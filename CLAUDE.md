@@ -9,6 +9,7 @@ prompt you are working on.
 
 ## Where things are
 ```
+.github/         CI: fmt, clippy, tests, guest build, fixture regenerate-and-diff
 prompts/         00-master.md (design authority) + one prompt per build stage
 docs/
   decisions.md   why a non-obvious choice was made; newest last
@@ -31,14 +32,20 @@ writing `docs/handoff/<stage>.md` and updating this file. Raise conflicts and
 open questions with the user rather than picking a default silently.
 
 ## Commands
+Everything above the line is what CI runs (`.github/workflows/ci.yml`); a green local
+run of these is a green CI run.
 ```
-cargo test --workspace                      # 33 tests as of S01
-cargo clippy --workspace --all-targets      # must be warning-free
 cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace                      # 33 tests as of S01
 cargo build -p field -p constants --target riscv32imac-unknown-none-elf   # guest target
+cargo run -p kat-gen && git diff --exit-code -- crates/field/tests/vectors/
+-------------------------------------------------------------------------------
 cargo run -p kat-gen                        # refresh fixtures (manual, deliberate)
 cargo run --release -p bench                # internal numbers only, no public claims
 ```
+The toolchain, its components and the guest target come from `rust-toolchain.toml`. CI
+does not name a version anywhere, so it cannot drift from that pin.
 
 ## The rules that bite most often
 - **Concrete types.** `Fr` is a struct. There is no `F: Field`, and there never will be.

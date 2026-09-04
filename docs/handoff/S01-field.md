@@ -138,10 +138,13 @@ uses a binary GCD; still inside 2×, and `batch_inverse` amortizes it to 1.06×.
   reference libraries as "dev-dependencies or fixture generators"; both tools are
   fixture/measurement harnesses and neither is reachable from the prover, the verifier,
   or a guest. In `crates/field` arkworks is strictly a dev-dependency.
-- **No CI workflow was added.** S01 does not ask for one and the anti-goals warn against
-  extra CI machinery. The three commands a CI job would run are in `CLAUDE.md`; the
-  regenerate-and-diff check master rule 8 wants is `cargo run -p kat-gen && git diff
-  --exit-code crates/field/tests/vectors/`. First stage that asks for CI should add it.
+- **CI was added at the user's request**, after the stage work was otherwise complete.
+  S01 does not ask for CI and the anti-goals warn against extra CI machinery, so it is
+  deliberately one job in one file with no matrix, no caching and no third-party
+  actions: fmt, clippy (`-D warnings`), `cargo test --workspace`, the guest-target
+  build that must-be-exact 10 requires, and the regenerate-and-diff of the committed
+  fixtures that master rule 8 wants. The toolchain, its components and the guest target
+  all come from `rust-toolchain.toml`, so CI cannot drift from the pin.
 - **No conflicts between the master prompt and the stage prompt were found.**
 
 ## Open for the next stage

@@ -1,0 +1,40 @@
+name: ci
+
+# The toolchain, its components and the guest target all come from
+# rust-toolchain.toml; rustup installs them on the first cargo invocation.
+# Nothing here may drift from that pin.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: toolchain
+        run: rustup show && cargo --version
+
+      - name: fmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: test
+        run: cargo test --workspace
+
+      # Must-be-exact 10: the field and constants crates compile unchanged for
+      # the guest.
+      - name: guest target builds
+        run: cargo build -p field -p constants --target riscv32imac-unknown-none-elf
+
+      # Master rule 8: committed fixtures are regenerated and diffed, so a
+      # silently edited vector file fails the build.
+      - name: committed fixtures are reproducible
+        run: |
+          cargo run -p kat-gen
+          git diff --exit-code -- crates/field/tests/vectors/

@@ -43,3 +43,11 @@ and is itself checked against the two NIST vectors.
 rule 2 allows reference libraries as dev-dependencies or fixture generators; a bin
 target cannot express "dev-dependency". Neither tool is reachable from the prover, the
 verifier, or a guest.
+
+**CI is one job, one file, no caching and no third-party actions.** Anti-goal 12 warns
+against tooling that creates friction without catching bugs, so the job runs only
+checks that can actually fail on a real defect: fmt, clippy at `-D warnings`, the test
+suite, the guest-target build, and regenerate-and-diff of the committed fixtures. The
+toolchain comes from `rust-toolchain.toml` rather than a setup action, so there is
+exactly one place the pinned version lives. No dependency caching until a build is slow
+enough to justify it — an unmeasured optimization is still unmeasured in CI.
