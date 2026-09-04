@@ -1,0 +1,6 @@
+# Pinned: reproducible guest builds are program-identity load-bearing, and the
+# workspace is stable-only (no nightly, no unstable features).
+[toolchain]
+channel = "1.96.1"
+components = ["rustfmt", "clippy"]
+targets = ["riscv32imac-unknown-none-elf"]
