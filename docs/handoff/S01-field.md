@@ -127,7 +127,13 @@ uses a binary GCD; still inside 2×, and `batch_inverse` amortizes it to 1.06×.
    wrong one. This is the test that catches it.
 
 ## Deviations and notes for the reviewer
-- **`serde` is taken with `default-features = false`.** Anti-goal 1 bans cargo features;
+- **`serde` is taken with no features at all** (`default-features = false`, and nothing
+  added back), in both the shipped graph and the test graph, so the tests exercise the
+  same serde the guest links. `postcard` is likewise featureless in dev-dependencies and
+  the roundtrip test uses `to_slice` into a stack buffer rather than `to_allocvec`; with
+  postcard's `alloc` feature on, cargo's feature unification handed `serde/alloc` to
+  `field` during tests only, which would have left the shipped configuration compiled
+  but never executed. Anti-goal 1 bans cargo features;
   must-be-exact 8 and 10 require `field` and `constants` to be `no_std` and to build for
   the guest target, which serde's default `std` feature would prevent. Read as a
   dependency's feature selection rather than a build configuration of ours, there is no

@@ -136,13 +136,10 @@ fn serde_roundtrip_over_random_elements() {
     let mut rng = Rng::new(SEED ^ 1);
     for _ in 0..1_000 {
         let x = rng.next_fr();
-        let wire = postcard::to_allocvec(&x).expect("serializing Fr cannot fail");
-        assert_eq!(
-            wire.as_slice(),
-            &x.to_bytes()[..],
-            "serde emits canonical bytes"
-        );
-        let back: Fr = postcard::from_bytes(&wire).expect("roundtrip");
+        let mut buf = [0u8; 64];
+        let wire = postcard::to_slice(&x, &mut buf).expect("serializing Fr cannot fail");
+        assert_eq!(wire, &x.to_bytes()[..], "serde emits canonical bytes");
+        let back: Fr = postcard::from_bytes(wire).expect("roundtrip");
         assert_eq!(back, x);
     }
 }

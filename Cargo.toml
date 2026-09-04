@@ -27,4 +27,4 @@ ark-bn254 = "0.6"
 ark-ff = "0.6"
 
 # Test only. Exercises the `Fr` serde impls over a real wire format.
-postcard = { version = "1", default-features = false, features = ["alloc"] }
+postcard = { version = "1", default-features = false }
