@@ -1,0 +1,34 @@
+# Glossary
+
+The vocabulary of `docs/spec/`. One word per concept; if two words appear for one
+thing, one of them is wrong.
+
+**Fr** — the BN254 *scalar* field, modulus
+`21888242871839275222246405745257275088548364400416034343698204186575808495617`.
+The field everything in this VM is arithmetized over. Not to be confused with **Fq**,
+the BN254 *base* field, which is where curve coordinates live.
+
+**Canonical form** — a field element as a 32-byte little-endian integer in `[0, p)`.
+The only encoding that ever reaches a file, an artifact, or a transcript.
+
+**Montgomery form** — the in-memory representation `x · R mod p` used for fast
+multiplication. An implementation detail of `crates/field`; never serialized.
+
+**Column = multilinear = polynomial** — three names for the same object: a vector of
+`2^k` Fr values, viewed as the evaluations of a multilinear polynomial over the
+boolean hypercube `{0,1}^k`. Prefer *column* when talking about a trace, *multilinear*
+when talking about sumcheck.
+
+**Layer** — one level of a GKR circuit. Each layer's values are determined by gates of
+degree ≤ 2 in the layer below.
+
+**Committed vs virtual** — a *committed* column is one the prover commits to with
+Mercury and later opens. A *virtual* column is derived in closed form by the verifier
+(range tables, timestamp tables, `eq`) and never committed.
+
+**Shard** — one fixed-height trace instance of a circuit family, proven independently
+except for the global memory argument.
+
+**Family** — a circuit family: one arithmetization shape (its own gates, columns and
+height) covering a set of program counters. The family set for a program is derived by
+the preprocessor and recorded in `VmConfig`.

@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/constants",
+    "crates/field",
+    "tools/kat-gen",
+    "tools/bench",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace.dependencies]
+constants = { path = "crates/constants" }
+field = { path = "crates/field" }
+
+# `default-features = false` keeps serde `no_std`, which `constants` and `field`
+# must stay for the guest target. This is not a cargo feature of ours: the
+# workspace still has exactly one build configuration.
+serde = { version = "1", default-features = false }
+
+# Test / tool only. Reference implementation for differential checks and the
+# KAT fixtures. Never linked by the prover, verifier, or a guest.
+ark-bn254 = "0.6"
+ark-ff = "0.6"
+
+# Test only. Exercises the `Fr` serde impls over a real wire format.
+postcard = { version = "1", default-features = false }
