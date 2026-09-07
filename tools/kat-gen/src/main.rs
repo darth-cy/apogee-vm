@@ -12,41 +12,17 @@ use std::path::PathBuf;
 
 use ark_bn254::Fr;
 use ark_ff::{AdditiveGroup, BigInteger, Field, One, PrimeField, Zero};
+use test_support::Rng;
 
 const SEED: u64 = 20260903;
 const RANDOM_BINARY: usize = 60;
 const RANDOM_UNARY: usize = 60;
 const RANDOM_POW: usize = 40;
 
-/// splitmix64. Owned here so the fixture does not depend on any RNG crate's
-/// stream staying stable across versions.
-struct Rng(u64);
-
-impl Rng {
-    fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
-    }
-
-    fn next_exp(&mut self) -> [u64; 4] {
-        [
-            self.next_u64(),
-            self.next_u64(),
-            self.next_u64(),
-            self.next_u64(),
-        ]
-    }
-
-    fn next_fr(&mut self) -> Fr {
-        let mut bytes = [0u8; 32];
-        for i in 0..4 {
-            bytes[8 * i..8 * i + 8].copy_from_slice(&self.next_u64().to_le_bytes());
-        }
-        Fr::from_le_bytes_mod_order(&bytes)
-    }
+/// A sample reduced mod p, not rejection-sampled: the vectors want arkworks'
+/// own answer for an arbitrary 256-bit input.
+fn next_fr(rng: &mut Rng) -> Fr {
+    Fr::from_le_bytes_mod_order(&rng.next_le32())
 }
 
 fn hex_fr(x: &Fr) -> String {
@@ -72,7 +48,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn main() {
-    let mut rng = Rng(SEED);
+    let mut rng = Rng::new(SEED);
     let mut out = String::new();
 
     out.push_str("# fr_kats v1 -- BN254 scalar field known-answer tests\n");
@@ -112,8 +88,8 @@ fn main() {
 
     out.push_str("\n# --- binary ops on random pairs ---\n");
     for _ in 0..RANDOM_BINARY {
-        let a = rng.next_fr();
-        let b = rng.next_fr();
+        let a = next_fr(&mut rng);
+        let b = next_fr(&mut rng);
         binary(&mut out, &a, &b);
     }
 
@@ -124,7 +100,7 @@ fn main() {
 
     out.push_str("\n# --- unary ops on random inputs ---\n");
     for _ in 0..RANDOM_UNARY {
-        let a = rng.next_fr();
+        let a = next_fr(&mut rng);
         unary(&mut out, &a);
     }
 
@@ -151,7 +127,7 @@ fn main() {
 
     out.push_str("\n# --- pow on random bases and exponents ---\n");
     for _ in 0..RANDOM_POW {
-        let a = rng.next_fr();
+        let a = next_fr(&mut rng);
         let e = rng.next_exp();
         power(&mut out, &a, &e);
     }

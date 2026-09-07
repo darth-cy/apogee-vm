@@ -24,7 +24,7 @@ tools/
   kat-gen/       regenerates the committed Fr test vectors from arkworks
   bench/         comparative microbenchmarks against arkworks
   transcript-ref/ the transcript oracle: Plonky3 + zkhash, NOT a workspace member
-  test-support/  SHA-256 and hex for the test suites; a dev-dependency, never shipped
+  test-support/  seeded RNG, SHA-256, hex; shared by every suite and generator
 ```
 Later stages add the crates listed in the master prompt's workspace layout. Crate names
 are frozen; internals are not.
@@ -43,7 +43,7 @@ cargo fmt --all -- --check
 cargo fmt --manifest-path tools/transcript-ref/Cargo.toml --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
-cargo test --workspace                      # 71 tests as of S02
+cargo test --workspace                      # 76 tests as of S02
 cargo build -p field -p constants -p transcript --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml

@@ -23,3 +23,11 @@ p3-field = { git = "https://github.com/Plonky3/Plonky3", rev = "7230fc572870436e
 p3-poseidon2 = { git = "https://github.com/Plonky3/Plonky3", rev = "7230fc572870436e6651762f35c6c3f3f48960d2" }
 p3-symmetric = { git = "https://github.com/Plonky3/Plonky3", rev = "7230fc572870436e6651762f35c6c3f3f48960d2" }
 zkhash = { git = "https://github.com/HorizenLabs/poseidon2", rev = "055bde3f4782731ba5f5ce5888a440a94327eaf3" }
+
+# The only path back into the repository, and deliberately the *only* thing the
+# oracle is allowed to share with the code it checks: a seeded RNG, SHA-256 and
+# hex. `test-support` declares no dependencies — its own `no_dependencies` test
+# enforces that — so linking it here cannot reach `crates/field`,
+# `crates/transcript`, or anything else this tool is supposed to be an
+# independent witness to.
+test-support = { path = "../test-support" }

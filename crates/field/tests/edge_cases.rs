@@ -2,9 +2,10 @@
 
 mod common;
 
-use common::{ark_to_bytes, to_ark, Rng};
+use common::{ark_to_bytes, next_fr, to_ark};
 use constants::{FR_MODULUS, FR_R, FR_R2};
 use field::{batch_inverse, Fr};
+use test_support::Rng;
 
 const SEED: u64 = 0xed6e_ca5e_0000_0001;
 
@@ -126,7 +127,7 @@ fn non_canonical_input_is_rejected() {
 fn wire_roundtrip_over_random_elements() {
     let mut rng = Rng::new(SEED);
     for _ in 0..1_000 {
-        let x = rng.next_fr();
+        let x = next_fr(&mut rng);
         assert_eq!(Fr::from_bytes(&x.to_bytes()), Some(x));
     }
 }
@@ -135,7 +136,7 @@ fn wire_roundtrip_over_random_elements() {
 fn serde_roundtrip_over_random_elements() {
     let mut rng = Rng::new(SEED ^ 1);
     for _ in 0..1_000 {
-        let x = rng.next_fr();
+        let x = next_fr(&mut rng);
         let mut buf = [0u8; 64];
         let wire = postcard::to_slice(&x, &mut buf).expect("serializing Fr cannot fail");
         assert_eq!(wire, &x.to_bytes()[..], "serde emits canonical bytes");
@@ -180,10 +181,16 @@ fn batch_inverse_at_required_lengths() {
         // Zeros interleaved with nonzeros; every length also gets an all-zero
         // and an all-nonzero variant.
         let mixed: Vec<Fr> = (0..len)
-            .map(|i| if i % 3 == 0 { Fr::ZERO } else { rng.next_fr() })
+            .map(|i| {
+                if i % 3 == 0 {
+                    Fr::ZERO
+                } else {
+                    next_fr(&mut rng)
+                }
+            })
             .collect();
         let all_zero: Vec<Fr> = vec![Fr::ZERO; len];
-        let all_nonzero: Vec<Fr> = (0..len).map(|_| rng.next_fr()).collect();
+        let all_nonzero: Vec<Fr> = (0..len).map(|_| next_fr(&mut rng)).collect();
 
         for input in [mixed, all_zero, all_nonzero] {
             let want = naive_batch_inverse(&input);
@@ -206,8 +213,8 @@ fn batch_inverse_at_required_lengths() {
 fn batch_inverse_boundary_shapes() {
     // Leading zero, trailing zero, adjacent zeros, and the edge values.
     let mut rng = Rng::new(SEED ^ 3);
-    let a = rng.next_fr();
-    let b = rng.next_fr();
+    let a = next_fr(&mut rng);
+    let b = next_fr(&mut rng);
     let cases: Vec<Vec<Fr>> = vec![
         vec![Fr::ZERO],
         vec![Fr::ONE],
@@ -266,7 +273,7 @@ fn from_hex_round_trips_every_edge_value_and_random_ones() {
     let mut values = vec![Fr::ZERO, Fr::ONE, Fr::MINUS_ONE, Fr::from_u64(u64::MAX)];
     let mut rng = Rng::new(SEED ^ 7);
     for _ in 0..200 {
-        values.push(rng.next_fr());
+        values.push(next_fr(&mut rng));
     }
     for x in values {
         assert_eq!(Fr::from_hex(&be_hex(&x)), Some(x), "round trip for {x:?}");

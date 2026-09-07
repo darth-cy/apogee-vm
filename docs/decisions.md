@@ -175,3 +175,30 @@ only `""` and `"abc"`, which are single-block: the padding path that spills into
 block was untested in a hash used to pin every fixture in the repository. The shared test
 adds FIPS 180-4's 56-byte vector and the 1,000,000-`a` vector, and walks the lengths either
 side of the block boundary.
+
+**The splitmix64 generator moved there too — all four copies of it.** It was in
+`crates/field/tests/common`, `tools/kat-gen`, `tools/bench` and `tools/transcript-ref`,
+byte-identical every time. Two of those four *write* committed fixtures, so a copy drifting
+would not have been a tidiness problem: it would have silently changed what the vectors
+test. `test_support::Rng` holds the stream and nothing else — `next_u64`, `next_exp`,
+`next_le32`, `next_bytes`.
+
+What did **not** move is the step from the stream to a field element, because no two callers
+did it the same way: `field`'s tests reject until the bytes are canonical, `bench` rejects
+until canonical *and nonzero*, `kat-gen` reduces mod p with no rejection at all, and
+`transcript-ref` decodes through Plonky3. Those stayed at their call sites as free functions
+over `&mut Rng`. Uniting them would have meant one sampler with three flags, which is the
+trade the master prompt's anti-goals name explicitly.
+
+The stream is pinned in `test-support` against the *published* splitmix64 output for seed 0,
+not against our own — an implementation that agrees with itself is not evidence. All four
+fixture files regenerate byte for byte after the move, which is the real check.
+
+**`tools/transcript-ref` takes a path dependency on `tools/test-support`.** It is the only
+edge from the out-of-workspace oracle back into the repository, and it exists so the oracle
+does not carry a fifth copy of the generator. It is safe because `test-support` declares no
+dependencies: the oracle's independence is about not computing expected values with our
+code, and an RNG that chooses *inputs* does not. The property that makes it safe is the one
+that could rot, so `no_dependencies` in `test-support` reads the manifest and asserts the
+`[dependencies]` table is empty, with a negative control per master rule 8. Without it, a
+convenience dependency added there would reach the oracle and nothing would visibly break.

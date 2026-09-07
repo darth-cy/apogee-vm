@@ -27,6 +27,7 @@ use p3_challenger::{CanObserve, CanSample, DuplexChallenger};
 use p3_field::{PrimeCharacteristicRing, PrimeField};
 use p3_poseidon2::ExternalLayerConstants;
 use p3_symmetric::Permutation;
+use test_support::Rng;
 use zkhash::ark_ff::{BigInteger, PrimeField as ArkPrimeField};
 use zkhash::fields::bn256::FpBN256;
 use zkhash::poseidon2::poseidon2_instance_bn256::RC3;
@@ -34,8 +35,9 @@ use zkhash::poseidon2::poseidon2_instance_bn256::RC3;
 const P3_REV: &str = "7230fc572870436e6651762f35c6c3f3f48960d2";
 const ZKHASH_REV: &str = "055bde3f4782731ba5f5ce5888a440a94327eaf3";
 
-/// Seed for the deterministic input stream. splitmix64, owned here so the
-/// fixtures do not depend on any RNG crate's stream staying stable.
+/// Seed for the deterministic input stream. The generator is `test_support`'s
+/// splitmix64 — owned in the repository, so the fixtures do not depend on any
+/// RNG crate's stream staying stable across versions.
 const SEED: u64 = 20260907;
 
 /// Random permutation vectors, on top of the structured ones. The stage asks
@@ -118,28 +120,10 @@ fn hex_fr(x: Bn254) -> String {
     hex(&to_le32(x))
 }
 
-struct Rng(u64);
-
-impl Rng {
-    fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
-    }
-
-    fn next_fr(&mut self) -> Bn254 {
-        let mut b = [0u8; 32];
-        for i in 0..4 {
-            b[8 * i..8 * i + 8].copy_from_slice(&self.next_u64().to_le_bytes());
-        }
-        from_le32(b)
-    }
-
-    fn next_bytes(&mut self, n: usize) -> Vec<u8> {
-        (0..n).map(|_| self.next_u64() as u8).collect()
-    }
+/// A sample reduced into the field by Plonky3's own decoder, so the inputs the
+/// vectors are generated from never come from our arithmetic.
+fn next_fr(rng: &mut Rng) -> Bn254 {
+    from_le32(rng.next_le32())
 }
 
 // ---------------------------------------------------------------------------
@@ -365,11 +349,11 @@ fn render_case(name: &str, ops: &[Op]) -> String {
 }
 
 fn cases() -> Vec<(String, Vec<Op>)> {
-    let mut rng = Rng(SEED);
+    let mut rng = Rng::new(SEED);
     let f = |n: u64| from_u64(n);
 
-    let a = rng.next_fr();
-    let b = rng.next_fr();
+    let a = next_fr(&mut rng);
+    let b = next_fr(&mut rng);
 
     // The stage's cases A-E.
     let mut v: Vec<(String, Vec<Op>)> = vec![("A".into(), vec![Op::Observe(f(1)), Op::Sample])];
@@ -489,28 +473,28 @@ fn cases() -> Vec<(String, Vec<Op>)> {
     // A 20-operation mixed script. `crates/transcript/tests/snapshot.rs`
     // snapshots after operation 10 and replays the rest into a fresh transcript.
     let s: Vec<Op> = vec![
-        Op::AppendScalar("PROTOCOL_SUITE", rng.next_fr()),
+        Op::AppendScalar("PROTOCOL_SUITE", next_fr(&mut rng)),
         Op::AppendBytes("PUBLIC_INPUTS", rng.next_bytes(8)),
         Op::Challenge("SUMCHECK_CHALLENGE"),
         Op::AppendScalars(
             "COMMITMENT",
-            vec![rng.next_fr(), rng.next_fr(), rng.next_fr()],
+            vec![next_fr(&mut rng), next_fr(&mut rng), next_fr(&mut rng)],
         ),
-        Op::Observe(rng.next_fr()),
+        Op::Observe(next_fr(&mut rng)),
         Op::Sample,
-        Op::AppendScalar("SUMCHECK_ROUND", rng.next_fr()),
+        Op::AppendScalar("SUMCHECK_ROUND", next_fr(&mut rng)),
         Op::Challenge("SUMCHECK_CHALLENGE"),
-        Op::Observe(rng.next_fr()),
-        Op::Observe(rng.next_fr()),
+        Op::Observe(next_fr(&mut rng)),
+        Op::Observe(next_fr(&mut rng)),
         // --- snapshot is taken here, after operation 10 ---
         Op::Sample,
         Op::AppendBytes("PUBLIC_INPUTS", rng.next_bytes(33)),
         Op::Challenge("SUMCHECK_CHALLENGE"),
-        Op::AppendScalars("EVALUATION_CLAIM", vec![rng.next_fr()]),
+        Op::AppendScalars("EVALUATION_CLAIM", vec![next_fr(&mut rng)]),
         Op::Sample,
-        Op::Observe(rng.next_fr()),
-        Op::AppendScalar("PCS_OPENING", rng.next_fr()),
-        Op::AppendScalar("COMMITMENT", rng.next_fr()),
+        Op::Observe(next_fr(&mut rng)),
+        Op::AppendScalar("PCS_OPENING", next_fr(&mut rng)),
+        Op::AppendScalar("COMMITMENT", next_fr(&mut rng)),
         Op::Sample,
         Op::Challenge("SUMCHECK_CHALLENGE"),
     ];
@@ -585,9 +569,9 @@ fn write_permutations() {
         [from_u64(2), from_u64(3), from_u64(5)],
     ];
 
-    let mut rng = Rng(SEED);
+    let mut rng = Rng::new(SEED);
     for _ in 0..RANDOM_PERMUTATIONS {
-        inputs.push([rng.next_fr(), rng.next_fr(), rng.next_fr()]);
+        inputs.push([next_fr(&mut rng), next_fr(&mut rng), next_fr(&mut rng)]);
     }
 
     for input in &inputs {

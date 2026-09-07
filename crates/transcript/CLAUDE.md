@@ -43,7 +43,7 @@ needs before touching the code.
 | `tests/duplex.rs` | Cases A-E and the rest replayed from file; the tag table and the one-tag-one-kind rule; output order; squeeze repetition; typed-layer separation; the byte encoding; the event log; negative controls. |
 | `tests/snapshot.rs` | The 20-operation script snapshotted at operation 10; byte round trip; malformed-snapshot rejection. |
 | `tests/common/mod.rs` | Fixture pinning, the vector reader, the case replayer. Test-only. |
-| `tools/test-support` | Hex and the SHA-256 behind the pin, shared with `field`. |
+| `tools/test-support` | The seeded RNG, hex, and the SHA-256 behind the pin. Shared. |
 
 ## Fixtures
 `tests/vectors/` holds three committed files, all produced by the reference oracle and
@@ -66,4 +66,7 @@ the files byte for byte, which is what CI checks.
 `tools/transcript-ref` is deliberately **not** a workspace member — its Plonky3 and
 `zkhash` dependency graphs would hand `serde/std` to `crates/field` through cargo's
 feature unification during `cargo test --workspace`. The reason is in its manifest and
-in `docs/decisions.md`.
+in `docs/decisions.md`. It has exactly one path dependency back into the repository,
+`tools/test-support`, for the seeded RNG that picks its inputs; that crate declares no
+dependencies of its own and has a test that keeps it that way, so the edge cannot reach
+anything the oracle is supposed to be an independent witness to.

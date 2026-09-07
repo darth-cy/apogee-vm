@@ -51,8 +51,8 @@ the S01 multiplier, which this stage deliberately did not do.
 | `tests/differential.rs` | 1,000 seeded random inputs per operator against ark-bn254. |
 | `tests/edge_cases.rs` | `0`, `1`, `p-1`, `R`, `R²` for every op; wire rules; `batch_inverse`. |
 | `tests/constants_check.rs` | Re-derives every frozen constant instead of trusting it. |
-| `tests/common/mod.rs` | Seeded RNG and the arkworks bridge. Test-only. |
-| `tools/test-support` | Hex and the SHA-256 behind the fixture pin, shared with `transcript`. |
+| `tests/common/mod.rs` | Sampling an `Fr` by rejection, and the arkworks bridge. Test-only. |
+| `tools/test-support` | The seeded RNG, hex, and the SHA-256 behind the fixture pin. Shared. |
 
 ## Fixtures
 `tests/vectors/fr_kats.txt` — 536 known-answer vectors generated from ark-bn254.

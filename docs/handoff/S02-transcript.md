@@ -164,8 +164,10 @@ and they must name the same field element.
 ## Verification performed
 
 69 workspace tests, green in debug and release (33 from S01, unchanged; 36 new).
-*(71 after the post-stage `tools/test-support` refactor: the two duplicated
-`sha256_matches_nist_vectors` tests became four shared ones.)*
+*(76 after the post-stage `tools/test-support` refactor, which united first the two
+copies of SHA-256 and then the four copies of the seeded RNG: two duplicated
+`sha256_matches_nist_vectors` tests out, nine shared ones in. Every committed fixture
+regenerates byte for byte across both moves.)*
 
 - **Acceptance 1** — `permutation_kat`: input `[0,1,2]`, byte-exact from the committed
   file. The value was independently confirmed against *both* upstream implementations
@@ -305,9 +307,9 @@ succeeds: the recursion guest links this crate.
   lines). Master rule 11 wants fixtures pinned by hash; the master prompt prefers
   duplication to an abstraction; both copies are checked against the NIST vectors where
   they live. *(Overruled by the repository owner after the stage: both copies now live
-  once in `tools/test-support`, a dev-dependency-only crate with no dependencies of its
-  own. See the S02a entry in `docs/decisions.md`. The workspace test count goes from 69
-  to 71 — two duplicated NIST tests removed, four shared ones added.)*
+  once in `tools/test-support`, a crate with no dependencies of its own, which also now
+  holds the splitmix64 generator that had four copies. See the S02a entry in
+  `docs/decisions.md`. The workspace test count goes from 69 to 76.)*
 - **No conflicts between the master prompt and the stage prompt were found.** The only
   place the stage left a frozen protocol decision open — the typed framing — was raised
   with the repository owner and decided by them, as recorded above.

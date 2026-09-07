@@ -8,35 +8,22 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use ark_ff::Field as _;
+use test_support::Rng;
 
 const N: usize = 1 << 20;
 const N_INVERSE: usize = 1 << 14; // one inversion is ~380 muls; 2^20 would take minutes
 const REPS: usize = 3;
 const SEED: u64 = 20260903;
 
-struct Rng(u64);
-
-impl Rng {
-    fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
-    }
-
-    /// Canonical bytes of a nonzero element, so both libraries get the same value.
-    fn next_canonical(&mut self) -> [u8; 32] {
-        loop {
-            let mut b = [0u8; 32];
-            for i in 0..4 {
-                b[8 * i..8 * i + 8].copy_from_slice(&self.next_u64().to_le_bytes());
-            }
-            b[31] &= 0x3f;
-            match field::Fr::from_bytes(&b) {
-                Some(x) if x != field::Fr::ZERO => return b,
-                _ => continue,
-            }
+/// Canonical bytes of a nonzero element, so both libraries get the same value.
+/// Nonzero because an inversion benchmark must not measure the zero path.
+fn next_canonical(rng: &mut Rng) -> [u8; 32] {
+    loop {
+        let mut b = rng.next_le32();
+        b[31] &= 0x3f; // p < 2^254, so clearing two bits keeps rejection rare
+        match field::Fr::from_bytes(&b) {
+            Some(x) if x != field::Fr::ZERO => return b,
+            _ => continue,
         }
     }
 }
@@ -57,9 +44,9 @@ fn ns_per_op(d: Duration, ops: usize) -> f64 {
 }
 
 fn main() {
-    let mut rng = Rng(SEED);
-    let bytes: Vec<[u8; 32]> = (0..N).map(|_| rng.next_canonical()).collect();
-    let bytes_b: Vec<[u8; 32]> = (0..N).map(|_| rng.next_canonical()).collect();
+    let mut rng = Rng::new(SEED);
+    let bytes: Vec<[u8; 32]> = (0..N).map(|_| next_canonical(&mut rng)).collect();
+    let bytes_b: Vec<[u8; 32]> = (0..N).map(|_| next_canonical(&mut rng)).collect();
 
     let xs: Vec<field::Fr> = bytes
         .iter()

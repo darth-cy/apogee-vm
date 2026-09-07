@@ -5,5 +5,6 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+test-support.workspace = true
 ark-bn254.workspace = true
 ark-ff.workspace = true

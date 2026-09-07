@@ -1,11 +1,71 @@
-//! Fixture plumbing shared by the test suites: SHA-256, and the hex codec that
-//! turns a digest or a field element into the text a committed vector file
-//! holds.
+//! Fixture plumbing shared by the test suites and the fixture generators:
+//! a seeded RNG, SHA-256, and the hex codec that turns a digest or a field
+//! element into the text a committed vector file holds.
 //!
-//! Master rule 11 pins every committed fixture by hash, so every crate that
-//! reads one needs the same two things. This crate is where they live, once.
-//! It is a dev-dependency only: no shipped crate, no guest build, and no
-//! `tools/` binary links it.
+//! Master rule 11 pins every committed fixture by hash and wants fixtures that
+//! regenerate byte for byte, so every crate that writes or reads one needs the
+//! same three things. This crate is where they live, once.
+//!
+//! **It has no dependencies, and must never acquire any.** That is what lets
+//! `tools/transcript-ref` — the reference oracle, deliberately outside the
+//! workspace so its Plonky3 and `zkhash` graphs cannot unify a feature into
+//! `crates/field` — link it without linking anything of ours that it is
+//! supposed to be checking. `no_dependencies` below is the executable form of
+//! that rule.
+
+// ---------------------------------------------------------------------------
+// Deterministic RNG
+// ---------------------------------------------------------------------------
+
+/// splitmix64. Owned so that a committed fixture's input stream cannot move
+/// under it when some RNG crate changes its algorithm in a minor release.
+///
+/// Only the raw stream lives here. Turning it into a field element is the
+/// caller's job, because every caller wants something different: rejection
+/// sampling to canonical bytes, reduction mod p, a nonzero value, or the
+/// unreduced limbs of an exponent.
+pub struct Rng(u64);
+
+impl Rng {
+    pub fn new(seed: u64) -> Rng {
+        Rng(seed)
+    }
+
+    pub fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+
+    /// Four limbs, little-endian: a 256-bit integer, unreduced. Used as a `pow`
+    /// exponent, where reduction would defeat the point.
+    pub fn next_exp(&mut self) -> [u64; 4] {
+        [
+            self.next_u64(),
+            self.next_u64(),
+            self.next_u64(),
+            self.next_u64(),
+        ]
+    }
+
+    /// The same four limbs as bytes — a 256-bit little-endian integer, and the
+    /// raw material every caller's field-element sampler starts from.
+    pub fn next_le32(&mut self) -> [u8; 32] {
+        let mut b = [0u8; 32];
+        for (i, limb) in self.next_exp().iter().enumerate() {
+            b[8 * i..8 * i + 8].copy_from_slice(&limb.to_le_bytes());
+        }
+        b
+    }
+
+    /// One byte per draw. Deliberately wasteful of the stream, and frozen that
+    /// way: the committed transcript cases were generated with it.
+    pub fn next_bytes(&mut self, n: usize) -> Vec<u8> {
+        (0..n).map(|_| self.next_u64() as u8).collect()
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Hex
@@ -135,6 +195,116 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The published splitmix64 reference stream for seed 0. This is the
+    /// generator every committed fixture's input sequence comes out of, so it
+    /// is pinned against the algorithm, not against our own output.
+    #[test]
+    fn rng_is_splitmix64() {
+        let mut r = Rng::new(0);
+        assert_eq!(
+            [r.next_u64(), r.next_u64(), r.next_u64(), r.next_u64()],
+            [
+                0xe220_a839_7b1d_cdaf,
+                0x6e78_9e6a_a1b9_65f4,
+                0x06c4_5d18_8009_454f,
+                0xf88b_b8a8_724c_81ec
+            ]
+        );
+        // The two seeds the committed fixtures are generated from.
+        assert_eq!(Rng::new(20260903).next_u64(), 0x2e76_1edb_4a84_3ed2);
+        assert_eq!(Rng::new(20260907).next_u64(), 0xad2e_a8a7_7120_2a78);
+    }
+
+    /// `next_le32` must be exactly `next_exp` written out little-endian: the
+    /// callers that sample a field element and the callers that sample an
+    /// exponent have to be drawing from the same stream, in the same order.
+    #[test]
+    fn next_le32_is_next_exp_little_endian() {
+        let limbs = Rng::new(7).next_exp();
+        let bytes = Rng::new(7).next_le32();
+        for (i, limb) in limbs.iter().enumerate() {
+            assert_eq!(bytes[8 * i..8 * i + 8], limb.to_le_bytes());
+        }
+    }
+
+    /// A generator that repeats, or that ignores its seed, would silently
+    /// hollow out every fixture built on it.
+    #[test]
+    fn rng_is_seeded_and_does_not_repeat() {
+        let mut r = Rng::new(20260903);
+        let draws: Vec<u64> = (0..1000).map(|_| r.next_u64()).collect();
+        let mut sorted = draws.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), draws.len(), "1000 draws must be distinct");
+        assert_ne!(Rng::new(1).next_u64(), Rng::new(2).next_u64());
+        assert_eq!(Rng::new(1).next_bytes(16), Rng::new(1).next_bytes(16));
+    }
+
+    /// Every dependency this manifest declares, or `Err` if it has no
+    /// `[dependencies]` table at all — which would make an empty answer a lie.
+    /// Table headers only: the manifest's own prose mentions
+    /// `[dev-dependencies]`, and a substring scan would trip over it.
+    fn declared_dependencies(manifest: &str) -> Result<Vec<String>, String> {
+        let header = |l: &str| {
+            let l = l.trim();
+            l.starts_with('[') && l.ends_with(']')
+        };
+        let mut saw_dependencies = false;
+        let mut declared = Vec::new();
+        let mut table = "";
+        for line in manifest.lines() {
+            if header(line) {
+                table = line.trim();
+                if table.ends_with("dependencies]") {
+                    if table == "[dependencies]" {
+                        saw_dependencies = true;
+                    } else {
+                        return Err(format!("unexpected dependency table {table}"));
+                    }
+                }
+                continue;
+            }
+            let body = line.trim();
+            if table == "[dependencies]" && !body.is_empty() && !body.starts_with('#') {
+                declared.push(body.to_string());
+            }
+        }
+        if !saw_dependencies {
+            return Err("no [dependencies] table to check".to_string());
+        }
+        Ok(declared)
+    }
+
+    /// The load-bearing property of this crate, per the module docs: nothing in
+    /// `[dependencies]`. `tools/transcript-ref` links it, and anything added
+    /// here would reach the reference oracle.
+    #[test]
+    fn no_dependencies() {
+        assert_eq!(
+            declared_dependencies(include_str!("../Cargo.toml")),
+            Ok(Vec::new()),
+            "test-support must stay dependency-free"
+        );
+    }
+
+    /// Negative control: the check above has to be able to fail.
+    #[test]
+    fn a_declared_dependency_is_caught() {
+        assert_eq!(
+            declared_dependencies("[package]\nname = \"x\"\n\n[dependencies]\nfield = \"1\"\n"),
+            Ok(vec!["field = \"1\"".to_string()])
+        );
+        assert!(
+            declared_dependencies("[package]\n\n[dev-dependencies]\nfield = \"1\"\n").is_err(),
+            "a dependency smuggled into another table is still a dependency"
+        );
+        assert!(
+            declared_dependencies("[package]\nname = \"x\"\n").is_err(),
+            "a manifest with no [dependencies] table cannot answer the question"
+        );
+    }
 
     /// Every fixture pin in the repository is only as good as this hash.
     /// FIPS 180-4 appendix B, plus the empty string.

@@ -3,8 +3,9 @@
 
 mod common;
 
-use common::{ark_to_bytes, to_ark, Rng};
+use common::{ark_to_bytes, next_canonical, next_fr, to_ark};
 use field::{batch_inverse, Fr};
+use test_support::Rng;
 
 const ROUNDS: usize = 1_000;
 const SEED: u64 = 0x5001_f1e1_d000_0001;
@@ -23,7 +24,7 @@ fn assert_same(ours: &Fr, theirs: &ark_bn254::Fr, what: &str, round: usize) {
 fn add_matches_arkworks() {
     let mut rng = Rng::new(SEED);
     for round in 0..ROUNDS {
-        let (a, b) = (rng.next_fr(), rng.next_fr());
+        let (a, b) = (next_fr(&mut rng), next_fr(&mut rng));
         assert_same(&(a + b), &(to_ark(&a) + to_ark(&b)), "add", round);
     }
 }
@@ -32,7 +33,7 @@ fn add_matches_arkworks() {
 fn sub_matches_arkworks() {
     let mut rng = Rng::new(SEED ^ 1);
     for round in 0..ROUNDS {
-        let (a, b) = (rng.next_fr(), rng.next_fr());
+        let (a, b) = (next_fr(&mut rng), next_fr(&mut rng));
         assert_same(&(a - b), &(to_ark(&a) - to_ark(&b)), "sub", round);
     }
 }
@@ -41,7 +42,7 @@ fn sub_matches_arkworks() {
 fn mul_matches_arkworks() {
     let mut rng = Rng::new(SEED ^ 2);
     for round in 0..ROUNDS {
-        let (a, b) = (rng.next_fr(), rng.next_fr());
+        let (a, b) = (next_fr(&mut rng), next_fr(&mut rng));
         assert_same(&(a * b), &(to_ark(&a) * to_ark(&b)), "mul", round);
     }
 }
@@ -50,7 +51,7 @@ fn mul_matches_arkworks() {
 fn neg_matches_arkworks() {
     let mut rng = Rng::new(SEED ^ 3);
     for round in 0..ROUNDS {
-        let a = rng.next_fr();
+        let a = next_fr(&mut rng);
         assert_same(&(-a), &(-to_ark(&a)), "neg", round);
     }
 }
@@ -59,7 +60,7 @@ fn neg_matches_arkworks() {
 fn square_matches_arkworks() {
     let mut rng = Rng::new(SEED ^ 4);
     for round in 0..ROUNDS {
-        let a = rng.next_fr();
+        let a = next_fr(&mut rng);
         let theirs = to_ark(&a) * to_ark(&a);
         assert_same(&a.square(), &theirs, "square", round);
     }
@@ -69,7 +70,7 @@ fn square_matches_arkworks() {
 fn inverse_matches_arkworks() {
     let mut rng = Rng::new(SEED ^ 5);
     for round in 0..ROUNDS {
-        let a = rng.next_fr();
+        let a = next_fr(&mut rng);
         let theirs = ark_ff::Field::inverse(&to_ark(&a)).expect("random element is nonzero");
         assert_same(&a.inverse().expect("nonzero"), &theirs, "inverse", round);
         assert_eq!(
@@ -84,7 +85,7 @@ fn inverse_matches_arkworks() {
 fn pow_matches_arkworks() {
     let mut rng = Rng::new(SEED ^ 6);
     for round in 0..ROUNDS {
-        let a = rng.next_fr();
+        let a = next_fr(&mut rng);
         let e = rng.next_exp();
         let theirs = ark_ff::Field::pow(&to_ark(&a), e);
         assert_same(&a.pow(&e), &theirs, "pow", round);
@@ -98,7 +99,7 @@ fn pow_matches_arkworks() {
 fn assign_operators_match_owned_operators() {
     let mut rng = Rng::new(SEED ^ 7);
     for _ in 0..ROUNDS {
-        let (a, b) = (rng.next_fr(), rng.next_fr());
+        let (a, b) = (next_fr(&mut rng), next_fr(&mut rng));
 
         let mut t = a;
         t += b;
@@ -138,7 +139,7 @@ fn assign_operators_match_owned_operators() {
 #[test]
 fn batch_inverse_matches_arkworks() {
     let mut rng = Rng::new(SEED ^ 8);
-    let mut ours: Vec<Fr> = (0..ROUNDS).map(|_| rng.next_fr()).collect();
+    let mut ours: Vec<Fr> = (0..ROUNDS).map(|_| next_fr(&mut rng)).collect();
     let mut theirs: Vec<ark_bn254::Fr> = ours.iter().map(to_ark).collect();
 
     batch_inverse(&mut ours);
@@ -162,7 +163,7 @@ fn from_u64_matches_arkworks() {
 fn wire_roundtrip_matches_arkworks() {
     let mut rng = Rng::new(SEED ^ 10);
     for round in 0..ROUNDS {
-        let bytes = rng.next_canonical();
+        let bytes = next_canonical(&mut rng);
         let ours = Fr::from_bytes(&bytes).expect("canonical by construction");
         let theirs: ark_bn254::Fr = ark_ff::PrimeField::from_le_bytes_mod_order(&bytes);
         assert_same(&ours, &theirs, "from_bytes", round);
