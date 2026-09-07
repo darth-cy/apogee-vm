@@ -12,7 +12,9 @@ and `batch_inverse`.
   correct; nothing may create an unreduced `Fr`.
 - **Montgomery form never escapes memory.** `to_bytes` and `from_bytes` are the only
   wire path, and `Debug` and the serde impls both route through them.
-- **`from_bytes` rejects, never reduces.** A value `>= p` returns `None`.
+- **`from_bytes` rejects, never reduces.** A value `>= p` returns `None`. Its
+  compile-time counterpart `from_canonical_limbs` panics instead, which in a `const`
+  context is a build failure — the right outcome for a frozen constant table.
 - **`batch_inverse` maps zero to zero.** Zeros are skipped, not an error.
 - **`#![no_std]`, portable stable Rust, `u128` intermediates only.** No carry
   intrinsics, no assembly, no nightly, no `unsafe`. It compiles unchanged for
@@ -29,7 +31,10 @@ is the human reading order and deliberately not the byte order.
 - Multiplication: CIOS Montgomery (Koç–Acar–Kaliski), four limbs, `u128`
   limb-product intermediates. With reduced operands the accumulator stays below `2p`,
   and `2p < 2^255`, so it never spills past the fourth limb and one conditional
-  subtraction reduces the result.
+  subtraction reduces the result. The limb primitives are `const fn` (`while` loops,
+  `debug_assert!` rather than `debug_assert_eq!`) so `from_canonical_limbs` can build
+  frozen `Fr` tables at compile time — `constants::POSEIDON2_RC3_*` is the first. There
+  is exactly one multiplier; the S01 suite covers it unchanged.
 - Inversion: Fermat, `pow(p-2)` through the frozen `pow`.
 - `batch_inverse`: Montgomery's trick over the nonzero entries.
 

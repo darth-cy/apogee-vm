@@ -42,21 +42,21 @@ pub struct Fr([u64; 4]);
 
 /// `acc + a * b + carry`, split into (low limb, carry out).
 #[inline(always)]
-fn mac(acc: u64, a: u64, b: u64, carry: u64) -> (u64, u64) {
+const fn mac(acc: u64, a: u64, b: u64, carry: u64) -> (u64, u64) {
     let t = (acc as u128) + (a as u128) * (b as u128) + (carry as u128);
     (t as u64, (t >> 64) as u64)
 }
 
 /// `a + b + carry`, split into (low limb, carry out).
 #[inline(always)]
-fn adc(a: u64, b: u64, carry: u64) -> (u64, u64) {
+const fn adc(a: u64, b: u64, carry: u64) -> (u64, u64) {
     let t = (a as u128) + (b as u128) + (carry as u128);
     (t as u64, (t >> 64) as u64)
 }
 
 /// `a - b - borrow`, split into (low limb, borrow out).
 #[inline(always)]
-fn sbb(a: u64, b: u64, borrow: u64) -> (u64, u64) {
+const fn sbb(a: u64, b: u64, borrow: u64) -> (u64, u64) {
     let t = (a as u128)
         .wrapping_sub(b as u128)
         .wrapping_sub(borrow as u128);
@@ -65,8 +65,10 @@ fn sbb(a: u64, b: u64, borrow: u64) -> (u64, u64) {
 
 /// Little-endian limbwise `a >= p`.
 #[inline]
-fn is_ge_modulus(a: &[u64; 4]) -> bool {
-    for i in (0..4).rev() {
+const fn is_ge_modulus(a: &[u64; 4]) -> bool {
+    let mut i = 4;
+    while i > 0 {
+        i -= 1;
         if a[i] != FR_MODULUS[i] {
             return a[i] > FR_MODULUS[i];
         }
@@ -76,15 +78,17 @@ fn is_ge_modulus(a: &[u64; 4]) -> bool {
 
 /// Subtract `p` once if `a >= p`.
 #[inline]
-fn reduce_once(a: &mut [u64; 4]) {
+const fn reduce_once(a: &mut [u64; 4]) {
     if is_ge_modulus(a) {
         let mut borrow = 0u64;
-        for i in 0..4 {
+        let mut i = 0;
+        while i < 4 {
             let (d, b) = sbb(a[i], FR_MODULUS[i], borrow);
             a[i] = d;
             borrow = b;
+            i += 1;
         }
-        debug_assert_eq!(borrow, 0, "a >= p, so a - p cannot borrow");
+        debug_assert!(borrow == 0, "a >= p, so a - p cannot borrow");
     }
 }
 
@@ -137,15 +141,20 @@ fn neg_limbs(a: &[u64; 4]) -> [u64; 4] {
 /// CIOS (Koc-Acar-Kaliski) over `s = 4` limbs. With `a < p` the running
 /// accumulator stays below `2p`, and `2p < 2^255`, so it never spills past the
 /// fourth limb and one conditional subtraction reduces the result.
-fn mont_mul(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
+const fn mont_mul(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
     let mut t = [0u64; 6];
-    for &b_i in b.iter() {
+    let mut i = 0;
+    while i < 4 {
+        let b_i = b[i];
+
         // t += a * b_i
         let mut carry = 0u64;
-        for j in 0..4 {
+        let mut j = 0;
+        while j < 4 {
             let (s, c) = mac(t[j], a[j], b_i, carry);
             t[j] = s;
             carry = c;
+            j += 1;
         }
         let (s, c) = adc(t[4], carry, 0);
         t[4] = s;
@@ -154,17 +163,21 @@ fn mont_mul(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
         // t = (t + m * p) / 2^64, with m chosen so the low limb cancels.
         let m = t[0].wrapping_mul(FR_INV);
         let (cancelled, mut carry) = mac(t[0], m, FR_MODULUS[0], 0);
-        debug_assert_eq!(cancelled, 0, "m = t[0] * (-p^-1) must cancel limb 0");
-        for j in 1..4 {
+        debug_assert!(cancelled == 0, "m = t[0] * (-p^-1) must cancel limb 0");
+        let mut j = 1;
+        while j < 4 {
             let (s, c) = mac(t[j], m, FR_MODULUS[j], carry);
             t[j - 1] = s;
             carry = c;
+            j += 1;
         }
         let (s, c) = adc(t[4], carry, 0);
         t[3] = s;
         t[4] = t[5] + c;
+
+        i += 1;
     }
-    debug_assert_eq!(t[4], 0, "CIOS accumulator stays below 2p < 2^255");
+    debug_assert!(t[4] == 0, "CIOS accumulator stays below 2p < 2^255");
 
     let mut r = [t[0], t[1], t[2], t[3]];
     reduce_once(&mut r);
@@ -190,6 +203,26 @@ impl Fr {
 
     /// `p - 1`. Also the decoded-table padding sentinel from S11 on.
     pub const MINUS_ONE: Fr = Fr(MINUS_ONE_MONTGOMERY);
+
+    /// Build an `Fr` from a canonical little-endian limb array, in a `const`
+    /// context.
+    ///
+    /// This is the compile-time counterpart of [`Fr::from_bytes`], and exists
+    /// for the frozen constant tables in `constants` — `POSEIDON2_RC3_*` is the
+    /// first — which must be usable as `Fr` without a runtime conversion pass.
+    /// The stored form stays canonical, per the one-encoding rule; the
+    /// Montgomery conversion happens during const evaluation.
+    ///
+    /// Panics if the value is not already reduced. In a `const` context that
+    /// panic is a compile error, which is exactly what a non-canonical frozen
+    /// constant deserves.
+    pub const fn from_canonical_limbs(x: [u64; 4]) -> Fr {
+        assert!(
+            !is_ge_modulus(&x),
+            "frozen constant is not canonical: value >= modulus"
+        );
+        Fr(mont_mul(&x, &FR_R2))
+    }
 
     /// Lift a `u64`. Always in range: `2^64 < p`.
     pub fn from_u64(x: u64) -> Fr {

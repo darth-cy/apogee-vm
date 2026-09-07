@@ -32,3 +32,18 @@ except for the global memory argument.
 **Family** — a circuit family: one arithmetization shape (its own gates, columns and
 height) covering a set of program counters. The family set for a program is derived by
 the preprocessor and recorded in `VmConfig`.
+
+**Transcript** — the Poseidon2 duplex sponge every challenge is drawn from. Two layers:
+the *raw duplex* (`observe`/`sample`) and the *typed layer* (`append_*`/
+`challenge_scalar`), which frames each message as `tag, length, payload`. Specified in
+`docs/spec/transcript.md`.
+
+**Tag** — a `u64` domain-separation label for one kind of transcript message. Values
+live only in `constants::transcript_tags`; each names exactly one message kind.
+
+**Absorb / squeeze** — material going into the sponge, and challenges coming out. An
+absorb of `n` elements zero-pads the rate and adds `n` to the capacity; a squeeze with
+nothing pending just permutes again.
+
+**Snapshot** — a transcript's sponge state and both buffers, enough to resume the
+challenge stream exactly. The unit of master rule 9's archivable phase boundaries.

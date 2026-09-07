@@ -1,0 +1,25 @@
+# Deliberately NOT a member of the root workspace, and its own workspace root.
+#
+# This tool links the Plonky3 and HorizenLabs reference implementations, whose
+# dependency graphs enable `serde/std`. Inside the workspace, cargo's feature
+# unification would hand `serde/std` to `crates/field` during
+# `cargo test --workspace`, so the shipped `no_std` serde configuration would be
+# compiled but never exercised — exactly the trap S01 avoided. Excluding the
+# tool keeps one build configuration for the workspace and one for the oracle.
+[workspace]
+
+[package]
+name = "transcript-ref"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Reference implementations, pinned by revision. Fixture generator only: nothing
+# here is reachable from the prover, the verifier, or a guest.
+[dependencies]
+p3-bn254 = { git = "https://github.com/Plonky3/Plonky3", rev = "7230fc572870436e6651762f35c6c3f3f48960d2" }
+p3-challenger = { git = "https://github.com/Plonky3/Plonky3", rev = "7230fc572870436e6651762f35c6c3f3f48960d2" }
+p3-field = { git = "https://github.com/Plonky3/Plonky3", rev = "7230fc572870436e6651762f35c6c3f3f48960d2" }
+p3-poseidon2 = { git = "https://github.com/Plonky3/Plonky3", rev = "7230fc572870436e6651762f35c6c3f3f48960d2" }
+p3-symmetric = { git = "https://github.com/Plonky3/Plonky3", rev = "7230fc572870436e6651762f35c6c3f3f48960d2" }
+zkhash = { git = "https://github.com/HorizenLabs/poseidon2", rev = "055bde3f4782731ba5f5ce5888a440a94327eaf3" }

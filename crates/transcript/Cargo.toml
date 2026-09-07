@@ -1,0 +1,13 @@
+[package]
+name = "transcript"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+constants.workspace = true
+field.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+postcard.workspace = true
