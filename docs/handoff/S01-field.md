@@ -61,15 +61,17 @@ pub mod transcript_tags {}      // empty
 | `tools/kat-gen/src/main.rs` | Deterministic regenerator (`cargo run -p kat-gen`) |
 | `tools/bench/src/main.rs` | Comparative microbenchmark (`cargo run --release -p bench`) |
 
-`fr_kats.txt` SHA-256 `cfb9db2443dc6d803104f7d89924235bcb2fa56cf6cfc04fc2e24cd31d0ce1df`,
-pinned in `tests/kat.rs::KAT_SHA256`. Refresh is manual: rerun the generator, re-hash,
-update the constant. Verified reproducible — rerunning the generator produced a
+`fr_kats.txt` is pinned by SHA-256 in `tests/kat.rs::KAT_SHA256`. The digest is
+deliberately not repeated here — it is a function of the generator's seed and content, so
+a copy in a handoff goes stale the first time either changes. Refresh is manual: rerun the
+generator, re-hash, update the constant. Verified reproducible — rerunning the generator produced a
 byte-identical file.
 
 Vector format is one whitespace-delimited line per case, values as 64 lowercase hex
 characters in little-endian byte order (`add|sub|mul a b c`, `square|inv a c`,
 `pow a e c`; `inv` of zero has the expected field `none`). The stage allowed "or
-similar committed format"; the reason for text over JSON is in `docs/decisions.md`.
+similar committed format"; text was chosen over JSON so a vector diffs line by line in
+review and needs no parser dependency.
 
 ## Verification performed
 - 33 tests, all green in both debug and release: 536 KATs, 1,000 seeded random inputs
@@ -121,7 +123,8 @@ uses a binary GCD; still inside 2×, and `batch_inverse` amortizes it to 1.06×.
    explicit binary makes regenerate-and-diff a one-liner.
 6. Test-only SHA-256 in `crates/field/tests/common/mod.rs`, ~55 lines, itself checked
    against the two NIST vectors. Implements master rule 11's "fixtures pinned by hash"
-   without adding a dependency.
+   without adding a dependency. *(Moved after S02 to `tools/test-support`, shared with
+   `crates/transcript`.)*
 7. `crates/field/tests/constants_check.rs` — not requested, but a wrong Montgomery
    constant is silent: every operation stays self-consistent while the field is the
    wrong one. This is the test that catches it.
@@ -138,7 +141,7 @@ uses a binary GCD; still inside 2×, and `batch_inverse` amortizes it to 1.06×.
   the guest target, which serde's default `std` feature would prevent. Read as a
   dependency's feature selection rather than a build configuration of ours, there is no
   conflict — the workspace still has exactly one build configuration — but it is
-  recorded here and in `docs/decisions.md` because it is the closest call in the stage.
+  recorded here because it is the closest call in the stage.
 - **arkworks is a normal dependency of `tools/kat-gen` and `tools/bench`**, not a
   dev-dependency, because a `bin` target cannot express one. Master rule 2 permits
   reference libraries as "dev-dependencies or fixture generators"; both tools are

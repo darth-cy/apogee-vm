@@ -13,7 +13,7 @@ here.
 - Changing any value here is a protocol-version change and must bump
   `PROTOCOL_VERSION`.
 
-## Contents as of S01
+## Contents as of S02
 | Item | Meaning |
 | --- | --- |
 | `PROTOCOL_VERSION: u32` | Placeholder, `0`. First item absorbed into every transcript. |
@@ -22,7 +22,24 @@ here.
 | `FR_R: [u64; 4]` | `2^256 mod p`. Also the Montgomery form of `1`. |
 | `FR_R2: [u64; 4]` | `2^512 mod p`. Converts canonical → Montgomery in one multiply. |
 | `FR_INV: u64` | `-p^{-1} mod 2^64`, the CIOS reduction multiplier. |
-| `transcript_tags` | Empty module. Every future domain-separation tag goes here. |
+| `POSEIDON2_RC3_INITIAL: [[&str; 3]; 4]` | Round constants, 4 initial full rounds. |
+| `POSEIDON2_RC3_INTERNAL: [&str; 56]` | Round constants, 56 partial rounds, lane 0. |
+| `POSEIDON2_RC3_TERMINAL: [[&str; 3]; 4]` | Round constants, 4 terminal full rounds. |
+| `transcript_tags` | The frozen tag table: 7 tags as of S02, sequential from 1. |
 
-`FR_MODULUS_MINUS_TWO` is an additive extension beyond the stage's enumerated list; it
-is a property of the modulus and belongs next to it.
+`FR_MODULUS_MINUS_TWO` is an additive extension beyond S01's enumerated list; it is a
+property of the modulus and belongs next to it.
+
+The `POSEIDON2_RC3_*` tables are the upstream HorizenLabs `RC3` constants as **hex string
+literals, copied from upstream character for character**, split by the permutation phase
+that reads them. `field::Fr::from_hex` reads them big-endian, as upstream writes them, so
+the vendored table diffs against its source by eye. Their provenance and the reason the
+partial rounds store one lane are in the source comment, and
+`crates/transcript/tests/poseidon2.rs` checks them against a committed dump of the full
+upstream table rather than trusting the transcription — which is also where the two
+textual conventions meet, since the dump is little-endian canonical bytes.
+
+Tags are sequential from 1, never renumbered, never reused, and `0` is not a tag. Every
+tag names exactly **one** message kind — scalars, bytes or a challenge — because the
+typed layer's `tag, length, payload` framing is only injective under that rule. See
+`docs/spec/transcript.md` section 8.

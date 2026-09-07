@@ -1,15 +1,14 @@
 [package]
-name = "field"
+name = "transcript"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
 [dependencies]
 constants.workspace = true
+field.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
 test-support.workspace = true
-ark-bn254.workspace = true
-ark-ff.workspace = true
 postcard.workspace = true

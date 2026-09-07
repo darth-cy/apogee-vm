@@ -237,6 +237,37 @@ impl Fr {
         out
     }
 
+    /// Decode a source-literal hex constant: `0x` followed by exactly 64
+    /// lowercase hex digits, read **big-endian**.
+    ///
+    /// This is the form frozen constant tables are written in — the order
+    /// [`Debug`] prints, and the order upstream tables such as the Poseidon2
+    /// round constants use, so a vendored table diffs against its source by
+    /// eye. It is deliberately *not* the little-endian byte order of
+    /// [`to_bytes`], which is the wire form; a hex literal in source is a
+    /// number, not a byte string.
+    ///
+    /// `None` for anything else: a missing prefix, the wrong length, an
+    /// uppercase or non-hex digit, or a value `>= p`. There is exactly one
+    /// accepted spelling, so a constant that does not parse is a build-time
+    /// failure at its `expect`, not a silently different field element.
+    ///
+    /// [`to_bytes`]: Fr::to_bytes
+    pub fn from_hex(s: &str) -> Option<Fr> {
+        let digits = s.strip_prefix("0x")?.as_bytes();
+        if digits.len() != 64 {
+            return None;
+        }
+        let mut le = [0u8; 32];
+        for i in 0..32 {
+            let hi = hex_digit(digits[2 * i])?;
+            let lo = hex_digit(digits[2 * i + 1])?;
+            // The text is big-endian, the bytes are little-endian.
+            le[31 - i] = (hi << 4) | lo;
+        }
+        Fr::from_bytes(&le)
+    }
+
     /// Decode a canonical 32-byte little-endian value.
     ///
     /// `None` if the value is `>= p`. Non-canonical input is never silently
@@ -252,6 +283,15 @@ impl Fr {
             return None;
         }
         Some(Fr(mont_mul(&limbs, &FR_R2)))
+    }
+}
+
+/// One lowercase hex digit's value, or `None`.
+fn hex_digit(c: u8) -> Option<u8> {
+    match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'a'..=b'f' => Some(c - b'a' + 10),
+        _ => None,
     }
 }
 

@@ -1,0 +1,11 @@
+[package]
+name = "test-support"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# A dev-dependency of the crates that read committed fixture files, and nothing
+# else. It has no dependencies of its own — deliberately, so that adding it to a
+# crate's `[dev-dependencies]` cannot unify a feature into that crate's real
+# dependency graph. It never appears in a shipped or guest build.
+[dependencies]

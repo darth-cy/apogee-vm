@@ -8,7 +8,7 @@ title: S01 — Fr Field (with Montgomery) + Constants Skeleton
 ## Deliver
 - `crates/field` holds `Fr`, the BN254 scalar field.
 - `crates/constants` is a skeleton crate with zero logic and only frozen constant definitions. It defines the Fr modulus limbs, Montgomery R and R², the modulus inverse, a `PROTOCOL_VERSION` placeholder, and an empty `transcript_tags` module.
-- You create the workspace `Cargo.toml`, a per-crate `CLAUDE.md`, and a `docs/` skeleton holding `decisions.md` copied in, an empty `handoff/`, and `GLOSSARY.md`.
+- You create the workspace `Cargo.toml`, a per-crate `CLAUDE.md`, and a `docs/` skeleton holding an empty `handoff/` and `GLOSSARY.md`.
 
 The public API below is frozen. Its semantics are exact; naming of internals is flexible.
 

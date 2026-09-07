@@ -153,6 +153,7 @@ dependencies = [
  "ark-bn254",
  "ark-ff",
  "field",
+ "test-support",
 ]
 
 [[package]]
@@ -240,6 +241,7 @@ dependencies = [
  "constants",
  "postcard",
  "serde",
+ "test-support",
 ]
 
 [[package]]
@@ -282,6 +284,7 @@ version = "0.1.0"
 dependencies = [
  "ark-bn254",
  "ark-ff",
+ "test-support",
 ]
 
 [[package]]
@@ -434,6 +437,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "test-support"
+version = "0.1.0"
+
+[[package]]
 name = "thiserror"
 version = "2.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -451,6 +458,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.4",
+]
+
+[[package]]
+name = "transcript"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "field",
+ "postcard",
+ "serde",
+ "test-support",
 ]
 
 [[package]]

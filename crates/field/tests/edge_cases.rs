@@ -2,9 +2,10 @@
 
 mod common;
 
-use common::{ark_to_bytes, to_ark, Rng};
+use common::{ark_to_bytes, next_fr, to_ark};
 use constants::{FR_MODULUS, FR_R, FR_R2};
 use field::{batch_inverse, Fr};
+use test_support::Rng;
 
 const SEED: u64 = 0xed6e_ca5e_0000_0001;
 
@@ -126,7 +127,7 @@ fn non_canonical_input_is_rejected() {
 fn wire_roundtrip_over_random_elements() {
     let mut rng = Rng::new(SEED);
     for _ in 0..1_000 {
-        let x = rng.next_fr();
+        let x = next_fr(&mut rng);
         assert_eq!(Fr::from_bytes(&x.to_bytes()), Some(x));
     }
 }
@@ -135,7 +136,7 @@ fn wire_roundtrip_over_random_elements() {
 fn serde_roundtrip_over_random_elements() {
     let mut rng = Rng::new(SEED ^ 1);
     for _ in 0..1_000 {
-        let x = rng.next_fr();
+        let x = next_fr(&mut rng);
         let mut buf = [0u8; 64];
         let wire = postcard::to_slice(&x, &mut buf).expect("serializing Fr cannot fail");
         assert_eq!(wire, &x.to_bytes()[..], "serde emits canonical bytes");
@@ -180,10 +181,16 @@ fn batch_inverse_at_required_lengths() {
         // Zeros interleaved with nonzeros; every length also gets an all-zero
         // and an all-nonzero variant.
         let mixed: Vec<Fr> = (0..len)
-            .map(|i| if i % 3 == 0 { Fr::ZERO } else { rng.next_fr() })
+            .map(|i| {
+                if i % 3 == 0 {
+                    Fr::ZERO
+                } else {
+                    next_fr(&mut rng)
+                }
+            })
             .collect();
         let all_zero: Vec<Fr> = vec![Fr::ZERO; len];
-        let all_nonzero: Vec<Fr> = (0..len).map(|_| rng.next_fr()).collect();
+        let all_nonzero: Vec<Fr> = (0..len).map(|_| next_fr(&mut rng)).collect();
 
         for input in [mixed, all_zero, all_nonzero] {
             let want = naive_batch_inverse(&input);
@@ -206,8 +213,8 @@ fn batch_inverse_at_required_lengths() {
 fn batch_inverse_boundary_shapes() {
     // Leading zero, trailing zero, adjacent zeros, and the edge values.
     let mut rng = Rng::new(SEED ^ 3);
-    let a = rng.next_fr();
-    let b = rng.next_fr();
+    let a = next_fr(&mut rng);
+    let b = next_fr(&mut rng);
     let cases: Vec<Vec<Fr>> = vec![
         vec![Fr::ZERO],
         vec![Fr::ONE],
@@ -223,4 +230,92 @@ fn batch_inverse_boundary_shapes() {
         batch_inverse(&mut got);
         assert_eq!(got, want, "batch_inverse on {input:?}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// `from_hex`: the source-literal form for frozen constant tables.
+//
+// Big-endian, `0x`-prefixed, exactly 64 lowercase digits — the order `Debug`
+// prints and the order upstream tables are written in, deliberately not the
+// little-endian byte order of `to_bytes`.
+// ---------------------------------------------------------------------------
+
+/// Big-endian hex for a value, the way `from_hex` expects to read it.
+fn be_hex(x: &Fr) -> String {
+    let mut s = String::from("0x");
+    for b in x.to_bytes().iter().rev() {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
+}
+
+#[test]
+fn from_hex_reads_big_endian() {
+    let one = format!("0x{:0>64}", "1");
+    assert_eq!(Fr::from_hex(&one), Some(Fr::ONE));
+    assert_eq!(Fr::from_hex(&format!("0x{:0>64}", "0")), Some(Fr::ZERO));
+
+    // 0x0102 is 258, not 513: the last digits are the least significant.
+    assert_eq!(
+        Fr::from_hex(&format!("0x{:0>64}", "102")),
+        Some(Fr::from_u64(258))
+    );
+
+    // The same value, read as little-endian bytes, is something else entirely.
+    let mut le = [0u8; 32];
+    le[30] = 0x01;
+    le[31] = 0x02;
+    assert_ne!(Fr::from_bytes(&le), Some(Fr::from_u64(258)));
+}
+
+#[test]
+fn from_hex_round_trips_every_edge_value_and_random_ones() {
+    let mut values = vec![Fr::ZERO, Fr::ONE, Fr::MINUS_ONE, Fr::from_u64(u64::MAX)];
+    let mut rng = Rng::new(SEED ^ 7);
+    for _ in 0..200 {
+        values.push(next_fr(&mut rng));
+    }
+    for x in values {
+        assert_eq!(Fr::from_hex(&be_hex(&x)), Some(x), "round trip for {x:?}");
+        // `Debug` prints the same digits, which is the point of the ordering.
+        assert_eq!(format!("{x:?}"), format!("Fr({})", be_hex(&x)));
+    }
+}
+
+#[test]
+fn from_hex_has_exactly_one_accepted_spelling() {
+    let valid = be_hex(&Fr::from_u64(0xdead_beef));
+    assert!(Fr::from_hex(&valid).is_some(), "the control must parse");
+
+    let digits = valid.trim_start_matches("0x");
+    let rejected = [
+        digits.to_string(),                     // no prefix
+        format!("0X{digits}"),                  // uppercase prefix
+        format!("0x{}", &digits[1..]),          // 63 digits
+        format!("0x0{digits}"),                 // 65 digits
+        format!("0x{}", digits.to_uppercase()), // uppercase digits
+        format!("0x{}g", &digits[1..]),         // non-hex digit
+        format!("0x{}", " ".repeat(64)),        // whitespace
+        String::new(),
+        "0x".to_string(),
+    ];
+    for s in rejected {
+        assert_eq!(Fr::from_hex(&s), None, "must reject {s:?}");
+    }
+}
+
+#[test]
+fn from_hex_rejects_values_at_or_above_the_modulus() {
+    // p itself, and p written one digit larger, and the all-ones word.
+    let p = "0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001";
+    assert_eq!(Fr::from_hex(p), None, "p is not canonical");
+
+    let p_plus_one = "0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000002";
+    assert_eq!(Fr::from_hex(p_plus_one), None);
+
+    assert_eq!(Fr::from_hex(&format!("0x{}", "f".repeat(64))), None);
+
+    // p - 1 is the largest value it does accept.
+    let p_minus_one = "0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000000";
+    assert_eq!(Fr::from_hex(p_minus_one), Some(Fr::MINUS_ONE));
 }

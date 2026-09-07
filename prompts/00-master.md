@@ -24,6 +24,7 @@ A RISC-V zkVM proving RV32IMAC guest programs (Rust, no-std), arithmetized as **
 2. First read the master prompt and the specific stage prompt, then review any relevant results from previous stages by inspecting stage handoff notes in `docs/handoff/`. With each completed stage, produce a handoff note in `docs/handoff/` describing the stage's results and modify `CLAUDE.md` to reflect latest changes. The handoff note should include the public API you froze (signatures), artifacts and their paths.
 3. Each stage has an acceptance section that must be satisfied.
 4. For each stage, branch off main, produce a git commit on the branch, and submit a pull request. Always branch and commit using the user's local Github credential, never Claude.
+5. Never write Claude's name into git history: no `Co-Authored-By` trailer on a commit, no generated-by footer on a pull request.
 
 ### Implementation Rules
 1. **Concrete types.** No trait-generic field, polynomial, commitment, or transcript abstractions. `Fr` is a struct, not a `F: Field`. Prefer readability and succinctness over generality. (Deliberate, narrow exceptions may be named by a stage prompt.)
@@ -84,7 +85,7 @@ Read this as a hard constraint, not advice. This is the prime directive made spe
 1. **No cargo features. Zero.** One build configuration for the whole workspace. `[features]` tables, `#[cfg(feature = "...")]`, `optional = true` dependencies, and `--no-default-features` are all banned. A configuration nobody builds is broken and undiscovered; a configuration everybody builds should not be conditional. If code is optional, delete it.
 2. **No type-system machinery.** No trait generics over field/poly/commitment/transcript (already rule 1), and equally: no associated types, no GATs, no const generics beyond plain fixed-size arrays, no trait objects (`dyn`), no blanket impls, no `impl Trait` in public signatures, no procedural macros, no build scripts that generate code, no typestate, no builder patterns, no newtype towers. Concrete structs, free functions, plain `enum`s.
 3. **No abstraction with one implementation.** A trait with a single impl is a rename with extra steps. Introduce the second caller first, then extract — never the reverse. Duplication is cheaper than the wrong abstraction, and far cheaper than the right abstraction introduced early.
-4. **No `unsafe`.** Not for speed, not for layout, not for FFI. If a measurement ever justifies it, that is a decision entry with the benchmark attached, reviewed on its own.
+4. **No `unsafe`.** Not for speed, not for layout, not for FFI. If a measurement ever justifies it, that is a separate change with the benchmark attached, reviewed on its own.
 5. **No nightly, no unstable anything.** Stable Rust, pinned by `rust-toolchain.toml`. No unstable rustfmt options, no `feature(...)` attributes, no lints that only exist on a newer toolchain. If it would break on a compiler bump, it is not allowed to be load-bearing.
 6. **No dependency for convenience.** The allowed runtime list in rule 2 is exhaustive. `itertools`, `thiserror`, `anyhow`, `once_cell`, `lazy_static`, `num-traits`, `hex`, `bitflags`, and friends are all "write the eight lines yourself".
 7. **No async, no threads, no interior mutability.** Parallelism is `rayon` over data, and nothing else. No `tokio`, no raw `std::thread`, no channels, no `Arc<Mutex<_>>`, no `RefCell`/`Cell` in shared structures, no global mutable state, no `OnceLock` caches.
@@ -134,7 +135,7 @@ crates/
   host/         host SDK: prove/verify API, input building, witness recorder
 guests/         fib/, echo/, keccak-test/, revm-block/, recursion-verifier/
 tools/          bench harness, artifact dump, ethproofs reporting
-docs/           decisions.md, spec/, handoff/, publication/, GLOSSARY.md
+docs/           spec/, handoff/, publication/, GLOSSARY.md
 prompts/        stage-wise build prompts
 ```
 
