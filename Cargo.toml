@@ -6,6 +6,7 @@ members = [
     "crates/transcript",
     "tools/kat-gen",
     "tools/bench",
+    "tools/test-support",
 ]
 
 # `tools/transcript-ref` is its own workspace: see the comment in its manifest.
@@ -20,6 +21,10 @@ publish = false
 constants = { path = "crates/constants" }
 field = { path = "crates/field" }
 transcript = { path = "crates/transcript" }
+
+# Test-only, and a dev-dependency everywhere it appears: SHA-256 for pinning
+# committed fixtures, and the hex codec those files are written in.
+test-support = { path = "tools/test-support" }
 
 # `default-features = false` keeps serde `no_std`, which `constants` and `field`
 # must stay for the guest target. This is not a cargo feature of ours: the

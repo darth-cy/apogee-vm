@@ -42,7 +42,8 @@ needs before touching the code.
 | `tests/poseidon2.rs` | Vendored `RC3` vs upstream; the `[0,1,2]` KAT; 128 reference permutation vectors; negative controls. |
 | `tests/duplex.rs` | Cases A-E and the rest replayed from file; the tag table and the one-tag-one-kind rule; output order; squeeze repetition; typed-layer separation; the byte encoding; the event log; negative controls. |
 | `tests/snapshot.rs` | The 20-operation script snapshotted at operation 10; byte round trip; malformed-snapshot rejection. |
-| `tests/common/mod.rs` | Hex, SHA-256 fixture pinning, the vector reader, the case replayer. Test-only. |
+| `tests/common/mod.rs` | Fixture pinning, the vector reader, the case replayer. Test-only. |
+| `tools/test-support` | Hex and the SHA-256 behind the pin, shared with `field`. |
 
 ## Fixtures
 `tests/vectors/` holds three committed files, all produced by the reference oracle and

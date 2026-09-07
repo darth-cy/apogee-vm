@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::{assert_sha256, data_lines, field_element, read_vectors, sha256, to_hex};
+use common::{assert_sha256, data_lines, field_element, read_vectors};
 use constants::{POSEIDON2_RC3_INITIAL, POSEIDON2_RC3_INTERNAL, POSEIDON2_RC3_TERMINAL};
 use field::Fr;
 use transcript::poseidon2_permute;
@@ -166,19 +166,6 @@ fn flip_a_bit(text: &str, pick: impl Fn(&str) -> bool, field: usize) -> String {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-
-/// The fixture pin is only as good as the hash behind it.
-#[test]
-fn sha256_matches_nist_vectors() {
-    assert_eq!(
-        to_hex(&sha256(b"abc")),
-        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-    );
-    assert_eq!(
-        to_hex(&sha256(b"")),
-        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    );
-}
 
 #[test]
 fn vendored_rc3_matches_upstream() {

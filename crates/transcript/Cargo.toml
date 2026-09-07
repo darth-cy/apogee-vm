@@ -10,4 +10,5 @@ field.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+test-support.workspace = true
 postcard.workspace = true

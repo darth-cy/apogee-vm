@@ -3,10 +3,8 @@
 //! The file is data, never inline literals, and is pinned by SHA-256. Refresh
 //! it with `cargo run -p kat-gen`, then update `KAT_SHA256` deliberately.
 
-mod common;
-
-use common::{hex_to_32, sha256, to_hex};
 use field::Fr;
+use test_support::{hex_to_32, sha256, to_hex};
 
 const KAT_PATH: &str = "tests/vectors/fr_kats.txt";
 const KAT_SHA256: &str = "cfb9db2443dc6d803104f7d89924235bcb2fa56cf6cfc04fc2e24cd31d0ce1df";
@@ -113,18 +111,6 @@ fn check(kat: &Kat) -> Result<(), String> {
             &kat.fields[..kat.fields.len() - 1]
         ))
     }
-}
-
-#[test]
-fn sha256_matches_nist_vectors() {
-    assert_eq!(
-        to_hex(&sha256(b"")),
-        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    );
-    assert_eq!(
-        to_hex(&sha256(b"abc")),
-        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-    );
 }
 
 #[test]

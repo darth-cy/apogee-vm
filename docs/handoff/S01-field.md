@@ -121,7 +121,8 @@ uses a binary GCD; still inside 2×, and `batch_inverse` amortizes it to 1.06×.
    explicit binary makes regenerate-and-diff a one-liner.
 6. Test-only SHA-256 in `crates/field/tests/common/mod.rs`, ~55 lines, itself checked
    against the two NIST vectors. Implements master rule 11's "fixtures pinned by hash"
-   without adding a dependency.
+   without adding a dependency. *(Moved after S02 to `tools/test-support`, shared with
+   `crates/transcript`; see the S02a entry in `docs/decisions.md`.)*
 7. `crates/field/tests/constants_check.rs` — not requested, but a wrong Montgomery
    constant is silent: every operation stays self-consistent while the field is the
    wrong one. This is the test that catches it.

@@ -146,3 +146,32 @@ a hand-built snapshot can differ there and still behave identically.
 wants fixtures pinned by hash. Sharing the ~55 test-only lines would mean a new crate or a
 cross-crate `#[path]` include; the master prompt prefers duplication to an abstraction,
 and both copies are checked against the two NIST vectors where they live.
+
+> **Superseded** by "SHA-256 and hex live in `tools/test-support`" below. The judgement
+> that duplication beats abstraction at two callers was overruled by the repository owner
+> once the second copy actually appeared.
+
+## S02a — shared test support
+
+**SHA-256 and hex live in `tools/test-support`, a dev-dependency-only crate.** Two
+identical copies of the hash that pins every committed fixture, plus two identical copies
+of its NIST self-test, is one copy too many: the failure mode is a fix or a hardening
+landing in one and not the other, and the thing that goes stale is the check that the pins
+mean anything. The crate holds `sha256`, `to_hex`, `hex_to_32` and `hex_to_bytes`, and its
+own NIST vectors. The first three each existed in both suites — `sha256` and `to_hex` byte
+for byte, `hex_to_32` differing only in loop style — and `hex_to_bytes` follows them because
+splitting the hex codec across two files by accident of today's call sites is worse than
+moving one more small function. What stayed behind is what is genuinely local: `field`'s
+seeded RNG and arkworks bridge, `transcript`'s vector-file reader and case replayer.
+
+It is in `tools/` rather than `crates/` because `crates/` is the master prompt's frozen
+list of crates that ship, and this one never does. It declares **no dependencies at all**,
+so appearing in a `[dev-dependencies]` table cannot unify a feature into that crate's real
+dependency graph — the hazard that already keeps `tools/transcript-ref` out of the
+workspace.
+
+**The moved SHA-256 gained the vectors the two copies never had.** Both old self-tests used
+only `""` and `"abc"`, which are single-block: the padding path that spills into a second
+block was untested in a hash used to pin every fixture in the repository. The shared test
+adds FIPS 180-4's 56-byte vector and the 1,000,000-`a` vector, and walks the lengths either
+side of the block boundary.

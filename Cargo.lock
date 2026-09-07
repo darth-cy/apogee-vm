@@ -240,6 +240,7 @@ dependencies = [
  "constants",
  "postcard",
  "serde",
+ "test-support",
 ]
 
 [[package]]
@@ -434,6 +435,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "test-support"
+version = "0.1.0"
+
+[[package]]
 name = "thiserror"
 version = "2.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -461,6 +466,7 @@ dependencies = [
  "field",
  "postcard",
  "serde",
+ "test-support",
 ]
 
 [[package]]

@@ -6,9 +6,10 @@ mod common;
 
 use std::str::FromStr;
 
-use common::{ark_to_bytes, to_hex};
+use common::ark_to_bytes;
 use constants::{FR_INV, FR_MODULUS, FR_MODULUS_MINUS_TWO, FR_R, FR_R2, PROTOCOL_VERSION};
 use field::Fr;
+use test_support::to_hex;
 
 /// The master prompt's frozen Fr modulus, in decimal.
 const FR_MODULUS_DECIMAL: &str =

@@ -164,6 +164,8 @@ and they must name the same field element.
 ## Verification performed
 
 69 workspace tests, green in debug and release (33 from S01, unchanged; 36 new).
+*(71 after the post-stage `tools/test-support` refactor: the two duplicated
+`sha256_matches_nist_vectors` tests became four shared ones.)*
 
 - **Acceptance 1** — `permutation_kat`: input `[0,1,2]`, byte-exact from the committed
   file. The value was independently confirmed against *both* upstream implementations
@@ -223,7 +225,8 @@ outside any case), `malformed_snapshots_are_rejected` (length above the rate for
 buffer, a stale lane in either buffer, a truncated encoding) and
 `snapshot_rejects_non_canonical_field_elements`.
 
-Also checked: `sha256_matches_nist_vectors` (the pin is only as good as the hash),
+Also checked: `sha256_matches_nist_vectors` (the pin is only as good as the hash; it now
+lives once, in `tools/test-support`),
 `tag_table_is_well_formed` (distinct, nonzero, all resolvable),
 `event_log_records_typed_operations_only`, `event_log_does_not_affect_challenges`,
 `restore_starts_a_fresh_event_log`, and `observe_drops_unread_output`. That last one
@@ -301,7 +304,10 @@ succeeds: the recursion guest links this crate.
 - **SHA-256 is duplicated** into `crates/transcript/tests/common/mod.rs` (~55 test-only
   lines). Master rule 11 wants fixtures pinned by hash; the master prompt prefers
   duplication to an abstraction; both copies are checked against the NIST vectors where
-  they live.
+  they live. *(Overruled by the repository owner after the stage: both copies now live
+  once in `tools/test-support`, a dev-dependency-only crate with no dependencies of its
+  own. See the S02a entry in `docs/decisions.md`. The workspace test count goes from 69
+  to 71 — two duplicated NIST tests removed, four shared ones added.)*
 - **No conflicts between the master prompt and the stage prompt were found.** The only
   place the stage left a frozen protocol decision open — the typed framing — was raised
   with the repository owner and decided by them, as recorded above.
