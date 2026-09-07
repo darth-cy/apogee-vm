@@ -224,3 +224,91 @@ fn batch_inverse_boundary_shapes() {
         assert_eq!(got, want, "batch_inverse on {input:?}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// `from_hex`: the source-literal form for frozen constant tables.
+//
+// Big-endian, `0x`-prefixed, exactly 64 lowercase digits — the order `Debug`
+// prints and the order upstream tables are written in, deliberately not the
+// little-endian byte order of `to_bytes`.
+// ---------------------------------------------------------------------------
+
+/// Big-endian hex for a value, the way `from_hex` expects to read it.
+fn be_hex(x: &Fr) -> String {
+    let mut s = String::from("0x");
+    for b in x.to_bytes().iter().rev() {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
+}
+
+#[test]
+fn from_hex_reads_big_endian() {
+    let one = format!("0x{:0>64}", "1");
+    assert_eq!(Fr::from_hex(&one), Some(Fr::ONE));
+    assert_eq!(Fr::from_hex(&format!("0x{:0>64}", "0")), Some(Fr::ZERO));
+
+    // 0x0102 is 258, not 513: the last digits are the least significant.
+    assert_eq!(
+        Fr::from_hex(&format!("0x{:0>64}", "102")),
+        Some(Fr::from_u64(258))
+    );
+
+    // The same value, read as little-endian bytes, is something else entirely.
+    let mut le = [0u8; 32];
+    le[30] = 0x01;
+    le[31] = 0x02;
+    assert_ne!(Fr::from_bytes(&le), Some(Fr::from_u64(258)));
+}
+
+#[test]
+fn from_hex_round_trips_every_edge_value_and_random_ones() {
+    let mut values = vec![Fr::ZERO, Fr::ONE, Fr::MINUS_ONE, Fr::from_u64(u64::MAX)];
+    let mut rng = Rng::new(SEED ^ 7);
+    for _ in 0..200 {
+        values.push(rng.next_fr());
+    }
+    for x in values {
+        assert_eq!(Fr::from_hex(&be_hex(&x)), Some(x), "round trip for {x:?}");
+        // `Debug` prints the same digits, which is the point of the ordering.
+        assert_eq!(format!("{x:?}"), format!("Fr({})", be_hex(&x)));
+    }
+}
+
+#[test]
+fn from_hex_has_exactly_one_accepted_spelling() {
+    let valid = be_hex(&Fr::from_u64(0xdead_beef));
+    assert!(Fr::from_hex(&valid).is_some(), "the control must parse");
+
+    let digits = valid.trim_start_matches("0x");
+    let rejected = [
+        digits.to_string(),                     // no prefix
+        format!("0X{digits}"),                  // uppercase prefix
+        format!("0x{}", &digits[1..]),          // 63 digits
+        format!("0x0{digits}"),                 // 65 digits
+        format!("0x{}", digits.to_uppercase()), // uppercase digits
+        format!("0x{}g", &digits[1..]),         // non-hex digit
+        format!("0x{}", " ".repeat(64)),        // whitespace
+        String::new(),
+        "0x".to_string(),
+    ];
+    for s in rejected {
+        assert_eq!(Fr::from_hex(&s), None, "must reject {s:?}");
+    }
+}
+
+#[test]
+fn from_hex_rejects_values_at_or_above_the_modulus() {
+    // p itself, and p written one digit larger, and the all-ones word.
+    let p = "0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001";
+    assert_eq!(Fr::from_hex(p), None, "p is not canonical");
+
+    let p_plus_one = "0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000002";
+    assert_eq!(Fr::from_hex(p_plus_one), None);
+
+    assert_eq!(Fr::from_hex(&format!("0x{}", "f".repeat(64))), None);
+
+    // p - 1 is the largest value it does accept.
+    let p_minus_one = "0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000000";
+    assert_eq!(Fr::from_hex(p_minus_one), Some(Fr::MINUS_ONE));
+}

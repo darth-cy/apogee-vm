@@ -80,20 +80,35 @@ compiled but never executed — the exact trap S01 documented and avoided. The t
 own workspace root with its own committed `Cargo.lock`, and CI drives it by
 `--manifest-path`. `tools/kat-gen` stays a member: arkworks does not pull `serde/std`.
 
-**Round constants are vendored as canonical limbs and converted at compile time.** The
-alternatives were storing them in Montgomery form (which puts a second encoding into a
-checked-in artifact, against master rule 3) or converting them at runtime (which roughly
-doubles the cost of a permutation, and the permutation is the recursion verifier's hot
-loop). Compile-time conversion needed one new function, `Fr::from_canonical_limbs`, and
-the mechanical const-ification of `field`'s limb primitives.
+**Round constants are vendored as upstream's hex literals and decoded at runtime.**
+`poseidon2_permute` reads 80 constants per call, and after S01 there is no way to write
+down an `Fr` *table* at compile time: the limb field is private and every constructor is a
+runtime function. So the choice was to give `field` a compile-time constructor or to decode
+per call.
 
-**`crates/field`'s limb primitives became `const fn`.** `mac`, `adc`, `sbb`,
-`is_ge_modulus`, `reduce_once` and `mont_mul` now use `while` loops instead of `for`, and
-`debug_assert!` instead of `debug_assert_eq!`, which const evaluation does not accept. The
-alternative was a second, const-only Montgomery multiplier — a duplicate of the most
-correctness-critical routine in the workspace, which the existing test suite would then
-only cover once. One implementation, still covered by all 33 S01 tests, is the safer
-trade even though it touches frozen code.
+The first version of this stage took the compile-time route — a `const fn`
+`Fr::from_canonical_limbs`, which required const-ifying `mont_mul` and its helpers. That
+was reverted. Two claims used to justify it did not survive measurement: "roughly doubles
+the cost of a permutation" was really **1.23x** for a byte-array table, and "the
+permutation is the recursion verifier's hot loop" is wrong — in the guest, Poseidon2 is a
+delegation circuit, so this Rust code is host-prover and native-verifier work. Master rule
+11 forbids optimising without a benchmark showing it matters on the real workload, and
+there is no real workload yet.
+
+What ships instead: `constants` holds the literals copied from upstream character for
+character, and `field::Fr::from_hex` decodes them on every call. `crates/field/src/lib.rs`
+is otherwise byte-identical to its S01 state — the diff is 40 added lines and nothing
+else. Measured: **4667 ns** per permutation with the decode already done, **8201 ns** as
+shipped, so decoding costs **1.76x**. That is the price of a vendored table a reviewer can
+diff against upstream by eye and an S01 crate nobody had to edit. If a real workload ever
+says it matters, the fix is a decoded table and it needs a benchmark in the same commit.
+
+**`Fr::from_hex` is big-endian, `to_bytes` is little-endian, and that is deliberate.** A
+hex literal in source is a number, so it reads in the order `Debug` already prints and the
+order upstream writes its tables; the wire form is bytes, so it stays little-endian per
+master rule 3. There is exactly one accepted spelling — `0x`, then 64 lowercase digits —
+so a mistyped constant fails at its `expect` instead of becoming a different field
+element.
 
 **Only the round constants the permutation reads are vendored.** Upstream `RC3` is 64 rows
 of 3, but the 56 partial rounds use lane 0 alone and upstream stores zero in the other

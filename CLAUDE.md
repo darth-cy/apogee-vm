@@ -42,7 +42,7 @@ cargo fmt --all -- --check
 cargo fmt --manifest-path tools/transcript-ref/Cargo.toml --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
-cargo test --workspace                      # 65 tests as of S02
+cargo test --workspace                      # 69 tests as of S02
 cargo build -p field -p constants -p transcript --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
@@ -63,8 +63,9 @@ does not name a version anywhere, so it cannot drift from that pin.
 - **Concrete types.** `Fr` is a struct. There is no `F: Field`, and there never will be.
 - **No cargo features. Zero.** One build configuration for the whole workspace.
 - **One encoding.** Field elements on the wire are canonical (non-Montgomery) 32-byte
-  little-endian. Montgomery form exists only in memory. Frozen `Fr` constant tables are
-  stored canonically too and converted by `Fr::from_canonical_limbs` at compile time.
+  little-endian. Montgomery form exists only in memory. Source literals are the one
+  exception and are their own single form: `Fr::from_hex`, `0x` plus 64 lowercase digits,
+  big-endian, because a constant in source is a number and should diff against upstream.
 - **One tag, one message kind.** The transcript frames typed messages as
   `tag, length, payload`, so a tag in `constants::transcript_tags` must name exactly one
   of scalars, bytes or a challenge. Reusing one across kinds is a soundness bug.

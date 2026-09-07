@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::{assert_sha256, data_lines, field_element, hex_to_32, read_vectors, sha256, to_hex};
+use common::{assert_sha256, data_lines, field_element, read_vectors, sha256, to_hex};
 use constants::{POSEIDON2_RC3_INITIAL, POSEIDON2_RC3_INTERNAL, POSEIDON2_RC3_TERMINAL};
 use field::Fr;
 use transcript::poseidon2_permute;
@@ -29,19 +29,9 @@ const STRUCTURED_PREFIX: usize = 8;
 // that a corrupted file is actually rejected.
 // ---------------------------------------------------------------------------
 
-fn limbs(bytes: [u8; 32]) -> [u64; 4] {
-    let mut out = [0u64; 4];
-    for (i, limb) in out.iter_mut().enumerate() {
-        let mut w = [0u8; 8];
-        w.copy_from_slice(&bytes[8 * i..8 * i + 8]);
-        *limb = u64::from_le_bytes(w);
-    }
-    out
-}
-
-/// The upstream 64x3 table, as canonical limbs.
-fn parse_rc3(text: &str) -> Result<[[[u64; 4]; 3]; 64], String> {
-    let mut table = [[[0u64; 4]; 3]; 64];
+/// The upstream 64x3 table, decoded from the committed little-endian dump.
+fn parse_rc3(text: &str) -> Result<[[Fr; 3]; 64], String> {
+    let mut table = [[Fr::ZERO; 3]; 64];
     let mut seen = [[false; 3]; 64];
     let lines = data_lines(text);
     if lines.len() != 64 * 3 {
@@ -61,7 +51,7 @@ fn parse_rc3(text: &str) -> Result<[[[u64; 4]; 3]; 64], String> {
         if round >= 64 || lane >= 3 {
             return Err(format!("line {}: index out of range", line.no));
         }
-        table[round][lane] = limbs(hex_to_32(&f[3])?);
+        table[round][lane] = field_element(&f[3]).map_err(|e| format!("line {}: {e}", line.no))?;
         seen[round][lane] = true;
     }
     if seen.iter().flatten().any(|s| !s) {
@@ -70,28 +60,37 @@ fn parse_rc3(text: &str) -> Result<[[[u64; 4]; 3]; 64], String> {
     Ok(table)
 }
 
-/// Check the vendored constants against the upstream table.
+/// Decode a vendored constant the way the permutation does.
+fn vendored(hex: &str) -> Result<Fr, String> {
+    Fr::from_hex(hex).ok_or_else(|| format!("vendored constant {hex} is not a canonical literal"))
+}
+
+/// Check the vendored hex literals against the upstream table.
+///
+/// This is also where the two textual conventions meet: `constants` holds
+/// upstream's big-endian `0x` literals, the committed dump holds little-endian
+/// canonical bytes, and they must name the same field element.
 fn check_rc3(text: &str) -> Result<(), String> {
     let upstream = parse_rc3(text)?;
 
     for round in 0..4 {
         for lane in 0..3 {
-            if POSEIDON2_RC3_INITIAL[round][lane] != upstream[round][lane] {
+            if vendored(POSEIDON2_RC3_INITIAL[round][lane])? != upstream[round][lane] {
                 return Err(format!("initial round {round} lane {lane} differs"));
             }
-            if POSEIDON2_RC3_TERMINAL[round][lane] != upstream[60 + round][lane] {
+            if vendored(POSEIDON2_RC3_TERMINAL[round][lane])? != upstream[60 + round][lane] {
                 return Err(format!("terminal round {round} lane {lane} differs"));
             }
         }
     }
     for round in 0..56 {
-        if POSEIDON2_RC3_INTERNAL[round] != upstream[4 + round][0] {
+        if vendored(POSEIDON2_RC3_INTERNAL[round])? != upstream[4 + round][0] {
             return Err(format!("internal round {round} differs"));
         }
         // Nothing was dropped: the lanes `constants` does not store are zero
         // upstream, so the partial rounds really do use lane 0 alone.
         for (lane, c) in upstream[4 + round].iter().enumerate().skip(1) {
-            if *c != [0u64; 4] {
+            if *c != Fr::ZERO {
                 return Err(format!(
                     "internal round {round} lane {lane} is not zero upstream"
                 ));

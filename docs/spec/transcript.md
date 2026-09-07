@@ -44,16 +44,17 @@ rows `60..64` the terminal full rounds, both using all three lanes; rows
 `4..60` are the partial rounds and use lane 0 only, with zero in lanes 1 and 2
 upstream.
 
-`constants` stores exactly the entries the permutation reads, as canonical
-little-endian limbs, split by phase:
-`POSEIDON2_RC3_INITIAL` (`[[[u64; 4]; 3]; 4]`), `POSEIDON2_RC3_INTERNAL`
-(`[[u64; 4]; 56]`), `POSEIDON2_RC3_TERMINAL` (`[[[u64; 4]; 3]; 4]`).
+`constants` stores exactly the entries the permutation reads, split by phase:
+`POSEIDON2_RC3_INITIAL` (`[[&str; 3]; 4]`), `POSEIDON2_RC3_INTERNAL`
+(`[&str; 56]`), `POSEIDON2_RC3_TERMINAL` (`[[&str; 3]; 4]`). The literals are
+copied from upstream character for character — `0x` plus 64 lowercase hex
+digits, big-endian — so the vendored table diffs against its source by eye.
 `crates/transcript/tests/poseidon2.rs` checks all three against a committed dump
 of the full 64x3 table, including that the lanes not stored are zero upstream.
 
-The canonical limbs become `Fr` at compile time through
-`Fr::from_canonical_limbs`, so the stored form obeys the one-encoding rule and
-no runtime conversion pass exists.
+`field::Fr::from_hex` decodes them, at runtime, on every permutation call: `Fr`
+has no compile-time constructor, and giving it one would have meant editing the
+S01 multiplier. The measured cost is in `docs/decisions.md`.
 
 ## 3. The permutation
 

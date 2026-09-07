@@ -28,40 +28,20 @@ use field::Fr;
 //
 // 8 full rounds (4 initial, 4 terminal) around 56 partial rounds, S-box
 // x -> x^5, partial-round S-box on lane 0. Round constants come from
-// `constants`, which documents their provenance.
+// `constants` as upstream's hex literals, which documents their provenance.
 // ---------------------------------------------------------------------------
 
-/// The initial full rounds' constants, in Montgomery form at compile time.
-const RC_INITIAL: [[Fr; 3]; 4] = full_round_constants(POSEIDON2_RC3_INITIAL);
-
-/// The partial rounds' constants, lane 0 only.
-const RC_INTERNAL: [Fr; 56] = partial_round_constants(POSEIDON2_RC3_INTERNAL);
-
-/// The terminal full rounds' constants.
-const RC_TERMINAL: [[Fr; 3]; 4] = full_round_constants(POSEIDON2_RC3_TERMINAL);
-
-const fn full_round_constants(limbs: [[[u64; 4]; 3]; 4]) -> [[Fr; 3]; 4] {
-    let mut out = [[Fr::ZERO; 3]; 4];
-    let mut round = 0;
-    while round < 4 {
-        let mut lane = 0;
-        while lane < 3 {
-            out[round][lane] = Fr::from_canonical_limbs(limbs[round][lane]);
-            lane += 1;
-        }
-        round += 1;
-    }
-    out
-}
-
-const fn partial_round_constants(limbs: [[u64; 4]; 56]) -> [Fr; 56] {
-    let mut out = [Fr::ZERO; 56];
-    let mut round = 0;
-    while round < 56 {
-        out[round] = Fr::from_canonical_limbs(limbs[round]);
-        round += 1;
-    }
-    out
+/// One frozen round constant, decoded from its hex literal.
+///
+/// `Fr` has no compile-time constructor, so this runs on every call: 80
+/// decodes per permutation. Measured cost is in `docs/decisions.md`; no
+/// benchmark on a real workload yet says it matters, so the obvious code
+/// stays. The literals are checked against the reference dump in
+/// `tests/poseidon2.rs`, and a malformed one panics here rather than becoming a
+/// different field element.
+#[inline]
+fn rc(hex: &str) -> Fr {
+    Fr::from_hex(hex).expect("a frozen round constant is a canonical hex literal")
 }
 
 /// `x^5`, the S-box. Three multiplications.
@@ -97,21 +77,21 @@ fn internal_matrix(s: &mut [Fr; 3]) {
 pub fn poseidon2_permute(state: &mut [Fr; 3]) {
     external_matrix(state);
 
-    for rc in RC_INITIAL.iter() {
+    for row in POSEIDON2_RC3_INITIAL.iter() {
         for lane in 0..3 {
-            state[lane] = sbox(state[lane] + rc[lane]);
+            state[lane] = sbox(state[lane] + rc(row[lane]));
         }
         external_matrix(state);
     }
 
-    for rc in RC_INTERNAL.iter() {
-        state[0] = sbox(state[0] + rc);
+    for c in POSEIDON2_RC3_INTERNAL.iter() {
+        state[0] = sbox(state[0] + rc(c));
         internal_matrix(state);
     }
 
-    for rc in RC_TERMINAL.iter() {
+    for row in POSEIDON2_RC3_TERMINAL.iter() {
         for lane in 0..3 {
-            state[lane] = sbox(state[lane] + rc[lane]);
+            state[lane] = sbox(state[lane] + rc(row[lane]));
         }
         external_matrix(state);
     }

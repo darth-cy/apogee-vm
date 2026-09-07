@@ -41,19 +41,21 @@ pub struct TranscriptSnapshot { /* private fields */ }
 
 ```rust
 // crates/constants/src/lib.rs   (additions; still zero logic, #![no_std])
-pub const POSEIDON2_RC3_INITIAL:  [[[u64; 4]; 3]; 4];   // RC3 rows 0..4,  all lanes
-pub const POSEIDON2_RC3_INTERNAL: [[u64; 4]; 56];       // RC3 rows 4..60, lane 0
-pub const POSEIDON2_RC3_TERMINAL: [[[u64; 4]; 3]; 4];   // RC3 rows 60..64, all lanes
+// Upstream's hex literals, character for character.
+pub const POSEIDON2_RC3_INITIAL:  [[&str; 3]; 4];   // RC3 rows 0..4,  all lanes
+pub const POSEIDON2_RC3_INTERNAL: [&str; 56];       // RC3 rows 4..60, lane 0
+pub const POSEIDON2_RC3_TERMINAL: [[&str; 3]; 4];   // RC3 rows 60..64, all lanes
 
 pub mod transcript_tags { /* the table below */ }
 ```
 
 ```rust
-// crates/field/src/lib.rs   (one addition)
+// crates/field/src/lib.rs   (one addition; the rest is byte-identical to S01)
 impl Fr {
-    /// Compile-time constructor from canonical little-endian limbs. Panics —
-    /// at build time, in a const context — if the value is not reduced.
-    pub const fn from_canonical_limbs(x: [u64; 4]) -> Fr;
+    /// `0x` + exactly 64 lowercase hex digits, big-endian. `None` for any other
+    /// spelling, or for a value `>= p`. The source-literal form for frozen
+    /// constant tables — deliberately not `to_bytes`' little-endian wire order.
+    pub fn from_hex(s: &str) -> Option<Fr>;
 }
 ```
 
@@ -151,13 +153,17 @@ test uses. The permutation oracle is Plonky3 at commit
 every generated vector file's header.
 
 `constants` stores only the entries the permutation reads: rows 0..4 and 60..64 with all
-three lanes, rows 4..60 with lane 0. `tests/poseidon2.rs` checks all three vendored tables
-against the committed dump of the **full** table, including that lanes 1 and 2 of the
-partial rounds are zero upstream — so the split cannot have dropped anything.
+three lanes, rows 4..60 with lane 0. The literals are copied from upstream character for
+character, so the vendored table diffs against its source by eye. `tests/poseidon2.rs`
+checks all three vendored tables against the committed dump of the **full** table,
+including that lanes 1 and 2 of the partial rounds are zero upstream — so the split cannot
+have dropped anything, and it is also where the two textual conventions meet: `constants`
+holds upstream's big-endian `0x` literals, the dump holds little-endian canonical bytes,
+and they must name the same field element.
 
 ## Verification performed
 
-65 workspace tests, green in debug and release (33 from S01, unchanged; 32 new).
+69 workspace tests, green in debug and release (33 from S01, unchanged; 36 new).
 
 - **Acceptance 1** — `permutation_kat`: input `[0,1,2]`, byte-exact from the committed
   file. The value was independently confirmed against *both* upstream implementations
@@ -236,11 +242,10 @@ succeeds: the recursion guest links this crate.
 
 ## Additive extensions (everything beyond the stage's literal list)
 
-1. **`Fr::from_canonical_limbs`** and the const-ification of `field`'s limb primitives.
-   Unavoidable: the round constants must reach `Fr` somehow, and the alternatives were a
-   second encoding in a checked-in artifact or a runtime conversion pass that roughly
-   doubles the cost of a permutation. Behaviour-preserving — all 33 S01 tests pass
-   unchanged.
+1. **`Fr::from_hex`**, plus four tests for it in `crates/field/tests/edge_cases.rs`.
+   Unavoidable in some form: the round constants have to reach `Fr` somehow, and after S01
+   there is no way to write down an `Fr` table at all. `crates/field/src/lib.rs` is
+   otherwise byte-identical to `main` — the diff is 40 added lines and nothing else.
 2. **`docs/spec/transcript.md`.** The stage cites "spec §5/§6/§9/§10" and no spec
    existed; master rule 12 wants one. It is the normative document from here on.
 3. **Structured permutation vectors** beyond the random ones: all-zero, all-one,
@@ -265,6 +270,16 @@ succeeds: the recursion guest links this crate.
   root manifest) with its own committed `Cargo.lock`. Verified empirically with
   `cargo tree -e features -i serde`. It costs one `--manifest-path` in CI and in the
   commands block; `cargo fmt --all` does not reach it, so CI checks it separately.
+- **`crates/field` was left alone, on purpose, after first not being.** The stage needs
+  frozen `Fr` tables and S01 provides no way to build one. The first version of this branch
+  made `mont_mul` and its helpers `const fn` and added a compile-time constructor; two
+  claims justifying that did not survive measurement (see `docs/decisions.md`), and master
+  rule 11 forbids optimising without a real-workload benchmark. It was reverted at the
+  repository owner's direction in favour of a runtime `Fr::from_hex`. The cost is
+  **1.76x** on the permutation — 4667 ns with the decode already done, 8201 ns as shipped —
+  and the benefit is that S01's most correctness-critical routine was not touched and the
+  vendored table is upstream's own text. If a real workload ever says the decode matters,
+  the fix is a decoded table and it needs a benchmark in the same commit.
 - **The oracle carries a second sponge on purpose.** The stage says the driver should
   "call ONLY the Plonky3 reference permutation"; the driver does transcribe the duplex from
   the spec text, as asked, but it also runs Plonky3's `DuplexChallenger` beside it and

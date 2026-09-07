@@ -10,7 +10,9 @@ needs before touching the code.
 ## Frozen invariants
 - **The construction is frozen.** Width 3, rate 2, capacity 1, `x^5`, 4 initial full
   rounds / 56 partial rounds / 4 terminal full rounds, partial-round S-box on lane 0,
-  upstream `RC3` constants. Changing any of it is a protocol-version change.
+  upstream `RC3` constants. Changing any of it is a protocol-version change. The constants
+  live in `constants` as upstream's hex literals and are decoded by `Fr::from_hex` on every
+  call; the measured cost of that is in `docs/decisions.md`.
 - **Overwrite absorption, zero pad, length tag.** A duplex step with `n > 0` pending
   elements overwrites the first `n` rate lanes, zero-fills the rest, and adds `n` to
   the capacity. A step with nothing pending leaves the rate alone and adds nothing —
