@@ -7,12 +7,8 @@
 mod common;
 
 use common::{assert_sha256, data_lines, field_element, read_vectors};
-use constants::{POSEIDON2_RC3_INITIAL, POSEIDON2_RC3_INTERNAL, POSEIDON2_RC3_TERMINAL};
 use field::Fr;
 use transcript::poseidon2_permute;
-
-const RC3_PATH: &str = "tests/vectors/poseidon2_rc3.txt";
-const RC3_SHA256: &str = "40d9c19a629f6c7262a06730a78be8031975027c5f85b37c75681a05080e3d19";
 
 const PERM_PATH: &str = "tests/vectors/poseidon2_perm.txt";
 const PERM_SHA256: &str = "905e08088b1b9e1bfe985e1447f2f373d66b3e97ce1750714d39940de65e1fee";
@@ -28,77 +24,6 @@ const STRUCTURED_PREFIX: usize = 8;
 // Parsing. Every reader returns `Result` so the negative controls can assert
 // that a corrupted file is actually rejected.
 // ---------------------------------------------------------------------------
-
-/// The upstream 64x3 table, decoded from the committed little-endian dump.
-fn parse_rc3(text: &str) -> Result<[[Fr; 3]; 64], String> {
-    let mut table = [[Fr::ZERO; 3]; 64];
-    let mut seen = [[false; 3]; 64];
-    let lines = data_lines(text);
-    if lines.len() != 64 * 3 {
-        return Err(format!("expected 192 rc lines, got {}", lines.len()));
-    }
-    for line in lines {
-        let f = &line.fields;
-        if f.len() != 4 || f[0] != "rc" {
-            return Err(format!("line {}: not an rc line", line.no));
-        }
-        let round: usize = f[1]
-            .parse()
-            .map_err(|_| format!("line {}: bad round", line.no))?;
-        let lane: usize = f[2]
-            .parse()
-            .map_err(|_| format!("line {}: bad lane", line.no))?;
-        if round >= 64 || lane >= 3 {
-            return Err(format!("line {}: index out of range", line.no));
-        }
-        table[round][lane] = field_element(&f[3]).map_err(|e| format!("line {}: {e}", line.no))?;
-        seen[round][lane] = true;
-    }
-    if seen.iter().flatten().any(|s| !s) {
-        return Err("the rc3 table has a hole".to_string());
-    }
-    Ok(table)
-}
-
-/// Decode a vendored constant the way the permutation does.
-fn vendored(hex: &str) -> Result<Fr, String> {
-    Fr::from_hex(hex).ok_or_else(|| format!("vendored constant {hex} is not a canonical literal"))
-}
-
-/// Check the vendored hex literals against the upstream table.
-///
-/// This is also where the two textual conventions meet: `constants` holds
-/// upstream's big-endian `0x` literals, the committed dump holds little-endian
-/// canonical bytes, and they must name the same field element.
-fn check_rc3(text: &str) -> Result<(), String> {
-    let upstream = parse_rc3(text)?;
-
-    for round in 0..4 {
-        for lane in 0..3 {
-            if vendored(POSEIDON2_RC3_INITIAL[round][lane])? != upstream[round][lane] {
-                return Err(format!("initial round {round} lane {lane} differs"));
-            }
-            if vendored(POSEIDON2_RC3_TERMINAL[round][lane])? != upstream[60 + round][lane] {
-                return Err(format!("terminal round {round} lane {lane} differs"));
-            }
-        }
-    }
-    for round in 0..56 {
-        if vendored(POSEIDON2_RC3_INTERNAL[round])? != upstream[4 + round][0] {
-            return Err(format!("internal round {round} differs"));
-        }
-        // Nothing was dropped: the lanes `constants` does not store are zero
-        // upstream, so the partial rounds really do use lane 0 alone.
-        for (lane, c) in upstream[4 + round].iter().enumerate().skip(1) {
-            if *c != Fr::ZERO {
-                return Err(format!(
-                    "internal round {round} lane {lane} is not zero upstream"
-                ));
-            }
-        }
-    }
-    Ok(())
-}
 
 struct PermVector {
     input: [Fr; 3],
@@ -167,13 +92,6 @@ fn flip_a_bit(text: &str, pick: impl Fn(&str) -> bool, field: usize) -> String {
 // Tests
 // ---------------------------------------------------------------------------
 
-#[test]
-fn vendored_rc3_matches_upstream() {
-    let text = read_vectors(RC3_PATH);
-    assert_sha256(RC3_PATH, &text, RC3_SHA256);
-    check_rc3(&text).expect("the vendored round constants must match upstream RC3");
-}
-
 /// Acceptance 1: the `[0, 1, 2]` known-answer vector, byte-exact from the file.
 #[test]
 fn permutation_kat() {
@@ -232,54 +150,6 @@ fn committed_vectors_cover_distinct_inputs() {
 }
 
 // --- negative controls -----------------------------------------------------
-
-#[test]
-fn corrupted_rc3_is_rejected() {
-    let text = read_vectors(RC3_PATH);
-
-    let flipped = flip_a_bit(&text, |l| l.starts_with("rc 0 0 "), 3);
-    assert!(check_rc3(&flipped).is_err(), "a flipped bit must be caught");
-
-    // A partial round's unused lane must still be checked for zero.
-    let mut nonzero = String::new();
-    for line in text.lines() {
-        if line.starts_with("rc 7 1 ") {
-            nonzero.push_str(&format!("rc 7 1 {}\n", "01".repeat(32)));
-        } else {
-            nonzero.push_str(line);
-            nonzero.push('\n');
-        }
-    }
-    assert!(
-        check_rc3(&nonzero).is_err(),
-        "a nonzero unused lane must be caught"
-    );
-
-    let truncated: String = text
-        .lines()
-        .map(|l| {
-            if l.starts_with("rc 3 2 ") {
-                "rc 3 2\n".to_string()
-            } else {
-                format!("{l}\n")
-            }
-        })
-        .collect();
-    assert!(
-        check_rc3(&truncated).is_err(),
-        "a truncated line must be caught"
-    );
-
-    let dropped: String = text
-        .lines()
-        .filter(|l| !l.starts_with("rc 12 0 "))
-        .map(|l| format!("{l}\n"))
-        .collect();
-    assert!(
-        check_rc3(&dropped).is_err(),
-        "a missing constant must be caught"
-    );
-}
 
 #[test]
 fn corrupted_permutation_vectors_are_rejected() {

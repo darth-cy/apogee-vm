@@ -49,8 +49,11 @@ upstream.
 (`[&str; 56]`), `POSEIDON2_RC3_TERMINAL` (`[[&str; 3]; 4]`). The literals are
 copied from upstream character for character — `0x` plus 64 lowercase hex
 digits, big-endian — so the vendored table diffs against its source by eye.
-`crates/transcript/tests/poseidon2.rs` checks all three against a committed dump
-of the full 64x3 table, including that the lanes not stored are zero upstream.
+The vendored tables are checked by the permutation vectors rather than against a
+separate dump of `RC3`: every constant is read on every permutation call, so a
+single wrong digit changes the output for essentially every input and fails both
+the `[0,1,2]` KAT and all 128 committed vectors in
+`crates/transcript/tests/poseidon2.rs`.
 
 `field::Fr::from_hex` decodes them, at runtime, on every permutation call: `Fr`
 has no compile-time constructor, and giving it one would have meant editing the

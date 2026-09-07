@@ -61,9 +61,10 @@ pub mod transcript_tags {}      // empty
 | `tools/kat-gen/src/main.rs` | Deterministic regenerator (`cargo run -p kat-gen`) |
 | `tools/bench/src/main.rs` | Comparative microbenchmark (`cargo run --release -p bench`) |
 
-`fr_kats.txt` SHA-256 `cfb9db2443dc6d803104f7d89924235bcb2fa56cf6cfc04fc2e24cd31d0ce1df`,
-pinned in `tests/kat.rs::KAT_SHA256`. Refresh is manual: rerun the generator, re-hash,
-update the constant. Verified reproducible — rerunning the generator produced a
+`fr_kats.txt` is pinned by SHA-256 in `tests/kat.rs::KAT_SHA256`. The digest is
+deliberately not repeated here — it is a function of the generator's seed and content, so
+a copy in a handoff goes stale the first time either changes. Refresh is manual: rerun the
+generator, re-hash, update the constant. Verified reproducible — rerunning the generator produced a
 byte-identical file.
 
 Vector format is one whitespace-delimited line per case, values as 64 lowercase hex

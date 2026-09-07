@@ -39,14 +39,14 @@ needs before touching the code.
 ## Tests
 | File | Covers |
 | --- | --- |
-| `tests/poseidon2.rs` | Vendored `RC3` vs upstream; the `[0,1,2]` KAT; 128 reference permutation vectors; negative controls. |
+| `tests/poseidon2.rs` | The `[0,1,2]` KAT; 128 reference permutation vectors; negative controls. |
 | `tests/duplex.rs` | Cases A-E and the rest replayed from file; the tag table and the one-tag-one-kind rule; output order; squeeze repetition; typed-layer separation; the byte encoding; the event log; negative controls. |
 | `tests/snapshot.rs` | The 20-operation script snapshotted at operation 10; byte round trip; malformed-snapshot rejection. |
 | `tests/common/mod.rs` | Fixture pinning, the vector reader, the case replayer. Test-only. |
 | `tools/test-support` | The seeded RNG, hex, and the SHA-256 behind the pin. Shared. |
 
 ## Fixtures
-`tests/vectors/` holds three committed files, all produced by the reference oracle and
+`tests/vectors/` holds two committed files, both produced by the reference oracle and
 pinned by SHA-256 in the tests. **`crates/transcript` never generates its own expected
 values**; that is what makes the tests a differential rather than a self-oracle. The
 oracle transcribes `docs/spec/transcript.md` over Plonky3's Poseidon2, and asserts on
@@ -55,7 +55,7 @@ every raw operation that its transcription agrees with Plonky3's own `DuplexChal
 other before a single vector is written.
 
 ```
-cargo run --manifest-path tools/transcript-ref/Cargo.toml   # rewrites all three in place
+cargo run --manifest-path tools/transcript-ref/Cargo.toml   # rewrites both in place
 shasum -a 256 crates/transcript/tests/vectors/*.txt
 ```
 

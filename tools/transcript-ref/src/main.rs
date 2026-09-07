@@ -9,9 +9,8 @@
 //! the byte encoding — without ever touching `crates/transcript`. Everything the
 //! repository's tests assert about the transcript is produced here.
 //!
-//! Three files are written, all under `crates/transcript/tests/vectors/`:
+//! Two files are written, both under `crates/transcript/tests/vectors/`:
 //!
-//! * `poseidon2_rc3.txt`    — the full upstream 64x3 `RC3` table.
 //! * `poseidon2_perm.txt`   — permutation known-answer vectors.
 //! * `transcript_cases.txt` — replayable transcript scripts with expected output.
 //!
@@ -533,21 +532,6 @@ fn provenance(title: &str) -> String {
     )
 }
 
-fn write_rc3() {
-    let mut out = provenance("poseidon2_rc3 v1 -- the upstream BN254 width-3 RC3 table");
-    out.push_str(
-        "# rc <round 0..64> <lane 0..3> <constant>\n\
-         # Rows 4..60 are the partial rounds; upstream stores zero in lanes 1 and 2\n\
-         # there, which is why `constants` keeps lane 0 only for those rows.\n\n",
-    );
-    for (round, row) in RC3.iter().enumerate() {
-        for (lane, c) in row.iter().enumerate() {
-            let _ = writeln!(out, "rc {round} {lane} {}", hex(&ark_to_le32(*c)));
-        }
-    }
-    write("poseidon2_rc3.txt", out);
-}
-
 fn write_permutations() {
     let perm = reference_permutation();
     let mut out = provenance("poseidon2_perm v1 -- width-3 BN254 Poseidon2 known-answer vectors");
@@ -613,7 +597,6 @@ fn write_cases() {
 }
 
 fn main() {
-    write_rc3();
     write_permutations();
     write_cases();
 }
