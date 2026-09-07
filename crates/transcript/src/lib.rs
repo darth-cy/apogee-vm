@@ -34,7 +34,7 @@ use field::Fr;
 /// One frozen round constant, decoded from its hex literal.
 ///
 /// `Fr` has no compile-time constructor, so this runs on every call: 80
-/// decodes per permutation. Measured cost is in `docs/decisions.md`; no
+/// decodes per permutation, measured at 1.76x on the permutation; no
 /// benchmark on a real workload yet says it matters, so the obvious code
 /// stays. The literals are checked against the reference dump in
 /// `tests/poseidon2.rs`, and a malformed one panics here rather than becoming a

@@ -57,7 +57,8 @@ the `[0,1,2]` KAT and all 128 committed vectors in
 
 `field::Fr::from_hex` decodes them, at runtime, on every permutation call: `Fr`
 has no compile-time constructor, and giving it one would have meant editing the
-S01 multiplier. The measured cost is in `docs/decisions.md`.
+S01 multiplier. The measured cost is **1.76x** on the permutation: 4667 ns with
+the decode already done, 8201 ns as shipped.
 
 ## 3. The permutation
 

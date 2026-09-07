@@ -12,7 +12,8 @@ needs before touching the code.
   rounds / 56 partial rounds / 4 terminal full rounds, partial-round S-box on lane 0,
   upstream `RC3` constants. Changing any of it is a protocol-version change. The constants
   live in `constants` as upstream's hex literals and are decoded by `Fr::from_hex` on every
-  call; the measured cost of that is in `docs/decisions.md`.
+  call; that costs **1.76x** on the permutation (4667 ns with the decode already done,
+  8201 ns as shipped) and stays until a real-workload benchmark says it matters.
 - **Overwrite absorption, zero pad, length tag.** A duplex step with `n > 0` pending
   elements overwrites the first `n` rate lanes, zero-fills the rest, and adds `n` to
   the capacity. A step with nothing pending leaves the rate alone and adds nothing —
@@ -65,8 +66,8 @@ the files byte for byte, which is what CI checks.
 
 `tools/transcript-ref` is deliberately **not** a workspace member — its Plonky3 and
 `zkhash` dependency graphs would hand `serde/std` to `crates/field` through cargo's
-feature unification during `cargo test --workspace`. The reason is in its manifest and
-in `docs/decisions.md`. It has exactly one path dependency back into the repository,
+feature unification during `cargo test --workspace`. The reason is in its manifest.
+It has exactly one path dependency back into the repository,
 `tools/test-support`, for the seeded RNG that picks its inputs; that crate declares no
 dependencies of its own and has a test that keeps it that way, so the edge cannot reach
 anything the oracle is supposed to be an independent witness to.

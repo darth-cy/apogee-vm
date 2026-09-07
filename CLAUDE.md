@@ -12,7 +12,6 @@ prompt you are working on.
 .github/         CI: fmt, clippy, tests, guest build, fixture regenerate-and-diff
 prompts/         00-master.md (design authority) + one prompt per build stage
 docs/
-  decisions.md   why a non-obvious choice was made; newest last
   GLOSSARY.md    the vocabulary (column = multilinear = poly; layer; shard; family)
   spec/          the frozen protocol specs; read before touching what they cover
   handoff/       one note per completed stage: frozen API, artifacts, deviations

@@ -279,7 +279,7 @@ succeeds: the recursion guest links this crate.
 - **`crates/field` was left alone, on purpose, after first not being.** The stage needs
   frozen `Fr` tables and S01 provides no way to build one. The first version of this branch
   made `mont_mul` and its helpers `const fn` and added a compile-time constructor; two
-  claims justifying that did not survive measurement (see `docs/decisions.md`), and master
+  claims justifying that did not survive measurement, and master
   rule 11 forbids optimising without a real-workload benchmark. It was reverted at the
   repository owner's direction in favour of a runtime `Fr::from_hex`. The cost is
   **1.76x** on the permutation — 4667 ns with the decode already done, 8201 ns as shipped —
@@ -309,8 +309,8 @@ succeeds: the recursion guest links this crate.
   duplication to an abstraction; both copies are checked against the NIST vectors where
   they live. *(Overruled by the repository owner after the stage: both copies now live
   once in `tools/test-support`, a crate with no dependencies of its own, which also now
-  holds the splitmix64 generator that had four copies. See the S02a entry in
-  `docs/decisions.md`. The workspace test count goes from 69 to 76.)*
+  holds the splitmix64 generator that had four copies. The workspace test count goes from
+  69 to 74.)*
 - **No conflicts between the master prompt and the stage prompt were found.** The only
   place the stage left a frozen protocol decision open — the typed framing — was raised
   with the repository owner and decided by them, as recorded above.
