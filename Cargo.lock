@@ -152,9 +152,12 @@ version = "0.1.0"
 dependencies = [
  "ark-bn254",
  "ark-ff",
+ "constants",
  "field",
  "poly",
+ "sumcheck",
  "test-support",
+ "transcript",
 ]
 
 [[package]]
@@ -425,6 +428,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.4",
+]
+
+[[package]]
+name = "sumcheck"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "field",
+ "poly",
+ "test-support",
+ "transcript",
 ]
 
 [[package]]

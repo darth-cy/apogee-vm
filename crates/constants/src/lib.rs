@@ -216,7 +216,11 @@ pub mod transcript_tags {
     /// Scalars. One sumcheck round polynomial's coefficients.
     pub const SUMCHECK_ROUND: u64 = 4;
 
-    /// Challenge. The sumcheck challenge for the round just absorbed.
+    /// Challenge. Every challenge a sumcheck draws: first the `n` eq-randomizers
+    /// `r` that fix the zerocheck's equality polynomial, then the per-round
+    /// challenge for the round just absorbed. One tag, one kind; the two roles
+    /// are separated by their fixed position in the transcript script, not by
+    /// their tag.
     pub const SUMCHECK_CHALLENGE: u64 = 5;
 
     /// Scalars. A claimed evaluation of a committed or virtual polynomial.
@@ -224,4 +228,14 @@ pub mod transcript_tags {
 
     /// Scalars. Mercury opening-proof material.
     pub const PCS_OPENING: u64 = 7;
+
+    /// Scalars. The single squeezed `Fr` that binds a witness's columns to the
+    /// transcript before any challenge is drawn over them. The same tag frames
+    /// the messages inside the separate sponge that produces it; see
+    /// `crates/sumcheck`.
+    pub const WITNESS_DIGEST: u64 = 8;
+
+    /// Scalars. A sumcheck's `final_evals`: the claimed value of every input
+    /// polynomial at the fully bound point, absorbed before any later challenge.
+    pub const SUMCHECK_FINAL_EVALS: u64 = 9;
 }

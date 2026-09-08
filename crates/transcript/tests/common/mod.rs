@@ -84,6 +84,8 @@ pub fn tag_by_name(name: &str) -> Result<Tag, String> {
         "SUMCHECK_CHALLENGE" => Ok(transcript_tags::SUMCHECK_CHALLENGE),
         "EVALUATION_CLAIM" => Ok(transcript_tags::EVALUATION_CLAIM),
         "PCS_OPENING" => Ok(transcript_tags::PCS_OPENING),
+        "WITNESS_DIGEST" => Ok(transcript_tags::WITNESS_DIGEST),
+        "SUMCHECK_FINAL_EVALS" => Ok(transcript_tags::SUMCHECK_FINAL_EVALS),
         other => Err(format!("unknown tag name {other}")),
     }
 }

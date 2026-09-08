@@ -184,12 +184,27 @@ uninitialised value can never be a valid message.
 | `SUMCHECK_CHALLENGE` | 5 | challenge |
 | `EVALUATION_CLAIM` | 6 | scalars |
 | `PCS_OPENING` | 7 | scalars |
+| `WITNESS_DIGEST` | 8 | scalars |
+| `SUMCHECK_FINAL_EVALS` | 9 | scalars |
 
 **One tag, one message kind.** The typed layer frames a message as
 `tag, length, payload...` and nothing more, so injectivity of the absorbed
 stream rests on each tag naming exactly one kind. Reusing a tag across kinds
 would make `append_bytes(T, b"")` and `append_scalars(T, &[])` absorb the same
 stream. Later stages append to the table; they must not reuse.
+
+`SUMCHECK_CHALLENGE` covers every challenge a sumcheck draws — the `n`
+eq-randomizers that fix the zerocheck's equality polynomial, then the per-round
+challenge for the round just absorbed. Those are two roles of one kind, and they
+are separated by their fixed position in the protocol's script rather than by
+their tag.
+
+`WITNESS_DIGEST` is used twice, in the same kind both times: it frames the
+messages absorbed by the separate sponge that produces the digest, and it frames
+the single scalar that carries the digest into the protocol transcript. The
+squeeze that ends that sponge is a raw `sample`, **not** a `challenge_scalar`,
+precisely because a challenge under the same tag would be one tag in two kinds.
+See `crates/sumcheck`.
 
 ## 9. `append_scalar`, `append_scalars` — scalar messages
 

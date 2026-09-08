@@ -5,6 +5,7 @@ members = [
     "crates/field",
     "crates/transcript",
     "crates/poly",
+    "crates/sumcheck",
     "tools/kat-gen",
     "tools/bench",
     "tools/test-support",
@@ -23,6 +24,7 @@ constants = { path = "crates/constants" }
 field = { path = "crates/field" }
 transcript = { path = "crates/transcript" }
 poly = { path = "crates/poly" }
+sumcheck = { path = "crates/sumcheck" }
 
 # Test-only, and a dev-dependency everywhere it appears: SHA-256 for pinning
 # committed fixtures, and the hex codec those files are written in.
@@ -41,3 +43,12 @@ ark-poly = "0.6"
 
 # Test only. Exercises the `Fr` serde impls over a real wire format.
 postcard = { version = "1", default-features = false }
+
+# Acceptance 1 proves a 2^20-row zerocheck, and must-be-exact 7's witness digest
+# absorbs every cell of every column through Poseidon2 — about 2^21 sponge
+# elements. Unoptimized that is minutes per run, which would make
+# `cargo test --workspace` unusable. Optimizing the dev profile keeps
+# `debug-assertions` and `overflow-checks` on, so the tests still run with every
+# check the default dev profile gives them; only the code generation changes.
+[profile.dev]
+opt-level = 2

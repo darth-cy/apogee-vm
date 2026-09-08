@@ -20,9 +20,10 @@ crates/
   field/         Fr arithmetic (Montgomery); no_std
   transcript/    Poseidon2 permutation + duplex transcript; no_std
   poly/          MultilinearPoly + small-type backing + eq machinery; no_std
+  sumcheck/      Gate + zerocheck prover/verifier; no_std
 tools/
   kat-gen/       regenerates the committed Fr and multilinear vectors from arkworks
-  bench/         comparative microbenchmarks against arkworks
+  bench/         one routine per measurement, individually selectable
   transcript-ref/ the transcript oracle: Plonky3 + zkhash, NOT a workspace member
   test-support/  seeded RNG, SHA-256, hex; shared by every suite and generator
 ```
@@ -43,15 +44,17 @@ cargo fmt --all -- --check
 cargo fmt --manifest-path tools/transcript-ref/Cargo.toml --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
-cargo test --workspace                      # 113 tests as of S03
-cargo build -p field -p constants -p transcript -p poly --target riscv32imac-unknown-none-elf
+cargo test --workspace                      # 139 tests as of S04
+cargo build -p field -p constants -p transcript -p poly -p sumcheck --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
 git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/
 -------------------------------------------------------------------------------
 cargo run -p kat-gen                        # refresh Fr + poly fixtures (manual, deliberate)
 cargo run --manifest-path tools/transcript-ref/Cargo.toml   # ditto, transcript vectors
-cargo run --release -p bench                # internal numbers only, no public claims
+cargo run --release -p bench                # every routine; internal numbers only
+cargo run --release -p bench -- --list      # the routines, and what each measures
+cargo run --release -p bench -- <routine>   # just that one; setup is per-routine
 ```
 
 `tools/transcript-ref` is deliberately outside the cargo workspace, so it takes
@@ -69,7 +72,11 @@ does not name a version anywhere, so it cannot drift from that pin.
   big-endian, because a constant in source is a number and should diff against upstream.
 - **One index convention.** Variable `j` is bit `j`: the evaluation at `y` sits at
   `index = sum_j y_j 2^j`, and `bind` fixes variable 0, the low bit. Frozen in
-  `crates/poly` and load-bearing for every later circuit stage.
+  `crates/poly` and load-bearing for every later circuit stage. Sumcheck round `i`
+  binds variable `i`, so a claim's point reads in that same order.
+- **Fixed proof shapes.** A sumcheck round message is 4 coefficients, always — the
+  degree ceiling makes the round polynomial a cubic, and nothing in a proof has a
+  data-dependent length.
 - **One tag, one message kind.** The transcript frames typed messages as
   `tag, length, payload`, so a tag in `constants::transcript_tags` must name exactly one
   of scalars, bytes or a challenge. Reusing one across kinds is a soundness bug.
@@ -86,3 +93,4 @@ does not name a version anywhere, so it cannot drift from that pin.
 | S01 — Fr field + constants skeleton | done | `docs/handoff/S01-field.md` |
 | S02 — Poseidon2 permutation + duplex transcript | done | `docs/handoff/S02-transcript.md` |
 | S03 — MultilinearPoly + small-type backing | done | `docs/handoff/S03-poly.md` |
+| S04 — Gate-based sumcheck (zerocheck) | done | `docs/handoff/S04-sumcheck.md` |

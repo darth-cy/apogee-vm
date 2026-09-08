@@ -40,6 +40,23 @@ multilinear extension of "y equals r" on the cube. `eq_table(r)` tabulates it ov
 cube; `eq_eval(r, y)` is the closed form. It is the weight a zerocheck sums against and
 is always a virtual column.
 
+**Gate** — a formula of degree at most 2 over named columns, written as a sum of terms
+`coef * x_a * x_b` with the second factor optional. The degree ceiling is structural: a
+term names at most two factors, so a gate above it cannot be constructed.
+
+**Zerocheck** — the claim that a gate vanishes on every point of the cube, discharged as
+the sumcheck `0 = sum_y eq(r, y) * G(y)` for `r` drawn after the witness is bound to the
+transcript. Because `eq` is multilinear and `G` is degree 2, each round polynomial is a
+cubic and a round message is always 4 coefficients.
+
+**Round polynomial** — the univariate a sumcheck prover sends for one variable. Here it
+is always the ascending-coefficient cubic `[c0, c1, c2, c3]`, and round `i` binds
+variable `i`, so the bound point reads in the same little-endian order as a table index.
+
+**Final evals** — the claimed value of every input column at the fully bound point,
+carried in the proof and absorbed before any later challenge. They are an evaluation
+claim, not a proof: discharging them against a commitment is the PCS's job.
+
 **Layer** — one level of a GKR circuit. Each layer's values are determined by gates of
 degree ≤ 2 in the layer below.
 
