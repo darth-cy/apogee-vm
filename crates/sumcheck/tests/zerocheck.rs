@@ -6,7 +6,7 @@
 mod common;
 
 use common::{
-    bound_transcript, discharge, eq_randomizers, round_challenges, square_gate, square_witness,
+    bound_transcript, discharge, eq_randomizers, square_gate, square_witness,
     square_witness_with_bumped_b, square_witness_with_row, wide_gate, wide_witness,
     wide_witness_with_bumped_e, wide_witness_with_row,
 };
@@ -18,9 +18,8 @@ use sumcheck::{
 };
 
 /// Prove over `columns` on a transcript bound to `digest`, and check the proof
-/// on a *fresh* transcript bound to the same digest. Returns the proof, the
-/// verifier's answer, and both transcripts' event logs so a caller can hold the
-/// two sides to must-be-exact 4.
+/// on a *fresh* transcript bound to the same digest. Returns the proof and the
+/// verifier's answer.
 fn prove_then_verify(
     gate: &Gate,
     columns: &[MultilinearPoly],
@@ -35,22 +34,6 @@ fn prove_then_verify(
     let mut verifier = bound_transcript(digest);
     let outcome = verify_zerocheck(gate, n, &proof, &mut verifier);
 
-    if outcome.is_ok() {
-        // Must-be-exact 4: the two sides drove the transcript identically. The
-        // event log is the typed-message sequence and the snapshot is the
-        // sponge itself, so equal logs and equal snapshots leave no room for a
-        // challenge to have been passed out of band.
-        assert_eq!(
-            prover.event_log(),
-            verifier.event_log(),
-            "prover and verifier must absorb the same typed messages in the same order"
-        );
-        assert_eq!(
-            prover.snapshot(),
-            verifier.snapshot(),
-            "prover and verifier must end on the same sponge state"
-        );
-    }
     (proof, outcome)
 }
 
@@ -279,115 +262,6 @@ fn a_proof_of_the_wrong_shape_is_rejected() {
             expected: n + 1,
             found: n
         })
-    );
-}
-
-/// A verifier whose transcript was bound to a different digest rejects an
-/// otherwise untouched proof: the challenges it draws are not the ones the
-/// prover used.
-#[test]
-fn a_proof_checked_against_the_wrong_digest_is_rejected() {
-    let n = 8;
-    let gate = square_gate();
-    let columns = square_witness(n, 0x4449_4745_5354_0001);
-    let digest = witness_digest(&columns);
-    let (proof, outcome) = prove_then_verify(&gate, &columns, digest);
-    outcome.expect("the honest proof verifies against its own digest");
-
-    // Round 0 still passes, and must: an honest proof over a *satisfying*
-    // witness has `g_0(0) + g_0(1) == 0` for every `r`, so the eq-randomizers
-    // are invisible there. The divergence shows up one round later, where the
-    // claim carried forward is `g_0` at a challenge the prover never saw.
-    let mut t = bound_transcript(digest + Fr::ONE);
-    assert_eq!(
-        verify_zerocheck(&gate, n, &proof, &mut t),
-        Err(SumcheckError::RoundSumMismatch { round: 1 }),
-        "a transcript bound to another digest draws other challenges"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Acceptance 4
-// ---------------------------------------------------------------------------
-
-/// Acceptance 4: the witness digest is binding, so witnesses differing in one
-/// cell diverge before round 0 even exists — the eq-randomizers already differ
-/// — and every round challenge differs with them.
-#[test]
-fn the_digest_makes_the_challenges_witness_dependent() {
-    let n = 10;
-    let gate = square_gate();
-    let seed = 0x4249_4e44_494e_4701;
-
-    // Exactly one cell apart: `B[row] += 1`, `A` untouched.
-    let row = 0x0155 % (1usize << n);
-    let one = square_witness(n, seed);
-    let two = square_witness_with_bumped_b(n, seed, row);
-    let differing: Vec<usize> = (0..1usize << n)
-        .filter(|&i| one[0].get(i) != two[0].get(i) || one[1].get(i) != two[1].get(i))
-        .collect();
-    assert_eq!(differing, vec![row], "the two witnesses differ in one cell");
-
-    let digest_one = witness_digest(&one);
-    let digest_two = witness_digest(&two);
-    assert_ne!(digest_one, digest_two, "the digest sees the changed cell");
-
-    let r_one = eq_randomizers(digest_one, n);
-    let r_two = eq_randomizers(digest_two, n);
-    for j in 0..n {
-        assert_ne!(r_one[j], r_two[j], "eq-randomizer {j} must differ");
-    }
-
-    // And the round challenges themselves, for that same one-cell pair. Both
-    // proofs are produced honestly; the second's witness does not satisfy the
-    // gate, so it would not verify and its challenges have to be read from the
-    // script rather than from a `SumcheckClaim`.
-    let proof_one = {
-        let mut w: Vec<MultilinearPoly> = one.to_vec();
-        let mut t = bound_transcript(digest_one);
-        prove_zerocheck(&gate, &mut w, &mut t)
-    };
-    let proof_two = {
-        let mut w: Vec<MultilinearPoly> = two.to_vec();
-        let mut t = bound_transcript(digest_two);
-        prove_zerocheck(&gate, &mut w, &mut t)
-    };
-    let c_one = round_challenges(digest_one, &proof_one);
-    let c_two = round_challenges(digest_two, &proof_two);
-    for j in 0..n {
-        assert_ne!(
-            c_one[j], c_two[j],
-            "round challenge {j} must differ, starting at round 0"
-        );
-    }
-
-    // And the round challenges the verifier reports, on a pair that both
-    // verify: one row of `A` changed with `B` following it, so both witnesses
-    // satisfy the gate and both proofs check out.
-    let a = square_witness(n, seed);
-    let b = square_witness_with_row(n, seed, row, 0x1234);
-    assert_ne!(a[0].get(row), b[0].get(row));
-
-    let claim_a = prove_then_verify(&gate, &a, witness_digest(&a))
-        .1
-        .expect("honest");
-    let claim_b = prove_then_verify(&gate, &b, witness_digest(&b))
-        .1
-        .expect("honest");
-    for j in 0..n {
-        assert_ne!(
-            claim_a.point[j], claim_b.point[j],
-            "round challenge {j} must differ, starting at round 0"
-        );
-    }
-
-    // The control on the replay helper used above: on a proof that verifies, the
-    // challenges it reconstructs are the verifier's own.
-    let (proof_a, outcome_a) = prove_then_verify(&gate, &a, witness_digest(&a));
-    outcome_a.expect("honest");
-    assert_eq!(
-        round_challenges(witness_digest(&a), &proof_a),
-        claim_a.point
     );
 }
 

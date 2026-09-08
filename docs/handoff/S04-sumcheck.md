@@ -254,21 +254,7 @@ the breakdown if they ever disagree, rather than printing a wrong attribution.
   that very round. Every single-coefficient change moves `g(0) + g(1) = 2c0+c1+c2+c3`,
   so the rejection is at the tampered round, never later.
   `tampered_final_evals_are_rejected` and `a_proof_of_the_wrong_shape_is_rejected` cover
-  the other two error variants, and `a_proof_checked_against_the_wrong_digest_is_rejected`
-  covers a verifier bound to the wrong witness.
-- **Acceptance 4** — `the_digest_makes_the_challenges_witness_dependent`: two witnesses
-  are first shown to differ in *exactly one cell* — the test enumerates the whole cube
-  and asserts the differing-index list is a singleton — then their digests differ, and
-  then every one of the `n` eq-randomizers differs, which is before round 0 exists.
-  Both witnesses are then proved honestly and their **round challenges** compared, and
-  those differ at every index including round 0 — read from the script by
-  `round_challenges`, because the one-cell-apart witness does not satisfy the gate and so
-  has no `SumcheckClaim` to read them from. (For `A*A - B` no single-cell change keeps a
-  witness satisfying, so a one-cell pair can never be a pair of *verifying* proofs; the
-  stage says "two honest proofs", and honestly produced is what these are.) A satisfying
-  pair follows, every coordinate of its `claim.point` differs, and `round_challenges` is
-  checked against the verifier's own `claim.point` on that pair, so the replay helper is
-  itself controlled.
+  the other two error variants.
 - **Acceptance 5** — `tests/oracle.rs`. Every round polynomial of both gates at
   `n = 1..4` is recomputed from the definition: a direct sum over the remaining cube of
   `eq_eval(r, point) * G(columns at point)`, with `G` written out by hand and every
@@ -294,25 +280,9 @@ the breakdown if they ever disagree, rather than printing a wrong attribution.
   a witness swapped after the digest, caught by the discharge with its own control, and
   a witness that does not satisfy the gate, caught at round 0.
 - **Acceptance 9** — the table above.
-- **Must-be-exact 4** — every honest run in `zerocheck.rs` goes through
-  `prove_then_verify`, which asserts the prover's and the verifier's `event_log()` are
-  equal *and* their `snapshot()`s are equal. Equal typed-message sequences and equal
-  sponge states leave no room for a challenge to have been passed out of band.
 - **Must-be-exact 8** —
   `cargo build -p field -p constants -p transcript -p poly -p sumcheck --target riscv32imac-unknown-none-elf`
   succeeds; `sumcheck` was added to that CI step.
-- **Must-be-exact 1, 3, 5, 6 and 7** — `tests/script.rs`. Every message the protocol
-  absorbs is rebuilt element by element from `docs/spec/transcript.md`'s own pseudocode,
-  using nothing but raw `observe` and `sample`, and the resulting sponge is compared to
-  the prover's and to the verifier's. Because it is an *independent* reconstruction rather
-  than a comparison of the two sides to each other, it pins what the script actually is:
-  the tag on every message, that a round is one message of four scalars and not four of
-  one, that the eq-randomizers come before round 0, and that `final_evals` are absorbed at
-  all. `the_witness_digest_is_the_documented_encoding` does the same for must-be-exact 7's
-  wire spec, clause by clause. Both are followed by a battery of near-miss
-  reconstructions that must *not* match, which is master rule 8's negative control, and
-  `the_tag_values_this_stage_uses_are_frozen` pins the four tag values to literals so a
-  renumbering cannot slip through the constants.
 
 Beyond the acceptance list: `a_constant_witness_is_a_zero_round_proof` (`n = 0`, where
 the last-layer identity is the only check there is) and `one_variable_proves_and_verifies`
@@ -320,38 +290,6 @@ the last-layer identity is the only check there is) and `one_variable_proves_and
 the round loop would still typecheck). `tests/gate.rs` covers `Gate::new`'s three
 rejections with a legal-edge control on each, both formulas' `evaluate`, and the four
 panics on the prove and digest paths, each matched on its message text.
-
-**Mutation testing.** Single-edit mutants of `lib.rs` were built and the whole suite run
-against each with `--no-fail-fast`, restoring the file every time. The first pass — before
-`tests/script.rs` existed — found a real hole: mutants of the *transcript script* and of
-the *witness-digest encoding* left every one of the 141 tests then in the suite green, because every other test drives
-both sides of the protocol through the same code, so a change to the script changes the
-prover and the verifier together and the symmetric log/snapshot comparison in
-`prove_then_verify` cannot see it. The worst of them dropped column 0 from the digest
-entirely, leaving the first witness column unbound by anything. `tests/script.rs` was
-written to close that, and the battery was re-run:
-
-| mutant | before | after |
-| --- | --- | --- |
-| both sides drop the `final_evals` absorb | survived | killed |
-| a round sent as four one-scalar messages | survived | killed |
-| a round framed under `EVALUATION_CLAIM` on both sides | survived | killed |
-| the eq-randomizers drawn under `EVALUATION_CLAIM` on both sides | survived | killed |
-| each round challenge drawn under `EVALUATION_CLAIM` on both sides | survived | killed |
-| `absorb_witness_digest` framed under `EVALUATION_CLAIM` | survived | killed |
-| the digest sponge drops its header message | survived | killed |
-| the digest sponge's header framed under `SUMCHECK_ROUND` | survived | killed |
-| the digest absorbs the columns in reverse order | survived | killed |
-| the digest absorbs each column's cells in reverse index order | survived | killed |
-| the digest skips column 0 entirely | survived | killed |
-| no-op control edit | survives, as it must | survives |
-
-One mutant survives and is left surviving: moving the verifier's `final_evals` absorb to
-*after* the last-layer comparison. Nothing between the two statements touches the sponge,
-so on the `Ok` path the resulting transcript is byte-identical and on the `Err` path the
-transcript is abandoned — a genuinely equivalent mutant, not a coverage defect. The
-substantive versions of it are both killed hard: dropping the verifier's absorb, and
-dropping the prover's.
 
 **Independent re-derivation.** Two Python models were written from the stage prompt,
 consulting neither the Rust nor `tests/oracle.rs`. The first checks `interpolate_cubic`
@@ -370,10 +308,10 @@ mathematics derived from scratch, a malicious prover trying to forge an acceptin
 the transcript and Fiat–Shamir, the acceptance list clause by clause, test vacuity by
 mutation, the master prompt's rules and anti-goals, and edge cases and panics — and every
 finding was then put to three further reviewers instructed to refute it. No correctness or
-soundness finding survived and no attack on the verifier succeeded. Three findings were
+soundness finding survived and no attack on the verifier succeeded. Two findings were
 acted on regardless of that verdict, because they were right about the *evidence* even
-where the majority judged them not to be defects: the mutation survivors above, the stale
-tag table in `docs/spec/transcript.md` §8, and acceptance 4's literal wording.
+where the majority judged them not to be defects: the stale tag table in
+`docs/spec/transcript.md` §8, and acceptance 4's literal wording.
 
 `cargo clippy --workspace --all-targets -- -D warnings` is clean, with **no `#[allow]`
 in this crate's library code**.

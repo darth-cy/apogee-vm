@@ -43,8 +43,8 @@ commit as any optimization; this is where that benchmark goes.
 
 ## The one hazard
 `zerocheck_verify.rs` holds a second copy of the frozen transcript script, so it can time
-the sponge without the arithmetic. `crates/sumcheck/CLAUDE.md` warns that a copy of that
-script is a drift hazard, so this one carries its own tripwire: the replay's sponge state
-is compared against the real verifier's, and on a mismatch the routine prints why it is
-withholding the breakdown instead of printing a wrong one. If you change the script,
-either update that replay or delete it and the line it feeds.
+the sponge without the arithmetic. A copy of that script drifts, so this one carries a
+tripwire: the replay's sponge state is compared against the real verifier's, and on a
+mismatch the routine prints why it is withholding the breakdown instead of printing a
+wrong one. If you change the script, either update that replay or delete it and the line
+it feeds.

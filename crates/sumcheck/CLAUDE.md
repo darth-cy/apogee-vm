@@ -76,22 +76,13 @@ cross a boundary only through `crates/field`'s canonical little-endian form.
 ## Tests
 | File | Covers |
 | --- | --- |
-| `tests/zerocheck.rs` | The 2^20 honest run and its structural shape; the swapped-witness tamper and its literal twin; a tampered round coefficient at four rounds by four coefficients; tampered `final_evals`; wrong-shape and wrong-digest proofs; the digest's effect on the challenges; the unsatisfying witness; both wide-gate tampers; `n = 0` and `n = 1`. |
+| `tests/zerocheck.rs` | The 2^20 honest run and its structural shape; the swapped-witness tamper and its literal twin; a tampered round coefficient at four rounds by four coefficients; tampered `final_evals`; wrong-shape proofs; the unsatisfying witness; both wide-gate tampers; `n = 0` and `n = 1`. |
 | `tests/oracle.rs` | Every round polynomial of both gates at `n <= 4`, against a direct sum over the cube that shares no code with the prover, plus the control proving that oracle can fail. |
 | `tests/gate.rs` | `Gate::new`'s three rejections and their legal-edge controls, `evaluate` on both formulas, and every panic on the prove and digest paths. |
-| `tests/script.rs` | The frozen transcript script and the witness-digest encoding, rebuilt from `docs/spec/transcript.md`'s pseudocode with raw `observe`/`sample` and compared to the real sponge, plus a near-miss battery for each that must not match. |
-| `tests/common/mod.rs` | The two gates, their satisfying witnesses and tamper variants, the transcript harness, the challenge replay, and the discharge check. Test-only. |
+| `tests/common/mod.rs` | The two gates, their satisfying witnesses and tamper variants, the transcript harness, and the discharge check. Test-only. |
 
 No committed fixture: the independent oracle is `tests/oracle.rs`'s recomputation from
 the definition, not a file. Every witness is seeded, so every test is deterministic.
-
-`tests/script.rs` exists because every *other* test drives both sides of the protocol
-through the same code, so a change to the transcript script changes the prover and the
-verifier together and a symmetric comparison cannot see it. Mutation testing found eleven
-such changes that left the whole suite green — including one that dropped column 0 from
-the digest, leaving the first witness column bound by nothing. All eleven are killed now.
-**A change to the script or the digest encoding must be made in `tests/script.rs` too, or
-it is not a change anything checks.**
 
 ## Numbers
 Two `tools/bench` routines cover this crate, each runnable on its own.

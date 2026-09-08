@@ -60,10 +60,9 @@ fn sumcheck_verify(inst: &Square, digest: Fr, proof: &SumcheckProof) -> bool {
 /// The transcript half of `sumcheck_verify` with the arithmetic removed: the
 /// same messages in the same order, and nothing else.
 ///
-/// This is a second copy of the frozen transcript script, which is exactly the
-/// thing `crates/sumcheck/CLAUDE.md` warns about — so the caller checks it
-/// against the real verifier's sponge and refuses to report a number if the two
-/// have drifted apart.
+/// This is a second copy of the frozen transcript script, and a copy drifts —
+/// so the caller checks it against the real verifier's sponge and refuses to
+/// report a number if the two have come apart.
 fn transcript_only(proof: &SumcheckProof, digest: Fr) -> Transcript {
     let mut t = Transcript::new();
     sumcheck::absorb_witness_digest(&mut t, digest);
