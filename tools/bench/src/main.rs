@@ -1,4 +1,5 @@
-//! Comparative microbenchmark for `Fr` against ark-bn254.
+//! Comparative microbenchmark for `Fr` against ark-bn254, plus the one
+//! `crates/poly` number acceptance 10 of S03 asks to be recorded.
 //!
 //!     cargo run --release -p bench
 //!
@@ -11,6 +12,9 @@ use ark_ff::Field as _;
 use test_support::Rng;
 
 const N: usize = 1 << 20;
+/// The polynomial size S03 asks for: 2^20 u32 evaluations, lifted and bound
+/// all the way down.
+const POLY_VARS: usize = 20;
 const N_INVERSE: usize = 1 << 14; // one inversion is ~380 muls; 2^20 would take minutes
 const REPS: usize = 3;
 const SEED: u64 = 20260903;
@@ -134,4 +138,36 @@ fn main() {
         println!("{:<28} {:>12.2} {:>12.2} {:>8.2}", name, o, a, o / a);
     }
     println!("\nn = {N} (inverse: {N_INVERSE}). Machine-dependent; internal use only.");
+
+    poly_bind_chain(&mut rng);
+}
+
+/// The lift plus the full bind chain of a `U32`-backed polynomial at
+/// `POLY_VARS` variables. No threshold: the number is recorded, not asserted.
+/// The table is built and cloned outside the timed region, so what is measured
+/// is the first bind's lift and the 20 folds.
+fn poly_bind_chain(rng: &mut Rng) {
+    let values: Vec<u32> = (0..1usize << POLY_VARS)
+        .map(|_| rng.next_u64() as u32)
+        .collect();
+    let point: Vec<field::Fr> = (0..POLY_VARS)
+        .map(|_| field::Fr::from_bytes(&next_canonical(rng)).unwrap())
+        .collect();
+
+    let mut best_time = Duration::MAX;
+    for _ in 0..REPS {
+        let mut p = poly::MultilinearPoly::new(poly::PolyBacking::U32(values.clone()));
+        let t = Instant::now();
+        for r in &point {
+            p.bind(*r);
+        }
+        best_time = best_time.min(t.elapsed());
+        black_box(&p);
+    }
+
+    println!(
+        "\npoly: lift + full bind chain, u32 backing, n = {POLY_VARS} ({} evaluations): {:.2} ms",
+        1usize << POLY_VARS,
+        best_time.as_secs_f64() * 1e3
+    );
 }

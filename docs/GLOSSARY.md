@@ -19,6 +19,27 @@ multiplication. An implementation detail of `crates/field`; never serialized.
 boolean hypercube `{0,1}^k`. Prefer *column* when talking about a trace, *multilinear*
 when talking about sumcheck.
 
+**Index convention** — the map from a hypercube point to a table index, frozen in
+`crates/poly`: variable `j` is bit `j`, so the evaluation at `y` sits at
+`index = sum_j y_j 2^j`. Little-endian, variable 0 in the low bit. Every column, gate
+and layer in every later stage is indexed this way.
+
+**Bind** — fixing the current variable 0 of a multilinear to a challenge `r`, halving
+its table by `f'(i) = f(2i) + r*(f(2i+1) - f(2i))`. The old variable 1 becomes the new
+variable 0, so a sequence of binds fixes the variables in order. *Evaluate* is the same
+fold done non-destructively, leaving the receiver untouched.
+
+**Backing** — how a column's table is stored: a bitset, `u8`, `u16`, `u32`, or `Fr`.
+Trace columns are mostly narrow integers, so storage stays at native width. **Lift** is
+the canonical embedding of such an integer into `Fr`. It is *lazy*, meaning
+bind-triggered: reads lift on the fly and change nothing, the first bind lifts the whole
+table, and the backing is `Fr` from then on.
+
+**eq** — the equality indicator `eq(r, y) = prod_j (r_j y_j + (1-r_j)(1-y_j))`, the
+multilinear extension of "y equals r" on the cube. `eq_table(r)` tabulates it over the
+cube; `eq_eval(r, y)` is the closed form. It is the weight a zerocheck sums against and
+is always a virtual column.
+
 **Layer** — one level of a GKR circuit. Each layer's values are determined by gates of
 degree ≤ 2 in the layer below.
 

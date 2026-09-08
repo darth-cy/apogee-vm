@@ -19,8 +19,9 @@ crates/
   constants/     frozen constants and tags; zero logic; no_std
   field/         Fr arithmetic (Montgomery); no_std
   transcript/    Poseidon2 permutation + duplex transcript; no_std
+  poly/          MultilinearPoly + small-type backing + eq machinery; no_std
 tools/
-  kat-gen/       regenerates the committed Fr test vectors from arkworks
+  kat-gen/       regenerates the committed Fr and multilinear vectors from arkworks
   bench/         comparative microbenchmarks against arkworks
   transcript-ref/ the transcript oracle: Plonky3 + zkhash, NOT a workspace member
   test-support/  seeded RNG, SHA-256, hex; shared by every suite and generator
@@ -42,13 +43,13 @@ cargo fmt --all -- --check
 cargo fmt --manifest-path tools/transcript-ref/Cargo.toml --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
-cargo test --workspace                      # 74 tests as of S02
-cargo build -p field -p constants -p transcript --target riscv32imac-unknown-none-elf
+cargo test --workspace                      # 113 tests as of S03
+cargo build -p field -p constants -p transcript -p poly --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
-git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/
+git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/
 -------------------------------------------------------------------------------
-cargo run -p kat-gen                        # refresh fixtures (manual, deliberate)
+cargo run -p kat-gen                        # refresh Fr + poly fixtures (manual, deliberate)
 cargo run --manifest-path tools/transcript-ref/Cargo.toml   # ditto, transcript vectors
 cargo run --release -p bench                # internal numbers only, no public claims
 ```
@@ -66,6 +67,9 @@ does not name a version anywhere, so it cannot drift from that pin.
   little-endian. Montgomery form exists only in memory. Source literals are the one
   exception and are their own single form: `Fr::from_hex`, `0x` plus 64 lowercase digits,
   big-endian, because a constant in source is a number and should diff against upstream.
+- **One index convention.** Variable `j` is bit `j`: the evaluation at `y` sits at
+  `index = sum_j y_j 2^j`, and `bind` fixes variable 0, the low bit. Frozen in
+  `crates/poly` and load-bearing for every later circuit stage.
 - **One tag, one message kind.** The transcript frames typed messages as
   `tag, length, payload`, so a tag in `constants::transcript_tags` must name exactly one
   of scalars, bytes or a challenge. Reusing one across kinds is a soundness bug.
@@ -81,3 +85,4 @@ does not name a version anywhere, so it cannot drift from that pin.
 | --- | --- | --- |
 | S01 — Fr field + constants skeleton | done | `docs/handoff/S01-field.md` |
 | S02 — Poseidon2 permutation + duplex transcript | done | `docs/handoff/S02-transcript.md` |
+| S03 — MultilinearPoly + small-type backing | done | `docs/handoff/S03-poly.md` |

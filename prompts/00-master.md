@@ -25,6 +25,7 @@ A RISC-V zkVM proving RV32IMAC guest programs (Rust, no-std), arithmetized as **
 3. Each stage has an acceptance section that must be satisfied.
 4. For each stage, branch off main, produce a git commit on the branch, and submit a pull request. Always branch and commit using the user's local Github credential, never Claude.
 5. Never write Claude's name into git history: no `Co-Authored-By` trailer on a commit, no generated-by footer on a pull request.
+6. Commit with the repository's configured git credential exactly as `git config user.name`/`user.email` report it — never pass `-c user.name`/`-c user.email`, and never substitute an address from anywhere else.
 
 ### Implementation Rules
 1. **Concrete types.** No trait-generic field, polynomial, commitment, or transcript abstractions. `Fr` is a struct, not a `F: Field`. Prefer readability and succinctness over generality. (Deliberate, narrow exceptions may be named by a stage prompt.)
