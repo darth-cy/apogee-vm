@@ -18,9 +18,13 @@
 //!
 //! for `r` drawn from the transcript after the witness is bound to it. `eq`
 //! is multilinear, so `eq * G` has degree at most 3 per variable and a round
-//! polynomial is a **cubic: exactly 4 coefficients, always**. If some `G(y)`
-//! is nonzero the sum is a nonzero polynomial in `r` of degree `n`, so it
-//! vanishes for at most `n / |Fr|` of the `r` a transcript can produce.
+//! polynomial is a **cubic: exactly 4 coefficients, always**.
+//!
+//! As a function of `r` that sum is multilinear, and it takes the value `G(y)`
+//! at each cube point `y`. So if `G` is nonzero anywhere on the cube the sum is
+//! not the zero polynomial, and by Schwartz–Zippel it vanishes on at most an
+//! `n / |Fr|` fraction of `Fr^n` — with `r` modelled as uniform, which is the
+//! Fiat–Shamir assumption the transcript carries.
 //!
 //! # The transcript script (frozen)
 //!
@@ -43,6 +47,12 @@
 //! Nothing here checks `final_evals` against a commitment: the Mercury PCS
 //! arrives in a later stage. [`verify_zerocheck`] returns the
 //! [`SumcheckClaim`] and the caller discharges the openings.
+//!
+//! Be precise about what that leaves open. The last-layer check constrains one
+//! field element — `G(final_evals)` — so many different `final_evals` satisfy
+//! it, and a prover is free to choose among them. What ties them to the actual
+//! columns is an opening, and until there is one the only binding on the
+//! witness is the digest, which is a hash and not a commitment.
 
 extern crate alloc;
 

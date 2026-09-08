@@ -6,7 +6,7 @@
 mod common;
 
 use common::{
-    bound_transcript, discharge, eq_randomizers, square_gate, square_witness,
+    bound_transcript, discharge, eq_randomizers, round_challenges, square_gate, square_witness,
     square_witness_with_bumped_b, square_witness_with_row, wide_gate, wide_witness,
     wide_witness_with_bumped_e, wide_witness_with_row,
 };
@@ -338,6 +338,29 @@ fn the_digest_makes_the_challenges_witness_dependent() {
         assert_ne!(r_one[j], r_two[j], "eq-randomizer {j} must differ");
     }
 
+    // And the round challenges themselves, for that same one-cell pair. Both
+    // proofs are produced honestly; the second's witness does not satisfy the
+    // gate, so it would not verify and its challenges have to be read from the
+    // script rather than from a `SumcheckClaim`.
+    let proof_one = {
+        let mut w: Vec<MultilinearPoly> = one.to_vec();
+        let mut t = bound_transcript(digest_one);
+        prove_zerocheck(&gate, &mut w, &mut t)
+    };
+    let proof_two = {
+        let mut w: Vec<MultilinearPoly> = two.to_vec();
+        let mut t = bound_transcript(digest_two);
+        prove_zerocheck(&gate, &mut w, &mut t)
+    };
+    let c_one = round_challenges(digest_one, &proof_one);
+    let c_two = round_challenges(digest_two, &proof_two);
+    for j in 0..n {
+        assert_ne!(
+            c_one[j], c_two[j],
+            "round challenge {j} must differ, starting at round 0"
+        );
+    }
+
     // And the round challenges the verifier reports, on a pair that both
     // verify: one row of `A` changed with `B` following it, so both witnesses
     // satisfy the gate and both proofs check out.
@@ -357,6 +380,15 @@ fn the_digest_makes_the_challenges_witness_dependent() {
             "round challenge {j} must differ, starting at round 0"
         );
     }
+
+    // The control on the replay helper used above: on a proof that verifies, the
+    // challenges it reconstructs are the verifier's own.
+    let (proof_a, outcome_a) = prove_then_verify(&gate, &a, witness_digest(&a));
+    outcome_a.expect("honest");
+    assert_eq!(
+        round_challenges(witness_digest(&a), &proof_a),
+        claim_a.point
+    );
 }
 
 // ---------------------------------------------------------------------------

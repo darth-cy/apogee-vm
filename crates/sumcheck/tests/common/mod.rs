@@ -6,7 +6,7 @@
 use constants::transcript_tags;
 use field::Fr;
 use poly::{MultilinearPoly, PolyBacking};
-use sumcheck::{absorb_witness_digest, Gate, GateTerm, PolyAddress, SumcheckClaim};
+use sumcheck::{absorb_witness_digest, Gate, GateTerm, PolyAddress, SumcheckClaim, SumcheckProof};
 use test_support::Rng;
 use transcript::Transcript;
 
@@ -27,6 +27,29 @@ pub fn eq_randomizers(digest: Fr, n: usize) -> Vec<Fr> {
     let mut t = bound_transcript(digest);
     (0..n)
         .map(|_| t.challenge_scalar(transcript_tags::SUMCHECK_CHALLENGE))
+        .collect()
+}
+
+/// The `n` round challenges a proof over `digest` was built on, replayed from
+/// the frozen script. Unlike `SumcheckClaim::point` this needs no verification,
+/// so it reads the challenges of a proof over a witness that does not satisfy
+/// the gate — which is what acceptance 4's one-cell pair is.
+///
+/// `script.rs` pins that this replay really is the protocol's script, and
+/// `the_digest_makes_the_challenges_witness_dependent` checks it against the
+/// verifier's own `claim.point` on a proof that does verify.
+pub fn round_challenges(digest: Fr, proof: &SumcheckProof) -> Vec<Fr> {
+    let mut t = bound_transcript(digest);
+    for _ in 0..proof.rounds.len() {
+        t.challenge_scalar(transcript_tags::SUMCHECK_CHALLENGE);
+    }
+    proof
+        .rounds
+        .iter()
+        .map(|g| {
+            t.append_scalars(transcript_tags::SUMCHECK_ROUND, g);
+            t.challenge_scalar(transcript_tags::SUMCHECK_CHALLENGE)
+        })
         .collect()
 }
 

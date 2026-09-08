@@ -33,7 +33,7 @@ jobs:
 
       # The crates the recursion guest links compile unchanged for the guest.
       - name: guest target builds
-        run: cargo build -p field -p constants -p transcript -p poly --target riscv32imac-unknown-none-elf
+        run: cargo build -p field -p constants -p transcript -p poly -p sumcheck --target riscv32imac-unknown-none-elf
 
       # Master rule 8: committed fixtures are regenerated and diffed, so a
       # silently edited vector file fails the build. `transcript-ref` is its own
