@@ -1,5 +1,6 @@
-//! Comparative microbenchmark for `Fr` against ark-bn254, plus the one
-//! `crates/poly` number acceptance 10 of S03 asks to be recorded.
+//! Comparative microbenchmark for `Fr` against ark-bn254, plus the
+//! `crates/poly` number acceptance 10 of S03 asks to be recorded and the
+//! `crates/sumcheck` numbers acceptance 9 of S04 asks to be recorded.
 //!
 //!     cargo run --release -p bench
 //!
@@ -140,6 +141,7 @@ fn main() {
     println!("\nn = {N} (inverse: {N_INVERSE}). Machine-dependent; internal use only.");
 
     poly_bind_chain(&mut rng);
+    zerocheck_prove();
 }
 
 /// The lift plus the full bind chain of a `U32`-backed polynomial at
@@ -169,5 +171,109 @@ fn poly_bind_chain(rng: &mut Rng) {
         "\npoly: lift + full bind chain, u32 backing, n = {POLY_VARS} ({} evaluations): {:.2} ms",
         1usize << POLY_VARS,
         best_time.as_secs_f64() * 1e3
+    );
+}
+
+// ---------------------------------------------------------------------------
+// S04 acceptance 9: prove wall-clock and peak polynomial memory at 2^20.
+// ---------------------------------------------------------------------------
+
+/// The rows acceptance 1 proves over.
+const ZEROCHECK_VARS: usize = 20;
+
+/// The bytes a polynomial's table occupies, by width. Vec capacity equals
+/// length for every table built here, so this is the allocation.
+fn table_bytes(backing: &poly::PolyBacking) -> usize {
+    match backing {
+        poly::PolyBacking::U1(limbs, _) => 8 * limbs.len(),
+        poly::PolyBacking::U8(v) => v.len(),
+        poly::PolyBacking::U16(v) => 2 * v.len(),
+        poly::PolyBacking::U32(v) => 4 * v.len(),
+        poly::PolyBacking::Fr(v) => 32 * v.len(),
+    }
+}
+
+/// Peak live polynomial bytes inside `prove_zerocheck`, computed from the
+/// tables the algorithm holds. It is not an allocator measurement: reading peak
+/// RSS portably needs either a dependency or `unsafe`, and both are banned.
+///
+/// The model: `eq` is a full `Fr` table for the whole proof; `bind` truncates a
+/// column's length without releasing its capacity, so from its first bind each
+/// column costs a full `Fr` table too. The peak is the instant some column `k`
+/// lifts, when its small backing and its fresh `Fr` table are both alive and
+/// the columns after it still hold theirs.
+fn peak_poly_bytes(small: &[usize], rows: usize) -> usize {
+    let fr = 32 * rows;
+    (0..small.len())
+        .map(|k| fr + fr * (k + 1) + small[k] + small[k + 1..].iter().sum::<usize>())
+        .max()
+        .unwrap_or(fr)
+}
+
+/// Acceptance 9: `A * A - B` over `2^20` rows, `A` in `U16` and `B` in `U32` —
+/// acceptance 1's witness exactly. No threshold; the numbers are recorded.
+fn zerocheck_prove() {
+    let rows = 1usize << ZEROCHECK_VARS;
+    let mut rng = Rng::new(SEED ^ 0x5330_3400);
+    let a: Vec<u16> = (0..rows).map(|_| rng.next_u64() as u16).collect();
+    let b: Vec<u32> = a.iter().map(|&x| (x as u32) * (x as u32)).collect();
+    let columns = || {
+        vec![
+            poly::MultilinearPoly::new(poly::PolyBacking::U16(a.clone())),
+            poly::MultilinearPoly::new(poly::PolyBacking::U32(b.clone())),
+        ]
+    };
+
+    let addr_a = sumcheck::PolyAddress(0);
+    let addr_b = sumcheck::PolyAddress(1);
+    let gate = sumcheck::Gate::new(
+        &[&addr_a, &addr_b],
+        vec![
+            sumcheck::GateTerm {
+                coef: field::Fr::ONE,
+                a: 0,
+                b: Some(0),
+            },
+            sumcheck::GateTerm {
+                coef: field::Fr::MINUS_ONE,
+                a: 1,
+                b: None,
+            },
+        ],
+    )
+    .unwrap();
+
+    let witness = columns();
+    let small: Vec<usize> = witness.iter().map(|p| table_bytes(p.backing())).collect();
+
+    let digest_start = Instant::now();
+    let digest = sumcheck::witness_digest(&witness);
+    let digest_time = digest_start.elapsed();
+    drop(witness);
+
+    let mut best_time = Duration::MAX;
+    for _ in 0..REPS {
+        let mut working = columns();
+        let mut t = transcript::Transcript::new();
+        sumcheck::absorb_witness_digest(&mut t, digest);
+        let start = Instant::now();
+        let proof = sumcheck::prove_zerocheck(&gate, &mut working, &mut t);
+        best_time = best_time.min(start.elapsed());
+        black_box(&proof);
+    }
+
+    let peak = peak_poly_bytes(&small, rows);
+    println!("\nsumcheck: A*A - B, n = {ZEROCHECK_VARS} ({rows} rows), best of {REPS}");
+    println!(
+        "  prove_zerocheck                      {:>10.1} ms",
+        best_time.as_secs_f64() * 1e3
+    );
+    println!(
+        "  witness_digest (once, not in prove)  {:>10.1} ms",
+        digest_time.as_secs_f64() * 1e3
+    );
+    println!(
+        "  peak polynomial memory (computed)    {:>10.1} MiB",
+        peak as f64 / (1024.0 * 1024.0)
     );
 }

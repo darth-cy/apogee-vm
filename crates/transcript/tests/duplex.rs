@@ -401,6 +401,8 @@ fn tag_table_is_well_formed() {
         "SUMCHECK_CHALLENGE",
         "EVALUATION_CLAIM",
         "PCS_OPENING",
+        "WITNESS_DIGEST",
+        "SUMCHECK_FINAL_EVALS",
     ];
     let values: Vec<u64> = names
         .iter()
