@@ -11,8 +11,25 @@ the BN254 *base* field, which is where curve coordinates live.
 **Canonical form** — a field element as a 32-byte little-endian integer in `[0, p)`.
 The only encoding that ever reaches a file, an artifact, or a transcript.
 
+**Fq2** — the quadratic extension `Fq[u]/(u^2+1)`, tower level one, where G2's coordinates
+live. `u^2 = -1`; an element is written `c0 + c1 u` and encoded `c0 || c1`.
+
+**Twist** — `E'/Fq2: y^2 = x^3 + 3/(9+u)`, the D-type sextic twist of `E/Fq: y^2 = x^3 + 3`.
+G2 is its order-`r` subgroup. `#E'(Fq2) = r(2q-r)`, so the twist's **cofactor** `2q-r` is
+not 1 and a G2 subgroup check is real arithmetic; G1's cofactor *is* 1, so on-curve implies
+in-subgroup there.
+
+**xi** — `9 + u`, the nonresidue that builds Fq6 over Fq2. `Fq2::mul_by_nonresidue`
+multiplies by it. Not to be confused with the Fq2 nonresidue `-1`, which gives `u^2+1`.
+
+**Uncompressed affine** — the one point encoding: `x || y` for G1 (64 bytes), `x || y` over
+Fq2 for G2 (128), each coordinate canonical, all-zero for the point at infinity. There is no
+compressed form anywhere in the protocol. Distinct from a point's *transcript* form, which is
+four ~128-bit Fr limbs.
+
 **Montgomery form** — the in-memory representation `x · R mod p` used for fast
-multiplication. An implementation detail of `crates/field`; never serialized.
+multiplication. An implementation detail of `crates/field` and `crates/curve`; never
+serialized.
 
 **Column = multilinear = polynomial** — three names for the same object: a vector of
 `2^k` Fr values, viewed as the evaluations of a multilinear polynomial over the

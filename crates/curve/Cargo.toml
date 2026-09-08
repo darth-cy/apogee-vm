@@ -1,0 +1,19 @@
+[package]
+name = "curve"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+constants.workspace = true
+field.workspace = true
+serde.workspace = true
+
+# Reference oracle for the differential tests and nothing else. Never linked by
+# the prover, the verifier, or a guest.
+[dev-dependencies]
+ark-bn254.workspace = true
+ark-ec.workspace = true
+ark-ff.workspace = true
+postcard.workspace = true
+test-support.workspace = true

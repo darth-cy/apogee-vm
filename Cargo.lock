@@ -190,6 +190,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "curve"
+version = "0.1.0"
+dependencies = [
+ "ark-bn254",
+ "ark-ec",
+ "ark-ff",
+ "constants",
+ "field",
+ "postcard",
+ "serde",
+ "test-support",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -287,6 +301,7 @@ name = "kat-gen"
 version = "0.1.0"
 dependencies = [
  "ark-bn254",
+ "ark-ec",
  "ark-ff",
  "ark-poly",
  "test-support",

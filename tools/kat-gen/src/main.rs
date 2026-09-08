@@ -7,7 +7,8 @@
 //! output, so a refresh is `cargo run -p kat-gen && git diff`. Freshness is a
 //! manual step; CI only reads the committed files.
 //!
-//! `crates/field`'s vectors are built here; `crates/poly`'s are in `poly.rs`.
+//! `crates/field`'s vectors are built here; `crates/poly`'s are in `poly.rs` and
+//! `crates/curve`'s in `curve.rs`.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -17,6 +18,7 @@ use ark_bn254::Fr;
 use ark_ff::{AdditiveGroup, BigInteger, Field, One, PrimeField, Zero};
 use test_support::{to_hex, Rng};
 
+mod curve;
 mod poly;
 
 const SEED: u64 = 20260903;
@@ -135,6 +137,7 @@ fn main() {
     println!("wrote {}", path.display());
 
     poly::generate();
+    curve::generate();
 }
 
 fn binary(out: &mut String, a: &Fr, b: &Fr) {
