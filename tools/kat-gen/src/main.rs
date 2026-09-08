@@ -1,10 +1,13 @@
-//! Regenerates the committed `Fr` known-answer-test vectors from arkworks.
+//! Regenerates the committed `Fr` and multilinear-polynomial vectors from
+//! arkworks.
 //!
 //!     cargo run -p kat-gen
 //!
 //! Deterministic: same toolchain and same arkworks version produce byte-identical
 //! output, so a refresh is `cargo run -p kat-gen && git diff`. Freshness is a
-//! manual step; CI only reads the committed file.
+//! manual step; CI only reads the committed files.
+//!
+//! `crates/field`'s vectors are built here; `crates/poly`'s are in `poly.rs`.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -12,7 +15,9 @@ use std::path::PathBuf;
 
 use ark_bn254::Fr;
 use ark_ff::{AdditiveGroup, BigInteger, Field, One, PrimeField, Zero};
-use test_support::Rng;
+use test_support::{to_hex, Rng};
+
+mod poly;
 
 const SEED: u64 = 20260903;
 const RANDOM_BINARY: usize = 60;
@@ -28,7 +33,7 @@ fn next_fr(rng: &mut Rng) -> Fr {
 fn hex_fr(x: &Fr) -> String {
     let bytes = x.into_bigint().to_bytes_le();
     assert_eq!(bytes.len(), 32, "Fr must serialize to 32 bytes");
-    hex(&bytes)
+    to_hex(&bytes)
 }
 
 fn hex_exp(e: &[u64; 4]) -> String {
@@ -36,15 +41,7 @@ fn hex_exp(e: &[u64; 4]) -> String {
     for i in 0..4 {
         bytes[8 * i..8 * i + 8].copy_from_slice(&e[i].to_le_bytes());
     }
-    hex(&bytes)
-}
-
-fn hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(2 * bytes.len());
-    for b in bytes {
-        write!(s, "{:02x}", b).expect("writing to a String cannot fail");
-    }
-    s
+    to_hex(&bytes)
 }
 
 fn main() {
@@ -136,6 +133,8 @@ fn main() {
         .join("../../crates/field/tests/vectors/fr_kats.txt");
     fs::write(&path, out).expect("writing the KAT file");
     println!("wrote {}", path.display());
+
+    poly::generate();
 }
 
 fn binary(out: &mut String, a: &Fr, b: &Fr) {
