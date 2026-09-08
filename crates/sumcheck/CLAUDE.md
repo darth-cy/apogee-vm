@@ -94,8 +94,19 @@ the digest, leaving the first witness column bound by nothing. All eleven are ki
 it is not a change anything checks.**
 
 ## Numbers
-`cargo run --release -p bench` prints the acceptance-9 line: `prove_zerocheck` at
-`n = 20`, the witness digest's own cost, and the peak polynomial memory. The last is
-computed from the tables the algorithm holds, not read from an allocator — there is no
-portable way to read peak RSS without a dependency or `unsafe`. See
-`docs/handoff/S04-sumcheck.md` for the recorded values.
+Two `tools/bench` routines cover this crate, each runnable on its own.
+
+`cargo run --release -p bench -- zerocheck-prove` prints the acceptance-9 line:
+`prove_zerocheck` at `n = 20`, the witness digest's own cost, and the peak polynomial
+memory. The last is computed from the tables the algorithm holds, not read from an
+allocator — there is no portable way to read peak RSS without a dependency or `unsafe`.
+
+`cargo run --release -p bench -- zerocheck-verify` puts `verify_zerocheck` against a
+verifier that just recomputes every row, on the same claim at `n = 22` — larger than the
+acceptance, because `O(2^n)` against `O(n)` is worth reading where the two have room to
+separate. The headline is the ratio; the line that matters is the breakdown under it,
+which says the sumcheck verifier is ~99% Poseidon2 and well under 1% arithmetic. That routine holds a second copy of the frozen
+transcript script, and checks it against the real verifier's sponge before reporting the
+breakdown — if the two ever disagree it says so and prints no number.
+
+See `docs/handoff/S04-sumcheck.md` for the recorded values.

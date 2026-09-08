@@ -23,7 +23,7 @@ crates/
   sumcheck/      Gate + zerocheck prover/verifier; no_std
 tools/
   kat-gen/       regenerates the committed Fr and multilinear vectors from arkworks
-  bench/         comparative microbenchmarks against arkworks
+  bench/         one routine per measurement, individually selectable
   transcript-ref/ the transcript oracle: Plonky3 + zkhash, NOT a workspace member
   test-support/  seeded RNG, SHA-256, hex; shared by every suite and generator
 ```
@@ -52,7 +52,9 @@ git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vect
 -------------------------------------------------------------------------------
 cargo run -p kat-gen                        # refresh Fr + poly fixtures (manual, deliberate)
 cargo run --manifest-path tools/transcript-ref/Cargo.toml   # ditto, transcript vectors
-cargo run --release -p bench                # internal numbers only, no public claims
+cargo run --release -p bench                # every routine; internal numbers only
+cargo run --release -p bench -- --list      # the routines, and what each measures
+cargo run --release -p bench -- <routine>   # just that one; setup is per-routine
 ```
 
 `tools/transcript-ref` is deliberately outside the cargo workspace, so it takes

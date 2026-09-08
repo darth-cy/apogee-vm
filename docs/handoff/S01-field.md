@@ -59,7 +59,7 @@ pub mod transcript_tags {}      // empty
 | --- | --- |
 | `crates/field/tests/vectors/fr_kats.txt` | 536 known-answer vectors from ark-bn254 0.6 |
 | `tools/kat-gen/src/main.rs` | Deterministic regenerator (`cargo run -p kat-gen`) |
-| `tools/bench/src/main.rs` | Comparative microbenchmark (`cargo run --release -p bench`) |
+| `tools/bench/src/fr_arith.rs` | Comparative microbenchmark (`cargo run --release -p bench -- fr-arith`) |
 
 `fr_kats.txt` is pinned by SHA-256 in `tests/kat.rs::KAT_SHA256`. The digest is
 deliberately not repeated here — it is a function of the generator's seed and content, so

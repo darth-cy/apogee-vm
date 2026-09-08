@@ -153,7 +153,7 @@ shows is a real collision. The protocol transcript sees one scalar and never the
 
 ## Bench (acceptance 9, no threshold)
 
-`cargo run --release -p bench`, Apple Silicon (aarch64-apple-darwin), rustc 1.96.1,
+`cargo run --release -p bench -- zerocheck-prove`, Apple Silicon (aarch64-apple-darwin), rustc 1.96.1,
 best of 3, `A * A - B` over `n = 20` (1,048,576 rows), `A` in `U16` and `B` in `U32` —
 acceptance 1's witness exactly. Internal numbers; no public claims.
 
@@ -176,13 +176,58 @@ already.
 
 **Peak polynomial memory is computed, not measured by an allocator.** Reading peak RSS
 portably needs either a dependency or `unsafe`, and both are banned, so
-`tools/bench/src/main.rs::peak_poly_bytes` accounts for the tables the algorithm holds:
+`tools/bench/src/zerocheck_prove.rs::peak_poly_bytes` accounts for the tables the algorithm holds:
 `eq` is a full `Fr` table for the whole proof; `bind` truncates a column's length
 without releasing its capacity, so from its first bind each column costs a full `Fr`
 table too; and the peak is the instant a column lifts, when its small backing and its
 fresh `Fr` table are both alive. For this witness that is
 `32*2^20` (eq) `+ 2 * 32*2^20` (A, B lifted) `+ 4*2^20` (B's `u32` backing, mid-lift)
 `= 100 MiB`.
+
+### Verification against recomputing every row
+
+`cargo run --release -p bench -- zerocheck-verify`, same machine and same claim, at
+`n = 22` (4,194,304 rows) rather than 20. The separation being measured is `O(2^n)`
+against `O(n)`, so it is worth reading at a size the acceptance itself does not have to
+pay for; the price is about 40 s of setup, which is affordable now that the routine can
+be run alone. The naive verifier holds both columns lifted to `Fr` and checks
+`A[i]^2 == B[i]` on every row, with no early return, because an honest verifier on a
+satisfying witness sweeps the whole table anyway. The sumcheck verifier holds a digest
+and a proof and never sees a row. Both are shown to accept the honest input and reject a
+corrupted one before either is timed.
+
+| verifier | time | input read |
+| --- | ---: | ---: |
+| naive: recompute every row in `Fr` | **49.3 ms** | 256.0 MiB |
+| `verify_zerocheck` | **0.87 ms** | 2,880 B |
+| speedup | **56.3x** | 93,207x |
+
+Against the same routine at `n = 20` (12.3 ms, 0.79 ms, 15.5x) the scaling is exactly
+what the asymptotics predict and worth recording as such: quadrupling the rows
+quadrupled the naive verifier and added 10% to the sumcheck one, because two more rows
+of `n` are two more rounds and nothing else.
+
+The interesting number is not 56.3x, it is the split under it: **99.4% of
+`verify_zerocheck` is the Poseidon2 transcript** and 0.6% — around 0.005 ms — is
+arithmetic. The bench deliberately derives no speedup from that residual, because it is
+the difference of two ~0.87 ms measurements and moves by a few percent between runs; what
+it supports without one is the qualitative claim, which is that the permutation and not
+the protocol is what caps the ratio. Note the shape: the proof-size win is 93,207x and
+the time win is 56.3x, three orders of magnitude apart, and the whole gap is sponge. The
+same runtime hex decode of the round constants named above is the second and sharper
+real-workload datum for that deferred item — the digest number says a decoded table would
+help the prover, and this one says it is very nearly the entire verifier.
+
+Two caveats are printed with the numbers rather than left to the reader. Proving and the
+digest are excluded from both sides because they are the prover's cost and the
+commitment's. And discharging the returned claim — opening `final_evals` against a
+Mercury commitment — does not exist yet, so the sumcheck figure is a floor and the naive
+verifier is the only one of the two that is currently complete.
+
+The sponge share is measured by replaying the verifier's message schedule with the
+arithmetic removed. That replay is a second copy of the frozen script, so the routine
+compares its sponge state against the real verifier's and prints why it is withholding
+the breakdown if they ever disagree, rather than printing a wrong attribution.
 
 ## Verification performed
 

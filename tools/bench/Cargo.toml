@@ -6,6 +6,7 @@ publish.workspace = true
 
 [dependencies]
 test-support.workspace = true
+constants.workspace = true
 field.workspace = true
 poly.workspace = true
 sumcheck.workspace = true
