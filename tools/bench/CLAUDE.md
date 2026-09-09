@@ -18,6 +18,7 @@ commit as any optimization; this is where that benchmark goes.
 | --- | --- | --- |
 | `src/fr_arith.rs` | `fr-arith` | S01: `Fr` mul, square, inverse, batch inverse against ark-bn254 |
 | `src/poly_bind.rs` | `poly-bind` | S03 acceptance 10: lift plus the full bind chain at 2^20 |
+| `src/msm.rs` | `msm` | S07 acceptance 9 and 10: MSM at 2^22 over real ceremony bases, against ark-bn254 |
 | `src/zerocheck_prove.rs` | `zerocheck-prove` | S04 acceptance 9: prove wall-clock and peak polynomial memory at 2^20 |
 | `src/zerocheck_verify.rs` | `zerocheck-verify` | S04: `verify_zerocheck` against recomputing every row, at 2^22 |
 | `src/square.rs` | — | the `A * A - B = 0` instance the two zerocheck routines share |
@@ -40,6 +41,13 @@ commit as any optimization; this is where that benchmark goes.
   asserts that each of its two verifiers accepts the honest input and rejects a corrupted
   one before it times either. A benchmark of a checker that cannot reject is a benchmark
   of nothing.
+
+`msm` is the one routine that needs an asset: `assets/ptau/powersOfTau28_hez_final_24.ptau`,
+gitignored and 19 GB. It measures over **real SRS bases** and does not substitute random
+ones — it says so and returns when the file is absent. `ark-ec` and `ark-ff` carry their
+`parallel` feature in the workspace manifest so that row compares two rayon
+implementations rather than ours against a single-threaded reference; that would be a gate
+passed by not being compared.
 
 ## The one hazard
 `zerocheck_verify.rs` holds a second copy of the frozen transcript script, so it can time

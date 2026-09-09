@@ -17,6 +17,8 @@
 //! | `curve`   | `crates/curve/tests/vectors/{fq,g1,g2}_kats.txt` |
 //! | `tower`   | `crates/curve/tests/vectors/{fq6,fq12}_kats.txt` |
 //! | `pairing` | `crates/curve/tests/vectors/pairing_kats.txt` |
+//! | `msm`     | `crates/curve/tests/vectors/msm_kats.txt` |
+//! | `srs`     | `crates/srs/tests/vectors/*` (needs the gitignored ceremony file) |
 
 use std::fs;
 use std::path::PathBuf;
@@ -25,18 +27,22 @@ use test_support::{sha256, to_hex};
 
 mod curve;
 mod field;
+mod msm;
 mod pairing;
 mod poly;
 mod shared;
+mod srs;
 mod tower;
 
 /// Every group, in the order a reader of the tower would meet them.
-const GROUPS: [(&str, fn()); 5] = [
+const GROUPS: [(&str, fn()); 7] = [
     ("field", field::generate),
     ("poly", poly::generate),
     ("curve", curve::generate),
     ("tower", tower::generate),
     ("pairing", pairing::generate),
+    ("msm", msm::generate),
+    ("srs", srs::generate),
 ];
 
 fn main() {

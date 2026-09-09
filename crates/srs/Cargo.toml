@@ -1,11 +1,12 @@
 [package]
-name = "curve"
+name = "srs"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
 [dependencies]
 constants.workspace = true
+curve.workspace = true
 field.workspace = true
 rayon.workspace = true
 serde.workspace = true
@@ -16,6 +17,6 @@ serde.workspace = true
 ark-bn254.workspace = true
 ark-ec.workspace = true
 ark-ff.workspace = true
-num-bigint.workspace = true
+ark-poly.workspace = true
 postcard.workspace = true
 test-support.workspace = true

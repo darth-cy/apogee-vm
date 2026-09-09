@@ -3,8 +3,8 @@
 ## What this crate owns
 BN254's base field `Fq`, the whole extension tower
 `Fq2 = Fq[u]/(u^2+1)`, `Fq6 = Fq2[v]/(v^3 - xi)`, `Fq12 = Fq6[w]/(w^2 - v)`, both curve
-groups `G1` and `G2` in affine and Jacobian coordinates, and the **optimal ate pairing**.
-No MSM: that is a later stage, and it compiles against exactly the surface frozen here.
+groups `G1` and `G2` in affine and Jacobian coordinates, the **optimal ate pairing**, and
+the **windowed Pippenger MSM** the prover leans on.
 
 Scalars are `field::Fr`. Coordinates are `Fq`. The two moduli agree in their top 128
 bits, so they are easy to confuse by eye and impossible to confuse by type.
@@ -53,6 +53,19 @@ bits, so they are easy to confuse by eye and impossible to confuse by type.
 - **The pairing validates nothing.** On-curve and subgroup checks belong at decode time,
   in `from_bytes`. Feeding `miller_loop` a point off the curve yields a meaningless
   `Fq12`, not an error.
+- **`msm` never dispatches on scalar magnitude.** `msm` always runs the general 254-bit
+  path and `msm_small_u32` is the only door to the cheaper one, which is a source-level
+  fact rather than something a test can observe: the two agree on every value, and the
+  only difference is what they cost. S03 backs trace columns with `u8`/`u16`/`u32`, so the
+  small case is the prover's common one and it earns its own entry point.
+- **The window width is arkworks' heuristic, verbatim.** `3` below 32 points,
+  `log2(n) * 69 / 100 + 2` above it. Copying the rule rather than inventing one is what
+  makes the S07 acceptance-9 benchmark a comparison of implementations.
+- **The recoding needs one more window than `ceil(bits / w)`.** Digits are signed into
+  `[-2^(w-1), 2^(w-1)]`, and the carry must not escape the top window, so the window count
+  is `ceil((bits + 1) / w)`. For every width the heuristic can pick this is the same
+  number, because no `w` in `3..=29` divides 254 or 32 — but the `+1` is the reason it is
+  provable rather than lucky.
 - **Fq6 has no `conjugate`.** It is a cubic extension of Fq2, so it has no order-two
   automorphism over it; coefficientwise Fq2-conjugation is not even a ring homomorphism,
   since it would have to move `xi = 9 + u` while fixing `v^3`. Conjugation is an Fq12
@@ -79,6 +92,7 @@ src/fq12.rs    Fq12: ops, square, pow, inverse, conjugate, frobenius_map
 src/g1.rs      G1Affine + G1Projective (Jacobian): dbl-2009-l, add-2007-bl, madd-2007-bl
 src/g2.rs      G2Affine + G2Projective, a literal mirror over Fq2 with the real subgroup check
 src/pairing.rs miller_loop, final_exponentiation, pairing, pairing_check
+src/msm.rs     windowed Pippenger: msm (254-bit) and msm_small_u32, MsmError
 ```
 
 `Fq6` and `Fq12` are re-exported at the crate root beside `Fq` and `Fq2`; the four pairing
@@ -106,13 +120,20 @@ against `ark_bn254::Fq6Config::NONRESIDUE`.
 | `tests/vectors/fq6_kats.txt` | Fq6: an 8x8 edge grid, 1,000 random vectors, every Frobenius power, `pow` |
 | `tests/vectors/fq12_kats.txt` | the same for Fq12, plus `conjugate` and 207 exact final exponentiations |
 | `tests/vectors/pairing_kats.txt` | 6 named cases including `e(G1, G2)`, and 120 random `(P, Q, e(P,Q))` |
+| `tests/vectors/msm_kats.txt` | 13 MSM cases from ark-bn254's `VariableBaseMSM`, at sizes 0, 1, 2, 100, 2^10, 2^16 and over four input patterns |
 
-Regenerate all six with `cargo run -p kat-gen`, or one group with
-`cargo run -p kat-gen -- <field|poly|curve|tower|pairing>`; either prints each file's
-SHA-256, and the digests are pinned in `tests/kats.rs::FILES` and refreshed deliberately.
-CI regenerates and diffs them.
+Regenerate all seven with `cargo run -p kat-gen`, or one group with
+`cargo run -p kat-gen -- <field|poly|curve|tower|pairing|msm>`; either prints each file's
+SHA-256. The six older files' digests are pinned in `tests/kats.rs::FILES`;
+`msm_kats.txt`'s is pinned in `tests/msm.rs::KAT_SHA256`, beside the only suite that
+reads it. Refreshes are deliberate, and CI regenerates and diffs every file.
 
-The six files are **18 MB**, of which S06's three are 14 MB. That is the price of
+`msm_kats.txt` is the one fixture that encodes its inputs as a seed and a pattern rather
+than writing them out: the 2^16-point case would otherwise be 12 MB of hex. Both sides
+expand the same seed independently — arkworks in `tools/kat-gen/src/msm.rs`, `curve` in
+`tests/msm.rs` — so a drift in either expansion changes the expected point and fails.
+
+The six older files are **18 MB**, of which S06's three are 14 MB. That is the price of
 Acceptance 1's "at least 1,000 random vectors per op" being committed rather than sampled
 live: an `Fq12` token is 768 hex characters and an `fq12_ops` line carries eleven of them.
 It is the largest single cost this stage adds to the repository and is recorded here so
@@ -128,6 +149,7 @@ nobody has to rediscover it.
 | `differential.rs` | 1,500 live group operations, 2,000 live field vectors, 50 tower rounds and 23 live pairings against ark-bn254 |
 | `tower.rs` | the field axioms for Fq6/Fq12, the tower relations `v^3 = xi` and `w^2 = v`, the Frobenius re-derived as `a^(q^i)` with no oracle, equality *dis*equality |
 | `pairing.rs` | bilinearity, non-degeneracy, unitarity, infinity handling, the multi-pair product relations, a toy KZG opening with its negative twins, and `final_exponentiation` against the literal `(q^12-1)/r` applied bit by bit |
+| `msm.rs` | the committed corpus, 100 live MSMs against ark-bn254 across every window-width boundary, small-path equivalence to 2^14, boundary scalars against a naive sum, and totality on every degenerate input |
 
 `curve` is a **std** crate (S05 Must-be-exact 8) and is deliberately absent from CI's
 guest-target build line: the recursion guest defers all pairing work through the

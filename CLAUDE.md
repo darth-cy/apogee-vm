@@ -18,12 +18,14 @@ docs/
 crates/
   constants/     frozen constants and tags; zero logic; no_std
   field/         Fr arithmetic (Montgomery); no_std
-  curve/         Fq tower through Fq12 + G1/G2 + the optimal ate pairing (no MSM); std
+  curve/         Fq tower through Fq12 + G1/G2 + the optimal ate pairing + Pippenger MSM; std
   transcript/    Poseidon2 permutation + duplex transcript; no_std
   poly/          MultilinearPoly + small-type backing + eq machinery; no_std
   sumcheck/      Gate + zerocheck prover/verifier; no_std
+  srs/           snarkjs .ptau ingestion, the SRS archive, univariate KZG; std
+assets/          gitignored: the powers-of-tau ceremony files; see the S07 handoff
 tools/
-  kat-gen/       regenerates the committed Fr, multilinear and curve vectors from arkworks
+  kat-gen/       regenerates the committed Fr, multilinear, curve, MSM and SRS vectors from arkworks
   bench/         one routine per measurement, individually selectable
   transcript-ref/ the transcript oracle: Plonky3 + zkhash, NOT a workspace member
   test-support/  seeded RNG, SHA-256, hex; shared by every suite and generator
@@ -45,14 +47,14 @@ cargo fmt --all -- --check
 cargo fmt --manifest-path tools/transcript-ref/Cargo.toml --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
-cargo test --workspace                      # 205 tests as of S06
+cargo test --workspace                      # 252 tests as of S07
 cargo build -p field -p constants -p transcript -p poly -p sumcheck --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
-git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/
+git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/
 -------------------------------------------------------------------------------
 cargo run -p kat-gen                        # refresh every fixture (manual, deliberate)
-cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing
+cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs
 cargo run --manifest-path tools/transcript-ref/Cargo.toml   # ditto, transcript vectors
 cargo run --release -p bench                # every routine; internal numbers only
 cargo run --release -p bench -- --list      # the routines, and what each measures
@@ -94,6 +96,15 @@ does not name a version anywhere, so it cannot drift from that pin.
 - **One tag, one message kind.** The transcript frames typed messages as
   `tag, length, payload`, so a tag in `constants::transcript_tags` must name exactly one
   of scalars, bytes or a challenge. Reusing one across kinds is a soundness bug.
+- **`.ptau` points are little-endian *Montgomery*.** The one file format here that is
+  not canonical: a ceremony file stores `coord * R mod q`, because that is
+  ffjavascript's in-memory layout written straight out. `crates/srs` multiplies by
+  `R^-1` and hands canonical bytes to S05's `from_bytes`, so there is still exactly one
+  validating decoder.
+- **SRS integrity is presumed; there is no SRS digest.** S07's Poseidon2 digest over the
+  SRS was dropped on instruction, so the master's statement-binding item `SRS digest`
+  has no implementation and nothing binds a proof to a particular SRS. Read
+  `docs/spec/srs.md` §4 before building statement binding.
 - **Own the crypto.** Runtime dependencies are limited to serialization, rayon, CLI and
   error handling. arkworks, Plonky3 and `zkhash` are reference oracles for tests and
   fixtures only, and never reachable from the prover, the verifier or a guest.
@@ -110,3 +121,4 @@ does not name a version anywhere, so it cannot drift from that pin.
 | S04 — Gate-based sumcheck (zerocheck) | done | `docs/handoff/S04-sumcheck.md` |
 | S05 — Fq tower + G1/G2 arithmetic | done | `docs/handoff/S05-fq-tower-curve.md` |
 | S06 — Fq6/Fq12, Miller loop, final exponentiation | done | `docs/handoff/S06-pairing.md` |
+| S07 — Pippenger MSM + ptau ingestion + KZG | done | `docs/handoff/S07-msm-srs-kzg.md` |
