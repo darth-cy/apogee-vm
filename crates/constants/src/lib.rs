@@ -56,6 +56,134 @@ pub const FR_R2: [u64; 4] = [
 pub const FR_INV: u64 = 0xc2e1_f593_efff_ffff;
 
 // ---------------------------------------------------------------------------
+// Fq, the BN254 base field, and the curve/tower constants that live over it.
+//
+// Fq is where curve coordinates live; Fr is where everything arithmetized in
+// the VM lives. Their top two limbs are identical — the two moduli agree in
+// their top 128 bits and differ only below — so they are easy to confuse by eye
+// and the tests re-derive both.
+//
+// The Montgomery machinery constants below are limb arrays, exactly as their
+// Fr counterparts are. The tower and curve parameters are hex string literals
+// read big-endian by `curve::Fq::from_hex`, the same one accepted spelling
+// `field::Fr::from_hex` defines, so each one diffs against EIP-197 and
+// arkworks-bn254 by eye.
+// ---------------------------------------------------------------------------
+
+/// BN254 base field modulus `q`, little-endian 64-bit limbs.
+///
+/// `q = 21888242871839275222246405745257275088696311157297823662689037894645226208583`
+/// `  = 0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47`
+///
+/// `q = 3 mod 4`, which is what makes a square root one exponentiation.
+pub const FQ_MODULUS: [u64; 4] = [
+    0x3c20_8c16_d87c_fd47,
+    0x9781_6a91_6871_ca8d,
+    0xb850_45b6_8181_585d,
+    0x3064_4e72_e131_a029,
+];
+
+/// `q - 2`, little-endian 64-bit limbs: the Fermat exponent for inversion.
+pub const FQ_MODULUS_MINUS_TWO: [u64; 4] = [
+    0x3c20_8c16_d87c_fd45,
+    0x9781_6a91_6871_ca8d,
+    0xb850_45b6_8181_585d,
+    0x3064_4e72_e131_a029,
+];
+
+/// `(q + 1) / 4`, little-endian 64-bit limbs: the square-root exponent.
+///
+/// For `q = 3 mod 4`, `x^((q+1)/4)` is a square root of `x` whenever `x` has
+/// one. It is an integer because `q + 1 = 0 mod 4`.
+pub const FQ_MODULUS_PLUS_ONE_DIV_FOUR: [u64; 4] = [
+    0x4f08_2305_b61f_3f52,
+    0x65e0_5aa4_5a1c_72a3,
+    0x6e14_116d_a060_5617,
+    0x0c19_139c_b84c_680a,
+];
+
+/// Montgomery radix `R = 2^256 mod q`, little-endian 64-bit limbs.
+///
+/// `R` is also the Montgomery representation of `1`.
+pub const FQ_R: [u64; 4] = [
+    0xd35d_438d_c58f_0d9d,
+    0x0a78_eb28_f5c7_0b3d,
+    0x666e_a36f_7879_462c,
+    0x0e0a_77c1_9a07_df2f,
+];
+
+/// `R^2 mod q`, little-endian 64-bit limbs: converts a canonical value into
+/// Montgomery form via one Montgomery multiplication.
+pub const FQ_R2: [u64; 4] = [
+    0xf32c_fc5b_538a_fa89,
+    0xb5e7_1911_d445_01fb,
+    0x47ab_1eff_0a41_7ff6,
+    0x06d8_9f71_cab8_351f,
+];
+
+/// `-q^{-1} mod 2^64`, the per-limb Montgomery reduction multiplier.
+pub const FQ_INV: u64 = 0x87d2_0782_e486_6389;
+
+/// The Fq2 nonresidue: `Fq2 = Fq[u]/(u^2 - FQ2_NONRESIDUE)`, so `u^2 = -1`.
+///
+/// This is `q - 1`. `-1` is a nonresidue exactly because `q = 3 mod 4`, and
+/// that single fact is what makes the Fq2 square root a two-branch closed form
+/// (see `curve::Fq2::sqrt`). Implementations multiply by it by negating, so the
+/// value appears here as the frozen definition and in `curve`'s constants test
+/// as the thing negation is checked against.
+pub const FQ2_NONRESIDUE: &str =
+    "0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd46";
+
+/// `xi = 9 + u`, real part: the nonresidue that builds Fq6 over Fq2.
+///
+/// `curve::Fq2::mul_by_nonresidue` multiplies by it. The Fq6 and Fq12 layers
+/// that consume it arrive with the pairing in the next stage; the G2 curve
+/// constant `3/xi` below already depends on it.
+pub const FQ6_NONRESIDUE_C0: &str =
+    "0x0000000000000000000000000000000000000000000000000000000000000009";
+
+/// `xi = 9 + u`, `u` part.
+pub const FQ6_NONRESIDUE_C1: &str =
+    "0x0000000000000000000000000000000000000000000000000000000000000001";
+
+/// G1's curve constant: `E/Fq: y^2 = x^3 + 3`.
+pub const G1_B: &str = "0x0000000000000000000000000000000000000000000000000000000000000003";
+
+/// G2's curve constant `3/xi = 3/(9+u)`, real part.
+///
+/// `E'/Fq2: y^2 = x^3 + 3/xi` is the D-type sextic twist, the curve EIP-197's
+/// G2 generator lies on.
+pub const G2_B_C0: &str = "0x2b149d40ceb8aaae81be18991be06ac3b5b4c5e559dbefa33267e6dc24a138e5";
+
+/// G2's curve constant `3/xi = 3/(9+u)`, `u` part.
+pub const G2_B_C1: &str = "0x009713b03af0fed4cd2cafadeed8fdf4a74fa084e52d1852e4a2bd0685c315d2";
+
+/// The standard G1 generator, `x`. The generator is `(1, 2)`.
+pub const G1_GENERATOR_X: &str =
+    "0x0000000000000000000000000000000000000000000000000000000000000001";
+
+/// The standard G1 generator, `y`.
+pub const G1_GENERATOR_Y: &str =
+    "0x0000000000000000000000000000000000000000000000000000000000000002";
+
+/// The standard G2 generator, `x` real part. EIP-197's G2, coordinate for
+/// coordinate.
+pub const G2_GENERATOR_X_C0: &str =
+    "0x1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed";
+
+/// The standard G2 generator, `x` `u` part.
+pub const G2_GENERATOR_X_C1: &str =
+    "0x198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2";
+
+/// The standard G2 generator, `y` real part.
+pub const G2_GENERATOR_Y_C0: &str =
+    "0x12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daa";
+
+/// The standard G2 generator, `y` `u` part.
+pub const G2_GENERATOR_Y_C1: &str =
+    "0x090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975b";
+
+// ---------------------------------------------------------------------------
 // Poseidon2 round constants, width 3, over the BN254 scalar field.
 //
 // Provenance: the `RC3` table of <https://github.com/HorizenLabs/poseidon2>,

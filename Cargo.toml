@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/constants",
     "crates/field",
+    "crates/curve",
     "crates/transcript",
     "crates/poly",
     "crates/sumcheck",
@@ -22,6 +23,7 @@ publish = false
 [workspace.dependencies]
 constants = { path = "crates/constants" }
 field = { path = "crates/field" }
+curve = { path = "crates/curve" }
 transcript = { path = "crates/transcript" }
 poly = { path = "crates/poly" }
 sumcheck = { path = "crates/sumcheck" }
@@ -38,6 +40,7 @@ serde = { version = "1", default-features = false }
 # Test / tool only. Reference implementation for differential checks and the
 # KAT fixtures. Never linked by the prover, verifier, or a guest.
 ark-bn254 = "0.6"
+ark-ec = "0.6"
 ark-ff = "0.6"
 ark-poly = "0.6"
 

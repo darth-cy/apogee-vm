@@ -18,11 +18,12 @@ docs/
 crates/
   constants/     frozen constants and tags; zero logic; no_std
   field/         Fr arithmetic (Montgomery); no_std
+  curve/         Fq tower + Fq2 + G1/G2 (no pairing, no MSM); std
   transcript/    Poseidon2 permutation + duplex transcript; no_std
   poly/          MultilinearPoly + small-type backing + eq machinery; no_std
   sumcheck/      Gate + zerocheck prover/verifier; no_std
 tools/
-  kat-gen/       regenerates the committed Fr and multilinear vectors from arkworks
+  kat-gen/       regenerates the committed Fr, multilinear and curve vectors from arkworks
   bench/         one routine per measurement, individually selectable
   transcript-ref/ the transcript oracle: Plonky3 + zkhash, NOT a workspace member
   test-support/  seeded RNG, SHA-256, hex; shared by every suite and generator
@@ -44,13 +45,13 @@ cargo fmt --all -- --check
 cargo fmt --manifest-path tools/transcript-ref/Cargo.toml --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
-cargo test --workspace                      # 139 tests as of S04
+cargo test --workspace                      # 180 tests as of S05
 cargo build -p field -p constants -p transcript -p poly -p sumcheck --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
-git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/
+git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/
 -------------------------------------------------------------------------------
-cargo run -p kat-gen                        # refresh Fr + poly fixtures (manual, deliberate)
+cargo run -p kat-gen                        # refresh Fr + poly + curve fixtures (manual, deliberate)
 cargo run --manifest-path tools/transcript-ref/Cargo.toml   # ditto, transcript vectors
 cargo run --release -p bench                # every routine; internal numbers only
 cargo run --release -p bench -- --list      # the routines, and what each measures
@@ -70,6 +71,14 @@ does not name a version anywhere, so it cannot drift from that pin.
   little-endian. Montgomery form exists only in memory. Source literals are the one
   exception and are their own single form: `Fr::from_hex`, `0x` plus 64 lowercase digits,
   big-endian, because a constant in source is a number and should diff against upstream.
+- **Fq is not Fr.** `Fr` is the scalar field everything is arithmetized over; `Fq` is the
+  base field curve coordinates live in. The moduli agree in their top 128 bits. `curve::Fq`
+  is a deliberate literal duplicate of `field::Fr`'s Montgomery kernel, not an abstraction
+  over it, and `curve::g2` is a literal mirror of `curve::g1`.
+- **Points on the wire are uncompressed affine.** 64 bytes `x ‖ y` for G1, 128 bytes
+  `x.c0 ‖ x.c1 ‖ y.c0 ‖ y.c1` for G2, each coordinate canonical 32-byte LE, all-zero for
+  infinity. No compressed form, no decompression, ever. A point's *transcript* form is a
+  different thing: four ~128-bit Fr limbs.
 - **One index convention.** Variable `j` is bit `j`: the evaluation at `y` sits at
   `index = sum_j y_j 2^j`, and `bind` fixes variable 0, the low bit. Frozen in
   `crates/poly` and load-bearing for every later circuit stage. Sumcheck round `i`
@@ -94,3 +103,4 @@ does not name a version anywhere, so it cannot drift from that pin.
 | S02 — Poseidon2 permutation + duplex transcript | done | `docs/handoff/S02-transcript.md` |
 | S03 — MultilinearPoly + small-type backing | done | `docs/handoff/S03-poly.md` |
 | S04 — Gate-based sumcheck (zerocheck) | done | `docs/handoff/S04-sumcheck.md` |
+| S05 — Fq tower + G1/G2 arithmetic | done | `docs/handoff/S05-fq-tower-curve.md` |
