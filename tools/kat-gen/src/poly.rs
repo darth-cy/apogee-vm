@@ -13,8 +13,6 @@
 //! it is `crates/poly`'s own answer read back.
 
 use std::fmt::Write as _;
-use std::fs;
-use std::path::PathBuf;
 
 use ark_bn254::Fr;
 use ark_ff::{BigInteger, One, PrimeField};
@@ -79,17 +77,12 @@ fn eq_at_vertex(r: &[Fr], y: usize) -> Fr {
     acc
 }
 
-fn write(relative: &str, contents: &str) {
-    let path: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../crates/poly/tests/vectors")
-        .join(relative);
-    fs::write(&path, contents).expect("writing a poly vector file");
-    println!("wrote {}", path.display());
-}
-
 pub fn generate() {
-    write("poly_kats.txt", &kats());
-    write("evaluate_diff.txt", &differential());
+    crate::write_vectors("crates/poly/tests/vectors/poly_kats.txt", &kats());
+    crate::write_vectors(
+        "crates/poly/tests/vectors/evaluate_diff.txt",
+        &differential(),
+    );
 }
 
 // ---------------------------------------------------------------------------

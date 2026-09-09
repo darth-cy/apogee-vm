@@ -22,6 +22,39 @@ in-subgroup there.
 **xi** — `9 + u`, the nonresidue that builds Fq6 over Fq2. `Fq2::mul_by_nonresidue`
 multiplies by it. Not to be confused with the Fq2 nonresidue `-1`, which gives `u^2+1`.
 
+**Fq6, Fq12** — the rest of the tower: `Fq6 = Fq2[v]/(v^3 - xi)` and
+`Fq12 = Fq6[w]/(w^2 - v)`, so `w^6 = xi`. Fq12 is the pairing's target group. Elements are
+written `c0 + c1 v + c2 v^2` and `c0 + c1 w`, and encoded in that coefficient order. Fq12
+has a **conjugate**, `c0 - c1 w`, which is its `q^6` Frobenius; Fq6 has none, because a
+cubic extension has no order-two automorphism over its base.
+
+**Frobenius map** — `a -> a^(q^i)`, spelled `frobenius_map(i)` and reduced modulo the
+extension degree. Coefficientwise it is a conjugation of each Fq2 times a fixed power of
+**xi**; those powers are the frozen tables in `crates/constants`.
+
+**Pairing** — the optimal ate pairing `e : G1 x G2 -> Fq12`,
+`e(P, Q) = f_{6x+2, Q}(P)^((q^12 - 1)/r)` with `x = 4965661367192848881`. Bilinear and
+non-degenerate. It appears only in verification; no prover, and no recursion guest, ever
+computes one.
+
+**Miller loop** — the first half of a pairing: a double-and-add over the signed-digit
+(NAF) expansion of `6x + 2`, accumulating a line function per step, then two Frobenius
+correction steps. `miller_loop` runs one shared loop over many pairs, so a multi-pair check
+costs one loop and not one per pair.
+
+**Final exponentiation** — the second half: raising to `(q^12 - 1)/r`, which is what makes
+the result independent of the Miller loop's conventions. Split into an *easy part*,
+`(q^6 - 1)(q^2 + 1)`, and a *hard part*, `(q^4 - q^2 + 1)/r`. Ours is the **exact** power,
+never a fixed multiple of it.
+
+**Cyclotomic subgroup** — where the easy part lands: the elements of order dividing
+`q^4 - q^2 + 1`. On them, conjugation *is* inversion (they are **unitary**), which is how
+the hard part's negative exponents are taken for free.
+
+**Pairing check** — `prod_i e(P_i, Q_i) == 1`, over one shared Miller loop and exactly one
+final exponentiation. The verifier shape for the whole project: the deferred-pairing
+accumulator is discharged by one of these.
+
 **Uncompressed affine** — the one point encoding: `x || y` for G1 (64 bytes), `x || y` over
 Fq2 for G2 (128), each coordinate canonical, all-zero for the point at infinity. There is no
 compressed form anywhere in the protocol. Distinct from a point's *transcript* form, which is

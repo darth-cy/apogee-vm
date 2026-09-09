@@ -198,6 +198,7 @@ dependencies = [
  "ark-ff",
  "constants",
  "field",
+ "num-bigint",
  "postcard",
  "serde",
  "test-support",
@@ -304,6 +305,8 @@ dependencies = [
  "ark-ec",
  "ark-ff",
  "ark-poly",
+ "constants",
+ "num-bigint",
  "test-support",
 ]
 

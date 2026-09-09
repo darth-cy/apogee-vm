@@ -27,13 +27,13 @@
 //! out-of-subgroup lines are exactly the values `from_bytes` must reject.
 
 use std::fmt::Write as _;
-use std::fs;
-use std::path::PathBuf;
 
 use ark_bn254::{Fq, Fq2, Fr, G1Affine, G1Projective, G2Affine, G2Projective};
 use ark_ec::{AffineRepr, CurveGroup, PrimeGroup};
 use ark_ff::{AdditiveGroup, BigInteger, Field, One, PrimeField};
-use test_support::{sha256, to_hex, Rng};
+use test_support::{to_hex, Rng};
+
+use crate::shared::{hex_exp, hex_fq, hex_fq2, hex_fr, hex_g1, hex_g2, opt_fq, opt_fq2};
 
 const FQ_SEED: u64 = 20260910;
 const G1_SEED: u64 = 20260911;
@@ -41,56 +41,6 @@ const G2_SEED: u64 = 20260912;
 
 /// Acceptance 1 and 3 both ask for at least a thousand random vectors.
 const RANDOM_VECTORS: usize = 1_000;
-
-// ---------------------------------------------------------------------------
-// Encoding
-// ---------------------------------------------------------------------------
-
-fn hex_fq(x: &Fq) -> String {
-    let bytes = x.into_bigint().to_bytes_le();
-    assert_eq!(bytes.len(), 32, "Fq must serialize to 32 bytes");
-    to_hex(&bytes)
-}
-
-fn hex_fq2(x: &Fq2) -> String {
-    format!("{}{}", hex_fq(&x.c0), hex_fq(&x.c1))
-}
-
-fn hex_fr(x: &Fr) -> String {
-    let bytes = x.into_bigint().to_bytes_le();
-    assert_eq!(bytes.len(), 32, "Fr must serialize to 32 bytes");
-    to_hex(&bytes)
-}
-
-fn hex_exp(e: &[u64; 4]) -> String {
-    let mut bytes = [0u8; 32];
-    for i in 0..4 {
-        bytes[8 * i..8 * i + 8].copy_from_slice(&e[i].to_le_bytes());
-    }
-    to_hex(&bytes)
-}
-
-fn hex_g1(p: &G1Affine) -> String {
-    if p.is_zero() {
-        return to_hex(&[0u8; 64]);
-    }
-    format!("{}{}", hex_fq(&p.x), hex_fq(&p.y))
-}
-
-fn hex_g2(p: &G2Affine) -> String {
-    if p.is_zero() {
-        return to_hex(&[0u8; 128]);
-    }
-    format!("{}{}", hex_fq2(&p.x), hex_fq2(&p.y))
-}
-
-fn opt_fq(x: Option<Fq>) -> String {
-    x.map(|v| hex_fq(&v)).unwrap_or_else(|| "none".to_string())
-}
-
-fn opt_fq2(x: Option<Fq2>) -> String {
-    x.map(|v| hex_fq2(&v)).unwrap_or_else(|| "none".to_string())
-}
 
 // ---------------------------------------------------------------------------
 // Sampling
@@ -402,7 +352,7 @@ fn g1_kats() -> String {
             hex_g1(&-p),
         );
     }
-    assert_distinct(&seen, "G1 random points");
+    crate::assert_distinct(&seen, "G1 random points");
 
     // The addition edges. `P + P` here goes through the *generic* add path in
     // the test, which is the case the H == 0, r == 0 branch exists for.
@@ -559,7 +509,7 @@ fn g2_kats() -> String {
             hex_g2(&-p),
         );
     }
-    assert_distinct(&seen, "G2 random points");
+    crate::assert_distinct(&seen, "G2 random points");
 
     let p = next_g2(&mut rng);
     let inf = G2Affine::identity();
@@ -699,15 +649,6 @@ fn g2_rejections(rng: &mut Rng) -> Vec<Rejection> {
     out
 }
 
-/// A generator whose input stream had collapsed would still write a thousand
-/// lines that all "match".
-fn assert_distinct(values: &[String], what: &str) {
-    let mut sorted = values.to_vec();
-    sorted.sort();
-    sorted.dedup();
-    assert_eq!(sorted.len(), values.len(), "{what} must not repeat");
-}
-
 // ---------------------------------------------------------------------------
 
 pub fn generate() {
@@ -716,11 +657,6 @@ pub fn generate() {
         ("g1_kats.txt", g1_kats()),
         ("g2_kats.txt", g2_kats()),
     ] {
-        let path: PathBuf = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../crates/curve/tests/vectors")
-            .join(name);
-        let digest = to_hex(&sha256(contents.as_bytes()));
-        fs::write(&path, contents).expect("writing a curve vector file");
-        println!("wrote {} (sha256 {})", path.display(), digest);
+        crate::write_vectors(&format!("crates/curve/tests/vectors/{name}"), &contents);
     }
 }

@@ -4,7 +4,7 @@
 //! `tools/test-support`. Test-only; never compiled into the library.
 #![allow(dead_code)]
 
-use curve::{Fq, Fq2, G1Affine, G2Affine};
+use curve::{Fq, Fq12, Fq2, Fq6, G1Affine, G2Affine};
 use field::Fr;
 use test_support::{hex_to_bytes, to_hex, Rng};
 
@@ -65,6 +65,24 @@ pub fn ark_fq2_bytes(x: &ark_bn254::Fq2) -> [u8; 64] {
     b[..32].copy_from_slice(&ark_fq_bytes(&x.c0));
     b[32..].copy_from_slice(&ark_fq_bytes(&x.c1));
     b
+}
+
+pub fn to_ark_fq6(x: &Fq6) -> ark_bn254::Fq6 {
+    ark_bn254::Fq6::new(to_ark_fq2(&x.c0), to_ark_fq2(&x.c1), to_ark_fq2(&x.c2))
+}
+
+pub fn to_ark_fq12(x: &Fq12) -> ark_bn254::Fq12 {
+    ark_bn254::Fq12::new(to_ark_fq6(&x.c0), to_ark_fq6(&x.c1))
+}
+
+pub fn from_ark_fq(x: &ark_bn254::Fq) -> Fq {
+    Fq::from_bytes(&ark_fq_bytes(x)).expect("arkworks emits a canonical Fq")
+}
+
+pub fn from_ark_fq12(x: &ark_bn254::Fq12) -> Fq12 {
+    let f2 = |v: &ark_bn254::Fq2| Fq2::new(from_ark_fq(&v.c0), from_ark_fq(&v.c1));
+    let f6 = |v: &ark_bn254::Fq6| Fq6::new(f2(&v.c0), f2(&v.c1), f2(&v.c2));
+    Fq12::new(f6(&x.c0), f6(&x.c1))
 }
 
 pub fn to_ark_g1(p: &G1Affine) -> ark_bn254::G1Affine {
@@ -134,6 +152,61 @@ pub fn fq_to_hex(x: &Fq) -> String {
 
 pub fn fq2_to_hex(x: &Fq2) -> String {
     to_hex(&x.to_bytes())
+}
+
+// The tower's wider tokens: coefficient order, each `Fq` in its canonical
+// 32-byte little-endian wire form. `Fq6` is 384 hex characters and `Fq12` is
+// 768. Neither type has a `to_bytes` of its own -- nothing in the protocol
+// serializes one -- so the codec lives here with the fixtures that need it.
+
+pub fn fq6_to_hex(x: &Fq6) -> String {
+    format!(
+        "{}{}{}",
+        fq2_to_hex(&x.c0),
+        fq2_to_hex(&x.c1),
+        fq2_to_hex(&x.c2)
+    )
+}
+
+pub fn fq12_to_hex(x: &Fq12) -> String {
+    format!("{}{}", fq6_to_hex(&x.c0), fq6_to_hex(&x.c1))
+}
+
+pub fn fq2_from_hex(s: &str) -> Result<Fq2, String> {
+    if s.len() != 128 {
+        return Err(format!(
+            "expected 128 hex characters of Fq2, got {}",
+            s.len()
+        ));
+    }
+    Ok(Fq2::new(fq_from_hex(&s[..64])?, fq_from_hex(&s[64..])?))
+}
+
+pub fn fq6_from_hex(s: &str) -> Result<Fq6, String> {
+    if s.len() != 384 {
+        return Err(format!(
+            "expected 384 hex characters of Fq6, got {}",
+            s.len()
+        ));
+    }
+    Ok(Fq6::new(
+        fq2_from_hex(&s[..128])?,
+        fq2_from_hex(&s[128..256])?,
+        fq2_from_hex(&s[256..])?,
+    ))
+}
+
+pub fn fq12_from_hex(s: &str) -> Result<Fq12, String> {
+    if s.len() != 768 {
+        return Err(format!(
+            "expected 768 hex characters of Fq12, got {}",
+            s.len()
+        ));
+    }
+    Ok(Fq12::new(
+        fq6_from_hex(&s[..384])?,
+        fq6_from_hex(&s[384..])?,
+    ))
 }
 
 pub fn g1_bytes_from_hex(s: &str) -> Result<[u8; 64], String> {

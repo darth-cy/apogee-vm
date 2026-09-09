@@ -33,6 +33,24 @@ const XI: Fq2 = Fq2 {
     c1: Fq(FQ_R),
 };
 
+/// An `Fq2` from the two big-endian hex literals `constants` stores it as.
+///
+/// The tower constants the pairing needs — the Fq6 and Fq12 Frobenius tables,
+/// the twist Frobenius — are powers of `xi` with no compact closed form, and
+/// `constants` holds them in the workspace's one source spelling: `"0x"` plus
+/// 64 lowercase big-endian digits, so each diffs against arkworks-bn254 by
+/// eye. `Fq::from_hex` is not a `const fn`, so they are parsed where they are
+/// used rather than being duplicated into `curve` as opaque Montgomery limbs.
+/// Two field conversions per Frobenius coefficient is nothing next to the
+/// thousands of `Fq` multiplications a pairing already costs, and a pairing
+/// never runs in the prover at all.
+pub(crate) fn fq2_from_hex(pair: [&str; 2]) -> Fq2 {
+    Fq2 {
+        c0: Fq::from_hex(pair[0]).expect("a constants tower literal is a canonical Fq"),
+        c1: Fq::from_hex(pair[1]).expect("a constants tower literal is a canonical Fq"),
+    }
+}
+
 /// An element `c0 + c1 * u` of the BN254 quadratic extension.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Fq2 {

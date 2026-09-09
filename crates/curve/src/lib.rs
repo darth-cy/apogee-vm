@@ -1,13 +1,17 @@
 //! BN254's base field tower level one, and both curve groups.
 //!
-//! Pure algebra: no pairing, no MSM. Those arrive in later stages and compile
-//! against exactly the surface re-exported here.
+//! The full tower, both curve groups, and the optimal ate pairing. No MSM;
+//! that arrives in a later stage and compiles against exactly the surface
+//! re-exported here.
 //!
 //! ```text
 //!   Fq   = GF(q),           q = 21888242871839275222246405745257275088696311157297823662689037894645226208583
 //!   Fq2  = Fq[u]/(u^2 + 1)
+//!   Fq6  = Fq2[v]/(v^3 - xi),   xi = 9 + u
+//!   Fq12 = Fq6[w]/(w^2 - v)
 //!   G1   = E /Fq  : y^2 = x^3 + 3            #E(Fq)   = r,            cofactor 1
 //!   G2   = E'/Fq2 : y^2 = x^3 + 3/(9+u)      #E'(Fq2) = r * (2q - r), cofactor 2q - r
+//!   e    : G1 x G2 -> Fq12                   the optimal ate pairing, in `pairing`
 //! ```
 //!
 //! `r` is `field::Fr`'s modulus: the scalar field. Scalars are `Fr`, and
@@ -49,11 +53,16 @@
 //!   either. G2's cofactor is not 1, so its subgroup check is real arithmetic.
 
 mod fq;
+mod fq12;
 mod fq2;
+mod fq6;
 mod g1;
 mod g2;
+pub mod pairing;
 
 pub use fq::{batch_inverse, Fq};
+pub use fq12::Fq12;
 pub use fq2::Fq2;
+pub use fq6::Fq6;
 pub use g1::{G1Affine, G1Projective};
 pub use g2::{G2Affine, G2Projective};

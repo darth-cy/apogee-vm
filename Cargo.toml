@@ -44,6 +44,12 @@ ark-ec = "0.6"
 ark-ff = "0.6"
 ark-poly = "0.6"
 
+# Tooling only, in `kat-gen` alone. The exact final exponent is (q^12 - 1)/r,
+# a 2,790-bit integer, and the fixtures state that definition rather than
+# trusting any library's decomposition of it. Already in the tree as an
+# `ark-ff` dependency; never reachable from the prover, verifier, or a guest.
+num-bigint = { version = "0.4", default-features = false }
+
 # Test only. Exercises the `Fr` serde impls over a real wire format.
 postcard = { version = "1", default-features = false }
 
