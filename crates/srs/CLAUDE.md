@@ -16,8 +16,12 @@ before touching the code.
   nothing binds a proof to a particular SRS, so the protocol is not sound against SRS
   substitution. A later stage building statement binding must reinstate it or record the
   same deviation. `docs/spec/srs.md` §4 is the long form.
-- **One ingestion format.** The snarkjs `.ptau` container from a
-  perpetual-powers-of-tau / Hermez ceremony, and no other, in v1.
+- **One ingestion format, one ceremony.** The snarkjs `.ptau` container, and no other,
+  in v1 — and **PSE's perpetual powers of tau, contribution 80** (`ppot_0080_<power>.ptau`),
+  **not Hermez's** `powersOfTau28_hez_final_*`. The two are different ceremonies with
+  different `tau`: their points and every commitment over them differ, so they are not
+  interchangeable and mixing them silently yields a correct-looking SRS whose fixtures do
+  not match. `docs/spec/srs.md` §2.0 has the reasoning and the mirror.
 - **`.ptau` points are little-endian *Montgomery*.** 64 bytes `x || y` for G1, 128 for G2,
   each coordinate `coord * R mod q` with `R = 2^256`. This is the one file format in the
   workspace that is not canonical, and it is the single fact about `.ptau` worth
@@ -63,15 +67,20 @@ src/kzg.rs    kzg_commit, kzg_open, kzg_verify
 encoding it is reading. They differ in three lines, and those three lines are the point of
 each function.
 
-## The ceremony file
-`assets/ptau/powersOfTau28_hez_final_24.ptau`, **gitignored**: it is 19 GB. Every test in
-this crate needs it, or one of the smaller powers beside it, and returns quietly when it
-is absent — so a clone without the assets still runs a green suite, and **CI runs none of
-these tests**. `cargo test -p srs -- --nocapture` prints one `skipped ...` line per test
-that did not run.
+## The ceremony files
+```
+assets/ptau/ppot_0080_24.ptau    19 GB   the required capability, and the fixture source
+assets/ptau/ppot_0080_12.ptau   4.8 MB   the ingestion negative controls, which read a
+                                         whole file into memory to damage one byte of it
+```
+**Gitignored.** Every test in this crate needs one of them and returns quietly when it is
+absent — so a clone without the assets still runs a green suite, and **CI runs none of
+these tests** except `totality.rs`, which builds its own bytes.
+`cargo test -p srs -- --nocapture` prints one `skipped ...` line per test that did not run.
 
-Provenance and re-download instructions are in `docs/handoff/S07-msm-srs-kzg.md`. Both
-mirrors the snarkjs README names are dead; the ones that work are recorded there.
+Both are PSE contribution 80, so power 12 is a genuine prefix of power 24 and the two
+agree point for point. Provenance, hashes and the download command are in
+`docs/handoff/S07-msm-srs-kzg.md`.
 
 ## Artifacts
 | Path | What |
@@ -84,9 +93,11 @@ the digests are pinned in `tests/ptau.rs` and `tests/kzg.rs`. **The generator sk
 writes nothing when the ceremony file is absent**, so CI's regenerate-and-diff stays clean
 on a machine without the assets.
 
-Both files carry a `# ceremony <[x]_1>` header line. A different power-24 ceremony has a
-different `tau`, so every point and every commitment would differ; the tests check that
-line first and say so, instead of printing a wall of mismatches.
+Both files carry a `# ceremony <[x]_1>` header line. A different ceremony — Hermez's, or
+a different PSE contribution — has a different `tau`, so every point and every commitment
+would differ; the tests check that line first and say so, instead of printing a wall of
+mismatches. That check is the thing that would catch a Hermez file dropped into
+`assets/ptau/` under a PSE name.
 
 ## Tests
 | File | What it pins |

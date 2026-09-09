@@ -4,6 +4,12 @@
 //! ones are ceremony output, not fixtures this repository owns. Every test
 //! that needs one asks for it and returns quietly when it is absent, so a
 //! clone without the assets still runs a green suite.
+//!
+//! The ceremony is **PSE's perpetual powers of tau**, contribution 80, whose
+//! files are named `ppot_0080_<power>.ptau`. Every power is a prefix of the
+//! same ceremony, so a file here is interchangeable with a bigger one read at
+//! a smaller power — but it is *not* interchangeable with Hermez's, which has
+//! a different `tau`. See `docs/spec/srs.md` §2.
 
 #![allow(dead_code)]
 
@@ -14,13 +20,13 @@ use std::path::PathBuf;
 pub fn ptau(power: u32) -> Option<PathBuf> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../assets/ptau")
-        .join(format!("powersOfTau28_hez_final_{power:02}.ptau"));
+        .join(format!("ppot_0080_{power:02}.ptau"));
     path.exists().then_some(path)
 }
 
 /// Say so, on stdout, so `cargo test -- --nocapture` shows what did not run.
 pub fn skipped(what: &str, power: u32) {
-    println!("skipped {what}: assets/ptau/powersOfTau28_hez_final_{power:02}.ptau is absent");
+    println!("skipped {what}: assets/ptau/ppot_0080_{power:02}.ptau is absent");
 }
 
 /// A scratch file path unique to this process and `name`.

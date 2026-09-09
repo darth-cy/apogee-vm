@@ -13,7 +13,7 @@
 //!
 //! # The ceremony file
 //!
-//! `assets/ptau/powersOfTau28_hez_final_24.ptau`, which is gitignored — it is
+//! `assets/ptau/ppot_0080_24.ptau`, which is gitignored — it is
 //! 19 GB. When it is absent this group prints why and writes nothing, so a
 //! regenerate-and-diff on a machine without the assets is still clean.
 //!
@@ -157,8 +157,7 @@ pub fn generate() {
 }
 
 fn ceremony_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../assets/ptau/powersOfTau28_hez_final_24.ptau")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ptau/ppot_0080_24.ptau")
 }
 
 /// `f(z)` by Horner, as a second opinion on the synthetic division.

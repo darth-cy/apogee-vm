@@ -36,8 +36,7 @@ const LOG_N: u32 = 22;
 /// Bases come from the real ceremony, because "fast on random points" is not
 /// the claim anyone cares about.
 fn ceremony_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../assets/ptau/powersOfTau28_hez_final_24.ptau")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/ptau/ppot_0080_24.ptau")
 }
 
 pub fn run() {

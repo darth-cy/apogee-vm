@@ -23,7 +23,7 @@ crates/
   poly/          MultilinearPoly + small-type backing + eq machinery; no_std
   sumcheck/      Gate + zerocheck prover/verifier; no_std
   srs/           snarkjs .ptau ingestion, the SRS archive, univariate KZG; std
-assets/          gitignored: the powers-of-tau ceremony files; see the S07 handoff
+assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 handoff
 tools/
   kat-gen/       regenerates the committed Fr, multilinear, curve, MSM and SRS vectors from arkworks
   bench/         one routine per measurement, individually selectable
@@ -47,7 +47,7 @@ cargo fmt --all -- --check
 cargo fmt --manifest-path tools/transcript-ref/Cargo.toml --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
-cargo test --workspace                      # 252 tests as of S07
+cargo test --workspace                      # 251 tests as of S07
 cargo build -p field -p constants -p transcript -p poly -p sumcheck --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
@@ -96,6 +96,11 @@ does not name a version anywhere, so it cannot drift from that pin.
 - **One tag, one message kind.** The transcript frames typed messages as
   `tag, length, payload`, so a tag in `constants::transcript_tags` must name exactly one
   of scalars, bytes or a challenge. Reusing one across kinds is a soundness bug.
+- **The ceremony is PSE's, not Hermez's.** `ppot_0080_<power>.ptau` from PSE's perpetual
+  powers of tau, contribution 80, and nothing else. Hermez's `powersOfTau28_hez_final_*`
+  is a *different ceremony with a different `tau`*: the two are not interchangeable, and
+  swapping one in silently gives a correct-looking SRS whose committed fixtures do not
+  match. `docs/spec/srs.md` §2.0.
 - **`.ptau` points are little-endian *Montgomery*.** The one file format here that is
   not canonical: a ceremony file stores `coord * R mod q`, because that is
   ffjavascript's in-memory layout written straight out. `crates/srs` multiplies by

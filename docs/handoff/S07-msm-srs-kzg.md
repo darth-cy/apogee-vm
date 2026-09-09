@@ -153,8 +153,8 @@ can observe — the two agree on every value and differ only in cost.
 | 1 | MSM differential fixtures at 1, 2, 100, 2^10, 2^16 + must-be-exact-1 cases | 13 committed cases, all match |
 | 2 | 100 live random MSMs at sizes <= 2^12 vs arkworks | 100 runs, 26 of them the exact window-width boundaries |
 | 3 | `msm_small_u32` == `msm` on u16/u32/zero/single-bit sets to 2^14 | 10 sizes x 5 scalar kinds |
-| 4 | Real ceremony file at power 24 | 2^24 powers, both generators, both G2 points subgroup-valid, `validate()` passes |
-| 5 | Ingestion negative controls, every error class | 11 controls, each the real file with exactly one edit |
+| 4 | Real ceremony file at power 24 | PSE `ppot_0080_24.ptau`: 2^24 powers, both generators, both G2 points subgroup-valid, `validate()` passes |
+| 5 | Ingestion negative controls, every error class | 11 controls, each the real power-12 ceremony file with exactly one edit |
 | 6 | Digest + archive | archive round trip, byte stability, pinned header layout, 8 tamper twins. **Digest dropped — see above** |
 | 7 | KZG round trip + arkworks differential at 1, 100, 2^10, 2^16 | committed fixtures, all match |
 | 8 | KZG tamper twins (a) witness (b) v+1 (c) proof point (d) z+1 | all four reject, plus two infinity substitutions |
@@ -201,57 +201,71 @@ the gate needed them, and it did not.
 
 ---
 
-## The ceremony file
+## The ceremony — PSE, not Hermez
 
-`assets/ptau/powersOfTau28_hez_final_24.ptau` — **gitignored**, 19 GB.
-`/assets` is in `.gitignore`; nothing under it can reach git history.
+**This project uses PSE's perpetual powers of tau, contribution 80.** That is
+frozen in `docs/spec/srs.md` §2.0 and it is the decision a later stage most
+needs to know about, because the two candidate ceremonies produce entirely
+different SRSs.
 
-| | |
-| --- | --- |
-| size | 19,327,446,162 bytes |
-| sha256 | `d21a509863a643b8fd15af9b2f6f8af9b5928b3138af591edc2b7a731b8c2938` |
-| header | `power = 24`, `ceremonyPower = 28`, modulus = BN254 `Fq` |
-| `[x]_1` | `9bbb31be...a2f39506` (the `# ceremony` line in both fixture files) |
-| source | `https://pse-trusted-setup-ppot.s3.eu-central-1.amazonaws.com/pot28_0080/ppot_0080_24.ptau` |
+The stage prompt named "perpetual-powers-of-tau / Hermez", i.e. either. PSE was
+chosen because **its mirror is the one that is still up**, and it is the best
+behaved: plain S3, no redirects, stable ETags, honest HTTP `Range` so a 19 GB
+fetch resumes. Hermez's two published mirrors —
+`storage.googleapis.com/zkevm/ptau/*` and `hermez.s3-eu-west-1.amazonaws.com/*`,
+both named in the snarkjs README — return `403 AccessDenied` for **every** power.
 
-**Provenance caveat, on the record.** The file is named
-`powersOfTau28_hez_final_24.ptau` but its size identifies it as the **PSE
-perpetual-powers-of-tau** `ppot_0080_24.ptau` (19,327,446,162 bytes), not
-Polygon Hermez's `powersOfTau28_hez_final_24.ptau` (19,327,435,928 bytes — the
-two differ in the contributions section). Both are perpetual-powers-of-tau
-ceremony output and both satisfy the stage, which names
-"perpetual-powers-of-tau / Hermez". It matters because **the two ceremonies have
-different `tau`**: the committed `ptau_kats.txt` and `kzg_kats.txt` were
-generated from this file and would not match the Hermez one. Both fixture files
-carry a `# ceremony <[x]_1>` header line and the tests check it first, so a
-swapped file produces one clear message rather than a wall of mismatches.
+Hermez's `powersOfTau28_hez_final_*.ptau` is a *different ceremony with a
+different `tau`*. Its points and every commitment over them differ, so the two
+are not interchangeable: dropping a Hermez file into `assets/ptau/` under a PSE
+name would give a structurally valid SRS whose committed fixtures do not match.
+Both fixture files carry a `# ceremony <[x]_1>` header line and the tests check
+it first, which turns exactly that mistake into one clear message.
 
-Two smaller files are downloaded beside it, used by the ingestion negative
-controls. These two **are** genuine Hermez ceremony output, verified against the
-blake2b-512 digests published in the snarkjs README:
+Nothing in the code depends on which ceremony it is — the reader would ingest
+Hermez's just as happily. The choice is frozen because the fixtures come from
+it, and because with the digest dropped nothing else would notice a swap.
 
-| file | size | sha256 |
+### The files
+
+Both gitignored; `/assets` is in `.gitignore`, so nothing under it can reach git
+history. Both are contribution 80, so power 12 is a genuine prefix of power 24
+and the two agree point for point — verified, not assumed.
+
+| | `ppot_0080_24.ptau` | `ppot_0080_12.ptau` |
 | --- | --- | --- |
-| `powersOfTau28_hez_final_12.ptau` | 4,801,688 | `dcf4ea473bf14b971ce5f7b7c1d6ce1c41a8ed042cdb75b65ca9178e3a3c7c17` |
-| `powersOfTau28_hez_final_16.ptau` | 75,580,568 | `1c401abb57c9ce531370f3015c3e75c0892e0f32b8b1e94ace0f6682d9695922` |
+| size | 19,327,446,162 | 4,811,922 |
+| sha256 | `d21a509863a643b8fd15af9b2f6f8af9b5928b3138af591edc2b7a731b8c2938` | `35e163120e724a60853d0dd76ec54037f7c7b00584392255f71a4341d5a05c50` |
+| header | `power = 24`, `ceremonyPower = 28` | `power = 12`, `ceremonyPower = 28` |
+| used by | the fixtures, the perf gate, every prefix test | the ingestion negative controls, which read a whole file into memory to damage one byte |
 
-from `https://fastfourier.nyc3.cdn.digitaloceanspaces.com/powers-of-tau/`, which
-hosts hez powers 08 through 18.
+`[x]_1` is `9bbb31be...a2f39506` for both — the `# ceremony` line in
+`ptau_kats.txt` and `kzg_kats.txt`.
 
-**Both mirrors the snarkjs README names are dead.**
-`storage.googleapis.com/zkevm/ptau/*` and `hermez.s3-eu-west-1.amazonaws.com/*`
-return `403 AccessDenied` for every power. Live sources found, all verified to
-serve real `ptau`-magic bytes and to honour HTTP `Range`:
+```bash
+mkdir -p assets/ptau && cd assets/ptau
+for p in 12 24; do
+  curl -L -C - -o ppot_0080_$p.ptau \
+    "https://pse-trusted-setup-ppot.s3.eu-central-1.amazonaws.com/pot28_0080/ppot_0080_$p.ptau"
+done
+```
+
+The bucket serves powers 08 through 28. Power 24 is the required capability:
+the master's trace-height ceiling is 2^22, plus Mercury quotient headroom.
+
+### Other mirrors, for the record
+
+All verified to serve real `ptau`-magic bytes and honour `Range`, in case the
+PSE bucket ever goes the way of the other two:
 
 | what | URL |
 | --- | --- |
 | Hermez 24 / 25 / 26 / 27 | `https://www.dropbox.com/sh/mn47gnepqu88mzl/AAAi2DHbiB5LhGGFRJ_M2DwVa/powersOfTau28_hez_final_24.ptau?dl=1` and siblings |
 | Hermez 23 | `https://risc0-artifacts.s3.us-west-2.amazonaws.com/tsc/2024-04-04/powersOfTau28_hez_final_23.ptau` |
 | Hermez 08–18 | `https://fastfourier.nyc3.cdn.digitaloceanspaces.com/powers-of-tau/` |
-| PSE ppot 08–28 | `https://pse-trusted-setup-ppot.s3.eu-central-1.amazonaws.com/pot28_0080/ppot_0080_<power>.ptau` |
 
-The PSE bucket is the best behaved: plain S3, no redirects, stable ETag,
-resumable.
+Switching to any of those is a ceremony change: regenerate both fixture files
+with `cargo run -p kat-gen -- srs` and update `docs/spec/srs.md` §2.0.
 
 ---
 
@@ -285,10 +299,14 @@ regenerate-and-diff line can include `crates/srs/tests/vectors/` and still be
 clean. `cargo test -p srs -- --nocapture` prints one `skipped ...` line per test
 that did not run.
 
-That is the direct consequence of the ceremony file being 19 GB and the
-committed-`.ptau`-fixture work being dropped. On a machine with the assets the
-same command runs all 34 of them, and that is where acceptance 4, 5, 6, 7 and 8
-are actually demonstrated.
+That is the direct consequence of the ceremony file being 19 GB.
+`cargo test --workspace` reports **251 passing either way** — 205 from S06, 10
+new in `crates/curve`, 36 in `crates/srs` — because a test that returns early
+still passes. What changes is that **33 of them do nothing**: every `crates/srs`
+test except `totality.rs`'s three. Acceptance 4, 5, 6, 7 and 8 are only
+demonstrated on a machine with the assets, and a green CI run is not evidence
+for them. `cargo test -p srs -- --nocapture` prints one `skipped ...` line per
+test that did not run, which is the only way to tell the two situations apart.
 
 `crates/srs` is a **std** crate and is absent from the guest-target build line,
 for the same reason `curve` is: no guest reads an SRS.

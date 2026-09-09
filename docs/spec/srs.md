@@ -29,11 +29,41 @@ Groth16's, not ours. They are never read.
 
 ---
 
-## 2. Ingestion format — frozen
+## 2. Ingestion format and ceremony — frozen
 
-**The snarkjs `.ptau` container from a perpetual-powers-of-tau / Hermez
-ceremony is the one ingestion format in v1.** There is no second reader, and
-adding one is a protocol change.
+**The snarkjs `.ptau` container is the one ingestion format in v1.** There is no
+second reader, and adding one is a protocol change.
+
+### 2.0 The ceremony — PSE, not Hermez
+
+**This project uses PSE's perpetual powers of tau, contribution 80.** Files are
+named `ppot_0080_<power>.ptau` and come from
+
+```text
+  https://pse-trusted-setup-ppot.s3.eu-central-1.amazonaws.com/pot28_0080/
+```
+
+which serves powers 08 through 28 over plain S3 — no redirects, stable ETags,
+and honest HTTP `Range`, so a 19 GB fetch resumes.
+
+**Not Polygon Hermez's `powersOfTau28_hez_final_*.ptau`.** The two are different
+ceremonies with different `tau`, so their points and every commitment over them
+differ; they are not interchangeable, and mixing them silently produces a
+correct-looking SRS whose fixtures do not match. Both were candidates — the
+stage prompt named either — and PSE was chosen because its mirror is the one
+that is still up and the best behaved. Hermez's two published mirrors
+(`storage.googleapis.com/zkevm/ptau/*` and `hermez.s3-eu-west-1.amazonaws.com/*`)
+both return `403 AccessDenied` for every power.
+
+Every PSE power is a prefix of the same ceremony, so `ppot_0080_12.ptau` and the
+first `2^12` powers of `ppot_0080_24.ptau` are the same points. That is what
+lets the small file stand in for the large one wherever a test needs to hold a
+whole ceremony in memory.
+
+Nothing in the code depends on *which* ceremony it is — the reader would ingest
+Hermez's just as happily. The choice is frozen here because the committed
+fixtures are generated from it, and because with the SRS digest dropped (§4)
+there is nothing else that would notice a swap.
 
 ### 2.1 Container
 

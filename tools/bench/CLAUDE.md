@@ -42,8 +42,8 @@ commit as any optimization; this is where that benchmark goes.
   one before it times either. A benchmark of a checker that cannot reject is a benchmark
   of nothing.
 
-`msm` is the one routine that needs an asset: `assets/ptau/powersOfTau28_hez_final_24.ptau`,
-gitignored and 19 GB. It measures over **real SRS bases** and does not substitute random
+`msm` is the one routine that needs an asset: `assets/ptau/ppot_0080_24.ptau`, gitignored
+and 19 GB. It measures over **real SRS bases** and does not substitute random
 ones — it says so and returns when the file is absent. `ark-ec` and `ark-ff` carry their
 `parallel` feature in the workspace manifest so that row compares two rayon
 implementations rather than ours against a single-threaded reference; that would be a gate
