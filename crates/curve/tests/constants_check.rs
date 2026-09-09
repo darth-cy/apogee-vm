@@ -15,11 +15,15 @@ use std::str::FromStr;
 use ark_ec::{AffineRepr, CurveConfig};
 use common::{ark_fq2_bytes, ark_fq_bytes, ark_g1_bytes, ark_g2_bytes, next_fq2, to_ark_fq2};
 use constants::{
-    FQ2_NONRESIDUE, FQ6_NONRESIDUE_C0, FQ6_NONRESIDUE_C1, FQ_INV, FQ_MODULUS, FQ_MODULUS_MINUS_TWO,
-    FQ_MODULUS_PLUS_ONE_DIV_FOUR, FQ_R, FQ_R2, FR_MODULUS, G1_B, G1_GENERATOR_X, G1_GENERATOR_Y,
-    G2_B_C0, G2_B_C1, G2_GENERATOR_X_C0, G2_GENERATOR_X_C1, G2_GENERATOR_Y_C0, G2_GENERATOR_Y_C1,
+    ATE_LOOP_NAF, BN_PARAMETER_X, FINAL_EXP_LAMBDA_0, FINAL_EXP_LAMBDA_1, FINAL_EXP_LAMBDA_2,
+    FQ12_FROBENIUS_C1, FQ2_NONRESIDUE, FQ6_FROBENIUS_C1, FQ6_FROBENIUS_C2, FQ6_NONRESIDUE_C0,
+    FQ6_NONRESIDUE_C1, FQ_INV, FQ_MODULUS, FQ_MODULUS_MINUS_TWO, FQ_MODULUS_PLUS_ONE_DIV_FOUR,
+    FQ_R, FQ_R2, FR_MODULUS, G1_B, G1_GENERATOR_X, G1_GENERATOR_Y, G2_B_C0, G2_B_C1,
+    G2_GENERATOR_X_C0, G2_GENERATOR_X_C1, G2_GENERATOR_Y_C0, G2_GENERATOR_Y_C1, TWIST_FROBENIUS_X,
+    TWIST_FROBENIUS_Y,
 };
 use curve::{Fq, Fq2, G1Affine, G2Affine};
+use num_bigint::{BigInt, BigUint};
 use test_support::{to_hex, Rng};
 
 /// The master prompt's frozen Fq modulus, in decimal.
@@ -360,4 +364,214 @@ fn g2_cofactor_is_two_q_minus_r_and_odd() {
         two_q_minus_r[ark_cofactor.len()..].iter().all(|&l| l == 0),
         "no limbs beyond arkworks' cofactor"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The pairing constants (S06)
+//
+// Each is a power of `xi`, so each has a closed form, and each is checked
+// three ways where the check is cheap: against its closed form as an integer
+// exponent, against a relation to its neighbours, and against arkworks' own
+// table. The Frobenius tables get a fourth, oracle-free check in
+// `tests/tower.rs`, which raises a random element to `q^i` directly.
+// ---------------------------------------------------------------------------
+
+fn big(limbs: &[u64; 4]) -> BigUint {
+    BigUint::from_bytes_le(&limbs_to_bytes(limbs))
+}
+
+fn q() -> BigUint {
+    big(&FQ_MODULUS)
+}
+
+fn xi_ark() -> ark_bn254::Fq2 {
+    to_ark_fq2(&Fq2::new(
+        Fq::from_hex(FQ6_NONRESIDUE_C0).expect("xi c0"),
+        Fq::from_hex(FQ6_NONRESIDUE_C1).expect("xi c1"),
+    ))
+}
+
+/// `xi^exponent`, computed in arkworks' Fq2 from the integer exponent.
+fn xi_pow(exponent: BigUint) -> Fq2 {
+    let v = ark_ff::Field::pow(&xi_ark(), exponent.to_u64_digits());
+    Fq2::new(
+        Fq::from_bytes(&ark_fq_bytes(&v.c0)).expect("canonical"),
+        Fq::from_bytes(&ark_fq_bytes(&v.c1)).expect("canonical"),
+    )
+}
+
+fn table_entry(pair: [&str; 2]) -> Fq2 {
+    Fq2::new(
+        Fq::from_hex(pair[0]).expect("a table entry's c0 is canonical hex"),
+        Fq::from_hex(pair[1]).expect("a table entry's c1 is canonical hex"),
+    )
+}
+
+#[test]
+fn bn_parameter_x_generates_both_moduli() {
+    let x = BigUint::from(BN_PARAMETER_X);
+    let poly =
+        |c: [u32; 5]| -> BigUint { (0..5).map(|k| BigUint::from(c[k]) * x.pow(k as u32)).sum() };
+    assert_eq!(
+        q(),
+        poly([1, 6, 24, 36, 36]),
+        "q must be 36x^4 + 36x^3 + 24x^2 + 6x + 1"
+    );
+    assert_eq!(
+        big(&FR_MODULUS),
+        poly([1, 6, 18, 36, 36]),
+        "r must be 36x^4 + 36x^3 + 18x^2 + 6x + 1"
+    );
+}
+
+#[test]
+fn frobenius_tables_are_the_powers_of_xi_they_claim() {
+    let three = BigUint::from(3u32);
+    let six = BigUint::from(6u32);
+    let one = BigUint::from(1u32);
+
+    for i in 0..6u32 {
+        let c1 = table_entry(FQ6_FROBENIUS_C1[i as usize]);
+        let c2 = table_entry(FQ6_FROBENIUS_C2[i as usize]);
+        assert_eq!(c1, xi_pow((q().pow(i) - &one) / &three), "FQ6_C1[{i}]");
+        assert_eq!(
+            c2,
+            xi_pow((BigUint::from(2u32) * q().pow(i) - BigUint::from(2u32)) / &three),
+            "FQ6_C2[{i}]"
+        );
+        // C2 is C1 squared, which is what makes the second table redundant
+        // *as data* and worth pinning anyway.
+        assert_eq!(c2, c1.square(), "FQ6_C2[{i}] must be FQ6_C1[{i}]^2");
+
+        let ark_c1 =
+            <ark_bn254::Fq6Config as ark_ff::fields::Fp6Config>::FROBENIUS_COEFF_FP6_C1[i as usize];
+        let ark_c2 =
+            <ark_bn254::Fq6Config as ark_ff::fields::Fp6Config>::FROBENIUS_COEFF_FP6_C2[i as usize];
+        assert_eq!(ark_fq2_bytes(&ark_c1), c1.to_bytes(), "FQ6_C1[{i}] vs ark");
+        assert_eq!(ark_fq2_bytes(&ark_c2), c2.to_bytes(), "FQ6_C2[{i}] vs ark");
+    }
+    assert_eq!(table_entry(FQ6_FROBENIUS_C1[0]), Fq2::ONE, "index 0 is one");
+    assert_eq!(table_entry(FQ6_FROBENIUS_C2[0]), Fq2::ONE, "index 0 is one");
+
+    for i in 0..12u32 {
+        let c = table_entry(FQ12_FROBENIUS_C1[i as usize]);
+        assert_eq!(c, xi_pow((q().pow(i) - &one) / &six), "FQ12_C1[{i}]");
+        // The two towers meet here: squaring the sixth root gives the cube
+        // root, so the Fq12 table determines the Fq6 one.
+        assert_eq!(
+            c.square(),
+            table_entry(FQ6_FROBENIUS_C1[(i % 6) as usize]),
+            "FQ12_C1[{i}]^2 must be FQ6_C1[{i} mod 6]"
+        );
+        let ark = <ark_bn254::Fq12Config as ark_ff::fields::Fp12Config>::FROBENIUS_COEFF_FP12_C1
+            [i as usize];
+        assert_eq!(ark_fq2_bytes(&ark), c.to_bytes(), "FQ12_C1[{i}] vs ark");
+    }
+    assert_eq!(
+        table_entry(FQ12_FROBENIUS_C1[0]),
+        Fq2::ONE,
+        "index 0 is one"
+    );
+}
+
+#[test]
+fn twist_frobenius_constants_are_the_powers_of_xi_they_claim() {
+    let x = table_entry(TWIST_FROBENIUS_X);
+    let y = table_entry(TWIST_FROBENIUS_Y);
+    let one = BigUint::from(1u32);
+    assert_eq!(x, xi_pow((q() - &one) / BigUint::from(3u32)), "gamma_x");
+    assert_eq!(y, xi_pow((q() - &one) / BigUint::from(2u32)), "gamma_y");
+
+    // Their relations to the tables, which is what makes them not a third
+    // independent thing to get wrong.
+    assert_eq!(x, table_entry(FQ6_FROBENIUS_C1[1]), "gamma_x = FQ6_C1[1]");
+    let sixth = table_entry(FQ12_FROBENIUS_C1[1]);
+    assert_eq!(y, sixth * sixth * sixth, "gamma_y = FQ12_C1[1]^3");
+
+    assert_eq!(
+        ark_fq2_bytes(&<ark_bn254::Config as ark_ec::bn::BnConfig>::TWIST_MUL_BY_Q_X),
+        x.to_bytes(),
+        "gamma_x vs ark"
+    );
+    assert_eq!(
+        ark_fq2_bytes(&<ark_bn254::Config as ark_ec::bn::BnConfig>::TWIST_MUL_BY_Q_Y),
+        y.to_bytes(),
+        "gamma_y vs ark"
+    );
+}
+
+#[test]
+fn ate_loop_naf_is_a_naf_of_six_x_plus_two() {
+    let mut value = BigInt::from(0);
+    for (i, digit) in ATE_LOOP_NAF.iter().enumerate() {
+        assert!(
+            (-1..=1).contains(digit),
+            "digit {i} is {digit}, not in {{-1, 0, 1}}"
+        );
+        value += BigInt::from(*digit) << i;
+    }
+    let expected = BigInt::from(6u32) * BigInt::from(BN_PARAMETER_X) + BigInt::from(2u32);
+    assert_eq!(value, expected, "the digits must sum to 6x + 2");
+
+    // Non-adjacency is what makes it *the* NAF rather than some signed form,
+    // and it is what bounds the loop's addition steps.
+    assert!(
+        !ATE_LOOP_NAF.windows(2).any(|w| w[0] != 0 && w[1] != 0),
+        "two adjacent digits are nonzero, so this is not a NAF"
+    );
+    // The leading digit is the accumulator's initial T = Q; the Miller loop
+    // starts one below it, so it must be exactly the top of the array.
+    assert_eq!(
+        *ATE_LOOP_NAF.last().expect("nonempty"),
+        1,
+        "the leading digit must be 1"
+    );
+    assert_eq!(
+        ATE_LOOP_NAF.len() as u64,
+        expected.bits() + 1,
+        "a NAF of an n-bit number is n+1 digits here"
+    );
+}
+
+#[test]
+fn final_exponentiation_lambdas_decompose_the_hard_exponent() {
+    let x = BigInt::from(BN_PARAMETER_X);
+    let horner = |c: [i64; 4]| -> BigInt {
+        c.iter()
+            .fold(BigInt::from(0), |acc, k| acc * &x + BigInt::from(*k))
+    };
+
+    // The closed forms, from Scott et al. Signs are carried here; `constants`
+    // stores magnitudes and `final_exponentiation` applies the sign by
+    // conjugation.
+    let lambda0 = -horner([36, 30, 18, 2]);
+    let lambda1 = -horner([36, 18, 12, -1]);
+    let lambda2 = horner([0, 6, 0, 1]);
+    assert_eq!(
+        BigInt::from(big(&FINAL_EXP_LAMBDA_0)),
+        -&lambda0,
+        "|lambda_0| must be 36x^3 + 30x^2 + 18x + 2"
+    );
+    assert_eq!(
+        BigInt::from(big(&FINAL_EXP_LAMBDA_1)),
+        -&lambda1,
+        "|lambda_1| must be 36x^3 + 18x^2 + 12x - 1"
+    );
+    assert_eq!(
+        BigInt::from(big(&FINAL_EXP_LAMBDA_2)),
+        lambda2,
+        "lambda_2 must be 6x^2 + 1"
+    );
+
+    // And the decomposition itself, as integers: this is the identity
+    // `final_exponentiation`'s hard part is a transcription of.
+    let qb = BigInt::from(q());
+    let d = &lambda0 + &lambda1 * &qb + &lambda2 * qb.pow(2) + qb.pow(3);
+    let phi12 = qb.pow(4) - qb.pow(2) + BigInt::from(1);
+    assert_eq!(
+        &d * BigInt::from(big(&FR_MODULUS)),
+        phi12,
+        "lambda_0 + lambda_1 q + lambda_2 q^2 + q^3 must be (q^4 - q^2 + 1)/r"
+    );
+    assert!(d > BigInt::from(0), "the hard exponent is positive");
 }

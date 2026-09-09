@@ -18,7 +18,7 @@ docs/
 crates/
   constants/     frozen constants and tags; zero logic; no_std
   field/         Fr arithmetic (Montgomery); no_std
-  curve/         Fq tower + Fq2 + G1/G2 (no pairing, no MSM); std
+  curve/         Fq tower through Fq12 + G1/G2 + the optimal ate pairing (no MSM); std
   transcript/    Poseidon2 permutation + duplex transcript; no_std
   poly/          MultilinearPoly + small-type backing + eq machinery; no_std
   sumcheck/      Gate + zerocheck prover/verifier; no_std
@@ -45,13 +45,14 @@ cargo fmt --all -- --check
 cargo fmt --manifest-path tools/transcript-ref/Cargo.toml --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
-cargo test --workspace                      # 180 tests as of S05
+cargo test --workspace                      # 205 tests as of S06
 cargo build -p field -p constants -p transcript -p poly -p sumcheck --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
 git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/
 -------------------------------------------------------------------------------
-cargo run -p kat-gen                        # refresh Fr + poly + curve fixtures (manual, deliberate)
+cargo run -p kat-gen                        # refresh every fixture (manual, deliberate)
+cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing
 cargo run --manifest-path tools/transcript-ref/Cargo.toml   # ditto, transcript vectors
 cargo run --release -p bench                # every routine; internal numbers only
 cargo run --release -p bench -- --list      # the routines, and what each measures
@@ -75,6 +76,10 @@ does not name a version anywhere, so it cannot drift from that pin.
   base field curve coordinates live in. The moduli agree in their top 128 bits. `curve::Fq`
   is a deliberate literal duplicate of `field::Fr`'s Montgomery kernel, not an abstraction
   over it, and `curve::g2` is a literal mirror of `curve::g1`.
+- **The pairing is the exact power.** `final_exponentiation` returns `f^((q^12-1)/r)` and
+  never a fixed multiple of it, so the Fuentes-Castañeda hard part is out — which also
+  means arkworks' own `Bn254::pairing` is *not* a drop-in oracle, and the fixtures raise
+  its Miller output to the literal exponent instead.
 - **Points on the wire are uncompressed affine.** 64 bytes `x ‖ y` for G1, 128 bytes
   `x.c0 ‖ x.c1 ‖ y.c0 ‖ y.c1` for G2, each coordinate canonical 32-byte LE, all-zero for
   infinity. No compressed form, no decompression, ever. A point's *transcript* form is a
@@ -104,3 +109,4 @@ does not name a version anywhere, so it cannot drift from that pin.
 | S03 — MultilinearPoly + small-type backing | done | `docs/handoff/S03-poly.md` |
 | S04 — Gate-based sumcheck (zerocheck) | done | `docs/handoff/S04-sumcheck.md` |
 | S05 — Fq tower + G1/G2 arithmetic | done | `docs/handoff/S05-fq-tower-curve.md` |
+| S06 — Fq6/Fq12, Miller loop, final exponentiation | done | `docs/handoff/S06-pairing.md` |

@@ -136,9 +136,9 @@ pub const FQ2_NONRESIDUE: &str =
 
 /// `xi = 9 + u`, real part: the nonresidue that builds Fq6 over Fq2.
 ///
-/// `curve::Fq2::mul_by_nonresidue` multiplies by it. The Fq6 and Fq12 layers
-/// that consume it arrive with the pairing in the next stage; the G2 curve
-/// constant `3/xi` below already depends on it.
+/// `curve::Fq2::mul_by_nonresidue` multiplies by it, `curve::Fq6` is built over
+/// it, and every Frobenius table further down is one of its powers. The G2
+/// curve constant `3/xi` below depends on it too.
 pub const FQ6_NONRESIDUE_C0: &str =
     "0x0000000000000000000000000000000000000000000000000000000000000009";
 
@@ -182,6 +182,217 @@ pub const G2_GENERATOR_Y_C0: &str =
 /// The standard G2 generator, `y` `u` part.
 pub const G2_GENERATOR_Y_C1: &str =
     "0x090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975b";
+
+// ---------------------------------------------------------------------------
+// The pairing: the Fq6/Fq12 Frobenius tables, the twist Frobenius, the ate
+// loop and the final exponentiation.
+//
+// The tower `curve::pairing` completes is
+//
+//     Fq2  = Fq[u]/(u^2 + 1)
+//     Fq6  = Fq2[v]/(v^3 - xi),   xi = 9 + u   (FQ6_NONRESIDUE_C0/_C1 above)
+//     Fq12 = Fq6[w]/(w^2 - v)
+//
+// Every table below is a power of `xi`, so each entry is re-derivable from a
+// single number and each is re-derived in `crates/curve/tests/constants_check.rs`
+// rather than trusted. They are hex string literals in the one accepted source
+// spelling, read big-endian by `curve::Fq::from_hex`, so they diff against
+// arkworks-bn254's own tables by eye.
+// ---------------------------------------------------------------------------
+
+/// `xi^((q^i - 1)/3)` for `i` in `0..6`, as `[c0, c1]` of an `Fq2`.
+///
+/// The `v` coefficient's Frobenius twist: `(a1 v)^(q^i) = a1^(q^i) * xi^((q^i-1)/3) * v`,
+/// because `v^3 = xi` forces `v^(q^i) = xi^((q^i-1)/3) * v`. Index 0 is one.
+pub const FQ6_FROBENIUS_C1: [[&str; 2]; 6] = [
+    [
+        "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+    ],
+    [
+        "0x2fb347984f7911f74c0bec3cf559b143b78cc310c2c3330c99e39557176f553d",
+        "0x16c9e55061ebae204ba4cc8bd75a079432ae2a1d0b7c9dce1665d51c640fcba2",
+    ],
+    [
+        "0x30644e72e131a0295e6dd9e7e0acccb0c28f069fbb966e3de4bd44e5607cfd48",
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+    ],
+    [
+        "0x0856e078b755ef0abaff1c77959f25ac805ffd3d5d6942d37b746ee87bdcfb6d",
+        "0x04f1de41b3d1766fa9f30e6dec26094f0fdf31bf98ff2631380cab2baaa586de",
+    ],
+    [
+        "0x000000000000000059e26bcea0d48bacd4f263f1acdb5c4f5763473177fffffe",
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+    ],
+    [
+        "0x28be74d4bb943f51699582b87809d9caf71614d4b0b71f3a62e913ee1dada9e4",
+        "0x14a88ae0cb747b99c2b86abcbe01477a54f40eb4c3f6068dedae0bcec9c7aac7",
+    ],
+];
+
+/// `xi^((2 q^i - 2)/3)` for `i` in `0..6`, as `[c0, c1]` of an `Fq2`.
+///
+/// The `v^2` coefficient's twist, and the square of [`FQ6_FROBENIUS_C1`] entry
+/// for entry — which is asserted rather than assumed.
+pub const FQ6_FROBENIUS_C2: [[&str; 2]; 6] = [
+    [
+        "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+    ],
+    [
+        "0x05b54f5e64eea80180f3c0b75a181e84d33365f7be94ec72848a1f55921ea762",
+        "0x2c145edbe7fd8aee9f3a80b03b0b1c923685d2ea1bdec763c13b4711cd2b8126",
+    ],
+    [
+        "0x000000000000000059e26bcea0d48bacd4f263f1acdb5c4f5763473177fffffe",
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+    ],
+    [
+        "0x0bc58c6611c08dab19bee0f7b5b2444ee633094575b06bcb0e1a92bc3ccbf066",
+        "0x23d5e999e1910a12feb0f6ef0cd21d04a44a9e08737f96e55fe3ed9d730c239f",
+    ],
+    [
+        "0x30644e72e131a0295e6dd9e7e0acccb0c28f069fbb966e3de4bd44e5607cfd48",
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+    ],
+    [
+        "0x1ee972ae6a826a7d1d9da40771b6f589de1afb54342c724fa97bda050992657f",
+        "0x10de546ff8d4ab51d2b513cdbb25772454326430418536d15721e37e70c255c9",
+    ],
+];
+
+/// `xi^((q^i - 1)/6)` for `i` in `0..12`, as `[c0, c1]` of an `Fq2`.
+///
+/// The `w` coefficient's Frobenius twist: `w^2 = v` and `v^3 = xi` give
+/// `w^6 = xi`, so `w^(q^i) = xi^((q^i-1)/6) * w`. Index 0 is one.
+pub const FQ12_FROBENIUS_C1: [[&str; 2]; 12] = [
+    [
+        "0x0000000000000000000000000000000000000000000000000000000000000001",
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+    ],
+    [
+        "0x1284b71c2865a7dfe8b99fdd76e68b605c521e08292f2176d60b35dadcc9e470",
+        "0x246996f3b4fae7e6a6327cfe12150b8e747992778eeec7e5ca5cf05f80f362ac",
+    ],
+    [
+        "0x30644e72e131a0295e6dd9e7e0acccb0c28f069fbb966e3de4bd44e5607cfd49",
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+    ],
+    [
+        "0x19dc81cfcc82e4bbefe9608cd0acaa90894cb38dbe55d24ae86f7d391ed4a67f",
+        "0x00abf8b60be77d7306cbeee33576139d7f03a5e397d439ec7694aa2bf4c0c101",
+    ],
+    [
+        "0x30644e72e131a0295e6dd9e7e0acccb0c28f069fbb966e3de4bd44e5607cfd48",
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+    ],
+    [
+        "0x0757cab3a41d3cdc072fc0af59c61f302cfa95859526b0d41264475e420ac20f",
+        "0x0ca6b035381e35b618e9b79ba4e2606ca20b7dfd71573c93e85845e34c4a5b9c",
+    ],
+    [
+        "0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd46",
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+    ],
+    [
+        "0x1ddf9756b8cbf849cf96a5d90a9accfd3b2f4c893f42a9166615563bfbb318d7",
+        "0x0bfab77f2c36b843121dc8b86f6c4ccf2307d819d98302a771c39bb757899a9b",
+    ],
+    [
+        "0x000000000000000059e26bcea0d48bacd4f263f1acdb5c4f5763473177fffffe",
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+    ],
+    [
+        "0x1687cca314aebb6dc866e529b0d4adcd0e34b703aa1bf84253b10eddb9a856c8",
+        "0x2fb855bcd54a22b6b18456d34c0b44c0187dc4add09d90a0c58be1eae3bc3c46",
+    ],
+    [
+        "0x000000000000000059e26bcea0d48bacd4f263f1acdb5c4f5763473177ffffff",
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+    ],
+    [
+        "0x290c83bf3d14634db120850727bb392d6a86d50bd34b19b929bc44b896723b38",
+        "0x23bd9e3da9136a739f668e1adc9ef7f0f575ec93f71a8df953c846338c32a1ab",
+    ],
+];
+
+/// `xi^((q - 1)/3)`: the `x` factor of the untwist-Frobenius-twist map on G2.
+///
+/// The Miller loop's two closing steps add `psi(Q)` and `-psi(psi(Q))` to the
+/// accumulator, where `psi(x, y) = (x^q * TWIST_FROBENIUS_X, y^q * TWIST_FROBENIUS_Y)`
+/// and `^q` on an `Fq2` is conjugation. This is [`FQ6_FROBENIUS_C1`]`[1]`, and
+/// the constants test asserts that.
+pub const TWIST_FROBENIUS_X: [&str; 2] = [
+    "0x2fb347984f7911f74c0bec3cf559b143b78cc310c2c3330c99e39557176f553d",
+    "0x16c9e55061ebae204ba4cc8bd75a079432ae2a1d0b7c9dce1665d51c640fcba2",
+];
+
+/// `xi^((q - 1)/2)`: the `y` factor of the same map, and the cube of
+/// [`FQ12_FROBENIUS_C1`]`[1]`.
+pub const TWIST_FROBENIUS_Y: [&str; 2] = [
+    "0x063cf305489af5dcdc5ec698b6e2f9b9dbaae0eda9c95998dc54014671a0135a",
+    "0x07c03cbcac41049a0704b5a7ec796f2b21807dc98fa25bd282d37f632623b0e3",
+];
+
+/// The BN parameter `x`, positive, with
+/// `q = 36x^4 + 36x^3 + 24x^2 + 6x + 1` and `r = 36x^4 + 36x^3 + 18x^2 + 6x + 1`.
+///
+/// Both identities are checked in `crates/curve/tests/constants_check.rs`, so
+/// this one number pins both moduli.
+pub const BN_PARAMETER_X: u64 = 4965661367192848881;
+
+/// The non-adjacent form of `6x + 2 = 29793968203157093288`, digits
+/// least-significant first, each in `{-1, 0, 1}`.
+///
+/// The optimal ate pairing's Miller loop runs over this: `sum_i d_i 2^i` is
+/// `6x + 2`, no two adjacent digits are nonzero, and the leading digit is the
+/// one at index 65, consumed by initialising the accumulator to `Q`. All four
+/// properties are asserted in `crates/curve/tests/constants_check.rs`.
+#[rustfmt::skip]
+pub const ATE_LOOP_NAF: [i8; 66] = [
+    0, 0, 0, 1, 0, 1, 0, -1, 0, 0, -1,
+    0, 0, 0, 1, 0, 0, -1, 0, -1, 0, 0,
+    0, 1, 0, -1, 0, 0, 0, 0, -1, 0, 0,
+    1, 0, -1, 0, 0, 1, 0, 0, 0, 0, 0,
+    -1, 0, 0, -1, 0, 1, 0, -1, 0, 0, 0,
+    -1, 0, -1, 0, 0, 0, 1, 0, -1, 0, 1,
+];
+
+/// `|lambda_0| = 36x^3 + 30x^2 + 18x + 2`, little-endian 64-bit limbs.
+///
+/// The final exponentiation's hard part raises to `d = (q^4 - q^2 + 1)/r`,
+/// which in base `q` is `d = lambda_0 + lambda_1 q + lambda_2 q^2 + q^3` with
+/// `lambda_0` and `lambda_1` **negative**. The magnitudes are stored here and
+/// the sign is applied by conjugation, which is inversion in the cyclotomic
+/// subgroup the easy part lands in. Reference for the decomposition: Scott,
+/// Benger, Charlemagne, Dominguez Perez and Kachisa, *On the final
+/// exponentiation for calculating pairings on ordinary elliptic curves*,
+/// ePrint 2008/490 — the procedure Beuchat et al. ePrint 2010/354 section 4.2
+/// follows. `crates/curve/tests/constants_check.rs` checks the recomposition
+/// against `(q^4 - q^2 + 1)/r` as integers.
+pub const FINAL_EXP_LAMBDA_0: [u64; 4] = [
+    0xb687_f7e0_0783_02b6,
+    0x3a97_459a_6afe_5ea2,
+    0xb3c4_d79d_41a9_1759,
+    0x0000_0000_0000_0000,
+];
+
+/// `|lambda_1| = 36x^3 + 18x^2 + 12x - 1`, little-endian 64-bit limbs, negative.
+pub const FINAL_EXP_LAMBDA_1: [u64; 4] = [
+    0x2891_5aa0_7812_cc81,
+    0x5bfc_4108_8d8d_aaa9,
+    0xb3c4_d79d_41a9_1758,
+    0x0000_0000_0000_0000,
+];
+
+/// `lambda_2 = 6x^2 + 1`, little-endian 64-bit limbs, positive.
+pub const FINAL_EXP_LAMBDA_2: [u64; 4] = [
+    0xf83e_9682_e87c_fd47,
+    0x6f4d_8248_eeb8_59fb,
+    0x0000_0000_0000_0000,
+    0x0000_0000_0000_0000,
+];
 
 // ---------------------------------------------------------------------------
 // Poseidon2 round constants, width 3, over the BN254 scalar field.

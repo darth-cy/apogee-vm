@@ -16,17 +16,19 @@
 mod common;
 
 use common::{
-    fq2_to_hex, fq_from_hex, fq_to_hex, fr_from_hex, g1_bytes_from_hex, g1_raw, g1_to_hex,
-    g2_bytes_from_hex, g2_raw, g2_to_hex,
+    fq12_from_hex, fq12_to_hex, fq2_from_hex, fq2_to_hex, fq6_from_hex, fq6_to_hex, fq_from_hex,
+    fq_to_hex, fr_from_hex, g1_bytes_from_hex, g1_raw, g1_to_hex, g2_bytes_from_hex, g2_raw,
+    g2_to_hex,
 };
 use constants::FR_MODULUS;
-use curve::{Fq, Fq2, G1Affine, G1Projective, G2Affine, G2Projective};
+use curve::pairing::{final_exponentiation, pairing};
+use curve::{Fq, Fq12, Fq2, Fq6, G1Affine, G1Projective, G2Affine, G2Projective};
 use field::Fr;
 use std::collections::BTreeMap;
 use test_support::{hex_to_32, sha256, to_hex};
 
 /// Every committed file, with the digest that pins it.
-const FILES: [(&str, &str); 3] = [
+const FILES: [(&str, &str); 6] = [
     (
         "tests/vectors/fq_kats.txt",
         "230f6e09738fec8b39fbc891534149a86520db5282b4723b4a27c959152c81ec",
@@ -39,12 +41,24 @@ const FILES: [(&str, &str); 3] = [
         "tests/vectors/g2_kats.txt",
         "42c37efa30ef8908803ac791cc73d3c60a2c55bd5cb4f17a3ccb01560d9634bb",
     ),
+    (
+        "tests/vectors/fq6_kats.txt",
+        "068f6cdd3a6cde2d8041c58cb8e79ec9761186922d32fe1fcdcce24186076965",
+    ),
+    (
+        "tests/vectors/fq12_kats.txt",
+        "aa99eebd621f3f100039783de7817377c7961b691c46af7b724617a6b61d62d9",
+    ),
+    (
+        "tests/vectors/pairing_kats.txt",
+        "12502ae98f4e61dcebb1c4e7390ef2ec8bc7220101ddbdcfc3c2595c8c8c7c76",
+    ),
 ];
 
 /// Each line kind and exactly how many lines of it the corpus holds. A
 /// truncated or half-regenerated file fails here rather than passing quietly
 /// with less coverage than it claims.
-const EXPECTED_KINDS: [(&str, usize); 17] = [
+const EXPECTED_KINDS: [(&str, usize); 26] = [
     ("fq_ops", 1_049),
     ("fq2_ops", 1_081),
     ("fq_pow", 75),
@@ -62,6 +76,15 @@ const EXPECTED_KINDS: [(&str, usize); 17] = [
     ("g2_madd_edge", 1),
     ("g2_scalar_edge", 4),
     ("g2_reject", 14),
+    ("fq6_ops", 1_064),
+    ("fq6_frob", 120),
+    ("fq6_pow", 80),
+    ("fq12_ops", 1_064),
+    ("fq12_frob", 240),
+    ("fq12_pow", 80),
+    ("fq12_final_exp", 207),
+    ("pairing_named", 6),
+    ("pairing_random", 120),
 ];
 
 /// One parsed line: where it came from, its kind, and its fields.
@@ -102,16 +125,6 @@ fn read_kats() -> Vec<Kat> {
 // Comparison helpers. Everything is compared in the wire form, so `to_bytes`
 // is exercised on every result and a failure message is readable.
 // ---------------------------------------------------------------------------
-
-fn fq2_from_hex(s: &str) -> Result<Fq2, String> {
-    if s.len() != 128 {
-        return Err(format!(
-            "expected 128 hex characters of Fq2, got {}",
-            s.len()
-        ));
-    }
-    Ok(Fq2::new(fq_from_hex(&s[..64])?, fq_from_hex(&s[64..])?))
-}
 
 fn want(expected: &str, ours: &str, what: &str) -> Result<(), String> {
     if expected == ours {
@@ -204,6 +217,63 @@ fn exponent(hex: &str) -> Result<[u64; 4], String> {
         limbs[i] = u64::from_le_bytes(w);
     }
     Ok(limbs)
+}
+
+/// A `pow` or `frobenius_map` index: a small decimal, in range.
+fn small_index(field: &str, bound: usize) -> Result<usize, String> {
+    let i: usize = field
+        .parse()
+        .map_err(|_| format!("{field} is not a decimal index"))?;
+    require(i < bound, &format!("index {i} is not below {bound}"))?;
+    Ok(i)
+}
+
+/// `1/a`, or the token `none` exactly when `a` is zero. Written once per field
+/// type rather than once over a trait; the crate has four of them.
+fn check_fq6_inverse(expected: &str, a: Fq6) -> Result<(), String> {
+    match (expected, a.inverse()) {
+        ("none", None) => require(a == Fq6::ZERO, "only zero has no inverse"),
+        ("none", Some(_)) => Err("fq6 inverse: expected none".to_string()),
+        (expected, None) => Err(format!("fq6 inverse: expected {expected}, got none")),
+        (expected, Some(inv)) => {
+            want(expected, &fq6_to_hex(&inv), "fq6 inverse")?;
+            require(a * inv == Fq6::ONE, "fq6 a * (1/a) != 1")
+        }
+    }
+}
+
+fn check_fq12_inverse(expected: &str, a: Fq12) -> Result<(), String> {
+    match (expected, a.inverse()) {
+        ("none", None) => require(a == Fq12::ZERO, "only zero has no inverse"),
+        ("none", Some(_)) => Err("fq12 inverse: expected none".to_string()),
+        (expected, None) => Err(format!("fq12 inverse: expected {expected}, got none")),
+        (expected, Some(inv)) => {
+            want(expected, &fq12_to_hex(&inv), "fq12 inverse")?;
+            require(a * inv == Fq12::ONE, "fq12 a * (1/a) != 1")
+        }
+    }
+}
+
+/// A named pairing case has to really be the case its name claims, so that a
+/// corrupted point fails on the name rather than on an accident of arithmetic.
+fn check_pairing_name(name: &str, p: &G1Affine, q: &G2Affine) -> Result<(), String> {
+    let (want_p, want_q): (G1Affine, G2Affine) = match name {
+        "gen_gen" => (G1Affine::GENERATOR, G2Affine::GENERATOR),
+        "gen_neg_gen" => (G1Affine::GENERATOR, -G2Affine::GENERATOR),
+        "neg_gen_gen" => (-G1Affine::GENERATOR, G2Affine::GENERATOR),
+        "inf_gen" => (G1Affine::IDENTITY, G2Affine::GENERATOR),
+        "gen_inf" => (G1Affine::GENERATOR, G2Affine::IDENTITY),
+        "inf_inf" => (G1Affine::IDENTITY, G2Affine::IDENTITY),
+        other => return Err(format!("unknown named pairing case {other}")),
+    };
+    require(
+        *p == want_p,
+        &format!("{name}: P is not what the name says"),
+    )?;
+    require(
+        *q == want_q,
+        &format!("{name}: Q is not what the name says"),
+    )
 }
 
 fn reject_coordinate(hex: &str) -> Result<(), String> {
@@ -659,6 +729,130 @@ fn evaluate(kat: &Kat) -> Result<(), String> {
             }
         }
 
+        // <a> <b> <a+b> <a-b> <a*b> <a^2> <1/a> <a*v> <a^q> <a^(q^2)> <a^(q^3)>
+        "fq6_ops" => {
+            arity(kat, 11)?;
+            let (a, b) = (fq6_from_hex(&f[0])?, fq6_from_hex(&f[1])?);
+            want(&f[2], &fq6_to_hex(&(a + b)), "fq6 add")?;
+            want(&f[3], &fq6_to_hex(&(a - b)), "fq6 sub")?;
+            want(&f[4], &fq6_to_hex(&(a * b)), "fq6 mul")?;
+            want(&f[5], &fq6_to_hex(&a.square()), "fq6 square")?;
+            check_fq6_inverse(&f[6], a)?;
+            want(
+                &f[7],
+                &fq6_to_hex(&a.mul_by_nonresidue()),
+                "fq6 mul_by_nonresidue",
+            )?;
+            for (power, expected) in [(1usize, &f[8]), (2, &f[9]), (3, &f[10])] {
+                want(
+                    expected,
+                    &fq6_to_hex(&a.frobenius_map(power)),
+                    &format!("fq6 frobenius {power}"),
+                )?;
+            }
+            Ok(())
+        }
+
+        // <a> <i> <a^(q^i)>, for every i the Fq6 Frobenius table has an entry for
+        "fq6_frob" => {
+            arity(kat, 3)?;
+            let a = fq6_from_hex(&f[0])?;
+            let power = small_index(&f[1], 6)?;
+            want(
+                &f[2],
+                &fq6_to_hex(&a.frobenius_map(power)),
+                "fq6 frobenius_map",
+            )
+        }
+
+        // <a> <e> <a^e>
+        "fq6_pow" => {
+            arity(kat, 3)?;
+            let a = fq6_from_hex(&f[0])?;
+            let e = exponent(&f[1])?;
+            want(&f[2], &fq6_to_hex(&a.pow(&e)), "fq6 pow")
+        }
+
+        // <a> <b> <a+b> <a-b> <a*b> <a^2> <1/a> <conj a> <a^q> <a^(q^2)> <a^(q^3)>
+        "fq12_ops" => {
+            arity(kat, 11)?;
+            let (a, b) = (fq12_from_hex(&f[0])?, fq12_from_hex(&f[1])?);
+            want(&f[2], &fq12_to_hex(&(a + b)), "fq12 add")?;
+            want(&f[3], &fq12_to_hex(&(a - b)), "fq12 sub")?;
+            want(&f[4], &fq12_to_hex(&(a * b)), "fq12 mul")?;
+            want(&f[5], &fq12_to_hex(&a.square()), "fq12 square")?;
+            check_fq12_inverse(&f[6], a)?;
+            want(&f[7], &fq12_to_hex(&a.conjugate()), "fq12 conjugate")?;
+            for (power, expected) in [(1usize, &f[8]), (2, &f[9]), (3, &f[10])] {
+                want(
+                    expected,
+                    &fq12_to_hex(&a.frobenius_map(power)),
+                    &format!("fq12 frobenius {power}"),
+                )?;
+            }
+            Ok(())
+        }
+
+        // <a> <i> <a^(q^i)>, for every i the Fq12 Frobenius table has an entry for
+        "fq12_frob" => {
+            arity(kat, 3)?;
+            let a = fq12_from_hex(&f[0])?;
+            let power = small_index(&f[1], 12)?;
+            want(
+                &f[2],
+                &fq12_to_hex(&a.frobenius_map(power)),
+                "fq12 frobenius_map",
+            )
+        }
+
+        // <a> <e> <a^e>
+        "fq12_pow" => {
+            arity(kat, 3)?;
+            let a = fq12_from_hex(&f[0])?;
+            let e = exponent(&f[1])?;
+            want(&f[2], &fq12_to_hex(&a.pow(&e)), "fq12 pow")
+        }
+
+        // <a> <a^((q^12-1)/r)>, the exact final exponent as an integer.
+        //
+        // This is the line that pins Must-be-exact 6: the expected value is
+        // arkworks raising the same input to the literal 2,790-bit exponent,
+        // so any error in the lambda decomposition fails here immediately.
+        "fq12_final_exp" => {
+            arity(kat, 2)?;
+            let a = fq12_from_hex(&f[0])?;
+            require(a != Fq12::ZERO, "final exponentiation takes no zero")?;
+            want(
+                &f[1],
+                &fq12_to_hex(&final_exponentiation(&a)),
+                "fq12 final exponentiation",
+            )
+        }
+
+        // <name> <P> <Q> <e(P,Q)>
+        "pairing_named" => {
+            arity(kat, 4)?;
+            let (p, q) = (g1_raw(&f[1])?, g2_raw(&f[2])?);
+            check_pairing_name(&f[0], &p, &q)?;
+            want(&f[3], &fq12_to_hex(&pairing(&p, &q)), "pairing")
+        }
+
+        // <P> <Q> <e(P,Q)>. Each point is also a `from_bytes` acceptance case:
+        // the fixtures are wire-format vectors wherever a point appears.
+        "pairing_random" => {
+            arity(kat, 3)?;
+            let (p, q) = (g1_raw(&f[0])?, g2_raw(&f[1])?);
+            require(
+                G1Affine::from_bytes(&g1_bytes_from_hex(&f[0])?).is_some(),
+                "a random pairing P must decode",
+            )?;
+            require(
+                G2Affine::from_bytes(&g2_bytes_from_hex(&f[1])?).is_some(),
+                "a random pairing Q must decode",
+            )?;
+            want(&f[2], &fq12_to_hex(&pairing(&p, &q)), "pairing")
+        }
+
         other => Err(format!("unknown operator {other}")),
     }
 }
@@ -792,9 +986,8 @@ fn corrupted_vectors_are_rejected() {
             continue;
         }
         let discriminator = match kat.op.as_str() {
-            "g1_add_edge" | "g2_add_edge" | "g1_scalar_edge" | "g2_scalar_edge" => {
-                kat.fields[0].clone()
-            }
+            "g1_add_edge" | "g2_add_edge" | "g1_scalar_edge" | "g2_scalar_edge"
+            | "pairing_named" => kat.fields[0].clone(),
             "fq_bytes" | "g1_reject" | "g2_reject" => kat.fields[1].clone(),
             _ => String::new(),
         };

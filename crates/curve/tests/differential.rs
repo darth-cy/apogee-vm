@@ -9,13 +9,17 @@
 
 mod common;
 
+use ark_ec::pairing::Pairing as _;
 use ark_ec::{AdditiveGroup, AffineRepr, CurveGroup, PrimeGroup};
 use ark_ff::Field as _;
 use common::{
     ark_fq2_bytes, ark_fq_bytes, ark_g1_bytes, ark_g2_bytes, next_fq, next_fq2, next_fr, to_ark_fq,
-    to_ark_fq2, to_ark_fr, to_ark_g1, to_ark_g2,
+    to_ark_fq12, to_ark_fq2, to_ark_fq6, to_ark_fr, to_ark_g1, to_ark_g2,
 };
-use curve::{Fq, Fq2, G1Affine, G1Projective, G2Affine, G2Projective};
+use constants::{BN_PARAMETER_X, FQ_MODULUS, FR_MODULUS};
+use curve::pairing::{final_exponentiation, miller_loop, pairing};
+use curve::{Fq, Fq12, Fq2, Fq6, G1Affine, G1Projective, G2Affine, G2Projective};
+use num_bigint::BigUint;
 use test_support::Rng;
 
 const FIELD_ROUNDS: usize = 1_000;
@@ -309,5 +313,183 @@ fn g2_subgroup_check_matches_arkworks_off_the_subgroup() {
         );
         assert!(!ours.is_in_subgroup(), "un-cleared points are not in G2");
         found += 1;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The tower and the pairing (S06)
+// ---------------------------------------------------------------------------
+
+/// Five Fq6 and six Fq12 operations per round, plus every Frobenius power.
+const TOWER_ROUNDS: usize = 50;
+/// Two independent comparisons per round, each a full pairing.
+const PAIRING_ROUNDS: usize = 20;
+
+fn next_fq6(rng: &mut Rng) -> Fq6 {
+    Fq6::new(next_fq2(rng), next_fq2(rng), next_fq2(rng))
+}
+
+fn next_fq12(rng: &mut Rng) -> Fq12 {
+    Fq12::new(next_fq6(rng), next_fq6(rng))
+}
+
+fn same_fq6(ours: &Fq6, theirs: &ark_bn254::Fq6, what: &str, round: usize) {
+    same_fq2(&ours.c0, &theirs.c0, what, round);
+    same_fq2(&ours.c1, &theirs.c1, what, round);
+    same_fq2(&ours.c2, &theirs.c2, what, round);
+}
+
+fn same_fq12(ours: &Fq12, theirs: &ark_bn254::Fq12, what: &str, round: usize) {
+    same_fq6(&ours.c0, &theirs.c0, what, round);
+    same_fq6(&ours.c1, &theirs.c1, what, round);
+}
+
+fn big_from_limbs(limbs: &[u64; 4]) -> BigUint {
+    let mut bytes = [0u8; 32];
+    for (i, limb) in limbs.iter().enumerate() {
+        bytes[8 * i..8 * i + 8].copy_from_slice(&limb.to_le_bytes());
+    }
+    BigUint::from_bytes_le(&bytes)
+}
+
+fn limbs_of(value: &BigUint) -> [u64; 4] {
+    let digits = value.to_u64_digits();
+    assert!(digits.len() <= 4, "the value must fit in four limbs");
+    let mut out = [0u64; 4];
+    out[..digits.len()].copy_from_slice(&digits);
+    out
+}
+
+/// `(q^12 - 1)/r`, the exact final exponent.
+fn full_final_exponent() -> BigUint {
+    let (q, r) = (big_from_limbs(&FQ_MODULUS), big_from_limbs(&FR_MODULUS));
+    let numerator = q.pow(12) - BigUint::from(1u32);
+    let exponent = &numerator / &r;
+    assert_eq!(&exponent * &r, numerator, "r divides q^12 - 1");
+    exponent
+}
+
+/// `m = 2x(6x^2 + 3x + 1) mod r`, the fixed multiplier arkworks' own final
+/// exponentiation introduces.
+fn fuentes_castaneda_multiplier() -> BigUint {
+    let x = BigUint::from(BN_PARAMETER_X);
+    let m = BigUint::from(2u32)
+        * &x
+        * (BigUint::from(6u32) * &x * &x + BigUint::from(3u32) * &x + BigUint::from(1u32));
+    m % big_from_limbs(&FR_MODULUS)
+}
+
+/// Random Fq6 and Fq12 rounds on top of the committed corpus, on a different
+/// seed and against whatever arkworks is in the graph today.
+#[test]
+fn tower_arithmetic_matches_arkworks() {
+    let mut rng = Rng::new(SEED ^ 0x0600);
+    for round in 0..TOWER_ROUNDS {
+        let (a, b) = (next_fq6(&mut rng), next_fq6(&mut rng));
+        let (ark_a, ark_b) = (to_ark_fq6(&a), to_ark_fq6(&b));
+        same_fq6(&(a + b), &(ark_a + ark_b), "fq6 add", round);
+        same_fq6(&(a - b), &(ark_a - ark_b), "fq6 sub", round);
+        same_fq6(&(a * b), &(ark_a * ark_b), "fq6 mul", round);
+        same_fq6(&a.square(), &ark_a.square(), "fq6 square", round);
+        same_fq6(
+            &a.inverse().expect("nonzero"),
+            &ark_a.inverse().expect("nonzero"),
+            "fq6 inverse",
+            round,
+        );
+        for power in 0..6 {
+            let mut theirs = ark_a;
+            theirs.frobenius_map_in_place(power);
+            same_fq6(&a.frobenius_map(power), &theirs, "fq6 frobenius", round);
+        }
+
+        let (a, b) = (next_fq12(&mut rng), next_fq12(&mut rng));
+        let (ark_a, ark_b) = (to_ark_fq12(&a), to_ark_fq12(&b));
+        same_fq12(&(a + b), &(ark_a + ark_b), "fq12 add", round);
+        same_fq12(&(a - b), &(ark_a - ark_b), "fq12 sub", round);
+        same_fq12(&(a * b), &(ark_a * ark_b), "fq12 mul", round);
+        same_fq12(&a.square(), &ark_a.square(), "fq12 square", round);
+        same_fq12(
+            &a.inverse().expect("nonzero"),
+            &ark_a.inverse().expect("nonzero"),
+            "fq12 inverse",
+            round,
+        );
+        let mut conj = ark_a;
+        conj.conjugate_in_place();
+        same_fq12(&a.conjugate(), &conj, "fq12 conjugate", round);
+        for power in 0..12 {
+            let mut theirs = ark_a;
+            theirs.frobenius_map_in_place(power);
+            same_fq12(&a.frobenius_map(power), &theirs, "fq12 frobenius", round);
+        }
+    }
+}
+
+/// The whole pairing against arkworks, twice over, on fresh inputs.
+///
+/// 1. Against the **definition**: arkworks' Miller loop raised to the literal
+///    integer `(q^12 - 1)/r`. That is what the committed fixtures carry, and
+///    it depends on no library's choice of decomposition.
+/// 2. Against arkworks' **own complete pipeline** — precomputed G2 line
+///    coefficients, sparse `mul_by_034`, cyclotomic squarings and the
+///    Fuentes-Castaneda hard part, none of which this crate has. That routine
+///    returns `f^(m d)` rather than `f^d`, so the comparison raises our value
+///    to `m` first. `r` is prime and `m` is nonzero mod `r`, so `f -> f^m` is
+///    a bijection of the order-`r` subgroup and the comparison is an equality
+///    test rather than a weaker one.
+#[test]
+fn pairing_matches_arkworks() {
+    let mut rng = Rng::new(SEED ^ 0x0601);
+    let exponent = full_final_exponent();
+    let m = fuentes_castaneda_multiplier();
+    assert_ne!(
+        m,
+        BigUint::from(0u32),
+        "m must be invertible mod the prime r for the m-power comparison to be exact"
+    );
+
+    for round in 0..PAIRING_ROUNDS {
+        let p = G1Projective::GENERATOR.mul(&next_fr(&mut rng)).to_affine();
+        let q = G2Projective::GENERATOR.mul(&next_fr(&mut rng)).to_affine();
+        let ours = pairing(&p, &q);
+
+        let ark_miller = ark_bn254::Bn254::multi_miller_loop([to_ark_g1(&p)], [to_ark_g2(&q)]).0;
+        same_fq12(
+            &ours,
+            &ark_miller.pow(exponent.to_u64_digits()),
+            "pairing vs the literal exponent",
+            round,
+        );
+        same_fq12(
+            &ours.pow(&limbs_of(&m)),
+            &ark_bn254::Bn254::pairing(to_ark_g1(&p), to_ark_g2(&q)).0,
+            "pairing^m vs arkworks' own pairing",
+            round,
+        );
+    }
+
+    // ...and the shared-iteration multi-pair loop against arkworks' own.
+    for k in [2usize, 3, 5] {
+        let pairs: Vec<(G1Affine, G2Affine)> = (0..k)
+            .map(|_| {
+                (
+                    G1Projective::GENERATOR.mul(&next_fr(&mut rng)).to_affine(),
+                    G2Projective::GENERATOR.mul(&next_fr(&mut rng)).to_affine(),
+                )
+            })
+            .collect();
+        let ours = final_exponentiation(&miller_loop(&pairs));
+        let ark_miller = ark_bn254::Bn254::multi_miller_loop(
+            pairs.iter().map(|(p, _)| to_ark_g1(p)).collect::<Vec<_>>(),
+            pairs.iter().map(|(_, q)| to_ark_g2(q)).collect::<Vec<_>>(),
+        )
+        .0;
+        same_fq12(
+            &ours,
+            &ark_miller.pow(exponent.to_u64_digits()),
+            "multi-pair vs the literal exponent",
+            k,
+        );
     }
 }
