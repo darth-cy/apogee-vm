@@ -7,6 +7,7 @@ members = [
     "crates/transcript",
     "crates/poly",
     "crates/sumcheck",
+    "crates/srs",
     "tools/kat-gen",
     "tools/bench",
     "tools/test-support",
@@ -27,10 +28,16 @@ curve = { path = "crates/curve" }
 transcript = { path = "crates/transcript" }
 poly = { path = "crates/poly" }
 sumcheck = { path = "crates/sumcheck" }
+srs = { path = "crates/srs" }
 
 # Test-only, and a dev-dependency everywhere it appears: SHA-256 for pinning
 # committed fixtures, and the hex codec those files are written in.
 test-support = { path = "tools/test-support" }
+
+# Data parallelism, and the only form of it in the workspace: no threads, no
+# async, no channels. Master rule 2 names it explicitly. `curve` uses it for the
+# MSM's window and input-chunk fan-out, `srs` for point decoding at ingestion.
+rayon = "1"
 
 # `default-features = false` keeps serde `no_std`, which `constants` and `field`
 # must stay for the guest target. This is not a cargo feature of ours: the
@@ -39,9 +46,15 @@ serde = { version = "1", default-features = false }
 
 # Test / tool only. Reference implementation for differential checks and the
 # KAT fixtures. Never linked by the prover, verifier, or a guest.
+# `parallel` is enabled so the S07 acceptance-9 gate compares two rayon
+# implementations rather than ours against a single-threaded arkworks, which
+# would be a gate we pass by not being compared. These are dev-dependencies and
+# tool dependencies only; nothing here is reachable from a prover, a verifier or
+# a guest, and anti-goal 1 bans cargo features *of ours*, not an upstream
+# oracle's build configuration.
 ark-bn254 = "0.6"
-ark-ec = "0.6"
-ark-ff = "0.6"
+ark-ec = { version = "0.6", features = ["parallel"] }
+ark-ff = { version = "0.6", features = ["parallel"] }
 ark-poly = "0.6"
 
 # Tooling only, in `kat-gen` alone. The exact final exponent is (q^12 - 1)/r,

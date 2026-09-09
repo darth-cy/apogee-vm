@@ -1,8 +1,7 @@
 //! BN254's base field tower level one, and both curve groups.
 //!
-//! The full tower, both curve groups, and the optimal ate pairing. No MSM;
-//! that arrives in a later stage and compiles against exactly the surface
-//! re-exported here.
+//! The full tower, both curve groups, the optimal ate pairing, and the
+//! Pippenger multi-scalar multiplication the prover leans on.
 //!
 //! ```text
 //!   Fq   = GF(q),           q = 21888242871839275222246405745257275088696311157297823662689037894645226208583
@@ -58,6 +57,7 @@ mod fq2;
 mod fq6;
 mod g1;
 mod g2;
+pub mod msm;
 pub mod pairing;
 
 pub use fq::{batch_inverse, Fq};

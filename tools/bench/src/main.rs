@@ -15,6 +15,7 @@
 //! Numbers are internal only. Machine-dependent; make no public claims.
 
 mod fr_arith;
+mod msm;
 mod poly_bind;
 mod square;
 mod timing;
@@ -23,7 +24,7 @@ mod zerocheck_verify;
 
 /// Every routine: selector, one line of what it measures, and the entry point.
 /// The order here is the order a bare `cargo run` runs them in.
-const ROUTINES: [(&str, &str, fn()); 4] = [
+const ROUTINES: [(&str, &str, fn()); 5] = [
     (
         "fr-arith",
         "S01: Fr mul, square, inverse and batch inverse against ark-bn254",
@@ -33,6 +34,11 @@ const ROUTINES: [(&str, &str, fn()); 4] = [
         "poly-bind",
         "S03: lift plus the full bind chain of a u32 column at 2^20",
         poly_bind::run,
+    ),
+    (
+        "msm",
+        "S07 acceptance 9 and 10: MSM at 2^22 over ceremony bases, against ark-bn254",
+        msm::run,
     ),
     (
         "zerocheck-prove",

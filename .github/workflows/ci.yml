@@ -38,8 +38,15 @@ jobs:
       # Master rule 8: committed fixtures are regenerated and diffed, so a
       # silently edited vector file fails the build. `transcript-ref` is its own
       # workspace on purpose; see the comment in its manifest.
+      #
+      # kat-gen's `srs` group needs the 19 GB ceremony file, which is gitignored
+      # and absent here: that group prints why and writes nothing, so the diff
+      # below stays clean and `crates/srs/tests/vectors/` is only ever
+      # regenerated on a machine that has the assets. For the same reason CI
+      # runs none of `crates/srs`'s tests -- they all return quietly. See
+      # crates/srs/CLAUDE.md.
       - name: committed fixtures are reproducible
         run: |
           cargo run -p kat-gen
           cargo run --manifest-path tools/transcript-ref/Cargo.toml
-          git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/
+          git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/
