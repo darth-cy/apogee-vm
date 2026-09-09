@@ -55,6 +55,23 @@ pub const FR_R2: [u64; 4] = [
 /// `-p^{-1} mod 2^64`, the per-limb Montgomery reduction multiplier.
 pub const FR_INV: u64 = 0xc2e1_f593_efff_ffff;
 
+/// The 2-adicity of `p - 1`: `p - 1 = 2^28 * c` with `c` odd.
+///
+/// The ceiling on every radix-2 FFT this protocol can run. Mercury's opening
+/// needs a `2b`-th root of unity for `b = sqrt(n)`, so it caps `n` at `2^54` —
+/// far above the trace-height menu, and above what any SRS this repository
+/// reads can commit to.
+pub const FR_TWO_ADICITY: u32 = 28;
+
+/// A generator of the order-`2^FR_TWO_ADICITY` subgroup of `Fr^*`.
+///
+/// `5^((p - 1) / 2^28) mod p`, where `5` is the smallest multiplicative
+/// generator of `Fr^*`. Squaring it `28 - k` times gives the `2^k`-th root of
+/// unity an FFT of size `2^k` needs. Re-derived from `5` and checked for exact
+/// order in `crates/pcs/src/fft.rs`'s unit tests rather than trusted.
+pub const FR_TWO_ADIC_ROOT_OF_UNITY: &str =
+    "0x2a3c09f0a58a7e8500e0a7eb8ef62abc402d111e41112ed49bd61b6e725b19f0";
+
 // ---------------------------------------------------------------------------
 // Fq, the BN254 base field, and the curve/tower constants that live over it.
 //
@@ -526,6 +543,22 @@ pub const POSEIDON2_RC3_TERMINAL: [[&str; 3]; 4] = [
     ],
 ];
 
+/// The `Fr` limb a point at infinity absorbs in place of each of its four
+/// coordinate limbs.
+///
+/// `2^128`. A transcript absorbs an affine G1 point as four `Fr` limbs —
+/// `x` low, `x` high, `y` low, `y` high — each the 128-bit halves of a
+/// canonical `Fq` coordinate, so **every limb of every real point is strictly
+/// below `2^128`**. `2^128` is therefore the smallest value no limb can take,
+/// and the sentinel cannot collide with any point, on the curve or off it.
+/// The non-collision is a fact about the split, not about the curve equation.
+///
+/// Spelled the way every frozen `Fr` literal in this crate is: `0x` plus 64
+/// lowercase big-endian hex digits, read by `field::Fr::from_hex`.
+/// `docs/spec/mercury.md` §4 is normative.
+pub const G1_INFINITY_SENTINEL: &str =
+    "0x0000000000000000000000000000000100000000000000000000000000000000";
+
 /// Domain-separation tags for the Poseidon2 duplex transcript.
 ///
 /// Sequential `u64`, assigned once and never renumbered: a value here is part
@@ -577,4 +610,34 @@ pub mod transcript_tags {
     /// Scalars. A sumcheck's `final_evals`: the claimed value of every input
     /// polynomial at the fully bound point, absorbed before any later challenge.
     pub const SUMCHECK_FINAL_EVALS: u64 = 9;
+
+    /// Scalars. A Mercury opening's instance size: the single element `n`, the
+    /// number of evaluations of the polynomial being opened. Absorbed first,
+    /// before the commitment. `docs/spec/mercury.md` §5.
+    pub const MERCURY_INSTANCE: u64 = 10;
+
+    /// Challenge. Mercury's fold point `alpha`, drawn after `h` is absorbed.
+    pub const MERCURY_ALPHA: u64 = 11;
+
+    /// Challenge. Mercury's inner-product batching challenge `gamma`, drawn
+    /// after `q` and `g` are absorbed.
+    pub const MERCURY_GAMMA: u64 = 12;
+
+    /// Challenge. Mercury's evaluation point `z`, drawn after `s` and `d` are
+    /// absorbed. Resampled under this same tag while it is zero, so `1/z`
+    /// exists; `docs/spec/mercury.md` §7.
+    pub const MERCURY_Z: u64 = 13;
+
+    /// Challenge. The BDFG20 opening-batch challenge, drawn after every
+    /// polynomial being batched has been committed and every claimed value
+    /// absorbed.
+    pub const BDFG_BATCH: u64 = 14;
+
+    /// Challenge. The BDFG20 second evaluation point `z'`, drawn after its
+    /// first proof element `W` is absorbed.
+    pub const BDFG_POINT: u64 = 15;
+
+    /// Challenge. The RLC that merges a verifier's two pairing relations into
+    /// one. Drawn last, after every proof element is absorbed.
+    pub const PAIRING_MERGE: u64 = 16;
 }

@@ -403,6 +403,13 @@ fn tag_table_is_well_formed() {
         "PCS_OPENING",
         "WITNESS_DIGEST",
         "SUMCHECK_FINAL_EVALS",
+        "MERCURY_INSTANCE",
+        "MERCURY_ALPHA",
+        "MERCURY_GAMMA",
+        "MERCURY_Z",
+        "BDFG_BATCH",
+        "BDFG_POINT",
+        "PAIRING_MERGE",
     ];
     let values: Vec<u64> = names
         .iter()

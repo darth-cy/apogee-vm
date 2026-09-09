@@ -114,6 +114,34 @@ degree ≤ 2 in the layer below.
 Mercury and later opens. A *virtual* column is derived in closed form by the verifier
 (range tables, timestamp tables, `eq`) and never committed.
 
+**Mercury** — the multilinear polynomial commitment scheme, ePrint 2025/385, specified in
+`docs/spec/mercury.md` and implemented in `crates/pcs`. A commitment *is* the univariate
+KZG commitment of the column's evaluation table read as coefficients — there is no second
+commitment scheme. An opening is a fixed 8 G1 points and 6 Fr values however large the
+column is, costs `O(n)` field operations and `2n + O(sqrt n)` scalar multiplications, and
+costs the verifier `O(log n)` field operations and two pairings. Not hiding; no ZK.
+
+**t and b** — Mercury's shape parameters: a column of `n = 2^(2t)` evaluations is worked
+on in `b = 2^t = sqrt(n)` blocks. Everything the prover builds except `q` and the fold's
+KZG quotient has `O(b)` coefficients, which is why an opening's transform is size `2b` and
+never larger. This is why the master prompt's trace-height menu is *even* powers of two.
+
+**u1 and u2** — the two halves of a Mercury opening point `u`. **`u1` is the FIRST `t`
+coordinates**, the ones pairing with the low `t` bits of a table index; `u2` is the last
+`t`. Getting this backwards is the integration bug `docs/spec/mercury.md` §2 exists to
+prevent, and the verifier rejects a swapped pair.
+
+**Fold** — Mercury's `f(X) = (X^b - alpha) q(X) + g(X)`, the univariate division that
+reduces a size-`n` claim to size-`b` ones. `g`'s coefficients are `f_i(alpha)`, and the
+whole division is `b` interleaved Horner passes over the table, `O(n)` field operations
+with no transform.
+
+**Limb form** — a G1 point's *transcript* representation: four Fr values, the 128-bit
+halves of each affine coordinate in the order `x` low, `x` high, `y` low, `y` high. The
+point at infinity absorbs four copies of `constants::G1_INFINITY_SENTINEL`, which is
+`2^128` and so cannot be any real point's limb. Frozen in `docs/spec/mercury.md` §4;
+distinct from the *uncompressed affine* byte form, which is what reaches a file.
+
 **Shard** — one fixed-height trace instance of a circuit family, proven independently
 except for the global memory argument.
 

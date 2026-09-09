@@ -8,6 +8,7 @@ members = [
     "crates/poly",
     "crates/sumcheck",
     "crates/srs",
+    "crates/pcs",
     "tools/kat-gen",
     "tools/bench",
     "tools/test-support",
@@ -29,6 +30,7 @@ transcript = { path = "crates/transcript" }
 poly = { path = "crates/poly" }
 sumcheck = { path = "crates/sumcheck" }
 srs = { path = "crates/srs" }
+pcs = { path = "crates/pcs" }
 
 # Test-only, and a dev-dependency everywhere it appears: SHA-256 for pinning
 # committed fixtures, and the hex codec those files are written in.

@@ -38,14 +38,26 @@ here.
 | `BN_PARAMETER_X: u64` | `4965661367192848881`, the BN parameter both moduli come from. |
 | `ATE_LOOP_NAF: [i8; 66]` | the NAF of `6x + 2`, least-significant digit first. |
 | `FINAL_EXP_LAMBDA_0/_1/_2: [u64; 4]` | the base-`q` decomposition of `(q^4-q^2+1)/r`; 0 and 1 are negative and stored as magnitudes. |
+| `FR_TWO_ADICITY: u32` | 28: `p - 1 = 2^28 * c`, the ceiling on every radix-2 FFT. |
+| `FR_TWO_ADIC_ROOT_OF_UNITY: &str` | `5^((p-1)/2^28)`, a generator of the order-`2^28` subgroup. |
+| `G1_INFINITY_SENTINEL: &str` | `2^128`: the limb a G1 point at infinity absorbs in each of its four lanes. |
 | `POSEIDON2_RC3_INITIAL: [[&str; 3]; 4]` | Round constants, 4 initial full rounds. |
 | `POSEIDON2_RC3_INTERNAL: [&str; 56]` | Round constants, 56 partial rounds, lane 0. |
 | `POSEIDON2_RC3_TERMINAL: [[&str; 3]; 4]` | Round constants, 4 terminal full rounds. |
-| `transcript_tags` | The frozen tag table: 9 tags as of S04, sequential from 1. |
+| `transcript_tags` | The frozen tag table: 16 tags as of S08, sequential from 1. |
 
 `FR_MODULUS_MINUS_TWO` is an additive extension beyond S01's enumerated list; it is a
 property of the modulus and belongs next to it. The same reasoning puts
-`FQ_MODULUS_MINUS_TWO` and `FQ_MODULUS_PLUS_ONE_DIV_FOUR` beside `FQ_MODULUS`.
+`FQ_MODULUS_MINUS_TWO` and `FQ_MODULUS_PLUS_ONE_DIV_FOUR` beside `FQ_MODULUS`, and
+`FR_TWO_ADICITY` / `FR_TWO_ADIC_ROOT_OF_UNITY` beside `FR_MODULUS`. Both of the latter are
+re-derived rather than trusted, in `crates/pcs/src/fft.rs`'s unit tests: the root is
+recomputed as `5^((p-1)/2^28)` from the modulus and its order is shown to be exactly
+`2^28`.
+
+`G1_INFINITY_SENTINEL` sits immediately above `transcript_tags` and is **not** part of it.
+It is the one constant in this crate whose value is chosen rather than derived: `2^128` is
+the smallest value no 128-bit coordinate half can take, which is what makes it collide with
+no G1 point, on the curve or off it. `docs/spec/mercury.md` §4 is normative.
 
 The pairing tables are all powers of `xi`, so each is re-derivable from one number, and
 `crates/curve/tests/constants_check.rs` re-derives every entry as an integer exponent, checks
