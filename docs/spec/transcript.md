@@ -186,6 +186,25 @@ uninitialised value can never be a valid message.
 | `PCS_OPENING` | 7 | scalars |
 | `WITNESS_DIGEST` | 8 | scalars |
 | `SUMCHECK_FINAL_EVALS` | 9 | scalars |
+| `MERCURY_INSTANCE` | 10 | scalars |
+| `MERCURY_ALPHA` | 11 | challenge |
+| `MERCURY_GAMMA` | 12 | challenge |
+| `MERCURY_Z` | 13 | challenge |
+| `BDFG_BATCH` | 14 | challenge |
+| `BDFG_POINT` | 15 | challenge |
+| `PAIRING_MERGE` | 16 | challenge |
+
+Tags 10 to 16 are S08's, and what each frames is fixed by
+`docs/spec/mercury.md` §5's schedule. `MERCURY_INSTANCE` frames one scalar, the
+opening's `n`. The other six are the six challenges of one Mercury opening, one
+tag each rather than one tag separated by position, because that document pins a
+squeeze position *and* a tag for every one of them.
+
+S08 also gave three existing tags new messages, all in their existing kind: a
+Mercury opening absorbs its commitment under `COMMITMENT`, its point and claimed
+value under `EVALUATION_CLAIM`, and every proof element and evaluation under
+`PCS_OPENING`. A G1 point reaches all three as four `Fr` limbs — the addendum in
+`docs/spec/mercury.md` §4 — so all three stay scalar-kind.
 
 **One tag, one message kind.** The typed layer frames a message as
 `tag, length, payload...` and nothing more, so injectivity of the absorbed

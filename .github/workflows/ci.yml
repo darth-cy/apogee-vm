@@ -45,8 +45,13 @@ jobs:
       # regenerated on a machine that has the assets. For the same reason CI
       # runs none of `crates/srs`'s tests -- they all return quietly. See
       # crates/srs/CLAUDE.md.
+      #
+      # `crates/pcs` is not in that position: its suite builds its own toy SRS
+      # and runs in full here, and its `pcs` kat-gen group needs no asset. Only
+      # one test in it -- the menu heights above 2^18, over real ceremony
+      # bases -- needs the file and returns quietly without it.
       - name: committed fixtures are reproducible
         run: |
           cargo run -p kat-gen
           cargo run --manifest-path tools/transcript-ref/Cargo.toml
-          git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/
+          git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/

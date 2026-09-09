@@ -19,6 +19,7 @@
 //! | `pairing` | `crates/curve/tests/vectors/pairing_kats.txt` |
 //! | `msm`     | `crates/curve/tests/vectors/msm_kats.txt` |
 //! | `srs`     | `crates/srs/tests/vectors/*` (needs the gitignored ceremony file) |
+//! | `pcs`     | `crates/pcs/tests/vectors/*` |
 
 use std::fs;
 use std::path::PathBuf;
@@ -29,13 +30,14 @@ mod curve;
 mod field;
 mod msm;
 mod pairing;
+mod pcs;
 mod poly;
 mod shared;
 mod srs;
 mod tower;
 
 /// Every group, in the order a reader of the tower would meet them.
-const GROUPS: [(&str, fn()); 7] = [
+const GROUPS: [(&str, fn()); 8] = [
     ("field", field::generate),
     ("poly", poly::generate),
     ("curve", curve::generate),
@@ -43,6 +45,7 @@ const GROUPS: [(&str, fn()); 7] = [
     ("pairing", pairing::generate),
     ("msm", msm::generate),
     ("srs", srs::generate),
+    ("pcs", pcs::generate),
 ];
 
 fn main() {

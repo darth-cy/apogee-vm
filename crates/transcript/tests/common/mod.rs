@@ -86,6 +86,13 @@ pub fn tag_by_name(name: &str) -> Result<Tag, String> {
         "PCS_OPENING" => Ok(transcript_tags::PCS_OPENING),
         "WITNESS_DIGEST" => Ok(transcript_tags::WITNESS_DIGEST),
         "SUMCHECK_FINAL_EVALS" => Ok(transcript_tags::SUMCHECK_FINAL_EVALS),
+        "MERCURY_INSTANCE" => Ok(transcript_tags::MERCURY_INSTANCE),
+        "MERCURY_ALPHA" => Ok(transcript_tags::MERCURY_ALPHA),
+        "MERCURY_GAMMA" => Ok(transcript_tags::MERCURY_GAMMA),
+        "MERCURY_Z" => Ok(transcript_tags::MERCURY_Z),
+        "BDFG_BATCH" => Ok(transcript_tags::BDFG_BATCH),
+        "BDFG_POINT" => Ok(transcript_tags::BDFG_POINT),
+        "PAIRING_MERGE" => Ok(transcript_tags::PAIRING_MERGE),
         other => Err(format!("unknown tag name {other}")),
     }
 }

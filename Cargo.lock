@@ -176,6 +176,7 @@ dependencies = [
  "constants",
  "curve",
  "field",
+ "pcs",
  "poly",
  "srs",
  "sumcheck",
@@ -525,8 +526,13 @@ dependencies = [
  "ark-ff",
  "ark-poly",
  "constants",
+ "field",
  "num-bigint",
+ "pcs",
+ "poly",
+ "srs",
  "test-support",
+ "transcript",
 ]
 
 [[package]]
@@ -586,6 +592,20 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+
+[[package]]
+name = "pcs"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "curve",
+ "field",
+ "poly",
+ "rayon",
+ "srs",
+ "test-support",
+ "transcript",
+]
 
 [[package]]
 name = "pin-project-lite"
