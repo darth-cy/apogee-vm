@@ -22,13 +22,16 @@ fn the_minimal_elf_loads() {
     assert_eq!(image.slots.len(), 2, "two halfwords, two slots");
 }
 
-/// Acceptance 6(a): the all-zero halfword, and the reserved `c.addi4spn`.
+/// Acceptance 6(a): a reserved `c.addi4spn`, refused with the pc named.
+///
+/// The all-zero halfword used to be the other case here and is not any more:
+/// it is a *defined*-illegal encoding rather than an unclaimed one, LLVM emits
+/// it as padding for unreachable blocks, and the sweep now records it as
+/// [`loader::Slot::NonInstruction`]. `image.rs` holds that behaviour, over the
+/// `zero_halfword` fixtures this file used to own.
 #[test]
 fn illegal_compressed_encodings_are_refused_with_the_pc() {
-    let cases: [(&str, u16); 2] = [
-        ("zero_halfword.elf", 0x0000),
-        ("reserved_addi4spn.elf", 0x0008),
-    ];
+    let cases: [(&str, u16); 1] = [("reserved_addi4spn.elf", 0x0008)];
     for (fixture, want_encoding) in cases {
         match load_elf(&common::synthetic(fixture)) {
             Err(LoaderError::RvcIllegal {

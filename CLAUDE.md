@@ -29,7 +29,8 @@ crates/
   loader/        ELF parsing, RVC expansion, ProgramImage; std
   guest-sdk/     crt0, entry!, linker script, bump allocator, ecall shims; no_std,
                  guest-only, and NOT a workspace member
-guests/          fib/, echo/, rvc-dense/ -- their own workspace; see guests/Cargo.toml
+guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/ -- their own
+                 workspace; see guests/Cargo.toml and docs/guest-program-manual.md
 assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 handoff
 tools/
   kat-gen/       regenerates the committed Fr, multilinear, curve, MSM, SRS and G1-absorption
@@ -61,7 +62,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
-cargo test --workspace                      # 395 tests as of S10; 5 more are #[ignore]d
+cargo test --workspace                      # 400 tests as of S10; 8 more are #[ignore]d
 cargo build -p field -p constants -p transcript -p poly -p sumcheck --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
@@ -83,7 +84,9 @@ cargo run -p artifact-dump -- <guest.elf> [--out <dir>]   # export a ProgramImag
 header of its own, which is the artifact later stages read — and `<name>.img.txt`,
 a report of that artifact with the full instruction listing.
 `docs/guest-program-manual.md` walks the whole path from an empty crate to those
-two files.
+two files, and `tools/artifact-dump/tests/manual.rs` *runs* that walkthrough on
+every crate in `guests/Cargo.toml`'s member list, reading the list from the
+manifest so a guest that exists is a guest whose walkthrough is checked.
 
 `tools/transcript-ref` is deliberately outside the cargo workspace, so it takes
 `--manifest-path` rather than `-p`. Its Plonky3 and `zkhash` dependencies would otherwise
@@ -195,6 +198,18 @@ execution itself. `.github/workflows/ci.yml` carries the two steps that would ga
   instruction's length — the only thing that says whether the next pc is `pc + 2` or
   `pc + 4`. Compacting would shift every later address and change S11's program identity
   for a program that did not change.
+- **The all-zero halfword is not code, and not a refusal.** RVC's *defined*-illegal
+  encoding gets a `Slot::NonInstruction` and the sweep resumes two bytes later; reaching
+  it is a run-time trap, which is the executor's business, and a loader cannot know
+  whether any pc does. This is not a corner case. rustc's RISC-V target sets
+  `TrapUnreachable`, so at the guests' `opt-level = 0` every LLVM `unreachable` block
+  becomes a real `unimp`, and with the C extension that assembles to exactly this
+  halfword — an exhaustive three-arm `match`, any `core::sync::atomic` operation, a
+  `for i in 0..n` with a signed counter, `slice::sort_unstable_by` and `field::Fr::inverse`
+  each emit one. Refusing it meant refusing ordinary compiler output, and did:
+  `guests/{amm,orderbook,vault}` carry 1, 16 and 2 of them. The desync oracle is
+  `crates/loader/tests/differential.rs` against `llvm-objdump`, not any single encoding
+  being fatal. `docs/guest-program-manual.md` §6a is the guest author's version.
 - **ecall numbers are append-only, forever.** Once a program's identity is published its
   ABI is frozen, and redefining a number does not fail loudly — it quietly makes an old
   program compute something else. One source: `constants::ecall`. The standard calls keep

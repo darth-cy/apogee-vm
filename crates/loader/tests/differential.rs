@@ -21,7 +21,7 @@ use loader::{load_elf, Slot};
 /// Acceptance 4: the loader's listing is the disassembler's, at every address.
 #[test]
 fn objdump_agrees_instruction_for_instruction() {
-    for name in ["fib", "rvc-dense"] {
+    for name in ["fib", "rvc-dense", "amm"] {
         let image = load_elf(&common::bytes(&format!("{name}.elf")))
             .unwrap_or_else(|e| panic!("{name}: {e:?}"));
         let listing = common::objdump(name);
@@ -33,6 +33,21 @@ fn objdump_agrees_instruction_for_instruction() {
 
         let mut listed = BTreeSet::new();
         for (pc, encoding, width) in &listing {
+            // objdump spells the all-zero halfword `c.unimp` and lists it as an
+            // instruction. The image records it as not code, because it is
+            // RVC's defined-illegal encoding and abbreviates nothing -- see
+            // `crates/loader/src/lib.rs`'s sweep. The two still agree about
+            // where it is and how wide it is, which is what this differential
+            // is for, so the carve-out is exactly one encoding wide.
+            if *encoding == 0 && *width == 2 {
+                assert_eq!(
+                    image.slot_at(*pc),
+                    Some(Slot::NonInstruction),
+                    "{name}: the c.unimp at {pc:#010x} is not recorded as not code"
+                );
+                listed.insert(*pc);
+                continue;
+            }
             match image.slot_at(*pc) {
                 Some(Slot::Instruction { compressed, .. }) => {
                     assert_eq!(
@@ -248,7 +263,7 @@ fn committed_fixtures_match_their_pins() {
     }
     assert_eq!(
         common::digest("synthetic_elfs.txt"),
-        "089b3dd2d06adf1a22c3558eacdf428158c35bb9644132cd73d65da3ce172f3b",
+        "4b637a7fc691b033a952ef1d2ecb28e4d18f6da8c3136c2fe224ddedca168436",
         "the synthetic ELF index has changed"
     );
     assert_eq!(

@@ -135,8 +135,8 @@ The frozen linker symbols are `__bss_start`, `__bss_end`, `__heap_start` and
 
 | Path | What |
 | --- | --- |
-| `crates/loader/tests/vectors/{fib,echo,rvc-dense}.elf` | the committed guest ELFs |
-| `crates/loader/tests/vectors/{fib,rvc-dense}.objdump.txt` | `llvm-objdump -d -M no-aliases`, one line per instruction |
+| `crates/loader/tests/vectors/{fib,echo,rvc-dense,amm,orderbook,vault}.elf` | the committed guest ELFs |
+| `crates/loader/tests/vectors/{fib,rvc-dense,amm}.objdump.txt` | `llvm-objdump -d -M no-aliases`, one line per instruction |
 | `crates/loader/tests/vectors/rvc-dense.nm.txt` | the text symbols |
 | `crates/loader/tests/vectors/*.elf` (11 more) | hand-built ELFs, one per refusal, plus `minimal.elf` |
 | `crates/loader/tests/vectors/synthetic_elfs.txt` | that index, each with its digest |
@@ -147,10 +147,16 @@ The frozen linker symbols are `__bss_start`, `__bss_end`, `__heap_start` and
 | `tools/kat-gen/src/guests.rs` | the guest ELF rebuild, opt-in |
 | `tools/artifact-dump/` | the exporter: a guest ELF out as the frozen wire form, plus a report |
 | `docs/guest-program-manual.md` | the guest author's walkthrough, empty crate to artifact |
+| `tools/artifact-dump/tests/manual.rs` | that walkthrough, run over every guest in the workspace |
+| `guests/{amm,orderbook,vault}/` | the three DeFi guests |
 
-The vector directory is 524 kB, most of it the three guest ELFs and the two disassembly
-listings. `echo.elf` deliberately has no committed listing: its 300 kB of disassembly is
-the same kind of evidence `fib` already gives, and its job is to run under QEMU.
+The vector directory is 1.4 MB, most of it the six guest ELFs and the three disassembly
+listings. `echo.elf`, `orderbook.elf` and `vault.elf` deliberately have no committed
+listing: theirs would be 300 kB to 830 kB of the same kind of evidence `fib` and `amm`
+already give. `amm` earns one because its text is long stretches of open-coded 128-bit
+arithmetic — LLVM legalises `i128` into 32-bit limbs on this target and calls no builtin
+for it — and because it carries the single `c.unimp` halfword the differential's carve-out
+exists for.
 
 Every file is pinned by SHA-256 in the test that reads it —
 `crates/loader/tests/common/mod.rs` for the loader's, `crates/transcript/tests/io_digest.rs`
@@ -196,24 +202,34 @@ the top of a range and nowhere else.
 
 ## Verification performed
 
-395 workspace tests, green in debug and release, plus 5 `#[ignore]`d (341 from S09,
-unchanged). Eight of them are `tools/artifact-dump`'s — seven integration tests and the
-doctest that compiles the "read an artifact back" snippet. `fmt` and `clippy -D warnings` are clean across **all four** workspaces — the
+400 workspace tests, green in debug and release, plus 8 `#[ignore]`d (341 from S09,
+unchanged). Eleven of them are `tools/artifact-dump`'s — seven integration tests over the
+committed fixtures, three that run `docs/guest-program-manual.md`'s own procedure over
+every guest in the workspace, and the doctest that compiles the "read an artifact back"
+snippet. `fmt` and `clippy -D warnings` are clean across **all four** workspaces — the
 root one, the oracle, `crates/guest-sdk` and `guests/` — with no `#[allow]` added anywhere.
 
 **Acceptances 3 and 8 are not verified on this machine and never were**; see "The defect
-CI found" below. The four `tests/qemu.rs` cases that carry them are `#[ignore]`d, because
-user-mode QEMU is Linux-only and no macOS build of it exists.
+CI found" below. The seven `tests/qemu.rs` cases — four from S10 as first written, three
+added with the new guests — are `#[ignore]`d, because user-mode QEMU is Linux-only and no
+macOS build of it exists.
 
 - **Acceptance 1** — `cd guests/fib && cargo build --target riscv32imac-unknown-none-elf`,
   no other flags, on stock stable. A CI step runs exactly that.
-- **Acceptance 2** — `tests/reproducible.rs::two_clean_builds_agree`: each of the three
+- **Acceptance 2** — `tests/reproducible.rs::two_clean_builds_agree`: each of the six
   guests built twice into two fresh target directories, SHA-256 compared. It is a test
   rather than a CI script so it runs wherever `cargo test` does. See the deviation below
-  on what it does *not* claim.
+  on what it does *not* claim. `tools/artifact-dump/tests/manual.rs` makes the same
+  comparison one step further downstream, over the exported artifacts.
 - **Acceptance 3** (`#[ignore]`d; Linux only) — `tests/qemu.rs::fib_computes_the_committed_value`: fib under
   `qemu-riscv32`, fd 0 from the committed record, fd 1 checked against the host-computed
-  value.
+  value. Three more cases joined it for the new guests, and one of them is worth naming:
+  `orderbook_ignores_advice_it_cannot_verify` runs the same batch three times — with a
+  correct fd 3 permutation, with a transposed one, and with an empty fd 3 — and requires
+  fd 1 to be identical in all three. That is the "a hint binds nothing" rule as an
+  executable statement, and it is the only form of it this repository can make before a
+  prover exists. **None of the four has been run**, here or anywhere: they need a Linux
+  host, and this machine is not one.
 - **Acceptance 4** — `tests/differential.rs::objdump_agrees_instruction_for_instruction`
   over `fib` (2,157 real compiler instructions) and `rvc-dense`, plus
   `the_fixture_covers_the_required_compressed_forms`, which asserts the stage's required
@@ -440,7 +456,92 @@ that this is not identity — that is S11's, over the decoded per-family tables 
 `VmConfig`, in a different field. A digest printed next to the word "program" is exactly
 what a reader would otherwise assume.
 
+## Three more guests, and what each is a fixture for
+
+`guests/` went from three crates to six. The three new ones are DeFi programs rather than
+toy ones, because the point was to find out what a real guest does that the toolchain has
+not seen — and it found something, which is the deviation at the top of the next section.
+
+| Guest | Lines | Instructions | What only it exercises |
+| --- | --- | --- | --- |
+| `amm` | 753 | 8,227 | exact 128- and 256-bit arithmetic: `mul_div` through a 256-bit intermediate, integer `sqrt`, a constant-product assertion over full products. No heap at all. LLVM legalises `i128` into 32-bit limbs on this target and calls no builtin for it, so all of it is open-coded — a `u128 * u128` is 68 hardware multiplies |
+| `orderbook` | 603 | 20,223 | the heap and the collections — `Vec`, `BTreeMap`, sorting, iterator chains, on an allocator whose `dealloc` does nothing — and the reference demonstration of hint-then-verify |
+| `vault` | 505 | 11,904 | `crates/field` and `crates/transcript` used for a computation rather than linked to prove they compile: Merkle paths under Poseidon2, `Fr::inverse` for the share price, and the deepest call chain in `guests/` |
+
+`orderbook` is the one to read first. It takes a sorted permutation of its orders from
+fd 3 — sorting is `O(n log n)` and checking a claimed permutation is sorted is `O(n)`, so
+the advice pays — and verifies it three ways (every index in range, no index twice via a
+bitset it builds itself, the permuted sequence in key order) before an advised byte reaches
+the auction. If any check fails it sorts the batch itself. **The two paths commit identical
+bytes.** Not even a flag saying the advice verified reaches fd 1, because such a flag would
+be a committed bit the prover chooses; which path ran goes to fd 2. That is the fd 3 rule
+written out at length, and `docs/guest-program-manual.md` §3 now points at it.
+
+Two things the reviewer should know about how they were checked. **None of the three has
+been executed** — `qemu-riscv32` is Linux-only — so their logic rests on desk-checking and
+on host harnesses that ran the pure arithmetic outside the guest, not on a run. And all
+three are committed as ELF fixtures, which took `crates/loader/tests/vectors/` from 524 kB
+to 1.4 MB; the alternative was a from-source test CI would not run, and the fixtures buy
+host-loadability, round-trip and listing-fidelity coverage on every run for no build cost.
+
 ## Deviations and notes for the reviewer
+
+- **The all-zero halfword became a `NonInstruction` slot, after S10 first froze it as a
+  refusal.** `crates/loader` used to answer `LoaderError::RvcIllegal` for it. It does not
+  any more: the sweep records `Slot::NonInstruction` and resumes two bytes later.
+
+  *Why.* rustc's RISC-V target sets `TrapUnreachable`, so at `opt-level = 0` — the guest
+  profile — every LLVM `unreachable` block is emitted as a real `unimp`, and with the C
+  extension `unimp` assembles to the two-byte `c.unimp`, which is `0x0000`. That is
+  exactly the encoding the loader refused. Four independent minimal reproductions, each
+  verified against the loader before the change and each loading after it:
+
+  - `match a.cmp(&b) { Less, Equal, Greater }` — a three-arm match, nothing more;
+  - `field::Fr::inverse()`, this repository's own crate, via `Fr::pow`'s
+    `for bit in (0..64).rev()`;
+  - `for i in 0..4` where the counter infers `i32`, which is the integer fallback;
+  - `AtomicU32::fetch_add`, and every other `core::sync::atomic` operation.
+
+  (Each was a four-line guest whose only content was the construct named. The pcs are not
+  recorded here: they are properties of throwaway crates, and a number a reader cannot
+  reproduce is worse than none.)
+
+  So the loader as S10 froze it could not accept an exhaustive three-arm `match`, any use
+  of `core::sync::atomic`, the most common spelling of a `for` loop, `slice::sort_unstable_by`,
+  or `Fr::inverse`. The three committed guests dodged it by accident. Nothing in CI would
+  have found it, because CI builds only `guests/fib` and the fixtures were generated from
+  guests that happen not to call any of the above.
+
+  *Why this fix and not the other.* Setting `opt-level = 1` in `guests/Cargo.toml` also
+  removes every trap, in one line, because `unreachable` then fuses into the surrounding
+  CFG. It was rejected as the primary fix for two reasons: it rewrites every committed ELF,
+  every derived listing and every pinned digest, and it moves the program identity of three
+  guests that did not change; and it leaves the loader exactly as brittle against the next
+  trap the compiler decides to emit. The widening is strictly additive — **every ELF that
+  loaded before the change loads to a byte-identical image after it**, which the unchanged
+  `fib`/`echo`/`rvc-dense` digests demonstrate — and it is the semantics the ISA asks for:
+  `c.unimp` is *defined*-illegal, so reaching it is a run-time trap, and a loader cannot
+  know whether any pc does. Put to the repository owner with all four reproductions and
+  both options; they chose the widening.
+
+  *What was given up.* The all-zero halfword was the sweep's canary for a desync into
+  zeroed data. The oracle that actually catches a desync is
+  `crates/loader/tests/differential.rs`, which compares the whole listing against
+  `llvm-objdump` address for address in both directions and does not depend on any single
+  encoding being fatal; it grew a carve-out exactly one encoding wide, and `amm.objdump.txt`
+  carries one `c.unimp` so that carve-out is exercised on every CI run.
+  `crates/loader/tests/image.rs` pins both halves of the new behaviour: the slot is
+  `NonInstruction`, and the sweep resynchronises on the far side of a run of them.
+  `zero_halfword.elf` moved from `negative.rs` to `image.rs`, and `zero_halfword_run.elf`
+  is new.
+
+- **`layout.rs` no longer requires the writable segment's `filesz` to be zero.** It
+  requires the file-backed bytes to stop at or before `__bss_start`. A guest with an
+  initialised mutable static has a `.data` section, lld folds it into the same `PT_LOAD` as
+  `.bss`, and the old rule refused that outright while the property it meant to state — that
+  the 256 MiB heap-and-stack reservation costs nothing on disk — still holds. None of the
+  six committed guests has a non-empty `.data`; the rule was wrong rather than the guests.
+  `docs/spec/ecall-abi.md` §7.1 says the same thing now.
 
 - **`#[entry]` is `entry!`.** The stage prompt names an `#[entry]` attribute macro. An
   attribute macro *requires* a `proc-macro` crate, and rustc refuses to let such a crate

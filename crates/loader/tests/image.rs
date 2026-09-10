@@ -4,10 +4,25 @@ mod common;
 
 use loader::{load_elf, LoaderError, ProgramImage, Slot};
 
+/// Every committed guest, which is every compiled ELF the loader is held to.
+///
+/// One list rather than three copies, because a guest added to `guests/` and
+/// wired into the fixtures should reach every structural check here without a
+/// second edit -- the checks below are about the shape of an image, and there
+/// is no image they are meant to skip.
+const GUESTS: [&str; 6] = [
+    "fib.elf",
+    "echo.elf",
+    "rvc-dense.elf",
+    "amm.elf",
+    "orderbook.elf",
+    "vault.elf",
+];
+
 /// Acceptance 7: loading the same ELF twice yields byte-identical images.
 #[test]
 fn loading_twice_serializes_identically() {
-    for name in ["fib.elf", "echo.elf", "rvc-dense.elf"] {
+    for name in GUESTS {
         let bytes = common::bytes(name);
         let a = load_elf(&bytes).unwrap_or_else(|e| panic!("{name}: {e:?}"));
         let b = load_elf(&bytes).unwrap_or_else(|e| panic!("{name}: {e:?}"));
@@ -23,7 +38,7 @@ fn loading_twice_serializes_identically() {
 /// The frozen wire form reads back to the value it was written from.
 #[test]
 fn the_image_round_trips_through_postcard() {
-    for name in ["minimal.elf", "fib.elf", "rvc-dense.elf"] {
+    for name in ["minimal.elf"].into_iter().chain(GUESTS) {
         let image = load_elf(&common::bytes(name)).unwrap_or_else(|e| panic!("{name}: {e:?}"));
         let wire = common::to_postcard(&image);
         let back: ProgramImage = postcard::from_bytes(&wire).expect("the wire form parses");
@@ -130,7 +145,7 @@ fn malformed_wire_forms_are_rejected() {
 /// The slot vector says what it claims to say.
 #[test]
 fn the_slot_vector_is_structurally_sound() {
-    for name in ["fib.elf", "echo.elf", "rvc-dense.elf"] {
+    for name in GUESTS {
         let image = load_elf(&common::bytes(name)).unwrap_or_else(|e| panic!("{name}: {e:?}"));
 
         assert_eq!(image.slot_base % 2, 0, "{name}: slot_base must be even");
@@ -284,4 +299,87 @@ fn the_image_does_not_depend_on_where_the_bytes_came_from() {
         "bytes past the last declared structure changed the image"
     );
     assert!(matches!(load_elf(&[]), Err(LoaderError::Truncated { .. })));
+}
+
+// ---------------------------------------------------------------------------
+// The all-zero halfword
+// ---------------------------------------------------------------------------
+
+/// RVC's defined-illegal encoding is not code, and is not a refusal.
+///
+/// The spec gives the all-zero halfword that status so that a jump into zeroed
+/// memory traps. Trapping is a run-time event: a loader cannot know whether any
+/// pc reaches a given halfword, so the honest record is [`Slot::NonInstruction`]
+/// and the trap belongs to the executor.
+///
+/// It is also not a corner case. rustc's RISC-V target sets `TrapUnreachable`,
+/// so at `opt-level = 0` — which is the guest profile — every LLVM `unreachable`
+/// block becomes a real `unimp`, and with the C extension that assembles to this
+/// halfword. An exhaustive `match` on a three-variant enum emits one; so does
+/// every `core::sync::atomic` operation, and so does `field::Fr::inverse`.
+/// Refusing it meant refusing ordinary compiler output.
+#[test]
+fn the_all_zero_halfword_is_not_code() {
+    let image = load_elf(&common::synthetic("zero_halfword.elf")).expect("it loads");
+    assert_eq!(
+        image.slot_at(0x0001_0000),
+        Some(Slot::Instruction {
+            word: 0x0000_0013,
+            compressed: true
+        }),
+        "the c.nop before the padding"
+    );
+    assert_eq!(
+        image.slot_at(0x0001_0002),
+        Some(Slot::NonInstruction),
+        "the all-zero halfword must be recorded as not code"
+    );
+}
+
+/// The sweep resumes at `pc + 2`, so what follows the padding is still found.
+///
+/// This is the half that matters. Skipping the halfword is only correct if the
+/// next instruction starts immediately after it — which is what LLVM emits,
+/// two-byte padding between basic blocks. Swallowing four bytes instead, or
+/// giving up on the rest of the segment, would silently drop real code.
+/// `tests/differential.rs` holds the same claim over whole compiled guests,
+/// against llvm-objdump.
+///
+/// **The lone halfword at index 4 is what gives this test teeth**, and a run of
+/// two would not have. An unswept slot is already `NonInstruction`, so after a
+/// *pair* of padding halfwords a sweep that advanced four bytes instead of two
+/// lands back on an instruction boundary and leaves a slot vector identical to
+/// the correct one — the assertion would hold while the bug it names was
+/// present. After a single one it lands mid-stream, never reaches the `c.nop`
+/// at index 5, and the last slot comes back `NonInstruction`.
+#[test]
+fn the_sweep_resynchronises_after_a_run_of_padding() {
+    let image = load_elf(&common::synthetic("zero_halfword_run.elf")).expect("it loads");
+    let kinds: Vec<Slot> = (0..6)
+        .map(|i| {
+            image
+                .slot_at(0x0001_0000 + 2 * i)
+                .expect("all six halfwords are in the image")
+        })
+        .collect();
+    let nop = Slot::Instruction {
+        word: 0x0000_0013,
+        compressed: true,
+    };
+    let jr = Slot::Instruction {
+        word: 0x0000_8067,
+        compressed: true,
+    };
+    assert_eq!(
+        kinds,
+        vec![
+            nop,
+            Slot::NonInstruction,
+            Slot::NonInstruction,
+            jr,
+            Slot::NonInstruction,
+            nop,
+        ],
+        "c.nop, two halfwords of padding, c.jr ra, one more halfword, c.nop"
+    );
 }

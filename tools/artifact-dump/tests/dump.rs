@@ -12,7 +12,15 @@ use artifact_dump::{dump, wire_form};
 use loader::{load_elf, ProgramImage, Slot};
 
 /// The committed guest ELFs, plus the smallest synthetic one.
-const FIXTURES: [&str; 4] = ["fib", "echo", "rvc-dense", "minimal"];
+const FIXTURES: [&str; 7] = [
+    "fib",
+    "echo",
+    "rvc-dense",
+    "amm",
+    "orderbook",
+    "vault",
+    "minimal",
+];
 
 fn elf(name: &str) -> Vec<u8> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

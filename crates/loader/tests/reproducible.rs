@@ -20,7 +20,7 @@ use test_support::{sha256, to_hex};
 
 #[test]
 fn two_clean_builds_agree() {
-    for name in ["fib", "echo", "rvc-dense"] {
+    for name in ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault"] {
         let a = build(name, "repro-a");
         let b = build(name, "repro-b");
         assert_eq!(

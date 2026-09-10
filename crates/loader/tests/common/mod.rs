@@ -26,7 +26,7 @@ use test_support::{sha256, to_hex};
 /// The synthetic ELFs are not listed one by one: `synthetic_elfs.txt` carries
 /// their digests and is itself pinned here, so the chain is one constant long
 /// either way and the index stays readable.
-pub const PINS: [(&str, &str); 6] = [
+pub const PINS: [(&str, &str); 10] = [
     (
         "fib.elf",
         "d1354939aada0d9ca2ea4b1a026e8fe1e82360021d1dbb42633b845f12c956ee",
@@ -40,12 +40,28 @@ pub const PINS: [(&str, &str); 6] = [
         "b5a2c504f6c8a1b85a59ec146df718756e004052cfef5d04a96823b32ff07a47",
     ),
     (
+        "amm.elf",
+        "bf639449c7e54327fc6e4ccfabfb3f9823e392302bc84b148506c546f4fc0309",
+    ),
+    (
+        "orderbook.elf",
+        "b313502281e27a1f6f48b700224caeb8bf59203371b1d133dc7000c3a8fe5824",
+    ),
+    (
+        "vault.elf",
+        "375051372a408b09132e350a1ac7a300a22e1f44386d188b56bb48f159e97930",
+    ),
+    (
         "fib.objdump.txt",
         "872301dfb860aa44597b94a9f28b2d725c9275b59a6cfe9b12bd9356331710c3",
     ),
     (
         "rvc-dense.objdump.txt",
         "6f9f51ee9407354c705ca4a5cbf8d4e169edd11cc51d6b4e98cfcadf9aee9eda",
+    ),
+    (
+        "amm.objdump.txt",
+        "e46dfefab08139e2037637dfc7e2a4a8102bafcb144c3180d2365921c5e83aba",
     ),
     (
         "rvc-dense.nm.txt",

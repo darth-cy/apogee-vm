@@ -57,10 +57,17 @@ const EBREAK: u32 = 0x0010_0073;
 pub fn expand(c: u16) -> Result<u32, &'static str> {
     let c = c as u32;
 
-    // The all-zero halfword is defined illegal, and is also the shape that
-    // uninitialised memory and section padding take. It falls into
-    // `c.addi4spn`'s reserved case below, but a program that desyncs into data
-    // hits it constantly, so it gets its own message.
+    // The all-zero halfword is defined illegal. It falls into `c.addi4spn`'s
+    // reserved case below, but it is a different kind of thing -- the spec
+    // gives it that status so a jump into zeroed memory traps -- so it gets its
+    // own message.
+    //
+    // `sweep` never asks: it records this halfword as `Slot::NonInstruction`
+    // before reaching here, because LLVM emits it as padding for blocks it
+    // proved unreachable and refusing it meant refusing ordinary compiler
+    // output. The branch stays because `expand` answers "what 32-bit
+    // instruction does this abbreviate", and the honest answer for this one is
+    // still "none".
     if c == 0 {
         return Err("the all-zero halfword is a defined-illegal encoding");
     }

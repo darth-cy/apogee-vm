@@ -38,6 +38,16 @@
 //! moment it meets a halfword no valid encoding claims. Being loud is the
 //! design: a loader that guessed would be a loader that proves the wrong
 //! program.
+//!
+//! The **all-zero halfword is the one exception**, and it is not a hole in
+//! that argument. It is RVC's *defined-illegal* encoding rather than an
+//! unclaimed one, LLVM emits it as padding for blocks it proved unreachable,
+//! and any guest built at `opt-level = 0` that matches on a three-variant enum
+//! carries one — see [`Slot::NonInstruction`] and the comment in `sweep`. It is recorded as not
+//! code, so a pc that reaches one traps at run time, which is what the ISA
+//! asks for. The oracle that catches a desync is `tests/differential.rs`,
+//! which compares the whole listing against llvm-objdump address for address;
+//! that check does not depend on any single encoding being fatal.
 
 mod rvc;
 
@@ -82,6 +92,10 @@ pub enum LoaderError {
     EntryNotAnInstruction { entry: u32 },
     /// A 16-bit halfword that no RV32C encoding claims. `reason` says which
     /// rule it broke; `pc` is where it is.
+    ///
+    /// The all-zero halfword is **not** one of these: it is a defined-illegal
+    /// encoding, not an unclaimed one, and the sweep records it as
+    /// [`Slot::NonInstruction`].
     RvcIllegal {
         pc: u32,
         encoding: u16,
@@ -122,8 +136,10 @@ pub enum Slot {
     Instruction { word: u32, compressed: bool },
     /// The second halfword of a 32-bit instruction.
     MidInstruction,
-    /// Not code: a data segment, a `.bss` byte, a gap between segments, or a
-    /// tail an instruction could not fit in.
+    /// Not code: a data segment, a `.bss` byte, a gap between segments, a
+    /// tail an instruction could not fit in, or the all-zero halfword, which
+    /// is RVC's defined-illegal encoding and is what LLVM pads an unreachable
+    /// block with.
     NonInstruction,
 }
 
@@ -458,6 +474,28 @@ fn sweep(segment: &Segment, slot_base: u32, slots: &mut [Slot]) -> Result<(), Lo
             };
             slots[index + 1] = Slot::MidInstruction;
             pc += 4;
+        } else if half == 0 {
+            // The all-zero halfword is RVC's *defined-illegal* encoding: the
+            // spec gives it that status precisely so a jump into zeroed memory
+            // traps. It abbreviates nothing, so there is no expansion to
+            // record, and reaching it is a run-time trap rather than a
+            // load-time refusal -- which is the only reading a loader can
+            // honestly take, since it cannot know whether any pc gets here.
+            //
+            // It is not exotic. rustc's RISC-V target sets `TrapUnreachable`,
+            // so at `opt-level = 0` every LLVM `unreachable` block becomes a
+            // real `unimp`; with the C extension that assembles to this
+            // halfword. An exhaustive `match` on a 3-variant enum is enough to
+            // emit one, and so is every `core::sync::atomic` operation. A
+            // loader that refused them would refuse ordinary compiler output.
+            //
+            // The sweep continues at `pc + 2`, which is where the next
+            // instruction starts: LLVM emits these as two-byte padding between
+            // basic blocks, so skipping one resynchronises rather than
+            // guesses. `tests/differential.rs` is what holds that claim to
+            // llvm-objdump.
+            slots[index] = Slot::NonInstruction;
+            pc += 2;
         } else {
             let word = rvc::expand(half).map_err(|reason| LoaderError::RvcIllegal {
                 pc: pc as u32,

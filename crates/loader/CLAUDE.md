@@ -54,6 +54,15 @@ pub enum LoaderError { /* twelve variants, one per failure class */ }
 - **Only the base C extension, in its RV32 flavor.** Every F/D form, every RV64-only form,
   every reserved code point and every `Zc*` slot is a loud error naming the pc. HINTs are
   expanded, not rejected: they are valid instructions whose 32-bit forms write `x0`.
+- **The all-zero halfword is not code, and not an error.** It is RVC's *defined*-illegal
+  encoding rather than an unclaimed one — the spec gives it that status so a jump into
+  zeroed memory traps — so reaching it is a run-time trap, which is the executor's business,
+  and a loader cannot know whether any pc does. It gets a `NonInstruction` slot and the
+  sweep resumes two bytes later. This is not a corner case: rustc's RISC-V target sets
+  `TrapUnreachable`, so at `opt-level = 0` every LLVM `unreachable` block becomes a real
+  `unimp`, and with the C extension that assembles to exactly this halfword. An exhaustive
+  `match` on a three-variant enum emits one; so does every `core::sync::atomic` operation,
+  and so does `field::Fr::inverse`. Refusing it meant refusing ordinary compiler output.
 
 ## Why the sweep is fragile on purpose
 Instruction boundaries are not local. Data inside an executable segment desynchronises the
@@ -61,6 +70,14 @@ linear sweep and everything after it decodes as garbage. Compiler output stays i
 because GCC and LLVM keep constants in `.rodata`; a desync that reaches real code diverges
 loudly — under QEMU, and here the moment it meets a halfword no encoding claims. A loader
 that guessed would be a loader that proves the wrong program.
+
+The all-zero halfword used to be part of that argument and is not any more, because it is
+the one illegal encoding a compiler emits on purpose. Nothing is lost: the oracle that
+actually catches a desync is `tests/differential.rs`, which compares the whole listing
+against `llvm-objdump` address for address in both directions, and that check does not
+depend on any single encoding being fatal. `tests/image.rs` pins both halves of the new
+behaviour — the slot is `NonInstruction`, and the sweep resynchronises on the far side of a
+run of them rather than swallowing what follows.
 
 ## The two oracles
 Master rule 10 wants differential tests, and the loader has two independent ones.

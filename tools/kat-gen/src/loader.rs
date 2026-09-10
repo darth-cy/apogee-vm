@@ -16,20 +16,42 @@ use std::process::Command;
 use crate::write_vectors;
 
 /// The guest ELFs the loader tests read, and what each is for.
-pub const ELF_FIXTURES: [(&str, &str); 3] = [
+pub const ELF_FIXTURES: [(&str, &str); 6] = [
     (
         "fib",
         "real compiler output: the address and boundary oracle",
     ),
     ("echo", "the ecall shims under QEMU"),
     ("rvc-dense", "the paired regions: the expansion oracle"),
+    (
+        "amm",
+        "open-coded 128- and 256-bit arithmetic, and the c.unimp padding an \
+         exhaustive dispatch emits",
+    ),
+    (
+        "orderbook",
+        "the heap, the collections, and the hint-then-verify pattern",
+    ),
+    (
+        "vault",
+        "field and transcript inside the proof: Poseidon2, Fr::inverse, deep \
+         recursion",
+    ),
 ];
 
 /// The ones the objdump differential runs against.
 ///
 /// Not `echo`: its listing is 300 kB of the same kind of evidence `fib`
-/// already gives, and its job here is to run under QEMU.
-const DISASSEMBLED: [&str; 2] = ["fib", "rvc-dense"];
+/// already gives, and its job here is to run under QEMU. `amm` earns one where
+/// the other two new guests do not, for two reasons. Its text is long stretches
+/// of open-coded 128-bit arithmetic -- LLVM legalises `i128` into 32-bit limbs
+/// on this target and calls no builtin for it, so the multiply, the shifts and
+/// the compares are all written out in line, which is a shape no hand-written
+/// fixture would produce. And it carries the `c.unimp` padding whose carve-out
+/// `differential.rs` now has to get right, in the smallest quantity of the
+/// three: exactly one halfword, against `vault`'s two and `orderbook`'s
+/// sixteen.
+const DISASSEMBLED: [&str; 3] = ["fib", "rvc-dense", "amm"];
 
 pub fn generate() {
     for name in DISASSEMBLED {
@@ -265,9 +287,28 @@ fn synthetic_elfs() {
     // -- the RVC negatives -------------------------------------------------
     cases.push((
         "zero_halfword",
-        "an all-zero halfword after a c.nop: the defined-illegal encoding, and \
-         the shape a sweep that has wandered into data keeps meeting",
+        "an all-zero halfword after a c.nop: RVC's defined-illegal encoding, \
+         which the sweep records as not code rather than refusing -- this one \
+         is a positive fixture, not a negative",
         ElfBuilder::rv32_exec(&[0x01, 0x00, 0x00, 0x00]).build(),
+    ));
+    cases.push((
+        "zero_halfword_run",
+        "c.nop, two all-zero halfwords, c.jr ra, one more, c.nop: the sweep \
+         must resynchronise on the far side of padding rather than swallow \
+         what follows it. The lone halfword is the load-bearing one -- after a \
+         pair, a sweep that over-advanced by two bytes would land on the \
+         second and look correct, because an unswept slot is already \
+         NonInstruction",
+        ElfBuilder::rv32_exec(&[
+            0x01, 0x00, // c.nop
+            0x00, 0x00, // padding
+            0x00, 0x00, // padding
+            0x82, 0x80, // c.jr ra
+            0x00, 0x00, // padding, alone this time
+            0x01, 0x00, // c.nop -- only a correctly resynchronised sweep finds it
+        ])
+        .build(),
     ));
     cases.push((
         "reserved_addi4spn",

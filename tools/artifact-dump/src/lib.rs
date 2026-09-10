@@ -249,8 +249,9 @@ fn instruction_stream(out: &mut String, image: &ProgramImage) -> Counts {
          ------------------\n\
          instructions      {:<10} {wide} four-byte, {compressed} two-byte\n\
          mid-instruction   {mid:<10} the second halfword of each four-byte instruction\n\
-         not code          {non:<10} data below the code, gaps, bytes above a segment's\n\
-         \x20                            file length, and tails no instruction fit in\n\
+         not code          {non:<10} the all-zero halfword LLVM pads an unreachable block\n\
+         \x20                            with, data below the code, gaps, bytes above a\n\
+         \x20                            segment's file length, tails nothing fit in\n\
          total slots       {:<10} {} + {mid} + {non}, and the slot span is {} bytes\n\
          instruction bytes {:<10} 4*{wide} + 2*{compressed}\n",
         wide + compressed,
@@ -310,7 +311,10 @@ fn listing(out: &mut String, image: &ProgramImage, names: &Names, counts: Counts
          The halfword after a four-byte instruction is a mid-instruction slot and\n\
          is not listed. Its position is implied by `len`, and the artifact's reader\n\
          rejects an image where one is missing or stands alone. Runs of slots that\n\
-         are not code are folded into a single line.\n\
+         are not code are folded into a single line. A one-halfword run in the\n\
+         middle of a function is almost always LLVM's `c.unimp` padding for a\n\
+         block it proved unreachable: it is a defined-illegal encoding, so a pc\n\
+         that reached it would trap, and no pc does.\n\
          \n\
          For mnemonics, disassemble the same ELF with the pinned toolchain:\n\
          \n\

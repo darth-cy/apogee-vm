@@ -65,8 +65,22 @@ A guest is an ordinary `no_std` binary crate that lives in the `guests/`
 workspace. Three files, one of which already exists.
 
 `hello` below is the guest this manual builds; you are creating it now. The
-repository itself ships three — `fib`, `echo` and `rvc-dense` — and every
-command here works on those too, with the name changed.
+repository ships six, and every command here works on those too with the name
+changed. They are worth reading before you write your own, because between them
+they cover most of what a guest can do:
+
+| Guest | What it is, and what it shows you |
+| --- | --- |
+| `fib` | the smallest real guest: read a `u32`, commit a `u32` |
+| `echo` | the ecall shims end to end — fd 0 to fd 1, a hint, diagnostics, the heap, and the Poseidon2 precompile with its software fallback |
+| `rvc-dense` | hand-written assembly and the compressed-instruction table; a loader fixture more than a program |
+| `amm` | a constant-product market maker: exact 128- and 256-bit arithmetic, `mul_div`, integer `sqrt`, and no heap at all |
+| `orderbook` | a uniform-price auction: `Vec`, `BTreeMap`, sorting, and the reference demonstration of hint-then-verify |
+| `vault` | Merkle-gated withdrawals over Poseidon2: `crates/field` and `crates/transcript` running inside the proof, and the deepest call chain in `guests/` |
+
+If you are looking for a pattern to copy, `amm` is the one to read for arithmetic
+and framing, `orderbook` for anything that takes prover advice, and `vault` for
+anything that hashes.
 
 **`guests/hello/Cargo.toml`**
 
@@ -100,7 +114,7 @@ fn main() {
 **`guests/Cargo.toml`** — add the crate to the member list:
 
 ```toml
-members = ["fib", "echo", "rvc-dense", "hello"]
+members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "hello"]
 ```
 
 Four things about that source file are not negotiable:
@@ -143,7 +157,7 @@ pub fn poseidon2_permute(state: &mut [u8; 96]) -> bool;   // false on -ENOSYS
 | 2 | no | diagnostics. Free-form, and the verifier never looks at it |
 | 3 | **no** | private hints: **nondeterministic prover advice** |
 
-Four rules worth having in front of you while you write:
+Five rules worth having in front of you while you write:
 
 1. **`read_input` and `hint` may return short.** They fill the buffer or stop
    at the end of the stream. If you need an exact length, check the count. A
@@ -160,6 +174,24 @@ Four rules worth having in front of you while you write:
    the precompile has a number and a calling convention but no circuit yet. You
    must have a software path and take it on `false`. Any *other* failure exits
    nonzero rather than falling back silently.
+5. **`hint` needs an fd 3 to read.** The zkVM always has one. `qemu-riscv32`
+   only has the descriptors you give it, and a `read` on a closed one answers
+   `-EBADF`, which the SDK treats as an executor fault and exits 70 on. Running
+   a guest that calls `hint` by hand means opening fd 3 yourself, even at an
+   empty file:
+
+   ```
+   sh -c 'exec 3</dev/null; exec qemu-riscv32 ./yourguest' < input
+   ```
+
+`guests/orderbook` is the worked example of rule 2. It takes a sorted
+permutation of its orders from fd 3 — sorting costs `O(n log n)` and checking a
+claimed permutation is sorted costs `O(n)`, so the advice is worth having — and
+then verifies it three ways before a single advised byte reaches the auction. If
+any check fails it sorts the batch itself. **The two paths commit identical
+bytes**, which is the whole point: not even a flag saying the advice verified
+reaches fd 1, because such a flag would be a committed bit the prover chooses.
+Which path ran is written to fd 2 and nowhere else.
 
 The allocator bumps upward from `__heap_start` and `dealloc` does nothing, so
 `alloc` works but never reclaims. An allocation that would cross `__stack_top`
@@ -272,8 +304,9 @@ far as the image is concerned.
 ```
 instructions      1897       675 four-byte, 1222 two-byte
 mid-instruction   675        the second halfword of each four-byte instruction
-not code          0          data below the code, gaps, bytes above a segment's
-                             file length, and tails no instruction fit in
+not code          0          the all-zero halfword LLVM pads an unreachable block
+                             with, data below the code, gaps, bytes above a
+                             segment's file length, tails nothing fit in
 total slots       2572       1897 + 675 + 0, and the slot span is 5144 bytes
 instruction bytes 5144       4*675 + 2*1222
 ```
@@ -281,10 +314,9 @@ instruction bytes 5144       4*675 + 2*1222
 Those last two lines are the same number twice, from both directions. The slot
 vector is pc/2-indexed and every halfword is accounted for exactly once.
 
-`not code` is `0` for every guest built from the frozen linker script, because
-`.text` is the lowest loaded segment and the span ends at the top of the code.
-It is nonzero when something non-executable sits below or between executable
-segments.
+`hello` has no `not code` slots. Size is not what decides it — `echo` is five
+times larger and has none either, while `amm` has one — the constructs in §6a
+are, and §6a says why.
 
 ### `symbols`
 
@@ -350,6 +382,57 @@ than being printed here.
 
 ---
 
+## 6a. The `not code` runs in the middle of your functions
+
+Dump a guest that uses any of the constructs in the table below, and the listing
+will have lines like this one, from `amm`:
+
+```
+0x00010f52    2       952e  00b50533
+0x00010f54    2       4108  00052503
+0x00010f56    2       8502  00050067
+---- not code: 0x00010f58 .. 0x00010f5a, 1 halfword ----
+0x00010f5a    4   18412683  18412683
+```
+
+That is not a desynchronised sweep and it is not data in your `.text`. It is two
+bytes of `0x0000`, and it is there because **rustc materialises unreachable code
+as a trap instruction at `opt-level = 0`**, which is the guest profile. The
+RISC-V target sets `TrapUnreachable`, so every LLVM `unreachable` block becomes a
+real `unimp`; with the C extension `unimp` assembles to the two-byte `c.unimp`,
+which is `0x0000`. `llvm-objdump` spells it `c.unimp`. The loader records it as
+not code, because the all-zero halfword is RVC's *defined-illegal* encoding — the
+spec gives it that status precisely so that a jump into zeroed memory traps —
+and it abbreviates no 32-bit instruction, so there is nothing to put in a slot.
+No pc reaches it; if one did, the VM would trap, which is what the ISA asks for.
+
+The three instructions above it are the giveaway: `c.add`, `c.lw`, `c.jr` is a
+jump table being indexed and jumped through. The padding is the switch default
+that LLVM proved unreachable.
+
+**What emits one.** More than you would guess, and none of it is exotic:
+
+| Construct | Why |
+| --- | --- |
+| an exhaustive `match` on an enum with three or more variants | the switch default is `unreachable`; two variants are folded into a branch instead and emit nothing |
+| `match a.cmp(&b) { Less, Equal, Greater }` | `Ordering` is three variants, so the above |
+| any `core::sync::atomic` load, store or read-modify-write | `Ordering` is five variants, and at `opt-level = 0` the helper is a real out-of-line call that matches on it |
+| `for i in 0..n` where `i` infers to a signed type | integer fallback is `i32`, and `<i32 as Step>::forward_unchecked` ends in `unwrap_unchecked` |
+| `slice::sort_unstable_by` | its pivot selection does the above |
+| `field::Fr::inverse`, `Fr::pow`, `field::batch_inverse` | `pow`'s `for bit in (0..64).rev()` infers `i32` |
+
+A `_ =>` wildcard does not save you on an enum, because rustc knows it covers
+exactly the remaining variants and the LLVM default is still unreachable. A
+wildcard on a `u32` *does*, because the default is then a block a real value can
+reach.
+
+None of this is something to avoid. It costs two bytes, no pc reaches it, and
+you cannot reliably keep it out of your binary anyway — `core` emits it on your
+behalf. It is documented here only so that a `not code` run in the middle of a
+function does not look like a bug when you read your own report.
+
+---
+
 ## 7. Check it yourself
 
 Five checks, in the order they are worth running.
@@ -368,9 +451,22 @@ cargo run -p artifact-dump -- /tmp/hello-fresh/riscv32imac-unknown-none-elf/debu
 cmp artifacts/hello.img /tmp/art2/hello.img
 ```
 
-Across machines it will differ, for the embedded-paths reason in §5. That is
-acceptance 2's exact boundary, and `crates/loader/tests/reproducible.rs` is the
-test that holds it.
+The `.img` files must be identical. The `.img.txt` files differ in exactly one
+line — `source ELF`, which records where the ELF was read from, and the two
+paths are different. A difference anywhere else would mean the report carries
+something that is not a function of the artifact.
+
+Across machines the artifact will differ, for the embedded-paths reason in §5.
+That is acceptance 2's exact boundary, and `crates/loader/tests/reproducible.rs`
+is the test that holds it.
+
+> **This whole walkthrough is a test.** `tools/artifact-dump/tests/manual.rs`
+> runs §4, §5 and the check above over **every** crate in `guests/Cargo.toml`'s
+> member list, on every CI run: two clean builds each, two exports each, and the
+> comparison. It reads the guest list out of the manifest rather than carrying
+> its own, so a guest that exists is a guest whose walkthrough is checked, and it
+> fails if this document stops naming one of them. If the procedure below ever
+> stops working, that is where it shows up.
 
 **Mnemonics**, against the pinned disassembler, per §6.
 
@@ -382,9 +478,9 @@ the first and unrunnable under the second — S10 shipped exactly that, twice.
 
 The two rules are properties of `link.ld`, which every guest links against
 unmodified, so a guest that changes only its own source has the segment shape
-the committed guests have. `crates/loader/tests/layout.rs` checks those on
-every CI run, and its ignored case relinks all three from source and re-checks
-— which is what to run after touching the script:
+the committed guests have. `crates/loader/tests/layout.rs` checks those over all
+six committed guests on every CI run, and its ignored case relinks them from
+source and re-checks — which is what to run after touching the script:
 
 ```
 cargo test -p loader --test layout -- --ignored     # needs the guest target
@@ -482,7 +578,7 @@ The tool writes nothing and prints the refusal. Every variant of
 | `BadSegment` | a `PT_LOAD` with an odd address, `filesz` above `memsz`, an overlap, or a span leaving the RAM window. Usually a hand-edited `link.ld` |
 | `NoExecutableSegment` | nothing is executable — an empty or entirely optimised-away guest |
 | `EntryNotAnInstruction` | `e_entry` is odd, outside the image, in a data segment, or mid-instruction. Usually `ENTRY(_start)` lost its target |
-| `RvcIllegal` | a halfword no RV32C encoding claims, at a named pc. Either data ended up inside `.text`, or the compiler emitted a `Zc*` form this VM does not accept |
+| `RvcIllegal` | a halfword no RV32C encoding claims, at a named pc. Either data ended up inside `.text`, or the compiler emitted a `Zc*` form this VM does not accept. **Not** the all-zero halfword, which is a defined-illegal encoding and becomes a not-code slot — see §6a |
 | `InstructionTooLong` | an encoding wider than 32 bits. RV32IMAC has none |
 | `TextTruncated` | a 32-bit instruction whose second halfword is past the end of its segment |
 
@@ -491,6 +587,15 @@ sweep is linear, and instruction boundaries are not local: data embedded in an
 executable segment desynchronises it and everything after decodes as garbage.
 Compiler output stays synchronised because GCC and LLVM keep constants in
 `.rodata`. A hand-written `.section .text` holding a table is the usual cause.
+
+Nothing in this table is something ordinary Rust can provoke. Every refusal here
+is a malformed or mis-targeted ELF, not a program the compiler would not know how
+to build — write whatever you like in safe `no_std` Rust and the loader will take
+it. That was not true before the all-zero halfword became a not-code slot: until
+then an exhaustive three-arm `match`, any use of `core::sync::atomic`, a
+`for i in 0..n` with a signed counter, `slice::sort_unstable_by` and
+`field::Fr::inverse` each made a guest unloadable, for a two-byte trap no pc
+reaches. §6a is the whole story.
 
 ---
 

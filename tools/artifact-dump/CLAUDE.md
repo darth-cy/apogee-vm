@@ -62,10 +62,23 @@ recorded expectation, so a change on either side has to agree with the other.
 - every slot is accounted for: instruction lines, the mid-instruction slots
   their lengths imply, and the folded `not code` runs sum to `slots.len()`;
 - a refused ELF produces an error and no artifact;
-- runs that are not code are folded exactly. No committed guest reaches that
-  path — with the frozen `link.ld`, `.text` is the lowest loaded segment, so
-  the slot span is all code — so the test builds a two-segment ELF whose
-  read-only segment sits below the executable one.
+- runs that are not code are folded exactly. Real guests reach that path now —
+  `amm`, `orderbook` and `vault` carry 1, 16 and 2 halfwords of LLVM's
+  `c.unimp` padding — but only ever one halfword at a time, so the test also
+  builds a two-segment ELF whose read-only segment sits below the executable
+  one and folds 128 halfwords into a single line.
+
+`tests/manual.rs` holds a different thing: `docs/guest-program-manual.md`. It
+runs sections 4, 5 and 7 — build, export, rebuild elsewhere, export again,
+compare — over every crate in `guests/Cargo.toml`'s member list, and it reads
+that list from the manifest rather than carrying its own, so a guest that exists
+is a guest whose walkthrough is checked. It also fails when a guest has no
+committed ELF fixture, when the manual stops naming one, and when the `members`
+line section 2 prints stops being the manifest's — that last one is the line a
+reader copies into `guests/Cargo.toml`, so a stale copy of it deletes guests. Twelve guest builds
+cost about six seconds, which is why it is not `#[ignore]`d: a walkthrough
+nothing runs is a walkthrough that has already stopped working and not been
+told.
 
 ## Not this tool's job
 Program identity. That is S11's, over the decoded per-family tables and the

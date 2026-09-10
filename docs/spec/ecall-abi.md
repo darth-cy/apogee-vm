@@ -209,9 +209,12 @@ address space exists at all. Two rules follow, and both are load-bearing:
 
 - **Every writable byte a guest can touch is declared.** The heap and the stack
   grow toward each other between `__heap_start` and `__stack_top`, so the linker
-  script reserves that whole span as one writable `NOBITS` segment reaching the
-  top of the window. Undeclared, it is unmapped memory under a host loader and
-  the guest's first stack write dies on a signal before `main` runs.
+  script reserves that whole span as one writable segment reaching the top of the
+  window. Undeclared, it is unmapped memory under a host loader and the guest's
+  first stack write dies on a signal before `main` runs. The reservation itself
+  must cost nothing on disk: `p_filesz` may cover an initialised `.data` — lld
+  folds one into this same segment — but must stop at or before `.bss`, or the
+  ELF carries 256 MiB of zeroes.
 - **No two segments share a page.** Each `PT_LOAD` is mapped independently, so a
   shared page takes the second mapping's permissions for all of it: an unaligned
   `.rodata` strips execute from the tail of `.text`, and zero fill landing on a

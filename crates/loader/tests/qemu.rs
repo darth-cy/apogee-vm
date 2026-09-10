@@ -194,6 +194,264 @@ fn the_rvc_fixture_runs() {
     );
 }
 
+/// `amm` prices one swap against a seeded pool, and the numbers are checkable.
+///
+/// A constant-product pool of a million against a million, seeded with no
+/// shares so the guest mints `sqrt(x*y)` for itself, and a single 1000-unit swap
+/// at thirty basis points. Every figure below is arithmetic anyone can redo:
+///
+/// ```text
+/// fee   = 1000 * 30 / 10_000                    = 3
+/// net   = 1000 - 3                              = 997
+/// new_x = 1_000_000 + 997                       = 1_000_997
+/// out   = floor(1_000_000 * 997 / 1_000_997)    = 996
+/// new_y = 1_000_000 - 996                       = 999_004
+/// k     = 1_000_997 * 999_004 = 1_000_000_006_988 >= 1_000_000_000_000
+/// ```
+///
+/// The point is not the arithmetic, which `guests/amm` gets right or wrong on
+/// the host too. It is that the exact 256-bit `mul_div` and `sqrt` underneath it
+/// run correctly on a 32-bit machine, where a `u128` is four registers and every
+/// multiply is a sequence LLVM writes out itself.
+#[test]
+#[ignore = "needs a Linux host with qemu-user; run with --ignored"]
+fn amm_prices_a_swap() {
+    let qemu = qemu();
+
+    let mut input = Vec::new();
+    input.extend_from_slice(&1_000_000u128.to_le_bytes()); // reserve_x
+    input.extend_from_slice(&1_000_000u128.to_le_bytes()); // reserve_y
+    input.extend_from_slice(&0u128.to_le_bytes()); // total_shares: an unclaimed seed
+    input.extend_from_slice(&30u32.to_le_bytes()); // fee_bps
+    input.extend_from_slice(&1u32.to_le_bytes()); // n_ops
+    input.extend_from_slice(&0u32.to_le_bytes()); // kind: SwapXForY
+    input.extend_from_slice(&1_000u128.to_le_bytes()); // amount
+    input.extend_from_slice(&0u128.to_le_bytes()); // limit: no floor
+    assert_eq!(input.len(), 56 + 36, "the batch is a header and one record");
+
+    let run = execute(&qemu, "amm", "amm", &input, None);
+    assert_eq!(
+        run.status,
+        Some(0),
+        "amm exited {:?}: {}",
+        run.status,
+        run.stderr
+    );
+    assert_eq!(run.stdout.len(), 104, "six u128 totals and two u32 tallies");
+
+    let word = |i: usize| u128::from_le_bytes(run.stdout[16 * i..16 * i + 16].try_into().unwrap());
+    let tally =
+        |i: usize| u32::from_le_bytes(run.stdout[96 + 4 * i..100 + 4 * i].try_into().unwrap());
+    assert_eq!(word(0), 1_000_997, "reserve_x");
+    assert_eq!(word(1), 999_004, "reserve_y");
+    assert_eq!(
+        word(2),
+        1_000_000,
+        "total_shares: sqrt(10^12) against the seed"
+    );
+    assert_eq!(word(3), 3, "fees_x");
+    assert_eq!(word(4), 0, "fees_y");
+    assert_eq!(word(5), 0, "last_quote: the batch has no Quote in it");
+    assert_eq!(tally(0), 1, "applied");
+    assert_eq!(tally(1), 0, "rejected");
+}
+
+/// `orderbook` commits the same bytes whether the prover's advice was good.
+///
+/// This is the fd 3 rule, executed. The guest is run three times over one batch
+/// — once with the permutation that really does sort it, once with a
+/// transposition of that permutation, and once with nothing on fd 3 at all —
+/// and **fd 1 must be identical in all three**. It is the strongest statement
+/// this repository can make about prover advice without a prover: a hint that
+/// changed a committed byte would be a statement the prover chose, and here the
+/// three runs cannot be told apart from the outside.
+///
+/// fd 2 is where they do differ, and the test insists on that too: three runs
+/// that agreed on the diagnostics as well would more likely mean the advice
+/// never reached the guest than that it was correctly ignored.
+///
+/// The batch, and the permutation `key` puts it in — bids best-price-first,
+/// then asks best-price-first, index breaking ties:
+///
+/// ```text
+/// 0  bid  100 x 10        bids: 0 (100), 2 (95)
+/// 1  ask   90 x  6        asks: 1 (90),  3 (100)
+/// 2  bid   95 x  5
+/// 3  ask  100 x  3        so the sorting permutation is [0, 2, 1, 3]
+/// ```
+#[test]
+#[ignore = "needs a Linux host with qemu-user; run with --ignored"]
+fn orderbook_ignores_advice_it_cannot_verify() {
+    let qemu = qemu();
+
+    let mut input = 4u32.to_le_bytes().to_vec();
+    for (side, price, qty) in [(0u32, 100u64, 10u64), (1, 90, 6), (0, 95, 5), (1, 100, 3)] {
+        input.extend_from_slice(&side.to_le_bytes());
+        input.extend_from_slice(&price.to_le_bytes());
+        input.extend_from_slice(&qty.to_le_bytes());
+    }
+    assert_eq!(input.len(), 4 + 4 * 20, "a count and four 20-byte records");
+
+    let advice = |perm: &[u32]| {
+        let mut bytes = (perm.len() as u32).to_le_bytes().to_vec();
+        for i in perm {
+            bytes.extend_from_slice(&i.to_le_bytes());
+        }
+        bytes
+    };
+    let sorted = advice(&[0, 2, 1, 3]);
+    // A permutation still, and still in range, so only the third check can
+    // refuse it: the ask at 100 cannot precede the ask at 90.
+    let transposed = advice(&[0, 2, 3, 1]);
+
+    let good = execute(&qemu, "ob-good", "orderbook", &input, Some(&sorted));
+    let bad = execute(&qemu, "ob-bad", "orderbook", &input, Some(&transposed));
+    // An empty file rather than no fd 3 at all: a `read` on a closed descriptor
+    // answers -EBADF, which the SDK treats as an executor fault and exits on,
+    // and that would be testing the shell rather than the guest.
+    let none = execute(&qemu, "ob-none", "orderbook", &input, Some(&[]));
+
+    for (tag, run) in [("good", &good), ("bad", &bad), ("none", &none)] {
+        assert_eq!(
+            run.status,
+            Some(0),
+            "orderbook/{tag} exited {:?}: {}",
+            run.status,
+            run.stderr
+        );
+        assert_eq!(run.stdout.len(), 28, "orderbook/{tag}: one 28-byte record");
+    }
+
+    assert_eq!(
+        to_hex(&good.stdout),
+        to_hex(&bad.stdout),
+        "a transposed permutation changed the committed output, so fd 3 is \
+         binding something it must not"
+    );
+    assert_eq!(
+        to_hex(&good.stdout),
+        to_hex(&none.stdout),
+        "the presence of advice changed the committed output"
+    );
+
+    assert!(
+        good.stderr.contains("advice=verified"),
+        "the sorting permutation was not accepted: {}",
+        good.stderr
+    );
+    assert!(
+        bad.stderr.contains("advice=rejected"),
+        "a transposed permutation was accepted: {}",
+        bad.stderr
+    );
+    assert!(
+        none.stderr.contains("advice=rejected"),
+        "an empty fd 3 was treated as advice: {}",
+        none.stderr
+    );
+}
+
+/// `vault` verifies a Merkle path, moves the root, and refuses a bad one.
+///
+/// Two withdrawals against a depth-1 tree, in one batch and in this order: the
+/// first opens correctly against the header root, the second presents a proof
+/// against a root that is no longer current. So the guest must accept one,
+/// reject one, and leave the root where the accepted one put it — which also
+/// says the rejection cost nothing, since a rejected withdrawal that had moved
+/// the root would show up in the final value.
+///
+/// The expected values are computed here with `transcript::poseidon2_permute`
+/// and `field::Fr`, which is the same permutation the guest falls back to. That
+/// makes this an independent implementation of the *Merkle and share
+/// arithmetic* and not an independent oracle for Poseidon2 — `crates/transcript`
+/// has its own vectors for that. What it witnesses is that a 254-bit `Fr::pow`,
+/// a field inversion and a tree walk all give the same answers inside a 32-bit
+/// guest as they do on the host.
+#[test]
+#[ignore = "needs a Linux host with qemu-user; run with --ignored"]
+fn vault_settles_a_merkle_withdrawal() {
+    let qemu = qemu();
+
+    /// The guest's `hash2`: lanes `[a, b, 0]`, permuted, first lane out.
+    fn hash2(a: Fr, b: Fr) -> Fr {
+        let mut state = [a, b, Fr::ZERO];
+        transcript::poseidon2_permute(&mut state);
+        state[0]
+    }
+
+    let account = Fr::from_u64(7);
+    let balance = Fr::from_u64(100);
+    let amount = Fr::from_u64(10);
+    let sibling = Fr::from_u64(0xabc);
+    let total_assets = Fr::from_u64(1_000);
+    let total_shares = Fr::from_u64(1_000);
+
+    // Depth 1, path bit clear: the leaf is the left child, so the root is
+    // hash2(leaf, sibling).
+    let root = hash2(hash2(account, balance), sibling);
+    let settled = hash2(hash2(account, balance - amount), sibling);
+
+    let record = |bal: Fr| {
+        let mut r = Vec::new();
+        r.extend_from_slice(&account.to_bytes());
+        r.extend_from_slice(&bal.to_bytes());
+        r.extend_from_slice(&amount.to_bytes());
+        r.extend_from_slice(&0u32.to_le_bytes()); // path_bits: left child
+        r.extend_from_slice(&sibling.to_bytes());
+        r
+    };
+
+    let mut input = Vec::new();
+    input.extend_from_slice(&root.to_bytes());
+    input.extend_from_slice(&total_assets.to_bytes());
+    input.extend_from_slice(&total_shares.to_bytes());
+    input.extend_from_slice(&1u32.to_le_bytes()); // depth
+    input.extend_from_slice(&2u32.to_le_bytes()); // count
+    input.extend_from_slice(&record(balance));
+    // The same leaf again. The first withdrawal already moved the root, so this
+    // one opens against a root that is gone.
+    input.extend_from_slice(&record(balance));
+    assert_eq!(
+        input.len(),
+        104 + 2 * 132,
+        "a header and two depth-1 records"
+    );
+
+    let run = execute(&qemu, "vault", "vault", &input, None);
+    assert_eq!(
+        run.status,
+        Some(0),
+        "vault exited {:?}: {}",
+        run.status,
+        run.stderr
+    );
+    assert_eq!(
+        run.stdout.len(),
+        104,
+        "three field elements and two tallies"
+    );
+
+    let element = |i: usize| to_hex(&run.stdout[32 * i..32 * i + 32]);
+    let tally =
+        |i: usize| u32::from_le_bytes(run.stdout[96 + 4 * i..100 + 4 * i].try_into().unwrap());
+
+    assert_eq!(
+        element(0),
+        to_hex(&settled.to_bytes()),
+        "the final root is not the one the accepted withdrawal produced"
+    );
+    assert_eq!(element(1), to_hex(&amount.to_bytes()), "total_withdrawn");
+    // shares = amount * total_shares / total_assets, and the two are equal here,
+    // so the share price is one and the shares burned are the amount.
+    assert_eq!(element(2), to_hex(&amount.to_bytes()), "shares_burned");
+    assert_eq!(tally(0), 1, "accepted");
+    assert_eq!(
+        tally(1),
+        1,
+        "rejected: the second proof is against a stale root"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Plumbing
 // ---------------------------------------------------------------------------

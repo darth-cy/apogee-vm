@@ -175,7 +175,7 @@ fn writable_at(loads: &[Load], addr: u64, what: &str) -> Result<(), String> {
 // The guests
 // ---------------------------------------------------------------------------
 
-const GUESTS: [&str; 3] = ["fib", "echo", "rvc-dense"];
+const GUESTS: [&str; 6] = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault"];
 
 /// Every rule above, over one image. The single place the rules are composed,
 /// so the committed fixtures and a fresh link are held to exactly one standard.
@@ -280,11 +280,19 @@ fn the_heap_and_the_stack_share_one_writable_segment() {
              the bump allocator would run off the end of it",
             holding.vaddr + holding.memsz
         );
-        assert_eq!(
-            holding.filesz, 0,
-            "{name}: the heap and stack reservation must be NOBITS, or the ELF \
-             carries {:#x} bytes of zeroes on disk",
-            holding.filesz
+        // The reservation must cost nothing on disk. `filesz` is not required
+        // to be zero -- a guest with an initialised mutable static has a
+        // `.data` section, and lld folds it into this same writable segment --
+        // but the file-backed part must stop at or before `.bss`, so that the
+        // 256 MiB of heap and stack above it is NOBITS. An ELF that carried
+        // even one zero byte of the reservation on disk would carry all of it.
+        let bss_start = *symbols(&elf).get("__bss_start").expect("__bss_start") as u64;
+        assert!(
+            holding.vaddr + holding.filesz <= bss_start,
+            "{name}: the writable segment's file bytes run to {:#x}, past \
+             __bss_start {bss_start:#x} -- the heap and stack reservation is \
+             being written to disk",
+            holding.vaddr + holding.filesz
         );
     }
 }
