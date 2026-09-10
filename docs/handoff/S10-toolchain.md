@@ -649,3 +649,24 @@ host-loadability, round-trip and listing-fidelity coverage on every run for no b
   the `--no-relax` flag and the address-preservation rule are load-bearing from here on.
 - **`transcript_tags` now has 21 entries.** Later stages append; they never renumber, and
   they never reuse a tag across message kinds.
+- **Whether to keep committing the `objdump` listings is undecided, deliberately.**
+  `crates/loader/tests/vectors/{fib,rvc-dense,amm}.objdump.txt` are 12,715 lines
+  between them, which was 52% of S10's pull request by line count and made that
+  PR hard to review for reasons that had nothing to do with its content. They are
+  committed so `tests/differential.rs` has a hermetic oracle pinned to the same
+  LLVM as the compiler — regenerating them is `cargo run -p kat-gen -- loader`
+  and the digests are pinned in `tests/common/mod.rs`, so a hand-edited listing
+  fails the build.
+
+  The alternative is to generate them during the test run: CI already installs
+  `llvm-tools` from `rust-toolchain.toml`, so the disassembler is present. That
+  would permanently halve diffs of this shape, at the price of making the
+  differential suite depend on an external binary at test time rather than on a
+  file in the repository, and of reversing a choice S10 made on purpose.
+
+  Neither option is obviously right and nothing here forces the question, so it
+  is recorded rather than answered. A stage that adds another disassembled guest
+  should decide it first — the cost is per-guest and it compounds. If the answer
+  is "generate at test time", note that `synthetic_elfs.txt` and the `.elf`
+  fixtures themselves are a separate question: those are inputs, not derivations,
+  and they have to stay committed.
