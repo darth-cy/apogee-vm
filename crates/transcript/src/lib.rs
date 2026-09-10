@@ -382,3 +382,46 @@ impl<'de> serde::Deserialize<'de> for TranscriptSnapshot {
         })
     }
 }
+
+// ---------------------------------------------------------------------------
+// The public I/O digest.
+// ---------------------------------------------------------------------------
+
+/// The single `Fr` that binds a guest's fd 0 and fd 1 byte streams.
+///
+/// This is the value the statement-binding order absorbs as "public I/O
+/// digest". Frozen at S10; later stages recompute it and never redefine it.
+/// `docs/spec/ecall-abi.md` section 6 is normative, and it is the same recipe
+/// the typed layer already runs:
+///
+/// ```text
+///   input tag, input byte length, input limbs,
+///   output tag, output byte length, output limbs,   then squeeze once
+/// ```
+///
+/// Each stream is packed 31 bytes at a time into little-endian `Fr` limbs with
+/// the final partial limb zero-extended, which is exactly
+/// [`Transcript::append_bytes`]'s frozen encoding — so this function is two
+/// typed messages and one raw squeeze, in a sponge of its own, the way
+/// `sumcheck::witness_digest` and `pcs::accumulator_digest` are built. The
+/// squeeze is a raw [`Transcript::sample`], not a challenge, because a
+/// challenge under one of these tags would be one tag in two kinds.
+///
+/// Injectivity, which is what makes this a binding commitment to the pair: the
+/// two tags are distinct constants and every limb is below `2^248`, so the
+/// absorbed stream parses back uniquely — read the tag, read the length, and
+/// the length says how many limbs follow. An empty stream contributes its tag
+/// and a zero length and no limbs. Appending a zero byte to a stream changes
+/// its length, and swapping two unequal streams swaps their tags.
+pub fn io_digest(public_input: &[u8], public_output: &[u8]) -> Fr {
+    let mut sponge = Transcript::new();
+    sponge.append_bytes(
+        constants::transcript_tags::PUBLIC_INPUT_STREAM,
+        public_input,
+    );
+    sponge.append_bytes(
+        constants::transcript_tags::PUBLIC_OUTPUT_STREAM,
+        public_output,
+    );
+    sponge.sample()
+}

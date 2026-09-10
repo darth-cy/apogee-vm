@@ -1,0 +1,22 @@
+# `guest-sdk` is deliberately NOT a member of the root workspace.
+#
+# It defines `#[panic_handler]` and `#[global_allocator]`, which are lang items
+# a host build cannot link twice, and it only ever compiles for
+# `riscv32imac-unknown-none-elf`. Keeping it out means `cargo test --workspace`
+# never tries to build a host test harness for it. `tools/transcript-ref` sits
+# outside the workspace for its own (different) reason.
+#
+# The toolchain still comes from the repository root's `rust-toolchain.toml`:
+# rustup walks up from the working directory, so there is exactly one pin.
+[workspace]
+
+[package]
+name = "guest-sdk"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# The one dependency, and the reason it exists: every ecall number and range
+# boundary has a single source, and this is it.
+constants = { path = "../constants" }

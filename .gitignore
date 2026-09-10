@@ -1,4 +1,6 @@
 /target
 .DS_Store
 /tools/transcript-ref/target
+/crates/guest-sdk/target
+/guests/target
 /assets
