@@ -58,7 +58,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
-cargo test --workspace                      # 388 tests as of S10
+cargo test --workspace                      # 387 tests as of S10; 5 more are #[ignore]d
 cargo build -p field -p constants -p transcript -p poly -p sumcheck --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
@@ -86,8 +86,18 @@ does not name a version anywhere, so it cannot drift from that pin. `llvm-tools`
 those components: `kat-gen -- loader` disassembles the committed guest ELFs with it, so
 the disassembler is pinned to the same LLVM as the compiler.
 
-`qemu-riscv32` runs the guests, and is the only executor before S12. It is Linux-only, so
-`crates/loader/tests/qemu.rs` prints why and returns on macOS; CI installs `qemu-user`.
+`qemu-riscv32` runs the guests, and is the only executor before S12. It is user-mode
+emulation, so it is Linux-only and no macOS build of it exists. `crates/loader/tests/qemu.rs`
+is therefore `#[ignore]`d and CI does not gate on it:
+
+```
+cargo test -p loader --test qemu -- --ignored        # a Linux host with qemu-user
+cargo test -p loader --test layout -- --ignored      # after editing link.ld
+```
+
+What that suite would have caught about the *image* is covered by `crates/loader/tests/
+layout.rs`, which reads the program headers and runs everywhere. What stays uncovered is
+execution itself. `.github/workflows/ci.yml` carries the two steps that would gate on it.
 
 ## The rules that bite most often
 - **Concrete types.** `Fr` is a struct. There is no `F: Field`, and there never will be.
@@ -159,6 +169,15 @@ the disassembler is pinned to the same LLVM as the compiler.
   SRS was dropped on instruction, so the master's statement-binding item `SRS digest`
   has no implementation and nothing binds a proof to a particular SRS. Read
   `docs/spec/srs.md` §4 before building statement binding.
+- **A guest ELF must satisfy two loaders, not one.** The zkVM makes the whole RAM window
+  addressable by construction, so `crates/loader` only ever reads `p_vaddr` and `p_memsz`.
+  A *host* loader — `qemu-riscv32`, the only executor before S12 — maps just the `PT_LOAD`s
+  the headers declare, page by page, at the declared permissions. So `link.ld` reserves
+  `__heap_start .. __stack_top` as one writable `NOBITS` segment reaching the top of RAM,
+  and page-aligns every section: an undeclared stack is unmapped memory whose first push
+  faults, and two segments sharing a page take the second mapping's permissions for all of
+  it. S10 shipped both bugs and QEMU is what found them. `docs/spec/ecall-abi.md` §7.1;
+  `crates/loader/tests/layout.rs` pins it without needing an emulator.
 - **Addresses are never compacted.** RVC expansion changes representation, not layout: a
   `c.addi` at `0x1002` stays at `0x1002` and occupies two bytes. `ProgramImage.slots` is
   therefore pc/2-indexed, and `Slot::Instruction`'s `compressed` flag *is* the

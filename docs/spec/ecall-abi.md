@@ -198,6 +198,29 @@ Guests link with `--no-relax`. Linker relaxation rewrites instruction sequences
 and shifts every later address, and S11's program identity is a function of
 those addresses.
 
+### 7.1 The segment layout, and why it is a normative part of this map
+
+The zkVM executor makes the whole window addressable by construction: it has no
+pages and no permissions, so the map above is the entire story for it. A host
+program loader — `qemu-riscv32`, which is the only executor before S12, or Linux
+itself — is narrower. It maps exactly the `PT_LOAD` segments the program headers
+declare, page by page, at the declared permissions, and nothing else in the
+address space exists at all. Two rules follow, and both are load-bearing:
+
+- **Every writable byte a guest can touch is declared.** The heap and the stack
+  grow toward each other between `__heap_start` and `__stack_top`, so the linker
+  script reserves that whole span as one writable `NOBITS` segment reaching the
+  top of the window. Undeclared, it is unmapped memory under a host loader and
+  the guest's first stack write dies on a signal before `main` runs.
+- **No two segments share a page.** Each `PT_LOAD` is mapped independently, so a
+  shared page takes the second mapping's permissions for all of it: an unaligned
+  `.rodata` strips execute from the tail of `.text`, and zero fill landing on a
+  read-only page is refused outright. `.text`, `.rodata`, `.data` and `.bss` are
+  therefore each page-aligned, which costs three pages of address space.
+
+`crates/loader/tests/layout.rs` holds the image to both rules by reading the
+program headers, and needs neither a cross-compiler nor an emulator to do it.
+
 ## 8. The guest-sdk surface
 
 ```rust

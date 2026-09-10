@@ -194,9 +194,13 @@ the top of a range and nowhere else.
 
 ## Verification performed
 
-388 workspace tests, green in debug and release (341 from S09, unchanged; 47 new). `fmt`
-and `clippy -D warnings` are clean across **all four** workspaces — the root one, the
-oracle, `crates/guest-sdk` and `guests/` — with no `#[allow]` added anywhere.
+387 workspace tests, green in debug and release, plus 5 `#[ignore]`d (341 from S09,
+unchanged). `fmt` and `clippy -D warnings` are clean across **all four** workspaces — the
+root one, the oracle, `crates/guest-sdk` and `guests/` — with no `#[allow]` added anywhere.
+
+**Acceptances 3 and 8 are not verified on this machine and never were**; see "The defect
+CI found" below. The four `tests/qemu.rs` cases that carry them are `#[ignore]`d, because
+user-mode QEMU is Linux-only and no macOS build of it exists.
 
 - **Acceptance 1** — `cd guests/fib && cargo build --target riscv32imac-unknown-none-elf`,
   no other flags, on stock stable. A CI step runs exactly that.
@@ -204,7 +208,7 @@ oracle, `crates/guest-sdk` and `guests/` — with no `#[allow]` added anywhere.
   guests built twice into two fresh target directories, SHA-256 compared. It is a test
   rather than a CI script so it runs wherever `cargo test` does. See the deviation below
   on what it does *not* claim.
-- **Acceptance 3** — `tests/qemu.rs::fib_computes_the_committed_value`: fib under
+- **Acceptance 3** (`#[ignore]`d; Linux only) — `tests/qemu.rs::fib_computes_the_committed_value`: fib under
   `qemu-riscv32`, fd 0 from the committed record, fd 1 checked against the host-computed
   value.
 - **Acceptance 4** — `tests/differential.rs::objdump_agrees_instruction_for_instruction`
@@ -224,7 +228,7 @@ oracle, `crates/guest-sdk` and `guests/` — with no `#[allow]` added anywhere.
   the two errors differ, so neither is standing in for the other.
 - **Acceptance 7** — `tests/image.rs::loading_twice_serializes_identically` for all three
   ELFs, plus a postcard round trip and re-serialization check.
-- **Acceptance 8** — `tests/qemu.rs::echo_exercises_every_shim`: 100 bytes through fd 0 to
+- **Acceptance 8** (`#[ignore]`d; Linux only) — `tests/qemu.rs::echo_exercises_every_shim`: 100 bytes through fd 0 to
   fd 1 byte for byte (crossing the guest's 64-byte buffer, so both the full-read and
   short-read paths run), a hint arriving on fd 3 and staying off fd 1, and the precompile
   number answering `-ENOSYS` and falling back. The fallback is checked to have produced
@@ -319,6 +323,67 @@ two documentation tables had gone stale.
 Separately, and before the review, the same adversarial question found the one that would
 have hurt most: an untrusted ELF could size the slot vector through `p_memsz`. That is the
 RAM-window check recorded below.
+
+## The defect CI found, and what now catches it locally
+
+The four `tests/qemu.rs` cases failed on `ubuntu-latest` — the first machine ever to run
+them, since QEMU user-mode does not exist on macOS. They were not failing for a platform
+reason. **The guest images were genuinely broken**, in a way every other suite in this
+stage was structurally unable to see, and QEMU earned its keep on its first outing.
+
+`crates/loader` reads an ELF the way the zkVM will: `p_vaddr` and `p_memsz` into a flat
+RAM window where every address exists by construction. A *host* program loader maps only
+the `PT_LOAD`s the headers declare, page by page, at the declared permissions. The linker
+script satisfied the first reader and not the second, twice over:
+
+1. **The stack and the heap were never declared.** `__stack_top` was `ORIGIN + LENGTH`
+   and `__heap_start` sat just above `.bss`, but the highest address any `PT_LOAD` covered
+   was the end of `.rodata` — `0x1240C` in fib, against a stack at `0x10000000`. Under
+   QEMU both are unmapped: crt0 set `sp`, called `main`, and `main`'s prologue store
+   killed the process on a signal before a single guest instruction ran. fib, the panic
+   case and rvc-dense all died this way, with exit status `None` and an empty fd 2 — which
+   is why the failure looked so much like an environment problem.
+2. **Zero fill shared a page with read-only data.** echo's four-byte `.bss` began at
+   `0x1B0A8`, on the same page as the tail of `.rodata`. `qemu-riscv32` refused the image
+   outright: `PT_LOAD with bss overlapping non-writable page`. A third instance of the
+   same rule was latent and would have bitten later: `.text` and `.rodata` shared a page
+   too, so the second mapping would have stripped execute from the tail of the code.
+
+Both are fixed in `link.ld` — one writable `NOBITS` segment covering `__heap_start` to the
+top of RAM, and `ALIGN(4096)` on every output section — and `docs/spec/ecall-abi.md` §7.1
+makes the two rules normative rather than incidental. The cost is three pages of address
+space. The committed ELFs were rebuilt and every derived fixture regenerated, so all of
+the addresses in `fib.objdump.txt` and `rvc-dense.objdump.txt` moved.
+
+**`crates/loader/tests/layout.rs` is the new coverage, and it needs no emulator.** It
+reads the program headers directly — not through `load_elf`, which drops the flags and
+offsets these rules are about — and asserts that every segment is page-aligned with
+`p_offset ≡ p_vaddr`, that no two segments share a page, that zero fill only ever lands on
+a writable mapping, that `__heap_start` and `__stack_top - 1` are mapped writable, and
+that the entry point is mapped executable. `the_layout_that_failed_in_ci_is_rejected`
+transcribes the two failing sets of program headers and asserts each is caught, with the
+shipping layout as the positive control. Run against the old fixtures the suite reproduces
+the CI failure exactly, on macOS, in milliseconds.
+
+Two process lessons worth carrying forward:
+
+- **`cargo` does not track the linker script as a dependency.** Editing `link.ld` and
+  rebuilding relinks nothing and hands back the stale binary. Every measurement of a
+  script change has to start from `cargo clean`.
+- **A test that skips is not a test that passes.** `tests/qemu.rs` used to print a note
+  and return when QEMU was absent, so a full local run reported four passes for four
+  things that had not happened, and the stage shipped believing them covered. They are
+  now `#[ignore]`d, and `qemu()` panics rather than returning when the emulator is
+  missing: running them is an explicit request, and a request that cannot be honoured
+  should say so.
+
+**What is still unverified.** Execution itself — that fib computes the value it commits,
+that the shims move bytes over the right descriptors, that the panic handler reports and
+exits nonzero. `layout.rs` proves the image is loadable, not that it is correct. Nothing
+but an executor can close that, and until S12 builds one it takes a Linux host:
+`cargo test -p loader --test qemu -- --ignored`. `.github/workflows/ci.yml` carries the
+two commented steps that would gate on it; enabling them is a one-line decision once a
+Linux run confirms green.
 
 ## Deviations and notes for the reviewer
 

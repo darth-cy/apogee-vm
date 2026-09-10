@@ -77,6 +77,8 @@ Master rule 10 wants differential tests, and the loader has two independent ones
 RVC **HINT** encodings are the one gap: LLVM will neither assemble nor disassemble one, so
 `src/rvc.rs`'s unit tests pin those six expansions longhand instead.
 
+A third oracle, of a different kind, is the host program loader itself -- see below.
+
 ## Artifacts
 | Path | What |
 | --- | --- |
@@ -86,6 +88,10 @@ RVC **HINT** encodings are the one gap: LLVM will neither assemble nor disassemb
 | `tests/vectors/*.elf` (the rest) | hand-built ELFs, one per refusal |
 | `tests/vectors/synthetic_elfs.txt` | that index, with each file's digest |
 | `tests/vectors/fib_io.txt` | fib's fd 0 and fd 1 byte streams |
+
+The `.elf` digests are pinned in `tests/common/mod.rs`; `tests/layout.rs` then holds
+those same files to the host-loadability rules, so a refresh that regressed the linker
+script fails rather than being recorded.
 
 Refresh, in this order and deliberately:
 
@@ -103,10 +109,35 @@ is unstable in the pinned cargo). Two clean builds on one machine do agree, whic
 acceptance 2 asks and what `tests/reproducible.rs` proves. Everything derivable *from* the
 ELFs is regenerated and diffed.
 
+## Host loadability is a separate property, and `tests/layout.rs` owns it
+This crate reads an ELF the way the zkVM will: `p_vaddr` and `p_memsz` into a flat RAM
+window where every address exists by construction. A **host** program loader --
+`qemu-riscv32`, or Linux -- maps only the segments the program headers declare, page by
+page, at the declared permissions. An image can be perfectly loadable here and unrunnable
+there, and nothing else in this crate would notice.
+
+S10 shipped exactly that bug. `__stack_top` sat at the top of the RAM window with no
+segment declaring it, so the first stack write hit unmapped memory and the guest died on a
+signal before `main`; and `.bss` shared a page with `.rodata`, which QEMU refuses outright.
+`tests/layout.rs` checks the rules that were violated -- every segment page-aligned, no two
+sharing a page, zero fill only on writable pages, `__heap_start` and `__stack_top - 1`
+mapped writable, the entry point mapped executable -- and pins the two failing layouts as
+negative controls. It parses the headers itself rather than through `load_elf`, because
+`ProgramImage` drops the flags and offsets the rules are about and because a check routed
+through the crate under test is a second reading of one parser, not a witness against it.
+
+It needs no compiler and no emulator, so unlike `tests/qemu.rs` it runs everywhere.
+
 ## Notes
-- `tests/qemu.rs` executes the guests. `qemu-riscv32` is user-mode emulation and exists on
-  Linux hosts only, so those tests print why and return on macOS; CI installs `qemu-user`
-  and runs them. They build their guest from source rather than reading the fixture, so
-  behaviour is always checked against the current `guests/`.
-- `tests/reproducible.rs` and `tests/qemu.rs` shell out to `cargo`. Each run gets its own
-  target directory under the system temp dir, because the test harness is threaded.
+- **`tests/qemu.rs` is `#[ignore]`d.** `qemu-riscv32` is user-mode emulation, built for
+  Linux hosts only -- there is no macOS build to install, so on a developer machine these
+  cannot run at all. They used to print why and return, which reported a pass for work that
+  did not happen; now they are ignored and `qemu()` panics when the emulator is missing, so
+  there is no path on which they pass without executing. Run them with
+  `cargo test -p loader --test qemu -- --ignored` on a Linux host with `qemu-user`.
+  CI does not gate on them; `.github/workflows/ci.yml` carries the two steps that would.
+  They build their guest from source rather than reading the fixture, so behaviour is
+  always checked against the current `guests/`.
+- `tests/reproducible.rs`, `tests/qemu.rs` and `tests/layout.rs`'s ignored case shell out to
+  `cargo`. Each run gets its own target directory under the system temp dir, because the
+  test harness is threaded.

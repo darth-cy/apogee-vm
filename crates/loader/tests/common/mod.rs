@@ -29,23 +29,23 @@ use test_support::{sha256, to_hex};
 pub const PINS: [(&str, &str); 6] = [
     (
         "fib.elf",
-        "51857775378131ce18ed6938695e85ba4ba913c199de8aef20c4252af49f54e0",
+        "d1354939aada0d9ca2ea4b1a026e8fe1e82360021d1dbb42633b845f12c956ee",
     ),
     (
         "echo.elf",
-        "1dea240a6ea089075761b088ad25d3e67a94a6a28de71319200e22081881c4e9",
+        "541b755f49a7207c2e7b8a821968269bb63ff1f6dd35ff125732edc107327354",
     ),
     (
         "rvc-dense.elf",
-        "8aac18798046a37e3d21fa73024165ac804a246672e57501d10e1b8ada68c7cd",
+        "b5a2c504f6c8a1b85a59ec146df718756e004052cfef5d04a96823b32ff07a47",
     ),
     (
         "fib.objdump.txt",
-        "050e9d516cd7284fa5335e2dc0ec78feaa4a907c2da6ab88c1d0adeaeaa411e7",
+        "872301dfb860aa44597b94a9f28b2d725c9275b59a6cfe9b12bd9356331710c3",
     ),
     (
         "rvc-dense.objdump.txt",
-        "1e94036501f7c075ee279483dd5eb2394ce505aaf0a73212300c0913aa5053e2",
+        "6f9f51ee9407354c705ca4a5cbf8d4e169edd11cc51d6b4e98cfcadf9aee9eda",
     ),
     (
         "rvc-dense.nm.txt",

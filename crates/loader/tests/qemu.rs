@@ -9,12 +9,30 @@
 //! committed ELFs are loader-differential artifacts and nothing here depends on
 //! them being fresh.
 //!
-//! # When QEMU is absent
+//! # Why every test here is `#[ignore]`d
 //!
-//! `qemu-riscv32` is user-mode emulation, which is built on Linux hosts only;
-//! it does not exist on macOS. These tests print why and return on a machine
-//! without it, the way `crates/srs`'s do without the ceremony file. CI runs on
-//! `ubuntu-latest` with `qemu-user` installed, so they are not optional there.
+//! `qemu-riscv32` is *user-mode* emulation: it translates Linux syscalls for a
+//! foreign architecture, so it is built for Linux hosts only and no macOS build
+//! of it exists -- Homebrew's `qemu` ships the system emulators and no
+//! `linux-user` targets at all. There is therefore no arrangement under which
+//! these run on a macOS developer machine, and a suite that silently passes by
+//! doing nothing is worse than one that is visibly not run: it reads as
+//! coverage in the summary line. So they are `#[ignore]`d, and [`qemu`] panics
+//! rather than returning when the emulator is missing -- running them is now an
+//! explicit request, and a request that cannot be honoured should say so.
+//!
+//! ```text
+//! cargo test -p loader --test qemu -- --ignored    # a Linux host with qemu-user
+//! ```
+//!
+//! **What still covers this ground without an emulator.** `tests/layout.rs`
+//! checks the property whose absence broke these four tests in CI -- that the
+//! image a host program loader is handed is one it can actually map and run --
+//! by reading the program headers directly. That runs everywhere. What is left
+//! uncovered here is execution itself: that fib computes the value it commits,
+//! that the shims move bytes over the right descriptors, and that the panic
+//! handler reports and exits nonzero. Nothing but an executor can witness those,
+//! and until S12 builds one, QEMU is it.
 
 mod common;
 
@@ -28,8 +46,9 @@ use test_support::to_hex;
 
 /// Acceptance 3: fib reads `n` from fd 0 and writes `fib(n)` to fd 1.
 #[test]
+#[ignore = "needs a Linux host with qemu-user; run with --ignored"]
 fn fib_computes_the_committed_value() {
-    let Some(qemu) = qemu() else { return };
+    let qemu = qemu();
 
     let record = common::rows("fib_io.txt");
     let field = |key: &str| {
@@ -63,8 +82,9 @@ fn fib_computes_the_committed_value() {
 /// fib asserts that fd 0 carried four bytes, so an empty input is the shortest
 /// path to a real guest panic.
 #[test]
+#[ignore = "needs a Linux host with qemu-user; run with --ignored"]
 fn a_panicking_guest_reports_and_exits_nonzero() {
-    let Some(qemu) = qemu() else { return };
+    let qemu = qemu();
 
     let run = execute(&qemu, "fib-panic", "fib", &[], None);
     assert!(
@@ -86,8 +106,9 @@ fn a_panicking_guest_reports_and_exits_nonzero() {
 /// Acceptance 8: `read_input`, `commit` and `hint` over fds 0, 1 and 3, and a
 /// precompile number that answers `-ENOSYS` and falls back.
 #[test]
+#[ignore = "needs a Linux host with qemu-user; run with --ignored"]
 fn echo_exercises_every_shim() {
-    let Some(qemu) = qemu() else { return };
+    let qemu = qemu();
 
     // 100 bytes: more than one 64-byte read, and not a multiple of it, so both
     // the full-buffer and the short-read paths run.
@@ -142,8 +163,9 @@ fn echo_exercises_every_shim() {
 /// uncompressed twin agree, and the paired regions are the sizes the loader
 /// tests read them at.
 #[test]
+#[ignore = "needs a Linux host with qemu-user; run with --ignored"]
 fn the_rvc_fixture_runs() {
-    let Some(qemu) = qemu() else { return };
+    let qemu = qemu();
 
     let run = execute(&qemu, "rvc", "rvc-dense", &7u32.to_le_bytes(), None);
     assert_eq!(
@@ -243,8 +265,12 @@ fn execute(qemu: &str, tag: &str, name: &str, stdin: &[u8], hint: Option<&[u8]>)
     }
 }
 
-/// `qemu-riscv32`, if this machine has it.
-fn qemu() -> Option<String> {
+/// The user-mode emulator to run the guests under.
+///
+/// Panics when it is absent. These tests are `#[ignore]`d, so reaching this
+/// function at all means someone asked for them by name; answering that request
+/// with a silent pass would report coverage that did not happen.
+fn qemu() -> String {
     for name in ["qemu-riscv32", "qemu-riscv32-static"] {
         if Command::new(name)
             .arg("--version")
@@ -253,14 +279,15 @@ fn qemu() -> Option<String> {
             .status()
             .is_ok_and(|s| s.success())
         {
-            return Some(name.to_string());
+            return name.to_string();
         }
     }
-    println!(
-        "qemu-riscv32 is not on PATH, so the guests were not executed. \
-         User-mode QEMU is Linux-only; CI installs qemu-user and runs these. \
+    panic!(
+        "qemu-riscv32 is not on PATH, so the guests cannot be executed. \
+         User-mode QEMU is Linux-only -- on macOS there is no build of it to \
+         install. Run these on a Linux host with qemu-user, or rely on \
+         tests/layout.rs, which checks host loadability without an emulator. \
          (Looked in {:?}.)",
         std::env::var("PATH").unwrap_or_default()
-    );
-    None
+    )
 }

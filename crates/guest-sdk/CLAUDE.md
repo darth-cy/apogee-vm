@@ -34,6 +34,17 @@ pub fn poseidon2_permute(state: &mut [u8; 96]) -> bool;   // false on -ENOSYS
 - **`link.ld` and its four symbols** — `__bss_start`, `__bss_end`, `__heap_start`,
   `__stack_top` — are frozen. `_start` sits in `.text._start` so the linker places it at
   `ORIGIN(RAM)`.
+- **The script must produce an image a *host* loader can map, not just one the zkVM can.**
+  The zkVM makes the whole RAM window addressable by construction; `qemu-riscv32` maps only
+  the `PT_LOAD`s the headers declare, page by page, at the declared permissions. So the
+  script reserves `__heap_start .. __stack_top` as one writable `NOBITS` segment reaching
+  the top of RAM — undeclared, the stack is unmapped and the first push faults — and
+  page-aligns `.text`, `.rodata`, `.data` and `.bss`, because two segments on one page take
+  the second mapping's permissions for all of it. Both rules were violated in the layout
+  S10 first shipped, and `crates/loader/tests/layout.rs` now pins them.
+  `docs/spec/ecall-abi.md` §7.1 is normative.
+- **Cargo does not track `link.ld` as a dependency.** Editing it and rebuilding relinks
+  nothing; the stale binary is what you get. `cargo clean` first, or trust nothing.
 - **`.bss` is zeroed byte by byte**, because `__bss_end` carries no alignment promise, and
   it is zeroed at all because the same binary must run under QEMU, where memory does not
   start zeroed.
