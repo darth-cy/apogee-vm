@@ -9,13 +9,15 @@ members = [
     "crates/sumcheck",
     "crates/srs",
     "crates/pcs",
+    "crates/loader",
     "tools/kat-gen",
     "tools/bench",
     "tools/test-support",
 ]
 
-# `tools/transcript-ref` is its own workspace: see the comment in its manifest.
-exclude = ["tools/transcript-ref"]
+# Excluded, each for its own reason: `tools/transcript-ref` and `crates/guest-sdk`
+# say why in their manifests, and `guests/` is the guest workspace.
+exclude = ["tools/transcript-ref", "crates/guest-sdk", "guests"]
 
 [workspace.package]
 version = "0.1.0"
@@ -31,6 +33,7 @@ poly = { path = "crates/poly" }
 sumcheck = { path = "crates/sumcheck" }
 srs = { path = "crates/srs" }
 pcs = { path = "crates/pcs" }
+loader = { path = "crates/loader" }
 
 # Test-only, and a dev-dependency everywhere it appears: SHA-256 for pinning
 # committed fixtures, and the hex codec those files are written in.

@@ -1,0 +1,13 @@
+[package]
+name = "echo"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+guest-sdk.workspace = true
+# The software twin of the one precompile number S10 assigns. Linking it here
+# is the point: it makes `poseidon2_permute`'s fallback the real function rather
+# than a stand-in, and it proves the S02 crate compiles and runs on RV32.
+transcript = { path = "../../crates/transcript" }
+field = { path = "../../crates/field" }

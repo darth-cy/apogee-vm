@@ -1,0 +1,18 @@
+[package]
+name = "loader"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The frozen guest memory map: a PT_LOAD outside it is refused.
+constants.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+# The public I/O digest lives in `transcript`; the fib fixture's fd 0/1 bytes
+# are here, so the test that digests them is here too.
+transcript.workspace = true
+field.workspace = true
+postcard.workspace = true
+test-support.workspace = true

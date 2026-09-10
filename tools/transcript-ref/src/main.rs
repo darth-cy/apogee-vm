@@ -9,10 +9,11 @@
 //! the byte encoding — without ever touching `crates/transcript`. Everything the
 //! repository's tests assert about the transcript is produced here.
 //!
-//! Two files are written, both under `crates/transcript/tests/vectors/`:
+//! Three files are written, all under `crates/transcript/tests/vectors/`:
 //!
 //! * `poseidon2_perm.txt`   — permutation known-answer vectors.
 //! * `transcript_cases.txt` — replayable transcript scripts with expected output.
+//! * `io_digest.txt`        — the public I/O digest, `docs/spec/ecall-abi.md` §6.
 //!
 //! Deterministic: same revisions in, byte-identical files out, so a refresh is
 //! run-and-diff. CI runs exactly that.
@@ -63,6 +64,8 @@ fn tag(name: &str) -> u64 {
         "SUMCHECK_CHALLENGE" => 5,
         "EVALUATION_CLAIM" => 6,
         "PCS_OPENING" => 7,
+        "PUBLIC_INPUT_STREAM" => 20,
+        "PUBLIC_OUTPUT_STREAM" => 21,
         other => panic!("unknown transcript tag name: {other}"),
     }
 }
@@ -596,7 +599,81 @@ fn write_cases() {
     write("transcript_cases.txt", out);
 }
 
+// ---------------------------------------------------------------------------
+// The public I/O digest.
+//
+// S10 freezes it as exactly two typed byte messages and one raw squeeze, in a
+// sponge of its own: `docs/spec/ecall-abi.md` section 6. Transcribed here from
+// that text, over the reference duplex, so the committed values do not come
+// from `crates/transcript`.
+// ---------------------------------------------------------------------------
+
+fn io_digest(input: &[u8], output: &[u8]) -> Bn254 {
+    let mut d = Duplex::new();
+    d.append_bytes("PUBLIC_INPUT_STREAM", input);
+    d.append_bytes("PUBLIC_OUTPUT_STREAM", output);
+    d.sample()
+}
+
+fn write_io_digest() {
+    let mut out =
+        provenance("io_digest v1 -- the public I/O digest over the fd 0 and fd 1 streams");
+    out.push_str(
+        "# io <name> <input|-> <output|-> <digest>\n\
+         #\n\
+         # Streams are lowercase hex, `-` for empty. The digest is one canonical\n\
+         # little-endian Fr.\n\
+         #\n\
+         # The cases come in three groups: the four shapes acceptance 10 names,\n\
+         # the chunk boundaries either side of 31 bytes, and three pairs that\n\
+         # differ in exactly one way -- swapped streams, an appended zero byte,\n\
+         # one flipped bit -- so the file itself shows each digest moving.\n\n",
+    );
+
+    let ascending = |n: usize| -> Vec<u8> { (0..n).map(|i| (i as u8).wrapping_mul(31)).collect() };
+    let a = b"apogee".to_vec();
+    let b = b"tenacity".to_vec();
+    let mut flipped = ascending(40);
+    flipped[17] ^= 0x08;
+
+    let cases: Vec<(&str, Vec<u8>, Vec<u8>)> = vec![
+        ("empty_empty", vec![], vec![]),
+        ("input_only", a.clone(), vec![]),
+        ("output_only", vec![], a.clone()),
+        ("one_byte_each", vec![0x00], vec![0x00]),
+        ("boundary_30", ascending(30), vec![]),
+        ("boundary_31", ascending(31), vec![]),
+        ("boundary_32", ascending(32), vec![]),
+        ("multi_block", ascending(100), ascending(70)),
+        ("swap_a", a.clone(), b.clone()),
+        ("swap_b", b.clone(), a.clone()),
+        ("append_zero_a", a.clone(), b.clone()),
+        ("append_zero_b", [a.clone(), vec![0x00]].concat(), b.clone()),
+        ("flip_a", ascending(40), b.clone()),
+        ("flip_b", flipped, b.clone()),
+    ];
+
+    for (name, input, output) in &cases {
+        let show = |bytes: &[u8]| {
+            if bytes.is_empty() {
+                "-".to_string()
+            } else {
+                hex(bytes)
+            }
+        };
+        let _ = writeln!(
+            out,
+            "io {name} {} {} {}",
+            show(input),
+            show(output),
+            hex_fr(io_digest(input, output))
+        );
+    }
+    write("io_digest.txt", out);
+}
+
 fn main() {
     write_permutations();
     write_cases();
+    write_io_digest();
 }

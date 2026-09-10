@@ -413,6 +413,8 @@ fn tag_table_is_well_formed() {
         "MERCURY_BATCH",
         "ACCUMULATOR_DIGEST",
         "ACCUMULATOR_MERGE",
+        "PUBLIC_INPUT_STREAM",
+        "PUBLIC_OUTPUT_STREAM",
     ];
     let values: Vec<u64> = names
         .iter()

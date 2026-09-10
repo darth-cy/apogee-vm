@@ -196,6 +196,18 @@ uninitialised value can never be a valid message.
 | `MERCURY_BATCH` | 17 | challenge |
 | `ACCUMULATOR_DIGEST` | 18 | scalars |
 | `ACCUMULATOR_MERGE` | 19 | challenge |
+| `PUBLIC_INPUT_STREAM` | 20 | bytes |
+| `PUBLIC_OUTPUT_STREAM` | 21 | bytes |
+
+Tags 20 and 21 are S10's, and they exist as a pair. They are the two domain tags
+of the **public I/O digest**: `transcript::io_digest` absorbs the guest's fd 0
+stream under the first and its fd 1 stream under the second, in a sponge of its
+own, and squeezes once. Two tags rather than one is exactly what makes swapping
+two unequal streams change the digest. Both frame byte messages, so the byte
+encoding of §10 supplies the packing and the byte length supplies the length,
+which is what keeps `x` and `x || 0x00` apart. The squeeze that ends that sponge
+is a raw `sample`, not a `challenge_scalar`, for the reason `ACCUMULATOR_DIGEST`'s
+is. `docs/spec/ecall-abi.md` §6 is normative for the recipe.
 
 Tags 17 to 19 are S09's. `MERCURY_BATCH` is the challenge that batches `k`
 column commitments opened at one point into a single Mercury instance, drawn

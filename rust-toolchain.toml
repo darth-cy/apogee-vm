@@ -2,5 +2,9 @@
 # workspace is stable-only (no nightly, no unstable features).
 [toolchain]
 channel = "1.96.1"
-components = ["rustfmt", "clippy"]
+# `llvm-tools` supplies llvm-objdump and llvm-nm, which `kat-gen -- loader`
+# uses to produce the committed disassembly and symbol listings. Taking them
+# from the toolchain rather than from PATH is what pins the disassembler to the
+# same LLVM as the compiler, so a regeneration is reproducible.
+components = ["rustfmt", "clippy", "llvm-tools"]
 targets = ["riscv32imac-unknown-none-elf"]

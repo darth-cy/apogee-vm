@@ -659,4 +659,109 @@ pub mod transcript_tags {
     /// deterministic function of the entry list and nothing else.
     /// `docs/spec/accumulator.md` section 6.
     pub const ACCUMULATOR_MERGE: u64 = 19;
+
+    /// Bytes. The guest's fd 0 stream inside the public I/O digest's own
+    /// sponge. Absorbed first, before the output stream, which is what
+    /// domain-separates the two. `docs/spec/ecall-abi.md` section 6.
+    pub const PUBLIC_INPUT_STREAM: u64 = 20;
+
+    /// Bytes. The guest's fd 1 stream inside the public I/O digest's own
+    /// sponge, absorbed second. Distinct from [`PUBLIC_INPUT_STREAM`] so that
+    /// swapping two unequal streams changes the digest.
+    /// `docs/spec/ecall-abi.md` section 6.
+    pub const PUBLIC_OUTPUT_STREAM: u64 = 21;
+}
+
+/// The guest memory map, frozen at S10.
+///
+/// The one region a guest has. `crates/guest-sdk/link.ld` states the same two
+/// numbers for the linker, `docs/spec/ecall-abi.md` section 7 states them for a
+/// reader, and `crates/constants/tests/ecall_abi.rs` checks all three against
+/// each other — a memory map written down three times is a memory map that can
+/// disagree with itself.
+///
+/// `crates/loader` refuses a `PT_LOAD` segment that does not lie inside this
+/// window. Nothing outside it is addressable, so a program that wants to be
+/// there is not a program this VM can run — and enforcing it also bounds what
+/// a hostile ELF can make the loader allocate.
+pub mod guest_memory {
+    /// First addressable byte, and where `_start` is placed.
+    pub const RAM_ORIGIN: u32 = 0x0001_0000;
+
+    /// Length of the region. `RAM_ORIGIN + RAM_LENGTH` is the initial `sp`.
+    pub const RAM_LENGTH: u32 = 0x0FFF_0000;
+}
+
+/// The guest ecall ABI: syscall numbers, range boundaries and file
+/// descriptors, in one place forever.
+///
+/// **Append-only.** Once a program's identity is published its ABI is frozen.
+/// Redefining a number does not fail loudly — it quietly makes an old program
+/// compute something else — so numbers here are assigned once and never
+/// reused, exactly like `transcript_tags`.
+///
+/// An ecall follows the Linux RISC-V convention: number in `a7`, arguments in
+/// `a0`-`a5`, return in `a0`, errors as the negated errno. The standard subset
+/// keeps its Linux numbers so `qemu-riscv32` runs guests unmodified; the two
+/// non-Linux ranges sit above every Linux number and are disjoint from each
+/// other. `docs/spec/ecall-abi.md` is the normative table.
+pub mod ecall {
+    /// Linux `read`. zkVM meaning is per file descriptor: see [`FD_PUBLIC_INPUT`]
+    /// and [`FD_HINT`].
+    pub const READ: u32 = 63;
+
+    /// Linux `write`. zkVM meaning is per file descriptor: see
+    /// [`FD_PUBLIC_OUTPUT`] and [`FD_STDERR`].
+    pub const WRITE: u32 = 64;
+
+    /// Linux `exit`. `a0` is the exit status; a nonzero status is a failed
+    /// execution.
+    pub const EXIT: u32 = 93;
+
+    /// First number of the zkVM-specific host-call range, `0x0400..=0x04FF`.
+    ///
+    /// Reserved and empty at S10. Calls here are **nondeterministic prover
+    /// advice**: whatever the host returns is a value the prover chose, and it
+    /// binds nothing unless it is folded into the public I/O digest. Kept
+    /// disjoint from [`PRECOMPILE_FIRST`] precisely so a reviewer can tell the
+    /// two apart at a glance.
+    pub const ZKVM_IO_FIRST: u32 = 0x0400;
+
+    /// Last number of the zkVM-specific host-call range.
+    pub const ZKVM_IO_LAST: u32 = 0x04FF;
+
+    /// First number of the precompile range, `0x0500..=0x05FF`.
+    ///
+    /// A precompile is a **deterministic function of guest memory**, dispatched
+    /// by ecall with pointer arguments in `a0`-`a5` because its operands do not
+    /// fit in registers. Every precompile shim lands in this range.
+    pub const PRECOMPILE_FIRST: u32 = 0x0500;
+
+    /// Last number of the precompile range.
+    pub const PRECOMPILE_LAST: u32 = 0x05FF;
+
+    /// Poseidon2 permutation over a `[Fr; 3]` state, `a0` = state pointer.
+    ///
+    /// The one precompile number S10 assigns. No circuit implements it yet, so
+    /// every executor answers `-ENOSYS` and the caller runs its software path.
+    pub const PRECOMPILE_POSEIDON2: u32 = 0x0500;
+
+    /// Public input, committed: the fd 0 byte stream the public I/O digest
+    /// binds first.
+    pub const FD_PUBLIC_INPUT: u32 = 0;
+
+    /// Public output / journal, committed: the fd 1 byte stream the public I/O
+    /// digest binds second.
+    pub const FD_PUBLIC_OUTPUT: u32 = 1;
+
+    /// Diagnostics. Free-form, uncommitted, and ignored by the verifier.
+    pub const FD_STDERR: u32 = 2;
+
+    /// Private hint channel, uncommitted: nondeterministic prover advice. A
+    /// guest that lets a hint change its committed output has made the proof
+    /// meaningless, because the prover picks the hint.
+    pub const FD_HINT: u32 = 3;
+
+    /// Linux `ENOSYS`. An unimplemented number returns `-ENOSYS` in `a0`.
+    pub const ENOSYS: u32 = 38;
 }

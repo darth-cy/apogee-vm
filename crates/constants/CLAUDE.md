@@ -6,14 +6,19 @@ else. If a later stage needs a magic number that outlives one function, it belon
 here.
 
 ## Frozen invariants
-- **Zero logic, forever.** Constant items and doc comments only: no functions, no
-  `const fn`, no traits, no macros, no tests, no dependencies. A test that checks a
-  constant lives in the crate that consumes it (see `crates/field/tests/constants_check.rs`).
+- **Zero logic, forever.** `src/` holds constant items and doc comments only: no
+  functions, no `const fn`, no traits, no macros, no dependencies. A test that checks a
+  constant lives in the crate that consumes it (see
+  `crates/field/tests/constants_check.rs`).
+- **One exception, added at S10:** `tests/ecall_abi.rs`. `docs/spec/ecall-abi.md` *is* the
+  ABI, and acceptance 9 wants the document checked against the numbers rather than
+  maintained beside them. An integration test is a separate crate, so `src/` is still
+  `#![no_std]` with nothing in it but constants.
 - **`#![no_std]`, forever.** Guest-side code links this crate.
 - Changing any value here is a protocol-version change and must bump
   `PROTOCOL_VERSION`.
 
-## Contents as of S09
+## Contents as of S10
 | Item | Meaning |
 | --- | --- |
 | `PROTOCOL_VERSION: u32` | Placeholder, `0`. First item absorbed into every transcript. |
@@ -44,7 +49,9 @@ here.
 | `POSEIDON2_RC3_INITIAL: [[&str; 3]; 4]` | Round constants, 4 initial full rounds. |
 | `POSEIDON2_RC3_INTERNAL: [&str; 56]` | Round constants, 56 partial rounds, lane 0. |
 | `POSEIDON2_RC3_TERMINAL: [[&str; 3]; 4]` | Round constants, 4 terminal full rounds. |
-| `transcript_tags` | The frozen tag table: 19 tags as of S09, sequential from 1. |
+| `transcript_tags` | The frozen tag table: 21 tags as of S10, sequential from 1. |
+| `guest_memory` | The frozen guest memory map: `RAM_ORIGIN` and `RAM_LENGTH`. |
+| `ecall` | The guest ecall ABI: syscall numbers, range boundaries, file descriptors. |
 
 `FR_MODULUS_MINUS_TWO` is an additive extension beyond S01's enumerated list; it is a
 property of the modulus and belongs next to it. The same reasoning puts
@@ -87,4 +94,17 @@ textual conventions meet, since the dump is little-endian canonical bytes.
 Tags are sequential from 1, never renumbered, never reused, and `0` is not a tag. Every
 tag names exactly **one** message kind — scalars, bytes or a challenge — because the
 typed layer's `tag, length, payload` framing is only injective under that rule. See
-`docs/spec/transcript.md` section 8.
+`docs/spec/transcript.md` section 8. S10 added `PUBLIC_INPUT_STREAM` (20) and
+`PUBLIC_OUTPUT_STREAM` (21), both bytes: the two domain tags of the public I/O digest.
+
+The `ecall` module holds the guest syscall numbers, the two non-Linux range boundaries and
+the four file descriptors. It obeys the same rule as the tags, for a sharper reason:
+**once a program's identity is published its ABI is frozen**, and redefining a number does
+not fail loudly — it quietly makes an old program compute something else. The standard
+calls keep their Linux numbers (`READ` 63, `WRITE` 64, `EXIT` 93) so `qemu-riscv32` runs a
+guest unmodified. `ZKVM_IO_FIRST..=ZKVM_IO_LAST` is `0x0400..=0x04FF` and
+`PRECOMPILE_FIRST..=PRECOMPILE_LAST` is `0x0500..=0x05FF`; both sit above the whole Linux
+number space and are disjoint from each other, because a host call is nondeterministic
+prover advice and a precompile is a deterministic function of memory, and a reviewer has
+to tell them apart at a glance. `docs/spec/ecall-abi.md` is normative, and
+`tests/ecall_abi.rs` holds it to this module in both directions.

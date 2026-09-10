@@ -96,6 +96,8 @@ pub fn tag_by_name(name: &str) -> Result<Tag, String> {
         "MERCURY_BATCH" => Ok(transcript_tags::MERCURY_BATCH),
         "ACCUMULATOR_DIGEST" => Ok(transcript_tags::ACCUMULATOR_DIGEST),
         "ACCUMULATOR_MERGE" => Ok(transcript_tags::ACCUMULATOR_MERGE),
+        "PUBLIC_INPUT_STREAM" => Ok(transcript_tags::PUBLIC_INPUT_STREAM),
+        "PUBLIC_OUTPUT_STREAM" => Ok(transcript_tags::PUBLIC_OUTPUT_STREAM),
         other => Err(format!("unknown tag name {other}")),
     }
 }

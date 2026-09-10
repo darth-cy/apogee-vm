@@ -189,3 +189,35 @@ nothing pending just permutes again.
 
 **Snapshot** — a transcript's sponge state and both buffers, enough to resume the
 challenge stream exactly. The unit of master rule 9's archivable phase boundaries.
+
+**Guest** — a program proven by this VM: `no_std` Rust built for
+`riscv32imac-unknown-none-elf`, linking `crates/guest-sdk`. It runs unmodified under
+`qemu-riscv32`, which is what the Linux ecall numbers buy.
+
+**ecall** — the guest's one way out. Number in `a7`, arguments in `a0`–`a5`, result in
+`a0`, errors as a negated errno. `docs/spec/ecall-abi.md` is the table.
+
+**Precompile** — a deterministic function of guest memory, dispatched by an ecall in
+`0x0500..=0x05FF` with pointer arguments. A delegation circuit proves exactly that
+function. Distinct from a **zkVM host call** (`0x0400..=0x04FF`), whose result is
+nondeterministic prover advice. The two ranges are separate so a reviewer can tell them
+apart at a glance.
+
+**Hint** — bytes the guest reads from fd 3. Uncommitted prover advice: a shortcut to a
+value the guest then checks against something bound, never an input in its own right.
+
+**Public I/O digest** — the single `Fr` binding the guest's fd 0 and fd 1 byte streams,
+`transcript::io_digest`. Frozen at S10; the statement-binding order absorbs it.
+`docs/spec/ecall-abi.md` §6.
+
+**RVC expansion** — rewriting a 16-bit compressed instruction as the exact 32-bit
+instruction it abbreviates. A representation change only: addresses are preserved, never
+compacted, so a two-byte instruction still occupies two bytes.
+
+**ProgramImage** — a loaded program: sorted memory segments, the entry pc, and a
+pc/2-indexed slot vector. A deterministic function of the ELF bytes, and what S11 derives
+program identity from.
+
+**Slot** — one halfword of a `ProgramImage`: the start of an instruction, the second
+halfword of a 32-bit one, or not code at all. The three cases are distinguished rather
+than inferred.

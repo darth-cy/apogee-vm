@@ -1,0 +1,22 @@
+# The guest template config. Two settings and two linker flags, and nothing
+# that a guest author has to remember to type.
+[build]
+target = "riscv32imac-unknown-none-elf"
+
+[target.riscv32imac-unknown-none-elf]
+# `cargo run` executes a guest under user-mode QEMU. Guests use Linux syscall
+# numbers precisely so this works unmodified.
+runner = "qemu-riscv32"
+
+# `-T`  the frozen memory map, which also defines the symbols crt0 and the bump
+#       allocator reference. Resolved relative to the directory cargo runs the
+#       linker in, which is this workspace's root.
+# `--no-relax`  linker relaxation rewrites instruction sequences and shifts
+#       every later address. Program identity in S11 is a function of those
+#       addresses, so relaxation is off, permanently.
+rustflags = [
+    "-C",
+    "link-arg=-T../crates/guest-sdk/link.ld",
+    "-C",
+    "link-arg=--no-relax",
+]

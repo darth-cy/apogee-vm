@@ -18,15 +18,31 @@ jobs:
       - name: toolchain
         run: rustup show && cargo --version
 
+      # User-mode QEMU is the only executor S10 has: the guests run under it
+      # unmodified, which is why the ecall ABI uses Linux numbers. It is
+      # Linux-only, so `crates/loader/tests/qemu.rs` prints why and returns on a
+      # developer's macOS machine; here it must actually run.
+      - name: qemu-riscv32
+        run: sudo apt-get update && sudo apt-get install -y qemu-user
+
+      # Four workspaces, all gated. `crates/guest-sdk` and `guests/` are separate
+      # workspaces because they compile only for the guest target, and guest-sdk
+      # is the one crate in the repository permitted `unsafe` -- so it is the one
+      # that most needs the lints, not the one to leave outside them. Neither
+      # takes `--all-targets`: there is no `test` crate for a no_std target.
       - name: fmt
         run: |
           cargo fmt --all -- --check
           cargo fmt --manifest-path tools/transcript-ref/Cargo.toml --all -- --check
+          cargo fmt --manifest-path crates/guest-sdk/Cargo.toml --all -- --check
+          cargo fmt --manifest-path guests/Cargo.toml --all -- --check
 
       - name: clippy
         run: |
           cargo clippy --workspace --all-targets -- -D warnings
           cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
+          (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
+          (cd guests && cargo clippy --bins -- -D warnings)
 
       - name: test
         run: cargo test --workspace
@@ -34,6 +50,11 @@ jobs:
       # The crates the recursion guest links compile unchanged for the guest.
       - name: guest target builds
         run: cargo build -p field -p constants -p transcript -p poly -p sumcheck --target riscv32imac-unknown-none-elf
+
+      # Acceptance 1, typed out: from the guest's own directory, with no flags
+      # beyond the target, and everything else coming from the template config.
+      - name: a guest builds from the template config
+        run: cd guests/fib && cargo build --target riscv32imac-unknown-none-elf
 
       # Master rule 8: committed fixtures are regenerated and diffed, so a
       # silently edited vector file fails the build. `transcript-ref` is its own
@@ -50,8 +71,16 @@ jobs:
       # and runs in full here, and its `pcs` kat-gen group needs no asset. Only
       # one test in it -- the menu heights above 2^18, over real ceremony
       # bases -- needs the file and returns quietly without it.
+      #
+      # The `guests` group is likewise absent from a bare `cargo run -p kat-gen`,
+      # for a different reason: it rebuilds the guest ELFs, and a guest ELF is
+      # not byte-reproducible across machines -- rustc embeds absolute paths in
+      # panic-location strings and stable Rust cannot remap them. Two clean
+      # builds on one machine do agree, and `crates/loader/tests/reproducible.rs`
+      # proves it. The `loader` group, which regenerates everything derivable
+      # *from* those ELFs, does run and is diffed.
       - name: committed fixtures are reproducible
         run: |
           cargo run -p kat-gen
           cargo run --manifest-path tools/transcript-ref/Cargo.toml
-          git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/
+          git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/

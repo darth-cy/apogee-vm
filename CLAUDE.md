@@ -25,6 +25,10 @@ crates/
   srs/           snarkjs .ptau ingestion, the SRS archive, univariate KZG; std
   pcs/           Mercury commit/open/verify, RLC batching, deferred pairings
                  and the accumulator, plus the typed G1 absorption; std
+  loader/        ELF parsing, RVC expansion, ProgramImage; std
+  guest-sdk/     crt0, entry!, linker script, bump allocator, ecall shims; no_std,
+                 guest-only, and NOT a workspace member
+guests/          fib/, echo/, rvc-dense/ -- their own workspace; see guests/Cargo.toml
 assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 handoff
 tools/
   kat-gen/       regenerates the committed Fr, multilinear, curve, MSM, SRS and G1-absorption
@@ -48,16 +52,22 @@ run of these is a green CI run.
 ```
 cargo fmt --all -- --check
 cargo fmt --manifest-path tools/transcript-ref/Cargo.toml --all -- --check
+cargo fmt --manifest-path crates/guest-sdk/Cargo.toml --all -- --check
+cargo fmt --manifest-path guests/Cargo.toml --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
-cargo test --workspace                      # 341 tests as of S09
+(cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
+(cd guests && cargo clippy --bins -- -D warnings)
+cargo test --workspace                      # 388 tests as of S10
 cargo build -p field -p constants -p transcript -p poly -p sumcheck --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
-git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/
+cd guests/fib && cargo build --target riscv32imac-unknown-none-elf
+git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/
 -------------------------------------------------------------------------------
 cargo run -p kat-gen                        # refresh every fixture (manual, deliberate)
-cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs
+cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader
+cargo run -p kat-gen -- guests              # rebuild the guest ELFs; opt-in, one machine
 cargo run --manifest-path tools/transcript-ref/Cargo.toml   # ditto, transcript vectors
 cargo run --release -p bench                # every routine; internal numbers only
 cargo run --release -p bench -- --list      # the routines, and what each measures
@@ -67,8 +77,17 @@ cargo run --release -p bench -- <routine>   # just that one; setup is per-routin
 `tools/transcript-ref` is deliberately outside the cargo workspace, so it takes
 `--manifest-path` rather than `-p`. Its Plonky3 and `zkhash` dependencies would otherwise
 feature-unify `serde/std` into `crates/field` during `cargo test --workspace`.
+`crates/guest-sdk` and `guests/` are outside it for a different reason: they compile only
+for `riscv32imac-unknown-none-elf` and link a `#[panic_handler]`. Guests are built from
+their own directory, where `guests/.cargo/config.toml` supplies the target, the runner and
+the pinned linker flags.
 The toolchain, its components and the guest target come from `rust-toolchain.toml`. CI
-does not name a version anywhere, so it cannot drift from that pin.
+does not name a version anywhere, so it cannot drift from that pin. `llvm-tools` is one of
+those components: `kat-gen -- loader` disassembles the committed guest ELFs with it, so
+the disassembler is pinned to the same LLVM as the compiler.
+
+`qemu-riscv32` runs the guests, and is the only executor before S12. It is Linux-only, so
+`crates/loader/tests/qemu.rs` prints why and returns on macOS; CI installs `qemu-user`.
 
 ## The rules that bite most often
 - **Concrete types.** `Fr` is a struct. There is no `F: Field`, and there never will be.
@@ -140,6 +159,29 @@ does not name a version anywhere, so it cannot drift from that pin.
   SRS was dropped on instruction, so the master's statement-binding item `SRS digest`
   has no implementation and nothing binds a proof to a particular SRS. Read
   `docs/spec/srs.md` §4 before building statement binding.
+- **Addresses are never compacted.** RVC expansion changes representation, not layout: a
+  `c.addi` at `0x1002` stays at `0x1002` and occupies two bytes. `ProgramImage.slots` is
+  therefore pc/2-indexed, and `Slot::Instruction`'s `compressed` flag *is* the
+  instruction's length — the only thing that says whether the next pc is `pc + 2` or
+  `pc + 4`. Compacting would shift every later address and change S11's program identity
+  for a program that did not change.
+- **ecall numbers are append-only, forever.** Once a program's identity is published its
+  ABI is frozen, and redefining a number does not fail loudly — it quietly makes an old
+  program compute something else. One source: `constants::ecall`. The standard calls keep
+  their Linux numbers (read 63, write 64, exit 93) so `qemu-riscv32` runs a guest
+  unmodified; zkVM host calls take `0x0400..=0x04FF` and precompiles `0x0500..=0x05FF`,
+  disjoint because a host call is nondeterministic prover advice and a precompile is a
+  deterministic function of memory. fd 0 and fd 1 are committed, fd 2 is ignored, fd 3 is
+  advice. `docs/spec/ecall-abi.md` is the table and a test holds it to the constants.
+- **`io_digest` is frozen.** `transcript::io_digest(input, output)` is two `append_bytes`
+  messages under `PUBLIC_INPUT_STREAM` and `PUBLIC_OUTPUT_STREAM` and one raw `sample`, in
+  a sponge of its own. Later stages recompute it; nobody redefines it.
+- **A guest ELF is not byte-reproducible across machines**, and CI does not pretend
+  otherwise. rustc embeds absolute paths in the panic-location strings of every crate
+  outside the guest workspace and of `core`, and stable Rust cannot remap them. Two clean
+  builds on one machine do agree — that is acceptance 2 and a test proves it — so the
+  committed `.elf` fixtures are refreshed with `cargo run -p kat-gen -- guests` on one
+  machine, and only what is derivable *from* them is regenerated and diffed in CI.
 - **Own the crypto.** Runtime dependencies are limited to serialization, rayon, CLI and
   error handling. arkworks, Plonky3 and `zkhash` are reference oracles for tests and
   fixtures only, and never reachable from the prover, the verifier or a guest.
@@ -159,3 +201,4 @@ does not name a version anywhere, so it cannot drift from that pin.
 | S07 — Pippenger MSM + ptau ingestion + KZG | done | `docs/handoff/S07-msm-srs-kzg.md` |
 | S08 — Mercury I: single-polynomial commit/open/verify | done | `docs/handoff/S08-mercury-single.md` |
 | S09 — Mercury II: RLC batching, deferral, accumulator | done | `docs/handoff/S09-mercury-batching.md` |
+| S10 — Guest toolchain + SDK + loader | done | `docs/handoff/S10-toolchain.md` |
