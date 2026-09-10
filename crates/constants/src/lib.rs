@@ -640,4 +640,23 @@ pub mod transcript_tags {
     /// Challenge. The RLC that merges a verifier's two pairing relations into
     /// one. Drawn last, after every proof element is absorbed.
     pub const PAIRING_MERGE: u64 = 16;
+
+    /// Challenge. The RLC that batches `k` same-size column commitments opened
+    /// at one point into a single Mercury instance. Drawn after every
+    /// commitment and every claimed value is absorbed, and never before.
+    /// `docs/spec/mercury.md` section 11.
+    pub const MERCURY_BATCH: u64 = 17;
+
+    /// Scalars. The words of an accumulator entry list, absorbed by the
+    /// separate sponge that produces the accumulator digest. The squeeze that
+    /// ends that sponge is a raw `sample`, **not** a `challenge_scalar`, for
+    /// the same reason `WITNESS_DIGEST`'s is: a challenge under this tag would
+    /// be one tag in two kinds. `docs/spec/accumulator.md` section 5.
+    pub const ACCUMULATOR_DIGEST: u64 = 18;
+
+    /// Challenge. The RLC weight a discharge gives each deferred check, drawn
+    /// from a sponge seeded with the accumulator digest so that it is a
+    /// deterministic function of the entry list and nothing else.
+    /// `docs/spec/accumulator.md` section 6.
+    pub const ACCUMULATOR_MERGE: u64 = 19;
 }

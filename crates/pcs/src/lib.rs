@@ -25,27 +25,44 @@
 //! index, exactly as in [`poly::MultilinearPoly::evaluate`], and
 //! [`open`] returns the same value that method does.
 //!
+//! # Batching, and deferred pairings
+//!
+//! [`batch_open`] opens `k` same-size columns at **one** point as a single
+//! Mercury instance: the commitments and the claimed values are absorbed, a
+//! challenge `rho` is squeezed, and `cm* = sum rho^i cm_i` and
+//! `f* = sum rho^i f_i` go through one ordinary opening.
+//! `docs/spec/mercury.md` §11 is normative and carries the lemma.
+//!
+//! [`verify_deferred`] and [`batch_verify_deferred`] run the identical
+//! verification and, instead of executing the two pairings, emit their terms as
+//! [`AccumulatorEntry`] items. [`discharge`] spends a concatenated list of them
+//! with one MSM per side and one two-pairing check.
+//! `docs/spec/accumulator.md` is normative for that.
+//!
 //! # What this crate does not do
 //!
 //! No hiding, no zero knowledge: Mercury is not a hiding commitment and
-//! nothing here pretends otherwise. No batching across polynomials — that is
-//! S09's business, which reuses [`append_g1_list`] and the BDFG20 pins in
-//! `docs/spec/mercury.md` §6.
+//! nothing here pretends otherwise.
 
 use rayon::prelude::*;
 
 use constants::{transcript_tags as tags, FR_TWO_ADICITY, G1_INFINITY_SENTINEL};
 use curve::msm::{msm, msm_small_u32};
-use curve::pairing::pairing_check;
-use curve::{G1Affine, G1Projective};
+use curve::G1Affine;
 use field::Fr;
 use poly::{eq_table, MultilinearPoly, PolyBacking};
 use srs::{Srs, SrsVerifier};
 use transcript::{Tag, Transcript};
 
+mod accumulator;
 mod bdfg;
 mod fft;
 mod uni;
+
+pub use accumulator::{
+    accumulator_digest, accumulator_from_words, accumulator_words, discharge, AccumulatorEntry,
+    PairingSide, ENTRIES_PER_CHECK, ENTRY_WORDS,
+};
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -74,6 +91,21 @@ pub enum PcsError {
     /// members, which leaves the BDFG20 batch undefined. Probability about
     /// `2^-252`; `docs/spec/mercury.md` §7.
     DegenerateChallenge,
+    /// A batch with no columns. There is no `cm*` and no `v*` to open, and no
+    /// statement to make. `docs/spec/mercury.md` §11.
+    EmptyBatch,
+    /// A batch's commitment list and the list paired with it differ in length:
+    /// the columns in [`batch_open`], the claimed values in [`batch_verify`].
+    BatchLengthMismatch { commitments: usize, paired: usize },
+    /// A batch's columns do not all have the same number of variables. Mercury
+    /// batches one instance size at a time and never pads to reach it.
+    MixedColumnSizes { expected: usize, found: usize },
+    /// An accumulator's per-check counts do not partition it, or a count word is
+    /// not a length. `length` is how long the thing being read is and `at` is
+    /// how far the counts got — in **entries** when the counts were handed in
+    /// beside an entry list, in **words** when they were read off a word array,
+    /// which is why neither field names a unit. `docs/spec/accumulator.md` §3.
+    MalformedAccumulator { length: usize, at: usize },
     /// The pairing check failed. There is one, so there is one variant.
     VerificationFailed,
 }
@@ -215,9 +247,7 @@ impl MercuryProof {
 /// any real point's limb. `docs/spec/mercury.md` §4 is normative.
 fn g1_limbs(p: &G1Affine) -> [Fr; 4] {
     if p.infinity {
-        let sentinel = Fr::from_hex(G1_INFINITY_SENTINEL)
-            .expect("the frozen infinity sentinel is a canonical hex literal");
-        return [sentinel; 4];
+        return [infinity_sentinel(); 4];
     }
     let half = |bytes: &[u8]| {
         let mut limb = [0u8; 32];
@@ -232,6 +262,16 @@ fn g1_limbs(p: &G1Affine) -> [Fr; 4] {
         half(&y[..16]),
         half(&y[16..]),
     ]
+}
+
+/// `constants::G1_INFINITY_SENTINEL`, decoded.
+///
+/// `2^128`: the limb a point at infinity absorbs in each of its four lanes, and
+/// the one value no real limb can take. Read here rather than in each caller so
+/// the absorber and the accumulator's decoder cannot disagree about it.
+fn infinity_sentinel() -> Fr {
+    Fr::from_hex(G1_INFINITY_SENTINEL)
+        .expect("the frozen infinity sentinel is a canonical hex literal")
 }
 
 /// Absorb one affine `G1` point under `tag`, as one typed message of four `Fr`
@@ -493,22 +533,30 @@ pub fn open(
 }
 
 // ---------------------------------------------------------------------------
-// verify
+// The verification core
 // ---------------------------------------------------------------------------
 
-/// Check that `cm` opens to `v` at `u`.
+/// Every field-side check of one Mercury verification, and the terms of its two
+/// pairing relations.
 ///
-/// Takes the three-point [`SrsVerifier`] and nothing else from the SRS: this
-/// path never commits to anything and never touches a power of `x` beyond
-/// `[1]_1`, `[1]_2` and `[x]_2`.
-pub fn verify(
+/// This is the one verification path. It validates the points, replays
+/// `docs/spec/mercury.md` §5's schedule, derives `h(alpha)` and `D(z)`, builds
+/// the BDFG20 batch and squeezes the merge challenge — everything [`verify`]
+/// used to do except the pairings themselves, which it hands back as the twelve
+/// [`AccumulatorEntry`] items of `docs/spec/accumulator.md` §2. Its callers
+/// either execute them or return them, and that branch is the only thing that
+/// separates a native verification from a deferred one.
+///
+/// The entry order is frozen: the statement's commitment, the eight proof
+/// points in their field order, `[1]_1`, then the two `G2X` terms.
+fn accumulate(
     vsrs: &SrsVerifier,
     cm: &MercuryCommitment,
     u: &[Fr],
     v: Fr,
     proof: &MercuryProof,
     tr: &mut Transcript,
-) -> Result<(), PcsError> {
+) -> Result<Vec<AccumulatorEntry>, PcsError> {
     check_num_vars(u.len())?;
     let t = u.len() / 2;
     let b = 1usize << t;
@@ -562,38 +610,261 @@ pub fn verify(
         d_z: uni::pow_usize(z, b - 1) * proof.g_inv_z,
     };
 
-    // Check A, the fold identity at z, rewritten so both G2 arguments are SRS
-    // constants: e(cm - (z^b - alpha) q - [g_z]_1 + z*pi_z, [1]_2) = e(pi_z, [x]_2).
-    let z_pow_b = uni::pow_usize(z, b);
-    let a1 = G1Projective::from(cm.0)
-        .add(&G1Projective::from(proof.q).mul(&-(z_pow_b - alpha)))
-        .add(&G1Projective::from(vsrs.g1_gen).mul(&-proof.g_z))
-        .add(&G1Projective::from(proof.pi_z).mul(&z));
-    let b1 = G1Projective::from(proof.pi_z);
-
-    // Check B, the BDFG20 batch: e(F + z' W', [1]_2) = e(W', [x]_2).
-    let b2 = G1Projective::from(proof.w_prime);
-    let a2 = bdfg::batch_term(
-        &[proof.g, proof.h, proof.s, proof.d],
-        &bdfg::items(alpha, z, z_inv, &claims),
-        &bdfg::point_set(alpha, z, z_inv),
-        &vsrs.g1_gen,
-        &proof.w,
-        delta,
-        z_prime,
-    )
-    .add(&b2.mul(&z_prime));
-
-    // One RLC, one `pairing_check`. If either relation fails, the merged one
-    // holds for at most a single `rho`, and `rho` was drawn after every proof
-    // element was absorbed.
-    let left = a1.add(&a2.mul(&rho)).to_affine();
-    let right = b1.add(&b2.mul(&rho)).to_affine();
-    if pairing_check(&[(left, vsrs.g2_gen), (-right, vsrs.g2_tau)]) {
-        Ok(())
-    } else {
-        Err(PcsError::VerificationFailed)
+    // The BDFG20 batch at `z'`, from the one definition both sides read: `c[i]`
+    // is `delta^i Z_{T \ S_i}(z')` and `constant` is `sum_i c[i] r_i(z')`.
+    let t_set = bdfg::point_set(alpha, z, z_inv);
+    let items = bdfg::items(alpha, z, z_inv, &claims);
+    let mut c = [Fr::ZERO; 4];
+    let mut constant = Fr::ZERO;
+    for (i, item) in items.iter().enumerate() {
+        c[i] = uni::pow_usize(delta, i) * uni::eval(&item.z_complement, z_prime);
+        constant += c[i] * uni::eval(&item.r, z_prime);
     }
+    let z_t = uni::eval(&uni::vanishing(&t_set), z_prime);
+    let z_pow_b = uni::pow_usize(z, b);
+
+    // Check A is the fold identity at `z`; check B is the BDFG20 batch; `rho`
+    // merges them, which is why every check-B term carries it and no check-A
+    // term does. `docs/spec/mercury.md` §8.2 and §8.3.
+    let one = |scalar: Fr, point: G1Affine| AccumulatorEntry {
+        side: PairingSide::G2One,
+        scalar,
+        point,
+    };
+    Ok(vec![
+        one(Fr::ONE, cm.0),
+        one(rho * c[1], proof.h),
+        one(-(z_pow_b - alpha), proof.q),
+        one(rho * c[0], proof.g),
+        one(rho * c[2], proof.s),
+        one(rho * c[3], proof.d),
+        one(z, proof.pi_z),
+        one(-(rho * z_t), proof.w),
+        one(rho * z_prime, proof.w_prime),
+        one(-(proof.g_z + rho * constant), vsrs.g1_gen),
+        AccumulatorEntry {
+            side: PairingSide::G2X,
+            scalar: Fr::ONE,
+            point: proof.pi_z,
+        },
+        AccumulatorEntry {
+            side: PairingSide::G2X,
+            scalar: rho,
+            point: proof.w_prime,
+        },
+    ])
+}
+
+// ---------------------------------------------------------------------------
+// The batch preamble
+// ---------------------------------------------------------------------------
+
+/// The batch preamble: absorb, squeeze `rho`, and derive `cm*` and `v*`.
+///
+/// One length-delimited message of `4k` limbs for the commitments **as
+/// passed**, then one message of `u` followed by all `k` claimed values, then
+/// the challenge. Nothing may be chosen after `rho` is drawn, which is what the
+/// order of those three steps buys. `docs/spec/mercury.md` §11.
+///
+/// Callers validate `k`, the list lengths and `u` before reaching here, so this
+/// only absorbs and combines.
+fn batch_preamble(
+    cms: &[MercuryCommitment],
+    u: &[Fr],
+    vs: &[Fr],
+    tr: &mut Transcript,
+) -> (Fr, MercuryCommitment, Fr) {
+    let points: Vec<G1Affine> = cms.iter().map(|cm| cm.0).collect();
+    append_g1_list(tr, tags::COMMITMENT, &points);
+    let mut claim: Vec<Fr> = u.to_vec();
+    claim.extend_from_slice(vs);
+    tr.append_scalars(tags::EVALUATION_CLAIM, &claim);
+    let rho = tr.challenge_scalar(tags::MERCURY_BATCH);
+
+    let weights = powers(rho, cms.len());
+    let cm_star = msm(&points, &weights)
+        .expect("one weight per commitment")
+        .to_affine();
+    let v_star = dot(&weights, vs);
+    (rho, MercuryCommitment(cm_star), v_star)
+}
+
+/// `batch_verify` and `batch_verify_deferred`, up to their one difference.
+fn batch_accumulate(
+    vsrs: &SrsVerifier,
+    cms: &[MercuryCommitment],
+    u: &[Fr],
+    vs: &[Fr],
+    proof: &MercuryProof,
+    tr: &mut Transcript,
+) -> Result<Vec<AccumulatorEntry>, PcsError> {
+    if cms.is_empty() {
+        return Err(PcsError::EmptyBatch);
+    }
+    if cms.len() != vs.len() {
+        return Err(PcsError::BatchLengthMismatch {
+            commitments: cms.len(),
+            paired: vs.len(),
+        });
+    }
+    check_num_vars(u.len())?;
+    // `cm*` is a sum of these, so an off-curve summand would smuggle a point
+    // the curve equation never saw into a sum that passes it.
+    for cm in cms {
+        if !cm.0.is_on_curve() || !cm.0.is_in_subgroup() {
+            return Err(PcsError::InvalidPoint { field: "cm" });
+        }
+    }
+
+    let (_, cm_star, v_star) = batch_preamble(cms, u, vs, tr);
+    accumulate(vsrs, &cm_star, u, v_star, proof, tr)
+}
+
+// ---------------------------------------------------------------------------
+// The four verifier entry points
+// ---------------------------------------------------------------------------
+
+/// Check that `cm` opens to `v` at `u`.
+///
+/// Takes the three-point [`SrsVerifier`] and nothing else from the SRS: this
+/// path never commits to anything and never touches a power of `x` beyond
+/// `[1]_1`, `[1]_2` and `[x]_2`.
+pub fn verify(
+    vsrs: &SrsVerifier,
+    cm: &MercuryCommitment,
+    u: &[Fr],
+    v: Fr,
+    proof: &MercuryProof,
+    tr: &mut Transcript,
+) -> Result<(), PcsError> {
+    let entries = accumulate(vsrs, cm, u, v, proof, tr)?;
+    accumulator::check_pairings(vsrs, &entries, &[entries.len()], &[Fr::ONE])
+}
+
+/// [`verify`], stopping one step short: the pairing terms, not the pairings.
+///
+/// Every field-side check still runs, and every point is still validated — only
+/// the two group relations are left unspent. The returned list is exactly one
+/// deferred check, [`ENTRIES_PER_CHECK`] entries long, and is discharged by
+/// [`discharge`] alongside however many others it is concatenated with.
+pub fn verify_deferred(
+    vsrs: &SrsVerifier,
+    cm: &MercuryCommitment,
+    u: &[Fr],
+    v: Fr,
+    proof: &MercuryProof,
+    tr: &mut Transcript,
+) -> Result<Vec<AccumulatorEntry>, PcsError> {
+    accumulate(vsrs, cm, u, v, proof, tr)
+}
+
+/// Check that `k` commitments open to `vs` at the single point `u`.
+///
+/// The commitments are absorbed **as passed** and `cm*` is derived from them by
+/// KZG's homomorphism, so a list in a different order, or one commitment short,
+/// is a different statement and fails. `docs/spec/mercury.md` §11.
+pub fn batch_verify(
+    vsrs: &SrsVerifier,
+    cms: &[MercuryCommitment],
+    u: &[Fr],
+    vs: &[Fr],
+    proof: &MercuryProof,
+    tr: &mut Transcript,
+) -> Result<(), PcsError> {
+    let entries = batch_accumulate(vsrs, cms, u, vs, proof, tr)?;
+    accumulator::check_pairings(vsrs, &entries, &[entries.len()], &[Fr::ONE])
+}
+
+/// [`batch_verify`], stopping one step short. See [`verify_deferred`].
+pub fn batch_verify_deferred(
+    vsrs: &SrsVerifier,
+    cms: &[MercuryCommitment],
+    u: &[Fr],
+    vs: &[Fr],
+    proof: &MercuryProof,
+    tr: &mut Transcript,
+) -> Result<Vec<AccumulatorEntry>, PcsError> {
+    batch_accumulate(vsrs, cms, u, vs, proof, tr)
+}
+
+// ---------------------------------------------------------------------------
+// batch_open
+// ---------------------------------------------------------------------------
+
+/// Open `k` same-size columns at one point `u`, as one Mercury instance.
+///
+/// Returns each column's value at `u` — the same value
+/// `MultilinearPoly::evaluate(u)` gives — and **one** ordinary proof, of
+/// `cm* = sum rho^i cm_i` at `u`. The commitments are absorbed as passed and
+/// never recomputed, exactly as [`open`] treats the single one.
+///
+/// `f* = sum rho^i f_i` is materialised into one column before the opening
+/// rather than recombined lazily inside it: `open` makes several passes over
+/// its polynomial, and a lazy combination would multiply `k` into every one of
+/// them. The combination is indexed and exact, so the result does not depend on
+/// the thread count.
+pub fn batch_open(
+    srs: &Srs,
+    cols: &[MultilinearPoly],
+    cms: &[MercuryCommitment],
+    u: &[Fr],
+    tr: &mut Transcript,
+) -> Result<(Vec<Fr>, MercuryProof), PcsError> {
+    if cols.is_empty() {
+        return Err(PcsError::EmptyBatch);
+    }
+    if cols.len() != cms.len() {
+        return Err(PcsError::BatchLengthMismatch {
+            commitments: cms.len(),
+            paired: cols.len(),
+        });
+    }
+    let num_vars = cols[0].num_vars();
+    for col in cols {
+        if col.num_vars() != num_vars {
+            return Err(PcsError::MixedColumnSizes {
+                expected: num_vars,
+                found: col.num_vars(),
+            });
+        }
+    }
+    let n = check_num_vars(num_vars)?;
+    if u.len() != num_vars {
+        return Err(PcsError::PointLengthMismatch {
+            point: u.len(),
+            num_vars,
+        });
+    }
+    let available = srs.g1().len();
+    if available < n {
+        return Err(PcsError::SrsTooSmall {
+            needed: n,
+            available,
+        });
+    }
+
+    let vs: Vec<Fr> = cols.iter().map(|col| col.evaluate(u)).collect();
+    let (rho, cm_star, v_star) = batch_preamble(cms, u, &vs, tr);
+
+    let weights = powers(rho, cols.len());
+    let combined: Vec<Fr> = (0..n)
+        .into_par_iter()
+        .map(|i| {
+            let mut acc = Fr::ZERO;
+            for (col, weight) in cols.iter().zip(&weights) {
+                acc += *weight * col.get(i);
+            }
+            acc
+        })
+        .collect();
+    let f_star = MultilinearPoly::new(PolyBacking::Fr(combined));
+
+    let (v, proof) = open(srs, &f_star, &cm_star, u, tr)?;
+    assert_eq!(
+        v, v_star,
+        "batch_open: the combined column's value must be the combination of the columns' values"
+    );
+    Ok((vs, proof))
 }
 
 // ---------------------------------------------------------------------------
@@ -633,15 +904,41 @@ fn dot(a: &[Fr], b: &[Fr]) -> Fr {
     acc
 }
 
-/// Draw `z`, resampling under the same tag while it is zero so that `1/z`
-/// exists. `docs/spec/mercury.md` §7.
-fn challenge_z(tr: &mut Transcript) -> Fr {
+/// `[1, x, x^2, ..., x^(k-1)]`, the weights of a geometric batch.
+///
+/// Index `i` carries `x^i`, so the first element of a batched list carries `1`.
+fn powers(x: Fr, k: usize) -> Vec<Fr> {
+    let mut out = Vec::with_capacity(k);
+    let mut acc = Fr::ONE;
+    for _ in 0..k {
+        out.push(acc);
+        acc *= x;
+    }
+    out
+}
+
+/// Draw `z` under `MERCURY_Z`, taking the first squeeze that is not `reject`
+/// and squeezing again under the same tag while it is.
+///
+/// `docs/spec/mercury.md` §7 pins `reject = 0`, so that `1/z` exists, and
+/// [`challenge_z`] is that rule. The rejected value is a parameter because the
+/// loop is otherwise unreachable and so untestable: a transcript squeezes zero
+/// with probability about `2^-254`, and no test can wait for that. A test names
+/// a value the sponge really does produce instead, and watches the next squeeze
+/// be taken.
+fn challenge_z_rejecting(tr: &mut Transcript, reject: Fr) -> Fr {
     loop {
         let z = tr.challenge_scalar(tags::MERCURY_Z);
-        if z != Fr::ZERO {
+        if z != reject {
             return z;
         }
     }
+}
+
+/// Draw `z`, resampling under the same tag while it is zero so that `1/z`
+/// exists. `docs/spec/mercury.md` §7.
+fn challenge_z(tr: &mut Transcript) -> Fr {
+    challenge_z_rejecting(tr, Fr::ZERO)
 }
 
 /// Whether `{z, 1/z, alpha}` has fewer than three distinct members, which would
@@ -766,6 +1063,8 @@ fn symmetric_witness(
 mod tests {
     use super::*;
 
+    use curve::G1Projective;
+
     /// The instance rule: `2t` variables for `1 <= t <= FR_TWO_ADICITY - 1`,
     /// and nothing else.
     ///
@@ -793,6 +1092,55 @@ mod tests {
         assert!(check_num_vars(MAX_NUM_VARS + 2).is_err());
         // The bound really is what keeps the shift in range.
         assert!(MAX_NUM_VARS < usize::BITS as usize);
+    }
+
+    /// Acceptance 5, and `docs/spec/mercury.md` §7's `z in F*` rule: a rejected
+    /// squeeze is discarded and the **next** squeeze under the same tag is
+    /// used.
+    ///
+    /// The rule rejects zero, which a sponge produces with probability about
+    /// `2^-254`, so the loop is undrivable as written. Naming the rejected
+    /// value instead makes it drivable with a value the sponge really does
+    /// produce, and what is then checked is the whole rule: the first draw is
+    /// discarded, the second is returned, and the transcript is left where two
+    /// squeezes under `MERCURY_Z` leave it — not one, and not a squeeze under
+    /// some other tag.
+    #[test]
+    fn a_rejected_z_draw_takes_the_next_squeeze() {
+        // What the sponge really produces under this tag, in order.
+        let mut tr = Transcript::new();
+        let draws: Vec<Fr> = (0..3)
+            .map(|_| tr.challenge_scalar(tags::MERCURY_Z))
+            .collect();
+        assert!(draws.iter().all(|z| *z != Fr::ZERO), "and none is zero");
+        assert_ne!(draws[0], draws[1]);
+
+        // The production rule rejects zero, so it takes the first draw.
+        let mut tr = Transcript::new();
+        assert_eq!(challenge_z(&mut tr), draws[0]);
+        assert_eq!(tr.challenge_scalar(tags::MERCURY_Z), draws[1]);
+
+        // Rejecting the first draw takes the second, and leaves the transcript
+        // two squeezes in rather than one.
+        let mut tr = Transcript::new();
+        assert_eq!(challenge_z_rejecting(&mut tr, draws[0]), draws[1]);
+        assert_eq!(tr.challenge_scalar(tags::MERCURY_Z), draws[2]);
+        assert_eq!(
+            tr.event_log(),
+            &[transcript::TranscriptEvent::Challenge {
+                tag: tags::MERCURY_Z
+            }; 3],
+            "the resample is a squeeze under the same tag, not a different one"
+        );
+
+        // And the production rule is exactly this helper at zero.
+        let mut plain = Transcript::new();
+        let mut named = Transcript::new();
+        assert_eq!(
+            challenge_z(&mut plain),
+            challenge_z_rejecting(&mut named, Fr::ZERO)
+        );
+        assert_eq!(plain.snapshot(), named.snapshot());
     }
 
     /// `docs/spec/mercury.md` §7. The transcript reaches this with probability

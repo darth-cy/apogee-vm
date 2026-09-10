@@ -15,10 +15,13 @@
 //!
 //! [`items`] is the one definition of the batch, called by the prover and by
 //! the verifier. Everything either side needs beyond it — the quotient, the
-//! linearization, the verifier's `G1` accumulation — is derived from what
-//! `items` returns, so the two cannot drift.
+//! linearization, the verifier's per-commitment coefficients — is derived from
+//! what `items` returns, so the two cannot drift.
+//!
+//! Nothing here touches a curve point. The verifier's `G1` accumulation used to
+//! live in this module; since S09 it is a list of `(scalar, point)` accumulator
+//! entries built in `crate::accumulate` from the same `Item`s.
 
-use curve::{G1Affine, G1Projective};
 use field::Fr;
 
 use crate::uni;
@@ -133,36 +136,4 @@ pub fn linearization(
     }
     l[0] -= constant;
     l
-}
-
-/// BDFG20 §4.1's `F`, the verifier's `G1` accumulation:
-///
-/// ```text
-///   F = sum_i delta^i Z_{T \ S_i}(z') cm_i
-///     - [ sum_i delta^i Z_{T \ S_i}(z') r_i(z') ]_1
-///     - Z_T(z') W
-/// ```
-///
-/// The batch then holds exactly when `e(F + z' W', [1]_2) = e(W', [x]_2)`,
-/// which the caller assembles beside Mercury's own pairing relation so that
-/// both rewrites read in one place.
-pub fn batch_term(
-    commitments: &[G1Affine; 4],
-    items: &[Item; 4],
-    t_set: &[Fr; 3],
-    g1_gen: &G1Affine,
-    w: &G1Affine,
-    delta: Fr,
-    z_prime: Fr,
-) -> G1Projective {
-    let mut acc = G1Projective::IDENTITY;
-    let mut constant = Fr::ZERO;
-    for (i, (cm, item)) in commitments.iter().zip(items).enumerate() {
-        let c = uni::pow_usize(delta, i) * uni::eval(&item.z_complement, z_prime);
-        acc = acc.add(&G1Projective::from(*cm).mul(&c));
-        constant += c * uni::eval(&item.r, z_prime);
-    }
-    let z_t = uni::eval(&uni::vanishing(t_set), z_prime);
-    acc.add(&G1Projective::from(*g1_gen).mul(&-constant))
-        .add(&G1Projective::from(*w).mul(&-z_t))
 }

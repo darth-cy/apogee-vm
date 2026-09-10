@@ -410,6 +410,9 @@ fn tag_table_is_well_formed() {
         "BDFG_BATCH",
         "BDFG_POINT",
         "PAIRING_MERGE",
+        "MERCURY_BATCH",
+        "ACCUMULATOR_DIGEST",
+        "ACCUMULATOR_MERGE",
     ];
     let values: Vec<u64> = names
         .iter()
@@ -420,6 +423,13 @@ fn tag_table_is_well_formed() {
     sorted.dedup();
     assert_eq!(sorted.len(), names.len(), "tag values must be distinct");
     assert!(values.iter().all(|v| *v != 0), "0 is not a tag");
+    // Sequential from 1, with nothing skipped: the table is a registry, and a
+    // hole in it is a tag someone allocated and forgot to name here.
+    assert_eq!(
+        sorted,
+        (1..=names.len() as u64).collect::<Vec<u64>>(),
+        "tags are sequential from 1"
+    );
 }
 
 // ---------------------------------------------------------------------------

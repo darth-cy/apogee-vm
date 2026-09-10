@@ -144,3 +144,253 @@ pub fn records(text: &str) -> Vec<Vec<String>> {
         .map(|l| l.split_whitespace().map(str::to_string).collect())
         .collect()
 }
+
+// ---------------------------------------------------------------------------
+// The verifier's arithmetic, written a second time
+// ---------------------------------------------------------------------------
+//
+// Everything below rebuilds what `crates/pcs` derives, from the definitions in
+// `docs/spec/mercury.md` and `docs/spec/accumulator.md` rather than from the
+// crate. Two files read it: `accumulator.rs`, which replays the schedule to
+// recover the challenges, and `edge_cases.rs`, which reads forced ones out of a
+// fixture. Naive on purpose — schoolbook multiplication, Lagrange written out,
+// `eq` from its product form — so that agreeing with the crate means something.
+
+use constants::transcript_tags as tags;
+use curve::G1Affine;
+use pcs::{
+    append_g1, append_g1_list, AccumulatorEntry, MercuryCommitment, MercuryProof, PairingSide,
+};
+use transcript::Transcript;
+
+/// The six challenges of one Mercury opening.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Challenges {
+    pub alpha: Fr,
+    pub gamma: Fr,
+    pub z: Fr,
+    pub delta: Fr,
+    pub z_prime: Fr,
+    pub rho: Fr,
+}
+
+pub fn eval(c: &[Fr], x: Fr) -> Fr {
+    let mut acc = Fr::ZERO;
+    let mut power = Fr::ONE;
+    for a in c {
+        acc += *a * power;
+        power *= x;
+    }
+    acc
+}
+
+pub fn mul(a: &[Fr], b: &[Fr]) -> Vec<Fr> {
+    let mut out = vec![Fr::ZERO; a.len() + b.len() - 1];
+    for (i, x) in a.iter().enumerate() {
+        for (j, y) in b.iter().enumerate() {
+            out[i + j] += *x * *y;
+        }
+    }
+    out
+}
+
+pub fn vanishing(roots: &[Fr]) -> Vec<Fr> {
+    let mut out = vec![Fr::ONE];
+    for r in roots {
+        out = mul(&out, &[-*r, Fr::ONE]);
+    }
+    out
+}
+
+/// Lagrange through `points`, evaluated at `x`.
+pub fn interpolate_at(points: &[(Fr, Fr)], x: Fr) -> Fr {
+    let mut acc = Fr::ZERO;
+    for (i, (xi, yi)) in points.iter().enumerate() {
+        let mut term = *yi;
+        for (j, (xj, _)) in points.iter().enumerate() {
+            if i != j {
+                term *= (x - *xj) * (*xi - *xj).inverse().expect("distinct abscissae");
+            }
+        }
+        acc += term;
+    }
+    acc
+}
+
+pub fn pow(x: Fr, e: usize) -> Fr {
+    let mut acc = Fr::ONE;
+    for _ in 0..e {
+        acc *= x;
+    }
+    acc
+}
+
+/// The verifier's `O(t)` route to `P_u(x)`.
+pub fn product_formula(u: &[Fr], x: Fr) -> Fr {
+    let mut acc = Fr::ONE;
+    let mut power = x;
+    for uk in u {
+        acc *= *uk * power + (Fr::ONE - *uk);
+        power = power.square();
+    }
+    acc
+}
+
+/// `docs/spec/mercury.md` §7's two derived values: `h(alpha)` and `D(z)`.
+pub fn derived(u: &[Fr], v: Fr, p: &MercuryProof, c: &Challenges) -> (Fr, Fr) {
+    let t = u.len() / 2;
+    let b = 1usize << t;
+    let (u1, u2) = (&u[..t], &u[t..]);
+    let z_inv = c.z.inverse().expect("z is nonzero");
+    let two_inv = Fr::from_u64(2).inverse().expect("2 is invertible");
+
+    let h_alpha = (p.g_z * product_formula(u1, z_inv)
+        + p.g_inv_z * product_formula(u1, c.z)
+        + c.gamma
+            * (p.h_z * product_formula(u2, z_inv) + p.h_inv_z * product_formula(u2, c.z) - v - v)
+        - c.z * p.s_z
+        - z_inv * p.s_inv_z)
+        * two_inv;
+    (h_alpha, pow(c.z, b - 1) * p.g_inv_z)
+}
+
+/// The twelve accumulator entries of `docs/spec/accumulator.md` §2, rebuilt
+/// from the specification for a given challenge set.
+pub fn deferred_entries(
+    g1_gen: &G1Affine,
+    cm: &MercuryCommitment,
+    u: &[Fr],
+    v: Fr,
+    p: &MercuryProof,
+    c: &Challenges,
+) -> Vec<AccumulatorEntry> {
+    let t = u.len() / 2;
+    let b = 1usize << t;
+    let z_inv = c.z.inverse().expect("z is nonzero");
+    let (h_alpha, d_z) = derived(u, v, p, c);
+
+    // The BDFG20 batch of §6, in its frozen order g, h, S, D.
+    let complements = [
+        vanishing(&[c.alpha]),
+        vec![Fr::ONE],
+        vanishing(&[c.alpha]),
+        vanishing(&[z_inv, c.alpha]),
+    ];
+    let r_at = [
+        interpolate_at(&[(c.z, p.g_z), (z_inv, p.g_inv_z)], c.z_prime),
+        interpolate_at(
+            &[(c.z, p.h_z), (z_inv, p.h_inv_z), (c.alpha, h_alpha)],
+            c.z_prime,
+        ),
+        interpolate_at(&[(c.z, p.s_z), (z_inv, p.s_inv_z)], c.z_prime),
+        d_z,
+    ];
+    let mut coefficients = [Fr::ZERO; 4];
+    let mut constant = Fr::ZERO;
+    for i in 0..4 {
+        coefficients[i] = pow(c.delta, i) * eval(&complements[i], c.z_prime);
+        constant += coefficients[i] * r_at[i];
+    }
+    let z_t = eval(&vanishing(&[c.z, z_inv, c.alpha]), c.z_prime);
+    let z_pow_b = pow(c.z, b);
+    let rho = c.rho;
+
+    let one = |scalar: Fr, point: G1Affine| AccumulatorEntry {
+        side: PairingSide::G2One,
+        scalar,
+        point,
+    };
+    vec![
+        one(Fr::ONE, cm.0),
+        one(rho * coefficients[1], p.h),
+        one(-(z_pow_b - c.alpha), p.q),
+        one(rho * coefficients[0], p.g),
+        one(rho * coefficients[2], p.s),
+        one(rho * coefficients[3], p.d),
+        one(c.z, p.pi_z),
+        one(-(rho * z_t), p.w),
+        one(rho * c.z_prime, p.w_prime),
+        one(-(p.g_z + rho * constant), *g1_gen),
+        AccumulatorEntry {
+            side: PairingSide::G2X,
+            scalar: Fr::ONE,
+            point: p.pi_z,
+        },
+        AccumulatorEntry {
+            side: PairingSide::G2X,
+            scalar: rho,
+            point: p.w_prime,
+        },
+    ]
+}
+
+/// `docs/spec/mercury.md` §5's schedule, transcribed a second time, run to
+/// recover every challenge it draws.
+///
+/// `prefix` is whatever the transcript absorbed before the opening: nothing for
+/// a single verification, §11's preamble for a batch.
+pub fn replay_schedule(
+    cm: &MercuryCommitment,
+    u: &[Fr],
+    v: Fr,
+    p: &MercuryProof,
+    prefix: &dyn Fn(&mut Transcript),
+) -> Challenges {
+    let mut tr = Transcript::new();
+    prefix(&mut tr);
+    tr.append_scalar(tags::MERCURY_INSTANCE, Fr::from_u64(1u64 << u.len()));
+    append_g1(&mut tr, tags::COMMITMENT, &cm.0);
+    let mut claim = u.to_vec();
+    claim.push(v);
+    tr.append_scalars(tags::EVALUATION_CLAIM, &claim);
+    append_g1(&mut tr, tags::PCS_OPENING, &p.h);
+    let alpha = tr.challenge_scalar(tags::MERCURY_ALPHA);
+    append_g1_list(&mut tr, tags::PCS_OPENING, &[p.q, p.g]);
+    let gamma = tr.challenge_scalar(tags::MERCURY_GAMMA);
+    append_g1_list(&mut tr, tags::PCS_OPENING, &[p.s, p.d]);
+    let z = loop {
+        let z = tr.challenge_scalar(tags::MERCURY_Z);
+        if z != Fr::ZERO {
+            break z;
+        }
+    };
+    tr.append_scalars(
+        tags::PCS_OPENING,
+        &[p.g_z, p.g_inv_z, p.h_z, p.h_inv_z, p.s_z, p.s_inv_z],
+    );
+    append_g1(&mut tr, tags::PCS_OPENING, &p.pi_z);
+    let delta = tr.challenge_scalar(tags::BDFG_BATCH);
+    append_g1(&mut tr, tags::PCS_OPENING, &p.w);
+    let z_prime = tr.challenge_scalar(tags::BDFG_POINT);
+    append_g1(&mut tr, tags::PCS_OPENING, &p.w_prime);
+    let rho = tr.challenge_scalar(tags::PAIRING_MERGE);
+    Challenges {
+        alpha,
+        gamma,
+        z,
+        delta,
+        z_prime,
+        rho,
+    }
+}
+
+/// The `Fr` a 32-byte hex token names.
+pub fn parse_fr(token: &str) -> Result<Fr, String> {
+    let raw = test_support::hex_to_bytes(token).map_err(|e| e.to_string())?;
+    let raw: [u8; 32] = raw.try_into().map_err(|_| "an Fr token is 32 bytes")?;
+    Fr::from_bytes(&raw).ok_or_else(|| "an Fr token must be canonical".to_string())
+}
+
+/// The `G1Affine` a 64-byte hex token names, validated.
+pub fn parse_g1(token: &str) -> Result<G1Affine, String> {
+    let raw = test_support::hex_to_bytes(token).map_err(|e| e.to_string())?;
+    let raw: [u8; 64] = raw.try_into().map_err(|_| "a G1 token is 64 bytes")?;
+    G1Affine::from_bytes(&raw).ok_or_else(|| "a G1 token must be a valid point".to_string())
+}
+
+/// The `MercuryProof` a 704-byte hex token names, validated.
+pub fn parse_proof(token: &str) -> Result<MercuryProof, String> {
+    let raw = test_support::hex_to_bytes(token).map_err(|e| e.to_string())?;
+    let raw: [u8; pcs::PROOF_BYTES] = raw.try_into().map_err(|_| "a proof token is 704 bytes")?;
+    MercuryProof::from_bytes(&raw).ok_or_else(|| "a proof token must decode".to_string())
+}

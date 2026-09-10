@@ -16,6 +16,7 @@
 
 mod fr_arith;
 mod mercury;
+mod mercury_batch;
 mod msm;
 mod poly_bind;
 mod square;
@@ -25,7 +26,7 @@ mod zerocheck_verify;
 
 /// Every routine: selector, one line of what it measures, and the entry point.
 /// The order here is the order a bare `cargo run` runs them in.
-const ROUTINES: [(&str, &str, fn()); 6] = [
+const ROUTINES: [(&str, &str, fn()); 7] = [
     (
         "fr-arith",
         "S01: Fr mul, square, inverse and batch inverse against ark-bn254",
@@ -45,6 +46,11 @@ const ROUTINES: [(&str, &str, fn()); 6] = [
         "mercury",
         "S08 acceptance 11: Mercury commit, open and verify at 2^22 over ceremony bases",
         mercury::run,
+    ),
+    (
+        "mercury-batch",
+        "S09 acceptance 11: 16 x 2^20 columns as one batch, then as 16 single openings",
+        mercury_batch::run,
     ),
     (
         "zerocheck-prove",
