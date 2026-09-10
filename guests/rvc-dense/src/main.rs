@@ -24,6 +24,49 @@
 //! **The executed pair** `rvc_exec` and `norvc_exec` compute the same function
 //! two ways and run under QEMU, which is what says the fixture is real code at
 //! real addresses rather than a well-formed byte string.
+//!
+//! # fd 0, the public input
+//!
+//! ```text
+//!           0..4     x               u32 LE, optional
+//! ```
+//!
+//! Optional in a way no other guest's input is: a stream shorter than four
+//! bytes leaves `x = 3` instead of faulting. This one is a loader fixture
+//! before it is a program, and it is dumped and disassembled far more often
+//! than it is executed, so it has to produce an image without an input to
+//! produce it from.
+//!
+//! # fd 1, the public output
+//!
+//! Twelve bytes — three little-endian `u32`s, written as three separate
+//! commits, because fd 1 is a stream and not a record:
+//!
+//! ```text
+//!           0..4     y               what both routines answered for x
+//!           4..8     rvc_len         bytes in the compressed paired region
+//!           8..12    norvc_len       bytes in the uncompressed one
+//! ```
+//!
+//! `y` is `(5*x + 11) & 0xff`, except at the single `x` for which `5*x + 4`
+//! wraps to exactly zero — `0xcccccccc` — where the branch skips the `+ 7` and
+//! `y` is `0`. The function is arbitrary and chosen for its *shape*: a stack
+//! frame, a store followed by a load of the same word, a taken branch and a
+//! masked result. Eleven of the fourteen instructions that shape produces
+//! compress, across quadrants 1 and 2; the three that do not — a non-destructive
+//! `addi`, and an `andi` whose immediate overflows the six-bit field — are what
+//! keep the executed region mixed rather than uniformly 16-bit. Exhaustive
+//! quadrant coverage is the paired regions' job, not this routine's.
+//!
+//! The two lengths are what make the last eight bytes worth committing. They
+//! are the regions' sizes as the linker laid them out, so a compressed region
+//! that quietly stopped being compressed — a toolchain that ignored
+//! `.option rvc`, or a relaxation pass that rewrote it — changes fd 1 rather
+//! than changing nothing.
+//!
+//! # fd 2 and fd 3
+//!
+//! Unused.
 
 use core::arch::global_asm;
 

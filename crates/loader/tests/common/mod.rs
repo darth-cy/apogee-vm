@@ -29,15 +29,15 @@ use test_support::{sha256, to_hex};
 pub const PINS: [(&str, &str); 10] = [
     (
         "fib.elf",
-        "d1354939aada0d9ca2ea4b1a026e8fe1e82360021d1dbb42633b845f12c956ee",
+        "1479cb1d3e7a3bb66fc58560612419bcedaefaacaee748752e16c05d17ba91ac",
     ),
     (
         "echo.elf",
-        "541b755f49a7207c2e7b8a821968269bb63ff1f6dd35ff125732edc107327354",
+        "3fcae63deedba71f61f3e1a4be7b083031b4255ee43b4b23b80c32aa9900d25d",
     ),
     (
         "rvc-dense.elf",
-        "b5a2c504f6c8a1b85a59ec146df718756e004052cfef5d04a96823b32ff07a47",
+        "d27edea9bf71b264746504e147d92fa5454af6cd1f9d70cc79db49cf8fa85d06",
     ),
     (
         "amm.elf",

@@ -8,6 +8,43 @@
 //! `alloc`, so without this the bump allocator would be dead-stripped out of
 //! every binary and the largest `unsafe` surface in the workspace would run
 //! nowhere. Here it is linked and exercised under QEMU, at two alignments.
+//!
+//! # fd 0, the public input
+//!
+//! Any number of bytes, with no structure of any kind. They are read 64 at a
+//! time until a read comes back short, which is the end of the stream.
+//!
+//! # fd 1, the public output
+//!
+//! The fd 0 stream, byte for byte, and nothing else. Neither the hint nor the
+//! permuted state ever reaches it; see below for why that is the point.
+//!
+//! # fd 2, the diagnostics
+//!
+//! Four lines, in this order, none of which a verifier looks at:
+//!
+//! ```text
+//! hint=<the fd 3 bytes, raw>
+//! heap=ok
+//! precompile=software              or `accelerated`, once a circuit exists
+//! state0=<64 hex digits>           lane 0 of the permuted state
+//! ```
+//!
+//! # fd 3, the prover's advice
+//!
+//! Up to 16 bytes, unstructured, and they reach fd 2 and nowhere else. That is
+//! the whole reason this guest reads them: a hint binds nothing, so one that
+//! reached fd 1 would be a committed value the prover chose.
+//!
+//! **This guest cannot run without an fd 3 to read from.** The zkVM always has
+//! one. `qemu-riscv32` has only the descriptors it is given, and a `read` on a
+//! closed one answers `-EBADF`, which the SDK treats as an executor fault and
+//! exits 70 on. Running it by hand means opening fd 3 yourself, even on an
+//! empty file:
+//!
+//! ```text
+//! sh -c 'exec 3</dev/null; exec qemu-riscv32 ./echo' < input
+//! ```
 
 extern crate alloc;
 
