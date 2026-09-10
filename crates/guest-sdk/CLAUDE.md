@@ -15,7 +15,10 @@ pub fn exit(code: i32) -> !;
 pub fn poseidon2_permute(state: &mut [u8; 96]) -> bool;   // false on -ENOSYS
 ```
 
-`docs/spec/ecall-abi.md` is the normative document for all of it.
+`docs/spec/ecall-abi.md` is the normative document for all of it, and
+`docs/guest-program-manual.md` is the walkthrough for someone writing a guest:
+the crate layout, the I/O rules, the build, and exporting the result as a
+`ProgramImage` artifact with `tools/artifact-dump`.
 
 ## Two things about this crate that are true of nothing else
 1. **It is not a workspace member.** It defines `#[panic_handler]` and

@@ -12,6 +12,7 @@ members = [
     "crates/loader",
     "tools/kat-gen",
     "tools/bench",
+    "tools/artifact-dump",
     "tools/test-support",
 ]
 

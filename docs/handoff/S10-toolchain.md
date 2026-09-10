@@ -145,6 +145,8 @@ The frozen linker symbols are `__bss_start`, `__bss_end`, `__heap_start` and
 | `docs/spec/ecall-abi.md` | the ABI |
 | `tools/kat-gen/src/loader.rs` | the derived listings, the synthetic ELFs, the fib record |
 | `tools/kat-gen/src/guests.rs` | the guest ELF rebuild, opt-in |
+| `tools/artifact-dump/` | the exporter: a guest ELF out as the frozen wire form, plus a report |
+| `docs/guest-program-manual.md` | the guest author's walkthrough, empty crate to artifact |
 
 The vector directory is 524 kB, most of it the three guest ELFs and the two disassembly
 listings. `echo.elf` deliberately has no committed listing: its 300 kB of disassembly is
@@ -194,8 +196,9 @@ the top of a range and nowhere else.
 
 ## Verification performed
 
-387 workspace tests, green in debug and release, plus 5 `#[ignore]`d (341 from S09,
-unchanged). `fmt` and `clippy -D warnings` are clean across **all four** workspaces — the
+395 workspace tests, green in debug and release, plus 5 `#[ignore]`d (341 from S09,
+unchanged). Eight of them are `tools/artifact-dump`'s — seven integration tests and the
+doctest that compiles the "read an artifact back" snippet. `fmt` and `clippy -D warnings` are clean across **all four** workspaces — the
 root one, the oracle, `crates/guest-sdk` and `guests/` — with no `#[allow]` added anywhere.
 
 **Acceptances 3 and 8 are not verified on this machine and never were**; see "The defect
@@ -384,6 +387,58 @@ but an executor can close that, and until S12 builds one it takes a Linux host:
 `cargo test -p loader --test qemu -- --ignored`. `.github/workflows/ci.yml` carries the
 two commented steps that would gate on it; enabling them is a one-line decision once a
 Linux run confirms green.
+
+## Exporting a `ProgramImage`, and the manual for it
+
+The stage froze `ProgramImage` and its wire form but shipped no way to *get* one out of a
+guest, so a guest author had a build command and a type and nothing between them.
+`tools/artifact-dump` is that step — the master layout's `tools/ artifact dump` entry —
+and `docs/guest-program-manual.md` is the walkthrough from an empty crate to the file.
+
+```
+cargo run -p artifact-dump -- <guest.elf> [--out <dir>]
+```
+
+It writes `<name>.img` and `<name>.img.txt`. Four decisions in it are worth recording.
+
+**The artifact has no container.** The `.img` is `postcard` over `entry`, `segments`,
+`slot_base`, `slots` and stops — no magic, no version word, no length prefix. A header
+would have made the file a *second* format to freeze, one `crates/loader`'s tests do not
+exercise and every consumer would have to strip. Reading one is
+`postcard::from_bytes::<ProgramImage>(&fs::read(path)?)`, which is the point of having
+frozen the encoding at all. The doc comment carrying that line is a doctest, so the
+snippet in the manual is compiled rather than asserted.
+
+**The report is rendered from the artifact, not from the loaded image.** `dump`
+serializes, reads back through the reader that re-checks every invariant, compares the
+result to what `load_elf` produced, and renders from *that*. On disagreement it writes
+nothing. So the printed page and the exported file cannot describe different things —
+which is the whole reason to print a page beside a binary.
+
+**No mnemonics.** An RV32IMAC instruction model is `crates/isa`'s, in a later stage; a
+decoder written here would be a second one to keep correct, and it would be the kind of
+second reading `tests/differential.rs` exists to avoid. The listing carries the address,
+the length, the encoding as it sits in memory and the expanded word, and points at
+`llvm-objdump` for the text.
+
+**Symbols are read from the ELF and labelled as such.** A listing of four thousand hex
+words with no names is one nobody can navigate, so `.symtab` is read for annotation —
+and every part of the report that shows a name says it came from the ELF and not from the
+artifact, because two ELFs differing only in their symbols export identical bytes.
+
+The tests hold the tool to `crates/loader` rather than to a recorded expectation. The one
+worth naming: `the_listing_is_the_instruction_stream` **parses the printed listing back**
+and compares it to the image's instruction slots — same addresses, same lengths, same
+expanded words, nothing extra and nothing dropped — and `every_slot_is_accounted_for`
+checks that the instruction lines, the mid-instruction slots their lengths imply and the
+folded `not code` runs sum to `slots.len()`. A report that quietly dropped a slot fails
+there. `tools/artifact-dump/CLAUDE.md` is the design record.
+
+One thing the tool deliberately does not do: **program identity**. The report prints a
+sha256 of the artifact so a rebuild can be compared against it, and says in as many words
+that this is not identity — that is S11's, over the decoded per-family tables and the
+`VmConfig`, in a different field. A digest printed next to the word "program" is exactly
+what a reader would otherwise assume.
 
 ## Deviations and notes for the reviewer
 

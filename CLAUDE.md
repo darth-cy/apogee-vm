@@ -13,6 +13,7 @@ prompt you are working on.
 prompts/         00-master.md (design authority) + one prompt per build stage
 docs/
   GLOSSARY.md    the vocabulary (column = multilinear = poly; layer; shard; family)
+  guest-program-manual.md  writing a guest and exporting its ProgramImage artifact
   spec/          the frozen protocol specs; read before touching what they cover
   handoff/       one note per completed stage: frozen API, artifacts, deviations
 crates/
@@ -34,6 +35,8 @@ tools/
   kat-gen/       regenerates the committed Fr, multilinear, curve, MSM, SRS and G1-absorption
                  vectors from arkworks, and the Mercury proof fixture from `pcs` itself
   bench/         one routine per measurement, individually selectable
+  artifact-dump/ a guest ELF out as the frozen ProgramImage artifact, plus a
+                 readable report of it; see docs/guest-program-manual.md
   transcript-ref/ the transcript oracle: Plonky3 + zkhash, NOT a workspace member
   test-support/  seeded RNG, SHA-256, hex; shared by every suite and generator
 ```
@@ -58,7 +61,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
-cargo test --workspace                      # 387 tests as of S10; 5 more are #[ignore]d
+cargo test --workspace                      # 395 tests as of S10; 5 more are #[ignore]d
 cargo build -p field -p constants -p transcript -p poly -p sumcheck --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
@@ -72,7 +75,15 @@ cargo run --manifest-path tools/transcript-ref/Cargo.toml   # ditto, transcript 
 cargo run --release -p bench                # every routine; internal numbers only
 cargo run --release -p bench -- --list      # the routines, and what each measures
 cargo run --release -p bench -- <routine>   # just that one; setup is per-routine
+
+cargo run -p artifact-dump -- <guest.elf> [--out <dir>]   # export a ProgramImage
 ```
+
+`artifact-dump` writes `<name>.img` — the frozen `postcard` wire form, with no
+header of its own, which is the artifact later stages read — and `<name>.img.txt`,
+a report of that artifact with the full instruction listing.
+`docs/guest-program-manual.md` walks the whole path from an empty crate to those
+two files.
 
 `tools/transcript-ref` is deliberately outside the cargo workspace, so it takes
 `--manifest-path` rather than `-p`. Its Plonky3 and `zkhash` dependencies would otherwise

@@ -109,6 +109,14 @@ is unstable in the pinned cargo). Two clean builds on one machine do agree, whic
 acceptance 2 asks and what `tests/reproducible.rs` proves. Everything derivable *from* the
 ELFs is regenerated and diffed.
 
+## Exporting an image
+`tools/artifact-dump` writes a `ProgramImage` out as the frozen `postcard` wire
+form — no container, no header — beside a text report of it. It is the path a
+guest author takes from an ELF to something later stages read and something a
+person can check by eye, and `docs/guest-program-manual.md` is that walkthrough.
+Its tests parse the printed listing back and compare it to the image slot for
+slot, so the report cannot drift from what this crate produces.
+
 ## Host loadability is a separate property, and `tests/layout.rs` owns it
 This crate reads an ELF the way the zkVM will: `p_vaddr` and `p_memsz` into a flat RAM
 window where every address exists by construction. A **host** program loader --
