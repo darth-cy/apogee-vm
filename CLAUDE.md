@@ -107,8 +107,8 @@ ordinary arrangement and the suite runs fine inside one. The tests stay `#[ignor
 machine with no emulator cannot report silent coverage, and CI asks for them by name:
 
 ```
-cargo test -p loader --test qemu -- --ignored        # a Linux host with qemu-user
-cargo test -p loader --test layout -- --ignored      # after editing link.ld
+cargo test -p loader --test qemu -- --include-ignored   # a Linux host with qemu-user
+cargo test -p loader --test layout -- --ignored         # after editing link.ld
 ```
 
 On macOS that costs about four minutes of setup, once:
@@ -117,7 +117,7 @@ On macOS that costs about four minutes of setup, once:
 brew install colima docker && colima start --cpu 4 --memory 8 --disk 60
 docker run --rm -v "$PWD":/w -w /w -e CARGO_TARGET_DIR=/tmp/t rust:latest \
   bash -c 'apt-get update -qq && apt-get install -y -qq qemu-user &&
-           cargo test -p loader --test qemu -- --ignored'
+           cargo test -p loader --test qemu -- --include-ignored'
 ```
 
 `CARGO_TARGET_DIR` is not optional there: cargo does not namespace `target/` by host

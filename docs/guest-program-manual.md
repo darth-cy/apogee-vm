@@ -520,7 +520,7 @@ stay `#[ignore]`d so a machine with no emulator cannot report silent coverage,
 and you ask for them by name:
 
 ```
-cargo test -p loader --test qemu -- --ignored     # a Linux host with qemu-user
+cargo test -p loader --test qemu -- --include-ignored   # a Linux host with qemu-user
 ```
 
 **On macOS, borrow a Linux.** Apple Silicon runs one at native speed, so only
@@ -533,7 +533,7 @@ colima start --cpu 4 --memory 8 --disk 60
 
 docker run --rm -v "$PWD":/w -w /w -e CARGO_TARGET_DIR=/tmp/t rust:latest \
   bash -c 'apt-get update -qq && apt-get install -y -qq qemu-user &&
-           cargo test -p loader --test qemu -- --ignored'
+           cargo test -p loader --test qemu -- --include-ignored'
 ```
 
 `rust:latest` ships rustup, which reads `rust-toolchain.toml` on the first

@@ -29,8 +29,14 @@ jobs:
       - name: qemu-riscv32
         run: sudo apt-get update && sudo apt-get install -y qemu-user
 
+      #
+      # `--include-ignored`, not `--ignored`: the latter runs *only* ignored
+      # tests, so a case added here without the attribute would be filtered out
+      # and CI would report green for a suite it never ran. Every case in the
+      # file carries `#[ignore]` today; this is what keeps that from being
+      # load-bearing.
       - name: guests execute
-        run: cargo test -p loader --test qemu -- --ignored
+        run: cargo test -p loader --test qemu -- --include-ignored
 
       # Four workspaces, all gated. `crates/guest-sdk` and `guests/` are separate
       # workspaces because they compile only for the guest target, and guest-sdk

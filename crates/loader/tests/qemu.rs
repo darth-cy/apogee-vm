@@ -27,7 +27,7 @@
 //! honoured should say so.
 //!
 //! ```text
-//! cargo test -p loader --test qemu -- --ignored    # a Linux host with qemu-user
+//! cargo test -p loader --test qemu -- --include-ignored   # a Linux host, qemu-user
 //! ```
 //!
 //! **`#[ignore]`d is not unrunnable, and on macOS it is not even inconvenient.**

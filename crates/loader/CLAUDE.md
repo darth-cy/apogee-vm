@@ -159,7 +159,8 @@ It needs no compiler and no emulator, so unlike `tests/qemu.rs` it runs everywhe
   cannot run at all. They used to print why and return, which reported a pass for work that
   did not happen; now they are ignored and `qemu()` panics when the emulator is missing, so
   there is no path on which they pass without executing. Run them with
-  `cargo test -p loader --test qemu -- --ignored` on a Linux host with `qemu-user`.
+  `cargo test -p loader --test qemu -- --include-ignored` on a Linux host with
+  `qemu-user`.
   CI does not gate on them; `.github/workflows/ci.yml` carries the two steps that would.
   They build their guest from source rather than reading the fixture, so behaviour is
   always checked against the current `guests/`.
