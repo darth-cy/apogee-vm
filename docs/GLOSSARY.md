@@ -142,6 +142,32 @@ point at infinity absorbs four copies of `constants::G1_INFINITY_SENTINEL`, whic
 `2^128` and so cannot be any real point's limb. Frozen in `docs/spec/mercury.md` §4;
 distinct from the *uncompressed affine* byte form, which is what reaches a file.
 
+**Batched opening** — `k` same-size columns opened at **one** point as a single Mercury
+instance: a challenge `rho` is squeezed after every commitment and every claimed value is
+absorbed, and `cm* = sum rho^i cm_i` is opened once. The proof is one 704-byte
+`MercuryProof` however many columns went into it, and the soundness cost is `(k-1)/|Fr|`.
+`docs/spec/mercury.md` §11. A shard prover calls it once per shard.
+
+**Deferred verification** — running every field-side check of a Mercury verification and
+emitting the two pairing relations' terms instead of computing the pairings. The terms are
+*accumulator entries*; `docs/spec/accumulator.md`.
+
+**Accumulator** — the list of `(side, scalar, G1 point)` terms deferred verifications
+produce. Lists are **concatenated, never combined**; only the final verifier spends one, and
+`ShardProof` and `BlockProof` carry none, because base verification pairs inside `crates/pcs`.
+
+**Deferred check** — one pairing relation `e(A, [1]_2) = e(B, [x]_2)` whose terms are
+deferred. One Mercury verification is one deferred check and emits twelve entries, whatever
+`n` and whatever a batch's `k`. Its entries are one **group**, and a group's boundary
+travels with the list — as a count word on the wire, as the `checks` slice in memory.
+
+**Pairing side** — which of the two fixed G2 arguments an accumulator term pairs against:
+`G2One` is `[1]_2`, `G2X` is `[x]_2`. Written `0` and `1` on the wire.
+
+**Discharge** — spending an accumulator: weight each deferred check by a power of a
+challenge drawn from the accumulator's own digest, one MSM per side, one two-pairing check.
+The weight is what keeps two checks from cancelling each other's errors.
+
 **Shard** — one fixed-height trace instance of a circuit family, proven independently
 except for the global memory argument.
 

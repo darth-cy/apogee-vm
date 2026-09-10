@@ -13,7 +13,7 @@ here.
 - Changing any value here is a protocol-version change and must bump
   `PROTOCOL_VERSION`.
 
-## Contents as of S06
+## Contents as of S09
 | Item | Meaning |
 | --- | --- |
 | `PROTOCOL_VERSION: u32` | Placeholder, `0`. First item absorbed into every transcript. |
@@ -44,7 +44,7 @@ here.
 | `POSEIDON2_RC3_INITIAL: [[&str; 3]; 4]` | Round constants, 4 initial full rounds. |
 | `POSEIDON2_RC3_INTERNAL: [&str; 56]` | Round constants, 56 partial rounds, lane 0. |
 | `POSEIDON2_RC3_TERMINAL: [[&str; 3]; 4]` | Round constants, 4 terminal full rounds. |
-| `transcript_tags` | The frozen tag table: 16 tags as of S08, sequential from 1. |
+| `transcript_tags` | The frozen tag table: 19 tags as of S09, sequential from 1. |
 
 `FR_MODULUS_MINUS_TWO` is an additive extension beyond S01's enumerated list; it is a
 property of the modulus and belongs next to it. The same reasoning puts

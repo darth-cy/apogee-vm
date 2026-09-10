@@ -16,6 +16,8 @@ rayon.workspace = true
 
 [dev-dependencies]
 test-support.workspace = true
+# Acceptance 4's cross-check: a reduced sumcheck claim opened at its own point.
+sumcheck.workspace = true
 # Also a real dependency; repeated here so the integration tests can use it to
 # build the toy SRS, which a test binary cannot reach through the library.
 rayon.workspace = true

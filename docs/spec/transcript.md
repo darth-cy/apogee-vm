@@ -193,6 +193,27 @@ uninitialised value can never be a valid message.
 | `BDFG_BATCH` | 14 | challenge |
 | `BDFG_POINT` | 15 | challenge |
 | `PAIRING_MERGE` | 16 | challenge |
+| `MERCURY_BATCH` | 17 | challenge |
+| `ACCUMULATOR_DIGEST` | 18 | scalars |
+| `ACCUMULATOR_MERGE` | 19 | challenge |
+
+Tags 17 to 19 are S09's. `MERCURY_BATCH` is the challenge that batches `k`
+column commitments opened at one point into a single Mercury instance, drawn
+after every commitment and every claimed value is absorbed
+(`docs/spec/mercury.md` §11). `ACCUMULATOR_DIGEST` frames the words of a
+deferred-pairing accumulator in the separate sponge that digests them, and
+`ACCUMULATOR_MERGE` is the per-check RLC weight a discharge draws from a sponge
+seeded with that digest (`docs/spec/accumulator.md` §5 and §6).
+
+S09 also gave `COMMITMENT` and `EVALUATION_CLAIM` new messages in their existing
+kind: a batch absorbs its commitment list under the first as one message of `4k`
+limbs, and `u` followed by all `k` claimed values under the second.
+
+`ACCUMULATOR_DIGEST` is used twice, in the same kind both times, exactly as
+`WITNESS_DIGEST` is: it frames the words absorbed by the sponge that produces the
+digest, and it frames the single scalar that carries the digest into the sponge
+`ACCUMULATOR_MERGE` is drawn from. The squeeze that ends the first sponge is a
+raw `sample`, **not** a `challenge_scalar`, for the same reason.
 
 Tags 10 to 16 are S08's, and what each frames is fixed by
 `docs/spec/mercury.md` §5's schedule. `MERCURY_INSTANCE` frames one scalar, the

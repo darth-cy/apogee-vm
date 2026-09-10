@@ -23,7 +23,8 @@ crates/
   poly/          MultilinearPoly + small-type backing + eq machinery; no_std
   sumcheck/      Gate + zerocheck prover/verifier; no_std
   srs/           snarkjs .ptau ingestion, the SRS archive, univariate KZG; std
-  pcs/           Mercury commit/open/verify + the typed G1 transcript absorption; std
+  pcs/           Mercury commit/open/verify, RLC batching, deferred pairings
+                 and the accumulator, plus the typed G1 absorption; std
 assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 handoff
 tools/
   kat-gen/       regenerates the committed Fr, multilinear, curve, MSM, SRS and G1-absorption
@@ -49,7 +50,7 @@ cargo fmt --all -- --check
 cargo fmt --manifest-path tools/transcript-ref/Cargo.toml --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
-cargo test --workspace                      # 301 tests as of S08
+cargo test --workspace                      # 341 tests as of S09
 cargo build -p field -p constants -p transcript -p poly -p sumcheck --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
@@ -102,6 +103,23 @@ does not name a version anywhere, so it cannot drift from that pin.
 - **A Mercury commitment IS a plain KZG commitment** of the evaluation table read as
   coefficients — exact equality, no second scheme. Trace heights are *even* powers of two
   so that `b = sqrt(n)` exists, which is where the height menu comes from.
+- **A batch is one instance, not `k` of them.** `pcs::batch_open` opens `k` same-size
+  columns at ONE point by squeezing `rho` *after* every commitment and every claimed value
+  is absorbed, then opening `cm* = Σ ρ^i cm_i` once. Column `i` carries `ρ^i`, so index 0
+  carries 1 and reordering the list is a different statement. The proof is one 704-byte
+  `MercuryProof` however large `k` is. `docs/spec/mercury.md` §11. A `k=1` batch is **not**
+  the same transcript as a bare single opening and the two are not interchangeable.
+- **`AccumulatorEntry` and `PairingSide` are frozen forever.** A deferred Mercury
+  verification emits exactly 12 entries — `cm`, the 8 proof points in field order, `[1]_1`,
+  then the two `G2X` terms — each six canonical Fr words and 192 bytes. Groups are
+  per deferred check, carried as a count word on the wire and as the `checks: &[usize]`
+  argument in memory. Entry lists are **concatenated, never combined**; `discharge` weights
+  each check by a power of a challenge drawn from the accumulator's own digest, and that
+  weight is load-bearing — without it two checks can cancel each other's errors.
+  `docs/spec/accumulator.md`. `ShardProof` and `BlockProof` carry no entries.
+- **`discharge` validates every accumulator point.** Nobody upstream does: absorption binds
+  claimed limbs, and the in-VM replay does no curve math. One rule, `docs/spec/accumulator.md`
+  §4, cited rather than restated.
 - **Fixed proof shapes.** A sumcheck round message is 4 coefficients, always — the
   degree ceiling makes the round polynomial a cubic, and nothing in a proof has a
   data-dependent length.
@@ -140,3 +158,4 @@ does not name a version anywhere, so it cannot drift from that pin.
 | S06 — Fq6/Fq12, Miller loop, final exponentiation | done | `docs/handoff/S06-pairing.md` |
 | S07 — Pippenger MSM + ptau ingestion + KZG | done | `docs/handoff/S07-msm-srs-kzg.md` |
 | S08 — Mercury I: single-polynomial commit/open/verify | done | `docs/handoff/S08-mercury-single.md` |
+| S09 — Mercury II: RLC batching, deferral, accumulator | done | `docs/handoff/S09-mercury-batching.md` |

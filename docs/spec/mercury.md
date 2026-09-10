@@ -1,7 +1,7 @@
 # Mercury: the multilinear polynomial commitment scheme
 
-Frozen as of S08 for the single-polynomial case. Changing anything here is a
-protocol-version change.
+Frozen as of S08 for the single-polynomial case, and as of S09 for the batching
+of §11. Changing anything here is a protocol-version change.
 
 Normative sources: **Mercury**, Eagen and Gabizon, ePrint 2025/385, whose §6 is
 the protocol; and **BDFG20**, Boneh, Drake, Fisch and Gabizon, ePrint 2020/081,
@@ -413,8 +413,10 @@ is `srs::SrsVerifier` — and does no G2 arithmetic beyond passing those two.
 Knowledge soundness in the AGM under Q-DLOG, with a trusted powers-of-tau SRS
 (`docs/spec/srs.md`). Mercury's own analysis bounds the Schwartz-Zippel term at
 `6n/|Fr|` and each batching challenge at `1/|Fr|`; the pairing merge of §8.3
-adds one more `1/|Fr|`. On BN254 that is roughly 100 to 103 bits of security,
-and no claim beyond that is made anywhere.
+adds one more `1/|Fr|`, and §11's column batching adds `(k-1)/|Fr|` for a batch
+of `k` columns. On BN254 that is roughly 100 to 103 bits of security, and no
+claim beyond that is made anywhere. Every one of those terms is dominated by
+`6n/|Fr|` for any `k` a shard can hold.
 
 **Not hiding, no zero knowledge.** Mercury is not a hiding commitment and this
 implementation adds no blinding. Nothing in this protocol may be described as
@@ -424,3 +426,124 @@ zero-knowledge.
 dropped, so nothing binds a proof to a particular SRS. That is a repository-wide
 gap, not a Mercury one, and it is recorded here because a Mercury proof is the
 first artifact that would carry the binding.
+
+---
+
+## 11. Batching `k` columns at one point — frozen as of S09
+
+This argument is not in the paper. `k` commitments to **same-size** columns,
+opened at **one** point `u`, become a single Mercury instance.
+
+`crates/pcs`: `batch_open`, `batch_verify`, `batch_verify_deferred`.
+
+### 11.1 The schedule
+
+Three steps, before the opening of §5 begins.
+
+| # | Operation | Tag | Message |
+| --- | --- | --- | --- |
+| B1 | absorb | `COMMITMENT` | `append_g1_list` of `cm_0 .. cm_(k-1)`: **one** message of `4k` limbs |
+| B2 | absorb | `EVALUATION_CLAIM` | `s + k` scalars: `u_0 .. u_(s-1)`, then `v_0 .. v_(k-1)` |
+| B3 | **squeeze** | `MERCURY_BATCH` | `rho` |
+
+Then `cm* = sum_i rho^i cm_i` and `v* = sum_i rho^i v_i`, and §5's sixteen steps
+run on the instance `(cm*, u, v*)`.
+
+Rules this schedule obeys, each load-bearing:
+
+1. **`rho` is squeezed only after all `k` commitments AND all `k` claimed values
+   are absorbed.** A prover that could choose any of them after seeing `rho` can
+   choose them to cancel.
+2. **The commitments are absorbed as passed**, in list order, and `cm*` is
+   derived from those same points. Index `i` carries `rho^i`, so index `0`
+   carries `1`: reordering the list is a different statement.
+3. **The commitment list is one length-delimited message.** The typed layer's
+   length field is `4k`, which is what makes `k` recoverable and therefore makes
+   the absorbed stream injective: `k` from the first message's length, then
+   `s = (s + k) - k` from the second's. Nothing else pins `k`, so splitting that
+   message, or dropping its length, would break injectivity — and dropping one
+   commitment while claiming `k - 1` would then be free.
+4. **`rho` is *not* resampled on zero.** `rho = 0` collapses the batch to
+   column 0 alone: `cm* = cm_0`, `v* = v_0`, and columns `1 .. k-1` go
+   unchecked. That is a **soundness** event, not a completeness one — an honest
+   prover still produces a proof that verifies — and it is already counted: it
+   is precisely the case `E(0) = 0` in §11.2, one of the at most `k - 1` roots
+   the `(k-1)/|Fr|` bound is over. Resampling would remove one root out of
+   `k - 1` and change nothing else, so it is not worth a rule. Contrast §7,
+   where `z = 0` must be resampled because the protocol divides by `z` and there
+   is no proof at all without an inverse.
+5. `rho` here is the **column-batching** challenge, under `MERCURY_BATCH`. §8.3's
+   `rho` is the pairing-merge challenge, under `PAIRING_MERGE`. The two never
+   appear in the same expression: by the time the merge challenge is drawn, the
+   batch has already become one instance.
+
+A `k = 1` batch is therefore **not** the same transcript as a bare single
+opening, and the two are not interchangeable: a proof made by one is rejected by
+the other's verifier. That is correct — they are different statements — and
+`crates/pcs/tests/vectors/mercury_batch.txt` pins the `k = 1` bytes.
+
+### 11.2 The lemma
+
+**Setup.** Let `f_0 .. f_(k-1)` be multilinears on the same `s = 2t` variables,
+`cm_i = com(f_i) = [f_i(x)]_1` in the sense of §2, `u` a point, and `v_i` the
+claimed values. Let `rho` be drawn after every `cm_i` and every `v_i` is fixed.
+Put
+
+```text
+    f* = sum_i rho^i f_i        cm* = sum_i rho^i cm_i        v* = sum_i rho^i v_i
+```
+
+**Claim.** `cm*` is a Mercury commitment to `f*`, and if `v_i != fhat_i(u)` for
+some `i`, then `v* != fhat*(u)` for all but at most `k - 1` values of `rho`.
+
+**Proof.** The first half is KZG's homomorphism. A commitment is
+`[f(x)]_1` for the polynomial whose coefficients are the evaluation table (§2),
+and the map from a table to that group element is `Fr`-linear, so
+`sum_i rho^i [f_i(x)]_1 = [(sum_i rho^i f_i)(x)]_1 = com(f*)`. Reading an
+evaluation table as coefficients is itself linear, so `f*`'s table is the same
+combination of the `f_i` tables, and `f*` is a multilinear on the same `s`
+variables.
+
+For the second half, multilinear evaluation at a fixed `u` is linear too:
+`fhat*(u) = sum_i rho^i fhat_i(u)`. So
+
+```text
+    v* - fhat*(u) = sum_i (v_i - fhat_i(u)) rho^i = E(rho)
+```
+
+where `E` is a polynomial in `rho` of degree at most `k - 1` whose coefficients
+were all fixed before `rho` was drawn. If any claim is wrong, `E` is not the zero
+polynomial, and Schwartz-Zippel gives at most `k - 1` roots in `Fr`. The batching
+therefore adds **at most `(k-1)/|Fr|`** to the soundness error, on top of the
+single opening's own. ∎
+
+**The hypothesis a verifier cannot check.** The lemma needs each `f_i` to have
+fewer than `n` coefficients — the same precondition §10's knowledge soundness
+already places on the single instance, transported unchanged, since degree is
+subadditive under a linear combination. `batch_open` enforces it by construction
+(`MixedColumnSizes` rejects columns of different sizes, `UnsupportedNumVars`
+rejects a size that is not `2^(2t)`), but `batch_verify` sees only commitments and
+cannot check it: a commitment is a group element and carries no degree. It is a
+**caller obligation**, discharged wherever the commitments come from — for a
+shard proof, by the fixed trace heights of the `VmConfig`.
+
+### 11.3 The prover
+
+`f*` is **materialised into one column** before the opening, combining rows in
+parallel: `open` makes several passes over its polynomial, and recombining `k`
+columns lazily inside it would multiply `k` into every one of them. The
+combination is indexed and exact, so the result does not depend on the thread
+count or the scheduling.
+
+`batch_open` never recommits: `cm*` is derived from the commitments it was
+handed, so a commitment that does not match its column produces a proof that
+fails, exactly as §5's rule 1 arranges for the single case.
+
+### 11.4 Cost
+
+One `k`-point MSM for `cm*`, `k` multiply-adds per coefficient for `f*`, and then
+**one** opening — so a batch is `2n + O(sqrt n)` scalar multiplications however
+many columns it holds, against `k(2n + O(sqrt n))` for `k` separate openings. The
+proof is one `MercuryProof`: 704 bytes, not `704k`. Verification is one
+`batch_verify`, which is the single verifier plus one `k`-point MSM and `k`
+scalar multiply-adds.
