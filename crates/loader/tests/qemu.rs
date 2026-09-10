@@ -11,28 +11,46 @@
 //!
 //! # Why every test here is `#[ignore]`d
 //!
-//! `qemu-riscv32` is *user-mode* emulation: it translates Linux syscalls for a
-//! foreign architecture, so it is built for Linux hosts only and no macOS build
-//! of it exists -- Homebrew's `qemu` ships the system emulators and no
-//! `linux-user` targets at all. There is therefore no arrangement under which
-//! these run on a macOS developer machine, and a suite that silently passes by
-//! doing nothing is worse than one that is visibly not run: it reads as
-//! coverage in the summary line. So they are `#[ignore]`d, and [`qemu`] panics
-//! rather than returning when the emulator is missing -- running them is now an
-//! explicit request, and a request that cannot be honoured should say so.
+//! `qemu-riscv32` is *user-mode* emulation: it does not emulate a machine, it
+//! runs one Linux userspace binary by translating each syscall it makes into a
+//! syscall on the host. That is Linux-on-Linux with a CPU translated in
+//! between -- QEMU's own tree calls the mode `linux-user`, and it reimplements
+//! Linux's `mmap` flags, signal frames, `futex` and errno numbering by calling
+//! through to a Linux kernel underneath. So it builds for Linux hosts only and
+//! no native macOS build exists; Homebrew's `qemu` ships the system emulators
+//! and no `linux-user` targets at all.
+//!
+//! A machine with no emulator must not report silent coverage -- a suite that
+//! passes by doing nothing reads as green in the summary line. So these are
+//! `#[ignore]`d and [`qemu`] panics rather than returning when the emulator is
+//! missing: running them is an explicit request, and a request that cannot be
+//! honoured should say so.
 //!
 //! ```text
 //! cargo test -p loader --test qemu -- --ignored    # a Linux host with qemu-user
 //! ```
 //!
-//! **What still covers this ground without an emulator.** `tests/layout.rs`
-//! checks the property whose absence broke these four tests in CI -- that the
-//! image a host program loader is handed is one it can actually map and run --
-//! by reading the program headers directly. That runs everywhere. What is left
-//! uncovered here is execution itself: that fib computes the value it commits,
-//! that the shims move bytes over the right descriptors, and that the panic
-//! handler reports and exits nonzero. Nothing but an executor can witness those,
-//! and until S12 builds one, QEMU is it.
+//! **`#[ignore]`d is not unrunnable, and on macOS it is not even inconvenient.**
+//! Apple Silicon runs a Linux VM at native speed, so only the innermost hop is
+//! emulated. `docs/guest-program-manual.md` section 7 has the recipe; it is
+//! about four minutes of setup, and CI gates on this suite on every pull
+//! request.
+//!
+//! A guest built inside such a container is not the same bytes as one built on
+//! the host: rustc embeds absolute paths in `core`'s panic-location strings, so
+//! the ELFs differ in size as well as content. It does not matter here, because
+//! every test below builds its guest from source -- what is checked is the
+//! behaviour of the current `guests/` tree, not of a fixture.
+//!
+//! **What covers this ground without an emulator.** `tests/layout.rs` checks
+//! the property whose absence broke these tests in CI -- that the image a host
+//! program loader is handed is one it can actually map and run -- by reading
+//! the program headers directly, and it runs everywhere. What only an executor
+//! can witness is execution itself: that fib computes the value it commits,
+//! that the shims move bytes over the right descriptors, that a 256-bit
+//! `mul_div` and a 254-bit `Fr::pow` give the same answers on a 32-bit machine
+//! as on the host, and that the panic handler reports and exits nonzero. Until
+//! S12 builds a zkVM executor, QEMU is the only thing that can.
 
 mod common;
 
@@ -542,8 +560,9 @@ fn qemu() -> String {
     }
     panic!(
         "qemu-riscv32 is not on PATH, so the guests cannot be executed. \
-         User-mode QEMU is Linux-only -- on macOS there is no build of it to \
-         install. Run these on a Linux host with qemu-user, or rely on \
+         User-mode QEMU is Linux-only -- on macOS there is no native build \
+         of it, but a Linux container is enough and takes minutes: see \
+         docs/guest-program-manual.md section 7. Otherwise rely on \
          tests/layout.rs, which checks host loadability without an emulator. \
          (Looked in {:?}.)",
         std::env::var("PATH").unwrap_or_default()

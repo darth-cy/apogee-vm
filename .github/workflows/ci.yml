@@ -20,17 +20,17 @@ jobs:
 
       # User-mode QEMU is the only executor S10 has: the guests run under it
       # unmodified, which is why the ecall ABI uses Linux numbers. It is
-      # Linux-only -- no macOS build of it exists -- so `crates/loader/tests/
-      # qemu.rs` is `#[ignore]`d and CI does not gate on it. What that suite
-      # would have caught about the *image* is now covered by `tests/layout.rs`,
-      # which reads the program headers and runs everywhere; what stays
-      # uncovered is execution itself. To gate on it here, uncomment both:
-      #
-      #   - name: qemu-riscv32
-      #     run: sudo apt-get update && sudo apt-get install -y qemu-user
-      #
-      #   - name: guests execute
-      #     run: cargo test -p loader --test qemu -- --ignored
+      # Linux-only -- no native macOS build exists -- so `crates/loader/tests/
+      # qemu.rs` is `#[ignore]`d, which keeps a developer machine without an
+      # emulator from reporting silent coverage. This runner is Linux, so it
+      # asks for the suite by name. Execution is the one property nothing else
+      # here can witness: `tests/layout.rs` covers the *image*, but only an
+      # executor shows that the guests compute what they commit.
+      - name: qemu-riscv32
+        run: sudo apt-get update && sudo apt-get install -y qemu-user
+
+      - name: guests execute
+        run: cargo test -p loader --test qemu -- --ignored
 
       # Four workspaces, all gated. `crates/guest-sdk` and `guests/` are separate
       # workspaces because they compile only for the guest target, and guest-sdk

@@ -513,13 +513,43 @@ Three things to see there, and each was a real failure:
    the span up to `__stack_top` is the heap and the stack: undeclared, the
    first push dies on a signal before `main` runs.
 
-**Execution.** `qemu-riscv32` is the only executor before S12, it is user-mode
-emulation, and it is Linux-only — there is no macOS build. Those tests are
-`#[ignore]`d and CI does not gate on them:
+**Execution.** `qemu-riscv32` is the only executor before S12. It is user-mode
+emulation — it translates the guest's Linux syscalls into the host's — so it
+builds for Linux hosts only and there is no native macOS build of it. The tests
+stay `#[ignore]`d so a machine with no emulator cannot report silent coverage,
+and you ask for them by name:
 
 ```
 cargo test -p loader --test qemu -- --ignored     # a Linux host with qemu-user
 ```
+
+**On macOS, borrow a Linux.** Apple Silicon runs one at native speed, so only
+the innermost hop is emulated: macOS -> arm64 Linux VM -> `qemu-riscv32` ->
+guest. About four minutes of setup, once:
+
+```
+brew install colima docker
+colima start --cpu 4 --memory 8 --disk 60
+
+docker run --rm -v "$PWD":/w -w /w -e CARGO_TARGET_DIR=/tmp/t rust:latest \
+  bash -c 'apt-get update -qq && apt-get install -y -qq qemu-user &&
+           cargo test -p loader --test qemu -- --ignored'
+```
+
+`rust:latest` ships rustup, which reads `rust-toolchain.toml` on the first
+cargo call and installs the pinned toolchain and the guest target, so nothing
+drifts from the pin. Set `CARGO_TARGET_DIR` somewhere outside the repository:
+cargo does not namespace `target/` by host triple, so sharing it with the macOS
+build makes each run rebuild over the other.
+
+A guest built inside that container is **not** the same bytes as one built on
+the host — rustc embeds absolute paths in `core`'s panic-location strings and
+stable Rust cannot remap them, so the two differ in size as well as content.
+That is why `crates/loader/tests/qemu.rs` builds every guest from source rather
+than reading a committed fixture: what it checks is the behaviour of the
+current `guests/` tree, and the fixtures are loader-differential inputs pinned
+separately. What does *not* differ is your own crate's panic locations, which
+are relative to the crate root, or anything on fd 0 and fd 1.
 
 To run your own guest by hand on a Linux host, `cargo run` from the guest's
 directory invokes it through QEMU already — that is what the `runner` line in

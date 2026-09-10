@@ -209,10 +209,11 @@ every guest in the workspace, and the doctest that compiles the "read an artifac
 snippet. `fmt` and `clippy -D warnings` are clean across **all four** workspaces — the
 root one, the oracle, `crates/guest-sdk` and `guests/` — with no `#[allow]` added anywhere.
 
-**Acceptances 3 and 8 are not verified on this machine and never were**; see "The defect
-CI found" below. The seven `tests/qemu.rs` cases — four from S10 as first written, three
-added with the new guests — are `#[ignore]`d, because user-mode QEMU is Linux-only and no
-macOS build of it exists.
+**Acceptances 3 and 8 cannot be verified natively on macOS**; see "The defect CI found"
+below. The seven `tests/qemu.rs` cases — four from S10 as first written, three added with
+the new guests — are `#[ignore]`d, because user-mode QEMU is Linux-only and no native macOS
+build of it exists. They have since been run in a Linux container and all seven pass; see
+"Execution, since verified", and CI now gates on them.
 
 - **Acceptance 1** — `cd guests/fib && cargo build --target riscv32imac-unknown-none-elf`,
   no other flags, on stock stable. A CI step runs exactly that.
@@ -396,13 +397,20 @@ Two process lessons worth carrying forward:
   missing: running them is an explicit request, and a request that cannot be honoured
   should say so.
 
-**What is still unverified.** Execution itself — that fib computes the value it commits,
-that the shims move bytes over the right descriptors, that the panic handler reports and
-exits nonzero. `layout.rs` proves the image is loadable, not that it is correct. Nothing
-but an executor can close that, and until S12 builds one it takes a Linux host:
-`cargo test -p loader --test qemu -- --ignored`. `.github/workflows/ci.yml` carries the
-two commented steps that would gate on it; enabling them is a one-line decision once a
-Linux run confirms green.
+**Execution, since verified.** This was the stage's open hole — `layout.rs` proves the
+image is loadable, not that it is correct — and it is now closed. All seven `tests/qemu.rs`
+cases were run on 2026-09-10 under `qemu-riscv32` 10.0.11 in a Linux container on the
+author's macOS machine (colima; `docs/guest-program-manual.md` §7 has the recipe), with
+rustup honouring the 1.96.1 pin: **7 passed, 0 failed, in 1.91s**. On the strength of that
+the two steps in `.github/workflows/ci.yml` are no longer commented out, so every pull
+request now gates on execution.
+
+The claim that "there is no arrangement under which these run on a macOS developer machine"
+appeared in `tests/qemu.rs` and was simply false. The true statement is narrower: no
+*native* macOS build of user-mode QEMU exists. A Linux VM is an ordinary arrangement and
+costs about four minutes. The wording is corrected in `qemu.rs`, `CLAUDE.md` and the manual,
+because a repository that tells a developer a suite is unrunnable will stop someone who
+could have run it.
 
 ## Exporting a `ProgramImage`, and the manual for it
 
@@ -477,9 +485,14 @@ bytes.** Not even a flag saying the advice verified reaches fd 1, because such a
 be a committed bit the prover chooses; which path ran goes to fd 2. That is the fd 3 rule
 written out at length, and `docs/guest-program-manual.md` §3 now points at it.
 
-Two things the reviewer should know about how they were checked. **None of the three has
-been executed** — `qemu-riscv32` is Linux-only — so their logic rests on desk-checking and
-on host harnesses that ran the pure arithmetic outside the guest, not on a run. And all
+Two things the reviewer should know about how they were checked. **All three have now
+been executed**, on 2026-09-10, in a Linux container — see "Execution, since verified"
+above. That is what retires the original note here, which said their logic rested on
+desk-checking and on host harnesses running the arithmetic outside the guest. What the run
+adds is the part desk-checking could not reach: that a 256-bit `mul_div` and `sqrt`, a
+254-bit `Fr::pow` and a field inversion give the same answers inside a 32-bit guest as on
+the host, and that `orderbook` commits identical fd 1 bytes under a correct permutation on
+fd 3, a transposition of it, and no fd 3 at all. And all
 three are committed as ELF fixtures, which took `crates/loader/tests/vectors/` from 524 kB
 to 1.4 MB; the alternative was a from-source test CI would not run, and the fixtures buy
 host-loadability, round-trip and listing-fidelity coverage on every run for no build cost.

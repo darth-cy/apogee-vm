@@ -101,17 +101,33 @@ those components: `kat-gen -- loader` disassembles the committed guest ELFs with
 the disassembler is pinned to the same LLVM as the compiler.
 
 `qemu-riscv32` runs the guests, and is the only executor before S12. It is user-mode
-emulation, so it is Linux-only and no macOS build of it exists. `crates/loader/tests/qemu.rs`
-is therefore `#[ignore]`d and CI does not gate on it:
+emulation: it translates Linux syscalls into host ones, so it builds for Linux hosts only
+and no macOS build of it exists. That is a claim about *native* builds — a Linux VM is an
+ordinary arrangement and the suite runs fine inside one. The tests stay `#[ignore]`d so a
+machine with no emulator cannot report silent coverage, and CI asks for them by name:
 
 ```
 cargo test -p loader --test qemu -- --ignored        # a Linux host with qemu-user
 cargo test -p loader --test layout -- --ignored      # after editing link.ld
 ```
 
-What that suite would have caught about the *image* is covered by `crates/loader/tests/
-layout.rs`, which reads the program headers and runs everywhere. What stays uncovered is
-execution itself. `.github/workflows/ci.yml` carries the two steps that would gate on it.
+On macOS that costs about four minutes of setup, once:
+
+```
+brew install colima docker && colima start --cpu 4 --memory 8 --disk 60
+docker run --rm -v "$PWD":/w -w /w -e CARGO_TARGET_DIR=/tmp/t rust:latest \
+  bash -c 'apt-get update -qq && apt-get install -y -qq qemu-user &&
+           cargo test -p loader --test qemu -- --ignored'
+```
+
+`CARGO_TARGET_DIR` is not optional there: cargo does not namespace `target/` by host
+triple, so sharing it with the macOS build makes each run rebuild over the other. The
+guests built inside the container differ in bytes from the committed fixtures — rustc
+embeds absolute paths in panic-location strings — which is why `qemu.rs` builds every
+guest from source rather than reading a fixture.
+
+What that suite would have caught about the *image* is also covered by `crates/loader/
+tests/layout.rs`, which reads the program headers and runs everywhere.
 
 ## The rules that bite most often
 - **Concrete types.** `Fr` is a struct. There is no `F: Field`, and there never will be.
