@@ -35,3 +35,28 @@ panic = "abort"
 debug = false
 incremental = false
 codegen-units = 1
+
+# The release profile exists because in a zkVM instruction count *is* proving
+# cost, and `opt-level = 3` removes between 15% and 45% of the image across the
+# six guests. What it must not do is change what a guest computes.
+#
+# Cargo's default release profile turns `overflow-checks` off, and that is not
+# a performance setting here, it is a semantic one:
+#
+#     let total = balance + deposit;   // balance = u32::MAX, deposit = 1
+#
+#     dev      panicked at src/main.rs: attempt to add with overflow, exit 101
+#     release  no trap, committed 00 00 00 00 on fd 1, exit 0
+#
+# fd 1 is the committed public output. Left to the defaults, the optimisation
+# level would be part of the statement being proven, and `tests/qemu.rs` --
+# which builds guests in dev -- would witness nothing about a release artifact.
+# So the two profiles are pinned to the same *semantics* and differ only in
+# `opt-level`, and CI runs the behaviour suite against both.
+[profile.release]
+panic = "abort"
+debug = false
+incremental = false
+codegen-units = 1
+overflow-checks = true
+debug-assertions = true

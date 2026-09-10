@@ -221,10 +221,36 @@ pub fn to_postcard(image: &ProgramImage) -> Vec<u8> {
 /// because a guest ELF is an artifact whose bytes get compared and a stray
 /// `RUSTFLAGS` would make the comparison meaningless.
 pub fn build(name: &str, slot: &str) -> Vec<u8> {
+    build_profile(name, slot, "debug")
+}
+
+/// The profile the behaviour suite builds at: `debug`, unless
+/// `APOGEE_GUEST_PROFILE` names another.
+///
+/// `guests/Cargo.toml` pins dev and release to the same *semantics* -- release
+/// keeps `overflow-checks` and `debug-assertions` on -- so every test that
+/// witnesses behaviour must give the same answer under either. CI runs
+/// `tests/qemu.rs` twice, once per profile, which is what holds that pin
+/// honest: unpinned, a release guest commits a wrapped `u32` on fd 1 where a
+/// dev guest panics.
+///
+/// Only the QEMU suite reads this. `layout.rs` and `reproducible.rs` stay on
+/// debug deliberately -- they are about the committed artifacts, which are dev
+/// builds.
+pub fn profile() -> String {
+    std::env::var("APOGEE_GUEST_PROFILE").unwrap_or_else(|_| "debug".into())
+}
+
+/// [`build`], at a named cargo profile: `debug` or `release`.
+pub fn build_profile(name: &str, slot: &str, profile: &str) -> Vec<u8> {
+    assert!(
+        matches!(profile, "debug" | "release"),
+        "unknown guest profile {profile:?}: expected \"debug\" or \"release\""
+    );
     let guest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../guests")
         .join(name);
-    let target_dir = std::env::temp_dir().join(format!("apogee-{slot}-{name}"));
+    let target_dir = std::env::temp_dir().join(format!("apogee-{slot}-{profile}-{name}"));
     let _ = fs::remove_dir_all(&target_dir);
 
     let mut command = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
@@ -232,6 +258,9 @@ pub fn build(name: &str, slot: &str) -> Vec<u8> {
         .current_dir(&guest_dir)
         .args(["build", "--target", "riscv32imac-unknown-none-elf"])
         .env("CARGO_TARGET_DIR", &target_dir);
+    if profile == "release" {
+        command.arg("--release");
+    }
     for key in [
         "RUSTFLAGS",
         "CARGO_ENCODED_RUSTFLAGS",
@@ -250,7 +279,8 @@ pub fn build(name: &str, slot: &str) -> Vec<u8> {
     );
 
     let elf = target_dir
-        .join("riscv32imac-unknown-none-elf/debug")
+        .join("riscv32imac-unknown-none-elf")
+        .join(profile)
         .join(name);
     let bytes = fs::read(&elf).unwrap_or_else(|e| panic!("reading {}: {e}", elf.display()));
     let _ = fs::remove_dir_all(&target_dir);

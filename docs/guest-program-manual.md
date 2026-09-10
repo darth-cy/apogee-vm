@@ -223,6 +223,52 @@ one target directory for the whole guest workspace, not one per guest.
 
 ---
 
+### Building at `--release`
+
+Everything above builds the dev profile, which is what the committed fixtures
+are and what the walkthrough checks. A guest also builds optimised:
+
+```
+cd guests/hello
+cargo build --target riscv32imac-unknown-none-elf --release
+```
+
+The ELF lands beside the dev one, at
+`guests/target/riscv32imac-unknown-none-elf/release/hello`.
+
+Reach for it when you care about cost. Instruction count is what a zkVM pays
+for, and `opt-level = 3` removes between a quarter and a half of the image:
+
+```text
+              dev     release
+  fib        2186        1299     41% fewer
+  echo       9881        6179     37% fewer
+  rvc-dense  2277        1468     36% fewer
+  amm        8227        6260     24% fewer
+  orderbook 20223        8499     58% fewer
+  vault     11904        8182     31% fewer
+```
+
+**Both profiles are pinned in `guests/Cargo.toml`, and the release one is not
+cargo's default.** Cargo would turn `overflow-checks` off in release, and in a
+guest that is a semantic change rather than a performance one:
+
+```rust
+let total = balance + deposit;      // balance = u32::MAX, deposit = 1
+```
+
+```text
+  dev      panicked at src/main.rs: attempt to add with overflow, exit 101
+  release  no trap, committed 00 00 00 00 on fd 1, exit 0
+```
+
+fd 1 is the committed public output, so with the defaults the optimisation level
+would be part of the statement you prove. The pinned profile keeps
+`overflow-checks` and `debug-assertions` on, so dev and release are the same
+program at different optimisation levels, and CI runs the behaviour suite
+against both to hold that. If you pin your own profiles in an out-of-tree
+guest, copy those two lines.
+
 ## 5. Export the artifact
 
 ```

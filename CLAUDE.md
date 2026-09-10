@@ -67,6 +67,7 @@ cargo build -p field -p constants -p transcript -p poly -p sumcheck --target ris
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
 cd guests/fib && cargo build --target riscv32imac-unknown-none-elf
+APOGEE_GUEST_PROFILE=release cargo test -p loader --test qemu -- --include-ignored
 git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/
 -------------------------------------------------------------------------------
 cargo run -p kat-gen                        # refresh every fixture (manual, deliberate)
@@ -109,7 +110,18 @@ machine with no emulator cannot report silent coverage, and CI asks for them by 
 ```
 cargo test -p loader --test qemu -- --include-ignored   # a Linux host with qemu-user
 cargo test -p loader --test layout -- --ignored         # after editing link.ld
+
+APOGEE_GUEST_PROFILE=release \
+  cargo test -p loader --test qemu -- --include-ignored   # the same seven, optimised
 ```
+
+**Guests build at `--release` too, and both profiles are pinned.** In a zkVM
+instruction count is proving cost, and `opt-level = 3` removes 24% to 58% of the image
+across the six guests. Cargo's default release profile would also turn `overflow-checks`
+off, which is not a performance setting here: `u32::MAX + 1` then commits `00000000` on
+fd 1 where the dev build panics and exits 101, and fd 1 is the *committed public output*.
+So `guests/Cargo.toml` pins both profiles to the same semantics — they differ only in
+`opt-level` — and CI runs `tests/qemu.rs` twice, once per profile, to hold that.
 
 On macOS that costs about four minutes of setup, once:
 

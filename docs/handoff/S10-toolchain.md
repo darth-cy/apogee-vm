@@ -405,6 +405,47 @@ rustup honouring the 1.96.1 pin: **7 passed, 0 failed, in 1.91s**. On the streng
 the two steps in `.github/workflows/ci.yml` are no longer commented out, so every pull
 request now gates on execution.
 
+**The release profile, and why it had to be pinned.** S10 shipped `[profile.dev]` pinned
+and `[profile.release]` absent, so `cargo build --release` from a guest directory worked
+but took cargo's defaults. That is not a performance question here. Cargo turns
+`overflow-checks` off in release, and the same source then commits a different value:
+
+```text
+    let total = balance + deposit;      // balance = u32::MAX, deposit = 1
+
+    dev      panicked at src/main.rs: attempt to add with overflow, exit 101
+    release  no trap, committed 00 00 00 00 on fd 1, exit 0
+```
+
+fd 1 is the committed public output, so left to the defaults the optimisation level would
+have been part of the statement proven, and `tests/qemu.rs` — which builds in dev — would
+have witnessed nothing about a release artifact. `guests/Cargo.toml` now pins both
+profiles to the same semantics, differing only in `opt-level`, and `tests/qemu.rs` takes
+its profile from `APOGEE_GUEST_PROFILE` so CI can run all seven cases twice. Both runs
+pass with identical expected bytes.
+
+It is worth having: instruction count is what a zkVM pays for, and `opt-level = 3` removes
+24% to 58% of the image.
+
+```text
+                 dev     release
+    fib         2186        1299     41% fewer
+    echo        9881        6179     37% fewer
+    rvc-dense   2277        1468     36% fewer
+    amm         8227        6260     24% fewer
+    orderbook  20223        8499     58% fewer
+    vault      11904        8182     31% fewer
+```
+
+Two things measured on the way that did *not* go as expected, recorded so the next stage
+does not re-derive them. Two clean `--release` builds of `orderbook` were byte-identical
+even at cargo's default `codegen-units = 16`, so the dev profile's `codegen-units = 1`
+is belt-and-braces on this machine rather than load-bearing for reproducibility — it is
+kept for release anyway, and it is *also* the larger win for the two biggest guests, where
+whole-crate inlining beats the cost of the checks. And `--ignored` runs only ignored
+tests; the CI step now says `--include-ignored`, so a case added to `qemu.rs` without the
+attribute cannot be silently filtered out.
+
 The claim that "there is no arrangement under which these run on a macOS developer machine"
 appeared in `tests/qemu.rs` and was simply false. The true statement is narrower: no
 *native* macOS build of user-mode QEMU exists. A Linux VM is an ordinary arrangement and

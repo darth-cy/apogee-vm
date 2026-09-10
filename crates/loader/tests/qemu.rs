@@ -494,7 +494,12 @@ fn execute(qemu: &str, tag: &str, name: &str, stdin: &[u8], hint: Option<&[u8]>)
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("creating the run directory");
     let elf = dir.join(name);
-    fs::write(&elf, common::build(name, &format!("qemu-{tag}"))).expect("writing the guest");
+    let profile = common::profile();
+    fs::write(
+        &elf,
+        common::build_profile(name, &format!("qemu-{tag}"), &profile),
+    )
+    .expect("writing the guest");
     // QEMU opens the file itself rather than exec'ing it, but a guest binary
     // that is not executable is a confusing thing to hand a debugger.
     fs::set_permissions(&elf, fs::Permissions::from_mode(0o755)).expect("marking the guest");
