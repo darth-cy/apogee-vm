@@ -257,6 +257,16 @@ fixtures regenerate to their pinned digests.
   disagreement is designed and recorded: llvm-objdump prints `<unknown>` for a fence
   with a nonzero `rs1` or an unknown `fm`, which the ISA says to accept; no corpus holds
   one.
+- **Every guest at both profiles, once, after the PR opened.** The committed listings
+  cover `fib`, `rvc-dense` and `amm` (S10's choice, kept); asked whether every guest
+  decodes, a one-off harness ran a fresh `llvm-objdump` over all seven committed ELFs
+  and all seven `--release` builds and put each through the same differential, plus
+  `decode_program` at the defaults. All fourteen: 91,519 instructions, every one
+  decoded and rendered equal to the disassembler, every instruction slot compared,
+  every listing line accounted for (the only lines skipped are the 33 `c.unimp`
+  halfwords the loader records as not code), no `<unknown>`, and every build derives.
+  Not committed: the release ELFs are not fixtures, and four more listings would be
+  about 1.9 MB of the evidence the three already give.
 - **`guests/atomics` is real compiler output for the whole A extension**: all eleven
   instructions in every `aq`/`rl` combination rustc emits, `lr.w`/`sc.w` loops and six
   fences, run under QEMU in both profiles. Its nine committed words observe both halves
@@ -412,5 +422,15 @@ differential cannot see it, because it prints the immediate shifted right by 12.
   and does not return, and a recomputation check against a registered identity.
 - **The SRS digest is still absent** (`docs/spec/srs.md` §4), and identity is taken over
   a presumed SRS; `identity.txt` records which ceremony by its `[x]_1`.
+- **Delegation families take ids 8 and up, above init/teardown.** `VmConfig::from_bytes`
+  requires init/teardown to be *present*, not last, so a config holding one parses.
+  Two more places read "not init/teardown" as "claims pcs", and the delegation stage
+  must revisit both: `field_mask` exempts only init/teardown from the mandatory
+  `pc, next_pc` prefix, and `decode_program` puts a family in the config only if it
+  claims a pc (init/teardown always). A delegation family claims no pc (its call is an
+  `ecall` row in family 0), and which precompile runs is the run-time value of `a7`,
+  so static detachment cannot see it. That stage must give delegation families a
+  presence rule of their own. A program that uses no delegation family keeps its
+  identity: the `VM_CONFIG` message lists only the families present.
 - **`transcript_tags` has 24 entries.** Append, never renumber, never reuse across kinds;
   the same rule now covers `constants::family` and `constants::extra_mask`.

@@ -60,9 +60,11 @@ fn every_instruction_is_claimed_by_exactly_one_family() {
             })
             .collect();
         println!("{name}: {} instructions; {}", slots.len(), sizes.join(", "));
-        assert_eq!(
-            config.families.last().map(|(f, _)| *f),
-            Some(family::INIT_TEARDOWN),
+        assert!(
+            config
+                .families
+                .iter()
+                .any(|(f, _)| *f == family::INIT_TEARDOWN),
             "{name}: init/teardown is in every VmConfig"
         );
     }

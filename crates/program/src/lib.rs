@@ -339,9 +339,12 @@ impl VmConfig {
 
     /// Decode, refusing anything [`VmConfig::to_bytes`] could not have written
     /// from a derived config: a wrong length, an unknown or out-of-order family,
-    /// a height off the menu, a family set that does not end with
-    /// init/teardown — which derivation puts in every config. `None` rather
-    /// than a panic.
+    /// a height off the menu, a family set without init/teardown — which
+    /// derivation puts in every config. `None` rather than a panic.
+    ///
+    /// Init/teardown is required to be *present*, not last. It has the highest
+    /// id today, but `FamilyId`s are append-only and the delegation families
+    /// take ids above it, so a config holding one lists it after init/teardown.
     pub fn from_bytes(bytes: &[u8]) -> Option<VmConfig> {
         let word = |i: usize| -> Option<u32> {
             Some(u32::from_le_bytes(
@@ -363,7 +366,7 @@ impl VmConfig {
             }
             families.push((f, h));
         }
-        if families.last().map(|(f, _)| *f) != Some(family::INIT_TEARDOWN) {
+        if !families.iter().any(|(f, _)| *f == family::INIT_TEARDOWN) {
             return None;
         }
         Some(VmConfig {

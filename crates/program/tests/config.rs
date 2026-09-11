@@ -129,16 +129,16 @@ fn the_descriptor_needs_one_shard_count_per_family() {
     absorb_statement_descriptor(&mut Transcript::new(), &fib_config(), &[1, 2]);
 }
 
-/// Derivation puts init/teardown last in every config, so a wire form without
-/// it — including the empty one — is not a config `to_bytes` could have
-/// written from a derivation.
+/// Derivation puts init/teardown in every config, so a wire form without it —
+/// including the empty one — is not a config `to_bytes` could have written
+/// from a derivation. Presence is what is checked, not position: delegation
+/// families are appended above init/teardown's id.
 #[test]
 fn a_config_without_init_teardown_is_refused() {
     let mut config = fib_config();
-    assert_eq!(
-        config.families.pop().map(|(f, _)| f),
-        Some(family::INIT_TEARDOWN)
-    );
+    let before = config.families.len();
+    config.families.retain(|(f, _)| *f != family::INIT_TEARDOWN);
+    assert_eq!(config.families.len(), before - 1);
     assert_eq!(VmConfig::from_bytes(&config.to_bytes()), None);
     let empty = VmConfig {
         families: Vec::new(),

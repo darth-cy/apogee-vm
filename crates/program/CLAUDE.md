@@ -151,7 +151,9 @@ cause.
 `bytecode_size_words`. **Per-proof shard counts are not in it.** Wire form, frozen: `u32`
 LE family count `k`, then `k` pairs `u32` LE `(family, height)`, then `u32` LE
 `bytecode_size_words`; `from_bytes` refuses a wrong length, an unknown or out-of-order
-family, a height off the menu, and a family set that does not end with init/teardown.
+family, a height off the menu, and a family set without init/teardown. Presence, not
+position: init/teardown has the highest id only until the delegation families are
+appended above it.
 
 The **statement descriptor** is the static `VmConfig` plus the per-proof shard count of
 each of its families, as two adjacent typed messages: `VM_CONFIG` carrying
