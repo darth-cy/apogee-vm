@@ -666,6 +666,13 @@ impl<'a> Machine<'a> {
                 self.exit = Some(status as i32);
                 status
             }
+            // Its one argument, the state pointer, is read as the ABI table
+            // says, so the row keeps its frame when the circuit lands. Until
+            // then every executor answers -ENOSYS.
+            ecall::PRECOMPILE_POSEIDON2 => {
+                self.read(&mut row, Role::Rs2, 10);
+                ecall::ENOSYS.wrapping_neg()
+            }
             _ => ecall::ENOSYS.wrapping_neg(),
         };
         self.write(&mut row, 10, result);

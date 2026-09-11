@@ -100,6 +100,7 @@ slot 2, and writes `a0` at slot 3; its `next_pc` is `pc + 4`, always.
 | `READ` 63 | `a0` fd, `a1` buf, `a2` count | bytes delivered, `min(count, left)`; `-EBADF` for a descriptor other than 0 and 3 |
 | `WRITE` 64 | `a0` fd, `a1` buf, `a2` count | `count`; `-EBADF` for a descriptor other than 1 and 2 |
 | `EXIT` 93 | `a0` status | the status, unchanged; execution stops after this row |
+| `PRECOMPILE_POSEIDON2` 0x500 | `a0` state pointer | `-ENOSYS` until its circuit exists; the row already has the frame it will keep |
 | anything else | none | `-ENOSYS` |
 
 The three slot-2 reads sit at distinct registers, which is what lets them share the
@@ -131,7 +132,15 @@ query per role present, in this frozen order**:
 | `ram` | 3 | RAM | a store's, an atomic's or a transfer's word |
 | `rd` | 3 | REG | `rd`; an ecall row's `a0` result |
 
-That order is non-decreasing in slot, so the log is ordered by timestamp.
+The rule underneath is **by slot, then by role number**, and every role today is
+numbered in slot order, so it is exactly the table's order and the log is ordered by
+timestamp. A role appended later — an ecall's `a3`, say — keeps its new number and takes
+its place in a cycle by its slot, so appending one renumbers nothing. The `present` mask
+is a `u8` with one bit to spare; a ninth role widens it, which is a schema change.
+
+The atomics family keeps its RAM query at slot 3 for every instruction it owns, `lr.w`
+included, though `lr.w` has no `rs2` and a load puts its word at slot 2: one family, one
+frame, as the stage prompt keeps the whole A extension in one circuit.
 
 ## 8. Routing
 
@@ -148,6 +157,8 @@ write — equal, as a multiset of `(space, address, timestamp, value)`, the read
 query's read, plus a teardown read of every address's last write. With one write per
 address per timestamp and every gap non-negative, that balance pairs each read with
 exactly the last write before it, which is sequential consistency. Teardown is taken
-from the log itself, so a changed final value balances by construction, exactly as in
-the argument, where teardown's values are bound by something else (the public I/O
-digest, and later stages).
+from the log itself, so everything after an address's last honest query balances by
+construction — its final value changed, a final query moved later or added, whole
+trailing cycles removed — exactly as in the argument, where teardown's values and the
+cycle count are bound by other means. For a snapshot, `TraceArchive` holds the log to
+the family rows event for event, which is where the cycle count lives.

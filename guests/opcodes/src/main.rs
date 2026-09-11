@@ -39,8 +39,10 @@
 //! - mode 1 executes `ebreak`, which both executors trap on;
 //! - modes 2 to 8 each make one misaligned access — `lw`, `sw`, `lh`, `sh`,
 //!   `lr.w`, `sc.w`, `amoadd.w` — which the zkVM refuses as a fatal guest
-//!   error. QEMU performs the first four and faults on the atomics; neither
-//!   is compared, and the emulator's refusal is what these modes are for.
+//!   error. QEMU performs the first four and the `amoadd.w` — its default
+//!   CPU allows a misaligned AMO inside an aligned 16-byte block — and
+//!   faults on `lr.w` and `sc.w`. None of it is compared: the emulator's
+//!   refusal is what these modes are for.
 //!
 //! # fd 1, the public output (mode 0)
 //!
@@ -165,6 +167,20 @@ cover_base:
     add     a0, a0, a4
     xor     a0, a0, a5
     add     a0, a0, a7
+
+    /* the compare-immediates with mixed signs, where a signed and an
+       unsigned comparison disagree: 1 < -1 is false signed and true unsigned,
+       and -5 < 1 the other way round */
+    li      t0, -5
+    li      t1, 1
+    slti    t2, t1, -1
+    sltiu   t3, t1, -1
+    sltiu   t4, t0, 1
+    slti    t5, t0, 1
+    add     a0, a0, t2
+    xor     a0, a0, t3
+    add     a0, a0, t4
+    xor     a0, a0, t5
 
     /* register-register: wrapping, shift amounts past 31, signedness */
     li      t0, 0x7fffffff

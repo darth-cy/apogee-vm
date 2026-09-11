@@ -471,4 +471,65 @@ mod tests {
         ];
         assert_eq!(compare(&[base, after], &records).unwrap_err().reg, Some(6));
     }
+
+    /// ... and the exemption ends when the emulator next writes rd: a QEMU
+    /// rd still holding the failed sc.w's 1 after that is a mismatch.
+    #[test]
+    fn the_sc_w_exemption_ends_at_the_next_write_of_rd() {
+        let sc = Instr::ScW {
+            rd: 5,
+            rs1: 10,
+            rs2: 11,
+            aq: false,
+            rl: false,
+        };
+        let li = Instr::Addi {
+            rd: 5,
+            rs1: 0,
+            imm: 7,
+        };
+        let fence = Instr::Fence {
+            fm: 0,
+            pred: 0,
+            succ: 0,
+        };
+        let mut seven = [0u32; 32];
+        seven[5] = 7;
+        let steps = [
+            Step {
+                pc: 0x1_0000,
+                regs: [0; 32],
+                instr: sc,
+                writes: 1 << 5,
+            },
+            Step {
+                pc: 0x1_0004,
+                regs: [0; 32],
+                instr: li,
+                writes: 1 << 5,
+            },
+            Step {
+                pc: 0x1_0008,
+                regs: seven,
+                instr: fence,
+                writes: 0,
+            },
+        ];
+        let mut failed = [0u32; 32];
+        failed[5] = 1;
+        let record = |pc: u32, regs: [u32; 32]| Record { pc, regs };
+        let agreeing = [
+            record(0x1_0000, [0; 32]),
+            record(0x1_0004, failed),
+            record(0x1_0008, seven),
+        ];
+        assert_eq!(compare(&steps, &agreeing).unwrap().sc_w_whitelisted, 1);
+        let stale = [
+            record(0x1_0000, [0; 32]),
+            record(0x1_0004, failed),
+            record(0x1_0008, failed),
+        ];
+        let m = compare(&steps, &stale).unwrap_err();
+        assert_eq!((m.index, m.reg), (2, Some(5)));
+    }
 }

@@ -87,7 +87,7 @@ impl MemoryEventLog {
     pub fn final_state(&self) -> Vec<FinalValue>;
     pub fn self_check(&self, image: &ProgramImage) -> Result<(), SelfCheckError>;
 }
-pub enum Role { Rs1, Rs2, Arg1, Arg2, Load, Ram, Rd }   // delta(), space(), name()
+pub enum Role { Rs1, Rs2, Arg1, Arg2, Load, Ram, Rd }   // delta(), space()
 pub const ROLES: [Role; 7];
 pub struct Query { pub addr: u32, pub read_ts: u64, pub read_value: u32, pub write_value: u32 }
 pub struct Row { pub cycle: u64, pub pc: u32, pub next_pc: u32, pub present: u8, pub queries: [Query; 7] }

@@ -57,7 +57,7 @@ pub const PINS: [(&str, &str); 13] = [
     ),
     (
         "opcodes.elf",
-        "a1bd5573ecbc90d79b459f72a9226295ef74a6f7d5dc0677f13cc54f0968fb4d",
+        "fab3dc597e652ac2b6034c217525e3c11820f64f3f40e17e536f96ce1821a28e",
     ),
     (
         "heap.elf",

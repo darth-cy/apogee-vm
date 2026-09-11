@@ -155,6 +155,32 @@ fn a_corrupted_event_is_named() {
     let mut tampered = events.to_vec();
     tampered[0].read_value += 2;
     assert_eq!(named(tampered), (AddressSpace::Pc, 0, events[0].ts));
+
+    // A stale read: a register read that sees the write before the one it
+    // should, with that write's value and a valid gap, and writes it back.
+    // The values alone still balance; only the timestamps in the balance
+    // catch it, and the replay names the stale read, not the honest reader.
+    let (r, prior) = events
+        .iter()
+        .enumerate()
+        .find_map(|(r, e)| {
+            if e.space != AddressSpace::Reg || e.delta() == 3 || e.read_ts == 0 {
+                return None;
+            }
+            let writer = events
+                .iter()
+                .find(|w| w.space == e.space && w.addr == e.addr && w.ts == e.read_ts)?;
+            (writer.read_ts > 0 && writer.read_value != e.read_value).then_some((r, *writer))
+        })
+        .expect("fib reads a register whose last write replaced an earlier value");
+    let mut tampered = events.to_vec();
+    tampered[r].read_ts = prior.read_ts;
+    tampered[r].read_value = prior.read_value;
+    tampered[r].write_value = prior.read_value;
+    assert_eq!(
+        named(tampered),
+        (AddressSpace::Reg, events[r].addr, events[r].ts)
+    );
 }
 
 /// Acceptance 5 and must-be-exact 3: every event of every traced guest on
@@ -348,8 +374,8 @@ fn frame(instr: &Instr, row: &Row) -> u8 {
         | AmomaxuW { .. } => roles(&[Rs1, Rs2, Ram, Rd]),
         Ecall if row.next_pc == row.pc => roles(&[Ram]),
         Ecall => match row.queries[Rs1 as usize].read_value {
-            63 | 64 => roles(&[Rs1, Rs2, Arg1, Arg2, Rd]),
-            93 => roles(&[Rs1, Rs2, Rd]),
+            ecall::READ | ecall::WRITE => roles(&[Rs1, Rs2, Arg1, Arg2, Rd]),
+            ecall::EXIT | ecall::PRECOMPILE_POSEIDON2 => roles(&[Rs1, Rs2, Rd]),
             _ => roles(&[Rs1, Rd]),
         },
         Ebreak => panic!("an ebreak has no row"),
@@ -453,13 +479,21 @@ fn every_row_carries_its_class_frame() {
 /// Must-be-exact 3's ecall transfers: a `read` or `write` that moved `n`
 /// bytes is preceded by one transfer cycle per word those bytes touch, in
 /// address order, each at the ecall's pc, re-writing that pc, and holding one
-/// slot-3 RAM query; and every transfer cycle belongs to such an ecall.
+/// slot-3 RAM query; and every transfer cycle belongs to such an ecall. The
+/// words' values too: a `read`'s transfer writes the stream's next bytes into
+/// the buffer and leaves the word's other bytes as they were, a `write`'s
+/// reads the stream's bytes out and writes the word back unchanged — and the
+/// recorded fd 0, fd 1 and fd 2 streams are exactly the bytes the transfers
+/// moved.
 #[test]
 fn an_ecall_s_transfers_precede_it_one_word_each() {
     let mut calls = 0;
     for name in TRACED {
         let t = traced(name);
         let rows = rows_by_cycle(&t);
+        let io = &t.execution.io;
+        let streams: [&[u8]; 4] = [&io.input, &io.output, &t.execution.stderr, &[]];
+        let mut moved_so_far = [0usize; 4];
         let mut claimed = 0;
         for (i, (_, row)) in rows.iter().enumerate() {
             if instr_at(&t.image, row.pc) != Instr::Ecall || row.next_pc == row.pc {
@@ -470,7 +504,9 @@ fn an_ecall_s_transfers_precede_it_one_word_each() {
             if !(number == 63 || number == 64) || moved <= 0 {
                 continue;
             }
+            let fd = row.queries[Role::Rs2 as usize].read_value as usize;
             let buf = row.queries[Role::Arg1 as usize].read_value;
+            let (start, end) = (buf as u64, buf as u64 + moved as u64);
             let first = buf & !3;
             let words = ((buf + moved as u32 - 1) & !3) - first;
             let words = (words / 4 + 1) as usize;
@@ -478,16 +514,37 @@ fn an_ecall_s_transfers_precede_it_one_word_each() {
                 let (_, transfer) = &rows[i - words + k];
                 assert_eq!((transfer.pc, transfer.next_pc), (row.pc, row.pc), "{name}");
                 assert_eq!(transfer.present, 1 << Role::Ram as u8, "{name}");
-                assert_eq!(
-                    transfer.queries[Role::Ram as usize].addr,
-                    first + 4 * k as u32,
-                    "{name}"
-                );
+                let q = transfer.queries[Role::Ram as usize];
+                assert_eq!(q.addr, first + 4 * k as u32, "{name}");
                 assert_eq!(transfer.cycle + (words - k) as u64, row.cycle, "{name}");
+                let (old, new) = (q.read_value.to_le_bytes(), q.write_value.to_le_bytes());
+                for (b, (old, new)) in old.iter().zip(&new).enumerate() {
+                    let addr = q.addr as u64 + b as u64;
+                    if addr < start || addr >= end {
+                        assert_eq!(new, old, "{name}: a byte beside the buffer changed");
+                        continue;
+                    }
+                    let byte = streams[fd][moved_so_far[fd] + (addr - start) as usize];
+                    if number == ecall::READ {
+                        assert_eq!(*new, byte, "{name}: read delivered the wrong byte");
+                    } else {
+                        assert_eq!(
+                            (*old, *new),
+                            (byte, byte),
+                            "{name}: write moved the wrong byte"
+                        );
+                    }
+                }
             }
+            moved_so_far[fd] += moved as usize;
             claimed += words;
             calls += 1;
         }
+        assert_eq!(
+            moved_so_far,
+            [io.input.len(), io.output.len(), t.execution.stderr.len(), 0],
+            "{name}: the recorded streams are the bytes the transfers moved"
+        );
         let transfers = rows
             .iter()
             .filter(|(_, r)| r.pc == r.next_pc && instr_at(&t.image, r.pc) == Instr::Ecall)
@@ -506,6 +563,18 @@ fn an_ecall_s_transfers_precede_it_one_word_each() {
 /// previous cycle's.
 #[test]
 fn the_rows_rebuild_the_log_exactly() {
+    // Each role's slot, restated from `docs/spec/execution-trace.md` §7
+    // rather than read from `Role::delta`, which is what is under test.
+    const SLOT: [u64; 7] = [1, 2, 2, 2, 2, 3, 3];
+    for role in ROLES {
+        assert_eq!(role.delta(), SLOT[role as usize], "{role:?}");
+    }
+    assert!(
+        ROLES
+            .windows(2)
+            .all(|w| SLOT[w[0] as usize] <= SLOT[w[1] as usize]),
+        "a cycle's queries are logged by slot, and ROLES is that order"
+    );
     for name in TRACED {
         let t = traced(name);
         let mut events = Vec::new();
@@ -524,7 +593,7 @@ fn the_rows_rebuild_the_log_exactly() {
                     events.push(MemoryEvent {
                         space: role.space(),
                         addr: q.addr,
-                        ts: base + role.delta(),
+                        ts: base + SLOT[role as usize],
                         read_ts: q.read_ts,
                         read_value: q.read_value,
                         write_value: q.write_value,
@@ -623,6 +692,18 @@ fn every_ecall_answers_as_the_abi_says() {
                 (ecall::PRECOMPILE_POSEIDON2, 0, 0, neg(ecall::ENOSYS)),
                 (ecall::ZKVM_IO_LAST, 0, 0, neg(ecall::ENOSYS)),
             ];
+            // The precompile's a0 is its state pointer, wherever the stack is.
+            let calls: Vec<_> = calls
+                .iter()
+                .map(|&(n, a0, count, result)| {
+                    let a0 = if n == ecall::PRECOMPILE_POSEIDON2 {
+                        0
+                    } else {
+                        a0
+                    };
+                    (n, a0, count, result)
+                })
+                .collect();
             assert!(
                 calls.windows(edges.len()).any(|w| w == edges),
                 "opcodes' cover_ecall calls are not {edges:?}: {calls:?}"

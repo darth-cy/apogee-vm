@@ -341,3 +341,18 @@ fn a_misaligned_access_is_a_named_fatal_error_in_both_paths() {
         assert!(plain.to_string().contains("misaligned"), "{plain}");
     }
 }
+
+/// The recorded fd 0 stream is the bytes the guest consumed, not what it was
+/// offered: `heap` reads its four-byte `n` and never the four after it, so
+/// those are not part of the public input `io_digest` binds.
+#[test]
+fn the_recorded_input_is_what_the_guest_consumed() {
+    let mut offered = 40u32.to_le_bytes().to_vec();
+    offered.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+    let image = image("heap");
+    let plain = run(&image, &io(&offered)).unwrap();
+    assert_eq!(plain.io.input, &offered[..4]);
+    let (tables, config) = preprocess(&image);
+    let (.., traced) = trace_run(&image, &io(&offered), &tables, &config).unwrap();
+    assert_eq!(traced.io.input, &offered[..4]);
+}

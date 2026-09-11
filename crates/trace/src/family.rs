@@ -60,19 +60,6 @@ impl Role {
             _ => AddressSpace::Reg,
         }
     }
-
-    /// The column-name prefix.
-    pub fn name(self) -> &'static str {
-        match self {
-            Role::Rs1 => "rs1",
-            Role::Rs2 => "rs2",
-            Role::Arg1 => "arg1",
-            Role::Arg2 => "arg2",
-            Role::Load => "load",
-            Role::Ram => "ram",
-            Role::Rd => "rd",
-        }
-    }
 }
 
 /// One query as a row holds it. Its write timestamp is not stored: it is

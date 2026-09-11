@@ -273,21 +273,28 @@ impl MemoryEventLog {
     ///
     /// Recomputed from the events alone, never from the tables. First the
     /// timestamp rules: every address is one its space has, every timestamp is
-    /// on the 38-bit clock, every read strictly precedes its write (the gap
-    /// `ts - read_ts - 1` is non-negative), and no two queries at one address
-    /// share a timestamp. Then the multiset balance the global argument
-    /// checks: the writes — an initial write at timestamp 0 of every touched
-    /// address, holding its value in `image`, plus every query's write — equal
-    /// the reads — every query's read, plus a teardown read of every address's
-    /// last write.
+    /// on the 38-bit clock, the events are in timestamp order, every read
+    /// strictly precedes its write (the gap `ts - read_ts - 1` is
+    /// non-negative), and no two queries at one address share a timestamp.
+    /// Then the multiset balance the global argument checks: the writes — an
+    /// initial write at timestamp 0 of every touched address, holding its
+    /// value in `image`, plus every query's write — equal the reads — every
+    /// query's read, plus a teardown read of every address's last write.
     ///
     /// Together those say each read sees exactly the last write before it:
     /// with one write per address per timestamp, the balance pairs every write
     /// with one later read, and the gap rule leaves only the chronological
-    /// pairing. The last write of an address is read by teardown, which is
-    /// derived here from the log itself — so a changed final value balances by
-    /// construction, as it does in the argument, where teardown's values are
-    /// bound by something else.
+    /// pairing. When the balance fails, the address's queries are replayed in
+    /// order and the first whose read is not the last write before it is the
+    /// one named.
+    ///
+    /// **What it cannot see.** Teardown is each address's last write, taken
+    /// from the log itself, so everything after an address's last honest
+    /// query balances by construction: its final value changed, a final query
+    /// moved later or added, whole trailing cycles removed. That is the
+    /// argument's own shape — teardown's values and the cycle count are bound
+    /// by other means — and for a snapshot `TraceArchive` holds the log to the
+    /// family rows, which is where the cycle count lives.
     pub fn self_check(&self, image: &ProgramImage) -> Result<(), SelfCheckError> {
         let refuse = |e: &MemoryEvent, reason: String| SelfCheckError {
             space: e.space,
@@ -297,12 +304,15 @@ impl MemoryEventLog {
         };
 
         let mut written: HashSet<(AddressSpace, u32, u64)> = HashSet::new();
-        for e in &self.events {
+        for (i, e) in self.events.iter().enumerate() {
             if !e.space.holds(e.addr) {
                 return Err(refuse(e, "not an address of its space".into()));
             }
             if e.ts >= 1 << memory::TS_BITS {
                 return Err(refuse(e, "the timestamp is past the 38-bit clock".into()));
+            }
+            if i > 0 && self.events[i - 1].ts > e.ts {
+                return Err(refuse(e, "the events are not in timestamp order".into()));
             }
             if e.read_ts >= e.ts {
                 return Err(refuse(
@@ -348,17 +358,19 @@ impl MemoryEventLog {
         else {
             return Ok(());
         };
-        // Name the query that reads timestamp `ts` here, where the imbalance
-        // is observed; failing that, the one that wrote it.
+        // Replay the unbalanced address in order, from its initial value, and
+        // name the first query whose read is not the last write before it: the
+        // corrupted read itself, or the reader of a corrupted write. A stale
+        // read is named where it is, not at the honest reader of that write.
+        let mut last = (0, initial_value(image, space, addr));
         let at = self
             .events
             .iter()
             .filter(|e| e.space == space && e.addr == addr)
-            .find(|e| e.read_ts == ts)
-            .or_else(|| {
-                self.events
-                    .iter()
-                    .find(|e| e.space == space && e.addr == addr && e.ts == ts)
+            .find(|e| {
+                let stale = (e.read_ts, e.read_value) != last;
+                last = (e.ts, e.write_value);
+                stale
             });
         Err(SelfCheckError {
             space,
@@ -366,7 +378,11 @@ impl MemoryEventLog {
             ts: at.map_or(ts, |e| e.ts),
             reason: format!(
                 "the read and write multisets differ: value {value:#x} at ts {ts} is \
-                 written {count:+} more times than it is read"
+                 written {count:+} more times than it is read{}",
+                at.map_or(String::new(), |e| format!(
+                    "; the query at ts {} reads ({}, {:#x})",
+                    e.ts, e.read_ts, e.read_value
+                ))
             ),
         })
     }
