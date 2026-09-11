@@ -24,7 +24,7 @@ pub const PINS: [(&str, &str); 3] = [
     ),
     (
         "isa_negative.txt",
-        "71aa9cdf27f643b409ddbed3d3a9ae3ee6c98a2351972ba45a82e3630c30a848",
+        "4be04b33f55c7624da5d7e6ed57c329c925d9091e385f7f683ef20892468992f",
     ),
 ];
 

@@ -15,7 +15,7 @@ use std::fmt::Write as _;
 use loader::{load_elf, Slot};
 use program::{
     decode_program, family_name, field_mask, program_identity, DecodedTables, ProgramParams,
-    RowField, ROW_FIELDS,
+    RowField,
 };
 use srs::Srs;
 use test_support::{sha256, to_hex};
@@ -53,7 +53,8 @@ pub fn render(
          The identity is one Fr, canonical little-endian: the Mercury commitments to\n\
          every column below, with the VmConfig, digested by the recipe in\n\
          crates/program/CLAUDE.md. It is a function of the decoded instructions and\n\
-         the parameters only -- not of the ELF's bytes, its symbols, or .rodata.\n",
+         the parameters only -- not of the ELF's bytes, its symbols, .rodata, .data\n\
+         or its entry point, none of which S11's identity binds yet.\n",
         to_hex(&sha256(elf)),
         tables.code_version,
         config.bytecode_size_words,
@@ -181,7 +182,3 @@ fn field_name(field: RowField) -> &'static str {
         RowField::ExtraMask => "extra_mask",
     }
 }
-
-// `ROW_FIELDS` is the frozen order the columns above are printed in; this
-// keeps the two from drifting silently if a field is ever appended.
-const _: () = assert!(ROW_FIELDS.len() == 8);

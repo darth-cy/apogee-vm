@@ -279,7 +279,7 @@ fn negatives() -> Vec<(u32, &'static str, &'static str)> {
         (
             r(0b00000 << 2, 3, 2, 0b000, 1, 0x2f),
             "AMO",
-            "AMO funct3 000 names no width",
+            "amoadd.b: Zabha's byte width, which RV32IMAC does not have",
         ),
         (
             amo(0b00010, 0, 0, 5, 2, 1),
@@ -289,7 +289,7 @@ fn negatives() -> Vec<(u32, &'static str, &'static str)> {
         (
             amo(0b00101, 0, 0, 3, 2, 1),
             "AMO",
-            "AMO funct5 00101 names nothing",
+            "amocas.w: Zacas, which RV32IMAC does not have",
         ),
         (
             amo(0b11111, 1, 1, 3, 2, 1),
@@ -309,7 +309,11 @@ fn negatives() -> Vec<(u32, &'static str, &'static str)> {
         (0x1200_0073, "SYSTEM", "sfence.vma: privileged"),
         (0xc000_2573, "extension", "csrrs a0, cycle, zero: Zicsr"),
         (0x0000_100f, "MISC-MEM", "fence.i: Zifencei"),
-        (0x0000_200f, "MISC-MEM", "MISC-MEM funct3 010 names nothing"),
+        (
+            0x0000_200f,
+            "MISC-MEM",
+            "cbo.inval: Zicbom, which RV32IMAC does not have",
+        ),
         (0x0005_a507, "opcode", "flw: F extension"),
         (0x00a5_a027, "opcode", "fsw: F extension"),
         (0x00b5_7553, "opcode", "fadd.s: F extension"),

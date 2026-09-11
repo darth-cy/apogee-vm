@@ -186,7 +186,7 @@ pub const ROW_FIELDS: [RowField; 8] = [
 /// This is the one place a family's columns are chosen; [`field_mask`] and
 /// the committed column order are both read off it. `funct3` is in no tuple:
 /// the extra mask is one-hot per mnemonic, which leaves it nothing to say.
-/// The init/teardown family claims no pc and has no decoded table.
+/// The init/teardown family claims no pc: its table is empty, with no columns.
 pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
     use RowField::*;
     match family {
@@ -338,8 +338,10 @@ impl VmConfig {
     }
 
     /// Decode, refusing anything [`VmConfig::to_bytes`] could not have written
-    /// from a valid config: a wrong length, an unknown or out-of-order family,
-    /// a height off the menu. `None` rather than a panic.
+    /// from a derived config: a wrong length, an unknown or out-of-order family,
+    /// a height off the menu, a family set that does not end with
+    /// init/teardown — which derivation puts in every config. `None` rather
+    /// than a panic.
     pub fn from_bytes(bytes: &[u8]) -> Option<VmConfig> {
         let word = |i: usize| -> Option<u32> {
             Some(u32::from_le_bytes(
@@ -360,6 +362,9 @@ impl VmConfig {
                 return None;
             }
             families.push((f, h));
+        }
+        if families.last().map(|(f, _)| *f) != Some(family::INIT_TEARDOWN) {
+            return None;
         }
         Some(VmConfig {
             families,
@@ -487,9 +492,11 @@ pub struct FamilyTable {
 }
 
 impl FamilyTable {
-    /// Whether `row` holds one of this family's instructions.
+    /// Whether `row` holds one of this family's instructions. A row at or above
+    /// the table's height is not live: it is outside the table, and code there
+    /// belongs to some taller family.
     pub fn is_live(&self, row: usize) -> bool {
-        read(&self.live, row) == 1
+        row < self.height as usize && read(&self.live, row) == 1
     }
 
     /// The value of column `column` at `row`, or `None` on a padding row.
@@ -554,6 +561,12 @@ fn narrowest(values: Vec<u32>) -> PolyBacking {
 /// The family set is derived, never chosen: a family is present exactly when
 /// it claims at least one pc, and init/teardown is always present. See
 /// `crates/program/CLAUDE.md` for every refusal.
+///
+/// `image` must satisfy `ProgramImage`'s documented invariants, which
+/// `loader::load_elf` and the wire-form reader establish: an even
+/// `slot_base`, every 32-bit instruction followed by its second halfword. A
+/// hand-built image that breaks them is a caller error, and trips the
+/// partition assertion rather than producing a table.
 pub fn decode_program(
     image: &ProgramImage,
     params: &ProgramParams,
@@ -702,11 +715,19 @@ fn check_partition(image: &ProgramImage, tables: &DecodedTables) {
         if let Slot::Instruction { .. } = slot {
             instructions += 1;
             let row = (image.slot_base / 2) as usize + i;
-            let owners = tables.families.iter().filter(|t| t.is_live(row)).count();
+            let owners: Vec<&FamilyTable> =
+                tables.families.iter().filter(|t| t.is_live(row)).collect();
             assert_eq!(
-                owners,
+                owners.len(),
                 1,
-                "family partition: pc={:#010x} is claimed by {owners} families",
+                "family partition: pc={:#010x} is claimed by {} families",
+                2 * row,
+                owners.len()
+            );
+            assert_eq!(
+                owners[0].get(0, row),
+                Some(2 * row as u32),
+                "decoded table: row {row} must hold pc {:#010x}",
                 2 * row
             );
         }
@@ -771,7 +792,7 @@ pub fn absorb_statement_descriptor(tr: &mut Transcript, config: &VmConfig, shard
 /// 2. `VM_CONFIG`: the family ids, their heights, `bytecode_size_words`;
 /// 3. per family in ascending order, `COMMITMENT`: that family's column
 ///    commitments in lookup-tuple order, as one list of 4-limb G1 points —
-///    empty for init/teardown, which has no decoded table;
+///    empty for init/teardown, whose table has no columns;
 /// 4. one raw squeeze, which is the identity.
 ///
 /// `tables` and `config` must be one derivation's output, and `srs` must hold

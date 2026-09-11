@@ -189,3 +189,46 @@ fn the_identity_line_is_the_program_identity() {
         "the page's identity is not the pinned one"
     );
 }
+
+/// The VmConfig section, parsed back: one row per family of the config, in
+/// order, with its id, height, live-row count and field mask.
+#[test]
+fn the_vm_config_section_is_the_config() {
+    for name in ["fib", "atomics"] {
+        let elf = loader_vector(&format!("{name}.elf"));
+        let page = render(&elf, name, &ProgramParams::defaults(), None).unwrap();
+        let (tables, config) =
+            decode_program(&load_elf(&elf).unwrap(), &ProgramParams::defaults()).unwrap();
+
+        let section: Vec<Vec<&str>> = page
+            .lines()
+            .skip_while(|l| *l != "VmConfig")
+            .skip(3)
+            .take_while(|l| !l.is_empty())
+            .map(|l| l.split_whitespace().collect())
+            .collect();
+        assert_eq!(
+            section.len(),
+            config.families.len(),
+            "{name}: one row per family"
+        );
+        for (row, (table, (family, height))) in section
+            .iter()
+            .zip(tables.families.iter().zip(&config.families))
+        {
+            assert_eq!(row[0].parse::<u32>().unwrap(), *family, "{name}");
+            assert_eq!(row[1], family_name(*family), "{name}");
+            assert_eq!(row[2].parse::<u32>().unwrap(), *height, "{name}");
+            let live = (0..table.height as usize)
+                .filter(|r| table.is_live(*r))
+                .count();
+            assert_eq!(row[3].parse::<usize>().unwrap(), live, "{name}");
+            let mask = row.last().unwrap().trim_end_matches(')');
+            assert_eq!(
+                u8::from_str_radix(mask.trim_start_matches("0b"), 2).unwrap(),
+                program::field_mask(*family),
+                "{name}"
+            );
+        }
+    }
+}

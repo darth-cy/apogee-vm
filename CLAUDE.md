@@ -65,7 +65,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
-cargo test --workspace                      # 433 tests as of S11; 15 more are #[ignore]d
+cargo test --workspace                      # 438 tests as of S11; 15 more are #[ignore]d
 cargo build -p field -p constants -p transcript -p poly -p sumcheck --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
@@ -269,9 +269,9 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   append-only; `ecall`/`ebreak`/`fence` share the add/sub/lui/auipc family's bit-0
   *system* kind and are told apart by `imm` (0/1/2). No family keeps `funct3`. `FamilyId`s
   are `constants::family`, append-only, and ascending `FamilyId` is the canonical order.
-- **Program identity binds the instruction tables, not the data image.** `.rodata` and
-  `.data` reach no decoded table, so at S11 a program differing only in a constant has the
-  same identity; init/teardown is in every `VmConfig` and absorbs an **empty** commitment
+- **Program identity binds the instruction tables, not the data image or the entry pc.**
+  `.rodata`, `.data` and `ProgramImage.entry` reach no decoded table, so at S11 a program
+  differing only in a constant or its entry point has the same identity; init/teardown is in every `VmConfig` and absorbs an **empty** commitment
   list until its stage fills that slot. Identity needs the 2^22 ceremony SRS, so its tests
   are `#[ignore]`d and run locally only. A verifier takes identity from a channel the
   prover does not control, never from the proof.

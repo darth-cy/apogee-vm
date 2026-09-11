@@ -239,7 +239,7 @@ except the add/sub/lui/auipc family's bit 0, the **system** kind of `ecall`, `eb
 and `fence`, told apart by `imm`.
 
 **Static detachment** — a family appears in a program's `VmConfig` exactly when the
-program has an instruction it claims; the preprocessor derives the set, nothing selects
+program has an instruction it claims, and init/teardown always; the preprocessor derives the set, nothing selects
 it. An instruction whose family is absent fails preprocessing loudly.
 
 **VmConfig** — a program's static VM shape: the family set, each family's trace height
@@ -254,4 +254,4 @@ it one execution used. `program::absorb_statement_descriptor`.
 **Program identity** — one `Fr`: Mercury commitments to every decoded-table column,
 digested with the `VmConfig` through a fresh typed transcript. A program's identity the
 way a code hash is a contract's, taken by a verifier from a channel the prover does not
-control. At S11 it binds the instruction tables but not `.rodata`/`.data`.
+control. At S11 it binds the instruction tables but not `.rodata`, `.data` or the entry pc.

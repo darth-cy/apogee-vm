@@ -53,7 +53,7 @@ pub const PINS: [(&str, &str); 11] = [
     ),
     (
         "atomics.elf",
-        "0df89ce199aa6bcfe7246a39bf8b5bc26caf5bd16163a86338571aaa9b84d98c",
+        "c6789deb5fbeb9570ab8b058a66e1ce73e90a9579498e05aff686ffa7f63a20f",
     ),
     (
         "fib.objdump.txt",

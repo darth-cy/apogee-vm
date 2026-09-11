@@ -38,12 +38,12 @@ jobs:
       - name: guests execute
         run: cargo test -p loader --test qemu -- --include-ignored
 
-      # The same seven cases, same expected bytes, at `--release`. This is what
+      # The same eight cases, same expected bytes, at `--release`. This is what
       # holds the profile pin in `guests/Cargo.toml` honest: with cargo's
       # defaults `overflow-checks` is off in release, and a guest then commits a
       # wrapped `u32` on fd 1 where the dev build panics and exits 101. fd 1 is
       # the committed public output, so that would make the optimisation level
-      # part of the statement being proven. It also builds all six guests at
+      # part of the statement being proven. It also builds all seven guests at
       # `--release`, which is the only place that path is exercised.
       - name: guests execute (release)
         env:
@@ -91,6 +91,10 @@ jobs:
       # regenerated on a machine that has the assets. For the same reason CI
       # runs none of `crates/srs`'s tests -- they all return quietly. See
       # crates/srs/CLAUDE.md.
+      #
+      # The `program` group's identity pin needs the same file and is skipped the
+      # same way; the rest of that group, and the `isa` group, need only
+      # llvm-objdump, which rust-toolchain.toml installs.
       #
       # `crates/pcs` is not in that position: its suite builds its own toy SRS
       # and runs in full here, and its `pcs` kat-gen group needs no asset. Only

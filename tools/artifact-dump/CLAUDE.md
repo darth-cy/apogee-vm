@@ -29,12 +29,12 @@ design record.
   compares the result to what `load_elf` produced, and renders from *that*. A
   report rendered from the in-memory image would describe something the file
   might not contain. On disagreement it writes nothing.
-- **No mnemonics.** An RV32IMAC instruction model is `crates/isa`'s, in a later
-  stage; a decoder written here would be a second one to keep correct, and the
-  report points at `llvm-objdump` instead. The listing carries the address, the
-  length, the encoding in memory and the expanded word — which is exactly what
-  `crates/loader/tests/differential.rs` already checks against that
-  disassembler.
+- **No mnemonics in the `ProgramImage` report.** The instruction model is
+  `crates/isa`'s, and that page describes the artifact, which carries words; it
+  points at `llvm-objdump` for text, and `tables` below is where mnemonics are
+  printed. The listing carries the address, the length, the encoding in memory and
+  the expanded word — which is exactly what `crates/loader/tests/differential.rs`
+  already checks against that disassembler.
 - **Symbols are read from the ELF and marked as such.** They come from
   `.symtab`, not from the artifact, because a listing of four thousand hex words
   with no names is one nobody can navigate. Every part of the report that names

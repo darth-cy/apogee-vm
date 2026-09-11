@@ -693,3 +693,27 @@ Changing any of these is a protocol-version change, not a refactor:
 
 Not frozen, and yours to change: the report's text and layout. It is a
 rendering. The artifact is the contract.
+
+## 11. What the VM will prove: the decoded tables
+
+The artifact is words. What a proof is about is those words decoded into per-family
+tables, and the `tables` form of the same tool prints them:
+
+```
+cargo run --release -p artifact-dump -- tables guests/target/riscv32imac-unknown-none-elf/debug/hello
+cargo run --release -p artifact-dump -- tables <elf> --ptau assets/ptau/ppot_0080_24.ptau
+```
+
+The page shows the `VmConfig` the preprocessor derived for your program — which circuit
+families it needs, and how tall each is — and then every instruction with its mnemonic,
+its decoded fields and the family that owns it. An instruction the VM does not support
+stops the page with `Not all opcodes supported: pc=…` naming where it is, which is the
+same refusal proving would give.
+
+With `--ptau` it also prints the **program identity** at the default parameters: the
+value a verifier would register for your program. It needs PSE's ceremony file (2^22
+powers, and about a minute); `docs/handoff/S07-msm-srs-kzg.md` has the download. Two
+things about it are worth knowing before you publish one. It is taken over the decoded
+instructions and the `VmConfig` only — at this stage not over `.rodata`, `.data` or
+the entry point — and it moves whenever the instructions do, including when a rebuild on
+another machine embeds different paths. `crates/program/CLAUDE.md` is the full account.

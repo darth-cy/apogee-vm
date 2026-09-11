@@ -143,6 +143,29 @@ fn reencode(instr: &Instr) -> u32 {
     }
 }
 
+/// Whether the immediate is in its format's range: U a multiple of 4096, I and
+/// S twelve signed bits, B thirteen and even, J twenty-one and even, a shift
+/// amount below 32.
+fn canonical(instr: &Instr) -> bool {
+    let format = TABLE
+        .iter()
+        .find(|row| row.0 == instr.mnemonic())
+        .expect("every mnemonic is in the table")
+        .1;
+    let Some(imm) = instr.fields().imm else {
+        return true;
+    };
+    let signed = |bits: u32| imm == (imm << (32 - bits)) >> (32 - bits);
+    match format {
+        'U' => imm & 0xfff == 0,
+        'I' | 'S' => signed(12),
+        'B' => imm & 1 == 0 && signed(13),
+        'J' => imm & 1 == 0 && signed(21),
+        'H' => (0..32).contains(&imm),
+        _ => false,
+    }
+}
+
 /// The accepted words of opcode `op`, round-tripping each one.
 fn accepted(op: u32) -> u64 {
     (0u32..1 << 25)
@@ -163,6 +186,11 @@ fn accepted(op: u32) -> u64 {
                         word & !ignored,
                         "{word:#010x} decodes to {instr:?}, which re-encodes to {back:#010x}"
                     );
+                    // The re-encoding masks each immediate to its bits, so on
+                    // its own it would not see a value with stray bits outside
+                    // them. The immediate must be in its format's canonical
+                    // range, where the encoded bits determine it.
+                    assert!(canonical(&instr), "{word:#010x}: {instr:?}");
                     1
                 }
             }

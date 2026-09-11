@@ -53,7 +53,7 @@ is claimed by exactly one family by construction.
 | 4 | `MEM_WORD` | `lw sw` | 2^22 |
 | 5 | `MEM_SUBWORD` | `lb lh lbu lhu sb sh` | 2^22 |
 | 6 | `ATOMICS` | `lr.w sc.w` and the nine AMOs | 2^16 |
-| 7 | `INIT_TEARDOWN` | no pc; present in every `VmConfig`; **no decoded table** | 2^20 |
+| 7 | `INIT_TEARDOWN` | no pc; present in every `VmConfig`; an **empty** table: no columns, no live rows | 2^20 |
 
 `bytecode_size_words` defaults to 2^20 (a 4 MiB ceiling), the code version to 0.
 
@@ -73,7 +73,9 @@ exists only to show it.
   is below `2^32`), and none is all zeros (`next_pc >= 2`).
 - **Strictly taller than the program.** A family's height must exceed its last live row
   by at least one, or derivation fails with `TableTooShort` naming the pc. So a 2^16
-  atomics table holds atomics below pc `0x1fffc` only; every committed guest's code ends
+  atomics table holds atomics at or below pc `0x1fffc` only. A row above a *shorter*
+  family's height is simply outside that table -- padding there -- so a program's code
+  may reach past every table but its own family's; every committed guest's code ends
   below `0x1c938`.
 - **Fields**, in frozen column order `pc, next_pc, rs1, rs2, rd, imm, funct3,
   extra_mask`. A form's absent register is `x0` and absent immediate 0. `imm` is the
@@ -149,7 +151,7 @@ cause.
 `bytecode_size_words`. **Per-proof shard counts are not in it.** Wire form, frozen: `u32`
 LE family count `k`, then `k` pairs `u32` LE `(family, height)`, then `u32` LE
 `bytecode_size_words`; `from_bytes` refuses a wrong length, an unknown or out-of-order
-family and a height off the menu.
+family, a height off the menu, and a family set that does not end with init/teardown.
 
 The **statement descriptor** is the static `VmConfig` plus the per-proof shard count of
 each of its families, as two adjacent typed messages: `VM_CONFIG` carrying
@@ -191,8 +193,10 @@ tables or a different config therefore give a different identity.
 decoded table, so two programs identical in code and different in a constant or a jump
 table have the same identity. On the repository owner's instruction S11 commits the
 instruction tables only; the init/teardown family is in every `VmConfig` and absorbs an
-**empty** commitment list, and the stage that builds its table fills that slot. Until
-then, identity is not a full program identity.
+**empty** commitment list, and the stage that builds its table fills that slot. **Nor the entry pc**: `ProgramImage.entry` reaches no table and not the
+`VmConfig`, so two images differing only in `e_entry` share an identity. The PC address
+space's initial value is init/teardown's to bind, with the data image. Until then,
+identity is not a full program identity.
 
 **How a verifier uses it.** Like a public key: taken from a channel the prover does not
 control — a registry, a constant, an operator — and never from the proof. A proof
@@ -203,8 +207,8 @@ useless. The verifier never sees an ELF.
 | File | What |
 | --- | --- |
 | `tests/partition.rs` | Acceptance 3 over every guest (claimed pcs are the instruction slots, each once), 4 (`guests/atomics` with atomics detached fails at its first atomic's pc), 5 (fib has no atomics; `atomics` has them; `mul_free.elf` has no mul/div), and an unknown opcode's named failure |
-| `tests/tables.rs` | Acceptance 6 (every exported column of every table scanned: non-live rows are all `MINUS_ONE`, live rows neither padding nor zero), 7 (`next_pc` against the loader's halfword map), exact heights, `TableTooShort` at the boundary, `ProgramTooLarge` at the ceiling, menu and version refusals, the frozen field masks, one-hot kinds naming exactly 59 mnemonics over the ISA corpus, narrowest storage, determinism, fixture pins |
-| `tests/config.rs` | The `VmConfig` wire form byte for byte, its refusals, the identity wire form, and the statement descriptor as two adjacent messages |
+| `tests/tables.rs` | Acceptance 6 (every exported column of every table scanned: non-live rows are all `MINUS_ONE`, live rows equal to the stored values and neither padding nor zero), code above a shorter family's table, the 59 row kinds pinned numerically, `narrowest` at each width boundary, 7 (`next_pc` against the loader's halfword map), exact heights, `TableTooShort` at the boundary, `ProgramTooLarge` at the ceiling, menu and version refusals, the frozen field masks, one-hot kinds naming exactly 59 mnemonics over the ISA corpus, narrowest storage, determinism, fixture pins |
+| `tests/config.rs` | The `VmConfig` wire form byte for byte, its refusals (including a config without init/teardown), an eight-family round trip, the identity wire form, and the statement descriptor as two adjacent messages |
 | `tests/identity.rs` | **`#[ignore]`d — needs `assets/ptau/ppot_0080_24.ptau`.** fib at the defaults twice in-process and against the pin; the recipe rebuilt message by message; acceptance 9's four moves; fib rebuilt from source twice |
 
 ```

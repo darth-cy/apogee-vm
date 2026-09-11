@@ -699,7 +699,7 @@ pub mod transcript_tags {
 /// after [`INIT_TEARDOWN`] and never renumber anything below them.
 ///
 /// Which mnemonic each instruction family claims is `crates/program`'s
-/// `family_of`, and `crates/program/CLAUDE.md` is the table.
+/// `row_kind`, and `crates/program/CLAUDE.md` is the table.
 pub mod family {
     /// `add`, `sub`, `addi`, `lui`, `auipc`, and the system row kind:
     /// `ecall`, `ebreak`, `fence`.

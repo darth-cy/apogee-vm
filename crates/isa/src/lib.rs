@@ -493,7 +493,8 @@ pub fn decode(word: u32) -> Result<Instr, DecodeError> {
                 pred: ((word >> 24) & 0xf) as u8,
                 succ: ((word >> 20) & 0xf) as u8,
             }),
-            _ => refuse("MISC-MEM: funct3 001 is fence.i (Zifencei), which RV32IMAC does not have"),
+            0b001 => refuse("MISC-MEM: funct3 001 is fence.i (Zifencei), which RV32IMAC does not have"),
+            _ => refuse("MISC-MEM: only funct3 000, fence, is RV32IMAC; the rest are other extensions or reserved"),
         },
         0x73 => match word {
             0x0000_0073 => Ok(Ecall),

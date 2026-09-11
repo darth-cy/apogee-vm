@@ -37,6 +37,15 @@ fn every_row_that_is_not_live_is_padding_in_every_field() {
             for row in 0..table.height as usize {
                 let values: Vec<Fr> = columns.iter().map(|p| p.get(row)).collect();
                 if table.is_live(row) {
+                    // The export is the stored column, cell for cell.
+                    for (c, v) in values.iter().enumerate() {
+                        assert_eq!(
+                            *v,
+                            Fr::from_u64(table.get(c, row).unwrap() as u64),
+                            "{name}: exported {} column {c} differs from the stored value",
+                            family_name(table.family)
+                        );
+                    }
                     assert!(
                         values.iter().all(|v| *v != Fr::MINUS_ONE),
                         "{name}: a live {} row holds the sentinel",
@@ -179,6 +188,54 @@ fn a_table_that_cannot_hold_its_program_fails_loudly() {
     let mut taller = common::smallest();
     taller.heights[family::ADD_SUB_LUI_AUIPC as usize] = 1 << 18;
     assert!(decode_program(&full, &taller).is_ok());
+
+    // Two instructions: the last live row decides, not the first.
+    let two = common::image_of(0x1_fffa, &[addi, addi]);
+    assert_eq!(
+        decode_program(&two, &common::smallest()).unwrap_err(),
+        ProgramError::TableTooShort {
+            family: family::ADD_SUB_LUI_AUIPC,
+            pc: 0x1_fffe,
+            height: 1 << 16,
+        }
+    );
+}
+
+/// A family's table bounds only that family's instructions: code above a
+/// shorter table's height is padding there, not an error and not a panic.
+/// At the defaults init/teardown is 2^20 rows and atomics 2^16, and every row
+/// above a table's height reads as not live.
+#[test]
+fn code_above_a_shorter_familys_table_is_padding_there() {
+    let addi = 0x0000_0013;
+    // pc 0x200000 is row 2^20: above init/teardown's whole table.
+    let high = common::image_of(0x20_0000, &[addi]);
+    let (tables, _) = decode_program(&high, &ProgramParams::defaults()).unwrap();
+    let init = tables.family(family::INIT_TEARDOWN).unwrap();
+    assert!(!init.is_live(1 << 20));
+
+    // An atomic low in memory and ordinary code above the atomics table.
+    let amoadd = 0x00b1_262f;
+    let mut image = common::image_of(0x1_0000, &[amoadd]);
+    let far = 0x2_0000u32;
+    image.segments[0]
+        .bytes
+        .resize((far + 4 - 0x1_0000) as usize, 0);
+    image.segments[0].bytes[(far - 0x1_0000) as usize..].copy_from_slice(&addi.to_le_bytes());
+    image.segments[0].mem_len = image.segments[0].bytes.len() as u32;
+    image
+        .slots
+        .resize(((far - 0x1_0000) / 2) as usize, Slot::NonInstruction);
+    image.slots.push(Slot::Instruction {
+        word: addi,
+        compressed: false,
+    });
+    image.slots.push(Slot::MidInstruction);
+    let (tables, config) = decode_program(&image, &ProgramParams::defaults()).unwrap();
+    assert_eq!(config.height(family::ATOMICS), Some(1 << 16));
+    let atomics = tables.family(family::ATOMICS).unwrap();
+    assert!(!atomics.is_live((far / 2) as usize));
+    assert_eq!(atomics.get(0, (far / 2) as usize), None);
 }
 
 /// Must-be-exact 5: `bytecode_size_words` is an explicit input, and a program
@@ -215,16 +272,17 @@ fn a_program_above_bytecode_size_words_fails_loudly() {
 #[test]
 fn parameters_off_the_menu_and_unknown_versions_are_refused() {
     let image = common::guest("fib");
-    for height in [0, 1, 1 << 17, 1 << 24, u32::MAX] {
-        let mut params = ProgramParams::defaults();
-        params.heights[family::MUL_DIV as usize] = height;
-        assert_eq!(
-            decode_program(&image, &params).unwrap_err(),
-            ProgramError::HeightNotOnMenu {
-                family: family::MUL_DIV,
-                height,
-            }
-        );
+    // Every family's height is checked, including the ones fib does not use
+    // and init/teardown, which claims nothing.
+    for family in FAMILIES {
+        for height in [0, 1, 1 << 17, 1 << 24, u32::MAX] {
+            let mut params = ProgramParams::defaults();
+            params.heights[family as usize] = height;
+            assert_eq!(
+                decode_program(&image, &params).unwrap_err(),
+                ProgramError::HeightNotOnMenu { family, height }
+            );
+        }
     }
     let mut params = ProgramParams::defaults();
     params.code_version = family::CODE_VERSION + 1;
@@ -283,6 +341,16 @@ fn every_row_kind_is_one_hot_and_names_exactly_one_mnemonic() {
             && bit == extra_mask::add_sub_lui_auipc::SYSTEM)
             .then(|| table.get(column(RowField::Imm), row).unwrap());
         let mnemonic = instr.mnemonic();
+        // The frozen assignment, written out rather than read from `row_kind`.
+        let (_, want_family, want_bit, want_code) = *KINDS
+            .iter()
+            .find(|k| k.0 == mnemonic)
+            .unwrap_or_else(|| panic!("{mnemonic} is not in KINDS"));
+        assert_eq!(
+            (family, bit, system),
+            (want_family, want_bit, want_code),
+            "{mnemonic}: family, bit or system code"
+        );
         if let Some(other) = kinds.insert((family, mask, system), mnemonic) {
             assert_eq!(other, mnemonic, "two mnemonics share one row kind");
         }
@@ -309,6 +377,109 @@ fn every_row_kind_is_one_hot_and_names_exactly_one_mnemonic() {
             family_name(family)
         );
     }
+}
+
+/// The frozen row kinds, as `crates/program/CLAUDE.md` tabulates them:
+/// `(mnemonic, family, extra-mask bit, system code)`. Numbers, not constant
+/// names, so a renumbered constant fails here too.
+const KINDS: [(&str, FamilyId, u32, Option<u32>); 59] = [
+    ("ecall", 0, 0, Some(0)),
+    ("ebreak", 0, 0, Some(1)),
+    ("fence", 0, 0, Some(2)),
+    ("addi", 0, 1, None),
+    ("auipc", 0, 2, None),
+    ("add", 0, 3, None),
+    ("sub", 0, 4, None),
+    ("lui", 0, 5, None),
+    ("slti", 1, 0, None),
+    ("sltiu", 1, 1, None),
+    ("slt", 1, 2, None),
+    ("sltu", 1, 3, None),
+    ("beq", 1, 4, None),
+    ("bne", 1, 5, None),
+    ("blt", 1, 6, None),
+    ("bge", 1, 7, None),
+    ("bltu", 1, 8, None),
+    ("bgeu", 1, 9, None),
+    ("jalr", 1, 10, None),
+    ("jal", 1, 11, None),
+    ("slli", 2, 0, None),
+    ("xori", 2, 1, None),
+    ("srli", 2, 2, None),
+    ("srai", 2, 3, None),
+    ("ori", 2, 4, None),
+    ("andi", 2, 5, None),
+    ("sll", 2, 6, None),
+    ("xor", 2, 7, None),
+    ("srl", 2, 8, None),
+    ("sra", 2, 9, None),
+    ("or", 2, 10, None),
+    ("and", 2, 11, None),
+    ("mul", 3, 0, None),
+    ("mulh", 3, 1, None),
+    ("mulhsu", 3, 2, None),
+    ("mulhu", 3, 3, None),
+    ("div", 3, 4, None),
+    ("divu", 3, 5, None),
+    ("rem", 3, 6, None),
+    ("remu", 3, 7, None),
+    ("lw", 4, 0, None),
+    ("sw", 4, 1, None),
+    ("lb", 5, 0, None),
+    ("lh", 5, 1, None),
+    ("lbu", 5, 2, None),
+    ("lhu", 5, 3, None),
+    ("sb", 5, 4, None),
+    ("sh", 5, 5, None),
+    ("amoadd.w", 6, 0, None),
+    ("amoswap.w", 6, 1, None),
+    ("lr.w", 6, 2, None),
+    ("sc.w", 6, 3, None),
+    ("amoxor.w", 6, 4, None),
+    ("amoor.w", 6, 5, None),
+    ("amoand.w", 6, 6, None),
+    ("amomin.w", 6, 7, None),
+    ("amomax.w", 6, 8, None),
+    ("amominu.w", 6, 9, None),
+    ("amomaxu.w", 6, 10, None),
+];
+
+/// `narrowest` at the boundaries of each width, on hand-built programs whose
+/// largest immediate is exactly the value under test.
+#[test]
+fn the_narrowest_backing_is_chosen_at_each_boundary() {
+    let variant = |b: &PolyBacking| match b {
+        PolyBacking::U1(..) => "u1",
+        PolyBacking::U8(_) => "u8",
+        PolyBacking::U16(_) => "u16",
+        PolyBacking::U32(_) => "u32",
+        PolyBacking::Fr(_) => "fr",
+    };
+    let imm_of = |words: &[u32]| {
+        let image = common::image_of(0x1_0000, words);
+        let (tables, _) = decode_program(&image, &common::smallest()).unwrap();
+        let alu = tables.family(family::ADD_SUB_LUI_AUIPC).unwrap().clone();
+        let imm = alu
+            .columns
+            .iter()
+            .find(|(f, _)| *f == RowField::Imm)
+            .unwrap();
+        let mask = alu
+            .columns
+            .iter()
+            .find(|(f, _)| *f == RowField::ExtraMask)
+            .unwrap();
+        (variant(&imm.1), variant(&mask.1))
+    };
+    let addi = |imm: u32| (imm << 20) | (1 << 7) | 0x13; // addi x1, x0, imm
+    let lui = |imm20: u32| (imm20 << 12) | (1 << 7) | 0x37; // lui x1, imm20
+    assert_eq!(imm_of(&[0x0000_0073]), ("u1", "u1"), "ecall: imm 0, mask 1");
+    assert_eq!(imm_of(&[addi(1)]).0, "u1");
+    assert_eq!(imm_of(&[addi(2)]).0, "u8");
+    assert_eq!(imm_of(&[addi(255)]), ("u8", "u8"));
+    assert_eq!(imm_of(&[addi(256)]).0, "u16");
+    assert_eq!(imm_of(&[lui(0xf)]).0, "u16", "0xf000");
+    assert_eq!(imm_of(&[lui(0x10)]).0, "u32", "0x10000");
 }
 
 /// Each stored column is in the narrowest backing its live values fit, with

@@ -29,9 +29,9 @@
 00312463 B branch funct3 010 is reserved
 00313463 B branch funct3 011 is reserved
 003130af AMO amoadd.d: funct3 011 is RV64's width
-003100af AMO AMO funct3 000 names no width
+003100af AMO amoadd.b: Zabha's byte width, which RV32IMAC does not have
 105120af AMO lr.w with rs2 = x5: rs2 must be x0
-283120af AMO AMO funct5 00101 names nothing
+283120af AMO amocas.w: Zacas, which RV32IMAC does not have
 fe3120af AMO AMO funct5 11111 names nothing
 000000f3 SYSTEM ecall with rd = x1
 00008073 SYSTEM ecall with rs1 = x1
@@ -42,7 +42,7 @@ fe3120af AMO AMO funct5 11111 names nothing
 12000073 SYSTEM sfence.vma: privileged
 c0002573 extension csrrs a0, cycle, zero: Zicsr
 0000100f MISC-MEM fence.i: Zifencei
-0000200f MISC-MEM MISC-MEM funct3 010 names nothing
+0000200f MISC-MEM cbo.inval: Zicbom, which RV32IMAC does not have
 0005a507 opcode flw: F extension
 00a5a027 opcode fsw: F extension
 00b57553 opcode fadd.s: F extension

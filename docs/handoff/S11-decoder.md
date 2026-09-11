@@ -18,12 +18,17 @@ accepts. This note is the frozen API, the artifacts, the numbers and the deviati
 constant or a jump table have the **same identity** at S11. The stage prompt's recipe
 commits the per-family decoded tables and the `VmConfig`, and nothing else; the master's
 "program-image addresses bound to program identity" belongs to the init/teardown family,
-which S11 puts in every `VmConfig` (height 2^20) with **no decoded table**. Put to the
-owner with the alternative — committing an image column now — and they chose the recipe
-as written. So init/teardown absorbs an **empty** commitment list in the identity
-recipe, and the stage that builds its table fills that slot. That is a versioning event,
-free before anything is registered. Until then identity is not a full program identity,
-and nothing downstream should treat it as one.
+which S11 puts in every `VmConfig` (height 2^20) with an **empty** table — no columns,
+no live rows. Put to the owner with the alternative — committing an image column now —
+and they chose the recipe as written. So init/teardown absorbs an **empty** commitment
+list in the identity recipe, and the stage that builds its table fills that slot. That
+is a versioning event, free before anything is registered.
+
+**The entry pc is not bound either.** `ProgramImage.entry` reaches no table and not the
+`VmConfig`, so two images differing only in `e_entry` share an identity. Setting the
+PC's initial value is init/teardown's business too, and it has to be bound with the data
+image. Until both are, identity is not a full program identity, and nothing downstream
+should treat it as one.
 
 ---
 
@@ -148,7 +153,7 @@ cargo run --release -p artifact-dump -- tables <guest.elf> [--ptau <ppot_0080_24
 
 | Path | What |
 | --- | --- |
-| `crates/isa/tests/vectors/isa_corpus.elf` | 323 hand-encoded words: every RV32IMA mnemonic, register-file ends, `x0`, boundary immediates |
+| `crates/isa/tests/vectors/isa_corpus.elf` | 302 hand-encoded words: every RV32IMA mnemonic, register-file ends, `x0`, boundary immediates |
 | `crates/isa/tests/vectors/isa_corpus.objdump.txt` | llvm-objdump's reading of it — the acceptance-1 oracle for the whole ISA |
 | `crates/isa/tests/vectors/isa_negative.txt` | 49 words that must not decode, each with format and reason |
 | `crates/program/tests/vectors/mul_free.elf` | a hand-encoded program with no M and no A |
@@ -167,7 +172,7 @@ and says so, as it does the `srs` group.
 
 | # | Item | Where | Result |
 | --- | --- | --- | --- |
-| 1 | decode vs `objdump -d`, the S10 corpus + a per-opcode list | `isa/tests/objdump.rs` | every instruction of `fib`, `rvc-dense`, `amm` (compressed ones through the loader's expansion) and all 323 corpus words: our decode, rendered in LLVM's syntax, equals the disassembler's text; 59 mnemonics counted from both sides |
+| 1 | decode vs `objdump -d`, the S10 corpus + a per-opcode list | `isa/tests/objdump.rs` | every instruction of `fib`, `rvc-dense`, `amm` (compressed ones through the loader's expansion) and all 302 corpus words: our decode, rendered in LLVM's syntax, equals the disassembler's text; 59 mnemonics counted from both sides |
 | 2 | malformed / reserved words refused | `isa/tests/negative.rs` | 49 words, a near miss for every format with a fixed field, each checked to be one field from an instruction |
 | 3 | fib's partition | `program/tests/partition.rs` | claimed-pc union equals the instruction slots, each claimed once — over all seven guests |
 | 4 | `amoadd.w` under detached atomics | `partition.rs` | fails naming the first atomic's pc: `Not all opcodes supported: pc=…` |
@@ -190,10 +195,10 @@ and says so, as it does the `srs` group.
 | MUL_DIV | 9 | 1,048,576 |
 | MEM_WORD | 693 | 4,194,304 |
 | MEM_SUBWORD | 83 | 4,194,304 |
-| INIT_TEARDOWN | 0 (no table) | 1,048,576 |
+| INIT_TEARDOWN | 0 (empty table, no columns) | 1,048,576 |
 
 2,186 instructions, 789 of them four bytes long; the committed columns are 7 + 7 + 7 + 6
-+ 7 + 7 = 41 Mercury commitments, 36 of them at 2^22.
++ 7 + 7 = 41 Mercury commitments, 35 of them at 2^22.
 
 **fib's identity** over PSE contribution 80:
 
@@ -203,7 +208,7 @@ smallest  a64bc9f51f45aec0c76417435f3f9f39874226eaffd0ed5b4c3d23a995238e07
 ```
 
 The default-parameter identity takes about 25 s in release on the Apple M5 Pro (the
-whole ignored suite, which computes it twice, is 69 s): 36 general `Fr` MSMs at 2^22,
+whole ignored suite, which computes it twice, is 69 s): 35 general `Fr` MSMs at 2^22,
 because a `MINUS_ONE`-padded column is never a small-integer column. Optimising that is
 possible — a padded column is its zero-padded small column minus the commitment of the
 non-live indicator — and deliberately not done: nothing needs identity to be fast, and
@@ -224,15 +229,22 @@ rustc embeds absolute paths, which differ there — and the test says so and com
 container's two clean rebuilds with each other, which agree; on macOS the rebuild *is*
 the fixture and reproduces the pinned identity. Both hosts are arm64; no x86 host has
 run the suite, so this is cross-OS and cross-libc, not cross-architecture. The QEMU
-suite ran in the same container, eight of eight in both profiles, `atomics` included.
+suite ran in the same container, eight of eight in both profiles, `atomics` included —
+twice, the second time after the review's changes to that guest.
+
+CI on the draft pull request, `ubuntu-latest` (x86_64), passed in 5m39s: fmt, clippy,
+the workspace suite, the QEMU suite in both profiles and the fixture regenerate-and-diff,
+with the identity pin skipped as designed. It runs no identity test.
 
 ## Verification performed
 
-**433 workspace tests, all green, plus 15 `#[ignore]`d** (400 and 8 at S10). The 33
-new: 9 in `crates/isa`, 20 in `crates/program`, 4 in `tools/artifact-dump`. The 7 new
+**438 workspace tests, all green, plus 15 `#[ignore]`d** (400 and 8 at S10). The 38
+new: 9 in `crates/isa`, 24 in `crates/program`, 5 in `tools/artifact-dump`. The 7 new
 ignored: `atomics_computes_its_cells` under QEMU, the five identity tests and the
 tool's identity line, all run and green as recorded above. `fmt` and
-`clippy -D warnings` are clean across all four workspaces with no `#[allow]` added.
+`clippy -D warnings` are clean across all four workspaces; the only `#[allow]`s added
+are the `dead_code` ones on the two new `tests/common` modules, as every earlier suite's
+shared test module has.
 `cargo run -p kat-gen` then `git diff` over every vector directory is clean, and the new
 fixtures regenerate to their pinned digests.
 
@@ -241,17 +253,86 @@ fixtures regenerate to their pinned digests.
   from the ISA tables, and every accepted word round-trips through an encoder transcribed
   in the test from the same tables. Both passed on the first run.
 - **The decoder against LLVM, first run clean.** The objdump differential passed on its
-  first execution over 12,700 guest instructions and the 323-word corpus. The one
+  first execution over 12,691 guest instructions and the 302-word corpus. The one
   disagreement is designed and recorded: llvm-objdump prints `<unknown>` for a fence
   with a nonzero `rs1` or an unknown `fm`, which the ISA says to accept; no corpus holds
   one.
 - **`guests/atomics` is real compiler output for the whole A extension**: all eleven
   instructions in every `aq`/`rl` combination rustc emits, `lr.w`/`sc.w` loops and six
-  fences, run under QEMU in both profiles.
+  fences, run under QEMU in both profiles. Its nine committed words observe both halves
+  of every AMO: the cell each one writes, and — folded in order into the ninth — the old
+  value each one returns in `rd`.
 - **Every existing guest ELF regenerated byte-identically** on this machine when
   `kat-gen -- guests` rebuilt all seven, so adding `atomics` moved no S10 fixture.
 
-REVIEW_RESULTS
+## Adversarial review
+
+Five lenses over the finished branch:
+- an independent re-derivation of the ISA;
+- a malicious prover against `crates/program`;
+- a stage-and-master compliance audit;
+- a fixtures and tooling audit;
+- a 29-mutant sweep in an isolated worktree.
+
+Every finding of medium severity or above then went to a skeptic told to refute it, 13
+agents in all. **Seven survived refutation, one was refuted, and 29 were raised at low
+severity.** All seven, and most of the lows, are acted on in this branch.
+
+The ISA lens found **no defect in `decode`**. Its own decoder, written in Python from the
+ISA text, agreed with this one on all 2^30 words with low bits `11`, word for word and
+field for field, and on the 3·2^30 others, all refused.
+
+**The one that mattered: a panic out of preprocessing.** `FamilyTable::is_live` read the
+liveness bitset with no bound, and `check_partition` asks every table about every
+instruction's row. So code at or above a *shorter* family's height indexed past the end
+of that table. At the defaults this meant any program with an instruction at pc
+`0x200000` or higher, since init/teardown has 2^20 rows, and any atomics program with
+code above `0x20000`. A valid program crashed derivation instead of producing tables, and
+`artifact-dump tables` had the same read. Two lenses found it independently, and both
+skeptics reproduced it. The fix makes a row outside a table not live, which is what the
+table model already said it was, with regressions for both shapes.
+
+The rest:
+- **The entry pc is not bound either**, while the documentation named only
+  `.rodata`/`.data` as unbound. One skeptic confirmed it as a documentation gap; another
+  refuted it as a code defect, since the stage recipe fixes what identity absorbs. Both
+  are right: the recipe is unchanged, and the gap is now stated everywhere the data image
+  is.
+- **`guests/atomics` could not observe `amominu.w`.** Its minimum was 0 from the first
+  round, and it folded into a cell that was already negative. The minimum is now offset
+  and folded into `SUM`, which is one-to-one in the value. A ninth committed word folds
+  every value an atomic returns, so the `rd` half of every AMO is checked too.
+- **Four test gaps, found by surviving mutants.**
+  - The export was never compared with the stored columns in CI.
+  - The frozen mnemonic-to-bit assignment was checked only against `row_kind` itself, so
+    an ADD/SUB swap survived. It is now pinned by a numeric 59-row table, which also pins
+    the system codes.
+  - `TableTooShort` was tested only on one-instruction images, so checking the first
+    claim instead of the last survived.
+  - The height-menu check was exercised on one family only.
+- **Lows acted on:**
+  - the sweep checks each immediate's canonical range, since a U immediate with stray low
+    bits would have passed the masked round trip;
+  - `VmConfig::from_bytes` refuses a config without init/teardown;
+  - an eight-family round trip;
+  - `narrowest` at each width boundary;
+  - the partition assertion also checks every live row's `pc` column;
+  - the MISC-MEM refusal reason;
+  - three negative-corpus reasons that called ratified extensions' encodings (Zicbom,
+    Zacas, Zabha) "nothing";
+  - the tool's VmConfig section, parsed back;
+  - `atomics` in `dump.rs`;
+  - the manual's `tables` section;
+  - every wrong number and stale sentence in the docs (302 corpus words, not 323; 35
+    commitments at 2^22, not 36).
+- **Not acted on, and why.** Three mutants are equivalent: the `field_mask` arity
+  assertion, `check_partition`'s count, and `decode`'s compressed-shape guard. No input
+  can kill them. Three recipe properties are covered only by the `#[ignore]`d identity
+  suite: the code version being absorbed, the empty init/teardown message, and the
+  tables/config consistency assertion. Reaching them needs an SRS, and the owner's
+  instruction keeps the ceremony out of CI.
+
+MUTANT_RECHECK
 
 ## Deviations and notes for the reviewer
 
@@ -278,7 +359,8 @@ REVIEW_RESULTS
    error types; acceptance 2 needs the error.
 7. **Rows are absolute pc/2**, as the prompt says, so the first 32,768 rows of every table
    (pc below `RAM_ORIGIN`) are always padding, and the 2^16 atomics default reaches atomics
-   below pc `0x1fffc` only. Every committed guest's code ends below `0x1c938`.
+   at or below pc `0x1fffc` only. Code above a shorter family's table is simply outside
+   it. Every committed guest's code ends below `0x1c938`.
 8. **"Strictly greater than the program's live rows"** is read as: the height exceeds the
    last live row's index plus one, so a table always has a padding row above its code.
    `TableTooShort` is tested at exactly that boundary.
@@ -289,9 +371,9 @@ REVIEW_RESULTS
 10. **System instructions carry a code in `imm`**: 0 ecall, 1 ebreak, 2 fence. With one
     system bit, as the prompt pins, something has to tell the three apart; the first two
     are their own `funct12`. A fence's `pred`/`succ`/`fm` are not recorded.
-11. **Init/teardown has no decoded table** and is in every `VmConfig`. "`pc` and
-    `next_pc` are mandatory in every family" is enforced for the seven instruction
-    families; init/teardown claims no pc.
+11. **Init/teardown's table is empty** — no columns, no live rows — and it is in every
+    `VmConfig`. "`pc` and `next_pc` are mandatory in every family" is enforced for the
+    seven instruction families; init/teardown claims no pc.
 12. **The code version is its own constant**, `constants::family::CODE_VERSION = 0`,
     not `PROTOCOL_VERSION`: a protocol change that leaves the tables alone should not
     re-register every program. Derivation refuses any other version.
@@ -310,9 +392,9 @@ REVIEW_RESULTS
 
 ## Open for the next stage
 
-- **Bind the data image.** Init/teardown's decoded table, its columns committed in the
-  identity's init/teardown slot — which is already in the recipe, absorbing an empty
-  list.
+- **Bind the data image and the entry pc.** Init/teardown's table, its columns
+  committed in the identity's init/teardown slot — which is already in the recipe,
+  absorbing an empty list — and the PC's initial value with them.
 - **The verifying key** needs the per-column commitments `program_identity` computes
   and does not return, and a recomputation check against a registered identity.
 - **The SRS digest is still absent** (`docs/spec/srs.md` §4), and identity is taken over
