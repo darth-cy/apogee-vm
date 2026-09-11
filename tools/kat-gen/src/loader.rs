@@ -16,7 +16,7 @@ use std::process::Command;
 use crate::write_vectors;
 
 /// The guest ELFs the loader tests read, and what each is for.
-pub const ELF_FIXTURES: [(&str, &str); 6] = [
+pub const ELF_FIXTURES: [(&str, &str); 7] = [
     (
         "fib",
         "real compiler output: the address and boundary oracle",
@@ -36,6 +36,11 @@ pub const ELF_FIXTURES: [(&str, &str); 6] = [
         "vault",
         "field and transcript inside the proof: Poseidon2, Fr::inverse, deep \
          recursion",
+    ),
+    (
+        "atomics",
+        "every A-extension instruction as the compiler emits them: the atomics \
+         family's fixture, and the one S11 force-detaches",
     ),
 ];
 
@@ -118,7 +123,7 @@ fn objdump_listing(name: &str) {
 ///
 /// Returns `None` for the file banner, the section banner, symbol headers and
 /// blank lines — everything that is not an instruction.
-fn parse_objdump_line(line: &str) -> Option<(u32, String, String)> {
+pub(crate) fn parse_objdump_line(line: &str) -> Option<(u32, String, String)> {
     // An instruction line starts with whitespace, then `address:`.
     if !line.starts_with(char::is_whitespace) {
         return None;
@@ -206,8 +211,8 @@ fn nm_listing(name: &str) {
 /// Small enough to read, which is the point — every negative control is a
 /// named deviation from this one shape, and no toolchain will produce most of
 /// them for RV32.
-struct ElfBuilder {
-    e_type: u16,
+pub(crate) struct ElfBuilder {
+    pub(crate) e_type: u16,
     e_machine: u16,
     ei_class: u8,
     entry: u32,
@@ -217,7 +222,7 @@ struct ElfBuilder {
 
 impl ElfBuilder {
     /// A minimal, valid, static RV32 executable with one `R|X` segment.
-    fn rv32_exec(text: &[u8]) -> ElfBuilder {
+    pub(crate) fn rv32_exec(text: &[u8]) -> ElfBuilder {
         ElfBuilder {
             e_type: 2,
             e_machine: 243,
@@ -227,7 +232,7 @@ impl ElfBuilder {
         }
     }
 
-    fn build(&self) -> Vec<u8> {
+    pub(crate) fn build(&self) -> Vec<u8> {
         const EHDR: usize = 52;
         const PHDR: usize = 32;
         let body_at = EHDR + PHDR * self.segments.len();

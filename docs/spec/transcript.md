@@ -198,6 +198,20 @@ uninitialised value can never be a valid message.
 | `ACCUMULATOR_MERGE` | 19 | challenge |
 | `PUBLIC_INPUT_STREAM` | 20 | bytes |
 | `PUBLIC_OUTPUT_STREAM` | 21 | bytes |
+| `PROGRAM_IDENTITY` | 22 | scalars |
+| `VM_CONFIG` | 23 | scalars |
+| `SHARD_COUNTS` | 24 | scalars |
+
+Tags 22 to 24 are S11's. `PROGRAM_IDENTITY` opens the program-identity sponge
+with its one scalar, the code version; `VM_CONFIG` frames the static `VmConfig`
+— the family ids ascending, then their heights, then `bytecode_size_words` —
+and `SHARD_COUNTS` frames one per-proof shard count per family of that config.
+The last two are the **statement descriptor**, always absorbed as two adjacent
+messages in that order. The identity sponge also absorbs one `COMMITMENT`
+message per family: that family's decoded-table column commitments as one
+list of four-limb points, in the existing kind. The squeeze that ends the
+identity sponge is a raw `sample`. `crates/program/CLAUDE.md` is normative for
+the recipe.
 
 Tags 20 and 21 are S10's, and they exist as a pair. They are the two domain tags
 of the **public I/O digest**: `transcript::io_digest` absorbs the guest's fd 0

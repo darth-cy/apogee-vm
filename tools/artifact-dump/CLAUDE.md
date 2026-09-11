@@ -29,12 +29,12 @@ design record.
   compares the result to what `load_elf` produced, and renders from *that*. A
   report rendered from the in-memory image would describe something the file
   might not contain. On disagreement it writes nothing.
-- **No mnemonics.** An RV32IMAC instruction model is `crates/isa`'s, in a later
-  stage; a decoder written here would be a second one to keep correct, and the
-  report points at `llvm-objdump` instead. The listing carries the address, the
-  length, the encoding in memory and the expanded word — which is exactly what
-  `crates/loader/tests/differential.rs` already checks against that
-  disassembler.
+- **No mnemonics in the `ProgramImage` report.** The instruction model is
+  `crates/isa`'s, and that page describes the artifact, which carries words; it
+  points at `llvm-objdump` for text, and `tables` below is where mnemonics are
+  printed. The listing carries the address, the length, the encoding in memory and
+  the expanded word — which is exactly what `crates/loader/tests/differential.rs`
+  already checks against that disassembler.
 - **Symbols are read from the ELF and marked as such.** They come from
   `.symtab`, not from the artifact, because a listing of four thousand hex words
   with no names is one nobody can navigate. Every part of the report that names
@@ -80,9 +80,28 @@ cost about six seconds, which is why it is not `#[ignore]`d: a walkthrough
 nothing runs is a walkthrough that has already stopped working and not been
 told.
 
+## `tables`: the decoded tables, printed (S11)
+```
+cargo run --release -p artifact-dump -- tables <guest.elf> [--ptau <ppot_0080_24.ptau>]
+```
+Prints to stdout: the `VmConfig` (each family's height, live rows, columns and field
+mask), then every instruction's pc, `next_pc`, owning family, mnemonic and decoded
+fields, then the extra-mask bits the program uses. With `--ptau` it also computes the
+program identity at the frozen default parameters, which needs 2^22 ceremony powers and
+about a minute; without, the page says what it needs. Any ELF the loader and decoder
+refuse is the loader's or `crates/program`'s named error, and nothing is printed.
+
+- **The listing is read out of the tables**, the columns identity commits to, not
+  re-derived from the image — except the mnemonic, which a table stores as a one-hot bit
+  and which comes from decoding the slot's word. `tests/tables.rs` parses the listing
+  back and holds it to the tables row for row, over every committed guest and a
+  hand-built ELF that is no fixture.
+- **This is where mnemonics live now.** The `ProgramImage` report above still has none,
+  on purpose: that page describes the artifact, and the artifact carries words, not
+  instructions.
+
 ## Not this tool's job
-Program identity. That is S11's, over the decoded per-family tables and the
-`VmConfig`. The sha256 the report prints pins the artifact's bytes so a rebuild
-can be compared against them, and the report says so in as many words, because
-a digest sitting next to the word "program" is exactly the thing a reader would
-otherwise assume.
+Defining program identity. That is `crates/program`'s; `tables` only prints it. The
+sha256 the `ProgramImage` report prints pins the artifact's bytes so a rebuild can be
+compared against them, and that report says in as many words that it is not identity,
+because a digest next to the word "program" is exactly what a reader would assume.

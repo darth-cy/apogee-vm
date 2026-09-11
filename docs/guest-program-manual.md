@@ -65,7 +65,7 @@ A guest is an ordinary `no_std` binary crate that lives in the `guests/`
 workspace. Three files, one of which already exists.
 
 `hello` below is the guest this manual builds; you are creating it now. The
-repository ships six, and every command here works on those too with the name
+repository ships seven, and every command here works on those too with the name
 changed. They are worth reading before you write your own, because between them
 they cover most of what a guest can do:
 
@@ -77,6 +77,7 @@ they cover most of what a guest can do:
 | `amm` | a constant-product market maker: exact 128- and 256-bit arithmetic, `mul_div`, integer `sqrt`, and no heap at all |
 | `orderbook` | a uniform-price auction: `Vec`, `BTreeMap`, sorting, and the reference demonstration of hint-then-verify |
 | `vault` | Merkle-gated withdrawals over Poseidon2: `crates/field` and `crates/transcript` running inside the proof, and the deepest call chain in `guests/` |
+| `atomics` | every A-extension instruction as the compiler emits it, from `core::sync::atomic` on one hart; the fixture for the atomics circuit family |
 
 If you are looking for a pattern to copy, `amm` is the one to read for arithmetic
 and framing, `orderbook` for anything that takes prover advice, and `vault` for
@@ -114,7 +115,7 @@ fn main() {
 **`guests/Cargo.toml`** — add the crate to the member list:
 
 ```toml
-members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "hello"]
+members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "hello"]
 ```
 
 Four things about that source file are not negotiable:
@@ -525,7 +526,7 @@ the first and unrunnable under the second — S10 shipped exactly that, twice.
 The two rules are properties of `link.ld`, which every guest links against
 unmodified, so a guest that changes only its own source has the segment shape
 the committed guests have. `crates/loader/tests/layout.rs` checks those over all
-six committed guests on every CI run, and its ignored case relinks them from
+seven committed guests on every CI run, and its ignored case relinks them from
 source and re-checks — which is what to run after touching the script:
 
 ```
@@ -692,3 +693,27 @@ Changing any of these is a protocol-version change, not a refactor:
 
 Not frozen, and yours to change: the report's text and layout. It is a
 rendering. The artifact is the contract.
+
+## 11. What the VM will prove: the decoded tables
+
+The artifact is words. What a proof is about is those words decoded into per-family
+tables, and the `tables` form of the same tool prints them:
+
+```
+cargo run --release -p artifact-dump -- tables guests/target/riscv32imac-unknown-none-elf/debug/hello
+cargo run --release -p artifact-dump -- tables <elf> --ptau assets/ptau/ppot_0080_24.ptau
+```
+
+The page shows the `VmConfig` the preprocessor derived for your program — which circuit
+families it needs, and how tall each is — and then every instruction with its mnemonic,
+its decoded fields and the family that owns it. An instruction the VM does not support
+stops the page with `Not all opcodes supported: pc=…` naming where it is, which is the
+same refusal proving would give.
+
+With `--ptau` it also prints the **program identity** at the default parameters: the
+value a verifier would register for your program. It needs PSE's ceremony file (2^22
+powers, and about a minute); `docs/handoff/S07-msm-srs-kzg.md` has the download. Two
+things about it are worth knowing before you publish one. It is taken over the decoded
+instructions and the `VmConfig` only — at this stage not over `.rodata`, `.data` or
+the entry point — and it moves whenever the instructions do, including when a rebuild on
+another machine embeds different paths. `crates/program/CLAUDE.md` is the full account.

@@ -415,6 +415,9 @@ fn tag_table_is_well_formed() {
         "ACCUMULATOR_MERGE",
         "PUBLIC_INPUT_STREAM",
         "PUBLIC_OUTPUT_STREAM",
+        "PROGRAM_IDENTITY",
+        "VM_CONFIG",
+        "SHARD_COUNTS",
     ];
     let values: Vec<u64> = names
         .iter()

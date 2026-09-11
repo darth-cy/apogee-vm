@@ -1,0 +1,18 @@
+[package]
+name = "isa"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# No dependencies. A 32-bit word in, an instruction out: nothing here needs a
+# field, a transcript or a loader, and nothing that does should be reachable
+# from the decoder.
+
+[dev-dependencies]
+# The acceptance-1 differential reads the loader's committed guest ELFs and
+# their llvm-objdump listings, and needs the loader's expansion of every
+# compressed instruction to decode it.
+loader.workspace = true
+test-support.workspace = true
+# The whole-space sweep: 2^30 words, split over the 32 major opcodes.
+rayon.workspace = true

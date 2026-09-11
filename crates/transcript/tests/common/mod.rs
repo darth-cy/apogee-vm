@@ -98,6 +98,9 @@ pub fn tag_by_name(name: &str) -> Result<Tag, String> {
         "ACCUMULATOR_MERGE" => Ok(transcript_tags::ACCUMULATOR_MERGE),
         "PUBLIC_INPUT_STREAM" => Ok(transcript_tags::PUBLIC_INPUT_STREAM),
         "PUBLIC_OUTPUT_STREAM" => Ok(transcript_tags::PUBLIC_OUTPUT_STREAM),
+        "PROGRAM_IDENTITY" => Ok(transcript_tags::PROGRAM_IDENTITY),
+        "VM_CONFIG" => Ok(transcript_tags::VM_CONFIG),
+        "SHARD_COUNTS" => Ok(transcript_tags::SHARD_COUNTS),
         other => Err(format!("unknown tag name {other}")),
     }
 }

@@ -1,0 +1,21 @@
+[package]
+name = "program"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# `std`, because program identity is Mercury commitments and `pcs` is std.
+[dependencies]
+# FamilyId, the extra-mask bits, the defaults, the identity tags, the RAM window.
+constants.workspace = true
+field.workspace = true
+isa.workspace = true
+# `ProgramImage` is the input; `load_elf` is never called here.
+loader.workspace = true
+pcs.workspace = true
+poly.workspace = true
+srs.workspace = true
+transcript.workspace = true
+
+[dev-dependencies]
+test-support.workspace = true

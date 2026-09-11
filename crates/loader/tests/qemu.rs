@@ -573,3 +573,70 @@ fn qemu() -> String {
         std::env::var("PATH").unwrap_or_default()
     )
 }
+
+/// `guests/atomics`: every A-extension instruction, on one hart.
+///
+/// Each atomic is a plain read-modify-write when nothing contends, so the
+/// nine committed words are ordinary arithmetic the host recomputes below.
+/// What the run adds is that the instructions are the compiler's real `amo*`,
+/// `lr.w` and `sc.w` -- the S11 atomics family's fixture actually computes what
+/// its source says, both halves of every AMO: the cell each one writes, and,
+/// folded into the last word in order, the old value each one returns. 37
+/// rounds, so the rotating mask wraps past bit 31.
+#[test]
+#[ignore = "needs a Linux host with qemu-user; run with --ignored"]
+fn atomics_computes_its_cells() {
+    let qemu = qemu();
+    let n: u32 = 37;
+    let fold = |acc: u32, value: u32| acc.wrapping_mul(31).wrapping_add(value);
+
+    let (mut sum, mut last, mut mixed, mut masked, mut flags) = (0u32, 0u32, 0u32, u32::MAX, 0u32);
+    let (mut low, mut high, mut steps) = (i32::MAX, 0u32, 1u32);
+    let (mut signed_high, mut unsigned_low) = (i32::MIN, u32::MAX);
+    let mut old = 0u32;
+    for i in 0..n {
+        let x = i.wrapping_mul(0x9e37_79b9);
+        // Each line: the old value the atomic returns, then its write.
+        old = fold(old, sum);
+        sum = sum.wrapping_add(x);
+        old = fold(old, last);
+        last = x;
+        old = fold(old, mixed);
+        mixed ^= x;
+        old = fold(old, masked);
+        masked &= !(1 << (i % 32));
+        old = fold(old, flags);
+        flags |= 1 << (x >> 27);
+        old = fold(old, low as u32);
+        low = low.min(x as i32);
+        old = fold(old, signed_high as u32);
+        signed_high = signed_high.max(x as i32);
+        old = fold(old, high);
+        high = high.max(x);
+        old = fold(old, unsigned_low);
+        unsigned_low = unsigned_low.min(x ^ 0x5555_5555);
+        steps = steps.wrapping_mul(3).wrapping_add(1);
+    }
+    high ^= signed_high as u32;
+    sum = sum.wrapping_add(unsigned_low);
+    let want: Vec<u8> = [
+        sum, last, mixed, masked, flags, low as u32, high, steps, old,
+    ]
+    .iter()
+    .flat_map(|w| w.to_le_bytes())
+    .collect();
+
+    let run = execute(&qemu, "atomics", "atomics", &n.to_le_bytes(), None);
+    assert_eq!(
+        run.status,
+        Some(0),
+        "atomics exited {:?}: {}",
+        run.status,
+        run.stderr
+    );
+    assert_eq!(
+        to_hex(&run.stdout),
+        to_hex(&want),
+        "atomics committed the wrong cells"
+    );
+}

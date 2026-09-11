@@ -1,24 +1,34 @@
 //! Export a guest ELF as the `ProgramImage` artifact later stages consume, and
-//! a report of that artifact a person can read.
+//! a report of that artifact a person can read — or print its decoded tables.
 //!
 //!     cargo run -p artifact-dump -- guests/target/riscv32imac-unknown-none-elf/debug/fib
 //!     cargo run -p artifact-dump -- <elf> --out artifacts/
+//!     cargo run --release -p artifact-dump -- tables <elf> [--ptau <file>]
 //!
-//! Two files land in the output directory, both named after the ELF:
+//! The first form writes two files into the output directory, both named
+//! after the ELF:
 //!
 //! | File | What |
 //! | --- | --- |
 //! | `<name>.img` | the artifact: the frozen `postcard` wire form, nothing else |
 //! | `<name>.img.txt` | the report of that artifact |
 //!
+//! `tables` prints to stdout instead: every instruction's pc, mnemonic, decoded
+//! fields and owning family, the derived `VmConfig`, and — given PSE's ceremony
+//! file with `--ptau` — the program identity at the frozen default parameters.
+//!
 //! `docs/guest-program-manual.md` is the walkthrough, from an empty crate to
-//! these two files.
+//! these files.
 
 use std::fs;
 use std::path::PathBuf;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("tables") {
+        tables(&args[1..]);
+        return;
+    }
     let (elf_path, out_dir) = match parse(&args) {
         Ok(parsed) => parsed,
         Err(why) => usage(&why),
@@ -76,6 +86,57 @@ fn main() {
     );
 }
 
+/// `tables <elf> [--ptau <file>]`: print the decoded tables at the frozen
+/// default parameters.
+fn tables(args: &[String]) {
+    let mut elf: Option<PathBuf> = None;
+    let mut ptau: Option<PathBuf> = None;
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--ptau" => match rest.next() {
+                Some(path) => ptau = Some(PathBuf::from(path)),
+                None => usage("`--ptau` needs a file"),
+            },
+            other if other.starts_with('-') => usage(&format!("unknown flag `{other}`")),
+            other => {
+                if elf.replace(PathBuf::from(other)).is_some() {
+                    usage("one ELF at a time");
+                }
+            }
+        }
+    }
+    let Some(elf_path) = elf else {
+        usage("no ELF given")
+    };
+    let bytes = match fs::read(&elf_path) {
+        Ok(bytes) => bytes,
+        Err(e) => fail(&format!("reading {}: {e}", elf_path.display())),
+    };
+
+    let params = program::ProgramParams::defaults();
+    // The SRS needs as many powers as the tallest table has rows.
+    let power = params
+        .heights
+        .iter()
+        .max()
+        .expect("eight heights")
+        .trailing_zeros();
+    let srs = ptau.map(|path| {
+        srs::Srs::from_ptau(&path, power)
+            .unwrap_or_else(|e| fail(&format!("reading {}: {e:?}", path.display())))
+    });
+    match artifact_dump::tables::render(
+        &bytes,
+        &elf_path.display().to_string(),
+        &params,
+        srs.as_ref(),
+    ) {
+        Ok(page) => print!("{page}"),
+        Err(why) => fail(&why),
+    }
+}
+
 /// `(elf, out_dir)`. The output directory defaults to the working directory,
 /// not the ELF's: the ELF lives in a target directory, which `cargo clean`
 /// deletes, and an artifact worth exporting is one worth keeping.
@@ -106,10 +167,12 @@ fn usage(why: &str) -> ! {
         eprintln!("artifact-dump: {why}");
     }
     eprintln!("usage: cargo run -p artifact-dump -- <guest.elf> [--out <dir>]");
+    eprintln!("       cargo run --release -p artifact-dump -- tables <guest.elf> [--ptau <file>]");
     eprintln!();
-    eprintln!("Writes <name>.img -- the frozen ProgramImage wire form, which is the");
-    eprintln!("artifact later stages read -- and <name>.img.txt, a report of it.");
-    eprintln!("See docs/guest-program-manual.md.");
+    eprintln!("The first writes <name>.img -- the frozen ProgramImage wire form, which is");
+    eprintln!("the artifact later stages read -- and <name>.img.txt, a report of it.");
+    eprintln!("`tables` prints the decoded per-family tables, the VmConfig and, with the");
+    eprintln!("PSE ceremony file, the program identity. See docs/guest-program-manual.md.");
     std::process::exit(if why.is_empty() { 0 } else { 2 });
 }
 

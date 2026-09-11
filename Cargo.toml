@@ -10,6 +10,8 @@ members = [
     "crates/srs",
     "crates/pcs",
     "crates/loader",
+    "crates/isa",
+    "crates/program",
     "tools/kat-gen",
     "tools/bench",
     "tools/artifact-dump",
@@ -35,6 +37,8 @@ sumcheck = { path = "crates/sumcheck" }
 srs = { path = "crates/srs" }
 pcs = { path = "crates/pcs" }
 loader = { path = "crates/loader" }
+isa = { path = "crates/isa" }
+program = { path = "crates/program" }
 
 # Test-only, and a dev-dependency everywhere it appears: SHA-256 for pinning
 # committed fixtures, and the hex codec those files are written in.
