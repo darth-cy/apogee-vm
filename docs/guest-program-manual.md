@@ -65,7 +65,7 @@ A guest is an ordinary `no_std` binary crate that lives in the `guests/`
 workspace. Three files, one of which already exists.
 
 `hello` below is the guest this manual builds; you are creating it now. The
-repository ships six, and every command here works on those too with the name
+repository ships seven, and every command here works on those too with the name
 changed. They are worth reading before you write your own, because between them
 they cover most of what a guest can do:
 
@@ -77,6 +77,7 @@ they cover most of what a guest can do:
 | `amm` | a constant-product market maker: exact 128- and 256-bit arithmetic, `mul_div`, integer `sqrt`, and no heap at all |
 | `orderbook` | a uniform-price auction: `Vec`, `BTreeMap`, sorting, and the reference demonstration of hint-then-verify |
 | `vault` | Merkle-gated withdrawals over Poseidon2: `crates/field` and `crates/transcript` running inside the proof, and the deepest call chain in `guests/` |
+| `atomics` | every A-extension instruction as the compiler emits it, from `core::sync::atomic` on one hart; the fixture for the atomics circuit family |
 
 If you are looking for a pattern to copy, `amm` is the one to read for arithmetic
 and framing, `orderbook` for anything that takes prover advice, and `vault` for
@@ -114,7 +115,7 @@ fn main() {
 **`guests/Cargo.toml`** — add the crate to the member list:
 
 ```toml
-members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "hello"]
+members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "hello"]
 ```
 
 Four things about that source file are not negotiable:
@@ -525,7 +526,7 @@ the first and unrunnable under the second — S10 shipped exactly that, twice.
 The two rules are properties of `link.ld`, which every guest links against
 unmodified, so a guest that changes only its own source has the segment shape
 the committed guests have. `crates/loader/tests/layout.rs` checks those over all
-six committed guests on every CI run, and its ignored case relinks them from
+seven committed guests on every CI run, and its ignored case relinks them from
 source and re-checks — which is what to run after touching the script:
 
 ```

@@ -175,7 +175,15 @@ fn writable_at(loads: &[Load], addr: u64, what: &str) -> Result<(), String> {
 // The guests
 // ---------------------------------------------------------------------------
 
-const GUESTS: [&str; 6] = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault"];
+const GUESTS: [&str; 7] = [
+    "fib",
+    "echo",
+    "rvc-dense",
+    "amm",
+    "orderbook",
+    "vault",
+    "atomics",
+];
 
 /// Every rule above, over one image. The single place the rules are composed,
 /// so the committed fixtures and a fresh link are held to exactly one standard.

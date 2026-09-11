@@ -11,7 +11,7 @@
 # toolchain, because rustup walks up from the working directory.
 [workspace]
 resolver = "2"
-members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault"]
+members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics"]
 
 [workspace.package]
 version = "0.1.0"

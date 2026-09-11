@@ -10,6 +10,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "atomics"
+version = "0.1.0"
+dependencies = [
+ "guest-sdk",
+]
+
+[[package]]
 name = "constants"
 version = "0.1.0"
 

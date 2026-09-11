@@ -670,6 +670,193 @@ pub mod transcript_tags {
     /// swapping two unequal streams changes the digest.
     /// `docs/spec/ecall-abi.md` section 6.
     pub const PUBLIC_OUTPUT_STREAM: u64 = 21;
+
+    /// Scalars. The first message of the program-identity sponge: the single
+    /// element `code version`. It is what opens that sponge, so the identity
+    /// is domain-separated from every other digest in the protocol.
+    /// `crates/program/CLAUDE.md`.
+    pub const PROGRAM_IDENTITY: u64 = 22;
+
+    /// Scalars. The static `VmConfig`: the family ids in ascending order, then
+    /// their heights in the same order, then `bytecode_size_words`. The first
+    /// half of the statement descriptor, and the second message of the
+    /// program-identity sponge.
+    pub const VM_CONFIG: u64 = 23;
+
+    /// Scalars. The per-proof shard count of every family in the `VmConfig`,
+    /// in the same ascending order. The second half of the statement
+    /// descriptor, always absorbed immediately after the [`VM_CONFIG`]
+    /// message it counts shards for.
+    pub const SHARD_COUNTS: u64 = 24;
+}
+
+/// The circuit families, by number. Frozen at S11; **append-only**.
+///
+/// A family is one arithmetization shape covering a set of program counters.
+/// The number is what every later stage cites: canonical ordering is ascending
+/// `FamilyId`, the program-identity digest absorbs families in that order, and
+/// shard transcripts are seeded with it. Delegation families are appended
+/// after [`INIT_TEARDOWN`] and never renumber anything below them.
+///
+/// Which mnemonic each instruction family claims is `crates/program`'s
+/// `family_of`, and `crates/program/CLAUDE.md` is the table.
+pub mod family {
+    /// `add`, `sub`, `addi`, `lui`, `auipc`, and the system row kind:
+    /// `ecall`, `ebreak`, `fence`.
+    pub const ADD_SUB_LUI_AUIPC: u32 = 0;
+    /// `jal`, `jalr`, the six branches, `slt`, `sltu`, `slti`, `sltiu`.
+    pub const JUMP_BRANCH_SLT: u32 = 1;
+    /// The six shifts and the six bitwise operations.
+    pub const SHIFT_BITWISE: u32 = 2;
+    /// The eight M-extension operations.
+    pub const MUL_DIV: u32 = 3;
+    /// `lw`, `sw`.
+    pub const MEM_WORD: u32 = 4;
+    /// `lb`, `lh`, `lbu`, `lhu`, `sb`, `sh`.
+    pub const MEM_SUBWORD: u32 = 5;
+    /// `lr.w`, `sc.w` and the nine AMOs.
+    pub const ATOMICS: u32 = 6;
+    /// Memory initialisation and teardown. Claims no pc; present in every
+    /// `VmConfig`.
+    pub const INIT_TEARDOWN: u32 = 7;
+
+    /// How many families this table defines.
+    pub const COUNT: u32 = 8;
+
+    /// The trace-height menu, ascending. Even powers of two only, so that a
+    /// Mercury opening's `b = sqrt(n)` exists.
+    pub const HEIGHT_MENU: [u32; 4] = [1 << 16, 1 << 18, 1 << 20, 1 << 22];
+
+    /// The default trace height of every family, indexed by `FamilyId`.
+    pub const DEFAULT_HEIGHTS: [u32; COUNT as usize] = [
+        1 << 22, // ADD_SUB_LUI_AUIPC
+        1 << 22, // JUMP_BRANCH_SLT
+        1 << 22, // SHIFT_BITWISE
+        1 << 20, // MUL_DIV
+        1 << 22, // MEM_WORD
+        1 << 22, // MEM_SUBWORD
+        1 << 16, // ATOMICS
+        1 << 20, // INIT_TEARDOWN
+    ];
+
+    /// The default `bytecode_size_words`: `2^20` words, a 4 MiB ceiling on the
+    /// span from `RAM_ORIGIN` to the last file-backed byte of the image.
+    pub const DEFAULT_BYTECODE_SIZE_WORDS: u32 = 1 << 20;
+
+    /// The version of the decoded-table construction. Absorbed first into the
+    /// program-identity sponge. Changing it re-registers every program.
+    pub const CODE_VERSION: u32 = 0;
+}
+
+/// The bit positions of `family_extra_mask`, per family. Frozen at S11;
+/// **append-only**.
+///
+/// Every live row's mask is **one-hot**: exactly one bit is set, naming the
+/// row's kind, which is its mnemonic — except the add/sub/lui/auipc family's
+/// bit 0, the *system* row kind shared by `ecall`, `ebreak` and `fence`, whose
+/// rows tell the three apart by the `imm` codes in [`system_code`]. A circuit
+/// unpacks the mask into selector bits, and one-hotness then comes from the
+/// decoded table's domain rather than from a constraint.
+///
+/// Within a family the bits are in canonical ascending order: ascending
+/// `(opcode, funct3, funct7)` of the encoding, `funct5` for the atomics. The
+/// system kind is pinned to bit 0 ahead of that order.
+pub mod extra_mask {
+    /// `family::ADD_SUB_LUI_AUIPC`.
+    pub mod add_sub_lui_auipc {
+        pub const SYSTEM: u32 = 0;
+        pub const ADDI: u32 = 1;
+        pub const AUIPC: u32 = 2;
+        pub const ADD: u32 = 3;
+        pub const SUB: u32 = 4;
+        pub const LUI: u32 = 5;
+    }
+
+    /// `family::JUMP_BRANCH_SLT`.
+    pub mod jump_branch_slt {
+        pub const SLTI: u32 = 0;
+        pub const SLTIU: u32 = 1;
+        pub const SLT: u32 = 2;
+        pub const SLTU: u32 = 3;
+        pub const BEQ: u32 = 4;
+        pub const BNE: u32 = 5;
+        pub const BLT: u32 = 6;
+        pub const BGE: u32 = 7;
+        pub const BLTU: u32 = 8;
+        pub const BGEU: u32 = 9;
+        pub const JALR: u32 = 10;
+        pub const JAL: u32 = 11;
+    }
+
+    /// `family::SHIFT_BITWISE`.
+    pub mod shift_bitwise {
+        pub const SLLI: u32 = 0;
+        pub const XORI: u32 = 1;
+        pub const SRLI: u32 = 2;
+        pub const SRAI: u32 = 3;
+        pub const ORI: u32 = 4;
+        pub const ANDI: u32 = 5;
+        pub const SLL: u32 = 6;
+        pub const XOR: u32 = 7;
+        pub const SRL: u32 = 8;
+        pub const SRA: u32 = 9;
+        pub const OR: u32 = 10;
+        pub const AND: u32 = 11;
+    }
+
+    /// `family::MUL_DIV`.
+    pub mod mul_div {
+        pub const MUL: u32 = 0;
+        pub const MULH: u32 = 1;
+        pub const MULHSU: u32 = 2;
+        pub const MULHU: u32 = 3;
+        pub const DIV: u32 = 4;
+        pub const DIVU: u32 = 5;
+        pub const REM: u32 = 6;
+        pub const REMU: u32 = 7;
+    }
+
+    /// `family::MEM_WORD`.
+    pub mod mem_word {
+        pub const LW: u32 = 0;
+        pub const SW: u32 = 1;
+    }
+
+    /// `family::MEM_SUBWORD`.
+    pub mod mem_subword {
+        pub const LB: u32 = 0;
+        pub const LH: u32 = 1;
+        pub const LBU: u32 = 2;
+        pub const LHU: u32 = 3;
+        pub const SB: u32 = 4;
+        pub const SH: u32 = 5;
+    }
+
+    /// `family::ATOMICS`, ascending `funct5`. `aq` and `rl` are not recorded:
+    /// on a single hart they order nothing.
+    pub mod atomics {
+        pub const AMOADD_W: u32 = 0;
+        pub const AMOSWAP_W: u32 = 1;
+        pub const LR_W: u32 = 2;
+        pub const SC_W: u32 = 3;
+        pub const AMOXOR_W: u32 = 4;
+        pub const AMOOR_W: u32 = 5;
+        pub const AMOAND_W: u32 = 6;
+        pub const AMOMIN_W: u32 = 7;
+        pub const AMOMAX_W: u32 = 8;
+        pub const AMOMINU_W: u32 = 9;
+        pub const AMOMAXU_W: u32 = 10;
+    }
+
+    /// The `imm` of a system row, which is how its one mask bit tells its
+    /// three instructions apart. `ECALL` and `EBREAK` are their encodings'
+    /// own `funct12`; `FENCE` is every fence, whatever its `pred`, `succ` and
+    /// `fm`, because on one hart every fence is a no-op.
+    pub mod system_code {
+        pub const ECALL: u32 = 0;
+        pub const EBREAK: u32 = 1;
+        pub const FENCE: u32 = 2;
+    }
 }
 
 /// The guest memory map, frozen at S10.

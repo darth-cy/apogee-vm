@@ -99,8 +99,8 @@ A third oracle, of a different kind, is the host program loader itself -- see be
 ## Artifacts
 | Path | What |
 | --- | --- |
-| `tests/vectors/{fib,echo,rvc-dense}.elf` | the committed guest ELFs |
-| `tests/vectors/{fib,rvc-dense}.objdump.txt` | the disassembly listings |
+| `tests/vectors/{fib,echo,rvc-dense,amm,orderbook,vault,atomics}.elf` | the committed guest ELFs; `atomics` (S11) is every A-extension instruction as the compiler emits it |
+| `tests/vectors/{fib,rvc-dense,amm}.objdump.txt` | the disassembly listings; `crates/isa`'s decoder is held to them too |
 | `tests/vectors/rvc-dense.nm.txt` | the text symbols |
 | `tests/vectors/*.elf` (the rest) | hand-built ELFs, one per refusal |
 | `tests/vectors/synthetic_elfs.txt` | that index, with each file's digest |

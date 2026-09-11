@@ -18,7 +18,7 @@ here.
 - Changing any value here is a protocol-version change and must bump
   `PROTOCOL_VERSION`.
 
-## Contents as of S10
+## Contents as of S11
 | Item | Meaning |
 | --- | --- |
 | `PROTOCOL_VERSION: u32` | Placeholder, `0`. First item absorbed into every transcript. |
@@ -49,9 +49,19 @@ here.
 | `POSEIDON2_RC3_INITIAL: [[&str; 3]; 4]` | Round constants, 4 initial full rounds. |
 | `POSEIDON2_RC3_INTERNAL: [&str; 56]` | Round constants, 56 partial rounds, lane 0. |
 | `POSEIDON2_RC3_TERMINAL: [[&str; 3]; 4]` | Round constants, 4 terminal full rounds. |
-| `transcript_tags` | The frozen tag table: 21 tags as of S10, sequential from 1. |
+| `transcript_tags` | The frozen tag table: 24 tags as of S11, sequential from 1. |
+| `family` | S11. The append-only `FamilyId` table (0 add/sub/lui/auipc … 7 init/teardown), `COUNT`, the height menu, the default heights, `DEFAULT_BYTECODE_SIZE_WORDS` and the decoded-table `CODE_VERSION`. |
+| `extra_mask` | S11. Every family's `family_extra_mask` bit positions, one-hot per mnemonic, append-only, and the system codes `ecall`/`ebreak`/`fence` carry in `imm`. |
 | `guest_memory` | The frozen guest memory map: `RAM_ORIGIN` and `RAM_LENGTH`. |
 | `ecall` | The guest ecall ABI: syscall numbers, range boundaries, file descriptors. |
+
+S11 added `PROGRAM_IDENTITY` (22), `VM_CONFIG` (23) and `SHARD_COUNTS` (24), all scalars:
+the program-identity sponge's opening message, and the two halves of the statement
+descriptor. `family` and `extra_mask` are numbers the decoded tables and the identity
+recipe are built from, so the same rule applies to them as to tags: **append, never
+renumber** — a renumbered family or mask bit is a different program identity for every
+program. `crates/program/CLAUDE.md` is the design record for both, and
+`crates/program/tests/tables.rs` pins the masks and checks every bit names one mnemonic.
 
 `FR_MODULUS_MINUS_TWO` is an additive extension beyond S01's enumerated list; it is a
 property of the modulus and belongs next to it. The same reasoning puts

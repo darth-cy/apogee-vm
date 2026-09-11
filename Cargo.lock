@@ -159,8 +159,11 @@ name = "artifact-dump"
 version = "0.1.0"
 dependencies = [
  "constants",
+ "isa",
  "loader",
  "postcard",
+ "program",
+ "srs",
  "test-support",
 ]
 
@@ -502,6 +505,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "isa"
+version = "0.1.0"
+dependencies = [
+ "loader",
+ "rayon",
+ "test-support",
+]
+
+[[package]]
 name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -537,9 +549,11 @@ dependencies = [
  "ark-poly",
  "constants",
  "field",
+ "loader",
  "num-bigint",
  "pcs",
  "poly",
+ "program",
  "srs",
  "test-support",
  "transcript",
@@ -679,6 +693,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "program"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "field",
+ "isa",
+ "loader",
+ "pcs",
+ "poly",
+ "srs",
+ "test-support",
+ "transcript",
 ]
 
 [[package]]

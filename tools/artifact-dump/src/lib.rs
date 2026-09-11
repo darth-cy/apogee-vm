@@ -37,6 +37,7 @@ use loader::{load_elf, ProgramImage, Slot};
 use test_support::{sha256, to_hex};
 
 pub mod symbols;
+pub mod tables;
 
 /// One dump: the artifact, the report of it, and the image both describe.
 pub struct Dump {

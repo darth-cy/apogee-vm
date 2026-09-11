@@ -221,3 +221,37 @@ program identity from.
 **Slot** — one halfword of a `ProgramImage`: the start of an instruction, the second
 halfword of a 32-bit one, or not code at all. The three cases are distinguished rather
 than inferred.
+
+**FamilyId** — a circuit family's number, `constants::family`: 0 add/sub/lui/auipc,
+1 jump/branch/SLT, 2 shift/bitwise, 3 mul/div, 4 mem word, 5 mem subword, 6 atomics,
+7 init/teardown. Append-only; ascending `FamilyId` is the canonical order everywhere.
+
+**Decoded table** — one family's committed setup: one row per halfword of the address
+space, row `i` standing for pc `2i`, holding that family's instruction there in the
+fields of its **lookup tuple**. `crates/program/CLAUDE.md`.
+
+**Padding row** — a decoded-table row that holds no live instruction of its family:
+`Fr::MINUS_ONE` in every field, never 0, because pc 0 is a valid pc and an all-zero row
+would be claimable.
+
+**Row kind** — what a live row's one-hot `family_extra_mask` bit names: its mnemonic,
+except the add/sub/lui/auipc family's bit 0, the **system** kind of `ecall`, `ebreak`
+and `fence`, told apart by `imm`.
+
+**Static detachment** — a family appears in a program's `VmConfig` exactly when the
+program has an instruction it claims; the preprocessor derives the set, nothing selects
+it. An instruction whose family is absent fails preprocessing loudly.
+
+**VmConfig** — a program's static VM shape: the family set, each family's trace height
+from the menu `{2^16, 2^18, 2^20, 2^22}`, and `bytecode_size_words`. Per-proof shard
+counts are not part of it.
+
+**Statement descriptor** — the static `VmConfig` plus the per-proof shard count of each
+of its families, absorbed as **two adjacent typed messages**, `VM_CONFIG` then
+`SHARD_COUNTS`. The static part says what VM a program needs; the counts say how much of
+it one execution used. `program::absorb_statement_descriptor`.
+
+**Program identity** — one `Fr`: Mercury commitments to every decoded-table column,
+digested with the `VmConfig` through a fresh typed transcript. A program's identity the
+way a code hash is a contract's, taken by a verifier from a channel the prover does not
+control. At S11 it binds the instruction tables but not `.rodata`/`.data`.

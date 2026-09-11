@@ -27,17 +27,20 @@ crates/
   pcs/           Mercury commit/open/verify, RLC batching, deferred pairings
                  and the accumulator, plus the typed G1 absorption; std
   loader/        ELF parsing, RVC expansion, ProgramImage; std
+  isa/           the RV32IMAC instruction model and the 32-bit decoder; no deps
+  program/       decoded per-family tables, VmConfig derivation, program identity; std
   guest-sdk/     crt0, entry!, linker script, bump allocator, ecall shims; no_std,
                  guest-only, and NOT a workspace member
-guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/ -- their own
+guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/ -- their own
                  workspace; see guests/Cargo.toml and docs/guest-program-manual.md
 assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 handoff
 tools/
   kat-gen/       regenerates the committed Fr, multilinear, curve, MSM, SRS and G1-absorption
-                 vectors from arkworks, and the Mercury proof fixture from `pcs` itself
+                 vectors from arkworks, the Mercury proof fixture from `pcs` itself, the ISA
+                 corpus via llvm-objdump, and the identity pin from `program` itself
   bench/         one routine per measurement, individually selectable
   artifact-dump/ a guest ELF out as the frozen ProgramImage artifact, plus a
-                 readable report of it; see docs/guest-program-manual.md
+                 readable report of it; `tables` prints the decoded tables and identity
   transcript-ref/ the transcript oracle: Plonky3 + zkhash, NOT a workspace member
   test-support/  seeded RNG, SHA-256, hex; shared by every suite and generator
 ```
@@ -62,16 +65,16 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
-cargo test --workspace                      # 400 tests as of S10; 8 more are #[ignore]d
+cargo test --workspace                      # 433 tests as of S11; 15 more are #[ignore]d
 cargo build -p field -p constants -p transcript -p poly -p sumcheck --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
 cd guests/fib && cargo build --target riscv32imac-unknown-none-elf
 APOGEE_GUEST_PROFILE=release cargo test -p loader --test qemu -- --include-ignored
-git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/
+git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/
 -------------------------------------------------------------------------------
 cargo run -p kat-gen                        # refresh every fixture (manual, deliberate)
-cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader
+cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader | isa | program
 cargo run -p kat-gen -- guests              # rebuild the guest ELFs; opt-in, one machine
 cargo run --manifest-path tools/transcript-ref/Cargo.toml   # ditto, transcript vectors
 cargo run --release -p bench                # every routine; internal numbers only
@@ -79,6 +82,8 @@ cargo run --release -p bench -- --list      # the routines, and what each measur
 cargo run --release -p bench -- <routine>   # just that one; setup is per-routine
 
 cargo run -p artifact-dump -- <guest.elf> [--out <dir>]   # export a ProgramImage
+cargo run --release -p artifact-dump -- tables <guest.elf> [--ptau <file>]   # decoded tables, identity
+cargo test --release -p program --test identity -- --ignored   # identity; needs the ceremony file
 ```
 
 `artifact-dump` writes `<name>.img` — the frozen `postcard` wire form, with no
@@ -112,12 +117,12 @@ cargo test -p loader --test qemu -- --include-ignored   # a Linux host with qemu
 cargo test -p loader --test layout -- --ignored         # after editing link.ld
 
 APOGEE_GUEST_PROFILE=release \
-  cargo test -p loader --test qemu -- --include-ignored   # the same seven, optimised
+  cargo test -p loader --test qemu -- --include-ignored   # the same eight, optimised
 ```
 
 **Guests build at `--release` too, and both profiles are pinned.** In a zkVM
 instruction count is proving cost, and `opt-level = 3` removes 24% to 58% of the image
-across the six guests. Cargo's default release profile would also turn `overflow-checks`
+across the guests. Cargo's default release profile would also turn `overflow-checks`
 off, which is not a performance setting here: `u32::MAX + 1` then commits `00000000` on
 fd 1 where the dev build panics and exits 101, and fd 1 is the *committed public output*.
 So `guests/Cargo.toml` pins both profiles to the same semantics — they differ only in
@@ -255,6 +260,24 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   builds on one machine do agree — that is acceptance 2 and a test proves it — so the
   committed `.elf` fixtures are refreshed with `cargo run -p kat-gen -- guests` on one
   machine, and only what is derivable *from* them is regenerated and diffed in CI.
+- **Decoded tables are absolute, one row per halfword, `MINUS_ONE`-padded.** Row `i` is pc
+  `2i`; a family's table is exactly its `VmConfig` height and strictly taller than its last
+  live row; every row that is not one of that family's live instructions is `Fr::MINUS_ONE` in
+  **every** field, never 0 (pc 0 is valid, so an all-zero row would be claimable).
+  `next_pc` is the fall-through, never a branch target. `crates/program/CLAUDE.md`.
+- **`family_extra_mask` is one-hot per mnemonic**, bits frozen in `constants::extra_mask`,
+  append-only; `ecall`/`ebreak`/`fence` share the add/sub/lui/auipc family's bit-0
+  *system* kind and are told apart by `imm` (0/1/2). No family keeps `funct3`. `FamilyId`s
+  are `constants::family`, append-only, and ascending `FamilyId` is the canonical order.
+- **Program identity binds the instruction tables, not the data image.** `.rodata` and
+  `.data` reach no decoded table, so at S11 a program differing only in a constant has the
+  same identity; init/teardown is in every `VmConfig` and absorbs an **empty** commitment
+  list until its stage fills that slot. Identity needs the 2^22 ceremony SRS, so its tests
+  are `#[ignore]`d and run locally only. A verifier takes identity from a channel the
+  prover does not control, never from the proof.
+- **`decode` is RV32IMA's 59 instructions exactly, and `fence` is its one wide form.** Every
+  `MISC-MEM funct3 = 000` word is a fence, as the ISA says; llvm-objdump prints `<unknown>`
+  for the reserved ones. `crates/isa/tests/sweep.rs` counts the whole 2^30 space per opcode.
 - **Own the crypto.** Runtime dependencies are limited to serialization, rayon, CLI and
   error handling. arkworks, Plonky3 and `zkhash` are reference oracles for tests and
   fixtures only, and never reachable from the prover, the verifier or a guest.
@@ -275,3 +298,4 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 | S08 — Mercury I: single-polynomial commit/open/verify | done | `docs/handoff/S08-mercury-single.md` |
 | S09 — Mercury II: RLC batching, deferral, accumulator | done | `docs/handoff/S09-mercury-batching.md` |
 | S10 — Guest toolchain + SDK + loader | done | `docs/handoff/S10-toolchain.md` |
+| S11 — Decoder + program identity | done | `docs/handoff/S11-decoder.md` |

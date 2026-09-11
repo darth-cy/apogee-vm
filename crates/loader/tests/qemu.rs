@@ -573,3 +573,54 @@ fn qemu() -> String {
         std::env::var("PATH").unwrap_or_default()
     )
 }
+
+/// `guests/atomics`: every A-extension instruction, on one hart.
+///
+/// Each atomic is a plain read-modify-write when nothing contends, so the
+/// eight committed words are ordinary arithmetic the host recomputes below.
+/// What the run adds is that the instructions are the compiler's real `amo*`,
+/// `lr.w` and `sc.w` -- the S11 atomics family's fixture actually computes what
+/// its source says. 37 rounds, so the rotating mask wraps past bit 31.
+#[test]
+#[ignore = "needs a Linux host with qemu-user; run with --ignored"]
+fn atomics_computes_its_cells() {
+    let qemu = qemu();
+    let n: u32 = 37;
+
+    let (mut sum, mut last, mut mixed, mut masked, mut flags) = (0u32, 0u32, 0u32, u32::MAX, 0u32);
+    let (mut low, mut high, mut steps) = (i32::MAX, 0u32, 1u32);
+    let (mut signed_high, mut unsigned_low) = (i32::MIN, u32::MAX);
+    for i in 0..n {
+        let x = i.wrapping_mul(0x9e37_79b9);
+        sum = sum.wrapping_add(x);
+        last = x;
+        mixed ^= x;
+        masked &= !(1 << (i % 32));
+        flags |= 1 << (x >> 27);
+        low = low.min(x as i32);
+        signed_high = signed_high.max(x as i32);
+        high = high.max(x);
+        unsigned_low = unsigned_low.min(x);
+        steps = steps.wrapping_mul(3).wrapping_add(1);
+    }
+    high ^= signed_high as u32;
+    low = low.min(unsigned_low as i32);
+    let want: Vec<u8> = [sum, last, mixed, masked, flags, low as u32, high, steps]
+        .iter()
+        .flat_map(|w| w.to_le_bytes())
+        .collect();
+
+    let run = execute(&qemu, "atomics", "atomics", &n.to_le_bytes(), None);
+    assert_eq!(
+        run.status,
+        Some(0),
+        "atomics exited {:?}: {}",
+        run.status,
+        run.stderr
+    );
+    assert_eq!(
+        to_hex(&run.stdout),
+        to_hex(&want),
+        "atomics committed the wrong cells"
+    );
+}

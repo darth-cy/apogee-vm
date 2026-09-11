@@ -10,13 +10,14 @@ use loader::{load_elf, LoaderError, ProgramImage, Slot};
 /// wired into the fixtures should reach every structural check here without a
 /// second edit -- the checks below are about the shape of an image, and there
 /// is no image they are meant to skip.
-const GUESTS: [&str; 6] = [
+const GUESTS: [&str; 7] = [
     "fib.elf",
     "echo.elf",
     "rvc-dense.elf",
     "amm.elf",
     "orderbook.elf",
     "vault.elf",
+    "atomics.elf",
 ];
 
 /// Acceptance 7: loading the same ELF twice yields byte-identical images.
