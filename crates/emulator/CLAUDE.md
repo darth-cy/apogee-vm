@@ -61,6 +61,11 @@ or rebuilding the streams from the log.
   that is not its instruction's, means `tables` are not this program's.
 - **The recorded fd 0 stream is what the guest consumed**, not what it was offered; fd 2
   is kept in `Execution::stderr` for diagnostics and archived nowhere.
+- **An ecall row reads the arguments the ABI table gives its number**, whether or not the
+  call is implemented yet: `PRECOMPILE_POSEIDON2` reads its `a0` pointer and answers
+  `-ENOSYS`, so its frame will not change when its circuit lands. A number the table does
+  not list reads none. The emulator spells no ABI number itself;
+  `crates/constants/tests/ecall_abi.rs` checks that.
 
 ## The QEMU differential
 `qemu-riscv32 -one-insn-per-tb -d nochain,cpu -D <log> <elf>`, fd 0 and fd 3 regular
@@ -95,9 +100,9 @@ docker run --rm -v "$PWD":/w -w /w -e CARGO_TARGET_DIR=/tmp/t rust:latest bash -
 | File | What |
 | --- | --- |
 | `src/lib.rs` (unit) | the last cycle on the 38-bit clock runs and the next is `ClockOverflow` |
-| `src/qemu.rs` (unit) | a real log parses; the entry rule is x2's and ends at its first write; a perturbed register is reported where it is; the whitelist is sc.w and bounded |
-| `tests/guests.rs` | the guests' host-computed answers (fib, heap, atomics, rvc-dense), acceptance 10 (echo's `-ENOSYS` fallback computes the S02 permutation), orderbook's advice invariance, `opcodes` executes all 58 non-trapping mnemonics and every instruction of its compressed block, acceptance 11 (seven misaligned kinds, both paths), `run` == `trace_run` |
-| `tests/trace.rs` | acceptance 3 (balance, heap traffic included), 4 (a corrupted RAM read, register write, pc write and gap each named), 5 (the four-slot clock over every event; `amoadd.w` fills all four slots), 6 (routing), the frame table restated from the spec and checked on every row, ecall transfers, the rows rebuilding the log exactly, `final_state` |
+| `src/qemu.rs` (unit) | a real log parses; the entry rule is x2's and ends at its first write; a perturbed register is reported where it is; the whitelist is sc.w and bounded, and its exemption ends at the next write of rd |
+| `tests/guests.rs` | the guests' host-computed answers (fib, heap, atomics, rvc-dense), acceptance 10 (echo's `-ENOSYS` fallback computes the S02 permutation), orderbook's advice invariance, `opcodes` executes all 58 non-trapping mnemonics and every instruction of its compressed block, acceptance 11 (seven misaligned kinds, both paths), `run` == `trace_run`, the recorded fd 0 stream is what the guest consumed |
+| `tests/trace.rs` | acceptance 3 (balance, heap traffic included), 4 (a corrupted RAM read, register write mid-chain, pc write and gap, a forged initial value, and a stale read, each named), 5 (the four-slot clock over every event; `amoadd.w` fills all four slots), 6 (routing), the frame table — roles and slots — restated from the spec and checked on every row, ecall transfers with every byte held to the recorded streams, every ecall answering as the ABI says (must-be-exact 2 without QEMU), the rows rebuilding the log exactly, `final_state` |
 | `tests/archive.rs` | acceptance 7 (byte-identical round trip, hash-equal payloads, answers without re-execution, `io_digest`) and 8 (five phases, the timing section byte for byte, out-of-order refused by byte patch) |
 | `tests/differential.rs` | **`#[ignore]`d** — acceptance 1 over `opcodes`, `rvc-dense`, `fib`, `heap`, `atomics`; acceptance 2 (perturbed registers and pc caught at their instruction); `ebreak` at one pc in both |
 

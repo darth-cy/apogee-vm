@@ -29,7 +29,8 @@ which is the "valid proof of a different computation" failure this whole documen
 to prevent.
 
 The standard calls keep their Linux numbers, which is what lets `qemu-riscv32`
-run a guest **unmodified** — and QEMU is the only executor this stage has, so
+run a guest **unmodified** — QEMU was the only executor S10 had, and since S12 it is
+the oracle the emulator is compared against instruction by instruction, so
 the choice is load-bearing rather than decorative.
 
 Precompile arguments travel as **pointers** in `a0`–`a5`, because their operands

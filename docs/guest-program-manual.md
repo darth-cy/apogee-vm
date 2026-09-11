@@ -562,7 +562,9 @@ Three things to see there, and each was a real failure:
    the span up to `__stack_top` is the heap and the stack: undeclared, the
    first push dies on a signal before `main` runs.
 
-**Execution.** `qemu-riscv32` is the only executor before S12. It is user-mode
+**Execution.** `qemu-riscv32` was the only executor before S12; since S12
+`crates/emulator` runs a guest too (`emulator::run`), and its trace is held to QEMU's
+instruction by instruction. It is user-mode
 emulation — it translates the guest's Linux syscalls into the host's — so it
 builds for Linux hosts only and there is no native macOS build of it. The tests
 stay `#[ignore]`d so a machine with no emulator cannot report silent coverage,

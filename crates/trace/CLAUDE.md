@@ -55,7 +55,8 @@ impl TraceArchive {
 - **The event schema.** One event per query: space, address, write timestamp, read
   timestamp, read value, write value. A read writes back what it read. The log is a flat
   vector in timestamp order — cycle order, and inside a cycle the pc query then the
-  roles in `ROLES` order. The last-access tables (a 32-entry array for the registers, an
+  roles by slot and then by role number, which today is exactly `ROLES` order; a role
+  appended later takes its place by slot and renumbers nothing. The last-access tables (a 32-entry array for the registers, an
   `Option` for the pc, a hash map keyed by RAM word address) fill each new event's read
   side and are never serialized; `from_events` rebuilds them.
 - **`record` panics on a broken invariant**: an address outside its space, a timestamp
@@ -63,12 +64,16 @@ impl TraceArchive {
   machine read that disagrees with the last write — the emulator and the log disagreeing
   about memory is not something a guest can cause.
 - **`self_check` is the memory argument at trace level.** Timestamp rules first (every
-  address in its space, every timestamp on the clock, every gap non-negative, one query
-  per address per timestamp), then multiset balance: init (timestamp 0, value from the
-  image) plus every write, against every read plus teardown (each address's last write,
-  taken from the log). It names the query where the fault is observed — the one that
-  reads a value no write produced. A changed *final* value balances by construction, as
-  in the argument, where teardown is bound by something else.
+  address in its space, every timestamp on the clock, the events in timestamp order,
+  every gap non-negative, one query per address per timestamp), then multiset balance:
+  init (timestamp 0, value from the image, never from the log) plus every write, against
+  every read plus teardown (each address's last write, taken from the log). When the
+  balance fails it replays the unbalanced address and names the first query whose read
+  is not the last write before it — the corrupted read, the reader of a corrupted write,
+  or a stale read, never the honest reader beside it. **Its blind spot is everything
+  after an address's last honest query** — a final value changed, a final query moved or
+  added, trailing cycles removed — by the argument's own shape; for a snapshot the
+  archive binds the log to the rows.
 - **Family buffers are raw live rows, column-major, in small types.** No padding and no
   polynomial: a padding row's content and a column's multilinear form belong to the
   constraint system, which S12 does not have. A row holds every value its cycle's
@@ -92,6 +97,14 @@ impl TraceArchive {
   post-execution always among them; a phase is timed exactly when it is filled; import
   refuses anything else. The post-execution content's own layout is in
   `src/archive.rs`'s module docs. Later phases are opaque bytes here. No compression.
+- **The reader takes exactly what the writer writes.** A snapshot's parts must agree —
+  every buffer well formed (one column length, height on the menu, no unknown role, an
+  absent role all zero, families ascending), the profile counting the buffers, the rows'
+  cycles `1..=n` each once, every event in its space and on the clock, and the log
+  exactly the one the rows rebuild — and `from_execution` applies the same rule, so every
+  archive that can be built can be read back. A file must also be the canonical
+  encoding of the archive it decodes to: `postcard` reads overlong varints, and one
+  archive must be one byte string for the payload boundary to mean anything.
 - **`export` and `import` take `impl Write` and `impl Read`** because the stage prompt
   froze those signatures; master anti-goal 2 would not have written them, and the S12
   handoff records it.
@@ -102,7 +115,8 @@ impl TraceArchive {
 ## Tests
 | File | What |
 | --- | --- |
-| `src/archive.rs` (unit) | an in-order later phase accepted; out-of-order, timing without content, content without timing, and trailing bytes refused |
+| `src/archive.rs` (unit) | an in-order later phase accepted; out-of-order, timing without content, content without timing, trailing bytes and an overlong varint refused; every one of the reader's twelve part-disagreement refusals, a mis-tagged section and bytes after the post-execution content refused as a named `Err`, never a panic, beside the untouched content; the constructor refusing parts that disagree |
+| `tests/log.rs` | the address-space tags against `constants::address_space`, and exactly which addresses each space has |
 | `tests/plan.rs` | acceptance 9: occupancy 0 / 1 / height / height+1 → 0 / 1 / 1 / 2 at every menu height, zero-occurrence families, the whole 38-bit clock at 2^16, purity, a mismatched profile refused |
 
 The self-check, the buffers and the archive are exercised over real executions in

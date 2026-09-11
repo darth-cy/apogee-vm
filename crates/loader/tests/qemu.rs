@@ -1,8 +1,11 @@
 //! The guests, executed.
 //!
-//! No zkVM emulator exists yet, so `qemu-riscv32` is the only executor this
-//! stage has — which is the whole reason the ecall ABI uses Linux numbers over
-//! Linux file descriptors. A guest runs here **unmodified**.
+//! `qemu-riscv32` runs every guest here **unmodified** — which is the whole
+//! reason the ecall ABI uses Linux numbers over Linux file descriptors. It was
+//! the only executor before S12; since then `crates/emulator` runs the guests
+//! too, and `crates/emulator/tests/differential.rs` holds its trace to QEMU's
+//! instruction by instruction. This file stays what it was: the guests'
+//! behaviour, under the executor with a decade of maintenance behind it.
 //!
 //! Each test builds its guest from source rather than reading the committed
 //! fixture, so behaviour is always checked against the current `guests/`. The
@@ -49,8 +52,9 @@
 //! can witness is execution itself: that fib computes the value it commits,
 //! that the shims move bytes over the right descriptors, that a 256-bit
 //! `mul_div` and a 254-bit `Fr::pow` give the same answers on a 32-bit machine
-//! as on the host, and that the panic handler reports and exits nonzero. Until
-//! S12 builds a zkVM executor, QEMU is the only thing that can.
+//! as on the host, and that the panic handler reports and exits nonzero. Before
+//! S12 QEMU was the only thing that could; now the emulator runs the same
+//! guests, and the differential compares the two.
 
 mod common;
 

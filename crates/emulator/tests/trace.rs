@@ -158,8 +158,11 @@ fn a_corrupted_event_is_named() {
 
     // A stale read: a register read that sees the write before the one it
     // should, with that write's value and a valid gap, and writes it back.
-    // The values alone still balance; only the timestamps in the balance
-    // catch it, and the replay names the stale read, not the honest reader.
+    // It must not be its register's last query: then teardown would read the
+    // stale value back and the values alone would stop balancing. With a
+    // later query, the values alone still balance, only the timestamps in the
+    // balance catch it, and the replay names the stale read, not the honest
+    // reader.
     let (r, prior) = events
         .iter()
         .enumerate()
@@ -167,6 +170,9 @@ fn a_corrupted_event_is_named() {
             if e.space != AddressSpace::Reg || e.delta() == 3 || e.read_ts == 0 {
                 return None;
             }
+            events[r + 1..]
+                .iter()
+                .find(|x| x.space == e.space && x.addr == e.addr)?;
             let writer = events
                 .iter()
                 .find(|w| w.space == e.space && w.addr == e.addr && w.ts == e.read_ts)?;

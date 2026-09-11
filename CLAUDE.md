@@ -69,7 +69,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
-cargo test --workspace                      # 479 tests as of S12; 18 more are #[ignore]d
+cargo test --workspace                      # 488 tests as of S12; 18 more are #[ignore]d
 cargo build -p field -p constants -p transcript -p poly -p sumcheck --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
