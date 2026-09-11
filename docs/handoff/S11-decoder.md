@@ -332,7 +332,20 @@ The rest:
   tables/config consistency assertion. Reaching them needs an SRS, and the owner's
   instruction keeps the ceremony out of CI.
 
-MUTANT_RECHECK
+**The fixes, re-checked by mutation.** In a fresh worktree of the fix commit, ten single
+edits were applied one at a time against the CI-run suites (`isa` and `program`, no
+ignored tests):
+- the seven earlier survivors that are not equivalent: the export reading column 0, ADD
+  and SUB swapped, ECALL and EBREAK codes swapped, `TableTooShort` on the first claim,
+  the height check over four families only, `from_bytes` refusing eight families, and
+  `narrowest`'s `u8` boundary off by one;
+- `is_live`'s new bound removed;
+- the init/teardown check deleted from `from_bytes`;
+- a U immediate that keeps stray low bits.
+
+**All ten are killed**, each by a named test, and a reworded-comment control survives.
+The U-immediate mutant is killed only by the sweep's new range check: the objdump
+differential cannot see it, because it prints the immediate shifted right by 12.
 
 ## Deviations and notes for the reviewer
 
