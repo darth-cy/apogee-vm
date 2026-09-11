@@ -175,7 +175,7 @@ the host-loadability rules by `crates/loader/tests/layout.rs` like every other g
 | 5 | timestamp scan; `amoadd.w` fills four slots | `trace.rs` | every event of five guests on the four-slot clock; each of atomics' `amoadd.w` cycles holds slots 0–3, slot 3 shared by the RAM query and `rd` |
 | 6 | routing | `trace.rs` | fib's cycles each in exactly one buffer, the family `row_kind` independently assigns its pc, counts summing to the cycle count; atomics' A cycles all and only in the atomics buffer, which its config has |
 | 7 | archive round trip, determinism, answers without re-execution | `emulator/tests/archive.rs` | byte-identical export → import → export for three guests; hash-equal payloads from two runs with different timings; cycle count, occupancy, fd 0/1 and `io_digest` from the import; family rows and log rebuilt |
-| 8 | five phases; out-of-order refused | `archive.rs`, `trace/src/archive.rs` | the payload ends with four present, empty sections and the timing section is pinned byte for byte; a byte-patched archive filling post-GKR before post-commit is refused beside an in-order control; every other refusal of the reader — twelve ways the parts can disagree, trailing bytes, a mis-tagged section, an overlong varint — has a negative control of its own |
+| 8 | five phases; out-of-order refused | `archive.rs`, `trace/src/archive.rs` | the payload ends with four present, empty sections and the timing section is pinned byte for byte; a byte-patched archive filling post-GKR before post-commit is refused beside an in-order control; every other refusal of the reader — fourteen ways the parts can disagree, trailing bytes, a mis-tagged section, an overlong varint — has a negative control of its own |
 | 9 | `ShardPlan` edges | `trace/tests/plan.rs` | 0 / 1 / h / h+1 → 0 / 1 / 1 / 2 at every menu height; zero-occurrence families zero; purity |
 | 10 | precompile `-ENOSYS` and fallback | `emulator/tests/guests.rs`, and `opcodes`' `cover_ecall` under the differential | echo's fallback computes the S02 permutation; `opcodes` makes the `0x500` and `0x4ff` calls, whose `a0` QEMU's matches |
 | 11 | misalignment fatal in both paths | `guests.rs` | `lw`, `sw`, `lh`, `sh`, `lr.w`, `sc.w`, `amoadd.w`: `Misaligned` at that instruction from `run` and `trace_run` alike, no trace |
@@ -367,6 +367,15 @@ failed anyway, for the wrong reason. The case now requires a later query at that
 register; with the edit re-applied it fails, and on the real code it passes. **Twelve of
 twelve.**
 
+**Found after the PR opened: the reader took any family id.** Raised in review of PR #12.
+`check_parts` held the buffers to ascending order and the profile to naming the same
+ids, but never held an id to `constants::family` — so an archive renaming a buffer and
+its profile entry to 42, to `u32::MAX`, or to init/teardown (which claims no pc, and so
+never holds an execution row) imported cleanly, and the first thing to notice was
+`plan_shards`' assertion downstream. A probe confirmed all three were accepted. The rule
+now requires every buffer's id to be in `program::FAMILIES` and init/teardown's buffer
+to be empty, and the reader's refusal table carries both cases, fourteen in all.
+
 ## Open for the next stage
 
 - **The ecall row's constraints (S16)** have the frame they need in the trace; what they
@@ -378,6 +387,11 @@ twelve.**
   and decides padding rows; nothing here pads.
 - **The archive's later phases** are opaque bytes; each phase's stage defines its content
   and appends it through a constructor of its own.
+- **The reader cannot see a row filed under the wrong real family.** An `add` row in the
+  `MUL_DIV` buffer names a valid, pc-claiming family, and whether that family claims the
+  row's pc is a fact about the program, which the archive does not carry. The stage that
+  reads an archive back into a proof has the decoded tables and checks routing there;
+  the constraint system's decoded-table lookup refuses it regardless.
 - **A host call or precompile with more than three arguments** needs a role per extra
   register: one fits the spare `present` bit, a second widens the mask, which is a schema
   change to the buffers and the archive.

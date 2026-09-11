@@ -98,8 +98,10 @@ impl TraceArchive {
   refuses anything else. The post-execution content's own layout is in
   `src/archive.rs`'s module docs. Later phases are opaque bytes here. No compression.
 - **The reader takes exactly what the writer writes.** A snapshot's parts must agree —
-  every buffer well formed (one column length, height on the menu, no unknown role, an
-  absent role all zero, families ascending), the profile counting the buffers, the rows'
+  every buffer well formed (a family `constants::family` has, and one that claims a pc —
+  init/teardown claims none, so its buffer is empty — one column length, height on the
+  menu, no unknown role, an absent role all zero, families ascending), the profile
+  counting the buffers, the rows'
   cycles `1..=n` each once, every event in its space and on the clock, and the log
   exactly the one the rows rebuild — and `from_execution` applies the same rule, so every
   archive that can be built can be read back. A file must also be the canonical
@@ -115,7 +117,7 @@ impl TraceArchive {
 ## Tests
 | File | What |
 | --- | --- |
-| `src/archive.rs` (unit) | an in-order later phase accepted; out-of-order, timing without content, content without timing, trailing bytes and an overlong varint refused; every one of the reader's twelve part-disagreement refusals, a mis-tagged section and bytes after the post-execution content refused as a named `Err`, never a panic, beside the untouched content; the constructor refusing parts that disagree |
+| `src/archive.rs` (unit) | an in-order later phase accepted; out-of-order, timing without content, content without timing, trailing bytes and an overlong varint refused; every one of the reader's fourteen part-disagreement refusals, a mis-tagged section and bytes after the post-execution content refused as a named `Err`, never a panic, beside the untouched content; the constructor refusing parts that disagree |
 | `tests/log.rs` | the address-space tags against `constants::address_space`, and exactly which addresses each space has |
 | `tests/plan.rs` | acceptance 9: occupancy 0 / 1 / height / height+1 → 0 / 1 / 1 / 2 at every menu height, zero-occurrence families, the whole 38-bit clock at 2^16, purity, a mismatched profile refused |
 

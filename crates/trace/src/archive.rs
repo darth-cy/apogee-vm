@@ -403,6 +403,8 @@ fn decode_post_execution(
 /// The parts of a post-execution snapshot agree: the one rule the
 /// constructor and the reader share.
 ///
+/// - every buffer names a family `constants::family` has, and one that
+///   claims a pc — init/teardown claims none, so its buffer is empty;
 /// - every buffer's columns have one length, its height is on the menu, no
 ///   `present` bit names a role past the seventh, a role a row does not have
 ///   is `Query::ABSENT`, and the families ascend;
@@ -422,6 +424,14 @@ fn check_parts(
 ) -> Result<(), String> {
     for (i, t) in traces.families.iter().enumerate() {
         let n = t.cycle.len();
+        if !program::FAMILIES.contains(&t.family) {
+            return Err(format!("family {} is not in constants::family", t.family));
+        }
+        if t.family == family::INIT_TEARDOWN && n != 0 {
+            return Err(format!(
+                "init/teardown claims no pc, yet its buffer holds {n} rows"
+            ));
+        }
         let columns_agree = t.pc.len() == n
             && t.next_pc.len() == n
             && t.present.len() == n
@@ -721,7 +731,28 @@ mod tests {
             tiny()
         );
         let pc = (address_space::PC, 0, 4, 0, 0x1_0000, 0x1_0004);
-        let cases: [(&str, Vec<u8>); 12] = [
+        let cases: [(&str, Vec<u8>); 14] = [
+            // The profile renames the family too, so only the id is wrong.
+            (
+                "family 42 is not in constants::family",
+                post(
+                    |a| {
+                        a.traces.families[0].family = 42;
+                        a.profile.counts[0].0 = 42;
+                    },
+                    None,
+                ),
+            ),
+            (
+                "init/teardown claims no pc",
+                post(
+                    |a| {
+                        a.traces.families[0].family = constants::family::INIT_TEARDOWN;
+                        a.profile.counts[0].0 = constants::family::INIT_TEARDOWN;
+                    },
+                    None,
+                ),
+            ),
             (
                 "differ in length",
                 post(|a| a.traces.families[0].pc.push(0), None),
