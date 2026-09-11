@@ -1,0 +1,15 @@
+[package]
+name = "trace"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+constants.workspace = true
+loader.workspace = true
+program.workspace = true
+serde.workspace = true
+# The archive's one encoding. Featureless, as everywhere in the workspace: it
+# writes through `to_extend` into a plain `Vec`, and reads through the
+# hand-written sequence visitor in `src/archive.rs`.
+postcard.workspace = true

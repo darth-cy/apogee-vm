@@ -78,6 +78,8 @@ they cover most of what a guest can do:
 | `orderbook` | a uniform-price auction: `Vec`, `BTreeMap`, sorting, and the reference demonstration of hint-then-verify |
 | `vault` | Merkle-gated withdrawals over Poseidon2: `crates/field` and `crates/transcript` running inside the proof, and the deepest call chain in `guests/` |
 | `atomics` | every A-extension instruction as the compiler emits it, from `core::sync::atomic` on one hart; the fixture for the atomics circuit family |
+| `opcodes` | every RV32IMAC instruction in hand-written assembly at its edge cases, which the emulator is compared against `qemu-riscv32` on; fd 0 selects the `ebreak` and misaligned-access modes |
+| `heap` | `Vec` and `Box` churned through the bump allocator, so the heap's traffic is in the trace |
 
 If you are looking for a pattern to copy, `amm` is the one to read for arithmetic
 and framing, `orderbook` for anything that takes prover advice, and `vault` for
@@ -115,7 +117,7 @@ fn main() {
 **`guests/Cargo.toml`** — add the crate to the member list:
 
 ```toml
-members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "hello"]
+members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "hello"]
 ```
 
 Four things about that source file are not negotiable:

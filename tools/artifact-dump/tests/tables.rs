@@ -110,6 +110,8 @@ fn every_committed_guest_renders_and_the_listing_is_the_tables() {
         "orderbook",
         "vault",
         "atomics",
+        "opcodes",
+        "heap",
     ] {
         let elf = loader_vector(&format!("{name}.elf"));
         let page = render(&elf, name, &ProgramParams::defaults(), None).unwrap();

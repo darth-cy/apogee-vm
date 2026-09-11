@@ -1,0 +1,17 @@
+[package]
+name = "emulator"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+constants.workspace = true
+isa.workspace = true
+loader.workspace = true
+program.workspace = true
+trace.workspace = true
+
+[dev-dependencies]
+field.workspace = true
+transcript.workspace = true
+test-support.workspace = true

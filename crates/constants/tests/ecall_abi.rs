@@ -37,6 +37,7 @@ fn constants_table() -> BTreeMap<&'static str, u32> {
         ("PRECOMPILE_FIRST", ecall::PRECOMPILE_FIRST),
         ("PRECOMPILE_LAST", ecall::PRECOMPILE_LAST),
         ("ENOSYS", ecall::ENOSYS),
+        ("EBADF", ecall::EBADF),
     ])
 }
 
@@ -241,6 +242,40 @@ fn the_shims_use_the_constants() {
             !source.contains(&format!("= {}", literal.trim())),
             "guest-sdk assigns the literal {literal}, which is an ABI number \
              with a home in constants::ecall"
+        );
+    }
+}
+
+/// The emulator's dispatch — the zkVM's executor since S12 — reaches the same
+/// constants and spells none of the numbers, so the ABI has one source for
+/// both sides of every ecall. Must-be-exact 2 of S12.
+#[test]
+fn the_emulator_dispatches_on_the_constants() {
+    let source = fs::read_to_string(repo_root().join("crates/emulator/src/lib.rs"))
+        .expect("crates/emulator/src/lib.rs is readable");
+    for name in [
+        "ecall::READ",
+        "ecall::WRITE",
+        "ecall::EXIT",
+        "ecall::FD_PUBLIC_INPUT",
+        "ecall::FD_PUBLIC_OUTPUT",
+        "ecall::FD_STDERR",
+        "ecall::FD_HINT",
+        "ecall::ENOSYS",
+        "ecall::EBADF",
+    ] {
+        assert!(
+            source.contains(name),
+            "the emulator does not reference {name}, so either a call is missing \
+             or it spells a number itself"
+        );
+    }
+    for literal in [
+        "63 =>", "64 =>", "93 =>", "== 63", "== 64", "== 93", "0x500",
+    ] {
+        assert!(
+            !source.contains(literal),
+            "the emulator spells `{literal}`, an ABI number with a home in constants::ecall"
         );
     }
 }

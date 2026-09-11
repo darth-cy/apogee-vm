@@ -50,6 +50,12 @@ jobs:
           APOGEE_GUEST_PROFILE: release
         run: cargo test -p loader --test qemu -- --include-ignored
 
+      # S12's differential: the emulator's trace against qemu-riscv32's
+      # per-instruction register log, over the committed guests. `#[ignore]`d
+      # for the reason the suite above is, and asked for by name the same way.
+      - name: emulator matches QEMU
+        run: cargo test -p emulator --test differential -- --include-ignored
+
       # Four workspaces, all gated. `crates/guest-sdk` and `guests/` are separate
       # workspaces because they compile only for the guest target, and guest-sdk
       # is the one crate in the repository permitted `unsafe` -- so it is the one

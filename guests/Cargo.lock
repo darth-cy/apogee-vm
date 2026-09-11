@@ -52,6 +52,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "heap"
+version = "0.1.0"
+dependencies = [
+ "guest-sdk",
+]
+
+[[package]]
+name = "opcodes"
+version = "0.1.0"
+dependencies = [
+ "guest-sdk",
+]
+
+[[package]]
 name = "orderbook"
 version = "0.1.0"
 dependencies = [

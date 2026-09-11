@@ -29,10 +29,14 @@ crates/
   loader/        ELF parsing, RVC expansion, ProgramImage; std
   isa/           the RV32IMAC instruction model and the 32-bit decoder; no deps
   program/       decoded per-family tables, VmConfig derivation, program identity; std
+  trace/         the memory event log and its self-check, the family buffers, the cycle
+                 profile and shard plan, and the TraceArchive snapshot; std
+  emulator/      the RV32IMAC reference emulator, its tracing path, and the QEMU
+                 differential harness; std
   guest-sdk/     crt0, entry!, linker script, bump allocator, ecall shims; no_std,
                  guest-only, and NOT a workspace member
-guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/ -- their own
-                 workspace; see guests/Cargo.toml and docs/guest-program-manual.md
+guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, opcodes/, heap/
+                 -- their own workspace; see guests/Cargo.toml and docs/guest-program-manual.md
 assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 handoff
 tools/
   kat-gen/       regenerates the committed Fr, multilinear, curve, MSM, SRS and G1-absorption
@@ -65,12 +69,13 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
-cargo test --workspace                      # 438 tests as of S11; 15 more are #[ignore]d
+cargo test --workspace                      # 479 tests as of S12; 18 more are #[ignore]d
 cargo build -p field -p constants -p transcript -p poly -p sumcheck --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
 cd guests/fib && cargo build --target riscv32imac-unknown-none-elf
 APOGEE_GUEST_PROFILE=release cargo test -p loader --test qemu -- --include-ignored
+cargo test -p emulator --test differential -- --include-ignored
 git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/
 -------------------------------------------------------------------------------
 cargo run -p kat-gen                        # refresh every fixture (manual, deliberate)
@@ -106,7 +111,8 @@ does not name a version anywhere, so it cannot drift from that pin. `llvm-tools`
 those components: `kat-gen -- loader` disassembles the committed guest ELFs with it, so
 the disassembler is pinned to the same LLVM as the compiler.
 
-`qemu-riscv32` runs the guests, and is the only executor before S12. It is user-mode
+`qemu-riscv32` runs the guests; it was the only executor before S12, and since S12 it is the
+oracle `crates/emulator/tests/differential.rs` holds the emulator's trace to. It is user-mode
 emulation: it translates Linux syscalls into host ones, so it builds for Linux hosts only
 and no macOS build of it exists. That is a claim about *native* builds — a Linux VM is an
 ordinary arrangement and the suite runs fine inside one. The tests stay `#[ignore]`d so a
@@ -282,6 +288,29 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   error handling. arkworks, Plonky3 and `zkhash` are reference oracles for tests and
   fixtures only, and never reachable from the prover, the verifier or a guest.
 - **No `unsafe`, no nightly, no async, no threads.** Parallelism is rayon over data.
+- **The execution trace's convention is `docs/spec/execution-trace.md`, and it is frozen.**
+  Timestamp `4·cycle + Δ` over four in-cycle slots, **cycles numbered from 1** (timestamp
+  0 is every address's initial write, which a cycle-0 pc query could not strictly follow),
+  a 38-bit clock that is a fatal error to exhaust, the frame of each instruction class, the
+  x0 rule, and the ecall frame — `a7` at slot 1, its arguments at slot 2, `a0` at slot 3,
+  and a `read`/`write`'s one **transfer cycle** per word moved *before* its own row. S14's
+  multiset fill and S16's ecall constraints cite it; they do not reinvent it.
+- **Address-space tags are nonzero**: `constants::address_space` `REG = 1`, `RAM = 2`,
+  `PC = 3`, so no real memory tuple is all zeros. A RAM event's address is the byte address
+  of its 4-aligned word.
+- **Family buffers are raw live rows**, column-major in small integer types, every query's
+  address, value and timestamps per row. No padding and no `MultilinearPoly` — those belong
+  to the constraint system, which is not built yet.
+- **`sc.w` always succeeds in the emulator.** That is the one divergence the QEMU
+  differential whitelists; the harness's other rule — `x2` differs at entry, Linux's stack
+  pointer, until the guest writes it — is about the environment, not an instruction.
+- **Misaligned halfword/word accesses, RAM-window violations (ecall buffers included),
+  `ebreak` and a pc that is not an instruction are fatal guest errors**, in `run` and
+  `trace_run` alike, and a fatal error returns no trace. `read`/`write` on a descriptor
+  the ABI does not give that call return `-EBADF`; the recorded fd 0 stream is the bytes
+  the guest consumed.
+- **The trace archive's deterministic payload is a byte prefix of the file**; the timing
+  section follows it, so determinism excludes timing by construction, not by comparison.
 - **Boring beats clever.** Added surface area is a defect. Every verifier entry point is
   `(&VerifyingKey, &Proof, &PublicInputs)` and nothing else.
 
@@ -299,3 +328,4 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 | S09 — Mercury II: RLC batching, deferral, accumulator | done | `docs/handoff/S09-mercury-batching.md` |
 | S10 — Guest toolchain + SDK + loader | done | `docs/handoff/S10-toolchain.md` |
 | S11 — Decoder + program identity | done | `docs/handoff/S11-decoder.md` |
+| S12 — Emulator + trace generation | done | `docs/handoff/S12-emulator.md` |

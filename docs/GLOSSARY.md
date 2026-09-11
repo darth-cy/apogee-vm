@@ -251,6 +251,44 @@ of its families, absorbed as **two adjacent typed messages**, `VM_CONFIG` then
 `SHARD_COUNTS`. The static part says what VM a program needs; the counts say how much of
 it one execution used. `program::absorb_statement_descriptor`.
 
+**Memory query** — one read and one write at one address: the value last written there
+and when, and the value written now and when. A query that only reads writes back what
+it read, so a register read is one query, never two. The memory argument's unit;
+`docs/spec/execution-trace.md` is the convention every query follows.
+
+**Memory event** — a memory query as the trace records it: address space, address,
+write timestamp, read timestamp, read value, write value. The `MemoryEventLog` is every
+event of one execution in timestamp order.
+
+**Address space** — registers (`REG`, tag 1), RAM (`RAM`, tag 2, word-granular) or the
+program counter (`PC`, tag 3). The tags are nonzero so no real tuple is all zeros.
+
+**In-cycle slot, Δ** — one of a cycle's four timestamps, `4·cycle + Δ` for `Δ` in
+`0..4`: slot 0 the pc query, 1 the first register read, 2 the second or a load's word, 3
+the register write or a store's word. Not a `ProgramImage` slot, which is a halfword.
+Distinct addresses may share a slot; one address never queries twice in one.
+
+**Role** — what a query does in its cycle — `rs1`, `rs2`, `arg1`, `arg2`, `load`, `ram`,
+`rd` — which fixes its address space, its slot, and its place among the cycle's events.
+
+**Transfer cycle** — a cycle an ecall spends moving one word of a `read`'s or `write`'s
+buffer: the pc re-written unchanged at slot 0, the word at slot 3, nothing else. A
+call's transfer cycles come immediately before its own row, which writes the real
+`next_pc`.
+
+**Family buffer** — one family's executed cycles, one row each, column-major in small
+integer types, holding every value the cycle's queries carried. Live rows only: padding
+and polynomials are the constraint system's.
+
+**Cycle profile** — how many cycles each family of a `VmConfig` ran, transfer cycles
+included; the counts sum to the cycle count. **Shard plan** — `ceil(occupancy / height)`
+shards per family, derived from it.
+
+**Trace archive** — the self-contained snapshot of a run: a section per **phase
+boundary** (post-execution, post-commit, post-GKR, post-opening, final), filled in
+order, and a timing section after them, outside the deterministic payload by
+construction.
+
 **Program identity** — one `Fr`: Mercury commitments to every decoded-table column,
 digested with the `VmConfig` through a fresh typed transcript. A program's identity the
 way a code hash is a contract's, taken by a verifier from a channel the prover does not
