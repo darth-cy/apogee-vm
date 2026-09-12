@@ -859,7 +859,8 @@ pub mod extra_mask {
     }
 }
 
-/// The guest memory map, frozen at S10.
+/// The guest memory map, frozen at S10 and re-frozen after S12 on the
+/// repository owner's instruction. These are the frozen values.
 ///
 /// The one region a guest has. `crates/guest-sdk/link.ld` states the same two
 /// numbers for the linker, `docs/spec/ecall-abi.md` section 7 states them for a
@@ -875,8 +876,9 @@ pub mod guest_memory {
     /// First addressable byte, and where `_start` is placed.
     pub const RAM_ORIGIN: u32 = 0x0001_0000;
 
-    /// Length of the region. `RAM_ORIGIN + RAM_LENGTH` is the initial `sp`.
-    pub const RAM_LENGTH: u32 = 0x0FFF_0000;
+    /// Length of the region. `RAM_ORIGIN + RAM_LENGTH` is the initial `sp`,
+    /// and lands on `0x8000_0000` — a window of just under 2 GiB.
+    pub const RAM_LENGTH: u32 = 0x7FFF_0000;
 
     /// The top of RAM the stack keeps for itself, added at S12. guest-sdk's
     /// allocator never hands out a block reaching into the last

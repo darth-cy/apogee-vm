@@ -11,8 +11,8 @@
 //! sort and a few iterator chains over a batch of up to 256 orders, on an
 //! allocator whose `dealloc` does nothing — so its peak footprint is the *sum*
 //! of every allocation it ever made, not the most it ever held at once. That
-//! sum is a few tens of kilobytes against the just-under-256-MiB window
-//! `link.ld` reserves, not quite four orders of magnitude of headroom. It
+//! sum is a few tens of kilobytes against the just-under-2-GiB window
+//! `link.ld` reserves, not quite five orders of magnitude of headroom. It
 //! grows linearly with the batch and the 256-order cap is the only thing
 //! holding it down, so the allocator's ceiling check stays out of reach here
 //! while staying reachable in principle: uncapped, a large enough batch finds

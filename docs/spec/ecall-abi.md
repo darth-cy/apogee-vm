@@ -195,7 +195,7 @@ permutation and never links `crates/transcript`.
 `crates/guest-sdk/link.ld`, frozen with the symbol names:
 
 ```ld
-MEMORY { RAM (rwx) : ORIGIN = 0x00010000, LENGTH = 0x0FFF0000 }
+MEMORY { RAM (rwx) : ORIGIN = 0x00010000, LENGTH = 0x7FFF0000 }
 ```
 
 Those two numbers also live in `constants::guest_memory` as `RAM_ORIGIN` and
@@ -238,7 +238,7 @@ address space exists at all. Two rules follow, and both are load-bearing:
   first stack write dies on a signal before `main` runs. The reservation itself
   must cost nothing on disk: `p_filesz` may cover an initialised `.data` — lld
   folds one into this same segment — but must stop at or before `.bss`, or the
-  ELF carries 256 MiB of zeroes.
+  ELF carries the whole 2 GiB reservation as zeroes.
 - **No two segments share a page.** Each `PT_LOAD` is mapped independently, so a
   shared page takes the second mapping's permissions for all of it: an unaligned
   `.rodata` strips execute from the tail of `.text`, and zero fill landing on a

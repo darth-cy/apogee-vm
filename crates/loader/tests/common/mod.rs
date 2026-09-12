@@ -29,55 +29,55 @@ use test_support::{sha256, to_hex};
 pub const PINS: [(&str, &str); 14] = [
     (
         "fib.elf",
-        "b3ce73eed893de9d21928e953a76349cdf2518068de228fed686e734d1d409d3",
+        "e163a65249fff123742588a3bcb44e09b72f89bbbed80fb406baf3c0f9b7622d",
     ),
     (
         "echo.elf",
-        "18a9475970ea05f56feb6d99d0ee56d642331968a0a0e54a34363b03e5e21917",
+        "4aef4d207001345b192ef52f38a07ed5250677ccdba80d6e64b64b516abe11a5",
     ),
     (
         "rvc-dense.elf",
-        "4d10fe7375569992366d4118e0865f01c339472204c87fd625c6eb6e7ade4ce3",
+        "5963ed501d97ac52d2bd58b0e56a9f463d8c3e460d6ad02c4e71d84bf21f214d",
     ),
     (
         "amm.elf",
-        "041c9c4a13b004a1945fac5afe2dac149e38f209d18127023f0be35408161547",
+        "c97742454c2728c740a7b31c167343faa55f0f44d2323cd4c3ef70ecb3ea0955",
     ),
     (
         "orderbook.elf",
-        "e4e635fc747406e63f5b7170c1739f097670bf9d0bf50065918ed9d63ee470f6",
+        "db8e450603d1b579b60d81a7f21edaaf6470dd29b24723b541467988310a0397",
     ),
     (
         "vault.elf",
-        "a659040a0c174e2d7c01b8e3ba5bcc7eb15a3982ffc77bc38ecd50f3a100aefe",
+        "c9a1e427470abdabe9eaab503d5c102d4c67012ca2bab3d9657f64899153f084",
     ),
     (
         "atomics.elf",
-        "a4e6331b0d678c56843299cb7a9e8c8ccf5d25f137d843f5aae5fdf34ab225e7",
+        "5761a4236b624cef6da5237116fc97d22a39c64b702f1018b88ffbe0c346c52f",
     ),
     (
         "opcodes.elf",
-        "e302ca218e83f8dc05a0376925e2f208e6a0005c3c0aaed3fbb47c6b60a3abf0",
+        "fc616d1ba21501af4781d16a91c4559bac1aecfa2e41211bad2042d665c0c9e6",
     ),
     (
         "heap.elf",
-        "998fe4124449a465130ef78dd997be1b31b239a2bc8ccea8e4e0d3ebb58b2cea",
+        "10c63b99b12aebd74eb721a6c002010883ae695dfab9ea5b8878febdfb1ba167",
     ),
     (
         "consistency.elf",
-        "ddb4b01e36096d31f72d4279c2bc18d2cc0c157cd8f58b2964241eeaada9f270",
+        "26c2d8d85c3ee8a730f21e89bd99106a45c9889201ee59740f30fdd63dc7f878",
     ),
     (
         "fib.objdump.txt",
-        "872301dfb860aa44597b94a9f28b2d725c9275b59a6cfe9b12bd9356331710c3",
+        "edb521661d782689e9e0ebc4ccf972838de6d93cc1ef42915ec830997a630489",
     ),
     (
         "rvc-dense.objdump.txt",
-        "6f9f51ee9407354c705ca4a5cbf8d4e169edd11cc51d6b4e98cfcadf9aee9eda",
+        "f0ba5063259581040592218f52059d935c5b1eb4c14a6b32c25f28c028f6567e",
     ),
     (
         "amm.objdump.txt",
-        "e46dfefab08139e2037637dfc7e2a4a8102bafcb144c3180d2365921c5e83aba",
+        "e282bbc7c1f8466b5f89d60ea761b5e844f62f98a5ba323e110a488f6b3bc38e",
     ),
     (
         "rvc-dense.nm.txt",

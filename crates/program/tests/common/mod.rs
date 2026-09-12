@@ -40,7 +40,7 @@ pub const PINS: [(&str, &str); 2] = [
     ),
     (
         "identity.txt",
-        "5bae46b1f978bdd29c686a6a18781af4619f3f8e40fa13c40693f8d09936fba5",
+        "ae8a59525387ef776e91bed7154031cbbbd277d35775677253852682c62a91b2",
     ),
 ];
 

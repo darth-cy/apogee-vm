@@ -12,7 +12,7 @@
    so an undeclared stack or heap is unmapped memory and the first push faults.
    Declaring it keeps the two executors agreeing on the memory map, which is the
    property that matters; the segment is NOBITS, so the file does not grow. */
-MEMORY { RAM (rwx) : ORIGIN = 0x00010000, LENGTH = 0x0FFF0000 }
+MEMORY { RAM (rwx) : ORIGIN = 0x00010000, LENGTH = 0x7FFF0000 }
 ENTRY(_start)
 SECTIONS {
   /* Every segment starts on its own page. A host loader mmaps each PT_LOAD

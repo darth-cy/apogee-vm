@@ -418,7 +418,7 @@ digests. Then five sections.
 
 ```
 entry             0x00010000  _start
-RAM window        0x00010000 .. 0x10000000    constants::guest_memory
+RAM window        0x00010000 .. 0x80000000    constants::guest_memory
 slot_base         0x00010000
 slot span         0x00010000 .. 0x00011418    2572 halfwords
 ```
@@ -435,7 +435,7 @@ nothing, and `slot_at` answers `None`.
   #  vaddr       end          mem_len      file bytes    zero fill  instructions
   0  0x00010000  0x00011418   0x00001418          5144            0          1897
   1  0x00012000  0x00012a2c   0x00000a2c          2604            0             0
-  2  0x00013000  0x10000000   0x0ffed000             0    268357632             0
+  2  0x00013000  0x80000000   0x7ffed000             0   2147405824             0
 ```
 
 Three segments is what the frozen `link.ld` produces for every guest in this
@@ -494,7 +494,7 @@ The last line is three linker symbols on one address, which is what an empty
 
 ```
 address     len  in memory  expanded  symbol
-0x00010000    4   0fff0117  0fff0117  _start
+0x00010000    4   7fff0117  7fff0117  _start
 0x00010004    4   00010113  00010113
 ...
 0x0001006a    2       1141  ff010113  _ZN5hello4main17h29eb51b0cbda4953E
@@ -652,7 +652,7 @@ Neither reads *your* ELF, so to check yours directly, look at its headers:
   Type           Offset   VirtAddr   PhysAddr   FileSiz MemSiz  Flg Align
   LOAD           0x001000 0x00010000 0x00010000 0x0173e 0x0173e R E 0x1000
   LOAD           0x003000 0x00012000 0x00012000 0x00ccc 0x00ccc R   0x1000
-  LOAD           0x004000 0x00013000 0x00013000 0x00000 0xffed000 RW  0x1000
+  LOAD           0x004000 0x00013000 0x00013000 0x00000 0x7ffed000 RW  0x1000
 ```
 
 Three things to see there, and each was a real failure:
@@ -664,7 +664,7 @@ Three things to see there, and each was a real failure:
    win for the whole page — an unaligned `.rodata` strips execute from the tail
    of `.text`;
 3. the segment with `MemSiz` above `FileSiz` is the one marked `RW`, and it
-   reaches `0x10000000`. Zero fill on a read-only page is refused outright, and
+   reaches `0x80000000`. Zero fill on a read-only page is refused outright, and
    the span up to `__stack_top` is the heap and the stack: undeclared, the
    first push dies on a signal before `main` runs.
 

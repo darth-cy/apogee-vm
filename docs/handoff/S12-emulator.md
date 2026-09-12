@@ -414,7 +414,7 @@ was handed out on top of live stack frames**. In safe Rust that is memory corrup
 no `unsafe` in sight: the probe wrote one byte into a `Vec`'s spare capacity and watched
 an unrelated local change from `0x00` to `0xaa`, and the next ordinary `format!` wrote
 over saved return addresses, ending the guest on a load from `0xc8d5f907`. Because the
-allocator never frees, the trigger is the *total* a run allocates — about 256 MiB — not
+allocator never frees, the trigger is the *total* a run allocates — about 2 GiB — not
 its peak, and running out of heap therefore corrupted the stack far more often than it
 reached the `exit(71)` the SDK documented. It also broke the `GlobalAlloc` contract the
 `unsafe impl` claims to meet.

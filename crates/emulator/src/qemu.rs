@@ -313,7 +313,7 @@ mod tests {
  x24/s8   00000000 x25/s9   00000000 x26/s10  00000000 x27/s11  00000000
  x28/t3   00000000 x29/t4   00000000 x30/t5   00000000 x31/t6   00000000
  pc       00010004
- x0/zero  00000000 x1/ra    00000000 x2/sp    10000000 x3/gp    00000000
+ x0/zero  00000000 x1/ra    00000000 x2/sp    80000000 x3/gp    00000000
  x4/tp    00000000 x5/t0    00000000 x6/t1    00000000 x7/t2    00000000
  x8/s0    00000000 x9/s1    00000000 x10/a0   00000000 x11/a1   00000000
  x12/a2   00000000 x13/a3   00000000 x14/a4   00000000 x15/a5   00000000
@@ -323,18 +323,18 @@ mod tests {
  x28/t3   00000000 x29/t4   00000000 x30/t5   00000000 x31/t6   00000000
 ";
 
-    /// The emulator's side of `LOG`: `auipc sp, 0xfff0` at 0x10000, then
+    /// The emulator's side of `LOG`: `auipc sp, 0x7fff0` at 0x10000, then
     /// anything at 0x10004.
     fn steps() -> Vec<Step> {
         let mut after = [0u32; 32];
-        after[2] = 0x1000_0000;
+        after[2] = 0x8000_0000;
         vec![
             Step {
                 pc: 0x1_0000,
                 regs: [0; 32],
                 instr: Instr::Auipc {
                     rd: 2,
-                    imm: 0x0fff_0000,
+                    imm: 0x7fff_0000,
                 },
                 writes: 1 << 2,
             },

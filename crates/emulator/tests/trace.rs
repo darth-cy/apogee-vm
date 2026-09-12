@@ -7,7 +7,7 @@ mod common;
 use std::collections::BTreeSet;
 
 use common::{instr_at, traced, TRACED};
-use constants::{ecall, family, memory};
+use constants::{ecall, family, guest_memory, memory};
 use emulator::trace_run;
 use isa::Instr;
 use program::row_kind;
@@ -46,7 +46,10 @@ fn the_heap_traffic_is_in_the_balanced_log() {
         .image
         .segments
         .iter()
-        .find(|s| s.vaddr as u64 + s.mem_len as u64 == 0x1000_0000)
+        .find(|s| {
+            s.vaddr as u64 + s.mem_len as u64
+                == guest_memory::RAM_ORIGIN as u64 + guest_memory::RAM_LENGTH as u64
+        })
         .expect("the heap-and-stack reservation reaches the top of RAM");
     let heap_words: BTreeSet<u32> = t
         .log

@@ -33,7 +33,7 @@ A `ProgramImage` is the post-load memory image plus entry point plus the expande
 The linker script is the memory map, symbols included:
 
 ```ld
-MEMORY { RAM (rwx) : ORIGIN = 0x00010000, LENGTH = 0x0FFF0000 }
+MEMORY { RAM (rwx) : ORIGIN = 0x00010000, LENGTH = 0x7FFF0000 }
 ENTRY(_start)
 SECTIONS {
   .text   : { *(.text._start) *(.text*) } > RAM
