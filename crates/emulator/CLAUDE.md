@@ -105,5 +105,18 @@ docker run --rm -v "$PWD":/w -w /w -e CARGO_TARGET_DIR=/tmp/t rust:latest bash -
 | `tests/trace.rs` | acceptance 3 (balance, heap traffic included), 4 (a corrupted RAM read, register write mid-chain, pc write and gap, a forged initial value, and a stale read, each named), 5 (the four-slot clock over every event; `amoadd.w` fills all four slots), 6 (routing), the frame table — roles and slots — restated from the spec and checked on every row, ecall transfers with every byte held to the recorded streams, every ecall answering as the ABI says (must-be-exact 2 without QEMU), the rows rebuilding the log exactly, `final_state` |
 | `tests/archive.rs` | acceptance 7 (byte-identical round trip, hash-equal payloads, answers without re-execution, `io_digest`) and 8 (five phases, the timing section byte for byte, out-of-order refused by byte patch) |
 | `tests/differential.rs` | **`#[ignore]`d** — acceptance 1 over `opcodes`, `rvc-dense`, `fib`, `heap`, `atomics`; acceptance 2 (perturbed registers and pc caught at their instruction); `ebreak` at one pc in both |
+| `tests/portability.rs` | the three-way portability suite over `guests/portability`: host and emulator agree on every corpus input (fd 1 by section, exit status, a panic's message, line and column); every workload, fault and bad input exercised; `trace_run` == `run` and the log balances, with every family but init/teardown and all eight M instructions executed; the heap probes exit 71; a flipped byte caught at its workload and every leg's flip classified; **`#[ignore]`d** — the same corpus with QEMU as the third leg |
 
-The guests are the committed ELFs in `crates/loader/tests/vectors/`, pinned there.
+The guests are the committed ELFs in `crates/loader/tests/vectors/`, pinned there — except
+in `tests/portability.rs`, which builds `guests/portability` from source at test time so
+its guest is always the source the host leg calls.
+
+## The portability suite
+`guests/portability` is a `no_std` library plus a thin guest `main`. The host calls the
+library directly; the guest is the same source, built here. Where the legs disagree says
+what broke: the host alone against both RV32 executors is Rust's target, the SDK or 32-bit
+behaviour; the emulator alone is an emulator bug; QEMU alone is the harness or QEMU's
+environment. `hazards::PLATFORM_DEPENDENT` declares the sections Rust itself lets differ
+per target — excused for the host, never between the two RV32 executors — and the
+pointer-width ones must actually differ on a 64-bit host. The host leg runs with
+overflow checks on (asserted) on a 64 MiB stack.

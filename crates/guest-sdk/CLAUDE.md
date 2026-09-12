@@ -60,6 +60,16 @@ the crate layout, the I/O rules, the build, and exporting the result as a
 - **A hint binds nothing.** The prover chooses fd 3's bytes. A guest that lets them change
   what it writes to fd 1, without checking them against something the public I/O digest
   does bind, has made its proof meaningless.
+- **The heap never meets the stack.** The allocator refuses a block — `exit(71)`, never a
+  null — that would end above `__stack_top - STACK_RESERVE` (`constants::guest_memory`,
+  8 MiB) or above the live `sp`, which it reads with one `mv` from inside `alloc`.
+  The ceiling used to be `__stack_top` itself, so an exhausted heap handed out blocks
+  over live frames, and safe code writing into a `Vec` rewrote the caller's locals and
+  return addresses. The portability suite found that by running a guest's source on the
+  host and comparing the two runs. `guests/portability`'s two heap probes pin each half
+  of the rule, and each half fails its probe when it is removed. `link.ld` is untouched:
+  the reserve is the allocator's policy, not a linker symbol. Still unguarded: a stack
+  that grows past its reserve after the heap has filled the space below it.
 
 ## `entry!` is a `macro_rules!`, not `#[entry]`
 The stage prompt names an `#[entry]` attribute macro. An attribute macro requires a

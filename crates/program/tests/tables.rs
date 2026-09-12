@@ -28,7 +28,7 @@ use program::{
 fn every_row_that_is_not_live_is_padding_in_every_field() {
     for name in common::GUESTS {
         let image = common::guest(name);
-        let (tables, _) = decode_program(&image, &common::smallest()).unwrap();
+        let (tables, _) = decode_program(&image, &common::fitting(&image)).unwrap();
         for table in &tables.families {
             let columns: Vec<_> = (0..table.columns.len())
                 .map(|c| table.column_poly(c))
@@ -108,7 +108,7 @@ fn every_row_that_is_not_live_is_padding_in_every_field() {
 fn next_pc_is_the_fall_through_the_encoding_implies() {
     for name in common::GUESTS {
         let image = common::guest(name);
-        let (tables, _) = decode_program(&image, &common::smallest()).unwrap();
+        let (tables, _) = decode_program(&image, &common::fitting(&image)).unwrap();
         let (mut two, mut four) = (0usize, 0usize);
         for table in tables.families.iter().filter(|t| !t.columns.is_empty()) {
             assert_eq!(table.columns[0].0, RowField::Pc);
@@ -511,8 +511,9 @@ fn each_column_is_stored_in_the_narrowest_backing() {
 fn decoding_is_a_function_of_its_inputs() {
     for name in common::GUESTS {
         let image = common::guest(name);
-        let a = decode_program(&image, &ProgramParams::defaults()).unwrap();
-        let b = decode_program(&image.clone(), &ProgramParams::defaults()).unwrap();
+        let params = common::fitting(&image);
+        let a = decode_program(&image, &params).unwrap();
+        let b = decode_program(&image.clone(), &params).unwrap();
         assert_eq!(a, b, "{name}");
     }
 }

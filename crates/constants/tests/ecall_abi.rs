@@ -209,6 +209,22 @@ fn the_memory_map_agrees_across_its_three_copies() {
                 <= u32::MAX as u64 + 1,
             "the RAM window must fit in the 32-bit address space"
         );
+        assert!(
+            guest_memory::STACK_RESERVE > 0
+                && guest_memory::STACK_RESERVE < guest_memory::RAM_LENGTH / 2,
+            "the stack's reserve must leave the heap most of RAM"
+        );
+        assert!(
+            guest_memory::STACK_RESERVE.is_multiple_of(4096),
+            "the stack's reserve is whole pages"
+        );
+        // The value, not only its shape: ten documents say 8 MiB in prose, and
+        // the probe guest derives its own arithmetic from this constant, so
+        // nothing else here would notice the number changing under them.
+        assert!(
+            guest_memory::STACK_RESERVE == 8 << 20,
+            "the documents say the stack's reserve is 8 MiB"
+        );
     }
 }
 

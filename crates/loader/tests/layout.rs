@@ -175,7 +175,7 @@ fn writable_at(loads: &[Load], addr: u64, what: &str) -> Result<(), String> {
 // The guests
 // ---------------------------------------------------------------------------
 
-const GUESTS: [&str; 9] = [
+const GUESTS: [&str; 10] = [
     "fib",
     "echo",
     "rvc-dense",
@@ -185,6 +185,7 @@ const GUESTS: [&str; 9] = [
     "atomics",
     "opcodes",
     "heap",
+    "portability",
 ];
 
 /// Every rule above, over one image. The single place the rules are composed,

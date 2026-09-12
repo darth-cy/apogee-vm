@@ -16,7 +16,7 @@ use std::process::Command;
 use crate::write_vectors;
 
 /// The guest ELFs the loader tests read, and what each is for.
-pub const ELF_FIXTURES: [(&str, &str); 9] = [
+pub const ELF_FIXTURES: [(&str, &str); 10] = [
     (
         "fib",
         "real compiler output: the address and boundary oracle",
@@ -51,6 +51,11 @@ pub const ELF_FIXTURES: [(&str, &str); 9] = [
         "heap",
         "Vec and Box churned through the bump allocator: S12's allocator \
          exercise",
+    ),
+    (
+        "portability",
+        "ordinary Rust run on the host, under QEMU and on the emulator: the \
+         three-way portability suite's guest, and its heap-ceiling probes",
     ),
 ];
 

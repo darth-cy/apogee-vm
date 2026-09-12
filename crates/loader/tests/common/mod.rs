@@ -26,42 +26,46 @@ use test_support::{sha256, to_hex};
 /// The synthetic ELFs are not listed one by one: `synthetic_elfs.txt` carries
 /// their digests and is itself pinned here, so the chain is one constant long
 /// either way and the index stays readable.
-pub const PINS: [(&str, &str); 13] = [
+pub const PINS: [(&str, &str); 14] = [
     (
         "fib.elf",
-        "1479cb1d3e7a3bb66fc58560612419bcedaefaacaee748752e16c05d17ba91ac",
+        "b3ce73eed893de9d21928e953a76349cdf2518068de228fed686e734d1d409d3",
     ),
     (
         "echo.elf",
-        "3fcae63deedba71f61f3e1a4be7b083031b4255ee43b4b23b80c32aa9900d25d",
+        "18a9475970ea05f56feb6d99d0ee56d642331968a0a0e54a34363b03e5e21917",
     ),
     (
         "rvc-dense.elf",
-        "d27edea9bf71b264746504e147d92fa5454af6cd1f9d70cc79db49cf8fa85d06",
+        "4d10fe7375569992366d4118e0865f01c339472204c87fd625c6eb6e7ade4ce3",
     ),
     (
         "amm.elf",
-        "bf639449c7e54327fc6e4ccfabfb3f9823e392302bc84b148506c546f4fc0309",
+        "041c9c4a13b004a1945fac5afe2dac149e38f209d18127023f0be35408161547",
     ),
     (
         "orderbook.elf",
-        "b313502281e27a1f6f48b700224caeb8bf59203371b1d133dc7000c3a8fe5824",
+        "e4e635fc747406e63f5b7170c1739f097670bf9d0bf50065918ed9d63ee470f6",
     ),
     (
         "vault.elf",
-        "375051372a408b09132e350a1ac7a300a22e1f44386d188b56bb48f159e97930",
+        "a659040a0c174e2d7c01b8e3ba5bcc7eb15a3982ffc77bc38ecd50f3a100aefe",
     ),
     (
         "atomics.elf",
-        "c6789deb5fbeb9570ab8b058a66e1ce73e90a9579498e05aff686ffa7f63a20f",
+        "a4e6331b0d678c56843299cb7a9e8c8ccf5d25f137d843f5aae5fdf34ab225e7",
     ),
     (
         "opcodes.elf",
-        "fab3dc597e652ac2b6034c217525e3c11820f64f3f40e17e536f96ce1821a28e",
+        "e302ca218e83f8dc05a0376925e2f208e6a0005c3c0aaed3fbb47c6b60a3abf0",
     ),
     (
         "heap.elf",
-        "c1664eeff2bc9ea507a01c9ca12c97f2e2fb56ef9d4e3c66c899dad6181e5d38",
+        "998fe4124449a465130ef78dd997be1b31b239a2bc8ccea8e4e0d3ebb58b2cea",
+    ),
+    (
+        "portability.elf",
+        "096577f22cb7473ad00ecc937f82d7fcf16094768868d1f859f6a8e4c9760103",
     ),
     (
         "fib.objdump.txt",

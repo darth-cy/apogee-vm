@@ -23,13 +23,23 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Stdio};
 
-use common::{image, input_of, io, preprocess};
+use common::{image, input_of, io, preprocess, qemu_binary};
 use emulator::qemu::{compare, emulator_steps, parse_log, Agreement, Record, Step, QEMU_FLAGS};
 use emulator::{run, trace_run, EmuError};
 
 /// Every guest the comparison covers: the stage's required corpus —
-/// `opcodes`, `rvc-dense`, `fib`, `heap` — and `atomics`, the compiled AMOs.
-const SUITE: [&str; 5] = ["opcodes", "rvc-dense", "fib", "heap", "atomics"];
+/// `opcodes`, `rvc-dense`, `fib`, `heap` — `atomics`, the compiled AMOs, and
+/// `portability` on its hazards workload, the one input of that guest small
+/// enough for a per-instruction log. `tests/portability.rs` runs the rest of
+/// it against QEMU at the level of fd 1 rather than of registers.
+const SUITE: [&str; 6] = [
+    "opcodes",
+    "rvc-dense",
+    "fib",
+    "heap",
+    "atomics",
+    "portability",
+];
 
 struct Qemu {
     status: Option<i32>,
@@ -169,23 +179,4 @@ fn ebreak_stops_both_executors_at_one_pc() {
         "QEMU must not exit cleanly through an ebreak"
     );
     assert_eq!(q.records.last().map(|r| r.pc), Some(pc));
-}
-
-fn qemu_binary() -> String {
-    for name in ["qemu-riscv32", "qemu-riscv32-static"] {
-        if Command::new(name)
-            .arg("--version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
-        {
-            return name.to_string();
-        }
-    }
-    panic!(
-        "qemu-riscv32 is not on PATH, so the differential cannot run. User-mode \
-         QEMU is Linux-only; docs/guest-program-manual.md section 7 has the \
-         container recipe."
-    )
 }

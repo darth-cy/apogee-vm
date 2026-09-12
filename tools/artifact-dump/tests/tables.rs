@@ -22,6 +22,30 @@ fn loader_vector(name: &str) -> Vec<u8> {
     fs::read(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
 }
 
+/// The parameters this image's code fits in: the frozen defaults where they
+/// hold it, else the smallest uniform menu height that does.
+///
+/// A table's rows are absolute pcs, one per halfword, so a family's height has
+/// to reach past its last instruction, and the defaults give atomics 2^16 rows
+/// — pc below `0x20000`. `guests/portability` is 1.7 MB of code with an `Arc`
+/// in it, so its atomics sit far above that and the defaults refuse it. This
+/// test is about the page, not about the heights; `docs/handoff/S12-emulator.md`
+/// records the question the refusal raises.
+fn fitting(elf: &[u8]) -> ProgramParams {
+    let image = load_elf(elf).expect("a committed guest loads");
+    let mut params = ProgramParams::defaults();
+    if decode_program(&image, &params).is_ok() {
+        return params;
+    }
+    for height in [1u32 << 18, 1 << 20, 1 << 22] {
+        params.heights.iter_mut().for_each(|h| *h = height);
+        if decode_program(&image, &params).is_ok() {
+            return params;
+        }
+    }
+    panic!("no menu height holds this image's code")
+}
+
 /// A static RV32 executable holding `words` at `0x10000`, built here rather
 /// than taken from any fixture: the "arbitrary user-supplied ELF".
 fn elf_of(words: &[u32]) -> Vec<u8> {
@@ -112,11 +136,12 @@ fn every_committed_guest_renders_and_the_listing_is_the_tables() {
         "atomics",
         "opcodes",
         "heap",
+        "portability",
     ] {
         let elf = loader_vector(&format!("{name}.elf"));
-        let page = render(&elf, name, &ProgramParams::defaults(), None).unwrap();
-        let (tables, _) =
-            decode_program(&load_elf(&elf).unwrap(), &ProgramParams::defaults()).unwrap();
+        let params = fitting(&elf);
+        let page = render(&elf, name, &params, None).unwrap();
+        let (tables, _) = decode_program(&load_elf(&elf).unwrap(), &params).unwrap();
         check_listing(&page, &elf, &tables);
         assert!(page.contains("program identity  not computed"), "{name}");
     }

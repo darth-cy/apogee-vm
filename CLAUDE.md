@@ -35,7 +35,7 @@ crates/
                  differential harness; std
   guest-sdk/     crt0, entry!, linker script, bump allocator, ecall shims; no_std,
                  guest-only, and NOT a workspace member
-guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, opcodes/, heap/
+guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, opcodes/, heap/, portability/
                  -- their own workspace; see guests/Cargo.toml and docs/guest-program-manual.md
 assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 handoff
 tools/
@@ -69,13 +69,14 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
-cargo test --workspace                      # 488 tests as of S12; 18 more are #[ignore]d
+cargo test --workspace                      # 495 tests as of S12; 20 more are #[ignore]d
 cargo build -p field -p constants -p transcript -p poly -p sumcheck --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
 cd guests/fib && cargo build --target riscv32imac-unknown-none-elf
 APOGEE_GUEST_PROFILE=release cargo test -p loader --test qemu -- --include-ignored
 cargo test -p emulator --test differential -- --include-ignored
+cargo test -p emulator --test portability -- --include-ignored   # and again at APOGEE_GUEST_PROFILE=release
 git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/
 -------------------------------------------------------------------------------
 cargo run -p kat-gen                        # refresh every fixture (manual, deliberate)
@@ -311,6 +312,20 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   the guest consumed.
 - **The trace archive's deterministic payload is a byte prefix of the file**; the timing
   section follows it, so determinism excludes timing by construction, not by comparison.
+- **The heap never meets the stack.** guest-sdk's allocator refuses a block, with
+  `exit(71)`, when it would end above `__stack_top - STACK_RESERVE` (8 MiB) or above the
+  live `sp`. Until S12 the ceiling was `__stack_top` itself, and an exhausted heap handed
+  out blocks on top of live stack frames. The allocator never frees, so the total a run
+  allocates is the limit, not its peak.
+- **Portability is tested three ways.** `guests/portability` is a `no_std` library the
+  host calls directly, plus a thin guest `main`. `crates/emulator/tests/portability.rs`
+  runs one corpus on the host, under QEMU (`#[ignore]`d; CI runs it) and on the emulator,
+  and holds fd 1, the exit status and a panic's message and line equal across all three.
+  Rust itself lets some values differ per target: `usize` width in `core::hash` and
+  `size_of`, 32-bit `usize` overflow, a `u64` narrowed with `as usize`, and NaN bits.
+  Those are declared in `hazards::PLATFORM_DEPENDENT` and excused for the host alone —
+  the pointer-width ones must then actually differ, and the NaN one is excused only on a
+  host whose own convention differs.
 - **Boring beats clever.** Added surface area is a defect. Every verifier entry point is
   `(&VerifyingKey, &Proof, &PublicInputs)` and nothing else.
 

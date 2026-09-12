@@ -360,6 +360,7 @@ dependencies = [
  "field",
  "isa",
  "loader",
+ "portability",
  "program",
  "test-support",
  "trace",
@@ -448,6 +449,13 @@ checksum = "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
 dependencies = [
  "typenum",
  "version_check",
+]
+
+[[package]]
+name = "guest-sdk"
+version = "0.1.0"
+dependencies = [
+ "constants",
 ]
 
 [[package]]
@@ -673,6 +681,16 @@ dependencies = [
  "ark-poly",
  "field",
  "test-support",
+]
+
+[[package]]
+name = "portability"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "field",
+ "guest-sdk",
+ "transcript",
 ]
 
 [[package]]

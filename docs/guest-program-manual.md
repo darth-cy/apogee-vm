@@ -65,7 +65,7 @@ A guest is an ordinary `no_std` binary crate that lives in the `guests/`
 workspace. Three files, one of which already exists.
 
 `hello` below is the guest this manual builds; you are creating it now. The
-repository ships seven, and every command here works on those too with the name
+repository ships ten, and every command here works on those too with the name
 changed. They are worth reading before you write your own, because between them
 they cover most of what a guest can do:
 
@@ -80,6 +80,7 @@ they cover most of what a guest can do:
 | `atomics` | every A-extension instruction as the compiler emits it, from `core::sync::atomic` on one hart; the fixture for the atomics circuit family |
 | `opcodes` | every RV32IMAC instruction in hand-written assembly at its edge cases, which the emulator is compared against `qemu-riscv32` on; fd 0 selects the `ebreak` and misaligned-access modes |
 | `heap` | `Vec` and `Box` churned through the bump allocator, so the heap's traffic is in the trace |
+| `portability` | ordinary Rust — numerics, collections, text, traits and closures, a codec, hashes, allocation patterns — as a `no_std` library the host calls directly and a thin guest `main`. The portability suite runs it on the host, under QEMU and on the emulator and holds the three to one answer; §2a is the pattern to copy |
 
 If you are looking for a pattern to copy, `amm` is the one to read for arithmetic
 and framing, `orderbook` for anything that takes prover advice, and `vault` for
@@ -117,7 +118,7 @@ fn main() {
 **`guests/Cargo.toml`** — add the crate to the member list:
 
 ```toml
-members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "hello"]
+members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "portability", "hello"]
 ```
 
 Four things about that source file are not negotiable:
@@ -139,6 +140,44 @@ Your guest may use any crate that compiles for `riscv32imac-unknown-none-elf`
 without `std`. `crates/field`, `crates/constants`, `crates/transcript`,
 `crates/poly` and `crates/sumcheck` all do, and CI builds them for the guest
 target on every run precisely so that this stays true.
+
+### 2a. Run your logic on the host too
+
+A guest you can only run inside the VM is a guest you can only debug there. Put
+the program in a `#![no_std]` library and keep `main.rs` to reading fd 0 and
+committing what the library returns. `guests/portability` is the worked example.
+Its `src/lib.rs` compiles for the host as well as for the guest, because its
+`Cargo.toml` makes `guest-sdk` a dependency of the guest target alone:
+
+```toml
+[target.'cfg(target_arch = "riscv32")'.dependencies]
+guest-sdk.workspace = true
+```
+
+A host test can then call the library directly, and
+`crates/emulator/tests/portability.rs` does exactly that. It runs one input on
+the host, under `qemu-riscv32` and on the emulator, and compares fd 1, the exit
+status, and a panic's message, line and column. Copy its shape for your own
+program: if the host and the guest disagree, the guest is what the proof will
+be about.
+
+Some things legitimately differ between a 64-bit machine and the guest, so keep
+them out of anything you commit:
+
+- **`usize` is 32 bits.** `size_of` of a pointer or a `usize` differs. So does
+  `core::hash` of anything holding a slice or a `usize`, because
+  `#[derive(Hash)]` writes lengths with `write_usize`. And `usize` arithmetic
+  overflows at 2^32; overflow checks are on, so that is a panic on the guest
+  alone.
+- **NaN bits.** Which NaN an operation produces is the platform's business:
+  x86-64 differs from RISC-V's soft float.
+- **The heap never frees.** The total you allocate over the run is the limit,
+  not the peak (§3).
+- **The stack has 8 MiB** reserved at the top of RAM.
+
+`guests/portability/src/hazards.rs` emits each of these on purpose, and its
+`PLATFORM_DEPENDENT` table names them. The suite checks that the pointer-width
+ones really do differ on a 64-bit host.
 
 ---
 
@@ -197,8 +236,17 @@ reaches fd 1, because such a flag would be a committed bit the prover chooses.
 Which path ran is written to fd 2 and nowhere else.
 
 The allocator bumps upward from `__heap_start` and `dealloc` does nothing, so
-`alloc` works but never reclaims. An allocation that would cross `__stack_top`
-exits nonzero rather than returning null.
+`alloc` works but never reclaims. What runs a guest out of heap is therefore
+the total it allocates over the run, not its peak. The top 8 MiB of RAM
+(`constants::guest_memory::STACK_RESERVE`) belong to the stack. An allocation
+that would reach into them, or above the live stack pointer, exits 71 rather
+than returning null.
+
+Before S12 the ceiling was `__stack_top` itself, and running out of heap handed
+out memory on top of live stack frames. `crates/emulator/tests/portability.rs`
+pins the fix. A stack deeper than 8 MiB can still run down into heap blocks
+without any check noticing, but recursion that deep would overflow a native
+main thread as well.
 
 ---
 

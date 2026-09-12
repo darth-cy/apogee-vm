@@ -158,17 +158,25 @@ pub mod memory { pub const TS_STEP: u64 = 4; pub const TS_BITS: u32 = 38; }
 | `docs/spec/execution-trace.md` | the timestamp convention, normative |
 | `crates/loader/tests/vectors/opcodes.elf` | `guests/opcodes`: every RV32IMAC instruction, the ebreak and misalignment modes |
 | `crates/loader/tests/vectors/heap.elf` | `guests/heap`: the allocator exercise |
-| `guests/opcodes/`, `guests/heap/` | their sources |
+| `crates/loader/tests/vectors/portability.elf` | `guests/portability`: the three-way suite's guest, 4.4 MB of it |
+| `guests/opcodes/`, `guests/heap/`, `guests/portability/` | their sources |
 
-Both ELFs are pinned in `crates/loader/tests/common/mod.rs`, built by `cargo run -p
-kat-gen -- guests` (which rebuilt the seven existing ELFs byte-identically) and held to
-the host-loadability rules by `crates/loader/tests/layout.rs` like every other guest.
+All three are pinned in `crates/loader/tests/common/mod.rs`, built by `cargo run -p
+kat-gen -- guests` and held to the host-loadability rules by
+`crates/loader/tests/layout.rs` like every other guest. The first run of that command
+rebuilt the seven existing ELFs byte-identically; the second, after the allocator fix
+below, changed all nine. Two of them changed in their code: `echo` and `orderbook` link
+the allocator and gained 37 instructions each, so their decoded tables move with it. The
+other seven changed only in their symbol and string tables — `fib`'s `.text` is
+byte-identical across the fix, and the committed `objdump` and `nm` listings, which are
+`fib`'s, `rvc-dense`'s and `amm`'s, did not move at all. Nor did the identity pin, which
+is `fib`'s.
 
 ## Acceptance
 
 | # | Item | Where | Result |
 | --- | --- | --- | --- |
-| 1 | QEMU differential over the suite | `emulator/tests/differential.rs` (`#[ignore]`d; CI) | every register of every instruction equal to `qemu-riscv32` 10.0.11's: `opcodes` 2,354 instructions (the one `sc.w` whitelisted), `rvc-dense` 638, `fib` 2,115, `heap` 138,359, `atomics` 22,507; exit status and fd 1 equal too |
+| 1 | QEMU differential over the suite | `emulator/tests/differential.rs` (`#[ignore]`d; CI) | every register of every instruction equal to `qemu-riscv32` 10.0.11's: `opcodes` 2,354 instructions (the one `sc.w` whitelisted), `rvc-dense` 638, `fib` 2,115, `heap` 141,827, `atomics` 22,507, `portability` 25,945 on its hazards workload; exit status and fd 1 equal too. `heap` was 138,359 before the allocator fix below: the ceiling check `alloc` now runs on every allocation is the whole difference |
 | 2 | harness negative control | `differential.rs`, and `src/qemu.rs` unit tests | a perturbed register at three positions in fib, and a perturbed pc, each reported at exactly that instruction and register |
 | 3 | self-check positive, heap traffic included | `emulator/tests/trace.rs` | fib, heap, atomics, opcodes and rvc-dense balance; heap changes over 100 heap words |
 | 4 | self-check tamper twin | `trace.rs` | a RAM read, a register write mid-chain, a pc write, a negative gap, a forged initial value (a RAM word's and the entry pc's) and a stale read, each failing with the space, address and timestamp of the offending query named |
@@ -188,11 +196,17 @@ use (transfer cycles included in both the count and add/sub/lui/auipc's occupanc
 | Guest | Input | Cycles | Transfers | Events | Per family |
 | --- | --- | ---: | ---: | ---: | --- |
 | fib | n = 24 | 2,117 | 2 | 7,190 | ADD 657 · JBS 481 · SHIFT 15 · MUL 0 · MEMW 952 · MEMSW 12 |
-| heap | n = 40 | 138,364 | 5 | 463,680 | ADD 41,716 · JBS 31,654 · SHIFT 5,308 · MUL 764 · MEMW 54,175 · MEMSW 4,747 |
+| heap | n = 40 | 141,832 | 5 | 475,512 | ADD 42,838 · JBS 32,470 · SHIFT 5,410 · MUL 764 · MEMW 55,603 · MEMSW 4,747 |
 | opcodes | mode 0 | 2,366 | 12 | 8,266 | ADD 768 · JBS 414 · SHIFT 172 · MUL 83 · MEMW 829 · MEMSW 77 · ATOMICS 23 |
 | atomics | n = 37 | 22,517 | 10 | 76,854 | … ATOMICS 409 |
 | rvc-dense | x = 7 | 642 | 4 | 2,206 | |
 | echo | 100 bytes, a 14-byte hint | 4,635,773 | | | (software Poseidon2; `run` only) |
+
+`heap` is the one row the allocator fix moved — 138,364 cycles and 463,680 events before
+it. Nothing about where its blocks land changed: `__heap_start` is the same address and
+every block is at the same offset from it. What changed is `alloc` itself, which grew the
+ceiling arithmetic and a `stack_pointer` call — 42 bytes of code — and `heap` makes about
+120 allocations. Every other guest's numbers are unchanged.
 
 At the default heights every family that ran plans one shard for each of these guests,
 and a family that did not run, init/teardown included, plans zero. `heap`'s allocations
@@ -224,6 +238,20 @@ rvc-dense against host-computed answers, echo's precompile fallback against the 
 permutation, orderbook's advice invariance — all on the first run. The first QEMU run
 then passed on every instruction of five guests; its only failure beforehand was the
 harness's own, a guest ELF written without its execute bit.
+
+**After the allocator fix and the portability suite: 495 workspace tests, all green,
+plus 20 `#[ignore]`d** — seven tests and two ignored more than the stage shipped with:
+six in `crates/emulator/tests/portability.rs`, and one in `crates/program/tests/
+partition.rs` holding the frozen default heights to the guests they can and cannot
+preprocess. `fmt` and `clippy -D warnings` stay
+clean across the four workspaces, `cargo run -p kat-gen` reproduces every derived fixture
+unchanged, and `kat-gen -- guests` rebuilt all ten guest ELFs. In the Linux container on
+the owner's arm64 machine (`qemu-riscv32` 10.0.11): `crates/loader`'s guest suite passes
+at both profiles, the differential agrees register for register over six guests with
+`portability` contributing 25,945 instructions, and the three-way portability suite
+passes at `debug` and at `release`. The allocator fix was mutation-checked three ways —
+the old `__stack_top` ceiling, the ceiling without its live-`sp` half, and the ceiling
+without its reserve — and each mutation fails a heap probe.
 
 ## Deviations and notes for the reviewer
 
@@ -376,6 +404,126 @@ never holds an execution row) imported cleanly, and the first thing to notice wa
 now requires every buffer's id to be in `program::FAMILIES` and init/teardown's buffer
 to be empty, and the reader's refusal table carries both cases, fourteen in all.
 
+**Found after the PR opened: the heap was handed out over the live stack.** Raised in
+review of PR #12, by the three-way idea below applied by hand before the suite existed —
+one source file compiled for the host and for the guest, and the two outputs diffed.
+
+guest-sdk's allocator refused only a block ending above `__stack_top`, and the stack
+grows down from exactly there, so **every block ending between the live `sp` and the top
+was handed out on top of live stack frames**. In safe Rust that is memory corruption with
+no `unsafe` in sight: the probe wrote one byte into a `Vec`'s spare capacity and watched
+an unrelated local change from `0x00` to `0xaa`, and the next ordinary `format!` wrote
+over saved return addresses, ending the guest on a load from `0xc8d5f907`. Because the
+allocator never frees, the trigger is the *total* a run allocates — about 256 MiB — not
+its peak, and running out of heap therefore corrupted the stack far more often than it
+reached the `exit(71)` the SDK documented. It also broke the `GlobalAlloc` contract the
+`unsafe impl` claims to meet.
+
+The fix, on the repository owner's instruction, leaves `link.ld` alone: a new
+`constants::guest_memory::STACK_RESERVE` (8 MiB, a native main thread's default stack)
+gives the top of RAM to the stack, and `alloc` refuses any block ending above
+`min(__stack_top - STACK_RESERVE, sp)`, reading the live `sp` with one `mv` from inside
+itself. `guests/portability`'s two heap probes pin the two halves, and each half is
+load-bearing: with the ceiling back at `__stack_top` the first probe commits "allocated
+past the ceiling" and exits 0; without the live-`sp` half the second is granted a block
+covering its own frame; without the reserve the first fails again.
+
+The adversarial review asked for a third, against the alignment round-up `alloc` does
+before it tests the end, and building it showed there is nothing there to catch. The
+reserve ceiling is `__stack_top - STACK_RESERVE`, which is 2^23-aligned, and a Rust
+type's size is always a multiple of its alignment — so rounding a block's start up can
+never carry it across that ceiling, and an allocator testing the end before rounding up
+gives the same answer for every block. The order could only matter for a block aligned
+past sixteen against the live-`sp` ceiling, since the ABI aligns `sp` to sixteen and no
+further, and a guest cannot construct that deterministically. The probe was written,
+run, found to pass against the mutation as well as the fix, and removed. What no allocator can
+see is a stack that grows past its reserve after the heap has filled below it — that
+needs a guard under every frame, and a program recursing that deep would overflow a
+native main thread too.
+
+## The portability suite
+
+A developer porting ordinary `no_std` Rust into this VM has to know that it computes what
+it computed on their machine. `guests/portability` is that question made executable: a
+`#![no_std] + alloc` library of about 14,000 lines — numerics, collections, text,
+traits, closures and iterators, a codec, hashes and the repository's own field and
+permutation, allocation patterns — beside a thin guest `main`. The host calls the library
+directly; the guest ELF is built from the same source at test time, so the two legs are
+always one program.
+
+`crates/emulator/tests/portability.rs` runs one corpus three ways and reads the
+disagreements off a table:
+
+| host | QEMU | emulator | reading |
+| --- | --- | --- | --- |
+| a | a | a | portable, on this input |
+| a | b | b | the host differs from both RV32 executors: Rust's target, the SDK, or 32-bit behaviour |
+| a | a | b | an emulator semantics bug |
+| a | b | a | QEMU differs from both: the harness, or QEMU's environment |
+| a | b | c | all three differ |
+
+Compared: the exit status, fd 1 byte for byte — split into its sections, so a mismatch
+names the workload that wrote it — and a panic's message, line and column. The host leg
+runs with overflow checks on (asserted, because `cargo test --release` would turn them
+off) on a 64 MiB stack.
+
+**What Rust itself lets differ is declared, not tolerated.** `hazards::PLATFORM_DEPENDENT`
+names six sections — `core::hash` of a slice and of a `usize`, `size_of` of anything
+holding a pointer, `usize` arithmetic overflowing at 2^32, a `u64` narrowed with
+`as usize`, and the bits of a NaN an operation produces — with the reason for each. The
+two RV32 executors are never excused from any of them. The host is excused from the
+pointer-width ones, which on a 64-bit host **must** then differ, so that list cannot go
+stale by quietly becoming false; and from the NaN one only where its own convention
+differs, which on AArch64 it does not, so there that section is compared like any other.
+The narrowing cast is the quiet member of the set: overflow checks catch 32-bit `usize`
+arithmetic, and nothing at all catches `as usize` dropping a value's top half.
+
+Coverage: 100 section tags across eight workloads, plus the input check's, 28 deliberate
+faults (four per workload, hazards none), and about 80 corpus inputs — three whole-guest runs, one per
+workload, six payload shapes including invalid UTF-8, three malformed fd 0s, one per
+fault, and 32 seeded random ones whose scale is drawn twice so small scales are commoner.
+Each fault is checked to panic on both legs with the same message at the same line and
+column, and with the same sections committed before it.
+
+It plugs into the two suites that already existed. `tests/differential.rs` gains
+`portability` on its hazards workload — 25,945 instructions, which is all of a 4.4 MB
+guest a per-instruction QEMU log can afford — and the traced test runs `numeric` and
+`structures` through `trace_run` and `self_check`, which is where the claim that every
+instruction family but init/teardown runs, and that all eight M instructions execute,
+is made.
+
+**Measured**, debug-profile guest, emulator cycles for one workload alone:
+
+| Workload | scale 0 | MAX_SCALE | fd 1 bytes |
+| --- | ---: | ---: | ---: |
+| numeric | 742,247 | 12,918,950 | 5,989 |
+| collections | 398,601 | 3,615,779 | 350 |
+| text | 500,298 | 7,746,501 | 5,293 |
+| structures | 774,697 | 6,341,254 | 305 |
+| codec | 930,125 | 7,171,470 | 4,005 |
+| crypto | 30,256,051 | 168,968,485 | 990 |
+| alloc_patterns | 1,210,785 | 10,050,502 | 2,159 |
+| hazards | 22,507 | 22,507 | 74 |
+
+Crypto is the outlier and the reason is worth writing down: at the guests' `opt-level =
+0`, one Poseidon2 permutation costs about 4.6M cycles and one `Fr::inverse` about 5.7M,
+because `crates/field`'s Montgomery multiply is compiled unoptimised along with
+everything else. The permutation's known answer and one batch inversion run at every
+scale; the Merkle tree, the sponge squeeze and Fermat's inversion run from scale 1 up.
+
+**Both guest profiles run it, and the second is what `opt-level = 3` has to say.** The
+whole suite is green three ways at `debug` and at `release`, with one difference worth
+recording: at `opt-level = 3` LLVM computes a remainder as `a - (a / b) * b`, so `rem`
+and `remu` are never emitted and the traced run's coverage claim is the committed debug
+build's. It is the same program either way — every section, exit status and panic
+matches across the profiles — but which *instructions* a proof will be about is the
+optimiser's business, which is worth knowing before a circuit is sized from a profile.
+
+**What it found:** the allocator bug above. Nothing else: the host and the emulator agree
+on every corpus input, and QEMU agrees with both. `docs/guest-program-manual.md` §2a now
+teaches the shape — logic in a `no_std` library, `guest-sdk` a dependency of the guest
+target alone — so a guest author can run their own program both ways.
+
 ## Open for the next stage
 
 - **The ecall row's constraints (S16)** have the frame they need in the trace; what they
@@ -399,3 +547,30 @@ to be empty, and the reader's refusal table carries both cases, fourteen in all.
   shape: a changed final value, a moved or added final query, trailing cycles removed.
   The archive binds the log to the rows; teardown and the cycle count are the constraint
   stages' to bind.
+- **The frozen default heights cannot preprocess a large guest that uses an atomic**, and
+  `guests/portability` is the first one to show it. Decoded-table rows are absolute pcs,
+  one per halfword, so a family's height has to reach past its last instruction — and
+  `DEFAULT_HEIGHTS` gives atomics 2^16 rows, which run out at pc `0x20000`. That guest is
+  1.7 MB of code with an `Arc` in it, and its atomics run up to pc `0x18e8a0` — the row
+  `TableTooShort` names — so `decode_program` refuses it at the defaults and takes a
+  uniform 2^20. Every suite here that is not *about* the heights now asks for the smallest menu
+  height that fits (`common::fitting`, `common::preprocess`). Whether heights should be
+  per family at all, or derived from the program's code span, is the next stage's to
+  decide; nothing about the defaults was changed here.
+- **The ISA's edge cases are still QEMU's to check, not the portability suite's.** Rust
+  settles division by zero and `INT_MIN / -1` with its own checks before the hardware sees
+  the operands, so no input to a Rust guest can reach the emulator's `div`/`rem` edge
+  semantics: a mutation making `div` by zero return 0 rather than all-ones survives the
+  whole local suite. `guests/opcodes` does exercise them and commits the answers on fd 1,
+  but `tests/guests.rs` compares which mnemonics ran, not what they computed. The QEMU
+  differential covers it in CI; pinning those committed words would cover it everywhere.
+- **A stack deeper than its reserve is unguarded.** The allocator keeps the heap 8 MiB
+  below the top of RAM and below the live `sp`, so no block is handed out over a live
+  frame — but nothing watches the stack grow *down* into blocks already handed out. That
+  needs a guard under every frame, which is instrumentation rather than allocation.
+- **The portability guest's crypto workload costs 30M cycles at scale 0**, because
+  `crates/field`'s Montgomery multiply and `crates/transcript`'s permutation compile at
+  the guests' `opt-level = 0` like everything else: one permutation is about 4.6M cycles
+  and one `Fr::inverse` about 5.7M. A stage that wants them cheaper has
+  `guests/Cargo.toml`'s profiles to change, and the rule that the two differ only in
+  `opt-level` to keep.

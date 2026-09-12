@@ -210,7 +210,7 @@ to be there is not one this VM can run — and enforcing it is also what stops a
 | `__bss_start` | first byte of `.bss`; crt0 zeroes from here |
 | `__bss_end` | one past the last byte of `.bss` |
 | `__heap_start` | first byte above `.bss`, 16-aligned; the bump allocator's floor |
-| `__stack_top` | `ORIGIN(RAM) + LENGTH(RAM)`; the initial `sp`, and the allocator's ceiling |
+| `__stack_top` | `ORIGIN(RAM) + LENGTH(RAM)`; the initial `sp`. The allocator's ceiling sits `STACK_RESERVE` below it (§8) |
 
 `_start` lives in its own `.text._start` input section so the linker places it
 at `ORIGIN(RAM)`. It sets `sp`, zeroes `.bss` byte by byte, calls `main`, and
@@ -264,5 +264,13 @@ pub fn poseidon2_permute(state: &mut [u8; 96]) -> bool;   // false on -ENOSYS
 `read_input` and `hint` fill the buffer or stop at the end of the stream, and
 return how many bytes they got; a caller that needs an exact length must check.
 `commit` and `log` write all of their bytes. The allocator bumps upward from
-`__heap_start`, `dealloc` does nothing, and an allocation that would cross
-`__stack_top` exits nonzero rather than returning null.
+`__heap_start` and `dealloc` does nothing. An allocation that would end above
+`__stack_top - STACK_RESERVE` (`constants::guest_memory`, 8 MiB), or above the
+live `sp`, exits 71 rather than returning null. The top of RAM therefore belongs
+to the stack, and no block is ever handed out over a frame in use.
+
+The ceiling was `__stack_top` until S12. With it, an exhausted heap handed out
+blocks over live stack frames, and safe code writing into one rewrote locals and
+return addresses. `crates/emulator/tests/portability.rs` holds each half of the
+rule. What no allocator check can see is a stack that grows past its reserve
+after the heap has filled below it.

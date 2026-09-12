@@ -877,6 +877,15 @@ pub mod guest_memory {
 
     /// Length of the region. `RAM_ORIGIN + RAM_LENGTH` is the initial `sp`.
     pub const RAM_LENGTH: u32 = 0x0FFF_0000;
+
+    /// The top of RAM the stack keeps for itself, added at S12. guest-sdk's
+    /// allocator never hands out a block reaching into the last
+    /// `STACK_RESERVE` bytes below `RAM_ORIGIN + RAM_LENGTH`, nor one above
+    /// the live `sp`. 8 MiB: a native main thread's default stack on Linux and
+    /// macOS, so a program whose recursion fits on the host fits here. Not
+    /// part of the linker's map — `link.ld` has no symbol for it — but a
+    /// number the SDK, its documents and its probe guest must agree on.
+    pub const STACK_RESERVE: u32 = 0x0080_0000;
 }
 
 /// The guest ecall ABI: syscall numbers, range boundaries and file
