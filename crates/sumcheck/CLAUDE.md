@@ -90,7 +90,8 @@ Two `tools/bench` routines cover this crate, each runnable on its own.
 `cargo run --release -p bench -- zerocheck-prove` prints the acceptance-9 line:
 `prove_zerocheck` at `n = 20`, the witness digest's own cost, and the peak polynomial
 memory. The last is computed from the tables the algorithm holds, not read from an
-allocator — there is no portable way to read peak RSS without a dependency or `unsafe`.
+allocator — there is no way to read peak RSS on every platform without a dependency
+or `unsafe`.
 
 `cargo run --release -p bench -- zerocheck-verify` puts `verify_zerocheck` against a
 verifier that just recomputes every row, on the same claim at `n = 22` — larger than the

@@ -1,9 +1,9 @@
 #![no_std]
 #![no_main]
-//! The portability guest: `portability::run` over fd 0, each section
+//! The consistency guest: `consistency::run` over fd 0, each section
 //! committed to fd 1 the moment it is produced, so a run that panics has
 //! committed exactly what the host's run of the same source had emitted before
-//! its panic. `crates/emulator/tests/portability.rs` runs it against the host
+//! its panic. `crates/emulator/tests/consistency.rs` runs it against the host
 //! and against QEMU.
 //!
 //! Two inputs are the guest's alone, because the host has no such heap: fd 0
@@ -19,8 +19,8 @@ use core::cell::Cell;
 use core::hint::black_box;
 use core::mem::forget;
 
+use consistency::{MODE_HEAP_CEILING, MODE_HEAP_UNDER_DEEP_STACK};
 use constants::guest_memory::{RAM_LENGTH, RAM_ORIGIN, STACK_RESERVE};
-use portability::{MODE_HEAP_CEILING, MODE_HEAP_UNDER_DEEP_STACK};
 
 guest_sdk::entry!(main);
 
@@ -29,7 +29,7 @@ fn main() {
     match input.first() {
         Some(&MODE_HEAP_CEILING) => heap_ceiling(),
         Some(&MODE_HEAP_UNDER_DEEP_STACK) => descend(DEPTH),
-        _ => portability::run(&input, &mut |section| guest_sdk::commit(section)),
+        _ => consistency::run(&input, &mut |section| guest_sdk::commit(section)),
     }
 }
 
@@ -118,7 +118,7 @@ fn descend(depth: usize) {
 /// ending well below it is granted, and one reaching over its local is not.
 ///
 /// Before the ceiling looked at `sp`, the second block was granted and a write
-/// to it rewrote `local` — the bug the portability suite found.
+/// to it rewrote `local` — the bug the consistency suite found.
 fn under_deep_stack() {
     /// Room for the allocator's own call chain below this frame.
     const CLEARANCE: usize = 64 << 10;

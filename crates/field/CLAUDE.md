@@ -15,7 +15,7 @@ and `batch_inverse`.
 - **`from_bytes` rejects, never reduces.** A value `>= p` returns `None`. So does
   `from_hex`, for the same reason and with the same discipline.
 - **`batch_inverse` maps zero to zero.** Zeros are skipped, not an error.
-- **`#![no_std]`, portable stable Rust, `u128` intermediates only.** No carry
+- **`#![no_std]`, plain stable Rust, `u128` intermediates only.** No carry
   intrinsics, no assembly, no nightly, no `unsafe`. It compiles unchanged for
   `riscv32imac-unknown-none-elf`; CI-equivalent check:
   `cargo build -p field -p constants --target riscv32imac-unknown-none-elf`.

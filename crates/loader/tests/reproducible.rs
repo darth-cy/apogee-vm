@@ -30,7 +30,7 @@ fn two_clean_builds_agree() {
         "atomics",
         "opcodes",
         "heap",
-        "portability",
+        "consistency",
     ] {
         let a = build(name, "repro-a");
         let b = build(name, "repro-b");

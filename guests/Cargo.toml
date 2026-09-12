@@ -11,7 +11,7 @@
 # toolchain, because rustup walks up from the working directory.
 [workspace]
 resolver = "2"
-members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "portability"]
+members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "consistency"]
 
 [workspace.package]
 version = "0.1.0"
@@ -37,8 +37,8 @@ incremental = false
 codegen-units = 1
 
 # The release profile exists because in a zkVM instruction count *is* proving
-# cost, and `opt-level = 3` removes between 15% and 45% of the image across the
-# six guests. What it must not do is change what a guest computes.
+# cost, and `opt-level = 3` removes 24% to 58% of the image across the guests.
+# What it must not do is change what a guest computes.
 #
 # Cargo's default release profile turns `overflow-checks` off, and that is not
 # a performance setting here, it is a semantic one:

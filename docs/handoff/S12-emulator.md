@@ -158,8 +158,8 @@ pub mod memory { pub const TS_STEP: u64 = 4; pub const TS_BITS: u32 = 38; }
 | `docs/spec/execution-trace.md` | the timestamp convention, normative |
 | `crates/loader/tests/vectors/opcodes.elf` | `guests/opcodes`: every RV32IMAC instruction, the ebreak and misalignment modes |
 | `crates/loader/tests/vectors/heap.elf` | `guests/heap`: the allocator exercise |
-| `crates/loader/tests/vectors/portability.elf` | `guests/portability`: the three-way suite's guest, 4.4 MB of it |
-| `guests/opcodes/`, `guests/heap/`, `guests/portability/` | their sources |
+| `crates/loader/tests/vectors/consistency.elf` | `guests/consistency`: the three-way suite's guest, 4.4 MB of it |
+| `guests/opcodes/`, `guests/heap/`, `guests/consistency/` | their sources |
 
 All three are pinned in `crates/loader/tests/common/mod.rs`, built by `cargo run -p
 kat-gen -- guests` and held to the host-loadability rules by
@@ -176,7 +176,7 @@ is `fib`'s.
 
 | # | Item | Where | Result |
 | --- | --- | --- | --- |
-| 1 | QEMU differential over the suite | `emulator/tests/differential.rs` (`#[ignore]`d; CI) | every register of every instruction equal to `qemu-riscv32` 10.0.11's: `opcodes` 2,354 instructions (the one `sc.w` whitelisted), `rvc-dense` 638, `fib` 2,115, `heap` 141,827, `atomics` 22,507, `portability` 25,945 on its hazards workload; exit status and fd 1 equal too. `heap` was 138,359 before the allocator fix below: the ceiling check `alloc` now runs on every allocation is the whole difference |
+| 1 | QEMU differential over the suite | `emulator/tests/differential.rs` (`#[ignore]`d; CI) | every register of every instruction equal to `qemu-riscv32` 10.0.11's: `opcodes` 2,354 instructions (the one `sc.w` whitelisted), `rvc-dense` 638, `fib` 2,115, `heap` 141,827, `atomics` 22,507, `consistency` 25,945 on its hazards workload; exit status and fd 1 equal too. `heap` was 138,359 before the allocator fix below: the ceiling check `alloc` now runs on every allocation is the whole difference |
 | 2 | harness negative control | `differential.rs`, and `src/qemu.rs` unit tests | a perturbed register at three positions in fib, and a perturbed pc, each reported at exactly that instruction and register |
 | 3 | self-check positive, heap traffic included | `emulator/tests/trace.rs` | fib, heap, atomics, opcodes and rvc-dense balance; heap changes over 100 heap words |
 | 4 | self-check tamper twin | `trace.rs` | a RAM read, a register write mid-chain, a pc write, a negative gap, a forged initial value (a RAM word's and the entry pc's) and a stale read, each failing with the space, address and timestamp of the offending query named |
@@ -239,16 +239,16 @@ permutation, orderbook's advice invariance — all on the first run. The first Q
 then passed on every instruction of five guests; its only failure beforehand was the
 harness's own, a guest ELF written without its execute bit.
 
-**After the allocator fix and the portability suite: 495 workspace tests, all green,
+**After the allocator fix and the consistency suite: 495 workspace tests, all green,
 plus 20 `#[ignore]`d** — seven tests and two ignored more than the stage shipped with:
-six in `crates/emulator/tests/portability.rs`, and one in `crates/program/tests/
+six in `crates/emulator/tests/consistency.rs`, and one in `crates/program/tests/
 partition.rs` holding the frozen default heights to the guests they can and cannot
 preprocess. `fmt` and `clippy -D warnings` stay
 clean across the four workspaces, `cargo run -p kat-gen` reproduces every derived fixture
 unchanged, and `kat-gen -- guests` rebuilt all ten guest ELFs. In the Linux container on
 the owner's arm64 machine (`qemu-riscv32` 10.0.11): `crates/loader`'s guest suite passes
 at both profiles, the differential agrees register for register over six guests with
-`portability` contributing 25,945 instructions, and the three-way portability suite
+`consistency` contributing 25,945 instructions, and the three-way consistency suite
 passes at `debug` and at `release`. The allocator fix was mutation-checked three ways —
 the old `__stack_top` ceiling, the ceiling without its live-`sp` half, and the ceiling
 without its reserve — and each mutation fails a heap probe.
@@ -423,7 +423,7 @@ The fix, on the repository owner's instruction, leaves `link.ld` alone: a new
 `constants::guest_memory::STACK_RESERVE` (8 MiB, a native main thread's default stack)
 gives the top of RAM to the stack, and `alloc` refuses any block ending above
 `min(__stack_top - STACK_RESERVE, sp)`, reading the live `sp` with one `mv` from inside
-itself. `guests/portability`'s two heap probes pin the two halves, and each half is
+itself. `guests/consistency`'s two heap probes pin the two halves, and each half is
 load-bearing: with the ceiling back at `__stack_top` the first probe commits "allocated
 past the ceiling" and exits 0; without the live-`sp` half the second is granted a block
 covering its own frame; without the reserve the first fails again.
@@ -441,22 +441,22 @@ see is a stack that grows past its reserve after the heap has filled below it �
 needs a guard under every frame, and a program recursing that deep would overflow a
 native main thread too.
 
-## The portability suite
+## The consistency suite
 
-A developer porting ordinary `no_std` Rust into this VM has to know that it computes what
-it computed on their machine. `guests/portability` is that question made executable: a
+A developer moving ordinary `no_std` Rust into this VM has to know that it computes what
+it computed on their machine. `guests/consistency` is that question made executable: a
 `#![no_std] + alloc` library of about 14,000 lines — numerics, collections, text,
 traits, closures and iterators, a codec, hashes and the repository's own field and
 permutation, allocation patterns — beside a thin guest `main`. The host calls the library
 directly; the guest ELF is built from the same source at test time, so the two legs are
 always one program.
 
-`crates/emulator/tests/portability.rs` runs one corpus three ways and reads the
+`crates/emulator/tests/consistency.rs` runs one corpus three ways and reads the
 disagreements off a table:
 
 | host | QEMU | emulator | reading |
 | --- | --- | --- | --- |
-| a | a | a | portable, on this input |
+| a | a | a | consistent, on this input |
 | a | b | b | the host differs from both RV32 executors: Rust's target, the SDK, or 32-bit behaviour |
 | a | a | b | an emulator semantics bug |
 | a | b | a | QEMU differs from both: the harness, or QEMU's environment |
@@ -486,7 +486,7 @@ Each fault is checked to panic on both legs with the same message at the same li
 column, and with the same sections committed before it.
 
 It plugs into the two suites that already existed. `tests/differential.rs` gains
-`portability` on its hazards workload — 25,945 instructions, which is all of a 4.4 MB
+`consistency` on its hazards workload — 25,945 instructions, which is all of a 4.4 MB
 guest a per-instruction QEMU log can afford — and the traced test runs `numeric` and
 `structures` through `trace_run` and `self_check`, which is where the claim that every
 instruction family but init/teardown runs, and that all eight M instructions execute,
@@ -548,16 +548,16 @@ target alone — so a guest author can run their own program both ways.
   The archive binds the log to the rows; teardown and the cycle count are the constraint
   stages' to bind.
 - **The frozen default heights cannot preprocess a large guest that uses an atomic**, and
-  `guests/portability` is the first one to show it. Decoded-table rows are absolute pcs,
+  `guests/consistency` is the first one to show it. Decoded-table rows are absolute pcs,
   one per halfword, so a family's height has to reach past its last instruction — and
   `DEFAULT_HEIGHTS` gives atomics 2^16 rows, which run out at pc `0x20000`. That guest is
-  1.7 MB of code with an `Arc` in it, and its atomics run up to pc `0x18e8a0` — the row
+  1.7 MB of code with an `Arc` in it, and its atomics run up to pc `0x18e62a` — the row
   `TableTooShort` names — so `decode_program` refuses it at the defaults and takes a
   uniform 2^20. Every suite here that is not *about* the heights now asks for the smallest menu
   height that fits (`common::fitting`, `common::preprocess`). Whether heights should be
   per family at all, or derived from the program's code span, is the next stage's to
   decide; nothing about the defaults was changed here.
-- **The ISA's edge cases are still QEMU's to check, not the portability suite's.** Rust
+- **The ISA's edge cases are still QEMU's to check, not the consistency suite's.** Rust
   settles division by zero and `INT_MIN / -1` with its own checks before the hardware sees
   the operands, so no input to a Rust guest can reach the emulator's `div`/`rem` edge
   semantics: a mutation making `div` by zero return 0 rather than all-ones survives the
@@ -568,7 +568,7 @@ target alone — so a guest author can run their own program both ways.
   below the top of RAM and below the live `sp`, so no block is handed out over a live
   frame — but nothing watches the stack grow *down* into blocks already handed out. That
   needs a guard under every frame, which is instrumentation rather than allocation.
-- **The portability guest's crypto workload costs 30M cycles at scale 0**, because
+- **The consistency guest's crypto workload costs 30M cycles at scale 0**, because
   `crates/field`'s Montgomery multiply and `crates/transcript`'s permutation compile at
   the guests' `opt-level = 0` like everything else: one permutation is about 4.6M cycles
   and one `Fr::inverse` about 5.7M. A stage that wants them cheaper has

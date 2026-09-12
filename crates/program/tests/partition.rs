@@ -167,15 +167,15 @@ fn each_program_derives_only_the_families_it_uses() {
 ///
 /// The suites that are not about the heights take `common::fitting`, so without
 /// this nothing would notice a guest — or growth in an existing one — crossing
-/// a default. `portability` is the first program to cross one: a family's table
+/// a default. `consistency` is the first program to cross one: a family's table
 /// is indexed by absolute pc and the defaults give atomics 2^16 rows, which run
-/// out at pc `0x20000`, while that guest's atomics run up to `0x18e8a0`.
+/// out at pc `0x20000`, while that guest's atomics run up to `0x18e62a`.
 #[test]
 fn the_default_heights_hold_every_guest_but_the_largest() {
     for name in common::GUESTS {
         let image = common::guest(name);
         let decoded = decode_program(&image, &ProgramParams::defaults());
-        if name == "portability" {
+        if name == "consistency" {
             let Err(program::ProgramError::TableTooShort { family, height, .. }) = decoded else {
                 panic!("{name} is expected to cross the default atomics height");
             };

@@ -76,8 +76,8 @@ exists only to show it.
   atomics table holds atomics at or below pc `0x1fffc` only. A row above a *shorter*
   family's height is simply outside that table -- padding there -- so a program's code
   may reach past every table but its own family's. Every committed guest's code ends
-  below `0x1c990` — `orderbook`'s is the highest — **except `portability`**, which is
-  1.7 MB of it with an `Arc` inside: its atomics run up to pc `0x18e8a0`, the row
+  below `0x1c990` — `orderbook`'s is the highest — **except `consistency`**, which is
+  1.7 MB of it with an `Arc` inside: its atomics run up to pc `0x18e62a`, the row
   `TableTooShort` names, so the frozen defaults refuse that guest and it takes a uniform
   2^20. Whether heights should be per family at
   all is an open question in `docs/handoff/S12-emulator.md`; the suites here that are not

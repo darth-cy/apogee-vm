@@ -64,8 +64,8 @@ pub const PINS: [(&str, &str); 14] = [
         "998fe4124449a465130ef78dd997be1b31b239a2bc8ccea8e4e0d3ebb58b2cea",
     ),
     (
-        "portability.elf",
-        "096577f22cb7473ad00ecc937f82d7fcf16094768868d1f859f6a8e4c9760103",
+        "consistency.elf",
+        "ddb4b01e36096d31f72d4279c2bc18d2cc0c157cd8f58b2964241eeaada9f270",
     ),
     (
         "fib.objdump.txt",

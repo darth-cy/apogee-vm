@@ -1,11 +1,11 @@
 [package]
-name = "portability"
+name = "consistency"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
 # `src/lib.rs` is the program, and it compiles for the host as well as for the
-# guest: `crates/emulator/tests/portability.rs` calls it directly and holds the
+# guest: `crates/emulator/tests/consistency.rs` calls it directly and holds the
 # two to one answer. Only `src/main.rs` is guest-only, so the guest runtime is
 # a dependency of the guest target alone -- unconditionally, a host build would
 # try to assemble crt0 and link a second `#[panic_handler]`. That is a

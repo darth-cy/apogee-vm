@@ -17,6 +17,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "consistency"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "field",
+ "guest-sdk",
+ "transcript",
+]
+
+[[package]]
 name = "constants"
 version = "0.1.0"
 
@@ -70,16 +80,6 @@ name = "orderbook"
 version = "0.1.0"
 dependencies = [
  "guest-sdk",
-]
-
-[[package]]
-name = "portability"
-version = "0.1.0"
-dependencies = [
- "constants",
- "field",
- "guest-sdk",
- "transcript",
 ]
 
 [[package]]

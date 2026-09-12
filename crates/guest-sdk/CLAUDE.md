@@ -65,8 +65,8 @@ the crate layout, the I/O rules, the build, and exporting the result as a
   8 MiB) or above the live `sp`, which it reads with one `mv` from inside `alloc`.
   The ceiling used to be `__stack_top` itself, so an exhausted heap handed out blocks
   over live frames, and safe code writing into a `Vec` rewrote the caller's locals and
-  return addresses. The portability suite found that by running a guest's source on the
-  host and comparing the two runs. `guests/portability`'s two heap probes pin each half
+  return addresses. The consistency suite found that by running a guest's source on the
+  host and comparing the two runs. `guests/consistency`'s two heap probes pin each half
   of the rule, and each half fails its probe when it is removed. `link.ld` is untouched:
   the reserve is the allocator's policy, not a linker symbol. Still unguarded: a stack
   that grows past its reserve after the heap has filled the space below it.

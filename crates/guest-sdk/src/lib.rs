@@ -348,8 +348,8 @@ static mut BUMP: usize = 0;
 /// silent corruption rather than an exit: a block ending anywhere between the
 /// live `sp` and the top was handed out *over live stack frames*, so safe code
 /// writing into a `Vec` rewrote the caller's locals and return addresses. The
-/// portability suite found it by running this guest's source on the host and
-/// comparing; `crates/emulator/tests/portability.rs` holds the fix to both
+/// consistency suite found it by running this guest's source on the host and
+/// comparing; `crates/emulator/tests/consistency.rs` holds the fix to both
 /// halves of the rule.
 ///
 /// What no allocator can see is a stack that grows past its reserve *after* the

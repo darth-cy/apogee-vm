@@ -15,7 +15,7 @@ trace.workspace = true
 field.workspace = true
 transcript.workspace = true
 test-support.workspace = true
-# `guests/portability`'s library half: the program the three-way portability
+# `guests/consistency`'s library half: the program the three-way consistency
 # suite calls on the host, from the same source it builds the guest from. A
 # path into the guest workspace, and a test dependency only.
-portability = { path = "../../guests/portability" }
+consistency = { path = "../../guests/consistency" }

@@ -44,8 +44,8 @@ jobs:
       # wrapped `u32` on fd 1 where the dev build panics and exits 101. fd 1 is
       # the committed public output, so that would make the optimisation level
       # part of the statement being proven. It also builds at `--release` the
-      # seven guests this suite runs; `portability`'s release build is the
-      # portability step below, and `opcodes` and `heap` have none in CI.
+      # seven guests this suite runs; `consistency`'s release build is the
+      # consistency step below, and `opcodes` and `heap` have none in CI.
       - name: guests execute (release)
         env:
           APOGEE_GUEST_PROFILE: release
@@ -57,15 +57,15 @@ jobs:
       - name: emulator matches QEMU
         run: cargo test -p emulator --test differential -- --include-ignored
 
-      # The three-way portability suite: `guests/portability` on the host,
+      # The three-way consistency suite: `guests/consistency` on the host,
       # under qemu-riscv32 and on the emulator, over one corpus of inputs. The
       # host-and-emulator half runs in the `test` step below; this is the half
       # that says which of two disagreeing legs is wrong. Both guest profiles,
       # for the reason the release step above gives.
       - name: host, QEMU and emulator agree
         run: |
-          cargo test -p emulator --test portability -- --include-ignored
-          APOGEE_GUEST_PROFILE=release cargo test -p emulator --test portability -- --include-ignored
+          cargo test -p emulator --test consistency -- --include-ignored
+          APOGEE_GUEST_PROFILE=release cargo test -p emulator --test consistency -- --include-ignored
 
       # Four workspaces, all gated. `crates/guest-sdk` and `guests/` are separate
       # workspaces because they compile only for the guest target, and guest-sdk

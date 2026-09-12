@@ -185,7 +185,7 @@ const GUESTS: [&str; 10] = [
     "atomics",
     "opcodes",
     "heap",
-    "portability",
+    "consistency",
 ];
 
 /// Every rule above, over one image. The single place the rules are composed,

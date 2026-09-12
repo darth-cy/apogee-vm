@@ -1,13 +1,13 @@
-//! The three-way portability suite: `guests/portability` run on the host,
+//! The three-way consistency suite: `guests/consistency` run on the host,
 //! under `qemu-riscv32` and on the zkVM's emulator, over one set of inputs,
 //! and held to one answer.
 //!
-//! `guests/portability` is a library of ordinary `no_std + alloc` Rust —
+//! `guests/consistency` is a library of ordinary `no_std + alloc` Rust —
 //! numerics, collections, text, traits and closures, a codec, hashes and the
 //! repository's own field and permutation, allocation patterns — and a thin
 //! guest `main`. The host calls the library directly. The guest is built from
 //! that same source here, at test time, so the legs are always one program: the
-//! committed `portability.elf` is the loader's fixture and the
+//! committed `consistency.elf` is the loader's fixture and the
 //! instruction-by-instruction differential's, and a stale one would have this
 //! suite comparing two programs.
 //!
@@ -15,7 +15,7 @@
 //!
 //! | host | QEMU | emulator | reading |
 //! | --- | --- | --- | --- |
-//! | a | a | a | portable, on this input |
+//! | a | a | a | consistent, on this input |
 //! | a | b | b | the host differs from both RV32 executors: Rust's target, the SDK, or 32-bit behaviour |
 //! | a | a | b | the emulator differs from real RV32 and from the host: an emulator bug |
 //! | a | b | a | QEMU differs from both: the harness, or QEMU's environment |
@@ -24,7 +24,7 @@
 //! Compared: the exit status; fd 1 byte for byte, split into its sections so a
 //! mismatch names the workload that wrote it; and for a panic, its message,
 //! line and column. The host is excused from the sections
-//! [`portability::hazards::PLATFORM_DEPENDENT`] declares — values Rust itself
+//! [`consistency::hazards::PLATFORM_DEPENDENT`] declares — values Rust itself
 //! defines per target — and the two RV32 executors are not. On a 64-bit host
 //! the pointer-width ones must actually differ, so the list cannot go stale by
 //! quietly becoming false.
@@ -38,7 +38,7 @@
 //! reason `tests/differential.rs` gives, and CI asks for it by name:
 //!
 //! ```text
-//! cargo test -p emulator --test portability -- --include-ignored
+//! cargo test -p emulator --test consistency -- --include-ignored
 //! ```
 //!
 //! `APOGEE_GUEST_PROFILE=release` builds the guest at `--release` instead,
@@ -59,15 +59,15 @@ use std::sync::{Once, OnceLock};
 use std::thread;
 
 use common::{instr_at, io};
-use constants::family;
-use emulator::{run, trace_run};
-use loader::{load_elf, ProgramImage};
-use portability::hazards::{Divergence, Platform, PLATFORM_DEPENDENT};
-use portability::hazards::{TAG_SIZE_OF, TAG_USIZE_CAST, TAG_USIZE_OVERFLOW};
-use portability::{
+use consistency::hazards::{Divergence, Platform, PLATFORM_DEPENDENT};
+use consistency::hazards::{TAG_SIZE_OF, TAG_USIZE_CAST, TAG_USIZE_OVERFLOW};
+use consistency::{
     sections, Input, HEADER_LEN, MAX_SCALE, MODE_HEAP_CEILING, MODE_HEAP_UNDER_DEEP_STACK,
     TAG_BAD_INPUT, WORKLOADS,
 };
+use constants::family;
+use emulator::{run, trace_run};
+use loader::{load_elf, ProgramImage};
 use test_support::{to_hex, Rng};
 
 /// guest-sdk's `EXIT_PANIC`: what its panic handler exits with, and what a
@@ -93,7 +93,7 @@ const HEAP_PROBES: [(u8, &[u8]); 2] = [
 /// A payload with the Unicode a text workload should trip over: a character
 /// whose uppercase is two, one whose lowercase is two, a ligature, CJK, an
 /// emoji, and a combining mark.
-const TEXT: &str = "Portable? naïve café — Straße, İstanbul, ﬃ, 日本語, 🦀, and e\u{301}.";
+const TEXT: &str = "Consistent? naïve café — Straße, İstanbul, ﬃ, 日本語, 🦀, and e\u{301}.";
 
 // ---------------------------------------------------------------------------
 // The legs
@@ -143,7 +143,7 @@ fn parse_panic(text: &str) -> Option<Panic> {
     })
 }
 
-const HOST_THREAD: &str = "portability-host";
+const HOST_THREAD: &str = "consistency-host";
 
 thread_local! {
     static HOST_PANIC: RefCell<Option<String>> = const { RefCell::new(None) };
@@ -178,7 +178,7 @@ fn on_host_thread<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> 
         .expect("a host-leg thread died outside catch_unwind")
 }
 
-/// The host leg: `portability::run`, called.
+/// The host leg: `consistency::run`, called.
 fn host(input: &[u8]) -> Outcome {
     static CHECKS_OVERFLOW: OnceLock<bool> = OnceLock::new();
     let checks = *CHECKS_OVERFLOW.get_or_init(|| {
@@ -196,7 +196,7 @@ fn host(input: &[u8]) -> Outcome {
     on_host_thread(move || {
         let mut output = Vec::new();
         let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-            portability::run(&input, &mut |section: &[u8]| {
+            consistency::run(&input, &mut |section: &[u8]| {
                 output.extend_from_slice(section)
             })
         }));
@@ -242,12 +242,12 @@ fn emulate(image: &ProgramImage, input: &[u8]) -> Outcome {
 fn qemu(elf: &[u8], input: &[u8]) -> Outcome {
     static RUNS: AtomicUsize = AtomicUsize::new(0);
     let dir = std::env::temp_dir().join(format!(
-        "apogee-portability-{}-{}",
+        "apogee-consistency-{}-{}",
         std::process::id(),
         RUNS.fetch_add(1, Ordering::Relaxed)
     ));
     fs::create_dir_all(&dir).expect("creating the run directory");
-    let path = dir.join("portability");
+    let path = dir.join("consistency");
     fs::write(&path, elf).expect("writing the guest");
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("marking the guest");
 
@@ -286,12 +286,12 @@ struct Guest {
     image: ProgramImage,
 }
 
-/// `guests/portability`, built once per test binary.
+/// `guests/consistency`, built once per test binary.
 fn guest() -> &'static Guest {
     static GUEST: OnceLock<Guest> = OnceLock::new();
     GUEST.get_or_init(|| {
-        let elf = common::build_guest("portability", &common::guest_profile());
-        let image = load_elf(&elf).unwrap_or_else(|e| panic!("portability: {e:?}"));
+        let elf = common::build_guest("consistency", &common::guest_profile());
+        let image = load_elf(&elf).unwrap_or_else(|e| panic!("consistency: {e:?}"));
         Guest { elf, image }
     })
 }
@@ -522,7 +522,8 @@ struct Case {
     input: Vec<u8>,
 }
 
-fn portable(seed: u64, scale: u32, workloads: u32, fault: u8, payload: &[u8]) -> Vec<u8> {
+/// One ordinary input, encoded as the fd 0 the guest and the host both read.
+fn fd0(seed: u64, scale: u32, workloads: u32, fault: u8, payload: &[u8]) -> Vec<u8> {
     Input {
         seed,
         scale,
@@ -535,7 +536,7 @@ fn portable(seed: u64, scale: u32, workloads: u32, fault: u8, payload: &[u8]) ->
 
 /// The input that asks workload `index` for fault `code`.
 fn fault_input(index: usize, code: u8) -> Vec<u8> {
-    portable(
+    fd0(
         0x100 + u64::from(code),
         3,
         1 << index,
@@ -546,13 +547,13 @@ fn fault_input(index: usize, code: u8) -> Vec<u8> {
 
 /// fd 0s that are not inputs: each gets one `TAG_BAD_INPUT` section.
 fn bad_inputs() -> [(&'static str, Vec<u8>); 3] {
-    let mut unknown_mode = portable(5, 0, 0, 0, b"");
+    let mut unknown_mode = fd0(5, 0, 0, 0, b"");
     unknown_mode[0] = 0x7f;
     [
         ("an empty fd 0", Vec::new()),
         (
             "a header one byte short",
-            portable(4, 0, 0, 0, b"")[..HEADER_LEN - 1].to_vec(),
+            fd0(4, 0, 0, 0, b"")[..HEADER_LEN - 1].to_vec(),
         ),
         ("an unknown mode", unknown_mode),
     ]
@@ -576,20 +577,20 @@ fn corpus() -> Vec<Case> {
 
     add(
         "every workload, scale 0, no payload".into(),
-        portable(1, 0, 0, 0, b""),
+        fd0(1, 0, 0, 0, b""),
     );
     add(
         "every workload, MAX_SCALE, the text payload".into(),
-        portable(2, MAX_SCALE, 0, 0, TEXT.as_bytes()),
+        fd0(2, MAX_SCALE, 0, 0, TEXT.as_bytes()),
     );
     add(
         "every workload, a scale past MAX_SCALE".into(),
-        portable(3, u32::MAX, 0, 0, b"clamped"),
+        fd0(3, u32::MAX, 0, 0, b"clamped"),
     );
     for (i, w) in WORKLOADS.iter().enumerate() {
         add(
             format!("{} alone, scale 5", w.name),
-            portable(10 + i as u64, 5, 1 << i, 0, TEXT.as_bytes()),
+            fd0(10 + i as u64, 5, 1 << i, 0, TEXT.as_bytes()),
         );
     }
     let payloads: [(&str, Vec<u8>); 6] = [
@@ -611,7 +612,7 @@ fn corpus() -> Vec<Case> {
     for (k, (what, payload)) in payloads.iter().enumerate() {
         add(
             format!("every workload, scale 2, {what} payload"),
-            portable(20 + k as u64, 2, 0, 0, payload),
+            fd0(20 + k as u64, 2, 0, 0, payload),
         );
     }
     for (what, input) in bad_inputs() {
@@ -647,7 +648,7 @@ fn corpus() -> Vec<Case> {
         };
         add(
             format!("random {k}: seed {seed:#x}, scale {scale}, workloads {workloads:#x}"),
-            portable(seed, scale, workloads, 0, &payload),
+            fd0(seed, scale, workloads, 0, &payload),
         );
     }
     // A corpus that shrank would let both agreement tests pass by having
@@ -727,7 +728,7 @@ fn the_host_and_the_emulator_agree_on_every_input() {
 #[test]
 fn every_workload_fault_and_bad_input_is_exercised() {
     let guest = guest();
-    let full = emulate(&guest.image, &portable(2, MAX_SCALE, 0, 0, TEXT.as_bytes()));
+    let full = emulate(&guest.image, &fd0(2, MAX_SCALE, 0, 0, TEXT.as_bytes()));
     let Outcome::Exit {
         code: 0, output, ..
     } = &full
@@ -854,7 +855,7 @@ fn a_traced_run_is_the_same_execution_and_its_memory_balances() {
         .filter(|(_, w)| w.name == "numeric" || w.name == "structures")
         .fold(0, |mask, (i, _)| mask | 1 << i);
     let mut inputs = vec![
-        portable(1, 0, traced, 0, TEXT.as_bytes()),
+        fd0(1, 0, traced, 0, TEXT.as_bytes()),
         bad_inputs()[0].1.clone(),
     ];
     if let Some((i, f)) = WORKLOADS
@@ -938,7 +939,7 @@ fn the_heap_stops_below_the_stack() {
 #[test]
 fn a_perturbed_leg_is_caught_and_classified() {
     let guest = guest();
-    let input = portable(7, 2, 0, 0, TEXT.as_bytes());
+    let input = fd0(7, 2, 0, 0, TEXT.as_bytes());
     let (h, e) = (host(&input), emulate(&guest.image, &input));
     judge(&h, None, &e).expect("the unperturbed legs are the control");
     judge(&h, Some(&e), &e).expect("and agree three ways with the emulator as QEMU");
@@ -1106,7 +1107,7 @@ fn workload_costs() {
         let cost = |scale| {
             let e = run(
                 &guest.image,
-                &io(&portable(1, scale, 1 << i, 0, TEXT.as_bytes())),
+                &io(&fd0(1, scale, 1 << i, 0, TEXT.as_bytes())),
             )
             .unwrap_or_else(|e| panic!("{}: {e}", w.name));
             (e.cycle_count, e.io.output.len())

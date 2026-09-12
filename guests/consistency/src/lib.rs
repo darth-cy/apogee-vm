@@ -1,7 +1,7 @@
 #![no_std]
-//! The portability guest's program: ordinary `no_std + alloc` Rust, compiled
+//! The consistency guest's program: ordinary `no_std + alloc` Rust, compiled
 //! from this one source twice — for the host, where
-//! `crates/emulator/tests/portability.rs` calls [`run`] directly, and for
+//! `crates/emulator/tests/consistency.rs` calls [`run`] directly, and for
 //! `riscv32imac-unknown-none-elf`, where `src/main.rs` hands it fd 0 and
 //! commits what it emits to fd 1. The suite runs one input on the host, under
 //! `qemu-riscv32` and on the zkVM's emulator, and holds the three to one
@@ -16,12 +16,12 @@
 //! # fd 0
 //!
 //! ```text
-//!    0       mode       u8      MODE_PORTABLE; src/main.rs's heap probes take the others
+//!    0       mode       u8      MODE_RUN; src/main.rs's heap probes take the others
 //!    1..9    seed       u64 LE  every generated datum derives from it
 //!    9..13   scale      u32 LE  workload size, clamped to MAX_SCALE
 //!   13..17   workloads  u32 LE  bit i selects WORKLOADS[i]; 0 selects all of them
 //!   17       fault      u8      0, or a code from some workload's `faults`
-//!   18..     payload            bytes the text and codec workloads read as given
+//!   18..     payload            bytes every workload but `hazards` reads as given
 //! ```
 //!
 //! # fd 1
@@ -76,7 +76,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 /// fd 0's first byte for an input this crate runs.
-pub const MODE_PORTABLE: u8 = 0;
+pub const MODE_RUN: u8 = 0;
 
 /// Guest-only, in `src/main.rs`: walk the heap up to its ceiling under the
 /// stack's reserve, commit, then ask for one byte more, which guest-sdk's
@@ -122,7 +122,7 @@ impl fmt::Display for InputError {
             InputError::Short { len } => {
                 write!(f, "fd 0 holds {len} bytes and the header is {HEADER_LEN}")
             }
-            InputError::Mode(mode) => write!(f, "mode {mode} is not MODE_PORTABLE"),
+            InputError::Mode(mode) => write!(f, "mode {mode} is not MODE_RUN"),
         }
     }
 }
@@ -132,7 +132,7 @@ impl<'a> Input<'a> {
         if bytes.len() < HEADER_LEN {
             return Err(InputError::Short { len: bytes.len() });
         }
-        if bytes[0] != MODE_PORTABLE {
+        if bytes[0] != MODE_RUN {
             return Err(InputError::Mode(bytes[0]));
         }
         let word = |at: usize| {
@@ -149,7 +149,7 @@ impl<'a> Input<'a> {
 
     pub fn encode(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(HEADER_LEN + self.payload.len());
-        bytes.push(MODE_PORTABLE);
+        bytes.push(MODE_RUN);
         bytes.extend_from_slice(&self.seed.to_le_bytes());
         bytes.extend_from_slice(&self.scale.to_le_bytes());
         bytes.extend_from_slice(&self.workloads.to_le_bytes());
@@ -270,7 +270,7 @@ pub fn sections(mut output: &[u8]) -> Option<Vec<(u8, &[u8])>> {
         let len = u32::from_le_bytes(rest.get(..4)?.try_into().ok()?) as usize;
         // Sliced in two steps rather than through `4 + len`, which overflows a
         // 32-bit `usize` on a hostile length — in the one function of this
-        // crate whose whole subject is 32-bit portability.
+        // crate whose whole subject is 32-bit behaviour.
         let body = rest.get(4..)?;
         sections.push((tag, body.get(..len)?));
         output = &body[len..];

@@ -35,7 +35,7 @@ crates/
                  differential harness; std
   guest-sdk/     crt0, entry!, linker script, bump allocator, ecall shims; no_std,
                  guest-only, and NOT a workspace member
-guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, opcodes/, heap/, portability/
+guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, opcodes/, heap/, consistency/
                  -- their own workspace; see guests/Cargo.toml and docs/guest-program-manual.md
 assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 handoff
 tools/
@@ -76,7 +76,7 @@ cargo run --manifest-path tools/transcript-ref/Cargo.toml
 cd guests/fib && cargo build --target riscv32imac-unknown-none-elf
 APOGEE_GUEST_PROFILE=release cargo test -p loader --test qemu -- --include-ignored
 cargo test -p emulator --test differential -- --include-ignored
-cargo test -p emulator --test portability -- --include-ignored   # and again at APOGEE_GUEST_PROFILE=release
+cargo test -p emulator --test consistency -- --include-ignored   # and again at APOGEE_GUEST_PROFILE=release
 git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/
 -------------------------------------------------------------------------------
 cargo run -p kat-gen                        # refresh every fixture (manual, deliberate)
@@ -317,8 +317,8 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   live `sp`. Until S12 the ceiling was `__stack_top` itself, and an exhausted heap handed
   out blocks on top of live stack frames. The allocator never frees, so the total a run
   allocates is the limit, not its peak.
-- **Portability is tested three ways.** `guests/portability` is a `no_std` library the
-  host calls directly, plus a thin guest `main`. `crates/emulator/tests/portability.rs`
+- **Consistency is tested three ways.** `guests/consistency` is a `no_std` library the
+  host calls directly, plus a thin guest `main`. `crates/emulator/tests/consistency.rs`
   runs one corpus on the host, under QEMU (`#[ignore]`d; CI runs it) and on the emulator,
   and holds fd 1, the exit status and a panic's message and line equal across all three.
   Rust itself lets some values differ per target: `usize` width in `core::hash` and

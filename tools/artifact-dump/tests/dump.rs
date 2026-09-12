@@ -22,7 +22,7 @@ const FIXTURES: [&str; 11] = [
     "atomics",
     "opcodes",
     "heap",
-    "portability",
+    "consistency",
     "minimal",
 ];
 

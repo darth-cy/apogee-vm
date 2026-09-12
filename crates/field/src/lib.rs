@@ -5,7 +5,7 @@
 //! never escapes memory: [`Fr::to_bytes`] and [`Fr::from_bytes`] are the only
 //! wire path, and they are canonical (non-Montgomery) 32-byte little-endian.
 //!
-//! Everything is portable stable Rust with `u128` intermediates — no carry
+//! Everything is plain stable Rust with `u128` intermediates — no carry
 //! intrinsics, no assembly, no nightly — so this crate compiles unchanged for
 //! `riscv32imac-unknown-none-elf`.
 

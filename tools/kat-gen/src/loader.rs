@@ -53,9 +53,9 @@ pub const ELF_FIXTURES: [(&str, &str); 10] = [
          exercise",
     ),
     (
-        "portability",
+        "consistency",
         "ordinary Rust run on the host, under QEMU and on the emulator: the \
-         three-way portability suite's guest, and its heap-ceiling probes",
+         three-way consistency suite's guest, and its heap-ceiling probes",
     ),
 ];
 

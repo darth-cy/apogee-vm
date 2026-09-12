@@ -175,7 +175,7 @@ on, because it is another stage's crate and the owner reverted exactly that chan
 already.
 
 **Peak polynomial memory is computed, not measured by an allocator.** Reading peak RSS
-portably needs either a dependency or `unsafe`, and both are banned, so
+on every platform needs either a dependency or `unsafe`, and both are banned, so
 `tools/bench/src/zerocheck_prove.rs::peak_poly_bytes` accounts for the tables the algorithm holds:
 `eq` is a full `Fr` table for the whole proof; `bind` truncates a column's length
 without releasing its capacity, so from its first bind each column costs a full `Fr`

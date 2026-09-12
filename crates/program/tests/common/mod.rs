@@ -27,7 +27,7 @@ pub const GUESTS: [&str; 10] = [
     "atomics",
     "opcodes",
     "heap",
-    "portability",
+    "consistency",
 ];
 
 /// This crate's committed fixtures and their digests. Refresh with
@@ -89,7 +89,7 @@ pub fn instructions(image: &ProgramImage) -> Vec<(u32, u32, bool)> {
 }
 
 /// Every family at the smallest menu height. A 2^16 table is cheap enough to
-/// export in full, and every committed guest but `portability` fits in one.
+/// export in full, and every committed guest but `consistency` fits in one.
 pub fn smallest() -> ProgramParams {
     ProgramParams {
         heights: [family::HEIGHT_MENU[0]; family::COUNT as usize],
@@ -101,8 +101,8 @@ pub fn smallest() -> ProgramParams {
 ///
 /// A table's rows are absolute pcs, one per halfword, so a family's height has
 /// to reach past its last instruction — and the heights are per family, which
-/// makes the *smallest* family's the binding one. `guests/portability` is
-/// 1.7 MB of code with an `Arc` in it, so its atomics run up to pc `0x18e8a0`,
+/// makes the *smallest* family's the binding one. `guests/consistency` is
+/// 1.7 MB of code with an `Arc` in it, so its atomics run up to pc `0x18e62a`,
 /// and neither `smallest()` (2^16 rows, pc below `0x20000`) nor the frozen
 /// defaults (2^16 for atomics) can hold them; a uniform 2^20 can. The S12 handoff records that as
 /// an open question about the defaults; a test that is not *about* the heights

@@ -37,8 +37,8 @@ pub fn io(input: &[u8]) -> GuestIo {
     }
 }
 
-/// Every family at the smallest height: every committed guest's code fits,
-/// and a table costs 2^16 rows rather than 2^22.
+/// Every family at the smallest height: every committed guest's code fits
+/// but `consistency`'s, and a table costs 2^16 rows rather than 2^22.
 pub fn smallest() -> ProgramParams {
     uniform(1 << 16)
 }
@@ -53,7 +53,7 @@ pub fn uniform(height: u32) -> ProgramParams {
 
 /// Decoded tables at the smallest menu height the guest's code fits.
 ///
-/// 2^16 rows for every committed guest but `portability`, whose code is large
+/// 2^16 rows for every committed guest but `consistency`, whose code is large
 /// enough to need a taller table: a table's rows are absolute pcs, one per
 /// halfword, so a family's height has to reach past the last instruction.
 pub fn preprocess(image: &ProgramImage) -> (DecodedTables, VmConfig) {
@@ -104,12 +104,12 @@ pub fn input_of(name: &str) -> Vec<u8> {
         "rvc-dense" => 7u32.to_le_bytes().to_vec(),
         // The hazards workload alone, at scale 0: 25,945 instructions, which is
         // all of a guest this size that an instruction-by-instruction log can
-        // afford. `tests/portability.rs` is where the rest of it runs.
-        "portability" => portability::Input {
+        // afford. `tests/consistency.rs` is where the rest of it runs.
+        "consistency" => consistency::Input {
             seed: 1,
             scale: 0,
             workloads: 1
-                << portability::WORKLOADS
+                << consistency::WORKLOADS
                     .iter()
                     .position(|w| w.name == "hazards")
                     .expect("the hazards workload"),

@@ -271,6 +271,6 @@ to the stack, and no block is ever handed out over a frame in use.
 
 The ceiling was `__stack_top` until S12. With it, an exhausted heap handed out
 blocks over live stack frames, and safe code writing into one rewrote locals and
-return addresses. `crates/emulator/tests/portability.rs` holds each half of the
+return addresses. `crates/emulator/tests/consistency.rs` holds each half of the
 rule. What no allocator check can see is a stack that grows past its reserve
 after the heap has filled below it.
