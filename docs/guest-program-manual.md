@@ -65,7 +65,7 @@ A guest is an ordinary `no_std` binary crate that lives in the `guests/`
 workspace. Three files, one of which already exists.
 
 `hello` below is the guest this manual builds; you are creating it now. The
-repository ships seven, and every command here works on those too with the name
+repository ships ten, and every command here works on those too with the name
 changed. They are worth reading before you write your own, because between them
 they cover most of what a guest can do:
 
@@ -78,6 +78,9 @@ they cover most of what a guest can do:
 | `orderbook` | a uniform-price auction: `Vec`, `BTreeMap`, sorting, and the reference demonstration of hint-then-verify |
 | `vault` | Merkle-gated withdrawals over Poseidon2: `crates/field` and `crates/transcript` running inside the proof, and the deepest call chain in `guests/` |
 | `atomics` | every A-extension instruction as the compiler emits it, from `core::sync::atomic` on one hart; the fixture for the atomics circuit family |
+| `opcodes` | every RV32IMAC instruction in hand-written assembly at its edge cases, which the emulator is compared against `qemu-riscv32` on; fd 0 selects the `ebreak` and misaligned-access modes |
+| `heap` | `Vec` and `Box` churned through the bump allocator, so the heap's traffic is in the trace |
+| `consistency` | ordinary Rust — numerics, collections, text, traits and closures, a codec, hashes, allocation patterns — as a `no_std` library the host calls directly and a thin guest `main`. The consistency suite runs it on the host, under QEMU and on the emulator and holds the three to one answer; §2a is the pattern to copy |
 
 If you are looking for a pattern to copy, `amm` is the one to read for arithmetic
 and framing, `orderbook` for anything that takes prover advice, and `vault` for
@@ -115,14 +118,14 @@ fn main() {
 **`guests/Cargo.toml`** — add the crate to the member list:
 
 ```toml
-members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "hello"]
+members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "consistency", "hello"]
 ```
 
 Four things about that source file are not negotiable:
 
 - **`#![no_std]`** — `riscv32imac-unknown-none-elf` is a bare-metal target and
   has no `std` to link against. That is not only a packaging fact: the parts of
-  `std` that look portable are largely the ones that would reach for host
+  `std` that look harmless are largely the ones that would reach for host
   entropy and host clocks, and those are refused at the ABI. See §3.
 - **`#![no_main]`** — the entry point is crt0's `_start`, not Rust's.
 - **`guest_sdk::entry!(main)`** gives your function the `main` symbol `_start`
@@ -137,6 +140,64 @@ Your guest may use any crate that compiles for `riscv32imac-unknown-none-elf`
 without `std`. `crates/field`, `crates/constants`, `crates/transcript`,
 `crates/poly` and `crates/sumcheck` all do, and CI builds them for the guest
 target on every run precisely so that this stays true.
+
+### 2a. Run your logic on the host too
+
+A guest you can only run inside the VM is a guest you can only debug there. Put
+the program in a `#![no_std]` library and keep `main.rs` to reading fd 0 and
+committing what the library returns. `guests/consistency` is the worked example.
+Its `src/lib.rs` compiles for the host as well as for the guest, because its
+`Cargo.toml` makes `guest-sdk` a dependency of the guest target alone:
+
+```toml
+[target.'cfg(target_arch = "riscv32")'.dependencies]
+guest-sdk.workspace = true
+```
+
+A host test can then call the library directly, and
+`crates/emulator/tests/consistency.rs` does exactly that. It runs one input on
+the host, under `qemu-riscv32` and on the emulator, and compares fd 1, the exit
+status, and a panic's message, line and column. Copy its shape for your own
+program: if the host and the guest disagree, the guest is what the proof will
+be about.
+
+Some things legitimately differ between a 64-bit machine and the guest, so keep
+them out of anything you commit. **Two announce themselves and four do not**,
+and that distinction is the one worth carrying, because a hazard that panics
+costs you a minute and a hazard that quietly commits a different number can
+reach a verifier:
+
+- **`usize` arithmetic overflows at 2^32** — *loud*. Overflow checks are on in
+  both profiles, so a product the host answers `Some` for panics on the guest
+  alone, with a file and a line. Type a quantity that is not an index `u64`.
+- **`as usize` on a wider value keeps the low 32 bits** — *silent*, and the
+  worst of the set. Nothing panics and nothing warns; the value is simply wrong
+  from there on. Write `usize::try_from(x)?` and treat a bare `as usize` on
+  anything wider than a pointer as a defect.
+- **`size_of` of anything holding a pointer or a `usize` differs** — *silent*.
+  `Vec<u8>` is 12 bytes here and 24 on a 64-bit host; `&[u8]` is 8 and 16;
+  `Box<u8>` is 4 and 8.
+- **`core::hash` of anything holding a slice, a `String` or a `usize` differs**
+  — *silent*, because `#[derive(Hash)]` writes lengths with `write_usize`, four
+  bytes here and eight there. Use `core::hash` for lookup, never for output. A
+  fingerprint that reaches fd 1 should come from a real hash over bytes you
+  chose, which the consistency suite holds identical on all three executors.
+- **NaN bits** — *silent*, and unreachable unless you use floats. Which NaN an
+  operation produces is the platform's business: `0x7ff8…` from RISC-V's soft
+  float and from AArch64, `0xfff8…` from x86-64. Only the raw bits differ —
+  `NaN != NaN` and `{}` formatting agree everywhere — so it takes `to_bits()`
+  on a NaN reaching fd 1 to bite you. The target has no FPU, so every `f64`
+  operation is a software routine: a guest using floats pays for them in
+  instruction count long before the NaN bits ever matter.
+- **The heap never frees**, so the total you allocate over the run is the limit,
+  not the peak (§3) — *loud*, `exit(71)`.
+- **The stack has 8 MiB** reserved at the top of RAM — *silent* if you exceed
+  it, and the one failure the SDK cannot catch for you.
+
+`guests/consistency/src/hazards.rs` emits each of these on purpose, and its
+`PLATFORM_DEPENDENT` table names them. The suite checks that the pointer-width
+ones really do differ on a 64-bit host. §7a is the symptom-first version of this
+list, for when something has already gone wrong.
 
 ---
 
@@ -195,8 +256,55 @@ reaches fd 1, because such a flag would be a committed bit the prover chooses.
 Which path ran is written to fd 2 and nowhere else.
 
 The allocator bumps upward from `__heap_start` and `dealloc` does nothing, so
-`alloc` works but never reclaims. An allocation that would cross `__stack_top`
-exits nonzero rather than returning null.
+`alloc` works but never reclaims. What runs a guest out of heap is therefore
+the total it allocates over the run, not its peak. The top 8 MiB of RAM
+(`constants::guest_memory::STACK_RESERVE`) belong to the stack. An allocation
+that would reach into them, or above the live stack pointer, exits 71 rather
+than returning null.
+
+**Write for that, because it is the one platform property with no analogue on
+your machine.** The budget is just under 248 MiB for a whole run — the RAM
+window less the stack's reserve, less your code and static data — which is
+generous until something allocates inside a loop, where a host's live footprint
+stays flat and the guest's grows without bound:
+
+```rust
+use core::fmt::Write;   // `String` implements it, but it has to be in scope
+
+// Costs ~32 bytes per row, forever. Two million rows is 64 MiB gone.
+for row in rows {
+    let key = format!("{}:{}", row.venue, row.symbol);
+    out.push(lookup(&key));
+}
+
+// Costs one allocation in total.
+let mut key = String::new();
+for row in rows {
+    key.clear();
+    write!(key, "{}:{}", row.venue, row.symbol).expect("writing to a String");
+    out.push(lookup(&key));
+}
+```
+
+The habits that matter, in the order they pay: hoist a buffer out of the loop
+and `clear()` it rather than building a new one; `Vec::with_capacity` when the
+size is known, so growth does not allocate a fresh buffer per doubling and
+abandon the old one; borrow `&str` and `&[T]` where you would have cloned; and
+prefer writing into a caller's buffer over returning an owned value from a
+function called in a loop. None of this is exotic — it is what a
+performance-minded Rust author does anyway — but here it is the difference
+between a guest that finishes and one that exits 71.
+
+This is not a quirk of this VM. A bump allocator that never frees is what every
+zkVM uses, for the same reason: the program runs once, commits its output, and
+its whole address space is discarded, so a free list would be cost paid for
+nothing.
+
+Before S12 the ceiling was `__stack_top` itself, and running out of heap handed
+out memory on top of live stack frames. `crates/emulator/tests/consistency.rs`
+pins the fix. A stack deeper than 8 MiB can still run down into heap blocks
+without any check noticing, but recursion that deep would overflow a native
+main thread as well.
 
 ---
 
@@ -310,7 +418,7 @@ digests. Then five sections.
 
 ```
 entry             0x00010000  _start
-RAM window        0x00010000 .. 0x10000000    constants::guest_memory
+RAM window        0x00010000 .. 0x80000000    constants::guest_memory
 slot_base         0x00010000
 slot span         0x00010000 .. 0x00011418    2572 halfwords
 ```
@@ -327,7 +435,7 @@ nothing, and `slot_at` answers `None`.
   #  vaddr       end          mem_len      file bytes    zero fill  instructions
   0  0x00010000  0x00011418   0x00001418          5144            0          1897
   1  0x00012000  0x00012a2c   0x00000a2c          2604            0             0
-  2  0x00013000  0x10000000   0x0ffed000             0    268357632             0
+  2  0x00013000  0x80000000   0x7ffed000             0   2147405824             0
 ```
 
 Three segments is what the frozen `link.ld` produces for every guest in this
@@ -386,7 +494,7 @@ The last line is three linker symbols on one address, which is what an empty
 
 ```
 address     len  in memory  expanded  symbol
-0x00010000    4   0fff0117  0fff0117  _start
+0x00010000    4   7fff0117  7fff0117  _start
 0x00010004    4   00010113  00010113
 ...
 0x0001006a    2       1141  ff010113  _ZN5hello4main17h29eb51b0cbda4953E
@@ -526,7 +634,7 @@ the first and unrunnable under the second — S10 shipped exactly that, twice.
 The two rules are properties of `link.ld`, which every guest links against
 unmodified, so a guest that changes only its own source has the segment shape
 the committed guests have. `crates/loader/tests/layout.rs` checks those over all
-seven committed guests on every CI run, and its ignored case relinks them from
+ten committed guests on every CI run, and its ignored case relinks them from
 source and re-checks — which is what to run after touching the script:
 
 ```
@@ -544,7 +652,7 @@ Neither reads *your* ELF, so to check yours directly, look at its headers:
   Type           Offset   VirtAddr   PhysAddr   FileSiz MemSiz  Flg Align
   LOAD           0x001000 0x00010000 0x00010000 0x0173e 0x0173e R E 0x1000
   LOAD           0x003000 0x00012000 0x00012000 0x00ccc 0x00ccc R   0x1000
-  LOAD           0x004000 0x00013000 0x00013000 0x00000 0xffed000 RW  0x1000
+  LOAD           0x004000 0x00013000 0x00013000 0x00000 0x7ffed000 RW  0x1000
 ```
 
 Three things to see there, and each was a real failure:
@@ -556,11 +664,13 @@ Three things to see there, and each was a real failure:
    win for the whole page — an unaligned `.rodata` strips execute from the tail
    of `.text`;
 3. the segment with `MemSiz` above `FileSiz` is the one marked `RW`, and it
-   reaches `0x10000000`. Zero fill on a read-only page is refused outright, and
+   reaches `0x80000000`. Zero fill on a read-only page is refused outright, and
    the span up to `__stack_top` is the heap and the stack: undeclared, the
    first push dies on a signal before `main` runs.
 
-**Execution.** `qemu-riscv32` is the only executor before S12. It is user-mode
+**Execution.** `qemu-riscv32` was the only executor before S12; since S12
+`crates/emulator` runs a guest too (`emulator::run`), and its trace is held to QEMU's
+instruction by instruction. It is user-mode
 emulation — it translates the guest's Linux syscalls into the host's — so it
 builds for Linux hosts only and there is no native macOS build of it. The tests
 stay `#[ignore]`d so a machine with no emulator cannot report silent coverage,
@@ -605,6 +715,89 @@ works unmodified.
 
 ---
 
+## 7a. When it runs but does the wrong thing
+
+§9 covers an ELF the loader refuses, which is always a malformed or mis-targeted
+build. This section is the other failure: a guest that loads, runs, and is
+wrong. **Start by running the same input through the library on the host (§2a)
+and diffing fd 1.** Which side is wrong tells you which half of this table to
+read.
+
+Every exit code the SDK produces, none of which your program chooses:
+
+| Exit | Constant | What happened |
+| --- | --- | --- |
+| 0 | — | `main` returned, or you called `exit(0)` |
+| 70 | `EXIT_IO_ERROR` | an ecall the ABI guarantees failed. Under the zkVM this is a bug; by hand under QEMU it is usually fd 3 not being open (§3 rule 5) |
+| 71 | `EXIT_OUT_OF_MEMORY` | the heap reached its ceiling. See below |
+| 72 | `EXIT_PRECOMPILE_ERROR` | a precompile failed for a reason other than "not implemented". `poseidon2_permute` returning `false` is *not* this — that is the software-fallback path (§3 rule 4) |
+| 101 | `EXIT_PANIC` | a Rust panic. The message, file, line and column go to fd 2 |
+
+### It exits 71
+
+The heap never frees, so the limit is **everything the run ever allocated added
+up** — just under 248 MiB, the RAM window less the stack's 8 MiB reserve and
+your image — not its high-water mark. A host profiler will show a flat few
+hundred kilobytes and tell you nothing.
+
+Look for allocation inside a loop: `format!`, `to_string()`, `to_owned()`,
+`clone()`, `collect()` into a temporary, or a `Vec`/`String` built and dropped
+per iteration. §3 has the rewrite. Multiply the per-iteration allocation by the
+iteration count; if that product is in the hundreds of megabytes, that is your
+answer. Growth counts too — a `Vec` pushed to without `with_capacity` abandons
+each buffer as it doubles.
+
+This is a clean stop, not corruption. Before S12 it was corruption: the
+allocator would hand out blocks sitting on top of live stack frames, and safe
+code writing into a `Vec` would rewrite its caller's locals and return address.
+That is fixed and pinned by two probes in `guests/consistency`.
+
+### It commits different bytes than the host
+
+In order of how often it is actually the cause:
+
+1. **`as usize` on a `u64`.** Keeps the low 32 bits here, all 64 on the host, in
+   silence. Grep your guest for `as usize` and replace each with
+   `usize::try_from(x)?`. This is the single highest-yield check on this page.
+2. **A `core::hash` fingerprint reached fd 1.** `#[derive(Hash)]` writes slice
+   and `String` lengths as `usize`, so every such hash differs by target. Move
+   to a real hash over bytes you control.
+3. **`size_of` of something holding a pointer** fed an offset, a capacity or a
+   serialized length.
+4. **Floats.** Only the bits of a NaN differ, so this needs `to_bits()` or a
+   transmute on a NaN path. Rare, and a sign you should be using integers.
+
+§2a is the full list with the reasoning; `hazards::PLATFORM_DEPENDENT` is the
+machine-readable one.
+
+### It panics on the guest but not on the host
+
+Almost always `usize` arithmetic crossing 2^32, which is in range on a 64-bit
+host and out of it here. Overflow checks are on in both profiles deliberately,
+so this is the platform telling you loudly what `as usize` would have told you
+never. Widen the variable to `u64` if it is a quantity; if it is genuinely an
+index, the guest is right and the host was hiding a bug.
+
+### It behaves impossibly — values change under it, or it crashes in `core`
+
+Suspect **stack depth**. You get 8 MiB, the same as a native main thread, but
+with no guard page: past its reserve the stack grows down into heap blocks and
+nothing notices. Unbounded recursion on attacker-controlled nesting is the usual
+cause, and a large local array (`let buf = [0u8; 4_000_000];`) is the other.
+Carry an explicit depth counter and return an error past a limit — which is what
+you would do in a server for the same reason.
+
+This is the one hazard on this page the SDK cannot catch for you, and it is
+recorded as an open item in `docs/handoff/S12-emulator.md`.
+
+### It never finishes
+
+An infinite loop is an infinite loop. The emulator's 38-bit clock stops it
+eventually, but not within a useful wall-clock time, so a hung run reads as a
+hung test rather than a failure. Bound your loops.
+
+---
+
 ## 8. Using the artifact downstream
 
 ```rust
@@ -642,6 +835,9 @@ uses `to_slice`. Reading back needs nothing special.
 ---
 
 ## 9. When the loader refuses
+
+This is export-time failure, and every case is a malformed or mis-targeted ELF.
+For a guest that loads and runs but misbehaves, §7a is the other table.
 
 The tool writes nothing and prints the refusal. Every variant of
 `loader::LoaderError` names one class of problem:

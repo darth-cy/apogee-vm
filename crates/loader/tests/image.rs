@@ -251,7 +251,7 @@ fn segments_must_lie_inside_the_guest_ram_window() {
 
     // p_memsz is the sixth word of the one program header, which starts at 52.
     let memsz_at = 52 + 20;
-    for memsz in [0x7fff_ffffu32, 0xffff_ffff, 0x1000_0000] {
+    for memsz in [0x7fff_ffffu32, 0xffff_ffff, 0x8000_0000] {
         let mut bad = good.clone();
         bad[memsz_at..memsz_at + 4].copy_from_slice(&memsz.to_le_bytes());
         assert!(

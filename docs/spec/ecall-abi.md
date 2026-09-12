@@ -29,7 +29,8 @@ which is the "valid proof of a different computation" failure this whole documen
 to prevent.
 
 The standard calls keep their Linux numbers, which is what lets `qemu-riscv32`
-run a guest **unmodified** — and QEMU is the only executor this stage has, so
+run a guest **unmodified** — QEMU was the only executor S10 had, and since S12 it is
+the oracle the emulator is compared against instruction by instruction, so
 the choice is load-bearing rather than decorative.
 
 Precompile arguments travel as **pointers** in `a0`–`a5`, because their operands
@@ -102,6 +103,28 @@ hint against something else, has made its proof meaningless: the prover picks
 the hint, so it picks the output. A hint is a shortcut to a value the guest then
 verifies, and never an input in its own right.
 
+Added at S12, where the first zkVM executor pinned what the table above left open:
+
+* **Every other descriptor answers `-EBADF`.** `read` on anything but fd 0 and
+  fd 3, and `write` on anything but fd 1 and fd 2, move no bytes and return
+  `-EBADF` — Linux's answer, and so `qemu-riscv32`'s, which keeps one source tree
+  meaning the same thing under both executors.
+* **`read` returns what the stream has.** It delivers `min(count, bytes left)` and
+  returns that count, so a `read` at the end of a stream returns 0. `write`
+  delivers all `count` bytes and returns `count`.
+* **A buffer outside the RAM window is a fatal guest error**, exactly as a load or
+  store there is: the bytes a call would move must lie in `[RAM_ORIGIN,
+  RAM_ORIGIN + RAM_LENGTH)` (section 7). Linux would answer `-EFAULT`; this VM has
+  no memory outside the window for a call to fault on, so there is nothing to
+  report back to.
+* **The recorded fd 0 stream is the bytes the guest consumed**, in order — what
+  `read` on fd 0 actually delivered, not everything the prover offered. Those are
+  the bytes the execution trace witnesses, so they are the public input the digest
+  in section 6 binds.
+
+How a call's register reads and its buffer traffic appear in the execution trace
+is `docs/spec/execution-trace.md`, not this document.
+
 ## 5. Every other number
 
 **Unimplemented numbers return `-ENOSYS`**, which is what `qemu-riscv32` does for them
@@ -110,6 +133,7 @@ today and what the S12 emulator will do.
 | Constant | Value | What |
 | --- | --- | --- |
 | `ENOSYS` | 38 | returned negated in `a0` for a number this VM does not implement |
+| `EBADF` | 9 | returned negated in `a0` for `read` or `write` on a descriptor section 4 does not give that call |
 
 That includes, deliberately, every syscall that would return host data:
 `getrandom`, `clock_gettime`, `gettimeofday`, and anything Rust's `HashMap`
@@ -171,7 +195,7 @@ permutation and never links `crates/transcript`.
 `crates/guest-sdk/link.ld`, frozen with the symbol names:
 
 ```ld
-MEMORY { RAM (rwx) : ORIGIN = 0x00010000, LENGTH = 0x0FFF0000 }
+MEMORY { RAM (rwx) : ORIGIN = 0x00010000, LENGTH = 0x7FFF0000 }
 ```
 
 Those two numbers also live in `constants::guest_memory` as `RAM_ORIGIN` and
@@ -186,7 +210,7 @@ to be there is not one this VM can run — and enforcing it is also what stops a
 | `__bss_start` | first byte of `.bss`; crt0 zeroes from here |
 | `__bss_end` | one past the last byte of `.bss` |
 | `__heap_start` | first byte above `.bss`, 16-aligned; the bump allocator's floor |
-| `__stack_top` | `ORIGIN(RAM) + LENGTH(RAM)`; the initial `sp`, and the allocator's ceiling |
+| `__stack_top` | `ORIGIN(RAM) + LENGTH(RAM)`; the initial `sp`. The allocator's ceiling sits `STACK_RESERVE` below it (§8) |
 
 `_start` lives in its own `.text._start` input section so the linker places it
 at `ORIGIN(RAM)`. It sets `sp`, zeroes `.bss` byte by byte, calls `main`, and
@@ -214,7 +238,7 @@ address space exists at all. Two rules follow, and both are load-bearing:
   first stack write dies on a signal before `main` runs. The reservation itself
   must cost nothing on disk: `p_filesz` may cover an initialised `.data` — lld
   folds one into this same segment — but must stop at or before `.bss`, or the
-  ELF carries 256 MiB of zeroes.
+  ELF carries the whole 2 GiB reservation as zeroes.
 - **No two segments share a page.** Each `PT_LOAD` is mapped independently, so a
   shared page takes the second mapping's permissions for all of it: an unaligned
   `.rodata` strips execute from the tail of `.text`, and zero fill landing on a
@@ -240,5 +264,13 @@ pub fn poseidon2_permute(state: &mut [u8; 96]) -> bool;   // false on -ENOSYS
 `read_input` and `hint` fill the buffer or stop at the end of the stream, and
 return how many bytes they got; a caller that needs an exact length must check.
 `commit` and `log` write all of their bytes. The allocator bumps upward from
-`__heap_start`, `dealloc` does nothing, and an allocation that would cross
-`__stack_top` exits nonzero rather than returning null.
+`__heap_start` and `dealloc` does nothing. An allocation that would end above
+`__stack_top - STACK_RESERVE` (`constants::guest_memory`, 8 MiB), or above the
+live `sp`, exits 71 rather than returning null. The top of RAM therefore belongs
+to the stack, and no block is ever handed out over a frame in use.
+
+The ceiling was `__stack_top` until S12. With it, an exhausted heap handed out
+blocks over live stack frames, and safe code writing into one rewrote locals and
+return addresses. `crates/emulator/tests/consistency.rs` holds each half of the
+rule. What no allocator check can see is a stack that grows past its reserve
+after the heap has filled below it.

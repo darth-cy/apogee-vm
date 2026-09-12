@@ -23,7 +23,7 @@ fn table_bytes(backing: &poly::PolyBacking) -> usize {
 
 /// Peak live polynomial bytes inside `prove_zerocheck`, computed from the
 /// tables the algorithm holds. It is not an allocator measurement: reading peak
-/// RSS portably needs either a dependency or `unsafe`, and both are banned.
+/// RSS on every platform needs either a dependency or `unsafe`, and both are banned.
 ///
 /// The model: `eq` is a full `Fr` table for the whole proof; `bind` truncates a
 /// column's length without releasing its capacity, so from its first bind each

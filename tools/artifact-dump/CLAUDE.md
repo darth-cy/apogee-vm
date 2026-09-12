@@ -75,8 +75,8 @@ that list from the manifest rather than carrying its own, so a guest that exists
 is a guest whose walkthrough is checked. It also fails when a guest has no
 committed ELF fixture, when the manual stops naming one, and when the `members`
 line section 2 prints stops being the manifest's — that last one is the line a
-reader copies into `guests/Cargo.toml`, so a stale copy of it deletes guests. Twelve guest builds
-cost about six seconds, which is why it is not `#[ignore]`d: a walkthrough
+reader copies into `guests/Cargo.toml`, so a stale copy of it deletes guests. Twenty guest builds
+— ten guests, each built twice — cost about fifteen seconds, which is why it is not `#[ignore]`d: a walkthrough
 nothing runs is a walkthrough that has already stopped working and not been
 told.
 

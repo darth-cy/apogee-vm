@@ -26,46 +26,58 @@ use test_support::{sha256, to_hex};
 /// The synthetic ELFs are not listed one by one: `synthetic_elfs.txt` carries
 /// their digests and is itself pinned here, so the chain is one constant long
 /// either way and the index stays readable.
-pub const PINS: [(&str, &str); 11] = [
+pub const PINS: [(&str, &str); 14] = [
     (
         "fib.elf",
-        "1479cb1d3e7a3bb66fc58560612419bcedaefaacaee748752e16c05d17ba91ac",
+        "e163a65249fff123742588a3bcb44e09b72f89bbbed80fb406baf3c0f9b7622d",
     ),
     (
         "echo.elf",
-        "3fcae63deedba71f61f3e1a4be7b083031b4255ee43b4b23b80c32aa9900d25d",
+        "4aef4d207001345b192ef52f38a07ed5250677ccdba80d6e64b64b516abe11a5",
     ),
     (
         "rvc-dense.elf",
-        "d27edea9bf71b264746504e147d92fa5454af6cd1f9d70cc79db49cf8fa85d06",
+        "5963ed501d97ac52d2bd58b0e56a9f463d8c3e460d6ad02c4e71d84bf21f214d",
     ),
     (
         "amm.elf",
-        "bf639449c7e54327fc6e4ccfabfb3f9823e392302bc84b148506c546f4fc0309",
+        "c97742454c2728c740a7b31c167343faa55f0f44d2323cd4c3ef70ecb3ea0955",
     ),
     (
         "orderbook.elf",
-        "b313502281e27a1f6f48b700224caeb8bf59203371b1d133dc7000c3a8fe5824",
+        "db8e450603d1b579b60d81a7f21edaaf6470dd29b24723b541467988310a0397",
     ),
     (
         "vault.elf",
-        "375051372a408b09132e350a1ac7a300a22e1f44386d188b56bb48f159e97930",
+        "c9a1e427470abdabe9eaab503d5c102d4c67012ca2bab3d9657f64899153f084",
     ),
     (
         "atomics.elf",
-        "c6789deb5fbeb9570ab8b058a66e1ce73e90a9579498e05aff686ffa7f63a20f",
+        "5761a4236b624cef6da5237116fc97d22a39c64b702f1018b88ffbe0c346c52f",
+    ),
+    (
+        "opcodes.elf",
+        "fc616d1ba21501af4781d16a91c4559bac1aecfa2e41211bad2042d665c0c9e6",
+    ),
+    (
+        "heap.elf",
+        "10c63b99b12aebd74eb721a6c002010883ae695dfab9ea5b8878febdfb1ba167",
+    ),
+    (
+        "consistency.elf",
+        "26c2d8d85c3ee8a730f21e89bd99106a45c9889201ee59740f30fdd63dc7f878",
     ),
     (
         "fib.objdump.txt",
-        "872301dfb860aa44597b94a9f28b2d725c9275b59a6cfe9b12bd9356331710c3",
+        "edb521661d782689e9e0ebc4ccf972838de6d93cc1ef42915ec830997a630489",
     ),
     (
         "rvc-dense.objdump.txt",
-        "6f9f51ee9407354c705ca4a5cbf8d4e169edd11cc51d6b4e98cfcadf9aee9eda",
+        "f0ba5063259581040592218f52059d935c5b1eb4c14a6b32c25f28c028f6567e",
     ),
     (
         "amm.objdump.txt",
-        "e46dfefab08139e2037637dfc7e2a4a8102bafcb144c3180d2365921c5e83aba",
+        "e282bbc7c1f8466b5f89d60ea761b5e844f62f98a5ba323e110a488f6b3bc38e",
     ),
     (
         "rvc-dense.nm.txt",

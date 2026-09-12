@@ -1,0 +1,21 @@
+[package]
+name = "emulator"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+constants.workspace = true
+isa.workspace = true
+loader.workspace = true
+program.workspace = true
+trace.workspace = true
+
+[dev-dependencies]
+field.workspace = true
+transcript.workspace = true
+test-support.workspace = true
+# `guests/consistency`'s library half: the program the three-way consistency
+# suite calls on the host, from the same source it builds the guest from. A
+# path into the guest workspace, and a test dependency only.
+consistency = { path = "../../guests/consistency" }

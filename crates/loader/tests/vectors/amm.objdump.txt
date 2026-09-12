@@ -6,7 +6,7 @@
 # ProgramImage at every address; the third is for the reader.
 #
 # 8228 instructions.
-00010000 0fff0117 auipc sp, 65520
+00010000 7fff0117 auipc sp, 524272
 00010004 00010113 addi sp, sp, 0
 00010008 00008297 auipc t0, 8
 0001000c ff828293 addi t0, t0, -8

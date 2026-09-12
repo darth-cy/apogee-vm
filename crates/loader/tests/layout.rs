@@ -175,7 +175,7 @@ fn writable_at(loads: &[Load], addr: u64, what: &str) -> Result<(), String> {
 // The guests
 // ---------------------------------------------------------------------------
 
-const GUESTS: [&str; 7] = [
+const GUESTS: [&str; 10] = [
     "fib",
     "echo",
     "rvc-dense",
@@ -183,6 +183,9 @@ const GUESTS: [&str; 7] = [
     "orderbook",
     "vault",
     "atomics",
+    "opcodes",
+    "heap",
+    "consistency",
 ];
 
 /// Every rule above, over one image. The single place the rules are composed,
@@ -292,7 +295,7 @@ fn the_heap_and_the_stack_share_one_writable_segment() {
         // to be zero -- a guest with an initialised mutable static has a
         // `.data` section, and lld folds it into this same writable segment --
         // but the file-backed part must stop at or before `.bss`, so that the
-        // 256 MiB of heap and stack above it is NOBITS. An ELF that carried
+        // 2 GiB of heap and stack above it is NOBITS. An ELF that carried
         // even one zero byte of the reservation on disk would carry all of it.
         let bss_start = *symbols(&elf).get("__bss_start").expect("__bss_start") as u64;
         assert!(
@@ -313,7 +316,7 @@ fn the_heap_and_the_stack_share_one_writable_segment() {
 #[test]
 fn the_layout_that_failed_in_ci_is_rejected() {
     // fib, as first shipped: .text and .rodata, and nothing writable at all.
-    // __stack_top was 0x10000000 and __heap_start 0x12410; neither existed.
+    // __stack_top was the top of RAM and __heap_start 0x12410; neither existed.
     let fib_as_shipped = [
         Load {
             offset: 0x1000,

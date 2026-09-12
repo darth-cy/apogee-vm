@@ -859,7 +859,8 @@ pub mod extra_mask {
     }
 }
 
-/// The guest memory map, frozen at S10.
+/// The guest memory map, frozen at S10 and re-frozen after S12 on the
+/// repository owner's instruction. These are the frozen values.
 ///
 /// The one region a guest has. `crates/guest-sdk/link.ld` states the same two
 /// numbers for the linker, `docs/spec/ecall-abi.md` section 7 states them for a
@@ -875,8 +876,18 @@ pub mod guest_memory {
     /// First addressable byte, and where `_start` is placed.
     pub const RAM_ORIGIN: u32 = 0x0001_0000;
 
-    /// Length of the region. `RAM_ORIGIN + RAM_LENGTH` is the initial `sp`.
-    pub const RAM_LENGTH: u32 = 0x0FFF_0000;
+    /// Length of the region. `RAM_ORIGIN + RAM_LENGTH` is the initial `sp`,
+    /// and lands on `0x8000_0000` — a window of just under 2 GiB.
+    pub const RAM_LENGTH: u32 = 0x7FFF_0000;
+
+    /// The top of RAM the stack keeps for itself, added at S12. guest-sdk's
+    /// allocator never hands out a block reaching into the last
+    /// `STACK_RESERVE` bytes below `RAM_ORIGIN + RAM_LENGTH`, nor one above
+    /// the live `sp`. 8 MiB: a native main thread's default stack on Linux and
+    /// macOS, so a program whose recursion fits on the host fits here. Not
+    /// part of the linker's map — `link.ld` has no symbol for it — but a
+    /// number the SDK, its documents and its probe guest must agree on.
+    pub const STACK_RESERVE: u32 = 0x0080_0000;
 }
 
 /// The guest ecall ABI: syscall numbers, range boundaries and file
@@ -951,4 +962,43 @@ pub mod ecall {
 
     /// Linux `ENOSYS`. An unimplemented number returns `-ENOSYS` in `a0`.
     pub const ENOSYS: u32 = 38;
+
+    /// Linux `EBADF`. `read` on a descriptor other than [`FD_PUBLIC_INPUT`]
+    /// and [`FD_HINT`], and `write` on one other than [`FD_PUBLIC_OUTPUT`] and
+    /// [`FD_STDERR`], return `-EBADF` in `a0` — Linux's answer, and so
+    /// `qemu-riscv32`'s. Added at S12.
+    pub const EBADF: u32 = 9;
+}
+
+/// The memory argument's address spaces, frozen at S12.
+///
+/// A memory query names one of these, and the tag is the `AS` term of the
+/// compressed tuple `gamma_M + AS + alpha_addr*ADDR + ...`. The tags are
+/// nonzero on purpose: `(REG, x0, ts 0, value 0)` is a real initial tuple, and
+/// with `REG = 0` it would be the all-zero tuple — the same reason the decoded
+/// tables pad with `MINUS_ONE` rather than 0. Append-only.
+pub mod address_space {
+    /// The 32 registers. A query's address is the register index, `0..32`.
+    pub const REG: u8 = 1;
+    /// Guest RAM, word-granular. A query's address is the byte address of the
+    /// 4-aligned word, so always a multiple of 4.
+    pub const RAM: u8 = 2;
+    /// The program counter: one address, `0`. Every cycle reads `pc` and
+    /// writes `next_pc` here.
+    pub const PC: u8 = 3;
+}
+
+/// The memory argument's clock, frozen at S12 from the master's memory
+/// invariant.
+///
+/// Cycle `c` occupies timestamps `TS_STEP * c + delta` for the four in-cycle
+/// slots `delta` in `0..TS_STEP`. Timestamp 0 is the initial write of every
+/// address, so the first executed cycle is **cycle 1**: a cycle-0 pc query
+/// would write at timestamp 0 and could not strictly follow the initial write
+/// it reads. Every timestamp is below `2^TS_BITS`.
+pub mod memory {
+    /// Timestamps per cycle, one per in-cycle slot.
+    pub const TS_STEP: u64 = 4;
+    /// The width of a timestamp, in bits.
+    pub const TS_BITS: u32 = 38;
 }

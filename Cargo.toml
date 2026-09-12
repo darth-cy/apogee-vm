@@ -12,6 +12,8 @@ members = [
     "crates/loader",
     "crates/isa",
     "crates/program",
+    "crates/trace",
+    "crates/emulator",
     "tools/kat-gen",
     "tools/bench",
     "tools/artifact-dump",
@@ -39,6 +41,8 @@ pcs = { path = "crates/pcs" }
 loader = { path = "crates/loader" }
 isa = { path = "crates/isa" }
 program = { path = "crates/program" }
+trace = { path = "crates/trace" }
+emulator = { path = "crates/emulator" }
 
 # Test-only, and a dev-dependency everywhere it appears: SHA-256 for pinning
 # committed fixtures, and the hex codec those files are written in.

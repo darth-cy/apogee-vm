@@ -250,6 +250,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "consistency"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "field",
+ "guest-sdk",
+ "transcript",
+]
+
+[[package]]
 name = "constants"
 version = "0.1.0"
 
@@ -353,6 +363,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
 
 [[package]]
+name = "emulator"
+version = "0.1.0"
+dependencies = [
+ "consistency",
+ "constants",
+ "field",
+ "isa",
+ "loader",
+ "program",
+ "test-support",
+ "trace",
+ "transcript",
+]
+
+[[package]]
 name = "enum-ordinalize"
 version = "4.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -434,6 +459,13 @@ checksum = "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
 dependencies = [
  "typenum",
  "version_check",
+]
+
+[[package]]
+name = "guest-sdk"
+version = "0.1.0"
+dependencies = [
+ "constants",
 ]
 
 [[package]]
@@ -1007,6 +1039,17 @@ name = "tinyvec_macros"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
+
+[[package]]
+name = "trace"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "loader",
+ "postcard",
+ "program",
+ "serde",
+]
 
 [[package]]
 name = "transcript"

@@ -68,7 +68,7 @@ pub fn io_digest(public_input: &[u8], public_output: &[u8]) -> Fr;
 // crates/constants/src/lib.rs   (additions; still zero logic in src/, #![no_std])
 pub mod guest_memory {
     pub const RAM_ORIGIN: u32 = 0x0001_0000;
-    pub const RAM_LENGTH: u32 = 0x0FFF_0000;
+    pub const RAM_LENGTH: u32 = 0x7FFF_0000;
 }
 pub mod ecall {
     pub const READ: u32 = 63;
@@ -113,7 +113,7 @@ The frozen linker symbols are `__bss_start`, `__bss_end`, `__heap_start` and
    be an instruction, and `.bss` — which this memory map always puts above the code —
    would otherwise cost four bytes of table per byte of zeroes.
 4. **The guest memory map**, `constants::guest_memory`: RAM is
-   `[0x0001_0000, 0x1000_0000)`. Every `PT_LOAD` must lie inside it. The same two numbers
+   `[0x0001_0000, 0x8000_0000)`. Every `PT_LOAD` must lie inside it. The same two numbers
    appear in `crates/guest-sdk/link.ld` and in `docs/spec/ecall-abi.md` §7, and a test
    checks all three against each other.
 5. **The ecall ABI**, per `docs/spec/ecall-abi.md`: numbers, ranges and file descriptors,
@@ -358,7 +358,7 @@ script satisfied the first reader and not the second, twice over:
 
 1. **The stack and the heap were never declared.** `__stack_top` was `ORIGIN + LENGTH`
    and `__heap_start` sat just above `.bss`, but the highest address any `PT_LOAD` covered
-   was the end of `.rodata` — `0x1240C` in fib, against a stack at `0x10000000`. Under
+   was the end of `.rodata` — `0x1240C` in fib, against a stack at the top of RAM. Under
    QEMU both are unmapped: crt0 set `sp`, called `main`, and `main`'s prologue store
    killed the process on a signal before a single guest instruction ran. fib, the panic
    case and rvc-dense all died this way, with exit status `None` and an empty fd 2 — which
@@ -593,7 +593,7 @@ host-loadability, round-trip and listing-fidelity coverage on every run for no b
   requires the file-backed bytes to stop at or before `__bss_start`. A guest with an
   initialised mutable static has a `.data` section, lld folds it into the same `PT_LOAD` as
   `.bss`, and the old rule refused that outright while the property it meant to state — that
-  the 256 MiB heap-and-stack reservation costs nothing on disk — still holds. None of the
+  the 2 GiB heap-and-stack reservation costs nothing on disk — still holds. None of the
   six committed guests has a non-empty `.data`; the rule was wrong rather than the guests.
   `docs/spec/ecall-abi.md` §7.1 says the same thing now.
 

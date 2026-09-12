@@ -27,7 +27,7 @@
 use core::alloc::{GlobalAlloc, Layout};
 use core::arch::global_asm;
 
-use constants::ecall;
+use constants::{ecall, guest_memory};
 
 // ---------------------------------------------------------------------------
 // crt0
@@ -265,7 +265,7 @@ pub fn exit(code: i32) -> ! {
 /// Status used for an executor-level I/O failure.
 const EXIT_IO_ERROR: i32 = 70;
 
-/// Status used when the heap would cross `__stack_top`.
+/// Status used when an allocation would reach the stack: see [`BumpAllocator`].
 const EXIT_OUT_OF_MEMORY: i32 = 71;
 
 /// Status used when a precompile answers something other than success or
@@ -329,13 +329,61 @@ static mut BUMP: usize = 0;
 ///
 /// Guest programs are short-lived and single-threaded, and the VM charges for
 /// every cycle a free list would cost. Memory is reclaimed when the program
-/// exits and not before.
+/// exits and not before — so what runs a guest out of heap is the *total* it
+/// allocates over the run, not its peak.
+///
+/// # The ceiling
+///
+/// The heap and the stack share `[__heap_start, __stack_top)`, the heap growing
+/// up and the stack down, with nothing between them but this check. A block is
+/// refused — `exit(71)`, never a null — when it would end above either of:
+///
+/// - `__stack_top - STACK_RESERVE`. The top
+///   [`guest_memory::STACK_RESERVE`] bytes are the stack's whatever the heap
+///   wants, so a program whose recursion fits in them never meets a heap block.
+/// - The live `sp`. A stack already deeper than its reserve still never has a
+///   block handed out on top of a frame in use.
+///
+/// Until S12 the ceiling was `__stack_top` itself, and running out of heap was
+/// silent corruption rather than an exit: a block ending anywhere between the
+/// live `sp` and the top was handed out *over live stack frames*, so safe code
+/// writing into a `Vec` rewrote the caller's locals and return addresses. The
+/// consistency suite found it by running this guest's source on the host and
+/// comparing; `crates/emulator/tests/consistency.rs` holds the fix to both
+/// halves of the rule.
+///
+/// What no allocator can see is a stack that grows past its reserve *after* the
+/// heap has filled the space below it. Catching that needs a guard below every
+/// frame — instrumentation, not allocation. The reserve is sized so it takes a
+/// program the host would also reject: 8 MiB is a native main thread's default
+/// stack on Linux and macOS.
 struct BumpAllocator;
 
-// SAFETY: `alloc` returns either null or a fresh, correctly-aligned block of
-// `layout.size()` bytes inside `[__heap_start, __stack_top)` that it never
-// hands out again, since `BUMP` only ever moves up. The guest is
-// single-threaded, so the read-modify-write of `BUMP` cannot race.
+/// The live stack pointer: nothing at or above it may be handed out.
+///
+/// Read from inside the allocator, so it is below every frame that could be
+/// using the memory a block would cover.
+fn stack_pointer() -> usize {
+    let sp: usize;
+    // SAFETY: copies one register into another and touches no memory.
+    unsafe {
+        core::arch::asm!("mv {}, sp", out(reg) sp, options(nomem, nostack, preserves_flags));
+    }
+    sp
+}
+
+// SAFETY: `alloc` returns a fresh, correctly-aligned block of `layout.size()`
+// bytes that starts at or above `__heap_start` and ends at or below both the
+// live stack pointer and `__stack_top - STACK_RESERVE`; it never hands the
+// block out again, since `BUMP` only ever moves up, and where no such block
+// exists it exits instead of returning. The guest is single-threaded, so the
+// read-modify-write of `BUMP` cannot race.
+//
+// The `sp` term makes the block disjoint from every frame in use *at the
+// moment of the call*; what keeps it disjoint for the block's whole life is the
+// reserve, which no allocation may enter, so the stack has 8 MiB to grow in
+// without meeting one. A stack that grows past that is the case the type's docs
+// say nothing here can see.
 unsafe impl GlobalAlloc for BumpAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let bump = core::ptr::addr_of_mut!(BUMP);
@@ -355,10 +403,18 @@ unsafe impl GlobalAlloc for BumpAllocator {
             exit(EXIT_OUT_OF_MEMORY);
         };
 
-        // An allocation crossing `__stack_top` exits nonzero rather than
-        // returning null: a guest that quietly gets a null pointer here reports
-        // a Rust allocation error through a path that needs an allocation.
-        if end > core::ptr::addr_of!(__stack_top) as usize {
+        // Past the ceiling — see the type's docs — this exits nonzero rather
+        // than returning null: a guest that quietly gets a null pointer here
+        // reports a Rust allocation error through a path that needs an
+        // allocation. `saturating_sub` guards `__stack_top` itself being below
+        // the reserve, which the frozen memory map makes impossible; it is
+        // three instructions for a case that cannot arise, kept because a map
+        // is a thing that can change and an underflow here would hand out the
+        // whole address space.
+        let ceiling = (core::ptr::addr_of!(__stack_top) as usize)
+            .saturating_sub(guest_memory::STACK_RESERVE as usize)
+            .min(stack_pointer());
+        if end > ceiling {
             exit(EXIT_OUT_OF_MEMORY);
         }
 

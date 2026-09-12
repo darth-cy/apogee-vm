@@ -17,7 +17,7 @@ use program::{decode_program, family_name, ProgramParams};
 fn every_instruction_is_claimed_by_exactly_one_family() {
     for name in common::GUESTS {
         let image = common::guest(name);
-        let (tables, config) = decode_program(&image, &ProgramParams::defaults())
+        let (tables, config) = decode_program(&image, &common::fitting(&image))
             .unwrap_or_else(|e| panic!("{name}: {e}"));
 
         let mut owner: BTreeMap<u32, u32> = BTreeMap::new();
@@ -160,6 +160,34 @@ fn each_program_derives_only_the_families_it_uses() {
     )
     .unwrap();
     assert_eq!(detached.1, config);
+}
+
+/// Which committed guests the frozen default heights can preprocess, and which
+/// cannot.
+///
+/// The suites that are not about the heights take `common::fitting`, so without
+/// this nothing would notice a guest — or growth in an existing one — crossing
+/// a default. `consistency` is the first program to cross one: a family's table
+/// is indexed by absolute pc and the defaults give atomics 2^16 rows, which run
+/// out at pc `0x20000`, while that guest's atomics run up to `0x18e62a`.
+#[test]
+fn the_default_heights_hold_every_guest_but_the_largest() {
+    for name in common::GUESTS {
+        let image = common::guest(name);
+        let decoded = decode_program(&image, &ProgramParams::defaults());
+        if name == "consistency" {
+            let Err(program::ProgramError::TableTooShort { family, height, .. }) = decoded else {
+                panic!("{name} is expected to cross the default atomics height");
+            };
+            assert_eq!((family, height), (family::ATOMICS, 1 << 16));
+            assert!(
+                decode_program(&image, &common::fitting(&image)).is_ok(),
+                "{name} fits no menu height"
+            );
+        } else {
+            assert!(decoded.is_ok(), "{name}: {:?}", decoded.err());
+        }
+    }
 }
 
 /// A word no family knows is a loud failure naming its pc, with the decoder's

@@ -17,6 +17,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "consistency"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "field",
+ "guest-sdk",
+ "transcript",
+]
+
+[[package]]
 name = "constants"
 version = "0.1.0"
 
@@ -49,6 +59,20 @@ name = "guest-sdk"
 version = "0.1.0"
 dependencies = [
  "constants",
+]
+
+[[package]]
+name = "heap"
+version = "0.1.0"
+dependencies = [
+ "guest-sdk",
+]
+
+[[package]]
+name = "opcodes"
+version = "0.1.0"
+dependencies = [
+ "guest-sdk",
 ]
 
 [[package]]

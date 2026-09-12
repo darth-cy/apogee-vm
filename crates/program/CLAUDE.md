@@ -75,8 +75,13 @@ exists only to show it.
   by at least one, or derivation fails with `TableTooShort` naming the pc. So a 2^16
   atomics table holds atomics at or below pc `0x1fffc` only. A row above a *shorter*
   family's height is simply outside that table -- padding there -- so a program's code
-  may reach past every table but its own family's; every committed guest's code ends
-  below `0x1c938`.
+  may reach past every table but its own family's. Every committed guest's code ends
+  below `0x1c990` — `orderbook`'s is the highest — **except `consistency`**, which is
+  1.7 MB of it with an `Arc` inside: its atomics run up to pc `0x18e62a`, the row
+  `TableTooShort` names, so the frozen defaults refuse that guest and it takes a uniform
+  2^20. Whether heights should be per family at
+  all is an open question in `docs/handoff/S12-emulator.md`; the suites here that are not
+  *about* the heights take `common::fitting`, the smallest menu height the code fits.
 - **Fields**, in frozen column order `pc, next_pc, rs1, rs2, rd, imm, funct3,
   extra_mask`. A form's absent register is `x0` and absent immediate 0. `imm` is the
   two's-complement `u32` of the value the instruction uses (`crates/isa` defines it),

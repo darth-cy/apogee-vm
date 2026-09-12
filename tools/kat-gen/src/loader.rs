@@ -16,7 +16,7 @@ use std::process::Command;
 use crate::write_vectors;
 
 /// The guest ELFs the loader tests read, and what each is for.
-pub const ELF_FIXTURES: [(&str, &str); 7] = [
+pub const ELF_FIXTURES: [(&str, &str); 10] = [
     (
         "fib",
         "real compiler output: the address and boundary oracle",
@@ -41,6 +41,21 @@ pub const ELF_FIXTURES: [(&str, &str); 7] = [
         "atomics",
         "every A-extension instruction as the compiler emits them: the atomics \
          family's fixture, and the one S11 force-detaches",
+    ),
+    (
+        "opcodes",
+        "every RV32IMAC instruction executed with edge-case operands: the \
+         S12 QEMU differential's coverage fixture, and its misalignment one",
+    ),
+    (
+        "heap",
+        "Vec and Box churned through the bump allocator: S12's allocator \
+         exercise",
+    ),
+    (
+        "consistency",
+        "ordinary Rust run on the host, under QEMU and on the emulator: the \
+         three-way consistency suite's guest, and its heap-ceiling probes",
     ),
 ];
 

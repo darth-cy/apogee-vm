@@ -13,11 +13,11 @@ use std::process::Command;
 
 use constants::family;
 use loader::{load_elf, ProgramImage, Segment, Slot};
-use program::ProgramParams;
+use program::{decode_program, ProgramParams};
 use test_support::{sha256, to_hex};
 
 /// Every guest with a committed ELF, in `guests/Cargo.toml`'s order.
-pub const GUESTS: [&str; 7] = [
+pub const GUESTS: [&str; 10] = [
     "fib",
     "echo",
     "rvc-dense",
@@ -25,6 +25,9 @@ pub const GUESTS: [&str; 7] = [
     "orderbook",
     "vault",
     "atomics",
+    "opcodes",
+    "heap",
+    "consistency",
 ];
 
 /// This crate's committed fixtures and their digests. Refresh with
@@ -37,7 +40,7 @@ pub const PINS: [(&str, &str); 2] = [
     ),
     (
         "identity.txt",
-        "5bae46b1f978bdd29c686a6a18781af4619f3f8e40fa13c40693f8d09936fba5",
+        "ae8a59525387ef776e91bed7154031cbbbd277d35775677253852682c62a91b2",
     ),
 ];
 
@@ -85,13 +88,36 @@ pub fn instructions(image: &ProgramImage) -> Vec<(u32, u32, bool)> {
         .collect()
 }
 
-/// Every family at the smallest menu height. Every committed guest fits, and
-/// a 2^16 table is cheap enough to export in full.
+/// Every family at the smallest menu height. A 2^16 table is cheap enough to
+/// export in full, and every committed guest but `consistency` fits in one.
 pub fn smallest() -> ProgramParams {
     ProgramParams {
         heights: [family::HEIGHT_MENU[0]; family::COUNT as usize],
         ..ProgramParams::defaults()
     }
+}
+
+/// Every family at the smallest menu height this image's code fits in.
+///
+/// A table's rows are absolute pcs, one per halfword, so a family's height has
+/// to reach past its last instruction — and the heights are per family, which
+/// makes the *smallest* family's the binding one. `guests/consistency` is
+/// 1.7 MB of code with an `Arc` in it, so its atomics run up to pc `0x18e62a`,
+/// and neither `smallest()` (2^16 rows, pc below `0x20000`) nor the frozen
+/// defaults (2^16 for atomics) can hold them; a uniform 2^20 can. The S12 handoff records that as
+/// an open question about the defaults; a test that is not *about* the heights
+/// takes the ones that fit.
+pub fn fitting(image: &ProgramImage) -> ProgramParams {
+    for &height in &family::HEIGHT_MENU {
+        let params = ProgramParams {
+            heights: [height; family::COUNT as usize],
+            ..ProgramParams::defaults()
+        };
+        if decode_program(image, &params).is_ok() {
+            return params;
+        }
+    }
+    panic!("no menu height holds this image's code")
 }
 
 /// A one-segment image of 32-bit `words` at `at`, built by hand.

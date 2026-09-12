@@ -37,6 +37,7 @@ fn constants_table() -> BTreeMap<&'static str, u32> {
         ("PRECOMPILE_FIRST", ecall::PRECOMPILE_FIRST),
         ("PRECOMPILE_LAST", ecall::PRECOMPILE_LAST),
         ("ENOSYS", ecall::ENOSYS),
+        ("EBADF", ecall::EBADF),
     ])
 }
 
@@ -208,6 +209,22 @@ fn the_memory_map_agrees_across_its_three_copies() {
                 <= u32::MAX as u64 + 1,
             "the RAM window must fit in the 32-bit address space"
         );
+        assert!(
+            guest_memory::STACK_RESERVE > 0
+                && guest_memory::STACK_RESERVE < guest_memory::RAM_LENGTH / 2,
+            "the stack's reserve must leave the heap most of RAM"
+        );
+        assert!(
+            guest_memory::STACK_RESERVE.is_multiple_of(4096),
+            "the stack's reserve is whole pages"
+        );
+        // The value, not only its shape: ten documents say 8 MiB in prose, and
+        // the probe guest derives its own arithmetic from this constant, so
+        // nothing else here would notice the number changing under them.
+        assert!(
+            guest_memory::STACK_RESERVE == 8 << 20,
+            "the documents say the stack's reserve is 8 MiB"
+        );
     }
 }
 
@@ -241,6 +258,40 @@ fn the_shims_use_the_constants() {
             !source.contains(&format!("= {}", literal.trim())),
             "guest-sdk assigns the literal {literal}, which is an ABI number \
              with a home in constants::ecall"
+        );
+    }
+}
+
+/// The emulator's dispatch — the zkVM's executor since S12 — reaches the same
+/// constants and spells none of the numbers, so the ABI has one source for
+/// both sides of every ecall. Must-be-exact 2 of S12.
+#[test]
+fn the_emulator_dispatches_on_the_constants() {
+    let source = fs::read_to_string(repo_root().join("crates/emulator/src/lib.rs"))
+        .expect("crates/emulator/src/lib.rs is readable");
+    for name in [
+        "ecall::READ",
+        "ecall::WRITE",
+        "ecall::EXIT",
+        "ecall::FD_PUBLIC_INPUT",
+        "ecall::FD_PUBLIC_OUTPUT",
+        "ecall::FD_STDERR",
+        "ecall::FD_HINT",
+        "ecall::ENOSYS",
+        "ecall::EBADF",
+    ] {
+        assert!(
+            source.contains(name),
+            "the emulator does not reference {name}, so either a call is missing \
+             or it spells a number itself"
+        );
+    }
+    for literal in [
+        "63 =>", "64 =>", "93 =>", "== 63", "== 64", "== 93", "0x500",
+    ] {
+        assert!(
+            !source.contains(literal),
+            "the emulator spells `{literal}`, an ABI number with a home in constants::ecall"
         );
     }
 }

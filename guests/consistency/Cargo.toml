@@ -1,0 +1,22 @@
+[package]
+name = "consistency"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# `src/lib.rs` is the program, and it compiles for the host as well as for the
+# guest: `crates/emulator/tests/consistency.rs` calls it directly and holds the
+# two to one answer. Only `src/main.rs` is guest-only, so the guest runtime is
+# a dependency of the guest target alone -- unconditionally, a host build would
+# try to assemble crt0 and link a second `#[panic_handler]`. That is a
+# condition on the target, not a cargo feature: each target still has exactly
+# one build configuration.
+[dependencies]
+# The repository's own field and permutation, run inside the proof and on the
+# host from one source, for the reason `vault` links them.
+field = { path = "../../crates/field" }
+transcript = { path = "../../crates/transcript" }
+
+[target.'cfg(target_arch = "riscv32")'.dependencies]
+guest-sdk.workspace = true
+constants = { path = "../../crates/constants" }
