@@ -283,12 +283,13 @@ All but the prover's are `gkr-verify`'s, re-exported by `gkr`.
 | `BaseClaim { address, point, value }` | a committed column's claimed value at `point`, `point[j]` bound to variable `j` |
 | `GkrProof { layers: Vec<SumcheckProof> }` | `layers[k]` is transition `k` |
 | `GkrError` | §5.5 |
-| `gkr::BaseLayer` | the committed columns by address; `new` refuses anything but `M`, `W`, `S`, and repeats |
+| `gkr::BaseLayer` | the committed columns by address, one per `M`, `W`, `S` address; `new` takes them as given |
 | `gkr::LayerValues { base, layers }` | the forward pass's output: the base, then layers `1..=N` in offset order |
 | `gkr::SelfCheckError { layer, row, relation }` | the first gate the materialized values break |
 
 `gkr::forward` materializes every layer. `gkr::self_check` recomputes every gate
-against those layers and names the first broken relation; the caller runs it.
+against those layers and names the first broken relation. It is a debugging hook,
+not a step of proving: a caller may run it after `forward`.
 `gkr::prove` does **not** run it and recomputes nothing: it proves whatever
 `LayerValues` holds, and a verifier rejects what is wrong.
 
@@ -326,6 +327,11 @@ single point here is S13's.
   a key calls it. No such routine exists at S13; the stage that introduces
   `VerifyingKey` must call `validate` there. On an artifact that breaks a law the
   engine's answer means nothing: it may panic, and `verify` may accept.
+- The base, the layer values and the challenges have the artifact's shape.
+  `forward`, `self_check` and `prove` check nothing about their inputs: soundness
+  is `verify`'s alone, and a cheating prover runs none of the prover's code, so a
+  malformed input costs only the honest prover — a panic where it is first read,
+  or a proof or base claims that fail downstream.
 
 ### 5.2 The transcript schedule (frozen)
 

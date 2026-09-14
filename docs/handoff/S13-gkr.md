@@ -259,8 +259,8 @@ them.
 
 ## Verification performed
 
-**621 workspace tests, all green, plus 20 `#[ignore]`d** (495 and 20 at S12) — 126 new: 69
-in `crates/constraints`, 36 in `crates/gkr`, 21 in `crates/checker`, about half of them
+**617 workspace tests, all green, plus 20 `#[ignore]`d** (495 and 20 at S12) — 122 new: 69
+in `crates/constraints`, 32 in `crates/gkr`, 21 in `crates/checker`, about half of them
 written to close the adversarial review's findings. `fmt` and
 `clippy -D warnings` are clean across all four workspaces; `constraints` and `gkr-verify`
 build for `riscv32imac-unknown-none-elf`; `cargo run -p kat-gen` regenerates every
@@ -378,7 +378,7 @@ the laws.
 
 ## The owner's review of PR #13
 
-Three changes, made after the adversarial review above, each on the owner's instruction.
+Four changes, made after the adversarial review above, each on the owner's instruction.
 
 **1. A sixth gate shape, `Quadratic { constant, linear, products }`**, wire tag 5:
 `c_0 + Σ a_i·x_i + Σ b_j·y_j·z_j`. The owner's reason: `a·b + c·d − e·f = 0` is degree 2
@@ -438,8 +438,52 @@ A second adversarial review — the `Quadratic` gate, the prover's equivalence a
 allocation contract, the validation contract, and a documentation sweep, each finding put
 to a verifier told to refute it — confirmed seven findings, all minor and all fixed: the
 refactor had dropped `prove_sumcheck`'s refusal of a halving list whose child tables do not
-pair up (restored, with `tests/refusals.rs::prove_sumcheck_refuses_unpaired_children`
-run against the mutant), and six counts and descriptions in the docs had gone stale.
+pair up (restored, with a test run against the mutant; item 4 then removed it with the
+prover's other input checks), and six counts and descriptions in the docs had gone stale.
+
+**4. The prover checks nothing about its inputs at run time.** The owner's reason: a wrong
+input makes a proof the verifier rejects, so the checks buy no soundness. That holds, and
+more strongly than it needs to: soundness is `verify`'s alone, and a cheating prover runs
+none of the prover's code, so no check in it could add any. Removed, and kept in the
+source uncalled or commented out as debugging aids: `check_slots`, `check_base` and
+`check_values` at the top of `forward`, `self_check` and `prove`; `BaseLayer::new`'s
+committed-address and repeat checks; `prove_sumcheck`'s table-height and child-pairing
+checks; and, in `gkr-verify`, `eval_gate`'s operand count and `ResolvedList::summand`'s
+weight count, which ran at every row and every sumcheck node. The four tests in
+`tests/refusals.rs` that held the entry points to those panics went with them.
+`ExternalChallenges::insert` still refuses a slot set twice: that is the map's meaning, not
+an input check, and the verifier's challenges live in the same type.
+
+What a malformed input does now, probed on the toy before those tests were removed:
+
+- a missing base column, layer column or challenge slot panics where it is first read
+  (`the base has no column W[0]`, an index out of bounds, `external challenge slot 0 has
+  no value`);
+- an extra column below the top gives a proof `verify` refuses as `ProofShape`;
+- an extra top column or a repeated base address is never read, and the proof verifies and
+  its base claims discharge;
+- a wrong challenge value on the prover's side is `LayerInconsistency`.
+
+One case does not fail at `verify`. A base column taller than the trace is read only up to
+the trace's height, so the proof verifies, about those rows. What fails is the base claim's
+opening against the committed column; here that is `evaluate` refusing a 4-coordinate point
+on a 5-variable column. This is the old M42 test's case, and it opens no gap: a cheating
+prover could hand itself that column whether the honest prover's check existed or not.
+
+None of it was measurable time. `gkr-prove`, alternating the old and new binaries three
+times (means of the best-of-3 figures):
+
+| | before | after |
+| --- | --- | --- |
+| `forward` | 67.8 ms | 67.1 ms |
+| `self_check` | 67.8 ms | 68.4 ms |
+| `prove` | 989.5 ms | 988.3 ms |
+| `verify` | 10.0 ms | 10.1 ms |
+
+The call-level checks walked the columns and gates once per call. The two per-evaluation
+asserts were an integer comparison beside several field multiplications. So the change is
+a contract, not a speedup. The one check with real cost is `self_check`, a full pass as long
+as `forward`, and `prove` never called it; its doc now names it a debugging hook.
 
 ## Deviations and notes for the reviewer
 
@@ -500,9 +544,9 @@ run against the mutant), and six counts and descriptions in the docs had gone st
     harnesses — calls `validate` itself. On an artifact that breaks a law the engine's
     answer means nothing: it may panic, and `verify` may accept. Until the owner's review
     every entry point validated on every call; the two tests that held `verify` and `prove`
-    to panicking on a lawless artifact went with it. The per-call checks stay, in their
-    order: `MissingChallenge`, `OutputShape`, `ProofShape`, then the prover's shape
-    refusals.
+    to panicking on a lawless artifact went with it. `verify`'s per-call checks stay, in
+    their order: `MissingChallenge`, `OutputShape`, `ProofShape`. The prover's input
+    checks are gone too (the owner's review, item 4).
 
 ## Open for the next stage
 

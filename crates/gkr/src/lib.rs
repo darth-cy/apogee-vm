@@ -13,6 +13,15 @@
 //! rayon. Field arithmetic is exact, so no split and no reduction order can
 //! change a value. Nothing is allocated per row, per row pair or per node:
 //! each rayon task owns its buffers and overwrites them (`crates/gkr/CLAUDE.md`).
+//!
+//! Nothing here checks its inputs at run time. The artifact is assumed to have
+//! passed `CircuitArtifact::validate` where its key is loaded, and the base, the
+//! layer values, the tables and the challenge slots to have the artifact's
+//! shape. Soundness is `verify`'s alone — a cheating prover runs none of this
+//! code — so a malformed input can only cost the honest prover: a panic when a
+//! missing column or slot is read, or a proof or base claims that fail
+//! downstream. The shape checks this crate used to run are kept, uncalled, as
+//! debugging aids: `check_slots` and the functions beside it.
 
 use std::sync::Arc;
 
@@ -38,23 +47,25 @@ pub struct BaseLayer {
 }
 
 impl BaseLayer {
-    /// A base layer from its `address -> column` mapping. Panics on an
-    /// address twice, or one that is not a committed `M`, `W` or `S` column —
-    /// virtual tables are never materialized in a layer.
+    /// A base layer from its `address -> column` mapping, taken as given: one
+    /// column per committed `M`, `W` or `S` address. Virtual tables are never
+    /// materialized in a layer. Nothing is checked — a repeated address is
+    /// shadowed by its first column and any other address is never read.
     pub fn new(columns: Vec<(PolyAddress, MultilinearPoly)>) -> BaseLayer {
-        for (i, (address, _)) in columns.iter().enumerate() {
-            assert!(
-                matches!(
-                    address,
-                    PolyAddress::Memory(_) | PolyAddress::Witness(_) | PolyAddress::Setup(_)
-                ),
-                "BaseLayer::new: {address} is not a committed column"
-            );
-            assert!(
-                !columns[..i].iter().any(|(a, _)| a == address),
-                "BaseLayer::new: {address} is given twice"
-            );
-        }
+        // A debugging aid, not a runtime check (see `check_slots`):
+        // for (i, (address, _)) in columns.iter().enumerate() {
+        //     assert!(
+        //         matches!(
+        //             address,
+        //             PolyAddress::Memory(_) | PolyAddress::Witness(_) | PolyAddress::Setup(_)
+        //         ),
+        //         "BaseLayer::new: {address} is not a committed column"
+        //     );
+        //     assert!(
+        //         !columns[..i].iter().any(|(a, _)| a == address),
+        //         "BaseLayer::new: {address} is given twice"
+        //     );
+        // }
         BaseLayer {
             columns: Arc::new(columns),
         }
@@ -110,19 +121,43 @@ fn layer_columns<'v>(
         artifact
             .committed()
             .iter()
-            .map(|a| base.get(*a).expect("the base was checked"))
+            .map(|a| {
+                base.get(*a)
+                    .unwrap_or_else(|| panic!("the base has no column {a}"))
+            })
             .collect()
     } else {
         layers[k - 1].iter().collect()
     }
 }
 
+// ---------------------------------------------------------------------------
+// Debugging aids
+// ---------------------------------------------------------------------------
+
+// `check_slots`, `check_base` and `check_values` are debugging aids, never
+// runtime checks: no entry point calls them. Each refuses, with a message
+// naming the culprit and before any work is done, an input the prover would
+// otherwise panic on later or turn into a proof or base claims that fail
+// downstream. None of them bears on soundness — that is `verify`'s, and a
+// cheating prover runs none of this code — and none of them catches a wrong
+// value, only a wrong shape. Uncomment a call at the top of an entry point to
+// get the early message while debugging.
+
+/// Every challenge slot a gate names is in `challenges`. Without it, a missing
+/// slot panics at the first gate evaluation that reads it.
+#[allow(dead_code)]
 fn check_slots(artifact: &CircuitArtifact, challenges: &ExternalChallenges, what: &str) {
     if let Err(e) = check_challenges(artifact, challenges) {
         panic!("{what}: {e}");
     }
 }
 
+/// `base` is exactly the committed layout at the trace's height. Without it, a
+/// missing column panics where it is first read, a column taller than the
+/// trace is read only up to the trace's height, and a column shorter panics
+/// on a read past its end.
+#[allow(dead_code)]
 fn check_base(artifact: &CircuitArtifact, base: &BaseLayer, what: &str) {
     let committed = artifact.committed();
     assert_eq!(
@@ -234,8 +269,9 @@ impl<'v> RowReader<'v> {
 
 /// Materialize every layer from `base`, gate list by gate list, row by row.
 ///
-/// Panics if a slot is missing or `base` is not exactly the committed layout at
-/// the trace's height.
+/// Checks nothing about its inputs (the crate doc says why): `base` is assumed
+/// to be the committed layout at the trace's height, and `challenges` to hold
+/// every slot a producing gate or cached entry names.
 ///
 /// `artifact` is the circuit part of a proving key, assumed to have passed
 /// `CircuitArtifact::validate` where the key is loaded, and not checked again;
@@ -245,8 +281,9 @@ pub fn forward(
     base: &BaseLayer,
     challenges: &ExternalChallenges,
 ) -> LayerValues {
-    check_slots(artifact, challenges, "gkr::forward");
-    check_base(artifact, base, "gkr::forward");
+    // Debugging aids, not runtime checks (see `check_slots`):
+    // check_slots(artifact, challenges, "gkr::forward");
+    // check_base(artifact, base, "gkr::forward");
     let mut layers: Vec<Vec<MultilinearPoly>> = Vec::with_capacity(artifact.depth());
     for k in 0..artifact.depth() {
         let columns = produce(artifact, base, &layers, k, challenges);
@@ -302,20 +339,26 @@ fn produce(
 /// against the column it writes, every enforcing gate against 0, on every
 /// row. The first failure found, lowest gate list and row first.
 ///
-/// `prove` does not call this: it proves whatever `values` holds, and a
-/// verifier rejects what is wrong. The caller runs it after `forward`.
+/// A debugging hook, not a step of proving. `prove` does not call it: it
+/// proves whatever `values` holds, and a verifier rejects what is wrong. On
+/// `forward`'s own output every producing gate holds by construction — the same
+/// kernel over the same inputs — so what it adds is the enforcing gates and the
+/// name and row of the first broken relation, which `verify`'s one
+/// `LayerInconsistency` cannot give. It costs as much as `forward`; a
+/// production prover does not run it per proof.
 ///
-/// Panics if a slot is missing or `values` does not have the artifact's shape.
-/// Like `forward`, it assumes `artifact` has passed `CircuitArtifact::validate`
-/// and does not check it again; on one that breaks a law its answer means
-/// nothing, and the call may panic.
+/// Checks nothing about its inputs, as `forward` does not. Like `forward`, it
+/// assumes `artifact` has passed `CircuitArtifact::validate` and does not
+/// check it again; on one that breaks a law its answer means nothing, and the
+/// call may panic.
 pub fn self_check(
     artifact: &CircuitArtifact,
     values: &LayerValues,
     challenges: &ExternalChallenges,
 ) -> Result<(), SelfCheckError> {
-    check_slots(artifact, challenges, "gkr::self_check");
-    check_values(artifact, values, "gkr::self_check");
+    // Debugging aids, not runtime checks (see `check_slots`):
+    // check_slots(artifact, challenges, "gkr::self_check");
+    // check_values(artifact, values, "gkr::self_check");
     for k in 0..artifact.depth() {
         let list = &artifact.layers[k];
         let reader = RowReader::new(artifact, &values.base, &values.layers, k);
@@ -369,6 +412,12 @@ pub fn self_check(
     Ok(())
 }
 
+/// `values` has the artifact's shape: the base as [`check_base`] holds it, one
+/// layer per gate list, each of the artifact's width and height. Without it, a
+/// missing layer or column panics where it is first read, an extra column below
+/// the top makes a proof whose claim count `verify` refuses, and an extra
+/// column of the top is never read.
+#[allow(dead_code)]
 fn check_values(artifact: &CircuitArtifact, values: &LayerValues, what: &str) {
     check_base(artifact, &values.base, what);
     assert_eq!(
@@ -524,22 +573,26 @@ pub fn prove_sumcheck(
     } else {
         artifact.virtuals.iter().map(|(kind, _)| *kind).collect()
     };
-    for table in tables.lower.iter().chain(&tables.upper) {
-        assert_eq!(
-            table.num_vars(),
-            n,
-            "prove_sumcheck: a table has {} variables, the eq point {n}",
-            table.num_vars()
-        );
-    }
-    if artifact.layers[summand.layer].halving {
-        assert_eq!(
-            tables.upper.len(),
-            tables.lower.len(),
-            "prove_sumcheck: halving gate list {} needs both children of every column",
-            summand.layer
-        );
-    }
+    // Debugging aids, not runtime checks (see `check_slots`). Without them a
+    // table shorter than the eq point, or a halving list missing a child table,
+    // panics on a read past its end; a taller table is read only in part, and
+    // an extra child table is bound and never read.
+    // for table in tables.lower.iter().chain(&tables.upper) {
+    //     assert_eq!(
+    //         table.num_vars(),
+    //         n,
+    //         "prove_sumcheck: a table has {} variables, the eq point {n}",
+    //         table.num_vars()
+    //     );
+    // }
+    // if artifact.layers[summand.layer].halving {
+    //     assert_eq!(
+    //         tables.upper.len(),
+    //         tables.lower.len(),
+    //         "prove_sumcheck: halving gate list {} needs both children of every column",
+    //         summand.layer
+    //     );
+    // }
     let resolved = ResolvedList::new(artifact, summand.layer, summand.challenges);
     let mut eq = fr_poly(eq_table(eq_point));
     let constants = interpolation_constants();
@@ -641,9 +694,9 @@ fn children(column: &MultilinearPoly, half: usize) -> (MultilinearPoly, Multilin
 /// Absorbs nothing of the base. Follows `docs/spec/gkr.md` §5.2 step for step,
 /// exactly as `verify` does.
 ///
-/// Panics if a slot is missing or `values` does not have the artifact's shape.
-/// It does not check that `values` satisfies the gates — `self_check` does — so
-/// a proof over wrong values is a proof a verifier rejects.
+/// Checks nothing about its inputs, as `forward` does not. It does not check
+/// that `values` satisfies the gates either — `self_check` does — so a proof
+/// over wrong values is a proof a verifier rejects.
 ///
 /// Like `forward`, it assumes `artifact` — the circuit part of a proving key —
 /// has passed `CircuitArtifact::validate` and does not check it again; on one
@@ -654,8 +707,9 @@ pub fn prove(
     challenges: &ExternalChallenges,
     t: &mut Transcript,
 ) -> GkrProof {
-    check_slots(artifact, challenges, "gkr::prove");
-    check_values(artifact, values, "gkr::prove");
+    // Debugging aids, not runtime checks (see `check_slots`):
+    // check_slots(artifact, challenges, "gkr::prove");
+    // check_values(artifact, values, "gkr::prove");
     let depth = artifact.depth();
 
     // O1, O2.

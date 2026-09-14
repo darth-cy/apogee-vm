@@ -40,7 +40,11 @@ pub fn verify(artifact: &CircuitArtifact, proof: &GkrProof, outputs: &OutputClai
   layer sumcheck — reach it through `ResolvedList`, which `gate_values` and `summand`
   wrap; the checker calls it directly over the flat relations. Where a comment and the
   kernel disagree, the kernel wins.
-- **Evaluation allocates nothing.** `eval_gate` counts its arity from the gate's fields;
+- **Evaluation checks nothing per point.** `eval_gate` trusts that it gets one value per
+  operand and `ResolvedList::summand` one weight per gate — every caller builds them to
+  that count, and neither comes from a proof — so both asserts are kept commented out as
+  debugging aids, off the prover's per-row and per-node path.
+- **Evaluation allocates nothing.** `eval_gate` reads the gate's fields, never `operands()`;
   `ResolvedList` resolves a list's operands once, in `new`, and its `cache`, `gate` and
   `summand` work in a caller-owned scratch buffer. It is public only because the prover
   half is another crate and must share this resolution rather than repeat it.

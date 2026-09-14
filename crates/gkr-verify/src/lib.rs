@@ -116,8 +116,8 @@ impl fmt::Display for GkrError {
 // The kernel
 // ---------------------------------------------------------------------------
 
-/// A coefficient's value. Panics on a slot `challenges` does not hold; the
-/// entry points check every slot first.
+/// A coefficient's value. Panics on a slot `challenges` does not hold: `verify`
+/// checks every slot first, and the prover leaves a missing slot to panic here.
 fn coefficient(c: Coeff, challenges: &ExternalChallenges) -> Fr {
     match c {
         Coeff::Literal(v) => v,
@@ -132,24 +132,28 @@ fn coefficient(c: Coeff, challenges: &ExternalChallenges) -> Fr {
 /// Every pass evaluates gates through this function and no other, so it is the
 /// semantic authority: where a comment and this disagree, this wins.
 pub fn eval_gate(gate: &GateDef, values: &[Fr], challenges: &ExternalChallenges) -> Fr {
-    // Counted from the fields, not from `operands()`, so the kernel allocates
-    // nothing.
-    let arity = match gate {
-        GateDef::Linear { terms, .. } => terms.len(),
-        GateDef::Product { .. }
-        | GateDef::MaskIntoIdentity { .. }
-        | GateDef::TreeProduct { .. } => 2,
-        GateDef::AffineProduct { left, right, .. } => left.len() + right.len(),
-        GateDef::Quadratic {
-            linear, products, ..
-        } => linear.len() + 2 * products.len(),
-    };
-    assert_eq!(
-        values.len(),
-        arity,
-        "eval_gate: {} values for a gate reading {arity}",
-        values.len()
-    );
+    // A debugging aid, not a runtime check: one value per operand. Every caller
+    // gathers exactly `operands()`'s count — `ResolvedList` from the resolved
+    // operands, the checker from `operands()` itself — so it cannot fail there,
+    // and this is the hottest path in the prover: every gate at every row and
+    // at every sumcheck node. Too few values panic on an index or leave terms
+    // out of a sum; `values` never comes from a proof.
+    // let arity = match gate {
+    //     GateDef::Linear { terms, .. } => terms.len(),
+    //     GateDef::Product { .. }
+    //     | GateDef::MaskIntoIdentity { .. }
+    //     | GateDef::TreeProduct { .. } => 2,
+    //     GateDef::AffineProduct { left, right, .. } => left.len() + right.len(),
+    //     GateDef::Quadratic {
+    //         linear, products, ..
+    //     } => linear.len() + 2 * products.len(),
+    // };
+    // assert_eq!(
+    //     values.len(),
+    //     arity,
+    //     "eval_gate: {} values for a gate reading {arity}",
+    //     values.len()
+    // );
     let c = |x: &Coeff| coefficient(*x, challenges);
     let affine = |terms: &[(Coeff, PolyAddress)], constant: &Coeff, values: &[Fr]| {
         terms
@@ -349,13 +353,17 @@ impl<'a> ResolvedList<'a> {
         virtuals: &[Fr],
         scratch: &mut [Fr],
     ) -> Fr {
-        let gates = self.producing + self.enforcing;
-        assert_eq!(
-            gates,
-            weights.len(),
-            "summand: {} weights for {gates} gates",
-            weights.len()
-        );
+        // A debugging aid, not a runtime check: one weight per gate. Both callers
+        // build `weights` with `powers` over exactly this count — `verify` two
+        // lines before it calls — and the prover reaches this at every sumcheck
+        // node.
+        // let gates = self.producing + self.enforcing;
+        // assert_eq!(
+        //     gates,
+        //     weights.len(),
+        //     "summand: {} weights for {gates} gates",
+        //     weights.len()
+        // );
         self.cache(lower, upper, virtuals, scratch);
         weights.iter().enumerate().fold(Fr::ZERO, |acc, (j, w)| {
             acc + self.gate(j, lower, upper, virtuals, scratch) * *w

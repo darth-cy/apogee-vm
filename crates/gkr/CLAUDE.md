@@ -34,12 +34,24 @@ pub fn prove(artifact: &CircuitArtifact, values: &LayerValues, challenges: &Exte
   which wraps it — at the final check.
 - **`prove` proves what `LayerValues` holds.** It never runs the self-check and never
   recomputes a table: wrong values make a proof a verifier rejects, which is what lets a
-  tamper reach `verify`. The self-check is the caller's, after `forward`.
+  tamper reach `verify`. The self-check is a debugging hook a caller may run after
+  `forward`, never a step of proving: on `forward`'s own output its producing gates hold
+  by construction, and it costs as much as `forward`.
 - **`forward`, `self_check` and `prove` do not validate the artifact.** It is the circuit
   part of a proving key and is assumed to have passed `CircuitArtifact::validate`, once,
   where the key is loaded — a routine a later stage owes. On one that breaks a law their
-  results mean nothing, and they may panic. They still refuse a missing challenge slot
-  and a base or layer values of the wrong shape.
+  results mean nothing, and they may panic.
+- **The prover checks nothing about its inputs at run time**, on the owner's instruction:
+  not the base, the layer values, the sumcheck tables or the challenge slots. Soundness is
+  `verify`'s alone — a cheating prover runs none of this code — so a check here could only
+  give an honest prover's malformed input an earlier message. Without one, a missing base
+  column, layer column or slot panics where it is first read; an extra column below the
+  top makes a proof `verify` refuses by its claim count; a base column taller than the
+  trace is read only up to the trace's height, and its base claims then cannot open
+  against the committed column. The old checks are kept as debugging aids, uncalled or
+  commented out: `check_slots`, `check_base`, `check_values`, `BaseLayer::new`'s and
+  `prove_sumcheck`'s asserts, and in `gkr-verify` the kernel's operand count and
+  `ResolvedList::summand`'s weight count, which sat on the per-row and per-node path.
 - **`prove` absorbs nothing of the base**, and follows `docs/spec/gkr.md` §5.2 step for
   step, exactly as `verify` does; the two end in one sponge state.
 - **The layer sumcheck driver owns step L2 only**: one 4-coefficient cubic per variable of
@@ -80,7 +92,7 @@ pub fn prove(artifact: &CircuitArtifact, values: &LayerValues, challenges: &Exte
 | `tests/edges.rs` | a circuit with `trace_vars` 1, a zero-variable layer, a width-0 top and an enforcing-only list, whose zero-round final check rejects a violation; two opposed enforcing gates in one list that do not cancel |
 | `tests/kernel.rs` | `eval_gate` for every shape at non-unit literal and challenge coefficients and nonzero constants, against hand-written arithmetic; `Quadratic` also with an empty linear list, an empty products list and both |
 | `tests/quadratic.rs` | the owner's `0 = a·b + c·d − e·f` as one enforcing `Quadratic`, beside a producing `Quadratic` with a constant, a linear term and a challenge whose column list 1 reads: honest forward values against hand arithmetic, self-check, proof, verify and discharge; one cell of `f` changed, named by the self-check and rejected at transition 0 |
-| `tests/refusals.rs` | `BaseLayer::new`, `ExternalChallenges::insert`, `forward`, `prove`, `self_check` and `prove_sumcheck` refusing malformed inputs; an artifact that breaks a law is not among them, since the entry points assume a validated one |
+| `tests/refusals.rs` | `ExternalChallenges::insert` refusing a slot set twice — the one refusal left, since the entry points check neither the artifact nor their inputs |
 | `tests/batching.rs` | acceptance 4: the whole event log against the schedule, and the outstanding-claim walk reading halving and claim counts from the artifact, with its negative controls |
 | `tests/compilation.rs` | acceptance 7: cached and cache-free give the same shape, values and proof byte for byte; degree-2 cached entries, in list 0 and in list 1, prove and verify |
 | `tests/oracle.rs` | every round of every transition recomputed from hand-written toy formulas, sharing no code with the kernel; the control that it can fail |

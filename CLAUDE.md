@@ -78,7 +78,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
-cargo test --workspace                      # 621 tests as of S13; 20 more are #[ignore]d
+cargo test --workspace                      # 617 tests as of S13; 20 more are #[ignore]d
 cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
@@ -371,6 +371,11 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   re-check it; the later stages that load a verifying or proving key must call
   `validate` there. On an artifact that breaks a law the engine's answer means nothing:
   it may panic, and `verify` may accept.
+- **The prover checks nothing about its inputs at run time** — not the base, the layer
+  values, the tables or the challenge slots. Soundness is `verify`'s alone, and a cheating
+  prover runs none of the prover's code; a malformed input costs only the honest prover a
+  panic or a proof that fails downstream. The old shape checks stay in the source,
+  uncalled or commented out, as debugging aids (`crates/gkr/CLAUDE.md`).
 - **Boring beats clever.** Added surface area is a defect. Every verifier entry point is
   `(&VerifyingKey, &Proof, &PublicInputs)` and nothing else.
 
