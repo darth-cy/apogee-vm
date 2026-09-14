@@ -1,0 +1,22 @@
+[package]
+name = "checker"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The standalone validators of `docs/spec/gkr.md` §4.2 and §4.3, the circuit
+# dump, the witness-row evaluator and the artifact cross-check, plus the
+# `checker` CLI over the first three. None of it calls `constraints`' own law
+# checks: the laws are enforced twice, by independent code.
+[dependencies]
+# `challenge_slot::NAMES`, for rendering a challenge coefficient.
+constants.workspace = true
+constraints.workspace = true
+field.workspace = true
+# The kernel (`eval_gate`, `gate_values`, re-exported from `gkr-verify`) and the
+# forward pass the cross-check runs.
+gkr.workspace = true
+poly.workspace = true
+
+[dev-dependencies]
+test-support.workspace = true

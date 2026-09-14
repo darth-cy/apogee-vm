@@ -23,6 +23,7 @@
 //! | `loader`  | `crates/loader/tests/vectors/*` (from the committed guest ELFs) |
 //! | `isa`     | `crates/isa/tests/vectors/*` (the hand-encoded corpus, via llvm-objdump) |
 //! | `program` | `crates/program/tests/vectors/*` (the identities need the ceremony file) |
+//! | `gkr`     | `crates/constraints/tests/vectors/*` (the S13 toy circuit, cached and cache-free) |
 //! | `guests`  | the guest ELFs themselves -- opt-in only, see `DEFAULT_GROUPS` |
 
 use std::fs;
@@ -32,6 +33,7 @@ use test_support::{sha256, to_hex};
 
 mod curve;
 mod field;
+mod gkr;
 mod guests;
 mod isa;
 mod loader;
@@ -45,7 +47,7 @@ mod srs;
 mod tower;
 
 /// Every group, in the order a reader of the tower would meet them.
-const GROUPS: [(&str, fn()); 12] = [
+const GROUPS: [(&str, fn()); 13] = [
     ("field", field::generate),
     ("poly", poly::generate),
     ("curve", curve::generate),
@@ -57,6 +59,7 @@ const GROUPS: [(&str, fn()); 12] = [
     ("loader", loader::generate),
     ("isa", isa::generate),
     ("program", program::generate),
+    ("gkr", gkr::generate),
     ("guests", guests::generate),
 ];
 
@@ -73,8 +76,9 @@ const GROUPS: [(&str, fn()); 12] = [
 /// one machine, with `cargo run -p kat-gen -- guests`, and everything CI can
 /// reproduce from them -- the objdump and nm listings -- is in `loader`, which
 /// does run by default.
-const DEFAULT_GROUPS: [&str; 11] = [
+const DEFAULT_GROUPS: [&str; 12] = [
     "field", "poly", "curve", "tower", "pairing", "msm", "srs", "pcs", "loader", "isa", "program",
+    "gkr",
 ];
 
 fn main() {

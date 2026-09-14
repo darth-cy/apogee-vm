@@ -107,8 +107,41 @@ variable `i`, so the bound point reads in the same little-endian order as a tabl
 carried in the proof and absorbed before any later challenge. They are an evaluation
 claim, not a proof: discharging them against a commitment is the PCS's job.
 
-**Layer** — one level of a GKR circuit. Each layer's values are determined by gates of
-degree ≤ 2 in the layer below.
+**Layer** — one level of a GKR circuit: `w_k` columns of `2^{n_k}` rows. Layer 0 is the
+committed base plus its virtual tables; layer `N`, the top, holds exactly the outputs;
+**gate list** `k` reads layer `k` and writes layer `k + 1`. `docs/spec/gkr.md`.
+
+**Row-wise and halving** — the two kinds of gate list. A row-wise list keeps the height
+and computes each output row from the same row below; a halving list halves every
+column of its layer, in order, as one level of a product tree, `out[i] = in[i] ·
+in[i + half]`, the child bit being the highest variable.
+
+**Producing, enforcing, cached** — the three kinds of gate entry. A producing gate
+writes one column one layer up; an enforcing gate writes nothing and must vanish on
+every row; a cached entry is a sub-expression of its list, substituted into every gate
+naming it, and never a column.
+
+**PolyAddress** — the one name of a polynomial: `M[i]` memory-argument column, `W[i]`
+witness column, `S[i]` setup column, `V[row]` virtual table, `L{k}[j]` inner-layer
+column, `scratch[i]` flat-list intermediate, `C{k}[j]` cached entry.
+
+**Circuit artifact** — a circuit as data, `constraints::CircuitArtifact`: the same
+constraint set as a flat list of relations over base and scratch addresses and as
+layered gates, tied by the scratch bijection and **Laws 1–4** (locality, derived
+width, top layer, single source of truth). Written as `postcard`.
+
+**Kernel** — `gkr_verify::eval_gate`, the one evaluation of a gate's formula; the
+semantic authority every pass and checker reads gates through.
+
+**External challenge** — a field element a gate coefficient names by slot
+(`constants::challenge_slot`), supplied by the caller from its own transcript, drawn
+after everything the gate can reach is bound.
+
+**Backward pass** — reducing claims about a circuit's outputs, one layer sumcheck per
+gate list, top to base, to claims about its committed columns at one point: the
+**base claims**. Within a transition, the claims on the layer above and the enforcing
+gates' zero claims are **batched** by one challenge into one claim; a halving
+transition's two **child claims** per column meet on a line at a second challenge.
 
 **Committed vs virtual** — a *committed* column is one the prover commits to with
 Mercury and later opens. A *virtual* column is derived in closed form by the verifier

@@ -1,0 +1,19 @@
+[package]
+name = "gkr-verify"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The verifier half of the GKR engine, `#![no_std]` + alloc: the recursion
+# guest links this crate. `crates/gkr` is the std + rayon prover half and
+# re-exports everything public here, so `gkr::verify` is this `verify`.
+[dependencies]
+constants.workspace = true
+constraints.workspace = true
+field.workspace = true
+poly.workspace = true
+# `SumcheckProof`, S04's frozen round shape, is a layer transition's proof.
+# Nothing else of `sumcheck` is used: `prove_zerocheck` and `verify_zerocheck`
+# are standalone entry points the engine deliberately does not call.
+sumcheck.workspace = true
+transcript.workspace = true

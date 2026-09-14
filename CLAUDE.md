@@ -33,6 +33,14 @@ crates/
                  profile and shard plan, and the TraceArchive snapshot; std
   emulator/      the RV32IMAC reference emulator, its tracing path, and the QEMU
                  differential harness; std
+  constraints/   circuits as data: PolyAddress, GateDef, LayerSpec, CircuitArtifact, the
+                 laws, the cache-free compilation and the wire form; no_std
+  gkr-verify/    the GKR verifier half: the gate kernel, the layer sumcheck verifier and
+                 verify, and every type verify touches; no_std, linked by the recursion guest
+  gkr/           the GKR prover half: forward pass, self-check, layer sumcheck prover,
+                 prove; std + rayon; re-exports gkr-verify whole
+  checker/       the standalone law validators, the padding and witness-row checks, the
+                 artifact cross-check, the circuit dump and the `checker` CLI; std
   guest-sdk/     crt0, entry!, linker script, bump allocator, ecall shims; no_std,
                  guest-only, and NOT a workspace member
 guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, opcodes/, heap/, consistency/
@@ -41,7 +49,8 @@ assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 h
 tools/
   kat-gen/       regenerates the committed Fr, multilinear, curve, MSM, SRS and G1-absorption
                  vectors from arkworks, the Mercury proof fixture from `pcs` itself, the ISA
-                 corpus via llvm-objdump, and the identity pin from `program` itself
+                 corpus via llvm-objdump, the identity pin from `program` itself, and S13's
+                 toy circuit artifacts, defined there and compiled by `constraints`
   bench/         one routine per measurement, individually selectable
   artifact-dump/ a guest ELF out as the frozen ProgramImage artifact, plus a
                  readable report of it; `tables` prints the decoded tables and identity
@@ -70,17 +79,20 @@ cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
 cargo test --workspace                      # 495 tests as of S12; 20 more are #[ignore]d
-cargo build -p field -p constants -p transcript -p poly -p sumcheck --target riscv32imac-unknown-none-elf
+cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
 cd guests/fib && cargo build --target riscv32imac-unknown-none-elf
 APOGEE_GUEST_PROFILE=release cargo test -p loader --test qemu -- --include-ignored
 cargo test -p emulator --test differential -- --include-ignored
 cargo test -p emulator --test consistency -- --include-ignored   # and again at APOGEE_GUEST_PROFILE=release
-git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/
+git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constraints/tests/vectors/
 -------------------------------------------------------------------------------
 cargo run -p kat-gen                        # refresh every fixture (manual, deliberate)
-cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader | isa | program
+cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader | isa | program | gkr
+cargo run -p checker -- laws <artifact>     # Laws 1-4, the standalone validators
+cargo run -p checker -- padding <artifact>  # the padding contract
+cargo run -p checker -- dump <artifact>     # a circuit, readably: layers, gates, relations, catalogue
 cargo run -p kat-gen -- guests              # rebuild the guest ELFs; opt-in, one machine
 cargo run --manifest-path tools/transcript-ref/Cargo.toml   # ditto, transcript vectors
 cargo run --release -p bench                # every routine; internal numbers only
@@ -326,6 +338,29 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   Those are declared in `hazards::PLATFORM_DEPENDENT` and excused for the host alone —
   the pointer-width ones must then actually differ, and the NaN one is excused only on a
   host whose own convention differs.
+- **The GKR engine's spec is `docs/spec/gkr.md`, and it is frozen**: the layer model, the
+  addresses, the five gate shapes, the artifact and its wire form, the laws, and the
+  backward pass's transcript schedule. A gate list is row-wise or halving, and a halving
+  list halves every column of its layer in order, the child bit being the highest variable.
+- **The verifier half is its own crate.** `gkr-verify` is `#![no_std]` and CI builds it
+  for the guest; `gkr` is std + rayon and re-exports it, so `gkr::verify` is
+  `gkr_verify::verify`. The owner chose two crates over a serial prover or an unchecked
+  no_std claim.
+- **`gkr_verify::eval_gate` is the one kernel.** Every pass reads gates through
+  `gate_values`, so the forward and backward passes share one `G`.
+- **Cached entries are substituted, never columns.** No table, no claim, no width; degree
+  counts after substitution, which is how a degree-3 gate is written and refused; the
+  prover evaluates a cached entry at every round node and never binds it. A virtual table
+  is never materialized either.
+- **A GKR circuit's outputs are absorbed before its top point is drawn.** Otherwise a
+  prover predicts the point and forges an output table with the same value there.
+- **One `LayerInconsistency { layer }` for every failing round or final check**, on the
+  owner's instruction: a batched sum cannot say whether the descending claim or an
+  enforcing gate is wrong, and no proof data is spent pretending otherwise.
+- **The laws are enforced twice**, by `CircuitArtifact::validate` and by `checker`'s
+  validators, which share no code; `from_bytes` checks encoding only, so the checker can be
+  handed a broken artifact. A column no gate reads and a cached entry no gate names are
+  refused: a relation constructed and then dropped constrains nothing.
 - **Boring beats clever.** Added surface area is a defect. Every verifier entry point is
   `(&VerifyingKey, &Proof, &PublicInputs)` and nothing else.
 
@@ -344,3 +379,4 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 | S10 — Guest toolchain + SDK + loader | done | `docs/handoff/S10-toolchain.md` |
 | S11 — Decoder + program identity | done | `docs/handoff/S11-decoder.md` |
 | S12 — Emulator + trace generation | done | `docs/handoff/S12-emulator.md` |
+| S13 — GKR engine, circuit artifact, checker suite | done | `docs/handoff/S13-gkr.md` |

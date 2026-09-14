@@ -688,6 +688,45 @@ pub mod transcript_tags {
     /// descriptor, always absorbed immediately after the [`VM_CONFIG`]
     /// message it counts shards for.
     pub const SHARD_COUNTS: u64 = 24;
+
+    /// Scalars. A GKR circuit's claimed output tables, output-map order, as
+    /// one message, absorbed before the top-layer point is drawn so that no
+    /// output can be chosen after the point is known. `docs/spec/gkr.md` §5.2.
+    pub const GKR_OUTPUTS: u64 = 25;
+
+    /// Challenge. One coordinate of a GKR circuit's top-layer point, drawn
+    /// after [`GKR_OUTPUTS`].
+    pub const GKR_OUTPUT_POINT: u64 = 26;
+
+    /// Challenge. The RLC that batches a layer transition's claims — one per
+    /// column of the layer written, then its enforcing gates — into the one
+    /// claim its sumcheck proves. Drawn after every claim it batches is
+    /// absorbed.
+    pub const GKR_BATCH: u64 = 27;
+
+    /// Scalars. The claimed values of the layer a transition reads, at the
+    /// point its sumcheck bound, in one message: one per column, or both
+    /// children per column for a halving transition.
+    pub const GKR_LAYER_CLAIMS: u64 = 28;
+
+    /// Challenge. The point `τ` on the line through a halving transition's
+    /// two child claims, drawn after both are absorbed.
+    pub const GKR_CHILD: u64 = 29;
+}
+
+/// The external challenge slots a GKR circuit's coefficients may name, frozen
+/// at S13; **append-only**.
+///
+/// A `constraints::Coeff::Challenge(slot)` names one of these numbers, and the
+/// caller supplies its value in `ExternalChallenges`. The number is the
+/// semantics; [`challenge_slot::NAMES`] is documentation for dumps and
+/// diagnostics, indexed by slot, exactly as a tag's constant name is.
+pub mod challenge_slot {
+    /// The S13 toy circuit's one challenge. No production circuit reads it.
+    pub const TOY: u32 = 0;
+
+    /// Every slot's display name, indexed by slot number.
+    pub const NAMES: [&str; 1] = ["toy"];
 }
 
 /// The circuit families, by number. Frozen at S11; **append-only**.
