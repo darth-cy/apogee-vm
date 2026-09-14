@@ -470,6 +470,12 @@ fn degree(gate: &GateDef, cached: &[CachedEntry]) -> u32 {
         GateDef::MaskIntoIdentity { input, mask } => (d(input) + d(mask)).max(d(mask)),
         GateDef::AffineProduct { left, right, .. } => widest(left) + widest(right),
         GateDef::TreeProduct { .. } => 2,
+        GateDef::Quadratic {
+            linear, products, ..
+        } => {
+            let pairs = products.iter().map(|(_, y, z)| d(y) + d(z)).max();
+            widest(linear).max(pairs.unwrap_or(0))
+        }
     }
 }
 
@@ -750,6 +756,20 @@ impl Namespace<'_> {
                 let x = self.column(*input);
                 vec![(vec![Symbol::Child(x, 0), Symbol::Child(x, 1)], Fr::ONE)]
             }
+            GateDef::Quadratic {
+                constant,
+                linear,
+                products,
+            } => {
+                let mut out = self.affine(linear, *constant);
+                for (b, y, z) in products {
+                    out.extend(product(
+                        &product(&coefficient(*b), &self.operand(*y)),
+                        &self.operand(*z),
+                    ));
+                }
+                normalize(out)
+            }
         }
     }
 }
@@ -843,7 +863,8 @@ pub(crate) fn inline_cached(a: &CircuitArtifact) -> Result<CircuitArtifact, Cons
 
 /// `Product { c, C, y }` over a `Linear` cached `C` is
 /// `AffineProduct { C.terms, C.constant; [(c, y)], 0 }`, and symmetrically;
-/// a gate naming no cached entry is itself; nothing else inlines.
+/// a gate naming no cached entry is itself; nothing else inlines — a
+/// `Quadratic` naming a cached entry included.
 fn inline(
     gate: &GateDef,
     cached: &[CachedEntry],

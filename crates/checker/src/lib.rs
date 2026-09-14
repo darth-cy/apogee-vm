@@ -729,6 +729,21 @@ fn formula(gate: &GateDef) -> String {
             affine(right, *right_constant)
         ),
         GateDef::TreeProduct { input } => format!("{input}(y, 0)·{input}(y, 1)"),
+        // Field order: the constant, each linear term, each product.
+        GateDef::Quadratic {
+            constant,
+            linear,
+            products,
+        } => {
+            let mut parts = vec![coeff(*constant)];
+            parts.extend(linear.iter().map(|(a, x)| format!("{}·{x}", coeff(*a))));
+            parts.extend(
+                products
+                    .iter()
+                    .map(|(b, y, z)| format!("{}·{y}·{z}", coeff(*b))),
+            );
+            format!("({})", parts.join(" + "))
+        }
     }
 }
 
@@ -908,9 +923,10 @@ fn table(column: &MultilinearPoly) -> Vec<Fr> {
 /// Does NOT cover: names other than the committed columns', virtual tables',
 /// outputs' and enforcing relations'; `format_version`, `coefficient_encoding`,
 /// `lookups`, the padding contract (`check_padding`); construction rules
-/// outside the laws — an artifact passing the laws and the constants but
-/// breaking one makes `gkr::forward` panic here instead of returning `Err`;
-/// any base but the one sampled. Materializes the whole trace, so it is for
+/// outside the laws — `gkr::forward` assumes an artifact that has passed
+/// `CircuitArtifact::validate`, so on one passing the laws and the constants
+/// but breaking such a rule this check's answer means nothing: it may panic,
+/// return `Err`, or return `Ok`; any base but the one sampled. Materializes the whole trace, so it is for
 /// test-sized circuits.
 pub fn cross_check(
     a: &CircuitArtifact,

@@ -13,7 +13,7 @@
 //!           L{1}[0] ab          = a·b                      relation 0, scratch[0]
 //!           L{1}[1] fingerprint = shifted_a·c              relation 1, scratch[1]
 //!           L{1}[2] masked_m    = m·s + (1 − s)            relation 2, scratch[2]
-//!           0 = (e − a)·s                                  relation 3 (enforcing)
+//!           0 = e·s − a·s                                  relation 3 (enforcing, Quadratic)
 //! list 1    L{2}[0] abm          = ab·masked_m             relation 4, scratch[3]
 //!           L{2}[1] fingerprint3 = fingerprint + 3         relation 5, scratch[4]
 //! list 2    L{3}[0] abm_product          = Π abm           relation 6, scratch[5] (halving)
@@ -28,9 +28,9 @@ use field::Fr;
 use test_support::{sha256, to_hex};
 
 pub const TOY_CACHED_SHA256: &str =
-    "290c749517de6c59875c35074b12cb0ab9d86c6d205d67c352ae58888b29b195";
+    "9ad63a54eef4fbd9c808f6db52ad27038202200a5e56be9576c2c52e4cd9aa35";
 pub const TOY_CACHE_FREE_SHA256: &str =
-    "b1393484f612fedef1b125811620b4aae17da3c52144d7ed8ff9bed924fea815";
+    "8025412caae28c09ca9dcff6bd242961097bd59446c539d7f173dcb01b45ff91";
 
 /// A committed artifact's bytes, pinned before anything reads them.
 pub fn fixture_bytes(name: &str, digest: &str) -> Vec<u8> {

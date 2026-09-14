@@ -146,3 +146,57 @@ fn tree_product() {
     };
     assert_eq!(eval_gate(&gate, &[fr(11), fr(13)], &ch), fr(11 * 13));
 }
+
+/// `c_0 + Σ a_i·x_i + Σ b_j·y_j·z_j` with `c_0 = 7`, linear coefficients 2 and
+/// `γ`, product coefficients 3, `γ` and 5, and one operand read twice; then an
+/// empty linear list under a challenge constant, an empty products list, and
+/// both empty. Kills a kernel that drops the constant, and one that drops a
+/// product's coefficient: each is written out below and differs.
+#[test]
+fn quadratic() {
+    let (ch, g) = gamma();
+    let gate = GateDef::Quadratic {
+        constant: lit(7),
+        linear: vec![(lit(2), x(0)), (Coeff::Challenge(TOY), x(1))],
+        products: vec![
+            (lit(3), x(2), x(3)),
+            (Coeff::Challenge(TOY), x(4), x(5)),
+            (lit(5), x(0), x(2)),
+        ],
+    };
+    let values = [11, 13, 17, 19, 23, 29, 11, 17].map(fr);
+    let value = eval_gate(&gate, &values, &ch);
+    let products = fr(3 * 17 * 19 + 5 * 11 * 17) + g * fr(23 * 29);
+    assert_eq!(value, fr(7 + 2 * 11) + g * fr(13) + products);
+    assert_ne!(
+        value,
+        fr(2 * 11) + g * fr(13) + products,
+        "the constant is kept"
+    );
+    assert_ne!(
+        value,
+        fr(7 + 2 * 11 + 17 * 19 + 5 * 11 * 17) + g * fr(13) + g * fr(23 * 29),
+        "a product's coefficient is its own"
+    );
+
+    let no_linear = GateDef::Quadratic {
+        constant: Coeff::Challenge(TOY),
+        linear: vec![],
+        products: vec![(lit(3), x(0), x(1))],
+    };
+    assert_eq!(eval_gate(&no_linear, &[fr(11), fr(13)], &ch), g + fr(429));
+
+    let no_products = GateDef::Quadratic {
+        constant: lit(7),
+        linear: vec![(lit(2), x(0))],
+        products: vec![],
+    };
+    assert_eq!(eval_gate(&no_products, &[fr(11)], &ch), fr(29));
+
+    let constant_only = GateDef::Quadratic {
+        constant: lit(7),
+        linear: vec![],
+        products: vec![],
+    };
+    assert_eq!(eval_gate(&constant_only, &[], &ch), fr(7));
+}

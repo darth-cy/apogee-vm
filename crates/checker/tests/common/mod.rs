@@ -5,7 +5,7 @@
 //! `M[0] m, W[0] a, W[1] b, W[2] c, W[3] e, S[0] s` and `V[row]` over 16 rows;
 //! list 0 writes `ab = a·b`, `fingerprint = (γ·a + row)·c` (the parenthesis a
 //! cached entry in one compilation, inline in the other) and
-//! `masked_m = m·s + (1 − s)`, and enforces `0 = (e − a)·s`; list 1 writes
+//! `masked_m = m·s + (1 − s)`, and enforces `0 = e·s − a·s` (a `Quadratic`); list 1 writes
 //! `abm = ab·masked_m` and `fingerprint3 = fingerprint + 3`; list 2 halves
 //! both into their products; the outputs are `L{3}[1]` then `L{3}[0]`.
 
@@ -23,8 +23,8 @@ pub const CACHE_FREE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../constraints/tests/vectors/toy_cache_free.bin"
 );
-const CACHED_SHA256: &str = "290c749517de6c59875c35074b12cb0ab9d86c6d205d67c352ae58888b29b195";
-const CACHE_FREE_SHA256: &str = "b1393484f612fedef1b125811620b4aae17da3c52144d7ed8ff9bed924fea815";
+const CACHED_SHA256: &str = "9ad63a54eef4fbd9c808f6db52ad27038202200a5e56be9576c2c52e4cd9aa35";
+const CACHE_FREE_SHA256: &str = "8025412caae28c09ca9dcff6bd242961097bd59446c539d7f173dcb01b45ff91";
 
 /// The committed layout's positions: `m, a, b, c, e, s`.
 pub const M: usize = 0;
@@ -99,11 +99,30 @@ pub fn linear(gate: &mut GateDef) -> (&mut Vec<(Coeff, PolyAddress)>, &mut Coeff
     }
 }
 
-/// Every term of `gate` reading `operand` gets coefficient `c`; the count.
+/// Every term of `gate` reading `operand` gets coefficient `c`; the count. A
+/// `Quadratic` product is such a term when either of its factors is `operand`.
 pub fn set_coefficient(gate: &mut GateDef, operand: PolyAddress, c: Coeff) -> usize {
     let terms: Vec<&mut (Coeff, PolyAddress)> = match gate {
         GateDef::Linear { terms, .. } => terms.iter_mut().collect(),
         GateDef::AffineProduct { left, right, .. } => left.iter_mut().chain(right).collect(),
+        GateDef::Quadratic {
+            linear, products, ..
+        } => {
+            let mut changed = 0;
+            for (b, y, z) in products.iter_mut() {
+                if *y == operand || *z == operand {
+                    *b = c;
+                    changed += 1;
+                }
+            }
+            linear.iter_mut().for_each(|term| {
+                if term.1 == operand {
+                    term.0 = c;
+                    changed += 1;
+                }
+            });
+            return changed;
+        }
         _ => Vec::new(),
     };
     let mut changed = 0;
@@ -126,6 +145,16 @@ pub fn set_operand(gate: &mut GateDef, from: PolyAddress, to: PolyAddress) -> us
             left.iter_mut().chain(right).map(|t| &mut t.1).collect()
         }
         GateDef::TreeProduct { input } => vec![input],
+        GateDef::Quadratic {
+            linear, products, ..
+        } => {
+            let mut ops: Vec<&mut PolyAddress> = linear.iter_mut().map(|t| &mut t.1).collect();
+            for (_, y, z) in products.iter_mut() {
+                ops.push(y);
+                ops.push(z);
+            }
+            ops
+        }
     };
     let mut changed = 0;
     for op in operands {

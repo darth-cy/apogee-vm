@@ -132,9 +132,17 @@ fn coefficient(c: Coeff, challenges: &ExternalChallenges) -> Fr {
 /// Every pass evaluates gates through this function and no other, so it is the
 /// semantic authority: where a comment and this disagree, this wins.
 pub fn eval_gate(gate: &GateDef, values: &[Fr], challenges: &ExternalChallenges) -> Fr {
+    // Counted from the fields, not from `operands()`, so the kernel allocates
+    // nothing.
     let arity = match gate {
-        GateDef::TreeProduct { .. } => 2,
-        _ => gate.operands().len(),
+        GateDef::Linear { terms, .. } => terms.len(),
+        GateDef::Product { .. }
+        | GateDef::MaskIntoIdentity { .. }
+        | GateDef::TreeProduct { .. } => 2,
+        GateDef::AffineProduct { left, right, .. } => left.len() + right.len(),
+        GateDef::Quadratic {
+            linear, products, ..
+        } => linear.len() + 2 * products.len(),
     };
     assert_eq!(
         values.len(),
@@ -163,6 +171,17 @@ pub fn eval_gate(gate: &GateDef, values: &[Fr], challenges: &ExternalChallenges)
             affine(left, left_constant, &values[..t]) * affine(right, right_constant, &values[t..])
         }
         GateDef::TreeProduct { .. } => values[0] * values[1],
+        GateDef::Quadratic {
+            constant,
+            linear,
+            products,
+        } => {
+            let t = linear.len();
+            products.iter().zip(values[t..].chunks_exact(2)).fold(
+                affine(linear, constant, &values[..t]),
+                |acc, ((b, _, _), yz)| acc + c(b) * yz[0] * yz[1],
+            )
+        }
     }
 }
 
@@ -181,15 +200,203 @@ pub fn virtual_at_point(kind: VirtualKind, point: &[Fr]) -> Fr {
     }
 }
 
+/// Where one operand of a [`ResolvedList`] is read at a point.
+#[derive(Clone, Copy, Debug)]
+enum Source {
+    /// `lower[i]`: a column of layer `k`, or child 0 of one.
+    Lower(usize),
+    /// `upper[i]`: child 1 of a column of layer `k`.
+    Upper(usize),
+    /// `virtuals[i]`.
+    Virtual(usize),
+    /// Cached entry `i`, evaluated at the same point.
+    Cached(usize),
+}
+
+/// Gate list `k` with every operand resolved, once, to the index its value is
+/// read at: a column of the lower layer, a child-1 value, a virtual table or a
+/// cached entry. [`gate_values`] and [`summand`] go through it, and the prover
+/// holds one per gate list per call, so every pass evaluates the same gates
+/// through [`eval_gate`] in the same order.
+///
+/// Evaluating allocates nothing. The caller owns a scratch buffer from
+/// [`ResolvedList::scratch`] — one per thread of work, reused point after point
+/// — and at each point calls [`ResolvedList::cache`] before reading gates with
+/// [`ResolvedList::gate`], or calls [`ResolvedList::summand`], which does both.
+/// `lower`, `upper` and `virtuals` are as [`gate_values`] takes them.
+///
+/// It is public because the prover half is another crate; the verifier's
+/// [`gate_values`] and [`summand`] are wrappers over it.
+pub struct ResolvedList<'a> {
+    challenges: &'a ExternalChallenges,
+    /// The cached entries, then the producing gates, then the enforcing gates.
+    gates: Vec<&'a GateDef>,
+    /// Gate `i` reads `sources[bounds[i]..bounds[i + 1]]`, in [`eval_gate`]'s
+    /// value order.
+    sources: Vec<Source>,
+    bounds: Vec<usize>,
+    cached: usize,
+    producing: usize,
+    enforcing: usize,
+    /// The cached values, then room for the widest gate's operands.
+    scratch: usize,
+}
+
+impl<'a> ResolvedList<'a> {
+    /// Resolve gate list `k` of `artifact`. A halving list's `TreeProduct`
+    /// reads column `x`'s two children, `lower[x]` then `upper[x]`, and its
+    /// cached and enforcing lists are not read. Panics on an operand a
+    /// validated artifact cannot hold.
+    pub fn new(
+        artifact: &'a CircuitArtifact,
+        k: usize,
+        challenges: &'a ExternalChallenges,
+    ) -> ResolvedList<'a> {
+        let list = &artifact.layers[k];
+        let mut gates: Vec<&'a GateDef> = Vec::new();
+        let mut sources: Vec<Source> = Vec::new();
+        let mut bounds = vec![0];
+        let (cached, enforcing) = if list.halving {
+            for entry in &list.producing {
+                let x = column_index(artifact, k, &entry.gate.operands()[0]);
+                gates.push(&entry.gate);
+                sources.extend([Source::Lower(x), Source::Upper(x)]);
+                bounds.push(sources.len());
+            }
+            (0, 0)
+        } else {
+            let resolve = |op: PolyAddress| match op {
+                PolyAddress::Virtual(kind) => Source::Virtual(
+                    artifact
+                        .virtuals
+                        .iter()
+                        .position(|(v, _)| *v == kind)
+                        .expect("a validated artifact lists every virtual table it reads"),
+                ),
+                PolyAddress::Cached { offset, .. } => Source::Cached(offset as usize),
+                other => Source::Lower(column_index(artifact, k, &other)),
+            };
+            let all = list
+                .cached
+                .iter()
+                .map(|e| &e.gate)
+                .chain(list.producing.iter().map(|e| &e.gate))
+                .chain(list.enforcing.iter().map(|e| &e.gate));
+            for gate in all {
+                gates.push(gate);
+                sources.extend(gate.operands().into_iter().map(resolve));
+                bounds.push(sources.len());
+            }
+            (list.cached.len(), list.enforcing.len())
+        };
+        let widest = bounds.windows(2).map(|w| w[1] - w[0]).max().unwrap_or(0);
+        ResolvedList {
+            challenges,
+            gates,
+            sources,
+            bounds,
+            cached,
+            producing: list.producing.len(),
+            enforcing,
+            scratch: cached + widest,
+        }
+    }
+
+    /// The producing gates, which [`ResolvedList::gate`] numbers first.
+    pub fn producing(&self) -> usize {
+        self.producing
+    }
+
+    /// The enforcing gates, numbered after the producing ones.
+    pub fn enforcing(&self) -> usize {
+        self.enforcing
+    }
+
+    /// A scratch buffer of the length evaluation needs.
+    pub fn scratch(&self) -> Vec<Fr> {
+        vec![Fr::ZERO; self.scratch]
+    }
+
+    /// Evaluate every cached entry at the point into `scratch`, where
+    /// [`ResolvedList::gate`] substitutes them.
+    pub fn cache(&self, lower: &[Fr], upper: &[Fr], virtuals: &[Fr], scratch: &mut [Fr]) {
+        for i in 0..self.cached {
+            let value = self.eval(i, lower, upper, virtuals, scratch);
+            scratch[i] = value;
+        }
+    }
+
+    /// Gate `j` at the point — producing gates first, then enforcing — with
+    /// the cached values [`ResolvedList::cache`] last left in `scratch`.
+    pub fn gate(
+        &self,
+        j: usize,
+        lower: &[Fr],
+        upper: &[Fr],
+        virtuals: &[Fr],
+        scratch: &mut [Fr],
+    ) -> Fr {
+        self.eval(self.cached + j, lower, upper, virtuals, scratch)
+    }
+
+    /// `S_k` at the point: the cached entries, then every gate weighted by
+    /// `weights`, as [`summand`] defines it.
+    pub fn summand(
+        &self,
+        weights: &[Fr],
+        lower: &[Fr],
+        upper: &[Fr],
+        virtuals: &[Fr],
+        scratch: &mut [Fr],
+    ) -> Fr {
+        let gates = self.producing + self.enforcing;
+        assert_eq!(
+            gates,
+            weights.len(),
+            "summand: {} weights for {gates} gates",
+            weights.len()
+        );
+        self.cache(lower, upper, virtuals, scratch);
+        weights.iter().enumerate().fold(Fr::ZERO, |acc, (j, w)| {
+            acc + self.gate(j, lower, upper, virtuals, scratch) * *w
+        })
+    }
+
+    /// Gate `i` of the whole list — cached entries included — through the
+    /// kernel, its operands gathered into `scratch` past the cached values.
+    fn eval(
+        &self,
+        i: usize,
+        lower: &[Fr],
+        upper: &[Fr],
+        virtuals: &[Fr],
+        scratch: &mut [Fr],
+    ) -> Fr {
+        let (cached, operands) = scratch.split_at_mut(self.cached);
+        let sources = &self.sources[self.bounds[i]..self.bounds[i + 1]];
+        let operands = &mut operands[..sources.len()];
+        for (slot, source) in operands.iter_mut().zip(sources) {
+            *slot = match *source {
+                Source::Lower(x) => lower[x],
+                Source::Upper(x) => upper[x],
+                Source::Virtual(x) => virtuals[x],
+                Source::Cached(x) => cached[x],
+            };
+        }
+        eval_gate(self.gates[i], operands, self.challenges)
+    }
+}
+
 /// Every gate of list `k` at one point: one value per producing gate, then one
 /// per enforcing gate, cached entries evaluated once and substituted.
 ///
 /// `lower` holds one value per column of layer `k` — offset order, or layout
 /// order at `k = 0` — and, for a halving list, `upper` the matching child-1
 /// values (child 0 being `lower`); `upper` is empty otherwise. `virtuals` holds
-/// one value per `artifact.virtuals` entry. The forward pass, the self-check
-/// and both sides of the layer sumcheck all read gates through this function,
-/// which reads them through [`eval_gate`].
+/// one value per `artifact.virtuals` entry. It resolves the list through a
+/// [`ResolvedList`], which the forward pass, the self-check and the prover's
+/// layer sumcheck use directly, and which reads every gate through
+/// [`eval_gate`].
 pub fn gate_values(
     artifact: &CircuitArtifact,
     k: usize,
@@ -198,44 +405,12 @@ pub fn gate_values(
     virtuals: &[Fr],
     challenges: &ExternalChallenges,
 ) -> Vec<Fr> {
-    let list = &artifact.layers[k];
-    if list.halving {
-        assert_eq!(
-            upper.len(),
-            lower.len(),
-            "gate_values: halving gate list {k} needs both children of every column"
-        );
-        return list
-            .producing
-            .iter()
-            .map(|entry| {
-                let x = column_index(artifact, k, &entry.gate.operands()[0]);
-                eval_gate(&entry.gate, &[lower[x], upper[x]], challenges)
-            })
-            .collect();
-    }
-    let read = |op: &PolyAddress, cached: &[Fr]| match *op {
-        PolyAddress::Virtual(kind) => {
-            let i = artifact
-                .virtuals
-                .iter()
-                .position(|(v, _)| *v == kind)
-                .expect("a validated artifact lists every virtual table it reads");
-            virtuals[i]
-        }
-        PolyAddress::Cached { offset, .. } => cached[offset as usize],
-        other => lower[column_index(artifact, k, &other)],
-    };
-    let eval = |gate: &GateDef, cached: &[Fr]| {
-        let values: Vec<Fr> = gate.operands().iter().map(|op| read(op, cached)).collect();
-        eval_gate(gate, &values, challenges)
-    };
-    let cached: Vec<Fr> = list.cached.iter().map(|e| eval(&e.gate, &[])).collect();
-    list.producing
-        .iter()
-        .map(|e| &e.gate)
-        .chain(list.enforcing.iter().map(|e| &e.gate))
-        .map(|gate| eval(gate, &cached))
+    check_children(artifact, k, lower, upper, "gate_values");
+    let resolved = ResolvedList::new(artifact, k, challenges);
+    let mut scratch = resolved.scratch();
+    resolved.cache(lower, upper, virtuals, &mut scratch);
+    (0..resolved.producing() + resolved.enforcing())
+        .map(|j| resolved.gate(j, lower, upper, virtuals, &mut scratch))
         .collect()
 }
 
@@ -251,18 +426,23 @@ pub fn summand(
     virtuals: &[Fr],
     challenges: &ExternalChallenges,
 ) -> Fr {
-    let values = gate_values(artifact, k, lower, upper, virtuals, challenges);
-    assert_eq!(
-        values.len(),
-        weights.len(),
-        "summand: {} weights for {} gates",
-        weights.len(),
-        values.len()
-    );
-    values
-        .iter()
-        .zip(weights)
-        .fold(Fr::ZERO, |acc, (v, w)| acc + *v * *w)
+    // The message `summand` has always panicked with, when it called
+    // `gate_values`.
+    check_children(artifact, k, lower, upper, "gate_values");
+    let resolved = ResolvedList::new(artifact, k, challenges);
+    let mut scratch = resolved.scratch();
+    resolved.summand(weights, lower, upper, virtuals, &mut scratch)
+}
+
+/// A halving list reads both children of every column.
+fn check_children(artifact: &CircuitArtifact, k: usize, lower: &[Fr], upper: &[Fr], what: &str) {
+    if artifact.layers[k].halving {
+        assert_eq!(
+            upper.len(),
+            lower.len(),
+            "{what}: halving gate list {k} needs both children of every column"
+        );
+    }
 }
 
 /// Where a column operand of gate list `k` sits in layer `k`'s value order.
@@ -360,10 +540,18 @@ pub fn verify_sumcheck(claim: Fr, rounds: &[[Fr; 4]], t: &mut Transcript) -> Opt
 /// Reduce `outputs` to claims about the committed base columns, or reject.
 ///
 /// `t` must already be bound to the base layer, exactly as the prover's was;
-/// this function absorbs nothing of the base. It checks every shape and every
-/// challenge slot before it touches `t`, and never panics on anything `proof`
-/// or `outputs` carries. Panics if `artifact` breaks a law: the artifact is the
-/// verifier's own, not the prover's.
+/// this function absorbs nothing of the base. It checks every challenge slot
+/// and every shape before it touches `t`, and, for an artifact that has passed
+/// [`CircuitArtifact::validate`], never panics on anything `proof` or `outputs`
+/// carries.
+///
+/// The artifact is the circuit part of a verifying key: the verifier's own
+/// data, not the prover's. `verify` assumes it has passed
+/// [`CircuitArtifact::validate`] and does not check it again, because
+/// validation belongs to a key, once, not to every proof. The routine that
+/// loads a verifying key does not exist yet; the stage that introduces
+/// `VerifyingKey` must call `validate` there. On an artifact that breaks a law
+/// `verify`'s answer means nothing: it may panic, and it may accept.
 pub fn verify(
     artifact: &CircuitArtifact,
     proof: &GkrProof,
@@ -371,9 +559,6 @@ pub fn verify(
     challenges: &ExternalChallenges,
     t: &mut Transcript,
 ) -> Result<Vec<BaseClaim>, GkrError> {
-    if let Err(e) = artifact.validate() {
-        panic!("gkr_verify::verify: the artifact is not a circuit: {e}");
-    }
     check_challenges(artifact, challenges)?;
 
     let depth = artifact.depth();

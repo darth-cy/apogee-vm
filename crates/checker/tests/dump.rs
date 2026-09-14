@@ -50,6 +50,7 @@ fn the_dump_names_everything_in_the_toy() {
             "  2 MaskIntoIdentity",
             "  3 AffineProduct",
             "  4 TreeProduct",
+            "  5 Quadratic",
         ];
         for line in header
             .iter()
@@ -88,11 +89,15 @@ fn the_dump_names_everything_in_the_toy() {
             assert!(text.contains(address), "{label}: no {address}");
         }
         // One line per gate shape, then a bijection line and an output line.
+        // The `Quadratic` lines, the gated equality's gate and its relation,
+        // kill a formula that drops a product's coefficient or a factor, or
+        // the constant: its terms print in field order, never simplified.
         let mut exact = vec![
             "  L{2}[1](x) = Σ_y eq(x, y) · (1·L{1}[1] + 3)   [relation 5 define_fingerprint3]",
             "  L{1}[0](x) = Σ_y eq(x, y) · 1·W[0]·W[1]   [relation 0 define_ab]",
             "  L{1}[2](x) = Σ_y eq(x, y) · (M[0]·S[0] + 1 − S[0])   [relation 2 define_masked_m]",
-            "  0 = (1·W[3] + -1·W[0] + 0)·(1·S[0] + 0)   for every y   [relation 3 gated_equality]",
+            "  0 = (0 + 1·W[3]·S[0] + -1·W[0]·S[0])   for every y   [relation 3 gated_equality]",
+            "  3 gated_equality: 0 = (0 + 1·W[3]·S[0] + -1·W[0]·S[0])   for every y",
             "  L{3}[0](x) = Σ_y eq(x, y) · L{2}[0](y, 0)·L{2}[0](y, 1)   [relation 6 define_abm_product]",
             "  scratch[0] = L{1}[0]  ab",
             "  0  L{3}[1]  fingerprint3_product",

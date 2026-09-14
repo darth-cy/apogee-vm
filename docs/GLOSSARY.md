@@ -82,8 +82,8 @@ fold done non-destructively, leaving the receiver untouched.
 **Backing** — how a column's table is stored: a bitset, `u8`, `u16`, `u32`, or `Fr`.
 Trace columns are mostly narrow integers, so storage stays at native width. **Lift** is
 the canonical embedding of such an integer into `Fr`. It is *lazy*, meaning
-bind-triggered: reads lift on the fly and change nothing, the first bind lifts the whole
-table, and the backing is `Fr` from then on.
+bind-triggered: reads lift on the fly and change nothing, the first bind lifts the table,
+folding it straight into a half-size `Fr` one, and the backing is `Fr` from then on.
 
 **eq** — the equality indicator `eq(r, y) = prod_j (r_j y_j + (1-r_j)(1-y_j))`, the
 multilinear extension of "y equals r" on the cube. `eq_table(r)` tabulates it over the

@@ -134,11 +134,21 @@ pub enum GateDef {
     },
     /// `x(·,0)·x(·,1)`: one step of a product tree, in a halving list.
     TreeProduct { input: PolyAddress },
+    /// `c_0 + Σ a_i·x_i + Σ b_j·y_j·z_j`: any degree-2 polynomial written out
+    /// term by term, including those no single product of affine forms spells,
+    /// such as `a·b + c·d − e·f`.
+    Quadratic {
+        constant: Coeff,
+        linear: Vec<(Coeff, PolyAddress)>,
+        products: Vec<(Coeff, PolyAddress, PolyAddress)>,
+    },
 }
 
 impl GateDef {
     /// The addresses the gate reads, in kernel order. `TreeProduct`'s one
-    /// operand is read twice by the kernel, as its two children.
+    /// operand is read twice by the kernel, as its two children. `Quadratic`'s
+    /// are its linear operands, then each product's two factors in turn:
+    /// `x_1..x_t, y_1, z_1, .., y_u, z_u`.
     pub fn operands(&self) -> Vec<PolyAddress> {
         match self {
             GateDef::Linear { terms, .. } => terms.iter().map(|(_, a)| *a).collect(),
@@ -148,10 +158,21 @@ impl GateDef {
                 left.iter().chain(right.iter()).map(|(_, a)| *a).collect()
             }
             GateDef::TreeProduct { input } => alloc::vec![*input],
+            GateDef::Quadratic {
+                linear, products, ..
+            } => {
+                let mut o: Vec<PolyAddress> = linear.iter().map(|(_, x)| *x).collect();
+                for (_, y, z) in products {
+                    o.push(*y);
+                    o.push(*z);
+                }
+                o
+            }
         }
     }
 
-    /// Every coefficient the gate carries, constants included.
+    /// Every coefficient the gate carries, constants included, in the order
+    /// of the gate's fields. `Quadratic`'s is `c_0, a_1..a_t, b_1..b_u`.
     pub fn coefficients(&self) -> Vec<Coeff> {
         match self {
             GateDef::Linear { terms, constant } => {
@@ -171,6 +192,16 @@ impl GateDef {
                 c.push(*left_constant);
                 c.extend(right.iter().map(|(c, _)| *c));
                 c.push(*right_constant);
+                c
+            }
+            GateDef::Quadratic {
+                constant,
+                linear,
+                products,
+            } => {
+                let mut c = alloc::vec![*constant];
+                c.extend(linear.iter().map(|(a, _)| *a));
+                c.extend(products.iter().map(|(b, _, _)| *b));
                 c
             }
         }
@@ -199,7 +230,7 @@ const ROW_WISE_OUTPUT: &str =
 
 /// The gate catalogue: one row per `GateDef` variant, in wire-tag order, each
 /// naming its variant in `variant`.
-pub const CATALOGUE: [CatalogueEntry; 5] = [
+pub const CATALOGUE: [CatalogueEntry; 6] = [
     CatalogueEntry {
         variant: "Linear",
         defined_in: DEFINED_IN,
@@ -245,6 +276,16 @@ pub const CATALOGUE: [CatalogueEntry; 5] = [
         output: "producing: L{k+1}[j], one variable fewer (halving lists only)",
         template: "out(x) = Σ_y eq(x,y)·x(y,0)·x(y,1)",
         purpose: "one level of a product tree; the child bit is layer k's highest variable",
+    },
+    CatalogueEntry {
+        variant: "Quadratic",
+        defined_in: DEFINED_IN,
+        evaluated_in: EVALUATED_IN,
+        inputs: "x_1..x_t, y_1 z_1..y_u z_u: addresses list k may read",
+        output: ROW_WISE_OUTPUT,
+        template: "out(x) = Σ_y eq(x,y)·(c_0 + Σ a_i·x_i(y) + Σ b_j·y_j(y)·z_j(y))",
+        purpose: "a degree-2 relation that is no single product of affine forms, such as \
+                  a·b + c·d − e·f",
     },
 ];
 
@@ -333,8 +374,9 @@ pub struct Padding {
 /// A whole circuit, as data. Fields are in wire order.
 ///
 /// Every field is public, so a checker can be handed an artifact that breaks a
-/// law. [`CircuitArtifact::validate`] is the construction-time check; every
-/// engine entry point asserts it, and whatever builds an artifact calls it.
+/// law. [`CircuitArtifact::validate`] is the construction-time check: whatever
+/// builds or loads an artifact calls it, once. The engine's entry points assume
+/// an artifact has passed it and do not check it again.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CircuitArtifact {
     /// [`FORMAT_VERSION`].

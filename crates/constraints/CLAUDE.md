@@ -15,10 +15,10 @@ pub enum VirtualKind { RowIndex }
 pub enum PolyAddress { Memory(u32), Witness(u32), Setup(u32), Virtual(VirtualKind),
                        Inner { layer, offset }, Scratch(u32), Cached { layer, offset } }  // + Display
 pub enum Coeff { Literal(Fr), Challenge(u32) }
-pub enum GateDef { Linear, Product, MaskIntoIdentity, AffineProduct, TreeProduct }
+pub enum GateDef { Linear, Product, MaskIntoIdentity, AffineProduct, TreeProduct, Quadratic }
 impl GateDef { pub fn operands(&self) -> Vec<PolyAddress>; pub fn coefficients(&self) -> Vec<Coeff>; }
 pub struct CatalogueEntry { variant, defined_in, evaluated_in, inputs, output, template, purpose }
-pub const CATALOGUE: [CatalogueEntry; 5];
+pub const CATALOGUE: [CatalogueEntry; 6];
 pub struct CachedEntry { name, address, gate }
 pub struct ProducingEntry { relation, output, gate }
 pub struct EnforcingEntry { relation, gate }
@@ -48,15 +48,17 @@ pub const MAX_TRACE_VARS: u32 = 30;
   appear is fixed: `M W S V` in gate list 0, `L{k}` in list `k`, `C{k}` in list `k`, never
   `scratch` in a gate; `M W S V scratch` in a relation, never `L` or `C`. The committed
   subtrees are split by role in the type: `M` memory-argument-tied, `W` not, `S` setup.
-- **`GateDef` is closed.** Five shapes, wire tags 0–4, append-only. A later stage adds a
+- **`GateDef` is closed.** Six shapes, wire tags 0–5, append-only. A later stage adds a
   variant with a tag of its own; nothing interprets a coefficient table generically.
 - **Cached entries are substituted, never columns.** No table, no claim, no width, no gate
   total. Degree is counted after substitution, which is the one way a degree-3 gate can
   be written — and `validate` refuses it.
 - **Laws 1–4 and every other rule of `docs/spec/gkr.md` §4.2 live in `validate`.** It is
-  the construction-time check: whatever builds an artifact calls it, every engine entry
-  point asserts it. `crates/checker` enforces the laws a second time with code that shares
-  nothing with `src/laws.rs`.
+  the construction-time check: whatever builds or loads an artifact calls it, once. No
+  engine entry point calls it — `gkr_verify::verify` and `gkr`'s passes assume an artifact
+  that passed — so the verifying-key and proving-key loading routines of later stages
+  must. `crates/checker` enforces the laws a second time with code that shares nothing
+  with `src/laws.rs`.
 - **A relation constructed and then dropped is refused**: an inner column below the top
   that no gate reads, or a cached entry no gate names, constrains nothing.
 - **A halving list halves every column of its layer, in order.**
@@ -80,6 +82,6 @@ output, not an oracle: the independent description of the toy is
 ## Tests
 | File | Covers |
 | --- | --- |
-| `tests/wire.rs` | both fixtures round-trip byte for byte; every refusal of the reader; every single-bit flip of a fixture decodes or errors, never panics |
-| `tests/laws.rs` | one mutation of the toy per rule, each refused with its error — structured variants matched whole, prose details by the rule and the address or name they carry — beside the toy validating; the degree-3 gate; cache-free inlining and its refusals |
-| `tests/audit.rs` | every `GateDef` variant emitted across both compilations; the catalogue; the two compilations' identical shape |
+| `tests/wire.rs` | both fixtures round-trip byte for byte; `Quadratic` against its hand-written bytes for no terms, linear only, products only and both, and each malformed `Quadratic` refused; every refusal of the reader; every single-bit flip of a fixture decodes or errors, never panics |
+| `tests/laws.rs` | one mutation of the toy per rule, each refused with its error — structured variants matched whole, prose details by the rule and the address or name they carry — beside the toy validating; the degree-3 gate; `Quadratic`'s degree, its identically zero and unread-column cases, Law 4 against an `AffineProduct` relation, and its refusal to inline; cache-free inlining and its refusals |
+| `tests/audit.rs` | every `GateDef` variant, all six, emitted across both compilations, counts written by hand; the catalogue; the two compilations' identical shape |

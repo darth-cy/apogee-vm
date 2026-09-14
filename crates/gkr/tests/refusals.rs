@@ -1,16 +1,20 @@
-//! What the entry points refuse by panicking: an artifact that breaks a law, at
-//! `verify` and at `prove`, and every documented refusal of the prover's inputs.
-//! Each panic's message is matched, beside the same call on well-formed input
-//! returning normally.
+//! What the entry points refuse by panicking: every documented refusal of the
+//! prover's inputs. Each panic's message is matched, beside the same call on
+//! well-formed input returning normally. An artifact that breaks a law is not
+//! among them: the entry points assume one that has passed `validate`
+//! (`docs/spec/gkr.md` §5.1).
 
 mod common;
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use common::{bind, honest, output_claims, toy, toy_base, toy_columns, with_column, TOY_ROWS};
-use constraints::{CircuitArtifact, Coeff, ConstraintError, GateDef, PolyAddress};
+use common::{bind, honest, toy, toy_base, toy_columns, with_column, TOY_ROWS};
+use constraints::PolyAddress;
 use field::Fr;
-use gkr::{forward, prove, self_check, verify, BaseLayer, ExternalChallenges};
+use gkr::{
+    forward, prove, prove_sumcheck, self_check, BaseLayer, ExternalChallenges, LayerSummand,
+    LayerTables,
+};
 use poly::{MultilinearPoly, PolyBacking};
 
 /// Run `f`, which must panic, and return its message.
@@ -24,64 +28,6 @@ fn panic_message<R>(f: impl FnOnce() -> R) -> String {
         .cloned()
         .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
         .expect("a panic carries a message")
-}
-
-/// The toy with `define_fingerprint3` saying `scratch[1] + 4` while its gate
-/// says `L{1}[1] + 3`: a Law 4 break in the flat list, which no pass of the
-/// engine reads, so only an entry point's own `validate` can refuse it.
-fn lawless() -> CircuitArtifact {
-    let mut artifact = toy();
-    let relation = artifact
-        .relations
-        .iter_mut()
-        .find(|r| r.name == "define_fingerprint3")
-        .expect("the toy defines fingerprint3");
-    match &mut relation.gate {
-        GateDef::Linear { constant, .. } => *constant = Coeff::Literal(Fr::from_u64(4)),
-        other => panic!("define_fingerprint3 is Linear, not {other:?}"),
-    }
-    assert!(matches!(
-        artifact.validate(),
-        Err(ConstraintError::SingleSource { .. })
-    ));
-    artifact
-}
-
-/// `verify` asserts the laws before anything else. Kills M27, which deletes
-/// that assertion: the lawless toy then verifies the toy's honest proof.
-#[test]
-fn verify_panics_on_an_artifact_that_breaks_a_law() {
-    let artifact = toy();
-    let base = toy_base(&toy_columns(0x5313_1600));
-    let (values, proof, result) = honest(&artifact, &base);
-    result.expect("the lawful toy verifies");
-    let outputs = output_claims(&artifact, &values);
-
-    let lawless = lawless();
-    let (mut t, challenges) = bind(&lawless, &base);
-    let message = panic_message(|| verify(&lawless, &proof, &outputs, &challenges, &mut t));
-    assert!(
-        message.starts_with("gkr_verify::verify: the artifact is not a circuit: law 4"),
-        "{message}"
-    );
-}
-
-/// `prove` asserts the laws too. Kills M28, which deletes the assertion from
-/// the check `prove`, `forward` and `self_check` share.
-#[test]
-fn prove_panics_on_an_artifact_that_breaks_a_law() {
-    let artifact = toy();
-    let base = toy_base(&toy_columns(0x5313_1700));
-    let (values, _, result) = honest(&artifact, &base);
-    result.expect("the lawful toy proves and verifies");
-
-    let lawless = lawless();
-    let (mut t, challenges) = bind(&lawless, &base);
-    let message = panic_message(|| prove(&lawless, &values, &challenges, &mut t));
-    assert!(
-        message.starts_with("gkr::prove: the artifact is not a circuit: law 4"),
-        "{message}"
-    );
 }
 
 /// `BaseLayer::new` refuses an address given twice. Kills M36.
@@ -156,4 +102,56 @@ fn prove_and_self_check_refuse_a_missing_column() {
         message.contains(": gkr::self_check: layer 1 has 2 columns, the artifact 3\n"),
         "{message}"
     );
+}
+
+/// `prove_sumcheck` refuses a halving list's tables whose children do not pair
+/// up, with its own message: more `upper` tables than `lower` would otherwise
+/// be bound and ignored, and fewer an index out of bounds. Kills the mutant
+/// that drops the check, under which the call with one `upper` table too many
+/// returns rounds.
+#[test]
+fn prove_sumcheck_refuses_unpaired_children() {
+    let artifact = toy();
+    let base = toy_base(&toy_columns(0x5313_1a00));
+    let (mut t, challenges) = bind(&artifact, &base);
+    let k = 2;
+    let list = &artifact.layers[k];
+    assert!(list.halving, "the toy's list 2 halves");
+    let width = artifact.layers[k - 1].width as usize;
+    let summand = LayerSummand {
+        artifact: &artifact,
+        layer: k,
+        weights: vec![Fr::ONE; list.producing.len() + list.enforcing.len()],
+        challenges: &challenges,
+    };
+    let eq_point = [Fr::from_u64(3), Fr::from_u64(5), Fr::from_u64(7)];
+    let tables = |count: usize| -> Vec<MultilinearPoly> {
+        (0..count as u64)
+            .map(|c| {
+                MultilinearPoly::new(PolyBacking::Fr(
+                    (0..8).map(|i| Fr::from_u64(c * 8 + i)).collect(),
+                ))
+            })
+            .collect()
+    };
+    let mut paired = LayerTables {
+        lower: tables(width),
+        upper: tables(width),
+    };
+    let (rounds, point) = prove_sumcheck(&eq_point, &summand, &mut paired, &mut t);
+    assert_eq!((rounds.len(), point.len()), (3, 3));
+
+    for upper in [width + 1, width - 1] {
+        let mut unpaired = LayerTables {
+            lower: tables(width),
+            upper: tables(upper),
+        };
+        let message = panic_message(|| prove_sumcheck(&eq_point, &summand, &mut unpaired, &mut t));
+        assert!(
+            message.contains(
+                ": prove_sumcheck: halving gate list 2 needs both children of every column\n"
+            ),
+            "{message}"
+        );
+    }
 }

@@ -97,12 +97,19 @@ is admissible only if its MLE has a closed form at every such point.
 | 2 | `MaskIntoIdentity { input, mask }` | `x·m + (1 − m)` | `x, m` |
 | 3 | `AffineProduct { left, left_constant, right, right_constant }` | `(Σ a_i·x_i + a_0)·(Σ b_j·y_j + b_0)` | `x_1..x_t, y_1..y_u` |
 | 4 | `TreeProduct { input }` | `x(·,0)·x(·,1)` | `x(·,0), x(·,1)` |
+| 5 | `Quadratic { constant, linear, products }` | `c_0 + Σ a_i·x_i + Σ b_j·y_j·z_j` | `x_1..x_t, y_1, z_1, .., y_u, z_u` |
+
+A gate's coefficients, wherever they are listed, are in the order of its fields;
+`Quadratic`'s are `c_0, a_1..a_t, b_1..b_u`. `Quadratic` is every degree-2
+polynomial written term by term, which is what lets one gate say
+`a·b + c·d − e·f`: an `AffineProduct`'s quadratic part is a product of two
+linear forms, and that one is not.
 
 **The kernel** — `gkr_verify::eval_gate`, one evaluation per variant over operand
 values in that order — is the semantic authority, and nothing else evaluates a gate.
 The engine's passes — the forward pass, the self-check and both halves of the layer
-sumcheck — reach it through `gkr_verify::gate_values`, which resolves a gate list's
-operands; the checker's witness-row evaluator, padding check and Law 4 sampler call
+sumcheck — reach it through `gkr_verify::ResolvedList`, which resolves a gate list's
+operands once and which `gkr_verify::gate_values` and `summand` wrap; the checker's witness-row evaluator, padding check and Law 4 sampler call
 it directly over the flat relations. `constraints::CATALOGUE` records, per variant, where it is
 defined and evaluated, what it reads and writes, its formula in the template, and
 what it is for.
@@ -120,7 +127,9 @@ binding a table gives the multilinear extension of `H`'s values, which for a
 degree-2 `H` is not `H` of the columns' extensions.
 
 **Degree** is counted after substitution: a column is degree 1, a challenge
-degree 0, `C{k}[j]` the degree of its expression. Every gate, every cached
+degree 0, `C{k}[j]` the degree of its expression. A `Quadratic` is as wide as its
+widest term — a linear term `d(x_i)`, a product `d(y_j) + d(z_j)` — and degree 0
+when it has neither. Every gate, every cached
 expression, and every relation must be degree ≤ 2 in the layer it reads.
 `Product(C, y)` with `C` of degree 2 is the degree-3 gate construction refuses.
 
@@ -138,7 +147,8 @@ Product { c, x, C }  →  AffineProduct { [(c, x)], 0 ; C.terms, C.constant }
 ```
 
 Anything else — both factors cached, a cached entry that is not `Linear`, a
-reference from any other shape — refuses to inline. Layer count, widths, gate
+reference from any of the other five shapes, a `Quadratic` included — refuses to
+inline. A gate naming no cached entry, of any shape, is left as it is. Layer count, widths, gate
 totals, forward-pass values and proofs are unchanged.
 
 ## 4. The artifact
@@ -191,9 +201,12 @@ GateDef         (tag u8, split u32, coeffs [Coeff], operands [PolyAddress])
                 2 Mask           split 0, coeffs none,                      operands x m
                 3 AffineProduct  split t, coeffs a_1..a_t a_0 b_1..b_u b_0, operands x_1..x_t y_1..y_u
                 4 TreeProduct    split 0, coeffs none,                      operands x
+                5 Quadratic      split t, coeffs c_0 a_1..a_t b_1..b_u,     operands x_1..x_t y_1 z_1 .. y_u z_u
 ```
 
-Tags are append-only. `from_bytes` is total — it returns an error and never
+A `Quadratic` decodes only when `t` is at most the operand count, the operands
+after the first `t` pair up, and there are exactly `1 + t + (operands − t)/2`
+coefficients. Tags are append-only. `from_bytes` is total — it returns an error and never
 panics, whatever it is handed, and reserves nothing an untrusted length asks for
 — and accepts exactly the bytes `to_bytes` writes: it re-encodes and compares. It
 checks no law: a decoded artifact may break every one, which is what lets the
@@ -202,8 +215,9 @@ checker be handed one.
 ### 4.2 The laws
 
 Enforced twice: by `CircuitArtifact::validate` in `constraints`, which whatever
-builds an artifact calls and every engine entry point asserts, and by `checker`'s
-standalone validators, which share no code with it.
+builds or loads an artifact calls, once, and by `checker`'s standalone
+validators, which share no code with it. The engine's entry points assume an
+artifact that has passed `validate` and do not check it again (§5.1).
 
 1. **Locality.** Every operand of gate list `k` is at layer `k` in the sense of
    §2 (base and setup counting as layer 0), in range, and a cached operand is one
@@ -306,6 +320,12 @@ single point here is S13's.
   `challenge_scalar(SUMCHECK_CHALLENGE)` immediately after the digest.
 - The artifact is the verifier's, not the prover's: it is part of what a
   verifying key conveys.
+- The artifact has passed `CircuitArtifact::validate`. `verify`, `forward`,
+  `self_check` and `prove` do not check it again: validation belongs to a
+  verifying or proving key, once, not to every proof, and the routine that loads
+  a key calls it. No such routine exists at S13; the stage that introduces
+  `VerifyingKey` must call `validate` there. On an artifact that breaks a law the
+  engine's answer means nothing: it may panic, and `verify` may accept.
 
 ### 5.2 The transcript schedule (frozen)
 
@@ -402,5 +422,8 @@ anything the proof or the claims carry:
 | 3 | `ProofShape { layer }` | `layer = N`: the proof has the wrong number of layers; otherwise transition `layer`, lowest first, has the wrong round or claim count |
 | — | `LayerInconsistency { layer }` | a round or the final check of transition `layer` failed |
 
-An artifact that breaks a law is a programmer error, and every entry point panics
-on one.
+The artifact is not among what `verify` checks. It is assumed to have passed
+`CircuitArtifact::validate` where its verifying key was loaded (§5.1), and the
+guarantee above — no panic on anything the proof or the claims carry — is for
+such an artifact. On one that breaks a law `verify`'s answer means nothing: it
+may panic, and it may accept.

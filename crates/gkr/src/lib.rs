@@ -5,12 +5,16 @@
 //!
 //! `docs/spec/gkr.md` is normative. The verifier half is `crates/gkr-verify`,
 //! re-exported here whole, so `gkr::verify` and `gkr::GkrProof` are its. Every
-//! gate is evaluated through `gkr_verify::gate_values`, on both sides, so the
-//! same `G` serves the forward and the backward pass.
+//! gate is evaluated through a `gkr_verify::ResolvedList`, the resolution
+//! `gate_values` and `summand` go through, so the same `G` serves the forward
+//! and the backward pass.
 //!
 //! Per-row work — a gate list's rows, a round's row pairs — is split over
 //! rayon. Field arithmetic is exact, so no split and no reduction order can
-//! change a value.
+//! change a value. Nothing is allocated per row, per row pair or per node:
+//! each rayon task owns its buffers and overwrites them (`crates/gkr/CLAUDE.md`).
+
+use std::sync::Arc;
 
 use rayon::prelude::*;
 
@@ -26,10 +30,11 @@ pub use gkr_verify::*;
 // The containers
 // ---------------------------------------------------------------------------
 
-/// The committed base columns, by address.
+/// The committed base columns, by address. A clone shares the columns rather
+/// than copying them.
 #[derive(Clone, Debug)]
 pub struct BaseLayer {
-    columns: Vec<(PolyAddress, MultilinearPoly)>,
+    columns: Arc<Vec<(PolyAddress, MultilinearPoly)>>,
 }
 
 impl BaseLayer {
@@ -50,7 +55,9 @@ impl BaseLayer {
                 "BaseLayer::new: {address} is given twice"
             );
         }
-        BaseLayer { columns }
+        BaseLayer {
+            columns: Arc::new(columns),
+        }
     }
 
     pub fn get(&self, address: PolyAddress) -> Option<&MultilinearPoly> {
@@ -86,37 +93,31 @@ pub struct SelfCheckError {
 // Tables
 // ---------------------------------------------------------------------------
 
-fn table(column: &MultilinearPoly) -> Vec<Fr> {
-    (0..column.len()).map(|i| column.get(i)).collect()
-}
-
 fn fr_poly(values: Vec<Fr>) -> MultilinearPoly {
     MultilinearPoly::new(PolyBacking::Fr(values))
 }
 
-/// Layer `k`'s columns as `Fr` tables: the committed columns in layout order
-/// at `k = 0`, the layer's columns in offset order above.
-fn layer_tables(artifact: &CircuitArtifact, values: &LayerValues, k: usize) -> Vec<Vec<Fr>> {
+/// Layer `k`'s columns, read in place at their own width: the committed
+/// columns in layout order at `k = 0`, the layer's columns in offset order
+/// above.
+fn layer_columns<'v>(
+    artifact: &CircuitArtifact,
+    base: &'v BaseLayer,
+    layers: &'v [Vec<MultilinearPoly>],
+    k: usize,
+) -> Vec<&'v MultilinearPoly> {
     if k == 0 {
         artifact
             .committed()
             .iter()
-            .map(|a| table(values.base.get(*a).expect("the base was checked")))
+            .map(|a| base.get(*a).expect("the base was checked"))
             .collect()
     } else {
-        values.layers[k - 1].iter().map(table).collect()
+        layers[k - 1].iter().collect()
     }
 }
 
-/// Row `y` of every table.
-fn row(tables: &[Vec<Fr>], y: usize) -> Vec<Fr> {
-    tables.iter().map(|t| t[y]).collect()
-}
-
-fn check_artifact(artifact: &CircuitArtifact, challenges: &ExternalChallenges, what: &str) {
-    if let Err(e) = artifact.validate() {
-        panic!("{what}: the artifact is not a circuit: {e}");
-    }
+fn check_slots(artifact: &CircuitArtifact, challenges: &ExternalChallenges, what: &str) {
     if let Err(e) = check_challenges(artifact, challenges) {
         panic!("{what}: {e}");
     }
@@ -146,82 +147,155 @@ fn check_base(artifact: &CircuitArtifact, base: &BaseLayer, what: &str) {
 }
 
 // ---------------------------------------------------------------------------
+// Row by row
+// ---------------------------------------------------------------------------
+
+/// Rows per rayon task in the forward pass and the self-check.
+const BLOCK: usize = 1 << 10;
+
+/// What gate list `k` reads, row by row: layer `k`'s columns in place, and the
+/// virtual tables' closed forms for a row-wise list.
+struct RowReader<'v> {
+    columns: Vec<&'v MultilinearPoly>,
+    halving: bool,
+    kinds: Vec<VirtualKind>,
+    /// The rows the list defines: layer `k`'s, or half of them for a halving
+    /// list, whose row `i` reads rows `i` and `i + rows` of layer `k`.
+    rows: usize,
+}
+
+/// One rayon task's buffers for [`RowReader::load`], overwritten row after row.
+struct RowScratch {
+    lower: Vec<Fr>,
+    upper: Vec<Fr>,
+    virtuals: Vec<Fr>,
+    gates: Vec<Fr>,
+}
+
+impl<'v> RowReader<'v> {
+    fn new(
+        artifact: &CircuitArtifact,
+        base: &'v BaseLayer,
+        layers: &'v [Vec<MultilinearPoly>],
+        k: usize,
+    ) -> RowReader<'v> {
+        let halving = artifact.layers[k].halving;
+        let rows_in = 1usize << artifact.layer_vars(k);
+        RowReader {
+            columns: layer_columns(artifact, base, layers, k),
+            halving,
+            kinds: if halving {
+                Vec::new()
+            } else {
+                artifact.virtuals.iter().map(|(kind, _)| *kind).collect()
+            },
+            rows: if halving { rows_in / 2 } else { rows_in },
+        }
+    }
+
+    fn scratch(&self, resolved: &ResolvedList) -> RowScratch {
+        let width = self.columns.len();
+        RowScratch {
+            lower: vec![Fr::ZERO; width],
+            upper: vec![Fr::ZERO; if self.halving { width } else { 0 }],
+            virtuals: vec![Fr::ZERO; self.kinds.len()],
+            gates: resolved.scratch(),
+        }
+    }
+
+    /// Row `y`'s inputs into `s` — both children for a halving list, the
+    /// virtual tables for a row-wise one — and its cached entries evaluated.
+    fn load(&self, y: usize, resolved: &ResolvedList, s: &mut RowScratch) {
+        if self.halving {
+            for (column, (lo, hi)) in self
+                .columns
+                .iter()
+                .zip(s.lower.iter_mut().zip(&mut s.upper))
+            {
+                *lo = column.get(y);
+                *hi = column.get(y + self.rows);
+            }
+        } else {
+            for (column, value) in self.columns.iter().zip(s.lower.iter_mut()) {
+                *value = column.get(y);
+            }
+            // A virtual table is never materialized: its closed form, per row.
+            for (kind, value) in self.kinds.iter().zip(s.virtuals.iter_mut()) {
+                *value = virtual_at_row(*kind, y);
+            }
+        }
+        resolved.cache(&s.lower, &s.upper, &s.virtuals, &mut s.gates);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The forward pass
 // ---------------------------------------------------------------------------
 
 /// Materialize every layer from `base`, gate list by gate list, row by row.
 ///
-/// Panics if the artifact breaks a law, a slot is missing, or `base` is not
-/// exactly the committed layout at the trace's height.
+/// Panics if a slot is missing or `base` is not exactly the committed layout at
+/// the trace's height.
+///
+/// `artifact` is the circuit part of a proving key, assumed to have passed
+/// `CircuitArtifact::validate` where the key is loaded, and not checked again;
+/// on one that breaks a law the values mean nothing, and the call may panic.
 pub fn forward(
     artifact: &CircuitArtifact,
     base: &BaseLayer,
     challenges: &ExternalChallenges,
 ) -> LayerValues {
-    check_artifact(artifact, challenges, "gkr::forward");
+    check_slots(artifact, challenges, "gkr::forward");
     check_base(artifact, base, "gkr::forward");
-    let mut values = LayerValues {
-        base: base.clone(),
-        layers: Vec::new(),
-    };
+    let mut layers: Vec<Vec<MultilinearPoly>> = Vec::with_capacity(artifact.depth());
     for k in 0..artifact.depth() {
-        let rows_out = 1usize << artifact.layer_vars(k + 1);
-        let width = artifact.layer_width(k + 1) as usize;
-        let rows: Vec<Vec<Fr>> = gate_rows(artifact, &values, k, challenges)
-            .into_iter()
-            .map(|mut gates| {
-                gates.truncate(width);
-                gates
-            })
-            .collect();
-        debug_assert_eq!(rows.len(), rows_out);
-        let columns = (0..width)
-            .map(|j| fr_poly(rows.iter().map(|r| r[j]).collect()))
-            .collect();
-        values.layers.push(columns);
+        let columns = produce(artifact, base, &layers, k, challenges);
+        layers.push(columns);
     }
-    values
+    LayerValues {
+        base: base.clone(),
+        layers,
+    }
 }
 
-/// Every gate of list `k` on every row it defines — `gate_values` per row of
-/// the layer the list writes, over the layer it reads.
-fn gate_rows(
+/// The columns gate list `k` writes. Each is allocated once, at its height,
+/// and filled in place: the rows are cut into blocks, every column's slice of
+/// a block goes to one rayon task, and the task writes its producing gates row
+/// by row. Enforcing gates are not evaluated here.
+fn produce(
     artifact: &CircuitArtifact,
-    values: &LayerValues,
+    base: &BaseLayer,
+    layers: &[Vec<MultilinearPoly>],
     k: usize,
     challenges: &ExternalChallenges,
-) -> Vec<Vec<Fr>> {
-    let lower = layer_tables(artifact, values, k);
-    let rows_in = 1usize << artifact.layer_vars(k);
-    if artifact.layers[k].halving {
-        let half = rows_in / 2;
-        (0..half)
-            .into_par_iter()
-            .map(|i| {
-                gate_values(
-                    artifact,
-                    k,
-                    &row(&lower, i),
-                    &row(&lower, i + half),
-                    &[],
-                    challenges,
-                )
-            })
-            .collect()
-    } else {
-        (0..rows_in)
-            .into_par_iter()
-            .map(|y| {
-                // A virtual table is never materialized: its closed form, per row.
-                let virtuals: Vec<Fr> = artifact
-                    .virtuals
-                    .iter()
-                    .map(|(kind, _)| virtual_at_row(*kind, y))
-                    .collect();
-                gate_values(artifact, k, &row(&lower, y), &[], &virtuals, challenges)
-            })
-            .collect()
+) -> Vec<MultilinearPoly> {
+    let width = artifact.layer_width(k + 1) as usize;
+    if width == 0 {
+        return Vec::new();
     }
+    let reader = RowReader::new(artifact, base, layers, k);
+    let resolved = ResolvedList::new(artifact, k, challenges);
+    let mut out: Vec<Vec<Fr>> = (0..width).map(|_| vec![Fr::ZERO; reader.rows]).collect();
+    let mut blocks: Vec<Vec<&mut [Fr]>> = (0..reader.rows.div_ceil(BLOCK))
+        .map(|_| Vec::with_capacity(width))
+        .collect();
+    for column in out.iter_mut() {
+        for (block, chunk) in blocks.iter_mut().zip(column.chunks_mut(BLOCK)) {
+            block.push(chunk);
+        }
+    }
+    blocks.into_par_iter().enumerate().for_each_init(
+        || reader.scratch(&resolved),
+        |s, (b, mut block)| {
+            for i in 0..block[0].len() {
+                reader.load(b * BLOCK + i, &resolved, s);
+                for (j, column) in block.iter_mut().enumerate() {
+                    column[i] = resolved.gate(j, &s.lower, &s.upper, &s.virtuals, &mut s.gates);
+                }
+            }
+        },
+    );
+    out.into_iter().map(fr_poly).collect()
 }
 
 /// Recompute every gate from the materialized layers: every producing gate
@@ -230,34 +304,66 @@ fn gate_rows(
 ///
 /// `prove` does not call this: it proves whatever `values` holds, and a
 /// verifier rejects what is wrong. The caller runs it after `forward`.
+///
+/// Panics if a slot is missing or `values` does not have the artifact's shape.
+/// Like `forward`, it assumes `artifact` has passed `CircuitArtifact::validate`
+/// and does not check it again; on one that breaks a law its answer means
+/// nothing, and the call may panic.
 pub fn self_check(
     artifact: &CircuitArtifact,
     values: &LayerValues,
     challenges: &ExternalChallenges,
 ) -> Result<(), SelfCheckError> {
-    check_artifact(artifact, challenges, "gkr::self_check");
+    check_slots(artifact, challenges, "gkr::self_check");
     check_values(artifact, values, "gkr::self_check");
     for k in 0..artifact.depth() {
         let list = &artifact.layers[k];
-        let width = list.producing.len();
-        let written = layer_tables(artifact, values, k + 1);
-        let rows = gate_rows(artifact, values, k, challenges);
-        for (y, gates) in rows.iter().enumerate() {
-            let broken = (0..width)
-                .find(|&j| gates[j] != written[j][y])
-                .map(|j| list.producing[j].relation)
-                .or_else(|| {
-                    (width..gates.len())
-                        .find(|&e| gates[e] != Fr::ZERO)
-                        .map(|e| list.enforcing[e - width].relation)
-                });
-            if let Some(relation) = broken {
-                return Err(SelfCheckError {
-                    layer: k,
-                    row: y,
-                    relation: artifact.relations[relation as usize].name.clone(),
-                });
-            }
+        let reader = RowReader::new(artifact, &values.base, &values.layers, k);
+        let resolved = ResolvedList::new(artifact, k, challenges);
+        let written = &values.layers[k];
+        let producing = resolved.producing();
+        let enforcing = resolved.enforcing();
+        let rows = reader.rows;
+        // Blocks in parallel, rows in order within one, and within a row the
+        // producing gates before the enforcing ones: the first failure of the
+        // first failing block is the first failure.
+        let first = (0..rows.div_ceil(BLOCK))
+            .into_par_iter()
+            .map_init(
+                || reader.scratch(&resolved),
+                |s, b| {
+                    for y in b * BLOCK..rows.min((b + 1) * BLOCK) {
+                        reader.load(y, &resolved, s);
+                        for (j, column) in written.iter().enumerate().take(producing) {
+                            let value =
+                                resolved.gate(j, &s.lower, &s.upper, &s.virtuals, &mut s.gates);
+                            if value != column.get(y) {
+                                return Some((y, j));
+                            }
+                        }
+                        for j in producing..producing + enforcing {
+                            let value =
+                                resolved.gate(j, &s.lower, &s.upper, &s.virtuals, &mut s.gates);
+                            if value != Fr::ZERO {
+                                return Some((y, j));
+                            }
+                        }
+                    }
+                    None
+                },
+            )
+            .find_map_first(|failure| failure);
+        if let Some((row, j)) = first {
+            let relation = if j < producing {
+                list.producing[j].relation
+            } else {
+                list.enforcing[j - producing].relation
+            };
+            return Err(SelfCheckError {
+                layer: k,
+                row,
+                relation: artifact.relations[relation as usize].name.clone(),
+            });
         }
     }
     Ok(())
@@ -343,39 +449,52 @@ fn interpolate_cubic(v: &[Fr; 4], c: &[Fr; 3]) -> [Fr; 4] {
     ]
 }
 
-/// The line `lo + X·(hi − lo)` of pair `i` of every table, as `(lo, step)`.
-fn lines(tables: &[MultilinearPoly], i: usize) -> (Vec<Fr>, Vec<Fr>) {
-    tables
-        .iter()
-        .map(|t| {
-            let lo = t.get(2 * i);
-            (lo, t.get(2 * i + 1) - lo)
-        })
-        .unzip()
+/// One rayon task's buffers for a round's row pairs, overwritten pair after
+/// pair: the line of every table and every virtual table as `(value, step)`,
+/// the point a virtual table's closed form is evaluated at, and the resolved
+/// list's scratch.
+struct PairScratch {
+    lower: Vec<Fr>,
+    lower_step: Vec<Fr>,
+    upper: Vec<Fr>,
+    upper_step: Vec<Fr>,
+    virtuals: Vec<Fr>,
+    virtuals_step: Vec<Fr>,
+    /// The round's bound challenges first; the rest is written per pair.
+    point: Vec<Fr>,
+    gates: Vec<Fr>,
 }
 
-/// The line of pair `i` of every virtual table after `bound.len()` rounds of
-/// an `n`-variable sumcheck, from the closed form alone: the point
-/// `(bound, X, bits of i)` at `X = 0` and `X = 1`.
-fn virtual_lines(kinds: &[VirtualKind], bound: &[Fr], n: usize, i: usize) -> (Vec<Fr>, Vec<Fr>) {
-    if kinds.is_empty() {
-        return (Vec::new(), Vec::new());
+/// The line `lo + X·(hi − lo)` of pair `i` of every table, into `lo` and `step`.
+fn lines(tables: &[MultilinearPoly], i: usize, lo: &mut [Fr], step: &mut [Fr]) {
+    for (t, (lo, step)) in tables.iter().zip(lo.iter_mut().zip(step.iter_mut())) {
+        *lo = t.get(2 * i);
+        *step = t.get(2 * i + 1) - *lo;
     }
-    let at = |x: Fr| {
-        let mut point = bound.to_vec();
-        point.push(x);
-        let rest = n - bound.len() - 1;
-        point.extend((0..rest).map(|j| Fr::from_u64(((i >> j) & 1) as u64)));
-        point
-    };
-    let (p0, p1) = (at(Fr::ZERO), at(Fr::ONE));
-    kinds
-        .iter()
-        .map(|kind| {
-            let lo = virtual_at_point(*kind, &p0);
-            (lo, virtual_at_point(*kind, &p1) - lo)
-        })
-        .unzip()
+}
+
+/// The line of pair `i` of every virtual table after `bound` rounds, from the
+/// closed form alone: `point` already holds the bound challenges; this writes
+/// `X` and the bits of `i` after them and evaluates at `X = 0` and `X = 1`.
+fn virtual_lines(
+    kinds: &[VirtualKind],
+    bound: usize,
+    i: usize,
+    point: &mut [Fr],
+    lo: &mut [Fr],
+    step: &mut [Fr],
+) {
+    for (j, y) in point[bound + 1..].iter_mut().enumerate() {
+        *y = Fr::from_u64(((i >> j) & 1) as u64);
+    }
+    point[bound] = Fr::ZERO;
+    for (kind, lo) in kinds.iter().zip(lo.iter_mut()) {
+        *lo = virtual_at_point(*kind, point);
+    }
+    point[bound] = Fr::ONE;
+    for (kind, (lo, step)) in kinds.iter().zip(lo.iter().zip(step.iter_mut())) {
+        *step = virtual_at_point(*kind, point) - *lo;
+    }
 }
 
 fn step(values: &mut [Fr], steps: &[Fr]) {
@@ -413,40 +532,73 @@ pub fn prove_sumcheck(
             table.num_vars()
         );
     }
+    if artifact.layers[summand.layer].halving {
+        assert_eq!(
+            tables.upper.len(),
+            tables.lower.len(),
+            "prove_sumcheck: halving gate list {} needs both children of every column",
+            summand.layer
+        );
+    }
+    let resolved = ResolvedList::new(artifact, summand.layer, summand.challenges);
     let mut eq = fr_poly(eq_table(eq_point));
     let constants = interpolation_constants();
     let mut rounds = Vec::with_capacity(n);
     let mut point = Vec::with_capacity(n);
     for _ in 0..n {
         let half = eq.len() / 2;
+        let bound = point.len();
         let at_nodes = (0..half)
             .into_par_iter()
-            .map(|i| {
-                let (mut lower, lower_step) = lines(&tables.lower, i);
-                let (mut upper, upper_step) = lines(&tables.upper, i);
-                let (mut virtuals, virtuals_step) = virtual_lines(&kinds, &point, n, i);
-                let (eq_lo, eq_hi) = (eq.get(2 * i), eq.get(2 * i + 1));
-                let eq_step = eq_hi - eq_lo;
-                let mut eq_at = eq_lo;
-                let mut acc = [Fr::ZERO; 4];
-                for node in acc.iter_mut() {
-                    *node = eq_at
-                        * gkr_verify::summand(
-                            summand.artifact,
-                            summand.layer,
-                            &summand.weights,
-                            &lower,
-                            &upper,
-                            &virtuals,
-                            summand.challenges,
+            .map_init(
+                || {
+                    let mut at = vec![Fr::ZERO; n];
+                    at[..bound].copy_from_slice(&point);
+                    PairScratch {
+                        lower: vec![Fr::ZERO; tables.lower.len()],
+                        lower_step: vec![Fr::ZERO; tables.lower.len()],
+                        upper: vec![Fr::ZERO; tables.upper.len()],
+                        upper_step: vec![Fr::ZERO; tables.upper.len()],
+                        virtuals: vec![Fr::ZERO; kinds.len()],
+                        virtuals_step: vec![Fr::ZERO; kinds.len()],
+                        point: at,
+                        gates: resolved.scratch(),
+                    }
+                },
+                |s, i| {
+                    lines(&tables.lower, i, &mut s.lower, &mut s.lower_step);
+                    lines(&tables.upper, i, &mut s.upper, &mut s.upper_step);
+                    if !kinds.is_empty() {
+                        virtual_lines(
+                            &kinds,
+                            bound,
+                            i,
+                            &mut s.point,
+                            &mut s.virtuals,
+                            &mut s.virtuals_step,
                         );
-                    eq_at += eq_step;
-                    step(&mut lower, &lower_step);
-                    step(&mut upper, &upper_step);
-                    step(&mut virtuals, &virtuals_step);
-                }
-                acc
-            })
+                    }
+                    let (eq_lo, eq_hi) = (eq.get(2 * i), eq.get(2 * i + 1));
+                    let eq_step = eq_hi - eq_lo;
+                    let mut eq_at = eq_lo;
+                    let mut acc = [Fr::ZERO; 4];
+                    for node in acc.iter_mut() {
+                        *node = eq_at
+                            * resolved.summand(
+                                &summand.weights,
+                                &s.lower,
+                                &s.upper,
+                                &s.virtuals,
+                                &mut s.gates,
+                            );
+                        eq_at += eq_step;
+                        step(&mut s.lower, &s.lower_step);
+                        step(&mut s.upper, &s.upper_step);
+                        step(&mut s.virtuals, &s.virtuals_step);
+                    }
+                    acc
+                },
+            )
             .reduce(
                 || [Fr::ZERO; 4],
                 |a, b| [a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3]],
@@ -468,22 +620,41 @@ pub fn prove_sumcheck(
 // prove
 // ---------------------------------------------------------------------------
 
+/// A halving list's two child tables of `column`, each copied once, straight
+/// from the column: child 0 is the first `half` rows, child 1 the rest, the
+/// child bit being the highest variable. A halving list never reads the base,
+/// so its column is one `forward` wrote, in `Fr`; any other backing is read
+/// through `get`.
+fn children(column: &MultilinearPoly, half: usize) -> (MultilinearPoly, MultilinearPoly) {
+    let (lo, hi) = match column.backing() {
+        PolyBacking::Fr(v) => (v[..half].to_vec(), v[half..].to_vec()),
+        _ => (
+            (0..half).map(|i| column.get(i)).collect(),
+            (half..2 * half).map(|i| column.get(i)).collect(),
+        ),
+    };
+    (fr_poly(lo), fr_poly(hi))
+}
+
 /// Prove the circuit's outputs, as `values` holds them, down to its committed
 /// base columns, on `t` — which the caller has already bound to the base.
 /// Absorbs nothing of the base. Follows `docs/spec/gkr.md` §5.2 step for step,
 /// exactly as `verify` does.
 ///
-/// Panics if the artifact breaks a law, a slot is missing, or `values` does not
-/// have the artifact's shape. It does not check that `values` satisfies the
-/// gates — `self_check` does — so a proof over wrong values is a proof a
-/// verifier rejects.
+/// Panics if a slot is missing or `values` does not have the artifact's shape.
+/// It does not check that `values` satisfies the gates — `self_check` does — so
+/// a proof over wrong values is a proof a verifier rejects.
+///
+/// Like `forward`, it assumes `artifact` — the circuit part of a proving key —
+/// has passed `CircuitArtifact::validate` and does not check it again; on one
+/// that breaks a law the proof means nothing, and the call may panic.
 pub fn prove(
     artifact: &CircuitArtifact,
     values: &LayerValues,
     challenges: &ExternalChallenges,
     t: &mut Transcript,
 ) -> GkrProof {
-    check_artifact(artifact, challenges, "gkr::prove");
+    check_slots(artifact, challenges, "gkr::prove");
     check_values(artifact, values, "gkr::prove");
     let depth = artifact.depth();
 
@@ -492,7 +663,8 @@ pub fn prove(
     let mut message: Vec<Fr> = Vec::new();
     for out in &artifact.outputs {
         if let PolyAddress::Inner { offset, .. } = *out {
-            message.extend(table(&top[offset as usize]));
+            let column = &top[offset as usize];
+            message.extend((0..column.len()).map(|i| column.get(i)));
         }
     }
     t.append_scalars(transcript_tags::GKR_OUTPUTS, &message);
@@ -513,23 +685,16 @@ pub fn prove(
             challenges,
         };
 
-        // L2.
-        let columns = layer_tables(artifact, values, k);
+        // L2: one binding copy per column, at the column's width. The first
+        // bind folds a narrow copy straight into a half-size `Fr` table.
+        let columns = layer_columns(artifact, &values.base, &values.layers, k);
         let mut tables = if list.halving {
             let half = 1usize << (artifact.layer_vars(k) - 1);
-            LayerTables {
-                lower: columns
-                    .iter()
-                    .map(|c| fr_poly(c[..half].to_vec()))
-                    .collect(),
-                upper: columns
-                    .iter()
-                    .map(|c| fr_poly(c[half..].to_vec()))
-                    .collect(),
-            }
+            let (lower, upper) = columns.iter().map(|c| children(c, half)).unzip();
+            LayerTables { lower, upper }
         } else {
             LayerTables {
-                lower: columns.into_iter().map(fr_poly).collect(),
+                lower: columns.into_iter().cloned().collect(),
                 upper: Vec::new(),
             }
         };

@@ -13,7 +13,7 @@
 //!           L{1}[0] ab          = a·b
 //!           L{1}[1] fingerprint = shifted_a·c
 //!           L{1}[2] masked_m    = m·s + (1 − s)
-//!           0 = (e − a)·s                                  (enforcing)
+//!           0 = e·s − a·s                                  (enforcing, Quadratic)
 //! list 1    L{2}[0] abm          = ab·masked_m
 //!           L{2}[1] fingerprint3 = fingerprint + 3
 //! list 2    L{3}[0] abm_product          = Π abm           (halving)
@@ -56,6 +56,17 @@ fn neg(v: u64) -> Coeff {
 
 fn inner(layer: u32, offset: u32) -> PolyAddress {
     PolyAddress::Inner { layer, offset }
+}
+
+/// `e·s − a·s`, the same polynomial as `(e − a)·s`, written as a `Quadratic`
+/// so the toy emits every shape. The flat list and the gate list spell it
+/// alike.
+fn gated_equality(a: PolyAddress, e: PolyAddress, s: PolyAddress) -> GateDef {
+    GateDef::Quadratic {
+        constant: lit(0),
+        linear: vec![],
+        products: vec![(lit(1), e, s), (neg(1), a, s)],
+    }
 }
 
 fn names(list: &[&str]) -> Vec<String> {
@@ -105,12 +116,7 @@ fn toy() -> CircuitArtifact {
         Relation {
             name: "gated_equality".into(),
             output: None,
-            gate: GateDef::AffineProduct {
-                left: vec![(lit(1), e), (neg(1), a)],
-                left_constant: lit(0),
-                right: vec![(lit(1), s)],
-                right_constant: lit(0),
-            },
+            gate: gated_equality(a, e, s),
         },
         Relation {
             name: "define_abm".into(),
@@ -187,12 +193,7 @@ fn toy() -> CircuitArtifact {
             ],
             enforcing: vec![EnforcingEntry {
                 relation: 3,
-                gate: GateDef::AffineProduct {
-                    left: vec![(lit(1), e), (neg(1), a)],
-                    left_constant: lit(0),
-                    right: vec![(lit(1), s)],
-                    right_constant: lit(0),
-                },
+                gate: gated_equality(a, e, s),
             }],
         },
         LayerSpec {

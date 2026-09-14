@@ -423,7 +423,7 @@ fn a_non_canonical_field_element_is_refused() {
 // Gates
 // ---------------------------------------------------------------------------
 
-/// Gate tags are 0 to 4 and append-only; 5 and 255 are refused, alone and
+/// Gate tags are 0 to 5 and append-only; 6 and 255 are refused, alone and
 /// inside an artifact.
 #[test]
 fn an_unknown_gate_tag_is_refused() {
@@ -434,7 +434,7 @@ fn an_unknown_gate_tag_is_refused() {
             input: common::inner(1, 0)
         })
     );
-    for tag in [5u8, 255] {
+    for tag in [6u8, 255] {
         let unknown = raw_gate(tag, 0, &[], &[(4, 1, 0)]);
         assert_eq!(
             postcard::from_bytes::<GateDef>(&unknown),
@@ -523,6 +523,109 @@ fn a_linear_whose_coefficient_count_is_not_operands_plus_one_is_refused() {
         postcard::from_bytes::<GateDef>(&raw_gate(0, 0, &[], &[])),
         Err(postcard::Error::SerdeDeCustom)
     );
+}
+
+/// A `Quadratic` with `t` linear terms and `u` products, every coefficient and
+/// address distinct, beside its encoding written field by field from
+/// `docs/spec/gkr.md` §4.1: tag 5, split `t`, coefficients
+/// `c_0, a_1..a_t, b_1..b_u`, operands `x_1..x_t, y_1, z_1, .., y_u, z_u`.
+fn quadratic(t: u32, u: u32) -> (GateDef, Vec<RawCoeff>, Vec<RawAddress>) {
+    let lit = |v: u32| Coeff::Literal(Fr::from_u64(v as u64));
+    let raw = |v: u32| (0u8, 0u32, Fr::from_u64(v as u64).to_bytes());
+    let gate = GateDef::Quadratic {
+        constant: lit(100),
+        linear: (0..t)
+            .map(|i| (lit(200 + i), PolyAddress::Witness(i)))
+            .collect(),
+        products: (0..u)
+            .map(|j| {
+                let (y, z) = (
+                    PolyAddress::Witness(10 + 2 * j),
+                    PolyAddress::Setup(11 + 2 * j),
+                );
+                (lit(300 + j), y, z)
+            })
+            .collect(),
+    };
+    let mut coeffs = vec![raw(100)];
+    coeffs.extend((0..t).map(|i| raw(200 + i)));
+    coeffs.extend((0..u).map(|j| raw(300 + j)));
+    let mut operands: Vec<RawAddress> = (0..t).map(|i| (1, i, 0)).collect();
+    for j in 0..u {
+        operands.push((1, 10 + 2 * j, 0));
+        operands.push((2, 11 + 2 * j, 0));
+    }
+    (gate, coeffs, operands)
+}
+
+/// `Quadratic` encodes to exactly its hand-written bytes and decodes back, alone
+/// and inside an artifact, for no terms at all, linear terms only, products
+/// only, and both. Kills an encoder writing the product count as the split: the
+/// decoder reading it would round-trip, but not match these bytes.
+#[test]
+fn a_quadratic_round_trips_byte_for_byte() {
+    for (t, u) in [(0, 0), (2, 0), (0, 2), (2, 3)] {
+        let (gate, coeffs, operands) = quadratic(t, u);
+        let bytes = raw_gate(5, t, &coeffs, &operands);
+        assert_eq!(encode(&gate), bytes, "({t}, {u})");
+        assert_eq!(
+            postcard::from_bytes::<GateDef>(&bytes),
+            Ok(gate.clone()),
+            "({t}, {u})"
+        );
+        let file = with_gate_bytes(&bytes);
+        let decoded = CircuitArtifact::from_bytes(&file);
+        assert_eq!(decoded, Ok(toy_with_gate(gate)), "({t}, {u})");
+        assert_eq!(decoded.map(|a| a.to_bytes()), Ok(file), "({t}, {u})");
+    }
+}
+
+/// Every malformed `Quadratic` is an error, never a panic, alone and inside an
+/// artifact: from a well-formed `t = 2, u = 3`, a split past the operands (9
+/// and `u32::MAX`), an odd number of product operands (the last removed, the
+/// coefficients one fewer to match), one coefficient too many and one too
+/// few; and, where a reader that indexed first would panic, a gate with no
+/// coefficients at all. Kills a decoder that does not require the product
+/// operands to pair up: it builds two products from five operands and returns
+/// `Ok`.
+#[test]
+fn a_malformed_quadratic_is_refused() {
+    let (gate, coeffs, operands) = quadratic(2, 3);
+    assert_eq!((coeffs.len(), operands.len()), (6, 8));
+    assert!(postcard::from_bytes::<GateDef>(&raw_gate(5, 2, &coeffs, &operands)) == Ok(gate));
+
+    let mut bad: Vec<(&str, Vec<u8>)> = vec![
+        ("split 9", raw_gate(5, 9, &coeffs, &operands)),
+        ("split u32::MAX", raw_gate(5, u32::MAX, &coeffs, &operands)),
+        (
+            "an odd product operand count",
+            raw_gate(5, 2, &coeffs[..5], &operands[..7]),
+        ),
+        (
+            "one coefficient too few",
+            raw_gate(5, 2, &coeffs[..5], &operands),
+        ),
+        ("no coefficients at all", raw_gate(5, 0, &[], &[])),
+    ];
+    let mut extra = coeffs.clone();
+    extra.push(coeffs[0]);
+    bad.push((
+        "one coefficient too many",
+        raw_gate(5, 2, &extra, &operands),
+    ));
+
+    for (what, bytes) in &bad {
+        assert_eq!(
+            postcard::from_bytes::<GateDef>(bytes),
+            Err(postcard::Error::SerdeDeCustom),
+            "{what}"
+        );
+        assert_eq!(
+            CircuitArtifact::from_bytes(&with_gate_bytes(bytes)),
+            Err(SHAPE_REFUSED.into()),
+            "{what}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

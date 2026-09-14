@@ -20,9 +20,9 @@ use test_support::{sha256, to_hex, Rng};
 use transcript::Transcript;
 
 pub const TOY_CACHED_SHA256: &str =
-    "290c749517de6c59875c35074b12cb0ab9d86c6d205d67c352ae58888b29b195";
+    "9ad63a54eef4fbd9c808f6db52ad27038202200a5e56be9576c2c52e4cd9aa35";
 pub const TOY_CACHE_FREE_SHA256: &str =
-    "b1393484f612fedef1b125811620b4aae17da3c52144d7ed8ff9bed924fea815";
+    "8025412caae28c09ca9dcff6bd242961097bd59446c539d7f173dcb01b45ff91";
 
 /// A committed artifact, pinned before it is decoded.
 pub fn fixture(name: &str, digest: &str) -> CircuitArtifact {
@@ -246,7 +246,7 @@ fn relation(name: &str, output: Option<u32>, gate: GateDef) -> Relation {
 }
 
 /// A witness-only circuit whose all-zero row is its padding row, validated.
-fn circuit(
+pub fn circuit(
     trace_vars: u32,
     witness: &[&str],
     layers: Vec<LayerSpec>,

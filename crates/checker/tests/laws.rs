@@ -10,9 +10,9 @@
 //! entry no gate names, the halving rules — so a mutant that breaks one of those
 //! as well is marked `only_laws: false` and left out of that comparison.)
 //!
-//! The tables: 35 mutants of both compilations — 4 lawful controls and 31 that
+//! The tables: 36 mutants of both compilations — 4 lawful controls and 32 that
 //! break a law, 2 of those also breaking a rule outside the laws — and 4 of the
-//! cached compilation's cached entries, each breaking a law. 74 runs, 70 of
+//! cached compilation's cached entries, each breaking a law. 76 runs, 72 of
 //! them compared against `validate`.
 
 mod common;
@@ -63,11 +63,19 @@ fn swap_reads(gate: &mut GateDef, x: PolyAddress, y: PolyAddress) {
     set_operand(gate, parked, y);
 }
 
-/// The right factor's terms of the enforcing gate, `(e − a)·(s)`.
-fn enforcing_right(a: &mut CircuitArtifact) -> &mut Vec<(Coeff, PolyAddress)> {
+/// The linear terms of the enforcing gate, `e·s − a·s`, a `Quadratic`.
+fn enforcing_linear(a: &mut CircuitArtifact) -> &mut Vec<(Coeff, PolyAddress)> {
     match &mut a.layers[0].enforcing[0].gate {
-        GateDef::AffineProduct { right, .. } => right,
-        other => panic!("gated_equality is not an AffineProduct: {other:?}"),
+        GateDef::Quadratic { linear, .. } => linear,
+        other => panic!("gated_equality is not a Quadratic: {other:?}"),
+    }
+}
+
+/// The product terms of the enforcing gate, `e·s − a·s`.
+fn enforcing_products(a: &mut CircuitArtifact) -> &mut Vec<(Coeff, PolyAddress, PolyAddress)> {
+    match &mut a.layers[0].enforcing[0].gate {
+        GateDef::Quadratic { products, .. } => products,
+        other => panic!("gated_equality is not a Quadratic: {other:?}"),
     }
 }
 
@@ -179,7 +187,7 @@ fn mutants() -> Vec<Mutant> {
                 .push((lit(1), inner(1, 3)));
         }),
         m("an enforcing gate reads scratch[0]", 1, &[4], |a| {
-            enforcing_right(a).push((lit(1), PolyAddress::Scratch(0)))
+            enforcing_linear(a).push((lit(1), PolyAddress::Scratch(0)))
         }),
         // Law 2: a declared width or variable count the gates do not imply.
         m(
@@ -357,6 +365,20 @@ fn mutants() -> Vec<Mutant> {
                 assert_eq!(set_coefficient(&mut a.relations[r].gate, W0, lit(1)), 1);
             },
         ),
+        // Kills a `Quadratic` expansion in `constraints` that ignores its product
+        // coefficients: `validate` then accepts `2·e·s − a·s` against
+        // `e·s − a·s` while `check_laws` refuses it, and the differential
+        // below reports the disagreement.
+        m(
+            "a product coefficient of the Quadratic gated equality changed in its gate only",
+            4,
+            &[],
+            |a| {
+                let products = enforcing_products(a);
+                assert_eq!(products[0].0, lit(1));
+                products[0].0 = lit(2);
+            },
+        ),
         m("an operand changed in one relation only", 4, &[], |a| {
             let r = relation(a, "define_ab");
             assert_eq!(set_operand(&mut a.relations[r].gate, W1, W2), 1);
@@ -402,7 +424,7 @@ fn cached_mutants() -> Vec<Mutant> {
                         constant: lit(0),
                     },
                 });
-                enforcing_right(a).push((lit(1), second));
+                enforcing_linear(a).push((lit(1), second));
             },
         ),
         m(
@@ -414,7 +436,7 @@ fn cached_mutants() -> Vec<Mutant> {
                     layer: 7,
                     offset: 0,
                 };
-                enforcing_right(a).push((lit(1), other_layer));
+                enforcing_linear(a).push((lit(1), other_layer));
             },
         ),
         m(
@@ -501,7 +523,7 @@ fn every_mutant_fails_exactly_the_laws_it_breaks() {
             ),
         }
     }
-    assert_eq!(all.len(), 2 * 35 + 4, "mutant runs");
+    assert_eq!(all.len(), 2 * 36 + 4, "mutant runs");
 }
 
 /// `checker` and `constraints::validate` agree on every mutant whose only
@@ -524,6 +546,6 @@ fn check_laws_agrees_with_validate() {
             ));
         }
     }
-    assert_eq!(compared, 2 * 33 + 4, "mutants compared");
+    assert_eq!(compared, 2 * 34 + 4, "mutants compared");
     assert!(disagreements.is_empty(), "{}", disagreements.join("\n"));
 }

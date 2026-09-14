@@ -193,6 +193,7 @@ impl Serialize for GateDef {
             GateDef::MaskIntoIdentity { .. } => (2, 0),
             GateDef::AffineProduct { left, .. } => (3, left.len() as u32),
             GateDef::TreeProduct { .. } => (4, 0),
+            GateDef::Quadratic { linear, .. } => (5, linear.len() as u32),
         };
         (
             tag,
@@ -257,6 +258,30 @@ impl<'de> Deserialize<'de> for GateDef {
             4 => {
                 shape(split == 0 && c.is_empty() && o.len() == 1)?;
                 Ok(GateDef::TreeProduct { input: o[0] })
+            }
+            5 => {
+                // `t` linear operands, then two per product, one coefficient
+                // each, after the constant. `t <= o.len()` is checked first,
+                // so the subtractions below cannot wrap.
+                let t = split as usize;
+                shape(
+                    t <= o.len()
+                        && (o.len() - t).is_multiple_of(2)
+                        && c.len() == 1 + t + (o.len() - t) / 2,
+                )?;
+                Ok(GateDef::Quadratic {
+                    constant: c[0],
+                    linear: c[1..=t]
+                        .iter()
+                        .copied()
+                        .zip(o[..t].iter().copied())
+                        .collect(),
+                    products: c[1 + t..]
+                        .iter()
+                        .zip(o[t..].chunks_exact(2))
+                        .map(|(b, yz)| (*b, yz[0], yz[1]))
+                        .collect(),
+                })
             }
             _ => Err(D::Error::custom("malformed gate: unknown shape tag")),
         }

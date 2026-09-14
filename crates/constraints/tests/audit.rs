@@ -11,7 +11,7 @@ use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress, CATALOGUE};
 /// with no wildcard: a variant appended to `GateDef` stops this file compiling
 /// until the audit accounts for it. The names are this file's, not the
 /// catalogue's, so the catalogue is checked against something.
-const VARIANTS: usize = 5;
+const VARIANTS: usize = 6;
 
 fn variant_name(g: &GateDef) -> &'static str {
     match g {
@@ -20,6 +20,7 @@ fn variant_name(g: &GateDef) -> &'static str {
         GateDef::MaskIntoIdentity { .. } => "MaskIntoIdentity",
         GateDef::AffineProduct { .. } => "AffineProduct",
         GateDef::TreeProduct { .. } => "TreeProduct",
+        GateDef::Quadratic { .. } => "Quadratic",
     }
 }
 
@@ -67,6 +68,11 @@ fn one_of_each() -> [GateDef; VARIANTS] {
             right_constant: one,
         },
         GateDef::TreeProduct { input: x },
+        GateDef::Quadratic {
+            constant: one,
+            linear: vec![(one, x)],
+            products: vec![(one, x, y)],
+        },
     ]
 }
 
@@ -119,21 +125,21 @@ fn the_audit_over_both_compilations_emits_every_variant() {
 /// Cached: `Linear` is `shifted_a`, `fingerprint3`'s gate and its relation;
 /// `Product` is the gates of `ab`, `fingerprint` (`shifted_a·c`) and `abm` and
 /// the relations of `ab` and `abm`; `MaskIntoIdentity` is `masked_m`'s gate and
-/// relation; `AffineProduct` is the enforcing gate and the relations of
-/// `fingerprint` and the gated equality; `TreeProduct` is the two halving gates
-/// and their relations.
+/// relation; `AffineProduct` is the relation of `fingerprint` alone;
+/// `TreeProduct` is the two halving gates and their relations; `Quadratic` is
+/// the gated equality, `e·s − a·s`, as the enforcing gate and as its relation.
 ///
 /// Cache-free: `shifted_a` is gone and `fingerprint`'s `Product` over it is now
 /// an `AffineProduct`, so `Linear` and `Product` each lose one and
 /// `AffineProduct` gains one. The two compilations emit different mixes of
 /// `Product` and `AffineProduct`, which is why the audit unions them. (At the
-/// toy's size each compilation alone still covers all five variants, because
-/// the flat list carries the `AffineProduct`s the cached gates do not.)
+/// toy's size each compilation alone still covers all six variants, because
+/// the flat list carries the `AffineProduct` the cached gates do not.)
 #[test]
 fn each_compilation_reports_its_own_variant_counts() {
-    //                  Linear Product Mask Affine Tree
-    let cached_counts = [3, 5, 2, 3, 4];
-    let cache_free_counts = [2, 4, 2, 4, 4];
+    //                  Linear Product Mask Affine Tree Quadratic
+    let cached_counts = [3, 5, 2, 1, 4, 2];
+    let cache_free_counts = [2, 4, 2, 2, 4, 2];
 
     assert_eq!(variant_counts(&toy()), cached_counts, "toy_cached.bin");
     assert_eq!(

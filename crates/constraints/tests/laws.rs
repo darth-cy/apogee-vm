@@ -1531,3 +1531,167 @@ fn validate_and_inline_return_on_every_decodable_bit_flip() {
         bytes.len() * 8
     );
 }
+
+// ---------------------------------------------------------------------------
+// The Quadratic shape
+// ---------------------------------------------------------------------------
+
+fn quadratic(
+    constant: Coeff,
+    linear: &[(Coeff, PolyAddress)],
+    products: &[(Coeff, PolyAddress, PolyAddress)],
+) -> GateDef {
+    GateDef::Quadratic {
+        constant,
+        linear: linear.to_vec(),
+        products: products.to_vec(),
+    }
+}
+
+/// The toy's gated equality, `e·s − a·s`, as its products.
+fn gated_products() -> Vec<(Coeff, PolyAddress, PolyAddress)> {
+    vec![(lit(1), E, S), (neg(1), A, S)]
+}
+
+/// A `Quadratic`'s degree is its widest term, cached entries substituted.
+/// `ab_cached = a·b` is degree 2. As a factor of a product in the gated
+/// equality, `e·s − a·s + ab_cached·s`, it makes the gate degree 3, refused as
+/// exactly that before Law 4 is reached. As a linear term,
+/// `ab_cached + e·s − a·s − a·b`, it is degree 2 and still the flat list's
+/// `e·s − a·s`, and the circuit validates.
+///
+/// Kills a degree that counts a product as its wider factor alone (the
+/// degree-3 gate then reaches Law 4 and is refused as `SingleSource`), and one
+/// that counts a linear term as a product with the constant (the degree-2 gate
+/// is then refused as degree 3).
+#[test]
+fn a_quadratic_is_as_wide_as_its_widest_term() {
+    let named_linearly = linear(&[(lit(1), cached(0, 1))], lit(0));
+
+    let mut in_product = toy_with_ab_cached(named_linearly.clone());
+    let mut products = gated_products();
+    products.push((lit(1), cached(0, 1), S));
+    in_product.layers[0].enforcing[0].gate = quadratic(lit(0), &[], &products);
+    assert_eq!(
+        in_product.validate(),
+        Err(ConstraintError::Degree {
+            gate: "gated_equality".into(),
+            degree: 3,
+        })
+    );
+
+    let mut in_linear = toy_with_ab_cached(named_linearly);
+    let mut products = gated_products();
+    products.push((neg(1), A, B));
+    in_linear.layers[0].enforcing[0].gate = quadratic(lit(0), &[(lit(1), cached(0, 1))], &products);
+    assert_eq!(in_linear.validate(), Ok(()));
+}
+
+/// An enforcing `Quadratic` whose products cancel, `e·s − s·e` in the gate and
+/// its relation alike, is identically zero and refused as constraining nothing;
+/// the toy's own `e·s − a·s` is the control.
+///
+/// Kills a `Quadratic` expansion that does not normalize its sum: the two
+/// products are one monomial, `e·s`, and only the merge makes them cancel.
+#[test]
+fn an_enforcing_quadratic_whose_products_cancel_is_refused() {
+    let mut a = toy();
+    let cancels = quadratic(lit(0), &[], &[(lit(1), E, S), (neg(1), S, E)]);
+    a.layers[0].enforcing[0].gate = cancels.clone();
+    a.relations[3].gate = cancels;
+    assert_malformed(
+        &a,
+        "enforcing gate `gated_equality` in gate list 0 is identically zero",
+    );
+    assert_eq!(toy().validate(), Ok(()));
+}
+
+/// An inner column read only through `Quadratic` terms that cancel is unread.
+/// `abm` rewritten `ab·masked_m + k·fingerprint·ab − ab·fingerprint` and
+/// `fingerprint3` rewritten to the constant 3, gates and relations alike: at
+/// `k = 1` `L{1}[1]` is named twice and read by nothing, and is refused; at
+/// `k = 2` it is read, and the circuit validates.
+///
+/// Kills a `Quadratic` expansion that does not normalize its sum, under which
+/// the two `ab·fingerprint` monomials stay apart and each reads `L{1}[1]`.
+#[test]
+fn a_column_read_only_through_cancelling_quadratic_terms_is_unread() {
+    let with_k = |k: u64| {
+        let mut a = toy();
+        let (ab, fp, masked) = (inner(1, 0), inner(1, 1), inner(1, 2));
+        a.layers[1].producing[0].gate = quadratic(
+            lit(0),
+            &[],
+            &[(lit(1), ab, masked), (lit(k), fp, ab), (neg(1), ab, fp)],
+        );
+        a.relations[4].gate = quadratic(
+            lit(0),
+            &[],
+            &[
+                (lit(1), scratch(0), scratch(2)),
+                (lit(k), scratch(1), scratch(0)),
+                (neg(1), scratch(0), scratch(1)),
+            ],
+        );
+        a.layers[1].producing[1].gate = linear(&[], lit(3));
+        a.relations[5].gate = linear(&[], lit(3));
+        a
+    };
+    assert_malformed(
+        &with_k(1),
+        "L{1}[1] is written but gate list 1 never reads it",
+    );
+    assert_eq!(with_k(2).validate(), Ok(()));
+}
+
+/// Law 4 compares polynomials, not shapes: the toy's `Quadratic` gate
+/// `e·s − a·s` against its relation rewritten `(e − a)·s` as an
+/// `AffineProduct` validates; the gate with `−2·a·s` in place of `−1·a·s` is a
+/// different polynomial and is refused.
+///
+/// Kills a `Quadratic` expansion that ignores its product coefficients: the
+/// gate is then `e·s + a·s`, and the matching pair is refused.
+#[test]
+fn law4_holds_a_quadratic_to_the_polynomial_its_relation_spells() {
+    let mut a = toy();
+    a.relations[3].gate = affine(&[(lit(1), E), (neg(1), A)], lit(0), &[(lit(1), S)], lit(0));
+    assert_eq!(a.validate(), Ok(()));
+
+    a.layers[0].enforcing[0].gate = quadratic(lit(0), &[], &[(lit(1), E, S), (neg(2), A, S)]);
+    assert_single_source(
+        &a,
+        "relation `gated_equality` and its gate in gate list 0 are different polynomials",
+    );
+}
+
+/// §3.1: a `Quadratic` naming a cached entry does not inline. The gated
+/// equality with `shifted_a` added as a linear term, `shifted_a + e·s − a·s`,
+/// its relation `γ·a + row + e·s − a·s`, validates and refuses to inline,
+/// naming the gate. A `Quadratic` naming none passes through: the toy's own
+/// gated equality is unchanged in its cache-free compilation.
+///
+/// Kills an inliner passing every `Quadratic` through unchanged: the output
+/// then names a cached entry its emptied list no longer has, and is refused as
+/// locality instead.
+#[test]
+fn a_quadratic_naming_a_cached_entry_is_not_inlinable() {
+    let mut a = toy();
+    a.layers[0].enforcing[0].gate = quadratic(lit(0), &[(lit(1), cached(0, 0))], &gated_products());
+    a.relations[3].gate = quadratic(lit(0), &[(GAMMA, A), (lit(1), ROW)], &gated_products());
+    assert_eq!(a.validate(), Ok(()));
+    assert_eq!(
+        a.inline_cached(),
+        Err(ConstraintError::NotInlinable {
+            gate: "gated_equality".into(),
+        })
+    );
+
+    let gated = quadratic(lit(0), &[], &gated_products());
+    assert_eq!(toy().layers[0].enforcing[0].gate, gated);
+    assert_eq!(
+        toy()
+            .inline_cached()
+            .map(|out| out.layers[0].enforcing[0].gate.clone()),
+        Ok(gated)
+    );
+}

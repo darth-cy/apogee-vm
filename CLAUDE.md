@@ -78,7 +78,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
-cargo test --workspace                      # 612 tests as of S13; 20 more are #[ignore]d
+cargo test --workspace                      # 621 tests as of S13; 20 more are #[ignore]d
 cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
@@ -339,7 +339,7 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   the pointer-width ones must then actually differ, and the NaN one is excused only on a
   host whose own convention differs.
 - **The GKR engine's spec is `docs/spec/gkr.md`, and it is frozen**: the layer model, the
-  addresses, the five gate shapes, the artifact and its wire form, the laws, and the
+  addresses, the six gate shapes, the artifact and its wire form, the laws, and the
   backward pass's transcript schedule. A gate list is row-wise or halving, and a halving
   list halves every column of its layer in order, the child bit being the highest variable.
 - **The verifier half is its own crate.** `gkr-verify` is `#![no_std]` and CI builds it
@@ -347,8 +347,10 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   `gkr_verify::verify`. The owner chose two crates over a serial prover or an unchecked
   no_std claim.
 - **`gkr_verify::eval_gate` is the one kernel.** The engine's passes read gates
-  through `gate_values`, so the forward and backward passes share one `G`; the checker
-  calls the kernel directly over the flat relations.
+  through `gkr_verify::ResolvedList`, which `gate_values` and `summand` wrap, so the
+  forward and backward passes share one `G`; the checker calls the kernel directly over
+  the flat relations. The prover allocates nothing per row, row pair or node
+  (`crates/gkr/CLAUDE.md`).
 - **Cached entries are substituted, never columns.** No table, no claim, no width; degree
   counts after substitution, which is how a degree-3 gate is written and refused; the
   prover evaluates a cached entry at every round node and never binds it. A virtual table
@@ -364,6 +366,11 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   normalized expansion, so `x − x` and `0·x` read nothing — a cached entry no gate
   names, and an identically zero enforcing gate are refused: a relation constructed and
   then dropped is one nothing depends on.
+- **`validate` runs once, where an artifact is built or loaded, never per proof.**
+  `gkr::verify`, `forward`, `self_check` and `prove` assume a validated artifact and do not
+  re-check it; the later stages that load a verifying or proving key must call
+  `validate` there. On an artifact that breaks a law the engine's answer means nothing:
+  it may panic, and `verify` may accept.
 - **Boring beats clever.** Added surface area is a defect. Every verifier entry point is
   `(&VerifyingKey, &Proof, &PublicInputs)` and nothing else.
 

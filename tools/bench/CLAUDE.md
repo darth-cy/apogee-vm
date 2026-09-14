@@ -22,6 +22,7 @@ commit as any optimization; this is where that benchmark goes.
 | `src/mercury.rs` | `mercury` | S08 acceptance 11: Mercury commit/open/verify at 2^22, the opening's MSM accounting, and narrow-backed against Fr-backed commit |
 | `src/zerocheck_prove.rs` | `zerocheck-prove` | S04 acceptance 9: prove wall-clock and peak polynomial memory at 2^20 |
 | `src/zerocheck_verify.rs` | `zerocheck-verify` | S04: `verify_zerocheck` against recomputing every row, at 2^22 |
+| `src/gkr_prove.rs` | `gkr-prove` | S13: the GKR engine's `forward`, `self_check`, `prove` and `verify`, separately, over a circuit built as data (32 narrow committed columns, 339 gates over 20 lists: cached, virtual, enforcing and `Quadratic` gates, then halving lists down to 16 product-tree roots) at 2^18; the forward pass's computed table memory |
 | `src/square.rs` | — | the `A * A - B = 0` instance the two zerocheck routines share |
 | `src/timing.rs` | — | the seed, `REPS`, `Best`, and the formatting helpers |
 | `src/main.rs` | — | the registry and the argument parsing, and nothing else |

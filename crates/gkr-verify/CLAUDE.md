@@ -17,6 +17,12 @@ pub struct GkrProof { pub layers: Vec<SumcheckProof> }       // SumcheckProof re
 pub enum GkrError { MissingChallenge { slot }, OutputShape, ProofShape { layer }, LayerInconsistency { layer } }
 
 pub fn eval_gate(gate: &GateDef, values: &[Fr], challenges: &ExternalChallenges) -> Fr;   // THE kernel
+pub struct ResolvedList<'a> { /* gate list k, every operand resolved to an index once */ }
+impl ResolvedList<'_> { pub fn new(artifact, k, challenges) -> Self; pub fn producing(&self) -> usize;
+    pub fn enforcing(&self) -> usize; pub fn scratch(&self) -> Vec<Fr>;
+    pub fn cache(&self, lower, upper, virtuals, scratch: &mut [Fr]);
+    pub fn gate(&self, j, lower, upper, virtuals, scratch: &mut [Fr]) -> Fr;
+    pub fn summand(&self, weights, lower, upper, virtuals, scratch: &mut [Fr]) -> Fr; }
 pub fn gate_values(artifact, k, lower, upper, virtuals, challenges) -> Vec<Fr>;
 pub fn summand(artifact, k, weights, lower, upper, virtuals, challenges) -> Fr;
 pub fn virtual_at_row(kind: VirtualKind, row: usize) -> Fr;
@@ -31,18 +37,28 @@ pub fn verify(artifact: &CircuitArtifact, proof: &GkrProof, outputs: &OutputClai
 ## Frozen invariants
 - **The kernel is the semantic authority.** `eval_gate` is the one place a gate's formula
   is computed. The engine's passes — the forward pass, the self-check, both halves of the
-  layer sumcheck — reach it through `gate_values`; the checker calls it directly over the
-  flat relations. Where a comment and the kernel disagree, the kernel wins.
+  layer sumcheck — reach it through `ResolvedList`, which `gate_values` and `summand`
+  wrap; the checker calls it directly over the flat relations. Where a comment and the
+  kernel disagree, the kernel wins.
+- **Evaluation allocates nothing.** `eval_gate` counts its arity from the gate's fields;
+  `ResolvedList` resolves a list's operands once, in `new`, and its `cache`, `gate` and
+  `summand` work in a caller-owned scratch buffer. It is public only because the prover
+  half is another crate and must share this resolution rather than repeat it.
 - **The transcript schedule of `docs/spec/gkr.md` §5.2**, step for step: outputs, point,
   then per transition batch, rounds, claims, and — halving only — the child challenge.
 - **`verify` absorbs nothing of the base.** Its transcript arrives bound; that binding is
   the caller's.
-- **`verify` never panics on proof or claim data.** Every shape, every slot and the output
-  claims are checked before the transcript is touched, in the order
-  `MissingChallenge`, `OutputShape`, `ProofShape`. A round or final check failing is
-  `LayerInconsistency { layer }`, one variant for a wrong descending claim and a violated
-  enforcing gate alike: a batched sum cannot say which term is wrong. An artifact that
-  breaks a law panics — it is the verifier's own data.
+- **`verify` never panics on proof or claim data**, for an artifact that has passed
+  `CircuitArtifact::validate`. Every shape, every slot and the output claims are checked
+  before the transcript is touched, in the order `MissingChallenge`, `OutputShape`,
+  `ProofShape`. A round or final check failing is `LayerInconsistency { layer }`, one
+  variant for a wrong descending claim and a violated enforcing gate alike: a batched sum
+  cannot say which term is wrong.
+- **`verify` does not validate the artifact.** The artifact is the circuit part of a
+  verifying key, the verifier's own data, and validation belongs to the key, once, not to
+  every proof. No routine loads a verifying key yet; the stage that introduces
+  `VerifyingKey` must call `validate` there. On an artifact that breaks a law `verify`'s
+  answer means nothing: it may panic, and it may accept.
 - **Virtual tables are evaluated from their closed form**, never materialized.
 - **`#![no_std]` + `alloc`, forever.** CI builds it for `riscv32imac-unknown-none-elf`.
 

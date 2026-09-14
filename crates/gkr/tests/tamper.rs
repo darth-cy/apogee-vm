@@ -432,7 +432,7 @@ fn challenge_sites(artifact: &CircuitArtifact) -> [usize; 3] {
 /// where the toy names it: in a producing gate (the cache-free toy, where `γ`
 /// sits in fingerprint's `AffineProduct`) and in an enforcing gate alone (the
 /// toy with `γ` moved out of `shifted_a` and onto `s` in the gated equality,
-/// relations to match). Each verifies with its slot, and without it returns
+/// written for that as `(e − a)·(γ·s)`, relations to match). Each verifies with its slot, and without it returns
 /// the error, untouched transcript and all, where a verifier that checked
 /// cached entries only would panic inside the kernel. Kills Mutant C and M10b.
 #[test]
@@ -457,6 +457,20 @@ fn a_slot_named_by_a_producing_or_enforcing_gate_is_checked() {
     };
     set(&mut enforcing.layers[0].cached[0].gate, true, one);
     set(&mut enforcing.relations[1].gate, true, one);
+    // The toy spells the gated equality as a `Quadratic`, whose two product
+    // coefficients `γ` and `−γ` no single `Coeff` can both be; `(e − a)·(γ·s)`
+    // is the same relation with one challenge.
+    let gated = GateDef::AffineProduct {
+        left: vec![
+            (one, PolyAddress::Witness(3)),
+            (Coeff::Literal(-Fr::ONE), PolyAddress::Witness(0)),
+        ],
+        left_constant: Coeff::Literal(Fr::ZERO),
+        right: vec![(one, PolyAddress::Setup(0))],
+        right_constant: Coeff::Literal(Fr::ZERO),
+    };
+    enforcing.layers[0].enforcing[0].gate = gated.clone();
+    enforcing.relations[3].gate = gated;
     set(&mut enforcing.layers[0].enforcing[0].gate, false, gamma);
     set(&mut enforcing.relations[3].gate, false, gamma);
     assert_eq!(enforcing.relations[3].name, "gated_equality");

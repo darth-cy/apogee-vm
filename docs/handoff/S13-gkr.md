@@ -6,7 +6,7 @@ instead. The deviations are at the end, and each one was put to the owner or is
 recorded as the stage prompt's own ambiguity.
 
 The normative document written this stage is **`docs/spec/gkr.md`**: the layer model,
-the addresses, the five gate shapes, the artifact and its wire form, the laws, the
+the addresses, the six gate shapes, the artifact and its wire form, the laws, the
 padding contract, and the backward pass's transcript schedule. The design records are
 the four new crate `CLAUDE.md` files. This note is the frozen API, the artifacts, the
 evidence and the deviations.
@@ -63,10 +63,12 @@ pub enum GateDef {
     AffineProduct { left: Vec<(Coeff, PolyAddress)>, left_constant: Coeff,
                     right: Vec<(Coeff, PolyAddress)>, right_constant: Coeff },
     TreeProduct { input: PolyAddress },
+    Quadratic { constant: Coeff, linear: Vec<(Coeff, PolyAddress)>,
+                products: Vec<(Coeff, PolyAddress, PolyAddress)> },
 }
 impl GateDef { pub fn operands(&self) -> Vec<PolyAddress>; pub fn coefficients(&self) -> Vec<Coeff>; }
 pub struct CatalogueEntry { pub variant, defined_in, evaluated_in, inputs, output, template, purpose: &'static str }
-pub const CATALOGUE: [CatalogueEntry; 5];
+pub const CATALOGUE: [CatalogueEntry; 6];
 pub struct CachedEntry { pub name: String, pub address: PolyAddress, pub gate: GateDef }
 pub struct ProducingEntry { pub relation: u32, pub output: PolyAddress, pub gate: GateDef }
 pub struct EnforcingEntry { pub relation: u32, pub gate: GateDef }
@@ -106,6 +108,12 @@ pub struct GkrProof { pub layers: Vec<SumcheckProof> }
 pub enum GkrError { MissingChallenge { slot: u32 }, OutputShape, ProofShape { layer: usize },
                     LayerInconsistency { layer: usize } }                     // + Display
 pub fn eval_gate(gate: &GateDef, values: &[Fr], challenges: &ExternalChallenges) -> Fr;   // THE kernel
+pub struct ResolvedList<'a> { /* gate list k, operands resolved once */ }
+impl<'a> ResolvedList<'a> { pub fn new(artifact: &'a CircuitArtifact, k: usize, challenges: &'a ExternalChallenges) -> Self;
+    pub fn producing(&self) -> usize; pub fn enforcing(&self) -> usize; pub fn scratch(&self) -> Vec<Fr>;
+    pub fn cache(&self, lower: &[Fr], upper: &[Fr], virtuals: &[Fr], scratch: &mut [Fr]);
+    pub fn gate(&self, j: usize, lower: &[Fr], upper: &[Fr], virtuals: &[Fr], scratch: &mut [Fr]) -> Fr;
+    pub fn summand(&self, weights: &[Fr], lower: &[Fr], upper: &[Fr], virtuals: &[Fr], scratch: &mut [Fr]) -> Fr; }
 pub fn gate_values(artifact: &CircuitArtifact, k: usize, lower: &[Fr], upper: &[Fr], virtuals: &[Fr],
                    challenges: &ExternalChallenges) -> Vec<Fr>;
 pub fn summand(artifact: &CircuitArtifact, k: usize, weights: &[Fr], lower: &[Fr], upper: &[Fr],
@@ -185,11 +193,12 @@ event logs to this table event for event.
 ## What this freezes for every later stage
 
 1. **`docs/spec/gkr.md`** in full: the layer model with its halving rule, the address
-   placement rules, the five shapes and their kernel order, cached-entry substitution and
+   placement rules, the six shapes and their kernel order, cached-entry substitution and
    the degree rule, the artifact fields and wire form, Laws 1–4 and the other refusals,
    the padding contract, the schedule and the error order.
-2. **The kernel is `gkr_verify::eval_gate`**, reached through `gate_values`, by the
-   forward pass, the self-check, both halves of the layer sumcheck and the checker.
+2. **The kernel is `gkr_verify::eval_gate`**, reached through `ResolvedList` — which
+   `gate_values` and `summand` wrap — by the forward pass, the self-check and both
+   halves of the layer sumcheck, and directly by the checker.
 3. **The transcript-seeding contract** of must-be-exact 11: the engine absorbs no
    base material; external challenges are drawn after everything their gates reach is
    bound.
@@ -203,8 +212,8 @@ event logs to this table event for event.
 | Path | What |
 | --- | --- |
 | `docs/spec/gkr.md` | the normative GKR spec |
-| `crates/constraints/tests/vectors/toy_cached.bin` | the toy circuit, 1,616 bytes |
-| `crates/constraints/tests/vectors/toy_cache_free.bin` | its cache-free compilation, 1,630 bytes |
+| `crates/constraints/tests/vectors/toy_cached.bin` | the toy circuit, 1,486 bytes |
+| `crates/constraints/tests/vectors/toy_cache_free.bin` | its cache-free compilation, 1,500 bytes |
 | `tools/kat-gen/src/gkr.rs` | the toy's only definition; `cargo run -p kat-gen -- gkr` |
 | `crates/{constraints,gkr-verify,gkr,checker}/CLAUDE.md` | the design records |
 
@@ -216,7 +225,7 @@ They are kat-gen's output, not an oracle. The toy:
 base      M[0] m   W[0] a   W[1] b   W[2] c   W[3] e   S[0] s   V[row]      16 rows
 list 0    C{0}[0] shifted_a = γ·a + row                 (cached)
           L{1}[0] ab = a·b     L{1}[1] fingerprint = shifted_a·c     L{1}[2] masked_m = m·s + (1 − s)
-          0 = (e − a)·s                                  (enforcing)
+          0 = e·s − a·s                                  (enforcing, Quadratic)
 list 1    L{2}[0] abm = ab·masked_m      L{2}[1] fingerprint3 = fingerprint + 3
 list 2    L{3}[0], L{3}[1]: the product trees of abm and fingerprint3   (halving)
 outputs   L{3}[1], L{3}[0]
@@ -240,18 +249,18 @@ them.
 | 2 | tamper twin | `gkr/tests/tamper.rs` | inner flips rejected at transitions 2 and 1; `e` flipped on an active row rejected at 0 with the self-check naming `gated_equality`, and on an inactive row accepted; one variant, by the owner's decision |
 | 3 | cancellation control | `tamper.rs` | `+v`/`−v` on two active rows: bare sum exactly 0, eq-weighted sum nonzero, `verify` rejects |
 | 4 | batching invariant and event-log order | `gkr/tests/batching.rs` | both logs equal the schedule event for event; a walker asserts at most one outstanding point after each reduction and every batch or child challenge after its claims; both walker negative controls fail as they must |
-| 5 | law validators' negative controls | `checker/tests/laws.rs`, `constraints/tests/laws.rs` | a gate two layers down (Law 1), a width the gates do not produce (Law 2), an address the output map lacks (Law 3), a flat list disagreeing in count and in meaning (Law 4): each refused by the checker and at construction; 35 checker mutants of both compilations and 4 cached-only, `check_laws` and `validate` agreeing on all 70 compared runs |
+| 5 | law validators' negative controls | `checker/tests/laws.rs`, `constraints/tests/laws.rs` | a gate two layers down (Law 1), a width the gates do not produce (Law 2), an address the output map lacks (Law 3), a flat list disagreeing in count and in meaning (Law 4): each refused by the checker and at construction; 36 checker mutants of both compilations and 4 cached-only, `check_laws` and `validate` agreeing on all 72 compared runs |
 | 6 | degree-3 gate refused | `constraints/tests/laws.rs` | `Degree { gate: "define_ab", degree: 3 }` from a degree-2 cached entry inside a `Product` |
 | 7 | cached vs cache-free | `gkr/tests/compilation.rs`, `constraints/tests/audit.rs` | same depth, widths, variables and gate totals; same forward values; **the same proof byte for byte** |
 | 8 | witness-row evaluator | `checker/tests/witness.rs` | a satisfying row passes; 14 cells perturbed each report exactly their hand-derived relations; evaluators reporting nothing or everything fail |
 | 9 | cross-check against an independent source | `checker/tests/cross_check.rs` | hand-written verifier constants and a plain-arithmetic reference pass; 24 perturbations, each on both compilations, each fail |
-| 10 | dump; byte-identical round trip | `checker/tests/dump.rs`, `constraints/tests/wire.rs` | the dump's sections and two exact gate lines; bytes → artifact → bytes identical, plus every refusal of the reader and all 12,928 single-bit flips without a panic |
-| 11 | dead-variant audit across compilations | `constraints/tests/audit.rs` | all five variants emitted; per-compilation counts pinned and shown to differ |
+| 10 | dump; byte-identical round trip | `checker/tests/dump.rs`, `constraints/tests/wire.rs` | the dump's sections and two exact gate lines; bytes → artifact → bytes identical, plus every refusal of the reader and all 11,888 single-bit flips without a panic |
+| 11 | dead-variant audit across compilations | `constraints/tests/audit.rs` | all six variants emitted; per-compilation counts pinned and shown to differ |
 
 ## Verification performed
 
-**612 workspace tests, all green, plus 20 `#[ignore]`d** (495 and 20 at S12) — 117 new: 62
-in `crates/constraints`, 34 in `crates/gkr`, 21 in `crates/checker`, about half of them
+**621 workspace tests, all green, plus 20 `#[ignore]`d** (495 and 20 at S12) — 126 new: 69
+in `crates/constraints`, 36 in `crates/gkr`, 21 in `crates/checker`, about half of them
 written to close the adversarial review's findings. `fmt` and
 `clippy -D warnings` are clean across all four workspaces; `constraints` and `gkr-verify`
 build for `riscv32imac-unknown-none-elf`; `cargo run -p kat-gen` regenerates every
@@ -275,7 +284,7 @@ formulas and `MultilinearPoly::evaluate`, replaying the schedule itself: 44 node
 seed, three seeds, none of the kernel, `gate_values` or the prover's interpolation used.
 
 **The two enforcement points agree.** `checker/tests/laws.rs` holds
-`check_laws(a).is_ok() == a.validate().is_ok()` over 60 mutant runs.
+`check_laws(a).is_ok() == a.validate().is_ok()` over 72 mutant runs.
 
 ## Adversarial review
 
@@ -320,7 +329,8 @@ validator mutants (39 killed on the first pass), and the survivors named the gap
 Four code findings, all acted on:
 
 - **`validate` was quartic in a gate's size.** Law 4 multiplied whole expansions out before
-  merging, so a 15 KB artifact took about 20 s — and every engine entry point validates.
+  merging, so a 15 KB artifact took about 20 s — and at the time every engine entry point
+  validated on every call (deviation 19 records why none does now).
   Every intermediate sum and product is now normalized as it is built, which is quadratic
   in a gate's distinct operands.
 - **A zero coefficient bypassed the dropped-relation rule**: `0·x` named a column that
@@ -365,6 +375,71 @@ Two disagreements between the enforcement points remain, both outside the laws a
 documented on `check_laws`: the checker does not refuse a relation whose `V[row]` terms
 cancel while `virtuals` does not list the table, and it applies none of the rules beyond
 the laws.
+
+## The owner's review of PR #13
+
+Three changes, made after the adversarial review above, each on the owner's instruction.
+
+**1. A sixth gate shape, `Quadratic { constant, linear, products }`**, wire tag 5:
+`c_0 + Σ a_i·x_i + Σ b_j·y_j·z_j`. The owner's reason: `a·b + c·d − e·f = 0` is degree 2
+and no single earlier shape writes it, because it is no one product of affine forms.
+Operands read `x_1..x_t, y_1 z_1..y_u z_u`; coefficients `c_0, a_1..a_t, b_1..b_u`, field
+order like every other shape. Degree is the widest term after substitution, so a product
+naming a degree-2 cached entry is refused. A `Quadratic` naming a cached entry refuses to
+inline. The toy's gated equality is now `e·s − a·s`, relation and gate alike — the same
+polynomial as before, so a capture of every forward value, proof and verify result for
+both compilations, eight seeds each, and the two small test circuits was byte-identical
+across the change; only the artifact bytes moved (`toy_cached.bin` 1,616 → 1,486 bytes,
+`toy_cache_free.bin` 1,630 → 1,500). `gkr/tests/quadratic.rs` proves the owner's own
+relation end to end and rejects it with one cell of `f` changed.
+
+**2. The engine does not validate the artifact.** Deviation 19 is the contract; the first
+item of "Open for the next stage" is what it leaves owed.
+
+**3. The prover allocates per call, per gate list, per round and per rayon task — never
+per row, row pair or node.** The owner read the forward pass as building row tables and
+transposing them into columns. It did, and more: every column of layer `k` was lifted to a
+fresh `Fr` copy per gate list (8× a `u32` column, 256× a bit column) in `forward`,
+`self_check` and `prove`; every enforcing gate was evaluated in `forward` and thrown away;
+the base was deep-cloned into `LayerValues`; and `gate_values` made about `3G` heap
+allocations per row and per sumcheck node, `G` the gate count. Now:
+
+- `gkr_verify::ResolvedList` resolves a gate list's operands to indices once. `eval_gate`
+  is still the only formula evaluator and no longer allocates; `gate_values` and `summand`
+  wrap `ResolvedList`, so the two passes and both sides of the sumcheck still share one
+  `G`. It is the one new public item, public because the prover half is another crate.
+- `forward` allocates each output column once, at its height, and fills it column-major in
+  place over rayon blocks of 1,024 rows, reading layer `k` at its own width and evaluating
+  producing gates only. `self_check` streams the same way and returns the same first
+  failure. `BaseLayer` holds its columns behind an `Arc`.
+- `prove` hands the sumcheck native-width clones; `poly`'s `bind` folds a narrow table
+  straight to half-size `Fr`, so no full-size lifted copy exists (the `poly-bind` bench is
+  about 4% slower for it: 28.95 → 30.1 ms at 2^20).
+- No public signature changed, and nothing any pass outputs did: a 1.2 MB capture of
+  forward values, 160 self-check failures, proofs, 127 rejected tampers and base claims
+  over every test circuit was byte-identical before and after.
+
+`tools/bench`'s `gkr-prove` routine is the measurement, run against the prover before and
+after on the same circuit (32 narrow columns, 339 gates over 20 lists ending in 16
+product-tree roots, 2^18 rows, best of 3, one machine):
+
+| | before | after | |
+| --- | --- | --- | --- |
+| `forward` | 547.7 ms | 67.3 ms | 8.1× faster |
+| `self_check` | 599.5 ms | 67.4 ms | 8.9× faster |
+| `prove` | 2,228.5 ms | 998.0 ms | 2.2× faster |
+| `verify` | 10.1 ms | 10.3 ms | unchanged, as it should be |
+| maximum resident set size | 1.84 GB | 1.07 GB | 42% less |
+| user CPU, whole routine | 121.8 s | 26.3 s | 4.6× less |
+
+Still serial, and the obvious next step: binding a transition's tables one after another.
+
+A second adversarial review — the `Quadratic` gate, the prover's equivalence and its
+allocation contract, the validation contract, and a documentation sweep, each finding put
+to a verifier told to refute it — confirmed seven findings, all minor and all fixed: the
+refactor had dropped `prove_sumcheck`'s refusal of a halving list whose child tables do not
+pair up (restored, with `tests/refusals.rs::prove_sumcheck_refuses_unpaired_children`
+run against the mutant), and six counts and descriptions in the docs had gone stale.
 
 ## Deviations and notes for the reviewer
 
@@ -417,12 +492,24 @@ the laws.
 18. **An identically zero enforcing gate is refused**, and a column counts as read only
     where it survives normalization — rules the stage does not name, both instances of
     must-be-exact 14's "no constraint is constructed and then dropped". Found by the review.
-19. **Every engine entry point validates the artifact on every call.** Cheap for a real
-    circuit now that Law 4 normalizes as it builds, and the conservative choice while there
-    is no verifying key to validate once; the stage that builds one may move it there.
+19. **No engine entry point validates the artifact.** `verify`, `forward`, `self_check`
+    and `prove` assume an artifact that has passed `CircuitArtifact::validate` and do not
+    check it again, on the owner's instruction: the artifact is the circuit part of a
+    verifying or proving key, and validation belongs to the key, once, not to every proof.
+    No routine loads a key yet, so at S13 whatever builds an artifact — `kat-gen`, the test
+    harnesses — calls `validate` itself. On an artifact that breaks a law the engine's
+    answer means nothing: it may panic, and `verify` may accept. Until the owner's review
+    every entry point validated on every call; the two tests that held `verify` and `prove`
+    to panicking on a lawless artifact went with it. The per-call checks stay, in their
+    order: `MissingChallenge`, `OutputShape`, `ProofShape`, then the prover's shape
+    refusals.
 
 ## Open for the next stage
 
+- **The verifying-key and proving-key loading routines must call `validate`, once.**
+  Nothing else does: the engine's entry points assume a validated artifact (deviation 19),
+  and on one that breaks a law `verify` may accept. Until a stage introduces
+  `VerifyingKey`, whatever builds an artifact is the only place it is checked.
 - **Padding rows and product trees.** The padding contract says which relations an
   inactive row satisfies; it does not yet say a padding row contributes the
   multiplicative identity to every column a halving list reads (master rule 7), and the
