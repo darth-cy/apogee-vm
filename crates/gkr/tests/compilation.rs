@@ -101,3 +101,64 @@ fn a_degree_two_cached_entry_proves_and_verifies() {
     let (_, toy_proof, _) = honest(&toy(), &base);
     assert_eq!(proof, toy_proof, "the same circuit, so the same proof");
 }
+
+/// Cached entries above gate list 0, where they read inner columns. The toy's
+/// one cached entry is in list 0, which reads only the base. Here gate list 1
+/// holds one: a linear `C{1}[0] = 1·L{1}[1] + 0` under fingerprint3's
+/// `1·C{1}[0] + 3`, and a degree-2 `C{1}[0] = 1·L{1}[0]·L{1}[2]` under abm's
+/// `1·C{1}[0] + 0`. Each is the toy's circuit with one gate spelled through
+/// the entry, so each validates, proves, verifies, discharges, and gives the
+/// toy's proof.
+#[test]
+fn a_cached_entry_in_list_one_proves_and_verifies() {
+    let inner = |layer, offset| PolyAddress::Inner { layer, offset };
+    let entry = PolyAddress::Cached {
+        layer: 1,
+        offset: 0,
+    };
+    let one = Coeff::Literal(Fr::ONE);
+
+    let mut linear = toy();
+    linear.layers[1].cached.push(CachedEntry {
+        name: "fingerprint_cached".into(),
+        address: entry,
+        gate: GateDef::Linear {
+            terms: vec![(one, inner(1, 1))],
+            constant: Coeff::Literal(Fr::ZERO),
+        },
+    });
+    linear.layers[1].producing[1].gate = GateDef::Linear {
+        terms: vec![(one, entry)],
+        constant: Coeff::Literal(Fr::from_u64(3)),
+    };
+
+    let mut quadratic = toy();
+    quadratic.layers[1].cached.push(CachedEntry {
+        name: "abm_cached".into(),
+        address: entry,
+        gate: GateDef::Product {
+            coeff: one,
+            left: inner(1, 0),
+            right: inner(1, 2),
+        },
+    });
+    quadratic.layers[1].producing[0].gate = GateDef::Linear {
+        terms: vec![(one, entry)],
+        constant: Coeff::Literal(Fr::ZERO),
+    };
+
+    let base = toy_base(&toy_columns(0x5313_1110));
+    let (_, toy_proof, _) = honest(&toy(), &base);
+    for (what, artifact) in [("linear", linear), ("degree-2", quadratic)] {
+        artifact
+            .validate()
+            .unwrap_or_else(|e| panic!("a {what} cached entry in list 1 is legal: {e}"));
+        let (_, proof, result) = honest(&artifact, &base);
+        let claims = result.unwrap_or_else(|e| panic!("{what}: an honest proof verifies: {e}"));
+        discharge(&base, &claims).unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert_eq!(
+            proof, toy_proof,
+            "{what}: the same circuit, so the same proof"
+        );
+    }
+}

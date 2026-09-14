@@ -65,9 +65,9 @@ impl<'de, T: Deserialize<'de>> Visitor<'de> for SeqVisitor<T> {
     }
 
     fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Seq<T>, A::Error> {
-        // The declared length is untrusted: it reserves nothing the elements
-        // themselves do not then supply.
-        let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(4096));
+        // The declared length is untrusted, so it reserves nothing: the vector
+        // grows only as elements actually decode.
+        let mut out = Vec::new();
         while let Some(x) = seq.next_element()? {
             out.push(x);
         }

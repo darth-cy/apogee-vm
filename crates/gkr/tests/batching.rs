@@ -6,6 +6,7 @@ mod common;
 
 use common::{bind, output_claims, toy, toy_base, toy_columns};
 use constants::transcript_tags as tags;
+use constraints::CircuitArtifact;
 use gkr::{forward, prove, verify};
 use transcript::TranscriptEvent::{self, Absorb, Challenge};
 
@@ -61,9 +62,19 @@ fn expected_log() -> Vec<TranscriptEvent> {
 
 /// Walk a log and hold must-be-exact 6 at every step: a batch or child
 /// challenge is drawn only once every claim it reduces has been absorbed, and
-/// after each reduction exactly one claim point is outstanding. Returns how
-/// many batches and child reductions it saw.
-fn outstanding_claims_never_exceed_one(log: &[TranscriptEvent]) -> (usize, usize) {
+/// after each reduction exactly one claim point is outstanding. Which
+/// transitions halve, and how many claims each leaves, are read from
+/// `artifact`, never guessed from the log. Returns how many batches and child
+/// reductions it saw.
+///
+/// The exact equality with `expected_log` is the implementation check: it is
+/// what fails when `prove` or `verify` drifts from the schedule. This walker
+/// checks the schedule's own invariant, on whatever log it is handed.
+fn outstanding_claims_never_exceed_one(
+    artifact: &CircuitArtifact,
+    log: &[TranscriptEvent],
+) -> (usize, usize) {
+    let depth = artifact.depth();
     // Points awaiting reduction: none until the outputs' point exists.
     let mut outstanding = 0usize;
     let mut previous: Option<TranscriptEvent> = None;
@@ -76,6 +87,7 @@ fn outstanding_claims_never_exceed_one(log: &[TranscriptEvent]) -> (usize, usize
             Challenge {
                 tag: tags::GKR_BATCH,
             } => {
+                assert!(batches < depth, "one batch per transition");
                 assert_eq!(
                     outstanding, 1,
                     "a batch reduces exactly one outstanding point"
@@ -100,8 +112,17 @@ fn outstanding_claims_never_exceed_one(log: &[TranscriptEvent]) -> (usize, usize
                 n_scalars,
             } => {
                 assert_eq!(outstanding, 0, "claims come out of a sumcheck");
+                assert!(batches >= 1, "claims come out of a batched transition");
+                // Batches run from transition depth − 1 down to 0.
+                let k = depth - batches;
                 // A halving transition leaves two points, (ρ, 0) and (ρ, 1).
-                outstanding = if n_scalars == 4 { 2 } else { 1 };
+                let points = if artifact.layers[k].halving { 2 } else { 1 };
+                assert_eq!(
+                    n_scalars,
+                    points * artifact.layer_width(k) as usize,
+                    "transition {k} leaves one claim per column at each point"
+                );
+                outstanding = points;
             }
             Challenge {
                 tag: tags::GKR_CHILD,
@@ -112,7 +133,7 @@ fn outstanding_claims_never_exceed_one(log: &[TranscriptEvent]) -> (usize, usize
                         previous,
                         Some(Absorb {
                             tag: tags::GKR_LAYER_CLAIMS,
-                            n_scalars: 4
+                            ..
                         })
                     ),
                     "both child claims are absorbed immediately before the child challenge"
@@ -161,7 +182,7 @@ fn every_reduction_follows_the_claims_it_reduces() {
         "both sides end in one sponge state"
     );
     assert_eq!(
-        outstanding_claims_never_exceed_one(verifier.event_log()),
+        outstanding_claims_never_exceed_one(&artifact, verifier.event_log()),
         (3, 1),
         "one batch per transition, one child reduction for the halving list"
     );
@@ -171,6 +192,12 @@ fn every_reduction_follows_the_claims_it_reduces() {
 /// one that batches before any claim exists, are both caught.
 #[test]
 fn the_walker_rejects_a_reduction_before_its_claims() {
+    let artifact = toy();
+    assert_eq!(
+        outstanding_claims_never_exceed_one(&artifact, &expected_log()),
+        (3, 1),
+        "the control walks"
+    );
     let mut early_child = expected_log();
     let claims = early_child
         .iter()
@@ -186,7 +213,8 @@ fn the_walker_rejects_a_reduction_before_its_claims() {
         .unwrap();
     early_child.swap(claims, claims + 1);
     assert!(
-        std::panic::catch_unwind(|| outstanding_claims_never_exceed_one(&early_child)).is_err()
+        std::panic::catch_unwind(|| outstanding_claims_never_exceed_one(&artifact, &early_child))
+            .is_err()
     );
 
     let mut early_batch = expected_log();
@@ -208,6 +236,7 @@ fn the_walker_rejects_a_reduction_before_its_claims() {
         },
     );
     assert!(
-        std::panic::catch_unwind(|| outstanding_claims_never_exceed_one(&early_batch)).is_err()
+        std::panic::catch_unwind(|| outstanding_claims_never_exceed_one(&artifact, &early_batch))
+            .is_err()
     );
 }

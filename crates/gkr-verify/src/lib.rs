@@ -118,7 +118,7 @@ impl fmt::Display for GkrError {
 
 /// A coefficient's value. Panics on a slot `challenges` does not hold; the
 /// entry points check every slot first.
-pub fn coefficient(c: Coeff, challenges: &ExternalChallenges) -> Fr {
+fn coefficient(c: Coeff, challenges: &ExternalChallenges) -> Fr {
     match c {
         Coeff::Literal(v) => v,
         Coeff::Challenge(slot) => challenges
@@ -200,6 +200,11 @@ pub fn gate_values(
 ) -> Vec<Fr> {
     let list = &artifact.layers[k];
     if list.halving {
+        assert_eq!(
+            upper.len(),
+            lower.len(),
+            "gate_values: halving gate list {k} needs both children of every column"
+        );
         return list
             .producing
             .iter()
@@ -285,7 +290,7 @@ pub fn powers(lambda: Fr, n: usize) -> Vec<Fr> {
 
 /// The number of claim values transition `k` leaves on layer `k`: one per
 /// column, or two per column for a halving list.
-pub fn claim_count(artifact: &CircuitArtifact, k: usize) -> usize {
+fn claim_count(artifact: &CircuitArtifact, k: usize) -> usize {
     let width = artifact.layer_width(k) as usize;
     if artifact.layers[k].halving {
         2 * width

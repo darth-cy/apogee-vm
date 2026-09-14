@@ -101,28 +101,65 @@ pub(crate) fn validate(a: &CircuitArtifact) -> Result<(), ConstraintError> {
 /// Every inner column below the top is read by the gate list above it, and
 /// every cached entry is named by a gate of its list. A column nothing reads —
 /// or a cached entry nothing names — is a relation constructed and then
-/// dropped: it constrains nothing, and a trace breaking it verifies. The top
-/// layer is Law 3's; a committed column nothing reads is still opened.
+/// dropped: nothing downstream depends on it, so it constrains nothing the
+/// circuit's outputs or enforcing gates can see. The top layer is Law 3's; a
+/// committed column nothing reads is still opened.
+///
+/// "Reads" is decided on the gates' normalized expansions, cached entries
+/// substituted, so a term that cancels — `x − x`, or `0·x` — reads nothing. An
+/// enforcing gate whose expansion is zero is dropped in the same sense: it
+/// holds on every row whatever it names, so it constrains nothing.
 fn nothing_dropped(a: &CircuitArtifact, shapes: &[(u32, u32)]) -> Result<(), ConstraintError> {
+    let inverse: BTreeMap<PolyAddress, u32> = a
+        .scratch
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.address, i as u32))
+        .collect();
     for (k, list) in a.layers.iter().enumerate() {
+        let layered = Namespace {
+            layered: true,
+            cached: &list.cached,
+            inverse: &inverse,
+        };
+        for entry in &list.enforcing {
+            if layered.expand(&entry.gate).is_empty() {
+                return Err(malformed(format!(
+                    "enforcing gate `{}` in gate list {k} is identically zero, so it constrains \
+                     nothing",
+                    a.relations[entry.relation as usize].name
+                )));
+            }
+        }
         let gates: Vec<&GateDef> = list
             .producing
             .iter()
             .map(|e| &e.gate)
             .chain(list.enforcing.iter().map(|e| &e.gate))
             .collect();
-        let mut read: Vec<PolyAddress> = gates.iter().flat_map(|g| g.operands()).collect();
+        let named: Vec<PolyAddress> = gates.iter().flat_map(|g| g.operands()).collect();
         for (j, entry) in list.cached.iter().enumerate() {
-            if !read.contains(&entry.address) {
+            if !named.contains(&entry.address) {
                 return Err(malformed(format!(
                     "cached entry `{}` (C{{{k}}}[{j}]) is named by no gate",
                     entry.name
                 )));
             }
         }
-        read.extend(list.cached.iter().flat_map(|e| e.gate.operands()));
         if k == 0 {
             continue;
+        }
+        let mut read: Vec<PolyAddress> = Vec::new();
+        for gate in &gates {
+            for (monomial, _) in layered.expand(gate) {
+                for symbol in monomial {
+                    if let Symbol::Column(PolyAddress::Scratch(s))
+                    | Symbol::Child(PolyAddress::Scratch(s), _) = symbol
+                    {
+                        read.push(a.scratch[s as usize].address);
+                    }
+                }
+            }
         }
         for j in 0..shapes[k].1 {
             let column = PolyAddress::Inner {
@@ -420,7 +457,7 @@ fn row_wise_shape(gate: &GateDef, name: &str, k: usize) -> Result<(), Constraint
 /// A gate's degree in the layer it reads, cached entries substituted: a column
 /// is 1, a challenge 0, `C{k}[j]` its expression's degree. Read from the shape,
 /// never from a simplification of it.
-pub(crate) fn degree(gate: &GateDef, cached: &[CachedEntry]) -> u32 {
+fn degree(gate: &GateDef, cached: &[CachedEntry]) -> u32 {
     let d = |op: &PolyAddress| match *op {
         PolyAddress::Cached { offset, .. } => degree(&cached[offset as usize].gate, &[]),
         _ => 1,
@@ -641,7 +678,9 @@ enum Symbol {
     Challenge(u32),
 }
 
-/// `Σ coefficient · Π symbols`, unnormalized.
+/// `Σ coefficient · Π symbols`, kept normalized: every sum and product below
+/// merges as it goes, so a gate's expansion never holds more monomials than the
+/// polynomial has — quadratic in the gate's distinct operands, never quartic.
 type Expansion = Vec<(Vec<Symbol>, Fr)>;
 
 /// Where a gate's operands live: the flat list, or gate list `k` of the
@@ -679,7 +718,7 @@ impl Namespace<'_> {
         for (c, x) in terms {
             out.extend(product(&coefficient(*c), &self.operand(*x)));
         }
-        out
+        normalize(out)
     }
 
     fn expand(&self, gate: &GateDef) -> Expansion {
@@ -696,7 +735,7 @@ impl Namespace<'_> {
                     &[(Vec::new(), Fr::MINUS_ONE)],
                     &self.operand(*mask),
                 ));
-                out
+                normalize(out)
             }
             GateDef::AffineProduct {
                 left,
@@ -731,7 +770,7 @@ fn product(a: &[(Vec<Symbol>, Fr)], b: &[(Vec<Symbol>, Fr)]) -> Expansion {
             out.push((m, *ca * *cb));
         }
     }
-    out
+    normalize(out)
 }
 
 /// One polynomial, one representation: monomials sorted, equal ones merged,

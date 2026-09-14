@@ -23,14 +23,13 @@ mod common;
 use checker::{check_laws, cross_check, ReferenceRun, VerifierConstants};
 use common::*;
 use constants::challenge_slot;
-use constraints::{CircuitArtifact, Coeff};
+use constraints::{CachedEntry, CircuitArtifact, Coeff, GateDef, PolyAddress};
 use field::Fr;
 use gkr::ExternalChallenges;
 
 /// What a verifier expects of the toy: 16 rows; list 0 row-wise, width 3, one
 /// enforcing gate and `cached` cached entries; list 1 row-wise, width 2; list 2
-/// halving both columns. A transition runs one round per variable of the layer
-/// it writes and leaves one claim per column read — two for a halving list.
+/// halving both columns.
 fn toy_constants(cached: usize) -> VerifierConstants {
     VerifierConstants {
         trace_vars: 4,
@@ -45,8 +44,6 @@ fn toy_constants(cached: usize) -> VerifierConstants {
         cached: vec![cached, 0, 0],
         outputs: vec!["fingerprint3_product", "abm_product"],
         challenge_slots: vec![challenge_slot::TOY],
-        rounds: vec![4, 4, 3],
-        claims: vec![6, 3, 2 * 2],
     }
 }
 
@@ -101,14 +98,11 @@ fn both_fixtures_agree_with_the_independent_description() {
 
 #[test]
 fn a_wrong_description_is_rejected() {
-    for (label, a, mut constants) in toys_with_constants() {
+    for (label, a, constants) in toys_with_constants() {
         let e = cross_check(&a, &constants, reference_one_row_off).unwrap_err();
         assert!(e.contains("output 1 differs"), "{label}: {e}");
         let e = cross_check(&a, &constants, reference_without_the_gate).unwrap_err();
         assert!(e.contains("enforcing relation 0 differs"), "{label}: {e}");
-        constants.claims[2] = 2;
-        let e = cross_check(&a, &constants, reference).unwrap_err();
-        assert!(e.contains("cross_check: claims"), "{label}: {e}");
     }
 }
 
@@ -244,6 +238,33 @@ fn perturbations() -> Vec<Perturbation> {
             "cross_check: witness",
             true,
             |a| a.witness[0] = "alpha".to_string(),
+        ),
+        p("a memory column name", "cross_check: memory", true, |a| {
+            a.memory[0] = "mem".to_string()
+        }),
+        p("a setup column name", "cross_check: setup", true, |a| {
+            a.setup[0] = "selector".to_string()
+        }),
+        p(
+            "a cached entry added, `b` read through it",
+            "cross_check: cached",
+            true,
+            |a| {
+                let list = &mut a.layers[0];
+                let alias = PolyAddress::Cached {
+                    layer: 0,
+                    offset: list.cached.len() as u32,
+                };
+                list.cached.push(CachedEntry {
+                    name: "b_alias".to_string(),
+                    address: alias,
+                    gate: GateDef::Linear {
+                        terms: vec![(lit(1), W1)],
+                        constant: lit(0),
+                    },
+                });
+                assert_eq!(set_operand(&mut list.producing[0].gate, W1, alias), 1);
+            },
         ),
         p("a virtual table name", "cross_check: virtuals", true, |a| {
             a.virtuals[0].1 = "index".to_string()

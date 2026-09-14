@@ -23,7 +23,7 @@ pub fn violated_relations(a: &CircuitArtifact, w: &WitnessRow, challenges: &Exte
 pub fn dump(a: &CircuitArtifact) -> String;
 pub struct VerifierConstants { /* trace_vars, committed and virtual names, per-list halving,
                                   num_vars, widths, enforcing and cached counts, output names,
-                                  challenge slots, rounds and claims per transition */ }
+                                  challenge slots */ }
 pub struct ReferenceRun { pub outputs: Vec<Vec<Fr>>, pub enforcing: Vec<(String, Vec<Fr>)> }
 pub fn cross_check(a: &CircuitArtifact, expected: &VerifierConstants,
                    reference: fn(&[Vec<Fr>], &ExternalChallenges) -> ReferenceRun) -> Result<(), String>;
@@ -46,9 +46,9 @@ checker dump <artifact>
   `coefficient_encoding`, lookups or padding.
 - **An error names its law first** (`Law 2 (derived width): ...`), so a failure is
   attributable. Where `constraints` files a rule under a different heading — the
-  halving order is Law 2 here and `Malformed` there, a cached entry out of position is
-  Law 1 here — both still refuse the same artifacts, which `tests/laws.rs`' differential
-  holds.
+  halving order and a halving gate list 0 are Law 2 here and `Malformed` there, a
+  cached entry out of position is Law 1 here — both still refuse the same artifacts,
+  which `tests/laws.rs`' differential holds.
 - **The cross-check's source is independent**: `tests/cross_check.rs`' constants and
   reference function are written from the toy's description, not read from its
   definition or from the committed file.
@@ -57,8 +57,8 @@ checker dump <artifact>
 ## Tests
 | File | Covers |
 | --- | --- |
-| `tests/laws.rs` | acceptance 5: both fixtures pass; 31 single-field mutants, each failing exactly the laws it breaks, among them a gate reading two layers down, a width the gates do not produce, a top layer the output map does not hold, and a flat list disagreeing in count and in meaning; `check_laws` against `validate` over 60 mutant runs, no disagreement |
+| `tests/laws.rs` | acceptance 5: both fixtures pass; 35 mutants of both compilations — 4 lawful controls and 31 law-breaking, 2 of those also breaking a rule outside the laws — plus 4 of the cached compilation's cached entries, each failing exactly the laws it breaks: among them a gate reading two layers down, a cached entry reading another or of another layer, a width the gates do not produce, a halving gate list 0, a halving list skipping a column, a top layer the output map does not hold or names twice, a scratch slot no relation defines, and a flat list disagreeing in count and in meaning; `check_laws` against `validate` over 70 of the 74 mutant runs, no disagreement |
 | `tests/padding.rs` | both fixtures pass; a flipped `zero_row_valid`, a padding row breaking the gated equality, and a wrong-length row each fail |
 | `tests/witness.rs` | acceptance 8: a satisfying row passes; perturbing each of 14 cells reports exactly the relations derived by hand for it, on active and inactive rows; an evaluator reporting nothing or everything fails |
-| `tests/cross_check.rs` | acceptance 9: the hand-written description passes both fixtures; 21 single-field perturbations each caught, by the check the test names; documentation-only renames pass |
-| `tests/dump.rs` | acceptance 10: the dump's header, columns, layers, relations, addresses and catalogue, two gate lines exactly; the CLI on the fixtures, a corrupted file and a lawless one |
+| `tests/cross_check.rs` | acceptance 9: the hand-written description passes both fixtures; 24 perturbations, each on both compilations, each caught by the check the test names — among them a renamed memory, witness and setup column and a lawful added cached entry; documentation-only renames pass |
+| `tests/dump.rs` | acceptance 10: the dump's header, columns, layers, relations, addresses and catalogue; one exact line per gate shape, the cached entry, a scratch-bijection line and an output-map line; a literal at or above `2^64` printed as hex; the CLI on the fixtures, a corrupted file and a lawless one |

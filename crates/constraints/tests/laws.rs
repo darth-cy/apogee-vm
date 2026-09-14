@@ -21,10 +21,12 @@ mod common;
 use common::*;
 use constants::challenge_slot;
 use constraints::{
-    CachedEntry, CircuitArtifact, Coeff, ConstraintError, EnforcingEntry, GateDef, LookupExpr,
-    PolyAddress, ProducingEntry, Relation, ScratchSlot,
+    CachedEntry, CircuitArtifact, Coeff, ConstraintError, EnforcingEntry, GateDef, LayerSpec,
+    LookupExpr, Padding, PolyAddress, ProducingEntry, Relation, ScratchSlot, VirtualKind,
+    COEFFICIENT_ENCODING_CANONICAL_LE, FORMAT_VERSION,
 };
 use field::Fr;
+use std::time::{Duration, Instant};
 
 fn linear(terms: &[(Coeff, PolyAddress)], constant: Coeff) -> GateDef {
     GateDef::Linear {
@@ -46,11 +48,35 @@ fn tree(input: PolyAddress) -> GateDef {
 }
 
 fn cached_entry(name: &str, offset: u32, gate: GateDef) -> CachedEntry {
+    cached_entry_in(0, name, offset, gate)
+}
+
+/// `C{layer}[offset] = gate`, for a cached entry of a list other than 0.
+fn cached_entry_in(layer: u32, name: &str, offset: u32, gate: GateDef) -> CachedEntry {
     CachedEntry {
         name: name.into(),
-        address: cached(0, offset),
+        address: cached(layer, offset),
         gate,
     }
+}
+
+fn affine(
+    left: &[(Coeff, PolyAddress)],
+    left_constant: Coeff,
+    right: &[(Coeff, PolyAddress)],
+    right_constant: Coeff,
+) -> GateDef {
+    GateDef::AffineProduct {
+        left: left.to_vec(),
+        left_constant,
+        right: right.to_vec(),
+        right_constant,
+    }
+}
+
+/// The literal 0, as a coefficient.
+fn zero() -> Coeff {
+    Coeff::Literal(Fr::ZERO)
 }
 
 #[track_caller]
@@ -208,6 +234,37 @@ fn law1_refuses_a_cached_entry_reading_another() {
     );
 }
 
+/// Law 1: a cached operand is one of the reading list's own entries, not an
+/// entry at the same offset of another list. `fingerprint`'s gate in list 0
+/// written `Product { 1, C{7}[0], c }` — a list the toy does not have — or
+/// `Product { 1, C{1}[0], c }`, in place of its own `C{0}[0]`, is refused as
+/// locality in list 0, naming the gate and the operand. The toy's spelling,
+/// `C{0}[0]`, validates.
+///
+/// Kills L20 (the cached arm's `l == layer` made vacuous): `C{7}[0]` then
+/// resolves to list 0's entry by offset alone, Law 4 finds the same
+/// polynomial, and the artifact is refused only later, as `shifted_a` named by
+/// no gate — `Malformed`, not this `Locality`.
+#[test]
+fn law1_refuses_a_cached_operand_of_another_list() {
+    assert_eq!(toy().layers[0].producing[1].gate, product(cached(0, 0), C));
+    assert_eq!(toy().validate(), Ok(()));
+
+    for operand in [cached(7, 0), cached(1, 0)] {
+        let mut a = toy();
+        a.layers[0].producing[1].gate = product(operand, C);
+        assert_eq!(
+            a.validate(),
+            Err(ConstraintError::Locality {
+                layer: 0,
+                gate: "define_fingerprint".into(),
+                operand,
+            }),
+            "{operand}"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Law 2: derived width
 // ---------------------------------------------------------------------------
@@ -291,8 +348,14 @@ fn law2_refuses_outputs_out_of_order() {
 /// Law 3, acceptance 5: the output map is a permutation of layer 3, nothing
 /// more and nothing less. The reversed order validates. Refused: an output
 /// dropped (the top layer then holds a column absent from the map), an output
-/// replaced by `L{2}[0]` from below the top, an output duplicated, and a third
-/// output `L{3}[2]` past the top layer's width.
+/// replaced by `L{2}[0]` from below the top, an output duplicated, a third
+/// output `L{3}[2]` past the top layer's width, and — with the count right —
+/// `[L{3}[1], L{3}[2]]`, whose second output is past the width.
+///
+/// The last case kills L15 (the top-layer `offset < width` test made
+/// vacuous): the third-output case is refused by the count before the offset
+/// is looked at, so only a map of the right length can see it, and under L15
+/// that map validates.
 #[test]
 fn law3_refuses_an_output_map_that_is_not_the_top_layer() {
     let mut reversed = toy();
@@ -320,6 +383,14 @@ fn law3_refuses_an_output_map_that_is_not_the_top_layer() {
     let mut extra = toy();
     extra.outputs.push(inner(3, 2));
     assert_top_layer(&extra, "layer 3 has 2 columns but the output map has 3");
+
+    let mut past = toy();
+    past.outputs[1] = inner(3, 2);
+    assert_eq!(past.outputs, [inner(3, 1), inner(3, 2)]);
+    assert_top_layer(
+        &past,
+        "output 1 is L{3}[2], not a distinct column of layer 3",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -364,6 +435,61 @@ fn law4_refuses_a_relation_that_says_something_else() {
     assert_single_source(
         &doubled,
         "relation `define_ab` and its gate in gate list 0 are different polynomials",
+    );
+}
+
+/// Law 4 compares normal forms across shapes, `MaskIntoIdentity` included.
+/// `masked_m`'s gate rewritten as `AffineProduct { [(1, m)], −1 ; [(1, s)], 0 }`,
+/// which is `(m − 1)·s`, while its relation stays `MaskIntoIdentity { m, s }`,
+/// `m·s + (1 − s)`: the two differ by the constant 1, and are refused, naming
+/// the relation and the list. Written as `(m − 1)·s` on both sides, it
+/// validates.
+///
+/// Kills L24 (the `1` dropped from `MaskIntoIdentity`'s expansion), under which
+/// the mask expands to `m·s − s` and matches the affine gate.
+#[test]
+fn law4_refuses_an_affine_product_that_is_a_mask_missing_its_one() {
+    let m_minus_one_times_s = affine(&[(lit(1), M)], neg(1), &[(lit(1), S)], lit(0));
+
+    let mut both = toy();
+    both.relations[2].gate = m_minus_one_times_s.clone();
+    both.layers[0].producing[2].gate = m_minus_one_times_s.clone();
+    assert_eq!(both.validate(), Ok(()));
+
+    let mut gate_only = toy();
+    assert_eq!(
+        gate_only.relations[2].gate,
+        GateDef::MaskIntoIdentity { input: M, mask: S }
+    );
+    gate_only.layers[0].producing[2].gate = m_minus_one_times_s;
+    assert_single_source(
+        &gate_only,
+        "relation `define_masked_m` and its gate in gate list 0 are different polynomials",
+    );
+}
+
+/// Law 4's normal form merges equal monomials. `fingerprint3`'s relation
+/// spelled `1·scratch[1] + 1·scratch[1] + 3`, two terms, against the gate
+/// `2·L{1}[1] + 3`, one: the same polynomial, which validates. The same
+/// relation against the toy's gate, `1·L{1}[1] + 3`, is a different polynomial,
+/// refused naming the relation and the list.
+///
+/// Kills L05 (equal monomials never merged in `normalize`), under which the
+/// lawful pair's expansions have three monomials and two, and are refused.
+#[test]
+fn law4_merges_equal_monomials_before_comparing() {
+    let twice = linear(&[(lit(1), scratch(1)), (lit(1), scratch(1))], lit(3));
+
+    let mut merged = toy();
+    merged.relations[5].gate = twice.clone();
+    merged.layers[1].producing[1].gate = linear(&[(lit(2), inner(1, 1))], lit(3));
+    assert_eq!(merged.validate(), Ok(()));
+
+    let mut once = toy();
+    once.relations[5].gate = twice;
+    assert_single_source(
+        &once,
+        "relation `define_fingerprint3` and its gate in gate list 1 are different polynomials",
     );
 }
 
@@ -475,6 +601,83 @@ fn law4_refuses_a_relation_deleted_under_its_gate() {
     assert_single_source(&orphaned, "a gate names relation 7, which does not exist");
 }
 
+/// The review's cost artifact at `t` terms, made not to vanish: one committed
+/// column `m`; a cached entry `C{0}[0]` of `t` alternating `±1·m` terms plus one
+/// more `1·m`, so it is `m` for even `t`; one enforcing gate
+/// `(Σ_t 1·C{0}[0] + 0)·(Σ_t 1·C{0}[0] + 0)`, which is `t²·m²`; and its relation
+/// spelled `t²·m·m`, the same polynomial. Every law holds and the gate is
+/// degree 2. (The review's own spelling was identically zero, which an
+/// enforcing gate may no longer be.)
+fn cancelling_square(t: usize) -> CircuitArtifact {
+    let mut alternating: Vec<(Coeff, PolyAddress)> = (0..t)
+        .map(|i| (if i % 2 == 0 { lit(1) } else { neg(1) }, M))
+        .collect();
+    alternating.push((lit(1), M));
+    let factor = vec![(lit(1), cached(0, 0)); t];
+    CircuitArtifact {
+        format_version: FORMAT_VERSION,
+        coefficient_encoding: COEFFICIENT_ENCODING_CANONICAL_LE,
+        trace_vars: 4,
+        memory: vec!["m".into()],
+        witness: vec![],
+        setup: vec![],
+        virtuals: vec![],
+        layers: vec![LayerSpec {
+            halving: false,
+            num_vars: 4,
+            width: 0,
+            cached: vec![cached_entry("alternating", 0, linear(&alternating, lit(0)))],
+            producing: vec![],
+            enforcing: vec![EnforcingEntry {
+                relation: 0,
+                gate: affine(&factor, lit(0), &factor, lit(0)),
+            }],
+        }],
+        relations: vec![Relation {
+            name: "square_is_zero".into(),
+            output: None,
+            gate: GateDef::Product {
+                coeff: lit((t * t) as u64),
+                left: M,
+                right: M,
+            },
+        }],
+        lookups: vec![],
+        scratch: vec![],
+        outputs: vec![],
+        padding: Padding {
+            row: vec![Fr::ZERO],
+            zero_row_valid: true,
+        },
+    }
+}
+
+/// Law 4's expansion is normalized as it is built — every intermediate sum and
+/// product merged — so its cost follows the polynomial, not its spelling.
+/// `cancelling_square` at `t` = 48 and 128 validates, each in under two
+/// seconds.
+///
+/// Kills reverting that normalization (c94cff1's `expand`, which multiplied
+/// out about `(t·(t+1))²` monomials before merging any): the review measured
+/// 434 ms at `t` = 48 and extrapolated about 20 s at `t` = 128 in a release
+/// build, where the normalized expansion takes milliseconds. `t` = 128 is the
+/// case that fails under the revert; the two-second bound sits far from both
+/// costs, so CI noise cannot flake it.
+#[test]
+fn law4_expansion_cost_follows_the_polynomial_not_its_spelling() {
+    for t in [48usize, 128] {
+        let a = cancelling_square(t);
+        let start = Instant::now();
+        let result = a.validate();
+        let elapsed = start.elapsed();
+        assert_eq!(result, Ok(()), "t = {t}");
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "t = {t}: validate took {elapsed:?}"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The degree ceiling
 // ---------------------------------------------------------------------------
@@ -547,6 +750,177 @@ fn a_degree_three_gate_is_refused_at_construction() {
             degree: 3,
         })
     );
+}
+
+// ---------------------------------------------------------------------------
+// Terms that read nothing
+// ---------------------------------------------------------------------------
+
+/// The toy with one extra term of coefficient `c` in each of four places, the
+/// term written into the gate and into its relation alike, so for any `c` the
+/// two sides are one polynomial: `fingerprint3 = 1·L{1}[1] + c·L{1}[0] + 3`
+/// (a `Linear` term), `gated_equality = (e − a + c·m)·s` (an `AffineProduct`
+/// left term), `gated_equality = (e − a)·(s + c·m)` (a right term), and
+/// `ab = c·a·b` (a `Product`'s coefficient). Each case is named by the gate the
+/// refusal names.
+fn toy_with_coefficient(c: Coeff) -> [(&'static str, CircuitArtifact); 4] {
+    let mut linear_term = toy();
+    linear_term.layers[1].producing[1].gate =
+        linear(&[(lit(1), inner(1, 1)), (c, inner(1, 0))], lit(3));
+    linear_term.relations[5].gate = linear(&[(lit(1), scratch(1)), (c, scratch(0))], lit(3));
+
+    let mut left_term = toy();
+    let left = affine(
+        &[(lit(1), E), (neg(1), A), (c, M)],
+        lit(0),
+        &[(lit(1), S)],
+        lit(0),
+    );
+    left_term.layers[0].enforcing[0].gate = left.clone();
+    left_term.relations[3].gate = left;
+
+    let mut right_term = toy();
+    let right = affine(
+        &[(lit(1), E), (neg(1), A)],
+        lit(0),
+        &[(lit(1), S), (c, M)],
+        lit(0),
+    );
+    right_term.layers[0].enforcing[0].gate = right.clone();
+    right_term.relations[3].gate = right;
+
+    let mut product_coeff = toy();
+    let scaled = GateDef::Product {
+        coeff: c,
+        left: A,
+        right: B,
+    };
+    product_coeff.layers[0].producing[0].gate = scaled.clone();
+    product_coeff.relations[0].gate = scaled;
+
+    [
+        ("define_fingerprint3", linear_term),
+        ("gated_equality", left_term),
+        ("gated_equality", right_term),
+        ("define_ab", product_coeff),
+    ]
+}
+
+/// `docs/spec/gkr.md` §4.2: a zero-coefficient term reads nothing, because
+/// "reads" is decided on the normalized expansion — but it is not refused for
+/// that alone. In each of `toy_with_coefficient`'s four places — a `Linear`
+/// term, an `AffineProduct` left term, an `AffineProduct` right term, a
+/// `Product` coefficient — a coefficient of 0 (or 2) validates: both sides stay
+/// one polynomial, and every column is still read elsewhere.
+///
+/// What is refused is what a zero term can hide. A column named only through
+/// `0·x` is unread: `fingerprint3 = 0·L{1}[1] + 3` is refused as
+/// `L{1}[1]` never read. And an enforcing gate whose expansion is zero —
+/// `gated_equality = (e − a)·(0)`, the right factor emptied to its zero
+/// constant — holds on every row whatever it names, and is refused as
+/// constraining nothing; the toy's own gated equality is the control.
+///
+/// Kills deciding "read" from operands rather than the expansion (the `0·L{1}[1]`
+/// case validates), and deleting the identically-zero enforcing check.
+#[test]
+fn a_term_that_reads_nothing_hides_neither_a_column_nor_a_constraint() {
+    for c in [zero(), lit(2)] {
+        for (name, a) in toy_with_coefficient(c) {
+            assert_eq!(a.validate(), Ok(()), "{name}");
+        }
+    }
+
+    let mut zero_read = toy();
+    zero_read.layers[1].producing[1].gate = linear(&[(zero(), inner(1, 1))], lit(3));
+    zero_read.relations[5].gate = linear(&[], lit(3));
+    assert_malformed(
+        &zero_read,
+        "L{1}[1] is written but gate list 1 never reads it",
+    );
+
+    let mut vacuous = toy();
+    let emptied = affine(
+        &[(lit(1), E), (Coeff::Literal(Fr::MINUS_ONE), A)],
+        lit(0),
+        &[],
+        lit(0),
+    );
+    vacuous.layers[0].enforcing[0].gate = emptied.clone();
+    vacuous.relations[3].gate = emptied;
+    assert_malformed(
+        &vacuous,
+        "enforcing gate `gated_equality` in gate list 0 is identically zero",
+    );
+    assert_eq!(toy().validate(), Ok(()));
+}
+
+/// The review's L21 and L22 scenarios, which used a zero-coefficient term to
+/// name an operand Law 4 cannot see. Law 1 range-checks every operand whatever
+/// its coefficient, so both are refused as locality:
+/// - `shifted_a = γ·a + 1·row + 0·M[5]`, past the one-column memory layout, is
+///   refused as locality in list 0 naming `shifted_a` and `M[5]`;
+/// - `shifted_a = γ·a + 0·row` with the virtual list emptied (relation 1 then
+///   `γ·a·c`, reading no `V`) is refused as locality naming `V[row]`.
+///
+/// Brought back in range — `0·M[0]`, and `0·row` with `row` listed — Law 1
+/// holds, the zero term normalizes away, and each validates; so does the
+/// in-range spelling with coefficient 1 and the relation to match.
+///
+/// Kills L21 (Law 1's memory range widened) and L22 (Law 1's virtual-listed
+/// test dropped): under either, the out-of-range artifact validates.
+#[test]
+fn a_zero_coefficient_operand_is_still_range_checked_first() {
+    let with_shifted_a = |terms: &[(Coeff, PolyAddress)], fingerprint: GateDef| {
+        let mut a = toy();
+        a.layers[0].cached[0].gate = linear(terms, lit(0));
+        a.relations[1].gate = fingerprint;
+        a
+    };
+    let fingerprint =
+        |terms: &[(Coeff, PolyAddress)]| affine(terms, lit(0), &[(lit(1), C)], lit(0));
+    let shifted_a_and = |c: Coeff, x: PolyAddress| [(GAMMA, A), (lit(1), ROW), (c, x)];
+
+    // L21: a memory column past the layout.
+    let past = with_shifted_a(
+        &shifted_a_and(zero(), PolyAddress::Memory(5)),
+        fingerprint(&[(GAMMA, A), (lit(1), ROW)]),
+    );
+    assert_eq!(
+        past.validate(),
+        Err(ConstraintError::Locality {
+            layer: 0,
+            gate: "shifted_a".into(),
+            operand: PolyAddress::Memory(5),
+        })
+    );
+    let in_range = with_shifted_a(
+        &shifted_a_and(zero(), M),
+        fingerprint(&[(GAMMA, A), (lit(1), ROW)]),
+    );
+    assert_eq!(in_range.validate(), Ok(()));
+    let read = with_shifted_a(
+        &shifted_a_and(lit(1), M),
+        fingerprint(&shifted_a_and(lit(1), M)),
+    );
+    assert_eq!(read.validate(), Ok(()));
+
+    // L22: a virtual table the artifact does not list.
+    let mut unlisted = with_shifted_a(&[(GAMMA, A), (zero(), ROW)], fingerprint(&[(GAMMA, A)]));
+    unlisted.virtuals.clear();
+    assert_eq!(
+        unlisted.validate(),
+        Err(ConstraintError::Locality {
+            layer: 0,
+            gate: "shifted_a".into(),
+            operand: ROW,
+        })
+    );
+    let listed = with_shifted_a(&[(GAMMA, A), (zero(), ROW)], fingerprint(&[(GAMMA, A)]));
+    assert_eq!(
+        listed.virtuals,
+        [(VirtualKind::RowIndex, String::from("row"))]
+    );
+    assert_eq!(listed.validate(), Ok(()));
 }
 
 // ---------------------------------------------------------------------------
@@ -704,6 +1078,106 @@ fn a_cached_entry_no_gate_names_is_refused() {
     assert_eq!(a.validate(), Ok(()));
 }
 
+/// §4.2: "read" is decided on the gates' normalized expansions, so a term that
+/// cancels reads nothing. `toy_with_a_copy(false)` — `L{1}[3]` written, nothing
+/// reading it — with `fingerprint3 = 1·L{1}[1] + 1·L{1}[3] − 1·L{1}[3] + 3`,
+/// its relation spelled the same way over `scratch[7]`: the gate names
+/// `L{1}[3]` twice and reads it not at all, and is refused, naming the column.
+/// The same gate with the cancelling term removed, `1·L{1}[1] + 1·L{1}[3] + 3`,
+/// reads it and validates.
+///
+/// Kills deciding "read" from `GateDef::operands` rather than the expansion
+/// (c94cff1's `nothing_dropped`), which counts the named column as read and
+/// accepts the cancelling artifact.
+#[test]
+fn a_column_read_only_by_cancelling_terms_is_refused() {
+    let with_terms = |gate: &[(Coeff, PolyAddress)], flat: &[(Coeff, PolyAddress)]| {
+        let mut a = toy_with_a_copy(false);
+        a.layers[1].producing[1].gate = linear(gate, lit(3));
+        a.relations[5].gate = linear(flat, lit(3));
+        a
+    };
+
+    let cancelling = with_terms(
+        &[
+            (lit(1), inner(1, 1)),
+            (lit(1), inner(1, 3)),
+            (neg(1), inner(1, 3)),
+        ],
+        &[
+            (lit(1), scratch(1)),
+            (lit(1), scratch(7)),
+            (neg(1), scratch(7)),
+        ],
+    );
+    assert!(cancelling.layers[1]
+        .producing
+        .iter()
+        .any(|e| e.gate.operands().contains(&inner(1, 3))));
+    assert_malformed(
+        &cancelling,
+        "L{1}[3] is written but gate list 1 never reads it",
+    );
+
+    let reading = with_terms(
+        &[(lit(1), inner(1, 1)), (lit(1), inner(1, 3))],
+        &[(lit(1), scratch(1)), (lit(1), scratch(7))],
+    );
+    assert_eq!(reading.validate(), Ok(()));
+}
+
+/// §3.1 allows a cached entry in any row-wise list, and a column read only
+/// through one is read. In list 1, which reads inner columns, so its entries
+/// read `L{1}` addresses that Law 4 maps to scratch slots:
+/// - `fingerprint_copy = C{1}[0] = 1·L{1}[1] + 0`, named by `fingerprint3`'s
+///   gate as `1·C{1}[0] + 3` with the relation unchanged, validates — no gate
+///   reads `L{1}[1]` except through the entry;
+/// - `abm_cached = C{1}[0] = 1·L{1}[0]·L{1}[2]`, degree 2, named by `abm`'s gate
+///   as `1·C{1}[0] + 0` with the relation unchanged, validates — likewise for
+///   `L{1}[0]` and `L{1}[2]`.
+///
+/// The refusal beside them: `fingerprint_copy` added with `fingerprint3`'s gate
+/// left as the toy's is refused as named by no gate, at `C{1}[0]`.
+///
+/// Kills L08 (a cached entry's operands not counted as read, so `L{1}[1]` is
+/// refused as never read) and L25 (a cached entry's operands expanded in the
+/// flat namespace, so its `L{1}` columns are not mapped to scratch and Law 4
+/// refuses the gate).
+#[test]
+fn a_column_read_through_a_cached_entry_of_list_one_is_read() {
+    let mut linear_entry = toy();
+    linear_entry.layers[1].cached.push(cached_entry_in(
+        1,
+        "fingerprint_copy",
+        0,
+        linear(&[(lit(1), inner(1, 1))], lit(0)),
+    ));
+    assert_malformed(
+        &linear_entry,
+        "cached entry `fingerprint_copy` (C{1}[0]) is named by no gate",
+    );
+    linear_entry.layers[1].producing[1].gate = linear(&[(lit(1), cached(1, 0))], lit(3));
+    assert_eq!(
+        linear_entry.relations[5].gate,
+        linear(&[(lit(1), scratch(1))], lit(3))
+    );
+    assert_eq!(linear_entry.validate(), Ok(()));
+
+    let mut product_entry = toy();
+    product_entry.layers[1].cached.push(cached_entry_in(
+        1,
+        "abm_cached",
+        0,
+        product(inner(1, 0), inner(1, 2)),
+    ));
+    product_entry.layers[1].producing[0].gate = linear(&[(lit(1), cached(1, 0))], lit(0));
+    assert_eq!(
+        product_entry.relations[4].gate,
+        product(scratch(0), scratch(2))
+    );
+    assert_eq!(product_entry.validate(), Ok(()));
+}
+
 // ---------------------------------------------------------------------------
 // Names, header and the other construction rules
 // ---------------------------------------------------------------------------
@@ -738,6 +1212,56 @@ fn names_are_nonempty_lowercase_and_used_once() {
     let mut a = toy();
     a.relations[3].name = String::new();
     assert_malformed(&a, "name \"\" is not a non-empty [a-z0-9_] string");
+}
+
+/// Must-be-exact 14: the name rules cover setup columns and virtual tables too.
+/// `s_0` and `row_index` are legal renames. Refused: the virtual table renamed
+/// `a`, which a witness column already is; the virtual table renamed `Row`; the
+/// setup column renamed `a`; and the setup column renamed `S`.
+///
+/// Kills L12 (virtual-table names left out of the name check) and L13 (setup
+/// names left out): under either, that subtree's refusals validate.
+#[test]
+fn setup_and_virtual_names_obey_the_name_rules() {
+    let mut legal = toy();
+    legal.setup[0] = "s_0".into();
+    legal.virtuals[0].1 = "row_index".into();
+    assert_eq!(legal.validate(), Ok(()));
+
+    let mut a = toy();
+    a.virtuals[0].1 = "a".into();
+    assert_malformed(&a, "name \"a\" is used twice");
+
+    let mut a = toy();
+    a.virtuals[0].1 = "Row".into();
+    assert_malformed(&a, "name \"Row\" is not a non-empty [a-z0-9_] string");
+
+    let mut a = toy();
+    a.setup[0] = "a".into();
+    assert_malformed(&a, "name \"a\" is used twice");
+
+    let mut a = toy();
+    a.setup[0] = "S".into();
+    assert_malformed(&a, "name \"S\" is not a non-empty [a-z0-9_] string");
+}
+
+/// Each virtual table is listed once. A second `RowIndex` entry, under a fresh
+/// legal name so the kind is the one thing wrong, is refused naming the kind;
+/// the toy's one entry validates.
+///
+/// Kills L14 (the listed-twice check disabled), under which the duplicate
+/// validates.
+#[test]
+fn a_virtual_table_listed_twice_is_refused() {
+    assert_eq!(
+        toy().virtuals,
+        [(VirtualKind::RowIndex, String::from("row"))]
+    );
+    assert_eq!(toy().validate(), Ok(()));
+
+    let mut a = toy();
+    a.virtuals.push((VirtualKind::RowIndex, "row_again".into()));
+    assert_malformed(&a, "virtual table RowIndex is listed twice");
 }
 
 /// Must-be-exact 7: the lookup-expression list exists and is empty at S13; one
@@ -849,6 +1373,32 @@ fn the_toy_inlines_to_the_committed_cache_free_compilation() {
         }
     );
     assert_eq!(toy_cache_free().inline_cached(), Ok(toy_cache_free()));
+}
+
+/// §3.1's second rule: `Product { c, x, C } → AffineProduct { [(c, x)], 0 ;
+/// C.terms, C.constant }` — a cached factor on the right inlines on the right.
+/// `fingerprint`'s gate written `Product { 1, c, shifted_a }` validates, and
+/// inlines to exactly the committed cache-free compilation with that one gate
+/// `AffineProduct { [(1, c)], 0 ; [(γ, a), (1, row)], 0 }`, which validates.
+///
+/// Kills L19 (the right-factor branch emitting the left-factor spelling,
+/// `AffineProduct { C.terms, C.constant ; [(c, x)], 0 }`): the same
+/// polynomial, so it would still validate, but a different artifact.
+#[test]
+fn a_right_cached_factor_inlines_on_the_right() {
+    let shifted_a = linear(&[(GAMMA, A), (lit(1), ROW)], lit(0));
+    assert_eq!(toy().layers[0].cached[0].gate, shifted_a);
+
+    let mut a = toy();
+    a.layers[0].producing[1].gate = product(C, cached(0, 0));
+    assert_eq!(a.validate(), Ok(()));
+
+    let mut expected = toy_cache_free();
+    expected.layers[0].producing[1].gate =
+        affine(&[(lit(1), C)], lit(0), &[(GAMMA, A), (lit(1), ROW)], lit(0));
+    let inlined = a.inline_cached();
+    assert_eq!(inlined, Ok(expected));
+    assert_eq!(inlined.map(|out| out.validate()), Ok(Ok(())));
 }
 
 /// §3.1: a `Product` inlines when exactly one factor is a cached `Linear`.

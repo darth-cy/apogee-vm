@@ -5,7 +5,10 @@
 #![allow(dead_code)]
 
 use constants::{challenge_slot, transcript_tags};
-use constraints::{CircuitArtifact, PolyAddress};
+use constraints::{
+    CircuitArtifact, Coeff, EnforcingEntry, GateDef, LayerSpec, Padding, PolyAddress,
+    ProducingEntry, Relation, ScratchSlot, COEFFICIENT_ENCODING_CANONICAL_LE, FORMAT_VERSION,
+};
 use field::Fr;
 use gkr::{
     forward, prove, verify, BaseClaim, BaseLayer, ExternalChallenges, GkrError, GkrProof,
@@ -196,4 +199,227 @@ pub fn discharge(base: &BaseLayer, claims: &[BaseClaim]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Circuits beyond the toy, built in the tests that need them
+// ---------------------------------------------------------------------------
+
+/// A base of `Fr` columns, given in layout order.
+pub fn fr_base(artifact: &CircuitArtifact, columns: Vec<Vec<Fr>>) -> BaseLayer {
+    let committed = artifact.committed();
+    assert_eq!(
+        columns.len(),
+        committed.len(),
+        "one column per committed address"
+    );
+    BaseLayer::new(
+        committed
+            .into_iter()
+            .zip(columns)
+            .map(|(a, c)| (a, MultilinearPoly::new(PolyBacking::Fr(c))))
+            .collect(),
+    )
+}
+
+fn lit(v: u64) -> Coeff {
+    Coeff::Literal(Fr::from_u64(v))
+}
+
+fn neg(v: u64) -> Coeff {
+    Coeff::Literal(-Fr::from_u64(v))
+}
+
+fn copy(x: PolyAddress) -> GateDef {
+    GateDef::Linear {
+        terms: vec![(lit(1), x)],
+        constant: lit(0),
+    }
+}
+
+fn relation(name: &str, output: Option<u32>, gate: GateDef) -> Relation {
+    Relation {
+        name: name.into(),
+        output,
+        gate,
+    }
+}
+
+/// A witness-only circuit whose all-zero row is its padding row, validated.
+fn circuit(
+    trace_vars: u32,
+    witness: &[&str],
+    layers: Vec<LayerSpec>,
+    relations: Vec<Relation>,
+    scratch: &[(&str, PolyAddress)],
+    outputs: Vec<PolyAddress>,
+) -> CircuitArtifact {
+    let artifact = CircuitArtifact {
+        format_version: FORMAT_VERSION,
+        coefficient_encoding: COEFFICIENT_ENCODING_CANONICAL_LE,
+        trace_vars,
+        memory: vec![],
+        witness: witness.iter().map(|n| n.to_string()).collect(),
+        setup: vec![],
+        virtuals: vec![],
+        layers,
+        relations,
+        lookups: vec![],
+        scratch: scratch
+            .iter()
+            .map(|(name, address)| ScratchSlot {
+                name: name.to_string(),
+                address: *address,
+            })
+            .collect(),
+        outputs,
+        padding: Padding {
+            row: vec![Fr::ZERO; witness.len()],
+            zero_row_valid: true,
+        },
+    };
+    if let Err(e) = artifact.validate() {
+        panic!("a test circuit is not a circuit: {e}");
+    }
+    artifact
+}
+
+/// The smallest shapes `docs/spec/gkr.md` calls legal, in one circuit:
+///
+/// ```text
+/// base      W[0] a                               2 rows: trace_vars 1
+/// list 0    L{1}[0] sq   = a·(a − 1)             row-wise, 1 variable
+/// list 1    L{2}[0] root = sq(·,0)·sq(·,1)       halving, down to 0 variables
+/// list 2    0 = root                             row-wise over 0 variables, enforcing only
+/// outputs   none                                 layer 3 has width 0
+/// ```
+///
+/// Transitions 1 and 2 have no rounds, so each final check is all that ties
+/// its claims to anything. Every row of `a` in `{0, 1}` satisfies it.
+pub fn root_circuit() -> CircuitArtifact {
+    let a = PolyAddress::Witness(0);
+    let sq = PolyAddress::Inner {
+        layer: 1,
+        offset: 0,
+    };
+    let root = PolyAddress::Inner {
+        layer: 2,
+        offset: 0,
+    };
+    let square = |x: PolyAddress| GateDef::AffineProduct {
+        left: vec![(lit(1), x)],
+        left_constant: lit(0),
+        right: vec![(lit(1), x)],
+        right_constant: neg(1),
+    };
+    circuit(
+        1,
+        &["a"],
+        vec![
+            LayerSpec {
+                halving: false,
+                num_vars: 1,
+                width: 1,
+                cached: vec![],
+                producing: vec![ProducingEntry {
+                    relation: 0,
+                    output: sq,
+                    gate: square(a),
+                }],
+                enforcing: vec![],
+            },
+            LayerSpec {
+                halving: true,
+                num_vars: 0,
+                width: 1,
+                cached: vec![],
+                producing: vec![ProducingEntry {
+                    relation: 1,
+                    output: root,
+                    gate: GateDef::TreeProduct { input: sq },
+                }],
+                enforcing: vec![],
+            },
+            LayerSpec {
+                halving: false,
+                num_vars: 0,
+                width: 0,
+                cached: vec![],
+                producing: vec![],
+                enforcing: vec![EnforcingEntry {
+                    relation: 2,
+                    gate: copy(root),
+                }],
+            },
+        ],
+        vec![
+            relation("define_sq", Some(0), square(a)),
+            relation(
+                "define_root",
+                Some(1),
+                GateDef::TreeProduct {
+                    input: PolyAddress::Scratch(0),
+                },
+            ),
+            relation("root_is_zero", None, copy(PolyAddress::Scratch(1))),
+        ],
+        &[("sq", sq), ("root", root)],
+        vec![],
+    )
+}
+
+/// Two enforcing gates in one list, each the other's negation:
+///
+/// ```text
+/// base      W[0] a   W[1] b                      4 rows
+/// list 0    L{1}[0] copy = a
+///           0 = a − b                            (enforcing, a_eq_b)
+///           0 = b − a                            (enforcing, b_eq_a)
+/// outputs   L{1}[0]
+/// ```
+///
+/// Where `a ≠ b` the two residuals cancel on every row, so only their distinct
+/// batch weights keep a violation visible.
+pub fn opposed_circuit() -> CircuitArtifact {
+    let (a, b) = (PolyAddress::Witness(0), PolyAddress::Witness(1));
+    let out = PolyAddress::Inner {
+        layer: 1,
+        offset: 0,
+    };
+    let minus = |x: PolyAddress, y: PolyAddress| GateDef::Linear {
+        terms: vec![(lit(1), x), (neg(1), y)],
+        constant: lit(0),
+    };
+    circuit(
+        2,
+        &["a", "b"],
+        vec![LayerSpec {
+            halving: false,
+            num_vars: 2,
+            width: 1,
+            cached: vec![],
+            producing: vec![ProducingEntry {
+                relation: 0,
+                output: out,
+                gate: copy(a),
+            }],
+            enforcing: vec![
+                EnforcingEntry {
+                    relation: 1,
+                    gate: minus(a, b),
+                },
+                EnforcingEntry {
+                    relation: 2,
+                    gate: minus(b, a),
+                },
+            ],
+        }],
+        vec![
+            relation("define_copy", Some(0), copy(a)),
+            relation("a_eq_b", None, minus(a, b)),
+            relation("b_eq_a", None, minus(b, a)),
+        ],
+        &[("copy", out)],
+        vec![out],
+    )
 }

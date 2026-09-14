@@ -1,14 +1,23 @@
 //! What `verify` rejects: the tamper twin (acceptance 2), the cancellation
-//! control (acceptance 3), a forged output table, a wrong child pair, and every
-//! malformed shape — each as a returned error, never a panic.
+//! control (acceptance 3), a forged output table, a wrong child pair, a lying
+//! row-wise final eval, every malformed shape and every missing slot — each as
+//! a returned error, never a panic — and what the self-check names.
 
 mod common;
 
-use common::{bind, honest, output_claims, run, toy, toy_base, toy_columns, with_column, TOY_ROWS};
-use constants::transcript_tags;
-use constraints::PolyAddress;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
+use common::{
+    bind, honest, output_claims, run, toy, toy_base, toy_cache_free, toy_columns, with_column,
+    TOY_ROWS,
+};
+use constants::{challenge_slot, transcript_tags};
+use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress};
 use field::Fr;
-use gkr::{forward, gate_values, self_check, verify, GkrError, LayerValues, OutputClaims};
+use gkr::{
+    forward, gate_values, self_check, verify, ExternalChallenges, GkrError, LayerValues,
+    OutputClaims, SelfCheckError,
+};
 use poly::{eq_eval, eq_table, MultilinearPoly, PolyBacking};
 
 fn fr(v: u32) -> Fr {
@@ -47,6 +56,36 @@ fn a_flipped_inner_value_is_rejected_at_the_transition_reading_it() {
     // L{1}[1] is fingerprint, read by list 1 as fingerprint + 3.
     let (_, flipped) = run(&artifact, &base, &bump(&values, 1, 1, 5), &outputs);
     assert_eq!(flipped, Err(GkrError::LayerInconsistency { layer: 1 }));
+}
+
+/// The self-check compares every producing gate with the column it writes,
+/// halving lists included, and names the first that disagrees: `abm` bumped on
+/// row 3 is `define_abm` at list 1, and `fingerprint3_product` bumped on row 2
+/// is its tree step at list 2. Kills M1 and M14b (producing gates never
+/// compared) and M14c (halving lists skipped).
+#[test]
+fn the_self_check_names_a_broken_producing_gate() {
+    let artifact = toy();
+    let base = toy_base(&toy_columns(0x5313_0300));
+    let (_, challenges) = bind(&artifact, &base);
+    let values = forward(&artifact, &base, &challenges);
+    assert_eq!(self_check(&artifact, &values, &challenges), Ok(()));
+    assert_eq!(
+        self_check(&artifact, &bump(&values, 2, 0, 3), &challenges),
+        Err(SelfCheckError {
+            layer: 1,
+            row: 3,
+            relation: "define_abm".into(),
+        })
+    );
+    assert_eq!(
+        self_check(&artifact, &bump(&values, 3, 1, 2), &challenges),
+        Err(SelfCheckError {
+            layer: 2,
+            row: 2,
+            relation: "define_fingerprint3_product".into(),
+        })
+    );
 }
 
 /// Acceptance 2, second half: `e` is read by the enforcing gate
@@ -139,10 +178,14 @@ fn a_cancelling_violation_is_rejected() {
     assert_eq!(result, Err(GkrError::LayerInconsistency { layer: 0 }));
 }
 
-/// The outputs are absorbed before the point they are evaluated at. A forged
-/// output table agreeing with the true one at the point the honest transcript
-/// draws — which a prover can compute in advance — is rejected, because
-/// absorbing the forgery moves the point.
+/// O1, the outputs absorbed before their point, is what stops this forgery.
+/// Without O1 the output point is what a transcript bound to the base draws
+/// next, so a prover knows it before choosing a table, and can choose one that
+/// differs from the true table yet agrees with it there. The forgery is built
+/// at exactly that point, so a verifier that never absorbs the outputs accepts
+/// it: this test fails under the mutant deleting the `GKR_OUTPUTS` absorb from
+/// both sides. The real verifier absorbs the forged table, draws another
+/// point, and rejects.
 #[test]
 fn a_forged_output_table_is_rejected() {
     let artifact = toy();
@@ -151,14 +194,8 @@ fn a_forged_output_table_is_rejected() {
     result.expect("the honest run verifies");
     let outputs = output_claims(&artifact, &values);
 
-    // The point an honest verifier draws, replayed from the frozen schedule.
+    // The point a transcript without O1 draws: the binding, then O2 at once.
     let (mut t, challenges) = bind(&artifact, &base);
-    let message: Vec<Fr> = outputs
-        .tables
-        .iter()
-        .flat_map(|tbl| (0..tbl.len()).map(|i| tbl.get(i)).collect::<Vec<_>>())
-        .collect();
-    t.append_scalars(transcript_tags::GKR_OUTPUTS, &message);
     let r: Vec<Fr> = (0..3)
         .map(|_| t.challenge_scalar(transcript_tags::GKR_OUTPUT_POINT))
         .collect();
@@ -230,6 +267,39 @@ fn a_wrong_child_pair_is_rejected() {
     );
 }
 
+/// A row-wise transition's final check, alone: one of its final evals bumped,
+/// every round untouched. The rounds still sum, so only the final check of
+/// that transition can reject — at transition 1 before the lie descends, and
+/// at transition 0 before it comes back as an accepted `BaseClaim`. Kills
+/// mutant A, the verifier that runs the final check on halving transitions
+/// only: there transition 1's lie is caught a layer late, and transition 0's
+/// verifies.
+#[test]
+fn a_lying_row_wise_final_eval_is_rejected_at_its_transition() {
+    let artifact = toy();
+    let base = toy_base(&toy_columns(0x5313_0a00));
+    let (values, proof, result) = honest(&artifact, &base);
+    result.expect("the control verifies");
+    let outputs = output_claims(&artifact, &values);
+    let check = |proof: &gkr::GkrProof| {
+        let (mut t, challenges) = bind(&artifact, &base);
+        verify(&artifact, proof, &outputs, &challenges, &mut t)
+    };
+
+    for k in [0, 1] {
+        assert!(!artifact.layers[k].halving, "transition {k} is row-wise");
+        for j in 0..proof.layers[k].final_evals.len() {
+            let mut lying = proof.clone();
+            lying.layers[k].final_evals[j] += Fr::ONE;
+            assert_eq!(
+                check(&lying),
+                Err(GkrError::LayerInconsistency { layer: k }),
+                "final eval {j} of transition {k}"
+            );
+        }
+    }
+}
+
 /// Every malformed shape is an error before the transcript is touched, in the
 /// frozen order: challenges, then outputs, then the proof.
 #[test]
@@ -268,10 +338,38 @@ fn malformed_shapes_are_errors_in_order() {
         Err(GkrError::ProofShape { layer: 3 })
     );
 
+    // Too long, not only too short: a layer beyond the depth is refused
+    // before anything reads the artifact at it.
+    let mut deep = proof.clone();
+    deep.layers.push(proof.layers[2].clone());
+    assert_eq!(
+        check(&deep, &outputs, &challenges),
+        Err(GkrError::ProofShape { layer: 3 })
+    );
+    // Two malformed transitions: the lowest is reported.
+    let mut twice = proof.clone();
+    twice.layers[0].rounds.pop();
+    twice.layers[2].final_evals.push(Fr::ZERO);
+    assert_eq!(
+        check(&twice, &outputs, &challenges),
+        Err(GkrError::ProofShape { layer: 0 })
+    );
+
     let one = OutputClaims {
         tables: vec![outputs.tables[0].clone()],
     };
     assert_eq!(check(&proof, &one, &challenges), Err(GkrError::OutputShape));
+    let three = OutputClaims {
+        tables: vec![
+            outputs.tables[0].clone(),
+            outputs.tables[1].clone(),
+            outputs.tables[0].clone(),
+        ],
+    };
+    assert_eq!(
+        check(&proof, &three, &challenges),
+        Err(GkrError::OutputShape)
+    );
     let wide = OutputClaims {
         tables: vec![values.layers[1][0].clone(), outputs.tables[1].clone()],
     };
@@ -293,4 +391,103 @@ fn malformed_shapes_are_errors_in_order() {
         check(&proof, &outputs, &challenges).is_ok(),
         "the control verifies"
     );
+}
+
+/// How many gates of each kind — cached, producing, enforcing — name a
+/// challenge slot.
+fn challenge_sites(artifact: &CircuitArtifact) -> [usize; 3] {
+    let names = |gate: &GateDef| {
+        gate.coefficients()
+            .iter()
+            .any(|c| matches!(c, Coeff::Challenge(_)))
+    };
+    let count = |gates: Vec<&GateDef>| gates.into_iter().filter(|g| names(g)).count();
+    let lists = &artifact.layers;
+    [
+        count(
+            lists
+                .iter()
+                .flat_map(|l| &l.cached)
+                .map(|e| &e.gate)
+                .collect(),
+        ),
+        count(
+            lists
+                .iter()
+                .flat_map(|l| &l.producing)
+                .map(|e| &e.gate)
+                .collect(),
+        ),
+        count(
+            lists
+                .iter()
+                .flat_map(|l| &l.enforcing)
+                .map(|e| &e.gate)
+                .collect(),
+        ),
+    ]
+}
+
+/// `MissingChallenge` wherever the slot is named, not only in a cached entry,
+/// where the toy names it: in a producing gate (the cache-free toy, where `γ`
+/// sits in fingerprint's `AffineProduct`) and in an enforcing gate alone (the
+/// toy with `γ` moved out of `shifted_a` and onto `s` in the gated equality,
+/// relations to match). Each verifies with its slot, and without it returns
+/// the error, untouched transcript and all, where a verifier that checked
+/// cached entries only would panic inside the kernel. Kills Mutant C and M10b.
+#[test]
+fn a_slot_named_by_a_producing_or_enforcing_gate_is_checked() {
+    let (one, gamma) = (
+        Coeff::Literal(Fr::ONE),
+        Coeff::Challenge(challenge_slot::TOY),
+    );
+    let mut enforcing = toy();
+    let set = |gate: &mut GateDef, left: bool, to: Coeff| match gate {
+        GateDef::Linear { terms, .. } => terms[0].0 = to,
+        GateDef::AffineProduct {
+            left: l, right: r, ..
+        } => {
+            if left {
+                l[0].0 = to
+            } else {
+                r[0].0 = to
+            }
+        }
+        other => panic!("not a toy gate: {other:?}"),
+    };
+    set(&mut enforcing.layers[0].cached[0].gate, true, one);
+    set(&mut enforcing.relations[1].gate, true, one);
+    set(&mut enforcing.layers[0].enforcing[0].gate, false, gamma);
+    set(&mut enforcing.relations[3].gate, false, gamma);
+    assert_eq!(enforcing.relations[3].name, "gated_equality");
+    enforcing
+        .validate()
+        .expect("γ on s in the gated equality is legal");
+
+    let producing = toy_cache_free();
+    assert_eq!(challenge_sites(&producing), [0, 1, 0]);
+    assert_eq!(challenge_sites(&enforcing), [0, 0, 1]);
+    for artifact in [producing, enforcing] {
+        let base = toy_base(&toy_columns(0x5313_0b00));
+        let (values, proof, result) = honest(&artifact, &base);
+        result.expect("the control verifies with its slot supplied");
+        let outputs = output_claims(&artifact, &values);
+        let (mut t, _) = bind(&artifact, &base);
+        let before = t.snapshot();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            verify(
+                &artifact,
+                &proof,
+                &outputs,
+                &ExternalChallenges::new(),
+                &mut t,
+            )
+        }));
+        assert_eq!(
+            result.ok(),
+            Some(Err(GkrError::MissingChallenge { slot: 0 })),
+            "an error, not a panic"
+        );
+        assert_eq!(t.snapshot(), before, "a missing slot touches no transcript");
+    }
 }

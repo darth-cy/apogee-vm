@@ -16,9 +16,7 @@
 use constants::challenge_slot;
 use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress, VirtualKind, CATALOGUE};
 use field::Fr;
-use gkr::{
-    claim_count, eval_gate, forward, gate_values, virtual_at_row, BaseLayer, ExternalChallenges,
-};
+use gkr::{eval_gate, forward, gate_values, virtual_at_row, BaseLayer, ExternalChallenges};
 use poly::{MultilinearPoly, PolyBacking};
 
 /// Independent pseudo-random points per sampled check.
@@ -100,10 +98,6 @@ fn output_name(a: &CircuitArtifact, address: PolyAddress) -> &str {
     slot.map_or("?", |slot| slot.name.as_str())
 }
 
-fn committed_width(a: &CircuitArtifact) -> usize {
-    a.memory.len() + a.witness.len() + a.setup.len()
-}
-
 /// `op`'s position in the committed layout, if it is an in-range `M`, `W`, `S`.
 fn layout_index(a: &CircuitArtifact, op: PolyAddress) -> Option<usize> {
     let (m, w, s) = (a.memory.len(), a.witness.len(), a.setup.len());
@@ -129,8 +123,7 @@ fn layout_index(a: &CircuitArtifact, op: PolyAddress) -> Option<usize> {
 ///
 /// Does NOT cover: the stored widths and variable counts (Law 2), the output
 /// map (Law 3), the flat list (Law 4), or any construction rule outside the
-/// laws — the degree ceiling, the halving rules Law 2 does not hold, names,
-/// challenge slots, `lookups`, `padding.row`'s length, `trace_vars`' ceiling.
+/// laws (listed on `check_laws`).
 pub fn check_law1(a: &CircuitArtifact) -> Result<(), String> {
     for (k, list) in a.layers.iter().enumerate() {
         // (what, gate, whether it may read a cached entry)
@@ -190,8 +183,8 @@ pub fn check_law1(a: &CircuitArtifact) -> Result<(), String> {
 /// `L{k+1}[0..width)` once each, in position order, which is the order the
 /// engine reads them in; the stored `num_vars` is `n_k` for a row-wise list and
 /// `n_k − 1` for a halving one. A halving list halves every inner column of its
-/// layer in order: its width is layer `k`'s (and `k >= 1`), and producing gate
-/// `j` is exactly `TreeProduct { input: L{k}[j] }`.
+/// layer in order: it is not gate list 0, which reads the base, its width is
+/// layer `k`'s, and producing gate `j` is exactly `TreeProduct { input: L{k}[j] }`.
 ///
 /// Does NOT cover: operand locality (Law 1), the output map (Law 3), the flat
 /// list (Law 4); layer 0's width, which is the layout and stores nothing; that
@@ -233,7 +226,12 @@ pub fn check_law2(a: &CircuitArtifact) -> Result<(), String> {
         if !halving {
             continue;
         }
-        let columns = if k == 0 { 0 } else { a.layer_width(k) };
+        if k == 0 {
+            return Err(format!(
+                "{LAW2}: gate list 0 is halving, but it reads the base, not inner columns"
+            ));
+        }
+        let columns = a.layer_width(k);
         if width != columns {
             return Err(format!(
                 "{LAW2}: halving gate list {k} writes {width} columns, but layer {k} has \
@@ -363,10 +361,14 @@ pub fn check_law4(a: &CircuitArtifact) -> Result<(), String> {
             .output
             .map(|i| a.scratch.get(i as usize).map(|s| s.address));
         if mapped != output.map(Some) {
+            let has = match rel.output {
+                Some(i) => format!("output {}", PolyAddress::Scratch(i)),
+                None => "no output".to_string(),
+            };
             return Err(format!(
-                "{LAW4}: {what} names relation {r} ({}), whose output {:?} does not map to it \
-                 through the scratch bijection",
-                rel.name, rel.output
+                "{LAW4}: {what} names relation {r} ({}), with {has}, which the scratch \
+                 bijection does not map to it",
+                rel.name
             ));
         }
     }
@@ -375,7 +377,7 @@ pub fn check_law4(a: &CircuitArtifact) -> Result<(), String> {
     let slots = challenge_slots(&all_gates(a));
     for trial in 0..TRIALS {
         let mut triple = || [rng.fr(), rng.fr(), rng.fr()];
-        let committed = (0..committed_width(a)).map(|_| triple()).collect();
+        let committed = a.committed().iter().map(|_| triple()).collect();
         let virt = triple();
         let scratch = (0..a.scratch.len()).map(|_| triple()).collect();
         let challenges = rng.challenges(&slots);
@@ -402,10 +404,14 @@ pub fn check_law4(a: &CircuitArtifact) -> Result<(), String> {
 
 /// Laws 1, 2, 3 and 4, in that order; the first failure.
 ///
-/// Does NOT cover: whatever each law's checker does not — in particular every
-/// construction rule of `docs/spec/gkr.md` §4.2 outside the laws — nor the
-/// padding contract (`check_padding`), nor what the circuit computes
-/// (`cross_check`).
+/// Does NOT cover: whatever each law's checker does not; the construction
+/// rules of `docs/spec/gkr.md` §3.1 and §4.2 outside the laws — the degree
+/// ceiling, a halving list with cached or enforcing entries, a row-wise list
+/// with a `TreeProduct`, an inner column no gate reads, an identically zero
+/// enforcing gate, a cached entry no gate names, a relation reading `V[row]` when `virtuals`
+/// does not list it, names, challenge slots, `lookups`, `padding.row`'s length,
+/// `format_version`, `coefficient_encoding`, `trace_vars`' ceiling; the padding
+/// contract (`check_padding`); what the circuit computes (`cross_check`).
 pub fn check_laws(a: &CircuitArtifact) -> Result<(), String> {
     check_law1(a)?;
     check_law2(a)?;
@@ -586,7 +592,7 @@ fn padding_failure(a: &CircuitArtifact, committed: &[Fr]) -> Result<Option<Strin
 /// sampled; the laws, which it assumes; whether a prover really pads with
 /// `padding.row`.
 pub fn check_padding(a: &CircuitArtifact) -> Result<(), String> {
-    let (width, given) = (committed_width(a), a.padding.row.len());
+    let (width, given) = (a.committed().len(), a.padding.row.len());
     if given != width {
         return Err(format!(
             "padding: padding.row has {given} values for {width} columns"
@@ -632,7 +638,7 @@ pub fn violated_relations(
     challenges: &ExternalChallenges,
 ) -> Vec<String> {
     let shape = (w.committed.len(), w.scratch.len());
-    let expected = (committed_width(a), a.scratch.len());
+    let expected = (a.committed().len(), a.scratch.len());
     assert_eq!(
         shape, expected,
         "violated_relations: (committed, scratch) lengths"
@@ -764,8 +770,9 @@ pub fn dump(a: &CircuitArtifact) -> String {
     line(format!("  depth                 {depth} gate lists"));
 
     line("\ncommitted columns".to_string());
+    let committed = a.committed();
     let names = a.memory.iter().chain(&a.witness).chain(&a.setup);
-    for (address, name) in a.committed().iter().zip(names) {
+    for (address, name) in committed.iter().zip(names) {
         line(format!("  {address}  {name}"));
     }
     line("virtual tables".to_string());
@@ -775,8 +782,10 @@ pub fn dump(a: &CircuitArtifact) -> String {
     }
 
     line("\nlayers".to_string());
-    let w = committed_width(a);
-    line(format!("layer 0  base  2^{n} rows, width {w}"));
+    line(format!(
+        "layer 0  base  2^{n} rows, width {}",
+        committed.len()
+    ));
     for (k, list) in a.layers.iter().enumerate() {
         let (up, kind) = (k + 1, if list.halving { "halving" } else { "row-wise" });
         line(format!("gate list {k}  {kind}, layer {k} -> layer {up}"));
@@ -820,7 +829,6 @@ pub fn dump(a: &CircuitArtifact) -> String {
     }
 
     line("\npadding contract".to_string());
-    let committed = a.committed();
     let mut row: Vec<String> = Vec::new();
     for (i, v) in a.padding.row.iter().enumerate() {
         let value = coeff(Coeff::Literal(*v));
@@ -876,10 +884,6 @@ pub struct VerifierConstants {
     pub outputs: Vec<&'static str>,
     /// Every challenge slot a gate or relation names, ascending, once each.
     pub challenge_slots: Vec<u32>,
-    /// The proof shape: transition `k`'s sumcheck rounds, and the claim values
-    /// it leaves on layer `k`.
-    pub rounds: Vec<usize>,
-    pub claims: Vec<usize>,
 }
 
 /// What an independent description computes from a base: the output tables in
@@ -926,10 +930,6 @@ pub fn cross_check(
     let cached: Vec<usize> = a.layers.iter().map(|l| l.cached.len()).collect();
     let outputs: Vec<&str> = a.outputs.iter().map(|out| output_name(a, *out)).collect();
     let slots = challenge_slots(&all_gates(a));
-    let rounds: Vec<usize> = (0..a.depth())
-        .map(|k| a.layer_vars(k + 1) as usize)
-        .collect();
-    let claims: Vec<usize> = (0..a.depth()).map(|k| claim_count(a, k)).collect();
     let got = [
         format!("trace_vars {}", a.trace_vars),
         format!("memory {:?}", a.memory),
@@ -943,8 +943,6 @@ pub fn cross_check(
         format!("cached {cached:?}"),
         format!("outputs {outputs:?}"),
         format!("challenge_slots {slots:?}"),
-        format!("rounds {rounds:?}"),
-        format!("claims {claims:?}"),
     ];
     let want = [
         format!("trace_vars {}", e.trace_vars),
@@ -959,8 +957,6 @@ pub fn cross_check(
         format!("cached {:?}", e.cached),
         format!("outputs {:?}", e.outputs),
         format!("challenge_slots {:?}", e.challenge_slots),
-        format!("rounds {:?}", e.rounds),
-        format!("claims {:?}", e.claims),
     ];
     for (got, want) in got.iter().zip(&want) {
         if got != want {
@@ -972,7 +968,9 @@ pub fn cross_check(
 
     let mut rng = Rng(0xc055_c4ec);
     let rows = 1usize << a.trace_vars;
-    let base: Vec<Vec<Fr>> = (0..committed_width(a))
+    let base: Vec<Vec<Fr>> = a
+        .committed()
+        .iter()
         .map(|_| (0..rows).map(|_| rng.fr()).collect())
         .collect();
     let challenges = rng.challenges(&e.challenge_slots);

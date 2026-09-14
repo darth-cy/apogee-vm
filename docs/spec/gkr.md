@@ -99,10 +99,11 @@ is admissible only if its MLE has a closed form at every such point.
 | 4 | `TreeProduct { input }` | `x(·,0)·x(·,1)` | `x(·,0), x(·,1)` |
 
 **The kernel** — `gkr_verify::eval_gate`, one evaluation per variant over operand
-values in that order — is the semantic authority. Every pass reads gates through
-`gkr_verify::gate_values`, which resolves operands and calls the kernel: the
-forward pass, the self-check, both halves of the layer sumcheck and the checker's
-witness-row evaluator. `constraints::CATALOGUE` records, per variant, where it is
+values in that order — is the semantic authority, and nothing else evaluates a gate.
+The engine's passes — the forward pass, the self-check and both halves of the layer
+sumcheck — reach it through `gkr_verify::gate_values`, which resolves a gate list's
+operands; the checker's witness-row evaluator, padding check and Law 4 sampler call
+it directly over the flat relations. `constraints::CATALOGUE` records, per variant, where it is
 defined and evaluated, what it reads and writes, its formula in the template, and
 what it is for.
 
@@ -173,8 +174,8 @@ producing entry sit at `C{k}[j]` and `L{k+1}[j]`.
 
 ### 4.1 Wire form
 
-`postcard` over the tuple above, hand-written serde. Integers are postcard
-varints; `bool` is one byte; `Option` is postcard's tag; a sequence is a varint
+`postcard` over the tuple above, hand-written serde. A `u32` is a postcard
+varint; a `u8` tag and a `bool` are one raw byte; `Option` is postcard's tag; a sequence is a varint
 length then its elements; a name is a `str`; an `Fr` is its 32 canonical bytes
 with no length prefix (`crates/field`'s `[u8; 32]` tuple).
 
@@ -224,9 +225,11 @@ standalone validators, which share no code with it.
 
 Besides the laws, `validate` refuses: degree above 2 (§3.1); a halving list
 breaking §1's rules; a relation operand outside §2's set; a scratch slot that is
-not exactly one producing relation's output; an inner column below the top that
-the next list never reads, and a cached entry no gate names — each a relation
-constructed and then dropped, which constrains nothing; an empty name, one outside
+not exactly one producing relation's output; an inner column below the top that the
+next list never reads — decided on the gates' normalized expansions, so a cancelling
+or zero-coefficient term reads nothing — a cached entry no gate names, and an
+enforcing gate whose normalized expansion is zero, each a relation constructed and
+then dropped, on which nothing depends; an empty name, one outside
 `[a-z0-9_]`, or one used twice anywhere in the artifact; an unknown challenge
 slot; a non-empty `lookups`; a `padding.row` whose length is not `w_0`; a format
 version or coefficient encoding other than 0; `trace_vars > 30`. Every refusal is

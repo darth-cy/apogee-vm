@@ -175,17 +175,6 @@ impl GateDef {
             }
         }
     }
-
-    /// This variant's row of [`CATALOGUE`].
-    pub fn catalogue_index(&self) -> usize {
-        match self {
-            GateDef::Linear { .. } => 0,
-            GateDef::Product { .. } => 1,
-            GateDef::MaskIntoIdentity { .. } => 2,
-            GateDef::AffineProduct { .. } => 3,
-            GateDef::TreeProduct { .. } => 4,
-        }
-    }
 }
 
 /// One row of the gate catalogue: what a `GateDef` variant is, where it is
@@ -208,7 +197,8 @@ const EVALUATED_IN: &str = "crates/gkr-verify/src/lib.rs, eval_gate: gkr::forwar
 const ROW_WISE_OUTPUT: &str =
     "producing: L{k+1}[j]; enforcing: nothing; cached: C{k}[j] (row-wise lists)";
 
-/// The gate catalogue, indexed by [`GateDef::catalogue_index`].
+/// The gate catalogue: one row per `GateDef` variant, in wire-tag order, each
+/// naming its variant in `variant`.
 pub const CATALOGUE: [CatalogueEntry; 5] = [
     CatalogueEntry {
         variant: "Linear",

@@ -19,11 +19,9 @@ pub enum GkrError { MissingChallenge { slot }, OutputShape, ProofShape { layer }
 pub fn eval_gate(gate: &GateDef, values: &[Fr], challenges: &ExternalChallenges) -> Fr;   // THE kernel
 pub fn gate_values(artifact, k, lower, upper, virtuals, challenges) -> Vec<Fr>;
 pub fn summand(artifact, k, weights, lower, upper, virtuals, challenges) -> Fr;
-pub fn coefficient(c: Coeff, challenges: &ExternalChallenges) -> Fr;
 pub fn virtual_at_row(kind: VirtualKind, row: usize) -> Fr;
 pub fn virtual_at_point(kind: VirtualKind, point: &[Fr]) -> Fr;
 pub fn powers(lambda: Fr, n: usize) -> Vec<Fr>;
-pub fn claim_count(artifact: &CircuitArtifact, k: usize) -> usize;
 pub fn check_challenges(artifact, challenges) -> Result<(), GkrError>;
 pub fn verify_sumcheck(claim: Fr, rounds: &[[Fr; 4]], t: &mut Transcript) -> Option<(Vec<Fr>, Fr)>;
 pub fn verify(artifact: &CircuitArtifact, proof: &GkrProof, outputs: &OutputClaims,
@@ -32,9 +30,9 @@ pub fn verify(artifact: &CircuitArtifact, proof: &GkrProof, outputs: &OutputClai
 
 ## Frozen invariants
 - **The kernel is the semantic authority.** `eval_gate` is the one place a gate's formula
-  is computed; the forward pass, the self-check, both halves of the layer sumcheck and the
-  checker's witness-row evaluator reach it through `gate_values`. Where a comment and the
-  kernel disagree, the kernel wins.
+  is computed. The engine's passes — the forward pass, the self-check, both halves of the
+  layer sumcheck — reach it through `gate_values`; the checker calls it directly over the
+  flat relations. Where a comment and the kernel disagree, the kernel wins.
 - **The transcript schedule of `docs/spec/gkr.md` §5.2**, step for step: outputs, point,
   then per transition batch, rounds, claims, and — halving only — the child challenge.
 - **`verify` absorbs nothing of the base.** Its transcript arrives bound; that binding is

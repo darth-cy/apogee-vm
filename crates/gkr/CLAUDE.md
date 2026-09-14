@@ -49,8 +49,14 @@ pub fn prove(artifact: &CircuitArtifact, values: &LayerValues, challenges: &Exte
 | File | Covers |
 | --- | --- |
 | `tests/backward.rs` | acceptance 1 over both compilations and eight bases, base claims discharged against the columns; the proof's frozen shape; an all-zero output |
-| `tests/tamper.rs` | acceptance 2's twin (layers 2 and 1 for inner flips, 0 for the enforcing-only cell, with the self-check naming the gate); acceptance 3's cancellation; a forged output table; a wrong child pair; every shape error, in order, touching no transcript |
-| `tests/batching.rs` | acceptance 4: the whole event log against the schedule, and the outstanding-claim walk, with its negative controls |
-| `tests/compilation.rs` | acceptance 7: cached and cache-free give the same shape, values and proof byte for byte; a degree-2 cached entry proves and verifies |
+| `tests/tamper.rs` | acceptance 2's twin (layers 2 and 1 for inner flips, 0 for the enforcing-only cell, with the self-check naming the gate); acceptance 3's cancellation; a forged output table built at the point a transcript without the outputs would draw; a wrong child pair; a lying row-wise final eval at transitions 0 and 1; the self-check naming broken producing and halving gates; `MissingChallenge` for a slot in a producing or an enforcing gate; every shape error, in order, touching no transcript |
+| `tests/forgery.rs` | every round held to the claim it inherits, directly on `verify_sumcheck`; an end-to-end forgery that repairs only the last round, rejected |
+| `tests/edges.rs` | a circuit with `trace_vars` 1, a zero-variable layer, a width-0 top and an enforcing-only list, whose zero-round final check rejects a violation; two opposed enforcing gates in one list that do not cancel |
+| `tests/kernel.rs` | `eval_gate` for every shape at non-unit literal and challenge coefficients and nonzero constants, against hand-written arithmetic |
+| `tests/refusals.rs` | `verify` and `prove` panicking on an artifact that breaks a law; `BaseLayer::new`, `ExternalChallenges::insert`, `forward`, `prove` and `self_check` refusing malformed inputs |
+| `tests/batching.rs` | acceptance 4: the whole event log against the schedule, and the outstanding-claim walk reading halving and claim counts from the artifact, with its negative controls |
+| `tests/compilation.rs` | acceptance 7: cached and cache-free give the same shape, values and proof byte for byte; degree-2 cached entries, in list 0 and in list 1, prove and verify |
 | `tests/oracle.rs` | every round of every transition recomputed from hand-written toy formulas, sharing no code with the kernel; the control that it can fail |
-| `tests/common/mod.rs` | the pinned toy fixtures, a satisfying base, the binding, the harness and the discharge |
+| `tests/common/mod.rs` | the pinned toy fixtures, a satisfying base, the binding, the harness, the discharge, and the two small circuits `edges.rs` and `forgery.rs` share |
+
+Every test written after the review states the mutant it kills, and each was run against that mutant.

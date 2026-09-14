@@ -78,7 +78,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
-cargo test --workspace                      # 495 tests as of S12; 20 more are #[ignore]d
+cargo test --workspace                      # 612 tests as of S13; 20 more are #[ignore]d
 cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
@@ -346,8 +346,9 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   for the guest; `gkr` is std + rayon and re-exports it, so `gkr::verify` is
   `gkr_verify::verify`. The owner chose two crates over a serial prover or an unchecked
   no_std claim.
-- **`gkr_verify::eval_gate` is the one kernel.** Every pass reads gates through
-  `gate_values`, so the forward and backward passes share one `G`.
+- **`gkr_verify::eval_gate` is the one kernel.** The engine's passes read gates
+  through `gate_values`, so the forward and backward passes share one `G`; the checker
+  calls the kernel directly over the flat relations.
 - **Cached entries are substituted, never columns.** No table, no claim, no width; degree
   counts after substitution, which is how a degree-3 gate is written and refused; the
   prover evaluates a cached entry at every round node and never binds it. A virtual table
@@ -359,8 +360,10 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   enforcing gate is wrong, and no proof data is spent pretending otherwise.
 - **The laws are enforced twice**, by `CircuitArtifact::validate` and by `checker`'s
   validators, which share no code; `from_bytes` checks encoding only, so the checker can be
-  handed a broken artifact. A column no gate reads and a cached entry no gate names are
-  refused: a relation constructed and then dropped constrains nothing.
+  handed a broken artifact. An inner column below the top that no gate reads — on the
+  normalized expansion, so `x − x` and `0·x` read nothing — a cached entry no gate
+  names, and an identically zero enforcing gate are refused: a relation constructed and
+  then dropped is one nothing depends on.
 - **Boring beats clever.** Added surface area is a defect. Every verifier entry point is
   `(&VerifyingKey, &Proof, &PublicInputs)` and nothing else.
 

@@ -199,9 +199,14 @@ fn every_truncation_is_refused() {
 }
 
 /// A sequence length is untrusted: a varint claiming 2^32 names in the memory
-/// layout, with nothing behind it, is a buffer that ends early — refused
-/// without reserving 2^32 of anything first. The same claim as a gate's operand
-/// count, with nothing behind it, is refused the same way.
+/// layout, with nothing behind it, is refused as a buffer that ends early, and
+/// `from_bytes` returns rather than panicking or aborting. The same claim as a
+/// gate's operand count, with nothing behind it, is refused the same way.
+///
+/// This shows the refusal, not the absence of a reservation: postcard's
+/// `size_hint` is `None` whenever a declared length exceeds the bytes left, so
+/// a visitor that reserved from the hint would pass this test too. No
+/// allocation is measured here.
 #[test]
 fn a_length_prefix_claiming_two_to_the_32_is_refused() {
     let huge = encode(&(1u64 << 32));

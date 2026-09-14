@@ -1,6 +1,8 @@
 //! Acceptance 10, the dump: the page names the header, every committed column
 //! and virtual table, every layer, every relation, every address the toy uses
-//! and the gate catalogue. And the `checker` CLI, run as a binary.
+//! and the gate catalogue, and prints exactly one line per gate shape, the
+//! cached entry, a scratch-bijection line and an output-map line. And the
+//! `checker` CLI, run as a binary.
 
 mod common;
 
@@ -85,13 +87,42 @@ fn the_dump_names_everything_in_the_toy() {
         for address in addresses {
             assert!(text.contains(address), "{label}: no {address}");
         }
-        assert!(has_line(
-            "  L{2}[1](x) = Σ_y eq(x, y) · (1·L{1}[1] + 3)   [relation 5 define_fingerprint3]"
-        ));
-        assert!(has_line(
-            "  0 = (1·W[3] + -1·W[0] + 0)·(1·S[0] + 0)   for every y   [relation 3 gated_equality]"
-        ));
+        // One line per gate shape, then a bijection line and an output line.
+        let mut exact = vec![
+            "  L{2}[1](x) = Σ_y eq(x, y) · (1·L{1}[1] + 3)   [relation 5 define_fingerprint3]",
+            "  L{1}[0](x) = Σ_y eq(x, y) · 1·W[0]·W[1]   [relation 0 define_ab]",
+            "  L{1}[2](x) = Σ_y eq(x, y) · (M[0]·S[0] + 1 − S[0])   [relation 2 define_masked_m]",
+            "  0 = (1·W[3] + -1·W[0] + 0)·(1·S[0] + 0)   for every y   [relation 3 gated_equality]",
+            "  L{3}[0](x) = Σ_y eq(x, y) · L{2}[0](y, 0)·L{2}[0](y, 1)   [relation 6 define_abm_product]",
+            "  scratch[0] = L{1}[0]  ab",
+            "  0  L{3}[1]  fingerprint3_product",
+        ];
+        if label == "cached" {
+            exact.push("  C{0}[0](y) = (toy·W[0] + 1·V[row] + 0)   [cached shifted_a]");
+        }
+        for line in exact {
+            assert!(has_line(line), "{label}: no line {line:?} in\n{text}");
+        }
     }
+}
+
+/// A literal at or above `2^64` prints as hex, even when its low eight bytes
+/// alone are a small number.
+#[test]
+fn a_large_literal_is_not_read_from_its_low_bytes() {
+    let mut a = load(CACHE_FREE);
+    let value = (1u128 << 64) + 5;
+    let mut bytes = [0u8; 32];
+    bytes[..16].copy_from_slice(&value.to_le_bytes());
+    *linear(&mut a.layers[1].producing[1].gate).1 = Coeff::Literal(Fr::from_bytes(&bytes).unwrap());
+    let line = format!(
+        "  L{{2}}[1](x) = Σ_y eq(x, y) · (1·L{{1}}[1] + 0x{value:064x})   [relation 5 define_fingerprint3]"
+    );
+    let text = dump(&a);
+    assert!(
+        text.lines().any(|l| l == line),
+        "no line {line:?} in\n{text}"
+    );
 }
 
 /// A negated literal as `-k`, a large one as 64 hex digits, a challenge by name.

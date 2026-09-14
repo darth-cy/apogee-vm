@@ -16,8 +16,7 @@ pub enum PolyAddress { Memory(u32), Witness(u32), Setup(u32), Virtual(VirtualKin
                        Inner { layer, offset }, Scratch(u32), Cached { layer, offset } }  // + Display
 pub enum Coeff { Literal(Fr), Challenge(u32) }
 pub enum GateDef { Linear, Product, MaskIntoIdentity, AffineProduct, TreeProduct }
-impl GateDef { pub fn operands(&self) -> Vec<PolyAddress>; pub fn coefficients(&self) -> Vec<Coeff>;
-               pub fn catalogue_index(&self) -> usize; }
+impl GateDef { pub fn operands(&self) -> Vec<PolyAddress>; pub fn coefficients(&self) -> Vec<Coeff>; }
 pub struct CatalogueEntry { variant, defined_in, evaluated_in, inputs, output, template, purpose }
 pub const CATALOGUE: [CatalogueEntry; 5];
 pub struct CachedEntry { name, address, gate }
@@ -82,5 +81,5 @@ output, not an oracle: the independent description of the toy is
 | File | Covers |
 | --- | --- |
 | `tests/wire.rs` | both fixtures round-trip byte for byte; every refusal of the reader; every single-bit flip of a fixture decodes or errors, never panics |
-| `tests/laws.rs` | one mutation of the toy per rule, each refused with its exact error, beside the toy validating; the degree-3 gate; cache-free inlining and its refusals |
+| `tests/laws.rs` | one mutation of the toy per rule, each refused with its error — structured variants matched whole, prose details by the rule and the address or name they carry — beside the toy validating; the degree-3 gate; cache-free inlining and its refusals |
 | `tests/audit.rs` | every `GateDef` variant emitted across both compilations; the catalogue; the two compilations' identical shape |

@@ -23,7 +23,28 @@ fn variant_name(g: &GateDef) -> &'static str {
     }
 }
 
-/// One gate of every variant, in `catalogue_index` order.
+/// The catalogue row describing `g`'s variant: the one whose `variant` is this
+/// file's name for it. A variant with no row, or with two, fails here.
+#[track_caller]
+fn catalogue_row(g: &GateDef) -> usize {
+    let rows: Vec<usize> = (0..CATALOGUE.len())
+        .filter(|&i| CATALOGUE[i].variant == variant_name(g))
+        .collect();
+    assert_eq!(
+        rows.len(),
+        1,
+        "catalogue rows for {}: {rows:?}",
+        variant_name(g)
+    );
+    rows[0]
+}
+
+/// The wire tag `to_bytes` writes for `g`: the first byte of its encoding.
+fn wire_tag(g: &GateDef) -> u8 {
+    postcard::to_extend(g, Vec::new()).expect("encoding into a Vec cannot fail")[0]
+}
+
+/// One gate of every variant, in wire-tag order.
 fn one_of_each() -> [GateDef; VARIANTS] {
     let one = Coeff::Literal(field::Fr::ONE);
     let x = PolyAddress::Witness(0);
@@ -62,11 +83,11 @@ fn every_gate(a: &CircuitArtifact) -> Vec<&GateDef> {
     gates
 }
 
-/// How many gates of each variant, indexed by `catalogue_index`.
+/// How many gates of each variant, indexed by catalogue row.
 fn variant_counts(a: &CircuitArtifact) -> [usize; VARIANTS] {
     let mut counts = [0usize; VARIANTS];
     for g in every_gate(a) {
-        counts[g.catalogue_index()] += 1;
+        counts[catalogue_row(g)] += 1;
     }
     counts
 }
@@ -74,13 +95,15 @@ fn variant_counts(a: &CircuitArtifact) -> [usize; VARIANTS] {
 /// Acceptance 11: across both compilations of the toy — the audit runs over
 /// all of them, since a variant absent from one may be the one another uses —
 /// every `GateDef` variant is emitted, so none is dead and none needs to be
-/// documented as reserved.
+/// documented as reserved. Each emitted gate is mapped to its catalogue row by
+/// this file's own variant names, so a catalogue row renamed away from its
+/// variant fails here too.
 #[test]
 fn the_audit_over_both_compilations_emits_every_variant() {
     let mut emitted = [false; VARIANTS];
     for a in [toy(), toy_cache_free()] {
         for g in every_gate(&a) {
-            emitted[g.catalogue_index()] = true;
+            emitted[catalogue_row(g)] = true;
         }
     }
     let dead: Vec<&str> = (0..VARIANTS)
@@ -133,14 +156,17 @@ fn each_compilation_reports_its_own_variant_counts() {
     assert_eq!(entries(&toy()), entries(&toy_cache_free()));
 }
 
-/// Must-be-exact 3 and 13: the catalogue has one row per variant, in
-/// `catalogue_index` order, named for the variant it describes, and no field of
-/// any row is empty.
+/// Must-be-exact 3 and 13: the catalogue has one row per variant, in wire-tag
+/// order, named for the variant it describes, and no field of any row is empty.
+/// Row `i` is the variant `to_bytes` tags `i` — the tag is read from the
+/// encoding, not from `one_of_each`'s order — so two rows swapped, or a row
+/// renamed, is refused.
 #[test]
-fn the_catalogue_has_one_row_per_variant_in_index_order() {
+fn the_catalogue_has_one_row_per_variant_in_wire_tag_order() {
     assert_eq!(CATALOGUE.len(), VARIANTS);
     for (i, g) in one_of_each().iter().enumerate() {
-        assert_eq!(g.catalogue_index(), i, "{g:?}");
+        assert_eq!(usize::from(wire_tag(g)), i, "{g:?}");
+        assert_eq!(catalogue_row(g), i, "{g:?}");
         let row = &CATALOGUE[i];
         assert_eq!(row.variant, variant_name(g));
         for (field, value) in [
