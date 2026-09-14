@@ -1,0 +1,24 @@
+[package]
+name = "gkr"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The prover half of the GKR engine: the forward pass, its self-check, and the
+# backward pass. `std`, because it splits its per-row work over rayon; the
+# verifier half, which the recursion guest links, is `crates/gkr-verify`, and
+# this crate re-exports it.
+[dependencies]
+constants.workspace = true
+constraints.workspace = true
+field.workspace = true
+gkr-verify.workspace = true
+poly.workspace = true
+rayon.workspace = true
+transcript.workspace = true
+
+[dev-dependencies]
+# The S13 base-layer binding: tests absorb `witness_digest` of the committed
+# columns before proving and verifying. S16 absorbs commitments instead.
+sumcheck.workspace = true
+test-support.workspace = true

@@ -91,7 +91,7 @@ jobs:
 
       # The crates the recursion guest links compile unchanged for the guest.
       - name: guest target builds
-        run: cargo build -p field -p constants -p transcript -p poly -p sumcheck --target riscv32imac-unknown-none-elf
+        run: cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify --target riscv32imac-unknown-none-elf
 
       # Acceptance 1, typed out: from the guest's own directory, with no flags
       # beyond the target, and everything else coming from the template config.
@@ -125,8 +125,11 @@ jobs:
       # builds on one machine do agree, and `crates/loader/tests/reproducible.rs`
       # proves it. The `loader` group, which regenerates everything derivable
       # *from* those ELFs, does run and is diffed.
+      #
+      # The `gkr` group writes S13's toy circuit, cached and cache-free, from its
+      # one definition in kat-gen; the diff holds the committed artifacts to it.
       - name: committed fixtures are reproducible
         run: |
           cargo run -p kat-gen
           cargo run --manifest-path tools/transcript-ref/Cargo.toml
-          git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/
+          git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constraints/tests/vectors/

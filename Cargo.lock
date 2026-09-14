@@ -187,8 +187,10 @@ dependencies = [
  "ark-ec",
  "ark-ff",
  "constants",
+ "constraints",
  "curve",
  "field",
+ "gkr",
  "pcs",
  "poly",
  "srs",
@@ -229,6 +231,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "checker"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "constraints",
+ "field",
+ "gkr",
+ "poly",
+ "test-support",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -262,6 +276,17 @@ dependencies = [
 [[package]]
 name = "constants"
 version = "0.1.0"
+
+[[package]]
+name = "constraints"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "field",
+ "postcard",
+ "serde",
+ "test-support",
+]
 
 [[package]]
 name = "core-foundation-sys"
@@ -462,6 +487,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "gkr"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "constraints",
+ "field",
+ "gkr-verify",
+ "poly",
+ "rayon",
+ "sumcheck",
+ "test-support",
+ "transcript",
+]
+
+[[package]]
+name = "gkr-verify"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "constraints",
+ "field",
+ "poly",
+ "sumcheck",
+ "transcript",
+]
+
+[[package]]
 name = "guest-sdk"
 version = "0.1.0"
 dependencies = [
@@ -580,6 +632,7 @@ dependencies = [
  "ark-ff",
  "ark-poly",
  "constants",
+ "constraints",
  "field",
  "loader",
  "num-bigint",

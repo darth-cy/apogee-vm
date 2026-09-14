@@ -1,0 +1,20 @@
+[package]
+name = "constraints"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# `#![no_std]` + alloc: `gkr-verify` reads the artifact, and the recursion
+# guest links `gkr-verify`.
+[dependencies]
+# `challenge_slot::NAMES`: the slots a coefficient may name.
+constants.workspace = true
+field.workspace = true
+# The artifact's one wire form. Both featureless, as everywhere in the
+# workspace: writing goes through `to_extend` into a plain `Vec`, reading
+# through the two hand-written visitors in `src/wire.rs`.
+serde.workspace = true
+postcard.workspace = true
+
+[dev-dependencies]
+test-support.workspace = true

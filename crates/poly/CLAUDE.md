@@ -29,8 +29,9 @@ on both `evaluate` and `bind`.
   the workspace, now or later. `MultilinearPoly` is a struct and `PolyBacking` is a
   plain `enum`.
 - **The lift is bind-triggered, never read-triggered.** `get` and `evaluate` lift on
-  the fly and leave the backing alone; the first `bind` lifts the whole table to
-  `PolyBacking::Fr`, and after any `bind` the backing is `Fr` forever. There are never
+  the fly and leave the backing alone; the first `bind` lifts the table to
+  `PolyBacking::Fr` — folding a small table straight into a half-size `Fr` table, so no
+  full-size lifted copy exists — and after any `bind` the backing is `Fr` forever. There are never
   two representations of one polynomial.
 - **Lift is the canonical embedding.** A `U1` bit becomes `Fr::ZERO` or `Fr::ONE`; a
   `U8`/`U16`/`U32` word becomes `Fr::from_u64` of its value. One definition, in

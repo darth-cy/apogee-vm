@@ -201,6 +201,19 @@ uninitialised value can never be a valid message.
 | `PROGRAM_IDENTITY` | 22 | scalars |
 | `VM_CONFIG` | 23 | scalars |
 | `SHARD_COUNTS` | 24 | scalars |
+| `GKR_OUTPUTS` | 25 | scalars |
+| `GKR_OUTPUT_POINT` | 26 | challenge |
+| `GKR_BATCH` | 27 | challenge |
+| `GKR_LAYER_CLAIMS` | 28 | scalars |
+| `GKR_CHILD` | 29 | challenge |
+
+Tags 25 to 29 are S13's, and what each frames is fixed by the backward pass's
+schedule in `docs/spec/gkr.md` §5.2: the claimed output tables, the top-layer
+point, the per-transition claim batch, the claimed values a transition leaves
+on the layer it reads, and the child-line point of a halving transition. One tag
+per role, as S08 did, so a transcript's event log says which role each message
+played. A layer sumcheck's rounds keep S04's `SUMCHECK_ROUND` and
+`SUMCHECK_CHALLENGE`, in their existing kinds.
 
 Tags 22 to 24 are S11's. `PROGRAM_IDENTITY` opens the program-identity sponge
 with its one scalar, the code version; `VM_CONFIG` frames the static `VmConfig`

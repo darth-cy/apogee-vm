@@ -25,8 +25,9 @@
 //! until a challenge forces field arithmetic. *Lazy* means bind-triggered:
 //! [`MultilinearPoly::get`] and [`MultilinearPoly::evaluate`] lift on the fly
 //! and leave the backing alone; the first [`MultilinearPoly::bind`] lifts the
-//! whole table to [`PolyBacking::Fr`], and it stays there. There are never two
-//! representations of one polynomial.
+//! table to [`PolyBacking::Fr`] — folding the small table straight into a
+//! half-size `Fr` one — and it stays there. There are never two representations
+//! of one polynomial.
 //!
 //! Lift is the canonical embedding of the integer into `Fr`: a `U1` bit becomes
 //! `Fr::ZERO` or `Fr::ONE`, a `U8`/`U16`/`U32` word becomes `Fr::from_u64`.
@@ -83,12 +84,6 @@ impl PolyBacking {
             PolyBacking::U32(v) => Fr::from_u64(v[index] as u64),
             PolyBacking::Fr(v) => v[index],
         }
-    }
-
-    /// The whole table, lifted. Used by `bind`, which must leave the backing in
-    /// the `Fr` variant.
-    fn lift(&self) -> Vec<Fr> {
-        (0..self.entries()).map(|i| self.entry(i)).collect()
     }
 }
 
@@ -157,25 +152,34 @@ impl MultilinearPoly {
     }
 
     /// Fix the current variable 0 to `r`, halving the table. The first call
-    /// lifts the whole backing to [`PolyBacking::Fr`], where it stays.
+    /// lifts the backing to [`PolyBacking::Fr`], where it stays.
     pub fn bind(&mut self, r: Fr) {
         assert!(
             self.num_vars > 0,
             "MultilinearPoly::bind: the polynomial has no variables left to bind"
         );
-        // Take the backing so an `Fr` table can be folded in place; anything
-        // else is lifted first, which is must-be-exact 2.
-        let mut values = match core::mem::replace(&mut self.backing, PolyBacking::Fr(Vec::new())) {
-            PolyBacking::Fr(v) => v,
-            small => small.lift(),
+        let half = self.len() / 2;
+        // Take the backing so an `Fr` table can be folded in place. A small
+        // one is folded straight into a half-size `Fr` table, each entry read
+        // through the one lift, so no full-size lifted copy is ever made.
+        let values = match core::mem::replace(&mut self.backing, PolyBacking::Fr(Vec::new())) {
+            PolyBacking::Fr(mut values) => {
+                for i in 0..half {
+                    let lo = values[2 * i];
+                    let hi = values[2 * i + 1];
+                    values[i] = lo + r * (hi - lo);
+                }
+                values.truncate(half);
+                values
+            }
+            small => (0..half)
+                .map(|i| {
+                    let lo = small.entry(2 * i);
+                    let hi = small.entry(2 * i + 1);
+                    lo + r * (hi - lo)
+                })
+                .collect(),
         };
-        let half = values.len() / 2;
-        for i in 0..half {
-            let lo = values[2 * i];
-            let hi = values[2 * i + 1];
-            values[i] = lo + r * (hi - lo);
-        }
-        values.truncate(half);
         self.backing = PolyBacking::Fr(values);
         self.num_vars -= 1;
     }
