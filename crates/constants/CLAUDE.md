@@ -69,9 +69,10 @@ descriptor's three messages. S14 added `MEMORY_WINDOWS` (30), the third; `MEMORY
 (31), the 64 register and pc boundary scalars; and `PROGRAM_ENTRY` (32), the entry pc in
 the identity sponge — all scalars, `docs/spec/memory.md` §6. `family` and `extra_mask` are
 numbers the decoded tables and the identity recipe are built from, so the same rule applies
-to them as to tags: **append, never renumber** — a renumbered family or mask bit is a different program identity for every
-program. `crates/program/CLAUDE.md` is the design record for both, and
-`crates/program/tests/tables.rs` pins the masks and checks every bit names one mnemonic.
+to them as to tags: **append, never renumber** — a renumbered family or mask bit is a
+different program identity for every program. `crates/program/CLAUDE.md` is the design
+record for both, and `crates/program/tests/tables.rs` pins the masks and checks every bit
+names one mnemonic.
 
 `FR_MODULUS_MINUS_TWO` is an additive extension beyond S01's enumerated list; it is a
 property of the modulus and belongs next to it. The same reasoning puts

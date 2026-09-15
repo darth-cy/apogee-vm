@@ -325,8 +325,8 @@ and polynomials are the constraint system's.
 **Cycle profile** — how many cycles each family of a `VmConfig` ran, transfer cycles
 included; the counts sum to the cycle count. **Shard plan** — `ceil(occupancy / height)`
 shards per family, derived from it. The init/teardown families run no cycles and plan
-zero; their shards are RAM windows, one `INIT_TEARDOWN` and one `ZERO_WINDOWS` per
-touched window above 0.
+zero; their shards are RAM windows: exactly one `INIT_TEARDOWN` shard, window 0, and one
+`ZERO_WINDOWS` shard per touched window above 0.
 
 **Trace archive** — the self-contained snapshot of a run: a section per **phase
 boundary** (post-execution, post-commit, post-GKR, post-opening, final), filled in
@@ -365,7 +365,8 @@ increasing in `[1, 2^29/h − 1]`; `trace::init_windows` computes it.
 
 **Frame** — an execution family's memory subtree: 41 `M` columns (`cycle`, and mask,
 address, read timestamp, read value and write value for each of the pc query and the
-seven roles), 11 `W` columns (the gap chunks and the x0 gadget), a read and a write leaf
+seven roles), 11 `W` columns (each query's high gap chunk, then the x0 gadget's `rd_inv`,
+`rd_is_zero` and `rd_selected`), a read and a write leaf
 per query, and a product tree to the read and write roots.
 `constraints::memory::frame_artifact`; `docs/spec/memory.md` §2.
 
@@ -385,6 +386,6 @@ one `MEMORY_BOUNDARY` message absorbed before the memory challenges. `x0`'s fina
 boundary factors `(W_b, R_b)`, once per statement. `docs/spec/memory.md` §4.
 
 **Halting sentinel** — `constants::memory::HALT_PC = 1`: the `next_pc` an exit row
-writes, and the pc's final value the verifier fixes. Odd and below `RAM_ORIGIN`, so no
-other row writes it, and a trace whose pc ends there ended on an exit row.
-`docs/spec/memory.md` §5.
+writes, and the pc's final value the verifier fixes. Odd and below `RAM_ORIGIN`, so once
+S16's constraints of `docs/spec/memory.md` §5 hold, no other row writes it, and a trace
+whose pc ends there ended on an exit row.

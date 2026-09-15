@@ -408,9 +408,10 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   `gkr_verify::boundary_factors` folds them and the entry pc into `(W_b, R_b)` once per
   statement, and `reconciles` is the check. `t_pc` is not a cycle count.
 - **The exit row writes `next_pc = HALT_PC = 1`**, not `pc + 4`, and the verifier fixes the
-  pc's final value to it. It is odd and below `RAM_ORIGIN`, so no other row writes it and a
-  trace missing its exit row cannot balance. The decoded table's `next_pc` stays the
-  fall-through. `docs/spec/memory.md` §5.
+  pc's final value to it. It is odd and below `RAM_ORIGIN`, so once S16's constraints of
+  `docs/spec/memory.md` §5 hold, no other row writes it and a trace missing its exit row
+  cannot balance; at S14 no gate constrains a row's `next_pc`. The decoded table's
+  `next_pc` stays the fall-through.
 - **The artifact format is 1, and a lookup carries a selector.** `LookupExpr = (name,
   channel, selector, tuple)`: a range obligation holds where its selector is 0 or its one
   `Linear` expression is below the channel's bound. S14 checks them natively
@@ -419,7 +420,8 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 - **`check_memory` is a provenance rule.** It runs beside `validate` wherever a memory
   artifact is built, and refuses any gate or output whose cone both names a global memory
   slot (1–5) and reads a `W` column, a global-slot coefficient over anything but `M`, `S`
-  and `V`, and a leaf mask with no booleanity gate. `S` is admitted only because identity
+  and `V`, and a leaf mask that is an `M` or `S` column with no booleanity gate, or any
+  virtual column but `V[ram_live]`. `S` is admitted only because identity
   binds setup columns before the challenges. `docs/spec/memory.md` §8.
 - **Boring beats clever.** Added surface area is a defect. Every verifier entry point is
   `(&VerifyingKey, &Proof, &PublicInputs)` and nothing else.
