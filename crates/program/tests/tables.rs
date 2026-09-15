@@ -6,13 +6,13 @@ mod common;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use constants::{extra_mask, family};
+use constants::{extra_mask, family, guest_memory};
 use field::Fr;
-use loader::Slot;
+use loader::{Segment, Slot};
 use poly::PolyBacking;
 use program::{
-    decode_program, family_name, field_mask, lookup_tuple, row_kind, FamilyId, ProgramError,
-    ProgramParams, RowField, FAMILIES,
+    decode_program, family_name, field_mask, image_init_column, lookup_tuple, row_kind, FamilyId,
+    ProgramError, ProgramParams, RowField, FAMILIES,
 };
 
 /// Acceptance 6: a scan of every exported column of every table proves that
@@ -203,16 +203,20 @@ fn a_table_that_cannot_hold_its_program_fails_loudly() {
 
 /// A family's table bounds only that family's instructions: code above a
 /// shorter table's height is padding there, not an error and not a panic.
-/// At the defaults init/teardown is 2^20 rows and atomics 2^16, and every row
-/// above a table's height reads as not live.
+/// With the two init families at 2^20 rows, and atomics at its default 2^16,
+/// every row above a table's height reads as not live.
 #[test]
 fn code_above_a_shorter_familys_table_is_padding_there() {
     let addi = 0x0000_0013;
-    // pc 0x200000 is row 2^20: above init/teardown's whole table.
+    // pc 0x200000 is row 2^20: above both init families' whole tables.
+    let mut params = ProgramParams::defaults();
+    params.heights[family::INIT_TEARDOWN as usize] = 1 << 20;
+    params.heights[family::ZERO_WINDOWS as usize] = 1 << 20;
     let high = common::image_of(0x20_0000, &[addi]);
-    let (tables, _) = decode_program(&high, &ProgramParams::defaults()).unwrap();
-    let init = tables.family(family::INIT_TEARDOWN).unwrap();
-    assert!(!init.is_live(1 << 20));
+    let (tables, _) = decode_program(&high, &params).unwrap();
+    for init in [family::INIT_TEARDOWN, family::ZERO_WINDOWS] {
+        assert!(!tables.family(init).unwrap().is_live(1 << 20));
+    }
 
     // An atomic low in memory and ordinary code above the atomics table.
     let amoadd = 0x00b1_262f;
@@ -239,17 +243,27 @@ fn code_above_a_shorter_familys_table_is_padding_there() {
 }
 
 /// Must-be-exact 5: `bytecode_size_words` is an explicit input, and a program
-/// above it fails loudly.
+/// above it fails loudly. The span ends at the last file-backed byte: fib's
+/// heap-and-stack reservation lies above it with no file bytes and counts for
+/// nothing.
 #[test]
 fn a_program_above_bytecode_size_words_fails_loudly() {
     let image = common::guest("fib");
     let end = image
         .segments
         .iter()
+        .filter(|s| !s.bytes.is_empty())
         .map(|s| s.vaddr as u64 + s.bytes.len() as u64)
         .max()
         .unwrap();
-    let words = (end - constants::guest_memory::RAM_ORIGIN as u64).div_ceil(4);
+    assert!(
+        image
+            .segments
+            .iter()
+            .any(|s| s.bytes.is_empty() && s.vaddr as u64 >= end),
+        "fib's reservation lies above its file bytes"
+    );
+    let words = (end - guest_memory::RAM_ORIGIN as u64).div_ceil(4);
 
     let mut params = ProgramParams::defaults();
     params.bytecode_size_words = words as u32;
@@ -269,11 +283,82 @@ fn a_program_above_bytecode_size_words_fails_loudly() {
     );
 }
 
+/// `docs/spec/memory.md` §3.4: every file-backed byte lies in RAM window 0,
+/// `[0, 4h)` with `h` the init families' height. At `h = 2^16` a last
+/// file-backed byte at `4h - 1` is accepted and one at `4h` refused, while a
+/// segment without file bytes far above counts for nothing.
+#[test]
+fn file_bytes_past_the_image_window_are_refused() {
+    let with_data_ending_at = |last: u32| {
+        let mut image = common::image_of(0x1_0000, &[0x0000_0013]);
+        image.segments.push(Segment {
+            vaddr: last - 3,
+            mem_len: 4,
+            bytes: vec![0xa5; 4],
+        });
+        image.segments.push(Segment {
+            vaddr: 0x4000_0000,
+            mem_len: 0x1000_0000,
+            bytes: Vec::new(),
+        });
+        image
+    };
+    let params = common::smallest();
+    assert!(decode_program(&with_data_ending_at(0x3_ffff), &params).is_ok());
+    assert_eq!(
+        decode_program(&with_data_ending_at(0x4_0000), &params).unwrap_err(),
+        ProgramError::ImageOutsideWindow {
+            end: 0x4_0001,
+            height: 1 << 16,
+        }
+    );
+    // One menu step up, window 0 holds the same bytes.
+    let mut taller = params;
+    taller.heights[family::INIT_TEARDOWN as usize] = 1 << 18;
+    taller.heights[family::ZERO_WINDOWS as usize] = 1 << 18;
+    assert!(decode_program(&with_data_ending_at(0x4_0000), &taller).is_ok());
+}
+
+/// `docs/spec/memory.md` §3.4: the image column of every committed guest, at
+/// the height its code fits. Row `y` is `initial_word(4y)`; every file-backed
+/// byte sits in its row at its shift, read from the segments directly; and
+/// the rows below `RAM_ORIGIN` are 0.
+#[test]
+fn the_image_column_is_window_zero_word_by_word() {
+    for name in common::GUESTS {
+        let image = common::guest(name);
+        let height = common::fitting(&image).heights[family::INIT_TEARDOWN as usize];
+        let column = image_init_column(&image, height);
+        let PolyBacking::U32(rows) = column.backing() else {
+            panic!("{name}: the image column is U32-backed");
+        };
+        assert_eq!(rows.len(), height as usize, "{name}");
+        for (y, row) in rows.iter().enumerate() {
+            assert_eq!(*row, image.initial_word(4 * y as u32), "{name}: row {y}");
+        }
+        for s in &image.segments {
+            for (i, byte) in s.bytes.iter().enumerate() {
+                let a = s.vaddr as usize + i;
+                assert_eq!(
+                    (rows[a / 4] >> (8 * (a % 4))) as u8,
+                    *byte,
+                    "{name}: byte {a:#x}"
+                );
+            }
+        }
+        let below = (guest_memory::RAM_ORIGIN / 4) as usize;
+        assert!(
+            rows[..below].iter().all(|r| *r == 0),
+            "{name}: a row below RAM_ORIGIN"
+        );
+    }
+}
+
 #[test]
 fn parameters_off_the_menu_and_unknown_versions_are_refused() {
     let image = common::guest("fib");
     // Every family's height is checked, including the ones fib does not use
-    // and init/teardown, which claims nothing.
+    // and the two init families, which claim nothing.
     for family in FAMILIES {
         for height in [0, 1, 1 << 17, 1 << 24, u32::MAX] {
             let mut params = ProgramParams::defaults();
@@ -296,7 +381,7 @@ fn parameters_off_the_menu_and_unknown_versions_are_refused() {
 /// it; mul/div and the atomics have no immediate.
 #[test]
 fn the_field_masks_are_frozen() {
-    let want: [(FamilyId, u8); 8] = [
+    let want: [(FamilyId, u8); 9] = [
         (family::ADD_SUB_LUI_AUIPC, 0b1011_1111),
         (family::JUMP_BRANCH_SLT, 0b1011_1111),
         (family::SHIFT_BITWISE, 0b1011_1111),
@@ -305,6 +390,7 @@ fn the_field_masks_are_frozen() {
         (family::MEM_SUBWORD, 0b1011_1111),
         (family::ATOMICS, 0b1001_1111),
         (family::INIT_TEARDOWN, 0),
+        (family::ZERO_WINDOWS, 0),
     ];
     for (family, mask) in want {
         assert_eq!(field_mask(family), mask, "{}", family_name(family));

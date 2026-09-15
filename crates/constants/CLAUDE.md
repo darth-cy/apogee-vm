@@ -57,7 +57,7 @@ here.
 | `challenge_slot` | S13's `TOY = 0`; S14's memory slots `MEM_GAMMA` 1, `MEM_ALPHA_ADDR` 2, `MEM_ALPHA_TS` 3, `MEM_ALPHA_VAL` 4, and the derived `MEM_WINDOW_CONSTANT` 5; `NAMES`. Append-only. |
 | `lookup_channel` | S14. `TIMESTAMP = 0`, its bound `BITS = [19]`, `NAMES`. Append-only; `docs/spec/memory.md` §7. |
 | `memory` | S12's clock, `TS_STEP` and `TS_BITS`; S14's `HALT_PC = 1`, the tuple part order `PART_AS/ADDR/TS/VAL`, the root positions `READ_ROOT = 0` and `WRITE_ROOT = 1`, and `RAM_LIVE_BIT = 14`. `docs/spec/memory.md`. |
-| `family` | S11. The append-only `FamilyId` table (0 add/sub/lui/auipc … 7 init/teardown), `COUNT`, the height menu, the default heights, `DEFAULT_BYTECODE_SIZE_WORDS` and the decoded-table `CODE_VERSION`. |
+| `family` | S11. The append-only `FamilyId` table (0 add/sub/lui/auipc … 7 init/teardown; S14's 8 zero windows), `COUNT`, the height menu, the default heights, `DEFAULT_BYTECODE_SIZE_WORDS` and the decoded-table `CODE_VERSION`. |
 | `extra_mask` | S11. Every family's `family_extra_mask` bit positions, one-hot per mnemonic, append-only, and the system codes `ecall`/`ebreak`/`fence` carry in `imm`. |
 | `guest_memory` | The frozen guest memory map: `RAM_ORIGIN` and `RAM_LENGTH`; and, since S12, `STACK_RESERVE`, the 8 MiB at the top of RAM guest-sdk's allocator leaves to the stack. |
 | `ecall` | The guest ecall ABI: syscall numbers, range boundaries, file descriptors. |

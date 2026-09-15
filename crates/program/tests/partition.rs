@@ -60,13 +60,13 @@ fn every_instruction_is_claimed_by_exactly_one_family() {
             })
             .collect();
         println!("{name}: {} instructions; {}", slots.len(), sizes.join(", "));
-        assert!(
-            config
-                .families
-                .iter()
-                .any(|(f, _)| *f == family::INIT_TEARDOWN),
-            "{name}: init/teardown is in every VmConfig"
-        );
+        for init in [family::INIT_TEARDOWN, family::ZERO_WINDOWS] {
+            assert!(
+                config.height(init).is_some(),
+                "{name}: {} is in every VmConfig",
+                family_name(init)
+            );
+        }
     }
 }
 
@@ -149,6 +149,7 @@ fn each_program_derives_only_the_families_it_uses() {
             family::MEM_WORD,
             family::MEM_SUBWORD,
             family::INIT_TEARDOWN,
+            family::ZERO_WINDOWS,
         ],
         "a mul-free program derives no mul/div family"
     );

@@ -10,6 +10,7 @@ fn config(height: u32) -> VmConfig {
             (family::ADD_SUB_LUI_AUIPC, height),
             (family::JUMP_BRANCH_SLT, 1 << 18),
             (family::INIT_TEARDOWN, 1 << 20),
+            (family::ZERO_WINDOWS, 1 << 20),
         ],
         bytecode_size_words: family::DEFAULT_BYTECODE_SIZE_WORDS,
     }
@@ -21,6 +22,7 @@ fn profile(occupancy: u64) -> CycleProfile {
             (family::ADD_SUB_LUI_AUIPC, occupancy),
             (family::JUMP_BRANCH_SLT, 0),
             (family::INIT_TEARDOWN, 0),
+            (family::ZERO_WINDOWS, 0),
         ],
     }
 }
@@ -41,6 +43,7 @@ fn shard_counts_at_the_edges() {
                         (family::ADD_SUB_LUI_AUIPC, want),
                         (family::JUMP_BRANCH_SLT, 0),
                         (family::INIT_TEARDOWN, 0),
+                        (family::ZERO_WINDOWS, 0),
                     ]
                 },
                 "occupancy {occupancy} at height {height}"

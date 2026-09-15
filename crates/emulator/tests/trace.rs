@@ -11,7 +11,7 @@ use constants::{ecall, family, guest_memory, memory};
 use emulator::trace_run;
 use isa::Instr;
 use program::row_kind;
-use trace::{AddressSpace, MemoryEvent, MemoryEventLog, Query, Role, Row, ROLES};
+use trace::{init_windows, AddressSpace, MemoryEvent, MemoryEventLog, Query, Role, Row, ROLES};
 
 fn rows_by_cycle(t: &common::Traced) -> Vec<(u32, Row)> {
     let mut rows: Vec<(u32, Row)> = t
@@ -695,6 +695,68 @@ fn the_final_state_is_the_last_write_of_every_address() {
         let pc = finals.last().unwrap();
         assert_eq!(pc.space, AddressSpace::Pc);
         assert_eq!(pc.ts, memory::TS_STEP * t.execution.cycle_count);
+    }
+}
+
+/// `docs/spec/memory.md` §3.4: `ZERO_WINDOWS`' shard list is the RAM windows
+/// above 0 the log touches. fib's stack sits just below `2^31`, in the last
+/// window `2^29 / h - 1` at every height, and all else it touches is in
+/// window 0.
+#[test]
+fn fib_touches_only_the_image_window_and_the_stack_window() {
+    let t = traced("fib");
+    assert_eq!(init_windows(&t.log, 1 << 22), [127]);
+    assert_eq!(init_windows(&t.log, 1 << 20), [511]);
+    assert_eq!(init_windows(&t.log, 1 << 16), [8191]);
+}
+
+/// Every RAM word every traced guest touches lies in window 0 or in a listed
+/// window, and every listed window holds one, at every menu height — and the
+/// list passes the verifier's window rules.
+#[test]
+fn the_window_list_is_exactly_the_touched_windows_above_zero() {
+    for name in TRACED {
+        let t = traced(name);
+        for height in family::HEIGHT_MENU {
+            let windows = init_windows(&t.log, height);
+            let touched: BTreeSet<u32> = t
+                .log
+                .events()
+                .iter()
+                .filter(|e| e.space == AddressSpace::Ram)
+                .map(|e| e.addr / (4 * height))
+                .collect();
+            for w in &touched {
+                assert!(
+                    *w == 0 || windows.contains(w),
+                    "{name} at {height}: a touched word in window {w} is in no shard"
+                );
+            }
+            for w in &windows {
+                assert!(
+                    touched.contains(w),
+                    "{name} at {height}: window {w} is listed and untouched"
+                );
+            }
+
+            let mut config = t.config.clone();
+            for (f, h) in config.families.iter_mut() {
+                if *f == family::INIT_TEARDOWN || *f == family::ZERO_WINDOWS {
+                    *h = height;
+                }
+            }
+            let counts: Vec<u32> = config
+                .families
+                .iter()
+                .map(|(f, _)| match *f {
+                    family::INIT_TEARDOWN => 1,
+                    family::ZERO_WINDOWS => windows.len() as u32,
+                    _ => 0,
+                })
+                .collect();
+            program::check_memory_windows(&config, &counts, &windows)
+                .unwrap_or_else(|e| panic!("{name} at {height}: {e}"));
+        }
     }
 }
 

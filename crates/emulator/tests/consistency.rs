@@ -840,7 +840,7 @@ fn every_workload_fault_and_bad_input_is_exercised() {
 /// `trace_run` over the guest is the same execution as `run`, and the memory
 /// log it leaves balances and ends on the halting sentinel — a failed run's
 /// too, and at least one input fails. The full run at scale 0 also carries the coverage
-/// claim at instruction level: every instruction family but init/teardown has
+/// claim at instruction level: every family but the two init families has
 /// rows, and all eight M-extension instructions execute.
 #[test]
 fn a_traced_run_is_the_same_execution_and_its_memory_balances() {
@@ -888,7 +888,9 @@ fn a_traced_run_is_the_same_execution_and_its_memory_balances() {
         if k == 0 {
             for trace in &traces.families {
                 assert!(
-                    trace.family == family::INIT_TEARDOWN || !trace.cycle.is_empty(),
+                    trace.family == family::INIT_TEARDOWN
+                        || trace.family == family::ZERO_WINDOWS
+                        || !trace.cycle.is_empty(),
                     "family {} never runs",
                     program::family_name(trace.family)
                 );
