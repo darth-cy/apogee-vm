@@ -159,7 +159,13 @@ fn an_arbitrary_elf_renders() {
     let page = render(&elf, "handmade", &ProgramParams::defaults(), None).unwrap();
     let (tables, _) = decode_program(&load_elf(&elf).unwrap(), &ProgramParams::defaults()).unwrap();
     check_listing(&page, &elf, &tables);
-    for family in ["ADD_SUB_LUI_AUIPC", "MUL_DIV", "ATOMICS", "INIT_TEARDOWN"] {
+    for family in [
+        "ADD_SUB_LUI_AUIPC",
+        "MUL_DIV",
+        "ATOMICS",
+        "INIT_TEARDOWN",
+        "ZERO_WINDOWS",
+    ] {
         assert!(page.contains(family), "{family} is in the VmConfig section");
     }
 }

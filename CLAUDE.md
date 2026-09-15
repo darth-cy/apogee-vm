@@ -288,12 +288,17 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   append-only; `ecall`/`ebreak`/`fence` share the add/sub/lui/auipc family's bit-0
   *system* kind and are told apart by `imm` (0/1/2). No family keeps `funct3`. `FamilyId`s
   are `constants::family`, append-only, and ascending `FamilyId` is the canonical order.
-- **Program identity binds the instruction tables, not the data image or the entry pc.**
-  `.rodata`, `.data` and `ProgramImage.entry` reach no decoded table, so at S11 a program
-  differing only in a constant or its entry point has the same identity; init/teardown is in every `VmConfig` and absorbs an **empty** commitment
-  list until its stage fills that slot. Identity needs the 2^22 ceremony SRS, so its tests
-  are `#[ignore]`d and run locally only. A verifier takes identity from a channel the
-  prover does not control, never from the proof.
+- **Program identity binds the instruction tables, the image window and the entry pc.**
+  Since S14 the recipe absorbs `PROGRAM_ENTRY [entry_pc]` after `VM_CONFIG`, and
+  `INIT_TEARDOWN`'s commitment list is the image column, row `y` = `initial_word(4y)` over
+  RAM window 0, so a changed `.text`, `.rodata` or `.data` byte or entry pc moves it;
+  `ZERO_WINDOWS` absorbs an empty list. It binds nothing an execution chooses — no shard
+  count, no window list — and not a `NOBITS` segment's size. `decode_program` refuses file
+  bytes past window 0 (`ImageOutsideWindow`), so no image byte escapes the column.
+  `identity_from_commitments` is the SRS-free digest a verifying-key loader recomputes.
+  Identity needs the 2^22 ceremony SRS, so its full tests are `#[ignore]`d and run locally
+  only. A verifier takes identity from a channel the prover does not control, never from
+  the proof. `docs/spec/memory.md` §6.2.
 - **`decode` is RV32IMA's 59 instructions exactly, and `fence` is its one wide form.** Every
   `MISC-MEM funct3 = 000` word is a fence, as the ISA says; llvm-objdump prints `<unknown>`
   for the reserved ones. `crates/isa/tests/sweep.rs` counts the whole 2^30 space per opcode.

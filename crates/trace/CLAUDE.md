@@ -36,6 +36,7 @@ pub struct FamilyTraces { pub families: Vec<FamilyTrace> }
 pub struct CycleProfile { pub counts: Vec<(FamilyId, u64)> }
 pub struct ShardPlan { pub shards: Vec<(FamilyId, u32)> }
 pub fn plan_shards(profile: &CycleProfile, config: &VmConfig) -> ShardPlan;
+pub fn init_windows(log: &MemoryEventLog, height: u32) -> Vec<u32>;   // ZERO_WINDOWS' shard list
 
 pub enum Phase { PostExecution, PostCommit, PostGkr, PostOpening, Final }   // tags 0..5
 pub struct PhaseTiming { pub wall_nanos: u64 }
@@ -89,8 +90,12 @@ impl TraceArchive {
   never reached included, and `CycleProfile` one count per buffer; the counts sum to the
   cycle count, transfer cycles included.
 - **`plan_shards` is `ceil(occupancy / height)`**, a pure function, zero for a family that
-  never ran. Init/teardown counts 0 cycles and so plans 0 shards here; its occupancy is
-  addresses, not cycles, and the stage that builds it decides what it is.
+  never ran. `INIT_TEARDOWN` and `ZERO_WINDOWS` count 0 cycles and so plan 0 shards here;
+  their rows are addresses, not cycles, and the prover assembles exactly 1 `INIT_TEARDOWN`
+  shard (RAM window 0) and `init_windows(log, h).len()` `ZERO_WINDOWS` shards.
+- **`init_windows(log, h)` is `ZERO_WINDOWS`' shard list**: the distinct `addr / 4h` of
+  every touched RAM word, ascending, without window 0 (`docs/spec/memory.md` §3.4). `h`
+  is the two init families' one height.
 - **The archive container.** Two `postcard` values back to back: the payload section —
   five `(phase tag, Option<bytes>)` entries, phases in order — then the timing section,
   five `(phase tag, Option<wall_nanos>)`. The deterministic payload is exactly the first
@@ -100,7 +105,7 @@ impl TraceArchive {
   `src/archive.rs`'s module docs. Later phases are opaque bytes here. No compression.
 - **The reader takes exactly what the writer writes.** A snapshot's parts must agree —
   every buffer well formed (a family `constants::family` has, and one that claims a pc —
-  init/teardown claims none, so its buffer is empty — one column length, height on the
+  the two init families claim none, so their buffers are empty — one column length, height on the
   menu, no unknown role, an absent role all zero, families ascending), the profile
   counting the buffers, the rows'
   cycles `1..=n` each once, every event in its space and on the clock, and the log
@@ -118,9 +123,9 @@ impl TraceArchive {
 ## Tests
 | File | What |
 | --- | --- |
-| `src/archive.rs` (unit) | an in-order later phase accepted; out-of-order, timing without content, content without timing, trailing bytes and an overlong varint refused; every one of the reader's fourteen part-disagreement refusals, a mis-tagged section and bytes after the post-execution content refused as a named `Err`, never a panic, beside the untouched content; the constructor refusing parts that disagree |
+| `src/archive.rs` (unit) | an in-order later phase accepted; out-of-order, timing without content, content without timing, trailing bytes and an overlong varint refused; every one of the reader's fifteen part-disagreement refusals (a buffer of rows for each init family among them), a mis-tagged section and bytes after the post-execution content refused as a named `Err`, never a panic, beside the untouched content; the constructor refusing parts that disagree |
 | `tests/log.rs` | the address-space tags against `constants::address_space`, and exactly which addresses each space has |
-| `tests/plan.rs` | acceptance 9: occupancy 0 / 1 / height / height+1 → 0 / 1 / 1 / 2 at every menu height, zero-occurrence families, the whole 38-bit clock at 2^16, purity, a mismatched profile refused |
+| `tests/plan.rs` | acceptance 9: occupancy 0 / 1 / height / height+1 → 0 / 1 / 1 / 2 at every menu height, zero-occurrence families (both init families among them), the whole 38-bit clock at 2^16, purity, a mismatched profile refused |
 
-The self-check, the buffers and the archive are exercised over real executions in
-`crates/emulator/tests/{trace,archive}.rs`, which is where executions exist.
+The self-check, the buffers, `init_windows` and the archive are exercised over real
+executions in `crates/emulator/tests/{trace,archive}.rs`, which is where executions exist.

@@ -34,7 +34,7 @@ pub fn render(
     let (tables, config) =
         decode_program(&image, params).map_err(|e| format!("{source_label}: {e}"))?;
     let identity = match srs {
-        Some(srs) => to_hex(&program_identity(&tables, &config, srs).to_bytes()),
+        Some(srs) => to_hex(&program_identity(&image, &tables, &config, srs).to_bytes()),
         None => "not computed: pass --ptau <ppot_0080_24.ptau>, the PSE ceremony file".to_string(),
     };
 
@@ -51,10 +51,12 @@ pub fn render(
          program identity  {identity}\n\
          \n\
          The identity is one Fr, canonical little-endian: the Mercury commitments to\n\
-         every column below, with the VmConfig, digested by the recipe in\n\
-         crates/program/CLAUDE.md. It is a function of the decoded instructions and\n\
-         the parameters only -- not of the ELF's bytes, its symbols, .rodata, .data\n\
-         or its entry point, none of which S11's identity binds yet.\n",
+         every column below and to the image's words in RAM window 0, with the\n\
+         VmConfig and the entry point, digested by the recipe in\n\
+         crates/program/CLAUDE.md. It is a function of the decoded instructions, the\n\
+         file-backed bytes (.text, .rodata, .data), the entry point and the\n\
+         parameters -- not of the ELF's symbols, its section headers or the size of\n\
+         a segment with no file bytes.\n",
         to_hex(&sha256(elf)),
         tables.code_version,
         config.bytecode_size_words,

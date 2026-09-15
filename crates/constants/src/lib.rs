@@ -800,7 +800,7 @@ pub mod lookup_channel {
 /// The number is what every later stage cites: canonical ordering is ascending
 /// `FamilyId`, the program-identity digest absorbs families in that order, and
 /// shard transcripts are seeded with it. Delegation families are appended
-/// after [`INIT_TEARDOWN`] and never renumber anything below them.
+/// after [`ZERO_WINDOWS`] and never renumber anything below them.
 ///
 /// Which mnemonic each instruction family claims is `crates/program`'s
 /// `row_kind`, and `crates/program/CLAUDE.md` is the table.
@@ -820,12 +820,18 @@ pub mod family {
     pub const MEM_SUBWORD: u32 = 5;
     /// `lr.w`, `sc.w` and the nine AMOs.
     pub const ATOMICS: u32 = 6;
-    /// Memory initialisation and teardown. Claims no pc; present in every
-    /// `VmConfig`.
+    /// Memory initialisation and teardown of RAM window 0, the image window:
+    /// exactly one shard. Claims no pc; present in every `VmConfig`, at the
+    /// height of [`ZERO_WINDOWS`]. `docs/spec/memory.md` §3.
     pub const INIT_TEARDOWN: u32 = 7;
+    /// Memory initialisation and teardown of the zero-initialized RAM windows
+    /// above window 0, one shard per window the execution touches. Claims no
+    /// pc; present in every `VmConfig`, at the height of [`INIT_TEARDOWN`].
+    /// `docs/spec/memory.md` §3.
+    pub const ZERO_WINDOWS: u32 = 8;
 
     /// How many families this table defines.
-    pub const COUNT: u32 = 8;
+    pub const COUNT: u32 = 9;
 
     /// The trace-height menu, ascending. Even powers of two only, so that a
     /// Mercury opening's `b = sqrt(n)` exists.
@@ -840,7 +846,8 @@ pub mod family {
         1 << 22, // MEM_WORD
         1 << 22, // MEM_SUBWORD
         1 << 16, // ATOMICS
-        1 << 20, // INIT_TEARDOWN
+        1 << 22, // INIT_TEARDOWN
+        1 << 22, // ZERO_WINDOWS
     ];
 
     /// The default `bytecode_size_words`: `2^20` words, a 4 MiB ceiling on the

@@ -404,7 +404,8 @@ fn decode_post_execution(
 /// constructor and the reader share.
 ///
 /// - every buffer names a family `constants::family` has, and one that
-///   claims a pc — init/teardown claims none, so its buffer is empty;
+///   claims a pc — the two init families claim none, so their buffers are
+///   empty;
 /// - every buffer's columns have one length, its height is on the menu, no
 ///   `present` bit names a role past the seventh, a role a row does not have
 ///   is `Query::ABSENT`, and the families ascend;
@@ -427,9 +428,10 @@ fn check_parts(
         if !program::FAMILIES.contains(&t.family) {
             return Err(format!("family {} is not in constants::family", t.family));
         }
-        if t.family == family::INIT_TEARDOWN && n != 0 {
+        if (t.family == family::INIT_TEARDOWN || t.family == family::ZERO_WINDOWS) && n != 0 {
             return Err(format!(
-                "init/teardown claims no pc, yet its buffer holds {n} rows"
+                "{} claims no pc, yet its buffer holds {n} rows",
+                program::family_name(t.family)
             ));
         }
         let columns_agree = t.pc.len() == n
@@ -731,7 +733,7 @@ mod tests {
             tiny()
         );
         let pc = (address_space::PC, 0, 4, 0, 0x1_0000, 0x1_0004);
-        let cases: [(&str, Vec<u8>); 14] = [
+        let cases: [(&str, Vec<u8>); 15] = [
             // The profile renames the family too, so only the id is wrong.
             (
                 "family 42 is not in constants::family",
@@ -744,11 +746,21 @@ mod tests {
                 ),
             ),
             (
-                "init/teardown claims no pc",
+                "INIT_TEARDOWN claims no pc",
                 post(
                     |a| {
                         a.traces.families[0].family = constants::family::INIT_TEARDOWN;
                         a.profile.counts[0].0 = constants::family::INIT_TEARDOWN;
+                    },
+                    None,
+                ),
+            ),
+            (
+                "ZERO_WINDOWS claims no pc",
+                post(
+                    |a| {
+                        a.traces.families[0].family = constants::family::ZERO_WINDOWS;
+                        a.profile.counts[0].0 = constants::family::ZERO_WINDOWS;
                     },
                     None,
                 ),
