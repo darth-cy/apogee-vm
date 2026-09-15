@@ -109,62 +109,63 @@ fn slot(s: u32) -> Coeff {
     Coeff::Challenge(s)
 }
 
-/// Query `query`'s read tuple, unmasked: `γ_M + AS·m + α_addr·addr +
-/// α_ts·read_ts + α_val·read_value`, a `Linear` over the frame's columns. With
-/// `m = 1` it is exactly `T(AS, addr, read_ts, read_value)` of
-/// `docs/spec/memory.md` §1. The verifier's boundary evaluates it too, at
-/// operand values `[1, addr, ts, value]`: `query` 0 is a PC tuple, 1 a REG one.
-pub fn read_tuple(query: usize) -> GateDef {
-    let space = FRAME_SPACE[query] as u64;
+/// Query `query`'s tuple, unmasked, over the frame's columns: its read tuple,
+/// or with `write` its write tuple. Each part's terms go in slot
+/// `constants::memory::PART_*` and are emitted in slot order:
+///
+/// ```text
+/// PART_AS    (AS, m)
+/// PART_ADDR  (α_addr, addr)
+/// PART_TS    read: (α_ts, read_ts)       write: (α_ts, cycle) × 4, (α_ts, m) × Δ
+/// PART_VAL   read: (α_val, read_value)   write: (α_val, write_value)
+/// ```
+///
+/// A coefficient is one literal or one slot, so `α_ts·4·cycle` is a term
+/// repeated four times and `α_ts·Δ·m` one repeated `Δ` times. The read tuple
+/// has one term per part, so its term `PART_*` is that part.
+fn tuple(query: usize, write: bool) -> GateDef {
+    let mask = frame(query, FIELD_MASK);
+    let mut parts: [Vec<(Coeff, PolyAddress)>; 4] = Default::default();
+    parts[memory::PART_AS] = vec![(lit(FRAME_SPACE[query] as u64), mask)];
+    parts[memory::PART_ADDR] = vec![(
+        slot(challenge_slot::MEM_ALPHA_ADDR),
+        frame(query, FIELD_ADDR),
+    )];
+    let alpha_ts = slot(challenge_slot::MEM_ALPHA_TS);
+    parts[memory::PART_TS] = match write {
+        false => vec![(alpha_ts, frame(query, FIELD_READ_TS))],
+        true => {
+            let mut ts = vec![(alpha_ts, CYCLE); memory::TS_STEP as usize];
+            ts.extend(vec![(alpha_ts, mask); FRAME_DELTA[query] as usize]);
+            ts
+        }
+    };
+    let value = match write {
+        false => FIELD_READ_VALUE,
+        true => FIELD_WRITE_VALUE,
+    };
+    parts[memory::PART_VAL] = vec![(slot(challenge_slot::MEM_ALPHA_VAL), frame(query, value))];
     GateDef::Linear {
-        terms: vec![
-            (lit(space), frame(query, FIELD_MASK)),
-            (
-                slot(challenge_slot::MEM_ALPHA_ADDR),
-                frame(query, FIELD_ADDR),
-            ),
-            (
-                slot(challenge_slot::MEM_ALPHA_TS),
-                frame(query, FIELD_READ_TS),
-            ),
-            (
-                slot(challenge_slot::MEM_ALPHA_VAL),
-                frame(query, FIELD_READ_VALUE),
-            ),
-        ],
+        terms: parts.concat(),
         constant: slot(challenge_slot::MEM_GAMMA),
     }
 }
 
+/// Query `query`'s read tuple, unmasked: `γ_M + AS·m + α_addr·addr +
+/// α_ts·read_ts + α_val·read_value`, a `Linear` over the frame's columns whose
+/// term `PART_*` is that part. With `m = 1` it is exactly
+/// `T(AS, addr, read_ts, read_value)` of `docs/spec/memory.md` §1. The
+/// verifier's boundary evaluates it too, at operand values placed by `PART_*`:
+/// `query` 0 is a PC tuple, 1 a REG one.
+pub fn read_tuple(query: usize) -> GateDef {
+    tuple(query, false)
+}
+
 /// Query `query`'s write tuple, unmasked: `γ_M + AS·m + α_addr·addr +
-/// α_ts·(4·cycle + Δ·m) + α_val·write_value`. A coefficient is one literal or
-/// one slot, so `α_ts·4·cycle` is the term `(α_ts, cycle)` four times and
-/// `α_ts·Δ·m` the term `(α_ts, m)` `Δ` times. With `m = 1` it is exactly
+/// α_ts·(4·cycle + Δ·m) + α_val·write_value`. With `m = 1` it is exactly
 /// `T(AS, addr, 4·cycle + Δ, write_value)`.
-pub fn write_tuple(query: usize) -> GateDef {
-    let space = FRAME_SPACE[query] as u64;
-    let mask = frame(query, FIELD_MASK);
-    let mut terms = vec![
-        (lit(space), mask),
-        (
-            slot(challenge_slot::MEM_ALPHA_ADDR),
-            frame(query, FIELD_ADDR),
-        ),
-    ];
-    for _ in 0..memory::TS_STEP {
-        terms.push((slot(challenge_slot::MEM_ALPHA_TS), CYCLE));
-    }
-    for _ in 0..FRAME_DELTA[query] {
-        terms.push((slot(challenge_slot::MEM_ALPHA_TS), mask));
-    }
-    terms.push((
-        slot(challenge_slot::MEM_ALPHA_VAL),
-        frame(query, FIELD_WRITE_VALUE),
-    ));
-    GateDef::Linear {
-        terms,
-        constant: slot(challenge_slot::MEM_GAMMA),
-    }
+fn write_tuple(query: usize) -> GateDef {
+    tuple(query, true)
 }
 
 /// A product-tree leaf, one flat `Quadratic`: at `mask = 1` the tuple, at
@@ -174,11 +175,12 @@ pub fn write_tuple(query: usize) -> GateDef {
 /// `(−1, mask)`, then every tuple term whose operand is the mask, as it is.
 /// Products: every other term `(c, x)` as `(c, x, mask)`, in the tuple's order.
 /// A term already on the mask enters once, not squared, so the leaf is
-/// `mask·tuple + 1 − mask` on a boolean mask only — which is why every mask a
-/// leaf reads from a committed column carries a booleanity gate (§2.4, §8).
+/// `mask·tuple + 1 − mask` — `tuple` being the unmasked gate, whose `AS` and
+/// `Δ` terms sit on the mask — on a boolean mask only; which is why every mask
+/// a leaf reads from a committed column carries a booleanity gate (§2.4, §8).
 ///
 /// Panics on a tuple that is not `Linear`.
-pub fn leaf(tuple: &GateDef, mask: PolyAddress) -> GateDef {
+fn leaf(tuple: &GateDef, mask: PolyAddress) -> GateDef {
     let GateDef::Linear { terms, constant } = tuple else {
         panic!("leaf: a memory tuple is a Linear gate");
     };
@@ -204,7 +206,7 @@ pub fn leaf(tuple: &GateDef, mask: PolyAddress) -> GateDef {
 
 /// `mask − mask·mask = 0`: the column is 0 or 1 on every row.
 /// `docs/spec/memory.md` §2.4.
-pub fn booleanity(mask: PolyAddress) -> GateDef {
+fn booleanity(mask: PolyAddress) -> GateDef {
     GateDef::Quadratic {
         constant: lit(0),
         linear: vec![(lit(1), mask)],
@@ -268,18 +270,20 @@ fn x0_gates() -> [(&'static str, GateDef); 4] {
 }
 
 /// Query `query`'s two timestamp-gap obligations, returned by value, on
-/// `lookup_channel::TIMESTAMP` under the selector `M[mask]`:
+/// `lookup_channel::TIMESTAMP` under the selector `M[mask]`, over its high
+/// chunk `hi = W[query]`:
 ///
 /// ```text
 /// gap_hi_<q> : Linear { [(1, hi)], 0 }
 /// gap_lo_<q> : Linear { [(4, cycle), (−1, read_ts), (−2^19, hi)], Δ − 1 }
 /// ```
 ///
-/// Both below `2^19` make `gap = 4·cycle + Δ − read_ts − 1 = lo + 2^19·hi` an
-/// integer in `[0, 2^38)`: strictly `read_ts < 4·cycle + Δ`.
-/// `docs/spec/memory.md` §2.4; `Δ − 1` is the field element, `−1` for the pc.
-pub fn gap_lookups(query: usize, hi: PolyAddress) -> [LookupExpr; 2] {
-    let name = FRAME_NAMES[query];
+/// Both below `2^19` make `gap = 4·cycle + Δ − read_ts − 1 = lo + 2^19·hi` a
+/// field element in `[0, 2^38)`: `read_ts < 4·cycle + Δ` as integers, under
+/// the counting premise of `docs/spec/memory.md` §4.2. §2.4; `Δ − 1` is the
+/// field element, `−1` for the pc.
+fn gap_lookups(query: usize) -> [LookupExpr; 2] {
+    let (name, hi) = (FRAME_NAMES[query], gap_hi(query));
     let selector = frame(query, FIELD_MASK);
     let channel = lookup_channel::TIMESTAMP;
     let chunk = Fr::from_u64(1 << lookup_channel::BITS[channel as usize]);
@@ -320,7 +324,7 @@ pub fn gap_lookups(query: usize, hi: PolyAddress) -> [LookupExpr; 2] {
 pub fn frame_artifact(trace_vars: u32) -> CircuitArtifact {
     let mut lookups = Vec::new();
     for query in 0..FRAME_QUERIES {
-        lookups.extend(gap_lookups(query, gap_hi(query)));
+        lookups.extend(gap_lookups(query));
     }
     frame_with_lookups(trace_vars, lookups)
 }
@@ -711,10 +715,14 @@ fn provenance(gate: &GateDef, below: &[(bool, bool)], cached: &[(bool, bool)]) -
 ///    operand does. So a product of a tuple and a copy of a `W` column two
 ///    layers up is refused too. An output is a gate's column, so this covers
 ///    outputs;
-/// 2. **a global slot over anything but `M`, `S` and `V`**: a gate with a
+/// 2. **a root that reads a `W` column**: `outputs[READ_ROOT]` or
+///    `outputs[WRITE_ROOT]` whose cone reads one, whether or not it names a
+///    slot. `W` is committed after the memory challenges, so a root over one
+///    is chosen after them and balances any trace;
+/// 3. **a global slot over anything but `M`, `S` and `V`**: a gate with a
 ///    global-slot coefficient that reads a `W` column, an inner column or a
 ///    cached entry;
-/// 3. **unconstrained masks**: a leaf — a producing `Quadratic` of gate list 0
+/// 4. **unconstrained masks**: a leaf — a producing `Quadratic` of gate list 0
 ///    with constant literal 1 and a linear term weighted by a global slot —
 ///    whose mask, that term's operand, is an `M`, `W` or `S` column, when gate
 ///    list 0 has no enforcing gate equal to [`booleanity`] of it; or is any
@@ -765,6 +773,19 @@ pub fn check_memory(a: &CircuitArtifact) -> Result<(), String> {
             }
         }
         below = above;
+    }
+    for root in [memory::READ_ROOT, memory::WRITE_ROOT] {
+        let Some(&address @ PolyAddress::Inner { offset, .. }) = a.outputs.get(root) else {
+            continue;
+        };
+        if below.get(offset as usize).is_some_and(|(_, w)| *w) {
+            let name = a.scratch.iter().find(|s| s.address == address);
+            let name = name.map_or("?", |s| s.name.as_str());
+            return Err(format!(
+                "memory provenance: output {root}, `{name}`, reads a W column, which is committed \
+                 after the memory challenges"
+            ));
+        }
     }
 
     let Some(list) = a.layers.first() else {
@@ -824,7 +845,7 @@ mod tests {
     fn a_dropped_gap_obligation_fails_the_build() {
         let mut lookups = Vec::new();
         for query in 0..FRAME_QUERIES {
-            lookups.extend(gap_lookups(query, gap_hi(query)));
+            lookups.extend(gap_lookups(query));
         }
         assert_eq!(frame_with_lookups(4, lookups.clone()), frame_artifact(4));
         lookups.pop();

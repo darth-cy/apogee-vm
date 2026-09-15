@@ -76,8 +76,9 @@ pub fn reconciles(read_roots: &[Fr], write_roots: &[Fr], factors: (Fr, Fr)) -> b
   slots 1–4 and derives slot 5, `γ_M + RAM + α_addr·4·2^trace_vars·window`, never read from a
   proof. `boundary_factors` evaluates every register and PC tuple through `eval_gate` on
   `constraints::memory::read_tuple` — the circuits' own tuple gate, at operand values
-  `[1, addr, ts, value]` — with `x0`'s final value 0 and the pc's `HALT_PC`; `BoundaryFinals`
-  documents the 64-scalar `MEMORY_BOUNDARY` order. `reconciles` is
+  placed by `constants::memory::PART_*`, the mask 1, `addr`, `ts`, `value` — with `x0`'s
+  final value 0 and the pc's `HALT_PC`; `BoundaryFinals` documents the 64-scalar
+  `MEMORY_BOUNDARY` order. `reconciles` is
   `Π read · R_b = Π write · W_b ≠ 0`. Nothing here decodes the finals or draws the
   challenges: S16's global transcript does.
 - **`#![no_std]` + `alloc`, forever.** CI builds it for `riscv32imac-unknown-none-elf`.

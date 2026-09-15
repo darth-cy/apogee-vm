@@ -2,7 +2,7 @@
 //! §4: a window shard's derived challenge, the register and PC boundary, and
 //! the reconciliation of every shard's roots.
 
-use constants::memory::HALT_PC;
+use constants::memory::{HALT_PC, PART_ADDR, PART_AS, PART_TS, PART_VAL};
 use constants::{address_space, challenge_slot};
 use constraints::memory::read_tuple;
 use constraints::MAX_TRACE_VARS;
@@ -76,9 +76,10 @@ pub fn window_challenges(
 /// ```
 ///
 /// Every tuple is the circuits' own tuple gate through the kernel:
-/// `constraints::memory::read_tuple` of query 0 (PC) or 1 (REG) at operand
-/// values `[1, addr, ts, value]`. `memory` holds slots 1 to 4; the kernel
-/// panics on a missing one.
+/// `constraints::memory::read_tuple` of query 0 (PC) or 1 (REG), whose term
+/// `PART_*` is that part, at operand values placed by the same constants: the
+/// mask 1 at `PART_AS`, then `addr`, `ts` and `value`. `memory` holds slots 1
+/// to 4; the kernel panics on a missing one.
 pub fn boundary_factors(
     memory: &ExternalChallenges,
     entry_pc: u32,
@@ -86,12 +87,11 @@ pub fn boundary_factors(
 ) -> (Fr, Fr) {
     let (pc, reg) = (read_tuple(0), read_tuple(1));
     let tuple = |gate, addr: u64, ts: u64, value: u64| {
-        let values = [
-            Fr::ONE,
-            Fr::from_u64(addr),
-            Fr::from_u64(ts),
-            Fr::from_u64(value),
-        ];
+        let mut values = [Fr::ZERO; 4];
+        values[PART_AS] = Fr::ONE;
+        values[PART_ADDR] = Fr::from_u64(addr);
+        values[PART_TS] = Fr::from_u64(ts);
+        values[PART_VAL] = Fr::from_u64(value);
         eval_gate(gate, &values, memory)
     };
     let mut write = tuple(&pc, 0, 0, entry_pc as u64);

@@ -53,11 +53,7 @@ pub mod memory {                                   // docs/spec/memory.md §2, �
     pub fn gap_hi(query: usize) -> PolyAddress;                      // W[query]
     pub const RD_INV: PolyAddress;  RD_IS_ZERO;  RD_SELECTED;        // W[8], W[9], W[10]
     pub const RD: usize = 7;
-    pub fn read_tuple(query: usize) -> GateDef;    // unmasked, Linear, constant γ_M
-    pub fn write_tuple(query: usize) -> GateDef;
-    pub fn leaf(tuple: &GateDef, mask: PolyAddress) -> GateDef;      // flat Quadratic
-    pub fn booleanity(mask: PolyAddress) -> GateDef;
-    pub fn gap_lookups(query: usize, hi: PolyAddress) -> [LookupExpr; 2];
+    pub fn read_tuple(query: usize) -> GateDef;    // unmasked, Linear, constant γ_M; term PART_* is that part
     pub fn frame_artifact(trace_vars: u32) -> CircuitArtifact;
     pub fn image_window_artifact(trace_vars: u32) -> CircuitArtifact;  // INIT_TEARDOWN
     pub fn zero_window_artifact(trace_vars: u32) -> CircuitArtifact;   // ZERO_WINDOWS
@@ -105,10 +101,14 @@ pub mod memory {                                   // docs/spec/memory.md §2, �
   gates, the names and the three artifact constructors are there and nowhere else: `trace`
   fills the columns, `gkr-verify`'s boundary evaluates `read_tuple` through the kernel, and
   `kat-gen` writes the constructors' bytes.
-- **One tuple gate for circuits and boundary.** `read_tuple(q)` and `write_tuple(q)` are the
-  *unmasked* tuple, a `Linear` whose `AS` and `Δ` terms sit on the mask column; with mask 1
-  each is exactly `T`. `leaf` turns one into the flat `Quadratic` of §2.2 and §3.3 by rule,
-  so the window leaves and the frame leaves are one construction.
+- **One tuple gate for circuits and boundary.** `read_tuple(q)` and the private write tuple
+  are the *unmasked* tuple, a `Linear` whose `AS` and `Δ` terms sit on the mask column; with
+  mask 1 each is exactly `T`. One private constructor writes both, each part's terms in slot
+  `constants::memory::PART_*`, so the read tuple's term `PART_*` is that part and
+  `gkr_verify::boundary_factors` places its operand values by the same constants. The
+  private `leaf` turns a tuple into the flat `Quadratic` of §2.2 and §3.3 by rule, so the
+  window leaves and the frame leaves are one construction. The gadgets' constructors are
+  private too: nothing outside this file builds a gate from them.
 - **A memory artifact is built by one private assembly** from complete vectors: leaves, row-wise
   `Product` lists to `[read, write]`, `trace_vars` halving lists, outputs at `READ_ROOT` and
   `WRITE_ROOT` named `read_root` and `write_root`, relations and scratch mirroring every gate,
@@ -117,9 +117,10 @@ pub mod memory {                                   // docs/spec/memory.md §2, �
   `validate` and `check_memory`, and panics on any refusal: a memory artifact that exists
   has passed both.
 - **`check_memory` is §8, beside `validate`, sharing no code with it**: forward provenance
-  (a global slot and a `W` column in one cone), a global slot over anything but `M`, `S`,
-  `V`, and a leaf mask that is committed without its booleanity gate in list 0 or virtual
-  but not `V[ram_live]`. It assumes an artifact that passed `validate`.
+  (a global slot and a `W` column in one cone), a root whose cone reads a `W` column at all,
+  a global slot over anything but `M`, `S`, `V`, and a leaf mask that is committed without
+  its booleanity gate in list 0 or virtual but not `V[ram_live]`. It assumes an artifact that
+  passed `validate`.
 - **The window address step is `WORD_BYTES`, not `TS_STEP`.** Both are 4; one is bytes per
   RAM word, the other timestamps per cycle.
 
@@ -143,6 +144,6 @@ constructor's bytes. The leaves' independent description is the plain arithmetic
 | --- | --- |
 | `tests/wire.rs` | both fixtures round-trip byte for byte; a format version other than 1 refused before decoding; `VirtualKind`'s tags and `V[ram_live]`'s address and name; a lookup against its hand-written bytes; `Quadratic` against its hand-written bytes for no terms, linear only, products only and both, and each malformed `Quadratic` refused; every refusal of the reader; every single-bit flip of a fixture decodes or errors, never panics |
 | `tests/laws.rs` | one mutation of the toy per rule, each refused with its error — structured variants matched whole, prose details by the rule and the address or name they carry — beside the toy validating; each lookup rule broken alone, refused naming the lookup, beside one and two lawful lookups and an `M` selector; the degree-3 gate; `Quadratic`'s degree, its identically zero and unread-column cases, Law 4 against an `AffineProduct` relation, and its refusal to inline; cache-free inlining and its refusals |
-| `tests/memory.rs` | the three fixtures pinned and equal to their constructors; every constructor validating and passing `check_memory` at 12 and 22; two roots named `read_root`, `write_root`, an all-zero padding row, `trace_vars` halving lists; the frame's layout, leaf order, widths and enforcing gates by name; its 16 obligations whole, `gap_lo_pc`'s constant `−1`; acceptance 11 exhaustively at reduced width, 5-bit chunks over a 10-bit clock, each query's own `gap_lo` expression read from the frame with its high chunk at 0, every `(cycle, read_ts)` pair admitted exactly when `read_ts < 4·cycle + Δ`; §8's pinned read sets; `check_memory` refusing a leaf fed from `W` (acceptance 9); the forward-provenance counterexample as a producing and as an enforcing gate of list 1, each beside its lawful control; a slot and a `W` column meeting through two cached entries, a cached entry itself carrying both, and a slot over a cached entry; a frame without `pc_mask_boolean` and one without `rd_mask_boolean`, whose mask another gate still reads; a window leaf masked by `S[0]` and by `V[row]`; and a global slot over an inner column — each mutant still passing `validate`, each test run against the mutant it names |
+| `tests/memory.rs` | the three fixtures pinned and equal to their constructors; every constructor validating and passing `check_memory` at 12 and 22; two roots named `read_root`, `write_root`, an all-zero padding row, `trace_vars` halving lists; every read tuple's parts at their `PART_*` positions; the frame's layout, leaf order, widths and enforcing gates by name; its 16 obligations whole, `gap_lo_pc`'s constant `−1`; acceptance 11 exhaustively at reduced width, 5-bit chunks over a 10-bit clock, each query's own `gap_lo` expression read from the frame with its high chunk at 0, every `(cycle, read_ts)` pair admitted exactly when `read_ts < 4·cycle + Δ`; §8's pinned read sets; `check_memory` refusing a leaf fed from `W` (acceptance 9); the forward-provenance counterexample as a producing and as an enforcing gate of list 1, each beside its lawful control; a slot and a `W` column meeting through two cached entries, a cached entry itself carrying both, and a slot over a cached entry; a frame without `pc_mask_boolean` and one without `rd_mask_boolean`, whose mask another gate still reads; a window leaf masked by `S[0]` and by `V[row]`; a global slot over an inner column; and a write root read from a `W` column alone, which provenance does not see — each mutant still passing `validate`, each test run against the mutant it names |
 | `src/memory.rs` (unit) | acceptance 12: the frame with one obligation dropped before the artifact is written panics at the count assertion |
 | `tests/audit.rs` | every `GateDef` variant, all six, emitted across both compilations, counts written by hand; the catalogue; the two compilations' identical shape |

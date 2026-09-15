@@ -6,10 +6,11 @@
 //! control is the unit test in `src/memory.rs`, which reaches the private
 //! construction.
 
-use constants::{address_space, challenge_slot, lookup_channel};
+use constants::{address_space, challenge_slot, lookup_channel, memory};
 use constraints::memory::{
-    check_memory, frame, frame_artifact, gap_hi, image_window_artifact, zero_window_artifact,
-    CYCLE, FIELD_MASK, FIELD_READ_TS, FRAME_DELTA, FRAME_NAMES, FRAME_QUERIES, FRAME_SPACE,
+    check_memory, frame, frame_artifact, gap_hi, image_window_artifact, read_tuple,
+    zero_window_artifact, CYCLE, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE,
+    FRAME_DELTA, FRAME_NAMES, FRAME_QUERIES, FRAME_SPACE,
 };
 use constraints::{
     CachedEntry, CircuitArtifact, Coeff, EnforcingEntry, GateDef, LayerSpec, LookupExpr, Padding,
@@ -104,6 +105,49 @@ fn every_artifact_has_two_named_roots_and_an_all_zero_padding_row() {
         let halving = a.layers.iter().filter(|l| l.halving).count() as u32;
         assert_eq!(halving, 12, "{label}");
         assert!(a.layers.iter().all(|l| l.cached.is_empty()), "{label}");
+    }
+}
+
+/// §1's part order, S14 must-be-exact 1: every query's read tuple has one term
+/// per part, and its term `PART_*` is that part — `(AS, mask)`,
+/// `(α_addr, addr)`, `(α_ts, read_ts)`, `(α_val, read_value)` — with constant
+/// `γ_M`. `gkr_verify::boundary_factors` places its operand values by the same
+/// constants. Fails if a constant named a position its part is not at.
+#[test]
+fn the_read_tuples_parts_are_at_their_named_positions() {
+    let slot = Coeff::Challenge;
+    for (q, space) in FRAME_SPACE.iter().enumerate() {
+        let GateDef::Linear { terms, constant } = read_tuple(q) else {
+            panic!("a tuple is Linear");
+        };
+        assert_eq!(terms.len(), 4, "{q}");
+        assert_eq!(constant, slot(challenge_slot::MEM_GAMMA), "{q}");
+        let space = Coeff::Literal(Fr::from_u64(*space as u64));
+        let parts = [
+            (memory::PART_AS, space, FIELD_MASK),
+            (
+                memory::PART_ADDR,
+                slot(challenge_slot::MEM_ALPHA_ADDR),
+                FIELD_ADDR,
+            ),
+            (
+                memory::PART_TS,
+                slot(challenge_slot::MEM_ALPHA_TS),
+                FIELD_READ_TS,
+            ),
+            (
+                memory::PART_VAL,
+                slot(challenge_slot::MEM_ALPHA_VAL),
+                FIELD_READ_VALUE,
+            ),
+        ];
+        for (part, coeff, field) in parts {
+            assert_eq!(
+                terms[part],
+                (coeff, frame(q, field)),
+                "query {q}, part {part}"
+            );
+        }
     }
 }
 
@@ -526,6 +570,38 @@ fn a_product_of_a_tuple_and_a_witness_copy_two_layers_up_is_refused() {
             Ok(())
         );
     }
+}
+
+/// §8's root rule: `ZERO_WINDOWS` with its init leaf replaced, gate and
+/// relation, by `Linear { [(1, W[0])], 0 }` over a new witness column `w`. The
+/// write root's cone then reads `W` and names no slot, so the provenance rule,
+/// which needs both, passes it, and so do the slot rule and the mask rule — yet
+/// `W` is committed after the memory challenges, so the prover would choose
+/// that root after them and balance any trace. `validate` accepts the circuit;
+/// `check_memory` refuses the root. Fails if a root may read a `W` column.
+#[test]
+fn a_root_read_from_a_witness_column_alone_is_refused() {
+    let mut a = zero_window_artifact(4);
+    a.witness.push("w".into());
+    a.padding.row.push(Fr::ZERO);
+    let w = GateDef::Linear {
+        terms: vec![(Coeff::Literal(Fr::ONE), PolyAddress::Witness(0))],
+        constant: Coeff::Literal(Fr::ZERO),
+    };
+    let entry = &mut a.layers[0].producing[1];
+    entry.gate = w.clone();
+    let r = entry.relation as usize;
+    assert_eq!(a.relations[r].name, "define_init");
+    a.relations[r].gate = w;
+    assert_eq!(a.validate(), Ok(()));
+    assert_eq!(
+        check_memory(&a),
+        Err(
+            "memory provenance: output 1, `write_root`, reads a W column, which is committed \
+             after the memory challenges"
+                .to_string()
+        )
+    );
 }
 
 /// One gate list over `M[0] a` and `W[0] w`, 2 rows: `cached`, then one
