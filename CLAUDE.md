@@ -28,20 +28,25 @@ crates/
                  and the accumulator, plus the typed G1 absorption; std
   loader/        ELF parsing, RVC expansion, ProgramImage; std
   isa/           the RV32IMAC instruction model and the 32-bit decoder; no deps
-  program/       decoded per-family tables, VmConfig derivation, program identity; std
+  program/       decoded per-family tables, VmConfig derivation, program identity, the image
+                 column, the statement descriptor and its RAM window rules; std
   trace/         the memory event log and its self-check, the family buffers, the cycle
                  profile and shard plan, the TraceArchive snapshot, and the memory
                  argument's column builders; std
   emulator/      the RV32IMAC reference emulator, its tracing path, and the QEMU
                  differential harness; std
   constraints/   circuits as data: PolyAddress, GateDef, LayerSpec, CircuitArtifact, the
-                 laws, the cache-free compilation and the wire form; no_std
+                 laws, the cache-free compilation and the wire form, and `memory`: the frame,
+                 the two window artifacts and check_memory; no_std
   gkr-verify/    the GKR verifier half: the gate kernel, the layer sumcheck verifier and
-                 verify, and every type verify touches; no_std, linked by the recursion guest
+                 verify, and every type verify touches; the memory argument's window
+                 constant, boundary factors and reconciliation; no_std, linked by the
+                 recursion guest
   gkr/           the GKR prover half: forward pass, self-check, layer sumcheck prover,
                  prove; std + rayon; re-exports gkr-verify whole
-  checker/       the standalone law validators, the padding and witness-row checks, the
-                 artifact cross-check, the circuit dump and the `checker` CLI; std
+  checker/       the standalone law validators and lookup rules, the padding, padding-identity
+                 and witness-row checks, the native lookup evaluator, the memory_roots hook,
+                 the artifact cross-check, the circuit dump and the `checker` CLI; std
   guest-sdk/     crt0, entry!, linker script, bump allocator, ecall shims; no_std,
                  guest-only, and NOT a workspace member
 guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, opcodes/, heap/, consistency/
@@ -384,6 +389,38 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   prover runs none of the prover's code; a malformed input costs only the honest prover a
   panic or a proof that fails downstream. The old shape checks stay in the source,
   uncalled or commented out, as debugging aids (`crates/gkr/CLAUDE.md`).
+- **The memory argument's spec is `docs/spec/memory.md`, and it is frozen**: the tuple, the
+  frame, RAM windows, the register and PC boundary, halting, binding, range obligations and
+  the construction-time rules. It amends the master's absorb order and S11's identity
+  recipe, and the master cites it.
+- **RAM is initialized in RAM windows, by two families of one height.** Window `w` is the
+  bytes `[4h·w, 4h·(w+1))`. `INIT_TEARDOWN` is window 0, exactly one shard, initialized from
+  the image column identity commits, rows below `RAM_ORIGIN` masked by `V[ram_live]`;
+  `ZERO_WINDOWS` is one shard per touched window above 0, initialized to 0. Both are in
+  every `VmConfig` at one height, or derivation and `VmConfig::from_bytes` refuse it. The
+  window ids go in the statement as `MEMORY_WINDOWS`, and `program::check_memory_windows`
+  holds them strictly increasing in `[1, 2^29/h − 1]` before the challenges. A window is a
+  slice of the address space; a shard's cycles are a slice of the execution.
+- **Registers and the pc have no rows: they are the verifier's boundary.** A proof carries
+  64 scalars — final timestamps of `x0..x31` and the pc, final values of `x1..x31` — as one
+  `MEMORY_BOUNDARY` message after every memory-column commitment and **before** the squeeze:
+  a final value chosen after the challenges solves reconciliation for any trace.
+  `gkr_verify::boundary_factors` folds them and the entry pc into `(W_b, R_b)` once per
+  statement, and `reconciles` is the check. `t_pc` is not a cycle count.
+- **The exit row writes `next_pc = HALT_PC = 1`**, not `pc + 4`, and the verifier fixes the
+  pc's final value to it. It is odd and below `RAM_ORIGIN`, so no other row writes it and a
+  trace missing its exit row cannot balance. The decoded table's `next_pc` stays the
+  fall-through. `docs/spec/memory.md` §5.
+- **The artifact format is 1, and a lookup carries a selector.** `LookupExpr = (name,
+  channel, selector, tuple)`: a range obligation holds where its selector is 0 or its one
+  `Linear` expression is below the channel's bound. S14 checks them natively
+  (`checker::violated_lookups`); S15 discharges them. `from_bytes` refuses any other
+  format version.
+- **`check_memory` is a provenance rule.** It runs beside `validate` wherever a memory
+  artifact is built, and refuses any gate or output whose cone both names a global memory
+  slot (1–5) and reads a `W` column, a global-slot coefficient over anything but `M`, `S`
+  and `V`, and a leaf mask with no booleanity gate. `S` is admitted only because identity
+  binds setup columns before the challenges. `docs/spec/memory.md` §8.
 - **Boring beats clever.** Added surface area is a defect. Every verifier entry point is
   `(&VerifyingKey, &Proof, &PublicInputs)` and nothing else.
 

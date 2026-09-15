@@ -22,7 +22,7 @@ here.
 - Changing any value here is a protocol-version change and must bump
   `PROTOCOL_VERSION`.
 
-## Contents as of S11
+## Contents as of S14
 | Item | Meaning |
 | --- | --- |
 | `PROTOCOL_VERSION: u32` | Placeholder, `0`. First item absorbed into every transcript. |
@@ -56,17 +56,20 @@ here.
 | `transcript_tags` | The frozen tag table: 32 tags as of S14, sequential from 1. |
 | `challenge_slot` | S13's `TOY = 0`; S14's memory slots `MEM_GAMMA` 1, `MEM_ALPHA_ADDR` 2, `MEM_ALPHA_TS` 3, `MEM_ALPHA_VAL` 4, and the derived `MEM_WINDOW_CONSTANT` 5; `NAMES`. Append-only. |
 | `lookup_channel` | S14. `TIMESTAMP = 0`, its bound `BITS = [19]`, `NAMES`. Append-only; `docs/spec/memory.md` §7. |
+| `address_space` | S12. `REG = 1`, `RAM = 2`, `PC = 3`: nonzero, so no real memory tuple is all zeros. |
 | `memory` | S12's clock, `TS_STEP` and `TS_BITS`; S14's `HALT_PC = 1`, the tuple part order `PART_AS/ADDR/TS/VAL`, the root positions `READ_ROOT = 0` and `WRITE_ROOT = 1`, and `RAM_LIVE_BIT = 14`. `docs/spec/memory.md`. |
-| `family` | S11. The append-only `FamilyId` table (0 add/sub/lui/auipc … 7 init/teardown; S14's 8 zero windows), `COUNT`, the height menu, the default heights, `DEFAULT_BYTECODE_SIZE_WORDS` and the decoded-table `CODE_VERSION`. |
+| `family` | S11. The append-only `FamilyId` table (0 add/sub/lui/auipc … 6 atomics, 7 `INIT_TEARDOWN`, since S14 RAM window 0 only; S14's 8 `ZERO_WINDOWS`), `COUNT`, the height menu, the default heights, `DEFAULT_BYTECODE_SIZE_WORDS` and the decoded-table `CODE_VERSION`. |
 | `extra_mask` | S11. Every family's `family_extra_mask` bit positions, one-hot per mnemonic, append-only, and the system codes `ecall`/`ebreak`/`fence` carry in `imm`. |
 | `guest_memory` | The frozen guest memory map: `RAM_ORIGIN` and `RAM_LENGTH`; and, since S12, `STACK_RESERVE`, the 8 MiB at the top of RAM guest-sdk's allocator leaves to the stack. |
 | `ecall` | The guest ecall ABI: syscall numbers, range boundaries, file descriptors. |
 
 S11 added `PROGRAM_IDENTITY` (22), `VM_CONFIG` (23) and `SHARD_COUNTS` (24), all scalars:
-the program-identity sponge's opening message, and the two halves of the statement
-descriptor. `family` and `extra_mask` are numbers the decoded tables and the identity
-recipe are built from, so the same rule applies to them as to tags: **append, never
-renumber** — a renumbered family or mask bit is a different program identity for every
+the program-identity sponge's opening message, and the first two of the statement
+descriptor's three messages. S14 added `MEMORY_WINDOWS` (30), the third; `MEMORY_BOUNDARY`
+(31), the 64 register and pc boundary scalars; and `PROGRAM_ENTRY` (32), the entry pc in
+the identity sponge — all scalars, `docs/spec/memory.md` §6. `family` and `extra_mask` are
+numbers the decoded tables and the identity recipe are built from, so the same rule applies
+to them as to tags: **append, never renumber** — a renumbered family or mask bit is a different program identity for every
 program. `crates/program/CLAUDE.md` is the design record for both, and
 `crates/program/tests/tables.rs` pins the masks and checks every bit names one mnemonic.
 

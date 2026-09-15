@@ -122,7 +122,7 @@ every row; a cached entry is a sub-expression of its list, substituted into ever
 naming it, and never a column.
 
 **PolyAddress** — the one name of a polynomial: `M[i]` memory-argument column, `W[i]`
-witness column, `S[i]` setup column, `V[row]` virtual table, `L{k}[j]` inner-layer
+witness column, `S[i]` setup column, `V[row]` or `V[ram_live]` virtual table, `L{k}[j]` inner-layer
 column, `scratch[i]` flat-list intermediate, `C{k}[j]` cached entry.
 
 **Circuit artifact** — a circuit as data, `constraints::CircuitArtifact`: the same
@@ -135,7 +135,12 @@ semantic authority every pass and checker reads gates through.
 
 **External challenge** — a field element a gate coefficient names by slot
 (`constants::challenge_slot`), supplied by the caller from its own transcript, drawn
-after everything the gate can reach is bound.
+after everything the gate can reach is bound — or derived.
+
+**Derived challenge slot** — an external challenge slot whose value is not drawn: a fixed
+function of drawn challenges and of statement data absorbed before them, computed by the
+verifier and never read from a proof. The one at S14 is `MEM_WINDOW_CONSTANT` (slot 5),
+`γ_M + RAM + α_addr·4h·w` per window shard. `docs/spec/gkr.md` §5.1.
 
 **Backward pass** — reducing claims about a circuit's outputs, one layer sumcheck per
 gate list, top to base, to claims about its committed columns at one point: the
@@ -241,7 +246,8 @@ value the guest then checks against something bound, never an input in its own r
 
 **Public I/O digest** — the single `Fr` binding the guest's fd 0 and fd 1 byte streams,
 `transcript::io_digest`. Frozen at S10; the statement-binding order absorbs it.
-`docs/spec/ecall-abi.md` §6.
+`docs/spec/ecall-abi.md` §6. Tying it to the streams an execution actually read and wrote
+is deferred: `docs/spec/memory.md` §10.
 
 **RVC expansion** — rewriting a 16-bit compressed instruction as the exact 32-bit
 instruction it abbreviates. A representation change only: addresses are preserved, never
@@ -257,9 +263,10 @@ than inferred.
 
 **FamilyId** — a circuit family's number, `constants::family`: 0 add/sub/lui/auipc,
 1 jump/branch/SLT, 2 shift/bitwise, 3 mul/div, 4 mem word, 5 mem subword, 6 atomics,
-7 init/teardown. Append-only; ascending `FamilyId` is the canonical order everywhere.
+7 `INIT_TEARDOWN`, 8 `ZERO_WINDOWS`. Append-only; ascending `FamilyId` is the canonical
+order everywhere.
 
-**Decoded table** — one family's committed setup: one row per halfword of the address
+**Decoded table** — one instruction family's committed setup: one row per halfword of the address
 space, row `i` standing for pc `2i`, holding that family's instruction there in the
 fields of its **lookup tuple**. `crates/program/CLAUDE.md`.
 
@@ -272,17 +279,19 @@ except the add/sub/lui/auipc family's bit 0, the **system** kind of `ecall`, `eb
 and `fence`, told apart by `imm`.
 
 **Static detachment** — a family appears in a program's `VmConfig` exactly when the
-program has an instruction it claims, and init/teardown always; the preprocessor derives the set, nothing selects
-it. An instruction whose family is absent fails preprocessing loudly.
+program has an instruction it claims, and the two init/teardown families always; the
+preprocessor derives the set, nothing selects it. An instruction whose family is absent fails preprocessing loudly.
 
 **VmConfig** — a program's static VM shape: the family set, each family's trace height
 from the menu `{2^16, 2^18, 2^20, 2^22}`, and `bytecode_size_words`. Per-proof shard
 counts are not part of it.
 
-**Statement descriptor** — the static `VmConfig` plus the per-proof shard count of each
-of its families, absorbed as **two adjacent typed messages**, `VM_CONFIG` then
-`SHARD_COUNTS`. The static part says what VM a program needs; the counts say how much of
-it one execution used. `program::absorb_statement_descriptor`.
+**Statement descriptor** — the static `VmConfig`, the per-proof shard count of each of
+its families, and the RAM window list, absorbed as **three adjacent typed messages**,
+`VM_CONFIG`, `SHARD_COUNTS`, `MEMORY_WINDOWS`. The static part says what VM a program
+needs; the counts and windows say how much of it one execution used.
+`program::absorb_statement_descriptor`; `program::check_memory_windows` is the verifier's
+rule over the windows.
 
 **Memory query** — one read and one write at one address: the value last written there
 and when, and the value written now and when. A query that only reads writes back what
@@ -315,14 +324,67 @@ and polynomials are the constraint system's.
 
 **Cycle profile** — how many cycles each family of a `VmConfig` ran, transfer cycles
 included; the counts sum to the cycle count. **Shard plan** — `ceil(occupancy / height)`
-shards per family, derived from it.
+shards per family, derived from it. The init/teardown families run no cycles and plan
+zero; their shards are RAM windows, one `INIT_TEARDOWN` and one `ZERO_WINDOWS` per
+touched window above 0.
 
 **Trace archive** — the self-contained snapshot of a run: a section per **phase
 boundary** (post-execution, post-commit, post-GKR, post-opening, final), filled in
 order, and a timing section after them, outside the deterministic payload by
 construction.
 
-**Program identity** — one `Fr`: Mercury commitments to every decoded-table column,
-digested with the `VmConfig` through a fresh typed transcript. A program's identity the
-way a code hash is a contract's, taken by a verifier from a channel the prover does not
-control. At S11 it binds the instruction tables but not `.rodata`, `.data` or the entry pc.
+**Program identity** — one `Fr`: Mercury commitments to every decoded-table column and to
+the image column, digested with the code version, the `VmConfig` and the entry pc through
+a fresh typed transcript. A program's identity the way a code hash is a contract's, taken
+by a verifier from a channel the prover does not control. Since S14 it binds `.text`,
+`.rodata`, `.data` and the entry pc, and nothing an execution chooses — no shard count,
+no window list. `docs/spec/memory.md` §6.2.
+
+**Init/teardown families** — `INIT_TEARDOWN` (7) and `ZERO_WINDOWS` (8): claim no pc,
+present in every `VmConfig`, at **one height** `h`. A shard is one RAM window, a row one
+word of it: the init tuple on the write side, the teardown tuple — the word's last write,
+or its initial value if untouched — on the read side. No witness columns, no enforcing
+gates. Registers and the pc have no rows in them: they are the **boundary**.
+`docs/spec/memory.md` §3.
+
+**RAM window** — `h` consecutive words of the address space: window `w` is the bytes
+`[4h·w, 4h·(w+1))`, row `y` the word at `4h·w + 4y`, for `w < 2^29 / h`. The windows tile
+`[0, 2^31)`, so addresses are distinct within a window by construction and across windows
+by distinct ids. A window is a slice of the *address space*, `h` rows whatever was
+touched; a shard's **cycles** — what `trace::build_memory_columns` takes — are a slice of
+the *execution*, one row per cycle.
+
+**Image window** — RAM window 0, the one `INIT_TEARDOWN` shard. Its initial values are
+the **image column**, `program::image_init_column`, row `y` = `initial_word(4y)`, a setup
+column program identity commits; rows `y < 2^14`, below `RAM_ORIGIN`, are masked by
+`V[ram_live]`.
+
+**Zero window** — a RAM window above 0 the execution touches, one `ZERO_WINDOWS` shard
+each, initialized to 0 at timestamp 0. Their ids are the statement's window list, strictly
+increasing in `[1, 2^29/h − 1]`; `trace::init_windows` computes it.
+
+**Frame** — an execution family's memory subtree: 41 `M` columns (`cycle`, and mask,
+address, read timestamp, read value and write value for each of the pc query and the
+seven roles), 11 `W` columns (the gap chunks and the x0 gadget), a read and a write leaf
+per query, and a product tree to the read and write roots.
+`constraints::memory::frame_artifact`; `docs/spec/memory.md` §2.
+
+**Range obligation** — an artifact's lookup element, `LookupExpr (name, channel,
+selector, tuple)`. It holds on a row where its selector is 0, or where its one `Linear`
+expression's canonical integer is below the channel's bound — `[0, 2^19)` on the timestamp
+channel. Every read carries two, the gap's chunks, selected by the query's mask.
+`checker::violated_lookups` checks them natively; S15 discharges them with LogUp.
+`docs/spec/memory.md` §7.
+
+**Boundary scalars** — the 64 values a proof carries for registers and the pc, which have
+no rows: the final timestamps `t_0 … t_31` and `t_pc`, then the final values `v_1 … v_31`,
+one `MEMORY_BOUNDARY` message absorbed before the memory challenges. `x0`'s final value is
+0 and the pc's `HALT_PC`, and neither is carried. **Boundary finals** —
+`gkr_verify::BoundaryFinals`, the same 64 in memory, filled by
+`trace::build_boundary_finals`. The verifier folds them and the entry pc into the
+boundary factors `(W_b, R_b)`, once per statement. `docs/spec/memory.md` §4.
+
+**Halting sentinel** — `constants::memory::HALT_PC = 1`: the `next_pc` an exit row
+writes, and the pc's final value the verifier fixes. Odd and below `RAM_ORIGIN`, so no
+other row writes it, and a trace whose pc ends there ended on an exit row.
+`docs/spec/memory.md` §5.

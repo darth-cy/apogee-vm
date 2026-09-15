@@ -148,7 +148,10 @@ number in the zkVM host-call range — where a reviewer will see it.
 
 One `Fr` binds the fd 0 and fd 1 byte streams. **Frozen at S10**: later stages
 recompute it and never redefine it. This is the value the statement-binding
-order absorbs as "public I/O digest".
+order absorbs as "public I/O digest". Absorbing it does not tie it to an
+execution: that the digest is of the bytes the guest actually read and wrote —
+the guest computing it and leaving its words in `x24`…`x31` at exit — is
+deferred past S14 (`docs/spec/memory.md` §10).
 
 ```rust
 transcript::io_digest(public_input: &[u8], public_output: &[u8]) -> Fr
