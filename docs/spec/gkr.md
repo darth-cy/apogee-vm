@@ -1,6 +1,7 @@
 # The GKR engine: layered circuits, the artifact, and the backward pass
 
-Frozen as of S13. Changing anything here is a protocol-version change.
+Frozen as of S13; S14 amended §2.1, §4, §4.1, §4.2, §4.3 and §5.1. Changing anything
+here is a protocol-version change.
 
 Implementation, by crate:
 
@@ -75,10 +76,19 @@ Where each may appear:
 
 ### 2.1 Virtual tables
 
-`VirtualKind::RowIndex`, `V[row]`, is the one kind at S13. Its value at row `y`
-is `y`; its closed form **is its multilinear extension**, `Σ_j 2^j · y_j` over
-`n_0` variables, and the kind tag is how the closed form is in the artifact. A
-virtual table has layer 0's height. It is **never materialized**: the forward
+Two kinds. Each closed form **is its multilinear extension** over `n_0`
+variables, and the kind tag is how the closed form is in the artifact:
+
+| kind | notation | value at row `y` | closed form |
+| --- | --- | --- | --- |
+| `RowIndex` | `V[row]` | `y` | `Σ_j 2^j · y_j` |
+| `RamLive` | `V[ram_live]` | 1 if `y ≥ 2^14`, else 0 | `1 − Π_{j=14}^{n_0−1} (1 − y_j)`, which is 0 when `n_0 ≤ 14` |
+
+14 is `constants::memory::RAM_LIVE_BIT`. `RamLive` is S14's, the mask on RAM
+window 0's rows below `RAM_ORIGIN` (`docs/spec/memory.md` §3.3); its closed form
+costs `n_0 − 14` multiplications and is 0 or 1 on the cube by construction.
+
+A virtual table has layer 0's height. It is **never materialized**: the forward
 pass evaluates the closed form per row, the prover at every point a round needs
 (`(bound, X, bits)` at `X = 0, 1`), and the verifier at the bound point. It is
 never committed, never claimed, and never returned as a `BaseClaim`. A later kind
@@ -157,14 +167,14 @@ totals, forward-pass values and proofs are unchanged.
 
 | field | what |
 | --- | --- |
-| `format_version` | `0`. A postcard layout is not self-describing, so this is how a reader refuses an artifact of a later, extended layout instead of misreading it |
+| `format_version` | `1` since S14; S13's was `0`. A postcard layout is not self-describing, so this is how a reader refuses an artifact of another layout instead of misreading it |
 | `coefficient_encoding` | `0` = every `Fr` canonical 32-byte little-endian; the only value, and how the file declares it |
 | `trace_vars` | `n_0`; the trace length is `2^{trace_vars}`, at most `2^30` so `1 << n` fits a 32-bit `usize` |
 | `memory`, `witness`, `setup` | the committed layout per subtree, one name per column |
 | `virtuals` | `(kind, name)`: the virtual tables the circuit reads |
 | `layers` | gate list `k` for `k = 0..N` |
 | `relations` | the flat constraint list |
-| `lookups` | must be empty at S13; S15 gives the element its meaning and bumps `format_version` if it reshapes it |
+| `lookups` | the range obligations: format 1's element, which carries a selector (`docs/spec/memory.md` §7); S15 discharges them |
 | `scratch` | `(name, L{k}[j])`: the scratch bijection |
 | `outputs` | the output map: a permutation of the top layer, in `OutputClaims` order |
 | `padding` | `(row, zero_row_valid)`: the padding contract, §4.3 |
@@ -175,12 +185,17 @@ LayerSpec   = (halving, num_vars, width,
                producing: [(relation, L{k+1}[j], GateDef)],
                enforcing: [(relation, GateDef)])
 Relation    = (name, output: Option<scratch index>, GateDef)
-LookupExpr  = (name, channel, tuple: [GateDef])
+LookupExpr  = (name, channel, selector: PolyAddress, tuple: [GateDef])
 ```
 
 `num_vars` and `width` are the layer **written**, `k + 1`: derived values stored
 for readers, which Law 2 holds to what the gates imply. The `j`-th cached and
 producing entry sit at `C{k}[j]` and `L{k+1}[j]`.
+
+A lookup holds on a row where its selector is 0, or where its tuple is in its
+channel's table. Every channel of `constants::lookup_channel` is a range channel
+at S14: its tuple is one expression, which holds when its canonical integer is
+below `2^BITS[channel]`.
 
 ### 4.1 Wire form
 
@@ -190,7 +205,7 @@ length then its elements; a name is a `str`; an `Fr` is its 32 canonical bytes
 with no length prefix (`crates/field`'s `[u8; 32]` tuple).
 
 ```text
-VirtualKind     u32                           0 RowIndex
+VirtualKind     u32                           0 RowIndex, 1 RamLive
 PolyAddress     (tag u8, a u32, b u32)        tags: 0 M, 1 W, 2 S, 3 V, 4 L, 5 scratch, 6 C
                                               V: a = kind; L, C: a = layer, b = offset;
                                               every unused field is 0
@@ -202,6 +217,7 @@ GateDef         (tag u8, split u32, coeffs [Coeff], operands [PolyAddress])
                 3 AffineProduct  split t, coeffs a_1..a_t a_0 b_1..b_u b_0, operands x_1..x_t y_1..y_u
                 4 TreeProduct    split 0, coeffs none,                      operands x
                 5 Quadratic      split t, coeffs c_0 a_1..a_t b_1..b_u,     operands x_1..x_t y_1 z_1 .. y_u z_u
+LookupExpr      (name str, channel u32, selector PolyAddress, tuple [GateDef])
 ```
 
 A `Quadratic` decodes only when `t` is at most the operand count, the operands
@@ -209,7 +225,9 @@ after the first `t` pair up, and there are exactly `1 + t + (operands − t)/2`
 coefficients. Tags are append-only. `from_bytes` is total — it returns an error and never
 panics, whatever it is handed, and reserves nothing an untrusted length asks for
 — and accepts exactly the bytes `to_bytes` writes: it re-encodes and compares. It
-checks no law: a decoded artifact may break every one, which is what lets the
+reads `format_version` first and refuses any version but 1 before decoding
+anything after it, because the layout that follows is the version's. It checks no
+law: a decoded artifact may break every one, which is what lets the
 checker be handed one.
 
 ### 4.2 The laws
@@ -245,9 +263,18 @@ or zero-coefficient term reads nothing — a cached entry no gate names, and an
 enforcing gate whose normalized expansion is zero, each a relation constructed and
 then dropped, on which nothing depends; an empty name, one outside
 `[a-z0-9_]`, or one used twice anywhere in the artifact; an unknown challenge
-slot; a non-empty `lookups`; a `padding.row` whose length is not `w_0`; a format
-version or coefficient encoding other than 0; `trace_vars > 30`. Every refusal is
-a `ConstraintError` naming the law, gate or address.
+slot; a `padding.row` whose length is not `w_0`; a format version other than 1 or
+a coefficient encoding other than 0; `trace_vars > 30`. Every refusal is a
+`ConstraintError` naming the law, gate or address.
+
+**The lookup rules** (S14, `docs/spec/memory.md` §7). `validate` refuses a lookup
+whose channel is not one of `constants::lookup_channel`; whose tuple is not
+exactly one expression, every channel being a range channel; whose expression is
+not `Linear` with literal coefficients, its constant included, over in-range `M`,
+`W`, `S` columns and virtual tables `virtuals` lists; or whose selector is not an
+in-range `M`, `W` or `S` column. Its name is held to the name rule above. Each
+refusal is a `ConstraintError` naming the lookup, and `checker::check_laws`
+enforces the same rules with code of its own.
 
 Names are documentation, never semantics, stored beside what they name rather
 than derived from a position, so none can drift with a layer index. An artifact
@@ -265,10 +292,18 @@ enforcing relation vanish, for every challenge value and every row index.
 The checker holds both statements to the relations, at pseudo-random challenge
 values and row indices.
 
-Not covered at S13, and owed by the stage that builds product trees over trace
-rows: that a padding row contributes the multiplicative identity to every column
-a halving list reads (master rule 7), and that the contract holds for the setup
-values a real padding row carries rather than the ones `padding.row` names.
+**The product-tree clause** (S14, master rule 7). For a family whose shards have
+inactive rows, every column the first halving list reads — computed from
+`padding.row` through every row-wise producing relation below that list — is
+exactly 1, for every challenge value and every row index: an inactive row
+contributes the multiplicative identity to every product. A RAM window family
+(`docs/spec/memory.md` §3) has no inactive rows — every row is an address — so the
+clause does not apply to it. `checker::check_padding_identity` holds an artifact
+to the clause at pseudo-random challenge values and row indices; an artifact with
+no halving list passes.
+
+Still not covered: that the contract holds for the setup values a real padding
+row carries rather than the ones `padding.row` names.
 
 ## 5. The backward pass
 
@@ -315,10 +350,16 @@ single point here is S13's.
 - **Before** `prove` or `verify`, the caller has bound the base layer into the
   transcript (at S13 the tests absorb `sumcheck::witness_digest` of the committed
   columns; S16 absorbs commitments). The engine never absorbs base material.
-- Every `ExternalChallenges` value is drawn **after** everything its gates can
-  reach is bound: every committed column on any path from a gate naming the slot
-  down through the inner layers. At S13 the tests draw the toy's slot as
-  `challenge_scalar(SUMCHECK_CHALLENGE)` immediately after the digest.
+- Every `ExternalChallenges` value is either drawn **after** everything its
+  gates can reach is bound — every committed column on any path from a gate
+  naming the slot down through the inner layers — or a **derived** value: a fixed
+  function of such challenges and of statement data absorbed before them,
+  computed by the verifier and never read from a proof.
+  `constants::challenge_slot::MEM_WINDOW_CONSTANT` is the one derived slot at
+  S14. At S13 the tests draw the toy's slot as
+  `challenge_scalar(SUMCHECK_CHALLENGE)` immediately after the digest. This rule
+  suffices for the GKR argument but not for the multiset argument, whose
+  provenance rule is `docs/spec/memory.md` §8.
 - The artifact is the verifier's, not the prover's: it is part of what a
   verifying key conveys.
 - The artifact has passed `CircuitArtifact::validate`. `verify`, `forward`,

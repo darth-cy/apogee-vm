@@ -96,6 +96,7 @@ pub fn prove(artifact: &CircuitArtifact, values: &LayerValues, challenges: &Exte
 | `tests/batching.rs` | acceptance 4: the whole event log against the schedule, and the outstanding-claim walk reading halving and claim counts from the artifact, with its negative controls |
 | `tests/compilation.rs` | acceptance 7: cached and cache-free give the same shape, values and proof byte for byte; degree-2 cached entries, in list 0 and in list 1, prove and verify |
 | `tests/oracle.rs` | every round of every transition recomputed from hand-written toy formulas, sharing no code with the kernel; the control that it can fail |
+| `tests/ram_live.rs` | `V[ram_live]`'s closed form against the extension of its table, at pseudo-random points and every cube point, over 14, 15, 16 and 18 variables; a 2^16-row circuit masking a product tree with it and enforcing a column zero below row 2^14: its root against a native product, proof, verify and discharge, and a violation on row 2^14 − 1 named by the self-check and rejected at transition 0 |
 | `tests/common/mod.rs` | the pinned toy fixtures, a satisfying base, the binding, the harness, the discharge, and the two small circuits `edges.rs` and `forgery.rs` share, and the `circuit` constructor that `quadratic.rs` builds its circuit from |
 
 Every test written after the review states the mutant it kills, and each was run against that mutant.

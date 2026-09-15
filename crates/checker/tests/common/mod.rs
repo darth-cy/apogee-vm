@@ -23,8 +23,8 @@ pub const CACHE_FREE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../constraints/tests/vectors/toy_cache_free.bin"
 );
-const CACHED_SHA256: &str = "9ad63a54eef4fbd9c808f6db52ad27038202200a5e56be9576c2c52e4cd9aa35";
-const CACHE_FREE_SHA256: &str = "8025412caae28c09ca9dcff6bd242961097bd59446c539d7f173dcb01b45ff91";
+const CACHED_SHA256: &str = "ee27e1192c4bcf9afa003509f6c06fead29628b02a4c17f86e381bf5609f1c70";
+const CACHE_FREE_SHA256: &str = "5318afeb5b5ba5d09871358c89db36a0db12680fa9559a70c67c50b41181251d";
 
 /// The committed layout's positions: `m, a, b, c, e, s`.
 pub const M: usize = 0;

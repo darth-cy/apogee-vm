@@ -1,6 +1,6 @@
 //! The standalone checkers over a committed `CircuitArtifact` file.
 //!
-//!     cargo run -p checker -- laws <artifact>      # Laws 1-4, docs/spec/gkr.md §4.2
+//!     cargo run -p checker -- laws <artifact>      # Laws 1-4 and the lookup rules, §4.2
 //!     cargo run -p checker -- padding <artifact>   # the padding contract, §4.3
 //!     cargo run -p checker -- dump <artifact>      # the readable page
 //!
@@ -30,7 +30,7 @@ fn main() {
     };
     match command.as_str() {
         "laws" => match checker::check_laws(&artifact) {
-            Ok(()) => println!("{path}: Laws 1-4 hold"),
+            Ok(()) => println!("{path}: Laws 1-4 and the lookup rules hold"),
             Err(e) => fail(&format!("{path}: {e}")),
         },
         "padding" => match checker::check_padding(&artifact) {
