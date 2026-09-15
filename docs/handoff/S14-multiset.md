@@ -1,9 +1,10 @@
 # S14 — Memory multiset argument, timestamps, init/teardown
 
-Branch `s14-multiset`, 21 commits over `main`. Status: implemented, reviewed, and
-every CI gate passes locally; the Linux-only QEMU suites passed in a container on this
-tree, and the ceremony-backed identity suite on the ceremony machine ("Verification
-performed"). Twelve acceptance items are met, several in the form the repository owner
+Branch `s14-multiset`, 22 commits over `main`, this note the last. Status: implemented,
+reviewed by five adversarial lenses with every confirmed finding fixed or assigned to a
+stage, and every CI gate green at the final commit — the local gates, the Linux-only QEMU
+suites in a container, and the ceremony-backed identity suites on the ceremony machine
+("Verification performed"). Twelve acceptance items are met, several in the form the repository owner
 chose instead of the prompt's (the remapping is in "Acceptance"). Eight controls
 (C1–C8) sit beside them: six show that a rule the design depends on is needed, and C8
 is the tamper target for the mask constraints S16 owes.
@@ -523,7 +524,7 @@ a verifying-key loader recomputes against a trusted identity. The new pins
 | `crates/constraints/tests/vectors/toy_cached.bin` | 1,486 bytes | `ee27e1192c4bcf9afa003509f6c06fead29628b02a4c17f86e381bf5609f1c70` | S13's toy, regenerated at format 1 |
 | `crates/constraints/tests/vectors/toy_cache_free.bin` | 1,500 bytes | `5318afeb5b5ba5d09871358c89db36a0db12680fa9559a70c67c50b41181251d` | its cache-free compilation, at format 1 |
 | `crates/program/tests/vectors/identity.txt` | 713 bytes | `3232810e92795fef2ce795c3c0b84044d54294cc7238da4bb5b11022c4a8032b` | fib's identity at the defaults and at `2^16`, new recipe |
-| `docs/spec/memory.md` | 23,468 bytes | — | the normative memory spec |
+| `docs/spec/memory.md` | 28,419 bytes | — | the normative memory spec |
 | `tools/kat-gen/src/memory.rs` | — | — | the `memory` group; `cargo run -p kat-gen -- memory` |
 
 The three memory fixtures are pinned by SHA-256 in `crates/constraints/tests/memory.rs`,
@@ -627,12 +628,21 @@ New test files, and the tests in each:
 | `gkr/tests/ram_live.rs` | 2 |
 | `constraints/src/memory.rs` (unit) | 1 |
 
-Every gate `CLAUDE.md` lists, run locally at the last commit:
-- `fmt` and `clippy -D warnings` in all four workspaces;
-- the `riscv32imac` build of the `no_std` crates;
-- `cargo run -p kat-gen` with `git diff --exit-code` over every fixture directory, which
-  regenerates `identity.txt` too, since the ceremony file is present on this machine;
-- `transcript-ref`, and fib's guest build.
+That count, and every run below marked "at `8b1993f`", was taken on the tree of
+`8b1993f`; this closing commit changes only this file and the root `CLAUDE.md`, so no code,
+test or fixture differs from it.
+
+Every gate `CLAUDE.md` lists, run locally at `8b1993f` on macOS, each exit 0:
+- `fmt --check` in all four workspaces (root, `tools/transcript-ref`, `crates/guest-sdk`,
+  `guests`);
+- `clippy -D warnings` in all four (the workspace and `transcript-ref` with
+  `--all-targets`, `guest-sdk` for `riscv32imac`, `guests --bins`);
+- the `riscv32imac` build of `field`, `constants`, `transcript`, `poly`, `sumcheck`,
+  `constraints` and `gkr-verify`;
+- `cargo run -p kat-gen`, then `git diff --exit-code` over all ten fixture directories
+  `CLAUDE.md` and CI name: no diff. `identity.txt` was regenerated too, since the ceremony
+  file is present, byte-identically (sha256 `3232810e…032b`);
+- `transcript-ref`, with no diff, and fib's guest build.
 
 **Mutation runs, from the phase reports.** Each mutant was applied alone, run against
 its named suite, and reverted (sources confirmed byte-identical after).
@@ -654,22 +664,28 @@ its named suite, and reverted (sources confirmed byte-identical after).
   byte-identically (sha256 `3232810e…032b`).
 - At `d5c9229`, the suite passed 6 again (71.5 s), and
   `artifact-dump --test tables -- --ignored` passed 1, its page's identity equal to the pin.
-- The review's fixes change no identity input. They add one SRS-free recipe test and doc
-  text to `crates/program`, and `identity.txt` still regenerates byte-identically.
+- At `8b1993f`, with `assets/ptau/ppot_0080_24.ptau`:
+  `cargo test --release -p program --test identity -- --ignored` passed 6 (92.3 s of test
+  time, alongside other runs; the two non-ignored tests filtered out), and
+  `cargo test --release -p artifact-dump --test tables -- --ignored` passed 1 (32.8 s).
+  `kat-gen`'s `program` group rewrote `identity.txt` byte-identically, as above. The
+  review's fixes change no identity input: they add one SRS-free recipe test and doc text
+  to `crates/program`.
 
-**QEMU runs**, in the colima container `CLAUDE.md` describes (`rust:latest` with
-qemu-user, its own `CARGO_TARGET_DIR`), at `d5c9229`:
+**QEMU runs**, in the colima container `CLAUDE.md` describes (`rust:latest` on aarch64
+Linux with qemu-user, its own `CARGO_TARGET_DIR`, every guest built from source), at
+`d5c9229` by the review's CI run and again at `8b1993f`:
 
-| Command | Result |
-| --- | --- |
-| `cargo test -p loader --test qemu -- --include-ignored` | 8 passed |
-| `APOGEE_GUEST_PROFILE=release cargo test -p loader --test qemu -- --include-ignored` | 8 passed |
-| `cargo test -p emulator --test differential -- --include-ignored` | 3 passed |
-| `cargo test -p emulator --test consistency -- --include-ignored` | 8 passed |
-| the same at `APOGEE_GUEST_PROFILE=release` | 8 passed |
-| `cargo test -p loader --test layout -- --ignored` | 1 passed |
+| Command | `d5c9229` | `8b1993f` |
+| --- | --- | --- |
+| `cargo test -p loader --test qemu -- --include-ignored` | 8 passed | 8 passed |
+| `APOGEE_GUEST_PROFILE=release cargo test -p loader --test qemu -- --include-ignored` | 8 passed | 8 passed |
+| `cargo test -p emulator --test differential -- --include-ignored` | 3 passed | 3 passed |
+| `cargo test -p emulator --test consistency -- --include-ignored` | 8 passed | 8 passed (62.4 s) |
+| the same at `APOGEE_GUEST_PROFILE=release` | 8 passed | 8 passed (24.0 s) |
+| `cargo test -p loader --test layout -- --ignored` | 1 passed | 1 passed |
 
-The review's fixes touch no emulator, loader or guest code.
+The review's fixes touch no emulator, loader or guest code; the rerun confirms it.
 
 **Debug-build runtime.**
 - Of `checker/tests/multiset.rs`'s 15.4 s, 15.2 s is A10's `2^16` frame proof.
@@ -679,85 +695,151 @@ The review's fixes touch no emulator, loader or guest code.
 
 ## Adversarial review
 
-Six lenses over `d5c9229`. Every finding was put to a skeptic told to refute it. Every
-finding that survived was either fixed in the stage's last commits or, where it needs the
-owner, recorded as an open question ("Not acted on" below). The lenses were:
-- the mathematics, derived from `docs/spec/memory.md` and then held to the code;
-- a malicious prover with 17 probes, each run through prove, verify and discharge;
-- a clause-by-clause audit against the stage prompt and the approved design;
-- a mutation sweep over constraints, gkr, checker, trace, program and emulator;
-- master-rule compliance and documentation truth;
-- the CI gates.
+Five lenses reviewed `d5c9229`, read-only, with every probe and mutant in a scratch copy
+with its own target directory; a CI run over the same commit sat beside them. Every
+finding was put to a skeptic told to refute it. A finding that survived was scoped either
+*fix now*, and fixed in the four commits after `d5c9229` plus this note, or *defer and
+record*, and written into "Deferred work, by stage" under the stage that owes it (or, for
+the one that needs the owner, into the open questions).
 
-**No defect in S14's own code was found.** Every S14 artifact is sound for what it
-covers, and no probe reached a panic. The major findings were soundness debts that no
-document assigned to a later stage, a stage deliverable not yet written, and gates with
-no behavioural test.
+| Lens | What it did | Raised | Confirmed | Refuted | Major / minor | Fix now / defer |
+| --- | --- | --- | --- | --- | --- | --- |
+| Mathematics | derived the soundness argument from `docs/spec/memory.md` alone, then held the code to the spec line by line; two probes | 6 | 6 | 0 | 1 / 5 | 5 / 1 |
+| Malicious prover | 17 probes on fib at `h = 2^16` through `validate` + `check_memory`, `check_memory_windows`, `self_check`, `violated_lookups`, `reconciles`, and prove, verify and discharge where run | 10 | 10 | 0 | 2 / 8 | 4 / 6 |
+| Stage-prompt compliance | clause by clause against `prompts/S14-multiset.md` as the owner amended it, and the approved design | 7 | 6 | 1 | 1 / 5 | 5 / 1 |
+| Mutation | 96 single mutants over constraints, gkr-verify, checker, trace, program, loader, emulator and constants | 8 | 8 | 0 | 2 / 6 | 8 / 0 |
+| Master rules and doc truth | anti-goals and rules over the diff, commit attribution, every S14 claim in the docs checked against code | 8 | 8 | 0 | 0 / 8 | 7 / 1 |
+| **Total** | | **39** | **38** | **1** | **6 / 32** | **29 / 9** |
+
+The CI run (every `CLAUDE.md` gate at `d5c9229`, QEMU in the container, the ceremony
+suites) was green and raised one minor fix-now finding, the stale test count, fixed in
+`8b1993f`. The refuted finding was compliance's "the QEMU suites were never run on the
+S14 tree": the CI run had run them, all passing.
+
+What each lens concluded:
+- **Mathematics.** No blocker: from the spec alone the argument holds, and the code
+  matches the spec everywhere it was held to it (tuple, leaf, booleanity, write-back, x0
+  and gap gates, every name, the product trees, both window artifacts, `check_memory`,
+  `window_challenges`, `boundary_factors`, `reconciles`, `RamLive` at a row and at a
+  point, the builders, the image column, the identity split, the window rules, the
+  lookup evaluators, `HALT_PC`). The findings were places where the spec's own claims were
+  incomplete or false.
+- **Malicious prover.** No attack got past a check S14 itself claims. Eight attacks were
+  accepted by every S14 check: four are the `HALT_PC` constraints §5 already gave S16, and
+  four rested on obligations no document recorded (a mask tied to nothing, twice; written
+  values `≥ 2^32`; the `S[0]` opening). Rejected: a trace starting at entry + 4, reads of
+  a nonexistent init, a second query consuming one write, every window-rule change, an
+  unmasked `V[ram_live]` (verify fails at layer 0), masks −1 and 2 (verify fails at layer
+  0), and the window constant at the top windows.
+- **Compliance.** Nearly every clause met as written or as amended. Missing: the handoff
+  and the range convention. Partial: `PART_*` read by nothing, and the Q7 version rule.
+- **Mutation.** 90 of 96 mutants killed; one survivor, `initial_word` computing byte
+  addresses with `u32` wrapping, is equivalent under `ProgramImage`'s segment invariant,
+  so 90 of 95 real mutants (94.7%). Counting only CI-reachable tests, 87 of 95: three
+  identity-recipe mutants died only in the ceremony tests. Five more, among them two x0
+  gates and the write-back gates weakened under their kept names, died only by a fixture
+  SHA pin or the gate-name list. No verifier or
+  circuit mutant with a soundness effect passed every test.
+- **Master rules.** Nothing blocks: no anti-goal broken, every commit attributed to the
+  configured identity alone. The findings were documentation truth, a little surplus
+  public surface, and stage-close bookkeeping.
+
+**No defect in S14's own circuits or verifier functions let a forgery past a check S14
+claims**, and no probe reached a panic. The major findings were soundness debts no
+document assigned to a later stage, a stage deliverable not yet written, and gates with no
+behavioural test; one minor finding (4 below) was a construction-time rule weaker than the
+roots need, and it is now strengthened in code.
+
+The fix commits: `ed18252` (constraints, gkr-verify), `9ae0256` (constants, the lookup
+rule tests), `2e8eada` (checker, trace and program tests, crate docs), `82d5120`
+(`docs/spec/memory.md`, `GLOSSARY`), `8b1993f` and this commit (the handoff, root
+`CLAUDE.md`).
 
 **Major.**
 
-1. **A mask is tied to nothing** (math, attacker; three findings). A query on a row whose
+1. **A mask is tied to nothing** (math-1, attacker-1, attacker-2). A query on a row whose
    pc mask is 0, a live row with a query masked off, and a live row with a query its
-   instruction lacks each balance, keeping every S14 gate and obligation. The prover
-   proved and verified a padding row's `rd` query rewriting `x10` after exit. On a live
-   row, a ghost store handed a later load a value no instruction wrote. §2.1 described the
-   honest fill as if it were enforced, and neither §5, §9 nor the draft handoff gave any
-   stage the rule.
-   *Done:* §2.1, §5 and §9 state what S16 owes (`m_pc` as liveness and lookup selector,
-   `m_q = m_pc·uses_q`, the transfer and ecall-argument cases), and so does the S16 list
-   below. Control C8 is the tamper target, and a root `CLAUDE.md` rule records it. The
-   S14-only half, seven gates `m_q − m_q·m_pc = 0`, is offered as open question 13, not
-   applied.
-2. **Two x0 gates and all five write-back gates had no behavioural test** (mutation). A gate
-   weakened under its kept name was caught only by the fixture's SHA pin, which
-   `kat-gen -- memory` regenerates: `rd_is_zero_at_nonzero` over `rd_inv`, or every
-   `<q>_writes_back` over `rs1`'s columns.
-   *Done:* balanced forgeries refused by exactly `rd_is_zero_at_nonzero`, by exactly
-   `rd_is_zero_inverse`, and by each `<q>_writes_back` in turn.
-3. **The handoff and the `CLAUDE.md` update were undelivered** (compliance, rules, CI).
-   *Done:* this file, the status row, the test count and the boundary scalars.
+   instruction lacks each balance, keeping every S14 gate and obligation. A padding row's
+   `rd` query rewriting `x10`, the exit status, after exit was accepted by every S14 check
+   under two unrelated challenge sets. On a live row, a ghost store handed a later load a
+   value no instruction wrote. §2.1 described the honest fill as if it were enforced, and
+   neither §5, §9 nor the draft handoff gave any stage the rule.
+   *Done* (`82d5120`, `2e8eada`, `8b1993f`): §2.1, §5 and §9 state what S16 owes (`m_pc` as
+   liveness and lookup selector, `m_q = m_pc·uses_q`, the transfer and ecall-argument
+   cases), and so does the S16 list below. Control C8 is the tamper target, and a root
+   `CLAUDE.md` rule records it. The S14-only half, seven gates `m_q − m_q·m_pc = 0`, is
+   offered as open question 13, not applied.
+2. **Two x0 gates and all five write-back gates had no behavioural test** (mutation, two
+   findings). A gate weakened under its kept name was caught only by the fixture's SHA pin,
+   which `kat-gen -- memory` regenerates: `rd_is_zero_at_nonzero` over `rd_inv` (a prover
+   then zeroes any register write), `rd_is_zero_inverse` removed (`x0` then holds 5), or
+   every `<q>_writes_back` over `rs1`'s columns.
+   *Done* (`2e8eada`): balanced forgeries refused by exactly `rd_is_zero_at_nonzero`, by
+   exactly `rd_is_zero_inverse`, and by each `<q>_writes_back` in turn.
+3. **The handoff and the `CLAUDE.md` update were undelivered** (compliance-1, rules-08,
+   CI-1). *Done* (`8b1993f`, and this commit): this file, the status row, the test count
+   and the boundary scalars.
 
 **Minor.**
 
 4. **A root built from `W` columns alone passed `check_memory`** (math). §8 refused a cone
    holding both a slot and a `W` column, but not one holding `W` alone; such a root is
-   chosen after the challenges. *Done:* `check_memory` refuses any root whose cone reads
-   `W`, with its test (a strengthening of the owner-approved §8 rules).
-5. **§9's window bound listed the image refusal and omitted `id ≥ 1`** (math). *Done:*
-   corrected, and C1 now balances an access at `0x4` against a zero window at id 0.
+   chosen after the challenges. *Done* (`ed18252`, §8 in `82d5120`): `check_memory` refuses
+   any root whose cone reads `W`, with its test (a strengthening of the owner-approved §8
+   rules). No fixture moved.
+5. **§9's window bound listed the image refusal and omitted `id ≥ 1`** (math-3). *Done*
+   (`82d5120`, C1 in `2e8eada`): corrected, and C1 now balances an access at `0x4` against
+   a zero window at id 0.
 6. **§2.2 and §2.4's leaf algebra was misstated**, and a leaf is `m·T + 1 − m` at every `m`
-   (math). *Done:* text corrected; `leaf`'s doc says which tuple it means.
-7. **Timestamps as integers rested on an unstated count** (math). *Done:* §4.2 states it,
-   with the corrected row bound `2^30`.
-8. **Nothing assigned the opening of `S[0]` against `cm(image column)`** (attacker): a
-   different image with a consistent trace passed every S14 check. *Done:* §6.2, §9 and the
-   S16 list below.
-9. **`check_memory_windows` trusted a hand-built config** (attacker). *Done:* documented
-   precondition; `from_bytes` already refuses the bytes.
-10. **The range convention was not written, and no 16-bit channel existed** (compliance).
-    *Done:* §7's convention and `lookup_channel::RANGE16 = 1`.
-11. **`PART_*` were read by nothing** (compliance, rules). *Done:* one private tuple
-    constructor places each part's terms by `PART_*`, `boundary_factors` places its
-    operands by them, and a test pins every read tuple's parts at their positions. The
-    fixtures did not move.
-12. **The version rule contradicted the owner's Q7 decision** (compliance, rules). *Done:*
-    `constants/CLAUDE.md` and `PROTOCOL_VERSION`'s doc amended, with the S12 precedent
-    corrected (S11 and S13 changed no existing value).
-13. **No test built a self-balancing query** (compliance). *Done:* control C7.
+   (math-4). *Done* (`82d5120`, `leaf`'s doc in `ed18252`): text corrected; `leaf`'s doc
+   says which tuple it means.
+7. **Timestamps as integers rested on an unstated count** (math-6). *Done* (`82d5120`):
+   §4.2 states it, with the corrected row bound `2^30`.
+8. **Nothing assigned the opening of `S[0]` against `cm(image column)`** (attacker-4): a
+   different image with a consistent trace passed every S14 check. *Done* (`82d5120`):
+   §6.2, §9 and the S16 list below.
+9. **`check_memory_windows` trusted a hand-built config** (attacker-10). *Done*
+   (`2e8eada`): documented precondition; `from_bytes` already refuses the bytes.
+10. **The range convention was not written, and no 16-bit channel existed** (compliance-2).
+    *Done* (§7 in `82d5120`, the channel in `9ae0256`): §7's convention and
+    `lookup_channel::RANGE16 = 1`.
+11. **`PART_*` were read by nothing** (compliance-3, rules-02). *Done* (`ed18252`): one
+    private tuple constructor places each part's terms by `PART_*`, `boundary_factors`
+    places its operands by them, and a test pins every read tuple's parts at their
+    positions. The fixtures did not move.
+12. **The version rule contradicted the owner's Q7 decision** (compliance-4, rules-01).
+    *Done* (`9ae0256`): `constants/CLAUDE.md` and `PROTOCOL_VERSION`'s doc amended, with
+    the S12 precedent corrected (S11 and S13 changed no existing value).
+13. **No test built a self-balancing query** (compliance-5). *Done* (`2e8eada`): control C7.
 14. **The identity recipe's S14 changes were reachable only by ignored tests** (mutation).
-    *Done:* an SRS-free test of the absorb order. Which column `INIT_TEARDOWN` commits,
-    and at which height, is still reached only by the ignored recipe test (a CI gap,
-    recorded).
-15. **Builder, validator and padding mutants survived** (mutation): `gap_hi` chunking
-    `gap + 1`, a window taking the next window's first word, a lookup named after a
-    scratch slot, `S` past the layout, and the padding clause sampling row 0 alone.
-    *Done:* one test each, and `M` past the layout too.
+    *Done* (`2e8eada`): an SRS-free test of the absorb order. Which column `INIT_TEARDOWN`
+    commits, and at which height, is still reached only by the ignored recipe test (a CI
+    gap, recorded under S16).
+15. **Builder, validator and padding mutants survived** (mutation, five findings):
+    `gap_hi` chunking `gap + 1`, a window taking the next window's first word, a lookup
+    named after a scratch slot, `S` past the layout, and the padding clause sampling row 0
+    alone. *Done*: one test each, and `M` past the layout too — the builders' and the
+    padding clause's in `2e8eada`, the lookup rules' in `9ae0256`.
 16. **Four `constraints::memory` functions were public with no outside caller**, and
-    `gap_lookups` took a parameter with one value (rules). *Done:* private, parameter
-    dropped.
-17. **`MEMORY_BOUNDARY`'s range refusal was stated in the present tense** (rules), and
-    `CLAUDE.md`, `GLOSSARY` and the `checker laws` line overstated S14. *Done:* reworded
-    and assigned to S16.
+    `gap_lookups` took a parameter with one value (rules-03). *Done* (`ed18252`): private,
+    parameter dropped.
+17. **`MEMORY_BOUNDARY`'s range refusal was stated in the present tense** (rules-04,
+    rules-05, rules-06), and `CLAUDE.md`, `GLOSSARY` and the `checker laws` line overstated
+    S14; `memory.md` had a typo. *Done* (`82d5120`, `8b1993f`): reworded and assigned to
+    S16.
+
+**Deferred and recorded**, each confirmed and each written into "Deferred work, by stage"
+under the stage named:
+
+| Finding | What is owed | Stage |
+| --- | --- | --- |
+| math-5 | lookup selectors boolean, or LogUp disagrees with `violated_lookups` | S15 |
+| attacker-8 | the self-balancing and same-timestamp forgeries only `violated_lookups` catches today | S15 (discharge), S16 (address decomposition) |
+| attacker-3 | every written value range-checked below `2^32` | S16 |
+| attacker-5, -6, -7 | the truncation, run-past-halt and exit-status tamper targets | S16 |
+| attacker-9 | the boundary decode refusing `t ≥ 2^38` | S16 |
+| compliance-6 | `check_memory` at every artifact load, and a per-family obligation count | S16 |
+| rules-07 | the master's *Trace heights* bullet | owner (open question 1) |
 
 **Mutants re-run against the fixes**, each applied alone in a scratch copy with its own
 target directory, run against its suite, and reverted:
@@ -1072,6 +1154,26 @@ consolidated design (the review's conflict list, G19). The prompt is not edited.
 - Until then a future read, an out-of-window access and a self-balancing query (a read
   tuple equal to its own write tuple) are rejected **only by the native evaluator**,
   `checker::violated_lookups`. Coverage and the RAM-window bound both rest on it.
+- **Boolean selectors** (review math-5). `docs/spec/memory.md` §7 says an obligation holds
+  where its selector is 0 or its expression is in range, admits any `M`, `W` or `S` column
+  as the selector, and requires no booleanity; `violated_lookups` treats any nonzero
+  selector as active. LogUp checks `Σ_i s_i/(X − e_i) = Σ_t mult_t/(X − t)`, which equals
+  that rule only for boolean selectors: a row with `s = −1` and an out-of-range `e` cancels
+  a row with `s = 1` and the same `e`, so a gap of −1 that `violated_lookups` reports would
+  pass. Either `validate` or `check_memory` refuses a lookup whose selector has no
+  booleanity gate in gate list 0, or §7 states the premise and S15's LogUp enforces it. A
+  gap obligation's selector must also be its own query's leaf mask: a `W` selector, or any
+  selector not tied to the mask, switches the obligation off even when it is boolean. At
+  S14 every selector is a booleanity-gated `M` mask of its own query, so nothing is exposed
+  now; §7 does not yet say this.
+- **Discharge targets** (review attacker-8), each accepted today by every S14 check but
+  `violated_lookups`:
+  - a self-balancing `ram` query (`read_ts = 4c + 3`, read = write = 7) at `0x7ffffff9`,
+    `0x80000000`, `2^32`, `p − 4` and `0x8`, named `gap_lo_ram` (or `gap_hi_ram` when
+    `gap_hi = −1`);
+  - an `arg1` query at `rs2`'s register in the same row, reading `rs2`'s write at the
+    timestamp it writes itself (`4c + 2`), named `gap_lo_arg1`;
+  - control C7's two forgeries.
 
 **S16.**
 - **The global transcript** in the amended order of `docs/spec/memory.md` §6.1:
@@ -1080,14 +1182,34 @@ consolidated design (the review's conflict list, G19). The prompt is not edited.
   - `MEMORY_BOUNDARY` immediately before the squeeze;
   - a new challenge-kind tag for drawing `γ_M, α_addr, α_ts, α_val`;
   - the init groups' domain tags.
-- **Decoding the boundary scalars** with their ranges, `t < 2^38` and `v < 2^32`.
+- **Decoding the boundary scalars** with their ranges, `t < 2^38` and `v < 2^32` (review
+  rules-04, attacker-9). At S14 `boundary_factors` takes any `u64` timestamp, `2^40` and
+  `u64::MAX` included, and simply fails to reconcile with honest roots. No attack was found
+  that needs `t ≥ 2^38`, but C6 shows why the decode must refuse out-of-range values.
 - **The zero-root refusal** in the real verifier.
-- **The `VerifyingKey` load**:
-  - `CircuitArtifact::validate`, once;
+- **The `VerifyingKey` and `ProvingKey` loads** (review compliance-6):
+  - `CircuitArtifact::validate`, once, and `constraints::memory::check_memory` beside it on
+    every memory artifact. Today both of `check_memory` and the obligation count run only
+    inside the private assembler behind the three constructors, so an artifact read with
+    `from_bytes` — or an execution family joining the frame to its instruction constraints
+    outside that assembler — gets neither, and one whose leaf is fed from a `W` column or
+    whose range obligation was dropped would load and verify;
   - recompute identity with `identity_from_commitments` from the carried entry pc and
     commitments, and refuse a mismatch with the trusted identity;
   - check the two init families' equal heights;
   - open `S[0]` against `cm(image column)`.
+- **A per-family obligation count** (review compliance-6): every family builder that adds
+  obligations (32-bit halfwords, address low bits) asserts its expected count, derived from
+  the reads and 32-bit ranges it declares, against `artifact.lookups.len()`, as the frame's
+  `lookups.len() == 2·reads` does.
+- **Every written value below `2^32`** (review attacker-3): `rd`'s selected value, a store's
+  or an atomic's RAM write, and `next_pc`, each range-checked under §7's convention. Read
+  and teardown values are then `u32` through the multiset, because every init value (the
+  `U32` image column, literal 0) and every boundary `v_r` is. The memory argument itself
+  needs no value range — the tuple compression is injective over field elements — but
+  instruction semantics and the digest-register comparison do. Tamper targets: an `rd`
+  write storing `2^32 + 5` that the register's next query reads, and the last store to a
+  stack word writing `2^32 + 5` into window 8191's teardown.
 - **Every mask constrained** (`docs/spec/memory.md` §2.1; review finding 1):
   - `m_pc` is the row's liveness, and the decoded-table lookup's selector is `m_pc`
     itself, not a separate witness.
@@ -1108,7 +1230,8 @@ consolidated design (the review's conflict list, G19). The prompt is not edited.
 - **Family constraints.**
   - Byte-level address decomposition and alignment: `low ∈ [0, 3]` range-checked,
     `low = 0` for `lw`/`sw`, `low ∈ {0, 2}` for `lh`/`sh`, a boolean wrap on `rs1 + imm`,
-    `ADDR = rs1 + imm − 2^32·wrap − low`.
+    `ADDR = rs1 + imm − 2^32·wrap − low`. Its tamper targets (review attacker-8) are the
+    self-balancing `ram` queries at the misaligned `0x7ffffff9` and at `2^32`.
   - Literal AS and Δ over boolean masks in every family.
   - The x0 gadget in every family that writes rd.
 - **`HALT_PC`'s constraints** (`docs/spec/memory.md` §5):
@@ -1117,7 +1240,19 @@ consolidated design (the review's conflict list, G19). The prompt is not edited.
   - `next_pc = is_exit·HALT_PC + is_transfer·pc + (1 − is_exit − is_transfer)·table_next_pc`;
   - the decoded-table lookup on every live row, transfer rows included;
   - the exit row's `a0` write equal to its read;
-  - a tamper test for each.
+  - a tamper test for each. The review's probes on fib, each accepted by every S14 check,
+    are the targets (attacker-5, -6, -7):
+    - **truncation**: fib cut at cycle 1,058 of 2,117, its last row's `next_pc` set to
+      `HALT_PC`, the finals and windows taken from the prefix;
+    - **running past halt**: after the exit row, a live row at `pc = HALT_PC` reading pc 1
+      at `4n`, writing it at `4(n + 1)` and rewriting `x10 := 42`;
+    - **resuming from `HALT_PC`**: row 100 writing `next_pc = HALT_PC` and row 101 reading
+      pc 1;
+    - **exit status**: the exit row's `a0` write changed from the status it read (0) to 42,
+      the finals claiming `v_10 = 42`.
+
+    The table lookup refuses the middle two, because pc 1 is odd and no table row claims
+    it. It does not reach a row whose pc mask is 0; that is the mask rule above.
 - **Ecall RAM confinement** in the shape the owner picks (open question 10), and the
   `-EBADF`/`-ENOSYS` rows.
 - **Optionally**, a literal pc read timestamp `4(c − 1)`, which saves one gap column and
@@ -1195,3 +1330,12 @@ From `docs/spec/memory.md` §9 and the design review.
   with LogUp, and appends its decoder and generic lookup channels after them.
 - **Before touching the memory argument, read `docs/spec/memory.md` §2.1 and §9.** They say
   what S14 does not enforce and which stage owes it.
+- **The window geometry assumes `h ≤ 2^29`.** `HEIGHT_MENU` tops out at `2^22` today. A
+  menu entry of `2^30` would give `N = 2^29/h = 0` and put window 0's live rows at
+  `[2^31, 2^32)`, so the menu must not grow past `2^29` without revisiting
+  `docs/spec/memory.md` §3.1. The derived window constant's `u64` product `(4 << n)·w`
+  stays below `2^64` for `n ≤ 30` and any `u32` window.
+- **S14's test harness draws the memory challenges from a transcript that binds nothing.**
+  So solving after the challenges, as C6 does, is possible there by construction. Every
+  forgery the review found accepted is a balanced multiset, independent of the challenges;
+  the binding comes with S16's global transcript.

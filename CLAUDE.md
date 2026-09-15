@@ -450,4 +450,4 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 | S11 — Decoder + program identity | done | `docs/handoff/S11-decoder.md` |
 | S12 — Emulator + trace generation | done | `docs/handoff/S12-emulator.md` |
 | S13 — GKR engine, circuit artifact, checker suite | done | `docs/handoff/S13-gkr.md` |
-| S14 — Memory multiset argument, timestamps, init/teardown | done | `docs/handoff/S14-multiset.md` |
+| S14 — Memory multiset argument, RAM windows, register/PC boundary | done | `docs/handoff/S14-multiset.md` |
