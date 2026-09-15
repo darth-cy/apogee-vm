@@ -1,7 +1,8 @@
 //! The lookup element, `docs/spec/memory.md` §7. `check_laws` holds every
 //! lookup to the rules of `docs/spec/gkr.md` §4.2 with code of its own, and
-//! agrees with `CircuitArtifact::validate` on every mutant below: 4 lawful and
-//! 20 breaking one rule each, on both toys. `violated_lookups`, the native
+//! agrees with `CircuitArtifact::validate` on every mutant below: 5 lawful — an
+//! `M`, a `W` and an `S` selector among them — and 20 breaking one rule each, on
+//! both toys. `violated_lookups`, the native
 //! evaluator, reports exactly the lookups a row breaks, and an evaluator
 //! reporting nothing, or everything, fails the same cases.
 
@@ -85,6 +86,7 @@ fn mutants() -> Vec<Mutant> {
                 })
             },
         ),
+        m("an M selector", true, |a| push(a, |l| l.selector = M0)),
         m("an expression reading a listed V[ram_live]", true, |a| {
             a.virtuals
                 .push((VirtualKind::RamLive, "ram_live".to_string()));
@@ -210,7 +212,7 @@ fn check_laws_agrees_with_validate_on_every_lookup_mutant() {
             runs += 1;
         }
     }
-    assert_eq!(runs, 2 * 24, "mutant runs");
+    assert_eq!(runs, 2 * 25, "mutant runs");
 }
 
 // ---------------------------------------------------------------------------

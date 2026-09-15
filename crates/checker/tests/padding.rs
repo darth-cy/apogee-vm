@@ -7,7 +7,9 @@ mod common;
 
 use checker::{check_laws, check_padding, check_padding_identity};
 use common::*;
-use constraints::{CircuitArtifact, Coeff, GateDef};
+use constraints::{
+    CircuitArtifact, Coeff, GateDef, LayerSpec, PolyAddress, ProducingEntry, Relation, ScratchSlot,
+};
 use field::Fr;
 
 #[test]
@@ -128,6 +130,67 @@ fn a_padding_row_whose_leaves_are_one_passes_and_each_moved_leaf_fails() {
             let e = check_padding_identity(&b).unwrap_err();
             assert!(e.contains(named), "{label}, cell {cell} = {value}: {e}");
         }
+    }
+}
+
+/// That edit with a second halving list stacked on the first — list 3 halves
+/// `L{3}[0]` and `L{3}[1]` again into `L{4}[0]` and `L{4}[1]`, the new outputs —
+/// keeps the laws and still passes, and moving a leaf off 1 still fails naming
+/// list 2's operand. The clause is about the first halving list alone: every
+/// later one reads a `TreeProduct`'s output, which no row-local relation defines.
+///
+/// Kills a clause reading the last halving list instead of the first, and one
+/// reading every halving list: both refuse the lawful two-level tree.
+#[test]
+fn a_second_halving_list_is_not_read() {
+    for (label, a) in toys() {
+        let mut a = identity_padded(a);
+        let (abm_product, fingerprint3_product) = (inner(3, 0), inner(3, 1));
+        let tree = |input| GateDef::TreeProduct { input };
+        let first = a.relations.len() as u32;
+        a.relations.push(Relation {
+            name: "define_abm_product_2".into(),
+            output: Some(7),
+            gate: tree(PolyAddress::Scratch(5)),
+        });
+        a.relations.push(Relation {
+            name: "define_fingerprint3_product_2".into(),
+            output: Some(8),
+            gate: tree(PolyAddress::Scratch(6)),
+        });
+        a.layers.push(LayerSpec {
+            halving: true,
+            num_vars: 2,
+            width: 2,
+            cached: vec![],
+            producing: vec![
+                ProducingEntry {
+                    relation: first,
+                    output: inner(4, 0),
+                    gate: tree(abm_product),
+                },
+                ProducingEntry {
+                    relation: first + 1,
+                    output: inner(4, 1),
+                    gate: tree(fingerprint3_product),
+                },
+            ],
+            enforcing: vec![],
+        });
+        for (name, offset) in [("abm_product_2", 0), ("fingerprint3_product_2", 1)] {
+            a.scratch.push(ScratchSlot {
+                name: name.into(),
+                address: inner(4, offset),
+            });
+        }
+        a.outputs = vec![inner(4, 1), inner(4, 0)];
+        assert_eq!(check_laws(&a), Ok(()), "{label}");
+        assert_eq!(check_padding_identity(&a), Ok(()), "{label}");
+
+        a.padding.row[B] = Fr::from_u64(2);
+        let e = check_padding_identity(&a).unwrap_err();
+        let named = "halving gate list 2 reads L{2}[0] (abm), which is 2 on padding.row";
+        assert!(e.contains(named), "{label}: {e}");
     }
 }
 

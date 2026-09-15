@@ -1281,7 +1281,7 @@ fn toy_with_lookup(edit: fn(&mut LookupExpr)) -> CircuitArtifact {
 
 /// The lookup rules of `docs/spec/gkr.md` §4.2 (`docs/spec/memory.md` §7). A
 /// lookup over a committed column and a listed virtual table, under a committed
-/// selector, validates, and so do two. Each rule broken alone is refused naming
+/// selector — `S`, `M` or `W` — validates, and so do two. Each rule broken alone is refused naming
 /// the lookup: a channel past `constants::lookup_channel`; a tuple of no
 /// expression or of two; a `Product` expression; a challenge coefficient, on a
 /// term and as the constant; an operand that is `L{1}[0]`, `scratch[0]`,
@@ -1292,6 +1292,7 @@ fn toy_with_lookup(edit: fn(&mut LookupExpr)) -> CircuitArtifact {
 fn a_lookup_is_refused_unless_it_keeps_the_lookup_rules() {
     assert!(toy().lookups.is_empty());
     assert_eq!(toy_with_lookup(|_| {}).validate(), Ok(()));
+    assert_eq!(toy_with_lookup(|l| l.selector = M).validate(), Ok(()));
     let mut two = toy_with_lookup(|_| {});
     let mut second = two.lookups[0].clone();
     second.name = "range_2".into();
