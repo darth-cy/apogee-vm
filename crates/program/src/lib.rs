@@ -864,8 +864,12 @@ pub fn absorb_statement_descriptor(
 /// every id in `[1, 2^29 / h - 1]`. `ZERO_WINDOWS` shard `i` is window
 /// `windows[i]`, so together they give every RAM word exactly one init row.
 ///
-/// `shard_counts` holds one count per family of `config`, as the statement
-/// descriptor does; anything else is a caller error and panics.
+/// `config` is one `decode_program` derived or `VmConfig::from_bytes`
+/// decoded — families strictly ascending, heights on the menu — and nothing
+/// here checks that again: a hand-built config listing a family twice is
+/// outside what these rules decide. `shard_counts` holds one count per family
+/// of `config`, as the statement descriptor does; anything else is a caller
+/// error and panics.
 pub fn check_memory_windows(
     config: &VmConfig,
     shard_counts: &[u32],

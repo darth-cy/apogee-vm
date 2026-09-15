@@ -201,7 +201,9 @@ carrying `ZERO_WINDOWS`' window ids `[w_1 … w_k]`, empty when there are none.
 challenges (`docs/spec/memory.md` §3.5): both init families present at one height `h`;
 `INIT_TEARDOWN`'s shard count 1; one window id per `ZERO_WINDOWS` shard; the ids strictly
 increasing; every id in `[1, 2^29 / h − 1]`. `ZERO_WINDOWS` shard `i` is window `w_i`. A
-breach is `WindowRule`, its `rule` naming which.
+breach is `WindowRule`, its `rule` naming which. It takes the `VmConfig` as
+`decode_program` derives it or `VmConfig::from_bytes` decodes it — families strictly
+ascending — and does not check that shape again.
 
 ## Program identity
 **The recipe, frozen** (`docs/spec/memory.md` §6.2). A fresh S02 typed transcript:
@@ -256,7 +258,7 @@ useless. The verifier never sees an ELF.
 | `tests/partition.rs` | Acceptance 3 over every guest (claimed pcs are the instruction slots, each once; both init families in every config), 4 (`guests/atomics` with atomics detached fails at its first atomic's pc), 5 (fib has no atomics; `atomics` has them; `mul_free.elf` has no mul/div), and an unknown opcode's named failure |
 | `tests/tables.rs` | Acceptance 6 (every exported column of every table scanned: non-live rows are all `MINUS_ONE`, live rows equal to the stored values and neither padding nor zero), code above a shorter family's table, the 59 row kinds pinned numerically, `narrowest` at each width boundary, 7 (`next_pc` against the loader's halfword map), exact heights, `TableTooShort` at the boundary, `ProgramTooLarge` at the ceiling with segments without file bytes not counted, `ImageOutsideWindow` at `4h − 1` / `4h`, the image column of every guest against `initial_word` and the segment bytes, menu and version refusals, the frozen field masks, one-hot kinds naming exactly 59 mnemonics over the ISA corpus, narrowest storage, determinism, fixture pins |
 | `tests/config.rs` | The `VmConfig` wire form byte for byte, its refusals, a config without either init family or with the two at different heights refused by derivation and by `from_bytes`, a nine-family round trip, the identity wire form, the statement descriptor as three adjacent messages, and every `check_memory_windows` rule at its boundary |
-| `tests/identity.rs` | **All but one `#[ignore]`d — they need `assets/ptau/ppot_0080_24.ptau`.** fib at the defaults twice in-process and against the pin; the recipe rebuilt message by message; acceptance 9's moves plus a `.rodata` byte, a `.data` byte and the entry pc; a segment without file bytes resized does not move it; fib rebuilt from source twice. In CI: `identity_from_commitments` moved by the entry pc and by each commitment |
+| `tests/identity.rs` | **All but two `#[ignore]`d — they need `assets/ptau/ppot_0080_24.ptau`.** fib at the defaults twice in-process and against the pin; the recipe rebuilt message by message; acceptance 9's moves plus a `.rodata` byte, a `.data` byte and the entry pc; a segment without file bytes resized does not move it; fib rebuilt from source twice. In CI: `identity_from_commitments` rebuilt message by message over a distinct point per family, and moved by the entry pc and by each commitment. `setup_commitments` — which column `INIT_TEARDOWN` commits, at which height — is reached only by the ignored recipe test |
 
 ```
 cargo test --release -p program --test identity -- --ignored   # locally, with the ceremony

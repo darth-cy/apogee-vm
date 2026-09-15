@@ -1,11 +1,13 @@
 //! Program identity: determinism, the recipe, and sensitivity. Acceptance 8
 //! and 9, and the recipe of `docs/spec/memory.md` §6.2.
 //!
-//! **Every test here but the last is `#[ignore]`d.** Identity is Mercury
+//! **Every test here but the last two is `#[ignore]`d.** Identity is Mercury
 //! commitments over the public SRS, which is PSE's 19 GB ceremony file,
 //! gitignored and absent from CI; asked for by name without it, each test
-//! panics saying so. The last is the digest over given commitments, which
-//! needs no SRS.
+//! panics saying so. The last two are the digest over given commitments, which
+//! needs no SRS: its recipe message by message, and its sensitivity. What CI
+//! does not reach is `setup_commitments` — which column `INIT_TEARDOWN`
+//! commits, at which height — held only by the ignored recipe test.
 //!
 //!     cargo test --release -p program --test identity -- --ignored
 //!
@@ -15,7 +17,7 @@
 mod common;
 
 use constants::{family, transcript_tags as tags};
-use curve::G1Affine;
+use curve::{G1Affine, G1Projective};
 use field::Fr;
 use loader::{load_elf, ProgramImage, Slot};
 use pcs::{append_g1_list, commit};
@@ -267,6 +269,43 @@ fn a_rebuilt_guest_has_the_same_identity() {
              absolute paths -- so only the two rebuilds are compared"
         );
     }
+}
+
+/// `identity_from_commitments` is §6.2's steps 1–5 over given lists, rebuilt
+/// here message by message: `PROGRAM_IDENTITY`, `VM_CONFIG`, `PROGRAM_ENTRY`,
+/// then one `COMMITMENT` list per family — a distinct point per family, and
+/// `ZERO_WINDOWS`' list empty — then one raw sample. Needs no SRS, so it runs in
+/// CI. Fails if a message moved, or a family's list were absorbed out of order.
+#[test]
+fn the_digest_over_commitments_is_the_documented_recipe() {
+    let image = common::guest("fib");
+    let (_, config) = decode_program(&image, &common::smallest()).unwrap();
+    let lists: Vec<Vec<G1Affine>> = config
+        .families
+        .iter()
+        .enumerate()
+        .map(|(i, (f, _))| match *f {
+            family::ZERO_WINDOWS => Vec::new(),
+            _ => vec![G1Projective::GENERATOR
+                .mul(&Fr::from_u64(i as u64 + 2))
+                .to_affine()],
+        })
+        .collect();
+    let fr = |x: u32| Fr::from_u64(x as u64);
+    let mut tr = Transcript::new();
+    tr.append_scalar(tags::PROGRAM_IDENTITY, fr(family::CODE_VERSION));
+    let mut vm: Vec<Fr> = config.families.iter().map(|(f, _)| fr(*f)).collect();
+    vm.extend(config.families.iter().map(|(_, h)| fr(*h)));
+    vm.push(fr(config.bytecode_size_words));
+    tr.append_scalars(tags::VM_CONFIG, &vm);
+    tr.append_scalar(tags::PROGRAM_ENTRY, fr(image.entry));
+    for points in &lists {
+        append_g1_list(&mut tr, tags::COMMITMENT, points);
+    }
+    assert_eq!(
+        identity_from_commitments(family::CODE_VERSION, &config, image.entry, &lists),
+        ProgramIdentity(tr.sample())
+    );
 }
 
 /// The digest over given commitments needs no SRS, so it runs in CI: over

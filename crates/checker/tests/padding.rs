@@ -133,6 +133,41 @@ fn a_padding_row_whose_leaves_are_one_passes_and_each_moved_leaf_fails() {
     }
 }
 
+/// That edit with `fingerprint`'s `γ` replaced by the literal −1 and
+/// `fingerprint3 = fingerprint + 2`, gates and relations alike, and padded with
+/// `c = 1` too: `fingerprint3 = (−1 + row)·1 + 2 = row + 1`, which is 1 at row
+/// 0 whatever the challenge and at no other row. The laws hold, and the clause
+/// refuses it naming `fingerprint3` at a row other than 0.
+///
+/// Kills a clause that samples its challenges but reads row 0 alone.
+#[test]
+fn a_leaf_that_is_1_at_row_0_alone_fails() {
+    for (label, a) in toys() {
+        let mut a = identity_padded(a);
+        let minus_one = Coeff::Literal(-Fr::ONE);
+        let r = relation(&a, "define_fingerprint");
+        let mut changed = set_coefficient(&mut a.relations[r].gate, W0, minus_one);
+        let list = &mut a.layers[0];
+        let cached = list.cached.iter_mut().map(|e| &mut e.gate);
+        for gate in cached.chain(list.producing.iter_mut().map(|e| &mut e.gate)) {
+            changed += set_coefficient(gate, W0, minus_one);
+        }
+        assert_eq!(
+            changed, 2,
+            "{label}: the relation and the gate that reads γ·a"
+        );
+        let r = relation(&a, "define_fingerprint3");
+        *linear(&mut a.relations[r].gate).1 = lit(2);
+        *linear(&mut a.layers[1].producing[1].gate).1 = lit(2);
+        a.padding.row[C] = Fr::ONE;
+        assert_eq!(check_laws(&a), Ok(()), "{label}");
+
+        let e = check_padding_identity(&a).unwrap_err();
+        assert!(e.contains("(fingerprint3), which is "), "{label}: {e}");
+        assert!(!e.contains("at row 0,"), "{label}: {e}");
+    }
+}
+
 /// That edit with a second halving list stacked on the first — list 3 halves
 /// `L{3}[0]` and `L{3}[1]` again into `L{4}[0]` and `L{4}[1]`, the new outputs —
 /// keeps the laws and still passes, and moving a leaf off 1 still fails naming

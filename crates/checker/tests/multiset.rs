@@ -37,13 +37,13 @@ use constants::{address_space, family};
 use constraints::memory::{
     check_memory, frame, frame_artifact, gap_hi, image_window_artifact, zero_window_artifact,
     CYCLE, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA,
-    FRAME_NAMES, FRAME_QUERIES, FRAME_SPACE, RD,
+    FRAME_NAMES, FRAME_QUERIES, FRAME_SPACE, RD, RD_INV, RD_IS_ZERO, RD_SELECTED,
 };
 use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress, VirtualKind};
 use field::Fr;
 use gkr::{
-    boundary_factors, reconciles, self_check, BaseLayer, BoundaryFinals, ExternalChallenges,
-    SelfCheckError,
+    boundary_factors, reconciles, self_check, window_challenges, BaseLayer, BoundaryFinals,
+    ExternalChallenges, SelfCheckError,
 };
 use loader::ProgramImage;
 use poly::{MultilinearPoly, PolyBacking};
@@ -55,6 +55,7 @@ use trace::{
 /// Frame queries by name, `docs/spec/memory.md` §2.1.
 const PC: usize = 0;
 const RS1: usize = 1;
+const RS2: usize = 2;
 const LOAD: usize = 5;
 const RAM: usize = 6;
 
@@ -175,6 +176,45 @@ fn locate(shard: &Shard, e: &MemoryEvent) -> (usize, usize) {
 fn first_live(f: &Fib, q: usize) -> usize {
     let live = |y: &usize| cell(&f.shards[0], frame(q, FIELD_MASK), *y) == Fr::ONE;
     (0..f.t.cycles.len()).find(live).expect("fib has the query")
+}
+
+/// The first two queries of one register, taken in register order, that are
+/// both `rd` writes — no query of the register between them — and that `keep`
+/// accepts.
+fn rd_writes_in_a_row(f: &Fib, keep: impl Fn(&MemoryEvent) -> bool) -> (MemoryEvent, MemoryEvent) {
+    let rd = |e: &MemoryEvent| e.delta() == FRAME_DELTA[RD];
+    for r in 0..32 {
+        let on_r: Vec<MemoryEvent> = (f.t.log.events().iter().copied())
+            .filter(|e| e.space == AddressSpace::Reg && e.addr == r)
+            .collect();
+        let pair = on_r
+            .windows(2)
+            .find(|p| rd(&p[0]) && rd(&p[1]) && keep(&p[0]));
+        if let Some(p) = pair {
+            return (p[0], p[1]);
+        }
+    }
+    panic!("fib has no such pair of rd writes");
+}
+
+/// `forged` keeps every obligation and reconciles, and its frame breaks exactly
+/// `relation` on `row`: `gkr::self_check` names it, and it is the one relation
+/// the witness-row evaluator reports there.
+fn balanced_and_refused_by(f: &Fib, forged: &[Shard], row: usize, relation: &str) {
+    let gate = SelfCheckError {
+        layer: 0,
+        row,
+        relation: relation.to_string(),
+    };
+    let expected = Surface {
+        gate: Err(gate),
+        lookups: Vec::new(),
+        reconciles: true,
+    };
+    assert_eq!(surface(f, forged, &f.finals), expected, "{relation}");
+    let (a, challenges) = (&forged[0].artifact, &forged[0].challenges);
+    let w = witness_row(a, &forwarded_shard(&forged[0]), row);
+    assert_eq!(violated_relations(a, &w, challenges), [relation]);
 }
 
 /// The shard counts of `t`'s statement with `init` `INIT_TEARDOWN` and `zero`
@@ -622,38 +662,88 @@ fn every_read_of_x0_returns_0() {
 #[test]
 fn a_write_of_5_to_x0_balances_and_rd_write_masked_refuses_it() {
     let f = fib();
-    let x0: Vec<MemoryEvent> =
-        f.t.log
-            .events()
-            .iter()
-            .filter(|e| e.space == AddressSpace::Reg && e.addr == 0)
-            .copied()
-            .collect();
-    let rd = |e: &MemoryEvent| e.delta() == FRAME_DELTA[RD];
-    let pair = x0.windows(2).find(|p| rd(&p[0]) && rd(&p[1]));
-    let pair = pair.expect("two rd writes to x0 in a row");
-    let (r1, k1) = locate(&f.shards[0], &pair[0]);
-    let (r2, k2) = locate(&f.shards[0], &pair[1]);
+    let (w1, w2) = rd_writes_in_a_row(&f, |e| e.addr == 0);
+    let (r1, k1) = locate(&f.shards[0], &w1);
+    let (r2, k2) = locate(&f.shards[0], &w2);
     assert_eq!((k1, k2), (RD, RD));
     let cells = [
         (frame(RD, FIELD_WRITE_VALUE), r1, int(5)),
         (frame(RD, FIELD_READ_VALUE), r2, int(5)),
     ];
     let forged = tampered(&f.shards, 0, &cells);
-    let gate = SelfCheckError {
-        layer: 0,
-        row: r1,
-        relation: "rd_write_masked".to_string(),
-    };
-    let expected = Surface {
-        gate: Err(gate),
-        lookups: Vec::new(),
-        reconciles: true,
-    };
-    assert_eq!(surface(&f, &forged, &f.finals), expected);
-    let (a, challenges) = (&forged[0].artifact, &forged[0].challenges);
-    let w = witness_row(a, &forwarded_shard(&forged[0]), r1);
-    assert_eq!(violated_relations(a, &w, challenges), ["rd_write_masked"]);
+    balanced_and_refused_by(&f, &forged, r1, "rd_write_masked");
+}
+
+/// S14 acceptance 8, the x0 gadget's other two gates, each against the forgery
+/// only it refuses, and each forgery balanced, so reconciliation cannot stand
+/// in for the gate:
+///
+/// - `rd_is_zero_at_nonzero`: fib's first two `rd` writes in a row to one
+///   nonzero register, R1 writing a nonzero value. R1 claims `rd_is_zero = 1`
+///   with `rd_inv = 0` and writes 0, and R2 reads that 0 — a register write
+///   zeroed. The inverse gate holds (`addr·0 + 1 − 1`), and so does
+///   `rd_write_masked` (`0 − sel + 1·sel`).
+/// - `rd_is_zero_inverse`: the pair of `rd` writes to `x0` above. R1 claims
+///   `rd_is_zero = 0` with `rd_selected = 5` and writes 5, and R2 reads 5 —
+///   `x0` holding 5. `addr·z` is 0 at address 0, and `rd_write_masked` holds,
+///   since `z = 0` selects the 5.
+///
+/// Each keeps every obligation and reconciles, and `gkr::self_check` and the
+/// witness-row evaluator name exactly that gate on R1's row. Fails if either
+/// gate were missing, or read another column under its name:
+/// `rd_is_zero_at_nonzero` over `rd_inv` instead of the address admits the first.
+#[test]
+fn a_zeroed_register_write_and_a_nonzero_x0_write_are_each_refused_by_their_gate() {
+    let f = fib();
+    let (w1, w2) = rd_writes_in_a_row(&f, |e| e.addr != 0 && e.write_value != 0);
+    let (r1, r2) = (locate(&f.shards[0], &w1).0, locate(&f.shards[0], &w2).0);
+    let cells = [
+        (RD_IS_ZERO, r1, Fr::ONE),
+        (RD_INV, r1, Fr::ZERO),
+        (frame(RD, FIELD_WRITE_VALUE), r1, Fr::ZERO),
+        (frame(RD, FIELD_READ_VALUE), r2, Fr::ZERO),
+    ];
+    let forged = tampered(&f.shards, 0, &cells);
+    balanced_and_refused_by(&f, &forged, r1, "rd_is_zero_at_nonzero");
+
+    let (w1, w2) = rd_writes_in_a_row(&f, |e| e.addr == 0);
+    let (r1, r2) = (locate(&f.shards[0], &w1).0, locate(&f.shards[0], &w2).0);
+    let cells = [
+        (RD_IS_ZERO, r1, Fr::ZERO),
+        (RD_SELECTED, r1, int(5)),
+        (frame(RD, FIELD_WRITE_VALUE), r1, int(5)),
+        (frame(RD, FIELD_READ_VALUE), r2, int(5)),
+    ];
+    let forged = tampered(&f.shards, 0, &cells);
+    balanced_and_refused_by(&f, &forged, r1, "rd_is_zero_inverse");
+}
+
+/// `docs/spec/memory.md` §2.4, the read-only queries. On the first live row of
+/// each of `rs1`, `rs2`, `arg1`, `arg2` and `load` in fib's frame, that query's
+/// write value set to its read value plus one — a read that silently changes
+/// the register or word it read. `gkr::self_check` and the witness-row
+/// evaluator name exactly `<q>_writes_back` on that row. All five are tried,
+/// so a gate built over another query's columns under the right name fails
+/// too. Fails if a read-only query could write back a value it did not read.
+#[test]
+fn a_read_only_query_writing_back_another_value_is_refused_by_its_gate() {
+    let f = fib();
+    for (q, name) in FRAME_NAMES.iter().enumerate().take(LOAD + 1).skip(RS1) {
+        let row = first_live(&f, q);
+        let value = cell(&f.shards[0], frame(q, FIELD_READ_VALUE), row) + Fr::ONE;
+        let frame_shard = with_cells(&f.shards[0], &[(frame(q, FIELD_WRITE_VALUE), row, value)]);
+        let (a, challenges) = (&frame_shard.artifact, &frame_shard.challenges);
+        let values = forwarded_shard(&frame_shard);
+        let relation = format!("{name}_writes_back");
+        let gate = SelfCheckError {
+            layer: 0,
+            row,
+            relation: relation.clone(),
+        };
+        assert_eq!(self_check(a, &values, challenges), Err(gate));
+        let w = witness_row(a, &values, row);
+        assert_eq!(violated_relations(a, &w, challenges), [relation]);
+    }
 }
 
 /// S14 acceptance 10, padding. fib's frame at the menu height 2^16 — 2,117 live
@@ -795,15 +885,19 @@ fn unmasked_image_window() -> CircuitArtifact {
     a
 }
 
-/// Control C1, the head mask. On fib's first row with no `ram` query, a forged
-/// one at word `0x4` — below `RAM_ORIGIN`, window 0's row 1 — reading `(0, 0)`
-/// and writing 7, with window 0's teardown row 1 set to that write: every gate
-/// and obligation holds, and the roots do not reconcile, because `V[ram_live]`
-/// makes row 1's leaves 1 and leaves no init tuple for the read to consume. The
-/// same forgery against the unmasked window 0 reconciles; that variant with
-/// fib's honest trace reconciles too, so the mask is the only difference.
+/// Control C1, the head mask and `id ≥ 1`, the two rules that keep an access
+/// below `RAM_ORIGIN` from balancing (`docs/spec/memory.md` §9). On fib's first
+/// row with no `ram` query, a forged one at word `0x4` — below `RAM_ORIGIN`,
+/// window 0's row 1 — reading `(0, 0)` and writing 7, with window 0's teardown
+/// row 1 set to that write: every gate and obligation holds, and the roots do
+/// not reconcile, because `V[ram_live]` makes row 1's leaves 1 and leaves no
+/// init tuple for the read to consume. The same forgery against the unmasked
+/// window 0 reconciles; that variant with fib's honest trace reconciles too, so
+/// the mask is the only difference. And with window 0 honest but a
+/// `ZERO_WINDOWS` shard listed at id 0, which has no mask, it reconciles as well.
 ///
-/// Fails if `V[ram_live]` did not remove window 0's rows below `RAM_ORIGIN`.
+/// Fails if `V[ram_live]` did not remove window 0's rows below `RAM_ORIGIN`, or
+/// if a zero window at id 0 were not a real attack and its rule not load-bearing.
 #[test]
 fn a_query_below_ram_origin_balances_only_without_the_head_mask() {
     let f = fib();
@@ -845,6 +939,28 @@ fn a_query_below_ram_origin_balances_only_without_the_head_mask() {
     };
     assert_eq!(surface(&f, &swap(&f.shards), &f.finals), honest());
     assert_eq!(surface(&f, &swap(&forged), &f.finals), honest());
+
+    // The id bound's other half: a ZERO_WINDOWS shard listed at window 0 has no
+    // mask, so its row 1 is an init row for 0x4. With it holding the forged
+    // write as teardown, zeros elsewhere, and window 0 honest, the forgery
+    // reconciles too; `check_memory_windows` refuses id 0 (C2).
+    let vars = HEIGHT.trailing_zeros();
+    let (mut ts_column, mut value_column) = (
+        vec![Fr::ZERO; HEIGHT as usize],
+        vec![Fr::ZERO; HEIGHT as usize],
+    );
+    (ts_column[1], value_column[1]) = (int(ts), int(7));
+    forged[1] = f.shards[1].clone();
+    forged.push(Shard {
+        label: "zero window 0".to_string(),
+        artifact: zero_window_artifact(vars),
+        base: BaseLayer::new(vec![
+            (PolyAddress::Memory(0), column(ts_column)),
+            (PolyAddress::Memory(1), column(value_column)),
+        ]),
+        challenges: window_challenges(&f.memory, 0, vars),
+    });
+    assert_eq!(surface(&f, &forged, &f.finals), honest());
 }
 
 /// Control C2, and acceptance 7's refusal of a duplicated window: the window
@@ -1065,4 +1181,134 @@ fn a_final_value_solved_after_the_challenges_reconciles_and_is_not_a_u32() {
         v.to_bytes()[4..].iter().any(|b| *b != 0),
         "the solved value is not a u32"
     );
+}
+
+/// Control C7, coverage rests on the gap obligation (`docs/spec/memory.md` §9).
+/// On fib's first row with no `ram` query, a forged one at `0x4000_0000` — word
+/// 0 of window 4096, which fib's statement does not list, so no row initializes
+/// or tears it down — reading its own write: `read_ts = 4·cycle + Δ`, and 5
+/// read and written. Its read tuple is its write tuple, so the two cancel and
+/// the roots reconcile with every gate holding; only the gap obligation names
+/// it, `gap_lo_ram` on that row, its gap being −1. The same on the first row
+/// with no `rs2` query, at register 32, which no boundary tuple covers: only
+/// `gap_lo_rs2`. With `read_ts` one lower neither is self-balancing, and
+/// neither reconciles.
+///
+/// The cryptographic discharge of these obligations is S15's gate; until then
+/// the native evaluator is the only check. Fails if the gap obligation admitted
+/// a read of a query's own write.
+#[test]
+fn a_query_reading_its_own_write_balances_where_no_row_is_and_only_its_gap_catches_it() {
+    let f = fib();
+    for (q, addr, value) in [(RAM, 0x4000_0000, 5), (RS2, 32, 9)] {
+        let empty = |y: &usize| cell(&f.shards[0], frame(q, FIELD_MASK), *y) == Fr::ZERO;
+        let row = (0..f.t.cycles.len()).find(empty).expect("a row without it");
+        assert_eq!(cell(&f.shards[0], gap_hi(q), row), Fr::ZERO);
+        let ts = TS_STEP * (row as u64 + 1) + FRAME_DELTA[q];
+        let forgery = |read_ts: u64| {
+            let cells = [
+                (frame(q, FIELD_MASK), row, Fr::ONE),
+                (frame(q, FIELD_ADDR), row, int(addr)),
+                (frame(q, FIELD_READ_TS), row, int(read_ts)),
+                (frame(q, FIELD_READ_VALUE), row, int(value)),
+                (frame(q, FIELD_WRITE_VALUE), row, int(value)),
+            ];
+            surface(&f, &tampered(&f.shards, 0, &cells), &f.finals)
+        };
+        let name = FRAME_NAMES[q];
+        let expected = Surface {
+            gate: Ok(()),
+            lookups: vec![(row, format!("gap_lo_{name}"))],
+            reconciles: true,
+        };
+        assert_eq!(forgery(ts), expected, "{name}");
+        assert!(!forgery(ts - 1).reconciles, "{name}");
+    }
+}
+
+/// Control C8, what S16's constraints owe the masks (`docs/spec/memory.md`
+/// §2.1, §9) — a documentation test, and S16's tamper targets. Nothing at S14
+/// ties a query's mask to its row's pc mask, or to the instruction the row looks
+/// up, so each of these forgeries over fib keeps every gate and obligation and
+/// reconciles:
+///
+/// 1. **a query on a row with no pc query**: padding row 2,117 at cycle 2,118,
+///    pc mask 0 and `rd` mask 1, reading `x10`'s last write and writing 42, with
+///    `rd_inv = 1/10` and `rd_selected = 42`, and the finals claiming
+///    `x10 = 42` — the exit status rewritten after the exit row;
+/// 2. **its reverse, a live row dropping a query**: fib's first two `rd` writes
+///    in a row to one nonzero register, the first masked to 0 and the second
+///    reading the write before it;
+/// 3. **a query a live row's instruction does not have**: the exit row, which
+///    has no `ram` query, given one over the first stack word's last write,
+///    writing 99, and the stack window's teardown there claiming it — a RAM
+///    word's final value that no instruction wrote. Where a later instruction
+///    reads the word, the same forgery hands it the 99.
+///
+/// S16 makes the pc mask the row's liveness and every other mask
+/// `m_q = m_pc·uses_q`, with `uses_q` from the looked-up row kind; each of the
+/// three must then be refused. Fails if an S14 check refused one.
+#[test]
+fn queries_their_row_does_not_have_reconcile_until_s16_couples_the_masks() {
+    let f = fib();
+    let with_cells_at =
+        |shard: usize, cells: &[(PolyAddress, usize, Fr)]| tampered(&f.shards, shard, cells);
+    let hi = |ts: u64, read_ts: u64| int((ts - read_ts - 1) >> 19);
+
+    let row = f.t.cycles.len();
+    let cycle = row as u64 + 1;
+    let ts = TS_STEP * cycle + FRAME_DELTA[RD];
+    let (t10, v10) = (f.finals.reg_ts[10], f.finals.reg_values[9]);
+    assert_eq!(cell(&f.shards[0], frame(PC, FIELD_MASK), row), Fr::ZERO);
+    let cells = [
+        (CYCLE, row, int(cycle)),
+        (frame(RD, FIELD_MASK), row, Fr::ONE),
+        (frame(RD, FIELD_ADDR), row, int(10)),
+        (frame(RD, FIELD_READ_TS), row, int(t10)),
+        (frame(RD, FIELD_READ_VALUE), row, int(v10 as u64)),
+        (frame(RD, FIELD_WRITE_VALUE), row, int(42)),
+        (gap_hi(RD), row, hi(ts, t10)),
+        (RD_INV, row, int(10).inverse().expect("nonzero")),
+        (RD_SELECTED, row, int(42)),
+    ];
+    let mut finals = f.finals;
+    (finals.reg_ts[10], finals.reg_values[9]) = (ts, 42);
+    assert_eq!(surface(&f, &with_cells_at(0, &cells), &finals), honest());
+
+    let (w1, w2) = rd_writes_in_a_row(&f, |e| e.addr != 0);
+    let (r1, r2) = (locate(&f.shards[0], &w1).0, locate(&f.shards[0], &w2).0);
+    let cells = [
+        (frame(RD, FIELD_MASK), r1, Fr::ZERO),
+        (RD_INV, r1, Fr::ZERO),
+        (frame(RD, FIELD_READ_TS), r2, int(w1.read_ts)),
+        (frame(RD, FIELD_READ_VALUE), r2, int(w1.read_value as u64)),
+        (gap_hi(RD), r2, hi(w2.ts, w1.read_ts)),
+    ];
+    assert_eq!(surface(&f, &with_cells_at(0, &cells), &f.finals), honest());
+
+    let exit = f.t.cycles.len() - 1;
+    assert_eq!(cell(&f.shards[0], frame(PC, FIELD_MASK), exit), Fr::ONE);
+    assert_eq!(cell(&f.shards[0], frame(RAM, FIELD_MASK), exit), Fr::ZERO);
+    let stack = |v: &&trace::FinalValue| {
+        v.space == AddressSpace::Ram && v.addr / (4 * HEIGHT) == STACK_WINDOW
+    };
+    let finals = f.t.log.final_state();
+    let word = finals.iter().find(stack).expect("a stack word");
+    let ts = TS_STEP * (exit as u64 + 1) + FRAME_DELTA[RAM];
+    let cells = [
+        (frame(RAM, FIELD_MASK), exit, Fr::ONE),
+        (frame(RAM, FIELD_ADDR), exit, int(word.addr as u64)),
+        (frame(RAM, FIELD_READ_TS), exit, int(word.ts)),
+        (frame(RAM, FIELD_READ_VALUE), exit, int(word.value as u64)),
+        (frame(RAM, FIELD_WRITE_VALUE), exit, int(99)),
+        (gap_hi(RAM), exit, hi(ts, word.ts)),
+    ];
+    let mut forged = with_cells_at(0, &cells);
+    let y = window_row(word.addr, STACK_WINDOW);
+    let teardown = [
+        (PolyAddress::Memory(0), y, int(ts)),
+        (PolyAddress::Memory(1), y, int(99)),
+    ];
+    forged[2] = with_cells(&f.shards[2], &teardown);
+    assert_eq!(surface(&f, &forged, &f.finals), honest());
 }
