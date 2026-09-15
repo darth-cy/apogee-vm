@@ -97,6 +97,19 @@ fn the_identity_wire_form_is_one_canonical_field_element() {
     assert_eq!(ProgramIdentity::from_bytes(&p), None);
 }
 
+/// The largest config: every family present, which no committed guest derives.
+#[test]
+fn a_config_of_every_family_round_trips() {
+    let all = VmConfig {
+        families: program::FAMILIES
+            .iter()
+            .map(|f| (*f, family::DEFAULT_HEIGHTS[*f as usize]))
+            .collect(),
+        bytecode_size_words: 1 << 20,
+    };
+    assert_eq!(VmConfig::from_bytes(&all.to_bytes()), Some(all));
+}
+
 /// The statement descriptor is three adjacent typed messages: the `VmConfig`
 /// under `VM_CONFIG`, one shard count per family under `SHARD_COUNTS`, and the
 /// RAM window list under `MEMORY_WINDOWS`.

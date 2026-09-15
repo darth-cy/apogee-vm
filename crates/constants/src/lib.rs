@@ -679,14 +679,14 @@ pub mod transcript_tags {
 
     /// Scalars. The static `VmConfig`: the family ids in ascending order, then
     /// their heights in the same order, then `bytecode_size_words`. The first
-    /// half of the statement descriptor, and the second message of the
-    /// program-identity sponge.
+    /// of the statement descriptor's three messages, and the second message of
+    /// the program-identity sponge.
     pub const VM_CONFIG: u64 = 23;
 
     /// Scalars. The per-proof shard count of every family in the `VmConfig`,
-    /// in the same ascending order. The second half of the statement
-    /// descriptor, always absorbed immediately after the [`VM_CONFIG`]
-    /// message it counts shards for.
+    /// in the same ascending order. The second of the statement descriptor's
+    /// three messages, always absorbed immediately after the [`VM_CONFIG`]
+    /// message it counts shards for and before [`MEMORY_WINDOWS`].
     pub const SHARD_COUNTS: u64 = 24;
 
     /// Scalars. A GKR circuit's claimed output tables, output-map order, as

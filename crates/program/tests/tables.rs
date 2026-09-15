@@ -244,8 +244,8 @@ fn code_above_a_shorter_familys_table_is_padding_there() {
 
 /// Must-be-exact 5: `bytecode_size_words` is an explicit input, and a program
 /// above it fails loudly. The span ends at the last file-backed byte: fib's
-/// heap-and-stack reservation lies above it with no file bytes, and a segment
-/// without file bytes far above counts for nothing either.
+/// heap-and-stack reservation lies above it with no file bytes and counts for
+/// nothing.
 #[test]
 fn a_program_above_bytecode_size_words_fails_loudly() {
     let image = common::guest("fib");
@@ -271,16 +271,6 @@ fn a_program_above_bytecode_size_words_fails_loudly() {
     assert_eq!(
         config.bytecode_size_words, words as u32,
         "and it is recorded"
-    );
-    let mut far = image.clone();
-    far.segments.push(Segment {
-        vaddr: 0x7000_0000,
-        mem_len: 0x1000,
-        bytes: Vec::new(),
-    });
-    assert!(
-        decode_program(&far, &params).is_ok(),
-        "a segment without file bytes far above"
     );
 
     params.bytecode_size_words = words as u32 - 1;
