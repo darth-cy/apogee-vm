@@ -165,11 +165,13 @@ address per timestamp and every gap non-negative, that balance pairs each read w
 exactly the last write before it, which is sequential consistency. Teardown is taken
 from the log itself, so everything after an address's last honest query balances by
 construction — its final value changed, a final query moved later or added, whole
-trailing cycles removed. The argument does not take teardown from the log. The
-registers' and the pc's final tuples are computed by the verifier, from boundary
-scalars absorbed before any memory challenge is drawn, with the pc's final value fixed
-to `HALT_PC`, so a trace whose trailing cycles were removed does not end on an exit row
-and does not balance there (`docs/spec/memory.md` §4–§5, which also lists what S16's
-constraints owe the sentinel). A RAM word's teardown is a row of a window family (§3
-there). For a snapshot, `TraceArchive` holds the log to the family rows event for
+trailing cycles removed. The argument is no different for final values: the registers'
+final tuples come from boundary scalars and a RAM word's teardown from a window family's
+columns (`docs/spec/memory.md` §3–§4), both supplied by the prover and absorbed before
+any memory challenge is drawn, so a changed final value or a final query moved later or
+added is caught by the row constraints, not by teardown. What the verifier fixes is two
+final values: `x0`'s, 0, and the pc's, `HALT_PC`. Only an exit row writes `HALT_PC`, so
+a trace whose trailing cycles, exit row included, were removed cannot balance
+(`docs/spec/memory.md` §4–§5, which also lists what S16's constraints owe the
+sentinel). For a snapshot, `TraceArchive` holds the log to the family rows event for
 event, which is where the cycle count lives.

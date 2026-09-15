@@ -16,7 +16,8 @@ here.
   `#![no_std]` with nothing in it but constants.
 - **A second, added at S14:** `tests/memory.rs`, because `RAM_LIVE_BIT` and `HALT_PC` are
   claims about `guest_memory::RAM_ORIGIN`: `RAM_ORIGIN == 4 << RAM_LIVE_BIT`, and
-  `HALT_PC` odd and below it.
+  `HALT_PC` odd and below it; and `lookup_channel::BITS[TIMESTAMP]` is one about
+  `memory::TS_BITS`: two chunks of it are the clock.
 - **`#![no_std]`, forever.** Guest-side code links this crate.
 - Changing any value here is a protocol-version change and must bump
   `PROTOCOL_VERSION`.

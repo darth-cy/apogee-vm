@@ -65,10 +65,11 @@ use consistency::{
     sections, Input, HEADER_LEN, MAX_SCALE, MODE_HEAP_CEILING, MODE_HEAP_UNDER_DEEP_STACK,
     TAG_BAD_INPUT, WORKLOADS,
 };
-use constants::family;
+use constants::{family, memory};
 use emulator::{run, trace_run};
 use loader::{load_elf, ProgramImage};
 use test_support::{to_hex, Rng};
+use trace::AddressSpace;
 
 /// guest-sdk's `EXIT_PANIC`: what its panic handler exits with, and what a
 /// panic on the host is scored as.
@@ -837,7 +838,8 @@ fn every_workload_fault_and_bad_input_is_exercised() {
 }
 
 /// `trace_run` over the guest is the same execution as `run`, and the memory
-/// log it leaves balances. The full run at scale 0 also carries the coverage
+/// log it leaves balances and ends on the halting sentinel — a failed run's
+/// too, and at least one input fails. The full run at scale 0 also carries the coverage
 /// claim at instruction level: every instruction family but init/teardown has
 /// rows, and all eight M-extension instructions execute.
 #[test]
@@ -865,6 +867,7 @@ fn a_traced_run_is_the_same_execution_and_its_memory_balances() {
     {
         inputs.push(fault_input(i, f.code));
     }
+    let mut failed = 0;
     for (k, input) in inputs.iter().enumerate() {
         let (traces, log, _, execution) = trace_run(&guest.image, &io(input), &tables, &config)
             .unwrap_or_else(|e| panic!("input {k}: {e}"));
@@ -872,6 +875,15 @@ fn a_traced_run_is_the_same_execution_and_its_memory_balances() {
         assert_eq!(plain, execution, "input {k}: run and trace_run");
         log.self_check(&guest.image)
             .unwrap_or_else(|e| panic!("input {k}: the memory log does not balance: {e:?}"));
+        // `docs/spec/memory.md` §5: a failed run halts on the sentinel too.
+        let final_pc = log.final_state().pop().expect("a run has a final state");
+        assert_eq!(
+            (final_pc.space, final_pc.value),
+            (AddressSpace::Pc, memory::HALT_PC),
+            "input {k}: exit status {}",
+            execution.exit_code
+        );
+        failed += usize::from(execution.exit_code != 0);
 
         if k == 0 {
             for trace in &traces.families {
@@ -909,6 +921,7 @@ fn a_traced_run_is_the_same_execution_and_its_memory_balances() {
             );
         }
     }
+    assert!(failed > 0, "no traced input exits nonzero");
 }
 
 /// guest-sdk's allocator refuses a block that reaches the stack, in both halves

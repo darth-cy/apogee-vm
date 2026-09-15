@@ -4,13 +4,23 @@
 //! An integration test rather than a unit test, for the reason
 //! `tests/ecall_abi.rs` gives: `crates/constants` holds no code.
 
-use constants::{guest_memory, memory};
+use constants::{guest_memory, lookup_channel, memory};
 
 /// `docs/spec/memory.md` §3.1: window 0's rows below `2^RAM_LIVE_BIT` are
 /// exactly the words below `RAM_ORIGIN`.
 #[test]
 fn ram_origin_is_where_ram_live_begins() {
     assert_eq!(guest_memory::RAM_ORIGIN, 4 << memory::RAM_LIVE_BIT);
+}
+
+/// `docs/spec/memory.md` §2.4: the timestamp gap's two chunks on the
+/// timestamp channel cover the clock exactly.
+#[test]
+fn two_timestamp_chunks_are_the_clock() {
+    assert_eq!(
+        2 * lookup_channel::BITS[lookup_channel::TIMESTAMP as usize],
+        memory::TS_BITS
+    );
 }
 
 /// `docs/spec/memory.md` §5: the halting sentinel is odd, so no instruction's
