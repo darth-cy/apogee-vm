@@ -16,16 +16,21 @@ here.
   `#![no_std]` with nothing in it but constants.
 - **A second, added at S14:** `tests/memory.rs`, because `RAM_LIVE_BIT` and `HALT_PC` are
   claims about `guest_memory::RAM_ORIGIN`: `RAM_ORIGIN == 4 << RAM_LIVE_BIT`, and
-  `HALT_PC` odd and below it; and `lookup_channel::BITS[TIMESTAMP]` is one about
-  `memory::TS_BITS`: two chunks of it are the clock.
+  `HALT_PC` odd and below it; `lookup_channel::BITS[TIMESTAMP]` is one about
+  `memory::TS_BITS`, two chunks of it being the clock; and two `BITS[RANGE16]` halfwords
+  are a 32-bit word.
 - **`#![no_std]`, forever.** Guest-side code links this crate.
-- Changing any value here is a protocol-version change and must bump
-  `PROTOCOL_VERSION`.
+- **From the first registered program identity on**, changing any value here is a
+  protocol-version change and must bump `PROTOCOL_VERSION`. Until then `PROTOCOL_VERSION`
+  is the unregistered placeholder 0, and `family::CODE_VERSION` stays 0 with it: S12
+  (`guest_memory::RAM_LENGTH`) and S14 (`family::DEFAULT_HEIGHTS[INIT_TEARDOWN]`,
+  `family::COUNT`, `challenge_slot::NAMES`, `lookup_channel`) changed values without
+  bumping either, by the owner's decision (`docs/handoff/S14-multiset.md`).
 
 ## Contents as of S14
 | Item | Meaning |
 | --- | --- |
-| `PROTOCOL_VERSION: u32` | Placeholder, `0`. First item absorbed into every transcript. |
+| `PROTOCOL_VERSION: u32` | Placeholder, `0`, until the first registered identity. First item absorbed into every transcript. |
 | `FR_MODULUS: [u64; 4]` | BN254 **scalar** field modulus `p`, little-endian limbs. |
 | `FR_MODULUS_MINUS_TWO: [u64; 4]` | `p - 2`, the Fermat exponent for inversion. |
 | `FR_R: [u64; 4]` | `2^256 mod p`. Also the Montgomery form of `1`. |
@@ -55,7 +60,7 @@ here.
 | `POSEIDON2_RC3_TERMINAL: [[&str; 3]; 4]` | Round constants, 4 terminal full rounds. |
 | `transcript_tags` | The frozen tag table: 32 tags as of S14, sequential from 1. |
 | `challenge_slot` | S13's `TOY = 0`; S14's memory slots `MEM_GAMMA` 1, `MEM_ALPHA_ADDR` 2, `MEM_ALPHA_TS` 3, `MEM_ALPHA_VAL` 4, and the derived `MEM_WINDOW_CONSTANT` 5; `NAMES`. Append-only. |
-| `lookup_channel` | S14. `TIMESTAMP = 0`, its bound `BITS = [19]`, `NAMES`. Append-only; `docs/spec/memory.md` §7. |
+| `lookup_channel` | S14. `TIMESTAMP = 0` and `RANGE16 = 1`, their bounds `BITS = [19, 16]`, `NAMES`. Append-only; `docs/spec/memory.md` §7, which freezes the range convention `RANGE16` serves. |
 | `address_space` | S12. `REG = 1`, `RAM = 2`, `PC = 3`: nonzero, so no real memory tuple is all zeros. |
 | `memory` | S12's clock, `TS_STEP` and `TS_BITS`; S14's `HALT_PC = 1`, the tuple part order `PART_AS/ADDR/TS/VAL`, the root positions `READ_ROOT = 0` and `WRITE_ROOT = 1`, and `RAM_LIVE_BIT = 14`. `docs/spec/memory.md`. |
 | `family` | S11. The append-only `FamilyId` table (0 add/sub/lui/auipc … 6 atomics, 7 `INIT_TEARDOWN`, since S14 RAM window 0 only; S14's 8 `ZERO_WINDOWS`), `COUNT`, the height menu, the default heights, `DEFAULT_BYTECODE_SIZE_WORDS` and the decoded-table `CODE_VERSION`. |

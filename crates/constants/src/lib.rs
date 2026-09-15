@@ -5,11 +5,15 @@
 //! functions, no traits, no macros, no tests. Guest-side code links it, so it
 //! is `#![no_std]` and stays that way.
 //!
-//! Changing any value here is a protocol-version change.
+//! From the first registered program identity on, changing any value here is
+//! a protocol-version change.
 
 /// Protocol version absorbed into every transcript before anything else.
 ///
-/// Placeholder: bumped whenever a frozen protocol invariant changes.
+/// Placeholder, 0, until the first program identity is registered; from then
+/// on it is bumped whenever a frozen protocol invariant changes. S12 and S14
+/// changed frozen values without a bump, by the owner's decision
+/// (`docs/handoff/S14-multiset.md`).
 pub const PROTOCOL_VERSION: u32 = 0;
 
 /// BN254 scalar field modulus `p`, little-endian 64-bit limbs.
@@ -787,11 +791,15 @@ pub mod lookup_channel {
     /// The timestamp gap's two 19-bit chunks: `[0, 2^19)`.
     pub const TIMESTAMP: u32 = 0;
 
+    /// A halfword, `[0, 2^16)`: two of them bound a 32-bit value, under the
+    /// range convention of `docs/spec/memory.md` §7. No S14 artifact uses it.
+    pub const RANGE16: u32 = 1;
+
     /// Each channel's bound, as a bit width, indexed by channel.
-    pub const BITS: [u32; 1] = [19];
+    pub const BITS: [u32; 2] = [19, 16];
 
     /// Every channel's display name, indexed by channel.
-    pub const NAMES: [&str; 1] = ["timestamp"];
+    pub const NAMES: [&str; 2] = ["timestamp", "range16"];
 }
 
 /// The circuit families, by number. Frozen at S11; **append-only**.

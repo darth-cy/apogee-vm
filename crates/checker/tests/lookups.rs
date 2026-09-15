@@ -1,10 +1,11 @@
 //! The lookup element, `docs/spec/memory.md` §7. `check_laws` holds every
 //! lookup to the rules of `docs/spec/gkr.md` §4.2 with code of its own, and
-//! agrees with `CircuitArtifact::validate` on every mutant below: 5 lawful — an
-//! `M`, a `W` and an `S` selector among them — and 20 breaking one rule each, on
-//! both toys. `violated_lookups`, the native
-//! evaluator, reports exactly the lookups a row breaks, and an evaluator
-//! reporting nothing, or everything, fails the same cases.
+//! agrees with `CircuitArtifact::validate` on every mutant below: 6 lawful — an
+//! `M`, a `W` and an `S` selector and the `range16` channel among them — and 29
+//! breaking one rule each, on both toys. `violated_lookups`, the native
+//! evaluator, reports exactly the lookups a row breaks, reads each lookup's bound
+//! from its own channel, and an evaluator reporting nothing, or everything, fails
+//! the same cases.
 
 mod common;
 
@@ -66,6 +67,23 @@ fn push(a: &mut CircuitArtifact, edit: fn(&mut LookupExpr)) {
     a.lookups.push(l);
 }
 
+/// Push `range` named `name`, which some other part of the artifact already
+/// carries.
+fn push_named(a: &mut CircuitArtifact, name: String) {
+    push(a, |_| {});
+    a.lookups.last_mut().expect("pushed").name = name;
+}
+
+/// Push `range` reading `operand` alone, or under the selector `operand`.
+fn push_reading(a: &mut CircuitArtifact, operand: PolyAddress, as_selector: bool) {
+    push(a, |_| {});
+    let l = a.lookups.last_mut().expect("pushed");
+    match as_selector {
+        true => l.selector = operand,
+        false => l.tuple[0] = expression(&[(lit(1), operand)], lit(0)),
+    }
+}
+
 fn mutants() -> Vec<Mutant> {
     vec![
         m("one lookup", true, |a| push(a, |_| {})),
@@ -87,12 +105,15 @@ fn mutants() -> Vec<Mutant> {
             },
         ),
         m("an M selector", true, |a| push(a, |l| l.selector = M0)),
+        m("the range16 channel", true, |a| {
+            push(a, |l| l.channel = lookup_channel::RANGE16)
+        }),
         m("an expression reading a listed V[ram_live]", true, |a| {
             a.virtuals
                 .push((VirtualKind::RamLive, "ram_live".to_string()));
             push(a, |l| l.tuple[0] = expression(&[(lit(1), LIVE)], neg(1)));
         }),
-        m("channel 1, past constants::lookup_channel", false, |a| {
+        m("a channel past constants::lookup_channel", false, |a| {
             push(a, |l| l.channel = lookup_channel::NAMES.len() as u32)
         }),
         m("channel u32::MAX", false, |a| {
@@ -165,11 +186,38 @@ fn mutants() -> Vec<Mutant> {
         m("selector W[4], past the layout", false, |a| {
             push(a, |l| l.selector = PolyAddress::Witness(4))
         }),
+        m("an expression reading S past the layout", false, |a| {
+            push_reading(a, PolyAddress::Setup(a.setup.len() as u32), false)
+        }),
+        m("selector S past the layout", false, |a| {
+            push_reading(a, PolyAddress::Setup(a.setup.len() as u32), true)
+        }),
+        m("an expression reading M past the layout", false, |a| {
+            push_reading(a, PolyAddress::Memory(a.memory.len() as u32), false)
+        }),
+        m("selector M past the layout", false, |a| {
+            push_reading(a, PolyAddress::Memory(a.memory.len() as u32), true)
+        }),
         m("selector L{1}[0]", false, |a| {
             push(a, |l| l.selector = inner(1, 0))
         }),
         m("a witness column's name", false, |a| {
             push(a, |l| l.name = "a".to_string())
+        }),
+        m("a memory column's name", false, |a| {
+            push_named(a, a.memory[0].clone())
+        }),
+        m("a setup column's name", false, |a| {
+            push_named(a, a.setup[0].clone())
+        }),
+        m("a listed virtual table's name", false, |a| {
+            push_named(a, a.virtuals[0].1.clone())
+        }),
+        m("a relation's name", false, |a| {
+            push_named(a, a.relations[0].name.clone())
+        }),
+        m("a scratch slot's name", false, |a| {
+            push_named(a, a.scratch[0].name.clone())
         }),
         m("one name for two lookups", false, |a| {
             push(a, |_| {});
@@ -212,7 +260,7 @@ fn check_laws_agrees_with_validate_on_every_lookup_mutant() {
             runs += 1;
         }
     }
-    assert_eq!(runs, 2 * 25, "mutant runs");
+    assert_eq!(runs, 2 * 35, "mutant runs");
 }
 
 // ---------------------------------------------------------------------------
@@ -344,6 +392,35 @@ fn run(evaluate: Evaluator) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// The native evaluator reads a lookup's bound from its own channel: `m` under
+/// `s = 1` on `range16` holds at `2^16 − 1` and is violated at `2^16`, a value
+/// the timestamp channel's `[0, 2^19)` would admit. Fails if the evaluator
+/// read every lookup against one channel's bound.
+#[test]
+fn a_range16_lookup_is_bound_below_2_16() {
+    for (label, mut a) in toys() {
+        let mut l = lookup("m_halfword", S0, expression(&[(lit(1), M0)], lit(0)));
+        l.channel = lookup_channel::RANGE16;
+        a.lookups.push(l);
+        assert_eq!(check_laws(&a), Ok(()), "{label}");
+        for (m, violated) in [((1 << 16) - 1, false), (1 << 16, true)] {
+            let mut committed = vec![Fr::ZERO; a.committed().len()];
+            (committed[S], committed[M]) = (Fr::ONE, Fr::from_u64(m));
+            let w = WitnessRow {
+                committed,
+                row: 0,
+                scratch: vec![Fr::ZERO; a.scratch.len()],
+            };
+            let names = violated_lookups(&a, &w);
+            assert_eq!(
+                names.len(),
+                violated as usize,
+                "{label}, m = {m}: {names:?}"
+            );
+        }
+    }
 }
 
 #[test]

@@ -1,5 +1,6 @@
-//! `constants::memory`'s S14 numbers against the memory map they are defined
-//! beside, because each is a claim about another constant.
+//! `constants::memory`'s and `constants::lookup_channel`'s S14 numbers against
+//! the constants they are defined beside, because each is a claim about another
+//! constant.
 //!
 //! An integration test rather than a unit test, for the reason
 //! `tests/ecall_abi.rs` gives: `crates/constants` holds no code.
@@ -21,6 +22,17 @@ fn two_timestamp_chunks_are_the_clock() {
         2 * lookup_channel::BITS[lookup_channel::TIMESTAMP as usize],
         memory::TS_BITS
     );
+}
+
+/// `docs/spec/memory.md` §7's range convention: a 32-bit value is two halfwords
+/// on the `range16` channel; and every channel has a bound and a name.
+#[test]
+fn two_halfwords_are_a_word() {
+    assert_eq!(
+        2 * lookup_channel::BITS[lookup_channel::RANGE16 as usize],
+        32
+    );
+    assert_eq!(lookup_channel::BITS.len(), lookup_channel::NAMES.len());
 }
 
 /// `docs/spec/memory.md` §5: the halting sentinel is odd, so no instruction's

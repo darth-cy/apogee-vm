@@ -1305,7 +1305,10 @@ fn a_lookup_is_refused_unless_it_keeps_the_lookup_rules() {
     };
     refused(
         |l| l.channel = lookup_channel::NAMES.len() as u32,
-        "names channel 1, which is not in constants::lookup_channel",
+        &format!(
+            "names channel {}, which is not in constants::lookup_channel",
+            lookup_channel::NAMES.len()
+        ),
     );
     refused(|l| l.tuple.clear(), "has 0 expressions");
     refused(|l| l.tuple.push(l.tuple[0].clone()), "has 2 expressions");
