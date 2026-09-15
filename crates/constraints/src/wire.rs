@@ -21,7 +21,7 @@ use field::Fr;
 
 use crate::{
     CachedEntry, CircuitArtifact, Coeff, EnforcingEntry, GateDef, LayerSpec, LookupExpr, Padding,
-    PolyAddress, ProducingEntry, Relation, ScratchSlot, VirtualKind,
+    PolyAddress, ProducingEntry, Relation, ScratchSlot, VirtualKind, FORMAT_VERSION,
 };
 
 pub(crate) fn to_bytes(a: &CircuitArtifact) -> Vec<u8> {
@@ -30,6 +30,16 @@ pub(crate) fn to_bytes(a: &CircuitArtifact) -> Vec<u8> {
 }
 
 pub(crate) fn from_bytes(bytes: &[u8]) -> Result<CircuitArtifact, String> {
+    // The layout after the first word is the version's, so no other version is
+    // decoded at all.
+    let (version, _) = postcard::take_from_bytes::<u32>(bytes)
+        .map_err(|e| format!("malformed circuit artifact: {e}"))?;
+    if version != FORMAT_VERSION {
+        return Err(format!(
+            "malformed circuit artifact: format version {version}, but this reader reads \
+             {FORMAT_VERSION} only"
+        ));
+    }
     let a: CircuitArtifact =
         postcard::from_bytes(bytes).map_err(|e| format!("malformed circuit artifact: {e}"))?;
     // `postcard` reads overlong varints and ignores trailing bytes; one
@@ -115,6 +125,7 @@ impl Serialize for VirtualKind {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         match self {
             VirtualKind::RowIndex => 0u32.serialize(s),
+            VirtualKind::RamLive => 1u32.serialize(s),
         }
     }
 }
@@ -123,6 +134,7 @@ impl<'de> Deserialize<'de> for VirtualKind {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<VirtualKind, D::Error> {
         match u32::deserialize(d)? {
             0 => Ok(VirtualKind::RowIndex),
+            1 => Ok(VirtualKind::RamLive),
             _ => Err(D::Error::custom("unknown virtual table kind")),
         }
     }
@@ -135,6 +147,7 @@ impl Serialize for PolyAddress {
             PolyAddress::Witness(i) => (1, i, 0),
             PolyAddress::Setup(i) => (2, i, 0),
             PolyAddress::Virtual(VirtualKind::RowIndex) => (3, 0, 0),
+            PolyAddress::Virtual(VirtualKind::RamLive) => (3, 1, 0),
             PolyAddress::Inner { layer, offset } => (4, layer, offset),
             PolyAddress::Scratch(i) => (5, i, 0),
             PolyAddress::Cached { layer, offset } => (6, layer, offset),
@@ -150,6 +163,7 @@ impl<'de> Deserialize<'de> for PolyAddress {
             (1, i, 0) => Ok(PolyAddress::Witness(i)),
             (2, i, 0) => Ok(PolyAddress::Setup(i)),
             (3, 0, 0) => Ok(PolyAddress::Virtual(VirtualKind::RowIndex)),
+            (3, 1, 0) => Ok(PolyAddress::Virtual(VirtualKind::RamLive)),
             (4, layer, offset) => Ok(PolyAddress::Inner { layer, offset }),
             (5, i, 0) => Ok(PolyAddress::Scratch(i)),
             (6, layer, offset) => Ok(PolyAddress::Cached { layer, offset }),
@@ -390,16 +404,24 @@ impl<'de> Deserialize<'de> for Relation {
 
 impl Serialize for LookupExpr {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        (self.name.as_str(), self.channel, self.tuple.as_slice()).serialize(s)
+        (
+            self.name.as_str(),
+            self.channel,
+            self.selector,
+            self.tuple.as_slice(),
+        )
+            .serialize(s)
     }
 }
 
 impl<'de> Deserialize<'de> for LookupExpr {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<LookupExpr, D::Error> {
-        let (Name(name), channel, Seq(tuple)) = <(Name, u32, Seq<GateDef>)>::deserialize(d)?;
+        let (Name(name), channel, selector, Seq(tuple)) =
+            <(Name, u32, PolyAddress, Seq<GateDef>)>::deserialize(d)?;
         Ok(LookupExpr {
             name,
             channel,
+            selector,
             tuple,
         })
     }

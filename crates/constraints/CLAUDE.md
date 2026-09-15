@@ -11,7 +11,7 @@ semantic authority; this crate owns the formula *representation* and the checks 
 when a circuit is built. **`docs/spec/gkr.md` §1–§4 is normative.**
 
 ```rust
-pub enum VirtualKind { RowIndex }
+pub enum VirtualKind { RowIndex, RamLive }
 pub enum PolyAddress { Memory(u32), Witness(u32), Setup(u32), Virtual(VirtualKind),
                        Inner { layer, offset }, Scratch(u32), Cached { layer, offset } }  // + Display
 pub enum Coeff { Literal(Fr), Challenge(u32) }
@@ -24,7 +24,7 @@ pub struct ProducingEntry { relation, output, gate }
 pub struct EnforcingEntry { relation, gate }
 pub struct LayerSpec { halving, num_vars, width, cached, producing, enforcing }
 pub struct Relation { name, output: Option<u32>, gate }
-pub struct LookupExpr { name, channel, tuple }
+pub struct LookupExpr { name, channel, selector: PolyAddress, tuple }
 pub struct ScratchSlot { name, address }
 pub struct Padding { row: Vec<Fr>, zero_row_valid: bool }
 pub struct CircuitArtifact { format_version, coefficient_encoding, trace_vars, memory, witness, setup,
@@ -38,7 +38,7 @@ impl CircuitArtifact {
     pub fn from_bytes(bytes: &[u8]) -> Result<CircuitArtifact, String>;
 }
 pub enum ConstraintError { Locality, DerivedWidth, TopLayer, SingleSource, Degree, NotInlinable, Malformed }
-pub const FORMAT_VERSION: u32 = 0;
+pub const FORMAT_VERSION: u32 = 1;
 pub const COEFFICIENT_ENCODING_CANONICAL_LE: u32 = 0;
 pub const MAX_TRACE_VARS: u32 = 30;
 ```
@@ -62,9 +62,17 @@ pub const MAX_TRACE_VARS: u32 = 30;
 - **A relation constructed and then dropped is refused**: an inner column below the top
   that no gate reads, or a cached entry no gate names, constrains nothing.
 - **A halving list halves every column of its layer, in order.**
+- **Two virtual kinds, append-only**: `RowIndex` (`V[row]`, tag 0) and `RamLive`
+  (`V[ram_live]`, tag 1, `docs/spec/gkr.md` §2.1). Their closed forms are
+  `gkr-verify`'s.
+- **A lookup is a range obligation** (`docs/spec/memory.md` §7): a channel of
+  `constants::lookup_channel`, one `Linear` expression with literal coefficients over
+  `M W S V`, and an `M`, `W` or `S` selector. `validate` refuses anything else, naming
+  the lookup.
 - **The wire form is `postcard` over a tuple per type**, hand-written serde with exactly
   two visitors, no header beyond `format_version` and `coefficient_encoding`. `from_bytes`
-  is total, reserves nothing an untrusted length asks for, and takes only the bytes
+  is total, reserves nothing an untrusted length asks for, refuses every format version
+  but `FORMAT_VERSION` before decoding anything after it, and takes only the bytes
   `to_bytes` writes. It checks no law, so a checker can be handed a broken artifact.
 - **Names are documentation, never semantics**: `[a-z0-9_]`, unique across the whole
   artifact, stored beside what they name.
@@ -73,7 +81,8 @@ pub const MAX_TRACE_VARS: u32 = 30;
 
 ## Fixtures
 `tests/vectors/toy_cached.bin` and `tests/vectors/toy_cache_free.bin`: S13's toy
-circuit and its cache-free compilation. The toy is defined in `tools/kat-gen/src/gkr.rs`
+circuit, written at format 1 since S14 with an empty lookup list, and its cache-free
+compilation. The toy is defined in `tools/kat-gen/src/gkr.rs`
 and nowhere else; `cargo run -p kat-gen -- gkr` rewrites both, CI regenerates and diffs
 them, and every suite that reads them pins their SHA-256 first. They are this crate's
 output, not an oracle: the independent description of the toy is
@@ -82,6 +91,6 @@ output, not an oracle: the independent description of the toy is
 ## Tests
 | File | Covers |
 | --- | --- |
-| `tests/wire.rs` | both fixtures round-trip byte for byte; `Quadratic` against its hand-written bytes for no terms, linear only, products only and both, and each malformed `Quadratic` refused; every refusal of the reader; every single-bit flip of a fixture decodes or errors, never panics |
-| `tests/laws.rs` | one mutation of the toy per rule, each refused with its error — structured variants matched whole, prose details by the rule and the address or name they carry — beside the toy validating; the degree-3 gate; `Quadratic`'s degree, its identically zero and unread-column cases, Law 4 against an `AffineProduct` relation, and its refusal to inline; cache-free inlining and its refusals |
+| `tests/wire.rs` | both fixtures round-trip byte for byte; a format version other than 1 refused before decoding; `VirtualKind`'s tags and `V[ram_live]`'s address and name; a lookup against its hand-written bytes; `Quadratic` against its hand-written bytes for no terms, linear only, products only and both, and each malformed `Quadratic` refused; every refusal of the reader; every single-bit flip of a fixture decodes or errors, never panics |
+| `tests/laws.rs` | one mutation of the toy per rule, each refused with its error — structured variants matched whole, prose details by the rule and the address or name they carry — beside the toy validating; each lookup rule broken alone, refused naming the lookup, beside one and two lawful lookups; the degree-3 gate; `Quadratic`'s degree, its identically zero and unread-column cases, Law 4 against an `AffineProduct` relation, and its refusal to inline; cache-free inlining and its refusals |
 | `tests/audit.rs` | every `GateDef` variant, all six, emitted across both compilations, counts written by hand; the catalogue; the two compilations' identical shape |

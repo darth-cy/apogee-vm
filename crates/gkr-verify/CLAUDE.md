@@ -63,7 +63,9 @@ pub fn verify(artifact: &CircuitArtifact, proof: &GkrProof, outputs: &OutputClai
   every proof. No routine loads a verifying key yet; the stage that introduces
   `VerifyingKey` must call `validate` there. On an artifact that breaks a law `verify`'s
   answer means nothing: it may panic, and it may accept.
-- **Virtual tables are evaluated from their closed form**, never materialized.
+- **Virtual tables are evaluated from their closed form**, never materialized:
+  `virtual_at_row` and `virtual_at_point` for `V[row]` and `V[ram_live]`,
+  `docs/spec/gkr.md` §2.1.
 - **`#![no_std]` + `alloc`, forever.** CI builds it for `riscv32imac-unknown-none-elf`.
 
 ## Tests
