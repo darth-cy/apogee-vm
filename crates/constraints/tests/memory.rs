@@ -8,17 +8,16 @@
 
 use constants::{address_space, challenge_slot, lookup_channel};
 use constraints::memory::{
-    check_memory, frame, frame_artifact, image_window_artifact, zero_window_artifact, CYCLE,
-    FIELD_MASK, FIELD_READ_TS, FRAME_DELTA, FRAME_NAMES, FRAME_SPACE,
+    check_memory, frame, frame_artifact, gap_hi, image_window_artifact, zero_window_artifact,
+    CYCLE, FIELD_MASK, FIELD_READ_TS, FRAME_DELTA, FRAME_NAMES, FRAME_QUERIES, FRAME_SPACE,
 };
 use constraints::{
     CachedEntry, CircuitArtifact, Coeff, EnforcingEntry, GateDef, LayerSpec, LookupExpr, Padding,
     PolyAddress, ProducingEntry, Relation, ScratchSlot, VirtualKind,
     COEFFICIENT_ENCODING_CANONICAL_LE, FORMAT_VERSION,
 };
-use std::collections::HashSet;
-
 use field::Fr;
+use std::collections::HashSet;
 use test_support::{sha256, to_hex};
 
 const FRAME_SHA256: &str = "a18112c678db49eed95654e2b38c8d0e78f60be5b8c543e91ac897952f205df5";
@@ -225,19 +224,26 @@ fn the_frame_carries_two_gap_obligations_per_query() {
     assert_eq!(*constant, minus(1), "gap_lo_pc's constant is −1");
 }
 
-/// S14 acceptance 11, exhaustively at reduced width: §2.4's gap gadget with
-/// `w = 5`-bit chunks over a 10-bit clock. Its two obligations say
-/// `hi ∈ [0, 2^w)` and `lo = ts − read_ts − 1 − 2^w·hi ∈ [0, 2^w)`, `lo` a field
-/// element, so a pair is admitted exactly when `ts − read_ts − 1`, computed in
-/// `Fr`, is one of the `2^{2w}` field elements `lo + 2^w·hi` — which are
-/// distinct. Over every `ts` and `read_ts` in `[0, 2^10)`, where `read_ts ≥ ts`
-/// wraps the gap to `p − (read_ts − ts + 1)`, a pair is admitted exactly when
-/// `read_ts < ts`: 523,776 of the 1,048,576. The full-width boundary, through
-/// the frame's own obligations, is `crates/checker/tests/multiset.rs`'
+/// S14 acceptance 11, exhaustively at reduced width: §2.4's gap encoding with
+/// `w = 5`-bit chunks over a 10-bit clock. The two obligations say
+/// `hi ∈ [0, 2^w)` and `lo = gap − 2^w·hi ∈ [0, 2^w)`, `lo` a field element, so
+/// a pair is admitted exactly when `gap`, computed in `Fr`, is one of the
+/// `2^{2w}` field elements `lo + 2^w·hi` — which are distinct. The gap is the
+/// library's: each query's `gap_lo_<q>` from `frame_artifact`, evaluated with
+/// its high chunk `W[q]` at 0, at `cycle` and `read_ts`. Over every query, every
+/// cycle in `[0, 2^8)` — so `ts = 4·cycle + Δ` meets every value of the 10-bit
+/// clock across the four `Δ` — and every `read_ts` in `[0, 2^10)`, where
+/// `read_ts ≥ ts` wraps the gap to `p − (read_ts − ts + 1)`, a pair is admitted
+/// exactly when `read_ts < ts`.
+///
+/// This test holds the recombination at width 5 and the expression's cycle,
+/// read-timestamp and constant terms; the chunk width `2^19` and the
+/// evaluator are held at full width by `crates/checker/tests/multiset.rs`'
 /// `the_gap_obligations_accept_exactly_0_through_2_38_minus_1`.
 ///
 /// Fails if a wrapped negative gap were admitted, or a strictly ordered pair
-/// refused.
+/// refused — so if `gap_lo`'s constant were `Δ` rather than `Δ − 1`, admitting
+/// `read_ts = ts`.
 #[test]
 fn the_gap_encoding_is_strict_at_reduced_width() {
     const W: u32 = 5;
@@ -254,16 +260,39 @@ fn the_gap_encoding_is_strict_at_reduced_width() {
         1 << (2 * W),
         "lo + 2^w·hi is injective"
     );
-    let mut admitted = 0;
-    for ts in 0..clock {
-        for read_ts in 0..clock {
-            let gap = Fr::from_u64(ts) - Fr::from_u64(read_ts) - Fr::ONE;
-            let ok = admitted_gaps.contains(&gap.to_bytes());
-            assert_eq!(ok, read_ts < ts, "ts {ts}, read_ts {read_ts}");
-            admitted += ok as u64;
+    let a = frame_artifact(12);
+    let literal = |c: &Coeff| match c {
+        Coeff::Literal(v) => *v,
+        Coeff::Challenge(_) => panic!("gap_lo's coefficients are literals"),
+    };
+    for q in 0..FRAME_QUERIES {
+        let GateDef::Linear { terms, constant } = &a.lookups[2 * q + 1].tuple[0] else {
+            panic!("gap_lo_{} is Linear", FRAME_NAMES[q]);
+        };
+        let (mut step, mut sign) = (Fr::ZERO, Fr::ZERO);
+        for (c, address) in terms {
+            match *address {
+                CYCLE => step += literal(c),
+                x if x == frame(q, FIELD_READ_TS) => sign += literal(c),
+                x => assert_eq!(
+                    x,
+                    gap_hi(q),
+                    "gap_lo_{} reads only its chunk",
+                    FRAME_NAMES[q]
+                ),
+            }
+        }
+        let constant = literal(constant);
+        for cycle in 0..clock / 4 {
+            let ts = 4 * cycle + FRAME_DELTA[q];
+            for read_ts in 0..clock {
+                let gap = step * Fr::from_u64(cycle) + sign * Fr::from_u64(read_ts) + constant;
+                let ok = admitted_gaps.contains(&gap.to_bytes());
+                let name = FRAME_NAMES[q];
+                assert_eq!(ok, read_ts < ts, "{name}: ts {ts}, read_ts {read_ts}");
+            }
         }
     }
-    assert_eq!(admitted, clock * (clock - 1) / 2);
 }
 
 /// Every base address a gate or an obligation of the artifact reads, once each,

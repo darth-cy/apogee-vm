@@ -657,17 +657,31 @@ fn a_write_of_5_to_x0_balances_and_rd_write_masked_refuses_it() {
 }
 
 /// S14 acceptance 10, padding. fib's frame at the menu height 2^16 — 2,117 live
-/// rows and 63,419 padding rows, every padding cell 0 — keeps every gate,
-/// proves, verifies and discharges its base claims. On every padding row each
-/// of the 16 leaves, and every row-wise product above them, is exactly 1 in the
-/// forwarded values; so its roots are the 2^12 frame's, and they reconcile with
-/// fib's windows. `check_padding_identity` holds the artifact to the same
-/// clause. Fails if a masked leaf were not 1: a padding row would move a root.
+/// rows and 63,419 padding rows — keeps every gate, proves, verifies and
+/// discharges its base claims. Every committed cell of every padding row is the
+/// artifact's padding row, all zeros, `cycle` included (`docs/spec/memory.md`
+/// §2.1). On every padding row each of the 16 leaves, and every row-wise product
+/// above them, is exactly 1 in the forwarded values; so its roots are the 2^12
+/// frame's, and they reconcile with fib's windows. `check_padding_identity`
+/// holds the artifact to the same clause. Fails if any padding cell were not 0 —
+/// a cycle filled on a padding row past the first, which no leaf sees on a
+/// mask-0 row — or if a masked leaf were not 1: a padding row would move a root.
 #[test]
 fn the_frame_padded_to_2_16_proves_and_its_padding_rows_are_1() {
     let f = fib();
     let live = f.t.cycles.len();
     let tall = frame_shard(&f.t.log, &f.t.cycles, 1 << 16, &f.memory);
+    let padding = &tall.artifact.padding.row;
+    assert!(
+        padding.iter().all(|v| *v == Fr::ZERO),
+        "an all-zero padding row"
+    );
+    for (i, address) in tall.artifact.committed().into_iter().enumerate() {
+        let column = tall.base.get(address).expect("a committed column");
+        for y in live..1 << 16 {
+            assert_eq!(column.get(y), padding[i], "{address}, row {y}");
+        }
+    }
     let values = forwarded_shard(&tall);
     assert_eq!(
         self_check(&tall.artifact, &values, &tall.challenges),
