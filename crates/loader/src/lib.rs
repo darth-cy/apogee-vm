@@ -176,6 +176,29 @@ impl ProgramImage {
             .get(((pc - self.slot_base) / 2) as usize)
             .copied()
     }
+
+    /// The little-endian word at `addr` before the first cycle, assembled
+    /// **byte by byte**: each of its four bytes is a segment's file-backed
+    /// byte where one has it, and 0 everywhere else — `.bss`, a gap, or
+    /// outside every segment. Byte by byte because a segment may start, and
+    /// its file bytes may end, inside a word.
+    ///
+    /// The one source of image words: `trace`'s initial RAM value calls it,
+    /// and `docs/spec/memory.md` §3.4 makes it the image column's source too.
+    pub fn initial_word(&self, addr: u32) -> u32 {
+        let mut word = 0;
+        for i in 0..4u64 {
+            // In u64, so a word at the top of the address space does not wrap.
+            let at = addr as u64 + i;
+            for s in &self.segments {
+                if at >= s.vaddr as u64 && at < s.vaddr as u64 + s.bytes.len() as u64 {
+                    word |= (s.bytes[(at - s.vaddr as u64) as usize] as u32) << (8 * i);
+                    break;
+                }
+            }
+        }
+        word
+    }
 }
 
 // ---------------------------------------------------------------------------

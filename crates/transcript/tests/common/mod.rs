@@ -106,6 +106,9 @@ pub fn tag_by_name(name: &str) -> Result<Tag, String> {
         "GKR_BATCH" => Ok(transcript_tags::GKR_BATCH),
         "GKR_LAYER_CLAIMS" => Ok(transcript_tags::GKR_LAYER_CLAIMS),
         "GKR_CHILD" => Ok(transcript_tags::GKR_CHILD),
+        "MEMORY_WINDOWS" => Ok(transcript_tags::MEMORY_WINDOWS),
+        "MEMORY_BOUNDARY" => Ok(transcript_tags::MEMORY_BOUNDARY),
+        "PROGRAM_ENTRY" => Ok(transcript_tags::PROGRAM_ENTRY),
         other => Err(format!("unknown tag name {other}")),
     }
 }

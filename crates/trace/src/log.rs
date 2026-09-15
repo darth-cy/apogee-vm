@@ -414,17 +414,6 @@ fn initial_value(image: &ProgramImage, space: AddressSpace, addr: u32) -> u32 {
     match space {
         AddressSpace::Reg => 0,
         AddressSpace::Pc => image.entry,
-        AddressSpace::Ram => (0..4u32).fold(0, |word, i| {
-            word | image_byte(image, addr.wrapping_add(i)) << (8 * i)
-        }),
+        AddressSpace::Ram => image.initial_word(addr),
     }
-}
-
-fn image_byte(image: &ProgramImage, addr: u32) -> u32 {
-    for s in &image.segments {
-        if addr >= s.vaddr && ((addr - s.vaddr) as usize) < s.bytes.len() {
-            return s.bytes[(addr - s.vaddr) as usize] as u32;
-        }
-    }
-    0
 }

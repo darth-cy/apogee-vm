@@ -712,6 +712,23 @@ pub mod transcript_tags {
     /// Challenge. The point `τ` on the line through a halving transition's
     /// two child claims, drawn after both are absorbed.
     pub const GKR_CHILD: u64 = 29;
+
+    /// Scalars. The statement's RAM window list `[w_1 … w_k]`, the
+    /// `ZERO_WINDOWS` family's shard windows ascending, absorbed immediately
+    /// after [`SHARD_COUNTS`] and before program identity.
+    /// `docs/spec/memory.md` §6.1.
+    pub const MEMORY_WINDOWS: u64 = 30;
+
+    /// Scalars. The 64 register and pc boundary scalars
+    /// `[t_0 … t_31, t_pc, v_1 … v_31]`, one message, absorbed after every
+    /// memory-column commitment and before the memory challenges are drawn.
+    /// `docs/spec/memory.md` §4.1 and §6.1.
+    pub const MEMORY_BOUNDARY: u64 = 31;
+
+    /// Scalars. The program-identity sponge's `entry_pc`, one element,
+    /// absorbed after [`VM_CONFIG`] and before the families' commitments.
+    /// `docs/spec/memory.md` §6.2.
+    pub const PROGRAM_ENTRY: u64 = 32;
 }
 
 /// The external challenge slots a GKR circuit's coefficients may name, frozen
@@ -725,8 +742,56 @@ pub mod challenge_slot {
     /// The S13 toy circuit's one challenge. No production circuit reads it.
     pub const TOY: u32 = 0;
 
+    /// `γ_M`, the memory tuple's additive challenge. Drawn once per
+    /// statement, after everything `docs/spec/memory.md` §6.1 absorbs.
+    pub const MEM_GAMMA: u32 = 1;
+
+    /// `α_addr`, the weight of a memory tuple's address. Drawn.
+    /// `docs/spec/memory.md` §1.
+    pub const MEM_ALPHA_ADDR: u32 = 2;
+
+    /// `α_ts`, the weight of a memory tuple's timestamp. Drawn.
+    /// `docs/spec/memory.md` §1.
+    pub const MEM_ALPHA_TS: u32 = 3;
+
+    /// `α_val`, the weight of a memory tuple's value. Drawn.
+    /// `docs/spec/memory.md` §1.
+    pub const MEM_ALPHA_VAL: u32 = 4;
+
+    /// A RAM window shard's constant `γ_M + RAM + α_addr·4h·w`. **Derived,
+    /// not drawn**: the verifier computes it from slots 1 and 2 and the window
+    /// id bound in the statement, and never reads it from a proof.
+    /// `docs/spec/memory.md` §3.3.
+    pub const MEM_WINDOW_CONSTANT: u32 = 5;
+
     /// Every slot's display name, indexed by slot number.
-    pub const NAMES: [&str; 1] = ["toy"];
+    pub const NAMES: [&str; 6] = [
+        "toy",
+        "mem_gamma",
+        "mem_alpha_addr",
+        "mem_alpha_ts",
+        "mem_alpha_val",
+        "mem_window_constant",
+    ];
+}
+
+/// The lookup channels a range obligation names, frozen at S14;
+/// **append-only**.
+///
+/// A `LookupExpr`'s `channel` is one of these numbers, and a range channel's
+/// expression holds on a row when its canonical integer is below
+/// `2^BITS[channel]`. [`lookup_channel::NAMES`] is documentation, indexed by
+/// channel, as [`challenge_slot::NAMES`] is. `docs/spec/memory.md` §7; S15
+/// discharges the channels with LogUp.
+pub mod lookup_channel {
+    /// The timestamp gap's two 19-bit chunks: `[0, 2^19)`.
+    pub const TIMESTAMP: u32 = 0;
+
+    /// Each channel's bound, as a bit width, indexed by channel.
+    pub const BITS: [u32; 1] = [19];
+
+    /// Every channel's display name, indexed by channel.
+    pub const NAMES: [&str; 1] = ["timestamp"];
 }
 
 /// The circuit families, by number. Frozen at S11; **append-only**.
@@ -1028,16 +1093,46 @@ pub mod address_space {
 }
 
 /// The memory argument's clock, frozen at S12 from the master's memory
-/// invariant.
+/// invariant, and the memory argument's own numbers, frozen at S14.
 ///
 /// Cycle `c` occupies timestamps `TS_STEP * c + delta` for the four in-cycle
 /// slots `delta` in `0..TS_STEP`. Timestamp 0 is the initial write of every
 /// address, so the first executed cycle is **cycle 1**: a cycle-0 pc query
 /// would write at timestamp 0 and could not strictly follow the initial write
 /// it reads. Every timestamp is below `2^TS_BITS`.
+///
+/// `docs/spec/memory.md` is normative for everything S14 added here.
 pub mod memory {
     /// Timestamps per cycle, one per in-cycle slot.
     pub const TS_STEP: u64 = 4;
     /// The width of a timestamp, in bits.
     pub const TS_BITS: u32 = 38;
+
+    /// The halting sentinel: the `next_pc` an exit row writes, and the pc's
+    /// final value the verifier fixes. Odd, so no instruction's `next_pc` can
+    /// be it, and below `guest_memory::RAM_ORIGIN`, so no decoded-table row
+    /// claims it. `docs/spec/memory.md` §5.
+    pub const HALT_PC: u32 = 1;
+
+    /// A memory tuple's parts, in order: `AS`, added unweighted; then `ADDR`,
+    /// `TS` and `VAL`, weighted by `α_addr`, `α_ts` and `α_val`.
+    /// `docs/spec/memory.md` §1.
+    pub const PART_AS: usize = 0;
+    /// The tuple's address part.
+    pub const PART_ADDR: usize = 1;
+    /// The tuple's timestamp part.
+    pub const PART_TS: usize = 2;
+    /// The tuple's value part.
+    pub const PART_VAL: usize = 3;
+
+    /// The output-map position of every memory artifact's read root: the
+    /// product of its read tuples. `docs/spec/memory.md` §1.
+    pub const READ_ROOT: usize = 0;
+    /// The output-map position of every memory artifact's write root.
+    pub const WRITE_ROOT: usize = 1;
+
+    /// Window 0's rows `y < 2^RAM_LIVE_BIT` lie below `RAM_ORIGIN`, which is
+    /// `4 << RAM_LIVE_BIT`, and `ram_live` masks them. `docs/spec/memory.md`
+    /// §3.1 and §3.3.
+    pub const RAM_LIVE_BIT: u32 = 14;
 }

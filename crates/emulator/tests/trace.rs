@@ -396,7 +396,7 @@ fn frame(instr: &Instr, row: &Row) -> u8 {
 /// roles; each register role names the instruction's own register — or, on
 /// an ecall row, `a7`, `a0`, `a1`, `a2` and `a0`; `rd = x0` logs a write-back
 /// of 0; an absent role is all zero; and `next_pc` is the fall-through except
-/// where control moved.
+/// where control moved, and on the exit row, which writes `HALT_PC`.
 #[test]
 fn every_row_carries_its_class_frame() {
     for name in TRACED {
@@ -424,7 +424,12 @@ fn every_row_carries_its_class_frame() {
                     for (role, r) in [(Role::Rs2, 10), (Role::Arg1, 11), (Role::Arg2, 12)] {
                         assert!(reg(role).is_none_or(|a| a == r), "{at}: {role:?}");
                     }
-                    assert_eq!(row.next_pc, row.pc + 4, "{at}");
+                    let next_pc = if row.queries[Role::Rs1 as usize].read_value == ecall::EXIT {
+                        memory::HALT_PC
+                    } else {
+                        row.pc + 4
+                    };
+                    assert_eq!(row.next_pc, next_pc, "{at}");
                 }
             } else {
                 assert_eq!(
@@ -482,6 +487,49 @@ fn every_row_carries_its_class_frame() {
                 }
             }
         }
+    }
+}
+
+/// `docs/spec/memory.md` §5, the halting sentinel: every traced guest's pc
+/// ends at `HALT_PC`, which exactly one event writes — the last pc write, the
+/// exit row's — and no other pc query writes an odd value.
+#[test]
+fn the_exit_row_alone_writes_the_halting_sentinel() {
+    for name in TRACED {
+        let t = traced(name);
+        let final_pc = t.log.final_state().pop().expect("a run has a final state");
+        assert_eq!(
+            (final_pc.space, final_pc.value),
+            (AddressSpace::Pc, memory::HALT_PC),
+            "{name}"
+        );
+        let pc_writes: Vec<&MemoryEvent> = t
+            .log
+            .events()
+            .iter()
+            .filter(|e| e.space == AddressSpace::Pc)
+            .collect();
+        let (last, rest) = pc_writes.split_last().expect("a run has cycles");
+        assert_eq!(last.write_value, memory::HALT_PC, "{name}");
+        for e in rest {
+            assert_eq!(
+                e.write_value % 2,
+                0,
+                "{name}: the pc query at ts {} writes {:#x}",
+                e.ts,
+                e.write_value
+            );
+        }
+        let (_, exit_row) = rows_by_cycle(&t).pop().expect("a run has rows");
+        assert_eq!(instr_at(&t.image, exit_row.pc), Instr::Ecall, "{name}");
+        assert_eq!(
+            (
+                exit_row.queries[Role::Rs1 as usize].read_value,
+                exit_row.next_pc
+            ),
+            (ecall::EXIT, memory::HALT_PC),
+            "{name}: the last row is the exit row"
+        );
     }
 }
 

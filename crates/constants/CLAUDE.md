@@ -14,6 +14,9 @@ here.
   ABI, and acceptance 9 wants the document checked against the numbers rather than
   maintained beside them. An integration test is a separate crate, so `src/` is still
   `#![no_std]` with nothing in it but constants.
+- **A second, added at S14:** `tests/memory.rs`, because `RAM_LIVE_BIT` and `HALT_PC` are
+  claims about `guest_memory::RAM_ORIGIN`: `RAM_ORIGIN == 4 << RAM_LIVE_BIT`, and
+  `HALT_PC` odd and below it.
 - **`#![no_std]`, forever.** Guest-side code links this crate.
 - Changing any value here is a protocol-version change and must bump
   `PROTOCOL_VERSION`.
@@ -49,7 +52,10 @@ here.
 | `POSEIDON2_RC3_INITIAL: [[&str; 3]; 4]` | Round constants, 4 initial full rounds. |
 | `POSEIDON2_RC3_INTERNAL: [&str; 56]` | Round constants, 56 partial rounds, lane 0. |
 | `POSEIDON2_RC3_TERMINAL: [[&str; 3]; 4]` | Round constants, 4 terminal full rounds. |
-| `transcript_tags` | The frozen tag table: 24 tags as of S11, sequential from 1. |
+| `transcript_tags` | The frozen tag table: 32 tags as of S14, sequential from 1. |
+| `challenge_slot` | S13's `TOY = 0`; S14's memory slots `MEM_GAMMA` 1, `MEM_ALPHA_ADDR` 2, `MEM_ALPHA_TS` 3, `MEM_ALPHA_VAL` 4, and the derived `MEM_WINDOW_CONSTANT` 5; `NAMES`. Append-only. |
+| `lookup_channel` | S14. `TIMESTAMP = 0`, its bound `BITS = [19]`, `NAMES`. Append-only; `docs/spec/memory.md` §7. |
+| `memory` | S12's clock, `TS_STEP` and `TS_BITS`; S14's `HALT_PC = 1`, the tuple part order `PART_AS/ADDR/TS/VAL`, the root positions `READ_ROOT = 0` and `WRITE_ROOT = 1`, and `RAM_LIVE_BIT = 14`. `docs/spec/memory.md`. |
 | `family` | S11. The append-only `FamilyId` table (0 add/sub/lui/auipc … 7 init/teardown), `COUNT`, the height menu, the default heights, `DEFAULT_BYTECODE_SIZE_WORDS` and the decoded-table `CODE_VERSION`. |
 | `extra_mask` | S11. Every family's `family_extra_mask` bit positions, one-hot per mnemonic, append-only, and the system codes `ecall`/`ebreak`/`fence` carry in `imm`. |
 | `guest_memory` | The frozen guest memory map: `RAM_ORIGIN` and `RAM_LENGTH`; and, since S12, `STACK_RESERVE`, the 8 MiB at the top of RAM guest-sdk's allocator leaves to the stack. |

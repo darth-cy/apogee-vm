@@ -66,7 +66,8 @@ impl TraceArchive {
 - **`self_check` is the memory argument at trace level.** Timestamp rules first (every
   address in its space, every timestamp on the clock, the events in timestamp order,
   every gap non-negative, one query per address per timestamp), then multiset balance:
-  init (timestamp 0, value from the image, never from the log) plus every write, against
+  init (timestamp 0, value from the image — `ProgramImage::initial_word` for a RAM word —
+  never from the log) plus every write, against
   every read plus teardown (each address's last write, taken from the log). When the
   balance fails it replays the unbalanced address and names the first query whose read
   is not the last write before it — the corrupted read, the reader of a corrupted write,

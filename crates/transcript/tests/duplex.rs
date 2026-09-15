@@ -423,6 +423,9 @@ fn tag_table_is_well_formed() {
         "GKR_BATCH",
         "GKR_LAYER_CLAIMS",
         "GKR_CHILD",
+        "MEMORY_WINDOWS",
+        "MEMORY_BOUNDARY",
+        "PROGRAM_ENTRY",
     ];
     let values: Vec<u64> = names
         .iter()

@@ -206,6 +206,16 @@ uninitialised value can never be a valid message.
 | `GKR_BATCH` | 27 | challenge |
 | `GKR_LAYER_CLAIMS` | 28 | scalars |
 | `GKR_CHILD` | 29 | challenge |
+| `MEMORY_WINDOWS` | 30 | scalars |
+| `MEMORY_BOUNDARY` | 31 | scalars |
+| `PROGRAM_ENTRY` | 32 | scalars |
+
+Tags 30 to 32 are S14's, and `docs/spec/memory.md` §6 is normative for all
+three. `MEMORY_WINDOWS` frames the statement's RAM window list, absorbed right
+after `SHARD_COUNTS`; `MEMORY_BOUNDARY` frames the 64 register and pc boundary
+scalars, absorbed after every memory-column commitment and before the memory
+challenges; `PROGRAM_ENTRY` frames the entry pc inside the program-identity
+sponge, after `VM_CONFIG`.
 
 Tags 25 to 29 are S13's, and what each frames is fixed by the backward pass's
 schedule in `docs/spec/gkr.md` §5.2: the claimed output tables, the top-layer
