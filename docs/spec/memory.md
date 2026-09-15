@@ -77,10 +77,30 @@ M[1 + 5q + f]   query q, field f:  0 mask   1 addr   2 read_ts   3 read_value   
 ```
 
 41 memory columns. For the pc query, `addr = 0`, `read_value = pc`, `write_value = next_pc`
-and `read_ts` is the previous cycle's pc write. `mask` is 1 exactly when the row is live and
-has query `q`. **A row or query with mask 0 carries 0 in every one of its memory columns**,
-`cycle` included on a padding row. `constraints::memory` holds the AS and Δ table as data, and
-a test in `crates/trace` holds it to `trace::Role`.
+and `read_ts` is the previous cycle's pc write. The honest fill sets `mask` to 1 exactly when
+the row is live and its instruction has query `q`. **A row or query with mask 0 carries 0 in
+every one of its memory columns**, `cycle` included on a padding row. `constraints::memory`
+holds the AS and Δ table as data, and a test in `crates/trace` holds it to `trace::Role`.
+
+**What ties a mask to its row is owed by S16.** At S14 the frame holds each mask to
+booleanity and nothing else. So three forgeries each balance: a query on a row whose pc mask
+is 0, a live row with one of its queries masked off, and a live row carrying a query its
+instruction does not have. Each keeps every gate and obligation, and the first lets a padding
+row rewrite `x10`, the exit status, after the exit row (`crates/checker/tests/multiset.rs`,
+control C8). S16's family constraints make:
+
+- `m_pc` the row's liveness, and the decoded-table lookup's selector `m_pc` itself, not a
+  separate witness: a live row of §5 is a row with `m_pc = 1`;
+- every other mask `m_q = m_pc·uses_q`, with `uses_q` read from the looked-up row kind:
+  - `rs1`, `rs2` and `rd` follow the instruction's form, `x0` included
+    (`execution-trace.md` §4);
+  - a transfer row shares its ecall's pc and table row and uses `pc` and `ram` only, so
+    `is_transfer` is a witness that is itself constrained;
+  - on an ecall row, `rs2`, `arg1` and `arg2` (`a0`, `a1`, `a2`) follow the number read at
+    slot 1: all three for `READ` and `WRITE`, `rs2` alone for `EXIT` and
+    `PRECOMPILE_POSEIDON2`, none otherwise (`execution-trace.md` §6). Each such `uses_q`
+    comes from `is-zero(a7_read − n)`, split across layers to keep every gate at degree 2
+    or below.
 
 ### 2.2 The leaves
 
@@ -104,11 +124,13 @@ W_q = Quadratic { constant: 1,
 ```
 
 `s` is a literal; `× k` repeats a term `k` times. The relation is the same polynomial.
-`constraints::memory::leaf` writes both from the unmasked tuple gate `read_tuple(q)` or
-`write_tuple(q)` — a `Linear` whose `AS` and `Δ` terms already sit on `m` — in this order:
-the tuple's constant on `m`, then `(−1, m)`, then the tuple's terms on `m` as they are, and
-every other term times `m`. A term already on `m` enters once, so a leaf is `m·T + 1 − m` on a
-boolean `m` only, which the booleanity gate of §2.4 supplies.
+`constraints::memory`'s leaf constructor writes both from the unmasked tuple gate
+`read_tuple(q)` or `write_tuple(q)` — a `Linear` whose `AS` and `Δ` terms already sit on `m`,
+its parts in the order of `constants::memory::PART_*` — in this order: the tuple's constant on
+`m`, then `(−1, m)`, then the tuple's terms on `m` as they are, and every other term times `m`.
+A term already on `m` enters once. So a leaf is `m·T + 1 − m` at every `m`, with `T` §1's tuple
+at `AS = s`, but it equals `m·tuple + 1 − m` for the unmasked gate only at a boolean `m`, and it
+is 1 or a tuple only at `m ∈ {0, 1}`, which the booleanity gate of §2.4 supplies.
 At `m = 0` a leaf is 1 whatever the other columns hold; at `m = 1` it is the tuple. The
 `MaskIntoIdentity` shape is not used: its input would have to be a column or a cached entry,
 and a cached tuple inside it refuses the cache-free compilation.
@@ -123,9 +145,10 @@ Every list multiplies exactly two children per output, and every gate is degree 
 
 ### 2.4 The gadgets every execution family carries
 
-**Mask booleanity.** For each of the 8 masks, the enforcing gate `m − m·m = 0`. A leaf is the
-multiplicative identity only at `m ∈ {0, 1}`; at `m = −1` a PC query's two leaves each flip
-sign, the products still balance, and the query reads as a REG query.
+**Mask booleanity.** For each of the 8 masks, the enforcing gate `m − m·m = 0`. A leaf is 1
+or a tuple only at `m ∈ {0, 1}`; at `m = −1` a PC query's two leaves are each
+`−T(AS − 2, …)`, one sign flip on each side, so the products still balance and the query
+reads as a REG query.
 
 **Read-only queries write back what they read.** For `rs1`, `rs2`, `arg1`, `arg2` and `load`,
 the enforcing gate `write_value − read_value = 0` (`execution-trace.md` §3). Without it a read
@@ -160,8 +183,9 @@ gap_hi_q : Linear { [(1, W[q_gap_hi])], 0 }
 gap_lo_q : Linear { [(4, cycle), (−1, read_ts), (−2^19, W[q_gap_hi])], Δ_q − 1 }
 ```
 
-Each chunk in `[0, 2^19)` makes `gap = lo + 2^19·hi` an integer in `[0, 2^38)`, which is
-strictly `read_ts < 4·cycle + Δ`. The gadget returns its obligations by value, and the
+Each chunk in `[0, 2^19)` makes `gap = lo + 2^19·hi` a field element in `[0, 2^38)`. As
+integers that is strictly `read_ts < 4·cycle + Δ`, because every timestamp of a balanced
+statement is a canonical integer (§4.2's count). The gadget returns its obligations by value, and the
 artifact's construction asserts their number is twice the number of reads.
 
 **Names.** A name is used once per artifact (`docs/spec/gkr.md` §4.2), so a column and the
@@ -289,8 +313,10 @@ order:
 | 32 | `t_pc` | the pc's final timestamp: the last cycle's pc write ts |
 | 33–63 | `v_1 … v_31` | register `x_r`'s final value, `r = 1..31`: its last write, 0 if never queried |
 
-Each `t` is below `2^38` and each `v` below `2^32`; the verifier refuses anything else when it
-decodes them. **Two final values are not carried**: `x0`'s is the constant 0 and the pc's is
+Each `t` is below `2^38` and each `v` below `2^32`, and S16's decoder of `MEMORY_BOUNDARY`
+refuses anything else. Nothing decodes the message at S14: `BoundaryFinals` holds each `v` as
+a `u32`, but each `t` as a `u64` that nothing checks against `2^38`. **Two final values are not
+carried**: `x0`'s is the constant 0 and the pc's is
 the constant `HALT_PC` (§5). `gkr_verify::BoundaryFinals` holds them as
 `{ reg_ts: [u64; 32], pc_ts: u64, reg_values: [u32; 31] }`, `reg_values[i]` being `x_{i+1}`,
 and `trace::build_boundary_finals(log)` fills it from the log's final state.
@@ -321,6 +347,16 @@ write is consumed once, every query consumes one write and produces one strictly
 gap), and the final read consumes one: the writes form one chain of strictly increasing
 timestamps, and the final read can only balance against its highest.
 
+That chain is over `Fr`, and that it cannot close on itself is a matter of counting. Each
+matched step adds an integer in `[1, 2^38]`, one plus a gap, so a closed loop of `k` steps
+needs `k·2^38 ≥ p`: more than `2^215` steps. A statement has fewer than `2^70` tuples: at most
+`2^32` shards per family (a `u32` count), times `family::COUNT = 9` families, times `2^30`
+rows (`MAX_TRACE_VARS`), times 16 leaves a row, plus the 66 boundary tuples. So no loop
+closes, each address's writes form one path from its init at timestamp 0, and every timestamp
+on that path is below `2^70·2^38 = 2^108 < p`: a canonical integer, so "strictly later" holds
+as integers. Re-check this count if the shard-count width, `MAX_TRACE_VARS`, the family count,
+the leaves per row or the gap width grows.
+
 ---
 
 ## 5. Halting
@@ -336,8 +372,9 @@ balances: a fib run that panics has 889 prefixes ending with `a0 = 0`.
 What S16's constraints owe the sentinel: `jalr`'s bit-0 clear and every jump's and branch's
 wrap bit booleanity-constrained; `is_exit` from `a7 = 93` on the system row kind, gated off
 transfer rows; the system row's `next_pc = is_exit·HALT_PC + is_transfer·pc +
-(1 − is_exit − is_transfer)·table_next_pc`; the decoded-table lookup on every live row,
-transfer rows included; and the exit row's `a0` write equal to its read.
+(1 − is_exit − is_transfer)·table_next_pc`; the decoded-table lookup on every live row
+(`m_pc = 1`), transfer rows included, with every other mask coupled to it as §2.1 says; and
+the exit row's `a0` write equal to its read.
 
 ---
 
@@ -376,9 +413,15 @@ A fresh sponge absorbs, in order:
 5. one raw squeeze, the identity.
 
 It binds the image's file-backed bytes inside window 0 and the entry pc, and nothing an
-execution chooses: no shard count, no window list. `program::setup_commitments` is steps 4's
+execution chooses: no shard count, no window list. `program::setup_commitments` is step 4's
 commitments (it needs the SRS); `program::identity_from_commitments` is the digest over them
 (it does not), which is what a verifying-key loader recomputes.
+
+Recomputing identity binds `cm(image column)`, not the column `INIT_TEARDOWN`'s proof reads.
+So the verifying-key path also opens that shard's `S[0]` base claim against the
+`cm(image column)` whose identity it recomputed, and refuses a mismatch (S16). Without the
+opening, a statement over a different image, with a trace consistent with that image, is
+accepted.
 
 ### 6.3 Tags
 
@@ -408,11 +451,24 @@ the selector is an `M`, `W` or `S` column; names follow the artifact-wide rule.
 | channel | name | bound |
 | --- | --- | --- |
 | 0 | `TIMESTAMP` | `[0, 2^19)` |
+| 1 | `RANGE16` | `[0, 2^16)` |
 
 An obligation **holds on a row** when its selector is 0 there, or its expression's canonical
 integer is below the bound. `checker::violated_lookups` is that check, natively, per row; S15
 discharges it with LogUp. Until then, a future read, an out-of-window access and a
 self-balancing query are caught by the native evaluator only.
+
+**The range convention**, S14 must-be-exact 4, frozen for every later family:
+
+- A value `v < 2^32` is bounded by one witnessed column `h` and two obligations on `RANGE16`,
+  `h` and `v − 2^16·h`, both with the row's mask as selector, and no gate.
+- A result `r` of an exact expression `e` taken mod `2^32` carries a witnessed `wrap`, the
+  enforcing gates `wrap − wrap·wrap = 0` and `e − r − 2^32·wrap = 0`, and `r` bounded as
+  above. It is admissible only where `0 ≤ e < 2^33` as integers, so that one boolean wrap
+  holds every carry. A wider wrap, such as a multiply's high word, is not frozen here.
+- The timestamp gap of §2.4 is the same shape on `TIMESTAMP`, with no wrap.
+
+No S14 artifact uses `RANGE16`.
 
 ---
 
@@ -424,6 +480,11 @@ self-balancing query are caught by the native evaluator only.
 - **provenance**: any gate, and any output, whose cone both names a global memory slot (1–5)
   and reads a `W` column. It is computed forward, one pair of flags per column, so a product of
   a tuple with a copy of a `W` column two layers up is refused too;
+- **a root that reads a `W` column**: `outputs[READ_ROOT]` or `outputs[WRITE_ROOT]` whose cone
+  reads one, whether or not it names a slot. `W` is committed after the memory challenges
+  (§6.1), so a root over it is chosen after them and balances any trace. Provenance, which
+  needs a slot as well, does not see a root built from `W` columns alone. Neither root's cone
+  reads a `W` column;
 - **a global slot over anything but `M`, `S` and `V`** — where `S` is admitted only because a
   setup column is bound by identity before the challenges: a gate with a global-slot
   coefficient reads no `W` column, no inner column and no cached entry;
@@ -447,19 +508,36 @@ an artifact to it.
 
 **Sequential consistency** of every address needs exactly one init tuple per address: disjoint
 windows, strictly increasing ids, id ≥ 1 for `ZERO_WINDOWS`, exactly one `INIT_TEARDOWN` shard,
-equal heights, the boundary counted once — and the gap obligation on every read.
+equal heights, the boundary counted once — and the gap obligation on every read, over §4.2's
+count.
 
 **Coverage**: an accessed address with no init row cannot balance, because its read timestamps
 would equal its write timestamps as multisets while each write is strictly later than its
 read. This, too, needs the gap obligation.
 
-**The RAM-window bound** — no access below `RAM_ORIGIN` or at `2^31` and above — rests on the
-`ram_live` mask, the id bound `N − 1`, the image refusal, and the gap obligation.
+**The RAM-window bound** — no access below `RAM_ORIGIN`, or at `2^31` and above — rests on the
+`V[ram_live]` mask, `1 ≤ id ≤ N − 1` for `ZERO_WINDOWS`, and the gap obligation. A zero window
+at id 0 has no mask, so its rows would give the words below `RAM_ORIGIN` init rows
+(`crates/checker/tests/multiset.rs`, control C1).
 
-**Owed by later stages**: S15 discharges the obligations. S16 constrains each access's byte
-address (`low ∈ [0, 3]`, `low = 0` for `lw`/`sw`, `low ∈ {0, 2}` for `lh`/`sh`, a boolean wrap
-on `rs1 + imm`), the sentinel's constraints of §5, the global transcript of §6.1, the
-verifying key's identity recomputation, and the zero-root refusal. S20 reconciles every shard.
+**That the initial values are the program's** rests on something else: the image refusal of
+§3.4, which keeps every file-backed byte inside window 0's column, and the opening of `S[0]`
+against identity's `cm(image column)` (§6.2).
+
+**Owed by later stages**: S15 discharges the obligations. S16 owes:
+
+- every mask constrained as §2.1 says: `m_pc` the row's liveness and the table lookup's
+  selector, and `m_q = m_pc·uses_q`;
+- each access's byte address: `low ∈ [0, 3]`, `low = 0` for `lw`/`sw`, `low ∈ {0, 2}` for
+  `lh`/`sh`, a boolean wrap on `rs1 + imm`;
+- the sentinel's constraints of §5;
+- the global transcript of §6.1, including decoding `MEMORY_BOUNDARY` and refusing any
+  `t ≥ 2^38` or `v ≥ 2^32`;
+- the verifying key's identity recomputation, and the opening of `INIT_TEARDOWN`'s `S[0]`
+  against `cm(image column)`;
+- the zero-root refusal.
+
+S20 reconciles every shard.
 
 **Cost** at `h = 2^22`: at least two window shards per proof (window 0 and the stack window),
 `2^23` leaf pairs and four committed `2^22`-entry columns, even for fib's 2,117 cycles; each

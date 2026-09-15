@@ -373,13 +373,14 @@ per query, and a product tree to the read and write roots.
 **Range obligation** — an artifact's lookup element, `LookupExpr (name, channel,
 selector, tuple)`. It holds on a row where its selector is 0, or where its one `Linear`
 expression's canonical integer is below the channel's bound — `[0, 2^19)` on the timestamp
-channel. Every read carries two, the gap's chunks, selected by the query's mask.
-`checker::violated_lookups` checks them natively; S15 discharges them with LogUp.
+channel, `[0, 2^16)` on `range16`. Every read carries two, the gap's chunks, selected by the
+query's mask. `checker::violated_lookups` checks them natively; S15 discharges them with LogUp.
 `docs/spec/memory.md` §7.
 
 **Boundary scalars** — the 64 values a proof carries for registers and the pc, which have
 no rows: the final timestamps `t_0 … t_31` and `t_pc`, then the final values `v_1 … v_31`,
-one `MEMORY_BOUNDARY` message absorbed before the memory challenges. `x0`'s final value is
+one `MEMORY_BOUNDARY` message, which S16's global transcript absorbs before the memory
+challenges. `x0`'s final value is
 0 and the pc's `HALT_PC`, and neither is carried. **Boundary finals** —
 `gkr_verify::BoundaryFinals`, the same 64 in memory, filled by
 `trace::build_boundary_finals`. The verifier folds them and the entry pc into the
