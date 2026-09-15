@@ -19,8 +19,9 @@ gkr.workspace = true
 poly.workspace = true
 
 [dev-dependencies]
-# `tests/memory.rs`' honest statement: a committed guest ELF loaded, decoded,
-# traced and filled into the memory columns, then proved.
+# `tests/memory.rs`' honest statement and `tests/multiset.rs`' tampers: a
+# committed guest ELF loaded, decoded, traced and filled into the memory
+# columns, then forwarded, reconciled and proved.
 emulator.workspace = true
 loader.workspace = true
 program.workspace = true

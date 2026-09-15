@@ -6,31 +6,31 @@
 //! and its boundary, filled by `trace`'s builders from a real execution — keeps
 //! every gate and every obligation, reconciles, and proves.
 
+mod common;
+
 use checker::{
-    check_laws, check_padding, check_padding_identity, memory_roots, violated_lookups, WitnessRow,
+    check_laws, check_padding, check_padding_identity, memory_roots, violated_lookups,
+    violated_relations,
+};
+use common::{
+    frame_shard, memory_challenges, prove_and_verify, shards, traced, window_shards, witness_row,
+    GUESTS, HEIGHT,
 };
 use constants::challenge_slot::{MEM_ALPHA_VAL, MEM_GAMMA};
-use constants::{family, transcript_tags};
+use constants::family;
 use constraints::memory::{
     frame, frame_artifact, image_window_artifact, zero_window_artifact, CYCLE, FRAME_QUERIES,
 };
 use constraints::{CircuitArtifact, PolyAddress};
-use emulator::{trace_run, GuestIo};
 use field::Fr;
 use gkr::{
-    boundary_factors, forward, prove, reconciles, self_check, verify, window_challenges, BaseLayer,
-    ExternalChallenges, GkrError, LayerValues, OutputClaims,
+    boundary_factors, forward, reconciles, self_check, window_challenges, BaseLayer,
+    ExternalChallenges, LayerValues,
 };
-use loader::{load_elf, ProgramImage};
 use poly::{MultilinearPoly, PolyBacking};
-use program::{check_memory_windows, decode_program, ProgramParams, VmConfig};
-use sumcheck::{absorb_witness_digest, witness_digest};
+use program::check_memory_windows;
 use test_support::Rng;
-use trace::{
-    build_boundary_finals, build_frame_witness, build_init_teardown_columns, build_memory_columns,
-    init_windows, plan_shards, CycleProfile, FamilyTraces, MemoryEventLog, ROLES,
-};
-use transcript::Transcript;
+use trace::{build_boundary_finals, build_memory_columns, init_windows, plan_shards, ROLES};
 
 /// A forwarded artifact over random columns and random slots 1–4, plus slot 5
 /// for window 9.
@@ -174,176 +174,17 @@ fn the_memory_artifacts_keep_the_laws_and_the_padding_contract() {
 // An honest statement over a committed guest
 // ---------------------------------------------------------------------------
 
-/// Every family's height: the init families' `h`, and tall enough for every
-/// instruction table of every committed guest but `consistency`.
-const HEIGHT: u32 = 1 << 16;
-
-/// The guests, each on the input `crates/emulator/tests/common` runs it on:
-/// fib's is `fib_io.txt`'s `n = 24`, heap's 40.
-const GUESTS: [(&str, u32); 2] = [("fib", 24), ("heap", 40)];
-
-/// One committed guest, decoded at `HEIGHT` and traced to its exit: what a
-/// statement's memory shards are built from.
-struct Traced {
-    image: ProgramImage,
-    config: VmConfig,
-    traces: FamilyTraces,
-    log: MemoryEventLog,
-    profile: CycleProfile,
-    /// `1..=n`, every cycle the execution ran.
-    cycles: Vec<u64>,
-}
-
-/// The ELF is `crates/loader/tests/vectors`', pinned by digest in that crate's
-/// suite.
-fn traced(name: &str, input: u32) -> Traced {
-    let path = format!(
-        "{}/../loader/tests/vectors/{name}.elf",
-        env!("CARGO_MANIFEST_DIR")
-    );
-    let elf = std::fs::read(&path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
-    let image = load_elf(&elf).unwrap_or_else(|e| panic!("{name}: {e:?}"));
-    let params = ProgramParams {
-        heights: [HEIGHT; family::COUNT as usize],
-        ..ProgramParams::defaults()
-    };
-    let (tables, config) =
-        decode_program(&image, &params).unwrap_or_else(|e| panic!("{name}: {e}"));
-    let io = GuestIo {
-        input: input.to_le_bytes().to_vec(),
-        hint: Vec::new(),
-    };
-    let (traces, log, profile, execution) =
-        trace_run(&image, &io, &tables, &config).unwrap_or_else(|e| panic!("{name}: {e}"));
-    assert_eq!(execution.exit_code, 0, "{name}");
-    Traced {
-        image,
-        config,
-        traces,
-        log,
-        profile,
-        cycles: (1..=execution.cycle_count).collect(),
-    }
-}
-
-/// Slots 1–4, drawn from a fresh transcript that binds nothing. S16's global
-/// transcript owns the real schedule — the statement, every memory column's
-/// commitment and the boundary absorbed before the squeeze
-/// (`docs/spec/memory.md` §6.1). Here they are only values no trace was chosen
-/// against.
-fn memory_challenges() -> ExternalChallenges {
-    let mut t = Transcript::new();
-    let mut memory = ExternalChallenges::new();
-    for slot in MEM_GAMMA..=MEM_ALPHA_VAL {
-        memory.insert(
-            slot,
-            t.challenge_scalar(transcript_tags::SUMCHECK_CHALLENGE),
-        );
-    }
-    memory
-}
-
-/// One memory shard: its artifact, its base and the challenges its gates read.
-struct Shard {
-    label: String,
-    artifact: CircuitArtifact,
-    base: BaseLayer,
-    challenges: ExternalChallenges,
-}
-
-/// A frame shard over `cycles`, in the order given, at `height` rows.
-fn frame_shard(t: &Traced, cycles: &[u64], height: usize, memory: &ExternalChallenges) -> Shard {
-    let mut columns = build_memory_columns(&t.log, cycles, height);
-    columns.extend(build_frame_witness(&t.log, cycles, height));
-    Shard {
-        label: "frame".to_string(),
-        artifact: frame_artifact(height.trailing_zeros()),
-        base: BaseLayer::new(columns),
-        challenges: memory.clone(),
-    }
-}
-
-/// Every memory shard of `t`'s statement: the frame, one shard over every
-/// cycle at the smallest power-of-two height holding them; then its windows.
-fn shards(t: &Traced, memory: &ExternalChallenges) -> Vec<Shard> {
-    let height = t.cycles.len().next_power_of_two();
-    let mut out = vec![frame_shard(t, &t.cycles, height, memory)];
-    out.extend(window_shards(t, memory));
-    out
-}
-
-/// `t`'s window shards at `HEIGHT`: `INIT_TEARDOWN`, window 0, and one
-/// `ZERO_WINDOWS` shard per id of `init_windows`.
-fn window_shards(t: &Traced, memory: &ExternalChallenges) -> Vec<Shard> {
-    let mut out = Vec::new();
-    let vars = HEIGHT.trailing_zeros();
-    let window = |w: u32, artifact: CircuitArtifact| Shard {
-        label: format!("window {w}"),
-        artifact,
-        base: BaseLayer::new(build_init_teardown_columns(
-            &t.log,
-            &t.image,
-            w,
-            HEIGHT as usize,
-        )),
-        challenges: window_challenges(memory, w, vars),
-    };
-    out.push(window(0, image_window_artifact(vars)));
-    let zero = zero_window_artifact(vars);
-    for w in init_windows(&t.log, HEIGHT) {
-        out.push(window(w, zero.clone()));
-    }
-    out
-}
-
-/// A shard's committed columns, in layout order.
-fn committed(shard: &Shard) -> Vec<MultilinearPoly> {
-    let columns = shard.artifact.committed().into_iter();
-    let column = |a| shard.base.get(a).expect("a committed column").clone();
-    columns.map(column).collect()
-}
-
-/// Prove `values` and verify the proof, each on a fresh transcript bound to
-/// the committed columns' witness digest as S13's harness binds a base, then
-/// discharge every base claim against its column.
-fn prove_and_verify(shard: &Shard, values: &LayerValues) -> Result<(), GkrError> {
-    let digest = witness_digest(&committed(shard));
-    let bound = || {
-        let mut t = Transcript::new();
-        absorb_witness_digest(&mut t, digest);
-        t
-    };
-    let a = &shard.artifact;
-    let proof = prove(a, values, &shard.challenges, &mut bound());
-    let top = values.layers.last().expect("a top layer");
-    let tables = a.outputs.iter().map(|out| match *out {
-        PolyAddress::Inner { offset, .. } => top[offset as usize].clone(),
-        other => panic!("an output is an inner address, not {other}"),
-    });
-    let outputs = OutputClaims {
-        tables: tables.collect(),
-    };
-    let claims = verify(a, &proof, &outputs, &shard.challenges, &mut bound())?;
-    for claim in claims {
-        let column = shard.base.get(claim.address).expect("a committed column");
-        let label = &shard.label;
-        assert_eq!(
-            column.evaluate(&claim.point),
-            claim.value,
-            "{label}: {}",
-            claim.address
-        );
-    }
-    Ok(())
-}
-
-/// The honest statement of a committed guest: every shard's forward pass keeps
-/// every gate, and its roots are what `memory_roots` recomputes; the frame
-/// keeps every obligation on every row, live and padding, and the checker's
-/// laws and padding contract; the window list keeps the verifier's rules; the
-/// roots reconcile with the boundary `build_boundary_finals` fills at the
+/// S14 acceptance 1, the honest statement of a committed guest: every shard's
+/// forward pass keeps every gate, and its roots are what `memory_roots`
+/// recomputes; all three artifacts keep the checker's laws and padding
+/// contract, and the frame the product-tree clause; the witness-row evaluator,
+/// `violated_relations`, reports nothing on every row of both windows and on
+/// every live row and the first padding row of the frame, and the lookup
+/// evaluator nothing on any row; the window list keeps the verifier's rules;
+/// the roots reconcile with the boundary `build_boundary_finals` fills at the
 /// image's entry pc; and every window shard proves and verifies, and the frame
-/// when `prove_frame` says so.
+/// when `prove_frame` says so. Fails on any gate, relation or obligation a
+/// builder's honest column breaks, and on any imbalance between the builders.
 fn honest_statement(name: &str, input: u32, prove_frame: bool) {
     let t = traced(name, input);
     let memory = memory_challenges();
@@ -361,30 +202,37 @@ fn honest_statement(name: &str, input: u32, prove_frame: bool) {
             memory_roots(a, &values).unwrap_or_else(|e| panic!("{name} {label}: {e}"));
         reads.push(read);
         writes.push(write);
+        assert_eq!(check_laws(a), Ok(()), "{name} {label}");
+        assert_eq!(check_padding(a), Ok(()), "{name} {label}");
+
+        let rows = 1usize << a.trace_vars;
+        if i == 0 {
+            assert!(t.cycles.len() < rows, "{name}: the frame has a padding row");
+        }
+        for row in 0..rows {
+            let w = witness_row(a, &values, row);
+            if i > 0 || row <= t.cycles.len() {
+                assert_eq!(
+                    violated_relations(a, &w, &shard.challenges),
+                    Vec::<String>::new(),
+                    "{name} {label}: row {row}"
+                );
+            }
+            assert_eq!(
+                violated_lookups(a, &w),
+                Vec::<String>::new(),
+                "{name} {label}: row {row}"
+            );
+        }
         if i > 0 || prove_frame {
             assert_eq!(prove_and_verify(shard, &values), Ok(()), "{name} {label}");
         }
     }
-
-    let frame = &shards[0];
-    assert_eq!(check_laws(&frame.artifact), Ok(()), "{name}");
-    assert_eq!(check_padding(&frame.artifact), Ok(()), "{name}");
-    assert_eq!(check_padding_identity(&frame.artifact), Ok(()), "{name}");
-    let columns = committed(frame);
-    let rows = columns[0].len();
-    assert!(t.cycles.len() < rows, "{name}: the frame has a padding row");
-    for row in 0..rows {
-        let w = WitnessRow {
-            committed: columns.iter().map(|c| c.get(row)).collect(),
-            row,
-            scratch: Vec::new(),
-        };
-        assert_eq!(
-            violated_lookups(&frame.artifact, &w),
-            Vec::<String>::new(),
-            "{name}: frame row {row}"
-        );
-    }
+    assert_eq!(
+        check_padding_identity(&shards[0].artifact),
+        Ok(()),
+        "{name}"
+    );
 
     let windows = init_windows(&t.log, HEIGHT);
     let counts: Vec<u32> = plan_shards(&t.profile, &t.config)
@@ -436,7 +284,7 @@ fn a_frame_per_family_in_any_order_reconciles() {
                 cycles.reverse();
             }
             let height = cycles.len().next_power_of_two().max(16);
-            let mut shard = frame_shard(&t, &cycles, height, &memory);
+            let mut shard = frame_shard(&t.log, &cycles, height, &memory);
             shard.label = format!("frame of family {}", trace.family);
             let column = shard.base.get(CYCLE).expect("the cycle column");
             for (i, &cycle) in cycles.iter().enumerate() {

@@ -16,6 +16,8 @@ use constraints::{
     PolyAddress, ProducingEntry, Relation, ScratchSlot, VirtualKind,
     COEFFICIENT_ENCODING_CANONICAL_LE, FORMAT_VERSION,
 };
+use std::collections::HashSet;
+
 use field::Fr;
 use test_support::{sha256, to_hex};
 
@@ -221,6 +223,47 @@ fn the_frame_carries_two_gap_obligations_per_query() {
         panic!("gap_lo_pc is Linear");
     };
     assert_eq!(*constant, minus(1), "gap_lo_pc's constant is −1");
+}
+
+/// S14 acceptance 11, exhaustively at reduced width: §2.4's gap gadget with
+/// `w = 5`-bit chunks over a 10-bit clock. Its two obligations say
+/// `hi ∈ [0, 2^w)` and `lo = ts − read_ts − 1 − 2^w·hi ∈ [0, 2^w)`, `lo` a field
+/// element, so a pair is admitted exactly when `ts − read_ts − 1`, computed in
+/// `Fr`, is one of the `2^{2w}` field elements `lo + 2^w·hi` — which are
+/// distinct. Over every `ts` and `read_ts` in `[0, 2^10)`, where `read_ts ≥ ts`
+/// wraps the gap to `p − (read_ts − ts + 1)`, a pair is admitted exactly when
+/// `read_ts < ts`: 523,776 of the 1,048,576. The full-width boundary, through
+/// the frame's own obligations, is `crates/checker/tests/multiset.rs`'
+/// `the_gap_obligations_accept_exactly_0_through_2_38_minus_1`.
+///
+/// Fails if a wrapped negative gap were admitted, or a strictly ordered pair
+/// refused.
+#[test]
+fn the_gap_encoding_is_strict_at_reduced_width() {
+    const W: u32 = 5;
+    let clock = 1u64 << (2 * W);
+    let mut admitted_gaps = HashSet::new();
+    for hi in 0..1u64 << W {
+        for lo in 0..1u64 << W {
+            let gap = Fr::from_u64(lo) + Fr::from_u64(1 << W) * Fr::from_u64(hi);
+            admitted_gaps.insert(gap.to_bytes());
+        }
+    }
+    assert_eq!(
+        admitted_gaps.len(),
+        1 << (2 * W),
+        "lo + 2^w·hi is injective"
+    );
+    let mut admitted = 0;
+    for ts in 0..clock {
+        for read_ts in 0..clock {
+            let gap = Fr::from_u64(ts) - Fr::from_u64(read_ts) - Fr::ONE;
+            let ok = admitted_gaps.contains(&gap.to_bytes());
+            assert_eq!(ok, read_ts < ts, "ts {ts}, read_ts {read_ts}");
+            admitted += ok as u64;
+        }
+    }
+    assert_eq!(admitted, clock * (clock - 1) / 2);
 }
 
 /// Every base address a gate or an obligation of the artifact reads, once each,
