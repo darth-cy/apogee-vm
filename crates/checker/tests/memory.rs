@@ -251,20 +251,31 @@ struct Shard {
     challenges: ExternalChallenges,
 }
 
-/// Every memory shard of `t`'s statement: the frame, one shard over every
-/// cycle at the smallest power-of-two height holding them; `INIT_TEARDOWN`,
-/// window 0; and one `ZERO_WINDOWS` shard per id of `init_windows`, the
-/// windows at `HEIGHT`.
-fn shards(t: &Traced, memory: &ExternalChallenges) -> Vec<Shard> {
-    let height = t.cycles.len().next_power_of_two();
-    let mut columns = build_memory_columns(&t.log, &t.cycles, height);
-    columns.extend(build_frame_witness(&t.log, &t.cycles, height));
-    let mut out = vec![Shard {
+/// A frame shard over `cycles`, in the order given, at `height` rows.
+fn frame_shard(t: &Traced, cycles: &[u64], height: usize, memory: &ExternalChallenges) -> Shard {
+    let mut columns = build_memory_columns(&t.log, cycles, height);
+    columns.extend(build_frame_witness(&t.log, cycles, height));
+    Shard {
         label: "frame".to_string(),
         artifact: frame_artifact(height.trailing_zeros()),
         base: BaseLayer::new(columns),
         challenges: memory.clone(),
-    }];
+    }
+}
+
+/// Every memory shard of `t`'s statement: the frame, one shard over every
+/// cycle at the smallest power-of-two height holding them; then its windows.
+fn shards(t: &Traced, memory: &ExternalChallenges) -> Vec<Shard> {
+    let height = t.cycles.len().next_power_of_two();
+    let mut out = vec![frame_shard(t, &t.cycles, height, memory)];
+    out.extend(window_shards(t, memory));
+    out
+}
+
+/// `t`'s window shards at `HEIGHT`: `INIT_TEARDOWN`, window 0, and one
+/// `ZERO_WINDOWS` shard per id of `init_windows`.
+fn window_shards(t: &Traced, memory: &ExternalChallenges) -> Vec<Shard> {
+    let mut out = Vec::new();
     let vars = HEIGHT.trailing_zeros();
     let window = |w: u32, artifact: CircuitArtifact| Shard {
         label: format!("window {w}"),
@@ -404,6 +415,54 @@ fn fib_honest_statement_reconciles_and_proves() {
 #[test]
 fn heap_honest_statement_reconciles_and_proves_its_windows() {
     honest_statement("heap", 40, false);
+}
+
+/// The statement's frame split as execution-family shards split it: one frame
+/// per family that ran, over that family's cycles — not contiguous — with the
+/// first family's list reversed, each at the smallest power-of-two height of at
+/// least 16. Row `i` holds `cycles[i]`, every shard keeps every gate, and the
+/// roots of every frame with the windows' reconcile with the boundary. Kills a
+/// builder that files a cycle's row by the cycle's number, or a list sorted,
+/// rather than by its place in `cycles`.
+#[test]
+fn a_frame_per_family_in_any_order_reconciles() {
+    for (name, input) in GUESTS {
+        let t = traced(name, input);
+        let memory = memory_challenges();
+        let mut shards = Vec::new();
+        for trace in t.traces.families.iter().filter(|f| !f.cycle.is_empty()) {
+            let mut cycles = trace.cycle.clone();
+            if shards.is_empty() {
+                cycles.reverse();
+            }
+            let height = cycles.len().next_power_of_two().max(16);
+            let mut shard = frame_shard(&t, &cycles, height, &memory);
+            shard.label = format!("frame of family {}", trace.family);
+            let column = shard.base.get(CYCLE).expect("the cycle column");
+            for (i, &cycle) in cycles.iter().enumerate() {
+                assert_eq!(column.get(i), Fr::from_u64(cycle), "{name}: row {i}");
+            }
+            shards.push(shard);
+        }
+        assert!(shards.len() > 1, "{name}: more than one family ran");
+        shards.extend(window_shards(&t, &memory));
+        let (mut reads, mut writes) = (Vec::new(), Vec::new());
+        for shard in &shards {
+            let (a, label) = (&shard.artifact, &shard.label);
+            let values = forward(a, &shard.base, &shard.challenges);
+            assert_eq!(
+                self_check(a, &values, &shard.challenges),
+                Ok(()),
+                "{name} {label}"
+            );
+            let (read, write) =
+                memory_roots(a, &values).unwrap_or_else(|e| panic!("{name} {label}: {e}"));
+            reads.push(read);
+            writes.push(write);
+        }
+        let factors = boundary_factors(&memory, t.image.entry, &build_boundary_finals(&t.log));
+        assert!(reconciles(&reads, &writes, factors), "{name}");
+    }
 }
 
 /// `build_memory_columns` against the family buffers, which file each query

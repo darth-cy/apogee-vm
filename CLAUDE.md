@@ -30,7 +30,8 @@ crates/
   isa/           the RV32IMAC instruction model and the 32-bit decoder; no deps
   program/       decoded per-family tables, VmConfig derivation, program identity; std
   trace/         the memory event log and its self-check, the family buffers, the cycle
-                 profile and shard plan, and the TraceArchive snapshot; std
+                 profile and shard plan, the TraceArchive snapshot, and the memory
+                 argument's column builders; std
   emulator/      the RV32IMAC reference emulator, its tracing path, and the QEMU
                  differential harness; std
   constraints/   circuits as data: PolyAddress, GateDef, LayerSpec, CircuitArtifact, the
@@ -318,8 +319,9 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   `PC = 3`, so no real memory tuple is all zeros. A RAM event's address is the byte address
   of its 4-aligned word.
 - **Family buffers are raw live rows**, column-major in small integer types, every query's
-  address, value and timestamps per row. No padding and no `MultilinearPoly` — those belong
-  to the constraint system, which is not built yet.
+  address, value and timestamps per row. No padding and no `MultilinearPoly` in them: the
+  memory argument's padded columns are filled from the log by `trace`'s memory builders,
+  keyed by `constraints::memory`'s layout.
 - **`sc.w` always succeeds in the emulator.** That is the one divergence the QEMU
   differential whitelists; the harness's other rule — `x2` differs at entry, Linux's stack
   pointer, until the guest writes it — is about the environment, not an instruction.
