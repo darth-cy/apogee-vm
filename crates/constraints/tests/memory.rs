@@ -12,8 +12,9 @@ use constraints::memory::{
     FIELD_MASK, FIELD_READ_TS, FRAME_DELTA, FRAME_NAMES, FRAME_SPACE,
 };
 use constraints::{
-    CircuitArtifact, Coeff, GateDef, LayerSpec, LookupExpr, Padding, PolyAddress, ProducingEntry,
-    Relation, ScratchSlot, VirtualKind, COEFFICIENT_ENCODING_CANONICAL_LE, FORMAT_VERSION,
+    CachedEntry, CircuitArtifact, Coeff, EnforcingEntry, GateDef, LayerSpec, LookupExpr, Padding,
+    PolyAddress, ProducingEntry, Relation, ScratchSlot, VirtualKind,
+    COEFFICIENT_ENCODING_CANONICAL_LE, FORMAT_VERSION,
 };
 use field::Fr;
 use test_support::{sha256, to_hex};
@@ -340,12 +341,16 @@ fn a_tuple_fed_from_a_witness_column_is_refused() {
 /// list 1  L{2}[0] mixed = tuple·copy            both, through its operands only
 /// ```
 ///
-/// No gate of list 0 is refused; the product in layer 2 is. The control
-/// copies `a` instead of `w` and passes. Kills a provenance check that reads a
-/// gate's own coefficients and base operands without carrying flags up.
+/// No gate of list 0 is refused; the product in layer 2 is. Then the same
+/// product as an enforcing gate of list 1, `mixed = 0`, beside a lawful
+/// producing `squared = tuple·tuple`: refused too, and there rule 1 is the only
+/// rule that can see it — its coefficient is a literal. The controls copy `a`
+/// instead of `w` and pass. Kills a provenance check that reads a gate's own
+/// coefficients and base operands without carrying flags up, or that skips
+/// enforcing gates.
 #[test]
 fn a_product_of_a_tuple_and_a_witness_copy_two_layers_up_is_refused() {
-    let circuit = |copied: PolyAddress| {
+    let circuit = |copied: PolyAddress, enforced: bool| {
         let (a, lit1) = (PolyAddress::Memory(0), Coeff::Literal(Fr::ONE));
         let tuple = GateDef::Linear {
             terms: vec![(Coeff::Challenge(challenge_slot::MEM_ALPHA_ADDR), a)],
@@ -362,7 +367,7 @@ fn a_product_of_a_tuple_and_a_witness_copy_two_layers_up_is_refused() {
         };
         let relation = |name: &str, output, gate| Relation {
             name: name.into(),
-            output: Some(output),
+            output,
             gate,
         };
         let entry = |relation, output, gate| ProducingEntry {
@@ -370,6 +375,38 @@ fn a_product_of_a_tuple_and_a_witness_copy_two_layers_up_is_refused() {
             output,
             gate,
         };
+        let slot = |name: &str, address| ScratchSlot {
+            name: name.into(),
+            address,
+        };
+        let (s0, s1) = (PolyAddress::Scratch(0), PolyAddress::Scratch(1));
+        let mut relations = vec![
+            relation("define_tuple", Some(0), tuple.clone()),
+            relation("define_copy", Some(1), copy.clone()),
+        ];
+        let mut scratch = vec![slot("tuple", inner(1, 0)), slot("copy", inner(1, 1))];
+        let mut list1 = LayerSpec {
+            halving: false,
+            num_vars: 1,
+            width: 1,
+            cached: vec![],
+            producing: vec![],
+            enforcing: vec![],
+        };
+        if enforced {
+            list1.producing = vec![entry(2, inner(2, 0), product(inner(1, 0), inner(1, 0)))];
+            list1.enforcing = vec![EnforcingEntry {
+                relation: 3,
+                gate: product(inner(1, 0), inner(1, 1)),
+            }];
+            relations.push(relation("define_squared", Some(2), product(s0, s0)));
+            relations.push(relation("mixed", None, product(s0, s1)));
+            scratch.push(slot("squared", inner(2, 0)));
+        } else {
+            list1.producing = vec![entry(2, inner(2, 0), product(inner(1, 0), inner(1, 1)))];
+            relations.push(relation("define_mixed", Some(2), product(s0, s1)));
+            scratch.push(slot("mixed", inner(2, 0)));
+        }
         let artifact = CircuitArtifact {
             format_version: FORMAT_VERSION,
             coefficient_encoding: COEFFICIENT_ENCODING_CANONICAL_LE,
@@ -390,39 +427,11 @@ fn a_product_of_a_tuple_and_a_witness_copy_two_layers_up_is_refused() {
                     ],
                     enforcing: vec![],
                 },
-                LayerSpec {
-                    halving: false,
-                    num_vars: 1,
-                    width: 1,
-                    cached: vec![],
-                    producing: vec![entry(2, inner(2, 0), product(inner(1, 0), inner(1, 1)))],
-                    enforcing: vec![],
-                },
+                list1,
             ],
-            relations: vec![
-                relation("define_tuple", 0, tuple),
-                relation("define_copy", 1, copy),
-                relation(
-                    "define_mixed",
-                    2,
-                    product(PolyAddress::Scratch(0), PolyAddress::Scratch(1)),
-                ),
-            ],
+            relations,
             lookups: vec![],
-            scratch: vec![
-                ScratchSlot {
-                    name: "tuple".into(),
-                    address: inner(1, 0),
-                },
-                ScratchSlot {
-                    name: "copy".into(),
-                    address: inner(1, 1),
-                },
-                ScratchSlot {
-                    name: "mixed".into(),
-                    address: inner(2, 0),
-                },
-            ],
+            scratch,
             outputs: vec![inner(2, 0)],
             padding: Padding {
                 row: vec![Fr::ZERO; 2],
@@ -432,49 +441,221 @@ fn a_product_of_a_tuple_and_a_witness_copy_two_layers_up_is_refused() {
         assert_eq!(artifact.validate(), Ok(()));
         artifact
     };
+    for (enforced, name) in [(false, "define_mixed"), (true, "mixed")] {
+        assert_eq!(
+            check_memory(&circuit(PolyAddress::Witness(0), enforced)),
+            Err(format!(
+                "memory provenance: `{name}` in gate list 1 names a global memory slot and reads a \
+                 W column"
+            ))
+        );
+        assert_eq!(
+            check_memory(&circuit(PolyAddress::Memory(0), enforced)),
+            Ok(())
+        );
+    }
+}
+
+/// One gate list over `M[0] a` and `W[0] w`, 2 rows: `cached`, then one
+/// producing gate `gate` writing the top column `out`, whose relation is
+/// `flat`, the same polynomial with the cached entries substituted.
+fn cached_circuit(cached: Vec<(&str, GateDef)>, gate: GateDef, flat: GateDef) -> CircuitArtifact {
+    let artifact = CircuitArtifact {
+        format_version: FORMAT_VERSION,
+        coefficient_encoding: COEFFICIENT_ENCODING_CANONICAL_LE,
+        trace_vars: 1,
+        memory: vec!["a".into()],
+        witness: vec!["w".into()],
+        setup: vec![],
+        virtuals: vec![],
+        layers: vec![LayerSpec {
+            halving: false,
+            num_vars: 1,
+            width: 1,
+            cached: cached
+                .into_iter()
+                .enumerate()
+                .map(|(j, (name, gate))| CachedEntry {
+                    name: name.into(),
+                    address: PolyAddress::Cached {
+                        layer: 0,
+                        offset: j as u32,
+                    },
+                    gate,
+                })
+                .collect(),
+            producing: vec![ProducingEntry {
+                relation: 0,
+                output: inner(1, 0),
+                gate,
+            }],
+            enforcing: vec![],
+        }],
+        relations: vec![Relation {
+            name: "define_out".into(),
+            output: Some(0),
+            gate: flat,
+        }],
+        lookups: vec![],
+        scratch: vec![ScratchSlot {
+            name: "out".into(),
+            address: inner(1, 0),
+        }],
+        outputs: vec![inner(1, 0)],
+        padding: Padding {
+            row: vec![Fr::ZERO; 2],
+            zero_row_valid: true,
+        },
+    };
+    assert_eq!(artifact.validate(), Ok(()));
+    artifact
+}
+
+/// Cached entries under §8, substituted as `validate` substitutes them, each
+/// circuit lawful:
+///
+/// ```text
+/// C[0] tuple = γ_M + α_addr·a,  C[1] copy = w,  out = tuple·copy
+///     refused at `out`: the slot and the W column meet only through the cache
+/// C[0] slot_over_w = α_addr·w,  out = slot_over_w
+///     refused at the cached entry itself, which is checked before `out`
+/// C[0] copy_a = a,  out = γ_M·copy_a
+///     refused by the slot rule: a slot over a cached entry
+/// ```
+///
+/// Kills a check that gives a cached operand no flags or drops its W flag, that
+/// does not check cached entries themselves, or that admits a slot over one.
+#[test]
+fn cached_entries_are_held_to_the_memory_rules() {
+    let (a, w) = (PolyAddress::Memory(0), PolyAddress::Witness(0));
+    let c = |offset| PolyAddress::Cached { layer: 0, offset };
+    let (gamma, alpha) = (
+        Coeff::Challenge(challenge_slot::MEM_GAMMA),
+        Coeff::Challenge(challenge_slot::MEM_ALPHA_ADDR),
+    );
+    let (one, zero) = (Coeff::Literal(Fr::ONE), Coeff::Literal(Fr::ZERO));
+    let linear = |terms, constant| GateDef::Linear { terms, constant };
+
+    let through_the_cache = cached_circuit(
+        vec![
+            ("tuple", linear(vec![(alpha, a)], gamma)),
+            ("copy", linear(vec![(one, w)], zero)),
+        ],
+        GateDef::Product {
+            coeff: one,
+            left: c(0),
+            right: c(1),
+        },
+        GateDef::Quadratic {
+            constant: zero,
+            linear: vec![(gamma, w)],
+            products: vec![(alpha, a, w)],
+        },
+    );
     assert_eq!(
-        check_memory(&circuit(PolyAddress::Witness(0))),
+        check_memory(&through_the_cache),
         Err(
-            "memory provenance: `define_mixed` in gate list 1 names a global memory slot and \
-             reads a W column"
+            "memory provenance: `define_out` in gate list 0 names a global memory slot and reads \
+             a W column"
                 .to_string()
         )
     );
-    assert_eq!(check_memory(&circuit(PolyAddress::Memory(0))), Ok(()));
+
+    let bad_entry = cached_circuit(
+        vec![("slot_over_w", linear(vec![(alpha, w)], zero))],
+        linear(vec![(one, c(0))], zero),
+        linear(vec![(alpha, w)], zero),
+    );
+    assert_eq!(
+        check_memory(&bad_entry),
+        Err(
+            "memory provenance: `slot_over_w` in gate list 0 names a global memory slot and reads \
+             a W column"
+                .to_string()
+        )
+    );
+
+    let slot_over_cache = cached_circuit(
+        vec![("copy_a", linear(vec![(one, a)], zero))],
+        linear(vec![(gamma, c(0))], zero),
+        linear(vec![(gamma, a)], zero),
+    );
+    assert_eq!(
+        check_memory(&slot_over_cache),
+        Err(
+            "memory slot operands: `define_out` in gate list 0 carries a global memory slot and \
+             reads C{0}[0]; only M, S and V columns may be weighted by one"
+                .to_string()
+        )
+    );
 }
 
-/// The frame with `pc_mask_boolean` removed — its enforcing entry and its
-/// relation, every later relation index shifted down — is still a lawful
-/// circuit, and `check_memory` refuses the pc leaves' mask as unconstrained.
+/// The frame with one query's booleanity gate removed — its enforcing entry
+/// and its relation, every later relation index shifted down — is still a
+/// lawful circuit, and `check_memory` refuses that query's leaves' mask as
+/// unconstrained. Tried on `pc_mask_boolean`, whose mask no other gate reads,
+/// and on `rd_mask_boolean`, whose mask `rd_is_zero_inverse` still reads.
 /// Kills a mask rule that is not checked, or that accepts any enforcing gate
 /// on the mask.
 #[test]
 fn a_frame_missing_a_booleanity_gate_is_refused() {
-    let mut a = frame_artifact(12);
-    let r = a
-        .relations
-        .iter()
-        .position(|rel| rel.name == "pc_mask_boolean")
-        .expect("the frame names it") as u32;
-    a.layers[0].enforcing.retain(|e| e.relation != r);
-    a.relations.remove(r as usize);
-    for list in a.layers.iter_mut() {
-        for e in list.producing.iter_mut() {
-            e.relation -= (e.relation > r) as u32;
+    for (query, mask) in [("pc", "M[1]"), ("rd", "M[36]")] {
+        let mut a = frame_artifact(12);
+        let r = a
+            .relations
+            .iter()
+            .position(|rel| rel.name == format!("{query}_mask_boolean"))
+            .expect("the frame names it") as u32;
+        a.layers[0].enforcing.retain(|e| e.relation != r);
+        a.relations.remove(r as usize);
+        for list in a.layers.iter_mut() {
+            for e in list.producing.iter_mut() {
+                e.relation -= (e.relation > r) as u32;
+            }
+            for e in list.enforcing.iter_mut() {
+                e.relation -= (e.relation > r) as u32;
+            }
         }
-        for e in list.enforcing.iter_mut() {
-            e.relation -= (e.relation > r) as u32;
-        }
+        assert_eq!(a.validate(), Ok(()), "{query}");
+        assert_eq!(
+            check_memory(&a),
+            Err(format!(
+                "unconstrained mask: leaf `define_read_{query}` masks with {mask}, and gate list \
+                 0 has no enforcing gate {mask} − {mask}·{mask}"
+            ))
+        );
     }
-    assert_eq!(a.validate(), Ok(()));
-    assert_eq!(
-        check_memory(&a),
-        Err(
-            "unconstrained mask: leaf `define_read_pc` masks with M[1], and gate list 0 has no \
-             enforcing gate M[1] − M[1]·M[1]"
-                .to_string()
-        )
-    );
+}
+
+/// `INIT_TEARDOWN` with its teardown leaf's mask `V[ram_live]` swapped, in the
+/// gate and its relation, for `S[0]` — a committed column no booleanity gate
+/// holds — and for `V[row]`, which is not 0 or 1 on the cube. Both still lawful
+/// circuits, both refused naming the leaf and the mask. Kills a mask rule that
+/// covers `M` alone, or that exempts every virtual column.
+#[test]
+fn a_window_leaf_masked_by_a_setup_column_or_the_row_index_is_refused() {
+    let live = PolyAddress::Virtual(VirtualKind::RamLive);
+    let cases = [
+        (
+            PolyAddress::Setup(0),
+            "unconstrained mask: leaf `define_teardown` masks with S[0], and gate list 0 has no \
+             enforcing gate S[0] − S[0]·S[0]",
+        ),
+        (
+            PolyAddress::Virtual(VirtualKind::RowIndex),
+            "unconstrained mask: leaf `define_teardown` masks with V[row], which is not 0 or 1 on \
+             every row",
+        ),
+    ];
+    for (mask, expected) in cases {
+        let mut a = image_window_artifact(12);
+        let entry = &mut a.layers[0].producing[0];
+        entry.gate = swap(&entry.gate, live, mask);
+        let r = entry.relation as usize;
+        a.relations[r].gate = swap(&a.relations[r].gate, live, mask);
+        assert_eq!(a.validate(), Ok(()), "{mask}");
+        assert_eq!(check_memory(&a), Err(expected.to_string()), "{mask}");
+    }
 }
 
 /// §8's third rule: the frame's first row-wise product weighted by `γ_M` reads

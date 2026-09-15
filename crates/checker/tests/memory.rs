@@ -33,36 +33,92 @@ fn forwarded(a: &CircuitArtifact, seed: u64) -> LayerValues {
     forward(a, &BaseLayer::new(columns), &challenges)
 }
 
-/// On a forwarded `ZERO_WINDOWS` artifact the roots are the top's two values
-/// and the products of the leaves, written out here over layer 1.
+type Constructor = fn(u32) -> CircuitArtifact;
+
+/// Each artifact at `trace_vars` 4 beside the layer its first halving list
+/// reads: layer 1 for a window, whose leaves it halves at once, and layer 4
+/// for the frame, above its three row-wise lists.
+const HALVING_INPUTS: [(&str, Constructor, usize); 2] = [
+    ("zero window", zero_window_artifact, 1),
+    ("frame", frame_artifact, 4),
+];
+
+/// On a forwarded artifact the roots are the top's two values and the
+/// products of layer `k`'s columns 0 and 1, written out here. Kills a hook
+/// that reads any layer but the first halving list's input.
 #[test]
-fn memory_roots_agrees_with_a_forwarded_window() {
-    let a = zero_window_artifact(4);
-    let values = forwarded(&a, 0x5714_3201);
-    let top = values.layers.last().expect("a top layer");
-    let product = |j: usize| (0..16).fold(Fr::ONE, |acc, y| acc * values.layers[0][j].get(y));
-    assert_eq!(
-        memory_roots(&a, &values),
-        Ok((top[0].get(0), top[1].get(0)))
-    );
-    assert_eq!(memory_roots(&a, &values), Ok((product(0), product(1))));
+fn memory_roots_agrees_with_a_forwarded_artifact() {
+    for (label, construct, k) in HALVING_INPUTS {
+        let a = construct(4);
+        let values = forwarded(&a, 0x5714_3201);
+        let top = values.layers.last().expect("a top layer");
+        let product =
+            |j: usize| (0..16).fold(Fr::ONE, |acc, y| acc * values.layers[k - 1][j].get(y));
+        assert_eq!(
+            memory_roots(&a, &values),
+            Ok((top[0].get(0), top[1].get(0))),
+            "{label}"
+        );
+        assert_eq!(
+            memory_roots(&a, &values),
+            Ok((product(0), product(1))),
+            "{label}"
+        );
+    }
 }
 
-/// One row of the read leaves changed in `LayerValues`, the top left as it
-/// was: refused. The same for the write side. Kills a hook that reads the roots
-/// off the top without recomputing them.
+/// One row under a root changed in `LayerValues`, the top left as it was:
+/// refused. The same for the write side, on both artifacts. Kills a hook that
+/// reads the roots off the top without recomputing them.
 #[test]
 fn memory_roots_refuses_a_changed_row_under_a_root() {
-    let a = zero_window_artifact(4);
-    for j in 0..2 {
-        let mut values = forwarded(&a, 0x5714_3202);
-        let column = &values.layers[0][j];
-        let mut rows: Vec<Fr> = (0..column.len()).map(|y| column.get(y)).collect();
-        rows[3] += Fr::ONE;
-        values.layers[0][j] = MultilinearPoly::new(PolyBacking::Fr(rows));
-        let e = memory_roots(&a, &values).unwrap_err();
-        assert!(e.contains(&format!("layer 1's column {j}")), "{e}");
+    for (label, construct, k) in HALVING_INPUTS {
+        let a = construct(4);
+        for j in 0..2 {
+            let mut values = forwarded(&a, 0x5714_3202);
+            let column = &values.layers[k - 1][j];
+            let mut rows: Vec<Fr> = (0..column.len()).map(|y| column.get(y)).collect();
+            rows[3] += Fr::ONE;
+            values.layers[k - 1][j] = MultilinearPoly::new(PolyBacking::Fr(rows));
+            let e = memory_roots(&a, &values).unwrap_err();
+            assert!(
+                e.contains(&format!("layer {k}'s column {j}")),
+                "{label}: {e}"
+            );
+        }
     }
+}
+
+/// The halving input replaced by one-row columns holding the roots themselves,
+/// whose products are the top: refused by height. A layer list of the wrong
+/// depth is refused too. Kills a hook that takes the column heights from
+/// `values` rather than from the artifact.
+#[test]
+fn memory_roots_refuses_a_layer_of_the_wrong_height_or_depth() {
+    let a = zero_window_artifact(4);
+    let mut values = forwarded(&a, 0x5714_3204);
+    let top: Vec<Fr> = values
+        .layers
+        .last()
+        .expect("a top")
+        .iter()
+        .map(|c| c.get(0))
+        .collect();
+    values.layers[0] = top
+        .iter()
+        .map(|root| MultilinearPoly::new(PolyBacking::Fr(vec![*root])))
+        .collect();
+    assert_eq!(
+        memory_roots(&a, &values),
+        Err("memory roots: layer 1's column 0 has 1 rows, not 16".to_string())
+    );
+
+    let mut values = forwarded(&a, 0x5714_3204);
+    values.layers.remove(1);
+    assert_eq!(
+        memory_roots(&a, &values),
+        Err("memory roots: 4 layers are materialized, and the artifact has 5".to_string())
+    );
 }
 
 #[test]

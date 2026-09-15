@@ -70,22 +70,26 @@ fn t(c: &[Fr; 4], space: u64, addr: Fr, ts: Fr, value: Fr) -> Fr {
 /// Every frame leaf is exactly 1 at `m = 0`, whatever the other columns and
 /// challenges are, and at `m = 1` the read leaf is `T(AS, addr, read_ts,
 /// read_value)` and the write leaf `T(AS, addr, 4·cycle + Δ, write_value)`.
-/// Kills a wrong AS, Δ, timestamp step, column position or mask term.
+/// Each query's mask is tried alone at 1 among zeros and alone at 0 among
+/// ones, beside all zeros and all ones, so leaves `q` and `8 + q` must read
+/// query `q`'s own mask. Kills a wrong AS, Δ, timestamp step, column position
+/// or mask term, and a leaf masked by another query's mask.
 #[test]
 fn frame_leaves_are_one_when_masked_and_the_tuple_when_live() {
     let a = frame_artifact(4);
     let mut rng = Rng::new(0x5714_3101);
-    for trial in 0..8 {
+    let mut patterns = vec![[false; 8], [true; 8]];
+    for q in 0..8 {
+        let mut alone = [false; 8];
+        alone[q] = true;
+        patterns.push(alone);
+        patterns.push(alone.map(|live| !live));
+    }
+    for live in patterns {
         let (c, slots) = random_memory(&mut rng);
         let mut row: Vec<Fr> = (0..FRAME_COLUMNS).map(|_| fr(&mut rng)).collect();
         for q in 0..8 {
-            row[column(q, 0)] = Fr::ZERO;
-        }
-        let values = gate_values(&a, 0, &row, &[], &[], &slots);
-        assert_eq!(values[..16], [Fr::ONE; 16], "trial {trial}");
-
-        for q in 0..8 {
-            row[column(q, 0)] = Fr::ONE;
+            row[column(q, 0)] = if live[q] { Fr::ONE } else { Fr::ZERO };
         }
         let values = gate_values(&a, 0, &row, &[], &[], &slots);
         let cycle = row[0];
@@ -93,16 +97,16 @@ fn frame_leaves_are_one_when_masked_and_the_tuple_when_live() {
             let (addr, read_ts) = (row[column(q, 1)], row[column(q, 2)]);
             let (read_value, write_value) = (row[column(q, 3)], row[column(q, 4)]);
             let write_ts = int(4) * cycle + int(DELTA[q]);
-            assert_eq!(
-                values[q],
-                t(&c, SPACE[q], addr, read_ts, read_value),
-                "trial {trial}, read leaf {q}"
-            );
-            assert_eq!(
-                values[8 + q],
-                t(&c, SPACE[q], addr, write_ts, write_value),
-                "trial {trial}, write leaf {q}"
-            );
+            let (read, write) = if live[q] {
+                (
+                    t(&c, SPACE[q], addr, read_ts, read_value),
+                    t(&c, SPACE[q], addr, write_ts, write_value),
+                )
+            } else {
+                (Fr::ONE, Fr::ONE)
+            };
+            assert_eq!(values[q], read, "masks {live:?}, read leaf {q}");
+            assert_eq!(values[8 + q], write, "masks {live:?}, write leaf {q}");
         }
     }
 }

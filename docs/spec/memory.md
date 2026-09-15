@@ -91,7 +91,8 @@ read leaf    R_q = m·T(s, addr, read_ts,         read_value)  + 1 − m
 write leaf   W_q = m·T(s, addr, 4·cycle + Δ,     write_value) + 1 − m
 ```
 
-Each is **one `Quadratic`, written flat**, with `m·s + 1 − m = 1 + (s − 1)·m`:
+Each is **one `Quadratic`, written flat**, as `1 + m·(γ_M − 1 + s + …)` with every other term
+of the tuple times `m`:
 
 ```text
 R_q = Quadratic { constant: 1,
@@ -234,7 +235,8 @@ The window constant for a shard of window `w` is
 `WC = γ_M + RAM + α_addr·4h·w`, computed by `gkr_verify::window_challenges` from the drawn
 slots and the window id bound in the statement (§6); `w = 0` for `INIT_TEARDOWN`.
 
-`kat-gen`'s `memory` group writes both artifacts at `n = 22` to
+`kat-gen`'s `memory` group writes `memory_frame.bin`, `image_window.bin` and `zero_window.bin` —
+the frame subtree of §2 and both window artifacts — at `n = 22` to
 `crates/constraints/tests/vectors/`; CI regenerates and diffs them.
 
 ### 3.4 The columns a prover fills
@@ -426,9 +428,10 @@ self-balancing query are caught by the native evaluator only.
   setup column is bound by identity before the challenges: a gate with a global-slot
   coefficient reads no `W` column, no inner column and no cached entry;
 - **unconstrained masks**: a leaf's mask that is a committed column — `M`, `W` or `S` — with
-  no enforcing gate `m − m·m` in gate list 0. A leaf is a producing `Quadratic` of gate list 0
-  with constant 1, and its mask the operand of each of its linear terms weighted by a global
-  slot.
+  no enforcing gate `m − m·m` in gate list 0, or that is any virtual column but `V[ram_live]`,
+  the one virtual that is 0 or 1 on the cube (`V[row]` is not). A leaf is a producing
+  `Quadratic` of gate list 0 with constant 1, and its mask the operand of each of its linear
+  terms weighted by a global slot. A `W` mask is refused by provenance first.
 
 The window artifacts' read sets are pinned by test: `ZERO_WINDOWS` reads `M[0], M[1], V[row]`;
 `INIT_TEARDOWN` reads those and `S[0]`, `V[ram_live]`.

@@ -366,12 +366,17 @@ fn frame_with_lookups(trace_vars: u32, lookups: Vec<LookupExpr>) -> CircuitArtif
     )
 }
 
-/// `γ_M + RAM + α_addr·4h·w`, slot 5, with `(α_addr, V[row])` four times for
-/// `4y`: a window row's tuple at `ts` and `value`, where given.
+/// Bytes per RAM word: row `y` of a window is the word at byte address
+/// `4h·w + 4y`, a RAM address being the byte address of a 4-aligned word
+/// (`docs/spec/memory.md` §3.1). Not `TS_STEP`, which is timestamps per cycle.
+const WORD_BYTES: u64 = 4;
+
+/// `γ_M + RAM + α_addr·4h·w`, slot 5, with `(α_addr, V[row])` `WORD_BYTES`
+/// times for `4y`: a window row's tuple at `ts` and `value`, where given.
 fn window_tuple(ts: Option<PolyAddress>, value: PolyAddress) -> GateDef {
     let row = PolyAddress::Virtual(VirtualKind::RowIndex);
     let mut terms = Vec::new();
-    for _ in 0..memory::TS_STEP {
+    for _ in 0..WORD_BYTES {
         terms.push((slot(challenge_slot::MEM_ALPHA_ADDR), row));
     }
     if let Some(ts) = ts {
@@ -425,7 +430,7 @@ pub fn zero_window_artifact(trace_vars: u32) -> CircuitArtifact {
     let row = PolyAddress::Virtual(VirtualKind::RowIndex);
     let teardown = window_tuple(Some(PolyAddress::Memory(0)), PolyAddress::Memory(1));
     let init = GateDef::Linear {
-        terms: vec![(slot(challenge_slot::MEM_ALPHA_ADDR), row); memory::TS_STEP as usize],
+        terms: vec![(slot(challenge_slot::MEM_ALPHA_ADDR), row); WORD_BYTES as usize],
         constant: slot(challenge_slot::MEM_WINDOW_CONSTANT),
     };
     assemble(
@@ -709,7 +714,9 @@ fn provenance(gate: &GateDef, below: &[(bool, bool)], cached: &[(bool, bool)]) -
 /// 3. **unconstrained masks**: a leaf — a producing `Quadratic` of gate list 0
 ///    with constant literal 1 and a linear term weighted by a global slot —
 ///    whose mask, that term's operand, is an `M`, `W` or `S` column, when gate
-///    list 0 has no enforcing gate equal to [`booleanity`] of it.
+///    list 0 has no enforcing gate equal to [`booleanity`] of it; or is any
+///    virtual column but `V[ram_live]`, the one virtual that is 0 or 1 on every
+///    row. (A `W` mask is refused by rule 1 first.)
 pub fn check_memory(a: &CircuitArtifact) -> Result<(), String> {
     let gate_name = |relation: u32| {
         a.relations
@@ -771,17 +778,26 @@ pub fn check_memory(a: &CircuitArtifact) -> Result<(), String> {
             continue;
         }
         for (c, mask) in linear {
-            let committed = matches!(
-                mask,
-                PolyAddress::Memory(_) | PolyAddress::Witness(_) | PolyAddress::Setup(_)
-            );
-            let constrained = list.enforcing.iter().any(|b| b.gate == booleanity(*mask));
-            if global(c) && committed && !constrained {
-                return Err(format!(
-                    "unconstrained mask: leaf `{}` masks with {mask}, and gate list 0 has no \
-                     enforcing gate {mask} − {mask}·{mask}",
-                    gate_name(e.relation)
-                ));
+            if !global(c) {
+                continue;
+            }
+            let leaf = gate_name(e.relation);
+            match mask {
+                PolyAddress::Memory(_) | PolyAddress::Witness(_) | PolyAddress::Setup(_) => {
+                    if !list.enforcing.iter().any(|b| b.gate == booleanity(*mask)) {
+                        return Err(format!(
+                            "unconstrained mask: leaf `{leaf}` masks with {mask}, and gate list \
+                             0 has no enforcing gate {mask} − {mask}·{mask}"
+                        ));
+                    }
+                }
+                PolyAddress::Virtual(VirtualKind::RamLive) => {}
+                _ => {
+                    return Err(format!(
+                        "unconstrained mask: leaf `{leaf}` masks with {mask}, which is not 0 or \
+                         1 on every row"
+                    ))
+                }
             }
         }
     }

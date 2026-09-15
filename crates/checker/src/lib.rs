@@ -873,8 +873,9 @@ pub fn violated_lookups(a: &CircuitArtifact, w: &WitnessRow) -> Vec<String> {
 /// computed directly and must equal the top layer's single values there.
 ///
 /// Refuses an artifact with no halving list, an output that is not an inner
-/// address or a top column that is not one value, and `values` whose products
-/// and top disagree.
+/// address, `values` with a layer count other than the artifact's depth or a
+/// root column of the halving input that is not `2^n_k` rows tall, a top
+/// column that is not one value, and `values` whose products and top disagree.
 ///
 /// Does NOT cover: the layers below the first halving list, which it takes as
 /// `values` holds them — `gkr::self_check` recomputes those; whether the roots
@@ -897,10 +898,18 @@ pub fn memory_roots(a: &CircuitArtifact, values: &LayerValues) -> Result<(Fr, Fr
         .checked_sub(1)
         .and_then(|i| values.layers.get(i))
         .ok_or(format!("memory roots: layer {k} is not materialized"))?;
+    if values.layers.len() != a.depth() {
+        return Err(format!(
+            "memory roots: {} layers are materialized, and the artifact has {}",
+            values.layers.len(),
+            a.depth()
+        ));
+    }
     let top = values
         .layers
         .last()
         .ok_or("memory roots: no layer is materialized".to_string())?;
+    let rows = 1usize << a.layer_vars(k);
     let mut roots = [Fr::ZERO; 2];
     for (root, j) in roots.iter_mut().zip([read, write]) {
         let (Some(column), Some(at_top)) = (layer.get(j), top.get(j)) else {
@@ -908,6 +917,12 @@ pub fn memory_roots(a: &CircuitArtifact, values: &LayerValues) -> Result<(Fr, Fr
                 "memory roots: column {j} of layer {k} or of the top is missing"
             ));
         };
+        if column.len() != rows {
+            return Err(format!(
+                "memory roots: layer {k}'s column {j} has {} rows, not {rows}",
+                column.len()
+            ));
+        }
         if at_top.len() != 1 {
             return Err(format!(
                 "memory roots: the top's column {j} has {} rows, not one",
