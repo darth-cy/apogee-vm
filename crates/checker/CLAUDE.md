@@ -27,6 +27,7 @@ pub fn check_padding_identity(a: &CircuitArtifact) -> Result<(), String>;   // t
 pub struct WitnessRow { pub committed: Vec<Fr>, pub row: usize, pub scratch: Vec<Fr> }
 pub fn violated_relations(a: &CircuitArtifact, w: &WitnessRow, challenges: &ExternalChallenges) -> Vec<String>;
 pub fn violated_lookups(a: &CircuitArtifact, w: &WitnessRow) -> Vec<String>;
+pub fn memory_roots(a: &CircuitArtifact, values: &gkr::LayerValues) -> Result<(Fr, Fr), String>;   // (read, write)
 pub fn dump(a: &CircuitArtifact) -> String;
 pub struct VerifierConstants { /* trace_vars, committed and virtual names, per-list halving,
                                   num_vars, widths, enforcing and cached counts, output names,
@@ -50,7 +51,8 @@ checker dump <artifact>
   the witness-row evaluator and the padding check cover row-local relations only —
   nothing at or above a halving list; the product-tree clause covers the first halving
   list's inputs, on `padding.row` only; the lookup evaluator is membership on one row,
-  not the LogUp argument; the cross-check covers the fields a verifier's
+  not the LogUp argument; the root hook `memory_roots` recomputes the two roots from the
+  layer the first halving list reads, and covers nothing below it; the cross-check covers the fields a verifier's
   description names, not documentation-only names, `format_version`,
   `coefficient_encoding`, lookups or padding.
 - **An error names its law first** (`Law 2 (derived width): ...`), so a failure is
@@ -69,6 +71,7 @@ checker dump <artifact>
 | `tests/laws.rs` | acceptance 5: both fixtures pass; 36 mutants of both compilations — 4 lawful controls and 32 law-breaking, 2 of those also breaking a rule outside the laws — plus 4 of the cached compilation's cached entries, each failing exactly the laws it breaks: among them a gate reading two layers down, a cached entry reading another or of another layer, a width the gates do not produce, a halving gate list 0, a halving list skipping a column, a top layer the output map does not hold or names twice, a scratch slot no relation defines, and a flat list disagreeing in count and in meaning, among them one product coefficient of the toy's `Quadratic` gate; `check_laws` against `validate` over 72 of the 76 mutant runs, no disagreement |
 | `tests/padding.rs` | both fixtures pass; a flipped `zero_row_valid`, a padding row breaking the gated equality, and a wrong-length row each fail; the product-tree clause: the toy fails it, pinned and explained, the toy edited to pad its leaves with 1 passes and each leaf moved off 1 fails naming it, the same edit with a second halving list stacked on the first still passes, and an artifact with no halving list passes |
 | `tests/lookups.rs` | `check_laws` against `validate` over 25 lookup mutants of both toys — 5 lawful, an `M`, a `W` and an `S` selector among them, 20 breaking one rule each — with no disagreement; `violated_lookups` on 11 hand-derived rows, among them the bound's edge, a selector of 2, `−1` read canonically, and `V[row]` and `V[ram_live]` read at the witness's row; evaluators reporting nothing or everything fail |
+| `tests/memory.rs` | `memory_roots` on a forwarded `ZERO_WINDOWS` artifact equal to the top and to the leaves' products; refused when one row under either root changes, and on an artifact with no halving list; the three `constraints::memory` artifacts passing `check_laws` and `check_padding`, and the frame `check_padding_identity` |
 | `tests/witness.rs` | acceptance 8: a satisfying row passes; perturbing each of 14 cells reports exactly the relations derived by hand for it, on active and inactive rows; an evaluator reporting nothing or everything fails |
 | `tests/cross_check.rs` | acceptance 9: the hand-written description passes both fixtures; 24 perturbations, each on both compilations, each caught by the check the test names — among them a renamed memory, witness and setup column and a lawful added cached entry; documentation-only renames pass |
 | `tests/dump.rs` | acceptance 10: the dump's header, columns, layers, relations, addresses and catalogue; one exact line per gate shape, the toy's `Quadratic` gate and its relation, the cached entry, a scratch-bijection line and an output-map line; a literal at or above `2^64` printed as hex; the CLI on the fixtures, a corrupted file and a lawless one; a lookup's line, with its channel's name and its selector |

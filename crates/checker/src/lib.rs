@@ -14,10 +14,13 @@
 //! fixed seeds), so every verdict is reproducible; each trial wrongly accepts
 //! two different polynomials with probability about `degree / |Fr|`.
 
+use constants::memory::{READ_ROOT, WRITE_ROOT};
 use constants::{challenge_slot, lookup_channel};
 use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress, VirtualKind, CATALOGUE};
 use field::Fr;
-use gkr::{eval_gate, forward, gate_values, virtual_at_row, BaseLayer, ExternalChallenges};
+use gkr::{
+    eval_gate, forward, gate_values, virtual_at_row, BaseLayer, ExternalChallenges, LayerValues,
+};
 use poly::{MultilinearPoly, PolyBacking};
 
 /// Independent pseudo-random points per sampled check.
@@ -855,6 +858,72 @@ pub fn violated_lookups(a: &CircuitArtifact, w: &WitnessRow) -> Vec<String> {
         }
     }
     violated
+}
+
+// ---------------------------------------------------------------------------
+// The memory roots
+// ---------------------------------------------------------------------------
+
+/// The root self-check hook, `docs/spec/memory.md` §1: a memory artifact's
+/// `(read root, write root)`, recomputed from the materialized layers rather
+/// than read off the top. A halving list keeps every column's offset, so the
+/// roots at `outputs[READ_ROOT]` and `outputs[WRITE_ROOT]` are, at their
+/// offsets `j_r` and `j_w`, the products over every row of columns `j_r` and
+/// `j_w` of the layer the first halving list reads. Those two products are
+/// computed directly and must equal the top layer's single values there.
+///
+/// Refuses an artifact with no halving list, an output that is not an inner
+/// address or a top column that is not one value, and `values` whose products
+/// and top disagree.
+///
+/// Does NOT cover: the layers below the first halving list, which it takes as
+/// `values` holds them — `gkr::self_check` recomputes those; whether the roots
+/// reconcile, which is `gkr::reconciles` over every shard; the laws and
+/// `check_memory`, which it assumes. Materializes nothing, but reads every row
+/// of two columns.
+pub fn memory_roots(a: &CircuitArtifact, values: &LayerValues) -> Result<(Fr, Fr), String> {
+    let Some(k) = a.layers.iter().position(|list| list.halving) else {
+        return Err("memory roots: the artifact has no halving list".to_string());
+    };
+    let offset = |position: usize| match a.outputs.get(position) {
+        Some(PolyAddress::Inner { offset, .. }) => Ok(*offset as usize),
+        other => Err(format!(
+            "memory roots: output {position} is {other:?}, not an inner column"
+        )),
+    };
+    let (read, write) = (offset(READ_ROOT)?, offset(WRITE_ROOT)?);
+    // Gate list 0 reads the base and is never halving, so layer k is inner.
+    let layer = k
+        .checked_sub(1)
+        .and_then(|i| values.layers.get(i))
+        .ok_or(format!("memory roots: layer {k} is not materialized"))?;
+    let top = values
+        .layers
+        .last()
+        .ok_or("memory roots: no layer is materialized".to_string())?;
+    let mut roots = [Fr::ZERO; 2];
+    for (root, j) in roots.iter_mut().zip([read, write]) {
+        let (Some(column), Some(at_top)) = (layer.get(j), top.get(j)) else {
+            return Err(format!(
+                "memory roots: column {j} of layer {k} or of the top is missing"
+            ));
+        };
+        if at_top.len() != 1 {
+            return Err(format!(
+                "memory roots: the top's column {j} has {} rows, not one",
+                at_top.len()
+            ));
+        }
+        let product = (0..column.len()).fold(Fr::ONE, |acc, y| acc * column.get(y));
+        if product != at_top.get(0) {
+            return Err(format!(
+                "memory roots: the product of layer {k}'s column {j} over its rows is not the \
+                 top's value"
+            ));
+        }
+        *root = product;
+    }
+    Ok((roots[0], roots[1]))
 }
 
 // ---------------------------------------------------------------------------

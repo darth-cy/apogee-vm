@@ -13,13 +13,17 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt;
 
-use constants::{memory, transcript_tags};
+use constants::transcript_tags;
 use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress, VirtualKind};
 use field::Fr;
 use poly::{eq_eval, MultilinearPoly};
 use transcript::Transcript;
 
 pub use sumcheck::SumcheckProof;
+
+mod memory;
+
+pub use memory::{boundary_factors, reconciles, window_challenges, BoundaryFinals};
 
 // ---------------------------------------------------------------------------
 // The containers
@@ -194,7 +198,7 @@ pub fn virtual_at_row(kind: VirtualKind, row: usize) -> Fr {
     match kind {
         VirtualKind::RowIndex => Fr::from_u64(row as u64),
         VirtualKind::RamLive => {
-            if row >= 1 << memory::RAM_LIVE_BIT {
+            if row >= 1 << constants::memory::RAM_LIVE_BIT {
                 Fr::ONE
             } else {
                 Fr::ZERO
@@ -212,7 +216,7 @@ pub fn virtual_at_point(kind: VirtualKind, point: &[Fr]) -> Fr {
         // bit from RAM_LIVE_BIT up is clear; over RAM_LIVE_BIT variables or
         // fewer the product is empty and the table is 0.
         VirtualKind::RamLive => {
-            let high = &point[point.len().min(memory::RAM_LIVE_BIT as usize)..];
+            let high = &point[point.len().min(constants::memory::RAM_LIVE_BIT as usize)..];
             Fr::ONE - high.iter().fold(Fr::ONE, |acc, y| acc * (Fr::ONE - *y))
         }
     }

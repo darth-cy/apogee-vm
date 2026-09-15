@@ -23,7 +23,8 @@
 //! | `loader`  | `crates/loader/tests/vectors/*` (from the committed guest ELFs) |
 //! | `isa`     | `crates/isa/tests/vectors/*` (the hand-encoded corpus, via llvm-objdump) |
 //! | `program` | `crates/program/tests/vectors/*` (the identities need the ceremony file) |
-//! | `gkr`     | `crates/constraints/tests/vectors/*` (the S13 toy circuit, cached and cache-free) |
+//! | `gkr`     | `crates/constraints/tests/vectors/toy_*` (the S13 toy circuit, cached and cache-free) |
+//! | `memory`  | `crates/constraints/tests/vectors/{memory_frame,image_window,zero_window}.bin` (S14's memory artifacts) |
 //! | `guests`  | the guest ELFs themselves -- opt-in only, see `DEFAULT_GROUPS` |
 
 use std::fs;
@@ -37,6 +38,7 @@ mod gkr;
 mod guests;
 mod isa;
 mod loader;
+mod memory;
 mod msm;
 mod pairing;
 mod pcs;
@@ -47,7 +49,7 @@ mod srs;
 mod tower;
 
 /// Every group, in the order a reader of the tower would meet them.
-const GROUPS: [(&str, fn()); 13] = [
+const GROUPS: [(&str, fn()); 14] = [
     ("field", field::generate),
     ("poly", poly::generate),
     ("curve", curve::generate),
@@ -60,6 +62,7 @@ const GROUPS: [(&str, fn()); 13] = [
     ("isa", isa::generate),
     ("program", program::generate),
     ("gkr", gkr::generate),
+    ("memory", memory::generate),
     ("guests", guests::generate),
 ];
 
@@ -76,9 +79,9 @@ const GROUPS: [(&str, fn()); 13] = [
 /// one machine, with `cargo run -p kat-gen -- guests`, and everything CI can
 /// reproduce from them -- the objdump and nm listings -- is in `loader`, which
 /// does run by default.
-const DEFAULT_GROUPS: [&str; 12] = [
+const DEFAULT_GROUPS: [&str; 13] = [
     "field", "poly", "curve", "tower", "pairing", "msm", "srs", "pcs", "loader", "isa", "program",
-    "gkr",
+    "gkr", "memory",
 ];
 
 fn main() {

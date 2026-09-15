@@ -51,7 +51,9 @@ written as a term repeated four times. Normalization merges repeats.
 
 **Roots.** Every memory artifact's output map has exactly two entries:
 `outputs[READ_ROOT = 0]` is the product of its read tuples and `outputs[WRITE_ROOT = 1]` the
-product of its write tuples (`constants::memory::{READ_ROOT, WRITE_ROOT}`).
+product of its write tuples (`constants::memory::{READ_ROOT, WRITE_ROOT}`), named `read_root`
+and `write_root` in the scratch bijection. `checker::memory_roots` recomputes both from the
+materialized layer the first halving list reads.
 
 ---
 
@@ -93,14 +95,19 @@ Each is **one `Quadratic`, written flat**, with `m·s + 1 − m = 1 + (s − 1)�
 
 ```text
 R_q = Quadratic { constant: 1,
-                  linear:   [(γ_M, m), (s − 1, m)],
+                  linear:   [(γ_M, m), (−1, m), (s, m)],
                   products: [(α_addr, addr, m), (α_ts, read_ts, m), (α_val, read_value, m)] }
 W_q = Quadratic { constant: 1,
-                  linear:   [(γ_M, m), (s − 1, m), (α_ts, m) × Δ],
+                  linear:   [(γ_M, m), (−1, m), (s, m), (α_ts, m) × Δ],
                   products: [(α_addr, addr, m), (α_ts, cycle, m) × 4, (α_val, write_value, m)] }
 ```
 
-`(s − 1)` is a literal; `× k` repeats a term `k` times. The relation is the same polynomial.
+`s` is a literal; `× k` repeats a term `k` times. The relation is the same polynomial.
+`constraints::memory::leaf` writes both from the unmasked tuple gate `read_tuple(q)` or
+`write_tuple(q)` — a `Linear` whose `AS` and `Δ` terms already sit on `m` — in this order:
+the tuple's constant on `m`, then `(−1, m)`, then the tuple's terms on `m` as they are, and
+every other term times `m`. A term already on `m` enters once, so a leaf is `m·T + 1 − m` on a
+boolean `m` only, which the booleanity gate of §2.4 supplies.
 At `m = 0` a leaf is 1 whatever the other columns hold; at `m = 1` it is the tuple. The
 `MaskIntoIdentity` shape is not used: its input would have to be a column or a cached entry,
 and a cached tuple inside it refuses the cache-free compilation.
@@ -145,16 +152,25 @@ gap_q = 4·cycle + Δ_q − read_ts − 1  ∈ [0, 2^38)
 ```
 
 as two range obligations on the timestamp channel (§7), both with selector `M[mask_q]`, over
-one witness column `W[gap_hi_q]`:
+one witness column `W[q_gap_hi]`:
 
 ```text
-gap_hi_q : Linear { [(1, W[gap_hi_q])], 0 }
-gap_lo_q : Linear { [(4, cycle), (−1, read_ts), (−2^19, W[gap_hi_q])], Δ_q − 1 }
+gap_hi_q : Linear { [(1, W[q_gap_hi])], 0 }
+gap_lo_q : Linear { [(4, cycle), (−1, read_ts), (−2^19, W[q_gap_hi])], Δ_q − 1 }
 ```
 
 Each chunk in `[0, 2^19)` makes `gap = lo + 2^19·hi` an integer in `[0, 2^38)`, which is
 strictly `read_ts < 4·cycle + Δ`. The gadget returns its obligations by value, and the
 artifact's construction asserts their number is twice the number of reads.
+
+**Names.** A name is used once per artifact (`docs/spec/gkr.md` §4.2), so a column and the
+obligation over it differ. With `<q>` the query's name of §2.1: `M` columns `cycle`,
+`<q>_mask`, `<q>_addr`, `<q>_read_ts`, `<q>_read_value`, `<q>_write_value`; `W` columns
+`<q>_gap_hi` for the 8 queries in order, then `rd_inv`, `rd_is_zero`, `rd_selected`
+(`W[8]`–`W[10]`); obligations `gap_hi_<q>` and `gap_lo_<q>`, two per query in query order;
+leaves `read_<q>`, `write_<q>`; enforcing gates `<q>_mask_boolean` for the 8 masks,
+`<q>_writes_back` for `rs1` through `load`, and `rd_is_zero_inverse`, `rd_is_zero_at_nonzero`,
+`rd_is_zero_boolean`, `rd_write_masked` for the four x0 gates in the order above.
 
 ---
 
@@ -401,14 +417,18 @@ self-balancing query are caught by the native evaluator only.
 ## 8. Construction-time rules
 
 `constraints::memory::check_memory(artifact)` runs where a memory artifact is built, beside
-`validate`, and refuses:
+`validate`, and refuses, naming the gate:
 
 - **provenance**: any gate, and any output, whose cone both names a global memory slot (1–5)
   and reads a `W` column. It is computed forward, one pair of flags per column, so a product of
   a tuple with a copy of a `W` column two layers up is refused too;
-- **unconstrained masks**: an `M` column used as a leaf mask with no enforcing gate `m − m·m`;
 - **a global slot over anything but `M`, `S` and `V`** — where `S` is admitted only because a
-  setup column is bound by identity before the challenges.
+  setup column is bound by identity before the challenges: a gate with a global-slot
+  coefficient reads no `W` column, no inner column and no cached entry;
+- **unconstrained masks**: a leaf's mask that is a committed column — `M`, `W` or `S` — with
+  no enforcing gate `m − m·m` in gate list 0. A leaf is a producing `Quadratic` of gate list 0
+  with constant 1, and its mask the operand of each of its linear terms weighted by a global
+  slot.
 
 The window artifacts' read sets are pinned by test: `ZERO_WINDOWS` reads `M[0], M[1], V[row]`;
 `INIT_TEARDOWN` reads those and `S[0]`, `V[ram_live]`.

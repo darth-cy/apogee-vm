@@ -21,6 +21,7 @@ use core::fmt;
 use field::Fr;
 
 mod laws;
+pub mod memory;
 mod wire;
 
 pub use laws::ConstraintError;
