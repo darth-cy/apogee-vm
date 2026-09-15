@@ -81,18 +81,21 @@ pub fn frame(query: usize, field: u32) -> PolyAddress {
     PolyAddress::Memory(1 + 5 * query as u32 + field)
 }
 
-/// `W[query]`: the high chunk of a query's timestamp gap.
-fn gap_hi(query: usize) -> PolyAddress {
+/// `W[query]`: the high chunk of a query's timestamp gap, `gap >> 19`.
+pub fn gap_hi(query: usize) -> PolyAddress {
     PolyAddress::Witness(query as u32)
 }
 
-/// The x0 gadget's witness columns, after the eight gap columns.
-const RD_INV: PolyAddress = PolyAddress::Witness(8);
-const RD_IS_ZERO: PolyAddress = PolyAddress::Witness(9);
-const RD_SELECTED: PolyAddress = PolyAddress::Witness(10);
+/// `W[8]`: the inverse of `rd`'s address, 0 where it has none. The x0
+/// gadget's witness columns follow the eight gap columns.
+pub const RD_INV: PolyAddress = PolyAddress::Witness(8);
+/// `W[9]`: 1 exactly on a live `rd` query at address 0.
+pub const RD_IS_ZERO: PolyAddress = PolyAddress::Witness(9);
+/// `W[10]`: the value `rd` writes where its address is not 0.
+pub const RD_SELECTED: PolyAddress = PolyAddress::Witness(10);
 
 /// The query `rd`, whose writes the x0 gadget masks.
-const RD: usize = 7;
+pub const RD: usize = 7;
 
 // ---------------------------------------------------------------------------
 // The tuple and the leaf

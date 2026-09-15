@@ -1,19 +1,24 @@
 //! Execution traces: the memory event log, the per-family buffers, the cycle
-//! profile and the shard plan, and the archive that snapshots them.
+//! profile and the shard plan, the archive that snapshots them, and the memory
+//! argument's columns filled from them.
 //!
 //! `docs/spec/execution-trace.md` is the frozen convention every value here
 //! follows: the timestamps, the slot of every query kind, the x0 rule, the
 //! ecall frame. `crates/trace/CLAUDE.md` is the design record. `crates/emulator`
 //! is the only producer; everything here is a data structure over what it
-//! produced.
+//! produced, or a column built from one.
 
 mod archive;
 mod family;
 mod log;
+mod memory;
 
 pub use archive::{IoStreams, Phase, PhaseTiming, TraceArchive, PHASES};
 pub use family::{FamilyTrace, FamilyTraces, Query, QueryColumns, Role, Row, ROLES};
 pub use log::{AddressSpace, FinalValue, MemoryEvent, MemoryEventLog, SelfCheckError};
+pub use memory::{
+    build_boundary_finals, build_frame_witness, build_init_teardown_columns, build_memory_columns,
+};
 
 use std::collections::BTreeSet;
 

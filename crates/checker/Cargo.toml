@@ -19,4 +19,14 @@ gkr.workspace = true
 poly.workspace = true
 
 [dev-dependencies]
+# `tests/memory.rs`' honest statement: a committed guest ELF loaded, decoded,
+# traced and filled into the memory columns, then proved.
+emulator.workspace = true
+loader.workspace = true
+program.workspace = true
+# The S13 base-layer binding: the proofs absorb `witness_digest` of the
+# committed columns first. S16 absorbs commitments instead.
+sumcheck.workspace = true
 test-support.workspace = true
+trace.workspace = true
+transcript.workspace = true

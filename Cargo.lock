@@ -236,10 +236,16 @@ version = "0.1.0"
 dependencies = [
  "constants",
  "constraints",
+ "emulator",
  "field",
  "gkr",
+ "loader",
  "poly",
+ "program",
+ "sumcheck",
  "test-support",
+ "trace",
+ "transcript",
 ]
 
 [[package]]
@@ -1099,7 +1105,11 @@ name = "trace"
 version = "0.1.0"
 dependencies = [
  "constants",
+ "constraints",
+ "field",
+ "gkr-verify",
  "loader",
+ "poly",
  "postcard",
  "program",
  "serde",

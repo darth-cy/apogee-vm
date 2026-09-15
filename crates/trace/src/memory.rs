@@ -1,0 +1,293 @@
+//! The memory argument's columns, filled from an execution: an execution
+//! family's frame and its witness, a RAM window's teardown, and the register
+//! and PC finals the verifier's boundary reads.
+//!
+//! `docs/spec/memory.md` is normative: §2.1 the frame, §2.4 its witness, §3.4
+//! a window's columns, §4.1 the finals. Every column is keyed by
+//! `constraints::memory`'s layout, which is where the layout lives.
+
+use constants::lookup_channel;
+use constants::memory::{HALT_PC, RAM_LIVE_BIT, TS_STEP};
+use constraints::memory::{
+    frame, gap_hi, CYCLE, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE,
+    FIELD_WRITE_VALUE, FRAME_DELTA, FRAME_QUERIES, FRAME_SPACE, RD, RD_INV, RD_IS_ZERO,
+    RD_SELECTED,
+};
+use constraints::PolyAddress;
+use field::Fr;
+use gkr_verify::BoundaryFinals;
+use loader::ProgramImage;
+use poly::{MultilinearPoly, PolyBacking};
+
+use crate::log::{AddressSpace, MemoryEvent, MemoryEventLog};
+
+/// `values`, zero-padded to `height` rows, in the narrowest backing that holds
+/// its largest entry: `U1`, `U8`, `U16`, `U32`, or `Fr` for a timestamp past
+/// 32 bits.
+fn column(mut values: Vec<u64>, height: usize) -> MultilinearPoly {
+    values.resize(height, 0);
+    let max = values.iter().copied().max().unwrap_or(0);
+    let backing = if max <= 1 {
+        let mut limbs = vec![0u64; height.div_ceil(64)];
+        for (i, v) in values.iter().enumerate() {
+            limbs[i / 64] |= v << (i % 64);
+        }
+        PolyBacking::U1(limbs, height)
+    } else if max <= u8::MAX as u64 {
+        PolyBacking::U8(values.into_iter().map(|v| v as u8).collect())
+    } else if max <= u16::MAX as u64 {
+        PolyBacking::U16(values.into_iter().map(|v| v as u16).collect())
+    } else if max <= u32::MAX as u64 {
+        PolyBacking::U32(values.into_iter().map(|v| v as u32).collect())
+    } else {
+        PolyBacking::Fr(values.into_iter().map(Fr::from_u64).collect())
+    };
+    MultilinearPoly::new(backing)
+}
+
+/// Each of `cycles`' eight frame queries, `None` where the cycle has none, from
+/// one pass over the log.
+///
+/// An event takes the first query of its row still free whose space and slot
+/// are its own. That is exact for every query but the three slot-2 register
+/// ones, `rs2`, `arg1` and `arg2`, which the log files in that order and which
+/// fill in that order: a row with `arg1` has `rs2`, and one with `arg2` has
+/// `arg1`, because an ecall's arguments are a prefix of `a0, a1, a2`
+/// (`docs/spec/execution-trace.md` §6, §7) and no other row reads `arg1`.
+///
+/// Panics on a cycle asked for twice or that the log lacks, on more events in
+/// a cycle than the frame has queries for, and on `cycles.len() > height`.
+fn frame_rows(
+    log: &MemoryEventLog,
+    cycles: &[u64],
+    height: usize,
+) -> Vec<[Option<MemoryEvent>; FRAME_QUERIES]> {
+    assert!(
+        cycles.len() <= height,
+        "memory columns: {} cycles do not fit {height} rows",
+        cycles.len()
+    );
+    let top = cycles.iter().copied().max().unwrap_or(0);
+    let mut row_of: Vec<Option<usize>> = vec![None; top as usize + 1];
+    for (i, &cycle) in cycles.iter().enumerate() {
+        assert!(
+            row_of[cycle as usize].replace(i).is_none(),
+            "memory columns: cycle {cycle} is asked for twice"
+        );
+    }
+    let mut rows = vec![[None; FRAME_QUERIES]; cycles.len()];
+    for event in log.events() {
+        let Some(&Some(i)) = row_of.get(event.cycle() as usize) else {
+            continue;
+        };
+        let row = &mut rows[i];
+        let query = (0..FRAME_QUERIES)
+            .find(|&q| {
+                row[q].is_none()
+                    && FRAME_SPACE[q] == event.space.tag()
+                    && FRAME_DELTA[q] == event.delta()
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "memory columns: cycle {} has a {:?} query at slot {} that no free frame \
+                     query takes",
+                    event.cycle(),
+                    event.space,
+                    event.delta()
+                )
+            });
+        row[query] = Some(*event);
+    }
+    for (row, cycle) in rows.iter().zip(cycles) {
+        assert!(
+            row[0].is_some(),
+            "memory columns: the log has no cycle {cycle}"
+        );
+    }
+    rows
+}
+
+/// An execution family's 41 frame columns, `docs/spec/memory.md` §2.1, in
+/// `constraints::memory`'s layout order: `M[0]` cycle, then per query its mask,
+/// address, read timestamp, read value and write value.
+///
+/// Row `i` is cycle `cycles[i]` — a shard's cycles, in the order given — and
+/// rows `cycles.len()..height` are padding, 0 in every column. A query the
+/// cycle lacks is 0 in every one of its columns. The pc query's address is 0,
+/// its read value the pc, its write value `next_pc` and its read timestamp the
+/// previous cycle's pc write, all as the log records them. Each column takes
+/// the narrowest backing its largest value fits.
+///
+/// Panics naming a cycle the log lacks or `cycles` repeats, on a cycle with a
+/// query the frame has no place for, and on `cycles.len() > height` or a
+/// `height` that is not a power of two.
+pub fn build_memory_columns(
+    log: &MemoryEventLog,
+    cycles: &[u64],
+    height: usize,
+) -> Vec<(PolyAddress, MultilinearPoly)> {
+    let rows = frame_rows(log, cycles, height);
+    let mut out = vec![(CYCLE, column(cycles.to_vec(), height))];
+    for q in 0..FRAME_QUERIES {
+        let field = |f: fn(&MemoryEvent) -> u64| {
+            let values = rows.iter().map(|row| row[q].as_ref().map_or(0, f));
+            column(values.collect(), height)
+        };
+        out.push((frame(q, FIELD_MASK), field(|_| 1)));
+        out.push((frame(q, FIELD_ADDR), field(|e| e.addr as u64)));
+        out.push((frame(q, FIELD_READ_TS), field(|e| e.read_ts)));
+        out.push((frame(q, FIELD_READ_VALUE), field(|e| e.read_value as u64)));
+        out.push((frame(q, FIELD_WRITE_VALUE), field(|e| e.write_value as u64)));
+    }
+    out
+}
+
+/// The frame's 11 witness columns, `docs/spec/memory.md` §2.4, over the rows
+/// [`build_memory_columns`] fills for the same `cycles` and `height`:
+///
+/// - `W[q] <q>_gap_hi`: `gap >> 19`, `gap = 4·cycle + Δ_q − read_ts − 1`, where
+///   the cycle has query `q`;
+/// - `W[8] rd_inv`: the inverse of `rd`'s address, where it is not 0;
+/// - `W[9] rd_is_zero`: 1 exactly on a live `rd` query at address 0;
+/// - `W[10] rd_selected`: `rd`'s write value, where its address is not 0;
+///
+/// and 0 everywhere else, padding rows included. On an honest log every
+/// enforcing gate and every obligation of `frame_artifact` holds on every row.
+/// Panics as [`build_memory_columns`] does.
+pub fn build_frame_witness(
+    log: &MemoryEventLog,
+    cycles: &[u64],
+    height: usize,
+) -> Vec<(PolyAddress, MultilinearPoly)> {
+    let rows = frame_rows(log, cycles, height);
+    let chunk = lookup_channel::BITS[lookup_channel::TIMESTAMP as usize];
+    let mut out = Vec::new();
+    for q in 0..FRAME_QUERIES {
+        let hi = rows.iter().map(|row| {
+            row[q].map_or(0, |e| {
+                let gap = TS_STEP * e.cycle() + FRAME_DELTA[q] - e.read_ts - 1;
+                gap >> chunk
+            })
+        });
+        out.push((gap_hi(q), column(hi.collect(), height)));
+    }
+    let named = rows.iter().map(|row| row[RD].filter(|e| e.addr != 0));
+    let mut inv: Vec<Fr> = named
+        .clone()
+        .map(|e| {
+            e.map_or(Fr::ZERO, |e| {
+                let addr = Fr::from_u64(e.addr as u64);
+                addr.inverse()
+                    .expect("a nonzero register index is invertible")
+            })
+        })
+        .collect();
+    inv.resize(height, Fr::ZERO);
+    out.push((RD_INV, MultilinearPoly::new(PolyBacking::Fr(inv))));
+    let is_zero = rows
+        .iter()
+        .map(|row| row[RD].map_or(0, |e| (e.addr == 0) as u64));
+    out.push((RD_IS_ZERO, column(is_zero.collect(), height)));
+    let selected = named.map(|e| e.map_or(0, |e| e.write_value as u64));
+    out.push((RD_SELECTED, column(selected.collect(), height)));
+    out
+}
+
+/// RAM window `ram_window`'s committed columns at `height` rows,
+/// `docs/spec/memory.md` §3.4: `M[0] teardown_ts` and `M[1] teardown_value`
+/// per row `y` at address `a = 4·height·ram_window + 4y`:
+///
+/// | row | `teardown_ts` | `teardown_value` |
+/// | --- | --- | --- |
+/// | `ram_window = 0` and `y < 2^14` | 0 | 0 |
+/// | `a` touched | its last write's timestamp | its last write's value |
+/// | `a` untouched | 0 | `image.initial_word(a)` |
+///
+/// and for `ram_window` 0, `INIT_TEARDOWN`'s window, `S[0]` too:
+/// `program::image_init_column(image, height)`. `height` is the two init
+/// families' one height. Panics unless the window lies inside `[0, 2^31)`, or
+/// if `height` is not a power of two.
+pub fn build_init_teardown_columns(
+    log: &MemoryEventLog,
+    image: &ProgramImage,
+    ram_window: u32,
+    height: usize,
+) -> Vec<(PolyAddress, MultilinearPoly)> {
+    let words = 4 * height as u64;
+    let first = words * ram_window as u64;
+    assert!(
+        first + words <= 1 << 31,
+        "build_init_teardown_columns: window {ram_window} at height {height} is not inside \
+         [0, 2^31)"
+    );
+    let live = |y: usize| ram_window != 0 || y >= 1 << RAM_LIVE_BIT;
+    let mut ts = vec![0u64; height];
+    let mut value: Vec<u64> = (0..height)
+        .map(|y| match live(y) {
+            true => image.initial_word((first + 4 * y as u64) as u32) as u64,
+            false => 0,
+        })
+        .collect();
+    for f in log.final_state() {
+        let a = f.addr as u64;
+        if f.space != AddressSpace::Ram || a < first || a >= first + words {
+            continue;
+        }
+        let y = ((a - first) / 4) as usize;
+        if live(y) {
+            ts[y] = f.ts;
+            value[y] = f.value as u64;
+        }
+    }
+    let mut out = vec![
+        (PolyAddress::Memory(0), column(ts, height)),
+        (PolyAddress::Memory(1), column(value, height)),
+    ];
+    if ram_window == 0 {
+        let init = program::image_init_column(image, height as u32);
+        out.push((PolyAddress::Setup(0), init));
+    }
+    out
+}
+
+/// The register and PC finals, `docs/spec/memory.md` §4.1, from the log's
+/// final state: each register's last write timestamp and value, `(0, 0)` for
+/// one never queried, and the pc's last write timestamp.
+///
+/// Panics naming the value if the pc's final value is not `HALT_PC` — the log
+/// did not end on an exit row, or has no pc query — or `x0`'s is not 0: the
+/// verifier fixes both, and neither is carried.
+pub fn build_boundary_finals(log: &MemoryEventLog) -> BoundaryFinals {
+    let mut finals = BoundaryFinals {
+        reg_ts: [0; 32],
+        pc_ts: 0,
+        reg_values: [0; 31],
+    };
+    let mut pc = None;
+    for f in log.final_state() {
+        let r = f.addr as usize;
+        match f.space {
+            AddressSpace::Reg => {
+                finals.reg_ts[r] = f.ts;
+                match r {
+                    0 => assert_eq!(
+                        f.value, 0,
+                        "build_boundary_finals: x0's final value is {:#x}, not 0",
+                        f.value
+                    ),
+                    _ => finals.reg_values[r - 1] = f.value,
+                }
+            }
+            AddressSpace::Pc => pc = Some(f),
+            AddressSpace::Ram => {}
+        }
+    }
+    let pc = pc.expect("build_boundary_finals: the log has no pc query, so no final pc");
+    assert_eq!(
+        pc.value, HALT_PC,
+        "build_boundary_finals: the pc's final value is {:#x}, not HALT_PC",
+        pc.value
+    );
+    finals.pc_ts = pc.ts;
+    finals
+}

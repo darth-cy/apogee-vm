@@ -50,6 +50,9 @@ pub mod memory {                                   // docs/spec/memory.md §2, �
     pub const FRAME_SPACE: [u8; 8];                // PC REG REG REG REG RAM RAM REG
     pub const FRAME_DELTA: [u64; 8];               // 0 1 2 2 2 2 3 3
     pub fn frame(query: usize, field: u32) -> PolyAddress;           // M[1 + 5·query + field]
+    pub fn gap_hi(query: usize) -> PolyAddress;                      // W[query]
+    pub const RD_INV: PolyAddress;  RD_IS_ZERO;  RD_SELECTED;        // W[8], W[9], W[10]
+    pub const RD: usize = 7;
     pub fn read_tuple(query: usize) -> GateDef;    // unmasked, Linear, constant γ_M
     pub fn write_tuple(query: usize) -> GateDef;
     pub fn leaf(tuple: &GateDef, mask: PolyAddress) -> GateDef;      // flat Quadratic
