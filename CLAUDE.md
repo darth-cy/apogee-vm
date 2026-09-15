@@ -85,7 +85,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
-cargo test --workspace                      # 617 tests as of S13; 20 more are #[ignore]d
+cargo test --workspace                      # 709 tests as of S14; 21 more are #[ignore]d
 cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
@@ -97,7 +97,7 @@ git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vect
 -------------------------------------------------------------------------------
 cargo run -p kat-gen                        # refresh every fixture (manual, deliberate)
 cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader | isa | program | gkr | memory
-cargo run -p checker -- laws <artifact>     # Laws 1-4, the standalone validators
+cargo run -p checker -- laws <artifact>     # Laws 1-4 and the lookup rules, the standalone validators
 cargo run -p checker -- padding <artifact>  # the padding contract
 cargo run -p checker -- dump <artifact>     # a circuit, readably: layers, gates, relations, catalogue
 cargo run -p kat-gen -- guests              # rebuild the guest ELFs; opt-in, one machine
@@ -402,9 +402,10 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   holds them strictly increasing in `[1, 2^29/h − 1]` before the challenges. A window is a
   slice of the address space; a shard's cycles are a slice of the execution.
 - **Registers and the pc have no rows: they are the verifier's boundary.** A proof carries
-  64 scalars — final timestamps of `x0..x31` and the pc, final values of `x1..x31` — as one
-  `MEMORY_BOUNDARY` message after every memory-column commitment and **before** the squeeze:
-  a final value chosen after the challenges solves reconciliation for any trace.
+  64 scalars — final timestamps of `x0..x31` and the pc, final values of `x1..x31` — which
+  S16's global transcript absorbs as one `MEMORY_BOUNDARY` message after every memory-column
+  commitment and **before** the squeeze (at S14 nothing absorbs or decodes them): a final
+  value chosen after the challenges solves reconciliation for any trace.
   `gkr_verify::boundary_factors` folds them and the entry pc into `(W_b, R_b)` once per
   statement, and `reconciles` is the check. `t_pc` is not a cycle count.
 - **The exit row writes `next_pc = HALT_PC = 1`**, not `pc + 4`, and the verifier fixes the
@@ -412,6 +413,12 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   `docs/spec/memory.md` §5 hold, no other row writes it and a trace missing its exit row
   cannot balance; at S14 no gate constrains a row's `next_pc`. The decoded table's
   `next_pc` stays the fall-through.
+- **At S14 a query's mask is held to booleanity and nothing else.** No gate ties it to the
+  row's pc mask or to the instruction the row looks up, so a padding row can carry an `rd`
+  query that rewrites `x10` after exit, and it balances. S16 owes `m_pc` as the row's
+  liveness and the table lookup's selector, and `m_q = m_pc·uses_q` from the row kind
+  (`docs/spec/memory.md` §2.1); `crates/checker/tests/multiset.rs`' control C8 is its tamper
+  target.
 - **The artifact format is 1, and a lookup carries a selector.** `LookupExpr = (name,
   channel, selector, tuple)`: a range obligation holds where its selector is 0 or its one
   `Linear` expression is below the channel's bound. S14 checks them natively
@@ -419,7 +426,8 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   format version.
 - **`check_memory` is a provenance rule.** It runs beside `validate` wherever a memory
   artifact is built, and refuses any gate or output whose cone both names a global memory
-  slot (1–5) and reads a `W` column, a global-slot coefficient over anything but `M`, `S`
+  slot (1–5) and reads a `W` column, a root whose cone reads a `W` column at all — `W` is
+  committed after the memory challenges — a global-slot coefficient over anything but `M`, `S`
   and `V`, and a leaf mask that is an `M` or `S` column with no booleanity gate, or any
   virtual column but `V[ram_live]`. `S` is admitted only because identity
   binds setup columns before the challenges. `docs/spec/memory.md` §8.
@@ -442,3 +450,4 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 | S11 — Decoder + program identity | done | `docs/handoff/S11-decoder.md` |
 | S12 — Emulator + trace generation | done | `docs/handoff/S12-emulator.md` |
 | S13 — GKR engine, circuit artifact, checker suite | done | `docs/handoff/S13-gkr.md` |
+| S14 — Memory multiset argument, timestamps, init/teardown | done | `docs/handoff/S14-multiset.md` |
