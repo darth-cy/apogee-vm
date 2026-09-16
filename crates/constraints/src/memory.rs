@@ -695,7 +695,7 @@ fn assemble(
     // fixtures are those bytes. Only a circuit that declares channels claims
     // to discharge anything, and only there is the discharge rule meaningful.
     if !channels.is_empty() {
-        if let Err(e) = lookup::check_discharge(&artifact) {
+        if let Err(e) = lookup::check_discharge(&artifact, channels) {
             panic!("memory artifact: {e}");
         }
     }

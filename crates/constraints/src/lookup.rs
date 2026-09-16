@@ -205,8 +205,14 @@ pub fn table_denominator(spec: &ChannelSpec) -> GateDef {
 }
 
 /// The channel's fraction tree: the leaf level's `(num, den)` columns in
-/// column order, one fraction per lookup expression, then the table's, then
-/// neutral `(0, 1)` fractions up to a power of two.
+/// column order — **the table's fraction first**, then one per lookup
+/// expression, then neutral `(0, 1)` fractions up to a power of two.
+///
+/// The table goes first so that the tree's first pair-addition, which combines
+/// leaves 0 and 1, is literally `1/(w_0 + g) − mult/(T + g)`: the node
+/// S15 must-be-exact 1 pins. Put it last and that node appears nowhere in a
+/// channel with more than one lookup, because the row fractions pair with each
+/// other.
 ///
 /// `lookups` are the artifact's lookups of this channel, in artifact order, and
 /// name their fractions.
@@ -220,19 +226,20 @@ fn channel_tree(spec: &ChannelSpec, lookups: &[&LookupExpr]) -> Tree {
         constant: lit(0),
     };
     let channel = lookup_channel::NAMES[spec.channel as usize];
-    let mut leaves: Vec<(String, GateDef)> = Vec::new();
+    let mut leaves: Vec<(String, GateDef)> = vec![
+        (
+            format!("{channel}_table_num"),
+            GateDef::Linear {
+                terms: vec![(Coeff::Literal(Fr::MINUS_ONE), spec.multiplicity)],
+                constant: lit(0),
+            },
+        ),
+        (format!("{channel}_table_den"), table_denominator(spec)),
+    ];
     for l in lookups {
         leaves.push((format!("{}_num", l.name), one.clone()));
         leaves.push((format!("{}_den", l.name), row_denominator(l)));
     }
-    leaves.push((
-        format!("{channel}_table_num"),
-        GateDef::Linear {
-            terms: vec![(Coeff::Literal(Fr::MINUS_ONE), spec.multiplicity)],
-            constant: lit(0),
-        },
-    ));
-    leaves.push((format!("{channel}_table_den"), table_denominator(spec)));
     let fractions = (lookups.len() + 1).next_power_of_two();
     for i in 0..fractions - lookups.len() - 1 {
         leaves.push((format!("{channel}_pad_{i}_num"), zero.clone()));
@@ -249,11 +256,12 @@ fn channel_tree(spec: &ChannelSpec, lookups: &[&LookupExpr]) -> Tree {
 /// `lookups`. Each channel's lookups are taken in artifact order, so a lookup's
 /// position in its channel's leaf level is where the artifact lists it.
 ///
-/// Panics unless every channel `lookups` names has a spec, every spec has at
-/// least one lookup, every lookup of a channel has the channel's tuple width,
-/// and `bits <= trace_vars` for a range channel — a table of `2^trace_vars`
-/// rows holds at most that many values, so a narrower circuit cannot carry a
-/// wider range (`docs/spec/lookup.md` §3).
+/// Panics unless every spec has at least one lookup, every lookup of a channel
+/// has the channel's tuple width, the channel's multiplicity is a **witness**
+/// column, a range channel's table is the virtual kind its bound names, and
+/// `bits <= trace_vars` for a range channel — a table of `2^trace_vars` rows
+/// holds at most that many values, so a narrower circuit cannot carry a wider
+/// range (`docs/spec/lookup.md` §3).
 pub(crate) fn channel_trees(
     lookups: &[LookupExpr],
     specs: &[ChannelSpec],
@@ -271,11 +279,30 @@ pub(crate) fn channel_trees(
             "channel `{name}`: a table of {width} columns is not between 1 and {}",
             lookup_channel::MAX_TUPLE
         );
+        // The multiplicity is committed per shard, before `g` and `β` are
+        // drawn (`docs/spec/lookup.md` §2 and §7). A setup column is fixed at
+        // key generation and a memory column belongs to the multiset argument;
+        // either would be a count the channel's own witness does not carry.
+        assert!(
+            matches!(spec.multiplicity, PolyAddress::Witness(_)),
+            "channel `{name}`: its multiplicity is {}, and a multiplicity is a witness column",
+            spec.multiplicity
+        );
         if lookup_channel::IS_RANGE[channel as usize] {
             let bits = lookup_channel::BITS[channel as usize];
             assert_eq!(
                 width, 1,
                 "channel `{name}`: a range channel looks up one expression, not {width}"
+            );
+            // The table is the kind the bound names, and nothing else: a range
+            // channel discharged against another kind's closed form proves a
+            // different range than the channel declares.
+            let kind = range_table(channel).expect("a range channel has a virtual table");
+            assert_eq!(
+                spec.table[0],
+                PolyAddress::Virtual(kind),
+                "channel `{name}`: its table is {}, not the {kind:?} its bound names",
+                spec.table[0]
             );
             assert!(
                 bits <= trace_vars,
@@ -312,20 +339,28 @@ pub fn range_table(channel: u32) -> Option<VirtualKind> {
     }
 }
 
-/// Every lookup of `artifact` is discharged by exactly one leaf denominator of
-/// its channel's fraction tree, and no leaf denominator discharges two.
+/// Every lookup of `artifact` is discharged by exactly one gate-list-0 column,
+/// no column discharges two, and — where `specs` is given — that column is a
+/// leaf of **that lookup's own channel's** fraction tree.
 ///
 /// This is the construction-time twin of the discharge rule (S15 must-be-exact
 /// 7): `channel_trees` builds the leaves from the lookup list, so the check is
-/// over the *finished* artifact, which is what makes a dropped or duplicated
-/// obligation visible. It matches by normalized expansion, so a leaf renamed,
-/// reordered or rewritten into an equal polynomial still counts, and one that
-/// reads another lookup's columns does not.
+/// over the *finished* artifact, which is what makes a dropped, duplicated or
+/// misrouted obligation visible. It matches by normalized expansion, so a leaf
+/// renamed, reordered or rewritten into an equal polynomial still counts, and
+/// one that reads another lookup's columns does not.
+///
+/// The channel half needs `specs`, because which output pair is which channel's
+/// root is the caller's knowledge and not the artifact's: the output map is the
+/// memory roots, if any, then one `(num, den)` pair per channel in `specs`
+/// order. Passing an empty `specs` runs the column half alone, which is all an
+/// artifact by itself can say.
 ///
 /// Assumes an artifact that passed [`CircuitArtifact::validate`].
-pub fn check_discharge(a: &CircuitArtifact) -> Result<(), String> {
+pub fn check_discharge(a: &CircuitArtifact, specs: &[ChannelSpec]) -> Result<(), String> {
     let list = &a.layers[0];
     let leaves: Vec<&GateDef> = list.producing.iter().map(|e| &e.gate).collect();
+    let cones = channel_cones(a, specs)?;
     let mut used = vec![0usize; leaves.len()];
     for l in &a.lookups {
         let want = crate::laws::normal_form(&row_denominator(l));
@@ -339,6 +374,21 @@ pub fn check_discharge(a: &CircuitArtifact) -> Result<(), String> {
                 l.name,
                 hits.len()
             ));
+        }
+        if let Some((i, spec)) = specs
+            .iter()
+            .enumerate()
+            .find(|(_, s)| s.channel == l.channel)
+        {
+            if !cones[i].contains(&hits[0]) {
+                let channel = lookup_channel::NAMES[l.channel as usize];
+                return Err(format!(
+                    "lookup discharge: lookup `{}` is discharged by a column outside channel \
+                     `{channel}`'s fraction tree, so it is summed against another table",
+                    l.name
+                ));
+            }
+            let _ = spec;
         }
         used[hits[0]] += 1;
     }
@@ -354,6 +404,47 @@ pub fn check_discharge(a: &CircuitArtifact) -> Result<(), String> {
     Ok(())
 }
 
+/// The gate-list-0 columns each channel's root pair is computed from, in
+/// `specs` order: the cone below `outputs[first + 2i]` and `outputs[first + 2i + 1]`,
+/// walked down layer by layer, with `first` the output past the memory roots.
+fn channel_cones(a: &CircuitArtifact, specs: &[ChannelSpec]) -> Result<Vec<Vec<usize>>, String> {
+    let first = a.outputs.len().checked_sub(2 * specs.len()).ok_or(format!(
+        "lookup discharge: {} outputs for {} channels",
+        a.outputs.len(),
+        specs.len()
+    ))?;
+    let offset = |address: PolyAddress| match address {
+        PolyAddress::Inner { offset, .. } => Ok(offset as usize),
+        other => Err(format!(
+            "lookup discharge: output {other} is not an inner column"
+        )),
+    };
+    let mut cones = Vec::with_capacity(specs.len());
+    for i in 0..specs.len() {
+        // Walk down from the two roots: at each list, replace the set of
+        // columns by the columns its gates read.
+        let mut live = alloc::collections::BTreeSet::new();
+        live.insert(offset(a.outputs[first + 2 * i])?);
+        live.insert(offset(a.outputs[first + 2 * i + 1])?);
+        // At each list above 0, replace the set of columns by the columns its
+        // gates read. Gate list 0's operands are base columns, so the set that
+        // survives the walk is the channel's leaf columns.
+        for k in (1..a.depth()).rev() {
+            let mut below = alloc::collections::BTreeSet::new();
+            for &j in &live {
+                for op in a.layers[k].producing[j].gate.operands() {
+                    if let PolyAddress::Inner { offset, .. } = op {
+                        below.insert(offset as usize);
+                    }
+                }
+            }
+            live = below;
+        }
+        cones.push(live.into_iter().collect());
+    }
+    Ok(cones)
+}
+
 /// Every column a copower scales also carries a direct range check of its own.
 ///
 /// A copower turns a row-varying bound `x < p` into the fixed `x·p' < 2^32`,
@@ -364,24 +455,46 @@ pub fn check_discharge(a: &CircuitArtifact) -> Result<(), String> {
 /// direct check establishes that.
 ///
 /// `scaled` names, per copower-scaled column, the column `x` the scaling reads.
-/// Refuses any of them that no `RANGE16` obligation of `a` bounds directly — a
-/// lookup whose one expression is `x` alone, with a unit coefficient and no
-/// constant. S18 and S19 consume this.
+/// Refuses any of them that no `RANGE16` obligation of `a` bounds **directly**,
+/// which is either shape of `docs/spec/memory.md` §7:
+///
+/// - a halfword: one obligation whose expression is `x` alone;
+/// - a 32-bit value: a witnessed high chunk `h` with obligations on `h` and on
+///   `x − 2^16·h`, the convention every 32-bit column in this VM is bounded by.
+///
+/// S18 and S19 consume this.
 pub fn check_copowers(a: &CircuitArtifact, scaled: &[PolyAddress]) -> Result<(), String> {
-    for x in scaled {
-        let direct = a.lookups.iter().any(|l| {
+    // A `RANGE16` obligation whose expression is exactly `terms`, in any order,
+    // with no constant.
+    let bounded = |terms: &[(Coeff, PolyAddress)]| {
+        a.lookups.iter().any(|l| {
+            let [GateDef::Linear {
+                terms: got,
+                constant,
+            }] = l.tuple.as_slice()
+            else {
+                return false;
+            };
             l.channel == lookup_channel::RANGE16
-                && matches!(
-                    l.tuple.as_slice(),
-                    [GateDef::Linear { terms, constant }]
-                        if *constant == lit(0)
-                            && terms.as_slice() == [(Coeff::Literal(Fr::ONE), *x)]
-                )
-        });
+                && *constant == lit(0)
+                && got.len() == terms.len()
+                && terms.iter().all(|t| got.contains(t))
+        })
+    };
+    let one = Coeff::Literal(Fr::ONE);
+    let half = Coeff::Literal(-Fr::from_u64(1 << 16));
+    for x in scaled {
+        // The halfword shape, then the 32-bit one over every column that could
+        // be its high chunk.
+        let direct = bounded(&[(one, *x)])
+            || (0..a.witness.len() as u32)
+                .map(PolyAddress::Witness)
+                .any(|h| bounded(&[(one, h)]) && bounded(&[(one, *x), (half, h)]));
         if !direct {
             return Err(format!(
                 "copower pairing: {x} is copower-scaled, but no range16 obligation bounds it \
-                 directly, and a scaled bound alone bounds nothing"
+                 directly — neither alone nor as a high chunk and a remainder — and a scaled \
+                 bound alone bounds nothing"
             ));
         }
     }

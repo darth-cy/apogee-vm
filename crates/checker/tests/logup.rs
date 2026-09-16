@@ -34,7 +34,7 @@ use gkr::{channel_holds, insert_lookup_challenges, BaseLayer, LayerValues};
 use loader::load_elf;
 use pcs::{append_g1, commit, MercuryCommitment};
 use poly::{MultilinearPoly, PolyBacking};
-use program::lookup_tables::{generic_table, GENERIC_WIDTH};
+use program::lookup_tables::{generic_table, GENERIC_WIDTH, SIGN_BASE};
 use program::{decode_program, lookup_tuple, ProgramParams};
 use test_support::{sha256, to_hex};
 use trace::{build_frame_witness, build_memory_columns, build_multiplicities};
@@ -395,7 +395,7 @@ fn the_combined_toy_proves_and_every_channel_holds() {
     assert_eq!(check_laws(a), Ok(()));
     assert_eq!(check_padding(a), Ok(()));
     assert_eq!(check_padding_identity(a), Ok(()));
-    assert_eq!(check_lookup_discharge(a), Ok(()));
+    assert_eq!(check_lookup_discharge(a, &toy.specs), Ok(()));
 
     let values = forwarded_shard(&toy.shard);
     assert_eq!(gkr::self_check(a, &values, &toy.shard.challenges), Ok(()));
@@ -810,6 +810,63 @@ fn the_gated_key_convention_holds_in_all_three_cases() {
         Fr::ZERO,
         "and the ZeroEntry at row 0 answers every switched-off row"
     );
+}
+
+/// The control for the precondition of `docs/spec/lookup.md` §4: the `+ 1`
+/// offset keeps every real **table entry** off the neutral tuple, and that is
+/// all it does. A row whose selector is 1 and whose key expression evaluates to
+/// `−1` gates to `1·(−1 + 1) = 0`, and with its other columns 0 the whole tuple
+/// is the `ZeroEntry` — a table row. The channel balances, every check passes,
+/// and the row has looked up the neutral entry instead of a real one.
+///
+/// So a family reading a value out of a table channel must bound the key it
+/// looks up; the channel cannot. The toy leaves `sign_h` unbounded on purpose —
+/// it is a toy for the channels, not a family — and S17 and S18 own the bounds.
+#[test]
+#[ignore = "2^20 rows: one forward pass is 3 GB"]
+fn an_unbounded_key_can_reach_the_neutral_entry() {
+    let toy = toy();
+    let a = &toy.shard.artifact;
+    let live = live_row(&toy, "sign_on");
+
+    // `sign_h = −(SIGN_BASE + 1)` and `sign_s = 0`: the gated tuple is
+    // (0, 0, 0), the ZeroEntry at the packed table's row 0.
+    let forged = with_cells(
+        &toy.shard,
+        &[
+            (at(a, "sign_h"), live, -Fr::from_u64(SIGN_BASE as u64 + 1)),
+            (at(a, "sign_s"), live, Fr::ZERO),
+        ],
+    );
+    let values = forwarded_shard(&forged);
+    assert_eq!(gkr::self_check(a, &values, &forged.challenges), Ok(()));
+
+    // The prover can even recount its multiplicities over it: the tuple is a
+    // table row, so it counts on row 0 beside every switched-off row.
+    let counts = build_multiplicities(a, &columns_of(&forged), &toy.specs)
+        .expect("the neutral tuple is a table row");
+    let mut recounted = forged.clone();
+    let mut columns = columns_of(&recounted);
+    for (address, column) in counts {
+        let at = columns
+            .iter()
+            .position(|(x, _)| *x == address)
+            .expect("a multiplicity column");
+        columns[at] = (address, column);
+    }
+    recounted.base = BaseLayer::new(columns);
+    let values = forwarded_shard(&recounted);
+    let recounted_toy = reshard(&toy, recounted);
+    let (sums, roots) = sums(&recounted_toy, &values);
+    let generic = channel_at(&sums, lookup_channel::GENERIC);
+    assert_eq!(
+        sums[generic].unmatched,
+        Vec::new(),
+        "the tuple is in the table"
+    );
+    assert_eq!(sums[generic].num, Fr::ZERO, "and the channel balances");
+    assert!(channel_holds(roots[generic]), "so the root accepts it");
+    assert_eq!(prove_and_verify(&recounted_toy, &values), Ok(()));
 }
 
 // ---------------------------------------------------------------------------

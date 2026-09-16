@@ -47,9 +47,9 @@ The answers are the design.
    to `1/(w+g) − m/(t+g)`, but the gated key `flag·(key+1)` is already degree 2, so
    `(w+g)(t+g)` is degree 3 and the gated denominators would need a layer of their own.
    The owner chose the split: `L` row fractions `(1, w_l + g)` and one table fraction
-   `(−m, t + g)`, whose first pair-addition in the tree *is* the pinned formula. Everything
-   lands in gate list 0, one layer shallower, with one `(num, den)` constructor and no leaf
-   carrying a dead multiplicity operand.
+   `(−m, t + g)`, **the table's first**, so the tree's first pair-addition is literally the
+   pinned node. Everything lands in gate list 0, one layer shallower, with one `(num, den)`
+   constructor and no leaf carrying a dead multiplicity operand.
 3. **No inverse columns.** Must-be-exact 9's "witnessed-inverse pattern" reads against
    must-be-exact 1 and acceptance 5: with a committed inverse, the gate `inv·d = 1` refuses
    a zero denominator at gate list 0 and it never reaches the root. The `(num, den)` pair
@@ -205,8 +205,8 @@ onto it and its six fixtures are byte-identical.
    decoder — and that those are the only two exemptions from the `ZeroEntry` rule.
 6. **The denominator gate's shape** (§5), and with it the rule that a tuple position above
    0 weights its columns by 1 and carries the constant 0 or 1.
-7. **The fraction tree** (§6): the leaf pairs, the neutral `(0, 1)` padding, the row-wise
-   and halving formulas, and the output map — the memory roots first, then each channel's
+7. **The fraction tree** (§6): the leaf pairs and their order — the table's first — the
+   neutral `(0, 1)` padding, the row-wise and halving formulas, and the output map — the memory roots first, then each channel's
    `(num, den)` pair in channel order.
 8. **The multiplicity convention** (§7): one committed column per channel, last in the
    witness subtree; counted over raw gated tuples; the lowest table row wins.
@@ -226,7 +226,7 @@ onto it and its six fixtures are byte-identical.
 
 | Path | Size | SHA-256 | What |
 | --- | --- | --- | --- |
-| `crates/constraints/tests/vectors/lookup_toy.bin` | 56,679 bytes | `975ee4d572a09399c30987eb2a8e8ad9d2b66a2445c8888d331d34343f9409d6` | S15's combined toy at `trace_vars` 20 |
+| `crates/constraints/tests/vectors/lookup_toy.bin` | 56,679 bytes | `abab86f0c6cda7d087de044f632f7764bc0cf8db4bdb95ebe229a4f61a85da8b` | S15's combined toy at `trace_vars` 20 |
 | `docs/spec/lookup.md` | — | — | the normative LogUp spec |
 | `tools/kat-gen/src/lookup.rs` | — | — | the toy's only definition; `cargo run -p kat-gen -- lookup` |
 
@@ -277,6 +277,9 @@ The stage prompt's items as the owner's answers remapped them. File paths are un
 | Every `GateDef` variant is emitted by a committed circuit — `TreeCross` only by the S15 toy | `constraints/tests/audit.rs::the_audit_over_every_committed_circuit_emits_every_variant` |
 | The selector rule and `check_memory`'s mask rule both bite on a frame missing a booleanity gate, each naming its own subject | `constraints/tests/memory.rs::a_frame_missing_a_booleanity_gate_is_refused` |
 | The lookup rules, `check_laws` against `validate`, with the new width, one-width-per-channel and selector-booleanity cases | `checker/tests/lookups.rs`, `constraints/tests/laws.rs::a_lookup_is_refused_unless_it_keeps_the_lookup_rules` |
+| A lookup discharged by a column in another channel's tree — still a lawful circuit, and still exactly one column per lookup — refused by the cone walk | `constraints/tests/lookup.rs::an_obligation_discharged_against_another_channels_table_is_refused` |
+| The checker's own negative controls: a selector with no booleanity gate, an unconsumed and a doubled obligation, and each half of a root pair alone | `checker/tests/lookups.rs`, three tests |
+| §4's precondition: a selected row whose key evaluates to `−1` reaches the `ZeroEntry` and every check accepts it | `checker/tests/logup.rs::an_unbounded_key_can_reach_the_neutral_entry` |
 | A halving list refuses a gate that halves nothing; a halving list reading its layer's other column is lawful since S15 | `constraints/tests/laws.rs::a_halving_list_refuses_a_gate_that_halves_nothing` |
 
 ---
@@ -287,9 +290,11 @@ The stage prompt's items as the owner's answers remapped them. File paths are un
 answers are "Read these first"; the prompt is not edited).
 
 1. **The leaf is split** into a row fraction `(1, w+g)` and a table fraction `(−m, t+g)`
-   rather than the single node must-be-exact 1 names. Their first pair-addition is that
-   node. The gated key is degree 2, so the single node would cost a whole extra layer for
-   the gated denominators, plus one copy-numerator column per lookup (owner's answer 2).
+   rather than the single node must-be-exact 1 names. The table's leaf is **first**, so the
+   tree's first pair-addition is that node exactly — for every channel, not only the
+   single-lookup ones. The gated key is degree 2, so the single node would cost a whole
+   extra layer for the gated denominators, plus one copy-numerator column per lookup
+   (owner's answer 2).
 2. **No witnessed inverses.** Must-be-exact 9's "witnessed-inverse pattern" is read as the
    `(num, den)` pair itself: a committed inverse would make acceptance 5 unreachable,
    because `inv·d = 1` refuses a zero denominator at gate list 0 (owner's answer 3).
@@ -354,6 +359,26 @@ answers are "Read these first"; the prompt is not edited).
     suite builds one; only `commit` is used, and an opening is S16's.
 17. **`Extras` is a parameter bundle, not a builder**: a plain struct with `Default`,
     passed once. Nothing is pushed into an artifact after a collection point.
+19. **Must-be-exact 11's "inside the deterministic single-pass trace generation" is a
+    second pass here.** `trace::build_multiplicities` takes the already-built columns and
+    walks them once, then walks the table once. Counting inside the emulator's own pass
+    would mean the trace builder knowing the artifact's lookup list, which it does not and
+    should not: a multiplicity is a property of a *circuit*, and the same trace feeds
+    several. The count is exactly the item's — one counter per channel per table row,
+    incremented once per lookup expression on each row, switched-off rows included — and
+    `trace::check_multiplicities` is the "a disagreeing column is a build error" half. It
+    has no caller outside the tests today; S16's prover path is where it runs, and the
+    deferral is recorded below.
+20. **The `ZeroEntry` row is checked where the columns are built, not at construction.**
+    The artifact holds a table's addresses, never its values, so no construction rule over
+    it could say anything about an all-zero row. `build_multiplicities` refuses a channel
+    whose table does not hold a looked-up tuple, and on a table with no `ZeroEntry` that is
+    every switched-off row.
+21. **`padding.row` is not the row a prover writes.** It is a row on which every row-local
+    relation holds, which is all `check_padding` and the product-tree clause ask; a
+    channel's multiplicity columns are nonzero on inactive rows, and a builder that zeroed
+    them would leave the channel unable to balance. `docs/spec/gkr.md` §4.3's
+    "still not covered" note now says so.
 18. **The pad fractions and the constant numerators cost inner columns.** A channel's leaf
     level is `2P` columns for `P = (L+1).next_power_of_two()` fractions, and `P` of those
     are the constant 1, `−m` or 0. Measured on the toy: layer 1 is 60 columns and the whole
@@ -390,6 +415,16 @@ answers are "Read these first"; the prompt is not edited).
   selector — so the shape is already the one S16 needs.
 - **A per-channel obligation count** in every family builder, as the frame's
   `lookups.len() == 2·reads` is: S14 recorded it, and a channel makes it per channel.
+- **`trace::check_multiplicities` in the prover path.** It is the "a multiplicity column
+  that disagrees with the recount is a build error" half of must-be-exact 11, and it has no
+  caller outside the tests today. A prover that commits a hand-written multiplicity column
+  meets nothing before the channel root, which is the runtime check the recount was meant
+  to sit in front of.
+- **Bounding every key a table channel looks up** (`docs/spec/lookup.md` §4). The gating
+  sends a switched-off row to the neutral entry; it does not stop a *selected* row from
+  reaching it by driving its key to `−1`. S17 and S18 own the bounds on the columns their
+  lookups' keys are built from;
+  `checker/tests/logup.rs::an_unbounded_key_can_reach_the_neutral_entry` is the control.
 
 **S17 / S18.**
 - **`U16GetSign` is committed**, in the generic channel's packed table at
@@ -427,14 +462,14 @@ answers are "Read these first"; the prompt is not edited).
 
 ## Verification performed
 
-**748 workspace tests, all green, plus 29 `#[ignore]`d** (722 and 21 at S14), from one
-`cargo test --workspace --no-fail-fast` on the final tree: 26 new passing tests and 8 new
+**752 workspace tests, all green, plus 30 `#[ignore]`d** (722 and 21 at S14), from one
+`cargo test --workspace --no-fail-fast` on the final tree: 30 new passing tests and 9 new
 ignored ones. New test files, and the tests in each:
 
 | File | Tests |
 | --- | --- |
-| `checker/tests/logup.rs` | 8, all `#[ignore]`d |
-| `constraints/tests/lookup.rs` | 16 |
+| `checker/tests/logup.rs` | 9, all `#[ignore]`d |
+| `constraints/tests/lookup.rs` | 17 |
 | `gkr/tests/lookup.rs` | 6 |
 | `program/tests/lookup_tables.rs` | 4 |
 
@@ -449,7 +484,7 @@ Every gate `CLAUDE.md` lists, run locally on macOS, each exit 0:
 - `cargo run -p kat-gen`, then `git diff --exit-code` over all ten fixture directories: no
   diff, `lookup_toy.bin` included and every S13 and S14 fixture unmoved;
 - `transcript-ref`, with no diff, and fib's guest build;
-- `cargo test -p checker --test logup -- --ignored --test-threads=1`: 8 passed, 172 s.
+- `cargo test -p checker --test logup -- --ignored --test-threads=1`: 9 passed, 189 s.
 
 **Measurements**, on the committed toy at `trace_vars` 20 (`JUMP_BRANCH_SLT`'s frame over
 fib, 47 committed columns, depth 25, layer 1 sixty columns wide):

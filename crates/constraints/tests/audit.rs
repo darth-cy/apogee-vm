@@ -104,7 +104,7 @@ fn variant_counts(a: &CircuitArtifact) -> [usize; VARIANTS] {
 fn lookup_toy() -> CircuitArtifact {
     let bytes = fixture_bytes(
         "lookup_toy.bin",
-        "975ee4d572a09399c30987eb2a8e8ad9d2b66a2445c8888d331d34343f9409d6",
+        "abab86f0c6cda7d087de044f632f7764bc0cf8db4bdb95ebe229a4f61a85da8b",
     );
     CircuitArtifact::from_bytes(&bytes).expect("the S15 toy decodes")
 }

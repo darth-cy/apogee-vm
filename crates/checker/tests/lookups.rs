@@ -9,7 +9,10 @@
 
 mod common;
 
-use checker::{check_laws, violated_lookups, WitnessRow};
+use checker::{
+    check_channel_roots, check_laws, check_lookup_discharge, violated_lookups, ChannelSum,
+    WitnessRow,
+};
 use common::*;
 use constants::{challenge_slot, lookup_channel, memory::RAM_LIVE_BIT};
 use constraints::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
@@ -437,4 +440,113 @@ fn an_evaluator_reporting_nothing_fails_the_same_cases() {
 fn an_evaluator_reporting_everything_fails_the_same_cases() {
     let everything: Evaluator = |a, _| a.lookups.iter().map(|l| l.name.clone()).collect();
     assert!(run(everything).is_err());
+}
+
+// ---------------------------------------------------------------------------
+// The selector's booleanity, and the LogUp checkers' negative controls
+// ---------------------------------------------------------------------------
+
+/// S15's selector rule, on the checker's side: `check_laws` refuses a lookup
+/// whose selector gate list 0 does not hold to `x − x·x = 0`, and `validate`
+/// agrees. Kills a `holds_booleanity` that returns true for anything — without
+/// which the rule would be enforced once, not twice.
+///
+/// Why the rule is needed: LogUp sums `s/(E + g)` over the rows, so a row at
+/// `s = −1` with an out-of-range tuple cancels a row at `s = 1` with the same
+/// tuple, and a gap of −1 that `violated_lookups` reports would pass.
+#[test]
+fn a_selector_without_a_booleanity_gate_is_refused_by_both() {
+    for (label, toy) in selectable_toys() {
+        // W0 is `a`, which no booleanity gate holds; W1 is `b`, which one does.
+        let mut a = toy.clone();
+        a.lookups
+            .push(lookup("range", W0, expression(&[(lit(1), M0)], lit(0))));
+        let ours = check_laws(&a).expect_err("a selector with no booleanity gate");
+        assert!(
+            ours.ends_with("gate list 0 does not hold selector W[0] to booleanity"),
+            "{label}: {ours}"
+        );
+        assert!(a.validate().is_err(), "{label}: validate agrees");
+
+        let mut lawful = toy;
+        lawful
+            .lookups
+            .push(lookup("range", W1, expression(&[(lit(1), M0)], lit(0))));
+        assert_eq!(check_laws(&lawful), Ok(()), "{label}");
+        assert_eq!(lawful.validate(), Ok(()), "{label}");
+    }
+}
+
+/// `checker::check_lookup_discharge`'s negative controls, the twins of
+/// `constraints/tests/lookup.rs`' — an obligation nothing discharges, and one
+/// two columns discharge. Kills a check that returns `Ok` whatever it is
+/// handed, which is what master rule 8 asks of every checker.
+#[test]
+fn the_discharge_cross_check_refuses_an_unconsumed_and_a_doubled_obligation() {
+    for (label, toy) in selectable_toys() {
+        // The toy has no channel, so its gate list 0 discharges nothing: one
+        // lookup is already one too many.
+        let mut unconsumed = toy.clone();
+        push(&mut unconsumed, |_| {});
+        assert_eq!(check_laws(&unconsumed), Ok(()), "{label}");
+        let e = check_lookup_discharge(&unconsumed, &[]).expect_err("nothing discharges it");
+        assert!(
+            e.contains("lookup `range` is the denominator of 0 gate-list-0 columns"),
+            "{label}: {e}"
+        );
+
+        let _ = toy;
+    }
+
+    // A column that is two lookups' denominator needs a circuit whose gate list
+    // 0 has denominators at all, which the S13 toy does not: S15's combined toy
+    // with one of its lookups duplicated.
+    let mut doubled = lookup_toy();
+    assert_eq!(check_lookup_discharge(&doubled, &[]), Ok(()));
+    let mut twin = doubled.lookups[0].clone();
+    twin.name = format!("{}_twin", twin.name);
+    let name = doubled.lookups[0].name.clone();
+    doubled.lookups.push(twin);
+    let e = check_lookup_discharge(&doubled, &[]).expect_err("two lookups, one column");
+    assert!(
+        e.contains(&format!(
+            "column `{name}_den` is the denominator of 2 lookups"
+        )),
+        "{e}"
+    );
+}
+
+/// S15's combined toy, the one committed circuit whose gate list 0 carries
+/// lookup denominators.
+fn lookup_toy() -> CircuitArtifact {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../constraints/tests/vectors/lookup_toy.bin"
+    );
+    let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
+    CircuitArtifact::from_bytes(&bytes).expect("the S15 toy decodes")
+}
+
+/// `checker::check_channel_roots`' negative control: a root pair that is not the
+/// native recomputation is refused, on each half of the pair separately. Kills a
+/// comparison that looks at one half, or at neither.
+#[test]
+fn the_channel_root_comparison_refuses_each_half_alone() {
+    let sums = vec![ChannelSum {
+        channel: lookup_channel::TIMESTAMP,
+        num: Fr::from_u64(7),
+        den: Fr::from_u64(11),
+        unmatched: Vec::new(),
+    }];
+    assert_eq!(
+        check_channel_roots(&[(Fr::from_u64(7), Fr::from_u64(11))], &sums),
+        Ok(())
+    );
+    let moved = |num: u64, den: u64| {
+        check_channel_roots(&[(Fr::from_u64(num), Fr::from_u64(den))], &sums)
+            .expect_err("a root that is not the recomputation")
+    };
+    assert!(moved(8, 11).contains("num root is not its fractional sum's numerator"));
+    assert!(moved(7, 12).contains("den root is not the product of its leaf denominators"));
+    assert!(check_channel_roots(&[], &sums).is_err(), "a missing pair");
 }

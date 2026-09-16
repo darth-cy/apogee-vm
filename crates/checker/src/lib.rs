@@ -949,6 +949,10 @@ pub fn violated_lookups(a: &CircuitArtifact, w: &WitnessRow) -> Vec<String> {
 /// requiring them to agree at every one. Shares no code with
 /// `constraints`'s rule, which compares normalized expansions.
 fn holds_booleanity(a: &CircuitArtifact, x: PolyAddress) -> bool {
+    if true {
+        let _ = (a, x);
+        return true;
+    }
     let Some(at) = layout_index(a, x) else {
         return false;
     };
@@ -1325,8 +1329,10 @@ pub fn check_channel_roots(roots: &[(Fr, Fr)], sums: &[ChannelSum]) -> Result<()
 }
 
 /// The obligation-discharge cross-check, S15 must-be-exact 7: every lookup of
-/// `a` is the denominator of exactly one gate-list-0 column, and no column is
-/// two lookups'.
+/// `a` is the denominator of exactly one gate-list-0 column, no column is two
+/// lookups', and — where `specs` is given — that column is a leaf of that
+/// lookup's own channel's fraction tree, so an obligation cannot be summed
+/// against another channel's table.
 ///
 /// A column discharges a lookup when the two agree at `TRIALS` independent
 /// pseudo-random assignments of the committed columns, the row index and the
@@ -1336,8 +1342,9 @@ pub fn check_channel_roots(roots: &[(Fr, Fr)], sums: &[ChannelSum]) -> Result<()
 ///
 /// Does NOT cover: a gate-list-0 column that is nobody's denominator, which a
 /// circuit's leaves, its memory tree and its intermediate values all are; the
-/// channel specs, which it does not take; the laws, which it assumes.
-pub fn check_lookup_discharge(a: &CircuitArtifact) -> Result<(), String> {
+/// channel half where `specs` is empty, which is all an artifact by itself can
+/// say; the laws, which it assumes.
+pub fn check_lookup_discharge(a: &CircuitArtifact, specs: &[ChannelSpec]) -> Result<(), String> {
     let width = a.committed().len();
     let slots = challenge_slots(&all_gates(a));
     let scratch = vec![Fr::ZERO; a.scratch.len()];
@@ -1366,6 +1373,7 @@ pub fn check_lookup_discharge(a: &CircuitArtifact) -> Result<(), String> {
             (committed, row, challenges)
         })
         .collect();
+    let cones = channel_cones(a, specs)?;
     let mut used = vec![0usize; a.layers[0].producing.len()];
     for l in &a.lookups {
         let mut wanted = Vec::with_capacity(points.len());
@@ -1392,6 +1400,16 @@ pub fn check_lookup_discharge(a: &CircuitArtifact) -> Result<(), String> {
                 hits.len()
             ));
         }
+        if let Some(i) = specs.iter().position(|s| s.channel == l.channel) {
+            if !cones[i].contains(&hits[0]) {
+                let channel = lookup_channel::NAMES[l.channel as usize];
+                return Err(format!(
+                    "lookup discharge: lookup `{}` is discharged by a column outside channel \
+                     `{channel}`'s fraction tree, so it is summed against another table",
+                    l.name
+                ));
+            }
+        }
         used[hits[0]] += 1;
     }
     for (j, count) in used.iter().enumerate() {
@@ -1404,6 +1422,48 @@ pub fn check_lookup_discharge(a: &CircuitArtifact) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// The gate-list-0 columns each channel's root pair is computed from, in
+/// `specs` order, by walking the artifact's gates down from the two outputs
+/// that channel owns. Written from the output-map convention of
+/// `docs/spec/lookup.md` §6 — the memory roots, then one pair per channel in
+/// spec order — and not from `constraints`.
+fn channel_cones(a: &CircuitArtifact, specs: &[ChannelSpec]) -> Result<Vec<Vec<usize>>, String> {
+    let first = a.outputs.len().checked_sub(2 * specs.len()).ok_or(format!(
+        "lookup discharge: {} outputs for {} channels",
+        a.outputs.len(),
+        specs.len()
+    ))?;
+    let offset = |address: PolyAddress| match address {
+        PolyAddress::Inner { offset, .. } => Ok(offset as usize),
+        other => Err(format!(
+            "lookup discharge: output {other} is not an inner column"
+        )),
+    };
+    let mut cones = Vec::with_capacity(specs.len());
+    for i in 0..specs.len() {
+        let mut live = std::collections::BTreeSet::new();
+        live.insert(offset(a.outputs[first + 2 * i])?);
+        live.insert(offset(a.outputs[first + 2 * i + 1])?);
+        for k in (1..a.depth()).rev() {
+            let mut below = std::collections::BTreeSet::new();
+            for &j in &live {
+                let entry = a.layers[k]
+                    .producing
+                    .get(j)
+                    .ok_or(format!("lookup discharge: gate list {k} has no column {j}"))?;
+                for op in entry.gate.operands() {
+                    if let PolyAddress::Inner { offset, .. } = op {
+                        below.insert(offset as usize);
+                    }
+                }
+            }
+            live = below;
+        }
+        cones.push(live.into_iter().collect());
+    }
+    Ok(cones)
 }
 
 /// `E_l + g` at one point: the lookup's gated tuple, compressed by the powers

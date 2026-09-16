@@ -103,11 +103,30 @@ selector is what sends such a row somewhere neutral, and the three conventions a
 | generic | `s·(e_0 + 1)` at `j = 0`, `s·e_j` above | the all-zero `ZeroEntry` row |
 | decoder | `s·(e_j + 1) − 1` | `MINUS_ONE` in every column |
 
-**The `+ 1` on a table channel's key** is what keeps every real entry off the all-zero
-tuple. Without it, a table whose key 0 maps to a nonzero value has no all-zero row at
-all, and adding a `ZeroEntry` beside a real key-0 entry puts two rows at one key — a
-cheating prover then reads the neutral value where the real one lives. The offset
+**The `+ 1` on a table channel's key** is what keeps every real *table entry* off the
+all-zero tuple. Without it, a table whose key 0 maps to a nonzero value has no all-zero
+row at all, and adding a `ZeroEntry` beside a real key-0 entry puts two rows at one key —
+a cheating prover then reads the neutral value where the real one lives. The offset
 reserves the all-zero tuple for the neutral row and shifts the real domain up by one.
+
+**The converse is a precondition, not a consequence.** The gating sends a row whose
+selector is 0 to the neutral tuple; it does **not** stop a row whose selector is 1 from
+reaching it. A selected row whose key expression evaluates to `−1` gates to
+`1·(−1 + 1) = 0`, and with its remaining columns 0 the whole tuple is the `ZeroEntry`,
+which is a table row: the channel balances and the row has "looked up" the neutral entry
+instead of a real one. Nothing in a LogUp channel can prevent that, because the channel's
+only claim is membership.
+
+So: **every key a table channel looks up is bounded elsewhere**, by the range convention
+of `docs/spec/memory.md` §7 or by the columns it is built from, and that bound is what
+keeps a selected row's key away from the neutral value. `AND_BASE = 0` and
+`SIGN_BASE = 256` (§9) then put the neutral value outside every bounded key's range. A
+family that reads a value out of a table channel without bounding the key it looked up has
+not proved what it thinks: it has proved that *something* is in the table. S15's combined
+toy leaves `sign_h` and `and_a` unbounded on purpose — it is a toy for the channels, not a
+family — so the forgery above works there, and
+`crates/checker/tests/logup.rs::an_unbounded_key_can_reach_the_neutral_entry` is the
+control that shows it. S17 and S18 own the bounds.
 
 **A range channel needs no offset**, and cannot have one: the table is `[0, 2^BITS)`, so
 shifting the domain up by one would put `2^BITS` outside it and the top of the range
@@ -149,15 +168,17 @@ The table side is `T + g = Σ_j β^j·t_j + g`, a `Linear` over the table's colu
 
 Every leaf is a `(num, den)` pair of gate-list-0 columns:
 
-| leaf | `num` | `den` |
-| --- | --- | --- |
-| row lookup `l` | `1` | `E_l + g` |
-| the table | `−mult` | `T + g` |
-| padding | `0` | `1` |
+| leaf | position | `num` | `den` |
+| --- | --- | --- | --- |
+| the table | 0 | `−mult` | `T + g` |
+| row lookup `l` | `1 + l` | `1` | `E_l + g` |
+| padding | after them | `0` | `1` |
 
 The leaf level is padded to a power of two with the neutral fraction `(0, 1)`. The row
-side and the table side are separate leaves; their first pair-addition is exactly
-`1/(w + g) − m/(t + g)`.
+side and the table side are separate leaves, and **the table's is first**, so that the
+tree's first pair-addition — leaves 0 and 1 — is literally
+`1/(w_0 + g) − mult/(T + g)`. Put it last and that node appears nowhere in a channel with
+more than one lookup, because the row fractions pair with each other.
 
 Fractions add pairwise, `a/b + c/d = (ad + cb)/(bd)`:
 
@@ -187,6 +208,14 @@ tree. Its identity is `(0, 1)`, not 1, and a padding row is not inactive in a ch
 all: it contributes the channel's neutral entry, which the multiplicity column counts
 like any other. `checker::check_padding_identity` exempts every column a `TreeCross`
 reads, and holds the product trees to the clause as before.
+
+**`padding.row` is not a row a prover writes.** It is a row on which every row-local
+relation holds, which is what `checker::check_padding` and the product-tree clause are
+asked of; a channel-carrying circuit's own inactive rows carry whatever counts their
+multiplicity columns hold there, and those are not 0. A witness builder that zeroed a
+multiplicity column on inactive rows would leave every channel unable to balance.
+`docs/spec/gkr.md` §4.3's "still not covered" note names this beside the setup values it
+already named.
 
 ## 7. Multiplicities
 
@@ -240,6 +269,13 @@ rows above               the ZeroEntry again, multiplicity 0
 `AND_BASE = 0` and `SIGN_BASE = 256` give the two tables disjoint key ranges, so no
 tuple of one is a tuple of the other. 131,073 rows: a circuit carrying both is at
 `2^18` or more, which every execution family already exceeds (§3).
+
+**The `ZeroEntry` row is a property of the table's contents, not of the artifact**, which
+holds no table values at all — only the addresses its gates read. So it is checked where
+the columns are built: `trace::build_multiplicities` refuses a channel whose table does
+not hold every gated tuple looked up, and on a table with no all-zero row that is every
+switched-off row's neutral entry, naming the channel. There is nothing a construction
+rule over the artifact could say about it.
 
 **`U16GetSign` is committed**, not closed-form. S17 and S18 consume it by name. It is
 load-bearing in a way it was not over a small field: with a whole word in one column its
@@ -322,6 +358,9 @@ the direct check establishes that. S18 and S19 consume it.
   compresses to a value that channel's table can hold.
 - **No tuple of one packed table is a tuple of another** rests on disjoint key ranges
   (§9) and on the `+ 1` offset keeping every real entry off the neutral tuple (§4).
+- **That a lookup answers with a real entry and not the neutral one** rests on the key
+  being bounded away from the neutral value — §4's precondition, which the channel itself
+  cannot supply.
 - **A row that looks up nothing costs nothing** rests on the neutral entry being a real
   table row whose multiplicity counts it (§4, §7).
 **What the discharge rule does and does not say.** `check_discharge` establishes that every

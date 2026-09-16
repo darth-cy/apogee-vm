@@ -331,7 +331,12 @@ to the clause at pseudo-random challenge values and row indices; an artifact wit
 no halving list passes.
 
 Still not covered: that the contract holds for the setup values a real padding
-row carries rather than the ones `padding.row` names.
+row carries rather than the ones `padding.row` names, and — since S15 — that a
+real padding row's **multiplicity columns** carry what `padding.row` says. They
+do not: a multiplicity counts table rows, not trace rows, and is nonzero on
+inactive rows of a channel-carrying circuit (`docs/spec/lookup.md` §6).
+`padding.row` is a row on which every row-local relation holds, which is what
+this contract asks of it, and not the row a prover writes.
 
 ## 5. The backward pass
 

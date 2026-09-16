@@ -20,7 +20,7 @@ use field::Fr;
 
 /// `tools/kat-gen/src/lookup.rs`'s output.
 const TOY: &str = "lookup_toy.bin";
-const TOY_SHA256: &str = "975ee4d572a09399c30987eb2a8e8ad9d2b66a2445c8888d331d34343f9409d6";
+const TOY_SHA256: &str = "abab86f0c6cda7d087de044f632f7764bc0cf8db4bdb95ebe229a4f61a85da8b";
 
 /// The toy's family, height and mask width, as that file fixes them.
 const FAMILY: u32 = family::JUMP_BRANCH_SLT;
@@ -60,7 +60,7 @@ fn the_committed_toy_is_a_circuit_that_discharges_every_lookup() {
     assert_eq!(a.trace_vars, VARS);
     assert_eq!(a.validate(), Ok(()));
     assert_eq!(constraints::memory::check_memory(&a), Ok(()));
-    assert_eq!(check_discharge(&a), Ok(()));
+    assert_eq!(check_discharge(&a, &[]), Ok(()));
 
     // Two memory roots, then one pair per channel in channel order.
     assert_eq!(a.outputs.len(), 2 + 2 * lookup_channel::COUNT as usize);
@@ -106,7 +106,7 @@ fn the_committed_toy_is_a_circuit_that_discharges_every_lookup() {
 /// beside them is the committed toy.
 #[test]
 fn an_unconsumed_and_a_doubly_consumed_obligation_each_fail_the_check() {
-    assert_eq!(check_discharge(&toy()), Ok(()));
+    assert_eq!(check_discharge(&toy(), &[]), Ok(()));
 
     // Unconsumed: a lookup the circuit's leaves do not carry.
     let mut unconsumed = toy();
@@ -115,7 +115,7 @@ fn an_unconsumed_and_a_doubly_consumed_obligation_each_fail_the_check() {
     extra.tuple = vec![column(w(1))];
     unconsumed.lookups.push(extra);
     assert_eq!(
-        check_discharge(&unconsumed),
+        check_discharge(&unconsumed, &[]),
         Err(
             "lookup discharge: lookup `gap_hi_pc_again` is the denominator of 0 gate-list-0 \
              columns; exactly one discharges it"
@@ -129,11 +129,107 @@ fn an_unconsumed_and_a_doubly_consumed_obligation_each_fail_the_check() {
     let mut twin = doubled.lookups[0].clone();
     twin.name = "gap_hi_pc_twin".to_string();
     doubled.lookups.push(twin);
-    let e = check_discharge(&doubled).expect_err("a doubly-consumed obligation");
+    let e = check_discharge(&doubled, &[]).expect_err("a doubly-consumed obligation");
     assert!(
         e.starts_with("lookup discharge: column `gap_hi_pc_den` is the denominator of 2 lookups"),
         "{e}"
     );
+}
+
+/// A lookup discharged by a column in **another** channel's fraction tree is
+/// summed against the wrong table, and the channel half of the rule refuses it.
+/// Two leaves of the toy swapped — a `range16` obligation's denominator for a
+/// `timestamp` one's, relations and all — is still a lawful circuit whose every
+/// lookup is the denominator of exactly one column; only the cone walk sees
+/// that the 16-bit obligation is now summed against `[0, 2^19)`.
+#[test]
+fn an_obligation_discharged_against_another_channels_table_is_refused() {
+    let specs = toy_specs();
+    let a = toy();
+    assert_eq!(check_discharge(&a, &specs), Ok(()));
+
+    let at = |name: &str| {
+        a.scratch
+            .iter()
+            .position(|s| s.name == name)
+            .unwrap_or_else(|| panic!("the toy has no column `{name}`"))
+    };
+    let (range16, timestamp) = (at("word_hi_range_den"), at("gap_hi_pc_den"));
+    let mut swapped = a.clone();
+    swapped.layers[0].producing.swap(range16, timestamp);
+    // The producing entries carry their outputs and relations with them, so put
+    // those back: only the gates move.
+    for (j, e) in swapped.layers[0].producing.iter_mut().enumerate() {
+        e.output = PolyAddress::Inner {
+            layer: 1,
+            offset: j as u32,
+        };
+        e.relation = a.layers[0].producing[j].relation;
+    }
+    let (rj, tj) = (
+        a.layers[0].producing[range16].relation as usize,
+        a.layers[0].producing[timestamp].relation as usize,
+    );
+    swapped.relations.swap(rj, tj);
+    let (rn, tn) = (
+        swapped.relations[rj].name.clone(),
+        swapped.relations[tj].name.clone(),
+    );
+    swapped.relations[rj].name = tn;
+    swapped.relations[tj].name = rn;
+    swapped.relations[rj].output = a.relations[rj].output;
+    swapped.relations[tj].output = a.relations[tj].output;
+    swapped.scratch.swap(range16, timestamp);
+    swapped.scratch[range16].address = a.scratch[range16].address;
+    swapped.scratch[timestamp].address = a.scratch[timestamp].address;
+
+    assert_eq!(swapped.validate(), Ok(()), "still a lawful circuit");
+    // The column half alone accepts it: every lookup is still exactly one
+    // column's denominator, the columns merely changed trees.
+    assert_eq!(check_discharge(&swapped, &[]), Ok(()));
+    let e = check_discharge(&swapped, &specs).expect_err("a misrouted obligation");
+    assert!(
+        e.contains("is discharged by a column outside channel")
+            && e.contains("so it is summed against another table"),
+        "{e}"
+    );
+}
+
+/// The toy's four channels, as `tools/kat-gen/src/lookup.rs` declares them.
+fn toy_specs() -> Vec<ChannelSpec> {
+    let a = toy();
+    let table = |names: &[&str]| -> Vec<PolyAddress> { names.iter().map(|n| at(&a, n)).collect() };
+    let mult = |c: u32| at(&a, &format!("mult_{}", lookup_channel::NAMES[c as usize]));
+    vec![
+        ChannelSpec {
+            channel: lookup_channel::TIMESTAMP,
+            table: vec![PolyAddress::Virtual(VirtualKind::Range19)],
+            multiplicity: mult(lookup_channel::TIMESTAMP),
+        },
+        ChannelSpec {
+            channel: lookup_channel::RANGE16,
+            table: vec![PolyAddress::Virtual(VirtualKind::Range16)],
+            multiplicity: mult(lookup_channel::RANGE16),
+        },
+        ChannelSpec {
+            channel: lookup_channel::GENERIC,
+            table: table(&["generic_key", "generic_v1", "generic_v2"]),
+            multiplicity: mult(lookup_channel::GENERIC),
+        },
+        ChannelSpec {
+            channel: lookup_channel::DECODER,
+            table: table(&[
+                "table_pc",
+                "table_next_pc",
+                "table_rs1",
+                "table_rs2",
+                "table_rd",
+                "table_imm",
+                "table_extra_mask",
+            ]),
+            multiplicity: mult(lookup_channel::DECODER),
+        },
+    ]
 }
 
 // ---------------------------------------------------------------------------
@@ -215,7 +311,7 @@ fn build(vars: u32, edit: fn(&mut Extras)) -> CircuitArtifact {
 fn the_minimal_extras_build_a_circuit() {
     let a = build(VARS, |_| {});
     assert_eq!(a.validate(), Ok(()));
-    assert_eq!(check_discharge(&a), Ok(()));
+    assert_eq!(check_discharge(&a, &[]), Ok(()));
     assert_eq!(constraints::memory::check_memory(&a), Ok(()));
 }
 
@@ -379,10 +475,11 @@ fn each_range_channel_names_its_virtual_table() {
 // The copower-pairing assertion
 // ---------------------------------------------------------------------------
 
-/// Every copower-scaled column carries a direct range check of its own. The
-/// toy bounds `word_hi` directly, so a copower over it passes; `word` is
-/// reached only through `word − 2^16·word_hi`, which is a scaled bound and
-/// bounds nothing on its own, so a copower over it is refused.
+/// Every copower-scaled column carries a direct range check of its own, in
+/// either shape `docs/spec/memory.md` §7 gives one: `word_hi` is a halfword
+/// bounded by an obligation of its own, and `word` is a 32-bit value bounded by
+/// that high chunk and the remainder `word − 2^16·word_hi`. A column with no
+/// obligation at all is refused.
 ///
 /// Why the scaled half is not enough: a copower turns `x < p` into
 /// `x·p' < 2^32` with `p·p' = 2^32`, and `p'` is a unit in `Fr`, so
@@ -391,17 +488,32 @@ fn each_range_channel_names_its_virtual_table() {
 #[test]
 fn a_copower_scaled_column_needs_its_own_direct_range_check() {
     let a = toy();
-    let word_hi = at(&a, "word_hi");
-    let word = at(&a, "word");
-    assert_eq!(check_copowers(&a, &[word_hi]), Ok(()));
     assert_eq!(check_copowers(&a, &[]), Ok(()));
-    let e = check_copowers(&a, &[word]).expect_err("word has no direct bound");
+    assert_eq!(
+        check_copowers(&a, &[at(&a, "word_hi")]),
+        Ok(()),
+        "a halfword"
+    );
+    assert_eq!(
+        check_copowers(&a, &[at(&a, "word"), at(&a, "word_hi")]),
+        Ok(()),
+        "a 32-bit value under the two-halfword convention"
+    );
+
+    // A column with no obligation at all.
+    let e = check_copowers(&a, &[at(&a, "and_a")]).expect_err("and_a is unbounded");
     assert!(
         e.contains("is copower-scaled, but no range16 obligation bounds it directly"),
         "{e}"
     );
-    // A column with no obligation at all is refused too.
-    assert!(check_copowers(&a, &[at(&a, "and_a")]).is_err());
+
+    // And the remainder alone does not bound the value: with the obligation on
+    // the high chunk removed, `word` is no longer directly bounded, because
+    // `word − 2^16·word_hi` small says nothing while `word_hi` is free.
+    let mut half = a.clone();
+    half.lookups.retain(|l| l.name != "word_hi_range");
+    assert!(check_copowers(&half, &[at(&a, "word")]).is_err());
+    assert!(check_copowers(&half, &[at(&a, "word_hi")]).is_err());
 }
 
 /// The committed column named `name`.
