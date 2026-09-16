@@ -425,14 +425,14 @@ answers are "Read these first"; the prompt is not edited).
 
 ## Verification performed
 
-**747 workspace tests, all green, plus 29 `#[ignore]`d** (722 and 21 at S14), from one
-`cargo test --workspace --no-fail-fast` on the final tree: 25 new passing tests and 8 new
+**748 workspace tests, all green, plus 29 `#[ignore]`d** (722 and 21 at S14), from one
+`cargo test --workspace --no-fail-fast` on the final tree: 26 new passing tests and 8 new
 ignored ones. New test files, and the tests in each:
 
 | File | Tests |
 | --- | --- |
 | `checker/tests/logup.rs` | 8, all `#[ignore]`d |
-| `constraints/tests/lookup.rs` | 15 |
+| `constraints/tests/lookup.rs` | 16 |
 | `gkr/tests/lookup.rs` | 6 |
 | `program/tests/lookup_tables.rs` | 4 |
 
