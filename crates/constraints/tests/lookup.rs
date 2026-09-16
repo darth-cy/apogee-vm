@@ -281,32 +281,7 @@ fn an_obligation_discharged_against_another_channels_table_is_refused() {
     };
     let (range16, timestamp) = (at("word_hi_range_den"), at("gap_hi_pc_den"));
     let mut swapped = a.clone();
-    swapped.layers[0].producing.swap(range16, timestamp);
-    // The producing entries carry their outputs and relations with them, so put
-    // those back: only the gates move.
-    for (j, e) in swapped.layers[0].producing.iter_mut().enumerate() {
-        e.output = PolyAddress::Inner {
-            layer: 1,
-            offset: j as u32,
-        };
-        e.relation = a.layers[0].producing[j].relation;
-    }
-    let (rj, tj) = (
-        a.layers[0].producing[range16].relation as usize,
-        a.layers[0].producing[timestamp].relation as usize,
-    );
-    swapped.relations.swap(rj, tj);
-    let (rn, tn) = (
-        swapped.relations[rj].name.clone(),
-        swapped.relations[tj].name.clone(),
-    );
-    swapped.relations[rj].name = tn;
-    swapped.relations[tj].name = rn;
-    swapped.relations[rj].output = a.relations[rj].output;
-    swapped.relations[tj].output = a.relations[tj].output;
-    swapped.scratch.swap(range16, timestamp);
-    swapped.scratch[range16].address = a.scratch[range16].address;
-    swapped.scratch[timestamp].address = a.scratch[timestamp].address;
+    swap_leaf_gates(&mut swapped, range16, timestamp);
 
     assert_eq!(swapped.validate(), Ok(()), "still a lawful circuit");
     // The column half alone accepts it: every lookup is still exactly one
@@ -318,6 +293,94 @@ fn an_obligation_discharged_against_another_channels_table_is_refused() {
             && e.contains("so it is summed against another table"),
         "{e}"
     );
+}
+
+/// A channel's **table fraction** in another channel's tree is refused, for the
+/// reason a misrouted obligation is. The toy's `timestamp` and `range16` table
+/// fractions swapped — each channel's `(−mult, T + g)` pair put where the
+/// other's belongs, numerator and denominator together — leaves the 19-bit tree
+/// subtracting a count of 16-bit rows from a sum of 19-bit ones, and the 16-bit
+/// tree the reverse. Neither channel then proves anything about its own table,
+/// and the honest prover cannot balance either tree.
+///
+/// Every other half of the rule is blind to it. Each table denominator is still
+/// exactly one column of the gate list, each still has its own `−mult`
+/// numerator directly before it, every lookup is still discharged once inside
+/// its own cone, and no column is two lookups'. Only walking down from the
+/// channel's own root pair sees which tree the fraction ended up in — which is
+/// why the count runs inside the cone and not over the whole list.
+#[test]
+fn two_channels_table_fractions_swapped_between_their_trees_are_refused() {
+    let specs = toy_specs();
+    let a = toy();
+    assert_eq!(check_discharge(&a, &specs), Ok(()));
+
+    let at = |name: &str| {
+        a.scratch
+            .iter()
+            .position(|s| s.name == name)
+            .unwrap_or_else(|| panic!("the toy has no column `{name}`"))
+    };
+    let mut swapped = a.clone();
+    swap_leaf_gates(
+        &mut swapped,
+        at("timestamp_table_num"),
+        at("range16_table_num"),
+    );
+    swap_leaf_gates(
+        &mut swapped,
+        at("timestamp_table_den"),
+        at("range16_table_den"),
+    );
+    assert_eq!(swapped.validate(), Ok(()), "still a lawful circuit");
+
+    // What the swap did NOT break, stated rather than assumed: each channel's
+    // table denominator is one column of the list and carries its numerator,
+    // so a rule that matched over the whole list would find both and accept.
+    for spec in &specs[..2] {
+        let den = table_denominator(spec);
+        let found: Vec<usize> = (0..swapped.layers[0].producing.len())
+            .filter(|&j| swapped.layers[0].producing[j].gate == den)
+            .collect();
+        assert_eq!(found.len(), 1, "one column still compresses this table");
+        assert_eq!(
+            swapped.layers[0].producing[found[0] - 1].gate,
+            GateDef::Linear {
+                terms: vec![(Coeff::Literal(Fr::MINUS_ONE), spec.multiplicity)],
+                constant: lit(0),
+            },
+            "and its `−mult` numerator is still directly before it"
+        );
+    }
+    // And the column half alone accepts it: no lookup's denominator moved.
+    assert_eq!(check_discharge(&swapped, &[]), Ok(()));
+
+    let e = check_discharge(&swapped, &specs).expect_err("swapped table fractions");
+    assert!(
+        e.contains(
+            "channel `timestamp`'s table fraction is a column outside its own fraction tree"
+        ),
+        "{e}"
+    );
+}
+
+/// Swap what two gate-list-0 columns compute, in the producing entry and in the
+/// relation it encodes. Names, addresses and outputs stay where they are: the
+/// column keeps its identity in the artifact and changes only its gate, which
+/// is what a builder that wired a leaf to the wrong tree produces. Nothing here
+/// matches by name — `check_discharge` reads normalized expansions — so the
+/// names are left alone deliberately.
+fn swap_leaf_gates(a: &mut CircuitArtifact, j: usize, k: usize) {
+    let (rj, rk) = (
+        a.layers[0].producing[j].relation as usize,
+        a.layers[0].producing[k].relation as usize,
+    );
+    let gj = a.layers[0].producing[j].gate.clone();
+    let gk = a.layers[0].producing[k].gate.clone();
+    a.layers[0].producing[j].gate = gk.clone();
+    a.layers[0].producing[k].gate = gj.clone();
+    a.relations[rj].gate = gk;
+    a.relations[rk].gate = gj;
 }
 
 /// The toy's four channels, as `tools/kat-gen/src/lookup.rs` declares them.

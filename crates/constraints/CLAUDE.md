@@ -116,10 +116,13 @@ pub mod memory {                                   // docs/spec/memory.md §2, �
 - **`lookup` is the LogUp channels as data, and `docs/spec/lookup.md` is normative for
   it**: the three gating conventions, the denominator gates, the fraction tree's leaves,
   the construction rules and the copower assertion. `check_discharge` holds every lookup
-  to exactly one gate-list-0 denominator, by normalized expansion, and counts **per
-  channel**: the two range channels gate identically, so one lookup's denominator gate can
-  be another channel's leaf byte for byte. `checker` enforces the same rule by evaluation
-  at pseudo-random points. A frame with no channel is S14's `frame_artifact` alone —
+  to exactly one gate-list-0 denominator, and every channel to exactly one
+  `(−mult, T + g)` table fraction, by normalized expansion, and counts both **per
+  channel** — inside the cone below that channel's own root pair. The two range channels
+  gate identically, so one lookup's denominator gate can be another channel's leaf byte
+  for byte; and a table fraction matched over the whole gate list would let two channels
+  hold each other's. `checker` enforces the lookup half by evaluation at pseudo-random
+  points, and the table half through `check_channel_roots` once the columns exist. A frame with no channel is S14's `frame_artifact` alone —
   `frame_with_channels_artifact` refuses an empty channel list, so the shape with every
   obligation undischarged is not one the rule can be skipped for.
 - **One assembly for every circuit**, `build`: a set of product and fraction trees whose

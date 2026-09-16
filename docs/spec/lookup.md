@@ -342,9 +342,18 @@ into an equal polynomial still counts. The count is **per channel**: the two ran
 channels gate and neutralize identically (§4), so one lookup's denominator gate can be
 another channel's leaf byte for byte, and where the caller names the channels the rule
 counts inside each lookup's own cone — which also turns a lookup whose only match is in
-another channel's tree into a misrouted obligation rather than a missing one.
-`checker::check_lookup_discharge` enforces the same rule by evaluation at pseudo-random
-points, sharing no code with it.
+another channel's tree into a misrouted obligation rather than a missing one. A channel's
+**table fraction** is counted the same way and in the same cone: exactly one column of the
+channel's own tree is `T + g` over the table its spec names, with `−mult` directly before
+it. Counting that one over the whole gate list instead would accept two channels holding
+each other's table fraction — each tree still carries one apiece, each numerator is still
+beside its denominator, and only the cone says which tree each landed in — and would
+refuse two channels that legitimately share a table.
+`checker::check_lookup_discharge` enforces the lookup half by evaluation at pseudo-random
+points, sharing no code with it; the table half's twin is `checker::check_channel_roots`,
+which rebuilds each channel's root from the spec's own table and multiplicity, so a
+channel computing with another's table fraction fails there — but only once the columns
+are materialized, where `check_discharge` reads the artifact alone.
 
 `constraints::lookup::check_copowers` is **the copower-pairing assertion**: every column
 a copower scales also carries a direct range check of its own. A copower turns the
@@ -384,14 +393,18 @@ the direct check establishes that. S18 and S19 consume it.
   precondition, which the channel itself cannot supply and which S17 and S18 own.
 - **A row that looks up nothing costs nothing** rests on the neutral entry being a real
   table row whose multiplicity counts it (§4, §7).
-**What the discharge rule does and does not say.** `check_discharge` establishes that every
-lookup of the artifact is the denominator of exactly one gate-list-0 column. It does **not**
-establish that that column feeds its channel's fraction tree rather than another's: the
-trees' shape is the constructor's, not something the artifact records separately. That
-direction is completeness, not soundness — a tree missing a fraction, or carrying one from
-another channel, is a channel an honest prover cannot balance — and the same reasoning
-covers the `ChannelSpec`s themselves, which a caller supplies and the artifact does not
-record. A verifying key conveys the artifact **and** the specs the family was built with.
+**What the discharge rule does and does not say.** Given the specs, `check_discharge`
+establishes that every lookup is the denominator of exactly one column of **its own
+channel's** fraction tree, and that each channel's table fraction is a leaf of that same
+tree: walking down from a channel's root pair is what makes the tree something the
+artifact records rather than the constructor's private knowledge. It does **not** establish
+that the specs are the ones the family was built with — which output pair is whose root,
+which columns are a table, and which column counts it are all the caller's, and the
+artifact records none of it. That direction is completeness, not soundness — a tree
+missing a fraction is a channel an honest prover cannot balance — but a verifying key must
+convey the artifact **and** the specs, or the rule has run against a description of a
+different circuit. With an empty `specs` the column half runs alone, which is all an
+artifact by itself can say, and the table half does not run at all.
 
 **Nothing yet binds the packed generic table.** What binds a setup column to the table it
 is supposed to be is program identity (`docs/spec/memory.md` §6.2), and identity's

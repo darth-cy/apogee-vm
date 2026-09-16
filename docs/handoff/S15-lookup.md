@@ -409,9 +409,14 @@ Five lenses — math, attacker, stage-prompt compliance, mutation and repo-rules
 findings, of which 25 survived an adversarial verification pass. The math lens found no
 error in the argument; what the rest found, and what was done:
 
-- **Two circuits could be built that no rule refused.** `frame_with_channels_artifact` with
-  an empty channel list (deviation 10 above), and a lookup two columns of its own channel's
-  tree discharge. Both are refused now, with a control apiece.
+- **Three circuits could be built that no rule refused.** `frame_with_channels_artifact`
+  with an empty channel list (deviation 10 above); a lookup two columns of its own
+  channel's tree discharge; and two channels holding each other's table fraction, which
+  the review left behind because `check_discharge` matched a channel's `(−mult, T + g)`
+  over the whole gate list where it matched a lookup's denominator inside the channel's
+  own cone. All three are refused now, with a control apiece — the last one swaps the
+  toy's `timestamp` and `range16` table fractions, which leaves every other half of the
+  rule satisfied and only the cone walk to see it.
 - **Three rules had no failing test**, so a checker that always accepted was invisible:
   `checker::check_lookup_discharge`, `checker::check_channel_roots` and
   `checker::holds_booleanity`. Each has a negative control now, as does
@@ -531,14 +536,14 @@ error in the argument; what the rest found, and what was done:
 
 ## Verification performed
 
-**760 workspace tests, all green, plus 30 `#[ignore]`d** (722 and 21 at S14), from one
-`cargo test --workspace` on the final tree: 38 new passing tests and 9 new ignored ones.
+**761 workspace tests, all green, plus 30 `#[ignore]`d** (722 and 21 at S14), from one
+`cargo test --workspace` on the final tree: 39 new passing tests and 9 new ignored ones.
 New test files, and the tests in each:
 
 | File | Tests |
 | --- | --- |
 | `checker/tests/logup.rs` | 9, all `#[ignore]`d |
-| `constraints/tests/lookup.rs` | 21 |
+| `constraints/tests/lookup.rs` | 22 |
 | `gkr/tests/lookup.rs` | 7 |
 | `program/tests/lookup_tables.rs` | 4 |
 | `tools/kat-gen/src/lookup.rs` | 1, the toy's constructor against its fixture |

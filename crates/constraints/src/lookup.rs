@@ -340,8 +340,10 @@ pub fn range_table(channel: u32) -> Option<VirtualKind> {
 }
 
 /// Every lookup of `artifact` is discharged by exactly one gate-list-0 column,
-/// no column discharges two, and — where `specs` is given — that column is a
-/// leaf of **that lookup's own channel's** fraction tree.
+/// no column discharges two, every channel in `specs` has exactly one table
+/// fraction, and — where `specs` is given — each of those columns is a leaf of
+/// **its own channel's** fraction tree: a lookup's denominator of the channel
+/// it names, a table fraction of the channel whose table it compresses.
 ///
 /// This is the construction-time twin of the discharge rule (S15 must-be-exact
 /// 7): `channel_trees` builds the leaves from the lookup list, so the check is
@@ -354,7 +356,8 @@ pub fn range_table(channel: u32) -> Option<VirtualKind> {
 /// root is the caller's knowledge and not the artifact's: the output map is the
 /// memory roots, if any, then one `(num, den)` pair per channel in `specs`
 /// order. Passing an empty `specs` runs the column half alone, which is all an
-/// artifact by itself can say.
+/// artifact by itself can say — and the table half not at all, a table fraction
+/// being a thing only a spec names.
 ///
 /// Assumes an artifact that passed [`CircuitArtifact::validate`].
 pub fn check_discharge(a: &CircuitArtifact, specs: &[ChannelSpec]) -> Result<(), String> {
@@ -382,18 +385,38 @@ pub fn check_discharge(a: &CircuitArtifact, specs: &[ChannelSpec]) -> Result<(),
         }
     };
     let mut used = vec![0usize; leaves.len()];
-    for spec in specs {
+    for (i, spec) in specs.iter().enumerate() {
         // The channel's own table fraction: `(−mult, T + g)`, and exactly one of
         // it. Without it a channel sums its rows against nothing.
         let want = crate::laws::normal_form(&table_denominator(spec));
-        let hits: Vec<usize> = (0..leaves.len())
+        let all: Vec<usize> = (0..leaves.len())
             .filter(|&j| crate::laws::normal_form(leaves[j]) == want)
             .collect();
         let channel = lookup_channel::NAMES[spec.channel as usize];
+        // Inside the channel's own cone, for the reason a lookup's denominator
+        // is: a table fraction that sits in another channel's tree leaves this
+        // channel summing its rows against a table it did not declare, and the
+        // other channel subtracting a count of rows it does not hold. Both
+        // trees still hold one table fraction and both numerators are where
+        // they should be, so the cone walk is the only half that sees it.
+        // Counting inside the cone is also what lets two channels share a
+        // table: over the whole list each would match the other's column and a
+        // correct circuit would be refused.
+        let hits: Vec<usize> = all
+            .iter()
+            .copied()
+            .filter(|j| cones[i].contains(j))
+            .collect();
+        if hits.is_empty() && !all.is_empty() {
+            return Err(format!(
+                "lookup discharge: channel `{channel}`'s table fraction is a column outside its \
+                 own fraction tree, so the channel sums its rows against another table"
+            ));
+        }
         if hits.len() != 1 {
             return Err(format!(
-                "lookup discharge: channel `{channel}`'s table is the denominator of {} \
-                 gate-list-0 columns; exactly one is its fraction",
+                "lookup discharge: channel `{channel}`'s table is the denominator of {} columns \
+                 of its fraction tree; exactly one is its fraction",
                 hits.len()
             ));
         }
