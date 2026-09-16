@@ -40,7 +40,7 @@ pub fn boundary_factors(memory: &ExternalChallenges, entry_pc: u32, finals: &Bou
 pub fn reconciles(read_roots: &[Fr], write_roots: &[Fr], factors: (Fr, Fr)) -> bool;
 
 // src/lookup.rs, docs/spec/lookup.md §2 and §8
-pub fn insert_lookup_challenges(into: &mut ExternalChallenges, g: Fr, beta: Fr, decoder_width: usize);
+pub fn insert_lookup_challenges(into: &mut ExternalChallenges, g: Fr, beta: Fr, a: &CircuitArtifact);
 pub fn channel_holds(root: (Fr, Fr)) -> bool;    // num == 0 AND den != 0, and neither alone
 ```
 

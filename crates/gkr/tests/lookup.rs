@@ -367,16 +367,35 @@ fn a_perturbed_closed_form_disagrees_with_the_table() {
 // ---------------------------------------------------------------------------
 
 /// `insert_lookup_challenges` fills `g`, `β` and every derived power, and the
-/// decoder's neutral slot is `g − Σ_{j < width} β^j` — the denominator of the
-/// `MINUS_ONE` tuple a switched-off decoder row looks up. A circuit with no
+/// decoder's neutral slot is `g − Σ_{j < W} β^j` — the denominator of the
+/// `MINUS_ONE` tuple a switched-off decoder row looks up — for `W` read from
+/// the **artifact's** decoder tuple and not from the caller. A circuit with no
 /// decoder channel gets no neutral slot.
 #[test]
 fn the_derived_lookup_slots_are_the_powers_and_the_neutral_denominator() {
     let mut rng = Rng::new(0x5115_000b);
     let (g, beta) = (fr(&mut rng), fr(&mut rng));
     for width in 0..=lookup_channel::MAX_TUPLE {
+        let mut a = fraction_circuit(3);
+        // A decoder lookup of `width` columns over `W[0]`, or none at width 0.
+        // The circuit's gates do not read it; the slot's value is a function of
+        // the lookup list alone.
+        if width > 0 {
+            a.witness.push("flag".into());
+            a.lookups.push(constraints::LookupExpr {
+                name: "decode_row".into(),
+                channel: lookup_channel::DECODER,
+                selector: PolyAddress::Witness(2),
+                tuple: (0..width)
+                    .map(|_| GateDef::Linear {
+                        terms: vec![(lit(1), PolyAddress::Witness(0))],
+                        constant: lit(0),
+                    })
+                    .collect(),
+            });
+        }
         let mut ch = ExternalChallenges::new();
-        insert_lookup_challenges(&mut ch, g, beta, width);
+        insert_lookup_challenges(&mut ch, g, beta, &a);
         assert_eq!(ch.get(challenge_slot::LOOKUP_G), Some(g));
         let mut power = beta;
         for slot in challenge_slot::LOOKUP_BETA_POWERS {

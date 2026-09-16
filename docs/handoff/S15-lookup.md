@@ -143,7 +143,7 @@ pub fn frame_with_channels_artifact(queries: &[usize], trace_vars: u32, extras: 
 ```rust
 // crates/gkr-verify/src/lookup.rs   (#![no_std]; re-exported at the crate root and by gkr)
 pub fn insert_lookup_challenges(into: &mut ExternalChallenges, g: Fr, beta: Fr,
-                                decoder_width: usize);
+                                a: &CircuitArtifact);   // W read from the artifact
 pub fn channel_holds(root: (Fr, Fr)) -> bool;                  // num == 0 AND den != 0
 ```
 

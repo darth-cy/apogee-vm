@@ -290,7 +290,7 @@ fn toy() -> Toy {
     let mut challenges = common::memory_challenges();
     let g = t.challenge_scalar(transcript_tags::LOOKUP_CHALLENGE);
     let beta = t.challenge_scalar(transcript_tags::LOOKUP_CHALLENGE);
-    insert_lookup_challenges(&mut challenges, g, beta, lookup_tuple(FAMILY).len());
+    insert_lookup_challenges(&mut challenges, g, beta, &artifact);
 
     Toy {
         shard: Shard {

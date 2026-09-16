@@ -4,6 +4,7 @@
 //! `docs/spec/lookup.md` §2 and §8.
 
 use constants::{challenge_slot, lookup_channel};
+use constraints::CircuitArtifact;
 use field::Fr;
 
 use crate::ExternalChallenges;
@@ -13,19 +14,28 @@ use crate::ExternalChallenges;
 /// coefficient is one literal or one challenge and no power above the first is
 /// either.
 ///
-/// `decoder_width` is the artifact's decoder tuple width, and 0 for a circuit
-/// with no decoder channel: at a nonzero width the derived
-/// `LOOKUP_DECODER_NEUTRAL` is `g − Σ_{j < width} β^j`, the denominator of the
-/// `MINUS_ONE` tuple a switched-off decoder row looks up.
+/// The decoder's neutral slot is read **from the artifact**, not from the
+/// caller: `LOOKUP_DECODER_NEUTRAL` is `g − Σ_{j < W} β^j` for `W` the width of
+/// that circuit's decoder tuple, the denominator of the `MINUS_ONE` tuple a
+/// switched-off decoder row looks up, and a circuit with no decoder channel gets
+/// no such slot. A caller passing `W` itself could pass the wrong one, and the
+/// gate would then mean something else on every padding row.
 ///
-/// Panics if a slot is already present, as `ExternalChallenges::insert` does,
-/// or if `decoder_width` is above `lookup_channel::MAX_TUPLE`.
+/// Panics if a slot is already present, as `ExternalChallenges::insert` does, or
+/// if the artifact's decoder tuple is wider than `lookup_channel::MAX_TUPLE`.
+/// Assumes an artifact that passed `CircuitArtifact::validate`, which is what
+/// holds every lookup of a channel to one width.
 pub fn insert_lookup_challenges(
     into: &mut ExternalChallenges,
     g: Fr,
     beta: Fr,
-    decoder_width: usize,
+    a: &CircuitArtifact,
 ) {
+    let decoder_width = a
+        .lookups
+        .iter()
+        .find(|l| l.channel == lookup_channel::DECODER)
+        .map_or(0, |l| l.tuple.len());
     assert!(
         decoder_width <= lookup_channel::MAX_TUPLE,
         "a lookup tuple has at most {} columns, and the decoder's is {decoder_width}",

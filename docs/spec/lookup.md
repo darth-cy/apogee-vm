@@ -58,7 +58,9 @@ challenge exists anywhere.
 `β^0` is the literal 1, so a one-column tuple names no slot at all. Every power above
 the first is a **derived slot** (`docs/spec/gkr.md` §5.1): a gate coefficient is one
 literal or one challenge, and `β^j` is neither. `gkr_verify::insert_lookup_challenges`
-fills them, and never reads one from a proof.
+fills them, and never reads one from a proof. It reads `W` — the decoder tuple's width —
+from the **artifact**, not from its caller: a caller passing the wrong `W` would leave
+every decoder padding row's gate meaning something else.
 
 **Selectors are boolean.** `validate` refuses a lookup whose selector no enforcing gate
 of gate list 0 holds to `x − x·x = 0`. LogUp sums `s/(E + g)` over the rows, so a row at

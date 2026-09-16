@@ -1343,11 +1343,6 @@ pub fn check_lookup_discharge(a: &CircuitArtifact) -> Result<(), String> {
     let scratch = vec![Fr::ZERO; a.scratch.len()];
     // `beta`'s powers are derived slots, so a point where they are independent
     // random values is a point no gate's coefficients mean what they say.
-    let decoder = a
-        .lookups
-        .iter()
-        .find(|l| l.channel == lookup_channel::DECODER)
-        .map_or(0, |l| l.tuple.len());
     let mut rng = Rng(0x1009_0217);
     let points: Vec<(Vec<Fr>, usize, ExternalChallenges)> = (0..TRIALS)
         .map(|_| {
@@ -1367,7 +1362,7 @@ pub fn check_lookup_discharge(a: &CircuitArtifact) -> Result<(), String> {
                 .filter(|slot| !lookup.contains(slot))
                 .collect();
             let mut challenges = rng.challenges(&others);
-            insert_lookup_challenges(&mut challenges, rng.fr(), rng.fr(), decoder);
+            insert_lookup_challenges(&mut challenges, rng.fr(), rng.fr(), a);
             (committed, row, challenges)
         })
         .collect();
