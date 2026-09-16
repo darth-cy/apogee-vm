@@ -1,10 +1,11 @@
 //! The memory artifacts under the checker: `memory_roots`, the root self-check
 //! hook of `docs/spec/memory.md` §1, agrees with a forwarded window and fails
-//! when a row under a root changes; the three artifacts keep the laws, the
-//! lookup rules and the padding contract, the frame its product-tree clause;
-//! and an honest statement over a committed guest — its frame, its RAM windows
-//! and its boundary, filled by `trace`'s builders from a real execution — keeps
-//! every gate and every obligation, reconciles, and proves.
+//! when a row under a root changes; every execution family's frame and both
+//! window artifacts keep the laws, the lookup rules and the padding contract,
+//! and each frame its product-tree clause; and an honest statement over a
+//! committed guest — one frame per family that ran, its RAM windows and its
+//! boundary, filled by `trace`'s builders from a real execution — keeps every
+//! gate and every obligation, reconciles, and proves.
 
 mod common;
 
@@ -13,13 +14,14 @@ use checker::{
     violated_relations,
 };
 use common::{
-    frame_shard, memory_challenges, prove_and_verify, shards, traced, window_shards, witness_row,
-    GUESTS, HEIGHT,
+    frame_height, frame_plan, frame_shard, memory_challenges, prove_and_verify, shards, traced,
+    window_shards, witness_row, FAMILY_NAMES, GUESTS, HEIGHT,
 };
 use constants::challenge_slot::{MEM_ALPHA_VAL, MEM_GAMMA};
 use constants::family;
 use constraints::memory::{
-    frame, frame_artifact, image_window_artifact, zero_window_artifact, CYCLE, FRAME_QUERIES,
+    family_frame_artifact, frame, frame_queries, image_window_artifact, zero_window_artifact,
+    CYCLE, PC,
 };
 use constraints::{CircuitArtifact, PolyAddress};
 use field::Fr;
@@ -31,6 +33,18 @@ use poly::{MultilinearPoly, PolyBacking};
 use program::check_memory_windows;
 use test_support::Rng;
 use trace::{build_boundary_finals, build_memory_columns, init_windows, plan_shards, ROLES};
+
+/// The seven execution families, ascending: the frames a statement can carry.
+/// The two init families run no cycles and have no frame.
+const EXECUTION: [u32; 7] = [
+    family::ADD_SUB_LUI_AUIPC,
+    family::JUMP_BRANCH_SLT,
+    family::SHIFT_BITWISE,
+    family::MUL_DIV,
+    family::MEM_WORD,
+    family::MEM_SUBWORD,
+    family::ATOMICS,
+];
 
 /// A forwarded artifact over random columns and random slots 1–4, plus slot 5
 /// for window 9.
@@ -55,12 +69,25 @@ fn forwarded(a: &CircuitArtifact, seed: u64) -> LayerValues {
 
 type Constructor = fn(u32) -> CircuitArtifact;
 
+/// The widest frame, `ADD_SUB_LUI_AUIPC`'s seven queries: 8 leaves a side.
+fn alu_frame(trace_vars: u32) -> CircuitArtifact {
+    family_frame_artifact(family::ADD_SUB_LUI_AUIPC, trace_vars)
+}
+
+/// The narrowest, `JUMP_BRANCH_SLT`'s four: 4 leaves a side, and no pad leaf.
+fn reg_frame(trace_vars: u32) -> CircuitArtifact {
+    family_frame_artifact(family::JUMP_BRANCH_SLT, trace_vars)
+}
+
 /// Each artifact at `trace_vars` 4 beside the layer its first halving list
-/// reads: layer 1 for a window, whose leaves it halves at once, and layer 4
-/// for the frame, above its three row-wise lists.
-const HALVING_INPUTS: [(&str, Constructor, usize); 2] = [
+/// reads: layer 1 for a window, whose two leaves it halves at once; layer 4 for
+/// a seven-query frame, whose 16 leaves take three row-wise lists; and layer 3
+/// for a four-query frame, whose 8 leaves take two. The two frame widths are
+/// here so the hook is held to a depth it cannot have hardcoded.
+const HALVING_INPUTS: [(&str, Constructor, usize); 3] = [
     ("zero window", zero_window_artifact, 1),
-    ("frame", frame_artifact, 4),
+    ("add_sub_lui_auipc frame", alu_frame, 4),
+    ("jump_branch_slt frame", reg_frame, 3),
 ];
 
 /// On a forwarded artifact the roots are the top's two values and the
@@ -88,8 +115,8 @@ fn memory_roots_agrees_with_a_forwarded_artifact() {
 }
 
 /// One row under a root changed in `LayerValues`, the top left as it was:
-/// refused. The same for the write side, on both artifacts. Kills a hook that
-/// reads the roots off the top without recomputing them.
+/// refused. The same for the write side, on all three artifacts. Kills a hook
+/// that reads the roots off the top without recomputing them.
 #[test]
 fn memory_roots_refuses_a_changed_row_under_a_root() {
     for (label, construct, k) in HALVING_INPUTS {
@@ -153,21 +180,30 @@ fn memory_roots_refuses_an_artifact_with_no_halving_list() {
     );
 }
 
-/// The checker's own laws, lookup rules and padding contract hold on all three
-/// constructors — the `zero_row_valid` each computes included — and the
-/// frame, an execution family's subtree whose shards have inactive rows, keeps
-/// the product-tree clause.
+/// The checker's own laws, lookup rules and padding contract hold on every
+/// execution family's frame and on both window artifacts — the `zero_row_valid`
+/// each computes included — and each frame, an execution family's subtree whose
+/// shards have inactive rows, keeps the product-tree clause. Every family is
+/// built, so a width whose leaves need constant-1 padding is covered beside one
+/// whose leaves are already a power of two.
 #[test]
 fn the_memory_artifacts_keep_the_laws_and_the_padding_contract() {
-    for (label, a) in [
-        ("frame", frame_artifact(6)),
-        ("image window", image_window_artifact(6)),
-        ("zero window", zero_window_artifact(6)),
-    ] {
-        assert_eq!(check_laws(&a), Ok(()), "{label}");
-        assert_eq!(check_padding(&a), Ok(()), "{label}");
+    let mut artifacts: Vec<(String, CircuitArtifact)> = EXECUTION
+        .iter()
+        .map(|&id| {
+            let label = format!("{} frame", FAMILY_NAMES[id as usize]);
+            (label, family_frame_artifact(id, 6))
+        })
+        .collect();
+    for (label, a) in &artifacts {
+        assert_eq!(check_padding_identity(a), Ok(()), "{label}");
     }
-    assert_eq!(check_padding_identity(&frame_artifact(6)), Ok(()));
+    artifacts.push(("image window".to_string(), image_window_artifact(6)));
+    artifacts.push(("zero window".to_string(), zero_window_artifact(6)));
+    for (label, a) in &artifacts {
+        assert_eq!(check_laws(a), Ok(()), "{label}");
+        assert_eq!(check_padding(a), Ok(()), "{label}");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -176,19 +212,34 @@ fn the_memory_artifacts_keep_the_laws_and_the_padding_contract() {
 
 /// S14 acceptance 1, the honest statement of a committed guest: every shard's
 /// forward pass keeps every gate, and its roots are what `memory_roots`
-/// recomputes; all three artifacts keep the checker's laws and padding
-/// contract, and the frame the product-tree clause; the witness-row evaluator,
-/// `violated_relations`, reports nothing on every row of both windows and on
-/// every live row and the first padding row of the frame, and the lookup
+/// recomputes; every artifact keeps the checker's laws and padding contract,
+/// and each frame the product-tree clause; the witness-row evaluator,
+/// `violated_relations`, reports nothing on every row of every window and on
+/// every live row and the first padding row of every frame, and the lookup
 /// evaluator nothing on any row; the window list keeps the verifier's rules;
 /// the roots reconcile with the boundary `build_boundary_finals` fills at the
-/// image's entry pc; and every window shard proves and verifies, and the frame
-/// when `prove_frame` says so. Fails on any gate, relation or obligation a
+/// image's entry pc; and every window shard proves and verifies, and the frames
+/// when `prove_frames` says so. Fails on any gate, relation or obligation a
 /// builder's honest column breaks, and on any imbalance between the builders.
-fn honest_statement(name: &str, input: u32, prove_frame: bool) {
+///
+/// The execution side is one frame per family that ran, each under that
+/// family's `frame_queries`: a single frame cannot hold cycles of two families,
+/// since an ecall row needs `arg1` and `arg2` and a load row needs `load`.
+fn honest_statement(name: &str, input: u32, prove_frames: bool) {
     let t = traced(name, input);
     let memory = memory_challenges();
+    let plan = frame_plan(&t);
     let shards = shards(&t, &memory);
+    assert!(plan.len() > 1, "{name}: more than one family ran");
+    assert_eq!(
+        shards.len(),
+        plan.len() + 1 + init_windows(&t.log, HEIGHT).len(),
+        "{name}: one shard per frame and per window"
+    );
+    assert!(
+        plan.iter().any(|(_, c)| frame_height(c.len()) > c.len()),
+        "{name}: some family's frame has a padding row"
+    );
     let (mut reads, mut writes) = (Vec::new(), Vec::new());
     for (i, shard) in shards.iter().enumerate() {
         let (a, label) = (&shard.artifact, &shard.label);
@@ -206,12 +257,18 @@ fn honest_statement(name: &str, input: u32, prove_frame: bool) {
         assert_eq!(check_padding(a), Ok(()), "{name} {label}");
 
         let rows = 1usize << a.trace_vars;
-        if i == 0 {
-            assert!(t.cycles.len() < rows, "{name}: the frame has a padding row");
-        }
+        // A frame's live rows are its family's cycles; a window row is an
+        // address, so a window has no inactive row at all.
+        let live = match shard.family {
+            Some(_) => {
+                assert_eq!(check_padding_identity(a), Ok(()), "{name} {label}");
+                plan[i].1.len()
+            }
+            None => rows,
+        };
         for row in 0..rows {
             let w = witness_row(a, &values, row);
-            if i > 0 || row <= t.cycles.len() {
+            if row <= live {
                 assert_eq!(
                     violated_relations(a, &w, &shard.challenges),
                     Vec::<String>::new(),
@@ -224,15 +281,10 @@ fn honest_statement(name: &str, input: u32, prove_frame: bool) {
                 "{name} {label}: row {row}"
             );
         }
-        if i > 0 || prove_frame {
+        if shard.family.is_none() || prove_frames {
             assert_eq!(prove_and_verify(shard, &values), Ok(()), "{name} {label}");
         }
     }
-    assert_eq!(
-        check_padding_identity(&shards[0].artifact),
-        Ok(()),
-        "{name}"
-    );
 
     let windows = init_windows(&t.log, HEIGHT);
     let counts: Vec<u32> = plan_shards(&t.profile, &t.config)
@@ -250,42 +302,41 @@ fn honest_statement(name: &str, input: u32, prove_frame: bool) {
     assert!(reconciles(&reads, &writes, factors), "{name}");
 }
 
-/// fib's 2,117 cycles: a 2^12-row frame, window 0 and the stack window 8191,
-/// every one proved.
+/// fib's 2,117 cycles, split across the families that ran: window 0 and the
+/// stack window 8191 beside them, every shard proved.
 #[test]
 fn fib_honest_statement_reconciles_and_proves() {
     honest_statement("fib", 24, true);
 }
 
-/// heap's 141,832 cycles: a 2^18-row frame, forwarded and checked row by row
-/// but not proved — its proof alone takes a minute in a debug build, and fib's
-/// frame proves the same artifact — and its two windows, proved.
+/// heap's 141,832 cycles: its frames forwarded and checked row by row but not
+/// proved — their proofs alone take minutes in a debug build, and fib's frames
+/// prove the same artifacts — and its two windows, proved.
 #[test]
 fn heap_honest_statement_reconciles_and_proves_its_windows() {
     honest_statement("heap", 40, false);
 }
 
-/// The statement's frame split as execution-family shards split it: one frame
-/// per family that ran, over that family's cycles — not contiguous — with the
-/// first family's list reversed, each at the smallest power-of-two height of at
-/// least 16. Row `i` holds `cycles[i]`, every shard keeps every gate, and the
-/// roots of every frame with the windows' reconcile with the boundary. Kills a
-/// builder that files a cycle's row by the cycle's number, or a list sorted,
-/// rather than by its place in `cycles`.
+/// The same statement built by hand, one frame per family that ran, over that
+/// family's cycles — not contiguous — with the first family's list reversed,
+/// each at the smallest power-of-two height of at least 16. Row `i` holds
+/// `cycles[i]`, every shard keeps every gate, and the roots of every frame with
+/// the windows' reconcile with the boundary. Kills a builder that files a
+/// cycle's row by the cycle's number, or a list sorted, rather than by its
+/// place in `cycles`.
 #[test]
 fn a_frame_per_family_in_any_order_reconciles() {
     for (name, input) in GUESTS {
         let t = traced(name, input);
         let memory = memory_challenges();
         let mut shards = Vec::new();
-        for trace in t.traces.families.iter().filter(|f| !f.cycle.is_empty()) {
+        for trace in t.traces.families.iter().filter(|f| !f.is_empty()) {
             let mut cycles = trace.cycle.clone();
             if shards.is_empty() {
                 cycles.reverse();
             }
-            let height = cycles.len().next_power_of_two().max(16);
-            let mut shard = frame_shard(&t.log, &cycles, height, &memory);
-            shard.label = format!("frame of family {}", trace.family);
+            let height = frame_height(cycles.len());
+            let shard = frame_shard(&t.log, trace.family, &cycles, height, &memory);
             let column = shard.base.get(CYCLE).expect("the cycle column");
             for (i, &cycle) in cycles.iter().enumerate() {
                 assert_eq!(column.get(i), Fr::from_u64(cycle), "{name}: row {i}");
@@ -314,54 +365,73 @@ fn a_frame_per_family_in_any_order_reconciles() {
 }
 
 /// `build_memory_columns` against the family buffers, which file each query
-/// under its role where the log files it by space and slot: on each guest the
-/// row of cycle `c` holds `c`, its pc query `(1, 0, 4(c − 1), pc, next_pc)`,
-/// and at query `1 + r` role `ROLES[r]`'s fields with mask 1, or zeros where
-/// the cycle lacks it; and the first padding row is 0 in every column. Kills a
-/// slot-2 register query filed under another role — which no gate of the frame
-/// would notice, the three sharing a space and a slot — and a pc query or a
-/// padding row filled otherwise.
+/// under its role where the log files it by space and slot: on each guest, in
+/// each family's own frame under its own `frame_queries`, row `i` holds that
+/// family's cycle `i`, its pc query `(1, 0, 4(c − 1), pc, next_pc)` at slot 0,
+/// and role `ROLES[r]` — query `1 + r` of the table — at the slot the family's
+/// list gives it, with mask 1, or zeros where the cycle lacks it; a role the
+/// family's list has no slot for is a role no row of that family has; and the
+/// first padding row is 0 in every column. Kills a slot-2 register query filed
+/// under another role — which no gate of the frame would notice, the three
+/// sharing a space and a slot — a query filed at a query id rather than at its
+/// family's slot, a `frame_queries` narrower than the family that ran, and a pc
+/// query or a padding row filled otherwise.
 #[test]
 fn the_frame_columns_are_the_family_buffers() {
     for (name, input) in GUESTS {
         let t = traced(name, input);
-        let height = t.cycles.len().next_power_of_two();
-        let base = BaseLayer::new(build_memory_columns(&t.log, &t.cycles, height));
-        let at = |address, y| base.get(address).expect("a frame column").get(y);
         let mut rows = 0;
-        for trace in &t.traces.families {
+        for trace in t.traces.families.iter().filter(|f| !f.is_empty()) {
+            let queries = frame_queries(trace.family);
+            let label = FAMILY_NAMES[trace.family as usize];
+            assert_eq!(queries[0], PC, "{name} {label}: the pc query is slot 0");
+            let height = frame_height(trace.len());
+            let columns = build_memory_columns(&t.log, queries, &trace.cycle, height);
+            let base = BaseLayer::new(columns);
+            let at = |address, y| base.get(address).expect("a frame column").get(y);
             for i in 0..trace.len() {
                 let row = trace.row(i);
                 let pc = [1, 0, 4 * (row.cycle - 1), row.pc as u64, row.next_pc as u64];
                 let mut expected = vec![(CYCLE, row.cycle)];
                 expected.extend((0..5).map(|f| (frame(0, f), pc[f as usize])));
                 for (r, role) in ROLES.iter().enumerate() {
-                    let fields = row.query(*role).map_or([0; 5], |q| {
+                    let query = row.query(*role);
+                    let Some(slot) = queries.iter().position(|&q| q == 1 + r) else {
+                        assert!(
+                            query.is_none(),
+                            "{name} {label}: cycle {} has {role:?}, and the family's frame has \
+                             no slot for it",
+                            row.cycle
+                        );
+                        continue;
+                    };
+                    let fields = query.map_or([0; 5], |q| {
                         let (addr, read, write) = (q.addr, q.read_value, q.write_value);
                         [1, addr as u64, q.read_ts, read as u64, write as u64]
                     });
-                    expected.extend((0..5).map(|f| (frame(1 + r, f), fields[f as usize])));
+                    expected.extend((0..5).map(|f| (frame(slot, f), fields[f as usize])));
                 }
-                let y = (row.cycle - 1) as usize;
                 for (address, value) in expected {
                     let cycle = row.cycle;
                     assert_eq!(
-                        at(address, y),
+                        at(address, i),
                         Fr::from_u64(value),
-                        "{name}: cycle {cycle}, {address}"
+                        "{name} {label}: cycle {cycle}, {address}"
                     );
                 }
                 rows += 1;
             }
+            let padding = trace.len();
+            if padding < height {
+                for m in 0..1 + 5 * queries.len() as u32 {
+                    assert_eq!(
+                        at(PolyAddress::Memory(m), padding),
+                        Fr::ZERO,
+                        "{name} {label}: M[{m}]"
+                    );
+                }
+            }
         }
         assert_eq!(rows, t.cycles.len(), "{name}: one family row per cycle");
-        for m in 0..1 + 5 * FRAME_QUERIES as u32 {
-            let padding = t.cycles.len();
-            assert_eq!(
-                at(PolyAddress::Memory(m), padding),
-                Fr::ZERO,
-                "{name}: M[{m}]"
-            );
-        }
     }
 }

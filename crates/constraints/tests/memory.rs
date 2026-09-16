@@ -1,16 +1,25 @@
-//! `constraints::memory`, `docs/spec/memory.md` §2, §3.3 and §8: the three
-//! memory artifacts validate and keep the construction-time rules at two
-//! heights, their layouts, obligations and read sets are the document's, the
-//! committed fixtures are the constructors' bytes, and `check_memory` refuses
-//! each thing §8 names. S14 acceptance 9 is here; acceptance 12's negative
-//! control is the unit test in `src/memory.rs`, which reaches the private
-//! construction.
+//! `constraints::memory`, `docs/spec/memory.md` §2, §3.3 and §8: every memory
+//! artifact — one frame per execution family, and the two RAM windows —
+//! validates and keeps the construction-time rules at two heights, their
+//! layouts, obligations and read sets are the document's, the committed
+//! fixtures are the constructors' bytes, and `check_memory` refuses each thing
+//! §8 names. S14 acceptance 9 is here; acceptance 12's negative control is the
+//! unit test in `src/memory.rs`, which reaches the private construction.
+//!
+//! A family's frame holds only the queries its instructions can make (§2.1), so
+//! nothing below is written against the eight of the query table: every
+//! expectation is derived from that family's list. **A query's address space
+//! and its in-cycle slot Δ come from its id in the query table; its columns,
+//! its gap chunk and its leaves come from its position — its *slot* — in the
+//! family's list.** Where the two differ is where this suite is aimed.
 
-use constants::{address_space, challenge_slot, lookup_channel, memory};
+use constants::{address_space, challenge_slot, family, lookup_channel, memory};
 use constraints::memory::{
-    check_memory, frame, frame_artifact, gap_hi, image_window_artifact, read_tuple,
-    zero_window_artifact, CYCLE, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE,
-    FRAME_DELTA, FRAME_NAMES, FRAME_QUERIES, FRAME_SPACE,
+    check_memory, family_frame_artifact, frame, frame_artifact, frame_queries, gap_hi,
+    image_window_artifact, rd_inv, rd_is_zero, rd_selected, read_tuple, zero_window_artifact, ARG1,
+    ARG2, CYCLE, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE,
+    FRAME_DELTA, FRAME_NAMES, FRAME_QUERIES, FRAME_READ_ONLY, FRAME_SPACE, LOAD, PC, RAM, RD, RS1,
+    RS2,
 };
 use constraints::{
     CachedEntry, CircuitArtifact, Coeff, EnforcingEntry, GateDef, LayerSpec, LookupExpr, Padding,
@@ -21,56 +30,207 @@ use field::Fr;
 use std::collections::HashSet;
 use test_support::{sha256, to_hex};
 
-const FRAME_SHA256: &str = "a18112c678db49eed95654e2b38c8d0e78f60be5b8c543e91ac897952f205df5";
+const FRAME_ALU_SHA256: &str = "48622aa5376f82bdffc501932772f7ac04ce0c8e4838513ff5b9db550470d289";
+const FRAME_REG_SHA256: &str = "f94da36c6f7052acd10c36a3a0bd04ce09fe2419cdbfa046db4a58b1a716cbc0";
+const FRAME_MEM_SHA256: &str = "7a31fd867d4b5490821bcef24e356daf34d834a397efed8fa41b8e821b6fee6f";
+const FRAME_ATOMICS_SHA256: &str =
+    "518c3853426a2ca30216536edc41a2659189c6c1e5abbeca9b516cf2032488c8";
 const IMAGE_WINDOW_SHA256: &str =
     "39a8655d430ed5c031e4f27075662fe92a9a1274cd23dc300ae5e2e82df67ecc";
 const ZERO_WINDOW_SHA256: &str = "f08dde677a70c8a15cc7b67b35806e6ee5d9afff9cb703586f21426baa51ec1c";
 
-type Constructor = fn(u32) -> CircuitArtifact;
-
-const CONSTRUCTORS: [(&str, Constructor); 3] = [
-    ("frame", frame_artifact),
-    ("image window", image_window_artifact),
-    ("zero window", zero_window_artifact),
+/// The seven execution families, ascending: every family that runs cycles and
+/// so carries a frame. `INIT_TEARDOWN` and `ZERO_WINDOWS` have none — their
+/// artifacts are §3.3's two windows — which `frame_queries` refuses in the unit
+/// tests of `src/memory.rs`.
+const EXECUTION_FAMILIES: [u32; 7] = [
+    family::ADD_SUB_LUI_AUIPC,
+    family::JUMP_BRANCH_SLT,
+    family::SHIFT_BITWISE,
+    family::MUL_DIV,
+    family::MEM_WORD,
+    family::MEM_SUBWORD,
+    family::ATOMICS,
 ];
 
+/// `docs/spec/memory.md` §2.1's table, written here again rather than read from
+/// `frame_queries`: per family, its query list and, derived from it by hand,
+/// `w`, the `M` and `W` column counts, the leaves a side, the obligations and
+/// the enforcing gates — `w` booleanity gates, one write-back per read-only
+/// query the family holds, and the four x0 gates.
+#[allow(clippy::type_complexity)]
+const FRAME_SHAPES: [(u32, &[usize], usize, usize, usize, usize, usize); 7] = [
+    //  family                      queries                                w    M   W  side  lk  enf
+    (
+        family::ADD_SUB_LUI_AUIPC,
+        &[PC, RS1, RS2, ARG1, ARG2, RAM, RD],
+        36,
+        10,
+        8,
+        14,
+        15,
+    ),
+    (
+        family::JUMP_BRANCH_SLT,
+        &[PC, RS1, RS2, RD],
+        21,
+        7,
+        4,
+        8,
+        10,
+    ),
+    (family::SHIFT_BITWISE, &[PC, RS1, RS2, RD], 21, 7, 4, 8, 10),
+    (family::MUL_DIV, &[PC, RS1, RS2, RD], 21, 7, 4, 8, 10),
+    (
+        family::MEM_WORD,
+        &[PC, RS1, RS2, LOAD, RAM, RD],
+        31,
+        9,
+        8,
+        12,
+        13,
+    ),
+    (
+        family::MEM_SUBWORD,
+        &[PC, RS1, RS2, LOAD, RAM, RD],
+        31,
+        9,
+        8,
+        12,
+        13,
+    ),
+    (family::ATOMICS, &[PC, RS1, RS2, RAM, RD], 26, 8, 8, 10, 11),
+];
+
+/// The four *distinct* frames: families sharing a query list share their
+/// artifact byte for byte, so these four stand for all seven.
+/// `the_seven_families_frames_are_the_four_fixtures` is what holds that.
+const DISTINCT_FRAMES: [u32; 4] = [
+    family::ADD_SUB_LUI_AUIPC,
+    family::JUMP_BRANCH_SLT,
+    family::MEM_WORD,
+    family::ATOMICS,
+];
+
+/// Every memory artifact there is, at `trace_vars`: one frame per execution
+/// family, then the two windows. The label names the artifact in a failure.
+fn every_artifact(trace_vars: u32) -> Vec<(String, CircuitArtifact)> {
+    let mut all: Vec<(String, CircuitArtifact)> = EXECUTION_FAMILIES
+        .iter()
+        .map(|&id| {
+            (
+                format!("family {id}'s frame"),
+                family_frame_artifact(id, trace_vars),
+            )
+        })
+        .collect();
+    all.push((
+        String::from("image window"),
+        image_window_artifact(trace_vars),
+    ));
+    all.push((
+        String::from("zero window"),
+        zero_window_artifact(trace_vars),
+    ));
+    all
+}
+
+fn fixture(name: &str) -> Vec<u8> {
+    let path = format!("{}/tests/vectors/{name}", env!("CARGO_MANIFEST_DIR"));
+    std::fs::read(&path).unwrap_or_else(|e| panic!("reading {path}: {e}"))
+}
+
 /// Each committed fixture is pinned, then held to its constructor's bytes at
-/// `trace_vars` 22. The constructors are the only definition; the pin is what
-/// makes a changed circuit a deliberate refresh.
+/// `trace_vars` 22 — the four distinct frames and the two windows. The
+/// constructors are the only definition; the pin is what makes a changed
+/// circuit a deliberate refresh.
 #[test]
 fn the_fixtures_are_the_constructors_bytes() {
-    let fixtures: [(&str, &str, Constructor); 3] = [
-        ("memory_frame.bin", FRAME_SHA256, frame_artifact),
+    let fixtures = [
+        (
+            "memory_frame_alu.bin",
+            FRAME_ALU_SHA256,
+            family_frame_artifact(family::ADD_SUB_LUI_AUIPC, 22),
+        ),
+        (
+            "memory_frame_reg.bin",
+            FRAME_REG_SHA256,
+            family_frame_artifact(family::JUMP_BRANCH_SLT, 22),
+        ),
+        (
+            "memory_frame_mem.bin",
+            FRAME_MEM_SHA256,
+            family_frame_artifact(family::MEM_WORD, 22),
+        ),
+        (
+            "memory_frame_atomics.bin",
+            FRAME_ATOMICS_SHA256,
+            family_frame_artifact(family::ATOMICS, 22),
+        ),
         (
             "image_window.bin",
             IMAGE_WINDOW_SHA256,
-            image_window_artifact,
+            image_window_artifact(22),
         ),
-        ("zero_window.bin", ZERO_WINDOW_SHA256, zero_window_artifact),
+        (
+            "zero_window.bin",
+            ZERO_WINDOW_SHA256,
+            zero_window_artifact(22),
+        ),
     ];
-    for (name, digest, construct) in fixtures {
-        let path = format!("{}/tests/vectors/{name}", env!("CARGO_MANIFEST_DIR"));
-        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
+    for (name, digest, artifact) in fixtures {
+        let bytes = fixture(name);
         assert_eq!(
             to_hex(&sha256(&bytes)),
             digest,
             "{name} changed. Regenerate it with `cargo run -p kat-gen -- memory`, review the \
              diff, then update the pinned digest deliberately."
         );
-        assert_eq!(bytes, construct(22).to_bytes(), "{name}");
-        assert_eq!(
-            CircuitArtifact::from_bytes(&bytes),
-            Ok(construct(22)),
-            "{name}"
-        );
+        assert_eq!(bytes, artifact.to_bytes(), "{name}");
+        assert_eq!(CircuitArtifact::from_bytes(&bytes), Ok(artifact), "{name}");
     }
 }
 
+/// Four files pin seven families: a family's frame is decided by its query
+/// list alone, so families sharing one share their artifact byte for byte —
+/// `JUMP_BRANCH_SLT`, `SHIFT_BITWISE` and `MUL_DIV` are one frame, `MEM_WORD`
+/// and `MEM_SUBWORD` another. Every execution family is held to the fixture
+/// `kat-gen` writes for it, and the four fixtures are pairwise distinct, so a
+/// family quietly re-pointed at another's frame fails here.
+#[test]
+fn the_seven_families_frames_are_the_four_fixtures() {
+    let files = [
+        (family::ADD_SUB_LUI_AUIPC, "memory_frame_alu.bin"),
+        (family::JUMP_BRANCH_SLT, "memory_frame_reg.bin"),
+        (family::SHIFT_BITWISE, "memory_frame_reg.bin"),
+        (family::MUL_DIV, "memory_frame_reg.bin"),
+        (family::MEM_WORD, "memory_frame_mem.bin"),
+        (family::MEM_SUBWORD, "memory_frame_mem.bin"),
+        (family::ATOMICS, "memory_frame_atomics.bin"),
+    ];
+    assert_eq!(files.map(|(id, _)| id), EXECUTION_FAMILIES);
+    for (id, name) in files {
+        assert_eq!(
+            family_frame_artifact(id, 22).to_bytes(),
+            fixture(name),
+            "family {id} is {name}"
+        );
+    }
+    let distinct: HashSet<Vec<u8>> = DISTINCT_FRAMES
+        .iter()
+        .map(|&id| family_frame_artifact(id, 22).to_bytes())
+        .collect();
+    assert_eq!(distinct.len(), 4, "the four fixtures are four circuits");
+}
+
+/// Every constructor there is — the seven families' frames and the two
+/// windows — at both a small height and the default one.
 #[test]
 fn every_constructor_validates_and_keeps_the_memory_rules_at_12_and_22() {
-    for (label, construct) in CONSTRUCTORS {
-        for trace_vars in [12, 22] {
-            let a = construct(trace_vars);
+    for trace_vars in [12, 22] {
+        let all = every_artifact(trace_vars);
+        assert_eq!(all.len(), EXECUTION_FAMILIES.len() + 2);
+        for (label, a) in all {
             assert_eq!(a.validate(), Ok(()), "{label} at {trace_vars}");
             assert_eq!(check_memory(&a), Ok(()), "{label} at {trace_vars}");
             assert_eq!(a.trace_vars, trace_vars, "{label}");
@@ -82,12 +242,13 @@ fn inner(layer: u32, offset: u32) -> PolyAddress {
     PolyAddress::Inner { layer, offset }
 }
 
-/// The shape both sides share: two output roots at the top, named, and a
-/// padding row of zeros whose zero row is valid.
+/// The shape every memory artifact shares — the seven frames and the two
+/// windows: two output roots at the top, named, a padding row of zeros whose
+/// zero row is valid, `trace_vars` halving lists whatever the width below
+/// them, and no cached entries anywhere.
 #[test]
 fn every_artifact_has_two_named_roots_and_an_all_zero_padding_row() {
-    for (label, construct) in CONSTRUCTORS {
-        let a = construct(12);
+    for (label, a) in every_artifact(12) {
         let n = a.depth() as u32;
         assert_eq!(a.outputs, vec![inner(n, 0), inner(n, 1)], "{label}");
         let names: Vec<&str> = a.scratch[a.scratch.len() - 2..]
@@ -108,11 +269,17 @@ fn every_artifact_has_two_named_roots_and_an_all_zero_padding_row() {
     }
 }
 
-/// §1's part order, S14 must-be-exact 1: every query's read tuple has one term
-/// per part, and its term `PART_*` is that part — `(AS, mask)`,
-/// `(α_addr, addr)`, `(α_ts, read_ts)`, `(α_val, read_value)` — with constant
-/// `γ_M`. `gkr_verify::boundary_factors` places its operand values by the same
-/// constants. Fails if a constant named a position its part is not at.
+/// §1's part order, S14 must-be-exact 1: every query of the table has a read
+/// tuple with one term per part, and its term `PART_*` is that part —
+/// `(AS, mask)`, `(α_addr, addr)`, `(α_ts, read_ts)`, `(α_val, read_value)` —
+/// with constant `γ_M`. `gkr_verify::boundary_factors` places its operand
+/// values by the same constants. `read_tuple` takes the query's id in the
+/// table and addresses the columns as a frame holding every query would; no
+/// family holds every query, and the boundary reads only the coefficients and
+/// their `PART_*` positions, which no slot changes — a family's leaf at slot
+/// `at` is the same tuple over slot `at`'s columns, which
+/// `a_query_at_a_slot_that_is_not_its_id_keeps_its_own_space_and_delta` holds.
+/// Fails if a constant named a position its part is not at.
 #[test]
 fn the_read_tuples_parts_are_at_their_named_positions() {
     let slot = Coeff::Challenge;
@@ -151,121 +318,413 @@ fn the_read_tuples_parts_are_at_their_named_positions() {
     }
 }
 
-/// §2.1 and §2.4: the 41 memory columns, the 11 witness columns, 16 leaves in
-/// the order `R_0..R_7, W_0..W_7`, three row-wise lists `16 → 8 → 4 → 2`, and
-/// the enforcing gates by name. The AS and Δ tables are written here again.
+/// The query table itself, §2.1: eight entries, their names, address spaces
+/// and Δ, the five read-only queries, `rd` last, and `M[0]` the cycle. These
+/// are indexed by a query's *id*, never by its slot in a family.
 #[test]
-fn the_frame_layout_is_the_documents() {
-    let a = frame_artifact(12);
-    let mut memory = vec!["cycle".to_string()];
-    for q in ["pc", "rs1", "rs2", "arg1", "arg2", "load", "ram", "rd"] {
-        for f in ["mask", "addr", "read_ts", "read_value", "write_value"] {
-            memory.push(format!("{q}_{f}"));
-        }
-    }
-    assert_eq!(a.memory, memory);
-    let witness = [
-        "pc_gap_hi",
-        "rs1_gap_hi",
-        "rs2_gap_hi",
-        "arg1_gap_hi",
-        "arg2_gap_hi",
-        "load_gap_hi",
-        "ram_gap_hi",
-        "rd_gap_hi",
-        "rd_inv",
-        "rd_is_zero",
-        "rd_selected",
-    ];
-    assert_eq!(a.witness, witness);
-    assert!(a.setup.is_empty() && a.virtuals.is_empty());
-    assert_eq!(frame(0, FIELD_MASK), PolyAddress::Memory(1));
-    assert_eq!(frame(7, 4), PolyAddress::Memory(40));
-    assert_eq!(CYCLE, PolyAddress::Memory(0));
+fn the_query_table_is_the_documents() {
+    assert_eq!(FRAME_QUERIES, 8);
+    assert_eq!(
+        FRAME_NAMES,
+        ["pc", "rs1", "rs2", "arg1", "arg2", "load", "ram", "rd"]
+    );
+    assert_eq!(
+        [PC, RS1, RS2, ARG1, ARG2, LOAD, RAM, RD],
+        [0, 1, 2, 3, 4, 5, 6, 7]
+    );
     assert_eq!(FRAME_DELTA, [0, 1, 2, 2, 2, 2, 3, 3]);
     let (pc, reg, ram) = (address_space::PC, address_space::REG, address_space::RAM);
     assert_eq!(FRAME_SPACE, [pc, reg, reg, reg, reg, ram, ram, reg]);
+    assert_eq!(FRAME_READ_ONLY, [RS1, RS2, ARG1, ARG2, LOAD]);
+    assert_eq!(CYCLE, PolyAddress::Memory(0));
+}
 
-    let leaves: Vec<&str> = a.scratch[..16].iter().map(|s| s.name.as_str()).collect();
-    let mut expected: Vec<String> = FRAME_NAMES.iter().map(|q| format!("read_{q}")).collect();
-    expected.extend(FRAME_NAMES.iter().map(|q| format!("write_{q}")));
-    assert_eq!(leaves, expected);
-    let widths: Vec<u32> = a.layers[..4].iter().map(|l| l.width).collect();
-    assert_eq!(widths, [16, 8, 4, 2]);
-    assert_eq!(a.depth(), 4 + 12);
+/// §2.1 and §2.4 per family, against [`FRAME_SHAPES`]'s hand-written query
+/// lists: `frame_queries` is that list; `1 + 5w` memory columns and `w + 3`
+/// witness columns named after the query at each slot; `2w` leaves in the
+/// order `read_<q>` by slot, the read side's constant-1 pads, then the same
+/// for the write side; row-wise widths halving from `2·side` to 2; and the
+/// enforcing gates by name — one booleanity per slot, one write-back per
+/// read-only query the family holds, then the four x0 gates. The column
+/// addresses are the slot's, `M[1 + 5s + f]` and `W[s]`, with the x0 gadget's
+/// three witness columns after the family's `w` gap chunks.
+///
+/// Fails if a family's frame kept the table's eight queries, if a query's
+/// columns were placed by its id rather than its slot, if a write-back gate
+/// were emitted for a query the family does not hold, or if the pads were
+/// dropped or misordered.
+#[test]
+fn the_frame_layout_is_the_documents() {
+    for (id, queries, memory_columns, witness_columns, side, obligations, gates) in FRAME_SHAPES {
+        let w = queries.len();
+        assert_eq!(frame_queries(id), queries, "family {id}");
+        assert_eq!(side, w.next_power_of_two(), "family {id}");
+        let a = family_frame_artifact(id, 12);
+        assert_eq!(a, frame_artifact(queries, 12), "family {id}");
 
-    let enforcing: Vec<&str> = a.layers[0]
-        .enforcing
-        .iter()
-        .map(|e| a.relations[e.relation as usize].name.as_str())
-        .collect();
+        let mut columns = vec![String::from("cycle")];
+        for &q in queries {
+            for f in ["mask", "addr", "read_ts", "read_value", "write_value"] {
+                columns.push(format!("{}_{f}", FRAME_NAMES[q]));
+            }
+        }
+        assert_eq!(a.memory, columns, "family {id}");
+        assert_eq!(a.memory.len(), memory_columns, "family {id}");
+        let mut witness: Vec<String> = queries
+            .iter()
+            .map(|&q| format!("{}_gap_hi", FRAME_NAMES[q]))
+            .collect();
+        witness.extend(["rd_inv", "rd_is_zero", "rd_selected"].map(String::from));
+        assert_eq!(a.witness, witness, "family {id}");
+        assert_eq!(a.witness.len(), witness_columns, "family {id}");
+        assert!(a.setup.is_empty() && a.virtuals.is_empty(), "family {id}");
+
+        // Columns are addressed by slot; the x0 columns follow the w chunks.
+        for at in 0..w {
+            for field in 0..5 {
+                let expected = PolyAddress::Memory(1 + 5 * at as u32 + field);
+                assert_eq!(frame(at, field), expected, "family {id}, slot {at}");
+            }
+            assert_eq!(gap_hi(at), PolyAddress::Witness(at as u32), "family {id}");
+        }
+        assert_eq!(rd_inv(w), PolyAddress::Witness(w as u32), "family {id}");
+        assert_eq!(rd_is_zero(w), PolyAddress::Witness(w as u32 + 1), "{id}");
+        assert_eq!(rd_selected(w), PolyAddress::Witness(w as u32 + 2), "{id}");
+
+        let leaves: Vec<&str> = a.scratch[..2 * side]
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect();
+        let mut expected: Vec<String> = Vec::new();
+        for tree in ["read", "write"] {
+            expected.extend(
+                queries
+                    .iter()
+                    .map(|&q| format!("{tree}_{}", FRAME_NAMES[q])),
+            );
+            expected.extend((0..side - w).map(|i| format!("{tree}_pad_{i}")));
+        }
+        assert_eq!(leaves, expected, "family {id}");
+
+        let rows = side.trailing_zeros() as usize;
+        let widths: Vec<u32> = a.layers[..=rows].iter().map(|l| l.width).collect();
+        let expected: Vec<u32> = (0..=rows).map(|k| ((2 * side) >> k) as u32).collect();
+        assert_eq!(widths, expected, "family {id}");
+        assert_eq!(a.depth(), 1 + rows + 12, "family {id}");
+        assert_eq!(a.lookups.len(), obligations, "family {id}");
+
+        let enforcing: Vec<&str> = a.layers[0]
+            .enforcing
+            .iter()
+            .map(|e| a.relations[e.relation as usize].name.as_str())
+            .collect();
+        let mut expected: Vec<String> = queries
+            .iter()
+            .map(|&q| format!("{}_mask_boolean", FRAME_NAMES[q]))
+            .collect();
+        expected.extend(
+            queries
+                .iter()
+                .filter(|q| FRAME_READ_ONLY.contains(q))
+                .map(|&q| format!("{}_writes_back", FRAME_NAMES[q])),
+        );
+        expected.extend(
+            [
+                "rd_is_zero_inverse",
+                "rd_is_zero_at_nonzero",
+                "rd_is_zero_boolean",
+                "rd_write_masked",
+            ]
+            .map(String::from),
+        );
+        assert_eq!(enforcing, expected, "family {id}");
+        assert_eq!(enforcing.len(), gates, "family {id}");
+    }
+}
+
+/// The widest frame's layout written out once, undeduced, as the document's
+/// §2.1 reads it: `ADD_SUB_LUI_AUIPC` holds every query but `load`, so `rd`
+/// sits at slot 6 and its mask is `M[31]`, not the `M[36]` a frame of all
+/// eight queries would give it. Kills a layout that silently kept the table's
+/// width.
+#[test]
+fn the_widest_frame_is_seven_queries_with_rd_at_slot_six() {
+    let a = family_frame_artifact(family::ADD_SUB_LUI_AUIPC, 12);
     assert_eq!(
-        enforcing,
+        a.memory,
         [
-            "pc_mask_boolean",
-            "rs1_mask_boolean",
-            "rs2_mask_boolean",
-            "arg1_mask_boolean",
-            "arg2_mask_boolean",
-            "load_mask_boolean",
-            "ram_mask_boolean",
-            "rd_mask_boolean",
-            "rs1_writes_back",
-            "rs2_writes_back",
-            "arg1_writes_back",
-            "arg2_writes_back",
-            "load_writes_back",
-            "rd_is_zero_inverse",
-            "rd_is_zero_at_nonzero",
-            "rd_is_zero_boolean",
-            "rd_write_masked",
+            "cycle",
+            "pc_mask",
+            "pc_addr",
+            "pc_read_ts",
+            "pc_read_value",
+            "pc_write_value",
+            "rs1_mask",
+            "rs1_addr",
+            "rs1_read_ts",
+            "rs1_read_value",
+            "rs1_write_value",
+            "rs2_mask",
+            "rs2_addr",
+            "rs2_read_ts",
+            "rs2_read_value",
+            "rs2_write_value",
+            "arg1_mask",
+            "arg1_addr",
+            "arg1_read_ts",
+            "arg1_read_value",
+            "arg1_write_value",
+            "arg2_mask",
+            "arg2_addr",
+            "arg2_read_ts",
+            "arg2_read_value",
+            "arg2_write_value",
+            "ram_mask",
+            "ram_addr",
+            "ram_read_ts",
+            "ram_read_value",
+            "ram_write_value",
+            "rd_mask",
+            "rd_addr",
+            "rd_read_ts",
+            "rd_read_value",
+            "rd_write_value",
         ]
+    );
+    assert_eq!(a.memory.len(), 36);
+    assert_eq!(frame(0, FIELD_MASK), PolyAddress::Memory(1));
+    assert_eq!(frame(6, FIELD_MASK), PolyAddress::Memory(31));
+    assert_eq!(frame(6, FIELD_WRITE_VALUE), PolyAddress::Memory(35));
+    assert_eq!(
+        a.witness,
+        [
+            "pc_gap_hi",
+            "rs1_gap_hi",
+            "rs2_gap_hi",
+            "arg1_gap_hi",
+            "arg2_gap_hi",
+            "ram_gap_hi",
+            "rd_gap_hi",
+            "rd_inv",
+            "rd_is_zero",
+            "rd_selected",
+        ]
+    );
+    assert_eq!(rd_inv(7), PolyAddress::Witness(7));
+}
+
+/// The three families whose query count is not a power of two pad each side of
+/// gate list 0 up to one, with leaves that are literally the constant 1 — the
+/// product's identity — reading no column at all, named `<tree>_pad_<i>` after
+/// that side's real leaves, in the gate and in its relation alike. A family
+/// whose width is already a power of two has none. `ATOMICS` is the widest gap:
+/// 5 queries, 3 pads a side.
+///
+/// Kills a pad that carries a column (which would commit and open it, and let
+/// a value of the trace reach the product unconstrained), a pad whose constant
+/// is not 1 (which would scale one side of the multiset), and a pad list that
+/// runs before the real leaves, which would renumber every slot's leaf.
+#[test]
+fn the_pad_leaves_are_the_constant_one_and_read_nothing() {
+    let one = GateDef::Linear {
+        terms: vec![],
+        constant: Coeff::Literal(Fr::ONE),
+    };
+    for (id, pads) in [
+        (family::ADD_SUB_LUI_AUIPC, 1),
+        (family::MEM_WORD, 2),
+        (family::ATOMICS, 3),
+    ] {
+        let w = frame_queries(id).len();
+        let side = w.next_power_of_two();
+        assert_eq!(side - w, pads, "family {id}");
+        let a = family_frame_artifact(id, 12);
+        assert_eq!(a.layers[0].producing.len(), 2 * side, "family {id}");
+        for (t, tree) in ["read", "write"].into_iter().enumerate() {
+            for i in 0..pads {
+                let e = &a.layers[0].producing[t * side + w + i];
+                assert_eq!(e.gate, one, "family {id}, {tree} pad {i}");
+                assert!(e.gate.operands().is_empty(), "family {id}");
+                let r = &a.relations[e.relation as usize];
+                assert_eq!(r.name, format!("define_{tree}_pad_{i}"), "family {id}");
+                assert_eq!(r.gate, one, "family {id}");
+            }
+        }
+    }
+    // A width that is already a power of two pads with nothing.
+    let a = family_frame_artifact(family::JUMP_BRANCH_SLT, 12);
+    assert_eq!(a.layers[0].producing.len(), 8);
+    assert!(a.scratch[..8].iter().all(|s| !s.name.contains("pad")));
+    assert!(a.relations.iter().all(|r| !r.name.contains("pad")));
+}
+
+/// The distinction the whole layout turns on, §2.1: **a query's address space
+/// and Δ come from its id in the query table; its columns come from its slot
+/// in the family's list.** Every frame's leaves are checked against §2.2's
+/// flat `Quadratic`, written here from the id and the slot separately:
+///
+/// ```text
+/// read  leaf  1 + (γ_M, m) + (−1, m) + (AS_q, m)
+///               + (α_addr, addr_s, m) + (α_ts, read_ts_s, m) + (α_val, read_value_s, m)
+/// write leaf  1 + (γ_M, m) + (−1, m) + (AS_q, m) + (α_ts, m) × Δ_q
+///               + (α_addr, addr_s, m) + (α_ts, cycle, m) × 4 + (α_val, write_value_s, m)
+/// ```
+///
+/// where `m` and every column are slot `s`'s. At least one slot per family
+/// holds a query whose id it is not — `ATOMICS` puts `ram` (AS RAM, Δ 3) at
+/// slot 3, where the table's `arg1` (AS REG, Δ 2) sits — and the test asserts
+/// it found one, so a frame that quietly became the identity would fail here
+/// rather than pass vacuously.
+///
+/// Kills a construction that reads `FRAME_SPACE[slot]` or `FRAME_DELTA[slot]`,
+/// or that addresses a column by the query's id.
+#[test]
+fn a_query_at_a_slot_that_is_not_its_id_keeps_its_own_space_and_delta() {
+    let alpha_ts = Coeff::Challenge(challenge_slot::MEM_ALPHA_TS);
+    let lit = |v: u64| Coeff::Literal(Fr::from_u64(v));
+    let mut displaced = 0;
+    for &id in &EXECUTION_FAMILIES {
+        let queries = frame_queries(id);
+        let a = family_frame_artifact(id, 12);
+        for (at, &q) in queries.iter().enumerate() {
+            displaced += (at != q) as usize;
+            let m = frame(at, FIELD_MASK);
+            let head = vec![
+                (Coeff::Challenge(challenge_slot::MEM_GAMMA), m),
+                (Coeff::Literal(Fr::MINUS_ONE), m),
+                (lit(FRAME_SPACE[q] as u64), m),
+            ];
+            let read = GateDef::Quadratic {
+                constant: lit(1),
+                linear: head.clone(),
+                products: vec![
+                    (
+                        Coeff::Challenge(challenge_slot::MEM_ALPHA_ADDR),
+                        frame(at, FIELD_ADDR),
+                        m,
+                    ),
+                    (alpha_ts, frame(at, FIELD_READ_TS), m),
+                    (
+                        Coeff::Challenge(challenge_slot::MEM_ALPHA_VAL),
+                        frame(at, FIELD_READ_VALUE),
+                        m,
+                    ),
+                ],
+            };
+            let mut linear = head;
+            linear.extend(vec![(alpha_ts, m); FRAME_DELTA[q] as usize]);
+            let mut products = vec![(
+                Coeff::Challenge(challenge_slot::MEM_ALPHA_ADDR),
+                frame(at, FIELD_ADDR),
+                m,
+            )];
+            products.extend(vec![(alpha_ts, CYCLE, m); memory::TS_STEP as usize]);
+            products.push((
+                Coeff::Challenge(challenge_slot::MEM_ALPHA_VAL),
+                frame(at, FIELD_WRITE_VALUE),
+                m,
+            ));
+            let write = GateDef::Quadratic {
+                constant: lit(1),
+                linear,
+                products,
+            };
+            let side = queries.len().next_power_of_two();
+            let name = FRAME_NAMES[q];
+            assert_eq!(
+                a.layers[0].producing[at].gate, read,
+                "family {id}, {name} at slot {at}"
+            );
+            assert_eq!(
+                a.layers[0].producing[side + at].gate,
+                write,
+                "family {id}, {name} at slot {at}"
+            );
+        }
+    }
+    assert!(
+        displaced > 0,
+        "no family displaces a query from its id, so the distinction is untested"
     );
 }
 
-/// §2.4: 16 obligations, two per query in query order, `gap_hi_<q>` then
-/// `gap_lo_<q>`, on the timestamp channel under the query's mask; the high
-/// chunk reads `W[q]`, and the low chunk's constant is `Δ − 1` — `−1` for the
-/// pc query.
+/// §2.4 per family: two obligations per *slot* in slot order, `gap_hi_<q>`
+/// then `gap_lo_<q>`, on the timestamp channel under that slot's mask; the
+/// high chunk is the slot's `W[s]` and the low chunk reads the slot's
+/// `read_ts` — while the constant is `Δ − 1` for the query's **id**, `−1` for
+/// the pc, which every frame holds at slot 0. `ATOMICS` is the witness that
+/// the two differ: its `ram` sits at slot 3, whose table entry `arg1` has
+/// Δ 2, and its obligation's constant is Δ(`ram`) − 1 = 2.
+///
+/// Fails if an obligation were keyed to the wrong slot's columns, if a query
+/// took the Δ of the slot it happens to sit at, or if a family carried the
+/// table's sixteen obligations rather than its own `2w`.
 #[test]
 fn the_frame_carries_two_gap_obligations_per_query() {
-    let a = frame_artifact(12);
-    assert_eq!(a.lookups.len(), 16);
     let minus = |v: u64| Coeff::Literal(-Fr::from_u64(v));
     let lit = |v: u64| Coeff::Literal(Fr::from_u64(v));
-    for (q, name) in FRAME_NAMES.iter().enumerate() {
-        let hi = PolyAddress::Witness(q as u32);
-        let selector = frame(q, FIELD_MASK);
-        let expected = [
-            LookupExpr {
-                name: format!("gap_hi_{name}"),
-                channel: lookup_channel::TIMESTAMP,
-                selector,
-                tuple: vec![GateDef::Linear {
-                    terms: vec![(lit(1), hi)],
-                    constant: lit(0),
-                }],
-            },
-            LookupExpr {
-                name: format!("gap_lo_{name}"),
-                channel: lookup_channel::TIMESTAMP,
-                selector,
-                tuple: vec![GateDef::Linear {
-                    terms: vec![
-                        (lit(4), CYCLE),
-                        (minus(1), frame(q, FIELD_READ_TS)),
-                        (minus(1 << 19), hi),
-                    ],
-                    constant: Coeff::Literal(Fr::from_u64(FRAME_DELTA[q]) - Fr::ONE),
-                }],
-            },
-        ];
-        assert_eq!(a.lookups[2 * q..2 * q + 2], expected, "{name}");
+    for &id in &EXECUTION_FAMILIES {
+        let queries = frame_queries(id);
+        let a = family_frame_artifact(id, 12);
+        assert_eq!(a.lookups.len(), 2 * queries.len(), "family {id}");
+        for (at, &q) in queries.iter().enumerate() {
+            let name = FRAME_NAMES[q];
+            let hi = PolyAddress::Witness(at as u32);
+            let selector = frame(at, FIELD_MASK);
+            let expected = [
+                LookupExpr {
+                    name: format!("gap_hi_{name}"),
+                    channel: lookup_channel::TIMESTAMP,
+                    selector,
+                    tuple: vec![GateDef::Linear {
+                        terms: vec![(lit(1), hi)],
+                        constant: lit(0),
+                    }],
+                },
+                LookupExpr {
+                    name: format!("gap_lo_{name}"),
+                    channel: lookup_channel::TIMESTAMP,
+                    selector,
+                    tuple: vec![GateDef::Linear {
+                        terms: vec![
+                            (lit(4), CYCLE),
+                            (minus(1), frame(at, FIELD_READ_TS)),
+                            (minus(1 << 19), hi),
+                        ],
+                        constant: Coeff::Literal(Fr::from_u64(FRAME_DELTA[q]) - Fr::ONE),
+                    }],
+                },
+            ];
+            assert_eq!(
+                a.lookups[2 * at..2 * at + 2],
+                expected,
+                "family {id}, {name}"
+            );
+        }
+        let GateDef::Linear { constant, .. } = &a.lookups[1].tuple[0] else {
+            panic!("gap_lo_pc is Linear");
+        };
+        assert_eq!(
+            *constant,
+            minus(1),
+            "family {id}: gap_lo_pc's constant is −1"
+        );
     }
-    let GateDef::Linear { constant, .. } = &a.lookups[1].tuple[0] else {
-        panic!("gap_lo_pc is Linear");
+    // `ram` at slot 3 of ATOMICS keeps Δ = 3, not slot 3's `arg1` Δ = 2.
+    let atomics = family_frame_artifact(family::ATOMICS, 12);
+    assert_eq!(frame_queries(family::ATOMICS)[3], RAM);
+    let GateDef::Linear { constant, .. } = &atomics.lookups[7].tuple[0] else {
+        panic!("gap_lo_ram is Linear");
     };
-    assert_eq!(*constant, minus(1), "gap_lo_pc's constant is −1");
+    assert_eq!(atomics.lookups[7].name, "gap_lo_ram");
+    assert_eq!(
+        *constant,
+        Coeff::Literal(Fr::from_u64(FRAME_DELTA[RAM]) - Fr::ONE)
+    );
+    assert_ne!(
+        *constant,
+        Coeff::Literal(Fr::from_u64(FRAME_DELTA[3]) - Fr::ONE)
+    );
 }
 
 /// S14 acceptance 11, exhaustively at reduced width: §2.4's gap encoding with
@@ -273,12 +732,13 @@ fn the_frame_carries_two_gap_obligations_per_query() {
 /// `hi ∈ [0, 2^w)` and `lo = gap − 2^w·hi ∈ [0, 2^w)`, `lo` a field element, so
 /// a pair is admitted exactly when `gap`, computed in `Fr`, is one of the
 /// `2^{2w}` field elements `lo + 2^w·hi` — which are distinct. The gap is the
-/// library's: each query's `gap_lo_<q>` from `frame_artifact`, evaluated with
-/// its high chunk `W[q]` at 0, at `cycle` and `read_ts`. Over every query, every
-/// cycle in `[0, 2^8)` — so `ts = 4·cycle + Δ` meets every value of the 10-bit
-/// clock across the four `Δ` — and every `read_ts` in `[0, 2^10)`, where
-/// `read_ts ≥ ts` wraps the gap to `p − (read_ts − ts + 1)`, a pair is admitted
-/// exactly when `read_ts < ts`.
+/// library's: each slot's `gap_lo_<q>` from that family's frame, evaluated with
+/// its high chunk `W[s]` at 0, at `cycle` and `read_ts`. Over the four distinct
+/// frames — which between them place all eight queries of the table, asserted
+/// below — every cycle in `[0, 2^8)`, so `ts = 4·cycle + Δ` meets every value
+/// of the 10-bit clock across the four `Δ`, and every `read_ts` in `[0, 2^10)`,
+/// where `read_ts ≥ ts` wraps the gap to `p − (read_ts − ts + 1)`, a pair is
+/// admitted exactly when `read_ts < ts`.
 ///
 /// This test holds the recombination at width 5 and the expression's cycle,
 /// read-timestamp and constant terms; the chunk width `2^19` and the
@@ -287,7 +747,7 @@ fn the_frame_carries_two_gap_obligations_per_query() {
 ///
 /// Fails if a wrapped negative gap were admitted, or a strictly ordered pair
 /// refused — so if `gap_lo`'s constant were `Δ` rather than `Δ − 1`, admitting
-/// `read_ts = ts`.
+/// `read_ts = ts`, or if a displaced query took its slot's Δ.
 #[test]
 fn the_gap_encoding_is_strict_at_reduced_width() {
     const W: u32 = 5;
@@ -304,39 +764,53 @@ fn the_gap_encoding_is_strict_at_reduced_width() {
         1 << (2 * W),
         "lo + 2^w·hi is injective"
     );
-    let a = frame_artifact(12);
     let literal = |c: &Coeff| match c {
         Coeff::Literal(v) => *v,
         Coeff::Challenge(_) => panic!("gap_lo's coefficients are literals"),
     };
-    for q in 0..FRAME_QUERIES {
-        let GateDef::Linear { terms, constant } = &a.lookups[2 * q + 1].tuple[0] else {
-            panic!("gap_lo_{} is Linear", FRAME_NAMES[q]);
-        };
-        let (mut step, mut sign) = (Fr::ZERO, Fr::ZERO);
-        for (c, address) in terms {
-            match *address {
-                CYCLE => step += literal(c),
-                x if x == frame(q, FIELD_READ_TS) => sign += literal(c),
-                x => assert_eq!(
-                    x,
-                    gap_hi(q),
-                    "gap_lo_{} reads only its chunk",
-                    FRAME_NAMES[q]
-                ),
+    let mut covered: HashSet<usize> = HashSet::new();
+    for &id in &DISTINCT_FRAMES {
+        let queries = frame_queries(id);
+        let a = family_frame_artifact(id, 12);
+        for (at, &q) in queries.iter().enumerate() {
+            covered.insert(q);
+            let GateDef::Linear { terms, constant } = &a.lookups[2 * at + 1].tuple[0] else {
+                panic!("gap_lo_{} is Linear", FRAME_NAMES[q]);
+            };
+            let (mut step, mut sign) = (Fr::ZERO, Fr::ZERO);
+            for (c, address) in terms {
+                match *address {
+                    CYCLE => step += literal(c),
+                    x if x == frame(at, FIELD_READ_TS) => sign += literal(c),
+                    x => assert_eq!(
+                        x,
+                        gap_hi(at),
+                        "gap_lo_{} reads only its chunk",
+                        FRAME_NAMES[q]
+                    ),
+                }
             }
-        }
-        let constant = literal(constant);
-        for cycle in 0..clock / 4 {
-            let ts = 4 * cycle + FRAME_DELTA[q];
-            for read_ts in 0..clock {
-                let gap = step * Fr::from_u64(cycle) + sign * Fr::from_u64(read_ts) + constant;
-                let ok = admitted_gaps.contains(&gap.to_bytes());
-                let name = FRAME_NAMES[q];
-                assert_eq!(ok, read_ts < ts, "{name}: ts {ts}, read_ts {read_ts}");
+            let constant = literal(constant);
+            for cycle in 0..clock / 4 {
+                let ts = 4 * cycle + FRAME_DELTA[q];
+                for read_ts in 0..clock {
+                    let gap = step * Fr::from_u64(cycle) + sign * Fr::from_u64(read_ts) + constant;
+                    let ok = admitted_gaps.contains(&gap.to_bytes());
+                    let name = FRAME_NAMES[q];
+                    assert_eq!(
+                        ok,
+                        read_ts < ts,
+                        "family {id}, {name} at slot {at}: ts {ts}, read_ts {read_ts}"
+                    );
+                }
             }
         }
     }
+    assert_eq!(
+        covered.len(),
+        FRAME_QUERIES,
+        "the four frames place every query of the table between them"
+    );
 }
 
 /// Every base address a gate or an obligation of the artifact reads, once each,
@@ -360,8 +834,11 @@ fn read_set(a: &CircuitArtifact) -> Vec<PolyAddress> {
 }
 
 /// §8's pinned read sets: `ZERO_WINDOWS` reads exactly `M[0]`, `M[1]`,
-/// `V[row]`; `INIT_TEARDOWN` those and `S[0]`, `V[ram_live]`; the frame reads
-/// no `S` and no `V`.
+/// `V[row]`; `INIT_TEARDOWN` those and `S[0]`, `V[ram_live]`; a family's frame
+/// reads exactly its own `1 + 5w` memory columns and `w + 3` witness columns
+/// — every column it commits and nothing else, no `S` and no `V`. A frame that
+/// kept a column it never reads would fail here, as would one reading past its
+/// own width into the addresses a wider family's frame uses.
 #[test]
 fn the_read_sets_are_pinned() {
     let (m0, m1, s0) = (
@@ -382,13 +859,16 @@ fn the_read_sets_are_pinned() {
             [m0, m1, s0, row, live],
             "{trace_vars}"
         );
-        let frame = read_set(&frame_artifact(trace_vars));
-        assert!(
-            frame
-                .iter()
-                .all(|op| matches!(op, PolyAddress::Memory(_) | PolyAddress::Witness(_))),
-            "{frame:?}"
-        );
+        for &id in &EXECUTION_FAMILIES {
+            let w = frame_queries(id).len() as u32;
+            let mut expected: Vec<PolyAddress> = (0..1 + 5 * w).map(PolyAddress::Memory).collect();
+            expected.extend((0..w + 3).map(PolyAddress::Witness));
+            assert_eq!(
+                read_set(&family_frame_artifact(id, trace_vars)),
+                expected,
+                "family {id} at {trace_vars}"
+            );
+        }
     }
     let zero = zero_window_artifact(12);
     assert_eq!(zero.memory, ["teardown_ts", "teardown_value"]);
@@ -425,16 +905,19 @@ fn swap(gate: &GateDef, from: PolyAddress, to: PolyAddress) -> GateDef {
     }
 }
 
-/// S14 acceptance 9: the `rs1` read leaf's address fed from `W[0]` instead of
-/// `M[7]`, in its gate and its relation alike. The artifact is still a lawful
-/// circuit — `validate` accepts it — and `check_memory` refuses it by
-/// provenance, naming the leaf.
+/// S14 acceptance 9, on the widest frame — `ADD_SUB_LUI_AUIPC`, whose gate
+/// list 0 also carries a constant-1 pad leaf a side: the `rs1` read leaf's
+/// address, slot 1's `M[7]`, fed from `W[0]` instead, in its gate and its
+/// relation alike. The artifact is still a lawful circuit — `validate` accepts
+/// it — and `check_memory` refuses it by provenance, naming the leaf.
 ///
 /// Kills a provenance check that ignores `W` operands or list 0.
 #[test]
 fn a_tuple_fed_from_a_witness_column_is_refused() {
-    let mut a = frame_artifact(12);
-    let (from, to) = (frame(1, 1), PolyAddress::Witness(0));
+    let mut a = family_frame_artifact(family::ADD_SUB_LUI_AUIPC, 12);
+    assert_eq!(frame_queries(family::ADD_SUB_LUI_AUIPC)[1], RS1);
+    let (from, to) = (frame(1, FIELD_ADDR), PolyAddress::Witness(0));
+    assert_eq!(from, PolyAddress::Memory(7));
     let entry = &mut a.layers[0].producing[1];
     entry.gate = swap(&entry.gate, from, to);
     let r = entry.relation as usize;
@@ -738,17 +1221,22 @@ fn cached_entries_are_held_to_the_memory_rules() {
     );
 }
 
-/// The frame with one query's booleanity gate removed — its enforcing entry
-/// and its relation, every later relation index shifted down — is still a
-/// lawful circuit, and `check_memory` refuses that query's leaves' mask as
-/// unconstrained. Tried on `pc_mask_boolean`, whose mask no other gate reads,
-/// and on `rd_mask_boolean`, whose mask `rd_is_zero_inverse` still reads.
-/// Kills a mask rule that is not checked, or that accepts any enforcing gate
-/// on the mask.
+/// The widest frame, `ADD_SUB_LUI_AUIPC`, with one query's booleanity gate
+/// removed — its enforcing entry and its relation, every later relation index
+/// shifted down — is still a lawful circuit, and `check_memory` refuses that
+/// query's leaves' mask as unconstrained. Tried on `pc_mask_boolean`, at slot
+/// 0, whose mask `M[1]` no other gate reads, and on `rd_mask_boolean`, at slot
+/// 6 — so `M[31]`, the address the family's *width* gives it, not the `M[36]`
+/// of the query table — whose mask `rd_is_zero_inverse` still reads. Kills a
+/// mask rule that is not checked, or that accepts any enforcing gate on the
+/// mask.
 #[test]
 fn a_frame_missing_a_booleanity_gate_is_refused() {
-    for (query, mask) in [("pc", "M[1]"), ("rd", "M[36]")] {
-        let mut a = frame_artifact(12);
+    let queries = frame_queries(family::ADD_SUB_LUI_AUIPC);
+    assert_eq!((queries[0], queries[6]), (PC, RD));
+    for (query, slot, mask) in [("pc", 0, "M[1]"), ("rd", 6, "M[31]")] {
+        assert_eq!(format!("{}", frame(slot, FIELD_MASK)), mask);
+        let mut a = family_frame_artifact(family::ADD_SUB_LUI_AUIPC, 12);
         let r = a
             .relations
             .iter()
@@ -806,13 +1294,13 @@ fn a_window_leaf_masked_by_a_setup_column_or_the_row_index_is_refused() {
     }
 }
 
-/// §8's third rule: the frame's first row-wise product weighted by `γ_M` reads
-/// two inner columns that come from `M` alone, so provenance passes; the slot
-/// over an inner column is refused. Kills a slot rule that only looks at list
-/// 0 or only at `W`.
+/// §8's third rule, on the widest frame: `ADD_SUB_LUI_AUIPC`'s first row-wise
+/// product weighted by `γ_M` reads two inner columns that come from `M` alone,
+/// so provenance passes; the slot over an inner column is refused. Kills a slot
+/// rule that only looks at list 0 or only at `W`.
 #[test]
 fn a_global_slot_over_an_inner_column_is_refused() {
-    let mut a = frame_artifact(4);
+    let mut a = family_frame_artifact(family::ADD_SUB_LUI_AUIPC, 4);
     let gamma = Coeff::Challenge(challenge_slot::MEM_GAMMA);
     let entry = &mut a.layers[1].producing[0];
     let GateDef::Product { coeff, .. } = &mut entry.gate else {

@@ -36,7 +36,7 @@ crates/
   emulator/      the RV32IMAC reference emulator, its tracing path, and the QEMU
                  differential harness; std
   constraints/   circuits as data: PolyAddress, GateDef, LayerSpec, CircuitArtifact, the
-                 laws, the cache-free compilation and the wire form, and `memory`: the frame,
+                 laws, the cache-free compilation and the wire form, and `memory`: the per-family frames,
                  the two window artifacts and check_memory; no_std
   gkr-verify/    the GKR verifier half: the gate kernel, the layer sumcheck verifier and
                  verify, and every type verify touches; the memory argument's window
@@ -85,7 +85,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
-cargo test --workspace                      # 709 tests as of S14; 21 more are #[ignore]d
+cargo test --workspace                      # 722 tests as of S14; 21 more are #[ignore]d
 cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
@@ -393,6 +393,20 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   frame, RAM windows, the register and PC boundary, halting, binding, range obligations and
   the construction-time rules. It amends the master's absorb order and S11's identity
   recipe, and the master cites it.
+- **A family's frame holds only the queries its instructions can make.** The query table has
+  eight entries — pc, then `execution-trace.md` §7's seven roles — but no family holds all
+  eight: `arg1` and `arg2` are an ecall row's alone, `load` a load's. The frozen subsets are
+  `constraints::memory::frame_queries`, 4 queries for `JUMP_BRANCH_SLT`, `SHIFT_BITWISE` and
+  `MUL_DIV`, 5 for `ATOMICS`, 6 for the two memory families and 7 for `ADD_SUB_LUI_AUIPC`,
+  giving `1 + 5w` memory and `w + 3` witness columns, `2w` obligations, and leaves padded to
+  a power of two a side with leaves that are literally 1. **A column's position is a slot in
+  that list; its address space and `Δ` come from its id in the table** — the two differ for
+  every family. A frame narrower than its family cannot balance, so the honest prover is
+  refused rather than a cheating one admitted; a wider one commits and opens columns that
+  are 0 on every row. What must be exact is S16's inheritance: a frame is a **superset** of
+  its instructions' queries, or S16 has no column to constrain an instruction's written
+  value against. `crates/trace/tests/memory.rs` holds `frame_queries` equal to the union of
+  its family's instructions' queries over all 59 of them, routed by `program::row_kind`.
 - **RAM is initialized in RAM windows, by two families of one height.** Window `w` is the
   bytes `[4h·w, 4h·(w+1))`. `INIT_TEARDOWN` is window 0, exactly one shard, initialized from
   the image column identity commits, rows below `RAM_ORIGIN` masked by `V[ram_live]`;

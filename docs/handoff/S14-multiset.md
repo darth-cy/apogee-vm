@@ -196,14 +196,17 @@ pub const FRAME_QUERIES: usize = 8;
 pub const FRAME_NAMES: [&str; FRAME_QUERIES];          // pc rs1 rs2 arg1 arg2 load ram rd
 pub const FRAME_SPACE: [u8; FRAME_QUERIES];            // PC REG REG REG REG RAM RAM REG
 pub const FRAME_DELTA: [u64; FRAME_QUERIES] = [0, 1, 2, 2, 2, 2, 3, 3];
-pub fn frame(query: usize, field: u32) -> PolyAddress;   // M[1 + 5q + f]
-pub fn gap_hi(query: usize) -> PolyAddress;              // W[q]
-pub const RD_INV: PolyAddress = PolyAddress::Witness(8);
-pub const RD_IS_ZERO: PolyAddress = PolyAddress::Witness(9);
-pub const RD_SELECTED: PolyAddress = PolyAddress::Witness(10);
-pub const RD: usize = 7;
+pub const PC: usize = 0;  RS1 = 1;  RS2 = 2;  ARG1 = 3;  ARG2 = 4;  LOAD = 5;  RAM = 6;  RD = 7;
+pub const FRAME_READ_ONLY: [usize; 5];                   // RS1 RS2 ARG1 ARG2 LOAD
+pub fn frame_queries(family: u32) -> &'static [usize];   // the frozen per-family subset
+pub fn frame(slot: usize, field: u32) -> PolyAddress;    // M[1 + 5·slot + f]; SLOT, not query id
+pub fn gap_hi(slot: usize) -> PolyAddress;               // W[slot]
+pub fn rd_inv(width: usize) -> PolyAddress;              // W[width]
+pub fn rd_is_zero(width: usize) -> PolyAddress;          // W[width + 1]
+pub fn rd_selected(width: usize) -> PolyAddress;         // W[width + 2]
 pub fn read_tuple(query: usize) -> GateDef;              // term PART_* is that part
-pub fn frame_artifact(trace_vars: u32) -> CircuitArtifact;
+pub fn frame_artifact(queries: &[usize], trace_vars: u32) -> CircuitArtifact;
+pub fn family_frame_artifact(family: u32, trace_vars: u32) -> CircuitArtifact;
 pub fn image_window_artifact(trace_vars: u32) -> CircuitArtifact;
 pub fn zero_window_artifact(trace_vars: u32) -> CircuitArtifact;
 pub fn check_memory(a: &CircuitArtifact) -> Result<(), String>;
@@ -232,10 +235,10 @@ pub fn memory_roots(a: &CircuitArtifact, values: &LayerValues) -> Result<(Fr, Fr
 ```rust
 // crates/trace/src/lib.rs, crates/trace/src/memory.rs   (std)
 pub fn init_windows(log: &MemoryEventLog, height: u32) -> Vec<u32>;
-pub fn build_memory_columns(log: &MemoryEventLog, cycles: &[u64], height: usize)
-    -> Vec<(PolyAddress, MultilinearPoly)>;            // the frame's 41 M columns
-pub fn build_frame_witness(log: &MemoryEventLog, cycles: &[u64], height: usize)
-    -> Vec<(PolyAddress, MultilinearPoly)>;            // its 11 W columns
+pub fn build_memory_columns(log: &MemoryEventLog, queries: &[usize], cycles: &[u64], height: usize)
+    -> Vec<(PolyAddress, MultilinearPoly)>;            // the frame's 1 + 5w M columns
+pub fn build_frame_witness(log: &MemoryEventLog, queries: &[usize], cycles: &[u64], height: usize)
+    -> Vec<(PolyAddress, MultilinearPoly)>;            // its w + 3 W columns
 pub fn build_init_teardown_columns(log: &MemoryEventLog, image: &ProgramImage, ram_window: u32,
                                    height: usize) -> Vec<(PolyAddress, MultilinearPoly)>;
                                                        // M[0], M[1]; and S[0] for window 0
@@ -370,6 +373,60 @@ proven". If S16 fixes the pc read timestamp to the literal `4(c − 1)`, then
 
 ---
 
+## Per-family frames
+
+Landed after the first review pass, on the owner's instruction. The frame was one uniform
+8-query layout every execution family carried; it is now the subset of queries each family's
+instructions can actually make.
+
+**Why.** No family ever used all eight. `arg1` and `arg2` are read by an ecall's own row
+alone; `load` is a load's word at slot 2, and the atomics family keeps its RAM query at slot
+3 for every instruction it owns. So the 8-query frame was a union no family reached, and
+every family carried dead columns: five memory columns, one witness column, two vacuous
+obligations and two leaves per dead query, committed and opened on every row.
+
+| family | `w` | committed columns | obligations | fixture bytes at 22 |
+| --- | --- | --- | --- | --- |
+| `ADD_SUB_LUI_AUIPC` | 7 | 46 | 14 | 22,611 |
+| `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MUL_DIV` | 4 | 28 | 8 | 13,892 |
+| `MEM_WORD`, `MEM_SUBWORD` | 6 | 40 | 12 | 20,282 |
+| `ATOMICS` | 5 | 34 | 10 | 17,953 |
+| *the old uniform frame* | 8 | 52 | 16 | 24,940 |
+
+Committed columns are `1 + 5w` memory plus `w + 3` witness. The three 4-query families drop
+46% of their memory-argument committed columns and half their timestamp obligations, and two
+of them default to `2^22` rows.
+
+**Soundness is not affected, and the direction of failure is what makes that true.** A frame
+*narrower* than its family drops events from the multiset, which leaves their addresses'
+chains broken: the honest prover cannot balance, so the failure mode is a refused honest
+proof, never an admitted forgery. A frame *wider* than its family carries columns that are 0
+on every row — waste, not a hole. Nothing about the tuple, the leaves, the product tree, the
+windows, the boundary or reconciliation changed.
+
+**What it hands S16.** S16 ties an instruction's computed value to a `write_value` column, so
+a query with no column is an instruction with nothing constraining it. The rule S16 inherits
+is therefore that **a family's frame is a superset of the queries its instructions make**.
+`crates/trace/tests/memory.rs::every_familys_frame_is_exactly_its_instructions_queries` holds
+`frame_queries` *equal* to that union over all 59 `Instr` variants, with the per-instruction
+queries written from `execution-trace.md` §4 and the routing taken from `program::row_kind`,
+so neither table can drift from the other. Equality rather than containment is deliberate: it
+also refuses a query no instruction of the family makes, which would be a dead column again.
+
+**Shape notes for later stages.**
+
+- A column's position is a **slot** in the family's query list; its address space and its
+  in-cycle `Δ` come from its **id** in the query table. The two differ for every family, and
+  `gkr/tests/memory.rs` pins the distinction per family.
+- The row-wise tree pairs neighbours, so each side is padded to a power of two with leaves
+  that are literally 1 (`Linear { [], 1 }`). Those cost inner columns only — no committed
+  column, no obligation, no enforcing gate. Four of the seven families pad.
+- `frame_queries` panics on the two init families, which run no cycles and have no frame.
+- One fixture per *distinct* frame: families sharing a query list share bytes, and a test
+  holds each of the seven families to one of the four files, so four fixtures pin all seven.
+
+---
+
 ## What the argument rests on
 
 `docs/spec/memory.md` §4.2 and §9 are normative; the review corrected both.
@@ -391,7 +448,7 @@ proven". If S16 fixes the pc read timestamp to the literal `4(c − 1)`, then
   `teardown_ts` are `Fr` columns that nothing bounds. Each matched step adds an integer in
   `[1, 2^38]`, so a closed loop needs more than `p/2^38 > 2^215` steps. A statement has
   fewer than `2^70` tuples: `2^32` shards per family, times 9 families, times `2^30` rows,
-  times 16 leaves, plus 66 boundary tuples. So no loop closes, and every timestamp is a
+  times at most 16 leaves, plus 66 boundary tuples. So no loop closes, and every timestamp is a
   canonical integer below `2^108`. Re-check the count if the shard-count width,
   `MAX_TRACE_VARS`, the family count, the leaves per row or the gap width grows.
 - **What ties a mask to its row is S16's.** At S14 a mask is held to booleanity only.
@@ -477,15 +534,21 @@ a verifying-key loader recomputes against a trusted identity. The new pins
      gates `wrap − wrap·wrap = 0` and `e − r − 2^32·wrap = 0`, and `r` bounded as above,
      admissible only where `0 ≤ e < 2^33`;
    - a wider wrap is not frozen (open question 12).
-5. **The frame** of an execution family's memory columns.
-   - 8 queries in the order pc, rs1, rs2, arg1, arg2, load, ram, rd, with their AS and
-     Δ.
-   - `M[0]` cycle and `M[1 + 5q + f]` for the five fields: 41 `M` columns.
-   - `W[q]` `<q>_gap_hi`, then `rd_inv`, `rd_is_zero`, `rd_selected`: 11 `W` columns.
-   - Leaves `R_0..R_7, W_0..W_7`, each a flat `Quadratic` `m·T + 1 − m`, then widths
-     16 → 8 → 4 → 2, then `trace_vars` halving lists.
-   - Enforcing gates: 8 mask booleanity, 5 write-backs (rs1 through load), 4 x0 gates.
-   - 16 gap obligations, two per read, each with selector `M[mask_q]`.
+5. **The frame** of an execution family's memory columns, over the `w` queries that
+   family's instructions can make (`constraints::memory::frame_queries`).
+   - A **query table** of 8 — pc, rs1, rs2, arg1, arg2, load, ram, rd — each with its AS
+     and Δ. No family holds all eight: `w` is 4, 5, 6 or 7.
+   - A column's position is a **slot** in the family's list; its AS and Δ come from the
+     query's **id** in the table. The two differ for every family.
+   - `M[0]` cycle and `M[1 + 5·slot + f]` for the five fields: `1 + 5w` `M` columns.
+   - `W[slot]` `<q>_gap_hi`, then `rd_inv`, `rd_is_zero`, `rd_selected` at `W[w]`–`W[w + 2]`:
+     `w + 3` `W` columns.
+   - Leaves `read_<q>` then `write_<q>`, each a flat `Quadratic` `m·T + 1 − m`, each side
+     padded to a power of two with `Linear { [], 1 }` pad leaves; then row-wise lists
+     halving the width to 2, then `trace_vars` halving lists.
+   - Enforcing gates: `w` mask booleanity, one write-back per read-only query the family
+     holds, 4 x0 gates.
+   - `2w` gap obligations, two per read, each with selector `M[mask_slot]`.
    - Every name, and the **padding fill**: a mask-0 row or query carries 0 in every one
      of its memory columns, `cycle` included on a padding row.
 6. **RAM window geometry and the two init families**: ids 7 and 8, one height, default
@@ -518,16 +581,19 @@ a verifying-key loader recomputes against a trusted identity. The new pins
 
 | Path | Size | SHA-256 | What |
 | --- | --- | --- | --- |
-| `crates/constraints/tests/vectors/memory_frame.bin` | 24,940 bytes | `a18112c678db49eed95654e2b38c8d0e78f60be5b8c543e91ac897952f205df5` | `frame_artifact(22)` |
+| `crates/constraints/tests/vectors/memory_frame_alu.bin` | 22,611 bytes | `48622aa5376f82bdffc501932772f7ac04ce0c8e4838513ff5b9db550470d289` | `ADD_SUB_LUI_AUIPC`'s frame at 22, `w = 7` |
+| `crates/constraints/tests/vectors/memory_frame_reg.bin` | 13,892 bytes | `f94da36c6f7052acd10c36a3a0bd04ce09fe2419cdbfa046db4a58b1a716cbc0` | `JUMP_BRANCH_SLT`'s, `w = 4`; also `SHIFT_BITWISE` and `MUL_DIV` |
+| `crates/constraints/tests/vectors/memory_frame_mem.bin` | 20,282 bytes | `7a31fd867d4b5490821bcef24e356daf34d834a397efed8fa41b8e821b6fee6f` | `MEM_WORD`'s, `w = 6`; also `MEM_SUBWORD` |
+| `crates/constraints/tests/vectors/memory_frame_atomics.bin` | 17,953 bytes | `518c3853426a2ca30216536edc41a2659189c6c1e5abbeca9b516cf2032488c8` | `ATOMICS`', `w = 5` |
 | `crates/constraints/tests/vectors/image_window.bin` | 3,907 bytes | `39a8655d430ed5c031e4f27075662fe92a9a1274cd23dc300ae5e2e82df67ecc` | `image_window_artifact(22)` |
 | `crates/constraints/tests/vectors/zero_window.bin` | 3,418 bytes | `f08dde677a70c8a15cc7b67b35806e6ee5d9afff9cb703586f21426baa51ec1c` | `zero_window_artifact(22)` |
 | `crates/constraints/tests/vectors/toy_cached.bin` | 1,486 bytes | `ee27e1192c4bcf9afa003509f6c06fead29628b02a4c17f86e381bf5609f1c70` | S13's toy, regenerated at format 1 |
 | `crates/constraints/tests/vectors/toy_cache_free.bin` | 1,500 bytes | `5318afeb5b5ba5d09871358c89db36a0db12680fa9559a70c67c50b41181251d` | its cache-free compilation, at format 1 |
 | `crates/program/tests/vectors/identity.txt` | 713 bytes | `3232810e92795fef2ce795c3c0b84044d54294cc7238da4bb5b11022c4a8032b` | fib's identity at the defaults and at `2^16`, new recipe |
-| `docs/spec/memory.md` | 28,419 bytes | — | the normative memory spec |
+| `docs/spec/memory.md` | 32,386 bytes | — | the normative memory spec |
 | `tools/kat-gen/src/memory.rs` | — | — | the `memory` group; `cargo run -p kat-gen -- memory` |
 
-The three memory fixtures are pinned by SHA-256 in `crates/constraints/tests/memory.rs`,
+The six memory fixtures are pinned by SHA-256 in `crates/constraints/tests/memory.rs`,
 and CI regenerates and diffs them. The toy's sizes did not move from S13 (the format
 word 0 → 1 has the same length, and its lookup list is empty), but its hashes did, and
 they are repinned in `crates/{constraints,gkr,checker}/tests/common/mod.rs`.
@@ -544,17 +610,17 @@ The stage prompt's items as remapped by the owner's design. File paths are under
 
 | # | Item (as remapped) | Where | Result |
 | --- | --- | --- | --- |
-| 1 | Honest statement: execution frame + `INIT_TEARDOWN` + `ZERO_WINDOWS` + boundary, over real traces; forward, self-check, roots, laws, witness rows, prove and verify | `checker/tests/memory.rs::fib_honest_statement_reconciles_and_proves`, `::heap_honest_statement_reconciles_and_proves_its_windows`, `::a_frame_per_family_in_any_order_reconciles` | fib (2,117 cycles): frame at `2^12`, windows 0 and 8191 at `2^16`, every shard self-checks, `memory_roots` recomputes its roots, `check_laws`/`check_padding` pass, `violated_relations` and `violated_lookups` empty, `check_memory_windows` passes, `reconciles` true, all three proved, verified and discharged. heap: the same, except its `2^18` frame is not proved (deviation 22). One frame per family over its own cycle list, one list reversed, also reconciles |
+| 1 | Honest statement: execution frame + `INIT_TEARDOWN` + `ZERO_WINDOWS` + boundary, over real traces; forward, self-check, roots, laws, witness rows, prove and verify | `checker/tests/memory.rs::fib_honest_statement_reconciles_and_proves`, `::heap_honest_statement_reconciles_and_proves_its_windows`, `::a_frame_per_family_in_any_order_reconciles` | fib (2,117 cycles): one frame shard per family that ran — `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MEM_WORD`, `MEM_SUBWORD`, each over its own cycles and addressed by its own `frame_queries` — plus windows 0 and 8191 at `2^16`; every shard self-checks, `memory_roots` recomputes its roots, `check_laws`/`check_padding` pass, `violated_relations` and `violated_lookups` empty, `check_memory_windows` passes, `reconciles` true, every shard proved, verified and discharged. heap: the same, except its tallest frame is not proved (deviation 22). The frames in any order, one cycle list reversed, also reconcile |
 | 2 | Tamper: one changed value | `checker/tests/multiset.rs::one_changed_value_does_not_reconcile` | fib's first store's `ram` read value + 1: no gate, no obligation, `reconciles` false |
 | 3 | Tamper: one changed timestamp, a distinct surface | `multiset.rs::one_changed_timestamp_does_not_reconcile_and_a_moved_cycle_breaks_a_gap` | pc `read_ts` 40 → 39: reconciliation only. Cycle 11 → 10: reconciliation, plus `gap_lo_pc` and `gap_lo_rs1` on that row, a list the test derives |
 | 4 | Future read: balanced, roots reconcile, the obligation catches it; comment names S15 | `multiset.rs::a_future_read_balances_and_only_its_gap_obligation_catches_it` | two x0 `rs1` queries' `read_ts` swapped: self-check Ok, `reconciles` true, `violated_lookups` exactly `[(row, gap_lo_rs1)]`; four `gap_hi` values each still caught |
 | 5 | Image binding: one flipped image byte | `multiset.rs::a_flipped_image_byte_under_a_read_word_does_not_reconcile` | the byte under `0x12000`, fib's only window-0 word, first touched by a read: false. The entry word, which nothing touches: true (init and teardown rows cancel) |
 | 6 | No nonzero init value outside the image | `multiset.rs::a_forged_nonzero_init_value_does_not_reconcile`; `constraints/tests/memory.rs::the_read_sets_are_pinned` | the zero window reads no `S` and no init column (pinned); a forged zero window with an `M[2]` init column validates and passes `check_memory`, reconciles at 0, and does not at 7 on `0x7ffffffc` |
 | 7 | Remapped: every touched RAM word lies in exactly one listed window; a duplicated window breaks reconciliation | `multiset.rs::every_touched_ram_word_has_exactly_one_teardown_row`, `::a_duplicated_window_lets_a_stale_read_balance`, `::window_rules_refuse_each_single_change_of_fibs_statement`; `emulator/tests/trace.rs::the_window_list_is_exactly_the_touched_windows_above_zero` | teardown rows with a nonzero `ts` equal the log's final RAM state, for fib and heap. A stale read at `0x7fffff70` fails against the honest statement and balances with a second window-8191 shard. `[8191, 8191]` refused. The list is exactly the touched windows at every menu height for every traced guest |
-| 8 | x0 | `multiset.rs::every_read_of_x0_returns_0`, `::a_write_of_5_to_x0_balances_and_rd_write_masked_refuses_it`, `::a_zeroed_register_write_and_a_nonzero_x0_write_are_each_refused_by_their_gate`, `::a_read_only_query_writing_back_another_value_is_refused_by_its_gate`; `gkr/tests/memory.rs::the_frame_proves_and_verifies_and_rejects_a_write_to_x0` | all 432 x0 queries read and write 0. A write of 5 then a read of 5 reconciles with no obligation, and the self-check and `violated_relations` name exactly `rd_write_masked`. The proof is rejected at layer 0. Each other gate refuses a balanced forgery of its own, named alone: `rd_is_zero_at_nonzero` a register write zeroed through `z = 1`, `rd_is_zero_inverse` an `x0` write of 5 through `z = 0`, and each of the five `<q>_writes_back` a read-only query writing back its read value plus one |
+| 8 | x0 | `multiset.rs::every_read_of_x0_returns_0`, `::a_write_of_5_to_x0_balances_and_rd_write_masked_refuses_it`, `::a_zeroed_register_write_and_a_nonzero_x0_write_are_each_refused_by_their_gate`, `::a_read_only_query_writing_back_another_value_is_refused_by_its_gate`; `gkr/tests/memory.rs::every_frame_proves_and_verifies_and_rejects_a_write_to_x0` | all 432 x0 queries read and write 0, swept across every frame. A write of 5 then a read of 5 reconciles with no obligation, and the self-check and `violated_relations` name exactly `rd_write_masked`. The proof is rejected at layer 0. Each other gate refuses a balanced forgery of its own, named alone: `rd_is_zero_at_nonzero` a register write zeroed through `z = 1`, `rd_is_zero_inverse` an `x0` write of 5 through `z = 0`, and each of the five `<q>_writes_back` a read-only query writing back its read value plus one |
 | 9 | Construction-time assertion: tuple-fed witness column | `constraints/tests/memory.rs::a_tuple_fed_from_a_witness_column_is_refused`, `::a_product_of_a_tuple_and_a_witness_copy_two_layers_up_is_refused`, `::cached_entries_are_held_to_the_memory_rules`, `::a_frame_missing_a_booleanity_gate_is_refused`, `::a_window_leaf_masked_by_a_setup_column_or_the_row_index_is_refused`, `::a_global_slot_over_an_inner_column_is_refused` | each mutant passes `validate` and is refused by `check_memory`, naming the gate |
-| 10 | Padding: the frame at a menu height verifies; padding rows contribute exactly 1 | `multiset.rs::the_frame_padded_to_2_16_proves_and_its_padding_rows_are_1` | fib's frame at `2^16`: every committed cell on 63,419 padding rows is 0, layers 1–4 are exactly 1 there, the roots equal the `2^12` frame's, `check_padding_identity` Ok, proved and verified |
-| 11 | Exhaustive reduced-width gap test | `constraints/tests/memory.rs::the_gap_encoding_is_strict_at_reduced_width`; `multiset.rs::the_gap_obligations_accept_exactly_0_through_2_38_minus_1` | each query's `gap_lo` expression from `frame_artifact(12)`, chunks of 5 bits, every cycle `< 2^8` and `read_ts < 2^10`: admitted exactly when `read_ts < ts`. At full width the real obligations accept 0 and `2^38 − 1` and refuse −1 and `2^38` |
+| 10 | Padding: the frame at a menu height verifies; padding rows contribute exactly 1 | `multiset.rs::the_frame_padded_to_2_16_proves_and_its_padding_rows_are_1` | fib's `ADD_SUB_LUI_AUIPC` frame at `2^16`: 657 live rows, every committed cell on its 64,879 padding rows is 0, every row-wise layer exactly 1 there with the depth read off the artifact, the roots equal the `2^12` frame's, `check_padding_identity` Ok, proved and verified |
+| 11 | Exhaustive reduced-width gap test | `constraints/tests/memory.rs::the_gap_encoding_is_strict_at_reduced_width`; `multiset.rs::the_gap_obligations_accept_exactly_0_through_2_38_minus_1` | each slot's `gap_lo` expression from each of the four distinct frames at 12 — 22 slot sweeps, with a coverage assertion that they reach all 8 queries of the table — chunks of 5 bits, every cycle `< 2^8` and `read_ts < 2^10`: admitted exactly when `read_ts < ts`. At full width the real obligations accept 0 and `2^38 − 1` and refuse −1 and `2^38` |
 | 12 | Dropped obligation fails the build | `constraints/src/memory.rs::a_dropped_gap_obligation_fails_the_build` | 15 of 16 obligations panic at the count assertion, before `validate` |
 
 **The design's controls**, each a rule removed or bypassed, all over fib's trace:
@@ -568,7 +634,7 @@ The stage prompt's items as remapped by the owner's design. File paths are under
 | C5 | mask booleanity | `multiset.rs::a_pc_query_masked_by_minus_1_reads_as_a_register_and_only_booleanity_refuses_it` | a pc query at mask −1 on padding row 2117 reads x10 and writes 42: reconciles, no obligation, self-check names `pc_mask_boolean`; the same cells at mask 1 do not reconcile |
 | C6 | boundary absorbed before the challenges | `multiset.rs::a_final_value_solved_after_the_challenges_reconciles_and_is_not_a_u32` | see "The boundary scalars" |
 | C7 | the gap obligation, for coverage | `multiset.rs::a_query_reading_its_own_write_balances_where_no_row_is_and_only_its_gap_catches_it` | a `ram` query at `0x4000_0000` (window 4096, unlisted) and an `rs2` query at register 32, each reading its own write: self-check Ok, `reconciles` true, `violated_lookups` exactly that row's `gap_lo`; with `read_ts` one lower, false |
-| C8 | S16's mask coupling (a documentation test, and S16's tamper target) | `multiset.rs::queries_their_row_does_not_have_reconcile_until_s16_couples_the_masks` | padding row 2,117 with pc mask 0 and an `rd` query moving `x10` to 42 after exit; a live row's `rd` write masked to 0; the exit row given a store over the first stack word's last write: each keeps every gate and obligation and reconciles |
+| C8 | S16's mask coupling (a documentation test, and S16's tamper target) | `multiset.rs::queries_their_row_does_not_have_reconcile_until_s16_couples_the_masks` | the `ADD_SUB_LUI_AUIPC` frame's padding row 657 with pc mask 0 and an `rd` query moving `x10` to 42 after exit; a live row's `rd` write masked to 0; the exit row, that frame's row 656, given a store over the first stack word's last write: each keeps every gate and obligation and reconciles |
 
 **The earlier phases' tests.**
 
@@ -611,7 +677,7 @@ The stage prompt's items as remapped by the owner's design. File paths are under
 
 ## Verification performed
 
-**709 workspace tests, all green, plus 21 `#[ignore]`d** (617 and 20 at S13), from
+**722 workspace tests, all green, plus 21 `#[ignore]`d** (617 and 20 at S13), from
 one `cargo test --workspace` at the stage's last commit: 92 new passing tests. The new ignored
 test is `program/tests/identity.rs::a_segment_without_file_bytes_does_not_move_the_identity_by_its_size`.
 New test files, and the tests in each:
@@ -1141,7 +1207,9 @@ consolidated design (the review's conflict list, G19). The prompt is not edited.
     fib's honest frame at `2^12` and `2^16`, they pass `self_check`, `check_laws`,
     `check_padding` and proving, and the forgery is named `rd_mask_implies_pc` at row
     2,117, with `verify` returning `LayerInconsistency { layer: 0 }`. They would change
-    the frozen frame from 17 to 24 enforcing gates, its names and `memory_frame.bin`.
+    every family's frame — one enforcing gate per query beyond the pc query, so 6 more for
+    `ADD_SUB_LUI_AUIPC` and 3 for the 4-query families — their names, and all four frame
+    fixtures.
     They do not cover the other two forgeries, which need the row kind. Land them at S14,
     or leave the whole rule to S16?
 
@@ -1202,6 +1270,18 @@ consolidated design (the review's conflict list, G19). The prompt is not edited.
   obligations (32-bit halfwords, address low bits) asserts its expected count, derived from
   the reads and 32-bit ranges it declares, against `artifact.lookups.len()`, as the frame's
   `lookups.len() == 2·reads` does.
+- **The frame superset rule** (`docs/spec/memory.md` §2.1 and §9). A family's frame holds
+  only the queries its instructions can make, so S16 must keep it a **superset** of them: a
+  query the frame lacks is an instruction with no `write_value` column to constrain its
+  result against, and that — not the narrowing itself — is the one way this could cost
+  soundness rather than completeness. `frame_queries` is held *equal* to that union over all
+  59 instructions by
+  `crates/trace/tests/memory.rs::every_familys_frame_is_exactly_its_instructions_queries`,
+  routed by `program::row_kind`, so a family that gains an instruction whose queries it does
+  not carry fails there rather than silently dropping the event. **When S16 adds or moves a
+  row kind — another ecall argument, a precompile, a new transfer shape — change that
+  family's list in `constraints::memory::frame_queries` first**, and expect the four frame
+  fixtures to move with it.
 - **Every written value below `2^32`** (review attacker-3): `rd`'s selected value, a store's
   or an atomic's RAM write, and `next_pc`, each range-checked under §7's convention. Read
   and teardown values are then `u32` through the multiset, because every init value (the

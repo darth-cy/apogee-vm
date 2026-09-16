@@ -1108,6 +1108,7 @@ dependencies = [
  "constraints",
  "field",
  "gkr-verify",
+ "isa",
  "loader",
  "poly",
  "postcard",

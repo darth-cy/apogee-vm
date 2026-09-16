@@ -45,16 +45,19 @@ pub const MAX_TRACE_VARS: u32 = 30;
 pub mod memory {                                   // docs/spec/memory.md §2, §3.3, §7, §8
     pub const CYCLE: PolyAddress;                  // M[0]
     pub const FIELD_MASK: u32 = 0;  FIELD_ADDR = 1;  FIELD_READ_TS = 2;  FIELD_READ_VALUE = 3;  FIELD_WRITE_VALUE = 4;
-    pub const FRAME_QUERIES: usize = 8;
+    pub const FRAME_QUERIES: usize = 8;            // the QUERY TABLE's size, never a frame's width
     pub const FRAME_NAMES: [&str; 8];              // pc rs1 rs2 arg1 arg2 load ram rd
     pub const FRAME_SPACE: [u8; 8];                // PC REG REG REG REG RAM RAM REG
     pub const FRAME_DELTA: [u64; 8];               // 0 1 2 2 2 2 3 3
-    pub fn frame(query: usize, field: u32) -> PolyAddress;           // M[1 + 5·query + field]
-    pub fn gap_hi(query: usize) -> PolyAddress;                      // W[query]
-    pub const RD_INV: PolyAddress;  RD_IS_ZERO;  RD_SELECTED;        // W[8], W[9], W[10]
-    pub const RD: usize = 7;
+    pub const PC: usize = 0;  RS1 = 1;  RS2 = 2;  ARG1 = 3;  ARG2 = 4;  LOAD = 5;  RAM = 6;  RD = 7;
+    pub const FRAME_READ_ONLY: [usize; 5];         // RS1 RS2 ARG1 ARG2 LOAD, the write-back queries
+    pub fn frame_queries(family: u32) -> &'static [usize];   // the frozen per-family subset
+    pub fn frame(slot: usize, field: u32) -> PolyAddress;            // M[1 + 5·slot + field]
+    pub fn gap_hi(slot: usize) -> PolyAddress;                       // W[slot]
+    pub fn rd_inv(width: usize) -> PolyAddress;    // W[width]; rd_is_zero W[width+1], rd_selected W[width+2]
     pub fn read_tuple(query: usize) -> GateDef;    // unmasked, Linear, constant γ_M; term PART_* is that part
-    pub fn frame_artifact(trace_vars: u32) -> CircuitArtifact;
+    pub fn frame_artifact(queries: &[usize], trace_vars: u32) -> CircuitArtifact;
+    pub fn family_frame_artifact(family: u32, trace_vars: u32) -> CircuitArtifact;
     pub fn image_window_artifact(trace_vars: u32) -> CircuitArtifact;  // INIT_TEARDOWN
     pub fn zero_window_artifact(trace_vars: u32) -> CircuitArtifact;   // ZERO_WINDOWS
     pub fn check_memory(a: &CircuitArtifact) -> Result<(), String>;
@@ -133,11 +136,15 @@ them, and every suite that reads them pins their SHA-256 first. They are this cr
 output, not an oracle: the independent description of the toy is
 `crates/checker/tests/cross_check.rs`.
 
-`tests/vectors/memory_frame.bin`, `image_window.bin` and `zero_window.bin`: the three
-`memory` constructors at `trace_vars` 22. `cargo run -p kat-gen -- memory` rewrites them, CI
-regenerates and diffs them, and `tests/memory.rs` pins their SHA-256 and holds each to its
-constructor's bytes. The leaves' independent description is the plain arithmetic of
-`crates/gkr/tests/memory.rs`.
+`tests/vectors/memory_frame_{alu,reg,mem,atomics}.bin`, `image_window.bin` and
+`zero_window.bin`: the `memory` constructors at `trace_vars` 22. One frame fixture per
+*distinct* frame — families sharing a query list share their artifact byte for byte, so
+`reg` is `JUMP_BRANCH_SLT`, `SHIFT_BITWISE` and `MUL_DIV`, and `mem` is `MEM_WORD` and
+`MEM_SUBWORD` — with a test holding each of the seven execution families to one of the
+four files, so four fixtures pin all seven. `cargo run -p kat-gen -- memory` rewrites
+them, CI regenerates and diffs them, and `tests/memory.rs` pins their SHA-256 and holds
+each to its constructor's bytes. The leaves' independent description is the plain
+arithmetic of `crates/gkr/tests/memory.rs`.
 
 ## Tests
 | File | Covers |

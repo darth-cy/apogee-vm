@@ -9,9 +9,8 @@
 use constants::lookup_channel;
 use constants::memory::{HALT_PC, RAM_LIVE_BIT, TS_STEP};
 use constraints::memory::{
-    frame, gap_hi, CYCLE, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE,
-    FIELD_WRITE_VALUE, FRAME_DELTA, FRAME_QUERIES, FRAME_SPACE, RD, RD_INV, RD_IS_ZERO,
-    RD_SELECTED,
+    frame, gap_hi, rd_inv, rd_is_zero, rd_selected, CYCLE, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS,
+    FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA, FRAME_SPACE, RD,
 };
 use constraints::PolyAddress;
 use field::Fr;
@@ -45,23 +44,28 @@ fn column(mut values: Vec<u64>, height: usize) -> MultilinearPoly {
     MultilinearPoly::new(backing)
 }
 
-/// Each of `cycles`' eight frame queries, `None` where the cycle has none, from
-/// one pass over the log.
+/// Each of `cycles`' frame queries, `None` where the cycle has none, from one
+/// pass over the log. `queries` is the family's query list,
+/// `constraints::memory::frame_queries`, and a slot of the result is a slot of
+/// that list.
 ///
-/// An event takes the first query of its row still free whose space and slot
+/// An event takes the first slot of its row still free whose space and slot
 /// are its own. That is exact for every query but the three slot-2 register
 /// ones, `rs2`, `arg1` and `arg2`, which the log files in that order and which
 /// fill in that order: a row with `arg1` has `rs2`, and one with `arg2` has
 /// `arg1`, because an ecall's arguments are a prefix of `a0, a1, a2`
 /// (`docs/spec/execution-trace.md` §6, §7) and no other row reads `arg1`.
 ///
-/// Panics on a cycle asked for twice or that the log lacks, on more events in
-/// a cycle than the frame has queries for, and on `cycles.len() > height`.
+/// Panics on a cycle asked for twice or that the log lacks, on `cycles.len() >
+/// height`, and — naming the event — on a query no free slot takes, which is
+/// how a frame too narrow for the family filling it fails loudly rather than
+/// dropping the event.
 fn frame_rows(
     log: &MemoryEventLog,
+    queries: &[usize],
     cycles: &[u64],
     height: usize,
-) -> Vec<[Option<MemoryEvent>; FRAME_QUERIES]> {
+) -> Vec<Vec<Option<MemoryEvent>>> {
     assert!(
         cycles.len() <= height,
         "memory columns: {} cycles do not fit {height} rows",
@@ -75,28 +79,29 @@ fn frame_rows(
             "memory columns: cycle {cycle} is asked for twice"
         );
     }
-    let mut rows = vec![[None; FRAME_QUERIES]; cycles.len()];
+    let mut rows = vec![vec![None; queries.len()]; cycles.len()];
     for event in log.events() {
         let Some(&Some(i)) = row_of.get(event.cycle() as usize) else {
             continue;
         };
         let row = &mut rows[i];
-        let query = (0..FRAME_QUERIES)
-            .find(|&q| {
-                row[q].is_none()
+        let at = (0..queries.len())
+            .find(|&at| {
+                let q = queries[at];
+                row[at].is_none()
                     && FRAME_SPACE[q] == event.space.tag()
                     && FRAME_DELTA[q] == event.delta()
             })
             .unwrap_or_else(|| {
                 panic!(
                     "memory columns: cycle {} has a {:?} query at slot {} that no free frame \
-                     query takes",
+                     query of {queries:?} takes",
                     event.cycle(),
                     event.space,
                     event.delta()
                 )
             });
-        row[query] = Some(*event);
+        row[at] = Some(*event);
     }
     for (row, cycle) in rows.iter().zip(cycles) {
         assert!(
@@ -107,9 +112,11 @@ fn frame_rows(
     rows
 }
 
-/// An execution family's 41 frame columns, `docs/spec/memory.md` §2.1, in
-/// `constraints::memory`'s layout order: `M[0]` cycle, then per query its mask,
-/// address, read timestamp, read value and write value.
+/// An execution family's `1 + 5·queries.len()` frame columns,
+/// `docs/spec/memory.md` §2.1, in `constraints::memory`'s layout order: `M[0]`
+/// cycle, then per slot of `queries` its mask, address, read timestamp, read
+/// value and write value. `queries` is the family's query list,
+/// `constraints::memory::frame_queries`.
 ///
 /// Row `i` is cycle `cycles[i]` — a shard's cycles, in the order given — and
 /// rows `cycles.len()..height` are padding, 0 in every column. A query the
@@ -119,59 +126,70 @@ fn frame_rows(
 /// the narrowest backing its largest value fits.
 ///
 /// Panics naming a cycle the log lacks or `cycles` repeats, on a cycle with a
-/// query the frame has no place for, and on `cycles.len() > height` or a
+/// query `queries` has no place for, and on `cycles.len() > height` or a
 /// `height` that is not a power of two.
 pub fn build_memory_columns(
     log: &MemoryEventLog,
+    queries: &[usize],
     cycles: &[u64],
     height: usize,
 ) -> Vec<(PolyAddress, MultilinearPoly)> {
-    let rows = frame_rows(log, cycles, height);
+    let rows = frame_rows(log, queries, cycles, height);
     let mut out = vec![(CYCLE, column(cycles.to_vec(), height))];
-    for q in 0..FRAME_QUERIES {
+    for at in 0..queries.len() {
         let field = |f: fn(&MemoryEvent) -> u64| {
-            let values = rows.iter().map(|row| row[q].as_ref().map_or(0, f));
+            let values = rows.iter().map(|row| row[at].as_ref().map_or(0, f));
             column(values.collect(), height)
         };
-        out.push((frame(q, FIELD_MASK), field(|_| 1)));
-        out.push((frame(q, FIELD_ADDR), field(|e| e.addr as u64)));
-        out.push((frame(q, FIELD_READ_TS), field(|e| e.read_ts)));
-        out.push((frame(q, FIELD_READ_VALUE), field(|e| e.read_value as u64)));
-        out.push((frame(q, FIELD_WRITE_VALUE), field(|e| e.write_value as u64)));
+        out.push((frame(at, FIELD_MASK), field(|_| 1)));
+        out.push((frame(at, FIELD_ADDR), field(|e| e.addr as u64)));
+        out.push((frame(at, FIELD_READ_TS), field(|e| e.read_ts)));
+        out.push((frame(at, FIELD_READ_VALUE), field(|e| e.read_value as u64)));
+        out.push((
+            frame(at, FIELD_WRITE_VALUE),
+            field(|e| e.write_value as u64),
+        ));
     }
     out
 }
 
-/// The frame's 11 witness columns, `docs/spec/memory.md` §2.4, over the rows
-/// [`build_memory_columns`] fills for the same `cycles` and `height`:
+/// The frame's `queries.len() + 3` witness columns, `docs/spec/memory.md` §2.4,
+/// over the rows [`build_memory_columns`] fills for the same `queries`,
+/// `cycles` and `height`:
 ///
-/// - `W[q] <q>_gap_hi`: `gap >> 19`, `gap = 4·cycle + Δ_q − read_ts − 1`, where
-///   the cycle has query `q`;
-/// - `W[8] rd_inv`: the inverse of `rd`'s address, where it is not 0;
-/// - `W[9] rd_is_zero`: 1 exactly on a live `rd` query at address 0;
-/// - `W[10] rd_selected`: `rd`'s write value, where its address is not 0;
+/// - `W[s] <q>_gap_hi`: `gap >> 19`, `gap = 4·cycle + Δ_q − read_ts − 1`, where
+///   the cycle has the query at slot `s`;
+/// - `W[w] rd_inv`: the inverse of `rd`'s address, where it is not 0;
+/// - `W[w + 1] rd_is_zero`: 1 exactly on a live `rd` query at address 0;
+/// - `W[w + 2] rd_selected`: `rd`'s write value, where its address is not 0;
 ///
-/// and 0 everywhere else, padding rows included. On an honest log every
-/// enforcing gate and every obligation of `frame_artifact` holds on every row.
-/// Panics as [`build_memory_columns`] does.
+/// and 0 everywhere else, padding rows included. The three x0 columns are
+/// there exactly when the frame has `rd`, as its gadget is. On an honest log
+/// every enforcing gate and every obligation of `frame_artifact` holds on
+/// every row. Panics as [`build_memory_columns`] does.
 pub fn build_frame_witness(
     log: &MemoryEventLog,
+    queries: &[usize],
     cycles: &[u64],
     height: usize,
 ) -> Vec<(PolyAddress, MultilinearPoly)> {
-    let rows = frame_rows(log, cycles, height);
+    let rows = frame_rows(log, queries, cycles, height);
     let chunk = lookup_channel::BITS[lookup_channel::TIMESTAMP as usize];
     let mut out = Vec::new();
-    for q in 0..FRAME_QUERIES {
+    for (at, &q) in queries.iter().enumerate() {
         let hi = rows.iter().map(|row| {
-            row[q].map_or(0, |e| {
+            row[at].map_or(0, |e| {
                 let gap = TS_STEP * e.cycle() + FRAME_DELTA[q] - e.read_ts - 1;
                 gap >> chunk
             })
         });
-        out.push((gap_hi(q), column(hi.collect(), height)));
+        out.push((gap_hi(at), column(hi.collect(), height)));
     }
-    let named = rows.iter().map(|row| row[RD].filter(|e| e.addr != 0));
+    let Some(at) = queries.iter().position(|&q| q == RD) else {
+        return out;
+    };
+    let width = queries.len();
+    let named = rows.iter().map(|row| row[at].filter(|e| e.addr != 0));
     let mut inv: Vec<Fr> = named
         .clone()
         .map(|e| {
@@ -183,13 +201,13 @@ pub fn build_frame_witness(
         })
         .collect();
     inv.resize(height, Fr::ZERO);
-    out.push((RD_INV, MultilinearPoly::new(PolyBacking::Fr(inv))));
+    out.push((rd_inv(width), MultilinearPoly::new(PolyBacking::Fr(inv))));
     let is_zero = rows
         .iter()
-        .map(|row| row[RD].map_or(0, |e| (e.addr == 0) as u64));
-    out.push((RD_IS_ZERO, column(is_zero.collect(), height)));
+        .map(|row| row[at].map_or(0, |e| (e.addr == 0) as u64));
+    out.push((rd_is_zero(width), column(is_zero.collect(), height)));
     let selected = named.map(|e| e.map_or(0, |e| e.write_value as u64));
-    out.push((RD_SELECTED, column(selected.collect(), height)));
+    out.push((rd_selected(width), column(selected.collect(), height)));
     out
 }
 

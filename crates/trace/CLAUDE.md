@@ -40,10 +40,10 @@ pub fn plan_shards(profile: &CycleProfile, config: &VmConfig) -> ShardPlan;
 pub fn init_windows(log: &MemoryEventLog, height: u32) -> Vec<u32>;   // ZERO_WINDOWS' shard list
 
 // src/memory.rs, docs/spec/memory.md §2.1, §2.4, §3.4, §4.1; columns keyed by constraints::memory
-pub fn build_memory_columns(log: &MemoryEventLog, cycles: &[u64], height: usize)
-    -> Vec<(PolyAddress, MultilinearPoly)>;                         // the frame's 41 M columns
-pub fn build_frame_witness(log: &MemoryEventLog, cycles: &[u64], height: usize)
-    -> Vec<(PolyAddress, MultilinearPoly)>;                         // its 11 W columns
+pub fn build_memory_columns(log: &MemoryEventLog, queries: &[usize], cycles: &[u64], height: usize)
+    -> Vec<(PolyAddress, MultilinearPoly)>;                    // the frame's 1 + 5w M columns
+pub fn build_frame_witness(log: &MemoryEventLog, queries: &[usize], cycles: &[u64], height: usize)
+    -> Vec<(PolyAddress, MultilinearPoly)>;                    // its w + 3 W columns
 pub fn build_init_teardown_columns(log: &MemoryEventLog, image: &ProgramImage, ram_window: u32,
     height: usize) -> Vec<(PolyAddress, MultilinearPoly)>;          // M[0], M[1]; S[0] at window 0
 pub fn build_boundary_finals(log: &MemoryEventLog) -> BoundaryFinals;   // gkr_verify's
@@ -114,6 +114,13 @@ impl TraceArchive {
   padding row are 0 in every column, `cycle` included. The pc query's fields are its
   event's: address 0, the pc read, `next_pc` written, the previous pc write's timestamp.
   A cycle the log lacks or `cycles` repeats panics, naming it.
+- **`queries` is the family's query list**, `constraints::memory::frame_queries(family)`,
+  and a column's position is a **slot** in that list, not a query id. A family's frame
+  holds only the queries its instructions can make, so the builders must be handed that
+  family's list; an event with no free slot panics, naming the cycle, the space and the
+  slot, which is how a frame too narrow for what it is filled with fails loudly instead
+  of dropping the event. `crates/trace/tests/memory.rs` holds `frame_queries` to
+  `program::row_kind` over all 59 instructions.
 - **An event takes the first free frame query of its space and slot.** Only the three
   slot-2 register roles share both, and they fill in log order, `rs2`, `arg1`, `arg2`.
   That is exact because an ecall's arguments are a prefix of `a0, a1, a2` and no other
@@ -161,7 +168,7 @@ impl TraceArchive {
 | `src/archive.rs` (unit) | an in-order later phase accepted; out-of-order, timing without content, content without timing, trailing bytes and an overlong varint refused; every one of the reader's fifteen part-disagreement refusals (a buffer of rows for each init family among them), a mis-tagged section and bytes after the post-execution content refused as a named `Err`, never a panic, beside the untouched content; the constructor refusing parts that disagree |
 | `tests/log.rs` | the address-space tags against `constants::address_space`, and exactly which addresses each space has |
 | `tests/plan.rs` | acceptance 9: occupancy 0 / 1 / height / height+1 → 0 / 1 / 1 / 2 at every menu height, zero-occurrence families (both init families among them), the whole 38-bit clock at 2^16, purity, a mismatched profile refused |
-| `tests/memory.rs` | `constraints::memory`'s frame table against `Role` in `ROLES` order, the pc query first, names included; the finals of a hand-written two-cycle log; `build_boundary_finals` refusing a pc that does not end at `HALT_PC` and a nonzero `x0`; `build_memory_columns` refusing a cycle the log lacks; `build_frame_witness`' gap columns at the chunk's edge, gaps `2^19 − 1`, `2^19` and `2^19 + 3`; a RAM write at `4h`, the first word of window 1, in window 1's columns alone |
+| `tests/memory.rs` | `constraints::memory`'s query table against `Role` in `ROLES` order, the pc query first, names included; **every family's frame equal to the union of its instructions' queries**, taken over all 59 `Instr` variants with the per-instruction queries written from `execution-trace.md` §4 and the routing from `program::row_kind`, so the two tables cannot drift; the finals of a hand-written two-cycle log; `build_boundary_finals` refusing a pc that does not end at `HALT_PC` and a nonzero `x0`; `build_memory_columns` refusing a cycle the log lacks; `build_frame_witness`' gap columns at the chunk's edge, gaps `2^19 − 1`, `2^19` and `2^19 + 3`; a RAM write at `4h`, the first word of window 1, in window 1's columns alone |
 
 The self-check, the buffers, `init_windows` and the archive are exercised over real
 executions in `crates/emulator/tests/{trace,archive}.rs`, which is where executions exist;

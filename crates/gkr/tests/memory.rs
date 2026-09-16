@@ -1,11 +1,17 @@
 //! The memory argument's gates through the kernel, and its verifier functions,
-//! `docs/spec/memory.md` §2.2, §3.3 and §4: every leaf of the three artifacts
-//! against the tuple written out in plain field arithmetic, the boundary
-//! factors against the same, the window constant against a hand computation,
-//! the reconciliation, and an honest proof of each artifact.
+//! `docs/spec/memory.md` §2.2, §3.3 and §4: every leaf of every execution
+//! family's frame and of the two window artifacts against the tuple written out
+//! in plain field arithmetic, the boundary factors against the same, the window
+//! constant against a hand computation, the reconciliation, and an honest proof
+//! of each artifact.
 //!
-//! The address spaces, the slots `Δ` and the column positions are written here
-//! again rather than read from `constraints::memory`.
+//! The address spaces, the slots `Δ`, the column positions **and each family's
+//! query list** are written here again rather than read from
+//! `constraints::memory`. A family's frame holds only the queries its
+//! instructions can make, so a leaf's `AS` and `Δ` come from its **global query
+//! id** while its columns come from its **slot** — its position in that
+//! family's list — and the two agree only for the pc query. Every table below
+//! is indexed by whichever of the two the document says it is.
 
 mod common;
 
@@ -13,8 +19,11 @@ use common::{committed_columns, discharge, fr_base, output_claims};
 use constants::challenge_slot::{
     MEM_ALPHA_ADDR, MEM_ALPHA_TS, MEM_ALPHA_VAL, MEM_GAMMA, MEM_WINDOW_CONSTANT,
 };
+use constants::family;
 use constants::transcript_tags;
-use constraints::memory::{frame_artifact, image_window_artifact, zero_window_artifact};
+use constraints::memory::{
+    family_frame_artifact, frame_artifact, image_window_artifact, zero_window_artifact,
+};
 use constraints::{CircuitArtifact, VirtualKind};
 use field::Fr;
 use gkr::{
@@ -25,17 +34,71 @@ use sumcheck::{absorb_witness_digest, witness_digest};
 use test_support::Rng;
 use transcript::Transcript;
 
-/// Per query: pc, rs1, rs2, arg1, arg2, load, ram, rd.
+/// The query table, by **global query id**: pc, rs1, rs2, arg1, arg2, load,
+/// ram, rd. No family holds all eight.
 const SPACE: [u64; 8] = [3, 1, 1, 1, 1, 2, 2, 1];
 const DELTA: [u64; 8] = [0, 1, 2, 2, 2, 2, 3, 3];
-/// 41 memory columns, then 11 witness columns.
-const FRAME_COLUMNS: usize = 52;
-const RAM: u64 = 2;
 
-/// The layout position of query `q`'s field `f`: 0 mask, 1 addr, 2 read_ts,
-/// 3 read_value, 4 write_value.
-fn column(q: usize, f: usize) -> usize {
-    1 + 5 * q + f
+/// The query ids, in the table's frozen order.
+const PC: usize = 0;
+const RS1: usize = 1;
+const RS2: usize = 2;
+const ARG1: usize = 3;
+const ARG2: usize = 4;
+const LOAD: usize = 5;
+const RAM: usize = 6;
+const RD: usize = 7;
+
+/// The queries that write back what they read, `docs/spec/memory.md` §2.4.
+const READ_ONLY: [usize; 5] = [RS1, RS2, ARG1, ARG2, LOAD];
+
+/// Every execution family and the queries its frame holds, `docs/spec/memory.md`
+/// §2.1's table written out. Widths 7, 4, 6 and 5: the three that are not powers
+/// of two carry constant-1 pad leaves, and the 4-wide one carries none.
+const FAMILIES: [(u32, &[usize]); 7] = [
+    (
+        family::ADD_SUB_LUI_AUIPC,
+        &[PC, RS1, RS2, ARG1, ARG2, RAM, RD],
+    ),
+    (family::JUMP_BRANCH_SLT, &[PC, RS1, RS2, RD]),
+    (family::SHIFT_BITWISE, &[PC, RS1, RS2, RD]),
+    (family::MUL_DIV, &[PC, RS1, RS2, RD]),
+    (family::MEM_WORD, &[PC, RS1, RS2, LOAD, RAM, RD]),
+    (family::MEM_SUBWORD, &[PC, RS1, RS2, LOAD, RAM, RD]),
+    (family::ATOMICS, &[PC, RS1, RS2, RAM, RD]),
+];
+
+/// The address space of a RAM tuple, which the window artifacts are all of.
+const RAM_SPACE: u64 = 2;
+
+/// The layout position of the query at **slot** `s`, field `f`: 0 mask, 1 addr,
+/// 2 read_ts, 3 read_value, 4 write_value. `M[1 + 5s + f]`, and the `1 + 5w`
+/// memory columns come first in the committed row.
+fn column(slot: usize, field: usize) -> usize {
+    1 + 5 * slot + field
+}
+
+/// `W[s]`, the gap's high chunk of the query at slot `s`, in a frame of width
+/// `w`: the witness columns follow the `1 + 5w` memory ones.
+fn gap_hi(width: usize, slot: usize) -> usize {
+    1 + 5 * width + slot
+}
+
+/// `W[w]`, `W[w + 1]`, `W[w + 2]`: the x0 gadget's three witnesses, after the
+/// `w` gap columns.
+fn rd_inv(width: usize) -> usize {
+    1 + 6 * width
+}
+fn rd_is_zero(width: usize) -> usize {
+    1 + 6 * width + 1
+}
+fn rd_selected(width: usize) -> usize {
+    1 + 6 * width + 2
+}
+
+/// A frame's committed columns: `1 + 5w` memory and `w + 3` witness.
+fn committed(width: usize) -> usize {
+    1 + 5 * width + width + 3
 }
 
 /// A pseudo-random field element below `2^252`.
@@ -67,46 +130,68 @@ fn t(c: &[Fr; 4], space: u64, addr: Fr, ts: Fr, value: Fr) -> Fr {
     c[0] + int(space) + c[1] * addr + c[2] * ts + c[3] * value
 }
 
-/// Every frame leaf is exactly 1 at `m = 0`, whatever the other columns and
-/// challenges are, and at `m = 1` the read leaf is `T(AS, addr, read_ts,
-/// read_value)` and the write leaf `T(AS, addr, 4·cycle + Δ, write_value)`.
-/// Each query's mask is tried alone at 1 among zeros and alone at 0 among
-/// ones, beside all zeros and all ones, so leaves `q` and `8 + q` must read
-/// query `q`'s own mask. Kills a wrong AS, Δ, timestamp step, column position
-/// or mask term, and a leaf masked by another query's mask.
+/// Every frame leaf of every execution family is exactly 1 at `m = 0`, whatever
+/// the other columns and challenges are, and at `m = 1` the read leaf is
+/// `T(AS, addr, read_ts, read_value)` and the write leaf `T(AS, addr, 4·cycle +
+/// Δ, write_value)` — with `AS` and `Δ` the **query's**, from the global table,
+/// and every column the **slot's**. Each slot's mask is tried alone at 1 among
+/// zeros and alone at 0 among ones, beside all zeros and all ones, so leaves `s`
+/// and `side + s` must read slot `s`'s own mask. The pad leaves that fill each
+/// side out to a power of two are 1 on every one of those rows.
+///
+/// Kills a wrong AS, Δ, timestamp step, column position or mask term, a leaf
+/// masked by another query's mask, a pad leaf that reads anything, and — the
+/// mutant the per-family frames add — a leaf taking its AS or Δ from its slot
+/// instead of its query id, which differs at `ATOMICS`' slot 3 (`ram`, AS 2,
+/// Δ 3, against `arg1`'s AS 1, Δ 2) and at `ADD_SUB_LUI_AUIPC`'s slots 5 and 6.
+/// Each family's query list is the test's own; `frame_artifact` over it is
+/// asserted equal to `family_frame_artifact`, so a changed `frame_queries` fails
+/// here rather than quietly moving what is swept.
 #[test]
 fn frame_leaves_are_one_when_masked_and_the_tuple_when_live() {
-    let a = frame_artifact(4);
     let mut rng = Rng::new(0x5714_3101);
-    let mut patterns = vec![[false; 8], [true; 8]];
-    for q in 0..8 {
-        let mut alone = [false; 8];
-        alone[q] = true;
-        patterns.push(alone);
-        patterns.push(alone.map(|live| !live));
-    }
-    for live in patterns {
-        let (c, slots) = random_memory(&mut rng);
-        let mut row: Vec<Fr> = (0..FRAME_COLUMNS).map(|_| fr(&mut rng)).collect();
-        for q in 0..8 {
-            row[column(q, 0)] = if live[q] { Fr::ONE } else { Fr::ZERO };
+    for (id, queries) in FAMILIES {
+        let a = family_frame_artifact(id, 4);
+        assert_eq!(a, frame_artifact(queries, 4), "family {id}'s query list");
+        let width = queries.len();
+        let side = width.next_power_of_two();
+
+        let mut patterns = vec![vec![false; width], vec![true; width]];
+        for s in 0..width {
+            let mut alone = vec![false; width];
+            alone[s] = true;
+            patterns.push(alone.iter().map(|live| !live).collect());
+            patterns.push(alone);
         }
-        let values = gate_values(&a, 0, &row, &[], &[], &slots);
-        let cycle = row[0];
-        for q in 0..8 {
-            let (addr, read_ts) = (row[column(q, 1)], row[column(q, 2)]);
-            let (read_value, write_value) = (row[column(q, 3)], row[column(q, 4)]);
-            let write_ts = int(4) * cycle + int(DELTA[q]);
-            let (read, write) = if live[q] {
-                (
-                    t(&c, SPACE[q], addr, read_ts, read_value),
-                    t(&c, SPACE[q], addr, write_ts, write_value),
-                )
-            } else {
-                (Fr::ONE, Fr::ONE)
-            };
-            assert_eq!(values[q], read, "masks {live:?}, read leaf {q}");
-            assert_eq!(values[8 + q], write, "masks {live:?}, write leaf {q}");
+        for live in patterns {
+            let (c, slots) = random_memory(&mut rng);
+            let mut row: Vec<Fr> = (0..committed(width)).map(|_| fr(&mut rng)).collect();
+            for (s, &m) in live.iter().enumerate() {
+                row[column(s, 0)] = if m { Fr::ONE } else { Fr::ZERO };
+            }
+            let values = gate_values(&a, 0, &row, &[], &[], &slots);
+            let cycle = row[0];
+            for (s, &q) in queries.iter().enumerate() {
+                let (addr, read_ts) = (row[column(s, 1)], row[column(s, 2)]);
+                let (read_value, write_value) = (row[column(s, 3)], row[column(s, 4)]);
+                let write_ts = int(4) * cycle + int(DELTA[q]);
+                let (read, write) = if live[s] {
+                    (
+                        t(&c, SPACE[q], addr, read_ts, read_value),
+                        t(&c, SPACE[q], addr, write_ts, write_value),
+                    )
+                } else {
+                    (Fr::ONE, Fr::ONE)
+                };
+                let at = format!("family {id}, masks {live:?}, slot {s} (query {q})");
+                assert_eq!(values[s], read, "{at}: read leaf");
+                assert_eq!(values[side + s], write, "{at}: write leaf");
+            }
+            for i in width..side {
+                let at = format!("family {id}, masks {live:?}, pad leaf {i}");
+                assert_eq!(values[i], Fr::ONE, "{at}: read side");
+                assert_eq!(values[side + i], Fr::ONE, "{at}: write side");
+            }
         }
     }
 }
@@ -154,8 +239,8 @@ fn window_leaves_are_the_tuples_of_their_rows() {
             } else {
                 let addr = int(4 * y as u64);
                 vec![
-                    t(&c, RAM, addr, ts, value),
-                    t(&c, RAM, addr, Fr::ZERO, init),
+                    t(&c, RAM_SPACE, addr, ts, value),
+                    t(&c, RAM_SPACE, addr, Fr::ZERO, init),
                 ]
             };
             assert_eq!(values, expected, "trial {trial}, image window row {y}");
@@ -170,8 +255,8 @@ fn window_leaves_are_the_tuples_of_their_rows() {
             );
             let addr = int(4 * h * window as u64 + 4 * y as u64);
             let expected = vec![
-                t(&c, RAM, addr, ts, value),
-                t(&c, RAM, addr, Fr::ZERO, Fr::ZERO),
+                t(&c, RAM_SPACE, addr, ts, value),
+                t(&c, RAM_SPACE, addr, Fr::ZERO, Fr::ZERO),
             ];
             assert_eq!(values, expected, "trial {trial}, window {window} row {y}");
         }
@@ -343,43 +428,47 @@ fn window_artifacts_prove_and_verify() {
     assert_eq!(prove_and_verify(&zero, &base, Some(5000)), Ok(()));
 }
 
-/// A satisfying frame base over 16 rows, in layout order: random masks, rows 0
-/// and 1 live in every query; a masked query is 0 in every column; a read-only
-/// query writes back; `rd` is at address 0 on row 0 and wherever a coin says,
-/// with its x0 witnesses consistent.
-fn frame_columns(rng: &mut Rng) -> Vec<Vec<Fr>> {
-    let (inv, is_zero, selected) = (49, 50, 51);
-    let mut cols: Vec<Vec<Fr>> = vec![Vec::new(); FRAME_COLUMNS];
+/// A satisfying base for the frame holding `queries`, over 16 rows, in layout
+/// order: random masks, rows 0 and 1 live in every query; a masked query is 0 in
+/// every column; a read-only query writes back; `rd` is at address 0 on row 0
+/// and wherever a coin says, with its x0 witnesses consistent. Every column is
+/// addressed by the query's **slot** in this family, its behaviour chosen by the
+/// query's id.
+fn frame_columns(queries: &[usize], rng: &mut Rng) -> Vec<Vec<Fr>> {
+    let width = queries.len();
+    let n = committed(width);
+    let (inv, is_zero, selected) = (rd_inv(width), rd_is_zero(width), rd_selected(width));
+    let mut cols: Vec<Vec<Fr>> = vec![Vec::new(); n];
     for y in 0..16 {
-        let mut row = vec![Fr::ZERO; FRAME_COLUMNS];
+        let mut row = vec![Fr::ZERO; n];
         row[0] = int(rng.next_u64() >> 32);
-        for q in 0..8 {
+        for (s, &q) in queries.iter().enumerate() {
             if y > 1 && rng.next_u64() & 1 == 0 {
                 continue;
             }
-            row[column(q, 0)] = Fr::ONE;
+            row[column(s, 0)] = Fr::ONE;
             let read_value = int(rng.next_u64() >> 32);
-            row[column(q, 2)] = int(rng.next_u64() >> 26);
-            row[column(q, 3)] = read_value;
-            row[41 + q] = int(rng.next_u64() >> 45);
-            let (addr, write_value) = match q {
-                1..=5 => (int(rng.next_u64() >> 59), read_value),
-                7 => {
-                    let sel = int(rng.next_u64() >> 32);
-                    row[selected] = sel;
-                    if y == 0 || rng.next_u64() & 1 == 0 {
-                        row[is_zero] = Fr::ONE;
-                        (Fr::ZERO, Fr::ZERO)
-                    } else {
-                        let addr = int(1 + rng.next_u64() % 31);
-                        row[inv] = addr.inverse().expect("nonzero");
-                        (addr, sel)
-                    }
+            row[column(s, 2)] = int(rng.next_u64() >> 26);
+            row[column(s, 3)] = read_value;
+            row[gap_hi(width, s)] = int(rng.next_u64() >> 45);
+            let (addr, write_value) = if READ_ONLY.contains(&q) {
+                (int(rng.next_u64() >> 59), read_value)
+            } else if q == RD {
+                let sel = int(rng.next_u64() >> 32);
+                row[selected] = sel;
+                if y == 0 || rng.next_u64() & 1 == 0 {
+                    row[is_zero] = Fr::ONE;
+                    (Fr::ZERO, Fr::ZERO)
+                } else {
+                    let addr = int(1 + rng.next_u64() % 31);
+                    row[inv] = addr.inverse().expect("nonzero");
+                    (addr, sel)
                 }
-                _ => (int(rng.next_u64() >> 32), int(rng.next_u64() >> 32)),
+            } else {
+                (int(rng.next_u64() >> 32), int(rng.next_u64() >> 32))
             };
-            row[column(q, 1)] = addr;
-            row[column(q, 4)] = write_value;
+            row[column(s, 1)] = addr;
+            row[column(s, 4)] = write_value;
         }
         for (column, value) in cols.iter_mut().zip(row) {
             column.push(value);
@@ -388,36 +477,47 @@ fn frame_columns(rng: &mut Rng) -> Vec<Vec<Fr>> {
     cols
 }
 
-/// The frame at `2^4` rows over a satisfying base proves and verifies. Then
-/// row 0's `rd` write, at address 0, is set to 5: the self-check names
-/// `rd_write_masked` and `verify` rejects at transition 0.
+/// Every execution family's frame at `2^4` rows over a satisfying base proves
+/// and verifies — the four widths, 7, 6, 5 and 4, so both a padded and an
+/// unpadded gate list 0 are proven. Then row 0's `rd` write, at address 0, is
+/// set to 5: the self-check names `rd_write_masked` and `verify` rejects at
+/// transition 0. `rd` is the table's last query and every list is ascending, so
+/// its slot is the family's last.
 #[test]
-fn the_frame_proves_and_verifies_and_rejects_a_write_to_x0() {
-    let a = frame_artifact(4);
+fn every_frame_proves_and_verifies_and_rejects_a_write_to_x0() {
     let mut rng = Rng::new(0x5714_3106);
-    let mut cols = frame_columns(&mut rng);
-    let base = fr_base(&a, cols.clone());
-    let (_, challenges) = bind(&a, &base, None);
-    assert_eq!(
-        self_check(&a, &forward(&a, &base, &challenges), &challenges),
-        Ok(())
-    );
-    assert_eq!(prove_and_verify(&a, &base, None), Ok(()));
+    for (id, queries) in FAMILIES {
+        let a = family_frame_artifact(id, 4);
+        let rd = queries.len() - 1;
+        assert_eq!(queries[rd], RD, "family {id}: rd is the last slot");
 
-    assert_eq!(cols[column(7, 1)][0], Fr::ZERO);
-    cols[column(7, 4)][0] = int(5);
-    let base = fr_base(&a, cols);
-    let (_, challenges) = bind(&a, &base, None);
-    assert_eq!(
-        self_check(&a, &forward(&a, &base, &challenges), &challenges),
-        Err(SelfCheckError {
-            layer: 0,
-            row: 0,
-            relation: "rd_write_masked".into(),
-        })
-    );
-    assert_eq!(
-        prove_and_verify(&a, &base, None),
-        Err(GkrError::LayerInconsistency { layer: 0 })
-    );
+        let mut cols = frame_columns(queries, &mut rng);
+        let base = fr_base(&a, cols.clone());
+        let (_, challenges) = bind(&a, &base, None);
+        assert_eq!(
+            self_check(&a, &forward(&a, &base, &challenges), &challenges),
+            Ok(()),
+            "family {id}"
+        );
+        assert_eq!(prove_and_verify(&a, &base, None), Ok(()), "family {id}");
+
+        assert_eq!(cols[column(rd, 1)][0], Fr::ZERO, "family {id}");
+        cols[column(rd, 4)][0] = int(5);
+        let base = fr_base(&a, cols);
+        let (_, challenges) = bind(&a, &base, None);
+        assert_eq!(
+            self_check(&a, &forward(&a, &base, &challenges), &challenges),
+            Err(SelfCheckError {
+                layer: 0,
+                row: 0,
+                relation: "rd_write_masked".into(),
+            }),
+            "family {id}"
+        );
+        assert_eq!(
+            prove_and_verify(&a, &base, None),
+            Err(GkrError::LayerInconsistency { layer: 0 }),
+            "family {id}"
+        );
+    }
 }

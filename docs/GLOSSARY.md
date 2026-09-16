@@ -363,12 +363,20 @@ column program identity commits; rows `y < 2^14`, below `RAM_ORIGIN`, are masked
 each, initialized to 0 at timestamp 0. Their ids are the statement's window list, strictly
 increasing in `[1, 2^29/h − 1]`; `trace::init_windows` computes it.
 
-**Frame** — an execution family's memory subtree: 41 `M` columns (`cycle`, and mask,
-address, read timestamp, read value and write value for each of the pc query and the
-seven roles), 11 `W` columns (each query's high gap chunk, then the x0 gadget's `rd_inv`,
-`rd_is_zero` and `rd_selected`), a read and a write leaf
-per query, and a product tree to the read and write roots.
+**Frame** — an execution family's memory subtree, over the queries that family's
+instructions can make and no others (`constraints::memory::frame_queries`, `w` of the
+eight in the **query table**, `4 ≤ w ≤ 7`): `1 + 5w` `M` columns (`cycle`, and mask,
+address, read timestamp, read value and write value per query), `w + 3` `W` columns (each
+query's high gap chunk, then the x0 gadget's `rd_inv`, `rd_is_zero` and `rd_selected`), a
+read and a write leaf per query — padded to a power of two a side with leaves that are
+literally 1 — and a product tree to the read and write roots. No family holds all eight:
+`arg1` and `arg2` are an ecall row's alone, and `load` a load's.
 `constraints::memory::frame_artifact`; `docs/spec/memory.md` §2.
+
+**Slot** (of a frame) — a query's position in its family's query list, which is how its
+columns are addressed: `M[1 + 5·slot + field]`. Distinct from the query's id in the query
+table, which is where its address space and its in-cycle `Δ` come from, and from the
+in-cycle slot `Δ` itself.
 
 **Range obligation** — an artifact's lookup element, `LookupExpr (name, channel,
 selector, tuple)`. It holds on a row where its selector is 0, or where its one `Linear`

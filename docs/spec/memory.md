@@ -62,8 +62,9 @@ materialized layer the first halving list reads.
 ### 2.1 The frame columns
 
 Every execution family's memory-argument columns follow one layout, built by
-`trace::build_memory_columns`. A row is one cycle. Eight queries per row: query 0 is the pc
-query, queries 1–7 are the roles of `execution-trace.md` §7 in their frozen order.
+`trace::build_memory_columns`. A row is one cycle. The **query table** has eight entries:
+query 0 is the pc query, queries 1–7 are the roles of `execution-trace.md` §7 in their frozen
+order.
 
 | query `q` | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -71,16 +72,51 @@ query, queries 1–7 are the roles of `execution-trace.md` §7 in their frozen o
 | `AS` | PC | REG | REG | REG | REG | RAM | RAM | REG |
 | `Δ` | 0 | 1 | 2 | 2 | 2 | 2 | 3 | 3 |
 
+**A family's frame holds a subset of that table, not all of it**: every query an instruction
+routed to it can make, and no other. The subsets are frozen in
+`constraints::memory::frame_queries`, derived from `execution-trace.md` §4 over
+`program::row_kind`'s routing:
+
+| family | queries | `w` | `M` | `W` | leaves a side | obligations |
+| --- | --- | --- | --- | --- | --- | --- |
+| `ADD_SUB_LUI_AUIPC` | pc `rs1` `rs2` `arg1` `arg2` `ram` `rd` | 7 | 36 | 10 | 8 | 14 |
+| `JUMP_BRANCH_SLT` | pc `rs1` `rs2` `rd` | 4 | 21 | 7 | 4 | 8 |
+| `SHIFT_BITWISE` | pc `rs1` `rs2` `rd` | 4 | 21 | 7 | 4 | 8 |
+| `MUL_DIV` | pc `rs1` `rs2` `rd` | 4 | 21 | 7 | 4 | 8 |
+| `MEM_WORD` | pc `rs1` `rs2` `load` `ram` `rd` | 6 | 31 | 9 | 8 | 12 |
+| `MEM_SUBWORD` | pc `rs1` `rs2` `load` `ram` `rd` | 6 | 31 | 9 | 8 | 12 |
+| `ATOMICS` | pc `rs1` `rs2` `ram` `rd` | 5 | 26 | 8 | 8 | 10 |
+
+`arg1` and `arg2` are read by an ecall's own row alone, and `load` is a load's word at slot 2,
+so no family holds all eight: the table above is a union no family reaches. The A extension
+keeps its RAM query at slot 3 for every instruction it owns, `lr.w` included
+(`execution-trace.md` §7), so `ATOMICS` has no `load`.
+
+A **slot** `s` is a position in the family's list, and the columns are addressed by slot:
+
 ```text
 M[0]            cycle
-M[1 + 5q + f]   query q, field f:  0 mask   1 addr   2 read_ts   3 read_value   4 write_value
+M[1 + 5s + f]   the query at slot s, field f:
+                0 mask   1 addr   2 read_ts   3 read_value   4 write_value
 ```
 
-41 memory columns. For the pc query, `addr = 0`, `read_value = pc`, `write_value = next_pc`
-and `read_ts` is the previous cycle's pc write. The honest fill sets `mask` to 1 exactly when
-the row is live and its instruction has query `q`. **A row or query with mask 0 carries 0 in
-every one of its memory columns**, `cycle` included on a padding row. `constraints::memory`
-holds the AS and Δ table as data, and a test in `crates/trace` holds it to `trace::Role`.
+`1 + 5w` memory columns and `w + 3` witness columns, `w` being the family's query count. For
+the pc query, `addr = 0`, `read_value = pc`, `write_value = next_pc` and `read_ts` is the
+previous cycle's pc write. The honest fill sets `mask` to 1 exactly when the row is live and
+its instruction has that query. **A row or query with mask 0 carries 0 in every one of its
+memory columns**, `cycle` included on a padding row. `constraints::memory` holds the AS and Δ
+table as data, and a test in `crates/trace` holds it to `trace::Role`.
+
+**Why the subset is a completeness rule, not a soundness one.** A frame *narrower* than its
+family drops events from the multiset, which leaves their addresses' chains broken: the
+honest prover cannot balance, and no forgery is admitted. A frame *wider* than its family
+carries columns that are 0 on every row, commits and opens them, and discharges their
+obligations vacuously — waste, not a hole. What the subset must be exact for is **S16**,
+which ties an instruction's computed value to a `write_value` column: a query with no column
+is an instruction with nothing constraining it. So the rule S16 inherits is that a family's
+frame is a **superset** of the queries its instructions make, and
+`crates/trace/tests/memory.rs` holds `frame_queries` to `program::row_kind` instruction by
+instruction.
 
 **What ties a mask to its row is owed by S16.** At S14 the frame holds each mask to
 booleanity and nothing else. So three forgeries each balance: a query on a row whose pc mask
@@ -137,25 +173,35 @@ and a cached tuple inside it refuses the cache-free compilation.
 
 ### 2.3 The product
 
-Gate list 0 writes the 16 leaves to layer 1 in the order `R_0..R_7, W_0..W_7`. Three row-wise
-lists multiply neighbours, `L{k+1}[j] = L{k}[2j]·L{k}[2j+1]`, taking the width 16 → 8 → 4 →
-2; layer 4 is `[read row product, write row product]`. Then `trace_vars` halving lists of
+Let `w` be the family's query count and `s = w` rounded up to a power of two. Gate list 0
+writes `2s` leaves to layer 1, in the order `R_0..R_{w−1}`, the read pads, `W_0..W_{w−1}`,
+the write pads. A **pad leaf** is `Linear { [], 1 }` — the product's identity, reading no
+column — so a family whose query count is not a power of two pays inner columns for them and
+nothing else: no committed column, no obligation, no enforcing gate. Row-wise lists multiply
+neighbours, `L{k+1}[j] = L{k}[2j]·L{k}[2j+1]`, halving the width from `2s` to 2; that last
+layer is `[read row product, write row product]`. Then `trace_vars` halving lists of
 `TreeProduct`, down to a 0-variable top of width 2. `outputs = [L{N}[0], L{N}[1]]`.
 Every list multiplies exactly two children per output, and every gate is degree ≤ 2.
 
+At the seven families' widths that is `2s = 8` leaves for the three 4-query families and 16
+for every other, the widest frame — `ADD_SUB_LUI_AUIPC`, `w = 7` — being the one that sets
+the 16.
+
 ### 2.4 The gadgets every execution family carries
 
-**Mask booleanity.** For each of the 8 masks, the enforcing gate `m − m·m = 0`. A leaf is 1
+**Mask booleanity.** For each of the family's `w` masks, the enforcing gate `m − m·m = 0`. A leaf is 1
 or a tuple only at `m ∈ {0, 1}`; at `m = −1` a PC query's two leaves are each
 `−T(AS − 2, …)`, one sign flip on each side, so the products still balance and the query
 reads as a REG query.
 
-**Read-only queries write back what they read.** For `rs1`, `rs2`, `arg1`, `arg2` and `load`,
-the enforcing gate `write_value − read_value = 0` (`execution-trace.md` §3). Without it a read
-of `x0` could write 5 there.
+**Read-only queries write back what they read.** For each of `rs1`, `rs2`, `arg1`, `arg2` and
+`load` **the family's frame holds**, the enforcing gate `write_value − read_value = 0`
+(`execution-trace.md` §3). Without it a read of `x0` could write 5 there. So the count is the
+family's: 4 for `ADD_SUB_LUI_AUIPC`, 3 for the two memory families, 2 for the rest.
 
-**The x0 rule** (must-be-exact 7). On query 7 (`rd`), with witness columns `rd_inv`,
-`rd_is_zero` = `z` and `rd_selected` = `sel`:
+**The x0 rule** (must-be-exact 7). On the `rd` query — query 7, at the family's last slot,
+every execution family having one — with witness columns `rd_inv`, `rd_is_zero` = `z` and
+`rd_selected` = `sel`:
 
 ```text
 addr·rd_inv + z − m = 0          z = 1 exactly when addr = 0 on a live rd query; z = 0 when m = 0
@@ -189,13 +235,16 @@ statement is a canonical integer (§4.2's count). The gadget returns its obligat
 artifact's construction asserts their number is twice the number of reads.
 
 **Names.** A name is used once per artifact (`docs/spec/gkr.md` §4.2), so a column and the
-obligation over it differ. With `<q>` the query's name of §2.1: `M` columns `cycle`,
-`<q>_mask`, `<q>_addr`, `<q>_read_ts`, `<q>_read_value`, `<q>_write_value`; `W` columns
-`<q>_gap_hi` for the 8 queries in order, then `rd_inv`, `rd_is_zero`, `rd_selected`
-(`W[8]`–`W[10]`); obligations `gap_hi_<q>` and `gap_lo_<q>`, two per query in query order;
-leaves `read_<q>`, `write_<q>`; enforcing gates `<q>_mask_boolean` for the 8 masks,
-`<q>_writes_back` for `rs1` through `load`, and `rd_is_zero_inverse`, `rd_is_zero_at_nonzero`,
-`rd_is_zero_boolean`, `rd_write_masked` for the four x0 gates in the order above.
+obligation over it differ. With `<q>` the query's name of §2.1 and `w` the family's query
+count, every list below is in **slot order**: `M` columns `cycle`, `<q>_mask`, `<q>_addr`,
+`<q>_read_ts`, `<q>_read_value`, `<q>_write_value`; `W` columns `<q>_gap_hi` for the family's
+`w` queries, then `rd_inv`, `rd_is_zero`, `rd_selected` (`W[w]`–`W[w + 2]`); obligations
+`gap_hi_<q>` and `gap_lo_<q>`, two per query; leaves `read_<q>` then `write_<q>`, each side
+followed by its `read_pad_<i>` / `write_pad_<i>` up to the power of two; enforcing gates
+`<q>_mask_boolean` for the family's `w` masks, `<q>_writes_back` for each of `rs1`, `rs2`,
+`arg1`, `arg2` and `load` the family holds, and `rd_is_zero_inverse`,
+`rd_is_zero_at_nonzero`, `rd_is_zero_boolean`, `rd_write_masked` for the four x0 gates in the
+order above.
 
 ---
 
@@ -259,9 +308,13 @@ The window constant for a shard of window `w` is
 `WC = γ_M + RAM + α_addr·4h·w`, computed by `gkr_verify::window_challenges` from the drawn
 slots and the window id bound in the statement (§6); `w = 0` for `INIT_TEARDOWN`.
 
-`kat-gen`'s `memory` group writes `memory_frame.bin`, `image_window.bin` and `zero_window.bin` —
-the frame subtree of §2 and both window artifacts — at `n = 22` to
-`crates/constraints/tests/vectors/`; CI regenerates and diffs them.
+`kat-gen`'s `memory` group writes `memory_frame_{alu,reg,mem,atomics}.bin`,
+`image_window.bin` and `zero_window.bin` — one file per *distinct* frame of §2, and both
+window artifacts — at `n = 22` to `crates/constraints/tests/vectors/`; CI regenerates and
+diffs them. Families sharing a query list share their artifact byte for byte, so `reg` is
+`JUMP_BRANCH_SLT`, `SHIFT_BITWISE` and `MUL_DIV`, and `mem` is `MEM_WORD` and `MEM_SUBWORD`;
+a test holds each of the seven execution families to one of the four files, so four fixtures
+pin all seven frames.
 
 ### 3.4 The columns a prover fills
 
@@ -351,7 +404,7 @@ That chain is over `Fr`, and that it cannot close on itself is a matter of count
 matched step adds an integer in `[1, 2^38]`, one plus a gap, so a closed loop of `k` steps
 needs `k·2^38 ≥ p`: more than `2^215` steps. A statement has fewer than `2^70` tuples: at most
 `2^32` shards per family (a `u32` count), times `family::COUNT = 9` families, times `2^30`
-rows (`MAX_TRACE_VARS`), times 16 leaves a row, plus the 66 boundary tuples. So no loop
+rows (`MAX_TRACE_VARS`), times at most 16 leaves a row, plus the 66 boundary tuples. So no loop
 closes, each address's writes form one path from its init at timestamp 0, and every timestamp
 on that path is below `2^70·2^38 = 2^108 < p`: a canonical integer, so "strictly later" holds
 as integers. Re-check this count if the shard-count width, `MAX_TRACE_VARS`, the family count,
@@ -526,6 +579,12 @@ against identity's `cm(image column)` (§6.2).
 
 **Owed by later stages**: S15 discharges the obligations. S16 owes:
 
+- the **frame superset rule** of §2.1: a family's frame holds every query its instructions
+  make. A query it lacks is an instruction S16 has no `write_value` column to constrain,
+  which is the one way a narrowed frame could cost soundness rather than completeness;
+  `crates/trace/tests/memory.rs` holds `frame_queries` equal to that union over all 59
+  instructions, so a family gaining an instruction whose queries it does not carry fails
+  there;
 - every mask constrained as §2.1 says: `m_pc` the row's liveness and the table lookup's
   selector, and `m_q = m_pc·uses_q`;
 - each access's byte address: `low ∈ [0, 3]`, `low = 0` for `lw`/`sw`, `low ∈ {0, 2}` for

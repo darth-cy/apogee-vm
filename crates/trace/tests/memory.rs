@@ -4,10 +4,17 @@
 //! chunk's edge, and a word at a window's edge. The honest columns are
 //! held to the circuits over real executions in `crates/checker/tests/memory.rs`.
 
-use constraints::memory::{gap_hi, FRAME_DELTA, FRAME_NAMES, FRAME_SPACE};
+use std::collections::{BTreeMap, BTreeSet};
+
+use constraints::memory::{
+    frame_queries, gap_hi, ARG1, ARG2, FRAME_DELTA, FRAME_NAMES, FRAME_SPACE, LOAD, PC, RAM, RD,
+    RS1, RS2,
+};
 use constraints::PolyAddress;
 use field::Fr;
+use isa::Instr;
 use loader::load_elf;
+use program::row_kind;
 use trace::{
     build_boundary_finals, build_frame_witness, build_init_teardown_columns, build_memory_columns,
     AddressSpace, MemoryEventLog, ROLES,
@@ -69,12 +76,240 @@ fn the_finals_refuse_a_nonzero_x0() {
 #[test]
 #[should_panic(expected = "memory columns: the log has no cycle 3")]
 fn the_frame_refuses_a_cycle_the_log_lacks() {
-    build_memory_columns(&two_cycles(1, 0), &[2, 3], 4);
+    build_memory_columns(&two_cycles(1, 0), REG_FRAME, &[2, 3], 4);
 }
 
-const PC: usize = 0;
-const RS1: usize = 1;
-const RS2: usize = 2;
+/// `JUMP_BRANCH_SLT`'s query list, `[PC, RS1, RS2, RD]`: the narrowest frame,
+/// and the one whose first three slots are the query ids `PC`, `RS1` and `RS2`,
+/// so a hand-written log of pc, slot-1 and slot-2 register queries fits it and
+/// its slots are those ids.
+const REG_FRAME: &[usize] = &[PC, RS1, RS2, RD];
+
+/// One value of every `Instr` variant, all 59. The operand values are
+/// irrelevant — a register query exists for every register field the form has,
+/// whatever register it names (`docs/spec/execution-trace.md` §4) — so one
+/// value per variant covers the variant.
+fn every_instruction() -> Vec<Instr> {
+    use Instr::*;
+    let (rd, rs1, rs2, imm, shamt) = (1u8, 2u8, 3u8, 16i32, 4u8);
+    let (aq, rl) = (false, false);
+    vec![
+        Lui { rd, imm },
+        Auipc { rd, imm },
+        Jal { rd, imm },
+        Jalr { rd, rs1, imm },
+        Beq { rs1, rs2, imm },
+        Bne { rs1, rs2, imm },
+        Blt { rs1, rs2, imm },
+        Bge { rs1, rs2, imm },
+        Bltu { rs1, rs2, imm },
+        Bgeu { rs1, rs2, imm },
+        Lb { rd, rs1, imm },
+        Lh { rd, rs1, imm },
+        Lw { rd, rs1, imm },
+        Lbu { rd, rs1, imm },
+        Lhu { rd, rs1, imm },
+        Sb { rs1, rs2, imm },
+        Sh { rs1, rs2, imm },
+        Sw { rs1, rs2, imm },
+        Addi { rd, rs1, imm },
+        Slti { rd, rs1, imm },
+        Sltiu { rd, rs1, imm },
+        Xori { rd, rs1, imm },
+        Ori { rd, rs1, imm },
+        Andi { rd, rs1, imm },
+        Slli { rd, rs1, shamt },
+        Srli { rd, rs1, shamt },
+        Srai { rd, rs1, shamt },
+        Add { rd, rs1, rs2 },
+        Sub { rd, rs1, rs2 },
+        Sll { rd, rs1, rs2 },
+        Slt { rd, rs1, rs2 },
+        Sltu { rd, rs1, rs2 },
+        Xor { rd, rs1, rs2 },
+        Srl { rd, rs1, rs2 },
+        Sra { rd, rs1, rs2 },
+        Or { rd, rs1, rs2 },
+        And { rd, rs1, rs2 },
+        Fence {
+            fm: 0,
+            pred: 3,
+            succ: 3,
+        },
+        Ecall,
+        Ebreak,
+        Mul { rd, rs1, rs2 },
+        Mulh { rd, rs1, rs2 },
+        Mulhsu { rd, rs1, rs2 },
+        Mulhu { rd, rs1, rs2 },
+        Div { rd, rs1, rs2 },
+        Divu { rd, rs1, rs2 },
+        Rem { rd, rs1, rs2 },
+        Remu { rd, rs1, rs2 },
+        LrW { rd, rs1, aq, rl },
+        ScW {
+            rd,
+            rs1,
+            rs2,
+            aq,
+            rl,
+        },
+        AmoswapW {
+            rd,
+            rs1,
+            rs2,
+            aq,
+            rl,
+        },
+        AmoaddW {
+            rd,
+            rs1,
+            rs2,
+            aq,
+            rl,
+        },
+        AmoxorW {
+            rd,
+            rs1,
+            rs2,
+            aq,
+            rl,
+        },
+        AmoandW {
+            rd,
+            rs1,
+            rs2,
+            aq,
+            rl,
+        },
+        AmoorW {
+            rd,
+            rs1,
+            rs2,
+            aq,
+            rl,
+        },
+        AmominW {
+            rd,
+            rs1,
+            rs2,
+            aq,
+            rl,
+        },
+        AmomaxW {
+            rd,
+            rs1,
+            rs2,
+            aq,
+            rl,
+        },
+        AmominuW {
+            rd,
+            rs1,
+            rs2,
+            aq,
+            rl,
+        },
+        AmomaxuW {
+            rd,
+            rs1,
+            rs2,
+            aq,
+            rl,
+        },
+    ]
+}
+
+/// The queries one instruction's cycle makes, ascending, written from
+/// `docs/spec/execution-trace.md` §4 and not from `constraints::memory`.
+///
+/// Slot 0 is the pc query, on every row. The register queries are the form's
+/// own register fields, `x0` included and none it lacks — which is exactly
+/// `Instr::fields()`. The rest are the class's: a load's word at slot 2, a
+/// store's or an atomic's at slot 3. An ecall's own row reads `a7`, `a0`, `a1`
+/// and `a2` and writes `a0`, and each of its transfer rows moves one RAM word,
+/// so its family needs both; its register fields are not encoded, so
+/// `fields()` says nothing about it. `ebreak` is a fatal guest error and has
+/// no row.
+fn queries_of(instr: &Instr) -> Vec<usize> {
+    use Instr::*;
+    match instr {
+        Ebreak => return Vec::new(),
+        Ecall => return vec![PC, RS1, RS2, ARG1, ARG2, RAM, RD],
+        _ => {}
+    }
+    let fields = instr.fields();
+    let mut queries = vec![PC];
+    if fields.rs1.is_some() {
+        queries.push(RS1);
+    }
+    if fields.rs2.is_some() {
+        queries.push(RS2);
+    }
+    match instr {
+        Lb { .. } | Lh { .. } | Lw { .. } | Lbu { .. } | Lhu { .. } => queries.push(LOAD),
+        Sb { .. } | Sh { .. } | Sw { .. } => queries.push(RAM),
+        LrW { .. }
+        | ScW { .. }
+        | AmoswapW { .. }
+        | AmoaddW { .. }
+        | AmoxorW { .. }
+        | AmoandW { .. }
+        | AmoorW { .. }
+        | AmominW { .. }
+        | AmomaxW { .. }
+        | AmominuW { .. }
+        | AmomaxuW { .. } => queries.push(RAM),
+        _ => {}
+    }
+    if fields.rd.is_some() {
+        queries.push(RD);
+    }
+    queries.sort_unstable();
+    queries
+}
+
+/// `docs/spec/memory.md` §2.1, the rule S16 inherits: a family's frame holds
+/// **exactly** the queries the instructions routed to it can make.
+///
+/// The per-instruction table above is this test's own reading of
+/// `execution-trace.md` §4; the routing is `program::row_kind`'s. Taking the
+/// union over every one of the 59 instructions and comparing it with
+/// `constraints::memory::frame_queries` holds the two tables together, so
+/// neither can drift: adding an instruction to a family whose frame lacks one
+/// of its queries fails here, and so does a frame carrying a query no
+/// instruction of the family makes.
+///
+/// Equality is the assertion, not containment. A query short of the union
+/// would leave S16 nothing to constrain that instruction's written value
+/// against; a query beyond it would be five memory columns and a witness
+/// column that are 0 on every row, committed, opened, and their obligations
+/// discharged vacuously.
+#[test]
+fn every_familys_frame_is_exactly_its_instructions_queries() {
+    let mut union: BTreeMap<u32, BTreeSet<usize>> = BTreeMap::new();
+    for instr in every_instruction() {
+        let (family, _) = row_kind(&instr);
+        union.entry(family).or_default().extend(queries_of(&instr));
+    }
+    assert_eq!(
+        union.len(),
+        7,
+        "every execution family is reached by some instruction"
+    );
+    for (family, queries) in &union {
+        let queries: Vec<usize> = queries.iter().copied().collect();
+        assert_eq!(
+            frame_queries(*family),
+            queries,
+            "{}",
+            program::family_name(*family)
+        );
+    }
+    // `ebreak` is the one instruction with no row, so it contributes nothing;
+    // if it ever did, the union above would have caught it in its family.
+    assert!(queries_of(&Instr::Ebreak).is_empty());
+}
 
 /// `docs/spec/memory.md` §2.4's high chunk at the chunk's edge. A hand-written
 /// log on four cycles reads `x5` with gaps 4, `2^19 − 1`, `2^19` and
@@ -106,7 +341,7 @@ fn the_gap_columns_hold_the_high_chunk_at_the_chunks_edge() {
         .collect();
     assert_eq!(x5, [4, (1 << 19) - 1, 1 << 19, (1 << 19) + 3]);
 
-    let columns = build_frame_witness(&log, &[1, c2, c3, c4], 4);
+    let columns = build_frame_witness(&log, REG_FRAME, &[1, c2, c3, c4], 4);
     let at = |q: usize| {
         let column = &columns
             .iter()

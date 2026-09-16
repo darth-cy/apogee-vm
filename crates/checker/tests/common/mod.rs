@@ -173,7 +173,9 @@ pub fn set_operand(gate: &mut GateDef, from: PolyAddress, to: PolyAddress) -> us
 use checker::{memory_roots, WitnessRow};
 use constants::challenge_slot::{MEM_ALPHA_VAL, MEM_GAMMA};
 use constants::{family, transcript_tags};
-use constraints::memory::{frame_artifact, image_window_artifact, zero_window_artifact};
+use constraints::memory::{
+    family_frame_artifact, frame_queries, image_window_artifact, zero_window_artifact,
+};
 use emulator::{trace_run, GuestIo};
 use gkr::{
     boundary_factors, forward, prove, reconciles, verify, window_challenges, BaseLayer,
@@ -187,6 +189,18 @@ use trace::{
     build_frame_witness, build_init_teardown_columns, build_memory_columns, init_windows,
     CycleProfile, FamilyTraces, MemoryEventLog,
 };
+
+/// Each execution family's name, indexed by `FamilyId`: what a frame shard is
+/// labelled by, since `constants::family` holds ids and not names.
+pub const FAMILY_NAMES: [&str; 7] = [
+    "add_sub_lui_auipc",
+    "jump_branch_slt",
+    "shift_bitwise",
+    "mul_div",
+    "mem_word",
+    "mem_subword",
+    "atomics",
+];
 use transcript::Transcript;
 
 /// Every family's height: the init families' `h`, and tall enough for every
@@ -262,33 +276,70 @@ pub fn memory_challenges() -> ExternalChallenges {
 #[derive(Clone)]
 pub struct Shard {
     pub label: String,
+    /// The execution family whose frame this is, which is what says how its
+    /// columns are addressed: slot `s` is `frame_queries(family)[s]`. `None`
+    /// for a RAM window shard, which has no frame.
+    pub family: Option<u32>,
     pub artifact: CircuitArtifact,
     pub base: BaseLayer,
     pub challenges: ExternalChallenges,
 }
 
-/// A frame shard of `log` over `cycles`, in the order given, at `height` rows.
+/// The height a frame over `cycles` cycles takes: the smallest power of two
+/// holding them, and at least 16 rows, so that a family with a handful of
+/// cycles still gets a frame whose lists have room to halve.
+pub fn frame_height(cycles: usize) -> usize {
+    cycles.next_power_of_two().max(16)
+}
+
+/// `family`'s frame shard of `log` over `cycles`, in the order given, at
+/// `height` rows. Both the columns and the artifact are built under that
+/// family's own query list, `constraints::memory::frame_queries`: a frame
+/// holds only the queries its instructions can make (`docs/spec/memory.md`
+/// §2.1), so a slot of this shard is a position in that list and not a query
+/// id.
 pub fn frame_shard(
     log: &MemoryEventLog,
+    family: u32,
     cycles: &[u64],
     height: usize,
     memory: &ExternalChallenges,
 ) -> Shard {
-    let mut columns = build_memory_columns(log, cycles, height);
-    columns.extend(build_frame_witness(log, cycles, height));
+    let queries = frame_queries(family);
+    let mut columns = build_memory_columns(log, queries, cycles, height);
+    columns.extend(build_frame_witness(log, queries, cycles, height));
     Shard {
-        label: "frame".to_string(),
-        artifact: frame_artifact(height.trailing_zeros()),
+        label: format!("frame of {}", FAMILY_NAMES[family as usize]),
+        family: Some(family),
+        artifact: family_frame_artifact(family, height.trailing_zeros()),
         base: BaseLayer::new(columns),
         challenges: memory.clone(),
     }
 }
 
-/// Every memory shard of `t`'s statement: the frame, one shard over every
-/// cycle at the smallest power-of-two height holding them; then its windows.
+/// Each execution family that ran, with the cycles its frame proves:
+/// `t.traces.families` in order, the families that never ran dropped. One
+/// frame cannot hold two families' cycles — an ecall row needs `arg1` and
+/// `arg2`, a load row needs `load` — so a statement's execution side is one
+/// frame per family, each under its own query list.
+pub fn frame_plan(t: &Traced) -> Vec<(u32, Vec<u64>)> {
+    let ran = t.traces.families.iter().filter(|f| !f.is_empty());
+    ran.map(|f| (f.family, f.cycle.clone())).collect()
+}
+
+/// One frame shard per family of [`frame_plan`], each over that family's own
+/// cycles at [`frame_height`].
+pub fn frame_shards(t: &Traced, memory: &ExternalChallenges) -> Vec<Shard> {
+    let shard = |(family, cycles): (u32, Vec<u64>)| {
+        frame_shard(&t.log, family, &cycles, frame_height(cycles.len()), memory)
+    };
+    frame_plan(t).into_iter().map(shard).collect()
+}
+
+/// Every memory shard of `t`'s statement: one frame per family that ran, in
+/// `frame_plan` order, then its windows.
 pub fn shards(t: &Traced, memory: &ExternalChallenges) -> Vec<Shard> {
-    let height = t.cycles.len().next_power_of_two();
-    let mut out = vec![frame_shard(&t.log, &t.cycles, height, memory)];
+    let mut out = frame_shards(t, memory);
     out.extend(window_shards(t, memory));
     out
 }
@@ -309,6 +360,7 @@ pub fn window_shard(
     let columns = build_init_teardown_columns(log, image, w, HEIGHT as usize);
     Shard {
         label: format!("window {w}"),
+        family: None,
         artifact,
         base: BaseLayer::new(columns),
         challenges: window_challenges(memory, w, vars),
@@ -366,6 +418,7 @@ pub fn with_cells(shard: &Shard, cells: &[(PolyAddress, usize, Fr)]) -> Shard {
         .collect();
     Shard {
         label: shard.label.clone(),
+        family: shard.family,
         artifact: shard.artifact.clone(),
         base: BaseLayer::new(columns),
         challenges: shard.challenges.clone(),

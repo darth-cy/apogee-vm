@@ -7,12 +7,15 @@
 //! gadgets, §3.3 the window artifacts, §7 the obligations, §8 the rules. Every
 //! formula, layout, order and name here is that document's.
 //!
+//! A family's frame holds only the queries its instructions can make, so `w`
+//! below is `frame_queries(family).len()`, never 8.
+//!
 //! ```text
-//! frame      M[0] cycle; M[1 + 5q + f] query q, field f; W[q] <q>_gap_hi;
-//!            W[8] rd_inv, W[9] rd_is_zero, W[10] rd_selected
-//! list 0     L{1}[0..8] read_<q>, L{1}[8..16] write_<q>;
-//!            enforcing: 8 booleanity, 5 write-back, 4 x0
-//! lists 1-3  L{k+1}[j] = L{k}[2j]·L{k}[2j+1], width 16 -> 8 -> 4 -> 2
+//! frame      M[0] cycle; M[1 + 5s + f] the query at slot s, field f;
+//!            W[s] <q>_gap_hi; W[w] rd_inv, W[w+1] rd_is_zero, W[w+2] rd_selected
+//! list 0     L{1}[0..w] read_<q>, then 1s to a power of two; likewise write_<q>;
+//!            enforcing: w booleanity, one write-back per read-only query, 4 x0
+//! lists 1-k  L{k+1}[j] = L{k}[2j]·L{k}[2j+1], halving the width to 2
 //!
 //! windows    M[0] teardown_ts, M[1] teardown_value, V[row];
 //!            INIT_TEARDOWN adds S[0] init_value and V[ram_live]
@@ -26,7 +29,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use constants::{address_space, challenge_slot, lookup_channel, memory};
+use constants::{address_space, challenge_slot, family, lookup_channel, memory};
 use field::Fr;
 
 use crate::{
@@ -53,13 +56,34 @@ pub const FIELD_READ_VALUE: u32 = 3;
 /// A frame query's field: the value it writes, at `4·cycle + Δ`.
 pub const FIELD_WRITE_VALUE: u32 = 4;
 
-/// Queries per frame row: the pc query, then the seven roles of
-/// `docs/spec/execution-trace.md` §7 in their frozen order.
+/// The query table's size: the pc query, then the seven roles of
+/// `docs/spec/execution-trace.md` §7 in their frozen order. A family's frame
+/// holds a *subset* of these — [`frame_queries`] — so this is the table's
+/// length, never a frame's width.
 pub const FRAME_QUERIES: usize = 8;
+
+/// The pc query, which every execution family's frame holds first.
+pub const PC: usize = 0;
+/// `rs1`; an ecall row's `a7`.
+pub const RS1: usize = 1;
+/// `rs2`; an ecall row's `a0`.
+pub const RS2: usize = 2;
+/// An ecall row's `a1`.
+pub const ARG1: usize = 3;
+/// An ecall row's `a2`.
+pub const ARG2: usize = 4;
+/// A load's word, at slot 2.
+pub const LOAD: usize = 5;
+/// A store's, an atomic's or an ecall transfer's word, at slot 3.
+pub const RAM: usize = 6;
 
 /// Each query's name, which its columns, leaves and obligations are named after.
 pub const FRAME_NAMES: [&str; FRAME_QUERIES] =
     ["pc", "rs1", "rs2", "arg1", "arg2", "load", "ram", "rd"];
+
+/// The read-only queries, which write back what they read: `rs1` through
+/// `load`. `docs/spec/memory.md` §2.4.
+pub const FRAME_READ_ONLY: [usize; 5] = [RS1, RS2, ARG1, ARG2, LOAD];
 
 /// Each query's address space, `constants::address_space`.
 pub const FRAME_SPACE: [u8; FRAME_QUERIES] = [
@@ -76,26 +100,73 @@ pub const FRAME_SPACE: [u8; FRAME_QUERIES] = [
 /// Each query's in-cycle slot `Δ`: its write is at `4·cycle + Δ`.
 pub const FRAME_DELTA: [u64; FRAME_QUERIES] = [0, 1, 2, 2, 2, 2, 3, 3];
 
-/// `M[1 + 5·query + field]`: one field of one frame query.
-pub fn frame(query: usize, field: u32) -> PolyAddress {
-    PolyAddress::Memory(1 + 5 * query as u32 + field)
+/// `M[1 + 5·slot + field]`: one field of the query at `slot` — its position in
+/// the family's query list, not its id in [`FRAME_NAMES`]. The two agree only
+/// for a family holding every query, and none does.
+pub fn frame(slot: usize, field: u32) -> PolyAddress {
+    PolyAddress::Memory(1 + 5 * slot as u32 + field)
 }
 
-/// `W[query]`: the high chunk of a query's timestamp gap, `gap >> 19`.
-pub fn gap_hi(query: usize) -> PolyAddress {
-    PolyAddress::Witness(query as u32)
+/// `W[slot]`: the high chunk of a query's timestamp gap, `gap >> 19`.
+pub fn gap_hi(slot: usize) -> PolyAddress {
+    PolyAddress::Witness(slot as u32)
 }
 
-/// `W[8]`: the inverse of `rd`'s address, 0 where it has none. The x0
-/// gadget's witness columns follow the eight gap columns.
-pub const RD_INV: PolyAddress = PolyAddress::Witness(8);
-/// `W[9]`: 1 exactly on a live `rd` query at address 0.
-pub const RD_IS_ZERO: PolyAddress = PolyAddress::Witness(9);
-/// `W[10]`: the value `rd` writes where its address is not 0.
-pub const RD_SELECTED: PolyAddress = PolyAddress::Witness(10);
+/// `W[width]`: the inverse of `rd`'s address, 0 where it has none. The x0
+/// gadget's three witness columns follow a frame's `width` gap columns.
+pub fn rd_inv(width: usize) -> PolyAddress {
+    PolyAddress::Witness(width as u32)
+}
+/// `W[width + 1]`: 1 exactly on a live `rd` query at address 0.
+pub fn rd_is_zero(width: usize) -> PolyAddress {
+    PolyAddress::Witness(width as u32 + 1)
+}
+/// `W[width + 2]`: the value `rd` writes where its address is not 0.
+pub fn rd_selected(width: usize) -> PolyAddress {
+    PolyAddress::Witness(width as u32 + 2)
+}
 
 /// The query `rd`, whose writes the x0 gadget masks.
 pub const RD: usize = 7;
+
+/// The queries an execution family's frame holds, ascending: every query an
+/// instruction routed to that family can make, and no other.
+/// `docs/spec/memory.md` §2.1.
+///
+/// **This is the one place a family's frame width is chosen.** It is derived
+/// from `docs/spec/execution-trace.md` §4 — which queries an instruction class
+/// makes — over `program::row_kind`'s routing, and
+/// `crates/trace/tests/memory.rs` holds it to that routing instruction by
+/// instruction. A frame narrower than its family cannot balance: the events it
+/// drops leave their addresses' chains broken, so the honest prover is refused
+/// rather than a cheating one admitted. A frame wider than its family carries
+/// columns that are 0 on every row, commits and opens them, and discharges
+/// their obligations vacuously.
+///
+/// Panics on the two init families, which run no cycles and have no frame, and
+/// on any other id.
+pub fn frame_queries(family: u32) -> &'static [usize] {
+    match family {
+        // lui, auipc, addi, add, sub, and the system row kind: an ecall's own
+        // row reads `a7`, `a0`, `a1`, `a2` and writes `a0`, and each of its
+        // transfer rows moves one RAM word at slot 3. No `load`: that is a
+        // load's word at slot 2, and no instruction here has one.
+        family::ADD_SUB_LUI_AUIPC => &[PC, RS1, RS2, ARG1, ARG2, RAM, RD],
+        // Register-register, register-immediate, branches and jumps: no RAM
+        // query at all, and `arg1`/`arg2` are ecall-only.
+        family::JUMP_BRANCH_SLT | family::SHIFT_BITWISE | family::MUL_DIV => &[PC, RS1, RS2, RD],
+        // A load's word at slot 2, a store's at slot 3.
+        family::MEM_WORD | family::MEM_SUBWORD => &[PC, RS1, RS2, LOAD, RAM, RD],
+        // The whole A extension keeps its RAM query at slot 3, `lr.w` included
+        // (`docs/spec/execution-trace.md` §7), so it has no `load`.
+        family::ATOMICS => &[PC, RS1, RS2, RAM, RD],
+        family::INIT_TEARDOWN | family::ZERO_WINDOWS => panic!(
+            "family {family} initializes RAM and runs no cycles, so it has no frame; \
+             `docs/spec/memory.md` §3.3 is its artifact"
+        ),
+        other => panic!("family {other} is not in constants::family"),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // The tuple and the leaf
@@ -123,17 +194,14 @@ fn slot(s: u32) -> Coeff {
 /// A coefficient is one literal or one slot, so `α_ts·4·cycle` is a term
 /// repeated four times and `α_ts·Δ·m` one repeated `Δ` times. The read tuple
 /// has one term per part, so its term `PART_*` is that part.
-fn tuple(query: usize, write: bool) -> GateDef {
-    let mask = frame(query, FIELD_MASK);
+fn tuple(query: usize, at: usize, write: bool) -> GateDef {
+    let mask = frame(at, FIELD_MASK);
     let mut parts: [Vec<(Coeff, PolyAddress)>; 4] = Default::default();
     parts[memory::PART_AS] = vec![(lit(FRAME_SPACE[query] as u64), mask)];
-    parts[memory::PART_ADDR] = vec![(
-        slot(challenge_slot::MEM_ALPHA_ADDR),
-        frame(query, FIELD_ADDR),
-    )];
+    parts[memory::PART_ADDR] = vec![(slot(challenge_slot::MEM_ALPHA_ADDR), frame(at, FIELD_ADDR))];
     let alpha_ts = slot(challenge_slot::MEM_ALPHA_TS);
     parts[memory::PART_TS] = match write {
-        false => vec![(alpha_ts, frame(query, FIELD_READ_TS))],
+        false => vec![(alpha_ts, frame(at, FIELD_READ_TS))],
         true => {
             let mut ts = vec![(alpha_ts, CYCLE); memory::TS_STEP as usize];
             ts.extend(vec![(alpha_ts, mask); FRAME_DELTA[query] as usize]);
@@ -144,7 +212,7 @@ fn tuple(query: usize, write: bool) -> GateDef {
         false => FIELD_READ_VALUE,
         true => FIELD_WRITE_VALUE,
     };
-    parts[memory::PART_VAL] = vec![(slot(challenge_slot::MEM_ALPHA_VAL), frame(query, value))];
+    parts[memory::PART_VAL] = vec![(slot(challenge_slot::MEM_ALPHA_VAL), frame(at, value))];
     GateDef::Linear {
         terms: parts.concat(),
         constant: slot(challenge_slot::MEM_GAMMA),
@@ -157,15 +225,19 @@ fn tuple(query: usize, write: bool) -> GateDef {
 /// `T(AS, addr, read_ts, read_value)` of `docs/spec/memory.md` §1. The
 /// verifier's boundary evaluates it too, at operand values placed by `PART_*`:
 /// `query` 0 is a PC tuple, 1 a REG one.
+/// `query` names both the query and its slot, so this is the tuple as a frame
+/// holding every query would address it. The verifier's boundary reads only
+/// the coefficients and their `PART_*` positions, which no slot changes.
 pub fn read_tuple(query: usize) -> GateDef {
-    tuple(query, false)
+    tuple(query, query, false)
 }
 
 /// Query `query`'s write tuple, unmasked: `γ_M + AS·m + α_addr·addr +
 /// α_ts·(4·cycle + Δ·m) + α_val·write_value`. With `m = 1` it is exactly
 /// `T(AS, addr, 4·cycle + Δ, write_value)`.
+#[cfg(test)]
 fn write_tuple(query: usize) -> GateDef {
-    tuple(query, true)
+    tuple(query, query, true)
 }
 
 /// A product-tree leaf, one flat `Quadratic`: at `mask = 1` the tuple, at
@@ -216,14 +288,11 @@ fn booleanity(mask: PolyAddress) -> GateDef {
 
 /// `write_value − read_value = 0`: a read-only query, `rs1` through `load`,
 /// writes back what it read.
-fn write_back(query: usize) -> GateDef {
+fn write_back(at: usize) -> GateDef {
     GateDef::Linear {
         terms: vec![
-            (lit(1), frame(query, FIELD_WRITE_VALUE)),
-            (
-                Coeff::Literal(Fr::MINUS_ONE),
-                frame(query, FIELD_READ_VALUE),
-            ),
+            (lit(1), frame(at, FIELD_WRITE_VALUE)),
+            (Coeff::Literal(Fr::MINUS_ONE), frame(at, FIELD_READ_VALUE)),
         ],
         constant: lit(0),
     }
@@ -237,16 +306,17 @@ fn write_back(query: usize) -> GateDef {
 /// z − z·z = 0                      rd_is_zero_boolean
 /// write_value − sel + z·sel = 0    rd_write_masked
 /// ```
-fn x0_gates() -> [(&'static str, GateDef); 4] {
-    let (addr, m) = (frame(RD, FIELD_ADDR), frame(RD, FIELD_MASK));
+fn x0_gates(at: usize, width: usize) -> [(&'static str, GateDef); 4] {
+    let (addr, m) = (frame(at, FIELD_ADDR), frame(at, FIELD_MASK));
+    let (inv, z, sel) = (rd_inv(width), rd_is_zero(width), rd_selected(width));
     let minus = Coeff::Literal(Fr::MINUS_ONE);
     [
         (
             "rd_is_zero_inverse",
             GateDef::Quadratic {
                 constant: lit(0),
-                linear: vec![(lit(1), RD_IS_ZERO), (minus, m)],
-                products: vec![(lit(1), addr, RD_INV)],
+                linear: vec![(lit(1), z), (minus, m)],
+                products: vec![(lit(1), addr, inv)],
             },
         ),
         (
@@ -254,16 +324,16 @@ fn x0_gates() -> [(&'static str, GateDef); 4] {
             GateDef::Quadratic {
                 constant: lit(0),
                 linear: vec![],
-                products: vec![(lit(1), addr, RD_IS_ZERO)],
+                products: vec![(lit(1), addr, z)],
             },
         ),
-        ("rd_is_zero_boolean", booleanity(RD_IS_ZERO)),
+        ("rd_is_zero_boolean", booleanity(z)),
         (
             "rd_write_masked",
             GateDef::Quadratic {
                 constant: lit(0),
-                linear: vec![(lit(1), frame(RD, FIELD_WRITE_VALUE)), (minus, RD_SELECTED)],
-                products: vec![(lit(1), RD_IS_ZERO, RD_SELECTED)],
+                linear: vec![(lit(1), frame(at, FIELD_WRITE_VALUE)), (minus, sel)],
+                products: vec![(lit(1), z, sel)],
             },
         ),
     ]
@@ -282,9 +352,9 @@ fn x0_gates() -> [(&'static str, GateDef); 4] {
 /// field element in `[0, 2^38)`: `read_ts < 4·cycle + Δ` as integers, under
 /// the counting premise of `docs/spec/memory.md` §4.2. §2.4; `Δ − 1` is the
 /// field element, `−1` for the pc.
-fn gap_lookups(query: usize) -> [LookupExpr; 2] {
-    let (name, hi) = (FRAME_NAMES[query], gap_hi(query));
-    let selector = frame(query, FIELD_MASK);
+fn gap_lookups(query: usize, at: usize) -> [LookupExpr; 2] {
+    let (name, hi) = (FRAME_NAMES[query], gap_hi(at));
+    let selector = frame(at, FIELD_MASK);
     let channel = lookup_channel::TIMESTAMP;
     let chunk = Fr::from_u64(1 << lookup_channel::BITS[channel as usize]);
     [
@@ -304,7 +374,7 @@ fn gap_lookups(query: usize) -> [LookupExpr; 2] {
             tuple: vec![GateDef::Linear {
                 terms: vec![
                     (lit(memory::TS_STEP), CYCLE),
-                    (Coeff::Literal(Fr::MINUS_ONE), frame(query, FIELD_READ_TS)),
+                    (Coeff::Literal(Fr::MINUS_ONE), frame(at, FIELD_READ_TS)),
                     (Coeff::Literal(-chunk), hi),
                 ],
                 constant: Coeff::Literal(Fr::from_u64(FRAME_DELTA[query]) - Fr::ONE),
@@ -317,49 +387,98 @@ fn gap_lookups(query: usize) -> [LookupExpr; 2] {
 // The artifacts
 // ---------------------------------------------------------------------------
 
-/// The memory subtree every execution family carries, `docs/spec/memory.md`
-/// §2, over `2^trace_vars` rows: 41 `M` columns, 11 `W` columns, 16 leaves,
-/// 17 enforcing gates and 16 gap obligations. Validated and held to
-/// [`check_memory`]; panics if either refuses it.
-pub fn frame_artifact(trace_vars: u32) -> CircuitArtifact {
+/// The memory subtree an execution family carries, `docs/spec/memory.md` §2,
+/// over `2^trace_vars` rows and the `queries` of [`frame_queries`]: with
+/// `w = queries.len()`, `1 + 5w` `M` columns, `w + 3` `W` columns, `2w` leaves
+/// padded to the next power of two a side, `w` booleanity gates, one
+/// write-back gate per read-only query, the four x0 gates and `2w` gap
+/// obligations. Validated and held to [`check_memory`]; panics if either
+/// refuses it, or if `queries` is not the pc query followed by a strictly
+/// ascending subset of the table.
+pub fn frame_artifact(queries: &[usize], trace_vars: u32) -> CircuitArtifact {
     let mut lookups = Vec::new();
-    for query in 0..FRAME_QUERIES {
-        lookups.extend(gap_lookups(query));
+    for (at, &query) in queries.iter().enumerate() {
+        lookups.extend(gap_lookups(query, at));
     }
-    frame_with_lookups(trace_vars, lookups)
+    frame_with_lookups(queries, trace_vars, lookups)
+}
+
+/// [`frame_artifact`] over [`frame_queries`] of `family`: the frame that
+/// family proves.
+pub fn family_frame_artifact(family: u32, trace_vars: u32) -> CircuitArtifact {
+    frame_artifact(frame_queries(family), trace_vars)
 }
 
 /// The frame, with the obligations its caller collected: the artifact's
 /// construction asserts there are two per read.
-fn frame_with_lookups(trace_vars: u32, lookups: Vec<LookupExpr>) -> CircuitArtifact {
+fn frame_with_lookups(
+    queries: &[usize],
+    trace_vars: u32,
+    lookups: Vec<LookupExpr>,
+) -> CircuitArtifact {
+    assert!(
+        queries.first() == Some(&PC)
+            && queries.windows(2).all(|w| w[0] < w[1])
+            && queries.iter().all(|&q| q < FRAME_QUERIES),
+        "memory frame: a family's queries are the pc query then a strictly ascending subset of \
+         the {FRAME_QUERIES} of FRAME_NAMES; {queries:?} is not"
+    );
+    let width = queries.len();
     let mut columns = vec![String::from("cycle")];
-    for name in FRAME_NAMES {
+    for &query in queries {
         for field in ["mask", "addr", "read_ts", "read_value", "write_value"] {
-            columns.push(format!("{name}_{field}"));
+            columns.push(format!("{}_{field}", FRAME_NAMES[query]));
         }
     }
-    let mut witness: Vec<String> = FRAME_NAMES
+    let mut witness: Vec<String> = queries
         .iter()
-        .map(|name| format!("{name}_gap_hi"))
+        .map(|&query| format!("{}_gap_hi", FRAME_NAMES[query]))
         .collect();
-    for name in ["rd_inv", "rd_is_zero", "rd_selected"] {
-        witness.push(String::from(name));
+    let rd = queries.iter().position(|&query| query == RD);
+    if rd.is_some() {
+        for name in ["rd_inv", "rd_is_zero", "rd_selected"] {
+            witness.push(String::from(name));
+        }
     }
 
     let mut reads = Vec::new();
     let mut writes = Vec::new();
     let mut enforcing = Vec::new();
-    for (query, name) in FRAME_NAMES.iter().enumerate() {
-        let mask = frame(query, FIELD_MASK);
-        reads.push((format!("read_{name}"), leaf(&read_tuple(query), mask)));
-        writes.push((format!("write_{name}"), leaf(&write_tuple(query), mask)));
+    for (at, &query) in queries.iter().enumerate() {
+        let (name, mask) = (FRAME_NAMES[query], frame(at, FIELD_MASK));
+        reads.push((format!("read_{name}"), leaf(&tuple(query, at, false), mask)));
+        writes.push((format!("write_{name}"), leaf(&tuple(query, at, true), mask)));
         enforcing.push((format!("{name}_mask_boolean"), booleanity(mask)));
     }
-    for (query, name) in FRAME_NAMES.iter().enumerate().take(6).skip(1) {
-        enforcing.push((format!("{name}_writes_back"), write_back(query)));
+    for (at, &query) in queries.iter().enumerate() {
+        if FRAME_READ_ONLY.contains(&query) {
+            enforcing.push((
+                format!("{}_writes_back", FRAME_NAMES[query]),
+                write_back(at),
+            ));
+        }
     }
-    for (name, gate) in x0_gates() {
-        enforcing.push((String::from(name), gate));
+    if let Some(at) = rd {
+        for (name, gate) in x0_gates(at, width) {
+            enforcing.push((String::from(name), gate));
+        }
+    }
+
+    // The row-wise lists pair neighbours, so each side of the tree is a power
+    // of two. A family whose query count is not one pads with leaves that are
+    // literally 1, the product's identity: they read no column, commit
+    // nothing, and carry no obligation.
+    let side = width.next_power_of_two();
+    for (leaves, name) in [(&mut reads, "read"), (&mut writes, "write")] {
+        for i in 0..side - width {
+            leaves.push((
+                format!("{name}_pad_{i}"),
+                GateDef::Linear {
+                    terms: vec![],
+                    constant: lit(1),
+                },
+            ));
+        }
     }
 
     assemble(
@@ -369,7 +488,7 @@ fn frame_with_lookups(trace_vars: u32, lookups: Vec<LookupExpr>) -> CircuitArtif
         [reads, writes],
         enforcing,
         lookups,
-        FRAME_QUERIES,
+        width,
     )
 }
 
@@ -832,23 +951,105 @@ pub fn check_memory(a: &CircuitArtifact) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    /// S14 acceptance 12's negative control. The frame's 16 obligations, less
-    /// the last gadget's `gap_lo_rd` — an obligation built and then dropped
-    /// before the artifact is written — fail the build at the count assertion,
-    /// before `validate` or `check_memory` run. The control beside it is the
-    /// same call with every obligation, which is `frame_artifact`.
+    /// S14 acceptance 12's negative control. The `ADD_SUB_LUI_AUIPC` frame's
+    /// 14 obligations, less the last gadget's `gap_lo_rd` — an obligation
+    /// built and then dropped before the artifact is written — fail the build
+    /// at the count assertion, before `validate` or `check_memory` run. The
+    /// control beside it is the same call with every obligation, which is
+    /// `frame_artifact`.
     #[test]
     #[should_panic(
-        expected = "every read carries two gap obligations, so 8 reads need 16 \
-                               obligations; 15 reached the artifact"
+        expected = "every read carries two gap obligations, so 7 reads need 14 \
+                               obligations; 13 reached the artifact"
     )]
     fn a_dropped_gap_obligation_fails_the_build() {
+        let queries = frame_queries(family::ADD_SUB_LUI_AUIPC);
         let mut lookups = Vec::new();
-        for query in 0..FRAME_QUERIES {
-            lookups.extend(gap_lookups(query));
+        for (at, &query) in queries.iter().enumerate() {
+            lookups.extend(gap_lookups(query, at));
         }
-        assert_eq!(frame_with_lookups(4, lookups.clone()), frame_artifact(4));
+        assert_eq!(
+            frame_with_lookups(queries, 4, lookups.clone()),
+            frame_artifact(queries, 4)
+        );
         lookups.pop();
-        frame_with_lookups(4, lookups);
+        frame_with_lookups(queries, 4, lookups);
+    }
+
+    /// The unmasked write tuple, which only the frame's leaves use, is the
+    /// read tuple's twin: `crates/constraints/tests/memory.rs` reads both.
+    #[test]
+    fn a_write_tuple_is_a_linear_gate() {
+        assert!(matches!(write_tuple(RD), GateDef::Linear { .. }));
+    }
+
+    /// Every execution family's frame builds at its own width — `assemble`
+    /// runs `validate` and `check_memory` and panics on either refusal, so
+    /// construction succeeding is the assertion — with `1 + 5w` memory
+    /// columns, `w + 3` witness columns, `2w` obligations, and a gate list 0
+    /// padded to a power of two a side. `ADD_SUB_LUI_AUIPC`, `MEM_WORD` and
+    /// `ATOMICS` are the widths that are not powers of two, so they are the
+    /// families whose constant-1 pad leaves this exercises.
+    #[test]
+    fn every_execution_family_builds_its_frame() {
+        let widths = [
+            (family::ADD_SUB_LUI_AUIPC, 7),
+            (family::JUMP_BRANCH_SLT, 4),
+            (family::SHIFT_BITWISE, 4),
+            (family::MUL_DIV, 4),
+            (family::MEM_WORD, 6),
+            (family::MEM_SUBWORD, 6),
+            (family::ATOMICS, 5),
+        ];
+        for (id, width) in widths {
+            assert_eq!(frame_queries(id).len(), width, "family {id}");
+            let a = family_frame_artifact(id, 6);
+            assert_eq!(a.memory.len(), 1 + 5 * width, "family {id}");
+            assert_eq!(a.witness.len(), width + 3, "family {id}");
+            assert_eq!(a.lookups.len(), 2 * width, "family {id}");
+            assert_eq!(
+                a.layers[0].width as usize,
+                2 * width.next_power_of_two(),
+                "family {id}"
+            );
+        }
+    }
+
+    /// `INIT_TEARDOWN` runs no cycles, so it has no frame: its artifact is
+    /// `image_window_artifact`.
+    #[test]
+    #[should_panic(expected = "initializes RAM and runs no cycles, so it has no frame")]
+    fn init_teardown_has_no_frame() {
+        frame_queries(family::INIT_TEARDOWN);
+    }
+
+    /// `ZERO_WINDOWS` likewise: its artifact is `zero_window_artifact`.
+    #[test]
+    #[should_panic(expected = "initializes RAM and runs no cycles, so it has no frame")]
+    fn zero_windows_has_no_frame() {
+        frame_queries(family::ZERO_WINDOWS);
+    }
+
+    /// An id past the table is not a family.
+    #[test]
+    #[should_panic(expected = "is not in constants::family")]
+    fn an_id_off_the_table_is_not_a_family() {
+        frame_queries(family::COUNT);
+    }
+
+    /// A query list that is not the pc query followed by a strictly ascending
+    /// subset is refused before anything is built: the pc query is mandatory,
+    /// and a repeat or a descent would give two slots one query's columns.
+    #[test]
+    #[should_panic(expected = "a family's queries are the pc query then a strictly ascending")]
+    fn a_frame_without_the_pc_query_is_refused() {
+        frame_artifact(&[RS1, RD], 4);
+    }
+
+    /// The same rule the other way: a descending list is not a subset.
+    #[test]
+    #[should_panic(expected = "a family's queries are the pc query then a strictly ascending")]
+    fn a_frame_whose_queries_descend_is_refused() {
+        frame_artifact(&[PC, RD, RS1], 4);
     }
 }

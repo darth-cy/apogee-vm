@@ -23,3 +23,8 @@ serde.workspace = true
 # writes through `to_extend` into a plain `Vec`, and reads through the
 # hand-written sequence visitor in `src/archive.rs`.
 postcard.workspace = true
+
+[dev-dependencies]
+# `Instr`, to hold `constraints::memory::frame_queries` to `program::row_kind`
+# instruction by instruction: tests only, never the runtime graph.
+isa.workspace = true
