@@ -98,6 +98,13 @@ Read this as a hard constraint, not advice. This is the prime directive made spe
 13. **When a rule here fights a stage requirement, the stage wins and you record it.** These are defaults for everything the stage prompts leave open, not permission to skip specified work. Never silently deliver less than the stage asked for.
 
 ## Frozen protocol invariants (violating any of these is a protocol-version change)
+
+**What "frozen" means here: strongly decided, not immovable.** Every item below was chosen deliberately and is expensive to revisit — changing one is a protocol-version change, and it invalidates committed fixtures, published identities, handoff notes and any proof already produced. That cost is the point. It makes the default *keep it*, and it makes churn expensive. It does not put these decisions beyond reasoning.
+
+So read a frozen item as a claim you may assess, not a wall to route around. If one is wrong, buys less than it costs, rests on an assumption that has since changed, or is contradicted by what a later stage learns, **say so — with the argument and the evidence, and with the price of changing it stated**. Weigh that price honestly: what has to be regenerated, re-pinned, or re-proven. Then raise it and get a decision; do not change it unilaterally, and do not quietly build around it either. Silence is the failure mode in both directions. When a frozen item does change, record the change and the reason where the item lives, and amend this file.
+
+The same reading applies to the word "frozen" everywhere else in this repository — the per-crate `CLAUDE.md` invariants, the specs in `docs/spec/`, and the handoff notes. A later stage discovering that an earlier stage froze the wrong thing is a normal event, not a violation.
+
 - **Fields.** Fr = BN254 scalar field, modulus `21888242871839275222246405745257275088548364400416034343698204186575808495617`. Fq = BN254 base field, modulus `21888242871839275222246405745257275088696311157297823662689037894645226208583`. Challenges are single Fr elements (no extension field — ~250-bit soundness per use).
 - **Transcript.** Poseidon2 over Fr, t=3, rate 2, capacity 1, x^5 S-box, 8 full + 56 partial rounds, zero pad and +height, BN254 `RC3` constants; duplex with overwrite absorption, absorb-length tag in the capacity lane; persistent state per proof.
 - **G1 point absorption.** Affine coordinates, each split into two ~128-bit limbs → 4 Fr elements per point; point at infinity = a frozen sentinel encoding. Never absorb compressed bytes. On-curve/subgroup validation is the verifier/decider's job; the transcript binds claimed limbs.
