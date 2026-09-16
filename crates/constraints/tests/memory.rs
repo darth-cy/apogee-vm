@@ -22,8 +22,8 @@ use constraints::memory::{
     RS2,
 };
 use constraints::{
-    CachedEntry, CircuitArtifact, Coeff, EnforcingEntry, GateDef, LayerSpec, LookupExpr, Padding,
-    PolyAddress, ProducingEntry, Relation, ScratchSlot, VirtualKind,
+    CachedEntry, CircuitArtifact, Coeff, ConstraintError, EnforcingEntry, GateDef, LayerSpec,
+    LookupExpr, Padding, PolyAddress, ProducingEntry, Relation, ScratchSlot, VirtualKind,
     COEFFICIENT_ENCODING_CANONICAL_LE, FORMAT_VERSION,
 };
 use field::Fr;
@@ -1252,7 +1252,20 @@ fn a_frame_missing_a_booleanity_gate_is_refused() {
                 e.relation -= (e.relation > r) as u32;
             }
         }
-        assert_eq!(a.validate(), Ok(()), "{query}");
+        // Two independent rules bite, and each names its own subject. Since
+        // S15 a mask is also the selector of that query's gap obligations, and
+        // `validate` refuses a selector gate list 0 does not hold to
+        // booleanity (`docs/spec/lookup.md` §2).
+        assert_eq!(
+            a.validate(),
+            Err(ConstraintError::Malformed {
+                detail: format!(
+                    "lookup `gap_hi_{query}` has selector {mask}, which gate list 0 does not \
+                     hold to booleanity"
+                )
+            }),
+            "{query}"
+        );
         assert_eq!(
             check_memory(&a),
             Err(format!(

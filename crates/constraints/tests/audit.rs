@@ -4,14 +4,14 @@
 
 mod common;
 
-use common::{toy, toy_cache_free};
+use common::{fixture_bytes, toy, toy_cache_free};
 use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress, CATALOGUE};
 
 /// The variant count, and each variant's name, written as an exhaustive match
 /// with no wildcard: a variant appended to `GateDef` stops this file compiling
 /// until the audit accounts for it. The names are this file's, not the
 /// catalogue's, so the catalogue is checked against something.
-const VARIANTS: usize = 6;
+const VARIANTS: usize = 7;
 
 fn variant_name(g: &GateDef) -> &'static str {
     match g {
@@ -21,6 +21,7 @@ fn variant_name(g: &GateDef) -> &'static str {
         GateDef::AffineProduct { .. } => "AffineProduct",
         GateDef::TreeProduct { .. } => "TreeProduct",
         GateDef::Quadratic { .. } => "Quadratic",
+        GateDef::TreeCross { .. } => "TreeCross",
     }
 }
 
@@ -73,6 +74,7 @@ fn one_of_each() -> [GateDef; VARIANTS] {
             linear: vec![(one, x)],
             products: vec![(one, x, y)],
         },
+        GateDef::TreeCross { left: x, right: y },
     ]
 }
 
@@ -98,16 +100,28 @@ fn variant_counts(a: &CircuitArtifact) -> [usize; VARIANTS] {
     counts
 }
 
-/// Acceptance 11: across both compilations of the toy — the audit runs over
-/// all of them, since a variant absent from one may be the one another uses —
+/// S15's combined toy, the one committed circuit with a fraction tree in it.
+fn lookup_toy() -> CircuitArtifact {
+    let bytes = fixture_bytes(
+        "lookup_toy.bin",
+        "abab86f0c6cda7d087de044f632f7764bc0cf8db4bdb95ebe229a4f61a85da8b",
+    );
+    CircuitArtifact::from_bytes(&bytes).expect("the S15 toy decodes")
+}
+
+/// Acceptance 11: across every committed circuit — the audit runs over all of
+/// them, since a variant absent from one may be the one another uses —
 /// every `GateDef` variant is emitted, so none is dead and none needs to be
 /// documented as reserved. Each emitted gate is mapped to its catalogue row by
 /// this file's own variant names, so a catalogue row renamed away from its
 /// variant fails here too.
+///
+/// `TreeCross` is S15's, and the S13 toy emits none: a fraction tree is the one
+/// thing that halves two columns together, and only the S15 toy has one.
 #[test]
-fn the_audit_over_both_compilations_emits_every_variant() {
+fn the_audit_over_every_committed_circuit_emits_every_variant() {
     let mut emitted = [false; VARIANTS];
-    for a in [toy(), toy_cache_free()] {
+    for a in [toy(), toy_cache_free(), lookup_toy()] {
         for g in every_gate(&a) {
             emitted[catalogue_row(g)] = true;
         }
@@ -137,9 +151,9 @@ fn the_audit_over_both_compilations_emits_every_variant() {
 /// the flat list carries the `AffineProduct` the cached gates do not.)
 #[test]
 fn each_compilation_reports_its_own_variant_counts() {
-    //                  Linear Product Mask Affine Tree Quadratic
-    let cached_counts = [3, 5, 2, 1, 4, 2];
-    let cache_free_counts = [2, 4, 2, 2, 4, 2];
+    //                  Linear Product Mask Affine Tree Quadratic Cross
+    let cached_counts = [3, 5, 2, 1, 4, 2, 0];
+    let cache_free_counts = [2, 4, 2, 2, 4, 2, 0];
 
     assert_eq!(variant_counts(&toy()), cached_counts, "toy_cached.bin");
     assert_eq!(

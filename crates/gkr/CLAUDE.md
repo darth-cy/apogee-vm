@@ -28,6 +28,11 @@ pub fn prove(artifact: &CircuitArtifact, values: &LayerValues, challenges: &Exte
 ```
 
 ## Frozen invariants
+- **A halving list reads both children of every column of its layer**, and a halving
+  gate reads each operand there. `RowReader` loads the low half as child 0 and the high
+  half as child 1 for every column, whatever the list's gates read, so S15's `TreeCross`
+  — which reads a fraction's numerator and its denominator — needed nothing of the
+  prover but the resolution `gkr-verify` owns.
 - **One `G` for both passes.** Every gate is evaluated through a
   `gkr_verify::ResolvedList`, which calls the kernel: the forward pass and the self-check
   per row, the prover at every node of every round, the verifier — through `summand`,

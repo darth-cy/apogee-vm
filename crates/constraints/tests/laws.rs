@@ -927,23 +927,35 @@ fn a_zero_coefficient_operand_is_still_range_checked_first() {
 // Halving lists
 // ---------------------------------------------------------------------------
 
-/// A halving list halves every column of its layer, in order. List 2's two
-/// trees swapped — entry 0 halving `L{2}[1]` — are refused, naming the entry
-/// and the column it must halve. Relations 6 and 7 are swapped with them, so
-/// the flat list agrees and only the order is wrong; the legal spelling of this
-/// reordering is `toy_with_list_1_reordered`, which validates.
+/// A halving list halves every column of its layer, and every entry of it is a
+/// halving shape. Since S15 an entry may halve any column of its layer — a
+/// fraction tree's numerator reads its denominator too — so list 2's two trees
+/// swapped, relations 6 and 7 swapped with them so the flat list agrees, is a
+/// lawful circuit and not a reordering to refuse. What is refused is an entry
+/// that halves nothing: `define_abm_product` rewritten as a copy of `L{2}[0]`,
+/// with its relation rewritten alike, leaves the list writing a column the
+/// layer above cannot be the halving of.
 #[test]
-fn a_halving_list_refuses_its_trees_out_of_order() {
+fn a_halving_list_refuses_a_gate_that_halves_nothing() {
     assert_eq!(toy_with_list_1_reordered().validate(), Ok(()));
 
+    let mut swapped = toy();
+    swapped.layers[2].producing[0].gate = tree(inner(2, 1));
+    swapped.layers[2].producing[1].gate = tree(inner(2, 0));
+    swapped.relations[6].gate = tree(scratch(4));
+    swapped.relations[7].gate = tree(scratch(3));
+    assert_eq!(swapped.validate(), Ok(()));
+
+    let copy = |x| GateDef::Linear {
+        terms: vec![(lit(1), x)],
+        constant: lit(0),
+    };
     let mut a = toy();
-    a.layers[2].producing[0].gate = tree(inner(2, 1));
-    a.layers[2].producing[1].gate = tree(inner(2, 0));
-    a.relations[6].gate = tree(scratch(4));
-    a.relations[7].gate = tree(scratch(3));
+    a.layers[2].producing[0].gate = copy(inner(2, 0));
+    a.relations[6].gate = copy(scratch(3));
     assert_malformed(
         &a,
-        "`define_abm_product` in halving gate list 2 is not TreeProduct of L{2}[0]",
+        "`define_abm_product` in halving gate list 2 is neither a TreeProduct nor a TreeCross",
     );
 }
 
@@ -1003,10 +1015,13 @@ fn a_halving_list_refuses_an_enforcing_gate() {
     );
 }
 
-/// A row-wise list has no `TreeProduct`. `fingerprint3` as a tree of
+/// A row-wise list has neither halving shape. `fingerprint3` as a tree of
 /// `L{1}[1]`, its relation a tree of `scratch[1]`, is refused in row-wise
 /// gate list 1: the list's kind is unchanged, so its variable count still
-/// holds and the shape is the one thing wrong.
+/// holds and the shape is the one thing wrong. Then the same for `TreeCross`,
+/// S15's fraction-tree numerator — it reads four values where a row-wise list
+/// supplies two, so an artifact carrying one outside a halving list is refused
+/// here rather than panicking in `eval_gate` on the first forward pass.
 #[test]
 fn a_row_wise_list_refuses_a_tree() {
     let mut a = toy();
@@ -1015,6 +1030,15 @@ fn a_row_wise_list_refuses_a_tree() {
     assert_malformed(
         &a,
         "`define_fingerprint3` is a TreeProduct in row-wise gate list 1",
+    );
+
+    let cross = |left, right| GateDef::TreeCross { left, right };
+    let mut b = toy();
+    b.layers[1].producing[1].gate = cross(inner(1, 0), inner(1, 1));
+    b.relations[5].gate = cross(scratch(0), scratch(1));
+    assert_malformed(
+        &b,
+        "`define_fingerprint3` is a TreeCross in row-wise gate list 1",
     );
 }
 
@@ -1264,8 +1288,29 @@ fn a_virtual_table_listed_twice_is_refused() {
     assert_malformed(&a, "virtual table RowIndex is listed twice");
 }
 
+/// `x − x·x = 0` on gate list 0, named `<name>_boolean`, as a gate and as its
+/// relation: what S15's selector rule asks of every lookup's selector.
+fn with_booleanity(a: &mut CircuitArtifact, x: PolyAddress, name: &str) {
+    let gate = GateDef::Quadratic {
+        constant: lit(0),
+        linear: vec![(lit(1), x)],
+        products: vec![(neg(1), x, x)],
+    };
+    a.layers[0].enforcing.push(EnforcingEntry {
+        relation: a.relations.len() as u32,
+        gate: gate.clone(),
+    });
+    a.relations.push(Relation {
+        name: format!("{name}_boolean"),
+        output: None,
+        gate,
+    });
+}
+
 /// The toy with one lookup, `range`: `4·m − row − 1` on the timestamp channel
-/// under selector `s`, edited by `edit`.
+/// under selector `s`, edited by `edit`. Gate list 0 gains a booleanity gate
+/// for every column the test ever selects on, since S15 refuses a selector
+/// without one.
 fn toy_with_lookup(edit: fn(&mut LookupExpr)) -> CircuitArtifact {
     let mut lookup = LookupExpr {
         name: "range".into(),
@@ -1275,6 +1320,9 @@ fn toy_with_lookup(edit: fn(&mut LookupExpr)) -> CircuitArtifact {
     };
     edit(&mut lookup);
     let mut a = toy();
+    for (x, name) in [(S, "s"), (M, "m"), (A, "a_column")] {
+        with_booleanity(&mut a, x, name);
+    }
     a.lookups.push(lookup);
     a
 }
@@ -1353,6 +1401,37 @@ fn a_lookup_is_refused_unless_it_keeps_the_lookup_rules() {
         "has selector W[4]",
     );
     refused(|l| l.selector = inner(1, 0), "has selector L{1}[0]");
+    refused(
+        |l| l.selector = PolyAddress::Witness(1),
+        "has selector W[1], which gate list 0 does not hold to booleanity",
+    );
+
+    // A table channel's tuple is 1 to MAX_TUPLE wide, and every lookup of one
+    // channel has the same width, because they share one table.
+    fn generic(l: &mut LookupExpr) {
+        l.channel = lookup_channel::GENERIC;
+        l.tuple = vec![linear(&[(lit(1), M)], lit(0)); 2];
+    }
+    assert_eq!(toy_with_lookup(generic).validate(), Ok(()));
+    refused(
+        |l| {
+            generic(l);
+            l.tuple = vec![linear(&[(lit(1), M)], lit(0)); lookup_channel::MAX_TUPLE + 1];
+        },
+        &format!(
+            "has {} expressions; a table channel's has 1 to lookup_channel::MAX_TUPLE",
+            lookup_channel::MAX_TUPLE + 1
+        ),
+    );
+    let mut mixed = toy_with_lookup(generic);
+    let mut narrow = mixed.lookups[0].clone();
+    narrow.name = "range_narrow".into();
+    narrow.tuple.pop();
+    mixed.lookups.push(narrow);
+    assert_malformed(
+        &mixed,
+        "lookup `range` has 2 expressions and `range_narrow` has 1, and one channel has one table",
+    );
 
     assert_malformed(
         &toy_with_lookup(|l| l.name = "a".into()),

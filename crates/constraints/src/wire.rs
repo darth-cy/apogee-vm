@@ -126,6 +126,8 @@ impl Serialize for VirtualKind {
         match self {
             VirtualKind::RowIndex => 0u32.serialize(s),
             VirtualKind::RamLive => 1u32.serialize(s),
+            VirtualKind::Range19 => 2u32.serialize(s),
+            VirtualKind::Range16 => 3u32.serialize(s),
         }
     }
 }
@@ -135,6 +137,8 @@ impl<'de> Deserialize<'de> for VirtualKind {
         match u32::deserialize(d)? {
             0 => Ok(VirtualKind::RowIndex),
             1 => Ok(VirtualKind::RamLive),
+            2 => Ok(VirtualKind::Range19),
+            3 => Ok(VirtualKind::Range16),
             _ => Err(D::Error::custom("unknown virtual table kind")),
         }
     }
@@ -148,6 +152,8 @@ impl Serialize for PolyAddress {
             PolyAddress::Setup(i) => (2, i, 0),
             PolyAddress::Virtual(VirtualKind::RowIndex) => (3, 0, 0),
             PolyAddress::Virtual(VirtualKind::RamLive) => (3, 1, 0),
+            PolyAddress::Virtual(VirtualKind::Range19) => (3, 2, 0),
+            PolyAddress::Virtual(VirtualKind::Range16) => (3, 3, 0),
             PolyAddress::Inner { layer, offset } => (4, layer, offset),
             PolyAddress::Scratch(i) => (5, i, 0),
             PolyAddress::Cached { layer, offset } => (6, layer, offset),
@@ -164,6 +170,8 @@ impl<'de> Deserialize<'de> for PolyAddress {
             (2, i, 0) => Ok(PolyAddress::Setup(i)),
             (3, 0, 0) => Ok(PolyAddress::Virtual(VirtualKind::RowIndex)),
             (3, 1, 0) => Ok(PolyAddress::Virtual(VirtualKind::RamLive)),
+            (3, 2, 0) => Ok(PolyAddress::Virtual(VirtualKind::Range19)),
+            (3, 3, 0) => Ok(PolyAddress::Virtual(VirtualKind::Range16)),
             (4, layer, offset) => Ok(PolyAddress::Inner { layer, offset }),
             (5, i, 0) => Ok(PolyAddress::Scratch(i)),
             (6, layer, offset) => Ok(PolyAddress::Cached { layer, offset }),
@@ -207,6 +215,7 @@ impl Serialize for GateDef {
             GateDef::MaskIntoIdentity { .. } => (2, 0),
             GateDef::AffineProduct { left, .. } => (3, left.len() as u32),
             GateDef::TreeProduct { .. } => (4, 0),
+            GateDef::TreeCross { .. } => (6, 0),
             GateDef::Quadratic { linear, .. } => (5, linear.len() as u32),
         };
         (
@@ -295,6 +304,13 @@ impl<'de> Deserialize<'de> for GateDef {
                         .zip(o[t..].chunks_exact(2))
                         .map(|(b, yz)| (*b, yz[0], yz[1]))
                         .collect(),
+                })
+            }
+            6 => {
+                shape(split == 0 && c.is_empty() && o.len() == 2)?;
+                Ok(GateDef::TreeCross {
+                    left: o[0],
+                    right: o[1],
                 })
             }
             _ => Err(D::Error::custom("malformed gate: unknown shape tag")),

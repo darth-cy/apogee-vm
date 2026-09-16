@@ -21,6 +21,8 @@
 
 use std::fmt;
 
+pub mod lookup_tables;
+
 use constants::extra_mask::{
     add_sub_lui_auipc as alu, atomics, jump_branch_slt as jbs, mem_subword, mem_word, mul_div,
     shift_bitwise as sb, system_code,

@@ -25,9 +25,11 @@ here.
   is the unregistered placeholder 0, and `family::CODE_VERSION` stays 0 with it: S12
   (`guest_memory::RAM_LENGTH`) and S14 (`family::DEFAULT_HEIGHTS[INIT_TEARDOWN]`,
   `family::COUNT`, `challenge_slot::NAMES`, `lookup_channel`) changed values without
-  bumping either, by the owner's decision (`docs/handoff/S14-multiset.md`).
+  bumping either, by the owner's decision (`docs/handoff/S14-multiset.md`). S15 appended
+  only — two channels, eight challenge slots and one tag — and changed no value, except
+  `lookup_channel::BITS`, which grew from two entries to four.
 
-## Contents as of S14
+## Contents as of S15
 | Item | Meaning |
 | --- | --- |
 | `PROTOCOL_VERSION: u32` | Placeholder, `0`, until the first registered identity. First item absorbed into every transcript. |
@@ -58,9 +60,9 @@ here.
 | `POSEIDON2_RC3_INITIAL: [[&str; 3]; 4]` | Round constants, 4 initial full rounds. |
 | `POSEIDON2_RC3_INTERNAL: [&str; 56]` | Round constants, 56 partial rounds, lane 0. |
 | `POSEIDON2_RC3_TERMINAL: [[&str; 3]; 4]` | Round constants, 4 terminal full rounds. |
-| `transcript_tags` | The frozen tag table: 32 tags as of S14, sequential from 1. |
-| `challenge_slot` | S13's `TOY = 0`; S14's memory slots `MEM_GAMMA` 1, `MEM_ALPHA_ADDR` 2, `MEM_ALPHA_TS` 3, `MEM_ALPHA_VAL` 4, and the derived `MEM_WINDOW_CONSTANT` 5; `NAMES`. Append-only. |
-| `lookup_channel` | S14. `TIMESTAMP = 0` and `RANGE16 = 1`, their bounds `BITS = [19, 16]`, `NAMES`. Append-only; `docs/spec/memory.md` §7, which freezes the range convention `RANGE16` serves. |
+| `transcript_tags` | The frozen tag table: 33 tags as of S15, sequential from 1. |
+| `challenge_slot` | S13's `TOY = 0`; S14's memory slots `MEM_GAMMA` 1, `MEM_ALPHA_ADDR` 2, `MEM_ALPHA_TS` 3, `MEM_ALPHA_VAL` 4, and the derived `MEM_WINDOW_CONSTANT` 5; S15's `LOOKUP_G` 6 and `LOOKUP_BETA` 7, drawn per shard, with the derived powers `LOOKUP_BETA_2..6` 8–12 (also as `LOOKUP_BETA_POWERS`) and `LOOKUP_DECODER_NEUTRAL` 13; `NAMES`. Append-only. |
+| `lookup_channel` | S14's `TIMESTAMP = 0` and `RANGE16 = 1`, S15's `GENERIC = 2` and `DECODER = 3`; `COUNT`, `IS_RANGE`, the bounds `BITS = [19, 16, 0, 0]` — 0 where `IS_RANGE` is false, which is the absence of a bound and not a bound of `[0, 1)` — `NAMES`, and `MAX_TUPLE = 7`, past which `β` has no slot. Append-only; `docs/spec/memory.md` §7 freezes the range convention `RANGE16` serves and `docs/spec/lookup.md` the rest. |
 | `address_space` | S12. `REG = 1`, `RAM = 2`, `PC = 3`: nonzero, so no real memory tuple is all zeros. |
 | `memory` | S12's clock, `TS_STEP` and `TS_BITS`; S14's `HALT_PC = 1`, the tuple part order `PART_AS/ADDR/TS/VAL`, the root positions `READ_ROOT = 0` and `WRITE_ROOT = 1`, and `RAM_LIVE_BIT = 14`. `docs/spec/memory.md`. |
 | `family` | S11. The append-only `FamilyId` table (0 add/sub/lui/auipc … 6 atomics, 7 `INIT_TEARDOWN`, since S14 RAM window 0 only; S14's 8 `ZERO_WINDOWS`), `COUNT`, the height menu, the default heights, `DEFAULT_BYTECODE_SIZE_WORDS` and the decoded-table `CODE_VERSION`. |
@@ -72,7 +74,11 @@ S11 added `PROGRAM_IDENTITY` (22), `VM_CONFIG` (23) and `SHARD_COUNTS` (24), all
 the program-identity sponge's opening message, and the first two of the statement
 descriptor's three messages. S14 added `MEMORY_WINDOWS` (30), the third; `MEMORY_BOUNDARY`
 (31), the 64 register and pc boundary scalars; and `PROGRAM_ENTRY` (32), the entry pc in
-the identity sponge — all scalars, `docs/spec/memory.md` §6. `family` and `extra_mask` are
+the identity sponge — all scalars, `docs/spec/memory.md` §6. S15 added
+`LOOKUP_CHALLENGE` (33), of **challenge** kind: a shard draws `g` then `β` under it, after
+every witness and multiplicity commitment of the shard is absorbed
+(`docs/spec/lookup.md` §2). One tag, one kind; the two roles are separated by their fixed
+position in the shard's script, as `SUMCHECK_CHALLENGE`'s are. `family` and `extra_mask` are
 numbers the decoded tables and the identity recipe are built from, so the same rule applies
 to them as to tags: **append, never renumber** — a renumbered family or mask bit is a
 different program identity for every program. `crates/program/CLAUDE.md` is the design

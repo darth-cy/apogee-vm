@@ -1,7 +1,7 @@
 //! The lookup element, `docs/spec/memory.md` §7. `check_laws` holds every
 //! lookup to the rules of `docs/spec/gkr.md` §4.2 with code of its own, and
-//! agrees with `CircuitArtifact::validate` on every mutant below: 6 lawful — an
-//! `M`, a `W` and an `S` selector and the `range16` channel among them — and 29
+//! agrees with `CircuitArtifact::validate` on every mutant below: 7 lawful — an
+//! `M`, a `W` and an `S` selector and the `range16` channel among them — and 31
 //! breaking one rule each, on both toys. `violated_lookups`, the native
 //! evaluator, reports exactly the lookups a row breaks, reads each lookup's bound
 //! from its own channel, and an evaluator reporting nothing, or everything, fails
@@ -9,7 +9,10 @@
 
 mod common;
 
-use checker::{check_laws, violated_lookups, WitnessRow};
+use checker::{
+    check_channel_roots, check_laws, check_lookup_discharge, check_padding_identity,
+    violated_lookups, ChannelSum, WitnessRow,
+};
 use common::*;
 use constants::{challenge_slot, lookup_channel, memory::RAM_LIVE_BIT};
 use constraints::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
@@ -223,6 +226,27 @@ fn mutants() -> Vec<Mutant> {
             push(a, |_| {});
             push(a, |l| l.selector = W1);
         }),
+        // Above position 0 an expression weights its columns by 1 and carries
+        // no constant, `β^0` being the literal 1 and `β^j·c` above it not one
+        // `Coeff`. Only a table channel has such a position.
+        m("a two-column generic lookup", true, |a| {
+            push(a, |l| {
+                l.channel = lookup_channel::GENERIC;
+                l.tuple.push(expression(&[(lit(1), W3)], lit(0)));
+            })
+        }),
+        m("a weighted expression above position 0", false, |a| {
+            push(a, |l| {
+                l.channel = lookup_channel::GENERIC;
+                l.tuple.push(expression(&[(lit(2), W3)], lit(0)));
+            })
+        }),
+        m("a constant on an expression above position 0", false, |a| {
+            push(a, |l| {
+                l.channel = lookup_channel::GENERIC;
+                l.tuple.push(expression(&[(lit(1), W3)], lit(5)));
+            })
+        }),
         m("an uppercase name", false, |a| {
             push(a, |l| l.name = "Range".to_string())
         }),
@@ -238,7 +262,7 @@ fn mutants() -> Vec<Mutant> {
 #[test]
 fn check_laws_agrees_with_validate_on_every_lookup_mutant() {
     let mut runs = 0;
-    for (label, toy) in toys() {
+    for (label, toy) in selectable_toys() {
         assert!(toy.lookups.is_empty(), "{label}");
         for mutant in mutants() {
             let mut a = toy.clone();
@@ -260,7 +284,7 @@ fn check_laws_agrees_with_validate_on_every_lookup_mutant() {
             runs += 1;
         }
     }
-    assert_eq!(runs, 2 * 35, "mutant runs");
+    assert_eq!(runs, 2 * 38, "mutant runs");
 }
 
 // ---------------------------------------------------------------------------
@@ -373,7 +397,7 @@ type Evaluator = fn(&CircuitArtifact, &WitnessRow) -> Vec<String>;
 
 /// Every case, on both compilations.
 fn run(evaluate: Evaluator) -> Result<(), String> {
-    for (label, toy) in toys() {
+    for (label, toy) in selectable_toys() {
         let a = with_lookups(toy);
         for (what, cells, row, want) in cases() {
             let mut committed = vec![Fr::ZERO; a.committed().len()];
@@ -400,7 +424,7 @@ fn run(evaluate: Evaluator) -> Result<(), String> {
 /// read every lookup against one channel's bound.
 #[test]
 fn a_range16_lookup_is_bound_below_2_16() {
-    for (label, mut a) in toys() {
+    for (label, mut a) in selectable_toys() {
         let mut l = lookup("m_halfword", S0, expression(&[(lit(1), M0)], lit(0)));
         l.channel = lookup_channel::RANGE16;
         a.lookups.push(l);
@@ -437,4 +461,169 @@ fn an_evaluator_reporting_nothing_fails_the_same_cases() {
 fn an_evaluator_reporting_everything_fails_the_same_cases() {
     let everything: Evaluator = |a, _| a.lookups.iter().map(|l| l.name.clone()).collect();
     assert!(run(everything).is_err());
+}
+
+// ---------------------------------------------------------------------------
+// The selector's booleanity, and the LogUp checkers' negative controls
+// ---------------------------------------------------------------------------
+
+/// S15's selector rule, on the checker's side: `check_laws` refuses a lookup
+/// whose selector gate list 0 does not hold to `x − x·x = 0`, and `validate`
+/// agrees. Kills a `holds_booleanity` that returns true for anything — without
+/// which the rule would be enforced once, not twice.
+///
+/// Why the rule is needed: LogUp sums `s/(E + g)` over the rows, so a row at
+/// `s = −1` with an out-of-range tuple cancels a row at `s = 1` with the same
+/// tuple, and a gap of −1 that `violated_lookups` reports would pass.
+#[test]
+fn a_selector_without_a_booleanity_gate_is_refused_by_both() {
+    for (label, toy) in selectable_toys() {
+        // W0 is `a`, which no booleanity gate holds; W1 is `b`, which one does.
+        let mut a = toy.clone();
+        a.lookups
+            .push(lookup("range", W0, expression(&[(lit(1), M0)], lit(0))));
+        let ours = check_laws(&a).expect_err("a selector with no booleanity gate");
+        assert!(
+            ours.ends_with("gate list 0 does not hold selector W[0] to booleanity"),
+            "{label}: {ours}"
+        );
+        assert!(a.validate().is_err(), "{label}: validate agrees");
+
+        let mut lawful = toy;
+        lawful
+            .lookups
+            .push(lookup("range", W1, expression(&[(lit(1), M0)], lit(0))));
+        assert_eq!(check_laws(&lawful), Ok(()), "{label}");
+        assert_eq!(lawful.validate(), Ok(()), "{label}");
+    }
+}
+
+/// `checker::check_lookup_discharge`'s negative controls, the twins of
+/// `constraints/tests/lookup.rs`' — an obligation nothing discharges, and one
+/// two columns discharge. Kills a check that returns `Ok` whatever it is
+/// handed, which is what master rule 8 asks of every checker.
+#[test]
+fn the_discharge_cross_check_refuses_an_unconsumed_and_a_doubled_obligation() {
+    for (label, toy) in selectable_toys() {
+        // The toy has no channel, so its gate list 0 discharges nothing: one
+        // lookup is already one too many.
+        let mut unconsumed = toy.clone();
+        push(&mut unconsumed, |_| {});
+        assert_eq!(check_laws(&unconsumed), Ok(()), "{label}");
+        let e = check_lookup_discharge(&unconsumed, &[]).expect_err("nothing discharges it");
+        assert!(
+            e.contains("lookup `range` is the denominator of 0 gate-list-0 columns"),
+            "{label}: {e}"
+        );
+
+        let _ = toy;
+    }
+
+    // A column that is two lookups' denominator needs a circuit whose gate list
+    // 0 has denominators at all, which the S13 toy does not: S15's combined toy
+    // with one of its lookups duplicated.
+    let mut doubled = lookup_toy();
+    assert_eq!(check_lookup_discharge(&doubled, &[]), Ok(()));
+    let mut twin = doubled.lookups[0].clone();
+    twin.name = format!("{}_twin", twin.name);
+    let name = doubled.lookups[0].name.clone();
+    doubled.lookups.push(twin);
+    let e = check_lookup_discharge(&doubled, &[]).expect_err("two lookups, one column");
+    assert!(
+        e.contains(&format!(
+            "column `{name}_den` is the denominator of 2 lookups"
+        )),
+        "{e}"
+    );
+}
+
+/// S15's combined toy, the one committed circuit whose gate list 0 carries
+/// lookup denominators.
+fn lookup_toy() -> CircuitArtifact {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../constraints/tests/vectors/lookup_toy.bin"
+    );
+    let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
+    CircuitArtifact::from_bytes(&bytes).expect("the S15 toy decodes")
+}
+
+/// `checker::check_channel_roots`' negative control: a root pair that is not the
+/// native recomputation is refused, on each half of the pair separately. Kills a
+/// comparison that looks at one half, or at neither.
+#[test]
+fn the_channel_root_comparison_refuses_each_half_alone() {
+    let sums = vec![ChannelSum {
+        channel: lookup_channel::TIMESTAMP,
+        num: Fr::from_u64(7),
+        den: Fr::from_u64(11),
+        unmatched: Vec::new(),
+    }];
+    assert_eq!(
+        check_channel_roots(&[(Fr::from_u64(7), Fr::from_u64(11))], &sums),
+        Ok(())
+    );
+    let moved = |num: u64, den: u64| {
+        check_channel_roots(&[(Fr::from_u64(num), Fr::from_u64(den))], &sums)
+            .expect_err("a root that is not the recomputation")
+    };
+    assert!(moved(8, 11).contains("num root is not its fractional sum's numerator"));
+    assert!(moved(7, 12).contains("den root is not the product of its leaf denominators"));
+    assert!(check_channel_roots(&[], &sums).is_err(), "a missing pair");
+}
+
+/// `ChannelSum::sum` is `num/den`, and no sum at all where the denominator is
+/// 0. Every other assertion on it is made where `num` is 0, where `num·den` and
+/// `num·den⁻¹` agree; these do not.
+#[test]
+fn a_channel_sum_is_its_numerator_over_its_denominator() {
+    let of = |num: u64, den: u64| ChannelSum {
+        channel: lookup_channel::TIMESTAMP,
+        num: Fr::from_u64(num),
+        den: Fr::from_u64(den),
+        unmatched: Vec::new(),
+    };
+    assert_eq!(of(6, 3).sum(), Some(Fr::from_u64(2)));
+    assert_eq!(of(0, 7).sum(), Some(Fr::ZERO), "a channel that holds");
+    assert_eq!(
+        of(6, 0).sum(),
+        None,
+        "no sum exists over a zero denominator, which is why the root check is both conditions"
+    );
+}
+
+/// The padding contract's product-tree clause still bites on a circuit that
+/// carries fraction trees. A fraction tree's identity is `(0, 1)` and its
+/// padding rows are not idle at all, so the columns a `TreeCross` reads are
+/// exempt — the product trees' columns in the same halving list are not, and a
+/// padding row whose pc query is live makes the read leaf `γ − compress`
+/// instead of 1. Kills an exemption widened from "the columns a `TreeCross`
+/// reads" to "every column, once the list holds a `TreeCross`".
+#[test]
+fn the_padding_identity_clause_survives_a_fraction_tree_in_the_same_list() {
+    let a = lookup_toy();
+    assert_eq!(check_padding_identity(&a), Ok(()));
+    assert!(
+        a.layers.iter().any(|l| l.halving
+            && l.producing
+                .iter()
+                .any(|e| matches!(e.gate, GateDef::TreeCross { .. }))
+            && l.producing
+                .iter()
+                .any(|e| matches!(e.gate, GateDef::TreeProduct { .. }))),
+        "the toy's first halving list holds both tree shapes; without that this proves nothing"
+    );
+
+    let at = a
+        .memory
+        .iter()
+        .position(|n| n == "pc_mask")
+        .expect("the toy's frame has a pc mask");
+    let mut live = a.clone();
+    live.padding.row[at] = Fr::ONE;
+    let e = check_padding_identity(&live).expect_err("a padding row whose pc query is live");
+    assert!(
+        e.contains("padding identity: halving gate list") && e.ends_with("not 1"),
+        "{e}"
+    );
 }

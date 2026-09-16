@@ -382,8 +382,35 @@ in-cycle slot `Δ` itself.
 selector, tuple)`. It holds on a row where its selector is 0, or where its one `Linear`
 expression's canonical integer is below the channel's bound — `[0, 2^19)` on the timestamp
 channel, `[0, 2^16)` on `range16`. Every read carries two, the gap's chunks, selected by the
-query's mask. `checker::violated_lookups` checks them natively; S15 discharges them with LogUp.
-`docs/spec/memory.md` §7.
+query's mask. `checker::violated_lookups` checks them natively; S15 discharges them with
+LogUp on the **timestamp channel**. `docs/spec/memory.md` §7.
+
+**Lookup channel** — one LogUp identity over a whole shard: every row's gated tuple is a
+row of the channel's one table. Four of them, `constants::lookup_channel`: `timestamp` and
+`range16`, whose tables are closed forms, and `generic` and `decoder`, whose are committed.
+`docs/spec/lookup.md` §1.
+
+**Gated tuple** — what a lookup expression contributes on a row: its columns compressed by
+the powers of `β`, with the selector sending a non-participating row to the channel's
+**neutral entry** — the value 0 on a range channel, the all-zero **`ZeroEntry`** row on
+the generic channel (whose keys are offset by one so no real entry reaches it), and the
+`MINUS_ONE` padding tuple on the decoder channel. `docs/spec/lookup.md` §4.
+
+**Multiplicity column** — a channel's one committed column, last in the witness subtree:
+row `t` counts how many gated tuples over the shard are table row `t`'s. Counted over raw
+tuples, never compressed ones, because it is committed before `g` and `β` exist.
+`docs/spec/lookup.md` §7.
+
+**Fraction tree** — how a channel is proved: `(num, den)` pairs added pairwise,
+`a/b + c/d = (ad + cb)/(bd)`, row-wise and then across rows, down to one root pair. Its
+halving numerator is the `TreeCross` gate; its identity is `(0, 1)`, which is why a
+padding row is not idle in it. A channel **holds** when its root is `num = 0` and
+`den ≠ 0`, both. `docs/spec/lookup.md` §6 and §8.
+
+**Copower** — a scaling that turns a row-varying bound `x < p` into the fixed
+`x·p' < 2^32`, `p·p' = 2^32`. It bounds nothing alone — `p'` is a unit, so `x = s·p'^{-1}`
+sweeps a coset almost none of whose elements are small — so every copower-scaled column
+also carries a direct range check. `constraints::lookup::check_copowers`.
 
 **Boundary scalars** — the 64 values a proof carries for registers and the pc, which have
 no rows: the final timestamps `t_0 … t_31` and `t_pc`, then the final values `v_1 … v_31`,

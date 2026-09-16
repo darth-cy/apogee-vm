@@ -322,13 +322,14 @@ fn a_nonzero_unused_address_field_is_refused() {
         );
         assert_eq!(encode(&address), encode(&raw), "{address} writes {raw:?}");
     }
-    let stray: [RawAddress; 7] = [
+    let stray: [RawAddress; 8] = [
         (0, 3, 1),
         (1, 3, 1),
         (2, 3, 1),
-        (3, 2, 0),
+        (3, 4, 0),
         (3, 0, 1),
         (3, 1, 1),
+        (3, 3, 1),
         (5, 3, 1),
     ];
     for raw in stray {
@@ -355,22 +356,26 @@ fn a_nonzero_unused_address_field_is_refused() {
     );
 }
 
-/// Virtual kinds are 0 (`V[row]`) and 1 (`V[ram_live]`), append-only, and a
-/// kind is printed by its short name.
+/// Virtual kinds are 0 (`V[row]`), 1 (`V[ram_live]`), 2 (`V[range19]`) and
+/// 3 (`V[range16]`), append-only, and a kind is printed by its short name.
 #[test]
-fn virtual_kind_tags_are_zero_and_one() {
-    assert_eq!(encode(&VirtualKind::RowIndex), [0]);
-    assert_eq!(encode(&VirtualKind::RamLive), [1]);
+fn virtual_kind_tags_are_append_only() {
+    let kinds = [
+        (VirtualKind::RowIndex, 0u8, "V[row]"),
+        (VirtualKind::RamLive, 1, "V[ram_live]"),
+        (VirtualKind::Range19, 2, "V[range19]"),
+        (VirtualKind::Range16, 3, "V[range16]"),
+    ];
+    for (kind, tag, name) in kinds {
+        assert_eq!(encode(&kind), [tag], "{kind:?}");
+        assert_eq!(postcard::from_bytes::<VirtualKind>(&[tag]), Ok(kind));
+        assert_eq!(PolyAddress::Virtual(kind).to_string(), name);
+    }
     assert_eq!(
-        postcard::from_bytes::<VirtualKind>(&[1]),
-        Ok(VirtualKind::RamLive)
+        postcard::from_bytes::<VirtualKind>(&[kinds.len() as u8]),
+        Err(postcard::Error::SerdeDeCustom),
+        "the first tag no kind has"
     );
-    assert_eq!(
-        postcard::from_bytes::<VirtualKind>(&[2]),
-        Err(postcard::Error::SerdeDeCustom)
-    );
-    let live = PolyAddress::Virtual(VirtualKind::RamLive);
-    assert_eq!(live.to_string(), "V[ram_live]");
 }
 
 /// Address tags are 0 to 6 and append-only; 7 and 255 are refused, alone and

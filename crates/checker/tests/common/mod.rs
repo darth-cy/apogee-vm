@@ -70,6 +70,44 @@ pub fn toys() -> [(&'static str, CircuitArtifact); 2] {
     [("cached", load(CACHED)), ("cache-free", load(CACHE_FREE))]
 }
 
+/// `x − x·x = 0` on gate list 0, named `<name>_is_boolean`, as a gate and as
+/// its relation. Since S15 a lookup's selector must carry one
+/// (`docs/spec/lookup.md` §2), so a toy a test selects on needs it.
+pub fn add_booleanity(a: &mut CircuitArtifact, x: PolyAddress, name: &str) {
+    let gate = GateDef::Quadratic {
+        constant: lit(0),
+        linear: vec![(lit(1), x)],
+        products: vec![(Coeff::Literal(-field::Fr::ONE), x, x)],
+    };
+    a.layers[0].enforcing.push(constraints::EnforcingEntry {
+        relation: a.relations.len() as u32,
+        gate: gate.clone(),
+    });
+    a.relations.push(constraints::Relation {
+        name: format!("{name}_is_boolean"),
+        output: None,
+        gate,
+    });
+}
+
+/// Both toys with booleanity gates over every column these suites select on:
+/// `m`, `b`, `e` and `s`.
+pub fn selectable_toys() -> [(&'static str, CircuitArtifact); 2] {
+    let mut out = toys();
+    for (_, a) in out.iter_mut() {
+        for (x, name) in [
+            (M0, "m"),
+            (W1, "b"),
+            (W3, "e"),
+            (PolyAddress::Setup(0), "s"),
+        ] {
+            add_booleanity(a, x, name);
+        }
+        assert_eq!(a.validate(), Ok(()));
+    }
+    out
+}
+
 pub fn relation(a: &CircuitArtifact, name: &str) -> usize {
     a.relations
         .iter()
@@ -145,6 +183,7 @@ pub fn set_operand(gate: &mut GateDef, from: PolyAddress, to: PolyAddress) -> us
             left.iter_mut().chain(right).map(|t| &mut t.1).collect()
         }
         GateDef::TreeProduct { input } => vec![input],
+        GateDef::TreeCross { left, right } => vec![left, right],
         GateDef::Quadratic {
             linear, products, ..
         } => {

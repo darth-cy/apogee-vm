@@ -11,11 +11,13 @@
 mod archive;
 mod family;
 mod log;
+mod lookup;
 mod memory;
 
 pub use archive::{IoStreams, Phase, PhaseTiming, TraceArchive, PHASES};
 pub use family::{FamilyTrace, FamilyTraces, Query, QueryColumns, Role, Row, ROLES};
 pub use log::{AddressSpace, FinalValue, MemoryEvent, MemoryEventLog, SelfCheckError};
+pub use lookup::{build_multiplicities, check_multiplicities};
 pub use memory::{
     build_boundary_finals, build_frame_witness, build_init_teardown_columns, build_memory_columns,
 };

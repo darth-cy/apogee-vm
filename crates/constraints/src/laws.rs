@@ -255,10 +255,21 @@ fn names(a: &CircuitArtifact) -> Result<(), ConstraintError> {
 }
 
 /// The lookup rules: every lookup's channel is one of
-/// `constants::lookup_channel`, each a range channel, so its tuple is exactly
-/// one expression; that expression is `Linear` with literal coefficients over
-/// in-range `M`, `W`, `S` columns and listed virtual tables; its selector is an
-/// in-range `M`, `W` or `S` column. A lookup's name is `names`'.
+/// `constants::lookup_channel`; a range channel's tuple is exactly one
+/// expression and a table channel's is between one and
+/// `lookup_channel::MAX_TUPLE`, every lookup of a channel carrying the same
+/// width because they share one table; every expression is `Linear` with
+/// literal coefficients over in-range `M`, `W`, `S` columns and listed virtual
+/// tables, each above position 0 weighting its columns by 1 and carrying no
+/// constant; and the selector is an in-range `M`, `W` or `S` column **that gate
+/// list 0 holds to booleanity**. A lookup's name is `names`'.
+///
+/// The selector rule is S15's, and it is what makes the native reading of an
+/// obligation — it holds where the selector is 0, or where the tuple is in the
+/// table — the same statement LogUp proves. LogUp sums `s/(E + g)` over the
+/// rows, so a row at `s = −1` with an out-of-range tuple cancels a row at
+/// `s = 1` with the same tuple, and a gap of −1 the native evaluator reports
+/// would pass. `docs/spec/lookup.md` §2.
 fn lookups(a: &CircuitArtifact) -> Result<(), ConstraintError> {
     let committed = |op: PolyAddress| match op {
         PolyAddress::Memory(i) => (i as usize) < a.memory.len(),
@@ -274,10 +285,31 @@ fn lookups(a: &CircuitArtifact) -> Result<(), ConstraintError> {
                 l.channel
             )));
         }
-        if l.tuple.len() != 1 {
+        let channel = l.channel as usize;
+        let width = l.tuple.len();
+        let allowed = match lookup_channel::IS_RANGE[channel] {
+            true => 1..=1,
+            false => 1..=lookup_channel::MAX_TUPLE,
+        };
+        if !allowed.contains(&width) {
+            let kind = match lookup_channel::IS_RANGE[channel] {
+                true => "a range channel's tuple has exactly one",
+                false => "a table channel's has 1 to lookup_channel::MAX_TUPLE",
+            };
             return Err(malformed(format!(
-                "lookup `{name}` has {} expressions; a range channel's tuple has exactly one",
-                l.tuple.len()
+                "lookup `{name}` has {width} expressions; {kind}"
+            )));
+        }
+        if let Some(other) = a
+            .lookups
+            .iter()
+            .find(|o| o.channel == l.channel && o.tuple.len() != width)
+        {
+            return Err(malformed(format!(
+                "lookup `{name}` has {width} expressions and `{}` has {}, and one channel has \
+                 one table",
+                other.name,
+                other.tuple.len()
             )));
         }
         if !committed(l.selector) {
@@ -286,7 +318,13 @@ fn lookups(a: &CircuitArtifact) -> Result<(), ConstraintError> {
                 l.selector
             )));
         }
-        for gate in &l.tuple {
+        if !boolean_in_list_0(a, l.selector) {
+            return Err(malformed(format!(
+                "lookup `{name}` has selector {}, which gate list 0 does not hold to booleanity",
+                l.selector
+            )));
+        }
+        for (j, gate) in l.tuple.iter().enumerate() {
             let GateDef::Linear { terms, constant } = gate else {
                 return Err(malformed(format!(
                     "lookup `{name}` has an expression that is not Linear"
@@ -310,9 +348,39 @@ fn lookups(a: &CircuitArtifact) -> Result<(), ConstraintError> {
                     )));
                 }
             }
+            // Above position 0 an expression weights each column by 1 and
+            // carries no constant. `β^0` is the literal 1, so position 0 takes
+            // any literal, but `β^j·c` above it is one `Coeff` only at `c = 1`:
+            // an expression this rule refuses has no denominator gate at all
+            // (`docs/spec/lookup.md` §5).
+            let unit = |c: &Coeff| matches!(c, Coeff::Literal(v) if *v == Fr::ONE);
+            if j > 0
+                && (!terms.iter().all(|(c, _)| unit(c)) || *constant != Coeff::Literal(Fr::ZERO))
+            {
+                return Err(malformed(format!(
+                    "lookup `{name}` weights expression {j} by something other than 1, or gives \
+                     it a constant; only expression 0 may, `β^0` being the literal 1"
+                )));
+            }
         }
     }
     Ok(())
+}
+
+/// Whether some enforcing gate of gate list 0 is `x − x·x`, whatever its shape
+/// spells it: the normalized expansions are compared, so `x − x·x`,
+/// `x·(1 − x)` written as an `AffineProduct`, and the `Quadratic`
+/// `constraints::memory` builds all count.
+fn boolean_in_list_0(a: &CircuitArtifact, x: PolyAddress) -> bool {
+    let want = normal_form(&GateDef::Quadratic {
+        constant: Coeff::Literal(Fr::ZERO),
+        linear: vec![(Coeff::Literal(Fr::ONE), x)],
+        products: vec![(Coeff::Literal(Fr::MINUS_ONE), x, x)],
+    });
+    a.layers[0]
+        .enforcing
+        .iter()
+        .any(|e| normal_form(&e.gate) == want)
 }
 
 /// Law 2, and the variable counts: `(n_k, w_k)` for every layer `0..=N`, each
@@ -428,22 +496,20 @@ fn gate_list(
                 "halving gate list {k} has cached or enforcing entries"
             )));
         }
-        // A halving list halves every column of its layer, in order: entry j is
-        // `TreeProduct { L{k}[j] }`. That is what lets transition k's claims be
-        // two children per column of layer k, and its batch weight j be both
-        // output j's and input j's.
+        // A halving list halves every column of its layer: it writes exactly as
+        // many columns as it reads, and every entry is a halving shape over
+        // layer `k`'s columns, read at both children. That is what lets
+        // transition k's claims be two children per column of layer k, and its
+        // batch weight j be both output j's and input j's. Which columns an
+        // entry reads is the list's own business — a product tree halves column
+        // j into column j, a fraction tree's numerator reads its denominator
+        // too — and `nothing_dropped` refuses a list that leaves one unread.
         for (j, entry) in list.producing.iter().enumerate() {
             let name = gate_name(a, k, "producing", j, entry.relation);
             locality(&entry.gate, name.clone(), false)?;
-            let halves_column_j = GateDef::TreeProduct {
-                input: PolyAddress::Inner {
-                    layer,
-                    offset: j as u32,
-                },
-            };
-            if entry.gate != halves_column_j {
+            if halving_shape(&entry.gate).is_none() {
                 return Err(malformed(format!(
-                    "`{name}` in halving gate list {k} is not TreeProduct of L{{{k}}}[{j}]"
+                    "`{name}` in halving gate list {k} is neither a TreeProduct nor a TreeCross"
                 )));
             }
         }
@@ -503,12 +569,25 @@ fn gate_list(
 }
 
 fn row_wise_shape(gate: &GateDef, name: &str, k: usize) -> Result<(), ConstraintError> {
-    if matches!(gate, GateDef::TreeProduct { .. }) {
+    if let Some(shape) = halving_shape(gate) {
         return Err(malformed(format!(
-            "`{name}` is a TreeProduct in row-wise gate list {k}"
+            "`{name}` is a {shape} in row-wise gate list {k}"
         )));
     }
     Ok(())
+}
+
+/// The name of `gate`'s halving shape, or `None` if it is a row-wise shape. The
+/// two halving shapes are `TreeProduct`, one level of a product tree, and
+/// `TreeCross`, the numerator of one level of a fraction tree
+/// (`docs/spec/gkr.md` §1, `docs/spec/lookup.md` §6). Each reads its operands at
+/// both children, so neither means anything in a row-wise list.
+fn halving_shape(gate: &GateDef) -> Option<&'static str> {
+    match gate {
+        GateDef::TreeProduct { .. } => Some("TreeProduct"),
+        GateDef::TreeCross { .. } => Some("TreeCross"),
+        _ => None,
+    }
 }
 
 /// A gate's degree in the layer it reads, cached entries substituted: a column
@@ -526,7 +605,7 @@ fn degree(gate: &GateDef, cached: &[CachedEntry]) -> u32 {
         GateDef::Product { left, right, .. } => d(left) + d(right),
         GateDef::MaskIntoIdentity { input, mask } => (d(input) + d(mask)).max(d(mask)),
         GateDef::AffineProduct { left, right, .. } => widest(left) + widest(right),
-        GateDef::TreeProduct { .. } => 2,
+        GateDef::TreeProduct { .. } | GateDef::TreeCross { .. } => 2,
         GateDef::Quadratic {
             linear, products, ..
         } => {
@@ -732,7 +811,7 @@ fn single_source(a: &CircuitArtifact) -> Result<(), ConstraintError> {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum Symbol {
+pub(crate) enum Symbol {
     /// A column, in the flat list's namespace: inner-layer addresses are
     /// already mapped to their scratch slots.
     Column(PolyAddress),
@@ -744,7 +823,7 @@ enum Symbol {
 /// `Σ coefficient · Π symbols`, kept normalized: every sum and product below
 /// merges as it goes, so a gate's expansion never holds more monomials than the
 /// polynomial has — quadratic in the gate's distinct operands, never quartic.
-type Expansion = Vec<(Vec<Symbol>, Fr)>;
+pub(crate) type Expansion = Vec<(Vec<Symbol>, Fr)>;
 
 /// Where a gate's operands live: the flat list, or gate list `k` of the
 /// layered encoding.
@@ -813,6 +892,13 @@ impl Namespace<'_> {
                 let x = self.column(*input);
                 vec![(vec![Symbol::Child(x, 0), Symbol::Child(x, 1)], Fr::ONE)]
             }
+            GateDef::TreeCross { left, right } => {
+                let (p, q) = (self.column(*left), self.column(*right));
+                normalize(vec![
+                    (vec![Symbol::Child(p, 0), Symbol::Child(q, 1)], Fr::ONE),
+                    (vec![Symbol::Child(p, 1), Symbol::Child(q, 0)], Fr::ONE),
+                ])
+            }
             GateDef::Quadratic {
                 constant,
                 linear,
@@ -848,6 +934,24 @@ fn product(a: &[(Vec<Symbol>, Fr)], b: &[(Vec<Symbol>, Fr)]) -> Expansion {
         }
     }
     normalize(out)
+}
+
+/// `gate`'s normalized expansion in the flat namespace: monomials over its own
+/// operand addresses and challenge slots, merged and sorted. Two gates with
+/// equal normal forms are the same polynomial — cancellation, term order and
+/// repeated terms included. `crate::lookup` matches leaf denominators against
+/// lookup expressions with it.
+///
+/// The gate must name no cached entry and no inner column: gate list 0's gates,
+/// and the expressions a lookup carries, are exactly that.
+pub(crate) fn normal_form(gate: &GateDef) -> Expansion {
+    let inverse = BTreeMap::new();
+    let ns = Namespace {
+        layered: false,
+        cached: &[],
+        inverse: &inverse,
+    };
+    normalize(ns.expand(gate))
 }
 
 /// One polynomial, one representation: monomials sorted, equal ones merged,

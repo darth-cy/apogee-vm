@@ -1,7 +1,8 @@
 # The GKR engine: layered circuits, the artifact, and the backward pass
 
-Frozen as of S13; S14 amended §2.1, §4, §4.1, §4.2, §4.3 and §5.1. Changing anything
-here is a protocol-version change.
+Frozen as of S13; S14 amended §2.1, §4, §4.1, §4.2, §4.3 and §5.1, and S15
+amended §1, §2.1, §3, §4.1, §4.2, §4.3 and §5.3. Changing anything here is a
+protocol-version change.
 
 Implementation, by crate:
 
@@ -35,18 +36,28 @@ A gate list is one of two kinds:
 | kind | `n_{k+1}` | `w_{k+1}` | its producing gates |
 | --- | --- | --- | --- |
 | row-wise | `n_k` | any | `out(y) = G(inputs at y)` for every row `y` |
-| halving | `n_k - 1` | `w_k` | entry `j` is `TreeProduct { L{k}[j] }`: `out[i] = in[i] · in[i + 2^{n_k - 1}]` |
+| halving | `n_k - 1` | `w_k` | a **halving shape** over layer `k`'s columns, each operand read at both children |
 
-A halving list **halves every column of its layer, in order**. The child bit is
-the **highest** variable of layer `k`. A halving list has no enforcing gates and
-no cached entries, reads inner-layer columns only (never layer 0), and needs
-`n_k >= 1`. A row-wise list has no `TreeProduct`.
+A halving list **halves every column of its layer**: it writes exactly as many
+columns as it reads, and `nothing_dropped` (§4.2) refuses a list leaving one
+unread. The child bit is the **highest** variable of layer `k`. A halving list
+has no enforcing gates and no cached entries, reads inner-layer columns only
+(never layer 0), and needs `n_k >= 1`. A row-wise list has no halving shape.
+
+There are two halving shapes. `TreeProduct { x }` is one level of a **product
+tree**, `out[i] = x[i]·x[i + 2^{n_k−1}]`, and entry `j` of a product tree halves
+column `j` into column `j`. `TreeCross { p, q }` is the numerator of one level of
+a **fraction tree** (`docs/spec/lookup.md` §6), `out[i] = p[i]·q[i + h] +
+p[i + h]·q[i]` with `h = 2^{n_k−1}`, and it reads its denominator beside its own
+column — which is why an entry is no longer pinned to the column at its own
+offset. S15 relaxed that; nothing else about the halving model moved, and the
+claim layout, L3's message and L4's line-folding are what they were.
 
 Every relation is written in one fixed template, whatever its shape:
 
 ```text
 producing (row-wise)   L{k+1}[j](x) = Σ_y eq(x, y) · G(inputs at y)
-producing (halving)    L{k+1}[j](x) = Σ_y eq(x, y) · L{k}[j](y, 0) · L{k}[j](y, 1)
+producing (halving)    L{k+1}[j](x) = Σ_y eq(x, y) · G(layer k at (y, 0) and (y, 1))
 enforcing              0 = G(inputs at y)   for every y
 ```
 
@@ -76,17 +87,23 @@ Where each may appear:
 
 ### 2.1 Virtual tables
 
-Two kinds. Each closed form **is its multilinear extension** over `n_0`
+Four kinds. Each closed form **is its multilinear extension** over `n_0`
 variables, and the kind tag is how the closed form is in the artifact:
 
 | kind | notation | value at row `y` | closed form |
 | --- | --- | --- | --- |
 | `RowIndex` | `V[row]` | `y` | `Σ_j 2^j · y_j` |
 | `RamLive` | `V[ram_live]` | 1 if `y ≥ 2^14`, else 0 | `1 − Π_{j=14}^{n_0−1} (1 − y_j)`, which is 0 when `n_0 ≤ 14` |
+| `Range19` | `V[range19]` | `y mod 2^19` | `Σ_{j < min(19, n_0)} 2^j · y_j` |
+| `Range16` | `V[range16]` | `y mod 2^16` | `Σ_{j < min(16, n_0)} 2^j · y_j` |
 
 14 is `constants::memory::RAM_LIVE_BIT`. `RamLive` is S14's, the mask on RAM
 window 0's rows below `RAM_ORIGIN` (`docs/spec/memory.md` §3.3); its closed form
 costs `n_0 − 14` multiplications and is 0 or 1 on the cube by construction.
+`Range19` and `Range16` are S15's, the range channels' tables
+(`docs/spec/lookup.md` §3); each is `[0, 2^BITS)` exactly when `n_0 ≥ BITS`, and
+a narrower set below that, which is why a circuit narrower than a range
+channel's bound is refused.
 
 A virtual table has layer 0's height. It is **never materialized**: the forward
 pass evaluates the closed form per row, the prover at every point a round needs
@@ -108,6 +125,7 @@ is admissible only if its MLE has a closed form at every such point.
 | 3 | `AffineProduct { left, left_constant, right, right_constant }` | `(Σ a_i·x_i + a_0)·(Σ b_j·y_j + b_0)` | `x_1..x_t, y_1..y_u` |
 | 4 | `TreeProduct { input }` | `x(·,0)·x(·,1)` | `x(·,0), x(·,1)` |
 | 5 | `Quadratic { constant, linear, products }` | `c_0 + Σ a_i·x_i + Σ b_j·y_j·z_j` | `x_1..x_t, y_1, z_1, .., y_u, z_u` |
+| 6 | `TreeCross { left, right }` | `p(·,0)·q(·,1) + p(·,1)·q(·,0)` | `p(·,0), p(·,1), q(·,0), q(·,1)` |
 
 A gate's coefficients, wherever they are listed, are in the order of its fields;
 `Quadratic`'s are `c_0, a_1..a_t, b_1..b_u`. `Quadratic` is every degree-2
@@ -205,7 +223,7 @@ length then its elements; a name is a `str`; an `Fr` is its 32 canonical bytes
 with no length prefix (`crates/field`'s `[u8; 32]` tuple).
 
 ```text
-VirtualKind     u32                           0 RowIndex, 1 RamLive
+VirtualKind     u32                           0 RowIndex, 1 RamLive, 2 Range19, 3 Range16
 PolyAddress     (tag u8, a u32, b u32)        tags: 0 M, 1 W, 2 S, 3 V, 4 L, 5 scratch, 6 C
                                               V: a = kind; L, C: a = layer, b = offset;
                                               every unused field is 0
@@ -243,7 +261,8 @@ artifact that has passed `validate` and do not check it again (§5.1).
 2. **Derived width.** A stored `width` is the number of producing gates, their
    outputs are exactly `L{k+1}[0..width)` in order, and a stored `num_vars` is
    `n_k` or `n_k − 1` by the list's kind. A halving list's width is `w_k`, and
-   its entry `j` reads `L{k}[j]`. Layer 0's size is the committed layout.
+   every entry of one is a halving shape over layer `k`'s columns. Layer 0's
+   size is the committed layout.
 3. **Top layer.** The last list writes layer `N`, which has no list, and
    `outputs` is a permutation of `L{N}[0..w_N)`: nothing more, nothing less.
 4. **Single source of truth.** Every relation is named by exactly one gate
@@ -267,14 +286,19 @@ slot; a `padding.row` whose length is not `w_0`; a format version other than 1 o
 a coefficient encoding other than 0; `trace_vars > 30`. Every refusal is a
 `ConstraintError` naming the law, gate or address.
 
-**The lookup rules** (S14, `docs/spec/memory.md` §7). `validate` refuses a lookup
-whose channel is not one of `constants::lookup_channel`; whose tuple is not
-exactly one expression, every channel being a range channel; whose expression is
-not `Linear` with literal coefficients, its constant included, over in-range `M`,
-`W`, `S` columns and virtual tables `virtuals` lists; or whose selector is not an
-in-range `M`, `W` or `S` column. Its name is held to the name rule above. Each
-refusal is a `ConstraintError` naming the lookup, and `checker::check_laws`
-enforces the same rules with code of its own.
+**The lookup rules** (S14, `docs/spec/memory.md` §7; S15, `docs/spec/lookup.md`).
+`validate` refuses a lookup whose channel is not one of
+`constants::lookup_channel`; whose tuple is not exactly one expression on a range
+channel, or is empty or wider than `lookup_channel::MAX_TUPLE` on a table one;
+whose width differs from another lookup's of the same channel, since one channel
+has one table; whose expression is not `Linear` with literal coefficients, its
+constant included, over in-range `M`, `W`, `S` columns and virtual tables
+`virtuals` lists; whose selector is not an in-range `M`, `W` or `S` column; or
+whose **selector no enforcing gate of gate list 0 holds to booleanity**, without
+which LogUp and the native reading of an obligation are different statements
+(`docs/spec/lookup.md` §2). Its name is held to the name rule above. Each refusal
+is a `ConstraintError` naming the lookup, and `checker::check_laws` enforces the
+same rules with code of its own.
 
 Names are documentation, never semantics, stored beside what they name rather
 than derived from a position, so none can drift with a layer index. An artifact
@@ -288,6 +312,16 @@ included.** `padding.row` is the committed columns' values on an inactive row,
 in layout order. Computing the row-local scratch values from it — every
 producing relation below the first halving list — makes every row-local
 enforcing relation vanish, for every challenge value and every row index.
+
+Since S15 that is a statement about the columns the contract reads, not about
+every cell a prover writes on a padding row. A channel's **multiplicity** column
+(`docs/spec/lookup.md` §7) counts a table value over the whole shard, padding
+rows included, so it is nonzero on rows where `padding.row` says 0; it enters no
+enforcing relation and no product tree, so neither clause below asks anything of
+it, and a witness builder must not zero it to match `padding.row`. A circuit
+with no channel is unchanged: there, `padding.row` is every committed cell of
+every padding row, and `crates/checker/tests/multiset.rs` holds S14's frames to
+exactly that.
 `zero_row_valid` says whether the all-zero committed row has the same property.
 The checker holds both statements to the relations, at pseudo-random challenge
 values and row indices.
@@ -298,12 +332,21 @@ inactive rows, every column the first halving list reads — computed from
 exactly 1, for every challenge value and every row index: an inactive row
 contributes the multiplicative identity to every product. A RAM window family
 (`docs/spec/memory.md` §3) has no inactive rows — every row is an address — so the
-clause does not apply to it. `checker::check_padding_identity` holds an artifact
+clause does not apply to it. Neither does it apply to a **fraction tree** (S15):
+its identity is `(0, 1)` and a padding row is not inactive in a channel at all —
+it contributes the channel's neutral entry, which the multiplicity column counts
+(`docs/spec/lookup.md` §6) — so `checker::check_padding_identity` exempts every
+column a `TreeCross` reads. `checker::check_padding_identity` holds an artifact
 to the clause at pseudo-random challenge values and row indices; an artifact with
 no halving list passes.
 
 Still not covered: that the contract holds for the setup values a real padding
-row carries rather than the ones `padding.row` names.
+row carries rather than the ones `padding.row` names, and — since S15 — that a
+real padding row's **multiplicity columns** carry what `padding.row` says. They
+do not: a multiplicity counts table rows, not trace rows, and is nonzero on
+inactive rows of a channel-carrying circuit (`docs/spec/lookup.md` §6).
+`padding.row` is a row on which every row-local relation holds, which is what
+this contract asks of it, and not the row a prover writes.
 
 ## 5. The backward pass
 
@@ -404,7 +447,7 @@ Transition `k` proves `c = Σ_y eq(p, y) · S_k(y)` over `n_{k+1}` variables:
 
 ```text
 row-wise   S_k(y) = Σ_j λ^j · G_j(inputs at y) + Σ_e λ^{w_{k+1} + e} · E_e(inputs at y)
-halving    S_k(x) = Σ_j λ^j · L{k}[j](x, 0) · L{k}[j](x, 1)
+halving    S_k(x) = Σ_j λ^j · G_j(layer k at (x, 0) and (x, 1))
 ```
 
 `G_j` is the producing gate writing `L{k+1}[j]`; `E_e` is the `e`-th enforcing

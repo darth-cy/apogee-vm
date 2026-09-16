@@ -165,13 +165,14 @@ fn mutants() -> Vec<Mutant> {
             },
         ),
         Mutant {
-            // L{2}[0] is then read by no gate, and a halving gate stops
-            // reading its own column (Law 2).
+            // L{2}[0] is then read by no gate, which `validate` refuses beside
+            // the laws. A halving gate reading some other column of its own
+            // layer is lawful since S15; reading two layers down is not.
             only_laws: false,
             ..m(
                 "list 2 reads L{1}[0], two layers down, gate and relation alike",
                 1,
-                &[2],
+                &[],
                 |a| {
                     a.layers[2].producing[0].gate = GateDef::TreeProduct { input: inner(1, 0) };
                     let (r, ab) = (relation(a, "define_abm_product"), slot(a, "ab") as u32);
@@ -244,20 +245,20 @@ fn mutants() -> Vec<Mutant> {
             })
         },
         m(
-            "halving list 2 reads L{2}[1] then L{2}[0], gates and relations alike",
+            "halving list 2's first gate copies L{2}[0] instead of halving it",
             2,
             &[],
             |a| {
-                a.layers[2].producing[0].gate = GateDef::TreeProduct { input: inner(2, 1) };
-                a.layers[2].producing[1].gate = GateDef::TreeProduct { input: inner(2, 0) };
-                let (abm, fp3) = (slot(a, "abm") as u32, slot(a, "fingerprint3") as u32);
-                let r = relation(a, "define_abm_product");
-                a.relations[r].gate = GateDef::TreeProduct {
-                    input: PolyAddress::Scratch(fp3),
+                let copy = GateDef::Linear {
+                    terms: vec![(lit(1), inner(2, 0))],
+                    constant: lit(0),
                 };
-                let r = relation(a, "define_fingerprint3_product");
-                a.relations[r].gate = GateDef::TreeProduct {
-                    input: PolyAddress::Scratch(abm),
+                a.layers[2].producing[0].gate = copy.clone();
+                let r = relation(a, "define_abm_product");
+                let abm = slot(a, "abm") as u32;
+                a.relations[r].gate = GateDef::Linear {
+                    terms: vec![(lit(1), PolyAddress::Scratch(abm))],
+                    constant: lit(0),
                 };
             },
         ),
