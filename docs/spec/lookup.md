@@ -137,8 +137,9 @@ drawn `LOOKUP_G`, or the derived `LOOKUP_DECODER_NEUTRAL` where the neutral tupl
 `MINUS_ONE`.
 
 Because `β^j·c` must be one `Coeff`, **a tuple position above 0 weights each of its
-columns by 1 and carries the constant 0 or 1**; position 0, where `β^0` is the literal
-1, takes any literal coefficients and any constant. Construction refuses anything else.
+columns by 1 and carries no constant**; position 0, where `β^0` is the literal 1, takes
+any literal coefficients and any constant. `validate` refuses anything else, so an
+artifact read with `from_bytes` never reaches a denominator gate that does not exist.
 
 The table side is `T + g = Σ_j β^j·t_j + g`, a `Linear` over the table's columns.
 
@@ -277,8 +278,8 @@ would make every tool walking it miss the most important lookup in every family.
 - a range channel whose bound exceeds `trace_vars` (§3);
 - a channel with a table and a multiplicity column but no lookup;
 - a lookup whose tuple width is not its channel's table width;
-- a tuple position above 0 whose coefficient is not 1 or whose constant is not 0 or 1
-  (§5);
+- a tuple position above 0 whose coefficient is not 1 or which carries a constant — which
+  `validate` refuses too, so a decoded artifact is caught as well (§5);
 - a tuple wider than `lookup_channel::MAX_TUPLE`, past which `β` has no slot.
 
 `constraints::lookup::check_discharge` is **the discharge rule**: every lookup of the

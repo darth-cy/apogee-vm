@@ -260,7 +260,8 @@ fn names(a: &CircuitArtifact) -> Result<(), ConstraintError> {
 /// `lookup_channel::MAX_TUPLE`, every lookup of a channel carrying the same
 /// width because they share one table; every expression is `Linear` with
 /// literal coefficients over in-range `M`, `W`, `S` columns and listed virtual
-/// tables; and the selector is an in-range `M`, `W` or `S` column **that gate
+/// tables, each above position 0 weighting its columns by 1 and carrying no
+/// constant; and the selector is an in-range `M`, `W` or `S` column **that gate
 /// list 0 holds to booleanity**. A lookup's name is `names`'.
 ///
 /// The selector rule is S15's, and it is what makes the native reading of an
@@ -323,7 +324,7 @@ fn lookups(a: &CircuitArtifact) -> Result<(), ConstraintError> {
                 l.selector
             )));
         }
-        for gate in &l.tuple {
+        for (j, gate) in l.tuple.iter().enumerate() {
             let GateDef::Linear { terms, constant } = gate else {
                 return Err(malformed(format!(
                     "lookup `{name}` has an expression that is not Linear"
@@ -346,6 +347,20 @@ fn lookups(a: &CircuitArtifact) -> Result<(), ConstraintError> {
                          virtual table"
                     )));
                 }
+            }
+            // Above position 0 an expression weights each column by 1 and
+            // carries no constant. `β^0` is the literal 1, so position 0 takes
+            // any literal, but `β^j·c` above it is one `Coeff` only at `c = 1`:
+            // an expression this rule refuses has no denominator gate at all
+            // (`docs/spec/lookup.md` §5).
+            let unit = |c: &Coeff| matches!(c, Coeff::Literal(v) if *v == Fr::ONE);
+            if j > 0
+                && (!terms.iter().all(|(c, _)| unit(c)) || *constant != Coeff::Literal(Fr::ZERO))
+            {
+                return Err(malformed(format!(
+                    "lookup `{name}` weights expression {j} by something other than 1, or gives \
+                     it a constant; only expression 0 may, `β^0` being the literal 1"
+                )));
             }
         }
     }

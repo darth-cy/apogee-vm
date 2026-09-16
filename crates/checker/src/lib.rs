@@ -506,9 +506,20 @@ fn check_lookups(a: &CircuitArtifact) -> Result<(), String> {
                 "{what}: gate list 0 does not hold selector {selector} to booleanity"
             ));
         }
-        for gate in &l.tuple {
-            if !matches!(gate, GateDef::Linear { .. }) {
+        for (j, gate) in l.tuple.iter().enumerate() {
+            let GateDef::Linear { terms, constant } = gate else {
                 return Err(format!("{what}: an expression that is not Linear"));
+            };
+            // Above position 0 an expression weights each column by 1 and
+            // carries no constant: `β^0` is the literal 1, so position 0 takes
+            // any literal, but `β^j·c` above it is one `Coeff` only at `c = 1`.
+            let unit = |c: &Coeff| matches!(c, Coeff::Literal(v) if *v == Fr::ONE);
+            let plain = terms.iter().all(|(c, _)| unit(c)) && *constant == Coeff::Literal(Fr::ZERO);
+            if j > 0 && !plain {
+                return Err(format!(
+                    "{what}: expression {j} is weighted or has a constant, which only \
+                     expression 0 may"
+                ));
             }
             let slots = challenge_slots(&[gate]);
             if !slots.is_empty() {
@@ -789,23 +800,18 @@ pub fn check_padding_identity(a: &CircuitArtifact) -> Result<(), String> {
                 known[i as usize] = true;
             }
         }
+        // A fraction tree's identity is `(0, 1)`, not 1, and its rows are not
+        // inactive at all: a padding row still contributes neutral entries to
+        // its channels, which the multiplicity column counts. So the clause is
+        // asked of the product trees alone, and every column a `TreeCross`
+        // reads is exempt.
+        let fraction: Vec<PolyAddress> = a.layers[k]
+            .producing
+            .iter()
+            .filter(|e| matches!(e.gate, GateDef::TreeCross { .. }))
+            .flat_map(|e| e.gate.operands())
+            .collect();
         for entry in &a.layers[k].producing {
-            // A fraction tree's identity is `(0, 1)`, not 1, and its rows are
-            // not inactive at all: a padding row still contributes neutral
-            // entries to its channels, which the multiplicity column counts.
-            // So the clause is asked of the product trees alone, and a column
-            // any `TreeCross` reads is exempt.
-            if matches!(entry.gate, GateDef::TreeCross { .. }) {
-                continue;
-            }
-            let fraction: Vec<PolyAddress> = a.layers[k]
-                .producing
-                .iter()
-                .flat_map(|e| match &e.gate {
-                    GateDef::TreeCross { .. } => e.gate.operands(),
-                    _ => Vec::new(),
-                })
-                .collect();
             for op in entry.gate.operands() {
                 if fraction.contains(&op) {
                     continue;

@@ -268,9 +268,11 @@ fn a_lookup_narrower_than_its_channels_table_is_refused() {
 
 /// A tuple position above 0 weights its columns by 1 and carries no constant:
 /// `β^j·c` is one `Coeff` only when `β^0 = 1` makes it a literal, or when
-/// `c = 1` makes it the slot itself.
+/// `c = 1` makes it the slot itself. The constructor builds the denominator
+/// gate before it validates, so its own assertion is what a caller sees; the
+/// test below is the same rule on a **decoded** artifact, where `validate` is.
 #[test]
-#[should_panic(expected = "weights W[10] by a coefficient other than 1")]
+#[should_panic(expected = "expression 1 weights W[10] by a coefficient other than 1")]
 fn a_scaled_term_above_tuple_position_zero_is_refused() {
     build(VARS, |e| {
         e.lookups[1].tuple[1] = GateDef::Linear {
@@ -278,6 +280,36 @@ fn a_scaled_term_above_tuple_position_zero_is_refused() {
             constant: lit(0),
         };
     });
+}
+
+/// The same rule on the constant, and `validate`'s own refusal of an artifact
+/// that reaches it by `from_bytes` rather than by the constructor: the toy with
+/// expression 1 of its decoder lookup given a constant is a decodable artifact
+/// `validate` refuses, so `check_discharge` — which assumes a validated
+/// artifact — is never handed one whose denominator gate does not exist.
+#[test]
+fn a_constant_above_tuple_position_zero_is_refused_by_validate() {
+    let mut a = toy();
+    let decoder = a
+        .lookups
+        .iter()
+        .position(|l| l.channel == lookup_channel::DECODER)
+        .expect("the toy has a decoder lookup");
+    let GateDef::Linear { constant, .. } = &mut a.lookups[decoder].tuple[1] else {
+        panic!("a tuple expression is a Linear gate");
+    };
+    *constant = lit(7);
+    let e = a
+        .validate()
+        .expect_err("a weighted expression above position 0");
+    assert_eq!(
+        e.to_string(),
+        "malformed circuit: lookup `decode_row` weights expression 1 by something other than \
+         1, or gives it a constant; only expression 0 may, `β^0` being the literal 1"
+    );
+    // It still round-trips, which is what makes the rule `validate`'s and not
+    // the wire form's.
+    assert_eq!(CircuitArtifact::from_bytes(&a.to_bytes()), Ok(a));
 }
 
 /// A lookup whose selector gate list 0 does not hold to booleanity is refused
