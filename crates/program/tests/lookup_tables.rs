@@ -46,7 +46,7 @@ fn the_generic_table_is_its_reference_computation() {
     assert_eq!(GENERIC_ROWS, 1 + AND_ROWS + SIGN_ROWS);
     let reference = reference();
     assert_eq!(reference.len(), GENERIC_ROWS - 1);
-    let entries: Vec<[u32; GENERIC_WIDTH]> = generic_entries().collect();
+    let entries: Vec<[u32; GENERIC_WIDTH]> = generic_entries();
     assert_eq!(
         entries, reference,
         "the crate's entries are the reference's"
@@ -122,7 +122,7 @@ fn a_height_below_the_packed_tables_rows_is_refused() {
 /// the other, and neither reaches the all-zero tuple.
 #[test]
 fn the_two_tables_key_ranges_are_disjoint_and_miss_zero() {
-    let keys: Vec<u32> = generic_entries().map(|e| e[0]).collect();
+    let keys: Vec<u32> = generic_entries().iter().map(|e| e[0]).collect();
     assert_eq!(keys.len(), GENERIC_ROWS - 1);
     assert!(keys.iter().all(|k| *k != 0), "no real entry has key 0");
     let and: Vec<u32> = keys[..AND_ROWS].to_vec();

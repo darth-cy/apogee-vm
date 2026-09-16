@@ -312,6 +312,16 @@ included.** `padding.row` is the committed columns' values on an inactive row,
 in layout order. Computing the row-local scratch values from it — every
 producing relation below the first halving list — makes every row-local
 enforcing relation vanish, for every challenge value and every row index.
+
+Since S15 that is a statement about the columns the contract reads, not about
+every cell a prover writes on a padding row. A channel's **multiplicity** column
+(`docs/spec/lookup.md` §7) counts a table value over the whole shard, padding
+rows included, so it is nonzero on rows where `padding.row` says 0; it enters no
+enforcing relation and no product tree, so neither clause below asks anything of
+it, and a witness builder must not zero it to match `padding.row`. A circuit
+with no channel is unchanged: there, `padding.row` is every committed cell of
+every padding row, and `crates/checker/tests/multiset.rs` holds S14's frames to
+exactly that.
 `zero_row_valid` says whether the all-zero committed row has the same property.
 The checker holds both statements to the relations, at pseudo-random challenge
 values and row indices.

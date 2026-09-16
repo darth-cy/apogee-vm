@@ -117,10 +117,13 @@ which is a table row: the channel balances and the row has "looked up" the neutr
 instead of a real one. Nothing in a LogUp channel can prevent that, because the channel's
 only claim is membership.
 
-So: **every key a table channel looks up is bounded elsewhere**, by the range convention
-of `docs/spec/memory.md` §7 or by the columns it is built from, and that bound is what
-keeps a selected row's key away from the neutral value. `AND_BASE = 0` and
-`SIGN_BASE = 256` (§9) then put the neutral value outside every bounded key's range. A
+So: **every key a table channel looks up is bounded elsewhere**, into its own table's key
+range, by the range convention of `docs/spec/memory.md` §7 or by the columns it is built
+from. That bound is what does two things the channel cannot. It keeps a selected row's key
+away from the neutral value. And it is what makes the disjoint key ranges of §9 mean
+anything: an unbounded `a` in an AND lookup's key `a + AND_BASE + 1` reaches
+`SIGN_BASE + h + 1` for any `h`, so the row can assert `a AND b = c` by landing on a
+`U16GetSign` entry — the *tables* are disjoint, the *keys a row can produce* are not. A
 family that reads a value out of a table channel without bounding the key it looked up has
 not proved what it thinks: it has proved that *something* is in the table. S15's combined
 toy leaves `sign_h` and `and_a` unbounded on purpose — it is a toy for the channels, not a
@@ -318,13 +321,30 @@ would make every tool walking it miss the most important lookup in every family.
 - a lookup whose tuple width is not its channel's table width;
 - a tuple position above 0 whose coefficient is not 1 or which carries a constant — which
   `validate` refuses too, so a decoded artifact is caught as well (§5);
-- a tuple wider than `lookup_channel::MAX_TUPLE`, past which `β` has no slot.
+- a tuple wider than `lookup_channel::MAX_TUPLE`, past which `β` has no slot;
+- a multiplicity that is not a **witness** column, so a channel cannot be counted by a
+  setup column fixed before `g` and `β` are drawn;
+- an empty channel list at `frame_with_channels_artifact`, which would be a circuit whose
+  every obligation — a frame carries `2w` of its own — is discharged by nothing.
+
+**What is not a construction rule.** §4's `ZeroEntry` row is a property of the table's
+*values*, and an artifact holds table *addresses*: that a committed table really has an
+all-zero row cannot be decided here. It is caught at witness build, where
+`trace::build_multiplicities` refuses a tuple its table does not hold and every padding
+row looks up the neutral entry — so a table missing it fails on the first shard, naming
+the trace rather than the artifact. Likewise §4's precondition, that a key is bounded
+into its own table's range, which the channel cannot supply (§13).
 
 `constraints::lookup::check_discharge` is **the discharge rule**: every lookup of the
 artifact is the denominator of exactly one gate-list-0 column, and no column is two
 lookups'. It matches by normalized expansion, so a leaf renamed, reordered or rewritten
-into an equal polynomial still counts. `checker::check_lookup_discharge` enforces the
-same rule by evaluation at pseudo-random points, sharing no code with it.
+into an equal polynomial still counts. The count is **per channel**: the two range
+channels gate and neutralize identically (§4), so one lookup's denominator gate can be
+another channel's leaf byte for byte, and where the caller names the channels the rule
+counts inside each lookup's own cone — which also turns a lookup whose only match is in
+another channel's tree into a misrouted obligation rather than a missing one.
+`checker::check_lookup_discharge` enforces the same rule by evaluation at pseudo-random
+points, sharing no code with it.
 
 `constraints::lookup::check_copowers` is **the copower-pairing assertion**: every column
 a copower scales also carries a direct range check of its own. A copower turns the
@@ -341,7 +361,8 @@ the direct check establishes that. S18 and S19 consume it.
   from `constraints::lookup`. It folds fractions rather than inverting per row — a channel
   of `2^20` rows would otherwise cost millions of inversions, and the fold is also a
   different algorithm from the balanced tree it checks. It names a zero denominator, and
-  reports every row whose gated tuple no table row answers.
+  names every gated tuple no table row answers, at the lowest row producing
+  each — a tuple several rows produce is listed once.
 - `checker::channel_roots` reads the root pairs from the materialized top layer, and
   `checker::check_channel_roots` holds them to the native recomputation: `den` is the
   product of every leaf denominator and `num` is `sum · den`.
@@ -358,9 +379,9 @@ the direct check establishes that. S18 and S19 consume it.
   compresses to a value that channel's table can hold.
 - **No tuple of one packed table is a tuple of another** rests on disjoint key ranges
   (§9) and on the `+ 1` offset keeping every real entry off the neutral tuple (§4).
-- **That a lookup answers with a real entry and not the neutral one** rests on the key
-  being bounded away from the neutral value — §4's precondition, which the channel itself
-  cannot supply.
+- **That a lookup is answered by its own table's entry, and not by the neutral row or by
+  another table's**, rests on the key being bounded into that table's range — §4's
+  precondition, which the channel itself cannot supply and which S17 and S18 own.
 - **A row that looks up nothing costs nothing** rests on the neutral entry being a real
   table row whose multiplicity counts it (§4, §7).
 **What the discharge rule does and does not say.** `check_discharge` establishes that every
@@ -370,13 +391,24 @@ trees' shape is the constructor's, not something the artifact records separately
 direction is completeness, not soundness — a tree missing a fraction, or carrying one from
 another channel, is a channel an honest prover cannot balance — and the same reasoning
 covers the `ChannelSpec`s themselves, which a caller supplies and the artifact does not
-record. A verifying key conveys the artifact **and** the specs the family was built with;
-what binds the setup columns to the tables they are supposed to be is program identity
-(`docs/spec/memory.md` §6.2), not anything here.
+record. A verifying key conveys the artifact **and** the specs the family was built with.
+
+**Nothing yet binds the packed generic table.** What binds a setup column to the table it
+is supposed to be is program identity (`docs/spec/memory.md` §6.2), and identity's
+commitment list is each family's *decoded* table plus `INIT_TEARDOWN`'s image column.
+§9's packed table is a **fourth kind** of committed setup column, and
+`program::setup_commitments` does not commit it, so a verifying key whose generic table has
+one poisoned cell — an AND row answering `37 & 45 = 0` — recomputes the same identity
+digest, and every construction rule here accepts it. This is a real gap, not a
+soundness argument: it is listed below as S16's, and until S16 closes it the generic
+channel's guarantee is conditional on the table a verifier is handed being the one
+`program::lookup_tables::generic_table` writes.
 
 - **Owed by later stages.** S16 wires the channels into the real shard transcript — the
   commitments, then `g` and `β` under `LOOKUP_CHALLENGE`, then the local challenges — and
   into the one Mercury opening per shard; it also runs `check_discharge` and
-  `check_copowers` where a proving or verifying key is loaded, and raises
+  `check_copowers` where a proving or verifying key is loaded, calls
+  `trace::check_multiplicities` where the witness is built, brings the packed generic
+  table into the identity recipe or the statement (above), and raises
   `DEFAULT_HEIGHTS[ATOMICS]` to a height its timestamp channel fits (§3). S17 and S18
   consume `U16GetSign` and the copower assertion.

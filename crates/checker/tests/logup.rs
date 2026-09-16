@@ -2,12 +2,16 @@
 //! S14's memory gates, filled from `fib`'s real trace and decoded table.
 //!
 //! **Every test here is `#[ignore]`d, and CI runs the file by name with
-//! `--test-threads=1`.** Not for want of an environment: the timestamp
+//! `--include-ignored --test-threads=1`.** `--include-ignored`, not
+//! `--ignored`, for the reason `.github/workflows/ci.yml` gives of the qemu
+//! step: the latter runs *only* ignored tests, so a case added here without the
+//! attribute would be filtered out of the one step meant to run it. Not for
+//! want of an environment: the timestamp
 //! channel's table is `[0, 2^19)`, a table of `2^n` rows holds at most `2^n`
 //! values, and a Mercury opening needs an even variable count, so the smallest
 //! circuit that carries a gap obligation is `2^20` rows
-//! (`docs/spec/lookup.md` §3). One forward pass over it is 3 GB, and two at
-//! once would not fit a CI runner.
+//! (`docs/spec/lookup.md` §3). One forward pass over it holds 144,703,478
+//! inner cells — 4.63 GB as `Fr` — and two at once would not fit a CI runner.
 //!
 //! What the toy holds is `tools/kat-gen/src/lookup.rs`'s header. Everything
 //! about the artifact that does not need a forward pass — the laws, the
@@ -24,7 +28,7 @@ use checker::{
     check_padding, check_padding_identity, violated_lookups, violated_relations, ChannelSum,
 };
 use common::{forwarded_shard, witness_row, Shard, HEIGHT};
-use constants::{family, lookup_channel, transcript_tags};
+use constants::{challenge_slot, family, lookup_channel, transcript_tags};
 use constraints::lookup::ChannelSpec;
 use constraints::{CircuitArtifact, PolyAddress};
 use emulator::trace_run;
@@ -383,7 +387,7 @@ fn every_channel_holds(toy: &Toy, values: &LayerValues) -> bool {
 /// memory roots are still the products they were; and the whole circuit proves
 /// and verifies.
 #[test]
-#[ignore = "2^20 rows: one forward pass is 3 GB"]
+#[ignore = "2^20 rows: one forward pass holds 4.63 GB of inner cells"]
 fn the_combined_toy_proves_and_every_channel_holds() {
     let toy = toy();
     let a = &toy.shard.artifact;
@@ -438,12 +442,16 @@ fn the_combined_toy_proves_and_every_channel_holds() {
 /// rebalance the count it broke. The honest twin passes; the forged one fails
 /// **verification**, not merely the native evaluator.
 ///
-/// The forgery is the strongest form available: the prover recounts its own
-/// multiplicities over the tampered witness, so every count is self-consistent
-/// and nothing but the table's membership is left to catch it — and the table
-/// holds no `2^16`.
+/// Two forgeries, and the second is the interesting one. The prover first
+/// recounts its own multiplicities over the tampered witness, which cannot even
+/// be done: the table holds no `2^16`. Then it does what an unconstrained prover
+/// would — choose a multiplicity cell **after** `g`, solving
+/// `δ = (num/den)·(T_0 + g)` — and the channel balances, every check accepts it,
+/// and the proof verifies. What forbids that is the order of
+/// `docs/spec/lookup.md` §2 and nothing in the circuit, which is why acceptance
+/// 3 is a test and not a remark.
 #[test]
-#[ignore = "2^20 rows: one forward pass is 3 GB"]
+#[ignore = "2^20 rows: one forward pass holds 4.63 GB of inner cells"]
 fn an_out_of_range_value_with_a_rebalanced_multiplicity_fails_verification() {
     let toy = toy();
     let a = &toy.shard.artifact;
@@ -479,17 +487,17 @@ fn an_out_of_range_value_with_a_rebalanced_multiplicity_fails_verification() {
     // With the counts left as they were, the channel's sum is nonzero and its
     // root refuses it.
     let forged_toy = reshard(&toy, forged);
-    let (sums, roots) = sums(&forged_toy, &values);
-    let range16 = sums
+    let (broken, roots) = sums(&forged_toy, &values);
+    let range16 = broken
         .iter()
         .position(|s| s.channel == lookup_channel::RANGE16)
         .expect("the range16 channel");
     assert_eq!(
-        sums[range16].unmatched.len(),
+        broken[range16].unmatched.len(),
         2,
         "both chunks are unmatched"
     );
-    assert_ne!(sums[range16].num, Fr::ZERO);
+    assert_ne!(broken[range16].num, Fr::ZERO);
     assert!(!channel_holds(roots[range16]));
     // The GKR proof of the forged witness is honest — nothing below the root
     // notices — and the root check is what refuses it. A prover claiming the
@@ -506,6 +514,43 @@ fn an_out_of_range_value_with_a_rebalanced_multiplicity_fails_verification() {
         }),
         "a forged output claim, refused at the top transition"
     );
+
+    // The other half of the item: a multiplicity chosen **after** `g`
+    // rebalances the channel outright. A multiplicity is a field vector, so a
+    // prover who knew `g` could add `δ = (num/den)·(T_0 + g)` at table row 0 and
+    // drive the channel's numerator to 0. What forbids it is the order of
+    // `docs/spec/lookup.md` §2 — every multiplicity commitment absorbed before
+    // `g` is drawn — and nothing in the circuit;
+    // `the_lookup_challenges_follow_every_commitment` is that order.
+    let g = toy
+        .shard
+        .challenges
+        .get(challenge_slot::LOOKUP_G)
+        .expect("g was supplied");
+    let table_0 = gkr::virtual_at_row(constraints::VirtualKind::Range16, 0) + g;
+    let delta = broken[range16].num
+        * broken[range16]
+            .den
+            .inverse()
+            .expect("a nonzero denominator")
+        * table_0;
+    let mult = toy.specs[range16].multiplicity;
+    let was = forged_toy.shard.base.get(mult).expect("a column").get(0);
+    let rebalanced = with_cells(&forged_toy.shard, &[(mult, 0, was + delta)]);
+    let values = forwarded_shard(&rebalanced);
+    let rebalanced_toy = reshard(&toy, rebalanced);
+    let (after, roots) = sums(&rebalanced_toy, &values);
+    assert_eq!(
+        after[range16].num,
+        Fr::ZERO,
+        "a multiplicity chosen after g rebalances the channel"
+    );
+    assert!(channel_holds(roots[range16]), "and its root accepts it");
+    assert_eq!(check_channel_roots(&roots, &after), Ok(()));
+    assert_eq!(prove_and_verify(&rebalanced_toy, &values), Ok(()));
+    // It is still not a count: no multiset of lookups produces it.
+    let recount = build_multiplicities(a, &columns_of(&rebalanced_toy.shard), &toy.specs);
+    assert!(recount.is_err(), "and it is still not a recount");
 }
 
 // ---------------------------------------------------------------------------
@@ -646,7 +691,7 @@ fn toy_srs(power: u32) -> srs::Srs {
 /// `jal` reads no source register at all — so the pair is found by its
 /// property instead of by its register.
 #[test]
-#[ignore = "2^20 rows: one forward pass is 3 GB"]
+#[ignore = "2^20 rows: one forward pass holds 4.63 GB of inner cells"]
 fn s14s_future_read_now_fails_the_timestamp_channel() {
     let toy = toy();
     let a = &toy.shard.artifact;
@@ -739,7 +784,7 @@ fn s14s_future_read_now_fails_the_timestamp_channel() {
 ///    which is the `+ 1` offset: a genuine lookup of `a = b = 0` credits the
 ///    AND table's own row, and a switched-off row credits row 0.
 #[test]
-#[ignore = "2^20 rows: one forward pass is 3 GB"]
+#[ignore = "2^20 rows: one forward pass holds 4.63 GB of inner cells"]
 fn the_gated_key_convention_holds_in_all_three_cases() {
     let toy = toy();
     let a = &toy.shard.artifact;
@@ -819,15 +864,37 @@ fn the_gated_key_convention_holds_in_all_three_cases() {
 /// is the `ZeroEntry` — a table row. The channel balances, every check passes,
 /// and the row has looked up the neutral entry instead of a real one.
 ///
+/// The same unbounded key reaches the **other table** too: the AND lookup's key
+/// `and_a + AND_BASE + 1` is `SIGN_BASE + h + 1` at `and_a = SIGN_BASE + h`, so
+/// an unbounded `and_a` answers an AND claim with a `U16GetSign` row. The
+/// tables' key ranges are disjoint; the keys a row can *produce* are not.
+///
 /// So a family reading a value out of a table channel must bound the key it
-/// looks up; the channel cannot. The toy leaves `sign_h` unbounded on purpose —
-/// it is a toy for the channels, not a family — and S17 and S18 own the bounds.
+/// looks up into its own table's range; the channel cannot. The toy leaves
+/// `sign_h` and `and_a` unbounded on purpose — it is a toy for the channels, not
+/// a family — and S17 and S18 own the bounds.
 #[test]
-#[ignore = "2^20 rows: one forward pass is 3 GB"]
+#[ignore = "2^20 rows: one forward pass holds 4.63 GB of inner cells"]
 fn an_unbounded_key_can_reach_the_neutral_entry() {
     let toy = toy();
     let a = &toy.shard.artifact;
     let live = live_row(&toy, "sign_on");
+
+    // `and_a = SIGN_BASE + h` with `h = 0x8001`: the AND tuple is
+    // (SIGN_BASE + h + 1, h >> 15, 0), the U16GetSign row for h. The row has
+    // "proved" `and_a AND 1 = 0`, which is false.
+    let h = 0x8001u64;
+    let cross = with_cells(
+        &toy.shard,
+        &[
+            (at(a, "and_a"), live, Fr::from_u64(SIGN_BASE as u64 + h)),
+            (at(a, "and_b"), live, Fr::from_u64(h >> 15)),
+            (at(a, "and_c"), live, Fr::ZERO),
+        ],
+    );
+    let counted = build_multiplicities(a, &columns_of(&cross), &toy.specs)
+        .expect("the AND tuple is a U16GetSign row");
+    assert_eq!(counted.len(), 4, "every channel still counts");
 
     // `sign_h = −(SIGN_BASE + 1)` and `sign_s = 0`: the gated tuple is
     // (0, 0, 0), the ZeroEntry at the packed table's row 0.
@@ -883,7 +950,7 @@ fn an_unbounded_key_can_reach_the_neutral_entry() {
 /// nothing else, which is exactly what the all-zero case shows: booleanity
 /// permits it, and the table does not hold it.
 #[test]
-#[ignore = "2^20 rows: one forward pass is 3 GB"]
+#[ignore = "2^20 rows: one forward pass holds 4.63 GB of inner cells"]
 fn a_moved_decoded_output_and_an_illegal_mask_each_fail_the_decoder_channel() {
     let toy = toy();
     let a = &toy.shard.artifact;
@@ -936,7 +1003,7 @@ fn a_moved_decoded_output_and_an_illegal_mask_each_fail_the_decoder_channel() {
 /// is untouched, every gate holds, the recount names the column and the row, and
 /// the channel's root is no longer `(0, nonzero)`.
 #[test]
-#[ignore = "2^20 rows: one forward pass is 3 GB"]
+#[ignore = "2^20 rows: one forward pass holds 4.63 GB of inner cells"]
 fn one_changed_multiplicity_cell_fails_its_channel() {
     let toy = toy();
     let a = &toy.shard.artifact;
@@ -973,8 +1040,16 @@ fn one_changed_multiplicity_cell_fails_its_channel() {
 /// Acceptance 12. Every bit the circuit extracts from the packed mask carries
 /// `x − x·x = 0`, and a witness that is not 0 or 1 breaks it: the self-check
 /// names the gate, and the proof is rejected at gate list 0.
+///
+/// The tamper is chosen so that `x − x·x` is the **only** thing that refuses
+/// it. `kind_0 := 2` alone would also break the recomposition gate
+/// `Σ 2^k·kind_k − decoded_mask`, and the test would then pass with the
+/// booleanity gates deleted from the artifact. So the mask moves with the bits:
+/// `kind_0 := 2`, every other bit 0, `decoded_mask := 2`. Recomposition holds
+/// (`2·1 = 2`), `0b10` is a legal one-hot mask, so the decoder channel has no
+/// quarrel with the row either — and only booleanity is left.
 #[test]
-#[ignore = "2^20 rows: one forward pass is 3 GB"]
+#[ignore = "2^20 rows: one forward pass holds 4.63 GB of inner cells"]
 fn a_non_boolean_extracted_bit_is_refused_by_its_gate() {
     let toy = toy();
     let a = &toy.shard.artifact;
@@ -987,18 +1062,21 @@ fn a_non_boolean_extracted_bit_is_refused_by_its_gate() {
         );
     }
     let live = live_row(&toy, "pc_mask");
-    let forged = with_cells(&toy.shard, &[(at(a, "kind_0"), live, Fr::from_u64(2))]);
+    let two = Fr::from_u64(2);
+    let mut cells = vec![
+        (at(a, "decoded_mask"), live, two),
+        (at(a, "kind_0"), live, two),
+    ];
+    for k in 1..MASK_BITS {
+        cells.push((at(a, &format!("kind_{k}")), live, Fr::ZERO));
+    }
+    let forged = with_cells(&toy.shard, &cells);
     let values = forwarded_shard(&forged);
     let broken = gkr::self_check(a, &values, &forged.challenges).expect_err("a non-boolean bit");
     assert_eq!(broken.row, live);
-    assert!(
-        [
-            String::from("kind_0_boolean"),
-            String::from("decoded_mask_bits")
-        ]
-        .contains(&broken.relation),
-        "{}",
-        broken.relation
+    assert_eq!(
+        broken.relation, "kind_0_boolean",
+        "the recomposition still holds, so booleanity is the only gate left"
     );
     assert_eq!(
         prove_and_verify(&reshard(&toy, forged), &values),

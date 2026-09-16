@@ -286,3 +286,35 @@ fn channel(channel: u32, at: u32) -> ChannelSpec {
         multiplicity: w(MULT + at),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use test_support::{sha256, to_hex};
+
+    /// The committed fixture is the bytes [`super::toy`] writes today.
+    ///
+    /// Every other suite reads the *file* — `crates/checker/tests/logup.rs`
+    /// fills its columns and proves it, `crates/constraints/tests/lookup.rs`
+    /// checks its laws and its discharge — so without this the constructor
+    /// above is covered by nothing but CI's regenerate-and-diff step, and a
+    /// change to it that a developer regenerates over is a change no test sees.
+    /// `crates/constraints/tests/memory.rs`' `the_fixtures_are_the_constructors_bytes`
+    /// is the same assertion for S14's frames.
+    #[test]
+    fn the_fixture_is_the_constructors_bytes() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(super::FIXTURE);
+        let committed =
+            std::fs::read(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+        let built = super::toy().to_bytes();
+        assert_eq!(
+            to_hex(&sha256(&built)),
+            to_hex(&sha256(&committed)),
+            "the toy's constructor and `{}` have diverged; `cargo run -p kat-gen -- lookup` \
+             writes the constructor's bytes",
+            super::FIXTURE
+        );
+        assert_eq!(built, committed);
+    }
+}

@@ -57,7 +57,7 @@ pub fn generic_table(log_height: u32) -> Vec<MultilinearPoly> {
         "the generic table needs {GENERIC_ROWS} rows and 2^{log_height} is {rows}"
     );
     let mut columns = vec![vec![0u32; rows]; GENERIC_WIDTH];
-    for (row, entry) in generic_entries().enumerate() {
+    for (row, entry) in generic_entries().into_iter().enumerate() {
         for (column, value) in columns.iter_mut().zip(entry) {
             column[row + 1] = value;
         }
@@ -73,10 +73,10 @@ pub fn generic_table(log_height: u32) -> Vec<MultilinearPoly> {
 ///
 /// This is the tuple a lookup expression must produce, so it is also what an
 /// independent reference computation is diffed against.
-pub fn generic_entries() -> impl Iterator<Item = [u32; GENERIC_WIDTH]> {
+pub fn generic_entries() -> Vec<[u32; GENERIC_WIDTH]> {
     let and = (0..256u32).flat_map(|a| (0..256u32).map(move |b| [AND_BASE + a + 1, b, a & b]));
     let sign = (0..1u32 << 16).map(|h| [SIGN_BASE + h + 1, h >> 15, 0]);
-    and.chain(sign)
+    and.chain(sign).collect()
 }
 
 /// The `ZeroEntry`, which every switched-off row of the channel looks up.

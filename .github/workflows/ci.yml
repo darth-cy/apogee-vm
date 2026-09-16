@@ -93,10 +93,11 @@ jobs:
       # environment: the timestamp channel's table is `[0, 2^19)`, a table of
       # `2^n` rows holds at most `2^n` values, and a Mercury opening needs an
       # even variable count, so the smallest circuit carrying a gap obligation
-      # is `2^20` rows. One forward pass over it is 3 GB, so the file runs
-      # single-threaded: two at once would not fit the runner.
+      # is `2^20` rows. One forward pass over it holds 4.63 GB of inner cells,
+      # so the file runs single-threaded: two at once would not fit the runner.
+      # `--include-ignored` for the reason the qemu step above gives.
       - name: the LogUp channels over the combined toy
-        run: cargo test -p checker --test logup -- --ignored --test-threads=1
+        run: cargo test -p checker --test logup -- --include-ignored --test-threads=1
 
       # The crates the recursion guest links compile unchanged for the guest.
       - name: guest target builds

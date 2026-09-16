@@ -901,7 +901,7 @@ fn below(v: Fr, bits: u32) -> bool {
 ///
 /// Does NOT cover: a table channel's lookups, whose membership is a statement
 /// about the whole table and not about one row — [`channel_sums`] is their
-/// native evaluator, and it reports every unmatched row; `w.scratch`, which no
+/// native evaluator, and it names every unmatched tuple; `w.scratch`, which no
 /// lookup reads; the LogUp argument that discharges a lookup, which is
 /// [`channel_sums`] and the root pair; the lookup rules, which it assumes.
 /// Panics if `w.committed` is not shaped to the artifact, or on a lookup whose
@@ -949,10 +949,6 @@ pub fn violated_lookups(a: &CircuitArtifact, w: &WitnessRow) -> Vec<String> {
 /// requiring them to agree at every one. Shares no code with
 /// `constraints`'s rule, which compares normalized expansions.
 fn holds_booleanity(a: &CircuitArtifact, x: PolyAddress) -> bool {
-    if true {
-        let _ = (a, x);
-        return true;
-    }
     let Some(at) = layout_index(a, x) else {
         return false;
     };
@@ -993,9 +989,10 @@ pub struct ChannelSum {
     /// The product of every leaf denominator of the channel over every row,
     /// the neutral fractions' 1s included: the fraction tree's `den` root.
     pub den: Fr,
-    /// `(row, lookup name)` for every row whose gated tuple is a row of no
-    /// table row, in row then lookup order. A nonempty list is why `num` is
-    /// not 0.
+    /// `(row, lookup name)` for each **distinct** gated tuple no table row
+    /// answers, at the lowest row producing it, in row then lookup order: a
+    /// tuple that several rows produce is listed once, so this names every
+    /// missing tuple and not every row. A nonempty list is why `num` is not 0.
     pub unmatched: Vec<(usize, String)>,
 }
 

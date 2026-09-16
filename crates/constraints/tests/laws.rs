@@ -1015,10 +1015,13 @@ fn a_halving_list_refuses_an_enforcing_gate() {
     );
 }
 
-/// A row-wise list has no `TreeProduct`. `fingerprint3` as a tree of
+/// A row-wise list has neither halving shape. `fingerprint3` as a tree of
 /// `L{1}[1]`, its relation a tree of `scratch[1]`, is refused in row-wise
 /// gate list 1: the list's kind is unchanged, so its variable count still
-/// holds and the shape is the one thing wrong.
+/// holds and the shape is the one thing wrong. Then the same for `TreeCross`,
+/// S15's fraction-tree numerator — it reads four values where a row-wise list
+/// supplies two, so an artifact carrying one outside a halving list is refused
+/// here rather than panicking in `eval_gate` on the first forward pass.
 #[test]
 fn a_row_wise_list_refuses_a_tree() {
     let mut a = toy();
@@ -1027,6 +1030,15 @@ fn a_row_wise_list_refuses_a_tree() {
     assert_malformed(
         &a,
         "`define_fingerprint3` is a TreeProduct in row-wise gate list 1",
+    );
+
+    let cross = |left, right| GateDef::TreeCross { left, right };
+    let mut b = toy();
+    b.layers[1].producing[1].gate = cross(inner(1, 0), inner(1, 1));
+    b.relations[5].gate = cross(scratch(0), scratch(1));
+    assert_malformed(
+        &b,
+        "`define_fingerprint3` is a TreeCross in row-wise gate list 1",
     );
 }
 

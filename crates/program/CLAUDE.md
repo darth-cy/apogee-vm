@@ -57,7 +57,7 @@ pub mod lookup_tables {                  // docs/spec/lookup.md §9
     pub const SIGN_BASE: u32 = 256;  pub const SIGN_ROWS: usize = 1 << 16;
     pub const GENERIC_ROWS: usize = 1 + AND_ROWS + SIGN_ROWS;
     pub fn generic_table(log_height: u32) -> Vec<MultilinearPoly>;
-    pub fn generic_entries() -> impl Iterator<Item = [u32; GENERIC_WIDTH]>;
+    pub fn generic_entries() -> Vec<[u32; GENERIC_WIDTH]>;
     pub fn zero_entry() -> [Fr; GENERIC_WIDTH];
 }
 ```

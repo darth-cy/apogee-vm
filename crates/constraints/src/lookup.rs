@@ -23,7 +23,7 @@ use alloc::vec::Vec;
 use constants::{challenge_slot, lookup_channel};
 use field::Fr;
 
-use crate::build::{self, Combine, Tree};
+use crate::build::{Combine, Tree};
 use crate::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
 
 fn lit(v: u64) -> Coeff {
@@ -361,35 +361,103 @@ pub fn check_discharge(a: &CircuitArtifact, specs: &[ChannelSpec]) -> Result<(),
     let list = &a.layers[0];
     let leaves: Vec<&GateDef> = list.producing.iter().map(|e| &e.gate).collect();
     let cones = channel_cones(a, specs)?;
+    let one = crate::laws::normal_form(&GateDef::Linear {
+        terms: Vec::new(),
+        constant: lit(1),
+    });
+    // A lookup's fraction is `(1, E_l + g)`, so the column before its
+    // denominator is its numerator and is the literal 1. Without this, a
+    // numerator moved to 0 turns the fraction into 0 and drops the obligation
+    // while every other check still sees the denominator where it was.
+    let numerator = |j: usize, name: &str| -> Result<(), String> {
+        match j
+            .checked_sub(1)
+            .filter(|i| crate::laws::normal_form(leaves[*i]) == one)
+        {
+            Some(_) => Ok(()),
+            None => Err(format!(
+                "lookup discharge: lookup `{name}`'s fraction has no numerator of 1 beside its \
+                 denominator, so its row contributes nothing"
+            )),
+        }
+    };
     let mut used = vec![0usize; leaves.len()];
-    for l in &a.lookups {
-        let want = crate::laws::normal_form(&row_denominator(l));
+    for spec in specs {
+        // The channel's own table fraction: `(−mult, T + g)`, and exactly one of
+        // it. Without it a channel sums its rows against nothing.
+        let want = crate::laws::normal_form(&table_denominator(spec));
         let hits: Vec<usize> = (0..leaves.len())
             .filter(|&j| crate::laws::normal_form(leaves[j]) == want)
             .collect();
+        let channel = lookup_channel::NAMES[spec.channel as usize];
         if hits.len() != 1 {
             return Err(format!(
-                "lookup discharge: lookup `{}` is the denominator of {} gate-list-0 columns; \
-                 exactly one discharges it",
-                l.name,
+                "lookup discharge: channel `{channel}`'s table is the denominator of {} \
+                 gate-list-0 columns; exactly one is its fraction",
                 hits.len()
             ));
         }
-        if let Some((i, spec)) = specs
-            .iter()
-            .enumerate()
-            .find(|(_, s)| s.channel == l.channel)
-        {
-            if !cones[i].contains(&hits[0]) {
-                let channel = lookup_channel::NAMES[l.channel as usize];
-                return Err(format!(
-                    "lookup discharge: lookup `{}` is discharged by a column outside channel \
-                     `{channel}`'s fraction tree, so it is summed against another table",
-                    l.name
-                ));
-            }
-            let _ = spec;
+        let mult = crate::laws::normal_form(&GateDef::Linear {
+            terms: vec![(Coeff::Literal(Fr::MINUS_ONE), spec.multiplicity)],
+            constant: lit(0),
+        });
+        let named = hits[0]
+            .checked_sub(1)
+            .is_some_and(|i| crate::laws::normal_form(leaves[i]) == mult);
+        if !named {
+            return Err(format!(
+                "lookup discharge: channel `{channel}`'s table fraction has no numerator \
+                 `−{}` beside its denominator",
+                spec.multiplicity
+            ));
         }
+        used[hits[0]] += 1;
+    }
+    for l in &a.lookups {
+        let want = crate::laws::normal_form(&row_denominator(l));
+        let all: Vec<usize> = (0..leaves.len())
+            .filter(|&j| crate::laws::normal_form(leaves[j]) == want)
+            .collect();
+        // The count is per channel, not per circuit: the two range channels
+        // gate and neutralize identically (§4), so one lookup's denominator gate
+        // can be another channel's leaf byte for byte, and counting over the
+        // whole list would refuse two obligations that are each discharged
+        // exactly once. Where `specs` names the channel, count inside its cone,
+        // and a lookup whose every match is outside it is misrouted rather than
+        // missing.
+        let channel = lookup_channel::NAMES[l.channel as usize];
+        let cone = specs
+            .iter()
+            .position(|s| s.channel == l.channel)
+            .map(|i| &cones[i]);
+        let hits: Vec<usize> = match cone {
+            Some(c) => all.iter().copied().filter(|j| c.contains(j)).collect(),
+            None => all.clone(),
+        };
+        if cone.is_some() && hits.is_empty() && !all.is_empty() {
+            return Err(format!(
+                "lookup discharge: lookup `{}` is discharged by a column outside channel \
+                 `{channel}`'s fraction tree, so it is summed against another table",
+                l.name
+            ));
+        }
+        if hits.len() != 1 {
+            return Err(match cone {
+                Some(_) => format!(
+                    "lookup discharge: lookup `{}` is the denominator of {} columns of channel \
+                     `{channel}`'s fraction tree; exactly one discharges it",
+                    l.name,
+                    hits.len()
+                ),
+                None => format!(
+                    "lookup discharge: lookup `{}` is the denominator of {} gate-list-0 columns; \
+                     exactly one discharges it",
+                    l.name,
+                    hits.len()
+                ),
+            });
+        }
+        numerator(hits[0], &l.name)?;
         used[hits[0]] += 1;
     }
     for (j, count) in used.iter().enumerate() {
@@ -508,6 +576,6 @@ pub(crate) fn product_tree(prefix: &str, leaves: Vec<(String, GateDef)>) -> Tree
     Tree {
         combine: Combine::Product,
         leaves,
-        prefix: build::name(prefix),
+        prefix: prefix.to_string(),
     }
 }

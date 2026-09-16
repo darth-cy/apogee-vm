@@ -127,7 +127,7 @@ pub fn beta_power(j: usize) -> Coeff;
 pub fn range_table(channel: u32) -> Option<VirtualKind>;
 pub fn row_denominator(l: &LookupExpr) -> GateDef;             // E_l + g, one Quadratic
 pub fn table_denominator(spec: &ChannelSpec) -> GateDef;       // T + g, one Linear
-pub fn check_discharge(a: &CircuitArtifact) -> Result<(), String>;
+pub fn check_discharge(a: &CircuitArtifact, specs: &[ChannelSpec]) -> Result<(), String>;
 pub fn check_copowers(a: &CircuitArtifact, scaled: &[PolyAddress]) -> Result<(), String>;
 
 // crates/constraints/src/memory.rs
@@ -136,8 +136,9 @@ pub struct Extras { pub witness: Vec<String>, pub setup: Vec<String>,
                     pub enforcing: Vec<(String, GateDef)>, pub lookups: Vec<LookupExpr>,
                     pub channels: Vec<lookup::ChannelSpec> }                  // + Default
 pub fn frame_with_channels_artifact(queries: &[usize], trace_vars: u32, extras: Extras)
-    -> CircuitArtifact;
-// frame_artifact(q, n) == frame_with_channels_artifact(q, n, Extras::default()), byte for byte
+    -> CircuitArtifact;                              // panics on an empty extras.channels
+// frame_artifact(q, n) is S14's bare frame, byte for byte: the one artifact that carries
+// obligations with no channel, and it does not come through the entry point above
 ```
 
 ```rust
@@ -177,7 +178,7 @@ pub const AND_BASE: u32 = 0;    pub const AND_ROWS: usize = 1 << 16;
 pub const SIGN_BASE: u32 = 256; pub const SIGN_ROWS: usize = 1 << 16;
 pub const GENERIC_ROWS: usize = 1 + AND_ROWS + SIGN_ROWS;      // 131,073
 pub fn generic_table(log_height: u32) -> Vec<MultilinearPoly>;
-pub fn generic_entries() -> impl Iterator<Item = [u32; GENERIC_WIDTH]>;
+pub fn generic_entries() -> Vec<[u32; GENERIC_WIDTH]>;
 pub fn zero_entry() -> [Fr; GENERIC_WIDTH];
 ```
 
@@ -326,10 +327,14 @@ answers are "Read these first"; the prompt is not edited).
    `constraints::memory` had: a set of product and fraction trees, reduced row-wise until
    each is one node — a shallower tree copies itself up — then `trace_vars` halving lists.
    `memory`'s six fixtures are byte-identical through the rewrite.
-10. **A frame with no channel is a component.** `check_discharge` runs only where a circuit
-    declares channels: S14 froze `frame_artifact` with its obligations declared and their
-    discharge owed to S15, and those bytes are the fixtures. Only a circuit claiming to
-    discharge something is held to the rule.
+10. **A frame with no channel is a component, and only `frame_artifact` builds one.**
+    `check_discharge` runs only where a circuit declares channels: S14 froze
+    `frame_artifact` with its obligations declared and their discharge owed to S15, and
+    those bytes are the fixtures. So that the exemption is one artifact rather than one
+    *shape*, `frame_with_channels_artifact` refuses an empty channel list outright — a
+    frame carries `2w` gap obligations whatever a caller adds, and were the rule merely
+    skipped for circuits that declare no channel, the shape with every obligation
+    undischarged would be the one shape it was never asked of.
 11. **The selector-booleanity rule is S14's deferred review finding math-5**, landed in
     `validate` and in `checker::check_laws`. It moves no fixture — every S14 selector is a
     booleanity-gated mask — and it makes two independent rules bite on a frame missing a
@@ -353,9 +358,9 @@ answers are "Read these first"; the prompt is not edited).
     (`docs/spec/memory.md` §5). The row's **pc** is the frame's own column, so the decoder
     binds the cycle to the table rather than a copy of it to a copy of the table.
 16. **The toy's tests bind the base with Mercury commitments**, as S16 will, not with
-    `sumcheck::witness_digest`: at `2^20` the digest is a Poseidon2 sponge over 49 million
-    cells — measured at 19 s per four columns, so about 220 s — while 47 commitments are
-    2.2 s. The toy SRS is built from a `tau` written down in the test, as `crates/pcs`'
+    `sumcheck::witness_digest`: at `2^20` the digest is a Poseidon2 sponge over 72 million
+    cells — measured at 19 s per four columns, so about 330 s — while 69 commitments are
+    3.2 s. The toy SRS is built from a `tau` written down in the test, as `crates/pcs`'
     suite builds one; only `commit` is used, and an opening is S16's.
 17. **`Extras` is a parameter bundle, not a builder**: a plain struct with `Default`,
     passed once. Nothing is pushed into an artifact after a collection point.
@@ -387,6 +392,53 @@ answers are "Read these first"; the prompt is not edited).
     cut a channel's layer-1 width from `2P` to `L + 2`, roughly 40% of the circuit. It is
     not done: the owner chose the uniform leaf, and both shapes need S20's streaming at
     `2^22` regardless. Recorded so the option is not rediscovered.
+19. **The discharge count is per channel.** The two range channels gate and neutralize
+    identically (§4), so a `timestamp` and a `range16` obligation over one selector and one
+    expression have byte-identical denominator gates — and bounding one expression in two
+    channels is ordinary, since a value under `2^16` is also under `2^19`. Counting matches
+    over the whole gate list would refuse a circuit in which both are discharged exactly
+    once, so where the caller names the channels the rule counts inside each lookup's own
+    cone, and a lookup whose every match lies outside its cone is reported as misrouted
+    rather than missing. With no `specs` the count is over the list, as before.
+
+---
+
+## What the adversarial review changed
+
+Five lenses — math, attacker, stage-prompt compliance, mutation and repo-rules — raised 44
+findings, of which 25 survived an adversarial verification pass. The math lens found no
+error in the argument; what the rest found, and what was done:
+
+- **Two circuits could be built that no rule refused.** `frame_with_channels_artifact` with
+  an empty channel list (deviation 10 above), and a lookup two columns of its own channel's
+  tree discharge. Both are refused now, with a control apiece.
+- **Three rules had no failing test**, so a checker that always accepted was invisible:
+  `checker::check_lookup_discharge`, `checker::check_channel_roots` and
+  `checker::holds_booleanity`. Each has a negative control now, as does
+  `check_padding_identity`'s fraction-tree exemption, `ChannelSum::sum`,
+  `check_copowers`' no-constant requirement and a `TreeCross` in a row-wise gate list —
+  each verified by applying the mutant and watching the test fail.
+- **The toy's constructor was checked by nothing but CI's regenerate-and-diff.**
+  `tools/kat-gen/src/lookup.rs` now holds `toy()`'s bytes to the committed fixture, as
+  `constraints/tests/memory.rs` does for S14's frames.
+- **`holds_booleanity` shipped a `if true { return true }` stub** left over from a
+  mutation run — committed, and caught here by the negative control the compliance lens
+  asked for. The rule was enforced once, by `validate`, not twice.
+- **Two claims in the docs were wrong**: the committed toy has 69 columns, not 47, which
+  moves the commitment and digest costs derived from it; and one forward pass holds 4.63 GB
+  of inner cells, not 3 GB, which is what CI's `--test-threads=1` rationale cites.
+- **Three gaps are real and are now recorded rather than closed**: nothing binds the packed
+  generic table to program identity, `padding.row` is no longer every cell of a padding row
+  once a channel is present, and the `ZeroEntry` cannot be a construction rule because an
+  artifact holds table addresses and not table values. The first two are S16 items below;
+  the third is `docs/spec/lookup.md` §11.
+- **Smaller**: `generic_entries` returned `impl Iterator` in a public signature, which the
+  master's anti-goal 2 bans by name; `build::name` was a one-line alias whose doc described
+  a different function; `normal_form`'s doc comment had stolen `normalize`'s first
+  sentence; `ChannelSum::unmatched` was documented as naming every unmatched row when it
+  names each unmatched tuple once; acceptance 12's tamper broke two gates at once, so it did
+  not show `x − x·x` was load-bearing; and the new CI step used `--ignored` where the
+  file's own qemu step explains why `--include-ignored` is required.
 
 ---
 
@@ -420,6 +472,23 @@ answers are "Read these first"; the prompt is not edited).
   caller outside the tests today. A prover that commits a hand-written multiplicity column
   meets nothing before the channel root, which is the runtime check the recount was meant
   to sit in front of.
+- **Nothing binds the packed generic table.** `program::setup_commitments` commits each
+  family's *decoded* table and `INIT_TEARDOWN`'s image column, and
+  `docs/spec/memory.md` §6.2 absorbs exactly those. §9's packed table is a fourth kind of
+  committed setup column and is in neither list, so a verifying key whose AND rows answer
+  `37 & 45 = 0` recomputes the honest identity digest and passes `validate`,
+  `check_memory`, `check_discharge` and `check_copowers` alike. The table differential in
+  `program/tests/lookup_tables.rs` holds the *reference implementation*, not the table a
+  verifier is handed. S16 brings it into the identity recipe or into the statement;
+  `docs/spec/lookup.md` §13 records the gap.
+- **`padding.row` is not every cell of a padding row any more.** `build::assemble` writes
+  it all-zero, and a channel's multiplicity column is nonzero on inactive rows — it counts
+  the neutral entry those rows look up. The column enters no enforcing relation and no
+  product tree, so neither padding clause asks anything of it, and `docs/spec/gkr.md` §4.3
+  now says so. The trap is for an S16 witness builder that carries S14's acceptance 10
+  forward — `multiset.rs` holds every committed cell of a frame shard's padding rows equal
+  to `padding.row` — and zeroes the multiplicities to match: every channel would then fail
+  to balance, and the honest prover is the one it breaks.
 - **Bounding every key a table channel looks up** (`docs/spec/lookup.md` §4). The gating
   sends a switched-off row to the neutral entry; it does not stop a *selected* row from
   reaching it by driving its key to `−1`. S17 and S18 own the bounds on the columns their
@@ -462,16 +531,17 @@ answers are "Read these first"; the prompt is not edited).
 
 ## Verification performed
 
-**752 workspace tests, all green, plus 30 `#[ignore]`d** (722 and 21 at S14), from one
-`cargo test --workspace --no-fail-fast` on the final tree: 30 new passing tests and 9 new
-ignored ones. New test files, and the tests in each:
+**760 workspace tests, all green, plus 30 `#[ignore]`d** (722 and 21 at S14), from one
+`cargo test --workspace` on the final tree: 38 new passing tests and 9 new ignored ones.
+New test files, and the tests in each:
 
 | File | Tests |
 | --- | --- |
 | `checker/tests/logup.rs` | 9, all `#[ignore]`d |
-| `constraints/tests/lookup.rs` | 17 |
-| `gkr/tests/lookup.rs` | 6 |
+| `constraints/tests/lookup.rs` | 21 |
+| `gkr/tests/lookup.rs` | 7 |
 | `program/tests/lookup_tables.rs` | 4 |
+| `tools/kat-gen/src/lookup.rs` | 1, the toy's constructor against its fixture |
 
 Every gate `CLAUDE.md` lists, run locally on macOS, each exit 0:
 - `fmt --check` in all four workspaces (root, `tools/transcript-ref`, `crates/guest-sdk`,
@@ -484,10 +554,12 @@ Every gate `CLAUDE.md` lists, run locally on macOS, each exit 0:
 - `cargo run -p kat-gen`, then `git diff --exit-code` over all ten fixture directories: no
   diff, `lookup_toy.bin` included and every S13 and S14 fixture unmoved;
 - `transcript-ref`, with no diff, and fib's guest build;
-- `cargo test -p checker --test logup -- --ignored --test-threads=1`: 9 passed, 189 s.
+- `cargo test -p checker --test logup -- --include-ignored --test-threads=1`: 9 passed, 201 s.
 
 **Measurements**, on the committed toy at `trace_vars` 20 (`JUMP_BRANCH_SLT`'s frame over
-fib, 47 committed columns, depth 25, layer 1 sixty columns wide):
+fib, 69 committed columns — 21 `M`, 38 `W`, 10 `S` — depth 25, layer 1 sixty columns
+wide). The two per-column rates are what was measured; the totals below them are that
+rate times 69:
 
 | What | Cost |
 | --- | --- |
@@ -496,7 +568,7 @@ fib, 47 committed columns, depth 25, layer 1 sixty columns wide):
 | `self_check` | 0.74 s |
 | `channel_sums`, all four channels | 2.7 s |
 | `build_multiplicities`, all four | 1.4 s |
-| one Mercury commitment | 46 ms — 2.2 s for the 47 columns |
+| one Mercury commitment | 46 ms — 3.2 s for the 69 columns |
 | a toy SRS of `2^20` points | 5.2 s |
 | `prove` + `verify` | ~10 s |
 | peak resident | 5.4 GB at 60 columns; 7.5 GB measured before the fraction fold below |
@@ -504,8 +576,8 @@ fib, 47 committed columns, depth 25, layer 1 sixty columns wide):
 Two measurements changed the implementation:
 
 - **`sumcheck::witness_digest` is 19 s per four columns at `2^20`** — a Poseidon2 sponge
-  over every cell — so binding the base that way would cost about 220 s a test. The suite
-  binds with Mercury commitments instead, which is 2.2 s and is also what S16 does.
+  over every cell — so binding the base that way would cost about 330 s a test. The suite
+  binds with Mercury commitments instead, which is 3.2 s and is also what S16 does.
 - **`checker::channel_sums` originally inverted per row**, eleven million inversions a
   channel. It folds fractions now, which is a different algorithm from the tree it checks
   and is what made the acceptance suite tractable at all.

@@ -936,8 +936,6 @@ fn product(a: &[(Vec<Symbol>, Fr)], b: &[(Vec<Symbol>, Fr)]) -> Expansion {
     normalize(out)
 }
 
-/// One polynomial, one representation: monomials sorted, equal ones merged,
-/// zero coefficients dropped.
 /// `gate`'s normalized expansion in the flat namespace: monomials over its own
 /// operand addresses and challenge slots, merged and sorted. Two gates with
 /// equal normal forms are the same polynomial — cancellation, term order and
@@ -956,6 +954,8 @@ pub(crate) fn normal_form(gate: &GateDef) -> Expansion {
     normalize(ns.expand(gate))
 }
 
+/// One polynomial, one representation: monomials sorted, equal ones merged,
+/// zero coefficients dropped.
 fn normalize(mut terms: Expansion) -> Expansion {
     for (m, _) in terms.iter_mut() {
         m.sort_unstable();

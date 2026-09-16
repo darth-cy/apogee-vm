@@ -12,7 +12,8 @@ mod common;
 use common::fixture_bytes;
 use constants::{challenge_slot, family, lookup_channel};
 use constraints::lookup::{
-    beta_power, check_copowers, check_discharge, range_table, table_denominator, ChannelSpec,
+    beta_power, check_copowers, check_discharge, range_table, row_denominator, table_denominator,
+    ChannelSpec,
 };
 use constraints::memory::{frame_queries, frame_with_channels_artifact, Extras};
 use constraints::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
@@ -132,6 +133,130 @@ fn an_unconsumed_and_a_doubly_consumed_obligation_each_fail_the_check() {
     let e = check_discharge(&doubled, &[]).expect_err("a doubly-consumed obligation");
     assert!(
         e.starts_with("lookup discharge: column `gap_hi_pc_den` is the denominator of 2 lookups"),
+        "{e}"
+    );
+}
+
+/// One lookup that **two columns of its own channel's tree** discharge is
+/// refused. The timestamp tree adds that fraction twice while the multiplicity
+/// column counts it once, so the honest prover cannot balance — and every other
+/// half of the rule is blind to it: the numerator is where it should be, the
+/// column is in the right cone, and no column is two lookups' denominator, so
+/// only the count itself catches it.
+#[test]
+fn two_columns_of_one_channel_discharging_one_lookup_are_refused() {
+    let specs = toy_specs();
+    let mut a = toy();
+    let slot = |a: &CircuitArtifact, name: &str| {
+        a.scratch
+            .iter()
+            .position(|s| s.name == name)
+            .unwrap_or_else(|| panic!("the toy has no column `{name}`"))
+    };
+    // `gap_lo_pc_den` rewritten as a second copy of `gap_hi_pc_den`, relation
+    // and all, with its own obligation dropped from the list so that nothing is
+    // left unconsumed.
+    let (hi, lo) = (slot(&a, "gap_hi_pc_den"), slot(&a, "gap_lo_pc_den"));
+    let gate = a.layers[0].producing[hi].gate.clone();
+    let r = a.layers[0].producing[lo].relation as usize;
+    a.layers[0].producing[lo].gate = gate.clone();
+    a.relations[r].gate = gate;
+    a.lookups.retain(|l| l.name != "gap_lo_pc");
+    assert_eq!(a.validate(), Ok(()), "still a lawful circuit");
+
+    let e = check_discharge(&a, &specs).expect_err("two columns discharge one lookup");
+    assert!(
+        e.contains(
+            "lookup `gap_hi_pc` is the denominator of 2 columns of channel `timestamp`'s \
+             fraction tree"
+        ),
+        "{e}"
+    );
+}
+
+/// The count is per channel, not per circuit. The two range channels gate and
+/// neutralize identically (§4), so a `timestamp` and a `range16` obligation over
+/// one selector and one expression have **byte-identical** denominator gates:
+/// counting matches over the whole gate list would see two columns for each and
+/// refuse a circuit in which both are discharged exactly once. Bounding one
+/// expression in two channels is ordinary — a value under `2^16` is also under
+/// `2^19` — so the rule counts inside each lookup's own channel's cone.
+#[test]
+fn one_expression_bounded_in_two_range_channels_is_discharged_once_in_each() {
+    let a = build(VARS, |e| {
+        e.witness.push("mult_range16".to_string());
+        e.virtuals
+            .push((VirtualKind::Range16, "range16".to_string()));
+        e.lookups.push(LookupExpr {
+            name: "value_range16".to_string(),
+            channel: lookup_channel::RANGE16,
+            selector: w(FLAG),
+            tuple: vec![column(w(VALUE))],
+        });
+        e.channels.push(ChannelSpec {
+            channel: lookup_channel::RANGE16,
+            table: vec![PolyAddress::Virtual(VirtualKind::Range16)],
+            multiplicity: w(MULT_GENERIC + 1),
+        });
+    });
+    // The construction itself runs the rule, so reaching this line is the
+    // assertion; what it is an assertion *about* is the collision below.
+    let two: Vec<&LookupExpr> = a
+        .lookups
+        .iter()
+        .filter(|l| l.name == "value_range" || l.name == "value_range16")
+        .collect();
+    assert_eq!(two.len(), 2);
+    assert_ne!(two[0].channel, two[1].channel);
+    assert_eq!(
+        row_denominator(two[0]),
+        row_denominator(two[1]),
+        "the two channels' denominator gates are the same gate"
+    );
+}
+
+/// A lookup whose fraction numerator is not 1 contributes nothing: its row's
+/// term is `0/(E_l + g)`, so the obligation is silently dropped while its
+/// denominator still sits where every other check looks. The same for a
+/// channel's table fraction, whose numerator is `−mult`.
+#[test]
+fn a_fraction_numerator_moved_off_its_leaf_drops_the_obligation() {
+    let specs = toy_specs();
+    let mut a = toy();
+    assert_eq!(check_discharge(&a, &specs), Ok(()));
+
+    let at = |a: &CircuitArtifact, name: &str| {
+        a.scratch
+            .iter()
+            .position(|s| s.name == name)
+            .unwrap_or_else(|| panic!("the toy has no column `{name}`"))
+    };
+    // The obligation's numerator, in the gate and its relation alike.
+    let zero = GateDef::Linear {
+        terms: vec![],
+        constant: lit(0),
+    };
+    let j = at(&a, "gap_hi_pc_num");
+    let r = a.layers[0].producing[j].relation as usize;
+    a.layers[0].producing[j].gate = zero.clone();
+    a.relations[r].gate = zero.clone();
+    assert_eq!(a.validate(), Ok(()), "still a lawful circuit");
+    let e = check_discharge(&a, &specs).expect_err("a numerator moved to 0");
+    assert!(
+        e.contains("lookup `gap_hi_pc`'s fraction has no numerator of 1"),
+        "{e}"
+    );
+
+    // And the table fraction's numerator, which is `−mult`.
+    let mut b = toy();
+    let j = at(&b, "timestamp_table_num");
+    let r = b.layers[0].producing[j].relation as usize;
+    b.layers[0].producing[j].gate = zero.clone();
+    b.relations[r].gate = zero;
+    assert_eq!(b.validate(), Ok(()));
+    let e = check_discharge(&b, &specs).expect_err("a table numerator moved to 0");
+    assert!(
+        e.contains("channel `timestamp`'s table fraction has no numerator"),
         "{e}"
     );
 }
@@ -352,6 +477,24 @@ fn a_lookup_whose_channel_no_spec_declares_is_refused() {
     });
 }
 
+/// A caller that declares no channel at all is refused at the entry point,
+/// before anything is built. A frame carries its own `2w` gap obligations
+/// whatever a caller adds, so an empty channel list is a circuit every
+/// obligation of which is undischarged — the one shape where the discharge rule
+/// has the most to say and, were it run only for circuits that declare a
+/// channel, the one shape it would never be asked of. S14's bare
+/// `frame_artifact` is the one artifact that legitimately carries obligations
+/// without a channel, and it does not come through here.
+#[test]
+#[should_panic(expected = "no channel, and a frame's own 8 gap obligations would be discharged")]
+fn extra_lookups_with_no_channel_at_all_are_refused() {
+    build(VARS, |e| {
+        e.channels.clear();
+        e.witness.retain(|n| !n.starts_with("mult_"));
+        e.setup.clear();
+    });
+}
+
 /// Every lookup of a channel is as wide as the channel's table: they share one
 /// table, and a narrower tuple would compress to a value the table cannot hold.
 #[test]
@@ -514,6 +657,26 @@ fn a_copower_scaled_column_needs_its_own_direct_range_check() {
     half.lookups.retain(|l| l.name != "word_hi_range");
     assert!(check_copowers(&half, &[at(&a, "word")]).is_err());
     assert!(check_copowers(&half, &[at(&a, "word_hi")]).is_err());
+
+    // A shifted bound is not a direct one. `word_hi + 2^15 < 2^16` says nothing
+    // about `word_hi`: it admits `word_hi = p − 1`, whose canonical
+    // representative is the modulus minus one, which is the very case the whole
+    // assertion exists for. So the obligation must carry no constant.
+    let mut shifted = a.clone();
+    for l in shifted
+        .lookups
+        .iter_mut()
+        .filter(|l| l.name == "word_hi_range")
+    {
+        let GateDef::Linear { constant, .. } = &mut l.tuple[0] else {
+            panic!("a range obligation is one Linear");
+        };
+        *constant = lit(1 << 15);
+    }
+    assert!(
+        check_copowers(&shifted, &[at(&a, "word_hi")]).is_err(),
+        "`word_hi + 2^15 < 2^16` is not a bound on `word_hi`"
+    );
 }
 
 /// The committed column named `name`.

@@ -14,7 +14,7 @@
 //! list and column by column, producing before enforcing.
 
 use alloc::format;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -450,9 +450,4 @@ pub(crate) fn zero_on_zero_row(name: &str, gate: &GateDef) -> bool {
              so zero_row_valid is not decided for it"
         ),
     }
-}
-
-/// The names of a tree's leaf columns, for a caller that builds its own.
-pub(crate) fn name(s: &str) -> String {
-    s.to_string()
 }

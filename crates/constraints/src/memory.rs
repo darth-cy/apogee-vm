@@ -394,7 +394,7 @@ fn gap_lookups(query: usize, at: usize) -> [LookupExpr; 2] {
 /// refuses it, or if `queries` is not the pc query followed by a strictly
 /// ascending subset of the table.
 pub fn frame_artifact(queries: &[usize], trace_vars: u32) -> CircuitArtifact {
-    frame_with_channels_artifact(queries, trace_vars, Extras::default())
+    frame_body(queries, trace_vars, frame_gaps(queries), Extras::default())
 }
 
 /// [`frame_artifact`] over [`frame_queries`] of `family`: the frame that
@@ -433,16 +433,34 @@ pub struct Extras {
 /// Validated, held to [`check_memory`] and to
 /// [`lookup::check_discharge`]; panics if any refuses it, or if `queries` is
 /// not the pc query followed by a strictly ascending subset of the table.
+///
+/// **`extras.channels` must not be empty.** A frame carries its own `2w` gap
+/// obligations whatever a caller adds, so a channel list of nothing is a
+/// circuit every one of whose obligations is undischarged. The one artifact of
+/// that shape is S14's [`frame_artifact`], a *component* whose discharge S15
+/// owes and whose bytes are frozen fixtures; it is built here rather than
+/// through this entry point, and this one refuses the shape outright.
 pub fn frame_with_channels_artifact(
     queries: &[usize],
     trace_vars: u32,
     extras: Extras,
 ) -> CircuitArtifact {
+    assert!(
+        !extras.channels.is_empty(),
+        "memory frame: no channel, and a frame's own {} gap obligations would be discharged \
+         by nothing; S14's bare frame is `frame_artifact`",
+        2 * queries.len()
+    );
+    frame_body(queries, trace_vars, frame_gaps(queries), extras)
+}
+
+/// A frame's own obligations: two per read (`docs/spec/memory.md` §2.4).
+fn frame_gaps(queries: &[usize]) -> Vec<LookupExpr> {
     let mut gaps = Vec::new();
     for (at, &query) in queries.iter().enumerate() {
         gaps.extend(gap_lookups(query, at));
     }
-    frame_body(queries, trace_vars, gaps, extras)
+    gaps
 }
 
 /// [`frame_with_channels_artifact`] with the frame's own obligations passed

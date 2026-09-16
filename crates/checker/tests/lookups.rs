@@ -1,7 +1,7 @@
 //! The lookup element, `docs/spec/memory.md` §7. `check_laws` holds every
 //! lookup to the rules of `docs/spec/gkr.md` §4.2 with code of its own, and
-//! agrees with `CircuitArtifact::validate` on every mutant below: 6 lawful — an
-//! `M`, a `W` and an `S` selector and the `range16` channel among them — and 29
+//! agrees with `CircuitArtifact::validate` on every mutant below: 7 lawful — an
+//! `M`, a `W` and an `S` selector and the `range16` channel among them — and 31
 //! breaking one rule each, on both toys. `violated_lookups`, the native
 //! evaluator, reports exactly the lookups a row breaks, reads each lookup's bound
 //! from its own channel, and an evaluator reporting nothing, or everything, fails
@@ -10,8 +10,8 @@
 mod common;
 
 use checker::{
-    check_channel_roots, check_laws, check_lookup_discharge, violated_lookups, ChannelSum,
-    WitnessRow,
+    check_channel_roots, check_laws, check_lookup_discharge, check_padding_identity,
+    violated_lookups, ChannelSum, WitnessRow,
 };
 use common::*;
 use constants::{challenge_slot, lookup_channel, memory::RAM_LIVE_BIT};
@@ -226,6 +226,27 @@ fn mutants() -> Vec<Mutant> {
             push(a, |_| {});
             push(a, |l| l.selector = W1);
         }),
+        // Above position 0 an expression weights its columns by 1 and carries
+        // no constant, `β^0` being the literal 1 and `β^j·c` above it not one
+        // `Coeff`. Only a table channel has such a position.
+        m("a two-column generic lookup", true, |a| {
+            push(a, |l| {
+                l.channel = lookup_channel::GENERIC;
+                l.tuple.push(expression(&[(lit(1), W3)], lit(0)));
+            })
+        }),
+        m("a weighted expression above position 0", false, |a| {
+            push(a, |l| {
+                l.channel = lookup_channel::GENERIC;
+                l.tuple.push(expression(&[(lit(2), W3)], lit(0)));
+            })
+        }),
+        m("a constant on an expression above position 0", false, |a| {
+            push(a, |l| {
+                l.channel = lookup_channel::GENERIC;
+                l.tuple.push(expression(&[(lit(1), W3)], lit(5)));
+            })
+        }),
         m("an uppercase name", false, |a| {
             push(a, |l| l.name = "Range".to_string())
         }),
@@ -263,7 +284,7 @@ fn check_laws_agrees_with_validate_on_every_lookup_mutant() {
             runs += 1;
         }
     }
-    assert_eq!(runs, 2 * 35, "mutant runs");
+    assert_eq!(runs, 2 * 38, "mutant runs");
 }
 
 // ---------------------------------------------------------------------------
@@ -549,4 +570,60 @@ fn the_channel_root_comparison_refuses_each_half_alone() {
     assert!(moved(8, 11).contains("num root is not its fractional sum's numerator"));
     assert!(moved(7, 12).contains("den root is not the product of its leaf denominators"));
     assert!(check_channel_roots(&[], &sums).is_err(), "a missing pair");
+}
+
+/// `ChannelSum::sum` is `num/den`, and no sum at all where the denominator is
+/// 0. Every other assertion on it is made where `num` is 0, where `num·den` and
+/// `num·den⁻¹` agree; these do not.
+#[test]
+fn a_channel_sum_is_its_numerator_over_its_denominator() {
+    let of = |num: u64, den: u64| ChannelSum {
+        channel: lookup_channel::TIMESTAMP,
+        num: Fr::from_u64(num),
+        den: Fr::from_u64(den),
+        unmatched: Vec::new(),
+    };
+    assert_eq!(of(6, 3).sum(), Some(Fr::from_u64(2)));
+    assert_eq!(of(0, 7).sum(), Some(Fr::ZERO), "a channel that holds");
+    assert_eq!(
+        of(6, 0).sum(),
+        None,
+        "no sum exists over a zero denominator, which is why the root check is both conditions"
+    );
+}
+
+/// The padding contract's product-tree clause still bites on a circuit that
+/// carries fraction trees. A fraction tree's identity is `(0, 1)` and its
+/// padding rows are not idle at all, so the columns a `TreeCross` reads are
+/// exempt — the product trees' columns in the same halving list are not, and a
+/// padding row whose pc query is live makes the read leaf `γ − compress`
+/// instead of 1. Kills an exemption widened from "the columns a `TreeCross`
+/// reads" to "every column, once the list holds a `TreeCross`".
+#[test]
+fn the_padding_identity_clause_survives_a_fraction_tree_in_the_same_list() {
+    let a = lookup_toy();
+    assert_eq!(check_padding_identity(&a), Ok(()));
+    assert!(
+        a.layers.iter().any(|l| l.halving
+            && l.producing
+                .iter()
+                .any(|e| matches!(e.gate, GateDef::TreeCross { .. }))
+            && l.producing
+                .iter()
+                .any(|e| matches!(e.gate, GateDef::TreeProduct { .. }))),
+        "the toy's first halving list holds both tree shapes; without that this proves nothing"
+    );
+
+    let at = a
+        .memory
+        .iter()
+        .position(|n| n == "pc_mask")
+        .expect("the toy's frame has a pc mask");
+    let mut live = a.clone();
+    live.padding.row[at] = Fr::ONE;
+    let e = check_padding_identity(&live).expect_err("a padding row whose pc query is live");
+    assert!(
+        e.contains("padding identity: halving gate list") && e.ends_with("not 1"),
+        "{e}"
+    );
 }

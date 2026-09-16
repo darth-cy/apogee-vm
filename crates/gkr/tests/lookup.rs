@@ -418,6 +418,41 @@ fn the_derived_lookup_slots_are_the_powers_and_the_neutral_denominator() {
     }
 }
 
+/// A range channel's declared bound and the width of the virtual table it looks
+/// into are stated in two places — `constants::lookup_channel::BITS` and the
+/// closed form `gkr_verify::virtual_at_row` evaluates — and they must agree, or
+/// the native evaluator and LogUp are checking different ranges.
+#[test]
+fn each_range_channels_bound_is_the_width_of_the_table_it_looks_into() {
+    for channel in 0..lookup_channel::COUNT {
+        let Some(kind) = constraints::lookup::range_table(channel) else {
+            assert!(
+                !lookup_channel::IS_RANGE[channel as usize],
+                "channel {channel}"
+            );
+            continue;
+        };
+        let bits = lookup_channel::BITS[channel as usize];
+        assert!(
+            lookup_channel::IS_RANGE[channel as usize],
+            "channel {channel}"
+        );
+        // The table at `bits + 1` variables is `[0, 2^bits)`: every value once,
+        // twice over, and nothing above.
+        let rows = 1usize << (bits + 1);
+        let top = (0..rows)
+            .map(|y| virtual_at_row(kind, y))
+            .max_by_key(|v| v.to_bytes())
+            .expect("a nonempty table");
+        assert_eq!(
+            top,
+            Fr::from_u64((1u64 << bits) - 1),
+            "{kind:?} tops out at 2^{bits} − 1, which is `BITS[{channel}]`"
+        );
+        assert_eq!(virtual_at_row(kind, 1 << bits), Fr::ZERO, "and wraps there");
+    }
+}
+
 /// The root check is `num == 0 AND den != 0`, and neither half alone.
 #[test]
 fn a_channel_holds_only_at_a_zero_numerator_over_a_nonzero_denominator() {

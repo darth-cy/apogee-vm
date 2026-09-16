@@ -48,7 +48,7 @@ pub mod lookup {                                   // docs/spec/lookup.md
     pub fn range_table(channel: u32) -> Option<VirtualKind>;
     pub fn row_denominator(l: &LookupExpr) -> GateDef;      // E_l + g, one Quadratic
     pub fn table_denominator(spec: &ChannelSpec) -> GateDef; // T + g, one Linear
-    pub fn check_discharge(a: &CircuitArtifact) -> Result<(), String>;
+    pub fn check_discharge(a: &CircuitArtifact, specs: &[ChannelSpec]) -> Result<(), String>;
     pub fn check_copowers(a: &CircuitArtifact, scaled: &[PolyAddress]) -> Result<(), String>;
 }
 
@@ -73,7 +73,7 @@ pub mod memory {                                   // docs/spec/memory.md §2, �
                         pub enforcing: Vec<(String, GateDef)>, pub lookups: Vec<LookupExpr>,
                         pub channels: Vec<lookup::ChannelSpec> }                  // + Default
     pub fn frame_with_channels_artifact(queries: &[usize], trace_vars: u32, extras: Extras)
-        -> CircuitArtifact;                        // the shape S16 builds a family's circuit from
+        -> CircuitArtifact;      // S16's shape; panics on an empty extras.channels
     pub fn image_window_artifact(trace_vars: u32) -> CircuitArtifact;  // INIT_TEARDOWN
     pub fn zero_window_artifact(trace_vars: u32) -> CircuitArtifact;   // ZERO_WINDOWS
     pub fn check_memory(a: &CircuitArtifact) -> Result<(), String>;
@@ -116,8 +116,12 @@ pub mod memory {                                   // docs/spec/memory.md §2, �
 - **`lookup` is the LogUp channels as data, and `docs/spec/lookup.md` is normative for
   it**: the three gating conventions, the denominator gates, the fraction tree's leaves,
   the construction rules and the copower assertion. `check_discharge` holds every lookup
-  to exactly one gate-list-0 denominator, by normalized expansion; `checker` enforces the
-  same rule by evaluation at pseudo-random points.
+  to exactly one gate-list-0 denominator, by normalized expansion, and counts **per
+  channel**: the two range channels gate identically, so one lookup's denominator gate can
+  be another channel's leaf byte for byte. `checker` enforces the same rule by evaluation
+  at pseudo-random points. A frame with no channel is S14's `frame_artifact` alone —
+  `frame_with_channels_artifact` refuses an empty channel list, so the shape with every
+  obligation undischarged is not one the rule can be skipped for.
 - **One assembly for every circuit**, `build`: a set of product and fraction trees whose
   leaves gate list 0 writes, reduced row-wise until each is one node — a tree that
   finishes early copies itself up — then `trace_vars` halving lists to a zero-variable
