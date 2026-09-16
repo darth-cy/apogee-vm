@@ -12,9 +12,14 @@ with `crates/constraints/src/laws.rs`: the laws are enforced twice, by independe
 code (S13 must-be-exact 4). Gates are evaluated only through the kernel,
 `gkr::eval_gate` and `gkr::gate_values`, which is the semantic authority. A gate's
 shape is otherwise read in three ways only: the dump's `formula` prints every shape;
-Law 2, the Law 4 sampler and the row-local order tell a `TreeProduct` — which reads
-children and spans rows — from every row-wise shape, `Quadratic` among them; and the
-lookup rules tell `Linear` from every other shape.
+Law 2, the Law 4 sampler and the row-local order tell a **halving shape** —
+`TreeProduct` or S15's `TreeCross`, which read children and span rows — from every
+row-wise shape, `Quadratic` among them; and the lookup rules tell `Linear` from every
+other shape.
+
+Since S15 it also owns the LogUp channels' second description
+(**`docs/spec/lookup.md` §12**): the native fractional sums, the comparison against the
+circuit's root pairs, and the obligation-discharge cross-check.
 
 ```rust
 pub fn check_law1(a: &CircuitArtifact) -> Result<(), String>;   // locality
@@ -28,6 +33,17 @@ pub struct WitnessRow { pub committed: Vec<Fr>, pub row: usize, pub scratch: Vec
 pub fn violated_relations(a: &CircuitArtifact, w: &WitnessRow, challenges: &ExternalChallenges) -> Vec<String>;
 pub fn violated_lookups(a: &CircuitArtifact, w: &WitnessRow) -> Vec<String>;
 pub fn memory_roots(a: &CircuitArtifact, values: &gkr::LayerValues) -> Result<(Fr, Fr), String>;   // (read, write)
+
+// docs/spec/lookup.md §12
+pub struct ChannelSum { pub channel: u32, pub num: Fr, pub den: Fr,
+                        pub unmatched: Vec<(usize, String)> }
+impl ChannelSum { pub fn sum(&self) -> Option<Fr>; }
+pub fn channel_sums(a: &CircuitArtifact, base: &gkr::BaseLayer, specs: &[ChannelSpec],
+                    challenges: &ExternalChallenges) -> Result<Vec<ChannelSum>, String>;
+pub fn channel_roots(a: &CircuitArtifact, values: &gkr::LayerValues, specs: &[ChannelSpec])
+    -> Result<Vec<(Fr, Fr)>, String>;
+pub fn check_channel_roots(roots: &[(Fr, Fr)], sums: &[ChannelSum]) -> Result<(), String>;
+pub fn check_lookup_discharge(a: &CircuitArtifact) -> Result<(), String>;
 pub fn dump(a: &CircuitArtifact) -> String;
 pub struct VerifierConstants { /* trace_vars, committed and virtual names, per-list halving,
                                   num_vars, widths, enforcing and cached counts, output names,
@@ -50,8 +66,12 @@ checker dump <artifact>
   trial accepts two different polynomials with probability about `degree/|Fr|`;
   the witness-row evaluator and the padding check cover row-local relations only —
   nothing at or above a halving list; the product-tree clause covers the first halving
-  list's inputs, on `padding.row` only; the lookup evaluator is membership on one row,
-  not the LogUp argument; the root hook `memory_roots` recomputes the two roots from the
+  list's inputs, on `padding.row` only, and **exempts every column a `TreeCross` reads**,
+  a fraction tree's identity being `(0, 1)` and its padding rows not idle at all
+  (`docs/spec/lookup.md` §6); `violated_lookups` is membership on one row for the
+  **range** channels alone — a table channel's is a statement about the whole table, and
+  `channel_sums` is its evaluator; `channel_sums` leaves `unmatched` empty where a
+  channel balances, and folds fractions rather than inverting per row; the root hook `memory_roots` recomputes the two roots from the
   layer the first halving list reads, and covers nothing below it; the cross-check covers the fields a verifier's
   description names, not documentation-only names, `format_version`,
   `coefficient_encoding`, lookups or padding.
@@ -64,6 +84,9 @@ checker dump <artifact>
   reference function are written from the toy's description, not read from its
   definition or from the committed file.
 - **Deterministic.** The sampled checks use the crate's own splitmix64 with fixed seeds.
+  `check_lookup_discharge`'s points fill the LogUp slots through
+  `gkr::insert_lookup_challenges`, never at random: `β`'s powers are derived, and a point
+  where they are independent values is a point no gate's coefficients mean what they say.
 
 ## Tests
 | File | Covers |
@@ -76,4 +99,5 @@ checker dump <artifact>
 | `tests/common/mod.rs` | the pinned toy fixtures and their editing helpers; the committed guests traced at 2^16, their memory shards, a shard with cells rewritten, roots, reconciliation, a forwarded row as a `WitnessRow`, and the prove-verify-discharge harness, shared by `memory.rs` and `multiset.rs` |
 | `tests/witness.rs` | acceptance 8: a satisfying row passes; perturbing each of 14 cells reports exactly the relations derived by hand for it, on active and inactive rows; an evaluator reporting nothing or everything fails |
 | `tests/cross_check.rs` | acceptance 9: the hand-written description passes both fixtures; 24 perturbations, each on both compilations, each caught by the check the test names — among them a renamed memory, witness and setup column and a lawful added cached entry; documentation-only renames pass |
+| `tests/logup.rs` | **`#[ignore]`d; CI runs the file by name with `--test-threads=1`** — the toy is 2^20 rows and one forward pass is 3 GB. S15's acceptance over the combined toy filled from fib's `JUMP_BRANCH_SLT` cycles and decoded table: 1, the honest circuit — laws, padding, both discharge checks, no violated lookup or relation, every channel's root reproduced natively and holding, proved and verified; 2, the stage gate, one `word_hi` moved out of `[0, 2^16)` with the multiplicities recounted over it, which cannot even be counted, and the honest twin beside it; 3, the transcript order, every witness and multiplicity commitment absorbed before `g` and `β` are drawn, event for event and as an invariant; 4, S14's future read rerun, balancing and breaking no gate, now refused by the timestamp channel; 6, the gated keys — garbage under a flag of 0 leaving every root where it was, a flag = 1 key moved, and the `+ 1` offset distinguishing the AND table's real `(0, 0, 0)` from the `ZeroEntry`; 7, a moved decoded output and two illegal packed masks, the all-zero one included, each refused by the table's domain with every gate still holding; 8, one multiplicity cell changed; 12, a non-boolean extracted bit refused by its own gate |
 | `tests/dump.rs` | acceptance 10: the dump's header, columns, layers, relations, addresses and catalogue; one exact line per gate shape, the toy's `Quadratic` gate and its relation, the cached entry, a scratch-bijection line and an output-map line; a literal at or above `2^64` printed as hex; the CLI on the fixtures, a corrupted file and a lawless one; a lookup's line, with its channel's name and its selector |

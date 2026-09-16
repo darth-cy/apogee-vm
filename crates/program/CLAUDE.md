@@ -50,6 +50,16 @@ pub fn absorb_statement_descriptor(tr: &mut Transcript, config: &VmConfig, shard
 pub fn check_memory_windows(config: &VmConfig, shard_counts: &[u32], windows: &[u32])
     -> Result<(), ProgramError>;
 pub fn family_name(family: FamilyId) -> &'static str;
+
+pub mod lookup_tables {                  // docs/spec/lookup.md §9
+    pub const GENERIC_WIDTH: usize = 3;  // a key and two values; the narrower table zero-padded
+    pub const AND_BASE: u32 = 0;   pub const AND_ROWS: usize = 1 << 16;
+    pub const SIGN_BASE: u32 = 256;  pub const SIGN_ROWS: usize = 1 << 16;
+    pub const GENERIC_ROWS: usize = 1 + AND_ROWS + SIGN_ROWS;
+    pub fn generic_table(log_height: u32) -> Vec<MultilinearPoly>;
+    pub fn generic_entries() -> impl Iterator<Item = [u32; GENERIC_WIDTH]>;
+    pub fn zero_entry() -> [Fr; GENERIC_WIDTH];
+}
 ```
 
 ## The families, and who claims what
@@ -150,6 +160,16 @@ the atomics — with the system kind pinned to bit 0 ahead of that order:
 | 6 | `AMOADD_W AMOSWAP_W LR_W SC_W AMOXOR_W AMOOR_W AMOAND_W AMOMIN_W AMOMAX_W AMOMINU_W AMOMAXU_W` |
 
 `aq` and `rl` are not recorded: on one hart they order nothing.
+
+## The generic lookup table
+`lookup_tables` packs the two tables a wide field still needs — an 8×8 AND byte table and
+`U16GetSign` — into one committed setup table, `docs/spec/lookup.md` §9: the `ZeroEntry`
+at row 0, AND at rows 1..=2^16 as `(AND_BASE + a + 1, b, a & b)`, `U16GetSign` at the next
+2^16 as `(SIGN_BASE + h + 1, h >> 15, 0)`, and the `ZeroEntry` again above them. The two
+key ranges are disjoint, so no tuple of one is a tuple of the other, and the `+ 1` the
+gating adds keeps every real entry off the all-zero tuple the `ZeroEntry` answers.
+131,073 rows, so a circuit carrying both is at 2^18 or more. **`U16GetSign` is committed,
+not closed-form**; S17 and S18 consume it by name.
 
 ## The image column
 `image_init_column(image, h)` is RAM window 0's initial words: row `y` is

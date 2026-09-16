@@ -976,16 +976,24 @@ fn holds_booleanity(a: &CircuitArtifact, x: PolyAddress) -> bool {
 pub struct ChannelSum {
     /// The channel, one of `constants::lookup_channel`.
     pub channel: u32,
-    /// `Σ_rows Σ_l 1/(E_l + g) − Σ_rows mult/(T + g)`, by direct inversion. A
-    /// channel holds exactly when this is 0.
-    pub sum: Fr,
+    /// The numerator of `Σ_rows Σ_l 1/(E_l + g) − Σ_rows mult/(T + g)` over the
+    /// common denominator [`ChannelSum::den`]. A channel holds exactly when
+    /// this is 0 and that one is not.
+    pub num: Fr,
     /// The product of every leaf denominator of the channel over every row,
     /// the neutral fractions' 1s included: the fraction tree's `den` root.
-    pub denominator: Fr,
+    pub den: Fr,
     /// `(row, lookup name)` for every row whose gated tuple is a row of no
-    /// table row, in row then lookup order. A nonempty list is why `sum` is
+    /// table row, in row then lookup order. A nonempty list is why `num` is
     /// not 0.
     pub unmatched: Vec<(usize, String)>,
+}
+
+impl ChannelSum {
+    /// `num/den`, the sum itself, where the denominator is not 0.
+    pub fn sum(&self) -> Option<Fr> {
+        self.den.inverse().map(|d| self.num * d)
+    }
 }
 
 /// The LogUp self-check hook, `docs/spec/lookup.md` §7: every channel's
@@ -1075,7 +1083,7 @@ pub fn channel_sums(
         let multiplicity = source(spec.multiplicity)?;
         // Every lookup resolved once: its selector, and per tuple position the
         // literal-weighted sources and the constant.
-        let mut resolved: Vec<(Source, Vec<(Vec<(Fr, Source)>, Fr)>)> = Vec::new();
+        let mut resolved: Vec<Resolved> = Vec::new();
         for l in &mine {
             if l.tuple.len() != width {
                 return Err(format!(
@@ -1112,10 +1120,15 @@ pub fn channel_sums(
         // One pass over the rows: the trace's fractions, the table's, and the
         // distinct gated tuples, of which a trace has a handful where the
         // table has a row each.
-        let mut sum = Fr::ZERO;
-        let mut denominator = Fr::ONE;
-        let mut looked_up: BTreeMap<Vec<[u8; 32]>, usize> = BTreeMap::new();
-        let mut first_seen: Vec<(usize, String, Vec<[u8; 32]>)> = Vec::new();
+        //
+        // The fractions are folded linearly — `(n, d) + (1, e)` is
+        // `(n·e + d, d·e)` — rather than inverted per row: a channel of 2^20
+        // rows would otherwise cost eleven million inversions, and the fold is
+        // also a different algorithm from the balanced tree it is checking.
+        let mut num = Fr::ZERO;
+        let mut den = Fr::ONE;
+        let mut looked_up: BTreeMap<Key, usize> = BTreeMap::new();
+        let mut first_seen: Vec<(usize, String, Key)> = Vec::new();
         let mut tuple = vec![Fr::ZERO; width];
         for row in 0..rows {
             for (l, (selector, expressions)) in mine.iter().zip(&resolved) {
@@ -1126,11 +1139,11 @@ pub fn channel_sums(
                         .fold(*constant, |acc, (c, src)| acc + *c * read(src, row));
                     tuple[j] = gate_tuple(spec.channel, j, s, raw);
                 }
-                let bytes: Vec<[u8; 32]> = tuple.iter().map(|v| v.to_bytes()).collect();
+                let bytes = key(&tuple);
                 if let Some(count) = looked_up.get_mut(&bytes) {
                     *count += 1;
                 } else {
-                    looked_up.insert(bytes.clone(), 1);
+                    looked_up.insert(bytes, 1);
                     first_seen.push((row, l.name.clone(), bytes));
                 }
                 let d = compress(&powers, &tuple) + g;
@@ -1140,8 +1153,8 @@ pub fn channel_sums(
                         l.name
                     ));
                 }
-                denominator *= d;
-                sum += d.inverse().expect("a nonzero denominator inverts");
+                num = num * d + den;
+                den *= d;
             }
             for (j, t) in table.iter().enumerate() {
                 tuple[j] = read(t, row);
@@ -1152,15 +1165,15 @@ pub fn channel_sums(
                     "channel sums: channel `{name}`'s table has denominator 0 at row {row}"
                 ));
             }
-            denominator *= d;
-            sum -= read(&multiplicity, row) * d.inverse().expect("a nonzero denominator inverts");
+            num = num * d - read(&multiplicity, row) * den;
+            den *= d;
         }
 
         // A second pass, only where the channel did not balance: which gated
         // tuples the table never holds, reported at the first row producing
         // each.
         let mut unmatched = Vec::new();
-        if sum != Fr::ZERO {
+        if num != Fr::ZERO {
             for row in 0..rows {
                 if looked_up.is_empty() {
                     break;
@@ -1168,7 +1181,7 @@ pub fn channel_sums(
                 for (j, t) in table.iter().enumerate() {
                     tuple[j] = read(t, row);
                 }
-                looked_up.remove(&tuple.iter().map(|v| v.to_bytes()).collect::<Vec<_>>());
+                looked_up.remove(&key(&tuple));
             }
             unmatched = first_seen
                 .into_iter()
@@ -1179,13 +1192,29 @@ pub fn channel_sums(
         }
         out.push(ChannelSum {
             channel: spec.channel,
-            sum,
-            denominator,
+            num,
+            den,
             unmatched,
         });
     }
     Ok(out)
 }
+
+/// A tuple's map key: its columns' canonical bytes, `MAX_TUPLE` wide and zero
+/// past the tuple, so it is `Copy` and a row costs no allocation.
+type Key = [[u8; 32]; lookup_channel::MAX_TUPLE];
+
+fn key(tuple: &[Fr]) -> Key {
+    let mut out = [[0u8; 32]; lookup_channel::MAX_TUPLE];
+    for (slot, v) in out.iter_mut().zip(tuple) {
+        *slot = v.to_bytes();
+    }
+    out
+}
+
+/// One lookup, resolved: its selector, and per tuple position the
+/// literal-weighted sources and the constant.
+type Resolved = (Source, Vec<(Vec<(Fr, Source)>, Fr)>);
 
 /// Where one value of a channel's recomputation is read.
 #[derive(Clone, Copy, Debug)]
@@ -1278,16 +1307,16 @@ pub fn check_channel_roots(roots: &[(Fr, Fr)], sums: &[ChannelSum]) -> Result<()
     }
     for ((num, den), s) in roots.iter().zip(sums) {
         let name = lookup_channel::NAMES[s.channel as usize];
-        if *den != s.denominator {
+        if *den != s.den {
             return Err(format!(
                 "channel roots: channel `{name}`'s den root is not the product of its leaf \
                  denominators"
             ));
         }
-        if *num != s.sum * s.denominator {
+        if *num != s.num {
             return Err(format!(
-                "channel roots: channel `{name}`'s num root is not its fractional sum times its \
-                 den root"
+                "channel roots: channel `{name}`'s num root is not its fractional sum's numerator \
+                 over that product"
             ));
         }
     }

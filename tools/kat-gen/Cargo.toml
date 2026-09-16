@@ -20,11 +20,9 @@ pcs.workspace = true
 # for the same reason the `pcs` proof fixture is: there is no second one.
 loader.workspace = true
 program.workspace = true
-gkr.workspace = true
-rayon.workspace = true
-curve.workspace = true
-# The `gkr` group: S13's toy circuit is defined here and nowhere else, written
-# as a `CircuitArtifact` and compiled cache-free by `constraints` itself.
+# The `gkr` and `lookup` groups: S13's toy circuit and S15's combined toy are
+# defined here and nowhere else, each written as a `CircuitArtifact` — the
+# former by hand, the latter through `constraints::memory`'s constructor.
 constraints.workspace = true
 ark-bn254.workspace = true
 ark-ec.workspace = true

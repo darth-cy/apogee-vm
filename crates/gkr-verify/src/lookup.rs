@@ -36,15 +36,15 @@ pub fn insert_lookup_challenges(
     for (i, slot) in challenge_slot::LOOKUP_BETA_POWERS.iter().enumerate() {
         into.insert(*slot, power);
         if i + 1 < challenge_slot::LOOKUP_BETA_POWERS.len() {
-            power = power * beta;
+            power *= beta;
         }
     }
     if decoder_width > 0 {
         let mut sum = Fr::ZERO;
         let mut power = Fr::ONE;
         for _ in 0..decoder_width {
-            sum = sum + power;
-            power = power * beta;
+            sum += power;
+            power *= beta;
         }
         into.insert(challenge_slot::LOOKUP_DECODER_NEUTRAL, g - sum);
     }

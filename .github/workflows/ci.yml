@@ -89,6 +89,15 @@ jobs:
       - name: test
         run: cargo test --workspace
 
+      # S15's acceptance over the combined toy. `#[ignore]`d for size, not for
+      # environment: the timestamp channel's table is `[0, 2^19)`, a table of
+      # `2^n` rows holds at most `2^n` values, and a Mercury opening needs an
+      # even variable count, so the smallest circuit carrying a gap obligation
+      # is `2^20` rows. One forward pass over it is 3 GB, so the file runs
+      # single-threaded: two at once would not fit the runner.
+      - name: the LogUp channels over the combined toy
+        run: cargo test -p checker --test logup -- --ignored --test-threads=1
+
       # The crates the recursion guest links compile unchanged for the guest.
       - name: guest target builds
         run: cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify --target riscv32imac-unknown-none-elf

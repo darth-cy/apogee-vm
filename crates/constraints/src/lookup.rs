@@ -312,12 +312,6 @@ pub fn range_table(channel: u32) -> Option<VirtualKind> {
     }
 }
 
-/// `outputs[2·i]` and `outputs[2·i + 1]` are channel `specs[i]`'s root pair,
-/// counting from `first`, the first output a channel owns.
-pub fn channel_roots(first: usize, i: usize) -> (usize, usize) {
-    (first + 2 * i, first + 2 * i + 1)
-}
-
 /// Every lookup of `artifact` is discharged by exactly one leaf denominator of
 /// its channel's fraction tree, and no leaf denominator discharges two.
 ///
@@ -392,12 +386,6 @@ pub fn check_copowers(a: &CircuitArtifact, scaled: &[PolyAddress]) -> Result<(),
         }
     }
     Ok(())
-}
-
-/// The prefix a tree of channel `channel` is named with, for a caller reading
-/// an artifact's scratch bijection back.
-pub fn channel_prefix(channel: u32) -> &'static str {
-    lookup_channel::NAMES[channel as usize]
 }
 
 /// A product tree over `leaves`, named `prefix`: the shape `constraints::memory`

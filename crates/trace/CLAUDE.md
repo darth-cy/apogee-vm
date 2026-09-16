@@ -7,7 +7,8 @@ profile and the shard plan, the `TraceArchive` that snapshots them, and the memo
 argument's columns filled from the log. `crates/emulator` is the only producer.
 **`docs/spec/execution-trace.md` is normative** for every value here — the clock, the
 address spaces, the frame of each instruction class, the x0 rule, the ecall frame and the
-order of the log — and **`docs/spec/memory.md`** for the memory columns.
+order of the log — **`docs/spec/memory.md`** for the memory columns, and
+**`docs/spec/lookup.md` §7** for the multiplicity columns.
 
 ```rust
 pub enum AddressSpace { Reg, Ram, Pc }            // tags: constants::address_space, 1 2 3
@@ -48,6 +49,11 @@ pub fn build_init_teardown_columns(log: &MemoryEventLog, image: &ProgramImage, r
     height: usize) -> Vec<(PolyAddress, MultilinearPoly)>;          // M[0], M[1]; S[0] at window 0
 pub fn build_boundary_finals(log: &MemoryEventLog) -> BoundaryFinals;   // gkr_verify's
 
+// docs/spec/lookup.md §7
+pub fn build_multiplicities(artifact: &CircuitArtifact, columns: &[(PolyAddress, MultilinearPoly)],
+                            specs: &[ChannelSpec]) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String>;
+pub fn check_multiplicities(artifact, columns, specs, given) -> Result<(), String>;
+
 pub enum Phase { PostExecution, PostCommit, PostGkr, PostOpening, Final }   // tags 0..5
 pub struct PhaseTiming { pub wall_nanos: u64 }
 pub struct IoStreams { pub input: Vec<u8>, pub output: Vec<u8> }
@@ -63,6 +69,12 @@ impl TraceArchive {
 ```
 
 ## Frozen invariants
+- **A multiplicity is counted over raw gated tuples, never over a compressed one.** It is
+  committed before `g` and `β` are drawn (`docs/spec/lookup.md` §2), so nothing in
+  `build_multiplicities` reads a challenge. One counter per channel per table row,
+  incremented once per lookup expression on each row, the rows their selector switches off
+  included; a tuple at several table rows credits the **lowest**; and a tuple the table
+  does not hold is a build error, because the honest prover cannot balance over one.
 - **The event schema.** One event per query: space, address, write timestamp, read
   timestamp, read value, write value. A read writes back what it read. The log is a flat
   vector in timestamp order — cycle order, and inside a cycle the pc query then the

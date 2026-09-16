@@ -11,14 +11,14 @@ semantic authority; this crate owns the formula *representation* and the checks 
 when a circuit is built. **`docs/spec/gkr.md` §1–§4 is normative.**
 
 ```rust
-pub enum VirtualKind { RowIndex, RamLive }
+pub enum VirtualKind { RowIndex, RamLive, Range19, Range16 }
 pub enum PolyAddress { Memory(u32), Witness(u32), Setup(u32), Virtual(VirtualKind),
                        Inner { layer, offset }, Scratch(u32), Cached { layer, offset } }  // + Display
 pub enum Coeff { Literal(Fr), Challenge(u32) }
-pub enum GateDef { Linear, Product, MaskIntoIdentity, AffineProduct, TreeProduct, Quadratic }
+pub enum GateDef { Linear, Product, MaskIntoIdentity, AffineProduct, TreeProduct, Quadratic, TreeCross }
 impl GateDef { pub fn operands(&self) -> Vec<PolyAddress>; pub fn coefficients(&self) -> Vec<Coeff>; }
 pub struct CatalogueEntry { variant, defined_in, evaluated_in, inputs, output, template, purpose }
-pub const CATALOGUE: [CatalogueEntry; 6];
+pub const CATALOGUE: [CatalogueEntry; 7];
 pub struct CachedEntry { name, address, gate }
 pub struct ProducingEntry { relation, output, gate }
 pub struct EnforcingEntry { relation, gate }
@@ -42,6 +42,16 @@ pub const FORMAT_VERSION: u32 = 1;
 pub const COEFFICIENT_ENCODING_CANONICAL_LE: u32 = 0;
 pub const MAX_TRACE_VARS: u32 = 30;
 
+pub mod lookup {                                   // docs/spec/lookup.md
+    pub struct ChannelSpec { pub channel: u32, pub table: Vec<PolyAddress>, pub multiplicity: PolyAddress }
+    pub fn beta_power(j: usize) -> Coeff;           // the literal 1 at j = 0, a derived slot above
+    pub fn range_table(channel: u32) -> Option<VirtualKind>;
+    pub fn row_denominator(l: &LookupExpr) -> GateDef;      // E_l + g, one Quadratic
+    pub fn table_denominator(spec: &ChannelSpec) -> GateDef; // T + g, one Linear
+    pub fn check_discharge(a: &CircuitArtifact) -> Result<(), String>;
+    pub fn check_copowers(a: &CircuitArtifact, scaled: &[PolyAddress]) -> Result<(), String>;
+}
+
 pub mod memory {                                   // docs/spec/memory.md §2, §3.3, §7, §8
     pub const CYCLE: PolyAddress;                  // M[0]
     pub const FIELD_MASK: u32 = 0;  FIELD_ADDR = 1;  FIELD_READ_TS = 2;  FIELD_READ_VALUE = 3;  FIELD_WRITE_VALUE = 4;
@@ -58,6 +68,12 @@ pub mod memory {                                   // docs/spec/memory.md §2, �
     pub fn read_tuple(query: usize) -> GateDef;    // unmasked, Linear, constant γ_M; term PART_* is that part
     pub fn frame_artifact(queries: &[usize], trace_vars: u32) -> CircuitArtifact;
     pub fn family_frame_artifact(family: u32, trace_vars: u32) -> CircuitArtifact;
+    pub struct Extras { pub witness: Vec<String>, pub setup: Vec<String>,
+                        pub virtuals: Vec<(VirtualKind, String)>,
+                        pub enforcing: Vec<(String, GateDef)>, pub lookups: Vec<LookupExpr>,
+                        pub channels: Vec<lookup::ChannelSpec> }                  // + Default
+    pub fn frame_with_channels_artifact(queries: &[usize], trace_vars: u32, extras: Extras)
+        -> CircuitArtifact;                        // the shape S16 builds a family's circuit from
     pub fn image_window_artifact(trace_vars: u32) -> CircuitArtifact;  // INIT_TEARDOWN
     pub fn zero_window_artifact(trace_vars: u32) -> CircuitArtifact;   // ZERO_WINDOWS
     pub fn check_memory(a: &CircuitArtifact) -> Result<(), String>;
@@ -69,7 +85,7 @@ pub mod memory {                                   // docs/spec/memory.md §2, �
   appear is fixed: `M W S V` in gate list 0, `L{k}` in list `k`, `C{k}` in list `k`, never
   `scratch` in a gate; `M W S V scratch` in a relation, never `L` or `C`. The committed
   subtrees are split by role in the type: `M` memory-argument-tied, `W` not, `S` setup.
-- **`GateDef` is closed.** Six shapes, wire tags 0–5, append-only. A later stage adds a
+- **`GateDef` is closed.** Seven shapes, wire tags 0–6, append-only. A later stage adds a
   variant with a tag of its own; nothing interprets a coefficient table generically.
 - **Cached entries are substituted, never columns.** No table, no claim, no width, no gate
   total. Degree is counted after substitution, which is the one way a degree-3 gate can
@@ -82,14 +98,31 @@ pub mod memory {                                   // docs/spec/memory.md §2, �
   with `src/laws.rs`.
 - **A relation constructed and then dropped is refused**: an inner column below the top
   that no gate reads, or a cached entry no gate names, constrains nothing.
-- **A halving list halves every column of its layer, in order.**
-- **Two virtual kinds, append-only**: `RowIndex` (`V[row]`, tag 0) and `RamLive`
-  (`V[ram_live]`, tag 1, `docs/spec/gkr.md` §2.1). Their closed forms are
-  `gkr-verify`'s.
-- **A lookup is a range obligation** (`docs/spec/memory.md` §7): a channel of
-  `constants::lookup_channel`, one `Linear` expression with literal coefficients over
-  `M W S V`, and an `M`, `W` or `S` selector. `validate` refuses anything else, naming
-  the lookup.
+- **A halving list halves every column of its layer**: it writes as many columns as it
+  reads, and every entry is a halving shape — `TreeProduct`, one level of a product tree,
+  or `TreeCross`, the numerator of one level of a fraction tree. Since S15 an entry may
+  read a column other than its own, which is what lets a numerator read its denominator.
+- **Four virtual kinds, append-only**: `RowIndex` (`V[row]`, tag 0), `RamLive`
+  (`V[ram_live]`, tag 1, `docs/spec/gkr.md` §2.1) and S15's range tables `Range19` (tag 2)
+  and `Range16` (tag 3), each the low `BITS` bits of the row index
+  (`docs/spec/lookup.md` §3). Their closed forms are `gkr-verify`'s.
+- **A lookup is a channel, a selector and a tuple** (`docs/spec/memory.md` §7,
+  `docs/spec/lookup.md`): a channel of `constants::lookup_channel`; one `Linear`
+  expression on a range channel and 1 to `MAX_TUPLE` on a table one, every lookup of a
+  channel the same width since one channel has one table; literal coefficients over
+  `M W S V`; an `M`, `W` or `S` selector **that gate list 0 holds to booleanity**, without
+  which LogUp and the native reading of an obligation are different statements.
+  `validate` refuses anything else, naming the lookup.
+- **`lookup` is the LogUp channels as data, and `docs/spec/lookup.md` is normative for
+  it**: the three gating conventions, the denominator gates, the fraction tree's leaves,
+  the construction rules and the copower assertion. `check_discharge` holds every lookup
+  to exactly one gate-list-0 denominator, by normalized expansion; `checker` enforces the
+  same rule by evaluation at pseudo-random points.
+- **One assembly for every circuit**, `build`: a set of product and fraction trees whose
+  leaves gate list 0 writes, reduced row-wise until each is one node — a tree that
+  finishes early copies itself up — then `trace_vars` halving lists to a zero-variable
+  top. The output map is the memory roots, then each channel's `(num, den)` pair in
+  channel order.
 - **The wire form is `postcard` over a tuple per type**, hand-written serde with exactly
   two visitors, no header beyond `format_version` and `coefficient_encoding`. `from_bytes`
   is total, reserves nothing an untrusted length asks for, refuses every format version

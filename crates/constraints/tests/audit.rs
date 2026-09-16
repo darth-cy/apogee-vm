@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::{toy, toy_cache_free};
+use common::{fixture_bytes, toy, toy_cache_free};
 use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress, CATALOGUE};
 
 /// The variant count, and each variant's name, written as an exhaustive match
@@ -100,16 +100,28 @@ fn variant_counts(a: &CircuitArtifact) -> [usize; VARIANTS] {
     counts
 }
 
-/// Acceptance 11: across both compilations of the toy — the audit runs over
-/// all of them, since a variant absent from one may be the one another uses —
+/// S15's combined toy, the one committed circuit with a fraction tree in it.
+fn lookup_toy() -> CircuitArtifact {
+    let bytes = fixture_bytes(
+        "lookup_toy.bin",
+        "975ee4d572a09399c30987eb2a8e8ad9d2b66a2445c8888d331d34343f9409d6",
+    );
+    CircuitArtifact::from_bytes(&bytes).expect("the S15 toy decodes")
+}
+
+/// Acceptance 11: across every committed circuit — the audit runs over all of
+/// them, since a variant absent from one may be the one another uses —
 /// every `GateDef` variant is emitted, so none is dead and none needs to be
 /// documented as reserved. Each emitted gate is mapped to its catalogue row by
 /// this file's own variant names, so a catalogue row renamed away from its
 /// variant fails here too.
+///
+/// `TreeCross` is S15's, and the S13 toy emits none: a fraction tree is the one
+/// thing that halves two columns together, and only the S15 toy has one.
 #[test]
-fn the_audit_over_both_compilations_emits_every_variant() {
+fn the_audit_over_every_committed_circuit_emits_every_variant() {
     let mut emitted = [false; VARIANTS];
-    for a in [toy(), toy_cache_free()] {
+    for a in [toy(), toy_cache_free(), lookup_toy()] {
         for g in every_gate(&a) {
             emitted[catalogue_row(g)] = true;
         }

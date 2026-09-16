@@ -38,9 +38,23 @@ pub struct BoundaryFinals { pub reg_ts: [u64; 32], pub pc_ts: u64, pub reg_value
 pub fn window_challenges(memory: &ExternalChallenges, window: u32, trace_vars: u32) -> ExternalChallenges;
 pub fn boundary_factors(memory: &ExternalChallenges, entry_pc: u32, finals: &BoundaryFinals) -> (Fr, Fr);  // (W_b, R_b)
 pub fn reconciles(read_roots: &[Fr], write_roots: &[Fr], factors: (Fr, Fr)) -> bool;
+
+// src/lookup.rs, docs/spec/lookup.md §2 and §8
+pub fn insert_lookup_challenges(into: &mut ExternalChallenges, g: Fr, beta: Fr, decoder_width: usize);
+pub fn channel_holds(root: (Fr, Fr)) -> bool;    // num == 0 AND den != 0, and neither alone
 ```
 
 ## Frozen invariants
+- **A halving gate reads each of its operands at both children**, `lower[x]` then
+  `upper[x]` in operand order, so `TreeProduct` gives two values and S15's `TreeCross`
+  four. That generalization is `ResolvedList::new`'s halving branch and nothing else: the
+  claim layout, L3's `2·w_k` message and L4's line-folding are what S13 froze.
+- **The LogUp slots above `LOOKUP_BETA` are derived**, never read from a proof: a gate
+  coefficient is one literal or one challenge, and `β^j` is neither
+  (`docs/spec/lookup.md` §2). `insert_lookup_challenges` is where they come from, and a
+  circuit with no decoder channel gets no `LOOKUP_DECODER_NEUTRAL`.
+- **A channel's root check is both conditions**, `channel_holds`: a leaf pair of `(0, 0)`
+  annihilates the whole tree, so `num == 0` alone would accept a channel proving nothing.
 - **The kernel is the semantic authority.** `eval_gate` is the one place a gate's formula
   is computed. The engine's passes — the forward pass, the self-check, both halves of the
   layer sumcheck — reach it through `ResolvedList`, which `gate_values` and `summand`

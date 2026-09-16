@@ -23,18 +23,18 @@ use checker::{
     channel_roots, channel_sums, check_channel_roots, check_laws, check_lookup_discharge,
     check_padding, check_padding_identity, violated_lookups, violated_relations, ChannelSum,
 };
-use common::{forwarded_shard, prove_and_verify, witness_row, Shard, HEIGHT};
-use constants::{challenge_slot, family, lookup_channel, transcript_tags};
+use common::{forwarded_shard, witness_row, Shard, HEIGHT};
+use constants::{family, lookup_channel, transcript_tags};
 use constraints::lookup::ChannelSpec;
 use constraints::{CircuitArtifact, PolyAddress};
 use emulator::trace_run;
 use emulator::GuestIo;
 use field::Fr;
-use gkr::{channel_holds, insert_lookup_challenges, BaseLayer, ExternalChallenges, LayerValues};
+use gkr::{channel_holds, insert_lookup_challenges, BaseLayer, LayerValues};
 use loader::load_elf;
 use pcs::{append_g1, commit, MercuryCommitment};
 use poly::{MultilinearPoly, PolyBacking};
-use program::lookup_tables::{generic_table, AND_BASE, GENERIC_WIDTH, SIGN_BASE};
+use program::lookup_tables::{generic_table, GENERIC_WIDTH};
 use program::{decode_program, lookup_tuple, ProgramParams};
 use test_support::{sha256, to_hex};
 use trace::{build_frame_witness, build_memory_columns, build_multiplicities};
@@ -125,12 +125,15 @@ fn specs(a: &CircuitArtifact) -> Vec<ChannelSpec> {
     ]
 }
 
-/// The toy, its base filled from `fib`'s `ADD_SUB_LUI_AUIPC` cycles.
+/// The toy, its base filled from `fib`'s own cycles and decoded table.
 struct Toy {
     shard: Shard,
     specs: Vec<ChannelSpec>,
     /// How many rows are live: the family's cycle count.
     live: usize,
+    /// The shard transcript after every committed column is absorbed and `g`
+    /// and `β` are drawn: what a proof of this shard starts from.
+    seeded: transcript::TranscriptSnapshot,
 }
 
 fn toy() -> Toy {
@@ -277,29 +280,42 @@ fn toy() -> Toy {
     let counted = build_multiplicities(&artifact, &columns, &specs).expect("the toy's tuples");
     columns.extend(counted);
 
+    // The shard's own transcript, in S16's order: every committed column's
+    // commitment absorbed, then `g` and `β` drawn under one challenge tag. The
+    // memory slots are the global argument's and come from a sponge of their
+    // own, as S14's harness draws them.
+    let base = BaseLayer::new(columns);
+    let mut t = Transcript::new();
+    absorb_commitments(&mut t, &artifact, &base);
+    let mut challenges = common::memory_challenges();
+    let g = t.challenge_scalar(transcript_tags::LOOKUP_CHALLENGE);
+    let beta = t.challenge_scalar(transcript_tags::LOOKUP_CHALLENGE);
+    insert_lookup_challenges(&mut challenges, g, beta, lookup_tuple(FAMILY).len());
+
     Toy {
         shard: Shard {
             label: "the S15 toy over fib".to_string(),
             family: None,
             artifact,
-            base: BaseLayer::new(columns),
-            challenges: challenges(),
+            base,
+            challenges,
         },
         specs,
         live,
+        seeded: t.snapshot(),
     }
 }
 
-/// Slots 1–5 and the LogUp slots, from a fresh transcript that binds nothing:
-/// S16's global and shard transcripts own the real schedule, and
-/// `the_lookup_challenges_follow_every_commitment` is the ordering rule.
-fn challenges() -> ExternalChallenges {
-    let mut t = Transcript::new();
-    let mut ch = common::memory_challenges();
-    let g = t.challenge_scalar(transcript_tags::LOOKUP_CHALLENGE);
-    let beta = t.challenge_scalar(transcript_tags::LOOKUP_CHALLENGE);
-    insert_lookup_challenges(&mut ch, g, beta, lookup_tuple(FAMILY).len());
-    ch
+/// Every committed column's Mercury commitment, absorbed as a `COMMITMENT`
+/// message of four `Fr` limbs — the base binding S16 uses, and the one a shard's
+/// local challenges must follow (`docs/spec/lookup.md` §2).
+fn absorb_commitments(t: &mut Transcript, a: &CircuitArtifact, base: &BaseLayer) {
+    let srs = toy_srs(a.trace_vars);
+    for address in a.committed() {
+        let column = base.get(address).expect("a committed column");
+        let MercuryCommitment(point) = commit(&srs, column).expect("the column commits");
+        append_g1(t, transcript_tags::COMMITMENT, &point);
+    }
 }
 
 /// `shard` with each `(address, row, value)` written into its base. Only the
@@ -352,7 +368,7 @@ fn every_channel_holds(toy: &Toy, values: &LayerValues) -> bool {
     check_channel_roots(&roots, &sums).is_ok()
         && sums
             .iter()
-            .all(|s| s.sum == Fr::ZERO && s.unmatched.is_empty())
+            .all(|s| s.num == Fr::ZERO && s.unmatched.is_empty())
         && roots.iter().all(|r| channel_holds(*r))
 }
 
@@ -389,7 +405,9 @@ fn the_combined_toy_proves_and_every_channel_holds() {
     for s in &sums {
         let name = lookup_channel::NAMES[s.channel as usize];
         assert_eq!(s.unmatched, Vec::new(), "{name}: unmatched rows");
-        assert_eq!(s.sum, Fr::ZERO, "{name}: the fractional sum");
+        assert_eq!(s.num, Fr::ZERO, "{name}: the fractional sum's numerator");
+        assert_ne!(s.den, Fr::ZERO, "{name}: its denominator");
+        assert_eq!(s.sum(), Some(Fr::ZERO), "{name}: the sum");
     }
     assert_eq!(check_channel_roots(&roots, &sums), Ok(()));
     for (s, root) in sums.iter().zip(&roots) {
@@ -408,7 +426,7 @@ fn the_combined_toy_proves_and_every_channel_holds() {
             "row {row}"
         );
     }
-    assert_eq!(prove_and_verify(&toy.shard, &values), Ok(()));
+    assert_eq!(prove_and_verify(&toy, &values), Ok(()));
 }
 
 // ---------------------------------------------------------------------------
@@ -431,7 +449,7 @@ fn an_out_of_range_value_with_a_rebalanced_multiplicity_fails_verification() {
     let a = &toy.shard.artifact;
     let honest = forwarded_shard(&toy.shard);
     assert!(every_channel_holds(&toy, &honest));
-    assert_eq!(prove_and_verify(&toy.shard, &honest), Ok(()));
+    assert_eq!(prove_and_verify(&toy, &honest), Ok(()));
 
     let row = 3;
     let out_of_range = Fr::from_u64(1 << 16);
@@ -460,14 +478,8 @@ fn an_out_of_range_value_with_a_rebalanced_multiplicity_fails_verification() {
 
     // With the counts left as they were, the channel's sum is nonzero and its
     // root refuses it.
-    let (sums, roots) = sums(
-        &Toy {
-            shard: forged.clone(),
-            specs: toy.specs.clone(),
-            live: toy.live,
-        },
-        &values,
-    );
+    let forged_toy = reshard(&toy, forged);
+    let (sums, roots) = sums(&forged_toy, &values);
     let range16 = sums
         .iter()
         .position(|s| s.channel == lookup_channel::RANGE16)
@@ -477,7 +489,587 @@ fn an_out_of_range_value_with_a_rebalanced_multiplicity_fails_verification() {
         2,
         "both chunks are unmatched"
     );
-    assert_ne!(sums[range16].sum, Fr::ZERO);
+    assert_ne!(sums[range16].num, Fr::ZERO);
     assert!(!channel_holds(roots[range16]));
-    assert_eq!(prove_and_verify(&forged, &values), Ok(()));
+    // The GKR proof of the forged witness is honest — nothing below the root
+    // notices — and the root check is what refuses it. A prover claiming the
+    // honest root instead is refused by the engine.
+    assert_eq!(prove_and_verify(&forged_toy, &values), Ok(()));
+    assert_eq!(
+        verify_claiming(
+            &forged_toy,
+            &values,
+            &[(range16, Fr::ZERO, roots[range16].1)]
+        ),
+        Err(gkr::GkrError::LayerInconsistency {
+            layer: a.depth() - 1
+        }),
+        "a forged output claim, refused at the top transition"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Acceptance 3: the shard-local challenges follow every commitment
+// ---------------------------------------------------------------------------
+
+/// Acceptance 3, structurally, from the recorded transcript event log: every
+/// `g`/`β` sample strictly follows the absorb of every witness and multiplicity
+/// commitment of the shard.
+///
+/// The script is the one S16 wires into a shard: commit each column, absorb it
+/// as a `COMMITMENT` message of four `Fr` limbs, and only then draw the two
+/// challenges under `LOOKUP_CHALLENGE`. The log is metadata — it never feeds
+/// the sponge — so reading it changes nothing.
+#[test]
+#[ignore = "2^20 rows: a toy SRS of 2^20 points and one commitment per column"]
+fn the_lookup_challenges_follow_every_commitment() {
+    let toy = toy();
+    let a = &toy.shard.artifact;
+    let srs = toy_srs(a.trace_vars);
+
+    // The witness subtree, the multiplicity columns last in it.
+    let witness: Vec<PolyAddress> = (0..a.witness.len() as u32)
+        .map(PolyAddress::Witness)
+        .collect();
+    let multiplicities: Vec<&String> = a.witness.iter().rev().take(4).collect();
+    assert!(
+        multiplicities.iter().all(|n| n.starts_with("mult_")),
+        "the multiplicity columns are last in the witness subtree: {multiplicities:?}"
+    );
+
+    let mut t = Transcript::new();
+    for address in &witness {
+        let column = toy.shard.base.get(*address).expect("a committed column");
+        let MercuryCommitment(point) = commit(&srs, column).expect("the column commits");
+        append_g1(&mut t, transcript_tags::COMMITMENT, &point);
+    }
+    let absorbs = t.event_log().len();
+    let g = t.challenge_scalar(transcript_tags::LOOKUP_CHALLENGE);
+    let beta = t.challenge_scalar(transcript_tags::LOOKUP_CHALLENGE);
+    assert_ne!(g, beta, "two draws, two values");
+
+    // The log, event for event: one absorb per column, then the two challenges.
+    let log = t.event_log();
+    let expected: Vec<TranscriptEvent> = witness
+        .iter()
+        .map(|_| TranscriptEvent::Absorb {
+            tag: transcript_tags::COMMITMENT,
+            n_scalars: 4,
+        })
+        .chain(
+            [TranscriptEvent::Challenge {
+                tag: transcript_tags::LOOKUP_CHALLENGE,
+            }; 2],
+        )
+        .collect();
+    assert_eq!(log, expected.as_slice());
+
+    // And the ordering invariant, over whatever log it is handed: no sample
+    // under the lookup tag precedes an absorb of a commitment.
+    let last_absorb = log
+        .iter()
+        .rposition(|e| matches!(e, TranscriptEvent::Absorb { tag, .. } if *tag == transcript_tags::COMMITMENT))
+        .expect("a commitment was absorbed");
+    let first_sample = log
+        .iter()
+        .position(|e| matches!(e, TranscriptEvent::Challenge { tag } if *tag == transcript_tags::LOOKUP_CHALLENGE))
+        .expect("a challenge was drawn");
+    assert!(
+        last_absorb < first_sample,
+        "every g/beta sample follows every commitment absorb"
+    );
+    assert_eq!(absorbs, last_absorb + 1);
+}
+
+/// An SRS of `2^power` powers of a `tau` written down here, built the way
+/// `crates/pcs`' suite builds one: real, structurally valid and completely
+/// insecure. Only `commit` is used — an opening is S16's.
+fn toy_srs(power: u32) -> srs::Srs {
+    use curve::{G1Projective, G2Affine};
+    use rayon::prelude::*;
+
+    let tau = Fr::from_hex("0x0000000000000000000000000000000000000000000000000000000000abcdef")
+        .expect("a canonical literal");
+    let count = 1usize << power;
+    let mut scalars = Vec::with_capacity(count);
+    let mut acc = Fr::ONE;
+    for _ in 0..count {
+        scalars.push(acc);
+        acc *= tau;
+    }
+    let projective: Vec<G1Projective> = scalars
+        .par_iter()
+        .map(|s| G1Projective::GENERATOR.mul(s))
+        .collect();
+    let g1 = G1Projective::batch_to_affine(&projective);
+    let g2_tau = G2Affine::GENERATOR.mul(&tau);
+
+    let mut bytes = Vec::with_capacity(280 + count * 64);
+    bytes.extend_from_slice(b"APOGESRS");
+    bytes.extend_from_slice(&1u32.to_le_bytes());
+    bytes.extend_from_slice(&power.to_le_bytes());
+    bytes.extend_from_slice(&(count as u64).to_le_bytes());
+    bytes.extend_from_slice(&G2Affine::GENERATOR.to_bytes());
+    bytes.extend_from_slice(&g2_tau.to_bytes());
+    for p in &g1 {
+        bytes.extend_from_slice(&p.to_bytes());
+    }
+    let thread: String = format!("{:?}", std::thread::current().id())
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect();
+    let dir = std::env::temp_dir().join(format!("apogee-logup-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a scratch directory");
+    let path = dir.join(format!("toy-{power}-{thread}.srs"));
+    std::fs::write(&path, &bytes).expect("writing the toy archive");
+    let srs = srs::Srs::load(&path).expect("the toy archive loads");
+    std::fs::remove_file(&path).ok();
+    srs
+}
+
+// ---------------------------------------------------------------------------
+// Acceptance 4: S14's future read, now through the timestamp channel
+// ---------------------------------------------------------------------------
+
+/// Acceptance 4. S14's acceptance 4 attack, rerun here: two `rs1` queries that
+/// read the same value at the same register, with their read timestamps
+/// swapped. The read tuples are a permutation of themselves, so the memory
+/// multiset still balances, and no gate is broken — `rs1_writes_back` sees the
+/// same values — so at S14 only the native evaluator saw it. Now the later of
+/// the two reads a timestamp after its own write, its gap is negative, and the
+/// timestamp channel refuses it: the tuple is a value `[0, 2^19)` does not
+/// hold, the multiplicities cannot even be recounted over it, and the channel's
+/// root is not `(0, nonzero)`.
+///
+/// S14 swapped two reads of `x0`, which is the case where the values match by
+/// construction. `JUMP_BRANCH_SLT` makes no `rs1` query on `x0` in fib — a
+/// `jal` reads no source register at all — so the pair is found by its
+/// property instead of by its register.
+#[test]
+#[ignore = "2^20 rows: one forward pass is 3 GB"]
+fn s14s_future_read_now_fails_the_timestamp_channel() {
+    let toy = toy();
+    let a = &toy.shard.artifact;
+    let cell = |name: &str, row: usize| toy.shard.base.get(at(a, name)).expect("a column").get(row);
+    let read_ts = at(a, "rs1_read_ts");
+
+    // Two live `rs1` queries at one register reading one value, at different
+    // timestamps: swapping those permutes the read tuples and nothing else.
+    let live: Vec<usize> = (0..toy.live)
+        .filter(|y| cell("rs1_mask", *y) == Fr::ONE)
+        .collect();
+    let mut pair = None;
+    for (i, &early) in live.iter().enumerate() {
+        for &late in &live[i + 1..] {
+            let same = cell("rs1_addr", early) == cell("rs1_addr", late)
+                && cell("rs1_read_value", early) == cell("rs1_read_value", late);
+            if same && cell("rs1_read_ts", early) != cell("rs1_read_ts", late) {
+                pair = Some((early, late));
+                break;
+            }
+        }
+        if pair.is_some() {
+            break;
+        }
+    }
+    let (early, late) = pair.expect("fib reads one register twice at one value");
+
+    let forged = with_cells(
+        &toy.shard,
+        &[
+            (read_ts, early, cell("rs1_read_ts", late)),
+            (read_ts, late, cell("rs1_read_ts", early)),
+        ],
+    );
+    let values = forwarded_shard(&forged);
+    // Every gate still holds: the swap breaks no relation.
+    assert_eq!(gkr::self_check(a, &values, &forged.challenges), Ok(()));
+
+    // The gap the earlier row now carries is not a value the table holds, so
+    // the honest prover cannot even count it.
+    let columns = columns_of(&forged);
+    let recount = build_multiplicities(a, &columns, &toy.specs);
+    assert!(
+        recount.is_err(),
+        "a negative gap is no row of [0, 2^19): {:?}",
+        recount.map(|_| ())
+    );
+
+    // With the honest counts, the timestamp channel does not hold.
+    let forged_toy = reshard(&toy, forged);
+    let (sums, roots) = sums(&forged_toy, &values);
+    let timestamp = channel_at(&sums, lookup_channel::TIMESTAMP);
+    assert!(
+        !sums[timestamp].unmatched.is_empty(),
+        "the negative gap is unmatched"
+    );
+    assert_ne!(sums[timestamp].num, Fr::ZERO);
+    assert!(!channel_holds(roots[timestamp]), "the root refuses it");
+    assert_eq!(
+        check_channel_roots(&roots, &sums),
+        Ok(()),
+        "and it is the root the circuit proved"
+    );
+
+    // A prover who claims the honest root instead is refused by `verify`.
+    assert_eq!(
+        verify_claiming(
+            &forged_toy,
+            &values,
+            &[(timestamp, Fr::ZERO, roots[timestamp].1)]
+        ),
+        Err(gkr::GkrError::LayerInconsistency {
+            layer: a.depth() - 1
+        }),
+        "a forged output claim, refused at the top transition"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Acceptance 6: the gated keys
+// ---------------------------------------------------------------------------
+
+/// Acceptance 6, all three cases of the gated-key convention.
+///
+/// 1. A row whose flag is 0 contributes exactly the neutral entry whatever its
+///    key columns hold: garbage written into `and_a`, `and_b` and `and_c` on
+///    such a row leaves every channel root where it was.
+/// 2. Tampering a flag = 1 row's key fails: the tuple is no row of the table.
+/// 3. The table's real entry `(0, 0, 0)` and the `ZeroEntry` are distinguished,
+///    which is the `+ 1` offset: a genuine lookup of `a = b = 0` credits the
+///    AND table's own row, and a switched-off row credits row 0.
+#[test]
+#[ignore = "2^20 rows: one forward pass is 3 GB"]
+fn the_gated_key_convention_holds_in_all_three_cases() {
+    let toy = toy();
+    let a = &toy.shard.artifact;
+    let honest = forwarded_shard(&toy.shard);
+    let (_, honest_roots) = sums(&toy, &honest);
+    assert!(honest_roots.iter().all(|r| channel_holds(*r)));
+
+    // 1. Garbage under a flag of 0.
+    let off = toy.live;
+    assert_eq!(
+        toy.shard
+            .base
+            .get(at(a, "and_on"))
+            .expect("a column")
+            .get(off),
+        Fr::ZERO,
+        "row {off} is a padding row, its flag off"
+    );
+    let garbage = with_cells(
+        &toy.shard,
+        &[
+            (at(a, "and_a"), off, Fr::from_u64(0xdead)),
+            (at(a, "and_b"), off, Fr::from_u64(0xbeef)),
+            (at(a, "and_c"), off, Fr::from_u64(0x1234)),
+        ],
+    );
+    let values = forwarded_shard(&garbage);
+    let (_, roots) = sums(&reshard(&toy, garbage), &values);
+    assert_eq!(
+        roots, honest_roots,
+        "a switched-off row contributes the neutral entry whatever it holds"
+    );
+
+    // 2. A flag = 1 row's key moved.
+    let live = live_row(&toy, "and_on");
+    let forged = with_cells(&toy.shard, &[(at(a, "and_a"), live, Fr::from_u64(0x1ff))]);
+    let values = forwarded_shard(&forged);
+    let forged_toy = reshard(&toy, forged);
+    let (sums, roots) = sums(&forged_toy, &values);
+    let generic = channel_at(&sums, lookup_channel::GENERIC);
+    assert_eq!(
+        sums[generic].unmatched,
+        vec![(live, "and_lookup".to_string())],
+        "the moved key is no row of the table"
+    );
+    assert!(!channel_holds(roots[generic]));
+
+    // 3. The `+ 1` offset. A genuine `0 AND 0 = 0` credits the AND table's own
+    // row, which is row 1; the switched-off rows credit row 0, the ZeroEntry.
+    let zeroed = with_cells(
+        &toy.shard,
+        &[
+            (at(a, "and_a"), live, Fr::ZERO),
+            (at(a, "and_b"), live, Fr::ZERO),
+            (at(a, "and_c"), live, Fr::ZERO),
+        ],
+    );
+    let counts = build_multiplicities(a, &columns_of(&zeroed), &toy.specs)
+        .expect("a genuine entry is countable");
+    let (_, generic_counts) = &counts[channel_at_spec(&toy.specs, lookup_channel::GENERIC)];
+    assert_ne!(
+        generic_counts.get(1),
+        Fr::ZERO,
+        "the AND entry (0, 0, 0) is the table's row 1, not its row 0"
+    );
+    assert_ne!(
+        generic_counts.get(0),
+        Fr::ZERO,
+        "and the ZeroEntry at row 0 answers every switched-off row"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Acceptance 7: the decoder
+// ---------------------------------------------------------------------------
+
+/// Acceptance 7. Honest cycle rows bind to `DecodedTables`, which acceptance 1
+/// shows. Here: one decoded output moved, and a packed mask outside the table's
+/// domain — the all-zero mask included — each refused by the decoder channel.
+///
+/// The mask is moved together with the bits that recompose it, so the
+/// booleanity and recomposition gates still hold and the lookup is the only
+/// thing left to catch it. One-hotness comes from the table's domain and from
+/// nothing else, which is exactly what the all-zero case shows: booleanity
+/// permits it, and the table does not hold it.
+#[test]
+#[ignore = "2^20 rows: one forward pass is 3 GB"]
+fn a_moved_decoded_output_and_an_illegal_mask_each_fail_the_decoder_channel() {
+    let toy = toy();
+    let a = &toy.shard.artifact;
+    let live = live_row(&toy, "pc_mask");
+    let mask = at(a, "decoded_mask");
+    let held = toy.shard.base.get(mask).expect("a column").get(live);
+    assert_ne!(held, Fr::ZERO, "a live row's mask is one-hot, never 0");
+
+    // One decoded output moved: the claimed `rd` for this pc.
+    let rd = at(a, "decoded_rd");
+    let was = toy.shard.base.get(rd).expect("a column").get(live);
+    let moved = with_cells(&toy.shard, &[(rd, live, was + Fr::ONE)]);
+    assert_eq!(
+        decoder_unmatched(&toy, moved),
+        vec![(live, "decode_row".to_string())],
+        "a claimed output the table does not pair with this pc"
+    );
+
+    // Two masks outside the domain, each with its bits: two bits set at once,
+    // and the all-zero mask. Both are twelve-bit values whose bits recompose
+    // them and are each boolean, so only the table's domain refuses them —
+    // which is the whole point of one packed column.
+    for claimed in [Fr::from_u64(0b11), Fr::ZERO] {
+        let mut cells = vec![(mask, live, claimed)];
+        for k in 0..MASK_BITS {
+            let bit = bit_of(claimed, k);
+            cells.push((at(a, &format!("kind_{k}")), live, bit));
+        }
+        let forged = with_cells(&toy.shard, &cells);
+        let values = forwarded_shard(&forged);
+        // The bits still recompose the mask, and each is still boolean.
+        assert_eq!(
+            gkr::self_check(a, &values, &forged.challenges),
+            Ok(()),
+            "mask {claimed:?}: every gate holds"
+        );
+        assert_eq!(
+            decoder_unmatched(&toy, forged),
+            vec![(live, "decode_row".to_string())],
+            "mask {claimed:?}: the table's domain is what refuses it"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Acceptance 8: a multiplicity-only tamper
+// ---------------------------------------------------------------------------
+
+/// Acceptance 8. Honest values with one multiplicity cell changed: the witness
+/// is untouched, every gate holds, the recount names the column and the row, and
+/// the channel's root is no longer `(0, nonzero)`.
+#[test]
+#[ignore = "2^20 rows: one forward pass is 3 GB"]
+fn one_changed_multiplicity_cell_fails_its_channel() {
+    let toy = toy();
+    let a = &toy.shard.artifact;
+    let column = at(a, "mult_generic");
+    let was = toy.shard.base.get(column).expect("a column").get(0);
+    let forged = with_cells(&toy.shard, &[(column, 0, was + Fr::ONE)]);
+    let values = forwarded_shard(&forged);
+    assert_eq!(gkr::self_check(a, &values, &forged.challenges), Ok(()));
+
+    let e =
+        trace::check_multiplicities(a, &columns_of(&forged), &toy.specs, &counted(&forged, &toy))
+            .expect_err("the recount differs");
+    assert!(
+        e.contains("channel `generic`'s W[") && e.ends_with("differs at row 0"),
+        "{e}"
+    );
+
+    let forged_toy = reshard(&toy, forged);
+    let (sums, roots) = sums(&forged_toy, &values);
+    let generic = channel_at(&sums, lookup_channel::GENERIC);
+    assert!(
+        sums[generic].unmatched.is_empty(),
+        "every tuple is still in the table"
+    );
+    assert_ne!(sums[generic].num, Fr::ZERO, "the counts no longer balance");
+    assert!(!channel_holds(roots[generic]));
+    assert_eq!(check_channel_roots(&roots, &sums), Ok(()));
+}
+
+// ---------------------------------------------------------------------------
+// Acceptance 12: booleanity of the extracted bits
+// ---------------------------------------------------------------------------
+
+/// Acceptance 12. Every bit the circuit extracts from the packed mask carries
+/// `x − x·x = 0`, and a witness that is not 0 or 1 breaks it: the self-check
+/// names the gate, and the proof is rejected at gate list 0.
+#[test]
+#[ignore = "2^20 rows: one forward pass is 3 GB"]
+fn a_non_boolean_extracted_bit_is_refused_by_its_gate() {
+    let toy = toy();
+    let a = &toy.shard.artifact;
+    // Each of the twelve has its own gate, named for it.
+    for k in 0..MASK_BITS {
+        let name = format!("kind_{k}_boolean");
+        assert!(
+            a.relations.iter().any(|r| r.name == name),
+            "the artifact carries `{name}`"
+        );
+    }
+    let live = live_row(&toy, "pc_mask");
+    let forged = with_cells(&toy.shard, &[(at(a, "kind_0"), live, Fr::from_u64(2))]);
+    let values = forwarded_shard(&forged);
+    let broken = gkr::self_check(a, &values, &forged.challenges).expect_err("a non-boolean bit");
+    assert_eq!(broken.row, live);
+    assert!(
+        [
+            String::from("kind_0_boolean"),
+            String::from("decoded_mask_bits")
+        ]
+        .contains(&broken.relation),
+        "{}",
+        broken.relation
+    );
+    assert_eq!(
+        prove_and_verify(&reshard(&toy, forged), &values),
+        Err(gkr::GkrError::LayerInconsistency { layer: 0 }),
+        "an enforcing gate of gate list 0"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The shared tamper helpers
+// ---------------------------------------------------------------------------
+
+/// `toy` with `shard` in place of its own: a tampered base, the same specs, the
+/// same live count and the same seeded transcript. The seeding binds the honest
+/// columns, which is exactly what a prover who tampers after committing has.
+fn reshard(toy: &Toy, shard: Shard) -> Toy {
+    Toy {
+        shard,
+        specs: toy.specs.clone(),
+        live: toy.live,
+        seeded: toy.seeded,
+    }
+}
+
+/// A shard's committed columns, by address.
+fn columns_of(shard: &Shard) -> Vec<(PolyAddress, MultilinearPoly)> {
+    shard
+        .artifact
+        .committed()
+        .into_iter()
+        .map(|address| (address, shard.base.get(address).expect("a column").clone()))
+        .collect()
+}
+
+/// A shard's multiplicity columns as `check_multiplicities` takes them.
+fn counted(shard: &Shard, toy: &Toy) -> Vec<(PolyAddress, MultilinearPoly)> {
+    toy.specs
+        .iter()
+        .map(|spec| {
+            (
+                spec.multiplicity,
+                shard.base.get(spec.multiplicity).expect("a column").clone(),
+            )
+        })
+        .collect()
+}
+
+/// Channel `channel`'s position in a `ChannelSum` list.
+fn channel_at(sums: &[ChannelSum], channel: u32) -> usize {
+    sums.iter()
+        .position(|s| s.channel == channel)
+        .unwrap_or_else(|| panic!("no channel {channel}"))
+}
+
+/// Channel `channel`'s position in a spec list.
+fn channel_at_spec(specs: &[ChannelSpec], channel: u32) -> usize {
+    specs
+        .iter()
+        .position(|s| s.channel == channel)
+        .unwrap_or_else(|| panic!("no channel {channel}"))
+}
+
+/// A live row on which `flag` is 1.
+fn live_row(toy: &Toy, flag: &str) -> usize {
+    let column = toy
+        .shard
+        .base
+        .get(at(&toy.shard.artifact, flag))
+        .expect("a column");
+    (0..toy.live)
+        .find(|y| column.get(*y) == Fr::ONE)
+        .unwrap_or_else(|| panic!("no row has {flag} = 1"))
+}
+
+/// Bit `k` of a field element that is a small integer.
+fn bit_of(v: Fr, k: usize) -> Fr {
+    Fr::from_u64(u64::from((small(v) >> k) & 1))
+}
+
+/// The decoder channel's unmatched rows on a forged shard.
+fn decoder_unmatched(toy: &Toy, forged: Shard) -> Vec<(usize, String)> {
+    let values = forwarded_shard(&forged);
+    let forged_toy = reshard(toy, forged);
+    let (sums, roots) = sums(&forged_toy, &values);
+    let decoder = channel_at(&sums, lookup_channel::DECODER);
+    assert!(!channel_holds(roots[decoder]), "the root refuses it");
+    sums[decoder].unmatched.clone()
+}
+
+/// Prove `values` and verify the proof, both transcripts restored from the
+/// shard's seeded state: every committed column bound by its commitment, and
+/// `g` and `β` drawn, before a single round message.
+fn prove_and_verify(toy: &Toy, values: &LayerValues) -> Result<(), gkr::GkrError> {
+    verify_claiming(toy, values, &[])
+}
+
+/// [`prove_and_verify`] with the channel pairs of `claimed` replacing the
+/// circuit's own in the output claims, so a prover claiming a root it did not
+/// compute is refused by the engine rather than by the root check.
+fn verify_claiming(
+    toy: &Toy,
+    values: &LayerValues,
+    claimed: &[(usize, Fr, Fr)],
+) -> Result<(), gkr::GkrError> {
+    let shard = &toy.shard;
+    let a = &shard.artifact;
+    let bound = || Transcript::restore(&toy.seeded);
+    let proof = gkr::prove(a, values, &shard.challenges, &mut bound());
+    let top = values.layers.last().expect("a top layer");
+    let mut tables: Vec<MultilinearPoly> = a
+        .outputs
+        .iter()
+        .map(|out| match *out {
+            PolyAddress::Inner { offset, .. } => top[offset as usize].clone(),
+            other => panic!("an output is an inner address, not {other}"),
+        })
+        .collect();
+    // The channel pairs are the outputs after the two memory roots.
+    for (i, num, den) in claimed {
+        tables[2 + 2 * i] = MultilinearPoly::new(PolyBacking::Fr(vec![*num]));
+        tables[2 + 2 * i + 1] = MultilinearPoly::new(PolyBacking::Fr(vec![*den]));
+    }
+    gkr::verify(
+        a,
+        &proof,
+        &gkr::OutputClaims { tables },
+        &shard.challenges,
+        &mut bound(),
+    )
+    .map(|_| ())
 }

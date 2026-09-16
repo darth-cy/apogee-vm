@@ -36,8 +36,9 @@ crates/
   emulator/      the RV32IMAC reference emulator, its tracing path, and the QEMU
                  differential harness; std
   constraints/   circuits as data: PolyAddress, GateDef, LayerSpec, CircuitArtifact, the
-                 laws, the cache-free compilation and the wire form, and `memory`: the per-family frames,
-                 the two window artifacts and check_memory; no_std
+                 laws, the cache-free compilation and the wire form; `memory`: the per-family frames,
+                 the two window artifacts and check_memory; and `lookup`: the LogUp
+                 channels, their gated tuples, the fraction tree and the discharge rules; no_std
   gkr-verify/    the GKR verifier half: the gate kernel, the layer sumcheck verifier and
                  verify, and every type verify touches; the memory argument's window
                  constant, boundary factors and reconciliation; no_std, linked by the
@@ -85,7 +86,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
-cargo test --workspace                      # 722 tests as of S14; 21 more are #[ignore]d
+cargo test --workspace                      # 747 tests as of S15; 29 more are #[ignore]d
+cargo test -p checker --test logup -- --ignored --test-threads=1   # S15's toy: 2^20 rows, 3 GB a pass
 cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
@@ -96,7 +98,7 @@ cargo test -p emulator --test consistency -- --include-ignored   # and again at 
 git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constraints/tests/vectors/
 -------------------------------------------------------------------------------
 cargo run -p kat-gen                        # refresh every fixture (manual, deliberate)
-cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader | isa | program | gkr | memory
+cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader | isa | program | gkr | memory | lookup
 cargo run -p checker -- laws <artifact>     # Laws 1-4 and the lookup rules, the standalone validators
 cargo run -p checker -- padding <artifact>  # the padding contract
 cargo run -p checker -- dump <artifact>     # a circuit, readably: layers, gates, relations, catalogue
@@ -435,9 +437,46 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   target.
 - **The artifact format is 1, and a lookup carries a selector.** `LookupExpr = (name,
   channel, selector, tuple)`: a range obligation holds where its selector is 0 or its one
-  `Linear` expression is below the channel's bound. S14 checks them natively
-  (`checker::violated_lookups`); S15 discharges them. `from_bytes` refuses any other
+  `Linear` expression is below the channel's bound. A **table** channel's tuple is 1 to
+  `MAX_TUPLE` expressions wide, and every lookup of a channel is the same width, because
+  one channel has one table. `checker::violated_lookups` is the range channels' native
+  evaluator; `checker::channel_sums` is every channel's. `from_bytes` refuses any other
   format version.
+- **The LogUp spec is `docs/spec/lookup.md`, and it is frozen**: the four channels, the two
+  shard-local challenges and their derived powers, the gated-key conventions, the fraction
+  tree, the multiplicity convention, the packed generic table and the decoder binding.
+- **`g` and `β` are shard-local and follow every commitment.** Drawn in that order under
+  `LOOKUP_CHALLENGE`, after every witness and multiplicity commitment of the shard is
+  absorbed. `β^0` is the literal 1, and every power above it is a **derived** slot: a gate
+  coefficient is one literal or one challenge, and `β^j` is neither. So a tuple position
+  above 0 weights its columns by 1 and carries the constant 0 or 1; position 0 takes any
+  literal.
+- **A lookup's selector carries a booleanity gate**, which `validate` refuses it without.
+  LogUp sums `s/(E + g)`, so at `s = −1` an out-of-range row cancels an in-range one and
+  LogUp stops being the statement `violated_lookups` reads.
+- **A channel's root check is both conditions**: `num == 0` **and** `den != 0`. A leaf pair
+  of `(0, 0)` annihilates the whole tree, so the numerator check alone would accept a
+  channel that proves nothing.
+- **A range channel needs `BITS ≤ trace_vars`**, refused at construction: a table of `2^n`
+  rows holds at most `2^n` values. With `BITS[TIMESTAMP] = 19` and Mercury's even variable
+  count, **every execution family's shard is at least `2^20` rows** — and
+  `DEFAULT_HEIGHTS[ATOMICS]`, still `2^16`, is a height S16 must raise.
+- **The `+ 1` on a gated key is for map tables only.** It keeps every real entry off the
+  all-zero tuple so the `ZeroEntry` answers switched-off rows alone. A range channel has no
+  offset and cannot have one — shifting `[0, 2^BITS)` up by one puts its top outside the
+  table — and the decoder gates to the `MINUS_ONE` padding tuple instead, S11's table
+  having no all-zero row. Those two exemptions are documented in `docs/spec/lookup.md` §4
+  and nowhere else.
+- **One packed mask column, and one-hotness is the table's domain.** Booleanity permits any
+  subset of bits, the empty one included, and on an all-zero mask every gated constraint
+  goes vacuous. Split the mask into independent boolean columns and the property is lost
+  silently. A bit a circuit *extracts* from the mask still carries its own `x² = x`.
+- **A multiplicity is counted over raw gated tuples**, never a compressed one: it is
+  committed before `g` and `β` exist. One counter per channel per table row, the lowest row
+  holding a repeated tuple, switched-off rows included.
+- **A fraction tree is exempt from the product-tree padding clause.** Its identity is
+  `(0, 1)`, and a padding row is not idle in a channel: it contributes the neutral entry,
+  which the multiplicity column counts.
 - **`check_memory` is a provenance rule.** It runs beside `validate` wherever a memory
   artifact is built, and refuses any gate or output whose cone both names a global memory
   slot (1–5) and reads a `W` column, a root whose cone reads a `W` column at all — `W` is
@@ -465,3 +504,4 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 | S12 — Emulator + trace generation | done | `docs/handoff/S12-emulator.md` |
 | S13 — GKR engine, circuit artifact, checker suite | done | `docs/handoff/S13-gkr.md` |
 | S14 — Memory multiset argument, RAM windows, register/PC boundary | done | `docs/handoff/S14-multiset.md` |
+| S15 — LogUp lookup channels + decoder lookup | done | `docs/handoff/S15-lookup.md` |

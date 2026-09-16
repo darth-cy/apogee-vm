@@ -220,15 +220,6 @@ pub fn virtual_at_row(kind: VirtualKind, row: usize) -> Fr {
     }
 }
 
-/// A range table's width in bits, or `None` for a kind that is not one.
-/// `docs/spec/lookup.md` §3.
-pub fn range_table_bits(kind: VirtualKind) -> Option<u32> {
-    match kind {
-        VirtualKind::Range19 | VirtualKind::Range16 => Some(range_bits(kind)),
-        VirtualKind::RowIndex | VirtualKind::RamLive => None,
-    }
-}
-
 fn range_bits(kind: VirtualKind) -> u32 {
     match kind {
         VirtualKind::Range19 => 19,
