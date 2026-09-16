@@ -322,6 +322,17 @@ the direct check establishes that. S18 and S19 consume it.
   (§9) and on the `+ 1` offset keeping every real entry off the neutral tuple (§4).
 - **A row that looks up nothing costs nothing** rests on the neutral entry being a real
   table row whose multiplicity counts it (§4, §7).
+**What the discharge rule does and does not say.** `check_discharge` establishes that every
+lookup of the artifact is the denominator of exactly one gate-list-0 column. It does **not**
+establish that that column feeds its channel's fraction tree rather than another's: the
+trees' shape is the constructor's, not something the artifact records separately. That
+direction is completeness, not soundness — a tree missing a fraction, or carrying one from
+another channel, is a channel an honest prover cannot balance — and the same reasoning
+covers the `ChannelSpec`s themselves, which a caller supplies and the artifact does not
+record. A verifying key conveys the artifact **and** the specs the family was built with;
+what binds the setup columns to the tables they are supposed to be is program identity
+(`docs/spec/memory.md` §6.2), not anything here.
+
 - **Owed by later stages.** S16 wires the channels into the real shard transcript — the
   commitments, then `g` and `β` under `LOOKUP_CHALLENGE`, then the local challenges — and
   into the one Mercury opening per shard; it also runs `check_discharge` and
