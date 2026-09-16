@@ -331,9 +331,11 @@ answers are "Read these first"; the prompt is not edited).
     booleanity gate: `validate` names the lookup, `check_memory` names the leaf.
 12. **`checker::channel_sums` folds fractions rather than inverting.** A channel of `2^20`
     rows and eleven lookups would otherwise cost eleven million inversions; the fold is
-    also a different algorithm from the balanced tree it checks. It leaves `unmatched`
-    empty where a channel balances: finding it costs a second pass over every row, and a
-    tuple outside the table that balances anyway is a coincidence of probability `~1/|Fr|`.
+    also a different algorithm from the balanced tree it checks, and the two agree on the
+    pair and not merely on the ratio, fraction addition being symmetric in its operands.
+    Its membership pass over the table always runs and ends as soon as every distinct
+    looked-up tuple is matched, so `unmatched` is a checked result on an honest channel and
+    not a vacuous one.
 13. **`violated_lookups` is the range channels' evaluator only.** A table channel's
     membership is a statement about the whole table, not about one row; `channel_sums` is
     its evaluator and reports every unmatched row.

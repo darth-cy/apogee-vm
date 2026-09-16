@@ -299,9 +299,11 @@ the direct check establishes that. S18 and S19 consume it.
 ## 12. What the checker adds
 
 - `checker::channel_sums` recomputes every channel's fractional sum and denominator
-  product natively, by direct inversion, re-deriving the gating and the compression from
-  §4 and §5 rather than from `constraints::lookup`. It names a zero denominator, and —
-  where the sum is not 0 — reports every row whose gated tuple no table row answers.
+  product natively, re-deriving the gating and the compression from §4 and §5 rather than
+  from `constraints::lookup`. It folds fractions rather than inverting per row — a channel
+  of `2^20` rows would otherwise cost millions of inversions, and the fold is also a
+  different algorithm from the balanced tree it checks. It names a zero denominator, and
+  reports every row whose gated tuple no table row answers.
 - `checker::channel_roots` reads the root pairs from the materialized top layer, and
   `checker::check_channel_roots` holds them to the native recomputation: `den` is the
   product of every leaf denominator and `num` is `sum · den`.

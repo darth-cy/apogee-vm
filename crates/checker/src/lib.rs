@@ -1004,8 +1004,8 @@ impl ChannelSum {
 
 /// The LogUp self-check hook, `docs/spec/lookup.md` §7: every channel's
 /// fractional sum and denominator product, recomputed natively from the base
-/// layer and the artifact's lookup list, and — when the sum is not 0 — the rows
-/// whose gated tuple no table row answers.
+/// layer and the artifact's lookup list, and every row whose gated tuple no
+/// table row answers.
 ///
 /// The gating, the compression and the neutral entry are re-derived here from
 /// `docs/spec/lookup.md` §4 and §5 rather than read from `constraints::lookup`,
@@ -1017,10 +1017,7 @@ impl ChannelSum {
 /// names: a zero leaf denominator is what makes the root's `den != 0` check
 /// bite, and no native sum exists over it.
 ///
-/// Does NOT cover: `unmatched` on a channel whose sum is 0 — the list is left
-/// empty there, because a tuple outside the table balancing anyway is a
-/// coincidence of probability `~1/|Fr|`, and finding it costs a second pass
-/// over every row; whether the circuit's own tree computes these values —
+/// Does NOT cover: whether the circuit's own tree computes these values —
 /// [`check_channel_roots`] is that comparison; the laws and the lookup rules,
 /// which it assumes. Reads every row of every column a lookup or a table names.
 pub fn channel_sums(
@@ -1175,27 +1172,25 @@ pub fn channel_sums(
             den *= d;
         }
 
-        // A second pass, only where the channel did not balance: which gated
-        // tuples the table never holds, reported at the first row producing
-        // each.
-        let mut unmatched = Vec::new();
-        if num != Fr::ZERO {
-            for row in 0..rows {
-                if looked_up.is_empty() {
-                    break;
-                }
-                for (j, t) in table.iter().enumerate() {
-                    tuple[j] = read(t, row);
-                }
-                looked_up.remove(&key(&tuple));
+        // A second pass over the table: which gated tuples it never holds,
+        // reported at the first row producing each. It ends early once every
+        // distinct tuple is matched, which on an honest channel is long before
+        // the last row.
+        for row in 0..rows {
+            if looked_up.is_empty() {
+                break;
             }
-            unmatched = first_seen
-                .into_iter()
-                .filter(|(_, _, bytes)| looked_up.contains_key(bytes))
-                .map(|(row, name, _)| (row, name))
-                .collect();
-            unmatched.sort();
+            for (j, t) in table.iter().enumerate() {
+                tuple[j] = read(t, row);
+            }
+            looked_up.remove(&key(&tuple));
         }
+        let mut unmatched: Vec<(usize, String)> = first_seen
+            .into_iter()
+            .filter(|(_, _, bytes)| looked_up.contains_key(bytes))
+            .map(|(row, name, _)| (row, name))
+            .collect();
+        unmatched.sort();
         out.push(ChannelSum {
             channel: spec.channel,
             num,
