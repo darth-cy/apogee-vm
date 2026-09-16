@@ -733,6 +733,13 @@ pub mod transcript_tags {
     /// absorbed after [`VM_CONFIG`] and before the families' commitments.
     /// `docs/spec/memory.md` §6.2.
     pub const PROGRAM_ENTRY: u64 = 32;
+
+    /// Challenge. The LogUp channels' two shard-local challenges, `g` then
+    /// `β`, drawn in that order after every witness and multiplicity
+    /// commitment of the shard is absorbed. One tag, one kind; the two roles
+    /// are separated by their fixed position in the shard's script, as
+    /// [`SUMCHECK_CHALLENGE`]'s are. `docs/spec/lookup.md` §2.
+    pub const LOOKUP_CHALLENGE: u64 = 33;
 }
 
 /// The external challenge slots a GKR circuit's coefficients may name, frozen
@@ -768,38 +775,115 @@ pub mod challenge_slot {
     /// `docs/spec/memory.md` §3.3.
     pub const MEM_WINDOW_CONSTANT: u32 = 5;
 
+    /// `g`, the LogUp channels' additive challenge. Drawn **per shard**, from
+    /// that shard's own transcript, after every witness and multiplicity
+    /// commitment is absorbed. `docs/spec/lookup.md` §2.
+    pub const LOOKUP_G: u32 = 6;
+
+    /// `β`, the LogUp tuple-compression challenge: a tuple is
+    /// `Σ_j β^j·col_j`, `β^0` being the literal 1. Drawn per shard,
+    /// immediately after [`LOOKUP_G`].
+    pub const LOOKUP_BETA: u32 = 7;
+
+    /// `β^2`. **Derived**: a gate coefficient is one literal or one challenge,
+    /// so every power above the first is a slot of its own, computed by the
+    /// verifier from [`LOOKUP_BETA`] and never read from a proof.
+    pub const LOOKUP_BETA_2: u32 = 8;
+    /// `β^3`, derived.
+    pub const LOOKUP_BETA_3: u32 = 9;
+    /// `β^4`, derived.
+    pub const LOOKUP_BETA_4: u32 = 10;
+    /// `β^5`, derived.
+    pub const LOOKUP_BETA_5: u32 = 11;
+    /// `β^6`, derived.
+    pub const LOOKUP_BETA_6: u32 = 12;
+
+    /// `β^j`'s slot for `j = 1 ..= 6`, indexed by `j - 1`. `β^0` is the
+    /// literal 1 and has no slot, which is why a range channel's one-column
+    /// tuple names no power at all.
+    pub const LOOKUP_BETA_POWERS: [u32; 6] = [
+        LOOKUP_BETA,
+        LOOKUP_BETA_2,
+        LOOKUP_BETA_3,
+        LOOKUP_BETA_4,
+        LOOKUP_BETA_5,
+        LOOKUP_BETA_6,
+    ];
+
+    /// `g − Σ_{j < W} β^j`, the decoder channel's denominator at a padding
+    /// row, `W` being that circuit's decoder tuple width. **Derived**: the
+    /// decoder's neutral tuple is `MINUS_ONE` in every column
+    /// (`docs/spec/lookup.md` §5), and a `Coeff` is one literal or one
+    /// challenge, so the sum it compresses to is a slot rather than a
+    /// constant.
+    pub const LOOKUP_DECODER_NEUTRAL: u32 = 13;
+
     /// Every slot's display name, indexed by slot number.
-    pub const NAMES: [&str; 6] = [
+    pub const NAMES: [&str; 14] = [
         "toy",
         "mem_gamma",
         "mem_alpha_addr",
         "mem_alpha_ts",
         "mem_alpha_val",
         "mem_window_constant",
+        "lookup_g",
+        "lookup_beta",
+        "lookup_beta_2",
+        "lookup_beta_3",
+        "lookup_beta_4",
+        "lookup_beta_5",
+        "lookup_beta_6",
+        "lookup_decoder_neutral",
     ];
 }
 
-/// The lookup channels a range obligation names, frozen at S14;
-/// **append-only**.
+/// The lookup channels a lookup expression names, frozen at S14 and completed
+/// at S15; **append-only**.
 ///
-/// A `LookupExpr`'s `channel` is one of these numbers, and a range channel's
-/// expression holds on a row when its canonical integer is below
-/// `2^BITS[channel]`. [`lookup_channel::NAMES`] is documentation, indexed by
-/// channel, as [`challenge_slot::NAMES`] is. `docs/spec/memory.md` §7; S15
-/// discharges the channels with LogUp.
+/// A `LookupExpr`'s `channel` is one of these numbers. A channel is either a
+/// **range** channel, whose one expression holds on a row when its canonical
+/// integer is below `2^BITS[channel]`, or a **table** channel, whose tuple
+/// holds when it is a row of the channel's committed table.
+/// [`lookup_channel::NAMES`] is documentation, indexed by channel, as
+/// [`challenge_slot::NAMES`] is. `docs/spec/memory.md` §7 and
+/// `docs/spec/lookup.md`.
 pub mod lookup_channel {
-    /// The timestamp gap's two 19-bit chunks: `[0, 2^19)`.
+    /// Range. The timestamp gap's two 19-bit chunks: `[0, 2^19)`.
     pub const TIMESTAMP: u32 = 0;
 
-    /// A halfword, `[0, 2^16)`: two of them bound a 32-bit value, under the
-    /// range convention of `docs/spec/memory.md` §7. No S14 artifact uses it.
+    /// Range. A halfword, `[0, 2^16)`: two of them bound a 32-bit value, under
+    /// the range convention of `docs/spec/memory.md` §7.
     pub const RANGE16: u32 = 1;
 
-    /// Each channel's bound, as a bit width, indexed by channel.
-    pub const BITS: [u32; 2] = [19, 16];
+    /// Table. The committed generic tables, packed into one table under the
+    /// gated-key convention of `docs/spec/lookup.md` §4.
+    pub const GENERIC: u32 = 2;
+
+    /// Table. A family's decoded instruction table, `crates/program`'s
+    /// `lookup_tuple(family)` columns in their frozen order.
+    pub const DECODER: u32 = 3;
+
+    /// How many channels this table defines.
+    pub const COUNT: u32 = 4;
+
+    /// Whether channel `i` is a range channel, indexed by channel. A range
+    /// channel's table is the closed form of `docs/spec/lookup.md` §3; a table
+    /// channel's is committed.
+    pub const IS_RANGE: [bool; COUNT as usize] = [true, true, false, false];
+
+    /// A range channel's bound, as a bit width, indexed by channel; 0 where
+    /// [`IS_RANGE`] is false, which is not a bound of `[0, 1)` but the absence
+    /// of one.
+    pub const BITS: [u32; COUNT as usize] = [19, 16, 0, 0];
 
     /// Every channel's display name, indexed by channel.
-    pub const NAMES: [&str; 2] = ["timestamp", "range16"];
+    pub const NAMES: [&str; COUNT as usize] = ["timestamp", "range16", "generic", "decoder"];
+
+    /// The widest lookup tuple any channel carries: `beta` powers exist for
+    /// positions `0 .. MAX_TUPLE`, and `challenge_slot::LOOKUP_BETA_POWERS`
+    /// has one slot per position above 0. The decoder's seven-column tuple is
+    /// the widest built (`crates/program`'s `lookup_tuple`).
+    pub const MAX_TUPLE: usize = 7;
 }
 
 /// The circuit families, by number. Frozen at S11; **append-only**.

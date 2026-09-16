@@ -20,7 +20,9 @@ use core::fmt;
 
 use field::Fr;
 
+mod build;
 mod laws;
+pub mod lookup;
 pub mod memory;
 mod wire;
 
@@ -56,6 +58,14 @@ pub enum VirtualKind {
     /// variables is `1 − Π_{j = RAM_LIVE_BIT}^{n−1} (1 − y_j)`, which is 0 when
     /// `n <= RAM_LIVE_BIT`. `docs/spec/memory.md` §3.3.
     RamLive,
+    /// `V[range19]`: the 19-bit range channel's table, the low 19 bits of the
+    /// row index. Its multilinear extension over `n` variables is
+    /// `Σ_{j < min(19, n)} 2^j·y_j`, so at `n >= 19` the table holds every
+    /// value of `[0, 2^19)` and nothing else. `docs/spec/lookup.md` §3.
+    Range19,
+    /// `V[range16]`: the 16-bit range channel's table, the low 16 bits of the
+    /// row index. `docs/spec/lookup.md` §3.
+    Range16,
 }
 
 /// The one way any polynomial is named. `docs/spec/gkr.md` §2 says which
@@ -88,6 +98,8 @@ impl fmt::Display for PolyAddress {
             PolyAddress::Setup(i) => write!(f, "S[{i}]"),
             PolyAddress::Virtual(VirtualKind::RowIndex) => write!(f, "V[row]"),
             PolyAddress::Virtual(VirtualKind::RamLive) => write!(f, "V[ram_live]"),
+            PolyAddress::Virtual(VirtualKind::Range19) => write!(f, "V[range19]"),
+            PolyAddress::Virtual(VirtualKind::Range16) => write!(f, "V[range16]"),
             PolyAddress::Inner { layer, offset } => write!(f, "L{{{layer}}}[{offset}]"),
             PolyAddress::Scratch(i) => write!(f, "scratch[{i}]"),
             PolyAddress::Cached { layer, offset } => write!(f, "C{{{layer}}}[{offset}]"),
@@ -142,6 +154,14 @@ pub enum GateDef {
     },
     /// `x(·,0)·x(·,1)`: one step of a product tree, in a halving list.
     TreeProduct { input: PolyAddress },
+    /// `p(·,0)·q(·,1) + p(·,1)·q(·,0)`: the numerator of one fraction-pair
+    /// addition, in a halving list. With `TreeProduct { q }` writing the
+    /// denominator, the pair `(p, q)` at layer `k` becomes
+    /// `p/q(·,0) + p/q(·,1)` at layer `k + 1`. `docs/spec/lookup.md` §6.
+    TreeCross {
+        left: PolyAddress,
+        right: PolyAddress,
+    },
     /// `c_0 + Σ a_i·x_i + Σ b_j·y_j·z_j`: any degree-2 polynomial written out
     /// term by term, including those no single product of affine forms spells,
     /// such as `a·b + c·d − e·f`.
@@ -153,8 +173,10 @@ pub enum GateDef {
 }
 
 impl GateDef {
-    /// The addresses the gate reads, in kernel order. `TreeProduct`'s one
-    /// operand is read twice by the kernel, as its two children. `Quadratic`'s
+    /// The addresses the gate reads, in kernel order. A halving gate's
+    /// operands are each read twice by the kernel, as their two children:
+    /// `TreeProduct`'s one operand gives `x(·,0), x(·,1)` and `TreeCross`'s
+    /// two give `p(·,0), p(·,1), q(·,0), q(·,1)`. `Quadratic`'s
     /// are its linear operands, then each product's two factors in turn:
     /// `x_1..x_t, y_1, z_1, .., y_u, z_u`.
     pub fn operands(&self) -> Vec<PolyAddress> {
@@ -166,6 +188,7 @@ impl GateDef {
                 left.iter().chain(right.iter()).map(|(_, a)| *a).collect()
             }
             GateDef::TreeProduct { input } => alloc::vec![*input],
+            GateDef::TreeCross { left, right } => alloc::vec![*left, *right],
             GateDef::Quadratic {
                 linear, products, ..
             } => {
@@ -189,7 +212,9 @@ impl GateDef {
                 c
             }
             GateDef::Product { coeff, .. } => alloc::vec![*coeff],
-            GateDef::MaskIntoIdentity { .. } | GateDef::TreeProduct { .. } => Vec::new(),
+            GateDef::MaskIntoIdentity { .. }
+            | GateDef::TreeProduct { .. }
+            | GateDef::TreeCross { .. } => Vec::new(),
             GateDef::AffineProduct {
                 left,
                 left_constant,
@@ -238,7 +263,7 @@ const ROW_WISE_OUTPUT: &str =
 
 /// The gate catalogue: one row per `GateDef` variant, in wire-tag order, each
 /// naming its variant in `variant`.
-pub const CATALOGUE: [CatalogueEntry; 6] = [
+pub const CATALOGUE: [CatalogueEntry; 7] = [
     CatalogueEntry {
         variant: "Linear",
         defined_in: DEFINED_IN,
@@ -294,6 +319,16 @@ pub const CATALOGUE: [CatalogueEntry; 6] = [
         template: "out(x) = Σ_y eq(x,y)·(c_0 + Σ a_i·x_i(y) + Σ b_j·y_j(y)·z_j(y))",
         purpose: "a degree-2 relation that is no single product of affine forms, such as \
                   a·b + c·d − e·f",
+    },
+    CatalogueEntry {
+        variant: "TreeCross",
+        defined_in: DEFINED_IN,
+        evaluated_in: EVALUATED_IN,
+        inputs: "p, q: L{k} columns, each read at both children",
+        output: "producing: L{k+1}[j], one variable fewer (halving lists only)",
+        template: "out(x) = Σ_y eq(x,y)·(p(y,0)·q(y,1) + p(y,1)·q(y,0))",
+        purpose: "the numerator of one level of a LogUp fraction tree; the denominator \
+                  beside it is a TreeProduct of q",
     },
 ];
 

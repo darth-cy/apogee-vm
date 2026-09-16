@@ -11,7 +11,7 @@ use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress, CATALOGUE};
 /// with no wildcard: a variant appended to `GateDef` stops this file compiling
 /// until the audit accounts for it. The names are this file's, not the
 /// catalogue's, so the catalogue is checked against something.
-const VARIANTS: usize = 6;
+const VARIANTS: usize = 7;
 
 fn variant_name(g: &GateDef) -> &'static str {
     match g {
@@ -21,6 +21,7 @@ fn variant_name(g: &GateDef) -> &'static str {
         GateDef::AffineProduct { .. } => "AffineProduct",
         GateDef::TreeProduct { .. } => "TreeProduct",
         GateDef::Quadratic { .. } => "Quadratic",
+        GateDef::TreeCross { .. } => "TreeCross",
     }
 }
 
@@ -73,6 +74,7 @@ fn one_of_each() -> [GateDef; VARIANTS] {
             linear: vec![(one, x)],
             products: vec![(one, x, y)],
         },
+        GateDef::TreeCross { left: x, right: y },
     ]
 }
 
@@ -137,9 +139,9 @@ fn the_audit_over_both_compilations_emits_every_variant() {
 /// the flat list carries the `AffineProduct` the cached gates do not.)
 #[test]
 fn each_compilation_reports_its_own_variant_counts() {
-    //                  Linear Product Mask Affine Tree Quadratic
-    let cached_counts = [3, 5, 2, 1, 4, 2];
-    let cache_free_counts = [2, 4, 2, 2, 4, 2];
+    //                  Linear Product Mask Affine Tree Quadratic Cross
+    let cached_counts = [3, 5, 2, 1, 4, 2, 0];
+    let cache_free_counts = [2, 4, 2, 2, 4, 2, 0];
 
     assert_eq!(variant_counts(&toy()), cached_counts, "toy_cached.bin");
     assert_eq!(

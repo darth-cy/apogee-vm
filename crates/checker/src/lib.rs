@@ -244,14 +244,17 @@ pub fn check_law2(a: &CircuitArtifact) -> Result<(), String> {
             ));
         }
         for (j, e) in list.producing.iter().enumerate() {
-            let input = PolyAddress::Inner {
-                layer: k as u32,
-                offset: j as u32,
-            };
-            if e.gate != (GateDef::TreeProduct { input }) {
+            // The two halving shapes: a product tree's `TreeProduct` and a
+            // fraction tree's `TreeCross` (`docs/spec/lookup.md` §6). Each
+            // reads its operands at both children, and locality (Law 1) is what
+            // holds those operands to layer `k`.
+            if !matches!(
+                e.gate,
+                GateDef::TreeProduct { .. } | GateDef::TreeCross { .. }
+            ) {
                 return Err(format!(
-                    "{LAW2}: producing gate {j} of halving gate list {k} is not \
-                     TreeProduct {{ input: {input} }}"
+                    "{LAW2}: producing gate {j} of halving gate list {k} is neither a \
+                     TreeProduct nor a TreeCross"
                 ));
             }
         }
@@ -1008,6 +1011,9 @@ fn formula(gate: &GateDef) -> String {
             affine(right, *right_constant)
         ),
         GateDef::TreeProduct { input } => format!("{input}(y, 0)·{input}(y, 1)"),
+        GateDef::TreeCross { left, right } => {
+            format!("({left}(y, 0)·{right}(y, 1) + {left}(y, 1)·{right}(y, 0))")
+        }
         // Field order: the constant, each linear term, each product.
         GateDef::Quadratic {
             constant,

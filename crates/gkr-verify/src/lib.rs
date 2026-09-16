@@ -147,6 +147,7 @@ pub fn eval_gate(gate: &GateDef, values: &[Fr], challenges: &ExternalChallenges)
     //     GateDef::Product { .. }
     //     | GateDef::MaskIntoIdentity { .. }
     //     | GateDef::TreeProduct { .. } => 2,
+    //     GateDef::TreeCross { .. } => 4,
     //     GateDef::AffineProduct { left, right, .. } => left.len() + right.len(),
     //     GateDef::Quadratic {
     //         linear, products, ..
@@ -179,6 +180,9 @@ pub fn eval_gate(gate: &GateDef, values: &[Fr], challenges: &ExternalChallenges)
             affine(left, left_constant, &values[..t]) * affine(right, right_constant, &values[t..])
         }
         GateDef::TreeProduct { .. } => values[0] * values[1],
+        // p(·,0)·q(·,1) + p(·,1)·q(·,0), the operands being p then q and each
+        // read at child 0 then child 1.
+        GateDef::TreeCross { .. } => values[0] * values[3] + values[1] * values[2],
         GateDef::Quadratic {
             constant,
             linear,
@@ -204,6 +208,30 @@ pub fn virtual_at_row(kind: VirtualKind, row: usize) -> Fr {
                 Fr::ZERO
             }
         }
+        // The low `bits` bits of the row index: at a height of `2^bits` rows or
+        // more the table is exactly `[0, 2^bits)`, each value once per
+        // `2^bits` rows.
+        VirtualKind::Range19 | VirtualKind::Range16 => {
+            let bits = range_bits(kind);
+            Fr::from_u64((row as u64) & ((1u64 << bits) - 1))
+        }
+    }
+}
+
+/// A range table's width in bits, or `None` for a kind that is not one.
+/// `docs/spec/lookup.md` §3.
+pub fn range_table_bits(kind: VirtualKind) -> Option<u32> {
+    match kind {
+        VirtualKind::Range19 | VirtualKind::Range16 => Some(range_bits(kind)),
+        VirtualKind::RowIndex | VirtualKind::RamLive => None,
+    }
+}
+
+fn range_bits(kind: VirtualKind) -> u32 {
+    match kind {
+        VirtualKind::Range19 => 19,
+        VirtualKind::Range16 => 16,
+        other => panic!("{other:?} is not a range table"),
     }
 }
 
@@ -218,6 +246,11 @@ pub fn virtual_at_point(kind: VirtualKind, point: &[Fr]) -> Fr {
         VirtualKind::RamLive => {
             let high = &point[point.len().min(constants::memory::RAM_LIVE_BIT as usize)..];
             Fr::ONE - high.iter().fold(Fr::ONE, |acc, y| acc * (Fr::ONE - *y))
+        }
+        // Σ_{j < bits} 2^j · y_j, the same Horner over the low variables alone.
+        VirtualKind::Range19 | VirtualKind::Range16 => {
+            let low = &point[..point.len().min(range_bits(kind) as usize)];
+            low.iter().rev().fold(Fr::ZERO, |acc, y| acc + acc + *y)
         }
     }
 }
@@ -265,10 +298,11 @@ pub struct ResolvedList<'a> {
 }
 
 impl<'a> ResolvedList<'a> {
-    /// Resolve gate list `k` of `artifact`. A halving list's `TreeProduct`
-    /// reads column `x`'s two children, `lower[x]` then `upper[x]`, and its
-    /// cached and enforcing lists are not read. Panics on an operand a
-    /// validated artifact cannot hold.
+    /// Resolve gate list `k` of `artifact`. A halving gate reads each of its
+    /// operands at both children — column `x` gives `lower[x]` then
+    /// `upper[x]`, in operand order — and a halving list's cached and
+    /// enforcing lists are not read. Panics on an operand a validated artifact
+    /// cannot hold.
     pub fn new(
         artifact: &'a CircuitArtifact,
         k: usize,
@@ -280,9 +314,11 @@ impl<'a> ResolvedList<'a> {
         let mut bounds = vec![0];
         let (cached, enforcing) = if list.halving {
             for entry in &list.producing {
-                let x = column_index(artifact, k, &entry.gate.operands()[0]);
                 gates.push(&entry.gate);
-                sources.extend([Source::Lower(x), Source::Upper(x)]);
+                for op in entry.gate.operands() {
+                    let x = column_index(artifact, k, &op);
+                    sources.extend([Source::Lower(x), Source::Upper(x)]);
+                }
                 bounds.push(sources.len());
             }
             (0, 0)

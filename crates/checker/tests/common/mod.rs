@@ -145,6 +145,7 @@ pub fn set_operand(gate: &mut GateDef, from: PolyAddress, to: PolyAddress) -> us
             left.iter_mut().chain(right).map(|t| &mut t.1).collect()
         }
         GateDef::TreeProduct { input } => vec![input],
+        GateDef::TreeCross { left, right } => vec![left, right],
         GateDef::Quadratic {
             linear, products, ..
         } => {

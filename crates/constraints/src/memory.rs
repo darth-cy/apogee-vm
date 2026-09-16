@@ -32,11 +32,9 @@ use alloc::vec::Vec;
 use constants::{address_space, challenge_slot, family, lookup_channel, memory};
 use field::Fr;
 
-use crate::{
-    CircuitArtifact, Coeff, EnforcingEntry, GateDef, LayerSpec, LookupExpr, Padding, PolyAddress,
-    ProducingEntry, Relation, ScratchSlot, VirtualKind, COEFFICIENT_ENCODING_CANONICAL_LE,
-    FORMAT_VERSION,
-};
+use crate::build;
+use crate::lookup;
+use crate::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
 
 // ---------------------------------------------------------------------------
 // The frame layout
@@ -396,11 +394,7 @@ fn gap_lookups(query: usize, at: usize) -> [LookupExpr; 2] {
 /// refuses it, or if `queries` is not the pc query followed by a strictly
 /// ascending subset of the table.
 pub fn frame_artifact(queries: &[usize], trace_vars: u32) -> CircuitArtifact {
-    let mut lookups = Vec::new();
-    for (at, &query) in queries.iter().enumerate() {
-        lookups.extend(gap_lookups(query, at));
-    }
-    frame_with_lookups(queries, trace_vars, lookups)
+    frame_with_channels_artifact(queries, trace_vars, Extras::default())
 }
 
 /// [`frame_artifact`] over [`frame_queries`] of `family`: the frame that
@@ -409,12 +403,56 @@ pub fn family_frame_artifact(family: u32, trace_vars: u32) -> CircuitArtifact {
     frame_artifact(frame_queries(family), trace_vars)
 }
 
-/// The frame, with the obligations its caller collected: the artifact's
-/// construction asserts there are two per read.
-fn frame_with_lookups(
+/// What a family's circuit carries beside its memory frame: the committed
+/// columns, virtual tables, enforcing gates and lookups its instruction
+/// constraints and its lookup channels add, and the channels that discharge
+/// them.
+///
+/// The frame's own columns come first in every subtree, so `witness` starts at
+/// `W[w + 3]` (or `W[w]` for a frame without an `rd` query) and `setup` at
+/// `S[0]`. The frame's `2w` gap obligations come first in the lookup list, so
+/// `lookups` follows them. An empty `Extras` is [`frame_artifact`], which is
+/// exactly S14's frame.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Extras {
+    pub witness: Vec<String>,
+    pub setup: Vec<String>,
+    pub virtuals: Vec<(VirtualKind, String)>,
+    pub enforcing: Vec<(String, GateDef)>,
+    pub lookups: Vec<LookupExpr>,
+    pub channels: Vec<lookup::ChannelSpec>,
+}
+
+/// An execution family's circuit: `docs/spec/memory.md` §2's frame over
+/// `queries`, whose read and write leaves feed two product trees, plus
+/// `extras`, whose lookups feed one fraction tree per channel
+/// (`docs/spec/lookup.md` §6).
+///
+/// The output map is `[read_root, write_root]` at `READ_ROOT` and `WRITE_ROOT`,
+/// then each channel's `(num, den)` root pair in `extras.channels` order.
+/// Validated, held to [`check_memory`] and to
+/// [`lookup::check_discharge`]; panics if any refuses it, or if `queries` is
+/// not the pc query followed by a strictly ascending subset of the table.
+pub fn frame_with_channels_artifact(
     queries: &[usize],
     trace_vars: u32,
-    lookups: Vec<LookupExpr>,
+    extras: Extras,
+) -> CircuitArtifact {
+    let mut gaps = Vec::new();
+    for (at, &query) in queries.iter().enumerate() {
+        gaps.extend(gap_lookups(query, at));
+    }
+    frame_body(queries, trace_vars, gaps, extras)
+}
+
+/// [`frame_with_channels_artifact`] with the frame's own obligations passed
+/// in, so the construction's count assertion — two per read
+/// (`docs/spec/memory.md` §2.4; S14 must-be-exact 5) — has something to refuse.
+fn frame_body(
+    queries: &[usize],
+    trace_vars: u32,
+    gaps: Vec<LookupExpr>,
+    extras: Extras,
 ) -> CircuitArtifact {
     assert!(
         queries.first() == Some(&PC)
@@ -440,10 +478,20 @@ fn frame_with_lookups(
             witness.push(String::from(name));
         }
     }
+    witness.extend(extras.witness);
 
+    assert_eq!(
+        gaps.len(),
+        2 * width,
+        "memory artifact: every read carries two gap obligations, so {width} reads need {} \
+         obligations; {} reached the artifact",
+        2 * width,
+        gaps.len()
+    );
     let mut reads = Vec::new();
     let mut writes = Vec::new();
     let mut enforcing = Vec::new();
+    let mut lookups = gaps;
     for (at, &query) in queries.iter().enumerate() {
         let (name, mask) = (FRAME_NAMES[query], frame(at, FIELD_MASK));
         reads.push((format!("read_{name}"), leaf(&tuple(query, at, false), mask)));
@@ -463,6 +511,8 @@ fn frame_with_lookups(
             enforcing.push((String::from(name), gate));
         }
     }
+    enforcing.extend(extras.enforcing);
+    lookups.extend(extras.lookups);
 
     // The row-wise lists pair neighbours, so each side of the tree is a power
     // of two. A family whose query count is not one pads with leaves that are
@@ -483,12 +533,12 @@ fn frame_with_lookups(
 
     assemble(
         trace_vars,
-        [columns, witness, vec![]],
-        vec![],
+        [columns, witness, extras.setup],
+        extras.virtuals,
         [reads, writes],
         enforcing,
         lookups,
-        width,
+        &extras.channels,
     )
 }
 
@@ -543,7 +593,7 @@ pub fn image_window_artifact(trace_vars: u32) -> CircuitArtifact {
         ],
         vec![],
         vec![],
-        0,
+        &[],
     )
 }
 
@@ -569,50 +619,20 @@ pub fn zero_window_artifact(trace_vars: u32) -> CircuitArtifact {
         ],
         vec![],
         vec![],
-        0,
+        &[],
     )
 }
 
-fn inner(layer: u32, offset: u32) -> PolyAddress {
-    PolyAddress::Inner { layer, offset }
-}
-
-/// Whether `gate` is 0 on the all-zero committed row, for every challenge
-/// value and row index: a `Linear` or `Quadratic` over committed columns is its
-/// constant there. Panics on any other gate, which no memory artifact enforces.
-fn zero_on_zero_row(name: &str, gate: &GateDef) -> bool {
-    let committed = gate.operands().iter().all(|op| {
-        matches!(
-            op,
-            PolyAddress::Memory(_) | PolyAddress::Witness(_) | PolyAddress::Setup(_)
-        )
-    });
-    match gate {
-        GateDef::Linear { constant, .. } | GateDef::Quadratic { constant, .. } if committed => {
-            *constant == lit(0)
-        }
-        _ => panic!(
-            "memory artifact: enforcing gate `{name}` is not a Linear or Quadratic gate over \
-             committed columns, so zero_row_valid is not decided for it"
-        ),
-    }
-}
-
-/// A whole memory artifact, as a struct literal of complete vectors:
+/// A whole memory artifact: two product trees, the read side then the write
+/// side, over `leaves`; `enforcing` on gate list 0; row-wise `Product` lists
+/// down to `[read, write]`, then `trace_vars` halving lists, and
+/// `outputs = [read_root, write_root]` at `READ_ROOT` and `WRITE_ROOT`.
+/// `crate::build::assemble` is the assembly; this is the memory argument's
+/// share of it.
 ///
-/// - `layout`: the `M`, `W`, `S` names; `virtuals` the tables it reads;
-/// - `leaves`: the read leaves, then the write leaves, `(name, gate)`, equal
-///   power-of-two counts; gate list 0 writes them to layer 1 in that order,
-///   beside `enforcing`, its enforcing gates;
-/// - row-wise lists of `Product`, `L{k+1}[j] = L{k}[2j]·L{k}[2j+1]`, until the
-///   layer is `[read, write]`, then `trace_vars` halving lists of
-///   `TreeProduct`; `outputs` is `[L{N}[READ_ROOT], L{N}[WRITE_ROOT]]`;
-/// - the flat relations and the scratch bijection mirror every gate, list by
-///   list, producing before enforcing; the padding row is all zeros.
-///
-/// Asserts first that `lookups` holds exactly two obligations per read of
-/// `reads` (`docs/spec/memory.md` §2.4; S14 must-be-exact 5), then validates
-/// and runs [`check_memory`], panicking on any refusal.
+/// Asserts first that `lookups` holds exactly two obligations per read of the
+/// read side (`docs/spec/memory.md` §2.4; S14 must-be-exact 5), then validates
+/// through `assemble` and runs [`check_memory`], panicking on any refusal.
 fn assemble(
     trace_vars: u32,
     layout: [Vec<String>; 3],
@@ -620,177 +640,59 @@ fn assemble(
     leaves: [Vec<(String, GateDef)>; 2],
     enforcing: Vec<(String, GateDef)>,
     lookups: Vec<LookupExpr>,
-    reads: usize,
+    channels: &[lookup::ChannelSpec],
 ) -> CircuitArtifact {
-    assert_eq!(
-        lookups.len(),
-        2 * reads,
-        "memory artifact: every read carries two gap obligations, so {reads} reads need {} \
-         obligations; {} reached the artifact",
-        2 * reads,
-        lookups.len()
-    );
     let [read, write] = leaves;
-    let side = read.len();
     assert!(
-        side.is_power_of_two() && write.len() == side,
-        "memory artifact: {side} read leaves and {} write leaves; the counts are equal powers \
-         of two",
+        read.len() == write.len(),
+        "memory artifact: {} read leaves and {} write leaves; the counts are equal",
+        read.len(),
         write.len()
     );
     let zero_row_valid = enforcing
         .iter()
-        .all(|(name, gate)| zero_on_zero_row(name, gate));
-    let depth = 1 + side.trailing_zeros() + trace_vars;
-    let name = |layer: u32, j: usize, width: usize| -> String {
-        let half = width / 2;
-        let (tree, i) = if j < half {
-            ("read", j)
-        } else {
-            ("write", j - half)
-        };
-        if layer == depth {
-            format!("{tree}_root")
-        } else if layer == 1 {
-            read.iter().chain(&write).nth(j).expect("a leaf").0.clone()
-        } else {
-            format!("{tree}_{layer}_{i}")
-        }
-    };
-
-    let mut relations: Vec<Relation> = Vec::new();
-    let mut scratch: Vec<ScratchSlot> = Vec::new();
-    let mut layers: Vec<LayerSpec> = Vec::new();
-
-    let width = 2 * side;
-    let mut producing = Vec::new();
-    for (j, (_, gate)) in read.iter().chain(&write).enumerate() {
-        let (output, n) = (inner(1, j as u32), name(1, j, width));
-        producing.push(ProducingEntry {
-            relation: relations.len() as u32,
-            output,
-            gate: gate.clone(),
-        });
-        relations.push(Relation {
-            name: format!("define_{n}"),
-            output: Some(scratch.len() as u32),
-            gate: gate.clone(),
-        });
-        scratch.push(ScratchSlot {
-            name: n,
-            address: output,
-        });
-    }
-    let mut enforcing_entries = Vec::new();
-    for (n, gate) in enforcing {
-        enforcing_entries.push(EnforcingEntry {
-            relation: relations.len() as u32,
-            gate: gate.clone(),
-        });
-        relations.push(Relation {
-            name: n,
-            output: None,
-            gate,
-        });
-    }
-    layers.push(LayerSpec {
-        halving: false,
-        num_vars: trace_vars,
-        width: width as u32,
-        cached: vec![],
-        producing,
-        enforcing: enforcing_entries,
-    });
-
-    let (mut width, mut vars) = (width, trace_vars);
-    for k in 1..depth {
-        // Layer k's columns are the last `width` scratch slots.
-        let below = (scratch.len() - width) as u32;
-        let halving = width == 2;
-        let (up_width, up_vars) = if halving {
-            (2, vars - 1)
-        } else {
-            (width / 2, vars)
-        };
-        let mut producing = Vec::new();
-        for j in 0..up_width {
-            let (output, n) = (inner(k + 1, j as u32), name(k + 1, j, up_width));
-            let x = j as u32;
-            let (gate, flat) = if halving {
-                (
-                    GateDef::TreeProduct { input: inner(k, x) },
-                    GateDef::TreeProduct {
-                        input: PolyAddress::Scratch(below + x),
-                    },
-                )
-            } else {
-                (
-                    GateDef::Product {
-                        coeff: lit(1),
-                        left: inner(k, 2 * x),
-                        right: inner(k, 2 * x + 1),
-                    },
-                    GateDef::Product {
-                        coeff: lit(1),
-                        left: PolyAddress::Scratch(below + 2 * x),
-                        right: PolyAddress::Scratch(below + 2 * x + 1),
-                    },
-                )
-            };
-            producing.push(ProducingEntry {
-                relation: relations.len() as u32,
-                output,
-                gate,
-            });
-            relations.push(Relation {
-                name: format!("define_{n}"),
-                output: Some(scratch.len() as u32),
-                gate: flat,
-            });
-            scratch.push(ScratchSlot {
-                name: n,
-                address: output,
-            });
-        }
-        layers.push(LayerSpec {
-            halving,
-            num_vars: up_vars,
-            width: up_width as u32,
-            cached: vec![],
-            producing,
-            enforcing: vec![],
-        });
-        (width, vars) = (up_width, up_vars);
-    }
-
-    let [columns, witness, setup] = layout;
-    let committed = columns.len() + witness.len() + setup.len();
-    let artifact = CircuitArtifact {
-        format_version: FORMAT_VERSION,
-        coefficient_encoding: COEFFICIENT_ENCODING_CANONICAL_LE,
+        .all(|(name, gate)| build::zero_on_zero_row(name, gate));
+    let mut trees = vec![
+        lookup::product_tree("read", read),
+        lookup::product_tree("write", write),
+    ];
+    trees.extend(lookup::channel_trees(&lookups, channels, trace_vars));
+    let artifact = build::assemble(
         trace_vars,
-        memory: columns,
-        witness,
-        setup,
+        layout,
         virtuals,
-        layers,
-        relations,
+        trees,
+        enforcing,
         lookups,
-        scratch,
-        outputs: vec![
-            inner(depth, memory::READ_ROOT as u32),
-            inner(depth, memory::WRITE_ROOT as u32),
+        zero_row_valid,
+    );
+    debug_assert_eq!(
+        artifact.outputs,
+        vec![
+            PolyAddress::Inner {
+                layer: artifact.depth() as u32,
+                offset: memory::READ_ROOT as u32,
+            },
+            PolyAddress::Inner {
+                layer: artifact.depth() as u32,
+                offset: memory::WRITE_ROOT as u32,
+            },
         ],
-        padding: Padding {
-            row: vec![Fr::ZERO; committed],
-            zero_row_valid,
-        },
-    };
-    if let Err(e) = artifact.validate() {
-        panic!("memory artifact: not a circuit: {e}");
-    }
+        "the read tree is output {}, the write tree output {}",
+        memory::READ_ROOT,
+        memory::WRITE_ROOT
+    );
     if let Err(e) = check_memory(&artifact) {
         panic!("memory artifact: {e}");
+    }
+    // A frame with no channel is a *component*: S14 froze `frame_artifact`
+    // with its obligations declared and their discharge owed to S15, and its
+    // fixtures are those bytes. Only a circuit that declares channels claims
+    // to discharge anything, and only there is the discharge rule meaningful.
+    if !channels.is_empty() {
+        if let Err(e) = lookup::check_discharge(&artifact) {
+            panic!("memory artifact: {e}");
+        }
     }
     artifact
 }
@@ -969,11 +871,11 @@ mod tests {
             lookups.extend(gap_lookups(query, at));
         }
         assert_eq!(
-            frame_with_lookups(queries, 4, lookups.clone()),
+            frame_body(queries, 4, lookups.clone(), Extras::default()),
             frame_artifact(queries, 4)
         );
         lookups.pop();
-        frame_with_lookups(queries, 4, lookups);
+        frame_body(queries, 4, lookups, Extras::default());
     }
 
     /// The unmasked write tuple, which only the frame's leaves use, is the
