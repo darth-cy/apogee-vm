@@ -11,7 +11,7 @@ use constants::{ecall, family, guest_memory, memory};
 use emulator::trace_run;
 use isa::Instr;
 use program::row_kind;
-use trace::{AddressSpace, MemoryEvent, MemoryEventLog, Query, Role, Row, ROLES};
+use trace::{init_windows, AddressSpace, MemoryEvent, MemoryEventLog, Query, Role, Row, ROLES};
 
 fn rows_by_cycle(t: &common::Traced) -> Vec<(u32, Row)> {
     let mut rows: Vec<(u32, Row)> = t
@@ -396,7 +396,7 @@ fn frame(instr: &Instr, row: &Row) -> u8 {
 /// roles; each register role names the instruction's own register — or, on
 /// an ecall row, `a7`, `a0`, `a1`, `a2` and `a0`; `rd = x0` logs a write-back
 /// of 0; an absent role is all zero; and `next_pc` is the fall-through except
-/// where control moved.
+/// where control moved, and on the exit row, which writes `HALT_PC`.
 #[test]
 fn every_row_carries_its_class_frame() {
     for name in TRACED {
@@ -424,7 +424,12 @@ fn every_row_carries_its_class_frame() {
                     for (role, r) in [(Role::Rs2, 10), (Role::Arg1, 11), (Role::Arg2, 12)] {
                         assert!(reg(role).is_none_or(|a| a == r), "{at}: {role:?}");
                     }
-                    assert_eq!(row.next_pc, row.pc + 4, "{at}");
+                    let next_pc = if row.queries[Role::Rs1 as usize].read_value == ecall::EXIT {
+                        memory::HALT_PC
+                    } else {
+                        row.pc + 4
+                    };
+                    assert_eq!(row.next_pc, next_pc, "{at}");
                 }
             } else {
                 assert_eq!(
@@ -482,6 +487,49 @@ fn every_row_carries_its_class_frame() {
                 }
             }
         }
+    }
+}
+
+/// `docs/spec/memory.md` §5, the halting sentinel: every traced guest's pc
+/// ends at `HALT_PC`, which exactly one event writes — the last pc write, the
+/// exit row's — and no other pc query writes an odd value.
+#[test]
+fn the_exit_row_alone_writes_the_halting_sentinel() {
+    for name in TRACED {
+        let t = traced(name);
+        let final_pc = t.log.final_state().pop().expect("a run has a final state");
+        assert_eq!(
+            (final_pc.space, final_pc.value),
+            (AddressSpace::Pc, memory::HALT_PC),
+            "{name}"
+        );
+        let pc_writes: Vec<&MemoryEvent> = t
+            .log
+            .events()
+            .iter()
+            .filter(|e| e.space == AddressSpace::Pc)
+            .collect();
+        let (last, rest) = pc_writes.split_last().expect("a run has cycles");
+        assert_eq!(last.write_value, memory::HALT_PC, "{name}");
+        for e in rest {
+            assert_eq!(
+                e.write_value % 2,
+                0,
+                "{name}: the pc query at ts {} writes {:#x}",
+                e.ts,
+                e.write_value
+            );
+        }
+        let (_, exit_row) = rows_by_cycle(&t).pop().expect("a run has rows");
+        assert_eq!(instr_at(&t.image, exit_row.pc), Instr::Ecall, "{name}");
+        assert_eq!(
+            (
+                exit_row.queries[Role::Rs1 as usize].read_value,
+                exit_row.next_pc
+            ),
+            (ecall::EXIT, memory::HALT_PC),
+            "{name}: the last row is the exit row"
+        );
     }
 }
 
@@ -647,6 +695,68 @@ fn the_final_state_is_the_last_write_of_every_address() {
         let pc = finals.last().unwrap();
         assert_eq!(pc.space, AddressSpace::Pc);
         assert_eq!(pc.ts, memory::TS_STEP * t.execution.cycle_count);
+    }
+}
+
+/// `docs/spec/memory.md` §3.4: `ZERO_WINDOWS`' shard list is the RAM windows
+/// above 0 the log touches. fib's stack sits just below `2^31`, in the last
+/// window `2^29 / h - 1` at every height, and all else it touches is in
+/// window 0.
+#[test]
+fn fib_touches_only_the_image_window_and_the_stack_window() {
+    let t = traced("fib");
+    assert_eq!(init_windows(&t.log, 1 << 22), [127]);
+    assert_eq!(init_windows(&t.log, 1 << 20), [511]);
+    assert_eq!(init_windows(&t.log, 1 << 16), [8191]);
+}
+
+/// Every RAM word every traced guest touches lies in window 0 or in a listed
+/// window, and every listed window holds one, at every menu height — and the
+/// list passes the verifier's window rules.
+#[test]
+fn the_window_list_is_exactly_the_touched_windows_above_zero() {
+    for name in TRACED {
+        let t = traced(name);
+        for height in family::HEIGHT_MENU {
+            let windows = init_windows(&t.log, height);
+            let touched: BTreeSet<u32> = t
+                .log
+                .events()
+                .iter()
+                .filter(|e| e.space == AddressSpace::Ram)
+                .map(|e| e.addr / (4 * height))
+                .collect();
+            for w in &touched {
+                assert!(
+                    *w == 0 || windows.contains(w),
+                    "{name} at {height}: a touched word in window {w} is in no shard"
+                );
+            }
+            for w in &windows {
+                assert!(
+                    touched.contains(w),
+                    "{name} at {height}: window {w} is listed and untouched"
+                );
+            }
+
+            let mut config = t.config.clone();
+            for (f, h) in config.families.iter_mut() {
+                if *f == family::INIT_TEARDOWN || *f == family::ZERO_WINDOWS {
+                    *h = height;
+                }
+            }
+            let counts: Vec<u32> = config
+                .families
+                .iter()
+                .map(|(f, _)| match *f {
+                    family::INIT_TEARDOWN => 1,
+                    family::ZERO_WINDOWS => windows.len() as u32,
+                    _ => 0,
+                })
+                .collect();
+            program::check_memory_windows(&config, &counts, &windows)
+                .unwrap_or_else(|e| panic!("{name} at {height}: {e}"));
+        }
     }
 }
 

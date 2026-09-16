@@ -28,19 +28,25 @@ crates/
                  and the accumulator, plus the typed G1 absorption; std
   loader/        ELF parsing, RVC expansion, ProgramImage; std
   isa/           the RV32IMAC instruction model and the 32-bit decoder; no deps
-  program/       decoded per-family tables, VmConfig derivation, program identity; std
+  program/       decoded per-family tables, VmConfig derivation, program identity, the image
+                 column, the statement descriptor and its RAM window rules; std
   trace/         the memory event log and its self-check, the family buffers, the cycle
-                 profile and shard plan, and the TraceArchive snapshot; std
+                 profile and shard plan, the TraceArchive snapshot, and the memory
+                 argument's column builders; std
   emulator/      the RV32IMAC reference emulator, its tracing path, and the QEMU
                  differential harness; std
   constraints/   circuits as data: PolyAddress, GateDef, LayerSpec, CircuitArtifact, the
-                 laws, the cache-free compilation and the wire form; no_std
+                 laws, the cache-free compilation and the wire form, and `memory`: the per-family frames,
+                 the two window artifacts and check_memory; no_std
   gkr-verify/    the GKR verifier half: the gate kernel, the layer sumcheck verifier and
-                 verify, and every type verify touches; no_std, linked by the recursion guest
+                 verify, and every type verify touches; the memory argument's window
+                 constant, boundary factors and reconciliation; no_std, linked by the
+                 recursion guest
   gkr/           the GKR prover half: forward pass, self-check, layer sumcheck prover,
                  prove; std + rayon; re-exports gkr-verify whole
-  checker/       the standalone law validators, the padding and witness-row checks, the
-                 artifact cross-check, the circuit dump and the `checker` CLI; std
+  checker/       the standalone law validators and lookup rules, the padding, padding-identity
+                 and witness-row checks, the native lookup evaluator, the memory_roots hook,
+                 the artifact cross-check, the circuit dump and the `checker` CLI; std
   guest-sdk/     crt0, entry!, linker script, bump allocator, ecall shims; no_std,
                  guest-only, and NOT a workspace member
 guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, opcodes/, heap/, consistency/
@@ -49,8 +55,9 @@ assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 h
 tools/
   kat-gen/       regenerates the committed Fr, multilinear, curve, MSM, SRS and G1-absorption
                  vectors from arkworks, the Mercury proof fixture from `pcs` itself, the ISA
-                 corpus via llvm-objdump, the identity pin from `program` itself, and S13's
-                 toy circuit artifacts, defined there and compiled by `constraints`
+                 corpus via llvm-objdump, the identity pin from `program` itself, S13's
+                 toy circuit artifacts, defined there and compiled by `constraints`, and
+                 S14's memory artifacts, written from `constraints::memory`'s constructors
   bench/         one routine per measurement, individually selectable
   artifact-dump/ a guest ELF out as the frozen ProgramImage artifact, plus a
                  readable report of it; `tables` prints the decoded tables and identity
@@ -78,7 +85,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
-cargo test --workspace                      # 617 tests as of S13; 20 more are #[ignore]d
+cargo test --workspace                      # 722 tests as of S14; 21 more are #[ignore]d
 cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
@@ -89,8 +96,8 @@ cargo test -p emulator --test consistency -- --include-ignored   # and again at 
 git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constraints/tests/vectors/
 -------------------------------------------------------------------------------
 cargo run -p kat-gen                        # refresh every fixture (manual, deliberate)
-cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader | isa | program | gkr
-cargo run -p checker -- laws <artifact>     # Laws 1-4, the standalone validators
+cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader | isa | program | gkr | memory
+cargo run -p checker -- laws <artifact>     # Laws 1-4 and the lookup rules, the standalone validators
 cargo run -p checker -- padding <artifact>  # the padding contract
 cargo run -p checker -- dump <artifact>     # a circuit, readably: layers, gates, relations, catalogue
 cargo run -p kat-gen -- guests              # rebuild the guest ELFs; opt-in, one machine
@@ -288,12 +295,17 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   append-only; `ecall`/`ebreak`/`fence` share the add/sub/lui/auipc family's bit-0
   *system* kind and are told apart by `imm` (0/1/2). No family keeps `funct3`. `FamilyId`s
   are `constants::family`, append-only, and ascending `FamilyId` is the canonical order.
-- **Program identity binds the instruction tables, not the data image or the entry pc.**
-  `.rodata`, `.data` and `ProgramImage.entry` reach no decoded table, so at S11 a program
-  differing only in a constant or its entry point has the same identity; init/teardown is in every `VmConfig` and absorbs an **empty** commitment
-  list until its stage fills that slot. Identity needs the 2^22 ceremony SRS, so its tests
-  are `#[ignore]`d and run locally only. A verifier takes identity from a channel the
-  prover does not control, never from the proof.
+- **Program identity binds the instruction tables, the image window and the entry pc.**
+  Since S14 the recipe absorbs `PROGRAM_ENTRY [entry_pc]` after `VM_CONFIG`, and
+  `INIT_TEARDOWN`'s commitment list is the image column, row `y` = `initial_word(4y)` over
+  RAM window 0, so a changed `.text`, `.rodata` or `.data` byte or entry pc moves it;
+  `ZERO_WINDOWS` absorbs an empty list. It binds nothing an execution chooses — no shard
+  count, no window list — and not a `NOBITS` segment's size. `decode_program` refuses file
+  bytes past window 0 (`ImageOutsideWindow`), so no image byte escapes the column.
+  `identity_from_commitments` is the SRS-free digest a verifying-key loader recomputes.
+  Identity needs the 2^22 ceremony SRS, so its full tests are `#[ignore]`d and run locally
+  only. A verifier takes identity from a channel the prover does not control, never from
+  the proof. `docs/spec/memory.md` §6.2.
 - **`decode` is RV32IMA's 59 instructions exactly, and `fence` is its one wide form.** Every
   `MISC-MEM funct3 = 000` word is a fence, as the ISA says; llvm-objdump prints `<unknown>`
   for the reserved ones. `crates/isa/tests/sweep.rs` counts the whole 2^30 space per opcode.
@@ -312,8 +324,9 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   `PC = 3`, so no real memory tuple is all zeros. A RAM event's address is the byte address
   of its 4-aligned word.
 - **Family buffers are raw live rows**, column-major in small integer types, every query's
-  address, value and timestamps per row. No padding and no `MultilinearPoly` — those belong
-  to the constraint system, which is not built yet.
+  address, value and timestamps per row. No padding and no `MultilinearPoly` in them: the
+  memory argument's padded columns are filled from the log by `trace`'s memory builders,
+  keyed by `constraints::memory`'s layout.
 - **`sc.w` always succeeds in the emulator.** That is the one divergence the QEMU
   differential whitelists; the harness's other rule — `x2` differs at entry, Linux's stack
   pointer, until the guest writes it — is about the environment, not an instruction.
@@ -376,6 +389,62 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   prover runs none of the prover's code; a malformed input costs only the honest prover a
   panic or a proof that fails downstream. The old shape checks stay in the source,
   uncalled or commented out, as debugging aids (`crates/gkr/CLAUDE.md`).
+- **The memory argument's spec is `docs/spec/memory.md`, and it is frozen**: the tuple, the
+  frame, RAM windows, the register and PC boundary, halting, binding, range obligations and
+  the construction-time rules. It amends the master's absorb order and S11's identity
+  recipe, and the master cites it.
+- **A family's frame holds only the queries its instructions can make.** The query table has
+  eight entries — pc, then `execution-trace.md` §7's seven roles — but no family holds all
+  eight: `arg1` and `arg2` are an ecall row's alone, `load` a load's. The frozen subsets are
+  `constraints::memory::frame_queries`, 4 queries for `JUMP_BRANCH_SLT`, `SHIFT_BITWISE` and
+  `MUL_DIV`, 5 for `ATOMICS`, 6 for the two memory families and 7 for `ADD_SUB_LUI_AUIPC`,
+  giving `1 + 5w` memory and `w + 3` witness columns, `2w` obligations, and leaves padded to
+  a power of two a side with leaves that are literally 1. **A column's position is a slot in
+  that list; its address space and `Δ` come from its id in the table** — the two differ for
+  every family. A frame narrower than its family cannot balance, so the honest prover is
+  refused rather than a cheating one admitted; a wider one commits and opens columns that
+  are 0 on every row. What must be exact is S16's inheritance: a frame is a **superset** of
+  its instructions' queries, or S16 has no column to constrain an instruction's written
+  value against. `crates/trace/tests/memory.rs` holds `frame_queries` equal to the union of
+  its family's instructions' queries over all 59 of them, routed by `program::row_kind`.
+- **RAM is initialized in RAM windows, by two families of one height.** Window `w` is the
+  bytes `[4h·w, 4h·(w+1))`. `INIT_TEARDOWN` is window 0, exactly one shard, initialized from
+  the image column identity commits, rows below `RAM_ORIGIN` masked by `V[ram_live]`;
+  `ZERO_WINDOWS` is one shard per touched window above 0, initialized to 0. Both are in
+  every `VmConfig` at one height, or derivation and `VmConfig::from_bytes` refuse it. The
+  window ids go in the statement as `MEMORY_WINDOWS`, and `program::check_memory_windows`
+  holds them strictly increasing in `[1, 2^29/h − 1]` before the challenges. A window is a
+  slice of the address space; a shard's cycles are a slice of the execution.
+- **Registers and the pc have no rows: they are the verifier's boundary.** A proof carries
+  64 scalars — final timestamps of `x0..x31` and the pc, final values of `x1..x31` — which
+  S16's global transcript absorbs as one `MEMORY_BOUNDARY` message after every memory-column
+  commitment and **before** the squeeze (at S14 nothing absorbs or decodes them): a final
+  value chosen after the challenges solves reconciliation for any trace.
+  `gkr_verify::boundary_factors` folds them and the entry pc into `(W_b, R_b)` once per
+  statement, and `reconciles` is the check. `t_pc` is not a cycle count.
+- **The exit row writes `next_pc = HALT_PC = 1`**, not `pc + 4`, and the verifier fixes the
+  pc's final value to it. It is odd and below `RAM_ORIGIN`, so once S16's constraints of
+  `docs/spec/memory.md` §5 hold, no other row writes it and a trace missing its exit row
+  cannot balance; at S14 no gate constrains a row's `next_pc`. The decoded table's
+  `next_pc` stays the fall-through.
+- **At S14 a query's mask is held to booleanity and nothing else.** No gate ties it to the
+  row's pc mask or to the instruction the row looks up, so a padding row can carry an `rd`
+  query that rewrites `x10` after exit, and it balances. S16 owes `m_pc` as the row's
+  liveness and the table lookup's selector, and `m_q = m_pc·uses_q` from the row kind
+  (`docs/spec/memory.md` §2.1); `crates/checker/tests/multiset.rs`' control C8 is its tamper
+  target.
+- **The artifact format is 1, and a lookup carries a selector.** `LookupExpr = (name,
+  channel, selector, tuple)`: a range obligation holds where its selector is 0 or its one
+  `Linear` expression is below the channel's bound. S14 checks them natively
+  (`checker::violated_lookups`); S15 discharges them. `from_bytes` refuses any other
+  format version.
+- **`check_memory` is a provenance rule.** It runs beside `validate` wherever a memory
+  artifact is built, and refuses any gate or output whose cone both names a global memory
+  slot (1–5) and reads a `W` column, a root whose cone reads a `W` column at all — `W` is
+  committed after the memory challenges — a global-slot coefficient over anything but `M`, `S`
+  and `V`, and a leaf mask that is an `M` or `S` column with no booleanity gate, or any
+  virtual column but `V[ram_live]`. `S` is admitted only because identity
+  binds setup columns before the challenges. `docs/spec/memory.md` §8.
 - **Boring beats clever.** Added surface area is a defect. Every verifier entry point is
   `(&VerifyingKey, &Proof, &PublicInputs)` and nothing else.
 
@@ -395,3 +464,4 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 | S11 — Decoder + program identity | done | `docs/handoff/S11-decoder.md` |
 | S12 — Emulator + trace generation | done | `docs/handoff/S12-emulator.md` |
 | S13 — GKR engine, circuit artifact, checker suite | done | `docs/handoff/S13-gkr.md` |
+| S14 — Memory multiset argument, RAM windows, register/PC boundary | done | `docs/handoff/S14-multiset.md` |

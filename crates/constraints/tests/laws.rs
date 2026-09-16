@@ -19,7 +19,7 @@
 mod common;
 
 use common::*;
-use constants::challenge_slot;
+use constants::{challenge_slot, lookup_channel};
 use constraints::{
     CachedEntry, CircuitArtifact, Coeff, ConstraintError, EnforcingEntry, GateDef, LayerSpec,
     LookupExpr, Padding, PolyAddress, ProducingEntry, Relation, ScratchSlot, VirtualKind,
@@ -1264,18 +1264,104 @@ fn a_virtual_table_listed_twice_is_refused() {
     assert_malformed(&a, "virtual table RowIndex is listed twice");
 }
 
-/// Must-be-exact 7: the lookup-expression list exists and is empty at S13; one
-/// expression is refused.
-#[test]
-fn a_nonempty_lookup_list_is_refused() {
-    assert!(toy().lookups.is_empty());
+/// The toy with one lookup, `range`: `4·m − row − 1` on the timestamp channel
+/// under selector `s`, edited by `edit`.
+fn toy_with_lookup(edit: fn(&mut LookupExpr)) -> CircuitArtifact {
+    let mut lookup = LookupExpr {
+        name: "range".into(),
+        channel: lookup_channel::TIMESTAMP,
+        selector: S,
+        tuple: vec![linear(&[(lit(4), M), (neg(1), ROW)], neg(1))],
+    };
+    edit(&mut lookup);
     let mut a = toy();
-    a.lookups.push(LookupExpr {
-        name: "lookup".into(),
-        channel: 0,
-        tuple: vec![],
-    });
-    assert_malformed(&a, "the lookup-expression list must be empty");
+    a.lookups.push(lookup);
+    a
+}
+
+/// The lookup rules of `docs/spec/gkr.md` §4.2 (`docs/spec/memory.md` §7). A
+/// lookup over a committed column and a listed virtual table, under a committed
+/// selector — `S`, `M` or `W` — validates, and so do two. Each rule broken alone is refused naming
+/// the lookup: a channel past `constants::lookup_channel`; a tuple of no
+/// expression or of two; a `Product` expression; a challenge coefficient, on a
+/// term and as the constant; an operand that is `L{1}[0]`, `scratch[0]`,
+/// `C{0}[0]`, `W[4]` past the layout, or `V[ram_live]`, which the toy does not
+/// list; a selector that is `V[row]`, `W[4]` or `L{1}[0]`. Its name is held to
+/// the artifact's rule: `a`, a witness column's, and `Range` are refused.
+#[test]
+fn a_lookup_is_refused_unless_it_keeps_the_lookup_rules() {
+    assert!(toy().lookups.is_empty());
+    assert_eq!(toy_with_lookup(|_| {}).validate(), Ok(()));
+    assert_eq!(toy_with_lookup(|l| l.selector = M).validate(), Ok(()));
+    let mut two = toy_with_lookup(|_| {});
+    let mut second = two.lookups[0].clone();
+    second.name = "range_2".into();
+    second.selector = A;
+    two.lookups.push(second);
+    assert_eq!(two.validate(), Ok(()));
+
+    let refused = |edit: fn(&mut LookupExpr), needle: &str| {
+        assert_malformed(&toy_with_lookup(edit), &format!("lookup `range` {needle}"))
+    };
+    refused(
+        |l| l.channel = lookup_channel::NAMES.len() as u32,
+        &format!(
+            "names channel {}, which is not in constants::lookup_channel",
+            lookup_channel::NAMES.len()
+        ),
+    );
+    refused(|l| l.tuple.clear(), "has 0 expressions");
+    refused(|l| l.tuple.push(l.tuple[0].clone()), "has 2 expressions");
+    refused(
+        |l| l.tuple[0] = product(M, S),
+        "has an expression that is not Linear",
+    );
+    refused(
+        |l| l.tuple[0] = linear(&[(GAMMA, M)], lit(0)),
+        "has a coefficient that is not a literal",
+    );
+    refused(
+        |l| l.tuple[0] = linear(&[(lit(1), M)], GAMMA),
+        "has a coefficient that is not a literal",
+    );
+    refused(
+        |l| l.tuple[0] = linear(&[(lit(1), inner(1, 0))], lit(0)),
+        "reads L{1}[0]",
+    );
+    refused(
+        |l| l.tuple[0] = linear(&[(lit(1), scratch(0))], lit(0)),
+        "reads scratch[0]",
+    );
+    refused(
+        |l| l.tuple[0] = linear(&[(lit(1), cached(0, 0))], lit(0)),
+        "reads C{0}[0]",
+    );
+    refused(
+        |l| l.tuple[0] = linear(&[(lit(1), PolyAddress::Witness(4))], lit(0)),
+        "reads W[4]",
+    );
+    refused(
+        |l| {
+            let live = PolyAddress::Virtual(VirtualKind::RamLive);
+            l.tuple[0] = linear(&[(lit(1), live)], lit(0));
+        },
+        "reads V[ram_live]",
+    );
+    refused(|l| l.selector = ROW, "has selector V[row]");
+    refused(
+        |l| l.selector = PolyAddress::Witness(4),
+        "has selector W[4]",
+    );
+    refused(|l| l.selector = inner(1, 0), "has selector L{1}[0]");
+
+    assert_malformed(
+        &toy_with_lookup(|l| l.name = "a".into()),
+        "name \"a\" is used twice",
+    );
+    assert_malformed(
+        &toy_with_lookup(|l| l.name = "Range".into()),
+        "name \"Range\" is not a non-empty [a-z0-9_] string",
+    );
 }
 
 /// A coefficient names a slot of `constants::challenge_slot`. `γ` moved to the
@@ -1337,13 +1423,16 @@ fn trace_vars_above_thirty_is_refused() {
     assert_malformed(&with_vars(31), "trace_vars 31 is above 30");
 }
 
-/// The first two words of the artifact are 0, and nothing else: a format
-/// version of 1 and a coefficient encoding of 1 are each refused.
+/// The first two words of the artifact are 1 and 0, and nothing else: a format
+/// version of 0 or 2 and a coefficient encoding of 1 are each refused.
 #[test]
-fn a_nonzero_format_version_or_coefficient_encoding_is_refused() {
-    let mut a = toy();
-    a.format_version = 1;
-    assert_malformed(&a, "format version 1, expected 0");
+fn a_wrong_format_version_or_coefficient_encoding_is_refused() {
+    assert_eq!(constraints::FORMAT_VERSION, 1);
+    for version in [0, 2] {
+        let mut a = toy();
+        a.format_version = version;
+        assert_malformed(&a, &format!("format version {version}, expected 1"));
+    }
 
     let mut a = toy();
     a.coefficient_encoding = 1;

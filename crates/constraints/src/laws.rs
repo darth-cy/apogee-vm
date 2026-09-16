@@ -12,7 +12,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt;
 
-use constants::challenge_slot;
+use constants::{challenge_slot, lookup_channel};
 use field::Fr;
 
 use crate::{
@@ -87,6 +87,7 @@ fn malformed(detail: String) -> ConstraintError {
 pub(crate) fn validate(a: &CircuitArtifact) -> Result<(), ConstraintError> {
     header(a)?;
     names(a)?;
+    lookups(a)?;
     let shapes = shapes(a)?;
     for (k, list) in a.layers.iter().enumerate() {
         gate_list(a, k, list, shapes[k].1)?;
@@ -202,11 +203,6 @@ fn header(a: &CircuitArtifact) -> Result<(), ConstraintError> {
             "a circuit has at least one gate list",
         )));
     }
-    if !a.lookups.is_empty() {
-        return Err(malformed(String::from(
-            "the lookup-expression list must be empty until a stage gives lookups meaning",
-        )));
-    }
     if a.padding.row.len() != a.committed().len() {
         return Err(malformed(format!(
             "the padding row has {} values for {} committed columns",
@@ -253,6 +249,67 @@ fn names(a: &CircuitArtifact) -> Result<(), ConstraintError> {
     for pair in all.windows(2) {
         if pair[0] == pair[1] {
             return Err(malformed(format!("name {:?} is used twice", pair[0])));
+        }
+    }
+    Ok(())
+}
+
+/// The lookup rules: every lookup's channel is one of
+/// `constants::lookup_channel`, each a range channel, so its tuple is exactly
+/// one expression; that expression is `Linear` with literal coefficients over
+/// in-range `M`, `W`, `S` columns and listed virtual tables; its selector is an
+/// in-range `M`, `W` or `S` column. A lookup's name is `names`'.
+fn lookups(a: &CircuitArtifact) -> Result<(), ConstraintError> {
+    let committed = |op: PolyAddress| match op {
+        PolyAddress::Memory(i) => (i as usize) < a.memory.len(),
+        PolyAddress::Witness(i) => (i as usize) < a.witness.len(),
+        PolyAddress::Setup(i) => (i as usize) < a.setup.len(),
+        _ => false,
+    };
+    for l in &a.lookups {
+        let name = &l.name;
+        if l.channel as usize >= lookup_channel::NAMES.len() {
+            return Err(malformed(format!(
+                "lookup `{name}` names channel {}, which is not in constants::lookup_channel",
+                l.channel
+            )));
+        }
+        if l.tuple.len() != 1 {
+            return Err(malformed(format!(
+                "lookup `{name}` has {} expressions; a range channel's tuple has exactly one",
+                l.tuple.len()
+            )));
+        }
+        if !committed(l.selector) {
+            return Err(malformed(format!(
+                "lookup `{name}` has selector {}, which is not a committed column",
+                l.selector
+            )));
+        }
+        for gate in &l.tuple {
+            let GateDef::Linear { terms, constant } = gate else {
+                return Err(malformed(format!(
+                    "lookup `{name}` has an expression that is not Linear"
+                )));
+            };
+            let literal = |c: &Coeff| matches!(c, Coeff::Literal(_));
+            if !literal(constant) || !terms.iter().all(|(c, _)| literal(c)) {
+                return Err(malformed(format!(
+                    "lookup `{name}` has a coefficient that is not a literal"
+                )));
+            }
+            for (_, op) in terms {
+                let listed = match *op {
+                    PolyAddress::Virtual(kind) => a.virtuals.iter().any(|(v, _)| *v == kind),
+                    other => committed(other),
+                };
+                if !listed {
+                    return Err(malformed(format!(
+                        "lookup `{name}` reads {op}, which is not a committed column or a listed \
+                         virtual table"
+                    )));
+                }
+            }
         }
     }
     Ok(())

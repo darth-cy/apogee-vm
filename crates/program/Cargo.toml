@@ -8,6 +8,8 @@ publish.workspace = true
 [dependencies]
 # FamilyId, the extra-mask bits, the defaults, the identity tags, the RAM window.
 constants.workspace = true
+# `G1Affine`, the type of a setup commitment.
+curve.workspace = true
 field.workspace = true
 isa.workspace = true
 # `ProgramImage` is the input; `load_elf` is never called here.

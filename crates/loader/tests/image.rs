@@ -2,7 +2,7 @@
 
 mod common;
 
-use loader::{load_elf, LoaderError, ProgramImage, Slot};
+use loader::{load_elf, LoaderError, ProgramImage, Segment, Slot};
 
 /// Every committed guest, which is every compiled ELF the loader is held to.
 ///
@@ -286,6 +286,82 @@ fn slot_at_refuses_odd_and_outside() {
             .is_none(),
         "one past the image"
     );
+}
+
+/// `initial_word` assembles a word byte by byte, little-endian, where segment
+/// edges fall inside it: a segment starting at an address 2 mod 4, file bytes
+/// ending mid-word with `.bss` above them, two segments meeting inside one
+/// word, and addresses no segment holds — the top word of the address space
+/// among them.
+#[test]
+fn initial_word_assembles_words_across_segment_edges() {
+    let segment = |vaddr: u32, mem_len: u32, bytes: &[u8]| Segment {
+        vaddr,
+        mem_len,
+        bytes: bytes.to_vec(),
+    };
+    let image = ProgramImage {
+        entry: 0x0001_3002,
+        segments: vec![
+            // 0x13002 is byte 2 of the word at 0x13000; 0xcc is byte 0 of the
+            // word at 0x13004, and the rest of the segment is `.bss`.
+            segment(0x0001_3002, 12, &[0xaa, 0xbb, 0xcc]),
+            // These two meet at 0x14002, inside the word at 0x14000.
+            segment(0x0001_4000, 2, &[0x01, 0x02]),
+            segment(0x0001_4002, 3, &[0x03, 0x04, 0x05]),
+        ],
+        slot_base: 0x0001_3002,
+        slots: Vec::new(),
+    };
+    assert_eq!(image.initial_word(0x0001_3000), 0xbbaa_0000);
+    assert_eq!(image.initial_word(0x0001_3004), 0x0000_00cc);
+    assert_eq!(image.initial_word(0x0001_3008), 0, ".bss");
+    assert_eq!(image.initial_word(0x0001_4000), 0x0403_0201);
+    assert_eq!(image.initial_word(0x0001_4004), 0x0000_0005);
+    assert_eq!(image.initial_word(0x0001_2ffc), 0, "below every segment");
+    assert_eq!(image.initial_word(0x2000_0000), 0, "no segment");
+    assert_eq!(image.initial_word(0xffff_fffc), 0, "the top word");
+}
+
+/// For every committed guest ELF, `initial_word` agrees with a plain byte
+/// reference over every word of every segment's file-backed bytes and the
+/// page above them. Not the whole of every segment: the heap-and-stack
+/// reservation spans nearly 2 GiB of zeros.
+#[test]
+fn initial_word_agrees_with_the_bytes_of_every_guest() {
+    let guests = common::PINS
+        .iter()
+        .map(|(name, _)| *name)
+        .filter(|name| name.ends_with(".elf"));
+    let mut words = 0;
+    for name in guests {
+        let image = load_elf(&common::bytes(name)).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        let byte = |at: u64| -> u32 {
+            for s in &image.segments {
+                let start = s.vaddr as u64;
+                if at >= start && at < start + s.bytes.len() as u64 {
+                    return s.bytes[(at - start) as usize] as u32;
+                }
+            }
+            0
+        };
+        for s in &image.segments {
+            let end = s.vaddr as u64 + (s.bytes.len() as u64 + 4096).min(s.mem_len as u64);
+            let mut addr = s.vaddr as u64 & !3;
+            while addr < end {
+                let want =
+                    byte(addr) | byte(addr + 1) << 8 | byte(addr + 2) << 16 | byte(addr + 3) << 24;
+                assert_eq!(
+                    image.initial_word(addr as u32),
+                    want,
+                    "{name}: the word at {addr:#010x}"
+                );
+                addr += 4;
+                words += 1;
+            }
+        }
+    }
+    assert!(words > 10_000, "only {words} words compared");
 }
 
 /// A load is a pure function of the bytes: no path, no clock, no environment.

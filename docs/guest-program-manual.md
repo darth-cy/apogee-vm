@@ -31,8 +31,9 @@ Two things it is **not**:
 
 - **Not program identity.** The report prints a sha256 of the artifact so you
   can pin the bytes and compare a rebuild against them. Program identity is
-  S11's, computed over the decoded per-family tables and the `VmConfig`; it is
-  a different value, in a different field, for a different purpose.
+  computed over the decoded per-family tables, the `VmConfig`, the entry point
+  and the image's words; it is a different value, in a different field, for a
+  different purpose.
 - **Not a proof of anything about execution.** The artifact says what the
   program *is*. It says nothing about what it does with any particular input.
 
@@ -910,6 +911,7 @@ With `--ptau` it also prints the **program identity** at the default parameters:
 value a verifier would register for your program. It needs PSE's ceremony file (2^22
 powers, and about a minute); `docs/handoff/S07-msm-srs-kzg.md` has the download. Two
 things about it are worth knowing before you publish one. It is taken over the decoded
-instructions and the `VmConfig` only — at this stage not over `.rodata`, `.data` or
-the entry point — and it moves whenever the instructions do, including when a rebuild on
+instructions, the `VmConfig`, the entry point and every file-backed byte of the image —
+`.text`, `.rodata` and `.data` — which must all lie below `4h`, `h` being the init
+families' height; and it moves whenever any of those do, including when a rebuild on
 another machine embeds different paths. `crates/program/CLAUDE.md` is the full account.

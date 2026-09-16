@@ -21,7 +21,10 @@ pub enum Slot {
     MidInstruction,
     NonInstruction,
 }
-impl ProgramImage { pub fn slot_at(&self, pc: u32) -> Option<Slot>; }
+impl ProgramImage {
+    pub fn slot_at(&self, pc: u32) -> Option<Slot>;
+    pub fn initial_word(&self, addr: u32) -> u32;   // S14: the one source of image words
+}
 
 pub enum LoaderError { /* twelve variants, one per failure class */ }
 ```
@@ -35,6 +38,11 @@ pub enum LoaderError { /* twelve variants, one per failure class */ }
   and change S11's program identity for a program that did not change.
 - **`compressed` is the instruction's length**, and the only thing that says whether the
   next pc is `pc + 2` or `pc + 4`. The expanded word alone cannot say.
+- **`initial_word` is the one source of an image word** (S14, `docs/spec/memory.md` §3.4):
+  the little-endian word at `addr`, assembled byte by byte from segments' file-backed
+  bytes, 0 wherever no segment has one, because a segment may start or its file bytes may
+  end inside a word. `trace`'s initial RAM value calls it; nothing assembles image words
+  another way. `tests/image.rs` holds it to segment edges and to every committed guest.
 - **The slot vector runs from the lowest loaded address to the top of the highest
   executable segment.** It stops there because no pc above the last executable byte can
   ever be an instruction, so a slot there would say nothing — and `.bss`, which this

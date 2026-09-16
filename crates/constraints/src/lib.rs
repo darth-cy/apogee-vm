@@ -21,13 +21,15 @@ use core::fmt;
 use field::Fr;
 
 mod laws;
+pub mod memory;
 mod wire;
 
 pub use laws::ConstraintError;
 
 /// The artifact format this crate reads and writes. The first word of every
-/// artifact.
-pub const FORMAT_VERSION: u32 = 0;
+/// artifact. 1 since S14, whose lookup element carries a selector; a reader
+/// refuses every other version before it decodes anything after it.
+pub const FORMAT_VERSION: u32 = 1;
 
 /// The one coefficient encoding: every `Fr` is its canonical 32-byte
 /// little-endian integer. The second word of every artifact, which is how the
@@ -49,6 +51,11 @@ pub enum VirtualKind {
     /// `V[row]`: the row index. Its value at row `y` is `y`, and its
     /// multilinear extension is `Σ_j 2^j · y_j`.
     RowIndex,
+    /// `V[ram_live]`: 1 at row `y >= 2^RAM_LIVE_BIT`, 0 below
+    /// (`constants::memory::RAM_LIVE_BIT`). Its multilinear extension over `n`
+    /// variables is `1 − Π_{j = RAM_LIVE_BIT}^{n−1} (1 − y_j)`, which is 0 when
+    /// `n <= RAM_LIVE_BIT`. `docs/spec/memory.md` §3.3.
+    RamLive,
 }
 
 /// The one way any polynomial is named. `docs/spec/gkr.md` §2 says which
@@ -80,6 +87,7 @@ impl fmt::Display for PolyAddress {
             PolyAddress::Witness(i) => write!(f, "W[{i}]"),
             PolyAddress::Setup(i) => write!(f, "S[{i}]"),
             PolyAddress::Virtual(VirtualKind::RowIndex) => write!(f, "V[row]"),
+            PolyAddress::Virtual(VirtualKind::RamLive) => write!(f, "V[ram_live]"),
             PolyAddress::Inner { layer, offset } => write!(f, "L{{{layer}}}[{offset}]"),
             PolyAddress::Scratch(i) => write!(f, "scratch[{i}]"),
             PolyAddress::Cached { layer, offset } => write!(f, "C{{{layer}}}[{offset}]"),
@@ -345,12 +353,17 @@ pub struct Relation {
     pub gate: GateDef,
 }
 
-/// A lookup expression: a tuple of expressions looked up in a channel. The
-/// list exists at S13 and must be empty; S15 gives it meaning.
+/// A lookup expression: on every row where `selector` is nonzero, `tuple` is
+/// looked up in `channel`, one of `constants::lookup_channel`. Every channel is
+/// a range channel at S14: its tuple is one `Linear` expression with literal
+/// coefficients, which holds when its canonical integer is below
+/// `2^BITS[channel]`. `docs/spec/memory.md` §7; S15 discharges it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LookupExpr {
     pub name: String,
     pub channel: u32,
+    /// An `M`, `W` or `S` column.
+    pub selector: PolyAddress,
     pub tuple: Vec<GateDef>,
 }
 
@@ -395,7 +408,7 @@ pub struct CircuitArtifact {
     pub layers: Vec<LayerSpec>,
     /// The flat constraint list.
     pub relations: Vec<Relation>,
-    /// Empty at S13.
+    /// The range obligations, `docs/spec/memory.md` §7.
     pub lookups: Vec<LookupExpr>,
     /// The scratch bijection: `scratch[i]` is `scratch[i].address`.
     pub scratch: Vec<ScratchSlot>,

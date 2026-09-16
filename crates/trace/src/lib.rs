@@ -1,19 +1,26 @@
 //! Execution traces: the memory event log, the per-family buffers, the cycle
-//! profile and the shard plan, and the archive that snapshots them.
+//! profile and the shard plan, the archive that snapshots them, and the memory
+//! argument's columns filled from them.
 //!
 //! `docs/spec/execution-trace.md` is the frozen convention every value here
 //! follows: the timestamps, the slot of every query kind, the x0 rule, the
 //! ecall frame. `crates/trace/CLAUDE.md` is the design record. `crates/emulator`
 //! is the only producer; everything here is a data structure over what it
-//! produced.
+//! produced, or a column built from one.
 
 mod archive;
 mod family;
 mod log;
+mod memory;
 
 pub use archive::{IoStreams, Phase, PhaseTiming, TraceArchive, PHASES};
 pub use family::{FamilyTrace, FamilyTraces, Query, QueryColumns, Role, Row, ROLES};
 pub use log::{AddressSpace, FinalValue, MemoryEvent, MemoryEventLog, SelfCheckError};
+pub use memory::{
+    build_boundary_finals, build_frame_witness, build_init_teardown_columns, build_memory_columns,
+};
+
+use std::collections::BTreeSet;
 
 use program::{FamilyId, VmConfig};
 
@@ -45,9 +52,10 @@ pub struct ShardPlan {
 /// families of `config`, in its order — a profile from another config is a
 /// caller error and panics.
 ///
-/// Init/teardown's count is 0 here, because it runs no cycles. Its rows are
-/// addresses rather than cycles, so the stage that builds that family decides
-/// what its occupancy is.
+/// `INIT_TEARDOWN` and `ZERO_WINDOWS` run no cycles, so both plan 0 shards
+/// here. Their rows are addresses rather than cycles: the prover assembles
+/// exactly 1 `INIT_TEARDOWN` shard, RAM window 0, and one `ZERO_WINDOWS`
+/// shard per entry of [`init_windows`] (`docs/spec/memory.md` §3).
 pub fn plan_shards(profile: &CycleProfile, config: &VmConfig) -> ShardPlan {
     assert!(
         profile.counts.len() == config.families.len()
@@ -72,4 +80,19 @@ pub fn plan_shards(profile: &CycleProfile, config: &VmConfig) -> ShardPlan {
         })
         .collect();
     ShardPlan { shards }
+}
+
+/// The `ZERO_WINDOWS` family's shard list: the distinct RAM window ids
+/// `addr / (4 * height)` of every RAM word the log touches, ascending, without
+/// window 0, which is `INIT_TEARDOWN`'s. `height` is the two init families'
+/// one height. `docs/spec/memory.md` §3.4.
+pub fn init_windows(log: &MemoryEventLog, height: u32) -> Vec<u32> {
+    let windows: BTreeSet<u32> = log
+        .touched_addresses()
+        .into_iter()
+        .filter(|(space, _)| *space == AddressSpace::Ram)
+        .map(|(_, addr)| addr / (4 * height))
+        .filter(|w| *w != 0)
+        .collect();
+    windows.into_iter().collect()
 }

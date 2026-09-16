@@ -28,9 +28,9 @@ use field::Fr;
 use test_support::{sha256, to_hex};
 
 pub const TOY_CACHED_SHA256: &str =
-    "9ad63a54eef4fbd9c808f6db52ad27038202200a5e56be9576c2c52e4cd9aa35";
+    "ee27e1192c4bcf9afa003509f6c06fead29628b02a4c17f86e381bf5609f1c70";
 pub const TOY_CACHE_FREE_SHA256: &str =
-    "8025412caae28c09ca9dcff6bd242961097bd59446c539d7f173dcb01b45ff91";
+    "5318afeb5b5ba5d09871358c89db36a0db12680fa9559a70c67c50b41181251d";
 
 /// A committed artifact's bytes, pinned before anything reads them.
 pub fn fixture_bytes(name: &str, digest: &str) -> Vec<u8> {

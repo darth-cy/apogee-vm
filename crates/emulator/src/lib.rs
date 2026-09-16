@@ -650,7 +650,8 @@ impl<'a> Machine<'a> {
 
     /// An ecall: its transfer cycles, if it moves bytes, then its own row —
     /// `a7` at slot 1, the arguments its number uses at slot 2, `a0` written
-    /// at slot 3, and `next_pc` the fall-through.
+    /// at slot 3, and `next_pc` the fall-through — except an exit's, which is
+    /// the halting sentinel `HALT_PC` (`docs/spec/memory.md` §5).
     fn ecall(&mut self, instr: Instr, pc: u32, fall: u32) -> Result<(), EmuError> {
         let mut row = Cycle::new();
         let number = self.read(&mut row, Role::Rs1, 17);
@@ -676,7 +677,12 @@ impl<'a> Machine<'a> {
             _ => ecall::ENOSYS.wrapping_neg(),
         };
         self.write(&mut row, 10, result);
-        self.commit(&row, instr, pc, fall)
+        let next_pc = if number == ecall::EXIT {
+            memory::HALT_PC
+        } else {
+            fall
+        };
+        self.commit(&row, instr, pc, next_pc)
     }
 
     /// Move a `read`'s or a `write`'s bytes, one transfer cycle per word they

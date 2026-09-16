@@ -1,5 +1,6 @@
 //! Preprocessing: a [`ProgramImage`] in, the per-family decoded tables, the
-//! [`VmConfig`] they derive, and the [`ProgramIdentity`] that commits to both.
+//! [`VmConfig`] they derive, and the [`ProgramIdentity`] that commits to both,
+//! to the image's words in RAM window 0 and to the entry pc.
 //!
 //! `crates/program/CLAUDE.md` is the design record: the table shape, the
 //! extra-mask encoding, the family list with its pc-claiming rule, the digest
@@ -25,6 +26,7 @@ use constants::extra_mask::{
     shift_bitwise as sb, system_code,
 };
 use constants::{family, guest_memory, transcript_tags as tags};
+use curve::G1Affine;
 use field::Fr;
 use isa::{decode, Instr};
 use loader::{ProgramImage, Slot};
@@ -50,6 +52,7 @@ pub const FAMILIES: [FamilyId; family::COUNT as usize] = [
     family::MEM_SUBWORD,
     family::ATOMICS,
     family::INIT_TEARDOWN,
+    family::ZERO_WINDOWS,
 ];
 
 /// The family's name as `constants::family` spells it.
@@ -63,6 +66,7 @@ pub fn family_name(family: FamilyId) -> &'static str {
         family::MEM_SUBWORD => "MEM_SUBWORD",
         family::ATOMICS => "ATOMICS",
         family::INIT_TEARDOWN => "INIT_TEARDOWN",
+        family::ZERO_WINDOWS => "ZERO_WINDOWS",
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -186,7 +190,7 @@ pub const ROW_FIELDS: [RowField; 8] = [
 /// This is the one place a family's columns are chosen; [`field_mask`] and
 /// the committed column order are both read off it. `funct3` is in no tuple:
 /// the extra mask is one-hot per mnemonic, which leaves it nothing to say.
-/// The init/teardown family claims no pc: its table is empty, with no columns.
+/// The two init families claim no pc: their tables are empty, with no columns.
 pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
     use RowField::*;
     match family {
@@ -196,7 +200,7 @@ pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
         | family::MEM_WORD
         | family::MEM_SUBWORD => &[Pc, NextPc, Rs1, Rs2, Rd, Imm, ExtraMask],
         family::MUL_DIV | family::ATOMICS => &[Pc, NextPc, Rs1, Rs2, Rd, ExtraMask],
-        family::INIT_TEARDOWN => &[],
+        family::INIT_TEARDOWN | family::ZERO_WINDOWS => &[],
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -230,7 +234,7 @@ pub fn field_mask(family: FamilyId) -> u8 {
         "{}: a lookup tuple lists its fields in frozen column order",
         family_name(family)
     );
-    if family != family::INIT_TEARDOWN {
+    if family != family::INIT_TEARDOWN && family != family::ZERO_WINDOWS {
         assert!(
             tuple.starts_with(&[RowField::Pc, RowField::NextPc]),
             "{}: pc and next_pc are mandatory in every instruction family",
@@ -339,12 +343,14 @@ impl VmConfig {
 
     /// Decode, refusing anything [`VmConfig::to_bytes`] could not have written
     /// from a derived config: a wrong length, an unknown or out-of-order family,
-    /// a height off the menu, a family set without init/teardown — which
-    /// derivation puts in every config. `None` rather than a panic.
+    /// a height off the menu, a family set without `INIT_TEARDOWN` or
+    /// `ZERO_WINDOWS` — which derivation puts in every config — or those two
+    /// at different heights. `None` rather than a panic.
     ///
-    /// Init/teardown is required to be *present*, not last. It has the highest
-    /// id today, but `FamilyId`s are append-only and the delegation families
-    /// take ids above it, so a config holding one lists it after init/teardown.
+    /// The two init families are required to be *present*, not last. They
+    /// have the highest ids today, but `FamilyId`s are append-only and the
+    /// delegation families take ids above them, so a config holding one lists
+    /// it after both.
     pub fn from_bytes(bytes: &[u8]) -> Option<VmConfig> {
         let word = |i: usize| -> Option<u32> {
             Some(u32::from_le_bytes(
@@ -366,13 +372,31 @@ impl VmConfig {
             }
             families.push((f, h));
         }
-        if !families.iter().any(|(f, _)| *f == family::INIT_TEARDOWN) {
-            return None;
-        }
-        Some(VmConfig {
+        let config = VmConfig {
             families,
             bytecode_size_words: word(1 + 2 * k)?,
-        })
+        };
+        window_height(&config).ok()?;
+        Some(config)
+    }
+}
+
+/// The one height of the two init families, or the rule a config breaks:
+/// `INIT_TEARDOWN` and `ZERO_WINDOWS` both present, at one height.
+/// `docs/spec/memory.md` §3.2: a `ZERO_WINDOWS` height below
+/// `INIT_TEARDOWN`'s would give image words a second init row.
+fn window_height(config: &VmConfig) -> Result<u32, ProgramError> {
+    match (
+        config.height(family::INIT_TEARDOWN),
+        config.height(family::ZERO_WINDOWS),
+    ) {
+        (Some(init), Some(zero)) if init == zero => Ok(init),
+        (Some(_), Some(_)) => Err(ProgramError::WindowRule {
+            rule: "INIT_TEARDOWN and ZERO_WINDOWS have one height",
+        }),
+        _ => Err(ProgramError::WindowRule {
+            rule: "INIT_TEARDOWN and ZERO_WINDOWS are in every VmConfig",
+        }),
     }
 }
 
@@ -420,6 +444,13 @@ pub enum ProgramError {
         pc: u32,
         height: u32,
     },
+    /// The image's file-backed bytes reach past RAM window 0: `end`, one past
+    /// the highest file-backed byte, is above `4 * height`, `height` being
+    /// `INIT_TEARDOWN`'s. `docs/spec/memory.md` §3.4.
+    ImageOutsideWindow { end: u64, height: u32 },
+    /// A RAM window rule of `docs/spec/memory.md` §3.2 or §3.5 is broken;
+    /// `rule` says which.
+    WindowRule { rule: &'static str },
 }
 
 impl fmt::Display for ProgramError {
@@ -454,6 +485,13 @@ impl fmt::Display for ProgramError {
                  its height must exceed its last live row by at least one",
                 family_name(family)
             ),
+            ProgramError::ImageOutsideWindow { end, height } => write!(
+                f,
+                "the image's file-backed bytes end at {end:#x}, past RAM window 0, which \
+                 ends at 4 * {height} = {:#x}",
+                4 * height as u64
+            ),
+            ProgramError::WindowRule { rule } => write!(f, "RAM window rule broken: {rule}"),
         }
     }
 }
@@ -562,8 +600,8 @@ fn narrowest(values: Vec<u32>) -> PolyBacking {
 /// Decode a program into its family tables, and derive its `VmConfig`.
 ///
 /// The family set is derived, never chosen: a family is present exactly when
-/// it claims at least one pc, and init/teardown is always present. See
-/// `crates/program/CLAUDE.md` for every refusal.
+/// it claims at least one pc, and `INIT_TEARDOWN` and `ZERO_WINDOWS` are
+/// always present. See `crates/program/CLAUDE.md` for every refusal.
 ///
 /// `image` must satisfy `ProgramImage`'s documented invariants, which
 /// `loader::load_elf` and the wire-form reader establish: an even
@@ -583,6 +621,8 @@ pub fn decode_program(
 /// that detachment is sound: an instruction whose family is not available is
 /// claimed by no family, which is the same loud failure as an instruction no
 /// family knows. Production derivation detaches nothing it did not derive.
+/// Detaching `INIT_TEARDOWN` or `ZERO_WINDOWS` leaves it out of the family
+/// set, which is refused.
 pub fn decode_program_detaching(
     image: &ProgramImage,
     params: &ProgramParams,
@@ -603,12 +643,7 @@ pub fn decode_program_detaching(
     // The bytecode ceiling: the word span from the bottom of RAM to the last
     // file-backed byte, which is what an init family enumerating image words
     // in closed form would have to cover.
-    let image_end = image
-        .segments
-        .iter()
-        .map(|s| s.vaddr as u64 + s.bytes.len() as u64)
-        .max()
-        .unwrap_or(guest_memory::RAM_ORIGIN as u64);
+    let image_end = file_bytes_end(image).unwrap_or(guest_memory::RAM_ORIGIN as u64);
     let words = image_end
         .saturating_sub(guest_memory::RAM_ORIGIN as u64)
         .div_ceil(4);
@@ -653,7 +688,9 @@ pub fn decode_program_detaching(
     };
     for family in FAMILIES {
         let rows = &claims[family as usize];
-        if rows.is_empty() && family != family::INIT_TEARDOWN {
+        let always = (family == family::INIT_TEARDOWN || family == family::ZERO_WINDOWS)
+            && !detached.contains(&family);
+        if rows.is_empty() && !always {
             continue;
         }
         let height = params.heights[family as usize];
@@ -672,8 +709,30 @@ pub fn decode_program_detaching(
         tables.families.push(build_table(family, height, rows));
     }
 
+    // RAM window 0, `INIT_TEARDOWN`'s, holds every file-backed byte: the image
+    // column commits exactly that window, so a byte above it would read as
+    // zero and move no identity. `docs/spec/memory.md` §3.4.
+    let height = window_height(&config)?;
+    if let Some(end) = file_bytes_end(image) {
+        if end > 4 * height as u64 {
+            return Err(ProgramError::ImageOutsideWindow { end, height });
+        }
+    }
+
     check_partition(image, &tables);
     Ok((tables, config))
+}
+
+/// One past the highest file-backed byte of the image, over the segments with
+/// file bytes; `None` when no segment has any. A segment without — `.bss`, the
+/// heap-and-stack reservation — holds no image byte, wherever it lies.
+fn file_bytes_end(image: &ProgramImage) -> Option<u64> {
+    image
+        .segments
+        .iter()
+        .filter(|s| !s.bytes.is_empty())
+        .map(|s| s.vaddr as u64 + s.bytes.len() as u64)
+        .max()
 }
 
 /// One family's table from its claimed rows.
@@ -764,15 +823,25 @@ fn absorb_vm_config(tr: &mut Transcript, config: &VmConfig) {
     tr.append_scalars(tags::VM_CONFIG, &message);
 }
 
-/// The statement descriptor: the static `VmConfig` and the per-proof shard
-/// count of each of its families, as two adjacent typed messages.
+/// The statement descriptor: the static `VmConfig`, the per-proof shard count
+/// of each of its families, and the RAM window list, as three adjacent typed
+/// messages.
 ///
 /// The first is exactly the `VmConfig` message program identity absorbs; the
 /// second is one count per family, in the same ascending order, under
 /// `SHARD_COUNTS`. A family present in the config and run zero times has count
 /// 0 — it still has a slot, so the counts line up with the families by
-/// position and by nothing else.
-pub fn absorb_statement_descriptor(tr: &mut Transcript, config: &VmConfig, shard_counts: &[u32]) {
+/// position and by nothing else. The third is `ZERO_WINDOWS`' window ids
+/// `[w_1 … w_k]` under `MEMORY_WINDOWS`, empty when `k = 0`: its length varies
+/// per execution exactly as the counts do. Absorbing checks nothing;
+/// [`check_memory_windows`] is the rule over the same three.
+/// `docs/spec/memory.md` §6.1.
+pub fn absorb_statement_descriptor(
+    tr: &mut Transcript,
+    config: &VmConfig,
+    shard_counts: &[u32],
+    windows: &[u32],
+) {
     assert_eq!(
         shard_counts.len(),
         config.families.len(),
@@ -784,58 +853,163 @@ pub fn absorb_statement_descriptor(tr: &mut Transcript, config: &VmConfig, shard
         .map(|c| Fr::from_u64(*c as u64))
         .collect();
     tr.append_scalars(tags::SHARD_COUNTS, &counts);
+    let ids: Vec<Fr> = windows.iter().map(|w| Fr::from_u64(*w as u64)).collect();
+    tr.append_scalars(tags::MEMORY_WINDOWS, &ids);
 }
 
-/// The program's identity: Mercury commitments to every decoded-table column,
-/// with the static `VmConfig`, digested through a fresh typed transcript.
+/// The verifier's RAM window rules over the statement, checked before the
+/// memory challenges (`docs/spec/memory.md` §3.5): `INIT_TEARDOWN` and
+/// `ZERO_WINDOWS` present at one height `h`; exactly one `INIT_TEARDOWN`
+/// shard; one window id per `ZERO_WINDOWS` shard; the ids strictly increasing;
+/// every id in `[1, 2^29 / h - 1]`. `ZERO_WINDOWS` shard `i` is window
+/// `windows[i]`, so together they give every RAM word exactly one init row.
 ///
-/// The recipe, frozen:
+/// `config` is one `decode_program` derived or `VmConfig::from_bytes`
+/// decoded — families strictly ascending, heights on the menu — and nothing
+/// here checks that again: a hand-built config listing a family twice is
+/// outside what these rules decide. `shard_counts` holds one count per family
+/// of `config`, as the statement descriptor does; anything else is a caller
+/// error and panics.
+pub fn check_memory_windows(
+    config: &VmConfig,
+    shard_counts: &[u32],
+    windows: &[u32],
+) -> Result<(), ProgramError> {
+    assert_eq!(
+        shard_counts.len(),
+        config.families.len(),
+        "check_memory_windows: one shard count per family in the VmConfig"
+    );
+    let height = window_height(config)?;
+    let count = |id: FamilyId| {
+        let i = config.families.iter().position(|(f, _)| *f == id);
+        shard_counts[i.expect("window_height found both init families")]
+    };
+    let broken = |rule| Err(ProgramError::WindowRule { rule });
+    if count(family::INIT_TEARDOWN) != 1 {
+        return broken("INIT_TEARDOWN proves exactly one shard");
+    }
+    if windows.len() as u64 != count(family::ZERO_WINDOWS) as u64 {
+        return broken("the window list has one id per ZERO_WINDOWS shard");
+    }
+    if windows.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return broken("the window ids are strictly increasing");
+    }
+    let n = (1u64 << 29) / height as u64;
+    if windows.iter().any(|w| *w == 0 || *w as u64 >= n) {
+        return broken("every window id is in [1, 2^29 / h - 1]");
+    }
+    Ok(())
+}
+
+/// RAM window 0's initial words, the image column: row `y` is
+/// `image.initial_word(4y)`, `height` rows, `height` being `INIT_TEARDOWN`'s.
+/// Program identity commits it as that family's one setup column.
+/// `docs/spec/memory.md` §3.4.
 ///
-/// 1. `PROGRAM_IDENTITY`: the code version, one scalar;
-/// 2. `VM_CONFIG`: the family ids, their heights, `bytecode_size_words`;
-/// 3. per family in ascending order, `COMMITMENT`: that family's column
-///    commitments in lookup-tuple order, as one list of 4-limb G1 points —
-///    empty for init/teardown, whose table has no columns;
-/// 4. one raw squeeze, which is the identity.
+/// `U32`-backed: a word is 32 bits, and nothing narrower holds every image.
+pub fn image_init_column(image: &ProgramImage, height: u32) -> MultilinearPoly {
+    let words = (0..height).map(|y| image.initial_word(4 * y)).collect();
+    MultilinearPoly::new(PolyBacking::U32(words))
+}
+
+/// The program's identity: its [`setup_commitments`], digested with the code
+/// version, the static `VmConfig` and the entry pc by
+/// [`identity_from_commitments`]. `docs/spec/memory.md` §6.2.
+pub fn program_identity(
+    image: &ProgramImage,
+    tables: &DecodedTables,
+    config: &VmConfig,
+    srs: &Srs,
+) -> ProgramIdentity {
+    identity_from_commitments(
+        tables.code_version,
+        config,
+        image.entry,
+        &setup_commitments(image, tables, config, srs),
+    )
+}
+
+/// Every family's setup commitments, one list per family of `config`, in its
+/// order: an instruction family's decoded-table columns in lookup-tuple order;
+/// `INIT_TEARDOWN`'s one, the [`image_init_column`] at its height;
+/// `ZERO_WINDOWS`' none.
 ///
-/// `tables` and `config` must be one derivation's output, and `srs` must hold
-/// as many powers as the tallest table has rows; either failing is a broken
+/// `tables` and `config` must be `image`'s derivation, and `srs` must hold as
+/// many powers as the tallest table has rows; either failing is a broken
 /// caller invariant and panics.
-pub fn program_identity(tables: &DecodedTables, config: &VmConfig, srs: &Srs) -> ProgramIdentity {
+pub fn setup_commitments(
+    image: &ProgramImage,
+    tables: &DecodedTables,
+    config: &VmConfig,
+    srs: &Srs,
+) -> Vec<Vec<G1Affine>> {
     assert_eq!(
         tables.families.len(),
         config.families.len(),
-        "program_identity: the tables and the VmConfig name different family sets"
+        "setup_commitments: the tables and the VmConfig name different family sets"
     );
     for (table, (family, height)) in tables.families.iter().zip(&config.families) {
         assert!(
             table.family == *family && table.height == *height,
-            "program_identity: the {} table does not match the VmConfig's entry",
+            "setup_commitments: the {} table does not match the VmConfig's entry",
             family_name(table.family)
         );
     }
-
-    let mut tr = Transcript::new();
-    tr.append_scalar(
-        tags::PROGRAM_IDENTITY,
-        Fr::from_u64(tables.code_version as u64),
-    );
-    absorb_vm_config(&mut tr, config);
-    for table in &tables.families {
-        // One column at a time: at 2^22 rows an `Fr` column is 128 MiB.
-        let points: Vec<_> = (0..table.columns.len())
-            .map(|c| {
-                commit(srs, &table.column_poly(c))
-                    .unwrap_or_else(|e| {
-                        panic!(
-                            "program_identity: committing the {} table failed: {e:?}",
-                            family_name(table.family)
-                        )
-                    })
-                    .0
+    let cm = |table: &FamilyTable, poly: &MultilinearPoly| {
+        commit(srs, poly)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "setup_commitments: committing a {} column failed: {e:?}",
+                    family_name(table.family)
+                )
             })
-            .collect();
-        append_g1_list(&mut tr, tags::COMMITMENT, &points);
+            .0
+    };
+    tables
+        .families
+        .iter()
+        .map(|table| match table.family {
+            family::INIT_TEARDOWN => vec![cm(table, &image_init_column(image, table.height))],
+            family::ZERO_WINDOWS => Vec::new(),
+            // One column at a time: at 2^22 rows an `Fr` column is 128 MiB.
+            _ => (0..table.columns.len())
+                .map(|c| cm(table, &table.column_poly(c)))
+                .collect(),
+        })
+        .collect()
+}
+
+/// The identity digest over given setup commitments. It needs no SRS: this is
+/// what a verifying-key loader recomputes. A fresh typed transcript absorbs,
+/// in this frozen order:
+///
+/// 1. `PROGRAM_IDENTITY`: `code_version`, one scalar;
+/// 2. `VM_CONFIG`: the family ids, their heights, `bytecode_size_words`;
+/// 3. `PROGRAM_ENTRY`: `entry_pc`, one scalar;
+/// 4. per family of `config`, in its order, `COMMITMENT`: that family's list
+///    in `commitments`, as one message of 4-limb G1 points;
+/// 5. one raw squeeze, which is the identity.
+///
+/// `commitments` holds one list per family of `config`; anything else is a
+/// caller error and panics.
+pub fn identity_from_commitments(
+    code_version: u32,
+    config: &VmConfig,
+    entry_pc: u32,
+    commitments: &[Vec<G1Affine>],
+) -> ProgramIdentity {
+    assert_eq!(
+        commitments.len(),
+        config.families.len(),
+        "identity_from_commitments: one commitment list per family in the VmConfig"
+    );
+    let mut tr = Transcript::new();
+    tr.append_scalar(tags::PROGRAM_IDENTITY, Fr::from_u64(code_version as u64));
+    absorb_vm_config(&mut tr, config);
+    tr.append_scalar(tags::PROGRAM_ENTRY, Fr::from_u64(entry_pc as u64));
+    for points in commitments {
+        append_g1_list(&mut tr, tags::COMMITMENT, points);
     }
     ProgramIdentity(tr.sample())
 }

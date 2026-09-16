@@ -12,7 +12,7 @@
 mod common;
 
 use common::{toy, toy_cache_free, toy_cache_free_bytes, toy_cached_bytes};
-use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress, VirtualKind};
+use constraints::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
 use field::Fr;
 use serde::Serialize;
 
@@ -158,16 +158,16 @@ fn a_trailing_byte_is_refused() {
 }
 
 /// A varint written longer than it needs to be is refused. The leading
-/// `format_version`, 0, is re-encoded as `0x80 0x00`: postcard reads that as 0,
+/// `format_version`, 1, is re-encoded as `0x81 0x00`: postcard reads that as 1,
 /// so the artifact decodes to the toy, and only the canonical comparison stands
 /// between the reader and two byte strings for one artifact.
 #[test]
 fn an_overlong_varint_is_refused() {
     let bytes = toy_cached_bytes();
-    assert_eq!(bytes[0], 0x00, "the file starts with format_version 0");
-    let overlong = [&[0x80u8, 0x00][..], &bytes[1..]].concat();
+    assert_eq!(bytes[0], 0x01, "the file starts with format_version 1");
+    let overlong = [&[0x81u8, 0x00][..], &bytes[1..]].concat();
 
-    assert_eq!(postcard::from_bytes::<u32>(&[0x80, 0x00]), Ok(0));
+    assert_eq!(postcard::from_bytes::<u32>(&[0x81, 0x00]), Ok(1));
     assert_eq!(
         postcard::from_bytes::<CircuitArtifact>(&overlong).as_ref(),
         Ok(&toy())
@@ -176,6 +176,52 @@ fn an_overlong_varint_is_refused() {
         CircuitArtifact::from_bytes(&overlong),
         Err(NOT_CANONICAL.into())
     );
+}
+
+/// The format version is read first, and no other version is decoded. The
+/// cached toy's bytes with their first word 2, or 128 (two varint bytes), are
+/// refused naming the version, where under 1 they decode to the toy; and so is
+/// an S13 file — format 0, whose lookup element had no selector — holding one
+/// lookup `(name, channel, tuple)`.
+///
+/// Kills a reader that checks the version only after decoding the rest: that
+/// reader takes the S13 lookup's tuple length for a selector, misreads the gate
+/// after it, and refuses the file as a malformed gate rather than as format 0.
+#[test]
+fn a_format_version_other_than_one_is_refused() {
+    let bytes = toy_cached_bytes();
+    assert_eq!(CircuitArtifact::from_bytes(&bytes), Ok(toy()));
+    let refused = |version: u32| {
+        Err(format!(
+            "malformed circuit artifact: format version {version}, but this reader reads 1 only"
+        ))
+    };
+    let two = [&[2u8][..], &bytes[1..]].concat();
+    assert_eq!(CircuitArtifact::from_bytes(&two), refused(2));
+    let wide = [&[0x80u8, 0x01][..], &bytes[1..]].concat();
+    assert_eq!(postcard::from_bytes::<u32>(&[0x80, 0x01]), Ok(128));
+    assert_eq!(CircuitArtifact::from_bytes(&wide), refused(128));
+
+    let mut a = toy();
+    a.lookups.push(LookupExpr {
+        name: "s13".into(),
+        channel: 0,
+        selector: PolyAddress::Memory(0),
+        tuple: vec![GateDef::Linear {
+            terms: vec![],
+            constant: common::lit(0),
+        }],
+    });
+    let s14 = a.to_bytes();
+    // The name `s13`, channel 0, selector `M[0]`, then the tuple's length, 1.
+    let lookup = [3u8, b's', b'1', b'3', 0, 0, 0, 0, 1];
+    let at = s14
+        .windows(lookup.len())
+        .position(|w| w == lookup)
+        .expect("the lookup is in the file");
+    let s13 = [&[0u8][..], &s14[1..at + 5], &s14[at + 8..]].concat();
+    assert_eq!(s13.len(), s14.len() - 3);
+    assert_eq!(CircuitArtifact::from_bytes(&s13), refused(0));
 }
 
 /// Every proper prefix of each file is refused as a buffer that ends early,
@@ -212,11 +258,11 @@ fn a_length_prefix_claiming_two_to_the_32_is_refused() {
     let huge = encode(&(1u64 << 32));
     assert_eq!(huge, [0x80, 0x80, 0x80, 0x80, 0x10]);
 
-    // format_version 0, coefficient_encoding 0, trace_vars 4, then the memory
+    // format_version 1, coefficient_encoding 0, trace_vars 4, then the memory
     // layout's length.
     let bytes = toy_cached_bytes();
-    assert_eq!(&bytes[..4], &[0, 0, 4, 1], "the toy has one memory column");
-    let claim = [&[0u8, 0, 4][..], &huge].concat();
+    assert_eq!(&bytes[..4], &[1, 0, 4, 1], "the toy has one memory column");
+    let claim = [&[1u8, 0, 4][..], &huge].concat();
     assert_eq!(CircuitArtifact::from_bytes(&claim), Err(ENDS_EARLY.into()));
 
     // tag 0, split 0, one coefficient, then 2^32 operands.
@@ -259,11 +305,12 @@ fn a_nonzero_unused_address_field_is_refused() {
         Ok(PolyAddress::Memory(3))
     );
 
-    let legal: [(RawAddress, PolyAddress); 7] = [
+    let legal: [(RawAddress, PolyAddress); 8] = [
         ((0, 3, 0), PolyAddress::Memory(3)),
         ((1, 3, 0), PolyAddress::Witness(3)),
         ((2, 3, 0), PolyAddress::Setup(3)),
         ((3, 0, 0), PolyAddress::Virtual(VirtualKind::RowIndex)),
+        ((3, 1, 0), PolyAddress::Virtual(VirtualKind::RamLive)),
         ((4, 3, 1), common::inner(3, 1)),
         ((5, 3, 0), PolyAddress::Scratch(3)),
         ((6, 3, 1), common::cached(3, 1)),
@@ -275,12 +322,13 @@ fn a_nonzero_unused_address_field_is_refused() {
         );
         assert_eq!(encode(&address), encode(&raw), "{address} writes {raw:?}");
     }
-    let stray: [RawAddress; 6] = [
+    let stray: [RawAddress; 7] = [
         (0, 3, 1),
         (1, 3, 1),
         (2, 3, 1),
-        (3, 1, 0),
+        (3, 2, 0),
         (3, 0, 1),
+        (3, 1, 1),
         (5, 3, 1),
     ];
     for raw in stray {
@@ -305,6 +353,24 @@ fn a_nonzero_unused_address_field_is_refused() {
         CircuitArtifact::from_bytes(&with_gate_bytes(&gate((0, 3, 1)))),
         Err(SHAPE_REFUSED.into())
     );
+}
+
+/// Virtual kinds are 0 (`V[row]`) and 1 (`V[ram_live]`), append-only, and a
+/// kind is printed by its short name.
+#[test]
+fn virtual_kind_tags_are_zero_and_one() {
+    assert_eq!(encode(&VirtualKind::RowIndex), [0]);
+    assert_eq!(encode(&VirtualKind::RamLive), [1]);
+    assert_eq!(
+        postcard::from_bytes::<VirtualKind>(&[1]),
+        Ok(VirtualKind::RamLive)
+    );
+    assert_eq!(
+        postcard::from_bytes::<VirtualKind>(&[2]),
+        Err(postcard::Error::SerdeDeCustom)
+    );
+    let live = PolyAddress::Virtual(VirtualKind::RamLive);
+    assert_eq!(live.to_string(), "V[ram_live]");
 }
 
 /// Address tags are 0 to 6 and append-only; 7 and 255 are refused, alone and
@@ -626,6 +692,62 @@ fn a_malformed_quadratic_is_refused() {
             "{what}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Lookups
+// ---------------------------------------------------------------------------
+
+/// A `LookupExpr` is `(name, channel, selector, tuple)`, `docs/spec/gkr.md`
+/// §4.1: the name's length and its bytes, the channel's varint, the selector's
+/// three address fields, the tuple's length and its gates. `gap_lo` below —
+/// channel 0, selector `M[2]`, one expression `4·M[0] + 1·V[ram_live] − 1` —
+/// encodes to exactly its hand-written bytes and decodes back, alone and as a
+/// lookup of the toy.
+///
+/// Kills an encoder that writes the selector after the tuple, or leaves it
+/// out: both round-trip through their own decoder, and neither matches these
+/// bytes.
+#[test]
+fn a_lookup_round_trips_byte_for_byte() {
+    let lookup = LookupExpr {
+        name: "gap_lo".into(),
+        channel: 0,
+        selector: PolyAddress::Memory(2),
+        tuple: vec![GateDef::Linear {
+            terms: vec![
+                (common::lit(4), PolyAddress::Memory(0)),
+                (common::lit(1), PolyAddress::Virtual(VirtualKind::RamLive)),
+            ],
+            constant: common::neg(1),
+        }],
+    };
+    let mut bytes = vec![6u8];
+    bytes.extend_from_slice(b"gap_lo");
+    bytes.push(0); // channel 0
+    bytes.extend_from_slice(&[0, 2, 0]); // selector M[2]
+    bytes.push(1); // one expression
+    bytes.extend(raw_gate(
+        0,
+        0,
+        &[
+            (0, 0, Fr::from_u64(4).to_bytes()),
+            (0, 0, one()),
+            (0, 0, Fr::MINUS_ONE.to_bytes()),
+        ],
+        &[(0, 0, 0), (3, 1, 0)],
+    ));
+    assert_eq!(encode(&lookup), bytes);
+    assert_eq!(
+        postcard::from_bytes::<LookupExpr>(&bytes),
+        Ok(lookup.clone())
+    );
+
+    let mut a = toy();
+    a.lookups.push(lookup);
+    let file = a.to_bytes();
+    assert!(file.windows(bytes.len()).any(|w| w == bytes.as_slice()));
+    assert_eq!(CircuitArtifact::from_bytes(&file), Ok(a));
 }
 
 // ---------------------------------------------------------------------------

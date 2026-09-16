@@ -21,6 +21,10 @@ use transcript::Transcript;
 
 pub use sumcheck::SumcheckProof;
 
+mod memory;
+
+pub use memory::{boundary_factors, reconciles, window_challenges, BoundaryFinals};
+
 // ---------------------------------------------------------------------------
 // The containers
 // ---------------------------------------------------------------------------
@@ -193,6 +197,13 @@ pub fn eval_gate(gate: &GateDef, values: &[Fr], challenges: &ExternalChallenges)
 pub fn virtual_at_row(kind: VirtualKind, row: usize) -> Fr {
     match kind {
         VirtualKind::RowIndex => Fr::from_u64(row as u64),
+        VirtualKind::RamLive => {
+            if row >= 1 << constants::memory::RAM_LIVE_BIT {
+                Fr::ONE
+            } else {
+                Fr::ZERO
+            }
+        }
     }
 }
 
@@ -201,6 +212,13 @@ pub fn virtual_at_point(kind: VirtualKind, point: &[Fr]) -> Fr {
     match kind {
         // Σ_j 2^j · y_j, by Horner from the highest variable.
         VirtualKind::RowIndex => point.iter().rev().fold(Fr::ZERO, |acc, y| acc + acc + *y),
+        // 1 − Π_{j >= RAM_LIVE_BIT} (1 − y_j): on the cube, 0 exactly when every
+        // bit from RAM_LIVE_BIT up is clear; over RAM_LIVE_BIT variables or
+        // fewer the product is empty and the table is 0.
+        VirtualKind::RamLive => {
+            let high = &point[point.len().min(constants::memory::RAM_LIVE_BIT as usize)..];
+            Fr::ONE - high.iter().fold(Fr::ONE, |acc, y| acc * (Fr::ONE - *y))
+        }
     }
 }
 

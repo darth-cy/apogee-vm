@@ -1,6 +1,9 @@
 # The execution trace
 
-Frozen at S12. **This document is the timestamp convention**: what every memory query
+Frozen at S12. S14 amended §4, §6 and §9 for the halting sentinel and the register and
+PC boundary of `docs/spec/memory.md` §4–§5.
+
+**This document is the timestamp convention**: what every memory query
 of an execution is, when it happens, and in what order the trace records it. S14's
 memory-argument fill and S16's ecall-row constraints cite it; they do not restate or
 reinvent it. `crates/emulator` produces a trace that follows it, `crates/trace` holds
@@ -79,8 +82,8 @@ all four slots in one cycle, and it does so with slot 3 shared by the RAM query 
 `rd` write, which sit at distinct addresses.
 
 **`next_pc`** is the sequential fall-through — `pc + 2` for a two-byte instruction,
-`pc + 4` otherwise — except where control moves: a jump's target, a taken branch's, and
-an ecall transfer's unchanged `pc`.
+`pc + 4` otherwise — except where control moves: a jump's target, a taken branch's, an
+ecall transfer's unchanged `pc`, and the exit row's `HALT_PC` (section 6).
 
 ## 5. The x0 rule
 
@@ -93,13 +96,16 @@ over this fixed trace behaviour.
 ## 6. ecall
 
 An ecall's own row reads `a7` at slot 1, the argument registers its number uses at
-slot 2, and writes `a0` at slot 3; its `next_pc` is `pc + 4`, always.
+slot 2, and writes `a0` at slot 3; its `next_pc` is `pc + 4`, except on an `EXIT` row,
+which writes the halting sentinel `constants::memory::HALT_PC = 1` instead
+(`docs/spec/memory.md` §5). `HALT_PC` is odd and no instruction's `next_pc` is, so a
+pc that ends there ended on an exit row.
 
 | Number | Arguments read | `a0` written |
 | --- | --- | --- |
 | `READ` 63 | `a0` fd, `a1` buf, `a2` count | bytes delivered, `min(count, left)`; `-EBADF` for a descriptor other than 0 and 3 |
 | `WRITE` 64 | `a0` fd, `a1` buf, `a2` count | `count`; `-EBADF` for a descriptor other than 1 and 2 |
-| `EXIT` 93 | `a0` status | the status, unchanged; execution stops after this row |
+| `EXIT` 93 | `a0` status | the status, unchanged; `next_pc` is `HALT_PC`, and execution stops after this row |
 | `PRECOMPILE_POSEIDON2` 0x500 | `a0` state pointer | `-ENOSYS` until its circuit exists; the row already has the frame it will keep |
 | anything else | none | `-ENOSYS` |
 
@@ -159,6 +165,13 @@ address per timestamp and every gap non-negative, that balance pairs each read w
 exactly the last write before it, which is sequential consistency. Teardown is taken
 from the log itself, so everything after an address's last honest query balances by
 construction — its final value changed, a final query moved later or added, whole
-trailing cycles removed — exactly as in the argument, where teardown's values and the
-cycle count are bound by other means. For a snapshot, `TraceArchive` holds the log to
-the family rows event for event, which is where the cycle count lives.
+trailing cycles removed. The argument is no different for final values: the registers'
+final tuples come from boundary scalars and a RAM word's teardown from a window family's
+columns (`docs/spec/memory.md` §3–§4), both supplied by the prover and absorbed before
+any memory challenge is drawn, so a changed final value or a final query moved later or
+added is caught by the row constraints, not by teardown. What the verifier fixes is two
+final values: `x0`'s, 0, and the pc's, `HALT_PC`. Only an exit row writes `HALT_PC`, so
+a trace whose trailing cycles, exit row included, were removed cannot balance
+(`docs/spec/memory.md` §4–§5, which also lists what S16's constraints owe the
+sentinel). For a snapshot, `TraceArchive` holds the log to the family rows event for
+event, which is where the cycle count lives.

@@ -10,7 +10,7 @@ use std::process::{Command, Output};
 
 use checker::dump;
 use common::*;
-use constraints::Coeff;
+use constraints::{Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
 use field::Fr;
 
 #[test]
@@ -21,7 +21,7 @@ fn the_dump_names_everything_in_the_toy() {
         let has_line = |line: &str| lines.contains(&line);
         let header = [
             "circuit artifact",
-            "  format version        0",
+            "  format version        1",
             "  coefficient encoding  0 (every Fr canonical 32-byte little-endian)",
             "  trace length          2^4 rows",
             "  depth                 3 gate lists",
@@ -147,6 +147,41 @@ fn coefficients_render_one_way() {
         "no line {line:?} in\n{text}"
     );
     assert!(text.contains("(toy·W[0] + 1·V[row] + 0)·(1·W[2] + 0)"));
+}
+
+/// A lookup prints its name, its channel's number and name, its selector and
+/// its tuple, each expression in the one formula notation; an unknown channel
+/// prints as `?` rather than panicking.
+#[test]
+fn a_lookup_prints_its_channel_selector_and_tuple() {
+    let mut a = load(CACHED);
+    a.lookups.push(LookupExpr {
+        name: "range".into(),
+        channel: 0,
+        selector: M0,
+        tuple: vec![GateDef::Linear {
+            terms: vec![
+                (lit(4), W0),
+                (
+                    Coeff::Literal(-Fr::ONE),
+                    PolyAddress::Virtual(VirtualKind::RamLive),
+                ),
+            ],
+            constant: lit(0),
+        }],
+    });
+    let text = dump(&a);
+    for line in [
+        "lookups (1)",
+        "  range channel 0 timestamp, selector M[0]: ((4·W[0] + -1·V[ram_live] + 0))",
+    ] {
+        assert!(
+            text.lines().any(|l| l == line),
+            "no line {line:?} in\n{text}"
+        );
+    }
+    a.lookups[0].channel = 9;
+    assert!(dump(&a).contains("  range channel 9 ?, selector M[0]: "));
 }
 
 #[test]

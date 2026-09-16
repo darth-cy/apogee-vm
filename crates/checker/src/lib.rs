@@ -1,7 +1,8 @@
 //! Standalone checkers for a `CircuitArtifact`, written from `docs/spec/gkr.md`
-//! alone: the four laws of §4.2, the padding contract of §4.3, a witness-row
-//! evaluator, a readable dump, and a cross-check against an independently
-//! written description of a circuit.
+//! alone: the four laws and the lookup rules of §4.2, the padding contract of
+//! §4.3 with its product-tree clause, a witness-row evaluator and the native
+//! lookup evaluator, a readable dump, and a cross-check against an
+//! independently written description of a circuit.
 //!
 //! Nothing here calls `CircuitArtifact::validate` or `inline_cached`: the laws
 //! are enforced twice, by `constraints` at construction and by this crate, with
@@ -13,10 +14,13 @@
 //! fixed seeds), so every verdict is reproducible; each trial wrongly accepts
 //! two different polynomials with probability about `degree / |Fr|`.
 
-use constants::challenge_slot;
+use constants::memory::{READ_ROOT, WRITE_ROOT};
+use constants::{challenge_slot, lookup_channel};
 use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress, VirtualKind, CATALOGUE};
 use field::Fr;
-use gkr::{eval_gate, forward, gate_values, virtual_at_row, BaseLayer, ExternalChallenges};
+use gkr::{
+    eval_gate, forward, gate_values, virtual_at_row, BaseLayer, ExternalChallenges, LayerValues,
+};
 use poly::{MultilinearPoly, PolyBacking};
 
 /// Independent pseudo-random points per sampled check.
@@ -26,6 +30,7 @@ const LAW1: &str = "Law 1 (locality)";
 const LAW2: &str = "Law 2 (derived width)";
 const LAW3: &str = "Law 3 (top layer)";
 const LAW4: &str = "Law 4 (single source of truth)";
+const LOOKUP_RULES: &str = "Lookup rules";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -297,8 +302,8 @@ pub fn check_law3(a: &CircuitArtifact) -> Result<(), String> {
 /// is the output of exactly one relation, no two slots share an address, a
 /// producing entry's output is its relation's slot's address and an enforcing
 /// entry's relation has no output. Semantics: at `TRIALS` pseudo-random points
-/// giving every committed column, virtual table and scratch slot a value and
-/// two child values, and every challenge slot a value, each relation and its
+/// giving every committed column, each virtual table kind and every scratch
+/// slot a value and two child values, and every challenge slot a value, each relation and its
 /// gate agree through the kernel — `L{k}[j]` read as its scratch slot,
 /// `C{k}[j]` evaluated from its entry, a `TreeProduct` reading the children.
 ///
@@ -378,7 +383,7 @@ pub fn check_law4(a: &CircuitArtifact) -> Result<(), String> {
     for trial in 0..TRIALS {
         let mut triple = || [rng.fr(), rng.fr(), rng.fr()];
         let committed = a.committed().iter().map(|_| triple()).collect();
-        let virt = triple();
+        let virt = [triple(), triple()];
         let scratch = (0..a.scratch.len()).map(|_| triple()).collect();
         let challenges = rng.challenges(&slots);
         let s = Sample {
@@ -402,28 +407,109 @@ pub fn check_law4(a: &CircuitArtifact) -> Result<(), String> {
     Ok(())
 }
 
-/// Laws 1, 2, 3 and 4, in that order; the first failure.
+/// Laws 1, 2, 3 and 4, in that order, then the lookup rules; the first
+/// failure.
 ///
-/// Does NOT cover: whatever each law's checker does not; the construction
-/// rules of `docs/spec/gkr.md` §3.1 and §4.2 outside the laws — the degree
-/// ceiling, a halving list with cached or enforcing entries, a row-wise list
-/// with a `TreeProduct`, an inner column no gate reads, an identically zero
-/// enforcing gate, a cached entry no gate names, a relation reading `V[row]` when `virtuals`
-/// does not list it, names, challenge slots, `lookups`, `padding.row`'s length,
-/// `format_version`, `coefficient_encoding`, `trace_vars`' ceiling; the padding
-/// contract (`check_padding`); what the circuit computes (`cross_check`).
+/// Does NOT cover: whatever each law's checker, and `check_lookups`, does not;
+/// the construction rules of `docs/spec/gkr.md` §3.1 and §4.2 outside the laws
+/// and the lookup rules — the degree ceiling, a halving list with cached or
+/// enforcing entries, a row-wise list with a `TreeProduct`, an inner column no
+/// gate reads, an identically zero enforcing gate, a cached entry no gate
+/// names, a relation reading a `V` that `virtuals` does not list, names other
+/// than lookups', challenge slots, `padding.row`'s length, `format_version`,
+/// `coefficient_encoding`, `trace_vars`' ceiling; the padding contract
+/// (`check_padding`, `check_padding_identity`); what the circuit computes
+/// (`cross_check`).
 pub fn check_laws(a: &CircuitArtifact) -> Result<(), String> {
     check_law1(a)?;
     check_law2(a)?;
     check_law3(a)?;
-    check_law4(a)
+    check_law4(a)?;
+    check_lookups(a)
 }
 
-/// One Law 4 point: `[value, child 0, child 1]` per committed column, the
-/// virtual table and each scratch slot, and a value per challenge slot.
+/// The lookup rules of `docs/spec/gkr.md` §4.2, lookup by lookup: its name is a
+/// non-empty `[a-z0-9_]` string no other name in the artifact repeats; its
+/// channel is one of `constants::lookup_channel`; its tuple holds exactly one
+/// expression, every channel being a range channel; that expression is
+/// `Linear`, its every coefficient and its constant literals, reading only
+/// in-range `M`, `W`, `S` columns and virtual tables `virtuals` lists; its
+/// selector is an in-range `M`, `W` or `S` column.
+///
+/// Does NOT cover: whether a row satisfies a lookup (`violated_lookups`); the
+/// names of anything but lookups.
+fn check_lookups(a: &CircuitArtifact) -> Result<(), String> {
+    let mut names: Vec<&String> = a.memory.iter().chain(&a.witness).chain(&a.setup).collect();
+    names.extend(a.virtuals.iter().map(|(_, name)| name));
+    for list in &a.layers {
+        names.extend(list.cached.iter().map(|e| &e.name));
+    }
+    names.extend(a.relations.iter().map(|r| &r.name));
+    names.extend(a.lookups.iter().map(|l| &l.name));
+    names.extend(a.scratch.iter().map(|slot| &slot.name));
+    for l in &a.lookups {
+        let what = format!("{LOOKUP_RULES}: lookup {:?}", l.name);
+        let spelled = l
+            .name
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_');
+        if l.name.is_empty() || !spelled {
+            return Err(format!("{what}: not a non-empty [a-z0-9_] name"));
+        }
+        let uses = names.iter().filter(|name| **name == &l.name).count();
+        if uses != 1 {
+            return Err(format!("{what}: its name is used {uses} times"));
+        }
+        let (channel, channels) = (l.channel, lookup_channel::NAMES.len());
+        if channel as usize >= channels {
+            return Err(format!(
+                "{what}: channel {channel}, but constants::lookup_channel has {channels}"
+            ));
+        }
+        let arity = l.tuple.len();
+        if arity != 1 {
+            return Err(format!(
+                "{what}: a tuple of {arity}, but a range channel looks up one expression"
+            ));
+        }
+        if layout_index(a, l.selector).is_none() {
+            let selector = l.selector;
+            return Err(format!(
+                "{what}: selector {selector} is not a committed column of the layout"
+            ));
+        }
+        for gate in &l.tuple {
+            if !matches!(gate, GateDef::Linear { .. }) {
+                return Err(format!("{what}: an expression that is not Linear"));
+            }
+            let slots = challenge_slots(&[gate]);
+            if !slots.is_empty() {
+                return Err(format!(
+                    "{what}: an expression naming challenge slots {slots:?}"
+                ));
+            }
+            for op in gate.operands() {
+                let readable = match op {
+                    PolyAddress::Virtual(kind) => a.virtuals.iter().any(|(v, _)| *v == kind),
+                    _ => layout_index(a, op).is_some(),
+                };
+                if !readable {
+                    return Err(format!(
+                        "{what}: an expression reads {op}, which a row does not hold"
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// One Law 4 point: `[value, child 0, child 1]` per committed column, per
+/// virtual table kind (`RowIndex`, then `RamLive`) and per scratch slot, and a
+/// value per challenge slot.
 struct Sample {
     committed: Vec<[Fr; 3]>,
-    virt: [Fr; 3],
+    virt: [[Fr; 3]; 2],
     scratch: Vec<[Fr; 3]>,
     challenges: ExternalChallenges,
 }
@@ -438,10 +524,11 @@ fn evaluate(gate: &GateDef, operands: &[[Fr; 3]], challenges: &ExternalChallenge
     eval_gate(gate, &values, challenges)
 }
 
-/// A committed column's, the virtual table's or a scratch slot's sample.
+/// A committed column's, a virtual table's or a scratch slot's sample.
 fn leaf(a: &CircuitArtifact, s: &Sample, op: PolyAddress) -> Option<[Fr; 3]> {
     match op {
-        PolyAddress::Virtual(VirtualKind::RowIndex) => Some(s.virt),
+        PolyAddress::Virtual(VirtualKind::RowIndex) => Some(s.virt[0]),
+        PolyAddress::Virtual(VirtualKind::RamLive) => Some(s.virt[1]),
         PolyAddress::Scratch(i) => s.scratch.get(i as usize).copied(),
         _ => layout_index(a, op).map(|i| s.committed[i]),
     }
@@ -612,6 +699,73 @@ pub fn check_padding(a: &CircuitArtifact) -> Result<(), String> {
     Ok(())
 }
 
+/// The padding contract's product-tree clause, `docs/spec/gkr.md` §4.3: from
+/// `padding.row`, compute every row-local scratch value as `check_padding`
+/// does, at `TRIALS` pseudo-random challenge values and row indices, and
+/// require every column the first halving list reads to be exactly 1, the
+/// multiplicative identity, so an inactive row leaves every product it enters
+/// unchanged. An artifact with no halving list passes.
+///
+/// Does NOT cover: the all-zero row and `zero_row_valid`; halving lists after
+/// the first, which read products rather than rows; rows and challenge values
+/// not sampled; the laws, which it assumes; whether the artifact's shards have
+/// inactive rows at all — a RAM window's have none (`docs/spec/memory.md`
+/// §3.3), and the clause is not asked of it; whether a prover really pads with
+/// `padding.row`.
+pub fn check_padding_identity(a: &CircuitArtifact) -> Result<(), String> {
+    let Some(k) = a.layers.iter().position(|list| list.halving) else {
+        return Ok(());
+    };
+    let (width, given) = (a.committed().len(), a.padding.row.len());
+    if given != width {
+        return Err(format!(
+            "padding identity: padding.row has {given} values for {width} columns"
+        ));
+    }
+    let order = row_local_order(a);
+    let slots = challenge_slots(&a.relations.iter().map(|r| &r.gate).collect::<Vec<_>>());
+    let mask = if a.trace_vars >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << a.trace_vars) - 1
+    };
+    let mut rng = Rng(0x1de7_7177);
+    for _ in 0..TRIALS {
+        let challenges = rng.challenges(&slots);
+        let row = (rng.next() & mask) as usize;
+        let mut scratch = vec![Fr::ZERO; a.scratch.len()];
+        let mut known = vec![false; a.scratch.len()];
+        for &r in &order {
+            let rel = &a.relations[r];
+            let value = row_value(a, &rel.gate, &a.padding.row, row, &scratch, &challenges)
+                .map_err(|e| format!("padding identity: relation {r} ({}): {e}", rel.name))?;
+            if let Some(i) = rel.output.filter(|i| (*i as usize) < scratch.len()) {
+                scratch[i as usize] = value;
+                known[i as usize] = true;
+            }
+        }
+        for entry in &a.layers[k].producing {
+            for op in entry.gate.operands() {
+                let slot = a.scratch.iter().position(|slot| slot.address == op);
+                let Some(i) = slot.filter(|i| known[*i]) else {
+                    return Err(format!(
+                        "padding identity: halving gate list {k} reads {op}, which no row-local \
+                         relation defines"
+                    ));
+                };
+                if scratch[i] != Fr::ONE {
+                    let (name, value) = (&a.scratch[i].name, coeff(Coeff::Literal(scratch[i])));
+                    return Err(format!(
+                        "padding identity: halving gate list {k} reads {op} ({name}), which is \
+                         {value} on padding.row at row {row}, not 1"
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// One row of a witness, as the flat constraint list reads it.
 pub struct WitnessRow {
     /// One value per committed column, in layout order: `M`, `W`, `S`.
@@ -660,6 +814,131 @@ pub fn violated_relations(
         }
     }
     violated
+}
+
+/// Whether `v`'s canonical integer is below `2^bits`: every bit from `bits`
+/// up is clear.
+fn below(v: Fr, bits: u32) -> bool {
+    let bytes = v.to_bytes();
+    (bits..256).all(|i| (bytes[(i / 8) as usize] >> (i % 8)) & 1 == 0)
+}
+
+/// The native lookup evaluator, `docs/spec/memory.md` §7: the names of the
+/// lookups `w` violates, in lookup order. A lookup is violated when its
+/// selector is nonzero on the row and an expression of its tuple has a
+/// canonical integer at or above `2^BITS[channel]`
+/// (`constants::lookup_channel`), `V` read at `w.row`.
+///
+/// Does NOT cover: `w.scratch`, which no lookup reads; the LogUp argument that
+/// discharges a lookup, which S15 builds — this is membership, natively, on one
+/// row; the lookup rules, which it assumes. Panics if `w.committed` is not
+/// shaped to the artifact, or on a lookup whose channel, selector, operands or
+/// coefficients the lookup rules refuse.
+pub fn violated_lookups(a: &CircuitArtifact, w: &WitnessRow) -> Vec<String> {
+    let (given, expected) = (w.committed.len(), a.committed().len());
+    assert_eq!(given, expected, "violated_lookups: committed length");
+    let literal_only = ExternalChallenges::new();
+    let mut violated = Vec::new();
+    for l in &a.lookups {
+        let fail = |why: String| -> ! { panic!("violated_lookups: lookup {}: {why}", l.name) };
+        let Some(&bits) = lookup_channel::BITS.get(l.channel as usize) else {
+            fail(format!("channel {} has no bound", l.channel));
+        };
+        let Some(i) = layout_index(a, l.selector) else {
+            fail(format!("selector {} is not a committed column", l.selector));
+        };
+        let mut out_of_range = false;
+        for gate in &l.tuple {
+            let value = row_value(a, gate, &w.committed, w.row, &[], &literal_only)
+                .unwrap_or_else(|e| fail(e));
+            out_of_range |= !below(value, bits);
+        }
+        if w.committed[i] != Fr::ZERO && out_of_range {
+            violated.push(l.name.clone());
+        }
+    }
+    violated
+}
+
+// ---------------------------------------------------------------------------
+// The memory roots
+// ---------------------------------------------------------------------------
+
+/// The root self-check hook, `docs/spec/memory.md` §1: a memory artifact's
+/// `(read root, write root)`, recomputed from the materialized layers rather
+/// than read off the top. A halving list keeps every column's offset, so the
+/// roots at `outputs[READ_ROOT]` and `outputs[WRITE_ROOT]` are, at their
+/// offsets `j_r` and `j_w`, the products over every row of columns `j_r` and
+/// `j_w` of the layer the first halving list reads. Those two products are
+/// computed directly and must equal the top layer's single values there.
+///
+/// Refuses an artifact with no halving list, an output that is not an inner
+/// address, `values` with a layer count other than the artifact's depth or a
+/// root column of the halving input that is not `2^n_k` rows tall, a top
+/// column that is not one value, and `values` whose products and top disagree.
+///
+/// Does NOT cover: the layers below the first halving list, which it takes as
+/// `values` holds them — `gkr::self_check` recomputes those; whether the roots
+/// reconcile, which is `gkr::reconciles` over every shard; the laws and
+/// `check_memory`, which it assumes. Materializes nothing, but reads every row
+/// of two columns.
+pub fn memory_roots(a: &CircuitArtifact, values: &LayerValues) -> Result<(Fr, Fr), String> {
+    let Some(k) = a.layers.iter().position(|list| list.halving) else {
+        return Err("memory roots: the artifact has no halving list".to_string());
+    };
+    let offset = |position: usize| match a.outputs.get(position) {
+        Some(PolyAddress::Inner { offset, .. }) => Ok(*offset as usize),
+        other => Err(format!(
+            "memory roots: output {position} is {other:?}, not an inner column"
+        )),
+    };
+    let (read, write) = (offset(READ_ROOT)?, offset(WRITE_ROOT)?);
+    // Gate list 0 reads the base and is never halving, so layer k is inner.
+    let layer = k
+        .checked_sub(1)
+        .and_then(|i| values.layers.get(i))
+        .ok_or(format!("memory roots: layer {k} is not materialized"))?;
+    if values.layers.len() != a.depth() {
+        return Err(format!(
+            "memory roots: {} layers are materialized, and the artifact has {}",
+            values.layers.len(),
+            a.depth()
+        ));
+    }
+    let top = values
+        .layers
+        .last()
+        .ok_or("memory roots: no layer is materialized".to_string())?;
+    let rows = 1usize << a.layer_vars(k);
+    let mut roots = [Fr::ZERO; 2];
+    for (root, j) in roots.iter_mut().zip([read, write]) {
+        let (Some(column), Some(at_top)) = (layer.get(j), top.get(j)) else {
+            return Err(format!(
+                "memory roots: column {j} of layer {k} or of the top is missing"
+            ));
+        };
+        if column.len() != rows {
+            return Err(format!(
+                "memory roots: layer {k}'s column {j} has {} rows, not {rows}",
+                column.len()
+            ));
+        }
+        if at_top.len() != 1 {
+            return Err(format!(
+                "memory roots: the top's column {j} has {} rows, not one",
+                at_top.len()
+            ));
+        }
+        let product = (0..column.len()).fold(Fr::ONE, |acc, y| acc * column.get(y));
+        if product != at_top.get(0) {
+            return Err(format!(
+                "memory roots: the product of layer {k}'s column {j} over its rows is not the \
+                 top's value"
+            ));
+        }
+        *root = product;
+    }
+    Ok((roots[0], roots[1]))
 }
 
 // ---------------------------------------------------------------------------
@@ -760,8 +1039,9 @@ fn template(output: Option<PolyAddress>, gate: &GateDef) -> String {
 /// and virtual tables by name, every layer with its variable count, width and
 /// kind, every cached entry, producing gate and enforcing gate in the one
 /// template of `docs/spec/gkr.md` §1 with its relation, the flat relation list
-/// in the same template, the scratch bijection, the output map, the lookups,
-/// the padding contract and the gate catalogue. Addresses are in short
+/// in the same template, the scratch bijection, the output map, the lookups
+/// with their channels and selectors, the padding contract and the gate
+/// catalogue. Addresses are in short
 /// notation; coefficients as `coeff` renders them.
 ///
 /// Does NOT cover: any judgement — it prints what the artifact holds, lawful or
@@ -839,8 +1119,11 @@ pub fn dump(a: &CircuitArtifact) -> String {
     line(format!("lookups ({})", a.lookups.len()));
     for l in &a.lookups {
         let tuple: Vec<String> = l.tuple.iter().map(formula).collect();
-        let (name, channel, tuple) = (&l.name, l.channel, tuple.join(", "));
-        line(format!("  {name} channel {channel}: ({tuple})"));
+        let (name, channel, selector, tuple) = (&l.name, l.channel, l.selector, tuple.join(", "));
+        let channel_name = lookup_channel::NAMES.get(channel as usize).unwrap_or(&"?");
+        line(format!(
+            "  {name} channel {channel} {channel_name}, selector {selector}: ({tuple})"
+        ));
     }
 
     line("\npadding contract".to_string());
@@ -922,7 +1205,8 @@ fn table(column: &MultilinearPoly) -> Vec<Fr> {
 ///
 /// Does NOT cover: names other than the committed columns', virtual tables',
 /// outputs' and enforcing relations'; `format_version`, `coefficient_encoding`,
-/// `lookups`, the padding contract (`check_padding`); construction rules
+/// `lookups` beyond the lookup rules `check_laws` holds, the padding contract
+/// (`check_padding`, `check_padding_identity`); construction rules
 /// outside the laws — `gkr::forward` assumes an artifact that has passed
 /// `CircuitArtifact::validate`, so on one passing the laws and the constants
 /// but breaking such a rule this check's answer means nothing: it may panic,

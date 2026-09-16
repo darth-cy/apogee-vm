@@ -6,10 +6,25 @@ publish.workspace = true
 
 [dependencies]
 constants.workspace = true
+# `constraints::memory`'s frame layout, which keys every memory column
+# `src/memory.rs` builds; `PolyAddress` is the key.
+constraints.workspace = true
+# `Fr`, for the x0 gadget's inverse column and a timestamp column past 32 bits.
+field.workspace = true
+# `BoundaryFinals`, the register and PC finals the verifier's boundary reads.
+gkr-verify.workspace = true
 loader.workspace = true
+# `MultilinearPoly`, the form of a column the memory builders return.
+poly.workspace = true
+# `image_init_column`, `INIT_TEARDOWN`'s setup column.
 program.workspace = true
 serde.workspace = true
 # The archive's one encoding. Featureless, as everywhere in the workspace: it
 # writes through `to_extend` into a plain `Vec`, and reads through the
 # hand-written sequence visitor in `src/archive.rs`.
 postcard.workspace = true
+
+[dev-dependencies]
+# `Instr`, to hold `constraints::memory::frame_queries` to `program::row_kind`
+# instruction by instruction: tests only, never the runtime graph.
+isa.workspace = true
