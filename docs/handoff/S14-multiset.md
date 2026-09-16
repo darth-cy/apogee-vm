@@ -631,7 +631,7 @@ The stage prompt's items as remapped by the owner's design. File paths are under
 | C2 | the window rules | `multiset.rs::window_rules_refuse_each_single_change_of_fibs_statement`; `program/tests/config.rs::the_window_rules_hold_at_their_boundaries` | on fib's real config, `[8191]` passes; `[0]`, `[8192]`, `[8191, 8191]`, `[8191, 1]`, an `INIT_TEARDOWN` count of 2 and a `ZERO_WINDOWS` count of 2 are each refused by their rule |
 | C3 | the boundary scalars and the entry pc | `multiset.rs::a_changed_boundary_scalar_does_not_reconcile` | x2's final ts + 1, x10's final value 1, entry pc + 4: each false |
 | C4 | the halting sentinel | `multiset.rs::the_finals_refuse_a_trace_stopped_before_its_exit_row`, `::a_prefix_claiming_halt_pc_does_not_reconcile` | a prefix's log panics "not HALT_PC"; the prefix's shards with `HALT_PC` in `R_b` do not reconcile, and with the prefix's own final pc they do |
-| C5 | mask booleanity | `multiset.rs::a_pc_query_masked_by_minus_1_reads_as_a_register_and_only_booleanity_refuses_it` | a pc query at mask −1 on padding row 2117 reads x10 and writes 42: reconciles, no obligation, self-check names `pc_mask_boolean`; the same cells at mask 1 do not reconcile |
+| C5 | mask booleanity | `multiset.rs::a_pc_query_masked_by_minus_1_reads_as_a_register_and_only_booleanity_refuses_it` | a pc query at mask −1 on the `ADD_SUB_LUI_AUIPC` frame's first padding row, 657, reads x10 and writes 42: reconciles, no obligation, self-check names `pc_mask_boolean`; the same cells at mask 1 do not reconcile |
 | C6 | boundary absorbed before the challenges | `multiset.rs::a_final_value_solved_after_the_challenges_reconciles_and_is_not_a_u32` | see "The boundary scalars" |
 | C7 | the gap obligation, for coverage | `multiset.rs::a_query_reading_its_own_write_balances_where_no_row_is_and_only_its_gap_catches_it` | a `ram` query at `0x4000_0000` (window 4096, unlisted) and an `rs2` query at register 32, each reading its own write: self-check Ok, `reconciles` true, `violated_lookups` exactly that row's `gap_lo`; with `read_ts` one lower, false |
 | C8 | S16's mask coupling (a documentation test, and S16's tamper target) | `multiset.rs::queries_their_row_does_not_have_reconcile_until_s16_couples_the_masks` | the `ADD_SUB_LUI_AUIPC` frame's padding row 657 with pc mask 0 and an `rd` query moving `x10` to 42 after exit; a live row's `rd` write masked to 0; the exit row, that frame's row 656, given a store over the first stack word's last write: each keeps every gate and obligation and reconciles |
@@ -1123,14 +1123,18 @@ consolidated design (the review's conflict list, G19). The prompt is not edited.
     `ecall_abi.rs`, for constants that are claims about other constants.
 36. **`rd_selected` on an rd write at address 0 is unconstrained** by the gadget, which
     only forces the write to 0. The builder sets it to 0.
-37. **The frame builder keeps eight `Option<MemoryEvent>` per cycle**, about 320 bytes a
-    row, so about 1.3 GB at a `2^22`-row shard. That is fine for tests; S16 and S20 may
-    want to stream.
+37. **The frame builder keeps one `Option<MemoryEvent>` per query of the family's frame,
+    per cycle** — `w` of them, 4 to 7, not a fixed 8 — so roughly 160 to 280 bytes a row
+    and about 0.7 to 1.2 GB at a `2^22`-row shard, against 1.3 GB when every family
+    carried all eight. The row is a `Vec`, so there is also a header and one allocation
+    per row; a fixed-capacity row would trade that for the widest family's footprint.
+    That is fine for tests; S16 and S20 may want to stream, and the per-row allocation is
+    a second reason to.
 38. **Tests pin measured facts about the committed `fib.elf`**:
     - `0x12000` as the only window-0 word;
     - 29 stack words, all first touched by a store;
     - 432 x0 queries;
-    - the gap list at row 10;
+    - the gap list at row 11 of `ADD_SUB_LUI_AUIPC`'s frame, cycle 18;
     - the stale store at `0x7fffff70`.
     A deliberate `kat-gen -- guests` refresh must re-measure them.
 39. **The test frame shards use the smallest power of two at or above the cycle count**
@@ -1301,8 +1305,8 @@ consolidated design (the review's conflict list, G19). The prompt is not edited.
       comes from `is-zero(a7_read − n)`, split across layers to keep degree 2.
   - **Tamper targets**, each to be refused:
     - C8's three forgeries;
-    - the review's live-row probe, a store on fib's row 39 over stack word `0x7fffffa0`
-      writing 99 that the load at cycle 41 then reads.
+    - the review's live-row probe, a store on fib's cycle-40 row over stack word
+      `0x7fffffa0` writing 99 that the load at cycle 41 then reads.
 - **The `S[0]` opening's tamper target.** fib with one byte of `0x12000` flipped: window 0
   and `S[0]` rebuilt from the flipped image, and the one load of that word reading the
   flipped word. Every S14 check accepts this, including discharge against the prover's own
@@ -1326,8 +1330,8 @@ consolidated design (the review's conflict list, G19). The prompt is not edited.
       `HALT_PC`, the finals and windows taken from the prefix;
     - **running past halt**: after the exit row, a live row at `pc = HALT_PC` reading pc 1
       at `4n`, writing it at `4(n + 1)` and rewriting `x10 := 42`;
-    - **resuming from `HALT_PC`**: row 100 writing `next_pc = HALT_PC` and row 101 reading
-      pc 1;
+    - **resuming from `HALT_PC`**: a live row writing `next_pc = HALT_PC` and the next row
+      reading pc 1;
     - **exit status**: the exit row's `a0` write changed from the status it read (0) to 42,
       the finals claiming `v_10 = 42`.
 
