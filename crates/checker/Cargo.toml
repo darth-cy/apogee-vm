@@ -25,6 +25,12 @@ poly.workspace = true
 emulator.workspace = true
 loader.workspace = true
 program.workspace = true
+# S15 acceptance 1 and 3: the toy's witness and multiplicity columns are
+# committed, and `g`/`beta` are drawn strictly after every absorb.
+pcs.workspace = true
+srs.workspace = true
+rayon.workspace = true
+curve.workspace = true
 # The S13 base-layer binding: the proofs absorb `witness_digest` of the
 # committed columns first. S16 absorbs commitments instead.
 sumcheck.workspace = true

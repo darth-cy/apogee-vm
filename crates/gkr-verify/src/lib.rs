@@ -21,8 +21,10 @@ use transcript::Transcript;
 
 pub use sumcheck::SumcheckProof;
 
+mod lookup;
 mod memory;
 
+pub use lookup::{channel_holds, insert_lookup_challenges};
 pub use memory::{boundary_factors, reconciles, window_challenges, BoundaryFinals};
 
 // ---------------------------------------------------------------------------

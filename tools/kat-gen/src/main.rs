@@ -25,6 +25,7 @@
 //! | `program` | `crates/program/tests/vectors/*` (the identities need the ceremony file) |
 //! | `gkr`     | `crates/constraints/tests/vectors/toy_*` (the S13 toy circuit, cached and cache-free) |
 //! | `memory`  | `crates/constraints/tests/vectors/{memory_frame,image_window,zero_window}.bin` (S14's memory artifacts) |
+//! | `lookup`  | `crates/constraints/tests/vectors/lookup_toy.bin` (S15's combined toy) |
 //! | `guests`  | the guest ELFs themselves -- opt-in only, see `DEFAULT_GROUPS` |
 
 use std::fs;
@@ -38,6 +39,7 @@ mod gkr;
 mod guests;
 mod isa;
 mod loader;
+mod lookup;
 mod memory;
 mod msm;
 mod pairing;
@@ -49,7 +51,7 @@ mod srs;
 mod tower;
 
 /// Every group, in the order a reader of the tower would meet them.
-const GROUPS: [(&str, fn()); 14] = [
+const GROUPS: [(&str, fn()); 15] = [
     ("field", field::generate),
     ("poly", poly::generate),
     ("curve", curve::generate),
@@ -63,6 +65,7 @@ const GROUPS: [(&str, fn()); 14] = [
     ("program", program::generate),
     ("gkr", gkr::generate),
     ("memory", memory::generate),
+    ("lookup", lookup::generate),
     ("guests", guests::generate),
 ];
 
@@ -79,9 +82,9 @@ const GROUPS: [(&str, fn()); 14] = [
 /// one machine, with `cargo run -p kat-gen -- guests`, and everything CI can
 /// reproduce from them -- the objdump and nm listings -- is in `loader`, which
 /// does run by default.
-const DEFAULT_GROUPS: [&str; 13] = [
+const DEFAULT_GROUPS: [&str; 14] = [
     "field", "poly", "curve", "tower", "pairing", "msm", "srs", "pcs", "loader", "isa", "program",
-    "gkr", "memory",
+    "gkr", "memory", "lookup",
 ];
 
 fn main() {

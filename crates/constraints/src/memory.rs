@@ -666,19 +666,24 @@ fn assemble(
         lookups,
         zero_row_valid,
     );
+    let top = artifact.depth() as u32;
     debug_assert_eq!(
-        artifact.outputs,
-        vec![
-            PolyAddress::Inner {
-                layer: artifact.depth() as u32,
-                offset: memory::READ_ROOT as u32,
-            },
-            PolyAddress::Inner {
-                layer: artifact.depth() as u32,
-                offset: memory::WRITE_ROOT as u32,
-            },
-        ],
-        "the read tree is output {}, the write tree output {}",
+        artifact.outputs.get(..2),
+        Some(
+            [
+                PolyAddress::Inner {
+                    layer: top,
+                    offset: memory::READ_ROOT as u32,
+                },
+                PolyAddress::Inner {
+                    layer: top,
+                    offset: memory::WRITE_ROOT as u32,
+                },
+            ]
+            .as_slice()
+        ),
+        "the read tree is output {}, the write tree output {}; every channel's root pair \
+         follows them",
         memory::READ_ROOT,
         memory::WRITE_ROOT
     );

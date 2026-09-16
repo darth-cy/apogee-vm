@@ -20,7 +20,8 @@ use constraints::lookup::ChannelSpec;
 use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress, VirtualKind, CATALOGUE};
 use field::Fr;
 use gkr::{
-    eval_gate, forward, gate_values, virtual_at_row, BaseLayer, ExternalChallenges, LayerValues,
+    eval_gate, forward, gate_values, insert_lookup_challenges, virtual_at_row, BaseLayer,
+    ExternalChallenges, LayerValues,
 };
 use poly::{MultilinearPoly, PolyBacking};
 use std::collections::BTreeMap;
@@ -310,7 +311,7 @@ pub fn check_law3(a: &CircuitArtifact) -> Result<(), String> {
 /// giving every committed column, each virtual table kind and every scratch
 /// slot a value and two child values, and every challenge slot a value, each relation and its
 /// gate agree through the kernel — `L{k}[j]` read as its scratch slot,
-/// `C{k}[j]` evaluated from its entry, a `TreeProduct` reading the children.
+/// `C{k}[j]` evaluated from its entry, a halving gate reading the children.
 ///
 /// Does NOT cover: operand locality (Law 1) or widths (Law 2); relation
 /// operands outside §2's set except as addresses it cannot evaluate; the degree
@@ -388,7 +389,7 @@ pub fn check_law4(a: &CircuitArtifact) -> Result<(), String> {
     for trial in 0..TRIALS {
         let mut triple = || [rng.fr(), rng.fr(), rng.fr()];
         let committed = a.committed().iter().map(|_| triple()).collect();
-        let virt = [triple(), triple()];
+        let virt = a.virtuals.iter().map(|_| triple()).collect();
         let scratch = (0..a.scratch.len()).map(|_| triple()).collect();
         let challenges = rng.challenges(&slots);
         let s = Sample {
@@ -532,30 +533,38 @@ fn check_lookups(a: &CircuitArtifact) -> Result<(), String> {
 }
 
 /// One Law 4 point: `[value, child 0, child 1]` per committed column, per
-/// virtual table kind (`RowIndex`, then `RamLive`) and per scratch slot, and a
-/// value per challenge slot.
+/// virtual table the artifact lists — in `virtuals` order, which is the index
+/// space every reader of a virtual uses — and per scratch slot, and a value per
+/// challenge slot.
 struct Sample {
     committed: Vec<[Fr; 3]>,
-    virt: [[Fr; 3]; 2],
+    virt: Vec<[Fr; 3]>,
     scratch: Vec<[Fr; 3]>,
     challenges: ExternalChallenges,
 }
 
-/// The kernel over sampled operands: a `TreeProduct` reads its operand's
-/// children, every other gate its operands' values.
+/// The kernel over sampled operands: a halving gate reads each of its operands
+/// at both children, every other gate its operands' values.
 fn evaluate(gate: &GateDef, operands: &[[Fr; 3]], challenges: &ExternalChallenges) -> Fr {
     let values: Vec<Fr> = match gate {
-        GateDef::TreeProduct { .. } => vec![operands[0][1], operands[0][2]],
+        GateDef::TreeProduct { .. } | GateDef::TreeCross { .. } => {
+            operands.iter().flat_map(|v| [v[1], v[2]]).collect()
+        }
         _ => operands.iter().map(|v| v[0]).collect(),
     };
     eval_gate(gate, &values, challenges)
 }
 
-/// A committed column's, a virtual table's or a scratch slot's sample.
+/// A committed column's, a virtual table's or a scratch slot's sample. A
+/// virtual is found by its position in `virtuals`, as every reader of one
+/// finds it, so a kind the artifact does not list has no sample.
 fn leaf(a: &CircuitArtifact, s: &Sample, op: PolyAddress) -> Option<[Fr; 3]> {
     match op {
-        PolyAddress::Virtual(VirtualKind::RowIndex) => Some(s.virt[0]),
-        PolyAddress::Virtual(VirtualKind::RamLive) => Some(s.virt[1]),
+        PolyAddress::Virtual(kind) => a
+            .virtuals
+            .iter()
+            .position(|(v, _)| *v == kind)
+            .and_then(|i| s.virt.get(i).copied()),
         PolyAddress::Scratch(i) => s.scratch.get(i as usize).copied(),
         _ => layout_index(a, op).map(|i| s.committed[i]),
     }
@@ -579,7 +588,10 @@ fn gate_operands(
     gate: &GateDef,
     in_cached: bool,
 ) -> Result<Vec<[Fr; 3]>, String> {
-    let tree = matches!(gate, GateDef::TreeProduct { .. });
+    let tree = matches!(
+        gate,
+        GateDef::TreeProduct { .. } | GateDef::TreeCross { .. }
+    );
     let mut out = Vec::new();
     for op in gate.operands() {
         let value = match op {
@@ -611,7 +623,7 @@ fn gate_operands(
 // ---------------------------------------------------------------------------
 
 /// The row-local relations, each after every relation whose scratch slot it
-/// reads. A relation is row-local when it is not a `TreeProduct` and every
+/// reads. A relation is row-local when it is not a halving shape and every
 /// scratch slot it reads is the output of a row-local relation; this is that
 /// definition's least fixpoint, so a cycle or an undefined slot is not
 /// row-local.
@@ -621,7 +633,13 @@ fn row_local_order(a: &CircuitArtifact) -> Vec<usize> {
     loop {
         let before = order.len();
         for (r, rel) in a.relations.iter().enumerate() {
-            if order.contains(&r) || matches!(rel.gate, GateDef::TreeProduct { .. }) {
+            // A halving relation reads its operands at two rows, so it is not
+            // row-local and nothing below it is either.
+            let halving = matches!(
+                rel.gate,
+                GateDef::TreeProduct { .. } | GateDef::TreeCross { .. }
+            );
+            if order.contains(&r) || halving {
                 continue;
             }
             let ready = rel.gate.operands().iter().all(|op| match *op {
@@ -701,7 +719,7 @@ fn padding_failure(a: &CircuitArtifact, committed: &[Fr]) -> Result<Option<Strin
 /// committed row the same way and require the verdict to equal
 /// `zero_row_valid`. Row-local is defined on `row_local_order`.
 ///
-/// Does NOT cover: relations that are not row-local (`TreeProduct`s and all
+/// Does NOT cover: relations that are not row-local (halving shapes and all
 /// that read one), which no single row decides; rows and challenge values not
 /// sampled; the laws, which it assumes; whether a prover really pads with
 /// `padding.row`.
@@ -828,7 +846,7 @@ pub struct WitnessRow {
 /// row, an enforcing one when its gate is nonzero. Row-local is
 /// `check_padding`'s definition.
 ///
-/// Does NOT cover: `TreeProduct` relations and every relation reading one's
+/// Does NOT cover: halving relations and every relation reading one's
 /// output, which span rows; the laws, which it assumes. Panics if `w` is not
 /// shaped to the artifact, a relation reads an address a row cannot supply, or
 /// `challenges` lacks a slot a relation names.
@@ -972,22 +990,25 @@ pub struct ChannelSum {
 
 /// The LogUp self-check hook, `docs/spec/lookup.md` §7: every channel's
 /// fractional sum and denominator product, recomputed natively from the base
-/// layer and the artifact's lookup list, and the rows whose gated tuple no
-/// table row answers.
+/// layer and the artifact's lookup list, and — when the sum is not 0 — the rows
+/// whose gated tuple no table row answers.
 ///
-/// The gated tuple, the compression and the neutral entry are re-derived here
-/// from `docs/spec/lookup.md` §4 and §5 rather than read from
-/// `constraints::lookup`, so a channel's root has two independent descriptions.
+/// The gating, the compression and the neutral entry are re-derived here from
+/// `docs/spec/lookup.md` §4 and §5 rather than read from `constraints::lookup`,
+/// so a channel's root has two independent descriptions.
 ///
 /// Refuses a spec whose channel has no lookup or whose table width a lookup
-/// disagrees with, a column the base does not hold, and a **zero denominator**,
-/// which it names: a zero leaf denominator is what makes the root's `den != 0`
-/// check bite, and no native sum exists over it.
+/// disagrees with, a column the base does not hold, an expression that is not
+/// a `Linear` with literal coefficients, and a **zero denominator**, which it
+/// names: a zero leaf denominator is what makes the root's `den != 0` check
+/// bite, and no native sum exists over it.
 ///
-/// Does NOT cover: whether the circuit's own tree computes these values —
+/// Does NOT cover: `unmatched` on a channel whose sum is 0 — the list is left
+/// empty there, because a tuple outside the table balancing anyway is a
+/// coincidence of probability `~1/|Fr|`, and finding it costs a second pass
+/// over every row; whether the circuit's own tree computes these values —
 /// [`check_channel_roots`] is that comparison; the laws and the lookup rules,
-/// which it assumes; a channel `specs` does not list. Reads every row of every
-/// column a lookup or a table names.
+/// which it assumes. Reads every row of every column a lookup or a table names.
 pub fn channel_sums(
     a: &CircuitArtifact,
     base: &BaseLayer,
@@ -1001,6 +1022,29 @@ pub fn channel_sums(
     let beta = challenges
         .get(challenge_slot::LOOKUP_BETA)
         .ok_or("channel sums: challenge slot lookup_beta was not supplied".to_string())?;
+    // The committed layout resolved once: `BaseLayer::get` is a linear scan,
+    // and reading a row through it per lookup is quadratic in the width.
+    let layout: Vec<&MultilinearPoly> = a
+        .committed()
+        .into_iter()
+        .map(|address| {
+            base.get(address)
+                .ok_or(format!("channel sums: the base has no column {address}"))
+        })
+        .collect::<Result<_, _>>()?;
+    let source = |address: PolyAddress| -> Result<Source, String> {
+        match address {
+            PolyAddress::Virtual(kind) => Ok(Source::Virtual(kind)),
+            other => layout_index(a, other)
+                .map(Source::Column)
+                .ok_or(format!("channel sums: {other} is not a committed column")),
+        }
+    };
+    let read = |src: &Source, row: usize| match src {
+        Source::Column(i) => layout[*i].get(row),
+        Source::Virtual(kind) => virtual_at_row(*kind, row),
+    };
+
     let mut out = Vec::new();
     for spec in specs {
         let name = lookup_channel::NAMES
@@ -1019,59 +1063,75 @@ pub fn channel_sums(
         let powers: Vec<Fr> = (0..width)
             .scan(Fr::ONE, |p, _| {
                 let at = *p;
-                *p = *p * beta;
+                *p *= beta;
                 Some(at)
             })
             .collect();
-        let column = |address: PolyAddress, row: usize| -> Result<Fr, String> {
-            match address {
-                PolyAddress::Virtual(kind) => Ok(virtual_at_row(kind, row)),
-                other => base
-                    .get(other)
-                    .map(|c| c.get(row))
-                    .ok_or(format!("channel sums: the base has no column {other}")),
+        let table: Vec<Source> = spec
+            .table
+            .iter()
+            .map(|t| source(*t))
+            .collect::<Result<_, _>>()?;
+        let multiplicity = source(spec.multiplicity)?;
+        // Every lookup resolved once: its selector, and per tuple position the
+        // literal-weighted sources and the constant.
+        let mut resolved: Vec<(Source, Vec<(Vec<(Fr, Source)>, Fr)>)> = Vec::new();
+        for l in &mine {
+            if l.tuple.len() != width {
+                return Err(format!(
+                    "channel sums: lookup `{}` has {} expressions and channel `{name}`'s table \
+                     has {width} columns",
+                    l.name,
+                    l.tuple.len()
+                ));
             }
-        };
-        // The table, as a map from its raw tuple to its lowest row: a table of
-        // 2^n rows over a domain of fewer values repeats, and the lowest row
-        // holding a value is the one a multiplicity counts on.
-        let mut table: BTreeMap<Vec<[u8; 32]>, usize> = BTreeMap::new();
-        let mut table_tuple = Vec::with_capacity(rows);
-        for row in 0..rows {
             let mut tuple = Vec::with_capacity(width);
-            for t in &spec.table {
-                tuple.push(column(*t, row)?);
+            for e in &l.tuple {
+                let GateDef::Linear { terms, constant } = e else {
+                    return Err(format!(
+                        "channel sums: lookup `{}` has an expression that is not Linear",
+                        l.name
+                    ));
+                };
+                let literal = |c: &Coeff| match c {
+                    Coeff::Literal(v) => Ok(*v),
+                    Coeff::Challenge(slot) => Err(format!(
+                        "channel sums: lookup `{}` weights a term by challenge slot {slot}",
+                        l.name
+                    )),
+                };
+                let mut weighted = Vec::with_capacity(terms.len());
+                for (c, x) in terms {
+                    weighted.push((literal(c)?, source(*x)?));
+                }
+                tuple.push((weighted, literal(constant)?));
             }
-            table
-                .entry(tuple.iter().map(|v| v.to_bytes()).collect())
-                .or_insert(row);
-            table_tuple.push(tuple);
+            resolved.push((source(l.selector)?, tuple));
         }
+
+        // One pass over the rows: the trace's fractions, the table's, and the
+        // distinct gated tuples, of which a trace has a handful where the
+        // table has a row each.
         let mut sum = Fr::ZERO;
         let mut denominator = Fr::ONE;
-        let mut unmatched = Vec::new();
+        let mut looked_up: BTreeMap<Vec<[u8; 32]>, usize> = BTreeMap::new();
+        let mut first_seen: Vec<(usize, String, Vec<[u8; 32]>)> = Vec::new();
+        let mut tuple = vec![Fr::ZERO; width];
         for row in 0..rows {
-            let selector = |l: &constraints::LookupExpr| column(l.selector, row);
-            for l in &mine {
-                if l.tuple.len() != width {
-                    return Err(format!(
-                        "channel sums: lookup `{}` has {} expressions and channel `{name}`'s \
-                         table has {width} columns",
-                        l.name,
-                        l.tuple.len()
-                    ));
+            for (l, (selector, expressions)) in mine.iter().zip(&resolved) {
+                let s = read(selector, row);
+                for (j, (terms, constant)) in expressions.iter().enumerate() {
+                    let raw = terms
+                        .iter()
+                        .fold(*constant, |acc, (c, src)| acc + *c * read(src, row));
+                    tuple[j] = gate_tuple(spec.channel, j, s, raw);
                 }
-                let s = selector(l)?;
-                let mut tuple = Vec::with_capacity(width);
-                for (j, e) in l.tuple.iter().enumerate() {
-                    let raw = row_value(a, e, &[], row, &[], challenges).or_else(|_| {
-                        let committed = committed_row(a, base, row)?;
-                        row_value(a, e, &committed, row, &[], challenges)
-                    })?;
-                    tuple.push(gate_tuple(spec.channel, j, s, raw));
-                }
-                if !table.contains_key(&tuple.iter().map(|v| v.to_bytes()).collect::<Vec<_>>()) {
-                    unmatched.push((row, l.name.clone()));
+                let bytes: Vec<[u8; 32]> = tuple.iter().map(|v| v.to_bytes()).collect();
+                if let Some(count) = looked_up.get_mut(&bytes) {
+                    *count += 1;
+                } else {
+                    looked_up.insert(bytes.clone(), 1);
+                    first_seen.push((row, l.name.clone(), bytes));
                 }
                 let d = compress(&powers, &tuple) + g;
                 if d == Fr::ZERO {
@@ -1080,18 +1140,42 @@ pub fn channel_sums(
                         l.name
                     ));
                 }
-                denominator = denominator * d;
-                sum = sum + d.inverse().expect("a nonzero denominator inverts");
+                denominator *= d;
+                sum += d.inverse().expect("a nonzero denominator inverts");
             }
-            let d = compress(&powers, &table_tuple[row]) + g;
+            for (j, t) in table.iter().enumerate() {
+                tuple[j] = read(t, row);
+            }
+            let d = compress(&powers, &tuple) + g;
             if d == Fr::ZERO {
                 return Err(format!(
                     "channel sums: channel `{name}`'s table has denominator 0 at row {row}"
                 ));
             }
-            denominator = denominator * d;
-            let m = column(spec.multiplicity, row)?;
-            sum = sum - m * d.inverse().expect("a nonzero denominator inverts");
+            denominator *= d;
+            sum -= read(&multiplicity, row) * d.inverse().expect("a nonzero denominator inverts");
+        }
+
+        // A second pass, only where the channel did not balance: which gated
+        // tuples the table never holds, reported at the first row producing
+        // each.
+        let mut unmatched = Vec::new();
+        if sum != Fr::ZERO {
+            for row in 0..rows {
+                if looked_up.is_empty() {
+                    break;
+                }
+                for (j, t) in table.iter().enumerate() {
+                    tuple[j] = read(t, row);
+                }
+                looked_up.remove(&tuple.iter().map(|v| v.to_bytes()).collect::<Vec<_>>());
+            }
+            unmatched = first_seen
+                .into_iter()
+                .filter(|(_, _, bytes)| looked_up.contains_key(bytes))
+                .map(|(row, name, _)| (row, name))
+                .collect();
+            unmatched.sort();
         }
         out.push(ChannelSum {
             channel: spec.channel,
@@ -1103,16 +1187,13 @@ pub fn channel_sums(
     Ok(out)
 }
 
-/// One row of the committed layout, in layout order.
-fn committed_row(a: &CircuitArtifact, base: &BaseLayer, row: usize) -> Result<Vec<Fr>, String> {
-    a.committed()
-        .into_iter()
-        .map(|address| {
-            base.get(address)
-                .map(|c| c.get(row))
-                .ok_or(format!("channel sums: the base has no column {address}"))
-        })
-        .collect()
+/// Where one value of a channel's recomputation is read.
+#[derive(Clone, Copy, Debug)]
+enum Source {
+    /// A committed column, by its position in the layout.
+    Column(usize),
+    /// A virtual table, by its closed form at the row.
+    Virtual(VirtualKind),
 }
 
 /// `Σ_j β^j·tuple_j`.
@@ -1134,7 +1215,6 @@ fn gate_tuple(channel: u32, j: usize, s: Fr, raw: Fr) -> Fr {
         _ => s * raw,
     }
 }
-
 /// Each channel's `(num, den)` root, read from the materialized top layer.
 ///
 /// The output map is the memory roots, where the artifact has any, then one
@@ -1231,12 +1311,34 @@ pub fn check_lookup_discharge(a: &CircuitArtifact) -> Result<(), String> {
     let width = a.committed().len();
     let slots = challenge_slots(&all_gates(a));
     let scratch = vec![Fr::ZERO; a.scratch.len()];
-    let mut rng = Rng(0x10_09_0217);
+    // `beta`'s powers are derived slots, so a point where they are independent
+    // random values is a point no gate's coefficients mean what they say.
+    let decoder = a
+        .lookups
+        .iter()
+        .find(|l| l.channel == lookup_channel::DECODER)
+        .map_or(0, |l| l.tuple.len());
+    let mut rng = Rng(0x1009_0217);
     let points: Vec<(Vec<Fr>, usize, ExternalChallenges)> = (0..TRIALS)
         .map(|_| {
             let committed: Vec<Fr> = (0..width).map(|_| rng.fr()).collect();
             let row = rng.next() as usize;
-            (committed, row, rng.challenges(&slots))
+            let lookup: Vec<u32> = challenge_slot::LOOKUP_BETA_POWERS
+                .iter()
+                .copied()
+                .chain([
+                    challenge_slot::LOOKUP_G,
+                    challenge_slot::LOOKUP_DECODER_NEUTRAL,
+                ])
+                .collect();
+            let others: Vec<u32> = slots
+                .iter()
+                .copied()
+                .filter(|slot| !lookup.contains(slot))
+                .collect();
+            let mut challenges = rng.challenges(&others);
+            insert_lookup_challenges(&mut challenges, rng.fr(), rng.fr(), decoder);
+            (committed, row, challenges)
         })
         .collect();
     let mut used = vec![0usize; a.layers[0].producing.len()];
@@ -1303,8 +1405,8 @@ fn lookup_denominator(
     let mut power = Fr::ONE;
     for (j, e) in l.tuple.iter().enumerate() {
         let raw = row_value(a, e, committed, row, &[], challenges)?;
-        value = value + power * gate_tuple(l.channel, j, s, raw);
-        power = power * beta;
+        value += power * gate_tuple(l.channel, j, s, raw);
+        power *= beta;
     }
     Ok(value + g)
 }
