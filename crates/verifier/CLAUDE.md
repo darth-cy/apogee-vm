@@ -49,5 +49,5 @@ verifier never takes identity from the key or the proof.
 | File | Covers |
 | --- | --- |
 | `src/lib.rs` (unit) | the core's opening width is `pcs::PROOF_BYTES` |
-| `tests/signature.rs` | acceptance 12: `verify_shard` and `reduce_shard` pinned to `(&VerifyingKey, &ShardProof, &PublicInputs)` at compile time; the `SrsVerifier` layout round-trips and an off-curve point is refused |
+| `tests/signature.rs` | acceptance 12: `verify_shard` and `reduce_shard` pinned to `(&VerifyingKey, &ShardProof, &PublicInputs)` at compile time; the `SrsVerifier` layout, over three distinct points, round-trips field by field, and each of the three with one bit flipped is refused |
 | `tests/cli.rs` | **`#[ignore]`d** (it proves the S16 statement first): acceptance 10's CLI half — the dumped key, statement and proofs verify; another identity is refused; a flipped bit in each proof, the statement and the key is refused; each proof alone, and each given twice, refused as not the statement's shards, and the two in reverse order accepted; a usage error exits 2 |

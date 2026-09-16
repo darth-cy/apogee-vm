@@ -100,7 +100,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
-cargo test --workspace                      # 761 tests as of S15; 30 more are #[ignore]d
+cargo test --workspace                      # 796 tests as of S16; 44 more are #[ignore]d
 cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 4.63 GB a pass, 30 min on a runner
 cargo test -p prover --test acceptance -- --include-ignored --test-threads=1  # DEFERRED; S16's statement, 8.6 GB peak
 cargo test -p verifier --test cli -- --include-ignored --test-threads=1       # DEFERRED; ditto

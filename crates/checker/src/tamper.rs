@@ -251,3 +251,26 @@ fn prove_all(
     let public = public_inputs(&global, &proofs);
     (global, proofs, public)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A refusal's class is its variant, whatever its reason or layer, except
+    /// that a `Lookup` must also name the channel.
+    #[test]
+    fn a_class_is_the_variant_and_a_lookups_channel() {
+        use VerifyError::*;
+        assert!(same_class(&Statement("a"), &Statement("b")));
+        assert!(same_class(&MemoryArgument("a"), &MemoryArgument("b")));
+        assert!(same_class(
+            &Constraint { layer: 3 },
+            &Constraint { layer: 0 }
+        ));
+        assert!(same_class(&Opening, &Opening));
+        assert!(same_class(&Lookup { channel: 1 }, &Lookup { channel: 1 }));
+        assert!(!same_class(&Lookup { channel: 0 }, &Lookup { channel: 3 }));
+        assert!(!same_class(&Statement("a"), &Malformed("a")));
+        assert!(!same_class(&Opening, &MemoryArgument("a")));
+    }
+}

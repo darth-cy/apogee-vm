@@ -257,6 +257,21 @@ fn a13_the_teardown_binds_the_final_values() {
     h.assert_rejects(&stamped, (INIT, 0), MEMORY);
     h.assert_rejects(&stamped, (ADD, 0), MEMORY);
     let (public, _) = h.honest();
+    // A boundary timestamp past the clock, proved under: step 10 refuses it
+    // before reconciliation. Only an in-memory statement can carry one;
+    // `PublicInputs::from_bytes` refuses it first.
+    let mut late = public.boundary;
+    late.reg_ts[5] = 1 << 38;
+    let late = Tamper {
+        cells: vec![],
+        boundary: Some(late),
+    };
+    assert_eq!(
+        h.run(&late, (ADD, 0)),
+        Err(VerifyError::MemoryArgument(
+            "a boundary timestamp is not below 2^38"
+        ))
+    );
     let mut finals = public.boundary;
     assert_eq!(finals.reg_values[9], common::RESULT);
     finals.reg_values[9] = common::RESULT + 1;

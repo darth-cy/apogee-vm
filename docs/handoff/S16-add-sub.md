@@ -165,10 +165,6 @@ pub fn shard_columns(setup: &ProverSetup, archive: &TraceArchive, family: Family
 pub fn prove_shard(ctx: &ProvingContext, archive: &TraceArchive, family: FamilyId, shard_idx: u32) -> ShardProof;
 pub fn prove_shard_columns(ctx: &ProvingContext, family: FamilyId, shard_idx: u32,
                            columns: Vec<(PolyAddress, MultilinearPoly)>) -> (ShardProof, Vec<TranscriptEvent>);
-impl ProvingContext<'_> {
-    pub fn gkr_part(&self, family: FamilyId, index: u32, base: &BaseLayer) -> ShardGkr;
-    pub fn opening_part(&self, shard: ShardGkr, base: &BaseLayer) -> (ShardProof, Vec<TranscriptEvent>);
-}
 pub fn advance(setup: &ProverSetup, archive: &mut TraceArchive, until: Phase) -> Result<(), ProverError>;  // resume
 pub fn finish(archive: &TraceArchive) -> Result<(PublicInputs, Vec<ShardProof>), ProverError>;
 pub enum ProverError { Unregistered { family: FamilyId, height: u32 }, Key(String), Trace(String), Archive(String) }
@@ -442,6 +438,60 @@ path); two wording nits.
 
 ---
 
+## Mutation testing
+
+Four agents, each in its own worktree at the first S16 commit, made one semantic edit at a
+time to the new code — a check removed or weakened, a constant or a gate term changed, a
+transcript message dropped or moved — ran the suites named for it, and reverted. The
+proof-level group ran the deferred suites one mutant at a time.
+
+| Group | Mutants | Caught | Survived |
+| --- | --- | --- | --- |
+| `verifier-core` (steps 1–6, the key's load rules, the readers, the transcripts) | 54 | 43 | 11 |
+| the add/sub circuit, against the row suite with its fixture and name pins skipped | 57 | 43 | 14 |
+| the G1 absorption, the archive, the `SrsVerifier` codec, `program`'s wrappers, tags | 17 | 12 | 5 |
+| steps 7–12, the fill and the harness, against the deferred suites | 11 | 7 | 4 |
+| **all** | **139** | **105** | **34** |
+
+**15 survivors were test gaps, and each is closed by a test that now kills it** (re-run
+against the mutant):
+
+- **Step 10's root comparison** — the one link between the roots a shard's proof
+  establishes and the roots reconciliation multiplies. Without it a statement whose
+  root pair is scaled by a constant verifies on every shard; the harness always built the
+  statement from the proofs, so nothing had tried. `acceptance.rs` now has that statement,
+  refused by exactly that check on the init shard and accepted by the add/sub shard.
+- **Four circuit rows** the row suite lacked: a padding row claiming a kind bit and
+  rewriting `x10` (the mask rules' `m_pc` factor), a padding row storing into RAM, an
+  unreduced `addi` and `sub` (the range check on every kind, not only add), and a
+  `next_pc` past 32 bits whose high halfword is solved in the field.
+- **The window constant of a `ZERO_WINDOWS` shard** — no suite at any speed built one —
+  and which squeeze is `g` and which `β`.
+- **A boundary scalar wider than 64 bits** with in-range low bytes, which the reader had
+  refused untested; a key one setup list short in memory; a boundary timestamp past the
+  clock reaching step 10 in memory.
+- **The `SrsVerifier` codec**: its test used one point for both G2 fields, so a swapped
+  offset passed, and never flipped a bit in a G2 point.
+- **Infrastructure**: `content(PostExecution)` panicking; the post-commit, post-GKR and
+  final snapshot sections refusing trailing bytes (`decode_final` extracted to test it);
+  the harness's class comparison.
+
+**16 are equivalent or redundant**, each with the reason in the agent's report: step 6's
+output-width check and `gkr_verify::verify`'s own (each masks the other); two dead error
+arms for a loaded key; the key load's `validate`, `check_memory` and `check_discharge`
+after byte equality with a registry circuit the constructor already checked (kept, as
+§7.2 says, on purpose); the key's canonical re-encode after canonical sub-decoders;
+step 8, which `gkr_verify::verify` makes true by construction; a gate scaled by 2; four
+gate edits that only add constraints on cells no memory event reads, or restate what the
+memory argument already forces; two channel relabelings the prover and verifier follow
+together.
+
+**3 are caught only by the deferred suites**: the decoder lookup's selector moved to one
+kind bit, the decoder tuple reordered (the honest prover cannot count it), and `advance`
+missing its post-GKR stop.
+
+---
+
 ## Deferred work, by stage
 
 **S17 (the jump/branch/slt family, the first generic-channel consumer).**
@@ -491,12 +541,12 @@ CI already builds the core for `riscv32imac`.
 On macOS (18 cores, 48 GB), every gate the root `CLAUDE.md` lists, at the final tree:
 
 - `fmt --check` in all four workspaces, and `clippy -D warnings` in all four;
-- `cargo test --workspace`: **790 passed, 43 `#[ignore]`d** (761 and 30 at S15). The new
-  suites that run in CI: `verifier-core` — `tests/wire.rs` 5, `tests/reduce.rs` 5, unit 4;
-  `verifier` — `tests/signature.rs` 2, unit 1; `checker/tests/add_sub.rs` 7;
-  `transcript/tests/g1.rs` 2; one each in `constraints::add_sub`'s unit tests, in
-  `trace`'s archive unit tests and in `kat-gen`'s `family` group — 29 in all. The new ignored ones are the three deferred suites below and
-  `loader/tests/qemu.rs`' addsub case;
+- `cargo test --workspace`: **796 passed, 44 `#[ignore]`d** (761 and 30 at S15). The 35
+  new tests that run in CI: `verifier-core` — `tests/wire.rs` 5, `tests/reduce.rs` 7, unit
+  4; `verifier` — `tests/signature.rs` 2, unit 1; `checker` — `tests/add_sub.rs` 7, unit 1;
+  `prover` unit 2; `transcript/tests/g1.rs` 2; `trace`'s archive unit tests 2; one each in
+  `constraints::add_sub`'s unit tests and in `kat-gen`'s `family` group. The 14 new ignored
+  ones are the three deferred suites below and `loader/tests/qemu.rs`' addsub case;
 - the `riscv32imac` build of `field`, `constants`, `transcript`, `poly`, `sumcheck`,
   `constraints`, `gkr-verify` **and `verifier-core`**, which CI now builds too;
 - `cargo run -p kat-gen`, then the fixture diff: `add_sub.bin` regenerates byte for byte
@@ -510,18 +560,17 @@ On macOS (18 cores, 48 GB), every gate the root `CLAUDE.md` lists, at the final 
   `verifier-core`;
 - S15's deferred `checker --test logup`: 9 passed, 203 s — S16 wires its channels.
 
-**The three deferred suites**, `--include-ignored --test-threads=1`, after the review's
-changes:
+**The three deferred suites**, `--include-ignored --test-threads=1`, on the final tree:
 
 | Suite | Result | Wall | Peak resident |
 | --- | --- | --- | --- |
-| `prover --test acceptance` | 6 passed | 302 s | 8.64 GB |
-| `verifier --test cli` | 1 passed | 25 s | 8.54 GB |
-| `checker --test tamper` | 5 passed | 499 s | 9.26 GB |
+| `prover --test acceptance` | 7 passed | 322 s | 8.64 GB |
+| `verifier --test cli` | 1 passed | 20 s | 8.56 GB |
+| `checker --test tamper` | 5 passed | 509 s | 9.25 GB |
 
 They are commented out of `.github/workflows/ci.yml` under `# DEFERRED:` lines, master
 rule 7: the add/sub shard cannot be smaller than `2^20` rows, and at the logup step's
-measured nine-fold runner slowdown they would take about 45, 4 and 75 minutes there.
+measured nine-fold runner slowdown they would take about 50, 3 and 75 minutes there.
 
 **Measurements**, one statement (`guests/addsub`, add/sub at `2^20`, the two window
 families at `2^16`, the toy SRS of `2^20` points): the global commit phase 1.8 s, the two

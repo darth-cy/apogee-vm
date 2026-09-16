@@ -741,6 +741,13 @@ mod tests {
         assert_eq!(back.timing(Phase::PostGkr), Some(t));
     }
 
+    /// Post-execution's content is its parts, never bytes `content` hands out.
+    #[test]
+    #[should_panic(expected = "post-execution's content is read through its parts")]
+    fn post_execution_has_no_content_bytes() {
+        let _ = tiny().content(Phase::PostExecution);
+    }
+
     #[test]
     fn a_phase_filled_out_of_order_is_refused() {
         let mut archive = tiny();

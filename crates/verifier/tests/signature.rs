@@ -27,19 +27,27 @@ fn the_verifier_entry_points_take_the_key_the_proof_and_the_public_inputs() {
 #[test]
 fn the_srs_verifier_round_trips_through_its_layout() {
     use curve::{G1Affine, G2Affine};
+    // Three distinct points, so a decoder that read one field at another's
+    // offset would not give the same verifier back.
+    let tau = G2Affine::GENERATOR.double();
     let vsrs = srs::SrsVerifier {
         g1_gen: G1Affine::GENERATOR,
         g2_gen: G2Affine::GENERATOR,
-        g2_tau: G2Affine::GENERATOR,
+        g2_tau: tau,
     };
     let bytes = verifier::encode_srs_verifier(&vsrs);
     assert_eq!(&bytes[..64], &G1Affine::GENERATOR.to_bytes());
+    assert_eq!(&bytes[64..192], &G2Affine::GENERATOR.to_bytes());
+    assert_eq!(&bytes[192..], &tau.to_bytes());
     assert_eq!(verifier::decode_srs_verifier(&bytes), Some(vsrs));
-    let mut off = bytes;
-    off[0] ^= 1;
-    assert_eq!(
-        verifier::decode_srs_verifier(&off),
-        None,
-        "(0, 2) is not a point"
-    );
+    // One low bit of a coordinate of each point, flipped: none is a point.
+    for (at, which) in [(0, "g1_gen"), (64, "g2_gen"), (192 + 96, "g2_tau")] {
+        let mut off = bytes;
+        off[at] ^= 1;
+        assert_eq!(
+            verifier::decode_srs_verifier(&off),
+            None,
+            "{which} with a bit flipped is not a point"
+        );
+    }
 }

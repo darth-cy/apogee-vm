@@ -330,6 +330,16 @@ fn violated(a: &CircuitArtifact, r: &Row) -> (Vec<String>, Vec<String>) {
     )
 }
 
+/// A cell's value as an integer, where the row holds one below `2^64`.
+fn small_int(v: Fr) -> u64 {
+    let b = v.to_bytes();
+    assert!(
+        b[8..].iter().all(|x| *x == 0),
+        "{v:?} is not a small integer"
+    );
+    u64::from_le_bytes(b[..8].try_into().unwrap())
+}
+
 fn names(list: &[&str]) -> Vec<String> {
     list.iter().map(|s| s.to_string()).collect()
 }
@@ -722,6 +732,27 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         r,
         vec!["rd_mask_rule", "rd_addr_rule"],
     ));
+    // The same forgery with a free kind bit claiming addi — a padding row's
+    // bits are no table's — which would make rs1 and rd present if a mask rule
+    // forgot the row's liveness.
+    let mut r = Row::default();
+    r.set("kind_addi", Fr::ONE)
+        .set("decoded_mask", f(2))
+        .set("decoded_rd", f(10))
+        .set("decoded_imm", f(43));
+    r.query("rs1", CYCLE, 1, 0, 0, 0);
+    r.query("rd", CYCLE, 3, 10, 42, 43);
+    r.set("rd_inv", f(10).inverse().unwrap())
+        .set("rd_selected", f(43));
+    cases.push((
+        "a padding row claiming addi and rewriting x10",
+        r,
+        vec!["rs1_mask_rule", "rd_mask_rule"],
+    ));
+    // A padding row storing into RAM, which no row of this family may do.
+    let mut r = Row::default();
+    r.query("ram", CYCLE, 3, 0x7fff_fffc, 0, 7);
+    cases.push(("a padding row storing a word", r, vec!["ram_mask_rule"]));
     // Its second: a live row's rd write masked off.
     let mut r = row("add, not carrying");
     r.drop_query("rd");
@@ -833,9 +864,11 @@ fn every_booleanity_gate_refuses_a_value_of_two() {
 // ---------------------------------------------------------------------------
 
 /// Acceptance 7, as rows. An unreduced sum — wrap 0 and `rd` holding the whole
-/// `a + b ≥ 2^32` — breaks no gate and only the range channel sees it; a wrap
-/// of 2 is refused by its booleanity; a `next_pc` outside 32 bits, reached
-/// through a wrap of 1, breaks no gate and only the range channel sees it; an
+/// `a + b ≥ 2^32` — breaks no gate and only the range channel sees it, on an
+/// add, an addi and a sub alike; a wrap of 2 is refused by its booleanity; a
+/// `next_pc` outside 32 bits, reached through a wrap of 1, breaks no gate and
+/// only the range channel sees it, through its low halfword or, with the high
+/// one solved in the field, through the high one; an
 /// all-zero mask breaks no gate and no range, so the decoder channel's domain
 /// is the only thing left to refuse it, which `tests/tamper.rs` proves.
 #[test]
@@ -868,6 +901,40 @@ fn the_negative_controls_break_what_they_say_they_break() {
     let (relations, lookups) = violated(&a, &far);
     assert_eq!(relations, Vec::<String>::new());
     assert_eq!(lookups, names(&["next_pc_lo_range"]));
+
+    // The unreduced result from the other row kinds that compute one: every
+    // row writing rd is range-checked, not only add's.
+    let value = |r: &Row, column: &str| small_int(r.get(column));
+    let mut addi = row("addi of -1, carrying");
+    let sum = f(value(&addi, "rs1_read_value") + value(&addi, "decoded_imm"));
+    addi.set("wrap", Fr::ZERO)
+        .set("rd_selected", sum)
+        .set("rd_write_value", sum)
+        .set("rd_hi", f(0xffff));
+    assert_eq!(violated(&a, &addi), (vec![], names(&["rd_lo_range"])));
+    let mut sub = row("sub, borrowing");
+    let difference = f(value(&sub, "rs1_read_value")) - f(value(&sub, "rs2_read_value"));
+    sub.set("wrap", Fr::ZERO)
+        .set("rd_selected", difference)
+        .set("rd_write_value", difference)
+        .set("rd_hi", Fr::ZERO);
+    assert_eq!(violated(&a, &sub), (vec![], names(&["rd_lo_range"])));
+
+    // A next_pc outside 32 bits whose high halfword is solved in the field so
+    // that its low halfword is in range: the high halfword's own check is the
+    // one that refuses it.
+    let mut solved = row("add, carrying");
+    let next = solved.get("decoded_next_pc") - f(TWO_32);
+    let low = f(value(&solved, "decoded_next_pc") & 0xffff);
+    let high = (next - low) * f(1 << 16).inverse().unwrap();
+    solved
+        .set("pc_wrap", Fr::ONE)
+        .set("pc_write_value", next)
+        .set("next_pc_hi", high);
+    assert_eq!(
+        violated(&a, &solved),
+        (vec![], names(&["next_pc_hi_range"]))
+    );
 
     let mut zero = row("lui");
     zero.set("decoded_mask", Fr::ZERO)

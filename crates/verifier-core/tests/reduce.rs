@@ -12,7 +12,8 @@ use field::Fr;
 use gkr_verify::SumcheckProof;
 use transcript::TranscriptEvent::{Absorb, Challenge};
 use verifier_core::{
-    global_commit, reduce_shard, shard_transcript, statement_shards, VerifyError, TRIVIAL_TS_WINDOW,
+    global_commit, memory_slots, reduce_shard, shard_challenges, shard_transcript,
+    statement_shards, VerifyError, TRIVIAL_TS_WINDOW,
 };
 
 fn refusal(
@@ -162,6 +163,78 @@ fn a_shard_transcript_starts_with_its_seed_its_window_and_its_commitments() {
     }
 }
 
+/// `g` then `β`: the first and the second `LOOKUP_CHALLENGE` squeeze after
+/// the seed, the window and the commitments, replayed by hand.
+#[test]
+fn g_is_the_first_lookup_squeeze_and_beta_the_second() {
+    let commitments = [blob(1), blob(2)];
+    let digest = Fr::from_u64(7);
+    let (_, g, beta) = shard_transcript(digest, ADD, 3, TRIVIAL_TS_WINDOW, &commitments);
+    let mut t = transcript::Transcript::new();
+    t.append_scalars(
+        tags::SHARD_SEED,
+        &[digest, Fr::from_u64(ADD as u64), Fr::from_u64(3)],
+    );
+    t.append_scalars(tags::SHARD_TS_WINDOW, &[Fr::ZERO, Fr::from_u64(1 << 38)]);
+    transcript::append_g1_points(&mut t, tags::COMMITMENT, &commitments);
+    assert_eq!(g, t.challenge_scalar(tags::LOOKUP_CHALLENGE));
+    assert_eq!(beta, t.challenge_scalar(tags::LOOKUP_CHALLENGE));
+}
+
+/// The challenges a shard's circuit reads (§4): slots 1 to 4 from the memory
+/// challenges; the window constant at the shard's own window — 0 for
+/// `INIT_TEARDOWN`, `windows[index]` for each `ZERO_WINDOWS` shard, and none
+/// for an execution family; and the LogUp slots from `g` and `β`.
+#[test]
+fn a_shard_reads_the_window_constant_of_its_own_window() {
+    use constants::challenge_slot as slot;
+    let key = vk();
+    let memory = [11, 12, 13, 14].map(Fr::from_u64);
+    let (g, beta) = (Fr::from_u64(21), Fr::from_u64(22));
+    let windows = [3, 9];
+    let expected = |circuit: &constraints::FamilyCircuit, window: u32| {
+        let mut want = gkr_verify::window_challenges(
+            &memory_slots(&memory),
+            window,
+            circuit.artifact.trace_vars,
+        );
+        gkr_verify::insert_lookup_challenges(&mut want, g, beta, &circuit.artifact);
+        want
+    };
+    let (add, init, zero) = (&key.circuits[0], &key.circuits[1], &key.circuits[2]);
+    assert_eq!((init.family, zero.family), (INIT, ZERO));
+
+    let first = shard_challenges(zero, 0, &windows, &memory, g, beta);
+    let second = shard_challenges(zero, 1, &windows, &memory, g, beta);
+    assert_eq!(first, expected(zero, 3));
+    assert_eq!(second, expected(zero, 9));
+    assert_ne!(
+        first.get(slot::MEM_WINDOW_CONSTANT),
+        second.get(slot::MEM_WINDOW_CONSTANT),
+        "two windows, two constants"
+    );
+    assert_eq!(
+        shard_challenges(init, 0, &windows, &memory, g, beta),
+        expected(init, 0)
+    );
+
+    let own = shard_challenges(add, 0, &windows, &memory, g, beta);
+    assert_eq!(own.get(slot::MEM_WINDOW_CONSTANT), None);
+    for (s, v) in [
+        slot::MEM_GAMMA,
+        slot::MEM_ALPHA_ADDR,
+        slot::MEM_ALPHA_TS,
+        slot::MEM_ALPHA_VAL,
+    ]
+    .into_iter()
+    .zip(memory)
+    {
+        assert_eq!(own.get(s), Some(v));
+    }
+    assert_eq!(own.get(slot::LOOKUP_G), Some(g));
+    assert_eq!(own.get(slot::LOOKUP_BETA), Some(beta));
+}
+
 /// Steps 1 to 5: a statement the key does not describe, or not the proof's, is
 /// refused as `Statement`, each rule by name, before anything is indexed.
 #[test]
@@ -186,6 +259,16 @@ fn a_statement_the_key_does_not_describe_is_refused_as_statement() {
     ));
     let mut k = key.clone();
     k.circuits.pop();
+    cases.push((
+        "the key's circuits are not its config's families",
+        k,
+        honest.clone(),
+        proof.clone(),
+    ));
+    // A key edited in memory to hold one setup list too few: refused here,
+    // not by a panic where step 11 indexes the lists.
+    let mut k = key.clone();
+    k.setup_commitments.pop();
     cases.push((
         "the key's circuits are not its config's families",
         k,

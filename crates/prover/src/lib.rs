@@ -370,15 +370,15 @@ pub fn shard_columns(
 
 /// A shard after its GKR proof: what the opening needs, and the live shard
 /// transcript. `docs/spec/shard-proof.md` §10's `PostGkr` entry.
-pub struct ShardGkr {
-    pub family: FamilyId,
-    pub index: u32,
-    pub witness_commitments: Vec<[u8; 64]>,
-    pub outputs: Vec<Fr>,
-    pub gkr: GkrProof,
+pub(crate) struct ShardGkr {
+    pub(crate) family: FamilyId,
+    pub(crate) index: u32,
+    pub(crate) witness_commitments: Vec<[u8; 64]>,
+    pub(crate) outputs: Vec<Fr>,
+    pub(crate) gkr: GkrProof,
     /// The base claims' one point.
-    pub point: Vec<Fr>,
-    pub transcript: Transcript,
+    pub(crate) point: Vec<Fr>,
+    pub(crate) transcript: Transcript,
 }
 
 impl ProvingContext<'_> {
@@ -396,7 +396,7 @@ impl ProvingContext<'_> {
     /// challenges, run the forward pass and the GKR proof. The base claims'
     /// one point is read back by replaying the schedule over the proof, which
     /// checks nothing: a tampered witness still gets its proof.
-    pub fn gkr_part(&self, family: FamilyId, index: u32, base: &BaseLayer) -> ShardGkr {
+    pub(crate) fn gkr_part(&self, family: FamilyId, index: u32, base: &BaseLayer) -> ShardGkr {
         let reg = self.setup.registration(family);
         let artifact = &reg.circuit.artifact;
         let witness: Vec<&MultilinearPoly> = (0..artifact.witness.len() as u32)
@@ -456,7 +456,7 @@ impl ProvingContext<'_> {
     /// The shard's one batched opening, `docs/spec/shard-proof.md` §5 and §4's
     /// S6, and its proof. Returns the proof and the shard transcript's event
     /// log.
-    pub fn opening_part(
+    pub(crate) fn opening_part(
         &self,
         shard: ShardGkr,
         base: &BaseLayer,

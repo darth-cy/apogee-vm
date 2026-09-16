@@ -201,6 +201,30 @@ fn a5_every_statement_twin_is_refused_as_statement() {
     }
 }
 
+/// Step 10's first check is the one link between the roots a shard's proof
+/// establishes and the roots reconciliation multiplies: the statement's roots
+/// are not absorbed. A statement whose init shard's root pair is scaled by one
+/// constant still reconciles, so that shard's proof is what refuses it — while
+/// the add/sub shard, whose own roots are untouched, accepts it. That is why a
+/// statement is verified only when every one of its shards is.
+#[test]
+#[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
+fn a_statement_root_that_is_not_its_proofs_is_refused_by_that_shard() {
+    let (setup, _, public, proofs) = proved();
+    assert_eq!((proofs[0].family, proofs[1].family), (INIT, ADD));
+    let seven = field::Fr::from_u64(7);
+    let mut forged = public.clone();
+    let [read, write] = forged.memory_roots[0];
+    forged.memory_roots[0] = [read * seven, write * seven];
+    assert_eq!(
+        verify_shard(&setup.vk, &proofs[0], &forged),
+        Err(VerifyError::MemoryArgument(
+            "the shard's roots are not the statement's"
+        ))
+    );
+    assert_eq!(verify_shard(&setup.vk, &proofs[1], &forged), Ok(()));
+}
+
 // ---------------------------------------------------------------------------
 // Acceptance 6 and 8
 // ---------------------------------------------------------------------------

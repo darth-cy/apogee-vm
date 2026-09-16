@@ -26,11 +26,6 @@ pub fn global_commit_phase(vk: &VerifyingKey, srs: &Srs, inputs: &StatementInput
 pub fn public_inputs(global: &GlobalCommitState, proofs: &[ShardProof]) -> PublicInputs;
 
 pub struct ProvingContext<'a> { pub setup: &'a ProverSetup, pub global: GlobalCommitState }
-impl ProvingContext<'_> {
-    pub fn gkr_part(&self, family: FamilyId, index: u32, base: &BaseLayer) -> ShardGkr;
-    pub fn opening_part(&self, shard: ShardGkr, base: &BaseLayer) -> (ShardProof, Vec<TranscriptEvent>);
-}
-pub struct ShardGkr { family, index, witness_commitments, outputs, gkr, point, transcript: Transcript }
 pub fn shard_columns(setup: &ProverSetup, archive: &TraceArchive, family: FamilyId, index: u32,
                      windows: &[u32]) -> Result<Vec<(PolyAddress, MultilinearPoly)>, ProverError>;
 pub fn prove_shard(ctx: &ProvingContext, archive: &TraceArchive, family: FamilyId, shard_idx: u32) -> ShardProof;
@@ -46,6 +41,9 @@ pub enum ProverError { Unregistered { family, height }, Key(String), Trace(Strin
   has its circuit and `family_fill` its fill; `register` takes the families of a
   `VmConfig` and refuses the first that lacks either. A later family adds one of each, and
   `global_commit_phase`, `prove_shard`, `reduce_shard` and `verify_shard` do not change.
+- **A shard's proof is two crate-private halves**, `gkr_part` (through the GKR proof, to
+  a `ShardGkr` — the post-GKR snapshot's entry) and `opening_part` (the batched opening),
+  which `prove_shard_columns` runs back to back and `advance` runs a phase apart.
 - **`prove_shard` is shard-local**: the witness commitments, the shard transcript, the
   lookup challenges, the forward pass, the GKR proof and the one batched opening. The
   global phase is `global_commit_phase`, shard-count generic, whose state a
@@ -80,4 +78,5 @@ pub enum ProverError { Unregistered { family, height }, Key(String), Trace(Strin
 | File | Covers |
 | --- | --- |
 | `tests/common/mod.rs` | the S16 statement: `guests/addsub`'s committed ELF decoded with its family at `2^20` and everything else at `2^16`, traced into an archive, over a toy SRS whose `tau` is written down and whose archive is cached under `target/tmp` (`CARGO_TARGET_TMPDIR`), shared by the three suites that include this module |
-| `tests/acceptance.rs` | **`#[ignore]`d; run with `--include-ignored --test-threads=1`** (a statement's proof peaks at 8.6 GB). Acceptance 1 (the guest's family set and trace; both shards verify; round counts, claim counts and byte lengths from the circuit); 5 (every statement twin refused as `Statement`, on both shards); 6 and 8 (the shard transcript event for event: seed, window, commitments, `g` and `β`, then the GKR schedule rebuilt from the artifact's shape — outputs, every batch, round and claim message, every child challenge — with one outstanding point after every batch, then one batched opening whose column-RLC challenge follows every evaluation claim; the verifier's reduction re-deriving the prover's point; the global transcript's challenges after every memory commitment); 9 (stopped after post-execution — nothing filled — and resumed after it, post-commit, post-GKR and post-opening, byte-identical); 10's library half (proofs, statement and key round-trip, and the key loads back to itself); and one-thread against all-threads determinism |
+| `src/phases.rs` (unit) | the post-commit section round-trips and refuses a trailing byte and a missing one; the post-GKR and final sections refuse a trailing byte |
+| `tests/acceptance.rs` | **`#[ignore]`d; run with `--include-ignored --test-threads=1`** (a statement's proof peaks at 8.6 GB). Acceptance 1 (the guest's family set and trace; both shards verify; round counts, claim counts and byte lengths from the circuit); 5 (every statement twin refused as `Statement`, on both shards); 6 and 8 (the shard transcript event for event: seed, window, commitments, `g` and `β`, then the GKR schedule rebuilt from the artifact's shape — outputs, every batch, round and claim message, every child challenge — with one outstanding point after every batch, then one batched opening whose column-RLC challenge follows every evaluation claim; the verifier's reduction re-deriving the prover's point; the global transcript's challenges after every memory commitment); 9 (stopped after post-execution — nothing filled — and resumed after it, post-commit, post-GKR and post-opening, byte-identical); 10's library half (proofs, statement and key round-trip, and the key loads back to itself); step 10's root comparison (the init shard's statement roots scaled by one constant still reconcile, and that shard's proof refuses them exactly while the add/sub shard's accepts); and one-thread against all-threads determinism |

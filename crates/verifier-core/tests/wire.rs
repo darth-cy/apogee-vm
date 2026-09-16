@@ -158,6 +158,21 @@ fn the_readers_refuse_rather_than_panic() {
         PublicInputs::from_bytes(&ts).is_ok(),
         "2^38 − 1 is a timestamp"
     );
+    // A timestamp and a value wider than 64 bits, whose low bytes are in
+    // range: refused, not truncated to the honest statement.
+    for (at, reason) in [
+        (boundary + 10 * 32, "a boundary timestamp is not below 2^38"),
+        (boundary + 42 * 32, "a boundary value is not below 2^32"),
+    ] {
+        let mut wide = public.clone();
+        wide[at + 20] ^= 1;
+        assert_eq!(
+            PublicInputs::from_bytes(&wide),
+            Err(reason),
+            "byte {}",
+            at + 20
+        );
+    }
     let mut v = public.clone();
     let v1 = boundary + 33 * 32;
     v[v1..v1 + 32].copy_from_slice(&Fr::from_u64(1 << 32).to_bytes());

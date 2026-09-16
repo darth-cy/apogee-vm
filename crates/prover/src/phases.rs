@@ -131,6 +131,14 @@ fn encode_final(public: &PublicInputs, proofs: &[ShardProof]) -> Vec<u8> {
     w.bytes
 }
 
+fn decode_final(bytes: &[u8]) -> Read<(PublicInputs, Vec<ShardProof>)> {
+    let mut r = Reader::new(bytes);
+    let public = PublicInputs::from_bytes(r.bytes()?)?;
+    let proofs = decode_proofs(&mut r)?;
+    r.finish()?;
+    Ok((public, proofs))
+}
+
 // ---------------------------------------------------------------------------
 // advance
 // ---------------------------------------------------------------------------
@@ -249,10 +257,72 @@ pub fn finish(archive: &TraceArchive) -> Result<(PublicInputs, Vec<ShardProof>),
     let bytes = archive
         .content(Phase::Final)
         .ok_or(ProverError::Archive("the final phase is empty".into()))?;
-    let error = archive_error(Phase::Final);
-    let mut r = Reader::new(bytes);
-    let public = PublicInputs::from_bytes(r.bytes().map_err(&error)?).map_err(&error)?;
-    let proofs = decode_proofs(&mut r).map_err(&error)?;
-    r.finish().map_err(&error)?;
-    Ok((public, proofs))
+    decode_final(bytes).map_err(archive_error(Phase::Final))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use field::Fr;
+    use verifier_core::BoundaryFinals;
+
+    fn global() -> GlobalCommitState {
+        let statement = PublicInputs {
+            input: vec![1],
+            output: vec![],
+            exit_status: 0,
+            shard_counts: vec![1, 1, 0],
+            windows: vec![],
+            boundary: BoundaryFinals {
+                reg_ts: [0; 32],
+                pc_ts: 4,
+                reg_values: [0; 31],
+            },
+            memory_commitments: vec![vec![[7; 64]], vec![]],
+            memory_roots: vec![],
+        };
+        let mut t = Transcript::new();
+        t.append_scalar(9, Fr::from_u64(3));
+        GlobalCommitState {
+            statement,
+            transcript: t.snapshot(),
+            memory_challenges: [1, 2, 3, 4].map(Fr::from_u64),
+            digest: Fr::from_u64(5),
+        }
+    }
+
+    /// The post-commit section reads back exactly what it wrote, and nothing
+    /// longer or shorter: a resumed archive is refused, not half-read.
+    #[test]
+    fn the_post_commit_section_is_its_encoding_exactly() {
+        let g = global();
+        let bytes = encode_global(&g);
+        let back = decode_global(&bytes).expect("the section decodes");
+        assert_eq!(back.statement, g.statement);
+        assert_eq!(back.transcript, g.transcript);
+        assert_eq!(back.memory_challenges, g.memory_challenges);
+        assert_eq!(back.digest, g.digest);
+        let mut long = bytes.clone();
+        long.push(0);
+        assert!(decode_global(&long).is_err(), "a trailing byte");
+        assert!(
+            decode_global(&bytes[..bytes.len() - 1]).is_err(),
+            "a byte short"
+        );
+    }
+
+    /// The post-GKR and final sections refuse a trailing byte the same way.
+    #[test]
+    fn the_later_sections_refuse_trailing_bytes() {
+        let mut gkrs = encode_gkrs(&[]);
+        assert!(decode_gkrs(&gkrs).unwrap().is_empty());
+        gkrs.push(0);
+        assert!(decode_gkrs(&gkrs).is_err());
+        let g = global();
+        let mut last = encode_final(&g.statement, &[]);
+        let (public, proofs) = decode_final(&last).expect("the final section decodes");
+        assert_eq!((public, proofs.len()), (g.statement, 0));
+        last.push(0);
+        assert!(decode_final(&last).is_err());
+    }
 }
