@@ -89,15 +89,24 @@ jobs:
       - name: test
         run: cargo test --workspace
 
-      # S15's acceptance over the combined toy. `#[ignore]`d for size, not for
-      # environment: the timestamp channel's table is `[0, 2^19)`, a table of
-      # `2^n` rows holds at most `2^n` values, and a Mercury opening needs an
-      # even variable count, so the smallest circuit carrying a gap obligation
-      # is `2^20` rows. One forward pass over it holds 4.63 GB of inner cells,
-      # so the file runs single-threaded: two at once would not fit the runner.
-      # `--include-ignored` for the reason the qemu step above gives.
-      - name: the LogUp channels over the combined toy
-        run: cargo test -p checker --test logup -- --include-ignored --test-threads=1
+      # DEFERRED: cargo test -p checker --test logup -- --include-ignored --test-threads=1
+      # Master rule 7. S15's acceptance over the combined toy took 30m18s of a
+      # 45-minute run here -- two thirds of it -- and cannot be made to take
+      # less: the timestamp channel's table is `[0, 2^19)`, a table of `2^n`
+      # rows holds at most `2^n` values, and a Mercury opening needs an even
+      # variable count, so the smallest circuit carrying a gap obligation is
+      # `2^20` rows. One forward pass over it holds 4.63 GB of inner cells, so
+      # the file must run single-threaded: two at once would not fit the
+      # runner. It is slow because the circuit is the real size, which is
+      # exactly the case rule 7 covers, so it runs locally on the stage PR that
+      # touches it and the handoff note records the result. The nine cases stay
+      # `#[ignore]`d for size, as they were -- that attribute is not what
+      # deferred them -- so `cargo test --workspace` is unchanged either way.
+      # Put back, with every other `# DEFERRED:` step, before the project is
+      # called finished.
+      #
+      # - name: the LogUp channels over the combined toy
+      #   run: cargo test -p checker --test logup -- --include-ignored --test-threads=1
 
       # The crates the recursion guest links compile unchanged for the guest.
       - name: guest target builds

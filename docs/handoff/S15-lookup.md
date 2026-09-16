@@ -559,7 +559,13 @@ Every gate `CLAUDE.md` lists, run locally on macOS, each exit 0:
 - `cargo run -p kat-gen`, then `git diff --exit-code` over all ten fixture directories: no
   diff, `lookup_toy.bin` included and every S13 and S14 fixture unmoved;
 - `transcript-ref`, with no diff, and fib's guest build;
-- `cargo test -p checker --test logup -- --include-ignored --test-threads=1`: 9 passed, 201 s.
+- `cargo test -p checker --test logup -- --include-ignored --test-threads=1`: 9 passed,
+  201 s — **the one step deferred out of CI** under master rule 7. On the runner it took
+  30m18s of a 45-minute run, two thirds of the whole, and single-threaded is not a choice:
+  one forward pass holds 4.63 GB and two would not fit. It is commented out of
+  `.github/workflows/ci.yml` under a `# DEFERRED:` line and runs locally on any PR that
+  touches the lookup channels, this one included. Every other gate below still runs on
+  every push.
 
 **Measurements**, on the committed toy at `trace_vars` 20 (`JUMP_BRANCH_SLT`'s frame over
 fib, 69 committed columns — 21 `M`, 38 `W`, 10 `S` — depth 25, layer 1 sixty columns

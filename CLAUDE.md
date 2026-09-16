@@ -75,8 +75,11 @@ writing `docs/handoff/<stage>.md` and updating this file. Raise conflicts and
 open questions with the user rather than picking a default silently.
 
 ## Commands
-Everything above the line is what CI runs (`.github/workflows/ci.yml`); a green local
-run of these is a green CI run.
+Everything above the line must be green before a stage's PR. All of it runs in CI
+(`.github/workflows/ci.yml`) except the lines marked `# DEFERRED`, which are commented out
+there under master rule 7 because the circuit is the real size: run those locally and
+record the result in the stage's handoff note. For the rest, a green local run is a green
+CI run.
 ```
 cargo fmt --all -- --check
 cargo fmt --manifest-path tools/transcript-ref/Cargo.toml --all -- --check
@@ -87,7 +90,7 @@ cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
 cargo test --workspace                      # 761 tests as of S15; 30 more are #[ignore]d
-cargo test -p checker --test logup -- --include-ignored --test-threads=1  # S15's toy: 2^20 rows, 4.63 GB a pass
+cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 4.63 GB a pass, 30 min on a runner
 cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
