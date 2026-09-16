@@ -426,6 +426,14 @@ fn tag_table_is_well_formed() {
         "MEMORY_WINDOWS",
         "MEMORY_BOUNDARY",
         "PROGRAM_ENTRY",
+        "LOOKUP_CHALLENGE",
+        "SRS_DIGEST",
+        "SRS_VERIFIER",
+        "MEMORY_GROUP",
+        "MEMORY_CHALLENGE",
+        "GLOBAL_STATE_DIGEST",
+        "SHARD_SEED",
+        "SHARD_TS_WINDOW",
     ];
     let values: Vec<u64> = names
         .iter()

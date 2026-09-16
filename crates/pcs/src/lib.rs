@@ -245,23 +245,13 @@ impl MercuryProof {
 /// reduction. The point at infinity absorbs four copies of
 /// `constants::G1_INFINITY_SENTINEL`, which is `2^128` and therefore cannot be
 /// any real point's limb. `docs/spec/mercury.md` §4 is normative.
+///
+/// Since S16 the split itself is `transcript::g1_limbs`, over the point's
+/// 64-byte encoding, so the no_std verifier core absorbs a commitment it holds
+/// as bytes exactly as this crate absorbs a `G1Affine`
+/// (`docs/spec/shard-proof.md` §2.4).
 fn g1_limbs(p: &G1Affine) -> [Fr; 4] {
-    if p.infinity {
-        return [infinity_sentinel(); 4];
-    }
-    let half = |bytes: &[u8]| {
-        let mut limb = [0u8; 32];
-        limb[..16].copy_from_slice(bytes);
-        Fr::from_bytes(&limb).expect("a 128-bit limb is below 2^128 < p")
-    };
-    let x = p.x.to_bytes();
-    let y = p.y.to_bytes();
-    [
-        half(&x[..16]),
-        half(&x[16..]),
-        half(&y[..16]),
-        half(&y[16..]),
-    ]
+    transcript::g1_limbs(&p.to_bytes())
 }
 
 /// `constants::G1_INFINITY_SENTINEL`, decoded.
@@ -288,11 +278,8 @@ pub fn append_g1(tr: &mut Transcript, tag: Tag, p: &G1Affine) {
 /// other list or with `k` separate messages. S09's commitment-list absorption
 /// is this function.
 pub fn append_g1_list(tr: &mut Transcript, tag: Tag, ps: &[G1Affine]) {
-    let mut limbs = Vec::with_capacity(4 * ps.len());
-    for p in ps {
-        limbs.extend_from_slice(&g1_limbs(p));
-    }
-    tr.append_scalars(tag, &limbs);
+    let points: Vec<[u8; 64]> = ps.iter().map(G1Affine::to_bytes).collect();
+    transcript::append_g1_points(tr, tag, &points);
 }
 
 // ---------------------------------------------------------------------------

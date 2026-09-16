@@ -240,16 +240,20 @@ dependencies = [
  "emulator",
  "field",
  "gkr",
+ "gkr-verify",
  "loader",
  "pcs",
  "poly",
  "program",
+ "prover",
  "rayon",
  "srs",
  "sumcheck",
  "test-support",
  "trace",
  "transcript",
+ "verifier",
+ "verifier-core",
 ]
 
 [[package]]
@@ -804,6 +808,30 @@ dependencies = [
  "srs",
  "test-support",
  "transcript",
+ "verifier-core",
+]
+
+[[package]]
+name = "prover"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "constraints",
+ "curve",
+ "emulator",
+ "field",
+ "gkr",
+ "loader",
+ "pcs",
+ "poly",
+ "postcard",
+ "program",
+ "rayon",
+ "srs",
+ "trace",
+ "transcript",
+ "verifier",
+ "verifier-core",
 ]
 
 [[package]]
@@ -1142,6 +1170,36 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "verifier"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "curve",
+ "emulator",
+ "field",
+ "loader",
+ "pcs",
+ "program",
+ "prover",
+ "rayon",
+ "srs",
+ "trace",
+ "verifier-core",
+]
+
+[[package]]
+name = "verifier-core"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "constraints",
+ "field",
+ "gkr-verify",
+ "poly",
+ "transcript",
+]
 
 [[package]]
 name = "version_check"

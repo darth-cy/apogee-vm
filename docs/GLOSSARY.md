@@ -425,3 +425,41 @@ boundary factors `(W_b, R_b)`, once per statement. `docs/spec/memory.md` §4.
 writes, and the pc's final value the verifier fixes. Odd and below `RAM_ORIGIN`, so once
 S16's constraints of `docs/spec/memory.md` §5 hold, no other row writes it, and a trace
 whose pc ends there ended on an exit row.
+
+**Statement** — what a set of shard proofs proves together: one program (its verifying
+key), one execution's public I/O and exit status, and that execution's shape — shard
+counts, RAM windows, boundary scalars, and each shard's memory commitments and roots.
+**`PublicInputs`** is its wire form, and every shard verifies against the same one: a
+shard alone proves nothing about the memory argument, whose reconciliation reads every
+shard's roots. `docs/spec/shard-proof.md` §1.
+
+**Shard proof** — `ShardProof`: one shard's witness commitments, its circuit's outputs, its
+GKR proof and one 704-byte batched Mercury opening, with the family, index, time window
+and global state digest it was proved under. Fixed in shape given the family and height.
+`docs/spec/shard-proof.md` §9.
+
+**Global state digest** — the challenge the statement's global transcript ends on, after
+everything the statement binds and the four memory challenges. Every shard's transcript is
+seeded from it, so a shard proof is for one statement only. `docs/spec/shard-proof.md` §2.
+
+**Verifying key** — `VerifyingKey`: the program's identity and everything it is the digest
+of (code version, `VmConfig`, entry pc, setup commitments), the SRS's 320-byte verifier
+points and their **SRS digest**, and one circuit per family. Loading it recomputes both
+digests and requires each circuit to be byte for byte the registry's.
+`docs/spec/shard-proof.md` §7.
+
+**SRS digest** — one `Fr`: a fresh transcript's squeeze over the SRS's verifier points
+(`[1]_1`, `[1]_2`, `[x]_2`), absorbed third in every statement. It binds a proof to the
+points its pairings use, not to the whole SRS. `docs/spec/shard-proof.md` §3.
+
+**Opening claim** — where the verifier core stops: the shard's commitments, the one point
+GKR reduced every committed column to, the values claimed there, and the transcript to
+open them under. `crates/verifier` spends it in one `pcs::batch_verify`.
+
+**Family registration** — how a family becomes provable: a circuit in
+`constraints::family_circuit` and a fill in `prover::family_fill`. Nothing else in the
+prover or the verifier names a family. `docs/spec/shard-proof.md` §11.
+
+**Tamper twin** — an honest statement proved again with one thing changed, as an honest
+prover would prove the changed witness, and checked for the class of the refusal:
+`checker::TamperHarness`. A twin whose change breaks nothing must verify.

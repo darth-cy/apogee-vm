@@ -17,6 +17,14 @@ field.workspace = true
 # forward pass the cross-check runs.
 gkr.workspace = true
 poly.workspace = true
+# `TamperHarness` (S16): a statement re-proved through `prover` and one shard
+# verified through `verifier::verify_shard`, the one verification path.
+gkr-verify.workspace = true
+program.workspace = true
+prover.workspace = true
+trace.workspace = true
+verifier.workspace = true
+verifier-core.workspace = true
 
 [dev-dependencies]
 # `tests/memory.rs`' honest statement and `tests/multiset.rs`' tampers: a
@@ -24,7 +32,6 @@ poly.workspace = true
 # columns, then forwarded, reconciled and proved.
 emulator.workspace = true
 loader.workspace = true
-program.workspace = true
 # S15 acceptance 1 and 3: the toy's witness and multiplicity columns are
 # committed, and `g`/`beta` are drawn strictly after every absorb.
 pcs.workspace = true
@@ -35,5 +42,4 @@ curve.workspace = true
 # committed columns first. S16 absorbs commitments instead.
 sumcheck.workspace = true
 test-support.workspace = true
-trace.workspace = true
 transcript.workspace = true

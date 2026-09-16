@@ -764,8 +764,8 @@ fn the_window_list_is_exactly_the_touched_windows_above_zero() {
 /// `docs/spec/ecall-abi.md` says. Each is `(a7, a0 read, a2 read, a0
 /// written)`, zero where the call reads no such register. `opcodes`'
 /// `cover_ecall` makes one call of each kind at its edge, in this order; every
-/// guest ends in `exit(0)`; and every call anywhere is a `read`, a `write`, an
-/// `exit`, or answered `-ENOSYS`.
+/// guest ends in `exit(0)` — `addsub` in `exit(42)`, its result; and every
+/// call anywhere is a `read`, a `write`, an `exit`, or answered `-ENOSYS`.
 #[test]
 fn every_ecall_answers_as_the_abi_says() {
     let neg = |errno: u32| errno.wrapping_neg();
@@ -784,7 +784,12 @@ fn every_ecall_answers_as_the_abi_says() {
                 )
             })
             .collect();
-        assert_eq!(calls.last(), Some(&(ecall::EXIT, 0, 0, 0)), "{name}");
+        let status = common::exit_code_of(name) as u32;
+        assert_eq!(
+            calls.last(),
+            Some(&(ecall::EXIT, status, 0, status)),
+            "{name}"
+        );
         for &(number, fd, count, result) in &calls {
             match number {
                 ecall::READ => assert!(

@@ -27,15 +27,14 @@ use constants::extra_mask::{
     add_sub_lui_auipc as alu, atomics, jump_branch_slt as jbs, mem_subword, mem_word, mul_div,
     shift_bitwise as sb, system_code,
 };
-use constants::{family, guest_memory, transcript_tags as tags};
+use constants::{family, guest_memory};
 use curve::G1Affine;
 use field::Fr;
 use isa::{decode, Instr};
 use loader::{ProgramImage, Slot};
-use pcs::{append_g1_list, commit};
+use pcs::commit;
 use poly::{MultilinearPoly, PolyBacking};
 use srs::Srs;
-use transcript::Transcript;
 
 /// A family's number: an index into `constants::family`'s table.
 pub type FamilyId = u32;
@@ -308,115 +307,16 @@ impl ProgramParams {
     }
 }
 
-/// The static VM shape a program derives: which families it needs, how tall
-/// each family's trace is, and the bytecode ceiling it was checked against.
-///
-/// Per-proof shard counts are deliberately **not** here — they vary with the
-/// execution, and a program's shape does not. They join it in the statement
-/// descriptor; see [`absorb_statement_descriptor`].
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct VmConfig {
-    /// `(family, height)`, strictly ascending by family, heights on the menu.
-    pub families: Vec<(FamilyId, u32)>,
-    pub bytecode_size_words: u32,
-}
+// `VmConfig`, its wire form, `ProgramIdentity` and the statement descriptor
+// moved to `crates/verifier-core` at S16, so the no_std verifier binds a
+// statement with the same code the prover does. They are re-exported here, and
+// every path that named them still does.
+pub use verifier_core::{absorb_statement_descriptor, ProgramIdentity, VmConfig};
 
-impl VmConfig {
-    /// The height of `family`, or `None` if it is detached.
-    pub fn height(&self, family: FamilyId) -> Option<u32> {
-        self.families
-            .iter()
-            .find(|(f, _)| *f == family)
-            .map(|(_, h)| *h)
-    }
-
-    /// The frozen wire form: `u32` LE family count `k`, then `k` pairs of
-    /// `u32` LE `(family, height)`, then `u32` LE `bytecode_size_words`.
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(8 + 8 * self.families.len());
-        out.extend_from_slice(&(self.families.len() as u32).to_le_bytes());
-        for (f, h) in &self.families {
-            out.extend_from_slice(&f.to_le_bytes());
-            out.extend_from_slice(&h.to_le_bytes());
-        }
-        out.extend_from_slice(&self.bytecode_size_words.to_le_bytes());
-        out
-    }
-
-    /// Decode, refusing anything [`VmConfig::to_bytes`] could not have written
-    /// from a derived config: a wrong length, an unknown or out-of-order family,
-    /// a height off the menu, a family set without `INIT_TEARDOWN` or
-    /// `ZERO_WINDOWS` — which derivation puts in every config — or those two
-    /// at different heights. `None` rather than a panic.
-    ///
-    /// The two init families are required to be *present*, not last. They
-    /// have the highest ids today, but `FamilyId`s are append-only and the
-    /// delegation families take ids above them, so a config holding one lists
-    /// it after both.
-    pub fn from_bytes(bytes: &[u8]) -> Option<VmConfig> {
-        let word = |i: usize| -> Option<u32> {
-            Some(u32::from_le_bytes(
-                bytes.get(4 * i..4 * i + 4)?.try_into().ok()?,
-            ))
-        };
-        let k = word(0)? as usize;
-        if k > family::COUNT as usize || bytes.len() != 4 * (2 * k + 2) {
-            return None;
-        }
-        let mut families = Vec::with_capacity(k);
-        for j in 0..k {
-            let (f, h) = (word(1 + 2 * j)?, word(2 + 2 * j)?);
-            if f >= family::COUNT || !family::HEIGHT_MENU.contains(&h) {
-                return None;
-            }
-            if families.last().is_some_and(|(prev, _)| *prev >= f) {
-                return None;
-            }
-            families.push((f, h));
-        }
-        let config = VmConfig {
-            families,
-            bytecode_size_words: word(1 + 2 * k)?,
-        };
-        window_height(&config).ok()?;
-        Some(config)
-    }
-}
-
-/// The one height of the two init families, or the rule a config breaks:
-/// `INIT_TEARDOWN` and `ZERO_WINDOWS` both present, at one height.
-/// `docs/spec/memory.md` §3.2: a `ZERO_WINDOWS` height below
-/// `INIT_TEARDOWN`'s would give image words a second init row.
+/// The init families' one height, or the window rule a config breaks, as a
+/// `ProgramError`. `verifier_core::window_height` is the rule.
 fn window_height(config: &VmConfig) -> Result<u32, ProgramError> {
-    match (
-        config.height(family::INIT_TEARDOWN),
-        config.height(family::ZERO_WINDOWS),
-    ) {
-        (Some(init), Some(zero)) if init == zero => Ok(init),
-        (Some(_), Some(_)) => Err(ProgramError::WindowRule {
-            rule: "INIT_TEARDOWN and ZERO_WINDOWS have one height",
-        }),
-        _ => Err(ProgramError::WindowRule {
-            rule: "INIT_TEARDOWN and ZERO_WINDOWS are in every VmConfig",
-        }),
-    }
-}
-
-/// A program's identity: one `Fr`, squeezed from the recipe in
-/// [`program_identity`]. Its wire form is that element's canonical 32-byte
-/// little-endian encoding.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ProgramIdentity(pub Fr);
-
-impl ProgramIdentity {
-    pub fn to_bytes(&self) -> [u8; 32] {
-        self.0.to_bytes()
-    }
-
-    /// `None` for a non-canonical encoding; never reduces.
-    pub fn from_bytes(bytes: &[u8; 32]) -> Option<ProgramIdentity> {
-        Fr::from_bytes(bytes).map(ProgramIdentity)
-    }
+    verifier_core::window_height(config).map_err(|rule| ProgramError::WindowRule { rule })
 }
 
 /// Every way derivation refuses a program. Each is loud and names what it
@@ -811,97 +711,17 @@ fn check_partition(image: &ProgramImage, tables: &DecodedTables) {
 // Identity and the statement descriptor
 // ---------------------------------------------------------------------------
 
-/// The static `VmConfig` as one typed message: the family ids ascending, then
-/// their heights in the same order, then `bytecode_size_words`. Its length,
-/// `2k + 1`, is what fixes `k`.
-fn absorb_vm_config(tr: &mut Transcript, config: &VmConfig) {
-    let mut message: Vec<Fr> = config
-        .families
-        .iter()
-        .map(|(f, _)| Fr::from_u64(*f as u64))
-        .collect();
-    message.extend(config.families.iter().map(|(_, h)| Fr::from_u64(*h as u64)));
-    message.push(Fr::from_u64(config.bytecode_size_words as u64));
-    tr.append_scalars(tags::VM_CONFIG, &message);
-}
-
-/// The statement descriptor: the static `VmConfig`, the per-proof shard count
-/// of each of its families, and the RAM window list, as three adjacent typed
-/// messages.
-///
-/// The first is exactly the `VmConfig` message program identity absorbs; the
-/// second is one count per family, in the same ascending order, under
-/// `SHARD_COUNTS`. A family present in the config and run zero times has count
-/// 0 — it still has a slot, so the counts line up with the families by
-/// position and by nothing else. The third is `ZERO_WINDOWS`' window ids
-/// `[w_1 … w_k]` under `MEMORY_WINDOWS`, empty when `k = 0`: its length varies
-/// per execution exactly as the counts do. Absorbing checks nothing;
-/// [`check_memory_windows`] is the rule over the same three.
-/// `docs/spec/memory.md` §6.1.
-pub fn absorb_statement_descriptor(
-    tr: &mut Transcript,
-    config: &VmConfig,
-    shard_counts: &[u32],
-    windows: &[u32],
-) {
-    assert_eq!(
-        shard_counts.len(),
-        config.families.len(),
-        "the statement descriptor carries one shard count per family in the VmConfig"
-    );
-    absorb_vm_config(tr, config);
-    let counts: Vec<Fr> = shard_counts
-        .iter()
-        .map(|c| Fr::from_u64(*c as u64))
-        .collect();
-    tr.append_scalars(tags::SHARD_COUNTS, &counts);
-    let ids: Vec<Fr> = windows.iter().map(|w| Fr::from_u64(*w as u64)).collect();
-    tr.append_scalars(tags::MEMORY_WINDOWS, &ids);
-}
-
-/// The verifier's RAM window rules over the statement, checked before the
-/// memory challenges (`docs/spec/memory.md` §3.5): `INIT_TEARDOWN` and
-/// `ZERO_WINDOWS` present at one height `h`; exactly one `INIT_TEARDOWN`
-/// shard; one window id per `ZERO_WINDOWS` shard; the ids strictly increasing;
-/// every id in `[1, 2^29 / h - 1]`. `ZERO_WINDOWS` shard `i` is window
-/// `windows[i]`, so together they give every RAM word exactly one init row.
-///
-/// `config` is one `decode_program` derived or `VmConfig::from_bytes`
-/// decoded — families strictly ascending, heights on the menu — and nothing
-/// here checks that again: a hand-built config listing a family twice is
-/// outside what these rules decide. `shard_counts` holds one count per family
-/// of `config`, as the statement descriptor does; anything else is a caller
-/// error and panics.
+/// The verifier's RAM window rules over the statement,
+/// `docs/spec/memory.md` §3.5, as a `ProgramError`:
+/// `verifier_core::check_memory_windows` is the rule, and its doc the
+/// precondition. A breach is `WindowRule`, its `rule` naming which.
 pub fn check_memory_windows(
     config: &VmConfig,
     shard_counts: &[u32],
     windows: &[u32],
 ) -> Result<(), ProgramError> {
-    assert_eq!(
-        shard_counts.len(),
-        config.families.len(),
-        "check_memory_windows: one shard count per family in the VmConfig"
-    );
-    let height = window_height(config)?;
-    let count = |id: FamilyId| {
-        let i = config.families.iter().position(|(f, _)| *f == id);
-        shard_counts[i.expect("window_height found both init families")]
-    };
-    let broken = |rule| Err(ProgramError::WindowRule { rule });
-    if count(family::INIT_TEARDOWN) != 1 {
-        return broken("INIT_TEARDOWN proves exactly one shard");
-    }
-    if windows.len() as u64 != count(family::ZERO_WINDOWS) as u64 {
-        return broken("the window list has one id per ZERO_WINDOWS shard");
-    }
-    if windows.windows(2).any(|pair| pair[0] >= pair[1]) {
-        return broken("the window ids are strictly increasing");
-    }
-    let n = (1u64 << 29) / height as u64;
-    if windows.iter().any(|w| *w == 0 || *w as u64 >= n) {
-        return broken("every window id is in [1, 2^29 / h - 1]");
-    }
-    Ok(())
+    verifier_core::check_memory_windows(config, shard_counts, windows)
+        .map_err(|rule| ProgramError::WindowRule { rule })
 }
 
 /// RAM window 0's initial words, the image column: row `y` is
@@ -983,15 +803,9 @@ pub fn setup_commitments(
 }
 
 /// The identity digest over given setup commitments. It needs no SRS: this is
-/// what a verifying-key loader recomputes. A fresh typed transcript absorbs,
-/// in this frozen order:
-///
-/// 1. `PROGRAM_IDENTITY`: `code_version`, one scalar;
-/// 2. `VM_CONFIG`: the family ids, their heights, `bytecode_size_words`;
-/// 3. `PROGRAM_ENTRY`: `entry_pc`, one scalar;
-/// 4. per family of `config`, in its order, `COMMITMENT`: that family's list
-///    in `commitments`, as one message of 4-limb G1 points;
-/// 5. one raw squeeze, which is the identity.
+/// what a verifying-key loader recomputes, and it is
+/// `verifier_core::identity_digest` over the points' canonical encodings,
+/// whose doc is the frozen recipe (`docs/spec/memory.md` §6.2).
 ///
 /// `commitments` holds one list per family of `config`; anything else is a
 /// caller error and panics.
@@ -1001,17 +815,9 @@ pub fn identity_from_commitments(
     entry_pc: u32,
     commitments: &[Vec<G1Affine>],
 ) -> ProgramIdentity {
-    assert_eq!(
-        commitments.len(),
-        config.families.len(),
-        "identity_from_commitments: one commitment list per family in the VmConfig"
-    );
-    let mut tr = Transcript::new();
-    tr.append_scalar(tags::PROGRAM_IDENTITY, Fr::from_u64(code_version as u64));
-    absorb_vm_config(&mut tr, config);
-    tr.append_scalar(tags::PROGRAM_ENTRY, Fr::from_u64(entry_pc as u64));
-    for points in commitments {
-        append_g1_list(&mut tr, tags::COMMITMENT, points);
-    }
-    ProgramIdentity(tr.sample())
+    let encoded: Vec<Vec<[u8; 64]>> = commitments
+        .iter()
+        .map(|points| points.iter().map(G1Affine::to_bytes).collect())
+        .collect();
+    verifier_core::identity_digest(code_version, config, entry_pc, &encoded)
 }

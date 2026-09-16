@@ -384,15 +384,18 @@ gkr_verify::verify_sumcheck(claim: Fr, rounds: &[[Fr; 4]], t: &mut Transcript)
 The prover's summand is one gate list with its batch weights; the verifier's
 returns the bound point and the last claim, which the caller holds to
 `eq(eq_point, point) · S(values)`. The claim is not a prover input: an honest
-round 0 sums to it by construction. S16's claim-merging sumcheck, whose claims
-sit at several points, extends this driver to a weighted sum of `eq` tables; the
-single point here is S13's.
+round 0 sums to it by construction. The master's claim-merging sumcheck was to
+extend this driver to a weighted sum of `eq` tables; S16 found no claims to merge —
+a shard is one circuit and the backward pass leaves every committed column at one
+point — and has none (`docs/spec/shard-proof.md` §5.3). The single point here is
+the only one.
 
 ### 5.1 What the caller owes
 
 - **Before** `prove` or `verify`, the caller has bound the base layer into the
   transcript (at S13 the tests absorb `sumcheck::witness_digest` of the committed
-  columns; S16 absorbs commitments). The engine never absorbs base material.
+  columns; since S16 the shard transcript absorbs the commitments,
+  `docs/spec/shard-proof.md` §4). The engine never absorbs base material.
 - Every `ExternalChallenges` value is either drawn **after** everything its
   gates can reach is bound — every committed column on any path from a gate
   naming the slot down through the inner layers — or a **derived** value: a fixed

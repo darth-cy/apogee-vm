@@ -10,6 +10,10 @@
 //! `gkr::eval_gate` and `gkr::gate_values`, the kernel that is the semantic
 //! authority.
 //!
+//! Since S16 it also holds [`TamperHarness`], the tamper-twin harness: a
+//! statement re-proved with a witness cell or the boundary changed, and one
+//! shard verified through `verifier::verify_shard`.
+//!
 //! The sampled checks draw deterministic pseudo-random points (splitmix64,
 //! fixed seeds), so every verdict is reproducible; each trial wrongly accepts
 //! two different polynomials with probability about `degree / |Fr|`.
@@ -25,6 +29,10 @@ use gkr::{
 };
 use poly::{MultilinearPoly, PolyBacking};
 use std::collections::BTreeMap;
+
+mod tamper;
+
+pub use tamper::{Cell, Tamper, TamperHarness};
 
 /// Independent pseudo-random points per sampled check.
 const TRIALS: usize = 8;

@@ -21,6 +21,13 @@ Since S15 it also owns the LogUp channels' second description
 (**`docs/spec/lookup.md` §12**): the native fractional sums, the comparison against the
 circuit's root pairs, and the obligation-discharge cross-check.
 
+Since S16 it also owns **the tamper-twin harness**, `TamperHarness`: an honest statement
+proved once, then proved again with cells of its witness or its boundary changed, as an
+honest prover would prove the changed witness, and one shard verified through
+`verifier::verify_shard`. It is the only place outside their own suites where a statement
+is both proved and verified, which is why `checker` now depends on both (the prover
+itself depends on `verifier` only for `encode_srs_verifier`).
+
 ```rust
 pub fn check_law1(a: &CircuitArtifact) -> Result<(), String>;   // locality
 pub fn check_law2(a: &CircuitArtifact) -> Result<(), String>;   // derived width, num_vars, halving order
@@ -45,6 +52,18 @@ pub fn channel_roots(a: &CircuitArtifact, values: &gkr::LayerValues, specs: &[Ch
 pub fn check_channel_roots(roots: &[(Fr, Fr)], sums: &[ChannelSum]) -> Result<(), String>;
 pub fn check_lookup_discharge(a: &CircuitArtifact) -> Result<(), String>;
 pub fn dump(a: &CircuitArtifact) -> String;
+
+// S16, docs/spec/shard-proof.md §6
+pub struct Cell { pub family: FamilyId, pub shard: u32, pub address: PolyAddress, pub row: usize, pub value: Fr }
+pub struct Tamper { pub cells: Vec<Cell>, pub boundary: Option<BoundaryFinals> }   // + Default
+impl<'a> TamperHarness<'a> {
+    pub fn new(setup: &'a ProverSetup, archive: &'a TraceArchive) -> TamperHarness<'a>;  // proves, asserts it verifies
+    pub fn honest(&self) -> (&PublicInputs, &[ShardProof]);
+    pub fn cell(&self, family: FamilyId, shard: u32, address: PolyAddress, row: usize) -> Fr;
+    pub fn run(&self, tamper: &Tamper, target: (FamilyId, u32)) -> Result<(), VerifyError>;
+    pub fn assert_rejects(&self, tamper: &Tamper, target: (FamilyId, u32), expected: VerifyError);  // by class
+    pub fn assert_verifies(&self, tamper: &Tamper, target: (FamilyId, u32));
+}
 pub struct VerifierConstants { /* trace_vars, committed and virtual names, per-list halving,
                                   num_vars, widths, enforcing and cached counts, output names,
                                   challenge slots */ }
@@ -83,6 +102,17 @@ checker dump <artifact>
 - **The cross-check's source is independent**: `tests/cross_check.rs`' constants and
   reference function are written from the toy's description, not read from its
   definition or from the committed file.
+- **The harness proves what an honest prover would.** A tampered cell is written into the
+  columns the honest fill produced; each channel's multiplicities are recounted over the
+  tampered columns **channel by channel**, and a channel keeps its honest counts only when
+  its own multiplicity column is the tamper or its own recount is impossible (a tuple its
+  table does not hold) — which never stops another channel's recount; a changed memory
+  column or boundary reruns the global commit phase, and every shard of the new statement
+  is proved again. So a refusal's class is the class of what the tamper broke, and
+  `assert_rejects` compares classes, not reasons — except that a `Lookup` refusal must
+  name the expected channel, since which table refuses is what a lookup twin is about. A tamper that breaks nothing verifies,
+  and `tests/tamper.rs`' acceptance 11 is that negative control. A tamper that keeps the
+  global state reuses the honest proofs of every shard it does not name.
 - **Deterministic.** The sampled checks use the crate's own splitmix64 with fixed seeds.
   `check_lookup_discharge`'s points fill the LogUp slots through
   `gkr::insert_lookup_challenges`, never at random: `β`'s powers are derived, and a point
@@ -100,4 +130,6 @@ checker dump <artifact>
 | `tests/witness.rs` | acceptance 8: a satisfying row passes; perturbing each of 14 cells reports exactly the relations derived by hand for it, on active and inactive rows; an evaluator reporting nothing or everything fails |
 | `tests/cross_check.rs` | acceptance 9: the hand-written description passes both fixtures; 24 perturbations, each on both compilations, each caught by the check the test names — among them a renamed memory, witness and setup column and a lawful added cached entry; documentation-only renames pass |
 | `tests/logup.rs` | **`#[ignore]`d; CI runs the file by name with `--include-ignored --test-threads=1`** — the toy is 2^20 rows and one forward pass holds 4.63 GB of inner cells. S15's acceptance over the combined toy filled from fib's `JUMP_BRANCH_SLT` cycles and decoded table: 1, the honest circuit — laws, padding, both discharge checks, no violated lookup or relation, every channel's root reproduced natively and holding, proved and verified; 2, the stage gate, one `word_hi` moved out of `[0, 2^16)` with the multiplicities recounted over it, which cannot even be counted, and the honest twin beside it; 3, the transcript order, every witness and multiplicity commitment absorbed before `g` and `β` are drawn, event for event and as an invariant; 4, S14's future read rerun, balancing and breaking no gate, now refused by the timestamp channel; 6, the gated keys — garbage under a flag of 0 leaving every root where it was, a flag = 1 key moved, and the `+ 1` offset distinguishing the AND table's real `(0, 0, 0)` from the `ZeroEntry`; 7, a moved decoded output and two illegal packed masks, the all-zero one included, each refused by the table's domain with every gate still holding; 8, one multiplicity cell changed; 12, a non-boolean extracted bit refused by its own gate; and the control for §4's precondition — a selected row whose key evaluates to `−1` gates to the `ZeroEntry`, and every check accepts it, which is why a family must bound the keys it looks up |
+| `tests/add_sub.rs` | S16's circuit row by row, in ordinary CI, with no forward pass: the fixture pinned and equal to its constructor, and the circuit passing the laws, the padding contract, the product-tree clause, `check_memory` and both discharge checks through both enforcement points; §8's layout, 31 gates, five lookups and three channels by name and in order; the registry's three families, and its `None`s; every row kind — each sum with and without its carry, each difference with and without its borrow, an `x0` destination, an `x0` operand, a two-byte instruction, a fence, the exit and the padding row — satisfying every gate and bound, each row built from Rust's own `u32` arithmetic; a table of single-cell tampers, each refused by exactly the gates written beside it; every booleanity gate §8.2 adds refusing 2; and acceptance 7's rows breaking exactly what their controls say, the all-zero mask breaking no gate and no range |
+| `tests/tamper.rs` | **`#[ignore]`d; run with `--include-ignored --test-threads=1`** (9.3 GB peak: a statement's proof, 8.6 GB, beside the honest one the harness keeps). The S16 statement through `TamperHarness`: acceptance 2–4, a wrap bit and a computed value `Constraint`, a teardown value and a pc read timestamp `MemoryArgument`, a `RANGE16` and a decoder multiplicity each `Lookup` on its own channel; 7, an unreduced sum and a `next_pc` past 32 bits refused by `RANGE16`, a wrap of 2 by its gate, an all-zero mask by `DECODER` — each channel named exactly; 11, cells nothing reads verifying; 13 as remapped, a teardown value or timestamp and `x10`'s final value under an honest exit status each `MemoryArgument`, on both shards; and S14's C8 forgeries, the exit rewriting its status, a non-exit row writing `HALT_PC`, and an image byte moved with its teardown value (`Opening`) |
 | `tests/dump.rs` | acceptance 10: the dump's header, columns, layers, relations, addresses and catalogue; one exact line per gate shape, the toy's `Quadratic` gate and its relation, the cached entry, a scratch-bijection line and an output-map line; a literal at or above `2^64` printed as hex; the CLI on the fixtures, a corrupted file and a lawless one; a lookup's line, with its channel's name and its selector |

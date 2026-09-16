@@ -75,7 +75,10 @@ S09), `accumulator` (entries, their wire form, discharge) — and no traits, no 
   exactly that reason.
 - **A G1 point absorbs as four Fr limbs**, `x` low / `x` high / `y` low / `y` high, split
   at 128 bits; infinity absorbs four copies of `constants::G1_INFINITY_SENTINEL` = `2^128`,
-  which no real limb can equal. A list is **one** message of `4k` limbs.
+  which no real limb can equal. A list is **one** message of `4k` limbs. Since S16 the
+  split itself is `transcript::g1_limbs` over the point's 64 bytes, which the no_std
+  verifier core calls without the curve; `append_g1_list` encodes and delegates, and
+  `tests/kats.rs`' arkworks vectors hold both.
 - **The proof is 704 bytes for every `n` and every `k`.** A batched proof is a
   `MercuryProof` and nothing else: batching changes the statement, never the shape.
 - **`rho^0` sits on list index 0.** Column `i` of a batch carries `rho^i`, so reordering

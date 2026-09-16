@@ -89,7 +89,10 @@ not hold cannot balance the channel.
 variable count (`docs/spec/mercury.md`), so the height menu's even entries put **every
 circuit carrying a timestamp gap obligation at `2^20` rows or more** — which is every
 execution family (`docs/spec/memory.md` §2.4). Six of the seven default there already;
-`constants::family::DEFAULT_HEIGHTS[ATOMICS]` is `2^16` and S16 must raise it.
+`constants::family::DEFAULT_HEIGHTS[ATOMICS]` is `2^16` and S16 must raise it. (S16 did
+not: by the owner's decision the atomics family's stage, S19, raises it with the circuit
+that needs it. Until then `constraints::family_circuit` has no atomics circuit at any
+height, so no key over the default heights and an atomics row can be built.)
 
 ## 4. Gated keys
 
@@ -425,3 +428,22 @@ channel's guarantee is conditional on the table a verifier is handed being the o
   table into the identity recipe or the statement (above), and raises
   `DEFAULT_HEIGHTS[ATOMICS]` to a height its timestamp channel fits (§3). S17 and S18
   consume `U16GetSign` and the copower assertion.
+
+**Status at S16.** The channels are wired into the shard transcript and its one opening
+(`docs/spec/shard-proof.md` §4, §5), and `check_discharge` runs at every key load, inside
+`VerifyingKey::check`. Three items moved, each recorded in `docs/handoff/S16-add-sub.md`:
+
+- **The packed generic table's binding is S17's**, by the owner's decision: "The generic
+  table becomes authenticated when the first family actually consumes the generic lookup
+  channel. Bind the exact packed-table commitment into the proof/constraint-system
+  statement or transcript before lookup challenges are derived. Do not add it to S16's
+  program-image identity merely because the table already exists." The add/sub family
+  does not look the generic channel up, so no S16 statement depends on the table.
+- **`check_copowers` runs where a family scales by a copower**, S17 and S18: the add/sub
+  family scales nothing, and the call over an empty list checks nothing.
+- **`trace::check_multiplicities` is not on the proving path.** The prover counts every
+  multiplicity column with `trace::build_multiplicities` and nothing else, so the check
+  would recount the build it just ran. A multiplicity column from any other source — the
+  tamper harness's — is the verifier's to refuse, and `crates/checker/tests/tamper.rs`
+  shows it is, as `Lookup`.
+- `DEFAULT_HEIGHTS[ATOMICS]` is S19's (§3).

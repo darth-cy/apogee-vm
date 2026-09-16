@@ -16,7 +16,7 @@ use std::process::Command;
 use crate::write_vectors;
 
 /// The guest ELFs the loader tests read, and what each is for.
-pub const ELF_FIXTURES: [(&str, &str); 10] = [
+pub const ELF_FIXTURES: [(&str, &str); 11] = [
     (
         "fib",
         "real compiler output: the address and boundary oracle",
@@ -56,6 +56,11 @@ pub const ELF_FIXTURES: [(&str, &str); 10] = [
         "consistency",
         "ordinary Rust run on the host, under QEMU and on the emulator: the \
          three-way consistency suite's guest, and its heap-ceiling probes",
+    ),
+    (
+        "addsub",
+        "S16's tiny guest: add/sub/addi/lui/auipc, a fence and an exit, and \
+         nothing else -- the one program proven end to end",
     ),
 ];
 

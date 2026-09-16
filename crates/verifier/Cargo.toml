@@ -1,0 +1,27 @@
+[package]
+name = "verifier"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The thin `std` wrapper over `verifier-core`: `verify_shard`, the one
+# verification path, which ends in `pcs::batch_verify`, and the `verifier`
+# CLI. `docs/spec/shard-proof.md` §6.
+[dependencies]
+curve.workspace = true
+pcs.workspace = true
+# `SrsVerifier`, the one piece of SRS material a verifier reads.
+srs.workspace = true
+verifier-core.workspace = true
+
+[dev-dependencies]
+# `tests/cli.rs` proves the S16 statement to have files to verify, through
+# `crates/prover/tests/common`.
+constants.workspace = true
+field.workspace = true
+prover.workspace = true
+emulator.workspace = true
+loader.workspace = true
+program.workspace = true
+rayon.workspace = true
+trace.workspace = true
