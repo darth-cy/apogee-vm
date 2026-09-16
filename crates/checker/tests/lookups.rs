@@ -238,7 +238,7 @@ fn mutants() -> Vec<Mutant> {
 #[test]
 fn check_laws_agrees_with_validate_on_every_lookup_mutant() {
     let mut runs = 0;
-    for (label, toy) in toys() {
+    for (label, toy) in selectable_toys() {
         assert!(toy.lookups.is_empty(), "{label}");
         for mutant in mutants() {
             let mut a = toy.clone();
@@ -373,7 +373,7 @@ type Evaluator = fn(&CircuitArtifact, &WitnessRow) -> Vec<String>;
 
 /// Every case, on both compilations.
 fn run(evaluate: Evaluator) -> Result<(), String> {
-    for (label, toy) in toys() {
+    for (label, toy) in selectable_toys() {
         let a = with_lookups(toy);
         for (what, cells, row, want) in cases() {
             let mut committed = vec![Fr::ZERO; a.committed().len()];
@@ -400,7 +400,7 @@ fn run(evaluate: Evaluator) -> Result<(), String> {
 /// read every lookup against one channel's bound.
 #[test]
 fn a_range16_lookup_is_bound_below_2_16() {
-    for (label, mut a) in toys() {
+    for (label, mut a) in selectable_toys() {
         let mut l = lookup("m_halfword", S0, expression(&[(lit(1), M0)], lit(0)));
         l.channel = lookup_channel::RANGE16;
         a.lookups.push(l);

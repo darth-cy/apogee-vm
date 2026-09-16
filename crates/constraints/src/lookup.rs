@@ -267,7 +267,7 @@ pub(crate) fn channel_trees(
             .unwrap_or_else(|| panic!("channel {channel} is not in constants::lookup_channel"));
         let width = spec.table.len();
         assert!(
-            width >= 1 && width <= lookup_channel::MAX_TUPLE,
+            (1..=lookup_channel::MAX_TUPLE).contains(&width),
             "channel `{name}`: a table of {width} columns is not between 1 and {}",
             lookup_channel::MAX_TUPLE
         );

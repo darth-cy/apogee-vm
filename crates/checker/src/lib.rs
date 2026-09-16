@@ -16,12 +16,14 @@
 
 use constants::memory::{READ_ROOT, WRITE_ROOT};
 use constants::{challenge_slot, lookup_channel};
+use constraints::lookup::ChannelSpec;
 use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress, VirtualKind, CATALOGUE};
 use field::Fr;
 use gkr::{
     eval_gate, forward, gate_values, virtual_at_row, BaseLayer, ExternalChallenges, LayerValues,
 };
 use poly::{MultilinearPoly, PolyBacking};
+use std::collections::BTreeMap;
 
 /// Independent pseudo-random points per sampled check.
 const TRIALS: usize = 8;
@@ -470,15 +472,37 @@ fn check_lookups(a: &CircuitArtifact) -> Result<(), String> {
             ));
         }
         let arity = l.tuple.len();
-        if arity != 1 {
+        let range = lookup_channel::IS_RANGE[channel as usize];
+        let widest = if range { 1 } else { lookup_channel::MAX_TUPLE };
+        if arity < 1 || arity > widest {
+            let kind = if range { "range" } else { "table" };
             return Err(format!(
-                "{what}: a tuple of {arity}, but a range channel looks up one expression"
+                "{what}: a tuple of {arity}, but a {kind} channel looks up 1 to {widest} \
+                 expressions"
+            ));
+        }
+        if let Some(other) = a
+            .lookups
+            .iter()
+            .find(|o| o.channel == l.channel && o.tuple.len() != arity)
+        {
+            return Err(format!(
+                "{what}: a tuple of {arity}, and {:?}'s is {}, over the one table their channel \
+                 has",
+                other.name,
+                other.tuple.len()
             ));
         }
         if layout_index(a, l.selector).is_none() {
             let selector = l.selector;
             return Err(format!(
                 "{what}: selector {selector} is not a committed column of the layout"
+            ));
+        }
+        if !holds_booleanity(a, l.selector) {
+            let selector = l.selector;
+            return Err(format!(
+                "{what}: gate list 0 does not hold selector {selector} to booleanity"
             ));
         }
         for gate in &l.tuple {
@@ -748,7 +772,26 @@ pub fn check_padding_identity(a: &CircuitArtifact) -> Result<(), String> {
             }
         }
         for entry in &a.layers[k].producing {
+            // A fraction tree's identity is `(0, 1)`, not 1, and its rows are
+            // not inactive at all: a padding row still contributes neutral
+            // entries to its channels, which the multiplicity column counts.
+            // So the clause is asked of the product trees alone, and a column
+            // any `TreeCross` reads is exempt.
+            if matches!(entry.gate, GateDef::TreeCross { .. }) {
+                continue;
+            }
+            let fraction: Vec<PolyAddress> = a.layers[k]
+                .producing
+                .iter()
+                .flat_map(|e| match &e.gate {
+                    GateDef::TreeCross { .. } => e.gate.operands(),
+                    _ => Vec::new(),
+                })
+                .collect();
             for op in entry.gate.operands() {
+                if fraction.contains(&op) {
+                    continue;
+                }
                 let slot = a.scratch.iter().position(|slot| slot.address == op);
                 let Some(i) = slot.filter(|i| known[*i]) else {
                     return Err(format!(
@@ -827,16 +870,18 @@ fn below(v: Fr, bits: u32) -> bool {
 }
 
 /// The native lookup evaluator, `docs/spec/memory.md` §7: the names of the
-/// lookups `w` violates, in lookup order. A lookup is violated when its
-/// selector is nonzero on the row and an expression of its tuple has a
+/// **range** lookups `w` violates, in lookup order. A lookup is violated when
+/// its selector is nonzero on the row and an expression of its tuple has a
 /// canonical integer at or above `2^BITS[channel]`
 /// (`constants::lookup_channel`), `V` read at `w.row`.
 ///
-/// Does NOT cover: `w.scratch`, which no lookup reads; the LogUp argument that
-/// discharges a lookup, which S15 builds — this is membership, natively, on one
-/// row; the lookup rules, which it assumes. Panics if `w.committed` is not
-/// shaped to the artifact, or on a lookup whose channel, selector, operands or
-/// coefficients the lookup rules refuse.
+/// Does NOT cover: a table channel's lookups, whose membership is a statement
+/// about the whole table and not about one row — [`channel_sums`] is their
+/// native evaluator, and it reports every unmatched row; `w.scratch`, which no
+/// lookup reads; the LogUp argument that discharges a lookup, which is
+/// [`channel_sums`] and the root pair; the lookup rules, which it assumes.
+/// Panics if `w.committed` is not shaped to the artifact, or on a lookup whose
+/// channel, selector, operands or coefficients the lookup rules refuse.
 pub fn violated_lookups(a: &CircuitArtifact, w: &WitnessRow) -> Vec<String> {
     let (given, expected) = (w.committed.len(), a.committed().len());
     assert_eq!(given, expected, "violated_lookups: committed length");
@@ -844,6 +889,13 @@ pub fn violated_lookups(a: &CircuitArtifact, w: &WitnessRow) -> Vec<String> {
     let mut violated = Vec::new();
     for l in &a.lookups {
         let fail = |why: String| -> ! { panic!("violated_lookups: lookup {}: {why}", l.name) };
+        if !lookup_channel::IS_RANGE
+            .get(l.channel as usize)
+            .copied()
+            .unwrap_or_else(|| fail(format!("channel {} is not a channel", l.channel)))
+        {
+            continue;
+        }
         let Some(&bits) = lookup_channel::BITS.get(l.channel as usize) else {
             fail(format!("channel {} has no bound", l.channel));
         };
@@ -861,6 +913,400 @@ pub fn violated_lookups(a: &CircuitArtifact, w: &WitnessRow) -> Vec<String> {
         }
     }
     violated
+}
+
+// ---------------------------------------------------------------------------
+// The LogUp channels
+// ---------------------------------------------------------------------------
+
+/// Whether some enforcing gate of gate list 0 is `x − x·x`, decided by
+/// evaluating each one's relation, and `x − x·x`, at `TRIALS` independent
+/// pseudo-random assignments of the committed columns and challenge slots and
+/// requiring them to agree at every one. Shares no code with
+/// `constraints`'s rule, which compares normalized expansions.
+fn holds_booleanity(a: &CircuitArtifact, x: PolyAddress) -> bool {
+    let Some(at) = layout_index(a, x) else {
+        return false;
+    };
+    let width = a.committed().len();
+    let slots = challenge_slots(&all_gates(a));
+    let scratch = vec![Fr::ZERO; a.scratch.len()];
+    let mut rng = Rng(0x600_1ea4);
+    let points: Vec<(Vec<Fr>, usize, ExternalChallenges)> = (0..TRIALS)
+        .map(|_| {
+            let committed: Vec<Fr> = (0..width).map(|_| rng.fr()).collect();
+            let row = rng.next() as usize;
+            (committed, row, rng.challenges(&slots))
+        })
+        .collect();
+    a.layers[0].enforcing.iter().any(|e| {
+        let Some(rel) = a.relations.get(e.relation as usize) else {
+            return false;
+        };
+        points.iter().all(|(committed, row, challenges)| {
+            let v = committed[at];
+            match row_value(a, &rel.gate, committed, *row, &scratch, challenges) {
+                Ok(value) => value == v - v * v,
+                Err(_) => false,
+            }
+        })
+    })
+}
+
+/// One channel's native recomputation, [`channel_sums`]'s element.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChannelSum {
+    /// The channel, one of `constants::lookup_channel`.
+    pub channel: u32,
+    /// `Σ_rows Σ_l 1/(E_l + g) − Σ_rows mult/(T + g)`, by direct inversion. A
+    /// channel holds exactly when this is 0.
+    pub sum: Fr,
+    /// The product of every leaf denominator of the channel over every row,
+    /// the neutral fractions' 1s included: the fraction tree's `den` root.
+    pub denominator: Fr,
+    /// `(row, lookup name)` for every row whose gated tuple is a row of no
+    /// table row, in row then lookup order. A nonempty list is why `sum` is
+    /// not 0.
+    pub unmatched: Vec<(usize, String)>,
+}
+
+/// The LogUp self-check hook, `docs/spec/lookup.md` §7: every channel's
+/// fractional sum and denominator product, recomputed natively from the base
+/// layer and the artifact's lookup list, and the rows whose gated tuple no
+/// table row answers.
+///
+/// The gated tuple, the compression and the neutral entry are re-derived here
+/// from `docs/spec/lookup.md` §4 and §5 rather than read from
+/// `constraints::lookup`, so a channel's root has two independent descriptions.
+///
+/// Refuses a spec whose channel has no lookup or whose table width a lookup
+/// disagrees with, a column the base does not hold, and a **zero denominator**,
+/// which it names: a zero leaf denominator is what makes the root's `den != 0`
+/// check bite, and no native sum exists over it.
+///
+/// Does NOT cover: whether the circuit's own tree computes these values —
+/// [`check_channel_roots`] is that comparison; the laws and the lookup rules,
+/// which it assumes; a channel `specs` does not list. Reads every row of every
+/// column a lookup or a table names.
+pub fn channel_sums(
+    a: &CircuitArtifact,
+    base: &BaseLayer,
+    specs: &[ChannelSpec],
+    challenges: &ExternalChallenges,
+) -> Result<Vec<ChannelSum>, String> {
+    let rows = 1usize << a.trace_vars;
+    let g = challenges
+        .get(challenge_slot::LOOKUP_G)
+        .ok_or("channel sums: challenge slot lookup_g was not supplied".to_string())?;
+    let beta = challenges
+        .get(challenge_slot::LOOKUP_BETA)
+        .ok_or("channel sums: challenge slot lookup_beta was not supplied".to_string())?;
+    let mut out = Vec::new();
+    for spec in specs {
+        let name = lookup_channel::NAMES
+            .get(spec.channel as usize)
+            .ok_or(format!("channel sums: channel {} is not one", spec.channel))?;
+        let width = spec.table.len();
+        let mine: Vec<&constraints::LookupExpr> = a
+            .lookups
+            .iter()
+            .filter(|l| l.channel == spec.channel)
+            .collect();
+        if mine.is_empty() {
+            return Err(format!("channel sums: channel `{name}` has no lookup"));
+        }
+        // β^0 .. β^{width-1}, the compression's weights.
+        let powers: Vec<Fr> = (0..width)
+            .scan(Fr::ONE, |p, _| {
+                let at = *p;
+                *p = *p * beta;
+                Some(at)
+            })
+            .collect();
+        let column = |address: PolyAddress, row: usize| -> Result<Fr, String> {
+            match address {
+                PolyAddress::Virtual(kind) => Ok(virtual_at_row(kind, row)),
+                other => base
+                    .get(other)
+                    .map(|c| c.get(row))
+                    .ok_or(format!("channel sums: the base has no column {other}")),
+            }
+        };
+        // The table, as a map from its raw tuple to its lowest row: a table of
+        // 2^n rows over a domain of fewer values repeats, and the lowest row
+        // holding a value is the one a multiplicity counts on.
+        let mut table: BTreeMap<Vec<[u8; 32]>, usize> = BTreeMap::new();
+        let mut table_tuple = Vec::with_capacity(rows);
+        for row in 0..rows {
+            let mut tuple = Vec::with_capacity(width);
+            for t in &spec.table {
+                tuple.push(column(*t, row)?);
+            }
+            table
+                .entry(tuple.iter().map(|v| v.to_bytes()).collect())
+                .or_insert(row);
+            table_tuple.push(tuple);
+        }
+        let mut sum = Fr::ZERO;
+        let mut denominator = Fr::ONE;
+        let mut unmatched = Vec::new();
+        for row in 0..rows {
+            let selector = |l: &constraints::LookupExpr| column(l.selector, row);
+            for l in &mine {
+                if l.tuple.len() != width {
+                    return Err(format!(
+                        "channel sums: lookup `{}` has {} expressions and channel `{name}`'s \
+                         table has {width} columns",
+                        l.name,
+                        l.tuple.len()
+                    ));
+                }
+                let s = selector(l)?;
+                let mut tuple = Vec::with_capacity(width);
+                for (j, e) in l.tuple.iter().enumerate() {
+                    let raw = row_value(a, e, &[], row, &[], challenges).or_else(|_| {
+                        let committed = committed_row(a, base, row)?;
+                        row_value(a, e, &committed, row, &[], challenges)
+                    })?;
+                    tuple.push(gate_tuple(spec.channel, j, s, raw));
+                }
+                if !table.contains_key(&tuple.iter().map(|v| v.to_bytes()).collect::<Vec<_>>()) {
+                    unmatched.push((row, l.name.clone()));
+                }
+                let d = compress(&powers, &tuple) + g;
+                if d == Fr::ZERO {
+                    return Err(format!(
+                        "channel sums: lookup `{}` has denominator 0 at row {row}",
+                        l.name
+                    ));
+                }
+                denominator = denominator * d;
+                sum = sum + d.inverse().expect("a nonzero denominator inverts");
+            }
+            let d = compress(&powers, &table_tuple[row]) + g;
+            if d == Fr::ZERO {
+                return Err(format!(
+                    "channel sums: channel `{name}`'s table has denominator 0 at row {row}"
+                ));
+            }
+            denominator = denominator * d;
+            let m = column(spec.multiplicity, row)?;
+            sum = sum - m * d.inverse().expect("a nonzero denominator inverts");
+        }
+        out.push(ChannelSum {
+            channel: spec.channel,
+            sum,
+            denominator,
+            unmatched,
+        });
+    }
+    Ok(out)
+}
+
+/// One row of the committed layout, in layout order.
+fn committed_row(a: &CircuitArtifact, base: &BaseLayer, row: usize) -> Result<Vec<Fr>, String> {
+    a.committed()
+        .into_iter()
+        .map(|address| {
+            base.get(address)
+                .map(|c| c.get(row))
+                .ok_or(format!("channel sums: the base has no column {address}"))
+        })
+        .collect()
+}
+
+/// `Σ_j β^j·tuple_j`.
+fn compress(powers: &[Fr], tuple: &[Fr]) -> Fr {
+    powers
+        .iter()
+        .zip(tuple)
+        .fold(Fr::ZERO, |acc, (p, v)| acc + *p * *v)
+}
+
+/// The gated value of tuple position `j` at selector `s` and raw expression
+/// value `raw`, `docs/spec/lookup.md` §4: a range channel gates to 0, the
+/// generic channel to the all-zero `ZeroEntry` with its key offset by one, and
+/// the decoder channel to `MINUS_ONE` in every column.
+fn gate_tuple(channel: u32, j: usize, s: Fr, raw: Fr) -> Fr {
+    match channel {
+        lookup_channel::GENERIC if j == 0 => s * (raw + Fr::ONE),
+        lookup_channel::DECODER => s * (raw + Fr::ONE) - Fr::ONE,
+        _ => s * raw,
+    }
+}
+
+/// Each channel's `(num, den)` root, read from the materialized top layer.
+///
+/// The output map is the memory roots, where the artifact has any, then one
+/// pair per channel in `specs` order (`constraints::memory`'s
+/// `frame_with_channels_artifact`), so the pairs are the **last**
+/// `2·specs.len()` outputs.
+pub fn channel_roots(
+    a: &CircuitArtifact,
+    values: &LayerValues,
+    specs: &[ChannelSpec],
+) -> Result<Vec<(Fr, Fr)>, String> {
+    let top = values
+        .layers
+        .last()
+        .ok_or("channel roots: no layer is materialized".to_string())?;
+    let first = a.outputs.len().checked_sub(2 * specs.len()).ok_or(format!(
+        "channel roots: {} outputs for {} channels",
+        a.outputs.len(),
+        specs.len()
+    ))?;
+    let mut out = Vec::new();
+    for i in 0..specs.len() {
+        let mut pair = [Fr::ZERO; 2];
+        for (at, value) in pair.iter_mut().enumerate() {
+            let PolyAddress::Inner { offset, .. } = a.outputs[first + 2 * i + at] else {
+                return Err(format!(
+                    "channel roots: output {} is not an inner column",
+                    first + 2 * i + at
+                ));
+            };
+            let column = top.get(offset as usize).ok_or(format!(
+                "channel roots: the top layer has no column {offset}"
+            ))?;
+            if column.len() != 1 {
+                return Err(format!(
+                    "channel roots: the top's column {offset} has {} rows, not one",
+                    column.len()
+                ));
+            }
+            *value = column.get(0);
+        }
+        out.push((pair[0], pair[1]));
+    }
+    Ok(out)
+}
+
+/// The circuit's own channel roots equal the native recomputation:
+/// `den` is the product of every leaf denominator, and `num` is `sum·den`.
+///
+/// Does NOT cover: whether a channel holds — that is `sum == 0` and
+/// `den != 0`, which the caller checks and a verifier repeats on the claimed
+/// outputs; the layers the fraction tree is built from, which
+/// `gkr::self_check` recomputes.
+pub fn check_channel_roots(roots: &[(Fr, Fr)], sums: &[ChannelSum]) -> Result<(), String> {
+    if roots.len() != sums.len() {
+        return Err(format!(
+            "channel roots: {} root pairs for {} channels",
+            roots.len(),
+            sums.len()
+        ));
+    }
+    for ((num, den), s) in roots.iter().zip(sums) {
+        let name = lookup_channel::NAMES[s.channel as usize];
+        if *den != s.denominator {
+            return Err(format!(
+                "channel roots: channel `{name}`'s den root is not the product of its leaf \
+                 denominators"
+            ));
+        }
+        if *num != s.sum * s.denominator {
+            return Err(format!(
+                "channel roots: channel `{name}`'s num root is not its fractional sum times its \
+                 den root"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The obligation-discharge cross-check, S15 must-be-exact 7: every lookup of
+/// `a` is the denominator of exactly one gate-list-0 column, and no column is
+/// two lookups'.
+///
+/// A column discharges a lookup when the two agree at `TRIALS` independent
+/// pseudo-random assignments of the committed columns, the row index and the
+/// challenge slots. The lookup's denominator is re-derived here from
+/// `docs/spec/lookup.md` §4 and §5; the column is evaluated through its
+/// relation, so the two descriptions share no code.
+///
+/// Does NOT cover: a gate-list-0 column that is nobody's denominator, which a
+/// circuit's leaves, its memory tree and its intermediate values all are; the
+/// channel specs, which it does not take; the laws, which it assumes.
+pub fn check_lookup_discharge(a: &CircuitArtifact) -> Result<(), String> {
+    let width = a.committed().len();
+    let slots = challenge_slots(&all_gates(a));
+    let scratch = vec![Fr::ZERO; a.scratch.len()];
+    let mut rng = Rng(0x10_09_0217);
+    let points: Vec<(Vec<Fr>, usize, ExternalChallenges)> = (0..TRIALS)
+        .map(|_| {
+            let committed: Vec<Fr> = (0..width).map(|_| rng.fr()).collect();
+            let row = rng.next() as usize;
+            (committed, row, rng.challenges(&slots))
+        })
+        .collect();
+    let mut used = vec![0usize; a.layers[0].producing.len()];
+    for l in &a.lookups {
+        let mut wanted = Vec::with_capacity(points.len());
+        for (committed, row, challenges) in &points {
+            wanted.push(lookup_denominator(a, l, committed, *row, challenges)?);
+        }
+        let mut hits = Vec::new();
+        for (j, e) in a.layers[0].producing.iter().enumerate() {
+            let Some(rel) = a.relations.get(e.relation as usize) else {
+                continue;
+            };
+            let agrees = points.iter().zip(&wanted).all(|((c, row, ch), want)| {
+                row_value(a, &rel.gate, c, *row, &scratch, ch) == Ok(*want)
+            });
+            if agrees {
+                hits.push(j);
+            }
+        }
+        if hits.len() != 1 {
+            return Err(format!(
+                "lookup discharge: lookup `{}` is the denominator of {} gate-list-0 columns; \
+                 exactly one discharges it",
+                l.name,
+                hits.len()
+            ));
+        }
+        used[hits[0]] += 1;
+    }
+    for (j, count) in used.iter().enumerate() {
+        if *count > 1 {
+            let name = &a.scratch[j].name;
+            return Err(format!(
+                "lookup discharge: column `{name}` is the denominator of {count} lookups; a \
+                 lookup is discharged once"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// `E_l + g` at one point: the lookup's gated tuple, compressed by the powers
+/// of `β` and shifted by `g`.
+fn lookup_denominator(
+    a: &CircuitArtifact,
+    l: &constraints::LookupExpr,
+    committed: &[Fr],
+    row: usize,
+    challenges: &ExternalChallenges,
+) -> Result<Fr, String> {
+    let g = challenges
+        .get(challenge_slot::LOOKUP_G)
+        .ok_or("lookup discharge: challenge slot lookup_g was not supplied".to_string())?;
+    let beta = challenges
+        .get(challenge_slot::LOOKUP_BETA)
+        .ok_or("lookup discharge: challenge slot lookup_beta was not supplied".to_string())?;
+    let at = layout_index(a, l.selector).ok_or(format!(
+        "lookup discharge: lookup `{}` has selector {}, which is not a committed column",
+        l.name, l.selector
+    ))?;
+    let s = committed[at];
+    let mut value = Fr::ZERO;
+    let mut power = Fr::ONE;
+    for (j, e) in l.tuple.iter().enumerate() {
+        let raw = row_value(a, e, committed, row, &[], challenges)?;
+        value = value + power * gate_tuple(l.channel, j, s, raw);
+        power = power * beta;
+    }
+    Ok(value + g)
 }
 
 // ---------------------------------------------------------------------------
