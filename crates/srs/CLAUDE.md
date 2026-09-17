@@ -8,14 +8,17 @@ The normative document is `docs/spec/srs.md`. This file is the summary a reader 
 before touching the code.
 
 ## Frozen invariants
-- **SRS integrity is presumed. There is no digest.** S07 specified a Poseidon2 digest over
-  every point, cached on `Srs`, carried in `SrsVerifier`, absorbed in statement binding
-  and re-verified by `load`. **It was dropped on the user's explicit instruction.** No code
-  in this workspace hashes an SRS. The master prompt's frozen statement-binding order
-  still lists `SRS digest` as its third item, and **that item has no implementation**:
-  nothing binds a proof to a particular SRS, so the protocol is not sound against SRS
-  substitution. A later stage building statement binding must reinstate it or record the
-  same deviation. `docs/spec/srs.md` §4 is the long form.
+- **SRS integrity is presumed. This crate has no digest.** S07 specified a Poseidon2
+  digest over every point, cached on `Srs`, carried in `SrsVerifier`, absorbed in
+  statement binding and re-verified by `load`. **It was dropped on the user's explicit
+  instruction.** No code in this workspace hashes the powers. The master prompt's frozen
+  statement-binding order lists `SRS digest` as its third item, and S16 filled it with a
+  narrower digest, `verifier_core::srs_digest`: the 320-byte `SrsVerifier` and, since S17,
+  the packed generic table's three commitments, and nothing else. A verifying key's loader
+  recomputes it from the key's own points, so a verifier takes the ceremony's digest from
+  a trusted channel; the powers are bound only through the pairing check against
+  `g2_tau`. `docs/spec/srs.md` §4 is the long form, and `docs/spec/shard-proof.md` §3 the
+  recipe.
 - **One ingestion format, one ceremony.** The snarkjs `.ptau` container, and no other,
   in v1 — and **PSE's perpetual powers of tau, contribution 80** (`ppot_0080_<power>.ptau`),
   **not Hermez's** `powersOfTau28_hez_final_*`. The two are different ceremonies with

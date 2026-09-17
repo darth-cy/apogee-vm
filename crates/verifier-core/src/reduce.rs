@@ -190,10 +190,14 @@ pub fn reduce_shard(
     }
 
     // 11. The opening the wrapper owes: M from the statement, W from the
-    //     proof, S from the key, in layout order.
+    //     proof, S from the key — identity's, then, for a family that reads
+    //     the generic channel, the generic table's — in layout order.
     let mut commitments = public.memory_commitments[position].clone();
     commitments.extend_from_slice(&proof.witness_commitments);
     commitments.extend_from_slice(&vk.setup_commitments[family_index]);
+    if circuit.reads_generic_table() {
+        commitments.extend_from_slice(&vk.generic_table);
+    }
     Ok(OpeningClaim {
         commitments,
         point,

@@ -30,10 +30,11 @@ use emulator::{run, trace_run, EmuError};
 /// Every guest the comparison covers: the stage's required corpus —
 /// `opcodes`, `rvc-dense`, `fib`, `heap` — `atomics`, the compiled AMOs,
 /// `consistency` on its hazards workload, the one input of that guest small
-/// enough for a per-instruction log, and `addsub`, S16's guest, which exits
-/// 42. `tests/consistency.rs` runs the rest of `consistency` against QEMU at
-/// the level of fd 1 rather than of registers.
-const SUITE: [&str; 7] = [
+/// enough for a per-instruction log, `addsub`, S16's guest, which exits 42,
+/// and `control`, S17's, which exits 16 — the jump/branch/slt family's twelve
+/// instructions compared one by one. `tests/consistency.rs` runs the rest of
+/// `consistency` against QEMU at the level of fd 1 rather than of registers.
+const SUITE: [&str; 8] = [
     "opcodes",
     "rvc-dense",
     "fib",
@@ -41,6 +42,7 @@ const SUITE: [&str; 7] = [
     "atomics",
     "consistency",
     "addsub",
+    "control",
 ];
 
 struct Qemu {

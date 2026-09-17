@@ -25,7 +25,7 @@ pub fn check_memory_windows(config: &VmConfig, shard_counts: &[u32], windows: &[
 pub struct ProgramIdentity(pub Fr);                        // to_bytes, from_bytes
 pub fn identity_digest(code_version: u32, config: &VmConfig, entry_pc: u32,
                        commitments: &[Vec<[u8; 64]>]) -> ProgramIdentity;
-pub fn srs_digest(verifier: &[u8; 320]) -> Fr;
+pub fn srs_digest(verifier: &[u8; 320], generic_table: &[[u8; 64]; 3]) -> Fr;   // S17: the table too
 pub const TRIVIAL_TS_WINDOW: [u64; 2];                     // [0, 2^38)
 pub fn statement_shards(config: &VmConfig, shard_counts: &[u32]) -> Vec<(u32, u32)>;
 pub fn boundary_scalars(finals: &BoundaryFinals) -> Vec<Fr>;
@@ -45,7 +45,9 @@ pub struct ShardProof { family, shard_index, ts_window: [u64; 2], global_digest:
                         witness_commitments: Vec<[u8; 64]>, outputs: Vec<Fr>, gkr: GkrProof,
                         opening: [u8; 704] }
 pub struct VerifyingKey { code_version, config, entry_pc, identity, setup_commitments,
-                          srs_verifier: [u8; 320], srs_digest: Fr, circuits: Vec<FamilyCircuit> }
+                          srs_verifier: [u8; 320],
+                          generic_table: [[u8; 64]; 3],   // S17, in every key; 3 = generic_table::WIDTH
+                          srs_digest: Fr, circuits: Vec<FamilyCircuit> }
 impl VerifyingKey { pub fn circuit(&self, f: u32) -> Option<&FamilyCircuit>; pub fn check(&self) -> Result<(), String>; }
 // PublicInputs, ShardProof, VerifyingKey: to_bytes, from_bytes
 pub struct OpeningClaim { pub commitments: Vec<[u8; 64]>, pub point: Vec<Fr>, pub values: Vec<Fr>,
@@ -77,16 +79,39 @@ pub const OPENING_BYTES: usize = 704;  pub const SRS_VERIFIER_BYTES: usize = 320
   proofs verifies against one `PublicInputs`: a shard checks the memory argument's
   reconciliation over roots the other shards' proofs establish.
 - **The global transcript is §2's G1–G11, implemented once** (`global_commit`), called by
-  the prover's global commit phase and by `reduce_shard`. `memory_roots` are not absorbed:
-  they are computed after the challenges, and each is bound by its own shard's GKR proof,
-  which step 10 compares with the statement.
+  the prover's global commit phase and by `reduce_shard`. It has no step for the generic
+  table: since S17 the table's commitments are inside the SRS digest, which G2 absorbs.
+  `memory_roots` are not absorbed: they are computed after the challenges, and each is
+  bound by its own shard's GKR proof, which step 10 compares with the statement.
+- **The SRS digest is §3's recipe** (`srs_digest`): a fresh transcript absorbs the
+  320-byte `SrsVerifier` as one `SRS_VERIFIER` (35) bytes message, then, since S17, the
+  key's three generic-table points as one `GENERIC_TABLE` (41) message of twelve limbs, and
+  the digest is one raw `sample()`. Tag 41 is absorbed in this sponge and nowhere else.
+  S17 amended S16's frozen spec in two places: §3 gained the second message, and §9's key
+  layout gained the three points, 192 raw bytes with no count, between the `SrsVerifier`
+  and the digest. Every S16 key's bytes and SRS digest changed.
 - **A key's load is §7.2**, `VerifyingKey::check`: its config derivable, its code version
-  `CODE_VERSION`, its identity the digest of its setup commitments, its SRS digest the
-  digest of its `SrsVerifier`, and its circuits **byte for byte**
-  `constraints::family_circuit(family, trace_vars)` — the circuits are protocol constants
-  given a family and a height, and identity binds the program, not the circuit — plus
-  `validate`, `check_memory` and `check_discharge` at every load, and every setup list its
-  artifact's `S` width. `from_bytes` refuses a non-canonical encoding.
+  `CODE_VERSION`, one setup list per config family, its identity the digest of its setup
+  commitments, its SRS digest the digest of its `SrsVerifier` and its generic table, and
+  its circuits **byte for byte** `constraints::family_circuit(family, trace_vars)` — the
+  circuits are protocol constants given a family and a height, and identity binds the
+  program, not the circuit — plus `validate`, `check_memory` and `check_discharge` at
+  every load. Per family, the setup list's length plus 3 where the circuit reads the
+  `GENERIC` channel (`FamilyCircuit::reads_generic_table`) is the artifact's `S` width.
+  Since S17 every key carries **one `generic_table`**, the packed table's three points,
+  whatever its families read. They are not in identity. A loaded key's digest agrees with
+  its own points and says nothing about whether they are the ceremony's, so a verifier
+  takes the digest from a trusted channel (§3). One further check guards the registry
+  rather than keys: every `GENERIC` channel spec names exactly the three setup columns
+  right after identity's. No key whose circuits are the registry's can fail it;
+  `prover::ProverSetup::new` runs `check`, so a later registry entry that broke it would
+  fail when its key is built. `from_bytes` refuses a non-canonical encoding; the key's
+  curve points are decoded by `verifier::load_verifying_key`, not here.
+- **The opening's commitments are `M`, `W`, then `S`** (step 11): the statement's memory
+  commitments for the shard, the proof's witness commitments, then
+  `vk.setup_commitments[family]` followed, where the circuit reads the generic channel, by
+  `vk.generic_table` (S17). That is the circuit's layout order: the jump family's shard
+  opens 21 + 44 + 10 commitments, the last three the table's.
 - **Every decoder is total** (`wire::Reader`): a count is refused unless the bytes left
   could hold it, a field element at or above `p` is refused, trailing bytes are refused,
   and a boundary scalar out of range — a timestamp at or above `2^38`, a value at or above
@@ -100,8 +125,9 @@ pub const OPENING_BYTES: usize = 704;  pub const SRS_VERIFIER_BYTES: usize = 320
 | File | Covers |
 | --- | --- |
 | `src/statement.rs` (unit) | the statement order puts the init families first; the window height and its two refusals; the boundary scalars' order; the trivial window |
-| `tests/wire.rs` | every type round-trips byte for byte; §9's layouts read back field by field; the statement's and the proof's readers refuse truncation at every length, the key's at every length before its circuits and at one in 97 after, and all three a trailing byte; an overlong count, a field element at the modulus and each out-of-range boundary scalar refused, one wider than 64 bits with in-range low bytes among them; a key with one bit flipped — one bit of every header byte, every bit of one circuit byte in 1009 — refused, never loaded and never a panic; each of §7.2's load rules refuses its edited key, by name, in memory and from bytes; the SRS digest is the documented recipe and moves with each of its 320 bytes |
-| `tests/reduce.rs` | the global transcript event for event (G1–G11); every statement field but the roots and the exit status moving the digest, and those two not — the exit status is bound at step 10; the shard transcript's first five events and every part of its seed moving `g`; `g` and `β` the first and second `LOOKUP_CHALLENGE` squeezes of a transcript replayed by hand; each shard's challenges — the window constant at `INIT_TEARDOWN`'s window 0 and at each `ZERO_WINDOWS` shard's own window, none for an execution family, and the memory and LogUp slots; each of steps 1–5's refusals as `Statement`, by reason, a key one setup list short among them; each of step 6's as `Malformed`; two thousand garbage statements and proofs refused with no panic |
+| `tests/wire.rs` | every type round-trips byte for byte, S16's key and one with S17's family among them; §9's layouts read back field by field — the proof's, the statement's, and the key's through its first circuit's artifact, S17's family key with its three generic-table points raw between its `SrsVerifier` and its SRS digest; the statement's and the proof's readers refuse truncation at every length, each key's at every length before its circuits and at one in 97 after, and all three a trailing byte; an overlong count, a field element at the modulus and each out-of-range boundary scalar refused, one wider than 64 bits with in-range low bytes among them; each key with one bit flipped — one bit of every byte before its circuits, every bit of one circuit byte in 1009, and every one of the generic table's 1,536 bits, each of those refused with the SRS digest's message — refused, never loaded and never a panic; each of §7.2's load rules but the registry's own order check, which no key can trip, refuses its edited key, by name, in memory and from bytes — S17's among them: a generic-table byte flipped and two of its points swapped, each refused by the SRS digest, and the jump family's setup list at 10 or at 6, each refused by the setup-count rule; the SRS digest is the documented recipe, its second message the table's twelve limbs, and moves with each of the `SrsVerifier`'s 320 bytes and each of the table's 192 |
+| `tests/reduce.rs` | the global transcript event for event, G1–G11 and nothing else; S17's generic table bound through the SRS digest: a key with S17's family has S16's schedule and no `GENERIC_TABLE` message, the statement's digest moves with each of the table's points and with their order once the key's SRS digest is recomputed over them, and a key whose table moved without it does not load; every statement field but the roots and the exit status moving the digest, and those two not — the exit status is bound at step 10; the key's SRS digest and identity each moving it; the shard transcript's first five events and every part of its seed moving `g`; `g` and `β` the first and second `LOOKUP_CHALLENGE` squeezes of a transcript replayed by hand; each shard's challenges — the window constant at `INIT_TEARDOWN`'s window 0 and at each `ZERO_WINDOWS` shard's own window, none for an execution family, and the memory and LogUp slots; each of steps 1–5's refusals as `Statement`, by reason, a key one setup list short among them; each of step 6's as `Malformed`; two thousand garbage statements and proofs refused with no panic |
 
-The proofs themselves are `crates/prover/tests/acceptance.rs` and
-`crates/checker/tests/tamper.rs`, `#[ignore]`d for size.
+The proofs themselves are `crates/prover/tests/acceptance.rs`,
+`crates/prover/tests/control.rs` and `crates/checker/tests/tamper.rs`, `#[ignore]`d for
+size.

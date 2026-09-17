@@ -16,6 +16,7 @@ use verifier_core::{
 };
 
 pub const ADD: u32 = family::ADD_SUB_LUI_AUIPC;
+pub const JBS: u32 = family::JUMP_BRANCH_SLT;
 pub const INIT: u32 = family::INIT_TEARDOWN;
 pub const ZERO: u32 = family::ZERO_WINDOWS;
 
@@ -34,6 +35,11 @@ pub fn config() -> VmConfig {
     }
 }
 
+/// The generic table's three commitments every key carries.
+pub fn generic_table() -> [[u8; 64]; 3] {
+    [blob(20), blob(21), blob(22)]
+}
+
 pub fn vk() -> VerifyingKey {
     let config = config();
     let setup = vec![(0..7).map(blob).collect(), vec![blob(100)], vec![]];
@@ -45,13 +51,62 @@ pub fn vk() -> VerifyingKey {
         config,
         setup_commitments: setup,
         srs_verifier,
-        srs_digest: srs_digest(&srs_verifier),
+        generic_table: generic_table(),
+        srs_digest: srs_digest(&srs_verifier, &generic_table()),
         circuits: vec![
             family_circuit(ADD, 20).unwrap(),
             family_circuit(INIT, 16).unwrap(),
             family_circuit(ZERO, 16).unwrap(),
         ],
     }
+}
+
+/// `vk`'s shape with S17's family beside add/sub: its decoded table's seven
+/// setup commitments in identity, which with the key's generic table are its
+/// ten setup columns.
+pub fn jbs_vk() -> VerifyingKey {
+    let config = VmConfig {
+        families: vec![
+            (ADD, 1 << 20),
+            (JBS, 1 << 20),
+            (INIT, 1 << 16),
+            (ZERO, 1 << 16),
+        ],
+        bytecode_size_words: 1 << 20,
+    };
+    let setup = vec![
+        (0..7).map(blob).collect(),
+        (10..17).map(blob).collect(),
+        vec![blob(100)],
+        vec![],
+    ];
+    let srs_verifier = [9u8; SRS_VERIFIER_BYTES];
+    VerifyingKey {
+        code_version: family::CODE_VERSION,
+        entry_pc: 0x1_0000,
+        identity: identity_digest(family::CODE_VERSION, &config, 0x1_0000, &setup),
+        config,
+        setup_commitments: setup,
+        srs_verifier,
+        generic_table: generic_table(),
+        srs_digest: srs_digest(&srs_verifier, &generic_table()),
+        circuits: vec![
+            family_circuit(ADD, 20).unwrap(),
+            family_circuit(JBS, 20).unwrap(),
+            family_circuit(INIT, 16).unwrap(),
+            family_circuit(ZERO, 16).unwrap(),
+        ],
+    }
+}
+
+/// A statement shaped to [`jbs_vk`]: one shard of each of its three families
+/// that run.
+pub fn jbs_statement() -> PublicInputs {
+    let mut s = statement();
+    s.shard_counts = vec![1, 1, 1, 0];
+    s.memory_commitments.push((600..621).map(blob).collect());
+    s.memory_roots.push([Fr::from_u64(5), Fr::from_u64(6)]);
+    s
 }
 
 /// The finals of a run that exits with `status`: x10 last written with it.

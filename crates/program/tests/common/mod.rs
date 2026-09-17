@@ -17,7 +17,7 @@ use program::{decode_program, ProgramParams};
 use test_support::{sha256, to_hex};
 
 /// Every guest with a committed ELF, in `guests/Cargo.toml`'s order.
-pub const GUESTS: [&str; 11] = [
+pub const GUESTS: [&str; 12] = [
     "fib",
     "echo",
     "rvc-dense",
@@ -29,12 +29,13 @@ pub const GUESTS: [&str; 11] = [
     "heap",
     "consistency",
     "addsub",
+    "control",
 ];
 
 /// This crate's committed fixtures and their digests. Refresh with
-/// `cargo run -p kat-gen -- program`, which prints them; the identity file
-/// needs the ceremony file.
-pub const PINS: [(&str, &str); 2] = [
+/// `cargo run -p kat-gen -- program`, which prints them; the identity and
+/// generic-table files need the ceremony file.
+pub const PINS: [(&str, &str); 3] = [
     (
         "mul_free.elf",
         "17a27f6ea5370cd865bb08afa7b2796274b41f0ede49f63d11a6314d7b4477fb",
@@ -42,6 +43,10 @@ pub const PINS: [(&str, &str); 2] = [
     (
         "identity.txt",
         "3232810e92795fef2ce795c3c0b84044d54294cc7238da4bb5b11022c4a8032b",
+    ),
+    (
+        "generic_table.txt",
+        "3754bcd72867a667e71fd6044dae27f63d5ae0c8e160690143bfe0853ff045f8",
     ),
 ];
 
@@ -178,6 +183,23 @@ pub fn pinned_identities() -> (String, Vec<(String, String)>) {
         })
         .collect();
     (ceremony, rows)
+}
+
+/// `generic_table.txt` as `(ceremony, [commitment hex; 3])`.
+pub fn pinned_generic_table() -> (String, Vec<String>) {
+    let text = String::from_utf8(own_vector("generic_table.txt")).expect("UTF-8");
+    let ceremony = text
+        .lines()
+        .find_map(|l| l.strip_prefix("# ceremony "))
+        .expect("generic_table.txt names its ceremony")
+        .to_string();
+    let rows: Vec<&str> = text
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+        .collect();
+    assert_eq!(rows.len(), 1, "one row: the three commitments");
+    let points = rows[0].split_whitespace().map(|x| x.to_string()).collect();
+    (ceremony, points)
 }
 
 /// Build one guest from source into a fresh target directory, the way

@@ -33,6 +33,7 @@ use constants::{address_space, challenge_slot, family, lookup_channel, memory};
 use field::Fr;
 
 use crate::build;
+use crate::gadgets;
 use crate::lookup;
 use crate::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
 
@@ -304,27 +305,16 @@ fn write_back(at: usize) -> GateDef {
 /// z − z·z = 0                      rd_is_zero_boolean
 /// write_value − sel + z·sel = 0    rd_write_masked
 /// ```
+///
+/// The first two are `gadgets::is_zero` over `addr`, enabled by the mask.
 fn x0_gates(at: usize, width: usize) -> [(&'static str, GateDef); 4] {
     let (addr, m) = (frame(at, FIELD_ADDR), frame(at, FIELD_MASK));
     let (inv, z, sel) = (rd_inv(width), rd_is_zero(width), rd_selected(width));
     let minus = Coeff::Literal(Fr::MINUS_ONE);
+    let [inverse, at_nonzero] = gadgets::is_zero(&[(lit(1), addr)], inv, z, m);
     [
-        (
-            "rd_is_zero_inverse",
-            GateDef::Quadratic {
-                constant: lit(0),
-                linear: vec![(lit(1), z), (minus, m)],
-                products: vec![(lit(1), addr, inv)],
-            },
-        ),
-        (
-            "rd_is_zero_at_nonzero",
-            GateDef::Quadratic {
-                constant: lit(0),
-                linear: vec![],
-                products: vec![(lit(1), addr, z)],
-            },
-        ),
+        ("rd_is_zero_inverse", inverse),
+        ("rd_is_zero_at_nonzero", at_nonzero),
         ("rd_is_zero_boolean", booleanity(z)),
         (
             "rd_write_masked",

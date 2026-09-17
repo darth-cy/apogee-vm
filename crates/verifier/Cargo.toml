@@ -18,6 +18,8 @@ verifier-core.workspace = true
 # `tests/cli.rs` proves the S16 statement to have files to verify, through
 # `crates/prover/tests/common`.
 constants.workspace = true
+# The loader's unit test builds a key over the registry's circuits.
+constraints.workspace = true
 field.workspace = true
 prover.workspace = true
 emulator.workspace = true

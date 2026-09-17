@@ -42,7 +42,8 @@ crates/
                  laws, the cache-free compilation and the wire form; `memory`: the per-family frames,
                  the two window artifacts and check_memory; and `lookup`: the LogUp
                  channels, their gated tuples, the fraction tree and the discharge rules;
-                 `add_sub`: S16's family circuit; `family_circuit`: the registry; no_std
+                 `add_sub`: S16's family circuit; `jump_branch_slt`: S17's; `gadgets`: the
+                 is-zero and comparison gadgets; `family_circuit`: the registry; no_std
   gkr-verify/    the GKR verifier half: the gate kernel, the layer sumcheck verifier and
                  verify, and every type verify touches; the memory argument's window
                  constant, boundary factors and reconciliation; no_std, linked by the
@@ -62,7 +63,7 @@ crates/
   guest-sdk/     crt0, entry!, linker script, bump allocator, ecall shims; no_std,
                  guest-only, and NOT a workspace member
 guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, opcodes/, heap/, consistency/,
-                 addsub/
+                 addsub/, control/
                  -- their own workspace; see guests/Cargo.toml and docs/guest-program-manual.md
 assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 handoff
 tools/
@@ -71,7 +72,9 @@ tools/
                  corpus via llvm-objdump, the identity pin from `program` itself, S13's
                  toy circuit artifacts, defined there and compiled by `constraints`,
                  S14's memory artifacts, written from `constraints::memory`'s constructors,
-                 S15's lookup toy, and S16's add/sub circuit, written from `constraints::add_sub`
+                 S15's lookup toy, S16's add/sub and S17's jump/branch/slt circuits, written
+                 from `constraints::{add_sub, jump_branch_slt}`, and the generic table's
+                 commitments over the ceremony
   bench/         one routine per measurement, individually selectable
   artifact-dump/ a guest ELF out as the frozen ProgramImage artifact, plus a
                  readable report of it; `tables` prints the decoded tables and identity
@@ -104,11 +107,12 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
-cargo test --workspace                      # 796 tests as of S16; 44 more are #[ignore]d
+cargo test --workspace                      # 819 tests as of S17; 50 more are #[ignore]d
 cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 4.63 GB a pass, 30 min on a runner
 cargo test -p prover --test acceptance -- --include-ignored --test-threads=1  # DEFERRED; S16's statement, 8.6 GB peak
 cargo test -p verifier --test cli -- --include-ignored --test-threads=1       # DEFERRED; ditto
-cargo test -p checker --test tamper -- --include-ignored --test-threads=1     # DEFERRED; one re-proof a twin, 9.3 GB peak
+cargo test -p checker --test tamper -- --include-ignored --test-threads=1     # DEFERRED; one re-proof a twin, 11.3 GB peak
+cargo test -p prover --test control -- --include-ignored --test-threads=1     # DEFERRED; S17's statement, 10.1 GB peak
 cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify -p verifier-core --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
@@ -134,6 +138,7 @@ cargo run --release -p bench -- <routine>   # just that one; setup is per-routin
 cargo run -p artifact-dump -- <guest.elf> [--out <dir>]   # export a ProgramImage
 cargo run --release -p artifact-dump -- tables <guest.elf> [--ptau <file>]   # decoded tables, identity
 cargo test --release -p program --test identity -- --ignored   # identity; needs the ceremony file
+cargo test --release -p program --test lookup_tables -- --ignored   # the generic table's commitments; ditto
 ```
 
 `artifact-dump` writes `<name>.img` — the frozen `postcard` wire form, with no
@@ -168,7 +173,7 @@ cargo test -p loader --test qemu -- --include-ignored   # a Linux host with qemu
 cargo test -p loader --test layout -- --ignored         # after editing link.ld
 
 APOGEE_GUEST_PROFILE=release \
-  cargo test -p loader --test qemu -- --include-ignored   # the same nine, optimised
+  cargo test -p loader --test qemu -- --include-ignored   # the same ten, optimised
 ```
 
 **Guests build at `--release` too, and both profiles are pinned.** In a zkVM
@@ -265,14 +270,19 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   ffjavascript's in-memory layout written straight out. `crates/srs` multiplies by
   `R^-1` and hands canonical bytes to S05's `from_bytes`, so there is still exactly one
   validating decoder.
-- **SRS integrity is presumed; the SRS digest covers the verifier points only.** S07's
-  Poseidon2 digest over the whole SRS was dropped on instruction. S16's SRS digest is
-  Poseidon2 over the 320-byte `SrsVerifier`, in the verifying key and absorbed third in
-  every statement: it binds a proof to the points its pairings read, and nothing more. The
-  key's loader recomputes it from the key's own points and identity does not bind the SRS,
-  so a key whose verifier points were swapped for ones with a known `tau` still loads.
-  A verifier must get the ceremony's `SrsVerifier`, or its digest, from a trusted channel,
-  as it gets identity. `docs/spec/srs.md` §4, `docs/spec/shard-proof.md` §7.2.
+- **SRS integrity is presumed; the SRS digest covers the verifier points and the generic
+  table, nothing else.** S07's Poseidon2 digest over the whole SRS was dropped on
+  instruction. The SRS digest is a Poseidon2 sponge over the 320-byte `SrsVerifier` (S16)
+  and, since S17, the packed generic table's three commitments as one twelve-limb
+  `GENERIC_TABLE` message. It is in the verifying key and G2 absorbs it in every statement:
+  it binds a proof to the points its pairings read and the table its generic lookups read,
+  and nothing more. The key's loader recomputes it from the key's own points, and identity
+  binds neither the SRS nor the table, so a key whose verifier points were swapped for ones
+  with a known `tau`, or whose table commitments were swapped for another table's, still
+  loads under its own recomputed digest. A verifier must get the ceremony's SRS digest from
+  a trusted channel, as it gets identity, or else get the ceremony's `SrsVerifier` and the
+  table's three commitments, which anyone holding the ceremony can compute, and recompute
+  the digest from them. `docs/spec/srs.md` §4, `docs/spec/shard-proof.md` §3 and §7.2.
 - **A guest ELF must satisfy two loaders, not one.** The zkVM makes the whole RAM window
   addressable by construction, so `crates/loader` only ever reads `p_vaddr` and `p_memsz`.
   A *host* loader — `qemu-riscv32`, the only executor before S12 — maps just the `PT_LOAD`s
@@ -458,14 +468,18 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   trace missing its exit row cannot balance. Since S16 the add/sub family's `next_pc` gate
   holds every one of its rows to it: the exit row writes `HALT_PC`, every other live row
   the decoded table's `next_pc`, which stays the fall-through, minus `2^32·pc_wrap`. Every
-  other family owes its own `next_pc` gate at its stage.
+  other family owes its own `next_pc` gate at its stage. **"Odd" is a constraint only where
+  a family makes it one**: S17's jump family range-checks every `next_pc` it writes even,
+  because a `jalr` whose `rs1 + imm` is 1 could otherwise keep bit 0 and write `HALT_PC` —
+  a crashing program proven to exit cleanly. A family that computes a pc owes the same.
 - **A frame alone holds a query's mask to booleanity and nothing else.** No frame gate ties
   it to the row's pc mask or to the instruction the row looks up, so a padding row can
   carry an `rd` query that rewrites `x10` after exit, and it balances. A family's circuit
   makes `m_pc` the row's liveness and the decoder lookup's selector, and `m_q = m_pc·uses_q`
   from the row kind (`docs/spec/memory.md` §2.1). S16's add/sub family does, and
-  `crates/checker/tests/tamper.rs` proves control C8's three forgeries refused; every
-  later family owes the same gates.
+  `crates/checker/tests/tamper.rs` proves control C8's three forgeries refused; S17's jump
+  family does, and its row suite refuses C8 on its frame; every later family owes the same
+  gates.
 - **The artifact format is 1, and a lookup carries a selector.** `LookupExpr = (name,
   channel, selector, tuple)`: a range obligation holds where its selector is 0 or its one
   `Linear` expression is below the channel's bound. A **table** channel's tuple is 1 to
@@ -514,8 +528,9 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   slot (1–5) and reads a `W` column, a root whose cone reads a `W` column at all — `W` is
   committed after the memory challenges — a global-slot coefficient over anything but `M`, `S`
   and `V`, and a leaf mask that is an `M` or `S` column with no booleanity gate, or any
-  virtual column but `V[ram_live]`. `S` is admitted only because identity
-  binds setup columns before the challenges. `docs/spec/memory.md` §8.
+  virtual column but `V[ram_live]`. `S` is admitted only because its columns are bound
+  before the challenges — by identity, or, for S17's generic table, by the SRS digest.
+  `docs/spec/memory.md` §8.
 - **The shard proof's spec is `docs/spec/shard-proof.md`, and it is frozen**: the statement,
   the global transcript G1–G11 and the shard transcript, the SRS digest, the one opening
   per shard, `verify_shard`'s check order, the verifying key and its load rules, the
@@ -533,7 +548,32 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   `constraints::family_circuit(family, trace_vars)` is the one source of circuits, and
   loading a key refuses any other. Identity binds the program, not its circuit. A family
   becomes provable with one arm there and one fill in `prover::family_fill`, and nothing
-  else in the prover or the verifier changes.
+  else in the prover or the verifier changes — S17's jump family was exactly that, plus
+  the generic table's binding below.
+- **The packed generic table is bound through the SRS digest, not identity** (owner's
+  decisions: S16 answer 8, and at S17 "fold into the SRS digest"). Every `VerifyingKey`
+  carries exactly one `generic_table`, the table's three commitments, whether or not any
+  of its families reads the `GENERIC` channel, and the SRS digest covers them. So the
+  global transcript is S16's G1–G11 unchanged, and the table enters it only through G2. A
+  family whose circuit reads the channel (`FamilyCircuit::reads_generic_table`) opens its
+  last three setup columns against them, listed after identity's setup commitments: the
+  jump family's `S[7..10]`. They are constants of the ceremony, the same three points at
+  every height `2^n` with `n` even and at least 18, pinned in
+  `crates/program/tests/vectors/generic_table.txt`. This amends S16's frozen shard-proof
+  spec at §3 and §9, so every S16 key's bytes and SRS digest changed.
+  `constants::generic_table` holds the table's width and key bases.
+  `docs/spec/jump-branch-slt.md` §6.
+- **The jump/branch/slt family's spec is `docs/spec/jump-branch-slt.md`, and it is frozen.**
+  S11's decoded table unchanged — the prompt's five-bit mask would have rebuilt it — so
+  `sc`, `cmp_imm`, the branch weights and the fall-through are linear forms over the twelve
+  one-hot kind bits, and the legal masks are those twelve bits
+  (`jump_branch_slt::LEGAL_MASKS`); one ungated degree-2 comparison,
+  `lhs − rhs − 2^32·sc·(lhs_sign − rhs_sign) + 2^32·lt − gap = 0`, whose `gap` range check
+  carries the soundness, signs from `U16GetSign` over range-checked halfwords, and no
+  comparison table; `taken` a committed bit; one ungated wrap on whichever sum `next_pc`
+  is; the link the table's fall-through, range-checked and with no wrap bit; a branch has no
+  `rd` query. **`constraints::gadgets`** — `is_zero` (the x0 rule is built on it, bytes
+  unchanged) and `comparison` — are frozen for S18 and S19.
 - **EXIT is the only provable ecall** (owner's decision, S16). The add/sub family holds
   every ecall row to `a7 = 93`, and its fill refuses any other ecall and any transfer
   cycle by name. The I/O-binding stage owes the rest, and until then fd 0 and fd 1 are
@@ -565,3 +605,4 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 | S14 — Memory multiset argument, RAM windows, register/PC boundary | done | `docs/handoff/S14-multiset.md` |
 | S15 — LogUp lookup channels + decoder lookup | done | `docs/handoff/S15-lookup.md` |
 | S16 — Vertical slice: add/sub family end to end | done | `docs/handoff/S16-add-sub.md` |
+| S17 — Jump/branch/slt family | done | `docs/handoff/S17-control-flow.md` |

@@ -1,7 +1,11 @@
-//! The S16 statement every suite proves: `guests/addsub`'s committed ELF,
-//! decoded with its execution family at `2^20` rows — the timestamp channel's
-//! floor — and everything else at `2^16`, traced into an archive, over a toy
-//! SRS whose `tau` is written down here. Test-only.
+//! The statements the proving suites prove, over a toy SRS whose `tau` is
+//! written down here. Test-only.
+//!
+//! - S16's: `guests/addsub`'s committed ELF, decoded with its execution family
+//!   at `2^20` rows — the timestamp channel's floor — and everything else at
+//!   `2^16`, traced into an archive.
+//! - S17's: `guests/control`'s, the same way, with both of its execution
+//!   families — add/sub and jump/branch/slt — at `2^20`.
 
 #![allow(dead_code)]
 
@@ -26,23 +30,45 @@ pub const WINDOW_VARS: u32 = 16;
 /// `guests/addsub`'s exit status.
 pub const RESULT: u32 = 42;
 
-pub fn elf() -> Vec<u8> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../loader/tests/vectors/addsub.elf");
+/// `guests/control`'s exit status: the number of its checks.
+pub const CONTROL_RESULT: u32 = 16;
+
+/// The committed ELF of guest `name`.
+pub fn fixture(name: &str) -> Vec<u8> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join(format!("../loader/tests/vectors/{name}.elf"));
     std::fs::read(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
 }
 
-pub fn params() -> ProgramParams {
+pub fn elf() -> Vec<u8> {
+    fixture("addsub")
+}
+
+/// Every family at `2^16` but `executed`, at `2^20`.
+fn heights(executed: &[u32]) -> ProgramParams {
     let mut heights = [1 << WINDOW_VARS; family::COUNT as usize];
-    heights[family::ADD_SUB_LUI_AUIPC as usize] = 1 << ADD_VARS;
+    for f in executed {
+        heights[*f as usize] = 1 << ADD_VARS;
+    }
     ProgramParams {
         heights,
         ..ProgramParams::defaults()
     }
 }
 
-pub fn program() -> Program {
-    let image = load_elf(&elf()).expect("addsub loads");
-    let (tables, config) = decode_program(&image, &params()).expect("addsub decodes");
+pub fn params() -> ProgramParams {
+    heights(&[family::ADD_SUB_LUI_AUIPC])
+}
+
+/// S17's heights: both of `control`'s execution families at `2^20`.
+pub fn control_params() -> ProgramParams {
+    heights(&[family::ADD_SUB_LUI_AUIPC, family::JUMP_BRANCH_SLT])
+}
+
+fn program_of(name: &str, params: &ProgramParams) -> Program {
+    let image = load_elf(&fixture(name)).unwrap_or_else(|e| panic!("{name} loads: {e:?}"));
+    let (tables, config) =
+        decode_program(&image, params).unwrap_or_else(|e| panic!("{name} decodes: {e}"));
     Program {
         image,
         tables,
@@ -50,15 +76,33 @@ pub fn program() -> Program {
     }
 }
 
+pub fn program() -> Program {
+    program_of("addsub", &params())
+}
+
+pub fn control_program() -> Program {
+    program_of("control", &control_params())
+}
+
 /// The post-execution archive of `addsub`'s one run.
 pub fn archive(program: &Program) -> TraceArchive {
+    trace(program, RESULT)
+}
+
+/// The post-execution archive of `control`'s one run.
+pub fn control_archive(program: &Program) -> TraceArchive {
+    trace(program, CONTROL_RESULT)
+}
+
+/// A run with no input and no hint, which must exit with `status`.
+fn trace(program: &Program, status: u32) -> TraceArchive {
     let io = GuestIo {
         input: Vec::new(),
         hint: Vec::new(),
     };
     let (traces, log, profile, execution) =
-        trace_run(&program.image, &io, &program.tables, &program.config).expect("addsub traces");
-    assert_eq!(execution.exit_code, RESULT as i32);
+        trace_run(&program.image, &io, &program.tables, &program.config).expect("the guest traces");
+    assert_eq!(execution.exit_code, status as i32);
     TraceArchive::from_execution(
         traces,
         log,
@@ -73,6 +117,10 @@ pub fn archive(program: &Program) -> TraceArchive {
 
 pub fn setup() -> ProverSetup {
     ProverSetup::new(program(), toy_srs(ADD_VARS)).expect("addsub registers")
+}
+
+pub fn control_setup() -> ProverSetup {
+    ProverSetup::new(control_program(), toy_srs(ADD_VARS)).expect("control registers")
 }
 
 /// An SRS of `2^power` powers of a `tau` written down here: real, structurally

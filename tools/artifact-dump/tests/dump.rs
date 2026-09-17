@@ -12,7 +12,7 @@ use artifact_dump::{dump, wire_form};
 use loader::{load_elf, ProgramImage, Slot};
 
 /// The committed guest ELFs, plus the smallest synthetic one.
-const FIXTURES: [&str; 12] = [
+const FIXTURES: [&str; 13] = [
     "fib",
     "echo",
     "rvc-dense",
@@ -24,6 +24,7 @@ const FIXTURES: [&str; 12] = [
     "heap",
     "consistency",
     "addsub",
+    "control",
     "minimal",
 ];
 

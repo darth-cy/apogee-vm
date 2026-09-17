@@ -1,6 +1,11 @@
 # The shard proof: statement, transcripts, the verifying key and the add/sub family
 
-Frozen as of S16. Changing anything here is a protocol-version change.
+Frozen as of S16. Changing anything here is a protocol-version change. S17 amended it for
+the generic table's binding and the second registered execution family: decision 2 and §3
+(the SRS digest also covers the table's three commitments), §9 (the key's layout gains
+them, 192 bytes), and §4, §5, §7, §8.5 and §11 to match. The global transcript's
+schedule, §2, did not change; a note there says where the table is bound.
+`docs/spec/jump-branch-slt.md` is that family's page.
 
 This page is S16's vertical slice as the repository owner decided it: the statement a
 proof is about, the global and per-shard transcripts, the three proof-side types and
@@ -26,7 +31,8 @@ The owner's decisions this page records, each put before any code:
    curve points and calls `pcs::batch_verify`. `pcs` is **not** split: the curve-free
    Mercury field-side module stays with the recursion stage, together with S09's open
    question of how a guest obtains `cm* = Σ ρ^i·cm_i`.
-2. **The SRS digest is a digest of the `SrsVerifier`** (§3), not of every power.
+2. **The SRS digest is a digest of the `SrsVerifier`** (§3), not of every power. At S17
+   the owner folded the packed generic table's three commitments into it (§3).
 3. **EXIT is the only provable ecall** (§8.4). The tiny guest's committed result is its
    exit status.
 4. **The statement's variable-length record lives in `PublicInputs`** (§1). A
@@ -102,6 +108,12 @@ G3 to G5 are `absorb_statement_descriptor`, S11's three adjacent messages as S14
 amended them. G1 is the protocol suite tag carrying `PROTOCOL_VERSION`: the suite is
 the tag, the version its payload.
 
+**The generic table has no step of its own (S17).** The packed generic table of
+`docs/spec/lookup.md` §9 is committed setup that program identity does not bind (owner's
+decision, S16 answer 8). Its three commitments are inside the SRS digest (§3), so G2 binds
+them before every challenge of the statement and of every shard seeded from it.
+`docs/spec/jump-branch-slt.md` §6 is the binding in full.
+
 **G8, the memory-column groups.** One group per family of the `VmConfig` — the
 `INIT_TEARDOWN` group, then the `ZERO_WINDOWS` group, then every other family's
 ascending by id, a family with no shards included:
@@ -137,13 +149,55 @@ those bytes say, and refused where it is decoded (§6, step 12).
 
 ## 3. The SRS digest
 
-`verifier_core::srs_digest(verifier_bytes)`: a fresh `Transcript` absorbs the 320-byte
-`SrsVerifier` encoding — `g1_gen ‖ g2_gen ‖ g2_tau`, S07's layout — as one
-`append_bytes(SRS_VERIFIER (35), ·)`, and the digest is one raw `sample()`. It is the
-same recipe as `io_digest`. It binds exactly the points a verifier's pairings read,
-so a proof is bound to the setup its verifier checks it against. It is not a digest of
-the powers: S07's full-SRS digest remains dropped (`docs/spec/srs.md` §4), and a
+`verifier_core::srs_digest(verifier, generic_table)`: a fresh `Transcript` absorbs two
+messages,
+
+```text
+append_bytes(SRS_VERIFIER (35), srs_verifier)          320 bytes: g1_gen ‖ g2_gen ‖ g2_tau, S07's layout
+append_g1_points(GENERIC_TABLE (41), generic_table)    3 points, one message of 12 limbs       S17
+```
+
+and the digest is one raw `sample()`, as `io_digest`'s is: raw, because a challenge under
+a bytes tag would be one tag in two kinds. The three points are in tuple order — key,
+value, result — each as §2.4's four limbs. Tag 41 is absorbed in this sponge and nowhere
+else.
+
+The digest binds the points a verifier's pairings read and the table every generic lookup
+reads, so a proof is bound to the setup its verifier checks it against. It is not a digest
+of the powers: S07's full-SRS digest remains dropped (`docs/spec/srs.md` §4), and a
 prover's powers are bound only through the pairing check against `g2_tau`.
+
+**S17's amendment.** At S16 the digest was the first message alone. S17 added the second,
+on the owner's decision to fold the generic table into the SRS digest. Every S16 key's
+digest therefore changed, and so did its bytes (§9). The table enters the global
+transcript only through this digest, which G2 absorbs.
+
+**Why one digest can carry the table.** Both messages are constants of the ceremony. A
+Mercury commitment is a plain KZG commitment of the evaluation table read as coefficients
+(`docs/spec/mercury.md` §2), and `program::lookup_tables::generic_table(n)` is zero past
+its 131,073 entries. So the table over `2^n` rows commits to the same three points at
+every even `n ≥ 18`, which is every height Mercury commits at from `2^18` up, and every
+key carries that one set, whatever its program and heights.
+`program::lookup_tables::generic_commitments(srs)` computes it at `GENERIC_LOG_HEIGHT`,
+18. It panics on an SRS of fewer than `2^18` powers, which no provable program's SRS is:
+that SRS holds at least its tallest family's rows, and every execution family's shard is
+at least `2^20` rows. `crates/program/tests/vectors/generic_table.txt` pins the three
+points over the PSE ceremony.
+
+**Where the trust sits.** A key's loader recomputes the digest from the key's own
+`srs_verifier` and `generic_table` (§7.2), so a loaded key's digest agrees with its own
+points and says nothing about whether they are the ceremony's. A verifier therefore
+obtains the SRS digest from a trusted channel, as it obtains identity. Instead of the
+digest it may obtain the ceremony's `SrsVerifier` and the table's three commitments, which
+anyone holding the ceremony recomputes with `generic_commitments`. Take a key whose table
+commitments were swapped for another table's. With the honest digest, it does not load.
+With its own recomputed digest, it loads, but that digest is not the trusted one; G2 then
+absorbs a different digest, and every honest proof is refused under the key as
+`Statement("the proof was made for another statement")`. A verifier that uses a key's
+digest without comparing it with the trusted one has not checked which table its generic
+lookups read: whoever built the key can commit another table in it, and proofs whose
+lookups hold only in that table verify under that key. Identity is unchanged, and binds
+neither the SRS nor the generic table.
 
 ---
 
@@ -164,8 +218,8 @@ S4 is drawn for every shard, whether or not its circuit names a lookup slot: one
 schedule, not two. **The time window** at S16 is the trivial one, `[0, 2^38)` — the
 whole clock — and a verifier refuses any other; S20 generalizes the value, not the
 field. **Every local challenge follows every commitment the shard reads**: the memory
-columns before G10, the setup columns through the identity before G10, the witness
-columns at S3.
+columns before G10, the setup columns through the identity before G10, the generic
+table's columns through the SRS digest at G2 (S17), the witness columns at S3.
 
 **The external challenges** the shard's circuit reads: slots 1 to 4 from G10; for a
 RAM window family, the derived slot 5 through
@@ -191,7 +245,8 @@ S6 opens all of them in one RLC-batched Mercury opening at that point:
 columns      the circuit's committed layout: M[0..], W[0..], S[0..]
 commitments  M from PublicInputs.memory_commitments[position]
              W from ShardProof.witness_commitments
-             S from VerifyingKey.setup_commitments[family]
+             S from VerifyingKey.setup_commitments[family],
+               then VerifyingKey.generic_table if the circuit reads GENERIC    (S17)
 point        the base claims' point, variable j at index j (Mercury's u1 first, S08)
 values       layer 0's L3 message: ShardProof.gkr.layers[0].final_evals
 ```
@@ -199,13 +254,25 @@ values       layer 0's L3 message: ShardProof.gkr.layers[0].final_evals
 Virtual columns are never claimed and never opened: `gkr_verify::verify` evaluates
 their closed form itself.
 
+`FamilyCircuit::reads_generic_table` is whether any of the circuit's channel specs is
+`GENERIC`; `reduce_shard`'s step 11 and the prover's opening both list the key's one
+`generic_table` after identity's commitments exactly when it is true. At S17 only
+`JUMP_BRANCH_SLT` reads it. Its `S[0..7]` are the decoded table, identity's seven, and
+`S[7..10]` the packed generic table (`constraints::jump_branch_slt::GENERIC_TABLE`). So
+`guests/control`'s jump-family shard at `2^20` opens `21 + 44 + 10` = 75 commitments,
+the last three the key's `generic_table`, and its add/sub shard opens `36 + 31 + 7`.
+
 ### 5.2 What the setup commitments bind
 
 The verifying key's setup commitments are program identity's lists
 (`docs/spec/memory.md` §6.2). So the `INIT_TEARDOWN` shard's `S[0]` is opened against
 identity's `cm(image column)`, which is S14's owed binding of the image the proof reads
 to the image identity commits, and an instruction family's decoder table is opened
-against the table identity commits.
+against the table identity commits. A family that reads the generic channel names the
+packed table as its setup columns right after identity's, and they are opened against the
+key's `generic_table`, which the SRS digest covers and G2 absorbs (§3, S17). The honest
+table's `2^n`-row columns commit to those three points at every even `n ≥ 18`, so one set
+serves every height.
 
 ### 5.3 No claim-merging sumcheck
 
@@ -275,7 +342,8 @@ do not match the commitments fail the opening (`Opening`).
 | `identity: ProgramIdentity` | the program's identity |
 | `setup_commitments: Vec<Vec<G1>>` | identity's per-family commitment lists, `docs/spec/memory.md` §6.2 |
 | `srs_verifier: [u8; 320]` | the `SrsVerifier`, S07's layout |
-| `srs_digest: Fr` | §3 |
+| `generic_table: [G1; 3]` | the packed generic table's `constants::generic_table::WIDTH` commitments, key column first (S17): in every key, whether or not a family reads the `GENERIC` channel; covered by the SRS digest, not in identity |
+| `srs_digest: Fr` | §3, over `srs_verifier` and `generic_table` |
 | `circuits: Vec<FamilyCircuit>` | one per config family, in its order: the family, its `CircuitArtifact` and its `ChannelSpec`s |
 
 `FamilyCircuit` is `constraints::FamilyCircuit`. A key conveys the artifact **and** the
@@ -291,7 +359,9 @@ column counts it are not recorded in an artifact (`docs/spec/lookup.md` §13).
 - a setup list count that is not the config's family count;
 - an `identity` that `identity_digest(code_version, config, entry_pc,
   setup_commitments)` does not reproduce;
-- an `srs_digest` that `srs_digest(srs_verifier)` does not reproduce;
+- an `srs_digest` that `srs_digest(srs_verifier, generic_table)` does not reproduce, as
+  "the SRS digest is not the digest of the key's SrsVerifier and generic table" (the
+  table since S17);
 - circuits that are not the config's families in its order, at its heights;
 - a circuit that is not **byte-for-byte** `constraints::family_circuit(family,
   trace_vars)` — the artifact and the specs both. The circuits are protocol constants
@@ -300,22 +370,35 @@ column counts it are not recorded in an artifact (`docs/spec/lookup.md` §13).
 - a circuit that fails `CircuitArtifact::validate`, `memory::check_memory` or
   `lookup::check_discharge` — run at every load, as S14 and S15 owed, although the
   constructor already ran them;
-- a family whose setup list length is not its artifact's `S` count.
+- a family whose setup list, plus `WIDTH` when its circuit reads the `GENERIC` channel,
+  is not its artifact's `S` count, as "family F: N setup commitments and G of the generic
+  table for S setup columns" (S17);
+- a circuit whose `GENERIC` channel specs do not name the table as the `WIDTH` setup
+  columns right after identity's — `S[N..N + WIDTH]`, `N` the family's setup list
+  length — as "family F: the circuit does not name the generic table as its last setup
+  columns" (S17). This one holds the registry to the order the opening lists the
+  commitments in (§5.1), and no key whose circuit is the registry's can trip it. It
+  guards a later registry entry: `ProverSetup::new` runs `check`, so such an entry fails
+  where its key is built.
 
 `verifier::load_verifying_key(bytes)` is that, plus decoding every curve point: the
-`SrsVerifier` through S07's validating reader and every setup commitment through
-`G1Affine::from_bytes`. **A verifier takes the identity from a channel the prover does
-not control** and compares it with the loaded key's; the `verifier` CLI takes it as an
-argument.
+`SrsVerifier` through S07's validating reader, and every setup commitment and the three
+generic-table commitments through `G1Affine::from_bytes`, a bad table point refused as
+"a generic-table commitment is not a point". **A verifier takes the identity from a
+channel the prover does not control** and compares it with the loaded key's; the
+`verifier` CLI takes it as an argument.
 
-**The key's `SrsVerifier` is presumed, not checked.** Identity binds the setup
-commitments, not the SRS they were computed over, and the SRS digest is recomputed from
-the key's own points. So a key whose `SrsVerifier` is replaced by points whose `tau`
-someone knows, digest recomputed, loads and matches the true identity, and whoever knows
-that `tau` can open any commitment to any value. The digest makes a proof specific to one
-set of verifier points; it does not make those points the ceremony's. That is
-`docs/spec/srs.md` §4's presumption, narrowed and not removed: a verifier must hold the
-ceremony's `SrsVerifier`, or its digest, from a trusted channel, as it holds identity.
+**A load does not check the ceremony.** Identity binds the setup commitments, not the SRS
+they were computed over, and the SRS digest is recomputed from the key's own
+`SrsVerifier` and generic table. So a key whose `SrsVerifier` is replaced by points whose
+`tau` someone knows, digest recomputed, loads and matches the true identity, and whoever
+knows that `tau` can open any commitment to any value. A key whose generic table is
+another table's, digest recomputed, loads too and matches the true identity (§3).
+The digest makes a proof specific to one set of verifier points and one table; it does
+not make them the ceremony's. That is `docs/spec/srs.md` §4's presumption, narrowed and
+not removed: a verifier must hold the ceremony's SRS digest from a trusted channel, as it
+holds identity, or hold the ceremony's `SrsVerifier` and the table's three commitments and
+recompute the digest from them (§3).
 
 Validation runs at load, once. `verify_shard` assumes a loaded key and does not check
 it again; on a key that did not pass, its answer means nothing. Steps 1 to 5 still refuse,
@@ -452,7 +535,8 @@ event, and every lookup is switched off by its selector.
 - The generic channel: the family does not look it up. **S17**, the first family that
   does, binds the exact packed-table commitment into the proof's statement or
   transcript before its lookup challenges are drawn — not into program identity
-  (owner's decision, S16).
+  (owner's decision, S16). S17 did, through the SRS digest (§3), which G2 absorbs
+  before every challenge; `docs/spec/jump-branch-slt.md` §6 is the binding.
 
 ---
 
@@ -479,7 +563,9 @@ ShardProof     family u32, shard_index u32, ts_window u64 u64, global_digest Fr,
 
 VerifyingKey   code_version u32, config bytes (VmConfig::to_bytes), entry_pc u32,
                identity Fr, setup_commitments list<list<G1>>,
-               srs_verifier 320 bytes, srs_digest Fr,
+               srs_verifier 320 bytes,
+               generic_table 3 × G1          192 bytes, no count; S17
+               srs_digest Fr,
                circuits list<(family u32, artifact bytes (CircuitArtifact::to_bytes),
                               channels list<(channel u32, table list<Address>,
                                              multiplicity Address)>)>
@@ -489,6 +575,9 @@ Address        tag u8 (0 M, 1 W, 2 S, 3 V), index u32 (a V's is its kind's wire 
 A `ShardProof`'s lengths are data on the wire and fixed per `(VerifyingKey, family)`:
 step 6 of §6 holds them to the circuit, and a `ShardProof` holds exactly one Mercury
 proof.
+
+S17 inserted `generic_table`, 192 fixed bytes, between `srs_verifier` and `srs_digest`,
+so every S16 key's bytes changed, and its digest with them (§3).
 
 ---
 
@@ -519,9 +608,14 @@ MSMs — combines its parts in a fixed order, so proofs do not depend on the thr
 
 ## 11. The registry
 
-`constraints::family_circuit(family, trace_vars)` returns a family's circuit, or `None`
-for a family S16 cannot prove: `ADD_SUB_LUI_AUIPC`, `INIT_TEARDOWN`
-(`image_window_artifact`, no channels) and `ZERO_WINDOWS` (`zero_window_artifact`, no
-channels). `prover::family_fill` is the matching table of column builders. A later
-family is added by one constructor, one arm in each table and one fill, with no edit to
-`global_commit_phase`, `prove_shard`, `reduce_shard` or `verify_shard`.
+`constraints::family_circuit(family, trace_vars)` returns a family's circuit for
+`ADD_SUB_LUI_AUIPC` and S17's `JUMP_BRANCH_SLT` (`docs/spec/jump-branch-slt.md`), each
+built from 19 variables and provable from 20 (§8), for `INIT_TEARDOWN`
+(`image_window_artifact`, no channels) and for `ZERO_WINDOWS` (`zero_window_artifact`, no
+channels). It returns `None` for a family no stage proves yet and for a height its circuit
+cannot be built at. `prover::family_fill` is the matching table of column builders. A
+later family is added by one constructor, one arm in each table and one fill, with no
+edit to `global_commit_phase`, `prove_shard`, `reduce_shard` or `verify_shard`. A later
+family that reads the generic channel needs nothing more: every key already carries the
+table's commitments, and `FamilyCircuit::reads_generic_table` adds them to its opening
+(§5.1) and its setup count (§7.2).

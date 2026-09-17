@@ -117,6 +117,7 @@ pub fn tag_by_name(name: &str) -> Result<Tag, String> {
         "GLOBAL_STATE_DIGEST" => Ok(transcript_tags::GLOBAL_STATE_DIGEST),
         "SHARD_SEED" => Ok(transcript_tags::SHARD_SEED),
         "SHARD_TS_WINDOW" => Ok(transcript_tags::SHARD_TS_WINDOW),
+        "GENERIC_TABLE" => Ok(transcript_tags::GENERIC_TABLE),
         other => Err(format!("unknown tag name {other}")),
     }
 }
