@@ -145,14 +145,12 @@ pub mod jump_branch_slt {
     pub fn channels() -> Vec<lookup::ChannelSpec>;
 }
 // family_circuit(JUMP_BRANCH_SLT, n) for n in 19..=MAX_TRACE_VARS
+impl FamilyCircuit { pub fn reads_generic_table(&self) -> bool; }   // any GENERIC channel
 ```
 
 **`crates/constants`**: `transcript_tags::GENERIC_TABLE = 41` (scalars);
 `generic_table::{WIDTH = 3, AND_BASE = 0, SIGN_BASE = 256}`, moved from
 `program::lookup_tables`, which keeps the names as aliases.
-
-`FamilyCircuit::reads_generic_table(&self) -> bool`: whether any of its channels is
-`GENERIC`.
 
 **`crates/program`**: `lookup_tables::GENERIC_LOG_HEIGHT = 18` and
 `lookup_tables::generic_commitments(&Srs) -> [G1Affine; GENERIC_WIDTH]`, the table's
@@ -253,6 +251,42 @@ File paths are under `crates/`. Every test listed passes; the ones marked *defer
 
 ---
 
+## Must-be-exact, item by item
+
+1. **The comparison equation**, `lhs − rhs − 2^32·sc·(lhs_sign − rhs_sign) + 2^32·lt − gap
+   = 0`, with `gap` 16+16 range-checked, `lt` boolean, and no comparison table: the only
+   tables it reads are `U16GetSign` for the two signs, over range-checked halfwords
+   (`docs/spec/jump-branch-slt.md` §3.2).
+2. **Signedness through `sc` alone**: `sc = slti + slt + blt + bge`, a linear form over the
+   kind bits. The `cmp_imm` role is `cmp_rhs = rs2 + (slti + sltiu)·imm` (answer 1): the
+   table's `imm` is the sign-extended immediate as a word, so its sign comes from
+   `U16GetSign` like any operand's. `the_slti_defect_has_no_analogue` is the test the
+   prompt asks for.
+3. **Committed gating**: `taken` is a committed bit, `taken_rule` its only definition; the
+   link and `lt` reach `rd` through `rd_value_rule`, gated by the twelve kind bits, which
+   are committed columns tied to the packed mask by `decoded_mask_bits` and to the table by
+   the decoder lookup — never a decoder output read bare.
+4. **`rd` follows S14's x0 rule** — `rd_selected`, `rd_is_zero`, the write masked at `x0` —
+   and the legal masks are S11's twelve one-bit values (answer 1, deviation 1), `jal`,
+   `jalr` and the four comparisons each with an `x0` variant that the same mask covers.
+5. **The frame** is S14's four queries for this family — the pc read and `next_pc` write,
+   `rs1`, `rs2`, `rd` — at their Δ slots. Every produced value is bounded: `lt`, `taken`,
+   `jalr_drop`, `pc_wrap` and the kind bits boolean; `gap`, both operands, the link or
+   `lt` written to `rd`, and `next_pc` 16+16 over `RANGE16`, `next_pc` even besides
+   (answer 3); both signs from the generic table.
+6. **One comparison, two consumers**: an `slt` row takes the default arm,
+   `(1 − taken − jal − jalr)·seq`, the decoded fall-through, and writes the same `lt` the
+   branches read.
+7. **The weights**, as linear forms over the kind bits (answer 1): `taken = (bne + bge +
+   bgeu) + (beq − bne)·eq + (blt + bltu − bge − bgeu)·lt` — BEQ (0, 1, 0), BNE (1, −1, 0),
+   BLT/BLTU (0, 0, 1), BGE/BGEU (1, 0, −1), and (0, 0, 0) wherever no branch bit is set.
+   The fixture pins the gate; every branch kind taken and not taken holds as a row, and a
+   branch going the other way is refused by `taken_rule`.
+8. **Every comparison intermediate is a committed base-layer column** and every semantic
+   gate is in gate list 0; the depth is the frozen assembly's (the reading above).
+
+---
+
 ## Deviations and notes for the reviewer
 
 1. **The decoded table and the mask** (answer 1). The prompt's must-be-exact 4 set
@@ -284,81 +318,54 @@ File paths are under `crates/`. Every test listed passes; the ones marked *defer
 
 ---
 
-## Deferred work, by stage
+## What the adversarial review changed
 
-**S18 (shift/bitwise, mul/div).** The gadgets are yours: the comparison for magnitude
-checks, `is_zero` for `rem ≠ 0`. The second reader of the generic channel (AND) opens the
-key's same triple after its identity commitments — nothing in the key changes. Every
-family that computes a pc keeps it even. `constraints::lookup::check_copowers` matches a
-`RANGE16` obligation on its expression and never its selector: S17's three `next_pc`
-obligations share `m_pc`, but a circuit whose direct pair sits under a narrower selector
-than its scaled obligation would pass the check. Tighten it before relying on it.
+Six read-only reviewers — the circuit's soundness against a malicious prover, the key and
+the statement, the fill's completeness for an honest program, the tests, spec against code
+against prompt, and the repository's rules — each followed by a skeptic told to refute
+every finding. 51 findings; 49 upheld in whole or part, about
+35 once findings reported by more than one reviewer are merged. The circuit reviewer found
+no row-level hole.
 
-**S19.** `amomin`/`amomax` on the comparison. `DEFAULT_HEIGHTS[ATOMICS]` (S16 answer 7).
+- **The generic table was not anchored.** Under the first answer the key carried the
+  table's commitments and the global transcript absorbed them, but nothing a verifier takes
+  on trust covered them: a key committing to a table whose signs are all 0 kept the true
+  identity and SRS digest, and a not-taken `blt` became provable. The fifth question put
+  the fix to the owner (answer 2). That also retired the one high finding — `memory.md`
+  §6.1's frozen absorb order lacked the new message — since there is none now.
+- **Tag 41 was missing from the tag registry test** (four reviewers), so a colliding value
+  would have passed. It is in, and the registry is `1..=41`.
+- **Acceptance 7's `next_pc` twin proved less than it said**: moving `rs1` also broke the
+  register's chain, so the refusal did not show the pc bound. The pc-only twin is added.
+- **Tests that claimed more than they checked**: the acceptance-6 row test held whether or
+  not its pc was edited (now the CI decoder recount over the filled shard); the two
+  booleanity gates on `pc_wrap` and `jalr_drop` had no forgery showing what each alone
+  stops (now rows); the "rs2 plus displacement" row added to `rs1`; the all-zero-mask test
+  was labelled S17's acceptance 7 (it is S15's and S16's control); the `x0` coverage never
+  checked that the comparisons computed 1; the reduced-width check was not tied to the
+  circuit's own gate; the not-taken check passed on a taken branch, and compressed
+  branches, `c.j` and `c.jr` were unasserted; the guest's family set was unchecked in CI;
+  acceptance 9 asserted an array's length (now the recomposition gate's weights); the key's
+  layout was never read back, and its bit flips never covered a key with a table.
+- **A load-rule half no key can reach**, whose test tripped the other half: the rules now
+  have separate messages, and the unreachable one is documented as the registry's
+  self-check (deviation 9).
+- **Code**: the fill's `with_drop` helper lost a parameter that was always 0; the prover's
+  per-height cache of the table's commitments became one computation, the commitments
+  being the same at every height; `artifact` asserts the all-zero row, which the spec
+  claimed it did; the registry's arm at 19 variables is tested.
+- **Docs**: the fraction trees' leaf counts (the widest has 16; the generic and decoder
+  trees are smaller); `addsub` no longer "the one program proven end to end"; the program
+  crate's split test table and the root's missing ceremony command; kat-gen's skip message;
+  the CI note's stale tamper peak; `check_memory`'s reason for admitting `S` columns;
+  `lookup.md` §13's "nothing binds the table"; `shard-proof.md`'s lists of what S17
+  amended; the two readings recorded above; and this note's verification section.
+- **For S18**: `check_copowers` ignores selectors (deferred work).
 
-**The I/O-binding stage, S20, S26**: unchanged from S16's list.
-
----
-
-## Open for the owner
-
-- **How a verifier obtains the trusted SRS digest** is S16's open question, and the
-  digest now pins the generic table as well as the `SrsVerifier`. Both are constants of
-  the ceremony: anyone holding it recomputes the digest, and
-  `crates/program/tests/vectors/generic_table.txt` pins the table's three points. The
-  `verifier` CLI still compares only identity with a value its caller supplies; it takes no
-  trusted digest, so it trusts the key's.
-
----
-
-## Verification performed
-
-On macOS (18 cores, 48 GB), every gate the root `CLAUDE.md` lists, at the final tree:
-
-- `fmt --check` in all four workspaces, and `clippy -D warnings` in all four;
-- `cargo test --workspace`: **833 passed, 50 `#[ignore]`d** (796 and 44 at S16). The 37
-  new tests that run in CI: `checker/tests/jump_branch_slt.rs` 22; `constraints` unit 10
-  (five in `gadgets`, five in `jump_branch_slt`); `prover/tests/key.rs` 2;
-  `program/tests/lookup_tables.rs` 1; `verifier-core/tests/reduce.rs` 1; `verifier` unit 1. `verifier-core/tests/wire.rs` and
-  `transcript/tests/duplex.rs` grew inside existing tests. The 6 new ignored ones are
-  `prover/tests/control.rs`' two, `checker/tests/tamper.rs`' two, the ceremony half of
-  `lookup_tables.rs`, and `loader/tests/qemu.rs`' control case;
-- the `riscv32imac` build of `field`, `constants`, `transcript`, `poly`, `sumcheck`,
-  `constraints`, `gkr-verify` and `verifier-core`; the guest workspace's clippy with
-  `guests/control` in it; fib's and control's guest builds;
-- `cargo run -p kat-gen`, then the fixture diff: nothing tracked moves, and the three new
-  fixtures regenerate byte for byte — `generic_table.txt` from the ceremony file;
-  `transcript-ref` with no diff;
-- the QEMU suites in the colima container (aarch64 Linux with `qemu-user`, its own
-  `CARGO_TARGET_DIR`, every guest built from source), at the committed tree:
-  `loader --test qemu` 10 passed at both profiles, `control_passes_its_checks` among them;
-  `emulator --test differential` 3 passed, control in its suite, its register file equal
-  to QEMU's at every instruction; `emulator --test consistency` 8 passed at both profiles;
-- on the PSE ceremony: `program --test identity -- --ignored` 6 passed, 71 s — **the
-  identity pins did not move** — and `program --test lookup_tables -- --ignored` 1 passed,
-  the table's three commitments equal to the pin at `2^18`, `2^20` and `2^22`;
-- S15's deferred `checker --test logup`: 9 passed, 199 s.
-
-**The deferred suites**, `--include-ignored --test-threads=1`, on the final tree:
-
-| Suite | Result | Wall | Peak resident |
-| --- | --- | --- | --- |
-| `prover --test acceptance` | 7 passed | 323 s | 8.64 GB |
-| `verifier --test cli` | 1 passed | 20 s | 8.54 GB |
-| `checker --test tamper` | 7 passed | 806 s | 11.26 GB |
-| `prover --test control` | 2 passed | 84 s | 10.07 GB |
-
-S16's three are unchanged in their results under the new key and digest; the tamper file
-is slower and larger with S17's twins, which re-prove a three-shard statement each. All
-four stay commented out of `.github/workflows/ci.yml` under `# DEFERRED:` lines, master
-rule 7: both execution shards are `2^20` rows, the timestamp channel's floor.
-
-**Measurements.** `control`'s statement — add/sub and jump/branch/slt at `2^20`,
-`INIT_TEARDOWN` at `2^16`, the toy SRS — proves in about 40 s on 18 cores, setup
-included: each of `control.rs`' two tests proves it, 84 s for the file. The family's
-circuit is 25 transitions deep at `2^20`, its base 75 columns wide and layer 1 84 (the
-add/sub circuit's are 74 and 68), a shard proof 61,612 bytes, and the artifact builds in
-about 4 ms.
+**Refuted**, with the reason kept: that `crates/verifier/CLAUDE.md` understates what SRS
+material a verifier reads (the table's commitments are commitments, like identity's, and
+the bullet covers those); and an untracked probe file in the checker's tests (another
+agent's scratch, gone before the commit).
 
 ---
 
@@ -418,3 +425,82 @@ listing it for the wrong families, for every family, or before identity's commit
 the prover's opening listing it never, for the wrong families, or first. Each fails
 `control.rs`' `a1_…` — the verifier-side ones as `Opening`, the prover's first two by
 `batch_open`'s length refusal, its order swap as `Opening` under the honest verifier.
+
+---
+
+## Deferred work, by stage
+
+**S18 (shift/bitwise, mul/div).** The gadgets are yours: the comparison for magnitude
+checks, `is_zero` for `rem ≠ 0`. The second reader of the generic channel (AND) opens the
+key's same triple after its identity commitments — nothing in the key changes. Every
+family that computes a pc keeps it even. `constraints::lookup::check_copowers` matches a
+`RANGE16` obligation on its expression and never its selector: S17's three `next_pc`
+obligations share `m_pc`, but a circuit whose direct pair sits under a narrower selector
+than its scaled obligation would pass the check. Tighten it before relying on it.
+
+**S19.** `amomin`/`amomax` on the comparison. `DEFAULT_HEIGHTS[ATOMICS]` (S16 answer 7).
+
+**The I/O-binding stage, S20, S26**: unchanged from S16's list.
+
+---
+
+## Open for the owner
+
+- **How a verifier obtains the trusted SRS digest** is S16's open question, and the
+  digest now pins the generic table as well as the `SrsVerifier`. Both are constants of
+  the ceremony: anyone holding it recomputes the digest, and
+  `crates/program/tests/vectors/generic_table.txt` pins the table's three points. The
+  `verifier` CLI still compares only identity with a value its caller supplies; it takes no
+  trusted digest, so it trusts the key's.
+
+---
+
+## Verification performed
+
+On macOS (18 cores, 48 GB), every gate the root `CLAUDE.md` lists, at the final tree:
+
+- `fmt --check` in all four workspaces, and `clippy -D warnings` in all four;
+- `cargo test --workspace`: **833 passed, 50 `#[ignore]`d** (796 and 44 at S16). The 37
+  new tests that run in CI: `checker/tests/jump_branch_slt.rs` 22; `constraints` unit 10
+  (five in `gadgets`, five in `jump_branch_slt`); `prover/tests/key.rs` 2;
+  `program/tests/lookup_tables.rs` 1; `verifier-core/tests/reduce.rs` 1; `verifier` unit
+  1. `verifier-core/tests/wire.rs` and `transcript/tests/duplex.rs` grew inside existing
+  tests. The 6 new ignored ones are
+  `prover/tests/control.rs`' two, `checker/tests/tamper.rs`' two, the ceremony half of
+  `lookup_tables.rs`, and `loader/tests/qemu.rs`' control case;
+- the `riscv32imac` build of `field`, `constants`, `transcript`, `poly`, `sumcheck`,
+  `constraints`, `gkr-verify` and `verifier-core`; the guest workspace's clippy with
+  `guests/control` in it; fib's and control's guest builds;
+- `cargo run -p kat-gen`, then the fixture diff: nothing tracked moves, and the three new
+  fixtures regenerate byte for byte — `generic_table.txt` from the ceremony file;
+  `transcript-ref` with no diff;
+- the QEMU suites in the colima container (aarch64 Linux with `qemu-user`, its own
+  `CARGO_TARGET_DIR`, every guest built from source), at the committed tree:
+  `loader --test qemu` 10 passed at both profiles, `control_passes_its_checks` among them;
+  `emulator --test differential` 3 passed, control in its suite, its register file equal
+  to QEMU's at every instruction; `emulator --test consistency` 8 passed at both profiles;
+- on the PSE ceremony: `program --test identity -- --ignored` 6 passed, 71 s — **the
+  identity pins did not move** — and `program --test lookup_tables -- --ignored` 1 passed,
+  the table's three commitments equal to the pin at `2^18`, `2^20` and `2^22`;
+- S15's deferred `checker --test logup`: 9 passed, 199 s.
+
+**The deferred suites**, `--include-ignored --test-threads=1`, on the final tree:
+
+| Suite | Result | Wall | Peak resident |
+| --- | --- | --- | --- |
+| `prover --test acceptance` | 7 passed | 322 s | 8.62 GB |
+| `verifier --test cli` | 1 passed | 20 s | 8.59 GB |
+| `checker --test tamper` | 7 passed | 797 s | 11.27 GB |
+| `prover --test control` | 2 passed | 84 s | 10.08 GB |
+
+S16's three are unchanged in their results under the new key and digest; the tamper file
+is slower and larger with S17's twins, which re-prove a three-shard statement each. All
+four stay commented out of `.github/workflows/ci.yml` under `# DEFERRED:` lines, master
+rule 7: both execution shards are `2^20` rows, the timestamp channel's floor.
+
+**Measurements.** `control`'s statement — add/sub and jump/branch/slt at `2^20`,
+`INIT_TEARDOWN` at `2^16`, the toy SRS — proves in about 40 s on 18 cores, setup
+included: each of `control.rs`' two tests proves it, 84 s for the file. The family's
+circuit is 25 transitions deep at `2^20`, its base 75 columns wide and layer 1 84 (the
+add/sub circuit's are 74 and 68), a shard proof 61,612 bytes, and the artifact builds in
+about 4 ms.

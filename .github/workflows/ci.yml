@@ -116,8 +116,8 @@ jobs:
       # timestamp channel sets, so it cannot shrink -- and one statement's
       # proof peaks at 8.6 GB resident -- more in the tamper file, which
       # keeps the honest statement beside each re-proof -- so each file runs
-      # single-threaded. Locally, on 18 cores, the three take 323 s, 20 s and,
-      # with S17's twins, 806 s; the logup step above ran nine times slower on
+      # single-threaded. Locally, on 18 cores, the three take 322 s, 20 s and,
+      # with S17's twins, 797 s; the logup step above ran nine times slower on
       # the runner than locally, which puts these at about 50, 3 and 120
       # minutes. They run locally on every PR that touches the prover, the
       # verifier, a family circuit or the memory and lookup arguments, and the
