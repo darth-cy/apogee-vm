@@ -14,7 +14,9 @@ prompts/         00-master.md (design authority) + one prompt per build stage
 docs/
   GLOSSARY.md    the vocabulary (column = multilinear = poly; layer; shard; family)
   guest-program-manual.md  writing a guest and exporting its ProgramImage artifact
-  spec/          the frozen protocol specs; read before touching what they cover
+  spec/          the frozen protocol specs; read before touching what they cover; and
+                 constraint-manifest.md, every registered circuit's columns and gates by
+                 position, name and formula
   handoff/       one note per completed stage: frozen API, artifacts, deviations
 crates/
   constants/     frozen constants and tags; zero logic; no_std
@@ -82,8 +84,10 @@ are frozen; internals are not.
 ## Build stage protocol
 Read `prompts/00-master.md`, then the stage prompt, then every prior note in
 `docs/handoff/`. Branch off `main`, commit on the branch, open a PR, and finish by
-writing `docs/handoff/<stage>.md` and updating this file. Raise conflicts and
-open questions with the user rather than picking a default silently.
+writing `docs/handoff/<stage>.md` and updating this file. A stage that adds or changes a
+circuit family also writes that family's entry in `docs/spec/constraint-manifest.md`
+(its §7 is the checklist). Raise conflicts and open questions with the user rather than
+picking a default silently.
 
 ## Commands
 Everything above the line must be green before a stage's PR. All of it runs in CI

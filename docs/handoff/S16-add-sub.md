@@ -235,6 +235,16 @@ kat-gen's own unit test, and regenerated and diffed by CI. It is this code's out
 oracle. What it is held to independently is §8's table, gate by gate, in
 `checker/tests/add_sub.rs`, over rows built from Rust's own `u32` arithmetic.
 
+`docs/spec/constraint-manifest.md` accounts for all three registered circuits:
+- every column by `PolyAddress`, artifact name, Rust identifier and descriptive name;
+- every inner layer by offset;
+- every gate and lookup as a formula;
+- the outputs;
+- what fixes each cell.
+
+Added on the owner's request after review, with master rule 12's note that every later
+circuit family writes its own entry there.
+
 **Proof sizes**, fixed per key and family and asserted by acceptance 1: an
 `ADD_SUB_LUI_AUIPC` shard at `2^20` is **57,100 bytes** (25 transitions, 20 rounds at
 layer 0, 74 base claims — 36 `M`, 31 `W`, 7 `S` — one 704-byte opening); an

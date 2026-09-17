@@ -130,6 +130,11 @@ constraint set as a flat list of relations over base and scratch addresses and a
 layered gates, tied by the scratch bijection and **Laws 1–4** (locality, derived
 width, top layer, single source of truth). Written as `postcard`.
 
+**Constraint manifest** — `docs/spec/constraint-manifest.md`, the accounting of every
+registered circuit: each column's `PolyAddress`, artifact name, Rust identifier and a
+descriptive name, each inner layer by offset, and each gate and lookup as a formula.
+Descriptive, not normative: where it and the code disagree, the code is right.
+
 **Kernel** — `gkr_verify::eval_gate`, the one evaluation of a gate's formula; the
 semantic authority every pass and checker reads gates through.
 

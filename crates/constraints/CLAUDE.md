@@ -9,6 +9,9 @@ compilation, the gate catalogue and the `postcard` wire form.
 Nothing here evaluates a gate. The kernel is `gkr_verify::eval_gate`, and it is the
 semantic authority; this crate owns the formula *representation* and the checks made
 when a circuit is built. **`docs/spec/gkr.md` §1–§4 is normative.**
+`docs/spec/constraint-manifest.md` is the readable account of every circuit
+`family_circuit` returns — each column, inner layer, gate and lookup by position, name and
+formula — and a change to a family's circuit updates its entry there.
 
 ```rust
 pub enum VirtualKind { RowIndex, RamLive, Range19, Range16 }
