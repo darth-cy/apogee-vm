@@ -58,6 +58,6 @@ verifier never takes identity from the key or the proof.
 ## Tests
 | File | Covers |
 | --- | --- |
-| `src/lib.rs` (unit) | the core's opening width is `pcs::PROOF_BYTES`; `every_generic_table_commitment_is_decoded_at_load` (S17): a key with the jump family over real points loads back to itself, and a generic-table commitment off the curve, the SRS digest recomputed over it, or a setup commitment off the curve, identity recomputed, is refused by name |
+| `src/lib.rs` (unit) | the core's opening width is `pcs::PROOF_BYTES`; `every_generic_table_commitment_is_decoded_at_load` (S17): a key with the jump family over real points loads back to itself, and each of the three generic-table commitments off the curve, the SRS digest recomputed over it, or a setup commitment off the curve, identity recomputed, is refused by name |
 | `tests/signature.rs` | acceptance 12: `verify_shard` and `reduce_shard` pinned to `(&VerifyingKey, &ShardProof, &PublicInputs)` at compile time; the `SrsVerifier` layout, over three distinct points, round-trips field by field, and each of the three with one bit flipped is refused |
 | `tests/cli.rs` | **`#[ignore]`d** (it proves the S16 statement first): acceptance 10's CLI half — the dumped key, statement and proofs verify; another identity is refused; a flipped bit in each proof, the statement and the key is refused; each proof alone, and each given twice, refused as not the statement's shards, and the two in reverse order accepted; a usage error exits 2 |

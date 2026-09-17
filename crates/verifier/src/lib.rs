@@ -134,15 +134,18 @@ mod tests {
                 .collect(),
         };
         assert_eq!(load_verifying_key(&key.to_bytes()), Ok(key.clone()));
-        // Off the curve, its digest recomputed so that the load reaches the
-        // point.
-        let mut off = key.clone();
-        off.generic_table[1][0] ^= 1;
-        off.srs_digest = srs_digest(&off.srs_verifier, &off.generic_table);
-        assert_eq!(
-            load_verifying_key(&off.to_bytes()),
-            Err("a generic-table commitment is not a point".to_string())
-        );
+        // Each of the three off the curve, its digest recomputed so that the
+        // load reaches the point.
+        for i in 0..3 {
+            let mut off = key.clone();
+            off.generic_table[i][0] ^= 1;
+            off.srs_digest = srs_digest(&off.srs_verifier, &off.generic_table);
+            assert_eq!(
+                load_verifying_key(&off.to_bytes()),
+                Err("a generic-table commitment is not a point".to_string()),
+                "point {i}"
+            );
+        }
         let mut off = key.clone();
         off.setup_commitments[1][0][0] ^= 1;
         off.identity = identity_digest(

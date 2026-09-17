@@ -492,13 +492,20 @@ fn expression(a: &CircuitArtifact, committed: &[Fr], gate: &constraints::GateDef
 /// rule).
 fn violated_tables(a: &CircuitArtifact, r: &Row) -> Vec<String> {
     let committed = r.committed(a);
-    let s = r.get("pc_mask");
+    let layout = a.committed();
     let entries: BTreeSet<[u64; generic_table::WIDTH]> = generic_entries()
         .iter()
         .map(|e| e.map(|x| x as u64))
         .collect();
     let mut out = Vec::new();
     for l in &a.lookups {
+        // Each lookup's own selector, read from the row: a selector moved to
+        // another column is a different circuit, and this is what sees it.
+        let at = layout
+            .iter()
+            .position(|x| *x == l.selector)
+            .expect("a selector is a committed column");
+        let s = committed[at];
         let values: Vec<Fr> = l
             .tuple
             .iter()
@@ -1386,6 +1393,44 @@ fn the_slti_defect_has_no_analogue() {
     );
 }
 
+/// Each table lookup is the lone refusal of a row that every gate and range
+/// accepts: a sign the generic table does not give, on either operand, and a
+/// `jal` whose claimed row is not the table's — every lookup under its own
+/// selector, which a `jal`, reading no `rs1`, must not escape.
+#[test]
+fn each_table_lookup_is_the_one_that_refuses_its_row() {
+    let a = artifact();
+    // slt(-1, 1) answering 0: rs1's sign read as 0, and the gap unchanged.
+    let mut r = row("slt -1 < 1");
+    assert_eq!(small_int(r.get("cmp_gap")), 0xffff_fffe);
+    r.set("rs1_sign", Fr::ZERO)
+        .set("lt", Fr::ZERO)
+        .set("rd_selected", Fr::ZERO)
+        .set("rd_write_value", Fr::ZERO);
+    assert_eq!(
+        violated(&a, &r),
+        (none(), none(), names(&["cmp_lhs_get_sign"]))
+    );
+    // slt(1, -1) answering 1: rs2's sign read as 0.
+    let mut r = row("slt 1 < -1");
+    assert_eq!(small_int(r.get("cmp_gap")), 2);
+    r.set("cmp_rhs_sign", Fr::ZERO)
+        .set("lt", Fr::ONE)
+        .set("rd_selected", Fr::ONE)
+        .set("rd_write_value", Fr::ONE);
+    assert_eq!(
+        violated(&a, &r),
+        (none(), none(), names(&["cmp_rhs_get_sign"]))
+    );
+    // A jal four bytes further than its table row says.
+    let mut r = row("jal forward");
+    assert_eq!(small_int(r.get("decoded_imm")), 0xa4);
+    r.set("decoded_imm", f(0xa8))
+        .set("pc_write_value", f(0x1_01a8));
+    assert_eq!(small_int(r.get("next_pc_hi")), 1);
+    assert_eq!(violated(&a, &r), (none(), none(), names(&["decode_row"])));
+}
+
 // ---------------------------------------------------------------------------
 // Acceptance 3 as rows: the pc, the halting sentinel and the decoder's domain
 // ---------------------------------------------------------------------------
@@ -1395,8 +1440,8 @@ fn the_slti_defect_has_no_analogue() {
 /// holds, and so does every range and table lookup but the evenness
 /// obligation — which is therefore the only thing between this row and a
 /// statement that ends in a clean exit where the program would crash. An odd
-/// target elsewhere is refused the same way, and an unreduced jump target by
-/// the high halfword.
+/// target elsewhere is refused the same way, and an unreduced jump or branch
+/// target by the high halfword.
 #[test]
 fn only_the_evenness_obligation_refuses_a_jalr_that_fakes_an_exit() {
     let a = artifact();
@@ -1422,6 +1467,19 @@ fn only_the_evenness_obligation_refuses_a_jalr_that_fakes_an_exit() {
     );
 
     let mut unreduced = row("jal backward");
+    let next = unreduced.get("pc_write_value") + f(TWO_32);
+    let hi = unreduced.get("next_pc_hi") + f(1 << 16);
+    unreduced
+        .set("pc_wrap", Fr::ZERO)
+        .set("pc_write_value", next)
+        .set("next_pc_hi", hi);
+    assert_eq!(
+        violated(&a, &unreduced),
+        (none(), names(&["next_pc_hi_range"]), none())
+    );
+    // A branch has no `rd` query, and its target is bounded all the same.
+    let mut unreduced = row("bne backward -16 taken");
+    assert_eq!(small_int(unreduced.get("pc_wrap")), 1);
     let next = unreduced.get("pc_write_value") + f(TWO_32);
     let hi = unreduced.get("next_pc_hi") + f(1 << 16);
     unreduced
@@ -1651,11 +1709,20 @@ fn control() -> (prover::Program, trace::TraceArchive) {
     ))
     .expect("the control guest");
     let image = loader::load_elf(&elf).expect("control loads");
+    let (program, archive, exit_code) = traced(image, 1 << VARS);
+    assert_eq!(exit_code, 16, "control passes its 16 checks");
+    (program, archive)
+}
+
+/// `image` decoded with both of S17's execution families at `height` and
+/// every other family at `2^16`, and traced into an archive; and the exit
+/// status.
+fn traced(image: loader::ProgramImage, height: u32) -> (prover::Program, trace::TraceArchive, i32) {
     let mut params = program::ProgramParams::defaults();
     params.heights = [1 << 16; family::COUNT as usize];
-    params.heights[family::ADD_SUB_LUI_AUIPC as usize] = 1 << VARS;
-    params.heights[family::JUMP_BRANCH_SLT as usize] = 1 << VARS;
-    let (tables, config) = program::decode_program(&image, &params).expect("control decodes");
+    params.heights[family::ADD_SUB_LUI_AUIPC as usize] = height;
+    params.heights[family::JUMP_BRANCH_SLT as usize] = height;
+    let (tables, config) = program::decode_program(&image, &params).expect("the image decodes");
     // Only the families S17 proves: an instruction of any other family
     // would put a family in the config that no circuit proves.
     let families: Vec<u32> = config.families.iter().map(|(f, _)| *f).collect();
@@ -1673,8 +1740,7 @@ fn control() -> (prover::Program, trace::TraceArchive) {
         hint: Vec::new(),
     };
     let (traces, log, profile, execution) =
-        emulator::trace_run(&image, &io, &tables, &config).expect("control traces");
-    assert_eq!(execution.exit_code, 16, "control passes its 16 checks");
+        emulator::trace_run(&image, &io, &tables, &config).expect("the image traces");
     let archive = trace::TraceArchive::from_execution(
         traces,
         log,
@@ -1692,6 +1758,7 @@ fn control() -> (prover::Program, trace::TraceArchive) {
             config,
         },
         archive,
+        execution.exit_code,
     )
 }
 
@@ -2046,26 +2113,83 @@ fn a_jump_to_a_pc_holding_no_instruction_cannot_be_counted() {
 #[test]
 fn the_fill_satisfies_every_gate_and_every_table() {
     let (program, archive) = control();
+    let live = ran(&program, &archive).len();
+    let columns = filled(&program, &archive, 0, VARS, true);
+    let rows: Vec<usize> = (0..live + 2).chain([(1 << VARS) - 1]).collect();
+    assert_rows_hold(&columns, &rows);
+}
+
+/// The family's fill of shard `index` at `2^vars` rows — its setup columns
+/// held to the program's decoded table and the packed generic table row for
+/// row — with every channel's multiplicities counted over it when `count`, and
+/// zero columns in their place otherwise: a height below the timestamp
+/// channel's `2^19` has no count, and no gate or range obligation reads one.
+fn filled(
+    program: &prover::Program,
+    archive: &trace::TraceArchive,
+    index: u32,
+    vars: u32,
+    count: bool,
+) -> Vec<(PolyAddress, poly::MultilinearPoly)> {
     let a = artifact();
     let fill = prover::family_fill(family::JUMP_BRANCH_SLT).expect("the family's fill");
     let source = prover::ShardSource {
-        program: &program,
-        archive: &archive,
+        program,
+        archive,
         family: family::JUMP_BRANCH_SLT,
-        index: 0,
-        height: 1 << VARS,
+        index,
+        height: 1 << vars,
         window: 0,
     };
     let mut columns = fill(&source).expect("the fill");
-    let counts = trace::build_multiplicities(&a, &columns, &jump_branch_slt::channels())
-        .expect("every tuple of the shard is a row of its table");
-    columns.extend(counts);
-    let layout = a.committed();
+    let column = |columns: &[(PolyAddress, poly::MultilinearPoly)], address: PolyAddress| {
+        columns
+            .iter()
+            .find(|(c, _)| *c == address)
+            .unwrap_or_else(|| panic!("the fill has no {address}"))
+            .1
+            .clone()
+    };
+    // The setup columns are the tables the key's commitments are of.
+    let table = program
+        .tables
+        .family(family::JUMP_BRANCH_SLT)
+        .expect("the family's table");
+    let generic = program::lookup_tables::generic_table(vars);
+    for j in 0..jump_branch_slt::TABLE_WIDTH + generic_table::WIDTH {
+        let filled = column(&columns, PolyAddress::Setup(j as u32));
+        let want = match j.checked_sub(jump_branch_slt::TABLE_WIDTH) {
+            None => table.column_poly(j),
+            Some(g) => generic[g].clone(),
+        };
+        assert_eq!(filled.len(), 1 << vars, "S[{j}]'s height");
+        assert!(
+            (0..1 << vars).all(|i| filled.get(i) == want.get(i)),
+            "S[{j}] is not its table"
+        );
+    }
+    if count {
+        let counts = trace::build_multiplicities(&a, &columns, &jump_branch_slt::channels())
+            .expect("every tuple of the shard is a row of its table");
+        columns.extend(counts);
+    } else {
+        for m in jump_branch_slt::MULTIPLICITIES {
+            let zero = poly::MultilinearPoly::new(poly::PolyBacking::U32(vec![0; 1 << vars]));
+            columns.push((m, zero));
+        }
+    }
     assert_eq!(
         columns.len(),
-        layout.len(),
+        a.committed().len(),
         "one column per committed address"
     );
+    columns
+}
+
+/// Every gate and every range obligation holds on each of `rows` of
+/// `columns`, a filled shard.
+fn assert_rows_hold(columns: &[(PolyAddress, poly::MultilinearPoly)], rows: &[usize]) {
+    let a = artifact();
     let column = |address: PolyAddress| {
         &columns
             .iter()
@@ -2073,10 +2197,9 @@ fn the_fill_satisfies_every_gate_and_every_table() {
             .unwrap_or_else(|| panic!("the fill has no {address}"))
             .1
     };
-    let ordered: Vec<&poly::MultilinearPoly> = layout.iter().map(|x| column(*x)).collect();
-    let live = ran(&program, &archive).len();
+    let ordered: Vec<&poly::MultilinearPoly> = a.committed().iter().map(|x| column(*x)).collect();
     let ch = challenges(&a);
-    for row in (0..live + 2).chain([(1 << VARS) - 1]) {
+    for &row in rows {
         let mut r = Row::default();
         let committed: Vec<Fr> = ordered.iter().map(|c| c.get(row)).collect();
         // Through the named row, so the scratch is computed exactly as the
@@ -2095,4 +2218,223 @@ fn the_fill_satisfies_every_gate_and_every_table() {
         assert_eq!(violated_relations(&a, &w, &ch), none(), "row {row}");
         assert_eq!(violated_lookups(&a, &w), none(), "row {row}");
     }
+}
+
+// Three instruction formats, for the programs below built by hand; each word
+// is read back through `isa::decode` where it is used.
+
+fn i_word(opcode: u32, rd: u32, rs1: u32, imm: i32) -> u32 {
+    ((imm as u32 & 0xfff) << 20) | (rs1 << 15) | (rd << 7) | opcode
+}
+
+fn b_word(funct3: u32, rs1: u32, rs2: u32, imm: i32) -> u32 {
+    let i = imm as u32;
+    ((i >> 12 & 1) << 31)
+        | ((i >> 5 & 0x3f) << 25)
+        | (rs2 << 20)
+        | (rs1 << 15)
+        | (funct3 << 12)
+        | ((i >> 1 & 0xf) << 8)
+        | ((i >> 11 & 1) << 7)
+        | 0x63
+}
+
+fn j_word(rd: u32, imm: i32) -> u32 {
+    let i = imm as u32;
+    ((i >> 20 & 1) << 31)
+        | ((i >> 1 & 0x3ff) << 21)
+        | ((i >> 11 & 1) << 20)
+        | ((i >> 12 & 0xff) << 12)
+        | (rd << 7)
+        | 0x6f
+}
+
+const ADDI: u32 = 0x13;
+const JALR: u32 = 0x67;
+const LUI: u32 = 0x37;
+const BNE: u32 = 1;
+const NOP: u32 = 0x13;
+const ECALL: u32 = 0x73;
+
+/// A one-segment image of 32-bit `words` at `at`, entered there, each word
+/// the mnemonic named beside it.
+fn image_of(at: u32, words: &[(u32, &str)]) -> loader::ProgramImage {
+    let mut slots = Vec::new();
+    for (word, mnemonic) in words {
+        assert_eq!(
+            isa::decode(*word).expect("the word decodes").mnemonic(),
+            *mnemonic
+        );
+        slots.push(loader::Slot::Instruction {
+            word: *word,
+            compressed: false,
+        });
+        slots.push(loader::Slot::MidInstruction);
+    }
+    let bytes: Vec<u8> = words.iter().flat_map(|(w, _)| w.to_le_bytes()).collect();
+    loader::ProgramImage {
+        entry: at,
+        segments: vec![loader::Segment {
+            vaddr: at,
+            mem_len: bytes.len() as u32,
+            bytes,
+        }],
+        slot_base: at,
+        slots,
+    }
+}
+
+/// A taken branch, a `jal` and a `jalr`, each landing in another `2^16`-byte
+/// page than its fall-through — which no committed guest does, `control`'s
+/// code lying in one page — fill and hold: `next_pc`'s high halfword is the
+/// target's, not the fall-through's.
+#[test]
+fn jumps_across_a_halfword_page_fill_and_hold() {
+    let image = image_of(
+        0x1_fff0,
+        &[
+            (i_word(ADDI, 5, 0, 1), "addi"),   // 0x1fff0  t0 = 1
+            (b_word(BNE, 5, 0, 16), "bne"),    // 0x1fff4  taken: 0x20004
+            (i_word(JALR, 0, 1, 4), "jalr"),   // 0x1fff8  to ra + 4 = 0x2000c
+            (NOP, "addi"),                     // 0x1fffc
+            (NOP, "addi"),                     // 0x20000
+            (j_word(1, -12), "jal"),           // 0x20004  to 0x1fff8, ra = 0x20008
+            (NOP, "addi"),                     // 0x20008
+            (i_word(ADDI, 17, 0, 93), "addi"), // 0x2000c  a7 = exit
+            (ECALL, "ecall"),                  // 0x20010
+        ],
+    );
+    let (program, archive, exit_code) = traced(image, 1 << VARS);
+    assert_eq!(exit_code, 0);
+    let rows = ran(&program, &archive);
+    let steps: Vec<(u32, u32, u32)> = rows.iter().map(|r| (r.pc, r.seq, r.next_pc)).collect();
+    assert_eq!(
+        steps,
+        [
+            (0x1_fff4, 0x1_fff8, 0x2_0004),
+            (0x2_0004, 0x2_0008, 0x1_fff8),
+            (0x1_fff8, 0x1_fffc, 0x2_000c),
+        ]
+    );
+    let columns = filled(&program, &archive, 0, VARS, true);
+    assert_rows_hold(&columns, &[0, 1, 2, 3]);
+}
+
+/// A family buffer longer than its height fills one shard at a time: shard 0
+/// its first `2^18` cycles and shard 1 the rest, each holding every gate. A
+/// branch loops `2^18 + 5` times. At `2^18` there is no timestamp table to
+/// count against, so the rows are checked and the counts are not.
+#[test]
+fn a_second_shard_fills_the_cycles_after_the_first() {
+    const LOG: u32 = 18;
+    let h = 1usize << LOG;
+    let image = image_of(
+        0x1_0000,
+        &[
+            ((0x40 << 12) | (5 << 7) | LUI, "lui"), // t0 = 2^18
+            (i_word(ADDI, 5, 5, 5), "addi"),        // t0 = 2^18 + 5
+            (i_word(ADDI, 5, 5, -1), "addi"),       // loop: t0 -= 1
+            (b_word(BNE, 5, 0, -4), "bne"),         // until t0 = 0
+            (i_word(ADDI, 17, 0, 93), "addi"),
+            (ECALL, "ecall"),
+        ],
+    );
+    let (program, archive, exit_code) = traced(image, 1 << LOG);
+    assert_eq!(exit_code, 0);
+    let traces = archive.family_traces();
+    let buffer = traces
+        .family(family::JUMP_BRANCH_SLT)
+        .expect("the family's buffer");
+    assert_eq!(buffer.len(), h + 5);
+    let cycles = |columns: &[(PolyAddress, poly::MultilinearPoly)]| {
+        let c = &columns
+            .iter()
+            .find(|(c, _)| *c == constraints::memory::CYCLE)
+            .expect("the cycle column")
+            .1;
+        (0..h).map(|i| c.get(i)).collect::<Vec<Fr>>()
+    };
+
+    let first = filled(&program, &archive, 0, LOG, false);
+    let want: Vec<Fr> = buffer.cycle[..h].iter().map(|c| f(*c)).collect();
+    assert_eq!(cycles(&first), want);
+    assert_rows_hold(&first, &[0, 1, h - 1]);
+
+    let second = filled(&program, &archive, 1, LOG, false);
+    let mut want: Vec<Fr> = buffer.cycle[h..].iter().map(|c| f(*c)).collect();
+    want.resize(h, Fr::ZERO);
+    assert_eq!(cycles(&second), want);
+    assert_rows_hold(&second, &[0, 1, 4, 5, 6, h - 1]);
+}
+
+/// `program` with the instruction at `pc` rewritten by `edit` and its tables
+/// decoded again: a program `archive` was not traced from.
+fn retabled(program: &prover::Program, pc: u32, edit: fn(u32) -> u32) -> prover::Program {
+    let mut image = program.image.clone();
+    let slot = ((pc - image.slot_base) / 2) as usize;
+    let loader::Slot::Instruction { word, compressed } = image.slots[slot] else {
+        panic!("pc {pc:#x} holds no instruction");
+    };
+    assert!(!compressed, "the edit is to a 32-bit instruction");
+    image.slots[slot] = loader::Slot::Instruction {
+        word: edit(word),
+        compressed,
+    };
+    let segment = image
+        .segments
+        .iter_mut()
+        .find(|s| s.vaddr <= pc && pc + 4 <= s.vaddr + s.bytes.len() as u32)
+        .expect("the instruction's bytes");
+    let at = (pc - segment.vaddr) as usize;
+    segment.bytes[at..at + 4].copy_from_slice(&edit(word).to_le_bytes());
+    let mut params = program::ProgramParams::defaults();
+    for (f, height) in &program.config.families {
+        params.heights[*f as usize] = *height;
+    }
+    let (tables, config) = program::decode_program(&image, &params).expect("the edit decodes");
+    assert_eq!(config, program.config);
+    prover::Program {
+        image,
+        tables,
+        config,
+    }
+}
+
+/// The fill refuses a trace whose `next_pc` is not what the decoded row
+/// computes, which the emulator cannot produce and the archive cannot tell:
+/// `control`'s trace filled against a table whose first `jal` jumps four
+/// bytes further.
+#[test]
+#[should_panic(expected = "the trace's next_pc is not the family's")]
+fn the_fill_refuses_a_next_pc_the_row_does_not_compute() {
+    let (program, archive) = control();
+    let jal = ran(&program, &archive)
+        .into_iter()
+        .find(|r| r.bit == kind::JAL && r.seq == r.pc + 4)
+        .expect("a 32-bit jal");
+    let other = retabled(&program, jal.pc, |word| {
+        let isa::Instr::Jal { rd, imm } = isa::decode(word).expect("a jal") else {
+            panic!("not a jal");
+        };
+        j_word(rd as u32, imm + 4)
+    });
+    filled(&other, &archive, 0, VARS, true);
+}
+
+/// And an `rd` write that is not what the row computes: the `slt` that finds
+/// `-1 < 1`, read as the `sltu` that does not.
+#[test]
+#[should_panic(expected = "the trace's rd write is not what the instruction computes")]
+fn the_fill_refuses_an_rd_write_the_row_does_not_compute() {
+    let (program, archive) = control();
+    let slt = ran(&program, &archive)
+        .into_iter()
+        .find(|r| r.bit == kind::SLT && r.rs1 == Some(u32::MAX) && r.rs2 == Some(1))
+        .expect("slt -1, 1");
+    let other = retabled(&program, slt.pc, |word| {
+        let sltu = word | 1 << 12;
+        assert_eq!(isa::decode(sltu).expect("an sltu").mnemonic(), "sltu");
+        sltu
+    });
+    filled(&other, &archive, 0, VARS, true);
 }

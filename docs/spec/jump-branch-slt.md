@@ -405,6 +405,9 @@ family is the count refusal; and `the_srs_digest_is_the_documented_recipe`.
 `the_generic_table_is_bound_through_the_srs_digest`, which finds no `GENERIC_TABLE` message
 in a statement with this family and moves the statement's digest with each point and their
 order. `crates/verifier/src/lib.rs`: `every_generic_table_commitment_is_decoded_at_load`.
+`crates/prover/tests/key.rs`, in CI with no proof: the key `ProverSetup::new` builds carries
+the table over its SRS under a digest over both, and each commitment is the column's
+coefficients evaluated at the toy SRS's `tau`, the same over `2^18` powers as over `2^20`.
 `crates/prover/tests/control.rs`, deferred: `a1_the_guest_proves_and_every_shard_verifies`
 and `a_key_with_another_generic_table_is_another_statement`.
 

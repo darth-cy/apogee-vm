@@ -240,7 +240,11 @@ File paths are under `crates/`. Every test listed passes; the ones marked *defer
 | The all-zero mask, refused by the decoder's domain alone (S15's and S16's control, on this family) | `::an_all_zero_mask_is_refused_by_the_decoder_domain_alone` |
 | The ordering gate is the gadget's equation over the family's columns, and the packed mask recomposes from exactly the twelve kind bits | `::the_layout_and_the_gates_are_the_specs`, `::the_legal_masks_are_the_instruction_list` |
 | The guest derives only the families S17 proves, and runs taken and not-taken compressed branches, a branch taken to its own fall-through, `c.j` and `c.jr` | `::the_guest_runs_the_acceptance_matrix` |
-| The prover's own fill over the guest's trace: every channel counts, every live row and the first padding rows satisfy every gate and range | `::the_fill_satisfies_every_gate_and_every_table` |
+| Each table lookup the lone refusal of a row every gate and range accepts: a forged sign on either operand, and a `jal` four bytes past its table row — each under its own selector | `::each_table_lookup_is_the_one_that_refuses_its_row` |
+| The prover's own fill over the guest's trace: every channel counts, every live row and the first padding rows satisfy every gate and range, and the setup columns are the decoded table and the generic table row for row | `::the_fill_satisfies_every_gate_and_every_table` |
+| The fill over programs built by hand: jumps and a taken branch across a `2^16`-byte page, and a second shard of a buffer longer than its height; and its refusals of a trace its table does not compute | `::jumps_across_a_halfword_page_fill_and_hold`, `::a_second_shard_fills_the_cycles_after_the_first`, `::the_fill_refuses_…` |
+| The circuit's construction checks, each through a broken circuit: an obligation dropped, `next_pc`'s direct bound replaced, a gate nonzero on the zero row; the comparison built at 1 to 32 bits only | `constraints/src/jump_branch_slt.rs`, `gadgets.rs` (unit) |
+| The key `ProverSetup::new` builds, with no proof: the table over its SRS, the digest over both; each commitment against the toy `tau`, the same over `2^18` powers as over `2^20` | `prover/tests/key.rs` |
 | The generic table's binding: the key's triple the ceremony's, the digest over it, the opening claim ending with it; a key with another table's does not load under the honest digest, and under its own every shard is refused as `Statement` | `prover/tests/control.rs` (deferred) |
 | The digest's recipe and every byte of both its inputs moving it; the global transcript event for event, S16's; the key's layout read back field by field; every bit of the key's table refused at load; the per-family setup count with and without the table | `verifier-core/tests/reduce.rs`, `wire.rs` |
 | `load_verifying_key` decodes every table point | `verifier/src/lib.rs` (unit) |
@@ -309,4 +313,108 @@ than its scaled obligation would pass the check. Tighten it before relying on it
 
 ## Verification performed
 
-PENDING
+On macOS (18 cores, 48 GB), every gate the root `CLAUDE.md` lists, at the final tree:
+
+- `fmt --check` in all four workspaces, and `clippy -D warnings` in all four;
+- `cargo test --workspace`: **833 passed, 50 `#[ignore]`d** (796 and 44 at S16). The 37
+  new tests that run in CI: `checker/tests/jump_branch_slt.rs` 22; `constraints` unit 10
+  (five in `gadgets`, five in `jump_branch_slt`); `prover/tests/key.rs` 2;
+  `program/tests/lookup_tables.rs` 1; `verifier-core/tests/reduce.rs` 1; `verifier` unit 1. `verifier-core/tests/wire.rs` and
+  `transcript/tests/duplex.rs` grew inside existing tests. The 6 new ignored ones are
+  `prover/tests/control.rs`' two, `checker/tests/tamper.rs`' two, the ceremony half of
+  `lookup_tables.rs`, and `loader/tests/qemu.rs`' control case;
+- the `riscv32imac` build of `field`, `constants`, `transcript`, `poly`, `sumcheck`,
+  `constraints`, `gkr-verify` and `verifier-core`; the guest workspace's clippy with
+  `guests/control` in it; fib's and control's guest builds;
+- `cargo run -p kat-gen`, then the fixture diff: nothing tracked moves, and the three new
+  fixtures regenerate byte for byte — `generic_table.txt` from the ceremony file;
+  `transcript-ref` with no diff;
+- the QEMU suites in the colima container (aarch64 Linux with `qemu-user`, its own
+  `CARGO_TARGET_DIR`, every guest built from source), at the committed tree:
+  `loader --test qemu` 10 passed at both profiles, `control_passes_its_checks` among them;
+  `emulator --test differential` 3 passed, control in its suite, its register file equal
+  to QEMU's at every instruction; `emulator --test consistency` 8 passed at both profiles;
+- on the PSE ceremony: `program --test identity -- --ignored` 6 passed, 71 s — **the
+  identity pins did not move** — and `program --test lookup_tables -- --ignored` 1 passed,
+  the table's three commitments equal to the pin at `2^18`, `2^20` and `2^22`;
+- S15's deferred `checker --test logup`: 9 passed, 199 s.
+
+**The deferred suites**, `--include-ignored --test-threads=1`, on the final tree:
+
+| Suite | Result | Wall | Peak resident |
+| --- | --- | --- | --- |
+| `prover --test acceptance` | 7 passed | 323 s | 8.64 GB |
+| `verifier --test cli` | 1 passed | 20 s | 8.54 GB |
+| `checker --test tamper` | 7 passed | 806 s | 11.26 GB |
+| `prover --test control` | 2 passed | 84 s | 10.07 GB |
+
+S16's three are unchanged in their results under the new key and digest; the tamper file
+is slower and larger with S17's twins, which re-prove a three-shard statement each. All
+four stay commented out of `.github/workflows/ci.yml` under `# DEFERRED:` lines, master
+rule 7: both execution shards are `2^20` rows, the timestamp channel's floor.
+
+**Measurements.** `control`'s statement — add/sub and jump/branch/slt at `2^20`,
+`INIT_TEARDOWN` at `2^16`, the toy SRS — proves in about 40 s on 18 cores, setup
+included: each of `control.rs`' two tests proves it, 84 s for the file. The family's
+circuit is 25 transitions deep at `2^20`, its base 75 columns wide and layer 1 84 (the
+add/sub circuit's are 74 and 68), a shard proof 61,612 bytes, and the artifact builds in
+about 4 ms.
+
+---
+
+## Mutation testing
+
+Three agents, each in its own worktree at the stage's second commit, made one semantic edit
+at a time to S17's code — a check removed or weakened, a constant, coefficient, selector or
+gate term changed, an order swapped, a message dropped — ran the suites named for it, and
+reverted. The circuit was measured with its two pins skipped, the fixture's SHA-256 and the
+gate-by-gate layout, as S16's was. A fourth agent ran the survivors only a proof could
+judge against `prover --test control`, one at a time, and the two it left were run the
+same way afterwards.
+
+| Group | Mutants | Caught in CI | Survived |
+| --- | --- | --- | --- |
+| the circuit: `jump_branch_slt`, `gadgets`, the x0 rule on `is_zero`, the registry arm | 78 | 66 | 12 |
+| the binding: the key's codec and load rules, the SRS digest, step 11, the load, the key's construction, `generic_commitments`, the constants | 42 | 29 | 13 |
+| the family's fill | 47 | 34 | 13 |
+| **all** | **167** | **129** | **38** |
+
+**20 survivors were test gaps, and each is closed by a test that now kills it in CI**
+(re-run against the mutant):
+
+- **Two holes in the row suite's table check.** It gated both table channels by the pc
+  mask instead of each lookup's own selector, so a selector moved to another column went
+  unseen: the decoder lookup under `rs1`'s mask, which frees every `jal` from its table
+  row, and the sign lookups under `lt`, which frees both signs wherever `lt = 0`. Only the
+  pins caught them. The check now reads each lookup's selector, and three rows — a forged
+  sign on each operand and a `jal` past its table row — are each refused by one lookup.
+- **A branch's `next_pc` bound**: the range obligations moved under `rd`'s mask, which a
+  branch does not have. An unreduced branch target is now a row.
+- **The construction checks** — the per-channel count, the copower check, the all-zero-row
+  assertion — which no test had fed a broken circuit; `jump_branch_slt` now has a private
+  `assemble` seam for that. And the comparison's width guard at 0 bits.
+- **The fill, five ways**: `next_pc`'s high halfword taken from the fall-through, which no
+  committed guest can tell apart, its code lying in one `2^16`-byte page; a shard's first
+  and last cycle, which no suite could tell with one shard; its two refusals of a trace its
+  table does not compute; and its setup columns in the wrong row order, which only the
+  proof's opening caught (three mutants).
+- **The key's construction**, which only the proving suites reached: the table stored in
+  another order, the digest over another table, `generic_commitments` committing one column
+  three times or at `2^20`. And `load_verifying_key` decoding two of the three points.
+
+**11 are equivalent**, each with the reason in the agent's report: the frame's write-back
+gates make `rs1`'s and `rs2`'s written values their read values, so reading either is the
+same (two mutants); the comparison's obligations under `rs1`'s mask, which differs from
+`m_pc` only on a `jal`, where nothing reads the comparison; two relabelings the prover and
+verifier follow together — the generic and decoder multiplicity columns swapped, the range
+pairs reordered; the load's registry self-check, which no key whose circuit is the
+registry's can fail (deviation 9); the fill's gap by signed subtraction; an equality
+inverse of 1 where the difference is 0, and on padding rows, where no gate reads it; a
+`jal`'s wrap taken from the immediate's sign, which is the carry for every target the
+emulator can reach; and two arms of the fill's `next_pc` match reordered, being disjoint.
+
+**7 are caught only by the proof**: step 11 of `reduce_shard` never listing the table,
+listing it for the wrong families, for every family, or before identity's commitments, and
+the prover's opening listing it never, for the wrong families, or first. Each fails
+`control.rs`' `a1_…` — the verifier-side ones as `Opening`, the prover's first two by
+`batch_open`'s length refusal, its order swap as `Opening` under the honest verifier.

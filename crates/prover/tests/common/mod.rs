@@ -123,6 +123,12 @@ pub fn control_setup() -> ProverSetup {
     ProverSetup::new(control_program(), toy_srs(ADD_VARS)).expect("control registers")
 }
 
+/// The toy SRS's `tau`.
+pub fn toy_tau() -> Fr {
+    Fr::from_hex("0x0000000000000000000000000000000000000000000000000000000000c0ffee")
+        .expect("a canonical literal")
+}
+
 /// An SRS of `2^power` powers of a `tau` written down here: real, structurally
 /// valid and completely insecure, built the way `crates/pcs`' suite builds one
 /// and loaded through `Srs::load`. The archive is kept under cargo's
@@ -140,8 +146,7 @@ pub fn toy_srs(power: u32) -> srs::Srs {
     if let Ok(srs) = srs::Srs::load(&path) {
         return srs;
     }
-    let tau = Fr::from_hex("0x0000000000000000000000000000000000000000000000000000000000c0ffee")
-        .expect("a canonical literal");
+    let tau = toy_tau();
     let count = 1usize << power;
     let mut scalars = Vec::with_capacity(count);
     let mut acc = Fr::ONE;

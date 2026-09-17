@@ -302,6 +302,11 @@ fn the_comparison() -> Comparison {
 /// obligation scales by `1/2`, lacks its direct range check, if a gate is
 /// nonzero on the all-zero padding row, and on every refusal of the assembly.
 pub fn artifact(trace_vars: u32) -> CircuitArtifact {
+    assemble(trace_vars, extras())
+}
+
+/// The family's columns, gates, lookups and channels, before the assembly.
+fn extras() -> Extras {
     assert_eq!(
         frame_queries(family::JUMP_BRANCH_SLT),
         &QUERIES,
@@ -506,21 +511,23 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
         tuple: decode,
     });
 
-    let a = frame_with_channels_artifact(
-        &QUERIES,
-        trace_vars,
-        Extras {
-            witness,
-            setup,
-            virtuals: vec![
-                (VirtualKind::Range19, "range19".into()),
-                (VirtualKind::Range16, "range16".into()),
-            ],
-            enforcing,
-            lookups,
-            channels: channels(),
-        },
-    );
+    Extras {
+        witness,
+        setup,
+        virtuals: vec![
+            (VirtualKind::Range19, "range19".into()),
+            (VirtualKind::Range16, "range16".into()),
+        ],
+        enforcing,
+        lookups,
+        channels: channels(),
+    }
+}
+
+/// `extras` over the family's frame at `trace_vars`, held to the checks
+/// [`artifact`] documents; a seam so a test can hand it a broken circuit.
+fn assemble(trace_vars: u32, extras: Extras) -> CircuitArtifact {
+    let a = frame_with_channels_artifact(&QUERIES, trace_vars, extras);
     // Every obligation is built above and then handed over, so a count is
     // what shows none was dropped on the way (S14 must-be-exact 5, S15's
     // per-channel form).
@@ -540,7 +547,7 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     }
     // The evenness obligation scales next_pc's low halfword by 1/2, which
     // bounds nothing unless next_pc is bounded directly too.
-    if let Err(e) = check_copowers(&a, &[next_pc]) {
+    if let Err(e) = check_copowers(&a, &[frame(SLOT_PC, FIELD_WRITE_VALUE)]) {
         panic!("jump_branch_slt: {e}");
     }
     // A shard's padding rows are all zero, which every gate must accept.
@@ -592,5 +599,54 @@ mod tests {
             assert_eq!(m.count_ones(), 1);
             assert!(LEGAL_MASKS[..i].iter().all(|n| n != m));
         }
+    }
+
+    /// The honest extras assemble, at the lowest height the registry builds.
+    #[test]
+    fn the_seam_assembles_the_family() {
+        assert_eq!(assemble(19, extras()), artifact(19));
+    }
+
+    /// An obligation dropped on the way to the assembly is refused by its
+    /// channel's count.
+    #[test]
+    #[should_panic(expected = "channel `range16` carries 10 obligations, not 11")]
+    fn a_dropped_obligation_fails_the_build() {
+        let mut e = extras();
+        e.lookups.retain(|l| l.name != "rd_hi_range");
+        assemble(20, e);
+    }
+
+    /// `next_pc`'s direct low-halfword bound replaced by one that bounds
+    /// nothing the halved obligation needs: the count holds, and the copower
+    /// check refuses it.
+    #[test]
+    #[should_panic(expected = "copower pairing")]
+    fn next_pc_without_its_direct_bound_fails_the_build() {
+        let mut e = extras();
+        let next_pc = frame(SLOT_PC, FIELD_WRITE_VALUE);
+        let l = e
+            .lookups
+            .iter_mut()
+            .find(|l| l.name == "next_pc_lo_range")
+            .expect("the direct bound");
+        l.tuple = vec![linear(vec![(lit(2), next_pc), (neg(1 << 17), NEXT_PC_HI)])];
+        assemble(20, e);
+    }
+
+    /// A gate that is nonzero on the all-zero row is refused: a shard's
+    /// padding rows are all zero.
+    #[test]
+    #[should_panic(expected = "a gate is nonzero on the all-zero row")]
+    fn a_gate_nonzero_on_the_zero_row_fails_the_build() {
+        let mut e = extras();
+        e.enforcing.push((
+            "taken_is_one".into(),
+            GateDef::Linear {
+                terms: vec![(lit(1), TAKEN)],
+                constant: neg(1),
+            },
+        ));
+        assemble(20, e);
     }
 }

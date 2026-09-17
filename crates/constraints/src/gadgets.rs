@@ -231,11 +231,9 @@ mod tests {
         );
     }
 
-    /// The sign lookup's tuple is the generic table's width.
-    #[test]
-    fn a_sign_lookup_has_the_generic_tables_width_and_key_base() {
-        let w = |i| PolyAddress::Witness(i);
-        let c = Comparison {
+    fn a_comparison() -> Comparison {
+        let w = PolyAddress::Witness;
+        Comparison {
             prefix: "cmp".into(),
             selector: PolyAddress::Memory(1),
             signed: vec![w(0)],
@@ -248,8 +246,13 @@ mod tests {
             lt: w(6),
             gap: w(7),
             gap_hi: w(8),
-        };
-        let (gates, lookups) = comparison(&c);
+        }
+    }
+
+    /// The sign lookup's tuple is the generic table's width.
+    #[test]
+    fn a_sign_lookup_has_the_generic_tables_width_and_key_base() {
+        let (gates, lookups) = comparison(&a_comparison());
         assert_eq!(gates.len(), 2);
         assert_eq!(lookups.len(), 8);
         for l in lookups
@@ -258,5 +261,24 @@ mod tests {
         {
             assert_eq!(l.tuple.len(), generic_table::WIDTH);
         }
+    }
+
+    /// The equation is built for a word of 1 to 32 bits, and for no other.
+    #[test]
+    fn a_word_of_1_and_of_32_bits_builds() {
+        comparison_equation(&a_comparison(), 1);
+        comparison_equation(&a_comparison(), 32);
+    }
+
+    #[test]
+    #[should_panic(expected = "a comparison's word is 1 to 32 bits wide, not 0")]
+    fn a_word_of_no_bits_is_refused() {
+        comparison_equation(&a_comparison(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "a comparison's word is 1 to 32 bits wide, not 33")]
+    fn a_word_of_33_bits_is_refused() {
+        comparison_equation(&a_comparison(), 33);
     }
 }
