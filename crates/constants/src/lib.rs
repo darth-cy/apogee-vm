@@ -774,6 +774,13 @@ pub mod transcript_tags {
     /// Scalars. `[start, end]`, the shard's timestamp window, immediately after
     /// the seed. `docs/spec/shard-proof.md` §4.
     pub const SHARD_TS_WINDOW: u64 = 40;
+
+    /// Scalars. The packed generic table's three commitments the verifying
+    /// key carries, each point four limbs, as one twelve-limb message inside
+    /// the SRS digest's own sponge, right after [`SRS_VERIFIER`]. Added at
+    /// S17, the first stage whose family reads the generic channel.
+    /// `docs/spec/shard-proof.md` §3.
+    pub const GENERIC_TABLE: u64 = 41;
 }
 
 /// The external challenge slots a GKR circuit's coefficients may name, frozen
@@ -918,6 +925,28 @@ pub mod lookup_channel {
     /// has one slot per position above 0. The decoder's seven-column tuple is
     /// the widest built (`crates/program`'s `lookup_tuple`).
     pub const MAX_TUPLE: usize = 7;
+}
+
+/// The generic channel's packed table, frozen at S15 in `crates/program`'s
+/// `lookup_tables` and moved here at S17, when a circuit — which cannot
+/// depend on `program` — first builds a key into it. `docs/spec/lookup.md` §9.
+///
+/// ```text
+/// row 0                    the ZeroEntry, all zero
+/// rows 1 ..= 2^16          AND:        (AND_BASE  + a + 1,  b,        a & b)
+/// rows 2^16+1 ..= 2^17     U16GetSign: (SIGN_BASE + h + 1,  h >> 15,  0)
+/// ```
+pub mod generic_table {
+    /// The table's tuple width: a key and two values.
+    pub const WIDTH: usize = 3;
+
+    /// The AND byte table's key base: its keys are `AND_BASE + a + 1` for
+    /// `a < 256`.
+    pub const AND_BASE: u32 = 0;
+
+    /// `U16GetSign`'s key base, one past the AND table's highest key: its keys
+    /// are `SIGN_BASE + h + 1` for every halfword `h`, disjoint from AND's.
+    pub const SIGN_BASE: u32 = 256;
 }
 
 /// The circuit families, by number. Frozen at S11; **append-only**.

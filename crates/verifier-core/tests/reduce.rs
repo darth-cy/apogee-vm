@@ -6,13 +6,13 @@
 
 mod common;
 
-use common::{blob, shell, statement, vk, ADD, INIT, ZERO};
+use common::{blob, jbs_statement, jbs_vk, shell, statement, vk, ADD, INIT, JBS, ZERO};
 use constants::transcript_tags as tags;
 use field::Fr;
 use gkr_verify::SumcheckProof;
 use transcript::TranscriptEvent::{Absorb, Challenge};
 use verifier_core::{
-    global_commit, memory_slots, reduce_shard, shard_challenges, shard_transcript,
+    global_commit, memory_slots, reduce_shard, shard_challenges, shard_transcript, srs_digest,
     statement_shards, VerifyError, TRIVIAL_TS_WINDOW,
 };
 
@@ -97,6 +97,60 @@ fn the_global_transcript_is_the_frozen_order() {
     let mut k = vk();
     k.identity.0 += Fr::ONE;
     assert_ne!(global_commit(&k, &public).digest, digest);
+}
+
+/// S17: the generic table is bound through the SRS digest, which G2 absorbs
+/// before every challenge of the statement and of every shard seeded from it.
+/// A key with S17's family has S16's schedule exactly, and the statement's
+/// digest moves with each of the table's points and with their order, once
+/// the key's SRS digest is recomputed over them — and a key whose table moved
+/// without it does not load.
+#[test]
+fn the_generic_table_is_bound_through_the_srs_digest() {
+    let (key, public) = (jbs_vk(), jbs_statement());
+    assert_eq!(key.check(), Ok(()));
+    let g = global_commit(&key, &public);
+    let log = g.transcript.event_log();
+    assert_eq!(
+        &log[..3],
+        &[
+            Absorb {
+                tag: tags::PROTOCOL_SUITE,
+                n_scalars: 1
+            },
+            Absorb {
+                tag: tags::SRS_DIGEST,
+                n_scalars: 1
+            },
+            Absorb {
+                tag: tags::VM_CONFIG,
+                n_scalars: 9
+            },
+        ]
+    );
+    assert!(log.iter().all(|e| *e
+        != Absorb {
+            tag: tags::GENERIC_TABLE,
+            n_scalars: 12
+        }));
+    assert_eq!(
+        statement_shards(&key.config, &public.shard_counts),
+        vec![(INIT, 0), (ADD, 0), (JBS, 0)]
+    );
+    let moved = |k: &mut verifier_core::VerifyingKey| {
+        assert!(k.check().is_err(), "a moved table without its digest loads");
+        k.srs_digest = srs_digest(&k.srs_verifier, &k.generic_table);
+        assert_eq!(k.check(), Ok(()));
+        global_commit(k, &public).digest
+    };
+    for i in 0..3 {
+        let mut k = jbs_vk();
+        k.generic_table[i] = blob(900 + i as u32);
+        assert_ne!(moved(&mut k), g.digest, "point {i}");
+    }
+    let mut k = jbs_vk();
+    k.generic_table.swap(0, 2);
+    assert_ne!(moved(&mut k), g.digest, "the order");
 }
 
 /// S1 to S4: the seed, the window, the witness commitments as one message,

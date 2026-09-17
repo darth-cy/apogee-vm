@@ -12,13 +12,14 @@
 //!
 //! # SRS integrity is presumed
 //!
-//! **There is no SRS digest.** S07 originally specified a Poseidon2 digest over
-//! every point, absorbed in statement binding and re-verified by [`Srs::load`];
-//! that requirement was dropped, and the SRS handed to this crate is *assumed*
-//! to be the right one. See `docs/spec/srs.md` §6 and the S07 handoff note —
-//! this is load-bearing for anything downstream that expected the statement to
-//! bind an SRS identity, and it must be reinstated before the protocol is
-//! sound against SRS substitution.
+//! **This crate has no SRS digest.** S07 originally specified a Poseidon2
+//! digest over every point, absorbed in statement binding and re-verified by
+//! [`Srs::load`]; that requirement was dropped, and the SRS handed to this crate
+//! is *assumed* to be the right one. See `docs/spec/srs.md` §4 and the S07
+//! handoff note. Since S16 a statement absorbs a narrower digest,
+//! `verifier_core::srs_digest`, over the verifier points and, since S17, the
+//! generic table's three commitments; the powers themselves are bound by
+//! nothing but the pairing check.
 //!
 //! What remains is structural, not identifying: every point is validated at
 //! decode time with S05's `from_bytes` (canonical, on-curve, in-subgroup), and

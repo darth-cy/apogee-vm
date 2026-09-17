@@ -434,6 +434,7 @@ fn tag_table_is_well_formed() {
         "GLOBAL_STATE_DIGEST",
         "SHARD_SEED",
         "SHARD_TS_WINDOW",
+        "GENERIC_TABLE",
     ];
     let values: Vec<u64> = names
         .iter()

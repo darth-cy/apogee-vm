@@ -1,12 +1,15 @@
-//! S16's tamper twins, through `TamperHarness`: one statement — `guests/addsub`
-//! — proved honestly once per test, then proved again with one tamper as an
-//! honest prover would prove the tampered witness, and one shard verified
-//! through `verify_shard`. Each twin asserts the class of the check that
-//! refuses it (`docs/spec/shard-proof.md` §6).
+//! S16's and S17's tamper twins, through `TamperHarness`: one statement —
+//! `guests/addsub`, or S17's `guests/control` — proved honestly once per test,
+//! then proved again with one tamper as an honest prover would prove the
+//! tampered witness, and one shard verified through `verify_shard`. Each twin
+//! asserts the class of the check that refuses it
+//! (`docs/spec/shard-proof.md` §6).
 //!
 //! **`#[ignore]`d, and run by name with `--include-ignored --test-threads=1`**:
 //! the add/sub shard is `2^20` rows and a statement's proof peaks at 8.6 GB —
-//! 9.3 GB here, where the harness holds the honest statement while it re-proves.
+//! 9.3 GB with the honest statement the harness holds beside a re-proof — and
+//! `control`'s has two execution shards of that height, which puts the file's
+//! peak at 11.3 GB.
 //! The rows these tampers edit are `crates/checker/tests/add_sub.rs`'s, which
 //! runs in ordinary CI.
 //!
@@ -19,15 +22,20 @@
 mod common;
 
 use checker::{Cell, Tamper, TamperHarness};
+use constants::extra_mask::jump_branch_slt as kind;
+use constants::family::JUMP_BRANCH_SLT as JBS;
 use constants::family::{ADD_SUB_LUI_AUIPC as ADD, INIT_TEARDOWN as INIT};
 use constants::lookup_channel;
 use constraints::add_sub::{DECODED, KINDS, MULTIPLICITIES, NEXT_PC_HI, PC_WRAP, RD_HI, WRAP};
+use constraints::jump_branch_slt as jbs;
 use constraints::memory::{
     frame, gap_hi, rd_inv, rd_is_zero, rd_selected, CYCLE, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS,
     FIELD_READ_VALUE, FIELD_WRITE_VALUE,
 };
 use constraints::PolyAddress;
 use field::Fr;
+use prover::{shard_columns, ProverSetup};
+use trace::{build_multiplicities, Role, TraceArchive};
 use verifier::VerifyError;
 
 const WIDTH: usize = 7;
@@ -394,4 +402,259 @@ fn small(v: Fr) -> u64 {
     let b = v.to_bytes();
     assert!(b[4..].iter().all(|x| *x == 0), "{v:?} is not a u32");
     u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as u64
+}
+
+// ---------------------------------------------------------------------------
+// S17: the jump/branch/slt family, over `guests/control`
+// ---------------------------------------------------------------------------
+
+/// `control`'s frame: pc, rs1, rs2, rd at slots 0 to 3.
+const JBS_RS1: usize = 1;
+const JBS_RD: usize = 3;
+
+/// The index, in `control`'s jump/branch/slt buffer — its one shard's rows —
+/// of the first row whose kind bit and trace row `pick` accepts.
+fn jbs_row(
+    setup: &ProverSetup,
+    archive: &TraceArchive,
+    pick: fn(u32, &trace::Row) -> bool,
+) -> usize {
+    let table = setup
+        .program
+        .tables
+        .family(JBS)
+        .expect("the family's table");
+    let traces = archive.family_traces();
+    let buffer = traces.family(JBS).expect("the family's buffer");
+    (0..buffer.len())
+        .find(|&i| {
+            let row = buffer.row(i);
+            let mask = table.get(6, row.pc as usize / 2).expect("a live row");
+            pick(mask.trailing_zeros(), &row)
+        })
+        .expect("control runs the row the test names")
+}
+
+fn jbs_cell(address: PolyAddress, row: usize, value: Fr) -> Cell {
+    cell(JBS, address, row, value)
+}
+
+/// S17 acceptance 7, and the generic channel's two bindings. The honest,
+/// branch-heavy statement verifies (the harness asserts it); then, each
+/// refused in its class:
+///
+/// - one corrupted `lt` cell, from `BLT(1, 0x80000000)`, which is not taken:
+///   the comparison and the branch form refuse it, `Constraint`;
+/// - the same forgery carried through — `lt`, the gap moved by `2^32` and its
+///   high halfword with it, `taken` and the pc written at the branch's
+///   target — which every gate accepts: the gap's range check is what refuses
+///   it, `Lookup { RANGE16 }`;
+/// - the written `next_pc` of the `jalr`, moved two bytes on together with
+///   the `rs1` it is formed from, every gate and bound still holding: only the
+///   global memory argument refuses it, `MemoryArgument` — and again with the
+///   add/sub row that wrote that `rs1` moved to match, so the register's chain
+///   balances and the pc's alone does not;
+/// - one generic-channel count moved, `Lookup { GENERIC }`;
+/// - a packed-table cell no row looks up, poisoned — `37 AND 45` answering 0
+///   — which no gate and no channel sees: the opening of the table's columns
+///   against the key's commitments refuses it, `Opening`.
+///
+/// And two cells nothing reads, on a padding row, still verify.
+#[test]
+#[ignore = "2^20 rows: one statement's proof peaks near 10 GB"]
+fn s17_a7_the_comparison_and_the_pc_are_pinned() {
+    let setup = common::control_setup();
+    let archive = common::control_archive(&setup.program);
+    let h = TamperHarness::new(&setup, &archive);
+    let columns = shard_columns(&setup, &archive, JBS, 0, &[]).expect("the honest shard");
+    let at = |address: PolyAddress, row: usize| {
+        columns
+            .iter()
+            .find(|(a, _)| *a == address)
+            .unwrap_or_else(|| panic!("no {address}"))
+            .1
+            .get(row)
+    };
+
+    // BLT(1, 0x80000000): not taken.
+    let r = jbs_row(&setup, &archive, |bit, row| {
+        bit == kind::BLT
+            && row.query(Role::Rs1).map(|q| q.read_value) == Some(1)
+            && row.query(Role::Rs2).map(|q| q.read_value) == Some(0x8000_0000)
+    });
+    assert_eq!(at(jbs::LT, r), Fr::ZERO);
+    assert_eq!(at(jbs::TAKEN, r), Fr::ZERO);
+    h.assert_rejects(
+        &tamper(vec![jbs_cell(jbs::LT, r, Fr::ONE)]),
+        (JBS, 0),
+        CONSTRAINT,
+    );
+    let (pc, imm) = (
+        small(at(frame(PC, FIELD_READ_VALUE), r)),
+        small(at(jbs::DECODED[4], r)),
+    );
+    let target = (pc + imm) & 0xffff_ffff;
+    let gap = at(jbs::CMP_GAP, r) + f(1 << 32);
+    let gap_hi = at(jbs::CMP_GAP_HI, r) + f(1 << 16);
+    h.assert_rejects(
+        &tamper(vec![
+            jbs_cell(jbs::LT, r, Fr::ONE),
+            jbs_cell(jbs::CMP_GAP, r, gap),
+            jbs_cell(jbs::CMP_GAP_HI, r, gap_hi),
+            jbs_cell(jbs::TAKEN, r, Fr::ONE),
+            jbs_cell(frame(PC, FIELD_WRITE_VALUE), r, f(target)),
+            jbs_cell(jbs::NEXT_PC_HI, r, f(target >> 16)),
+        ]),
+        (JBS, 0),
+        lookup(lookup_channel::RANGE16),
+    );
+
+    // The jalr: rs1 = rd, imm = -2, bit 0 of rs1 + imm set.
+    let r = jalr_row(&setup, &archive);
+    let v = small(at(frame(JBS_RS1, FIELD_READ_VALUE), r));
+    let next = small(at(frame(PC, FIELD_WRITE_VALUE), r));
+    assert_eq!(at(jbs::JALR_DROP, r), Fr::ONE);
+    assert_eq!(next, (v - 2) & !1);
+    h.assert_rejects(&tamper(jalr_moved(r, v, next)), (JBS, 0), MEMORY);
+    // `addi t2, t2, 3`, the add/sub row just before the jalr, wrote `v`. Its
+    // write moved too, the register's read and write pair up again, and the
+    // pc's is the one imbalance left. The add/sub shard is re-proved over its
+    // broken gate, and only this family's shard is verified.
+    let jalr_pc = small(at(frame(PC, FIELD_READ_VALUE), r)) as u32;
+    let traces = archive.family_traces();
+    let adds = traces.family(ADD).expect("the add/sub buffer");
+    let a = (0..adds.len())
+        .find(|&i| {
+            let row = adds.row(i);
+            row.next_pc == jalr_pc && row.query(Role::Rd).map(|q| q.write_value as u64) == Some(v)
+        })
+        .expect("the add/sub row writing the jalr's rs1");
+    let mut pc_only = jalr_moved(r, v, next);
+    pc_only.push(cell(ADD, frame(RD, FIELD_WRITE_VALUE), a, f(v + 2)));
+    h.assert_rejects(&tamper(pc_only), (JBS, 0), MEMORY);
+
+    // The generic channel's count of the ZeroEntry, and a poisoned AND row.
+    let m = at(jbs::MULTIPLICITIES[2], 0);
+    h.assert_rejects(
+        &tamper(vec![jbs_cell(jbs::MULTIPLICITIES[2], 0, m + Fr::ONE)]),
+        (JBS, 0),
+        lookup(lookup_channel::GENERIC),
+    );
+    let and_row = 1 + 37 * 256 + 45;
+    assert_eq!(at(jbs::GENERIC_TABLE[0], and_row), f(37 + 1));
+    assert_eq!(at(jbs::GENERIC_TABLE[2], and_row), f(37 & 45));
+    assert_eq!(at(jbs::MULTIPLICITIES[2], and_row), Fr::ZERO);
+    h.assert_rejects(
+        &tamper(vec![jbs_cell(jbs::GENERIC_TABLE[2], and_row, Fr::ZERO)]),
+        (JBS, 0),
+        OPENING,
+    );
+
+    // A padding row's dropped bit and its equality inverse: nothing reads
+    // either where every mask and kind bit is 0.
+    let padding = 1000;
+    assert_eq!(at(frame(PC, FIELD_MASK), padding), Fr::ZERO);
+    h.assert_verifies(
+        &tamper(vec![
+            jbs_cell(jbs::JALR_DROP, padding, Fr::ONE),
+            jbs_cell(jbs::EQ_INV, padding, f(7)),
+        ]),
+        (JBS, 0),
+    );
+}
+
+/// `control`'s `jalr t2, -2(t2)`: `rs1` and `rd` the one register, its
+/// immediate `-2`.
+fn jalr_row(setup: &ProverSetup, archive: &TraceArchive) -> usize {
+    jbs_row(setup, archive, |bit, row| {
+        let (rs1, rd) = (row.query(Role::Rs1), row.query(Role::Rd));
+        bit == kind::JALR && rs1.is_some() && rs1.map(|q| q.addr) == rd.map(|q| q.addr)
+    })
+}
+
+/// The `jalr` at row `r`, reading `v` and landing at `next`, re-run on
+/// `v + 2`: its `rs1` read and write-back, its `rd` read — the same register,
+/// written at slot 1 — the pc it writes, and what the comparison and the
+/// equality gadget computed from `rs1`. Bit 0 and the wrap are unchanged, so
+/// every gate and every bound holds; the register's chain and the pc's do not.
+fn jalr_moved(r: usize, v: u64, next: u64) -> Vec<Cell> {
+    let moved = v + 2;
+    vec![
+        jbs_cell(frame(JBS_RS1, FIELD_READ_VALUE), r, f(moved)),
+        jbs_cell(frame(JBS_RS1, FIELD_WRITE_VALUE), r, f(moved)),
+        jbs_cell(frame(JBS_RD, FIELD_READ_VALUE), r, f(moved)),
+        jbs_cell(frame(PC, FIELD_WRITE_VALUE), r, f(next + 2)),
+        jbs_cell(jbs::EQ_INV, r, f(moved).inverse().unwrap()),
+        jbs_cell(jbs::CMP_GAP, r, f(moved)),
+    ]
+}
+
+/// S17 acceptance 6, fetch binding. The `jalr` above re-run two bytes further
+/// lands in the middle of the 32-bit `sltiu` it jumps to — the second
+/// halfword, which no family's table holds — and the row after it is moved
+/// there with it, so the pc's chain is whole. Every gate still holds; the
+/// honest prover's recount of the decoder channel fails loudly, naming the
+/// channel, because the table's row there is its `MINUS_ONE` padding; and the
+/// proof it makes anyway is refused by that channel, `Lookup { DECODER }`,
+/// before the memory argument sees the moved register.
+#[test]
+#[ignore = "2^20 rows: one statement's proof peaks near 10 GB"]
+fn s17_a6_a_jump_to_a_pc_holding_no_instruction_is_unprovable() {
+    let setup = common::control_setup();
+    let archive = common::control_archive(&setup.program);
+    let h = TamperHarness::new(&setup, &archive);
+    let mut columns = shard_columns(&setup, &archive, JBS, 0, &[]).expect("the honest shard");
+    let at = |columns: &[(PolyAddress, poly::MultilinearPoly)], address: PolyAddress, row| {
+        columns
+            .iter()
+            .find(|(a, _)| *a == address)
+            .unwrap_or_else(|| panic!("no {address}"))
+            .1
+            .get(row)
+    };
+
+    let r = jalr_row(&setup, &archive);
+    let v = small(at(&columns, frame(JBS_RS1, FIELD_READ_VALUE), r));
+    let next = small(at(&columns, frame(PC, FIELD_WRITE_VALUE), r));
+    // The jalr lands on this family's next row, a 32-bit instruction whose
+    // second halfword no family's table holds.
+    assert_eq!(
+        small(at(&columns, frame(PC, FIELD_READ_VALUE), r + 1)),
+        next
+    );
+    let tables = &setup.program.tables;
+    assert!(tables.family(JBS).unwrap().is_live(next as usize / 2));
+    for table in &tables.families {
+        assert!(
+            !table.is_live(next as usize / 2 + 1),
+            "family {} holds pc {:#x}",
+            table.family,
+            next + 2
+        );
+    }
+
+    let mut cells = jalr_moved(r, v, next);
+    cells.push(jbs_cell(frame(PC, FIELD_READ_VALUE), r + 1, f(next + 2)));
+
+    // The honest prover cannot count the decoder channel over it.
+    for c in &cells {
+        let column = columns
+            .iter_mut()
+            .find(|(a, _)| *a == c.address)
+            .expect("a committed column");
+        let mut values: Vec<Fr> = (0..column.1.len()).map(|i| column.1.get(i)).collect();
+        values[c.row] = c.value;
+        column.1 = poly::MultilinearPoly::new(poly::PolyBacking::Fr(values));
+    }
+    let circuit = setup.vk.circuit(JBS).expect("the family's circuit");
+    let decoder = circuit
+        .channels
+        .iter()
+        .find(|spec| spec.channel == lookup_channel::DECODER)
+        .expect("the decoder channel");
+    let refusal = build_multiplicities(&circuit.artifact, &columns, std::slice::from_ref(decoder))
+        .expect_err("a row at a pc no table holds cannot be counted");
+    assert!(refusal.contains("channel `decoder`"), "{refusal}");
+
+    h.assert_rejects(&tamper(cells), (JBS, 0), lookup(lookup_channel::DECODER));
 }

@@ -53,12 +53,15 @@ pub fn family_name(family: FamilyId) -> &'static str;
 
 pub mod lookup_tables {                  // docs/spec/lookup.md §9
     pub const GENERIC_WIDTH: usize = 3;  // a key and two values; the narrower table zero-padded
+                                         // since S17 these three are constants::generic_table's
     pub const AND_BASE: u32 = 0;   pub const AND_ROWS: usize = 1 << 16;
     pub const SIGN_BASE: u32 = 256;  pub const SIGN_ROWS: usize = 1 << 16;
     pub const GENERIC_ROWS: usize = 1 + AND_ROWS + SIGN_ROWS;
+    pub const GENERIC_LOG_HEIGHT: u32 = 18;   // S17: 2^18 is the first power of two >= GENERIC_ROWS
     pub fn generic_table(log_height: u32) -> Vec<MultilinearPoly>;
     pub fn generic_entries() -> Vec<[u32; GENERIC_WIDTH]>;
     pub fn zero_entry() -> [Fr; GENERIC_WIDTH];
+    pub fn generic_commitments(srs: &Srs) -> [G1Affine; GENERIC_WIDTH];   // S17; panics below 2^18 powers
 }
 ```
 
@@ -171,6 +174,20 @@ gating adds keeps every real entry off the all-zero tuple the `ZeroEntry` answer
 131,073 rows, so a circuit carrying both is at 2^18 or more. **`U16GetSign` is committed,
 not closed-form**; S17 and S18 consume it by name.
 
+**Since S17** the three layout constants are `constants::generic_table`'s — a circuit,
+which cannot depend on this crate, builds a key into the table — and the names here are
+aliases. `generic_commitments(srs)` is the table's three commitments, in tuple order,
+computed at `GENERIC_LOG_HEIGHT`; it panics if `srs` holds fewer than `2^18` powers. They
+are the same three points at every height `2^n` with `n` even and at least 18, a commitment reading the
+table as coefficients and every row past its entries being zero. So they are a constant of
+the ceremony: every verifying key carries them, whatever its families read, and its SRS
+digest covers them (`docs/spec/shard-proof.md` §3, `docs/spec/jump-branch-slt.md` §6).
+Anyone holding the ceremony recomputes them with this function; a verifier holding only
+the `SrsVerifier` cannot. `tests/vectors/generic_table.txt` pins them over the ceremony,
+and `kat-gen -- program` writes it when the ceremony file is present, after checking that
+the table commits to the same points at every menu height from `2^18` up: `2^18`, `2^20`
+and `2^22`.
+
 ## The image column
 `image_init_column(image, h)` is RAM window 0's initial words: row `y` is
 `image.initial_word(4y)`, `h` rows, `U32`-backed. `initial_word` assembles a word byte
@@ -254,8 +271,8 @@ little-endian encoding.
 **What it binds.** Identity is a pure function of `(ProgramImage's instruction slots, its
 file-backed bytes, its entry, family set, heights, bytecode_size_words, code version)` —
 and the SRS it commits over, which identity does not bind: since S16 the statement binds
-the SRS's verifier points instead, through the verifying key's SRS digest
-(`docs/spec/shard-proof.md` §3). `decode_program`
+the SRS's verifier points instead, and since S17 the generic table's three commitments,
+through the verifying key's SRS digest (`docs/spec/shard-proof.md` §3). `decode_program`
 refuses file bytes past window 0, so every one of them is in the image column. Every step
 is deterministic: `load_elf` and `decode_program` touch no clock, filesystem or hash map;
 the tables are sorted vectors; Mercury's MSM is exact and thread-count independent (S07);
@@ -288,15 +305,19 @@ useless. The verifier never sees an ELF.
 | `tests/tables.rs` | Acceptance 6 (every exported column of every table scanned: non-live rows are all `MINUS_ONE`, live rows equal to the stored values and neither padding nor zero), code above a shorter family's table, the 59 row kinds pinned numerically, `narrowest` at each width boundary, 7 (`next_pc` against the loader's halfword map), exact heights, `TableTooShort` at the boundary, `ProgramTooLarge` at the ceiling with segments without file bytes not counted, `ImageOutsideWindow` at `4h − 1` / `4h`, the image column of every guest against `initial_word` and the segment bytes, menu and version refusals, the frozen field masks, one-hot kinds naming exactly 59 mnemonics over the ISA corpus, narrowest storage, determinism, fixture pins |
 | `tests/config.rs` | The `VmConfig` wire form byte for byte, its refusals, a config without either init family or with the two at different heights refused by derivation and by `from_bytes`, a nine-family round trip, the identity wire form, the statement descriptor as three adjacent messages, and every `check_memory_windows` rule at its boundary |
 | `tests/identity.rs` | **All but two `#[ignore]`d — they need `assets/ptau/ppot_0080_24.ptau`.** fib at the defaults twice in-process and against the pin; the recipe rebuilt message by message; acceptance 9's moves plus a `.rodata` byte, a `.data` byte and the entry pc; a segment without file bytes resized does not move it; fib rebuilt from source twice. In CI: `identity_from_commitments` rebuilt message by message over a distinct point per family, and moved by the entry pc and by each commitment. `setup_commitments` — which column `INIT_TEARDOWN` commits, at which height — is reached only by the ignored recipe test |
+| `tests/lookup_tables.rs` | S15's acceptance 10 — the packed table against an independent reference, and a poisoned row caught — a height below the table's 131,073 rows refused with a panic, and the two key ranges disjoint and off zero; and S17's pin: in CI, `the_generic_table_commitments_are_pinned_over_the_ceremony` holds `generic_table.txt` to `identity.txt`'s ceremony and to three 64-byte points; `#[ignore]`d, `the_generic_table_commitments_are_the_ceremonys_at_every_height` recomputes `generic_commitments` over the ceremony, holds it to the pin, and holds the table over `2^18`, `2^20` and `2^22` to the same three points |
 
 ```
 cargo test --release -p program --test identity -- --ignored   # locally, with the ceremony
+cargo test --release -p program --test lookup_tables -- --ignored
 ```
 
 `tests/vectors/mul_free.elf` (hand-encoded, no M or A) and `tests/vectors/identity.txt`
 (fib's identity at the defaults and at all-2^16, with a `# ceremony` line the tests check
-first) come from `cargo run -p kat-gen -- program`; the identity half needs the ceremony
-file and is skipped without it, as the `srs` group is. The identities are generated by
-this crate — there is no second preprocessor — so they are a regression pin on the
-recipe. Guest ELFs and the ISA corpus are read in place from `crates/loader` and
-`crates/isa`.
+first) come from `cargo run -p kat-gen -- program`, and so, since S17, does
+`tests/vectors/generic_table.txt` (the same `# ceremony` line, then one row: the packed
+table's three commitments, key column first, each 64 bytes as hex); the identity and
+generic-table halves need the ceremony file and are skipped without it, as the `srs` group
+is. The identities and the table's commitments are generated by this crate — there is no
+second preprocessor — so they are a regression pin on the recipe. Guest ELFs and the ISA
+corpus are read in place from `crates/loader` and `crates/isa`.

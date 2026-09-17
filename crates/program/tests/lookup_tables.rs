@@ -6,6 +6,8 @@
 //! `program::lookup_tables`, so the two descriptions share no code. A poisoned
 //! row is caught by the same comparison.
 
+mod common;
+
 use field::Fr;
 use program::lookup_tables::{
     generic_entries, generic_table, zero_entry, AND_BASE, AND_ROWS, GENERIC_ROWS, GENERIC_WIDTH,
@@ -135,4 +137,37 @@ fn the_two_tables_key_ranges_are_disjoint_and_miss_zero() {
         (SIGN_BASE + 1, SIGN_BASE + (1 << 16))
     );
     assert!(and_high < sign_low, "the ranges do not overlap");
+}
+
+/// The packed table's commitments — what every verifying key carries and its
+/// SRS digest covers — pinned under the ceremony `identity.txt` is over: a
+/// trusted value anyone holding the ceremony can recompute
+/// (`docs/spec/jump-branch-slt.md` §6). In CI: the file names the same
+/// ceremony and holds three 64-byte points.
+#[test]
+fn the_generic_table_commitments_are_pinned_over_the_ceremony() {
+    let (ceremony, points) = common::pinned_generic_table();
+    assert_eq!(ceremony, common::pinned_identities().0);
+    assert_eq!(points.len(), GENERIC_WIDTH);
+    assert!(points.iter().all(|p| p.len() == 128));
+}
+
+/// Over the ceremony: `generic_commitments` is the pin, and the table over
+/// every menu height it fits — `2^18`, `2^20`, `2^22` — commits to the same
+/// three points, which is what lets one set serve every family's height.
+#[test]
+#[ignore = "needs assets/ptau/ppot_0080_24.ptau; run with --ignored"]
+fn the_generic_table_commitments_are_the_ceremonys_at_every_height() {
+    let srs = srs::Srs::from_ptau(&common::ptau(), 22).expect("the ceremony file ingests");
+    let (ceremony, pinned) = common::pinned_generic_table();
+    assert_eq!(test_support::to_hex(&srs.g1()[1].to_bytes()), ceremony);
+    let hex = |p: &curve::G1Affine| test_support::to_hex(&p.to_bytes());
+    let points = program::lookup_tables::generic_commitments(&srs);
+    assert_eq!(points.iter().map(hex).collect::<Vec<_>>(), pinned);
+    for log in [18, 20, 22] {
+        for (column, point) in generic_table(log).iter().zip(&points) {
+            let at = pcs::commit(&srs, column).expect("a commitment").0;
+            assert_eq!(&at, point, "2^{log}");
+        }
+    }
 }

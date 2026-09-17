@@ -103,7 +103,7 @@ pub fn input_of(name: &str) -> Vec<u8> {
         "atomics" => 37u32.to_le_bytes().to_vec(),
         "rvc-dense" => 7u32.to_le_bytes().to_vec(),
         // Reads nothing: its exit status is its result.
-        "addsub" => Vec::new(),
+        "addsub" | "control" => Vec::new(),
         // The hazards workload alone, at scale 0: 25,945 instructions, which is
         // all of a guest this size that an instruction-by-instruction log can
         // afford. `tests/consistency.rs` is where the rest of it runs.
@@ -124,10 +124,11 @@ pub fn input_of(name: &str) -> Vec<u8> {
 }
 
 /// The status each traced guest exits with on [`input_of`]'s input: 0, but
-/// for `addsub`, whose exit status is its result.
+/// for `addsub` and `control`, whose exit statuses are their results.
 pub fn exit_code_of(name: &str) -> i32 {
     match name {
         "addsub" => 42,
+        "control" => 16,
         _ => 0,
     }
 }
@@ -167,7 +168,15 @@ pub fn traced(name: &str) -> Traced {
 }
 
 /// The guests the trace suites run.
-pub const TRACED: [&str; 6] = ["fib", "heap", "atomics", "opcodes", "rvc-dense", "addsub"];
+pub const TRACED: [&str; 7] = [
+    "fib",
+    "heap",
+    "atomics",
+    "opcodes",
+    "rvc-dense",
+    "addsub",
+    "control",
+];
 
 /// The profile a from-source guest is built at: `debug`, unless
 /// `APOGEE_GUEST_PROFILE` names another — the variable

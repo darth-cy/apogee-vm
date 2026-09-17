@@ -263,12 +263,22 @@ pub fn identity_digest(
 
 /// The SRS digest, `docs/spec/shard-proof.md` §3: a fresh typed transcript
 /// absorbs the 320-byte `SrsVerifier` encoding — `g1_gen ‖ g2_gen ‖ g2_tau`,
-/// S07's layout — as one `SRS_VERIFIER` bytes message, and the digest is one
-/// raw squeeze, as `io_digest`'s is. Raw, because a challenge under a bytes tag
-/// would be one tag in two kinds.
-pub fn srs_digest(verifier: &[u8; 320]) -> Fr {
+/// S07's layout — as one `SRS_VERIFIER` bytes message, then, since S17, the
+/// packed generic table's three commitments as one `GENERIC_TABLE` message of
+/// twelve limbs; the digest is one raw squeeze, as `io_digest`'s is. Raw,
+/// because a challenge under a bytes tag would be one tag in two kinds.
+///
+/// Both are constants of the ceremony — the table's commitments are the same
+/// at every height — so one trusted digest pins the points every pairing reads
+/// and the table every generic lookup reads (`docs/spec/jump-branch-slt.md`
+/// §6).
+pub fn srs_digest(
+    verifier: &[u8; 320],
+    generic_table: &[[u8; 64]; constants::generic_table::WIDTH],
+) -> Fr {
     let mut sponge = Transcript::new();
     sponge.append_bytes(tags::SRS_VERIFIER, verifier);
+    append_g1_points(&mut sponge, tags::GENERIC_TABLE, generic_table);
     sponge.sample()
 }
 

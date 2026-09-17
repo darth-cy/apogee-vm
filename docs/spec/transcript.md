@@ -217,11 +217,20 @@ uninitialised value can never be a valid message.
 | `GLOBAL_STATE_DIGEST` | 38 | challenge |
 | `SHARD_SEED` | 39 | scalars |
 | `SHARD_TS_WINDOW` | 40 | scalars |
+| `GENERIC_TABLE` | 41 | scalars |
+
+Tag 41 is S17's, `docs/spec/shard-proof.md` §3 and `docs/spec/jump-branch-slt.md` §6.
+`GENERIC_TABLE` frames the packed generic table's three commitments, the verifying key's
+one triple, as one message of twelve limbs, four a point in the frozen split of
+`docs/spec/mercury.md` §4. It is absorbed only inside the SRS digest's sponge, right
+after `SRS_VERIFIER` and before the raw squeeze. The global transcript never absorbs it:
+the table reaches a statement through the digest, which `SRS_DIGEST` carries.
 
 Tags 34 to 40 are S16's, and `docs/spec/shard-proof.md` §2 to §4 is normative for
 all seven. `SRS_DIGEST` frames the statement's SRS digest, absorbed right after the
 protocol suite message; `SRS_VERIFIER` frames the 320-byte `SrsVerifier` inside the
-digest's own sponge, whose raw squeeze is the digest, as `io_digest`'s is.
+digest's own sponge, whose raw squeeze is the digest, as `io_digest`'s is. Since S17 that
+sponge absorbs one more message, tag 41's, before the squeeze.
 `MEMORY_GROUP` opens each family's memory-column group with `[family, shard
 count]`; the group's lists follow under `COMMITMENT`. `MEMORY_CHALLENGE` draws the
 four global memory challenges, separated by position, and `GLOBAL_STATE_DIGEST` the

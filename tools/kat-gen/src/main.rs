@@ -26,7 +26,7 @@
 //! | `gkr`     | `crates/constraints/tests/vectors/toy_*` (the S13 toy circuit, cached and cache-free) |
 //! | `memory`  | `crates/constraints/tests/vectors/{memory_frame,image_window,zero_window}.bin` (S14's memory artifacts) |
 //! | `lookup`  | `crates/constraints/tests/vectors/lookup_toy.bin` (S15's combined toy) |
-//! | `family`  | `crates/constraints/tests/vectors/add_sub.bin` (S16's add/sub family circuit) |
+//! | `family`  | `crates/constraints/tests/vectors/{add_sub,jump_branch_slt}.bin` (S16's and S17's family circuits) |
 //! | `guests`  | the guest ELFs themselves -- opt-in only, see `DEFAULT_GROUPS` |
 
 use std::fs;
