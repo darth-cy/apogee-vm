@@ -109,6 +109,14 @@ pub fn tag_by_name(name: &str) -> Result<Tag, String> {
         "MEMORY_WINDOWS" => Ok(transcript_tags::MEMORY_WINDOWS),
         "MEMORY_BOUNDARY" => Ok(transcript_tags::MEMORY_BOUNDARY),
         "PROGRAM_ENTRY" => Ok(transcript_tags::PROGRAM_ENTRY),
+        "LOOKUP_CHALLENGE" => Ok(transcript_tags::LOOKUP_CHALLENGE),
+        "SRS_DIGEST" => Ok(transcript_tags::SRS_DIGEST),
+        "SRS_VERIFIER" => Ok(transcript_tags::SRS_VERIFIER),
+        "MEMORY_GROUP" => Ok(transcript_tags::MEMORY_GROUP),
+        "MEMORY_CHALLENGE" => Ok(transcript_tags::MEMORY_CHALLENGE),
+        "GLOBAL_STATE_DIGEST" => Ok(transcript_tags::GLOBAL_STATE_DIGEST),
+        "SHARD_SEED" => Ok(transcript_tags::SHARD_SEED),
+        "SHARD_TS_WINDOW" => Ok(transcript_tags::SHARD_TS_WINDOW),
         other => Err(format!("unknown tag name {other}")),
     }
 }

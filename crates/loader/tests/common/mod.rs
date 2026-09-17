@@ -26,14 +26,14 @@ use test_support::{sha256, to_hex};
 /// The synthetic ELFs are not listed one by one: `synthetic_elfs.txt` carries
 /// their digests and is itself pinned here, so the chain is one constant long
 /// either way and the index stays readable.
-pub const PINS: [(&str, &str); 14] = [
+pub const PINS: [(&str, &str); 15] = [
     (
         "fib.elf",
         "e163a65249fff123742588a3bcb44e09b72f89bbbed80fb406baf3c0f9b7622d",
     ),
     (
         "echo.elf",
-        "4aef4d207001345b192ef52f38a07ed5250677ccdba80d6e64b64b516abe11a5",
+        "aaca0ff1750df7aaf766266488690b2b29ec6067f36add46cea87323d76207a8",
     ),
     (
         "rvc-dense.elf",
@@ -49,7 +49,7 @@ pub const PINS: [(&str, &str); 14] = [
     ),
     (
         "vault.elf",
-        "c9a1e427470abdabe9eaab503d5c102d4c67012ca2bab3d9657f64899153f084",
+        "05d3ba4f0268422244bc8b27b665c5ef00412e843702cfdff9571bcc020a00e8",
     ),
     (
         "atomics.elf",
@@ -65,7 +65,11 @@ pub const PINS: [(&str, &str); 14] = [
     ),
     (
         "consistency.elf",
-        "26c2d8d85c3ee8a730f21e89bd99106a45c9889201ee59740f30fdd63dc7f878",
+        "7bdea84047995fda5f967297f7c6353e146f8bbbe7923908f9e06f884a6d4600",
+    ),
+    (
+        "addsub.elf",
+        "587f6bd45be8f242015a8870be2b765ede1e87d94219758dc9bc996a38827145",
     ),
     (
         "fib.objdump.txt",

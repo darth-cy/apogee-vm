@@ -18,6 +18,9 @@ members = [
     "crates/gkr-verify",
     "crates/gkr",
     "crates/checker",
+    "crates/verifier-core",
+    "crates/verifier",
+    "crates/prover",
     "tools/kat-gen",
     "tools/bench",
     "tools/artifact-dump",
@@ -51,6 +54,9 @@ constraints = { path = "crates/constraints" }
 gkr-verify = { path = "crates/gkr-verify" }
 gkr = { path = "crates/gkr" }
 checker = { path = "crates/checker" }
+verifier-core = { path = "crates/verifier-core" }
+verifier = { path = "crates/verifier" }
+prover = { path = "crates/prover" }
 
 # Test-only, and a dev-dependency everywhere it appears: SHA-256 for pinning
 # committed fixtures, and the hex codec those files are written in.

@@ -38,13 +38,13 @@ jobs:
       - name: guests execute
         run: cargo test -p loader --test qemu -- --include-ignored
 
-      # The same eight cases, same expected bytes, at `--release`. This is what
+      # The same nine cases, same expected bytes, at `--release`. This is what
       # holds the profile pin in `guests/Cargo.toml` honest: with cargo's
       # defaults `overflow-checks` is off in release, and a guest then commits a
       # wrapped `u32` on fd 1 where the dev build panics and exits 101. fd 1 is
       # the committed public output, so that would make the optimisation level
       # part of the statement being proven. It also builds at `--release` the
-      # seven guests this suite runs; `consistency`'s release build is the
+      # eight guests this suite runs; `consistency`'s release build is the
       # consistency step below, and `opcodes` and `heap` have none in CI.
       - name: guests execute (release)
         env:
@@ -108,9 +108,33 @@ jobs:
       # - name: the LogUp channels over the combined toy
       #   run: cargo test -p checker --test logup -- --include-ignored --test-threads=1
 
+      # DEFERRED: cargo test -p prover --test acceptance -- --include-ignored --test-threads=1
+      # DEFERRED: cargo test -p verifier --test cli -- --include-ignored --test-threads=1
+      # DEFERRED: cargo test -p checker --test tamper -- --include-ignored --test-threads=1
+      # Master rule 7, for S16's proving suites. Each proves `guests/addsub`'s
+      # statement, whose add/sub shard is `2^20` rows -- the floor the
+      # timestamp channel sets, so it cannot shrink -- and one statement's
+      # proof peaks at 8.6 GB resident -- 9.3 GB in the tamper file, which
+      # keeps the honest statement beside each re-proof -- so each file runs
+      # single-threaded. Locally, on 18 cores, the three take 322 s, 20 s and
+      # 509 s; the logup step above ran nine times slower on the runner than
+      # locally, which puts these at about 50, 3 and 75 minutes. They run locally on every
+      # PR that touches the prover, the verifier, a family circuit or the
+      # memory and lookup arguments, and the handoff note records the result.
+      # The CI-sized halves -- the add/sub circuit row by row, the core's
+      # statement, wire and load-rule suites, the signature pin -- run in the
+      # `test` step on every push.
+      #
+      # - name: S16's statement, proved and verified
+      #   run: |
+      #     cargo test -p prover --test acceptance -- --include-ignored --test-threads=1
+      #     cargo test -p verifier --test cli -- --include-ignored --test-threads=1
+      # - name: S16's tamper twins
+      #   run: cargo test -p checker --test tamper -- --include-ignored --test-threads=1
+
       # The crates the recursion guest links compile unchanged for the guest.
       - name: guest target builds
-        run: cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify --target riscv32imac-unknown-none-elf
+        run: cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify -p verifier-core --target riscv32imac-unknown-none-elf
 
       # Acceptance 1, typed out: from the guest's own directory, with no flags
       # beyond the target, and everything else coming from the template config.

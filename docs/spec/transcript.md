@@ -209,6 +209,31 @@ uninitialised value can never be a valid message.
 | `MEMORY_WINDOWS` | 30 | scalars |
 | `MEMORY_BOUNDARY` | 31 | scalars |
 | `PROGRAM_ENTRY` | 32 | scalars |
+| `LOOKUP_CHALLENGE` | 33 | challenge |
+| `SRS_DIGEST` | 34 | scalars |
+| `SRS_VERIFIER` | 35 | bytes |
+| `MEMORY_GROUP` | 36 | scalars |
+| `MEMORY_CHALLENGE` | 37 | challenge |
+| `GLOBAL_STATE_DIGEST` | 38 | challenge |
+| `SHARD_SEED` | 39 | scalars |
+| `SHARD_TS_WINDOW` | 40 | scalars |
+
+Tags 34 to 40 are S16's, and `docs/spec/shard-proof.md` §2 to §4 is normative for
+all seven. `SRS_DIGEST` frames the statement's SRS digest, absorbed right after the
+protocol suite message; `SRS_VERIFIER` frames the 320-byte `SrsVerifier` inside the
+digest's own sponge, whose raw squeeze is the digest, as `io_digest`'s is.
+`MEMORY_GROUP` opens each family's memory-column group with `[family, shard
+count]`; the group's lists follow under `COMMITMENT`. `MEMORY_CHALLENGE` draws the
+four global memory challenges, separated by position, and `GLOBAL_STATE_DIGEST` the
+digest every shard is seeded with. `SHARD_SEED` and `SHARD_TS_WINDOW` are the first
+two messages of every shard transcript. S16 also gave `PROTOCOL_SUITE`,
+`PUBLIC_INPUTS` and `PROGRAM_IDENTITY` their statement messages, each in its
+existing kind: the suite message carries `PROTOCOL_VERSION`, the public-inputs
+message the 32 canonical bytes of the I/O digest, and the identity message the
+program identity.
+
+Tag 33 is S15's, `docs/spec/lookup.md` §2: a shard's two LogUp challenges, `g`
+then `β`, separated by position.
 
 Tags 30 to 32 are S14's, and `docs/spec/memory.md` §6 is normative for all
 three. `MEMORY_WINDOWS` frames the statement's RAM window list, absorbed right

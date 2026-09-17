@@ -17,7 +17,11 @@ loader.workspace = true
 pcs.workspace = true
 poly.workspace = true
 srs.workspace = true
-transcript.workspace = true
+# `VmConfig`, `ProgramIdentity`, the statement descriptor, the window rules and
+# the identity digest, which moved there at S16 so the no_std verifier binds a
+# statement with the same code the prover does; re-exported here.
+verifier-core.workspace = true
 
 [dev-dependencies]
 test-support.workspace = true
+transcript.workspace = true

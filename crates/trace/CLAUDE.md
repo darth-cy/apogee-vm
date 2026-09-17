@@ -62,6 +62,8 @@ impl TraceArchive {
     pub fn family_traces(&self) -> &FamilyTraces;  pub fn memory_log(&self) -> &MemoryEventLog;
     pub fn cycle_profile(&self) -> &CycleProfile;  pub fn io_streams(&self) -> &IoStreams;
     pub fn is_filled(&self, Phase) -> bool;        pub fn timing(&self, Phase) -> Option<PhaseTiming>;
+    pub fn fill(&mut self, Phase, content: Vec<u8>, PhaseTiming) -> Result<(), String>;   // S16
+    pub fn content(&self, Phase) -> Option<&[u8]>;                                        // S16
     pub fn deterministic_payload(&self) -> Vec<u8>;
     pub fn export(&self, w: impl Write) -> Result<(), String>;
     pub fn import(r: impl Read) -> Result<TraceArchive, String>;
@@ -156,7 +158,10 @@ impl TraceArchive {
   value's bytes, so timing is outside it by construction. Filled phases are a prefix,
   post-execution always among them; a phase is timed exactly when it is filled; import
   refuses anything else. The post-execution content's own layout is in
-  `src/archive.rs`'s module docs. Later phases are opaque bytes here. No compression.
+  `src/archive.rs`'s module docs. Later phases are opaque bytes here, filled by the prover
+through `fill` — which refuses post-execution, a phase already filled and one whose
+predecessor is empty, so the prefix rule holds in memory as it does on import — and read
+back through `content`; their schemas are `docs/spec/shard-proof.md` §10. No compression.
 - **The reader takes exactly what the writer writes.** A snapshot's parts must agree —
   every buffer well formed (a family `constants::family` has, and one that claims a pc —
   the two init families claim none, so their buffers are empty — one column length, height on the
@@ -177,7 +182,7 @@ impl TraceArchive {
 ## Tests
 | File | What |
 | --- | --- |
-| `src/archive.rs` (unit) | an in-order later phase accepted; out-of-order, timing without content, content without timing, trailing bytes and an overlong varint refused; every one of the reader's fifteen part-disagreement refusals (a buffer of rows for each init family among them), a mis-tagged section and bytes after the post-execution content refused as a named `Err`, never a panic, beside the untouched content; the constructor refusing parts that disagree |
+| `src/archive.rs` (unit) | `fill` keeping the phases a prefix: post-execution, a refill and an out-of-order phase refused, each later phase's content and timing read back; `content` panicking on post-execution; an in-order later phase accepted; out-of-order, timing without content, content without timing, trailing bytes and an overlong varint refused; every one of the reader's fifteen part-disagreement refusals (a buffer of rows for each init family among them), a mis-tagged section and bytes after the post-execution content refused as a named `Err`, never a panic, beside the untouched content; the constructor refusing parts that disagree |
 | `tests/log.rs` | the address-space tags against `constants::address_space`, and exactly which addresses each space has |
 | `tests/plan.rs` | acceptance 9: occupancy 0 / 1 / height / height+1 → 0 / 1 / 1 / 2 at every menu height, zero-occurrence families (both init families among them), the whole 38-bit clock at 2^16, purity, a mismatched profile refused |
 | `tests/memory.rs` | `constraints::memory`'s query table against `Role` in `ROLES` order, the pc query first, names included; **every family's frame equal to the union of its instructions' queries**, taken over all 59 `Instr` variants with the per-instruction queries written from `execution-trace.md` §4 and the routing from `program::row_kind`, so the two tables cannot drift; the finals of a hand-written two-cycle log; `build_boundary_finals` refusing a pc that does not end at `HALT_PC` and a nonzero `x0`; `build_memory_columns` refusing a cycle the log lacks; `build_frame_witness`' gap columns at the chunk's edge, gaps `2^19 − 1`, `2^19` and `2^19 + 3`; a RAM write at `4h`, the first word of window 1, in window 1's columns alone |

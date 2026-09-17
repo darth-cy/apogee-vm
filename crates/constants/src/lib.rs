@@ -579,8 +579,10 @@ pub const G1_INFINITY_SENTINEL: &str =
 /// Adding a tag is free; reusing one across kinds is a soundness bug. See
 /// `docs/spec/transcript.md` section 8.
 pub mod transcript_tags {
-    /// Scalars. The protocol suite and version preamble, absorbed first in
-    /// every transcript, before any other message.
+    /// Scalars. The protocol suite and version preamble, `[PROTOCOL_VERSION]`:
+    /// the first message of the statement's global transcript
+    /// (`docs/spec/shard-proof.md` §2, G1). The shard transcripts and the
+    /// identity, I/O and SRS-digest sponges open with their own tags instead.
     pub const PROTOCOL_SUITE: u64 = 1;
 
     /// Bytes. The statement's public inputs / public I/O.
@@ -678,7 +680,8 @@ pub mod transcript_tags {
     /// Scalars. The first message of the program-identity sponge: the single
     /// element `code version`. It is what opens that sponge, so the identity
     /// is domain-separated from every other digest in the protocol.
-    /// `crates/program/CLAUDE.md`.
+    /// `crates/program/CLAUDE.md`. Since S16 also the global transcript's G6
+    /// message, `[identity]` (`docs/spec/shard-proof.md` §2).
     pub const PROGRAM_IDENTITY: u64 = 22;
 
     /// Scalars. The static `VmConfig`: the family ids in ascending order, then
@@ -740,6 +743,37 @@ pub mod transcript_tags {
     /// are separated by their fixed position in the shard's script, as
     /// [`SUMCHECK_CHALLENGE`]'s are. `docs/spec/lookup.md` §2.
     pub const LOOKUP_CHALLENGE: u64 = 33;
+
+    /// Scalars. The statement's SRS digest, one element, absorbed right after
+    /// the protocol suite message. `docs/spec/shard-proof.md` §2 and §3.
+    pub const SRS_DIGEST: u64 = 34;
+
+    /// Bytes. The 320-byte `SrsVerifier` encoding, inside the SRS digest's own
+    /// sponge, whose raw squeeze is the digest. `docs/spec/shard-proof.md` §3.
+    pub const SRS_VERIFIER: u64 = 35;
+
+    /// Scalars. `[family, shard count]`, opening one family's memory-column
+    /// group in the global transcript; the group's commitment lists follow it
+    /// under [`COMMITMENT`]. `docs/spec/shard-proof.md` §2.
+    pub const MEMORY_GROUP: u64 = 36;
+
+    /// Challenge. The global memory challenges `γ_M, α_addr, α_ts, α_val`,
+    /// drawn in that order after the boundary scalars. One tag, one kind; the
+    /// four roles are separated by position. `docs/spec/shard-proof.md` §2.
+    pub const MEMORY_CHALLENGE: u64 = 37;
+
+    /// Challenge. The global state digest, drawn once after the memory
+    /// challenges; every shard transcript is seeded with it.
+    /// `docs/spec/shard-proof.md` §2.
+    pub const GLOBAL_STATE_DIGEST: u64 = 38;
+
+    /// Scalars. `[global state digest, family, shard index]`, the first message
+    /// of every shard transcript. `docs/spec/shard-proof.md` §4.
+    pub const SHARD_SEED: u64 = 39;
+
+    /// Scalars. `[start, end]`, the shard's timestamp window, immediately after
+    /// the seed. `docs/spec/shard-proof.md` §4.
+    pub const SHARD_TS_WINDOW: u64 = 40;
 }
 
 /// The external challenge slots a GKR circuit's coefficients may name, frozen

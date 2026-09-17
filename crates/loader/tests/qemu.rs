@@ -644,3 +644,26 @@ fn atomics_computes_its_cells() {
         "atomics committed the wrong cells"
     );
 }
+
+/// `guests/addsub`: S16's tiny guest, its own `_start` with no SDK beneath it.
+///
+/// It reads nothing and writes nothing, so its one observable is the exit
+/// status, which is its result: a chain of additions and subtractions that
+/// leaves 42 in `a0`. That the register file matches the emulator's at every
+/// instruction is `crates/emulator/tests/differential.rs`'s claim; this is the
+/// guest run the way every other one here is, in either profile.
+#[test]
+#[ignore = "needs a Linux host with qemu-user; run with --ignored"]
+fn addsub_exits_with_its_result() {
+    let qemu = qemu();
+
+    let run = execute(&qemu, "addsub", "addsub", &[], None);
+    assert_eq!(
+        run.status,
+        Some(42),
+        "addsub exited {:?}: {}",
+        run.status,
+        run.stderr
+    );
+    assert!(run.stdout.is_empty(), "addsub commits nothing to fd 1");
+}

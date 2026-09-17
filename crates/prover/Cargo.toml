@@ -1,0 +1,31 @@
+[package]
+name = "prover"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The shard prover and the global commit phase. `docs/spec/shard-proof.md` is
+# normative. std + rayon: commitments and the forward pass are data-parallel.
+[dependencies]
+constants.workspace = true
+constraints.workspace = true
+curve.workspace = true
+field.workspace = true
+gkr.workspace = true
+loader.workspace = true
+pcs.workspace = true
+poly.workspace = true
+# The phase snapshots hold S02's `TranscriptSnapshot` in its `postcard` form.
+postcard.workspace = true
+program.workspace = true
+rayon.workspace = true
+srs.workspace = true
+trace.workspace = true
+transcript.workspace = true
+# `encode_srs_verifier`, the key's `SrsVerifier` bytes.
+verifier.workspace = true
+verifier-core.workspace = true
+
+[dev-dependencies]
+# `tests/common` traces the S16 guest.
+emulator.workspace = true

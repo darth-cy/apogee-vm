@@ -14,13 +14,15 @@ prompts/         00-master.md (design authority) + one prompt per build stage
 docs/
   GLOSSARY.md    the vocabulary (column = multilinear = poly; layer; shard; family)
   guest-program-manual.md  writing a guest and exporting its ProgramImage artifact
-  spec/          the frozen protocol specs; read before touching what they cover
+  spec/          the frozen protocol specs; read before touching what they cover; and
+                 constraint-manifest.md, every registered circuit's columns and gates by
+                 position, name and formula
   handoff/       one note per completed stage: frozen API, artifacts, deviations
 crates/
   constants/     frozen constants and tags; zero logic; no_std
   field/         Fr arithmetic (Montgomery); no_std
   curve/         Fq tower through Fq12 + G1/G2 + the optimal ate pairing + Pippenger MSM; std
-  transcript/    Poseidon2 permutation + duplex transcript; no_std
+  transcript/    Poseidon2 permutation + duplex transcript, and the curve-free G1 absorption; no_std
   poly/          MultilinearPoly + small-type backing + eq machinery; no_std
   sumcheck/      Gate + zerocheck prover/verifier; no_std
   srs/           snarkjs .ptau ingestion, the SRS archive, univariate KZG; std
@@ -28,8 +30,9 @@ crates/
                  and the accumulator, plus the typed G1 absorption; std
   loader/        ELF parsing, RVC expansion, ProgramImage; std
   isa/           the RV32IMAC instruction model and the 32-bit decoder; no deps
-  program/       decoded per-family tables, VmConfig derivation, program identity, the image
-                 column, the statement descriptor and its RAM window rules; std
+  program/       decoded per-family tables, VmConfig derivation, program identity and the image
+                 column; re-exports the statement descriptor and window rules from
+                 verifier-core; std
   trace/         the memory event log and its self-check, the family buffers, the cycle
                  profile and shard plan, the TraceArchive snapshot, and the memory
                  argument's column builders; std
@@ -38,27 +41,37 @@ crates/
   constraints/   circuits as data: PolyAddress, GateDef, LayerSpec, CircuitArtifact, the
                  laws, the cache-free compilation and the wire form; `memory`: the per-family frames,
                  the two window artifacts and check_memory; and `lookup`: the LogUp
-                 channels, their gated tuples, the fraction tree and the discharge rules; no_std
+                 channels, their gated tuples, the fraction tree and the discharge rules;
+                 `add_sub`: S16's family circuit; `family_circuit`: the registry; no_std
   gkr-verify/    the GKR verifier half: the gate kernel, the layer sumcheck verifier and
                  verify, and every type verify touches; the memory argument's window
                  constant, boundary factors and reconciliation; no_std, linked by the
                  recursion guest
   gkr/           the GKR prover half: forward pass, self-check, layer sumcheck prover,
                  prove; std + rayon; re-exports gkr-verify whole
+  verifier-core/ the statement and its wire forms, the global and shard transcripts, the
+                 verifying key and its load rules, and reduce_shard — every check of a
+                 shard but its Mercury opening; no_std, linked by the recursion guest
+  verifier/      verify_shard, the one verification path, and the `verifier` CLI; std
+  prover/        the verifying key's construction, family registration and fills, the
+                 global commit phase, prove_shard, the phase snapshots and resume; std
   checker/       the standalone law validators and lookup rules, the padding, padding-identity
                  and witness-row checks, the native lookup evaluator, the memory_roots hook,
-                 the artifact cross-check, the circuit dump and the `checker` CLI; std
+                 the artifact cross-check, the circuit dump, the `checker` CLI, and
+                 TamperHarness, the tamper-twin prover; std
   guest-sdk/     crt0, entry!, linker script, bump allocator, ecall shims; no_std,
                  guest-only, and NOT a workspace member
-guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, opcodes/, heap/, consistency/
+guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, opcodes/, heap/, consistency/,
+                 addsub/
                  -- their own workspace; see guests/Cargo.toml and docs/guest-program-manual.md
 assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 handoff
 tools/
   kat-gen/       regenerates the committed Fr, multilinear, curve, MSM, SRS and G1-absorption
                  vectors from arkworks, the Mercury proof fixture from `pcs` itself, the ISA
                  corpus via llvm-objdump, the identity pin from `program` itself, S13's
-                 toy circuit artifacts, defined there and compiled by `constraints`, and
-                 S14's memory artifacts, written from `constraints::memory`'s constructors
+                 toy circuit artifacts, defined there and compiled by `constraints`,
+                 S14's memory artifacts, written from `constraints::memory`'s constructors,
+                 S15's lookup toy, and S16's add/sub circuit, written from `constraints::add_sub`
   bench/         one routine per measurement, individually selectable
   artifact-dump/ a guest ELF out as the frozen ProgramImage artifact, plus a
                  readable report of it; `tables` prints the decoded tables and identity
@@ -71,8 +84,10 @@ are frozen; internals are not.
 ## Build stage protocol
 Read `prompts/00-master.md`, then the stage prompt, then every prior note in
 `docs/handoff/`. Branch off `main`, commit on the branch, open a PR, and finish by
-writing `docs/handoff/<stage>.md` and updating this file. Raise conflicts and
-open questions with the user rather than picking a default silently.
+writing `docs/handoff/<stage>.md` and updating this file. A stage that adds or changes a
+circuit family also writes that family's entry in `docs/spec/constraint-manifest.md`
+(its §7 is the checklist). Raise conflicts and open questions with the user rather than
+picking a default silently.
 
 ## Commands
 Everything above the line must be green before a stage's PR. All of it runs in CI
@@ -89,9 +104,12 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
-cargo test --workspace                      # 761 tests as of S15; 30 more are #[ignore]d
+cargo test --workspace                      # 796 tests as of S16; 44 more are #[ignore]d
 cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 4.63 GB a pass, 30 min on a runner
-cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify --target riscv32imac-unknown-none-elf
+cargo test -p prover --test acceptance -- --include-ignored --test-threads=1  # DEFERRED; S16's statement, 8.6 GB peak
+cargo test -p verifier --test cli -- --include-ignored --test-threads=1       # DEFERRED; ditto
+cargo test -p checker --test tamper -- --include-ignored --test-threads=1     # DEFERRED; one re-proof a twin, 9.3 GB peak
+cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify -p verifier-core --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
 cd guests/fib && cargo build --target riscv32imac-unknown-none-elf
@@ -101,10 +119,12 @@ cargo test -p emulator --test consistency -- --include-ignored   # and again at 
 git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constraints/tests/vectors/
 -------------------------------------------------------------------------------
 cargo run -p kat-gen                        # refresh every fixture (manual, deliberate)
-cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader | isa | program | gkr | memory | lookup
+cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader | isa | program | gkr | memory | lookup | family
 cargo run -p checker -- laws <artifact>     # Laws 1-4 and the lookup rules, the standalone validators
 cargo run -p checker -- padding <artifact>  # the padding contract
 cargo run -p checker -- dump <artifact>     # a circuit, readably: layers, gates, relations, catalogue
+cargo run --release -p verifier -- <verifying-key> <identity-hex> <public-inputs> <proof>...
+                                            # verify a statement: the types' to_bytes, as crates/verifier/tests/cli.rs writes them
 cargo run -p kat-gen -- guests              # rebuild the guest ELFs; opt-in, one machine
 cargo run --manifest-path tools/transcript-ref/Cargo.toml   # ditto, transcript vectors
 cargo run --release -p bench                # every routine; internal numbers only
@@ -148,7 +168,7 @@ cargo test -p loader --test qemu -- --include-ignored   # a Linux host with qemu
 cargo test -p loader --test layout -- --ignored         # after editing link.ld
 
 APOGEE_GUEST_PROFILE=release \
-  cargo test -p loader --test qemu -- --include-ignored   # the same eight, optimised
+  cargo test -p loader --test qemu -- --include-ignored   # the same nine, optimised
 ```
 
 **Guests build at `--release` too, and both profiles are pinned.** In a zkVM
@@ -198,7 +218,9 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   different thing: four ~128-bit Fr limbs. Those limbs are frozen in S08: `x` low,
   `x` high, `y` low, `y` high, split at 128 bits, with infinity absorbing four copies of
   `constants::G1_INFINITY_SENTINEL` = `2^128` — a value no real limb can take.
-  `pcs::append_g1_list` is **one** message of `4k` limbs, never `k` messages.
+  `pcs::append_g1_list` is **one** message of `4k` limbs, never `k` messages. Since S16
+  the split is `transcript::g1_limbs` over the 64 bytes, so the no_std verifier core
+  absorbs a point without decoding it; validating a point is its decoder's job.
 - **One index convention.** Variable `j` is bit `j`: the evaluation at `y` sits at
   `index = sum_j y_j 2^j`, and `bind` fixes variable 0, the low bit. Frozen in
   `crates/poly` and load-bearing for every later circuit stage. Sumcheck round `i`
@@ -243,10 +265,14 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   ffjavascript's in-memory layout written straight out. `crates/srs` multiplies by
   `R^-1` and hands canonical bytes to S05's `from_bytes`, so there is still exactly one
   validating decoder.
-- **SRS integrity is presumed; there is no SRS digest.** S07's Poseidon2 digest over the
-  SRS was dropped on instruction, so the master's statement-binding item `SRS digest`
-  has no implementation and nothing binds a proof to a particular SRS. Read
-  `docs/spec/srs.md` §4 before building statement binding.
+- **SRS integrity is presumed; the SRS digest covers the verifier points only.** S07's
+  Poseidon2 digest over the whole SRS was dropped on instruction. S16's SRS digest is
+  Poseidon2 over the 320-byte `SrsVerifier`, in the verifying key and absorbed third in
+  every statement: it binds a proof to the points its pairings read, and nothing more. The
+  key's loader recomputes it from the key's own points and identity does not bind the SRS,
+  so a key whose verifier points were swapped for ones with a known `tau` still loads.
+  A verifier must get the ceremony's `SrsVerifier`, or its digest, from a trusted channel,
+  as it gets identity. `docs/spec/srs.md` §4, `docs/spec/shard-proof.md` §7.2.
 - **A guest ELF must satisfy two loaders, not one.** The zkVM makes the whole RAM window
   addressable by construction, so `crates/loader` only ever reads `p_vaddr` and `p_memsz`.
   A *host* loader — `qemu-riscv32`, the only executor before S12 — maps just the `PT_LOAD`s
@@ -423,21 +449,23 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 - **Registers and the pc have no rows: they are the verifier's boundary.** A proof carries
   64 scalars — final timestamps of `x0..x31` and the pc, final values of `x1..x31` — which
   S16's global transcript absorbs as one `MEMORY_BOUNDARY` message after every memory-column
-  commitment and **before** the squeeze (at S14 nothing absorbs or decodes them): a final
-  value chosen after the challenges solves reconciliation for any trace.
+  commitment and **before** the squeeze, and `PublicInputs` decodes and refuses out of
+  range: a final value chosen after the challenges solves reconciliation for any trace.
   `gkr_verify::boundary_factors` folds them and the entry pc into `(W_b, R_b)` once per
   statement, and `reconciles` is the check. `t_pc` is not a cycle count.
 - **The exit row writes `next_pc = HALT_PC = 1`**, not `pc + 4`, and the verifier fixes the
-  pc's final value to it. It is odd and below `RAM_ORIGIN`, so once S16's constraints of
-  `docs/spec/memory.md` §5 hold, no other row writes it and a trace missing its exit row
-  cannot balance; at S14 no gate constrains a row's `next_pc`. The decoded table's
-  `next_pc` stays the fall-through.
-- **At S14 a query's mask is held to booleanity and nothing else.** No gate ties it to the
-  row's pc mask or to the instruction the row looks up, so a padding row can carry an `rd`
-  query that rewrites `x10` after exit, and it balances. S16 owes `m_pc` as the row's
-  liveness and the table lookup's selector, and `m_q = m_pc·uses_q` from the row kind
-  (`docs/spec/memory.md` §2.1); `crates/checker/tests/multiset.rs`' control C8 is its tamper
-  target.
+  pc's final value to it. It is odd and below `RAM_ORIGIN`, so no other row writes it and a
+  trace missing its exit row cannot balance. Since S16 the add/sub family's `next_pc` gate
+  holds every one of its rows to it: the exit row writes `HALT_PC`, every other live row
+  the decoded table's `next_pc`, which stays the fall-through, minus `2^32·pc_wrap`. Every
+  other family owes its own `next_pc` gate at its stage.
+- **A frame alone holds a query's mask to booleanity and nothing else.** No frame gate ties
+  it to the row's pc mask or to the instruction the row looks up, so a padding row can
+  carry an `rd` query that rewrites `x10` after exit, and it balances. A family's circuit
+  makes `m_pc` the row's liveness and the decoder lookup's selector, and `m_q = m_pc·uses_q`
+  from the row kind (`docs/spec/memory.md` §2.1). S16's add/sub family does, and
+  `crates/checker/tests/tamper.rs` proves control C8's three forgeries refused; every
+  later family owes the same gates.
 - **The artifact format is 1, and a lookup carries a selector.** `LookupExpr = (name,
   channel, selector, tuple)`: a range obligation holds where its selector is 0 or its one
   `Linear` expression is below the channel's bound. A **table** channel's tuple is 1 to
@@ -463,7 +491,8 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 - **A range channel needs `BITS ≤ trace_vars`**, refused at construction: a table of `2^n`
   rows holds at most `2^n` values. With `BITS[TIMESTAMP] = 19` and Mercury's even variable
   count, **every execution family's shard is at least `2^20` rows** — and
-  `DEFAULT_HEIGHTS[ATOMICS]`, still `2^16`, is a height S16 must raise.
+  `DEFAULT_HEIGHTS[ATOMICS]`, still `2^16`, is a height S19 raises, by the owner's
+  decision; until then no atomics circuit exists at any height.
 - **The `+ 1` on a gated key is for map tables only.** It keeps every real entry off the
   all-zero tuple so the `ZeroEntry` answers switched-off rows alone. A range channel has no
   offset and cannot have one — shifting `[0, 2^BITS)` up by one puts its top outside the
@@ -487,6 +516,33 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   and `V`, and a leaf mask that is an `M` or `S` column with no booleanity gate, or any
   virtual column but `V[ram_live]`. `S` is admitted only because identity
   binds setup columns before the challenges. `docs/spec/memory.md` §8.
+- **The shard proof's spec is `docs/spec/shard-proof.md`, and it is frozen**: the statement,
+  the global transcript G1–G11 and the shard transcript, the SRS digest, the one opening
+  per shard, `verify_shard`'s check order, the verifying key and its load rules, the
+  add/sub family, the wire forms, the prover's phases and the registry.
+- **One statement, many shard proofs, one `PublicInputs`.** The statement's variable-length
+  record — shard counts, windows, boundary, every shard's memory commitments and roots —
+  is in `PublicInputs`, and a `ShardProof` has a fixed shape per key and family. A shard
+  verifies only against the whole statement: its reconciliation reads every shard's roots,
+  and its transcript is seeded from the global state digest.
+- **`verify_shard`'s check order is its error class**: `Statement`, `Malformed`,
+  `Constraint`, `Lookup`, `MemoryArgument`, `Opening`, first failure returned. The CLI and
+  every test call `verify_shard` and nothing else; `verifier_core::reduce_shard` is every
+  step but the opening, `#![no_std]`, for the recursion guest.
+- **A verifying key's circuits are the registry's, byte for byte.**
+  `constraints::family_circuit(family, trace_vars)` is the one source of circuits, and
+  loading a key refuses any other. Identity binds the program, not its circuit. A family
+  becomes provable with one arm there and one fill in `prover::family_fill`, and nothing
+  else in the prover or the verifier changes.
+- **EXIT is the only provable ecall** (owner's decision, S16). The add/sub family holds
+  every ecall row to `a7 = 93`, and its fill refuses any other ecall and any transfer
+  cycle by name. The I/O-binding stage owes the rest, and until then fd 0 and fd 1 are
+  bound only by the public I/O digest in the statement, which no row reads.
+- **A tamper twin is proved as an honest prover would prove it.** `checker::TamperHarness`
+  writes the cells, recounts the multiplicities over them (unless a multiplicity is the
+  tamper, or no count exists), recommits memory columns when they change, re-proves, and
+  asserts the refusal's class. It works because the prover checks nothing (S13). A
+  change that breaks nothing must verify, and a test says it does.
 - **Boring beats clever.** Added surface area is a defect. Every verifier entry point is
   `(&VerifyingKey, &Proof, &PublicInputs)` and nothing else.
 
@@ -508,3 +564,4 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 | S13 — GKR engine, circuit artifact, checker suite | done | `docs/handoff/S13-gkr.md` |
 | S14 — Memory multiset argument, RAM windows, register/PC boundary | done | `docs/handoff/S14-multiset.md` |
 | S15 — LogUp lookup channels + decoder lookup | done | `docs/handoff/S15-lookup.md` |
+| S16 — Vertical slice: add/sub family end to end | done | `docs/handoff/S16-add-sub.md` |

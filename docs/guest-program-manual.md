@@ -66,7 +66,7 @@ A guest is an ordinary `no_std` binary crate that lives in the `guests/`
 workspace. Three files, one of which already exists.
 
 `hello` below is the guest this manual builds; you are creating it now. The
-repository ships ten, and every command here works on those too with the name
+repository ships eleven, and every command here works on those too with the name
 changed. They are worth reading before you write your own, because between them
 they cover most of what a guest can do:
 
@@ -82,6 +82,7 @@ they cover most of what a guest can do:
 | `opcodes` | every RV32IMAC instruction in hand-written assembly at its edge cases, which the emulator is compared against `qemu-riscv32` on; fd 0 selects the `ebreak` and misaligned-access modes |
 | `heap` | `Vec` and `Box` churned through the bump allocator, so the heap's traffic is in the trace |
 | `consistency` | ordinary Rust — numerics, collections, text, traits and closures, a codec, hashes, allocation patterns — as a `no_std` library the host calls directly and a thin guest `main`. The consistency suite runs it on the host, under QEMU and on the emulator and holds the three to one answer; §2a is the pattern to copy |
+| `addsub` | S16's tiny guest, the one program proven end to end: a straight run of `add`, `sub`, `addi`, `lui` and `auipc` in both lengths, a `fence`, and an exit whose status, 42, is its result. It is hand-written assembly with no `guest-sdk` under it, the one guest that does not use `guest_sdk::entry!` — its own `_start` is the whole program, because crt0's `.bss` loop and its call to `main` are branches, stores and jumps, which S16 has no circuit for — so read it as a proof fixture, not a pattern |
 
 If you are looking for a pattern to copy, `amm` is the one to read for arithmetic
 and framing, `orderbook` for anything that takes prover advice, and `vault` for
@@ -119,7 +120,7 @@ fn main() {
 **`guests/Cargo.toml`** — add the crate to the member list:
 
 ```toml
-members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "consistency", "hello"]
+members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "consistency", "addsub", "hello"]
 ```
 
 Four things about that source file are not negotiable:
@@ -440,9 +441,10 @@ nothing, and `slot_at` answers `None`.
 ```
 
 Three segments is what the frozen `link.ld` produces for every guest in this
-repository: `.text` (read + execute), `.rodata` (read only), and one writable
-segment holding `.data`, `.bss` and the reservation above them, running to the
-top of RAM. Its `file bytes` is zero whenever `.data` is empty, which is the
+repository that has read-only data: `.text` (read + execute), `.rodata` (read
+only), and one writable segment holding `.data`, `.bss` and the reservation above
+them, running to the top of RAM. A guest with no `.rodata` has two, and `addsub`,
+which is a page of hand-written instructions and nothing else, is that one. Its `file bytes` is zero whenever `.data` is empty, which is the
 common case — `hello`, `fib`, `echo` and `rvc-dense` are all like that, so the
 whole third segment is zero fill. It is declared because a host program loader
 maps exactly what the program headers declare and nothing else — an undeclared

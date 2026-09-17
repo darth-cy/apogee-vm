@@ -162,6 +162,48 @@ impl TraceArchive {
         self.timing[phase as usize]
     }
 
+    /// Fill a later phase with its content and its wall-clock timing — how a
+    /// prover phase exports its snapshot (S16; the schemas are
+    /// `docs/spec/shard-proof.md` §10). Refuses post-execution, which the
+    /// constructor fills, a phase already filled, and a phase whose
+    /// predecessor is empty: the filled phases stay a prefix, which is the rule
+    /// [`TraceArchive::import`] reads by.
+    pub fn fill(
+        &mut self,
+        phase: Phase,
+        content: Vec<u8>,
+        timing: PhaseTiming,
+    ) -> Result<(), String> {
+        if phase == Phase::PostExecution {
+            return Err(
+                "the post-execution phase is the archive's own, filled at construction".into(),
+            );
+        }
+        let i = phase as usize;
+        if self.later[i - 1].is_some() {
+            return Err(format!("{phase:?} is already filled"));
+        }
+        if !self.is_filled(PHASES[i - 1]) {
+            return Err(format!(
+                "{phase:?} cannot be filled before {:?}: phases fill in order",
+                PHASES[i - 1]
+            ));
+        }
+        self.later[i - 1] = Some(content);
+        self.timing[i] = Some(timing);
+        Ok(())
+    }
+
+    /// A later phase's content, or `None` while it is empty. Panics on
+    /// post-execution, whose content is the parts the other accessors return.
+    pub fn content(&self, phase: Phase) -> Option<&[u8]> {
+        assert!(
+            phase != Phase::PostExecution,
+            "TraceArchive::content: post-execution's content is read through its parts"
+        );
+        self.later[phase as usize - 1].as_deref()
+    }
+
     /// The payload section's bytes: everything but the timing, and what two
     /// runs of one guest on one input agree on byte for byte.
     pub fn deterministic_payload(&self) -> Vec<u8> {
@@ -674,6 +716,36 @@ mod tests {
         assert_eq!(back, archive);
         assert!(back.is_filled(Phase::PostCommit));
         assert!(!back.is_filled(Phase::PostGkr));
+    }
+
+    /// `fill` is the only door to a later phase, and it keeps the reader's
+    /// rule: in order, once each, never post-execution. What it fills round
+    /// trips through `export` and `import` with its timing.
+    #[test]
+    fn fill_keeps_the_phases_a_prefix() {
+        let mut archive = tiny();
+        let t = PhaseTiming { wall_nanos: 3 };
+        assert!(archive.fill(Phase::PostExecution, vec![1], t).is_err());
+        let e = archive.fill(Phase::PostGkr, vec![1], t).unwrap_err();
+        assert!(e.contains("before PostCommit"), "{e}");
+        assert_eq!(archive.content(Phase::PostCommit), None);
+        archive.fill(Phase::PostCommit, vec![4, 5], t).unwrap();
+        let e = archive.fill(Phase::PostCommit, vec![6], t).unwrap_err();
+        assert!(e.contains("already filled"), "{e}");
+        archive.fill(Phase::PostGkr, vec![], t).unwrap();
+        assert_eq!(archive.content(Phase::PostCommit), Some(&[4u8, 5][..]));
+        assert_eq!(archive.content(Phase::PostGkr), Some(&[][..]));
+        assert_eq!(archive.content(Phase::PostOpening), None);
+        let back = reimport(&archive).expect("a filled archive imports");
+        assert_eq!(back, archive);
+        assert_eq!(back.timing(Phase::PostGkr), Some(t));
+    }
+
+    /// Post-execution's content is its parts, never bytes `content` hands out.
+    #[test]
+    #[should_panic(expected = "post-execution's content is read through its parts")]
+    fn post_execution_has_no_content_bytes() {
+        let _ = tiny().content(Phase::PostExecution);
     }
 
     #[test]

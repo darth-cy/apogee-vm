@@ -194,6 +194,15 @@ Consequences, stated plainly:
   (canonical, on-curve, in-subgroup), and `validate()` relates the powers to
   one `tau`. Neither says *which* SRS you have.
 
+**S16 reinstated a narrower digest** (`docs/spec/shard-proof.md` §3): Poseidon2
+over the 320-byte `SrsVerifier` alone, carried in the verifying key and absorbed
+third in every statement. It binds a proof to the three points its pairings
+read. It does not bind the powers, and it is recomputed from the key's own
+points, so it does not say those points are the ceremony's: a verifier still
+needs the ceremony's `SrsVerifier`, or its digest, from a trusted channel
+(`docs/spec/shard-proof.md` §7.2). This section's presumption stands, narrowed
+to that.
+
 ---
 
 ## 5. Archive format — frozen

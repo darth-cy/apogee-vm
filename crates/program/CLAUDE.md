@@ -202,6 +202,13 @@ two claims for one pc is a broken invariant of this crate, not something a progr
 cause.
 
 ## `VmConfig` and the statement descriptor
+**Since S16 these live in `crates/verifier-core`**, which the no_std verifier and the prover
+share: `VmConfig`, `ProgramIdentity` and `absorb_statement_descriptor` are re-exported
+here unchanged; `check_memory_windows` wraps the core's, mapping its `&'static str` into
+`WindowRule`; and `identity_from_commitments` encodes its points and calls the core's
+`identity_digest`, which takes the 64-byte encodings. The recipes and wire forms below did
+not move a byte, and every path above still resolves.
+
 `VmConfig` is the static shape: the family set ascending with each height, and
 `bytecode_size_words`. **Per-proof shard counts are not in it.** Wire form, frozen: `u32`
 LE family count `k`, then `k` pairs `u32` LE `(family, height)`, then `u32` LE
@@ -246,7 +253,9 @@ little-endian encoding.
 
 **What it binds.** Identity is a pure function of `(ProgramImage's instruction slots, its
 file-backed bytes, its entry, family set, heights, bytecode_size_words, code version)` —
-and the SRS it commits over, which is presumed (`docs/spec/srs.md` §4). `decode_program`
+and the SRS it commits over, which identity does not bind: since S16 the statement binds
+the SRS's verifier points instead, through the verifying key's SRS digest
+(`docs/spec/shard-proof.md` §3). `decode_program`
 refuses file bytes past window 0, so every one of them is in the image column. Every step
 is deterministic: `load_elf` and `decode_program` touch no clock, filesystem or hash map;
 the tables are sorted vectors; Mercury's MSM is exact and thread-count independent (S07);

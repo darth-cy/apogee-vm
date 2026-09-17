@@ -20,6 +20,7 @@ use core::fmt;
 
 use field::Fr;
 
+pub mod add_sub;
 mod build;
 mod laws;
 pub mod lookup;
@@ -42,6 +43,55 @@ pub const COEFFICIENT_ENCODING_CANONICAL_LE: u32 = 0;
 /// Far above the height menu's `2^22`, and low enough that `1 << trace_vars`
 /// fits a 32-bit `usize`, which the recursion guest has.
 pub const MAX_TRACE_VARS: u32 = 30;
+
+// ---------------------------------------------------------------------------
+// The registry
+// ---------------------------------------------------------------------------
+
+/// A family's circuit as a verifying key conveys it: the artifact **and** the
+/// channel specs that say which output pair is whose root, which columns are a
+/// table and which column counts it — none of which an artifact records
+/// (`docs/spec/lookup.md` §13). `docs/spec/shard-proof.md` §7.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FamilyCircuit {
+    pub family: u32,
+    pub artifact: CircuitArtifact,
+    pub channels: Vec<lookup::ChannelSpec>,
+}
+
+/// The circuit that proves `family` over `2^trace_vars` rows, or `None` for a
+/// family no stage has built yet, or a height it cannot be built at.
+///
+/// **The one registry of circuits**, `docs/spec/shard-proof.md` §11: a
+/// verifying key's circuits must be byte for byte what this returns, and a
+/// later family is added here, with one constructor, and nowhere in the
+/// verifier. `ADD_SUB_LUI_AUIPC` needs 19 variables for its timestamp
+/// channel (`docs/spec/lookup.md` §3); the two RAM window families take any
+/// height up to `MAX_TRACE_VARS`.
+pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
+    use constants::family as f;
+    if trace_vars > MAX_TRACE_VARS {
+        return None;
+    }
+    let (artifact, channels) = match family {
+        f::ADD_SUB_LUI_AUIPC => {
+            let bits =
+                constants::lookup_channel::BITS[constants::lookup_channel::TIMESTAMP as usize];
+            if trace_vars < bits {
+                return None;
+            }
+            (add_sub::artifact(trace_vars), add_sub::channels())
+        }
+        f::INIT_TEARDOWN => (memory::image_window_artifact(trace_vars), Vec::new()),
+        f::ZERO_WINDOWS => (memory::zero_window_artifact(trace_vars), Vec::new()),
+        _ => return None,
+    };
+    Some(FamilyCircuit {
+        family,
+        artifact,
+        channels,
+    })
+}
 
 // ---------------------------------------------------------------------------
 // Addresses

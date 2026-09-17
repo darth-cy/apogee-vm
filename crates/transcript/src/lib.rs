@@ -425,3 +425,48 @@ pub fn io_digest(public_input: &[u8], public_output: &[u8]) -> Fr {
     );
     sponge.sample()
 }
+
+// ---------------------------------------------------------------------------
+// G1 points, curve-free.
+// ---------------------------------------------------------------------------
+
+/// A `G1` point's four transcript limbs, from its 64-byte canonical encoding
+/// `x ‖ y`, with no curve arithmetic. `docs/spec/mercury.md` §4 is normative,
+/// and `docs/spec/shard-proof.md` §2.4 says why it lives here.
+///
+/// All-zero bytes are the point at infinity (S05's wire rule), which absorbs
+/// `constants::G1_INFINITY_SENTINEL`, `2^128`, in each of its four lanes.
+/// Anything else is `x[0..16], x[16..32], y[0..16], y[16..32]`, each read as a
+/// little-endian integer below `2^128` — so no real limb is the sentinel, and
+/// the split is a function of the bytes whether or not they encode a point on
+/// the curve. Validating the point is its decoder's job, not the absorber's.
+/// `pcs::append_g1_list` is this over `G1Affine::to_bytes`.
+pub fn g1_limbs(point: &[u8; 64]) -> [Fr; 4] {
+    if point.iter().all(|b| *b == 0) {
+        let sentinel = Fr::from_hex(constants::G1_INFINITY_SENTINEL)
+            .expect("the frozen infinity sentinel is a canonical hex literal");
+        return [sentinel; 4];
+    }
+    let limb = |half: &[u8]| {
+        let mut bytes = [0u8; 32];
+        bytes[..16].copy_from_slice(half);
+        Fr::from_bytes(&bytes).expect("a 128-bit limb is below 2^128 < p")
+    };
+    [
+        limb(&point[..16]),
+        limb(&point[16..32]),
+        limb(&point[32..48]),
+        limb(&point[48..]),
+    ]
+}
+
+/// Absorb `points` under `tag` as **one** typed message of `4 * points.len()`
+/// limbs, each point through [`g1_limbs`]. The list's length is bound by the
+/// message's framed length, so `k` points are never `k` messages.
+pub fn append_g1_points(tr: &mut Transcript, tag: Tag, points: &[[u8; 64]]) {
+    let mut limbs = Vec::with_capacity(4 * points.len());
+    for point in points {
+        limbs.extend_from_slice(&g1_limbs(point));
+    }
+    tr.append_scalars(tag, &limbs);
+}

@@ -11,11 +11,18 @@ frozen encoding — and because `transcript` is the crate the prover and the ver
 already depend on. `docs/spec/ecall-abi.md` §6 is normative for it, exactly as
 `docs/spec/accumulator.md` is for `pcs::accumulator_digest`.
 
+Since S16 it holds a second: the curve-free absorption of a `G1` point from its 64-byte
+encoding, `docs/spec/mercury.md` §4's limbs with no curve arithmetic, moved here from
+`pcs` so the no_std verifier core absorbs commitments without linking the curve
+(`docs/spec/shard-proof.md` §2.4). `pcs::append_g1_list` now calls it.
+
 The full specification is `docs/spec/transcript.md`. This file is the summary a reader
 needs before touching the code.
 
 ```rust
 pub fn io_digest(public_input: &[u8], public_output: &[u8]) -> Fr;   // FROZEN AT S10
+pub fn g1_limbs(point: &[u8; 64]) -> [Fr; 4];                         // S16; mercury.md §4
+pub fn append_g1_points(tr: &mut Transcript, tag: Tag, points: &[[u8; 64]]);   // one message
 ```
 
 ## Frozen invariants
@@ -44,6 +51,10 @@ pub fn io_digest(public_input: &[u8], public_output: &[u8]) -> Fr;   // FROZEN A
   Two distinct tags are what make swapping unequal streams change the digest; the byte
   length in each message is what keeps `x` and `x || 0x00` apart, since the final limb is
   zero-extended. Later stages recompute it and never redefine it.
+- **A G1 point's limbs are a function of its bytes.** All-zero is infinity and absorbs
+  the sentinel `2^128` four times; anything else is `x` low, `x` high, `y` low, `y` high,
+  split at byte 16, whether or not the bytes are a point. Validating a point is its
+  decoder's; the absorber never rejects. A list is **one** message of `4k` limbs.
 - **`#![no_std]`, forever.** The recursion guest links this crate. CI-equivalent check:
   `cargo build -p field -p constants -p transcript --target riscv32imac-unknown-none-elf`.
 
@@ -60,6 +71,7 @@ pub fn io_digest(public_input: &[u8], public_output: &[u8]) -> Fr;   // FROZEN A
 | `tests/duplex.rs` | Cases A-E and the rest replayed from file; the tag table and the one-tag-one-kind rule; output order; squeeze repetition; typed-layer separation; the byte encoding; the event log; negative controls. |
 | `tests/snapshot.rs` | The 20-operation script snapshotted at operation 10; byte round trip; malformed-snapshot rejection. |
 | `tests/io_digest.rs` | The public I/O digest against committed vectors; the empty cases; and the three sensitivity properties -- swapped streams, an appended zero byte, a flipped bit -- asserted directly rather than by example. |
+| `tests/g1.rs` | S16's G1 absorption: the generator and infinity, each byte in its own limb, no limb the sentinel, a one-byte point not infinity, and a list as one message, the empty list included. `crates/pcs/tests/kats.rs`' arkworks-derived absorption vectors hold the same split through `pcs::append_g1_list`. |
 | `tests/common/mod.rs` | Fixture pinning, the vector reader, the case replayer. Test-only. |
 | `tools/test-support` | The seeded RNG, hex, and the SHA-256 behind the pin. Shared. |
 

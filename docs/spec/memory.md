@@ -138,6 +138,14 @@ control C8). S16's family constraints make:
     comes from `is-zero(a7_read − n)`, split across layers to keep every gate at degree 2
     or below.
 
+**Status at S16.** `ADD_SUB_LUI_AUIPC` discharges this section for its own rows
+(`docs/spec/shard-proof.md` §8): `m_pc` is the decoder lookup's selector and every other
+mask is `m_pc` times its kind's use. It proves `EXIT` alone, so it needs no `is-zero`: a
+gate holds every ecall row's `a7` read to 93, and `arg1`, `arg2` and `ram` are masked off
+on every row. No transfer row is provable, so `is_transfer` does not exist yet; the
+I/O-binding stage owes it. Every other execution family owes this section at its own stage,
+and until then has no circuit, so no statement containing it can be proved.
+
 ### 2.2 The leaves
 
 For query `q` with mask `m`, AS `s`, slot `Δ`:
@@ -367,7 +375,8 @@ order:
 | 33–63 | `v_1 … v_31` | register `x_r`'s final value, `r = 1..31`: its last write, 0 if never queried |
 
 Each `t` is below `2^38` and each `v` below `2^32`, and S16's decoder of `MEMORY_BOUNDARY`
-refuses anything else. Nothing decodes the message at S14: `BoundaryFinals` holds each `v` as
+refuses anything else (since S16, `PublicInputs::from_bytes` does, and `reduce_shard`'s step 10
+re-checks the timestamps). Nothing decodes the message at S14: `BoundaryFinals` holds each `v` as
 a `u32`, but each `t` as a `u64` that nothing checks against `2^38`. **Two final values are not
 carried**: `x0`'s is the constant 0 and the pc's is
 the constant `HALT_PC` (§5). `gkr_verify::BoundaryFinals` holds them as
@@ -429,6 +438,12 @@ transfer rows; the system row's `next_pc = is_exit·HALT_PC + is_transfer·pc +
 (`m_pc = 1`), transfer rows included, with every other mask coupled to it as §2.1 says; and
 the exit row's `a0` write equal to its read.
 
+**Status at S16.** The system row's share is done, for `EXIT` alone: every ecall row reads
+`a7 = 93`, writes `a0` back, and writes `HALT_PC`; every other live row of the family writes
+the decoded fall-through, with a boolean wrap its range check forces to 0
+(`docs/spec/shard-proof.md` §8.4). `jalr`'s bit and the jumps' and branches' wraps are the
+jump family's stage's, and `is_transfer` the I/O-binding stage's.
+
 ---
 
 ## 6. Binding
@@ -447,7 +462,10 @@ PROTOCOL_SUITE → PROTOCOL_VERSION → [SRS digest] → VM_CONFIG → SHARD_COU
 
 `program::absorb_statement_descriptor` writes `VM_CONFIG`, `SHARD_COUNTS` and
 `MEMORY_WINDOWS`. The list's length varies per execution exactly as the shard counts do. The
-boundary message and the squeeze belong to S16's global transcript.
+boundary message and the squeeze belong to S16's global transcript, which is
+`docs/spec/shard-proof.md` §2: it frames each family's group with a `MEMORY_GROUP` message,
+draws the four challenges under `MEMORY_CHALLENGE`, and ends on the global state digest
+every shard seeds from.
 
 Both new items must precede the squeeze. A window list chosen after the challenges is a union
 over up to `2^127` lists at `h = 2^22` — void as a bound at `h ≤ 2^20`. A final value chosen
@@ -474,7 +492,9 @@ Recomputing identity binds `cm(image column)`, not the column `INIT_TEARDOWN`'s 
 So the verifying-key path also opens that shard's `S[0]` base claim against the
 `cm(image column)` whose identity it recomputed, and refuses a mismatch (S16). Without the
 opening, a statement over a different image, with a trace consistent with that image, is
-accepted.
+accepted. Since S16 that opening is the shard's own batched opening: its commitment list
+takes the verifying key's setup commitments for the `S` columns, so `S[0]` opens against
+the very `cm(image column)` identity was recomputed over (`docs/spec/shard-proof.md` §5.2).
 
 ### 6.3 Tags
 
@@ -484,7 +504,8 @@ accepted.
 | 31 | `MEMORY_BOUNDARY` | scalars |
 | 32 | `PROGRAM_ENTRY` | scalars |
 
-S16 appends the challenge-kind tag its memory squeeze draws under.
+S16 appends the challenge-kind tag its memory squeeze draws under: `MEMORY_CHALLENGE`, 37,
+among seven (`docs/spec/transcript.md` §8).
 
 ---
 
@@ -595,6 +616,13 @@ against identity's `cm(image column)` (§6.2).
 - the verifying key's identity recomputation, and the opening of `INIT_TEARDOWN`'s `S[0]`
   against `cm(image column)`;
 - the zero-root refusal.
+
+**Status at S16.** Discharged: the frame superset rule, which the add/sub family's
+seven-query frame meets; the masks and the sentinel for that family (§2.1, §5); the global
+transcript and the boundary decoder; the key's identity recomputation and the opening of
+`S[0]`; and the zero-root refusal, which is `reconciles`' nonzero half and which step 10 of
+`verify_shard` runs. Still owed: the masks and the sentinel for every other family, at
+each family's stage, and each access's byte address, at the memory families' stage.
 
 S20 reconciles every shard.
 

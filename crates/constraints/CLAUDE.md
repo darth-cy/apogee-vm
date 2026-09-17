@@ -9,6 +9,9 @@ compilation, the gate catalogue and the `postcard` wire form.
 Nothing here evaluates a gate. The kernel is `gkr_verify::eval_gate`, and it is the
 semantic authority; this crate owns the formula *representation* and the checks made
 when a circuit is built. **`docs/spec/gkr.md` §1–§4 is normative.**
+`docs/spec/constraint-manifest.md` is the readable account of every circuit
+`family_circuit` returns — each column, inner layer, gate and lookup by position, name and
+formula — and a change to a family's circuit updates its entry there.
 
 ```rust
 pub enum VirtualKind { RowIndex, RamLive, Range19, Range16 }
@@ -77,6 +80,20 @@ pub mod memory {                                   // docs/spec/memory.md §2, �
     pub fn image_window_artifact(trace_vars: u32) -> CircuitArtifact;  // INIT_TEARDOWN
     pub fn zero_window_artifact(trace_vars: u32) -> CircuitArtifact;   // ZERO_WINDOWS
     pub fn check_memory(a: &CircuitArtifact) -> Result<(), String>;
+}
+
+pub struct FamilyCircuit { pub family: u32, pub artifact: CircuitArtifact,
+                           pub channels: Vec<lookup::ChannelSpec> }
+pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit>;   // the registry
+
+pub mod add_sub {                                  // docs/spec/shard-proof.md §8
+    pub const DECODED: [PolyAddress; 6];           // W[10..16]: next_pc rs1 rs2 rd imm mask
+    pub const KINDS: [PolyAddress; 6];             // W[16..22]: system addi auipc add sub lui
+    pub const IS_ECALL: PolyAddress;  IS_FENCE;  WRAP;  RD_HI;  PC_WRAP;  NEXT_PC_HI;   // W[22..28]
+    pub const MULTIPLICITIES: [PolyAddress; 3];    // W[28..31]: timestamp, range16, decoder
+    pub const TABLE_WIDTH: usize = 7;              // S[0..7], program::lookup_tuple order
+    pub fn artifact(trace_vars: u32) -> CircuitArtifact;
+    pub fn channels() -> Vec<lookup::ChannelSpec>;
 }
 ```
 
@@ -164,6 +181,23 @@ pub mod memory {                                   // docs/spec/memory.md §2, �
   a global slot over anything but `M`, `S`, `V`, and a leaf mask that is committed without
   its booleanity gate in list 0 or virtual but not `V[ram_live]`. It assumes an artifact that
   passed `validate`.
+- **`family_circuit` is the one registry of circuits** (`docs/spec/shard-proof.md` §11).
+  A verifying key's circuits are byte for byte what it returns for the key's families and
+  heights, so a circuit is a protocol constant given a family and a height; a later family
+  is one arm here and one fill in `crates/prover`. It returns `None` for a family no stage
+  has built, above `MAX_TRACE_VARS`, and for `ADD_SUB_LUI_AUIPC` below 19 variables, the
+  timestamp channel's bound. The two window families have no channels.
+- **`add_sub` is §8 as data**, S15's `frame_with_channels_artifact` over the family's seven
+  frame queries plus 21 witness columns, the 7-column decoded table as `S`, 31 enforcing
+  gates, five lookups and three channels. Its gates are the family's whole semantics:
+  one-hot kinds and the packed mask the table's domain; each query's mask the row kind's
+  use of it times `m_pc`; each written value the kind's arithmetic with a boolean carry
+  and a 16+16-bit range split; `ecall` only as `exit` (`a7 = 93`), its status `a0`, its
+  `next_pc` `HALT_PC`; every other row's `next_pc` the decoded fall-through, with a
+  boolean `pc_wrap`. A `const` assertion pins `system_code::ECALL == 0`, so a renumbering
+  fails the build, and `artifact` asserts each channel's obligation count — 14, 4, 1 —
+  when it builds the circuit, so a dropped obligation panics at construction.
+
 - **The window address step is `WORD_BYTES`, not `TS_STEP`.** Both are 4; one is bytes per
   RAM word, the other timestamps per cycle.
 
@@ -186,11 +220,17 @@ them, CI regenerates and diffs them, and `tests/memory.rs` pins their SHA-256 an
 each to its constructor's bytes. The leaves' independent description is the plain
 arithmetic of `crates/gkr/tests/memory.rs`.
 
+`tests/vectors/add_sub.bin`: S16's `add_sub::artifact` at `trace_vars` 22, the family's
+default height. `cargo run -p kat-gen -- family` rewrites it, kat-gen's own unit test holds
+it to the constructor, CI regenerates and diffs it, and `crates/checker/tests/add_sub.rs`
+pins its SHA-256 and holds its gates to §8's table.
+
 ## Tests
 | File | Covers |
 | --- | --- |
 | `tests/wire.rs` | both fixtures round-trip byte for byte; a format version other than 1 refused before decoding; `VirtualKind`'s tags and `V[ram_live]`'s address and name; a lookup against its hand-written bytes; `Quadratic` against its hand-written bytes for no terms, linear only, products only and both, and each malformed `Quadratic` refused; every refusal of the reader; every single-bit flip of a fixture decodes or errors, never panics |
 | `tests/laws.rs` | one mutation of the toy per rule, each refused with its error — structured variants matched whole, prose details by the rule and the address or name they carry — beside the toy validating; each lookup rule broken alone, refused naming the lookup, beside one and two lawful lookups and an `M` selector; the degree-3 gate; `Quadratic`'s degree, its identically zero and unread-column cases, Law 4 against an `AffineProduct` relation, and its refusal to inline; cache-free inlining and its refusals |
 | `tests/memory.rs` | the three fixtures pinned and equal to their constructors; every constructor validating and passing `check_memory` at 12 and 22; two roots named `read_root`, `write_root`, an all-zero padding row, `trace_vars` halving lists; every read tuple's parts at their `PART_*` positions; the frame's layout, leaf order, widths and enforcing gates by name; its 16 obligations whole, `gap_lo_pc`'s constant `−1`; acceptance 11 exhaustively at reduced width, 5-bit chunks over a 10-bit clock, each query's own `gap_lo` expression read from the frame with its high chunk at 0, every `(cycle, read_ts)` pair admitted exactly when `read_ts < 4·cycle + Δ`; §8's pinned read sets; `check_memory` refusing a leaf fed from `W` (acceptance 9); the forward-provenance counterexample as a producing and as an enforcing gate of list 1, each beside its lawful control; a slot and a `W` column meeting through two cached entries, a cached entry itself carrying both, and a slot over a cached entry; a frame without `pc_mask_boolean` and one without `rd_mask_boolean`, whose mask another gate still reads; a window leaf masked by `S[0]` and by `V[row]`; a global slot over an inner column; and a write root read from a `W` column alone, which provenance does not see — each mutant still passing `validate`, each test run against the mutant it names |
+| `src/add_sub.rs` (unit) | the three system codes pairwise distinct, which is what lets `system_split`, `ecall_code` and `fence_code` refuse every `ebreak` row; the gates themselves are `crates/checker/tests/add_sub.rs`' |
 | `src/memory.rs` (unit) | acceptance 12: the frame with one obligation dropped before the artifact is written panics at the count assertion |
 | `tests/audit.rs` | every `GateDef` variant, all six, emitted across both compilations, counts written by hand; the catalogue; the two compilations' identical shape |
