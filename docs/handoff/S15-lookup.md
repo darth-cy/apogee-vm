@@ -38,7 +38,8 @@ The answers are the design.
 1. **S14's frame fixtures do not move.** Folding the discharge into `frame_artifact` would
    have given every frame a multiplicity column, a fraction tree and two more outputs, and
    moved all four fixture hashes and `docs/spec/memory.md` §2 with them. Instead
-   `constraints::memory::frame_with_channels_artifact` takes an `Extras` — the columns,
+   `constraints::memory::frame_with_channels_artifact` takes an `Extras` (renamed
+   `FamilySpec` at S17) — the columns,
    gates, lookups and channels a family's instruction constraints add — and
    `frame_artifact` is that constructor with an empty one. Its bytes are unchanged, which
    `kat-gen -- memory` and the fixtures' SHA pins hold. S16 assembles the real family
@@ -139,6 +140,7 @@ pub fn frame_with_channels_artifact(queries: &[usize], trace_vars: u32, extras: 
     -> CircuitArtifact;                              // panics on an empty extras.channels
 // frame_artifact(q, n) is S14's bare frame, byte for byte: the one artifact that carries
 // obligations with no channel, and it does not come through the entry point above
+// Extras is named FamilySpec since S17, and its parameter family_spec; nothing else moved
 ```
 
 ```rust
@@ -362,7 +364,7 @@ answers are "Read these first"; the prompt is not edited).
     cells — measured at 19 s per four columns, so about 330 s — while 69 commitments are
     3.2 s. The toy SRS is built from a `tau` written down in the test, as `crates/pcs`'
     suite builds one; only `commit` is used, and an opening is S16's.
-17. **`Extras` is a parameter bundle, not a builder**: a plain struct with `Default`,
+17. **`Extras` is a parameter bundle, not a builder** (`FamilySpec` since S17): a plain struct with `Default`,
     passed once. Nothing is pushed into an artifact after a collection point.
 19. **Must-be-exact 11's "inside the deterministic single-pass trace generation" is a
     second pass here.** `trace::build_multiplicities` takes the already-built columns and

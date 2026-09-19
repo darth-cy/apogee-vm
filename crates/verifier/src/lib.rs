@@ -63,8 +63,8 @@ pub fn encode_srs_verifier(vsrs: &SrsVerifier) -> [u8; SRS_VERIFIER_BYTES] {
 
 /// Load a verifying key: `VerifyingKey::from_bytes`, whose load rules are
 /// `docs/spec/shard-proof.md` §7.2, and then every curve point it carries —
-/// the `SrsVerifier` and every setup commitment — through its validating
-/// decoder. Run once per key.
+/// the `SrsVerifier`, every setup commitment and every generic-table
+/// commitment — through its validating decoder. Run once per key.
 pub fn load_verifying_key(bytes: &[u8]) -> Result<VerifyingKey, String> {
     let vk = VerifyingKey::from_bytes(bytes)?;
     if decode_srs_verifier(&vk.srs_verifier).is_none() {
@@ -73,6 +73,13 @@ pub fn load_verifying_key(bytes: &[u8]) -> Result<VerifyingKey, String> {
     let points = vk.setup_commitments.iter().flatten();
     if points.clone().any(|p| G1Affine::from_bytes(p).is_none()) {
         return Err("a setup commitment is not a point".into());
+    }
+    if vk
+        .generic_table
+        .iter()
+        .any(|p| G1Affine::from_bytes(p).is_none())
+    {
+        return Err("a generic-table commitment is not a point".into());
     }
     Ok(vk)
 }
@@ -85,5 +92,71 @@ mod tests {
     #[test]
     fn the_core_holds_an_opening_of_pcs_width() {
         assert_eq!(OPENING_BYTES, pcs::PROOF_BYTES);
+    }
+
+    /// A key whose every other point is one loads; a generic-table commitment
+    /// that is not a point is refused, and so is a setup commitment.
+    #[test]
+    fn every_generic_table_commitment_is_decoded_at_load() {
+        use constants::family;
+        use curve::{G1Affine, G2Affine};
+        use verifier_core::{identity_digest, srs_digest, VmConfig};
+
+        let point = G1Affine::GENERATOR.to_bytes();
+        let config = VmConfig {
+            families: vec![
+                (family::JUMP_BRANCH_SLT, 1 << 20),
+                (family::INIT_TEARDOWN, 1 << 16),
+                (family::ZERO_WINDOWS, 1 << 16),
+            ],
+            bytecode_size_words: 1 << 20,
+        };
+        let setup = vec![vec![point; 7], vec![point], vec![]];
+        let srs_verifier = encode_srs_verifier(&SrsVerifier {
+            g1_gen: G1Affine::GENERATOR,
+            g2_gen: G2Affine::GENERATOR,
+            g2_tau: G2Affine::GENERATOR.double(),
+        });
+        let generic_table = [point; 3];
+        let key = VerifyingKey {
+            code_version: family::CODE_VERSION,
+            entry_pc: 0x1_0000,
+            identity: identity_digest(family::CODE_VERSION, &config, 0x1_0000, &setup),
+            config: config.clone(),
+            setup_commitments: setup,
+            srs_verifier,
+            generic_table,
+            srs_digest: srs_digest(&srs_verifier, &generic_table),
+            circuits: config
+                .families
+                .iter()
+                .map(|(f, h)| constraints::family_circuit(*f, h.trailing_zeros()).unwrap())
+                .collect(),
+        };
+        assert_eq!(load_verifying_key(&key.to_bytes()), Ok(key.clone()));
+        // Each of the three off the curve, its digest recomputed so that the
+        // load reaches the point.
+        for i in 0..3 {
+            let mut off = key.clone();
+            off.generic_table[i][0] ^= 1;
+            off.srs_digest = srs_digest(&off.srs_verifier, &off.generic_table);
+            assert_eq!(
+                load_verifying_key(&off.to_bytes()),
+                Err("a generic-table commitment is not a point".to_string()),
+                "point {i}"
+            );
+        }
+        let mut off = key.clone();
+        off.setup_commitments[1][0][0] ^= 1;
+        off.identity = identity_digest(
+            off.code_version,
+            &off.config,
+            off.entry_pc,
+            &off.setup_commitments,
+        );
+        assert_eq!(
+            load_verifying_key(&off.to_bytes()),
+            Err("a setup commitment is not a point".to_string())
+        );
     }
 }

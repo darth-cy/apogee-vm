@@ -425,7 +425,11 @@ zero-knowledge.
 **SRS substitution is not detected.** `docs/spec/srs.md` §4: the SRS digest was
 dropped, so nothing binds a proof to a particular SRS. That is a repository-wide
 gap, not a Mercury one, and it is recorded here because a Mercury proof is the
-first artifact that would carry the binding.
+first artifact that would carry the binding. S16 narrowed the gap and S17 extended
+the narrowing: a statement now absorbs a digest of the `SrsVerifier` and the packed
+generic table's three commitments (`docs/spec/shard-proof.md` §3), which a verifier
+takes from a trusted channel. The powers remain unbound except through the pairing
+check.
 
 ---
 

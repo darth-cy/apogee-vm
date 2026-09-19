@@ -409,16 +409,17 @@ convey the artifact **and** the specs, or the rule has run against a description
 different circuit. With an empty `specs` the column half runs alone, which is all an
 artifact by itself can say, and the table half does not run at all.
 
-**Nothing yet binds the packed generic table.** What binds a setup column to the table it
-is supposed to be is program identity (`docs/spec/memory.md` §6.2), and identity's
-commitment list is each family's *decoded* table plus `INIT_TEARDOWN`'s image column.
-§9's packed table is a **fourth kind** of committed setup column, and
-`program::setup_commitments` does not commit it, so a verifying key whose generic table has
-one poisoned cell — an AND row answering `37 & 45 = 0` — recomputes the same identity
-digest, and every construction rule here accepts it. This is a real gap, not a
-soundness argument: it is listed below as S16's, and until S16 closes it the generic
-channel's guarantee is conditional on the table a verifier is handed being the one
-`program::lookup_tables::generic_table` writes.
+**Identity does not bind the packed generic table, and until S17 nothing did.** What binds
+a setup column to the table it is supposed to be is program identity
+(`docs/spec/memory.md` §6.2), and identity's commitment list is each family's *decoded*
+table plus `INIT_TEARDOWN`'s image column. §9's packed table is a **fourth kind** of
+committed setup column, and `program::setup_commitments` does not commit it, so a
+verifying key whose generic table has one poisoned cell — an AND row answering
+`37 & 45 = 0` — recomputes the same identity digest, and every construction rule here
+accepts it. That was a real gap, not a soundness argument. S15 listed it below as S16's,
+S16 moved it to S17, and S17 closed it through the SRS digest (the status below). The
+generic channel's guarantee is now conditional on the verifier's SRS digest being the
+ceremony's, which it takes from a trusted channel.
 
 - **Owed by later stages.** S16 wires the channels into the real shard transcript — the
   commitments, then `g` and `β` under `LOOKUP_CHALLENGE`, then the local challenges — and
@@ -447,3 +448,31 @@ channel's guarantee is conditional on the table a verifier is handed being the o
   tamper harness's — is the verifier's to refuse, and `crates/checker/tests/tamper.rs`
   shows it is, as `Lookup`.
 - `DEFAULT_HEIGHTS[ATOMICS]` is S19's (§3).
+
+**Status at S17.** The jump/branch/slt family is the first to read the generic channel —
+two `U16GetSign` lookups, `docs/spec/jump-branch-slt.md` §3.2 — and with it:
+
+- **The packed generic table is bound through the SRS digest**, the owner's decision at
+  S17, and so before any lookup challenge, as the owner's words above ask. Every verifying
+  key carries the table's three commitments as one triple, `VerifyingKey::generic_table`,
+  whether or not any of its families reads the channel. The SRS digest absorbs the triple
+  after the `SrsVerifier` (`docs/spec/shard-proof.md` §3), and the global transcript
+  absorbs the digest at G2, so every challenge of the statement, and of every shard seeded
+  from it, follows the table. A family whose circuit reads the channel names the table as
+  its setup columns right after identity's, and its one batched opening opens those
+  columns against the key's triple (`docs/spec/shard-proof.md` §5.1). Identity still does
+  not bind the table.
+- **The triple is a constant of the ceremony**: the same three points at every menu
+  height from `2^18`, because the table is zero past its 131,073 rows and a commitment
+  reads the table as coefficients. So one trusted SRS digest pins both the points every
+  pairing reads and the table every generic lookup reads. The ceremony's triple is pinned
+  in `crates/program/tests/vectors/generic_table.txt`
+  (`docs/spec/jump-branch-slt.md` §6).
+- **§4's precondition is met for its keys**: each `U16GetSign` key is built on a high
+  halfword the `RANGE16` channel bounds, so no key reaches the `ZeroEntry` or an AND key.
+- **`check_copowers` runs** over `next_pc`, whose evenness obligation scales its low
+  halfword by `1/2`, inside the family's constructor — and so at every key load, which
+  rebuilds the registry's circuit (`docs/spec/shard-proof.md` §7.2).
+- **The generic table's constants moved** to `constants::generic_table` (`WIDTH`,
+  `AND_BASE`, `SIGN_BASE`), because a circuit, which cannot depend on `program`, now builds
+  a key into it; `program::lookup_tables` keeps every name as an alias.

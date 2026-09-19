@@ -449,13 +449,24 @@ seeded from it, so a shard proof is for one statement only. `docs/spec/shard-pro
 
 **Verifying key** — `VerifyingKey`: the program's identity and everything it is the digest
 of (code version, `VmConfig`, entry pc, setup commitments), the SRS's 320-byte verifier
-points and their **SRS digest**, and one circuit per family. Loading it recomputes both
-digests and requires each circuit to be byte for byte the registry's.
-`docs/spec/shard-proof.md` §7.
+points, the **generic-table commitments**, the **SRS digest** over those two, and one
+circuit per family. Loading it recomputes both digests and requires each circuit to be
+byte for byte the registry's. `docs/spec/shard-proof.md` §7.
 
 **SRS digest** — one `Fr`: a fresh transcript's squeeze over the SRS's verifier points
-(`[1]_1`, `[1]_2`, `[x]_2`), absorbed third in every statement. It binds a proof to the
-points its pairings use, not to the whole SRS. `docs/spec/shard-proof.md` §3.
+(`[1]_1`, `[1]_2`, `[x]_2`) and, since S17, the generic-table commitments, absorbed at G2 of
+every statement's global transcript. It binds a proof to the points its pairings use and to the table its
+generic lookups read; it does not bind the powers. A key's loader recomputes it from the
+key's own points, so a verifier takes the ceremony's digest from a trusted channel.
+`docs/spec/shard-proof.md` §3.
+
+**Generic-table commitments** — the packed generic table's three commitments (key, value
+and result columns), `VerifyingKey::generic_table`: one triple in every key, whether or
+not any of its families reads the `generic` channel. A family whose circuit reads it names
+the table as its setup columns right after identity's, and its shard opens those columns
+against the triple. Not in program identity: the SRS digest covers them. A constant of the
+ceremony, the same three points at every menu height from `2^18`.
+`docs/spec/jump-branch-slt.md` §6.
 
 **Opening claim** — where the verifier core stops: the shard's commitments, the one point
 GKR reduced every committed column to, the values claimed there, and the transcript to
@@ -468,3 +479,18 @@ prover or the verifier names a family. `docs/spec/shard-proof.md` §11.
 **Tamper twin** — an honest statement proved again with one thing changed, as an honest
 prover would prove the changed witness, and checked for the class of the refusal:
 `checker::TamperHarness`. A twin whose change breaks nothing must verify.
+
+**Comparison gadget** — S17's `constraints::gadgets::comparison`: `lt` and `gap` for
+`lhs < rhs`, signed or unsigned by a selector sum `sc`, from one ungated degree-2 equation
+`lhs − rhs − 2^32·sc·(lhs_sign − rhs_sign) + 2^32·lt − gap = 0`. The 16+16 range check on
+`gap` is what leaves one answer; the signs are `U16GetSign` lookups on range-checked high
+halfwords. No comparison table. `docs/spec/jump-branch-slt.md` §3.2.
+
+**Is-zero gadget** — `constraints::gadgets::is_zero`: `x·inv + z − enable = 0` and
+`z·x = 0`, which, for a boolean `enable`, make `z = enable·[x = 0]` boolean with no gate of
+its own. The frame's x0 rule is one. `docs/spec/jump-branch-slt.md` §3.1.
+
+**Fetch binding** — why a jump or branch to an address holding no decoded instruction is
+unprovable: the next row is live at that pc, and its decoder lookup finds only the table's
+`MINUS_ONE` padding row there, which no live tuple equals. `docs/spec/jump-branch-slt.md`
+§5.

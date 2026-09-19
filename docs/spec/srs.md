@@ -62,8 +62,10 @@ whole ceremony in memory.
 
 Nothing in the code depends on *which* ceremony it is — the reader would ingest
 Hermez's just as happily. The choice is frozen here because the committed
-fixtures are generated from it, and because with the SRS digest dropped (§4)
-there is nothing else that would notice a swap.
+fixtures are generated from it, and because with S07's full-SRS digest dropped
+(§4) nothing else notices a swap. The narrower digest a verifying key carries
+since S16 is recomputed from the key's own points, so it notices one only
+against a digest the verifier already trusts.
 
 ### 2.1 Container
 
@@ -195,13 +197,50 @@ Consequences, stated plainly:
   one `tau`. Neither says *which* SRS you have.
 
 **S16 reinstated a narrower digest** (`docs/spec/shard-proof.md` §3): Poseidon2
-over the 320-byte `SrsVerifier` alone, carried in the verifying key and absorbed
-third in every statement. It binds a proof to the three points its pairings
-read. It does not bind the powers, and it is recomputed from the key's own
-points, so it does not say those points are the ceremony's: a verifier still
-needs the ceremony's `SrsVerifier`, or its digest, from a trusted channel
-(`docs/spec/shard-proof.md` §7.2). This section's presumption stands, narrowed
-to that.
+over the 320-byte `SrsVerifier`, carried in the verifying key and absorbed third
+in every statement (the master's count, where `PROTOCOL_VERSION` is second; it
+is G2 of `docs/spec/shard-proof.md` §2). At S16 it bound a proof to the three
+points its pairings read and to nothing else. It does not bind the powers, and it
+is recomputed from the key's own points, so it does not say those points are the
+ceremony's: at S16 a verifier needed the ceremony's `SrsVerifier`, or its
+digest, from a trusted channel (`docs/spec/shard-proof.md` §7.2). This section's
+presumption stands, narrowed to that.
+
+**S17 added one message to that digest** (`docs/spec/shard-proof.md` §3,
+`docs/spec/jump-branch-slt.md` §6), by the owner's decision. After the
+`SrsVerifier`, the sponge absorbs the packed generic table's three commitments
+(`docs/spec/lookup.md` §9) as one `GENERIC_TABLE` message of twelve limbs, then
+squeezes. The digest covers those three points and the `SrsVerifier`, and
+nothing else. It still does not bind the powers.
+
+The table's commitments belong in the digest because they are a constant of the
+ceremony. The table is zero past its 131,073 rows, and a Mercury commitment is a
+plain KZG commitment of the evaluation table read as coefficients, so the table
+over `2^n` rows commits to the same three points at every even `n ≥ 18`, and so at
+every menu height that holds it.
+`program::lookup_tables::generic_commitments(srs)` computes them at `2^18`, and
+PSE's prefix property (§2.0) makes any file of that power or above give the same
+points. Every verifying key carries them as one triple, `generic_table`, placed
+between its `SrsVerifier` and its digest (`docs/spec/shard-proof.md` §9). One
+trusted digest therefore pins both the points every pairing reads and the table
+every generic lookup reads.
+
+The key's loader recomputes the digest from the key's own `SrsVerifier` and
+triple, so a verifier needs the ceremony's digest from a trusted channel, or the
+`SrsVerifier` and the triple. Anyone holding the ceremony recomputes the triple;
+a verifier holding only the `SrsVerifier` cannot.
+`crates/program/tests/vectors/generic_table.txt` pins the ceremony's triple,
+which `cargo run -p kat-gen -- program` writes, and
+`cargo test --release -p program --test lookup_tables -- --ignored` recomputes it
+over `ppot_0080_24.ptau` and holds the table to it at `2^18`, `2^20` and `2^22`.
+
+A key carrying another table's commitments does not load with the honest digest.
+With its digest recomputed over them it loads, but that digest is not the
+trusted one, and every proof made under the honest key is refused under it as
+`Statement` (`crates/prover/tests/control.rs`,
+`a_key_with_another_generic_table_is_another_statement`). S16's key bytes and
+SRS digests all change with this amendment. Program identity is unchanged, and
+binds neither the SRS nor the table.
 
 ---
 
@@ -251,7 +290,9 @@ not a wholesale substitution.
 
 **This is the only SRS material any verifier path may require.** The full `Srs`
 stays prover-side; a verifier that wants a power is asking to commit, which is
-a design error rather than a missing accessor.
+a design error rather than a missing accessor. The packed generic table's three
+commitments, which every verifying key carries since S17, are computed from the
+powers, but a verifier reads them as given points and never commits (§4).
 
 Its wire form is 320 bytes, the three points concatenated in that order, each
 in the canonical encoding `curve` writes. Deserialisation goes back through the

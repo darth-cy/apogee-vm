@@ -41,6 +41,10 @@ pub enum ProverError { Unregistered { family, height }, Key(String), Trace(Strin
   has its circuit and `family_fill` its fill; `register` takes the families of a
   `VmConfig` and refuses the first that lacks either. A later family adds one of each, and
   `global_commit_phase`, `prove_shard`, `reduce_shard` and `verify_shard` do not change.
+  S17's jump family was that, plus the binding of the generic table it is the first to
+  read: every key carries the table's commitments, and `opening_part` and `reduce_shard`'s
+  step 11 list them after identity's setup commitments for a family whose circuit reads
+  the `GENERIC` channel.
 - **A shard's proof is two crate-private halves**, `gkr_part` (through the GKR proof, to
   a `ShardGkr` — the post-GKR snapshot's entry) and `opening_part` (the batched opening),
   which `prove_shard_columns` runs back to back and `advance` runs a phase apart.
@@ -65,7 +69,21 @@ pub enum ProverError { Unregistered { family, height }, Key(String), Trace(Strin
   exactly that build, and a column the prover counted itself cannot disagree with it.
 - **The add/sub fill writes the computed `rd` value into `rd_selected`**, where S14's frame
   builder writes 0 on an `x0` write: the family's semantic gates read what the instruction
-  computed, and the frame's x0 rule masks it into the write.
+  computed, and the frame's x0 rule masks it into the write. S17's jump/branch/slt fill
+  does the same with the link or `lt`, computes every comparison cell from Rust's own
+  `u32`/`i32` ordering — `cmp_gap` is `(rs1 − cmp_rhs) mod 2^32` whatever the signedness —
+  and writes the packed generic table (`program::lookup_tables::generic_table`) as its
+  `S[7..10]`; it panics, like add/sub's, if the trace's `next_pc` or `rd` write is not what
+  the instruction computes.
+- **Every key carries the generic table's commitments** (S17): `ProverSetup::new` takes
+  them from `program::lookup_tables::generic_commitments(&srs)` — the table committed
+  once, at `2^18`, the same three points at every height — puts them in the key's
+  `generic_table` whatever its families read, and computes the SRS digest over the
+  `SrsVerifier` and them. It then runs the key's own load rules, `VerifyingKey::check`, so
+  a registry entry that broke them fails there. `opening_part` lists the three after
+  identity's setup commitments for a family whose circuit reads the `GENERIC` channel, as
+  `reduce_shard`'s step 11 does. The SRS must hold at least `2^18` powers, which every
+  provable program's does: its tallest family is at least `2^20` rows.
 - **Snapshots are the S12 archive's later sections**, `docs/spec/shard-proof.md` §10, in
   §9's encodings, each phase timed into the archive's timing section. `advance` reads back
   any phase the archive holds; the columns are never stored and a resumed phase rebuilds
@@ -77,6 +95,8 @@ pub enum ProverError { Unregistered { family, height }, Key(String), Trace(Strin
 ## Tests
 | File | Covers |
 | --- | --- |
-| `tests/common/mod.rs` | the S16 statement: `guests/addsub`'s committed ELF decoded with its family at `2^20` and everything else at `2^16`, traced into an archive, over a toy SRS whose `tau` is written down and whose archive is cached under `target/tmp` (`CARGO_TARGET_TMPDIR`), shared by the three suites that include this module |
+| `tests/common/mod.rs` | the S16 statement: `guests/addsub`'s committed ELF decoded with its family at `2^20` and everything else at `2^16`, traced into an archive, over a toy SRS whose `tau` is written down and whose archive is cached under `target/tmp` (`CARGO_TARGET_TMPDIR`), shared by the four suites that include this module — `tests/acceptance.rs`, `tests/control.rs`, `crates/verifier/tests/cli.rs` and `crates/checker/tests/tamper.rs`; and S17's, `guests/control`'s, with both of its execution families at `2^20` (`control_setup`, `control_archive`, `CONTROL_RESULT = 16`); `toy_tau` |
+| `tests/key.rs` | S17, in ordinary CI, no proof: `ProverSetup::new` over `control` and the toy SRS gives a key whose `generic_table` is `generic_commitments` over that SRS, whose SRS digest is over its `SrsVerifier` and them, and which loads; each of the three commitments is `[Σ_i c_i·τ^i]_1` of its column, computed by Horner's rule from the toy `τ`, the three distinct, and the same over `2^18` powers as over `2^20` |
+| `tests/control.rs` | **`#[ignore]`d; run with `--include-ignored --test-threads=1`** (10.1 GB peak). S17 acceptance 1: `control`'s four-family config, its self-checking trace, three shards — `INIT_TEARDOWN`, `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT` — each verifying, with round and claim counts and byte lengths from the circuit, the jump family's pinned at 61,612 bytes; the generic table's binding — the key's `generic_table` equal to `generic_commitments` over this SRS, its SRS digest the digest over the `SrsVerifier` and them, and the jump family's opening claim `M ++ W ++ S`, 21 + 44 + 10 commitments ending with the table's three, while add/sub's is 36 + 31 + 7 and ends with identity's; and `a_key_with_another_generic_table_is_another_statement`: a key whose table's value and result commitments are swapped does not load under the honest SRS digest, loads under its own recomputed one, which differs, and refuses every honest shard as `Statement("the proof was made for another statement")` |
 | `src/phases.rs` (unit) | the post-commit section round-trips and refuses a trailing byte and a missing one; the post-GKR and final sections refuse a trailing byte |
 | `tests/acceptance.rs` | **`#[ignore]`d; run with `--include-ignored --test-threads=1`** (a statement's proof peaks at 8.6 GB). Acceptance 1 (the guest's family set and trace; both shards verify; round counts, claim counts and byte lengths from the circuit); 5 (every statement twin refused as `Statement`, on both shards); 6 and 8 (the shard transcript event for event: seed, window, commitments, `g` and `β`, then the GKR schedule rebuilt from the artifact's shape — outputs, every batch, round and claim message, every child challenge — with one outstanding point after every batch, then one batched opening whose column-RLC challenge follows every evaluation claim; the verifier's reduction re-deriving the prover's point; the global transcript's challenges after every memory commitment); 9 (stopped after post-execution — nothing filled — and resumed after it, post-commit, post-GKR and post-opening, byte-identical); 10's library half (proofs, statement and key round-trip, and the key loads back to itself); step 10's root comparison (the init shard's statement roots scaled by one constant still reconcile, and that shard's proof refuses them exactly while the add/sub shard's accepts); and one-thread against all-threads determinism |

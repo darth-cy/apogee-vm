@@ -15,7 +15,7 @@ use constraints::lookup::{
     beta_power, check_copowers, check_discharge, range_table, row_denominator, table_denominator,
     ChannelSpec,
 };
-use constraints::memory::{frame_queries, frame_with_channels_artifact, Extras};
+use constraints::memory::{frame_queries, frame_with_channels_artifact, FamilySpec};
 use constraints::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
 use field::Fr;
 
@@ -80,7 +80,7 @@ fn the_committed_toy_is_a_circuit_that_discharges_every_lookup() {
     let got: Vec<String> = a.outputs.iter().map(|o| name(*o).to_string()).collect();
     assert_eq!(got, expected);
 
-    // The frame's own obligations come first, then the extras'.
+    // The frame's own obligations come first, then the family spec's.
     let channels: Vec<u32> = a.lookups.iter().map(|l| l.channel).collect();
     assert_eq!(
         channels,
@@ -424,7 +424,7 @@ fn toy_specs() -> Vec<ChannelSpec> {
 // The channel construction rules
 // ---------------------------------------------------------------------------
 
-/// A minimal `Extras` beside the frame: a timestamp obligation over one
+/// A minimal `FamilySpec` beside the frame: a timestamp obligation over one
 /// witness column, and a two-column generic lookup over a committed table.
 /// Each refusal below breaks one rule of it.
 ///
@@ -437,13 +437,13 @@ const GEN_B: u32 = FRAME_WITNESS + 3;
 const MULT_TIMESTAMP: u32 = FRAME_WITNESS + 4;
 const MULT_GENERIC: u32 = FRAME_WITNESS + 5;
 
-fn extras(edit: fn(&mut Extras)) -> Extras {
+fn family_spec(edit: fn(&mut FamilySpec)) -> FamilySpec {
     let boolean = |x: PolyAddress| GateDef::Quadratic {
         constant: lit(0),
         linear: vec![(lit(1), x)],
         products: vec![(Coeff::Literal(Fr::MINUS_ONE), x, x)],
     };
-    let mut e = Extras {
+    let mut e = FamilySpec {
         witness: [
             "value",
             "flag",
@@ -489,14 +489,14 @@ fn extras(edit: fn(&mut Extras)) -> Extras {
     e
 }
 
-fn build(vars: u32, edit: fn(&mut Extras)) -> CircuitArtifact {
-    frame_with_channels_artifact(frame_queries(FAMILY), vars, extras(edit))
+fn build(vars: u32, edit: fn(&mut FamilySpec)) -> CircuitArtifact {
+    frame_with_channels_artifact(frame_queries(FAMILY), vars, family_spec(edit))
 }
 
-/// The control: the minimal extras build a circuit at the toy's height, with a
+/// The control: the minimal family spec builds a circuit at the toy's height, with a
 /// range channel and a table channel side by side.
 #[test]
-fn the_minimal_extras_build_a_circuit() {
+fn the_minimal_family_spec_builds_a_circuit() {
     let a = build(VARS, |_| {});
     assert_eq!(a.validate(), Ok(()));
     assert_eq!(check_discharge(&a, &[]), Ok(()));

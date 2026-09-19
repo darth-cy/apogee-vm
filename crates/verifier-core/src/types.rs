@@ -8,8 +8,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 
-use constants::lookup_channel;
 use constants::memory::TS_BITS;
+use constants::{generic_table, lookup_channel};
 use constraints::lookup::{check_discharge, ChannelSpec};
 use constraints::memory::check_memory;
 use constraints::{family_circuit, CircuitArtifact, FamilyCircuit, PolyAddress, VirtualKind};
@@ -296,6 +296,12 @@ pub struct VerifyingKey {
     /// Program identity's commitment lists, one per config family.
     pub setup_commitments: Vec<Vec<[u8; 64]>>,
     pub srs_verifier: [u8; SRS_VERIFIER_BYTES],
+    /// The packed generic table's commitments, key column first: one set for
+    /// every key, the same at every height, which a family that reads the
+    /// generic channel opens its last setup columns against. Not in identity;
+    /// the SRS digest covers them (`docs/spec/shard-proof.md` §3, §7; S17).
+    pub generic_table: [[u8; 64]; generic_table::WIDTH],
+    /// The digest of `srs_verifier` and `generic_table`.
     pub srs_digest: Fr,
     /// One per config family, in its order.
     pub circuits: Vec<FamilyCircuit>,
@@ -357,6 +363,9 @@ impl VerifyingKey {
             w.g1s(list);
         }
         w.raw(&self.srs_verifier);
+        for point in &self.generic_table {
+            w.raw(point);
+        }
         w.fr(&self.srs_digest);
         w.count(self.circuits.len());
         for c in &self.circuits {
@@ -396,6 +405,10 @@ impl VerifyingKey {
         let setup_commitments = (0..lists).map(|_| r.g1s()).collect::<Read<Vec<_>>>()?;
         let mut srs_verifier = [0u8; SRS_VERIFIER_BYTES];
         srs_verifier.copy_from_slice(r.take(SRS_VERIFIER_BYTES)?);
+        let mut generic_table = [[0u8; 64]; generic_table::WIDTH];
+        for point in generic_table.iter_mut() {
+            point.copy_from_slice(r.take(64)?);
+        }
         let srs_digest = r.fr()?;
         let n = r.count(12)?;
         let mut circuits = Vec::new();
@@ -432,6 +445,7 @@ impl VerifyingKey {
             identity,
             setup_commitments,
             srs_verifier,
+            generic_table,
             srs_digest,
             circuits,
         })
@@ -463,8 +477,11 @@ impl VerifyingKey {
         if identity != self.identity {
             return Err("the identity is not the digest of the key's setup commitments".into());
         }
-        if srs_digest(&self.srs_verifier) != self.srs_digest {
-            return Err("the SRS digest is not the digest of the key's SrsVerifier".into());
+        if srs_digest(&self.srs_verifier, &self.generic_table) != self.srs_digest {
+            return Err(
+                "the SRS digest is not the digest of the key's SrsVerifier and generic table"
+                    .into(),
+            );
         }
         if self.circuits.len() != families.len() {
             return Err("the key has not one circuit per config family".into());
@@ -490,11 +507,35 @@ impl VerifyingKey {
             c.artifact.validate().map_err(|e| format!("{name}: {e}"))?;
             check_memory(&c.artifact).map_err(|e| format!("{name}: {e}"))?;
             check_discharge(&c.artifact, &c.channels).map_err(|e| format!("{name}: {e}"))?;
-            if setup.len() != c.artifact.setup.len() {
+            // A family that reads the generic channel opens the key's generic
+            // table after identity's commitments (`reduce_shard`'s step 11).
+            let generic = if c.reads_generic_table() {
+                generic_table::WIDTH
+            } else {
+                0
+            };
+            if setup.len() + generic != c.artifact.setup.len() {
                 return Err(format!(
-                    "{name}: {} setup commitments for {} setup columns",
+                    "{name}: {} setup commitments and {generic} of the generic table for {} \
+                     setup columns",
                     setup.len(),
                     c.artifact.setup.len()
+                ));
+            }
+            // The registry's own consistency, which no key can break once its
+            // circuit is the registry's: the table is the setup columns right
+            // after identity's, the order the opening lists them in.
+            let after_identity: Vec<PolyAddress> = (0..generic as u32)
+                .map(|j| PolyAddress::Setup(setup.len() as u32 + j))
+                .collect();
+            let named = c
+                .channels
+                .iter()
+                .filter(|spec| spec.channel == lookup_channel::GENERIC)
+                .all(|spec| spec.table == after_identity);
+            if !named {
+                return Err(format!(
+                    "{name}: the circuit does not name the generic table as its last setup columns"
                 ));
             }
         }

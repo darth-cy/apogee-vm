@@ -71,12 +71,12 @@ pub mod memory {                                   // docs/spec/memory.md §2, �
     pub fn read_tuple(query: usize) -> GateDef;    // unmasked, Linear, constant γ_M; term PART_* is that part
     pub fn frame_artifact(queries: &[usize], trace_vars: u32) -> CircuitArtifact;
     pub fn family_frame_artifact(family: u32, trace_vars: u32) -> CircuitArtifact;
-    pub struct Extras { pub witness: Vec<String>, pub setup: Vec<String>,
-                        pub virtuals: Vec<(VirtualKind, String)>,
-                        pub enforcing: Vec<(String, GateDef)>, pub lookups: Vec<LookupExpr>,
-                        pub channels: Vec<lookup::ChannelSpec> }                  // + Default
-    pub fn frame_with_channels_artifact(queries: &[usize], trace_vars: u32, extras: Extras)
-        -> CircuitArtifact;      // S16's shape; panics on an empty extras.channels
+    pub struct FamilySpec { pub witness: Vec<String>, pub setup: Vec<String>,
+                            pub virtuals: Vec<(VirtualKind, String)>,
+                            pub enforcing: Vec<(String, GateDef)>, pub lookups: Vec<LookupExpr>,
+                            pub channels: Vec<lookup::ChannelSpec> }              // + Default
+    pub fn frame_with_channels_artifact(queries: &[usize], trace_vars: u32, family_spec: FamilySpec)
+        -> CircuitArtifact;      // S16's shape; panics on an empty family_spec.channels
     pub fn image_window_artifact(trace_vars: u32) -> CircuitArtifact;  // INIT_TEARDOWN
     pub fn zero_window_artifact(trace_vars: u32) -> CircuitArtifact;   // ZERO_WINDOWS
     pub fn check_memory(a: &CircuitArtifact) -> Result<(), String>;
@@ -84,7 +84,32 @@ pub mod memory {                                   // docs/spec/memory.md §2, �
 
 pub struct FamilyCircuit { pub family: u32, pub artifact: CircuitArtifact,
                            pub channels: Vec<lookup::ChannelSpec> }
+impl FamilyCircuit { pub fn reads_generic_table(&self) -> bool; }   // S17: a GENERIC channel spec
 pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit>;   // the registry
+
+pub mod gadgets {                                  // docs/spec/jump-branch-slt.md §3; S17
+    pub fn is_zero(x: &[(Coeff, PolyAddress)], inv: PolyAddress, z: PolyAddress,
+                   enable: PolyAddress) -> [GateDef; 2];   // x·inv + z − enable, z·x
+    pub struct Comparison { pub prefix: String, pub selector: PolyAddress, pub signed: Vec<PolyAddress>,
+                            pub lhs, pub lhs_hi, pub lhs_sign, pub rhs, pub rhs_hi, pub rhs_sign,
+                            pub lt, pub gap, pub gap_hi: PolyAddress }
+    pub fn comparison_equation(c: &Comparison, word_bits: u32) -> GateDef;
+    pub fn comparison(c: &Comparison) -> (Vec<(String, GateDef)>, Vec<LookupExpr>);
+}
+
+pub mod jump_branch_slt {                          // docs/spec/jump-branch-slt.md; S17
+    pub const DECODED: [PolyAddress; 6];           // W[7..13]: next_pc rs1 rs2 rd imm mask
+    pub const KINDS: [PolyAddress; 12];            // W[13..25]: extra_mask::jump_branch_slt order
+    pub const CMP_RHS: PolyAddress;  RS1_HI;  RS1_SIGN;  CMP_RHS_HI;  CMP_RHS_SIGN;  LT;
+    pub const CMP_GAP: PolyAddress;  CMP_GAP_HI;  EQ;  EQ_INV;  TAKEN;  JALR_DROP;  PC_WRAP;
+    pub const NEXT_PC_HI: PolyAddress;  RD_HI;     // W[25..40]
+    pub const MULTIPLICITIES: [PolyAddress; 4];    // W[40..44]: timestamp, range16, generic, decoder
+    pub const TABLE_WIDTH: usize = 7;              // S[0..7]
+    pub const GENERIC_TABLE: [PolyAddress; 3];     // S[7..10]
+    pub const LEGAL_MASKS: [u32; 12];              // the twelve one-bit masks
+    pub fn artifact(trace_vars: u32) -> CircuitArtifact;
+    pub fn channels() -> Vec<lookup::ChannelSpec>;
+}
 
 pub mod add_sub {                                  // docs/spec/shard-proof.md §8
     pub const DECODED: [PolyAddress; 6];           // W[10..16]: next_pc rs1 rs2 rd imm mask
@@ -160,7 +185,8 @@ pub mod add_sub {                                  // docs/spec/shard-proof.md �
   normative for it.** The frame layout, the AS and Δ tables, the tuple, leaf and gadget
   gates, the names and the three artifact constructors are there and nowhere else: `trace`
   fills the columns, `gkr-verify`'s boundary evaluates `read_tuple` through the kernel, and
-  `kat-gen` writes the constructors' bytes.
+  `kat-gen` writes the constructors' bytes. One exception since S17: the x0 rule's first
+  two gates come from `gadgets::is_zero`, with their bytes unchanged.
 - **One tuple gate for circuits and boundary.** `read_tuple(q)` and the private write tuple
   are the *unmasked* tuple, a `Linear` whose `AS` and `Δ` terms sit on the mask column; with
   mask 1 each is exactly `T`. One private constructor writes both, each part's terms in slot
@@ -185,8 +211,23 @@ pub mod add_sub {                                  // docs/spec/shard-proof.md �
   A verifying key's circuits are byte for byte what it returns for the key's families and
   heights, so a circuit is a protocol constant given a family and a height; a later family
   is one arm here and one fill in `crates/prover`. It returns `None` for a family no stage
-  has built, above `MAX_TRACE_VARS`, and for `ADD_SUB_LUI_AUIPC` below 19 variables, the
-  timestamp channel's bound. The two window families have no channels.
+  has built, above `MAX_TRACE_VARS`, and for `ADD_SUB_LUI_AUIPC` and `JUMP_BRANCH_SLT`
+  below 19 variables, the timestamp channel's bound. The two window families have no
+  channels.
+- **A circuit that reads the `GENERIC` channel names the packed table as its last three
+  setup columns** (S17). `FamilyCircuit::reads_generic_table` is whether any channel spec
+  is `GENERIC`. At S17 only `JUMP_BRANCH_SLT` reads it: its `S[0..7]` are identity's
+  decoded table, and its `S[7..10]` (`jump_branch_slt::GENERIC_TABLE`) are the packed
+  table. A shard of such a family opens those three columns against the verifying key's
+  one `generic_table`, which the key's SRS digest covers and identity does not;
+  `VerifyingKey::check` holds a registered circuit to this order
+  (`docs/spec/shard-proof.md` §7.2).
+- **A family's sub-circuit is a `FamilySpec`, and a function that builds one is named
+  `family_spec`** (the owner's naming, S17): the witness and setup columns, virtual
+  tables, enforcing gates, lookups and channels a family adds beside its memory frame,
+  collected once and handed to `frame_with_channels_artifact`. `add_sub` builds one
+  inline, `jump_branch_slt` behind the private `family_spec` function its `assemble` seam
+  takes; a later family names its own the same way. S15 called the type `Extras`.
 - **`add_sub` is §8 as data**, S15's `frame_with_channels_artifact` over the family's seven
   frame queries plus 21 witness columns, the 7-column decoded table as `S`, 31 enforcing
   gates, five lookups and three channels. Its gates are the family's whole semantics:
@@ -197,7 +238,22 @@ pub mod add_sub {                                  // docs/spec/shard-proof.md �
   boolean `pc_wrap`. A `const` assertion pins `system_code::ECALL == 0`, so a renumbering
   fails the build, and `artifact` asserts each channel's obligation count — 14, 4, 1 —
   when it builds the circuit, so a dropped obligation panics at construction.
-
+- **`jump_branch_slt` is `docs/spec/jump-branch-slt.md` as data** (S17): the four-query
+  frame plus 37 witness columns, S11's seven-column decoded table and the packed generic
+  table as `S`, 42 enforcing gates, 22 lookups and four channels. Its semantics are linear
+  forms over twelve one-hot kind bits read from S11's unchanged table; one comparison
+  (`gadgets::comparison`) feeds both the branches and the `slt` kinds; `eq` is
+  `gadgets::is_zero` enabled by `m_pc`; `taken` is a committed bit; `next_pc` carries one
+  ungated wrap and a `jalr` dropped bit, and every `next_pc` is range-checked **even**, so no
+  row of the family writes `HALT_PC`. `artifact` asserts each channel's obligation count —
+  8, 11, 2, 1 — and runs `lookup::check_copowers` over `next_pc`, whose evenness obligation
+  halves it.
+- **`gadgets` is S17's pair of reusable constructors, frozen for S18 and S19.** `is_zero`
+  is `x·inv + z − enable = 0, z·x = 0`, and S14's x0 rule is built on it with its bytes
+  unchanged (the frame fixtures hold that); `comparison` is the ungated degree-2 ordering
+  equation, `lt`'s booleanity, three 16+16 range pairs and two `U16GetSign` lookups, and
+  `comparison_equation` exposes the equation at any width so the exhaustive reduced-width
+  check evaluates the gate itself.
 - **The window address step is `WORD_BYTES`, not `TS_STEP`.** Both are 4; one is bytes per
   RAM word, the other timestamps per cycle.
 
@@ -220,10 +276,12 @@ them, CI regenerates and diffs them, and `tests/memory.rs` pins their SHA-256 an
 each to its constructor's bytes. The leaves' independent description is the plain
 arithmetic of `crates/gkr/tests/memory.rs`.
 
-`tests/vectors/add_sub.bin`: S16's `add_sub::artifact` at `trace_vars` 22, the family's
-default height. `cargo run -p kat-gen -- family` rewrites it, kat-gen's own unit test holds
-it to the constructor, CI regenerates and diffs it, and `crates/checker/tests/add_sub.rs`
-pins its SHA-256 and holds its gates to §8's table.
+`tests/vectors/add_sub.bin` and `tests/vectors/jump_branch_slt.bin`: S16's
+`add_sub::artifact` and S17's `jump_branch_slt::artifact`, each at `trace_vars` 22, the
+family's default height. `cargo run -p kat-gen -- family` rewrites both, kat-gen's own unit
+test holds each to its constructor, CI regenerates and diffs them, and
+`crates/checker/tests/add_sub.rs` and `jump_branch_slt.rs` pin their SHA-256 and hold their
+gates to `docs/spec/shard-proof.md` §8 and `docs/spec/jump-branch-slt.md`.
 
 ## Tests
 | File | Covers |
@@ -231,6 +289,8 @@ pins its SHA-256 and holds its gates to §8's table.
 | `tests/wire.rs` | both fixtures round-trip byte for byte; a format version other than 1 refused before decoding; `VirtualKind`'s tags and `V[ram_live]`'s address and name; a lookup against its hand-written bytes; `Quadratic` against its hand-written bytes for no terms, linear only, products only and both, and each malformed `Quadratic` refused; every refusal of the reader; every single-bit flip of a fixture decodes or errors, never panics |
 | `tests/laws.rs` | one mutation of the toy per rule, each refused with its error — structured variants matched whole, prose details by the rule and the address or name they carry — beside the toy validating; each lookup rule broken alone, refused naming the lookup, beside one and two lawful lookups and an `M` selector; the degree-3 gate; `Quadratic`'s degree, its identically zero and unread-column cases, Law 4 against an `AffineProduct` relation, and its refusal to inline; cache-free inlining and its refusals |
 | `tests/memory.rs` | the three fixtures pinned and equal to their constructors; every constructor validating and passing `check_memory` at 12 and 22; two roots named `read_root`, `write_root`, an all-zero padding row, `trace_vars` halving lists; every read tuple's parts at their `PART_*` positions; the frame's layout, leaf order, widths and enforcing gates by name; its 16 obligations whole, `gap_lo_pc`'s constant `−1`; acceptance 11 exhaustively at reduced width, 5-bit chunks over a 10-bit clock, each query's own `gap_lo` expression read from the frame with its high chunk at 0, every `(cycle, read_ts)` pair admitted exactly when `read_ts < 4·cycle + Δ`; §8's pinned read sets; `check_memory` refusing a leaf fed from `W` (acceptance 9); the forward-provenance counterexample as a producing and as an enforcing gate of list 1, each beside its lawful control; a slot and a `W` column meeting through two cached entries, a cached entry itself carrying both, and a slot over a cached entry; a frame without `pc_mask_boolean` and one without `rd_mask_boolean`, whose mask another gate still reads; a window leaf masked by `S[0]` and by `V[row]`; a global slot over an inner column; and a write root read from a `W` column alone, which provenance does not see — each mutant still passing `validate`, each test run against the mutant it names |
+| `src/gadgets.rs` (unit) | two range halfwords are the comparison's 32-bit word; the comparison returns two gates and eight lookups, each sign lookup the generic table's width; the equation built at 1 and 32 bits and refused at 0 and 33; a `const` assertion holds `U16GetSign`'s keys above AND's |
+| `src/jump_branch_slt.rs` (unit) | the legal masks are twelve distinct single bits; through the private `assemble` seam, the honest family spec gives `artifact`, and the build is refused for an obligation dropped (the channel count), for `next_pc`'s direct bound replaced (the copower check) and for a gate nonzero on the all-zero row |
 | `src/add_sub.rs` (unit) | the three system codes pairwise distinct, which is what lets `system_split`, `ecall_code` and `fence_code` refuse every `ebreak` row; the gates themselves are `crates/checker/tests/add_sub.rs`' |
 | `src/memory.rs` (unit) | acceptance 12: the frame with one obligation dropped before the artifact is written panics at the count assertion |
 | `tests/audit.rs` | every `GateDef` variant, all six, emitted across both compilations, counts written by hand; the catalogue; the two compilations' identical shape |

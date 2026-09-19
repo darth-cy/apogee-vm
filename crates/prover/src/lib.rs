@@ -28,6 +28,7 @@ use gkr::{forward, prove, BaseLayer};
 use loader::ProgramImage;
 use pcs::{batch_open, commit, MercuryCommitment};
 use poly::MultilinearPoly;
+use program::lookup_tables::generic_commitments;
 use program::{setup_commitments, DecodedTables, FamilyId};
 use rayon::prelude::*;
 use srs::Srs;
@@ -131,10 +132,11 @@ pub struct ProverSetup {
 
 impl ProverSetup {
     /// Register every family of `program`'s config and build its verifying
-    /// key over `srs`: identity's setup commitments, the SRS digest, and every
-    /// circuit, held to the key's own load rules (`docs/spec/shard-proof.md`
-    /// §7.2) before it is returned. `srs` holds at least as many powers as the
-    /// tallest family has rows.
+    /// key over `srs`: identity's setup commitments, the generic table's, the
+    /// SRS digest over both SRS constants, and every circuit, held to the key's
+    /// own load rules (`docs/spec/shard-proof.md` §7.2) before it is returned.
+    /// `srs` holds at least as many powers as the tallest family has rows, and
+    /// at least the generic table's `2^18`.
     pub fn new(program: Program, srs: Srs) -> Result<ProverSetup, ProverError> {
         let families = register(&program.config)?;
         let setup = setup_commitments(&program.image, &program.tables, &program.config, &srs);
@@ -142,6 +144,7 @@ impl ProverSetup {
             .iter()
             .map(|points| points.iter().map(G1Affine::to_bytes).collect())
             .collect();
+        let generic_table = generic_commitments(&srs).map(|p| p.to_bytes());
         let code_version = program.tables.code_version;
         let srs_verifier = verifier::encode_srs_verifier(&srs.verifier());
         let vk = VerifyingKey {
@@ -151,7 +154,8 @@ impl ProverSetup {
             identity: identity_digest(code_version, &program.config, program.image.entry, &setup),
             setup_commitments: setup,
             srs_verifier,
-            srs_digest: srs_digest(&srs_verifier),
+            generic_table,
+            srs_digest: srs_digest(&srs_verifier, &generic_table),
             circuits: families.iter().map(|f| f.circuit.clone()).collect(),
         };
         vk.check().map_err(ProverError::Key)?;
@@ -489,6 +493,9 @@ impl ProvingContext<'_> {
             self.global.statement.memory_commitments[self.position(family, index)].clone();
         encoded.extend_from_slice(&witness_commitments);
         encoded.extend_from_slice(&self.setup.vk.setup_commitments[family_index]);
+        if reg.circuit.reads_generic_table() {
+            encoded.extend_from_slice(&self.setup.vk.generic_table);
+        }
         let cms: Vec<MercuryCommitment> = encoded
             .iter()
             .map(|b| MercuryCommitment(G1Affine::from_bytes(b).expect("the prover's own point")))

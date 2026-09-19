@@ -667,3 +667,25 @@ fn addsub_exits_with_its_result() {
     );
     assert!(run.stdout.is_empty(), "addsub commits nothing to fd 1");
 }
+
+/// `guests/control`: S17's guest, its own `_start` like `addsub`'s.
+///
+/// It reads nothing and writes nothing, and checks every jump, branch and
+/// comparison it makes itself: the exit status is the number of checks, 16,
+/// or 1 from its `fail` path. That the register file matches the emulator's
+/// at every instruction is `crates/emulator/tests/differential.rs`'s claim.
+#[test]
+#[ignore = "needs a Linux host with qemu-user; run with --ignored"]
+fn control_passes_its_checks() {
+    let qemu = qemu();
+
+    let run = execute(&qemu, "control", "control", &[], None);
+    assert_eq!(
+        run.status,
+        Some(16),
+        "control exited {:?}: {}",
+        run.status,
+        run.stderr
+    );
+    assert!(run.stdout.is_empty(), "control commits nothing to fd 1");
+}

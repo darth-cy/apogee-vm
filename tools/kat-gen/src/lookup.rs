@@ -30,7 +30,7 @@
 use constants::{family, lookup_channel};
 use constraints::lookup::{range_table, ChannelSpec};
 use constraints::memory::{
-    frame_queries, frame_with_channels_artifact, Extras, FIELD_MASK, FIELD_READ_VALUE,
+    frame_queries, frame_with_channels_artifact, FamilySpec, FIELD_MASK, FIELD_READ_VALUE,
 };
 use constraints::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
 use field::Fr;
@@ -256,7 +256,7 @@ pub fn toy() -> CircuitArtifact {
     frame_with_channels_artifact(
         frame_queries(FAMILY),
         TRACE_VARS,
-        Extras {
+        FamilySpec {
             witness,
             setup,
             virtuals: vec![

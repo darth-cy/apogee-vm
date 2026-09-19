@@ -33,6 +33,7 @@ use constants::{address_space, challenge_slot, family, lookup_channel, memory};
 use field::Fr;
 
 use crate::build;
+use crate::gadgets;
 use crate::lookup;
 use crate::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
 
@@ -304,27 +305,16 @@ fn write_back(at: usize) -> GateDef {
 /// z − z·z = 0                      rd_is_zero_boolean
 /// write_value − sel + z·sel = 0    rd_write_masked
 /// ```
+///
+/// The first two are `gadgets::is_zero` over `addr`, enabled by the mask.
 fn x0_gates(at: usize, width: usize) -> [(&'static str, GateDef); 4] {
     let (addr, m) = (frame(at, FIELD_ADDR), frame(at, FIELD_MASK));
     let (inv, z, sel) = (rd_inv(width), rd_is_zero(width), rd_selected(width));
     let minus = Coeff::Literal(Fr::MINUS_ONE);
+    let [inverse, at_nonzero] = gadgets::is_zero(&[(lit(1), addr)], inv, z, m);
     [
-        (
-            "rd_is_zero_inverse",
-            GateDef::Quadratic {
-                constant: lit(0),
-                linear: vec![(lit(1), z), (minus, m)],
-                products: vec![(lit(1), addr, inv)],
-            },
-        ),
-        (
-            "rd_is_zero_at_nonzero",
-            GateDef::Quadratic {
-                constant: lit(0),
-                linear: vec![],
-                products: vec![(lit(1), addr, z)],
-            },
-        ),
+        ("rd_is_zero_inverse", inverse),
+        ("rd_is_zero_at_nonzero", at_nonzero),
         ("rd_is_zero_boolean", booleanity(z)),
         (
             "rd_write_masked",
@@ -394,7 +384,12 @@ fn gap_lookups(query: usize, at: usize) -> [LookupExpr; 2] {
 /// refuses it, or if `queries` is not the pc query followed by a strictly
 /// ascending subset of the table.
 pub fn frame_artifact(queries: &[usize], trace_vars: u32) -> CircuitArtifact {
-    frame_body(queries, trace_vars, frame_gaps(queries), Extras::default())
+    frame_body(
+        queries,
+        trace_vars,
+        frame_gaps(queries),
+        FamilySpec::default(),
+    )
 }
 
 /// [`frame_artifact`] over [`frame_queries`] of `family`: the frame that
@@ -403,7 +398,7 @@ pub fn family_frame_artifact(family: u32, trace_vars: u32) -> CircuitArtifact {
     frame_artifact(frame_queries(family), trace_vars)
 }
 
-/// What a family's circuit carries beside its memory frame: the committed
+/// A family's own sub-circuit, beside its memory frame: the committed
 /// columns, virtual tables, enforcing gates and lookups its instruction
 /// constraints and its lookup channels add, and the channels that discharge
 /// them.
@@ -411,10 +406,10 @@ pub fn family_frame_artifact(family: u32, trace_vars: u32) -> CircuitArtifact {
 /// The frame's own columns come first in every subtree, so `witness` starts at
 /// `W[w + 3]` (or `W[w]` for a frame without an `rd` query) and `setup` at
 /// `S[0]`. The frame's `2w` gap obligations come first in the lookup list, so
-/// `lookups` follows them. An empty `Extras` is [`frame_artifact`], which is
+/// `lookups` follows them. An empty `FamilySpec` is [`frame_artifact`], which is
 /// exactly S14's frame.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Extras {
+pub struct FamilySpec {
     pub witness: Vec<String>,
     pub setup: Vec<String>,
     pub virtuals: Vec<(VirtualKind, String)>,
@@ -425,16 +420,16 @@ pub struct Extras {
 
 /// An execution family's circuit: `docs/spec/memory.md` §2's frame over
 /// `queries`, whose read and write leaves feed two product trees, plus
-/// `extras`, whose lookups feed one fraction tree per channel
+/// `family_spec`, whose lookups feed one fraction tree per channel
 /// (`docs/spec/lookup.md` §6).
 ///
 /// The output map is `[read_root, write_root]` at `READ_ROOT` and `WRITE_ROOT`,
-/// then each channel's `(num, den)` root pair in `extras.channels` order.
+/// then each channel's `(num, den)` root pair in `family_spec.channels` order.
 /// Validated, held to [`check_memory`] and to
 /// [`lookup::check_discharge`]; panics if any refuses it, or if `queries` is
 /// not the pc query followed by a strictly ascending subset of the table.
 ///
-/// **`extras.channels` must not be empty.** A frame carries its own `2w` gap
+/// **`family_spec.channels` must not be empty.** A frame carries its own `2w` gap
 /// obligations whatever a caller adds, so a channel list of nothing is a
 /// circuit every one of whose obligations is undischarged. The one artifact of
 /// that shape is S14's [`frame_artifact`], a *component* whose discharge S15
@@ -443,15 +438,15 @@ pub struct Extras {
 pub fn frame_with_channels_artifact(
     queries: &[usize],
     trace_vars: u32,
-    extras: Extras,
+    family_spec: FamilySpec,
 ) -> CircuitArtifact {
     assert!(
-        !extras.channels.is_empty(),
+        !family_spec.channels.is_empty(),
         "memory frame: no channel, and a frame's own {} gap obligations would be discharged \
          by nothing; S14's bare frame is `frame_artifact`",
         2 * queries.len()
     );
-    frame_body(queries, trace_vars, frame_gaps(queries), extras)
+    frame_body(queries, trace_vars, frame_gaps(queries), family_spec)
 }
 
 /// A frame's own obligations: two per read (`docs/spec/memory.md` §2.4).
@@ -470,7 +465,7 @@ fn frame_body(
     queries: &[usize],
     trace_vars: u32,
     gaps: Vec<LookupExpr>,
-    extras: Extras,
+    family_spec: FamilySpec,
 ) -> CircuitArtifact {
     assert!(
         queries.first() == Some(&PC)
@@ -496,7 +491,7 @@ fn frame_body(
             witness.push(String::from(name));
         }
     }
-    witness.extend(extras.witness);
+    witness.extend(family_spec.witness);
 
     assert_eq!(
         gaps.len(),
@@ -529,8 +524,8 @@ fn frame_body(
             enforcing.push((String::from(name), gate));
         }
     }
-    enforcing.extend(extras.enforcing);
-    lookups.extend(extras.lookups);
+    enforcing.extend(family_spec.enforcing);
+    lookups.extend(family_spec.lookups);
 
     // The row-wise lists pair neighbours, so each side of the tree is a power
     // of two. A family whose query count is not one pads with leaves that are
@@ -551,12 +546,12 @@ fn frame_body(
 
     assemble(
         trace_vars,
-        [columns, witness, extras.setup],
-        extras.virtuals,
+        [columns, witness, family_spec.setup],
+        family_spec.virtuals,
         [reads, writes],
         enforcing,
         lookups,
-        &extras.channels,
+        &family_spec.channels,
     )
 }
 
@@ -894,11 +889,11 @@ mod tests {
             lookups.extend(gap_lookups(query, at));
         }
         assert_eq!(
-            frame_body(queries, 4, lookups.clone(), Extras::default()),
+            frame_body(queries, 4, lookups.clone(), FamilySpec::default()),
             frame_artifact(queries, 4)
         );
         lookups.pop();
-        frame_body(queries, 4, lookups, Extras::default());
+        frame_body(queries, 4, lookups, FamilySpec::default());
     }
 
     /// The unmasked write tuple, which only the frame's leaves use, is the

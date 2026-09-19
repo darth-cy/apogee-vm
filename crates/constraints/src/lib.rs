@@ -22,6 +22,8 @@ use field::Fr;
 
 pub mod add_sub;
 mod build;
+pub mod gadgets;
+pub mod jump_branch_slt;
 mod laws;
 pub mod lookup;
 pub mod memory;
@@ -59,29 +61,41 @@ pub struct FamilyCircuit {
     pub channels: Vec<lookup::ChannelSpec>,
 }
 
+impl FamilyCircuit {
+    /// Whether the circuit reads the generic channel, and so names the packed
+    /// generic table as its last `constants::generic_table::WIDTH` setup
+    /// columns, which a shard opens against the verifying key's generic-table
+    /// commitments (`docs/spec/jump-branch-slt.md` §6).
+    pub fn reads_generic_table(&self) -> bool {
+        self.channels
+            .iter()
+            .any(|spec| spec.channel == constants::lookup_channel::GENERIC)
+    }
+}
+
 /// The circuit that proves `family` over `2^trace_vars` rows, or `None` for a
 /// family no stage has built yet, or a height it cannot be built at.
 ///
 /// **The one registry of circuits**, `docs/spec/shard-proof.md` §11: a
 /// verifying key's circuits must be byte for byte what this returns, and a
 /// later family is added here, with one constructor, and nowhere in the
-/// verifier. `ADD_SUB_LUI_AUIPC` needs 19 variables for its timestamp
-/// channel (`docs/spec/lookup.md` §3); the two RAM window families take any
-/// height up to `MAX_TRACE_VARS`.
+/// verifier. `ADD_SUB_LUI_AUIPC` and `JUMP_BRANCH_SLT` need 19 variables for
+/// their timestamp channel (`docs/spec/lookup.md` §3) — which also holds the
+/// generic table's `2^17 + 1` rows the second reads; the two RAM window
+/// families take any height up to `MAX_TRACE_VARS`.
 pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
     use constants::family as f;
     if trace_vars > MAX_TRACE_VARS {
         return None;
     }
+    let timestamp = constants::lookup_channel::BITS[constants::lookup_channel::TIMESTAMP as usize];
     let (artifact, channels) = match family {
-        f::ADD_SUB_LUI_AUIPC => {
-            let bits =
-                constants::lookup_channel::BITS[constants::lookup_channel::TIMESTAMP as usize];
-            if trace_vars < bits {
-                return None;
-            }
-            (add_sub::artifact(trace_vars), add_sub::channels())
-        }
+        f::ADD_SUB_LUI_AUIPC | f::JUMP_BRANCH_SLT if trace_vars < timestamp => return None,
+        f::ADD_SUB_LUI_AUIPC => (add_sub::artifact(trace_vars), add_sub::channels()),
+        f::JUMP_BRANCH_SLT => (
+            jump_branch_slt::artifact(trace_vars),
+            jump_branch_slt::channels(),
+        ),
         f::INIT_TEARDOWN => (memory::image_window_artifact(trace_vars), Vec::new()),
         f::ZERO_WINDOWS => (memory::zero_window_artifact(trace_vars), Vec::new()),
         _ => return None,

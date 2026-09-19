@@ -146,6 +146,10 @@ on every row. No transfer row is provable, so `is_transfer` does not exist yet; 
 I/O-binding stage owes it. Every other execution family owes this section at its own stage,
 and until then has no circuit, so no statement containing it can be proved.
 
+**Status at S17.** `JUMP_BRANCH_SLT` discharges this section for its own rows
+(`docs/spec/jump-branch-slt.md` §4.1): `m_pc` is the decoder lookup's selector, and `rs1`,
+`rs2` and `rd` are each `m_pc` times the kind's use of them — a branch has no `rd` query.
+
 ### 2.2 The leaves
 
 For query `q` with mask `m`, AS `s`, slot `Δ`:
@@ -444,6 +448,13 @@ the decoded fall-through, with a boolean wrap its range check forces to 0
 (`docs/spec/shard-proof.md` §8.4). `jalr`'s bit and the jumps' and branches' wraps are the
 jump family's stage's, and `is_transfer` the I/O-binding stage's.
 
+**Status at S17.** The jump family's share is done (`docs/spec/jump-branch-slt.md` §4.3,
+§4.4): one boolean wrap on whichever sum `next_pc` is, a boolean dropped bit on a `jalr`
+row, and — beyond this list — every `next_pc` the family writes range-checked **even**.
+The dropped bit alone does not clear bit 0: a `jalr` whose `rs1 + imm` is 1 could keep it
+and write `HALT_PC`, so the even check is what makes "every masked `jalr` target is even",
+above, a constraint rather than an intention.
+
 ---
 
 ## 6. Binding
@@ -471,6 +482,12 @@ Both new items must precede the squeeze. A window list chosen after the challeng
 over up to `2^127` lists at `h = 2^22` — void as a bound at `h ≤ 2^20`. A final value chosen
 after them is solved outright: `v = (target − γ_M − 1 − α_addr·r − α_ts·t_r)/α_val` reconciles
 any trace.
+
+`[SRS digest]` is S16's `SRS_DIGEST` message, G2 of `docs/spec/shard-proof.md` §2, carrying
+the digest of its §3. Since S17 that digest is taken over the packed generic table's three
+commitments as well as the `SrsVerifier`, so that table, which identity does not bind, is
+fixed before the squeeze too. The order above gains no message for it
+(`docs/spec/jump-branch-slt.md` §6).
 
 ### 6.2 Program identity (amends S11's recipe)
 
@@ -560,7 +577,8 @@ No S14 artifact uses `RANGE16`.
   needs a slot as well, does not see a root built from `W` columns alone. Neither root's cone
   reads a `W` column;
 - **a global slot over anything but `M`, `S` and `V`** — where `S` is admitted only because a
-  setup column is bound by identity before the challenges: a gate with a global-slot
+  setup column is bound before the challenges: by identity, or, for the packed generic
+  table's columns since S17, by the SRS digest (§6.1). A gate with a global-slot
   coefficient reads no `W` column, no inner column and no cached entry;
 - **unconstrained masks**: a leaf's mask that is a committed column — `M`, `W` or `S` — with
   no enforcing gate `m − m·m` in gate list 0, or that is any virtual column but `V[ram_live]`,
@@ -623,6 +641,8 @@ transcript and the boundary decoder; the key's identity recomputation and the op
 `S[0]`; and the zero-root refusal, which is `reconciles`' nonzero half and which step 10 of
 `verify_shard` runs. Still owed: the masks and the sentinel for every other family, at
 each family's stage, and each access's byte address, at the memory families' stage.
+
+**Status at S17.** Discharged: the masks and the sentinel for `JUMP_BRANCH_SLT` (§2.1, §5).
 
 S20 reconciles every shard.
 
