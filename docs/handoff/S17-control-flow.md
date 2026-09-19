@@ -315,6 +315,17 @@ File paths are under `crates/`. Every test listed passes; the ones marked *defer
    that breaks it is refused when a key is built.
 10. **`jump_branch_slt::artifact` asserts the all-zero row is valid**, which the assembly
     only records; the prover pads with all-zero rows.
+11. **A family's sub-circuit is a `FamilySpec`, not an `Extras`** — the owner's naming,
+    asked for after this PR opened, and the convention for every sub-circuit a later
+    stage factors out: a name that says what the thing defines. S15's `memory::Extras` is
+    `memory::FamilySpec`, and the private `jump_branch_slt::extras` is `family_spec`; the
+    name now says the function defines the family's own circuit spec rather than
+    leftovers beside the frame. It is a rename and nothing else: the fields, the
+    constructor, every gate and every fixture byte are unchanged, which `kat-gen`'s clean
+    diff holds. It reaches
+    `memory`, `add_sub`, `jump_branch_slt`, `gadgets`' doc, S15's lookup suite and its
+    `kat-gen` toy, `constraint-manifest.md` §3.1 and §4.1, both `CLAUDE.md`s, and three
+    notes in S15's own handoff.
 
 ---
 
@@ -497,6 +508,13 @@ S16's three are unchanged in their results under the new key and digest; the tam
 is slower and larger with S17's twins, which re-prove a three-shard statement each. All
 four stay commented out of `.github/workflows/ci.yml` under `# DEFERRED:` lines, master
 rule 7: both execution shards are `2^20` rows, the timestamp channel's floor.
+
+**Re-run after the `FamilySpec` rename** (deviation 11), which changed no byte any of them
+reads: all five deferred suites again, same results — `control` 2 passed (99 s, 10.10 GB),
+`acceptance` 7 passed (344 s, 8.71 GB), `cli` 1 passed (21 s, 8.57 GB), `tamper` 7 passed
+(797 s, 11.27 GB), S15's `logup` 9 passed (198 s, 18.75 GB) — beside the 833 workspace
+tests, `fmt` and `clippy` in all four workspaces, the `riscv32imac` build, and `kat-gen`
+with a clean fixture diff, `jump_branch_slt.bin` still `99094d63…`.
 
 **Measurements.** `control`'s statement — add/sub and jump/branch/slt at `2^20`,
 `INIT_TEARDOWN` at `2^16`, the toy SRS — proves in about 40 s on 18 cores, setup

@@ -550,6 +550,13 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   becomes provable with one arm there and one fill in `prover::family_fill`, and nothing
   else in the prover or the verifier changes — S17's jump family was exactly that, plus
   the generic table's binding below.
+- **A family's sub-circuit is a `constraints::memory::FamilySpec`** (owner's naming, S17):
+  what a family adds beside its memory frame — witness and setup columns, virtual tables,
+  enforcing gates, lookups and channels — collected once and handed to
+  `frame_with_channels_artifact`. A family that factors that collection into a function of
+  its own calls it `family_spec`: `add_sub` builds its spec inline, `jump_branch_slt`
+  behind a private `family_spec` its `assemble` seam takes. Every sub-circuit a later
+  stage factors out is named the same way. S15 called the type `Extras`.
 - **The packed generic table is bound through the SRS digest, not identity** (owner's
   decisions: S16 answer 8, and at S17 "fold into the SRS digest"). Every `VerifyingKey`
   carries exactly one `generic_table`, the table's three commitments, whether or not any

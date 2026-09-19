@@ -31,7 +31,7 @@ use field::Fr;
 use crate::gadgets::{comparison, is_zero, Comparison};
 use crate::lookup::{check_copowers, ChannelSpec};
 use crate::memory::{
-    frame, frame_queries, frame_with_channels_artifact, rd_selected, Extras, FIELD_ADDR,
+    frame, frame_queries, frame_with_channels_artifact, rd_selected, FamilySpec, FIELD_ADDR,
     FIELD_MASK, FIELD_READ_VALUE, FIELD_WRITE_VALUE, PC, RD, RS1, RS2,
 };
 use crate::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
@@ -302,11 +302,12 @@ fn the_comparison() -> Comparison {
 /// obligation scales by `1/2`, lacks its direct range check, if a gate is
 /// nonzero on the all-zero padding row, and on every refusal of the assembly.
 pub fn artifact(trace_vars: u32) -> CircuitArtifact {
-    assemble(trace_vars, extras())
+    assemble(trace_vars, family_spec())
 }
 
-/// The family's columns, gates, lookups and channels, before the assembly.
-fn extras() -> Extras {
+/// The family's sub-circuit: its columns, gates, lookups and channels,
+/// before the assembly onto the frame.
+fn family_spec() -> FamilySpec {
     assert_eq!(
         frame_queries(family::JUMP_BRANCH_SLT),
         &QUERIES,
@@ -511,7 +512,7 @@ fn extras() -> Extras {
         tuple: decode,
     });
 
-    Extras {
+    FamilySpec {
         witness,
         setup,
         virtuals: vec![
@@ -524,10 +525,10 @@ fn extras() -> Extras {
     }
 }
 
-/// `extras` over the family's frame at `trace_vars`, held to the checks
+/// `family_spec` over the family's frame at `trace_vars`, held to the checks
 /// [`artifact`] documents; a seam so a test can hand it a broken circuit.
-fn assemble(trace_vars: u32, extras: Extras) -> CircuitArtifact {
-    let a = frame_with_channels_artifact(&QUERIES, trace_vars, extras);
+fn assemble(trace_vars: u32, family_spec: FamilySpec) -> CircuitArtifact {
+    let a = frame_with_channels_artifact(&QUERIES, trace_vars, family_spec);
     // Every obligation is built above and then handed over, so a count is
     // what shows none was dropped on the way (S14 must-be-exact 5, S15's
     // per-channel form).
@@ -601,10 +602,10 @@ mod tests {
         }
     }
 
-    /// The honest extras assemble, at the lowest height the registry builds.
+    /// The honest family spec assembles, at the lowest height the registry builds.
     #[test]
     fn the_seam_assembles_the_family() {
-        assert_eq!(assemble(19, extras()), artifact(19));
+        assert_eq!(assemble(19, family_spec()), artifact(19));
     }
 
     /// An obligation dropped on the way to the assembly is refused by its
@@ -612,7 +613,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "channel `range16` carries 10 obligations, not 11")]
     fn a_dropped_obligation_fails_the_build() {
-        let mut e = extras();
+        let mut e = family_spec();
         e.lookups.retain(|l| l.name != "rd_hi_range");
         assemble(20, e);
     }
@@ -623,7 +624,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "copower pairing")]
     fn next_pc_without_its_direct_bound_fails_the_build() {
-        let mut e = extras();
+        let mut e = family_spec();
         let next_pc = frame(SLOT_PC, FIELD_WRITE_VALUE);
         let l = e
             .lookups
@@ -639,7 +640,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "a gate is nonzero on the all-zero row")]
     fn a_gate_nonzero_on_the_zero_row_fails_the_build() {
-        let mut e = extras();
+        let mut e = family_spec();
         e.enforcing.push((
             "taken_is_one".into(),
             GateDef::Linear {

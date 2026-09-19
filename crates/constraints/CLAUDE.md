@@ -71,12 +71,12 @@ pub mod memory {                                   // docs/spec/memory.md §2, �
     pub fn read_tuple(query: usize) -> GateDef;    // unmasked, Linear, constant γ_M; term PART_* is that part
     pub fn frame_artifact(queries: &[usize], trace_vars: u32) -> CircuitArtifact;
     pub fn family_frame_artifact(family: u32, trace_vars: u32) -> CircuitArtifact;
-    pub struct Extras { pub witness: Vec<String>, pub setup: Vec<String>,
-                        pub virtuals: Vec<(VirtualKind, String)>,
-                        pub enforcing: Vec<(String, GateDef)>, pub lookups: Vec<LookupExpr>,
-                        pub channels: Vec<lookup::ChannelSpec> }                  // + Default
-    pub fn frame_with_channels_artifact(queries: &[usize], trace_vars: u32, extras: Extras)
-        -> CircuitArtifact;      // S16's shape; panics on an empty extras.channels
+    pub struct FamilySpec { pub witness: Vec<String>, pub setup: Vec<String>,
+                            pub virtuals: Vec<(VirtualKind, String)>,
+                            pub enforcing: Vec<(String, GateDef)>, pub lookups: Vec<LookupExpr>,
+                            pub channels: Vec<lookup::ChannelSpec> }              // + Default
+    pub fn frame_with_channels_artifact(queries: &[usize], trace_vars: u32, family_spec: FamilySpec)
+        -> CircuitArtifact;      // S16's shape; panics on an empty family_spec.channels
     pub fn image_window_artifact(trace_vars: u32) -> CircuitArtifact;  // INIT_TEARDOWN
     pub fn zero_window_artifact(trace_vars: u32) -> CircuitArtifact;   // ZERO_WINDOWS
     pub fn check_memory(a: &CircuitArtifact) -> Result<(), String>;
@@ -222,6 +222,12 @@ pub mod add_sub {                                  // docs/spec/shard-proof.md �
   one `generic_table`, which the key's SRS digest covers and identity does not;
   `VerifyingKey::check` holds a registered circuit to this order
   (`docs/spec/shard-proof.md` §7.2).
+- **A family's sub-circuit is a `FamilySpec`, and a function that builds one is named
+  `family_spec`** (the owner's naming, S17): the witness and setup columns, virtual
+  tables, enforcing gates, lookups and channels a family adds beside its memory frame,
+  collected once and handed to `frame_with_channels_artifact`. `add_sub` builds one
+  inline, `jump_branch_slt` behind the private `family_spec` function its `assemble` seam
+  takes; a later family names its own the same way. S15 called the type `Extras`.
 - **`add_sub` is §8 as data**, S15's `frame_with_channels_artifact` over the family's seven
   frame queries plus 21 witness columns, the 7-column decoded table as `S`, 31 enforcing
   gates, five lookups and three channels. Its gates are the family's whole semantics:
@@ -284,7 +290,7 @@ gates to `docs/spec/shard-proof.md` §8 and `docs/spec/jump-branch-slt.md`.
 | `tests/laws.rs` | one mutation of the toy per rule, each refused with its error — structured variants matched whole, prose details by the rule and the address or name they carry — beside the toy validating; each lookup rule broken alone, refused naming the lookup, beside one and two lawful lookups and an `M` selector; the degree-3 gate; `Quadratic`'s degree, its identically zero and unread-column cases, Law 4 against an `AffineProduct` relation, and its refusal to inline; cache-free inlining and its refusals |
 | `tests/memory.rs` | the three fixtures pinned and equal to their constructors; every constructor validating and passing `check_memory` at 12 and 22; two roots named `read_root`, `write_root`, an all-zero padding row, `trace_vars` halving lists; every read tuple's parts at their `PART_*` positions; the frame's layout, leaf order, widths and enforcing gates by name; its 16 obligations whole, `gap_lo_pc`'s constant `−1`; acceptance 11 exhaustively at reduced width, 5-bit chunks over a 10-bit clock, each query's own `gap_lo` expression read from the frame with its high chunk at 0, every `(cycle, read_ts)` pair admitted exactly when `read_ts < 4·cycle + Δ`; §8's pinned read sets; `check_memory` refusing a leaf fed from `W` (acceptance 9); the forward-provenance counterexample as a producing and as an enforcing gate of list 1, each beside its lawful control; a slot and a `W` column meeting through two cached entries, a cached entry itself carrying both, and a slot over a cached entry; a frame without `pc_mask_boolean` and one without `rd_mask_boolean`, whose mask another gate still reads; a window leaf masked by `S[0]` and by `V[row]`; a global slot over an inner column; and a write root read from a `W` column alone, which provenance does not see — each mutant still passing `validate`, each test run against the mutant it names |
 | `src/gadgets.rs` (unit) | two range halfwords are the comparison's 32-bit word; the comparison returns two gates and eight lookups, each sign lookup the generic table's width; the equation built at 1 and 32 bits and refused at 0 and 33; a `const` assertion holds `U16GetSign`'s keys above AND's |
-| `src/jump_branch_slt.rs` (unit) | the legal masks are twelve distinct single bits; through the private `assemble` seam, the honest extras give `artifact`, and the build is refused for an obligation dropped (the channel count), for `next_pc`'s direct bound replaced (the copower check) and for a gate nonzero on the all-zero row |
+| `src/jump_branch_slt.rs` (unit) | the legal masks are twelve distinct single bits; through the private `assemble` seam, the honest family spec gives `artifact`, and the build is refused for an obligation dropped (the channel count), for `next_pc`'s direct bound replaced (the copower check) and for a gate nonzero on the all-zero row |
 | `src/add_sub.rs` (unit) | the three system codes pairwise distinct, which is what lets `system_split`, `ecall_code` and `fence_code` refuse every `ebreak` row; the gates themselves are `crates/checker/tests/add_sub.rs`' |
 | `src/memory.rs` (unit) | acceptance 12: the frame with one obligation dropped before the artifact is written panics at the count assertion |
 | `tests/audit.rs` | every `GateDef` variant, all six, emitted across both compilations, counts written by hand; the catalogue; the two compilations' identical shape |

@@ -370,7 +370,7 @@ For the query `<q>` at slot `s`, with `m = <q>_mask`:
 ### 3.1 Header
 
 `family_circuit(0, n)` is `add_sub::artifact(n)` with `add_sub::channels()`, built by
-`memory::frame_with_channels_artifact(&QUERIES, n, Extras { .. })` (`QUERIES` and the `SLOT_*`
+`memory::frame_with_channels_artifact(&QUERIES, n, FamilySpec { .. })` (`QUERIES` and the `SLOT_*`
 constants are private to `add_sub.rs`). Normative spec: `shard-proof.md` §8. Fill:
 `prover::family_fill(0)`, the private `fill::add_sub`.
 
@@ -1217,7 +1217,7 @@ obligations: `rd_write_masked` holds the two equal (the row's `rd_is_zero` is 0)
 ### 4.1 Header
 
 `family_circuit(1, n)` is `jump_branch_slt::artifact(n)` with `jump_branch_slt::channels()`,
-built by `memory::frame_with_channels_artifact(&QUERIES, n, Extras { .. })` with S17's two
+built by `memory::frame_with_channels_artifact(&QUERIES, n, FamilySpec { .. })` with S17's two
 gadgets, `constraints::gadgets::{is_zero, comparison}` (`QUERIES`, the `SLOT_*` constants and
 the per-kind constants `SLTI` … `JAL` are private to `jump_branch_slt.rs`). Normative spec:
 `jump-branch-slt.md`. Fill: `prover::family_fill(1)`, the private `fill::jump_branch_slt`.

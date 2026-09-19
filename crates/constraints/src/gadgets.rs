@@ -4,7 +4,7 @@
 //! normative.
 //!
 //! Both return gates and lookups as data, and a family's circuit puts them in
-//! its `memory::Extras`. S14's x0 rule is built on [`is_zero`]; S17's
+//! its `memory::FamilySpec`. S14's x0 rule is built on [`is_zero`]; S17's
 //! jump/branch/slt family is the first to use both; S18 takes them for its
 //! magnitude comparisons and its `rem ≠ 0` test, and S19 for `amomin`/`amomax`.
 

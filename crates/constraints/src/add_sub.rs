@@ -26,7 +26,7 @@ use field::Fr;
 
 use crate::lookup::ChannelSpec;
 use crate::memory::{
-    frame, frame_queries, frame_with_channels_artifact, rd_selected, Extras, ARG1, ARG2,
+    frame, frame_queries, frame_with_channels_artifact, rd_selected, FamilySpec, ARG1, ARG2,
     FIELD_ADDR, FIELD_MASK, FIELD_READ_VALUE, FIELD_WRITE_VALUE, PC, RAM, RD, RS1, RS2,
 };
 use crate::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
@@ -422,7 +422,7 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     let a = frame_with_channels_artifact(
         &QUERIES,
         trace_vars,
-        Extras {
+        FamilySpec {
             witness,
             setup,
             virtuals: vec![
