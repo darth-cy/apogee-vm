@@ -917,9 +917,9 @@ fn honest_rows() -> Vec<(&'static str, Row)> {
     }
     // The same truncation on a small operand. `0xfedcba99 << 1` overflows a
     // 32-bit `ovf`, so the untruncated forgery of
-    // `only_the_shift_powers_table_refuses_an_untruncated_amount` needs a
-    // base whose doubled word still fits one — otherwise `ovf`'s own range
-    // pair refuses the row too and the table is not the lone refusal.
+    // `an_untruncated_amount_is_refused_by_its_scaled_bound_and_the_table`
+    // needs a base whose doubled word still fits one — otherwise `ovf`'s own
+    // range pair refuses the row besides the two the test is there to name.
     push(
         "sll by rs2 = 33, small rs1",
         honest(Instr::new(kind::SLL, 0), 0x1234_5679, 33, 0),
@@ -1004,9 +1004,9 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         vec!["decoded_mask_bits"],
     ));
 
-    // The two halves. `f_shift` is the ShiftPowers selector, so switching it
-    // off is what would free `amount` from the table's domain — the one thing
-    // that bounds it. Two gates refuse it: its own rule, and the copower
+    // The two halves. `f_shift` selects the ShiftPowers lookup and the key
+    // bound on `amount` alike, so switching it off is what would free the
+    // amount from both. Two gates refuse it: its own rule, and the copower
     // identity, which reads `f_shift` as its right-hand side.
     let mut r = row("slli 3");
     r.set("f_shift", Fr::ZERO);
@@ -1306,15 +1306,16 @@ fn every_booleanity_gate_refuses_a_value_of_two() {
 // Acceptance 2's negative half
 // ---------------------------------------------------------------------------
 
-/// The shift amount's only bound is `ShiftPowers`' domain, and this is the row
-/// that shows it. `sll` by `rs2 = 33` shifts by 1; the forgery claims 33
-/// instead, with `pow = 2^33`, a copower of `2^-2` so that `pow·copow` is
-/// still `2^31`, an overflow of `rs1·2` and a result of 0. Every gate holds,
-/// every range holds — the operand is small enough that `rs1·2` is still a
-/// 32-bit `ovf` — and the table, which has a row for each of the 32 amounts
-/// and for no other value, is the lone refusal.
+/// The shift amount is bounded twice over, and this is the row that shows
+/// both. `sll` by `rs2 = 33` shifts by 1; the forgery claims 33 instead, with
+/// `pow = 2^33`, a copower of `2^-2` so that `pow·copow` is still `2^31`, an
+/// overflow of `rs1·2` and a result of 0. Every gate holds — the operand is
+/// small enough that `rs1·2` is still a 32-bit `ovf` — and two obligations do
+/// not: `amount_scaled`, 33 being a halfword itself but not once multiplied by
+/// `2^11`, and the `ShiftPowers` lookup, the packed table having no row at all
+/// for a key past that sub-table's last.
 #[test]
-fn only_the_shift_powers_table_refuses_an_untruncated_amount() {
+fn an_untruncated_amount_is_refused_by_its_scaled_bound_and_the_table() {
     let a = artifact();
     let base = row("sll by rs2 = 33, small rs1");
     assert_eq!(

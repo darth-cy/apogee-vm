@@ -296,11 +296,14 @@ rule over the artifact could say about it.
 load-bearing in a way it was not over a small field: with a whole word in one column its
 top bit is no longer a column that already exists, so every sign comes from here.
 
-**A table's domain can be the whole of a bound.** `ShiftPowers` has a row for each of the
-32 RV32 shift amounts and for no other value, so a row that looks it up has an amount in
-`[0, 32)` and nothing else says so (`docs/spec/shift-bitwise.md` §3.1). The AND table's
-domain does the same for a byte: a column that matches one of its rows is below 256, which
-is why the bitwise half of S18's first family carries no range obligation of its own.
+**A table's domain bounds what its row fixes, not the key that chose the row.** A lookup
+that holds has matched *some* row of the packed table; which sub-table's row it is follows
+from the key's own bound and from nothing else (§4). So `ShiftPowers`' 32 rows fix `pow` and
+`copow` for an amount the shift family has already held to `[0, 32)`, and the AND table's
+rows fix `b` and `a & b` for a key it has already held below 256
+(`docs/spec/shift-bitwise.md` §3.3). The highest sub-table's domain does bound its own key
+besides, every key past its last row matching nothing at all — but that is a fact about the
+packed table's layout, which appending a sub-table changes, and no family leans on it.
 
 **Why `ShiftPowers`' second value is halved.** The copower a residue bound multiplies by is
 `2^(32 − s)`, which at `s = 0` is `2^32` and does not fit these columns' `u32` backing. The

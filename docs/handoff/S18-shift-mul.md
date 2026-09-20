@@ -17,9 +17,10 @@ The two circuits' centres of gravity:
 - **shift/bitwise** ships as **one merged family**. Its six shifts settle both directions
   through a single multiplication — `shift_in` selects the multiplicand, `shift_prod` is
   the one ungated product — and its six bitwise operations derive XOR and OR from a single
-  AND accumulator over four byte lookups, with no XOR table and no OR table. The shift
-  amount is truncated by a table's *domain*: `ShiftPowers` has a row for each of the 32
-  amounts and for no other value.
+  AND accumulator over four byte lookups, with no XOR table and no OR table. Every key it
+  looks up carries a range pair of its own, the shift amount and the four `rs1` bytes
+  alike, and `ShiftPowers`' domain, a row for each of the 32 amounts and for no other
+  value, bounds the amount a second time.
 - **mul/div** proves all eight M instructions with **one product identity**, shared by the
   four multiplies and the division alike. Truncation toward zero is one definitional gate;
   `|rem| < |divisor|` is one range-checked gap carrying a zero-divisor correction; and the
@@ -31,8 +32,9 @@ Normative documents written or amended this stage:
 - **`docs/spec/shift-bitwise.md`** (new) and **`docs/spec/mul-div.md`** (new): what each
   circuit reads from S11's table, the columns, the gates, the lookups, why it is sound,
   what it does not do, the fill and the fixture.
-- **`docs/spec/lookup.md`** §9: `ShiftPowers` as the packed table's third sub-table, why a
-  table's domain can be the whole of a bound, and why its copower is stored halved.
+- **`docs/spec/lookup.md`** §9: `ShiftPowers` as the packed table's third sub-table, what a
+  table's domain fixes and what it leaves to the key's own bound, and why its copower is
+  stored halved.
 - **`docs/spec/srs.md`** §4 and **`docs/spec/shard-proof.md`** §3, §5.1, §11 and the
   header: the table grew, so its three commitments, every key's SRS digest and every key's
   bytes moved a second time. **The recipe, the message, its tag and its wire position are
@@ -251,7 +253,7 @@ File paths are under `crates/`. Every test listed passes; the ones marked *defer
 | # | Item | Where | Result |
 | --- | --- | --- | --- |
 | 1 | Per-instruction differential for all 20, and a proof per family | `emulator/tests/differential.rs` (`alu` and `opcodes` in `SUITE`), `emulator/tests/trace.rs` (`alu` in `TRACED`), `loader/tests/qemu.rs::alu_passes_its_checks`, `prover/tests/alu.rs` (deferred) | All twenty run in `guests/alu`, which self-checks every one and exits 96, and in `guests/opcodes`, S12's coverage fixture; the statement's five shards prove and every one verifies, with each proof's shape read off its circuit |
-| 2 | Shift edge fixtures | `checker/tests/shift_bitwise.rs::the_guest_runs_the_acceptance_matrix`, `::every_row_kind_…`, `::only_the_shift_powers_table_…`, `::the_shamt_is_not_free_…` | shamt 0, 1 and 31 for each immediate shift; `rs2 = 32` and 33, with 32 asserted to leave the word alone; `sra` of a negative at three amounts; `srai` against `srli` on one negative operand at one shamt, with different answers — as rows and in the guest's trace; and the negative half, an untruncated amount and a free shamt each refused by what §3.3 and §4.2 say refuses it |
+| 2 | Shift edge fixtures | `checker/tests/shift_bitwise.rs::the_guest_runs_the_acceptance_matrix`, `::every_row_kind_…`, `::an_untruncated_amount_…`, `::the_shamt_is_not_free_…` | shamt 0, 1 and 31 for each immediate shift; `rs2 = 32` and 33, with 32 asserted to leave the word alone; `sra` of a negative at three amounts; `srai` against `srli` on one negative operand at one shamt, with different answers — as rows and in the guest's trace; and the negative half, an untruncated amount and a free shamt each refused by what §3.3 and §4.2 say refuses it |
 | 3 | The signed-multiply matrix | `checker/tests/mul_div.rs::every_row_kind_…`, `::the_guest_runs_the_acceptance_matrix`, `emulator/tests/differential.rs` | All four sign quadrants of each of the four multiplies, `−2^31 × −2^31`, the asymmetric `mulhsu` corner `−2^31 × (2^32 − 1)` and `mulhu` near `2^64`, each as a row and in the guest, whose every value the emulator and QEMU confirm |
 | 4 | The div/rem matrix, and the floored fixture | `checker/tests/mul_div.rs::every_row_kind_…`, `::the_floored_quotient_satisfies_the_identity_and_is_refused_by_the_sign_rule`, `::a_quotient_off_by_one_…`, `::a_zero_divisor_whose_quotient_is_not_all_ones_…`, `::the_signed_overflow_has_exactly_the_pinned_answer` | All four sign quadrants of `div` and `rem` and the unsigned pair; division by zero for all four; the `−2^31 ÷ −1` overflow. `DIV(−7, 2)`'s **floored** witness satisfies the bare division identity and is refused by `r_sign_rule` alone — the prompt's "tampered to floored, that fixture must be unprovable", as a row |
 | 5 | The exhaustive reduced-width division check | `checker/tests/mul_div.rs::the_division_encoding_admits_exactly_one_witness_at_a_reduced_width` | At a 4-bit word, over every `(dividend, divisor)` pair and each of the four division kinds, every candidate witness evaluated through `gkr::eval_gate` over `mul_div::arithmetic_gates(4)` **itself**: exactly one satisfies where the divisor is nonzero, and exactly one up to `q_sign` where it is zero — the refinement §6 records |

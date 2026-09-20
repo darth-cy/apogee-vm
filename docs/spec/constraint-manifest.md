@@ -1415,8 +1415,8 @@ obligations of each padding row, and in `mult_timestamp` also the two chunks of 
 row does not make — `rs1` on `jal`; `rs2` on `slti`, `sltiu`, `jal` and `jalr`; `rd` on a
 branch. The `RANGE16` and `GENERIC` obligations are selected by `pc_mask`, so none is off on a
 live row. Row 0 also counts every live chunk or halfword whose value is 0, such as `pc_gap_hi`
-on every live row. The generic table's all-zero tuple repeats on every row past `2^17`, and the
-count goes to the lowest, row 0.
+on every live row. The generic table's all-zero tuple repeats on every row past `2^17 + 32`,
+and the count goes to the lowest, row 0.
 
 **Setup columns, `S[0..10]`** — two tables. `S[0..7]` is the family's decoded table,
 `program::lookup_tuple(1)` order, filled by `program::FamilyTable::column_poly(j)`; committed in
@@ -1440,9 +1440,9 @@ denominator, at the `β` power in the last column.
 | `S[4]` | `table_rd` | `channels()[3].table[4]` | Table rd | `RowField::Rd` | `decoder_table_den` | `β⁴` |
 | `S[5]` | `table_imm` | `channels()[3].table[5]` | Table immediate | `RowField::Imm` | `decoder_table_den` | `β⁵` |
 | `S[6]` | `table_extra_mask` | `channels()[3].table[6]` | Table kind mask | `RowField::ExtraMask` | `decoder_table_den` | `β⁶` |
-| `S[7]` | `generic_key` | `jump_branch_slt::GENERIC_TABLE[0]`, `channels()[2].table[0]` | Generic key | 0, `AND_BASE + a + 1` or `SIGN_BASE + h + 1` | `generic_table_den` | 1 |
-| `S[8]` | `generic_value` | `GENERIC_TABLE[1]` | Generic value | 0, `b` or `h >> 15` | `generic_table_den` | `β` |
-| `S[9]` | `generic_result` | `GENERIC_TABLE[2]` | Generic result | 0, `a & b` or 0 | `generic_table_den` | `β²` |
+| `S[7]` | `generic_key` | `jump_branch_slt::GENERIC_TABLE[0]`, `channels()[2].table[0]` | Generic key | 0, `AND_BASE + a + 1`, `SIGN_BASE + h + 1` or `SHIFT_BASE + s + 1` | `generic_table_den` | 1 |
+| `S[8]` | `generic_value` | `GENERIC_TABLE[1]` | Generic value | 0, `b`, `h >> 15` or `2^s` | `generic_table_den` | `β` |
+| `S[9]` | `generic_result` | `GENERIC_TABLE[2]` | Generic result | 0, `a & b`, 0 or `2^(31 − s)` | `generic_table_den` | `β²` |
 
 `jump_branch_slt::TABLE_WIDTH` is 7 and `constants::generic_table::WIDTH` is 3.
 
@@ -1897,9 +1897,9 @@ write, and each `_hi_range`/`_lo_range` pair bounds `rs1_read_value`, `cmp_rhs`,
 `rd_selected` and `pc_write_value` below `2^32`. With `next_pc_lo_range`, `next_pc_even` holds
 exactly when `next_pc`'s low halfword is even: an odd one halves to `(lo + p)/2`, far above
 `2^16`. The two `_hi_range` obligations keep each sign lookup's key `hi + 257` in
-`[257, 2^16 + 256]`, `U16GetSign`'s keys, never the `ZeroEntry` or an AND key (`lookup.md` §4's
-precondition), so the only row that key can meet is `(hi + 257, hi >> 15, 0)` and each sign is
-its operand's bit 31.
+`[257, 2^16 + 256]`, `U16GetSign`'s keys, never the `ZeroEntry`, an AND key or a `ShiftPowers`
+key (`lookup.md` §4's precondition), so the only row that key can meet is
+`(hi + 257, hi >> 15, 0)` and each sign is its operand's bit 31.
 
 The channels, `jump_branch_slt::channels()`, in output order:
 
@@ -2780,8 +2780,9 @@ Relations 124–171, in list order, in §3.5's format. The family's 38 come from
 
   reads as  both are ungated and degree 1. On a shift row the byte columns carry no table
             lookup — f_bitwise is 0 — so a decomposition always exists and constrains
-            nothing; on a bitwise row the byte table's domain bounds each of the eight and
-            the decomposition is the unique one.
+            nothing; on a bitwise row §5.6's key bound holds each `byte_a_j` below 256 and
+            the AND row it matches holds `byte_b_j` there, so all eight are bytes and the
+            decomposition is the unique one.
 
 ────────────────────────────────────────────────────────────────────────────────────────────
 171     bitwise_out_rule — AND, OR and XOR from one accumulator         Quadratic, degree 2
@@ -2902,10 +2903,12 @@ own selectors, whose scales are literals — and the unit test
 Bounding the *key* is all that is needed. With `byte_a_j` below 256 the row it matches is an AND
 row, and that row fixes `byte_b_j` below 256 and `byte_and_j` to `byte_a_j & byte_b_j`; with
 `amount` below 32 the row is a `ShiftPowers` row, and that row fixes `pow` and `copow`.
-**`ShiftPowers`' domain is the only thing that bounds `amount` to `[0, 32)`** — no gate does —
-which is why the suite's `only_the_shift_powers_table_refuses_an_untruncated_amount` builds a
-row whose `amount` is 33 with `pow = 2^33` and a copower of `2^-2`, so that `pow·copow` is still
-`2^31`, and finds the table the lone refusal.
+**No gate bounds `amount` to `[0, 32)`; its key bound does, and `ShiftPowers`' domain again** —
+the table's holding because `ShiftPowers` is the highest sub-table and a key past its last row
+matches nothing at all. Which is why the suite's
+`an_untruncated_amount_is_refused_by_its_scaled_bound_and_the_table` builds a row whose `amount`
+is 33 with `pow = 2^33` and a copower of `2^-2`, so that `pow·copow` is still `2^31`, and finds
+`amount_scaled` and the lookup refusing it together.
 
 The channels, `shift_bitwise::channels()`, in output order:
 
@@ -3207,11 +3210,12 @@ forms §5.5's 171 derives from it.
 
 What no gate refuses, and what does:
 
-- **`amount` above 31**: nothing in gate list 0. `ShiftPowers`' domain is the whole bound, which
-  is the point of `only_the_shift_powers_table_refuses_an_untruncated_amount` — an `sll by rs2 =
-  33, small rs1` row claiming to shift by 33, with `pow = 2^33` and a copower of `2^-2` so that
-  `copower_rule` still holds, an `ovf` of `rs1·2` that is still a word, and a result of 0. Every
-  gate and every range obligation accepts it; the generic table is the lone refusal.
+- **`amount` above 31**: nothing in gate list 0, and not `amount_range` either, 33 being a
+  perfectly good halfword. `amount_scaled` refuses it and so does `ShiftPowers`' domain, which is
+  the point of `an_untruncated_amount_is_refused_by_its_scaled_bound_and_the_table` — an `sll by
+  rs2 = 33, small rs1` row claiming to shift by 33, with `pow = 2^33` and a copower of `2^-2` so
+  that `copower_rule` still holds, an `ovf` of `rs1·2` that is still a word, and a result of 0.
+  Every gate accepts it; the two obligations on its key are the refusal.
 - **A byte key above 255**: the key bound of §5.6 and nothing else. At `byte_a0 = 256` the scaled
   half alone refuses (256 is a perfectly good halfword); at `byte_a0 = 65_823` both halves do.
 - **A shamt claimed different from `src2 mod 32`**: `amount_split` with `high`'s pair, which is

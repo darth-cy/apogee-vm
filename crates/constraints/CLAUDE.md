@@ -300,7 +300,8 @@ pub mod add_sub {                                  // docs/spec/shard-proof.md �
   AND accumulator, inlined as a linear form over the four `byte_and` columns; there is no
   XOR table and no OR table, and the `rd` term is gated by `f_bitwise`, not by the bracket.
   `artifact` asserts each channel's obligation count — 8, 24, 6, 1 — and runs
-  `check_copowers` over `residue`.
+  `check_copowers` over all six scaled columns: `residue`, `amount` and the four byte
+  keys, each under its own selector.
 - **`mul_div` is `docs/spec/mul-div.md` as data** (S18): the four-query frame plus 47
   witness columns, S11's **six**-column decoded table — this family's tuple has no `imm` —
   and the packed generic table as `S`, 54 enforcing gates, 27 lookups and four channels.

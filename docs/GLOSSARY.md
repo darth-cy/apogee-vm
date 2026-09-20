@@ -422,10 +422,10 @@ bound. `constraints::lookup::check_copowers`, `docs/spec/shift-bitwise.md` §3.
 
 **ShiftPowers** — the third table packed into the generic table (S18): 32 rows,
 `(SHIFT_BASE + s + 1, 2^s, 2^(31 − s))`, one per RV32 shift amount and no other. Its
-**domain is the bound** that truncates a shift amount to `[0, 32)`; its second value is the
-copower `2^(32 − s)` stored halved, `2^32` not fitting the table's `u32` columns, so the
-two gates that read it carry a factor 2. `docs/spec/lookup.md` §9,
-`docs/spec/shift-bitwise.md` §3.1.
+**domain fixes `pow` and `copow`** for an amount the shift family has already held to
+`[0, 32)` by a range pair on the key; its second value is the copower `2^(32 − s)` stored
+halved, `2^32` not fitting the table's `u32` columns, so the two gates that read it carry a
+factor 2. `docs/spec/lookup.md` §9, `docs/spec/shift-bitwise.md` §3.1 and §3.3.
 
 **Boundary scalars** — the 64 values a proof carries for registers and the pc, which have
 no rows: the final timestamps `t_0 … t_31` and `t_pc`, then the final values `v_1 … v_31`,

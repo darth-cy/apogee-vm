@@ -955,9 +955,9 @@ pub mod generic_table {
     /// both ranges below it.
     pub const SHIFT_BASE: u32 = SIGN_BASE + (1 << 16);
 
-    /// `ShiftPowers`' rows: one per shift amount a RV32 shift can take, which
-    /// is what bounds a looked-up amount to `[0, 32)` — the table *is* the
-    /// bound (`docs/spec/shift-bitwise.md` §3).
+    /// `ShiftPowers`' rows: one per shift amount a RV32 shift can take and
+    /// none other, so a key past the last of them matches no row of the packed
+    /// table at all (`docs/spec/shift-bitwise.md` §3.1).
     pub const SHIFT_ROWS: usize = 32;
 
     /// The exponent `ShiftPowers`' two values sum to: row `s` is

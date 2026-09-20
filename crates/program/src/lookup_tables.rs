@@ -21,9 +21,9 @@
 //! field says nothing extra about a byte's seventh bit — and `U16GetSign` is
 //! load-bearing in a way it was not over a small field: with a whole word in one
 //! column, its top bit is no longer a column that already exists, so every sign
-//! comes from here. `ShiftPowers` is the one table whose *domain* is the bound:
-//! it has a row for each of the 32 shift amounts and for no other value, which
-//! is what truncates a shift (`docs/spec/shift-bitwise.md` §3).
+//! comes from here. `ShiftPowers` has a row for each of the 32 shift amounts
+//! and for no other value, so it fixes `2^s` and its copower for an amount the
+//! shift family has already bounded (`docs/spec/shift-bitwise.md` §3.3).
 //!
 //! `ShiftPowers`' second value is `2^(31−s)`, half the `2^(32−s)` a residue
 //! bound multiplies by, because `2^32` does not fit these columns' `u32`
@@ -37,8 +37,8 @@ use pcs::commit;
 use poly::{MultilinearPoly, PolyBacking};
 use srs::Srs;
 
-/// The channel's tuple width: a key and two values, the AND table being the
-/// wider of the two and `U16GetSign` zero-padded to it.
+/// The channel's tuple width: a key and two values, which the AND table and
+/// `ShiftPowers` both fill and `U16GetSign` is zero-padded to.
 /// `constants::generic_table::WIDTH`.
 pub const GENERIC_WIDTH: usize = generic_table::WIDTH;
 

@@ -123,8 +123,8 @@ pub const RS1_SIGN: PolyAddress = w(21);
 /// `W[29]`: the high halfword of the second operand `rs2 + imm`, which bounds
 /// that sum to a 32-bit word on every live row.
 pub const SRC2_HI: PolyAddress = w(22);
-/// `W[30]`: the truncated shift amount, bounded to `[0, 32)` by `ShiftPowers`'
-/// domain and by nothing else.
+/// `W[30]`: the truncated shift amount, bounded to `[0, 32)` by its own key
+/// bound under `f_shift` and again by `ShiftPowers`' domain.
 pub const AMOUNT: PolyAddress = w(23);
 /// `W[31]`, `W[32]`: `2^amount` and `2^(31 − amount)`, the `ShiftPowers` row
 /// `amount` keys.
@@ -509,10 +509,10 @@ fn family_spec() -> FamilySpec {
         linear(vec![(lit(1), next_pc), (neg(1), SEQ)]),
     ));
 
-    // rs2 + imm = 32·high + amount. `amount` is bounded to [0, 32) by
-    // ShiftPowers' domain and `high` by its own range pair, so the split is
-    // the unique one and `amount` really is the low five bits: never leave the
-    // shamt free, or `sll` with rs2 = 4 shifts by 8.
+    // rs2 + imm = 32·high + amount. `amount` is bounded to [0, 32) by its key
+    // bound and ShiftPowers' domain alike, and `high` by its own range pair,
+    // so the split is the unique one and `amount` really is the low five bits:
+    // never leave the shamt free, or `sll` with rs2 = 4 shifts by 8.
     let mut split = src2();
     split.push((neg(32), HIGH));
     split.push((neg(1), AMOUNT));
@@ -599,8 +599,9 @@ fn family_spec() -> FamilySpec {
 
     // Both operands as four bytes each, low first. Ungated and degree 1: on a
     // shift row the bytes carry no table lookup, so the decomposition is free
-    // and satisfiable; on a bitwise row the byte table's domain bounds each of
-    // them and the decomposition is the unique one.
+    // and satisfiable; on a bitwise row each `byte_a_j` carries its own key
+    // bound and the AND row it matches holds `byte_b_j` below 256, so the
+    // decomposition is the unique one.
     let byte_weights = [1u64, 1 << 8, 1 << 16, 1 << 24];
     let mut rs1_bytes = vec![(lit(1), v_rs1)];
     let mut src2_bytes = src2();

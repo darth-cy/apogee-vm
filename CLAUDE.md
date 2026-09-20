@@ -576,9 +576,12 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   `docs/spec/jump-branch-slt.md` §6.
 - **The shift/bitwise family's spec is `docs/spec/shift-bitwise.md`, and it is frozen.**
   One merged family, never split: `rs2 + imm` is the second operand of all twelve, one
-  addend always being zero; the amount is `src2 & 31` with `high` range-checked, and
-  **`ShiftPowers`' 32-row domain is the whole of the bound** on it — never leave the shamt
-  free, or `sll` with `rs2 = 4` shifts by 8. **One product serves both directions**:
+  addend always being zero; the amount is `src2 & 31` with `high` range-checked — never
+  leave the shamt free, or `sll` with `rs2 = 4` shifts by 8. **Every key this family looks
+  up carries a range pair of its own**, the amount and the four `rs1` bytes alike: with
+  three sub-tables in one channel an unbounded key does not miss the table, it reads a
+  foreign sub-table's row, and a `byte_a_j` of 65,823 reads `ShiftPowers`' `s = 31` row and
+  proves a false `and`. **One product serves both directions**:
   `shift_in` selects the multiplicand and `shift_prod = shift_in·pow` is ungated, which is
   what keeps `is_left·(rs1·pow − …)` from being degree 3. A right shift is the floor-division
   identity with `se = is_arithmetic·rs1_sign` committed; the residue bound is the copower

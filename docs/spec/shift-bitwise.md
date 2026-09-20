@@ -145,9 +145,13 @@ packed table is now 131,105 rows, still inside `2^18`, and its three commitments
 and every S16 and S17 verifying key's bytes change with it. Identity binds none of it
 (`jump-branch-slt.md` §6, unchanged).
 
-**The domain is the bound.** Nothing else constrains `amount` to `[0, 32)`: a row that looks
-up `ShiftPowers` under `f_shift` is matching a table row, and the table has a row for each
-of the 32 amounts and for no other value.
+**The domain is a bound, and not the one this family leans on.** A row that looks up
+`ShiftPowers` under `f_shift` is matching a row of the packed table, and no row of it carries a
+key above `SHIFT_BASE + 32`, so an amount above 31 matches nothing and the lookup fails. That
+holds only because `ShiftPowers` sits at the top of the packed table with nothing above it:
+appending a fourth sub-table there would leave those keys landing on its rows, which is §3.3's
+whole subject. So `amount` carries a bound of its own besides, and an untruncated amount is
+refused twice over.
 
 **Why the copower is stored halved.** The residue bound of §4.3 multiplies by `2^(32 − s)`,
 which at `s = 0` is `2^32`. The packed table's columns are `u32`-backed, so the stored value
@@ -297,8 +301,9 @@ bitwise_out_rule f_bitwise·rd_selected − t1·(rs1 + rs2 + imm) − t2·Σ_j 2
 ```
 
 Both decompositions are degree 1 and ungated: on a shift row the byte columns carry no table
-lookup, so a decomposition always exists and constrains nothing; on a bitwise row the byte
-table's domain bounds each of the eight byte columns and the decomposition is the unique one.
+lookup, so a decomposition always exists and constrains nothing; on a bitwise row §3.3's pair
+holds each `byte_a_j` below 256 and the AND row it matches holds `byte_b_j` there, so all eight
+columns are bytes and each decomposition is the unique one.
 
 **XOR and OR are derived from the single AND accumulator**, and there is no XOR table and no
 OR table. Per byte `or = a + b − and` and `xor = a + b − 2·and`; summing by weight, and
