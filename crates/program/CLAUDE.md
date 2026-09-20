@@ -56,7 +56,8 @@ pub mod lookup_tables {                  // docs/spec/lookup.md §9
                                          // since S17 these three are constants::generic_table's
     pub const AND_BASE: u32 = 0;   pub const AND_ROWS: usize = 1 << 16;
     pub const SIGN_BASE: u32 = 256;  pub const SIGN_ROWS: usize = 1 << 16;
-    pub const GENERIC_ROWS: usize = 1 + AND_ROWS + SIGN_ROWS;
+    pub const SHIFT_BASE: u32 = SIGN_BASE + (1 << 16);   pub const SHIFT_ROWS: usize = 32;   // S18
+    pub const GENERIC_ROWS: usize = 1 + AND_ROWS + SIGN_ROWS + SHIFT_ROWS;
     pub const GENERIC_LOG_HEIGHT: u32 = 18;   // S17: 2^18 is the first power of two >= GENERIC_ROWS
     pub fn generic_table(log_height: u32) -> Vec<MultilinearPoly>;
     pub fn generic_entries() -> Vec<[u32; GENERIC_WIDTH]>;
@@ -165,14 +166,20 @@ the atomics — with the system kind pinned to bit 0 ahead of that order:
 `aq` and `rl` are not recorded: on one hart they order nothing.
 
 ## The generic lookup table
-`lookup_tables` packs the two tables a wide field still needs — an 8×8 AND byte table and
-`U16GetSign` — into one committed setup table, `docs/spec/lookup.md` §9: the `ZeroEntry`
-at row 0, AND at rows 1..=2^16 as `(AND_BASE + a + 1, b, a & b)`, `U16GetSign` at the next
-2^16 as `(SIGN_BASE + h + 1, h >> 15, 0)`, and the `ZeroEntry` again above them. The two
-key ranges are disjoint, so no tuple of one is a tuple of the other, and the `+ 1` the
-gating adds keeps every real entry off the all-zero tuple the `ZeroEntry` answers.
-131,073 rows, so a circuit carrying both is at 2^18 or more. **`U16GetSign` is committed,
-not closed-form**; S17 and S18 consume it by name.
+`lookup_tables` packs the tables a wide field still needs — an 8×8 AND byte table,
+`U16GetSign` and, since S18, `ShiftPowers` — into one committed setup table,
+`docs/spec/lookup.md` §9: the `ZeroEntry` at row 0, AND at rows 1..=2^16 as
+`(AND_BASE + a + 1, b, a & b)`, `U16GetSign` at the next 2^16 as
+`(SIGN_BASE + h + 1, h >> 15, 0)`, `ShiftPowers` at the next 32 as
+`(SHIFT_BASE + s + 1, 2^s, 2^(31 − s))`, and the `ZeroEntry` again above them. The three
+key ranges are pairwise disjoint, so no tuple of one is a tuple of another, and the `+ 1`
+the gating adds keeps every real entry off the all-zero tuple the `ZeroEntry` answers.
+131,105 rows, so a circuit carrying them is at 2^18 or more. **`U16GetSign` is committed,
+not closed-form**; S17 and S18 consume it by name. **`ShiftPowers`' domain is a bound**:
+32 rows, one per RV32 shift amount, is what truncates a shift
+(`docs/spec/shift-bitwise.md` §3.1), and its second value is `2^(31 − s)` rather than
+`2^(32 − s)` because `2^32` does not fit these `u32` columns — the two gates that read it
+carry the factor 2.
 
 **Since S17** the three layout constants are `constants::generic_table`'s — a circuit,
 which cannot depend on this crate, builds a key into the table — and the names here are
@@ -305,7 +312,7 @@ useless. The verifier never sees an ELF.
 | `tests/tables.rs` | Acceptance 6 (every exported column of every table scanned: non-live rows are all `MINUS_ONE`, live rows equal to the stored values and neither padding nor zero), code above a shorter family's table, the 59 row kinds pinned numerically, `narrowest` at each width boundary, 7 (`next_pc` against the loader's halfword map), exact heights, `TableTooShort` at the boundary, `ProgramTooLarge` at the ceiling with segments without file bytes not counted, `ImageOutsideWindow` at `4h − 1` / `4h`, the image column of every guest against `initial_word` and the segment bytes, menu and version refusals, the frozen field masks, one-hot kinds naming exactly 59 mnemonics over the ISA corpus, narrowest storage, determinism, fixture pins |
 | `tests/config.rs` | The `VmConfig` wire form byte for byte, its refusals, a config without either init family or with the two at different heights refused by derivation and by `from_bytes`, a nine-family round trip, the identity wire form, the statement descriptor as three adjacent messages, and every `check_memory_windows` rule at its boundary |
 | `tests/identity.rs` | **All but two `#[ignore]`d — they need `assets/ptau/ppot_0080_24.ptau`.** fib at the defaults twice in-process and against the pin; the recipe rebuilt message by message; acceptance 9's moves plus a `.rodata` byte, a `.data` byte and the entry pc; a segment without file bytes resized does not move it; fib rebuilt from source twice. In CI: `identity_from_commitments` rebuilt message by message over a distinct point per family, and moved by the entry pc and by each commitment. `setup_commitments` — which column `INIT_TEARDOWN` commits, at which height — is reached only by the ignored recipe test |
-| `tests/lookup_tables.rs` | S15's acceptance 10 — the packed table against an independent reference, and a poisoned row caught — a height below the table's 131,073 rows refused with a panic, and the two key ranges disjoint and off zero; and S17's pin: in CI, `the_generic_table_commitments_are_pinned_over_the_ceremony` holds `generic_table.txt` to `identity.txt`'s ceremony and to three 64-byte points; `#[ignore]`d, `the_generic_table_commitments_are_the_ceremonys_at_every_height` recomputes `generic_commitments` over the ceremony, holds it to the pin, and holds the table over `2^18`, `2^20` and `2^22` to the same three points |
+| `tests/lookup_tables.rs` | S15's acceptance 10 — the packed table against an independent reference, and a poisoned row caught — a height below the table's 131,105 rows refused with a panic, and the three key ranges pairwise disjoint and off zero; and S17's pin: in CI, `the_generic_table_commitments_are_pinned_over_the_ceremony` holds `generic_table.txt` to `identity.txt`'s ceremony and to three 64-byte points; `#[ignore]`d, `the_generic_table_commitments_are_the_ceremonys_at_every_height` recomputes `generic_commitments` over the ceremony, holds it to the pin, and holds the table over `2^18`, `2^20` and `2^22` to the same three points |
 
 ```
 cargo test --release -p program --test identity -- --ignored   # locally, with the ceremony

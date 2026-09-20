@@ -415,7 +415,17 @@ padding row is not idle in it. A channel **holds** when its root is `num = 0` an
 **Copower** — a scaling that turns a row-varying bound `x < p` into the fixed
 `x·p' < 2^32`, `p·p' = 2^32`. It bounds nothing alone — `p'` is a unit, so `x = s·p'^{-1}`
 sweeps a coset almost none of whose elements are small — so every copower-scaled column
-also carries a direct range check. `constraints::lookup::check_copowers`.
+also carries a direct range check, **under the same selector as the scaled obligation**
+(S18 tightened that; S17 matched the expression alone). S18's shifts are the pattern's
+first user: `residue < 2^s` is `residue·2^(32 − s) < 2^32` plus `residue`'s own 16+16
+bound. `constraints::lookup::check_copowers`, `docs/spec/shift-bitwise.md` §3.
+
+**ShiftPowers** — the third table packed into the generic table (S18): 32 rows,
+`(SHIFT_BASE + s + 1, 2^s, 2^(31 − s))`, one per RV32 shift amount and no other. Its
+**domain is the bound** that truncates a shift amount to `[0, 32)`; its second value is the
+copower `2^(32 − s)` stored halved, `2^32` not fitting the table's `u32` columns, so the
+two gates that read it carry a factor 2. `docs/spec/lookup.md` §9,
+`docs/spec/shift-bitwise.md` §3.1.
 
 **Boundary scalars** — the 64 values a proof carries for registers and the pc, which have
 no rows: the final timestamps `t_0 … t_31` and `t_pc`, then the final values `v_1 … v_31`,
@@ -494,3 +504,12 @@ its own. The frame's x0 rule is one. `docs/spec/jump-branch-slt.md` §3.1.
 unprovable: the next row is live at that pc, and its decoder lookup finds only the table's
 `MINUS_ONE` padding row there, which no live tuple equals. `docs/spec/jump-branch-slt.md`
 §5.
+
+**Sign adjustment** — how S18's mul/div family reads an operand signed or unsigned without
+a case split: `x_adj = x − 2^32·s` with `s` the operand's top bit **gated by the kind's
+signedness flag**, so an unsigned position takes 0 whatever the word holds. `mulhsu`'s
+asymmetry is two different flag lists over one pair of columns.
+`docs/spec/mul-div.md` §3. The quotient's and the remainder's own sign flags are *not*
+sign lookups: tying the quotient's to bit 31 of its word would make `−2^31 ÷ −1`
+unprovable, that case being the one whose signed quotient does not fit
+(`docs/spec/mul-div.md` §5.3).

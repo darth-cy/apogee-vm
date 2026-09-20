@@ -545,19 +545,31 @@ fn channel_cones(a: &CircuitArtifact, specs: &[ChannelSpec]) -> Result<Vec<Vec<u
 /// bound says `x` is under this row's width **given** `x` is bounded; only the
 /// direct check establishes that.
 ///
-/// `scaled` names, per copower-scaled column, the column `x` the scaling reads.
-/// Refuses any of them that no `RANGE16` obligation of `a` bounds **directly**,
-/// which is either shape of `docs/spec/memory.md` §7:
+/// Each entry of `scaled` is a copower-scaled column `x` and the **selector**
+/// the scaled obligation carries. Refuses any of them that no `RANGE16`
+/// obligation of `a` **under that same selector** bounds directly, which is
+/// either shape of `docs/spec/memory.md` §7:
 ///
 /// - a halfword: one obligation whose expression is `x` alone;
 /// - a 32-bit value: a witnessed high chunk `h` with obligations on `h` and on
 ///   `x − 2^16·h`, the convention every 32-bit column in this VM is bounded by.
 ///
-/// S18 and S19 consume this.
-pub fn check_copowers(a: &CircuitArtifact, scaled: &[PolyAddress]) -> Result<(), String> {
-    // A `RANGE16` obligation whose expression is exactly `terms`, in any order,
-    // with no constant.
-    let bounded = |terms: &[(Coeff, PolyAddress)]| {
+/// **The selector is half the check.** S17 matched an obligation on its
+/// expression alone, so a circuit whose direct pair sat under a narrower
+/// selector than its scaled obligation passed: on a row the narrow selector
+/// switches off, the direct bound is vacuous and the scaled one is back to
+/// bounding nothing. Requiring the same selector is conservative — a direct
+/// bound under a genuinely *broader* selector is also sound — and conservative
+/// is the right side to be on for a check whose failure mode is silent.
+///
+/// S18 consumes this for the shift family's residue; S19 for its own.
+pub fn check_copowers(
+    a: &CircuitArtifact,
+    scaled: &[(PolyAddress, PolyAddress)],
+) -> Result<(), String> {
+    // A `RANGE16` obligation under `selector` whose expression is exactly
+    // `terms`, in any order, with no constant.
+    let bounded = |selector: PolyAddress, terms: &[(Coeff, PolyAddress)]| {
         a.lookups.iter().any(|l| {
             let [GateDef::Linear {
                 terms: got,
@@ -567,6 +579,7 @@ pub fn check_copowers(a: &CircuitArtifact, scaled: &[PolyAddress]) -> Result<(),
                 return false;
             };
             l.channel == lookup_channel::RANGE16
+                && l.selector == selector
                 && *constant == lit(0)
                 && got.len() == terms.len()
                 && terms.iter().all(|t| got.contains(t))
@@ -574,18 +587,20 @@ pub fn check_copowers(a: &CircuitArtifact, scaled: &[PolyAddress]) -> Result<(),
     };
     let one = Coeff::Literal(Fr::ONE);
     let half = Coeff::Literal(-Fr::from_u64(1 << 16));
-    for x in scaled {
+    for (x, selector) in scaled {
         // The halfword shape, then the 32-bit one over every column that could
         // be its high chunk.
-        let direct = bounded(&[(one, *x)])
+        let direct = bounded(*selector, &[(one, *x)])
             || (0..a.witness.len() as u32)
                 .map(PolyAddress::Witness)
-                .any(|h| bounded(&[(one, h)]) && bounded(&[(one, *x), (half, h)]));
+                .any(|h| {
+                    bounded(*selector, &[(one, h)]) && bounded(*selector, &[(one, *x), (half, h)])
+                });
         if !direct {
             return Err(format!(
-                "copower pairing: {x} is copower-scaled, but no range16 obligation bounds it \
-                 directly — neither alone nor as a high chunk and a remainder — and a scaled \
-                 bound alone bounds nothing"
+                "copower pairing: {x} is copower-scaled under {selector}, but no range16 \
+                 obligation under that selector bounds it directly — neither alone nor as a \
+                 high chunk and a remainder — and a scaled bound alone bounds nothing"
             ));
         }
     }

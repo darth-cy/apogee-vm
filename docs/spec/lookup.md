@@ -261,20 +261,29 @@ is the only thing standing between a steerable denominator and a vacuous channel
 
 ## 9. The generic channel's table
 
-`program::lookup_tables::generic_table` packs the two tables a wide field still needs
-into one committed setup table of `GENERIC_WIDTH = 3` columns — the key, then two value
-columns, the narrower table zero-padded to the wider's width:
+`program::lookup_tables::generic_table` packs the tables a wide field still needs into one
+committed setup table of `GENERIC_WIDTH = 3` columns — the key, then two value columns, a
+narrower table zero-padded to the widest's width:
 
 ```text
-row 0                    the ZeroEntry, all zero
-rows 1 ..= 2^16          AND:        (AND_BASE  + a + 1,  b,        a & b)
-rows 2^16+1 ..= 2^17     U16GetSign: (SIGN_BASE + h + 1,  h >> 15,  0)
-rows above               the ZeroEntry again, multiplicity 0
+row 0                     the ZeroEntry, all zero
+rows 1 ..= 2^16           AND:         (AND_BASE   + a + 1,  b,        a & b)
+rows 2^16+1 ..= 2^17      U16GetSign:  (SIGN_BASE  + h + 1,  h >> 15,  0)
+rows 2^17+1 ..= 2^17+32   ShiftPowers: (SHIFT_BASE + s + 1,  2^s,      2^(31 − s))
+rows above                the ZeroEntry again, multiplicity 0
 ```
 
-`AND_BASE = 0` and `SIGN_BASE = 256` give the two tables disjoint key ranges, so no
-tuple of one is a tuple of the other. 131,073 rows: a circuit carrying both is at
-`2^18` or more, which every execution family already exceeds (§3).
+`AND_BASE = 0`, `SIGN_BASE = 256` and `SHIFT_BASE = SIGN_BASE + 2^16` give the three
+tables pairwise disjoint key ranges, so no tuple of one is a tuple of another. 131,105
+rows: a circuit carrying them is at `2^18` or more, which every execution family already
+exceeds (§3).
+
+**The table grows; its home does not.** S18 appended `ShiftPowers` here rather than giving
+it a channel of its own or a second triple in the verifying key. Every key carries one set
+of the table's three commitments and the SRS digest covers them
+(`docs/spec/jump-branch-slt.md` §6), so a table that grows moves those three commitments,
+the SRS digest and every existing key's bytes — and nothing else. Identity binds none of
+it. A later stage appending a fourth table pays the same price and no more.
 
 **The `ZeroEntry` row is a property of the table's contents, not of the artifact**, which
 holds no table values at all — only the addresses its gates read. So it is checked where
@@ -287,9 +296,22 @@ rule over the artifact could say about it.
 load-bearing in a way it was not over a small field: with a whole word in one column its
 top bit is no longer a column that already exists, so every sign comes from here.
 
+**A table's domain can be the whole of a bound.** `ShiftPowers` has a row for each of the
+32 RV32 shift amounts and for no other value, so a row that looks it up has an amount in
+`[0, 32)` and nothing else says so (`docs/spec/shift-bitwise.md` §3.1). The AND table's
+domain does the same for a byte: a column that matches one of its rows is below 256, which
+is why the bitwise half of S18's first family carries no range obligation of its own.
+
+**Why `ShiftPowers`' second value is halved.** The copower a residue bound multiplies by is
+`2^(32 − s)`, which at `s = 0` is `2^32` and does not fit these columns' `u32` backing. The
+table stores `2^(31 − s)` and the two gates that read it carry the compensating factor 2, so
+`pow·copow = 2^31` is `pow·(2·copow) = 2^32`. `constants::generic_table::SHIFT_COPOWER_BITS`
+is that exponent.
+
 The taxonomy stays small on purpose. XOR and AND are positional — a wide field says
-nothing extra about a byte's seventh bit — and everything that only existed to work
-around a small field retires into arithmetic gadgets in later stages.
+nothing extra about a byte's seventh bit, and S18 derives both XOR and OR from the AND
+table alone — and everything that only existed to work around a small field retires into
+arithmetic gadgets in later stages.
 
 ## 10. The decoder channel
 
@@ -463,7 +485,7 @@ two `U16GetSign` lookups, `docs/spec/jump-branch-slt.md` §3.2 — and with it:
   columns against the key's triple (`docs/spec/shard-proof.md` §5.1). Identity still does
   not bind the table.
 - **The triple is a constant of the ceremony**: the same three points at every menu
-  height from `2^18`, because the table is zero past its 131,073 rows and a commitment
+  height from `2^18`, because the table is zero past its rows — 131,105 since S18 — and a commitment
   reads the table as coefficients. So one trusted SRS digest pins both the points every
   pairing reads and the table every generic lookup reads. The ceremony's triple is pinned
   in `crates/program/tests/vectors/generic_table.txt`

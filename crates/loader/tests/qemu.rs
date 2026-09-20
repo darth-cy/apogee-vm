@@ -689,3 +689,29 @@ fn control_passes_its_checks() {
     );
     assert!(run.stdout.is_empty(), "control commits nothing to fd 1");
 }
+
+/// `guests/alu`: S18's guest, its own `_start` like `addsub`'s and
+/// `control`'s.
+///
+/// It reads nothing and writes nothing, and checks every shift, bitwise
+/// operation, multiply and division it makes itself: the exit status is the
+/// number of checks, 96, or 1 from its `fail` path. Every expected value in it
+/// was computed from an exact RV32IM model, so this run is the second of three
+/// independent readings — the emulator's is
+/// `crates/emulator/tests/differential.rs`'s, which also compares the register
+/// file at every instruction.
+#[test]
+#[ignore = "needs a Linux host with qemu-user; run with --ignored"]
+fn alu_passes_its_checks() {
+    let qemu = qemu();
+
+    let run = execute(&qemu, "alu", "alu", &[], None);
+    assert_eq!(
+        run.status,
+        Some(96),
+        "alu exited {:?}: {}",
+        run.status,
+        run.stderr
+    );
+    assert!(run.stdout.is_empty(), "alu commits nothing to fd 1");
+}

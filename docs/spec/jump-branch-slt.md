@@ -86,7 +86,8 @@ BLT and BLTU `(0, 0, 1)`, BGE and BGEU `(1, 0, −1)`, and `(0, 0, 0)` on every 
 
 `constraints::jump_branch_slt::artifact(trace_vars)` and `::channels()`, through S15's
 `frame_with_channels_artifact`. The circuit is built from `trace_vars = 19` — the timestamp
-channel's width, which also holds the generic table's `2^17 + 1` rows — and a provable
+channel's width, which also holds the generic table's rows — `2^17 + 1` at S17, and 32
+more since S18 appended `ShiftPowers` (`docs/spec/lookup.md` §9) — and a provable
 height is at least 20, a Mercury opening needing an even count (as `shard-proof.md` §8 says
 of add/sub).
 
@@ -325,7 +326,7 @@ off, and the row reaches no memory event.
 
 The packed table (`lookup.md` §9) is a program-independent constant of the ceremony.
 `program::lookup_tables::generic_table(n)` fills its three columns over `2^n` rows, zero past
-its `2^17 + 1` entries, and a Mercury commitment is a plain KZG commitment of the evaluation
+its entries — `2^17 + 1` at S17, 32 more since S18 — and a Mercury commitment is a plain KZG commitment of the evaluation
 table read as coefficients (`mercury.md`). So the table over `2^n` rows commits to the same
 three points at every even `n ≥ 18`. `program::lookup_tables::generic_commitments(srs)` computes
 them once, at `GENERIC_LOG_HEIGHT = 18`, key column first. It panics if `srs` holds fewer

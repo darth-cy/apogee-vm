@@ -681,35 +681,43 @@ fn each_range_channel_names_its_virtual_table() {
 // The copower-pairing assertion
 // ---------------------------------------------------------------------------
 
-/// Every copower-scaled column carries a direct range check of its own, in
-/// either shape `docs/spec/memory.md` §7 gives one: `word_hi` is a halfword
-/// bounded by an obligation of its own, and `word` is a 32-bit value bounded by
-/// that high chunk and the remainder `word − 2^16·word_hi`. A column with no
-/// obligation at all is refused.
+/// Every copower-scaled column carries a direct range check of its own, under
+/// the selector the scaled obligation carries, in either shape
+/// `docs/spec/memory.md` §7 gives one: `word_hi` is a halfword bounded by an
+/// obligation of its own, and `word` is a 32-bit value bounded by that high
+/// chunk and the remainder `word − 2^16·word_hi`. A column with no obligation
+/// at all is refused, and so is one whose direct bound sits under a different
+/// selector.
 ///
 /// Why the scaled half is not enough: a copower turns `x < p` into
 /// `x·p' < 2^32` with `p·p' = 2^32`, and `p'` is a unit in `Fr`, so
 /// `x = s·p'^{-1}` sweeps a coset of `2^32` elements almost none of which are
 /// small integers. The range check on `s` sees nothing wrong.
+///
+/// Why the selector is half the check: on a row the direct bound's selector
+/// switches off and the scaled one's does not, the direct bound is vacuous and
+/// the scaled bound is back to bounding nothing. S17 matched an obligation on
+/// its expression alone and left that open; S18 closed it.
 #[test]
 fn a_copower_scaled_column_needs_its_own_direct_range_check() {
     let a = toy();
+    let live = at(&a, "pc_mask");
     assert_eq!(check_copowers(&a, &[]), Ok(()));
     assert_eq!(
-        check_copowers(&a, &[at(&a, "word_hi")]),
+        check_copowers(&a, &[(at(&a, "word_hi"), live)]),
         Ok(()),
         "a halfword"
     );
     assert_eq!(
-        check_copowers(&a, &[at(&a, "word"), at(&a, "word_hi")]),
+        check_copowers(&a, &[(at(&a, "word"), live), (at(&a, "word_hi"), live)]),
         Ok(()),
         "a 32-bit value under the two-halfword convention"
     );
 
     // A column with no obligation at all.
-    let e = check_copowers(&a, &[at(&a, "and_a")]).expect_err("and_a is unbounded");
+    let e = check_copowers(&a, &[(at(&a, "and_a"), live)]).expect_err("and_a is unbounded");
     assert!(
-        e.contains("is copower-scaled, but no range16 obligation bounds it directly"),
+        e.contains("but no range16 obligation under that selector bounds it directly"),
         "{e}"
     );
 
@@ -718,8 +726,8 @@ fn a_copower_scaled_column_needs_its_own_direct_range_check() {
     // `word − 2^16·word_hi` small says nothing while `word_hi` is free.
     let mut half = a.clone();
     half.lookups.retain(|l| l.name != "word_hi_range");
-    assert!(check_copowers(&half, &[at(&a, "word")]).is_err());
-    assert!(check_copowers(&half, &[at(&a, "word_hi")]).is_err());
+    assert!(check_copowers(&half, &[(at(&a, "word"), live)]).is_err());
+    assert!(check_copowers(&half, &[(at(&a, "word_hi"), live)]).is_err());
 
     // A shifted bound is not a direct one. `word_hi + 2^15 < 2^16` says nothing
     // about `word_hi`: it admits `word_hi = p − 1`, whose canonical
@@ -737,8 +745,31 @@ fn a_copower_scaled_column_needs_its_own_direct_range_check() {
         *constant = lit(1 << 15);
     }
     assert!(
-        check_copowers(&shifted, &[at(&a, "word_hi")]).is_err(),
+        check_copowers(&shifted, &[(at(&a, "word_hi"), live)]).is_err(),
         "`word_hi + 2^15 < 2^16` is not a bound on `word_hi`"
+    );
+
+    // The bound is there but under another selector: the pair moves to
+    // `and_on`, which is 0 on rows the pc mask is 1 on, so on those rows the
+    // direct bound says nothing and the scaled one is alone again. Refused,
+    // and the honest selector is accepted beside it.
+    let mut elsewhere = a.clone();
+    let and_on = at(&a, "and_on");
+    for l in elsewhere.lookups.iter_mut() {
+        if l.name == "word_hi_range" || l.name == "word_lo_range" {
+            l.selector = and_on;
+        }
+    }
+    let e = check_copowers(&elsewhere, &[(at(&a, "word"), live)])
+        .expect_err("the direct pair is under another selector");
+    assert!(
+        e.contains("but no range16 obligation under that selector bounds it directly"),
+        "{e}"
+    );
+    assert_eq!(
+        check_copowers(&elsewhere, &[(at(&a, "word"), and_on)]),
+        Ok(()),
+        "under the selector the pair really carries, it bounds"
     );
 }
 

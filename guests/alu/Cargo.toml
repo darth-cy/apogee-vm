@@ -1,0 +1,14 @@
+[package]
+name = "alu"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# No dependencies, and no `guest-sdk`: the SDK's crt0 zeroes `.bss` with a
+# store loop and calls `main`, and stores belong to a family no stage has a
+# circuit for yet. This guest is its own `_start`, written in the instructions
+# of the four families S18 proves — add/sub/lui/auipc, jump/branch/slt,
+# shift/bitwise and mul/div — and the one ecall S16 proves.
+# `guests/.cargo/config.toml` still supplies the target and the frozen linker
+# script.
+[dependencies]

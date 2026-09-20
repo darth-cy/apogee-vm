@@ -1,25 +1,34 @@
-//! The generic channel's committed table: the two tables a wide field still
+//! The generic channel's committed table: the tables a wide field still
 //! needs, packed into one column set under the gated-key convention of
 //! `docs/spec/lookup.md` §4.
 //!
 //! ```text
-//! row 0                      the ZeroEntry, all zero
-//! rows 1 ..= 2^16            AND:          (a + AND_BASE + 1,  b,  a & b)
-//! rows 2^16+1 ..= 2^17       U16GetSign:   (h + SIGN_BASE + 1, h >> 15, 0)
-//! rows above                 the ZeroEntry again, multiplicity 0
+//! row 0                       the ZeroEntry, all zero
+//! rows 1 ..= 2^16             AND:          (a + AND_BASE + 1,   b,        a & b)
+//! rows 2^16+1 ..= 2^17        U16GetSign:   (h + SIGN_BASE + 1,  h >> 15,  0)
+//! rows 2^17+1 ..= 2^17+32     ShiftPowers:  (s + SHIFT_BASE + 1, 2^s,      2^(31−s))
+//! rows above                  the ZeroEntry again, multiplicity 0
 //! ```
 //!
-//! A table's key range is its own — `AND_BASE + 1 ..= AND_BASE + 256` and
-//! `SIGN_BASE + 1 ..= SIGN_BASE + 2^16` are disjoint — so no tuple of one is a
-//! tuple of the other, and the `+ 1` the gating adds keeps every real entry off
-//! the all-zero tuple the `ZeroEntry` answers. The narrower table is
-//! zero-padded to the wider's width, which is [`GENERIC_WIDTH`].
+//! A table's key range is its own — `AND_BASE + 1 ..= AND_BASE + 256`,
+//! `SIGN_BASE + 1 ..= SIGN_BASE + 2^16` and `SHIFT_BASE + 1 ..= SHIFT_BASE + 32`
+//! are pairwise disjoint — so no tuple of one is a tuple of another, and the
+//! `+ 1` the gating adds keeps every real entry off the all-zero tuple the
+//! `ZeroEntry` answers. A narrower table is zero-padded to the widest's width,
+//! which is [`GENERIC_WIDTH`].
 //!
 //! The taxonomy stays small on purpose. XOR and AND are positional — a wide
 //! field says nothing extra about a byte's seventh bit — and `U16GetSign` is
 //! load-bearing in a way it was not over a small field: with a whole word in one
 //! column, its top bit is no longer a column that already exists, so every sign
-//! comes from here.
+//! comes from here. `ShiftPowers` is the one table whose *domain* is the bound:
+//! it has a row for each of the 32 shift amounts and for no other value, which
+//! is what truncates a shift (`docs/spec/shift-bitwise.md` §3).
+//!
+//! `ShiftPowers`' second value is `2^(31−s)`, half the `2^(32−s)` a residue
+//! bound multiplies by, because `2^32` does not fit these columns' `u32`
+//! backing; the two gates that read it carry the factor 2.
+//! `constants::generic_table::SHIFT_COPOWER_BITS`.
 
 use constants::generic_table;
 use curve::G1Affine;
@@ -47,8 +56,16 @@ pub const SIGN_BASE: u32 = generic_table::SIGN_BASE;
 /// `U16GetSign`'s rows: one per halfword.
 pub const SIGN_ROWS: usize = 1 << 16;
 
-/// The rows the packed table needs: the `ZeroEntry` and both tables.
-pub const GENERIC_ROWS: usize = 1 + AND_ROWS + SIGN_ROWS;
+/// `ShiftPowers`' key base, one past `U16GetSign`'s highest key.
+/// `constants::generic_table::SHIFT_BASE`.
+pub const SHIFT_BASE: u32 = generic_table::SHIFT_BASE;
+
+/// `ShiftPowers`' rows: one per RV32 shift amount.
+/// `constants::generic_table::SHIFT_ROWS`.
+pub const SHIFT_ROWS: usize = generic_table::SHIFT_ROWS;
+
+/// The rows the packed table needs: the `ZeroEntry` and the three tables.
+pub const GENERIC_ROWS: usize = 1 + AND_ROWS + SIGN_ROWS + SHIFT_ROWS;
 
 /// The smallest height that holds the packed table: `2^18`, the first power
 /// of two at or above [`GENERIC_ROWS`].
@@ -80,14 +97,22 @@ pub fn generic_table(log_height: u32) -> Vec<MultilinearPoly> {
 }
 
 /// Every real entry of the packed table, in row order from row 1: the AND byte
-/// table, then `U16GetSign`. Row 0, the `ZeroEntry`, is not among them.
+/// table, then `U16GetSign`, then `ShiftPowers`. Row 0, the `ZeroEntry`, is not
+/// among them.
 ///
 /// This is the tuple a lookup expression must produce, so it is also what an
 /// independent reference computation is diffed against.
 pub fn generic_entries() -> Vec<[u32; GENERIC_WIDTH]> {
     let and = (0..256u32).flat_map(|a| (0..256u32).map(move |b| [AND_BASE + a + 1, b, a & b]));
     let sign = (0..1u32 << 16).map(|h| [SIGN_BASE + h + 1, h >> 15, 0]);
-    and.chain(sign).collect()
+    let shift = (0..SHIFT_ROWS as u32).map(|s| {
+        [
+            SHIFT_BASE + s + 1,
+            1 << s,
+            1 << (generic_table::SHIFT_COPOWER_BITS - s),
+        ]
+    });
+    and.chain(sign).chain(shift).collect()
 }
 
 /// The `ZeroEntry`, which every switched-off row of the channel looks up.

@@ -26,7 +26,7 @@ use test_support::{sha256, to_hex};
 /// The synthetic ELFs are not listed one by one: `synthetic_elfs.txt` carries
 /// their digests and is itself pinned here, so the chain is one constant long
 /// either way and the index stays readable.
-pub const PINS: [(&str, &str); 16] = [
+pub const PINS: [(&str, &str); 17] = [
     (
         "fib.elf",
         "e163a65249fff123742588a3bcb44e09b72f89bbbed80fb406baf3c0f9b7622d",
@@ -74,6 +74,10 @@ pub const PINS: [(&str, &str); 16] = [
     (
         "control.elf",
         "88f5b0ccf00b889c50ec81892a44550b5d19bde75f5fa388cea4027898aecdaa",
+    ),
+    (
+        "alu.elf",
+        "32f85c1799425f5de1a0ac04368e1e6b952289627710b804202f53895dccc168",
     ),
     (
         "fib.objdump.txt",

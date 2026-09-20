@@ -139,6 +139,7 @@ fn every_committed_guest_renders_and_the_listing_is_the_tables() {
         "consistency",
         "addsub",
         "control",
+        "alu",
     ] {
         let elf = loader_vector(&format!("{name}.elf"));
         let params = fitting(&elf);

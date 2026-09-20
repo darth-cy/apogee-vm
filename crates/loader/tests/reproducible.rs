@@ -33,6 +33,7 @@ fn two_clean_builds_agree() {
         "consistency",
         "addsub",
         "control",
+        "alu",
     ] {
         let a = build(name, "repro-a");
         let b = build(name, "repro-b");

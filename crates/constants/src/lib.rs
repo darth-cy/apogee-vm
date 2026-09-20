@@ -929,12 +929,14 @@ pub mod lookup_channel {
 
 /// The generic channel's packed table, frozen at S15 in `crates/program`'s
 /// `lookup_tables` and moved here at S17, when a circuit — which cannot
-/// depend on `program` — first builds a key into it. `docs/spec/lookup.md` §9.
+/// depend on `program` — first builds a key into it. S18 appends
+/// `ShiftPowers`. `docs/spec/lookup.md` §9.
 ///
 /// ```text
-/// row 0                    the ZeroEntry, all zero
-/// rows 1 ..= 2^16          AND:        (AND_BASE  + a + 1,  b,        a & b)
-/// rows 2^16+1 ..= 2^17     U16GetSign: (SIGN_BASE + h + 1,  h >> 15,  0)
+/// row 0                     the ZeroEntry, all zero
+/// rows 1 ..= 2^16           AND:         (AND_BASE   + a + 1,  b,        a & b)
+/// rows 2^16+1 ..= 2^17      U16GetSign:  (SIGN_BASE  + h + 1,  h >> 15,  0)
+/// rows 2^17+1 ..= 2^17+32   ShiftPowers: (SHIFT_BASE + s + 1,  2^s,      2^(31−s))
 /// ```
 pub mod generic_table {
     /// The table's tuple width: a key and two values.
@@ -947,6 +949,26 @@ pub mod generic_table {
     /// `U16GetSign`'s key base, one past the AND table's highest key: its keys
     /// are `SIGN_BASE + h + 1` for every halfword `h`, disjoint from AND's.
     pub const SIGN_BASE: u32 = 256;
+
+    /// `ShiftPowers`' key base, one past `U16GetSign`'s highest key: its keys
+    /// are `SHIFT_BASE + s + 1` for every shift amount `s < 32`, disjoint from
+    /// both ranges below it.
+    pub const SHIFT_BASE: u32 = SIGN_BASE + (1 << 16);
+
+    /// `ShiftPowers`' rows: one per shift amount a RV32 shift can take, which
+    /// is what bounds a looked-up amount to `[0, 32)` — the table *is* the
+    /// bound (`docs/spec/shift-bitwise.md` §3).
+    pub const SHIFT_ROWS: usize = 32;
+
+    /// The exponent `ShiftPowers`' two values sum to: row `s` is
+    /// `(2^s, 2^(SHIFT_COPOWER_BITS − s))`, so their product is
+    /// `2^SHIFT_COPOWER_BITS` on every row.
+    ///
+    /// **It is 31, not 32.** The copower a residue bound needs is `2^(32 − s)`,
+    /// which at `s = 0` is `2^32` and does not fit the packed table's `u32`
+    /// columns; the table stores half of it and the two gates that read it
+    /// carry the compensating factor 2 (`docs/spec/shift-bitwise.md` §3.1).
+    pub const SHIFT_COPOWER_BITS: u32 = 31;
 }
 
 /// The circuit families, by number. Frozen at S11; **append-only**.

@@ -855,14 +855,9 @@ fn the_registry_holds_the_family() {
     assert_eq!(family_circuit(family::JUMP_BRANCH_SLT, 18), None);
     let at_19 = family_circuit(family::JUMP_BRANCH_SLT, 19).expect("the family at 2^19");
     assert_eq!(at_19.artifact, jump_branch_slt::artifact(19));
-    // Every other family's ownership of its own rows is unchanged.
-    for id in [
-        family::SHIFT_BITWISE,
-        family::MUL_DIV,
-        family::MEM_WORD,
-        family::MEM_SUBWORD,
-        family::ATOMICS,
-    ] {
+    // Every family no stage proves yet is still unregistered. S18's two are
+    // registered now, and are their own suites'.
+    for id in [family::MEM_WORD, family::MEM_SUBWORD, family::ATOMICS] {
         assert_eq!(family_circuit(id, VARS), None, "family {id}");
     }
 }
