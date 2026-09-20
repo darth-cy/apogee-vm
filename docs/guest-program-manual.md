@@ -66,7 +66,7 @@ A guest is an ordinary `no_std` binary crate that lives in the `guests/`
 workspace. Three files, one of which already exists.
 
 `hello` below is the guest this manual builds; you are creating it now. The
-repository ships twelve, and every command here works on those too with the name
+repository ships thirteen, and every command here works on those too with the name
 changed. They are worth reading before you write your own, because between them
 they cover most of what a guest can do:
 
@@ -84,6 +84,7 @@ they cover most of what a guest can do:
 | `consistency` | ordinary Rust — numerics, collections, text, traits and closures, a codec, hashes, allocation patterns — as a `no_std` library the host calls directly and a thin guest `main`. The consistency suite runs it on the host, under QEMU and on the emulator and holds the three to one answer; §2a is the pattern to copy |
 | `addsub` | S16's tiny guest, the first program proven end to end: a straight run of `add`, `sub`, `addi`, `lui` and `auipc` in both lengths, a `fence`, and an exit whose status, 42, is its result. It is hand-written assembly with no `guest-sdk` under it, one of the two guests that do not use `guest_sdk::entry!` — its own `_start` is the whole program, because crt0's `.bss` loop and its call to `main` are branches, stores and jumps, which S16 has no circuit for — so read it as a proof fixture, not a pattern |
 | `control` | S17's guest, proven end to end the same way: the twelve jumps, branches and comparisons of the `JUMP_BRANCH_SLT` family at their edge cases — full-width and mixed-sign orderings, `slti`/`sltiu` against −1, `x0` as a destination, a loop closed by a backward branch, calls and returns in both lengths, and a `jalr` whose `rs1 + imm` has bit 0 set — each checked by the guest itself, exiting with the number of checks, 16. Hand-written assembly with no `guest-sdk`, for `addsub`'s reason: its only instructions are the two families S17 proves |
+| `alu` | S18's guest, proven end to end the same way: the twelve shifts and bitwise operations of the `SHIFT_BITWISE` family and the eight M operations of `MUL_DIV`, at the edge cases the stage names — shamt 0, 1 and 31, `rs2 = 32` and 33 for the shift amount's truncation, `sra` of a negative operand, all four sign quadrants of each multiply and each division, `−2^31 × −2^31`, the asymmetric `mulhsu` corner, division by zero for all four, and the one signed overflow — each checked by the guest itself, exiting with the number of checks, 96. Hand-written assembly with no `guest-sdk`, for `addsub`'s reason: its only instructions are the four families S18 proves |
 
 If you are looking for a pattern to copy, `amm` is the one to read for arithmetic
 and framing, `orderbook` for anything that takes prover advice, and `vault` for
@@ -121,7 +122,7 @@ fn main() {
 **`guests/Cargo.toml`** — add the crate to the member list:
 
 ```toml
-members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "consistency", "addsub", "control", "hello"]
+members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "consistency", "addsub", "control", "alu", "hello"]
 ```
 
 Four things about that source file are not negotiable:
@@ -445,7 +446,7 @@ Three segments is what the frozen `link.ld` produces for every guest in this
 repository that has read-only data: `.text` (read + execute), `.rodata` (read
 only), and one writable segment holding `.data`, `.bss` and the reservation above
 them, running to the top of RAM. A guest with no `.rodata` has two, as `addsub` and
-`control` do, each a page of hand-written instructions and nothing else. The
+`control` and `alu` do, each a page of hand-written instructions and nothing else. The
 writable segment's `file bytes` is zero whenever `.data` is empty, which is the
 common case — `hello`, `fib`, `echo` and `rvc-dense` are all like that, so the
 whole third segment is zero fill. It is declared because a host program loader
@@ -639,7 +640,7 @@ the first and unrunnable under the second — S10 shipped exactly that, twice.
 The two rules are properties of `link.ld`, which every guest links against
 unmodified, so a guest that changes only its own source has the segment shape
 the committed guests have. `crates/loader/tests/layout.rs` checks those over all
-twelve committed guests on every CI run, and its ignored case relinks them from
+thirteen committed guests on every CI run, and its ignored case relinks them from
 source and re-checks — which is what to run after touching the script:
 
 ```

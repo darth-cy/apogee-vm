@@ -27,6 +27,8 @@ pub mod jump_branch_slt;
 mod laws;
 pub mod lookup;
 pub mod memory;
+pub mod mul_div;
+pub mod shift_bitwise;
 mod wire;
 
 pub use laws::ConstraintError;
@@ -79,10 +81,10 @@ impl FamilyCircuit {
 /// **The one registry of circuits**, `docs/spec/shard-proof.md` §11: a
 /// verifying key's circuits must be byte for byte what this returns, and a
 /// later family is added here, with one constructor, and nowhere in the
-/// verifier. `ADD_SUB_LUI_AUIPC` and `JUMP_BRANCH_SLT` need 19 variables for
-/// their timestamp channel (`docs/spec/lookup.md` §3) — which also holds the
-/// generic table's `2^17 + 1` rows the second reads; the two RAM window
-/// families take any height up to `MAX_TRACE_VARS`.
+/// verifier. Every execution family needs 19 variables for its timestamp
+/// channel (`docs/spec/lookup.md` §3) — which also holds the packed generic
+/// table's rows, which three of the four read; the two RAM window families
+/// take any height up to `MAX_TRACE_VARS`.
 pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
     use constants::family as f;
     if trace_vars > MAX_TRACE_VARS {
@@ -90,12 +92,21 @@ pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
     }
     let timestamp = constants::lookup_channel::BITS[constants::lookup_channel::TIMESTAMP as usize];
     let (artifact, channels) = match family {
-        f::ADD_SUB_LUI_AUIPC | f::JUMP_BRANCH_SLT if trace_vars < timestamp => return None,
+        f::ADD_SUB_LUI_AUIPC | f::JUMP_BRANCH_SLT | f::SHIFT_BITWISE | f::MUL_DIV
+            if trace_vars < timestamp =>
+        {
+            return None
+        }
         f::ADD_SUB_LUI_AUIPC => (add_sub::artifact(trace_vars), add_sub::channels()),
         f::JUMP_BRANCH_SLT => (
             jump_branch_slt::artifact(trace_vars),
             jump_branch_slt::channels(),
         ),
+        f::SHIFT_BITWISE => (
+            shift_bitwise::artifact(trace_vars),
+            shift_bitwise::channels(),
+        ),
+        f::MUL_DIV => (mul_div::artifact(trace_vars), mul_div::channels()),
         f::INIT_TEARDOWN => (memory::image_window_artifact(trace_vars), Vec::new()),
         f::ZERO_WINDOWS => (memory::zero_window_artifact(trace_vars), Vec::new()),
         _ => return None,

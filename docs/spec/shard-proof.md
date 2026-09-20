@@ -7,6 +7,13 @@ them, 192 bytes), and §4, §5, §7, §8.5 and §11 to match. The global transcr
 schedule, §2, did not change; a note there says where the table is bound.
 `docs/spec/jump-branch-slt.md` is that family's page.
 
+S18 registered the third and fourth execution families and **changed nothing in this
+page's protocol**: §3's recipe, §9's layout and §2's schedule are as S17 left them. What
+moved is the value inside one message — the packed table gained `ShiftPowers`' 32 rows, so
+its three commitments and every key's SRS digest and bytes moved again (§3). §5.1, §7.2
+and §11 gain the two new readers. `docs/spec/shift-bitwise.md` and `docs/spec/mul-div.md`
+are those families' pages.
+
 This page is S16's vertical slice as the repository owner decided it: the statement a
 proof is about, the global and per-shard transcripts, the three proof-side types and
 their wire forms, the order `verify_shard` checks things in, the `ADD_SUB_LUI_AUIPC`
@@ -172,10 +179,14 @@ on the owner's decision to fold the generic table into the SRS digest. Every S16
 digest therefore changed, and so did its bytes (§9). The table enters the global
 transcript only through this digest, which G2 absorbs.
 
+**S18 changed the table, not the recipe.** Appending `ShiftPowers` to the packed table
+moved its three commitments, so every S16 and S17 key's digest and bytes moved with them.
+The message, its tag, its position and the rest of this section are unchanged.
+
 **Why one digest can carry the table.** Both messages are constants of the ceremony. A
 Mercury commitment is a plain KZG commitment of the evaluation table read as coefficients
 (`docs/spec/mercury.md` §2), and `program::lookup_tables::generic_table(n)` is zero past
-its 131,073 entries. So the table over `2^n` rows commits to the same three points at
+its entries — 131,073 at S17, 131,105 since S18. So the table over `2^n` rows commits to the same three points at
 every even `n ≥ 18`, which is every height Mercury commits at from `2^18` up, and every
 key carries that one set, whatever its program and heights.
 `program::lookup_tables::generic_commitments(srs)` computes it at `GENERIC_LOG_HEIGHT`,
@@ -256,11 +267,15 @@ their closed form itself.
 
 `FamilyCircuit::reads_generic_table` is whether any of the circuit's channel specs is
 `GENERIC`; `reduce_shard`'s step 11 and the prover's opening both list the key's one
-`generic_table` after identity's commitments exactly when it is true. At S17 only
-`JUMP_BRANCH_SLT` reads it. Its `S[0..7]` are the decoded table, identity's seven, and
-`S[7..10]` the packed generic table (`constraints::jump_branch_slt::GENERIC_TABLE`). So
-`guests/control`'s jump-family shard at `2^20` opens `21 + 44 + 10` = 75 commitments,
-the last three the key's `generic_table`, and its add/sub shard opens `36 + 31 + 7`.
+`generic_table` after identity's commitments exactly when it is true. Three of the four
+registered execution families read it: `JUMP_BRANCH_SLT`, whose `S[0..7]` are the decoded
+table and whose `S[7..10]` are the packed generic table; S18's `SHIFT_BITWISE`, the same
+shape; and S18's `MUL_DIV`, whose decoded tuple has no immediate, so its table is `S[0..6]`
+and the packed table `S[6..9]`. `ADD_SUB_LUI_AUIPC` does not. So `guests/alu`'s shards at
+`2^20` open `21 + 44 + 10` = 75, `21 + 61 + 10` = 92 and `21 + 54 + 9` = 84 commitments,
+each ending with the key's `generic_table`, and its add/sub shard opens `36 + 31 + 7`.
+**Nothing in the key changed when the second and third readers arrived**, which is the
+point of carrying the triple in every key whatever its families read.
 
 ### 5.2 What the setup commitments bind
 
@@ -609,7 +624,8 @@ MSMs — combines its parts in a fixed order, so proofs do not depend on the thr
 ## 11. The registry
 
 `constraints::family_circuit(family, trace_vars)` returns a family's circuit for
-`ADD_SUB_LUI_AUIPC` and S17's `JUMP_BRANCH_SLT` (`docs/spec/jump-branch-slt.md`), each
+`ADD_SUB_LUI_AUIPC`, S17's `JUMP_BRANCH_SLT` (`docs/spec/jump-branch-slt.md`) and S18's
+`SHIFT_BITWISE` and `MUL_DIV` (`docs/spec/shift-bitwise.md`, `docs/spec/mul-div.md`), each
 built from 19 variables and provable from 20 (§8), for `INIT_TEARDOWN`
 (`image_window_artifact`, no channels) and for `ZERO_WINDOWS` (`zero_window_artifact`, no
 channels). It returns `None` for a family no stage proves yet and for a height its circuit
@@ -618,4 +634,7 @@ later family is added by one constructor, one arm in each table and one fill, wi
 edit to `global_commit_phase`, `prove_shard`, `reduce_shard` or `verify_shard`. A later
 family that reads the generic channel needs nothing more: every key already carries the
 table's commitments, and `FamilyCircuit::reads_generic_table` adds them to its opening
-(§5.1) and its setup count (§7.2).
+(§5.1) and its setup count (§7.2). **S18's two families were exactly that** — two
+constructors, two registry arms, two fills — plus the 32 rows they appended to the packed
+table, which moved the table's commitments and so every key's SRS digest (§3), and nothing
+in this crate's code.

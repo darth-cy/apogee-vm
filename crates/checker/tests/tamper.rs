@@ -1,15 +1,15 @@
-//! S16's and S17's tamper twins, through `TamperHarness`: one statement —
-//! `guests/addsub`, or S17's `guests/control` — proved honestly once per test,
-//! then proved again with one tamper as an honest prover would prove the
-//! tampered witness, and one shard verified through `verify_shard`. Each twin
-//! asserts the class of the check that refuses it
-//! (`docs/spec/shard-proof.md` §6).
+//! S16's, S17's and S18's tamper twins, through `TamperHarness`: one
+//! statement — `guests/addsub`, S17's `guests/control`, or S18's `guests/alu` —
+//! proved honestly once per test, then proved again with one tamper as an
+//! honest prover would prove the tampered witness, and one shard verified
+//! through `verify_shard`. Each twin asserts the class of the check that
+//! refuses it (`docs/spec/shard-proof.md` §6).
 //!
 //! **`#[ignore]`d, and run by name with `--include-ignored --test-threads=1`**:
 //! the add/sub shard is `2^20` rows and a statement's proof peaks at 8.6 GB —
 //! 9.3 GB with the honest statement the harness holds beside a re-proof — and
-//! `control`'s has two execution shards of that height, which puts the file's
-//! peak at 11.3 GB.
+//! `control`'s has two execution shards of that height, 11.3 GB. S18's `alu`
+//! has four, which puts the file's peak at 15.7 GB.
 //! The rows these tampers edit are `crates/checker/tests/add_sub.rs`'s, which
 //! runs in ordinary CI.
 //!
@@ -17,14 +17,26 @@
 //! `add t2, t0, t1` (carrying), row 5 `add t3, t1, t1`, row 8 `add x0, t0, t1`
 //! (carrying, discarded), row 27 `addi a7, x0, 93`, row 28 the exit. Everything
 //! from row 29 up is padding.
+//!
+//! S18 adds `guests/alu`, whose statement has four execution shards of `2^20`
+//! rows — add/sub, jump/branch/slt, shift/bitwise and mul/div — and so is the
+//! largest statement in the file. Its twins name no row number: the shift and
+//! mul/div rows are found by their committed kind bit and by the very cell the
+//! twin corrupts, so a guest that grows a check keeps the test honest. The
+//! rows themselves, instruction by instruction, are
+//! `crates/checker/tests/shift_bitwise.rs`' and `crates/checker/tests/
+//! mul_div.rs`', which run in ordinary CI.
 
 #[path = "../../prover/tests/common/mod.rs"]
 mod common;
 
 use checker::{Cell, Tamper, TamperHarness};
 use constants::extra_mask::jump_branch_slt as kind;
+use constants::extra_mask::mul_div as md_kind;
+use constants::extra_mask::shift_bitwise as sb_kind;
 use constants::family::JUMP_BRANCH_SLT as JBS;
 use constants::family::{ADD_SUB_LUI_AUIPC as ADD, INIT_TEARDOWN as INIT};
+use constants::family::{MUL_DIV as MD, SHIFT_BITWISE as SHB};
 use constants::lookup_channel;
 use constraints::add_sub::{DECODED, KINDS, MULTIPLICITIES, NEXT_PC_HI, PC_WRAP, RD_HI, WRAP};
 use constraints::jump_branch_slt as jbs;
@@ -32,6 +44,8 @@ use constraints::memory::{
     frame, gap_hi, rd_inv, rd_is_zero, rd_selected, CYCLE, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS,
     FIELD_READ_VALUE, FIELD_WRITE_VALUE,
 };
+use constraints::mul_div as md;
+use constraints::shift_bitwise as sb;
 use constraints::PolyAddress;
 use field::Fr;
 use prover::{shard_columns, ProverSetup};
@@ -657,4 +671,168 @@ fn s17_a6_a_jump_to_a_pc_holding_no_instruction_is_unprovable() {
     assert!(refusal.contains("channel `decoder`"), "{refusal}");
 
     h.assert_rejects(&tamper(cells), (JBS, 0), lookup(lookup_channel::DECODER));
+}
+
+// ---------------------------------------------------------------------------
+// S18: the shift/bitwise and mul/div families, over `guests/alu`
+// ---------------------------------------------------------------------------
+
+/// The row the negative control edits, and the bound of the scan that finds
+/// the rows the twins corrupt. Both S18 families run well under a hundred live
+/// rows of `alu`, and every row above them is padding, whose committed cells
+/// are all zero — so this row is padding, and a predicate that reads a nonzero
+/// cell cannot match on any padding row below it.
+const ALU_PADDING: usize = 1000;
+
+/// The value `address` holds at `row` of one shard's committed columns.
+fn at(columns: &[(PolyAddress, poly::MultilinearPoly)], address: PolyAddress, row: usize) -> Fr {
+    columns
+        .iter()
+        .find(|(a, _)| *a == address)
+        .unwrap_or_else(|| panic!("no {address}"))
+        .1
+        .get(row)
+}
+
+/// The first row of `columns` carrying kind bit `bit` on which `cell` is not
+/// zero: the row a twin corrupts, found by the very cell it corrupts, so no
+/// twin here names a row number.
+fn alu_row(
+    columns: &[(PolyAddress, poly::MultilinearPoly)],
+    bit: PolyAddress,
+    cell: PolyAddress,
+    what: &str,
+) -> usize {
+    (0..ALU_PADDING)
+        .find(|&i| at(columns, bit, i) == Fr::ONE && at(columns, cell, i) != Fr::ZERO)
+        .unwrap_or_else(|| panic!("alu runs no {what}"))
+}
+
+/// S18 acceptance 8, one twin per family and three refusal classes on screen.
+/// The honest `alu` statement — four execution shards of `2^20` rows, the
+/// largest in this file — verifies (the harness asserts it); its structural
+/// counts are the two documents'; and then, each refused in its class:
+///
+/// - **the residue twin.** One `residue` cell of an `sra` that discards a bit,
+///   raised by one. `residue` is what a right shift's floor-division identity
+///   `rs1 − 2^32·se = (rd − 2^32·se)·2^s + residue` balances with, and
+///   `scaled = residue·2^(32 − s)` is the copower half of its bound, so the
+///   circuit refuses it: `Constraint`. This is the stage's named
+///   shift/bitwise twin.
+/// - **the product-high twin.** One `p_high` cell of a `mulh` whose product has
+///   a high half, raised by one. The one product identity
+///   `mx·my = p_low + 2^32·p_high − 2^64·p_sign` covers all four multiplies and
+///   the division alike, and `rd` is `p_high` on this row, so two gates refuse
+///   it: `Constraint`. This is the stage's named mul/div twin.
+/// - **a multiplicity, in a second class.** The shift family's `GENERIC` count
+///   of the `ZeroEntry`, the packed table's first row, which every switched-off
+///   lookup of the shard gates to, raised by one. Every gate still holds and
+///   every range is still in range; the channel whose count it is —
+///   the one carrying `U16GetSign`, the shift powers and the four AND bytes —
+///   is what refuses it, `Lookup { GENERIC }`, and the harness's per-channel
+///   recount leaves that column alone precisely because it is the tamper.
+/// - **a memory column, in a third class.** The pc read timestamp of a live
+///   mul/div row, lowered by one. Its gap chunk stays in range and its
+///   multiplicity is recounted, the shard's memory columns are recommitted,
+///   and the tuple then matches no write in the statement: only the global
+///   multiset refuses it, `MemoryArgument`.
+///
+/// And the negative control, which is what says the four above mean anything:
+/// cells nothing reads, on a padding row of each family, change and the
+/// statement still verifies. On the shift family's, `pow` — whose one product
+/// `pow·copow` has a copower of 0 there, whose `shift_prod` product has a
+/// `shift_in` of 0, and whose `ShiftPowers` lookup `f_shift` switches off — and
+/// one AND byte, which no gate reads but through a kind bit and no lookup but
+/// under `f_bitwise`. On the mul/div family's, the two is-zero inverses, which
+/// multiply `r` and `rs2`, both 0 there. None of the four is range checked.
+#[test]
+#[ignore = "four 2^20-row execution shards, and the honest statement beside a re-proof: 15.7 GB"]
+fn s18_a8_the_residue_and_the_product_high_are_pinned() {
+    let setup = common::alu_setup();
+    let archive = common::alu_archive(&setup.program);
+    let h = TamperHarness::new(&setup, &archive);
+
+    // The structural counts: five shards, `ZERO_WINDOWS` the one family of the
+    // config that does not run, and each new family's committed width —
+    // `docs/spec/shift-bitwise.md` §6 and `docs/spec/mul-div.md` §6.
+    let (public, proofs) = h.honest();
+    assert_eq!(public.shard_counts, vec![1, 1, 1, 1, 1, 0]);
+    let shards: Vec<(u32, u32)> = proofs.iter().map(|p| (p.family, p.shard_index)).collect();
+    assert_eq!(
+        shards,
+        vec![(INIT, 0), (ADD, 0), (JBS, 0), (SHB, 0), (MD, 0)]
+    );
+    for (family, want) in [(SHB, (21, 61, 10)), (MD, (21, 54, 9))] {
+        let a = &setup.vk.circuit(family).expect("a circuit").artifact;
+        assert_eq!((a.memory.len(), a.witness.len(), a.setup.len()), want);
+    }
+
+    let shift = shard_columns(&setup, &archive, SHB, 0, &[]).expect("the honest shift shard");
+    let muldiv = shard_columns(&setup, &archive, MD, 0, &[]).expect("the honest mul/div shard");
+
+    // The residue twin.
+    let r = alu_row(
+        &shift,
+        sb::KINDS[sb_kind::SRA as usize],
+        sb::RESIDUE,
+        "`sra` that discards a bit",
+    );
+    let residue = at(&shift, sb::RESIDUE, r);
+    h.assert_rejects(
+        &tamper(vec![cell(SHB, sb::RESIDUE, r, residue + Fr::ONE)]),
+        (SHB, 0),
+        CONSTRAINT,
+    );
+
+    // The product-high twin.
+    let r = alu_row(
+        &muldiv,
+        md::KINDS[md_kind::MULH as usize],
+        md::P_HIGH,
+        "`mulh` whose product has a high half",
+    );
+    let high = at(&muldiv, md::P_HIGH, r);
+    h.assert_rejects(
+        &tamper(vec![cell(MD, md::P_HIGH, r, high + Fr::ONE)]),
+        (MD, 0),
+        CONSTRAINT,
+    );
+
+    // A generic-channel count, in a second class.
+    let m = at(&shift, sb::MULTIPLICITIES[2], 0);
+    h.assert_rejects(
+        &tamper(vec![cell(SHB, sb::MULTIPLICITIES[2], 0, m + Fr::ONE)]),
+        (SHB, 0),
+        lookup(lookup_channel::GENERIC),
+    );
+
+    // A pc read timestamp, in a third.
+    let read_ts = frame(PC, FIELD_READ_TS);
+    let r = (1..ALU_PADDING)
+        .find(|&i| at(&muldiv, read_ts, i) != Fr::ZERO)
+        .expect("a mul/div row reading a pc written before it");
+    let ts = at(&muldiv, read_ts, r);
+    h.assert_rejects(
+        &tamper(vec![cell(MD, read_ts, r, ts - Fr::ONE)]),
+        (MD, 0),
+        MEMORY,
+    );
+
+    // The negative control.
+    assert_eq!(at(&shift, frame(PC, FIELD_MASK), ALU_PADDING), Fr::ZERO);
+    assert_eq!(at(&muldiv, frame(PC, FIELD_MASK), ALU_PADDING), Fr::ZERO);
+    h.assert_verifies(
+        &tamper(vec![
+            cell(SHB, sb::POW, ALU_PADDING, f(7)),
+            cell(SHB, sb::BYTES_AND[0], ALU_PADDING, f(5)),
+        ]),
+        (SHB, 0),
+    );
+    h.assert_verifies(
+        &tamper(vec![
+            cell(MD, md::R_INV, ALU_PADDING, f(7)),
+            cell(MD, md::D_INV, ALU_PADDING, f(9)),
+        ]),
+        (MD, 0),
+    );
 }

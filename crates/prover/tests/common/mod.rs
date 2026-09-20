@@ -6,6 +6,8 @@
 //!   `2^16`, traced into an archive.
 //! - S17's: `guests/control`'s, the same way, with both of its execution
 //!   families — add/sub and jump/branch/slt — at `2^20`.
+//! - S18's: `guests/alu`'s, with all four of its execution families — those
+//!   two, shift/bitwise and mul/div — at `2^20`.
 
 #![allow(dead_code)]
 
@@ -29,6 +31,9 @@ pub const WINDOW_VARS: u32 = 16;
 
 /// `guests/addsub`'s exit status.
 pub const RESULT: u32 = 42;
+
+/// `guests/alu`'s exit status: the number of its checks.
+pub const ALU_RESULT: u32 = 96;
 
 /// `guests/control`'s exit status: the number of its checks.
 pub const CONTROL_RESULT: u32 = 16;
@@ -65,6 +70,16 @@ pub fn control_params() -> ProgramParams {
     heights(&[family::ADD_SUB_LUI_AUIPC, family::JUMP_BRANCH_SLT])
 }
 
+/// S18's heights: all four of `alu`'s execution families at `2^20`.
+pub fn alu_params() -> ProgramParams {
+    heights(&[
+        family::ADD_SUB_LUI_AUIPC,
+        family::JUMP_BRANCH_SLT,
+        family::SHIFT_BITWISE,
+        family::MUL_DIV,
+    ])
+}
+
 fn program_of(name: &str, params: &ProgramParams) -> Program {
     let image = load_elf(&fixture(name)).unwrap_or_else(|e| panic!("{name} loads: {e:?}"));
     let (tables, config) =
@@ -84,6 +99,10 @@ pub fn control_program() -> Program {
     program_of("control", &control_params())
 }
 
+pub fn alu_program() -> Program {
+    program_of("alu", &alu_params())
+}
+
 /// The post-execution archive of `addsub`'s one run.
 pub fn archive(program: &Program) -> TraceArchive {
     trace(program, RESULT)
@@ -92,6 +111,11 @@ pub fn archive(program: &Program) -> TraceArchive {
 /// The post-execution archive of `control`'s one run.
 pub fn control_archive(program: &Program) -> TraceArchive {
     trace(program, CONTROL_RESULT)
+}
+
+/// The post-execution archive of `alu`'s one run.
+pub fn alu_archive(program: &Program) -> TraceArchive {
+    trace(program, ALU_RESULT)
 }
 
 /// A run with no input and no hint, which must exit with `status`.
@@ -121,6 +145,10 @@ pub fn setup() -> ProverSetup {
 
 pub fn control_setup() -> ProverSetup {
     ProverSetup::new(control_program(), toy_srs(ADD_VARS)).expect("control registers")
+}
+
+pub fn alu_setup() -> ProverSetup {
+    ProverSetup::new(alu_program(), toy_srs(ADD_VARS)).expect("alu registers")
 }
 
 /// The toy SRS's `tau`.

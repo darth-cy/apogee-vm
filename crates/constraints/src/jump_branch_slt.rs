@@ -294,7 +294,7 @@ fn the_comparison() -> Comparison {
 /// The family's circuit over `2^trace_vars` rows,
 /// `docs/spec/jump-branch-slt.md`. `trace_vars` is at least 19, the timestamp
 /// channel's width, which the assembly refuses below; a Mercury opening needs
-/// it even as well, and at 19 or more the generic table's `2^17 + 1` rows fit.
+/// it even as well, and at 19 or more the generic table's rows fit.
 ///
 /// Panics if the family's frame is not the four queries this file addresses,
 /// if any channel's obligation count is not the document's — 8 timestamp, 11
@@ -548,7 +548,13 @@ fn assemble(trace_vars: u32, family_spec: FamilySpec) -> CircuitArtifact {
     }
     // The evenness obligation scales next_pc's low halfword by 1/2, which
     // bounds nothing unless next_pc is bounded directly too.
-    if let Err(e) = check_copowers(&a, &[frame(SLOT_PC, FIELD_WRITE_VALUE)]) {
+    if let Err(e) = check_copowers(
+        &a,
+        &[(
+            frame(SLOT_PC, FIELD_WRITE_VALUE),
+            frame(SLOT_PC, FIELD_MASK),
+        )],
+    ) {
         panic!("jump_branch_slt: {e}");
     }
     // A shard's padding rows are all zero, which every gate must accept.

@@ -44,7 +44,10 @@ pub enum ProverError { Unregistered { family, height }, Key(String), Trace(Strin
   S17's jump family was that, plus the binding of the generic table it is the first to
   read: every key carries the table's commitments, and `opening_part` and `reduce_shard`'s
   step 11 list them after identity's setup commitments for a family whose circuit reads
-  the `GENERIC` channel.
+  the `GENERIC` channel. **S18's two families were that and nothing else**: two circuits,
+  two fills, and no edit anywhere in this crate's phase code — the second and third readers
+  of the generic channel needed no key change at all, which is what carrying the triple in
+  every key buys.
 - **A shard's proof is two crate-private halves**, `gkr_part` (through the GKR proof, to
   a `ShardGkr` — the post-GKR snapshot's entry) and `opening_part` (the batched opening),
   which `prove_shard_columns` runs back to back and `advance` runs a phase apart.
@@ -74,7 +77,22 @@ pub enum ProverError { Unregistered { family, height }, Key(String), Trace(Strin
   `u32`/`i32` ordering — `cmp_gap` is `(rs1 − cmp_rhs) mod 2^32` whatever the signedness —
   and writes the packed generic table (`program::lookup_tables::generic_table`) as its
   `S[7..10]`; it panics, like add/sub's, if the trace's `next_pc` or `rd` write is not what
-  the instruction computes.
+  the instruction computes. **S18's two do the same.** `fill::shift_bitwise` computes the
+  shift amount, the shared product, the overflow or residue and the eight byte columns from
+  Rust's own `u32` and `i64` arithmetic, writes `pow` and `copow` as 0 on a bitwise row, and
+  panics on a residue not below its power or a row carrying both a register `rs2` and a
+  nonzero immediate — which the emulator cannot produce, one addend always being zero.
+  `fill::mul_div` computes the division witness from `wrapping_div` and `wrapping_rem`,
+  which are RV32M's two pins exactly, and the product from `i128`; it derives `q_sign` from
+  the sign of the adjusted quotient rather than from bit 31 of the word, which is what makes
+  `−2^31 ÷ −1` fillable (`docs/spec/mul-div.md` §5.3), and panics if the identity does not
+  divide, if a quotient word is not its adjusted value or if a product does not fit two
+  words. Its decoded row is **five** values, not six: the family's tuple has no immediate,
+  so its table is `S[0..6]` and the packed table `S[6..9]`.
+- **Six `Fr`-backed columns exist across the two new fills**, and no more: `shift_in` and
+  `shift_prod`, whose values are signed on a right shift and reach `2^63` on a left one;
+  `mx` and `my`, which are signed; and `r_inv` and `d_inv`, which are field inverses. Every
+  other column of both fills is `u32`-backed.
 - **Every key carries the generic table's commitments** (S17): `ProverSetup::new` takes
   them from `program::lookup_tables::generic_commitments(&srs)` — the table committed
   once, at `2^18`, the same three points at every height — puts them in the key's

@@ -52,7 +52,8 @@ pub mod lookup {                                   // docs/spec/lookup.md
     pub fn row_denominator(l: &LookupExpr) -> GateDef;      // E_l + g, one Quadratic
     pub fn table_denominator(spec: &ChannelSpec) -> GateDef; // T + g, one Linear
     pub fn check_discharge(a: &CircuitArtifact, specs: &[ChannelSpec]) -> Result<(), String>;
-    pub fn check_copowers(a: &CircuitArtifact, scaled: &[PolyAddress]) -> Result<(), String>;
+    pub fn check_copowers(a: &CircuitArtifact, scaled: &[(PolyAddress, PolyAddress)])
+        -> Result<(), String>;   // (column, the selector its scaled obligation carries); S18
 }
 
 pub mod memory {                                   // docs/spec/memory.md §2, §3.3, §7, §8
@@ -107,6 +108,42 @@ pub mod jump_branch_slt {                          // docs/spec/jump-branch-slt.
     pub const TABLE_WIDTH: usize = 7;              // S[0..7]
     pub const GENERIC_TABLE: [PolyAddress; 3];     // S[7..10]
     pub const LEGAL_MASKS: [u32; 12];              // the twelve one-bit masks
+    pub fn artifact(trace_vars: u32) -> CircuitArtifact;
+    pub fn channels() -> Vec<lookup::ChannelSpec>;
+}
+
+pub mod shift_bitwise {                            // docs/spec/shift-bitwise.md; S18
+    pub const DECODED: [PolyAddress; 6];           // W[7..13]: next_pc rs1 rs2 rd imm mask
+    pub const KINDS: [PolyAddress; 12];            // W[13..25]: extra_mask::shift_bitwise order
+    pub const F_SHIFT: PolyAddress;  F_BITWISE;    // W[25..27]: the two halves, each a lookup selector
+    pub const RS1_HI: PolyAddress;  RS1_SIGN;  SRC2_HI;  AMOUNT;  POW;  COPOW;  HIGH;  HIGH_HI;
+    pub const SE: PolyAddress;  SHIFT_IN;  SHIFT_PROD;  OVF;  OVF_HI;  RESIDUE;  RESIDUE_HI;
+    pub const SCALED: PolyAddress;  SCALED_HI;     // W[27..44]
+    pub const BYTES_A: [PolyAddress; 4];  BYTES_B;  BYTES_AND;   // W[44..56]
+    pub const RD_HI: PolyAddress;                  // W[56]
+    pub const MULTIPLICITIES: [PolyAddress; 4];    // W[57..61]: timestamp, range16, generic, decoder
+    pub const TABLE_WIDTH: usize = 7;              // S[0..7]
+    pub const GENERIC_TABLE: [PolyAddress; 3];     // S[7..10]
+    pub const LEGAL_MASKS: [u32; 12];              // the twelve one-bit masks
+    pub fn artifact(trace_vars: u32) -> CircuitArtifact;
+    pub fn channels() -> Vec<lookup::ChannelSpec>;
+}
+
+pub mod mul_div {                                  // docs/spec/mul-div.md; S18
+    pub const WORD_BITS: u32 = 32;
+    pub const DECODED: [PolyAddress; 5];           // W[7..12]: next_pc rs1 rs2 rd mask -- NO imm
+    pub const KINDS: [PolyAddress; 8];             // W[12..20]: extra_mask::mul_div order
+    pub const F_DIV: PolyAddress;                  // W[20]: the is-zero gadgets' enable
+    pub const RS1_HI: PolyAddress;  RS1_TOP;  RS2_HI;  RS2_TOP;  S1;  S2;   // W[21..27]
+    pub const MX: PolyAddress;  MY;  P_LOW;  P_LOW_HI;  P_HIGH;  P_HIGH_HI;  P_SIGN;  // W[27..34]
+    pub const Q: PolyAddress;  Q_HI;  Q_SIGN;  R;  R_HI;  R_SIGN;           // W[34..40]
+    pub const R_INV: PolyAddress;  RZ;  D1;  D_INV;  DZ;                    // W[40..45]
+    pub const ABS_R: PolyAddress;  ABS_D;  GAP;  GAP_HI;  RD_HI;            // W[45..50]
+    pub const MULTIPLICITIES: [PolyAddress; 4];    // W[50..54]
+    pub const TABLE_WIDTH: usize = 6;              // S[0..6] -- six, the tuple having no imm
+    pub const GENERIC_TABLE: [PolyAddress; 3];     // S[6..9]
+    pub const LEGAL_MASKS: [u32; 8];
+    pub fn arithmetic_gates(word_bits: u32) -> Vec<(String, GateDef)>;   // the width seam
     pub fn artifact(trace_vars: u32) -> CircuitArtifact;
     pub fn channels() -> Vec<lookup::ChannelSpec>;
 }
@@ -211,9 +248,10 @@ pub mod add_sub {                                  // docs/spec/shard-proof.md �
   A verifying key's circuits are byte for byte what it returns for the key's families and
   heights, so a circuit is a protocol constant given a family and a height; a later family
   is one arm here and one fill in `crates/prover`. It returns `None` for a family no stage
-  has built, above `MAX_TRACE_VARS`, and for `ADD_SUB_LUI_AUIPC` and `JUMP_BRANCH_SLT`
-  below 19 variables, the timestamp channel's bound. The two window families have no
-  channels.
+  has built, above `MAX_TRACE_VARS`, and for any of the four execution families below 19
+  variables, the timestamp channel's bound. The two window families have no channels. At
+  S18 it holds `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MUL_DIV` and the
+  two windows; `MEM_WORD`, `MEM_SUBWORD` and `ATOMICS` are still `None`.
 - **A circuit that reads the `GENERIC` channel names the packed table as its last three
   setup columns** (S17). `FamilyCircuit::reads_generic_table` is whether any channel spec
   is `GENERIC`. At S17 only `JUMP_BRANCH_SLT` reads it: its `S[0..7]` are identity's
@@ -248,12 +286,46 @@ pub mod add_sub {                                  // docs/spec/shard-proof.md �
   row of the family writes `HALT_PC`. `artifact` asserts each channel's obligation count —
   8, 11, 2, 1 — and runs `lookup::check_copowers` over `next_pc`, whose evenness obligation
   halves it.
+- **`shift_bitwise` is `docs/spec/shift-bitwise.md` as data** (S18): the four-query frame
+  plus 54 witness columns, S11's seven-column decoded table and the packed generic table as
+  `S`, 48 enforcing gates, 39 lookups and four channels. **One merged family**, never split
+  into shift and bitwise halves. Its semantics are linear forms over twelve one-hot kind
+  bits — only `f_shift` and `f_bitwise` become columns, each being a lookup selector, which
+  `validate` requires a booleanity gate for. One expression `rs2 + imm` is the second
+  operand of all twelve, one addend always being zero. **One product serves both shift
+  directions**: `shift_in` selects the multiplicand and `shift_prod = shift_in·pow` is
+  ungated, which is what keeps the two arms degree 2. The residue bound is the copower
+  pattern — `scaled = 2·residue·copow` range-checked, plus `residue`'s own direct pair,
+  which `check_copowers` refuses the circuit without. XOR and OR are derived from the one
+  AND accumulator, inlined as a linear form over the four `byte_and` columns; there is no
+  XOR table and no OR table, and the `rd` term is gated by `f_bitwise`, not by the bracket.
+  `artifact` asserts each channel's obligation count — 8, 24, 6, 1 — and runs
+  `check_copowers` over all six scaled columns: `residue`, `amount` and the four byte
+  keys, each under its own selector.
+- **`mul_div` is `docs/spec/mul-div.md` as data** (S18): the four-query frame plus 47
+  witness columns, S11's **six**-column decoded table — this family's tuple has no `imm` —
+  and the packed generic table as `S`, 54 enforcing gates, 27 lookups and four channels.
+  **One product identity serves all four multiplies and the division alike**: `mx` and `my`
+  select the multiplicands, and `product_rule` is the only multiplication of two row values.
+  The division identity is gated to division rows, and must be: an ungated one makes an
+  ordinary `mul` of `−2^31` by `−1` unprovable. `r_sign` is *defined* as
+  `f_div·s1·(1 − [r = 0])`, which is what separates truncated division from floored;
+  `|rem| < |divisor|` is one range-checked gap carrying a `2^32·dz` correction, so a zero
+  divisor imposes no bound; and `q_sign` is a **free** boolean pinned only by `q`'s range —
+  tying it to bit 31 of `q` would make `−2^31 ÷ −1` unprovable. The signed overflow
+  therefore needs no pin; div-by-zero needs one gate. `arithmetic_gates(word_bits)` is the
+  width seam the exhaustive reduced-width check drives, as `comparison_equation` is at S17.
+  `artifact` asserts each channel's obligation count — 8, 16, 2, 1.
 - **`gadgets` is S17's pair of reusable constructors, frozen for S18 and S19.** `is_zero`
   is `x·inv + z − enable = 0, z·x = 0`, and S14's x0 rule is built on it with its bytes
   unchanged (the frame fixtures hold that); `comparison` is the ungated degree-2 ordering
   equation, `lt`'s booleanity, three 16+16 range pairs and two `U16GetSign` lookups, and
   `comparison_equation` exposes the equation at any width so the exhaustive reduced-width
-  check evaluates the gate itself.
+  check evaluates the gate itself. S18 used `is_zero` twice, for `rem ≠ 0` and the
+  zero-divisor test, and did **not** use `comparison`: its magnitude bound is a directly
+  range-checked gap, which is where the zero-divisor correction lives and which the
+  gadget's operand ranges and sign lookups would only duplicate (`docs/spec/mul-div.md`
+  decision 1).
 - **The window address step is `WORD_BYTES`, not `TS_STEP`.** Both are 4; one is bytes per
   RAM word, the other timestamps per cycle.
 
@@ -276,12 +348,14 @@ them, CI regenerates and diffs them, and `tests/memory.rs` pins their SHA-256 an
 each to its constructor's bytes. The leaves' independent description is the plain
 arithmetic of `crates/gkr/tests/memory.rs`.
 
-`tests/vectors/add_sub.bin` and `tests/vectors/jump_branch_slt.bin`: S16's
-`add_sub::artifact` and S17's `jump_branch_slt::artifact`, each at `trace_vars` 22, the
-family's default height. `cargo run -p kat-gen -- family` rewrites both, kat-gen's own unit
-test holds each to its constructor, CI regenerates and diffs them, and
-`crates/checker/tests/add_sub.rs` and `jump_branch_slt.rs` pin their SHA-256 and hold their
-gates to `docs/spec/shard-proof.md` §8 and `docs/spec/jump-branch-slt.md`.
+`tests/vectors/{add_sub,jump_branch_slt,shift_bitwise,mul_div}.bin`: one per registered
+execution family — S16's `add_sub::artifact`, S17's `jump_branch_slt::artifact` and S18's
+`shift_bitwise::artifact` and `mul_div::artifact` — each at `trace_vars` 22, the height the
+first three default to. `cargo run -p kat-gen -- family` rewrites all four, kat-gen's own
+unit test holds each to its constructor, CI regenerates and diffs them, and the matching
+suite in `crates/checker/tests` pins each SHA-256 and holds its gates to
+`docs/spec/shard-proof.md` §8, `docs/spec/jump-branch-slt.md`,
+`docs/spec/shift-bitwise.md` and `docs/spec/mul-div.md`.
 
 ## Tests
 | File | Covers |
@@ -290,6 +364,8 @@ gates to `docs/spec/shard-proof.md` §8 and `docs/spec/jump-branch-slt.md`.
 | `tests/laws.rs` | one mutation of the toy per rule, each refused with its error — structured variants matched whole, prose details by the rule and the address or name they carry — beside the toy validating; each lookup rule broken alone, refused naming the lookup, beside one and two lawful lookups and an `M` selector; the degree-3 gate; `Quadratic`'s degree, its identically zero and unread-column cases, Law 4 against an `AffineProduct` relation, and its refusal to inline; cache-free inlining and its refusals |
 | `tests/memory.rs` | the three fixtures pinned and equal to their constructors; every constructor validating and passing `check_memory` at 12 and 22; two roots named `read_root`, `write_root`, an all-zero padding row, `trace_vars` halving lists; every read tuple's parts at their `PART_*` positions; the frame's layout, leaf order, widths and enforcing gates by name; its 16 obligations whole, `gap_lo_pc`'s constant `−1`; acceptance 11 exhaustively at reduced width, 5-bit chunks over a 10-bit clock, each query's own `gap_lo` expression read from the frame with its high chunk at 0, every `(cycle, read_ts)` pair admitted exactly when `read_ts < 4·cycle + Δ`; §8's pinned read sets; `check_memory` refusing a leaf fed from `W` (acceptance 9); the forward-provenance counterexample as a producing and as an enforcing gate of list 1, each beside its lawful control; a slot and a `W` column meeting through two cached entries, a cached entry itself carrying both, and a slot over a cached entry; a frame without `pc_mask_boolean` and one without `rd_mask_boolean`, whose mask another gate still reads; a window leaf masked by `S[0]` and by `V[row]`; a global slot over an inner column; and a write root read from a `W` column alone, which provenance does not see — each mutant still passing `validate`, each test run against the mutant it names |
 | `src/gadgets.rs` (unit) | two range halfwords are the comparison's 32-bit word; the comparison returns two gates and eight lookups, each sign lookup the generic table's width; the equation built at 1 and 32 bits and refused at 0 and 33; a `const` assertion holds `U16GetSign`'s keys above AND's |
+| `src/shift_bitwise.rs` (unit) | the legal masks are twelve distinct single bits; the two halves and the two shift directions partition the kinds; and through the private `assemble` seam, the honest family spec gives `artifact`, and the build is refused for an obligation dropped, for `residue`'s direct pair moved under a narrower selector than its scaled obligation (S18's tightened copower check) and for a gate nonzero on the all-zero row |
+| `src/mul_div.rs` (unit) | the legal masks are eight distinct single bits; the multiplies and the divisions partition the kinds; `arithmetic_gates` built at 1 and 32 bits and refused at 0 and 33; and through the `assemble` seam, the honest spec gives `artifact` and the build is refused for a dropped obligation and for a gate nonzero on the all-zero row |
 | `src/jump_branch_slt.rs` (unit) | the legal masks are twelve distinct single bits; through the private `assemble` seam, the honest family spec gives `artifact`, and the build is refused for an obligation dropped (the channel count), for `next_pc`'s direct bound replaced (the copower check) and for a gate nonzero on the all-zero row |
 | `src/add_sub.rs` (unit) | the three system codes pairwise distinct, which is what lets `system_split`, `ecall_code` and `fence_code` refuse every `ebreak` row; the gates themselves are `crates/checker/tests/add_sub.rs`' |
 | `src/memory.rs` (unit) | acceptance 12: the frame with one obligation dropped before the artifact is written panics at the count assertion |

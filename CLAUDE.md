@@ -16,7 +16,8 @@ docs/
   guest-program-manual.md  writing a guest and exporting its ProgramImage artifact
   spec/          the frozen protocol specs; read before touching what they cover; and
                  constraint-manifest.md, every registered circuit's columns and gates by
-                 position, name and formula
+                 position, name and formula. One page per circuit family:
+                 jump-branch-slt.md, shift-bitwise.md, mul-div.md
   handoff/       one note per completed stage: frozen API, artifacts, deviations
 crates/
   constants/     frozen constants and tags; zero logic; no_std
@@ -42,8 +43,9 @@ crates/
                  laws, the cache-free compilation and the wire form; `memory`: the per-family frames,
                  the two window artifacts and check_memory; and `lookup`: the LogUp
                  channels, their gated tuples, the fraction tree and the discharge rules;
-                 `add_sub`: S16's family circuit; `jump_branch_slt`: S17's; `gadgets`: the
-                 is-zero and comparison gadgets; `family_circuit`: the registry; no_std
+                 `add_sub`: S16's family circuit; `jump_branch_slt`: S17's; `shift_bitwise`
+                 and `mul_div`: S18's two; `gadgets`: the is-zero and comparison gadgets;
+                 `family_circuit`: the registry; no_std
   gkr-verify/    the GKR verifier half: the gate kernel, the layer sumcheck verifier and
                  verify, and every type verify touches; the memory argument's window
                  constant, boundary factors and reconciliation; no_std, linked by the
@@ -63,7 +65,7 @@ crates/
   guest-sdk/     crt0, entry!, linker script, bump allocator, ecall shims; no_std,
                  guest-only, and NOT a workspace member
 guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, opcodes/, heap/, consistency/,
-                 addsub/, control/
+                 addsub/, control/, alu/
                  -- their own workspace; see guests/Cargo.toml and docs/guest-program-manual.md
 assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 handoff
 tools/
@@ -89,7 +91,8 @@ Read `prompts/00-master.md`, then the stage prompt, then every prior note in
 `docs/handoff/`. Branch off `main`, commit on the branch, open a PR, and finish by
 writing `docs/handoff/<stage>.md` and updating this file. A stage that adds or changes a
 circuit family also writes that family's entry in `docs/spec/constraint-manifest.md`
-(its §7 is the checklist). Raise conflicts and open questions with the user rather than
+(its maintenance section is the checklist). Raise conflicts and open questions with the
+user rather than
 picking a default silently.
 
 ## Commands
@@ -107,12 +110,13 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
-cargo test --workspace                      # 833 tests as of S17; 50 more are #[ignore]d
+cargo test --workspace                      # 881 tests as of S18; 53 more are #[ignore]d
 cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 4.63 GB a pass, 30 min on a runner
 cargo test -p prover --test acceptance -- --include-ignored --test-threads=1  # DEFERRED; S16's statement, 8.6 GB peak
 cargo test -p verifier --test cli -- --include-ignored --test-threads=1       # DEFERRED; ditto
-cargo test -p checker --test tamper -- --include-ignored --test-threads=1     # DEFERRED; one re-proof a twin, 11.3 GB peak
+cargo test -p checker --test tamper -- --include-ignored --test-threads=1     # DEFERRED; one re-proof a twin, 15.7 GB peak
 cargo test -p prover --test control -- --include-ignored --test-threads=1     # DEFERRED; S17's statement, 10.1 GB peak
+cargo test --release -p prover --test alu -- --include-ignored --test-threads=1  # DEFERRED; S18's statement, 14.1 GB peak, 111 s
 cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify -p verifier-core --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
@@ -570,6 +574,46 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   spec at §3 and §9, so every S16 key's bytes and SRS digest changed.
   `constants::generic_table` holds the table's width and key bases.
   `docs/spec/jump-branch-slt.md` §6.
+- **The shift/bitwise family's spec is `docs/spec/shift-bitwise.md`, and it is frozen.**
+  One merged family, never split: `rs2 + imm` is the second operand of all twelve, one
+  addend always being zero; the amount is `src2 & 31` with `high` range-checked — never
+  leave the shamt free, or `sll` with `rs2 = 4` shifts by 8. **Every key this family looks
+  up carries a range pair of its own**, the amount and the four `rs1` bytes alike: with
+  three sub-tables in one channel an unbounded key does not miss the table, it reads a
+  foreign sub-table's row, and a `byte_a_j` of 65,823 reads `ShiftPowers`' `s = 31` row and
+  proves a false `and`. **One product serves both directions**:
+  `shift_in` selects the multiplicand and `shift_prod = shift_in·pow` is ungated, which is
+  what keeps `is_left·(rs1·pow − …)` from being degree 3. A right shift is the floor-division
+  identity with `se = is_arithmetic·rs1_sign` committed; the residue bound is the copower
+  pattern, and **`residue` carries its own direct 16+16 check besides**, without which a
+  field-element residue absorbs `rs1 − rd·2^s` for any `rd` at all. XOR and OR are derived
+  from the one AND accumulator — `or = a + b − and`, `xor = a + b − 2·and`, summed by
+  linearity, no XOR table and no OR table — and the `rd` term is gated by the family bit,
+  not by the bracket, since the op selectors are zero on a shift row.
+- **`ShiftPowers` is a third sub-table of the packed generic table**, `(SHIFT_BASE + s + 1,
+  2^s, 2^(31 − s))` for `s < 32`. Its second value is the copower `2^(32 − s)` **stored
+  halved**, `2^32` not fitting the table's `u32` columns, and the two gates that read it
+  carry a factor 2. Appending it moved the table's three commitments, so every S16 and S17
+  verifying key's SRS digest and bytes moved with them, and
+  `crates/program/tests/vectors/generic_table.txt` was re-pinned over the ceremony.
+  Identity binds none of it. That is the standing price of S17's binding.
+- **The mul/div family's spec is `docs/spec/mul-div.md`, and it is frozen.** Its decoded
+  tuple is **six columns, not seven** — every one of its instructions is R-type, so S11's
+  tuple carries no `imm`, its table is `S[0..6]` and the packed table `S[6..9]`. **One
+  product identity serves all four multiplies and the division alike**, `mx` and `my`
+  selecting the multiplicands; the division identity is gated to division rows, and must
+  be, or a `mul` of `−2^31` by `−1` is unprovable. `r_sign` is *defined* as
+  `f_div·s1·(1 − [r = 0])`, which is what separates truncated from floored division — the
+  easiest line to leave out — and `|rem| < |divisor|` is one range-checked gap carrying a
+  `2^32·dz` correction, so a zero divisor imposes no bound. **`q_sign` is a free boolean**,
+  pinned only by `q`'s own range: tying it to bit 31 of `q` would make `−2^31 ÷ −1`
+  unprovable, that being the case whose signed quotient is `+2^31`. So the signed overflow
+  needs no pin; div-by-zero needs one gate.
+- **`check_copowers` is selector-aware since S18.** It takes each copower-scaled column with
+  the selector its scaled obligation carries and requires the direct range pair under that
+  same selector. S17 matched an obligation on its expression alone, which passed a circuit
+  whose direct pair sat under a narrower selector and bounded nothing on the rows that
+  selector switches off.
 - **The jump/branch/slt family's spec is `docs/spec/jump-branch-slt.md`, and it is frozen.**
   S11's decoded table unchanged — the prompt's five-bit mask would have rebuilt it — so
   `sc`, `cmp_imm`, the branch weights and the fall-through are linear forms over the twelve
@@ -613,3 +657,4 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 | S15 — LogUp lookup channels + decoder lookup | done | `docs/handoff/S15-lookup.md` |
 | S16 — Vertical slice: add/sub family end to end | done | `docs/handoff/S16-add-sub.md` |
 | S17 — Jump/branch/slt family | done | `docs/handoff/S17-control-flow.md` |
+| S18 — Shift/bitwise + mul/div families | done | `docs/handoff/S18-shift-mul.md` |

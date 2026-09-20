@@ -214,7 +214,8 @@ squeezes. The digest covers those three points and the `SrsVerifier`, and
 nothing else. It still does not bind the powers.
 
 The table's commitments belong in the digest because they are a constant of the
-ceremony. The table is zero past its 131,073 rows, and a Mercury commitment is a
+ceremony. The table is zero past its rows — 131,073 at S17, 131,105 since S18
+appended `ShiftPowers` — and a Mercury commitment is a
 plain KZG commitment of the evaluation table read as coefficients, so the table
 over `2^n` rows commits to the same three points at every even `n ≥ 18`, and so at
 every menu height that holds it.
@@ -241,6 +242,13 @@ trusted one, and every proof made under the honest key is refused under it as
 `a_key_with_another_generic_table_is_another_statement`). S16's key bytes and
 SRS digests all change with this amendment. Program identity is unchanged, and
 binds neither the SRS nor the table.
+
+**A table that grows moves the digest again.** S18 appended `ShiftPowers`' 32 rows
+to the packed table (`docs/spec/lookup.md` §9), so its three commitments, the
+pin, every key's `srs_digest` and every key's bytes moved a second time. Nothing
+else did: the recipe, the message, the wire position and identity are all as S17
+froze them. That is the standing price of this binding, and it is what keeps a
+growing table inside one trusted value.
 
 ---
 

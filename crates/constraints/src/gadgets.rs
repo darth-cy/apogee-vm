@@ -24,8 +24,13 @@ fn lit(v: u64) -> Coeff {
 
 /// A sign lookup's key is `hi + SIGN_BASE + 1` for a halfword `hi`, which is
 /// above every AND key only because `U16GetSign`'s base is past the AND
-/// table's 256 keys (`docs/spec/lookup.md` §9).
+/// table's 256 keys, and below every `ShiftPowers` key only because S18's base
+/// is past `U16GetSign`'s `2^16` (`docs/spec/lookup.md` §9). A caller must
+/// still bound the key it looks up: the ranges being disjoint is what makes an
+/// *in-range* key unambiguous, not what keeps an out-of-range one out
+/// (`docs/spec/shift-bitwise.md` §3.3).
 const _: () = assert!(generic_table::SIGN_BASE >= generic_table::AND_BASE + 256);
+const _: () = assert!(generic_table::SHIFT_BASE >= generic_table::SIGN_BASE + (1 << 16));
 
 /// The witnessed-inverse is-zero gadget over the linear form
 /// `x = Σ c_i·x_i`, with witness columns `inv` and `z`:

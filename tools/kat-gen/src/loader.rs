@@ -16,7 +16,7 @@ use std::process::Command;
 use crate::write_vectors;
 
 /// The guest ELFs the loader tests read, and what each is for.
-pub const ELF_FIXTURES: [(&str, &str); 12] = [
+pub const ELF_FIXTURES: [(&str, &str); 13] = [
     (
         "fib",
         "real compiler output: the address and boundary oracle",
@@ -66,6 +66,11 @@ pub const ELF_FIXTURES: [(&str, &str); 12] = [
         "control",
         "S17's guest: the twelve jump/branch/slt instructions over the \
          stage's acceptance matrix, self-checking, beside add/sub rows",
+    ),
+    (
+        "alu",
+        "S18's guest: the twelve shift/bitwise and eight mul/div instructions \
+         over the stage's acceptance matrices, self-checking",
     ),
 ];
 
