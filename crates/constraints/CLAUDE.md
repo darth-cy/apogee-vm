@@ -148,6 +148,54 @@ pub mod mul_div {                                  // docs/spec/mul-div.md; S18
     pub fn channels() -> Vec<lookup::ChannelSpec>;
 }
 
+pub mod mem_word {                                 // docs/spec/memory-ops.md §3; S19
+    pub const DECODED: [PolyAddress; 6];           // W[9..15]: next_pc rs1 rs2 rd imm mask
+    pub const KINDS: [PolyAddress; 2];             // W[15..17]: extra_mask::mem_word order
+    pub const WRAP: PolyAddress;  WORD_INDEX;  WORD_INDEX_HI;  RD_HI;      // W[17..21]
+    pub const MULTIPLICITIES: [PolyAddress; 3];    // W[21..24]: timestamp, range16, decoder
+    pub const TABLE_WIDTH: usize = 7;              // S[0..7]; NO generic table
+    pub const LEGAL_MASKS: [u32; 2];
+    pub fn artifact(trace_vars: u32) -> CircuitArtifact;
+    pub fn channels() -> Vec<lookup::ChannelSpec>;
+}
+
+pub mod mem_subword {                              // docs/spec/memory-ops.md §4; S19
+    pub const BYTE_BITS: u32 = 8;                  // the one place a byte's width is written
+    pub const DECODED: [PolyAddress; 6];           // W[9..15]
+    pub const KINDS: [PolyAddress; 6];             // W[15..21]: extra_mask::mem_subword order
+    pub const WRAP: PolyAddress;  WORD_INDEX;  WORD_INDEX_HI;  BIT0;  BIT1;    // W[21..26]
+    pub const P: PolyAddress;  PCOPOW;  WPH;  P_RAM;  WORD;                    // W[26..31]
+    pub const HIGH: PolyAddress;  HIGH_HI;  HIGH_SCALED;  HIGH_SCALED_HI;      // W[31..35]
+    pub const SUB: PolyAddress;  SUB_SCALED;  SUB_SCALED_HI;                   // W[35..38]
+    pub const LOW: PolyAddress;  LOW_HI;  LOW_SCALED;  LOW_SCALED_HI;          // W[38..42]
+    pub const SRC_SUB: PolyAddress;  SRC_SUB_SCALED;  SRC_SUB_SCALED_HI;
+    pub const SRC_HIGH: PolyAddress;  SRC_HIGH_HI;                             // W[42..47]
+    pub const SIGN_IN: PolyAddress;  SIGN;  SE;  RD_HI;                        // W[47..51]
+    pub const MULTIPLICITIES: [PolyAddress; 4];    // W[51..55]
+    pub const TABLE_WIDTH: usize = 7;              // S[0..7]
+    pub const GENERIC_TABLE: [PolyAddress; 3];     // S[7..10]
+    pub const LEGAL_MASKS: [u32; 6];
+    pub fn splice_gates(byte_bits: u32) -> Vec<(String, GateDef)>;   // the width seam
+    pub fn artifact(trace_vars: u32) -> CircuitArtifact;
+    pub fn channels() -> Vec<lookup::ChannelSpec>;
+}
+
+pub mod atomics {                                  // docs/spec/memory-ops.md §6; S19
+    pub const DECODED: [PolyAddress; 5];           // W[8..13]: next_pc rs1 rs2 rd mask -- NO imm
+    pub const KINDS: [PolyAddress; 11];            // W[13..24]: extra_mask::atomics order
+    pub const WORD_INDEX: PolyAddress;  WORD_INDEX_HI;                         // W[24..26]
+    pub const SUM: PolyAddress;  SUM_HI;  ADD_WRAP;  F_BITWISE;                // W[26..30]
+    pub const BYTES_A: [PolyAddress; 4];  BYTES_B;  BYTES_AND;                 // W[30..42]
+    pub const OLD_HI: PolyAddress;  OLD_SIGN;  SRC_HI;  SRC_SIGN;  LT;
+    pub const CMP_GAP: PolyAddress;  CMP_GAP_HI;  LO;                          // W[42..50]
+    pub const MULTIPLICITIES: [PolyAddress; 4];    // W[50..54]
+    pub const TABLE_WIDTH: usize = 6;              // S[0..6] -- six, the tuple having no imm
+    pub const GENERIC_TABLE: [PolyAddress; 3];     // S[6..9]
+    pub const LEGAL_MASKS: [u32; 11];
+    pub fn artifact(trace_vars: u32) -> CircuitArtifact;
+    pub fn channels() -> Vec<lookup::ChannelSpec>;
+}
+
 pub mod add_sub {                                  // docs/spec/shard-proof.md §8
     pub const DECODED: [PolyAddress; 6];           // W[10..16]: next_pc rs1 rs2 rd imm mask
     pub const KINDS: [PolyAddress; 6];             // W[16..22]: system addi auipc add sub lui
@@ -247,11 +295,16 @@ pub mod add_sub {                                  // docs/spec/shard-proof.md �
 - **`family_circuit` is the one registry of circuits** (`docs/spec/shard-proof.md` §11).
   A verifying key's circuits are byte for byte what it returns for the key's families and
   heights, so a circuit is a protocol constant given a family and a height; a later family
-  is one arm here and one fill in `crates/prover`. It returns `None` for a family no stage
-  has built, above `MAX_TRACE_VARS`, and for any of the four execution families below 19
-  variables, the timestamp channel's bound. The two window families have no channels. At
-  S18 it holds `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MUL_DIV` and the
-  two windows; `MEM_WORD`, `MEM_SUBWORD` and `ATOMICS` are still `None`.
+  is one arm here and one fill in `crates/prover`. It returns `None` above
+  `MAX_TRACE_VARS` and for **any of the seven execution families below 19 variables**, the
+  timestamp channel's bound. The two window families have no channels and take any height.
+  Since S19 it holds every family the master prompt names: `ADD_SUB_LUI_AUIPC`,
+  `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MUL_DIV`, `MEM_WORD`, `MEM_SUBWORD`, `ATOMICS` and
+  the two windows. **The minimum-height guard must name every execution family**:
+  `HEIGHT_MENU` legally holds `2^16` and `2^18`, `VerifyingKey::check` builds a circuit
+  from a key's own `VmConfig`, and a family missing from the guard would reach
+  `lookup::channel_trees`' `BITS <= trace_vars` assertion — a panic inside key validation,
+  in a `no_std` crate the recursion guest links, on bytes a verifier was handed.
 - **A circuit that reads the `GENERIC` channel names the packed table as its last three
   setup columns** (S17). `FamilyCircuit::reads_generic_table` is whether any channel spec
   is `GENERIC`. At S17 only `JUMP_BRANCH_SLT` reads it: its `S[0..7]` are identity's
@@ -316,6 +369,48 @@ pub mod add_sub {                                  // docs/spec/shard-proof.md �
   therefore needs no pin; div-by-zero needs one gate. `arithmetic_gates(word_bits)` is the
   width seam the exhaustive reduced-width check drives, as `comparison_equation` is at S17.
   `artifact` asserts each channel's obligation count — 8, 16, 2, 1.
+- **`mem_word`, `mem_subword` and `atomics` are `docs/spec/memory-ops.md` as data** (S19),
+  and **§2's addressing is shared by all three**: `addr = 4·word_index (+ 2·bit1 + bit0)`
+  is an alignment check over the integers and nothing at all over `Fr`, so what makes the
+  split base-4 is three `RANGE16` obligations on `word_index` — the direct pair and
+  `4·word_index_hi`, which caps `word_index` at `2^30 − 1` and is exactly tight at the top
+  of the address space. Every RAM query's address is `4·word_index`, so a sub-word access,
+  a word access and an atomic name one cell. All three pass `(word_index_hi, m_pc)` to
+  `check_copowers`.
+  - **`mem_word`**: the six-query frame plus 15 witness columns, S11's seven-column
+    decoded table as `S`, 33 enforcing gates, 18 lookups and **three** channels — it reads
+    no generic lookup, the second registered family after `ADD_SUB_LUI_AUIPC` with none,
+    so `reads_generic_table` is false and its setup list is identity's alone. It carries no
+    offset bits at all, which is what makes a misaligned `lw` or `sw` unrepresentable.
+    `rd_selected` carries a 16+16 pair, which is what keeps every register value in the VM
+    locally 32-bit (`memory-ops.md` §5.1).
+  - **`mem_subword`**: the same frame plus 46 witness columns, the decoded table and the
+    packed generic table as `S`, 53 enforcing gates, 36 lookups and four channels.
+    **There is no `MemoryOffsetGetBits` table**: the splice power `p` and its halved
+    copower are degree-2 gates over the address's own two offset bits (`p_rule`,
+    `pcopow_rule`, `wph_rule`), which is the owner's decision at S19 and strictly stronger
+    than the prompt's seven-row table — it adds no key to bound and does not move the
+    packed table's commitments. `half_aligned` is load-bearing twice: it is the halfword
+    alignment rule *and* what keeps `w·p` a divisor of `2^32`, on which §4.7's bound on
+    what a store writes rests. `splice_gates(byte_bits)` is the width seam the exhaustive
+    reduced-width check drives, as `mul_div::arithmetic_gates` is at S18. One `U16GetSign`
+    lookup serves both widths because `sign_in` is `256·sub` on a byte row and `sub` on a
+    halfword one, and its single `RANGE16` obligation is the exact key bound — the one
+    place a bare obligation, not a pair, is right. `check_copowers` takes `high`, `sub`,
+    `low` and `src_sub` beside `word_index_hi`.
+  - **`atomics`**: the five-query frame — `pc rs1 rs2 ram rd`, with the RAM query and the
+    `rd` query sharing Δ = 3 at distinct address spaces, the one family with two queries in
+    one Δ slot — plus 46 witness columns, S11's **six**-column decoded table (no `imm`, so the
+    packed table sits at `S[6..9]`) and 46 enforcing gates, 36 lookups and four channels.
+    One `ram_value_rule` selects all eleven arms; `rd` takes the **old** word on every kind
+    but `sc.w`, which always succeeds and writes 0 (a conformance deviation, `memory-ops.md`
+    §6.6). OR and XOR are derived from the one AND accumulator, inlined as a linear form;
+    `f_bitwise` is the **three** bitwise kinds, not `amoand` alone. `assemble` asserts the
+    comparison gadget's four parameters — selector, `lhs`, `rhs` and `signed` — because each
+    wrong choice is a silent, total break of the four min/max kinds and nothing else in the
+    circuit would catch it. Every arm indexes `KINDS` through its `extra_mask` constant and
+    never by position: the stage prompt lists `amoand` and `amoor` in the opposite order to
+    `constants::extra_mask::atomics`.
 - **`gadgets` is S17's pair of reusable constructors, frozen for S18 and S19.** `is_zero`
   is `x·inv + z − enable = 0, z·x = 0`, and S14's x0 rule is built on it with its bytes
   unchanged (the frame fixtures hold that); `comparison` is the ungated degree-2 ordering

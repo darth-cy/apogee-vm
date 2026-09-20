@@ -1,0 +1,15 @@
+[package]
+name = "mem"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# No dependencies, and no `guest-sdk`: the SDK's crt0 zeroes `.bss` with a store
+# loop and calls `main`, which would put rows of its own in the families this
+# guest is the fixture for. This guest is its own `_start`, written in the
+# instructions of the three families S19 proves — `mem_word`, `mem_subword` and
+# `atomics` — plus the add/sub and jump/branch families it needs to set up and
+# check them, and the one ecall S16 proves.
+# `guests/.cargo/config.toml` still supplies the target and the frozen linker
+# script.
+[dependencies]

@@ -855,10 +855,12 @@ fn the_registry_holds_the_family() {
     assert_eq!(family_circuit(family::JUMP_BRANCH_SLT, 18), None);
     let at_19 = family_circuit(family::JUMP_BRANCH_SLT, 19).expect("the family at 2^19");
     assert_eq!(at_19.artifact, jump_branch_slt::artifact(19));
-    // Every family no stage proves yet is still unregistered. S18's two are
-    // registered now, and are their own suites'.
+    // Since S19 every execution family is registered, each in its own suite;
+    // what is still `None` for all of them is a height below the timestamp
+    // channel's width.
     for id in [family::MEM_WORD, family::MEM_SUBWORD, family::ATOMICS] {
-        assert_eq!(family_circuit(id, VARS), None, "family {id}");
+        assert!(family_circuit(id, VARS).is_some(), "family {id}");
+        assert_eq!(family_circuit(id, 18), None, "family {id} at 18");
     }
 }
 

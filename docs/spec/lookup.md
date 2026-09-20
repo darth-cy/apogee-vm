@@ -88,11 +88,13 @@ not hold cannot balance the channel.
 **What that costs.** `BITS[TIMESTAMP]` is 19 and a Mercury opening needs an even
 variable count (`docs/spec/mercury.md`), so the height menu's even entries put **every
 circuit carrying a timestamp gap obligation at `2^20` rows or more** — which is every
-execution family (`docs/spec/memory.md` §2.4). Six of the seven default there already;
-`constants::family::DEFAULT_HEIGHTS[ATOMICS]` is `2^16` and S16 must raise it. (S16 did
-not: by the owner's decision the atomics family's stage, S19, raises it with the circuit
-that needs it. Until then `constraints::family_circuit` has no atomics circuit at any
-height, so no key over the default heights and an atomics row can be built.)
+execution family (`docs/spec/memory.md` §2.4). Six of the seven defaulted there already,
+and `constants::family::DEFAULT_HEIGHTS[ATOMICS]` was `2^16` until **S19 raised it to
+`2^20`** with the circuit that needs it (S16 answer 7, `docs/spec/memory-ops.md` §7.1). No
+family that runs cycles may default below the floor. Since S19 `family_circuit`'s
+minimum-height arm names **all seven** execution families, so a key naming any of them at
+`2^16` or `2^18` — both on the menu — gets `None` and a clean `Err` at load rather than
+reaching this channel's assertion and panicking inside `VerifyingKey::check`.
 
 ## 4. Gated keys
 
@@ -389,7 +391,9 @@ row-varying bound `x < p` into the fixed `x·p' < 2^32`, where `p·p' = 2^32`. T
 bounds nothing alone: `p'` is a unit in `Fr`, so `x = s·p'^{-1}` sweeps a coset of `2^32`
 elements, almost none of them small integers, and the range check on `s` sees nothing
 wrong. The scaled bound says `x` is under this row's width **given** `x` is bounded; only
-the direct check establishes that. S18 and S19 consume it.
+the direct check establishes that. S18 and S19 consume it; S19's `mem_subword` is its
+heaviest user, with `high`, `sub`, `low` and the store source each carrying a scaled bound
+and a direct one, and all three families passing `word_index_hi` to the check.
 
 ## 12. What the checker adds
 
@@ -472,7 +476,7 @@ ceremony's, which it takes from a trusted channel.
   would recount the build it just ran. A multiplicity column from any other source — the
   tamper harness's — is the verifier's to refuse, and `crates/checker/tests/tamper.rs`
   shows it is, as `Lookup`.
-- `DEFAULT_HEIGHTS[ATOMICS]` is S19's (§3).
+- `DEFAULT_HEIGHTS[ATOMICS]` is S19's (§3), and S19 raised it.
 
 **Status at S17.** The jump/branch/slt family is the first to read the generic channel —
 two `U16GetSign` lookups, `docs/spec/jump-branch-slt.md` §3.2 — and with it:

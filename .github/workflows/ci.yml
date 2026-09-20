@@ -119,7 +119,7 @@ jobs:
       # single-threaded. Locally, on 18 cores, the three take 322 s, 20 s and,
       # with S17's and S18's twins, 1103 s; the logup step above ran nine times
       # slower on the runner than locally, which puts these at about 50, 3 and
-      # 160 minutes. The tamper file's peak is S18's statement's, 15.7 GB: four
+      # 160 minutes. The tamper file's peak is S19's statement's, 16.9 GB: five
       # `2^20` execution shards with the honest statement held beside the
       # re-proof. They run locally on every PR that touches the prover, the
       # verifier, a family circuit or the memory and lookup arguments, and the
@@ -155,7 +155,8 @@ jobs:
       # channel's floor, beside `INIT_TEARDOWN` at `2^16`. It is the largest
       # statement the repository proves: 14.1 GB peak, 111 s locally on 18
       # cores, so the file runs single-threaded. S18's tamper twins joined the
-      # tamper file above, which now peaks at 15.7 GB. Both families'
+      # tamper file above, which peaked at 15.7 GB with S18's statement and
+      # at 16.9 GB since S19's joined it. Both families'
       # CI-sized halves -- each circuit row by row, the division encoding
       # exhaustively at a reduced width, the derived bitwise ops over all
       # 65,536 byte pairs, the legal masks, the guest's trace against the
@@ -165,6 +166,23 @@ jobs:
       #
       # - name: S18's statement, proved and verified
       #   run: cargo test -p prover --test alu -- --include-ignored --test-threads=1
+
+      # DEFERRED: cargo test --release -p prover --test mem -- --include-ignored --test-threads=1
+      # Master rule 7, for S19's statement: `guests/mem` proves one shard of
+      # each of five execution families -- add/sub, jump/branch/slt and the
+      # three S19 adds -- each `2^20` rows for the timestamp channel's floor,
+      # beside `INIT_TEARDOWN` and the first `ZERO_WINDOWS` shard any acceptance
+      # statement has had, both at `2^16`. It is now the largest statement the
+      # repository proves: 14.7 GB peak, 118 s locally on 18 cores, so the file
+      # runs single-threaded. S19's tamper twins joined the tamper file above,
+      # which peaks at 16.9 GB with them. The three families' CI-sized halves --
+      # each circuit row by row, the splice exhaustively at a reduced width, the
+      # legal masks and the kind-bit map, and all three fills over the guest's
+      # trace -- are `crates/checker/tests/mem_word.rs`, `mem_subword.rs`,
+      # `atomics.rs` and `mem_fill.rs`, in the `test` step.
+      #
+      # - name: S19's statement, proved and verified
+      #   run: cargo test --release -p prover --test mem -- --include-ignored --test-threads=1
 
       # The crates the recursion guest links compile unchanged for the guest.
       - name: guest target builds

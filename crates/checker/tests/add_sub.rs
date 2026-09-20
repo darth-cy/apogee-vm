@@ -555,9 +555,10 @@ fn the_layout_and_the_gates_are_the_specs() {
 }
 
 /// The registry: this family at 20 variables and up, the two window families
-/// at any menu height, each the constructor it names; no circuit for a family
-/// no stage proves yet — S17's `JUMP_BRANCH_SLT` and S18's two are their own
-/// suites' — nor for this one below the timestamp channel's width.
+/// at any menu height, each the constructor it names; and no execution circuit
+/// at all below the timestamp channel's width — since S19 that guard covers
+/// every one of the seven, so a key naming a menu height of `2^16` or `2^18`
+/// gets `None` and not a panic. Each family's own circuit is its own suite's.
 #[test]
 fn the_registry_holds_the_three_families_s16_proves() {
     let c = family_circuit(family::ADD_SUB_LUI_AUIPC, 20).expect("add/sub at 2^20");
@@ -580,13 +581,20 @@ fn the_registry_holds_the_three_families_s16_proves() {
         );
     }
     for id in [
+        family::ADD_SUB_LUI_AUIPC,
+        family::JUMP_BRANCH_SLT,
+        family::SHIFT_BITWISE,
+        family::MUL_DIV,
         family::MEM_WORD,
         family::MEM_SUBWORD,
         family::ATOMICS,
-        family::COUNT,
     ] {
-        assert_eq!(family_circuit(id, 20), None, "family {id}");
+        for vars in [16, 18] {
+            assert_eq!(family_circuit(id, vars), None, "family {id} at {vars}");
+        }
+        assert!(family_circuit(id, 20).is_some(), "family {id} at 20");
     }
+    assert_eq!(family_circuit(family::COUNT, 20), None);
     assert_eq!(family_circuit(family::INIT_TEARDOWN, 31), None);
 }
 

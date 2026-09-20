@@ -17,7 +17,7 @@ use program::{decode_program, ProgramParams};
 use test_support::{sha256, to_hex};
 
 /// Every guest with a committed ELF, in `guests/Cargo.toml`'s order.
-pub const GUESTS: [&str; 13] = [
+pub const GUESTS: [&str; 14] = [
     "fib",
     "echo",
     "rvc-dense",
@@ -31,6 +31,7 @@ pub const GUESTS: [&str; 13] = [
     "addsub",
     "control",
     "alu",
+    "mem",
 ];
 
 /// This crate's committed fixtures and their digests. Refresh with

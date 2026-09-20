@@ -8,6 +8,9 @@
 //!   families — add/sub and jump/branch/slt — at `2^20`.
 //! - S18's: `guests/alu`'s, with all four of its execution families — those
 //!   two, shift/bitwise and mul/div — at `2^20`.
+//! - S19's: `guests/mem`'s, with five — add/sub, jump/branch/slt and the three
+//!   families S19 proves — at `2^20`. It is the first statement whose rows
+//!   touch RAM, so it is also the first with a `ZERO_WINDOWS` shard.
 
 #![allow(dead_code)]
 
@@ -37,6 +40,9 @@ pub const ALU_RESULT: u32 = 96;
 
 /// `guests/control`'s exit status: the number of its checks.
 pub const CONTROL_RESULT: u32 = 16;
+
+/// `guests/mem`'s exit status: the number of its checks.
+pub const MEM_RESULT: u32 = 50;
 
 /// The committed ELF of guest `name`.
 pub fn fixture(name: &str) -> Vec<u8> {
@@ -80,6 +86,17 @@ pub fn alu_params() -> ProgramParams {
     ])
 }
 
+/// S19's heights: all five of `mem`'s execution families at `2^20`.
+pub fn mem_params() -> ProgramParams {
+    heights(&[
+        family::ADD_SUB_LUI_AUIPC,
+        family::JUMP_BRANCH_SLT,
+        family::MEM_WORD,
+        family::MEM_SUBWORD,
+        family::ATOMICS,
+    ])
+}
+
 fn program_of(name: &str, params: &ProgramParams) -> Program {
     let image = load_elf(&fixture(name)).unwrap_or_else(|e| panic!("{name} loads: {e:?}"));
     let (tables, config) =
@@ -103,6 +120,10 @@ pub fn alu_program() -> Program {
     program_of("alu", &alu_params())
 }
 
+pub fn mem_program() -> Program {
+    program_of("mem", &mem_params())
+}
+
 /// The post-execution archive of `addsub`'s one run.
 pub fn archive(program: &Program) -> TraceArchive {
     trace(program, RESULT)
@@ -116,6 +137,11 @@ pub fn control_archive(program: &Program) -> TraceArchive {
 /// The post-execution archive of `alu`'s one run.
 pub fn alu_archive(program: &Program) -> TraceArchive {
     trace(program, ALU_RESULT)
+}
+
+/// The post-execution archive of `mem`'s one run.
+pub fn mem_archive(program: &Program) -> TraceArchive {
+    trace(program, MEM_RESULT)
 }
 
 /// A run with no input and no hint, which must exit with `status`.
@@ -149,6 +175,10 @@ pub fn control_setup() -> ProverSetup {
 
 pub fn alu_setup() -> ProverSetup {
     ProverSetup::new(alu_program(), toy_srs(ADD_VARS)).expect("alu registers")
+}
+
+pub fn mem_setup() -> ProverSetup {
+    ProverSetup::new(mem_program(), toy_srs(ADD_VARS)).expect("mem registers")
 }
 
 /// The toy SRS's `tau`.

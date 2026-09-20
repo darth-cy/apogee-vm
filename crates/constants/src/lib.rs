@@ -1015,6 +1015,13 @@ pub mod family {
     pub const HEIGHT_MENU: [u32; 4] = [1 << 16, 1 << 18, 1 << 20, 1 << 22];
 
     /// The default trace height of every family, indexed by `FamilyId`.
+    ///
+    /// **No execution family may default below `2^20`.** A circuit carrying a
+    /// timestamp gap obligation needs `lookup_channel::BITS[TIMESTAMP] = 19`
+    /// variables (`docs/spec/lookup.md` §3), and a Mercury opening needs an
+    /// even count, so `2^20` is the floor for every family that runs cycles.
+    /// `ATOMICS` sat at `2^16` from S11 until S19 raised it with the circuit
+    /// that needs it (`docs/handoff/S16-add-sub.md` answer 7).
     pub const DEFAULT_HEIGHTS: [u32; COUNT as usize] = [
         1 << 22, // ADD_SUB_LUI_AUIPC
         1 << 22, // JUMP_BRANCH_SLT
@@ -1022,7 +1029,7 @@ pub mod family {
         1 << 20, // MUL_DIV
         1 << 22, // MEM_WORD
         1 << 22, // MEM_SUBWORD
-        1 << 16, // ATOMICS
+        1 << 20, // ATOMICS
         1 << 22, // INIT_TEARDOWN
         1 << 22, // ZERO_WINDOWS
     ];

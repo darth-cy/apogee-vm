@@ -14,6 +14,13 @@ its three commitments and every key's SRS digest and bytes moved again (§3). §
 and §11 gain the two new readers. `docs/spec/shift-bitwise.md` and `docs/spec/mul-div.md`
 are those families' pages.
 
+S19 registered the fifth, sixth and seventh — the last three — and **changed nothing in
+this page's protocol either**, not even the value inside a message: it appended nothing to
+the packed table, so the three commitments, every key's SRS digest and every key's bytes
+are S18's. §5.1 and §11 gain the three new families, two of which read the generic channel
+and one of which does not. `docs/spec/memory-ops.md` is their page. With them
+`family_circuit` holds every family the master prompt names.
+
 This page is S16's vertical slice as the repository owner decided it: the statement a
 proof is about, the global and per-shard transcripts, the three proof-side types and
 their wire forms, the order `verify_shard` checks things in, the `ADD_SUB_LUI_AUIPC`
@@ -267,11 +274,12 @@ their closed form itself.
 
 `FamilyCircuit::reads_generic_table` is whether any of the circuit's channel specs is
 `GENERIC`; `reduce_shard`'s step 11 and the prover's opening both list the key's one
-`generic_table` after identity's commitments exactly when it is true. Three of the four
+`generic_table` after identity's commitments exactly when it is true. **Five of the seven**
 registered execution families read it: `JUMP_BRANCH_SLT`, whose `S[0..7]` are the decoded
-table and whose `S[7..10]` are the packed generic table; S18's `SHIFT_BITWISE`, the same
-shape; and S18's `MUL_DIV`, whose decoded tuple has no immediate, so its table is `S[0..6]`
-and the packed table `S[6..9]`. `ADD_SUB_LUI_AUIPC` does not. So `guests/alu`'s shards at
+table and whose `S[7..10]` are the packed generic table; S18's `SHIFT_BITWISE` and S19's
+`MEM_SUBWORD`, the same shape; and S18's `MUL_DIV` and S19's `ATOMICS`, whose decoded
+tuples have no immediate, so each table is `S[0..6]` and the packed table `S[6..9]`.
+`ADD_SUB_LUI_AUIPC` and S19's `MEM_WORD` do not, and each opens identity's list alone. So `guests/alu`'s shards at
 `2^20` open `21 + 44 + 10` = 75, `21 + 61 + 10` = 92 and `21 + 54 + 9` = 84 commitments,
 each ending with the key's `generic_table`, and its add/sub shard opens `36 + 31 + 7`.
 **Nothing in the key changed when the second and third readers arrived**, which is the
@@ -624,12 +632,14 @@ MSMs — combines its parts in a fixed order, so proofs do not depend on the thr
 ## 11. The registry
 
 `constraints::family_circuit(family, trace_vars)` returns a family's circuit for
-`ADD_SUB_LUI_AUIPC`, S17's `JUMP_BRANCH_SLT` (`docs/spec/jump-branch-slt.md`) and S18's
-`SHIFT_BITWISE` and `MUL_DIV` (`docs/spec/shift-bitwise.md`, `docs/spec/mul-div.md`), each
-built from 19 variables and provable from 20 (§8), for `INIT_TEARDOWN`
-(`image_window_artifact`, no channels) and for `ZERO_WINDOWS` (`zero_window_artifact`, no
-channels). It returns `None` for a family no stage proves yet and for a height its circuit
-cannot be built at. `prover::family_fill` is the matching table of column builders. A
+`ADD_SUB_LUI_AUIPC`, S17's `JUMP_BRANCH_SLT` (`docs/spec/jump-branch-slt.md`), S18's
+`SHIFT_BITWISE` and `MUL_DIV` (`docs/spec/shift-bitwise.md`, `docs/spec/mul-div.md`) and
+S19's `MEM_WORD`, `MEM_SUBWORD` and `ATOMICS` (`docs/spec/memory-ops.md`) — **every family
+the master prompt names, since S19** — each built from 19 variables and provable from 20
+(§8), for `INIT_TEARDOWN` (`image_window_artifact`, no channels) and for `ZERO_WINDOWS`
+(`zero_window_artifact`, no channels). It returns `None` for a height its circuit cannot be
+built at, and its minimum-height arm names **all seven** execution families, so a key
+naming one at the menu's `2^16` or `2^18` is a clean `Err` at load and not a panic. `prover::family_fill` is the matching table of column builders. A
 later family is added by one constructor, one arm in each table and one fill, with no
 edit to `global_commit_phase`, `prove_shard`, `reduce_shard` or `verify_shard`. A later
 family that reads the generic channel needs nothing more: every key already carries the
@@ -637,4 +647,7 @@ table's commitments, and `FamilyCircuit::reads_generic_table` adds them to its o
 (§5.1) and its setup count (§7.2). **S18's two families were exactly that** — two
 constructors, two registry arms, two fills — plus the 32 rows they appended to the packed
 table, which moved the table's commitments and so every key's SRS digest (§3), and nothing
-in this crate's code.
+in this crate's code. **S19's three were that and less**: three constructors, three registry
+arms, three fills, and not even a row appended to the packed table, so no key's digest or
+bytes moved. `MEM_WORD`, which reads no generic lookup, went down `ADD_SUB_LUI_AUIPC`'s
+path and needed nothing of the generic machinery at all.

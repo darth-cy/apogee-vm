@@ -21,11 +21,14 @@ use core::fmt;
 use field::Fr;
 
 pub mod add_sub;
+pub mod atomics;
 mod build;
 pub mod gadgets;
 pub mod jump_branch_slt;
 mod laws;
 pub mod lookup;
+pub mod mem_subword;
+pub mod mem_word;
 pub mod memory;
 pub mod mul_div;
 pub mod shift_bitwise;
@@ -83,8 +86,11 @@ impl FamilyCircuit {
 /// later family is added here, with one constructor, and nowhere in the
 /// verifier. Every execution family needs 19 variables for its timestamp
 /// channel (`docs/spec/lookup.md` §3) — which also holds the packed generic
-/// table's rows, which three of the four read; the two RAM window families
-/// take any height up to `MAX_TRACE_VARS`.
+/// table's rows, which five of the seven read; the two RAM window families
+/// take any height up to `MAX_TRACE_VARS`. **The minimum-height arm names
+/// every execution family**: one missing from it would reach
+/// `lookup::channel_trees`' assertion and panic inside `VerifyingKey::check`,
+/// on bytes a verifier was handed, instead of returning `None`.
 pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
     use constants::family as f;
     if trace_vars > MAX_TRACE_VARS {
@@ -92,7 +98,13 @@ pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
     }
     let timestamp = constants::lookup_channel::BITS[constants::lookup_channel::TIMESTAMP as usize];
     let (artifact, channels) = match family {
-        f::ADD_SUB_LUI_AUIPC | f::JUMP_BRANCH_SLT | f::SHIFT_BITWISE | f::MUL_DIV
+        f::ADD_SUB_LUI_AUIPC
+        | f::JUMP_BRANCH_SLT
+        | f::SHIFT_BITWISE
+        | f::MUL_DIV
+        | f::MEM_WORD
+        | f::MEM_SUBWORD
+        | f::ATOMICS
             if trace_vars < timestamp =>
         {
             return None
@@ -107,6 +119,9 @@ pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
             shift_bitwise::channels(),
         ),
         f::MUL_DIV => (mul_div::artifact(trace_vars), mul_div::channels()),
+        f::MEM_WORD => (mem_word::artifact(trace_vars), mem_word::channels()),
+        f::MEM_SUBWORD => (mem_subword::artifact(trace_vars), mem_subword::channels()),
+        f::ATOMICS => (atomics::artifact(trace_vars), atomics::channels()),
         f::INIT_TEARDOWN => (memory::image_window_artifact(trace_vars), Vec::new()),
         f::ZERO_WINDOWS => (memory::zero_window_artifact(trace_vars), Vec::new()),
         _ => return None,
