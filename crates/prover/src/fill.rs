@@ -5,7 +5,10 @@
 //! the common path counts over the family's channels.
 
 use constants::extra_mask::add_sub_lui_auipc as kind;
+use constants::extra_mask::atomics as at;
 use constants::extra_mask::jump_branch_slt as jbs;
+use constants::extra_mask::mem_subword as kind_sub;
+use constants::extra_mask::mem_word as kind_mem;
 use constants::extra_mask::mul_div as md;
 use constants::extra_mask::shift_bitwise as sb;
 use constants::extra_mask::system_code;
@@ -13,7 +16,10 @@ use constants::{ecall, family, memory};
 use constraints::add_sub::{
     DECODED, IS_ECALL, IS_FENCE, KINDS, NEXT_PC_HI, PC_WRAP, RD_HI, TABLE_WIDTH, WRAP,
 };
+use constraints::atomics as at_circuit;
 use constraints::jump_branch_slt as jbs_circuit;
+use constraints::mem_subword as ms_circuit;
+use constraints::mem_word as mw_circuit;
 use constraints::memory::{frame_queries, rd_selected};
 use constraints::mul_div as md_circuit;
 use constraints::shift_bitwise as sb_circuit;
@@ -51,6 +57,9 @@ pub fn family_fill(family: FamilyId) -> Option<Fill> {
         family::JUMP_BRANCH_SLT => Some(jump_branch_slt),
         family::SHIFT_BITWISE => Some(shift_bitwise),
         family::MUL_DIV => Some(mul_div),
+        family::MEM_WORD => Some(mem_word),
+        family::MEM_SUBWORD => Some(mem_subword),
+        family::ATOMICS => Some(atomics),
         family::INIT_TEARDOWN | family::ZERO_WINDOWS => Some(window),
         _ => None,
     }
@@ -117,9 +126,7 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
     let start = src.index as usize * h;
     let end = (start + h).min(trace.len());
     let cycles = &trace.cycle[start..end];
-    let log = src.archive.memory_log();
-    let queries = frame_queries(fam);
-    let width = queries.len();
+    let width = frame_queries(fam).len();
 
     let mut decoded: [Vec<u32>; 6] = Default::default();
     let mut kinds: [Vec<u32>; 6] = Default::default();
@@ -204,13 +211,7 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
         next_pc_hi.push(row.next_pc >> 16);
     }
 
-    let mut out = build_memory_columns(log, queries, cycles, h);
-    for (address, column) in build_frame_witness(log, queries, cycles, h) {
-        // The computed value, not S14's masked one.
-        if address != rd_selected(width) {
-            out.push((address, column));
-        }
-    }
+    let mut out = frame_columns(src, fam, cycles);
     out.push((rd_selected(width), u32_column(sel, h)));
     for (address, values) in DECODED.iter().zip(decoded) {
         out.push((*address, u32_column(values, h)));
@@ -264,9 +265,7 @@ fn jump_branch_slt(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPol
     let start = src.index as usize * h;
     let end = (start + h).min(trace.len());
     let cycles = &trace.cycle[start..end];
-    let log = src.archive.memory_log();
-    let queries = frame_queries(fam);
-    let width = queries.len();
+    let width = frame_queries(fam).len();
 
     let mut decoded: [Vec<u32>; 6] = Default::default();
     let mut kinds: [Vec<u32>; 12] = Default::default();
@@ -371,13 +370,7 @@ fn jump_branch_slt(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPol
         }
     }
 
-    let mut out = build_memory_columns(log, queries, cycles, h);
-    for (address, column) in build_frame_witness(log, queries, cycles, h) {
-        // The computed value, not S14's masked one.
-        if address != rd_selected(width) {
-            out.push((address, column));
-        }
-    }
+    let mut out = frame_columns(src, fam, cycles);
     let [cmp_rhs, rs1_hi, rs1_sign, rhs_hi, rhs_sign, lt, gap, gap_hi, eq, taken, drop, wrap, next_hi, rd_hi, sel] =
         cells;
     out.push((rd_selected(width), u32_column(sel, h)));
@@ -449,9 +442,7 @@ fn shift_bitwise(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)
     let start = src.index as usize * h;
     let end = (start + h).min(trace.len());
     let cycles = &trace.cycle[start..end];
-    let log = src.archive.memory_log();
-    let queries = frame_queries(fam);
-    let width = queries.len();
+    let width = frame_queries(fam).len();
 
     let mut decoded: [Vec<u32>; 6] = Default::default();
     let mut kinds: [Vec<u32>; 12] = Default::default();
@@ -585,13 +576,7 @@ fn shift_bitwise(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)
         }
     }
 
-    let mut out = build_memory_columns(log, queries, cycles, h);
-    for (address, column) in build_frame_witness(log, queries, cycles, h) {
-        // The computed value, not S14's masked one.
-        if address != rd_selected(width) {
-            out.push((address, column));
-        }
-    }
+    let mut out = frame_columns(src, fam, cycles);
     let [f_shift, f_bitwise, rs1_hi, rs1_sign, src2_hi, amount, pow, copow, high, high_hi, se, ovf, ovf_hi, residue, residue_hi, scaled, scaled_hi, rd_hi, sel] =
         cells;
     out.push((rd_selected(width), u32_column(sel, h)));
@@ -674,9 +659,7 @@ fn mul_div(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
     let start = src.index as usize * h;
     let end = (start + h).min(trace.len());
     let cycles = &trace.cycle[start..end];
-    let log = src.archive.memory_log();
-    let queries = frame_queries(fam);
-    let width = queries.len();
+    let width = frame_queries(fam).len();
 
     let mut decoded: [Vec<u32>; 5] = Default::default();
     let mut kinds: [Vec<u32>; 8] = Default::default();
@@ -850,13 +833,7 @@ fn mul_div(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
         }
     }
 
-    let mut out = build_memory_columns(log, queries, cycles, h);
-    for (address, column) in build_frame_witness(log, queries, cycles, h) {
-        // The computed value, not S14's masked one.
-        if address != rd_selected(width) {
-            out.push((address, column));
-        }
-    }
+    let mut out = frame_columns(src, fam, cycles);
     let [f_div, rs1_hi, rs1_top, rs2_hi, rs2_top, s1, s2, p_low, p_low_hi, p_high, p_high_hi, p_sign, q, q_hi, q_sign, r, r_hi, r_sign, rz, d1, dz, abs_r, abs_d, gap, gap_hi, rd_hi, sel] =
         cells;
     out.push((rd_selected(width), u32_column(sel, h)));
@@ -909,6 +886,549 @@ fn mul_div(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
     }
     let generic = generic_table(h.trailing_zeros());
     for (address, column) in md_circuit::GENERIC_TABLE.iter().zip(generic) {
+        out.push((*address, column));
+    }
+    Ok(out)
+}
+
+/// The frame columns and the frame's own witness columns of a shard of
+/// `family`, with `rd_selected` left out: every S19 fill writes the value the
+/// instruction **computes** there, while S14's builder leaves 0 on an `x0`
+/// write and the frame's x0 rule is what masks it back down.
+fn frame_columns(
+    src: &ShardSource,
+    family: FamilyId,
+    cycles: &[u64],
+) -> Vec<(PolyAddress, MultilinearPoly)> {
+    let log = src.archive.memory_log();
+    let queries = frame_queries(family);
+    let width = queries.len();
+    let mut out = build_memory_columns(log, queries, cycles, src.height);
+    for (address, column) in build_frame_witness(log, queries, cycles, src.height) {
+        if address != rd_selected(width) {
+            out.push((address, column));
+        }
+    }
+    out
+}
+
+/// A `MEM_WORD` shard, `docs/spec/memory-ops.md` §3.5: S14's frame columns over
+/// the shard's cycles; the decoded row each cycle's pc claims and its two kind
+/// bits; the effective address split into `4·word_index` with its wrap bit; and
+/// the written `rd` value with its high halfword. The family looks nothing up
+/// in the packed generic table, so its setup columns are the decoded table
+/// alone.
+///
+/// Panics if the trace and the decoded table disagree — a cycle at a pc the
+/// table does not hold, an `rd` write or a `next_pc` that is not what the
+/// instruction computes, or an unaligned access, which the emulator refuses as
+/// a fatal guest error before it stages an event.
+fn mem_word(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    let fam = family::MEM_WORD;
+    let traces = src.archive.family_traces();
+    let trace = traces
+        .family(fam)
+        .ok_or("the archive has no MEM_WORD buffer")?;
+    let table = src
+        .program
+        .tables
+        .family(fam)
+        .ok_or("the program has no MEM_WORD table")?;
+    let h = src.height;
+    let start = src.index as usize * h;
+    let end = (start + h).min(trace.len());
+    let cycles = &trace.cycle[start..end];
+
+    let mut decoded: [Vec<u32>; 6] = Default::default();
+    let mut kinds: [Vec<u32>; 2] = Default::default();
+    // wrap word_index word_index_hi rd_hi, then rd_selected.
+    let mut cells: [Vec<u32>; 5] = Default::default();
+    for r in start..end {
+        let row = trace.row(r);
+        let slot = row.pc as usize / 2;
+        let field = |column: usize| {
+            table.get(column, slot).unwrap_or_else(|| {
+                panic!(
+                    "cycle {} runs pc {:#x}, which the MEM_WORD table does not hold",
+                    row.cycle, row.pc
+                )
+            })
+        };
+        // lookup_tuple: pc next_pc rs1 rs2 rd imm extra_mask.
+        let row_values = [field(1), field(2), field(3), field(4), field(5), field(6)];
+        let (seq, imm, mask) = (row_values[0], row_values[4], row_values[5]);
+        let bit = mask.trailing_zeros();
+        let read = |role: Role| row.query(role).map_or(0, |q| q.read_value);
+        let (address, wrap) = add(read(Role::Rs1), imm);
+        assert_eq!(
+            address % 4,
+            0,
+            "cycle {}: a MEM_WORD access at {address:#x} is not word-aligned",
+            row.cycle
+        );
+        let sel = match bit == kind_mem::LW {
+            true => read(Role::Load),
+            false => 0,
+        };
+        assert_eq!(
+            row.next_pc, seq,
+            "cycle {}: the trace's next_pc is not the decoded fall-through",
+            row.cycle
+        );
+        if let Some(rd) = row.query(Role::Rd).filter(|q| q.addr != 0) {
+            assert_eq!(
+                rd.write_value, sel,
+                "cycle {}: the trace's rd write is not what the instruction computes",
+                row.cycle
+            );
+        }
+        // `word_addr_rule` ties every RAM query's address to `4·word_index`,
+        // so the fill holds the trace to it rather than to alignment alone.
+        for role in [Role::Load, Role::Ram] {
+            if let Some(q) = row.query(role) {
+                assert_eq!(
+                    q.addr, address,
+                    "cycle {}: a {role:?} query's address is not the effective address",
+                    row.cycle
+                );
+            }
+        }
+        if let Some(ram) = row.query(Role::Ram) {
+            assert_eq!(
+                ram.write_value,
+                read(Role::Rs2),
+                "cycle {}: the trace's stored word is not rs2",
+                row.cycle
+            );
+        }
+        let values = [wrap, address / 4, (address / 4) >> 16, sel >> 16, sel];
+        for (column, v) in cells.iter_mut().zip(values) {
+            column.push(v);
+        }
+        for (column, v) in decoded.iter_mut().zip(row_values) {
+            column.push(v);
+        }
+        for (k, column) in kinds.iter_mut().enumerate() {
+            column.push((k as u32 == bit) as u32);
+        }
+    }
+
+    let mut out = frame_columns(src, fam, cycles);
+    let [wrap, word_index, word_index_hi, rd_hi, sel] = cells;
+    out.push((rd_selected(frame_queries(fam).len()), u32_column(sel, h)));
+    for (address, values) in mw_circuit::DECODED.iter().zip(decoded) {
+        out.push((*address, u32_column(values, h)));
+    }
+    for (address, values) in mw_circuit::KINDS.iter().zip(kinds) {
+        out.push((*address, u32_column(values, h)));
+    }
+    for (address, values) in [
+        (mw_circuit::WRAP, wrap),
+        (mw_circuit::WORD_INDEX, word_index),
+        (mw_circuit::WORD_INDEX_HI, word_index_hi),
+        (mw_circuit::RD_HI, rd_hi),
+    ] {
+        out.push((address, u32_column(values, h)));
+    }
+    for j in 0..mw_circuit::TABLE_WIDTH {
+        out.push((PolyAddress::Setup(j as u32), table.column_poly(j)));
+    }
+    Ok(out)
+}
+
+/// A `MEM_SUBWORD` shard, `docs/spec/memory-ops.md` §4.7: the frame columns;
+/// the decoded row and its six kind bits; the effective address split into
+/// `4·word_index + 2·bit1 + bit0` with its wrap bit; the splice's derived
+/// constants and its three parts, each with the column its bound scales; the
+/// truncated store source and the rest of `rs2`; the sign lookup's key, its
+/// answer and the sign-extension term; and the written `rd` value.
+///
+/// Panics if the trace and the decoded table disagree — a cycle at a pc the
+/// table does not hold, an `rd` write, a written word or a `next_pc` that is
+/// not what the instruction computes, or a halfword access at an odd address,
+/// which the emulator refuses as a fatal guest error.
+fn mem_subword(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    let fam = family::MEM_SUBWORD;
+    let traces = src.archive.family_traces();
+    let trace = traces
+        .family(fam)
+        .ok_or("the archive has no MEM_SUBWORD buffer")?;
+    let table = src
+        .program
+        .tables
+        .family(fam)
+        .ok_or("the program has no MEM_SUBWORD table")?;
+    let h = src.height;
+    let start = src.index as usize * h;
+    let end = (start + h).min(trace.len());
+    let cycles = &trace.cycle[start..end];
+
+    let mut decoded: [Vec<u32>; 6] = Default::default();
+    let mut kinds: [Vec<u32>; 6] = Default::default();
+    // wrap word_index word_index_hi bit0 bit1 p pcopow wph p_ram word
+    // high high_hi high_scaled high_scaled_hi sub sub_scaled sub_scaled_hi
+    // low low_hi low_scaled low_scaled_hi
+    // src_sub src_sub_scaled src_sub_scaled_hi src_high src_high_hi
+    // sign_in sign se rd_hi, then rd_selected.
+    let mut cells: [Vec<u32>; 31] = Default::default();
+    for r in start..end {
+        let row = trace.row(r);
+        let slot = row.pc as usize / 2;
+        let field = |column: usize| {
+            table.get(column, slot).unwrap_or_else(|| {
+                panic!(
+                    "cycle {} runs pc {:#x}, which the MEM_SUBWORD table does not hold",
+                    row.cycle, row.pc
+                )
+            })
+        };
+        let row_values = [field(1), field(2), field(3), field(4), field(5), field(6)];
+        let (seq, imm, mask) = (row_values[0], row_values[4], row_values[5]);
+        let bit = mask.trailing_zeros();
+        let read = |role: Role| row.query(role).map_or(0, |q| q.read_value);
+        let is_byte = matches!(bit, kind_sub::LB | kind_sub::LBU | kind_sub::SB);
+        let is_load = matches!(
+            bit,
+            kind_sub::LB | kind_sub::LH | kind_sub::LBU | kind_sub::LHU
+        );
+        let sign_extends = matches!(bit, kind_sub::LB | kind_sub::LH);
+        let (address, wrap) = add(read(Role::Rs1), imm);
+        let (bit0, bit1) = (address & 1, (address >> 1) & 1);
+        assert!(
+            is_byte || bit0 == 0,
+            "cycle {}: a halfword access at {address:#x} is not halfword-aligned",
+            row.cycle
+        );
+        // The splice: p = 2^(8·offset), w the access width, and the word this
+        // row decomposes — the one a load read, or the one a store rewrites.
+        let p = 1u64 << (8 * (address & 3));
+        let w = if is_byte { 1u64 << 8 } else { 1u64 << 16 };
+        let word = match is_load {
+            true => read(Role::Load),
+            false => read(Role::Ram),
+        } as u64;
+        let (low, sub, high) = (word % p, (word / p) % w, word / (w * p));
+        let (src_sub, src_high) = (read(Role::Rs2) as u64 % w, read(Role::Rs2) as u64 / w);
+        let sign_in = sub * if is_byte { 1 << 8 } else { 1 };
+        let sign = sign_in >> 15;
+        let se = (sign_extends && sign == 1) as u64;
+        let sel = match is_load {
+            true => sub + se * ((1u64 << 32) - w),
+            false => 0,
+        };
+        assert_eq!(
+            row.next_pc, seq,
+            "cycle {}: the trace's next_pc is not the decoded fall-through",
+            row.cycle
+        );
+        if let Some(rd) = row.query(Role::Rd).filter(|q| q.addr != 0) {
+            assert_eq!(
+                rd.write_value as u64, sel,
+                "cycle {}: the trace's rd write is not what the instruction computes",
+                row.cycle
+            );
+        }
+        for role in [Role::Load, Role::Ram] {
+            if let Some(q) = row.query(role) {
+                assert_eq!(
+                    q.addr,
+                    address & !3,
+                    "cycle {}: a {role:?} query's address is not the accessed word",
+                    row.cycle
+                );
+            }
+        }
+        if let Some(ram) = row.query(Role::Ram) {
+            assert_eq!(
+                ram.write_value as u64,
+                high * w * p + src_sub * p + low,
+                "cycle {}: the trace's stored word is not the spliced one",
+                row.cycle
+            );
+        }
+        let p_ram = if is_load { 0 } else { p };
+        let values = [
+            wrap as u64,
+            (address / 4) as u64,
+            ((address / 4) >> 16) as u64,
+            bit0 as u64,
+            bit1 as u64,
+            p,
+            (1u64 << 31) / p,
+            w * p / 2,
+            p_ram,
+            word,
+            high,
+            high >> 16,
+            high * w * p,
+            (high * w * p) >> 16,
+            sub,
+            sub * ((1u64 << 32) / w),
+            (sub * ((1u64 << 32) / w)) >> 16,
+            low,
+            low >> 16,
+            low * ((1u64 << 32) / p),
+            (low * ((1u64 << 32) / p)) >> 16,
+            src_sub,
+            src_sub * ((1u64 << 32) / w),
+            (src_sub * ((1u64 << 32) / w)) >> 16,
+            src_high,
+            src_high >> 16,
+            sign_in,
+            sign,
+            se,
+            sel >> 16,
+            sel,
+        ];
+        for (column, v) in cells.iter_mut().zip(values) {
+            column.push(v as u32);
+        }
+        for (column, v) in decoded.iter_mut().zip(row_values) {
+            column.push(v);
+        }
+        for (k, column) in kinds.iter_mut().enumerate() {
+            column.push((k as u32 == bit) as u32);
+        }
+    }
+
+    let mut out = frame_columns(src, fam, cycles);
+    let [wrap, word_index, word_index_hi, bit0, bit1, p, pcopow, wph, p_ram, word, high, high_hi, high_scaled, high_scaled_hi, sub, sub_scaled, sub_scaled_hi, low, low_hi, low_scaled, low_scaled_hi, src_sub, src_sub_scaled, src_sub_scaled_hi, src_high, src_high_hi, sign_in, sign, se, rd_hi, sel] =
+        cells;
+    out.push((rd_selected(frame_queries(fam).len()), u32_column(sel, h)));
+    for (address, values) in ms_circuit::DECODED.iter().zip(decoded) {
+        out.push((*address, u32_column(values, h)));
+    }
+    for (address, values) in ms_circuit::KINDS.iter().zip(kinds) {
+        out.push((*address, u32_column(values, h)));
+    }
+    for (address, values) in [
+        (ms_circuit::WRAP, wrap),
+        (ms_circuit::WORD_INDEX, word_index),
+        (ms_circuit::WORD_INDEX_HI, word_index_hi),
+        (ms_circuit::BIT0, bit0),
+        (ms_circuit::BIT1, bit1),
+        (ms_circuit::P, p),
+        (ms_circuit::PCOPOW, pcopow),
+        (ms_circuit::WPH, wph),
+        (ms_circuit::P_RAM, p_ram),
+        (ms_circuit::WORD, word),
+        (ms_circuit::HIGH, high),
+        (ms_circuit::HIGH_HI, high_hi),
+        (ms_circuit::HIGH_SCALED, high_scaled),
+        (ms_circuit::HIGH_SCALED_HI, high_scaled_hi),
+        (ms_circuit::SUB, sub),
+        (ms_circuit::SUB_SCALED, sub_scaled),
+        (ms_circuit::SUB_SCALED_HI, sub_scaled_hi),
+        (ms_circuit::LOW, low),
+        (ms_circuit::LOW_HI, low_hi),
+        (ms_circuit::LOW_SCALED, low_scaled),
+        (ms_circuit::LOW_SCALED_HI, low_scaled_hi),
+        (ms_circuit::SRC_SUB, src_sub),
+        (ms_circuit::SRC_SUB_SCALED, src_sub_scaled),
+        (ms_circuit::SRC_SUB_SCALED_HI, src_sub_scaled_hi),
+        (ms_circuit::SRC_HIGH, src_high),
+        (ms_circuit::SRC_HIGH_HI, src_high_hi),
+        (ms_circuit::SIGN_IN, sign_in),
+        (ms_circuit::SIGN, sign),
+        (ms_circuit::SE, se),
+        (ms_circuit::RD_HI, rd_hi),
+    ] {
+        out.push((address, u32_column(values, h)));
+    }
+    for j in 0..ms_circuit::TABLE_WIDTH {
+        out.push((PolyAddress::Setup(j as u32), table.column_poly(j)));
+    }
+    let generic = generic_table(h.trailing_zeros());
+    for (address, column) in ms_circuit::GENERIC_TABLE.iter().zip(generic) {
+        out.push((*address, column));
+    }
+    Ok(out)
+}
+
+/// An `ATOMICS` shard, `docs/spec/memory-ops.md` §6.7: the frame columns; the
+/// decoded row — five columns, this family's tuple having no `imm` — and its
+/// eleven kind bits; the word index, which is `rs1/4` with no offset at all;
+/// `amoadd`'s reduced sum and carry; the bitwise selector with both operands'
+/// bytes and their AND; the comparison of the old word against `rs2` and the
+/// smaller of the two; and the written `rd` value, which is the **old** word on
+/// every kind but `sc.w`.
+///
+/// Panics if the trace and the decoded table disagree — a cycle at a pc the
+/// table does not hold, a written word, an `rd` write or a `next_pc` that is
+/// not what the instruction computes, or a misaligned access, which the
+/// emulator refuses as a fatal guest error.
+fn atomics(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    let fam = family::ATOMICS;
+    let traces = src.archive.family_traces();
+    let trace = traces
+        .family(fam)
+        .ok_or("the archive has no ATOMICS buffer")?;
+    let table = src
+        .program
+        .tables
+        .family(fam)
+        .ok_or("the program has no ATOMICS table")?;
+    let h = src.height;
+    let start = src.index as usize * h;
+    let end = (start + h).min(trace.len());
+    let cycles = &trace.cycle[start..end];
+
+    let mut decoded: [Vec<u32>; 5] = Default::default();
+    let mut kinds: [Vec<u32>; 11] = Default::default();
+    // word_index word_index_hi sum sum_hi add_wrap f_bitwise
+    // old_hi old_sign src_hi src_sign lt cmp_gap cmp_gap_hi lo, then rd_selected.
+    let mut cells: [Vec<u32>; 15] = Default::default();
+    let mut bytes: [Vec<u32>; 12] = Default::default();
+    for r in start..end {
+        let row = trace.row(r);
+        let slot = row.pc as usize / 2;
+        let field = |column: usize| {
+            table.get(column, slot).unwrap_or_else(|| {
+                panic!(
+                    "cycle {} runs pc {:#x}, which the ATOMICS table does not hold",
+                    row.cycle, row.pc
+                )
+            })
+        };
+        // lookup_tuple: pc next_pc rs1 rs2 rd extra_mask — six, no imm.
+        let row_values = [field(1), field(2), field(3), field(4), field(5)];
+        let (seq, mask) = (row_values[0], row_values[4]);
+        let bit = mask.trailing_zeros();
+        let read = |role: Role| row.query(role).map_or(0, |q| q.read_value);
+        let (address, old, b) = (read(Role::Rs1), read(Role::Ram), read(Role::Rs2));
+        assert_eq!(
+            address % 4,
+            0,
+            "cycle {}: an atomic at {address:#x} is not word-aligned",
+            row.cycle
+        );
+        let (sum, add_wrap) = add(old, b);
+        let signed_order = matches!(bit, at::AMOMIN_W | at::AMOMAX_W);
+        let lt = match signed_order {
+            true => (old as i32) < (b as i32),
+            false => old < b,
+        };
+        let lo = if lt { old } else { b };
+        let gap = old.wrapping_sub(b);
+        let and: Vec<u32> = (0..4)
+            .map(|j| (old >> (8 * j)) & 0xff & (b >> (8 * j)))
+            .collect();
+        let accumulator: u32 = (0..4).map(|j| and[j] << (8 * j)).sum();
+        let new = match bit {
+            at::LR_W => old,
+            at::SC_W | at::AMOSWAP_W => b,
+            at::AMOADD_W => sum,
+            at::AMOAND_W => accumulator,
+            // `or` and `xor` are `a + b − and` and `a + b − 2·and` byte by
+            // byte, each below 2^32, but the sum on its own can pass it.
+            at::AMOOR_W => old.wrapping_add(b).wrapping_sub(accumulator),
+            at::AMOXOR_W => old
+                .wrapping_add(b)
+                .wrapping_sub(accumulator)
+                .wrapping_sub(accumulator),
+            at::AMOMIN_W | at::AMOMINU_W => lo,
+            at::AMOMAX_W | at::AMOMAXU_W => old.wrapping_add(b).wrapping_sub(lo),
+            other => panic!("cycle {}: kind bit {other} is not an atomic", row.cycle),
+        };
+        let sel = match bit == at::SC_W {
+            true => 0,
+            false => old,
+        };
+        assert_eq!(
+            row.next_pc, seq,
+            "cycle {}: the trace's next_pc is not the decoded fall-through",
+            row.cycle
+        );
+        assert_eq!(
+            row.query(Role::Ram).map(|q| (q.addr, q.write_value)),
+            Some((address, new)),
+            "cycle {}: the trace's RAM query is not the word the instruction rewrites",
+            row.cycle
+        );
+        if let Some(rd) = row.query(Role::Rd).filter(|q| q.addr != 0) {
+            assert_eq!(
+                rd.write_value, sel,
+                "cycle {}: the trace's rd write is not the old word",
+                row.cycle
+            );
+        }
+        let values = [
+            address / 4,
+            (address / 4) >> 16,
+            sum,
+            sum >> 16,
+            add_wrap,
+            matches!(bit, at::AMOAND_W | at::AMOOR_W | at::AMOXOR_W) as u32,
+            old >> 16,
+            old >> 31,
+            b >> 16,
+            b >> 31,
+            lt as u32,
+            gap,
+            gap >> 16,
+            lo,
+            sel,
+        ];
+        for (column, v) in cells.iter_mut().zip(values) {
+            column.push(v);
+        }
+        for j in 0..4 {
+            bytes[j].push((old >> (8 * j)) & 0xff);
+            bytes[4 + j].push((b >> (8 * j)) & 0xff);
+            bytes[8 + j].push(and[j]);
+        }
+        for (column, v) in decoded.iter_mut().zip(row_values) {
+            column.push(v);
+        }
+        for (k, column) in kinds.iter_mut().enumerate() {
+            column.push((k as u32 == bit) as u32);
+        }
+    }
+
+    let mut out = frame_columns(src, fam, cycles);
+    let [word_index, word_index_hi, sum, sum_hi, add_wrap, f_bitwise, old_hi, old_sign, src_hi, src_sign, lt, cmp_gap, cmp_gap_hi, lo, sel] =
+        cells;
+    out.push((rd_selected(frame_queries(fam).len()), u32_column(sel, h)));
+    for (address, values) in at_circuit::DECODED.iter().zip(decoded) {
+        out.push((*address, u32_column(values, h)));
+    }
+    for (address, values) in at_circuit::KINDS.iter().zip(kinds) {
+        out.push((*address, u32_column(values, h)));
+    }
+    for (address, values) in [
+        (at_circuit::WORD_INDEX, word_index),
+        (at_circuit::WORD_INDEX_HI, word_index_hi),
+        (at_circuit::SUM, sum),
+        (at_circuit::SUM_HI, sum_hi),
+        (at_circuit::ADD_WRAP, add_wrap),
+        (at_circuit::F_BITWISE, f_bitwise),
+        (at_circuit::OLD_HI, old_hi),
+        (at_circuit::OLD_SIGN, old_sign),
+        (at_circuit::SRC_HI, src_hi),
+        (at_circuit::SRC_SIGN, src_sign),
+        (at_circuit::LT, lt),
+        (at_circuit::CMP_GAP, cmp_gap),
+        (at_circuit::CMP_GAP_HI, cmp_gap_hi),
+        (at_circuit::LO, lo),
+    ] {
+        out.push((address, u32_column(values, h)));
+    }
+    let mut columns = bytes.into_iter();
+    for group in [
+        at_circuit::BYTES_A,
+        at_circuit::BYTES_B,
+        at_circuit::BYTES_AND,
+    ] {
+        for address in group {
+            let values = columns.next().expect("twelve byte columns");
+            out.push((address, u32_column(values, h)));
+        }
+    }
+    for j in 0..at_circuit::TABLE_WIDTH {
+        out.push((PolyAddress::Setup(j as u32), table.column_poly(j)));
+    }
+    let generic = generic_table(h.trailing_zeros());
+    for (address, column) in at_circuit::GENERIC_TABLE.iter().zip(generic) {
         out.push((*address, column));
     }
     Ok(out)

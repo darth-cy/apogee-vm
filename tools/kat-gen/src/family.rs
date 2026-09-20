@@ -1,23 +1,27 @@
 //! The `family` group: every registered execution family's circuit at
-//! `trace_vars` 22, the height each defaults to — S16's
-//! `ADD_SUB_LUI_AUIPC`, S17's `JUMP_BRANCH_SLT` and S18's `SHIFT_BITWISE` and
-//! `MUL_DIV`.
+//! `trace_vars` 22 — S16's `ADD_SUB_LUI_AUIPC`, S17's `JUMP_BRANCH_SLT`, S18's
+//! `SHIFT_BITWISE` and `MUL_DIV`, and S19's `MEM_WORD`, `MEM_SUBWORD` and
+//! `ATOMICS`. Five of the seven default to that height; `MUL_DIV` and
+//! `ATOMICS` default to `2^20`, and the fixture height is one number for the
+//! whole group.
 //!
 //! Each family's `artifact` constructor is the only definition of its circuit;
 //! this group writes their bytes, and CI regenerates and diffs them. It is not
 //! an oracle: what each file holds is `docs/spec/shard-proof.md` §8,
-//! `docs/spec/jump-branch-slt.md`, `docs/spec/shift-bitwise.md` and
-//! `docs/spec/mul-div.md`, and the matching suite in `crates/checker/tests`
-//! holds the gates to those documents one by one.
+//! `docs/spec/jump-branch-slt.md`, `docs/spec/shift-bitwise.md`,
+//! `docs/spec/mul-div.md` and `docs/spec/memory-ops.md`, and the matching suite
+//! in `crates/checker/tests` holds the gates to those documents one by one.
 
-use constraints::{add_sub, jump_branch_slt, mul_div, shift_bitwise};
+use constraints::{
+    add_sub, atomics, jump_branch_slt, mem_subword, mem_word, mul_div, shift_bitwise,
+};
 
 use crate::write_bytes;
 
 const TRACE_VARS: u32 = 22;
 
 /// Each fixture's path and the bytes its constructor writes at [`TRACE_VARS`].
-fn fixtures() -> [(&'static str, Vec<u8>); 4] {
+fn fixtures() -> [(&'static str, Vec<u8>); 7] {
     [
         (
             "crates/constraints/tests/vectors/add_sub.bin",
@@ -34,6 +38,18 @@ fn fixtures() -> [(&'static str, Vec<u8>); 4] {
         (
             "crates/constraints/tests/vectors/mul_div.bin",
             mul_div::artifact(TRACE_VARS).to_bytes(),
+        ),
+        (
+            "crates/constraints/tests/vectors/mem_word.bin",
+            mem_word::artifact(TRACE_VARS).to_bytes(),
+        ),
+        (
+            "crates/constraints/tests/vectors/mem_subword.bin",
+            mem_subword::artifact(TRACE_VARS).to_bytes(),
+        ),
+        (
+            "crates/constraints/tests/vectors/atomics.bin",
+            atomics::artifact(TRACE_VARS).to_bytes(),
         ),
     ]
 }

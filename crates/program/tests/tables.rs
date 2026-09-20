@@ -203,8 +203,10 @@ fn a_table_that_cannot_hold_its_program_fails_loudly() {
 
 /// A family's table bounds only that family's instructions: code above a
 /// shorter table's height is padding there, not an error and not a panic.
-/// With the two init families at 2^20 rows, and atomics at its default 2^16,
-/// every row above a table's height reads as not live.
+/// With the two init families at 2^20 rows, and atomics held to 2^16, every row
+/// above a table's height reads as not live. Atomics is given that height
+/// explicitly since S19, which raised its default to `2^20`, the timestamp
+/// channel's floor: the mechanism is the height's, not the default's.
 #[test]
 fn code_above_a_shorter_familys_table_is_padding_there() {
     let addi = 0x0000_0013;
@@ -219,6 +221,7 @@ fn code_above_a_shorter_familys_table_is_padding_there() {
     }
 
     // An atomic low in memory and ordinary code above the atomics table.
+    params.heights[family::ATOMICS as usize] = 1 << 16;
     let amoadd = 0x00b1_262f;
     let mut image = common::image_of(0x1_0000, &[amoadd]);
     let far = 0x2_0000u32;
@@ -235,7 +238,7 @@ fn code_above_a_shorter_familys_table_is_padding_there() {
         compressed: false,
     });
     image.slots.push(Slot::MidInstruction);
-    let (tables, config) = decode_program(&image, &ProgramParams::defaults()).unwrap();
+    let (tables, config) = decode_program(&image, &params).unwrap();
     assert_eq!(config.height(family::ATOMICS), Some(1 << 16));
     let atomics = tables.family(family::ATOMICS).unwrap();
     assert!(!atomics.is_live((far / 2) as usize));

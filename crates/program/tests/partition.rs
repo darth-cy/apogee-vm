@@ -163,32 +163,33 @@ fn each_program_derives_only_the_families_it_uses() {
     assert_eq!(detached.1, config);
 }
 
-/// Which committed guests the frozen default heights can preprocess, and which
-/// cannot.
+/// Every committed guest preprocesses at the frozen default heights, and the
+/// height rule that would refuse one still fires.
 ///
 /// The suites that are not about the heights take `common::fitting`, so without
 /// this nothing would notice a guest — or growth in an existing one — crossing
-/// a default. `consistency` is the first program to cross one: a family's table
-/// is indexed by absolute pc and the defaults give atomics 2^16 rows, which run
-/// out at pc `0x20000`, while that guest's atomics run up to `0x18e62a`.
+/// a default. Until S19 `consistency` crossed one: a family's table is indexed
+/// by absolute pc, the defaults gave atomics `2^16` rows, which run out at pc
+/// `0x20000`, and that guest's atomics run up to `0x18e62a`. S19 raised
+/// `DEFAULT_HEIGHTS[ATOMICS]` to `2^20` — the timestamp channel's floor, which
+/// the atomics circuit needs — so every guest now fits; the second half holds
+/// the refusal to the old height so the mechanism keeps a test.
 #[test]
-fn the_default_heights_hold_every_guest_but_the_largest() {
+fn the_default_heights_hold_every_committed_guest() {
     for name in common::GUESTS {
         let image = common::guest(name);
         let decoded = decode_program(&image, &ProgramParams::defaults());
-        if name == "consistency" {
-            let Err(program::ProgramError::TableTooShort { family, height, .. }) = decoded else {
-                panic!("{name} is expected to cross the default atomics height");
-            };
-            assert_eq!((family, height), (family::ATOMICS, 1 << 16));
-            assert!(
-                decode_program(&image, &common::fitting(&image)).is_ok(),
-                "{name} fits no menu height"
-            );
-        } else {
-            assert!(decoded.is_ok(), "{name}: {:?}", decoded.err());
-        }
+        assert!(decoded.is_ok(), "{name}: {:?}", decoded.err());
     }
+    let mut short = ProgramParams::defaults();
+    short.heights[family::ATOMICS as usize] = 1 << 16;
+    let image = common::guest("consistency");
+    let Err(program::ProgramError::TableTooShort { family, height, .. }) =
+        decode_program(&image, &short)
+    else {
+        panic!("consistency's atomics run past pc 0x20000 and cannot fit 2^16 rows");
+    };
+    assert_eq!((family, height), (family::ATOMICS, 1 << 16));
 }
 
 /// A word no family knows is a loud failure naming its pc, with the decoder's

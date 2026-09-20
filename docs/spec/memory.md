@@ -143,12 +143,24 @@ control C8). S16's family constraints make:
 mask is `m_pc` times its kind's use. It proves `EXIT` alone, so it needs no `is-zero`: a
 gate holds every ecall row's `a7` read to 93, and `arg1`, `arg2` and `ram` are masked off
 on every row. No transfer row is provable, so `is_transfer` does not exist yet; the
-I/O-binding stage owes it. Every other execution family owes this section at its own stage,
-and until then has no circuit, so no statement containing it can be proved.
+I/O-binding stage owes it. Every other execution family owed this section at its own stage,
+and until then had no circuit, so no statement containing it could be proved.
 
 **Status at S17.** `JUMP_BRANCH_SLT` discharges this section for its own rows
 (`docs/spec/jump-branch-slt.md` §4.1): `m_pc` is the decoder lookup's selector, and `rs1`,
 `rs2` and `rd` are each `m_pc` times the kind's use of them — a branch has no `rd` query.
+
+**Status at S18.** `SHIFT_BITWISE` and `MUL_DIV` discharge it the same way
+(`docs/spec/shift-bitwise.md` §4.1, `docs/spec/mul-div.md` §4.1): `rs1` and `rd` on every
+kind, `rs2` on the R-type half alone.
+
+**Status at S19.** `MEM_WORD`, `MEM_SUBWORD` and `ATOMICS` discharge it
+(`docs/spec/memory-ops.md` §3.2, §4.6, §6.7), and with them **every execution family
+does**. Their `uses_q` sets are `execution-trace.md` §4's: a load makes no `rs2` query and
+a store no `rd`, so the two memory families read `load`/`rd` under the load kinds and
+`rs2`/`ram` under the store kinds; and `lr.w` makes no `rs2` query, which the atomics
+family's rule keys on `b_lr` and never on `is_zero(decoded_rs2)` — a test
+`amoadd.w rd, x0, (rs1)`, a real lowering, would also pass.
 
 ### 2.2 The leaves
 
@@ -455,6 +467,14 @@ The dropped bit alone does not clear bit 0: a `jalr` whose `rs1 + imm` is 1 coul
 and write `HALT_PC`, so the even check is what makes "every masked `jalr` target is even",
 above, a constraint rather than an intention.
 
+**Status at S18 and S19.** The remaining five families each carry a `next_pc` gate, and
+every one of them is the degree-1 `next_pc − decoded_next_pc = 0`: none of the twelve shift
+and bitwise kinds, the eight M kinds or the nineteen memory and atomic kinds computes a pc,
+so none carries a wrap bit, a bound or an evenness check. S17's rule that a family
+computing a pc keeps its `next_pc` even does not reach a family that copies one
+(`docs/spec/shift-bitwise.md` §4.1, `docs/spec/memory-ops.md` §3.2). Since S19 every
+registered family has its gate.
+
 ---
 
 ## 6. Binding
@@ -639,10 +659,25 @@ against identity's `cm(image column)` (§6.2).
 seven-query frame meets; the masks and the sentinel for that family (§2.1, §5); the global
 transcript and the boundary decoder; the key's identity recomputation and the opening of
 `S[0]`; and the zero-root refusal, which is `reconciles`' nonzero half and which step 10 of
-`verify_shard` runs. Still owed: the masks and the sentinel for every other family, at
-each family's stage, and each access's byte address, at the memory families' stage.
+`verify_shard` runs. Still owed at S16: the masks and the sentinel for every other family,
+at each family's stage, and each access's byte address, at the memory families' stage —
+both discharged by S19, below.
 
 **Status at S17.** Discharged: the masks and the sentinel for `JUMP_BRANCH_SLT` (§2.1, §5).
+
+**Status at S18.** Discharged: the masks and the sentinel for `SHIFT_BITWISE` and
+`MUL_DIV`, each of which copies the decoded fall-through rather than computing a pc.
+
+**Status at S19.** Discharged: the masks and the sentinel for `MEM_WORD`, `MEM_SUBWORD`
+and `ATOMICS`, and **each access's byte address** — the last item on the list above, and
+the one the memory families' stage owed. It is not the `low ∈ [0, 3]` shape that line
+describes: the split is `addr = 4·word_index + 2·bit1 + bit0`, which is an alignment
+statement over ℤ and nothing over `Fr`, and it is the range check on `word_index` that
+makes it base-4. `MEM_WORD` carries no offset bits at all, so a misaligned `lw` or `sw` has
+no witness; `half_aligned` clears bit 0 at halfword width; and `ATOMICS` derives
+`rs1 < 2^32` from `rs1 = 4·word_index` rather than assuming it.
+`docs/spec/memory-ops.md` §2 is that section, and with it **every item this list owed is
+discharged** but the I/O-binding stage's transfer rows.
 
 S20 reconciles every shard.
 

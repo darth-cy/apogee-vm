@@ -17,7 +17,7 @@ docs/
   spec/          the frozen protocol specs; read before touching what they cover; and
                  constraint-manifest.md, every registered circuit's columns and gates by
                  position, name and formula. One page per circuit family:
-                 jump-branch-slt.md, shift-bitwise.md, mul-div.md
+                 jump-branch-slt.md, shift-bitwise.md, mul-div.md, memory-ops.md
   handoff/       one note per completed stage: frozen API, artifacts, deviations
 crates/
   constants/     frozen constants and tags; zero logic; no_std
@@ -44,8 +44,9 @@ crates/
                  the two window artifacts and check_memory; and `lookup`: the LogUp
                  channels, their gated tuples, the fraction tree and the discharge rules;
                  `add_sub`: S16's family circuit; `jump_branch_slt`: S17's; `shift_bitwise`
-                 and `mul_div`: S18's two; `gadgets`: the is-zero and comparison gadgets;
-                 `family_circuit`: the registry; no_std
+                 and `mul_div`: S18's two; `mem_word`, `mem_subword` and `atomics`: S19's
+                 three; `gadgets`: the is-zero and comparison gadgets;
+                 `family_circuit`: the registry, now every family; no_std
   gkr-verify/    the GKR verifier half: the gate kernel, the layer sumcheck verifier and
                  verify, and every type verify touches; the memory argument's window
                  constant, boundary factors and reconciliation; no_std, linked by the
@@ -65,7 +66,7 @@ crates/
   guest-sdk/     crt0, entry!, linker script, bump allocator, ecall shims; no_std,
                  guest-only, and NOT a workspace member
 guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, opcodes/, heap/, consistency/,
-                 addsub/, control/, alu/
+                 addsub/, control/, alu/, mem/
                  -- their own workspace; see guests/Cargo.toml and docs/guest-program-manual.md
 assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 handoff
 tools/
@@ -110,13 +111,14 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
-cargo test --workspace                      # 881 tests as of S18; 53 more are #[ignore]d
+cargo test --workspace                      # 945 tests as of S19; 56 more are #[ignore]d
 cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 4.63 GB a pass, 30 min on a runner
 cargo test -p prover --test acceptance -- --include-ignored --test-threads=1  # DEFERRED; S16's statement, 8.6 GB peak
 cargo test -p verifier --test cli -- --include-ignored --test-threads=1       # DEFERRED; ditto
-cargo test -p checker --test tamper -- --include-ignored --test-threads=1     # DEFERRED; one re-proof a twin, 15.7 GB peak
+cargo test -p checker --test tamper -- --include-ignored --test-threads=1     # DEFERRED; one re-proof a twin, 16.9 GB peak
 cargo test -p prover --test control -- --include-ignored --test-threads=1     # DEFERRED; S17's statement, 10.1 GB peak
 cargo test --release -p prover --test alu -- --include-ignored --test-threads=1  # DEFERRED; S18's statement, 14.1 GB peak, 111 s
+cargo test --release -p prover --test mem -- --include-ignored --test-threads=1  # DEFERRED; S19's statement, 14.7 GB peak, 118 s
 cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify -p verifier-core --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
@@ -471,19 +473,24 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   pc's final value to it. It is odd and below `RAM_ORIGIN`, so no other row writes it and a
   trace missing its exit row cannot balance. Since S16 the add/sub family's `next_pc` gate
   holds every one of its rows to it: the exit row writes `HALT_PC`, every other live row
-  the decoded table's `next_pc`, which stays the fall-through, minus `2^32·pc_wrap`. Every
-  other family owes its own `next_pc` gate at its stage. **"Odd" is a constraint only where
-  a family makes it one**: S17's jump family range-checks every `next_pc` it writes even,
-  because a `jalr` whose `rs1 + imm` is 1 could otherwise keep bit 0 and write `HALT_PC` —
-  a crashing program proven to exit cleanly. A family that computes a pc owes the same.
+  the decoded table's `next_pc`, which stays the fall-through, minus `2^32·pc_wrap`. **"Odd"
+  is a constraint only where a family makes it one**: S17's jump family range-checks every
+  `next_pc` it writes even, because a `jalr` whose `rs1 + imm` is 1 could otherwise keep
+  bit 0 and write `HALT_PC` — a crashing program proven to exit cleanly. A family that
+  computes a pc owes the same; one that copies the decoded fall-through owes a degree-1
+  `next_pc − decoded_next_pc = 0` and no bound at all, which is S18's reading and what
+  S19's three families carry. Since S19 every family has its `next_pc` gate.
 - **A frame alone holds a query's mask to booleanity and nothing else.** No frame gate ties
   it to the row's pc mask or to the instruction the row looks up, so a padding row can
   carry an `rd` query that rewrites `x10` after exit, and it balances. A family's circuit
   makes `m_pc` the row's liveness and the decoder lookup's selector, and `m_q = m_pc·uses_q`
   from the row kind (`docs/spec/memory.md` §2.1). S16's add/sub family does, and
   `crates/checker/tests/tamper.rs` proves control C8's three forgeries refused; S17's jump
-  family does, and its row suite refuses C8 on its frame; every later family owes the same
-  gates.
+  family does, and its row suite refuses C8 on its frame; and since S19 every registered
+  family does, each with its own `uses_q` sets read off `docs/spec/execution-trace.md` §4 —
+  a load has no `rs2` query, a store no `rd`, and `lr.w` no `rs2`, which its mask rule keys
+  on `b_lr` and never on `is_zero(decoded_rs2)`, a test `amoadd.w rd, x0, (rs1)` would also
+  pass.
 - **The artifact format is 1, and a lookup carries a selector.** `LookupExpr = (name,
   channel, selector, tuple)`: a range obligation holds where its selector is 0 or its one
   `Linear` expression is below the channel's bound. A **table** channel's tuple is 1 to
@@ -508,9 +515,12 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   channel that proves nothing.
 - **A range channel needs `BITS ≤ trace_vars`**, refused at construction: a table of `2^n`
   rows holds at most `2^n` values. With `BITS[TIMESTAMP] = 19` and Mercury's even variable
-  count, **every execution family's shard is at least `2^20` rows** — and
-  `DEFAULT_HEIGHTS[ATOMICS]`, still `2^16`, is a height S19 raises, by the owner's
-  decision; until then no atomics circuit exists at any height.
+  count, **every execution family's shard is at least `2^20` rows**, so no family that runs
+  cycles may default below it. S19 raised `DEFAULT_HEIGHTS[ATOMICS]` from `2^16` to `2^20`
+  with the circuit that needs it, and `family_circuit`'s minimum-height arm now names
+  **all seven** execution families: a family missing from it would reach the channel
+  assertion and panic inside `VerifyingKey::check`, on bytes a verifier was handed, rather
+  than returning `None` for a clean `Err`.
 - **The `+ 1` on a gated key is for map tables only.** It keeps every real entry off the
   all-zero tuple so the `ZeroEntry` answers switched-off rows alone. A range channel has no
   offset and cannot have one — shifting `[0, 2^BITS)` up by one puts its top outside the
@@ -625,6 +635,38 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   is; the link the table's fall-through, range-checked and with no wrap bit; a branch has no
   `rd` query. **`constraints::gadgets`** — `is_zero` (the x0 rule is built on it, bytes
   unchanged) and `comparison` — are frozen for S18 and S19.
+- **The memory-op families' spec is `docs/spec/memory-ops.md`, and it is frozen.** The
+  addressing is shared by all three: `addr = 4·word_index (+ 2·bit1 + bit0)` is an
+  alignment check over ℤ and **nothing over Fr** — 4 is a unit there — so what makes the
+  split base-4 is the range check on `word_index`, three `RANGE16` obligations whose third,
+  `4·word_index_hi`, caps it at `2^30 − 1` and is exactly tight at the top of the address
+  space. `MEM_WORD` carries no offset bits at all, so a misaligned `lw` or `sw` has no
+  representation; `half_aligned` clears bit 0 at halfword width, and is load-bearing twice
+  — it is also what keeps `w·p` a divisor of `2^32`, on which the bound on what a store
+  writes rests. **Every RAM query's address is `4·word_index`**: one memory, not two.
+- **There is no `MemoryOffsetGetBits` table** (owner's decision, S19). The splice power
+  `p = 2^(8·offset)` and its halved copower are degree-2 gates over the address's own two
+  offset bits, which pins the position more directly than a keyed table would — the table
+  never carried the pinning, only the values — and adds no key to bound and no movement of
+  the packed generic table's three commitments. **The packed table did not move at S19**,
+  and a later stage restoring the table would pay S18's standing price for nothing.
+- **A copied value is not range-checked; a computed one is.** That is the prompt's
+  write-side induction, and S19 made it two one-directional inductions rather than a mutual
+  one: `mem_word`'s `rd_selected` carries a 16+16 pair even though it is a copy of a RAM
+  word, so **every register write in every family is locally bounded**, and the RAM side
+  then follows from the register side and from `mem_subword`'s and `atomics`' own local
+  bounds. The I/O-binding stage owes its transfer rows' `ram_write_value` the same.
+- **`sc.w` always succeeds, and that is a conformance deviation, not a soundness one.**
+  It stores `rs2` and writes `rd = 0` with no reservation state anywhere in the machine.
+  The emulator has the same semantics, so emulator and circuit agree, and the QEMU
+  differential carries it as its one whitelist entry — counted, asserted and never a
+  silently-ignored diff (`crates/emulator/src/qemu.rs`).
+- **A gadget's parameters can be a family's whole soundness, and then they are asserted.**
+  `atomics::assemble` holds the comparison gadget's selector, `lhs`, `rhs` and `signed` to
+  what `docs/spec/memory-ops.md` §6.4 states, because each wrong choice silently breaks the
+  four min/max kinds and nothing else in the circuit would catch it. Likewise every arm
+  indexes `KINDS` through its `constants::extra_mask` constant and never by position: the
+  stage prompt lists `amoand` and `amoor` in the opposite order to the constants.
 - **EXIT is the only provable ecall** (owner's decision, S16). The add/sub family holds
   every ecall row to `a7 = 93`, and its fill refuses any other ecall and any transfer
   cycle by name. The I/O-binding stage owes the rest, and until then fd 0 and fd 1 are
@@ -658,3 +700,4 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 | S16 — Vertical slice: add/sub family end to end | done | `docs/handoff/S16-add-sub.md` |
 | S17 — Jump/branch/slt family | done | `docs/handoff/S17-control-flow.md` |
 | S18 — Shift/bitwise + mul/div families | done | `docs/handoff/S18-shift-mul.md` |
+| S19 — Memory-op families + atomics | done | `docs/handoff/S19-mem.md` |

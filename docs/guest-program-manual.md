@@ -85,6 +85,7 @@ they cover most of what a guest can do:
 | `addsub` | S16's tiny guest, the first program proven end to end: a straight run of `add`, `sub`, `addi`, `lui` and `auipc` in both lengths, a `fence`, and an exit whose status, 42, is its result. It is hand-written assembly with no `guest-sdk` under it, one of the two guests that do not use `guest_sdk::entry!` — its own `_start` is the whole program, because crt0's `.bss` loop and its call to `main` are branches, stores and jumps, which S16 has no circuit for — so read it as a proof fixture, not a pattern |
 | `control` | S17's guest, proven end to end the same way: the twelve jumps, branches and comparisons of the `JUMP_BRANCH_SLT` family at their edge cases — full-width and mixed-sign orderings, `slti`/`sltiu` against −1, `x0` as a destination, a loop closed by a backward branch, calls and returns in both lengths, and a `jalr` whose `rs1 + imm` has bit 0 set — each checked by the guest itself, exiting with the number of checks, 16. Hand-written assembly with no `guest-sdk`, for `addsub`'s reason: its only instructions are the two families S17 proves |
 | `alu` | S18's guest, proven end to end the same way: the twelve shifts and bitwise operations of the `SHIFT_BITWISE` family and the eight M operations of `MUL_DIV`, at the edge cases the stage names — shamt 0, 1 and 31, `rs2 = 32` and 33 for the shift amount's truncation, `sra` of a negative operand, all four sign quadrants of each multiply and each division, `−2^31 × −2^31`, the asymmetric `mulhsu` corner, division by zero for all four, and the one signed overflow — each checked by the guest itself, exiting with the number of checks, 96. Hand-written assembly with no `guest-sdk`, for `addsub`'s reason: its only instructions are the four families S18 proves |
+| `mem` | S19's guest, proven end to end the same way: `lw` and `sw` of the `MEM_WORD` family, the six sub-word loads and stores of `MEM_SUBWORD` at every legal byte and halfword offset, and the eleven instructions of `ATOMICS`, at the cases the stage names — a negative byte and a negative halfword sign-extended, `sb` and `sh` truncating a source whose high bytes are set and leaving the rest of the word alone, `amoadd` overflowing `2^32`, two consecutive AMOs to one address, all four min/max at `0x7fffffff` against `0x80000000`, an `lr.w`/`sc.w` pair, and `lw x0` and `amoadd.w x0` — each checked by the guest itself, exiting with the number of checks, 50. Hand-written assembly with no `guest-sdk`, for `addsub`'s reason. It is also the first guest that writes near the top of RAM as well as inside window 0, so its statement is the first with a `ZERO_WINDOWS` shard |
 
 If you are looking for a pattern to copy, `amm` is the one to read for arithmetic
 and framing, `orderbook` for anything that takes prover advice, and `vault` for
@@ -122,7 +123,7 @@ fn main() {
 **`guests/Cargo.toml`** — add the crate to the member list:
 
 ```toml
-members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "consistency", "addsub", "control", "alu", "hello"]
+members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "consistency", "addsub", "control", "alu", "mem", "hello"]
 ```
 
 Four things about that source file are not negotiable:
@@ -446,7 +447,8 @@ Three segments is what the frozen `link.ld` produces for every guest in this
 repository that has read-only data: `.text` (read + execute), `.rodata` (read
 only), and one writable segment holding `.data`, `.bss` and the reservation above
 them, running to the top of RAM. A guest with no `.rodata` has two, as `addsub` and
-`control` and `alu` do, each a page of hand-written instructions and nothing else. The
+`control`, `alu` and `mem` do, each a page of hand-written instructions and nothing
+else. The
 writable segment's `file bytes` is zero whenever `.data` is empty, which is the
 common case — `hello`, `fib`, `echo` and `rvc-dense` are all like that, so the
 whole third segment is zero fill. It is declared because a host program loader

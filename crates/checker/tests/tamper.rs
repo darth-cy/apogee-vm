@@ -1,5 +1,6 @@
-//! S16's, S17's and S18's tamper twins, through `TamperHarness`: one
-//! statement — `guests/addsub`, S17's `guests/control`, or S18's `guests/alu` —
+//! S16's, S17's, S18's and S19's tamper twins, through `TamperHarness`: one
+//! statement — `guests/addsub`, S17's `guests/control`, S18's `guests/alu` or
+//! S19's `guests/mem` —
 //! proved honestly once per test, then proved again with one tamper as an
 //! honest prover would prove the tampered witness, and one shard verified
 //! through `verify_shard`. Each twin asserts the class of the check that
@@ -9,7 +10,8 @@
 //! the add/sub shard is `2^20` rows and a statement's proof peaks at 8.6 GB —
 //! 9.3 GB with the honest statement the harness holds beside a re-proof — and
 //! `control`'s has two execution shards of that height, 11.3 GB. S18's `alu`
-//! has four, which puts the file's peak at 15.7 GB.
+//! has four, and S19's `mem` five beside `INIT_TEARDOWN` and a `ZERO_WINDOWS`
+//! shard — seven in all — which puts the file's peak at S19's statement.
 //! The rows these tampers edit are `crates/checker/tests/add_sub.rs`'s, which
 //! runs in ordinary CI.
 //!
@@ -19,13 +21,19 @@
 //! from row 29 up is padding.
 //!
 //! S18 adds `guests/alu`, whose statement has four execution shards of `2^20`
-//! rows — add/sub, jump/branch/slt, shift/bitwise and mul/div — and so is the
-//! largest statement in the file. Its twins name no row number: the shift and
-//! mul/div rows are found by their committed kind bit and by the very cell the
-//! twin corrupts, so a guest that grows a check keeps the test honest. The
-//! rows themselves, instruction by instruction, are
+//! rows — add/sub, jump/branch/slt, shift/bitwise and mul/div. Its twins name
+//! no row number: the shift and mul/div rows are found by their committed kind
+//! bit and by the very cell the twin corrupts, so a guest that grows a check
+//! keeps the test honest. The rows themselves, instruction by instruction, are
 //! `crates/checker/tests/shift_bitwise.rs`' and `crates/checker/tests/
 //! mul_div.rs`', which run in ordinary CI.
+//!
+//! S19 adds `guests/mem`, whose statement is **the largest in the file**: five
+//! execution shards of `2^20` rows — those two, plus `MEM_WORD`, `MEM_SUBWORD`
+//! and `ATOMICS` — beside `INIT_TEARDOWN` and the first `ZERO_WINDOWS` shard
+//! any acceptance statement has had. Its twins find their rows the same way,
+//! and the rows are `crates/checker/tests/mem_word.rs`', `mem_subword.rs`' and
+//! `atomics.rs`', in ordinary CI.
 
 #[path = "../../prover/tests/common/mod.rs"]
 mod common;
@@ -834,5 +842,175 @@ fn s18_a8_the_residue_and_the_product_high_are_pinned() {
             cell(MD, md::D_INV, ALU_PADDING, f(9)),
         ]),
         (MD, 0),
+    );
+}
+
+/// The row of `columns` past every live one: `guests/mem` runs 174 cycles in
+/// its largest family, so a row here is padding in all five.
+const MEM_PADDING: usize = 1000;
+
+/// The `ram` query's slot in the two memory families' frame,
+/// `pc rs1 rs2 load ram rd`, and the atomics family's width. A slot is a
+/// position in the family's own query list, so these differ from the add/sub
+/// constants above.
+const MEM_RAM: usize = 4;
+const AT_WIDTH: usize = 5;
+
+/// S19 acceptance 8, one twin per family and two refusal classes on screen.
+/// The honest `mem` statement — five execution shards of `2^20` rows and, for
+/// the first time in this file, a `ZERO_WINDOWS` shard — verifies (the harness
+/// asserts it); its structural counts are `docs/spec/memory-ops.md` §3.1, §4.3
+/// and §6.2's; and then, each refused in its class:
+///
+/// - **the old-word twin.** The RAM query's `read_value` on an `sw` row, moved
+///   by one. The stage prompt names "one loaded-value cell: no gate reads it",
+///   and for a *loaded* value that is not so — the frame's own
+///   `load_writes_back` gate reads it, and so does `rd_value_rule`. The cell
+///   with the stated property in this family is the word a **store**
+///   overwrites: `ram` is not in `FRAME_READ_ONLY`, no `mem_word` gate reads
+///   its read value, and none of the family's eighteen obligations touches it.
+///   So every gate and every bound still holds, and the refusal comes from the
+///   permutation product alone — the read tuple matches no write —
+///   `MemoryArgument` at `verify_shard` step 10, which is what the item is
+///   testing.
+/// - **the splice twin.** One `low` cell of a sub-word access, raised by one.
+///   `low` is the bytes below the accessed sub-word; `splice_rule` balances the
+///   word with it and `low_scaled = 2·low·pcopow` is the copower half of its
+///   bound, so the circuit refuses it: `Constraint`. This is the stage's named
+///   `mem_subword` twin.
+/// - **the old-value twin.** One `rd_selected` cell of an AMO, raised by one.
+///   Every AMO writes the **old** word to `rd`, which `rd_value_rule` is;
+///   `Constraint`. This is the stage's named `atomics` twin.
+/// - **a decoder count**, in a third class: `Lookup { DECODER }`.
+///
+/// The negative control follows: cells nothing reads on an all-zero padding row
+/// — `mem_word`'s `word_index_hi`, whose three obligations are switched off
+/// where `m_pc` is 0; `mem_subword`'s `pcopow`, free there because `p_rule`
+/// makes `p` zero and `pcopow_rule` then reads `0 = 0`; and `atomics`' `sum_hi`
+/// and `cmp_gap_hi`, whose only readers are their own `RANGE16` obligations,
+/// also under `m_pc`. All of them verify.
+///
+/// `lo` is **not** among them, which is worth recording: `lo_rule` is ungated,
+/// so it pins `lo` to `rs2` on a padding row as much as on a live one. That is
+/// the tighter circuit, not a defect — it is the shape S18's `add_rule` and
+/// `old_bytes_rule` have too — and it is why the control moves a bounded
+/// column's high chunk instead.
+#[test]
+#[ignore = "five 2^20-row execution shards, and the honest statement beside a re-proof: 16.9 GB"]
+fn s19_a8_the_old_word_the_splice_and_the_old_value_are_pinned() {
+    use constants::extra_mask::atomics as at_kind;
+    use constants::extra_mask::mem_subword as ms_kind;
+    use constants::extra_mask::mem_word as mw_kind;
+    use constants::family::ZERO_WINDOWS as ZERO;
+    use constants::family::{ATOMICS as AT, MEM_SUBWORD as MS, MEM_WORD as MW};
+    use constraints::{atomics as at_circuit, mem_subword as ms, mem_word as mw};
+
+    let setup = common::mem_setup();
+    let archive = common::mem_archive(&setup.program);
+    let h = TamperHarness::new(&setup, &archive);
+
+    // The structural counts: seven shards, the first `ZERO_WINDOWS` one any
+    // acceptance statement has had, and each new family's committed width.
+    let (public, proofs) = h.honest();
+    assert_eq!(public.shard_counts, vec![1, 1, 1, 1, 1, 1, 1]);
+    assert_eq!(public.windows, vec![8191]);
+    let shards: Vec<(u32, u32)> = proofs.iter().map(|p| (p.family, p.shard_index)).collect();
+    assert_eq!(
+        shards,
+        vec![
+            (INIT, 0),
+            (ZERO, 0),
+            (ADD, 0),
+            (JBS, 0),
+            (MW, 0),
+            (MS, 0),
+            (AT, 0)
+        ]
+    );
+    for (family, want) in [(MW, (31, 24, 7)), (MS, (31, 55, 10)), (AT, (26, 54, 9))] {
+        let a = &setup.vk.circuit(family).expect("a circuit").artifact;
+        assert_eq!(
+            (a.memory.len(), a.witness.len(), a.setup.len()),
+            want,
+            "family {family}"
+        );
+    }
+
+    let word = shard_columns(&setup, &archive, MW, 0, &public.windows).expect("the mem_word shard");
+    let sub =
+        shard_columns(&setup, &archive, MS, 0, &public.windows).expect("the mem_subword shard");
+    let atomic =
+        shard_columns(&setup, &archive, AT, 0, &public.windows).expect("the atomics shard");
+
+    // The old-word twin: the word an `sw` overwrites, which no gate reads.
+    let old = frame(MEM_RAM, FIELD_READ_VALUE);
+    let r = alu_row(
+        &word,
+        mw::KINDS[mw_kind::SW as usize],
+        old,
+        "sw over a nonzero word",
+    );
+    let value = at(&word, old, r);
+    h.assert_rejects(
+        &tamper(vec![cell(MW, old, r, value + Fr::ONE)]),
+        (MW, 0),
+        MEMORY,
+    );
+
+    // The splice twin: one `low` cell of a sub-word access.
+    let r = alu_row(
+        &sub,
+        ms::KINDS[ms_kind::SB as usize],
+        ms::LOW,
+        "sb at a nonzero byte offset",
+    );
+    let value = at(&sub, ms::LOW, r);
+    h.assert_rejects(
+        &tamper(vec![cell(MS, ms::LOW, r, value + Fr::ONE)]),
+        (MS, 0),
+        CONSTRAINT,
+    );
+
+    // The old-value twin: the value an AMO writes to `rd`.
+    let sel = rd_selected(AT_WIDTH);
+    let r = alu_row(
+        &atomic,
+        at_circuit::KINDS[at_kind::AMOADD_W as usize],
+        sel,
+        "amoadd over a nonzero word",
+    );
+    let value = at(&atomic, sel, r);
+    h.assert_rejects(
+        &tamper(vec![cell(AT, sel, r, value + Fr::ONE)]),
+        (AT, 0),
+        CONSTRAINT,
+    );
+
+    // A decoder count, in a third class.
+    let m = at(&sub, ms::MULTIPLICITIES[3], 0);
+    h.assert_rejects(
+        &tamper(vec![cell(MS, ms::MULTIPLICITIES[3], 0, m + Fr::ONE)]),
+        (MS, 0),
+        lookup(lookup_channel::DECODER),
+    );
+
+    // The negative control: cells nothing reads on an all-zero padding row.
+    for columns in [&word, &sub, &atomic] {
+        assert_eq!(at(columns, frame(PC, FIELD_MASK), MEM_PADDING), Fr::ZERO);
+    }
+    h.assert_verifies(
+        &tamper(vec![cell(MW, mw::WORD_INDEX_HI, MEM_PADDING, f(7))]),
+        (MW, 0),
+    );
+    h.assert_verifies(
+        &tamper(vec![cell(MS, ms::PCOPOW, MEM_PADDING, f(9))]),
+        (MS, 0),
+    );
+    h.assert_verifies(
+        &tamper(vec![
+            cell(AT, at_circuit::SUM_HI, MEM_PADDING, f(11)),
+            cell(AT, at_circuit::CMP_GAP_HI, MEM_PADDING, f(13)),
+        ]),
+        (AT, 0),
     );
 }

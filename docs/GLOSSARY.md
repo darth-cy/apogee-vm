@@ -513,3 +513,33 @@ asymmetry is two different flag lists over one pair of columns.
 sign lookups: tying the quotient's to bit 31 of its word would make `−2^31 ÷ −1`
 unprovable, that case being the one whose signed quotient does not fit
 (`docs/spec/mul-div.md` §5.3).
+
+**Word index** — the accessed word's index, so the memory tuple's address is
+`4·word_index` (S19). `addr = 4·word_index + 2·bit1 + bit0` is an alignment statement over
+ℤ and **nothing at all over `Fr`**, where 4 is a unit and `word_index := addr·4⁻¹` solves
+it for any address; what makes the split base-4 is the range check on `word_index`, and in
+particular the obligation `4·word_index_hi`, which caps it at `2^30 − 1`.
+`docs/spec/memory-ops.md` §2.
+
+**Unified word addressing** — that a sub-word access, a word access and an atomic all name
+the same `4·word_index` cell, the byte position living only in the splice (S19). A
+byte-address form would be a broken memory model: `lb` at one word's four offsets would
+name four different cells, and a byte `sb` wrote would be invisible to a later `lw`.
+`docs/spec/memory-ops.md` §2.
+
+**Splice** — how a sub-word access reads or rewrites its word:
+`word = high·(w·p) + sub·p + low`, with `p = 2^(8·offset)` the splice power and `w` the
+access width. Each of `high`, `sub`, `low` and the store source carries both its
+copower-scaled bound and its own direct range check, which is what makes the decomposition
+unique; a store is the single splice `new = old + (src_sub − old_sub)·p`, with no
+clear-then-set tables. `p` and its halved copower are **degree-2 gates over the address's
+own two offset bits**, not a lookup table — S19 did not build the prompt's
+`MemoryOffsetGetBits`, because the gates pin the position more directly and add no key to
+bound. `docs/spec/memory-ops.md` §4.
+
+**Write-side induction** — why a value read from memory carries no range check: every value
+*written* to a register or a RAM word is below `2^32`, so every value read back is too.
+S19 made it two one-directional inductions rather than a mutual one, by giving `mem_word`'s
+`rd_selected` a bound of its own even though it is a copy: every register write in every
+family is then locally bounded, and the RAM side follows from it.
+`docs/spec/memory-ops.md` §5.

@@ -715,3 +715,32 @@ fn alu_passes_its_checks() {
     );
     assert!(run.stdout.is_empty(), "alu commits nothing to fd 1");
 }
+
+/// `guests/mem`: S19's guest, its own `_start` like `addsub`'s, `control`'s and
+/// `alu`'s.
+///
+/// It reads nothing and writes nothing, and checks every word, sub-word and
+/// atomic access it makes itself: the exit status is the number of checks, 48,
+/// or 1 from its `fail` path. Every expected value in it was computed from an
+/// exact RV32IMA model, so this run is the second of three independent
+/// readings — the emulator's is `crates/emulator/tests/differential.rs`'s,
+/// which also compares the register file at every instruction.
+///
+/// It is the first hand-written guest with memory traffic. Nothing in it
+/// depends on the environment's stack pointer: it loads both of its scratch
+/// addresses with `li`, one inside RAM window 0 and one near the top of RAM.
+#[test]
+#[ignore = "needs a Linux host with qemu-user; run with --ignored"]
+fn mem_passes_its_checks() {
+    let qemu = qemu();
+
+    let run = execute(&qemu, "mem", "mem", &[], None);
+    assert_eq!(
+        run.status,
+        Some(50),
+        "mem exited {:?}: {}",
+        run.status,
+        run.stderr
+    );
+    assert!(run.stdout.is_empty(), "mem commits nothing to fd 1");
+}

@@ -47,7 +47,10 @@ pub enum ProverError { Unregistered { family, height }, Key(String), Trace(Strin
   the `GENERIC` channel. **S18's two families were that and nothing else**: two circuits,
   two fills, and no edit anywhere in this crate's phase code — the second and third readers
   of the generic channel needed no key change at all, which is what carrying the triple in
-  every key buys.
+  every key buys. **S19's three were the same**: three circuits, three fills, and nothing
+  else in this crate, `MEM_WORD` — which reads no generic lookup — going down the same
+  no-generic path `ADD_SUB_LUI_AUIPC` already took. With them every family the master
+  prompt names is registered.
 - **A shard's proof is two crate-private halves**, `gkr_part` (through the GKR proof, to
   a `ShardGkr` — the post-GKR snapshot's entry) and `opening_part` (the batched opening),
   which `prove_shard_columns` runs back to back and `advance` runs a phase apart.
@@ -89,10 +92,25 @@ pub enum ProverError { Unregistered { family, height }, Key(String), Trace(Strin
   divide, if a quotient word is not its adjusted value or if a product does not fit two
   words. Its decoded row is **five** values, not six: the family's tuple has no immediate,
   so its table is `S[0..6]` and the packed table `S[6..9]`.
-- **Six `Fr`-backed columns exist across the two new fills**, and no more: `shift_in` and
+- **Six `Fr`-backed columns exist across the S18 fills**, and no more: `shift_in` and
   `shift_prod`, whose values are signed on a right shift and reach `2^63` on a left one;
   `mx` and `my`, which are signed; and `r_inv` and `d_inv`, which are field inverses. Every
-  other column of both fills is `u32`-backed.
+  other column of those fills is `u32`-backed, and **every column of all three S19 fills
+  is**: the splice's halved copower and halved width multiplier are what keep them there
+  (`docs/spec/memory-ops.md` §4.1).
+- **S19's three fills** share one helper, `frame_columns`, which is S14's frame columns and
+  frame witness with `rd_selected` left out so each fill writes the value the instruction
+  computes there. `fill::mem_word` splits the effective address with `overflowing_add` and
+  asserts the access is word-aligned; `fill::mem_subword` computes `p`, `w`, the three
+  splice parts and the store source's split with ordinary `u64` division and remainder, and
+  asserts a halfword access is halfword-aligned and that the trace's stored word is the
+  spliced one; `fill::atomics` computes all eleven results from Rust's own operators —
+  `wrapping_add` for `amoadd`, the byte AND for the three bitwise kinds with `or` and `xor`
+  derived from it through `wrapping_add`/`wrapping_sub`, since `old + rs2` on its own can
+  pass `2^32`, and `i32`/`u32` `min`/`max` for the four min/max — and asserts the trace's
+  stored word and `rd` write are what the instruction computes. Its decoded row is **five**
+  values like mul/div's, the tuple having no immediate. Each panics on a disagreement the
+  emulator cannot produce, never on a witness a cheating prover could write.
 - **Every key carries the generic table's commitments** (S17): `ProverSetup::new` takes
   them from `program::lookup_tables::generic_commitments(&srs)` — the table committed
   once, at `2^18`, the same three points at every height — puts them in the key's
