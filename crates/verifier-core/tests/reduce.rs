@@ -406,10 +406,20 @@ fn a_statement_the_key_does_not_describe_is_refused_as_statement() {
         p,
         proof.clone(),
     ));
+    // Step 4 since S20: a window is `[start, end)` inside the clock. Which
+    // windows a block admits is `check_ts_windows`, which needs every shard.
     let mut q = proof.clone();
-    q.ts_window = [0, 4];
+    q.ts_window = [5, 4];
     cases.push((
-        "the time window is not the whole clock",
+        "the time window is not [start, end) in the clock",
+        key.clone(),
+        honest.clone(),
+        q,
+    ));
+    let mut q = proof.clone();
+    q.ts_window = [0, (1 << 38) + 1];
+    cases.push((
+        "the time window is not [start, end) in the clock",
         key.clone(),
         honest.clone(),
         q,

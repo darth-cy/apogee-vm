@@ -5,7 +5,11 @@
 //! proof list that is not the statement's shards, each once: a statement is
 //! proven only by all of them.
 //!
-//! `#[ignore]`d with the rest of S16's proving suites: it proves the statement
+//! Since S20 it also covers the `block` verb over a `BlockProof` file, which
+//! is `verify_block` reached from files: one proof carrying its whole shard
+//! set, so no list of shards can be short.
+//!
+//! `#[ignore]`d with the rest of the proving suites: it proves the statement
 //! first, which peaks at 8.6 GB.
 
 #[path = "../../prover/tests/common/mod.rs"]
@@ -21,7 +25,15 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn run(args: &[&Path], identity: &str) -> (i32, String) {
+    invoke(&[], args, identity)
+}
+
+/// `verifier [verb] <key> <identity> <rest>...`.
+fn invoke(verb: &[&str], args: &[&Path], identity: &str) -> (i32, String) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_verifier"));
+    for v in verb {
+        command.arg(v);
+    }
     command.arg(args[0]).arg(identity);
     for a in &args[1..] {
         command.arg(a);
@@ -128,5 +140,80 @@ fn the_cli_verifies_the_dumped_files_and_refuses_a_flipped_bit() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(2));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// S20: the `block` verb over a `BlockProof` file, end to end — the same
+/// statement, proved as a block instead of as loose shards.
+#[test]
+#[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
+fn the_cli_verifies_a_block_file() {
+    use verifier_core::BlockProof;
+
+    let setup = common::setup();
+    let mut archive = common::archive(&setup.program);
+    let plan = trace::plan_shards(archive.cycle_profile(), &setup.program.config);
+    let block = prover::prove_block(&setup, &mut archive, &plan).expect("the block proves");
+
+    let dir =
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("s20-cli-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let write = |name: &str, bytes: &[u8]| {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        path
+    };
+    let key = write("addsub.vk", &setup.vk.to_bytes());
+    let statement = write("addsub.public", &block.statement().to_bytes());
+    let file = write("addsub.block", &block.to_bytes());
+    let identity = hex(&setup.vk.identity.to_bytes());
+
+    let (code, text) = invoke(&["block"], &[&key, &statement, &file], &identity);
+    assert_eq!(code, 0, "{text}");
+    assert!(text.contains("the block verifies: 2 shards"), "{text}");
+
+    // Another identity, a statement that is not the block's, and a flipped bit
+    // anywhere in the block are each refused.
+    let mut other = setup.vk.identity.to_bytes();
+    other[0] ^= 1;
+    let (code, text) = invoke(&["block"], &[&key, &statement, &file], &hex(&other));
+    assert_eq!(code, 1, "{text}");
+
+    let mut elsewhere = block.statement().clone();
+    elsewhere.exit_status += 1;
+    let other_statement = write("other.public", &elsewhere.to_bytes());
+    let (code, text) = invoke(&["block"], &[&key, &other_statement, &file], &identity);
+    assert_eq!(code, 1, "{text}");
+    assert!(
+        text.contains("the block's statement is not the one given"),
+        "{text}"
+    );
+
+    let bytes = std::fs::read(&file).unwrap();
+    for at in [0, 40, bytes.len() / 2, bytes.len() - 1] {
+        let mut flipped = bytes.clone();
+        flipped[at] ^= 0x10;
+        let bad = write(&format!("addsub.block.flipped-{at}"), &flipped);
+        let (code, text) = invoke(&["block"], &[&key, &statement, &bad], &identity);
+        assert_eq!(code, 1, "the block flipped at {at}: {text}");
+    }
+
+    // A block file given to the shard form, and a shard file to the block
+    // form, are each refused as the wrong encoding rather than accepted.
+    let (code, _) = run(&[&key, &statement, &file], &identity);
+    assert_eq!(code, 1);
+    let shard = write("shard.proof", &block.shard_proofs()[0].to_bytes());
+    let (code, _) = invoke(&["block"], &[&key, &statement, &shard], &identity);
+    assert_eq!(code, 1);
+
+    // `block` with the wrong number of arguments is a usage error.
+    let out = Command::new(env!("CARGO_BIN_EXE_verifier"))
+        .arg("block")
+        .arg(&key)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+
+    assert_eq!(BlockProof::from_bytes(&bytes).unwrap(), block);
     std::fs::remove_dir_all(&dir).ok();
 }

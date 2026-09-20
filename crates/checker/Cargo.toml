@@ -23,6 +23,9 @@ gkr-verify.workspace = true
 program.workspace = true
 prover.workspace = true
 trace.workspace = true
+# S20's transcript-tape validator: `TranscriptEvent`, the global commit phase's
+# absorb sequence as the checker renders and diffs it.
+transcript.workspace = true
 verifier.workspace = true
 verifier-core.workspace = true
 
@@ -45,4 +48,3 @@ isa.workspace = true
 # committed columns first. S16 absorbs commitments instead.
 sumcheck.workspace = true
 test-support.workspace = true
-transcript.workspace = true

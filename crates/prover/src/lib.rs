@@ -41,7 +41,7 @@ use verifier_core::{
 };
 
 pub use fill::{family_fill, Fill, ShardSource};
-pub use phases::{advance, finish};
+pub use phases::{advance, finish, prove_block};
 
 /// Every way the prover refuses. One flat enum.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -372,11 +372,51 @@ pub fn shard_columns(
     Ok(columns)
 }
 
+/// The low 64 bits of a field element's canonical encoding. The cycle column
+/// holds cycle numbers, so an honest column's entries are far below `2^64`;
+/// a tampered one is read as its low bits rather than refused, because the
+/// prover checks nothing (S13) and a wrong window is a proof the verifier
+/// refuses.
+fn low64(v: Fr) -> u64 {
+    let b = v.to_bytes();
+    u64::from_le_bytes(b[..8].try_into().expect("8 bytes"))
+}
+
+/// The shard's claimed time window, `docs/spec/block-proof.md` §4.
+///
+/// For a **cycle-owning** family it is read off the shard's own `M[0]` cycle
+/// column: `[4·cycle(row 0), 4·max cycle + 4)`, the timestamps of the row-0 pc
+/// write and one past the last row's last slot (`docs/spec/execution-trace.md`
+/// §1, the clock's four slots, and §3, a query's write at `4·cycle + Δ`). Row 0
+/// is live in every shard a plan cuts, and padding rows carry cycle 0, so the
+/// maximum is the last live row's. The honest prover's window is
+/// therefore the one its committed rows say; nothing in the circuit holds it
+/// there (§4.1).
+///
+/// For a family whose rows are words rather than cycles — the two RAM window
+/// families — it is [`TRIVIAL_TS_WINDOW`]: such a family owns no part of the
+/// execution's time, and the block's window rules exempt it.
+fn ts_window(family: FamilyId, base: &BaseLayer) -> [u64; 2] {
+    if !constants::family::CYCLE_OWNING[family as usize] {
+        return TRIVIAL_TS_WINDOW;
+    }
+    let cycles = base
+        .get(PolyAddress::Memory(0))
+        .expect("an execution family's M[0] is its cycle column");
+    let mut top = 0u64;
+    for i in 0..cycles.len() {
+        top = top.max(low64(cycles.get(i)));
+    }
+    let ts = |c: u64| c.saturating_mul(constants::memory::TS_STEP);
+    [ts(low64(cycles.get(0))), ts(top).saturating_add(4)]
+}
+
 /// A shard after its GKR proof: what the opening needs, and the live shard
 /// transcript. `docs/spec/shard-proof.md` §10's `PostGkr` entry.
 pub(crate) struct ShardGkr {
     pub(crate) family: FamilyId,
     pub(crate) index: u32,
+    pub(crate) ts_window: [u64; 2],
     pub(crate) witness_commitments: Vec<[u8; 64]>,
     pub(crate) outputs: Vec<Fr>,
     pub(crate) gkr: GkrProof,
@@ -407,11 +447,12 @@ impl ProvingContext<'_> {
             .map(|i| base.get(PolyAddress::Witness(i)).expect("a witness column"))
             .collect();
         let witness_commitments = commit_all(&self.setup.srs, &witness);
+        let ts_window = ts_window(family, base);
         let (mut t, g, beta) = shard_transcript(
             self.global.digest,
             family,
             index,
-            TRIVIAL_TS_WINDOW,
+            ts_window,
             &witness_commitments,
         );
         let challenges = shard_challenges(
@@ -449,6 +490,7 @@ impl ProvingContext<'_> {
         ShardGkr {
             family,
             index,
+            ts_window,
             witness_commitments,
             outputs,
             gkr,
@@ -468,6 +510,7 @@ impl ProvingContext<'_> {
         let ShardGkr {
             family,
             index,
+            ts_window,
             witness_commitments,
             outputs,
             gkr,
@@ -510,7 +553,7 @@ impl ProvingContext<'_> {
         let proof = ShardProof {
             family,
             shard_index: index,
-            ts_window: TRIVIAL_TS_WINDOW,
+            ts_window,
             global_digest: self.global.digest,
             witness_commitments,
             outputs,

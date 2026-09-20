@@ -29,7 +29,9 @@ here.
   only — two channels, eight challenge slots and one tag — and changed no value, except
   `lookup_channel::BITS`, which grew from two entries to four. S16 appended seven tags and
   changed nothing. S17 appended one tag and the `generic_table` module, whose three values
-  S15 had frozen in `crates/program` and which moved here unchanged.
+  S15 had frozen in `crates/program` and which moved here unchanged. S20 appended no tag
+  and changed no value: it added two documentation tables, `family::CYCLE_OWNING` and
+  `transcript_tags::NAMES`.
 
 ## Contents as of S17
 | Item | Meaning |
@@ -62,13 +64,13 @@ here.
 | `POSEIDON2_RC3_INITIAL: [[&str; 3]; 4]` | Round constants, 4 initial full rounds. |
 | `POSEIDON2_RC3_INTERNAL: [&str; 56]` | Round constants, 56 partial rounds, lane 0. |
 | `POSEIDON2_RC3_TERMINAL: [[&str; 3]; 4]` | Round constants, 4 terminal full rounds. |
-| `transcript_tags` | The frozen tag table: 41 tags as of S17, sequential from 1. |
+| `transcript_tags` | The frozen tag table: 41 tags as of S17, sequential from 1; and S20's `NAMES`, one per tag indexed by `tag - 1`, **documentation and never semantics**, as `challenge_slot::NAMES` is. `checker::tape` renders a transcript's absorb sequence with them, which is what makes a tape diffable against `docs/spec/shard-proof.md` §2; the lookup itself lives there, because this crate holds no logic. |
 | `challenge_slot` | S13's `TOY = 0`; S14's memory slots `MEM_GAMMA` 1, `MEM_ALPHA_ADDR` 2, `MEM_ALPHA_TS` 3, `MEM_ALPHA_VAL` 4, and the derived `MEM_WINDOW_CONSTANT` 5; S15's `LOOKUP_G` 6 and `LOOKUP_BETA` 7, drawn per shard, with the derived powers `LOOKUP_BETA_2..6` 8–12 (also as `LOOKUP_BETA_POWERS`) and `LOOKUP_DECODER_NEUTRAL` 13; `NAMES`. Append-only. |
 | `lookup_channel` | S14's `TIMESTAMP = 0` and `RANGE16 = 1`, S15's `GENERIC = 2` and `DECODER = 3`; `COUNT`, `IS_RANGE`, the bounds `BITS = [19, 16, 0, 0]` — 0 where `IS_RANGE` is false, which is the absence of a bound and not a bound of `[0, 1)` — `NAMES`, and `MAX_TUPLE = 7`, past which `β` has no slot. Append-only; `docs/spec/memory.md` §7 freezes the range convention `RANGE16` serves and `docs/spec/lookup.md` the rest. |
 | `generic_table` | S15's packed generic table, moved from `program::lookup_tables` at S17 because a circuit now builds a key into it: `WIDTH = 3`, `AND_BASE = 0`, `SIGN_BASE = 256`, and S18's `SHIFT_BASE = SIGN_BASE + 2^16`, `SHIFT_ROWS = 32`, `SHIFT_COPOWER_BITS = 31`. Appending a table here moves the table's three commitments and so every verifying key's SRS digest; `SHIFT_COPOWER_BITS` is 31 and not 32 because `2^32` does not fit the table's `u32` columns, so the copower is stored halved and the two gates that read it carry a factor 2. `docs/spec/lookup.md` §9, `docs/spec/shift-bitwise.md` §3.1. |
 | `address_space` | S12. `REG = 1`, `RAM = 2`, `PC = 3`: nonzero, so no real memory tuple is all zeros. |
 | `memory` | S12's clock, `TS_STEP` and `TS_BITS`; S14's `HALT_PC = 1`, the tuple part order `PART_AS/ADDR/TS/VAL`, the root positions `READ_ROOT = 0` and `WRITE_ROOT = 1`, and `RAM_LIVE_BIT = 14`. `docs/spec/memory.md`. |
-| `family` | S11. The append-only `FamilyId` table (0 add/sub/lui/auipc … 6 atomics, 7 `INIT_TEARDOWN`, since S14 RAM window 0 only; S14's 8 `ZERO_WINDOWS`), `COUNT`, the height menu, the default heights, `DEFAULT_BYTECODE_SIZE_WORDS` and the decoded-table `CODE_VERSION`. |
+| `family` | S11. The append-only `FamilyId` table (0 add/sub/lui/auipc … 6 atomics, 7 `INIT_TEARDOWN`, since S14 RAM window 0 only; S14's 8 `ZERO_WINDOWS`), `COUNT`, the height menu, the default heights, `DEFAULT_BYTECODE_SIZE_WORDS`, the decoded-table `CODE_VERSION`, and S20's `CYCLE_OWNING`: whether a family's rows are execution cycles, `true` for the seven instruction families and `false` for the two RAM window families, append-only beside the ids. Only cycle-owning families' shards partition an execution in time (`docs/spec/block-proof.md` §4). |
 | `extra_mask` | S11. Every family's `family_extra_mask` bit positions, one-hot per mnemonic, append-only, and the system codes `ecall`/`ebreak`/`fence` carry in `imm`. |
 | `guest_memory` | The frozen guest memory map: `RAM_ORIGIN` and `RAM_LENGTH`; and, since S12, `STACK_RESERVE`, the 8 MiB at the top of RAM guest-sdk's allocator leaves to the stack. |
 | `ecall` | The guest ecall ABI: syscall numbers, range boundaries, file descriptors. |

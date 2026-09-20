@@ -33,6 +33,8 @@ pub fn prove_shard_columns(ctx: &ProvingContext, family: FamilyId, shard_idx: u3
                            columns: Vec<(PolyAddress, MultilinearPoly)>) -> (ShardProof, Vec<TranscriptEvent>);
 pub fn advance(setup: &ProverSetup, archive: &mut TraceArchive, until: Phase) -> Result<(), ProverError>;
 pub fn finish(archive: &TraceArchive) -> Result<(PublicInputs, Vec<ShardProof>), ProverError>;
+pub fn prove_block(setup: &ProverSetup, archive: &mut TraceArchive, plan: &ShardPlan)
+    -> Result<BlockProof, ProverError>;                    // S20, docs/spec/block-proof.md §5
 pub enum ProverError { Unregistered { family, height }, Key(String), Trace(String), Archive(String) }
 ```
 
@@ -124,15 +126,40 @@ pub enum ProverError { Unregistered { family, height }, Key(String), Trace(Strin
   §9's encodings, each phase timed into the archive's timing section. `advance` reads back
   any phase the archive holds; the columns are never stored and a resumed phase rebuilds
   them. A resumed statement finishes to the same bytes as an uninterrupted one.
+- **`prove_block` is orchestration and nothing else** (S20): it refuses a `ShardPlan`
+  that is not `trace::plan_shards` over this archive's cycle profile, runs `advance` to
+  `Phase::Final`, and assembles the block from `finish`. The shard cut is the one every
+  family fill has done since S16 — rows `[i·h, min((i+1)·h, len))` of the family's trace
+  buffer, the last chunk padded by the column builders. The two RAM window families run
+  no cycles, so the plan counts 0 for both and their shards are the statement's.
+- **Shard proving is the block's one parallel step**, a `rayon` parallel iterator over
+  the shard list in `advance`'s `PostGkr` and `PostOpening` phases, and it starts only
+  after the global commit phase has closed. Each task forks its transcript from the same
+  global state, builds its own slice of the archive, proves it and drops it, so the
+  shards share no prover state and the schedule cannot reach a challenge; an indexed
+  parallel `map` collects in order. The peak is one shard trace per worker on top of the
+  statement's committed memory columns — **measured at 24.2 GB for a four-shard block,
+  three of them at `2^20`, and at 32.3 GB for `guests/mem`'s seven, five of them
+  `2^20` — where the same statement was 14.7 GB when the shards were proved one at a
+  time.** The trade is about 2.2× the peak for about 1.4× the speed, it grows with the
+  family count, and there is no knob: a caller that must bound it installs its own rayon
+  pool. `docs/handoff/S20-orchestration.md` has the table.
+- **A shard's claimed time window is read off its own `M[0]` cycle column**:
+  `[4·cycle(row 0), 4·max cycle + 4)` for a cycle-owning family, the trivial window for
+  one whose rows are RAM words. Reading it from the committed column rather than from
+  the archive keeps `prove_shard_columns`' signature and makes the honest window a
+  function of exactly what the shard commits; a tampered column is read as its low 64
+  bits and multiplied saturatingly, because the prover checks nothing.
 - **Deterministic.** Commitments are computed in parallel and collected in order; the
   forward pass, the sumcheck and the MSMs are thread-count independent (S07, S13). Proofs
-  are byte-identical on one thread and on all of them.
+  are byte-identical on one thread and on all of them, and so is an assembled block.
 
 ## Tests
 | File | Covers |
 | --- | --- |
 | `tests/common/mod.rs` | the S16 statement: `guests/addsub`'s committed ELF decoded with its family at `2^20` and everything else at `2^16`, traced into an archive, over a toy SRS whose `tau` is written down and whose archive is cached under `target/tmp` (`CARGO_TARGET_TMPDIR`), shared by the four suites that include this module — `tests/acceptance.rs`, `tests/control.rs`, `crates/verifier/tests/cli.rs` and `crates/checker/tests/tamper.rs`; and S17's, `guests/control`'s, with both of its execution families at `2^20` (`control_setup`, `control_archive`, `CONTROL_RESULT = 16`); `toy_tau` |
 | `tests/key.rs` | S17, in ordinary CI, no proof: `ProverSetup::new` over `control` and the toy SRS gives a key whose `generic_table` is `generic_commitments` over that SRS, whose SRS digest is over its `SrsVerifier` and them, and which loads; each of the three commitments is `[Σ_i c_i·τ^i]_1` of its column, computed by Horner's rule from the toy `τ`, the three distinct, and the same over `2^18` powers as over `2^20` |
-| `tests/control.rs` | **`#[ignore]`d; run with `--include-ignored --test-threads=1`** (10.1 GB peak). S17 acceptance 1: `control`'s four-family config, its self-checking trace, three shards — `INIT_TEARDOWN`, `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT` — each verifying, with round and claim counts and byte lengths from the circuit, the jump family's pinned at 61,612 bytes; the generic table's binding — the key's `generic_table` equal to `generic_commitments` over this SRS, its SRS digest the digest over the `SrsVerifier` and them, and the jump family's opening claim `M ++ W ++ S`, 21 + 44 + 10 commitments ending with the table's three, while add/sub's is 36 + 31 + 7 and ends with identity's; and `a_key_with_another_generic_table_is_another_statement`: a key whose table's value and result commitments are swapped does not load under the honest SRS digest, loads under its own recomputed one, which differs, and refuses every honest shard as `Statement("the proof was made for another statement")` |
+| `tests/control.rs` | **`#[ignore]`d; run with `--include-ignored --test-threads=1`** (18.0 GB peak since S20 proves its two `2^20` shards at once; 10.1 GB at S17). S17 acceptance 1: `control`'s four-family config, its self-checking trace, three shards — `INIT_TEARDOWN`, `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT` — each verifying, with round and claim counts and byte lengths from the circuit, the jump family's pinned at 61,612 bytes; the generic table's binding — the key's `generic_table` equal to `generic_commitments` over this SRS, its SRS digest the digest over the `SrsVerifier` and them, and the jump family's opening claim `M ++ W ++ S`, 21 + 44 + 10 commitments ending with the table's three, while add/sub's is 36 + 31 + 7 and ends with identity's; and `a_key_with_another_generic_table_is_another_statement`: a key whose table's value and result commitments are swapped does not load under the honest SRS digest, loads under its own recomputed one, which differs, and refuses every honest shard as `Statement("the proof was made for another statement")` |
 | `src/phases.rs` (unit) | the post-commit section round-trips and refuses a trailing byte and a missing one; the post-GKR and final sections refuse a trailing byte |
+| `tests/block.rs` | **`#[ignore]`d; run with `cargo test --release -p prover --test block -- --include-ignored --test-threads=1`** (779 s, 33.4 GB peak). S20's acceptance over `guests/shards`, whose add/sub family runs 1,064,970 cycles and so proves **two shards of one family**: 1, 3, 8 and 9 — the block proves and verifies, every shard also verifies on the S16 path, the records are statement order, the descriptor and counts read through the serialized proof alone, `ZERO_WINDOWS` proves zero shards and reads 0, the `ShardProof` and `BlockProof` schemas destructured exhaustively so a boundary-pc field could not be added unnoticed, the run's transcript tape equal to the committed fixture with its five squeezes after every absorb and no tag G1–G11 does not have, and the windows ordered and disjoint within add/sub while the jump family's overlaps both; 4 and 6 — a one-bit-different I/O digest, another identity, another config, a shard count altered with and without matching lists, and two shards' windows exchanged, each refused as `Statement` by the check named, the window swap also refused independently by the shard's own transcript; 5 — the truncated statement **re-proved as an honest prover would**, its counts, lists and roots adjusted and its global phase rerun, refused by `MemoryArgument` on the root product; 7 — one `wrap` cell of the **second** add/sub shard, re-proved, refused as `Constraint` with the honest twin still passing; 10 — killed and resumed at post-commit and post-GKR, byte-identical; must-be-exact 8 — byte-identical on one thread; and 2 — `guests/mem`'s five-family block, seven shards, every record carrying its family's memory commitments and both roots |
 | `tests/acceptance.rs` | **`#[ignore]`d; run with `--include-ignored --test-threads=1`** (a statement's proof peaks at 8.6 GB). Acceptance 1 (the guest's family set and trace; both shards verify; round counts, claim counts and byte lengths from the circuit); 5 (every statement twin refused as `Statement`, on both shards); 6 and 8 (the shard transcript event for event: seed, window, commitments, `g` and `β`, then the GKR schedule rebuilt from the artifact's shape — outputs, every batch, round and claim message, every child challenge — with one outstanding point after every batch, then one batched opening whose column-RLC challenge follows every evaluation claim; the verifier's reduction re-deriving the prover's point; the global transcript's challenges after every memory commitment); 9 (stopped after post-execution — nothing filled — and resumed after it, post-commit, post-GKR and post-opening, byte-identical); 10's library half (proofs, statement and key round-trip, and the key loads back to itself); step 10's root comparison (the init shard's statement roots scaled by one constant still reconcile, and that shard's proof refuses them exactly while the add/sub shard's accepts); and one-thread against all-threads determinism |

@@ -646,6 +646,7 @@ dependencies = [
  "ark-ec",
  "ark-ff",
  "ark-poly",
+ "checker",
  "constants",
  "constraints",
  "field",
@@ -657,6 +658,7 @@ dependencies = [
  "srs",
  "test-support",
  "transcript",
+ "verifier-core",
 ]
 
 [[package]]
@@ -816,6 +818,7 @@ dependencies = [
 name = "prover"
 version = "0.1.0"
 dependencies = [
+ "checker",
  "constants",
  "constraints",
  "curve",

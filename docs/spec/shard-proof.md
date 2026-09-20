@@ -14,6 +14,18 @@ its three commitments and every key's SRS digest and bytes moved again (§3). §
 and §11 gain the two new readers. `docs/spec/shift-bitwise.md` and `docs/spec/mul-div.md`
 are those families' pages.
 
+S20 **amended two things and added a page**. The time window, §4, is no longer the
+trivial one: S20 generalizes its value, not its field or its position, so §6's step 4
+became a well-formedness check and the block's own ordering rule moved to
+`docs/spec/block-proof.md` §4. And §6's eleven steps are now reachable in two public
+halves, `derive_global_phase` (steps 1–3 and the global transcript) and
+`verify_shard_local` (steps 4–11), so a block pays for the global transcript once
+instead of once per shard; `reduce_shard` is their composition and its order, its
+classes and its answers are unchanged. §10's `PostGkr` entry gained the shard's time
+window. Nothing else here moved: the global transcript's schedule, the SRS digest, the
+key's layout and load rules, the opening and the registry are as S19 left them.
+`docs/spec/block-proof.md` is the block layer's page.
+
 S19 registered the fifth, sixth and seventh — the last three — and **changed nothing in
 this page's protocol either**, not even the value inside a message: it appended nothing to
 the packed table, so the three commitments, every key's SRS digest and every key's bytes
@@ -233,9 +245,13 @@ For shard `(family, index)`, a fresh `Transcript`:
 | S6 | the batch opening | | `docs/spec/mercury.md` §11.1 then §5: B1–B3 and the sixteen steps |
 
 S4 is drawn for every shard, whether or not its circuit names a lookup slot: one
-schedule, not two. **The time window** at S16 is the trivial one, `[0, 2^38)` — the
-whole clock — and a verifier refuses any other; S20 generalizes the value, not the
-field. **Every local challenge follows every commitment the shard reads**: the memory
+schedule, not two. **The time window** at S16 was the trivial one, `[0, 2^38)` — the
+whole clock — and a verifier refused any other. **Since S20 it is the shard's own**,
+`[4·cycle(row 0), 4·max cycle + 4)` for a cycle-owning family and the trivial window for
+one whose rows are RAM words; step 4 holds it to `start <= end <= 2^38` and nothing more,
+and the block's rule — ordered and disjoint within each cycle-owning family — is
+`docs/spec/block-proof.md` §4, which needs every shard and so is `verify_block`'s. S20
+generalized the value, not the field or its position, and the S16 seed is unaltered. **Every local challenge follows every commitment the shard reads**: the memory
 columns before G10, the setup columns through the identity before G10, the generic
 table's columns through the SRS digest at G2 (S17), the witness columns at S3.
 
@@ -319,7 +335,7 @@ and the first that fails names the class:
 | 1 | `Statement` | one shard count per `VmConfig` family; the key's circuits are its config's families, in order |
 | 2 | `Statement` | `docs/spec/memory.md` §3.5's window rules (`check_memory_windows`) |
 | 3 | `Statement` | `memory_commitments` has one list per statement shard, each as long as its family's `M` layout; `memory_roots` one pair per statement shard |
-| 4 | `Statement` | the time window is `[0, 2^38)` |
+| 4 | `Statement` | the time window is a window: `start <= end <= 2^38` (S20; at S16, `[0, 2^38)` exactly) |
 | 5 | `Statement` | the replayed global state digest (§2) equals the one the proof carries |
 | 6 | `Malformed` | the proof's family is in the config and its index below its count; its witness commitments, outputs and GKR transitions have the circuit's shape |
 | 7 | `Constraint` | `gkr_verify::verify` over the shard transcript (§4): any `LayerInconsistency` |
@@ -331,7 +347,16 @@ and the first that fails names the class:
 
 `VerifyError` is `Statement(reason)`, `Malformed(reason)`, `Constraint { layer }`,
 `Lookup { channel }`, `MemoryArgument(reason)`, `Opening`. `reduce_shard` never panics
-on anything a proof or public inputs carry, for a key that passed its load (§7.2).
+on anything a proof or public inputs carry, for a key that passed its load (§7.2). S20
+added no class: a block's own refusals are `Statement`.
+
+**The split (S20).** Steps 1 to 3 and the global transcript are
+`verifier_core::derive_global_phase(vk, public) -> Result<GlobalChallenges, VerifyError>`,
+and steps 4 to 11 are `verifier_core::verify_shard_local(vk, global, proof, public)`.
+`reduce_shard` is `verify_shard_local(vk, &derive_global_phase(vk, public)?, proof,
+public)` and `verifier::verify_shard` is that plus step 12, so there is still one
+per-shard path; `verify_block` runs the first half once for the whole block
+(`docs/spec/block-proof.md` §3).
 
 **A statement is verified when its proofs are exactly its shards**, `statement_shards(config,
 shard_counts)`, each once in any order, and every one passes `verify_shard`. One shard's
@@ -615,7 +640,7 @@ uninterrupted run.
 | phase | content |
 | --- | --- |
 | `PostCommit` | `GlobalCommitState`: `bytes`, the statement's `PublicInputs` encoding (no roots); the global transcript's 226-byte snapshot after G11; the four memory challenges; the digest |
-| `PostGkr` | `list<ShardGkr>` in statement order: family u32, shard u32, witness commitments `list<G1>`, outputs `list<Fr>`, gkr, the base claims' point `list<Fr>`, the shard transcript's snapshot after S5 |
+| `PostGkr` | `list<ShardGkr>` in statement order: family u32, shard u32, **ts_start u64, ts_end u64** (S20), witness commitments `list<G1>`, outputs `list<Fr>`, gkr, the base claims' point `list<Fr>`, the shard transcript's snapshot after S5 |
 | `PostOpening` | `list<bytes>`: each shard's `ShardProof` encoding, statement order |
 | `Final` | `bytes`, the complete `PublicInputs` encoding; then `list<bytes>` of the proofs |
 

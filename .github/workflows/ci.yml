@@ -95,7 +95,8 @@ jobs:
       # less: the timestamp channel's table is `[0, 2^19)`, a table of `2^n`
       # rows holds at most `2^n` values, and a Mercury opening needs an even
       # variable count, so the smallest circuit carrying a gap obligation is
-      # `2^20` rows. One forward pass over it holds 4.63 GB of inner cells, so
+      # `2^20` rows. One forward pass over it holds 4.63 GB of inner cells and the
+      # file peaks at 18.8 GB, so
       # the file must run single-threaded: two at once would not fit the
       # runner. It is slow because the circuit is the real size, which is
       # exactly the case rule 7 covers, so it runs locally on the stage PR that
@@ -119,7 +120,7 @@ jobs:
       # single-threaded. Locally, on 18 cores, the three take 322 s, 20 s and,
       # with S17's and S18's twins, 1103 s; the logup step above ran nine times
       # slower on the runner than locally, which puts these at about 50, 3 and
-      # 160 minutes. The tamper file's peak is S19's statement's, 16.9 GB: five
+      # 160 minutes. The tamper file's peak is S19's statement's, 17.0 GB: five
       # `2^20` execution shards with the honest statement held beside the
       # re-proof. They run locally on every PR that touches the prover, the
       # verifier, a family circuit or the memory and lookup arguments, and the
@@ -138,7 +139,8 @@ jobs:
       # DEFERRED: cargo test -p prover --test control -- --include-ignored --test-threads=1
       # Master rule 7, for S17's statement: `guests/control` proves one add/sub
       # and one jump/branch/slt shard, each `2^20` rows for the timestamp
-      # channel's floor, and peaks at 10.1 GB, so the file runs single-threaded;
+      # channel's floor, and peaks at 18.0 GB since S20 proves its two `2^20`
+      # shards at once, so the file runs single-threaded;
       # 85 s locally. S17's tamper twins joined the tamper file above, which now
       # peaks at 11.3 GB. The family's CI-sized half -- the circuit row by row,
       # the comparison exhaustively at a reduced width, the legal masks, the
@@ -153,10 +155,10 @@ jobs:
       # each of the four execution families -- add/sub, jump/branch/slt,
       # shift/bitwise and mul/div -- each `2^20` rows for the timestamp
       # channel's floor, beside `INIT_TEARDOWN` at `2^16`. It is the largest
-      # statement the repository proves: 14.1 GB peak, 111 s locally on 18
+      # statement the repository proves: 30.9 GB peak, 67 s locally on 18
       # cores, so the file runs single-threaded. S18's tamper twins joined the
       # tamper file above, which peaked at 15.7 GB with S18's statement and
-      # at 16.9 GB since S19's joined it. Both families'
+      # at 17.0 GB since S19's joined it. Both families'
       # CI-sized halves -- each circuit row by row, the division encoding
       # exhaustively at a reduced width, the derived bitwise ops over all
       # 65,536 byte pairs, the legal masks, the guest's trace against the
@@ -173,9 +175,9 @@ jobs:
       # three S19 adds -- each `2^20` rows for the timestamp channel's floor,
       # beside `INIT_TEARDOWN` and the first `ZERO_WINDOWS` shard any acceptance
       # statement has had, both at `2^16`. It is now the largest statement the
-      # repository proves: 14.7 GB peak, 118 s locally on 18 cores, so the file
+      # repository proves: 32.3 GB peak, 87 s locally on 18 cores, so the file
       # runs single-threaded. S19's tamper twins joined the tamper file above,
-      # which peaks at 16.9 GB with them. The three families' CI-sized halves --
+      # which peaks at 17.0 GB with them. The three families' CI-sized halves --
       # each circuit row by row, the splice exhaustively at a reduced width, the
       # legal masks and the kind-bit map, and all three fills over the guest's
       # trace -- are `crates/checker/tests/mem_word.rs`, `mem_subword.rs`,
@@ -183,6 +185,37 @@ jobs:
       #
       # - name: S19's statement, proved and verified
       #   run: cargo test --release -p prover --test mem -- --include-ignored --test-threads=1
+
+      # NOTE (S20): every peak quoted above was re-measured on the S20 tree.
+      # Shard proving is now a rayon parallel iterator, so a statement whose
+      # families each prove a `2^20` shard holds one forward pass per worker
+      # rather than one at a time: `mem` went from 14.7 GB / 119 s to 32.3 GB /
+      # 87 s, `alu` from 14.1 / 111 to 30.9 / 67, and `control` from 10.1 to
+      # 18.0. `acceptance` (one `2^20` shard) and `tamper` (which proves one
+      # shard at a time) did not move. There is no knob; a caller that must
+      # bound the peak installs its own rayon pool, as
+      # `prover/tests/block.rs::the_block_does_not_depend_on_the_thread_count`
+      # does. `docs/handoff/S20-orchestration.md` has the table.
+
+      # DEFERRED: cargo test --release -p prover --test block -- --include-ignored --test-threads=1
+      # Master rule 7, for S20's acceptance. `guests/shards` runs 1,064,970
+      # add/sub cycles, past the `2^20` floor the timestamp channel sets, so the
+      # plan cuts it into two shards of one family -- which is the stage gate,
+      # and which cannot be made smaller: 2^20 is the least height a family
+      # carrying a timestamp gap obligation can have, so a two-shard family is
+      # two `2^20` shards whatever the guest. The file proves seven blocks --
+      # the demo five times over, once of them on a single thread, and
+      # `guests/mem`'s five-family block once -- and takes 779 s locally on 18
+      # cores at a 33.4 GB peak (25.3 GB on an earlier run of the same file; the
+      # spread is `guests/mem`'s block, 32.3 GB on its own -- plan for 34), so it
+      # runs single-threaded. Its CI-sized halves
+      # are `crates/verifier-core/tests/block.rs` (the record layout, the wire
+      # forms, the structural rule and the window rule) and
+      # `crates/checker/tests/tape.rs` (the frozen absorb order and its negative
+      # control), both in the `test` step.
+      #
+      # - name: S20's block, proved and verified
+      #   run: cargo test --release -p prover --test block -- --include-ignored --test-threads=1
 
       # The crates the recursion guest links compile unchanged for the guest.
       - name: guest target builds
@@ -227,4 +260,4 @@ jobs:
         run: |
           cargo run -p kat-gen
           cargo run --manifest-path tools/transcript-ref/Cargo.toml
-          git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constraints/tests/vectors/
+          git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constraints/tests/vectors/ crates/checker/tests/vectors/

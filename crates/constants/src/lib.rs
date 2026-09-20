@@ -781,6 +781,58 @@ pub mod transcript_tags {
     /// S17, the first stage whose family reads the generic channel.
     /// `docs/spec/shard-proof.md` §3.
     pub const GENERIC_TABLE: u64 = 41;
+
+    /// Every tag's name, indexed by `tag - 1`. **Documentation, never
+    /// semantics**, as `challenge_slot::NAMES` is: the number is the tag, and
+    /// nothing reads a name to decide anything. `checker::tape` renders a
+    /// transcript's absorb sequence with them, which is what makes a tape
+    /// diffable against the frozen order of `docs/spec/shard-proof.md` §2.
+    ///
+    /// Append here whenever a tag is appended above. This crate keeps its
+    /// zero-logic rule: the lookup lives in `checker::tape`.
+    pub const NAMES: [&str; 41] = [
+        "PROTOCOL_SUITE",
+        "PUBLIC_INPUTS",
+        "COMMITMENT",
+        "SUMCHECK_ROUND",
+        "SUMCHECK_CHALLENGE",
+        "EVALUATION_CLAIM",
+        "PCS_OPENING",
+        "WITNESS_DIGEST",
+        "SUMCHECK_FINAL_EVALS",
+        "MERCURY_INSTANCE",
+        "MERCURY_ALPHA",
+        "MERCURY_GAMMA",
+        "MERCURY_Z",
+        "BDFG_BATCH",
+        "BDFG_POINT",
+        "PAIRING_MERGE",
+        "MERCURY_BATCH",
+        "ACCUMULATOR_DIGEST",
+        "ACCUMULATOR_MERGE",
+        "PUBLIC_INPUT_STREAM",
+        "PUBLIC_OUTPUT_STREAM",
+        "PROGRAM_IDENTITY",
+        "VM_CONFIG",
+        "SHARD_COUNTS",
+        "GKR_OUTPUTS",
+        "GKR_OUTPUT_POINT",
+        "GKR_BATCH",
+        "GKR_LAYER_CLAIMS",
+        "GKR_CHILD",
+        "MEMORY_WINDOWS",
+        "MEMORY_BOUNDARY",
+        "PROGRAM_ENTRY",
+        "LOOKUP_CHALLENGE",
+        "SRS_DIGEST",
+        "SRS_VERIFIER",
+        "MEMORY_GROUP",
+        "MEMORY_CHALLENGE",
+        "GLOBAL_STATE_DIGEST",
+        "SHARD_SEED",
+        "SHARD_TS_WINDOW",
+        "GENERIC_TABLE",
+    ];
 }
 
 /// The external challenge slots a GKR circuit's coefficients may name, frozen
@@ -1009,6 +1061,28 @@ pub mod family {
 
     /// How many families this table defines.
     pub const COUNT: u32 = 9;
+
+    /// Whether a family's rows are **execution cycles**, indexed by
+    /// `FamilyId`. Append-only, beside the ids themselves.
+    ///
+    /// The seven instruction families own cycles; [`INIT_TEARDOWN`] and
+    /// [`ZERO_WINDOWS`] own addresses — a RAM window's rows are words, not
+    /// cycles (`docs/spec/memory.md` §3). A block's time-window rules apply to
+    /// cycle-owning families alone (`docs/spec/block-proof.md` §4): only their
+    /// shards partition an execution in time. The delegation families E21–S23
+    /// append here as `false`; their shards carry a min/max invocation window
+    /// and no disjointness.
+    pub const CYCLE_OWNING: [bool; COUNT as usize] = [
+        true,  // ADD_SUB_LUI_AUIPC
+        true,  // JUMP_BRANCH_SLT
+        true,  // SHIFT_BITWISE
+        true,  // MUL_DIV
+        true,  // MEM_WORD
+        true,  // MEM_SUBWORD
+        true,  // ATOMICS
+        false, // INIT_TEARDOWN
+        false, // ZERO_WINDOWS
+    ];
 
     /// The trace-height menu, ascending. Even powers of two only, so that a
     /// Mercury opening's `b = sqrt(n)` exists.

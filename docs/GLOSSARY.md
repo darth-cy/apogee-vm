@@ -453,6 +453,48 @@ GKR proof and one 704-byte batched Mercury opening, with the family, index, time
 and global state digest it was proved under. Fixed in shape given the family and height.
 `docs/spec/shard-proof.md` §9.
 
+**Block** — one execution proved and carried as one object: **`BlockProof`**, the static
+`VmConfig`, the statement, and one `ShardProof` per statement shard in statement order.
+It is not new evidence — `verify_block` is `verify_shard` over every shard plus the
+block's structural and time-window checks — and it carries no accumulator entries. Its
+public-data API (`config`, `shard_counts`, `shard_count`, `statement`, `shard_proofs`,
+`reconciliation`) is what S24's occupancy assertions and S26/S27's replay read.
+`docs/spec/block-proof.md` §1.
+
+**Block reconciliation** — `BlockReconciliation`: the cross-shard record set as a named
+type, one **`ShardRecord`** per statement shard in statement order — family, shard index,
+time window, the shard's memory commitments in column order, read root, write root. A
+view over the block, assembled rather than stored, in the layout S27's aggregation guest
+replays. `docs/spec/block-proof.md` §2 and §6.
+
+**Shard-set exactness** — the rule that a block's proofs are its statement's shards,
+`statement_shards(config, counts)`, each once, no gap and no extra, in that order. A
+family in the `VmConfig` with zero shards this execution is valid and has no record;
+omitting a shard whose cycles *ran* is caught by the memory argument, not by this rule.
+`docs/spec/block-proof.md` §2.1.
+
+**Time window** — `[ts_start, ts_end)`, a shard's public claim about which slice of the
+execution's 38-bit clock its rows **write in** — from its row-0 pc write to one past its
+last row's last slot. Its rows' *reads* reach back before it, as a memory read always
+may. Absorbed into the shard transcript right after the seed triple. A block checks that the windows of each **cycle-owning** family are
+non-empty, ordered and pairwise disjoint; a family whose rows are RAM words rather than
+cycles is exempt, and so are the delegation families to come. **It is a check on the
+plan, not on the trace**: no gate ties a claimed window to the rows committed under it,
+and cross-shard ordering, cycle uniqueness and pc continuity are carried by the global
+memory multiset alone. `docs/spec/block-proof.md` §4.
+
+**Cycle-owning** — a family whose rows are execution cycles, `constants::family::CYCLE_OWNING`:
+the seven instruction families. `INIT_TEARDOWN` and `ZERO_WINDOWS` own addresses instead,
+and the delegation families own invocations. Only cycle-owning families' shards partition
+an execution in time.
+
+**Transcript tape** — one line per typed transcript message, in order:
+`absorb <TAG> <payload field elements>` or `squeeze <TAG>`. The event log carries a
+message's tag and length and never its values, so a tape is a statement about the
+*script* a transcript ran. `checker::check_global_tape` diffs the global commit phase's
+tape against the frozen pre-fork order, written out independently.
+`docs/spec/block-proof.md` §7.
+
 **Global state digest** — the challenge the statement's global transcript ends on, after
 everything the statement binds and the four memory challenges. Every shard's transcript is
 seeded from it, so a shard proof is for one statement only. `docs/spec/shard-proof.md` §2.

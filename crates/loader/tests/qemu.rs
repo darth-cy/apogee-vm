@@ -744,3 +744,33 @@ fn mem_passes_its_checks() {
     );
     assert!(run.stdout.is_empty(), "mem commits nothing to fd 1");
 }
+
+/// `guests/shards`: S20's guest, its own `_start` like the four before it.
+///
+/// It is here for its **size**: a counted loop of 64 unrolled `add`s, 16,384
+/// iterations, so `ADD_SUB_LUI_AUIPC` runs 1,064,970 cycles and one execution
+/// becomes two shards of one family. It reads nothing, writes nothing and
+/// checks its own two answers — the accumulator reached `64 * 16384` and the
+/// counter reached 0 — exiting with the number of checks, 2, or 1 from `fail`.
+///
+/// It is **not** in `crates/emulator/tests/differential.rs`' suite, and for one
+/// reason: that comparison reads QEMU's per-instruction register log, and a
+/// million instructions of it is gigabytes. What this run covers is the
+/// semantics — a real executor reaching the same two answers — and the
+/// emulator's own reading of the same guest is the block suite, which proves
+/// the trace it produced.
+#[test]
+#[ignore = "needs a Linux host with qemu-user; run with --ignored"]
+fn shards_passes_its_checks() {
+    let qemu = qemu();
+
+    let run = execute(&qemu, "shards", "shards", &[], None);
+    assert_eq!(
+        run.status,
+        Some(2),
+        "shards exited {:?}: {}",
+        run.status,
+        run.stderr
+    );
+    assert!(run.stdout.is_empty(), "shards commits nothing to fd 1");
+}

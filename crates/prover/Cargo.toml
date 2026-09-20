@@ -29,3 +29,7 @@ verifier-core.workspace = true
 [dev-dependencies]
 # `tests/common` traces the S16 guest.
 emulator.workspace = true
+# S20 acceptance 3: the transcript-tape validator over the statement the block
+# was actually proved for. A dev-dependency cycle -- `checker` depends on this
+# crate -- which cargo resolves: the dev graph is built separately.
+checker.workspace = true

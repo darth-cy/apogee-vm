@@ -6,10 +6,11 @@
 use std::time::Instant;
 
 use gkr::BaseLayer;
-use trace::{Phase, PhaseTiming, TraceArchive};
+use rayon::prelude::*;
+use trace::{plan_shards, Phase, PhaseTiming, ShardPlan, TraceArchive};
 use transcript::{Transcript, TranscriptSnapshot};
 use verifier_core::wire::{Read, Reader, Writer};
-use verifier_core::{read_gkr, statement_shards, write_gkr, PublicInputs, ShardProof};
+use verifier_core::{read_gkr, statement_shards, write_gkr, BlockProof, PublicInputs, ShardProof};
 
 use crate::{
     global_commit_phase, public_inputs, shard_columns, statement_inputs, GlobalCommitState,
@@ -75,6 +76,8 @@ fn encode_gkrs(shards: &[ShardGkr]) -> Vec<u8> {
     for s in shards {
         w.u32(s.family);
         w.u32(s.index);
+        w.u64(s.ts_window[0]);
+        w.u64(s.ts_window[1]);
         w.g1s(&s.witness_commitments);
         w.frs(&s.outputs);
         write_gkr(&mut w, &s.gkr);
@@ -91,6 +94,7 @@ fn decode_gkrs(bytes: &[u8]) -> Read<Vec<ShardGkr>> {
     for _ in 0..n {
         let family = r.u32()?;
         let index = r.u32()?;
+        let ts_window = [r.u64()?, r.u64()?];
         let witness_commitments = r.g1s()?;
         let outputs = r.frs()?;
         let gkr = read_gkr(&mut r)?;
@@ -99,6 +103,7 @@ fn decode_gkrs(bytes: &[u8]) -> Read<Vec<ShardGkr>> {
         out.push(ShardGkr {
             family,
             index,
+            ts_window,
             witness_commitments,
             outputs,
             gkr,
@@ -142,6 +147,19 @@ fn decode_final(bytes: &[u8]) -> Read<(PublicInputs, Vec<ShardProof>)> {
 // ---------------------------------------------------------------------------
 // advance
 // ---------------------------------------------------------------------------
+
+/// The results of a parallel step, in order, or the **first** of them that
+/// failed.
+///
+/// `collect::<Result<Vec<_>, _>>()` on a parallel iterator returns *some*
+/// error when more than one fails, and which one is not deterministic — rayon
+/// says so. Every other refusal this prover makes names a cycle or a family,
+/// and one that named a different cycle on a different machine would be a
+/// diagnostic nobody could reproduce. So the parallel step collects in order
+/// and the first failure is picked here, sequentially.
+fn first_error<T>(results: Vec<Result<T, ProverError>>) -> Result<Vec<T>, ProverError> {
+    results.into_iter().collect()
+}
 
 fn archive_error(phase: Phase) -> impl Fn(&'static str) -> ProverError {
     move |e| ProverError::Archive(format!("{phase:?}: {e}"))
@@ -201,15 +219,28 @@ pub fn advance(
             )?))
         };
 
-    // PostGkr.
+    // PostGkr. Shard proving is the block's one parallel step, and it starts
+    // only after the global phase has closed: each task forks its transcript
+    // from the same global state, builds its own slice of the archive, proves
+    // it and drops it, so the shards share no prover state, the schedule
+    // cannot reach a challenge, and the peak is one shard trace per worker.
+    // `map` over an indexed parallel iterator collects in order, so the result
+    // is statement order whatever the thread count
+    // (`docs/spec/block-proof.md` §5).
     let gkrs = match archive.content(Phase::PostGkr) {
         Some(bytes) => decode_gkrs(bytes).map_err(archive_error(Phase::PostGkr))?,
         None => {
             let since = Instant::now();
-            let mut gkrs = Vec::new();
-            for &(family, index) in &shards {
-                gkrs.push(ctx.gkr_part(family, index, &base(archive, (family, index))?));
-            }
+            let read_only: &TraceArchive = archive;
+            let gkrs = first_error(
+                shards
+                    .par_iter()
+                    .map(|&(family, index)| {
+                        base(read_only, (family, index))
+                            .map(|base| ctx.gkr_part(family, index, &base))
+                    })
+                    .collect(),
+            )?;
             fill(archive, Phase::PostGkr, encode_gkrs(&gkrs), since)?;
             gkrs
         }
@@ -227,11 +258,15 @@ pub fn advance(
         }
         None => {
             let since = Instant::now();
-            let mut proofs = Vec::new();
-            for gkr in gkrs {
-                let shard = (gkr.family, gkr.index);
-                proofs.push(ctx.opening_part(gkr, &base(archive, shard)?).0);
-            }
+            let read_only: &TraceArchive = archive;
+            let proofs = first_error(
+                gkrs.into_par_iter()
+                    .map(|gkr| {
+                        let shard = (gkr.family, gkr.index);
+                        base(read_only, shard).map(|base| ctx.opening_part(gkr, &base).0)
+                    })
+                    .collect(),
+            )?;
             let mut w = Writer::new();
             encode_proofs(&mut w, &proofs);
             fill(archive, Phase::PostOpening, w.bytes, since)?;
@@ -249,6 +284,43 @@ pub fn advance(
         fill(archive, Phase::Final, encode_final(&public, &proofs), since)?;
     }
     Ok(())
+}
+
+/// Prove one archived execution as a **block**: `docs/spec/block-proof.md` §5.
+///
+/// `plan` is the execution's own shard plan and is checked against the
+/// archive's cycle profile — a plan for another execution is refused rather
+/// than silently proving a different shard set. The rest is [`advance`] to
+/// `Phase::Final` and [`finish`]: the global commit phase once, every shard
+/// proved from its own forked transcript, and the five phase sections left in
+/// `archive`, so a killed run resumes to the same bytes.
+///
+/// The two RAM window families run no cycles, so `plan` counts 0 for both;
+/// their shards — exactly one `INIT_TEARDOWN`, one `ZERO_WINDOWS` per touched
+/// window — are the statement's, `docs/spec/memory.md` §3.
+pub fn prove_block(
+    setup: &ProverSetup,
+    archive: &mut TraceArchive,
+    plan: &ShardPlan,
+) -> Result<BlockProof, ProverError> {
+    let derived = plan_shards(archive.cycle_profile(), &setup.program.config);
+    if *plan != derived {
+        return Err(ProverError::Trace(format!(
+            "the shard plan {:?} is not the archived execution's {:?}",
+            plan.shards, derived.shards
+        )));
+    }
+    advance(setup, archive, Phase::Final)?;
+    let (statement, shards) = finish(archive)?;
+    let block = BlockProof {
+        config: setup.vk.config.clone(),
+        statement,
+        shards,
+    };
+    block
+        .shape()
+        .expect("prove_block assembles the statement's shards in statement order");
+    Ok(block)
 }
 
 /// The statement and every shard's proof, from an archive whose final phase is

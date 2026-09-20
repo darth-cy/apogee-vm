@@ -9,9 +9,11 @@
 use curve::{G1Affine, G2Affine};
 use pcs::{batch_verify, MercuryCommitment, MercuryProof};
 use srs::SrsVerifier;
+use verifier_core::{check_ts_windows, derive_global_phase, verify_shard_local, OpeningClaim};
 
 pub use verifier_core::{
-    PublicInputs, ShardProof, VerifyError, VerifyingKey, OPENING_BYTES, SRS_VERIFIER_BYTES,
+    BlockProof, BlockReconciliation, PublicInputs, ShardProof, ShardRecord, VerifyError,
+    VerifyingKey, OPENING_BYTES, SRS_VERIFIER_BYTES,
 };
 
 /// Verify one shard's proof against its statement: **the one verification
@@ -21,14 +23,68 @@ pub use verifier_core::{
 ///
 /// A statement is proven when every one of its shards' proofs verifies against
 /// one `public`: a shard checks the memory argument's reconciliation over roots
-/// the other shards' proofs establish.
+/// the other shards' proofs establish. [`verify_block`] is that, over a block
+/// that carries its whole shard set.
 pub fn verify_shard(
     vk: &VerifyingKey,
     proof: &ShardProof,
     public: &PublicInputs,
 ) -> Result<(), VerifyError> {
-    let claim = verifier_core::reduce_shard(vk, proof, public)?;
-    // 12. The opening: every point it reads through its validating decoder.
+    let global = derive_global_phase(vk, public)?;
+    spend(vk, proof, verify_shard_local(vk, &global, proof, public)?)
+}
+
+/// Verify a whole block: **the one block verification path**, and the same
+/// per-shard path [`verify_shard`] runs. `docs/spec/block-proof.md` §3 is
+/// normative; the checks are, in order:
+///
+/// 1. the block's descriptor is the key's and its statement is `public`;
+/// 2. the statement's own checks and the global transcript, once
+///    (`derive_global_phase`);
+/// 3. **shard-set exactness**: the proofs are the statement's shards, each
+///    once, no gap and no extra, in statement order;
+/// 4. the time windows: ordered and disjoint within each cycle-owning family
+///    (`check_ts_windows`);
+/// 5. every shard through `verify_shard_local` and its opening, which is where
+///    the read/write root products reconcile across every shard and family
+///    (step 10) and every channel's roots are checked (step 9).
+///
+/// A family in the config with zero shards this execution is valid and has no
+/// record; omitting a shard whose cycles ran is caught by step 5's
+/// reconciliation, because its writes and reads are missing from one side of
+/// the global multiset.
+pub fn verify_block(
+    vk: &VerifyingKey,
+    proof: &BlockProof,
+    public: &PublicInputs,
+) -> Result<(), VerifyError> {
+    let statement = VerifyError::Statement;
+    // 1. The descriptor and the statement the block binds are the ones the
+    //    verifier holds. Both are absorbed before any challenge (§2, G3–G9),
+    //    so a block cannot claim one occupancy and bind another.
+    if proof.config != vk.config {
+        return Err(statement("the block's VmConfig is not the key's"));
+    }
+    if proof.statement != *public {
+        return Err(statement("the block's statement is not the one given"));
+    }
+    // 2. The statement, and the global transcript once for every shard.
+    let global = derive_global_phase(vk, public)?;
+    // 3. Shard-set exactness.
+    proof.shape().map_err(statement)?;
+    // 4. The time windows.
+    check_ts_windows(&proof.reconciliation().records).map_err(statement)?;
+    // 5. Every shard, by the one per-shard path.
+    for shard in &proof.shards {
+        spend(vk, shard, verify_shard_local(vk, &global, shard, public)?)?;
+    }
+    Ok(())
+}
+
+/// Step 12, the wrapper's: decode every point the opening claim reads through
+/// its validating decoder, and run `pcs::batch_verify`. This is where the
+/// base verifier's pairings happen.
+fn spend(vk: &VerifyingKey, proof: &ShardProof, claim: OpeningClaim) -> Result<(), VerifyError> {
     let opening = VerifyError::Opening;
     let vsrs = decode_srs_verifier(&vk.srs_verifier).ok_or(opening)?;
     let cms = claim
