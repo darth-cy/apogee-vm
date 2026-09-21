@@ -10,14 +10,14 @@ every program.
 
 ```rust
 pub type FamilyId = u32;                                   // constants::family
-pub const FAMILIES: [FamilyId; 9];                         // ascending: the canonical order
+pub const FAMILIES: [FamilyId; 10];                        // ascending: the canonical order
 pub fn row_kind(instr: &Instr) -> (FamilyId, u32);         // the pc-claiming rule + mask bit
 pub enum RowField { Pc, NextPc, Rs1, Rs2, Rd, Imm, Funct3, ExtraMask }
 pub const ROW_FIELDS: [RowField; 8];                       // frozen column order
 pub fn lookup_tuple(family: FamilyId) -> &'static [RowField];
 pub fn field_mask(family: FamilyId) -> u8;                 // derived from the tuple
 
-pub struct ProgramParams { pub bytecode_size_words: u32, pub heights: [u32; 9], pub code_version: u32 }
+pub struct ProgramParams { pub bytecode_size_words: u32, pub heights: [u32; 10], pub code_version: u32 }
 impl ProgramParams { pub fn defaults() -> ProgramParams; }
 pub struct VmConfig { pub families: Vec<(FamilyId, u32)>, pub bytecode_size_words: u32 }
 impl VmConfig { pub fn to_bytes(&self) -> Vec<u8>; pub fn from_bytes(b: &[u8]) -> Option<VmConfig>;
@@ -33,7 +33,16 @@ impl ProgramIdentity { pub fn to_bytes(&self) -> [u8; 32]; pub fn from_bytes(b: 
 pub enum ProgramError { UnsupportedCodeVersion, HeightNotOnMenu, ProgramTooLarge,
                         NotAllOpcodesSupported, TableTooShort,
                         ImageOutsideWindow { end: u64, height: u32 },
-                        WindowRule { rule: &'static str } }   // + Display
+                        WindowRule { rule: &'static str },
+                        UnknownDelegation { addr: u32, number: u32 } }   // + Display
+
+// S21: delegation families. docs/spec/delegation.md §3 and §7.
+pub const DELEGATIONS: [(FamilyId, u32, usize); 1];        // (family, ecall number, frame words)
+pub fn delegation_family(number: u32) -> Option<FamilyId>;
+pub fn delegation_ecall(family: FamilyId) -> Option<u32>;
+pub fn delegation_frame_words(family: FamilyId) -> Option<usize>;
+pub fn claims_pcs(family: FamilyId) -> bool;
+pub fn declared_delegations(image: &ProgramImage) -> Result<Vec<FamilyId>, ProgramError>;
 
 pub fn decode_program(image: &ProgramImage, params: &ProgramParams)
     -> Result<(DecodedTables, VmConfig), ProgramError>;
@@ -82,17 +91,36 @@ is claimed by exactly one family by construction.
 | 6 | `ATOMICS` | `lr.w sc.w` and the nine AMOs | 2^20 |
 | 7 | `INIT_TEARDOWN` | no pc; RAM window 0, the image window, exactly one shard; present in every `VmConfig`; an **empty** table: no columns, no live rows | 2^22 |
 | 8 | `ZERO_WINDOWS` | no pc; the zero-initialized RAM windows above window 0, one shard per touched window; present in every `VmConfig`; an **empty** table | 2^22 |
+| 9 | `KECCAK_F` | no pc; **invoked, not decoded**: ecall `0x501`, one keccak-f[1600] permutation a row, present exactly when the image declares it; an **empty** table | 2^8 |
 
 The two init families have **one height**, `h`: RAM window `w` is the bytes
 `[4h·w, 4h·(w+1))` (`docs/spec/memory.md` §3). `bytecode_size_words` defaults to 2^20
 (a 4 MiB ceiling), the code version to 0.
 
 **Static detachment.** A family is in the `VmConfig` exactly when it claims at least one
-pc, and the two init families always. The preprocessor derives the set; nothing selects
-it. A pc whose family is unavailable is claimed by nobody, which is the same loud failure
-as an unknown instruction — that is what makes detachment sound.
-`decode_program_detaching` exists only to show it; detaching an init family leaves it out
-of the set, which is refused.
+pc, the two init families always, and — since S21 — **a delegation family exactly when the
+image declares it**. Those are the three presence rules and there are no others. The
+preprocessor derives the set; nothing selects it. A pc whose family is unavailable is
+claimed by nobody, which is the same loud failure as an unknown instruction — that is what
+makes detachment sound. `decode_program_detaching` exists only to show it; detaching an init
+family leaves it out of the set, which is refused.
+
+**A delegation family claims no pc, so the instruction sweep can never learn that a program
+calls one**: the ecall number lives in `a7` at run time and no instruction word carries it.
+What decides membership is a **declaration record** the SDK shim emits into
+`.rodata.apogee.delegations` — `constants::delegation::MARKER_MAGIC` then the number, twelve
+bytes — and `declared_delegations` scans the image's file-backed segment bytes for it,
+**byte-wise**, because a `static`'s address is the linker's and the record has landed at an
+odd offset in practice. The mechanism is **reachability**: the record is referenced by the
+shim and by nothing else, so the linker keeps it exactly when the shim is linked. Two things
+break exactly one half of that and each is caught by
+`crates/program/tests/delegation.rs`: a `#[used]` record survives into every guest that links
+the SDK — `guests/Cargo.toml` pins `codegen-units = 1`, so the SDK is one object file and ten
+guests carried the marker before `#[used]` came off — and an optimiser that folds the record's
+number into an immediate drops it at `--release`, which `core::hint::black_box` in
+`guest_sdk::delegation_number` is what prevents. A record naming a number no family answers is
+`UnknownDelegation`, loudly: the guest and this preprocessor disagreeing about the ABI is not
+something to ignore.
 
 ## The table
 - **One row per halfword, absolute.** Row `i` is pc `2i`. A family's table has exactly
@@ -140,7 +168,7 @@ cover is therefore not expressible.
 | --- | --- | --- |
 | `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MEM_WORD`, `MEM_SUBWORD` | `pc next_pc rs1 rs2 rd imm extra_mask` | `0b1011_1111` |
 | `MUL_DIV`, `ATOMICS` | `pc next_pc rs1 rs2 rd extra_mask` | `0b1001_1111` |
-| `INIT_TEARDOWN`, `ZERO_WINDOWS` | — | `0` |
+| `INIT_TEARDOWN`, `ZERO_WINDOWS`, `KECCAK_F` | — | `0` |
 
 **`funct3` is in no tuple.** The extra mask is one-hot per mnemonic, which leaves it
 nothing to say; it remains a row field so a later family that wants it can take it.
@@ -220,6 +248,10 @@ Every one is an `Err`, and `Display` names what it refused.
 - `WindowRule { rule }` — the derived family set lacks `INIT_TEARDOWN` or `ZERO_WINDOWS`
   (only a detaching test can make it), or their heights differ: a `ZERO_WINDOWS` height
   below `INIT_TEARDOWN`'s would give image words a second init row.
+- `UnknownDelegation { addr, number }` — a declaration record in the image names an ecall
+  number no registered family answers. Loud rather than ignored: the guest and this
+  preprocessor disagree about the ABI, and a silently dropped declaration makes the guest's
+  own call fail much later and much less clearly.
 - `ImageOutsideWindow { end, height }` — one past the last file-backed byte is above
   `4 · height(INIT_TEARDOWN)`, counting segments with file bytes only. Otherwise `.data`
   placed in window 1 would read as zero and not move the identity.
@@ -238,12 +270,14 @@ here unchanged; `check_memory_windows` wraps the core's, mapping its `&'static s
 not move a byte, and every path above still resolves.
 
 `VmConfig` is the static shape: the family set ascending with each height, and
-`bytecode_size_words`. **Per-proof shard counts are not in it.** Wire form, frozen: `u32`
+`bytecode_size_words`. **Per-proof shard counts are not in it.** A delegation family's id is
+above the two window families', so a config lists it last;
+`crates/program/tests/delegation.rs` holds every registered delegation to that. Wire form, frozen: `u32`
 LE family count `k`, then `k` pairs `u32` LE `(family, height)`, then `u32` LE
 `bytecode_size_words`; `from_bytes` refuses a wrong length, an unknown or out-of-order
 family, a height off the menu, a family set without `INIT_TEARDOWN` or `ZERO_WINDOWS`,
-and those two at different heights. Presence, not position: the init families have the
-highest ids only until the delegation families are appended above them.
+and those two at different heights. Presence, not position: since S21 the init families no
+longer have the highest ids, `KECCAK_F` being 9.
 
 The **statement descriptor** is the static `VmConfig`, the per-proof shard count of each
 of its families, and the RAM window list, as three adjacent typed messages: `VM_CONFIG`
@@ -313,6 +347,7 @@ useless. The verifier never sees an ELF.
 | File | What |
 | --- | --- |
 | `tests/partition.rs` | Acceptance 3 over every guest (claimed pcs are the instruction slots, each once; both init families in every config), 4 (`guests/atomics` with atomics detached fails at its first atomic's pc), 5 (fib has no atomics; `atomics` has them; `mul_free.elf` has no mul/div), and an unknown opcode's named failure |
+| `tests/delegation.rs` | **S21.** The registry read three ways and its two rules (every number in the precompile range, every family above the window ones, none claiming a pc or carrying a table); the byte-wise scan at every offset 0–7; a family declared twice counted once; a truncated record declaring nothing; a segment with no file bytes carrying none; an unknown number refused by name; and **acceptance 8 over every committed guest** — the two keccak guests declare `KECCAK_F`, no other guest declares anything at all, and each config's delegation families are exactly its declared ones. The second clause is the one that matters: `#[used]` would put the record in all seventeen. Plus, `#[ignore]`d, `reachability_survives_the_optimiser`: `keccak-test` and `fib` built from source at **both** optimisation levels, since the committed fixtures are `debug` and the `core::hint::black_box` in the shim exists for `opt-level = 3` |
 | `tests/tables.rs` | Acceptance 6 (every exported column of every table scanned: non-live rows are all `MINUS_ONE`, live rows equal to the stored values and neither padding nor zero), code above a shorter family's table, the 59 row kinds pinned numerically, `narrowest` at each width boundary, 7 (`next_pc` against the loader's halfword map), exact heights, `TableTooShort` at the boundary, `ProgramTooLarge` at the ceiling with segments without file bytes not counted, `ImageOutsideWindow` at `4h − 1` / `4h`, the image column of every guest against `initial_word` and the segment bytes, menu and version refusals, the frozen field masks, one-hot kinds naming exactly 59 mnemonics over the ISA corpus, narrowest storage, determinism, fixture pins |
 | `tests/config.rs` | The `VmConfig` wire form byte for byte, its refusals, a config without either init family or with the two at different heights refused by derivation and by `from_bytes`, a nine-family round trip, the identity wire form, the statement descriptor as three adjacent messages, and every `check_memory_windows` rule at its boundary |
 | `tests/identity.rs` | **All but two `#[ignore]`d — they need `assets/ptau/ppot_0080_24.ptau`.** fib at the defaults twice in-process and against the pin; the recipe rebuilt message by message; acceptance 9's moves plus a `.rodata` byte, a `.data` byte and the entry pc; a segment without file bytes resized does not move it; fib rebuilt from source twice. In CI: `identity_from_commitments` rebuilt message by message over a distinct point per family, and moved by the entry pc and by each commitment. `setup_commitments` — which column `INIT_TEARDOWN` commits, at which height — is reached only by the ignored recipe test |

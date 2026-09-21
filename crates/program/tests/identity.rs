@@ -135,7 +135,8 @@ fn the_identity_is_the_documented_recipe() {
     assert_eq!(
         lists.iter().filter(|l| l.is_empty()).count(),
         1,
-        "ZERO_WINDOWS absorbs an empty list, and only it"
+        "ZERO_WINDOWS absorbs an empty list, and here only it: fib declares no \
+         delegation family, whose list is empty too"
     );
     assert_eq!(lists, setup_commitments(&image, &tables, &config, &srs));
     assert_eq!(
@@ -273,39 +274,55 @@ fn a_rebuilt_guest_has_the_same_identity() {
 
 /// `identity_from_commitments` is §6.2's steps 1–5 over given lists, rebuilt
 /// here message by message: `PROGRAM_IDENTITY`, `VM_CONFIG`, `PROGRAM_ENTRY`,
-/// then one `COMMITMENT` list per family — a distinct point per family, and
-/// `ZERO_WINDOWS`' list empty — then one raw sample. Needs no SRS, so it runs in
-/// CI. Fails if a message moved, or a family's list were absorbed out of order.
+/// then one `COMMITMENT` list per family — a distinct point per family, and an
+/// empty list for the families that commit nothing — then one raw sample.
+/// Needs no SRS, so it runs in CI. Fails if a message moved, or a family's
+/// list were absorbed out of order.
+///
+/// Two guests. `fib`'s config is the nine-family one, whose single empty list
+/// is `ZERO_WINDOWS`'. `keccak-test` declares `KECCAK_F`
+/// (`docs/spec/delegation.md` §7), which is invoked rather than decoded and so
+/// commits nothing either — and its id is above both window families', so the
+/// digest absorbs **two adjacent empty `COMMITMENT` messages**. That is the
+/// shape a framing without a length would collapse, and no config could
+/// produce it before S21.
 #[test]
 fn the_digest_over_commitments_is_the_documented_recipe() {
-    let image = common::guest("fib");
-    let (_, config) = decode_program(&image, &common::smallest()).unwrap();
-    let lists: Vec<Vec<G1Affine>> = config
-        .families
-        .iter()
-        .enumerate()
-        .map(|(i, (f, _))| match *f {
-            family::ZERO_WINDOWS => Vec::new(),
-            _ => vec![G1Projective::GENERATOR
-                .mul(&Fr::from_u64(i as u64 + 2))
-                .to_affine()],
-        })
-        .collect();
-    let fr = |x: u32| Fr::from_u64(x as u64);
-    let mut tr = Transcript::new();
-    tr.append_scalar(tags::PROGRAM_IDENTITY, fr(family::CODE_VERSION));
-    let mut vm: Vec<Fr> = config.families.iter().map(|(f, _)| fr(*f)).collect();
-    vm.extend(config.families.iter().map(|(_, h)| fr(*h)));
-    vm.push(fr(config.bytecode_size_words));
-    tr.append_scalars(tags::VM_CONFIG, &vm);
-    tr.append_scalar(tags::PROGRAM_ENTRY, fr(image.entry));
-    for points in &lists {
-        append_g1_list(&mut tr, tags::COMMITMENT, points);
+    let mut empties = Vec::new();
+    for name in ["fib", "keccak-test"] {
+        let image = common::guest(name);
+        let (_, config) = decode_program(&image, &common::smallest()).unwrap();
+        let lists: Vec<Vec<G1Affine>> = config
+            .families
+            .iter()
+            .enumerate()
+            .map(|(i, (f, _))| match *f {
+                family::ZERO_WINDOWS | family::KECCAK_F => Vec::new(),
+                _ => vec![G1Projective::GENERATOR
+                    .mul(&Fr::from_u64(i as u64 + 2))
+                    .to_affine()],
+            })
+            .collect();
+        let fr = |x: u32| Fr::from_u64(x as u64);
+        let mut tr = Transcript::new();
+        tr.append_scalar(tags::PROGRAM_IDENTITY, fr(family::CODE_VERSION));
+        let mut vm: Vec<Fr> = config.families.iter().map(|(f, _)| fr(*f)).collect();
+        vm.extend(config.families.iter().map(|(_, h)| fr(*h)));
+        vm.push(fr(config.bytecode_size_words));
+        tr.append_scalars(tags::VM_CONFIG, &vm);
+        tr.append_scalar(tags::PROGRAM_ENTRY, fr(image.entry));
+        for points in &lists {
+            append_g1_list(&mut tr, tags::COMMITMENT, points);
+        }
+        assert_eq!(
+            identity_from_commitments(family::CODE_VERSION, &config, image.entry, &lists),
+            ProgramIdentity(tr.sample()),
+            "{name}"
+        );
+        empties.push(lists.iter().filter(|l| l.is_empty()).count());
     }
-    assert_eq!(
-        identity_from_commitments(family::CODE_VERSION, &config, image.entry, &lists),
-        ProgramIdentity(tr.sample())
-    );
+    // Neither pass is the other: one empty list, then two adjacent ones.
+    assert_eq!(empties, vec![1, 2]);
 }
 
 /// The digest over given commitments needs no SRS, so it runs in CI: over

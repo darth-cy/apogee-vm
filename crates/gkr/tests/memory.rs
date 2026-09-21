@@ -439,7 +439,10 @@ fn window_artifacts_prove_and_verify() {
 /// every column; a read-only query writes back; `rd` is at address 0 on row 0
 /// and wherever a coin says, with its x0 witnesses consistent. Every column is
 /// addressed by the query's **slot** in this family, its behaviour chosen by the
-/// query's id.
+/// query's id: `ram` and `deleg` fall through to the last arm and write what
+/// they like, the frame constraining neither — the mirror's three zeroings are
+/// the requesting family's own circuit, not its frame
+/// (`docs/spec/delegation.md` §5.2).
 fn frame_columns(queries: &[usize], rng: &mut Rng) -> Vec<Vec<Fr>> {
     let width = queries.len();
     let n = committed(width);
@@ -484,18 +487,21 @@ fn frame_columns(queries: &[usize], rng: &mut Rng) -> Vec<Vec<Fr>> {
 }
 
 /// Every execution family's frame at `2^4` rows over a satisfying base proves
-/// and verifies — the four widths, 7, 6, 5 and 4, so both a padded and an
+/// and verifies — the four widths, 8, 6, 5 and 4, so both a padded and an
 /// unpadded gate list 0 are proven. Then row 0's `rd` write, at address 0, is
 /// set to 5: the self-check names `rd_write_masked` and `verify` rejects at
-/// transition 0. `rd` is the table's last query and every list is ascending, so
-/// its slot is the family's last.
+/// transition 0. `rd`'s **slot** is its position in that family's own ascending
+/// list — the last one for every family but `ADD_SUB_LUI_AUIPC`, where S21's
+/// `deleg` query follows it — so it is looked up rather than assumed.
 #[test]
 fn every_frame_proves_and_verifies_and_rejects_a_write_to_x0() {
     let mut rng = Rng::new(0x5714_3106);
     for (id, queries) in FAMILIES {
         let a = family_frame_artifact(id, 4);
-        let rd = queries.len() - 1;
-        assert_eq!(queries[rd], RD, "family {id}: rd is the last slot");
+        let rd = queries
+            .iter()
+            .position(|&q| q == RD)
+            .unwrap_or_else(|| panic!("family {id}: every execution family writes rd"));
 
         let mut cols = frame_columns(queries, &mut rng);
         let base = fr_base(&a, cols.clone());

@@ -50,7 +50,7 @@ fn the_global_transcript_is_the_frozen_order() {
         absorb(tags::COMMITMENT, 4 * 2),
         absorb(tags::MEMORY_GROUP, 2),
         absorb(tags::MEMORY_GROUP, 2),
-        absorb(tags::COMMITMENT, 4 * 36),
+        absorb(tags::COMMITMENT, 4 * 41),
         absorb(tags::MEMORY_BOUNDARY, 64),
     ];
     want.extend(
@@ -81,7 +81,7 @@ fn the_global_transcript_is_the_frozen_order() {
     assert!(moved(|p| p.boundary.reg_ts[3] += 1));
     assert!(moved(|p| p.boundary.pc_ts += 1));
     assert!(moved(|p| p.boundary.reg_values[0] += 1));
-    assert!(moved(|p| p.memory_commitments[1][35] = blob(999)));
+    assert!(moved(|p| p.memory_commitments[1][40] = blob(999)));
     assert!(moved(|p| p.memory_commitments[1].swap(0, 1)));
     assert!(moved(|p| p.memory_commitments.swap(0, 1)));
     assert!(moved(|p| {
@@ -528,7 +528,7 @@ fn garbage_is_refused_and_never_panics() {
             4 => q.family = (next() % 12) as u32,
             5 => q.shard_index = next() as u32,
             6 => q.outputs.truncate((next() % 9) as usize),
-            _ => q.witness_commitments.truncate((next() % 32) as usize),
+            _ => q.witness_commitments.truncate((next() % 34) as usize),
         }
         assert!(reduce_shard(&key, &q, &p).is_err());
     }
@@ -581,19 +581,4 @@ fn the_statement_half_of_the_memory_argument_is_one_check_for_a_statement() {
         verify_global_memory(&key, &g, &p),
         Err(memory("the statement's roots do not reconcile"))
     );
-}
-
-#[test]
-fn tmp_print_widths() {
-    for (f, v) in [(ADD, 20u32), (INIT, 16), (ZERO, 16), (JBS, 20)] {
-        let c = constraints::family_circuit(f, v).unwrap();
-        println!(
-            "family {f}: memory {} witness {} setup {} outputs {} depth {}",
-            c.artifact.memory.len(),
-            c.artifact.witness.len(),
-            c.artifact.setup.len(),
-            c.artifact.outputs.len(),
-            c.artifact.depth()
-        );
-    }
 }

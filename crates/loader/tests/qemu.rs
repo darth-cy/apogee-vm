@@ -774,3 +774,45 @@ fn shards_passes_its_checks() {
     );
     assert!(run.stdout.is_empty(), "shards commits nothing to fd 1");
 }
+
+/// `guests/keccak-test` and `guests/keccak-unused`: S21's acceptance 5, the
+/// **software-fallback half**.
+///
+/// The delegation ecall `0x501` is a precompile number `qemu-riscv32` knows
+/// nothing about, so its `ecall` returns `-ENOSYS` and `guest_sdk::keccak256`
+/// takes its in-guest software path — the same frozen signature, the same
+/// bytes out (`docs/spec/delegation.md` §2). The guest checks its own six
+/// digests and exits 6 either way, which is the property: one binary, two
+/// executors, bit-identical answers. The emulator's half of the same
+/// acceptance is `crates/emulator/tests/guests.rs`, where the ecall performs
+/// the permutation instead, and the digests themselves are re-derived from
+/// `tiny-keccak` there so neither path can agree on a stale literal.
+///
+/// `keccak-unused` links the shim and never calls it. Under QEMU that is
+/// indistinguishable from any other guest — nothing about detachment is
+/// visible at run time; it is the *image* that declares the family, and
+/// `crates/program/tests/delegation.rs` is what reads that. What this run adds
+/// is that linking the shim costs the guest nothing at run time: it still
+/// exits 7.
+#[test]
+#[ignore = "needs a Linux host with qemu-user; run with --ignored"]
+fn keccak_falls_back_to_software_and_agrees() {
+    let qemu = qemu();
+
+    for (name, status) in [("keccak-test", 6), ("keccak-unused", 7)] {
+        let run = execute(&qemu, name, name, &[], None);
+        assert_eq!(
+            run.status,
+            Some(status),
+            "{name} exited {:?} rather than {status}, so a digest disagreed \
+             between the delegation path and the software one: {}",
+            run.status,
+            run.stderr
+        );
+        assert!(
+            run.stdout.is_empty(),
+            "{name} commits nothing to fd 1: an ecall other than EXIT and the \
+             delegation call would make the fixture unprovable"
+        );
+    }
+}

@@ -17,8 +17,8 @@ use constraints::add_sub::{
     DECODED, IS_ECALL, IS_FENCE, IS_KECCAK, KINDS, NEXT_PC_HI, PC_WRAP, RD_HI, TABLE_WIDTH, WRAP,
 };
 use constraints::atomics as at_circuit;
-use constraints::keccak as kec_circuit;
 use constraints::jump_branch_slt as jbs_circuit;
+use constraints::keccak as kec_circuit;
 use constraints::mem_subword as ms_circuit;
 use constraints::mem_word as mw_circuit;
 use constraints::memory::{frame_queries, rd_selected};

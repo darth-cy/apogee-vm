@@ -90,9 +90,8 @@ fn frame_rows(
         // `constants::delegation::FRAME_DELTA` and is that family's row, not
         // this one's (`docs/spec/delegation.md` §4.1). The panic below is
         // unchanged for every pair the table *does* have.
-        let in_table = (0..FRAME_QUERIES).any(|q| {
-            FRAME_SPACE[q] == event.space.tag() && FRAME_DELTA[q] == event.delta()
-        });
+        let in_table = (0..FRAME_QUERIES)
+            .any(|q| FRAME_SPACE[q] == event.space.tag() && FRAME_DELTA[q] == event.delta());
         if !in_table {
             continue;
         }

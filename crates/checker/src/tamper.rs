@@ -257,30 +257,45 @@ pub struct AnchorTwins {
     pub anchor_value: PolyAddress,
 }
 
-/// The four anchor twins and their control, run as a block.
+/// The four anchor twins and their control (S21 must-be-exact 3).
 ///
-/// Every one of them has shipped as a real regression, and none is
-/// theoretical (S21 must-be-exact 3):
+/// **Each twin is run at the level that names what refuses it**, and the two
+/// levels answer differently on purpose. `verify_block` runs
+/// `verify_global_memory` **before** any shard's own checks
+/// (`docs/spec/block-proof.md` §3), so at block level a forgery that unbalances
+/// the multiset is `MemoryArgument` whatever else is also wrong;
+/// `verify_shard`'s order puts `Constraint` first, so at shard level the same
+/// witness names the gate. A twin that asserted `Constraint` at block level
+/// would be asserting something false — and did, until this run.
 ///
-/// 1. **A request with no invocation.** The invocation's row is switched off,
-///    so its answer tuple is not written and the request's read of it matches
-///    nothing. The global multiset is what refuses it — `MemoryArgument` — and
-///    that check reads every shard's roots at once, which is why this twin
-///    needs the block and not one shard.
-/// 2. **Two requests against one invocation.** The same dropped invocation,
-///    and the orphaned request's mirror chained onto another request's write
-///    the way it would chain without the timestamp zeroing. It *balances*: the
-///    multiset has nothing to say, and the zeroing gates are the whole of what
-///    refuses it — `Constraint`. Lose them and N requests close the permutation
-///    against one real invocation, with N−1 executions elided.
-/// 3. **Each zeroing alone**, all three: a request that writes a register, one
-///    whose mirror read is stamped, and one whose mirror read carries a value.
-///    The third is the one an earlier rebuild dropped while restoring the other
-///    two, because the headline defect named only the timestamp.
+/// 1. **A request with no invocation**, at block level. The invocation's row is
+///    switched off, so its answer tuple is not written and the request's read
+///    of it matches nothing. `MemoryArgument`, and that check reads every
+///    shard's roots at once, which is why this twin needs the block.
+/// 2. **The same forgery with the anchor side repaired**, at block level: the
+///    orphaned request's mirror chained onto another request's write, the way
+///    it would chain if the timestamp zeroing were not there. Still
+///    `MemoryArgument` — and *why* is the point. Switching an invocation off
+///    drops its 50 RAM frame accesses with it, so the word at `base + 4j` loses
+///    a write that the next invocation's `read_ts` still names. Repairing the
+///    anchor does not repair that, and repairing *that* means re-pointing the
+///    next invocation's 50 reads, re-deriving its 1,600 state bits and
+///    re-running the permutation — which is proving the execution, not eliding
+///    it. So in this family the chain cannot be mounted by editing cells at
+///    all, and the multiset is what says so.
+/// 3. **Each zeroing alone**, all three, at **shard** level so the gate is the
+///    first failure and not the multiset: a request that writes a register, one
+///    whose mirror read is stamped, and one whose mirror read carries a value,
+///    each `Constraint`. This is the direct evidence that the gates are
+///    load-bearing: they make the pairing 1:1 **locally**, without leaning on
+///    the RAM side of twin 2. The third is the one an earlier rebuild dropped
+///    while restoring the other two, because the headline defect named only the
+///    timestamp.
 ///
 /// The control is the pair the zeroings leave free — the mirror's write value
-/// and the invocation's teardown value, moved together — which must still
-/// verify, or the twins above would prove nothing about *which* cell matters.
+/// and the invocation's teardown value, moved **together** — which must still
+/// verify as a block, or the twins above would prove nothing about *which*
+/// cell matters.
 pub fn assert_anchor_twins_refused(h: &TamperHarness, t: &AnchorTwins) {
     let (rf, rs) = t.requester;
     let (df, ds) = t.delegation;
@@ -310,7 +325,8 @@ pub fn assert_anchor_twins_refused(h: &TamperHarness, t: &AnchorTwins) {
     );
 
     // 2: and the orphan chains onto another request's write instead, which is
-    // exactly what a missing timestamp zeroing would let it do.
+    // what a missing timestamp zeroing would let it do. The anchor side is then
+    // consistent and the RAM side is not, so the multiset still refuses it.
     let other_ts = cell(t.cycle, t.other_request) * Fr::from_u64(constants::memory::TS_STEP)
         + Fr::from_u64(constants::delegation::ANCHOR_DELTA);
     h.assert_block_rejects(
@@ -325,10 +341,14 @@ pub fn assert_anchor_twins_refused(h: &TamperHarness, t: &AnchorTwins) {
             ],
             ..Tamper::default()
         },
-        VerifyError::Constraint { layer: 0 },
+        VerifyError::MemoryArgument(""),
     );
 
-    // 3: each zeroing on its own.
+    // 3: each zeroing on its own, at shard level, where `Constraint` precedes
+    // `MemoryArgument` and the gate is therefore the answer. Each of these
+    // unbalances the multiset too — a stamped mirror read matches no write —
+    // so at block level all three would read `MemoryArgument` and say nothing
+    // about the gates.
     for (what, address) in [
         ("a request that writes a register", t.rd_selected),
         ("a mirror read with a timestamp", t.mirror_read_ts),
@@ -338,7 +358,7 @@ pub fn assert_anchor_twins_refused(h: &TamperHarness, t: &AnchorTwins) {
             cells: vec![request(address, Fr::ONE)],
             ..Tamper::default()
         };
-        match h.run_block(&tamper) {
+        match h.run(&tamper, t.requester) {
             Err(VerifyError::Constraint { .. }) => {}
             other => panic!("{what} was not refused by a gate: {other:?}"),
         }

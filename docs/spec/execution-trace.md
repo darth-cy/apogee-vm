@@ -1,7 +1,9 @@
 # The execution trace
 
 Frozen at S12. S14 amended §4, §6 and §9 for the halting sentinel and the register and
-PC boundary of `docs/spec/memory.md` §4–§5.
+PC boundary of `docs/spec/memory.md` §4–§5. S21 appended the eighth role, `delegate`, and
+a delegation call's row and its invocation's frame (§4, §6, §7;
+`docs/spec/delegation.md` §4.1 and §5.1).
 
 **This document is the timestamp convention**: what every memory query
 of an execution is, when it happens, and in what order the trace records it. S14's
@@ -75,6 +77,7 @@ form has, whatever register it names** — `x0` included — and for none it lac
 | AMOs | `rs1` | `rs2` | the word, rewritten to `op(old, rs2)`; `rd` ← `old` |
 | `fence` | | | |
 | an ecall's own row | `a7` | its arguments | `a0` ← the result |
+| a **delegation** request's row | `a7` | `a0`, the frame base | `a0` ← 0; and `delegate`, the mirror query |
 | an ecall transfer | | | the word |
 
 `ebreak` has no row: it is a fatal guest error. The atomics family is the one that fills
@@ -107,6 +110,7 @@ pc that ends there ended on an exit row.
 | `WRITE` 64 | `a0` fd, `a1` buf, `a2` count | `count`; `-EBADF` for a descriptor other than 1 and 2 |
 | `EXIT` 93 | `a0` status | the status, unchanged; `next_pc` is `HALT_PC`, and execution stops after this row |
 | `PRECOMPILE_POSEIDON2` 0x500 | `a0` state pointer | `-ENOSYS` until its circuit exists; the row already has the frame it will keep |
+| a **delegation** number | `a0`, the frame base | 0, and the row carries its mirror query; `-ENOSYS` on an executor without the circuit |
 | anything else | none | `-ENOSYS` |
 
 The three slot-2 reads sit at distinct registers, which is what lets them share the
@@ -137,12 +141,20 @@ query per role present, in this frozen order**:
 | `load` | 2 | RAM | a load's word |
 | `ram` | 3 | RAM | a store's, an atomic's or a transfer's word |
 | `rd` | 3 | REG | `rd`; an ecall row's `a0` result |
+| `delegate` | 3 | the delegation family's own | a delegation request's mirror query, at the frame base it handed over |
 
 The rule underneath is **by slot, then by role number**, and every role today is
 numbered in slot order, so it is exactly the table's order and the log is ordered by
 timestamp. A role appended later — an ecall's `a3`, say — keeps its new number and takes
-its place in a cycle by its slot, so appending one renumbers nothing. The `present` mask
-is a `u8` with one bit to spare; a ninth role widens it, which is a schema change.
+its place in a cycle by its slot, so appending one renumbers nothing. S21's `delegate` is
+the eighth and it took the last bit: **the `present` mask is a full `u8` now**, and a
+ninth role widens it, which is a schema change.
+
+A **delegation invocation's** frame accesses are not roles and are not this row's: they
+ride the requesting cycle at `constants::delegation::FRAME_DELTA`, which is 0, so they
+follow the pc query and precede the roles, and they belong to the delegation family's own
+row (`docs/spec/delegation.md` §4.1). `(RAM, 0)` is a pair no role has, which is how
+`trace`'s frame builder tells them apart.
 
 The atomics family keeps its RAM query at slot 3 for every instruction it owns, `lr.w`
 included, though `lr.w` has no `rs2` and a load puts its word at slot 2: one family, one

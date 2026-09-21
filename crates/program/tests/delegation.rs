@@ -214,6 +214,36 @@ fn every_guest_declares_exactly_what_it_links() {
     assert!(common::GUESTS.len() > common::DECLARING_GUESTS.len() + 4);
 }
 
+/// Reachability survives `opt-level = 3`, which is the half of acceptance 8
+/// the committed fixtures cannot show: they are built at `debug`.
+///
+/// This is the regression the `core::hint::black_box` in
+/// `guest_sdk::delegation_number` exists for. Without it LLVM folds the
+/// record's number into an immediate, the record becomes unreferenced, and
+/// `keccak-test` declares **nothing** at `--release` while declaring
+/// `KECCAK_F` at `--debug` — a guest whose provable family set depends on its
+/// optimisation level. `fib` is the control in the other direction: it links
+/// the same SDK object file and must declare nothing at either level, which is
+/// what `#[used]` would break.
+///
+/// `#[ignore]`d because it builds two guests from source into fresh target
+/// directories; run it with `--ignored`.
+#[test]
+#[ignore = "builds two guests from source at both optimisation levels"]
+fn reachability_survives_the_optimiser() {
+    for profile in ["debug", "release"] {
+        for (name, want) in [("keccak-test", vec![family::KECCAK_F]), ("fib", Vec::new())] {
+            let bytes = common::build_profile(name, &format!("deleg-{profile}"), profile);
+            let image = loader::load_elf(&bytes).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            assert_eq!(
+                declared_delegations(&image),
+                Ok(want.clone()),
+                "{name} at {profile} declares the wrong set"
+            );
+        }
+    }
+}
+
 /// A declared family is in the `VmConfig` **last**, after the two window
 /// families, and carries a table with no columns — it is invoked, never
 /// decoded.

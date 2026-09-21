@@ -211,12 +211,7 @@ fn quadratic(
 /// literal 0 — the stamp no ordinary cycle can produce — and `Some` otherwise,
 /// carrying either a column read or `4·cycle + 3`. `value` is `None` for the
 /// answer tuple too, whose value is the literal 0.
-fn leaf(
-    space: u8,
-    addr: PolyAddress,
-    ts: Timestamp,
-    value: Option<PolyAddress>,
-) -> GateDef {
+fn leaf(space: u8, addr: PolyAddress, ts: Timestamp, value: Option<PolyAddress>) -> GateDef {
     let mut linear = vec![
         (slot(challenge_slot::MEM_GAMMA), LIVE),
         (neg(1), LIVE),
@@ -537,17 +532,11 @@ fn list0_enforcing() -> Vec<(String, GateDef)> {
     }
     for j in 0..k::FRAME_WORDS {
         for i in 0..GAP_BITS {
-            out.push((
-                format!("gap{j}_{i}_boolean"),
-                booleanity(gap_bit(j, i)),
-            ));
+            out.push((format!("gap{j}_{i}_boolean"), booleanity(gap_bit(j, i))));
         }
     }
     for i in 0..BASE_LOW_BITS {
-        out.push((
-            format!("base_low{i}_boolean"),
-            booleanity(base_low_bit(i)),
-        ));
+        out.push((format!("base_low{i}_boolean"), booleanity(base_low_bit(i))));
     }
     for i in 0..BASE_ROOM_BITS {
         out.push((
@@ -561,10 +550,7 @@ fn list0_enforcing() -> Vec<(String, GateDef)> {
             format!("addr_w{j}"),
             quadratic(
                 vec![(neg(4 * j as u64), LIVE)],
-                vec![
-                    (lit(1), LIVE, word(j, WORD_ADDR)),
-                    (neg(1), LIVE, BASE),
-                ],
+                vec![(lit(1), LIVE, word(j, WORD_ADDR)), (neg(1), LIVE, BASE)],
             ),
         ));
     }
@@ -618,10 +604,7 @@ fn list0_enforcing() -> Vec<(String, GateDef)> {
     }
     out.push((
         "base_aligned".to_string(),
-        quadratic(
-            vec![(neg(guest_memory::RAM_ORIGIN as u64), LIVE)],
-            low,
-        ),
+        quadratic(vec![(neg(guest_memory::RAM_ORIGIN as u64), LIVE)], low),
     ));
     let top = (1u64 << 31) - k::STATE_BYTES as u64;
     let mut room = vec![(neg(1), LIVE, BASE)];
@@ -698,10 +681,7 @@ fn round_sub(r: usize, sub: usize) -> Vec<(String, GateDef)> {
                     let i = k::LANE_BITS * x + z;
                     out.push((
                         name("c", i),
-                        xor(
-                            kec(read, i),
-                            kec(read, 5 * k::LANE_BITS + bit(x, 4, z)),
-                        ),
+                        xor(kec(read, i), kec(read, 5 * k::LANE_BITS + bit(x, 4, z))),
                     ));
                 }
             }
@@ -719,10 +699,7 @@ fn round_sub(r: usize, sub: usize) -> Vec<(String, GateDef)> {
                         let c = k::LANE_BITS * ((x + 4) % 5) + z;
                         out.push((
                             name("u", bit(x, y, z)),
-                            xor(
-                                kec(read, 5 * k::LANE_BITS + bit(x, y, z)),
-                                kec(read, c),
-                            ),
+                            xor(kec(read, 5 * k::LANE_BITS + bit(x, y, z)), kec(read, c)),
                         ));
                     }
                 }
@@ -737,14 +714,11 @@ fn round_sub(r: usize, sub: usize) -> Vec<(String, GateDef)> {
             for y in 0..5 {
                 for x in 0..5 {
                     for z in 0..k::LANE_BITS {
-                        let c = k::LANE_BITS * ((x + 1) % 5)
-                            + (z + k::LANE_BITS - 1) % k::LANE_BITS;
+                        let c =
+                            k::LANE_BITS * ((x + 1) % 5) + (z + k::LANE_BITS - 1) % k::LANE_BITS;
                         out.push((
                             name("b", bit(x, y, z)),
-                            xor(
-                                kec(read, bit(x, y, z)),
-                                kec(read, k::STATE_BITS + c),
-                            ),
+                            xor(kec(read, bit(x, y, z)), kec(read, k::STATE_BITS + c)),
                         ));
                     }
                 }
@@ -790,15 +764,10 @@ fn round_sub(r: usize, sub: usize) -> Vec<(String, GateDef)> {
                         let two = bit((big_x + 2) % 5, big_y, big_z);
                         let bp = |i: usize| kec(read, k::STATE_BITS + i);
                         let v = kec(read, here);
-                        let mut linear =
-                            vec![(lit(1), bp(here)), (lit(1), bp(two)), (neg(1), v)];
-                        let mut products =
-                            vec![(neg(2), bp(here), bp(two)), (lit(2), bp(here), v)];
+                        let mut linear = vec![(lit(1), bp(here)), (lit(1), bp(two)), (neg(1), v)];
+                        let mut products = vec![(neg(2), bp(here), bp(two)), (lit(2), bp(here), v)];
                         let mut constant = lit(0);
-                        if big_x == 0
-                            && big_y == 0
-                            && (k::ROUND_CONSTANTS[r] >> big_z) & 1 == 1
-                        {
+                        if big_x == 0 && big_y == 0 && (k::ROUND_CONSTANTS[r] >> big_z) & 1 == 1 {
                             // `g ⊕ 1 = 1 − g`: negate the gate and add one.
                             for t in linear.iter_mut() {
                                 t.0 = negate(t.0);
@@ -876,10 +845,7 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
         if layer < ROUND_LAYERS {
             producing.push((format!("live_{}", layer + 1), copy(carry(layer, 0))));
             for j in 0..k::FRAME_WORDS {
-                producing.push((
-                    format!("wv{j}_{}", layer + 1),
-                    copy(carry(layer, 1 + j)),
-                ));
+                producing.push((format!("wv{j}_{}", layer + 1), copy(carry(layer, 1 + j))));
             }
         }
         let enforcing = if layer == ROUND_LAYERS {

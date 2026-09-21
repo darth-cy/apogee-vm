@@ -7,7 +7,7 @@ mod common;
 use std::collections::BTreeSet;
 
 use common::{instr_at, traced, TRACED};
-use constants::{ecall, family, guest_memory, memory};
+use constants::{delegation, ecall, family, guest_memory, memory};
 use emulator::trace_run;
 use isa::Instr;
 use program::row_kind;
@@ -385,6 +385,14 @@ fn frame(instr: &Instr, row: &Row) -> u8 {
         Ecall => match row.queries[Rs1 as usize].read_value {
             ecall::READ | ecall::WRITE => roles(&[Rs1, Rs2, Arg1, Arg2, Rd]),
             ecall::EXIT | ecall::PRECOMPILE_POSEIDON2 => roles(&[Rs1, Rs2, Rd]),
+            // A delegation call reads its frame base from `a0` and carries the
+            // mirror query besides, at slot 3 in the delegation family's own
+            // address space (`docs/spec/delegation.md` §5.1). Asked of the
+            // registry rather than of a number spelled here, because the
+            // registry is where a delegation's number lives. No guest traced
+            // here makes one — `guests/keccak-test` is the one that does — so
+            // this arm is the restated frame and not coverage of it.
+            n if program::delegation_family(n).is_some() => roles(&[Rs1, Rs2, Rd, Delegate]),
             _ => roles(&[Rs1, Rd]),
         },
         Ebreak => panic!("an ebreak has no row"),
@@ -617,12 +625,22 @@ fn an_ecall_s_transfers_precede_it_one_word_each() {
 /// The buffers carry everything the log does: rebuilt from the rows alone,
 /// in cycle order, the log comes back event for event — the pc query's read
 /// timestamp included, which a row does not store because it is always the
-/// previous cycle's.
+/// previous cycle's. No guest here delegates, so every event is some row's:
+/// an invocation's frame words are logged too, but they ride the requesting
+/// cycle and live in a `DelegationTrace`, never in a `Row`
+/// (`docs/spec/delegation.md` §4.1).
 #[test]
 fn the_rows_rebuild_the_log_exactly() {
-    // Each role's slot, restated from `docs/spec/execution-trace.md` §7
-    // rather than read from `Role::delta`, which is what is under test.
-    const SLOT: [u64; 7] = [1, 2, 2, 2, 2, 3, 3];
+    // Each role's slot, restated from `docs/spec/execution-trace.md` §7 — and,
+    // for the eighth, from `docs/spec/delegation.md` §5.1, the delegation
+    // request's mirror query — rather than read from `Role::delta`, which is
+    // what is under test.
+    const SLOT: [u64; 8] = [1, 2, 2, 2, 2, 3, 3, 3];
+    assert_eq!(
+        SLOT[Role::Delegate as usize],
+        delegation::ANCHOR_DELTA,
+        "the mirror query sits at the slot the invocation's answer is stamped at"
+    );
     for role in ROLES {
         assert_eq!(role.delta(), SLOT[role as usize], "{role:?}");
     }
@@ -700,8 +718,11 @@ fn the_final_state_is_the_last_write_of_every_address() {
 
 /// `docs/spec/memory.md` §3.4: `ZERO_WINDOWS`' shard list is the RAM windows
 /// above 0 the log touches. fib's stack sits just below `2^31`, in the last
-/// window `2^29 / h - 1` at every height, and all else it touches is in
-/// window 0.
+/// window `2^29 / h - 1` at every height, and at each of these three all else
+/// it touches is in window 0 — not at the menu's `2^8`, which S21 added for
+/// the keccak delegation family and where a window is 1 KiB, small enough that
+/// fib's own image reaches past window 0. The test below holds `init_windows`
+/// to the whole menu at every guest.
 #[test]
 fn fib_touches_only_the_image_window_and_the_stack_window() {
     let t = traced("fib");
@@ -766,7 +787,8 @@ fn the_window_list_is_exactly_the_touched_windows_above_zero() {
 /// `cover_ecall` makes one call of each kind at its edge, in this order; every
 /// guest ends in `exit(0)` — `addsub` in `exit(42)` and `control` in
 /// `exit(16)`, their results; and every
-/// call anywhere is a `read`, a `write`, an `exit`, or answered `-ENOSYS`.
+/// call anywhere is a `read`, a `write`, an `exit`, a delegation answered 0
+/// (`docs/spec/delegation.md` §2), or answered `-ENOSYS`.
 #[test]
 fn every_ecall_answers_as_the_abi_says() {
     let neg = |errno: u32| errno.wrapping_neg();
@@ -802,6 +824,12 @@ fn every_ecall_answers_as_the_abi_says() {
                     "{name}: write({fd}, _, {count}) = {result:#x}"
                 ),
                 ecall::EXIT => assert_eq!(result, fd, "{name}: exit writes back its status"),
+                // An executor that has the circuit answers a delegation 0; one
+                // without it answers `-ENOSYS`, which is what sends the shim
+                // down its software path. No guest here calls one.
+                n if program::delegation_family(n).is_some() => {
+                    assert_eq!(result, 0, "{name}: delegation {number:#x}")
+                }
                 _ => assert_eq!(result, neg(ecall::ENOSYS), "{name}: ecall {number:#x}"),
             }
         }

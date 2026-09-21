@@ -1,6 +1,8 @@
 # The memory argument: tuples, RAM windows, the register and PC boundary
 
-Frozen as of S14. Changing anything here is a protocol-version change.
+Frozen as of S14. Changing anything here is a protocol-version change. S21 appended the ninth
+query — `deleg`, a delegation request's mirror (§2.1) — and a new address space above RAM's;
+`docs/spec/delegation.md` is normative for both, and nothing else on this page moved.
 
 This page is the global memory argument of `prompts/00-master.md`, as the repository owner
 decided it at S14: RAM initialization and teardown in fixed **RAM windows**, the register and
@@ -62,15 +64,20 @@ materialized layer the first halving list reads.
 ### 2.1 The frame columns
 
 Every execution family's memory-argument columns follow one layout, built by
-`trace::build_memory_columns`. A row is one cycle. The **query table** has eight entries:
-query 0 is the pc query, queries 1–7 are the roles of `execution-trace.md` §7 in their frozen
-order.
+`trace::build_memory_columns`. A row is one cycle. The **query table** has **nine** entries
+since S21: query 0 is the pc query, queries 1–8 are the roles of `execution-trace.md` §7 in
+their frozen order.
 
-| query `q` | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| what | pc | `rs1` | `rs2` | `arg1` | `arg2` | `load` | `ram` | `rd` |
-| `AS` | PC | REG | REG | REG | REG | RAM | RAM | REG |
-| `Δ` | 0 | 1 | 2 | 2 | 2 | 2 | 3 | 3 |
+| query `q` | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| what | pc | `rs1` | `rs2` | `arg1` | `arg2` | `load` | `ram` | `rd` | `deleg` |
+| `AS` | PC | REG | REG | REG | REG | RAM | RAM | REG | the delegation family's own |
+| `Δ` | 0 | 1 | 2 | 2 | 2 | 2 | 3 | 3 | 3 |
+
+`deleg` is a **delegation request's mirror query** (`docs/spec/delegation.md` §5.1), in the
+address space of the family it calls — `DELEGATION_KECCAK_F = 4` for S21's one family — at the
+frame base the request read from `a0`. It is the eighth role and took `trace::Row::present`'s
+last spare bit.
 
 **A family's frame holds a subset of that table, not all of it**: every query an instruction
 routed to it can make, and no other. The subsets are frozen in
@@ -79,7 +86,7 @@ routed to it can make, and no other. The subsets are frozen in
 
 | family | queries | `w` | `M` | `W` | leaves a side | obligations |
 | --- | --- | --- | --- | --- | --- | --- |
-| `ADD_SUB_LUI_AUIPC` | pc `rs1` `rs2` `arg1` `arg2` `ram` `rd` | 7 | 36 | 10 | 8 | 14 |
+| `ADD_SUB_LUI_AUIPC` | pc `rs1` `rs2` `arg1` `arg2` `ram` `rd` `deleg` | 8 | 41 | 11 | 8 | 16 |
 | `JUMP_BRANCH_SLT` | pc `rs1` `rs2` `rd` | 4 | 21 | 7 | 4 | 8 |
 | `SHIFT_BITWISE` | pc `rs1` `rs2` `rd` | 4 | 21 | 7 | 4 | 8 |
 | `MUL_DIV` | pc `rs1` `rs2` `rd` | 4 | 21 | 7 | 4 | 8 |
@@ -87,10 +94,19 @@ routed to it can make, and no other. The subsets are frozen in
 | `MEM_SUBWORD` | pc `rs1` `rs2` `load` `ram` `rd` | 6 | 31 | 9 | 8 | 12 |
 | `ATOMICS` | pc `rs1` `rs2` `ram` `rd` | 5 | 26 | 8 | 8 | 10 |
 
-`arg1` and `arg2` are read by an ecall's own row alone, and `load` is a load's word at slot 2,
-so no family holds all eight: the table above is a union no family reaches. The A extension
-keeps its RAM query at slot 3 for every instruction it owns, `lr.w` included
-(`execution-trace.md` §7), so `ATOMICS` has no `load`.
+`arg1`, `arg2` and `deleg` are an ecall row's alone, and `load` is a load's word at slot 2, so
+no family holds all nine: the table above is a union no family reaches. The A extension keeps
+its RAM query at slot 3 for every instruction it owns, `lr.w` included
+(`execution-trace.md` §7), so `ATOMICS` has no `load`. **`ADD_SUB_LUI_AUIPC`'s eight is a power
+of two**, so its two product trees carry no pad leaf — the only family of which that is true —
+and its sixteen gap obligations, with the table fraction, make seventeen `TIMESTAMP` leaves,
+which pads to 32 and costs the circuit one row-wise gate list
+(`docs/spec/constraint-manifest.md` §3.6).
+
+**A delegation family has no frame and is not in this table.** Its rows are invocations, not
+cycles, and its memory columns are 50 fixed-offset words plus an anchor rather than a subset of
+the query table; `frame_queries` panics on it by name. `docs/spec/delegation.md` §4 and §6 are
+its layout, and `docs/spec/constraint-manifest.md` §12 the accounting.
 
 A **slot** `s` is a position in the family's list, and the columns are addressed by slot:
 
@@ -208,8 +224,9 @@ layer is `[read row product, write row product]`. Then `trace_vars` halving list
 Every list multiplies exactly two children per output, and every gate is degree ≤ 2.
 
 At the seven families' widths that is `2s = 8` leaves for the three 4-query families and 16
-for every other, the widest frame — `ADD_SUB_LUI_AUIPC`, `w = 7` — being the one that sets
-the 16.
+for every other. **`ADD_SUB_LUI_AUIPC`, the widest, is the only one where `s = w`**: its
+eight queries fill an eight-leaf tree exactly, so since S21 it carries no pad leaf. It was
+`w = 7` and one pad a side until the `deleg` query.
 
 ### 2.4 The gadgets every execution family carries
 
@@ -655,8 +672,8 @@ against identity's `cm(image column)` (§6.2).
   against `cm(image column)`;
 - the zero-root refusal.
 
-**Status at S16.** Discharged: the frame superset rule, which the add/sub family's
-seven-query frame meets; the masks and the sentinel for that family (§2.1, §5); the global
+**Status at S16.** Discharged: the frame superset rule, which the add/sub family's frame meets
+— seven queries then, eight since S21; the masks and the sentinel for that family (§2.1, §5); the global
 transcript and the boundary decoder; the key's identity recomputation and the opening of
 `S[0]`; and the zero-root refusal, which is `reconciles`' nonzero half and which step 10 of
 `verify_shard` runs. Still owed at S16: the masks and the sentinel for every other family,
@@ -680,6 +697,17 @@ no witness; `half_aligned` clears bit 0 at halfword width; and `ATOMICS` derives
 discharged** but the I/O-binding stage's transfer rows.
 
 S20 reconciles every shard.
+
+**Status at S21.** The delegation families ride this argument and add nothing to it. An
+invocation's 50 frame accesses are ordinary `(RAM, base + 4j)` tuples with ordinary gap bounds,
+and its anchor pair lives in an address space of its own, above RAM's, whose only writer is an
+invocation and whose only reader is a request's `deleg` query. So a delegation shard's two roots
+enter `reconciles`' product exactly as a CPU shard's do, the boundary factors are unchanged, and
+**no new global rule exists**: what makes a request and an invocation pair 1:1 is a timestamp-0
+tuple that no cycle can write and three gates that pin the read side
+(`docs/spec/delegation.md` §5.3). The one thing scoped away from delegation families is the
+block's ts-window disjointness, which is per **cycle-owning** family and always was
+(`docs/spec/block-proof.md` §4).
 
 **Cost** at `h = 2^22`: at least two window shards per proof (window 0 and the stack window),
 `2^23` leaf pairs and four committed `2^22`-entry columns, even for fib's 2,117 cycles; each

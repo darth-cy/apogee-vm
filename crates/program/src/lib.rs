@@ -596,8 +596,11 @@ fn narrowest(values: Vec<u32>) -> PolyBacking {
 /// declaration; a user flag never adds or removes one.
 pub fn declared_delegations(image: &ProgramImage) -> Result<Vec<FamilyId>, ProgramError> {
     let mut found: Vec<FamilyId> = Vec::new();
-    let mut segments: Vec<&loader::Segment> =
-        image.segments.iter().filter(|s| !s.bytes.is_empty()).collect();
+    let mut segments: Vec<&loader::Segment> = image
+        .segments
+        .iter()
+        .filter(|s| !s.bytes.is_empty())
+        .collect();
     segments.sort_by_key(|s| s.vaddr);
     for segment in segments {
         let bytes = &segment.bytes;

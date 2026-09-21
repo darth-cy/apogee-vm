@@ -215,8 +215,36 @@ The weight is what keeps two checks from cancelling each other's errors.
 except for the global memory argument.
 
 **Family** — a circuit family: one arithmetization shape (its own gates, columns and
-height) covering a set of program counters. The family set for a program is derived by
-the preprocessor and recorded in `VmConfig`.
+height). An *execution* family covers a set of program counters; a *window* family covers
+a slice of RAM; a *delegation* family covers a function, and covers no pc at all. The family
+set for a program is derived by the preprocessor and recorded in `VmConfig`.
+
+**Delegation family** — a family that is **invoked, not decoded**: a row is one call of a
+fixed function, not one cycle. It claims no pc, has no decoded table and no row kind, owns
+no cycle, carries no lookup channel, and is in a `VmConfig` exactly when the linked binary
+**declares** it. S21's `KECCAK_F` is the first, one keccak-f[1600] permutation a row at
+`2^8` rows. `docs/spec/delegation.md`.
+
+**Delegation request** — the CPU-side row of a delegation call: an ecall whose `a7` is the
+family's number and whose `a0` is the **frame base**, a pointer to the bytes the function
+reads and rewrites. It writes 0 into `a0`, falls through to `pc + 4`, and carries one extra
+memory query — the **mirror** — which is its half of the anchor.
+
+**Anchor** — the pair of memory tuples that ties a request to its invocation, in an address
+space of the delegation family's own. The invocation writes an **answer tuple** stamped
+timestamp 0 — the stamp no cycle can produce, cycles being numbered from 1 — and the
+request reads exactly that, which makes the pairing 1:1 over the one global multiset. Three
+gates pin the request's side (it writes no register; its mirror read is stamped 0 and
+valued 0); the fourth field, the value the request writes back, is **free on both sides** and
+balances only when the two agree. `docs/spec/delegation.md` §5.
+
+**Static detachment** — how a family no pc claims gets into a `VmConfig`: the SDK shim emits
+a twelve-byte **declaration record** into `.rodata`, referenced by the shim and by nothing
+else, so the linker keeps it exactly when the shim is linked, and the preprocessor finds it
+by a byte-wise scan of the image. Reachability, not `#[used]` — which would put the record
+in every guest that links the SDK — and `core::hint::black_box` on the read, without which
+`opt-level = 3` folds the number into an immediate and drops the record.
+`docs/spec/delegation.md` §7.
 
 **Transcript** — the Poseidon2 duplex sponge every challenge is drawn from. Two layers:
 the *raw duplex* (`observe`/`sample`) and the *typed layer* (`append_*`/
@@ -242,7 +270,8 @@ challenge stream exactly. The unit of master rule 9's archivable phase boundarie
 
 **Precompile** — a deterministic function of guest memory, dispatched by an ecall in
 `0x0500..=0x05FF` with pointer arguments. A delegation circuit proves exactly that
-function. Distinct from a **zkVM host call** (`0x0400..=0x04FF`), whose result is
+function; on an executor without the circuit the same number answers `-ENOSYS` and the
+SDK's shim runs a software fallback behind the **same frozen signature**, bit for bit. Distinct from a **zkVM host call** (`0x0400..=0x04FF`), whose result is
 nondeterministic prover advice. The two ranges are separate so a reviewer can tell them
 apart at a glance.
 
@@ -478,14 +507,15 @@ execution's 38-bit clock its rows **write in** — from its row-0 pc write to on
 last row's last slot. Its rows' *reads* reach back before it, as a memory read always
 may. Absorbed into the shard transcript right after the seed triple. A block checks that the windows of each **cycle-owning** family are
 non-empty, ordered and pairwise disjoint; a family whose rows are RAM words rather than
-cycles is exempt, and so are the delegation families to come. **It is a check on the
+cycles is exempt, and so is a delegation family — whose window is a *sub-interval* of the
+requesting family's, since an invocation rides the cycle that asked for it. **It is a check on the
 plan, not on the trace**: no gate ties a claimed window to the rows committed under it,
 and cross-shard ordering, cycle uniqueness and pc continuity are carried by the global
 memory multiset alone. `docs/spec/block-proof.md` §4.
 
 **Cycle-owning** — a family whose rows are execution cycles, `constants::family::CYCLE_OWNING`:
 the seven instruction families. `INIT_TEARDOWN` and `ZERO_WINDOWS` own addresses instead,
-and the delegation families own invocations. Only cycle-owning families' shards partition
+and a delegation family owns invocations. Only cycle-owning families' shards partition
 an execution in time.
 
 **Transcript tape** — one line per typed transcript message, in order:

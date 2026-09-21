@@ -27,6 +27,7 @@
 //! | `memory`  | `crates/constraints/tests/vectors/{memory_frame,image_window,zero_window}.bin` (S14's memory artifacts) |
 //! | `lookup`  | `crates/constraints/tests/vectors/lookup_toy.bin` (S15's combined toy) |
 //! | `family`  | `crates/constraints/tests/vectors/{add_sub,jump_branch_slt}.bin` (S16's and S17's family circuits) |
+//! | `keccak`  | `crates/constraints/tests/vectors/keccak.txt` (S21's delegation circuit, by digest: the artifact is 100 MB) |
 //! | `guests`  | the guest ELFs themselves -- opt-in only, see `DEFAULT_GROUPS` |
 
 use std::fs;
@@ -40,6 +41,7 @@ mod field;
 mod gkr;
 mod guests;
 mod isa;
+mod keccak;
 mod loader;
 mod lookup;
 mod memory;
@@ -54,7 +56,7 @@ mod tape;
 mod tower;
 
 /// Every group, in the order a reader of the tower would meet them.
-const GROUPS: [(&str, fn()); 17] = [
+const GROUPS: [(&str, fn()); 18] = [
     ("field", field::generate),
     ("poly", poly::generate),
     ("curve", curve::generate),
@@ -70,6 +72,7 @@ const GROUPS: [(&str, fn()); 17] = [
     ("memory", memory::generate),
     ("lookup", lookup::generate),
     ("family", family::generate),
+    ("keccak", keccak::generate),
     ("tape", tape::generate),
     ("guests", guests::generate),
 ];
@@ -87,9 +90,9 @@ const GROUPS: [(&str, fn()); 17] = [
 /// one machine, with `cargo run -p kat-gen -- guests`, and everything CI can
 /// reproduce from them -- the objdump and nm listings -- is in `loader`, which
 /// does run by default.
-const DEFAULT_GROUPS: [&str; 16] = [
+const DEFAULT_GROUPS: [&str; 17] = [
     "field", "poly", "curve", "tower", "pairing", "msm", "srs", "pcs", "loader", "isa", "program",
-    "gkr", "memory", "lookup", "family", "tape",
+    "gkr", "memory", "lookup", "family", "keccak", "tape",
 ];
 
 fn main() {

@@ -95,7 +95,11 @@ fn a_frame_word_is_its_lane_half() {
     let words = words_of(&lanes);
     for (i, lane) in lanes.iter().enumerate() {
         assert_eq!(words[2 * i], *lane as u32, "lane {i}'s low half");
-        assert_eq!(words[2 * i + 1], (*lane >> 32) as u32, "lane {i}'s high half");
+        assert_eq!(
+            words[2 * i + 1],
+            (*lane >> 32) as u32,
+            "lane {i}'s high half"
+        );
     }
 }
 

@@ -1,0 +1,5 @@
+# the KECCAK_F delegation family's circuit, by SHA-256 of `artifact(n).to_bytes()`
+# docs/spec/delegation.md is normative; docs/spec/constraint-manifest.md §12 is the accounting
+# the artifact itself is about 100 MB, so what is committed is its digest
+# n memory witness layers inner relations outputs bytes sha256
+8 204 3560 177 354762 358525 2 100254040 34698d0cfcf46a2c70075216af20b8eec2b0ec9709510d44380c7947fd14ab60

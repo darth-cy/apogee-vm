@@ -34,6 +34,17 @@ use crate::memory::{
 };
 use crate::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
 
+// The two ecall numbers this family proves are distinct and each in its ABI
+// range, so `ecall_is_exit` and `keccak_number` partition its ecall rows rather
+// than both holding on one (`docs/spec/delegation.md` §2). Neither gate spells
+// a number: each reads `constants::ecall`, the one place an ecall number lives.
+// A `const` assertion rather than a test, because a violation here is a
+// mis-numbered ABI and should not compile.
+const _: () = assert!(constants::ecall::EXIT != constants::ecall::PRECOMPILE_KECCAK_F);
+const _: () = assert!(constants::ecall::PRECOMPILE_KECCAK_F >= constants::ecall::PRECOMPILE_FIRST);
+const _: () = assert!(constants::ecall::PRECOMPILE_KECCAK_F <= constants::ecall::PRECOMPILE_LAST);
+const _: () = assert!(constants::ecall::EXIT < constants::ecall::ZKVM_IO_FIRST);
+
 /// The family's queries, in slot order: its frame is `memory::frame_queries`'
 /// list, and this file addresses its columns by these slots.
 const QUERIES: [usize; 8] = [PC, RS1, RS2, ARG1, ARG2, RAM, RD, DELEG];
@@ -345,10 +356,7 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     enforcing.push((
         "keccak_number".into(),
         quadratic(
-            vec![(
-                neg(constants::ecall::PRECOMPILE_KECCAK_F as u64),
-                IS_KECCAK,
-            )],
+            vec![(neg(constants::ecall::PRECOMPILE_KECCAK_F as u64), IS_KECCAK)],
             vec![(lit(1), IS_KECCAK, v_rs1)],
         ),
     ));

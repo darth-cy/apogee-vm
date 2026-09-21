@@ -49,9 +49,7 @@ fn column(values: Vec<u64>) -> MultilinearPoly {
 /// bits, each gap's 38 bits, and the frame pointer's two decompositions.
 fn witness(live: &[Invocation]) -> Vec<(PolyAddress, MultilinearPoly)> {
     assert!(live.len() <= ROWS);
-    let at = |r: usize, f: &dyn Fn(&Invocation) -> u64| -> u64 {
-        live.get(r).map_or(0, f)
-    };
+    let at = |r: usize, f: &dyn Fn(&Invocation) -> u64| -> u64 { live.get(r).map_or(0, f) };
     let mut out: Vec<(PolyAddress, MultilinearPoly)> = Vec::new();
     let mut push = |address: PolyAddress, f: &dyn Fn(&Invocation) -> u64| {
         out.push((address, column((0..ROWS).map(|r| at(r, f)).collect())));
@@ -299,7 +297,12 @@ fn a_corrupted_state_bit_is_caught() {
         1,
         Fr::from_u64(words[0] as u64 ^ 1),
     );
-    let flipped = corrupt(flipped, keccak::in_bit(0), 1, Fr::from_u64(1 ^ (words[0] as u64 & 1)));
+    let flipped = corrupt(
+        flipped,
+        keccak::in_bit(0),
+        1,
+        Fr::from_u64(1 ^ (words[0] as u64 & 1)),
+    );
     assert_eq!(refusal(&a, flipped), "output_w0");
 }
 

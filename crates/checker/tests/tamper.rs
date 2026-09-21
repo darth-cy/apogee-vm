@@ -60,12 +60,52 @@ use prover::{shard_columns, ProverSetup};
 use trace::{build_multiplicities, Role, TraceArchive};
 use verifier::VerifyError;
 
-const WIDTH: usize = 7;
+/// `ADD_SUB_LUI_AUIPC`'s frame width, and the **slot** of each query this file
+/// touches — a position in `frame_queries(ADD)`, never a query id.
+///
+/// S21 appended `deleg`, so the width is 8 and `rd`'s slot is still 6; a query
+/// inserted rather than appended would move every one of these silently, which
+/// is what `the_slot_constants_are_the_frames` below exists to catch. It runs
+/// in ordinary CI, unlike every proof test in this file.
+const WIDTH: usize = 8;
 const PC: usize = 0;
 const RS1: usize = 1;
 const RS2: usize = 2;
 const RAM: usize = 5;
 const RD: usize = 6;
+const DELEG: usize = 7;
+
+/// The slot constants above against the frozen frame, and the witness columns
+/// they index against the circuit's own names. No proof, so this is the one
+/// test in this file CI runs.
+#[test]
+fn the_slot_constants_are_the_frames() {
+    let queries = constraints::memory::frame_queries(ADD);
+    assert_eq!(queries.len(), WIDTH, "the add/sub frame is {WIDTH} queries");
+    use constraints::memory as m;
+    for (slot, id) in [
+        (PC, m::PC),
+        (RS1, m::RS1),
+        (RS2, m::RS2),
+        (RAM, m::RAM),
+        (RD, m::RD),
+        (DELEG, m::DELEG),
+    ] {
+        assert_eq!(queries[slot], id, "slot {slot}");
+    }
+    // And the x0 gadget's three columns, which follow the frame's gap chunks.
+    let a = &constraints::family_circuit(ADD, 20)
+        .expect("the add/sub circuit")
+        .artifact;
+    let name = |address: PolyAddress| match address {
+        PolyAddress::Witness(i) => a.witness[i as usize].clone(),
+        other => panic!("{other} is not a witness column"),
+    };
+    assert_eq!(name(rd_inv(WIDTH)), "rd_inv");
+    assert_eq!(name(rd_is_zero(WIDTH)), "rd_is_zero");
+    assert_eq!(name(rd_selected(WIDTH)), "rd_selected");
+    assert_eq!(name(gap_hi(DELEG)), "deleg_gap_hi");
+}
 
 const CONSTRAINT: VerifyError = VerifyError::Constraint { layer: 0 };
 const MEMORY: VerifyError = VerifyError::MemoryArgument("");
@@ -1045,12 +1085,14 @@ fn s21_a5_a6_the_delegation_witness_and_the_anchor_are_pinned() {
     let archive = common::keccak_archive(&setup.program);
     let h = TamperHarness::new(&setup, &archive);
 
-    // The structural counts. Eight shards, the delegation family's last, and
-    // its circuit's width: 204 memory columns — `cycle`, `live`, `base`,
-    // `anchor_value` and four a frame word — and 3,560 witness ones, the
-    // state's 1,600 bits, 38 gap bits a read, and the frame pointer's 60.
+    // The structural counts. Nine shards — six `2^20` execution ones, the two
+    // `2^16` windows and one `2^8` delegation shard — the delegation family's
+    // last, and its circuit's width: 204 memory columns (`cycle`, `live`,
+    // `base`, `anchor_value` and four a frame word) and 3,560 witness ones (the
+    // state's 1,600 bits, 38 gap bits a read, and the frame pointer's 60).
     let (public, proofs) = h.honest();
     let shards: Vec<(u32, u32)> = proofs.iter().map(|p| (p.family, p.shard_index)).collect();
+    assert_eq!(shards.len(), 9, "nine shards: {shards:?}");
     assert_eq!(shards.last(), Some(&(KEC, 0)));
     assert!(shards.contains(&(INIT, 0)) && shards.contains(&(ZERO, 0)));
     let a = &setup.vk.circuit(KEC).expect("a keccak circuit").artifact;
@@ -1127,15 +1169,29 @@ fn s21_a5_a6_the_delegation_witness_and_the_anchor_are_pinned() {
         CONSTRAINT,
     );
 
-    // The negative control: a padding row's cells, which every gate of the
-    // family gates off `live`. The permutation still runs there and its
-    // output word is still 0, which is exactly why `output_w{j}` is gated.
+    // The negative control: a padding row's cells that every gate of the family
+    // really does gate off `live` — a gap bit, whose `gap_w{j}` carries the
+    // mask on every product, and a frame-pointer headroom bit, whose
+    // `base_in_window` does too.
     h.assert_verifies(
         &tamper(vec![
-            keccak_cell(kec::in_bit(11), padding_row, Fr::ONE),
             keccak_cell(kec::gap_bit(5, 7), padding_row, Fr::ONE),
+            keccak_cell(kec::base_room_bit(3), padding_row, Fr::ONE),
         ]),
         (KEC, 0),
+    );
+    // And its other half, which is the sharper statement: **`in_bit` is not
+    // free on a padding row**, because `input_w{j}` is ungated. It does not
+    // need the mask on an honest row — every term is 0 there — but that also
+    // means a padding row's state bits are pinned to the words they recompose,
+    // which are 0. Setting bit 11 asks word 0 to be 2^11 and `input_w0`
+    // refuses it. The distinction matters: a reviewer reading "every gate is
+    // gated on live" would expect this cell to be free, and it is not
+    // (`docs/spec/constraint-manifest.md` §12.5, §12.10).
+    h.assert_rejects(
+        &tamper(vec![keccak_cell(kec::in_bit(11), padding_row, Fr::ONE)]),
+        (KEC, 0),
+        CONSTRAINT,
     );
 
     // Acceptance 6. The requesting rows are the add/sub family's delegation
@@ -1148,7 +1204,6 @@ fn s21_a5_a6_the_delegation_witness_and_the_anchor_are_pinned() {
             .1
             .get(row)
     };
-    const DELEG: usize = 7;
     let requests: Vec<usize> = (0..1 << common::ADD_VARS)
         .filter(|r| alu_at(frame(DELEG, FIELD_MASK), *r) == Fr::ONE)
         .collect();
@@ -1190,7 +1245,7 @@ fn s21_a5_a6_the_delegation_witness_and_the_anchor_are_pinned() {
             request: requests[0],
             invocation: paired,
             other_request: requests[1],
-            rd_selected: rd_selected(8),
+            rd_selected: rd_selected(WIDTH),
             cycle: CYCLE,
             mirror_read_ts: frame(DELEG, FIELD_READ_TS),
             mirror_read_value: frame(DELEG, FIELD_READ_VALUE),

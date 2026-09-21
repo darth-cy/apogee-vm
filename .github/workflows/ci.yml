@@ -132,30 +132,41 @@ jobs:
 
       # DEFERRED: cargo test -p prover --test acceptance -- --include-ignored --test-threads=1
       # DEFERRED: cargo test -p verifier --test cli -- --include-ignored --test-threads=1
-      # DEFERRED: cargo test -p checker --test tamper -- --include-ignored --test-threads=1
+      # DEFERRED: cargo test --release -p checker --test tamper -- --include-ignored --test-threads=1
       # Master rule 7, for S16's proving suites. Each proves `guests/addsub`'s
       # statement, whose add/sub shard is `2^20` rows -- the floor the
       # timestamp channel sets, so it cannot shrink -- and one statement's
       # proof peaks at 8.6 GB resident -- more in the tamper file, which
       # keeps the honest statement beside each re-proof -- so each file runs
       # single-threaded. Locally, on 18 cores, the three take 322 s, 20 s and,
-      # with S17's and S18's twins, 1103 s; the logup step above ran nine times
-      # slower on the runner than locally, which puts these at about 50, 3 and
-      # 160 minutes. The tamper file's peak is S19's statement's, 17.0 GB: five
-      # `2^20` execution shards with the honest statement held beside the
-      # re-proof. They run locally on every PR that touches the prover, the
-      # verifier, a family circuit or the memory and lookup arguments, and the
-      # handoff note records the result.
+      # with every stage's twins through S21, 2568 s; the logup step above ran
+      # nine times slower on the runner than locally, which puts these at about
+      # 50, 3 and 380 minutes. The tamper file's peak is 19.2 GB: a statement's
+      # proof with the honest one held beside it. They run locally on every PR
+      # that touches the prover, the verifier, a family circuit or the memory
+      # and lookup arguments, and the handoff note records the result.
       # The CI-sized halves -- the add/sub circuit row by row, the core's
       # statement, wire and load-rule suites, the signature pin -- run in the
       # `test` step on every push.
+      #
+      # Since S21 the file also carries the delegation anchor's twins over
+      # `guests/keccak-test`'s nine-shard block
+      # (`checker::assert_anchor_twins_refused`), and it runs at `--release`:
+      # a debug build of that block is not a reasonable gate. Those twins run
+      # at two levels on purpose. `verify_block` checks the memory argument
+      # before any shard's own gates, so a dropped invocation -- and the same
+      # forgery with its anchor side repaired -- is `MemoryArgument` there;
+      # the three request-side zeroings are asserted through `verify_shard`
+      # instead, where `Constraint` comes first and the gate is the answer.
+      # `docs/spec/delegation.md` §5.2 is why that distinction matters for
+      # S22 and S23.
       #
       # - name: S16's statement, proved and verified
       #   run: |
       #     cargo test -p prover --test acceptance -- --include-ignored --test-threads=1
       #     cargo test -p verifier --test cli -- --include-ignored --test-threads=1
       # - name: S16's tamper twins
-      #   run: cargo test -p checker --test tamper -- --include-ignored --test-threads=1
+      #   run: cargo test --release -p checker --test tamper -- --include-ignored --test-threads=1
 
       # DEFERRED: cargo test -p prover --test control -- --include-ignored --test-threads=1
       # Master rule 7, for S17's statement: `guests/control` proves one add/sub
@@ -226,9 +237,10 @@ jobs:
       # carrying a timestamp gap obligation can have, so a two-shard family is
       # two `2^20` shards whatever the guest. The file proves seven blocks --
       # the demo five times over, once of them on a single thread, and
-      # `guests/mem`'s five-family block once -- and takes 779 s locally on 18
-      # cores at a 33.4 GB peak (25.3 GB on an earlier run of the same file; the
-      # spread is `guests/mem`'s block, 32.3 GB on its own -- plan for 34), so it
+      # `guests/mem`'s five-family block once -- and takes 804 s locally on 18
+      # cores at a 38.0 GB peak (33.4 GB on another run of the same file, and
+      # 25.3 and 33.4 at S20: the spread is what the allocator happens to hold
+      # when the largest shard's forward pass runs -- plan for 38), so it
       # runs single-threaded. Its CI-sized halves
       # are `crates/verifier-core/tests/block.rs` (the record layout, the wire
       # forms, the structural rule and the window rule) and
@@ -237,6 +249,34 @@ jobs:
       #
       # - name: S20's block, proved and verified
       #   run: cargo test --release -p prover --test block -- --include-ignored --test-threads=1
+
+      # DEFERRED: cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1
+      # Master rule 7, for S21's acceptances 4 and 8, and **the heaviest suite
+      # in the repository**: 38.9 GB peak, 124 s locally on 18 cores, so it runs
+      # single-threaded. `guests/keccak-test` is nine shards -- six `2^20`
+      # execution shards, two `2^16` window shards and one `2^8` KECCAK_F shard
+      # -- and it is the delegation shard that costs, not the count: one keccak
+      # row is a whole keccak-f[1600] permutation, so the circuit is 354,762
+      # inner columns and its forward pass at 256 rows is about 2.9 GB before
+      # anything is committed (`docs/spec/delegation.md` §9). The second test in
+      # the file, `guests/keccak-unused`, proves eight shards: the same nine
+      # families, zero invocations, zero delegation shards.
+      #
+      # Its CI-sized halves are `crates/checker/tests/keccak.rs` (the circuit's
+      # forward pass against `emulator::keccak_f` at four rows, and ten negative
+      # controls each naming its gate), `crates/emulator/tests/keccak.rs`
+      # (`keccak_f` against `tiny-keccak` on all 1,600 single-bit states),
+      # `crates/emulator/tests/guests.rs` (the corpus digests re-derived from
+      # `tiny-keccak`, and both guests run) and
+      # `crates/program/tests/delegation.rs` (static detachment over every
+      # committed guest), all in the `test` step. The anchor's four tamper twins
+      # are in `crates/checker/tests/tamper.rs`, deferred with it.
+      #
+      # Measured: 2 passed, 130 s, 38.9 GB peak on its own and 33.5 GB inside a
+      # batch -- the same spread `block` above has, so plan for 39.
+      #
+      # - name: S21's block with a delegation shard, proved and verified
+      #   run: cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1
 
       # The crates the recursion guest links compile unchanged for the guest.
       - name: guest target builds

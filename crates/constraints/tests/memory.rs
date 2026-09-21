@@ -17,9 +17,9 @@ use constants::{address_space, challenge_slot, family, lookup_channel, memory};
 use constraints::memory::{
     check_memory, family_frame_artifact, frame, frame_artifact, frame_queries, gap_hi,
     image_window_artifact, rd_inv, rd_is_zero, rd_selected, read_tuple, zero_window_artifact, ARG1,
-    ARG2, CYCLE, DELEG, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE,
-    FIELD_WRITE_VALUE, FRAME_DELTA, FRAME_NAMES, FRAME_QUERIES, FRAME_READ_ONLY, FRAME_SPACE, LOAD,
-    PC, RAM, RD, RS1, RS2,
+    ARG2, CYCLE, DELEG, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE,
+    FRAME_DELTA, FRAME_NAMES, FRAME_QUERIES, FRAME_READ_ONLY, FRAME_SPACE, LOAD, PC, RAM, RD, RS1,
+    RS2,
 };
 use constraints::{
     CachedEntry, CircuitArtifact, Coeff, ConstraintError, EnforcingEntry, GateDef, LayerSpec,

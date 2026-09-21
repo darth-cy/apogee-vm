@@ -32,6 +32,26 @@ const KECCAK: u32 = family::KECCAK_F;
 const ADD: u32 = family::ADD_SUB_LUI_AUIPC;
 const INIT: u32 = family::INIT_TEARDOWN;
 
+/// `docs/spec/shard-proof.md` §9's length formula over a circuit's own shape —
+/// `crates/prover/tests/mem.rs`' `proof_bytes`, restated here so a shard of a
+/// family with no channel is measured by the same rule as one with three.
+fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
+    let transitions: usize = (0..a.depth())
+        .map(|k| {
+            let claims = a.layer_width(k) as usize * if a.layers[k].halving { 2 } else { 1 };
+            4 + 128 * a.layer_vars(k + 1) as usize + 4 + 32 * claims
+        })
+        .sum();
+    4 + 4
+        + 16
+        + 32
+        + (4 + 64 * a.witness.len())
+        + (4 + 32 * a.outputs.len())
+        + 4
+        + transitions
+        + 704
+}
+
 /// Acceptance 4: the statement proves to a `BlockProof` with one keccak shard,
 /// `verify_block` returns `Ok`, and the read/write roots reconcile across the
 /// CPU shards and the delegation shard together.
@@ -132,6 +152,20 @@ fn a4_the_block_with_a_delegation_shard_proves_and_verifies() {
         keccak.ts_window[0] >= add.ts_window[0] && keccak.ts_window[1] <= add.ts_window[1],
         "the invocations ride cycles the add/sub family owns"
     );
+
+    // The delegation shard's proof has its circuit's shape:
+    // `docs/spec/shard-proof.md` §9's layout over `keccak::artifact(8)`, which
+    // is `docs/spec/constraint-manifest.md` §1.2's 11,880,012 bytes. Almost
+    // all of it is final claims — 358,540 of them — which is what a circuit
+    // whose row is a whole permutation costs on the wire.
+    let circuit = constraints::family_circuit(KECCAK, common::KECCAK_VARS)
+        .expect("the registry has the keccak circuit");
+    assert_eq!(
+        keccak.to_bytes().len(),
+        proof_bytes(&circuit.artifact),
+        "the keccak shard's proof is its circuit's shape"
+    );
+    assert_eq!(keccak.to_bytes().len(), 11_880_012);
 
     // Every shard verifies on its own too, through the one entry point.
     for shard in &block.shards {

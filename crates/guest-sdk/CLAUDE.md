@@ -13,6 +13,9 @@ pub fn hint(buf: &mut [u8]) -> usize;          // fd 3, prover advice
 pub fn log(bytes: &[u8]);                      // fd 2, verifier-ignored
 pub fn exit(code: i32) -> !;
 pub fn poseidon2_permute(state: &mut [u8; 96]) -> bool;   // false on -ENOSYS
+
+// S21, docs/spec/delegation.md §2. The signature is frozen; the path is not.
+pub fn keccak256(input: &[u8]) -> [u8; 32];
 ```
 
 `docs/spec/ecall-abi.md` is the normative document for all of it, and
@@ -34,6 +37,20 @@ the crate layout, the I/O rules, the build, and exporting the result as a
 ## Frozen invariants
 - **The ecall numbers live in `constants::ecall`, never here.** `crates/constants/tests/
   ecall_abi.rs` checks that this file references them and spells none of them itself.
+- **`keccak256`'s signature is the frozen surface, and both paths are behind it** (S21).
+  The shim tries the delegation ecall; on an executor without the circuit it answers
+  `-ENOSYS` and an in-guest software permutation runs instead. **The bytes are identical
+  either way** — that is acceptance 3, and `guests/keccak-test` checks its own six digests
+  under both executors. A guest never chooses the path and cannot tell which ran.
+- **The declaration record is kept by reachability, not by `#[used]`** (S21). The static in
+  `.rodata.apogee.delegations` is referenced by `delegation_number()` and by nothing else,
+  so the linker keeps it exactly when the shim is linked and the preprocessor can see a
+  family no pc claims (`docs/spec/delegation.md` §7). Two failures are live here and each
+  shipped once: `#[used]` put the record in **every** guest that links this crate —
+  `guests/Cargo.toml` pins `codegen-units = 1`, so the SDK is one object file — and at
+  `opt-level = 3` LLVM folded the record's number into an immediate and dropped the record,
+  which `core::hint::black_box` is what prevents. `crates/program/tests/delegation.rs` holds
+  every committed guest to both halves, and it must: neither is visible in this source.
 - **`link.ld` and its four symbols** — `__bss_start`, `__bss_end`, `__heap_start`,
   `__stack_top` — are frozen. `_start` sits in `.text._start` so the linker places it at
   `ORIGIN(RAM)`.

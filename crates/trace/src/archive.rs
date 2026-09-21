@@ -59,9 +59,7 @@ use constants::{family, memory};
 use serde::de::{Deserialize, Deserializer, SeqAccess, Visitor};
 use serde::Serialize;
 
-use crate::family::{
-    DelegationTrace, FamilyTrace, FamilyTraces, Query, QueryColumns, Row, ROLES,
-};
+use crate::family::{DelegationTrace, FamilyTrace, FamilyTraces, Query, QueryColumns, Row, ROLES};
 use crate::log::{AddressSpace, MemoryEvent, MemoryEventLog};
 use crate::CycleProfile;
 
@@ -558,17 +556,16 @@ fn check_parts(
         }
         for r in 0..n {
             let row = t.row(r);
-            // Eight roles, so the mask is full: every bit of the `u8` names
-            // one, and a ninth role widens the mask
-            // (`docs/spec/execution-trace.md` §7). The check stays, written
-            // off `ROLES`, so it moves with the table rather than with a
-            // literal someone has to remember.
-            if ROLES.len() < 8 && row.present >> ROLES.len() != 0 {
-                return Err(format!(
-                    "family {} row {r} marks a role that does not exist",
-                    t.family
-                ));
-            }
+            // Since S21 there are eight roles, so the mask is full: every bit
+            // of the `u8` names one and no value of it can mark a role that
+            // does not exist. The check that used to stand here is therefore
+            // unreachable, and an unreachable refusal is worse than none —
+            // what catches a `present` bit the execution did not make is the
+            // log replay below, which finds the row and the log disagreeing.
+            // A ninth role widens this mask, which is a schema change
+            // (`docs/spec/execution-trace.md` §7); the assertion is what makes
+            // that a compile error here rather than a silently dropped check.
+            const _: () = assert!(ROLES.len() == 8);
             for role in ROLES {
                 if row.query(role).is_none() && row.queries[role as usize] != Query::ABSENT {
                     return Err(format!(
@@ -652,7 +649,10 @@ fn check_parts(
     {
         return Err("the rows' cycles are not 1 to their count, each once".into());
     }
-    if invocations.last().is_some_and(|(c, _, _)| *c > rows.len() as u64) {
+    if invocations
+        .last()
+        .is_some_and(|(c, _, _)| *c > rows.len() as u64)
+    {
         return Err("a delegation invocation claims a cycle the execution never ran".into());
     }
 
@@ -987,8 +987,12 @@ mod tests {
                 "differ in length",
                 post(|a| a.traces.families[0].pc.push(0), None),
             ),
+            // Bit 7 is `Role::Delegate`, a real role since S21, so a row
+            // claiming it is not refused for naming a role that does not exist
+            // — the mask is full — but for claiming a query the log has no
+            // event for.
             (
-                "role that does not exist",
+                "the log disagrees with the row",
                 post(|a| a.traces.families[0].present[0] = 0x80, None),
             ),
             (

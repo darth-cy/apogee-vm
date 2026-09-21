@@ -62,7 +62,12 @@ pub fn advance_metered(setup, archive, until)   -> Result<ProvingMetrics, Prover
   every key buys. **S19's three were the same**: three circuits, three fills, and nothing
   else in this crate, `MEM_WORD` — which reads no generic lookup — going down the same
   no-generic path `ADD_SUB_LUI_AUIPC` already took. With them every family the master
-  prompt names is registered.
+  prompt names is registered. **S21's `KECCAK_F` was one circuit and one fill too** — plus
+  the `deleg` query, which is `constraints::memory`'s frame table and not this crate's — and
+  it is the first family whose opening claim is `M ++ W` with no setup commitment at all,
+  reading neither a decoded table nor the generic one. `ts_window` is the one function here
+  that grew an arm: a delegation family reads its cycle column like a cycle-owning one while
+  being exempt from the block's disjointness rule (`docs/spec/delegation.md` §8).
 - **A shard's proof is two crate-private halves**, `gkr_part` (through the GKR proof, to
   a `ShardGkr` — the post-GKR snapshot's entry) and `opening_part` (the batched opening),
   which `prove_shard_columns` runs back to back and `advance` runs a phase apart.
@@ -78,8 +83,11 @@ pub fn advance_metered(setup, archive, until)   -> Result<ProvingMetrics, Prover
   replay is a schedule drift, never a witness defect. `opening_part` asserts the opened
   values are the base claims.
 - **What the prover does refuse is its own program**: a family with no circuit or fill,
-  and a trace S16 cannot prove — an ecall other than `EXIT`, a transfer cycle — each by
-  name. The add/sub fill panics if the trace and the decoded table disagree, which the
+  and a trace it cannot prove — an ecall that is neither `EXIT` nor a **registered
+  delegation number**, and a transfer cycle — each by name. S21 widened that from `EXIT`
+  alone: `fill::add_sub`'s system arm keys on `program::delegation_family(a7)`, so a
+  delegation request fills `is_keccak = 1`, `rd_selected = 0` and the fall-through, and any
+  other number is still refused by name. The add/sub fill panics if the trace and the decoded table disagree, which the
   emulator cannot cause.
 - **Multiplicities come from `trace::build_multiplicities` and nowhere else.** A fill
   returns every column but them, and `shard_columns` counts them over the family's
@@ -114,6 +122,15 @@ pub fn advance_metered(setup, archive, until)   -> Result<ProvingMetrics, Prover
   divide, if a quotient word is not its adjusted value or if a product does not fit two
   words. Its decoded row is **five** values, not six: the family's tuple has no immediate,
   so its table is `S[0..6]` and the packed table `S[6..9]`.
+- **`fill::keccak_f` fills all 3,764 columns of a `2^8` delegation shard from the
+  archive's `DelegationTrace`** (S21): the requesting cycle, the mask, the base, the free
+  `anchor_value` (0), the 50 frame words' four fields each, the input state's 1,600 bits
+  taken from the words the invocation *read*, each gap's 38 bits, and the frame pointer's
+  two decompositions. It computes no permutation: the written words are what the execution
+  wrote, and the circuit is what says that was keccak-f. Every column is `u32`- or
+  `u64`-backed; there is no `Fr` column and no multiplicity column, the family having no
+  channel. Padding rows are zero in every column, which the padding contract's second clause
+  needs (`docs/spec/delegation.md` §6.1).
 - **Six `Fr`-backed columns exist across the S18 fills**, and no more: `shift_in` and
   `shift_prod`, whose values are signed on a right shift and reach `2^63` on a left one;
   `mx` and `my`, which are signed; and `r_inv` and `d_inv`, which are field inverses. Every
@@ -216,5 +233,6 @@ pub fn advance_metered(setup, archive, until)   -> Result<ProvingMetrics, Prover
 | `tests/key.rs` | S17, in ordinary CI, no proof: `ProverSetup::new` over `control` and the toy SRS gives a key whose `generic_table` is `generic_commitments` over that SRS, whose SRS digest is over its `SrsVerifier` and them, and which loads; each of the three commitments is `[Σ_i c_i·τ^i]_1` of its column, computed by Horner's rule from the toy `τ`, the three distinct, and the same over `2^18` powers as over `2^20` |
 | `tests/control.rs` | **`#[ignore]`d; run with `--include-ignored --test-threads=1`** (18.0 GB peak since S20 proves its two `2^20` shards at once; 10.1 GB at S17). S17 acceptance 1: `control`'s four-family config, its self-checking trace, three shards — `INIT_TEARDOWN`, `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT` — each verifying, with round and claim counts and byte lengths from the circuit, the jump family's pinned at 61,612 bytes; the generic table's binding — the key's `generic_table` equal to `generic_commitments` over this SRS, its SRS digest the digest over the `SrsVerifier` and them, and the jump family's opening claim `M ++ W ++ S`, 21 + 44 + 10 commitments ending with the table's three, while add/sub's is 36 + 31 + 7 and ends with identity's; and `a_key_with_another_generic_table_is_another_statement`: a key whose table's value and result commitments are swapped does not load under the honest SRS digest, loads under its own recomputed one, which differs, and refuses every honest shard as `Statement("the proof was made for another statement")` |
 | `src/phases.rs` (unit) | the post-commit section round-trips and refuses a trailing byte and a missing one; the post-GKR and final sections refuse a trailing byte |
+| `tests/keccak.rs` | **`#[ignore]`d; run with `cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1`** (124 s, **38.9 GB peak** — the heaviest suite in the repository). S21's acceptances 4 and 8: `guests/keccak-test`'s nine-shard block — six `2^20` execution shards, two `2^16` window shards and one `2^8` delegation shard — proves and verifies, every shard also verifies on the S16 path, the delegation shard is **last** in statement order, its ts window is its invocations' and is contained in the add/sub family's (which is why §4's disjointness is scoped to cycle-owning families), the cycle profile's total excludes the 10 invocations, the shard's proof is its circuit's 11,880,012 bytes, and the statement reads back through the serialized block alone; and `guests/keccak-unused`, which declares the family and never calls it, proving **zero** keccak shards with the family still in the config, the descriptor and the transcript's group list |
 | `tests/block.rs` | **`#[ignore]`d; run with `cargo test --release -p prover --test block -- --include-ignored --test-threads=1`** (779 s, 33.4 GB peak). S20's acceptance over `guests/shards`, whose add/sub family runs 1,064,970 cycles and so proves **two shards of one family**: 1, 3, 8 and 9 — the block proves and verifies, every shard also verifies on the S16 path, the records are statement order, the descriptor and counts read through the serialized proof alone, `ZERO_WINDOWS` proves zero shards and reads 0, the `ShardProof` and `BlockProof` schemas destructured exhaustively so a boundary-pc field could not be added unnoticed, the run's transcript tape equal to the committed fixture with its five squeezes after every absorb and no tag G1–G11 does not have, and the windows ordered and disjoint within add/sub while the jump family's overlaps both; 4 and 6 — a one-bit-different I/O digest, another identity, another config, a shard count altered with and without matching lists, and two shards' windows exchanged, each refused as `Statement` by the check named, the window swap also refused independently by the shard's own transcript; 5 — the truncated statement **re-proved as an honest prover would**, its counts, lists and roots adjusted and its global phase rerun, refused by `MemoryArgument` on the root product; 7 — one `wrap` cell of the **second** add/sub shard, re-proved, refused as `Constraint` with the honest twin still passing; 10 — killed and resumed at post-commit and post-GKR, byte-identical; must-be-exact 8 — byte-identical on one thread; and 2 — `guests/mem`'s five-family block, seven shards, every record carrying its family's memory commitments and both roots |
 | `tests/acceptance.rs` | **`#[ignore]`d; run with `--include-ignored --test-threads=1`** (a statement's proof peaks at 8.6 GB). Acceptance 1 (the guest's family set and trace; both shards verify; round counts, claim counts and byte lengths from the circuit); 5 (every statement twin refused as `Statement`, on both shards); 6 and 8 (the shard transcript event for event: seed, window, commitments, `g` and `β`, then the GKR schedule rebuilt from the artifact's shape — outputs, every batch, round and claim message, every child challenge — with one outstanding point after every batch, then one batched opening whose column-RLC challenge follows every evaluation claim; the verifier's reduction re-deriving the prover's point; the global transcript's challenges after every memory commitment); 9 (stopped after post-execution — nothing filled — and resumed after it, post-commit, post-GKR and post-opening, byte-identical); 10's library half (proofs, statement and key round-trip, and the key loads back to itself); step 10a's root comparison, which is per shard and stayed there when S20 lifted 10b out (the init shard's statement roots scaled by one constant still reconcile — 10b passes — and that shard's proof refuses them exactly while the add/sub shard's accepts); and one-thread against all-threads determinism |

@@ -214,6 +214,28 @@ cancel.
 The mirror's *written* value is free. It is the value the invocation's teardown
 consumes, and both sides are the prover's; an honest fill writes 0 on both.
 
+**What the twins found, and what (2) therefore buys.** In *this* family the
+chain above is not mountable by editing cells at all, and the reason is worth
+recording for S22 and S23. Switching an invocation off drops its **50 RAM frame
+accesses** with it, so the word at `base + 4j` loses a write that the next
+invocation's `read_ts` still names; repairing the anchor side does not repair
+that, and repairing that means re-pointing the next invocation's 50 reads,
+re-deriving its 1,600 state bits and re-running the permutation — which is
+proving the execution rather than eliding it. So what refuses a dropped
+invocation here is the **global multiset**, not gate (2), and
+`crates/checker/tests/tamper.rs` asserts `MemoryArgument` for both of those
+twins.
+
+What (2) buys is that the pairing is **local**: a request whose mirror read is
+stamped is refused by a gate on its own shard, with no appeal to the frame's
+chains at all. A delegation family with a smaller frame — or one whose rows read
+nothing that chains — would have nothing else to rely on, and the gate is what
+makes the ABI's guarantee independent of the family. The three zeroings are
+therefore asserted at **shard** level, where `Constraint` precedes
+`MemoryArgument` and the gate is the answer; at block level
+`verify_global_memory` runs first (`docs/spec/block-proof.md` §3) and every one
+of these reads `MemoryArgument`.
+
 ### 5.3 Why the pairing is 1:1
 
 In the delegation family's address space the only tuples are the mirrors' and
@@ -269,7 +291,7 @@ three zeroings enforce, and `AddressSpace::chains()` is where the log says so.
 ## 6. The keccak-f circuit
 
 `constants::family::KECCAK_F`, one keccak-f[1600] permutation a row.
-`constraints::keccak` is the circuit; `docs/spec/constraint-manifest.md` §14 is
+`constraints::keccak` is the circuit; `docs/spec/constraint-manifest.md` §12 is
 its column-by-column account.
 
 ### 6.1 The columns
@@ -424,8 +446,11 @@ That one constant is the whole of its treatment in a block:
   them, and two delegation shards of one execution are consecutive *invocations*,
   not consecutive *times*.
 - The window a delegation shard claims is the **min and max invocation
-  timestamp** it holds: `[4·cycle(first) + Δ, 4·cycle(last) + Δ + 1)`.
-  `prover::ts_window` computes it off the shard's own `cycle` column.
+  timestamp** it holds: `[4·cycle(first), 4·cycle(last) + 4)` — the same formula
+  `prover::ts_window` uses for a cycle-owning family, over the same `M[0]`. It is
+  three-way since S21: trivial for a RAM window family, and this for the other
+  two kinds. The window is a claim about *when the requests were*, since an
+  invocation carries its requesting cycle and nothing of its own.
 - Step 4 of `verify_shard` still holds `start ≤ end ≤ 2^38`, as it does for every
   shard.
 
@@ -444,15 +469,20 @@ shards sort last. `verify_block` needs no edit at all.
 ## 9. The height, and why there is no lookup channel
 
 `KECCAK_F` takes **`2^8`**, added to `constants::family::HEIGHT_MENU` at S21.
-One row is a whole permutation, and a whole permutation is ~345,600 inner
-columns over 168 layers; `gkr::forward` materializes every layer at the full
-height, so a shard's forward pass is that count times its height times 32 bytes:
+One row is a whole permutation, and a whole permutation is **354,762 inner
+columns** over 177 layers (`docs/spec/constraint-manifest.md` §12.7);
+`gkr::forward` materializes every layer at the full height, so a shard's forward
+pass is that count times its height times 32 bytes:
 
 | height | forward pass | permutations a shard |
 | --- | --- | --- |
 | `2^8` | 2.9 GB | 256 |
-| `2^10` | 11.5 GB | 1,024 |
-| `2^16` | 734 GB | 65,536 |
+| `2^10` | 11.6 GB | 1,024 |
+| `2^12` | 46.5 GB | 4,096 |
+| `2^16` | 744 GB | 65,536 |
+
+`2^8` is also **even**, which Mercury needs for `b = sqrt(2^n)` to exist, so the
+menu below `2^16` had `2^8`, `2^10`, `2^12` and `2^14` to choose from.
 
 At `2^8` **no range channel's table fits**: `V[range16]` over 8 variables holds
 `[0, 2^8)`, not `[0, 2^16)`, and `lookup::channel_trees` refuses a channel whose
@@ -508,8 +538,9 @@ it is the one place a new delegation type touches an existing family's circuit.
 - **It does not delegate the sponge.** `guest_sdk::keccak256` runs its padding
   and its rate absorption in guest code and delegates one ecall per keccak-f
   block. The delegated path and the software fallback are bit-identical, which
-  `crates/emulator/tests/keccak.rs` and `crates/loader/tests/qemu.rs` hold, and
-  the fallback is what runs under `qemu-riscv32`.
+  `crates/emulator/tests/guests.rs` and `crates/loader/tests/qemu.rs` hold over
+  `guests/keccak-test`'s six digests — themselves re-derived from `tiny-keccak`
+  rather than restated — and the fallback is what runs under `qemu-riscv32`.
 - **It does not change the proof's shape.** A delegation `ShardProof` is a
   `ShardProof`, and `verify_shard`, `verify_block`, `PublicInputs` and
   `VerifyingKey` are S16's and S20's unchanged.

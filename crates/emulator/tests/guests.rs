@@ -356,3 +356,104 @@ fn the_recorded_input_is_what_the_guest_consumed() {
     let (.., traced) = trace_run(&image, &io(&offered), &tables, &config).unwrap();
     assert_eq!(traced.io.input, &offered[..4]);
 }
+
+// ---------------------------------------------------------------------------
+// S21: the keccak corpus
+// ---------------------------------------------------------------------------
+
+/// `guests/keccak-test`'s corpus source: byte `i` is `(31i + 7) mod 256`.
+fn keccak_corpus_source() -> Vec<u8> {
+    (0..400usize)
+        .map(|i| (31u32.wrapping_mul(i as u32).wrapping_add(7)) as u8)
+        .collect()
+}
+
+/// The `[[u32; 8]; 6]` literal in `guests/keccak-test/src/main.rs`, read out
+/// of the source file.
+///
+/// Reading the guest's source rather than restating its table is the whole
+/// point: a digest table restated in a test is a second literal, and two
+/// stale literals agree. `guests/` is not a workspace member and the constant
+/// is `no_std` guest code, so there is no way to link it.
+fn keccak_guest_digests() -> Vec<[u8; 32]> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../guests/keccak-test/src/main.rs");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+    let head = "const DIGESTS: [[u32; 8]; 6] = [";
+    let start = text.find(head).expect("keccak-test declares DIGESTS") + head.len();
+    let body = &text[start..start + text[start..].find("\n];").expect("DIGESTS ends")];
+    let mut words: Vec<u32> = Vec::new();
+    let mut rest = body;
+    while let Some(at) = rest.find("0x") {
+        let digits = &rest[at + 2..];
+        let end = digits
+            .find(|c: char| !c.is_ascii_hexdigit())
+            .unwrap_or(digits.len());
+        assert_eq!(
+            end,
+            8,
+            "a digest word is eight hex digits: {}",
+            &digits[..end]
+        );
+        words.push(u32::from_str_radix(&digits[..end], 16).expect("hex"));
+        rest = &digits[end..];
+    }
+    assert_eq!(words.len(), 6 * 8, "six digests of eight words");
+    words
+        .chunks(8)
+        .map(|c| {
+            let mut out = [0u8; 32];
+            for (w, word) in c.iter().enumerate() {
+                out[4 * w..4 * w + 4].copy_from_slice(&word.to_le_bytes());
+            }
+            out
+        })
+        .collect()
+}
+
+/// Acceptance 3, the host half: every digest `guests/keccak-test` checks
+/// itself against is `tiny-keccak`'s, re-derived here from the reference
+/// rather than copied.
+///
+/// The guest compares in-guest and exits 6, so a wrong literal would make the
+/// guest fail — but only if the emulator's keccak-f and the SDK's sponge were
+/// both right. Re-deriving from the reference is what closes that: this test
+/// fixes the *answer*, and the two tests below fix the two paths to it.
+#[test]
+fn the_keccak_corpus_digests_are_the_references() {
+    use tiny_keccak::Hasher;
+
+    let source = keccak_corpus_source();
+    let pinned = keccak_guest_digests();
+    for (i, len) in [0usize, 1, 135, 136, 137, 400].iter().enumerate() {
+        let mut hasher = tiny_keccak::Keccak::v256();
+        hasher.update(&source[..*len]);
+        let mut want = [0u8; 32];
+        hasher.finalize(&mut want);
+        assert_eq!(
+            to_hex(&pinned[i]),
+            to_hex(&want),
+            "keccak-test's digest of the first {len} bytes is stale"
+        );
+    }
+}
+
+/// Acceptance 3, the delegation half: the guest runs on the emulator, whose
+/// ecall performs the permutation, and exits 6 — one per corpus entry.
+///
+/// `guests/keccak-unused` links the shim and never calls it, so it makes no
+/// invocation and exits 7; that it still *declares* the family is
+/// `crates/program/tests/delegation.rs`'.
+#[test]
+fn keccak_test_checks_its_corpus_under_the_delegation_ecall() {
+    for (name, status) in [("keccak-test", 6), ("keccak-unused", 7)] {
+        let execution = run(&image(name), &io(&[])).unwrap();
+        assert_eq!(
+            execution.exit_code, status,
+            "{name} exited {}, and 200 + i would name the corpus entry that failed",
+            execution.exit_code
+        );
+        assert!(execution.io.output.is_empty(), "{name} writes nothing");
+    }
+}
