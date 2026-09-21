@@ -24,7 +24,9 @@ mod types;
 pub mod wire;
 
 pub use block::{check_ts_windows, BlockProof, BlockReconciliation, ShardRecord};
-pub use reduce::{derive_global_phase, reduce_shard, verify_shard_local, GlobalChallenges};
+pub use reduce::{
+    derive_global_phase, reduce_shard, verify_global_memory, verify_shard_local, GlobalChallenges,
+};
 pub use statement::{
     absorb_statement_descriptor, boundary_scalars, check_memory_windows, global_commit,
     identity_digest, memory_slots, shard_challenges, shard_transcript, srs_digest,

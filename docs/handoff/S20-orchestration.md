@@ -17,12 +17,13 @@ the cut is carried by the global memory multiset and by nothing else.
 Normative documents written or amended this stage:
 
 - **`docs/spec/block-proof.md`** (new): the block and its public-data API, the
-  cross-shard record set, `verify_block`'s five checks, the time windows and exactly what
+  cross-shard record set, `verify_block`'s six checks, the time windows and exactly what
   they bind, the prover's shard cut and its one parallel step, the wire forms, and the
   transcript-tape validator.
 - **`docs/spec/shard-proof.md`**: §4 (the time window is the shard's own), §6 step 4 (a
-  well-formedness check) and §6's note (the `derive_global_phase` / `verify_shard_local`
-  split), §10's `PostGkr` row (the window), and a header note. **No frozen rule was
+  well-formedness check) and §6's note and step table (the `derive_global_phase` /
+  `verify_global_memory` / `verify_shard_local` split, and step 10 read as 10a and 10b),
+  §10's `PostGkr` row (the window), and a header note. **No frozen rule was
   dropped**; the global transcript's schedule, the SRS digest, the key's layout and load
   rules, the opening and the registry are as S19 left them.
 - Also updated to match: `docs/GLOSSARY.md`, `docs/guest-program-manual.md`,
@@ -97,8 +98,10 @@ Two further readings were taken before code, and are recorded rather than assume
 pub struct GlobalChallenges { pub memory: [Fr; 4], pub digest: Fr }
 pub fn derive_global_phase(vk: &VerifyingKey, public: &PublicInputs)
     -> Result<GlobalChallenges, VerifyError>;            // §6 steps 1-3 and the global transcript
+pub fn verify_global_memory(vk: &VerifyingKey, global: &GlobalChallenges,
+                            public: &PublicInputs) -> Result<(), VerifyError>;  // §6 step 10b
 pub fn verify_shard_local(vk: &VerifyingKey, global: &GlobalChallenges, proof: &ShardProof,
-                          public: &PublicInputs) -> Result<OpeningClaim, VerifyError>;  // steps 4-11
+                          public: &PublicInputs) -> Result<OpeningClaim, VerifyError>;  // 4-10a, 11
 // reduce_shard is now their composition; its order, classes and answers are S16's.
 
 pub struct ShardRecord { pub family: u32, pub shard_index: u32, pub ts_window: [u64; 2],
@@ -165,10 +168,12 @@ no value changed.
 3. **`BlockReconciliation` and `ShardRecord`**, and the record layout — family, shard
    index, `ts_start`, `ts_end`, the memory commitments in column order, read root, write
    root — which is what S27's aggregation guest replays.
-4. **`prove_block` and `verify_block`**, and `verify_block`'s five checks in order.
-5. **The verifier factoring** inside the no_std core: `derive_global_phase` and
-   `verify_shard_local`, which are the exact functions `verify_block` composes and which
-   S27's leaf/root split consumes.
+4. **`prove_block` and `verify_block`**, and `verify_block`'s six checks in order.
+5. **The verifier factoring** inside the no_std core, which is **by operand**:
+   `derive_global_phase` and `verify_global_memory` read the key and the statement and
+   run once for a block; `verify_shard_local` is the only one that takes a `ShardProof`
+   and the only one that runs per shard. These are the exact functions `verify_block`
+   composes and which S27's leaf/root split consumes.
 6. **The per-shard ts-window binding absorb**, one typed `SHARD_TS_WINDOW` message
    immediately after the seed triple — S16's position, unaltered, with S20's value — and
    the anchoring convention, cycle-owning scoping included, **as the owner settled it**:
@@ -245,8 +250,9 @@ File paths are under `crates/`. Every test listed passes. The ones marked *defer
    `SHARD_TS_WINDOW` at S2 with a real value. No challenge is drawn before the statement
    is fully absorbed, and `checker::check_global_tape` is the standing check of it.
 2. **`verify_block` takes `(&VerifyingKey, &BlockProof, &PublicInputs)` and nothing
-   else**, pinned at compile time, and it composes `verify_shard_local` plus the opening
-   — the same two steps `verify_shard` runs. The CLI calls it and so does every test.
+   else**, pinned at compile time, and it composes `verify_global_memory` plus
+   `verify_shard_local` plus the opening — the same parts `verify_shard` runs. The CLI
+   calls it and so does every test.
 3. **The statement descriptor is carried in the proof**: `BlockProof.config` and
    `BlockProof.statement.shard_counts` are G3 and G4's messages, and check 1 holds both
    to the key's and to the verifier's. A block cannot claim different occupancy than it
@@ -368,6 +374,21 @@ whole cost.
 are most. The global transcript is replayed once instead of four times, which is what the
 `derive_global_phase` split buys.
 
+**Step 10b, the memory argument's statement half, is also run once and not per shard**
+(`verify_global_memory`). Measured at **7.44 µs** a call on this machine — 66 boundary
+tuples folded through the gate kernel, 64 products, and one pass over the root list —
+so the four-shard demo saves 22 µs of that 75 ms and `guests/mem`'s seven shards save
+45 µs. **Natively that is 0.03%, and the reason for the split is not the microseconds.**
+It is that the check is a function of the statement and has one answer for it: a
+verifier that ran it per shard would compute the same boolean `Σ shard_counts` times.
+Two things follow that do matter. A statement that cannot reconcile is now refused
+before any shard's circuit or opening is run, because B1–B5 verify no shard. And
+S26/S27 replay the verifier **inside the VM**, where the work is proving cost and not
+microseconds: the boundary fold is 66 read tuples of four terms each plus 64 products
+— **328 field multiplications and 264 Montgomery conversions**, before the root
+product's `2 · Σ shard_counts` — and the recursion guest now pays it once for a block
+instead of once a shard.
+
 **Proof size: 204,848 bytes.** The statement is 8,444; the four proofs are 20,524
 (`INIT_TEARDOWN` at `2^16`), 57,100 and 57,100 (`ADD_SUB_LUI_AUIPC` at `2^20`) and
 61,612 (`JUMP_BRANCH_SLT` at `2^20`), 196,336 together; the `VmConfig` and the length
@@ -424,10 +445,14 @@ answer it.
 On macOS (18 cores, 48 GB), every gate the root `CLAUDE.md` lists, at the final tree:
 
 - `fmt --check` in all four workspaces, and `clippy -D warnings` in all four;
-- `cargo test --workspace`: **958 passed, 65 `#[ignore]`d** (945 and 56 at S19). The 13
+- `cargo test --workspace`: **960 passed, 65 `#[ignore]`d** (945 and 56 at S19). The 15
   new tests that run in CI: `verifier-core/tests/block.rs` 6 and `src/block.rs`'s unit
-  tests 2; `checker/tests/tape.rs` 5. The 9 new ignored ones are
-  `prover/tests/block.rs`' 7, `verifier/tests/cli.rs`' block case and
+  tests 2; `checker/tests/tape.rs` 5; and the step-10b split's two,
+  `verifier-core/tests/reduce.rs`'
+  `the_statement_half_of_the_memory_argument_is_one_check_for_a_statement` and
+  `verifier/src/lib.rs`'
+  `the_block_checks_the_statement_s_memory_argument_before_any_shard`. The 9 new ignored
+  ones are `prover/tests/block.rs`' 7, `verifier/tests/cli.rs`' block case and
   `loader/tests/qemu.rs`' `shards` case;
 - the `riscv32imac` build of `field`, `constants`, `transcript`, `poly`, `sumcheck`,
   `constraints`, `gkr-verify` and `verifier-core`;
@@ -469,6 +494,38 @@ green, and the peaks are the table above:
 | `checker --test tamper` | 9 passed | 1,512 s | 16.98 GB |
 | `checker --test logup` | 9 passed | 198 s | 18.76 GB |
 
+### The step-10b split, re-verified
+
+The memory argument's statement half was lifted out of `verify_shard_local` into
+`verify_global_memory` after the measurements above were taken (the owner's finding: the
+cross-shard product was being recomputed once per shard). **`verify_shard`'s and
+`verify_block`'s answers are unchanged by construction** — step 11 cannot fail, so 10b
+after it is 10b in place — and the timings and peaks above are proving cost, which the
+split does not touch. Re-run on the split tree, all green and all within noise of the
+table above:
+
+| Suite | Result | Wall | Peak resident |
+| --- | --- | --- | --- |
+| `cargo test --workspace` | 960 passed, 65 ignored | — | — |
+| `verifier --test cli` | 2 passed | 40 s | 8.60 GB |
+| `prover --test acceptance` | 7 passed | 321 s | 8.63 GB |
+| `prover --test control` | 2 passed | 61 s | 18.00 GB |
+
+`acceptance` is the one that matters most there: it pins **step 10a's** root comparison,
+the check that stayed per shard — the init shard's statement roots scaled by one constant
+still reconcile, so 10b passes, and that shard's own proof refuses them while the add/sub
+shard's accepts.
+
+**Owed, not run on the split tree**, under the owner's standing instruction that the
+deferred suites run once at the end of a progression rather than per commit (root
+`CLAUDE.md`, "Commands"): `checker --test tamper`, `prover --test block`,
+`prover --test alu`, `prover --test mem`, `checker --test logup`. The two that bear on
+this change are `tamper`, which pins `MemoryArgument("a boundary timestamp is not below
+2^38")` and `MemoryArgument("x10's final value is not the exit status")` through
+`verify_shard`, and `block`, whose `a5` pins `MemoryArgument("the statement's roots do
+not reconcile")` through `verify_block`. Both properties are also pinned by the two new
+CI-speed tests listed above, which is why they were added.
+
 **Not run here**: the QEMU suites, which need a Linux host with `qemu-user`.
 `guests/shards`' case in `loader/tests/qemu.rs` is new and should be run in the container
 before merge, at both profiles, along with `loader --test qemu`'s other nine and the
@@ -489,8 +546,11 @@ list grew.
   that would justify picking a number.
 - **E21–S23's delegation families** append `false` to `family::CYCLE_OWNING` and carry a
   min/max invocation window. `verify_block` needs no change.
-- **S26 and S27** consume `derive_global_phase`, `verify_shard_local`,
-  `BlockProof`'s public data and `BlockReconciliation`'s serialization, all frozen here.
+- **S26 and S27** consume `derive_global_phase`, `verify_global_memory`,
+  `verify_shard_local`, `BlockProof`'s public data and `BlockReconciliation`'s
+  serialization, all frozen here. A leaf that verifies one shard runs
+  `verify_shard_local`; the **root owes the one `verify_global_memory` call**, and a
+  recursion that omits it has checked every circuit and no memory argument.
   The Mercury field-side module and `cm*` are still owed by S26, as S16 left them.
 - **The I/O-binding stage** still owes `read`, `write`, the transfer rows and the tie
   between fd 0 / fd 1 and the execution. Until then `EXIT` is the only provable ecall,

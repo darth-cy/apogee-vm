@@ -9,7 +9,9 @@
 use curve::{G1Affine, G2Affine};
 use pcs::{batch_verify, MercuryCommitment, MercuryProof};
 use srs::SrsVerifier;
-use verifier_core::{check_ts_windows, derive_global_phase, verify_shard_local, OpeningClaim};
+use verifier_core::{
+    check_ts_windows, derive_global_phase, verify_global_memory, verify_shard_local, OpeningClaim,
+};
 
 pub use verifier_core::{
     BlockProof, BlockReconciliation, PublicInputs, ShardProof, ShardRecord, VerifyError,
@@ -22,16 +24,18 @@ pub use verifier_core::{
 /// and checked; its identity is compared with a registered one by the caller.
 ///
 /// A statement is proven when every one of its shards' proofs verifies against
-/// one `public`: a shard checks the memory argument's reconciliation over roots
-/// the other shards' proofs establish. [`verify_block`] is that, over a block
-/// that carries its whole shard set.
+/// one `public` **and** the statement's memory argument reconciles over the
+/// roots all of them establish. This runs both for its one shard; over a whole
+/// shard set, that is [`verify_block`], which runs the second once.
 pub fn verify_shard(
     vk: &VerifyingKey,
     proof: &ShardProof,
     public: &PublicInputs,
 ) -> Result<(), VerifyError> {
     let global = derive_global_phase(vk, public)?;
-    spend(vk, proof, verify_shard_local(vk, &global, proof, public)?)
+    let claim = verify_shard_local(vk, &global, proof, public)?;
+    verify_global_memory(vk, &global, public)?;
+    spend(vk, proof, claim)
 }
 
 /// Verify a whole block: **the one block verification path**, and the same
@@ -45,14 +49,20 @@ pub fn verify_shard(
 ///    once, no gap and no extra, in statement order;
 /// 4. the time windows: ordered and disjoint within each cycle-owning family
 ///    (`check_ts_windows`);
-/// 5. every shard through `verify_shard_local` and its opening, which is where
-///    the read/write root products reconcile across every shard and family
-///    (step 10) and every channel's roots are checked (step 9).
+/// 5. the memory argument's statement half **once** — the boundary, and the
+///    read/write root product across every shard of every family
+///    (`verify_global_memory`, step 10b). It reads the statement and no
+///    proof, so it is one check for the block, not one per shard;
+/// 6. every shard through `verify_shard_local` and its opening: its circuit,
+///    its channels' roots (step 9), and its own roots held to the statement's
+///    entry for it (step 10a), which is what puts it in check 5's product.
 ///
 /// A family in the config with zero shards this execution is valid and has no
-/// record; omitting a shard whose cycles ran is caught by step 5's
-/// reconciliation, because its writes and reads are missing from one side of
-/// the global multiset.
+/// record; omitting a shard whose cycles ran is caught by check 5, because its
+/// writes and reads are missing from one side of the global multiset.
+///
+/// Checks 1 to 5 read no proof, so a statement that cannot reconcile is
+/// refused before any shard is verified.
 pub fn verify_block(
     vk: &VerifyingKey,
     proof: &BlockProof,
@@ -74,7 +84,11 @@ pub fn verify_block(
     proof.shape().map_err(statement)?;
     // 4. The time windows.
     check_ts_windows(&proof.reconciliation().records).map_err(statement)?;
-    // 5. Every shard, by the one per-shard path.
+    // 5. The memory argument's statement half, once for the whole block. Its
+    //    operands are the statement's and the key's alone, so per shard it
+    //    would be the same answer recomputed `shards.len()` times.
+    verify_global_memory(vk, &global, public)?;
+    // 6. Every shard, by the one per-shard path.
     for shard in &proof.shards {
         spend(vk, shard, verify_shard_local(vk, &global, shard, public)?)?;
     }
@@ -150,10 +164,9 @@ mod tests {
         assert_eq!(OPENING_BYTES, pcs::PROOF_BYTES);
     }
 
-    /// A key whose every other point is one loads; a generic-table commitment
-    /// that is not a point is refused, and so is a setup commitment.
-    #[test]
-    fn every_generic_table_commitment_is_decoded_at_load() {
+    /// A key over the registry's circuits: `JUMP_BRANCH_SLT` at `2^20` and the
+    /// two RAM window families at `2^16`, every point the generator.
+    fn key() -> VerifyingKey {
         use constants::family;
         use curve::{G1Affine, G2Affine};
         use verifier_core::{identity_digest, srs_digest, VmConfig};
@@ -174,7 +187,7 @@ mod tests {
             g2_tau: G2Affine::GENERATOR.double(),
         });
         let generic_table = [point; 3];
-        let key = VerifyingKey {
+        VerifyingKey {
             code_version: family::CODE_VERSION,
             entry_pc: 0x1_0000,
             identity: identity_digest(family::CODE_VERSION, &config, 0x1_0000, &setup),
@@ -188,7 +201,85 @@ mod tests {
                 .iter()
                 .map(|(f, h)| constraints::family_circuit(*f, h.trailing_zeros()).unwrap())
                 .collect(),
+        }
+    }
+
+    /// **`verify_block` runs the memory argument's statement half itself, at
+    /// check 5, and not inside its per-shard loop** (`docs/spec/block-proof.md`
+    /// §3). The block below carries one `INIT_TEARDOWN` shard whose proof is a
+    /// shell — a digest of zero, no commitments, no outputs — so the loop
+    /// would refuse it as `Statement` the moment it read it, as the second
+    /// assertion shows. The answer is `MemoryArgument` instead, which is only
+    /// possible if check 5 ran first and read the statement alone.
+    #[test]
+    fn the_block_checks_the_statement_s_memory_argument_before_any_shard() {
+        use constants::family;
+        use verifier_core::{BoundaryFinals, GkrProof, PublicInputs};
+
+        let vk = key();
+        let width = vk
+            .circuit(family::INIT_TEARDOWN)
+            .expect("the key's window family")
+            .artifact
+            .memory
+            .len();
+        let mut boundary = BoundaryFinals {
+            reg_ts: [0; 32],
+            pc_ts: 0,
+            reg_values: [0; 31],
         };
+        // Out of the clock, which is step 10b's first check.
+        boundary.reg_ts[7] = 1 << 38;
+        let statement = PublicInputs {
+            input: vec![],
+            output: vec![],
+            exit_status: 0,
+            // Positional over the config: no jump shard, the one window-0
+            // shard the window rules require, no zero window.
+            shard_counts: vec![0, 1, 0],
+            windows: vec![],
+            boundary,
+            memory_commitments: vec![vec![[0u8; 64]; width]],
+            memory_roots: vec![[field::Fr::ONE, field::Fr::ONE]],
+        };
+        let shell = ShardProof {
+            family: family::INIT_TEARDOWN,
+            shard_index: 0,
+            ts_window: [0, 0],
+            global_digest: field::Fr::ZERO,
+            witness_commitments: vec![],
+            outputs: vec![],
+            gkr: GkrProof { layers: vec![] },
+            opening: [0; OPENING_BYTES],
+        };
+        let block = BlockProof {
+            config: vk.config.clone(),
+            statement: statement.clone(),
+            shards: vec![shell.clone()],
+        };
+        assert_eq!(
+            verify_block(&vk, &block, &statement),
+            Err(VerifyError::MemoryArgument(
+                "a boundary timestamp is not below 2^38"
+            )),
+            "check 5 reads the statement and runs before the shards"
+        );
+        assert_eq!(
+            verify_shard(&vk, &shell, &statement),
+            Err(VerifyError::Statement(
+                "the proof was made for another statement"
+            )),
+            "the loop would have answered this, so the block's answer is check 5's"
+        );
+    }
+
+    /// A key whose every other point is one loads; a generic-table commitment
+    /// that is not a point is refused, and so is a setup commitment.
+    #[test]
+    fn every_generic_table_commitment_is_decoded_at_load() {
+        use verifier_core::{identity_digest, srs_digest};
+
+        let key = key();
         assert_eq!(load_verifying_key(&key.to_bytes()), Ok(key.clone()));
         // Each of the three off the curve, its digest recomputed so that the
         // load reaches the point.

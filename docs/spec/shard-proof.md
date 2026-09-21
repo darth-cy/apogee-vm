@@ -92,7 +92,7 @@ aggregates them.
 The first three are what the outside world asserts. The rest is the statement's
 record: chosen by the prover, absorbed into the global transcript before any
 challenge (§2) — every field but `memory_roots`, which are computed after the
-challenges and bound instead by each shard's own GKR proof (§6, step 10).
+challenges and bound instead by each shard's own GKR proof (§6, step 10a).
 
 ### 1.2 Statement order
 
@@ -341,7 +341,8 @@ and the first that fails names the class:
 | 7 | `Constraint` | `gkr_verify::verify` over the shard transcript (§4): any `LayerInconsistency` |
 | 8 | `Constraint` | every base claim at one point |
 | 9 | `Lookup` | `gkr_verify::channel_holds` on every channel's root pair, in channel order |
-| 10 | `MemoryArgument` | the proof's two memory roots are the statement's for its shard; every boundary timestamp below `2^38`; `v_10 = exit_status`; `gkr_verify::reconciles` over every shard's roots with `boundary_factors(memory challenges, vk.entry_pc, boundary)` |
+| 10a | `MemoryArgument` | the proof's two memory roots are the statement's for its shard |
+| 10b | `MemoryArgument` | every boundary timestamp below `2^38`; `v_10 = exit_status`; `gkr_verify::reconciles` over every shard's roots with `boundary_factors(memory challenges, vk.entry_pc, boundary)` |
 | 11 | — | return the opening claim (§5.1) |
 | 12 | `Opening` | decode every commitment, the `SrsVerifier` and the Mercury proof, and `pcs::batch_verify` |
 
@@ -350,13 +351,31 @@ and the first that fails names the class:
 on anything a proof or public inputs carry, for a key that passed its load (§7.2). S20
 added no class: a block's own refusals are `Statement`.
 
-**The split (S20).** Steps 1 to 3 and the global transcript are
-`verifier_core::derive_global_phase(vk, public) -> Result<GlobalChallenges, VerifyError>`,
-and steps 4 to 11 are `verifier_core::verify_shard_local(vk, global, proof, public)`.
-`reduce_shard` is `verify_shard_local(vk, &derive_global_phase(vk, public)?, proof,
-public)` and `verifier::verify_shard` is that plus step 12, so there is still one
-per-shard path; `verify_block` runs the first half once for the whole block
-(`docs/spec/block-proof.md` §3).
+**The split (S20).** The steps divide by *what they read*, so a block pays for each
+exactly as often as its operands change:
+
+| part | reads | run |
+| --- | --- | --- |
+| `verifier_core::derive_global_phase(vk, public) -> Result<GlobalChallenges, VerifyError>` | the key and the statement | steps 1 to 3 and the global transcript, **once per statement** |
+| `verifier_core::verify_global_memory(vk, global, public) -> Result<(), VerifyError>` | the key, the statement and the memory challenges | step 10b, **once per statement** |
+| `verifier_core::verify_shard_local(vk, global, proof, public) -> Result<OpeningClaim, VerifyError>` | one `ShardProof` besides | steps 4 to 10a and 11, **once per shard** |
+
+**Step 10b names no `ShardProof`, and that is the whole of why it is its own
+function.** Its operands are `vk.entry_pc`, `public.boundary`, `public.memory_roots`
+and the four memory challenges — the statement's and the key's, every one of them — so
+it has one answer for a statement and a verifier that ran it per shard would fold the
+same 66 boundary tuples and multiply the same root product `Σ shard_counts` times over
+for that one answer. What puts a *particular* shard's proof into that product is step
+10a, which holds the roots its own GKR outputs claim to the statement's entry for its
+position; with shard-set exactness on top (`docs/spec/block-proof.md` §2.1) every root
+the product reads belongs to a shard that was verified.
+
+`reduce_shard` is `derive_global_phase`, then `verify_shard_local`, then
+`verify_global_memory`, and `verifier::verify_shard` is that plus step 12. **The order
+is S16's** and not merely close to it: step 11 builds the opening claim and has no
+failure, so running 10b after it returns yields the same first failure, in the same
+class, with the same message, as S16's single step 10 did. `verify_block` runs the two
+statement parts once each for the whole block (`docs/spec/block-proof.md` §3).
 
 **A statement is verified when its proofs are exactly its shards**, `statement_shards(config,
 shard_counts)`, each once in any order, and every one passes `verify_shard`. One shard's
@@ -366,7 +385,7 @@ that verifies a subset has verified nothing about the rest, and the `verifier` C
 a proof list that is not the statement's shards.
 
 Steps 1 to 4 run before the replay so that a statement the key does not describe is
-refused rather than indexed out of range. The exit status is step 10's because it is
+refused rather than indexed out of range. The exit status is step 10b's because it is
 a teardown: `v_10` is `x10`'s final value, which the boundary carries.
 
 **Why this order classifies.** A prover that proves a tampered witness honestly —

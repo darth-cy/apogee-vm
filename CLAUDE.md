@@ -106,6 +106,16 @@ Everything above the line must be green before a stage's PR. All of it runs in C
 there under master rule 7 because the circuit is the real size: run those locally and
 record the result in the stage's handoff note. For the rest, a green local run is a green
 CI run.
+
+**The `# DEFERRED` suites run once, at the end of a progression, not per commit**
+(owner's instruction, S20). Each is tens of minutes and 8–33 GB of peak memory, so
+re-running them after every change spends hours re-confirming what the previous run
+established. While a progression is in flight, the gate is `cargo fmt`, `cargo clippy`,
+the `riscv32imac` build and `cargo test --workspace`; a change whose only coverage would
+be a deferred suite owes a **fast** test pinning the same property — a synthetic key and
+statement in a unit test rather than a real proof — so the workspace run still guards it.
+Then run the deferred suites in one batch when no further commits are expected, and
+record their timings and peaks in the handoff note.
 ```
 cargo fmt --all -- --check
 cargo fmt --manifest-path tools/transcript-ref/Cargo.toml --all -- --check
@@ -115,7 +125,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
-cargo test --workspace                      # 958 tests as of S20; 65 more are #[ignore]d
+cargo test --workspace                      # 960 tests as of S20; 65 more are #[ignore]d
 cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 18.8 GB peak, 198 s, 30 min on a runner
 cargo test -p prover --test acceptance -- --include-ignored --test-threads=1  # DEFERRED; S16's statement, 8.6 GB peak
 cargo test -p verifier --test cli -- --include-ignored --test-threads=1       # DEFERRED; ditto
@@ -567,7 +577,8 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 - **`verify_shard`'s check order is its error class**: `Statement`, `Malformed`,
   `Constraint`, `Lookup`, `MemoryArgument`, `Opening`, first failure returned. The CLI and
   every test call `verify_shard` and nothing else; `verifier_core::reduce_shard` is every
-  step but the opening, `#![no_std]`, for the recursion guest.
+  step but the opening, `#![no_std]`, for the recursion guest. S20 split those steps into
+  three functions by what each reads, and the order survived it exactly.
 - **A verifying key's circuits are the registry's, byte for byte.**
   `constraints::family_circuit(family, trace_vars)` is the one source of circuits, and
   loading a key refuses any other. Identity binds the program, not its circuit. A family
@@ -690,10 +701,25 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   the static `VmConfig`, the statement it binds and one `ShardProof` per statement shard
   in statement order — no new evidence, no accumulator entry. `verify_block` is
   `derive_global_phase` once, three structural checks (the descriptor and the statement
-  against the verifier's, shard-set exactness, the ts windows) and then
-  `verify_shard_local` plus the opening per shard, which is exactly what `verify_shard`
-  runs. The cross-shard read/write root product is step 10's, run per shard, so it is the
-  verifier's and never a prover self-check. `docs/spec/block-proof.md`.
+  against the verifier's, shard-set exactness, the ts windows), `verify_global_memory`
+  once, and then `verify_shard_local` plus the opening per shard, which is exactly what
+  `verify_shard` runs. The cross-shard read/write root product is the verifier's and
+  never a prover self-check. `docs/spec/block-proof.md`.
+- **A check that reads only the statement runs once per block, not once per shard.**
+  `verifier_core`'s split is by operand, not by convenience: `derive_global_phase`
+  (steps 1–3, the global transcript) and `verify_global_memory` (step 10b — the boundary
+  in range, `x10`'s final value, and `gkr_verify::reconciles` over every shard's roots
+  against the boundary factors) name no `ShardProof` and have one answer for a
+  statement, so `verify_block` calls each once; only `verify_shard_local` takes a proof
+  and runs per shard. Per shard, step 10b would refold the same 66 boundary tuples and
+  remultiply the same root product `Σ shard_counts` times for that one boolean. What
+  still binds a shard into the product is **step 10a**, its own GKR output roots against
+  the statement's entry for its position, which stays in `verify_shard_local` and must;
+  shard-set exactness then makes every root in the product a verified shard's. The
+  consequence for a caller: `verify_shard_local` alone is not a verification, and a
+  block verifier that omits `verify_global_memory` has checked every circuit and no
+  memory argument. The order is unchanged — step 11 cannot fail, so `reduce_shard`
+  running 10b after it returns gives S16's first failure, class and message.
 - **The ts window is a check on the plan, not on the trace** (owner's decision, S20).
   Each shard claims `[ts_start, ts_end)`, absorbed at S2 before its witness commitments;
   a block requires the windows of each **cycle-owning** family

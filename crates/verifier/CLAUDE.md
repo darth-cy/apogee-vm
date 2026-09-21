@@ -41,11 +41,19 @@ to.
 - **`verify_block` composes that path, it does not repeat it** (S20). It is
   `derive_global_phase` once, the block's four structural checks — the descriptor and
   the statement against the verifier's, `BlockProof::shape()`, and `check_ts_windows` —
-  and then `verify_shard_local` plus the opening per shard, which are exactly the two
-  halves `verify_shard` runs. Its signature is
+  then `verify_global_memory` **once**, and then `verify_shard_local` plus the opening
+  per shard, which are exactly the parts `verify_shard` runs. Its signature is
   `(&VerifyingKey, &BlockProof, &PublicInputs)` and nothing else. The cross-shard
-  read/write root product is step 10's, run per shard, so it is the verifier's and never
-  a prover self-check.
+  read/write root product is the verifier's and never a prover self-check.
+- **Everything that reads only the statement runs once; only `verify_shard_local` runs
+  per shard.** The cross-shard root product and the boundary fold are a function of the
+  statement, so a block checks them once (B5) and not once a shard; what each shard
+  still owes is step 10a, its own roots against the statement's entry for it, which
+  `verify_shard_local` keeps. B3's shard-set exactness is what makes the two add up to
+  S16's step 10: every root in the product belongs to a shard that was verified.
+  Because B1–B5 verify no shard — they read the block's shape and its statement, never
+  a GKR transition or an opening — a statement that cannot reconcile is refused before
+  any shard's circuit is run.
 - **Every curve point is decoded through its validating reader** — the `SrsVerifier`'s
   three through S05's `from_bytes`, every commitment through `G1Affine::from_bytes`, the
   Mercury proof through `MercuryProof::from_bytes` — and a point that is not one is
@@ -75,6 +83,6 @@ to.
 ## Tests
 | File | Covers |
 | --- | --- |
-| `src/lib.rs` (unit) | the core's opening width is `pcs::PROOF_BYTES`; `every_generic_table_commitment_is_decoded_at_load` (S17): a key with the jump family over real points loads back to itself, and each of the three generic-table commitments off the curve, the SRS digest recomputed over it, or a setup commitment off the curve, identity recomputed, is refused by name |
-| `tests/signature.rs` | acceptance 12: `verify_shard` and `reduce_shard` pinned to `(&VerifyingKey, &ShardProof, &PublicInputs)` at compile time; the `SrsVerifier` layout, over three distinct points, round-trips field by field, and each of the three with one bit flipped is refused |
+| `src/lib.rs` (unit) | the core's opening width is `pcs::PROOF_BYTES`; `every_generic_table_commitment_is_decoded_at_load` (S17): a key with the jump family over real points loads back to itself, and each of the three generic-table commitments off the curve, the SRS digest recomputed over it, or a setup commitment off the curve, identity recomputed, is refused by name; `the_block_checks_the_statement_s_memory_argument_before_any_shard` (S20): a block of one shell shard over a statement whose boundary is out of the clock answers `MemoryArgument`, which only check 5 can give — the per-shard loop would have answered `Statement`, and the test asserts that too. It fails if check 5 is deleted or folded back into the loop |
+| `tests/signature.rs` | acceptance 12: `verify_shard` and `reduce_shard` pinned to `(&VerifyingKey, &ShardProof, &PublicInputs)` at compile time, and the core's three parts to theirs — the two that take no `ShardProof` are the two a block runs once; the `SrsVerifier` layout, over three distinct points, round-trips field by field, and each of the three with one bit flipped is refused |
 | `tests/cli.rs` | **`#[ignore]`d** (it proves the S16 statement first): S20's `the_cli_verifies_a_block_file` — the same statement proved as a block, the `block` verb exiting 0, and another identity, a statement that is not the block's, a flipped bit anywhere in the block, a shard file given to the block form and a block file given to the shard form each refused, with a usage error on a short `block` invocation; and acceptance 10's CLI half — the dumped key, statement and proofs verify; another identity is refused; a flipped bit in each proof, the statement and the key is refused; each proof alone, and each given twice, refused as not the statement's shards, and the two in reverse order accepted; a usage error exits 2 |

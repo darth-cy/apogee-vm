@@ -9,9 +9,17 @@ use verifier::{
 const _: fn(&VerifyingKey, &ShardProof, &PublicInputs) -> Result<(), VerifyError> = verify_shard;
 const _: fn(&VerifyingKey, &BlockProof, &PublicInputs) -> Result<(), VerifyError> = verify_block;
 
-/// The no_std core's two halves, which both entry points compose (S20).
+/// The no_std core's three parts, which both entry points compose (S20). Two
+/// of them are per statement and one is per shard, which is the whole point of
+/// the split: a block runs `derive_global_phase` and `verify_global_memory`
+/// once each, and `verify_shard_local` once a shard.
 const _: fn(&VerifyingKey, &PublicInputs) -> Result<verifier_core::GlobalChallenges, VerifyError> =
     verifier_core::derive_global_phase;
+const _: fn(
+    &VerifyingKey,
+    &verifier_core::GlobalChallenges,
+    &PublicInputs,
+) -> Result<(), VerifyError> = verifier_core::verify_global_memory;
 const _: fn(
     &VerifyingKey,
     &verifier_core::GlobalChallenges,

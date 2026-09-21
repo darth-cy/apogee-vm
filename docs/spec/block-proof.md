@@ -14,7 +14,7 @@ and `docs/spec/memory.md` for the multiset, and restates neither.
 | crate | what |
 | --- | --- |
 | `crates/constants` | `family::CYCLE_OWNING`, which families own cycles |
-| `crates/verifier-core` | `#![no_std]`: `BlockProof`, `ShardRecord`, `BlockReconciliation`, `check_ts_windows`, and the `derive_global_phase` / `verify_shard_local` split |
+| `crates/verifier-core` | `#![no_std]`: `BlockProof`, `ShardRecord`, `BlockReconciliation`, `check_ts_windows`, and the `derive_global_phase` / `verify_global_memory` / `verify_shard_local` split |
 | `crates/verifier` | `std`: `verify_block`, and the CLI's `block` verb |
 | `crates/prover` | `prove_block`, the shard cut, the per-shard time window, and the block's parallel step |
 | `crates/trace` | `ShardPlan` and `plan_shards`, S12's |
@@ -147,15 +147,29 @@ it and nothing else. Checks run in this order, and the first that fails names th
 | B2 | — | `derive_global_phase(vk, public)`: steps 1 to 3 of `docs/spec/shard-proof.md` §6 and the global transcript G1–G11, **once for the whole block** |
 | B3 | `Statement` | `BlockProof::shape()`, §2.1 |
 | B4 | `Statement` | `check_ts_windows` over the records, §4 |
-| B5 | per shard | `verify_shard_local(vk, global, shard, public)` — steps 4 to 11 — then the opening, step 12 |
+| B5 | `MemoryArgument` | `verify_global_memory(vk, global, public)` — step 10b — **once for the whole block** |
+| B6 | per shard | `verify_shard_local(vk, global, shard, public)` — steps 4 to 10a and 11 — then the opening, step 12 |
 
-B5 is where the cross-shard reconciliation happens: step 10 multiplies the read-side
-roots and the write-side roots across **every** shard of every family in the statement,
-`INIT_TEARDOWN` and `ZERO_WINDOWS` included, applies the boundary factors once, and
-requires the products equal and nonzero (`docs/spec/memory.md` §4.2). It also holds each
-shard's own two roots to the statement's for its position, which is the link between the
-roots a shard's proof establishes and the roots the product reads. Every channel's LogUp
-root pair is checked per shard at step 9.
+**B5 is the cross-shard reconciliation, and it is one check, not one per shard.** It
+multiplies the read-side roots and the write-side roots across **every** shard of every
+family in the statement, `INIT_TEARDOWN` and `ZERO_WINDOWS` included, applies the
+boundary factors once, and requires the products equal and nonzero
+(`docs/spec/memory.md` §4.2). Every operand is the statement's or the key's — the
+boundary, the root list, `vk.entry_pc` and the four memory challenges B2 drew — and no
+`ShardProof` is among them, so the answer is a property of the statement and running it
+per shard would recompute one boolean `Σ shard_counts` times.
+
+B6 is what ties a *particular* proof to the product B5 read: step 10a holds each
+shard's own two roots, which are outputs of its GKR proof, to the statement's entry for
+its position. With B3's shard-set exactness above it — one proof per statement shard,
+in statement order, no gap and no extra — every root in B5's product belongs to a shard
+B6 verified, so the two checks together are what S16's step 10 was for one shard.
+Every channel's LogUp root pair is checked per shard, at step 9.
+
+**B1 to B5 verify no shard.** They read the block's shape, its windows and its
+statement — never a GKR transition or an opening — so a statement that cannot reconcile
+is refused before any shard's circuit is run, where S16's order reached it only after
+the first shard's circuit and opening had been checked.
 
 **Nothing is delegated to a prover-side self-check.** `verify_block` reaches every
 check through `verifier_core` and `pcs`, and the prover's own assertions are not on
@@ -165,23 +179,35 @@ the path.
 shard must also drop its count, its commitment list and its root pair and re-prove the
 rest — which is what an honest prover would do for the truncated statement, and gives a
 block that passes B1 to B4. Its memory events are then missing from one side of the
-global multiset, and step 10 answers `MemoryArgument("the statement's roots do not
+global multiset, and step 10b answers `MemoryArgument("the statement's roots do not
 reconcile")`.
 
 **The single-path rule.** `verify_shard(vk, proof, public)` is
-`derive_global_phase` then `verify_shard_local` then the opening, and `verify_block` is
-the same two functions with the first run once. `reduce_shard` is their composition, so
-its eleven steps, their order and their classes are S16's, unchanged.
+`derive_global_phase`, then `verify_shard_local`, then `verify_global_memory`, then the
+opening; `verify_block` is the same three functions with the two statement ones run
+once. `reduce_shard` is their composition, so its steps, their order and their classes
+are S16's, unchanged — step 11 cannot fail, so 10b after it is 10b in place.
 
 ```rust
 // crates/verifier-core, #![no_std]
 pub struct GlobalChallenges { pub memory: [Fr; 4], pub digest: Fr }
+// once per statement
 pub fn derive_global_phase(vk: &VerifyingKey, public: &PublicInputs)
     -> Result<GlobalChallenges, VerifyError>;
+pub fn verify_global_memory(vk: &VerifyingKey, global: &GlobalChallenges,
+                            public: &PublicInputs)
+    -> Result<(), VerifyError>;
+// once per shard
 pub fn verify_shard_local(vk: &VerifyingKey, global: &GlobalChallenges,
                           proof: &ShardProof, public: &PublicInputs)
     -> Result<OpeningClaim, VerifyError>;
 ```
+
+**`verify_shard_local` alone is not a verification**, and its signature is the warning:
+a caller that runs it over every shard and never calls `verify_global_memory` has
+checked every circuit and no memory argument, and would accept a block whose shards are
+individually perfect and whose multiset does not close. `verify_block` is the in-tree
+block verifier and S27's `aggregate_block` is the other; both owe the one call.
 
 S27's leaf/root split is the consumer: a leaf verifies one shard against a digest the
 root derived once.
