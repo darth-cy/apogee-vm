@@ -12,8 +12,9 @@ use field::Fr;
 use gkr_verify::SumcheckProof;
 use transcript::TranscriptEvent::{Absorb, Challenge};
 use verifier_core::{
-    global_commit, memory_slots, reduce_shard, shard_challenges, shard_transcript, srs_digest,
-    statement_shards, VerifyError, TRIVIAL_TS_WINDOW,
+    derive_global_phase, global_commit, memory_slots, reduce_shard, shard_challenges,
+    shard_transcript, srs_digest, statement_shards, verify_global_memory, VerifyError,
+    TRIVIAL_TS_WINDOW,
 };
 
 fn refusal(
@@ -406,10 +407,20 @@ fn a_statement_the_key_does_not_describe_is_refused_as_statement() {
         p,
         proof.clone(),
     ));
+    // Step 4 since S20: a window is `[start, end)` inside the clock. Which
+    // windows a block admits is `check_ts_windows`, which needs every shard.
     let mut q = proof.clone();
-    q.ts_window = [0, 4];
+    q.ts_window = [5, 4];
     cases.push((
-        "the time window is not the whole clock",
+        "the time window is not [start, end) in the clock",
+        key.clone(),
+        honest.clone(),
+        q,
+    ));
+    let mut q = proof.clone();
+    q.ts_window = [0, (1 << 38) + 1];
+    cases.push((
+        "the time window is not [start, end) in the clock",
         key.clone(),
         honest.clone(),
         q,
@@ -521,4 +532,53 @@ fn garbage_is_refused_and_never_panics() {
         }
         assert!(reduce_shard(&key, &q, &p).is_err());
     }
+}
+
+/// **Step 10b reads the statement and the key, and no `ShardProof` at all**,
+/// `docs/spec/shard-proof.md` §6: it is `verify_global_memory`, and a block
+/// runs it once however many shards it has. Its own three checks keep S16's
+/// order — the boundary's range, then the exit status, then the product — so
+/// a statement broken two ways answers with the first.
+#[test]
+fn the_statement_half_of_the_memory_argument_is_one_check_for_a_statement() {
+    let key = vk();
+    let answer = |edit: fn(&mut verifier_core::PublicInputs)| {
+        let mut p = statement();
+        edit(&mut p);
+        // Every edit but the roots and the exit status moves the digest, so
+        // each statement is judged against challenges of its own.
+        let g = derive_global_phase(&key, &p).expect("a statement the key describes");
+        verify_global_memory(&key, &g, &p)
+    };
+    let memory = VerifyError::MemoryArgument;
+    let late = memory("a boundary timestamp is not below 2^38");
+    assert_eq!(answer(|p| p.boundary.reg_ts[5] = 1 << 38), Err(late));
+    assert_eq!(answer(|p| p.boundary.pc_ts = 1 << 38), Err(late));
+    assert_eq!(
+        answer(|p| p.exit_status += 1),
+        Err(memory("x10's final value is not the exit status"))
+    );
+    // Both, and the range refusal is the one returned: 10b's internal order
+    // is S16's step 10, which checked the range first.
+    assert_eq!(
+        answer(|p| {
+            p.boundary.pc_ts = 1 << 38;
+            p.exit_status += 1;
+        }),
+        Err(late)
+    );
+    // The synthetic roots are 1, 2, 3 and 4, which no boundary reconciles.
+    assert_eq!(
+        answer(|_| ()),
+        Err(memory("the statement's roots do not reconcile"))
+    );
+    // And the product is what refuses them: the roots move it, though they
+    // move no challenge — the digest test above pins that they do not.
+    let mut p = statement();
+    p.memory_roots[0][0] += Fr::ONE;
+    let g = derive_global_phase(&key, &p).expect("a statement the key describes");
+    assert_eq!(
+        verify_global_memory(&key, &g, &p),
+        Err(memory("the statement's roots do not reconcile"))
+    );
 }

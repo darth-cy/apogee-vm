@@ -31,8 +31,10 @@ use poly::{MultilinearPoly, PolyBacking};
 use std::collections::BTreeMap;
 
 mod tamper;
+mod tape;
 
 pub use tamper::{Cell, Tamper, TamperHarness};
+pub use tape::{check_global_tape, expected_global_tape, global_tape, tape};
 
 /// Independent pseudo-random points per sampled check.
 const TRIALS: usize = 8;

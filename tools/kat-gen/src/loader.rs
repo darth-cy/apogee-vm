@@ -16,7 +16,7 @@ use std::process::Command;
 use crate::write_vectors;
 
 /// The guest ELFs the loader tests read, and what each is for.
-pub const ELF_FIXTURES: [(&str, &str); 14] = [
+pub const ELF_FIXTURES: [(&str, &str); 15] = [
     (
         "fib",
         "real compiler output: the address and boundary oracle",
@@ -77,6 +77,11 @@ pub const ELF_FIXTURES: [(&str, &str); 14] = [
         "S19's guest: `lw`/`sw`, the six sub-word loads and stores at every \
          legal offset, and all eleven atomics, over the stage's acceptance \
          matrices, self-checking",
+    ),
+    (
+        "shards",
+        "S20's guest: a counted loop of unrolled `add`s whose add/sub family \
+         runs 1,064,970 cycles, so one execution is two shards of one family",
     ),
 ];
 

@@ -1,5 +1,13 @@
 //! `reduce_shard`: a shard proof reduced to the one Mercury opening it still
 //! owes, or refused. `docs/spec/shard-proof.md` §6, steps 1 to 11, in order.
+//!
+//! Since S20 the steps are split at the fork in three public parts, so a block
+//! pays for everything that depends on the statement alone once instead of
+//! once per shard: [`derive_global_phase`] is steps 1 to 3 and the replay,
+//! [`verify_shard_local`] is steps 4 to 11 but the memory argument's statement
+//! half, and [`verify_global_memory`] is that half — step 10b, the boundary
+//! and the cross-shard root product. `reduce_shard` is their composition and
+//! its order, its classes and its answers are S16's, unchanged.
 
 use alloc::vec::Vec;
 
@@ -12,25 +20,34 @@ use poly::{MultilinearPoly, PolyBacking};
 
 use crate::statement::{
     check_memory_windows, global_commit, shard_challenges, shard_transcript, statement_shards,
-    TRIVIAL_TS_WINDOW,
 };
 use crate::types::{OpeningClaim, PublicInputs, ShardProof, VerifyError, VerifyingKey};
 
 /// `x10`'s position in `BoundaryFinals::reg_values`, which starts at `x1`.
 const EXIT_STATUS_REGISTER: usize = 10 - 1;
 
-/// Reduce `proof` to its opening claim, or refuse it with the class of the
-/// first check that fails, `docs/spec/shard-proof.md` §6.
+/// What the global commit phase leaves every shard of a statement: the four
+/// memory challenges `γ_M, α_addr, α_ts, α_val` and the global state digest.
 ///
-/// The one no_std entry point of the verifier. `verifier::verify_shard` is this
-/// followed by the opening; nothing else verifies a shard. `vk` has passed its
-/// load (`VerifyingKey::check`); nothing `proof` or `public` carries makes
-/// this panic.
-pub fn reduce_shard(
+/// One per statement, whatever the shard counts. [`derive_global_phase`] is
+/// the only way to obtain one, and it never returns one for a statement the
+/// key does not describe.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GlobalChallenges {
+    pub memory: [Fr; 4],
+    pub digest: Fr,
+}
+
+/// The statement's checks and the global transcript, `docs/spec/shard-proof.md`
+/// §6 steps 1 to 3 and §2: the statement is one `vk` describes, its window
+/// rules hold, its per-shard lists line up, and then G1 to G11 are replayed.
+///
+/// **Run once per statement**, by the prover's global commit phase and by
+/// `verify_block`; `verify_shard` runs it for its one shard.
+pub fn derive_global_phase(
     vk: &VerifyingKey,
-    proof: &ShardProof,
     public: &PublicInputs,
-) -> Result<OpeningClaim, VerifyError> {
+) -> Result<GlobalChallenges, VerifyError> {
     let statement = VerifyError::Statement;
     let config = &vk.config;
 
@@ -68,8 +85,10 @@ pub fn reduce_shard(
     if total != public.memory_roots.len() as u64 {
         return Err(statement("the statement has not one root pair per shard"));
     }
-    let shards = statement_shards(config, &public.shard_counts);
-    for ((family, _), list) in shards.iter().zip(&public.memory_commitments) {
+    for ((family, _), list) in statement_shards(config, &public.shard_counts)
+        .iter()
+        .zip(&public.memory_commitments)
+    {
         let circuit = vk
             .circuit(*family)
             .expect("step 1 matched the circuits to the config");
@@ -80,13 +99,50 @@ pub fn reduce_shard(
         }
     }
 
-    // 4. The time window.
-    if proof.ts_window != TRIVIAL_TS_WINDOW {
-        return Err(statement("the time window is not the whole clock"));
+    let global = global_commit(vk, public);
+    Ok(GlobalChallenges {
+        memory: global.memory,
+        digest: global.digest,
+    })
+}
+
+/// One shard against a statement whose global phase is already derived,
+/// `docs/spec/shard-proof.md` §6 steps 4 to 11: its time window, its seeding,
+/// its shape, its circuit, its channels and the memory argument's **shard
+/// half**, then the opening claim its caller owes.
+///
+/// **Not a whole verification on its own.** The memory argument's other half —
+/// the boundary and the read/write root product over every shard — depends on
+/// the statement and not on any one proof, so it is [`verify_global_memory`],
+/// which a caller owes **once** per statement however many shards it runs.
+/// `reduce_shard` and `verifier::verify_shard` run it for their one shard;
+/// `verifier::verify_block` runs it once for the block.
+///
+/// `global` is [`derive_global_phase`]`(vk, public)`; passing one derived from
+/// another statement is a caller error and makes the answer meaningless.
+/// Nothing `proof` or `public` carries makes this panic.
+pub fn verify_shard_local(
+    vk: &VerifyingKey,
+    global: &GlobalChallenges,
+    proof: &ShardProof,
+    public: &PublicInputs,
+) -> Result<OpeningClaim, VerifyError> {
+    let statement = VerifyError::Statement;
+    let config = &vk.config;
+    let shards = statement_shards(config, &public.shard_counts);
+
+    // 4. The time window is a window: `[start, end)` inside the clock. Which
+    //    windows a *block* admits — ordered and disjoint within a cycle-owning
+    //    family — is `crate::check_ts_windows`, which needs every shard and so
+    //    is `verify_block`'s (`docs/spec/block-proof.md` §4).
+    let [start, end] = proof.ts_window;
+    if start > end || end > 1 << TS_BITS {
+        return Err(statement(
+            "the time window is not [start, end) in the clock",
+        ));
     }
 
-    // 5. The global transcript, replayed.
-    let global = global_commit(vk, public);
+    // 5. The global transcript's digest, replayed.
     if global.digest != proof.global_digest {
         return Err(statement("the proof was made for another statement"));
     }
@@ -164,12 +220,58 @@ pub fn reduce_shard(
         }
     }
 
-    // 10. The memory argument.
+    // 10a. The memory argument's shard half: this proof's own roots are the
+    //      ones the statement publishes for this shard, which is what binds
+    //      this shard into the global product [`verify_global_memory`] takes.
+    //      10b, the product itself, is a function of the statement alone and
+    //      is the caller's, once.
     let memory = VerifyError::MemoryArgument;
     let own = [proof.outputs[READ_ROOT], proof.outputs[WRITE_ROOT]];
     if own != public.memory_roots[position] {
         return Err(memory("the shard's roots are not the statement's"));
     }
+
+    // 11. The opening the wrapper owes: M from the statement, W from the
+    //     proof, S from the key — identity's, then, for a family that reads
+    //     the generic channel, the generic table's — in layout order.
+    let mut commitments = public.memory_commitments[position].clone();
+    commitments.extend_from_slice(&proof.witness_commitments);
+    commitments.extend_from_slice(&vk.setup_commitments[family_index]);
+    if circuit.reads_generic_table() {
+        commitments.extend_from_slice(&vk.generic_table);
+    }
+    Ok(OpeningClaim {
+        commitments,
+        point,
+        values: claims.iter().map(|c| c.value).collect(),
+        transcript: t,
+    })
+}
+
+/// The memory argument's **statement half**, `docs/spec/shard-proof.md` §6
+/// step 10b and `docs/spec/memory.md` §4.2: the boundary is in range and names
+/// the exit status, and the read/write root product reconciles over every
+/// shard of every family in the statement, against the boundary's two factors.
+///
+/// **Run once per statement**, not once per shard. Every operand is the
+/// statement's or the key's — `vk.entry_pc`, `public.boundary`,
+/// `public.memory_roots` and `global.memory` — so the answer is the same for
+/// every shard of one statement, and a block that ran it per shard would fold
+/// the same 66 boundary tuples and the same root product `shard_count` times
+/// over. What ties one shard's proof into the product it reads is step 10a,
+/// in [`verify_shard_local`], which holds that proof's own roots to the
+/// statement's entry for its shard; with shard-set exactness on top —
+/// `BlockProof::shape`, one proof per statement shard and no other — every
+/// root in the product is a verified shard's.
+///
+/// `global` is [`derive_global_phase`]`(vk, public)`. Nothing `public` carries
+/// makes this panic.
+pub fn verify_global_memory(
+    vk: &VerifyingKey,
+    global: &GlobalChallenges,
+    public: &PublicInputs,
+) -> Result<(), VerifyError> {
+    let memory = VerifyError::MemoryArgument;
     let b = &public.boundary;
     if b.reg_ts
         .iter()
@@ -188,20 +290,27 @@ pub fn reduce_shard(
     if !reconciles(&reads, &writes, factors) {
         return Err(memory("the statement's roots do not reconcile"));
     }
+    Ok(())
+}
 
-    // 11. The opening the wrapper owes: M from the statement, W from the
-    //     proof, S from the key — identity's, then, for a family that reads
-    //     the generic channel, the generic table's — in layout order.
-    let mut commitments = public.memory_commitments[position].clone();
-    commitments.extend_from_slice(&proof.witness_commitments);
-    commitments.extend_from_slice(&vk.setup_commitments[family_index]);
-    if circuit.reads_generic_table() {
-        commitments.extend_from_slice(&vk.generic_table);
-    }
-    Ok(OpeningClaim {
-        commitments,
-        point,
-        values: claims.iter().map(|c| c.value).collect(),
-        transcript: t,
-    })
+/// Reduce `proof` to its opening claim, or refuse it with the class of the
+/// first check that fails, `docs/spec/shard-proof.md` §6.
+///
+/// The one no_std entry point for a single shard. `verifier::verify_shard` is
+/// this followed by the opening; nothing else verifies a shard. `vk` has
+/// passed its load (`VerifyingKey::check`); nothing `proof` or `public`
+/// carries makes this panic.
+pub fn reduce_shard(
+    vk: &VerifyingKey,
+    proof: &ShardProof,
+    public: &PublicInputs,
+) -> Result<OpeningClaim, VerifyError> {
+    let global = derive_global_phase(vk, public)?;
+    let claim = verify_shard_local(vk, &global, proof, public)?;
+    // Step 10b, at step 10's place in the order: step 11 builds the claim and
+    // cannot fail, so running the statement half after it returns is the same
+    // first failure, with the same class and the same message, as S16's
+    // single step 10 was.
+    verify_global_memory(vk, &global, public)?;
+    Ok(claim)
 }

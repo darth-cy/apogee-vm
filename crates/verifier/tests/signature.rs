@@ -1,10 +1,31 @@
-//! S16 acceptance 12: the one verification entry point takes the verifying
-//! key, the proof and the public inputs, and nothing else. Pinned at compile
-//! time: a changed signature does not build.
+//! S16 acceptance 12 and S20 must-be-exact 2: every verification entry point
+//! takes the verifying key, the proof and the public inputs, and nothing else
+//! — master rule 6. Pinned at compile time: a changed signature does not build.
 
-use verifier::{verify_shard, PublicInputs, ShardProof, VerifyError, VerifyingKey};
+use verifier::{
+    verify_block, verify_shard, BlockProof, PublicInputs, ShardProof, VerifyError, VerifyingKey,
+};
 
 const _: fn(&VerifyingKey, &ShardProof, &PublicInputs) -> Result<(), VerifyError> = verify_shard;
+const _: fn(&VerifyingKey, &BlockProof, &PublicInputs) -> Result<(), VerifyError> = verify_block;
+
+/// The no_std core's three parts, which both entry points compose (S20). Two
+/// of them are per statement and one is per shard, which is the whole point of
+/// the split: a block runs `derive_global_phase` and `verify_global_memory`
+/// once each, and `verify_shard_local` once a shard.
+const _: fn(&VerifyingKey, &PublicInputs) -> Result<verifier_core::GlobalChallenges, VerifyError> =
+    verifier_core::derive_global_phase;
+const _: fn(
+    &VerifyingKey,
+    &verifier_core::GlobalChallenges,
+    &PublicInputs,
+) -> Result<(), VerifyError> = verifier_core::verify_global_memory;
+const _: fn(
+    &VerifyingKey,
+    &verifier_core::GlobalChallenges,
+    &ShardProof,
+    &PublicInputs,
+) -> Result<verifier_core::OpeningClaim, VerifyError> = verifier_core::verify_shard_local;
 
 /// The no_std core's entry point takes the same three and returns the opening
 /// claim the wrapper finishes.
@@ -17,9 +38,11 @@ const _: fn(
 /// The pins above are the test; this one says so at run time too.
 #[test]
 fn the_verifier_entry_points_take_the_key_the_proof_and_the_public_inputs() {
-    let entry: fn(&VerifyingKey, &ShardProof, &PublicInputs) -> Result<(), VerifyError> =
+    let shard: fn(&VerifyingKey, &ShardProof, &PublicInputs) -> Result<(), VerifyError> =
         verify_shard;
-    let _ = entry;
+    let block: fn(&VerifyingKey, &BlockProof, &PublicInputs) -> Result<(), VerifyError> =
+        verify_block;
+    let _ = (shard, block);
 }
 
 /// The SRS verifier's bytes are S07's layout, and every point goes back

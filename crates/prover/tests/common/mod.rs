@@ -11,6 +11,11 @@
 //! - S19's: `guests/mem`'s, with five — add/sub, jump/branch/slt and the three
 //!   families S19 proves — at `2^20`. It is the first statement whose rows
 //!   touch RAM, so it is also the first with a `ZERO_WINDOWS` shard.
+//! - S20's: `guests/shards`', with add/sub and jump/branch/slt at `2^20`. Its
+//!   add/sub family runs 1,064,970 cycles, past `2^20`, so it is the first
+//!   statement with **two shards of one family** — and it touches no RAM, so
+//!   it is also the first with a family the config carries and no shard
+//!   proves.
 
 #![allow(dead_code)]
 
@@ -43,6 +48,12 @@ pub const CONTROL_RESULT: u32 = 16;
 
 /// `guests/mem`'s exit status: the number of its checks.
 pub const MEM_RESULT: u32 = 50;
+
+/// `guests/shards`' exit status: the number of its checks.
+pub const SHARDS_RESULT: u32 = 2;
+
+/// `guests/shards`' add/sub occupancy, which is what makes it two shards.
+pub const SHARDS_ADD_CYCLES: u64 = 1_064_970;
 
 /// The committed ELF of guest `name`.
 pub fn fixture(name: &str) -> Vec<u8> {
@@ -97,6 +108,11 @@ pub fn mem_params() -> ProgramParams {
     ])
 }
 
+/// S20's heights: both of `shards`' execution families at `2^20`.
+pub fn shards_params() -> ProgramParams {
+    heights(&[family::ADD_SUB_LUI_AUIPC, family::JUMP_BRANCH_SLT])
+}
+
 fn program_of(name: &str, params: &ProgramParams) -> Program {
     let image = load_elf(&fixture(name)).unwrap_or_else(|e| panic!("{name} loads: {e:?}"));
     let (tables, config) =
@@ -124,6 +140,10 @@ pub fn mem_program() -> Program {
     program_of("mem", &mem_params())
 }
 
+pub fn shards_program() -> Program {
+    program_of("shards", &shards_params())
+}
+
 /// The post-execution archive of `addsub`'s one run.
 pub fn archive(program: &Program) -> TraceArchive {
     trace(program, RESULT)
@@ -142,6 +162,11 @@ pub fn alu_archive(program: &Program) -> TraceArchive {
 /// The post-execution archive of `mem`'s one run.
 pub fn mem_archive(program: &Program) -> TraceArchive {
     trace(program, MEM_RESULT)
+}
+
+/// The post-execution archive of `shards`' one run.
+pub fn shards_archive(program: &Program) -> TraceArchive {
+    trace(program, SHARDS_RESULT)
 }
 
 /// A run with no input and no hint, which must exit with `status`.
@@ -179,6 +204,10 @@ pub fn alu_setup() -> ProverSetup {
 
 pub fn mem_setup() -> ProverSetup {
     ProverSetup::new(mem_program(), toy_srs(ADD_VARS)).expect("mem registers")
+}
+
+pub fn shards_setup() -> ProverSetup {
+    ProverSetup::new(shards_program(), toy_srs(ADD_VARS)).expect("shards registers")
 }
 
 /// The toy SRS's `tau`.

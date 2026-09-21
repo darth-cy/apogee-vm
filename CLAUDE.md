@@ -15,9 +15,12 @@ docs/
   GLOSSARY.md    the vocabulary (column = multilinear = poly; layer; shard; family)
   guest-program-manual.md  writing a guest and exporting its ProgramImage artifact
   spec/          the frozen protocol specs; read before touching what they cover; and
+                 metrics.md, the proving harness: the stage tree, the byte classes and
+                 what the memory model does and does not count; and
                  constraint-manifest.md, every registered circuit's columns and gates by
                  position, name and formula. One page per circuit family:
-                 jump-branch-slt.md, shift-bitwise.md, mul-div.md, memory-ops.md
+                 jump-branch-slt.md, shift-bitwise.md, mul-div.md, memory-ops.md;
+                 block-proof.md, the block layer: BlockProof, verify_block, ts windows
   handoff/       one note per completed stage: frozen API, artifacts, deviations
 crates/
   constants/     frozen constants and tags; zero logic; no_std
@@ -54,19 +57,23 @@ crates/
   gkr/           the GKR prover half: forward pass, self-check, layer sumcheck prover,
                  prove; std + rayon; re-exports gkr-verify whole
   verifier-core/ the statement and its wire forms, the global and shard transcripts, the
-                 verifying key and its load rules, and reduce_shard — every check of a
-                 shard but its Mercury opening; no_std, linked by the recursion guest
-  verifier/      verify_shard, the one verification path, and the `verifier` CLI; std
+                 verifying key and its load rules, reduce_shard and its two halves —
+                 every check of a shard but its Mercury opening — and the block: BlockProof,
+                 BlockReconciliation and the ts-window rule; no_std, linked by the recursion guest
+  verifier/      verify_shard and verify_block, the two verification paths, and the
+                 `verifier` CLI; std
   prover/        the verifying key's construction, family registration and fills, the
-                 global commit phase, prove_shard, the phase snapshots and resume; std
+                 global commit phase, prove_shard, prove_block, the phase snapshots and
+                 resume, and `metrics`, the proving harness behind the workspace's one
+                 cargo feature; std
   checker/       the standalone law validators and lookup rules, the padding, padding-identity
                  and witness-row checks, the native lookup evaluator, the memory_roots hook,
-                 the artifact cross-check, the circuit dump, the `checker` CLI, and
-                 TamperHarness, the tamper-twin prover; std
+                 the artifact cross-check, the circuit dump, the transcript-tape validator,
+                 the `checker` CLI, and TamperHarness, the tamper-twin prover; std
   guest-sdk/     crt0, entry!, linker script, bump allocator, ecall shims; no_std,
                  guest-only, and NOT a workspace member
 guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, opcodes/, heap/, consistency/,
-                 addsub/, control/, alu/, mem/
+                 addsub/, control/, alu/, mem/, shards/
                  -- their own workspace; see guests/Cargo.toml and docs/guest-program-manual.md
 assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 handoff
 tools/
@@ -76,8 +83,8 @@ tools/
                  toy circuit artifacts, defined there and compiled by `constraints`,
                  S14's memory artifacts, written from `constraints::memory`'s constructors,
                  S15's lookup toy, S16's add/sub and S17's jump/branch/slt circuits, written
-                 from `constraints::{add_sub, jump_branch_slt}`, and the generic table's
-                 commitments over the ceremony
+                 from `constraints::{add_sub, jump_branch_slt}`, the generic table's
+                 commitments over the ceremony, and S20's global transcript tape
   bench/         one routine per measurement, individually selectable
   artifact-dump/ a guest ELF out as the frozen ProgramImage artifact, plus a
                  readable report of it; `tables` prints the decoded tables and identity
@@ -102,6 +109,16 @@ Everything above the line must be green before a stage's PR. All of it runs in C
 there under master rule 7 because the circuit is the real size: run those locally and
 record the result in the stage's handoff note. For the rest, a green local run is a green
 CI run.
+
+**The `# DEFERRED` suites run once, at the end of a progression, not per commit**
+(owner's instruction, S20). Each is tens of minutes and 8–33 GB of peak memory, so
+re-running them after every change spends hours re-confirming what the previous run
+established. While a progression is in flight, the gate is `cargo fmt`, `cargo clippy`,
+the `riscv32imac` build and `cargo test --workspace`; a change whose only coverage would
+be a deferred suite owes a **fast** test pinning the same property — a synthetic key and
+statement in a unit test rather than a real proof — so the workspace run still guards it.
+Then run the deferred suites in one batch when no further commits are expected, and
+record their timings and peaks in the handoff note.
 ```
 cargo fmt --all -- --check
 cargo fmt --manifest-path tools/transcript-ref/Cargo.toml --all -- --check
@@ -111,14 +128,18 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
-cargo test --workspace                      # 945 tests as of S19; 56 more are #[ignore]d
-cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 4.63 GB a pass, 30 min on a runner
+cargo clippy -p prover --all-targets --features metrics -- -D warnings   # the ONE feature's configuration
+cargo test --workspace                      # 960 tests as of S20; 65 more are #[ignore]d
+cargo test -p prover --features metrics --test metrics  # the metrics harness; 10 more, 2 #[ignore]d
+cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 18.8 GB peak, 198 s, 30 min on a runner
 cargo test -p prover --test acceptance -- --include-ignored --test-threads=1  # DEFERRED; S16's statement, 8.6 GB peak
 cargo test -p verifier --test cli -- --include-ignored --test-threads=1       # DEFERRED; ditto
-cargo test -p checker --test tamper -- --include-ignored --test-threads=1     # DEFERRED; one re-proof a twin, 16.9 GB peak
-cargo test -p prover --test control -- --include-ignored --test-threads=1     # DEFERRED; S17's statement, 10.1 GB peak
-cargo test --release -p prover --test alu -- --include-ignored --test-threads=1  # DEFERRED; S18's statement, 14.1 GB peak, 111 s
-cargo test --release -p prover --test mem -- --include-ignored --test-threads=1  # DEFERRED; S19's statement, 14.7 GB peak, 118 s
+cargo test -p checker --test tamper -- --include-ignored --test-threads=1     # DEFERRED; one re-proof a twin, 17.0 GB peak, 1512 s
+cargo test -p prover --test control -- --include-ignored --test-threads=1     # DEFERRED; S17's statement, 18.0 GB peak, 64 s
+cargo test --release -p prover --test alu -- --include-ignored --test-threads=1  # DEFERRED; S18's statement, 30.9 GB peak, 67 s
+cargo test --release -p prover --test mem -- --include-ignored --test-threads=1  # DEFERRED; S19's statement, 32.3 GB peak, 87 s
+cargo test --release -p prover --test block -- --include-ignored --test-threads=1  # DEFERRED; S20's block, 33.4 GB peak, 779 s
+cargo test -p prover --features metrics --test metrics -- --include-ignored --nocapture  # DEFERRED; S16's statement twice, 8.6 GB each, and prints both reports
 cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify -p verifier-core --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
@@ -126,15 +147,20 @@ cd guests/fib && cargo build --target riscv32imac-unknown-none-elf
 APOGEE_GUEST_PROFILE=release cargo test -p loader --test qemu -- --include-ignored
 cargo test -p emulator --test differential -- --include-ignored
 cargo test -p emulator --test consistency -- --include-ignored   # and again at APOGEE_GUEST_PROFILE=release
-git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constraints/tests/vectors/
+git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constraints/tests/vectors/ crates/checker/tests/vectors/
 -------------------------------------------------------------------------------
 cargo run -p kat-gen                        # refresh every fixture (manual, deliberate)
-cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader | isa | program | gkr | memory | lookup | family
+cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader | isa | program | gkr | memory | lookup | family | tape
 cargo run -p checker -- laws <artifact>     # Laws 1-4 and the lookup rules, the standalone validators
 cargo run -p checker -- padding <artifact>  # the padding contract
 cargo run -p checker -- dump <artifact>     # a circuit, readably: layers, gates, relations, catalogue
+cargo run -p checker -- tape <verifying-key> <public-inputs>
+                                            # the global commit phase's absorb sequence, diffed
+                                            # against the frozen pre-fork order
 cargo run --release -p verifier -- <verifying-key> <identity-hex> <public-inputs> <proof>...
                                             # verify a statement: the types' to_bytes, as crates/verifier/tests/cli.rs writes them
+cargo run --release -p verifier -- block <verifying-key> <identity-hex> <public-inputs> <block>
+                                            # verify a BlockProof file end to end
 cargo run -p kat-gen -- guests              # rebuild the guest ELFs; opt-in, one machine
 cargo run --manifest-path tools/transcript-ref/Cargo.toml   # ditto, transcript vectors
 cargo run --release -p bench                # every routine; internal numbers only
@@ -210,7 +236,18 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 
 ## The rules that bite most often
 - **Concrete types.** `Fr` is a struct. There is no `F: Field`, and there never will be.
-- **No cargo features. Zero.** One build configuration for the whole workspace.
+- **No cargo features. Zero — with exactly one exception, and it is closed.** One build
+  configuration for the whole workspace. The exception is `prover/metrics`, granted by the
+  owner at S20 for the proving harness and **for nothing else**: the rule stands unchanged
+  for every future progression, and `crates/prover/tests/one_feature.rs` enforces that by
+  reading every `Cargo.toml` in the repository and failing on any `[features]` table but
+  that one, or any key in it but `metrics`. The feature is off by default, enables no
+  dependency, and changes no proof byte; CI builds, clippies and tests the feature-on
+  configuration too, so the anti-goal's stated hazard — "a configuration nobody builds is
+  broken and undiscovered" — does not apply to it. `docs/spec/metrics.md` §0. A
+  `features = [...]` *key* inside a dependency entry is a different thing and always was
+  allowed: it selects an upstream crate's features, as the workspace manifest does for
+  `ark-ec` and `ark-ff`.
 - **One encoding.** Field elements on the wire are canonical (non-Montgomery) 32-byte
   little-endian. Montgomery form exists only in memory. Source literals are the one
   exception and are their own single form: `Fr::from_hex`, `0x` plus 64 lowercase digits,
@@ -557,7 +594,8 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 - **`verify_shard`'s check order is its error class**: `Statement`, `Malformed`,
   `Constraint`, `Lookup`, `MemoryArgument`, `Opening`, first failure returned. The CLI and
   every test call `verify_shard` and nothing else; `verifier_core::reduce_shard` is every
-  step but the opening, `#![no_std]`, for the recursion guest.
+  step but the opening, `#![no_std]`, for the recursion guest. S20 split those steps into
+  three functions by what each reads, and the order survived it exactly.
 - **A verifying key's circuits are the registry's, byte for byte.**
   `constraints::family_circuit(family, trace_vars)` is the one source of circuits, and
   loading a key refuses any other. Identity binds the program, not its circuit. A family
@@ -676,6 +714,59 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   tamper, or no count exists), recommits memory columns when they change, re-proves, and
   asserts the refusal's class. It works because the prover checks nothing (S13). A
   change that breaks nothing must verify, and a test says it does.
+- **One execution is one block, and a block is its shards closed.** `BlockProof` carries
+  the static `VmConfig`, the statement it binds and one `ShardProof` per statement shard
+  in statement order — no new evidence, no accumulator entry. `verify_block` is
+  `derive_global_phase` once, three structural checks (the descriptor and the statement
+  against the verifier's, shard-set exactness, the ts windows), `verify_global_memory`
+  once, and then `verify_shard_local` plus the opening per shard, which is exactly what
+  `verify_shard` runs. The cross-shard read/write root product is the verifier's and
+  never a prover self-check. `docs/spec/block-proof.md`.
+- **A check that reads only the statement runs once per block, not once per shard.**
+  `verifier_core`'s split is by operand, not by convenience: `derive_global_phase`
+  (steps 1–3, the global transcript) and `verify_global_memory` (step 10b — the boundary
+  in range, `x10`'s final value, and `gkr_verify::reconciles` over every shard's roots
+  against the boundary factors) name no `ShardProof` and have one answer for a
+  statement, so `verify_block` calls each once; only `verify_shard_local` takes a proof
+  and runs per shard. Per shard, step 10b would refold the same 66 boundary tuples and
+  remultiply the same root product `Σ shard_counts` times for that one boolean. What
+  still binds a shard into the product is **step 10a**, its own GKR output roots against
+  the statement's entry for its position, which stays in `verify_shard_local` and must;
+  shard-set exactness then makes every root in the product a verified shard's. The
+  consequence for a caller: `verify_shard_local` alone is not a verification, and a
+  block verifier that omits `verify_global_memory` has checked every circuit and no
+  memory argument. The order is unchanged — step 11 cannot fail, so `reduce_shard`
+  running 10b after it returns gives S16's first failure, class and message.
+- **The ts window is a check on the plan, not on the trace** (owner's decision, S20).
+  Each shard claims `[ts_start, ts_end)`, absorbed at S2 before its witness commitments;
+  a block requires the windows of each **cycle-owning** family
+  (`constants::family::CYCLE_OWNING` — the seven instruction families, not the two RAM
+  window ones) to be non-empty, ordered and pairwise disjoint, **per family**, because
+  cycle numbers are global and two families interleave. **No gate ties a claimed window
+  to the rows committed under it**: the anchoring obligation the stage prompt asked for
+  was removed, because the global memory multiset already forces every live row of every
+  shard onto one path from the entry pc to `HALT_PC` with strictly increasing timestamps
+  (`docs/spec/memory.md` §4.2). Cross-shard ordering, cycle uniqueness and pc continuity
+  are carried by that and nothing else; there is no pc chaining and no tag that could
+  carry one.
+- **Shard proving is the block's one parallel step**, and it costs memory. It starts only
+  after the global commit phase closes, each task forks its transcript from the same
+  global state, and an indexed `map` collects in order — so a block is byte-identical for
+  any thread count. The price is one shard's forward pass per worker, and it **grew every
+  statement in the repository**: the four-shard demo is 44 s at a 24.2 GB peak on 18
+  cores and 319 s at a 10.6 GB peak on one, and `guests/mem`'s seven-shard statement went
+  from 14.7 GB / 119 s to **32.3 GB / 87 s** — about 2.2× the peak for about 1.4× the
+  speed, growing with the family count. There is no knob; a caller that must bound the
+  peak runs `prove_block` inside a `rayon::ThreadPoolBuilder` pool of its own, which is
+  what the determinism test does. Every deferred suite's peak was re-measured and the
+  numbers above the line, in `.github/workflows/ci.yml` and in
+  `docs/handoff/S20-orchestration.md` are that measurement.
+- **A cycle-owning family's shard cannot be smaller than `2^20` rows**, so a two-shard
+  family is two `2^20` shards whatever the guest. That is why the S20 demo is a new guest
+  — `guests/shards`, a counted loop running 1,064,970 add/sub cycles — and not an
+  existing one at `2^16`: the stage prompt's `2^16` is impossible
+  (`docs/spec/lookup.md` §3), and the two guests that read an fd 0 input are unprovable
+  while `EXIT` is the only provable ecall.
 - **Boring beats clever.** Added surface area is a defect. Every verifier entry point is
   `(&VerifyingKey, &Proof, &PublicInputs)` and nothing else.
 
@@ -701,3 +792,4 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 | S17 — Jump/branch/slt family | done | `docs/handoff/S17-control-flow.md` |
 | S18 — Shift/bitwise + mul/div families | done | `docs/handoff/S18-shift-mul.md` |
 | S19 — Memory-op families + atomics | done | `docs/handoff/S19-mem.md` |
+| S20 — Sharding + block orchestration | done | `docs/handoff/S20-orchestration.md` |

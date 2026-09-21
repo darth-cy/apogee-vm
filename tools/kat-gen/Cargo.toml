@@ -24,6 +24,11 @@ program.workspace = true
 # defined here and nowhere else, each written as a `CircuitArtifact` — the
 # former by hand, the latter through `constraints::memory`'s constructor.
 constraints.workspace = true
+# The `tape` group: `checker::check_global_tape` over a shaped statement, which
+# is the global commit phase (`verifier-core`) diffed against the frozen
+# pre-fork order the checker writes out independently.
+checker.workspace = true
+verifier-core.workspace = true
 ark-bn254.workspace = true
 ark-ec.workspace = true
 ark-ff.workspace = true

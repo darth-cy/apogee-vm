@@ -153,6 +153,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "shards"
+version = "0.1.0"
+
+[[package]]
 name = "syn"
 version = "3.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
