@@ -80,6 +80,11 @@ pub enum Stage {
 
     /// `statement_inputs`: every shard's `M` columns built from the archive.
     StatementColumns = 4,
+    /// One shard's fill inside `statement_inputs`, for its `M` columns alone.
+    /// It does **not** count multiplicities — the statement commits `M` and
+    /// nothing else — which is why this is a stage of its own and not a
+    /// `ShardColumnsTotal` sample.
+    StatementShardFill = 33,
 
     /// `global_commit_phase` end to end.
     GlobalCommitTotal = 5,
@@ -88,12 +93,13 @@ pub enum Stage {
     /// G1–G11: the statement absorbed and the five challenges drawn.
     GlobalTranscript = 7,
 
-    /// `shard_columns` end to end, once per call — and on a full block it is
-    /// called **three times per shard**: once by `statement_inputs`, which
-    /// wants only the `M` columns out of it, and once in each of `advance`'s
-    /// two parallel regions, which drop them in between so that a killed run
-    /// can resume. Its sample count against the shard count is where that
-    /// shows, and on the S16 statement it is 6 for two shards.
+    /// `shard_columns` end to end, once per call — **twice per shard** on a
+    /// full block, once in each of `advance`'s two parallel regions, which
+    /// drop the columns in between so that a killed run can resume from the
+    /// archive (`docs/spec/shard-proof.md` §10). That is the resume design's
+    /// price and is deliberate; it is not three, because `statement_inputs`
+    /// takes the cheaper [`Stage::StatementShardFill`] path for the `M`
+    /// columns it alone needs.
     ShardColumnsTotal = 8,
     /// The family's own fill over the archive.
     ShardFill = 9,
@@ -157,7 +163,7 @@ pub enum Stage {
 }
 
 /// Every stage, in order. `Stage as usize` indexes this.
-pub const STAGES: [Stage; 33] = [
+pub const STAGES: [Stage; 34] = [
     Stage::SetupTotal,
     Stage::SetupRegister,
     Stage::SetupCommit,
@@ -191,6 +197,7 @@ pub const STAGES: [Stage; 33] = [
     Stage::ArchiveDecode,
     Stage::ShardGkrTask,
     Stage::ShardOpeningTask,
+    Stage::StatementShardFill,
 ];
 
 impl Stage {
@@ -202,6 +209,7 @@ impl Stage {
             | ShardGkrTotal | ShardOpeningTotal | BlockTotal | ArchiveEncode | ArchiveDecode
             | ShardGkrTask | ShardOpeningTask => None,
             SetupRegister | SetupCommit | SetupKeyCheck => Some(SetupTotal),
+            StatementShardFill => Some(StatementColumns),
             GlobalCommitMsm | GlobalTranscript => Some(GlobalCommitTotal),
             ShardFill | ShardMultiplicities => Some(ShardColumnsTotal),
             ShardBaseLayer | ShardWitnessCommit | ShardSeed | ShardForward | ShardSumcheck
@@ -249,6 +257,7 @@ impl Stage {
             ArchiveDecode => "archive_decode",
             ShardGkrTask => "shard_gkr_task",
             ShardOpeningTask => "shard_opening_task",
+            StatementShardFill => "statement_shard_fill",
         }
     }
 }

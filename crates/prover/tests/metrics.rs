@@ -335,11 +335,22 @@ fn a_metered_block_is_the_block_prove_block_makes() {
     assert_eq!(metrics.count(Stage::ShardGkrTotal), metrics.shards.len());
     assert_eq!(
         metrics.count(Stage::ShardColumnsTotal),
-        3 * metrics.shards.len(),
-        "a full block builds every shard's columns three times: once in \
-         `statement_inputs`, which wants only the `M` half, and once in each of \
-         `advance`'s two parallel regions, which drop them in between so a \
-         killed run can resume"
+        2 * metrics.shards.len(),
+        "a full block builds every shard's committed columns twice, once in \
+         each of `advance`'s two parallel regions, which drop them in between \
+         so a killed run can resume from the archive. It is not three: \
+         `statement_inputs` takes the `M`-only path"
+    );
+    assert_eq!(
+        metrics.count(Stage::StatementShardFill),
+        metrics.shards.len(),
+        "the statement builds each shard's `M` columns once, and counts no \
+         multiplicities to do it"
+    );
+    assert!(
+        metrics.total(Stage::StatementColumns) < metrics.total(Stage::ShardColumnsTotal),
+        "the `M`-only path is the cheap one: it runs the fill and stops, where \
+         `shard_columns` goes on to count every channel's multiplicities"
     );
     assert_eq!(metrics.count(Stage::ShardGkrTask), metrics.shards.len());
     assert!(

@@ -639,12 +639,42 @@ and `guests/mem`'s seven is the one to measure it on. That run is owed.
 
 Three things the run found, each now fixed or written down:
 
-1. **Column building is three times per shard, not twice.** `statement_inputs` builds every
-   shard's columns to take the `M` half out of them, and then each of `advance`'s two
-   parallel regions builds them again. Six calls for two shards. **5.6 s of an 18.4 s
-   block**, of which `shard_multiplicities` is 5.5 s — multiplicity counting, not the fill,
-   is what column building costs. The harness does not fix that; it attaches the cost,
-   which is the first thing a future stage weighing the trade will want.
+1. **Column building was three times per shard, and the third was waste. Fixed.**
+   `statement_inputs` was calling `shard_columns` — the whole committed set, every
+   channel's multiplicities counted — to take the `M` half out of it and drop the rest.
+   The statement commits `M` and nothing else. It now calls `shard_memory_columns`, which
+   runs the fill and **moves** the memory columns out of its result; a multiplicity is a
+   witness column by construction (`constraints::lookup` asserts it at every channel), so
+   nothing droppable could have been an `M` column, and the extraction panics rather than
+   commit a short list if a fill ever disagrees.
+
+   `build_multiplicities` is about **99%** of what `shard_columns` costs — 880 ms against
+   16 ms for the fill, on one `2^20` shard — and the third pass was the **sequential**
+   one, so the saving is pure wall clock:
+
+   | | before | after |
+   | --- | --- | --- |
+   | `statement_columns` | 1.783 s | **31.55 ms** |
+   | `shard_columns_total` | 5.360 s over 6 calls | **3.594 s over 4** |
+   | `block_total` | 17.723 s | **16.083 s** (−9.3%) |
+
+   The block is byte-identical either way, and the modelled peak is unchanged at 4.95 GiB:
+   this was never resident, only recomputed. `crates/prover/src/lib.rs`' `column_at` had no
+   other caller and was deleted with it.
+
+   **The remaining two are the resume design's price and are deliberate.** `advance` builds
+   a shard's columns in the `PostGkr` region and again in the `PostOpening` region because
+   the archive stores proofs and not columns — one `2^20` base layer is 388 MiB — and
+   because the boundary between them is a **resume point**: a run killed during the opening
+   region keeps its GKR work, 11.9 s of this 16.1 s block and most of 779 s on the S20
+   block suite. Two ways to remove it, neither taken without the owner's word:
+
+   - **fuse the two regions** into one per-shard task. No memory cost (the forward pass is
+     dropped before the opening, so the fused peak is still base + forward), saves one
+     build per shard — about 5% of a block — and costs the GKR phase on any late kill.
+   - **hold every base layer across the boundary.** Free while the shard count is at or
+     below the thread count, because they are all live during the GKR region anyway; a
+     regression above it, turning one base layer per worker into one per shard.
 2. **The speedup was measured against the wrong numerator.** `shard_gkr_total` over the
    region's wall read **0.84×** — not a speedup at all — because the region also waits for
    each task to build its shard's columns. Two stages were added, `shard_gkr_task` and

@@ -332,17 +332,12 @@ fn statement_inputs_rec(
     let boundary = build_boundary_finals(log);
     let mut memory_columns = Vec::new();
     for (family, index) in statement_shards(config, &counts) {
-        let columns = shard_columns_rec(setup, archive, family, index, &windows, rec)?;
-        let reg = setup.registration(family);
-        let memory: Vec<MultilinearPoly> = (0..reg.circuit.artifact.memory.len() as u32)
-            .map(|i| column_at(&columns, PolyAddress::Memory(i)).clone())
-            .collect();
-        metric!(rec.shard_bytes(
-            ShardId::new(family, index),
-            ByteClass::MemoryColumns,
-            metrics::polys_bytes(&memory)
-        ));
-        memory_columns.push(memory);
+        // `M` alone, moved out of the fill: the statement commits nothing else,
+        // and asking `shard_columns` for the whole set here counted every
+        // channel's multiplicities only to drop them.
+        memory_columns.push(shard_memory_columns_rec(
+            setup, archive, family, index, &windows, rec,
+        )?);
     }
     metric!({
         // The circuits are the setup's, whoever built it: a block metered here
@@ -375,14 +370,6 @@ fn statement_inputs_rec(
         boundary,
         memory_columns,
     })
-}
-
-fn column_at(columns: &[(PolyAddress, MultilinearPoly)], address: PolyAddress) -> &MultilinearPoly {
-    columns
-        .iter()
-        .find(|(a, _)| *a == address)
-        .map(|(_, c)| c)
-        .unwrap_or_else(|| panic!("a shard's columns have no {address}"))
 }
 
 /// `[f(x)]_1` of every column, in order, as 64-byte encodings. Parallel over
@@ -520,6 +507,101 @@ pub fn shard_columns_metered(
     shard_columns_rec(setup, archive, family, index, windows, rec)
 }
 
+/// What a family's fill reads for shard `(family, index)`.
+fn shard_source<'a>(
+    setup: &'a ProverSetup,
+    archive: &'a TraceArchive,
+    family: FamilyId,
+    index: u32,
+    windows: &[u32],
+) -> ShardSource<'a> {
+    ShardSource {
+        program: &setup.program,
+        archive,
+        family,
+        index,
+        height: setup.registration(family).height as usize,
+        window: window_of(family, index, windows),
+    }
+}
+
+/// Shard `(family, index)`'s **`M` columns alone**, in layout order, as the
+/// statement commits them: the family's fill over the archive, and the memory
+/// columns moved out of its result.
+///
+/// [`shard_columns`] is the whole committed set and counts the channels'
+/// multiplicities on top of the fill. **The statement commits `M` and nothing
+/// else**, and `build_multiplicities` is about 99% of what `shard_columns`
+/// costs — 880 ms against 16 ms for the fill, on one `2^20` shard — so
+/// counting them here only to drop them was a third of every block's column
+/// building and a tenth of its wall clock. `crates/prover/CLAUDE.md`.
+///
+/// A multiplicity is a **witness** column by construction
+/// (`constraints::lookup` asserts it at every channel), so nothing this drops
+/// could have been an `M` column; the loop below panics rather than commit a
+/// short list if a family's fill ever disagrees.
+pub fn shard_memory_columns(
+    setup: &ProverSetup,
+    archive: &TraceArchive,
+    family: FamilyId,
+    index: u32,
+    windows: &[u32],
+) -> Result<Vec<MultilinearPoly>, ProverError> {
+    shard_memory_columns_rec(setup, archive, family, index, windows, &mut Recorder::new())
+}
+
+/// [`shard_memory_columns`] recording into `rec`.
+#[cfg(feature = "metrics")]
+pub fn shard_memory_columns_metered(
+    setup: &ProverSetup,
+    archive: &TraceArchive,
+    family: FamilyId,
+    index: u32,
+    windows: &[u32],
+    rec: &mut Recorder,
+) -> Result<Vec<MultilinearPoly>, ProverError> {
+    shard_memory_columns_rec(setup, archive, family, index, windows, rec)
+}
+
+fn shard_memory_columns_rec(
+    setup: &ProverSetup,
+    archive: &TraceArchive,
+    family: FamilyId,
+    index: u32,
+    windows: &[u32],
+    rec: &mut Recorder,
+) -> Result<Vec<MultilinearPoly>, ProverError> {
+    let span = rec.start(Stage::StatementShardFill);
+    let source = shard_source(setup, archive, family, index, windows);
+    let columns = (setup.registration(family).fill)(&source).map_err(ProverError::Trace)?;
+    let width = setup.registration(family).circuit.artifact.memory.len();
+    let mut memory: Vec<Option<MultilinearPoly>> = (0..width).map(|_| None).collect();
+    for (address, column) in columns {
+        if let PolyAddress::Memory(i) = address {
+            let i = i as usize;
+            assert!(
+                i < width,
+                "shard ({family}, {index}): the fill wrote M[{i}] and the circuit has {width}"
+            );
+            memory[i] = Some(column);
+        }
+    }
+    let memory: Vec<MultilinearPoly> = memory
+        .into_iter()
+        .enumerate()
+        .map(|(i, column)| {
+            column.unwrap_or_else(|| panic!("shard ({family}, {index}): the fill wrote no M[{i}]"))
+        })
+        .collect();
+    rec.end(span);
+    metric!(rec.shard_bytes(
+        ShardId::new(family, index),
+        ByteClass::MemoryColumns,
+        metrics::polys_bytes(&memory)
+    ));
+    Ok(memory)
+}
+
 fn shard_columns_rec(
     setup: &ProverSetup,
     archive: &TraceArchive,
@@ -530,14 +612,7 @@ fn shard_columns_rec(
 ) -> Result<Vec<(PolyAddress, MultilinearPoly)>, ProverError> {
     let total = rec.start(Stage::ShardColumnsTotal);
     let reg = setup.registration(family);
-    let source = ShardSource {
-        program: &setup.program,
-        archive,
-        family,
-        index,
-        height: reg.height as usize,
-        window: window_of(family, index, windows),
-    };
+    let source = shard_source(setup, archive, family, index, windows);
     let span = rec.start(Stage::ShardFill);
     let mut columns = (reg.fill)(&source).map_err(ProverError::Trace)?;
     rec.end(span);

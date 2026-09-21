@@ -91,7 +91,7 @@ prints it as `(unattributed)` and it is itself a finding.
 | root | children | what |
 | --- | --- | --- |
 | `setup_total` | `setup_register`, `setup_commit`, `setup_key_check` | `ProverSetup::new`: the registry's compilation, the setup MSMs, the key's load rules |
-| `statement_columns` | — | `statement_inputs`: every shard's `M` columns built from the archive |
+| `statement_columns` | `statement_shard_fill` | `statement_inputs`: every shard's `M` columns built from the archive |
 | `global_commit_total` | `global_commit_msm`, `global_transcript` | the memory columns committed, then G1–G11 |
 | `shard_columns_total` | `shard_fill`, `shard_multiplicities` | one call of `shard_columns`. **Read its sample count against the shard count** |
 | `shard_gkr_task` | — | one rayon task's whole body in the GKR region |
@@ -119,23 +119,43 @@ A figure well below the thread count is the region waiting on its slowest shard,
 **`block_total`'s `(unattributed)` remainder is the statement phase.** `statement_columns`
 and `global_commit_total` are roots of their own — they are not shard work and do not
 belong under a region — but they happen inside `prove_block`, so `block_total` minus its
-listed children is very nearly their sum. On the S16 statement: 1.822 s of remainder
-against 1.787 s + 34 ms of statement work. The two adding up is a check on the accounting,
-not a finding.
+listed children is very nearly their sum. On the S16 statement: 60.95 ms of remainder
+against 31.55 ms + 27.01 ms of statement work. The two adding up is a check on the
+accounting, not a finding — and watching that remainder fall from 1.82 s to 61 ms is how
+the fix above was confirmed.
 
 ### What the stage counts already say
 
-`shard_columns_total` reports **three times** the shard count — 6 for the S16 statement's
-two shards. `statement_inputs` builds every shard's columns to take the `M` half out of
-them; `advance` then builds them again in the `PostGkr` phase, drops them, and builds them
-a third time in the `PostOpening` phase. The phases exist so a killed run resumes, and the
-columns are deliberately never stored (`docs/spec/shard-proof.md` §10). The harness does
-not fix that; it makes it visible, with the cost attached — and on the S16 statement that
-cost is **5.6 s of a 18.4 s block**, of which `shard_multiplicities` is 5.5 s. Multiplicity
-counting, not the fill, is what column building costs.
+`shard_columns_total` reports **twice** the shard count — 4 for the S16 statement's two
+shards — and that is the resume design's price, deliberately paid. `advance` builds every
+shard's committed columns in the `PostGkr` phase, drops them, and builds them again in the
+`PostOpening` phase, because the archive stores proofs and not columns
+(`docs/spec/shard-proof.md` §10): one `2^20` base layer is 388 MiB, and the boundary
+between the two phases is a **resume point** — a run killed during the opening region keeps
+its GKR work, which is 11.9 s of a 16.1 s block here and most of 779 s on the S20 block
+suite. `crates/prover/CLAUDE.md` records what fusing the two regions, or holding the base
+layers across the boundary, would each cost.
 
-The other two stage counts to read this way: `shard_gkr_total` and `shard_gkr_task` are
-once per shard, and `archive_encode` is once per phase section written.
+**It read three before the harness existed, and the third was pure waste.**
+`statement_inputs` was calling `shard_columns` — the whole committed set, every channel's
+multiplicities counted — to take the `M` half out of it and drop the rest. The statement
+commits `M` and nothing else, so it now calls `shard_memory_columns`, which runs the fill
+and moves the memory columns out of the result. `build_multiplicities` is about **99%** of
+what `shard_columns` costs (880 ms against 16 ms for the fill, on one `2^20` shard), and
+that third pass was the **sequential** one, so removing it is pure wall clock:
+
+| | before | after |
+| --- | --- | --- |
+| `statement_columns` | 1.783 s | **31.55 ms** |
+| `shard_columns_total` | 5.360 s over 6 | **3.594 s over 4** |
+| `block_total` | 17.723 s | **16.083 s** (−9.3%) |
+
+The block is byte-identical either way (`tests/metrics.rs`), and the modelled peak is
+unchanged at 4.95 GiB — this was never resident, only recomputed.
+
+The other stage counts to read this way: `shard_gkr_total` and `shard_gkr_task` are once
+per shard, `statement_shard_fill` is once per shard, and `archive_encode` is once per phase
+section written.
 
 ---
 

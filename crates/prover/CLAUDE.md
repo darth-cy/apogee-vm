@@ -28,6 +28,9 @@ pub fn public_inputs(global: &GlobalCommitState, proofs: &[ShardProof]) -> Publi
 pub struct ProvingContext<'a> { pub setup: &'a ProverSetup, pub global: GlobalCommitState }
 pub fn shard_columns(setup: &ProverSetup, archive: &TraceArchive, family: FamilyId, index: u32,
                      windows: &[u32]) -> Result<Vec<(PolyAddress, MultilinearPoly)>, ProverError>;
+pub fn shard_memory_columns(setup: &ProverSetup, archive: &TraceArchive, family: FamilyId,
+                            index: u32, windows: &[u32])
+    -> Result<Vec<MultilinearPoly>, ProverError>;      // the `M` half, no multiplicities
 pub fn prove_shard(ctx: &ProvingContext, archive: &TraceArchive, family: FamilyId, shard_idx: u32) -> ShardProof;
 pub fn prove_shard_columns(ctx: &ProvingContext, family: FamilyId, shard_idx: u32,
                            columns: Vec<(PolyAddress, MultilinearPoly)>) -> (ShardProof, Vec<TranscriptEvent>);
@@ -80,7 +83,17 @@ pub fn advance_metered(setup, archive, until)   -> Result<ProvingMetrics, Prover
   emulator cannot cause.
 - **Multiplicities come from `trace::build_multiplicities` and nowhere else.** A fill
   returns every column but them, and `shard_columns` counts them over the family's
-  channels. `trace::check_multiplicities` is not called on this path: it is a recount of
+  channels.
+- **The statement's path does not count them.** `statement_inputs` commits `M` and nothing
+  else, so it calls `shard_memory_columns` — the fill, with the memory columns *moved* out
+  of its result — and never `shard_columns`. Counting every channel's multiplicities there
+  only to drop them was **a third of all the column building a block did**, and it was the
+  sequential third: `build_multiplicities` is about 99% of what `shard_columns` costs (880
+  ms against 16 ms for the fill, on one `2^20` shard), so the S16 statement spent 1.8 s of
+  a 17.7 s block on it. A multiplicity is a **witness** column by construction, asserted at
+  every channel in `constraints::lookup`, so the `M` list cannot lose one this way; the
+  extraction panics rather than commit a short list if a fill ever disagrees. The metrics
+  harness is what found it (`docs/spec/metrics.md` §2). `trace::check_multiplicities` is not called on this path: it is a recount of
   exactly that build, and a column the prover counted itself cannot disagree with it.
 - **The add/sub fill writes the computed `rd` value into `rd_selected`**, where S14's frame
   builder writes 0 on an `x0` write: the family's semantic gates read what the instruction
@@ -133,6 +146,16 @@ pub fn advance_metered(setup, archive, until)   -> Result<ProvingMetrics, Prover
   §9's encodings, each phase timed into the archive's timing section. `advance` reads back
   any phase the archive holds; the columns are never stored and a resumed phase rebuilds
   them. A resumed statement finishes to the same bytes as an uninterrupted one.
+- **A shard's committed columns are built twice per block, and that is the resume design's
+  price, not an oversight.** The `PostGkr` and `PostOpening` regions each build them and
+  drop them, because the archive stores proofs and not columns — one `2^20` base layer is
+  388 MiB — and because the boundary between them is a **resume point**: a run killed
+  during the opening region keeps its GKR work, which on the S16 statement is 11.8 s of
+  16 s and on the S20 block suite is most of 779 s. Fusing the two regions into one
+  per-shard task would save one build per shard (about 5% of a block) at the cost of
+  losing the GKR phase on any late kill; holding every base layer across the boundary is
+  free only while the shard count is below the thread count, and a regression above it.
+  Neither is taken. What *was* removed is the third build, above.
 - **`prove_block` is orchestration and nothing else** (S20): it refuses a `ShardPlan`
   that is not `trace::plan_shards` over this archive's cycle profile, runs `advance` to
   `Phase::Final`, and assembles the block from `finish`. The shard cut is the one every
