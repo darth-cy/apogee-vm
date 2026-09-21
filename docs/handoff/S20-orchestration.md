@@ -534,6 +534,143 @@ list grew.
 
 ---
 
+## The proving metrics harness, and the one cargo feature
+
+Added at the owner's instruction after the block layer was in. `docs/spec/metrics.md` is
+the schema; this is what it cost and what it is owed.
+
+### The exception, and the wording the master prompt needs
+
+The harness is behind a cargo feature, `prover/metrics`, which **master anti-goal 1 bans
+outright**. The owner granted exactly one exception and left the rule standing for every
+future progression. `prompts/00-master.md` is the design authority and is not edited from
+inside a stage, so the replacement text for anti-goal 1 is set out here for the owner to
+paste:
+
+> 1. **No cargo features. Zero, with one closed exception.** One build configuration for
+>    the whole workspace. `[features]` tables, `#[cfg(feature = "...")]`, `optional = true`
+>    dependencies, and `--no-default-features` are all banned. A configuration nobody
+>    builds is broken and undiscovered; a configuration everybody builds should not be
+>    conditional. If code is optional, delete it.
+>
+>    The one exception, granted at S20 and **closed**: `prover/metrics`, the proving
+>    harness. It is off by default, enables no dependency, changes no proof byte, and CI
+>    builds, lints and tests its configuration — so the hazard this rule names does not
+>    apply to it. No later stage may add a second feature.
+>    `crates/prover/tests/one_feature.rs` fails if one appears. A `features = [...]` *key*
+>    inside a dependency entry selects an upstream crate's features and was never covered
+>    by this rule, as the workspace manifest's `ark-ec` and `ark-ff` entries show.
+
+Until that paste happens the repository and the master prompt disagree, and the
+repository's copy — root `CLAUDE.md`, "The rules that bite most often" — is the one that
+matches the code.
+
+### What it measures
+
+**Time**: 31 stages in a frozen enum, one span each, opened where the work is. Nine roots
+with children, and a parent is measured in its own right rather than summed, so the report
+prints the `(unattributed)` gap. The two parallel regions are timed as wall clock against
+the sum of their shards' own spans, which gives the speedup the thread count bought.
+
+**Bytes**: twelve classes, each a real buffer with a name, sized **as stored** — a `u1`
+column of `2^20` rows counts 128 KiB, not the 32 MiB its lifted `Fr` value would be.
+
+**Shape**, because a timing table on its own says nothing about what was timed: the
+identity and SRS digest, the config, the cycle profile, every family's circuit by the
+numbers (columns, layers, relations, lookups, channels), every shard's height, time
+window, GKR depth, sumcheck round count and proof size, and the archive's own five
+`PhaseTiming`s.
+
+**Derived**: per-family occupancy (cycles against the rows its shards hold), nanoseconds
+per executed cycle, and the modelled memory peak.
+
+### Peak memory: what the owner chose, and what it is worth
+
+In-process peak RSS needs libc FFI or a `GlobalAlloc` wrapper, both `unsafe` and so banned
+by **anti-goal 4**. The owner chose allocation accounting over a second exception.
+
+So the harness reports **the bytes the prover asks for**, attributed to a cause, and models
+the peak from them: a shard is largest inside `gkr_part`, where its base layer and its
+forward pass are live together, and a block holds `min(threads, shards)` of those at once.
+It is a **lower bound on RSS and not an estimate of it** — it misses allocator slack,
+fragmentation, rayon's stacks, the SRS, the archive, and every transient a called crate
+makes inside a stage. `/usr/bin/time -l` stays the ground truth, as in every table above.
+
+What it buys instead is attribution and prediction. The 14.7 → 32.3 GB regression this
+stage introduced has a shape the model gives before a run is made: one thread holds one
+shard's peak, `n` threads hold the `n` largest. A caller bounding the peak with its own
+`rayon::ThreadPoolBuilder` pool can now price each pool size.
+
+### The seam, and why the default build is untouched
+
+`Stage`, `ByteClass` and `ShardId` compile in both builds; the collector does not. With the
+feature off `Recorder` and `Span` are zero-sized, every method is an empty
+`#[inline(always)]` body, and **`start` does not read the clock** — a timing seam that
+sampled the clock in the default build would be a harness nobody asked for. Measurement
+whose *arguments* cost something sits inside `metric!`, which expands to nothing at all, so
+the argument is never evaluated.
+
+**No frozen signature changed.** `prove_block`, `advance`, `prove_shard`,
+`prove_shard_columns`, `global_commit_phase`, `statement_inputs`, `shard_columns` and
+`ProverSetup::new` are each now a one-line call into a private `_rec` implementation with a
+throwaway recorder, and `tests/signature.rs`-style compile pins elsewhere in the workspace
+are unaffected. The metered entry points are `*_metered` siblings that exist only with the
+feature.
+
+**No shared state** (anti-goal 7): each rayon task builds its own `Recorder::for_shard`,
+hands it back beside its result, and the caller absorbs them in the order the indexed `map`
+collected — statement order. Two runs' reports differ only in their timings.
+
+### Calibration, and what the first real run found
+
+One metered run of S16's statement — two shards, 18 threads, **dev profile**, this machine:
+
+| | |
+| --- | --- |
+| modelled block peak | 4.95 GiB = **5.31 GB** |
+| modelled floor (+ the statement's memory columns) | 5.36 GB |
+| **measured, `/usr/bin/time -l`** | **8.60 GB** |
+
+The model is **62% of the measured peak** — which is what a floor excluding allocator
+slack, rayon's stacks, the SRS, the archive and every in-stage transient should look like.
+Only one shard is large on this statement, so its block peak is one shard's peak whatever
+the thread count; the thread-count effect belongs to a statement with several large shards,
+and `guests/mem`'s seven is the one to measure it on. That run is owed.
+
+Three things the run found, each now fixed or written down:
+
+1. **Column building is three times per shard, not twice.** `statement_inputs` builds every
+   shard's columns to take the `M` half out of them, and then each of `advance`'s two
+   parallel regions builds them again. Six calls for two shards. **5.6 s of an 18.4 s
+   block**, of which `shard_multiplicities` is 5.5 s — multiplicity counting, not the fill,
+   is what column building costs. The harness does not fix that; it attaches the cost,
+   which is the first thing a future stage weighing the trade will want.
+2. **The speedup was measured against the wrong numerator.** `shard_gkr_total` over the
+   region's wall read **0.84×** — not a speedup at all — because the region also waits for
+   each task to build its shard's columns. Two stages were added, `shard_gkr_task` and
+   `shard_opening_task`, each one task's whole body, and the ratio is against those.
+3. **A shard's peak must take the largest sample of each class, not their sum**, and a
+   shard notes its shape twice — once before the opening exists and once after. Both were
+   summing and double-counting; both are fixed and pinned by a test. Without the first, the
+   harness over-reported every real block by a base layer.
+
+`guests/addsub` runs **29 cycles** in a `2^20`-row family — 0.0% occupancy, and 0.63
+seconds a cycle. Both numbers are correct and both are useless on their own; the occupancy
+table is where the height menu's floor (`docs/spec/lookup.md` §3) becomes visible.
+
+### Verification
+
+`cargo fmt`, `cargo clippy --workspace --all-targets -- -D warnings`, **and
+`cargo clippy -p prover --all-targets --features metrics -- -D warnings`**, all clean; the
+`riscv32imac` build unaffected, the feature being `prover`-only and `prover` being std.
+`cargo test --workspace` is **962 passed, 65 `#[ignore]`d** — the two new ones are
+`tests/one_feature.rs`', which run in the default build because the rule they enforce is
+not conditional. The harness's own **ten** tests run in CI under `--features metrics`; its
+two end-to-end ones are `#[ignore]`d with the other real-proof suites, and both were run
+once here (56.8 s, 8.59 GB) to produce the calibration above.
+
+---
+
 ## Open for the next stage
 
 - **The ts window binds nothing about a trace**, by the owner's decision. If aggregation

@@ -85,9 +85,18 @@ jobs:
           cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
           (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
           (cd guests && cargo clippy --bins -- -D warnings)
+          # The workspace's ONE cargo feature (master anti-goal 1's one
+          # exception, owner's decision at S20): the anti-goal's stated hazard
+          # is "a configuration nobody builds is broken and undiscovered", so
+          # this configuration is built, linted and tested here like any other.
+          # `crates/prover/tests/one_feature.rs` is what keeps it at one.
+          cargo clippy -p prover --all-targets --features metrics -- -D warnings
 
       - name: test
         run: cargo test --workspace
+
+      - name: test the metrics configuration
+        run: cargo test -p prover --features metrics --test metrics
 
       # DEFERRED: cargo test -p checker --test logup -- --include-ignored --test-threads=1
       # Master rule 7. S15's acceptance over the combined toy took 30m18s of a
@@ -108,6 +117,18 @@ jobs:
       #
       # - name: the LogUp channels over the combined toy
       #   run: cargo test -p checker --test logup -- --include-ignored --test-threads=1
+
+      # DEFERRED: cargo test -p prover --features metrics --test metrics -- --include-ignored
+      # Master rule 7. The two ignored cases in that file prove S16's statement
+      # twice over -- once through `prove_block` and once through
+      # `prove_block_metered`, to hold the two blocks equal byte for byte --
+      # and peak at about 8.6 GB each. The file's other eight cases run above,
+      # in the `test the metrics configuration` step, and they are what hold
+      # the data model and both reports; only the end-to-end property is
+      # deferred. `docs/spec/metrics.md` §7.
+      #
+      # - name: the metrics harness end to end
+      #   run: cargo test -p prover --features metrics --test metrics -- --include-ignored --nocapture
 
       # DEFERRED: cargo test -p prover --test acceptance -- --include-ignored --test-threads=1
       # DEFERRED: cargo test -p verifier --test cli -- --include-ignored --test-threads=1

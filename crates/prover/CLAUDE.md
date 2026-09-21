@@ -36,6 +36,13 @@ pub fn finish(archive: &TraceArchive) -> Result<(PublicInputs, Vec<ShardProof>),
 pub fn prove_block(setup: &ProverSetup, archive: &mut TraceArchive, plan: &ShardPlan)
     -> Result<BlockProof, ProverError>;                    // S20, docs/spec/block-proof.md §5
 pub enum ProverError { Unregistered { family, height }, Key(String), Trace(String), Archive(String) }
+
+// feature = "metrics" only -- THE WORKSPACE'S ONE CARGO FEATURE. docs/spec/metrics.md
+pub mod metrics;                                 // Stage, ByteClass, ShardId in both builds
+pub fn prove_block_metered(setup, archive, plan) -> Result<(BlockProof, ProvingMetrics), ProverError>;
+pub fn advance_metered(setup, archive, until)   -> Result<ProvingMetrics, ProverError>;
+// and `*_metered` siblings of ProverSetup::new, statement_inputs, global_commit_phase,
+// shard_columns, prove_shard and prove_shard_columns, each taking `&mut Recorder`.
 ```
 
 ## Frozen invariants
@@ -150,6 +157,29 @@ pub enum ProverError { Unregistered { family, height }, Key(String), Trace(Strin
   the archive keeps `prove_shard_columns`' signature and makes the honest window a
   function of exactly what the shard commits; a tampered column is read as its low 64
   bits and multiplied saturatingly, because the prover checks nothing.
+- **`metrics` is the workspace's one cargo feature, and it stays the only one** (owner's
+  decision, S20; master anti-goal 1 otherwise bans them outright). It turns on
+  `src/metrics`: stage timing, byte accounting and the modelled memory peak. The rule it
+  excepts stands for every future progression, and `tests/one_feature.rs` enforces that by
+  reading every `Cargo.toml` in the repository. `docs/spec/metrics.md` §0.
+- **The seam costs nothing with the feature off, and that is structural, not a hope.**
+  `Recorder` and `Span` are zero-sized there and every method is an empty
+  `#[inline(always)]` body, so `rec.start`/`rec.end` **does not read the clock** and a ZST
+  argument is not passed. Measurement whose *arguments* cost something — every byte count,
+  every shape note — sits inside `metric!`, which expands to nothing at all, so the
+  argument is never evaluated. **Every frozen signature is unchanged**: each public entry
+  point is a one-line call into a private `_rec` implementation with a throwaway recorder.
+- **The harness has no shared state** (anti-goal 7): each rayon task builds its own
+  `Recorder::for_shard`, hands it back beside its result, and `advance` absorbs them in the
+  order the indexed `map` collected — statement order. Two runs' reports differ only in
+  their timings.
+- **The memory model is a floor, not an estimate** (`docs/spec/metrics.md` §4). It counts
+  the bytes the prover asks for, sized as the columns are stored, and misses allocator
+  slack, rayon stacks, the SRS and the archive, and every transient a called crate makes
+  inside a stage. `/usr/bin/time -l` stays the ground truth for RSS. What it does give is
+  attribution and prediction: a shard's peak is its base layer plus its forward pass, and a
+  block's is the `min(threads, shards)` largest of those summed — the shape of S20's
+  14.7 → 32.3 GB regression, before the run is made.
 - **Deterministic.** Commitments are computed in parallel and collected in order; the
   forward pass, the sumcheck and the MSMs are thread-count independent (S07, S13). Proofs
   are byte-identical on one thread and on all of them, and so is an assembled block.
@@ -158,6 +188,8 @@ pub enum ProverError { Unregistered { family, height }, Key(String), Trace(Strin
 | File | Covers |
 | --- | --- |
 | `tests/common/mod.rs` | the S16 statement: `guests/addsub`'s committed ELF decoded with its family at `2^20` and everything else at `2^16`, traced into an archive, over a toy SRS whose `tau` is written down and whose archive is cached under `target/tmp` (`CARGO_TARGET_TMPDIR`), shared by the four suites that include this module — `tests/acceptance.rs`, `tests/control.rs`, `crates/verifier/tests/cli.rs` and `crates/checker/tests/tamper.rs`; and S17's, `guests/control`'s, with both of its execution families at `2^20` (`control_setup`, `control_archive`, `CONTROL_RESULT = 16`); `toy_tau` |
+| `tests/one_feature.rs` | master anti-goal 1, enforced: every `Cargo.toml` in the repository read, and any `[features]` table but this crate's — or any key in this crate's but `metrics` — fails the test, naming the rule. A `features = [...]` key inside a dependency entry is an upstream crate's feature and always was allowed. Plus: the exception is written down in the root `CLAUDE.md`, `docs/spec/metrics.md` and this file |
+| `tests/metrics.rs` | **the whole file is `#![cfg(feature = "metrics")]`**; CI runs it a second time with the feature. The stage table indexes itself and every parent is a root; the peak model counts `base_layer` and `forward_layers` and nothing else; a recorder records what it is told and `absorb` merges a task's samples in statement order; the modelled block peak follows the thread count; the unattributed remainder is the parent-minus-children gap; both reports render from an empty recorder and from a full one, and the JSON's braces balance; the report names its build, because a `dev` timing table read as `release` is worse than none. **`#[ignore]`d** (S16's statement twice, 8.6 GB a time): the metered block equals `prove_block`'s **byte for byte**, `shard_columns_total` is twice the shard count, and the report prints |
 | `tests/key.rs` | S17, in ordinary CI, no proof: `ProverSetup::new` over `control` and the toy SRS gives a key whose `generic_table` is `generic_commitments` over that SRS, whose SRS digest is over its `SrsVerifier` and them, and which loads; each of the three commitments is `[Σ_i c_i·τ^i]_1` of its column, computed by Horner's rule from the toy `τ`, the three distinct, and the same over `2^18` powers as over `2^20` |
 | `tests/control.rs` | **`#[ignore]`d; run with `--include-ignored --test-threads=1`** (18.0 GB peak since S20 proves its two `2^20` shards at once; 10.1 GB at S17). S17 acceptance 1: `control`'s four-family config, its self-checking trace, three shards — `INIT_TEARDOWN`, `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT` — each verifying, with round and claim counts and byte lengths from the circuit, the jump family's pinned at 61,612 bytes; the generic table's binding — the key's `generic_table` equal to `generic_commitments` over this SRS, its SRS digest the digest over the `SrsVerifier` and them, and the jump family's opening claim `M ++ W ++ S`, 21 + 44 + 10 commitments ending with the table's three, while add/sub's is 36 + 31 + 7 and ends with identity's; and `a_key_with_another_generic_table_is_another_statement`: a key whose table's value and result commitments are swapped does not load under the honest SRS digest, loads under its own recomputed one, which differs, and refuses every honest shard as `Statement("the proof was made for another statement")` |
 | `src/phases.rs` (unit) | the post-commit section round-trips and refuses a trailing byte and a missing one; the post-GKR and final sections refuse a trailing byte |

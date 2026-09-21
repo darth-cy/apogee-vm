@@ -15,6 +15,8 @@ docs/
   GLOSSARY.md    the vocabulary (column = multilinear = poly; layer; shard; family)
   guest-program-manual.md  writing a guest and exporting its ProgramImage artifact
   spec/          the frozen protocol specs; read before touching what they cover; and
+                 metrics.md, the proving harness: the stage tree, the byte classes and
+                 what the memory model does and does not count; and
                  constraint-manifest.md, every registered circuit's columns and gates by
                  position, name and formula. One page per circuit family:
                  jump-branch-slt.md, shift-bitwise.md, mul-div.md, memory-ops.md;
@@ -62,7 +64,8 @@ crates/
                  `verifier` CLI; std
   prover/        the verifying key's construction, family registration and fills, the
                  global commit phase, prove_shard, prove_block, the phase snapshots and
-                 resume; std
+                 resume, and `metrics`, the proving harness behind the workspace's one
+                 cargo feature; std
   checker/       the standalone law validators and lookup rules, the padding, padding-identity
                  and witness-row checks, the native lookup evaluator, the memory_roots hook,
                  the artifact cross-check, the circuit dump, the transcript-tape validator,
@@ -125,7 +128,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
+cargo clippy -p prover --all-targets --features metrics -- -D warnings   # the ONE feature's configuration
 cargo test --workspace                      # 960 tests as of S20; 65 more are #[ignore]d
+cargo test -p prover --features metrics --test metrics  # the metrics harness; 10 more, 2 #[ignore]d
 cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 18.8 GB peak, 198 s, 30 min on a runner
 cargo test -p prover --test acceptance -- --include-ignored --test-threads=1  # DEFERRED; S16's statement, 8.6 GB peak
 cargo test -p verifier --test cli -- --include-ignored --test-threads=1       # DEFERRED; ditto
@@ -134,6 +139,7 @@ cargo test -p prover --test control -- --include-ignored --test-threads=1     # 
 cargo test --release -p prover --test alu -- --include-ignored --test-threads=1  # DEFERRED; S18's statement, 30.9 GB peak, 67 s
 cargo test --release -p prover --test mem -- --include-ignored --test-threads=1  # DEFERRED; S19's statement, 32.3 GB peak, 87 s
 cargo test --release -p prover --test block -- --include-ignored --test-threads=1  # DEFERRED; S20's block, 33.4 GB peak, 779 s
+cargo test -p prover --features metrics --test metrics -- --include-ignored --nocapture  # DEFERRED; S16's statement twice, 8.6 GB each, and prints both reports
 cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify -p verifier-core --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
@@ -230,7 +236,18 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 
 ## The rules that bite most often
 - **Concrete types.** `Fr` is a struct. There is no `F: Field`, and there never will be.
-- **No cargo features. Zero.** One build configuration for the whole workspace.
+- **No cargo features. Zero — with exactly one exception, and it is closed.** One build
+  configuration for the whole workspace. The exception is `prover/metrics`, granted by the
+  owner at S20 for the proving harness and **for nothing else**: the rule stands unchanged
+  for every future progression, and `crates/prover/tests/one_feature.rs` enforces that by
+  reading every `Cargo.toml` in the repository and failing on any `[features]` table but
+  that one, or any key in it but `metrics`. The feature is off by default, enables no
+  dependency, and changes no proof byte; CI builds, clippies and tests the feature-on
+  configuration too, so the anti-goal's stated hazard — "a configuration nobody builds is
+  broken and undiscovered" — does not apply to it. `docs/spec/metrics.md` §0. A
+  `features = [...]` *key* inside a dependency entry is a different thing and always was
+  allowed: it selects an upstream crate's features, as the workspace manifest does for
+  `ark-ec` and `ark-ff`.
 - **One encoding.** Field elements on the wire are canonical (non-Montgomery) 32-byte
   little-endian. Montgomery form exists only in memory. Source literals are the one
   exception and are their own single form: `Fr::from_hex`, `0x` plus 64 lowercase digits,

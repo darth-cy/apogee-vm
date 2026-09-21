@@ -6,6 +6,18 @@ publish.workspace = true
 
 # The shard prover and the global commit phase. `docs/spec/shard-proof.md` is
 # normative. std + rayon: commitments and the forward pass are data-parallel.
+
+# THE WORKSPACE'S ONE AND ONLY CARGO FEATURE, and the one exception to master
+# anti-goal 1, granted by the owner at S20 for this and nothing else. It turns
+# on `src/metrics`, the proving harness: stage timing, byte accounting and the
+# modelled memory peak. It is off by default, it enables no dependency and it
+# changes no proof byte -- `tests/metrics.rs` proves the last of those. The
+# rule stands for every future progression: `tests/one_feature.rs` fails if a
+# second `[features]` table appears anywhere in the workspace, or if this one
+# grows a second key. `docs/spec/metrics.md`.
+[features]
+metrics = []
+
 [dependencies]
 constants.workspace = true
 constraints.workspace = true
