@@ -26,14 +26,14 @@ use test_support::{sha256, to_hex};
 /// The synthetic ELFs are not listed one by one: `synthetic_elfs.txt` carries
 /// their digests and is itself pinned here, so the chain is one constant long
 /// either way and the index stays readable.
-pub const PINS: [(&str, &str); 18] = [
+pub const PINS: [(&str, &str); 21] = [
     (
         "fib.elf",
         "5c73ceb44f873c61ec5b03633aa477d67512e63f0085245cafa4e46e1f3d609c",
     ),
     (
         "echo.elf",
-        "f748ee504e4de8235ba6ba4ea890b5bb84da0f536e7a1b89a08527aa3f028614",
+        "445a2f98cfa4ce9d9e8d0458e144562c83bcf42c6fe145cb33924f6f727edacb",
     ),
     (
         "rvc-dense.elf",
@@ -45,7 +45,7 @@ pub const PINS: [(&str, &str); 18] = [
     ),
     (
         "orderbook.elf",
-        "54d41ef536180f5bb6db63bcf8ad0e580be9166549cc919e67004b35814e6d68",
+        "d380523fed7479e5e9e747bf828c827b4e86902fb0fcb0f025e31d5612dcc7dc",
     ),
     (
         "vault.elf",
@@ -61,11 +61,11 @@ pub const PINS: [(&str, &str); 18] = [
     ),
     (
         "heap.elf",
-        "e4373f6ad241bba8ee3aa79f0650323c4bb2d412456271caa3871bd1c3161c67",
+        "228954404813103d793bee01d60c336110d7ae70d07ce290c2a4391f81fa1916",
     ),
     (
         "consistency.elf",
-        "983b3b20f8144f289d7f80dff974805fcfdd3a6650c58e0b1fee0d5b3b398ad5",
+        "91d5713a04c10a4e619145ed041a4ff1880db13d09e25cd5c63172fecc306634",
     ),
     (
         "addsub.elf",
@@ -98,6 +98,18 @@ pub const PINS: [(&str, &str); 18] = [
     (
         "rvc-dense.nm.txt",
         "06362b158abae3b1d13cfd74781817c574e746ec1c7b9121daed0cfea53706e7",
+    ),
+    (
+        "shards.elf",
+        "6b05f589f3726b8f7b42cd67547227a23640041eefa2e66d5277618735d34241",
+    ),
+    (
+        "keccak-test.elf",
+        "2ae0e094e78c467c85b0931ae03ac01d21decfd6d4d2e2ab7d5607f079ff14f9",
+    ),
+    (
+        "keccak-unused.elf",
+        "365cbb894e1110bb0903291cd938e3625ac6a3472f0fd86ce36fc59992eb618a",
     ),
 ];
 

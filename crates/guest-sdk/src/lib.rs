@@ -362,19 +362,42 @@ fn delegation_number(record: &'static [u8; delegation::MARKER_BYTES]) -> u32 {
     u32::from_le_bytes([record[n], record[n + 1], record[n + 2], record[n + 3]])
 }
 
+/// The 200-byte frame a delegation request hands over, **word-aligned**.
+///
+/// The alignment is in the type because nothing else supplies it. A bare
+/// `[u8; keccak::STATE_BYTES]` has alignment 1, and a stack local's address is
+/// the code generator's to choose: LLVM places align-1 stack objects at odd
+/// offsets whenever the frame packs that way, at every optimisation level.
+/// `docs/spec/delegation.md` §4 rule 1 requires a word-aligned base, and a
+/// misaligned one is a fatal `EmuError::Misaligned` — while `qemu-riscv32`,
+/// which answers `-ENOSYS` and never dereferences the pointer, runs the
+/// software path and agrees with everybody. An unaligned buffer would
+/// therefore be a guest that gives the right digest under one executor and
+/// dies under the other, decided by codegen rather than by the program.
+///
+/// `align(4)` and not more: 4 is what the ABI states, what `keccak`'s
+/// `base_aligned` decomposes and what `emulator::keccak_frame` checks.
+#[repr(C, align(4))]
+struct Frame([u8; keccak::STATE_BYTES]);
+
+/// The frame rule of `docs/spec/delegation.md` §4, as a type-level assertion:
+/// the buffer the ecall hands over is word-aligned or this crate does not
+/// build.
+const _: () = assert!(core::mem::align_of::<Frame>() >= 4);
+
 /// keccak-f[1600] over the 200-byte state frame, as a delegation.
 ///
 /// Returns `false` when the executor answers exactly `-ENOSYS` — which
 /// `qemu-riscv32` does, having no circuit — and the caller runs the software
 /// path. Any other nonzero answer exits nonzero rather than falling back, for
 /// [`poseidon2_permute`]'s reason.
-fn keccak_f1600(state: &mut [u8; keccak::STATE_BYTES]) -> bool {
-    // SAFETY: `state` is a live, writable 200-byte buffer, which is the whole
-    // of this call's contract.
+fn keccak_f1600(state: &mut Frame) -> bool {
+    // SAFETY: `state` is a live, writable 200-byte buffer, word-aligned by its
+    // type, which is the whole of this call's contract.
     let ret = unsafe {
         ecall1(
             delegation_number(&DELEGATION_KECCAK_F),
-            state.as_mut_ptr() as u32,
+            state.0.as_mut_ptr() as u32,
         )
     };
     match ret {
@@ -425,23 +448,25 @@ fn keccak_f_software(lanes: &mut [u64; keccak::LANES]) {
 
 /// One permutation of the sponge state: the delegation, or the software path.
 ///
-/// The frame the delegation dereferences is this function's own 200-byte
-/// buffer, so it is 8-aligned and wholly inside the RAM window by construction
-/// — the two frame rules of `docs/spec/delegation.md` §4 — and a caller cannot
-/// hand the delegation a pointer that breaks them.
-fn permute(state: &mut [u8; keccak::STATE_BYTES]) {
+/// The frame the delegation dereferences is a [`Frame`], so it satisfies the
+/// two frame rules of `docs/spec/delegation.md` §4 for different reasons. The
+/// **window** rule holds by construction: the buffer is a stack local, the
+/// stack lies below `__stack_top`, and `__stack_top` is the top of the RAM
+/// window, so `base + 200` cannot leave it. The **alignment** rule does not
+/// hold by construction, which is why [`Frame`] carries it.
+fn permute(state: &mut Frame) {
     if keccak_f1600(state) {
         return;
     }
     let mut lanes = [0u64; keccak::LANES];
     for (i, lane) in lanes.iter_mut().enumerate() {
         let mut bytes = [0u8; 8];
-        bytes.copy_from_slice(&state[8 * i..8 * i + 8]);
+        bytes.copy_from_slice(&state.0[8 * i..8 * i + 8]);
         *lane = u64::from_le_bytes(bytes);
     }
     keccak_f_software(&mut lanes);
     for (i, lane) in lanes.iter().enumerate() {
-        state[8 * i..8 * i + 8].copy_from_slice(&lane.to_le_bytes());
+        state.0[8 * i..8 * i + 8].copy_from_slice(&lane.to_le_bytes());
     }
 }
 
@@ -456,10 +481,10 @@ fn permute(state: &mut [u8; keccak::STATE_BYTES]) {
 /// domain — `0x01` first and `0x80` in the block's last byte — which is what
 /// makes this keccak256 and not SHA3-256.
 pub fn keccak256(input: &[u8]) -> [u8; keccak::DIGEST_BYTES] {
-    let mut state = [0u8; keccak::STATE_BYTES];
+    let mut state = Frame([0u8; keccak::STATE_BYTES]);
     let mut block = input.chunks_exact(keccak::RATE_BYTES);
     for chunk in block.by_ref() {
-        for (cell, byte) in state.iter_mut().zip(chunk) {
+        for (cell, byte) in state.0.iter_mut().zip(chunk) {
             *cell ^= byte;
         }
         permute(&mut state);
@@ -472,12 +497,12 @@ pub fn keccak256(input: &[u8]) -> [u8; keccak::DIGEST_BYTES] {
     last[..rest.len()].copy_from_slice(rest);
     last[rest.len()] ^= keccak::PAD_FIRST;
     last[keccak::RATE_BYTES - 1] ^= keccak::PAD_LAST;
-    for (cell, byte) in state.iter_mut().zip(last.iter()) {
+    for (cell, byte) in state.0.iter_mut().zip(last.iter()) {
         *cell ^= byte;
     }
     permute(&mut state);
     let mut digest = [0u8; keccak::DIGEST_BYTES];
-    digest.copy_from_slice(&state[..keccak::DIGEST_BYTES]);
+    digest.copy_from_slice(&state.0[..keccak::DIGEST_BYTES]);
     digest
 }
 

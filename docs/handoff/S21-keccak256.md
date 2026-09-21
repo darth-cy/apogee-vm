@@ -599,6 +599,154 @@ reasonable gate.
 
 ---
 
+## Corrections after review
+
+An owner review of `delegation.md` and the SDK shim, after the deferred batch and before
+the merge, found one code defect and a family of documentation drift. All are fixed on
+this branch. Nothing here changed a circuit, a proof byte or a fixture.
+
+### The SDK's frame buffer was aligned by luck
+
+`keccak256`'s 200-byte state was a bare `[u8; keccak::STATE_BYTES]`, whose Rust alignment
+is **1**, and `permute`'s doc comment asserted it was "8-aligned … by construction". Both
+halves were wrong. Disassembling the committed guest put the buffer at `sp + 0xc`
+(release) and `sp + 0x4c` (debug), 16-aligned `sp` in both — that is **4**-aligned, not 8.
+And nothing guaranteed even the 4: a probe compiled with this repo's own toolchain places
+an align-1 local at `sp + 11`, an odd offset, at every optimisation level.
+
+`docs/spec/delegation.md` §4 rule 1 requires a **word**-aligned base, which is what
+`emulator::keccak_frame` checks (`base.is_multiple_of(4)`) and what `keccak`'s
+`base_aligned` decomposes. So the failure mode was the bad kind: misaligned, the emulator
+raises fatal `Misaligned` and returns no trace, while `qemu-riscv32` answers `-ENOSYS`,
+never dereferences the pointer, runs the software fallback and gives the right digest —
+the same binary correct under one executor and dead under the other, decided by codegen.
+
+**Owner's decision: `align(4)`, not 8** — the number in the type is the number in the
+spec. The buffer is now a `#[repr(C, align(4))] struct Frame([u8; STATE_BYTES])`, threaded
+through `permute` and `keccak_f1600` so the type carries the guarantee all the way to the
+ecall, with `const _: () = assert!(align_of::<Frame>() >= 4)` beside it. The window half
+of the old comment was true and is kept, with its argument stated: the buffer is a stack
+local, the stack lies below `__stack_top`, and `__stack_top` is the top of the RAM window.
+
+`poseidon2_permute` takes a **caller-supplied** `&mut [u8; 96]` and has the same exposure.
+It is inert today — every executor answers `-ENOSYS` — but S22 should give it a `Frame` of
+its own rather than inherit this.
+
+### `delegation.md` carried the pre-split Δ, and one frozen order backwards
+
+Deviation 3 above records the `FRAME_DELTA = 0` / `ANCHOR_DELTA = 3` split.
+`execution-trace.md` §7 was updated for it; **§4.1 of this document was not**, and kept the
+stage prompt's Δ = 3 under a constant name that does not exist
+(`constants::delegation::DELTA`). Four lines said `+3` where the frame is meant — §4.1,
+§5.3 twice, and §6.2's gap row — against five that correctly mean the anchor.
+
+That mattered more than a wrong number usually does. `(RAM, 3)` **is** an entry of
+`constraints::memory`'s query table — the `ram` query — so an S22 family that stamped its
+frame writes at Δ = 3 as §4.1 instructed would have its first frame event filed into the
+requesting row and its second reach `trace`'s "no free frame query takes" panic. That is
+exactly the collision this stage's first build hit and deviation 3 fixed: the handoff
+explained the fix while the normative spec still carried the cause.
+
+§4.1 also stated the **frozen log order backwards** — "the pc query, then its roles … and
+then the invocation's frame words", against `archive.rs`'s
+`once(pc).chain(frame).chain(queries)`. The frame words ride Δ = 0 and sit *between* the
+pc query and the roles. The paragraph ends "Nothing else reconstructs that order", so it
+was the one statement in the section with no second source, and it was inverted.
+
+Two more, both of which would have produced an unverifiable proof if followed:
+
+- **§8's window formula** said `[4·cycle(first), 4·cycle(last) + 4)`, "the min and max".
+  `prover::ts_window` computes `[4·cycle(row 0), 4·max cycle + 4)`. On a delegation shard
+  the difference is not cosmetic: `2^8` rows hold as many invocations as the execution
+  made, so the tail is padding and padding carries cycle 0 — the last row's cycle gives an
+  end *below* the start, which step 4 of `verify_shard` refuses.
+- **§7 contradicted itself** about the same guest: "a guest that links the SDK and does not
+  call it declares nothing", four paragraphs above "A guest that links a shim but never
+  calls it declares the family … and proves zero shards". `guests/keccak-unused` is the
+  second. What decides it is reachability, not execution, and §7 now says so.
+
+Four source comments carried the same drift: `keccak.rs`'s module header, its `leaf` doc
+and its gap-gate comment — that last one contradicted by its own follow-up ten lines below
+— and `emulator`'s dispatch arm, which cited the phantom `delegation::DELTA` 170 lines
+above the code that uses `FRAME_DELTA`.
+
+### Two invariants that were promised and not enforced
+
+`ANCHOR_DELTA`'s documentation says it "must stay equal to"
+`constraints::memory::FRAME_DELTA`'s `deleg` entry. Nothing held it. And nothing held the
+load-bearing half of `FRAME_DELTA = 0` either — that `(RAM, 0)` is a pair **no** frame
+query takes. Both are now `const _: () = assert!(…)` in `constraints::keccak`, so the
+collision above cannot be reintroduced by editing a table.
+
+### Stale API sketches
+
+`add_sub::artifact`'s doc still described S16's **seven**-query frame and 14 timestamp
+obligations, three lines above its own assertion message saying *eight*; S21 made it 8 and
+16. `crates/constraints/CLAUDE.md`'s query-table block still showed the 8-entry table with
+no `DELEG`. The root `CLAUDE.md` had been updated; that one had not.
+
+### The guest ELF fixtures moved, and the pin table caught it
+
+Refreshing the fixtures was not optional: `crates/emulator/tests/guests.rs` runs
+`keccak-test` from the **committed** `crates/loader/tests/vectors/keccak-test.elf`, so
+without a refresh the one test that exercises the delegation path through
+`emulator::keccak_frame`'s alignment check would still be running the pre-fix buffer.
+`loader/tests/qemu.rs` builds from source and was green at both profiles, but under QEMU
+the ecall answers `-ENOSYS` and the frame pointer is never dereferenced, so it cannot
+cover this.
+
+`cargo run -p kat-gen -- guests` moved **six** ELFs, not the two that call `keccak256`:
+`keccak-test` and `keccak-unused` from the real stack-layout change, and `echo`, `heap`,
+`orderbook` and `consistency` at **identical byte size**. The size-preserving churn is
+crate-hash propagation — editing `guest-sdk` changes its SVH, which changes the
+fixed-width hash suffix in every `guest_sdk` symbol name those four retain. Any edit to
+the SDK does this; it is not particular to this one.
+
+That it was this change and not pre-existing drift was checked rather than assumed:
+reverting `guest-sdk` to `HEAD` and regenerating brought **every** ELF back byte-identical.
+A full `cargo run -p kat-gen` then showed nothing else moved — `identity.txt` pins
+`guests/fib`, which does not reference `keccak256` and did not change, and the circuit
+artifacts, `keccak.txt` and the global transcript tape are byte-identical, the circuit not
+having changed.
+
+`crates/loader/tests/differential.rs`'s `committed_fixtures_match_their_pins` failed on
+the refresh, which is exactly its job — master rule 11's tripwire, digests in source so a
+fixture refresh is a code edit a reviewer sees. Four pins updated. While there, three
+guests turned out never to have been pinned at all — S20's `shards` and S21's
+`keccak-test` and `keccak-unused` — so the table's own claim, "every committed fixture is
+pinned by SHA-256", was false for precisely the newest three and for the fixture this
+change touches. They are pinned now; `PINS` is 21 entries.
+
+### The two deferred suites that read that ELF were re-run
+
+`prover/tests/common/mod.rs` and `checker`'s twins load
+`crates/loader/tests/vectors/keccak-test.elf` directly, so the batch's recorded results
+were stale the moment it was refreshed. Both were re-run over the new fixture and both
+hold:
+
+| suite | result | wall | peak |
+| --- | --- | --- | --- |
+| `prover --test keccak` | 2 passed | 129.7 s | 31.2 GB |
+| `checker --test tamper`, `s21_a5_a6` alone | 1 passed | 1,061.8 s | 19.2 GB |
+
+The peak is inside the 31–39 GB spread already recorded for this suite; the wall times
+are within a few seconds of the batch's. The twins were never at risk of a stale row
+index — they locate the live invocation row by its `live` mask and the request row by its
+delegation mask, not by number — but the input genuinely changed and the numbers above are
+a measurement rather than an inference. The other eight deferred suites read guests this
+change did not move.
+
+### `reachability_survives_the_optimiser` is now a CI step
+
+**Owner's decision.** §7 called `black_box`-survives-`opt-level = 3` the whole mechanism of
+static detachment, and the only test of it was `#[ignore]`d and named in no CI step —
+`every_guest_declares_exactly_what_it_links` covers every guest but at one profile only.
+Measured before deciding: **0.56 s for all four builds, cold**, because a guest is three
+small `no_std` crates and `core` comes prebuilt, and `build_profile` wipes its target
+directory before and after. Far too cheap to defer, so it runs in CI.
+
+---
+
 ## Open for the next stage
 
 1. **`docs/spec/delegation.md` §10 is the append list**, and S22 and S23 should read it

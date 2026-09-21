@@ -1059,9 +1059,9 @@ fn s19_a8_the_old_word_the_splice_and_the_old_value_are_pinned() {
 // S21: the delegation circuit's cells, and the anchor's linkage
 // ---------------------------------------------------------------------------
 
-/// S21 acceptance 5 and 6, over `guests/keccak-test`: eight shards — six
+/// S21 acceptance 5 and 6, over `guests/keccak-test`: nine shards — six
 /// execution families at `2^20`, the two windows, and the `KECCAK_F`
-/// delegation shard at `2^8`.
+/// delegation shard at `2^8`, which is what the count below asserts.
 ///
 /// **5**, the circuit cell: one state bit and one written word of the
 /// delegation witness, each corrupted alone, each refused by the gate that

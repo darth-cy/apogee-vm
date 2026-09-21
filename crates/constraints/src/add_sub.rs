@@ -237,9 +237,10 @@ fn names(list: &[&str]) -> Vec<String> {
 /// §8. `trace_vars` is at least 19, the timestamp channel's width, which the
 /// assembly refuses below; a Mercury opening needs it even as well.
 ///
-/// Panics if the family's frame is not the seven queries this file addresses,
-/// or if any obligation count is not §8.3's — 14 timestamp, 4 `RANGE16`, 1
-/// decoder — and on every refusal of the assembly.
+/// Panics if the family's frame is not the eight queries this file addresses,
+/// or if any obligation count is not §8.3's — 16 timestamp (two a query, and
+/// S21's `deleg` is the eighth), 4 `RANGE16`, 1 decoder — and on every refusal
+/// of the assembly.
 pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     assert_eq!(
         frame_queries(family::ADD_SUB_LUI_AUIPC),

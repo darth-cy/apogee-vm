@@ -142,18 +142,29 @@ Every frame word is an ordinary RAM query (`docs/spec/execution-trace.md` §3):
 a read of what was there, a write of what the function computed. So:
 
 - **The invocation rides the requesting cycle.** It is not a cycle of its own:
-  its writes are at `4 · cycle + Δ` with `Δ = constants::delegation::DELTA = 3`,
-  the requesting cycle's, and its reads carry their own read timestamps with a
-  gap check apiece (§6.2). Cycle numbering, the shard plan and the clock are
-  unchanged — an invocation adds no cycle.
+  its writes are at `4 · cycle + Δ` with
+  `Δ = constants::delegation::FRAME_DELTA = 0`, the requesting cycle's first
+  slot, and its reads carry their own read timestamps with a gap check apiece
+  (§6.2). Cycle numbering, the shard plan and the clock are unchanged — an
+  invocation adds no cycle.
+- **The slot is 0, and it has to be.** `(RAM, 0)` is a pair no query of
+  `constraints::memory`'s table holds, which is what lets `trace`'s frame
+  builder recognise an invocation's events as *not this row's* and pass over
+  them. A family that stamped its frame writes at Δ = 3 would land on the
+  requesting family's own `ram` query, which is `(RAM, 3)`: the first frame
+  event would be filed into the requesting row and the second would reach that
+  builder's "no free frame query takes" panic. The **anchor** is the slot-3
+  side of the ABI and is a different constant, `ANCHOR_DELTA` (§5.1).
 - **All frame words share one slot.** They are distinct addresses, and
   `docs/spec/execution-trace.md` §3 already provides that distinct addresses may
   share a slot; two queries at one address never do.
-- **The log order is frozen**: a delegation cycle's events are the request row's
-  own — the pc query, then its roles in `ROLES` order — and then the
-  invocation's frame words **in frame order**, ascending by word index. Nothing
-  else reconstructs that order, so the emulator emits it and
-  `TraceArchive`'s `check_parts` replays it.
+- **The log order is frozen, and it is timestamp order**: the request row's pc
+  query, then the invocation's frame words **in frame order**, ascending by
+  word index, then the request row's roles in `ROLES` order. The frame words
+  sit *between* the pc query and the roles because they ride Δ = 0 while the
+  roles ride Δ = 1, 2 and 3. Nothing else reconstructs that order, so the
+  emulator emits it and `TraceArchive`'s `check_parts` replays it
+  (`crates/trace/src/archive.rs`).
 
 ---
 
@@ -258,7 +269,7 @@ timestamp 0 exactly the invocations', and the balance gives
   invocation sits at a request's base and at that request's cycle**.
 
 That is what the frame's own chains then need. The invocation's reads consume
-the last writes before `4·cycle + 3` at each frame address and its writes are
+the last writes before `4·cycle` at each frame address and its writes are
 consumed by the next reads there, so the permutation lands at the right place in
 each word's history — and a base the request did not name would put it somewhere
 else entirely.
@@ -267,7 +278,7 @@ Two further facts close the argument:
 
 - **An invocation cannot self-cancel.** Its frame read at word `j` would have to
   equal its own write there, but the gap gate makes the read timestamp strictly
-  below `4·cycle + 3`. So every frame query joins a real chain.
+  below `4·cycle`. So every frame query joins a real chain.
 - **A frame outside the windows cannot balance.** §4's bounds put every frame
   address in `[RAM_ORIGIN, 2^31)`, where a RAM window's rows are; an address
   below `RAM_ORIGIN` is masked out of window 0 by `V[ram_live]` and has no init
@@ -320,7 +331,7 @@ on the emitted artifact rather than on the vector handed in.
 | --- | --- |
 | a frame word's value `< 2^32` | `input_w{j}` recomposes it from its own 32 input bits, so the bound and the read are one gate |
 | a written word | `output_w{j}`, gated on `live`, recomposes it from the permutation's output bits |
-| a read's timestamp gap `∈ [0, 2^38)` | `gap_w{j}`: `4·cycle + 3 − read_ts − 1` is a sum of 38 booleans |
+| a read's timestamp gap `∈ [0, 2^38)` | `gap_w{j}`: `4·cycle − read_ts − 1` is a sum of 38 booleans — `FRAME_DELTA` is 0, so the constant is `−live` |
 | the frame base's alignment and floor | `base_aligned` |
 | the frame's ceiling | `base_in_window` |
 | word `j`'s address | `addr_w{j}`: `live·(addr_j − base − 4j) = 0` |
@@ -403,9 +414,14 @@ than decorative: a shim that exists has a record, the number it calls is the
 number the record declares, and at `opt-level = 3` the optimiser cannot fold
 the read into an immediate and leave the record unreferenced.
 
-Both halves are tested, at both optimisation levels and over every committed
-guest (`crates/program/tests/delegation.rs`): a guest that calls `keccak256`
-declares, and a guest that links the SDK and does not call it declares
+Both halves are tested in `crates/program/tests/delegation.rs`, by two tests of
+different reach: `every_guest_declares_exactly_what_it_links` covers **every**
+committed guest at the committed profile, and
+`reachability_survives_the_optimiser` covers `keccak-test` and `fib` at **both**
+optimisation levels, which is the half `#[used]` would break. What decides it is
+**reachability, not execution**: `guests/keccak-unused` never runs its call and
+declares `KECCAK_F` all the same, because the linker can see the call and cannot
+know the branch is dead. A guest that never names `keccak256` declares
 nothing.
 
 `program::declared_delegations(image)` is the scan — over the image's
@@ -445,9 +461,14 @@ That one constant is the whole of its treatment in a block:
   cycle numbers are global, invocations interleave with the cycles that request
   them, and two delegation shards of one execution are consecutive *invocations*,
   not consecutive *times*.
-- The window a delegation shard claims is the **min and max invocation
-  timestamp** it holds: `[4·cycle(first), 4·cycle(last) + 4)` — the same formula
-  `prover::ts_window` uses for a cycle-owning family, over the same `M[0]`. It is
+- The window a delegation shard claims is read off its own `M[0]`:
+  `[4·cycle(row 0), 4·max cycle + 4)` — the same expression `prover::ts_window`
+  uses for a cycle-owning family, over the same column, and it spans the
+  requesting cycles of the invocations the shard holds. **Row 0 and the
+  maximum, not the first and last rows**: a delegation shard is `2^8` rows and
+  holds only as many invocations as the execution made, so its tail is padding
+  and padding carries cycle 0. Reading the last row would put the end below the
+  start, which step 4 of `verify_shard` refuses. It is
   three-way since S21: trivial for a RAM window family, and this for the other
   two kinds. The window is a claim about *when the requests were*, since an
   invocation carries its requesting cycle and nothing of its own.

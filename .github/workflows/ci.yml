@@ -98,6 +98,23 @@ jobs:
       - name: test the metrics configuration
         run: cargo test -p prover --features metrics --test metrics
 
+      # Static detachment's second half. `every_guest_declares_exactly_what_it
+      # _links` runs in the `test` step above, over every committed guest at the
+      # committed profile; this is the one that covers BOTH optimisation levels,
+      # which is the half `black_box` exists for and the half `#[used]` would
+      # break. At `opt-level = 3` LLVM folds the declaration record's read into
+      # an immediate unless it is barred, the static goes unreferenced, and the
+      # declaration disappears from exactly the guests that need it
+      # (`docs/spec/delegation.md` §7) -- so a mechanism the ABI calls
+      # load-bearing had no CI coverage at all until this step.
+      #
+      # `#[ignore]`d because it builds guests from source, into target
+      # directories it wipes before and after. Not a deferred suite: measured at
+      # 0.56 s for all four builds, cold, because a guest is three small no_std
+      # crates and `core` comes prebuilt.
+      - name: static detachment survives the optimiser
+        run: cargo test -p program --test delegation -- --ignored --test-threads=1
+
       # DEFERRED: cargo test -p checker --test logup -- --include-ignored --test-threads=1
       # Master rule 7. S15's acceptance over the combined toy took 30m18s of a
       # 45-minute run here -- two thirds of it -- and cannot be made to take
@@ -269,7 +286,8 @@ jobs:
       # `crates/emulator/tests/guests.rs` (the corpus digests re-derived from
       # `tiny-keccak`, and both guests run) and
       # `crates/program/tests/delegation.rs` (static detachment over every
-      # committed guest), all in the `test` step. The anchor's four tamper twins
+      # committed guest in the `test` step, and over both optimisation levels in
+      # the step of its own above). The anchor's four tamper twins
       # are in `crates/checker/tests/tamper.rs`, deferred with it.
       #
       # Measured: 2 passed, 130 s, 38.9 GB peak on its own and 33.5 GB inside a

@@ -59,11 +59,11 @@ pub mod lookup {                                   // docs/spec/lookup.md
 pub mod memory {                                   // docs/spec/memory.md §2, §3.3, §7, §8
     pub const CYCLE: PolyAddress;                  // M[0]
     pub const FIELD_MASK: u32 = 0;  FIELD_ADDR = 1;  FIELD_READ_TS = 2;  FIELD_READ_VALUE = 3;  FIELD_WRITE_VALUE = 4;
-    pub const FRAME_QUERIES: usize = 8;            // the QUERY TABLE's size, never a frame's width
-    pub const FRAME_NAMES: [&str; 8];              // pc rs1 rs2 arg1 arg2 load ram rd
-    pub const FRAME_SPACE: [u8; 8];                // PC REG REG REG REG RAM RAM REG
-    pub const FRAME_DELTA: [u64; 8];               // 0 1 2 2 2 2 3 3
-    pub const PC: usize = 0;  RS1 = 1;  RS2 = 2;  ARG1 = 3;  ARG2 = 4;  LOAD = 5;  RAM = 6;  RD = 7;
+    pub const FRAME_QUERIES: usize = 9;            // the QUERY TABLE's size, never a frame's width
+    pub const FRAME_NAMES: [&str; 9];              // pc rs1 rs2 arg1 arg2 load ram rd deleg
+    pub const FRAME_SPACE: [u8; 9];                // PC REG REG REG REG RAM RAM REG DELEGATION_KECCAK_F
+    pub const FRAME_DELTA: [u64; 9];               // 0 1 2 2 2 2 3 3 3
+    pub const PC: usize = 0;  RS1 = 1;  RS2 = 2;  ARG1 = 3;  ARG2 = 4;  LOAD = 5;  RAM = 6;  RD = 7;  DELEG = 8;
     pub const FRAME_READ_ONLY: [usize; 5];         // RS1 RS2 ARG1 ARG2 LOAD, the write-back queries
     pub fn frame_queries(family: u32) -> &'static [usize];   // the frozen per-family subset
     pub fn frame(slot: usize, field: u32) -> PolyAddress;            // M[1 + 5·slot + field]

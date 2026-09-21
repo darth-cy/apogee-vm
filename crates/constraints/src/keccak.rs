@@ -6,7 +6,10 @@
 //! is that document as data.
 //!
 //! ```text
-//! M[0]            cycle          the requesting cycle; every write is at 4·cycle + 3
+//! M[0]            cycle          the requesting cycle: the 50 frame writes ride
+//!                                4·cycle + FRAME_DELTA = 4·cycle, the anchor's
+//!                                teardown read 4·cycle + ANCHOR_DELTA = 4·cycle + 3,
+//!                                and the anchor's answer tuple a literal 0
 //! M[1]            live           the row mask, and the one mask every leaf carries
 //! M[2]            base           the frame base pointer, and the anchor's address
 //! M[3]            anchor_value   what the request wrote back on its mirror query
@@ -48,6 +51,42 @@ use crate::lookup::ChannelSpec;
 use crate::{
     CachedEntry, CircuitArtifact, Coeff, EnforcingEntry, GateDef, LayerSpec, Padding, PolyAddress,
     ProducingEntry, Relation, ScratchSlot, COEFFICIENT_ENCODING_CANONICAL_LE, FORMAT_VERSION,
+};
+
+// ---------------------------------------------------------------------------
+// What the ABI pins
+// ---------------------------------------------------------------------------
+
+/// The anchor's slot **is** the `deleg` query's slot.
+///
+/// `constants::delegation::ANCHOR_DELTA`'s own documentation says it must stay
+/// equal to `constraints::memory::FRAME_DELTA`'s entry for `deleg`; this is what
+/// holds it. The request's mirror write and this family's teardown read have to
+/// be the same tuple on all four fields, or they never cancel and the anchor
+/// pairs nothing (`docs/spec/delegation.md` §5.1).
+const _: () = assert!(
+    constants::delegation::ANCHOR_DELTA == crate::memory::FRAME_DELTA[crate::memory::DELEG]
+);
+
+/// An invocation's frame slot is one **no query of the frame table holds**.
+///
+/// `(RAM, FRAME_DELTA)` has to miss the table, or `trace`'s frame builder files
+/// an invocation's frame events into the requesting row instead of passing over
+/// them. That is the collision S21's first build hit at Δ = 3, where the `ram`
+/// query sits: the first frame event is filed and the second reaches that
+/// builder's "no free frame query takes" panic
+/// (`docs/spec/delegation.md` §4.1).
+const _: () = {
+    let mut q = 0;
+    while q < crate::memory::FRAME_QUERIES {
+        assert!(
+            !(crate::memory::FRAME_SPACE[q] == address_space::RAM
+                && crate::memory::FRAME_DELTA[q] == constants::delegation::FRAME_DELTA),
+            "a frame query already holds (RAM, FRAME_DELTA): an invocation's frame events \
+             would be filed into the requesting row"
+        );
+        q += 1;
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -207,10 +246,12 @@ fn quadratic(
 /// One memory leaf: `live·T(space, addr, ts, value) + 1 − live`, written flat
 /// as `docs/spec/memory.md` §2.2 writes one.
 ///
-/// `ts` is `None` for the anchor's answer tuple, whose timestamp is the
-/// literal 0 — the stamp no ordinary cycle can produce — and `Some` otherwise,
-/// carrying either a column read or `4·cycle + 3`. `value` is `None` for the
-/// answer tuple too, whose value is the literal 0.
+/// `ts` is `Timestamp::Zero` for the anchor's answer tuple, whose timestamp is
+/// the literal 0 — the stamp no ordinary cycle can produce — and otherwise
+/// carries either a column read or this row's `4·cycle + delta`, where `delta`
+/// is `FRAME_DELTA = 0` for the 50 frame writes and `ANCHOR_DELTA = 3` for the
+/// teardown alone. `value` is `None` for the answer tuple too, whose value is
+/// the literal 0.
 fn leaf(space: u8, addr: PolyAddress, ts: Timestamp, value: Option<PolyAddress>) -> GateDef {
     let mut linear = vec![
         (slot(challenge_slot::MEM_GAMMA), LIVE),
@@ -555,8 +596,8 @@ fn list0_enforcing() -> Vec<(String, GateDef)> {
         ));
     }
     // The timestamp gap of every read, `docs/spec/memory.md` §2.4's statement
-    // over 38 bits rather than its 19+19 lookup: `gap = 4·cycle + 3 − read_ts
-    // − 1` is in `[0, 2^38)` because it is a sum of 38 booleans.
+    // over 38 bits rather than its 19+19 lookup: `gap = 4·cycle + FRAME_DELTA
+    // − read_ts − 1` is in `[0, 2^38)` because it is a sum of 38 booleans.
     for j in 0..k::FRAME_WORDS {
         let mut products = vec![
             (lit(mem::TS_STEP), LIVE, CYCLE),

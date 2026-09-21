@@ -747,7 +747,7 @@ impl<'a> Machine<'a> {
             // A delegation call: the frame base is its one argument, read as
             // the ABI table says, and the frame is permuted in place. The
             // invocation is not a cycle of its own — it rides this one, at
-            // `delegation::DELTA` (`docs/spec/delegation.md` §4).
+            // `delegation::FRAME_DELTA` (`docs/spec/delegation.md` §4.1).
             n if program::delegation_family(n).is_some() => {
                 let family = program::delegation_family(n).expect("just matched");
                 let base = self.read(&mut row, Role::Rs2, 10);
