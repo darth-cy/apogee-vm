@@ -96,6 +96,17 @@ minimum-height arm names **all seven** execution families, so a key naming any o
 `2^16` or `2^18` — both on the menu — gets `None` and a clean `Err` at load rather than
 reaching this channel's assertion and panicking inside `VerifyingKey::check`.
 
+**The way out of that floor is to carry no channel at all, and S21 took it.** A delegation
+family's rows are invocations rather than cycles, so `2^8` rows is a sensible shard and `2^16`
+is not reachable at any price (`docs/spec/delegation.md` §9). At `2^8` no range channel's table
+fits, so the keccak family carries **none** — no `TIMESTAMP`, no `RANGE16`, no `GENERIC`, no
+`DECODER`, no multiplicity column — and every bound it makes is a bit decomposition with a
+booleanity gate of its own. That is also why its registry arm sits *below* the minimum-height
+guard rather than in it: a family with no channel reaches no assertion here, so there is
+nothing for the guard to pre-empt, and putting it in the guard would refuse the only height it
+has. **A delegation family must therefore carry no channel**, which is a rule about the
+guard's placement as much as about the circuit.
+
 ## 4. Gated keys
 
 A lookup expression **cannot be conditional**: it is a linear form evaluated on every

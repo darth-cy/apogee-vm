@@ -14,6 +14,11 @@ here.
   ABI, and acceptance 9 wants the document checked against the numbers rather than
   maintained beside them. An integration test is a separate crate, so `src/` is still
   `#![no_std]` with nothing in it but constants.
+- **A third, added at S21:** `tests/keccak.rs`, which re-derives `keccak::ROTATIONS` from the
+  `(t+1)(t+2)/2 mod 64` walk and `keccak::ROUND_CONSTANTS` from the degree-8 LFSR, rather than
+  trusting the transcription. Two tables of 25 and 24 numbers copied from a reference are
+  exactly the kind of constant a test must re-derive; the same rule as the Poseidon2 round
+  constants and the pairing tables below.
 - **A second, added at S14:** `tests/memory.rs`, because `RAM_LIVE_BIT` and `HALT_PC` are
   claims about `guest_memory::RAM_ORIGIN`: `RAM_ORIGIN == 4 << RAM_LIVE_BIT`, and
   `HALT_PC` odd and below it; `lookup_channel::BITS[TIMESTAMP]` is one about
@@ -27,13 +32,19 @@ here.
   `family::COUNT`, `challenge_slot::NAMES`, `lookup_channel`) changed values without
   bumping either, by the owner's decision (`docs/handoff/S14-multiset.md`). S15 appended
   only — two channels, eight challenge slots and one tag — and changed no value, except
-  `lookup_channel::BITS`, which grew from two entries to four. S16 appended seven tags and
+  `lookup_channel::BITS`, which grew from two entries to four. **S21 changed four values and
+  appended three modules**, under the same pre-registration licence: `family::COUNT` 9 → 10,
+  `family::CYCLE_OWNING` and `family::DEFAULT_HEIGHTS` each one entry longer, and
+  `family::HEIGHT_MENU` gained `2^8` at its front — the one that is a real amendment, since it
+  widens what a `VmConfig` may carry. The new modules are `keccak` (the permutation's frozen
+  tables and sizes), `delegation` (the frame and anchor deltas and the declaration record's
+  magic) and one tag-free addition to `address_space`. S16 appended seven tags and
   changed nothing. S17 appended one tag and the `generic_table` module, whose three values
   S15 had frozen in `crates/program` and which moved here unchanged. S20 appended no tag
   and changed no value: it added two documentation tables, `family::CYCLE_OWNING` and
   `transcript_tags::NAMES`.
 
-## Contents as of S17
+## Contents as of S21
 | Item | Meaning |
 | --- | --- |
 | `PROTOCOL_VERSION: u32` | Placeholder, `0`, until the first registered identity. First item absorbed into every transcript. |
@@ -68,9 +79,11 @@ here.
 | `challenge_slot` | S13's `TOY = 0`; S14's memory slots `MEM_GAMMA` 1, `MEM_ALPHA_ADDR` 2, `MEM_ALPHA_TS` 3, `MEM_ALPHA_VAL` 4, and the derived `MEM_WINDOW_CONSTANT` 5; S15's `LOOKUP_G` 6 and `LOOKUP_BETA` 7, drawn per shard, with the derived powers `LOOKUP_BETA_2..6` 8–12 (also as `LOOKUP_BETA_POWERS`) and `LOOKUP_DECODER_NEUTRAL` 13; `NAMES`. Append-only. |
 | `lookup_channel` | S14's `TIMESTAMP = 0` and `RANGE16 = 1`, S15's `GENERIC = 2` and `DECODER = 3`; `COUNT`, `IS_RANGE`, the bounds `BITS = [19, 16, 0, 0]` — 0 where `IS_RANGE` is false, which is the absence of a bound and not a bound of `[0, 1)` — `NAMES`, and `MAX_TUPLE = 7`, past which `β` has no slot. Append-only; `docs/spec/memory.md` §7 freezes the range convention `RANGE16` serves and `docs/spec/lookup.md` the rest. |
 | `generic_table` | S15's packed generic table, moved from `program::lookup_tables` at S17 because a circuit now builds a key into it: `WIDTH = 3`, `AND_BASE = 0`, `SIGN_BASE = 256`, and S18's `SHIFT_BASE = SIGN_BASE + 2^16`, `SHIFT_ROWS = 32`, `SHIFT_COPOWER_BITS = 31`. Appending a table here moves the table's three commitments and so every verifying key's SRS digest; `SHIFT_COPOWER_BITS` is 31 and not 32 because `2^32` does not fit the table's `u32` columns, so the copower is stored halved and the two gates that read it carry a factor 2. `docs/spec/lookup.md` §9, `docs/spec/shift-bitwise.md` §3.1. |
-| `address_space` | S12. `REG = 1`, `RAM = 2`, `PC = 3`: nonzero, so no real memory tuple is all zeros. |
+| `address_space` | S12. `REG = 1`, `RAM = 2`, `PC = 3`: nonzero, so no real memory tuple is all zeros. S21 added `DELEGATION_KECCAK_F = 4`, **one space per delegation family**: an anchor tuple must be unreachable from RAM and from any other family's, so a space is what separates them (`docs/spec/delegation.md` §3, §5). |
 | `memory` | S12's clock, `TS_STEP` and `TS_BITS`; S14's `HALT_PC = 1`, the tuple part order `PART_AS/ADDR/TS/VAL`, the root positions `READ_ROOT = 0` and `WRITE_ROOT = 1`, and `RAM_LIVE_BIT = 14`. `docs/spec/memory.md`. |
-| `family` | S11. The append-only `FamilyId` table (0 add/sub/lui/auipc … 6 atomics, 7 `INIT_TEARDOWN`, since S14 RAM window 0 only; S14's 8 `ZERO_WINDOWS`), `COUNT`, the height menu, the default heights, `DEFAULT_BYTECODE_SIZE_WORDS`, the decoded-table `CODE_VERSION`, and S20's `CYCLE_OWNING`: whether a family's rows are execution cycles, `true` for the seven instruction families and `false` for the two RAM window families, append-only beside the ids. Only cycle-owning families' shards partition an execution in time (`docs/spec/block-proof.md` §4). |
+| `family` | S11. The append-only `FamilyId` table (0 add/sub/lui/auipc … 6 atomics, 7 `INIT_TEARDOWN`, since S14 RAM window 0 only; S14's 8 `ZERO_WINDOWS`; **S21's 9 `KECCAK_F`**, the first delegation family and the first family above the two window ones), `COUNT`, the height menu, the default heights, `DEFAULT_BYTECODE_SIZE_WORDS`, the decoded-table `CODE_VERSION`, and S20's `CYCLE_OWNING`: whether a family's rows are execution cycles, `true` for the seven instruction families and `false` for the two RAM window families **and for every delegation family**, append-only beside the ids. Only cycle-owning families' shards partition an execution in time (`docs/spec/block-proof.md` §4). **`HEIGHT_MENU` opens with `2^8` since S21** and `DEFAULT_HEIGHTS[KECCAK_F]` is that: a delegation family's rows are invocations, not halfwords, and `2^16` of them is 744 GB of forward pass (`docs/spec/delegation.md` §9). It is an even power because Mercury needs one. |
+| `delegation` | **S21.** The delegation ABI's numbers: `FRAME_DELTA = 0`, the in-cycle slot an invocation's frame accesses ride — a `(space, Δ)` pair no role takes, which is how `trace`'s frame builder tells them from the requesting row's; `ANCHOR_DELTA = 3`, the slot the request's mirror query writes at; and `MARKER_MAGIC` / `MARKER_BYTES`, the 12-byte `.rodata` record a linked shim emits so the preprocessor can see a family no pc claims (`docs/spec/delegation.md` §4, §5, §7). |
+| `keccak` | **S21.** keccak-f[1600] and keccak-256 as data: `LANES`, `LANE_BITS`, `STATE_BITS`, `STATE_BYTES`, `FRAME_WORDS = 50`, `ROUNDS = 24`, `RATE_BYTES = 136`, `DIGEST_BYTES = 32`, the sponge's `PAD_FIRST`/`PAD_LAST`, and the two tables `ROTATIONS` and `ROUND_CONSTANTS`. The circuit, the emulator and the guest SDK all read them, which is the point: one permutation, three consumers, no second copy. `tests/keccak.rs` re-derives both tables. |
 | `extra_mask` | S11. Every family's `family_extra_mask` bit positions, one-hot per mnemonic, append-only, and the system codes `ecall`/`ebreak`/`fence` carry in `imm`. |
 | `guest_memory` | The frozen guest memory map: `RAM_ORIGIN` and `RAM_LENGTH`; and, since S12, `STACK_RESERVE`, the 8 MiB at the top of RAM guest-sdk's allocator leaves to the stack. |
 | `ecall` | The guest ecall ABI: syscall numbers, range boundaries, file descriptors. |

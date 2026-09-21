@@ -15,6 +15,14 @@ use program::{
     ProgramError, ProgramParams, RowField, FAMILIES,
 };
 
+/// The one committed guest with no compressed instruction. `guests/shards`
+/// assembles under `.option norvc` throughout — S20's shard-cut demo wants
+/// uniform four-byte instructions so its pc arithmetic is obvious — so it has
+/// no RVC code to interleave and no `pc + 2` fall-through. Every other guest
+/// has both, and the exception is held *exact* below rather than skipped: the
+/// counts it is missing must be zero, not merely unchecked.
+const NO_RVC: &str = "shards";
+
 /// Acceptance 6: a scan of every exported column of every table proves that
 /// every row that is not one of the family's live instructions is
 /// `MINUS_ONE` in every field, and that no live row is the padding row — or
@@ -92,10 +100,18 @@ fn every_row_that_is_not_live_is_padding_in_every_field() {
             }
         }
         println!("{name}: {mid} mid-instruction slots, {interleaved} of them before RVC code, {non} not code");
-        assert!(
-            mid > 0 && interleaved > 0,
-            "{name}: no mid-instruction slot inside RVC code"
-        );
+        assert!(mid > 0, "{name}: no 32-bit instruction at all");
+        if name == NO_RVC {
+            assert_eq!(
+                interleaved, 0,
+                "{NO_RVC} is `.option norvc` throughout: it has no RVC code"
+            );
+        } else {
+            assert!(
+                interleaved > 0,
+                "{name}: no mid-instruction slot inside RVC code"
+            );
+        }
         if name == "amm" {
             assert!(non > 0, "amm carries a c.unimp, which is not code");
         }
@@ -128,42 +144,74 @@ fn next_pc_is_the_fall_through_the_encoding_implies() {
                 }
             }
         }
-        assert!(two > 0 && four > 0, "{name}: both lengths are exercised");
+        assert!(four > 0, "{name}: no four-byte instruction");
+        if name == NO_RVC {
+            assert_eq!(
+                two, 0,
+                "{NO_RVC} is `.option norvc` throughout: nothing falls through by 2"
+            );
+        } else {
+            assert!(two > 0, "{name}: both lengths are exercised");
+        }
     }
 }
 
 /// Must-be-exact 3: every table is exactly its family's `VmConfig` height, an
 /// even variable count, and exports at that length.
+///
+/// Two guests, because the default heights are no longer one band: `fib`
+/// carries the seven execution families and the two window ones, and
+/// `keccak-test` carries a delegation family beside them, whose default is the
+/// menu's new `2^8` (`docs/spec/delegation.md` §9). A delegation family is
+/// invoked, never decoded, so its table is empty — but it is still exactly its
+/// height, liveness bitset and all.
 #[test]
 fn every_table_is_exactly_its_config_height() {
-    let image = common::guest("fib");
-    let (tables, config) = decode_program(&image, &ProgramParams::defaults()).unwrap();
-    assert_eq!(tables.families.len(), config.families.len());
-    for (table, (family, height)) in tables.families.iter().zip(&config.families) {
-        assert_eq!((table.family, table.height), (*family, *height));
-        assert_eq!(*height, family::DEFAULT_HEIGHTS[*family as usize]);
-        let live_len = match &table.live {
-            PolyBacking::U1(_, n) => *n,
-            other => panic!("liveness is a bitset, not {other:?}"),
-        };
-        assert_eq!(live_len, *height as usize);
-        for (_, backing) in &table.columns {
-            let len = match backing {
+    for name in ["fib", "keccak-test"] {
+        let image = common::guest(name);
+        let (tables, config) = decode_program(&image, &ProgramParams::defaults()).unwrap();
+        assert_eq!(tables.families.len(), config.families.len());
+        for (table, (family, height)) in tables.families.iter().zip(&config.families) {
+            assert_eq!((table.family, table.height), (*family, *height));
+            assert_eq!(*height, family::DEFAULT_HEIGHTS[*family as usize]);
+            let live_len = match &table.live {
                 PolyBacking::U1(_, n) => *n,
-                PolyBacking::U8(v) => v.len(),
-                PolyBacking::U16(v) => v.len(),
-                PolyBacking::U32(v) => v.len(),
-                PolyBacking::Fr(_) => panic!("a stored column is never Fr"),
+                other => panic!("liveness is a bitset, not {other:?}"),
             };
-            assert_eq!(len, *height as usize);
+            assert_eq!(live_len, *height as usize);
+            for (_, backing) in &table.columns {
+                let len = match backing {
+                    PolyBacking::U1(_, n) => *n,
+                    PolyBacking::U8(v) => v.len(),
+                    PolyBacking::U16(v) => v.len(),
+                    PolyBacking::U32(v) => v.len(),
+                    PolyBacking::Fr(_) => panic!("a stored column is never Fr"),
+                };
+                assert_eq!(len, *height as usize);
+            }
+        }
+        // The two ends of the menu, named so neither guest's pass is vacuous:
+        // the widest execution table at 2^22, and — for the guest that
+        // declares one — the delegation table at 2^8.
+        let alu = tables.family(family::ADD_SUB_LUI_AUIPC).unwrap();
+        assert_eq!(alu.height, 1 << 22, "{name}");
+        match tables.family(family::KECCAK_F) {
+            Some(keccak) => {
+                assert_eq!(name, "keccak-test");
+                assert_eq!(keccak.height, 1 << 8);
+                assert!(keccak.columns.is_empty(), "invoked, never decoded");
+            }
+            None => assert_eq!(name, "fib", "fib declares no delegation family"),
+        }
+        if name == "fib" {
+            // One export at the full default height, to see the length and
+            // the variable count directly. 2^22 rows of Fr is 128 MiB, so it
+            // is done once and not per guest.
+            let exported = alu.column_poly(0);
+            assert_eq!(exported.len(), 1 << 22);
+            assert_eq!(exported.num_vars() % 2, 0);
         }
     }
-    // One export at the full default height, to see the length and the
-    // variable count directly. 2^22 rows of Fr is 128 MiB.
-    let alu = tables.family(family::ADD_SUB_LUI_AUIPC).unwrap();
-    let exported = alu.column_poly(0);
-    assert_eq!(exported.len(), 1 << 22);
-    assert_eq!(exported.num_vars() % 2, 0);
 }
 
 /// Must-be-exact 3: the table must be strictly taller than the row after its
@@ -381,10 +429,18 @@ fn parameters_off_the_menu_and_unknown_versions_are_refused() {
 }
 
 /// The per-family field masks, frozen. `funct3` is bit 6 and no family keeps
-/// it; mul/div and the atomics have no immediate.
+/// it; mul/div and the atomics have no immediate; the two window families and
+/// the delegation family have no decoded table at all, so their tuple is empty
+/// and their mask 0 — a delegation family is invoked, never decoded
+/// (`docs/spec/delegation.md` §1).
+///
+/// The list is every family, in canonical ascending order, and is held to
+/// `FAMILIES` by count *and* by order: a family appended to
+/// `constants::family` without a mask here fails on the next line, not
+/// silently.
 #[test]
 fn the_field_masks_are_frozen() {
-    let want: [(FamilyId, u8); 9] = [
+    let want: [(FamilyId, u8); 10] = [
         (family::ADD_SUB_LUI_AUIPC, 0b1011_1111),
         (family::JUMP_BRANCH_SLT, 0b1011_1111),
         (family::SHIFT_BITWISE, 0b1011_1111),
@@ -394,7 +450,9 @@ fn the_field_masks_are_frozen() {
         (family::ATOMICS, 0b1001_1111),
         (family::INIT_TEARDOWN, 0),
         (family::ZERO_WINDOWS, 0),
+        (family::KECCAK_F, 0),
     ];
+    assert_eq!(want.map(|(f, _)| f), FAMILIES, "every family, in order");
     for (family, mask) in want {
         assert_eq!(field_mask(family), mask, "{}", family_name(family));
         assert_eq!(lookup_tuple(family).len(), mask.count_ones() as usize);

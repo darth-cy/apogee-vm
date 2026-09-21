@@ -239,22 +239,47 @@ fn a4_a6_every_block_twin_is_refused() {
         verify_block(&setup.vk, &block, &flipped),
         statement("the block's statement is not the one given")
     );
-    // ... and with the block's own copy moved to match, by the digest.
+    // ... and with the block's own copy moved to match, so checks 1 and 2 pass
+    // and the digest is what has to catch it.
+    //
+    // **The block's answer is check 5's, not the shard loop's**, and that is
+    // S20's split working: the four memory challenges are drawn from the
+    // statement's own transcript (G10), so re-deriving them from a different
+    // statement makes the honest roots' two products disagree, and
+    // `verify_global_memory` runs before any shard is verified
+    // (`verify_block`'s doc comment). The seed is still named, one level down:
+    // the same proof under the same statement through `verify_shard` is
+    // `Statement`, which is where `tests/acceptance.rs` pins it.
     let mut twin = block.clone();
     twin.statement = flipped.clone();
     assert_eq!(
         verify_block(&setup.vk, &twin, &flipped),
-        statement("the proof was made for another statement")
+        Err(VerifyError::MemoryArgument(
+            "the statement's roots do not reconcile"
+        ))
+    );
+    assert_eq!(
+        verify_shard(&setup.vk, &twin.shards[0], &flipped),
+        statement("the proof was made for another statement"),
+        "the per-shard path still names the seed"
     );
 
     // 4(b) Another `ProgramIdentity`. An in-memory edit: such a key would not
-    // load (`docs/spec/shard-proof.md` §7.2), and steps 1 to 5 refuse it
+    // load (`docs/spec/shard-proof.md` §7.2), and checks 1 to 5 refuse it
     // anyway because G6 absorbs the identity.
     let mut other = setup.vk.clone();
     other.identity.0 += Fr::ONE;
     assert_eq!(
         verify_block(&other, &block, &honest),
-        statement("the proof was made for another statement")
+        Err(VerifyError::MemoryArgument(
+            "the statement's roots do not reconcile"
+        )),
+        "G6 absorbs the identity, so check 5's challenges move with it"
+    );
+    assert_eq!(
+        verify_shard(&other, &block.shards[0], &honest),
+        statement("the proof was made for another statement"),
+        "and the per-shard path names the seed"
     );
     // A key for another program refuses at the descriptor.
     let mut narrowed = setup.vk.clone();

@@ -71,8 +71,20 @@ fn identities() {
         .expect("reading fib.elf");
     let image = load_elf(&fib).expect("fib loads");
 
+    // The menu's **second** entry since S21, which opens with `2^8` for the
+    // delegation families: a delegation row is an invocation, not a halfword,
+    // so 256 rows is a sensible table there and no guest's code fits in 256
+    // halfwords anywhere else (`docs/spec/delegation.md` §9). The pinned
+    // identity is fib's at a uniform `2^16` and must stay that, so the height
+    // is asserted rather than left to an index.
+    let smallest_height = constants::family::HEIGHT_MENU[1];
+    assert_eq!(
+        smallest_height,
+        1 << 16,
+        "the menu's second entry is no longer 2^16, and identity.txt pins 2^16"
+    );
     let smallest = ProgramParams {
-        heights: [constants::family::HEIGHT_MENU[0]; constants::family::COUNT as usize],
+        heights: [smallest_height; constants::family::COUNT as usize],
         ..ProgramParams::defaults()
     };
     generic_table(&srs);

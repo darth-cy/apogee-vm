@@ -55,6 +55,20 @@ pub const SHARDS_RESULT: u32 = 2;
 /// `guests/shards`' add/sub occupancy, which is what makes it two shards.
 pub const SHARDS_ADD_CYCLES: u64 = 1_064_970;
 
+/// `guests/keccak-test`'s exit status: the number of its checks.
+pub const KECCAK_RESULT: u32 = 6;
+
+/// How many keccak-f permutations `guests/keccak-test` invokes: one per block
+/// of its six inputs, `docs/spec/delegation.md`'s corpus.
+pub const KECCAK_INVOCATIONS: u64 = 10;
+
+/// The delegation family's height: `2^8`, the menu's smallest, and the only
+/// one whose forward pass a machine holds (`docs/spec/delegation.md` §9).
+pub const KECCAK_VARS: u32 = 8;
+
+/// `guests/keccak-unused`'s exit status.
+pub const KECCAK_UNUSED_RESULT: u32 = 7;
+
 /// The committed ELF of guest `name`.
 pub fn fixture(name: &str) -> Vec<u8> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -113,6 +127,21 @@ pub fn shards_params() -> ProgramParams {
     heights(&[family::ADD_SUB_LUI_AUIPC, family::JUMP_BRANCH_SLT])
 }
 
+/// S21's heights: the five execution families `keccak-test` runs at `2^20`,
+/// and the delegation family at `2^8`.
+pub fn keccak_params() -> ProgramParams {
+    let mut params = heights(&[
+        family::ADD_SUB_LUI_AUIPC,
+        family::JUMP_BRANCH_SLT,
+        family::SHIFT_BITWISE,
+        family::MUL_DIV,
+        family::MEM_WORD,
+        family::MEM_SUBWORD,
+    ]);
+    params.heights[family::KECCAK_F as usize] = 1 << KECCAK_VARS;
+    params
+}
+
 fn program_of(name: &str, params: &ProgramParams) -> Program {
     let image = load_elf(&fixture(name)).unwrap_or_else(|e| panic!("{name} loads: {e:?}"));
     let (tables, config) =
@@ -144,6 +173,14 @@ pub fn shards_program() -> Program {
     program_of("shards", &shards_params())
 }
 
+pub fn keccak_program() -> Program {
+    program_of("keccak-test", &keccak_params())
+}
+
+pub fn keccak_unused_program() -> Program {
+    program_of("keccak-unused", &keccak_params())
+}
+
 /// The post-execution archive of `addsub`'s one run.
 pub fn archive(program: &Program) -> TraceArchive {
     trace(program, RESULT)
@@ -167,6 +204,16 @@ pub fn mem_archive(program: &Program) -> TraceArchive {
 /// The post-execution archive of `shards`' one run.
 pub fn shards_archive(program: &Program) -> TraceArchive {
     trace(program, SHARDS_RESULT)
+}
+
+/// The post-execution archive of `keccak-test`'s one run.
+pub fn keccak_archive(program: &Program) -> TraceArchive {
+    trace(program, KECCAK_RESULT)
+}
+
+/// The post-execution archive of `keccak-unused`'s one run.
+pub fn keccak_unused_archive(program: &Program) -> TraceArchive {
+    trace(program, KECCAK_UNUSED_RESULT)
 }
 
 /// A run with no input and no hint, which must exit with `status`.
@@ -208,6 +255,14 @@ pub fn mem_setup() -> ProverSetup {
 
 pub fn shards_setup() -> ProverSetup {
     ProverSetup::new(shards_program(), toy_srs(ADD_VARS)).expect("shards registers")
+}
+
+pub fn keccak_setup() -> ProverSetup {
+    ProverSetup::new(keccak_program(), toy_srs(ADD_VARS)).expect("keccak-test registers")
+}
+
+pub fn keccak_unused_setup() -> ProverSetup {
+    ProverSetup::new(keccak_unused_program(), toy_srs(ADD_VARS)).expect("keccak-unused registers")
 }
 
 /// The toy SRS's `tau`.

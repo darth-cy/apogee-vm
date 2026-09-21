@@ -60,12 +60,52 @@ use prover::{shard_columns, ProverSetup};
 use trace::{build_multiplicities, Role, TraceArchive};
 use verifier::VerifyError;
 
-const WIDTH: usize = 7;
+/// `ADD_SUB_LUI_AUIPC`'s frame width, and the **slot** of each query this file
+/// touches — a position in `frame_queries(ADD)`, never a query id.
+///
+/// S21 appended `deleg`, so the width is 8 and `rd`'s slot is still 6; a query
+/// inserted rather than appended would move every one of these silently, which
+/// is what `the_slot_constants_are_the_frames` below exists to catch. It runs
+/// in ordinary CI, unlike every proof test in this file.
+const WIDTH: usize = 8;
 const PC: usize = 0;
 const RS1: usize = 1;
 const RS2: usize = 2;
 const RAM: usize = 5;
 const RD: usize = 6;
+const DELEG: usize = 7;
+
+/// The slot constants above against the frozen frame, and the witness columns
+/// they index against the circuit's own names. No proof, so this is the one
+/// test in this file CI runs.
+#[test]
+fn the_slot_constants_are_the_frames() {
+    let queries = constraints::memory::frame_queries(ADD);
+    assert_eq!(queries.len(), WIDTH, "the add/sub frame is {WIDTH} queries");
+    use constraints::memory as m;
+    for (slot, id) in [
+        (PC, m::PC),
+        (RS1, m::RS1),
+        (RS2, m::RS2),
+        (RAM, m::RAM),
+        (RD, m::RD),
+        (DELEG, m::DELEG),
+    ] {
+        assert_eq!(queries[slot], id, "slot {slot}");
+    }
+    // And the x0 gadget's three columns, which follow the frame's gap chunks.
+    let a = &constraints::family_circuit(ADD, 20)
+        .expect("the add/sub circuit")
+        .artifact;
+    let name = |address: PolyAddress| match address {
+        PolyAddress::Witness(i) => a.witness[i as usize].clone(),
+        other => panic!("{other} is not a witness column"),
+    };
+    assert_eq!(name(rd_inv(WIDTH)), "rd_inv");
+    assert_eq!(name(rd_is_zero(WIDTH)), "rd_is_zero");
+    assert_eq!(name(rd_selected(WIDTH)), "rd_selected");
+    assert_eq!(name(gap_hi(DELEG)), "deleg_gap_hi");
+}
 
 const CONSTRAINT: VerifyError = VerifyError::Constraint { layer: 0 };
 const MEMORY: VerifyError = VerifyError::MemoryArgument("");
@@ -1012,5 +1052,206 @@ fn s19_a8_the_old_word_the_splice_and_the_old_value_are_pinned() {
             cell(AT, at_circuit::CMP_GAP_HI, MEM_PADDING, f(13)),
         ]),
         (AT, 0),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// S21: the delegation circuit's cells, and the anchor's linkage
+// ---------------------------------------------------------------------------
+
+/// S21 acceptance 5 and 6, over `guests/keccak-test`: nine shards — six
+/// execution families at `2^20`, the two windows, and the `KECCAK_F`
+/// delegation shard at `2^8`, which is what the count below asserts.
+///
+/// **5**, the circuit cell: one state bit and one written word of the
+/// delegation witness, each corrupted alone, each refused by the gate that
+/// reads it — `Constraint` — with the honest twin passing and the structural
+/// counts on screen beside them.
+///
+/// **6**, the linkage: the three anchor twins of `docs/spec/delegation.md`
+/// §5.2, run through the family-parameterized helper S22 and S23 invoke by
+/// name. They are the block's, not one shard's: a dropped invocation's only
+/// symptom is the cross-shard root product, and that check reads the statement
+/// rather than a proof (`docs/spec/block-proof.md` §3).
+#[test]
+#[ignore]
+fn s21_a5_a6_the_delegation_witness_and_the_anchor_are_pinned() {
+    use constants::family::KECCAK_F as KEC;
+    use constants::family::ZERO_WINDOWS as ZERO;
+    use constants::{delegation, keccak as k};
+    use constraints::keccak as kec;
+
+    let setup = common::keccak_setup();
+    let archive = common::keccak_archive(&setup.program);
+    let h = TamperHarness::new(&setup, &archive);
+
+    // The structural counts. Nine shards — six `2^20` execution ones, the two
+    // `2^16` windows and one `2^8` delegation shard — the delegation family's
+    // last, and its circuit's width: 204 memory columns (`cycle`, `live`,
+    // `base`, `anchor_value` and four a frame word) and 3,560 witness ones (the
+    // state's 1,600 bits, 38 gap bits a read, and the frame pointer's 60).
+    let (public, proofs) = h.honest();
+    let shards: Vec<(u32, u32)> = proofs.iter().map(|p| (p.family, p.shard_index)).collect();
+    assert_eq!(shards.len(), 9, "nine shards: {shards:?}");
+    assert_eq!(shards.last(), Some(&(KEC, 0)));
+    assert!(shards.contains(&(INIT, 0)) && shards.contains(&(ZERO, 0)));
+    let a = &setup.vk.circuit(KEC).expect("a keccak circuit").artifact;
+    assert_eq!(
+        (a.memory.len(), a.witness.len(), a.setup.len()),
+        (4 + 4 * k::FRAME_WORDS, 3560, 0)
+    );
+    assert_eq!(a.trace_vars, common::KECCAK_VARS);
+
+    // Acceptance 5. The invocation rows are the guest's ten, in order; the
+    // twins take the first, found by its mask rather than by its number.
+    let columns = shard_columns(&setup, &archive, KEC, 0, &public.windows)
+        .expect("the delegation shard's columns");
+    let at = |address: PolyAddress, row: usize| {
+        columns
+            .iter()
+            .find(|(a, _)| *a == address)
+            .unwrap_or_else(|| panic!("the shard has no {address}"))
+            .1
+            .get(row)
+    };
+    let live_row = (0..1 << common::KECCAK_VARS)
+        .find(|r| at(kec::LIVE, *r) == Fr::ONE)
+        .expect("a live invocation");
+    let padding_row = (0..1 << common::KECCAK_VARS)
+        .find(|r| at(kec::LIVE, *r) == Fr::ZERO)
+        .expect("a padding row");
+    let keccak_cell = |address, row, value| Cell {
+        family: KEC,
+        shard: 0,
+        address,
+        row,
+        value,
+    };
+
+    // A flipped input state bit: the word it recomposes no longer matches, and
+    // `input_w{j}` is the gate that says so. Flipping the word with it moves
+    // the refusal to the permutation's own output, which is the other half of
+    // the same statement — the circuit is what ties the two together.
+    let bit = at(kec::in_bit(0), live_row);
+    h.assert_rejects(
+        &tamper(vec![keccak_cell(kec::in_bit(0), live_row, Fr::ONE - bit)]),
+        (KEC, 0),
+        CONSTRAINT,
+    );
+    let word = at(kec::word(0, kec::WORD_READ_VALUE), live_row);
+    h.assert_rejects(
+        &tamper(vec![
+            keccak_cell(kec::in_bit(0), live_row, Fr::ONE - bit),
+            keccak_cell(
+                kec::word(0, kec::WORD_READ_VALUE),
+                live_row,
+                word + Fr::ONE - bit - bit,
+            ),
+        ]),
+        (KEC, 0),
+        CONSTRAINT,
+    );
+    // A corrupted written word: the permutation says what it must be.
+    let out = at(kec::word(7, kec::WORD_WRITE_VALUE), live_row);
+    h.assert_rejects(
+        &tamper(vec![keccak_cell(
+            kec::word(7, kec::WORD_WRITE_VALUE),
+            live_row,
+            out + Fr::ONE,
+        )]),
+        (KEC, 0),
+        CONSTRAINT,
+    );
+    // And a gap bit, which is the frame read's only bound.
+    h.assert_rejects(
+        &tamper(vec![keccak_cell(kec::gap_bit(3, 0), live_row, f(2))]),
+        (KEC, 0),
+        CONSTRAINT,
+    );
+
+    // The negative control: a padding row's cells that every gate of the family
+    // really does gate off `live` — a gap bit, whose `gap_w{j}` carries the
+    // mask on every product, and a frame-pointer headroom bit, whose
+    // `base_in_window` does too.
+    h.assert_verifies(
+        &tamper(vec![
+            keccak_cell(kec::gap_bit(5, 7), padding_row, Fr::ONE),
+            keccak_cell(kec::base_room_bit(3), padding_row, Fr::ONE),
+        ]),
+        (KEC, 0),
+    );
+    // And its other half, which is the sharper statement: **`in_bit` is not
+    // free on a padding row**, because `input_w{j}` is ungated. It does not
+    // need the mask on an honest row — every term is 0 there — but that also
+    // means a padding row's state bits are pinned to the words they recompose,
+    // which are 0. Setting bit 11 asks word 0 to be 2^11 and `input_w0`
+    // refuses it. The distinction matters: a reviewer reading "every gate is
+    // gated on live" would expect this cell to be free, and it is not
+    // (`docs/spec/constraint-manifest.md` §12.5, §12.10).
+    h.assert_rejects(
+        &tamper(vec![keccak_cell(kec::in_bit(11), padding_row, Fr::ONE)]),
+        (KEC, 0),
+        CONSTRAINT,
+    );
+
+    // Acceptance 6. The requesting rows are the add/sub family's delegation
+    // ecalls, found by the mirror query's own mask.
+    let alu = shard_columns(&setup, &archive, ADD, 0, &public.windows).expect("the add/sub shard");
+    let alu_at = |address: PolyAddress, row: usize| {
+        alu.iter()
+            .find(|(a, _)| *a == address)
+            .unwrap_or_else(|| panic!("the add/sub shard has no {address}"))
+            .1
+            .get(row)
+    };
+    let requests: Vec<usize> = (0..1 << common::ADD_VARS)
+        .filter(|r| alu_at(frame(DELEG, FIELD_MASK), *r) == Fr::ONE)
+        .collect();
+    assert_eq!(
+        requests.len() as u64,
+        common::KECCAK_INVOCATIONS,
+        "one request a permutation"
+    );
+    // The invocation that pairs with request 0 is the one at its cycle: the
+    // anchor binds them there and nowhere else.
+    let cycle_of = |row: usize| alu_at(CYCLE, row);
+    let paired = (0..1 << common::KECCAK_VARS)
+        .find(|r| at(kec::LIVE, *r) == Fr::ONE && at(kec::CYCLE, *r) == cycle_of(requests[0]))
+        .expect("the invocation at the request's cycle");
+    assert_eq!(
+        at(kec::BASE, paired),
+        alu_at(frame(DELEG, FIELD_ADDR), requests[0]),
+        "and at its frame base"
+    );
+    assert_eq!(
+        (
+            alu_at(frame(DELEG, FIELD_READ_TS), requests[0]),
+            alu_at(frame(DELEG, FIELD_READ_VALUE), requests[0])
+        ),
+        (Fr::ZERO, Fr::ZERO),
+        "an honest request's mirror read is the answer tuple, stamped 0"
+    );
+    assert_eq!(
+        delegation::ANCHOR_DELTA,
+        constraints::memory::FRAME_DELTA[DELEG],
+        "the anchor's slot is the mirror query's"
+    );
+
+    checker::assert_anchor_twins_refused(
+        &h,
+        &checker::AnchorTwins {
+            requester: (ADD, 0),
+            delegation: (KEC, 0),
+            request: requests[0],
+            invocation: paired,
+            other_request: requests[1],
+            rd_selected: rd_selected(WIDTH),
+            cycle: CYCLE,
+            mirror_read_ts: frame(DELEG, FIELD_READ_TS),
+            mirror_read_value: frame(DELEG, FIELD_READ_VALUE),
+            mirror_write_value: frame(DELEG, FIELD_WRITE_VALUE),
+            live: kec::LIVE,
+            anchor_value: kec::ANCHOR_VALUE,
+        },
     );
 }

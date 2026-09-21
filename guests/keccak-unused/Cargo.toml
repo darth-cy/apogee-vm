@@ -1,0 +1,10 @@
+[package]
+name = "keccak-unused"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# S21's second fixture: it links `guest_sdk::keccak256` — so its image carries
+# the delegation declaration record — and never calls it.
+[dependencies]
+guest-sdk.workspace = true

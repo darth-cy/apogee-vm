@@ -1058,9 +1058,14 @@ pub mod family {
     /// pc; present in every `VmConfig`, at the height of [`INIT_TEARDOWN`].
     /// `docs/spec/memory.md` §3.
     pub const ZERO_WINDOWS: u32 = 8;
+    /// The keccak-f[1600] **delegation** family (S21): one permutation a row,
+    /// invoked by the [`ecall::PRECOMPILE_KECCAK_F`] ecall and never decoded.
+    /// Claims no pc, owns no cycle, and is in a `VmConfig` only when the
+    /// linked binary declares it (`docs/spec/delegation.md` §7).
+    pub const KECCAK_F: u32 = 9;
 
     /// How many families this table defines.
-    pub const COUNT: u32 = 9;
+    pub const COUNT: u32 = 10;
 
     /// Whether a family's rows are **execution cycles**, indexed by
     /// `FamilyId`. Append-only, beside the ids themselves.
@@ -1069,9 +1074,10 @@ pub mod family {
     /// [`ZERO_WINDOWS`] own addresses — a RAM window's rows are words, not
     /// cycles (`docs/spec/memory.md` §3). A block's time-window rules apply to
     /// cycle-owning families alone (`docs/spec/block-proof.md` §4): only their
-    /// shards partition an execution in time. The delegation families E21–S23
-    /// append here as `false`; their shards carry a min/max invocation window
-    /// and no disjointness.
+    /// shards partition an execution in time. A **delegation** family appends
+    /// here as `false`: its rows are invocations, its shards carry a min/max
+    /// invocation window, and no disjointness is asked of them
+    /// (`docs/spec/delegation.md` §8). [`KECCAK_F`] is the first.
     pub const CYCLE_OWNING: [bool; COUNT as usize] = [
         true,  // ADD_SUB_LUI_AUIPC
         true,  // JUMP_BRANCH_SLT
@@ -1082,11 +1088,21 @@ pub mod family {
         true,  // ATOMICS
         false, // INIT_TEARDOWN
         false, // ZERO_WINDOWS
+        false, // KECCAK_F
     ];
 
     /// The trace-height menu, ascending. Even powers of two only, so that a
     /// Mercury opening's `b = sqrt(n)` exists.
-    pub const HEIGHT_MENU: [u32; 4] = [1 << 16, 1 << 18, 1 << 20, 1 << 22];
+    ///
+    /// `2^8` is S21's, and it is a **delegation** height: one row is a whole
+    /// keccak-f[1600] permutation, so a row costs ~345,600 inner columns and a
+    /// shard's forward pass is that times its height. At `2^16` a keccak shard
+    /// would materialize 734 GB of layer values; at `2^8` it is 2.9 GB
+    /// (`docs/spec/delegation.md` §9). No family carrying a range-channel
+    /// obligation may take it — `lookup_channel::BITS` bottoms out at 16 — and
+    /// `constraints::family_circuit` returns `None` for every such family
+    /// below its channel's width.
+    pub const HEIGHT_MENU: [u32; 5] = [1 << 8, 1 << 16, 1 << 18, 1 << 20, 1 << 22];
 
     /// The default trace height of every family, indexed by `FamilyId`.
     ///
@@ -1096,6 +1112,11 @@ pub mod family {
     /// even count, so `2^20` is the floor for every family that runs cycles.
     /// `ATOMICS` sat at `2^16` from S11 until S19 raised it with the circuit
     /// that needs it (`docs/handoff/S16-add-sub.md` answer 7).
+    ///
+    /// A **delegation** family is the other way round: it carries no range
+    /// channel at all, so no floor applies, and its ceiling is its own circuit
+    /// — [`KECCAK_F`] sits at `2^8` because one row is a whole permutation
+    /// (`docs/spec/delegation.md` §9).
     pub const DEFAULT_HEIGHTS: [u32; COUNT as usize] = [
         1 << 22, // ADD_SUB_LUI_AUIPC
         1 << 22, // JUMP_BRANCH_SLT
@@ -1106,6 +1127,7 @@ pub mod family {
         1 << 20, // ATOMICS
         1 << 22, // INIT_TEARDOWN
         1 << 22, // ZERO_WINDOWS
+        1 << 8,  // KECCAK_F
     ];
 
     /// The default `bytecode_size_words`: `2^20` words, a 4 MiB ceiling on the
@@ -1313,6 +1335,14 @@ pub mod ecall {
     /// every executor answers `-ENOSYS` and the caller runs its software path.
     pub const PRECOMPILE_POSEIDON2: u32 = 0x0500;
 
+    /// keccak-f[1600] over a 200-byte state frame, `a0` = the frame base
+    /// pointer, read and written in place. The first **delegation** call:
+    /// `docs/spec/delegation.md` is its ABI, and the circuit that proves it is
+    /// `constants::family::KECCAK_F`. Returns 0 on an executor that has the
+    /// circuit and `-ENOSYS` on one that does not, so the same binary runs
+    /// under `qemu-riscv32` with its software fallback.
+    pub const PRECOMPILE_KECCAK_F: u32 = 0x0501;
+
     /// Public input, committed: the fd 0 byte stream the public I/O digest
     /// binds first.
     pub const FD_PUBLIC_INPUT: u32 = 0;
@@ -1355,6 +1385,22 @@ pub mod address_space {
     /// The program counter: one address, `0`. Every cycle reads `pc` and
     /// writes `next_pc` here.
     pub const PC: u8 = 3;
+    /// The **delegation** anchor space of `family::KECCAK_F` (S21).
+    ///
+    /// Not memory: no guest instruction reaches it, no RAM window initializes
+    /// it, and no chain runs through it. Its balance is a bijection — one
+    /// delegation request's read against one invocation's answer tuple,
+    /// stamped 0 (`docs/spec/delegation.md` §5). A tuple at timestamp 0 is
+    /// exactly what makes that pairing 1:1; in [`RAM`] the same tuple would
+    /// collide with a window family's init write, and a request with no
+    /// invocation would balance.
+    ///
+    /// **Each delegation family takes the next tag**, append-only: S22's and
+    /// S23's are 5 and 6. The tag *is* the delegation type, which is why a
+    /// keccak request cannot be answered by another type's invocation at the
+    /// same frame base; the anchor's address is the frame base and carries no
+    /// type of its own.
+    pub const DELEGATION_KECCAK_F: u8 = 4;
 }
 
 /// The memory argument's clock, frozen at S12 from the master's memory
@@ -1400,4 +1446,129 @@ pub mod memory {
     /// `4 << RAM_LIVE_BIT`, and `ram_live` masks them. `docs/spec/memory.md`
     /// §3.1 and §3.3.
     pub const RAM_LIVE_BIT: u32 = 14;
+}
+
+/// The **delegation** ABI's numbers, frozen at S21. `docs/spec/delegation.md`
+/// is the ABI itself; this module is the one place its numbers live.
+///
+/// A delegation family is *invoked*, never decoded: it sets no family bit, it
+/// runs its own trace beside the CPU families, and a requesting cycle hands it
+/// a frame base pointer in `a0`. Every number here is append-only, for the
+/// same reason [`ecall`]'s are — a published identity's ABI is frozen, and
+/// redefining a number quietly makes an old program compute something else.
+pub mod delegation {
+    /// The in-cycle slot (`delta`) of every frame access an invocation makes:
+    /// **0**, the requesting cycle's first.
+    ///
+    /// Zero for two reasons. An invocation is not part of the requesting
+    /// instruction's frame at all — it happens at the top of the cycle, before
+    /// the row's own register reads — and `(RAM, 0)` is a pair **no query of
+    /// `constraints::memory`'s table has**, which is what lets the frame
+    /// builder pass over an invocation's events instead of trying to file them
+    /// in the requesting family's frame. The narrow-frame panic beside that
+    /// rule is unchanged: a pair the table *does* have and no free slot takes
+    /// is still loud.
+    pub const FRAME_DELTA: u64 = 0;
+
+    /// The in-cycle slot of a request's mirror query and of the invocation's
+    /// answer tuple: **3**, which is `constraints::memory::FRAME_DELTA`'s
+    /// entry for the `deleg` query and must stay equal to it.
+    ///
+    /// The two sides of the anchor meet at this timestamp, which is what binds
+    /// an invocation to its requesting cycle (`docs/spec/delegation.md` §5.3).
+    pub const ANCHOR_DELTA: u64 = 3;
+
+    /// The eight bytes that open a delegation declaration record in a guest
+    /// image. `docs/spec/delegation.md` §7.
+    ///
+    /// The record is [`MARKER_BYTES`] long: this magic, then the declared
+    /// ecall number as a little-endian `u32`. The guest SDK emits one per
+    /// delegation shim, in an allocated `.rodata` section, so the linker keeps
+    /// it exactly when the shim is linked and `crates/loader` carries it into
+    /// the image like any other file-backed byte — where program identity
+    /// already binds it.
+    ///
+    /// **Scanned at every byte offset, not at an alignment.** A `static`'s
+    /// address is the linker's, and a record that happened to land off a word
+    /// boundary would be a declaration silently lost — a build that proves
+    /// nothing rather than one that fails.
+    pub const MARKER_MAGIC: [u8; 8] = *b"APOGDEL1";
+
+    /// A declaration record's length: [`MARKER_MAGIC`] then a `u32`.
+    pub const MARKER_BYTES: usize = 12;
+}
+
+/// keccak-f[1600] and keccak256, frozen at S21.
+///
+/// The permutation's shape and its two constant tables. Four consumers read
+/// them and none of them defines its own: `constraints::keccak` builds the
+/// circuit, `emulator` executes the delegation ecall, `guest-sdk` runs the
+/// software fallback, and the test oracles check all three against
+/// `tiny-keccak`.
+pub mod keccak {
+    /// Lanes in the state: 5 by 5.
+    pub const LANES: usize = 25;
+    /// Bits in a lane.
+    pub const LANE_BITS: usize = 64;
+    /// Bits in the state: `LANES * LANE_BITS`.
+    pub const STATE_BITS: usize = LANES * LANE_BITS;
+    /// Bytes in the state: 200.
+    pub const STATE_BYTES: usize = STATE_BITS / 8;
+    /// 32-bit words in the state frame: 50. Frame word `j` is at byte offset
+    /// `4 * j`; lane `i = 5y + x` occupies words `2i` and `2i + 1`, low half
+    /// first (`docs/spec/delegation.md` §4).
+    pub const FRAME_WORDS: usize = STATE_BYTES / 4;
+    /// Rounds of the permutation.
+    pub const ROUNDS: usize = 24;
+
+    /// keccak256's rate, in bytes: `200 - 2 * 32`.
+    pub const RATE_BYTES: usize = 136;
+    /// keccak256's digest, in bytes.
+    pub const DIGEST_BYTES: usize = 32;
+    /// keccak256's padding: `pad10*1` in the **original** Keccak domain, which
+    /// is Ethereum's. SHA-3's `0x06` is a different function and is not this.
+    pub const PAD_FIRST: u8 = 0x01;
+    /// The high bit `pad10*1` sets in the block's last byte.
+    pub const PAD_LAST: u8 = 0x80;
+
+    /// The rho rotation offsets, `ROTATIONS[y][x]` for lane `A[x][y]`, a
+    /// rotate-**left** on the 64-bit lane. Re-derived from `r = 0`, `(x, y) =
+    /// (1, 0)` and `t*(t+1)/2 mod 64` by `crates/constants/tests/keccak.rs`
+    /// rather than trusted.
+    pub const ROTATIONS: [[u32; 5]; 5] = [
+        [0, 1, 62, 28, 27],
+        [36, 44, 6, 55, 20],
+        [3, 10, 43, 25, 39],
+        [41, 45, 15, 21, 8],
+        [18, 2, 61, 56, 14],
+    ];
+
+    /// The iota round constants, one per round. Re-derived from the degree-8
+    /// LFSR of the Keccak reference by `crates/constants/tests/keccak.rs`.
+    pub const ROUND_CONSTANTS: [u64; ROUNDS] = [
+        0x0000_0000_0000_0001,
+        0x0000_0000_0000_8082,
+        0x8000_0000_0000_808a,
+        0x8000_0000_8000_8000,
+        0x0000_0000_0000_808b,
+        0x0000_0000_8000_0001,
+        0x8000_0000_8000_8081,
+        0x8000_0000_0000_8009,
+        0x0000_0000_0000_008a,
+        0x0000_0000_0000_0088,
+        0x0000_0000_8000_8009,
+        0x0000_0000_8000_000a,
+        0x0000_0000_8000_808b,
+        0x8000_0000_0000_008b,
+        0x8000_0000_0000_8089,
+        0x8000_0000_0000_8003,
+        0x8000_0000_0000_8002,
+        0x8000_0000_0000_0080,
+        0x0000_0000_0000_800a,
+        0x8000_0000_8000_000a,
+        0x8000_0000_8000_8081,
+        0x8000_0000_0000_8080,
+        0x0000_0000_8000_0001,
+        0x8000_0000_8000_8008,
+    ];
 }

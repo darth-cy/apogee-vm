@@ -59,11 +59,11 @@ pub mod lookup {                                   // docs/spec/lookup.md
 pub mod memory {                                   // docs/spec/memory.md §2, §3.3, §7, §8
     pub const CYCLE: PolyAddress;                  // M[0]
     pub const FIELD_MASK: u32 = 0;  FIELD_ADDR = 1;  FIELD_READ_TS = 2;  FIELD_READ_VALUE = 3;  FIELD_WRITE_VALUE = 4;
-    pub const FRAME_QUERIES: usize = 8;            // the QUERY TABLE's size, never a frame's width
-    pub const FRAME_NAMES: [&str; 8];              // pc rs1 rs2 arg1 arg2 load ram rd
-    pub const FRAME_SPACE: [u8; 8];                // PC REG REG REG REG RAM RAM REG
-    pub const FRAME_DELTA: [u64; 8];               // 0 1 2 2 2 2 3 3
-    pub const PC: usize = 0;  RS1 = 1;  RS2 = 2;  ARG1 = 3;  ARG2 = 4;  LOAD = 5;  RAM = 6;  RD = 7;
+    pub const FRAME_QUERIES: usize = 9;            // the QUERY TABLE's size, never a frame's width
+    pub const FRAME_NAMES: [&str; 9];              // pc rs1 rs2 arg1 arg2 load ram rd deleg
+    pub const FRAME_SPACE: [u8; 9];                // PC REG REG REG REG RAM RAM REG DELEGATION_KECCAK_F
+    pub const FRAME_DELTA: [u64; 9];               // 0 1 2 2 2 2 3 3 3
+    pub const PC: usize = 0;  RS1 = 1;  RS2 = 2;  ARG1 = 3;  ARG2 = 4;  LOAD = 5;  RAM = 6;  RD = 7;  DELEG = 8;
     pub const FRAME_READ_ONLY: [usize; 5];         // RS1 RS2 ARG1 ARG2 LOAD, the write-back queries
     pub fn frame_queries(family: u32) -> &'static [usize];   // the frozen per-family subset
     pub fn frame(slot: usize, field: u32) -> PolyAddress;            // M[1 + 5·slot + field]
@@ -197,13 +197,27 @@ pub mod atomics {                                  // docs/spec/memory-ops.md §
 }
 
 pub mod add_sub {                                  // docs/spec/shard-proof.md §8
-    pub const DECODED: [PolyAddress; 6];           // W[10..16]: next_pc rs1 rs2 rd imm mask
-    pub const KINDS: [PolyAddress; 6];             // W[16..22]: system addi auipc add sub lui
-    pub const IS_ECALL: PolyAddress;  IS_FENCE;  WRAP;  RD_HI;  PC_WRAP;  NEXT_PC_HI;   // W[22..28]
-    pub const MULTIPLICITIES: [PolyAddress; 3];    // W[28..31]: timestamp, range16, decoder
+    pub const DECODED: [PolyAddress; 6];           // W[11..17]: next_pc rs1 rs2 rd imm mask
+    pub const KINDS: [PolyAddress; 6];             // W[17..23]: system addi auipc add sub lui
+    pub const IS_ECALL: PolyAddress;  IS_FENCE;  IS_KECCAK;                    // W[23..26]
+    pub const WRAP: PolyAddress;  RD_HI;  PC_WRAP;  NEXT_PC_HI;                // W[26..30]
+    pub const MULTIPLICITIES: [PolyAddress; 3];    // W[30..33]: timestamp, range16, decoder
     pub const TABLE_WIDTH: usize = 7;              // S[0..7], program::lookup_tuple order
     pub fn artifact(trace_vars: u32) -> CircuitArtifact;
     pub fn channels() -> Vec<lookup::ChannelSpec>;
+}
+
+pub mod keccak {                                   // docs/spec/delegation.md §6; S21
+    pub const CYCLE: PolyAddress;  LIVE;  BASE;  ANCHOR_VALUE;                 // M[0..4]
+    pub fn word(j: usize, field: u32) -> PolyAddress;        // M[4 + 4j + f], j < 50
+    pub const WORD_ADDR: u32 = 0;  WORD_READ_TS;  WORD_READ_VALUE;  WORD_WRITE_VALUE;
+    pub fn in_bit(b: usize) -> PolyAddress;                  // W[0..1600]
+    pub fn gap_bit(j: usize, bit: usize) -> PolyAddress;     // W[1600..3500], 38 a word
+    pub fn base_low_bit(bit: usize) -> PolyAddress;          // W[3500..3529]
+    pub fn base_room_bit(bit: usize) -> PolyAddress;         // W[3529..3560]
+    pub const MEMORY_COLUMNS: usize = 204;  WITNESS_COLUMNS: usize = 3560;
+    pub fn artifact(trace_vars: u32) -> CircuitArtifact;
+    pub fn channels() -> Vec<lookup::ChannelSpec>;           // EMPTY
 }
 ```
 
@@ -298,13 +312,17 @@ pub mod add_sub {                                  // docs/spec/shard-proof.md �
   is one arm here and one fill in `crates/prover`. It returns `None` above
   `MAX_TRACE_VARS` and for **any of the seven execution families below 19 variables**, the
   timestamp channel's bound. The two window families have no channels and take any height.
-  Since S19 it holds every family the master prompt names: `ADD_SUB_LUI_AUIPC`,
-  `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MUL_DIV`, `MEM_WORD`, `MEM_SUBWORD`, `ATOMICS` and
-  the two windows. **The minimum-height guard must name every execution family**:
-  `HEIGHT_MENU` legally holds `2^16` and `2^18`, `VerifyingKey::check` builds a circuit
-  from a key's own `VmConfig`, and a family missing from the guard would reach
-  `lookup::channel_trees`' `BITS <= trace_vars` assertion — a panic inside key validation,
-  in a `no_std` crate the recursion guest links, on bytes a verifier was handed.
+  Since S19 it holds every family the master prompt names, and since S21 the first that it
+  does not: `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MUL_DIV`, `MEM_WORD`,
+  `MEM_SUBWORD`, `ATOMICS`, the two windows and `KECCAK_F`. **The minimum-height guard must
+  name every execution family**: `HEIGHT_MENU` legally holds `2^16` and `2^18`,
+  `VerifyingKey::check` builds a circuit from a key's own `VmConfig`, and a family missing
+  from the guard would reach `lookup::channel_trees`' `BITS <= trace_vars` assertion — a
+  panic inside key validation, in a `no_std` crate the recursion guest links, on bytes a
+  verifier was handed. **`KECCAK_F`'s arm sits below the guard, deliberately**: a family with
+  no lookup channel reaches no such assertion, so there is nothing to pre-empt, and putting
+  it in the guard would refuse the only height it has, `2^8`. That is why a delegation
+  family **must** carry no channel (`docs/spec/lookup.md` §3).
 - **A circuit that reads the `GENERIC` channel names the packed table as its last three
   setup columns** (S17). `FamilyCircuit::reads_generic_table` is whether any channel spec
   is `GENERIC`. At S17 only `JUMP_BRANCH_SLT` reads it: its `S[0..7]` are identity's
@@ -443,6 +461,15 @@ them, CI regenerates and diffs them, and `tests/memory.rs` pins their SHA-256 an
 each to its constructor's bytes. The leaves' independent description is the plain
 arithmetic of `crates/gkr/tests/memory.rs`.
 
+`tests/vectors/keccak.txt`: **a digest, not an artifact.** `keccak::artifact(8).to_bytes()`
+is 100,254,040 bytes — 974 times the largest committed circuit — so what is committed is one
+line: the shape counts and the artifact's SHA-256. `cargo run -p kat-gen -- keccak` writes
+it, kat-gen's own unit test holds it to the constructor, and CI regenerates and diffs it like
+every other fixture. The owner chose the digest at S21 over committing the bytes or
+committing nothing. Its readable account is `docs/spec/constraint-manifest.md` §12; there is
+no `checker dump` of it, because a 358,525-relation listing is not a readable account of
+anything.
+
 `tests/vectors/{add_sub,jump_branch_slt,shift_bitwise,mul_div}.bin`: one per registered
 execution family — S16's `add_sub::artifact`, S17's `jump_branch_slt::artifact` and S18's
 `shift_bitwise::artifact` and `mul_div::artifact` — each at `trace_vars` 22, the height the
@@ -462,6 +489,7 @@ suite in `crates/checker/tests` pins each SHA-256 and holds its gates to
 | `src/shift_bitwise.rs` (unit) | the legal masks are twelve distinct single bits; the two halves and the two shift directions partition the kinds; and through the private `assemble` seam, the honest family spec gives `artifact`, and the build is refused for an obligation dropped, for `residue`'s direct pair moved under a narrower selector than its scaled obligation (S18's tightened copower check) and for a gate nonzero on the all-zero row |
 | `src/mul_div.rs` (unit) | the legal masks are eight distinct single bits; the multiplies and the divisions partition the kinds; `arithmetic_gates` built at 1 and 32 bits and refused at 0 and 33; and through the `assemble` seam, the honest spec gives `artifact` and the build is refused for a dropped obligation and for a gate nonzero on the all-zero row |
 | `src/jump_branch_slt.rs` (unit) | the legal masks are twelve distinct single bits; through the private `assemble` seam, the honest family spec gives `artifact`, and the build is refused for an obligation dropped (the channel count), for `next_pc`'s direct bound replaced (the copower check) and for a gate nonzero on the all-zero row |
-| `src/add_sub.rs` (unit) | the three system codes pairwise distinct, which is what lets `system_split`, `ecall_code` and `fence_code` refuse every `ebreak` row; the gates themselves are `crates/checker/tests/add_sub.rs`' |
+| `src/add_sub.rs` (unit, and four `const` assertions) | the three system codes pairwise distinct, which is what lets `system_split`, `ecall_code` and `fence_code` refuse every `ebreak` row; and, since S21, four `const _: () = assert!(..)` items holding the two provable ecall numbers distinct and each in its ABI range — what makes `ecall_is_exit` and `keccak_number` a partition rather than two gates that can both hold. A `const` assertion rather than a test, because a violation there is a mis-numbered ABI and should not compile. Neither gate spells a number: both read `constants::ecall`. The gates themselves are `crates/checker/tests/add_sub.rs`' |
+| `src/keccak.rs` (`check_shape`, run on every build) | every row-wise layer's width equal to its three parts' — the offset helpers all index off that split, and a layer one column out would read a neighbour's with no other symptom; the column counts; no setup column and **no channel**; the depth; gate list 0's enforcing count; `base_aligned` and `base_in_window` present **by name**; and 50 each of `addr_w`, `gap_w`, `input_w` and `output_w`, counted on the emitted artifact. S21's must-be-exact 4: a bound that exists only in a comment is not a bound, and a name check is what an `assume_*` hypothesis cannot stand in for |
 | `src/memory.rs` (unit) | acceptance 12: the frame with one obligation dropped before the artifact is written panics at the count assertion |
 | `tests/audit.rs` | every `GateDef` variant, all six, emitted across both compilations, counts written by hand; the catalogue; the two compilations' identical shape |

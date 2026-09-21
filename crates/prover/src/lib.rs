@@ -673,16 +673,25 @@ fn low64(v: Fr) -> u64 {
 /// therefore the one its committed rows say; nothing in the circuit holds it
 /// there (§4.1).
 ///
+/// For a **delegation** family it is the same expression over the same column,
+/// and means something else: the shard's rows are invocations, each stamped
+/// with the cycle that requested it, so the window is the **min and max
+/// invocation timestamp** the shard holds (`docs/spec/delegation.md` §8). The
+/// block asks nothing of it — no emptiness, no disjointness — because
+/// invocations interleave with the cycles that request them and two delegation
+/// shards are consecutive invocations, not consecutive times.
+///
 /// For a family whose rows are words rather than cycles — the two RAM window
 /// families — it is [`TRIVIAL_TS_WINDOW`]: such a family owns no part of the
-/// execution's time, and the block's window rules exempt it.
+/// execution's time at all, and there is no column to read one off.
 fn ts_window(family: FamilyId, base: &BaseLayer) -> [u64; 2] {
-    if !constants::family::CYCLE_OWNING[family as usize] {
+    let delegation = program::delegation_frame_words(family).is_some();
+    if !constants::family::CYCLE_OWNING[family as usize] && !delegation {
         return TRIVIAL_TS_WINDOW;
     }
     let cycles = base
         .get(PolyAddress::Memory(0))
-        .expect("an execution family's M[0] is its cycle column");
+        .expect("a family with a time window has its cycle column at M[0]");
     let mut top = 0u64;
     for i in 0..cycles.len() {
         top = top.max(low64(cycles.get(i)));

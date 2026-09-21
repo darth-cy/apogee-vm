@@ -15,6 +15,16 @@ pub enum AddressSpace {
     Ram,
     /// The program counter; the one address is 0.
     Pc,
+    /// `family::KECCAK_F`'s **delegation anchor** space (S21): the address is
+    /// a request's frame base pointer.
+    ///
+    /// Not memory. No instruction reaches it, no RAM window initializes it,
+    /// and no chain of writes runs through it: every query here reads the
+    /// invocation's answer tuple, stamped 0, whatever was written at that
+    /// address before (`docs/spec/delegation.md` §5). Each delegation family
+    /// has a space of its own — the tag *is* the delegation type — so a
+    /// keccak request cannot consume another type's answer.
+    KeccakF,
 }
 
 impl AddressSpace {
@@ -24,6 +34,7 @@ impl AddressSpace {
             AddressSpace::Reg => address_space::REG,
             AddressSpace::Ram => address_space::RAM,
             AddressSpace::Pc => address_space::PC,
+            AddressSpace::KeccakF => address_space::DELEGATION_KECCAK_F,
         }
     }
 
@@ -33,21 +44,39 @@ impl AddressSpace {
             address_space::REG => Some(AddressSpace::Reg),
             address_space::RAM => Some(AddressSpace::Ram),
             address_space::PC => Some(AddressSpace::Pc),
+            address_space::DELEGATION_KECCAK_F => Some(AddressSpace::KeccakF),
             _ => None,
         }
     }
 
     /// Whether `addr` is an address this space has: a register index, a
-    /// 4-aligned word inside the RAM window, or the pc's one address.
+    /// 4-aligned word inside the RAM window, the pc's one address, or — for a
+    /// delegation space — a frame base pointer, which is a 4-aligned word
+    /// address like any other.
     pub fn holds(self, addr: u32) -> bool {
         match self {
             AddressSpace::Reg => addr < 32,
-            AddressSpace::Ram => {
+            AddressSpace::Ram | AddressSpace::KeccakF => {
                 addr.is_multiple_of(4)
                     && addr >= guest_memory::RAM_ORIGIN
                     && addr - guest_memory::RAM_ORIGIN < guest_memory::RAM_LENGTH
             }
             AddressSpace::Pc => addr == 0,
+        }
+    }
+
+    /// Whether the space chains: whether a query's read is the last write at
+    /// its address.
+    ///
+    /// True for the three memory spaces and false for every delegation space,
+    /// where a query reads the answer tuple stamped 0 whatever came before, so
+    /// repeated requests at one frame base do **not** chain — which is exactly
+    /// what the three request-side zeroings enforce in the circuit
+    /// (`docs/spec/delegation.md` §5).
+    pub fn chains(self) -> bool {
+        match self {
+            AddressSpace::Reg | AddressSpace::Ram | AddressSpace::Pc => true,
+            AddressSpace::KeccakF => false,
         }
     }
 }
@@ -176,7 +205,11 @@ impl MemoryEventLog {
                 last.ts
             );
         }
-        let (read_ts, last_value) = self.last(space, addr).unwrap_or((0, read_value));
+        let (read_ts, last_value) = if space.chains() {
+            self.last(space, addr).unwrap_or((0, read_value))
+        } else {
+            (0, 0)
+        };
         assert_eq!(
             last_value, read_value,
             "memory event log: {space:?} {addr:#x} at ts {ts} read {read_value:#x}, \
@@ -295,6 +328,14 @@ impl MemoryEventLog {
     /// argument's own shape — teardown's values and the cycle count are bound
     /// by other means — and for a snapshot `TraceArchive` holds the log to the
     /// family rows, which is where the cycle count lives.
+    ///
+    /// Nor can it see a **delegation** request without its invocation. An
+    /// invocation is not a log event — its frame accesses are, but the two
+    /// anchor tuples are the delegation circuit's leaves — so this check
+    /// credits each request's pair and every delegation query balances by
+    /// itself. That the requests and the invocations pair 1:1 is the circuit's
+    /// statement and the global multiset's, never the trace's
+    /// (`docs/spec/delegation.md` §5.3).
     pub fn self_check(&self, image: &ProgramImage) -> Result<(), SelfCheckError> {
         let refuse = |e: &MemoryEvent, reason: String| SelfCheckError {
             space: e.space,
@@ -341,6 +382,17 @@ impl MemoryEventLog {
             *balance
                 .entry((e.space, e.addr, e.read_ts, e.read_value))
                 .or_default() -= 1;
+            if !e.space.chains() {
+                // The invocation's own two tuples, which are not log events:
+                // the answer it writes at timestamp 0, and the read that
+                // consumes what the request wrote back. One pair per request,
+                // not per address, because a delegation space does not chain.
+                *balance.entry((e.space, e.addr, 0, 0)).or_default() += 1;
+                *balance
+                    .entry((e.space, e.addr, e.ts, e.write_value))
+                    .or_default() -= 1;
+                continue;
+            }
             let slot = last
                 .entry((e.space, e.addr))
                 .or_insert((e.ts, e.write_value));
@@ -392,6 +444,7 @@ impl MemoryEventLog {
             AddressSpace::Reg => self.regs[addr as usize],
             AddressSpace::Pc => self.pc,
             AddressSpace::Ram => self.ram.get(&addr).copied(),
+            AddressSpace::KeccakF => None,
         }
     }
 
@@ -403,6 +456,9 @@ impl MemoryEventLog {
             AddressSpace::Ram => {
                 self.ram.insert(e.addr, last);
             }
+            // An unchained space keeps no last write: there is nothing for a
+            // later query there to read, and nothing to tear down.
+            AddressSpace::KeccakF => {}
         }
     }
 }
@@ -415,5 +471,6 @@ fn initial_value(image: &ProgramImage, space: AddressSpace, addr: u32) -> u32 {
         AddressSpace::Reg => 0,
         AddressSpace::Pc => image.entry,
         AddressSpace::Ram => image.initial_word(addr),
+        AddressSpace::KeccakF => 0,
     }
 }

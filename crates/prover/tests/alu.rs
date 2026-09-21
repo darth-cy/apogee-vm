@@ -174,6 +174,7 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
     assert_eq!(&claim[81..], &table[..]);
 
     let claim = reduced(&proofs[1]);
-    assert_eq!(claim.len(), 36 + 31 + 7);
-    assert_eq!(&claim[67..], &setup.vk.setup_commitments[0][..]);
+    // 41 + 33 since S21's eighth frame query (`deleg`).
+    assert_eq!(claim.len(), 41 + 33 + 7);
+    assert_eq!(&claim[74..], &setup.vk.setup_commitments[0][..]);
 }

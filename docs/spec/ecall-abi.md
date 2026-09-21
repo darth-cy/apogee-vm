@@ -75,6 +75,7 @@ Every number this VM implements, with its nondeterminism class. The
 | 64 | `WRITE` | per fd | `write(fd, buf, len)`; see section 4 |
 | 93 | `EXIT` | deterministic | `exit(status)`; nonzero is a failed execution |
 | 0x0500 | `PRECOMPILE_POSEIDON2` | deterministic | Poseidon2 over `[Fr; 3]`, `a0` = state pointer. No circuit yet: every executor answers `-ENOSYS` and the caller runs its software path |
+| 0x0501 | `PRECOMPILE_KECCAK_F` | deterministic | keccak-f[1600] over the 200-byte state frame at `a0`, permuted in place. The first **delegation** call: `docs/spec/delegation.md` is its ABI, `constants::family::KECCAK_F` the circuit that proves it. An executor with the circuit answers 0; one without answers `-ENOSYS` and the caller runs its software path |
 
 The classes are:
 

@@ -137,8 +137,10 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
     assert_eq!(&claim[65..72], &setup.vk.setup_commitments[1][..]);
     assert_eq!(&claim[72..], &table[..]);
     let add = reduced(&proofs[1]);
-    assert_eq!(add.len(), 36 + 31 + 7);
-    assert_eq!(&add[67..], &setup.vk.setup_commitments[0][..]);
+    // 41 + 33 since S21's eighth frame query (`deleg`), so identity's seven
+    // setup commitments start at 74 rather than 67.
+    assert_eq!(add.len(), 41 + 33 + 7);
+    assert_eq!(&add[74..], &setup.vk.setup_commitments[0][..]);
 }
 
 /// The generic table's binding from the other side. A key whose table

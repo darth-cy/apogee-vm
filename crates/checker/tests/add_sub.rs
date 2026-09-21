@@ -18,7 +18,7 @@ use checker::{
     violated_relations, WitnessRow,
 };
 use constants::extra_mask::add_sub_lui_auipc as kind;
-use constants::{challenge_slot, family, lookup_channel};
+use constants::{challenge_slot, ecall, family, guest_memory, lookup_channel};
 use constraints::lookup::{check_discharge, ChannelSpec};
 use constraints::memory::check_memory;
 use constraints::{add_sub, family_circuit, CircuitArtifact, PolyAddress, VirtualKind};
@@ -31,7 +31,7 @@ const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../constraints/tests/vectors/add_sub.bin"
 );
-const FIXTURE_SHA256: &str = "4c79713708774c2cb0c8a58504a95d43da02b9c1bb9e68f6e9c60016c2ea114b";
+const FIXTURE_SHA256: &str = "3df1bda9415702ddd2e57351658a7424ba839c34ce1d3271d9b42fa02114e518";
 
 fn artifact() -> CircuitArtifact {
     add_sub::artifact(VARS)
@@ -181,8 +181,15 @@ const CYCLE: u64 = 9;
 /// The honest row of `i` on cycle 9, its reads seeing `rs1v`, `rs2v` and the
 /// old `rd` value `rd_old` — an exit's status is `rs2v`, and its `rd` read sees
 /// the same `a0`.
+///
+/// An ecall row whose `a7` is a **delegation** number rather than 93 is a
+/// delegation request (`docs/spec/delegation.md` §2): it takes the same ecall
+/// frame, carries `is_keccak` beside `is_ecall`, makes the mirror query at the
+/// `a0` it read, writes 0 into `a0`, and falls through rather than halting.
 fn honest(i: Instr, rs1v: u32, rs2v: u32, rd_old: u32) -> Row {
-    let exit = i.bit == kind::SYSTEM && i.imm == 0;
+    let system_ecall = i.bit == kind::SYSTEM && i.imm == 0;
+    let delegation = system_ecall && rs1v == ecall::PRECOMPILE_KECCAK_F;
+    let exit = system_ecall && !delegation;
     let fence = i.bit == kind::SYSTEM && i.imm == 2;
     let (sel, wrap) = match i.bit {
         kind::ADD => add(rs1v, rs2v),
@@ -195,10 +202,10 @@ fn honest(i: Instr, rs1v: u32, rs2v: u32, rd_old: u32) -> Row {
     };
     let fall = i.pc + if i.compressed { 2 } else { 4 };
     let next = if exit { 1 } else { fall };
-    let uses_rs1 = matches!(i.bit, kind::ADD | kind::SUB | kind::ADDI) || exit;
-    let uses_rs2 = matches!(i.bit, kind::ADD | kind::SUB) || exit;
+    let uses_rs1 = matches!(i.bit, kind::ADD | kind::SUB | kind::ADDI) || system_ecall;
+    let uses_rs2 = matches!(i.bit, kind::ADD | kind::SUB) || system_ecall;
     let uses_rd = !fence;
-    let (rs1_addr, rs2_addr, rd_addr) = match exit {
+    let (rs1_addr, rs2_addr, rd_addr) = match system_ecall {
         true => (17, 10, 10),
         false => (i.rs1, i.rs2, i.rd),
     };
@@ -214,6 +221,14 @@ fn honest(i: Instr, rs1v: u32, rs2v: u32, rd_old: u32) -> Row {
     }
     if uses_rs2 {
         r.query("rs2", CYCLE, 2, rs2_addr as u64, rs2v as u64, rs2v as u64);
+    }
+    if delegation {
+        // The mirror query: address the frame base the request passed in `a0`,
+        // reading the answer tuple an invocation wrote at timestamp 0, and
+        // writing back a value nothing constrains — 0 in an honest fill
+        // (`docs/spec/delegation.md` §5.2).
+        r.set("deleg_mask", Fr::ONE)
+            .set("deleg_addr", f(rs2v as u64));
     }
     if uses_rd {
         let write = if rd_addr == 0 { 0 } else { sel };
@@ -243,8 +258,11 @@ fn honest(i: Instr, rs1v: u32, rs2v: u32, rd_old: u32) -> Row {
         .set("table_pc", f(i.pc as u64));
     let kinds = ["system", "addi", "auipc", "add", "sub", "lui"];
     r.set(name("kind", kinds[i.bit as usize]), Fr::ONE);
-    if exit {
+    if system_ecall {
         r.set("is_ecall", Fr::ONE);
+    }
+    if delegation {
+        r.set("is_keccak", Fr::ONE);
     }
     if fence {
         r.set("is_fence", Fr::ONE);
@@ -318,6 +336,18 @@ fn honest_rows() -> Vec<(&'static str, Row)> {
             "exit 42",
             honest(Instr::new(kind::SYSTEM, 0, 0, 0, 0), 93, 42, 42),
         ),
+        // S21's row kind: `a7` is the keccak family's number, `a0` the frame
+        // base — word-aligned and inside the RAM window, as every frame
+        // pointer is (`docs/spec/delegation.md` §4) — and `a0` is written 0.
+        (
+            "keccak delegation request",
+            honest(
+                Instr::new(kind::SYSTEM, 0, 0, 0, 0),
+                ecall::PRECOMPILE_KECCAK_F,
+                guest_memory::RAM_ORIGIN + 0x400,
+                7,
+            ),
+        ),
         ("padding", Row::default()),
     ]
 }
@@ -383,7 +413,7 @@ fn the_circuit_is_the_fixture_and_keeps_every_rule() {
 #[test]
 fn the_layout_and_the_gates_are_the_specs() {
     let a = artifact();
-    assert_eq!(a.memory.len(), 36);
+    assert_eq!(a.memory.len(), 41);
     let mut witness = names(&[
         "pc_gap_hi",
         "rs1_gap_hi",
@@ -392,6 +422,7 @@ fn the_layout_and_the_gates_are_the_specs() {
         "arg2_gap_hi",
         "ram_gap_hi",
         "rd_gap_hi",
+        "deleg_gap_hi",
         "rd_inv",
         "rd_is_zero",
         "rd_selected",
@@ -409,6 +440,7 @@ fn the_layout_and_the_gates_are_the_specs() {
         "kind_lui",
         "is_ecall",
         "is_fence",
+        "is_keccak",
         "wrap",
         "rd_hi",
         "pc_wrap",
@@ -448,6 +480,7 @@ fn the_layout_and_the_gates_are_the_specs() {
         "arg2_mask_boolean",
         "ram_mask_boolean",
         "rd_mask_boolean",
+        "deleg_mask_boolean",
         "rs1_writes_back",
         "rs2_writes_back",
         "arg1_writes_back",
@@ -470,13 +503,17 @@ fn the_layout_and_the_gates_are_the_specs() {
         "system_split",
         "ecall_code",
         "fence_code",
+        "is_keccak_boolean",
+        "keccak_is_an_ecall",
         "ecall_is_exit",
+        "keccak_number",
         "rs1_mask_rule",
         "rs2_mask_rule",
         "arg1_mask_rule",
         "arg2_mask_rule",
         "ram_mask_rule",
         "rd_mask_rule",
+        "deleg_mask_rule",
         "rs1_addr_rule",
         "rs2_addr_rule",
         "rd_addr_rule",
@@ -486,6 +523,10 @@ fn the_layout_and_the_gates_are_the_specs() {
         "sub",
         "lui",
         "exit_status",
+        "deleg_writes_no_register",
+        "deleg_read_ts_zero",
+        "deleg_read_value_zero",
+        "deleg_addr_rule",
         "wrap_boolean",
         "pc_wrap_boolean",
         "next_pc_rule",
@@ -497,9 +538,9 @@ fn the_layout_and_the_gates_are_the_specs() {
         .iter()
         .map(|l| (l.name.clone(), l.channel))
         .collect();
-    assert_eq!(lookups.len(), 19);
+    assert_eq!(lookups.len(), 21);
     assert_eq!(
-        lookups[14..],
+        lookups[16..],
         [
             ("rd_hi_range".to_string(), lookup_channel::RANGE16),
             ("rd_lo_range".to_string(), lookup_channel::RANGE16),
@@ -508,13 +549,13 @@ fn the_layout_and_the_gates_are_the_specs() {
             ("decode_row".to_string(), lookup_channel::DECODER),
         ]
     );
-    assert!(lookups[..14]
+    assert!(lookups[..16]
         .iter()
         .all(|(_, c)| *c == lookup_channel::TIMESTAMP));
     // The frame's gap obligations are each under their own query's mask; the
     // family's five are under the row's.
     let pc_mask = PolyAddress::Memory(1);
-    for (at, l) in a.lookups[..14].iter().enumerate() {
+    for (at, l) in a.lookups[..16].iter().enumerate() {
         assert_eq!(
             l.selector,
             PolyAddress::Memory(1 + 5 * (at as u32 / 2)),
@@ -523,11 +564,11 @@ fn the_layout_and_the_gates_are_the_specs() {
         );
     }
     assert!(
-        a.lookups[14..].iter().all(|l| l.selector == pc_mask),
+        a.lookups[16..].iter().all(|l| l.selector == pc_mask),
         "every new obligation is the row's"
     );
 
-    let mult = |i: u32| PolyAddress::Witness(28 + i);
+    let mult = |i: u32| PolyAddress::Witness(30 + i);
     assert_eq!(
         add_sub::channels(),
         vec![
@@ -549,8 +590,9 @@ fn the_layout_and_the_gates_are_the_specs() {
         ]
     );
     // Four product-tree leaves a side beside the frame's, then one fraction
-    // tree per channel: 16 + 32 + 16 + 4.
-    assert_eq!(a.layers[0].width, 68);
+    // tree per channel. The frame is eight queries since S21, so its product
+    // trees are 16 a side: 32 + 36 + 28 + 4.
+    assert_eq!(a.layers[0].width, 100);
     assert_eq!(a.outputs.len(), 2 + 2 * 3);
 }
 
@@ -605,8 +647,8 @@ fn the_registry_holds_the_three_families_s16_proves() {
 /// Every row kind the family proves — each sum with and without its carry,
 /// each difference with and without its borrow, `rd = x0` computing a nonzero
 /// value it discards, an `x0` operand, a two-byte instruction, a fence, the
-/// exit, and the all-zero padding row — satisfies every gate and every range
-/// obligation.
+/// exit, S21's **delegation request**, and the all-zero padding row —
+/// satisfies every gate and every range obligation.
 #[test]
 fn every_row_kind_satisfies_every_gate_and_every_bound() {
     let a = artifact();
@@ -625,6 +667,28 @@ fn every_row_kind_satisfies_every_gate_and_every_bound() {
     assert_ne!(get("add to x0, carrying", "rd_selected"), Fr::ZERO);
     assert_eq!(get("c.add, two bytes", "decoded_next_pc"), f(0x1_0012));
     assert_eq!(get("exit 42", "pc_write_value"), Fr::ONE);
+    // S21's row: an ecall that is not an exit. It carries both flags, makes
+    // the mirror query at the `a0` it read, writes 0 into `a0`, and falls
+    // through rather than halting (`docs/spec/delegation.md` §2, §5.1).
+    let d = |col: &str| get("keccak delegation request", col);
+    assert_eq!(d("is_ecall"), Fr::ONE);
+    assert_eq!(d("is_keccak"), Fr::ONE);
+    assert_eq!(d("rs1_read_value"), f(ecall::PRECOMPILE_KECCAK_F as u64));
+    assert_eq!(d("deleg_mask"), Fr::ONE);
+    assert_eq!(d("deleg_addr"), d("rs2_read_value"));
+    assert_eq!(d("deleg_read_ts"), Fr::ZERO);
+    assert_eq!(d("deleg_read_value"), Fr::ZERO);
+    assert_eq!(d("rd_selected"), Fr::ZERO);
+    assert_eq!(d("rd_write_value"), Fr::ZERO);
+    assert_eq!(d("pc_write_value"), d("decoded_next_pc"));
+    assert_ne!(
+        d("pc_write_value"),
+        Fr::ONE,
+        "a delegation row does not halt"
+    );
+    // And the exit row is still the only one that halts: the two ecall kinds
+    // differ in exactly `is_keccak`.
+    assert_eq!(get("exit 42", "is_keccak"), Fr::ZERO);
 }
 
 // ---------------------------------------------------------------------------
@@ -814,6 +878,103 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     r.set("pc_write_value", f(0x1_0014)).set("next_pc_hi", f(1));
     cases.push(("the exit falling through", r, vec!["next_pc_rule"]));
 
+    // S21's eight gates, and the three S16 gates it amended
+    // (`docs/spec/delegation.md` §5.2). Each case is one cell of the honest
+    // delegation row, or of the honest exit row, moved.
+    let deleg = || row("keccak delegation request");
+    // The flag without the ecall it must accompany.
+    let mut r = row("add, carrying");
+    r.set("is_keccak", Fr::ONE);
+    // `is_keccak` without `is_ecall` makes the amended gates' factor
+    // `is_ecall - is_keccak` equal -1, so all three of them fire too: that is
+    // the price of subtracting rather than gating, and 129 is what makes the
+    // factor 0 or 1 on any row that passes.
+    cases.push((
+        "an add claiming to be a delegation",
+        r,
+        vec![
+            "keccak_is_an_ecall",
+            "ecall_is_exit",
+            "keccak_number",
+            "deleg_mask_rule",
+            "exit_status",
+            "next_pc_rule",
+        ],
+    ));
+    // A delegation whose a7 is another number: 130 and 131 partition the
+    // ecalls this family proves, so a7 = 93 with the flag set breaks 131 and
+    // a7 = 0x502 breaks both.
+    let mut r = deleg();
+    r.set("rs1_read_value", f(93)).set("rs1_write_value", f(93));
+    cases.push((
+        "a delegation row whose a7 is EXIT",
+        r,
+        vec!["keccak_number"],
+    ));
+    let mut r = deleg();
+    let other = f(ecall::PRECOMPILE_KECCAK_F as u64 + 1);
+    r.set("rs1_read_value", other).set("rs1_write_value", other);
+    cases.push((
+        "a delegation row calling an unregistered number",
+        r,
+        vec!["keccak_number"],
+    ));
+    // An exit row that claims the delegation flag is no longer held to 93 by
+    // 130 — but 131 asks a7 for 0x501, and 138 for the mirror query.
+    let mut r = row("exit 42");
+    r.set("is_keccak", Fr::ONE);
+    cases.push((
+        "an exit row claiming the delegation flag",
+        r,
+        vec!["keccak_number", "deleg_mask_rule", "next_pc_rule"],
+    ));
+    // The mirror query dropped: without it a request has no anchor and cannot
+    // pair with an invocation, so the gate has to be the one that catches it.
+    let mut r = deleg();
+    r.drop_query("deleg");
+    cases.push((
+        "a delegation request without its mirror query",
+        r,
+        vec!["deleg_mask_rule"],
+    ));
+    // The mirror query at an address other than the a0 handed over.
+    let mut r = deleg();
+    let elsewhere = r.get("deleg_addr") + f(4);
+    r.set("deleg_addr", elsewhere);
+    cases.push((
+        "a mirror query at another frame base",
+        r,
+        vec!["deleg_addr_rule"],
+    ));
+    // The three request-side zeroings, one at a time.
+    let mut r = deleg();
+    r.set("deleg_read_ts", f(4 * CYCLE + 1));
+    cases.push((
+        "a mirror query reading a stamped tuple",
+        r,
+        vec!["deleg_read_ts_zero"],
+    ));
+    let mut r = deleg();
+    r.set("deleg_read_value", f(7));
+    cases.push((
+        "a mirror query reading a nonzero value",
+        r,
+        vec!["deleg_read_value_zero"],
+    ));
+    let mut r = deleg();
+    r.set("rd_selected", f(7))
+        .set("rd_write_value", f(7))
+        .set("rd_hi", Fr::ZERO);
+    cases.push((
+        "a delegation answering something other than 0",
+        r,
+        vec!["deleg_writes_no_register"],
+    ));
+    // And the amended pc rule: a delegation row that halts.
+    let mut r = deleg();
+    r.set("pc_write_value", Fr::ONE).set("next_pc_hi", Fr::ZERO);
+    cases.push(("a delegation row halting", r, vec!["next_pc_rule"]));
+
     // The mask's bits. A lui row whose bits say add still sums — its result is
     // its immediate, and its absent operands read 0 — so what refuses it is the
     // recomposition, and the two operands an add reads and this row lacks.
@@ -841,11 +1002,16 @@ fn each_gate_is_the_one_that_refuses_its_row() {
 #[test]
 fn every_booleanity_gate_refuses_a_value_of_two() {
     let a = artifact();
-    let cases: [(&str, &str, &str); 4] = [
+    let cases: [(&str, &str, &str); 5] = [
         ("add, carrying", "wrap", "wrap_boolean"),
         ("add, carrying", "pc_wrap", "pc_wrap_boolean"),
         ("exit 42", "is_ecall", "is_ecall_boolean"),
         ("fence", "is_fence", "is_fence_boolean"),
+        (
+            "keccak delegation request",
+            "is_keccak",
+            "is_keccak_boolean",
+        ),
     ];
     for (base, column, gate) in cases {
         let mut r = row(base);

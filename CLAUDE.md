@@ -20,7 +20,9 @@ docs/
                  constraint-manifest.md, every registered circuit's columns and gates by
                  position, name and formula. One page per circuit family:
                  jump-branch-slt.md, shift-bitwise.md, mul-div.md, memory-ops.md;
-                 block-proof.md, the block layer: BlockProof, verify_block, ts windows
+                 block-proof.md, the block layer: BlockProof, verify_block, ts windows; and
+                 delegation.md, THE delegation ABI: the ecall convention, the frame, the
+                 anchor, static detachment, and the keccak-f family
   handoff/       one note per completed stage: frozen API, artifacts, deviations
 crates/
   constants/     frozen constants and tags; zero logic; no_std
@@ -48,7 +50,8 @@ crates/
                  channels, their gated tuples, the fraction tree and the discharge rules;
                  `add_sub`: S16's family circuit; `jump_branch_slt`: S17's; `shift_bitwise`
                  and `mul_div`: S18's two; `mem_word`, `mem_subword` and `atomics`: S19's
-                 three; `gadgets`: the is-zero and comparison gadgets;
+                 three; `keccak`: S21's delegation circuit; `gadgets`: the is-zero and
+                 comparison gadgets;
                  `family_circuit`: the registry, now every family; no_std
   gkr-verify/    the GKR verifier half: the gate kernel, the layer sumcheck verifier and
                  verify, and every type verify touches; the memory argument's window
@@ -73,7 +76,7 @@ crates/
   guest-sdk/     crt0, entry!, linker script, bump allocator, ecall shims; no_std,
                  guest-only, and NOT a workspace member
 guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, opcodes/, heap/, consistency/,
-                 addsub/, control/, alu/, mem/, shards/
+                 addsub/, control/, alu/, mem/, shards/, keccak-test/, keccak-unused/
                  -- their own workspace; see guests/Cargo.toml and docs/guest-program-manual.md
 assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 handoff
 tools/
@@ -82,9 +85,10 @@ tools/
                  corpus via llvm-objdump, the identity pin from `program` itself, S13's
                  toy circuit artifacts, defined there and compiled by `constraints`,
                  S14's memory artifacts, written from `constraints::memory`'s constructors,
-                 S15's lookup toy, S16's add/sub and S17's jump/branch/slt circuits, written
-                 from `constraints::{add_sub, jump_branch_slt}`, the generic table's
-                 commitments over the ceremony, and S20's global transcript tape
+                 S15's lookup toy, every registered execution family's circuit, written from
+                 `constraints`, S21's keccak circuit **by digest** (the artifact is 100 MB),
+                 the generic table's commitments over the ceremony, and S20's global
+                 transcript tape
   bench/         one routine per measurement, individually selectable
   artifact-dump/ a guest ELF out as the frozen ProgramImage artifact, plus a
                  readable report of it; `tables` prints the decoded tables and identity
@@ -129,17 +133,19 @@ cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
 cargo clippy -p prover --all-targets --features metrics -- -D warnings   # the ONE feature's configuration
-cargo test --workspace                      # 960 tests as of S20; 65 more are #[ignore]d
+cargo test --workspace                      # 1,001 tests as of S21; 70 more are #[ignore]d
 cargo test -p prover --features metrics --test metrics  # the metrics harness; 10 more, 2 #[ignore]d
-cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 18.8 GB peak, 198 s, 30 min on a runner
-cargo test -p prover --test acceptance -- --include-ignored --test-threads=1  # DEFERRED; S16's statement, 8.6 GB peak
-cargo test -p verifier --test cli -- --include-ignored --test-threads=1       # DEFERRED; ditto
-cargo test -p checker --test tamper -- --include-ignored --test-threads=1     # DEFERRED; one re-proof a twin, 17.0 GB peak, 1512 s
-cargo test -p prover --test control -- --include-ignored --test-threads=1     # DEFERRED; S17's statement, 18.0 GB peak, 64 s
-cargo test --release -p prover --test alu -- --include-ignored --test-threads=1  # DEFERRED; S18's statement, 30.9 GB peak, 67 s
-cargo test --release -p prover --test mem -- --include-ignored --test-threads=1  # DEFERRED; S19's statement, 32.3 GB peak, 87 s
-cargo test --release -p prover --test block -- --include-ignored --test-threads=1  # DEFERRED; S20's block, 33.4 GB peak, 779 s
-cargo test -p prover --features metrics --test metrics -- --include-ignored --nocapture  # DEFERRED; S16's statement twice, 8.6 GB each, and prints both reports
+cargo test -p program --test delegation -- --ignored --test-threads=1  # static detachment at BOTH guest profiles; builds four guests, 0.6 s
+cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 18.8 GB peak, 200 s, 30 min on a runner
+cargo test -p prover --test acceptance -- --include-ignored --test-threads=1  # DEFERRED; S16's statement, 11.5 GB peak, 361 s
+cargo test -p verifier --test cli -- --include-ignored --test-threads=1       # DEFERRED; ditto, 11.5 GB, 44 s
+cargo test --release -p checker --test tamper -- --include-ignored --test-threads=1  # DEFERRED; one re-proof a twin, five statements, 19.2 GB peak, 2568 s; --release since S21
+cargo test -p prover --test control -- --include-ignored --test-threads=1     # DEFERRED; S17's statement, 21.1 GB peak, 61 s
+cargo test --release -p prover --test alu -- --include-ignored --test-threads=1  # DEFERRED; S18's statement, 30.3 GB peak, 53 s
+cargo test --release -p prover --test mem -- --include-ignored --test-threads=1  # DEFERRED; S19's statement, 33.5 GB peak, 61 s
+cargo test --release -p prover --test block -- --include-ignored --test-threads=1  # DEFERRED; S20's block, 38.0 GB peak, 804 s
+cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1  # DEFERRED; S21's nine-shard block, 38.9 GB peak, 130 s -- the heaviest in the repository
+cargo test -p prover --features metrics --test metrics -- --include-ignored --nocapture  # DEFERRED; S16's statement twice, 11.6 GB peak, and prints both reports
 cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify -p verifier-core --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
@@ -150,7 +156,7 @@ cargo test -p emulator --test consistency -- --include-ignored   # and again at 
 git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constraints/tests/vectors/ crates/checker/tests/vectors/
 -------------------------------------------------------------------------------
 cargo run -p kat-gen                        # refresh every fixture (manual, deliberate)
-cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader | isa | program | gkr | memory | lookup | family | tape
+cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader | isa | program | gkr | memory | lookup | family | keccak | tape
 cargo run -p checker -- laws <artifact>     # Laws 1-4 and the lookup rules, the standalone validators
 cargo run -p checker -- padding <artifact>  # the padding contract
 cargo run -p checker -- dump <artifact>     # a circuit, readably: layers, gates, relations, catalogue
@@ -406,7 +412,10 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   multiset fill and S16's ecall constraints cite it; they do not reinvent it.
 - **Address-space tags are nonzero**: `constants::address_space` `REG = 1`, `RAM = 2`,
   `PC = 3`, so no real memory tuple is all zeros. A RAM event's address is the byte address
-  of its 4-aligned word.
+  of its 4-aligned word. Since S21 there is **one space per delegation family** —
+  `DELEGATION_KECCAK_F = 4` — holding that family's anchor tuples and nothing else, which
+  is what makes a request's mirror read answerable by an invocation and by nothing in RAM
+  or a register.
 - **Family buffers are raw live rows**, column-major in small integer types, every query's
   address, value and timestamps per row. No padding and no `MultilinearPoly` in them: the
   memory argument's padded columns are filled from the log by `trace`'s memory builders,
@@ -478,12 +487,15 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   the construction-time rules. It amends the master's absorb order and S11's identity
   recipe, and the master cites it.
 - **A family's frame holds only the queries its instructions can make.** The query table has
-  eight entries — pc, then `execution-trace.md` §7's seven roles — but no family holds all
-  eight: `arg1` and `arg2` are an ecall row's alone, `load` a load's. The frozen subsets are
-  `constraints::memory::frame_queries`, 4 queries for `JUMP_BRANCH_SLT`, `SHIFT_BITWISE` and
-  `MUL_DIV`, 5 for `ATOMICS`, 6 for the two memory families and 7 for `ADD_SUB_LUI_AUIPC`,
-  giving `1 + 5w` memory and `w + 3` witness columns, `2w` obligations, and leaves padded to
-  a power of two a side with leaves that are literally 1. **A column's position is a slot in
+  **nine** entries since S21 — pc, then `execution-trace.md` §7's eight roles — but no family
+  holds all nine: `arg1`, `arg2` and `deleg` are an ecall row's alone, `load` a load's. The
+  frozen subsets are `constraints::memory::frame_queries`, 4 queries for `JUMP_BRANCH_SLT`,
+  `SHIFT_BITWISE` and `MUL_DIV`, 5 for `ATOMICS`, 6 for the two memory families and **8 for
+  `ADD_SUB_LUI_AUIPC`**, giving `1 + 5w` memory and `w + 3` witness columns, `2w`
+  obligations, and leaves padded to a power of two a side with leaves that are literally 1 —
+  **add/sub's eight need no pad**, and its sixteen obligations push its timestamp tree to 32
+  leaves and the circuit to six row-wise gate lists, which is what moved every relation
+  number in `constraint-manifest.md` §3. **A column's position is a slot in
   that list; its address space and `Δ` come from its id in the table** — the two differ for
   every family. A frame narrower than its family cannot balance, so the honest prover is
   refused rather than a cheating one admitted; a wider one commits and opens columns that
@@ -705,10 +717,41 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   four min/max kinds and nothing else in the circuit would catch it. Likewise every arm
   indexes `KINDS` through its `constants::extra_mask` constant and never by position: the
   stage prompt lists `amoand` and `amoor` in the opposite order to the constants.
-- **EXIT is the only provable ecall** (owner's decision, S16). The add/sub family holds
-  every ecall row to `a7 = 93`, and its fill refuses any other ecall and any transfer
-  cycle by name. The I/O-binding stage owes the rest, and until then fd 0 and fd 1 are
-  bound only by the public I/O digest in the statement, which no row reads.
+- **EXIT and a registered delegation number are the provable ecalls** (owner's decision,
+  S16; S21 added the second). The add/sub family holds every ecall row to `a7 = 93` **or**
+  `a7 = 0x501`, by two gates that partition its ecall rows, and its fill refuses any other
+  ecall and any transfer cycle by name. A delegation row falls through rather than halting,
+  writes 0 into `a0`, and carries the `deleg` mirror query that pairs it with an invocation.
+  The I/O-binding stage owes `read` and `write`, and until then fd 0 and fd 1 are bound only
+  by the public I/O digest in the statement, which no row reads.
+- **The delegation ABI is `docs/spec/delegation.md`, and it is frozen**: the ecall
+  convention (`a7` the number, `a0` the frame base, `a0 ← 0`, fall-through), the indirect
+  frame, the anchor and its 1:1 pairing, the three request-side zeroings, static detachment
+  by a `.rodata` declaration record and reachability, the alignment rules, and the
+  delegation-shard ts-window convention. S22 and S23 consume it frozen and may only append
+  frame tables. **A delegation family is invoked, not decoded**: it claims no pc, has no
+  decoded table, owns no cycle, and is in a `VmConfig` exactly when the linked binary
+  declares it — the third presence rule, beside "claims a pc" and "is a window family".
+- **A delegation family carries no lookup channel, and that is load-bearing.** Its height is
+  `2^8` (rows are invocations, not halfwords; `2^16` is 744 GB of forward pass), where no
+  range channel's table fits, so every bound it makes is a bit decomposition with a
+  booleanity gate. That is also why its registry arm sits *below* `family_circuit`'s
+  minimum-height guard: a family with no channel reaches no `BITS ≤ trace_vars` assertion,
+  and putting it in the guard would refuse the only height it has.
+- **The anchor's value column is free on both sides, and the multiset is what pairs them.**
+  A request writes `T(deleg_space, base, 4c+3, v)` and an invocation reads it; nothing fixes
+  `v` locally on either side, and they cancel only when equal. What *is* pinned, by three
+  gates, is the other three fields: a request writes no register, and its mirror read is
+  stamped 0 with value 0. Timestamp 0 is the stamp no cycle can produce, so an invocation's
+  answer tuple has exactly one reader. **What the zeroings buy is that the pairing is
+  local**: a request whose mirror read is stamped is refused by a gate on its own shard,
+  with no appeal to the frame's chains — which a delegation family with a smaller frame
+  would have nothing else to rely on. In *this* family a dropped invocation also drops its
+  50 RAM frame accesses, so the global multiset catches it first;
+  `checker::assert_anchor_twins_refused` is the family-parameterized proof, and it asserts
+  the zeroings at **shard** level and the dropped invocation at block level, because
+  `verify_block` runs `verify_global_memory` before any shard's own checks and a twin that
+  expected `Constraint` there would be asserting something false.
 - **A tamper twin is proved as an honest prover would prove it.** `checker::TamperHarness`
   writes the cells, recounts the multiplicities over them (unless a multiplicity is the
   tamper, or no count exists), recommits memory columns when they change, re-proves, and
@@ -741,7 +784,8 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   Each shard claims `[ts_start, ts_end)`, absorbed at S2 before its witness commitments;
   a block requires the windows of each **cycle-owning** family
   (`constants::family::CYCLE_OWNING` — the seven instruction families, not the two RAM
-  window ones) to be non-empty, ordered and pairwise disjoint, **per family**, because
+  window ones and not a delegation family, whose window is a sub-interval of the requesting
+  family's) to be non-empty, ordered and pairwise disjoint, **per family**, because
   cycle numbers are global and two families interleave. **No gate ties a claimed window
   to the rows committed under it**: the anchoring obligation the stage prompt asked for
   was removed, because the global memory multiset already forces every live row of every
@@ -793,3 +837,4 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 | S18 — Shift/bitwise + mul/div families | done | `docs/handoff/S18-shift-mul.md` |
 | S19 — Memory-op families + atomics | done | `docs/handoff/S19-mem.md` |
 | S20 — Sharding + block orchestration | done | `docs/handoff/S20-orchestration.md` |
+| S21 — keccak256 delegation + the delegation ABI | done | `docs/handoff/S21-keccak256.md` |

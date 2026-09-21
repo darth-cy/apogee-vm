@@ -7,11 +7,12 @@ profile and the shard plan, the `TraceArchive` that snapshots them, and the memo
 argument's columns filled from the log. `crates/emulator` is the only producer.
 **`docs/spec/execution-trace.md` is normative** for every value here — the clock, the
 address spaces, the frame of each instruction class, the x0 rule, the ecall frame and the
-order of the log — **`docs/spec/memory.md`** for the memory columns, and
-**`docs/spec/lookup.md` §7** for the multiplicity columns.
+order of the log — **`docs/spec/memory.md`** for the memory columns,
+**`docs/spec/lookup.md` §7** for the multiplicity columns, and, since S21,
+**`docs/spec/delegation.md`** for the eighth role, the invocation frame and the anchor.
 
 ```rust
-pub enum AddressSpace { Reg, Ram, Pc }            // tags: constants::address_space, 1 2 3
+pub enum AddressSpace { Reg, Ram, Pc, KeccakF }   // tags: constants::address_space, 1 2 3 4
 pub struct MemoryEvent { pub space: AddressSpace, pub addr: u32, pub ts: u64,
                          pub read_ts: u64, pub read_value: u32, pub write_value: u32 }
 pub struct FinalValue { pub space: AddressSpace, pub addr: u32, pub ts: u64, pub value: u32 }
@@ -25,15 +26,25 @@ impl MemoryEventLog {
     pub fn final_state(&self) -> Vec<FinalValue>;                   // sorted: last write per address
     pub fn self_check(&self, image: &ProgramImage) -> Result<(), SelfCheckError>;
 }
+impl AddressSpace { pub fn chains(&self) -> bool; }   // S21: false for a delegation space
 
-pub enum Role { Rs1, Rs2, Arg1, Arg2, Load, Ram, Rd }
-pub const ROLES: [Role; 7];                           // the frozen in-cycle order
+pub enum Role { Rs1, Rs2, Arg1, Arg2, Load, Ram, Rd, Delegate }   // S21's eighth
+pub const ROLES: [Role; 8];                           // the frozen in-cycle order
 pub struct Query { pub addr: u32, pub read_ts: u64, pub read_value: u32, pub write_value: u32 }
-pub struct Row { pub cycle: u64, pub pc: u32, pub next_pc: u32, pub present: u8, pub queries: [Query; 7] }
+pub struct Row { pub cycle: u64, pub pc: u32, pub next_pc: u32, pub present: u8, pub queries: [Query; 8] }
 pub struct QueryColumns { pub addr: Vec<u32>, pub read_ts: Vec<u64>, pub read_value: Vec<u32>, pub write_value: Vec<u32> }
 pub struct FamilyTrace { pub family: FamilyId, pub height: u32, pub cycle: Vec<u64>, pub pc: Vec<u32>,
-                         pub next_pc: Vec<u32>, pub present: Vec<u8>, pub queries: [QueryColumns; 7] }
-pub struct FamilyTraces { pub families: Vec<FamilyTrace> }
+                         pub next_pc: Vec<u32>, pub present: Vec<u8>, pub queries: [QueryColumns; 8] }
+// S21: a delegation family's buffer. Its rows are invocations, not cycles.
+pub struct DelegationTrace { pub family: FamilyId, pub height: u32, pub cycle: Vec<u64>,
+                             pub base: Vec<u32>, pub words: Vec<QueryColumns> }
+impl DelegationTrace { pub fn new(family, height, width) -> Self; pub fn len(&self) -> usize;
+                       pub fn is_empty(&self) -> bool; pub fn push(&mut self, cycle, base, &[Query]);
+                       pub fn frame(&self, row: usize) -> Vec<Query>; }
+pub struct FamilyTraces { pub families: Vec<FamilyTrace>, pub delegations: Vec<DelegationTrace> }
+impl FamilyTraces { pub fn family(&self, f) -> Option<&FamilyTrace>;
+                    pub fn delegation(&self, f) -> Option<&DelegationTrace>;
+                    pub fn row_counts(&self) -> Vec<(FamilyId, u64)>; }
 
 pub struct CycleProfile { pub counts: Vec<(FamilyId, u64)> }
 pub struct ShardPlan { pub shards: Vec<(FamilyId, u32)> }
@@ -110,10 +121,32 @@ impl TraceArchive {
   read timestamp is not stored: it is always `4 * (cycle - 1)`.
 - **The frozen column names** are `cycle`, `pc`, `next_pc`, `present`, then for each
   role in `ROLES` order `rs1.addr` `rs1.read_ts` `rs1.read_value` `rs1.write_value` …
-  through `rd.write_value`: the fields of `FamilyTrace` and `QueryColumns`. Append-only.
+  through `delegate.write_value`: the fields of `FamilyTrace` and `QueryColumns`.
+  Append-only.
+- **`Role::Delegate` is S21's eighth role and it filled the `present` mask.** `present` is a
+  `u8` and there are now eight roles, so every bit of it names one and no value can mark a
+  role that does not exist; a ninth role widens the mask, which is a schema change
+  (`docs/spec/execution-trace.md` §7). `src/archive.rs` asserts `ROLES.len() == 8` where the
+  old "role that does not exist" refusal stood, because an unreachable refusal is worse than
+  none.
 - **`FamilyTraces` has one buffer per `VmConfig` family, in its order**, the ones the run
-  never reached included, and `CycleProfile` one count per buffer; the counts sum to the
-  cycle count, transfer cycles included.
+  never reached included, and `CycleProfile` one count per buffer. **A delegation family's
+  buffer is a `DelegationTrace` and its rows are invocations**, so `CycleProfile::total()`
+  filters on `program::claims_pcs` and leaves them out of the cycle count while
+  `plan_shards` still counts them into that family's shard count
+  (`docs/spec/delegation.md` §8). The cycle-owning counts sum to the cycle count, transfer
+  cycles included.
+- **A delegation space does not chain.** `AddressSpace::chains()` is false for `KeccakF`, so
+  `record` fills such an event's read side with `(0, 0)` rather than from the last-access
+  tables, and `self_check` credits the invocation's own pair per event instead of an initial
+  write and a teardown read. That is what makes the anchor's timestamp-0 tuple a *write with
+  no initial write behind it* — the property the 1:1 pairing rests on
+  (`docs/spec/delegation.md` §5.2, §5.4).
+- **An invocation's frame events are not roles and are not the requesting row's.** They ride
+  the requesting cycle at `constants::delegation::FRAME_DELTA`, which is 0, so they follow
+  the pc query and precede the roles in the log, and `(RAM, 0)` is a `(space, Δ)` pair no
+  role takes — which is exactly how `frame_rows` tells them apart: an event whose pair is in
+  no query of the table is skipped rather than assigned a slot.
 - **`plan_shards` is `ceil(occupancy / height)`**, a pure function, zero for a family that
   never ran. `INIT_TEARDOWN` and `ZERO_WINDOWS` count 0 cycles and so plan 0 shards here;
   their rows are addresses, not cycles, and the prover assembles exactly 1 `INIT_TEARDOWN`
@@ -183,9 +216,9 @@ back through `content`; their schemas are `docs/spec/shard-proof.md` §10. No co
 | File | What |
 | --- | --- |
 | `src/archive.rs` (unit) | `fill` keeping the phases a prefix: post-execution, a refill and an out-of-order phase refused, each later phase's content and timing read back; `content` panicking on post-execution; an in-order later phase accepted; out-of-order, timing without content, content without timing, trailing bytes and an overlong varint refused; every one of the reader's fifteen part-disagreement refusals (a buffer of rows for each init family among them), a mis-tagged section and bytes after the post-execution content refused as a named `Err`, never a panic, beside the untouched content; the constructor refusing parts that disagree |
-| `tests/log.rs` | the address-space tags against `constants::address_space`, and exactly which addresses each space has |
+| `tests/log.rs` | the address-space tags against `constants::address_space` (`KeccakF` included, and 5 as the next unclaimed tag), exactly which addresses each space has — a delegation anchor's address is a frame base, so `KeccakF` has RAM's — and which spaces chain |
 | `tests/plan.rs` | acceptance 9: occupancy 0 / 1 / height / height+1 → 0 / 1 / 1 / 2 at every menu height, zero-occurrence families (both init families among them), the whole 38-bit clock at 2^16, purity, a mismatched profile refused |
-| `tests/memory.rs` | `constraints::memory`'s query table against `Role` in `ROLES` order, the pc query first, names included; **every family's frame equal to the union of its instructions' queries**, taken over all 59 `Instr` variants with the per-instruction queries written from `execution-trace.md` §4 and the routing from `program::row_kind`, so the two tables cannot drift; the finals of a hand-written two-cycle log; `build_boundary_finals` refusing a pc that does not end at `HALT_PC` and a nonzero `x0`; `build_memory_columns` refusing a cycle the log lacks; `build_frame_witness`' gap columns at the chunk's edge, gaps `2^19 − 1`, `2^19` and `2^19 + 3`; a RAM write at `4h`, the first word of window 1, in window 1's columns alone |
+| `tests/memory.rs` | `constraints::memory`'s query table against `Role` in `ROLES` order, the pc query first, names included — queries 1–8, `Role::Delegate`'s frame columns spelled `deleg_*` rather than `delegate_*`, which is written out rather than derived so a rename on one side alone still fails; `frame_queries(KECCAK_F)` panicking, since a delegation family is invoked rather than decoded; **every family's frame equal to the union of its instructions' queries**, taken over all 59 `Instr` variants with the per-instruction queries written from `execution-trace.md` §4 and the routing from `program::row_kind`, so the two tables cannot drift; the finals of a hand-written two-cycle log; `build_boundary_finals` refusing a pc that does not end at `HALT_PC` and a nonzero `x0`; `build_memory_columns` refusing a cycle the log lacks; `build_frame_witness`' gap columns at the chunk's edge, gaps `2^19 − 1`, `2^19` and `2^19 + 3`; a RAM write at `4h`, the first word of window 1, in window 1's columns alone |
 
 The self-check, the buffers, `init_windows` and the archive are exercised over real
 executions in `crates/emulator/tests/{trace,archive}.rs`, which is where executions exist;

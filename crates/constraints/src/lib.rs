@@ -25,6 +25,7 @@ pub mod atomics;
 mod build;
 pub mod gadgets;
 pub mod jump_branch_slt;
+pub mod keccak;
 mod laws;
 pub mod lookup;
 pub mod mem_subword;
@@ -86,11 +87,13 @@ impl FamilyCircuit {
 /// later family is added here, with one constructor, and nowhere in the
 /// verifier. Every execution family needs 19 variables for its timestamp
 /// channel (`docs/spec/lookup.md` §3) — which also holds the packed generic
-/// table's rows, which five of the seven read; the two RAM window families
-/// take any height up to `MAX_TRACE_VARS`. **The minimum-height arm names
-/// every execution family**: one missing from it would reach
-/// `lookup::channel_trees`' assertion and panic inside `VerifyingKey::check`,
-/// on bytes a verifier was handed, instead of returning `None`.
+/// table's rows, which five of the seven read; the two RAM window families and
+/// every delegation family take any height up to `MAX_TRACE_VARS`. **The
+/// minimum-height arm names every execution family**: one missing from it
+/// would reach `lookup::channel_trees`' assertion and panic inside
+/// `VerifyingKey::check`, on bytes a verifier was handed, instead of returning
+/// `None`. A family with no channel reaches no such assertion, which is why a
+/// delegation family is not in the arm and must carry no channel.
 pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
     use constants::family as f;
     if trace_vars > MAX_TRACE_VARS {
@@ -124,6 +127,10 @@ pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
         f::ATOMICS => (atomics::artifact(trace_vars), atomics::channels()),
         f::INIT_TEARDOWN => (memory::image_window_artifact(trace_vars), Vec::new()),
         f::ZERO_WINDOWS => (memory::zero_window_artifact(trace_vars), Vec::new()),
+        // A delegation family carries no channel at all, so no minimum height
+        // applies to it — and none could: at a channel's height its
+        // permutation does not fit (`docs/spec/delegation.md` §9).
+        f::KECCAK_F => (keccak::artifact(trace_vars), keccak::channels()),
         _ => return None,
     };
     Some(FamilyCircuit {

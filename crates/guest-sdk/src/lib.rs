@@ -27,7 +27,7 @@
 use core::alloc::{GlobalAlloc, Layout};
 use core::arch::global_asm;
 
-use constants::{ecall, guest_memory};
+use constants::{delegation, ecall, guest_memory, keccak};
 
 // ---------------------------------------------------------------------------
 // crt0
@@ -303,6 +303,207 @@ pub fn poseidon2_permute(state: &mut [u8; 96]) -> bool {
         n if n == -(ecall::ENOSYS as i32) => false,
         _ => exit(EXIT_PRECOMPILE_ERROR),
     }
+}
+
+// ---------------------------------------------------------------------------
+// keccak256, and the delegation it declares
+// ---------------------------------------------------------------------------
+
+/// The delegation **declaration record** for keccak-f[1600].
+///
+/// `docs/spec/delegation.md` §7. The magic, then the ecall number as a
+/// little-endian `u32`. It is in an allocated `.rodata` section, which
+/// `link.ld`'s `*(.rodata*)` already absorbs, so no guest's layout moves and no
+/// loader change is needed: `crates/program` scans the image's own file-backed
+/// bytes for it, and program identity binds it through the image column.
+///
+/// [`keccak_f1600`] reads its ecall number **out of this record**, which is
+/// what makes the record load-bearing rather than decorative: a shim that
+/// exists has one, and the number it calls is the number it declares.
+///
+/// **No `#[used]`, deliberately.** The record must be in the image exactly
+/// when the shim is, and `#[used]` would put it in *every* guest that links
+/// this crate — `guests/Cargo.toml` pins `codegen-units = 1`, so the SDK is
+/// one object file — which would declare `KECCAK_F` for `fib` and detachment
+/// would mean nothing. Reachability is the whole mechanism: the record is
+/// referenced by the shim and by nothing else, so a guest that never calls
+/// `keccak256` drops the chain and the record with it.
+/// `crates/program/tests/delegation.rs` holds every committed guest to that,
+/// at both optimisation levels.
+#[link_section = ".rodata.apogee.delegations"]
+static DELEGATION_KECCAK_F: [u8; delegation::MARKER_BYTES] = {
+    let mut record = [0u8; delegation::MARKER_BYTES];
+    let magic = delegation::MARKER_MAGIC;
+    let mut i = 0;
+    while i < magic.len() {
+        record[i] = magic[i];
+        i += 1;
+    }
+    let number = ecall::PRECOMPILE_KECCAK_F.to_le_bytes();
+    let mut j = 0;
+    while j < number.len() {
+        record[magic.len() + j] = number[j];
+        j += 1;
+    }
+    record
+};
+
+/// The declared ecall number, read back out of the record.
+///
+/// Through `black_box`, which is what keeps the *record* in the image at
+/// `opt-level = 3`: without it LLVM folds the read into an immediate, the
+/// static becomes unreferenced, and the declaration disappears from exactly
+/// the guests that need it. `black_box` is an optimisation barrier and nothing
+/// else — a dead call to this function is still dead, which is the other half
+/// of what detachment needs.
+fn delegation_number(record: &'static [u8; delegation::MARKER_BYTES]) -> u32 {
+    let record = core::hint::black_box(record);
+    let n = delegation::MARKER_MAGIC.len();
+    u32::from_le_bytes([record[n], record[n + 1], record[n + 2], record[n + 3]])
+}
+
+/// The 200-byte frame a delegation request hands over, **word-aligned**.
+///
+/// The alignment is in the type because nothing else supplies it. A bare
+/// `[u8; keccak::STATE_BYTES]` has alignment 1, and a stack local's address is
+/// the code generator's to choose: LLVM places align-1 stack objects at odd
+/// offsets whenever the frame packs that way, at every optimisation level.
+/// `docs/spec/delegation.md` §4 rule 1 requires a word-aligned base, and a
+/// misaligned one is a fatal `EmuError::Misaligned` — while `qemu-riscv32`,
+/// which answers `-ENOSYS` and never dereferences the pointer, runs the
+/// software path and agrees with everybody. An unaligned buffer would
+/// therefore be a guest that gives the right digest under one executor and
+/// dies under the other, decided by codegen rather than by the program.
+///
+/// `align(4)` and not more: 4 is what the ABI states, what `keccak`'s
+/// `base_aligned` decomposes and what `emulator::keccak_frame` checks.
+#[repr(C, align(4))]
+struct Frame([u8; keccak::STATE_BYTES]);
+
+/// The frame rule of `docs/spec/delegation.md` §4, as a type-level assertion:
+/// the buffer the ecall hands over is word-aligned or this crate does not
+/// build.
+const _: () = assert!(core::mem::align_of::<Frame>() >= 4);
+
+/// keccak-f[1600] over the 200-byte state frame, as a delegation.
+///
+/// Returns `false` when the executor answers exactly `-ENOSYS` — which
+/// `qemu-riscv32` does, having no circuit — and the caller runs the software
+/// path. Any other nonzero answer exits nonzero rather than falling back, for
+/// [`poseidon2_permute`]'s reason.
+fn keccak_f1600(state: &mut Frame) -> bool {
+    // SAFETY: `state` is a live, writable 200-byte buffer, word-aligned by its
+    // type, which is the whole of this call's contract.
+    let ret = unsafe {
+        ecall1(
+            delegation_number(&DELEGATION_KECCAK_F),
+            state.0.as_mut_ptr() as u32,
+        )
+    };
+    match ret {
+        0 => true,
+        n if n == -(ecall::ENOSYS as i32) => false,
+        _ => exit(EXIT_PRECOMPILE_ERROR),
+    }
+}
+
+/// keccak-f[1600] in software: the fallback, and the definition the delegated
+/// path is held to.
+///
+/// Written from `constants::keccak`'s two tables, which
+/// `crates/constants/tests/keccak.rs` re-derives from the Keccak reference's
+/// generators. `crates/emulator` carries its own copy for the executor side;
+/// the two are held bit-identical, and both to `tiny-keccak`, by
+/// `crates/emulator/tests/keccak.rs`. A crate whose only purpose was to be
+/// shared by two callers would be the abstraction the master's anti-goals
+/// refuse, and this crate is not a workspace member in any case.
+fn keccak_f_software(lanes: &mut [u64; keccak::LANES]) {
+    for round in 0..keccak::ROUNDS {
+        let mut c = [0u64; 5];
+        for (x, c) in c.iter_mut().enumerate() {
+            *c = lanes[x] ^ lanes[x + 5] ^ lanes[x + 10] ^ lanes[x + 15] ^ lanes[x + 20];
+        }
+        for x in 0..5 {
+            let d = c[(x + 4) % 5] ^ c[(x + 1) % 5].rotate_left(1);
+            for y in 0..5 {
+                lanes[x + 5 * y] ^= d;
+            }
+        }
+        let mut b = [0u64; keccak::LANES];
+        for x in 0..5 {
+            for y in 0..5 {
+                b[y + 5 * ((2 * x + 3 * y) % 5)] =
+                    lanes[x + 5 * y].rotate_left(keccak::ROTATIONS[y][x]);
+            }
+        }
+        for x in 0..5 {
+            for y in 0..5 {
+                lanes[x + 5 * y] =
+                    b[x + 5 * y] ^ (!b[(x + 1) % 5 + 5 * y] & b[(x + 2) % 5 + 5 * y]);
+            }
+        }
+        lanes[0] ^= keccak::ROUND_CONSTANTS[round];
+    }
+}
+
+/// One permutation of the sponge state: the delegation, or the software path.
+///
+/// The frame the delegation dereferences is a [`Frame`], so it satisfies the
+/// two frame rules of `docs/spec/delegation.md` §4 for different reasons. The
+/// **window** rule holds by construction: the buffer is a stack local, the
+/// stack lies below `__stack_top`, and `__stack_top` is the top of the RAM
+/// window, so `base + 200` cannot leave it. The **alignment** rule does not
+/// hold by construction, which is why [`Frame`] carries it.
+fn permute(state: &mut Frame) {
+    if keccak_f1600(state) {
+        return;
+    }
+    let mut lanes = [0u64; keccak::LANES];
+    for (i, lane) in lanes.iter_mut().enumerate() {
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(&state.0[8 * i..8 * i + 8]);
+        *lane = u64::from_le_bytes(bytes);
+    }
+    keccak_f_software(&mut lanes);
+    for (i, lane) in lanes.iter().enumerate() {
+        state.0[8 * i..8 * i + 8].copy_from_slice(&lane.to_le_bytes());
+    }
+}
+
+/// keccak256 of `input`: Ethereum's Keccak, not SHA-3.
+///
+/// **This signature is frozen** (`docs/spec/delegation.md`): it is the patchable
+/// entry point a hash hook routes through, and the delegated path and the
+/// software fallback are bit-identical behind it.
+///
+/// The sponge and the padding run here, in guest code, and one delegation ecall
+/// covers each keccak-f block. Padding is `pad10*1` in the original Keccak
+/// domain — `0x01` first and `0x80` in the block's last byte — which is what
+/// makes this keccak256 and not SHA3-256.
+pub fn keccak256(input: &[u8]) -> [u8; keccak::DIGEST_BYTES] {
+    let mut state = Frame([0u8; keccak::STATE_BYTES]);
+    let mut block = input.chunks_exact(keccak::RATE_BYTES);
+    for chunk in block.by_ref() {
+        for (cell, byte) in state.0.iter_mut().zip(chunk) {
+            *cell ^= byte;
+        }
+        permute(&mut state);
+    }
+    // The last, partial block, padded. `chunks_exact`'s remainder is shorter
+    // than the rate, so the padded block is exactly one rate long — including
+    // the empty input, whose only block is the padding.
+    let rest = block.remainder();
+    let mut last = [0u8; keccak::RATE_BYTES];
+    last[..rest.len()].copy_from_slice(rest);
+    last[rest.len()] ^= keccak::PAD_FIRST;
+    last[keccak::RATE_BYTES - 1] ^= keccak::PAD_LAST;
+    for (cell, byte) in state.0.iter_mut().zip(last.iter()) {
+        *cell ^= byte;
+    }
+    permute(&mut state);
+    let mut digest = [0u8; keccak::DIGEST_BYTES];
+    digest.copy_from_slice(&state.0[..keccak::DIGEST_BYTES]);
+    digest
 }
 
 // ---------------------------------------------------------------------------

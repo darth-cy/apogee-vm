@@ -66,7 +66,7 @@ A guest is an ordinary `no_std` binary crate that lives in the `guests/`
 workspace. Three files, one of which already exists.
 
 `hello` below is the guest this manual builds; you are creating it now. The
-repository ships thirteen, and every command here works on those too with the name
+repository ships seventeen, and every command here works on those too with the name
 changed. They are worth reading before you write your own, because between them
 they cover most of what a guest can do:
 
@@ -87,10 +87,12 @@ they cover most of what a guest can do:
 | `alu` | S18's guest, proven end to end the same way: the twelve shifts and bitwise operations of the `SHIFT_BITWISE` family and the eight M operations of `MUL_DIV`, at the edge cases the stage names — shamt 0, 1 and 31, `rs2 = 32` and 33 for the shift amount's truncation, `sra` of a negative operand, all four sign quadrants of each multiply and each division, `−2^31 × −2^31`, the asymmetric `mulhsu` corner, division by zero for all four, and the one signed overflow — each checked by the guest itself, exiting with the number of checks, 96. Hand-written assembly with no `guest-sdk`, for `addsub`'s reason: its only instructions are the four families S18 proves |
 | `mem` | S19's guest, proven end to end the same way: `lw` and `sw` of the `MEM_WORD` family, the six sub-word loads and stores of `MEM_SUBWORD` at every legal byte and halfword offset, and the eleven instructions of `ATOMICS`, at the cases the stage names — a negative byte and a negative halfword sign-extended, `sb` and `sh` truncating a source whose high bytes are set and leaving the rest of the word alone, `amoadd` overflowing `2^32`, two consecutive AMOs to one address, all four min/max at `0x7fffffff` against `0x80000000`, an `lr.w`/`sc.w` pair, and `lw x0` and `amoadd.w x0` — each checked by the guest itself, exiting with the number of checks, 50. Hand-written assembly with no `guest-sdk`, for `addsub`'s reason. It is also the first guest that writes near the top of RAM as well as inside window 0, so its statement is the first with a `ZERO_WINDOWS` shard |
 | `shards` | S20's guest, and the only one written for its *size*: a counted loop whose body is 64 unrolled `add`s, so `ADD_SUB_LUI_AUIPC` runs 1,064,970 cycles — past `2^20`, the smallest height a family carrying a timestamp gap obligation can have — and one execution becomes **two shards of one family**, which is S20's stage gate. `JUMP_BRANCH_SLT` runs 16,386 and fits one shard; nothing touches RAM, so `ZERO_WINDOWS` proves zero shards and the block carries a family with a count of 0. It exits with the number of checks, 2. Hand-written assembly with no `guest-sdk`, for `addsub`'s reason, and a loop rather than a straight line because a family's height is both its shard height and its decoded table's row count: 2^20 four-byte instructions would need a 2^22 table, which is a 2^22 shard, which is one shard again |
+| `keccak-test` | S21's guest, and the first that calls a **delegation**: `guest_sdk::keccak256` over six inputs — empty, one byte, one short of the 136-byte rate, exactly the rate, one past it, and 400 bytes — each checked in the guest against a pinned digest, exiting with the number of checks, 6. Ten keccak-f[1600] permutations in all, which one `2^8` `KECCAK_F` shard holds with room to spare. It is *one* binary on both executors: here the delegation ecall runs the permutation the `KECCAK_F` circuit proves and the invocations reach that family's trace, under `qemu-riscv32` the same ecall answers `-ENOSYS` and the SDK's software permutation runs, and the digests are identical either way (§3 rule 6) |
+| `keccak-unused` | the other half of that story, and the guest to read when you want to know what *linking* a delegation costs: it links `keccak256` behind a `core::hint::black_box` branch the optimiser cannot fold away, and never calls it. The shim is reachable, so its declaration record is in the image, so `KECCAK_F` is in the `VmConfig` — and the run invokes it zero times, so the execution proves zero shards of it. A guest that links no shim declares nothing at all (`docs/spec/delegation.md` §7). It exits 7 |
 
 If you are looking for a pattern to copy, `amm` is the one to read for arithmetic
-and framing, `orderbook` for anything that takes prover advice, and `vault` for
-anything that hashes.
+and framing, `orderbook` for anything that takes prover advice, `vault` for
+anything that hashes, and `keccak-test` for calling a delegation.
 
 **`guests/hello/Cargo.toml`**
 
@@ -124,7 +126,7 @@ fn main() {
 **`guests/Cargo.toml`** — add the crate to the member list:
 
 ```toml
-members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "consistency", "addsub", "control", "alu", "mem", "shards", "hello"]
+members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "consistency", "addsub", "control", "alu", "mem", "shards", "keccak-test", "keccak-unused", "hello"]
 ```
 
 Four things about that source file are not negotiable:
@@ -216,6 +218,7 @@ pub fn hint(buf: &mut [u8]) -> usize;          // fd 3, prover advice
 pub fn log(bytes: &[u8]);                      // fd 2, verifier-ignored
 pub fn exit(code: i32) -> !;
 pub fn poseidon2_permute(state: &mut [u8; 96]) -> bool;   // false on -ENOSYS
+pub fn keccak256(input: &[u8]) -> [u8; 32];    // delegated, or the same thing in software
 ```
 
 | fd | Committed | What it means for you |
@@ -225,7 +228,7 @@ pub fn poseidon2_permute(state: &mut [u8; 96]) -> bool;   // false on -ENOSYS
 | 2 | no | diagnostics. Free-form, and the verifier never looks at it |
 | 3 | **no** | private hints: **nondeterministic prover advice** |
 
-Five rules worth having in front of you while you write:
+Six rules worth having in front of you while you write:
 
 1. **`read_input` and `hint` may return short.** They fill the buffer or stop
    at the end of the stream. If you need an exact length, check the count. A
@@ -251,6 +254,19 @@ Five rules worth having in front of you while you write:
    ```
    sh -c 'exec 3</dev/null; exec qemu-riscv32 ./yourguest' < input
    ```
+
+6. **`keccak256` is a delegation, and you call it like a function.** The sponge
+   and the padding run in guest code and one ecall covers each keccak-f[1600]
+   block: this VM answers that ecall out of the circuit the `KECCAK_F` family
+   proves, and an executor without the circuit — `qemu-riscv32` — answers
+   `-ENOSYS`, whereupon the SDK runs the permutation in software. Both paths
+   produce the same digest, so unlike rule 4 there is no fallback for you to
+   write. Calling it is also what *declares* the family: the shim carries a
+   record the preprocessor scans the image for, kept exactly when the shim is
+   reachable, so a guest that never calls `keccak256` declares nothing and a
+   guest that links it and never calls it declares a family it proves zero
+   shards of. `docs/spec/delegation.md` is the normative page; `guests/keccak-test`
+   and `guests/keccak-unused` are the two halves worked out.
 
 `guests/orderbook` is the worked example of rule 2. It takes a sorted
 permutation of its orders from fd 3 — sorting costs `O(n log n)` and checking a
@@ -642,8 +658,8 @@ the first and unrunnable under the second — S10 shipped exactly that, twice.
 
 The two rules are properties of `link.ld`, which every guest links against
 unmodified, so a guest that changes only its own source has the segment shape
-the committed guests have. `crates/loader/tests/layout.rs` checks those over all
-thirteen committed guests on every CI run, and its ignored case relinks them from
+the committed guests have. `crates/loader/tests/layout.rs` checks those over the
+committed guests on every CI run, and its ignored case relinks them from
 source and re-checks — which is what to run after touching the script:
 
 ```

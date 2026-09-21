@@ -28,6 +28,7 @@ fn constants_table() -> BTreeMap<&'static str, u32> {
         ("WRITE", ecall::WRITE),
         ("EXIT", ecall::EXIT),
         ("PRECOMPILE_POSEIDON2", ecall::PRECOMPILE_POSEIDON2),
+        ("PRECOMPILE_KECCAK_F", ecall::PRECOMPILE_KECCAK_F),
         ("FD_PUBLIC_INPUT", ecall::FD_PUBLIC_INPUT),
         ("FD_PUBLIC_OUTPUT", ecall::FD_PUBLIC_OUTPUT),
         ("FD_STDERR", ecall::FD_STDERR),
@@ -243,6 +244,10 @@ fn the_shims_use_the_constants() {
         "ecall::FD_STDERR",
         "ecall::FD_HINT",
         "ecall::PRECOMPILE_POSEIDON2",
+        // S21: the shim does not call this number directly — it reads it out
+        // of the declaration record it emits (`docs/spec/delegation.md` §7) —
+        // but the record is built from the constant, which is the same rule.
+        "ecall::PRECOMPILE_KECCAK_F",
     ] {
         assert!(
             source.contains(name),
@@ -253,7 +258,7 @@ fn the_shims_use_the_constants() {
 
     // And it spells none of them. The numbers below are the ones a second copy
     // would most plausibly be written as.
-    for literal in [" 63", " 64", " 93", "0x0500"] {
+    for literal in [" 63", " 64", " 93", "0x0500", "0x0501"] {
         assert!(
             !source.contains(&format!("= {}", literal.trim())),
             "guest-sdk assigns the literal {literal}, which is an ABI number \
@@ -287,7 +292,7 @@ fn the_emulator_dispatches_on_the_constants() {
         );
     }
     for literal in [
-        "63 =>", "64 =>", "93 =>", "== 63", "== 64", "== 93", "0x500",
+        "63 =>", "64 =>", "93 =>", "== 63", "== 64", "== 93", "0x500", "0x501",
     ] {
         assert!(
             !source.contains(literal),

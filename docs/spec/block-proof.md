@@ -1,6 +1,9 @@
 # The block: sharding, orchestration and `verify_block`
 
-Frozen as of S20. Changing anything here is a protocol-version change.
+Frozen as of S20. Changing anything here is a protocol-version change. S21 registered the
+first family that owns no cycles and is not a RAM window — the keccak delegation family — and
+**changed no line of `verify_block`**: the rule §4 already scoped to `CYCLE_OWNING` is what
+admitted it (`docs/spec/delegation.md` §8).
 
 A statement is one execution of one program, proven by one `ShardProof` per shard of
 every family, every one of them against one `PublicInputs`
@@ -245,10 +248,16 @@ disjointness rule could never hold for any real execution.
 
 **Which families own cycles.** The seven instruction families do; `INIT_TEARDOWN` and
 `ZERO_WINDOWS` do not, their rows being RAM words rather than cycles
-(`docs/spec/memory.md` §3). The delegation families E21–S23 append to
-`family::CYCLE_OWNING` as `false`, and their shard records carry a min/max invocation
-timestamp with no disjointness requirement — per-address ordering is already carried by
-the multiset gap checks. **E21–S23 therefore slot in with zero `verify_block` changes.**
+(`docs/spec/memory.md` §3). **`KECCAK_F` does not either, and S21 is where that was paid
+out**: it appended to `family::CYCLE_OWNING` as `false`, and its shard record carries a
+min/max invocation timestamp with no disjointness requirement — per-address ordering is
+already carried by the multiset gap checks. **S21 slotted in with zero `verify_block`
+changes**, which is what this paragraph promised at S20, and S22 and S23 will do the same.
+
+An invocation rides the cycle of the request that made it, so a delegation shard's window is
+a *sub-interval* of the requesting family's and the two overlap by construction —
+`crates/prover/tests/keccak.rs` asserts that containment. A block-wide or unscoped rule would
+have refused every honest block with a delegation in it.
 
 `CYCLE_OWNING` is a constant beside the family ids and **not** a field of the
 `VmConfig`: the config's wire form is absorbed into program identity and into the global
@@ -335,8 +344,11 @@ For a cycle-owning family, `[4·cycle(row 0), 4·max cycle + 4)`, read off the s
 slot (`docs/spec/execution-trace.md` §1, the clock's four slots, and §3, a query's write
 at `4·cycle + Δ`). Reading it from the committed column rather
 than from the archive keeps the S16 `prove_shard_columns` signature, and makes the
-honest window a function of exactly what the shard commits. For a family that owns no
-cycles, the trivial window.
+honest window a function of exactly what the shard commits. For a **delegation** family,
+since S21, the same formula over the same `M[0]`, which there is the requesting cycle of each
+invocation: `prover`'s `ts_window` is three-way, and a delegation family reads its cycle
+column like a cycle-owning one while being exempt from §4's disjointness. For a RAM window
+family, the trivial window.
 
 A tampered cycle column is read as its low 64 bits and multiplied saturatingly: the
 prover checks nothing (S13), and a window that is not a window is a proof step 4
@@ -422,7 +434,8 @@ produces the digest every shard is seeded with.
 - **No aggregation and no recursion.** A `BlockProof` is verified by running every
   shard's verification. Folding those into one proof is S26 and S27's.
 - **No accumulator entries** (§1).
-- **No delegation families.** `CYCLE_OWNING` has the slot for them and §4 the rule;
-  E21–S23 add the families.
+- **Nothing for a delegation family beyond §4's scoping.** S21 added `KECCAK_F` and
+  `verify_block` did not change; S22 and S23 append their own families the same way
+  (`docs/spec/delegation.md` §10).
 - **No binding of fd 0 and fd 1 to the execution.** The public I/O digest is in the
   statement and no row reads it, as at S16; the I/O-binding stage owes it.

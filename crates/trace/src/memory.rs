@@ -10,7 +10,7 @@ use constants::lookup_channel;
 use constants::memory::{HALT_PC, RAM_LIVE_BIT, TS_STEP};
 use constraints::memory::{
     frame, gap_hi, rd_inv, rd_is_zero, rd_selected, CYCLE, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS,
-    FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA, FRAME_SPACE, RD,
+    FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA, FRAME_QUERIES, FRAME_SPACE, RD,
 };
 use constraints::PolyAddress;
 use field::Fr;
@@ -84,6 +84,17 @@ fn frame_rows(
         let Some(&Some(i)) = row_of.get(event.cycle() as usize) else {
             continue;
         };
+        // An event whose `(space, Δ)` pair no query of the table has belongs
+        // to no cycle's row: it is a **delegation invocation's** frame access,
+        // which rides the requesting cycle's timestamp at
+        // `constants::delegation::FRAME_DELTA` and is that family's row, not
+        // this one's (`docs/spec/delegation.md` §4.1). The panic below is
+        // unchanged for every pair the table *does* have.
+        let in_table = (0..FRAME_QUERIES)
+            .any(|q| FRAME_SPACE[q] == event.space.tag() && FRAME_DELTA[q] == event.delta());
+        if !in_table {
+            continue;
+        }
         let row = &mut rows[i];
         let at = (0..queries.len())
             .find(|&at| {
@@ -297,7 +308,9 @@ pub fn build_boundary_finals(log: &MemoryEventLog) -> BoundaryFinals {
                 }
             }
             AddressSpace::Pc => pc = Some(f),
-            AddressSpace::Ram => {}
+            // A RAM word's final value is a window family's row, and a
+            // delegation space has no final state at all.
+            AddressSpace::Ram | AddressSpace::KeccakF => {}
         }
     }
     let pc = pc.expect("build_boundary_finals: the log has no pc query, so no final pc");

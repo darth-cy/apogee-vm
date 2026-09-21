@@ -146,7 +146,7 @@ fn a_shard_appears_once_and_with_its_proof_size() {
     run.absorb(task);
     let m = run.finish();
     assert_eq!(m.shards.len(), 1, "one row a shard");
-    assert_eq!(m.shards[0].proof_bytes, 57_100, "the complete one");
+    assert_eq!(m.shards[0].proof_bytes, 62_260, "the complete one");
 }
 
 /// **The block peak model is the thread count's price**, and that is the whole
@@ -273,8 +273,10 @@ fn shape(shard: ShardId) -> ShardShape {
         gkr_layers: 3,
         sumcheck_rounds: 60,
         final_evals: 9,
-        witness_commitments: 31,
-        proof_bytes: 57_100,
+        witness_commitments: 33,
+        // A real `ADD_SUB_LUI_AUIPC` shard's size at `n = 20` since S21's
+        // eighth frame query, so the synthetic row reads like one.
+        proof_bytes: 62_260,
     }
 }
 

@@ -22,7 +22,11 @@
 //! ```text
 //! ( families: [(family u32, height u32, cycle [u64], pc [u32], next_pc [u32],
 //!               present [u8], [(addr [u32], read_ts [u64], read_value [u32],
-//!                               write_value [u32]); 7]
+//!                               write_value [u32]); 8]
+//!             )],
+//!   delegations: [(family u32, height u32, cycle [u64], base [u32],
+//!               [(addr [u32], read_ts [u64], read_value [u32],
+//!                 write_value [u32])]
 //!             )],
 //!   events:   [(space tag u8, addr u32, ts u64, read_ts u64, read_value u32,
 //!               write_value u32)],
@@ -55,7 +59,7 @@ use constants::{family, memory};
 use serde::de::{Deserialize, Deserializer, SeqAccess, Visitor};
 use serde::Serialize;
 
-use crate::family::{FamilyTrace, FamilyTraces, Query, QueryColumns, Row, ROLES};
+use crate::family::{DelegationTrace, FamilyTrace, FamilyTraces, Query, QueryColumns, Row, ROLES};
 use crate::log::{AddressSpace, MemoryEvent, MemoryEventLog};
 use crate::CycleProfile;
 
@@ -320,7 +324,7 @@ type FamilyRef<'a> = (
     &'a [u32],
     &'a [u32],
     &'a [u8],
-    [QueryRef<'a>; 7],
+    [QueryRef<'a>; 8],
 );
 type QueryWire = (Seq<u32>, Seq<u64>, Seq<u32>, Seq<u32>);
 type FamilyWire = (
@@ -330,11 +334,14 @@ type FamilyWire = (
     Seq<u32>,
     Seq<u32>,
     Seq<u8>,
-    [QueryWire; 7],
+    [QueryWire; 8],
 );
 type EventWire = (u8, u32, u64, u64, u32, u32);
+type DelegationRef<'a> = (u32, u32, &'a [u64], &'a [u32], &'a [QueryRef<'a>]);
+type DelegationWire = (u32, u32, Seq<u64>, Seq<u32>, Seq<QueryWire>);
 type PostExecutionWire = (
     Seq<FamilyWire>,
+    Seq<DelegationWire>,
     Seq<EventWire>,
     Seq<(u32, u64)>,
     Seq<u8>,
@@ -381,7 +388,37 @@ fn post_execution_wire(
             )
         })
         .collect();
-    encode(&(&families[..], events, counts, &io.input[..], &io.output[..]))
+    let words: Vec<Vec<QueryRef>> = traces
+        .delegations
+        .iter()
+        .map(|t| {
+            t.words
+                .iter()
+                .map(|q| {
+                    (
+                        &q.addr[..],
+                        &q.read_ts[..],
+                        &q.read_value[..],
+                        &q.write_value[..],
+                    )
+                })
+                .collect()
+        })
+        .collect();
+    let delegations: Vec<DelegationRef> = traces
+        .delegations
+        .iter()
+        .zip(&words)
+        .map(|(t, w)| (t.family, t.height, &t.cycle[..], &t.base[..], &w[..]))
+        .collect();
+    encode(&(
+        &families[..],
+        &delegations[..],
+        events,
+        counts,
+        &io.input[..],
+        &io.output[..],
+    ))
 }
 
 fn decode_post_execution(
@@ -392,9 +429,29 @@ fn decode_post_execution(
     if !rest.is_empty() {
         return Err("bytes follow the post-execution payload".into());
     }
-    let (families, events, counts, input, output) = wire;
+    let (families, delegations, events, counts, input, output) = wire;
 
     let traces = FamilyTraces {
+        delegations: delegations
+            .0
+            .into_iter()
+            .map(|(family, height, cycle, base, words)| DelegationTrace {
+                family,
+                height,
+                cycle: cycle.0,
+                base: base.0,
+                words: words
+                    .0
+                    .into_iter()
+                    .map(|(addr, read_ts, read_value, write_value)| QueryColumns {
+                        addr: addr.0,
+                        read_ts: read_ts.0,
+                        read_value: read_value.0,
+                        write_value: write_value.0,
+                    })
+                    .collect(),
+            })
+            .collect(),
         families: families
             .0
             .into_iter()
@@ -499,12 +556,16 @@ fn check_parts(
         }
         for r in 0..n {
             let row = t.row(r);
-            if row.present >> 7 != 0 {
-                return Err(format!(
-                    "family {} row {r} marks a role that does not exist",
-                    t.family
-                ));
-            }
+            // Since S21 there are eight roles, so the mask is full: every bit
+            // of the `u8` names one and no value of it can mark a role that
+            // does not exist. The check that used to stand here is therefore
+            // unreachable, and an unreachable refusal is worse than none —
+            // what catches a `present` bit the execution did not make is the
+            // log replay below, which finds the row and the log disagreeing.
+            // A ninth role widens this mask, which is a schema change
+            // (`docs/spec/execution-trace.md` §7); the assertion is what makes
+            // that a compile error here rather than a silently dropped check.
+            const _: () = assert!(ROLES.len() == 8);
             for role in ROLES {
                 if row.query(role).is_none() && row.queries[role as usize] != Query::ABSENT {
                     return Err(format!(
@@ -516,6 +577,63 @@ fn check_parts(
             }
         }
     }
+    // The delegation buffers: one row per invocation, not per cycle.
+    let mut invocations: Vec<(u64, &DelegationTrace, usize)> = Vec::new();
+    for (i, t) in traces.delegations.iter().enumerate() {
+        let n = t.cycle.len();
+        let Some(width) = program::delegation_frame_words(t.family) else {
+            return Err(format!(
+                "family {} has a delegation buffer but is not a delegation family",
+                t.family
+            ));
+        };
+        if !family::HEIGHT_MENU.contains(&t.height) {
+            return Err(format!(
+                "family {}'s height {} is not on the menu",
+                t.family, t.height
+            ));
+        }
+        if i > 0 && traces.delegations[i - 1].family >= t.family {
+            return Err("the delegation buffers are not in ascending family order".into());
+        }
+        if t.words.len() != width {
+            return Err(format!(
+                "{}'s frame is {} words, and its buffer holds {}",
+                program::family_name(t.family),
+                width,
+                t.words.len()
+            ));
+        }
+        let columns_agree = t.base.len() == n
+            && t.words.iter().all(|q| {
+                q.addr.len() == n
+                    && q.read_ts.len() == n
+                    && q.read_value.len() == n
+                    && q.write_value.len() == n
+            });
+        if !columns_agree {
+            return Err(format!("family {}'s columns differ in length", t.family));
+        }
+        for r in 0..n {
+            let base = t.base[r];
+            for (j, q) in t.words.iter().enumerate() {
+                if q.addr[r] as u64 != base as u64 + 4 * j as u64 {
+                    return Err(format!(
+                        "{} invocation {r}: frame word {j} is at {:#x}, not {:#x}",
+                        program::family_name(t.family),
+                        q.addr[r],
+                        base as u64 + 4 * j as u64
+                    ));
+                }
+            }
+            invocations.push((t.cycle[r], t, r));
+        }
+    }
+    invocations.sort_by_key(|(cycle, _, _)| *cycle);
+    if invocations.windows(2).any(|w| w[0].0 == w[1].0) {
+        return Err("two delegation invocations claim one cycle".into());
+    }
+
     consistent(traces, profile)?;
 
     let mut rows: Vec<Row> = traces
@@ -530,6 +648,12 @@ fn check_parts(
         .any(|(i, row)| row.cycle != i as u64 + 1)
     {
         return Err("the rows' cycles are not 1 to their count, each once".into());
+    }
+    if invocations
+        .last()
+        .is_some_and(|(c, _, _)| *c > rows.len() as u64)
+    {
+        return Err("a delegation invocation claims a cycle the execution never ran".into());
     }
 
     for e in events {
@@ -549,6 +673,7 @@ fn check_parts(
     }
 
     let mut next = 0usize;
+    let mut pending = invocations.iter().peekable();
     for row in &rows {
         let base = memory::TS_STEP * row.cycle;
         let pc = MemoryEvent {
@@ -569,7 +694,27 @@ fn check_parts(
                 write_value: q.write_value,
             })
         });
-        for want in std::iter::once(pc).chain(queries) {
+        // An invocation's frame accesses ride the requesting cycle, at slot
+        // `FRAME_DELTA`, so they follow the pc query and precede the row's
+        // roles — the log is in timestamp order
+        // (`docs/spec/delegation.md` §4.1).
+        let mut frame: Vec<MemoryEvent> = Vec::new();
+        if pending.peek().is_some_and(|(c, _, _)| *c == row.cycle) {
+            let (_, trace, r) = pending.next().expect("peeked");
+            frame = trace
+                .words
+                .iter()
+                .map(|q| MemoryEvent {
+                    space: AddressSpace::Ram,
+                    addr: q.addr[*r],
+                    ts: base + constants::delegation::FRAME_DELTA,
+                    read_ts: q.read_ts[*r],
+                    read_value: q.read_value[*r],
+                    write_value: q.write_value[*r],
+                })
+                .collect();
+        }
+        for want in std::iter::once(pc).chain(frame).chain(queries) {
             if events.get(next) != Some(&want) {
                 return Err(format!(
                     "the log disagrees with the row of cycle {} at event {next}",
@@ -590,12 +735,12 @@ fn check_parts(
 
 /// The profile counts exactly the buffers' families, in order, row for row.
 fn consistent(traces: &FamilyTraces, profile: &CycleProfile) -> Result<(), String> {
-    let agree = traces.families.len() == profile.counts.len()
-        && traces
-            .families
+    let counts = traces.row_counts();
+    let agree = counts.len() == profile.counts.len()
+        && counts
             .iter()
             .zip(&profile.counts)
-            .all(|(t, (f, n))| t.family == *f && t.len() as u64 == *n);
+            .all(|((f, n), (pf, pn))| f == pf && n == pn);
     if agree {
         Ok(())
     } else {
@@ -660,11 +805,12 @@ mod tests {
             pc: 0x1_0000,
             next_pc: 0x1_0004,
             present: 0,
-            queries: [Query::ABSENT; 7],
+            queries: [Query::ABSENT; 8],
         });
         TraceArchive::from_execution(
             FamilyTraces {
                 families: vec![trace],
+                delegations: Vec::new(),
             },
             log,
             CycleProfile {
@@ -841,8 +987,12 @@ mod tests {
                 "differ in length",
                 post(|a| a.traces.families[0].pc.push(0), None),
             ),
+            // Bit 7 is `Role::Delegate`, a real role since S21, so a row
+            // claiming it is not refused for naming a role that does not exist
+            // — the mask is full — but for claiming a query the log has no
+            // event for.
             (
-                "role that does not exist",
+                "the log disagrees with the row",
                 post(|a| a.traces.families[0].present[0] = 0x80, None),
             ),
             (

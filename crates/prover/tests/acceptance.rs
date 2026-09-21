@@ -126,11 +126,15 @@ fn a1_the_tiny_guest_proves_and_both_shards_verify() {
         assert_eq!(proof.to_bytes().len(), proof_bytes(a));
     }
     let [init, add] = [&proofs[0], &proofs[1]];
-    assert_eq!(add.to_bytes().len(), 57_100);
+    // S21 moved all four: the frame took its eighth query (`deleg`), which
+    // widened the base layer by 19 columns, added two timestamp obligations,
+    // pushed that tree from 16 leaves to 32 and so the circuit from five
+    // row-wise gate lists to six (`docs/spec/constraint-manifest.md` §1.2).
+    assert_eq!(add.to_bytes().len(), 62_260);
     assert_eq!(init.to_bytes().len(), 20_524);
-    assert_eq!(add.gkr.layers.len(), 25);
+    assert_eq!(add.gkr.layers.len(), 26);
     assert_eq!(add.gkr.layers[0].rounds.len(), 20);
-    assert_eq!(add.gkr.layers[0].final_evals.len(), 36 + 31 + 7);
+    assert_eq!(add.gkr.layers[0].final_evals.len(), 41 + 33 + 7);
 }
 
 // ---------------------------------------------------------------------------

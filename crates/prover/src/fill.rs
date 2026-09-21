@@ -12,12 +12,13 @@ use constants::extra_mask::mem_word as kind_mem;
 use constants::extra_mask::mul_div as md;
 use constants::extra_mask::shift_bitwise as sb;
 use constants::extra_mask::system_code;
-use constants::{ecall, family, memory};
+use constants::{delegation, ecall, family, guest_memory, keccak, memory};
 use constraints::add_sub::{
-    DECODED, IS_ECALL, IS_FENCE, KINDS, NEXT_PC_HI, PC_WRAP, RD_HI, TABLE_WIDTH, WRAP,
+    DECODED, IS_ECALL, IS_FENCE, IS_KECCAK, KINDS, NEXT_PC_HI, PC_WRAP, RD_HI, TABLE_WIDTH, WRAP,
 };
 use constraints::atomics as at_circuit;
 use constraints::jump_branch_slt as jbs_circuit;
+use constraints::keccak as kec_circuit;
 use constraints::mem_subword as ms_circuit;
 use constraints::mem_word as mw_circuit;
 use constraints::memory::{frame_queries, rd_selected};
@@ -61,8 +62,115 @@ pub fn family_fill(family: FamilyId) -> Option<Fill> {
         family::MEM_SUBWORD => Some(mem_subword),
         family::ATOMICS => Some(atomics),
         family::INIT_TEARDOWN | family::ZERO_WINDOWS => Some(window),
+        family::KECCAK_F => Some(keccak_f),
         _ => None,
     }
+}
+
+/// A `KECCAK_F` shard, `docs/spec/delegation.md` §6.1: the delegation buffer's
+/// invocations, one a row, with the frame's 50 word queries, the input state's
+/// 1600 bits, every read's 38 gap bits and the frame pointer's two
+/// decompositions.
+///
+/// The words come from the buffer, which the tracer filled from the log, so
+/// this fill does **not** rerun the permutation: what it writes is what the
+/// execution did, and the circuit is what says that was keccak-f. Padding rows
+/// are zero in every column, which is the artifact's padding row.
+fn keccak_f(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    let fam = family::KECCAK_F;
+    let trace = src
+        .archive
+        .family_traces()
+        .delegation(fam)
+        .ok_or("the archive has no KECCAK_F buffer")?;
+    let h = src.height;
+    let start = src.index as usize * h;
+    let end = (start + h).min(trace.len());
+    let rows = start..end;
+
+    let mut out: Vec<(PolyAddress, MultilinearPoly)> = Vec::new();
+    let cycles: Vec<Fr> = rows.clone().map(|r| Fr::from_u64(trace.cycle[r])).collect();
+    out.push((kec_circuit::CYCLE, fr_column(cycles, h)));
+    out.push((
+        kec_circuit::LIVE,
+        u32_column(rows.clone().map(|_| 1).collect(), h),
+    ));
+    out.push((
+        kec_circuit::BASE,
+        u32_column(rows.clone().map(|r| trace.base[r]).collect(), h),
+    ));
+    // The value the request wrote back on its mirror query. Free on both
+    // sides, and 0 on both in an honest fill (`docs/spec/delegation.md` §5.2).
+    out.push((kec_circuit::ANCHOR_VALUE, u32_column(Vec::new(), h)));
+
+    for j in 0..keccak::FRAME_WORDS {
+        let words = &trace.words[j];
+        for (field, values) in [
+            (
+                kec_circuit::WORD_ADDR,
+                rows.clone().map(|r| words.addr[r]).collect::<Vec<u32>>(),
+            ),
+            (
+                kec_circuit::WORD_READ_VALUE,
+                rows.clone().map(|r| words.read_value[r]).collect(),
+            ),
+            (
+                kec_circuit::WORD_WRITE_VALUE,
+                rows.clone().map(|r| words.write_value[r]).collect(),
+            ),
+        ] {
+            out.push((kec_circuit::word(j, field), u32_column(values, h)));
+        }
+        let read_ts: Vec<Fr> = rows
+            .clone()
+            .map(|r| Fr::from_u64(words.read_ts[r]))
+            .collect();
+        out.push((
+            kec_circuit::word(j, kec_circuit::WORD_READ_TS),
+            fr_column(read_ts, h),
+        ));
+        // `gap = 4·cycle + Δ − read_ts − 1`, as 38 bits.
+        for bit in 0..memory::TS_BITS as usize {
+            let values: Vec<u32> = rows
+                .clone()
+                .map(|r| {
+                    let ts = memory::TS_STEP * trace.cycle[r] + delegation::FRAME_DELTA;
+                    let gap = ts - words.read_ts[r] - 1;
+                    ((gap >> bit) & 1) as u32
+                })
+                .collect();
+            out.push((kec_circuit::gap_bit(j, bit), u32_column(values, h)));
+        }
+    }
+
+    // The state's bits: frame word `2i + half` is lane `i`'s half, so bit `t`
+    // of word `j` is state bit `64·(j/2) + 32·(j%2) + t`.
+    for b in 0..keccak::STATE_BITS {
+        let (j, t) = (2 * (b / 64) + (b % 64) / 32, b % 32);
+        let values: Vec<u32> = rows
+            .clone()
+            .map(|r| (trace.words[j].read_value[r] >> t) & 1)
+            .collect();
+        out.push((kec_circuit::in_bit(b), u32_column(values, h)));
+    }
+    for bit in 0..29 {
+        let values: Vec<u32> = rows
+            .clone()
+            .map(|r| (((trace.base[r] - guest_memory::RAM_ORIGIN) / 4) >> bit) & 1)
+            .collect();
+        out.push((kec_circuit::base_low_bit(bit), u32_column(values, h)));
+    }
+    for bit in 0..31 {
+        let values: Vec<u32> = rows
+            .clone()
+            .map(|r| {
+                let room = (1u64 << 31) - keccak::STATE_BYTES as u64 - trace.base[r] as u64;
+                ((room >> bit) & 1) as u32
+            })
+            .collect();
+        out.push((kec_circuit::base_room_bit(bit), u32_column(values, h)));
+    }
+    Ok(out)
 }
 
 /// A RAM window shard: `trace::build_init_teardown_columns` over its window,
@@ -131,6 +239,7 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
     let mut decoded: [Vec<u32>; 6] = Default::default();
     let mut kinds: [Vec<u32>; 6] = Default::default();
     let (mut is_ecall, mut is_fence, mut wrap) = (Vec::new(), Vec::new(), Vec::new());
+    let mut is_keccak: Vec<u32> = Vec::new();
     let (mut sel, mut rd_hi, mut next_pc_hi) = (Vec::new(), Vec::new(), Vec::new());
     for r in start..end {
         let row = trace.row(r);
@@ -149,7 +258,7 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
         let read = |role: Role| row.query(role).map_or(0, |q| q.read_value);
         let (a, b) = (read(Role::Rs1), read(Role::Rs2));
         let bit = mask.trailing_zeros();
-        let (mut ecall_row, mut fence_row) = (0, 0);
+        let (mut ecall_row, mut fence_row, mut keccak_row) = (0, 0, 0);
         let (value, carry) = match bit {
             kind::ADD => add(a, b),
             kind::ADDI => add(a, imm),
@@ -167,9 +276,16 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
                     ecall_row = 1;
                     (read(Role::Rd), 0)
                 }
+                // A delegation request: it writes no register, so its
+                // `rd_selected` is 0, and its `next_pc` is the fall-through —
+                // it is not an exit (`docs/spec/delegation.md` §5.2).
+                system_code::ECALL if program::delegation_family(a).is_some() => {
+                    keccak_row = 1;
+                    (0, 0)
+                }
                 system_code::ECALL => {
                     return Err(format!(
-                        "cycle {} calls ecall {a}, and S16 proves EXIT alone",
+                        "cycle {} calls ecall {a}, which no family proves",
                         row.cycle
                     ))
                 }
@@ -203,7 +319,8 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
         for (k, column) in kinds.iter_mut().enumerate() {
             column.push((k as u32 == bit) as u32);
         }
-        is_ecall.push(ecall_row);
+        is_ecall.push(ecall_row | keccak_row);
+        is_keccak.push(keccak_row);
         is_fence.push(fence_row);
         wrap.push(carry);
         sel.push(value);
@@ -221,6 +338,7 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
     }
     out.push((IS_ECALL, u32_column(is_ecall, h)));
     out.push((IS_FENCE, u32_column(is_fence, h)));
+    out.push((IS_KECCAK, u32_column(is_keccak, h)));
     out.push((WRAP, u32_column(wrap, h)));
     out.push((RD_HI, u32_column(rd_hi, h)));
     out.push((PC_WRAP, u32_column(Vec::new(), h)));

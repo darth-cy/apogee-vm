@@ -7,8 +7,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use constraints::memory::{
-    frame_queries, gap_hi, ARG1, ARG2, FRAME_DELTA, FRAME_NAMES, FRAME_SPACE, LOAD, PC, RAM, RD,
-    RS1, RS2,
+    frame_queries, gap_hi, ARG1, ARG2, DELEG, FRAME_DELTA, FRAME_NAMES, FRAME_SPACE, LOAD, PC, RAM,
+    RD, RS1, RS2,
 };
 use constraints::PolyAddress;
 use field::Fr;
@@ -17,12 +17,19 @@ use loader::load_elf;
 use program::row_kind;
 use trace::{
     build_boundary_finals, build_frame_witness, build_init_teardown_columns, build_memory_columns,
-    AddressSpace, MemoryEventLog, ROLES,
+    AddressSpace, MemoryEventLog, Role, ROLES,
 };
 
 /// `docs/spec/memory.md` §2.1: query 0 is the pc query, at `PC` and slot 0,
-/// and queries 1–7 are `ROLES` in order, each at its role's space and slot and
+/// and queries 1–8 are `ROLES` in order, each at its role's space and slot and
 /// named after it. Kills a frame table that drifts from the trace's roles.
+///
+/// S21's eighth role, `Role::Delegate`, is the one whose columns are not its
+/// own name lowercased: the frame spells them `deleg_*`, as
+/// `constraints::memory::DELEG` and the committed artifacts do
+/// (`docs/spec/delegation.md` §5.1). That exception is written out here
+/// rather than derived, so a role renamed on one side of the table alone
+/// still fails.
 #[test]
 fn the_frame_table_is_the_pc_query_then_the_roles() {
     assert_eq!(FRAME_SPACE.len(), 1 + ROLES.len());
@@ -31,7 +38,10 @@ fn the_frame_table_is_the_pc_query_then_the_roles() {
         (AddressSpace::Pc.tag(), 0, "pc")
     );
     for (i, role) in ROLES.iter().enumerate() {
-        let name = format!("{role:?}").to_lowercase();
+        let name = match role {
+            Role::Delegate => "deleg".to_string(),
+            _ => format!("{role:?}").to_lowercase(),
+        };
         assert_eq!(
             (FRAME_SPACE[1 + i], FRAME_DELTA[1 + i], FRAME_NAMES[1 + i]),
             (role.space().tag(), role.delta(), name.as_str()),
@@ -229,13 +239,17 @@ fn every_instruction() -> Vec<Instr> {
 /// store's or an atomic's at slot 3. An ecall's own row reads `a7`, `a0`, `a1`
 /// and `a2` and writes `a0`, and each of its transfer rows moves one RAM word,
 /// so its family needs both; its register fields are not encoded, so
-/// `fields()` says nothing about it. `ebreak` is a fatal guest error and has
-/// no row.
+/// `fields()` says nothing about it. Since S21 an ecall row may also carry
+/// `DELEG`, the delegation request's mirror query at slot 3 in the delegation
+/// family's own address space, whose address is the frame base the row read
+/// from `a0` (`docs/spec/delegation.md` §5.1) — a delegation call is an
+/// ecall, so it is this same variant and its family needs that query too.
+/// `ebreak` is a fatal guest error and has no row.
 fn queries_of(instr: &Instr) -> Vec<usize> {
     use Instr::*;
     match instr {
         Ebreak => return Vec::new(),
-        Ecall => return vec![PC, RS1, RS2, ARG1, ARG2, RAM, RD],
+        Ecall => return vec![PC, RS1, RS2, ARG1, ARG2, RAM, RD, DELEG],
         _ => {}
     }
     let fields = instr.fields();
@@ -292,6 +306,10 @@ fn every_familys_frame_is_exactly_its_instructions_queries() {
         let (family, _) = row_kind(&instr);
         union.entry(family).or_default().extend(queries_of(&instr));
     }
+    // Seven of `constants::family`'s ten. The two init families run no cycles
+    // and no instruction routes to them, and `KECCAK_F` is invoked rather than
+    // decoded, so no instruction word names it either
+    // (`docs/spec/delegation.md` §1).
     assert_eq!(
         union.len(),
         7,
@@ -309,6 +327,18 @@ fn every_familys_frame_is_exactly_its_instructions_queries() {
     // `ebreak` is the one instruction with no row, so it contributes nothing;
     // if it ever did, the union above would have caught it in its family.
     assert!(queries_of(&Instr::Ebreak).is_empty());
+}
+
+/// The delegation family is the third family with no query-table frame, and it
+/// has none for its own reason: its rows are invocations, and its frame is 50
+/// words at fixed offsets from one base pointer rather than a subset of the
+/// query table (`docs/spec/delegation.md` §4). Asking `frame_queries` for it is
+/// a caller that took it for an execution family, so it refuses loudly rather
+/// than answering with the request side's list.
+#[test]
+#[should_panic(expected = "is invoked, not decoded")]
+fn the_delegation_family_has_no_query_table_frame() {
+    frame_queries(constants::family::KECCAK_F);
 }
 
 /// `docs/spec/memory.md` §2.4's high chunk at the chunk's edge. A hand-written

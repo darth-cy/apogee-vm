@@ -4,7 +4,8 @@
 The reference emulator — RV32IMAC on one hart over a `ProgramImage` — its ecall
 dispatch, the tracing path that fills `crates/trace`'s structures, and the QEMU
 differential harness. **`docs/spec/execution-trace.md` is the convention the trace
-follows; `docs/spec/ecall-abi.md` is the ABI the ecalls implement.**
+follows; `docs/spec/ecall-abi.md` is the ABI the ecalls implement**; and, since S21,
+**`docs/spec/delegation.md`** for what a delegation ecall does.
 
 ```rust
 pub struct GuestIo { pub input: Vec<u8>, pub hint: Vec<u8> }
@@ -12,11 +13,17 @@ pub struct Execution { pub regs: [u32; 32], pub exit_code: i32, pub cycle_count:
                        pub io: IoStreams, pub stderr: Vec<u8> }
 pub enum EmuError { NotAnInstruction { pc }, IllegalInstruction { pc, word }, Ebreak { pc },
                     Misaligned { pc, addr, width }, OutOfBounds { pc, addr },
-                    ClockOverflow { cycle } }                                // + Display
+                    ClockOverflow { cycle },
+                    DelegationFamilyAbsent { pc, number } }                  // + Display
 
 pub fn run(image: &ProgramImage, io: &GuestIo) -> Result<Execution, EmuError>;
 pub fn trace_run(image: &ProgramImage, io: &GuestIo, tables: &DecodedTables, config: &VmConfig)
     -> Result<(FamilyTraces, MemoryEventLog, CycleProfile, Execution), EmuError>;
+
+// S21: the reference permutation, and the frame's two readings of it.
+pub fn keccak_f(state: &mut [u64; 25]);
+pub fn lanes_of(words: &[u32; 50]) -> [u64; 25];
+pub fn words_of(lanes: &[u64; 25]) -> [u32; 50];
 
 pub mod qemu {
     pub const QEMU_FLAGS: [&str; 3];                   // -one-insn-per-tb -d nochain,cpu
@@ -71,6 +78,23 @@ or rebuilding the streams from the log.
   `-ENOSYS`, so its frame will not change when its circuit lands. A number the table does
   not list reads none. The emulator spells no ABI number itself;
   `crates/constants/tests/ecall_abi.rs` checks that.
+- **A delegation ecall performs the permutation and answers 0** (S21). The arm keys on
+  `program::delegation_family(n)`, never on a literal: it reads `a0` as the frame base,
+  refuses a misaligned or out-of-window one as the ordinary `Misaligned` / `OutOfBounds`
+  fatal errors, permutes the 50 words in place, logs the 50 RAM events at
+  `constants::delegation::FRAME_DELTA` — **right after the pc query and before the roles**,
+  which is what makes `(RAM, 0)` a pair no role takes — stages the mirror query
+  (`Role::Delegate`, at the base, reading the zero tuple), routes an `Invocation` to the
+  family's `DelegationTrace`, and writes 0 into `a0` with `next_pc` the fall-through. A
+  program whose `VmConfig` lacks the family it calls is `DelegationFamilyAbsent`, loudly:
+  the executor and the preprocessor disagreeing about the ABI is not something to answer
+  `-ENOSYS` to. An executor *without* the circuit — `qemu-riscv32` — answers `-ENOSYS` and
+  the guest's software fallback runs, which is the whole of acceptance 3.
+- **`keccak_f` is the one permutation in the repository** and the emulator owns it, because
+  the emulator is what executes it; the circuit's forward pass is checked against it and
+  `tests/keccak.rs` checks it against `tiny-keccak` on all 1,600 single-bit states. The
+  guest SDK's software fallback is a second implementation by necessity — it is `no_std`
+  guest code — and `guests/keccak-test` is what holds the two to the same digests.
 
 ## The QEMU differential
 `qemu-riscv32 -one-insn-per-tb -d nochain,cpu -D <log> <elf>`, fd 0 and fd 3 regular
@@ -105,8 +129,9 @@ docker run --rm -v "$PWD":/w -w /w -e CARGO_TARGET_DIR=/tmp/t rust:latest bash -
 | File | What |
 | --- | --- |
 | `src/lib.rs` (unit) | the last cycle on the 38-bit clock runs and the next is `ClockOverflow` |
+| `tests/keccak.rs` | `keccak_f` against `tiny-keccak`: the all-zero state, the all-ones state, **all 1,600 single-bit states**, a random walk, and `lanes_of`/`words_of` round-tripping. 7 tests |
 | `src/qemu.rs` (unit) | a real log parses; the entry rule is x2's and ends at its first write; a perturbed register is reported where it is; the whitelist is sc.w and bounded, and its exemption ends at the next write of rd |
-| `tests/guests.rs` | the guests' host-computed answers (fib, heap, atomics, rvc-dense), acceptance 10 (echo's `-ENOSYS` fallback computes the S02 permutation), orderbook's advice invariance, `opcodes` executes all 58 non-trapping mnemonics and every instruction of its compressed block, acceptance 11 (seven misaligned kinds, both paths), `run` == `trace_run`, the recorded fd 0 stream is what the guest consumed |
+| `tests/guests.rs` | the guests' host-computed answers (fib, heap, atomics, rvc-dense), acceptance 10 (echo's `-ENOSYS` fallback computes the S02 permutation), orderbook's advice invariance, `opcodes` executes all 58 non-trapping mnemonics and every instruction of its compressed block, acceptance 11 (seven misaligned kinds, both paths), `run` == `trace_run`, the recorded fd 0 stream is what the guest consumed; and **S21's acceptance 3**: the six digests `guests/keccak-test` checks itself against, re-derived from `tiny-keccak` and read out of the guest's own source so a stale literal cannot pass, and both keccak guests run to their exit statuses under the delegation ecall |
 | `tests/trace.rs` | acceptance 3 (balance, heap traffic included), 4 (a corrupted RAM read, register write mid-chain, pc write and gap, a forged initial value, and a stale read, each named), 5 (the four-slot clock over every event; `amoadd.w` fills all four slots), 6 (routing), the frame table — roles and slots — restated from the spec and checked on every row, the halting sentinel (the exit row alone writes `HALT_PC`, as the last pc write; every other pc write even), ecall transfers with every byte held to the recorded streams, every ecall answering as the ABI says (must-be-exact 2 without QEMU), the rows rebuilding the log exactly, `final_state`, and `trace::init_windows` (fib's stack window at 2^22, 2^20 and 2^16; every traced guest's list exactly its touched windows above 0 at every height, and passing `program::check_memory_windows`) |
 | `tests/archive.rs` | acceptance 7 (byte-identical round trip, hash-equal payloads, answers without re-execution, `io_digest`) and 8 (five phases, the timing section byte for byte, out-of-order refused by byte patch) |
 | `tests/differential.rs` | **`#[ignore]`d** — acceptance 1 over `opcodes`, `rvc-dense`, `fib`, `heap`, `atomics`; acceptance 2 (perturbed registers and pc caught at their instruction); `ebreak` at one pc in both |
