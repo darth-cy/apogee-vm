@@ -17,7 +17,7 @@ use program::{decode_program, ProgramParams};
 use test_support::{sha256, to_hex};
 
 /// Every guest with a committed ELF, in `guests/Cargo.toml`'s order.
-pub const GUESTS: [&str; 14] = [
+pub const GUESTS: [&str; 17] = [
     "fib",
     "echo",
     "rvc-dense",
@@ -32,6 +32,17 @@ pub const GUESTS: [&str; 14] = [
     "control",
     "alu",
     "mem",
+    "shards",
+    "keccak-test",
+    "keccak-unused",
+];
+
+/// The guests whose image declares a delegation family, and which
+/// (`docs/spec/delegation.md` §7). Every other guest declares none, which is
+/// what `tests/delegation.rs` holds them to.
+pub const DECLARING_GUESTS: [(&str, u32); 2] = [
+    ("keccak-test", family::KECCAK_F),
+    ("keccak-unused", family::KECCAK_F),
 ];
 
 /// This crate's committed fixtures and their digests. Refresh with

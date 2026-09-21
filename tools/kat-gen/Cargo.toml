@@ -34,3 +34,10 @@ ark-ec.workspace = true
 ark-ff.workspace = true
 ark-poly.workspace = true
 num-bigint.workspace = true
+
+[dev-dependencies]
+# The reference keccak, for the example that derives `guests/keccak-test`'s
+# expected digests. Test/tool only, as every oracle in this repository is.
+tiny-keccak.workspace = true
+emulator.workspace = true
+trace.workspace = true

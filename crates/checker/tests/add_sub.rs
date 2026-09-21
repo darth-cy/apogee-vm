@@ -31,7 +31,7 @@ const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../constraints/tests/vectors/add_sub.bin"
 );
-const FIXTURE_SHA256: &str = "4c79713708774c2cb0c8a58504a95d43da02b9c1bb9e68f6e9c60016c2ea114b";
+const FIXTURE_SHA256: &str = "3df1bda9415702ddd2e57351658a7424ba839c34ce1d3271d9b42fa02114e518";
 
 fn artifact() -> CircuitArtifact {
     add_sub::artifact(VARS)
@@ -383,7 +383,7 @@ fn the_circuit_is_the_fixture_and_keeps_every_rule() {
 #[test]
 fn the_layout_and_the_gates_are_the_specs() {
     let a = artifact();
-    assert_eq!(a.memory.len(), 36);
+    assert_eq!(a.memory.len(), 41);
     let mut witness = names(&[
         "pc_gap_hi",
         "rs1_gap_hi",
@@ -392,6 +392,7 @@ fn the_layout_and_the_gates_are_the_specs() {
         "arg2_gap_hi",
         "ram_gap_hi",
         "rd_gap_hi",
+        "deleg_gap_hi",
         "rd_inv",
         "rd_is_zero",
         "rd_selected",
@@ -409,6 +410,7 @@ fn the_layout_and_the_gates_are_the_specs() {
         "kind_lui",
         "is_ecall",
         "is_fence",
+        "is_keccak",
         "wrap",
         "rd_hi",
         "pc_wrap",
@@ -448,6 +450,7 @@ fn the_layout_and_the_gates_are_the_specs() {
         "arg2_mask_boolean",
         "ram_mask_boolean",
         "rd_mask_boolean",
+        "deleg_mask_boolean",
         "rs1_writes_back",
         "rs2_writes_back",
         "arg1_writes_back",
@@ -470,13 +473,17 @@ fn the_layout_and_the_gates_are_the_specs() {
         "system_split",
         "ecall_code",
         "fence_code",
+        "is_keccak_boolean",
+        "keccak_is_an_ecall",
         "ecall_is_exit",
+        "keccak_number",
         "rs1_mask_rule",
         "rs2_mask_rule",
         "arg1_mask_rule",
         "arg2_mask_rule",
         "ram_mask_rule",
         "rd_mask_rule",
+        "deleg_mask_rule",
         "rs1_addr_rule",
         "rs2_addr_rule",
         "rd_addr_rule",
@@ -486,6 +493,10 @@ fn the_layout_and_the_gates_are_the_specs() {
         "sub",
         "lui",
         "exit_status",
+        "deleg_writes_no_register",
+        "deleg_read_ts_zero",
+        "deleg_read_value_zero",
+        "deleg_addr_rule",
         "wrap_boolean",
         "pc_wrap_boolean",
         "next_pc_rule",
@@ -497,9 +508,9 @@ fn the_layout_and_the_gates_are_the_specs() {
         .iter()
         .map(|l| (l.name.clone(), l.channel))
         .collect();
-    assert_eq!(lookups.len(), 19);
+    assert_eq!(lookups.len(), 21);
     assert_eq!(
-        lookups[14..],
+        lookups[16..],
         [
             ("rd_hi_range".to_string(), lookup_channel::RANGE16),
             ("rd_lo_range".to_string(), lookup_channel::RANGE16),
@@ -508,13 +519,13 @@ fn the_layout_and_the_gates_are_the_specs() {
             ("decode_row".to_string(), lookup_channel::DECODER),
         ]
     );
-    assert!(lookups[..14]
+    assert!(lookups[..16]
         .iter()
         .all(|(_, c)| *c == lookup_channel::TIMESTAMP));
     // The frame's gap obligations are each under their own query's mask; the
     // family's five are under the row's.
     let pc_mask = PolyAddress::Memory(1);
-    for (at, l) in a.lookups[..14].iter().enumerate() {
+    for (at, l) in a.lookups[..16].iter().enumerate() {
         assert_eq!(
             l.selector,
             PolyAddress::Memory(1 + 5 * (at as u32 / 2)),
@@ -523,11 +534,11 @@ fn the_layout_and_the_gates_are_the_specs() {
         );
     }
     assert!(
-        a.lookups[14..].iter().all(|l| l.selector == pc_mask),
+        a.lookups[16..].iter().all(|l| l.selector == pc_mask),
         "every new obligation is the row's"
     );
 
-    let mult = |i: u32| PolyAddress::Witness(28 + i);
+    let mult = |i: u32| PolyAddress::Witness(30 + i);
     assert_eq!(
         add_sub::channels(),
         vec![
@@ -549,8 +560,9 @@ fn the_layout_and_the_gates_are_the_specs() {
         ]
     );
     // Four product-tree leaves a side beside the frame's, then one fraction
-    // tree per channel: 16 + 32 + 16 + 4.
-    assert_eq!(a.layers[0].width, 68);
+    // tree per channel. The frame is eight queries since S21, so its product
+    // trees are 16 a side: 32 + 36 + 28 + 4.
+    assert_eq!(a.layers[0].width, 100);
     assert_eq!(a.outputs.len(), 2 + 2 * 3);
 }
 

@@ -5,7 +5,7 @@
 //! `crates/checker` enforces the four laws a second time with code of its own;
 //! nothing here is shared with it.
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec;
@@ -150,14 +150,17 @@ fn nothing_dropped(a: &CircuitArtifact, shapes: &[(u32, u32)]) -> Result<(), Con
         if k == 0 {
             continue;
         }
-        let mut read: Vec<PolyAddress> = Vec::new();
+        // A set, not a list: a wide layer is read by as many gates as it has
+        // columns, and membership by scan is quadratic in a circuit whose
+        // layers are thousands of columns wide.
+        let mut read: BTreeSet<PolyAddress> = BTreeSet::new();
         for gate in &gates {
             for (monomial, _) in layered.expand(gate) {
                 for symbol in monomial {
                     if let Symbol::Column(PolyAddress::Scratch(s))
                     | Symbol::Child(PolyAddress::Scratch(s), _) = symbol
                     {
-                        read.push(a.scratch[s as usize].address);
+                        read.insert(a.scratch[s as usize].address);
                     }
                 }
             }
@@ -673,7 +676,9 @@ fn relations(a: &CircuitArtifact, shapes: &[(u32, u32)]) -> Result<(), Constrain
             a.scratch.len()
         )));
     }
-    let mut seen: Vec<PolyAddress> = Vec::new();
+    // A set, for the same reason: the bijection is over every inner column of
+    // the circuit, and a scan per slot is quadratic in that count.
+    let mut seen: BTreeSet<PolyAddress> = BTreeSet::new();
     for (i, slot) in a.scratch.iter().enumerate() {
         let in_range = match slot.address {
             PolyAddress::Inner { layer, offset } => {
@@ -681,13 +686,12 @@ fn relations(a: &CircuitArtifact, shapes: &[(u32, u32)]) -> Result<(), Constrain
             }
             _ => false,
         };
-        if !in_range || seen.contains(&slot.address) {
+        if !in_range || !seen.insert(slot.address) {
             return Err(malformed(format!(
                 "scratch[{i}] is {}, which is not a fresh inner-layer column",
                 slot.address
             )));
         }
-        seen.push(slot.address);
     }
     Ok(())
 }

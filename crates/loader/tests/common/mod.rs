@@ -29,43 +29,43 @@ use test_support::{sha256, to_hex};
 pub const PINS: [(&str, &str); 18] = [
     (
         "fib.elf",
-        "e163a65249fff123742588a3bcb44e09b72f89bbbed80fb406baf3c0f9b7622d",
+        "5c73ceb44f873c61ec5b03633aa477d67512e63f0085245cafa4e46e1f3d609c",
     ),
     (
         "echo.elf",
-        "aaca0ff1750df7aaf766266488690b2b29ec6067f36add46cea87323d76207a8",
+        "f748ee504e4de8235ba6ba4ea890b5bb84da0f536e7a1b89a08527aa3f028614",
     ),
     (
         "rvc-dense.elf",
-        "5963ed501d97ac52d2bd58b0e56a9f463d8c3e460d6ad02c4e71d84bf21f214d",
+        "14069a03b878f84ceea8fb00a9b763efef408e021b31dc0feb5df3fd3228fe58",
     ),
     (
         "amm.elf",
-        "c97742454c2728c740a7b31c167343faa55f0f44d2323cd4c3ef70ecb3ea0955",
+        "519ce4ab55391aa358913a57fca241d080d9c24f9cf6183358549899894dba34",
     ),
     (
         "orderbook.elf",
-        "db8e450603d1b579b60d81a7f21edaaf6470dd29b24723b541467988310a0397",
+        "54d41ef536180f5bb6db63bcf8ad0e580be9166549cc919e67004b35814e6d68",
     ),
     (
         "vault.elf",
-        "05d3ba4f0268422244bc8b27b665c5ef00412e843702cfdff9571bcc020a00e8",
+        "942afdc095949749e65cd745b281048e987e337412da055e6944967b803fda5a",
     ),
     (
         "atomics.elf",
-        "5761a4236b624cef6da5237116fc97d22a39c64b702f1018b88ffbe0c346c52f",
+        "3391e02e52f93525b5b01474a469b035d4c53b298d63e58d618891b33474070a",
     ),
     (
         "opcodes.elf",
-        "fc616d1ba21501af4781d16a91c4559bac1aecfa2e41211bad2042d665c0c9e6",
+        "8fa2f475840db13a185a51f109f1a2ccf795c72a54d118ec4d9fa64ccf48e450",
     ),
     (
         "heap.elf",
-        "10c63b99b12aebd74eb721a6c002010883ae695dfab9ea5b8878febdfb1ba167",
+        "e4373f6ad241bba8ee3aa79f0650323c4bb2d412456271caa3871bd1c3161c67",
     ),
     (
         "consistency.elf",
-        "7bdea84047995fda5f967297f7c6353e146f8bbbe7923908f9e06f884a6d4600",
+        "983b3b20f8144f289d7f80dff974805fcfdd3a6650c58e0b1fee0d5b3b398ad5",
     ),
     (
         "addsub.elf",
@@ -93,7 +93,7 @@ pub const PINS: [(&str, &str); 18] = [
     ),
     (
         "amm.objdump.txt",
-        "e282bbc7c1f8466b5f89d60ea761b5e844f62f98a5ba323e110a488f6b3bc38e",
+        "bb54985d4ded03480c628ae80372b072314b50400e0f3fa317e76e77db0a78e4",
     ),
     (
         "rvc-dense.nm.txt",

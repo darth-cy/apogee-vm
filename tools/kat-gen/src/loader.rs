@@ -16,7 +16,7 @@ use std::process::Command;
 use crate::write_vectors;
 
 /// The guest ELFs the loader tests read, and what each is for.
-pub const ELF_FIXTURES: [(&str, &str); 15] = [
+pub const ELF_FIXTURES: [(&str, &str); 17] = [
     (
         "fib",
         "real compiler output: the address and boundary oracle",
@@ -82,6 +82,16 @@ pub const ELF_FIXTURES: [(&str, &str); 15] = [
         "shards",
         "S20's guest: a counted loop of unrolled `add`s whose add/sub family \
          runs 1,064,970 cycles, so one execution is two shards of one family",
+    ),
+    (
+        "keccak-test",
+        "S21's guest: `guest_sdk::keccak256` over the sponge's six shapes, \
+         self-checking, and the one program whose image declares a delegation",
+    ),
+    (
+        "keccak-unused",
+        "S21's zero-shard fixture: it links the keccak shim, so its image \
+         declares the family, and never calls it",
     ),
 ];
 

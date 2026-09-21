@@ -17,9 +17,9 @@ use constants::{address_space, challenge_slot, family, lookup_channel, memory};
 use constraints::memory::{
     check_memory, family_frame_artifact, frame, frame_artifact, frame_queries, gap_hi,
     image_window_artifact, rd_inv, rd_is_zero, rd_selected, read_tuple, zero_window_artifact, ARG1,
-    ARG2, CYCLE, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE,
-    FRAME_DELTA, FRAME_NAMES, FRAME_QUERIES, FRAME_READ_ONLY, FRAME_SPACE, LOAD, PC, RAM, RD, RS1,
-    RS2,
+    ARG2, CYCLE, DELEG, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE,
+    FIELD_WRITE_VALUE, FRAME_DELTA, FRAME_NAMES, FRAME_QUERIES, FRAME_READ_ONLY, FRAME_SPACE, LOAD,
+    PC, RAM, RD, RS1, RS2,
 };
 use constraints::{
     CachedEntry, CircuitArtifact, Coeff, ConstraintError, EnforcingEntry, GateDef, LayerSpec,
@@ -30,7 +30,7 @@ use field::Fr;
 use std::collections::HashSet;
 use test_support::{sha256, to_hex};
 
-const FRAME_ALU_SHA256: &str = "48622aa5376f82bdffc501932772f7ac04ce0c8e4838513ff5b9db550470d289";
+const FRAME_ALU_SHA256: &str = "b16651f6def235bd51056b6508bd56c7c97a2e3a611427a1ac4270b8f98d4945";
 const FRAME_REG_SHA256: &str = "f94da36c6f7052acd10c36a3a0bd04ce09fe2419cdbfa046db4a58b1a716cbc0";
 const FRAME_MEM_SHA256: &str = "7a31fd867d4b5490821bcef24e356daf34d834a397efed8fa41b8e821b6fee6f";
 const FRAME_ATOMICS_SHA256: &str =
@@ -63,12 +63,12 @@ const FRAME_SHAPES: [(u32, &[usize], usize, usize, usize, usize, usize); 7] = [
     //  family                      queries                                w    M   W  side  lk  enf
     (
         family::ADD_SUB_LUI_AUIPC,
-        &[PC, RS1, RS2, ARG1, ARG2, RAM, RD],
-        36,
-        10,
+        &[PC, RS1, RS2, ARG1, ARG2, RAM, RD, DELEG],
+        41,
+        11,
         8,
-        14,
-        15,
+        16,
+        16,
     ),
     (
         family::JUMP_BRANCH_SLT,
@@ -318,23 +318,30 @@ fn the_read_tuples_parts_are_at_their_named_positions() {
     }
 }
 
-/// The query table itself, §2.1: eight entries, their names, address spaces
-/// and Δ, the five read-only queries, `rd` last, and `M[0]` the cycle. These
-/// are indexed by a query's *id*, never by its slot in a family.
+/// The query table itself, §2.1: nine entries, their names, address spaces and
+/// Δ, the five read-only queries, `rd` and then S21's `deleg` last, and `M[0]`
+/// the cycle. These are indexed by a query's *id*, never by its slot in a
+/// family.
+///
+/// `deleg` is a delegation request's mirror query
+/// (`docs/spec/delegation.md` §5.1): the eighth role, at slot 3 like `ram` and
+/// `rd`, in the delegation family's own address space, and read-write — the
+/// value it writes back is not the value it read.
 #[test]
 fn the_query_table_is_the_documents() {
-    assert_eq!(FRAME_QUERIES, 8);
+    assert_eq!(FRAME_QUERIES, 9);
     assert_eq!(
         FRAME_NAMES,
-        ["pc", "rs1", "rs2", "arg1", "arg2", "load", "ram", "rd"]
+        ["pc", "rs1", "rs2", "arg1", "arg2", "load", "ram", "rd", "deleg"]
     );
     assert_eq!(
-        [PC, RS1, RS2, ARG1, ARG2, LOAD, RAM, RD],
-        [0, 1, 2, 3, 4, 5, 6, 7]
+        [PC, RS1, RS2, ARG1, ARG2, LOAD, RAM, RD, DELEG],
+        [0, 1, 2, 3, 4, 5, 6, 7, 8]
     );
-    assert_eq!(FRAME_DELTA, [0, 1, 2, 2, 2, 2, 3, 3]);
+    assert_eq!(FRAME_DELTA, [0, 1, 2, 2, 2, 2, 3, 3, 3]);
     let (pc, reg, ram) = (address_space::PC, address_space::REG, address_space::RAM);
-    assert_eq!(FRAME_SPACE, [pc, reg, reg, reg, reg, ram, ram, reg]);
+    let del = address_space::DELEGATION_KECCAK_F;
+    assert_eq!(FRAME_SPACE, [pc, reg, reg, reg, reg, ram, ram, reg, del]);
     assert_eq!(FRAME_READ_ONLY, [RS1, RS2, ARG1, ARG2, LOAD]);
     assert_eq!(CYCLE, PolyAddress::Memory(0));
 }
@@ -444,11 +451,11 @@ fn the_frame_layout_is_the_documents() {
 
 /// The widest frame's layout written out once, undeduced, as the document's
 /// §2.1 reads it: `ADD_SUB_LUI_AUIPC` holds every query but `load`, so `rd`
-/// sits at slot 6 and its mask is `M[31]`, not the `M[36]` a frame of all
-/// eight queries would give it. Kills a layout that silently kept the table's
-/// width.
+/// sits at slot 6 and its mask is `M[31]`, not the `M[36]` a frame of all nine
+/// queries would give it, and S21's `deleg` follows at slot 7. Kills a layout
+/// that silently kept the table's width.
 #[test]
-fn the_widest_frame_is_seven_queries_with_rd_at_slot_six() {
+fn the_widest_frame_is_eight_queries_with_rd_at_slot_six() {
     let a = family_frame_artifact(family::ADD_SUB_LUI_AUIPC, 12);
     assert_eq!(
         a.memory,
@@ -489,12 +496,18 @@ fn the_widest_frame_is_seven_queries_with_rd_at_slot_six() {
             "rd_read_ts",
             "rd_read_value",
             "rd_write_value",
+            "deleg_mask",
+            "deleg_addr",
+            "deleg_read_ts",
+            "deleg_read_value",
+            "deleg_write_value",
         ]
     );
-    assert_eq!(a.memory.len(), 36);
+    assert_eq!(a.memory.len(), 41);
     assert_eq!(frame(0, FIELD_MASK), PolyAddress::Memory(1));
     assert_eq!(frame(6, FIELD_MASK), PolyAddress::Memory(31));
     assert_eq!(frame(6, FIELD_WRITE_VALUE), PolyAddress::Memory(35));
+    assert_eq!(frame(7, FIELD_MASK), PolyAddress::Memory(36));
     assert_eq!(
         a.witness,
         [
@@ -505,15 +518,16 @@ fn the_widest_frame_is_seven_queries_with_rd_at_slot_six() {
             "arg2_gap_hi",
             "ram_gap_hi",
             "rd_gap_hi",
+            "deleg_gap_hi",
             "rd_inv",
             "rd_is_zero",
             "rd_selected",
         ]
     );
-    assert_eq!(rd_inv(7), PolyAddress::Witness(7));
+    assert_eq!(rd_inv(8), PolyAddress::Witness(8));
 }
 
-/// The three families whose query count is not a power of two pad each side of
+/// The two families whose query count is not a power of two pad each side of
 /// gate list 0 up to one, with leaves that are literally the constant 1 — the
 /// product's identity — reading no column at all, named `<tree>_pad_<i>` after
 /// that side's real leaves, in the gate and in its relation alike. A family
@@ -531,7 +545,9 @@ fn the_pad_leaves_are_the_constant_one_and_read_nothing() {
         constant: Coeff::Literal(Fr::ONE),
     };
     for (id, pads) in [
-        (family::ADD_SUB_LUI_AUIPC, 1),
+        // The add/sub frame is eight queries since S21, a power of two, so it
+        // pays no pad at all; the other two still do.
+        (family::ADD_SUB_LUI_AUIPC, 0),
         (family::MEM_WORD, 2),
         (family::ATOMICS, 3),
     ] {

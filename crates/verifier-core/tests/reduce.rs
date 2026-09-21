@@ -582,3 +582,18 @@ fn the_statement_half_of_the_memory_argument_is_one_check_for_a_statement() {
         Err(memory("the statement's roots do not reconcile"))
     );
 }
+
+#[test]
+fn tmp_print_widths() {
+    for (f, v) in [(ADD, 20u32), (INIT, 16), (ZERO, 16), (JBS, 20)] {
+        let c = constraints::family_circuit(f, v).unwrap();
+        println!(
+            "family {f}: memory {} witness {} setup {} outputs {} depth {}",
+            c.artifact.memory.len(),
+            c.artifact.witness.len(),
+            c.artifact.setup.len(),
+            c.artifact.outputs.len(),
+            c.artifact.depth()
+        );
+    }
+}

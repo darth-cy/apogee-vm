@@ -15,7 +15,9 @@ mod lookup;
 mod memory;
 
 pub use archive::{IoStreams, Phase, PhaseTiming, TraceArchive, PHASES};
-pub use family::{FamilyTrace, FamilyTraces, Query, QueryColumns, Role, Row, ROLES};
+pub use family::{
+    DelegationTrace, FamilyTrace, FamilyTraces, Query, QueryColumns, Role, Row, ROLES,
+};
 pub use log::{AddressSpace, FinalValue, MemoryEvent, MemoryEventLog, SelfCheckError};
 pub use lookup::{build_multiplicities, check_multiplicities};
 pub use memory::{
@@ -26,17 +28,28 @@ use std::collections::BTreeSet;
 
 use program::{FamilyId, VmConfig};
 
-/// How many cycles each family ran: one count per family of the `VmConfig`,
-/// in its order, zero for a family the execution never reached. The counts
-/// sum to the execution's cycle count, transfer cycles included.
+/// How many rows each family filled: one count per family of the `VmConfig`,
+/// in its order, zero for a family the execution never reached.
+///
+/// A cycle-owning family's count is its cycles, transfer cycles included, and
+/// those counts sum to the execution's cycle count — [`CycleProfile::total`].
+/// A **delegation** family's count is its *invocations*, which are not cycles:
+/// they ride a requesting cycle that the add/sub family already counts
+/// (`docs/spec/delegation.md` §8), so they are outside that sum. Either way
+/// the count is what [`plan_shards`] divides by the family's height.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CycleProfile {
     pub counts: Vec<(FamilyId, u64)>,
 }
 
 impl CycleProfile {
+    /// The execution's cycle count: the cycle-owning families' counts alone.
     pub fn total(&self) -> u64 {
-        self.counts.iter().map(|(_, n)| n).sum()
+        self.counts
+            .iter()
+            .filter(|(f, _)| program::claims_pcs(*f))
+            .map(|(_, n)| n)
+            .sum()
     }
 }
 

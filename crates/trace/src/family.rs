@@ -29,11 +29,21 @@ pub enum Role {
     Ram,
     /// Slot 3, a register write: `rd`. On an ecall row, `a0`, the result.
     Rd,
+    /// Slot 3, a **delegation** request's mirror query (S21). Its address is
+    /// the frame base pointer the request handed over in `a0`, in the
+    /// delegation family's own address space; its read is the invocation's
+    /// answer tuple, stamped 0 (`docs/spec/delegation.md` §5). Only an ecall
+    /// row whose number is a delegation call has one.
+    Delegate,
 }
 
 /// Every role, in frozen order. A cycle's events are its pc query, then one
 /// query per role it has, in this order.
-pub const ROLES: [Role; 7] = [
+///
+/// Eight is the ceiling: `Row::present` is a `u8` with one bit per role, so a
+/// ninth role widens it, and that is a schema change
+/// (`docs/spec/execution-trace.md` §7). [`Role::Delegate`] took the last bit.
+pub const ROLES: [Role; 8] = [
     Role::Rs1,
     Role::Rs2,
     Role::Arg1,
@@ -41,6 +51,7 @@ pub const ROLES: [Role; 7] = [
     Role::Load,
     Role::Ram,
     Role::Rd,
+    Role::Delegate,
 ];
 
 impl Role {
@@ -49,14 +60,20 @@ impl Role {
         match self {
             Role::Rs1 => 1,
             Role::Rs2 | Role::Arg1 | Role::Arg2 | Role::Load => 2,
-            Role::Ram | Role::Rd => 3,
+            Role::Ram | Role::Rd | Role::Delegate => 3,
         }
     }
 
     /// The address space.
+    ///
+    /// [`Role::Delegate`]'s is a constant because S21 registers one delegation
+    /// family and a delegation family's anchor space *is* its type
+    /// (`constants::address_space`). A second delegation type makes this a
+    /// function of the row's ecall number, and this match is where that lands.
     pub fn space(self) -> AddressSpace {
         match self {
             Role::Load | Role::Ram => AddressSpace::Ram,
+            Role::Delegate => AddressSpace::KeccakF,
             _ => AddressSpace::Reg,
         }
     }
@@ -95,7 +112,7 @@ pub struct Row {
     pub pc: u32,
     pub next_pc: u32,
     pub present: u8,
-    pub queries: [Query; 7],
+    pub queries: [Query; 8],
 }
 
 impl Row {
@@ -131,7 +148,7 @@ pub struct FamilyTrace {
     pub next_pc: Vec<u32>,
     pub present: Vec<u8>,
     /// Indexed by `role as usize`.
-    pub queries: [QueryColumns; 7],
+    pub queries: [QueryColumns; 8],
 }
 
 impl FamilyTrace {
@@ -171,7 +188,7 @@ impl FamilyTrace {
 
     /// Row `i`, gathered back out of the columns.
     pub fn row(&self, i: usize) -> Row {
-        let mut queries = [Query::ABSENT; 7];
+        let mut queries = [Query::ABSENT; 8];
         for (q, columns) in queries.iter_mut().zip(&self.queries) {
             *q = Query {
                 addr: columns.addr[i],
@@ -190,16 +207,120 @@ impl FamilyTrace {
     }
 }
 
+/// One **delegation** family's rows: one per invocation, column-major.
+///
+/// A delegation family is invoked, never decoded, so a row is not a cycle: it
+/// is one call of the precompile, stamped with the cycle that requested it. Its
+/// memory queries are the frame's fixed-offset words — 50 of them for
+/// keccak-f[1600] — which do not fit [`Row`]'s eight roles and are not roles at
+/// all, so they live here rather than in a [`FamilyTrace`].
+///
+/// `words[j]` is frame word `j`, at byte offset `4 * j` from `base`
+/// (`docs/spec/delegation.md` §4); every word's write timestamp is
+/// `4 * cycle + constants::delegation::FRAME_DELTA`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DelegationTrace {
+    pub family: FamilyId,
+    /// The family's `VmConfig` height.
+    pub height: u32,
+    /// The requesting cycle, one per invocation.
+    pub cycle: Vec<u64>,
+    /// The frame base pointer the request handed over, one per invocation.
+    pub base: Vec<u32>,
+    /// The frame's word queries, in frame order; every entry has one value per
+    /// invocation.
+    pub words: Vec<QueryColumns>,
+}
+
+impl DelegationTrace {
+    /// An empty buffer for `family` at `height`, with `width` frame words.
+    pub fn new(family: FamilyId, height: u32, width: usize) -> DelegationTrace {
+        DelegationTrace {
+            family,
+            height,
+            cycle: Vec::new(),
+            base: Vec::new(),
+            words: vec![QueryColumns::default(); width],
+        }
+    }
+
+    /// How many invocations the family made.
+    pub fn len(&self) -> usize {
+        self.cycle.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.cycle.is_empty()
+    }
+
+    /// Append one invocation. `words` is one query per frame word, in frame
+    /// order, and must be the buffer's width.
+    pub fn push(&mut self, cycle: u64, base: u32, words: &[Query]) {
+        assert_eq!(
+            words.len(),
+            self.words.len(),
+            "delegation buffer: an invocation of {} frame words in a {}-word frame",
+            words.len(),
+            self.words.len()
+        );
+        self.cycle.push(cycle);
+        self.base.push(base);
+        for (columns, q) in self.words.iter_mut().zip(words) {
+            columns.addr.push(q.addr);
+            columns.read_ts.push(q.read_ts);
+            columns.read_value.push(q.read_value);
+            columns.write_value.push(q.write_value);
+        }
+    }
+
+    /// Invocation `i`'s frame, gathered back out of the columns.
+    pub fn frame(&self, i: usize) -> Vec<Query> {
+        self.words
+            .iter()
+            .map(|columns| Query {
+                addr: columns.addr[i],
+                read_ts: columns.read_ts[i],
+                read_value: columns.read_value[i],
+                write_value: columns.write_value[i],
+            })
+            .collect()
+    }
+}
+
 /// Every family's buffer, one per family of the `VmConfig`, in its order —
 /// including those this execution never reached, which are empty.
+///
+/// A delegation family's buffer is a [`DelegationTrace`] and lives in
+/// `delegations`; every other family's is a [`FamilyTrace`] in `families`.
+/// Both are ascending by family id, and the two id sets are disjoint.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FamilyTraces {
     pub families: Vec<FamilyTrace>,
+    pub delegations: Vec<DelegationTrace>,
 }
 
 impl FamilyTraces {
-    /// The buffer of `family`, or `None` if the config has no such family.
+    /// The buffer of `family`, or `None` if the config has no such family or
+    /// the family is a delegation one.
     pub fn family(&self, family: FamilyId) -> Option<&FamilyTrace> {
         self.families.iter().find(|t| t.family == family)
+    }
+
+    /// The delegation buffer of `family`, or `None`.
+    pub fn delegation(&self, family: FamilyId) -> Option<&DelegationTrace> {
+        self.delegations.iter().find(|t| t.family == family)
+    }
+
+    /// Every buffer's row count, ascending by family id: the shape a
+    /// `CycleProfile` has.
+    pub fn row_counts(&self) -> Vec<(FamilyId, u64)> {
+        let mut out: Vec<(FamilyId, u64)> = self
+            .families
+            .iter()
+            .map(|t| (t.family, t.len() as u64))
+            .chain(self.delegations.iter().map(|t| (t.family, t.len() as u64)))
+            .collect();
+        out.sort_by_key(|(f, _)| *f);
+        out
     }
 }

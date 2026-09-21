@@ -27,7 +27,7 @@ use constants::extra_mask::{
     add_sub_lui_auipc as alu, atomics, jump_branch_slt as jbs, mem_subword, mem_word, mul_div,
     shift_bitwise as sb, system_code,
 };
-use constants::{family, guest_memory};
+use constants::{delegation, ecall, family, guest_memory, keccak};
 use curve::G1Affine;
 use field::Fr;
 use isa::{decode, Instr};
@@ -54,7 +54,57 @@ pub const FAMILIES: [FamilyId; family::COUNT as usize] = [
     family::ATOMICS,
     family::INIT_TEARDOWN,
     family::ZERO_WINDOWS,
+    family::KECCAK_F,
 ];
+
+/// Every **delegation** family, with the ecall number that invokes it and the
+/// width of its memory frame in 32-bit words. Ascending by family id,
+/// append-only: `docs/spec/delegation.md` §3 is the table this mirrors.
+///
+/// This is the one place the three are tied together. An ecall number here is
+/// answered by that family's circuit, the frame it dereferences is that many
+/// words, and a guest declares it by linking the shim that emits the marker
+/// record of §7.
+pub const DELEGATIONS: [(FamilyId, u32, usize); 1] = [(
+    family::KECCAK_F,
+    ecall::PRECOMPILE_KECCAK_F,
+    keccak::FRAME_WORDS,
+)];
+
+/// The family that answers `number`, or `None` if it is not a delegation call.
+pub fn delegation_family(number: u32) -> Option<FamilyId> {
+    DELEGATIONS
+        .iter()
+        .find(|(_, n, _)| *n == number)
+        .map(|(f, _, _)| *f)
+}
+
+/// The ecall number that invokes `family`, or `None` if it is not a delegation
+/// family.
+pub fn delegation_ecall(family: FamilyId) -> Option<u32> {
+    DELEGATIONS
+        .iter()
+        .find(|(f, _, _)| *f == family)
+        .map(|(_, n, _)| *n)
+}
+
+/// `family`'s memory frame in 32-bit words, or `None` if it is not a
+/// delegation family.
+pub fn delegation_frame_words(family: FamilyId) -> Option<usize> {
+    DELEGATIONS
+        .iter()
+        .find(|(f, _, _)| *f == family)
+        .map(|(_, _, w)| *w)
+}
+
+/// Whether `family`'s rows are cycles, and so whether it claims pcs.
+///
+/// The two coincide and always will: a family whose rows are cycles is one the
+/// decoder routes instructions to, and a family whose rows are addresses or
+/// invocations claims nothing. `constants::family::CYCLE_OWNING` is the table.
+pub fn claims_pcs(family: FamilyId) -> bool {
+    family::CYCLE_OWNING[family as usize]
+}
 
 /// The family's name as `constants::family` spells it.
 pub fn family_name(family: FamilyId) -> &'static str {
@@ -68,6 +118,7 @@ pub fn family_name(family: FamilyId) -> &'static str {
         family::ATOMICS => "ATOMICS",
         family::INIT_TEARDOWN => "INIT_TEARDOWN",
         family::ZERO_WINDOWS => "ZERO_WINDOWS",
+        family::KECCAK_F => "KECCAK_F",
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -191,7 +242,8 @@ pub const ROW_FIELDS: [RowField; 8] = [
 /// This is the one place a family's columns are chosen; [`field_mask`] and
 /// the committed column order are both read off it. `funct3` is in no tuple:
 /// the extra mask is one-hot per mnemonic, which leaves it nothing to say.
-/// The two init families claim no pc: their tables are empty, with no columns.
+/// A family that claims no pc — the two init families, and every delegation
+/// family — has an empty table with no columns.
 pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
     use RowField::*;
     match family {
@@ -201,7 +253,7 @@ pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
         | family::MEM_WORD
         | family::MEM_SUBWORD => &[Pc, NextPc, Rs1, Rs2, Rd, Imm, ExtraMask],
         family::MUL_DIV | family::ATOMICS => &[Pc, NextPc, Rs1, Rs2, Rd, ExtraMask],
-        family::INIT_TEARDOWN | family::ZERO_WINDOWS => &[],
+        family::INIT_TEARDOWN | family::ZERO_WINDOWS | family::KECCAK_F => &[],
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -235,7 +287,7 @@ pub fn field_mask(family: FamilyId) -> u8 {
         "{}: a lookup tuple lists its fields in frozen column order",
         family_name(family)
     );
-    if family != family::INIT_TEARDOWN && family != family::ZERO_WINDOWS {
+    if claims_pcs(family) {
         assert!(
             tuple.starts_with(&[RowField::Pc, RowField::NextPc]),
             "{}: pc and next_pc are mandatory in every instruction family",
@@ -353,6 +405,10 @@ pub enum ProgramError {
     /// A RAM window rule of `docs/spec/memory.md` §3.2 or §3.5 is broken;
     /// `rule` says which.
     WindowRule { rule: &'static str },
+    /// The image carries a delegation declaration record naming an ecall
+    /// number no delegation family answers. `addr` is the record's address.
+    /// `docs/spec/delegation.md` §7.
+    UnknownDelegation { addr: u32, number: u32 },
 }
 
 impl fmt::Display for ProgramError {
@@ -362,6 +418,11 @@ impl fmt::Display for ProgramError {
                 f,
                 "code version {version} is not the one this preprocessor builds ({})",
                 family::CODE_VERSION
+            ),
+            ProgramError::UnknownDelegation { addr, number } => write!(
+                f,
+                "the delegation record at {addr:#x} declares ecall {number:#x}, \
+                 which no delegation family answers"
             ),
             ProgramError::HeightNotOnMenu { family, height } => write!(
                 f,
@@ -510,6 +571,62 @@ fn narrowest(values: Vec<u32>) -> PolyBacking {
 /// `slot_base`, every 32-bit instruction followed by its second halfword. A
 /// hand-built image that breaks them is a caller error, and trips the
 /// partition assertion rather than producing a table.
+/// The delegation families the linked binary **declares**, ascending.
+///
+/// Static detachment for a delegation family, `docs/spec/delegation.md` §7.
+/// A delegation family claims no pc, so the instruction sweep can never learn
+/// that a program calls one: the ecall number lives in `a7` at run time, not
+/// in any instruction word. What decides membership instead is a declaration
+/// record the shim itself emits — `constants::delegation::MARKER_MAGIC` then
+/// the declared ecall number, little-endian — placed in an allocated
+/// `.rodata` section, so the linker keeps it exactly when the shim is linked.
+///
+/// The scan is over the image's **file-backed bytes**, at every byte offset,
+/// in address order. Those bytes are already what program identity binds
+/// through the image column (`docs/spec/memory.md` §6.2), so a declaration
+/// cannot be altered without moving identity, and no loader change is needed
+/// to carry it: a record is an ordinary run of `.rodata` bytes. The scan is
+/// byte-wise and not word-wise because a `static`'s address is the linker's,
+/// and a record that landed off a word boundary would be a declaration
+/// silently lost.
+///
+/// A record naming a number no delegation family answers is
+/// [`ProgramError::UnknownDelegation`] — loud, because it means the guest and
+/// this preprocessor disagree about the ABI. A number declared twice is one
+/// declaration; a user flag never adds or removes one.
+pub fn declared_delegations(image: &ProgramImage) -> Result<Vec<FamilyId>, ProgramError> {
+    let mut found: Vec<FamilyId> = Vec::new();
+    let mut segments: Vec<&loader::Segment> =
+        image.segments.iter().filter(|s| !s.bytes.is_empty()).collect();
+    segments.sort_by_key(|s| s.vaddr);
+    for segment in segments {
+        let bytes = &segment.bytes;
+        let n = delegation::MARKER_MAGIC.len();
+        for at in 0..bytes.len().saturating_sub(delegation::MARKER_BYTES - 1) {
+            if bytes[at..at + n] != delegation::MARKER_MAGIC {
+                continue;
+            }
+            let number = u32::from_le_bytes([
+                bytes[at + n],
+                bytes[at + n + 1],
+                bytes[at + n + 2],
+                bytes[at + n + 3],
+            ]);
+            let Some(family) = delegation_family(number) else {
+                return Err(ProgramError::UnknownDelegation {
+                    addr: segment.vaddr.wrapping_add(at as u32),
+                    number,
+                });
+            };
+            if !found.contains(&family) {
+                found.push(family);
+            }
+        }
+    }
+    found.sort_unstable();
+    Ok(found)
+}
+
 pub fn decode_program(
     image: &ProgramImage,
     params: &ProgramParams,
@@ -588,9 +705,17 @@ pub fn decode_program_detaching(
         code_version: params.code_version,
         families: Vec::new(),
     };
+    let declared = declared_delegations(image)?;
     for family in FAMILIES {
         let rows = &claims[family as usize];
-        let always = (family == family::INIT_TEARDOWN || family == family::ZERO_WINDOWS)
+        // Three presence rules, and no fourth. A family that claims a pc is
+        // present because it claims one. The two init families are present in
+        // every config (`docs/spec/memory.md` §3.2). A delegation family is
+        // present exactly when the linked binary declares it
+        // (`docs/spec/delegation.md` §7) — never because a caller asked.
+        let always = (family == family::INIT_TEARDOWN
+            || family == family::ZERO_WINDOWS
+            || declared.contains(&family))
             && !detached.contains(&family);
         if rows.is_empty() && !always {
             continue;
@@ -793,7 +918,11 @@ pub fn setup_commitments(
         .iter()
         .map(|table| match table.family {
             family::INIT_TEARDOWN => vec![cm(table, &image_init_column(image, table.height))],
-            family::ZERO_WINDOWS => Vec::new(),
+            // `ZERO_WINDOWS` has no setup column, and a delegation family has
+            // no decoded table at all: it is invoked, never decoded, so there
+            // is nothing about it for identity to commit but its presence in
+            // the `VM_CONFIG` message.
+            family::ZERO_WINDOWS | family::KECCAK_F => Vec::new(),
             // One column at a time: at 2^22 rows an `Fr` column is 128 MiB.
             _ => (0..table.columns.len())
                 .map(|c| cm(table, &table.column_poly(c)))

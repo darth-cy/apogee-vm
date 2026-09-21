@@ -35,9 +35,11 @@ use test_support::Rng;
 use transcript::Transcript;
 
 /// The query table, by **global query id**: pc, rs1, rs2, arg1, arg2, load,
-/// ram, rd. No family holds all eight.
-const SPACE: [u64; 8] = [3, 1, 1, 1, 1, 2, 2, 1];
-const DELTA: [u64; 8] = [0, 1, 2, 2, 2, 2, 3, 3];
+/// ram, rd, and — S21's eighth role — deleg, a delegation request's mirror, in
+/// the keccak family's own address space 4 (`docs/spec/delegation.md` §5.1).
+/// No family holds all nine.
+const SPACE: [u64; 9] = [3, 1, 1, 1, 1, 2, 2, 1, 4];
+const DELTA: [u64; 9] = [0, 1, 2, 2, 2, 2, 3, 3, 3];
 
 /// The query ids, in the table's frozen order.
 const PC: usize = 0;
@@ -48,17 +50,20 @@ const ARG2: usize = 4;
 const LOAD: usize = 5;
 const RAM: usize = 6;
 const RD: usize = 7;
+const DELEG: usize = 8;
 
 /// The queries that write back what they read, `docs/spec/memory.md` §2.4.
 const READ_ONLY: [usize; 5] = [RS1, RS2, ARG1, ARG2, LOAD];
 
 /// Every execution family and the queries its frame holds, `docs/spec/memory.md`
-/// §2.1's table written out. Widths 7, 4, 6 and 5: the three that are not powers
-/// of two carry constant-1 pad leaves, and the 4-wide one carries none.
+/// §2.1's table written out, with `deleg` on the family that owns ecall rows
+/// (`docs/spec/delegation.md` §5.1). Widths 8, 4, 6 and 5: the two that are not
+/// powers of two carry constant-1 pad leaves, and the 8- and the 4-wide ones
+/// carry none.
 const FAMILIES: [(u32, &[usize]); 7] = [
     (
         family::ADD_SUB_LUI_AUIPC,
-        &[PC, RS1, RS2, ARG1, ARG2, RAM, RD],
+        &[PC, RS1, RS2, ARG1, ARG2, RAM, RD, DELEG],
     ),
     (family::JUMP_BRANCH_SLT, &[PC, RS1, RS2, RD]),
     (family::SHIFT_BITWISE, &[PC, RS1, RS2, RD]),
@@ -143,7 +148,8 @@ fn t(c: &[Fr; 4], space: u64, addr: Fr, ts: Fr, value: Fr) -> Fr {
 /// masked by another query's mask, a pad leaf that reads anything, and — the
 /// mutant the per-family frames add — a leaf taking its AS or Δ from its slot
 /// instead of its query id, which differs at `ATOMICS`' slot 3 (`ram`, AS 2,
-/// Δ 3, against `arg1`'s AS 1, Δ 2) and at `ADD_SUB_LUI_AUIPC`'s slots 5 and 6.
+/// Δ 3, against `arg1`'s AS 1, Δ 2) and at `ADD_SUB_LUI_AUIPC`'s slots 5, 6 and
+/// 7 — the last of them `deleg`, AS 4 against slot 7's `rd` AS 1.
 /// Each family's query list is the test's own; `frame_artifact` over it is
 /// asserted equal to `family_frame_artifact`, so a changed `frame_queries` fails
 /// here rather than quietly moving what is swept.

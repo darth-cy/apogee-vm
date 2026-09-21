@@ -55,11 +55,14 @@ pub const FIELD_READ_VALUE: u32 = 3;
 /// A frame query's field: the value it writes, at `4·cycle + Δ`.
 pub const FIELD_WRITE_VALUE: u32 = 4;
 
-/// The query table's size: the pc query, then the seven roles of
+/// The query table's size: the pc query, then the eight roles of
 /// `docs/spec/execution-trace.md` §7 in their frozen order. A family's frame
 /// holds a *subset* of these — [`frame_queries`] — so this is the table's
 /// length, never a frame's width.
-pub const FRAME_QUERIES: usize = 8;
+///
+/// S21 appended [`DELEG`], the eighth role, taking `Row::present`'s last spare
+/// bit. A ninth role widens that mask, which is a schema change.
+pub const FRAME_QUERIES: usize = 9;
 
 /// The pc query, which every execution family's frame holds first.
 pub const PC: usize = 0;
@@ -76,9 +79,15 @@ pub const LOAD: usize = 5;
 /// A store's, an atomic's or an ecall transfer's word, at slot 3.
 pub const RAM: usize = 6;
 
+/// A **delegation** request's mirror query, at slot 3, in the delegation
+/// family's own address space; its address is the frame base pointer the
+/// request read from `a0`. `docs/spec/delegation.md` §5.
+pub const DELEG: usize = 8;
+
 /// Each query's name, which its columns, leaves and obligations are named after.
-pub const FRAME_NAMES: [&str; FRAME_QUERIES] =
-    ["pc", "rs1", "rs2", "arg1", "arg2", "load", "ram", "rd"];
+pub const FRAME_NAMES: [&str; FRAME_QUERIES] = [
+    "pc", "rs1", "rs2", "arg1", "arg2", "load", "ram", "rd", "deleg",
+];
 
 /// The read-only queries, which write back what they read: `rs1` through
 /// `load`. `docs/spec/memory.md` §2.4.
@@ -94,10 +103,11 @@ pub const FRAME_SPACE: [u8; FRAME_QUERIES] = [
     address_space::RAM,
     address_space::RAM,
     address_space::REG,
+    address_space::DELEGATION_KECCAK_F,
 ];
 
 /// Each query's in-cycle slot `Δ`: its write is at `4·cycle + Δ`.
-pub const FRAME_DELTA: [u64; FRAME_QUERIES] = [0, 1, 2, 2, 2, 2, 3, 3];
+pub const FRAME_DELTA: [u64; FRAME_QUERIES] = [0, 1, 2, 2, 2, 2, 3, 3, 3];
 
 /// `M[1 + 5·slot + field]`: one field of the query at `slot` — its position in
 /// the family's query list, not its id in [`FRAME_NAMES`]. The two agree only
@@ -150,7 +160,9 @@ pub fn frame_queries(family: u32) -> &'static [usize] {
         // row reads `a7`, `a0`, `a1`, `a2` and writes `a0`, and each of its
         // transfer rows moves one RAM word at slot 3. No `load`: that is a
         // load's word at slot 2, and no instruction here has one.
-        family::ADD_SUB_LUI_AUIPC => &[PC, RS1, RS2, ARG1, ARG2, RAM, RD],
+        // The delegation mirror is here too: a delegation ecall is an ecall,
+        // so its row is this family's (`docs/spec/delegation.md` §5.1).
+        family::ADD_SUB_LUI_AUIPC => &[PC, RS1, RS2, ARG1, ARG2, RAM, RD, DELEG],
         // Register-register, register-immediate, branches and jumps: no RAM
         // query at all, and `arg1`/`arg2` are ecall-only.
         family::JUMP_BRANCH_SLT | family::SHIFT_BITWISE | family::MUL_DIV => &[PC, RS1, RS2, RD],
@@ -162,6 +174,11 @@ pub fn frame_queries(family: u32) -> &'static [usize] {
         family::INIT_TEARDOWN | family::ZERO_WINDOWS => panic!(
             "family {family} initializes RAM and runs no cycles, so it has no frame; \
              `docs/spec/memory.md` §3.3 is its artifact"
+        ),
+        family::KECCAK_F => panic!(
+            "family {family} is invoked, not decoded, and its frame is 50 fixed-offset \
+             words rather than a subset of the query table; `docs/spec/delegation.md` \
+             §4 is its artifact"
         ),
         other => panic!("family {other} is not in constants::family"),
     }
@@ -872,15 +889,15 @@ mod tests {
     use super::*;
 
     /// S14 acceptance 12's negative control. The `ADD_SUB_LUI_AUIPC` frame's
-    /// 14 obligations, less the last gadget's `gap_lo_rd` — an obligation
+    /// 16 obligations, less the last gadget's `gap_lo_deleg` — an obligation
     /// built and then dropped before the artifact is written — fail the build
     /// at the count assertion, before `validate` or `check_memory` run. The
     /// control beside it is the same call with every obligation, which is
     /// `frame_artifact`.
     #[test]
     #[should_panic(
-        expected = "every read carries two gap obligations, so 7 reads need 14 \
-                               obligations; 13 reached the artifact"
+        expected = "every read carries two gap obligations, so 8 reads need 16 \
+                               obligations; 15 reached the artifact"
     )]
     fn a_dropped_gap_obligation_fails_the_build() {
         let queries = frame_queries(family::ADD_SUB_LUI_AUIPC);
@@ -913,7 +930,7 @@ mod tests {
     #[test]
     fn every_execution_family_builds_its_frame() {
         let widths = [
-            (family::ADD_SUB_LUI_AUIPC, 7),
+            (family::ADD_SUB_LUI_AUIPC, 8),
             (family::JUMP_BRANCH_SLT, 4),
             (family::SHIFT_BITWISE, 4),
             (family::MUL_DIV, 4),

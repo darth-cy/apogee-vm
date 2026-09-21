@@ -94,6 +94,14 @@ num-bigint = { version = "0.4", default-features = false }
 # Test only. Exercises the `Fr` serde impls over a real wire format.
 postcard = { version = "1", default-features = false }
 
+# Test only, S21. The reference keccak-f[1600] and keccak256 the emulator's
+# permutation, the guest SDK's software fallback and the delegation circuit's
+# forward pass are each held to. `default-features = false` keeps it `no_std`,
+# which costs nothing here. Never reachable from the prover, the verifier or a
+# guest: master rule 2 allows a reference implementation as a dev-dependency
+# and nowhere else, and `crates/emulator/tests/keccak.rs` is where it is used.
+tiny-keccak = { version = "2", default-features = false, features = ["keccak"] }
+
 # Acceptance 1 proves a 2^20-row zerocheck, and must-be-exact 7's witness digest
 # absorbs every cell of every column through Poseidon2 — about 2^21 sponge
 # elements. Unoptimized that is minutes per run, which would make

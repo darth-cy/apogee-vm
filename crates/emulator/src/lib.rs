@@ -27,13 +27,13 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use constants::{ecall, guest_memory, memory};
+use constants::{delegation, ecall, guest_memory, keccak, memory};
 use isa::{decode, Instr};
 use loader::{ProgramImage, Slot};
-use program::{row_kind, DecodedTables, VmConfig};
+use program::{row_kind, DecodedTables, FamilyId, VmConfig};
 use trace::{
-    AddressSpace, CycleProfile, FamilyTrace, FamilyTraces, IoStreams, MemoryEventLog, Query, Role,
-    Row, ROLES,
+    AddressSpace, CycleProfile, DelegationTrace, FamilyTrace, FamilyTraces, IoStreams,
+    MemoryEventLog, Query, Role, Row, ROLES,
 };
 
 pub mod qemu;
@@ -81,6 +81,15 @@ pub enum EmuError {
     OutOfBounds { pc: u32, addr: u32 },
     /// Cycle `cycle`'s timestamps would pass the 38-bit clock.
     ClockOverflow { cycle: u64 },
+    /// A delegation ecall whose family the `VmConfig` does not hold.
+    ///
+    /// Only the tracing path raises it: the family set is a property of the
+    /// linked binary (`docs/spec/delegation.md` §7), and a program that calls
+    /// a delegation it did not declare is one no trace can describe and no
+    /// proof can cover. Loud rather than answered `-ENOSYS`, because the two
+    /// are different failures — one is a VM that lacks the circuit, the other
+    /// a program whose declaration and whose code disagree.
+    DelegationFamilyAbsent { pc: u32, number: u32 },
 }
 
 impl fmt::Display for EmuError {
@@ -106,6 +115,11 @@ impl fmt::Display for EmuError {
                 f,
                 "cycle {cycle} would pass the {}-bit timestamp clock",
                 memory::TS_BITS
+            ),
+            EmuError::DelegationFamilyAbsent { pc, number } => write!(
+                f,
+                "the delegation ecall {number:#x} at pc {pc:#010x} has no family in this \
+                 VmConfig, so the program calls a delegation it does not declare"
             ),
         }
     }
@@ -149,7 +163,16 @@ pub fn trace_run(
             families: config
                 .families
                 .iter()
+                .filter(|(family, _)| program::delegation_frame_words(*family).is_none())
                 .map(|(family, height)| FamilyTrace::new(*family, *height))
+                .collect(),
+            delegations: config
+                .families
+                .iter()
+                .filter_map(|(family, height)| {
+                    program::delegation_frame_words(*family)
+                        .map(|width| DelegationTrace::new(*family, *height, width))
+                })
                 .collect(),
         },
     });
@@ -160,12 +183,7 @@ pub fn trace_run(
         .expect("trace_run installed a recorder");
     let execution = machine.finish();
     let profile = CycleProfile {
-        counts: recorder
-            .traces
-            .families
-            .iter()
-            .map(|t| (t.family, t.len() as u64))
-            .collect(),
+        counts: recorder.traces.row_counts(),
     };
     assert_eq!(
         profile.total(),
@@ -191,13 +209,27 @@ enum Fetch {
 
 /// One cycle's queries before they are committed, by role:
 /// `(address, value read, value written)`.
+///
+/// `delegation` is the invocation a delegation request made, if any: the
+/// family, the frame base, and one `(address, old, new)` per frame word in
+/// frame order. It is not a role — 50 frame words do not fit eight — and it is
+/// the invocation's row, not the requesting cycle's
+/// (`docs/spec/delegation.md` §4).
 struct Cycle {
-    queries: [Option<(u32, u32, u32)>; 7],
+    queries: [Option<(u32, u32, u32)>; 8],
+    delegation: Option<Invocation>,
 }
+
+/// One delegation invocation: the family, the frame base, and one
+/// `(address, old, new)` per frame word in frame order.
+type Invocation = (FamilyId, u32, Vec<(u32, u32, u32)>);
 
 impl Cycle {
     fn new() -> Cycle {
-        Cycle { queries: [None; 7] }
+        Cycle {
+            queries: [None; 8],
+            delegation: None,
+        }
     }
 
     fn stage(&mut self, role: Role, addr: u32, read: u32, write: u32) {
@@ -392,6 +424,44 @@ impl<'a> Machine<'a> {
             return Err(EmuError::OutOfBounds { pc, addr });
         }
         Ok(word)
+    }
+
+    /// Run keccak-f[1600] over the 200-byte frame at `base`, in place, and
+    /// return its 50 word queries as `(address, old, new)` in frame order.
+    ///
+    /// The two frame rules of `docs/spec/delegation.md` §4, and nothing else
+    /// checks them: the base is word-aligned, and the whole frame lies inside
+    /// the RAM window. Both are fatal guest errors, as a misaligned load is —
+    /// the circuit refuses the same two, so an execution this refuses is one
+    /// no proof could cover. The bound is computed in `u64` because
+    /// `base + 200` wraps a `u32` at the top of the window, and a wrapped
+    /// comparison passes a check it should fail.
+    fn keccak_frame(&mut self, pc: u32, base: u32) -> Result<Vec<(u32, u32, u32)>, EmuError> {
+        if !base.is_multiple_of(4) {
+            return Err(EmuError::Misaligned {
+                pc,
+                addr: base,
+                width: 4,
+            });
+        }
+        let window = guest_memory::RAM_ORIGIN as u64 + guest_memory::RAM_LENGTH as u64;
+        if (base as u64) < guest_memory::RAM_ORIGIN as u64
+            || base as u64 + keccak::STATE_BYTES as u64 > window
+        {
+            return Err(EmuError::OutOfBounds { pc, addr: base });
+        }
+        let old: [u32; keccak::FRAME_WORDS] =
+            core::array::from_fn(|j| self.word(base + 4 * j as u32));
+        let mut lanes = lanes_of(&old);
+        keccak_f(&mut lanes);
+        let new = words_of(&lanes);
+        let mut frame = Vec::with_capacity(keccak::FRAME_WORDS);
+        for j in 0..keccak::FRAME_WORDS {
+            let addr = base + 4 * j as u32;
+            self.set_word(addr, new[j]);
+            frame.push((addr, old[j], new[j]));
+        }
+        Ok(frame)
     }
 
     /// Replace a word, staging the slot-3 RAM query.
@@ -674,6 +744,27 @@ impl<'a> Machine<'a> {
                 self.read(&mut row, Role::Rs2, 10);
                 ecall::ENOSYS.wrapping_neg()
             }
+            // A delegation call: the frame base is its one argument, read as
+            // the ABI table says, and the frame is permuted in place. The
+            // invocation is not a cycle of its own — it rides this one, at
+            // `delegation::DELTA` (`docs/spec/delegation.md` §4).
+            n if program::delegation_family(n).is_some() => {
+                let family = program::delegation_family(n).expect("just matched");
+                let base = self.read(&mut row, Role::Rs2, 10);
+                if let Some(recorder) = &self.recorder {
+                    if recorder.traces.delegation(family).is_none() {
+                        return Err(EmuError::DelegationFamilyAbsent { pc, number: n });
+                    }
+                }
+                let frame = self.keccak_frame(pc, base)?;
+                // The mirror query: the request consumes the invocation's
+                // answer tuple, whose timestamp and value are both 0
+                // (`docs/spec/delegation.md` §5). Its write-back is 0 too,
+                // which nothing constrains and the honest fill writes.
+                row.stage(Role::Delegate, base, 0, 0);
+                row.delegation = Some((family, base, frame));
+                0
+            }
             _ => ecall::ENOSYS.wrapping_neg(),
         };
         self.write(&mut row, 10, result);
@@ -754,6 +845,59 @@ impl<'a> Machine<'a> {
     }
 }
 
+/// keccak-f[1600] over the state as 25 little-endian lanes, lane `5y + x` at
+/// index `x + 5y`.
+///
+/// The reference permutation, written from `docs/spec/delegation.md` §6 and
+/// the two tables of `constants::keccak`. `crates/guest-sdk` carries its own
+/// copy for the software fallback — the two are held bit-identical by
+/// `crates/emulator/tests/keccak.rs` and both to `tiny-keccak` — because the
+/// SDK builds only for the guest target and is not a workspace member, and a
+/// crate whose only purpose was to be shared by two callers would be the
+/// abstraction the master's anti-goals refuse.
+pub fn keccak_f(lanes: &mut [u64; keccak::LANES]) {
+    for round in 0..keccak::ROUNDS {
+        // theta
+        let mut c = [0u64; 5];
+        for (x, c) in c.iter_mut().enumerate() {
+            *c = lanes[x] ^ lanes[x + 5] ^ lanes[x + 10] ^ lanes[x + 15] ^ lanes[x + 20];
+        }
+        for x in 0..5 {
+            let d = c[(x + 4) % 5] ^ c[(x + 1) % 5].rotate_left(1);
+            for y in 0..5 {
+                lanes[x + 5 * y] ^= d;
+            }
+        }
+        // rho and pi
+        let mut b = [0u64; keccak::LANES];
+        for x in 0..5 {
+            for y in 0..5 {
+                b[y + 5 * ((2 * x + 3 * y) % 5)] =
+                    lanes[x + 5 * y].rotate_left(keccak::ROTATIONS[y][x]);
+            }
+        }
+        // chi
+        for x in 0..5 {
+            for y in 0..5 {
+                lanes[x + 5 * y] =
+                    b[x + 5 * y] ^ (!b[(x + 1) % 5 + 5 * y] & b[(x + 2) % 5 + 5 * y]);
+            }
+        }
+        // iota
+        lanes[0] ^= keccak::ROUND_CONSTANTS[round];
+    }
+}
+
+/// The 50 frame words as 25 lanes: word `2i` is lane `i`'s low half.
+pub fn lanes_of(words: &[u32; keccak::FRAME_WORDS]) -> [u64; keccak::LANES] {
+    core::array::from_fn(|i| words[2 * i] as u64 | (words[2 * i + 1] as u64) << 32)
+}
+
+/// The 25 lanes as 50 frame words: the inverse of [`lanes_of`].
+pub fn words_of(lanes: &[u64; keccak::LANES]) -> [u32; keccak::FRAME_WORDS] {
+    core::array::from_fn(|j| (lanes[j / 2] >> (32 * (j % 2))) as u32)
+}
+
 // ---------------------------------------------------------------------------
 // The recorder: the tracing path's one addition
 // ---------------------------------------------------------------------------
@@ -770,12 +914,34 @@ impl Recorder<'_> {
     fn record(&mut self, cycle: u64, pc: u32, next_pc: u32, instr: Instr, queries: &Cycle) {
         let base = memory::TS_STEP * cycle;
         self.log.record(AddressSpace::Pc, 0, base, pc, next_pc);
+        // An invocation's frame accesses ride this cycle at
+        // `delegation::FRAME_DELTA`, which is 0, so they follow the pc query
+        // and precede the row's roles: the log is in timestamp order
+        // (`docs/spec/delegation.md` §4.1).
+        let mut invocation: Vec<Query> = Vec::new();
+        if let Some((_, _, frame)) = &queries.delegation {
+            for (addr, read, write) in frame {
+                let event = self.log.record(
+                    AddressSpace::Ram,
+                    *addr,
+                    base + delegation::FRAME_DELTA,
+                    *read,
+                    *write,
+                );
+                invocation.push(Query {
+                    addr: *addr,
+                    read_ts: event.read_ts,
+                    read_value: *read,
+                    write_value: *write,
+                });
+            }
+        }
         let mut row = Row {
             cycle,
             pc,
             next_pc,
             present: 0,
-            queries: [Query::ABSENT; 7],
+            queries: [Query::ABSENT; 8],
         };
         for role in ROLES {
             if let Some((addr, read, write)) = queries.queries[role as usize] {
@@ -791,12 +957,30 @@ impl Recorder<'_> {
                 row.present |= 1 << role as u8;
             }
         }
+        if let Some((family, frame_base, _)) = &queries.delegation {
+            let buffer = self
+                .traces
+                .delegations
+                .iter_mut()
+                .find(|t| t.family == *family)
+                .expect("the ecall checked the family is in the config");
+            buffer.push(cycle, *frame_base, &invocation);
+        }
         let owner = self.owner(pc, instr);
-        self.traces.families[owner].push(&row);
+        self.traces
+            .families
+            .iter_mut()
+            .find(|t| t.family == owner)
+            .expect("the owning family has a buffer")
+            .push(&row);
     }
 
-    /// The position of the one family whose table claims `pc`.
-    fn owner(&self, pc: u32, instr: Instr) -> usize {
+    /// The one family whose table claims `pc`.
+    ///
+    /// By family id rather than by position: a delegation family is in the
+    /// decoded tables — with an empty table, claiming nothing — but its buffer
+    /// is a `DelegationTrace`, so the two lists no longer line up by index.
+    fn owner(&self, pc: u32, instr: Instr) -> FamilyId {
         let row = (pc / 2) as usize;
         let mut owners = self
             .tables
@@ -804,7 +988,7 @@ impl Recorder<'_> {
             .iter()
             .enumerate()
             .filter(|(_, t)| t.is_live(row));
-        let (at, table) = owners.next().unwrap_or_else(|| {
+        let (_at, table) = owners.next().unwrap_or_else(|| {
             panic!(
                 "routing: pc {pc:#010x} is claimed by no family, so the decoded tables \
                  are not this program's"
@@ -820,7 +1004,7 @@ impl Recorder<'_> {
             "routing: the table claiming pc {pc:#010x} is not the family of the \
              instruction there"
         );
-        at
+        table.family
     }
 }
 

@@ -1014,3 +1014,189 @@ fn s19_a8_the_old_word_the_splice_and_the_old_value_are_pinned() {
         (AT, 0),
     );
 }
+
+// ---------------------------------------------------------------------------
+// S21: the delegation circuit's cells, and the anchor's linkage
+// ---------------------------------------------------------------------------
+
+/// S21 acceptance 5 and 6, over `guests/keccak-test`: eight shards — six
+/// execution families at `2^20`, the two windows, and the `KECCAK_F`
+/// delegation shard at `2^8`.
+///
+/// **5**, the circuit cell: one state bit and one written word of the
+/// delegation witness, each corrupted alone, each refused by the gate that
+/// reads it — `Constraint` — with the honest twin passing and the structural
+/// counts on screen beside them.
+///
+/// **6**, the linkage: the three anchor twins of `docs/spec/delegation.md`
+/// §5.2, run through the family-parameterized helper S22 and S23 invoke by
+/// name. They are the block's, not one shard's: a dropped invocation's only
+/// symptom is the cross-shard root product, and that check reads the statement
+/// rather than a proof (`docs/spec/block-proof.md` §3).
+#[test]
+#[ignore]
+fn s21_a5_a6_the_delegation_witness_and_the_anchor_are_pinned() {
+    use constants::family::KECCAK_F as KEC;
+    use constants::family::ZERO_WINDOWS as ZERO;
+    use constants::{delegation, keccak as k};
+    use constraints::keccak as kec;
+
+    let setup = common::keccak_setup();
+    let archive = common::keccak_archive(&setup.program);
+    let h = TamperHarness::new(&setup, &archive);
+
+    // The structural counts. Eight shards, the delegation family's last, and
+    // its circuit's width: 204 memory columns — `cycle`, `live`, `base`,
+    // `anchor_value` and four a frame word — and 3,560 witness ones, the
+    // state's 1,600 bits, 38 gap bits a read, and the frame pointer's 60.
+    let (public, proofs) = h.honest();
+    let shards: Vec<(u32, u32)> = proofs.iter().map(|p| (p.family, p.shard_index)).collect();
+    assert_eq!(shards.last(), Some(&(KEC, 0)));
+    assert!(shards.contains(&(INIT, 0)) && shards.contains(&(ZERO, 0)));
+    let a = &setup.vk.circuit(KEC).expect("a keccak circuit").artifact;
+    assert_eq!(
+        (a.memory.len(), a.witness.len(), a.setup.len()),
+        (4 + 4 * k::FRAME_WORDS, 3560, 0)
+    );
+    assert_eq!(a.trace_vars, common::KECCAK_VARS);
+
+    // Acceptance 5. The invocation rows are the guest's ten, in order; the
+    // twins take the first, found by its mask rather than by its number.
+    let columns = shard_columns(&setup, &archive, KEC, 0, &public.windows)
+        .expect("the delegation shard's columns");
+    let at = |address: PolyAddress, row: usize| {
+        columns
+            .iter()
+            .find(|(a, _)| *a == address)
+            .unwrap_or_else(|| panic!("the shard has no {address}"))
+            .1
+            .get(row)
+    };
+    let live_row = (0..1 << common::KECCAK_VARS)
+        .find(|r| at(kec::LIVE, *r) == Fr::ONE)
+        .expect("a live invocation");
+    let padding_row = (0..1 << common::KECCAK_VARS)
+        .find(|r| at(kec::LIVE, *r) == Fr::ZERO)
+        .expect("a padding row");
+    let keccak_cell = |address, row, value| Cell {
+        family: KEC,
+        shard: 0,
+        address,
+        row,
+        value,
+    };
+
+    // A flipped input state bit: the word it recomposes no longer matches, and
+    // `input_w{j}` is the gate that says so. Flipping the word with it moves
+    // the refusal to the permutation's own output, which is the other half of
+    // the same statement — the circuit is what ties the two together.
+    let bit = at(kec::in_bit(0), live_row);
+    h.assert_rejects(
+        &tamper(vec![keccak_cell(kec::in_bit(0), live_row, Fr::ONE - bit)]),
+        (KEC, 0),
+        CONSTRAINT,
+    );
+    let word = at(kec::word(0, kec::WORD_READ_VALUE), live_row);
+    h.assert_rejects(
+        &tamper(vec![
+            keccak_cell(kec::in_bit(0), live_row, Fr::ONE - bit),
+            keccak_cell(
+                kec::word(0, kec::WORD_READ_VALUE),
+                live_row,
+                word + Fr::ONE - bit - bit,
+            ),
+        ]),
+        (KEC, 0),
+        CONSTRAINT,
+    );
+    // A corrupted written word: the permutation says what it must be.
+    let out = at(kec::word(7, kec::WORD_WRITE_VALUE), live_row);
+    h.assert_rejects(
+        &tamper(vec![keccak_cell(
+            kec::word(7, kec::WORD_WRITE_VALUE),
+            live_row,
+            out + Fr::ONE,
+        )]),
+        (KEC, 0),
+        CONSTRAINT,
+    );
+    // And a gap bit, which is the frame read's only bound.
+    h.assert_rejects(
+        &tamper(vec![keccak_cell(kec::gap_bit(3, 0), live_row, f(2))]),
+        (KEC, 0),
+        CONSTRAINT,
+    );
+
+    // The negative control: a padding row's cells, which every gate of the
+    // family gates off `live`. The permutation still runs there and its
+    // output word is still 0, which is exactly why `output_w{j}` is gated.
+    h.assert_verifies(
+        &tamper(vec![
+            keccak_cell(kec::in_bit(11), padding_row, Fr::ONE),
+            keccak_cell(kec::gap_bit(5, 7), padding_row, Fr::ONE),
+        ]),
+        (KEC, 0),
+    );
+
+    // Acceptance 6. The requesting rows are the add/sub family's delegation
+    // ecalls, found by the mirror query's own mask.
+    let alu = shard_columns(&setup, &archive, ADD, 0, &public.windows).expect("the add/sub shard");
+    let alu_at = |address: PolyAddress, row: usize| {
+        alu.iter()
+            .find(|(a, _)| *a == address)
+            .unwrap_or_else(|| panic!("the add/sub shard has no {address}"))
+            .1
+            .get(row)
+    };
+    const DELEG: usize = 7;
+    let requests: Vec<usize> = (0..1 << common::ADD_VARS)
+        .filter(|r| alu_at(frame(DELEG, FIELD_MASK), *r) == Fr::ONE)
+        .collect();
+    assert_eq!(
+        requests.len() as u64,
+        common::KECCAK_INVOCATIONS,
+        "one request a permutation"
+    );
+    // The invocation that pairs with request 0 is the one at its cycle: the
+    // anchor binds them there and nowhere else.
+    let cycle_of = |row: usize| alu_at(CYCLE, row);
+    let paired = (0..1 << common::KECCAK_VARS)
+        .find(|r| at(kec::LIVE, *r) == Fr::ONE && at(kec::CYCLE, *r) == cycle_of(requests[0]))
+        .expect("the invocation at the request's cycle");
+    assert_eq!(
+        at(kec::BASE, paired),
+        alu_at(frame(DELEG, FIELD_ADDR), requests[0]),
+        "and at its frame base"
+    );
+    assert_eq!(
+        (
+            alu_at(frame(DELEG, FIELD_READ_TS), requests[0]),
+            alu_at(frame(DELEG, FIELD_READ_VALUE), requests[0])
+        ),
+        (Fr::ZERO, Fr::ZERO),
+        "an honest request's mirror read is the answer tuple, stamped 0"
+    );
+    assert_eq!(
+        delegation::ANCHOR_DELTA,
+        constraints::memory::FRAME_DELTA[DELEG],
+        "the anchor's slot is the mirror query's"
+    );
+
+    checker::assert_anchor_twins_refused(
+        &h,
+        &checker::AnchorTwins {
+            requester: (ADD, 0),
+            delegation: (KEC, 0),
+            request: requests[0],
+            invocation: paired,
+            other_request: requests[1],
+            rd_selected: rd_selected(8),
+            cycle: CYCLE,
+            mirror_read_ts: frame(DELEG, FIELD_READ_TS),
+            mirror_read_value: frame(DELEG, FIELD_READ_VALUE),
+            mirror_write_value: frame(DELEG, FIELD_WRITE_VALUE),
+            live: kec::LIVE,
+            anchor_value: kec::ANCHOR_VALUE,
+        },
+    );
+}

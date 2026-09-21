@@ -28,12 +28,12 @@ use gkr::{
     ExternalChallenges, LayerValues,
 };
 use poly::{MultilinearPoly, PolyBacking};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 mod tamper;
 mod tape;
 
-pub use tamper::{Cell, Tamper, TamperHarness};
+pub use tamper::{assert_anchor_twins_refused, AnchorTwins, Cell, Tamper, TamperHarness};
 pub use tape::{check_global_tape, expected_global_tape, global_tape, tape};
 
 /// Independent pseudo-random points per sampled check.
@@ -102,6 +102,19 @@ fn challenge_slots(gates: &[&GateDef]) -> Vec<u32> {
     slots.sort_unstable();
     slots.dedup();
     slots
+}
+
+/// The scratch bijection read the other way: an inner address to its slot.
+///
+/// Built once per caller. Every use of it here used to be a scan of the whole
+/// bijection, which is quadratic in a circuit whose inner columns number in the
+/// hundreds of thousands — a delegation family's do.
+fn slot_index(a: &CircuitArtifact) -> BTreeMap<PolyAddress, usize> {
+    a.scratch
+        .iter()
+        .enumerate()
+        .map(|(i, slot)| (slot.address, i))
+        .collect()
 }
 
 fn relation_name(a: &CircuitArtifact, r: u32) -> &str {
@@ -349,26 +362,37 @@ pub fn check_law4(a: &CircuitArtifact) -> Result<(), String> {
     }
     // With equal counts, every index named exactly once also means no entry
     // names an index outside the list.
-    for (r, rel) in relations.iter().enumerate() {
-        let named = entries.iter().filter(|e| e.1 as usize == r).count();
-        if named != 1 {
-            let name = &rel.name;
-            return Err(format!(
-                "{LAW4}: relation {r} ({name}) is named by {named} gate entries"
-            ));
+    // Counted into a tally rather than searched per index: a circuit whose
+    // relations and scratch slots number in the hundreds of thousands — a
+    // delegation family's does — makes a scan per index quadratic.
+    let mut named = vec![0usize; listed];
+    for e in &entries {
+        if let Some(count) = named.get_mut(e.1 as usize) {
+            *count += 1;
         }
     }
-    for (i, slot) in a.scratch.iter().enumerate() {
-        let defined = relations
-            .iter()
-            .filter(|rel| rel.output == Some(i as u32))
-            .count();
-        if defined != 1 {
-            return Err(format!(
-                "{LAW4}: scratch[{i}] is the output of {defined} relations"
-            ));
+    if let Some(r) = named.iter().position(|n| *n != 1) {
+        let name = &relations[r].name;
+        return Err(format!(
+            "{LAW4}: relation {r} ({name}) is named by {} gate entries",
+            named[r]
+        ));
+    }
+    let mut defined = vec![0usize; a.scratch.len()];
+    for rel in relations {
+        if let Some(count) = rel.output.and_then(|i| defined.get_mut(i as usize)) {
+            *count += 1;
         }
-        if a.scratch[..i].iter().any(|s| s.address == slot.address) {
+    }
+    if let Some(i) = defined.iter().position(|n| *n != 1) {
+        return Err(format!(
+            "{LAW4}: scratch[{i}] is the output of {} relations",
+            defined[i]
+        ));
+    }
+    let mut seen: BTreeSet<PolyAddress> = BTreeSet::new();
+    for (i, slot) in a.scratch.iter().enumerate() {
+        if !seen.insert(slot.address) {
             let at = slot.address;
             return Err(format!(
                 "{LAW4}: scratch[{i}] maps to {at}, as an earlier slot does"
@@ -396,6 +420,7 @@ pub fn check_law4(a: &CircuitArtifact) -> Result<(), String> {
 
     let mut rng = Rng(0x1a44_0004);
     let slots = challenge_slots(&all_gates(a));
+    let index = slot_index(a);
     for trial in 0..TRIALS {
         let mut triple = || [rng.fr(), rng.fr(), rng.fr()];
         let committed = a.committed().iter().map(|_| triple()).collect();
@@ -407,6 +432,7 @@ pub fn check_law4(a: &CircuitArtifact) -> Result<(), String> {
             virt,
             scratch,
             challenges,
+            index: index.clone(),
         };
         for (what, r, _, gate) in &entries {
             let rel = &relations[*r as usize];
@@ -562,6 +588,8 @@ struct Sample {
     virt: Vec<[Fr; 3]>,
     scratch: Vec<[Fr; 3]>,
     challenges: ExternalChallenges,
+    /// The scratch bijection inverted, so an operand's slot is a lookup.
+    index: BTreeMap<PolyAddress, usize>,
 }
 
 /// The kernel over sampled operands: a halving gate reads each of its operands
@@ -616,10 +644,7 @@ fn gate_operands(
     let mut out = Vec::new();
     for op in gate.operands() {
         let value = match op {
-            PolyAddress::Inner { .. } => {
-                let slot = a.scratch.iter().position(|slot| slot.address == op);
-                slot.map(|i| s.scratch[i])
-            }
+            PolyAddress::Inner { .. } => s.index.get(&op).map(|i| s.scratch[*i]),
             PolyAddress::Cached { layer, offset } if !tree && !in_cached => {
                 let list = a.layers.get(layer as usize);
                 match list.and_then(|list| list.cached.get(offset as usize)) {
@@ -650,6 +675,7 @@ fn gate_operands(
 /// row-local.
 fn row_local_order(a: &CircuitArtifact) -> Vec<usize> {
     let mut known = vec![false; a.scratch.len()];
+    let mut placed = vec![false; a.relations.len()];
     let mut order: Vec<usize> = Vec::new();
     loop {
         let before = order.len();
@@ -660,7 +686,7 @@ fn row_local_order(a: &CircuitArtifact) -> Vec<usize> {
                 rel.gate,
                 GateDef::TreeProduct { .. } | GateDef::TreeCross { .. }
             );
-            if order.contains(&r) || halving {
+            if placed[r] || halving {
                 continue;
             }
             let ready = rel.gate.operands().iter().all(|op| match *op {
@@ -669,6 +695,7 @@ fn row_local_order(a: &CircuitArtifact) -> Vec<usize> {
             });
             if ready {
                 order.push(r);
+                placed[r] = true;
                 if let Some(slot) = rel.output.and_then(|i| known.get_mut(i as usize)) {
                     *slot = true;
                 }
@@ -821,12 +848,13 @@ pub fn check_padding_identity(a: &CircuitArtifact) -> Result<(), String> {
             .filter(|e| matches!(e.gate, GateDef::TreeCross { .. }))
             .flat_map(|e| e.gate.operands())
             .collect();
+        let index = slot_index(a);
         for entry in &a.layers[k].producing {
             for op in entry.gate.operands() {
                 if fraction.contains(&op) {
                     continue;
                 }
-                let slot = a.scratch.iter().position(|slot| slot.address == op);
+                let slot = index.get(&op).copied();
                 let Some(i) = slot.filter(|i| known[*i]) else {
                     return Err(format!(
                         "padding identity: halving gate list {k} reads {op}, which no row-local \
@@ -878,9 +906,13 @@ pub fn violated_relations(
         "violated_relations: (committed, scratch) lengths"
     );
     let order = row_local_order(a);
+    let mut row_local = vec![false; a.relations.len()];
+    for r in &order {
+        row_local[*r] = true;
+    }
     let mut violated = Vec::new();
     for (r, rel) in a.relations.iter().enumerate() {
-        if !order.contains(&r) {
+        if !row_local[r] {
             continue;
         }
         let value = row_value(a, &rel.gate, &w.committed, w.row, &w.scratch, challenges)
