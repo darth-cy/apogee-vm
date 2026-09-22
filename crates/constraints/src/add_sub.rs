@@ -31,9 +31,8 @@ use field::Fr;
 use crate::lookup::ChannelSpec;
 use crate::memory::{
     deleg_space, frame, frame_queries, frame_with_channels_artifact, rd_selected, FamilySpec, ARG1,
-    ARG2, DELEG,
-    FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, PC, RAM, RD, RS1,
-    RS2,
+    ARG2, DELEG, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, PC,
+    RAM, RD, RS1, RS2,
 };
 use crate::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
 
@@ -64,8 +63,14 @@ const _: () = {
         assert!(DELEGATIONS[i].1 <= constants::ecall::PRECOMPILE_LAST);
         let mut j = i + 1;
         while j < TYPES {
-            assert!(DELEGATIONS[i].1 != DELEGATIONS[j].1, "two delegation types share an ecall number");
-            assert!(DELEGATIONS[i].2 != DELEGATIONS[j].2, "two delegation types share an address space");
+            assert!(
+                DELEGATIONS[i].1 != DELEGATIONS[j].1,
+                "two delegation types share an ecall number"
+            );
+            assert!(
+                DELEGATIONS[i].2 != DELEGATIONS[j].2,
+                "two delegation types share an address space"
+            );
             j += 1;
         }
         i += 1;

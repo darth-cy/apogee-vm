@@ -6,9 +6,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use constraints::memory::{ frame_query_takes,
-    frame_queries, gap_hi, ARG1, ARG2, DELEG, FRAME_DELTA, FRAME_NAMES, FRAME_SPACE, LOAD, PC, RAM,
-    RD, RS1, RS2,
+use constraints::memory::{
+    frame_queries, frame_query_takes, gap_hi, ARG1, ARG2, DELEG, FRAME_DELTA, FRAME_NAMES,
+    FRAME_SPACE, LOAD, PC, RAM, RD, RS1, RS2,
 };
 use constraints::PolyAddress;
 use field::Fr;

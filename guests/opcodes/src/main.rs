@@ -26,7 +26,8 @@
 //!   `c.unimp`, which trap), each instruction of the block executed;
 //! - `cover_ecall`: `read` into and `write` from an unaligned buffer, a
 //!   zero-length `write`, `-EBADF` for both calls, the empty hint stream, and
-//!   `-ENOSYS` for the precompile range and an unassigned host-call number.
+//!   `-ENOSYS` for an unassigned precompile number and an unassigned
+//!   host-call number.
 //!
 //! # fd 0, the public input
 //!
@@ -593,8 +594,13 @@ cover_ecall:
     ecall
     add     t1, t1, a0
 
-    /* the precompile range, and a host-call number nobody assigned: -ENOSYS */
-    li      a7, 0x500
+    /* the precompile range, and a host-call number nobody assigned: -ENOSYS.
+       0x5ff rather than 0x500: since S23 the low precompile numbers are
+       *delegations*, and calling one a guest did not declare is a fatal
+       trace-time failure rather than an -ENOSYS (`docs/spec/delegation.md`
+       §7). What this block covers is the `ecall` instruction over a number
+       nothing answers, which 0x5ff is and 0x500 no longer is. */
+    li      a7, 0x5ff
     mv      a0, t0
     ecall
     add     t1, t1, a0

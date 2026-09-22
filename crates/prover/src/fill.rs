@@ -16,18 +16,18 @@ use constants::fr_arith as fa;
 use constants::poseidon2 as p2;
 use constants::{delegation, ecall, family, guest_memory, keccak, memory};
 use constraints::add_sub::{
-    DECODED, IS_ECALL, IS_FENCE, IS_KECCAK, KINDS, NEXT_PC_HI, PC_WRAP, RD_HI, TABLE_WIDTH, WRAP,
+    DECODED, IS_ECALL, IS_FENCE, KINDS, NEXT_PC_HI, PC_WRAP, RD_HI, TABLE_WIDTH, WRAP,
 };
 use constraints::atomics as at_circuit;
-use constraints::jump_branch_slt as jbs_circuit;
 use constraints::delegation as deleg;
 use constraints::fr_arith as fa_circuit;
+use constraints::jump_branch_slt as jbs_circuit;
 use constraints::keccak as kec_circuit;
-use constraints::poseidon2 as p2_circuit;
 use constraints::mem_subword as ms_circuit;
 use constraints::mem_word as mw_circuit;
 use constraints::memory::{frame_queries, rd_selected};
 use constraints::mul_div as md_circuit;
+use constraints::poseidon2 as p2_circuit;
 use constraints::shift_bitwise as sb_circuit;
 use constraints::PolyAddress;
 use field::Fr;
@@ -116,7 +116,10 @@ fn delegation_frame(
     let mut out: Vec<(PolyAddress, MultilinearPoly)> = Vec::new();
     let cycles: Vec<Fr> = rows.clone().map(|r| Fr::from_u64(trace.cycle[r])).collect();
     out.push((deleg::CYCLE, fr_column(cycles, h)));
-    out.push((deleg::LIVE, u32_column(rows.clone().map(|_| 1).collect(), h)));
+    out.push((
+        deleg::LIVE,
+        u32_column(rows.clone().map(|_| 1).collect(), h),
+    ));
     out.push((
         deleg::BASE,
         u32_column(rows.clone().map(|r| trace.base[r]).collect(), h),
@@ -206,7 +209,11 @@ fn borrow_chain(words: &[u32; 8]) -> ([u64; 8], [u64; 8]) {
     for i in 0..8 {
         let d = words[i] as i64 - p[i] as i64 - carry;
         carry = i64::from(d < 0);
-        diff[i] = if d < 0 { (d + (1i64 << 32)) as u64 } else { d as u64 };
+        diff[i] = if d < 0 {
+            (d + (1i64 << 32)) as u64
+        } else {
+            d as u64
+        };
         borrow[i] = carry as u64;
     }
     (diff, borrow)
@@ -236,7 +243,9 @@ fn value_columns(
         for t in 0..32 {
             let values: Vec<u32> = rows
                 .clone()
-                .map(|r| ((borrow_chain(&value_words(trace, first, field, r)).0[k] >> t) & 1) as u32)
+                .map(|r| {
+                    ((borrow_chain(&value_words(trace, first, field, r)).0[k] >> t) & 1) as u32
+                })
                 .collect();
             out.push((diffs(k, t), u32_column(values, h)));
         }
@@ -434,7 +443,7 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
     let mut decoded: [Vec<u32>; 6] = Default::default();
     let mut kinds: [Vec<u32>; 6] = Default::default();
     let (mut is_ecall, mut is_fence, mut wrap) = (Vec::new(), Vec::new(), Vec::new());
-    let mut is_keccak: Vec<u32> = Vec::new();
+    let mut is_deleg: [Vec<u32>; constraints::add_sub::IS_DELEGATION.len()] = Default::default();
     let (mut sel, mut rd_hi, mut next_pc_hi) = (Vec::new(), Vec::new(), Vec::new());
     for r in start..end {
         let row = trace.row(r);
@@ -453,7 +462,9 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
         let read = |role: Role| row.query(role).map_or(0, |q| q.read_value);
         let (a, b) = (read(Role::Rs1), read(Role::Rs2));
         let bit = mask.trailing_zeros();
-        let (mut ecall_row, mut fence_row, mut keccak_row) = (0, 0, 0);
+        let (mut ecall_row, mut fence_row) = (0, 0);
+        // One selector per delegation type, in `IS_DELEGATION` order.
+        let mut deleg_row = [0u32; constraints::add_sub::IS_DELEGATION.len()];
         let (value, carry) = match bit {
             kind::ADD => add(a, b),
             kind::ADDI => add(a, imm),
@@ -475,7 +486,11 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
                 // `rd_selected` is 0, and its `next_pc` is the fall-through —
                 // it is not an exit (`docs/spec/delegation.md` §5.2).
                 system_code::ECALL if program::delegation_family(a).is_some() => {
-                    keccak_row = 1;
+                    let at = program::DELEGATIONS
+                        .iter()
+                        .position(|(_, n, ..)| *n == a)
+                        .expect("just matched");
+                    deleg_row[at] = 1;
                     (0, 0)
                 }
                 system_code::ECALL => {
@@ -514,8 +529,17 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
         for (k, column) in kinds.iter_mut().enumerate() {
             column.push((k as u32 == bit) as u32);
         }
-        is_ecall.push(ecall_row | keccak_row);
-        is_keccak.push(keccak_row);
+        let requests: u32 = deleg_row.iter().sum();
+        is_ecall.push(ecall_row | requests);
+        for (column, v) in is_deleg.iter_mut().zip(deleg_row) {
+            column.push(v);
+        }
+        // `deleg_space`, the `M` column the mirror's leaf reads, is not this
+        // fill's: `trace::build_memory_columns` writes it from the mirror
+        // event's own address space. What ties the two together is the
+        // registry — `deleg_space_rule` asks for `Σ tag_t·is_deleg_t`, and the
+        // event's space is that family's tag — so a disagreement between them
+        // is a disagreement inside `constants::delegation::TYPES`.
         is_fence.push(fence_row);
         wrap.push(carry);
         sel.push(value);
@@ -533,7 +557,9 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
     }
     out.push((IS_ECALL, u32_column(is_ecall, h)));
     out.push((IS_FENCE, u32_column(is_fence, h)));
-    out.push((IS_KECCAK, u32_column(is_keccak, h)));
+    for (address, values) in constraints::add_sub::IS_DELEGATION.iter().zip(is_deleg) {
+        out.push((*address, u32_column(values, h)));
+    }
     out.push((WRAP, u32_column(wrap, h)));
     out.push((RD_HI, u32_column(rd_hi, h)));
     out.push((PC_WRAP, u32_column(Vec::new(), h)));

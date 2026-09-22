@@ -51,7 +51,7 @@ use field::Fr;
 use crate::delegation as d;
 use crate::lookup::ChannelSpec;
 use crate::{
-    CircuitArtifact, Coeff, GateDef, PolyAddress, Padding, COEFFICIENT_ENCODING_CANONICAL_LE,
+    CircuitArtifact, Coeff, GateDef, Padding, PolyAddress, COEFFICIENT_ENCODING_CANONICAL_LE,
     FORMAT_VERSION,
 };
 
@@ -79,9 +79,10 @@ const CARRY: usize = 1 + p2::WIDTH;
 pub const MEMORY_COLUMNS: usize = d::HEAD_COLUMNS + 4 * WORDS;
 /// `W` columns: the frame's own, then six values' bits — three read, three
 /// written.
-pub const WITNESS_COLUMNS: usize =
-    d::GAP_BITS * WORDS + d::BASE_LOW_BITS + d::BASE_ROOM_BITS
-        + 2 * p2::WIDTH * (d::VALUE_BITS + d::CANONICITY_BITS);
+pub const WITNESS_COLUMNS: usize = d::GAP_BITS * WORDS
+    + d::BASE_LOW_BITS
+    + d::BASE_ROOM_BITS
+    + 2 * p2::WIDTH * (d::VALUE_BITS + d::CANONICITY_BITS);
 
 const fn w(i: usize) -> PolyAddress {
     PolyAddress::Witness(i as u32)
@@ -586,7 +587,12 @@ fn check_shape(a: &CircuitArtifact) {
             continue;
         }
         let want = tree_width(k + 1) + carry_width(k + 1) + perm_width(k + 1);
-        assert_eq!(list.width as usize, want, "poseidon2: layer {} width", k + 1);
+        assert_eq!(
+            list.width as usize,
+            want,
+            "poseidon2: layer {} width",
+            k + 1
+        );
     }
     for name in ["base_aligned", "base_in_window"] {
         assert!(
@@ -594,17 +600,16 @@ fn check_shape(a: &CircuitArtifact) {
             "poseidon2: the emitted artifact has no relation `{name}`"
         );
     }
-    for (prefix, want) in [
-        ("addr_w", WORDS),
-        ("gap_w", WORDS),
-        ("out_lane", p2::WIDTH),
-    ] {
+    for (prefix, want) in [("addr_w", WORDS), ("gap_w", WORDS), ("out_lane", p2::WIDTH)] {
         let got = a
             .relations
             .iter()
             .filter(|r| r.name.starts_with(prefix) && !r.name.ends_with("_boolean"))
             .count();
-        assert_eq!(got, want, "poseidon2: {got} `{prefix}*` relations, not {want}");
+        assert_eq!(
+            got, want,
+            "poseidon2: {got} `{prefix}*` relations, not {want}"
+        );
     }
     assert_eq!(
         a.layers[ROUND_LAYERS].enforcing.len(),

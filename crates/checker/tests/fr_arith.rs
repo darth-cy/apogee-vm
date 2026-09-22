@@ -517,7 +517,11 @@ fn a_free_inverse_at_zero_is_refused() {
 /// the only thing that refuses it.
 #[test]
 fn a_row_claiming_two_operations_is_refused() {
-    assert_eq!(f::OP_ADD + f::OP_MUL, f::OP_INV, "the forgery below needs this");
+    assert_eq!(
+        f::OP_ADD + f::OP_MUL,
+        f::OP_INV,
+        "the forgery below needs this"
+    );
     let a = fr_arith::artifact(VARS);
     // Row 2 of `honest()` is the inverse.
     let columns = witness(&honest());
@@ -566,7 +570,12 @@ fn a_non_canonical_operand_is_refused() {
                 Fr::from_u64((diff[k] >> t) & 1),
             );
         }
-        columns = corrupt(columns, fr_arith::borrow_bit(0, k), 0, Fr::from_u64(borrow[k]));
+        columns = corrupt(
+            columns,
+            fr_arith::borrow_bit(0, k),
+            0,
+            Fr::from_u64(borrow[k]),
+        );
     }
     assert_eq!(refusal(&a, columns), "a_below_modulus");
 }

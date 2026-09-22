@@ -48,8 +48,9 @@ use crate::{
 // builder would file them into the requesting row. Both are `const` assertions
 // rather than tests because a violation is a broken ABI, not a failing case.
 // `crates/constraints/src/keccak.rs` carries the same two.
-const _: () =
-    assert!(constants::delegation::ANCHOR_DELTA == crate::memory::FRAME_DELTA[crate::memory::DELEG]);
+const _: () = assert!(
+    constants::delegation::ANCHOR_DELTA == crate::memory::FRAME_DELTA[crate::memory::DELEG]
+);
 const _: () = {
     let mut q = 0;
     while q < crate::memory::FRAME_QUERIES {
@@ -378,10 +379,7 @@ pub(crate) fn frame_gates(space_words: usize, frame_bytes: u64) -> Vec<(String, 
             format!("addr_w{j}"),
             quadratic(
                 vec![(neg(4 * j as u64), LIVE)],
-                vec![
-                    (lit(1), LIVE, word(j, WORD_ADDR)),
-                    (neg(1), LIVE, BASE),
-                ],
+                vec![(lit(1), LIVE, word(j, WORD_ADDR)), (neg(1), LIVE, BASE)],
             ),
         ));
     }
@@ -519,10 +517,7 @@ pub(crate) fn canonical_gates(
         } else {
             format!("borrow{}", i - 32 * WORDS_PER_VALUE)
         };
-        out.push((
-            format!("{name}_{which}_boolean"),
-            booleanity(w(canon + i)),
-        ));
+        out.push((format!("{name}_{which}_boolean"), booleanity(w(canon + i))));
     }
     // `word_k − Σ 2^t·bit = 0`, ungated and degree 1: both sides are 0 on the
     // padding row, so no mask is needed, and this single gate is the word's
@@ -615,7 +610,11 @@ impl Assembly {
         producing: Vec<(String, GateDef)>,
         enforcing: Vec<(String, GateDef)>,
     ) {
-        assert_eq!(layer, self.layers.len() + 1, "delegation: layers go in order");
+        assert_eq!(
+            layer,
+            self.layers.len() + 1,
+            "delegation: layers go in order"
+        );
         self.base.push(self.scratch.len() as u32);
         let reads_inner = layer > 1;
         let mut entries = Vec::with_capacity(producing.len());

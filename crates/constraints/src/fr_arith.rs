@@ -198,10 +198,7 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     // it is `f::OPS`-valued on a live row and 0 on a padding one, and needs no
     // 32-bit decomposition of its own.
     for (i, op) in f::OPS.iter().enumerate() {
-        enforcing.push((
-            format!("selector{op}_boolean"),
-            d::booleanity(selector(i)),
-        ));
+        enforcing.push((format!("selector{op}_boolean"), d::booleanity(selector(i))));
     }
     {
         let mut terms = vec![(d::lit(1), d::word(f::OPCODE_WORD, d::WORD_READ_VALUE))];
@@ -265,10 +262,8 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     // (`crates/constraints/src/gadgets.rs` is the same two gates over a linear
     // form), and the third gate the gadget does not owe but this family does.
     {
-        let mut products: Vec<(Coeff, PolyAddress, PolyAddress)> = a_terms
-            .iter()
-            .map(|(c, x)| (*c, *x, inv()))
-            .collect();
+        let mut products: Vec<(Coeff, PolyAddress, PolyAddress)> =
+            a_terms.iter().map(|(c, x)| (*c, *x, inv())).collect();
         enforcing.push((
             "inv_is_an_inverse".to_string(),
             d::quadratic(
@@ -312,11 +307,7 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
 
     let artifact = crate::memory::assemble(
         trace_vars,
-        [
-            d::memory_names(WORDS),
-            witness_names(),
-            Vec::new(),
-        ],
+        [d::memory_names(WORDS), witness_names(), Vec::new()],
         Vec::new(),
         d::leaves(address_space::DELEGATION_FR_ARITH, WORDS),
         enforcing,
@@ -403,7 +394,10 @@ fn check_shape(a: &CircuitArtifact) {
             .iter()
             .filter(|r| r.name.starts_with(prefix) && !r.name.ends_with("_boolean"))
             .count();
-        assert_eq!(got, want, "fr_arith: {got} `{prefix}*` relations, not {want}");
+        assert_eq!(
+            got, want,
+            "fr_arith: {got} `{prefix}*` relations, not {want}"
+        );
     }
     assert!(
         !a.relations.iter().any(|r| r.name.contains("assume")),

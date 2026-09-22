@@ -83,7 +83,11 @@ fn the_registry_is_one_table() {
             "a delegation family is invoked, never decoded, so it has no table"
         );
     }
-    assert_eq!(delegation_family(ecall::EXIT), None, "exit is not a delegation");
+    assert_eq!(
+        delegation_family(ecall::EXIT),
+        None,
+        "exit is not a delegation"
+    );
     assert_eq!(delegation_frame_words(family::ADD_SUB_LUI_AUIPC), None);
     assert_eq!(
         [
@@ -166,7 +170,7 @@ fn a_number_no_family_answers_is_refused() {
     // the ABI — not silently ignored, which would make the guest's own call
     // fail much later and much less clearly.
     let base = constants::guest_memory::RAM_ORIGIN;
-    for number in [0u32, ecall::EXIT, ecall::PRECOMPILE_POSEIDON2, 0x05ff] {
+    for number in [0u32, ecall::EXIT, ecall::PRECOMPILE_FIRST + 3, 0x05ff] {
         assert_eq!(
             declared_delegations(&image_of(record(number))),
             Err(ProgramError::UnknownDelegation { addr: base, number }),
@@ -204,23 +208,32 @@ fn a_segment_with_no_file_bytes_carries_no_record() {
 // Every committed guest
 // ---------------------------------------------------------------------------
 
-/// Acceptance 8's first half, over every guest in the tree: the two that call
-/// or reference `guest_sdk::keccak256` declare `KECCAK_F`, and **no other
-/// guest declares anything at all** — not even the ten that link the SDK.
+/// S21 acceptance 8's first half and S23 acceptance 9's, over every guest in
+/// the tree: a guest declares exactly the delegation families whose shims it
+/// links, and **a guest that links none declares nothing at all** — not even
+/// the ones that link the SDK.
 ///
 /// The second clause is the one that matters. `guests/Cargo.toml` pins
 /// `codegen-units = 1`, so the SDK is one object file; a `#[used]` record
 /// would be in every guest that links it, `fib` included, and detachment
 /// would mean nothing.
+///
+/// Since S23 the set is wider than the guests that name a shim: `field`'s and
+/// `transcript`'s guest-target backends route `Fr`'s arithmetic and the
+/// permutation through the delegation shims, so **every guest that links
+/// either crate declares both families**. That is the seam working, not a
+/// leak: a guest doing field arithmetic is a guest whose proof needs those
+/// circuits.
 #[test]
 fn every_guest_declares_exactly_what_it_links() {
     for name in common::GUESTS {
         let image = common::guest(name);
-        let want: Vec<u32> = common::DECLARING_GUESTS
+        let mut want: Vec<u32> = common::DECLARING_GUESTS
             .iter()
             .filter(|(g, _)| *g == name)
-            .map(|(_, f)| *f)
+            .flat_map(|(_, f)| f.iter().copied())
             .collect();
+        want.sort_unstable();
         assert_eq!(
             declared_delegations(&image),
             Ok(want.clone()),
@@ -238,9 +251,19 @@ fn every_guest_declares_exactly_what_it_links() {
             );
         }
     }
-    // The two halves are both non-empty, so neither clause is vacuous.
-    assert_eq!(common::DECLARING_GUESTS.len(), 2);
+    // The two halves are both non-empty, so neither clause is vacuous, and
+    // every registered family is declared by at least one guest.
+    assert_eq!(common::DECLARING_GUESTS.len(), 7);
     assert!(common::GUESTS.len() > common::DECLARING_GUESTS.len() + 4);
+    for (fam, ..) in DELEGATIONS {
+        assert!(
+            common::DECLARING_GUESTS
+                .iter()
+                .any(|(_, f)| f.contains(&fam)),
+            "no guest declares {}",
+            program::family_name(fam)
+        );
+    }
 }
 
 /// Reachability survives `opt-level = 3`, which is the half of acceptance 8
@@ -261,7 +284,11 @@ fn every_guest_declares_exactly_what_it_links() {
 #[ignore = "builds two guests from source at both optimisation levels"]
 fn reachability_survives_the_optimiser() {
     for profile in ["debug", "release"] {
-        for (name, want) in [("keccak-test", vec![family::KECCAK_F]), ("fib", Vec::new())] {
+        for (name, want) in [
+            ("keccak-test", vec![family::KECCAK_F]),
+            ("recursion-ops", vec![family::POSEIDON2, family::FR_ARITH]),
+            ("fib", Vec::new()),
+        ] {
             let bytes = common::build_profile(name, &format!("deleg-{profile}"), profile);
             let image = loader::load_elf(&bytes).unwrap_or_else(|e| panic!("{name}: {e:?}"));
             assert_eq!(

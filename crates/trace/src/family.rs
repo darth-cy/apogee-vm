@@ -76,8 +76,9 @@ impl Role {
     pub fn space(self, delegation: Option<AddressSpace>) -> AddressSpace {
         match self {
             Role::Load | Role::Ram => AddressSpace::Ram,
-            Role::Delegate => delegation
-                .expect("a delegation request's row knows which family it is requesting"),
+            Role::Delegate => {
+                delegation.expect("a delegation request's row knows which family it is requesting")
+            }
             _ => AddressSpace::Reg,
         }
     }

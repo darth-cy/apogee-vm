@@ -330,12 +330,12 @@ pub mod recursion {
     use constants::{delegation, ecall, fr_arith, poseidon2};
 
     /// The Poseidon2 delegation's declaration record.
-    #[link_section = ".rodata.apogee.delegations"]
+    #[link_section = ".rodata.apogee.delegations.poseidon2"]
     static DELEGATION_POSEIDON2: [u8; delegation::MARKER_BYTES] =
         super::record(ecall::PRECOMPILE_POSEIDON2);
 
     /// The Fr-arithmetic delegation's declaration record.
-    #[link_section = ".rodata.apogee.delegations"]
+    #[link_section = ".rodata.apogee.delegations.fr_arith"]
     static DELEGATION_FR_ARITH: [u8; delegation::MARKER_BYTES] =
         super::record(ecall::PRECOMPILE_FR_ARITH);
 
@@ -412,6 +412,14 @@ pub mod recursion {
 /// loader change is needed: `crates/program` scans the image's own file-backed
 /// bytes for it, and program identity binds it through the image column.
 ///
+/// **Each record has a section name of its own**, and that is load-bearing:
+/// the linker's garbage collection works at section granularity, so three
+/// records sharing one `#[link_section]` are one input section and are kept
+/// or dropped together. With one name every guest that reached *any* shim
+/// declared *every* family, and detachment said nothing. The names all begin
+/// `.rodata.`, so `link.ld` absorbs them unchanged and the byte-wise scan does
+/// not care what they are called.
+///
 /// [`keccak_f1600`] reads its ecall number **out of this record**, which is
 /// what makes the record load-bearing rather than decorative: a shim that
 /// exists has one, and the number it calls is the number it declares.
@@ -425,9 +433,8 @@ pub mod recursion {
 /// `keccak256` drops the chain and the record with it.
 /// `crates/program/tests/delegation.rs` holds every committed guest to that,
 /// at both optimisation levels.
-#[link_section = ".rodata.apogee.delegations"]
-static DELEGATION_KECCAK_F: [u8; delegation::MARKER_BYTES] =
-    record(ecall::PRECOMPILE_KECCAK_F);
+#[link_section = ".rodata.apogee.delegations.keccak_f"]
+static DELEGATION_KECCAK_F: [u8; delegation::MARKER_BYTES] = record(ecall::PRECOMPILE_KECCAK_F);
 
 /// One declaration record: the magic, then the declared number as a
 /// little-endian `u32`. `const`-evaluated, so it is a constant in `.rodata`

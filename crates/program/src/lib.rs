@@ -939,10 +939,9 @@ pub fn setup_commitments(
             // no decoded table at all: it is invoked, never decoded, so there
             // is nothing about it for identity to commit but its presence in
             // the `VM_CONFIG` message.
-            family::ZERO_WINDOWS
-            | family::KECCAK_F
-            | family::POSEIDON2
-            | family::FR_ARITH => Vec::new(),
+            family::ZERO_WINDOWS | family::KECCAK_F | family::POSEIDON2 | family::FR_ARITH => {
+                Vec::new()
+            }
             // One column at a time: at 2^22 rows an `Fr` column is 128 MiB.
             _ => (0..table.columns.len())
                 .map(|c| cm(table, &table.column_poly(c)))

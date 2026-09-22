@@ -36,12 +36,12 @@ use std::path::PathBuf;
 use test_support::{sha256, to_hex};
 
 mod curve;
+mod delegation;
 mod family;
 mod field;
 mod gkr;
 mod guests;
 mod isa;
-mod delegation;
 mod loader;
 mod lookup;
 mod memory;
@@ -91,8 +91,23 @@ const GROUPS: [(&str, fn()); 18] = [
 /// reproduce from them -- the objdump and nm listings -- is in `loader`, which
 /// does run by default.
 const DEFAULT_GROUPS: [&str; 17] = [
-    "field", "poly", "curve", "tower", "pairing", "msm", "srs", "pcs", "loader", "isa", "program",
-    "gkr", "memory", "lookup", "family", "delegation", "tape",
+    "field",
+    "poly",
+    "curve",
+    "tower",
+    "pairing",
+    "msm",
+    "srs",
+    "pcs",
+    "loader",
+    "isa",
+    "program",
+    "gkr",
+    "memory",
+    "lookup",
+    "family",
+    "delegation",
+    "tape",
 ];
 
 fn main() {

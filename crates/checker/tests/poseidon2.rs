@@ -458,6 +458,11 @@ fn a_bad_frame_pointer_is_refused() {
 #[test]
 fn a_padding_rows_lane_is_not_free() {
     let a = poseidon2::artifact(VARS);
-    let columns = corrupt(witness(&honest()), poseidon2::value_bit(0, 0, 0), 3, Fr::ONE);
+    let columns = corrupt(
+        witness(&honest()),
+        poseidon2::value_bit(0, 0, 0),
+        3,
+        Fr::ONE,
+    );
     assert_eq!(refusal(&a, columns), "in0_word0");
 }

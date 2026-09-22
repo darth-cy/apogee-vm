@@ -69,6 +69,15 @@ pub const KECCAK_VARS: u32 = 8;
 /// `guests/keccak-unused`'s exit status.
 pub const KECCAK_UNUSED_RESULT: u32 = 7;
 
+/// `guests/recursion-ops`' exit status: the number of checks it passed.
+pub const RECURSION_RESULT: u32 = 9;
+
+/// `guests/recursion-unused`'s exit status.
+pub const RECURSION_UNUSED_RESULT: u32 = 11;
+
+/// S23's delegation heights, `2^8` like S21's.
+pub const DELEGATION_VARS: u32 = 8;
+
 /// The committed ELF of guest `name`.
 pub fn fixture(name: &str) -> Vec<u8> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -142,6 +151,23 @@ pub fn keccak_params() -> ProgramParams {
     params
 }
 
+/// S23's heights: the execution families `recursion-ops` runs at `2^20`, and
+/// the two delegation families at `2^8`.
+pub fn recursion_params() -> ProgramParams {
+    let mut params = heights(&[
+        family::ADD_SUB_LUI_AUIPC,
+        family::JUMP_BRANCH_SLT,
+        family::SHIFT_BITWISE,
+        family::MUL_DIV,
+        family::MEM_WORD,
+        family::MEM_SUBWORD,
+    ]);
+    for f in [family::POSEIDON2, family::FR_ARITH] {
+        params.heights[f as usize] = 1 << DELEGATION_VARS;
+    }
+    params
+}
+
 fn program_of(name: &str, params: &ProgramParams) -> Program {
     let image = load_elf(&fixture(name)).unwrap_or_else(|e| panic!("{name} loads: {e:?}"));
     let (tables, config) =
@@ -181,6 +207,14 @@ pub fn keccak_unused_program() -> Program {
     program_of("keccak-unused", &keccak_params())
 }
 
+pub fn recursion_program() -> Program {
+    program_of("recursion-ops", &recursion_params())
+}
+
+pub fn recursion_unused_program() -> Program {
+    program_of("recursion-unused", &recursion_params())
+}
+
 /// The post-execution archive of `addsub`'s one run.
 pub fn archive(program: &Program) -> TraceArchive {
     trace(program, RESULT)
@@ -214,6 +248,16 @@ pub fn keccak_archive(program: &Program) -> TraceArchive {
 /// The post-execution archive of `keccak-unused`'s one run.
 pub fn keccak_unused_archive(program: &Program) -> TraceArchive {
     trace(program, KECCAK_UNUSED_RESULT)
+}
+
+/// The post-execution archive of `recursion-ops`' one run.
+pub fn recursion_archive(program: &Program) -> TraceArchive {
+    trace(program, RECURSION_RESULT)
+}
+
+/// The post-execution archive of `recursion-unused`'s one run.
+pub fn recursion_unused_archive(program: &Program) -> TraceArchive {
+    trace(program, RECURSION_UNUSED_RESULT)
 }
 
 /// A run with no input and no hint, which must exit with `status`.
@@ -263,6 +307,15 @@ pub fn keccak_setup() -> ProverSetup {
 
 pub fn keccak_unused_setup() -> ProverSetup {
     ProverSetup::new(keccak_unused_program(), toy_srs(ADD_VARS)).expect("keccak-unused registers")
+}
+
+pub fn recursion_setup() -> ProverSetup {
+    ProverSetup::new(recursion_program(), toy_srs(ADD_VARS)).expect("recursion-ops registers")
+}
+
+pub fn recursion_unused_setup() -> ProverSetup {
+    ProverSetup::new(recursion_unused_program(), toy_srs(ADD_VARS))
+        .expect("recursion-unused registers")
 }
 
 /// The toy SRS's `tau`.

@@ -168,10 +168,7 @@ pub fn build_memory_columns(
         let values = rows
             .iter()
             .map(|row| row[at].as_ref().map_or(0, |e| e.space.tag() as u64));
-        out.push((
-            deleg_space(queries.len()),
-            column(values.collect(), height),
-        ));
+        out.push((deleg_space(queries.len()), column(values.collect(), height)));
     }
     out
 }

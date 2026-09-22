@@ -539,7 +539,12 @@ impl<'a> Machine<'a> {
 
     /// Write a delegation's answer back over its frame, returning the word
     /// queries as `(address, old, new)` in frame order.
-    fn delegation_writeback(&mut self, base: u32, old: &[u32], new: &[u32]) -> Vec<(u32, u32, u32)> {
+    fn delegation_writeback(
+        &mut self,
+        base: u32,
+        old: &[u32],
+        new: &[u32],
+    ) -> Vec<(u32, u32, u32)> {
         let mut frame = Vec::with_capacity(old.len());
         for j in 0..old.len() {
             let addr = base + 4 * j as u32;
@@ -1059,9 +1064,13 @@ impl Recorder<'_> {
         };
         for role in ROLES {
             if let Some((addr, read, write)) = queries.queries[role as usize] {
-                let event =
-                    self.log
-                        .record(role.space(delegation), addr, base + role.delta(), read, write);
+                let event = self.log.record(
+                    role.space(delegation),
+                    addr,
+                    base + role.delta(),
+                    read,
+                    write,
+                );
                 row.queries[role as usize] = Query {
                     addr,
                     read_ts: event.read_ts,
