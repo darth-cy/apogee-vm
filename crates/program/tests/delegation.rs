@@ -52,11 +52,20 @@ fn image_of(bytes: Vec<u8>) -> ProgramImage {
 /// `VmConfig` lists it last.
 #[test]
 fn the_registry_is_one_table() {
-    assert_eq!(DELEGATIONS.len(), 1, "S21 registers one delegation family");
-    for (fam, number, words) in DELEGATIONS {
+    assert_eq!(
+        DELEGATIONS.len(),
+        3,
+        "S21 registers one delegation family and S23 two more"
+    );
+    for (fam, number, space, words) in DELEGATIONS {
         assert_eq!(delegation_family(number), Some(fam));
         assert_eq!(delegation_ecall(fam), Some(number));
         assert_eq!(delegation_frame_words(fam), Some(words));
+        assert_eq!(program::delegation_space(fam), Some(space));
+        assert!(
+            constants::address_space::DELEGATION.contains(&space),
+            "a delegation family's anchor tag is in the delegation set"
+        );
         assert!(
             (ecall::PRECOMPILE_FIRST..=ecall::PRECOMPILE_LAST).contains(&number),
             "a delegation is a precompile: {number:#x}"
@@ -74,20 +83,40 @@ fn the_registry_is_one_table() {
             "a delegation family is invoked, never decoded, so it has no table"
         );
     }
-    assert_eq!(
-        (
-            delegation_family(ecall::EXIT),
-            delegation_family(ecall::PRECOMPILE_POSEIDON2)
-        ),
-        (None, None),
-        "neither exit nor the poseidon2 number is a delegation yet"
-    );
+    assert_eq!(delegation_family(ecall::EXIT), None, "exit is not a delegation");
     assert_eq!(delegation_frame_words(family::ADD_SUB_LUI_AUIPC), None);
     assert_eq!(
-        (family::KECCAK_F, ecall::PRECOMPILE_KECCAK_F, 50),
-        DELEGATIONS[0],
-        "the keccak family, its number and its 50-word frame"
+        [
+            (
+                family::KECCAK_F,
+                ecall::PRECOMPILE_KECCAK_F,
+                constants::address_space::DELEGATION_KECCAK_F,
+                50
+            ),
+            (
+                family::POSEIDON2,
+                ecall::PRECOMPILE_POSEIDON2,
+                constants::address_space::DELEGATION_POSEIDON2,
+                24
+            ),
+            (
+                family::FR_ARITH,
+                ecall::PRECOMPILE_FR_ARITH,
+                constants::address_space::DELEGATION_FR_ARITH,
+                25
+            ),
+        ],
+        DELEGATIONS,
+        "the three families, their numbers, their tags and their frames"
     );
+    // Every number and every tag is its own: the request-side gates partition
+    // ecall rows on exactly that (`crates/constraints/src/add_sub.rs`).
+    for (i, (_, n, s, _)) in DELEGATIONS.iter().enumerate() {
+        for (_, m, t, _) in DELEGATIONS.iter().skip(i + 1) {
+            assert_ne!(n, m, "two delegation types share an ecall number");
+            assert_ne!(s, t, "two delegation types share an address space");
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -201,7 +230,7 @@ fn every_guest_declares_exactly_what_it_links() {
             .expect("the guest decodes")
             .1;
         let families: Vec<u32> = config.families.iter().map(|(f, _)| *f).collect();
-        for (fam, _, _) in DELEGATIONS {
+        for (fam, ..) in DELEGATIONS {
             assert_eq!(
                 families.contains(&fam),
                 want.contains(&fam),

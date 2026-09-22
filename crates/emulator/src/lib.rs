@@ -27,7 +27,8 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use constants::{delegation, ecall, guest_memory, keccak, memory};
+use constants::{delegation, ecall, family, fr_arith, guest_memory, keccak, memory, poseidon2};
+use field::Fr;
 use isa::{decode, Instr};
 use loader::{ProgramImage, Slot};
 use program::{row_kind, DecodedTables, FamilyId, VmConfig};
@@ -90,6 +91,15 @@ pub enum EmuError {
     /// are different failures — one is a VM that lacks the circuit, the other
     /// a program whose declaration and whose code disagree.
     DelegationFamilyAbsent { pc: u32, number: u32 },
+    /// A delegation's frame does not describe a call its family can answer:
+    /// an operation code outside the legal set, or a value that is not a
+    /// canonical `Fr`.
+    ///
+    /// Fatal, and it has to be: the circuit refuses both — the opcode by its
+    /// selector sum, a non-canonical value by its borrow chain — so an
+    /// execution the emulator let through here would be one no proof could
+    /// cover (`docs/spec/delegation.md` §13).
+    DelegationFrame { pc: u32, detail: &'static str },
 }
 
 impl fmt::Display for EmuError {
@@ -121,7 +131,83 @@ impl fmt::Display for EmuError {
                 "the delegation ecall {number:#x} at pc {pc:#010x} has no family in this \
                  VmConfig, so the program calls a delegation it does not declare"
             ),
+            EmuError::DelegationFrame { pc, detail } => write!(
+                f,
+                "the delegation frame at pc {pc:#010x} is not a call this family answers: {detail}"
+            ),
         }
+    }
+}
+
+/// The Poseidon2 delegation over its 24-word frame: three canonical
+/// little-endian `Fr` lanes, permuted in place.
+///
+/// The permutation is `transcript::poseidon2_permute` and nothing else — the
+/// executor and the circuit are held to one definition, not to each other.
+/// A lane that is not canonical is refused by the caller before this runs.
+fn poseidon2_frame(old: &[u32]) -> Vec<u32> {
+    let mut state = [Fr::ZERO; poseidon2::WIDTH];
+    for (i, lane) in state.iter_mut().enumerate() {
+        *lane = Fr::from_bytes(&value_bytes(old, poseidon2::WORDS_PER_LANE * i))
+            .expect("the caller checked canonicity");
+    }
+    transcript::poseidon2_permute(&mut state);
+    let mut out = old.to_vec();
+    for (i, lane) in state.iter().enumerate() {
+        write_value(&mut out, poseidon2::WORDS_PER_LANE * i, &lane.to_bytes());
+    }
+    out
+}
+
+/// The Fr-arithmetic delegation over its 25-word frame: the opcode word, then
+/// `a`, `b` and the result in `field::Fr`'s in-memory representation.
+///
+/// The three operations are `Fr`'s own `Add`, `Mul` and `inverse`, with
+/// `inverse(0) = 0` in place of `None`, which is this delegation's convention
+/// (`docs/spec/delegation.md` §13).
+fn fr_arith_frame(pc: u32, old: &[u32]) -> Result<Vec<u32>, EmuError> {
+    let operand = |first: usize| -> Result<Fr, EmuError> {
+        Fr::from_memory_bytes(&value_bytes(old, first)).ok_or(EmuError::DelegationFrame {
+            pc,
+            detail: "an operand is not a canonical Fr",
+        })
+    };
+    let a = operand(fr_arith::A_WORD)?;
+    let b = operand(fr_arith::B_WORD)?;
+    // The result's words are read and thrown away, but they must still be a
+    // canonical `Fr`: the circuit decomposes every frame value it names, and
+    // the words it writes are the ones its canonicity gates bind.
+    let out = match old[fr_arith::OPCODE_WORD] {
+        fr_arith::OP_ADD => a + b,
+        fr_arith::OP_MUL => a * b,
+        fr_arith::OP_INV => a.inverse().unwrap_or(Fr::ZERO),
+        _ => {
+            return Err(EmuError::DelegationFrame {
+                pc,
+                detail: "the operation code is not add, mul or inverse",
+            })
+        }
+    };
+    let mut frame = old.to_vec();
+    write_value(&mut frame, fr_arith::OUT_WORD, &out.to_memory_bytes());
+    Ok(frame)
+}
+
+/// The 32 bytes a frame value occupies, from its eight little-endian words.
+fn value_bytes(frame: &[u32], first: usize) -> [u8; 32] {
+    let mut bytes = [0u8; 32];
+    for k in 0..8 {
+        bytes[4 * k..4 * k + 4].copy_from_slice(&frame[first + k].to_le_bytes());
+    }
+    bytes
+}
+
+/// Write 32 bytes back over a frame value's eight words.
+fn write_value(frame: &mut [u32], first: usize, bytes: &[u8; 32]) {
+    for k in 0..8 {
+        let mut word = [0u8; 4];
+        word.copy_from_slice(&bytes[4 * k..4 * k + 4]);
+        frame[first + k] = u32::from_le_bytes(word);
     }
 }
 
@@ -426,17 +512,15 @@ impl<'a> Machine<'a> {
         Ok(word)
     }
 
-    /// Run keccak-f[1600] over the 200-byte frame at `base`, in place, and
-    /// return its 50 word queries as `(address, old, new)` in frame order.
-    ///
-    /// The two frame rules of `docs/spec/delegation.md` §4, and nothing else
-    /// checks them: the base is word-aligned, and the whole frame lies inside
-    /// the RAM window. Both are fatal guest errors, as a misaligned load is —
-    /// the circuit refuses the same two, so an execution this refuses is one
-    /// no proof could cover. The bound is computed in `u64` because
-    /// `base + 200` wraps a `u32` at the top of the window, and a wrapped
-    /// comparison passes a check it should fail.
-    fn keccak_frame(&mut self, pc: u32, base: u32) -> Result<Vec<(u32, u32, u32)>, EmuError> {
+    /// Read the `words`-word frame at `base`, checking the two frame rules of
+    /// `docs/spec/delegation.md` §4, and nothing else checks them: the base is
+    /// word-aligned, and the whole frame lies inside the RAM window. Both are
+    /// fatal guest errors, as a misaligned load is — the circuit refuses the
+    /// same two, so an execution this refuses is one no proof could cover. The
+    /// bound is computed in `u64` because `base + frame bytes` wraps a `u32`
+    /// at the top of the window, and a wrapped comparison passes a check it
+    /// should fail.
+    fn delegation_frame(&mut self, pc: u32, base: u32, words: usize) -> Result<Vec<u32>, EmuError> {
         if !base.is_multiple_of(4) {
             return Err(EmuError::Misaligned {
                 pc,
@@ -446,22 +530,53 @@ impl<'a> Machine<'a> {
         }
         let window = guest_memory::RAM_ORIGIN as u64 + guest_memory::RAM_LENGTH as u64;
         if (base as u64) < guest_memory::RAM_ORIGIN as u64
-            || base as u64 + keccak::STATE_BYTES as u64 > window
+            || base as u64 + 4 * words as u64 > window
         {
             return Err(EmuError::OutOfBounds { pc, addr: base });
         }
-        let old: [u32; keccak::FRAME_WORDS] =
-            core::array::from_fn(|j| self.word(base + 4 * j as u32));
-        let mut lanes = lanes_of(&old);
-        keccak_f(&mut lanes);
-        let new = words_of(&lanes);
-        let mut frame = Vec::with_capacity(keccak::FRAME_WORDS);
-        for j in 0..keccak::FRAME_WORDS {
+        Ok((0..words).map(|j| self.word(base + 4 * j as u32)).collect())
+    }
+
+    /// Write a delegation's answer back over its frame, returning the word
+    /// queries as `(address, old, new)` in frame order.
+    fn delegation_writeback(&mut self, base: u32, old: &[u32], new: &[u32]) -> Vec<(u32, u32, u32)> {
+        let mut frame = Vec::with_capacity(old.len());
+        for j in 0..old.len() {
             let addr = base + 4 * j as u32;
             self.set_word(addr, new[j]);
             frame.push((addr, old[j], new[j]));
         }
-        Ok(frame)
+        frame
+    }
+
+    /// Execute delegation family `family` over the frame at `base`, in place.
+    ///
+    /// The one dispatch: every delegation number reaches it, and a family with
+    /// no arm here is a `DELEGATIONS` row nobody implemented, which is a build
+    /// error rather than a silent `-ENOSYS`.
+    fn delegate(
+        &mut self,
+        family: FamilyId,
+        pc: u32,
+        base: u32,
+    ) -> Result<Vec<(u32, u32, u32)>, EmuError> {
+        let words =
+            program::delegation_frame_words(family).expect("the caller matched a delegation");
+        let old = self.delegation_frame(pc, base, words)?;
+        let new = match family {
+            family::KECCAK_F => {
+                let mut state: [u32; keccak::FRAME_WORDS] = core::array::from_fn(|j| old[j]);
+                let mut lanes = lanes_of(&state);
+                keccak_f(&mut lanes);
+                state = words_of(&lanes);
+                state.to_vec()
+            }
+            family::POSEIDON2 => poseidon2_frame(&old),
+            family::FR_ARITH => fr_arith_frame(pc, &old)?,
+            other => panic!("emulator: delegation family {other} has no implementation"),
+        };
+        assert_eq!(new.len(), words, "a delegation writes its whole frame");
+        Ok(self.delegation_writeback(base, &old, &new))
     }
 
     /// Replace a word, staging the slot-3 RAM query.
@@ -737,13 +852,6 @@ impl<'a> Machine<'a> {
                 self.exit = Some(status as i32);
                 status
             }
-            // Its one argument, the state pointer, is read as the ABI table
-            // says, so the row keeps its frame when the circuit lands. Until
-            // then every executor answers -ENOSYS.
-            ecall::PRECOMPILE_POSEIDON2 => {
-                self.read(&mut row, Role::Rs2, 10);
-                ecall::ENOSYS.wrapping_neg()
-            }
             // A delegation call: the frame base is its one argument, read as
             // the ABI table says, and the frame is permuted in place. The
             // invocation is not a cycle of its own — it rides this one, at
@@ -756,7 +864,7 @@ impl<'a> Machine<'a> {
                         return Err(EmuError::DelegationFamilyAbsent { pc, number: n });
                     }
                 }
-                let frame = self.keccak_frame(pc, base)?;
+                let frame = self.delegate(family, pc, base)?;
                 // The mirror query: the request consumes the invocation's
                 // answer tuple, whose timestamp and value are both 0
                 // (`docs/spec/delegation.md` §5). Its write-back is 0 too,
@@ -936,6 +1044,12 @@ impl Recorder<'_> {
                 });
             }
         }
+        // The row's mirror query names the delegation family's own anchor
+        // space, which the role alone does not say: the invocation riding this
+        // cycle does (`trace::Role::space`).
+        let delegation = queries.delegation.as_ref().and_then(|(family, ..)| {
+            program::delegation_space(*family).and_then(AddressSpace::from_tag)
+        });
         let mut row = Row {
             cycle,
             pc,
@@ -945,9 +1059,9 @@ impl Recorder<'_> {
         };
         for role in ROLES {
             if let Some((addr, read, write)) = queries.queries[role as usize] {
-                let event = self
-                    .log
-                    .record(role.space(), addr, base + role.delta(), read, write);
+                let event =
+                    self.log
+                        .record(role.space(delegation), addr, base + role.delta(), read, write);
                 row.queries[role as usize] = Query {
                     addr,
                     read_ts: event.read_ts,

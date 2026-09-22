@@ -25,7 +25,23 @@ pub enum AddressSpace {
     /// has a space of its own — the tag *is* the delegation type — so a
     /// keccak request cannot consume another type's answer.
     KeccakF,
+    /// `family::POSEIDON2`'s delegation anchor space (S23). As [`KeccakF`] in
+    /// every respect but the type it names.
+    ///
+    /// [`KeccakF`]: AddressSpace::KeccakF
+    Poseidon2,
+    /// `family::FR_ARITH`'s delegation anchor space (S23).
+    FrArith,
 }
+
+/// Every delegation anchor space, ascending by tag. One `deleg` frame query
+/// serves them all, and which one a request names is the row's business:
+/// `constraints::memory::frame_query_takes` is the routing rule.
+pub const DELEGATION_SPACES: [AddressSpace; 3] = [
+    AddressSpace::KeccakF,
+    AddressSpace::Poseidon2,
+    AddressSpace::FrArith,
+];
 
 impl AddressSpace {
     /// The frozen tag.
@@ -35,6 +51,8 @@ impl AddressSpace {
             AddressSpace::Ram => address_space::RAM,
             AddressSpace::Pc => address_space::PC,
             AddressSpace::KeccakF => address_space::DELEGATION_KECCAK_F,
+            AddressSpace::Poseidon2 => address_space::DELEGATION_POSEIDON2,
+            AddressSpace::FrArith => address_space::DELEGATION_FR_ARITH,
         }
     }
 
@@ -45,6 +63,8 @@ impl AddressSpace {
             address_space::RAM => Some(AddressSpace::Ram),
             address_space::PC => Some(AddressSpace::Pc),
             address_space::DELEGATION_KECCAK_F => Some(AddressSpace::KeccakF),
+            address_space::DELEGATION_POSEIDON2 => Some(AddressSpace::Poseidon2),
+            address_space::DELEGATION_FR_ARITH => Some(AddressSpace::FrArith),
             _ => None,
         }
     }
@@ -56,7 +76,10 @@ impl AddressSpace {
     pub fn holds(self, addr: u32) -> bool {
         match self {
             AddressSpace::Reg => addr < 32,
-            AddressSpace::Ram | AddressSpace::KeccakF => {
+            AddressSpace::Ram
+            | AddressSpace::KeccakF
+            | AddressSpace::Poseidon2
+            | AddressSpace::FrArith => {
                 addr.is_multiple_of(4)
                     && addr >= guest_memory::RAM_ORIGIN
                     && addr - guest_memory::RAM_ORIGIN < guest_memory::RAM_LENGTH
@@ -76,7 +99,7 @@ impl AddressSpace {
     pub fn chains(self) -> bool {
         match self {
             AddressSpace::Reg | AddressSpace::Ram | AddressSpace::Pc => true,
-            AddressSpace::KeccakF => false,
+            AddressSpace::KeccakF | AddressSpace::Poseidon2 | AddressSpace::FrArith => false,
         }
     }
 }
@@ -444,7 +467,7 @@ impl MemoryEventLog {
             AddressSpace::Reg => self.regs[addr as usize],
             AddressSpace::Pc => self.pc,
             AddressSpace::Ram => self.ram.get(&addr).copied(),
-            AddressSpace::KeccakF => None,
+            AddressSpace::KeccakF | AddressSpace::Poseidon2 | AddressSpace::FrArith => None,
         }
     }
 
@@ -458,7 +481,7 @@ impl MemoryEventLog {
             }
             // An unchained space keeps no last write: there is nothing for a
             // later query there to read, and nothing to tear down.
-            AddressSpace::KeccakF => {}
+            AddressSpace::KeccakF | AddressSpace::Poseidon2 | AddressSpace::FrArith => {}
         }
     }
 }
@@ -471,6 +494,6 @@ fn initial_value(image: &ProgramImage, space: AddressSpace, addr: u32) -> u32 {
         AddressSpace::Reg => 0,
         AddressSpace::Pc => image.entry,
         AddressSpace::Ram => image.initial_word(addr),
-        AddressSpace::KeccakF => 0,
+        AddressSpace::KeccakF | AddressSpace::Poseidon2 | AddressSpace::FrArith => 0,
     }
 }

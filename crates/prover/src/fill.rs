@@ -12,13 +12,18 @@ use constants::extra_mask::mem_word as kind_mem;
 use constants::extra_mask::mul_div as md;
 use constants::extra_mask::shift_bitwise as sb;
 use constants::extra_mask::system_code;
+use constants::fr_arith as fa;
+use constants::poseidon2 as p2;
 use constants::{delegation, ecall, family, guest_memory, keccak, memory};
 use constraints::add_sub::{
     DECODED, IS_ECALL, IS_FENCE, IS_KECCAK, KINDS, NEXT_PC_HI, PC_WRAP, RD_HI, TABLE_WIDTH, WRAP,
 };
 use constraints::atomics as at_circuit;
 use constraints::jump_branch_slt as jbs_circuit;
+use constraints::delegation as deleg;
+use constraints::fr_arith as fa_circuit;
 use constraints::keccak as kec_circuit;
+use constraints::poseidon2 as p2_circuit;
 use constraints::mem_subword as ms_circuit;
 use constraints::mem_word as mw_circuit;
 use constraints::memory::{frame_queries, rd_selected};
@@ -63,86 +68,195 @@ pub fn family_fill(family: FamilyId) -> Option<Fill> {
         family::ATOMICS => Some(atomics),
         family::INIT_TEARDOWN | family::ZERO_WINDOWS => Some(window),
         family::KECCAK_F => Some(keccak_f),
+        family::POSEIDON2 => Some(poseidon2),
+        family::FR_ARITH => Some(fr_arith),
         _ => None,
     }
 }
 
-/// A `KECCAK_F` shard, `docs/spec/delegation.md` §6.1: the delegation buffer's
-/// invocations, one a row, with the frame's 50 word queries, the input state's
-/// 1600 bits, every read's 38 gap bits and the frame pointer's two
-/// decompositions.
-///
-/// The words come from the buffer, which the tracer filled from the log, so
-/// this fill does **not** rerun the permutation: what it writes is what the
-/// execution did, and the circuit is what says that was keccak-f. Padding rows
-/// are zero in every column, which is the artifact's padding row.
-fn keccak_f(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
-    let fam = family::KECCAK_F;
+/// A delegation shard's rows: the buffer, the slice of invocations this shard
+/// holds, and the height to pad to.
+struct Invocations<'a> {
+    trace: &'a trace::DelegationTrace,
+    rows: core::ops::Range<usize>,
+    height: usize,
+}
+
+/// The invocations a delegation shard proves.
+fn invocations<'a>(src: &'a ShardSource, family: FamilyId) -> Result<Invocations<'a>, String> {
     let trace = src
         .archive
         .family_traces()
-        .delegation(fam)
-        .ok_or("the archive has no KECCAK_F buffer")?;
-    let h = src.height;
-    let start = src.index as usize * h;
-    let end = (start + h).min(trace.len());
-    let rows = start..end;
+        .delegation(family)
+        .ok_or_else(|| format!("the archive has no {} buffer", program::family_name(family)))?;
+    let start = src.index as usize * src.height;
+    let end = (start + src.height).min(trace.len());
+    Ok(Invocations {
+        trace,
+        rows: start..end,
+        height: src.height,
+    })
+}
 
+/// Every column the delegation frame itself owns, for a frame of `words`
+/// words: `docs/spec/delegation.md` §4 and §6.1 — the four head columns, four
+/// per frame word, 38 gap bits a word, and the frame pointer's two
+/// decompositions.
+///
+/// The words come from the buffer, which the tracer filled from the log, so
+/// this does **not** rerun the delegated function: what it writes is what the
+/// execution did, and the circuit is what says that was the function. Padding
+/// rows are zero in every column, which is the artifact's padding row.
+fn delegation_frame(
+    inv: &Invocations,
+    words: usize,
+    frame_bytes: u64,
+) -> Vec<(PolyAddress, MultilinearPoly)> {
+    let (trace, rows, h) = (inv.trace, inv.rows.clone(), inv.height);
     let mut out: Vec<(PolyAddress, MultilinearPoly)> = Vec::new();
     let cycles: Vec<Fr> = rows.clone().map(|r| Fr::from_u64(trace.cycle[r])).collect();
-    out.push((kec_circuit::CYCLE, fr_column(cycles, h)));
+    out.push((deleg::CYCLE, fr_column(cycles, h)));
+    out.push((deleg::LIVE, u32_column(rows.clone().map(|_| 1).collect(), h)));
     out.push((
-        kec_circuit::LIVE,
-        u32_column(rows.clone().map(|_| 1).collect(), h),
-    ));
-    out.push((
-        kec_circuit::BASE,
+        deleg::BASE,
         u32_column(rows.clone().map(|r| trace.base[r]).collect(), h),
     ));
     // The value the request wrote back on its mirror query. Free on both
     // sides, and 0 on both in an honest fill (`docs/spec/delegation.md` §5.2).
-    out.push((kec_circuit::ANCHOR_VALUE, u32_column(Vec::new(), h)));
+    out.push((deleg::ANCHOR_VALUE, u32_column(Vec::new(), h)));
 
-    for j in 0..keccak::FRAME_WORDS {
-        let words = &trace.words[j];
+    for j in 0..words {
+        let w = &trace.words[j];
         for (field, values) in [
             (
-                kec_circuit::WORD_ADDR,
-                rows.clone().map(|r| words.addr[r]).collect::<Vec<u32>>(),
+                deleg::WORD_ADDR,
+                rows.clone().map(|r| w.addr[r]).collect::<Vec<u32>>(),
             ),
             (
-                kec_circuit::WORD_READ_VALUE,
-                rows.clone().map(|r| words.read_value[r]).collect(),
+                deleg::WORD_READ_VALUE,
+                rows.clone().map(|r| w.read_value[r]).collect(),
             ),
             (
-                kec_circuit::WORD_WRITE_VALUE,
-                rows.clone().map(|r| words.write_value[r]).collect(),
+                deleg::WORD_WRITE_VALUE,
+                rows.clone().map(|r| w.write_value[r]).collect(),
             ),
         ] {
-            out.push((kec_circuit::word(j, field), u32_column(values, h)));
+            out.push((deleg::word(j, field), u32_column(values, h)));
         }
-        let read_ts: Vec<Fr> = rows
-            .clone()
-            .map(|r| Fr::from_u64(words.read_ts[r]))
-            .collect();
-        out.push((
-            kec_circuit::word(j, kec_circuit::WORD_READ_TS),
-            fr_column(read_ts, h),
-        ));
+        let read_ts: Vec<Fr> = rows.clone().map(|r| Fr::from_u64(w.read_ts[r])).collect();
+        out.push((deleg::word(j, deleg::WORD_READ_TS), fr_column(read_ts, h)));
         // `gap = 4·cycle + Δ − read_ts − 1`, as 38 bits.
         for bit in 0..memory::TS_BITS as usize {
             let values: Vec<u32> = rows
                 .clone()
                 .map(|r| {
                     let ts = memory::TS_STEP * trace.cycle[r] + delegation::FRAME_DELTA;
-                    let gap = ts - words.read_ts[r] - 1;
+                    let gap = ts - w.read_ts[r] - 1;
                     ((gap >> bit) & 1) as u32
                 })
                 .collect();
-            out.push((kec_circuit::gap_bit(j, bit), u32_column(values, h)));
+            out.push((deleg::gap_bit(j, bit), u32_column(values, h)));
         }
     }
+    for bit in 0..deleg::BASE_LOW_BITS {
+        let values: Vec<u32> = rows
+            .clone()
+            .map(|r| (((trace.base[r] - guest_memory::RAM_ORIGIN) / 4) >> bit) & 1)
+            .collect();
+        out.push((deleg::base_low_bit(words, bit), u32_column(values, h)));
+    }
+    for bit in 0..deleg::BASE_ROOM_BITS {
+        let values: Vec<u32> = rows
+            .clone()
+            .map(|r| {
+                let room = (1u64 << 31) - frame_bytes - trace.base[r] as u64;
+                ((room >> bit) & 1) as u32
+            })
+            .collect();
+        out.push((deleg::base_room_bit(words, bit), u32_column(values, h)));
+    }
+    out
+}
 
+/// A frame value's eight words on row `r`, from the field its circuit reads.
+fn value_words(trace: &trace::DelegationTrace, first: usize, field: u32, r: usize) -> [u32; 8] {
+    core::array::from_fn(|k| {
+        let w = &trace.words[first + k];
+        match field {
+            deleg::WORD_READ_VALUE => w.read_value[r],
+            _ => w.write_value[r],
+        }
+    })
+}
+
+/// The borrow chain of `X − p` over eight 32-bit limbs: the difference limbs
+/// and the borrows, the last of which is 1 exactly when `X` is below `p`.
+///
+/// The honest witness of the canonicity gates of `docs/spec/delegation.md`
+/// §11.3. It is computed here rather than read from anywhere, because it is a
+/// function of the words the execution wrote.
+fn borrow_chain(words: &[u32; 8]) -> ([u64; 8], [u64; 8]) {
+    let mut p = [0u64; 8];
+    for (i, limb) in constants::FR_MODULUS.iter().enumerate() {
+        p[2 * i] = limb & 0xffff_ffff;
+        p[2 * i + 1] = limb >> 32;
+    }
+    let (mut diff, mut borrow) = ([0u64; 8], [0u64; 8]);
+    let mut carry = 0i64;
+    for i in 0..8 {
+        let d = words[i] as i64 - p[i] as i64 - carry;
+        carry = i64::from(d < 0);
+        diff[i] = if d < 0 { (d + (1i64 << 32)) as u64 } else { d as u64 };
+        borrow[i] = carry as u64;
+    }
+    (diff, borrow)
+}
+
+/// One frame value's 256 word bits and 264 canonicity bits.
+fn value_columns(
+    inv: &Invocations,
+    first: usize,
+    field: u32,
+    bits: &dyn Fn(usize, usize) -> PolyAddress,
+    diffs: &dyn Fn(usize, usize) -> PolyAddress,
+    borrows: &dyn Fn(usize) -> PolyAddress,
+) -> Vec<(PolyAddress, MultilinearPoly)> {
+    let (trace, rows, h) = (inv.trace, inv.rows.clone(), inv.height);
+    let mut out: Vec<(PolyAddress, MultilinearPoly)> = Vec::new();
+    for k in 0..8 {
+        for t in 0..32 {
+            let values: Vec<u32> = rows
+                .clone()
+                .map(|r| (value_words(trace, first, field, r)[k] >> t) & 1)
+                .collect();
+            out.push((bits(k, t), u32_column(values, h)));
+        }
+    }
+    for k in 0..8 {
+        for t in 0..32 {
+            let values: Vec<u32> = rows
+                .clone()
+                .map(|r| ((borrow_chain(&value_words(trace, first, field, r)).0[k] >> t) & 1) as u32)
+                .collect();
+            out.push((diffs(k, t), u32_column(values, h)));
+        }
+    }
+    for k in 0..8 {
+        let values: Vec<u32> = rows
+            .clone()
+            .map(|r| borrow_chain(&value_words(trace, first, field, r)).1[k] as u32)
+            .collect();
+        out.push((borrows(k), u32_column(values, h)));
+    }
+    out
+}
+
+/// A `KECCAK_F` shard, `docs/spec/delegation.md` §6.1: the delegation frame,
+/// plus the input state's 1600 bits.
+fn keccak_f(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    let inv = invocations(src, family::KECCAK_F)?;
+    let mut out = delegation_frame(&inv, keccak::FRAME_WORDS, keccak::STATE_BYTES as u64);
+    let (trace, rows, h) = (inv.trace, inv.rows.clone(), inv.height);
     // The state's bits: frame word `2i + half` is lane `i`'s half, so bit `t`
     // of word `j` is state bit `64·(j/2) + 32·(j%2) + t`.
     for b in 0..keccak::STATE_BITS {
@@ -153,23 +267,104 @@ fn keccak_f(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, St
             .collect();
         out.push((kec_circuit::in_bit(b), u32_column(values, h)));
     }
-    for bit in 0..29 {
-        let values: Vec<u32> = rows
-            .clone()
-            .map(|r| (((trace.base[r] - guest_memory::RAM_ORIGIN) / 4) >> bit) & 1)
-            .collect();
-        out.push((kec_circuit::base_low_bit(bit), u32_column(values, h)));
+    Ok(out)
+}
+
+/// A `POSEIDON2` shard, `docs/spec/delegation.md` §12.1: the delegation frame,
+/// plus the six lane values' word and canonicity bits — three read, three
+/// written.
+fn poseidon2(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    let inv = invocations(src, family::POSEIDON2)?;
+    let mut out = delegation_frame(&inv, p2::FRAME_WORDS, p2::FRAME_BYTES as u64);
+    for v in 0..2 * p2::WIDTH {
+        let lane = v % p2::WIDTH;
+        let field = if v < p2::WIDTH {
+            deleg::WORD_READ_VALUE
+        } else {
+            deleg::WORD_WRITE_VALUE
+        };
+        out.extend(value_columns(
+            &inv,
+            p2::WORDS_PER_LANE * lane,
+            field,
+            &|k, t| p2_circuit::value_bit(v, k, t),
+            &|k, t| p2_circuit::diff_bit(v, k, t),
+            &|k| p2_circuit::borrow_bit(v, k),
+        ));
     }
-    for bit in 0..31 {
-        let values: Vec<u32> = rows
-            .clone()
-            .map(|r| {
-                let room = (1u64 << 31) - keccak::STATE_BYTES as u64 - trace.base[r] as u64;
-                ((room >> bit) & 1) as u32
-            })
-            .collect();
-        out.push((kec_circuit::base_room_bit(bit), u32_column(values, h)));
+    Ok(out)
+}
+
+/// An `FR_ARITH` shard, `docs/spec/delegation.md` §13.1: the delegation frame,
+/// the three values' bits, the operation selectors, and the three witnessed
+/// scalars — the product helper, the inverse and the is-zero flag.
+fn fr_arith(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    let inv = invocations(src, family::FR_ARITH)?;
+    let mut out = delegation_frame(&inv, fa::FRAME_WORDS, fa::FRAME_BYTES as u64);
+    let (trace, rows, h) = (inv.trace, inv.rows.clone(), inv.height);
+    for (v, (first, field)) in [
+        (fa::A_WORD, deleg::WORD_READ_VALUE),
+        (fa::B_WORD, deleg::WORD_READ_VALUE),
+        (fa::OUT_WORD, deleg::WORD_WRITE_VALUE),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        out.extend(value_columns(
+            &inv,
+            first,
+            field,
+            &|k, t| fa_circuit::value_bit(v, k, t),
+            &|k, t| fa_circuit::diff_bit(v, k, t),
+            &|k| fa_circuit::borrow_bit(v, k),
+        ));
     }
+    let opcode = |r: usize| trace.words[fa::OPCODE_WORD].read_value[r];
+    for (i, op) in fa::OPS.iter().enumerate() {
+        let values: Vec<u32> = rows.clone().map(|r| u32::from(opcode(r) == *op)).collect();
+        out.push((fa_circuit::selector(i), u32_column(values, h)));
+    }
+    // The three `Fr`-valued witnesses. `a` and `b` are the frame's own words
+    // read as `Fr`'s in-memory representation; every one is canonical, which
+    // the emulator refused to run without.
+    let value = |first: usize, field: u32, r: usize| -> Fr {
+        let words = value_words(trace, first, field, r);
+        let mut bytes = [0u8; 32];
+        for k in 0..8 {
+            bytes[4 * k..4 * k + 4].copy_from_slice(&words[k].to_le_bytes());
+        }
+        Fr::from_bytes(&bytes).expect("the emulator refuses a non-canonical frame value")
+    };
+    let a = |r: usize| value(fa::A_WORD, deleg::WORD_READ_VALUE, r);
+    let b = |r: usize| value(fa::B_WORD, deleg::WORD_READ_VALUE, r);
+    out.push((
+        fa_circuit::prod(),
+        fr_column(rows.clone().map(|r| a(r) * b(r)).collect(), h),
+    ));
+    out.push((
+        fa_circuit::inv(),
+        fr_column(
+            rows.clone()
+                .map(|r| match opcode(r) == fa::OP_INV {
+                    true => a(r).inverse().unwrap_or(Fr::ZERO),
+                    false => Fr::ZERO,
+                })
+                .collect(),
+            h,
+        ),
+    ));
+    out.push((
+        fa_circuit::is_zero(),
+        fr_column(
+            rows.clone()
+                .map(|r| match opcode(r) == fa::OP_INV && a(r) == Fr::ZERO {
+                    true => Fr::ONE,
+                    false => Fr::ZERO,
+                })
+                .collect(),
+            h,
+        ),
+    ));
     Ok(out)
 }
 

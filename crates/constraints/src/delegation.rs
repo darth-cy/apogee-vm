@@ -68,34 +68,34 @@ const _: () = {
 // ---------------------------------------------------------------------------
 
 /// `M[0]`: the cycle whose ecall requested this invocation.
-pub(crate) const CYCLE: PolyAddress = PolyAddress::Memory(0);
+pub const CYCLE: PolyAddress = PolyAddress::Memory(0);
 /// `M[1]`: the row's one mask. The frame and the anchor are one invocation:
 /// live together or not at all.
-pub(crate) const LIVE: PolyAddress = PolyAddress::Memory(1);
+pub const LIVE: PolyAddress = PolyAddress::Memory(1);
 /// `M[2]`: the frame base pointer the request handed over in `a0`.
-pub(crate) const BASE: PolyAddress = PolyAddress::Memory(2);
+pub const BASE: PolyAddress = PolyAddress::Memory(2);
 /// `M[3]`: the teardown read's value, free on both sides of the anchor.
-pub(crate) const ANCHOR_VALUE: PolyAddress = PolyAddress::Memory(3);
+pub const ANCHOR_VALUE: PolyAddress = PolyAddress::Memory(3);
 
 /// The four `M` columns every delegation frame carries before its words.
-pub(crate) const HEAD_COLUMNS: usize = 4;
+pub const HEAD_COLUMNS: usize = 4;
 
 /// A frame word's field: its address, `base + 4j`.
-pub(crate) const WORD_ADDR: u32 = 0;
+pub const WORD_ADDR: u32 = 0;
 /// A frame word's field: the timestamp of the write its read consumed.
-pub(crate) const WORD_READ_TS: u32 = 1;
+pub const WORD_READ_TS: u32 = 1;
 /// A frame word's field: the value it read.
-pub(crate) const WORD_READ_VALUE: u32 = 2;
+pub const WORD_READ_VALUE: u32 = 2;
 /// A frame word's field: the value it wrote, at `4·cycle + FRAME_DELTA`.
-pub(crate) const WORD_WRITE_VALUE: u32 = 3;
+pub const WORD_WRITE_VALUE: u32 = 3;
 
 /// `M[4 + 4j + field]`: one field of frame word `j`.
-pub(crate) fn word(j: usize, field: u32) -> PolyAddress {
+pub fn word(j: usize, field: u32) -> PolyAddress {
     PolyAddress::Memory(HEAD_COLUMNS as u32 + 4 * j as u32 + field)
 }
 
 /// The `M` column names, in layout order.
-pub(crate) fn memory_names(words: usize) -> Vec<String> {
+pub fn memory_names(words: usize) -> Vec<String> {
     let mut out = vec![
         "cycle".to_string(),
         "live".to_string(),
@@ -112,38 +112,38 @@ pub(crate) fn memory_names(words: usize) -> Vec<String> {
 
 /// Bits in a timestamp gap: the whole clock, because a delegation family has
 /// no lookup channel to range-check into (`docs/spec/delegation.md` §9).
-pub(crate) const GAP_BITS: usize = mem::TS_BITS as usize;
+pub const GAP_BITS: usize = mem::TS_BITS as usize;
 /// Bits in `(base − RAM_ORIGIN) / 4`, which is below `2^31 / 4`.
-pub(crate) const BASE_LOW_BITS: usize = 29;
+pub const BASE_LOW_BITS: usize = 29;
 /// Bits in `2^31 − frame bytes − base`.
-pub(crate) const BASE_ROOM_BITS: usize = 31;
+pub const BASE_ROOM_BITS: usize = 31;
 
 const fn w(i: usize) -> PolyAddress {
     PolyAddress::Witness(i as u32)
 }
 
 /// `W[38j + bit]`: bit `bit` of frame word `j`'s timestamp gap.
-pub(crate) fn gap_bit(j: usize, bit: usize) -> PolyAddress {
+pub fn gap_bit(j: usize, bit: usize) -> PolyAddress {
     w(GAP_BITS * j + bit)
 }
 
 /// `W[38·words + bit]`: bit `bit` of `(base − RAM_ORIGIN) / 4`.
-pub(crate) fn base_low_bit(words: usize, bit: usize) -> PolyAddress {
+pub fn base_low_bit(words: usize, bit: usize) -> PolyAddress {
     w(GAP_BITS * words + bit)
 }
 
 /// `W[38·words + 29 + bit]`: bit `bit` of `2^31 − frame bytes − base`.
-pub(crate) fn base_room_bit(words: usize, bit: usize) -> PolyAddress {
+pub fn base_room_bit(words: usize, bit: usize) -> PolyAddress {
     w(GAP_BITS * words + BASE_LOW_BITS + bit)
 }
 
 /// The first `W` index a family's own columns may take.
-pub(crate) fn frame_witness(words: usize) -> usize {
+pub fn frame_witness(words: usize) -> usize {
     GAP_BITS * words + BASE_LOW_BITS + BASE_ROOM_BITS
 }
 
 /// The frame's own `W` column names, in layout order.
-pub(crate) fn witness_names(words: usize) -> Vec<String> {
+pub fn witness_names(words: usize) -> Vec<String> {
     let mut out = Vec::with_capacity(frame_witness(words));
     for j in 0..words {
         for i in 0..GAP_BITS {
@@ -283,7 +283,7 @@ pub(crate) fn pad_leaf() -> GateDef {
 
 /// Leaves a side: the frame's `words` plus the anchor's one, padded to a power
 /// of two with leaves that are literally 1.
-pub(crate) fn leaves_a_side(words: usize) -> usize {
+pub fn leaves_a_side(words: usize) -> usize {
     (words + 1).next_power_of_two()
 }
 
@@ -445,12 +445,12 @@ pub(crate) fn frame_gates(space_words: usize, frame_bytes: u64) -> Vec<(String, 
 // ---------------------------------------------------------------------------
 
 /// Bits a frame value's eight words take: 32 apiece.
-pub(crate) const VALUE_BITS: usize = 32 * WORDS_PER_VALUE;
+pub const VALUE_BITS: usize = 32 * WORDS_PER_VALUE;
 /// Bits the canonicity proof of one frame value takes beyond those: eight
 /// 32-bit difference limbs and eight borrow bits.
-pub(crate) const CANONICITY_BITS: usize = 32 * WORDS_PER_VALUE + WORDS_PER_VALUE;
+pub const CANONICITY_BITS: usize = 32 * WORDS_PER_VALUE + WORDS_PER_VALUE;
 /// Words in one `Fr` on the wire: 32 bytes, little-endian.
-pub(crate) const WORDS_PER_VALUE: usize = 8;
+pub const WORDS_PER_VALUE: usize = 8;
 
 /// `p` as eight little-endian 32-bit limbs, re-derived from
 /// `constants::FR_MODULUS` rather than restated.

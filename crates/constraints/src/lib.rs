@@ -23,7 +23,7 @@ use field::Fr;
 pub mod add_sub;
 pub mod atomics;
 mod build;
-mod delegation;
+pub mod delegation;
 pub mod fr_arith;
 pub mod gadgets;
 pub mod jump_branch_slt;

@@ -652,6 +652,19 @@ fn the_rows_rebuild_the_log_exactly() {
     );
     for name in TRACED {
         let t = traced(name);
+        // The cycles that made a delegation request, and which family: the
+        // mirror query's address space is the row's, not the role's.
+        let requested: std::collections::HashMap<u64, AddressSpace> = t
+            .traces
+            .delegations
+            .iter()
+            .flat_map(|d| {
+                let space = program::delegation_space(d.family)
+                    .and_then(AddressSpace::from_tag)
+                    .expect("a delegation family has an anchor space");
+                d.cycle.iter().map(move |c| (*c, space))
+            })
+            .collect();
         let mut events = Vec::new();
         for (_, row) in rows_by_cycle(&t) {
             let base = memory::TS_STEP * row.cycle;
@@ -666,7 +679,7 @@ fn the_rows_rebuild_the_log_exactly() {
             for role in ROLES {
                 if let Some(q) = row.query(role) {
                     events.push(MemoryEvent {
-                        space: role.space(),
+                        space: role.space(requested.get(&row.cycle).copied()),
                         addr: q.addr,
                         ts: base + SLOT[role as usize],
                         read_ts: q.read_ts,
