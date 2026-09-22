@@ -278,10 +278,10 @@ fn every_guest_declares_exactly_what_it_links() {
 /// the same SDK object file and must declare nothing at either level, which is
 /// what `#[used]` would break.
 ///
-/// `#[ignore]`d because it builds two guests from source into fresh target
+/// `#[ignore]`d because it builds three guests from source into fresh target
 /// directories; run it with `--ignored`.
 #[test]
-#[ignore = "builds two guests from source at both optimisation levels"]
+#[ignore = "builds three guests from source at both optimisation levels"]
 fn reachability_survives_the_optimiser() {
     for profile in ["debug", "release"] {
         for (name, want) in [

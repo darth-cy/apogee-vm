@@ -7039,9 +7039,10 @@ the 50 `output_w` gates are gated on `live` for exactly that reason (§12.5). Th
 forces `live` and the 50 written words to be carried through all 168 round layers: only gate
 list 0 can read a committed column, and the comparison happens at the top.
 
-**There is no row kind for "which delegation this is".** S21 registers one delegation family, so
-a row of this circuit is a keccak-f row and nothing else; a second family is a second circuit
-with its own `FamilyId`, not a selector here (`delegation.md` §10).
+**There is no row kind for "which delegation this is".** A row of this circuit is a keccak-f row
+and nothing else; the other two delegation families are two more *circuits* with their own
+`FamilyId`s, not selectors here (`delegation.md` §10). Which type a *request* asks for is the
+requesting family's business, and it is a column there (§2.1).
 
 ### 12.3 The base layer
 

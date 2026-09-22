@@ -138,9 +138,9 @@ cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
 cargo clippy -p prover --all-targets --features metrics -- -D warnings   # the ONE feature's configuration
-cargo test --workspace                      # 1,001 tests as of S21; 70 more are #[ignore]d
+cargo test --workspace                      # 1,025 tests as of S23; 73 more are #[ignore]d
 cargo test -p prover --features metrics --test metrics  # the metrics harness; 10 more, 2 #[ignore]d
-cargo test -p program --test delegation -- --ignored --test-threads=1  # static detachment at BOTH guest profiles; builds four guests, 0.6 s
+cargo test -p program --test delegation -- --ignored --test-threads=1  # static detachment at BOTH guest profiles; builds six guest images, 2.9 s
 cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 18.8 GB peak, 200 s, 30 min on a runner
 cargo test -p prover --test acceptance -- --include-ignored --test-threads=1  # DEFERRED; S16's statement, 11.5 GB peak, 361 s
 cargo test -p verifier --test cli -- --include-ignored --test-threads=1       # DEFERRED; ditto, 11.5 GB, 44 s

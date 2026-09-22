@@ -48,7 +48,7 @@ fn the_reconciliation_is_the_statement_and_the_proofs() {
         assert_eq!(r.memory_commitments, block.statement.memory_commitments[i]);
         assert_eq!(r.roots, block.statement.memory_roots[i]);
     }
-    assert_eq!(records[1].memory_commitments.len(), 41, "add/sub's M width");
+    assert_eq!(records[1].memory_commitments.len(), 42, "add/sub's M width");
 }
 
 /// The public-data API: the descriptor, the counts and a family's count, read

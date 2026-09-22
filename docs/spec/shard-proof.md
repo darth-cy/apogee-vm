@@ -484,22 +484,25 @@ variables and Mercury an even count.
 ### 8.1 Columns
 
 The frame is `docs/spec/memory.md` §2.1's over the family's **eight** queries — `pc rs1
-rs2 arg1 arg2 ram rd deleg` at slots 0 to 7 — so `M[0..41]` and `W[0..11]` are the frame's.
-`deleg` is S21's, a delegation request's mirror query (`docs/spec/delegation.md` §5.1); every
-column index below moved by five in `M` and by one in `W` when it was added, and so did every
-relation number in `docs/spec/constraint-manifest.md` §3. The circuit adds:
+rs2 arg1 arg2 ram rd deleg` at slots 0 to 7 — so `M[0..41]` and `W[0..11]` are the frame's,
+and `M[41] deleg_space` follows them: the one extra memory column a frame holding the
+delegation mirror carries, which is the requested type's address-space tag and what that
+query's leaf reads for its `AS` term (`docs/spec/delegation.md` §5.1). `deleg` is S21's, a
+delegation request's mirror query; every column index below moved by five in `M` and by one
+in `W` when it was added, and so did every relation number in
+`docs/spec/constraint-manifest.md` §3. The circuit adds:
 
 | column | name | what |
 | --- | --- | --- |
 | `W[11]`–`W[16]` | `decoded_next_pc`, `decoded_rs1`, `decoded_rs2`, `decoded_rd`, `decoded_imm`, `decoded_mask` | the claimed decoded row |
 | `W[17]`–`W[22]` | `kind_system`, `kind_addi`, `kind_auipc`, `kind_add`, `kind_sub`, `kind_lui` | the mask's bits, `constants::extra_mask::add_sub_lui_auipc` order |
 | `W[23]`, `W[24]` | `is_ecall`, `is_fence` | the system kind, split by its code |
-| `W[25]` | `is_keccak` | **S21**: the ecall row is a delegation request, not the exit |
-| `W[26]` | `wrap` | the sum's carry, or the difference's borrow |
-| `W[27]` | `rd_hi` | `rd_selected >> 16` |
-| `W[28]` | `pc_wrap` | `next_pc`'s wrap |
-| `W[29]` | `next_pc_hi` | `next_pc >> 16` |
-| `W[30]`–`W[32]` | `mult_timestamp`, `mult_range16`, `mult_decoder` | one multiplicity per channel, last |
+| `W[25]`–`W[27]` | `is_deleg_9`, `is_deleg_10`, `is_deleg_11` | **S21**, widened at **S23**: the ecall row is a delegation request of exactly one type, not the exit. One selector per row of `constants::delegation::TYPES` |
+| `W[28]` | `wrap` | the sum's carry, or the difference's borrow |
+| `W[29]` | `rd_hi` | `rd_selected >> 16` |
+| `W[30]` | `pc_wrap` | `next_pc`'s wrap |
+| `W[31]` | `next_pc_hi` | `next_pc >> 16` |
+| `W[32]`–`W[34]` | `mult_timestamp`, `mult_range16`, `mult_decoder` | one multiplicity per channel, last |
 | `S[0]`–`S[6]` | `table_pc` … `table_extra_mask` | the decoded table, `program::lookup_tuple` order |
 | `V[range19]`, `V[range16]` | | the two range tables |
 
@@ -523,15 +526,16 @@ x0 — `deleg` is not read-only and carries no write-back), with `m_q` the query
 | `system_split` | `is_ecall + is_fence − b_system` | a system row is exactly one of the two |
 | `ecall_code` | `is_ecall·decoded_imm` | an ecall row's code is 0 |
 | `fence_code` | `is_fence·decoded_imm − 2·is_fence` | a fence row's code is 2; so no row is an `ebreak` |
-| `is_keccak_boolean` | `x − x²` | **S21** |
-| `keccak_is_an_ecall` | `is_keccak·(1 − is_ecall)` | **S21**: a delegation request is an ecall row and takes the ecall frame |
-| `ecall_is_exit` | `(is_ecall − is_keccak)·(v_rs1 − 93)` | `a7 = EXIT` on every ecall row **that is not a delegation** |
-| `keccak_number` | `is_keccak·(v_rs1 − 0x501)` | **S21**: and `a7 = PRECOMPILE_KECCAK_F` on the ones that are. With the row above, the two partition the ecalls this family proves |
+| `is_deleg_{t}_boolean` | `x − x²` | **S21**, one per type since **S23** |
+| `deleg_{t}_is_an_ecall` | `is_deleg_t·(1 − is_ecall)` | **S21**: a delegation request is an ecall row and takes the ecall frame |
+| `deleg_{t}_number` | `is_deleg_t·(v_rs1 − N_t)` | **S21**: `a7` is that type's number. `N_t` is read from `constants::delegation::TYPES`, never spelled |
+| `ecall_is_exit` | `(is_ecall − Σ_t is_deleg_t)·(v_rs1 − 93)` | `a7 = EXIT` on every ecall row **that is not a delegation**. With the rows above these partition the ecalls this family proves — because the numbers are pairwise distinct, which a `const` assertion enforces |
 | `rs1_mask_rule` | `m_rs1 − m_pc·(b_add + b_sub + b_addi + is_ecall)` | |
 | `rs2_mask_rule` | `m_rs2 − m_pc·(b_add + b_sub + is_ecall)` | |
 | `arg1_mask_rule`, `arg2_mask_rule`, `ram_mask_rule` | `m_q` | no `read`/`write` arguments, no transfer |
 | `rd_mask_rule` | `m_rd − m_pc·(b_add + b_sub + b_addi + b_auipc + b_lui + is_ecall)` | |
-| `deleg_mask_rule` | `m_deleg − m_pc·is_keccak` | **S21**: exactly the delegation rows make the mirror query |
+| `deleg_mask_rule` | `m_deleg − m_pc·Σ_t is_deleg_t` | **S21**: exactly the delegation rows make the mirror query |
+| `deleg_space_rule` | `deleg_space − Σ_t tag_t·is_deleg_t` | **S23**: the mirror's leaf names the requested type through this column, because a leaf may read no `W` column (`docs/spec/delegation.md` §5.1) |
 | `rs1_addr_rule` | `m_rs1·(a_rs1 − decoded_rs1 − 17·is_ecall)` | `rs1`, or `a7` on an ecall |
 | `rs2_addr_rule` | `m_rs2·(a_rs2 − decoded_rs2 − 10·is_ecall)` | `rs2`, or `a0` |
 | `rd_addr_rule` | `m_rd·(a_rd − decoded_rd − 10·is_ecall)` | `rd`, or `a0` |
@@ -539,19 +543,21 @@ x0 — `deleg` is not read-only and carries no write-back), with `m_q` the query
 | `add_addi_auipc` | `(b_add + b_addi + b_auipc)·(v_rs1 + v_rs2 + decoded_imm − sel − 2^32·wrap) + b_auipc·pc` | the three sums, one gate |
 | `sub` | `b_sub·(v_rs1 − v_rs2 − sel + 2^32·wrap)` | |
 | `lui` | `b_lui·(decoded_imm − sel)` | |
-| `exit_status` | `(is_ecall − is_keccak)·(v_rd − sel)` | the exit row writes back `a0`; a delegation row does not |
+| `exit_status` | `(is_ecall − Σ_t is_deleg_t)·(v_rd − sel)` | the exit row writes back `a0`; a delegation row does not |
 | `deleg_writes_no_register` | `m_deleg·sel` | **S21**: a delegation answers 0 |
 | `deleg_read_ts_zero` | `m_deleg·read_ts_deleg` | **S21**: the mirror query reads the invocation's answer tuple |
 | `deleg_read_value_zero` | `m_deleg·v_deleg` | **S21**: and that tuple's value is 0 |
 | `deleg_addr_rule` | `m_deleg·(a_deleg − v_rs2)` | **S21**: the mirror sits at the frame base the request passed in `a0` |
 | `wrap_boolean`, `pc_wrap_boolean` | `x − x²` | |
-| `next_pc_rule` | `next_pc + 2^32·pc_wrap − (1 − is_ecall + is_keccak)·decoded_next_pc − HALT_PC·(is_ecall − is_keccak)` | the fall-through, or `HALT_PC` on the exit row; **a delegation row falls through** |
+| `next_pc_rule` | `next_pc + 2^32·pc_wrap − (1 − is_ecall + Σ_t is_deleg_t)·decoded_next_pc − HALT_PC·(is_ecall − Σ_t is_deleg_t)` | the fall-through, or `HALT_PC` on the exit row; **a delegation row falls through** |
 
 Every gate is of degree at most 2 — `decoded_mask_bits`, `system_split` and the three
 `arg1`/`arg2`/`ram` mask rules are linear — and 0 on the all-zero row. **All eight S21 gates
 are degree 2, and the three they amended stayed degree 2**: each gained terms on an existing
-product's other factor, never a third factor. By `keccak_is_an_ecall` the factor
-`is_ecall − is_keccak` is 0 or 1 on any row that passes, never −1. The semantic gates are gated by a
+product's other factor, never a third factor. S23 did the same — three gates per type where
+S21 had four for the one, plus `deleg_space_rule`, which is degree 1. By
+`deleg_{t}_is_an_ecall` the factor `is_ecall − Σ_t is_deleg_t` is 0 or 1 on any row that
+passes, never negative. The semantic gates are gated by a
 decoder bit, never by `m_pc` times a bit: on a live row the bits are the table's, and on
 a padding row every mask is 0, so whatever the bits say reaches no memory event.
 
@@ -728,3 +734,14 @@ so meets no `BITS ≤ trace_vars` assertion: it is built at every `n` the artifa
 in practice at `2^8`. It reads no generic channel and lists no setup commitment at all, so its
 opening claim is `M ++ W` — the first of any family. `docs/spec/delegation.md` is the ABI and
 `docs/spec/constraint-manifest.md` §12 the accounting.
+
+**S23's `POSEIDON2` and `FR_ARITH` were two constructors, two registry arms and two fills**,
+both below the guard for the same reason, both opening `M ++ W`, and both at `2^8`. What they
+cost beyond that is in the *request* side, not here: a second and third delegation number mean
+the add/sub family carries one `is_deleg_t` bit per registered type rather than S21's one
+`is_keccak`, and a frame holding the mirror carries the `deleg_space` column that says which
+type the request names (§8.1, §8.2). Both are `docs/spec/memory.md` §2.1's table again and not
+this crate's: `global_commit_phase`, `prove_shard`, `reduce_shard` and `verify_shard` are
+unchanged, and no key's SRS digest moved, the packed generic table having gained no row.
+`docs/spec/delegation.md` §12 and §13 are the two ABIs and
+`docs/spec/constraint-manifest.md` §13 and §14 the accounting.

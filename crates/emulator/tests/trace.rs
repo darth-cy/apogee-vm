@@ -855,18 +855,17 @@ fn every_ecall_answers_as_the_abi_says() {
                 (read, 1000, 4, neg(ecall::EBADF)),
                 (write, 1000, 4, neg(ecall::EBADF)),
                 (read, 3, 4, 0),
-                (ecall::PRECOMPILE_POSEIDON2, 0, 0, neg(ecall::ENOSYS)),
+                // The top of the precompile range, which no family answers:
+                // since S23 the low numbers are *delegations*, and calling one
+                // a guest did not declare is fatal rather than `-ENOSYS`.
+                (ecall::PRECOMPILE_LAST, 0, 0, neg(ecall::ENOSYS)),
                 (ecall::ZKVM_IO_LAST, 0, 0, neg(ecall::ENOSYS)),
             ];
-            // The precompile's a0 is its state pointer, wherever the stack is.
+            // The unassigned precompile's a0 is a pointer, wherever the stack is.
             let calls: Vec<_> = calls
                 .iter()
                 .map(|&(n, a0, count, result)| {
-                    let a0 = if n == ecall::PRECOMPILE_POSEIDON2 {
-                        0
-                    } else {
-                        a0
-                    };
+                    let a0 = if n == ecall::PRECOMPILE_LAST { 0 } else { a0 };
                     (n, a0, count, result)
                 })
                 .collect();

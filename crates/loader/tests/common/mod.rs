@@ -33,7 +33,7 @@ pub const PINS: [(&str, &str); 23] = [
     ),
     (
         "echo.elf",
-        "e1bb10eeb6537c9bc639cb56b0c1f497382c858c8f53c8e6657472c5da2c7590",
+        "934407e4d89707b10c8340d87c133d8a037e302f22bd6830a1cbd66cc3199482",
     ),
     (
         "rvc-dense.elf",
@@ -45,11 +45,11 @@ pub const PINS: [(&str, &str); 23] = [
     ),
     (
         "orderbook.elf",
-        "97c6f190824c023172b36c8d8a6d705b0b2d4c14b6a9e1336869c02907f84a46",
+        "8e05021a96ce975a75950ec6be7186f0021873bb5e556672e12910aa62fc3cb2",
     ),
     (
         "vault.elf",
-        "6d0e70ed41918e897feef12b1abf3daaece7a0398aa56164ba025666fb851e4a",
+        "dbadf3770c409b64c86481ea71203b5cb5db1b3d8a98c085813ff23311fa3966",
     ),
     (
         "atomics.elf",
@@ -57,15 +57,15 @@ pub const PINS: [(&str, &str); 23] = [
     ),
     (
         "opcodes.elf",
-        "d8a35e299af2ab4ebacd87da8f4d778069269b198e736caef5e80c038f431265",
+        "e29f9a0b850f7b6d5159f37037d679f7ae66afcbef8cd82ef9bc47a966126a9f",
     ),
     (
         "heap.elf",
-        "4557484c508e922270e0b923993e69da2ff82897db28da5324a8139e3b402b52",
+        "c94969998512d987bff3f860e9d67b10992f5bbe068ab48e4e69f6e2c7c69ba5",
     ),
     (
         "consistency.elf",
-        "0cf55d06bb3e84e33ec65e071f2960b5d7fcd6c06de00c2b6df0cabf0bda3131",
+        "0a3040d1215f8f335c78ada939b6c055f36549ddc5fecfe3a3ebbfb8a0d65b5e",
     ),
     (
         "addsub.elf",
@@ -105,19 +105,19 @@ pub const PINS: [(&str, &str); 23] = [
     ),
     (
         "keccak-test.elf",
-        "c906c7f55ab7c047499e39d74cca7b58fd00deff1814f4090394f0513b1145eb",
+        "c1d134ee91f5d32c7ce5291542c37d093034731f9b2b3b3d862956c0cd89cac3",
     ),
     (
         "keccak-unused.elf",
-        "ac1c8fdb1c166edd888d4789f7cd83b635c7636c2e6b5bd4fb8dc0699fbdbbf3",
+        "49bd8a9ba53e561fc19d0ec066afe91e3301842d36e0f584a37b7414557729b1",
     ),
     (
         "recursion-ops.elf",
-        "edce5f735e12b69f591bf1b55fcb01917a03649d94e8601afcfd1b54f703230e",
+        "4dc91d5bb40a1d9187cae204df0ee6913ae3444c1b0f186003bef23e36f94580",
     ),
     (
         "recursion-unused.elf",
-        "3d0c175a049434ab6dab593f1a28dce2badf60ce10e7f2b7e834e7f6afec334f",
+        "8b4b503a1f89348c512df28e11d5cd2111b987fa2f95a2b4f5362fd1fd7e877e",
     ),
 ];
 
