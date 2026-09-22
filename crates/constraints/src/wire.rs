@@ -128,6 +128,9 @@ impl Serialize for VirtualKind {
             VirtualKind::RamLive => 1u32.serialize(s),
             VirtualKind::Range19 => 2u32.serialize(s),
             VirtualKind::Range16 => 3u32.serialize(s),
+            // Above the four closed forms, so their tags do not move. A
+            // schedule column's index rides in the same word.
+            VirtualKind::Schedule(k) => (4u32 + *k as u32).serialize(s),
         }
     }
 }
@@ -139,6 +142,9 @@ impl<'de> Deserialize<'de> for VirtualKind {
             1 => Ok(VirtualKind::RamLive),
             2 => Ok(VirtualKind::Range19),
             3 => Ok(VirtualKind::Range16),
+            t if (t - 4) < crate::ecrecover::tables::id::COUNT as u32 => {
+                Ok(VirtualKind::Schedule((t - 4) as u16))
+            }
             _ => Err(D::Error::custom("unknown virtual table kind")),
         }
     }
@@ -154,6 +160,9 @@ impl Serialize for PolyAddress {
             PolyAddress::Virtual(VirtualKind::RamLive) => (3, 1, 0),
             PolyAddress::Virtual(VirtualKind::Range19) => (3, 2, 0),
             PolyAddress::Virtual(VirtualKind::Range16) => (3, 3, 0),
+            // The schedule columns take the same `3` tag with an index above
+            // the four closed forms, so no existing address's bytes move.
+            PolyAddress::Virtual(VirtualKind::Schedule(k)) => (3, 4 + k as u32, 0),
             PolyAddress::Inner { layer, offset } => (4, layer, offset),
             PolyAddress::Scratch(i) => (5, i, 0),
             PolyAddress::Cached { layer, offset } => (6, layer, offset),
@@ -172,6 +181,9 @@ impl<'de> Deserialize<'de> for PolyAddress {
             (3, 1, 0) => Ok(PolyAddress::Virtual(VirtualKind::RamLive)),
             (3, 2, 0) => Ok(PolyAddress::Virtual(VirtualKind::Range19)),
             (3, 3, 0) => Ok(PolyAddress::Virtual(VirtualKind::Range16)),
+            (3, k, 0) if (k - 4) < crate::ecrecover::tables::id::COUNT as u32 => {
+                Ok(PolyAddress::Virtual(VirtualKind::Schedule((k - 4) as u16)))
+            }
             (4, layer, offset) => Ok(PolyAddress::Inner { layer, offset }),
             (5, i, 0) => Ok(PolyAddress::Scratch(i)),
             (6, layer, offset) => Ok(PolyAddress::Cached { layer, offset }),

@@ -85,7 +85,6 @@ pub struct Step {
     /// The linear slots, each with its schedule coefficient.
     pub c: Option<(i64, u32)>,
     pub e: Option<(i64, u32)>,
-    pub d: Option<(i64, u32)>,
     /// The constant added, limb by limb. Small: a step's constant is a curve
     /// constant or a table entry, never a scaled value.
     pub literal: [u64; 4],
@@ -140,7 +139,6 @@ impl Step {
         out.extend(self.b.filter(|_| self.output != Output::Sqrt));
         out.extend(self.c.map(|(_, v)| v));
         out.extend(self.e.map(|(_, v)| v));
-        out.extend(self.d.filter(|_| self.output != Output::D).map(|(_, v)| v));
         if let Digit::Check(at) = self.digit {
             out.push(at);
         }
@@ -829,15 +827,35 @@ impl Builder {
                 readers[v.0 as usize] += 1;
             }
         }
-        // Address ranges, in value order.
-        let mut base = Vec::with_capacity(readers.len());
-        let mut next = 0u32;
-        for r in &readers {
-            base.push(next);
-            // A value nothing reads still occupies one address: the write has
-            // to go somewhere, and a write with no reader is what a dangling
-            // computation is.
-            next += (*r).max(1) as u32;
+        // Address ranges, **by producing step**: the step at index `i` owns
+        // the block `[i·cap, (i + 1)·cap)`, and its value's copies are the
+        // bottom of that block.
+        //
+        // Packing them densely in value order would also work and would use
+        // fewer addresses, but an address is only a pairing label -- a
+        // multiset cares that a read and a write agree, not that the space is
+        // full -- and the block scheme buys something dense packing cannot:
+        // **a step's write addresses are a closed form of its step index**,
+        // `step·cap + j`, so the circuit reads them off `V[row]` with no
+        // schedule table at all. Packed densely they are a running total,
+        // which is 3,515 constants the recursion guest would have to link
+        // (`docs/spec/ecrecover.md` §6.2).
+        //
+        // A value nothing reads still occupies one address: the write has to
+        // go somewhere, and a write with no reader is what a dangling
+        // computation is.
+        let cap = self.cap as u32;
+        let base: Vec<u32> = (0..readers.len())
+            .map(|v| self.produced[v] as u32 * cap)
+            .collect();
+        for (v, r) in readers.iter().enumerate() {
+            assert!(
+                (*r).max(1) <= self.cap,
+                "value {v}, produced at step {}, is read {r} times and the fan-out cap is {}: \
+                 its copies would run past its own block",
+                self.produced[v],
+                self.cap
+            );
         }
 
         let mut taken = vec![0usize; readers.len()];
@@ -861,9 +879,17 @@ impl Builder {
                 .flatten();
             let c = step.c.map(|(k, v)| (k, address(v, &mut taken)));
             let e = step.e.map(|(k, v)| (k, address(v, &mut taken)));
-            let d_read = (step.output != Output::D)
-                .then(|| step.d.map(|(k, v)| (k, address(v, &mut taken))))
-                .flatten();
+            // The `D` slot is the **written** one, and no step of this
+            // program reads it: `d` on an unplaced step carries the output's
+            // coefficient and nothing else, which `out_coeff` below takes.
+            // Asserted rather than assumed, because a slot the row pays for on
+            // every one of its 4,096 rows and never uses is four committed
+            // limb columns of nothing.
+            assert!(
+                step.output == Output::D || step.d.is_none(),
+                "step `{}` reads the D slot, which the row congruence no longer carries",
+                step.note
+            );
 
             let writes = match (step.output, step.bused) {
                 (Output::None, _) | (_, false) => Vec::new(),
@@ -878,11 +904,11 @@ impl Builder {
             // read or a write. A `D` written with no coefficient of its own
             // carries the usual `−1`; a square root's `B` is its `A`.
             let home = writes.first().copied();
-            let (a, b, d) = match step.output {
-                Output::A => (home, b_read, d_read),
-                Output::Sqrt => (home, home, d_read),
-                Output::D => (a_read, b_read, None),
-                Output::None => (a_read, b_read, d_read),
+            let (a, b) = match step.output {
+                Output::A => (home, b_read),
+                Output::Sqrt => (home, home),
+                Output::D => (a_read, b_read),
+                Output::None => (a_read, b_read),
             };
             steps.push(Step {
                 a,
@@ -890,7 +916,6 @@ impl Builder {
                 b,
                 c,
                 e,
-                d,
                 literal: step.literal,
                 digit: match step.digit {
                     UnplacedDigit::None => Digit::None,
@@ -924,7 +949,10 @@ impl Builder {
         }
         Schedule {
             steps,
-            values: next as usize,
+            // The address space is one block of `cap` per step, so it is as
+            // wide as the program is long -- sparse by construction, and that
+            // is the point: the bound is a closed form of the step index.
+            values: self.steps.len() * self.cap,
             fan_out,
         }
     }

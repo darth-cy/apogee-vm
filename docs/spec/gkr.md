@@ -87,8 +87,9 @@ Where each may appear:
 
 ### 2.1 Virtual tables
 
-Four kinds. Each closed form **is its multilinear extension** over `n_0`
-variables, and the kind tag is how the closed form is in the artifact:
+Four closed forms and one table family. Each closed form **is its multilinear
+extension** over `n_0` variables, and the kind tag is how the closed form is in
+the artifact:
 
 | kind | notation | value at row `y` | closed form |
 | --- | --- | --- | --- |
@@ -96,6 +97,7 @@ variables, and the kind tag is how the closed form is in the artifact:
 | `RamLive` | `V[ram_live]` | 1 if `y ≥ 2^14`, else 0 | `1 − Π_{j=14}^{n_0−1} (1 − y_j)`, which is 0 when `n_0 ≤ 14` |
 | `Range19` | `V[range19]` | `y mod 2^19` | `Σ_{j < min(19, n_0)} 2^j · y_j` |
 | `Range16` | `V[range16]` | `y mod 2^16` | `Σ_{j < min(16, n_0)} 2^j · y_j` |
+| `Schedule(k)` | `V[sched_k]` | `c_k[y mod 2^b]` | `Σ_{i < 2^b} eq(y_0..y_{b−1}, i) · c_k[i]` |
 
 14 is `constants::memory::RAM_LIVE_BIT`. `RamLive` is S14's, the mask on RAM
 window 0's rows below `RAM_ORIGIN` (`docs/spec/memory.md` §3.3); its closed form
@@ -105,11 +107,37 @@ costs `n_0 − 14` multiplications and is 0 or 1 on the cube by construction.
 a narrower set below that, which is why a circuit narrower than a range
 channel's bound is refused.
 
+`Schedule` is S22's, and it is the one kind whose extension is a **sum over a
+period against a constant vector** rather than a closed form in the row index
+alone (`docs/spec/ecrecover.md` §6.2). `b` is
+`log2(constants::ecrecover::ROWS_PER_INVOCATION)`, the variables of one
+delegation invocation's row block, and `c_k` is column `k` of
+`constraints::ecrecover::tables` — the step schedule, the same for every
+invocation. It reads only the low `b` variables: that independence of everything
+above them is what **step-periodic** means, and a circuit with fewer than `b`
+variables has no block to be periodic over and is refused.
+
+Two things keep it affordable, both measured. A term with `c_k[i] = 0` drops out
+of the sum, so a column costs its *nonzero* count and not `2^b`; and each column
+is stored offset by its modal value, which costs one addition here — `eq` sums
+to 1 over the cube, so `Σ_i eq(y, i)·(m + d_i) = m + Σ_i eq(y, i)·d_i` — and
+makes the common entry the zero that drops out. Together those take the schedule
+from 163,840 constants to 24,882 stored pairs.
+
+`Schedule` is also the one kind that carries **data**: its constants are
+generated source that `gkr-verify` links, and the recursion guest links
+`gkr-verify`. That is the price `ecrecover.md` §6.2 weighed against committing
+the schedule as setup columns, which would have moved every verifying key's SRS
+digest and bytes and given a key builder something to substitute. A virtual
+table is never committed, so there is nothing there to substitute, and
+`family_circuit` binds it the same way it binds a gate list.
+
 A virtual table has layer 0's height. It is **never materialized**: the forward
 pass evaluates the closed form per row, the prover at every point a round needs
 (`(bound, X, bits)` at `X = 0, 1`), and the verifier at the bound point. It is
 never committed, never claimed, and never returned as a `BaseClaim`. A later kind
-is admissible only if its MLE has a closed form at every such point.
+is admissible only if its MLE has a closed form — or, as `Schedule` has, a
+period and a constant vector — at every such point.
 
 ## 3. Gate shapes
 

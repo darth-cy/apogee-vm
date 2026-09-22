@@ -362,8 +362,82 @@ fn fixture() -> (&'static str, String) {
     ("crates/program/tests/vectors/ecrecover.txt", text)
 }
 
+/// The schedule's virtual columns as committed Rust source.
+///
+/// `constraints::ecrecover::tables::derive` is the definition; this writes it
+/// out so that `gkr_verify::virtual_at_row` can read a table entry without
+/// rebuilding the 3,779-step program, which it would otherwise do once per row
+/// per column. The file is source rather than a `tests/vectors` fixture
+/// because the engine links it, and the recursion guest links the engine
+/// (`docs/spec/ecrecover.md` §6.2).
+///
+/// It is **generated and diffed** like every other fixture: `kat-gen --
+/// ecrecover` rewrites it, CI regenerates and diffs, and
+/// `crates/constraints/tests/tables.rs` holds it equal to `derive`'s output
+/// inside `cargo test --workspace`, so a schedule edited without regenerating
+/// fails fast rather than silently building a circuit against stale constants.
+fn schedule_data() -> (&'static str, String) {
+    use constraints::ecrecover::tables::{derive, id, MODAL};
+    let sparse = derive();
+    let total: usize = sparse.iter().map(|t| t.len()).sum();
+
+    let mut out = String::new();
+    for line in [
+        r#"//! The step schedule's virtual columns, generated."#,
+        r#"//!"#,
+        r#"//! Written by `cargo run -p kat-gen -- ecrecover` from"#,
+        r#"//! `constraints::ecrecover::tables::derive`, which is the definition."#,
+        r#"//! Do not edit by hand: `crates/constraints/tests/tables.rs` holds this"#,
+        r#"//! equal to `derive`'s output, so a hand edit fails the workspace run."#,
+        r#"//!"#,
+        r#"//! Each table is stored as the `(step, value - MODAL[k])` pairs where"#,
+        r#"//! that difference is not zero, ascending by step. A zero entry costs"#,
+        r#"//! nothing in the extension's sum, which is what keeps the schedule"#,
+        r#"//! affordable in a `no_std` crate the recursion guest links."#,
+        r#""#,
+    ] {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push_str(&format!(
+        "/// Every schedule table, sparse: {total} pairs against {} dense.\n",
+        id::COUNT * constants::ecrecover::ROWS_PER_INVOCATION
+    ));
+    // `rustfmt::skip`, because `cargo fmt --all` would otherwise rewrap this
+    // array and the file would no longer be what the generator writes --
+    // which is the equality the test below and CI's regenerate-and-diff both
+    // rest on.
+    out.push_str("#[rustfmt::skip]\n");
+    out.push_str(&format!(
+        "pub const SPARSE: [&[(u16, i128)]; {}] = [\n",
+        id::COUNT
+    ));
+    for (k, table) in sparse.iter().enumerate() {
+        out.push_str(&format!(
+            "    // table {k}, modal {}, {} pairs\n    &[",
+            MODAL[k],
+            table.len()
+        ));
+        for (i, (step, value)) in table.iter().enumerate() {
+            if i % 8 == 0 {
+                out.push_str("\n        ");
+            }
+            out.push_str(&format!("({step}, {value}), "));
+        }
+        if !table.is_empty() {
+            out.push('\n');
+            out.push_str("    ");
+        }
+        out.push_str("],\n");
+    }
+    out.push_str("];\n");
+    ("crates/constraints/src/ecrecover/schedule_data.rs", out)
+}
+
 pub fn generate() {
     let (path, text) = fixture();
+    write_vectors(path, &text);
+    let (path, text) = schedule_data();
     write_vectors(path, &text);
 }
 
@@ -374,6 +448,22 @@ mod tests {
     #[test]
     fn the_fixture_is_what_the_generator_writes() {
         let (path, text) = super::fixture();
+        let full = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(path);
+        let on_disk = std::fs::read_to_string(full).expect("the committed file");
+        assert_eq!(
+            on_disk, text,
+            "{path} is stale: rerun `kat-gen -- ecrecover`"
+        );
+    }
+
+    /// The generated schedule columns are what the generator writes, for the
+    /// same reason -- and this one is **source the engine links**, so a stale
+    /// copy is a circuit built against constants the program no longer has.
+    #[test]
+    fn the_schedule_columns_are_what_the_generator_writes() {
+        let (path, text) = super::schedule_data();
         let full = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join(path);

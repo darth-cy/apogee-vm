@@ -12,6 +12,7 @@
 mod common;
 
 use common::{toy, toy_cache_free, toy_cache_free_bytes, toy_cached_bytes};
+use constraints::ecrecover::tables;
 use constraints::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
 use field::Fr;
 use serde::Serialize;
@@ -326,7 +327,9 @@ fn a_nonzero_unused_address_field_is_refused() {
         (0, 3, 1),
         (1, 3, 1),
         (2, 3, 1),
-        (3, 4, 0),
+        // The first virtual index no kind has, which moves as kinds are
+        // appended: the four closed forms, then one per schedule column.
+        (3, 4 + tables::id::COUNT as u32, 0),
         (3, 0, 1),
         (3, 1, 1),
         (3, 3, 1),
@@ -357,7 +360,8 @@ fn a_nonzero_unused_address_field_is_refused() {
 }
 
 /// Virtual kinds are 0 (`V[row]`), 1 (`V[ram_live]`), 2 (`V[range19]`) and
-/// 3 (`V[range16]`), append-only, and a kind is printed by its short name.
+/// 3 (`V[range16]`), then one per schedule column, append-only, and a kind is
+/// printed by its short name.
 #[test]
 fn virtual_kind_tags_are_append_only() {
     let kinds = [
@@ -371,8 +375,20 @@ fn virtual_kind_tags_are_append_only() {
         assert_eq!(postcard::from_bytes::<VirtualKind>(&[tag]), Ok(kind));
         assert_eq!(PolyAddress::Virtual(kind).to_string(), name);
     }
+    // S22's step-periodic schedule columns take the tags above those four,
+    // one per column, and print by index (`docs/spec/gkr.md` §2).
+    for k in 0..tables::id::COUNT {
+        let kind = VirtualKind::Schedule(k as u16);
+        let tag = 4 + k as u8;
+        assert_eq!(encode(&kind), [tag], "{kind:?}");
+        assert_eq!(postcard::from_bytes::<VirtualKind>(&[tag]), Ok(kind));
+        assert_eq!(
+            PolyAddress::Virtual(kind).to_string(),
+            format!("V[sched_{k}]")
+        );
+    }
     assert_eq!(
-        postcard::from_bytes::<VirtualKind>(&[kinds.len() as u8]),
+        postcard::from_bytes::<VirtualKind>(&[(kinds.len() + tables::id::COUNT) as u8]),
         Err(postcard::Error::SerdeDeCustom),
         "the first tag no kind has"
     );

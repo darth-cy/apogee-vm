@@ -214,7 +214,7 @@ impl Machine {
                 sum = s2::addmod(&sum, &s2::mulmod(&x, &y, m), m);
             }
         }
-        for (coefficient, at) in [step.c, step.e, step.d].into_iter().flatten() {
+        for (coefficient, at) in [step.c, step.e].into_iter().flatten() {
             let v = self.read(at, step.note);
             sum = s2::addmod(&sum, &scale(coefficient, &v, m), m);
         }

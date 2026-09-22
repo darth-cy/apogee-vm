@@ -321,6 +321,9 @@ fn write_address(w: &mut Writer, a: PolyAddress) {
                 VirtualKind::RamLive => 1,
                 VirtualKind::Range19 => 2,
                 VirtualKind::Range16 => 3,
+                // The same index the artifact's wire form gives it, above the
+                // four closed forms so none of theirs moves.
+                VirtualKind::Schedule(k) => 4 + k as u32,
             },
         ),
         other => panic!("a channel spec names committed and virtual columns only, not {other}"),

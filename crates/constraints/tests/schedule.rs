@@ -14,6 +14,8 @@
 //! only about its size.
 
 use constants::ecrecover as e;
+use std::collections::BTreeMap;
+
 use constraints::ecrecover::schedule::{Digit, Frame, Output};
 use constraints::ecrecover::{schedule, FAN_OUT, SELECTORS, TABLE, WINDOWS, WINDOW_BITS};
 
@@ -38,34 +40,64 @@ fn the_program_is_the_row_budget() {
     assert_eq!(program.fan_out, FAN_OUT, "the widest write is the cap");
 }
 
-/// Every bus address is written exactly once and read at most once.
+/// Every bus address a step writes is written exactly once and read exactly
+/// once, and every address a step reads is one some step wrote.
 ///
 /// That is the multiset's rule, not a convention: a write with no read and a
 /// read with no write each leave the global argument unbalanced, and the
 /// honest prover is the one refused. The program spends copy steps to keep
 /// it, and this is the check that it spent enough.
+///
+/// The address space is **sparse** -- a step owns the block
+/// `[step·FAN_OUT, (step + 1)·FAN_OUT)` and uses as much of it as the value's
+/// readers need -- so this iterates the addresses that are used rather than
+/// the whole range. Density was never the property; pairing is. What the
+/// blocks buy is that a write address is a closed form of the step index and
+/// so costs no schedule table (`docs/spec/ecrecover.md` §6.2).
 #[test]
 fn every_bus_address_is_written_once_and_read_once() {
     let program = schedule();
-    let mut written = vec![0usize; program.values];
-    let mut read = vec![0usize; program.values];
+    let mut written: BTreeMap<u32, usize> = BTreeMap::new();
+    let mut read: BTreeMap<u32, usize> = BTreeMap::new();
     for step in &program.steps {
         for at in &step.writes {
-            written[*at as usize] += 1;
+            *written.entry(*at).or_default() += 1;
         }
         for at in step.reads() {
-            read[at as usize] += 1;
+            *read.entry(at).or_default() += 1;
         }
     }
-    for (at, (w, r)) in written.iter().zip(&read).enumerate() {
+    for (at, w) in &written {
         assert_eq!(*w, 1, "bus address {at} is written {w} times");
-        assert!(*r <= 1, "bus address {at} is read {r} times");
+        let r = read.get(at).copied().unwrap_or(0);
+        assert_eq!(
+            r, 1,
+            "bus address {at} is written once and read {r} times; an address written and \
+             never read is an unmatched write, and a multiset with one does not balance"
+        );
     }
-    let dangling = read.iter().filter(|r| **r == 0).count();
-    assert_eq!(
-        dangling, 0,
-        "an address written and never read is an unmatched write, and a \
-         multiset with one does not balance"
+    for at in read.keys() {
+        assert!(
+            written.contains_key(at),
+            "bus address {at} is read and never written"
+        );
+    }
+    // Every address is inside its own step's block, which is what makes the
+    // write address derivable from the row index.
+    for (i, step) in program.steps.iter().enumerate() {
+        for at in &step.writes {
+            let block = *at as usize / FAN_OUT;
+            assert_eq!(
+                block, i,
+                "step {i} writes {at}, which is step {block}'s block"
+            );
+        }
+    }
+    assert!(
+        written.len() * 2 < program.values,
+        "the block scheme is meant to be sparse; {} of {} addresses used",
+        written.len(),
+        program.values
     );
 }
 

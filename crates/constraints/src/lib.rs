@@ -165,6 +165,25 @@ pub enum VirtualKind {
     /// `V[range16]`: the 16-bit range channel's table, the low 16 bits of the
     /// row index. `docs/spec/lookup.md` §3.
     Range16,
+    /// `V[sched_k]`: a **step-periodic schedule table** (S22), column `k` of
+    /// `constraints::ecrecover::tables`, constant per step of an invocation's
+    /// row block and the same for every invocation.
+    ///
+    /// Its multilinear extension over `n >= log2(ROWS_PER_INVOCATION)`
+    /// variables is a sum over one period against a constant vector,
+    /// `docs/spec/ecrecover.md` §6.2:
+    ///
+    /// ```text
+    /// V[sched_k](y) = Σ_{i < ROWS_PER_INVOCATION} eq(y_0..y_11, i) · c_k[i]
+    /// ```
+    ///
+    /// It reads only the low variables, which is what "step-periodic" means:
+    /// every invocation of the block sees the same schedule. Unlike the four
+    /// above it carries **data** rather than a closed form in the row index,
+    /// and that data is generated source the engine links -- which is the
+    /// price §6.2 weighed and took, against committing the schedule as setup
+    /// columns and moving every verifying key's SRS digest.
+    Schedule(u16),
 }
 
 /// The one way any polynomial is named. `docs/spec/gkr.md` §2 says which
@@ -199,6 +218,7 @@ impl fmt::Display for PolyAddress {
             PolyAddress::Virtual(VirtualKind::RamLive) => write!(f, "V[ram_live]"),
             PolyAddress::Virtual(VirtualKind::Range19) => write!(f, "V[range19]"),
             PolyAddress::Virtual(VirtualKind::Range16) => write!(f, "V[range16]"),
+            PolyAddress::Virtual(VirtualKind::Schedule(k)) => write!(f, "V[sched_{k}]"),
             PolyAddress::Inner { layer, offset } => write!(f, "L{{{layer}}}[{offset}]"),
             PolyAddress::Scratch(i) => write!(f, "scratch[{i}]"),
             PolyAddress::Cached { layer, offset } => write!(f, "C{{{layer}}}[{offset}]"),

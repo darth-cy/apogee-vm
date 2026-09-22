@@ -14,6 +14,8 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use constants::transcript_tags;
+use constraints::ecrecover::schedule_data as sched_data;
+use constraints::ecrecover::tables as sched;
 use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress, VirtualKind};
 use field::Fr;
 use poly::{eq_eval, MultilinearPoly};
@@ -217,7 +219,37 @@ pub fn virtual_at_row(kind: VirtualKind, row: usize) -> Fr {
             let bits = range_bits(kind);
             Fr::from_u64((row as u64) & ((1u64 << bits) - 1))
         }
+        // Step-periodic: the row's step is its index within the invocation's
+        // block, and the schedule is the same for every invocation
+        // (`docs/spec/ecrecover.md` §6.2).
+        VirtualKind::Schedule(k) => {
+            let k = k as usize;
+            let step = row % constants::ecrecover::ROWS_PER_INVOCATION;
+            signed(sched::at(sched_data::SPARSE[k], sched::MODAL[k], step))
+        }
     }
+}
+
+/// A schedule constant as a field element. Every one of them is a small signed
+/// integer or a 64-bit limb, so the magnitude fits `u64` and the sign is the
+/// only thing to carry.
+fn signed(v: i128) -> Fr {
+    let magnitude = Fr::from_u64(v.unsigned_abs() as u64);
+    if v < 0 {
+        -magnitude
+    } else {
+        magnitude
+    }
+}
+
+/// `eq(y, i) = Π_j (y_j if bit j of i is set, else 1 − y_j)`, at one point of
+/// the cube.
+fn eq_at(point: &[Fr], i: usize) -> Fr {
+    let mut acc = Fr::ONE;
+    for (j, y) in point.iter().enumerate() {
+        acc *= if (i >> j) & 1 == 1 { *y } else { Fr::ONE - *y };
+    }
+    acc
 }
 
 fn range_bits(kind: VirtualKind) -> u32 {
@@ -244,6 +276,42 @@ pub fn virtual_at_point(kind: VirtualKind, point: &[Fr]) -> Fr {
         VirtualKind::Range19 | VirtualKind::Range16 => {
             let low = &point[..point.len().min(range_bits(kind) as usize)];
             low.iter().rev().fold(Fr::ZERO, |acc, y| acc + acc + *y)
+        }
+        // `Σ_{i < 2^b} eq(y_0..y_{b−1}, i) · c_k[i]` over the low `b`
+        // variables, `b = log2(ROWS_PER_INVOCATION)`, and nothing above them:
+        // that independence is what "step-periodic" means.
+        //
+        // The table is stored offset by its modal value, and that costs
+        // exactly one addition here rather than a second pass: `eq` sums to 1
+        // over the whole cube, so
+        //
+        // ```text
+        // Σ_i eq(y, i)·(MODAL + offset_i) = MODAL + Σ_i eq(y, i)·offset_i
+        // ```
+        //
+        // and an entry equal to the mode has `offset_i = 0` and is not stored
+        // at all. That is the whole of §6.2's saving: 24,882 stored pairs
+        // against 163,840 dense.
+        //
+        // `eq` is evaluated per stored pair rather than tabulated over the
+        // block. Every table here is far sparser than its 4,096 steps -- the
+        // window columns are live on 172 and the frame columns on seven -- so
+        // a 4,096-entry table would cost more than the pairs do, and it would
+        // allocate.
+        VirtualKind::Schedule(k) => {
+            let k = k as usize;
+            let bits = constants::ecrecover::ROWS_PER_INVOCATION.trailing_zeros() as usize;
+            assert!(
+                point.len() >= bits,
+                "a schedule column needs the {bits} variables of an invocation block, and this                  circuit has {}; `family_circuit` refuses a height below the block",
+                point.len()
+            );
+            let low = &point[..bits];
+            let mut acc = signed(sched::MODAL[k]);
+            for (step, offset) in sched_data::SPARSE[k] {
+                acc += eq_at(low, *step as usize) * signed(*offset);
+            }
+            acc
         }
     }
 }

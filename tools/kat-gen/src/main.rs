@@ -93,9 +93,25 @@ const GROUPS: [(&str, fn()); 19] = [
 /// one machine, with `cargo run -p kat-gen -- guests`, and everything CI can
 /// reproduce from them -- the objdump and nm listings -- is in `loader`, which
 /// does run by default.
-const DEFAULT_GROUPS: [&str; 17] = [
-    "field", "poly", "curve", "tower", "pairing", "msm", "srs", "pcs", "loader", "isa", "program",
-    "gkr", "memory", "lookup", "family", "keccak", "tape",
+const DEFAULT_GROUPS: [&str; 18] = [
+    "field",
+    "poly",
+    "curve",
+    "tower",
+    "pairing",
+    "msm",
+    "srs",
+    "pcs",
+    "loader",
+    "isa",
+    "program",
+    "gkr",
+    "memory",
+    "lookup",
+    "family",
+    "keccak",
+    "ecrecover",
+    "tape",
 ];
 
 fn main() {

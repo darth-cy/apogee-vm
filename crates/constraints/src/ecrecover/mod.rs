@@ -8,6 +8,8 @@
 //! does — which is how the program is known to be right before a gate exists.
 
 pub mod schedule;
+pub mod schedule_data;
+pub mod tables;
 
 use alloc::vec::Vec;
 
