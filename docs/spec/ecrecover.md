@@ -150,15 +150,15 @@ recovery is 259 point doublings and 133 point additions over a 256-bit field,
 about 1,180 non-native congruences, and no single row holds it. So:
 
 > An invocation of `ECRECOVER` occupies `constants::ecrecover::ROWS_PER_INVOCATION`
-> = **2,048** consecutive rows, aligned to that boundary. Invocation `i` of a
-> shard is rows `[2048·i, 2048·(i+1))`, and a shard of `2^20` rows holds **512**
+> = **4,096** consecutive rows, aligned to that boundary. Invocation `i` of a
+> shard is rows `[4096·i, 4096·(i+1))`, and a shard of `2^20` rows holds **256**
 > recoveries.
 
 Everything else §1 says is unchanged: rows are invocations rather than cycles,
 the accesses ride the one global multiset, and the family is present exactly
 when the binary declares it. What changes is only the row-to-invocation ratio,
 and with it three mechanical things — the shard plan divides the invocation
-count by `2^20 / 2048` rather than by `2^20`, the fill writes 2,048 rows per
+count by `2^20 / 4096` rather than by `2^20`, the fill writes 4,096 rows per
 invocation, and the frame and anchor sit on designated **steps** of the block
 rather than on its one row.
 
@@ -168,12 +168,27 @@ per-step constant — which congruence to run, which frame word to touch, which
 window digit to select — is a **schedule column**, periodic with period 2,048.
 §6.2 says what a schedule column is and what binds it.
 
-`ROWS_PER_INVOCATION` is **2,048 by measurement, not by decree** (owner's
-decision, S22). §6.1's cliff is what chooses it, the obligation count per row is
-what puts a choice on one side of that cliff or the other, and the count is only
-knowable once the gadget exists. The constant may be re-pinned when the gadget
-is built and counted; what may not change is that it is a fixed, aligned,
-protocol-wide block size rather than anything a prover or a program picks.
+`ROWS_PER_INVOCATION` is **by measurement, not by decree** (owner's decision,
+S22), and the measurement has been taken: `constraints::ecrecover::schedule`
+is **3,779 steps**, which 4,096 holds with 8% to spare. It was 2,048 when this
+page was first written, from an estimate of the congruence count that the
+program itself corrected. What may not change is that the block is fixed,
+aligned and protocol-wide rather than anything a prover or a program picks.
+
+`crates/constraints/tests/schedule.rs` pins the step count and compares the
+shapes that were measured against it:
+
+| window | fan-out cap | steps | rows | value slots a row |
+| --- | --- | --- | --- | --- |
+| 2 bits | 4 | 5,086 | 8,192 | 7 |
+| 3 bits | 4 | 4,159 | 8,192 | 9 |
+| **3 bits** | **6** | **3,639** | **4,096** | **9** |
+| 4 bits | 6 | 3,231 | 4,096 | 13 |
+
+The chosen row is the cheapest per recovery: a wider window saves steps and
+spends value slots, which every row of the shard pays for whether it selects
+anything or not. (The 3,639 there is the shape before the digit's sign moved
+into the selectors, which §5.2 explains and which costs 140 steps.)
 
 ### 2.3 The scratch bus
 
@@ -413,103 +428,137 @@ both directions" for this case.
 `r_inv` witnessed with `r · r_inv ≡ 1 (mod n)`; `u1 = (n − e) · r_inv mod n`;
 `u2 = s · r_inv mod n`. Four congruences.
 
-### 4.4 The outcome
+### 4.4 The outcome, and what a failing call runs
 
-`success = valid_v ∧ valid_r ∧ valid_s ∧ f ∧ ¬q_infinity`, each an exact
-boolean from the rows above and from §5.2's infinity flag. The output words are
-`success · Q.x` and `success · Q.y` limb-wise, so a failure zeroes them by the
-gate rather than by the fill.
+`success = valid_v ∧ valid_r ∧ valid_s ∧ is_residue`, each an exact boolean
+from the rows above. The output words are `success · Q.x` and `success · Q.y`
+limb-wise, so a failure zeroes them by the gate rather than by the fill.
+
+**A failing call runs every row the successful one does.** The block is a
+fixed number of rows and the same program fills it either way, so a call whose
+`r` is on no curve point still walks the ladder — on substitute values, since
+it has no recovered point to walk it on. That substitution is a correctness
+requirement rather than a convenience: the ladder's steps assert `x2 ≠ x1` and
+`y ≠ 0` (§5.3), and a point that is not on the curve, or one that is
+degenerate against the other base, makes an honest prover unable to prove a
+**failure** — a call the EVM says succeeds with empty output.
+
+The substitute is `constants::secp256k1::H`, and it is **not** `G`:
+
+| substituted | to | why |
+| --- | --- | --- |
+| the base point | `H` | with both of the ladder's bases equal, the accumulator and the addend are multiples of one point and `acc = ±addend` turns up within a few windows |
+| `r`, in the inverse | `1` | `r = 0` is one of the failure classes, and the inverse of the divisor has to exist |
+| the root's parity | `0` | a failing call has no root to take the parity of, and `y = 0` is what the two roots of §4.2 leave |
+
+`H` is the point with the **smallest positive x** for which `x³ + 7` is a
+square, taking the even `y` — a nothing-up-my-sleeve rule with no free choice
+in it, re-derived from that rule in `crates/program/tests/secp256k1.rs`. Its
+discrete logarithm base `G` is nobody's to know, which is what keeps the
+failure path out of the exceptional case for **chosen** inputs and not merely
+for random ones: steering it there needs `α·H = β·G` for an `α` and `β` the
+caller picks, and on the failure path they do pick both.
 
 ---
 
 ## 5. The scalar multiplication
 
-### 5.1 One joint ladder, and G's multiples as literals
+### 5.1 One joint ladder, three-bit signed-odd windows
 
-`Q = u1·G + u2·R` is computed by a **single accumulator with shared doublings**,
-width 4, 64 digits:
-
-```text
-A ← O
-for w in 63 .. 0:
-    A ← 16·A                       four doublings, except at w = 63
-    A ← A + T_G[d1_w]              d1_w = u1's digit w
-    A ← A + T_R[d2_w]              d2_w = u2's digit w
-```
-
-with `T_G = {k·G}` and `T_R = {k·R}` for `k` in `1..=15`, and a zero digit
-adding nothing (§5.2's identity case).
-
-**Cost: 7 + 4·63 = 259 doublings and 7 + 63 + 63 = 133 additions.** Two separate
-ladders — a fixed-window comb for `G` and a windowed ladder for `R` — cost
-259 doublings and 133 additions too, because `R`'s ladder needs the doublings
-either way. The per-window comb for `G` therefore buys **nothing**.
-
-That is why **`G`'s fifteen multiples are gate literals and not committed setup
-columns**, which is a deviation from the stage prompt's "G's multiples are
-constant, so they ship as committed setup columns" and is recorded as one.
-`T_G` is the same on every row, so `Σ_k (lit(T_{G,k}), sel_k)` is one `Linear`
-gate; a setup column constant on every row is the same number with 120 more
-commitments and an identity binding, for no gain. A delegation family cannot
-carry setup columns today in any case: `program::setup_commitments` returns an
-empty list for one and `VerifyingKey::check` enforces the count.
-
-`T_R` is **not** constant and is built in-circuit: 1 doubling and 13 additions
-from `R`, its 15 points bussed like any other value.
-
-### 5.2 Window selectors, and the digits' tie to the scalar
-
-Each window digit drives 16 boolean selectors `s_{w,0..15}` with `Σ_k s_{w,k} = 1`.
-**One-hotness alone is not enough** — with free digits a prover computes
-`Σ d_w 16^w · R` for *any* digit string, which is any multiple of `R`, which is
-a complete forgery from a missing linear gate. Two more gates per window:
+`Q = u1·G + u2·R` is computed by a **single accumulator with shared
+doublings**, `WINDOW_BITS = 3` and `WINDOWS = 86`:
 
 ```text
-digit_w   = Σ_k k · s_{w,k}
-Σ_w digit_w · 16^w = u                    in two 128-bit halves, never in one Fr
+A ← T_R[d2_85] ; A ← A + T_G[d1_85]
+for w in 84 .. 0:
+    A ← 8·A                        three doublings
+    A ← A + T_R[d2_w]
+    A ← A + T_G[d1_w]
 ```
 
-The second must be the split of §3.4 for the same reason as everything else:
-here the attacker *chooses* the digits, so a wrap by `±q·|Fr|` is free rather
-than a grinding problem.
+with `T_G = {±1, ±3, ±5, ±7}·G` and `T_R` the same multiples of `R`.
 
-The selected point is `Σ_k s_{w,k} · T_k` limb-wise — a `Linear` gate over
-literals for `T_G`, and one `Quadratic` per limb over the bussed table for
-`T_R`.
+**The digits are signed and odd, and that is the whole completeness
+argument.** A zero digit is an identity addition and the chord formula has no
+answer for it; with every digit in `{±1, ±3, ±5, ±7}` no window ever adds the
+identity, and the accumulator is initialized from a table entry rather than
+from `O`, so the identity never enters the ladder at all. Every scalar has
+such a representation: `u` and `u + n` are the same multiple of a point of
+order `n` and exactly one of them is odd, and the recoding of an odd scalar
+keeps it odd at every step. `crates/program/tests/ecrecover_schedule.rs`
+checks that over random scalars.
 
-### 5.3 Complete addition: the five cases, constrained
+**`G`'s eight multiples are gate literals and not committed setup columns**,
+which is a deviation from the stage prompt's "G's multiples are constant, so
+they ship as committed setup columns" and is recorded as one. `T_G` is the
+same on every row, so a selection over it is `Σ_k (lit(T_k), s_k)` — one
+`Quadratic` gate over the row's selectors and the schedule's constants, with
+no commitment, no opening and no fan-out to pay for. `T_R` is not constant
+and is built in circuit from one doubling and three additions, its entries
+bussed like any other value.
+
+### 5.2 Selectors, and the digits' tie to the scalar
+
+A window's digit drives `SELECTORS = 8` boolean one-hot columns, one per
+**signed** digit. Putting the sign in the selector rather than in a column of
+its own is what keeps the selection at degree two: a sign column would have to
+be tied to the digit on every row that reads it and then multiplied into the
+selection, which is degree three. The price is four more bussed table entries
+— `−y` for each of the four `x` — and nothing else.
+
+**One-hotness alone is not enough.** With free digits a prover computes
+`Σ d_w 8^w · R` for any digit string, which is any multiple of `R`, which is a
+complete forgery from a missing linear gate. So the digit is accumulated:
+
+```text
+u_acc ← 8·u_acc + digit_w              one step a window a scalar
+Σ_w digit_w 8^w = u                    in two 128-bit halves, never in one Fr
+```
+
+The split of §3.4 is not optional here for the same reason as everywhere
+else, and more so: the attacker *chooses* the digits, so a wrap by `±q·|Fr|`
+is free rather than a grinding problem.
+
+**A window's three rows must agree on their digit.** The two selections and
+the accumulation each carry selector columns of their own, and nothing ties
+one row's to another's — so a prover would otherwise take `x` from one table
+entry and `y` from a different one, and the "point" the ladder then adds is on
+no curve at all. One row of the window **emits** its digit onto the bus and
+the other two **check** their selectors against it
+(`constraints::ecrecover::schedule::Digit`). The digit is bussed shifted into
+`[1, 2^(w+1))`, so a negative digit is still a small positive value whose
+limbs above the lowest are zero.
+
+### 5.3 The exceptional case, and where it is refused
 
 `λ·(x2 − x1) = y2 − y1` is **vacuous** at `x1 = x2, y1 = y2`: `0 = 0`, `λ` is
 free, and `x3 = λ² − x1 − x2` then ranges over the whole field. One such row
 anywhere in the ladder recovers an arbitrary public key from an honest
-signature. This is the family's top forging vector and it is not a corner case:
-a zero digit is an identity add, and `P(some zero digit)` is
-`1 − (15/16)^128 ≈ 99.97%` over the two digit strings of one recovery.
+signature. This is the family's top forging vector.
 
-So the addition gadget carries an **infinity flag per point** and five exact
-cases, selected by
+It is refused **locally**, by one step an addition:
 
 ```text
-z_x = [x1 = x2]          z_y = [y1 + y2 ≡ 0 mod p]          both on 128-bit halves
+add_dx_nonzero      witness 1/(x2 − x1)          x2 ≠ x1
+dbl_y_nonzero       witness 1/y                  y ≠ 0
 ```
 
-| case | selector | what is enforced |
-| --- | --- | --- |
-| `P = O` | `inf1` | `R = Q` |
-| `Q = O` | `inf2 ∧ ¬inf1` | `R = P` |
-| `P = −Q` | `z_x ∧ z_y ∧ ¬inf1 ∧ ¬inf2` | `R = O` |
-| `P = Q` | `z_x ∧ ¬z_y` | the tangent: `λ·2y1 = 3x1²` |
-| otherwise | `¬z_x ∧ ¬inf1 ∧ ¬inf2` | the chord: `λ·(x2 − x1) = y2 − y1` |
+Neither witness is bussed: each exists to prove something exists, and a bus
+write with no read leaves the global multiset unbalanced (§2.3). With `x2 ≠ x1`
+asserted the chord's slope is determined, and with `y ≠ 0` the tangent's is.
 
-and both non-degenerate cases then share `λ² = x3 + x1 + x2` and
-`λ·(x1 − x3) = y3 + y1`.
+The stage prompt's five-case complete addition — an infinity flag per point,
+`z_x = [x1 = x2]`, `z_y = [y1 + y2 ≡ 0]`, and a selected branch — is **not
+built**, and this is recorded as a deviation. It costs about three times the
+rows, and what it buys is an answer for cases the signed-odd digits have
+already removed: no window adds the identity, and `acc = ±T` mid-ladder is an
+equality of group elements that a caller cannot steer into. What it does not
+remove is `y = 0`, which the assertion above covers and the curve does not
+have anyway (`#E = n` is odd, so there is no 2-torsion and `x³ + 7 = 0` has no
+root).
 
-**Gating a product costs a column.** `GateDef::Quadratic` is `c_0 + Σ a_i·x_i +
-Σ b_j·y_j·z_j` — pairs only — so `s·(λ·Δx − Δy)` is not expressible at degree 2.
-A gated congruence therefore commits `λ_sel = s·λ` with its own degree-2 gate
-and its own limb obligations. That cost is real and is in §6's budget.
-
----
+The one place that argument fails is a **failing** call, and §4.4 is what
+answers it.
 
 ## 6. The row schedule and the budget
 

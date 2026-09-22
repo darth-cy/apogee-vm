@@ -1,11 +1,13 @@
 # S22 — secp256k1 ecrecover delegation family
 
-Branch `s22-ecrecover`. **Status: incomplete, and deliberately stopped at a verified
-boundary.** The stage prompt runs S22 as two ordered build sessions; what is delivered
-here is the design authority, the ABI, the semantics, the executor, the shim with both of
-its paths, the corpus and the fixtures — all green — and **not** the circuit family, its
-fill, the request-side tag column, the tamper twins or the end-to-end proof. §7 is the
-acceptance list item by item and §8 is what the next session picks up, in order.
+Branch `s22-ecrecover`. **Status: Session A complete and verified; Session B not
+started.** The stage prompt runs S22 as two ordered build sessions. Delivered and green:
+the design authority, the ABI, the semantics, the executor, the shim with both of its
+paths, the corpus and the fixtures; the **non-native gadget library**, exhaustive at
+reduced width; and the **step program**, interpreted over `program::secp256k1` and held
+to the committed corpus. Not delivered: the circuit family, its fill, the request-side
+tag column, the tamper twins and the end-to-end proof. §7 is the acceptance list item by
+item, §8 is Session A and what it measured, and §8.4 is Session B in order.
 
 Four design questions went to the repository owner before any code and were answered.
 Each answer and what follows from it is in §1; two of them contradict frozen text in
@@ -329,32 +331,80 @@ corpus.
 
 ---
 
-## 8. What the next session does, in order
+## 8. Session A, and what it measured
 
-1. **`crates/constraints/src/ecrecover.rs`** — the circuit, from `ecrecover.md`. Its own
-   `Assembly`, as `keccak.rs` has, for the same reason: `build::assemble` builds trees and
-   its `push_list` is quadratic in the circuit's width.
-2. **Setup columns for a delegation family.** The step schedule is a setup column periodic
-   in `row mod 2048`, and today `program::setup_commitments` returns an empty list for a
-   delegation family and `VerifyingKey::check` enforces that count. One arm in each.
-3. **`add_sub`'s tag column** (§1.4). `M` goes from `1 + 5w` to `2 + 5w`, every index below
-   `deleg_space` moves, and `docs/spec/constraint-manifest.md` §3 is rewritten from the new
-   artifact — as it was at S21, for the same kind of reason.
+The stage prompt orders Session A before Session B, and Session A is delivered.
+
+### 8.1 `constraints::nonnative`
+
+`docs/spec/ecrecover.md` §3 as data: the congruence over ℤ with its carry chain, the
+canonicality complement, the chunk-and-bit bound, and the 128-bit-half equality. **The
+width is a parameter**, which is what lets `crates/constraints/tests/nonnative.rs`
+instantiate four limbs of one bit and exhaust every input, every quotient and every
+result — the statement the 256-bit instance rests on and cannot make.
+
+Three things those tests settled:
+
+- **A congruence proves congruence and nothing more.** At `P = 13` in a four-bit span
+  both `d` and `d + 13` satisfy the same gates, so a prover picks which representative to
+  bus onward. Canonicality is what makes a result a result, on **every** value a row
+  writes and not only where the EVM semantics bound it. §3.3 gains that as its first
+  reason.
+- **The seventh carry is demonstrated, not asserted.** The test builds the gadget wrong
+  on purpose and shows that a carry out of the last position puts results in the wrong
+  residue class within reach.
+- **The magnitude argument is in exact integers.** A position sits just under `2^131` and
+  its carry just under `2^67` — inside the range check's 68 bits by the sign bit alone. A
+  third product a position overflows it, and the test asserts that too.
+
+### 8.2 `constraints::ecrecover::schedule`
+
+The step program one invocation runs, a row a step: one congruence shape, four value
+slots and a table, with the operands and the coefficients coming from the schedule.
+`crates/program/tests/ecrecover_schedule.rs` **interprets** it over
+`program::secp256k1` and holds its answer to `apply_frame`'s over the whole committed
+corpus, both outcomes. That is the check that says the program is the right program, and
+it is worth having before a gate exists: a gate list built from a wrong program is a
+correct circuit for the wrong function, and every later test would agree with it.
+
+`APOGEE_TRACE_SCHEDULE=1` on that test prints every value the program computes. The
+witness builder has to reproduce exactly that list, and a diff against it is how a
+disagreement gets found.
+
+### 8.3 What the measurement moved
+
+| | was | is | why |
+| --- | --- | --- | --- |
+| `ROWS_PER_INVOCATION` | 2,048 | **4,096** | the program is 3,779 steps; 2,048 came from an estimate of the congruence count |
+| recoveries a `2^20` shard | 512 | **256** | the above |
+| the window | 4 bits, 15 entries | **3 bits, 4 odd multiples, 8 signed selectors** | cheapest per recovery of the four shapes measured (§2.2) |
+| `G`'s multiples | setup columns (prompt) | gate literals | unchanged from §5.1, and now also true of the negated half |
+| the complete addition | five cases | signed-odd digits and two invertibility assertions | §5.3, recorded as a deviation |
+| the failure substitute | — | `constants::secp256k1::H` | §4.4; `G` makes the ladder degenerate and a **failure** unprovable |
+
+### 8.4 What Session B does, in order
+
+1. **`crates/constraints/src/ecrecover.rs`** — the circuit, from the schedule and from
+   `ecrecover.md`. Its own `Assembly`, as `keccak.rs` has, for the same reason:
+   `build::assemble` builds trees and its `push_list` is quadratic in the circuit's width.
+   The row's gate set is now known exactly: the congruence over five value slots and
+   eight table slots, the bound and canonicality of the written value, the is-zero pair
+   on 128-bit halves, the one-hot selectors with their digit tie, and the frame window.
+2. **The schedule's virtual columns.** `VirtualKind` gains this family's step-periodic
+   tables, whose extension is a sum over one period of `eq` against a constant vector
+   (§6.2, the owner's decision). `docs/spec/gkr.md` §2's virtual-table set is amended.
+   No key's bytes, identity or SRS digest move.
+3. **`add_sub`'s tag column** (§1.4). Append it rather than inserting: the artifact moves
+   either way, but no existing `M` index needs to.
 4. **`trace`'s witness builder** and **`prover::family_fill`**, including `plan_shards`
-   dividing by `height / ROWS_PER_INVOCATION` rather than by `height`, and the fill
-   writing 2,048 rows an invocation into an aligned block.
+   dividing by `height / ROWS_PER_INVOCATION`. The builder's values are the interpreter's.
 5. **`constraint-manifest.md` §13**, the family's column-by-column account.
-6. **The twins.** `checker::assert_anchor_twins_refused` is filled with this family's
-   addresses and called by name — but note `ecrecover.md` §2.3: a **bus** defect surfaces
-   at block level as `MemoryArgument`, not at shard level as `Constraint`, because
-   `verify_block` runs `verify_global_memory` before any shard's own checks. The S21 twins
-   had to be split by level for the anchor; the bus needs the same reading.
-7. **`kat-gen -- ecrecover`** gains the artifact's digest, as `keccak` does: this circuit
-   will be far too large to commit as bytes.
-8. **The deferred suites**, once, at the end, per the owner's standing instruction.
+6. **The twins**, noting that a **bus** defect surfaces at block level as
+   `MemoryArgument`, not at shard level as `Constraint`.
+7. **`kat-gen -- ecrecover`** gains the artifact's digest.
+8. **The deferred suites**, once, on the measurement host.
 
-The single biggest risk is not size. It is that `Q = ∞` and the equal-x and identity
-branches must be **derived from exact, limb-wise case selectors** rather than witnessed:
-the same gadget that makes failure provable is the one that keeps `λ` from going free, and
-§3.1 is six exact field values that make the degenerate branch selectable if any equality
-is written on one `Fr`.
+The single biggest remaining risk is unchanged in kind and smaller in size: every
+equality and zero test must be on **two 128-bit halves** (§3.4), and the one-hot
+selectors must be held one-hot as well as boolean — booleanity permits the empty set, and
+an all-zero selector row selects the point at infinity by another name.

@@ -871,6 +871,7 @@ name = "program"
 version = "0.1.0"
 dependencies = [
  "constants",
+ "constraints",
  "curve",
  "field",
  "isa",

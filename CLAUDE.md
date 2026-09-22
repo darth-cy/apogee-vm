@@ -153,7 +153,7 @@ cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
 cargo clippy -p prover --all-targets --features metrics -- -D warnings   # the ONE feature's configuration
-cargo test --workspace                      # 1,018 tests as of S22; 71 more are #[ignore]d
+cargo test --workspace                      # 1,032 tests as of S22; 71 more are #[ignore]d
 cargo test -p prover --features metrics --test metrics  # the metrics harness; 10 more, 2 #[ignore]d
 cargo test -p program --test delegation -- --ignored --test-threads=1  # static detachment at BOTH guest profiles; builds four guests, 0.6 s
 cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 18.8 GB peak, 200 s, 30 min on a runner
@@ -857,6 +857,40 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   existing one at `2^16`: the stage prompt's `2^16` is impossible
   (`docs/spec/lookup.md` §3), and the two guests that read an fd 0 input are unprovable
   while `EXIT` is the only provable ecall.
+- **`ROWS_PER_INVOCATION` is a measurement, not a target.** It is 4,096 because
+  `constraints::ecrecover::schedule` is 3,779 steps, and it was 2,048 until the program
+  was written and counted. The owner's decision at S22 is that the ratio may be re-pinned
+  on measurement while the block stays fixed, aligned and protocol-wide.
+  `crates/constraints/tests/schedule.rs` pins the count and records the shapes it beat: a
+  wider window saves steps and spends value slots, and every row of the shard pays for a
+  slot whether it uses it or not.
+- **A bus write with no read is an unbalanced multiset.** The scratch bus pairs one write
+  with one read, so a value read `k` times costs `k` writes and the program spends copy
+  steps to get them — fan-out is a cost, not a convenience. The other direction bites
+  just as hard: a witness that exists only to prove something exists — an invertibility
+  witness, a non-residue certificate, a parity's halved value — must **not** be bussed,
+  and carries `bused: false`. `crates/constraints/tests/schedule.rs` holds every address
+  to exactly one write and at most one read.
+- **The ladder's digits are signed and odd, and that is the completeness argument.** With
+  every digit in `{±1, ±3, … }` no window adds the identity, so the chord formula's
+  degenerate case never arises from a zero digit, and the five-case complete addition the
+  stage prompt asks for is not built (`docs/spec/ecrecover.md` §5.3, recorded as a
+  deviation). What is still asserted, one step an operation, is `x2 ≠ x1` and `y ≠ 0`:
+  those keep the slope determined, and a free slope anywhere in the ladder recovers an
+  arbitrary public key from an honest signature.
+- **A failing call runs every row a successful one does, on `H` and not on `G`.** The
+  block is a fixed number of rows either way, so a call whose `r` is on no curve point
+  still walks the ladder. Substituting `G` makes both of the joint ladder's bases equal,
+  and then `acc = ±addend` turns up within a few windows — which leaves an honest prover
+  unable to prove a **failure**, a call the EVM says succeeds with empty output.
+  `constants::secp256k1::H` is the point with the smallest positive `x` whose `x³ + 7` is
+  a square, even `y`: its discrete log base `G` is nobody's to know, which is what keeps
+  the failure path out of the exceptional case for **chosen** inputs.
+- **A window's rows must agree on their digit.** The two table selections and the digit
+  accumulation each carry one-hot selector columns of their own, and nothing ties one
+  row's to another's — so a prover would otherwise take `x` from one table entry and `y`
+  from another, and the "point" the ladder adds is on no curve. One row emits its digit
+  onto the bus and the others check their selectors against it.
 - **Boring beats clever.** Added surface area is a defect. Every verifier entry point is
   `(&VerifyingKey, &Proof, &PublicInputs)` and nothing else.
 

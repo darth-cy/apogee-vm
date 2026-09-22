@@ -1729,6 +1729,33 @@ pub mod secp256k1 {
     /// (`docs/spec/ecrecover.md` section 5.1).
     ///
     /// `crates/trace/tests/secp256k1.rs` re-derives every entry from [`G_X`],
+    /// A second base point, used on the **failure path** and nowhere else.
+    ///
+    /// Every row of an invocation block runs whether the call succeeds or
+    /// not, so a failing call still walks the scalar ladder — on substitute
+    /// values, since a failing call has no recovered point to walk it on. The
+    /// substitute cannot be [`G_X`]/[`G_Y`]: with the ladder's two bases
+    /// equal, its accumulator and its addend are multiples of one point and
+    /// `acc = ±addend` turns up within a few windows. That is the chord
+    /// formula's exceptional case, and it leaves an honest prover unable to
+    /// prove a **failure** — a call the EVM says succeeds with empty output.
+    ///
+    /// `H` is the point with the **smallest positive x** for which `x³ + 7`
+    /// is a square, taking the even `y`. A nothing-up-my-sleeve rule with no
+    /// free choice in it, and its discrete logarithm base `G` is nobody's to
+    /// know — which is what keeps the failure path out of the exceptional
+    /// case for **chosen** inputs and not merely for random ones: steering it
+    /// there needs `α·H = β·G` for an `α` and `β` the caller picks.
+    ///
+    /// `crates/program/tests/secp256k1.rs` re-derives it from that rule.
+    pub const H_X: [u64; LIMBS] = [1, 0, 0, 0];
+    pub const H_Y: [u64; LIMBS] = [
+        0xbc75_0d58_7e76_a7ee,
+        0x264c_a8d2_587f_dd6f,
+        0x63db_6860_5822_fb14,
+        0x4218_f20a_e6c6_46b3,
+    ];
+
     /// [`G_Y`] and the group law rather than trusting these digits.
     pub const G_MULTIPLES: [[[u64; LIMBS]; 2]; WINDOW_ENTRIES] = [
         // 1 * G
@@ -1995,11 +2022,19 @@ pub mod ecrecover {
 
     /// Rows one invocation occupies: a fixed, power-of-two, **aligned** block.
     ///
-    /// A recovery is 259 point doublings and 133 point additions, which is
-    /// about 1,180 non-native congruences; one congruence a row is what keeps
-    /// a row's `RANGE16` obligations under 128, where the channel's fraction
-    /// tree stops doubling (`docs/spec/ecrecover.md` section 6). At
-    /// `family::DEFAULT_HEIGHTS[ECRECOVER]` = `2^20` that is 512 recoveries a
+    /// One congruence a row is what keeps a row's `RANGE16` obligations under
+    /// 128, where the channel's fraction tree stops doubling
+    /// (`docs/spec/ecrecover.md` section 6). The step program that fills the
+    /// block is `constraints::ecrecover::schedule`, and **this number is its
+    /// measurement**: 3,639 steps at three-bit signed-odd windows with a
+    /// fan-out cap of six, which is the cheapest of the shapes
+    /// `crates/constraints/tests/schedule.rs` compares. At
+    /// `family::DEFAULT_HEIGHTS[ECRECOVER]` = `2^20` that is 256 recoveries a
     /// shard.
-    pub const ROWS_PER_INVOCATION: usize = 2048;
+    ///
+    /// It was 2,048 when S22's specification was written, from an estimate of
+    /// the congruence count that the program itself corrected. What is frozen
+    /// is that the block is fixed, aligned and protocol-wide -- not the
+    /// number (owner's decision, S22).
+    pub const ROWS_PER_INVOCATION: usize = 4096;
 }

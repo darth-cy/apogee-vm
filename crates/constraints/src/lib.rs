@@ -23,6 +23,7 @@ use field::Fr;
 pub mod add_sub;
 pub mod atomics;
 mod build;
+pub mod ecrecover;
 pub mod gadgets;
 pub mod jump_branch_slt;
 pub mod keccak;

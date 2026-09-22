@@ -399,3 +399,43 @@ fn the_identity_result_is_a_named_failure() {
     let q = recover(&h2, v, &r, &r).expect("a key");
     assert!(on_curve(&q) && !q.infinity);
 }
+
+/// `H`, the failure path's base point, re-derived from the rule its doc
+/// states rather than trusted as digits: the **smallest positive x** for
+/// which `x³ + 7` is a square, with the even `y`.
+///
+/// It exists because a failing call still walks the ladder, on substitute
+/// values, and the substitute cannot be `G` — with both of the joint
+/// ladder's bases equal, its accumulator and its addend are multiples of one
+/// point and `acc = ±addend` turns up within a few windows, which is the
+/// chord's exceptional case. `docs/spec/ecrecover.md` §4.4.
+#[test]
+fn the_fallback_base_point_is_the_smallest_one() {
+    let mut x = ONE;
+    let found = loop {
+        let cube = mulmod(&mulmod(&x, &x, &k::P), &x, &k::P);
+        let rhs = addmod(&cube, &[7, 0, 0, 0], &k::P);
+        let root = powmod(&rhs, &k::P_PLUS_1_OVER_4, &k::P);
+        if !is_zero(&rhs) && mulmod(&root, &root, &k::P) == rhs {
+            let y = if root[0] & 1 == 0 {
+                root
+            } else {
+                submod(&ZERO, &root, &k::P)
+            };
+            break (x, y);
+        }
+        x = addmod(&x, &ONE, &k::P);
+    };
+    assert_eq!(found.0, k::H_X, "H's x is not the smallest");
+    assert_eq!(found.1, k::H_Y, "H's y is not the even root");
+    assert_eq!(k::H_Y[0] & 1, 0, "H takes the even root");
+    assert!(
+        on_curve(&Point {
+            infinity: false,
+            x: k::H_X,
+            y: k::H_Y,
+        }),
+        "H is not on the curve"
+    );
+    assert_ne!(k::H_X, k::G_X, "H is not G");
+}

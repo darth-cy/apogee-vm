@@ -23,6 +23,10 @@ srs.workspace = true
 verifier-core.workspace = true
 
 [dev-dependencies]
+# S22's step program, whose interpreter in `tests/ecrecover_schedule.rs` runs
+# over `src/secp256k1.rs` and is what says the program is the right program.
+# `verifier-core` already depends on it, so this adds nothing to the graph.
+constraints.workspace = true
 # The bignum oracle for `src/secp256k1.rs`: every limb routine is differenced
 # against it, and the 512-by-256 division exhaustively at reduced width.
 num-bigint.workspace = true
