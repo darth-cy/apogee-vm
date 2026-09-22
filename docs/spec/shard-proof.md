@@ -613,11 +613,13 @@ event, and every lookup is switched off by its selector.
 
 ### 8.5 Owed elsewhere, and what this family does not do
 
-- `read`, `write`, `PRECOMPILE_POSEIDON2`, `-EBADF`, `-ENOSYS` and transfer rows: the
-  I/O-binding stage, which also chooses how a transfer is confined (S14's open
-  question 10). **A delegation call is no longer among them**: S21 made
-  `PRECOMPILE_KECCAK_F` the second provable ecall, with four gates of its own and three
-  S16 gates amended (§8.2). What makes it *correct* is not here but in the delegation
+- `read`, `write`, `-EBADF`, `-ENOSYS` and transfer rows: the I/O-binding stage, which
+  also chooses how a transfer is confined (S14's open question 10). **A delegation call is
+  no longer among them**: S21 made `PRECOMPILE_KECCAK_F` the second provable ecall, with
+  four gates of its own and three S16 gates amended (§8.2), and S23 added
+  `PRECOMPILE_POSEIDON2` and `PRECOMPILE_FR_ARITH` beside it — one selector and three gates
+  per type, with the shared gates gaining a term apiece and every one of them still degree
+  2 (`delegation.md` §10). What makes it *correct* is not here but in the delegation
   family's circuit; this family only witnesses that the request was made
   (`docs/spec/delegation.md` §5).
 - Binding fd 0 and fd 1 to the execution: that stage too (S14's D3, D5). At S16 the

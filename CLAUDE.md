@@ -22,7 +22,8 @@ docs/
                  jump-branch-slt.md, shift-bitwise.md, mul-div.md, memory-ops.md;
                  block-proof.md, the block layer: BlockProof, verify_block, ts windows; and
                  delegation.md, THE delegation ABI: the ecall convention, the frame, the
-                 anchor, static detachment, and the keccak-f family
+                 anchor, static detachment, the three delegation circuits, and the
+                 guest-target backend
   handoff/       one note per completed stage: frozen API, artifacts, deviations
 crates/
   constants/     frozen constants and tags; zero logic; no_std
@@ -50,7 +51,9 @@ crates/
                  channels, their gated tuples, the fraction tree and the discharge rules;
                  `add_sub`: S16's family circuit; `jump_branch_slt`: S17's; `shift_bitwise`
                  and `mul_div`: S18's two; `mem_word`, `mem_subword` and `atomics`: S19's
-                 three; `keccak`: S21's delegation circuit; `gadgets`: the is-zero and
+                 three; `delegation`: the frame, the anchor and the layered builder S23's
+                 two circuits share; `keccak`: S21's delegation circuit; `poseidon2` and
+                 `fr_arith`: S23's; `gadgets`: the is-zero and
                  comparison gadgets;
                  `family_circuit`: the registry, now every family; no_std
   gkr-verify/    the GKR verifier half: the gate kernel, the layer sumcheck verifier and
@@ -76,7 +79,8 @@ crates/
   guest-sdk/     crt0, entry!, linker script, bump allocator, ecall shims; no_std,
                  guest-only, and NOT a workspace member
 guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, opcodes/, heap/, consistency/,
-                 addsub/, control/, alu/, mem/, shards/, keccak-test/, keccak-unused/
+                 addsub/, control/, alu/, mem/, shards/, keccak-test/, keccak-unused/,
+                 recursion-ops/, recursion-unused/
                  -- their own workspace; see guests/Cargo.toml and docs/guest-program-manual.md
 assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 handoff
 tools/
@@ -86,7 +90,8 @@ tools/
                  toy circuit artifacts, defined there and compiled by `constraints`,
                  S14's memory artifacts, written from `constraints::memory`'s constructors,
                  S15's lookup toy, every registered execution family's circuit, written from
-                 `constraints`, S21's keccak circuit **by digest** (the artifact is 100 MB),
+                 `constraints`, the three delegation circuits **by digest** (the artifacts
+                 are megabytes),
                  the generic table's commitments over the ceremony, and S20's global
                  transcript tape
   bench/         one routine per measurement, individually selectable
@@ -145,6 +150,7 @@ cargo test --release -p prover --test alu -- --include-ignored --test-threads=1 
 cargo test --release -p prover --test mem -- --include-ignored --test-threads=1  # DEFERRED; S19's statement, 33.5 GB peak, 61 s
 cargo test --release -p prover --test block -- --include-ignored --test-threads=1  # DEFERRED; S20's block, 38.0 GB peak, 804 s
 cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1  # DEFERRED; S21's nine-shard block, 38.9 GB peak, 130 s -- the heaviest in the repository
+cargo test --release -p prover --test recursion -- --include-ignored --test-threads=1  # DEFERRED; S23's ten-shard block, 26.0 GB peak, 125 s
 cargo test -p prover --features metrics --test metrics -- --include-ignored --nocapture  # DEFERRED; S16's statement twice, 11.6 GB peak, and prints both reports
 cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify -p verifier-core --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
@@ -156,7 +162,7 @@ cargo test -p emulator --test consistency -- --include-ignored   # and again at 
 git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constraints/tests/vectors/ crates/checker/tests/vectors/
 -------------------------------------------------------------------------------
 cargo run -p kat-gen                        # refresh every fixture (manual, deliberate)
-cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader | isa | program | gkr | memory | lookup | family | keccak | tape
+cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader | isa | program | gkr | memory | lookup | family | delegation | tape
 cargo run -p checker -- laws <artifact>     # Laws 1-4 and the lookup rules, the standalone validators
 cargo run -p checker -- padding <artifact>  # the padding contract
 cargo run -p checker -- dump <artifact>     # a circuit, readably: layers, gates, relations, catalogue
@@ -412,10 +418,12 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   multiset fill and S16's ecall constraints cite it; they do not reinvent it.
 - **Address-space tags are nonzero**: `constants::address_space` `REG = 1`, `RAM = 2`,
   `PC = 3`, so no real memory tuple is all zeros. A RAM event's address is the byte address
-  of its 4-aligned word. Since S21 there is **one space per delegation family** —
-  `DELEGATION_KECCAK_F = 4` — holding that family's anchor tuples and nothing else, which
-  is what makes a request's mirror read answerable by an invocation and by nothing in RAM
-  or a register.
+  of its 4-aligned word. Since S21 there is **one space per delegation family** — 4, 5 and
+  6 — holding that family's anchor tuples and nothing else, which is what makes a request's
+  mirror read answerable by an invocation of *that type* and by nothing in RAM or a
+  register. One `deleg` frame query serves all three, so its tag is not a literal but the
+  frame's own `deleg_space` M column: a memory leaf may read no `W` column, and a type
+  selector is one (`docs/spec/delegation.md` §5.1 and §10.1).
 - **Family buffers are raw live rows**, column-major in small integer types, every query's
   address, value and timestamps per row. No padding and no `MultilinearPoly` in them: the
   memory argument's padded columns are filled from the log by `trace`'s memory builders,
@@ -718,9 +726,11 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   indexes `KINDS` through its `constants::extra_mask` constant and never by position: the
   stage prompt lists `amoand` and `amoor` in the opposite order to the constants.
 - **EXIT and a registered delegation number are the provable ecalls** (owner's decision,
-  S16; S21 added the second). The add/sub family holds every ecall row to `a7 = 93` **or**
-  `a7 = 0x501`, by two gates that partition its ecall rows, and its fill refuses any other
-  ecall and any transfer cycle by name. A delegation row falls through rather than halting,
+  S16; S21 added the second and S23 the third and fourth). The add/sub family commits one
+  boolean selector per delegation type and holds every ecall row to `a7 = 93` **or** that
+  type's number; what makes the gates a *partition* is that the numbers are pairwise
+  distinct, which a `const` assertion over `constants::delegation::TYPES` enforces. Its fill
+  refuses any other ecall and any transfer cycle by name. A delegation row falls through rather than halting,
   writes 0 into `a0`, and carries the `deleg` mirror query that pairs it with an invocation.
   The I/O-binding stage owes `read` and `write`, and until then fd 0 and fd 1 are bound only
   by the public I/O digest in the statement, which no row reads.
@@ -728,14 +738,41 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   convention (`a7` the number, `a0` the frame base, `a0 ← 0`, fall-through), the indirect
   frame, the anchor and its 1:1 pairing, the three request-side zeroings, static detachment
   by a `.rodata` declaration record and reachability, the alignment rules, and the
-  delegation-shard ts-window convention. S22 and S23 consume it frozen and may only append
+  delegation-shard ts-window convention. A later delegation family consumes it frozen and
+  may only append
   frame tables. **A delegation family is invoked, not decoded**: it claims no pc, has no
   decoded table, owns no cycle, and is in a `VmConfig` exactly when the linked binary
   declares it — the third presence rule, beside "claims a pc" and "is a window family".
+- **The delegated backend is a target dependency, never a cargo feature.** `field` and
+  `transcript` route `Fr`'s add, multiply and inverse and `poseidon2_permute` through
+  `guest_sdk::recursion`'s shims under `#[cfg(target_arch = "riscv32")]`, with a
+  `[target.'cfg(target_arch = "riscv32")'.dependencies]` edge to `guest-sdk`; the fallback
+  is each crate's own software path, so the two are bit-identical by construction rather
+  than by a test over two copies. The direction is forced — cargo refuses the cycle, so
+  `guest-sdk` may not name `Fr` and its shims take frames of bytes — and the stage prompt's
+  "'delegated' cargo feature" is refused by master anti-goal 1 and by
+  `crates/prover/tests/one_feature.rs`. **A guest that does field arithmetic therefore
+  declares both S23 families**, because the shims are reachable from `Fr`'s operators.
+- **A declaration record needs a `#[link_section]` of its own.** The linker's garbage
+  collection is per section, so three records sharing one section name are kept or dropped
+  together and every guest reaching any shim declares every family. `.rodata.apogee.
+  delegations.<family>` per record is what makes detachment mean anything with more than one
+  of them (`docs/spec/delegation.md` §7).
+- **The fr-arith frame carries `Fr`'s in-memory representation, not its mathematical value**
+  (owner's decision, S23). Each 32-byte group is still a canonical little-endian field
+  element — the circuit's borrow chain refuses one at or above `p` — but the element is
+  `x·R`, so the circuit's multiply carries the literal `R^-1` and its inverse `R^2`, and the
+  three operations are exactly what `Fr`'s `Add`, `Mul` and `inverse` compute. A
+  mathematically canonical frame would cost a Montgomery conversion per operand, about twice
+  the software multiply the delegation replaces, and a delegated multiply would be *slower*
+  than not delegating. Poseidon2's frame is the other way — canonical values, so the circuit
+  is `poseidon2_permute` itself — because there the conversion is six operations against 240
+  the delegation removes (`docs/spec/delegation.md` §12.1, §13.2).
 - **A delegation family carries no lookup channel, and that is load-bearing.** Its height is
-  `2^8` (rows are invocations, not halfwords; `2^16` is 744 GB of forward pass), where no
-  range channel's table fits, so every bound it makes is a bit decomposition with a
-  booleanity gate. That is also why its registry arm sits *below* `family_circuit`'s
+  `2^8` (rows are invocations, not halfwords; keccak at `2^16` is 744 GB of forward pass),
+  where no range channel's table fits, so every bound it makes is a bit decomposition with a
+  booleanity gate — including a frame value's **canonicity**, an eight-limb borrow chain
+  against `p` whose last borrow is 1 exactly when the value is below the modulus. That is also why its registry arm sits *below* `family_circuit`'s
   minimum-height guard: a family with no channel reaches no `BITS ≤ trace_vars` assertion,
   and putting it in the guard would refuse the only height it has.
 - **The anchor's value column is free on both sides, and the multiset is what pairs them.**
@@ -838,3 +875,5 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 | S19 — Memory-op families + atomics | done | `docs/handoff/S19-mem.md` |
 | S20 — Sharding + block orchestration | done | `docs/handoff/S20-orchestration.md` |
 | S21 — keccak256 delegation + the delegation ABI | done | `docs/handoff/S21-keccak256.md` |
+| S22 — secp256k1 ecrecover delegation | **cancelled** | `prompts/00-master.md`, "Stage register" |
+| S23 — Fr-arithmetic + Poseidon2 delegations | done | `docs/handoff/S23-fr-poseidon2.md` |

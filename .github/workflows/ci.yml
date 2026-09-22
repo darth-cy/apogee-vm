@@ -176,7 +176,7 @@ jobs:
       # the three request-side zeroings are asserted through `verify_shard`
       # instead, where `Constraint` comes first and the gate is the answer.
       # `docs/spec/delegation.md` §5.2 is why that distinction matters for
-      # S22 and S23.
+      # a later delegation family.
       #
       # - name: S16's statement, proved and verified
       #   run: |
@@ -295,6 +295,30 @@ jobs:
       #
       # - name: S21's block with a delegation shard, proved and verified
       #   run: cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1
+
+      # DEFERRED: cargo test --release -p prover --test recursion -- --include-ignored --test-threads=1
+      # Master rule 7, for S23's acceptances 4 and 9. `guests/recursion-ops`
+      # does ordinary `field::Fr` arithmetic and calls
+      # `transcript::poseidon2_permute`, and the guest-target backends route
+      # both through the two delegations: ten shards, of which eight are the
+      # `2^20` and `2^16` ones every statement has and two are `2^8` delegation
+      # shards. The delegation shards are cheap -- 51 MB and 23 MB of forward
+      # pass -- and the peak is the execution shards' as usual.
+      # `guests/recursion-unused` is acceptance 9's other half: both families
+      # declared, zero invocations, zero shards.
+      # Its CI-sized halves are `crates/checker/tests/poseidon2.rs` and
+      # `crates/checker/tests/fr_arith.rs` (each circuit's forward pass against
+      # its definition, with ten negative controls apiece),
+      # `crates/emulator/tests/guests.rs` (the guest run on the emulator and its
+      # invocation counts) and `crates/program/tests/delegation.rs` (static
+      # detachment over every committed guest), all in the `test` step. The two
+      # anchors' tamper twins are in `crates/checker/tests/tamper.rs`, deferred
+      # with it.
+      #
+      # Measured: 2 passed, 125 s, 26.0 GB peak on 18 cores.
+      #
+      # - name: S23's block with both recursion delegation shards
+      #   run: cargo test --release -p prover --test recursion -- --include-ignored --test-threads=1
 
       # The crates the recursion guest links compile unchanged for the guest.
       - name: guest target builds

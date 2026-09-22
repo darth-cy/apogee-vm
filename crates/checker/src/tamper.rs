@@ -225,10 +225,12 @@ impl<'a> TamperHarness<'a> {
 /// rows, and the columns the three request-side zeroings sit on.
 ///
 /// Frozen at S21 for every delegation family (`docs/spec/delegation.md` §5.2);
-/// S22 and S23 fill it with their own addresses and call
+/// a later family fills it with its own addresses and calls
 /// [`assert_anchor_twins_refused`]. Nothing here is keccak's: the anchor is one
 /// mechanism, and a family that wrote its own would be a family whose pairing
-/// nobody had argued.
+/// nobody had argued. S23's two families fill it unchanged, which is the
+/// evidence that it is general — and told their request rows apart from each
+/// other's by the frame's `deleg_space` column.
 #[derive(Clone, Copy, Debug)]
 pub struct AnchorTwins {
     /// The family that owns ecall cycles, and the shard holding the requests.

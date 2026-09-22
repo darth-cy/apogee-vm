@@ -65,3 +65,23 @@ shasum -a 256 crates/field/tests/vectors/fr_kats.txt
 
 then update `KAT_SHA256` in `tests/kat.rs`. The generator is deterministic: rerunning
 it without changing arkworks reproduces the file byte for byte.
+
+## The guest-target backend (S23)
+
+`Fr`'s `add_limbs`, `mont_mul` and `inverse` route through
+`guest_sdk::recursion::fr_arith` under `#[cfg(target_arch = "riscv32")]`, and fall back to
+the code below them when the executor answers `-ENOSYS`. `docs/spec/delegation.md` §13 is
+the ABI.
+
+- **It is a target dependency, not a cargo feature.**
+  `[target.'cfg(target_arch = "riscv32")'.dependencies] guest-sdk` — the workspace still has
+  one build configuration, a host build never resolves the edge, and master anti-goal 1
+  stands. The direction is forced: cargo refuses the cycle, so `guest-sdk` cannot name `Fr`.
+- **The fallback is this crate's own code**, one branch below the ecall, so the delegated
+  path and the software path are one definition rather than two held equal by a test.
+- **`to_memory_bytes` / `from_memory_bytes` are the frame's codec and exist for this caller
+  alone.** They are the four Montgomery limbs written out, which is a canonical little-endian
+  encoding of the element `x·R`; everything that is not the delegation uses `to_bytes`.
+  They are limb copies, which is what keeps a delegated multiply from recursing into itself.
+- **`inverse` never asks the delegation for `inverse(0)`.** `None` is this crate's answer and
+  `0` is the frame ABI's, and the two are reconciled here.

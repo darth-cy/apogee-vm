@@ -36,10 +36,12 @@ pub enum ProgramError { UnsupportedCodeVersion, HeightNotOnMenu, ProgramTooLarge
                         WindowRule { rule: &'static str },
                         UnknownDelegation { addr: u32, number: u32 } }   // + Display
 
-// S21: delegation families. docs/spec/delegation.md §3 and §7.
-pub const DELEGATIONS: [(FamilyId, u32, usize); 1];        // (family, ecall number, frame words)
+// S21: delegation families, three of them since S23. docs/spec/delegation.md §3 and §7.
+// The table *is* `constants::delegation::TYPES`: one array, no second copy.
+pub const DELEGATIONS: [(FamilyId, u32, u8, usize); 3];   // (family, ecall, address space, frame words)
 pub fn delegation_family(number: u32) -> Option<FamilyId>;
 pub fn delegation_ecall(family: FamilyId) -> Option<u32>;
+pub fn delegation_space(family: FamilyId) -> Option<u8>;
 pub fn delegation_frame_words(family: FamilyId) -> Option<usize>;
 pub fn claims_pcs(family: FamilyId) -> bool;
 pub fn declared_delegations(image: &ProgramImage) -> Result<Vec<FamilyId>, ProgramError>;

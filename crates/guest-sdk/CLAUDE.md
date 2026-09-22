@@ -94,3 +94,34 @@ The stage prompt names an `#[entry]` attribute macro. An attribute macro require
 for the sake of one spelling, and anti-goal 2 bans proc macros outright. The declarative
 form was chosen with the repository owner. It emits a wrapper carrying `#[export_name =
 "main"]`, so the annotated function keeps its own name and may itself be called `main`.
+
+## `recursion`: the delegation shims the backends ride on (S23)
+
+`guest_sdk::recursion` is two raw delegation calls and their declaration records, and
+nothing else:
+
+```rust
+#[repr(C, align(4))] pub struct Poseidon2Frame(pub [u8; 96]);
+#[repr(C, align(4))] pub struct FrArithFrame(pub [u8; 100]);
+pub fn poseidon2(frame: &mut Poseidon2Frame) -> bool;
+pub fn fr_arith(frame: &mut FrArithFrame) -> bool;
+```
+
+- **There is no software path in this module, and there must not be.** The callers are
+  `field` and `transcript`, whose own implementations *are* the fallback, so the delegated
+  path and the fallback are the same function rather than two copies held equal by a test.
+  That is the opposite of `keccak256`, whose sponge and permutation this crate owns because
+  nothing else can.
+- **The frames are word-aligned by their types.** A bare `[u8; N]` has alignment 1 and a
+  stack local's address is the code generator's, so a misaligned base would be a guest that
+  is correct under `qemu-riscv32` — which answers `-ENOSYS` and never dereferences the
+  pointer — and fatally `Misaligned` under this VM. `guest_sdk::poseidon2_permute` keeps its
+  S10 `&mut [u8; 96]` signature and copies through an aligned frame; a caller that wants the
+  copies gone passes a `Poseidon2Frame` of its own, which is what `transcript` does.
+- **Each declaration record has a `#[link_section]` of its own.** The linker's garbage
+  collection is per section, so records sharing one section name are kept or dropped
+  together — with one name, every guest that reached any shim declared every family and
+  static detachment said nothing (`docs/spec/delegation.md` §7).
+- **This crate does not depend on `field`, and cannot.** `field` depends on *it* for the
+  guest target, and cargo refuses the cycle; that is why the shims take frames of bytes
+  rather than `&[Fr]`.

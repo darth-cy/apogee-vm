@@ -547,7 +547,7 @@ fn recursion_ops_invokes_both_families() {
             .delegation(family)
             .unwrap_or_else(|| panic!("{} has no buffer", program::family_name(family)));
         assert!(
-            trace.len() > 0,
+            !trace.is_empty(),
             "{} is invoked at least once",
             program::family_name(family)
         );

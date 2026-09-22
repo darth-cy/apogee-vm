@@ -1005,7 +1005,11 @@ mod tests {
         for (id, width) in widths {
             assert_eq!(frame_queries(id).len(), width, "family {id}");
             let a = family_frame_artifact(id, 6);
-            assert_eq!(a.memory.len(), 1 + 5 * width, "family {id}");
+            // `1 + 5w`, and one more when the frame holds the delegation
+            // mirror: that query's leaf names the requested type through a
+            // memory column rather than a literal (`deleg_space`).
+            let extra = usize::from(frame_queries(id).contains(&DELEG));
+            assert_eq!(a.memory.len(), 1 + 5 * width + extra, "family {id}");
             assert_eq!(a.witness.len(), width + 3, "family {id}");
             assert_eq!(a.lookups.len(), 2 * width, "family {id}");
             assert_eq!(

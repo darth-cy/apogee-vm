@@ -85,8 +85,10 @@ pub fn advance_metered(setup, archive, until)   -> Result<ProvingMetrics, Prover
 - **What the prover does refuse is its own program**: a family with no circuit or fill,
   and a trace it cannot prove — an ecall that is neither `EXIT` nor a **registered
   delegation number**, and a transfer cycle — each by name. S21 widened that from `EXIT`
-  alone: `fill::add_sub`'s system arm keys on `program::delegation_family(a7)`, so a
-  delegation request fills `is_keccak = 1`, `rd_selected = 0` and the fall-through, and any
+  alone and S23 again: `fill::add_sub`'s system arm keys on
+  `program::delegation_family(a7)` and sets that type's selector from its position in
+  `program::DELEGATIONS`, so a delegation request fills one `is_deleg_*` column,
+  `rd_selected = 0` and the fall-through, and any
   other number is still refused by name. The add/sub fill panics if the trace and the decoded table disagree, which the
   emulator cannot cause.
 - **Multiplicities come from `trace::build_multiplicities` and nowhere else.** A fill
@@ -122,6 +124,13 @@ pub fn advance_metered(setup, archive, until)   -> Result<ProvingMetrics, Prover
   divide, if a quotient word is not its adjusted value or if a product does not fit two
   words. Its decoded row is **five** values, not six: the family's tuple has no immediate,
   so its table is `S[0..6]` and the packed table `S[6..9]`.
+- **One delegation frame fill, three families.** `fill::delegation_frame` writes the four
+  head columns, the four per frame word, the 38 gap bits a read and the frame pointer's 60
+  for any delegation family, and each family's own fill adds what is its own:
+  `fill::keccak_f` the state's 1,600 bits, `fill::poseidon2` six values' 520 bits apiece,
+  `fill::fr_arith` three values' bits, the selectors and the three witnessed scalars. The
+  canonicity witness — the borrow chain of `X − p` — is computed here, because it is a
+  function of the words the execution wrote and nothing records it.
 - **`fill::keccak_f` fills all 3,764 columns of a `2^8` delegation shard from the
   archive's `DelegationTrace`** (S21): the requesting cycle, the mask, the base, the free
   `anchor_value` (0), the 50 frame words' four fields each, the input state's 1,600 bits

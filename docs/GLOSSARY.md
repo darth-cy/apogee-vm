@@ -222,8 +222,9 @@ set for a program is derived by the preprocessor and recorded in `VmConfig`.
 **Delegation family** — a family that is **invoked, not decoded**: a row is one call of a
 fixed function, not one cycle. It claims no pc, has no decoded table and no row kind, owns
 no cycle, carries no lookup channel, and is in a `VmConfig` exactly when the linked binary
-**declares** it. S21's `KECCAK_F` is the first, one keccak-f[1600] permutation a row at
-`2^8` rows. `docs/spec/delegation.md`.
+**declares** it. Three are registered: S21's `KECCAK_F`, one keccak-f[1600] permutation a
+row, and S23's `POSEIDON2` and `FR_ARITH`, one width-3 Poseidon2 permutation and one `Fr`
+add, multiply or inverse a row. All three at `2^8` rows. `docs/spec/delegation.md`.
 
 **Delegation request** — the CPU-side row of a delegation call: an ecall whose `a7` is the
 family's number and whose `a0` is the **frame base**, a pointer to the bytes the function
@@ -231,7 +232,11 @@ reads and rewrites. It writes 0 into `a0`, falls through to `pc + 4`, and carrie
 memory query — the **mirror** — which is its half of the anchor.
 
 **Anchor** — the pair of memory tuples that ties a request to its invocation, in an address
-space of the delegation family's own. The invocation writes an **answer tuple** stamped
+space of the delegation family's own. One `deleg` query serves every type — a second would
+need a ninth trace role — so which space a request names is carried per row by the frame's
+`deleg_space` column, which the requesting family pins to its type selectors; a memory leaf
+may read no `W` column, and a selector is one. The invocation writes an **answer tuple**
+stamped
 timestamp 0 — the stamp no cycle can produce, cycles being numbered from 1 — and the
 request reads exactly that, which makes the pairing 1:1 over the one global multiset. Three
 gates pin the request's side (it writes no register; its mirror read is stamped 0 and
@@ -243,8 +248,17 @@ a twelve-byte **declaration record** into `.rodata`, referenced by the shim and 
 else, so the linker keeps it exactly when the shim is linked, and the preprocessor finds it
 by a byte-wise scan of the image. Reachability, not `#[used]` — which would put the record
 in every guest that links the SDK — and `core::hint::black_box` on the read, without which
-`opt-level = 3` folds the number into an immediate and drops the record.
-`docs/spec/delegation.md` §7.
+`opt-level = 3` folds the number into an immediate and drops the record. Each record needs a
+`#[link_section]` of its **own**: garbage collection is per section, so records sharing one
+name are kept or dropped together and every guest reaching any shim would declare every
+family. `docs/spec/delegation.md` §7.
+
+**Guest-target backend** — the seam that makes recursion contract: `field` and `transcript`
+route `Fr`'s add, multiply and inverse and `poseidon2_permute` through the delegation shims
+under `#[cfg(target_arch = "riscv32")]`, and fall back to their own software path when the
+executor answers `-ENOSYS`. A *target dependency* on `guest-sdk`, never a cargo feature. So
+a guest writes ordinary arithmetic, declares the families through reachability, and is one
+binary under both executors. `docs/spec/delegation.md` §13.4.
 
 **Transcript** — the Poseidon2 duplex sponge every challenge is drawn from. Two layers:
 the *raw duplex* (`observe`/`sample`) and the *typed layer* (`append_*`/

@@ -109,7 +109,6 @@ pc that ends there ended on an exit row.
 | `READ` 63 | `a0` fd, `a1` buf, `a2` count | bytes delivered, `min(count, left)`; `-EBADF` for a descriptor other than 0 and 3 |
 | `WRITE` 64 | `a0` fd, `a1` buf, `a2` count | `count`; `-EBADF` for a descriptor other than 1 and 2 |
 | `EXIT` 93 | `a0` status | the status, unchanged; `next_pc` is `HALT_PC`, and execution stops after this row |
-| `PRECOMPILE_POSEIDON2` 0x500 | `a0` state pointer | `-ENOSYS` until its circuit exists; the row already has the frame it will keep |
 | a **delegation** number | `a0`, the frame base | 0, and the row carries its mirror query; `-ENOSYS` on an executor without the circuit |
 | anything else | none | `-ENOSYS` |
 

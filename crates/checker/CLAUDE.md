@@ -88,7 +88,7 @@ pub fn cross_check(a: &CircuitArtifact, expected: &VerifierConstants,
 
 Since S21 it also owns **the delegation anchor's twins**, `assert_anchor_twins_refused`:
 the four forgeries the anchor's 1:1 pairing exists to refuse, plus the control that says
-which cell matters, **parameterized by family** so S22 and S23 fill an `AnchorTwins` with
+which cell matters, **parameterized by family** so a new family fills an `AnchorTwins` with
 their own addresses rather than writing the argument again (S21 must-be-exact 3).
 
 **Each twin runs at the level that names what refuses it, and the two levels differ on

@@ -159,7 +159,7 @@ pub fn borrow_bit(v: usize, k: usize) -> PolyAddress {
 /// Whether round `r` S-boxes every lane. The first four and the last four do;
 /// the 56 between them S-box lane 0 alone.
 fn is_full(r: usize) -> bool {
-    r < p2::ROUNDS_FULL / 2 || r >= p2::ROUNDS - p2::ROUNDS_FULL / 2
+    !(p2::ROUNDS_FULL / 2..p2::ROUNDS - p2::ROUNDS_FULL / 2).contains(&r)
 }
 
 /// Round `r`'s constant for lane `i`, from `constants::POSEIDON2_RC3_*`.
@@ -198,7 +198,7 @@ fn tree_width(k: usize) -> usize {
 /// Layer `k`'s carried columns: `live` and the three written lane values,
 /// which only the last list reads.
 fn carry_width(k: usize) -> usize {
-    if k >= 1 && k <= ROUND_LAYERS {
+    if (1..=ROUND_LAYERS).contains(&k) {
         CARRY
     } else {
         0

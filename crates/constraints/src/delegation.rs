@@ -531,8 +531,8 @@ pub(crate) fn canonical_gates(
     }
     let p = modulus_limbs();
     let borrow = |i: usize| w(canon + 32 * WORDS_PER_VALUE + i);
-    for i in 0..WORDS_PER_VALUE {
-        let mut lin = vec![(neg(p[i]), LIVE), (lit(1u64 << 32), borrow(i))];
+    for (i, limb) in p.iter().enumerate() {
+        let mut lin = vec![(neg(*limb), LIVE), (lit(1u64 << 32), borrow(i))];
         if i > 0 {
             lin.push((neg(1), borrow(i - 1)));
         }

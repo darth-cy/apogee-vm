@@ -1069,7 +1069,7 @@ fn s19_a8_the_old_word_the_splice_and_the_old_value_are_pinned() {
 /// counts on screen beside them.
 ///
 /// **6**, the linkage: the three anchor twins of `docs/spec/delegation.md`
-/// §5.2, run through the family-parameterized helper S22 and S23 invoke by
+/// §5.2, run through the family-parameterized helper every later family invokes by
 /// name. They are the block's, not one shard's: a dropped invocation's only
 /// symptom is the cross-shard root product, and that check reads the statement
 /// rather than a proof (`docs/spec/block-proof.md` §3).

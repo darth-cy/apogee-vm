@@ -90,7 +90,7 @@ or rebuilding the streams from the log.
   the executor and the preprocessor disagreeing about the ABI is not something to answer
   `-ENOSYS` to. An executor *without* the circuit — `qemu-riscv32` — answers `-ENOSYS` and
   the guest's software fallback runs, which is the whole of acceptance 3.
-- **`keccak_f` is the one permutation in the repository** and the emulator owns it, because
+- **`keccak_f` is the one keccak permutation in the repository** and the emulator owns it, because
   the emulator is what executes it; the circuit's forward pass is checked against it and
   `tests/keccak.rs` checks it against `tiny-keccak` on all 1,600 single-bit states. The
   guest SDK's software fallback is a second implementation by necessity — it is `no_std`

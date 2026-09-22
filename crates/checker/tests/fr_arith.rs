@@ -540,13 +540,13 @@ fn a_non_canonical_operand_is_refused() {
     // last borrow is 0, so `a_below_modulus` cannot hold.
     let p = modulus();
     let mut columns = columns;
-    for k in 0..8 {
+    for (k, limb) in p.iter().enumerate() {
         for field in [fr_arith::WORD_READ_VALUE, fr_arith::WORD_WRITE_VALUE] {
             columns = corrupt(
                 columns,
                 fr_arith::word(f::A_WORD + k, field),
                 0,
-                Fr::from_u64(p[k]),
+                Fr::from_u64(*limb),
             );
         }
         for t in 0..32 {
@@ -554,7 +554,7 @@ fn a_non_canonical_operand_is_refused() {
                 columns,
                 fr_arith::value_bit(0, k, t),
                 0,
-                Fr::from_u64((p[k] >> t) & 1),
+                Fr::from_u64((*limb >> t) & 1),
             );
         }
     }

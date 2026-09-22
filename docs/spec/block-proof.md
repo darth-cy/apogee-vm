@@ -252,7 +252,8 @@ disjointness rule could never hold for any real execution.
 out**: it appended to `family::CYCLE_OWNING` as `false`, and its shard record carries a
 min/max invocation timestamp with no disjointness requirement — per-address ordering is
 already carried by the multiset gap checks. **S21 slotted in with zero `verify_block`
-changes**, which is what this paragraph promised at S20, and S22 and S23 will do the same.
+changes**, which is what this paragraph promised at S20, and S23's two families did the
+same.
 
 An invocation rides the cycle of the request that made it, so a delegation shard's window is
 a *sub-interval* of the requesting family's and the two overlap by construction —
@@ -435,7 +436,7 @@ produces the digest every shard is seeded with.
   shard's verification. Folding those into one proof is S26 and S27's.
 - **No accumulator entries** (§1).
 - **Nothing for a delegation family beyond §4's scoping.** S21 added `KECCAK_F` and
-  `verify_block` did not change; S22 and S23 append their own families the same way
+  `verify_block` did not change; S23's two families appended the same way
   (`docs/spec/delegation.md` §10).
 - **No binding of fd 0 and fd 1 to the execution.** The public I/O digest is in the
   statement and no row reads it, as at S16; the I/O-binding stage owes it.

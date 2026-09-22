@@ -101,3 +101,17 @@ It has exactly one path dependency back into the repository,
 `tools/test-support`, for the seeded RNG that picks its inputs; that crate declares no
 dependencies of its own and has a test that keeps it that way, so the edge cannot reach
 anything the oracle is supposed to be an independent witness to.
+
+## The guest-target backend (S23)
+
+`poseidon2_permute` routes through `guest_sdk::recursion::poseidon2` under
+`#[cfg(target_arch = "riscv32")]` and falls back to its own rounds on `-ENOSYS`. One ecall
+over a 24-word frame against 240 Montgomery multiplies and 80 constant decodes in software.
+`docs/spec/delegation.md` §12 is the ABI, and `crates/field/CLAUDE.md`'s note on the seam
+applies here unchanged — a target dependency, never a cargo feature, and the fallback is
+this crate's own code.
+
+The lanes cross the frame as **canonical** little-endian `Fr`, which `to_bytes` writes: the
+circuit computes the permutation over the mathematical values, so it is this function's
+rounds and not this function conjugated by a scaling. The Fr-arithmetic delegation makes the
+opposite choice for the opposite reason (§13.2).
