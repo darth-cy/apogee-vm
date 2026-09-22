@@ -1645,7 +1645,7 @@ pub mod keccak {
 ///
 /// Zero logic, as everywhere in this crate. The limb tables below were
 /// computed from `p = 2^256 - 2^32 - 977` and the generator, not transcribed,
-/// and `crates/trace/tests/secp256k1.rs` re-derives every one of them from the
+/// and `crates/program/tests/secp256k1.rs` re-derives every one of them from the
 /// curve equation and the group law -- the pattern [`keccak::ROUND_CONSTANTS`]
 /// uses.
 pub mod secp256k1 {
@@ -1666,11 +1666,25 @@ pub mod secp256k1 {
     /// says.
     pub const CHUNKS_PER_LIMB: usize = 4;
 
-    /// The window width of both scalar multiplications: **4**, so a 256-bit
-    /// scalar is 64 digits.
+    /// The window width of the **software** recovery: **4**, so a 256-bit
+    /// scalar is 64 unsigned digits.
+    ///
+    /// This is `guest_sdk`'s fallback path and `program::window_table`, which
+    /// run on a CPU where a table lookup is free. **It is not the circuit's
+    /// window**, and the two are different on purpose: an in-circuit digit
+    /// costs one boolean selector column per table entry on every row of the
+    /// block, so the circuit uses three-bit **signed-odd** windows —
+    /// `constraints::ecrecover::WINDOW_BITS` = 3, 86 windows, 4 odd multiples
+    /// and 8 signed selectors — which was the cheapest of the four shapes
+    /// `crates/constraints/tests/schedule.rs` measured
+    /// (`docs/spec/ecrecover.md` §5.1).
+    ///
+    /// [`G_MULTIPLES`] serves both: the circuit reads its odd entries,
+    /// `G_MULTIPLES[2k]` being `(2k + 1)·G`, and negates `y` for the signed
+    /// half.
     pub const WINDOW_BITS: u32 = 4;
 
-    /// Digits in a 256-bit scalar at [`WINDOW_BITS`].
+    /// Digits in a 256-bit scalar at [`WINDOW_BITS`], the software window.
     pub const WINDOWS: usize = 64;
 
     /// Non-zero entries in a window table, `1 ..= 15`. The zero digit is not a
@@ -1718,17 +1732,6 @@ pub mod secp256k1 {
         0x483ada7726a3c465,
     ];
 
-    /// `k * G` for `k` in `1 ..= 15`, indexed by `k - 1`: `[k][0]` is `x`,
-    /// `[k][1]` is `y`, each four 64-bit limbs.
-    ///
-    /// The fixed-window table of the joint ladder. It is the **same on every
-    /// row**, so the circuit spends it as gate literals rather than as setup
-    /// columns: `sum_k (lit(T_k), sel_k)` is one `Linear` gate, where a setup
-    /// column constant on every row would be the same number with 120 more
-    /// commitments and an identity binding for no gain
-    /// (`docs/spec/ecrecover.md` section 5.1).
-    ///
-    /// `crates/trace/tests/secp256k1.rs` re-derives every entry from [`G_X`],
     /// A second base point, used on the **failure path** and nowhere else.
     ///
     /// Every row of an invocation block runs whether the call succeeds or
@@ -1756,7 +1759,18 @@ pub mod secp256k1 {
         0x4218_f20a_e6c6_46b3,
     ];
 
-    /// [`G_Y`] and the group law rather than trusting these digits.
+    /// `k * G` for `k` in `1 ..= 15`, indexed by `k - 1`: `[k][0]` is `x`,
+    /// `[k][1]` is `y`, each four 64-bit limbs.
+    ///
+    /// The fixed-window table of the joint ladder. It is the **same on every
+    /// row**, so the circuit spends it as gate literals rather than as setup
+    /// columns: `sum_k (lit(T_k), sel_k)` is one `Linear` gate, where a setup
+    /// column constant on every row would be the same number with 120 more
+    /// commitments and an identity binding for no gain
+    /// (`docs/spec/ecrecover.md` section 5.1).
+    ///
+    /// `crates/program/tests/secp256k1.rs` re-derives every entry from
+    /// [`G_X`], [`G_Y`] and the group law rather than trusting these digits.
     pub const G_MULTIPLES: [[[u64; LIMBS]; 2]; WINDOW_ENTRIES] = [
         // 1 * G
         [
@@ -2026,9 +2040,10 @@ pub mod ecrecover {
     /// 128, where the channel's fraction tree stops doubling
     /// (`docs/spec/ecrecover.md` section 6). The step program that fills the
     /// block is `constraints::ecrecover::schedule`, and **this number is its
-    /// measurement**: 3,639 steps at three-bit signed-odd windows with a
+    /// measurement**: 3,779 steps at three-bit signed-odd windows with a
     /// fan-out cap of six, which is the cheapest of the shapes
-    /// `crates/constraints/tests/schedule.rs` compares. At
+    /// `crates/constraints/tests/schedule.rs` compares -- that test pins the
+    /// count, so this sentence cannot drift from it again. At
     /// `family::DEFAULT_HEIGHTS[ECRECOVER]` = `2^20` that is 256 recoveries a
     /// shard.
     ///

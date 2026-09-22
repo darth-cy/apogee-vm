@@ -135,7 +135,9 @@ pub fn statement() -> PublicInputs {
         boundary: finals(42),
         memory_commitments: vec![
             (200..202).map(blob).collect(),
-            (300..341).map(blob).collect(),
+            // 42: the frame's `1 + 5w` columns and the appended `deleg_space`
+            // tag column (`docs/spec/ecrecover.md` §2.4).
+            (300..342).map(blob).collect(),
         ],
         memory_roots: vec![
             [Fr::from_u64(1), Fr::from_u64(2)],
@@ -145,16 +147,16 @@ pub fn statement() -> PublicInputs {
 }
 
 /// A proof of the `ADD_SUB_LUI_AUIPC` shard with the right digest and the
-/// right widths — 33 witness commitments since S21: the frame's `w + 3 = 11`
-/// and the family's own 22, `is_keccak` among them — and no transitions at
-/// all.
+/// right widths — 34 witness commitments since S22: the frame's `w + 3 = 11`
+/// and the family's own 23, `is_keccak` and `is_ecrecover` among them — and no
+/// transitions at all.
 pub fn shell(vk: &VerifyingKey, public: &PublicInputs) -> ShardProof {
     ShardProof {
         family: ADD,
         shard_index: 0,
         ts_window: TRIVIAL_TS_WINDOW,
         global_digest: global_commit(vk, public).digest,
-        witness_commitments: (400..433).map(blob).collect(),
+        witness_commitments: (400..434).map(blob).collect(),
         outputs: vec![Fr::ZERO; 8],
         gkr: GkrProof { layers: vec![] },
         opening: [3; OPENING_BYTES],

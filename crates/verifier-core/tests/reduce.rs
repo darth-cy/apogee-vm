@@ -50,7 +50,9 @@ fn the_global_transcript_is_the_frozen_order() {
         absorb(tags::COMMITMENT, 4 * 2),
         absorb(tags::MEMORY_GROUP, 2),
         absorb(tags::MEMORY_GROUP, 2),
-        absorb(tags::COMMITMENT, 4 * 41),
+        // 42: `ADD_SUB_LUI_AUIPC`'s `1 + 5w` frame columns and the appended
+        // `deleg_space` tag column (`docs/spec/ecrecover.md` §2.4).
+        absorb(tags::COMMITMENT, 4 * 42),
         absorb(tags::MEMORY_BOUNDARY, 64),
     ];
     want.extend(
@@ -81,7 +83,7 @@ fn the_global_transcript_is_the_frozen_order() {
     assert!(moved(|p| p.boundary.reg_ts[3] += 1));
     assert!(moved(|p| p.boundary.pc_ts += 1));
     assert!(moved(|p| p.boundary.reg_values[0] += 1));
-    assert!(moved(|p| p.memory_commitments[1][40] = blob(999)));
+    assert!(moved(|p| p.memory_commitments[1][41] = blob(999)));
     assert!(moved(|p| p.memory_commitments[1].swap(0, 1)));
     assert!(moved(|p| p.memory_commitments.swap(0, 1)));
     assert!(moved(|p| {
@@ -528,7 +530,7 @@ fn garbage_is_refused_and_never_panics() {
             4 => q.family = (next() % 12) as u32,
             5 => q.shard_index = next() as u32,
             6 => q.outputs.truncate((next() % 9) as usize),
-            _ => q.witness_commitments.truncate((next() % 34) as usize),
+            _ => q.witness_commitments.truncate((next() % 35) as usize),
         }
         assert!(reduce_shard(&key, &q, &p).is_err());
     }

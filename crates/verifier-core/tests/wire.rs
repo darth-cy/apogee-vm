@@ -67,9 +67,12 @@ fn the_layouts_are_the_specs() {
     assert_eq!(u32_at(4), 0);
     assert_eq!((u64_at(8), u64_at(16)), (0, 1 << 38));
     assert_eq!(&b[24..56], &proof.global_digest.to_bytes());
-    assert_eq!(u32_at(56), 33);
+    // 34 witness commitments since S22: the frame's `w + 3 = 11` and add/sub's
+    // own 23, `is_ecrecover` joining `is_keccak`
+    // (`docs/spec/ecrecover.md` §2.4).
+    assert_eq!(u32_at(56), 34);
     assert_eq!(&b[60..124], &blob(400));
-    let outputs = 60 + 33 * 64;
+    let outputs = 60 + 34 * 64;
     assert_eq!(u32_at(outputs), 2);
     let gkr = outputs + 4 + 2 * 32;
     assert_eq!(u32_at(gkr), 2, "two transitions");
@@ -92,7 +95,7 @@ fn the_layouts_are_the_specs() {
     );
     assert_eq!(
         b.len(),
-        boundary + 64 * 32 + 4 + (4 + 2 * 64) + (4 + 41 * 64) + 4 + 2 * 64
+        boundary + 64 * 32 + 4 + (4 + 2 * 64) + (4 + 42 * 64) + 4 + 2 * 64
     );
 
     // The key: the header up to the circuits, S17's generic table three raw

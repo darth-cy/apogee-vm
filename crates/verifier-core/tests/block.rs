@@ -48,7 +48,9 @@ fn the_reconciliation_is_the_statement_and_the_proofs() {
         assert_eq!(r.memory_commitments, block.statement.memory_commitments[i]);
         assert_eq!(r.roots, block.statement.memory_roots[i]);
     }
-    assert_eq!(records[1].memory_commitments.len(), 41, "add/sub's M width");
+    // 42 since S22: the frame's `1 + 5w` columns and the appended
+    // `deleg_space` tag column (`docs/spec/ecrecover.md` §2.4).
+    assert_eq!(records[1].memory_commitments.len(), 42, "add/sub's M width");
 }
 
 /// The public-data API: the descriptor, the counts and a family's count, read

@@ -103,11 +103,69 @@ pub const FRAME_SPACE: [u8; FRAME_QUERIES] = [
     address_space::RAM,
     address_space::RAM,
     address_space::REG,
-    address_space::DELEGATION_KECCAK_F,
+    DELEGATION_ANY,
 ];
+
+/// The [`DELEG`] slot's entry in [`FRAME_SPACE`], and **not an address-space
+/// tag**: 0, which `constants::address_space` leaves free precisely so that no
+/// real tuple is all zeros.
+///
+/// A delegation request's anchor space is the delegation **type**'s, and a
+/// requesting family serves every type — so there is no one literal to put
+/// here. The row's `deleg_space` column carries the tag
+/// ([`deleg_space`], `docs/spec/ecrecover.md` §2.4) and the requesting
+/// family's own circuit pins it. Routing a logged event to its frame slot is
+/// [`frame_matches`] and never a comparison against this array: S22 shipped
+/// the comparison with a keccak literal here, which silently `continue`d past
+/// every ecrecover anchor event and filled the slot with zeros.
+pub const DELEGATION_ANY: u8 = 0;
+
+/// The delegation **anchor** spaces: one per delegation family, the tag being
+/// the delegation type (`docs/spec/delegation.md` §5).
+///
+/// `DELEGATION_ECRECOVER_SCRATCH` is deliberately absent. It is a bus, not an
+/// anchor: nothing pairs a request with it and no frame slot takes it.
+pub fn is_delegation_anchor(tag: u8) -> bool {
+    matches!(
+        tag,
+        address_space::DELEGATION_KECCAK_F | address_space::DELEGATION_ECRECOVER
+    )
+}
+
+/// Does a logged event in address space `tag` at in-cycle slot `delta` belong
+/// to the query with id `query`?
+///
+/// The one routing authority, shared by `constraints` and `trace`. Every query
+/// but [`DELEG`] is an exact `(space, Δ)` pair; `DELEG` takes **any** anchor
+/// space at its Δ, the type being carried by the row's `deleg_space` column
+/// rather than by the slot.
+pub fn frame_matches(query: usize, tag: u8, delta: u64) -> bool {
+    if FRAME_DELTA[query] != delta {
+        return false;
+    }
+    match query {
+        DELEG => is_delegation_anchor(tag),
+        _ => FRAME_SPACE[query] == tag,
+    }
+}
 
 /// Each query's in-cycle slot `Δ`: its write is at `4·cycle + Δ`.
 pub const FRAME_DELTA: [u64; FRAME_QUERIES] = [0, 1, 2, 2, 2, 2, 3, 3, 3];
+
+/// `M[1 + 5w]`: the **delegation tag column** of a frame of width `w` that
+/// holds [`DELEG`], and the frame's last memory column.
+///
+/// It carries the anchor space of the delegation type this row requested, and
+/// the requesting family's circuit pins it to a sum over its type selectors
+/// (`docs/spec/ecrecover.md` §2.4). The mirror leaf's `AS` part is then the
+/// product `deleg_space · m_deleg` rather than a literal `tag · m_deleg` —
+/// which is what lets one requesting family serve every delegation type
+/// without the leaf cone reading a `W` column, as `check_memory` forbids.
+///
+/// It is **appended**, so no existing `M` index moves.
+pub fn deleg_space(width: usize) -> PolyAddress {
+    PolyAddress::Memory(1 + 5 * width as u32)
+}
 
 /// `M[1 + 5·slot + field]`: one field of the query at `slot` — its position in
 /// the family's query list, not its id in [`FRAME_NAMES`]. The two agree only
@@ -175,10 +233,10 @@ pub fn frame_queries(family: u32) -> &'static [usize] {
             "family {family} initializes RAM and runs no cycles, so it has no frame; \
              `docs/spec/memory.md` §3.3 is its artifact"
         ),
-        family::KECCAK_F => panic!(
-            "family {family} is invoked, not decoded, and its frame is 50 fixed-offset \
-             words rather than a subset of the query table; `docs/spec/delegation.md` \
-             §4 is its artifact"
+        family::KECCAK_F | family::ECRECOVER => panic!(
+            "family {family} is invoked, not decoded, and its frame is a block of \
+             fixed-offset words rather than a subset of the query table; \
+             `docs/spec/delegation.md` §4 is its artifact"
         ),
         other => panic!("family {other} is not in constants::family"),
     }
@@ -210,10 +268,22 @@ fn slot(s: u32) -> Coeff {
 /// A coefficient is one literal or one slot, so `α_ts·4·cycle` is a term
 /// repeated four times and `α_ts·Δ·m` one repeated `Δ` times. The read tuple
 /// has one term per part, so its term `PART_*` is that part.
-fn tuple(query: usize, at: usize, write: bool) -> GateDef {
+fn tuple(query: usize, at: usize, write: bool, tag: Option<PolyAddress>) -> GateDef {
     let mask = frame(at, FIELD_MASK);
     let mut parts: [Vec<(Coeff, PolyAddress)>; 4] = Default::default();
-    parts[memory::PART_AS] = vec![(lit(FRAME_SPACE[query] as u64), mask)];
+    // Every query but `DELEG` has one literal address space. `DELEG`'s is the
+    // delegation *type*'s, which the row carries in `deleg_space`: the term is
+    // `(1, deleg_space)` rather than `(tag, mask)`, and because its operand is
+    // not the mask, `leaf` turns it into the product `(1, deleg_space, mask)`
+    // on its own — degree 2, no new gate shape (`ecrecover.md` §2.4).
+    parts[memory::PART_AS] = match (query, tag) {
+        (DELEG, Some(column)) => vec![(lit(1), column)],
+        (DELEG, None) => panic!(
+            "memory tuple: the DELEG query's address space is its row's `deleg_space` column, \
+             not a literal; pass the frame's tag column"
+        ),
+        _ => vec![(lit(FRAME_SPACE[query] as u64), mask)],
+    };
     parts[memory::PART_ADDR] = vec![(slot(challenge_slot::MEM_ALPHA_ADDR), frame(at, FIELD_ADDR))];
     let alpha_ts = slot(challenge_slot::MEM_ALPHA_TS);
     parts[memory::PART_TS] = match write {
@@ -245,7 +315,12 @@ fn tuple(query: usize, at: usize, write: bool) -> GateDef {
 /// holding every query would address it. The verifier's boundary reads only
 /// the coefficients and their `PART_*` positions, which no slot changes.
 pub fn read_tuple(query: usize) -> GateDef {
-    tuple(query, query, false)
+    assert_ne!(
+        query, DELEG,
+        "read_tuple: the delegation mirror's address space is a column, not a literal, so it \
+         has no frame-free spelling; `frame_matches` routes it and `deleg_space` carries it"
+    );
+    tuple(query, query, false, None)
 }
 
 /// Query `query`'s write tuple, unmasked: `γ_M + AS·m + α_addr·addr +
@@ -253,7 +328,7 @@ pub fn read_tuple(query: usize) -> GateDef {
 /// `T(AS, addr, 4·cycle + Δ, write_value)`.
 #[cfg(test)]
 fn write_tuple(query: usize) -> GateDef {
-    tuple(query, query, true)
+    tuple(query, query, true, None)
 }
 
 /// A product-tree leaf, one flat `Quadratic`: at `mask = 1` the tuple, at
@@ -498,6 +573,12 @@ fn frame_body(
             columns.push(format!("{}_{field}", FRAME_NAMES[query]));
         }
     }
+    // The tag column, appended last so no existing `M` index moves. A frame
+    // without the delegation mirror has no type to carry and no column.
+    let tag = queries.contains(&DELEG).then(|| {
+        columns.push(String::from("deleg_space"));
+        deleg_space(width)
+    });
     let mut witness: Vec<String> = queries
         .iter()
         .map(|&query| format!("{}_gap_hi", FRAME_NAMES[query]))
@@ -524,8 +605,14 @@ fn frame_body(
     let mut lookups = gaps;
     for (at, &query) in queries.iter().enumerate() {
         let (name, mask) = (FRAME_NAMES[query], frame(at, FIELD_MASK));
-        reads.push((format!("read_{name}"), leaf(&tuple(query, at, false), mask)));
-        writes.push((format!("write_{name}"), leaf(&tuple(query, at, true), mask)));
+        reads.push((
+            format!("read_{name}"),
+            leaf(&tuple(query, at, false, tag), mask),
+        ));
+        writes.push((
+            format!("write_{name}"),
+            leaf(&tuple(query, at, true, tag), mask),
+        ));
         enforcing.push((format!("{name}_mask_boolean"), booleanity(mask)));
     }
     for (at, &query) in queries.iter().enumerate() {
@@ -543,6 +630,31 @@ fn frame_body(
     }
     enforcing.extend(family_spec.enforcing);
     lookups.extend(family_spec.lookups);
+    // The tag column's default pin. A requesting family supplies its own —
+    // `add_sub`'s `deleg_space_rule`, a sum over its type selectors — and this
+    // adds nothing where it did. Where it did not, the column is held to 0,
+    // which `check_memory` would otherwise refuse outright.
+    //
+    // Holding it to 0 rather than refusing is the safer failure: a family that
+    // grows the mirror slot and forgets the gate then cannot request any
+    // delegation at all, because 0 is no anchor's tag and its mirror read
+    // pairs with no invocation. The honest prover is stopped; a cheating one
+    // gains nothing. Refusing would be correct too, but it would make a bare
+    // frame — the intermediate every family is built from — unbuildable.
+    if let Some(column) = tag {
+        if !enforcing
+            .iter()
+            .any(|(_, g)| g.operands().contains(&column))
+        {
+            enforcing.push((
+                "deleg_space_unused".into(),
+                GateDef::Linear {
+                    terms: vec![(lit(1), column)],
+                    constant: lit(0),
+                },
+            ));
+        }
+    }
 
     // The row-wise lists pair neighbours, so each side of the tree is a power
     // of two. A family whose query count is not one pads with leaves that are
@@ -881,6 +993,53 @@ pub fn check_memory(a: &CircuitArtifact) -> Result<(), String> {
             }
         }
     }
+
+    // The **address-space operand**, which is a column exactly for the
+    // delegation mirror (`docs/spec/ecrecover.md` §2.4).
+    //
+    // In a leaf every product carries a global memory slot — `α_addr`, `α_ts`,
+    // `α_val` — but the `AS` part carries a plain literal, so a product with a
+    // literal coefficient *is* the address-space term and there is no other.
+    // Where its operand is a committed column, some enforcing gate of the same
+    // list must read it. That is deliberately the weakest check that catches
+    // the real failure — a family that grows the column and forgets the gate —
+    // and it is not a proof that the gate pins anything; what it refuses is a
+    // free column supplying a leaf's address space, which a prover would
+    // otherwise choose, `0` included. `docs/spec/memory.md` §1 reserves 0 so
+    // that no real memory tuple is all zeros, and the whole multiset rests on
+    // it.
+    for e in &list.producing {
+        let GateDef::Quadratic {
+            constant, products, ..
+        } = &e.gate
+        else {
+            continue;
+        };
+        if *constant != lit(1) {
+            continue;
+        }
+        for (c, space, _) in products {
+            if global(c) {
+                continue;
+            }
+            let committed = matches!(
+                space,
+                PolyAddress::Memory(_) | PolyAddress::Witness(_) | PolyAddress::Setup(_)
+            );
+            if committed
+                && !list
+                    .enforcing
+                    .iter()
+                    .any(|b| b.gate.operands().contains(space))
+            {
+                return Err(format!(
+                    "unpinned address space: leaf `{}` takes its address space from {space}, and \
+                     gate list 0 has no enforcing gate reading {space}",
+                    gate_name(e.relation)
+                ));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -941,7 +1100,10 @@ mod tests {
         for (id, width) in widths {
             assert_eq!(frame_queries(id).len(), width, "family {id}");
             let a = family_frame_artifact(id, 6);
-            assert_eq!(a.memory.len(), 1 + 5 * width, "family {id}");
+            // `1 + 5w`, and one more for the tag column on the family that
+            // holds the delegation mirror (`ecrecover.md` §2.4).
+            let tag = usize::from(frame_queries(id).contains(&DELEG));
+            assert_eq!(a.memory.len(), 1 + 5 * width + tag, "family {id}");
             assert_eq!(a.witness.len(), width + 3, "family {id}");
             assert_eq!(a.lookups.len(), 2 * width, "family {id}");
             assert_eq!(

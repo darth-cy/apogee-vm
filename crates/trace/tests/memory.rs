@@ -8,8 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use constants::family;
 use constraints::memory::{
-    frame_queries, gap_hi, ARG1, ARG2, DELEG, FRAME_DELTA, FRAME_NAMES, FRAME_SPACE, LOAD, PC, RAM,
-    RD, RS1, RS2,
+    frame_matches, frame_queries, gap_hi, ARG1, ARG2, DELEG, DELEGATION_ANY, FRAME_DELTA,
+    FRAME_NAMES, FRAME_SPACE, LOAD, PC, RAM, RD, RS1, RS2,
 };
 use constraints::PolyAddress;
 use field::Fr;
@@ -43,15 +43,30 @@ fn the_frame_table_is_the_pc_query_then_the_roles() {
             Role::Delegate => "deleg".to_string(),
             _ => format!("{role:?}").to_lowercase(),
         };
+        // The mirror's slot carries no tag. Every other role's address space
+        // is one literal, but a requesting family serves every delegation
+        // type from this one slot, so the space is the row's `deleg_space`
+        // column and the table holds `DELEGATION_ANY` instead
+        // (`docs/spec/ecrecover.md` §2.4). The event's own space is still a
+        // real anchor tag, which is why `frame_matches` and not this table is
+        // what routes it.
+        let space = match role {
+            Role::Delegate => DELEGATION_ANY,
+            _ => role.space(Some(family::KECCAK_F)).tag(),
+        };
         assert_eq!(
             (FRAME_SPACE[1 + i], FRAME_DELTA[1 + i], FRAME_NAMES[1 + i]),
-            (
-                role.space(Some(family::KECCAK_F)).tag(),
-                role.delta(),
-                name.as_str()
-            ),
+            (space, role.delta(), name.as_str()),
             "{role:?}"
         );
+        if matches!(role, Role::Delegate) {
+            for family in [family::KECCAK_F, family::ECRECOVER] {
+                assert!(
+                    frame_matches(1 + i, role.space(Some(family)).tag(), role.delta()),
+                    "the mirror slot takes family {family}'s anchor"
+                );
+            }
+        }
     }
 }
 

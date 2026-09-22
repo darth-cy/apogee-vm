@@ -7,12 +7,14 @@
 //! S15's `memory::frame_with_channels_artifact` beside S14's frame.
 //!
 //! ```text
-//! frame     M[0..41], W[0..11]: pc rs1 rs2 arg1 arg2 ram rd deleg at slots 0..8
+//! frame     M[0..42], W[0..11]: pc rs1 rs2 arg1 arg2 ram rd deleg at slots 0..8,
+//!           M[41] deleg_space, the requested delegation type's anchor tag
 //! W[11..17] the claimed decoded row: next_pc rs1 rs2 rd imm mask
 //! W[17..23] the mask's six bits; W[23], W[24] is_ecall, is_fence
-//! W[25]     is_keccak: the delegation request selector
-//! W[26..30] wrap, rd_hi, pc_wrap, next_pc_hi
-//! W[30..33] one multiplicity per channel: timestamp, range16, decoder
+//! W[25]     is_keccak: the keccak-f delegation request selector
+//! W[26]     is_ecrecover: the ecrecover delegation request selector
+//! W[27..31] wrap, rd_hi, pc_wrap, next_pc_hi
+//! W[31..34] one multiplicity per channel: timestamp, range16, decoder
 //! S[0..7]   the decoded table, program::lookup_tuple order
 //! ```
 
@@ -34,15 +36,33 @@ use crate::memory::{
 };
 use crate::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
 
-// The two ecall numbers this family proves are distinct and each in its ABI
-// range, so `ecall_is_exit` and `keccak_number` partition its ecall rows rather
-// than both holding on one (`docs/spec/delegation.md` §2). Neither gate spells
+// The ecall numbers this family proves are distinct and each in its ABI range,
+// so `ecall_is_exit` and the per-type number gates partition its ecall rows
+// rather than two holding on one (`docs/spec/delegation.md` §2). No gate spells
 // a number: each reads `constants::ecall`, the one place an ecall number lives.
 // A `const` assertion rather than a test, because a violation here is a
 // mis-numbered ABI and should not compile.
 const _: () = assert!(constants::ecall::EXIT != constants::ecall::PRECOMPILE_KECCAK_F);
 const _: () = assert!(constants::ecall::PRECOMPILE_KECCAK_F >= constants::ecall::PRECOMPILE_FIRST);
 const _: () = assert!(constants::ecall::PRECOMPILE_KECCAK_F <= constants::ecall::PRECOMPILE_LAST);
+const _: () = assert!(constants::ecall::EXIT != constants::ecall::PRECOMPILE_ECRECOVER);
+const _: () =
+    assert!(constants::ecall::PRECOMPILE_ECRECOVER != constants::ecall::PRECOMPILE_KECCAK_F);
+const _: () = assert!(constants::ecall::PRECOMPILE_ECRECOVER >= constants::ecall::PRECOMPILE_FIRST);
+const _: () = assert!(constants::ecall::PRECOMPILE_ECRECOVER <= constants::ecall::PRECOMPILE_LAST);
+// The **tags** are held apart for the same reason as the numbers, and it is the
+// sharper of the two: `deleg_space_rule` is what separates one delegation type
+// from another, so two entries of `DELEG_SELECTORS` sharing a tag would leave a
+// request answerable by the wrong family's invocation -- a recovery answered by
+// a permutation. Neither may be 0 either, which is `DELEGATION_ANY`, the value
+// the frame pins the column to when no type is requested.
+const _: () = assert!(
+    constants::address_space::DELEGATION_KECCAK_F != constants::address_space::DELEGATION_ECRECOVER
+);
+const _: () =
+    assert!(constants::address_space::DELEGATION_KECCAK_F != crate::memory::DELEGATION_ANY);
+const _: () =
+    assert!(constants::address_space::DELEGATION_ECRECOVER != crate::memory::DELEGATION_ANY);
 const _: () = assert!(constants::ecall::EXIT < constants::ecall::ZKVM_IO_FIRST);
 
 /// The family's queries, in slot order: its frame is `memory::frame_queries`'
@@ -56,6 +76,8 @@ const SLOT_ARG2: usize = 4;
 const SLOT_RAM: usize = 5;
 const SLOT_RD: usize = 6;
 const SLOT_DELEG: usize = 7;
+/// The frame's width, which the tag column is appended after.
+const FRAME_WIDTH: usize = 8;
 
 /// The frame's own witness columns: eight gap chunks, then the x0 gadget's
 /// three. Everything this file adds follows them.
@@ -65,7 +87,7 @@ const fn w(i: u32) -> PolyAddress {
     PolyAddress::Witness(i)
 }
 
-/// `W[10..16]`: the claimed decoded row, `next_pc, rs1, rs2, rd, imm, mask` —
+/// `W[11..17]`: the claimed decoded row, `next_pc, rs1, rs2, rd, imm, mask` —
 /// `program::lookup_tuple` after `pc`, which the frame's own pc column is.
 pub const DECODED: [PolyAddress; 6] = [
     w(FRAME_WITNESS),
@@ -82,7 +104,7 @@ const DECODED_RD: PolyAddress = DECODED[3];
 const DECODED_IMM: PolyAddress = DECODED[4];
 const DECODED_MASK: PolyAddress = DECODED[5];
 
-/// `W[16..22]`: the packed mask's bits, bit `k` at index `k` —
+/// `W[17..23]`: the packed mask's bits, bit `k` at index `k` —
 /// `constants::extra_mask::add_sub_lui_auipc`'s order: system, addi, auipc,
 /// add, sub, lui.
 pub const KINDS: [PolyAddress; 6] = [
@@ -100,29 +122,61 @@ const KIND_ADD: PolyAddress = KINDS[kind::ADD as usize];
 const KIND_SUB: PolyAddress = KINDS[kind::SUB as usize];
 const KIND_LUI: PolyAddress = KINDS[kind::LUI as usize];
 
-/// `W[22]`: 1 exactly on a system row whose code is `ecall`.
+/// `W[23]`: 1 exactly on a system row whose code is `ecall`.
 pub const IS_ECALL: PolyAddress = w(FRAME_WITNESS + 12);
 /// `W[24]`: 1 exactly on a system row whose code is `fence`.
+///
+/// One above `IS_ECALL`: `W[FRAME_WITNESS + 13]`.
 pub const IS_FENCE: PolyAddress = w(FRAME_WITNESS + 13);
 /// `W[25]`: 1 exactly on an ecall row whose `a7` is the keccak-f delegation
 /// number — the **delegation request** selector (`docs/spec/delegation.md`
 /// §5.1). A free boolean, pinned by the two number gates below: an ecall row
 /// is an exit or a delegation request, and its `a7` is that call's number.
 pub const IS_KECCAK: PolyAddress = w(FRAME_WITNESS + 14);
-/// `W[26]`: the sum's carry, or the difference's borrow.
-pub const WRAP: PolyAddress = w(FRAME_WITNESS + 15);
-/// `W[27]`: the computed `rd` value's high halfword.
-pub const RD_HI: PolyAddress = w(FRAME_WITNESS + 16);
-/// `W[28]`: `next_pc`'s wrap, 0 on every honest row.
-pub const PC_WRAP: PolyAddress = w(FRAME_WITNESS + 17);
-/// `W[29]`: `next_pc`'s high halfword.
-pub const NEXT_PC_HI: PolyAddress = w(FRAME_WITNESS + 18);
-/// `W[30..33]`: the channels' multiplicities, in channel order — timestamp,
+/// `W[26]`: [`IS_KECCAK`]'s twin for the ecrecover delegation (S22), a free
+/// boolean pinned the same way, by `ecrecover_number`.
+pub const IS_ECRECOVER: PolyAddress = w(FRAME_WITNESS + 15);
+/// `W[27]`: the sum's carry, or the difference's borrow.
+pub const WRAP: PolyAddress = w(FRAME_WITNESS + 16);
+/// `W[28]`: the computed `rd` value's high halfword.
+pub const RD_HI: PolyAddress = w(FRAME_WITNESS + 17);
+/// `W[29]`: `next_pc`'s wrap, 0 on every honest row.
+pub const PC_WRAP: PolyAddress = w(FRAME_WITNESS + 18);
+/// `W[30]`: `next_pc`'s high halfword.
+pub const NEXT_PC_HI: PolyAddress = w(FRAME_WITNESS + 19);
+/// `W[31..34]`: the channels' multiplicities, in channel order — timestamp,
 /// range16, decoder — last in the witness subtree (`docs/spec/lookup.md` §7).
 pub const MULTIPLICITIES: [PolyAddress; 3] = [
-    w(FRAME_WITNESS + 19),
     w(FRAME_WITNESS + 20),
     w(FRAME_WITNESS + 21),
+    w(FRAME_WITNESS + 22),
+];
+
+/// **Every delegation request selector, with the ecall number that pins it
+/// and the anchor tag it implies.**
+///
+/// The four gates that treat a request differently from an exit —
+/// `ecall_is_exit`, `exit_status`, `next_pc_rule` and `deleg_mask_rule` — are
+/// written over this table rather than over one column, so a later stage's
+/// family is one entry here rather than a hunt through the gate list.
+/// `deleg_space_rule` reads the tags.
+///
+/// Each selector is a free boolean; its own number gate is what pins it, and
+/// what makes the set mutually exclusive is that two at once would need `a7`
+/// to hold two distinct ecall numbers.
+pub const DELEG_SELECTORS: [(PolyAddress, &str, u32, u8); 2] = [
+    (
+        IS_KECCAK,
+        "keccak",
+        constants::ecall::PRECOMPILE_KECCAK_F,
+        constants::address_space::DELEGATION_KECCAK_F,
+    ),
+    (
+        IS_ECRECOVER,
+        "ecrecover",
+        constants::ecall::PRECOMPILE_ECRECOVER,
+        constants::address_space::DELEGATION_ECRECOVER,
+    ),
 ];
 
 /// The decoded table's width, `program::lookup_tuple(ADD_SUB_LUI_AUIPC)`:
@@ -271,6 +325,7 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
         "is_ecall",
         "is_fence",
         "is_keccak",
+        "is_ecrecover",
         "wrap",
         "rd_hi",
         "pc_wrap",
@@ -330,37 +385,48 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
             vec![(lit(1), IS_FENCE, DECODED_IMM)],
         ),
     ));
-    // An ecall row is an exit or a delegation request, and `a7` is that
-    // call's number. `is_keccak` is a free boolean and `is_exit` is
-    // `is_ecall - is_keccak`, so the two pins below leave `a7` no third
-    // value: a row claiming both would need `a7` to be 93 and the delegation
-    // number at once (`docs/spec/delegation.md` §5.1).
-    enforcing.push(("is_keccak_boolean".into(), booleanity(IS_KECCAK)));
-    enforcing.push((
-        "keccak_is_an_ecall".into(),
-        quadratic(
-            vec![(lit(1), IS_KECCAK)],
-            vec![(neg(1), IS_KECCAK, IS_ECALL)],
-        ),
-    ));
-    // is_exit·(a7 - EXIT) = 0, with is_exit written out as is_ecall - is_keccak.
-    enforcing.push((
-        "ecall_is_exit".into(),
-        quadratic(
-            vec![
-                (neg(constants::ecall::EXIT as u64), IS_ECALL),
-                (lit(constants::ecall::EXIT as u64), IS_KECCAK),
-            ],
-            vec![(lit(1), IS_ECALL, v_rs1), (neg(1), IS_KECCAK, v_rs1)],
-        ),
-    ));
-    enforcing.push((
-        "keccak_number".into(),
-        quadratic(
-            vec![(neg(constants::ecall::PRECOMPILE_KECCAK_F as u64), IS_KECCAK)],
-            vec![(lit(1), IS_KECCAK, v_rs1)],
-        ),
-    ));
+    // An ecall row is an exit or a delegation request of one type, and `a7`
+    // is that call's number. Each `is_<type>` is a free boolean and `is_exit`
+    // is `is_ecall - Σ is_<type>`, so the pins below leave `a7` no other
+    // value: a row claiming two types at once would need `a7` to hold two
+    // distinct numbers, and one claiming a type and the exit would need 93
+    // and a precompile number (`docs/spec/delegation.md` §5.1).
+    for (deleg, name, number, _) in DELEG_SELECTORS {
+        enforcing.push((format!("is_{name}_boolean"), booleanity(deleg)));
+        enforcing.push((
+            format!("{name}_is_an_ecall"),
+            quadratic(vec![(lit(1), deleg)], vec![(neg(1), deleg, IS_ECALL)]),
+        ));
+        enforcing.push((
+            format!("{name}_number"),
+            quadratic(
+                vec![(neg(number as u64), deleg)],
+                vec![(lit(1), deleg, v_rs1)],
+            ),
+        ));
+    }
+    // is_exit·(a7 - EXIT) = 0, with is_exit written out as is_ecall - Σ is_<type>.
+    enforcing.push(("ecall_is_exit".into(), {
+        let mut linear_terms = vec![(neg(constants::ecall::EXIT as u64), IS_ECALL)];
+        let mut products = vec![(lit(1), IS_ECALL, v_rs1)];
+        for (deleg, _, _, _) in DELEG_SELECTORS {
+            linear_terms.push((lit(constants::ecall::EXIT as u64), deleg));
+            products.push((neg(1), deleg, v_rs1));
+        }
+        quadratic(linear_terms, products)
+    }));
+    // The tag column of `ecrecover.md` §2.4, pinned to the requested type's
+    // anchor space. Degree 1, and it holds on **every** row rather than under
+    // `m_deleg`: on a row that requests nothing every selector is 0, so the
+    // gate reads `deleg_space = 0`, which is what the mirror leaf's product
+    // wants there anyway.
+    enforcing.push(("deleg_space_rule".into(), {
+        let mut terms = vec![(lit(1), crate::memory::deleg_space(FRAME_WIDTH))];
+        for (deleg, _, _, tag) in DELEG_SELECTORS {
+            terms.push((neg(tag as u64), deleg));
+        }
+        linear(terms)
+    }));
 
     enforcing.push((
         "rs1_mask_rule".into(),
@@ -391,7 +457,10 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     ));
     enforcing.push((
         "deleg_mask_rule".into(),
-        mask_rule(frame(SLOT_DELEG, FIELD_MASK), &[IS_KECCAK]),
+        mask_rule(
+            frame(SLOT_DELEG, FIELD_MASK),
+            &DELEG_SELECTORS.map(|(deleg, _, _, _)| deleg),
+        ),
     ));
     enforcing.push(("rs1_addr_rule".into(), addr_rule(SLOT_RS1, DECODED_RS1, A7)));
     enforcing.push(("rs2_addr_rule".into(), addr_rule(SLOT_RS2, DECODED_RS2, A0)));
@@ -433,18 +502,14 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     ));
     // The exit row's `a0` write is its read. A delegation request's is not:
     // it writes 0, which is the first of the three request-side zeroings.
-    enforcing.push((
-        "exit_status".into(),
-        quadratic(
-            vec![],
-            vec![
-                (lit(1), IS_ECALL, v_rd),
-                (neg(1), IS_ECALL, sel),
-                (neg(1), IS_KECCAK, v_rd),
-                (lit(1), IS_KECCAK, sel),
-            ],
-        ),
-    ));
+    enforcing.push(("exit_status".into(), {
+        let mut products = vec![(lit(1), IS_ECALL, v_rd), (neg(1), IS_ECALL, sel)];
+        for (deleg, _, _, _) in DELEG_SELECTORS {
+            products.push((neg(1), deleg, v_rd));
+            products.push((lit(1), deleg, sel));
+        }
+        quadratic(vec![], products)
+    }));
     // The three request-side zeroings of `docs/spec/delegation.md` §5.2, each
     // gated on the mirror query's own mask. All three, and not two: without
     // the rd zeroing a request writes a register the ABI says it does not;
@@ -487,23 +552,21 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     enforcing.push(("pc_wrap_boolean".into(), booleanity(PC_WRAP)));
     // next_pc + 2^32·pc_wrap = decoded_next_pc, or HALT_PC on the exit row.
     // A delegation request is not an exit: its next_pc is the fall-through,
-    // so `is_exit = is_ecall - is_keccak` is what carries the sentinel.
-    enforcing.push((
-        "next_pc_rule".into(),
-        quadratic(
-            vec![
-                (lit(1), next_pc),
-                (Coeff::Literal(two_32()), PC_WRAP),
-                (neg(1), DECODED_NEXT_PC),
-                (neg(mem::HALT_PC as u64), IS_ECALL),
-                (lit(mem::HALT_PC as u64), IS_KECCAK),
-            ],
-            vec![
-                (lit(1), IS_ECALL, DECODED_NEXT_PC),
-                (neg(1), IS_KECCAK, DECODED_NEXT_PC),
-            ],
-        ),
-    ));
+    // so `is_exit = is_ecall - Σ is_<type>` is what carries the sentinel.
+    enforcing.push(("next_pc_rule".into(), {
+        let mut linear_terms = vec![
+            (lit(1), next_pc),
+            (Coeff::Literal(two_32()), PC_WRAP),
+            (neg(1), DECODED_NEXT_PC),
+            (neg(mem::HALT_PC as u64), IS_ECALL),
+        ];
+        let mut products = vec![(lit(1), IS_ECALL, DECODED_NEXT_PC)];
+        for (deleg, _, _, _) in DELEG_SELECTORS {
+            linear_terms.push((lit(mem::HALT_PC as u64), deleg));
+            products.push((neg(1), deleg, DECODED_NEXT_PC));
+        }
+        quadratic(linear_terms, products)
+    }));
 
     let mut decode = vec![column(pc)];
     decode.extend(DECODED.iter().map(|x| column(*x)));

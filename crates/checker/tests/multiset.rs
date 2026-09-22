@@ -43,10 +43,10 @@ use constants::challenge_slot::{
 use constants::memory::{HALT_PC, TS_STEP};
 use constants::{address_space, family};
 use constraints::memory::{
-    check_memory, family_frame_artifact, frame, frame_queries, gap_hi, image_window_artifact,
-    rd_inv, rd_is_zero, rd_selected, zero_window_artifact, CYCLE, FIELD_ADDR, FIELD_MASK,
-    FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA, FRAME_NAMES, FRAME_READ_ONLY,
-    FRAME_SPACE, LOAD, PC, RAM, RD, RS1, RS2,
+    check_memory, family_frame_artifact, frame, frame_matches, frame_queries, gap_hi,
+    image_window_artifact, rd_inv, rd_is_zero, rd_selected, zero_window_artifact, CYCLE,
+    FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA,
+    FRAME_NAMES, FRAME_READ_ONLY, FRAME_SPACE, LOAD, PC, RAM, RD, RS1, RS2,
 };
 use constraints::{CircuitArtifact, Coeff, GateDef, PolyAddress, VirtualKind};
 use field::Fr;
@@ -240,8 +240,7 @@ fn locate(f: &Fib, e: &MemoryEvent) -> (usize, usize, usize) {
     let queries = frame_queries(f.shards[i].family.expect("a frame shard"));
     let holds = |at: usize| {
         let q = queries[at];
-        FRAME_SPACE[q] == e.space.tag()
-            && FRAME_DELTA[q] == e.delta()
+        frame_matches(q, e.space.tag(), e.delta())
             && cell(&f.shards[i], frame(at, FIELD_MASK), row) == Fr::ONE
             && cell(&f.shards[i], frame(at, FIELD_ADDR), row) == int(e.addr as u64)
             && cell(&f.shards[i], frame(at, FIELD_READ_TS), row) == int(e.read_ts)

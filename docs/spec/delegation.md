@@ -1,8 +1,11 @@
 # Delegation: the ABI, the anchor, and the keccak-f family
 
-Frozen as of S21. **This page is the delegation ABI** — every delegation family
-obeys it, and S22 and S23 consume it as written and may append only their own
-frame tables (§10). Changing anything else here is a protocol-version change.
+Frozen as of S21 and amended in three sentences at S22 — §1's row-to-invocation
+ratio, §3's ecall number and address-space tags, and §9's lookup-channel rule —
+each recorded in `docs/spec/ecrecover.md` §8. **This page is the delegation
+ABI** — every delegation family obeys it, and a later one consumes it as written
+and may append only its own registry row and frame table (§10). Changing
+anything else here is a protocol-version change.
 
 It cites `docs/spec/ecall-abi.md` for the calling convention, `docs/spec/memory.md`
 for the memory argument, `docs/spec/execution-trace.md` for the clock and the
@@ -34,9 +37,14 @@ exactly four ways, and in no others:
   offsets — the *indirect-access* pattern. Prior art carries the invocation over
   a CSR write, with the CSR number doubling as the delegation type; this VM
   carries it over an ecall, whose number is the type.
-- Its **rows are invocations**, not cycles. One row is one call. It runs its own
-  trace beside the CPU families, and its shards are planned from its invocation
-  count like any other family's rows.
+- Its **rows are invocations**, not cycles. It runs its own trace beside the CPU
+  families, and its shards are planned from its invocation count like any other
+  family's rows. A family whose invocation does not fit one row takes a fixed,
+  **aligned** block of them instead: `KECCAK_F` is one row a call, and
+  `ECRECOVER` is `constants::ecrecover::ROWS_PER_INVOCATION` = 4,096
+  consecutive rows aligned to that boundary (`docs/spec/ecrecover.md` §2.2).
+  What is frozen is that a row is an invocation and not a cycle; the ratio is
+  not, and the shard plan, the fill and the ts window read it.
 - Its accesses **ride the one global memory multiset** (`docs/spec/memory.md`
   §1). There is no second argument, no side channel and no new tuple shape.
 - It is in a `VmConfig` exactly when the **linked binary declares it** (§7),
@@ -87,9 +95,13 @@ One table ties a family, its number and its frame width together:
 | family | id | ecall | frame words | address space |
 | --- | --- | --- | --- | --- |
 | `KECCAK_F` | 9 | `PRECOMPILE_KECCAK_F` = `0x0501` | 50 | `DELEGATION_KECCAK_F` = 4 |
+| `ECRECOVER` | 10 | `PRECOMPILE_ECRECOVER` = `0x0502` | 42 | `DELEGATION_ECRECOVER` = 5 |
 
-`0x0500` is `PRECOMPILE_POSEIDON2`, assigned at S10 and still without a circuit;
-S22 gives it one and takes address-space tag 5.
+`0x0500` is `PRECOMPILE_POSEIDON2`, assigned at S10, still without a circuit and
+still unimplemented, so every executor answers `-ENOSYS` for it. S21 wrote here
+that S22 would give it one and take address-space tag 5. S22 is **ecrecover**
+instead, and because ecall numbers are append-only forever it took the number
+after keccak's rather than the first free one.
 
 **Each delegation family has an address-space tag of its own**
 (`constants::address_space`), append-only beside `REG = 1`, `RAM = 2` and
@@ -97,6 +109,15 @@ S22 gives it one and takes address-space tag 5.
 be answered by another type's invocation at the same frame base, and why the
 anchor's address needs to carry nothing but the pointer. Tags stay nonzero, so
 no real tuple is all zeros.
+
+`ECRECOVER` takes **two** of them, and only the first is a registry column.
+`DELEGATION_ECRECOVER = 5` is its anchor space; `DELEGATION_ECRECOVER_SCRATCH =
+6` is neither memory nor an anchor and answers no request — it carries the
+values one row of an invocation block computes for another, which an engine
+with no cross-row wiring has nowhere else to put (`docs/spec/ecrecover.md`
+§2.3). A family needing more than one tag takes them in order, and the tag a
+later stage was pencilled in for shifts up: S23's is 7. `PROTOCOL_VERSION` is
+still 0 and nothing is published, so that shift costs this sentence.
 
 `crates/constants/tests/ecall_abi.rs` holds the number in this table, the number
 in `constants::ecall`, the number the shim calls and the number the emulator
@@ -165,6 +186,36 @@ a read of what was there, a write of what the function computed. So:
   roles ride Δ = 1, 2 and 3. Nothing else reconstructs that order, so the
   emulator emits it and `TraceArchive`'s `check_parts` replays it
   (`crates/trace/src/archive.rs`).
+
+### 4.2 The `ECRECOVER` frame
+
+42 words, 168 bytes (`constants::ecrecover`), appended under §10's rule and
+changing nothing above it. §4's two frame rules hold with 168 in place of 200,
+and §4.1 applies to every word without exception, because an input word is
+written back unchanged and so all 42 are read **and** written.
+
+| words | field | direction |
+| --- | --- | --- |
+| `0 ..8` | `hash`, the digest the signature covers | in |
+| `8` | `v`, the recovery id: 27 or 28, and nothing else | in |
+| `9 ..17` | `r`, the signature's first half | in |
+| `17..25` | `s`, the signature's second half | in |
+| `25..33` | `pubkey.x`, the recovered point | out |
+| `33..41` | `pubkey.y` | out |
+| `41` | `success`, 0 or 1 | out |
+
+A 256-bit field is eight **little-endian** 32-bit words: word `2i` is limb `i`'s
+low half and word `2i + 1` its high half. That is not the EVM's big-endian, and
+the reason is the circuit's unit — a 64-bit limb bounded by four 16-bit chunks,
+which cannot reverse bytes at byte granularity. The shim reverses instead, in
+guest code. This is the one place the two frames differ in kind: keccak's SHA-3
+byte order *is* the natural memory image and needs no reversal at all.
+
+Failure is an output rather than a refusal: on a failing call `success` is 0 and
+every output word is zero, by a gate and not by the fill. The circuit proves the
+public key and never hashes — the address the EVM returns is
+`keccak256(x ‖ y)[12..]` and the shim derives it through S21's own delegation.
+`docs/spec/ecrecover.md` §1 and §2.1 are normative for all of it.
 
 ---
 
@@ -487,7 +538,7 @@ shards sort last. `verify_block` needs no edit at all.
 
 ---
 
-## 9. The height, and why there is no lookup channel
+## 9. The height, and why keccak carries no lookup channel
 
 `KECCAK_F` takes **`2^8`**, added to `constants::family::HEIGHT_MENU` at S21.
 One row is a whole permutation, and a whole permutation is **354,762 inner
@@ -519,9 +570,17 @@ bits, in a circuit that is already 1,600 bits wide — and it removes the failur
 assertion inside `VerifyingKey::check` on bytes a verifier was handed.
 
 **A delegation family must therefore be absent from `family_circuit`'s
-minimum-height arm, and must carry no lookup channel.** The two go together: a
-family with a channel needs that channel's height, and at that height its
-permutation does not fit.
+minimum-height arm.** That arm holds the seven execution families to `2^20`,
+the height `TIMESTAMP` needs; a delegation family named there would reach
+`lookup::channel_trees`' assertion inside `VerifyingKey::check`, on bytes a
+verifier was handed, rather than returning `None` for a clean `Err`.
+
+Being absent from it is the whole of the obligation, and the rest of this
+section is `KECCAK_F`'s arithmetic and not a rule: **a channel is allowed at a
+height that fits it**. `KECCAK_F` at `2^8` has room for none, so every bound it
+makes is a bit decomposition; `ECRECOVER` at `2^20` carries `RANGE16`
+(`16 ≤ 20`) and `TIMESTAMP` (`19 ≤ 20`), and its frame's gap checks are S14's
+19+19 gadget rather than 38 booleans (`docs/spec/ecrecover.md` §6.3).
 
 ---
 
@@ -541,11 +600,39 @@ rule are the same for every delegation family, and a family that wrote its own
 would be a family whose pairing nobody had argued. What varies with the type is
 the address-space tag, and nothing else.
 
-The request-side gates are `ADD_SUB_LUI_AUIPC`'s and grow by one term per
-delegation type — the mirror's mask is `m_pc` times the sum of the type
-selectors, and its leaf's `AS` term is the sum over types of `(tag_t, m_t)`.
-That is the same shape as every `uses_q` rule of `docs/spec/memory.md` §2.1, and
-it is the one place a new delegation type touches an existing family's circuit.
+The request-side gates are `ADD_SUB_LUI_AUIPC`'s and grow by one entry per
+delegation type. The mirror's mask is the sum of the type selectors, which is
+the same shape as every `uses_q` rule of `docs/spec/memory.md` §2.1.
+
+Its leaf's `AS` term is **not** the matching sum `Σ_t (tag_t, m_t)`, and this
+page said it was until S22 built the second type and found it cannot be written
+(`docs/spec/ecrecover.md` §2.4). A type selector is a witness column, and
+`check_memory` refuses a leaf cone that reads one — `W` is committed after the
+memory challenges, so a leaf that read it would be a leaf whose tuple the
+prover picks after seeing them. `constraints::memory::FRAME_SPACE[DELEG]` is
+therefore no tag at all but the sentinel `DELEGATION_ANY`, and the requesting
+frame carries **one appended `M` column**, `deleg_space`, holding the
+requested type's tag:
+
+```text
+deleg_space_rule    deleg_space − Σ_t tag_t · is_t = 0
+```
+
+degree 1, an enforcing gate and so free to read `W`, holding on every row: a
+row that requests nothing has every selector 0 and `deleg_space = 0`. The
+leaf's `AS` term is then the product `(1, deleg_space, m_deleg)`, which needs
+no new gate shape — the tuple's term is `(1, deleg_space)`, and because its
+operand is not the mask, `leaf` promotes it to a product itself.
+
+Routing a logged event to that slot is `constraints::memory::frame_matches`
+and never a comparison against `FRAME_SPACE`, which is the other half of the
+same lesson: S22 first shipped the comparison with a keccak literal still in
+the table, and every ecrecover anchor event was silently skipped rather than
+refused, filling the slot with zeros.
+
+Adding a type is one entry in `constraints::add_sub::DELEG_SELECTORS` — the
+selector column, its ecall number and its tag — and it is the one place a new
+delegation type touches an existing family's circuit.
 
 ---
 

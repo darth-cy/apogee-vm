@@ -15,11 +15,11 @@
 
 use constants::{address_space, challenge_slot, family, lookup_channel, memory};
 use constraints::memory::{
-    check_memory, family_frame_artifact, frame, frame_artifact, frame_queries, gap_hi,
-    image_window_artifact, rd_inv, rd_is_zero, rd_selected, read_tuple, zero_window_artifact, ARG1,
-    ARG2, CYCLE, DELEG, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE,
-    FRAME_DELTA, FRAME_NAMES, FRAME_QUERIES, FRAME_READ_ONLY, FRAME_SPACE, LOAD, PC, RAM, RD, RS1,
-    RS2,
+    check_memory, deleg_space, family_frame_artifact, frame, frame_artifact, frame_matches,
+    frame_queries, gap_hi, image_window_artifact, is_delegation_anchor, rd_inv, rd_is_zero,
+    rd_selected, read_tuple, zero_window_artifact, ARG1, ARG2, CYCLE, DELEG, DELEGATION_ANY,
+    FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA,
+    FRAME_NAMES, FRAME_QUERIES, FRAME_READ_ONLY, FRAME_SPACE, LOAD, PC, RAM, RD, RS1, RS2,
 };
 use constraints::{
     CachedEntry, CircuitArtifact, Coeff, ConstraintError, EnforcingEntry, GateDef, LayerSpec,
@@ -30,7 +30,7 @@ use field::Fr;
 use std::collections::HashSet;
 use test_support::{sha256, to_hex};
 
-const FRAME_ALU_SHA256: &str = "b16651f6def235bd51056b6508bd56c7c97a2e3a611427a1ac4270b8f98d4945";
+const FRAME_ALU_SHA256: &str = "f199ca64e301ed301ffb69831342acdc45fc9abaeb06d76d5ec58a025bf6124d";
 const FRAME_REG_SHA256: &str = "f94da36c6f7052acd10c36a3a0bd04ce09fe2419cdbfa046db4a58b1a716cbc0";
 const FRAME_MEM_SHA256: &str = "7a31fd867d4b5490821bcef24e356daf34d834a397efed8fa41b8e821b6fee6f";
 const FRAME_ATOMICS_SHA256: &str =
@@ -58,17 +58,22 @@ const EXECUTION_FAMILIES: [u32; 7] = [
 /// `w`, the `M` and `W` column counts, the leaves a side, the obligations and
 /// the enforcing gates — `w` booleanity gates, one write-back per read-only
 /// query the family holds, and the four x0 gates.
+///
+/// The memory count is `1 + 5w`, and `1 + 5w + 1` on the one family that holds
+/// the delegation mirror: `ADD_SUB_LUI_AUIPC` carries `deleg_space`, the tag
+/// column S22 appended after the last query's five
+/// (`docs/spec/ecrecover.md` §2.4).
 #[allow(clippy::type_complexity)]
 const FRAME_SHAPES: [(u32, &[usize], usize, usize, usize, usize, usize); 7] = [
     //  family                      queries                                w    M   W  side  lk  enf
     (
         family::ADD_SUB_LUI_AUIPC,
         &[PC, RS1, RS2, ARG1, ARG2, RAM, RD, DELEG],
-        41,
+        42,
         11,
         8,
         16,
-        16,
+        17,
     ),
     (
         family::JUMP_BRANCH_SLT,
@@ -280,10 +285,20 @@ fn every_artifact_has_two_named_roots_and_an_all_zero_padding_row() {
 /// `at` is the same tuple over slot `at`'s columns, which
 /// `a_query_at_a_slot_that_is_not_its_id_keeps_its_own_space_and_delta` holds.
 /// Fails if a constant named a position its part is not at.
+///
+/// Eight queries of the nine, since S22: the delegation mirror's address space
+/// is a column of the frame rather than a literal of the table, so it has no
+/// frame-free tuple at all and `read_tuple` refuses it —
+/// `the_delegation_mirror_has_no_frame_free_read_tuple` pins the refusal, and
+/// `the_delegation_mirrors_leaves_take_their_address_space_from_the_tag_column`
+/// pins the leaf it does have.
 #[test]
 fn the_read_tuples_parts_are_at_their_named_positions() {
     let slot = Coeff::Challenge;
     for (q, space) in FRAME_SPACE.iter().enumerate() {
+        if q == DELEG {
+            continue;
+        }
         let GateDef::Linear { terms, constant } = read_tuple(q) else {
             panic!("a tuple is Linear");
         };
@@ -325,8 +340,15 @@ fn the_read_tuples_parts_are_at_their_named_positions() {
 ///
 /// `deleg` is a delegation request's mirror query
 /// (`docs/spec/delegation.md` §5.1): the eighth role, at slot 3 like `ram` and
-/// `rd`, in the delegation family's own address space, and read-write — the
+/// `rd`, in a delegation family's own address space, and read-write — the
 /// value it writes back is not the value it read.
+///
+/// Its entry in `FRAME_SPACE` is `DELEGATION_ANY` and **not a tag**, because a
+/// requesting family serves every delegation type and there is no one literal
+/// to put there: the type the row requested is carried by its `deleg_space`
+/// column, and routing a logged event to the slot is `frame_matches`
+/// (`docs/spec/ecrecover.md` §2.4). 0 is free for that exactly because every
+/// real address space is nonzero, which is asserted here over all six.
 #[test]
 fn the_query_table_is_the_documents() {
     assert_eq!(FRAME_QUERIES, 9);
@@ -340,26 +362,45 @@ fn the_query_table_is_the_documents() {
     );
     assert_eq!(FRAME_DELTA, [0, 1, 2, 2, 2, 2, 3, 3, 3]);
     let (pc, reg, ram) = (address_space::PC, address_space::REG, address_space::RAM);
-    let del = address_space::DELEGATION_KECCAK_F;
-    assert_eq!(FRAME_SPACE, [pc, reg, reg, reg, reg, ram, ram, reg, del]);
+    assert_eq!(
+        FRAME_SPACE,
+        [pc, reg, reg, reg, reg, ram, ram, reg, DELEGATION_ANY]
+    );
+    assert_eq!(DELEGATION_ANY, 0);
+    for space in [
+        pc,
+        reg,
+        ram,
+        address_space::DELEGATION_KECCAK_F,
+        address_space::DELEGATION_ECRECOVER,
+        address_space::DELEGATION_ECRECOVER_SCRATCH,
+    ] {
+        assert_ne!(
+            space, DELEGATION_ANY,
+            "an address space took the free value"
+        );
+    }
     assert_eq!(FRAME_READ_ONLY, [RS1, RS2, ARG1, ARG2, LOAD]);
     assert_eq!(CYCLE, PolyAddress::Memory(0));
 }
 
 /// §2.1 and §2.4 per family, against [`FRAME_SHAPES`]'s hand-written query
-/// lists: `frame_queries` is that list; `1 + 5w` memory columns and `w + 3`
+/// lists: `frame_queries` is that list; `1 + 5w` memory columns — one more,
+/// `deleg_space`, on a frame that holds the delegation mirror — and `w + 3`
 /// witness columns named after the query at each slot; `2w` leaves in the
 /// order `read_<q>` by slot, the read side's constant-1 pads, then the same
 /// for the write side; row-wise widths halving from `2·side` to 2; and the
 /// enforcing gates by name — one booleanity per slot, one write-back per
-/// read-only query the family holds, then the four x0 gates. The column
+/// read-only query the family holds, the four x0 gates, and on a frame that
+/// holds the delegation mirror the tag column's default pin. The column
 /// addresses are the slot's, `M[1 + 5s + f]` and `W[s]`, with the x0 gadget's
 /// three witness columns after the family's `w` gap chunks.
 ///
 /// Fails if a family's frame kept the table's eight queries, if a query's
 /// columns were placed by its id rather than its slot, if a write-back gate
-/// were emitted for a query the family does not hold, or if the pads were
-/// dropped or misordered.
+/// were emitted for a query the family does not hold, if the tag column were
+/// dropped, given to a frame with no mirror, or placed anywhere but after the
+/// last query's five, or if the pads were dropped or misordered.
 #[test]
 fn the_frame_layout_is_the_documents() {
     for (id, queries, memory_columns, witness_columns, side, obligations, gates) in FRAME_SHAPES {
@@ -374,6 +415,13 @@ fn the_frame_layout_is_the_documents() {
             for f in ["mask", "addr", "read_ts", "read_value", "write_value"] {
                 columns.push(format!("{}_{f}", FRAME_NAMES[q]));
             }
+        }
+        // S22's tag column, on a frame that holds the delegation mirror and on
+        // no other: the requested type's anchor space, appended after every
+        // query's five so no existing `M` index moves
+        // (`docs/spec/ecrecover.md` §2.4).
+        if queries.contains(&DELEG) {
+            columns.push(String::from("deleg_space"));
         }
         assert_eq!(a.memory, columns, "family {id}");
         assert_eq!(a.memory.len(), memory_columns, "family {id}");
@@ -393,6 +441,11 @@ fn the_frame_layout_is_the_documents() {
                 assert_eq!(frame(at, field), expected, "family {id}, slot {at}");
             }
             assert_eq!(gap_hi(at), PolyAddress::Witness(at as u32), "family {id}");
+        }
+        if queries.contains(&DELEG) {
+            let tag = PolyAddress::Memory(1 + 5 * w as u32);
+            assert_eq!(deleg_space(w), tag, "family {id}");
+            assert_eq!(a.memory[1 + 5 * w], "deleg_space", "family {id}");
         }
         assert_eq!(rd_inv(w), PolyAddress::Witness(w as u32), "family {id}");
         assert_eq!(rd_is_zero(w), PolyAddress::Witness(w as u32 + 1), "{id}");
@@ -444,6 +497,15 @@ fn the_frame_layout_is_the_documents() {
             ]
             .map(String::from),
         );
+        // The mirror slot's tag column is held to 0 by the frame itself,
+        // because a bare frame declares no delegation type and a column that
+        // supplies a leaf's address space may not be free. A requesting
+        // family's own pin -- `add_sub`'s `deleg_space_rule`, a sum over its
+        // type selectors -- replaces this one rather than joining it
+        // (`docs/spec/ecrecover.md` §2.4).
+        if queries.contains(&DELEG) {
+            expected.push(String::from("deleg_space_unused"));
+        }
         assert_eq!(enforcing, expected, "family {id}");
         assert_eq!(enforcing.len(), gates, "family {id}");
     }
@@ -452,8 +514,11 @@ fn the_frame_layout_is_the_documents() {
 /// The widest frame's layout written out once, undeduced, as the document's
 /// §2.1 reads it: `ADD_SUB_LUI_AUIPC` holds every query but `load`, so `rd`
 /// sits at slot 6 and its mask is `M[31]`, not the `M[36]` a frame of all nine
-/// queries would give it, and S21's `deleg` follows at slot 7. Kills a layout
-/// that silently kept the table's width.
+/// queries would give it, and S21's `deleg` follows at slot 7. S22's tag
+/// column closes the list: `deleg_space` is `M[41]`, past the mirror's own
+/// five, so the frame is 42 memory columns and every index below it is the
+/// one S21 froze. Kills a layout that silently kept the table's width, and a
+/// tag column inserted anywhere but the end.
 #[test]
 fn the_widest_frame_is_eight_queries_with_rd_at_slot_six() {
     let a = family_frame_artifact(family::ADD_SUB_LUI_AUIPC, 12);
@@ -501,13 +566,16 @@ fn the_widest_frame_is_eight_queries_with_rd_at_slot_six() {
             "deleg_read_ts",
             "deleg_read_value",
             "deleg_write_value",
+            "deleg_space",
         ]
     );
-    assert_eq!(a.memory.len(), 41);
+    assert_eq!(a.memory.len(), 42);
     assert_eq!(frame(0, FIELD_MASK), PolyAddress::Memory(1));
     assert_eq!(frame(6, FIELD_MASK), PolyAddress::Memory(31));
     assert_eq!(frame(6, FIELD_WRITE_VALUE), PolyAddress::Memory(35));
     assert_eq!(frame(7, FIELD_MASK), PolyAddress::Memory(36));
+    assert_eq!(frame(7, FIELD_WRITE_VALUE), PolyAddress::Memory(40));
+    assert_eq!(deleg_space(8), PolyAddress::Memory(41));
     assert_eq!(
         a.witness,
         [
@@ -592,6 +660,14 @@ fn the_pad_leaves_are_the_constant_one_and_read_nothing() {
 /// it found one, so a frame that quietly became the identity would fail here
 /// rather than pass vacuously.
 ///
+/// The delegation mirror is the one query with no `AS_q` to write: its space
+/// is the row's `deleg_space` column, so `(AS_q, m)` is gone from the linear
+/// part and the product `(1, deleg_space, m)` heads the products instead
+/// (`docs/spec/ecrecover.md` §2.4). The shape is written out here too, at
+/// whichever slot each family gives it, and
+/// `the_delegation_mirrors_leaves_take_their_address_space_from_the_tag_column`
+/// is where the term itself is argued.
+///
 /// Kills a construction that reads `FRAME_SPACE[slot]` or `FRAME_DELTA[slot]`,
 /// or that addresses a column by the query's id.
 #[test]
@@ -605,35 +681,47 @@ fn a_query_at_a_slot_that_is_not_its_id_keeps_its_own_space_and_delta() {
         for (at, &q) in queries.iter().enumerate() {
             displaced += (at != q) as usize;
             let m = frame(at, FIELD_MASK);
-            let head = vec![
+            let mut head = vec![
                 (Coeff::Challenge(challenge_slot::MEM_GAMMA), m),
                 (Coeff::Literal(Fr::MINUS_ONE), m),
-                (lit(FRAME_SPACE[q] as u64), m),
             ];
+            // The address space, which the mirror alone takes from a column:
+            // its term's operand is not the mask, so it is a product and it
+            // leads both leaves' product lists.
+            let space: Vec<(Coeff, PolyAddress, PolyAddress)> = match q {
+                DELEG => vec![(lit(1), deleg_space(queries.len()), m)],
+                _ => {
+                    head.push((lit(FRAME_SPACE[q] as u64), m));
+                    vec![]
+                }
+            };
+            let mut read_products = space.clone();
+            read_products.extend([
+                (
+                    Coeff::Challenge(challenge_slot::MEM_ALPHA_ADDR),
+                    frame(at, FIELD_ADDR),
+                    m,
+                ),
+                (alpha_ts, frame(at, FIELD_READ_TS), m),
+                (
+                    Coeff::Challenge(challenge_slot::MEM_ALPHA_VAL),
+                    frame(at, FIELD_READ_VALUE),
+                    m,
+                ),
+            ]);
             let read = GateDef::Quadratic {
                 constant: lit(1),
                 linear: head.clone(),
-                products: vec![
-                    (
-                        Coeff::Challenge(challenge_slot::MEM_ALPHA_ADDR),
-                        frame(at, FIELD_ADDR),
-                        m,
-                    ),
-                    (alpha_ts, frame(at, FIELD_READ_TS), m),
-                    (
-                        Coeff::Challenge(challenge_slot::MEM_ALPHA_VAL),
-                        frame(at, FIELD_READ_VALUE),
-                        m,
-                    ),
-                ],
+                products: read_products,
             };
             let mut linear = head;
             linear.extend(vec![(alpha_ts, m); FRAME_DELTA[q] as usize]);
-            let mut products = vec![(
+            let mut products = space;
+            products.push((
                 Coeff::Challenge(challenge_slot::MEM_ALPHA_ADDR),
                 frame(at, FIELD_ADDR),
                 m,
-            )];
+            ));
             products.extend(vec![(alpha_ts, CYCLE, m); memory::TS_STEP as usize]);
             products.push((
                 Coeff::Challenge(challenge_slot::MEM_ALPHA_VAL),
@@ -662,6 +750,183 @@ fn a_query_at_a_slot_that_is_not_its_id_keeps_its_own_space_and_delta() {
         displaced > 0,
         "no family displaces a query from its id, so the distinction is untested"
     );
+}
+
+/// S22's tag column, on the one frame that holds the delegation mirror. A
+/// requesting family serves **every** delegation type from its one `deleg`
+/// slot, so the mirror's address space cannot be a literal of the query table:
+/// the row carries the requested type's anchor tag in `deleg_space`, the
+/// frame's last memory column, and the leaf's `AS` term is the product
+/// `(1, deleg_space, m)` rather than `(tag, m)`
+/// (`docs/spec/ecrecover.md` §2.4). Both leaves are written out whole, so the
+/// coefficient, the column and the term's position at the head of the products
+/// are each pinned, and `rd` at the slot before is written out beside them as
+/// the literal-space shape the mirror is not.
+///
+/// The negative is asserted directly and not left to the two equalities: no
+/// literal of any byte weights the mirror's mask, so no tag of any delegation
+/// family can be hiding in either leaf, whatever the tags grow to.
+///
+/// Kills a regression to a hardcoded tag — which would answer an ecrecover
+/// request with keccak's anchor space, so that a request could pair with an
+/// invocation of the wrong type — and a tag column that reached the leaf as
+/// anything but a product on the mask, which `check_memory` would then have to
+/// refuse as a leaf cone reading a `W` column.
+#[test]
+fn the_delegation_mirrors_leaves_take_their_address_space_from_the_tag_column() {
+    let queries = frame_queries(family::ADD_SUB_LUI_AUIPC);
+    let (w, at) = (queries.len(), 7);
+    assert_eq!((queries[at], queries[6]), (DELEG, RD));
+    let a = family_frame_artifact(family::ADD_SUB_LUI_AUIPC, 12);
+    let tag = deleg_space(w);
+    assert_eq!(tag, PolyAddress::Memory(1 + 5 * w as u32));
+    assert_eq!(a.memory[1 + 5 * w], "deleg_space");
+    assert_eq!(a.memory.len(), 2 + 5 * w);
+
+    let lit = |v: u64| Coeff::Literal(Fr::from_u64(v));
+    let alpha_ts = Coeff::Challenge(challenge_slot::MEM_ALPHA_TS);
+    let alpha_addr = Coeff::Challenge(challenge_slot::MEM_ALPHA_ADDR);
+    let alpha_val = Coeff::Challenge(challenge_slot::MEM_ALPHA_VAL);
+    let m = frame(at, FIELD_MASK);
+    let head = vec![
+        (Coeff::Challenge(challenge_slot::MEM_GAMMA), m),
+        (Coeff::Literal(Fr::MINUS_ONE), m),
+    ];
+    let read = GateDef::Quadratic {
+        constant: lit(1),
+        linear: head.clone(),
+        products: vec![
+            (lit(1), tag, m),
+            (alpha_addr, frame(at, FIELD_ADDR), m),
+            (alpha_ts, frame(at, FIELD_READ_TS), m),
+            (alpha_val, frame(at, FIELD_READ_VALUE), m),
+        ],
+    };
+    let mut linear = head;
+    linear.extend(vec![(alpha_ts, m); FRAME_DELTA[DELEG] as usize]);
+    let mut products = vec![(lit(1), tag, m), (alpha_addr, frame(at, FIELD_ADDR), m)];
+    products.extend(vec![(alpha_ts, CYCLE, m); memory::TS_STEP as usize]);
+    products.push((alpha_val, frame(at, FIELD_WRITE_VALUE), m));
+    let write = GateDef::Quadratic {
+        constant: lit(1),
+        linear,
+        products,
+    };
+    let side = w.next_power_of_two();
+    assert_eq!(a.layers[0].producing[at].gate, read, "read_deleg");
+    assert_eq!(a.layers[0].producing[side + at].gate, write, "write_deleg");
+
+    // No literal weights the mirror's mask, at any value a tag could take.
+    for (name, gate) in [("read_deleg", &read), ("write_deleg", &write)] {
+        let GateDef::Quadratic { linear, .. } = gate else {
+            panic!("a leaf is a Quadratic");
+        };
+        for byte in 0..=u8::MAX {
+            assert!(
+                !linear.contains(&(lit(byte as u64), m)),
+                "{name} weights its mask by the literal {byte}"
+            );
+        }
+    }
+    // `rd`, at the slot before, is the shape the mirror departs from: its
+    // space is REG and REG is a literal on its mask.
+    let GateDef::Quadratic { linear, .. } = &a.layers[0].producing[6].gate else {
+        panic!("a leaf is a Quadratic");
+    };
+    assert!(linear.contains(&(lit(FRAME_SPACE[RD] as u64), frame(6, FIELD_MASK))));
+}
+
+/// The routing rule, §2.4: `frame_matches` is the one authority for whether a
+/// logged event belongs to a frame slot, and the mirror is the one slot that
+/// is not an exact `(FRAME_SPACE, FRAME_DELTA)` pair. It takes **any**
+/// delegation anchor space at its Δ 3 — the type being the row's
+/// `deleg_space`, not the slot's — and nothing else: not
+/// `DELEGATION_ECRECOVER_SCRATCH`, which is a bus rather than an anchor and
+/// which no frame slot answers, not `RAM`, which shares Δ 3 and is the near
+/// miss, and no anchor at any other Δ. Every other query is held to its exact
+/// pair over the whole tag space, and `is_delegation_anchor` over all 256.
+///
+/// Kills a router that kept S21's keccak literal — which would `continue` past
+/// every ecrecover anchor event and fill the slot with zeros, so the honest
+/// prover's frame would not balance — one that widened far enough to swallow
+/// the scratch bus, and one that stopped reading Δ.
+#[test]
+fn the_mirror_slot_routes_every_delegation_anchor_and_never_the_scratch_bus() {
+    let anchors = [
+        address_space::DELEGATION_KECCAK_F,
+        address_space::DELEGATION_ECRECOVER,
+    ];
+    for tag in 0..=u8::MAX {
+        assert_eq!(
+            is_delegation_anchor(tag),
+            anchors.contains(&tag),
+            "tag {tag}"
+        );
+    }
+    assert!(!is_delegation_anchor(
+        address_space::DELEGATION_ECRECOVER_SCRATCH
+    ));
+    assert!(!is_delegation_anchor(DELEGATION_ANY));
+
+    for delta in 0..memory::TS_STEP {
+        for tag in 0..=u8::MAX {
+            let mirrored = is_delegation_anchor(tag) && delta == FRAME_DELTA[DELEG];
+            assert_eq!(
+                frame_matches(DELEG, tag, delta),
+                mirrored,
+                "the mirror on tag {tag} at Δ {delta}"
+            );
+        }
+    }
+    // The cases §2.4 names, written out beside the sweep: both anchors are the
+    // mirror's at its own Δ; the scratch bus is no slot's; `RAM` shares the Δ
+    // and is the near miss; and an anchor one slot early is nobody's either.
+    let mirror = FRAME_DELTA[DELEG];
+    for (tag, delta, matches) in [
+        (address_space::DELEGATION_KECCAK_F, mirror, true),
+        (address_space::DELEGATION_ECRECOVER, mirror, true),
+        (address_space::DELEGATION_ECRECOVER_SCRATCH, mirror, false),
+        (address_space::RAM, mirror, false),
+        (address_space::DELEGATION_KECCAK_F, mirror - 1, false),
+        (address_space::DELEGATION_ECRECOVER, 0, false),
+    ] {
+        assert_eq!(
+            frame_matches(DELEG, tag, delta),
+            matches,
+            "the mirror on tag {tag} at Δ {delta}"
+        );
+    }
+
+    // Every other query is its pair and nothing else, so an anchor event
+    // reaches none of them — `ram` and `rd`, which sit at the mirror's Δ,
+    // included.
+    for query in 0..FRAME_QUERIES {
+        if query == DELEG {
+            continue;
+        }
+        for delta in 0..memory::TS_STEP {
+            for tag in 0..=u8::MAX {
+                assert_eq!(
+                    frame_matches(query, tag, delta),
+                    tag == FRAME_SPACE[query] && delta == FRAME_DELTA[query],
+                    "{} on tag {tag} at Δ {delta}",
+                    FRAME_NAMES[query]
+                );
+            }
+        }
+    }
+}
+
+/// The mirror has no frame-free read tuple. `read_tuple` spells a query's
+/// tuple as a frame holding every query would address it, which the verifier's
+/// boundary evaluates for the pc and `rs1` and for nothing else
+/// (`gkr_verify::boundary_factors`); the mirror's address space is a column of
+/// the frame it sits in, so there is no such spelling and asking for one is
+/// refused rather than answered with a hardcoded tag.
+#[test]
+#[should_panic(expected = "the delegation mirror's address space is a column, not a literal")]
+fn the_delegation_mirror_has_no_frame_free_read_tuple() {
+    read_tuple(DELEG);
 }
 
 /// §2.4 per family: two obligations per *slot* in slot order, `gap_hi_<q>`
@@ -851,10 +1116,12 @@ fn read_set(a: &CircuitArtifact) -> Vec<PolyAddress> {
 
 /// §8's pinned read sets: `ZERO_WINDOWS` reads exactly `M[0]`, `M[1]`,
 /// `V[row]`; `INIT_TEARDOWN` those and `S[0]`, `V[ram_live]`; a family's frame
-/// reads exactly its own `1 + 5w` memory columns and `w + 3` witness columns
-/// — every column it commits and nothing else, no `S` and no `V`. A frame that
-/// kept a column it never reads would fail here, as would one reading past its
-/// own width into the addresses a wider family's frame uses.
+/// reads exactly its own `1 + 5w` memory columns — and `M[1 + 5w]` besides,
+/// where it holds the delegation mirror, whose two leaves take their address
+/// space from that tag column — and `w + 3` witness columns, every column it
+/// commits and nothing else, no `S` and no `V`. A frame that kept a column it
+/// never reads would fail here, as would one reading past its own width into
+/// the addresses a wider family's frame uses.
 #[test]
 fn the_read_sets_are_pinned() {
     let (m0, m1, s0) = (
@@ -876,8 +1143,11 @@ fn the_read_sets_are_pinned() {
             "{trace_vars}"
         );
         for &id in &EXECUTION_FAMILIES {
-            let w = frame_queries(id).len() as u32;
-            let mut expected: Vec<PolyAddress> = (0..1 + 5 * w).map(PolyAddress::Memory).collect();
+            let queries = frame_queries(id);
+            let w = queries.len() as u32;
+            let tag = u32::from(queries.contains(&DELEG));
+            let mut expected: Vec<PolyAddress> =
+                (0..1 + 5 * w + tag).map(PolyAddress::Memory).collect();
             expected.extend((0..w + 3).map(PolyAddress::Witness));
             assert_eq!(
                 read_set(&family_frame_artifact(id, trace_vars)),

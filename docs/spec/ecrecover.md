@@ -162,10 +162,10 @@ count by `2^20 / 4096` rather than by `2^20`, the fill writes 4,096 rows per
 invocation, and the frame and anchor sit on designated **steps** of the block
 rather than on its one row.
 
-A row's **step** is its index within the block, `row mod 2048`. The schedule is
+A row's **step** is its index within the block, `row mod 4096`. The schedule is
 a function of the step alone and is the same for every invocation, so every
 per-step constant — which congruence to run, which frame word to touch, which
-window digit to select — is a **schedule column**, periodic with period 2,048.
+window digit to select — is a **schedule column**, periodic with period 4,096.
 §6.2 says what a schedule column is and what binds it.
 
 `ROWS_PER_INVOCATION` is **by measurement, not by decree** (owner's decision,
@@ -257,15 +257,32 @@ carrying the tag, and one enforcing gate — which *may* read `W`, being no
 leaf — pins it:
 
 ```text
-deleg_space_rule    m_deleg · (deleg_space − Σ_t tag_t · is_t) = 0
+deleg_space_rule    deleg_space − Σ_t tag_t · is_t = 0
 ```
 
+**Unmasked, and degree 1.** Writing it under `m_deleg` would make it vacuous on
+every row that requests nothing, and would cost a degree it does not need: the
+mask is itself `Σ_t is_t`, so on a row with no type every selector is 0 and the
+gate already reads `deleg_space = 0`. The stronger form is also the cheaper one.
+
 The mirror leaf's `AS` part becomes the product `(1, deleg_space, m_deleg)`
-rather than the literal `(tag, m_deleg)`. `ADD_SUB_LUI_AUIPC`'s memory subtree
-goes from `1 + 5w` to `2 + 5w` columns and every `M` index below `deleg_space`
-moves; `docs/spec/constraint-manifest.md` §3 is rewritten from the new
-artifact. Nothing else about the anchor changes, and keccak's own circuit does
-not change at all.
+rather than the literal `(tag, m_deleg)`, and it needs no new gate shape: the
+unmasked tuple's term is `(1, deleg_space)`, and because its operand is not the
+mask, `leaf` promotes it to a product on its own.
+
+The column is **appended**, at `M[1 + 5w]`, so `ADD_SUB_LUI_AUIPC`'s memory
+subtree goes from `1 + 5w` to `1 + 5w + 1` columns and **no existing `M` index
+moves**. The artifact's bytes move either way and
+`docs/spec/constraint-manifest.md` §3 is rewritten from the new one; what
+appending buys is that every column address already written down stays where it
+was. Nothing else about the anchor changes, and keccak's own circuit does not
+change at all.
+
+`check_memory` refuses a frame that commits this column without pinning it, for
+the reason it refuses an unbooleaned leaf mask: the column supplies a leaf's
+address space, so a free one lets a prover choose it — `0` included, which is
+the value `docs/spec/memory.md` reserves so that no real memory tuple is all
+zeros.
 
 ---
 
@@ -584,12 +601,21 @@ A coarser row is cheaper *per signature* and the handoff records the
 measurement; what pins the choice is the height, and the height is the stage
 prompt's.
 
+**The table's row counts were derived before the program was written**, from an
+estimate of about 1,180 congruences, and the estimate was low. The step program
+is 3,779 steps, so the measurement replaced the `≤ 127` row's 2,048 with
+**4,096** and `ROWS_PER_INVOCATION` with it (§2.2). What the table argues is
+unaffected, because that argument is about `F` doubling and not about the row
+count. The forward-pass figures in the last column are estimates from the same
+tree cost model and are still owed a run on the measurement host.
+
 ### 6.2 The step schedule, and what binds it
 
-The schedule is a table of 2,048 steps, each naming a congruence shape, its
-operands' bus addresses and its result's, and it is the same for every
-invocation. A row's behaviour must be a function of its step and of **nothing a
-prover chooses**: if a prover could pick which operands a step reads, the bus
+The schedule is a table of `ROWS_PER_INVOCATION` = 4,096 steps — 3,779 of them
+live and the remaining 317 idle — each naming a congruence shape, its operands'
+bus addresses and its result's, and it is the same for every invocation. A
+row's behaviour must be a function of its step and of **nothing a prover
+chooses**: if a prover could pick which operands a step reads, the bus
 would carry a dataflow of their choosing and the multiset would still balance,
 because a multiset pairs a read with a write and says nothing about which write
 it should have been.
@@ -600,7 +626,7 @@ closed-form multilinear extension over the low `log2(ROWS_PER_INVOCATION)`
 variables, evaluated by both halves of the engine from the same source:
 
 ```
-V[sched_k](y) = Σ_{i < 2048} eq(y_0..y_10, i) · c_k[i]
+V[sched_k](y) = Σ_{i < 4096} eq(y_0..y_11, i) · c_k[i]
 ```
 
 Three routes were weighed, and they differ in what a verifier must trust:

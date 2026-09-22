@@ -1,11 +1,16 @@
 # S22 — secp256k1 ecrecover delegation family
 
-Branch `s22-ecrecover`. **Status: Session A complete and verified; Session B not
-started.** The stage prompt runs S22 as two ordered build sessions. Delivered and green:
-the design authority, the ABI, the semantics, the executor, the shim with both of its
-paths, the corpus and the fixtures; the **non-native gadget library**, exhaustive at
-reduced width; and the **step program**, interpreted over `program::secp256k1` and held
-to the committed corpus. Not delivered: the circuit family, its fill, the request-side
+Branch `s22-ecrecover`. **Status: Session A's deliverables are in and green, Session A's
+acceptance is not complete, and Session B has not started.** The stage prompt runs S22 as
+two ordered build sessions and begins Session B only after Session A's acceptance
+sub-list passes. Delivered and green: the design authority, the ABI, the semantics, the
+executor, the shim with both of its paths, the corpus and the fixtures; the **non-native
+gadget library**, exhaustive at reduced width; and the **step program**, interpreted over
+`program::secp256k1` and held to the committed corpus. **Outstanding on Session A:
+acceptance 2** — three in-circuit point-arithmetic cases, an accumulator step with
+`P == Q`, an identity intermediate and an equal-x-different-y add, one of them carrying a
+tamper twin — which has no test anywhere in the tree, because the sub-circuit it would
+run on does not exist. Also not delivered: the circuit family, its fill, the request-side
 tag column, the tamper twins and the end-to-end proof. §7 is the acceptance list item by
 item, §8 is Session A and what it measured, and §8.4 is Session B in order.
 
@@ -46,8 +51,9 @@ holds it. Two independent derivations put a one-row-per-invocation circuit at:
 | `lookup::check_discharge`, which runs inside `VerifyingKey::check` | ~1.3 × 10¹¹ normalizations **on bytes a verifier was handed** |
 
 against `KECCAK_F`'s 3,764 columns, 100 MB and 11.9 MB. The owner's answer: **many rows
-an invocation**, `ROWS_PER_INVOCATION = 2048`, aligned, which at `2^20` is 512 recoveries
-a shard.
+an invocation**, aligned. The number is `ROWS_PER_INVOCATION = 4096`, which at `2^20` is
+256 recoveries a shard; it was pinned at 2,048 from an estimate of the congruence count,
+and the step program corrected it (§8.3).
 
 ### 1.2 The cross-row carry rides the global memory multiset
 
@@ -108,7 +114,7 @@ mod secp256k1 { LIMBS = 4, LIMB_BITS = 64, CHUNKS_PER_LIMB = 4, WINDOW_BITS = 4,
                 P, N, P_PLUS_1_OVER_4, G_X, G_Y, G_MULTIPLES }
 mod ecrecover { VALUE_WORDS = 8, OFF_HASH/V/R/S/PUBKEY_X/PUBKEY_Y/SUCCESS,
                 FRAME_WORDS = 42, V_MIN = 27, V_MAX = 28,
-                ROWS_PER_INVOCATION = 2048 }
+                ROWS_PER_INVOCATION = 4096 }
 ```
 
 Every limb table was **computed, not transcribed**, and
@@ -151,11 +157,11 @@ multiplications apiece is not affordable.
 
 `crates/program/tests/vectors/ecrecover.txt`, written by
 `cargo run -p kat-gen -- ecrecover` from **`libsecp256k1`** (the recovery) and
-**`tiny-keccak`** (the address). 25 lines, 9 fields each. The signatures are built locally
-and the oracle answers the *recovery*, which is the thing under test; the cross-check is
-as strong either way, because the recovered key is compared with the oracle's own
-`PublicKey::from_secret_key`, so a wrong scalar multiplication makes a signature that
-recovers to the wrong key.
+**`tiny-keccak`** (the address). 27 data lines of 9 fields each, under six comment lines.
+The signatures are built locally and the oracle answers the *recovery*, which is the
+thing under test; the cross-check is as strong either way, because the recovered key is
+compared with the oracle's own `PublicKey::from_secret_key`, so a wrong scalar
+multiplication makes a signature that recovers to the wrong key.
 
 `libsecp256k1` is taken with `default-features = false, features = ["static-context"]`,
 which keeps `std`, `hmac` and `sha2` out of the graph. **Checked for the
@@ -254,7 +260,7 @@ the price is this paragraph.
 | `docs/spec/ecrecover.md` | the design authority, eight sections |
 | `crates/program/src/secp256k1.rs` | the native reference, ~600 lines |
 | `crates/program/tests/secp256k1.rs` | 11 tests: the oracle differential, the exhaustive division, the corpus |
-| `crates/program/tests/vectors/ecrecover.txt` | the 25-line corpus, from two outside oracles |
+| `crates/program/tests/vectors/ecrecover.txt` | the 27-line corpus, from two outside oracles |
 | `tools/kat-gen/src/ecrecover.rs` | the `ecrecover` group |
 | `crates/guest-sdk/src/lib.rs` | the shim, the fallback, the record |
 | `crates/emulator/tests/ecrecover.rs` | 5 tests: the frame transform, the guests' vectors, both guests run |
@@ -272,7 +278,7 @@ On macOS (18 cores), every gate the root `CLAUDE.md` lists above the line:
 | `cargo fmt --all -- --check`, all four workspaces | clean |
 | `cargo clippy --workspace --all-targets -- -D warnings` | clean |
 | `cargo clippy` for `transcript-ref`, `guest-sdk` (riscv32imac), `guests`, `prover --features metrics` | clean |
-| `cargo test --workspace` | **1,018 passed, 0 failed, 71 ignored** (1,001 / 70 at S21) |
+| `cargo test --workspace` | **1,032 passed, 0 failed, 71 ignored** (1,001 / 70 at S21) |
 | `cargo test -p prover --features metrics --test metrics` | 10 passed, 2 ignored |
 | the `riscv32imac` build of the eight `no_std` crates | green |
 | `cargo run -p kat-gen`, then the fixture diff | **clean** |
@@ -293,7 +299,7 @@ an argument and not a run.
 
 | # | item | status |
 | --- | --- | --- |
-| 1 | gadget differential, and exhaustive at reduced limb width | **partial**. The *native* layer is differenced against `num-bigint` on randomized vectors and its 512-by-256 division is checked **exhaustively at reduced width** — 128 normalized divisors × 65,536 dividends, every branch of Knuth's estimate. The *circuit* gadget is not built, so it is not differenced. |
+| 1 | gadget differential, and exhaustive at reduced limb width | **partial**. The *native* layer is differenced against `num-bigint` on randomized vectors and its 512-by-256 division is checked **exhaustively at reduced width** — 128 normalized divisors × 65,536 dividends, every branch of Knuth's estimate. The *circuit* gadget is built — `constraints::nonnative`, width-parameterized, exhausted at four limbs of one bit over every input, quotient and result (§8.1) — but the family circuit that consumes it is not, so it has no committed vectors to be differenced on. |
 | 2 | point-arithmetic edge cases in-circuit, with a tamper twin | **not done** — needs the circuit. The five cases and their exact selectors are specified in `ecrecover.md` §5.3, and the native `point_add` carries the same five. |
 
 **Session B**
@@ -305,7 +311,7 @@ an argument and not a run.
 | 5 | failure-path proof | **partial**: `guests/ecrecover-fail` exists, runs on the emulator and exits 5; it is not proven. |
 | 6–8 | the three tamper twins | **not done** |
 | 9 | checker validators, artifact regenerate-and-diff, degree-2, padding | **not done** — no artifact yet. The regenerate-and-diff gate is green for everything that does exist. |
-| 10 | measured rows per invocation and wall-clock | **budgeted, not measured**: 2,048 rows an invocation and ~28 GB a shard are derived in `ecrecover.md` §6.1 from the tree cost model, not from a run. |
+| 10 | measured rows per invocation and wall-clock | **partial**. Rows per invocation is **measured**: `constraints::ecrecover::schedule` is 3,779 steps, which pins `ROWS_PER_INVOCATION` at 4,096, and `crates/constraints/tests/schedule.rs` holds that count and the three shapes it beat (§8.3). Wall-clock is not — nothing has been proved — and the ~28 GB a shard in `ecrecover.md` §6.1 is still the tree cost model rather than a run. |
 
 **Must-be-exact**
 

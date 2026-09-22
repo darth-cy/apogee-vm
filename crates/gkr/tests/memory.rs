@@ -83,27 +83,37 @@ fn column(slot: usize, field: usize) -> usize {
     1 + 5 * slot + field
 }
 
-/// `W[s]`, the gap's high chunk of the query at slot `s`, in a frame of width
-/// `w`: the witness columns follow the `1 + 5w` memory ones.
-fn gap_hi(width: usize, slot: usize) -> usize {
-    1 + 5 * width + slot
+/// `M[1 + 5w]`, the delegation mirror's tag column, on the one frame that
+/// holds `deleg` — appended after the per-query fields and before the witness
+/// subtree (`docs/spec/ecrecover.md` §2.4). A frame without the mirror has no
+/// such column, so every helper below offsets by `tag(queries)` rather than by
+/// a constant.
+fn tag(queries: &[usize]) -> usize {
+    usize::from(queries.contains(&DELEG))
+}
+
+/// `W[s]`, the gap's high chunk of the query at slot `s`: the witness columns
+/// follow the memory ones, the tag column included.
+fn gap_hi(queries: &[usize], slot: usize) -> usize {
+    1 + 5 * queries.len() + tag(queries) + slot
 }
 
 /// `W[w]`, `W[w + 1]`, `W[w + 2]`: the x0 gadget's three witnesses, after the
 /// `w` gap columns.
-fn rd_inv(width: usize) -> usize {
-    1 + 6 * width
+fn rd_inv(queries: &[usize]) -> usize {
+    1 + 6 * queries.len() + tag(queries)
 }
-fn rd_is_zero(width: usize) -> usize {
-    1 + 6 * width + 1
+fn rd_is_zero(queries: &[usize]) -> usize {
+    rd_inv(queries) + 1
 }
-fn rd_selected(width: usize) -> usize {
-    1 + 6 * width + 2
+fn rd_selected(queries: &[usize]) -> usize {
+    rd_inv(queries) + 2
 }
 
-/// A frame's committed columns: `1 + 5w` memory and `w + 3` witness.
-fn committed(width: usize) -> usize {
-    1 + 5 * width + width + 3
+/// A frame's committed columns: `1 + 5w` memory, one more where the mirror's
+/// tag column is, and `w + 3` witness.
+fn committed(queries: &[usize]) -> usize {
+    1 + 5 * queries.len() + tag(queries) + queries.len() + 3
 }
 
 /// A pseudo-random field element below `2^252`.
@@ -131,8 +141,8 @@ fn random_memory(rng: &mut Rng) -> ([Fr; 4], ExternalChallenges) {
 }
 
 /// `T(AS, ADDR, TS, VAL) = γ_M + AS + α_addr·ADDR + α_ts·TS + α_val·VAL`.
-fn t(c: &[Fr; 4], space: u64, addr: Fr, ts: Fr, value: Fr) -> Fr {
-    c[0] + int(space) + c[1] * addr + c[2] * ts + c[3] * value
+fn t(c: &[Fr; 4], space: Fr, addr: Fr, ts: Fr, value: Fr) -> Fr {
+    c[0] + space + c[1] * addr + c[2] * ts + c[3] * value
 }
 
 /// Every frame leaf of every execution family is exactly 1 at `m = 0`, whatever
@@ -149,7 +159,11 @@ fn t(c: &[Fr; 4], space: u64, addr: Fr, ts: Fr, value: Fr) -> Fr {
 /// mutant the per-family frames add — a leaf taking its AS or Δ from its slot
 /// instead of its query id, which differs at `ATOMICS`' slot 3 (`ram`, AS 2,
 /// Δ 3, against `arg1`'s AS 1, Δ 2) and at `ADD_SUB_LUI_AUIPC`'s slots 5, 6 and
-/// 7 — the last of them `deleg`, AS 4 against slot 7's `rd` AS 1.
+/// 7 — the last of them `deleg`, whose AS is not a literal at all but the row's
+/// own `deleg_space` column, against slot 7's `rd` AS 1
+/// (`docs/spec/ecrecover.md` §2.4). Sweeping it with a **random** tag column is
+/// what kills a leaf that went back to a hardcoded tag: a literal would have to
+/// equal a random field element to pass.
 /// Each family's query list is the test's own; `frame_artifact` over it is
 /// asserted equal to `family_frame_artifact`, so a changed `frame_queries` fails
 /// here rather than quietly moving what is swept.
@@ -171,7 +185,7 @@ fn frame_leaves_are_one_when_masked_and_the_tuple_when_live() {
         }
         for live in patterns {
             let (c, slots) = random_memory(&mut rng);
-            let mut row: Vec<Fr> = (0..committed(width)).map(|_| fr(&mut rng)).collect();
+            let mut row: Vec<Fr> = (0..committed(queries)).map(|_| fr(&mut rng)).collect();
             for (s, &m) in live.iter().enumerate() {
                 row[column(s, 0)] = if m { Fr::ONE } else { Fr::ZERO };
             }
@@ -181,10 +195,17 @@ fn frame_leaves_are_one_when_masked_and_the_tuple_when_live() {
                 let (addr, read_ts) = (row[column(s, 1)], row[column(s, 2)]);
                 let (read_value, write_value) = (row[column(s, 3)], row[column(s, 4)]);
                 let write_ts = int(4) * cycle + int(DELTA[q]);
+                // The mirror's address space is the row's tag column, every
+                // other query's a literal from the global table.
+                let space = if q == DELEG {
+                    row[1 + 5 * width]
+                } else {
+                    int(SPACE[q])
+                };
                 let (read, write) = if live[s] {
                     (
-                        t(&c, SPACE[q], addr, read_ts, read_value),
-                        t(&c, SPACE[q], addr, write_ts, write_value),
+                        t(&c, space, addr, read_ts, read_value),
+                        t(&c, space, addr, write_ts, write_value),
                     )
                 } else {
                     (Fr::ONE, Fr::ONE)
@@ -245,8 +266,8 @@ fn window_leaves_are_the_tuples_of_their_rows() {
             } else {
                 let addr = int(4 * y as u64);
                 vec![
-                    t(&c, RAM_SPACE, addr, ts, value),
-                    t(&c, RAM_SPACE, addr, Fr::ZERO, init),
+                    t(&c, int(RAM_SPACE), addr, ts, value),
+                    t(&c, int(RAM_SPACE), addr, Fr::ZERO, init),
                 ]
             };
             assert_eq!(values, expected, "trial {trial}, image window row {y}");
@@ -261,8 +282,8 @@ fn window_leaves_are_the_tuples_of_their_rows() {
             );
             let addr = int(4 * h * window as u64 + 4 * y as u64);
             let expected = vec![
-                t(&c, RAM_SPACE, addr, ts, value),
-                t(&c, RAM_SPACE, addr, Fr::ZERO, Fr::ZERO),
+                t(&c, int(RAM_SPACE), addr, ts, value),
+                t(&c, int(RAM_SPACE), addr, Fr::ZERO, Fr::ZERO),
             ];
             assert_eq!(values, expected, "trial {trial}, window {window} row {y}");
         }
@@ -335,14 +356,14 @@ fn the_boundary_factors_are_the_documents_products() {
         }
         let entry_pc = rng.next_u64() as u32 & !1;
 
-        let mut w_b = t(&c, 3, Fr::ZERO, Fr::ZERO, int(entry_pc as u64));
-        let mut r_b = t(&c, 3, Fr::ZERO, int(finals.pc_ts), Fr::ONE);
-        w_b *= t(&c, 1, Fr::ZERO, Fr::ZERO, Fr::ZERO);
-        r_b *= t(&c, 1, Fr::ZERO, int(finals.reg_ts[0]), Fr::ZERO);
+        let mut w_b = t(&c, int(3), Fr::ZERO, Fr::ZERO, int(entry_pc as u64));
+        let mut r_b = t(&c, int(3), Fr::ZERO, int(finals.pc_ts), Fr::ONE);
+        w_b *= t(&c, int(1), Fr::ZERO, Fr::ZERO, Fr::ZERO);
+        r_b *= t(&c, int(1), Fr::ZERO, int(finals.reg_ts[0]), Fr::ZERO);
         for r in 1..32 {
-            w_b *= t(&c, 1, int(r as u64), Fr::ZERO, Fr::ZERO);
+            w_b *= t(&c, int(1), int(r as u64), Fr::ZERO, Fr::ZERO);
             let value = int(finals.reg_values[r - 1] as u64);
-            r_b *= t(&c, 1, int(r as u64), int(finals.reg_ts[r]), value);
+            r_b *= t(&c, int(1), int(r as u64), int(finals.reg_ts[r]), value);
         }
         let (w, r) = boundary_factors(&slots, entry_pc, &finals);
         assert_eq!((w, r), (w_b, r_b), "trial {trial}");
@@ -444,9 +465,8 @@ fn window_artifacts_prove_and_verify() {
 /// the requesting family's own circuit, not its frame
 /// (`docs/spec/delegation.md` §5.2).
 fn frame_columns(queries: &[usize], rng: &mut Rng) -> Vec<Vec<Fr>> {
-    let width = queries.len();
-    let n = committed(width);
-    let (inv, is_zero, selected) = (rd_inv(width), rd_is_zero(width), rd_selected(width));
+    let n = committed(queries);
+    let (inv, is_zero, selected) = (rd_inv(queries), rd_is_zero(queries), rd_selected(queries));
     let mut cols: Vec<Vec<Fr>> = vec![Vec::new(); n];
     for y in 0..16 {
         let mut row = vec![Fr::ZERO; n];
@@ -459,7 +479,7 @@ fn frame_columns(queries: &[usize], rng: &mut Rng) -> Vec<Vec<Fr>> {
             let read_value = int(rng.next_u64() >> 32);
             row[column(s, 2)] = int(rng.next_u64() >> 26);
             row[column(s, 3)] = read_value;
-            row[gap_hi(width, s)] = int(rng.next_u64() >> 45);
+            row[gap_hi(queries, s)] = int(rng.next_u64() >> 45);
             let (addr, write_value) = if READ_ONLY.contains(&q) {
                 (int(rng.next_u64() >> 59), read_value)
             } else if q == RD {

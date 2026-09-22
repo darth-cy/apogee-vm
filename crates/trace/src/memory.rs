@@ -9,8 +9,9 @@
 use constants::lookup_channel;
 use constants::memory::{HALT_PC, RAM_LIVE_BIT, TS_STEP};
 use constraints::memory::{
-    frame, gap_hi, rd_inv, rd_is_zero, rd_selected, CYCLE, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS,
-    FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA, FRAME_QUERIES, FRAME_SPACE, RD,
+    deleg_space, frame, frame_matches, gap_hi, rd_inv, rd_is_zero, rd_selected, CYCLE, DELEG,
+    FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA,
+    FRAME_QUERIES, RD,
 };
 use constraints::PolyAddress;
 use field::Fr;
@@ -84,14 +85,22 @@ fn frame_rows(
         let Some(&Some(i)) = row_of.get(event.cycle() as usize) else {
             continue;
         };
-        // An event whose `(space, Δ)` pair no query of the table has belongs
-        // to no cycle's row: it is a **delegation invocation's** frame access,
-        // which rides the requesting cycle's timestamp at
+        // An event that matches no query of the table belongs to no cycle's
+        // row: it is a **delegation invocation's** frame access, which rides
+        // the requesting cycle's timestamp at
         // `constants::delegation::FRAME_DELTA` and is that family's row, not
         // this one's (`docs/spec/delegation.md` §4.1). The panic below is
-        // unchanged for every pair the table *does* have.
-        let in_table = (0..FRAME_QUERIES)
-            .any(|q| FRAME_SPACE[q] == event.space.tag() && FRAME_DELTA[q] == event.delta());
+        // unchanged for every event the table *does* match.
+        //
+        // `frame_matches` and not a comparison against `FRAME_SPACE`: the
+        // delegation mirror takes any anchor space, its type being carried by
+        // the row's `deleg_space` column rather than by the slot. Comparing
+        // against the literal that used to sit there skipped every anchor
+        // event of the second delegation family, which is a `continue` and
+        // not a panic — the add/sub row's mirror slot then filled with zeros
+        // and the global multiset went unbalanced with no diagnostic.
+        let in_table =
+            (0..FRAME_QUERIES).any(|q| frame_matches(q, event.space.tag(), event.delta()));
         if !in_table {
             continue;
         }
@@ -99,9 +108,7 @@ fn frame_rows(
         let at = (0..queries.len())
             .find(|&at| {
                 let q = queries[at];
-                row[at].is_none()
-                    && FRAME_SPACE[q] == event.space.tag()
-                    && FRAME_DELTA[q] == event.delta()
+                row[at].is_none() && frame_matches(q, event.space.tag(), event.delta())
             })
             .unwrap_or_else(|| {
                 panic!(
@@ -160,6 +167,18 @@ pub fn build_memory_columns(
             frame(at, FIELD_WRITE_VALUE),
             field(|e| e.write_value as u64),
         ));
+    }
+    // The tag column, appended last, exactly where the artifact appends it:
+    // the anchor space of the delegation type this row requested, which is the
+    // event's own space, and 0 on every row that requested none. The circuit's
+    // `deleg_space_rule` holds it to the sum of the row's type selectors, and
+    // the mirror leaf reads it as the tuple's address space
+    // (`docs/spec/ecrecover.md` §2.4).
+    if let Some(at) = queries.iter().position(|&q| q == DELEG) {
+        let values = rows
+            .iter()
+            .map(|row| row[at].as_ref().map_or(0, |e| e.space.tag() as u64));
+        out.push((deleg_space(queries.len()), column(values.collect(), height)));
     }
     out
 }
