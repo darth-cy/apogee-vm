@@ -34,6 +34,18 @@ use test_support::to_hex;
 
 use crate::write_vectors;
 
+/// keccak256, from the `tiny-keccak` oracle: the address is
+/// `keccak256(x || y)[12..]`, and the guest shim derives it through
+/// `guest_sdk::keccak256`, so the corpus carries what the EVM would return.
+fn keccak256(input: &[u8]) -> [u8; 32] {
+    use tiny_keccak::Hasher;
+    let mut hasher = tiny_keccak::Keccak::v256();
+    hasher.update(input);
+    let mut out = [0u8; 32];
+    hasher.finalize(&mut out);
+    out
+}
+
 /// One corpus line.
 struct Case {
     name: String,
@@ -318,17 +330,24 @@ fn fixture() -> (&'static str, String) {
     text.push_str(
         "# the secp256k1 ecrecover corpus, from the `libsecp256k1` dev-dependency oracle\n\
          # docs/spec/ecrecover.md \u{00a7}1 is normative for the semantics\n\
-         # name v hash r s outcome pubkey_x pubkey_y\n\
+         # name v hash r s outcome pubkey_x pubkey_y address\n\
          # every 256-bit field is 64 hex digits, big-endian, the EVM's encoding\n\
-         # outcome is `ok` with a key, or `fail` with two `-`\n",
+         # outcome is `ok` with a key and the 20-byte address keccak256(x || y)[12..],\n\
+         # or `fail` with three `-`\n",
     );
     for case in corpus() {
-        let (outcome, x, y) = match case.key {
-            Some((x, y)) => ("ok", to_hex(&x), to_hex(&y)),
-            None => ("fail", "-".to_string(), "-".to_string()),
+        let (outcome, x, y, address) = match case.key {
+            Some((x, y)) => {
+                let mut serialized = [0u8; 64];
+                serialized[..32].copy_from_slice(&x);
+                serialized[32..].copy_from_slice(&y);
+                let digest = keccak256(&serialized);
+                ("ok", to_hex(&x), to_hex(&y), to_hex(&digest[12..]))
+            }
+            None => ("fail", "-".to_string(), "-".to_string(), "-".to_string()),
         };
         text.push_str(&format!(
-            "{} {} {} {} {} {} {} {}\n",
+            "{} {} {} {} {} {} {} {} {}\n",
             case.name,
             case.v,
             to_hex(&case.hash),
@@ -336,7 +355,8 @@ fn fixture() -> (&'static str, String) {
             to_hex(&case.s),
             outcome,
             x,
-            y
+            y,
+            address
         ));
     }
     ("crates/program/tests/vectors/ecrecover.txt", text)

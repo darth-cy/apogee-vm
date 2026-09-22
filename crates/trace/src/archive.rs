@@ -59,7 +59,9 @@ use constants::{family, memory};
 use serde::de::{Deserialize, Deserializer, SeqAccess, Visitor};
 use serde::Serialize;
 
-use crate::family::{DelegationTrace, FamilyTrace, FamilyTraces, Query, QueryColumns, Row, ROLES};
+use crate::family::{
+    DelegationTrace, FamilyTrace, FamilyTraces, Query, QueryColumns, Role, Row, ROLES,
+};
 use crate::log::{AddressSpace, MemoryEvent, MemoryEventLog};
 use crate::CycleProfile;
 
@@ -707,6 +709,19 @@ fn check_parts(
                     write_value: q.write_value[*r],
                 })
                 .collect();
+        }
+        // A `Delegate` query is a delegation request, and a request's anchor
+        // lands in the space of the family it requested — so a row claiming
+        // one with no invocation on its cycle names a space that does not
+        // exist. That is a disagreement between the parts, which is this
+        // function's whole subject, and not a reason to panic on bytes a
+        // caller handed in.
+        if row.query(Role::Delegate).is_some() && delegation.is_none() {
+            return Err(format!(
+                "the log disagrees with the row of cycle {}: it claims a delegation \
+                 request and no invocation rides that cycle",
+                row.cycle
+            ));
         }
         let queries = ROLES.iter().filter_map(|role| {
             row.query(*role).map(|q| MemoryEvent {

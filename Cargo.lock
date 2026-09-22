@@ -680,6 +680,7 @@ dependencies = [
  "program",
  "srs",
  "test-support",
+ "tiny-keccak",
  "transcript",
  "verifier-core",
 ]

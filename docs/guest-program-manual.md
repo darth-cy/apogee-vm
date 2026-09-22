@@ -89,10 +89,13 @@ they cover most of what a guest can do:
 | `shards` | S20's guest, and the only one written for its *size*: a counted loop whose body is 64 unrolled `add`s, so `ADD_SUB_LUI_AUIPC` runs 1,064,970 cycles — past `2^20`, the smallest height a family carrying a timestamp gap obligation can have — and one execution becomes **two shards of one family**, which is S20's stage gate. `JUMP_BRANCH_SLT` runs 16,386 and fits one shard; nothing touches RAM, so `ZERO_WINDOWS` proves zero shards and the block carries a family with a count of 0. It exits with the number of checks, 2. Hand-written assembly with no `guest-sdk`, for `addsub`'s reason, and a loop rather than a straight line because a family's height is both its shard height and its decoded table's row count: 2^20 four-byte instructions would need a 2^22 table, which is a 2^22 shard, which is one shard again |
 | `keccak-test` | S21's guest, and the first that calls a **delegation**: `guest_sdk::keccak256` over six inputs — empty, one byte, one short of the 136-byte rate, exactly the rate, one past it, and 400 bytes — each checked in the guest against a pinned digest, exiting with the number of checks, 6. Ten keccak-f[1600] permutations in all, which one `2^8` `KECCAK_F` shard holds with room to spare. It is *one* binary on both executors: here the delegation ecall runs the permutation the `KECCAK_F` circuit proves and the invocations reach that family's trace, under `qemu-riscv32` the same ecall answers `-ENOSYS` and the SDK's software permutation runs, and the digests are identical either way (§3 rule 6) |
 | `keccak-unused` | the other half of that story, and the guest to read when you want to know what *linking* a delegation costs: it links `keccak256` behind a `core::hint::black_box` branch the optimiser cannot fold away, and never calls it. The shim is reachable, so its declaration record is in the image, so `KECCAK_F` is in the `VmConfig` — and the run invokes it zero times, so the execution proves zero shards of it. A guest that links no shim declares nothing at all (`docs/spec/delegation.md` §7). It exits 7 |
+| `ecrecover-test` | S22's guest, and the first that calls **two** delegations: `guest_sdk::ecrecover` over four lines of the committed corpus — a `v = 27` signature, a `v = 28` one, the same signature malleated so `s > n/2` (which the EVM precompile accepts: EIP-2's low-s rule is a transaction-signature rule and `0x01` does not carry it), and `r` and `s` both 1 — each checked in the guest against the address the EVM would return, exiting with the number of checks, 4. The address is `keccak256(x ‖ y)[12..]`, so the guest's image declares `ECRECOVER` **and** `KECCAK_F`: the circuit proves the public key and never hashes (`docs/spec/ecrecover.md` §1.1). One binary on both executors, as `keccak-test` is |
+| `ecrecover-fail` | the failure path, and the guest to read when you want to know what an *invalid* signature costs: `r = 5`, whose `x^3 + 7` is a quadratic non-residue mod `p`, so no curve point has that `x`. The shim answers `None`, the guest runs on, and it exits 5. Failure is a **provable outcome** rather than an unprovable execution — which is what lets a block holding a failed `ecrecover` call be proven at all (`docs/spec/ecrecover.md` §1.3) |
 
 If you are looking for a pattern to copy, `amm` is the one to read for arithmetic
 and framing, `orderbook` for anything that takes prover advice, `vault` for
-anything that hashes, and `keccak-test` for calling a delegation.
+anything that hashes, and `keccak-test` for calling a delegation — or
+`ecrecover-test`, which calls two.
 
 **`guests/hello/Cargo.toml`**
 
@@ -126,7 +129,7 @@ fn main() {
 **`guests/Cargo.toml`** — add the crate to the member list:
 
 ```toml
-members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "consistency", "addsub", "control", "alu", "mem", "shards", "keccak-test", "keccak-unused", "hello"]
+members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "consistency", "addsub", "control", "alu", "mem", "shards", "keccak-test", "keccak-unused", "ecrecover-test", "ecrecover-fail", "hello"]
 ```
 
 Four things about that source file are not negotiable:

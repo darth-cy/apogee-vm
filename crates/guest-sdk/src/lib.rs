@@ -328,9 +328,18 @@ pub fn poseidon2_permute(state: &mut [u8; 96]) -> bool {
 /// would mean nothing. Reachability is the whole mechanism: the record is
 /// referenced by the shim and by nothing else, so a guest that never calls
 /// `keccak256` drops the chain and the record with it.
+///
+/// **The section name carries the family, and that is load-bearing** (S22).
+/// `--gc-sections` collects at *section* granularity, so two records sharing
+/// one output section are kept or dropped together: with both in a bare
+/// `.rodata.apogee.delegations`, `guests/keccak-test` declared `ECRECOVER`
+/// as well — a guest whose `VmConfig` would carry a family it cannot call,
+/// and detachment meaning nothing in the other direction from `#[used]`.
+/// `link.ld`'s `*(.rodata*)` absorbs the suffixed names unchanged, and
+/// `crates/program`'s scan reads bytes and never section names.
 /// `crates/program/tests/delegation.rs` holds every committed guest to that,
 /// at both optimisation levels.
-#[link_section = ".rodata.apogee.delegations"]
+#[link_section = ".rodata.apogee.delegations.keccak_f"]
 static DELEGATION_KECCAK_F: [u8; delegation::MARKER_BYTES] = {
     let mut record = [0u8; delegation::MARKER_BYTES];
     let magic = delegation::MARKER_MAGIC;
@@ -516,7 +525,7 @@ pub fn keccak256(input: &[u8]) -> [u8; keccak::DIGEST_BYTES] {
 /// `DELEGATION_KECCAK_F`'s above: the magic, then the ecall number as a
 /// little-endian `u32`, in an allocated `.rodata` section, kept exactly when
 /// the shim that reads it is reachable. No `#[used]`, for that reason.
-#[link_section = ".rodata.apogee.delegations"]
+#[link_section = ".rodata.apogee.delegations.ecrecover"]
 static DELEGATION_ECRECOVER: [u8; delegation::MARKER_BYTES] = {
     let mut record = [0u8; delegation::MARKER_BYTES];
     let magic = delegation::MARKER_MAGIC;
@@ -843,7 +852,7 @@ fn powmod(a: &U256, e: &U256, m: &U256) -> U256 {
     let mut i = secp256k1::LIMBS;
     while i > 0 {
         i -= 1;
-        let mut bit = 64;
+        let mut bit = secp256k1::LIMB_BITS;
         while bit > 0 {
             bit -= 1;
             out = mulmod(&out, &out, m);

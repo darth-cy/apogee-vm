@@ -16,7 +16,7 @@ use std::process::Command;
 use crate::write_vectors;
 
 /// The guest ELFs the loader tests read, and what each is for.
-pub const ELF_FIXTURES: [(&str, &str); 17] = [
+pub const ELF_FIXTURES: [(&str, &str); 19] = [
     (
         "fib",
         "real compiler output: the address and boundary oracle",
@@ -92,6 +92,16 @@ pub const ELF_FIXTURES: [(&str, &str); 17] = [
         "keccak-unused",
         "S21's zero-shard fixture: it links the keccak shim, so its image \
          declares the family, and never calls it",
+    ),
+    (
+        "ecrecover-test",
+        "S22's guest: `guest_sdk::ecrecover` over four lines of the committed \
+         corpus, self-checking, and the first program declaring two delegations",
+    ),
+    (
+        "ecrecover-fail",
+        "S22's failure-path fixture: one signature whose r is on no curve \
+         point, the shim answering `None`, and the guest exiting cleanly",
     ),
 ];
 

@@ -52,6 +52,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ecrecover-fail"
+version = "0.1.0"
+dependencies = [
+ "guest-sdk",
+]
+
+[[package]]
+name = "ecrecover-test"
+version = "0.1.0"
+dependencies = [
+ "guest-sdk",
+]
+
+[[package]]
 name = "fib"
 version = "0.1.0"
 dependencies = [

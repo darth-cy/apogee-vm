@@ -52,7 +52,23 @@ fn image_of(bytes: Vec<u8>) -> ProgramImage {
 /// `VmConfig` lists it last.
 #[test]
 fn the_registry_is_one_table() {
-    assert_eq!(DELEGATIONS.len(), 1, "S21 registers one delegation family");
+    assert_eq!(
+        DELEGATIONS.len(),
+        2,
+        "S21 registers KECCAK_F and S22 ECRECOVER"
+    );
+    // Append-only, and ascending by family id: the two rules the table's own
+    // doc comment states (`docs/spec/delegation.md` §3).
+    assert!(
+        DELEGATIONS.windows(2).all(|w| w[0].0 < w[1].0),
+        "the registry is ascending by family id"
+    );
+    let numbers: std::collections::BTreeSet<u32> = DELEGATIONS.iter().map(|(_, n, _)| *n).collect();
+    assert_eq!(
+        numbers.len(),
+        DELEGATIONS.len(),
+        "no two delegation families answer one ecall number"
+    );
     for (fam, number, words) in DELEGATIONS {
         assert_eq!(delegation_family(number), Some(fam));
         assert_eq!(delegation_ecall(fam), Some(number));
@@ -210,8 +226,15 @@ fn every_guest_declares_exactly_what_it_links() {
         }
     }
     // The two halves are both non-empty, so neither clause is vacuous.
-    assert_eq!(common::DECLARING_GUESTS.len(), 2);
-    assert!(common::GUESTS.len() > common::DECLARING_GUESTS.len() + 4);
+    // Four guests declare, six declarations between them, and most guests
+    // declare nothing at all — which is the clause that matters: `#[used]`, or
+    // one shared `link_section`, would put a record in every guest that links
+    // the SDK.
+    assert_eq!(common::DECLARING_GUESTS.len(), 6);
+    let declaring: std::collections::BTreeSet<&str> =
+        common::DECLARING_GUESTS.iter().map(|(g, _)| *g).collect();
+    assert_eq!(declaring.len(), 4);
+    assert!(common::GUESTS.len() > declaring.len() + 10);
 }
 
 /// Reachability survives `opt-level = 3`, which is the half of acceptance 8

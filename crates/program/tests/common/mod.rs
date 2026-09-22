@@ -17,7 +17,7 @@ use program::{decode_program, ProgramParams};
 use test_support::{sha256, to_hex};
 
 /// Every guest with a committed ELF, in `guests/Cargo.toml`'s order.
-pub const GUESTS: [&str; 17] = [
+pub const GUESTS: [&str; 19] = [
     "fib",
     "echo",
     "rvc-dense",
@@ -35,14 +35,31 @@ pub const GUESTS: [&str; 17] = [
     "shards",
     "keccak-test",
     "keccak-unused",
+    "ecrecover-test",
+    "ecrecover-fail",
 ];
 
 /// The guests whose image declares a delegation family, and which
 /// (`docs/spec/delegation.md` §7). Every other guest declares none, which is
 /// what `tests/delegation.rs` holds them to.
-pub const DECLARING_GUESTS: [(&str, u32); 2] = [
+/// **Ascending by family id within a guest**, which is the order
+/// `declared_delegations` returns.
+///
+/// The two S22 guests declare **both** families: `guest_sdk::ecrecover`
+/// derives its address through `guest_sdk::keccak256`
+/// (`docs/spec/ecrecover.md` §1.1), so linking the one shim makes the other
+/// reachable. That is detachment working, not leaking — the keccak path is
+/// genuinely called — and it is why the two records need **separate**
+/// `link_section` names: `--gc-sections` collects at section granularity, so
+/// records sharing one output section are kept or dropped together, and
+/// `keccak-test` declared `ECRECOVER` until they were split.
+pub const DECLARING_GUESTS: [(&str, u32); 6] = [
     ("keccak-test", family::KECCAK_F),
     ("keccak-unused", family::KECCAK_F),
+    ("ecrecover-test", family::KECCAK_F),
+    ("ecrecover-test", family::ECRECOVER),
+    ("ecrecover-fail", family::KECCAK_F),
+    ("ecrecover-fail", family::ECRECOVER),
 ];
 
 /// This crate's committed fixtures and their digests. Refresh with
@@ -55,7 +72,7 @@ pub const PINS: [(&str, &str); 3] = [
     ),
     (
         "identity.txt",
-        "3232810e92795fef2ce795c3c0b84044d54294cc7238da4bb5b11022c4a8032b",
+        "5a0e27eaae71ef17e70594d0bb47b143f569bbdb705e63a0e539fcfe4b381745",
     ),
     (
         "generic_table.txt",

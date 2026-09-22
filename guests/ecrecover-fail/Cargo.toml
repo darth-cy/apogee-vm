@@ -1,0 +1,10 @@
+[package]
+name = "ecrecover-fail"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# S22's failure-path fixture guest: one invalid signature, the shim returning
+# `None`, and an exit status that says which of the two answers it got.
+[dependencies]
+guest-sdk.workspace = true

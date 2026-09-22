@@ -39,5 +39,9 @@ num-bigint.workspace = true
 # `hmac` and `sha2` out of the graph, so nothing here can feature-unify into
 # the `no_std` crates during `cargo test --workspace` -- the hazard
 # `tools/transcript-ref` lives outside the workspace to avoid.
+# The `ecrecover` group's second oracle: the address a line recovers to is
+# `keccak256(x || y)[12..]`, and the corpus carries it so a guest fixture can
+# check what the EVM would return rather than the raw key.
+tiny-keccak.workspace = true
 libsecp256k1 = { version = "0.7", default-features = false, features = ["static-context"] }
 

@@ -816,3 +816,43 @@ fn keccak_falls_back_to_software_and_agrees() {
         );
     }
 }
+
+/// S22's acceptance 3, the fallback half: `guest_sdk::ecrecover`'s software
+/// recovery under `qemu-riscv32`, which has no circuit.
+///
+/// The delegation ecall `0x502` is a precompile number QEMU knows nothing
+/// about, so its `ecall` returns `-ENOSYS` and the shim runs its in-guest
+/// secp256k1 instead — the same frozen signature, the same twenty bytes out
+/// (`docs/spec/delegation.md` §2). The two guests check themselves and exit 4
+/// and 5 either way, which is the property: one binary, two executors,
+/// bit-identical answers, over a corpus `libsecp256k1` and `tiny-keccak`
+/// answered.
+///
+/// The delegated half is `crates/emulator/tests/ecrecover.rs`, where the ecall
+/// performs the recovery instead; the corpus itself is fixed there and in
+/// `crates/program/tests/secp256k1.rs`, so neither path can agree on a stale
+/// literal. `ecrecover-fail` is acceptance 5's fixture: a signature whose `r`
+/// is on no curve point is a provable failure, and the guest runs on to its
+/// own exit row rather than trapping.
+#[test]
+#[ignore = "needs a Linux host with qemu-user; run with --ignored"]
+fn ecrecover_falls_back_to_software_and_agrees() {
+    let qemu = qemu();
+
+    for (name, status) in [("ecrecover-test", 4), ("ecrecover-fail", 5)] {
+        let run = execute(&qemu, name, name, &[], None);
+        assert_eq!(
+            run.status,
+            Some(status),
+            "{name} exited {:?} rather than {status}, so an address disagreed \
+             between the delegation path and the software one: {}",
+            run.status,
+            run.stderr
+        );
+        assert!(
+            run.stdout.is_empty(),
+            "{name} commits nothing to fd 1: an ecall other than EXIT and the \
+             delegation call would make the fixture unprovable"
+        );
+    }
+}

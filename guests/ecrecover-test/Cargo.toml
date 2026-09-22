@@ -1,0 +1,11 @@
+[package]
+name = "ecrecover-test"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# S22's fixture guest. It links `guest-sdk` for `ecrecover` — which is what
+# emits the delegation declaration record `crates/program` scans for
+# (`docs/spec/delegation.md` §7) — and for crt0.
+[dependencies]
+guest-sdk.workspace = true

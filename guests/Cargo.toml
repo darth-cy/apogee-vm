@@ -11,7 +11,7 @@
 # toolchain, because rustup walks up from the working directory.
 [workspace]
 resolver = "2"
-members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "consistency", "addsub", "control", "alu", "mem", "shards", "keccak-test", "keccak-unused"]
+members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "consistency", "addsub", "control", "alu", "mem", "shards", "keccak-test", "keccak-unused", "ecrecover-test", "ecrecover-fail"]
 
 [workspace.package]
 version = "0.1.0"

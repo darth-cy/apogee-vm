@@ -12,6 +12,11 @@ fn the_tags_are_the_frozen_constants() {
         (AddressSpace::Ram, address_space::RAM),
         (AddressSpace::Pc, address_space::PC),
         (AddressSpace::KeccakF, address_space::DELEGATION_KECCAK_F),
+        (AddressSpace::Ecrecover, address_space::DELEGATION_ECRECOVER),
+        (
+            AddressSpace::EcrecoverScratch,
+            address_space::DELEGATION_ECRECOVER_SCRATCH,
+        ),
     ] {
         assert_eq!(space.tag(), tag);
         assert_eq!(AddressSpace::from_tag(tag), Some(space));
@@ -22,14 +27,32 @@ fn the_tags_are_the_frozen_constants() {
             address_space::RAM,
             address_space::PC,
             address_space::DELEGATION_KECCAK_F,
+            address_space::DELEGATION_ECRECOVER,
+            address_space::DELEGATION_ECRECOVER_SCRATCH,
         ),
-        (1, 2, 3, 4)
+        (1, 2, 3, 4, 5, 6)
     );
-    // Every tag is nonzero, so no real tuple is all zeros, and 5 is the tag
-    // S22's delegation family takes — it names no space yet
-    // (`docs/spec/delegation.md` §3).
-    for tag in [0u8, 5, 255] {
+    // Every tag is nonzero, so no real tuple is all zeros, and 7 is the next
+    // one a delegation family takes (`docs/spec/delegation.md` §3).
+    for tag in [0u8, 7, 255] {
         assert_eq!(AddressSpace::from_tag(tag), None, "tag {tag}");
+    }
+    // The anchor space of a delegation family is its type, and only a
+    // delegation family has one.
+    assert_eq!(
+        AddressSpace::delegation(constants::family::KECCAK_F),
+        Some(AddressSpace::KeccakF)
+    );
+    assert_eq!(
+        AddressSpace::delegation(constants::family::ECRECOVER),
+        Some(AddressSpace::Ecrecover)
+    );
+    for family in [
+        constants::family::ADD_SUB_LUI_AUIPC,
+        constants::family::INIT_TEARDOWN,
+        constants::family::ZERO_WINDOWS,
+    ] {
+        assert_eq!(AddressSpace::delegation(family), None, "family {family}");
     }
 }
 

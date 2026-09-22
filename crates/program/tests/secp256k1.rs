@@ -289,7 +289,7 @@ fn recover_matches_the_committed_corpus() {
             continue;
         }
         let f: Vec<&str> = line.split_whitespace().collect();
-        assert_eq!(f.len(), 8, "a corpus line is eight fields: {line}");
+        assert_eq!(f.len(), 9, "a corpus line is nine fields: {line}");
         let name = f[0];
         let v: u32 = f[1].parse().expect("v");
         let hash = from_be_bytes(&test_support::hex_to_32(f[2]).expect("hash"));
