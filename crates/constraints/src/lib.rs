@@ -32,6 +32,7 @@ pub mod mem_subword;
 pub mod mem_word;
 pub mod memory;
 pub mod mul_div;
+pub mod nonnative;
 pub mod shift_bitwise;
 mod wire;
 

@@ -314,5 +314,13 @@ cargo clippy -p prover --all-targets --features metrics -- -D warnings
 
 The `--include-ignored` line proves S16's statement twice (about 8.6 GB a time) and prints
 both reports. It belongs with the other deferred suites: under the owner's standing
-instruction those run **once at the end of a progression**, not per commit (root
-`CLAUDE.md`, "Commands").
+instruction those run **once at the end of a progression**, not per commit, and from S22
+on they run on the **measurement host** — an EC2 `r8i.8xlarge`, 32 vCPU, 256 GiB — which
+is started for a run and stopped after it (root `CLAUDE.md`, "Commands").
+
+That is also why every number this harness reports is quoted with its environment. The
+modelled figures are machine-independent by construction (§4.1) and the measured ones are
+not: `modelled_block_peak` is a function of the rayon thread count, and the thread count
+is a property of the host. **A report pasted into a handoff note without the host it was
+taken on is not a measurement** — name the cores, the memory, the profile and the OS, as
+§4.3's calibration does.

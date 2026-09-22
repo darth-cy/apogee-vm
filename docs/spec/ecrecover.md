@@ -165,7 +165,15 @@ rather than on its one row.
 A row's **step** is its index within the block, `row mod 2048`. The schedule is
 a function of the step alone and is the same for every invocation, so every
 per-step constant — which congruence to run, which frame word to touch, which
-window digit to select — is a **setup column**, periodic with period 2,048.
+window digit to select — is a **schedule column**, periodic with period 2,048.
+§6.2 says what a schedule column is and what binds it.
+
+`ROWS_PER_INVOCATION` is **2,048 by measurement, not by decree** (owner's
+decision, S22). §6.1's cliff is what chooses it, the obligation count per row is
+what puts a choice on one side of that cliff or the other, and the count is only
+knowable once the gadget exists. The constant may be re-pinned when the gadget
+is built and counted; what may not change is that it is a fixed, aligned,
+protocol-wide block size rather than anything a prover or a program picks.
 
 ### 2.3 The scratch bus
 
@@ -313,6 +321,16 @@ independent things break without it:
   `⌊(p−1)²/p⌋ < 2^256` and `⌊(n−1)²/n⌋ < 2^256`. Checked numerically in
   `crates/program/tests/secp256k1.rs`.
 - **Equality stops meaning equality.** §3.4.
+
+- **The result stops being a result.** §3.1's equation says
+  `result ≡ … (mod P)`, which is all it can say: a congruence admits the whole
+  residue class that fits four limbs, so `result` and `result + P` satisfy the
+  same gates and a prover picks which one to bus onward. Canonicality is what
+  turns a class into a representative, and it is needed on **every value a row
+  writes**, not only on the ones the EVM semantics bound. This is checked
+  exhaustively at reduced width in
+  `crates/constraints/tests/nonnative.rs`, where the congruence alone is shown
+  to admit exactly the class and the complement to leave exactly one of it.
 
 The check is a complement with a borrow chain: witness `D` with
 `value + D = P − 1` limb-wise, three boolean borrows, `D`'s limbs range-checked
@@ -517,12 +535,45 @@ A coarser row is cheaper *per signature* and the handoff records the
 measurement; what pins the choice is the height, and the height is the stage
 prompt's.
 
-### 6.2 The step schedule
+### 6.2 The step schedule, and what binds it
 
 The schedule is a table of 2,048 steps, each naming a congruence shape, its
 operands' bus addresses and its result's, and it is the same for every
-invocation. It lives in setup columns indexed by `row mod 2048`, so a row's
-behaviour is a function of its position and of nothing a prover chooses.
+invocation. A row's behaviour must be a function of its step and of **nothing a
+prover chooses**: if a prover could pick which operands a step reads, the bus
+would carry a dataflow of their choosing and the multiset would still balance,
+because a multiset pairs a read with a write and says nothing about which write
+it should have been.
+
+**The schedule columns are virtual** (owner's decision, S22), not committed.
+`VirtualKind` gains this family's tables, each a step-periodic constant with a
+closed-form multilinear extension over the low `log2(ROWS_PER_INVOCATION)`
+variables, evaluated by both halves of the engine from the same source:
+
+```
+V[sched_k](y) = Σ_{i < 2048} eq(y_0..y_10, i) · c_k[i]
+```
+
+Three routes were weighed, and they differ in what a verifier must trust:
+
+| route | what binds the schedule | price |
+| --- | --- | --- |
+| **virtual columns** | `family_circuit`, which `VerifyingKey::check` already holds every key's circuit equal to | `gkr.md` §2's virtual-table set grows, and the tables' constants sit in a `no_std` crate |
+| setup columns, identity | the identity channel, as the decoded tables are bound | identity would cover a protocol constant that is the same for every program |
+| setup columns, SRS digest | the ceremony, recomputable by anyone holding it (S17's generic table) | every verifying key's SRS digest and bytes move again, and a new pinned vector file |
+
+The first was chosen because it adds **no trust surface at all**: a virtual
+column is never committed, never opened, and never sent, so there is nothing for
+a key builder to substitute. The schedule becomes part of the circuit, and a
+circuit that is not the protocol's is already refused by
+`VerifyingKey::check` — the same check that refuses a tampered gate list refuses
+a tampered schedule, for free. It also keeps every S16–S21 key's identity and
+SRS digest exactly where they are.
+
+The price is real and is paid in one place: `gkr-verify` is `#![no_std]` and the
+recursion guest links it, so the schedule's constants are image bytes for that
+guest. They are protocol constants either way; what the choice moves is whether
+they are carried as curve points in a key or as a table in the source.
 
 ### 6.3 The bounds every row carries
 
@@ -564,6 +615,12 @@ only one delegation family existed.
 | §1 | "Its rows are invocations, not cycles. One row is one call." | rows are invocations; **a family may take a fixed aligned block of rows per invocation** (§2.2) | the shard plan, the fill and the ts window read the block size; keccak, at one row, is unchanged |
 | §9 | "A delegation family … must carry no lookup channel." | a delegation family must be absent from `family_circuit`'s minimum-height arm; **a channel is allowed at a height that fits it** | none for keccak, which still carries none at `2^8` |
 | §3 | "`0x0500` is `PRECOMPILE_POSEIDON2` … S22 gives it one and takes address-space tag 5" | S22 is **ecrecover**; it takes `0x0502` and tags 5 and 6, and S23 takes the next of each | S23's pencilled tag 6 becomes 7; nothing is published, `PROTOCOL_VERSION` is still 0 |
+
+It also amends **one sentence of `docs/spec/gkr.md`** §2, the virtual-table set:
+
+| where | what it said | what it says now | price |
+| --- | --- | --- | --- |
+| `gkr.md` §2 | the four virtual tables are `V[row]`, `V[ram_live]`, `V[range19]`, `V[range16]` | a virtual table may also be a **step-periodic schedule table**, whose extension is a sum over one period of `eq` against a constant vector (§6.2) | the constants are `no_std` source the recursion guest will link; no key's bytes, identity or SRS digest move |
 
 §9's sentence is the one worth reading twice. Its stated reason was that at
 `2^8` no range channel's table fits, which is true of `BITS = 16` and is not a

@@ -114,8 +114,8 @@ picking a default silently.
 ## Commands
 Everything above the line must be green before a stage's PR. All of it runs in CI
 (`.github/workflows/ci.yml`) except the lines marked `# DEFERRED`, which are commented out
-there under master rule 7 because the circuit is the real size: run those locally and
-record the result in the stage's handoff note. For the rest, a green local run is a green
+there under master rule 7 because the circuit is the real size: run those on the
+measurement host below and record the result in the stage's handoff note. For the rest, a green local run is a green
 CI run.
 
 **The `# DEFERRED` suites run once, at the end of a progression, not per commit**
@@ -127,6 +127,22 @@ be a deferred suite owes a **fast** test pinning the same property — a synthet
 statement in a unit test rather than a real proof — so the workspace run still guards it.
 Then run the deferred suites in one batch when no further commits are expected, and
 record their timings and peaks in the handoff note.
+
+**They run on the measurement host, not on a laptop** (owner's instruction, S22). That
+host is an EC2 `r8i.8xlarge` — 32 vCPU, 256 GiB, 500 GB SSD — brought up for a
+measurement run and stopped after it, so a run is **asked for, never assumed**: when a
+progression's commits are in, stop and prompt the owner to start the instance rather than
+beginning a local batch. S22 is what made it necessary: one `ECRECOVER` shard's forward
+pass is on the order of a laptop's entire memory, and `prove_block` holds one per rayon
+worker.
+
+**A number without its environment is not a measurement.** Every timing, peak and
+throughput — in a handoff note, in `docs/spec/metrics.md`, in the list below — names the
+host it was taken on: cores, memory, profile and OS. The peaks below are within a factor
+of two of a machine's limit, so a bare number read against the wrong host is a wrong
+answer. Everything recorded through S21, and every `# DEFERRED` figure in the list below,
+was measured on **macOS/aarch64, 18 cores, 48 GB**, dev profile unless the line says
+`--release`; from S22 on they are the EC2 host's.
 ```
 cargo fmt --all -- --check
 cargo fmt --manifest-path tools/transcript-ref/Cargo.toml --all -- --check
