@@ -27,7 +27,7 @@ use constants::extra_mask::{
     add_sub_lui_auipc as alu, atomics, jump_branch_slt as jbs, mem_subword, mem_word, mul_div,
     shift_bitwise as sb, system_code,
 };
-use constants::{delegation, ecall, family, guest_memory, keccak};
+use constants::{delegation, family, guest_memory};
 use curve::G1Affine;
 use field::Fr;
 use isa::{decode, Instr};
@@ -55,28 +55,27 @@ pub const FAMILIES: [FamilyId; family::COUNT as usize] = [
     family::INIT_TEARDOWN,
     family::ZERO_WINDOWS,
     family::KECCAK_F,
+    family::POSEIDON2,
+    family::FR_ARITH,
 ];
 
-/// Every **delegation** family, with the ecall number that invokes it and the
-/// width of its memory frame in 32-bit words. Ascending by family id,
-/// append-only: `docs/spec/delegation.md` §3 is the table this mirrors.
+/// Every **delegation** family, with the ecall number that invokes it, its
+/// anchor address space, and the width of its memory frame in 32-bit words.
+/// Ascending by family id, append-only: `docs/spec/delegation.md` §3 is the
+/// table this mirrors.
 ///
-/// This is the one place the three are tied together. An ecall number here is
-/// answered by that family's circuit, the frame it dereferences is that many
-/// words, and a guest declares it by linking the shim that emits the marker
-/// record of §7.
-pub const DELEGATIONS: [(FamilyId, u32, usize); 1] = [(
-    family::KECCAK_F,
-    ecall::PRECOMPILE_KECCAK_F,
-    keccak::FRAME_WORDS,
-)];
+/// `constants::delegation::TYPES` is the table itself — `constraints` builds
+/// its request-side gates from the same rows, and this crate must not carry a
+/// second copy of them.
+pub const DELEGATIONS: [(FamilyId, u32, u8, usize); constants::delegation::TYPES.len()] =
+    constants::delegation::TYPES;
 
 /// The family that answers `number`, or `None` if it is not a delegation call.
 pub fn delegation_family(number: u32) -> Option<FamilyId> {
     DELEGATIONS
         .iter()
-        .find(|(_, n, _)| *n == number)
-        .map(|(f, _, _)| *f)
+        .find(|(_, n, ..)| *n == number)
+        .map(|(f, ..)| *f)
 }
 
 /// The ecall number that invokes `family`, or `None` if it is not a delegation
@@ -84,8 +83,17 @@ pub fn delegation_family(number: u32) -> Option<FamilyId> {
 pub fn delegation_ecall(family: FamilyId) -> Option<u32> {
     DELEGATIONS
         .iter()
-        .find(|(f, _, _)| *f == family)
-        .map(|(_, n, _)| *n)
+        .find(|(f, ..)| *f == family)
+        .map(|(_, n, ..)| *n)
+}
+
+/// `family`'s anchor address space, or `None` if it is not a delegation
+/// family. The tag *is* the delegation type (`docs/spec/delegation.md` §3).
+pub fn delegation_space(family: FamilyId) -> Option<u8> {
+    DELEGATIONS
+        .iter()
+        .find(|(f, ..)| *f == family)
+        .map(|(_, _, space, _)| *space)
 }
 
 /// `family`'s memory frame in 32-bit words, or `None` if it is not a
@@ -93,8 +101,8 @@ pub fn delegation_ecall(family: FamilyId) -> Option<u32> {
 pub fn delegation_frame_words(family: FamilyId) -> Option<usize> {
     DELEGATIONS
         .iter()
-        .find(|(f, _, _)| *f == family)
-        .map(|(_, _, w)| *w)
+        .find(|(f, ..)| *f == family)
+        .map(|(.., w)| *w)
 }
 
 /// Whether `family`'s rows are cycles, and so whether it claims pcs.
@@ -119,6 +127,8 @@ pub fn family_name(family: FamilyId) -> &'static str {
         family::INIT_TEARDOWN => "INIT_TEARDOWN",
         family::ZERO_WINDOWS => "ZERO_WINDOWS",
         family::KECCAK_F => "KECCAK_F",
+        family::POSEIDON2 => "POSEIDON2",
+        family::FR_ARITH => "FR_ARITH",
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -253,7 +263,11 @@ pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
         | family::MEM_WORD
         | family::MEM_SUBWORD => &[Pc, NextPc, Rs1, Rs2, Rd, Imm, ExtraMask],
         family::MUL_DIV | family::ATOMICS => &[Pc, NextPc, Rs1, Rs2, Rd, ExtraMask],
-        family::INIT_TEARDOWN | family::ZERO_WINDOWS | family::KECCAK_F => &[],
+        family::INIT_TEARDOWN
+        | family::ZERO_WINDOWS
+        | family::KECCAK_F
+        | family::POSEIDON2
+        | family::FR_ARITH => &[],
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -925,7 +939,10 @@ pub fn setup_commitments(
             // no decoded table at all: it is invoked, never decoded, so there
             // is nothing about it for identity to commit but its presence in
             // the `VM_CONFIG` message.
-            family::ZERO_WINDOWS | family::KECCAK_F => Vec::new(),
+            family::ZERO_WINDOWS
+            | family::KECCAK_F
+            | family::POSEIDON2
+            | family::FR_ARITH => Vec::new(),
             // One column at a time: at 2^22 rows an `Fr` column is 128 MiB.
             _ => (0..table.columns.len())
                 .map(|c| cm(table, &table.column_poly(c)))

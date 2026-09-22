@@ -1063,9 +1063,18 @@ pub mod family {
     /// Claims no pc, owns no cycle, and is in a `VmConfig` only when the
     /// linked binary declares it (`docs/spec/delegation.md` §7).
     pub const KECCAK_F: u32 = 9;
+    /// The Poseidon2 **delegation** family (S23): one width-3 permutation a
+    /// row, invoked by the [`ecall::PRECOMPILE_POSEIDON2`] ecall. The circuit
+    /// is `transcript::poseidon2_permute`, gate for gate
+    /// (`docs/spec/delegation.md` §12).
+    pub const POSEIDON2: u32 = 10;
+    /// The Fr-arithmetic **delegation** family (S23): one `Fr` add, multiply
+    /// or inverse a row, invoked by the [`ecall::PRECOMPILE_FR_ARITH`] ecall
+    /// (`docs/spec/delegation.md` §13).
+    pub const FR_ARITH: u32 = 11;
 
     /// How many families this table defines.
-    pub const COUNT: u32 = 10;
+    pub const COUNT: u32 = 12;
 
     /// Whether a family's rows are **execution cycles**, indexed by
     /// `FamilyId`. Append-only, beside the ids themselves.
@@ -1089,6 +1098,8 @@ pub mod family {
         false, // INIT_TEARDOWN
         false, // ZERO_WINDOWS
         false, // KECCAK_F
+        false, // POSEIDON2
+        false, // FR_ARITH
     ];
 
     /// The trace-height menu, ascending. Even powers of two only, so that a
@@ -1128,6 +1139,8 @@ pub mod family {
         1 << 22, // INIT_TEARDOWN
         1 << 22, // ZERO_WINDOWS
         1 << 8,  // KECCAK_F
+        1 << 8,  // POSEIDON2
+        1 << 8,  // FR_ARITH
     ];
 
     /// The default `bytecode_size_words`: `2^20` words, a 4 MiB ceiling on the
@@ -1329,10 +1342,13 @@ pub mod ecall {
     /// Last number of the precompile range.
     pub const PRECOMPILE_LAST: u32 = 0x05FF;
 
-    /// Poseidon2 permutation over a `[Fr; 3]` state, `a0` = state pointer.
+    /// Poseidon2 permutation over a `[Fr; 3]` state, `a0` = the 96-byte frame
+    /// base pointer, read and written in place.
     ///
-    /// The one precompile number S10 assigns. No circuit implements it yet, so
-    /// every executor answers `-ENOSYS` and the caller runs its software path.
+    /// Assigned at S10 and given its circuit at S23: a **delegation** call,
+    /// `docs/spec/delegation.md` is its ABI and `constants::family::POSEIDON2`
+    /// the family that proves it. The three lanes cross the frame as canonical
+    /// little-endian `Fr`, 8 words each, lane `i` at words `8i..8i + 8`.
     pub const PRECOMPILE_POSEIDON2: u32 = 0x0500;
 
     /// keccak-f[1600] over a 200-byte state frame, `a0` = the frame base
@@ -1342,6 +1358,19 @@ pub mod ecall {
     /// circuit and `-ENOSYS` on one that does not, so the same binary runs
     /// under `qemu-riscv32` with its software fallback.
     pub const PRECOMPILE_KECCAK_F: u32 = 0x0501;
+
+    /// One `Fr` add, multiply or inverse over a 25-word frame, `a0` = the
+    /// frame base pointer, read and written in place. A **delegation** call
+    /// (S23); `constants::family::FR_ARITH` is the family that proves it and
+    /// `docs/spec/delegation.md` §13 the frame table.
+    ///
+    /// The operands cross the frame in `field::Fr`'s **in-memory**
+    /// representation — the four Montgomery limbs, little-endian, which is a
+    /// canonical little-endian encoding of a field element and is checked to
+    /// be one in-circuit. The three operations are exactly what `Fr`'s `Add`,
+    /// `Mul` and `inverse` compute on those representatives, so the delegated
+    /// path and the software fallback are the same function by construction.
+    pub const PRECOMPILE_FR_ARITH: u32 = 0x0502;
 
     /// Public input, committed: the fd 0 byte stream the public I/O digest
     /// binds first.
@@ -1395,12 +1424,37 @@ pub mod address_space {
     /// collide with a window family's init write, and a request with no
     /// invocation would balance.
     ///
-    /// **Each delegation family takes the next tag**, append-only: S22's and
-    /// S23's are 5 and 6. The tag *is* the delegation type, which is why a
-    /// keccak request cannot be answered by another type's invocation at the
-    /// same frame base; the anchor's address is the frame base and carries no
-    /// type of its own.
+    /// **Each delegation family takes the next tag**, append-only. The tag
+    /// *is* the delegation type, which is why a keccak request cannot be
+    /// answered by another type's invocation at the same frame base; the
+    /// anchor's address is the frame base and carries no type of its own.
+    ///
+    /// With more than one type the requesting row can no longer name its tag
+    /// with a literal, because one `deleg` frame query serves every type: the
+    /// tag rides the frame's `deleg_space` column instead, which the row's
+    /// type selectors pin (`docs/spec/delegation.md` §5.1).
     pub const DELEGATION_KECCAK_F: u8 = 4;
+
+    /// The delegation anchor space of `family::POSEIDON2` (S23). As
+    /// [`DELEGATION_KECCAK_F`] in every respect but the type it names.
+    pub const DELEGATION_POSEIDON2: u8 = 5;
+
+    /// The delegation anchor space of `family::FR_ARITH` (S23).
+    pub const DELEGATION_FR_ARITH: u8 = 6;
+
+    /// Every delegation tag, ascending, **append-only**: the one place the set
+    /// is written down, so a reader of a memory event can tell a delegation
+    /// anchor from RAM, a register or the pc without knowing which family it
+    /// belongs to.
+    ///
+    /// `constraints::memory::frame_query_takes` and `trace::AddressSpace` both
+    /// read it; the `deleg` frame query takes an event in **any** of these
+    /// spaces, and nothing else does.
+    pub const DELEGATION: [u8; 3] = [
+        DELEGATION_KECCAK_F,
+        DELEGATION_POSEIDON2,
+        DELEGATION_FR_ARITH,
+    ];
 }
 
 /// The memory argument's clock, frozen at S12 from the master's memory
@@ -1496,6 +1550,36 @@ pub mod delegation {
 
     /// A declaration record's length: [`MARKER_MAGIC`] then a `u32`.
     pub const MARKER_BYTES: usize = 12;
+
+    /// **The delegation registry**: every delegation type, ascending by family
+    /// id, as `(family, ecall number, address-space tag, frame words)`.
+    /// Append-only, and the one place the four are tied together —
+    /// `program::DELEGATIONS` is this table, `constraints::add_sub` builds one
+    /// selector and one number gate per row of it, `constraints`' circuits
+    /// take their tag from it, and `emulator` dispatches on it.
+    ///
+    /// `docs/spec/delegation.md` §3 is the same table in prose, and
+    /// `crates/constants/tests/ecall_abi.rs` holds the two equal.
+    pub const TYPES: [(u32, u32, u8, usize); 3] = [
+        (
+            super::family::KECCAK_F,
+            super::ecall::PRECOMPILE_KECCAK_F,
+            super::address_space::DELEGATION_KECCAK_F,
+            super::keccak::FRAME_WORDS,
+        ),
+        (
+            super::family::POSEIDON2,
+            super::ecall::PRECOMPILE_POSEIDON2,
+            super::address_space::DELEGATION_POSEIDON2,
+            super::poseidon2::FRAME_WORDS,
+        ),
+        (
+            super::family::FR_ARITH,
+            super::ecall::PRECOMPILE_FR_ARITH,
+            super::address_space::DELEGATION_FR_ARITH,
+            super::fr_arith::FRAME_WORDS,
+        ),
+    ];
 }
 
 /// keccak-f[1600] and keccak256, frozen at S21.
@@ -1571,4 +1655,88 @@ pub mod keccak {
         0x0000_0000_8000_0001,
         0x8000_0000_8000_8008,
     ];
+}
+
+/// The **Poseidon2 delegation** family's shape, frozen at S23.
+///
+/// The permutation itself is `transcript::poseidon2_permute` and its round
+/// constants are [`POSEIDON2_RC3_INITIAL`], [`POSEIDON2_RC3_INTERNAL`] and
+/// [`POSEIDON2_RC3_TERMINAL`] — there is no second copy of either, here or in
+/// the circuit. This module holds only the numbers the *frame* needs.
+pub mod poseidon2 {
+    /// The permutation's width, `t`: three `Fr` lanes.
+    pub const WIDTH: usize = 3;
+
+    /// Words per `Fr` on the wire: 32 bytes, little-endian.
+    pub const WORDS_PER_LANE: usize = 8;
+
+    /// The frame: three lanes of eight words, read and written in place. Lane
+    /// `i` occupies words `WORDS_PER_LANE * i .. WORDS_PER_LANE * (i + 1)`.
+    pub const FRAME_WORDS: usize = WIDTH * WORDS_PER_LANE;
+
+    /// The frame in bytes, which is what a shim hands over.
+    pub const FRAME_BYTES: usize = 4 * FRAME_WORDS;
+
+    /// Full rounds, four before the partial rounds and four after.
+    pub const ROUNDS_FULL: usize = 8;
+
+    /// Partial rounds, S-boxing lane 0 alone.
+    pub const ROUNDS_PARTIAL: usize = 56;
+
+    /// Every round, in order: the circuit unrolls one layer group apiece.
+    pub const ROUNDS: usize = ROUNDS_FULL + ROUNDS_PARTIAL;
+
+    /// S-boxes in one permutation: three a full round, one a partial round.
+    pub const SBOXES: usize = 3 * ROUNDS_FULL + ROUNDS_PARTIAL;
+}
+
+/// The **Fr-arithmetic delegation** family's shape, frozen at S23.
+///
+/// One invocation is one operation, and one operation is one trace row: the
+/// contraction the recursion guest is sized against is `ops/row = 1`
+/// (`docs/spec/delegation.md` §13).
+///
+/// The three operands cross the frame in `field::Fr`'s **in-memory**
+/// representation — the four Montgomery limbs written little-endian, which is
+/// a canonical little-endian encoding of a field element and is checked to be
+/// one in-circuit. That choice is what makes the delegation worth making: a
+/// mathematically-canonical frame would cost a Montgomery conversion per
+/// operand, about twice the software multiply the delegation replaces.
+pub mod fr_arith {
+    /// Words per `Fr` on the wire: 32 bytes, little-endian.
+    pub const WORDS_PER_VALUE: usize = 8;
+
+    /// The operation code's word, the frame's first.
+    pub const OPCODE_WORD: usize = 0;
+
+    /// The first word of operand `a`.
+    pub const A_WORD: usize = 1;
+
+    /// The first word of operand `b`.
+    pub const B_WORD: usize = A_WORD + WORDS_PER_VALUE;
+
+    /// The first word of the result. The only words the invocation writes.
+    pub const OUT_WORD: usize = B_WORD + WORDS_PER_VALUE;
+
+    /// The frame: the opcode word then three values of eight words.
+    pub const FRAME_WORDS: usize = OUT_WORD + WORDS_PER_VALUE;
+
+    /// The frame in bytes, which is what a shim hands over.
+    pub const FRAME_BYTES: usize = 4 * FRAME_WORDS;
+
+    /// `out = a + b`, what `Fr`'s `Add` computes on the representatives.
+    pub const OP_ADD: u32 = 1;
+
+    /// `out = a * b`, what `Fr`'s `Mul` computes on the representatives —
+    /// which, the representatives being Montgomery, is `a·b·R^-1` over `Fr`.
+    pub const OP_MUL: u32 = 2;
+
+    /// `out = a.inverse()`, what `Fr`'s `inverse` computes on the
+    /// representatives — `R^2·a^-1` over `Fr` — and **0 at `a = 0`**, which is
+    /// this delegation's convention rather than `Fr`'s `None`. The backend
+    /// answers zero itself and never makes the call.
+    pub const OP_INV: u32 = 3;
+
+    /// The operation codes, ascending. Every live row carries exactly one.
+    pub const OPS: [u32; 3] = [OP_ADD, OP_MUL, OP_INV];
 }

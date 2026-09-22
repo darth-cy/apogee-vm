@@ -63,6 +63,7 @@ name = "field"
 version = "0.1.0"
 dependencies = [
  "constants",
+ "guest-sdk",
  "serde",
 ]
 

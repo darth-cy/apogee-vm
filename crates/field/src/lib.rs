@@ -284,6 +284,41 @@ impl Fr {
         }
         Some(Fr(mont_mul(&limbs, &FR_R2)))
     }
+
+    /// The element's **in-memory** representation, as 32 little-endian bytes:
+    /// the four Montgomery limbs written out, nothing converted.
+    ///
+    /// This is a canonical little-endian encoding of a field element like
+    /// [`to_bytes`]'s — the limbs are always reduced below `p` — but of a
+    /// *different* element: of `self · R`, where `R = 2^256 mod p`, rather
+    /// than of `self`. It exists for one caller, the Fr-arithmetic delegation
+    /// of `docs/spec/delegation.md` §13, whose frame carries operands in this
+    /// form precisely so that crossing it costs no Montgomery conversion.
+    /// Everything that is not that delegation uses [`to_bytes`].
+    ///
+    /// [`to_bytes`]: Fr::to_bytes
+    pub fn to_memory_bytes(&self) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        for i in 0..4 {
+            out[8 * i..8 * i + 8].copy_from_slice(&self.0[i].to_le_bytes());
+        }
+        out
+    }
+
+    /// The inverse of [`to_memory_bytes`]. `None` if the value is `>= p`,
+    /// which is what the delegation circuit's canonicity gates refuse.
+    pub fn from_memory_bytes(b: &[u8; 32]) -> Option<Fr> {
+        let mut limbs = [0u64; 4];
+        for (limb, chunk) in limbs.iter_mut().zip(b.chunks_exact(8)) {
+            let mut w = [0u8; 8];
+            w.copy_from_slice(chunk);
+            *limb = u64::from_le_bytes(w);
+        }
+        if is_ge_modulus(&limbs) {
+            return None;
+        }
+        Some(Fr(limbs))
+    }
 }
 
 /// One lowercase hex digit's value, or `None`.
