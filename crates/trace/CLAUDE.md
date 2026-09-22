@@ -12,7 +12,9 @@ order of the log — **`docs/spec/memory.md`** for the memory columns,
 **`docs/spec/delegation.md`** for the eighth role, the invocation frame and the anchor.
 
 ```rust
-pub enum AddressSpace { Reg, Ram, Pc, KeccakF }   // tags: constants::address_space, 1 2 3 4
+pub enum AddressSpace { Reg, Ram, Pc, KeccakF, Ecrecover, EcrecoverScratch }
+// tags: constants::address_space, 1 2 3 4 5 6
+impl AddressSpace { pub fn delegation(family: FamilyId) -> Option<AddressSpace>; }   // S22
 pub struct MemoryEvent { pub space: AddressSpace, pub addr: u32, pub ts: u64,
                          pub read_ts: u64, pub read_value: u32, pub write_value: u32 }
 pub struct FinalValue { pub space: AddressSpace, pub addr: u32, pub ts: u64, pub value: u32 }

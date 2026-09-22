@@ -10,14 +10,14 @@ every program.
 
 ```rust
 pub type FamilyId = u32;                                   // constants::family
-pub const FAMILIES: [FamilyId; 10];                        // ascending: the canonical order
+pub const FAMILIES: [FamilyId; 11];                        // ascending: the canonical order
 pub fn row_kind(instr: &Instr) -> (FamilyId, u32);         // the pc-claiming rule + mask bit
 pub enum RowField { Pc, NextPc, Rs1, Rs2, Rd, Imm, Funct3, ExtraMask }
 pub const ROW_FIELDS: [RowField; 8];                       // frozen column order
 pub fn lookup_tuple(family: FamilyId) -> &'static [RowField];
 pub fn field_mask(family: FamilyId) -> u8;                 // derived from the tuple
 
-pub struct ProgramParams { pub bytecode_size_words: u32, pub heights: [u32; 10], pub code_version: u32 }
+pub struct ProgramParams { pub bytecode_size_words: u32, pub heights: [u32; 11], pub code_version: u32 }
 impl ProgramParams { pub fn defaults() -> ProgramParams; }
 pub struct VmConfig { pub families: Vec<(FamilyId, u32)>, pub bytecode_size_words: u32 }
 impl VmConfig { pub fn to_bytes(&self) -> Vec<u8>; pub fn from_bytes(b: &[u8]) -> Option<VmConfig>;
@@ -36,8 +36,8 @@ pub enum ProgramError { UnsupportedCodeVersion, HeightNotOnMenu, ProgramTooLarge
                         WindowRule { rule: &'static str },
                         UnknownDelegation { addr: u32, number: u32 } }   // + Display
 
-// S21: delegation families. docs/spec/delegation.md §3 and §7.
-pub const DELEGATIONS: [(FamilyId, u32, usize); 1];        // (family, ecall number, frame words)
+// S21: delegation families. docs/spec/delegation.md §3 and §7; S22 appends ECRECOVER.
+pub const DELEGATIONS: [(FamilyId, u32, usize); 2];        // (family, ecall number, frame words)
 pub fn delegation_family(number: u32) -> Option<FamilyId>;
 pub fn delegation_ecall(family: FamilyId) -> Option<u32>;
 pub fn delegation_frame_words(family: FamilyId) -> Option<usize>;
@@ -59,6 +59,23 @@ pub fn absorb_statement_descriptor(tr: &mut Transcript, config: &VmConfig, shard
 pub fn check_memory_windows(config: &VmConfig, shard_counts: &[u32], windows: &[u32])
     -> Result<(), ProgramError>;
 pub fn family_name(family: FamilyId) -> &'static str;
+
+pub mod secp256k1 {                      // S22: docs/spec/ecrecover.md §1.4
+    pub type U256 = [u64; 4];            // four 64-bit limbs, least significant first
+    // The modulus is a parameter, not a type: p and n differ in nothing else, and the
+    // circuit does the same -- a congruence carries its modulus as gate literals.
+    pub fn add/sub/less/is_zero/mul_wide/div_rem_wide/rem(..);
+    pub fn addmod/submod/mulmod/mul_quotient_rem/invmod/powmod(..);
+    pub struct Point { pub infinity: bool, pub x: U256, pub y: U256 }
+    pub fn generator/on_curve/negate/point_add/point_double(..);
+    pub fn window_table/window_digits/joint_mul(..);   // the schedule the circuit proves
+    pub enum RecoverFailure { BadRecoveryId, ROutOfRange, SOutOfRange, NotOnCurve, Infinity }
+    pub fn recover(hash, v, r, s) -> Result<Point, RecoverFailure>;
+    pub fn curve_y(x, parity) -> Option<U256>;
+    pub fn from_be_bytes/to_be_bytes/to_frame_words/from_frame_words(..);
+    pub fn apply_frame(words: &mut [u32]);            // the delegated function itself
+    pub fn frame_of(hash, v, r, s) -> [u32; 42];
+}
 
 pub mod lookup_tables {                  // docs/spec/lookup.md §9
     pub const GENERIC_WIDTH: usize = 3;  // a key and two values; the narrower table zero-padded
@@ -92,6 +109,7 @@ is claimed by exactly one family by construction.
 | 7 | `INIT_TEARDOWN` | no pc; RAM window 0, the image window, exactly one shard; present in every `VmConfig`; an **empty** table: no columns, no live rows | 2^22 |
 | 8 | `ZERO_WINDOWS` | no pc; the zero-initialized RAM windows above window 0, one shard per touched window; present in every `VmConfig`; an **empty** table | 2^22 |
 | 9 | `KECCAK_F` | no pc; **invoked, not decoded**: ecall `0x501`, one keccak-f[1600] permutation a row, present exactly when the image declares it; an **empty** table | 2^8 |
+| 10 | `ECRECOVER` | no pc; invoked, not decoded: ecall `0x502`, one secp256k1 recovery per **2,048-row block**, present exactly when the image declares it; an **empty** table (`docs/spec/ecrecover.md`) | 2^20 |
 
 The two init families have **one height**, `h`: RAM window `w` is the bytes
 `[4h·w, 4h·(w+1))` (`docs/spec/memory.md` §3). `bytecode_size_words` defaults to 2^20
@@ -168,7 +186,7 @@ cover is therefore not expressible.
 | --- | --- | --- |
 | `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MEM_WORD`, `MEM_SUBWORD` | `pc next_pc rs1 rs2 rd imm extra_mask` | `0b1011_1111` |
 | `MUL_DIV`, `ATOMICS` | `pc next_pc rs1 rs2 rd extra_mask` | `0b1001_1111` |
-| `INIT_TEARDOWN`, `ZERO_WINDOWS`, `KECCAK_F` | — | `0` |
+| `INIT_TEARDOWN`, `ZERO_WINDOWS`, `KECCAK_F`, `ECRECOVER` | — | `0` |
 
 **`funct3` is in no tuple.** The extra mask is one-hot per mnemonic, which leaves it
 nothing to say; it remains a row field so a later family that wants it can take it.
@@ -351,6 +369,7 @@ useless. The verifier never sees an ELF.
 | `tests/tables.rs` | Acceptance 6 (every exported column of every table scanned: non-live rows are all `MINUS_ONE`, live rows equal to the stored values and neither padding nor zero), code above a shorter family's table, the 59 row kinds pinned numerically, `narrowest` at each width boundary, 7 (`next_pc` against the loader's halfword map), exact heights, `TableTooShort` at the boundary, `ProgramTooLarge` at the ceiling with segments without file bytes not counted, `ImageOutsideWindow` at `4h − 1` / `4h`, the image column of every guest against `initial_word` and the segment bytes, menu and version refusals, the frozen field masks, one-hot kinds naming exactly 59 mnemonics over the ISA corpus, narrowest storage, determinism, fixture pins |
 | `tests/config.rs` | The `VmConfig` wire form byte for byte, its refusals, a config without either init family or with the two at different heights refused by derivation and by `from_bytes`, a nine-family round trip, the identity wire form, the statement descriptor as three adjacent messages, and every `check_memory_windows` rule at its boundary |
 | `tests/identity.rs` | **All but two `#[ignore]`d — they need `assets/ptau/ppot_0080_24.ptau`.** fib at the defaults twice in-process and against the pin; the recipe rebuilt message by message; acceptance 9's moves plus a `.rodata` byte, a `.data` byte and the entry pc; a segment without file bytes resized does not move it; fib rebuilt from source twice. In CI: `identity_from_commitments` rebuilt message by message over a distinct point per family, and moved by the entry pc and by each commitment. `setup_commitments` — which column `INIT_TEARDOWN` commits, at which height — is reached only by the ignored recipe test |
+| `tests/secp256k1.rs` | **S22.** `num-bigint` as the bignum oracle on randomized vectors; the 512-by-256 division **exhaustively at reduced width** (128 normalized divisors x 65,536 dividends, every branch of Knuth's estimate); the constants re-derived rather than trusted — `p` from its closed form, `G` from the curve equation, `n` from `n*G = infinity`, and all fifteen `G_MULTIPLES` from the group law, which matters because the circuit spends them as **gate literals**; `recover` against the committed corpus `libsecp256k1` answered; every failure class reached by the input the EVM's rules say reaches it; and `Q = infinity` shown reachable rather than theoretical |
 | `tests/lookup_tables.rs` | S15's acceptance 10 — the packed table against an independent reference, and a poisoned row caught — a height below the table's 131,105 rows refused with a panic, and the three key ranges pairwise disjoint and off zero; and S17's pin: in CI, `the_generic_table_commitments_are_pinned_over_the_ceremony` holds `generic_table.txt` to `identity.txt`'s ceremony and to three 64-byte points; `#[ignore]`d, `the_generic_table_commitments_are_the_ceremonys_at_every_height` recomputes `generic_commitments` over the ceremony, holds it to the pin, and holds the table over `2^18`, `2^20` and `2^22` to the same three points |
 
 ```

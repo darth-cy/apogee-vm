@@ -22,7 +22,9 @@ docs/
                  jump-branch-slt.md, shift-bitwise.md, mul-div.md, memory-ops.md;
                  block-proof.md, the block layer: BlockProof, verify_block, ts windows; and
                  delegation.md, THE delegation ABI: the ecall convention, the frame, the
-                 anchor, static detachment, and the keccak-f family
+                 anchor, static detachment, and the keccak-f family; and
+                 ecrecover.md, S22's family: the EVM semantics, the 42-word frame, the
+                 row block, the scratch bus, the non-native gadget and the joint ladder
   handoff/       one note per completed stage: frozen API, artifacts, deviations
 crates/
   constants/     frozen constants and tags; zero logic; no_std
@@ -37,8 +39,9 @@ crates/
   loader/        ELF parsing, RVC expansion, ProgramImage; std
   isa/           the RV32IMAC instruction model and the 32-bit decoder; no deps
   program/       decoded per-family tables, VmConfig derivation, program identity and the image
-                 column; re-exports the statement descriptor and window rules from
-                 verifier-core; std
+                 column; `secp256k1`, the native curve the emulator executes and the
+                 witness builder writes from; re-exports the statement descriptor and
+                 window rules from verifier-core; std
   trace/         the memory event log and its self-check, the family buffers, the cycle
                  profile and shard plan, the TraceArchive snapshot, and the memory
                  argument's column builders; std
@@ -76,7 +79,8 @@ crates/
   guest-sdk/     crt0, entry!, linker script, bump allocator, ecall shims; no_std,
                  guest-only, and NOT a workspace member
 guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, opcodes/, heap/, consistency/,
-                 addsub/, control/, alu/, mem/, shards/, keccak-test/, keccak-unused/
+                 addsub/, control/, alu/, mem/, shards/, keccak-test/, keccak-unused/,
+                 ecrecover-test/, ecrecover-fail/
                  -- their own workspace; see guests/Cargo.toml and docs/guest-program-manual.md
 assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 handoff
 tools/
@@ -133,7 +137,7 @@ cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
 cargo clippy -p prover --all-targets --features metrics -- -D warnings   # the ONE feature's configuration
-cargo test --workspace                      # 1,001 tests as of S21; 70 more are #[ignore]d
+cargo test --workspace                      # 1,018 tests as of S22; 71 more are #[ignore]d
 cargo test -p prover --features metrics --test metrics  # the metrics harness; 10 more, 2 #[ignore]d
 cargo test -p program --test delegation -- --ignored --test-threads=1  # static detachment at BOTH guest profiles; builds four guests, 0.6 s
 cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 18.8 GB peak, 200 s, 30 min on a runner
@@ -156,7 +160,7 @@ cargo test -p emulator --test consistency -- --include-ignored   # and again at 
 git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constraints/tests/vectors/ crates/checker/tests/vectors/
 -------------------------------------------------------------------------------
 cargo run -p kat-gen                        # refresh every fixture (manual, deliberate)
-cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader | isa | program | gkr | memory | lookup | family | keccak | tape
+cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader | isa | program | gkr | memory | lookup | family | keccak | ecrecover | tape
 cargo run -p checker -- laws <artifact>     # Laws 1-4 and the lookup rules, the standalone validators
 cargo run -p checker -- padding <artifact>  # the padding contract
 cargo run -p checker -- dump <artifact>     # a circuit, readably: layers, gates, relations, catalogue
@@ -728,16 +732,42 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   convention (`a7` the number, `a0` the frame base, `a0 ← 0`, fall-through), the indirect
   frame, the anchor and its 1:1 pairing, the three request-side zeroings, static detachment
   by a `.rodata` declaration record and reachability, the alignment rules, and the
-  delegation-shard ts-window convention. S22 and S23 consume it frozen and may only append
-  frame tables. **A delegation family is invoked, not decoded**: it claims no pc, has no
-  decoded table, owns no cycle, and is in a `VmConfig` exactly when the linked binary
-  declares it — the third presence rule, beside "claims a pc" and "is a window family".
-- **A delegation family carries no lookup channel, and that is load-bearing.** Its height is
-  `2^8` (rows are invocations, not halfwords; `2^16` is 744 GB of forward pass), where no
-  range channel's table fits, so every bound it makes is a bit decomposition with a
-  booleanity gate. That is also why its registry arm sits *below* `family_circuit`'s
-  minimum-height guard: a family with no channel reaches no `BITS ≤ trace_vars` assertion,
-  and putting it in the guard would refuse the only height it has.
+  delegation-shard ts-window convention. **A delegation family is invoked, not decoded**:
+  it claims no pc, has no decoded table, owns no cycle, and is in a `VmConfig` exactly when
+  the linked binary declares it — the third presence rule, beside "claims a pc" and "is a
+  window family". S22 amends **three sentences** of it and nothing else
+  (`docs/spec/ecrecover.md` §8): §1's "one row is one call", §9's "no lookup channel", and
+  §3's forward-looking claim that S22 is poseidon2 — it is ecrecover, so the number is
+  `0x0502` and the tags are 5 and 6.
+- **A delegation family's rows are invocations, and an invocation may be a block of them.**
+  `KECCAK_F` is one row a call; `ECRECOVER` is `constants::ecrecover::ROWS_PER_INVOCATION`
+  = 2,048, aligned, because a recovery is ~1,180 non-native congruences and no row holds
+  it. What is frozen is that rows are invocations rather than cycles, not the ratio
+  (`docs/spec/ecrecover.md` §2.2).
+- **A delegation family carries a lookup channel only at a height that fits it.** `KECCAK_F`
+  carries none: its height is `2^8` (`2^16` is 744 GB of forward pass) and no range
+  channel's table fits there, so every bound it makes is a bit decomposition.
+  `ECRECOVER` at `2^20` carries `RANGE16` **and** `TIMESTAMP`, so its frame's gap checks
+  are S14's 19+19 gadget. What is unchanged is the rule that matters: a delegation family
+  sits *below* `family_circuit`'s minimum-height guard, so a height its channels do not fit
+  returns `None` for a clean `Err` rather than panicking inside `VerifyingKey::check` on
+  bytes a verifier was handed.
+- **A delegation type reaches the mirror leaf through an `M` column, never a `W` one.**
+  `delegation.md` §10 says a second type makes the leaf's `AS` term "a sum over types of
+  `(tag_t, m_t)`"; that cannot be built, because `FRAME_SPACE[DELEG]` is a literal per
+  query slot and `check_memory` refuses a leaf cone that reads `W`. The requesting frame
+  gains one `M` column carrying the tag, pinned by an *enforcing* gate — which may read `W`
+  — and the leaf's `AS` part becomes a product (`docs/spec/ecrecover.md` §2.4).
+- **A 256-bit value recomposed to one `Fr` is 6-to-1.** `p / |Fr| = n / |Fr| = 5`, so six
+  canonical values with limbs below `2^64` recompose to zero. Every equality and zero test
+  over a non-native value is therefore on **two 128-bit halves**, as `transcript::g1_limbs`
+  already splits a coordinate. A single-`Fr` `is_zero` makes the equal-x branch of a point
+  addition selectable, and a selectable degenerate branch frees `λ` — which recovers an
+  arbitrary public key from an honest signature (`docs/spec/ecrecover.md` §3.4).
+- **Two declaration records may not share a `link_section`.** `--gc-sections` collects at
+  section granularity, so records in one output section are kept or dropped together, and
+  `guests/keccak-test` declared `ECRECOVER` until they were split. That is `#[used]`'s
+  failure from the other direction, and `crates/program/tests/delegation.rs` catches both.
 - **The anchor's value column is free on both sides, and the multiset is what pairs them.**
   A request writes `T(deleg_space, base, 4c+3, v)` and an invocation reads it; nothing fixes
   `v` locally on either side, and they cancel only when equal. What *is* pinned, by three
@@ -838,3 +868,4 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 | S19 — Memory-op families + atomics | done | `docs/handoff/S19-mem.md` |
 | S20 — Sharding + block orchestration | done | `docs/handoff/S20-orchestration.md` |
 | S21 — keccak256 delegation + the delegation ABI | done | `docs/handoff/S21-keccak256.md` |
+| S22 — secp256k1 ecrecover delegation family | **partial** | `docs/handoff/S22-ecrecover.md` |

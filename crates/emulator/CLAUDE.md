@@ -78,7 +78,10 @@ or rebuilding the streams from the log.
   `-ENOSYS`, so its frame will not change when its circuit lands. A number the table does
   not list reads none. The emulator spells no ABI number itself;
   `crates/constants/tests/ecall_abi.rs` checks that.
-- **A delegation ecall performs the permutation and answers 0** (S21). The arm keys on
+- **A delegation ecall performs its family's function and answers 0** (S21; generic at
+  S22). The frame's **width** comes from `program::delegation_frame_words` and the
+  **transform** from the one `delegated` match, which is the only per-family line in the
+  request path. The arm keys on
   `program::delegation_family(n)`, never on a literal: it reads `a0` as the frame base,
   refuses a misaligned or out-of-window one as the ordinary `Misaligned` / `OutOfBounds`
   fatal errors, permutes the 50 words in place, logs the 50 RAM events at
@@ -90,6 +93,9 @@ or rebuilding the streams from the log.
   the executor and the preprocessor disagreeing about the ABI is not something to answer
   `-ENOSYS` to. An executor *without* the circuit — `qemu-riscv32` — answers `-ENOSYS` and
   the guest's software fallback runs, which is the whole of acceptance 3.
+- **A `Delegate` query's address space is the family the row requested**, not a constant:
+  `trace::Role::space` takes the row's delegation family since S22, and the recorder passes
+  it. Every other role's space is still a constant.
 - **`keccak_f` is the one permutation in the repository** and the emulator owns it, because
   the emulator is what executes it; the circuit's forward pass is checked against it and
   `tests/keccak.rs` checks it against `tiny-keccak` on all 1,600 single-bit states. The
@@ -129,6 +135,7 @@ docker run --rm -v "$PWD":/w -w /w -e CARGO_TARGET_DIR=/tmp/t rust:latest bash -
 | File | What |
 | --- | --- |
 | `src/lib.rs` (unit) | the last cycle on the 38-bit clock runs and the next is `ClockOverflow` |
+| `tests/ecrecover.rs` | **S22.** The frame transform against the committed corpus — including that a failing call leaves **every** output word zero, and that an input word never moves; `guests/ecrecover-test`'s four vectors read **out of the guest's source** and held to that corpus, so a stale literal cannot pass; and both fixture guests run on the emulator to their exit statuses, 4 and 5 |
 | `tests/keccak.rs` | `keccak_f` against `tiny-keccak`: the all-zero state, the all-ones state, **all 1,600 single-bit states**, a random walk, and `lanes_of`/`words_of` round-tripping. 7 tests |
 | `src/qemu.rs` (unit) | a real log parses; the entry rule is x2's and ends at its first write; a perturbed register is reported where it is; the whitelist is sc.w and bounded, and its exemption ends at the next write of rd |
 | `tests/guests.rs` | the guests' host-computed answers (fib, heap, atomics, rvc-dense), acceptance 10 (echo's `-ENOSYS` fallback computes the S02 permutation), orderbook's advice invariance, `opcodes` executes all 58 non-trapping mnemonics and every instruction of its compressed block, acceptance 11 (seven misaligned kinds, both paths), `run` == `trace_run`, the recorded fd 0 stream is what the guest consumed; and **S21's acceptance 3**: the six digests `guests/keccak-test` checks itself against, re-derived from `tiny-keccak` and read out of the guest's own source so a stale literal cannot pass, and both keccak guests run to their exit statuses under the delegation ecall |

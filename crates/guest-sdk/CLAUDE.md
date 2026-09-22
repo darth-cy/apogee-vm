@@ -16,12 +16,27 @@ pub fn poseidon2_permute(state: &mut [u8; 96]) -> bool;   // false on -ENOSYS
 
 // S21, docs/spec/delegation.md §2. The signature is frozen; the path is not.
 pub fn keccak256(input: &[u8]) -> [u8; 32];
+
+// S22, docs/spec/ecrecover.md. Frozen: S24's revm precompile hook routes through it.
+// `None` is every failure the EVM's 0x01 has. The delegated path and the software
+// fallback are bit-identical **by construction**, not by comparison: both fill the same
+// 42-word frame, and the address is `keccak256(x ‖ y)[12..]` afterwards, once — so the
+// circuit proves the public key and never hashes.
+pub fn ecrecover(msg_hash: &[u8; 32], v: u8, r: &[u8; 32], s: &[u8; 32]) -> Option<[u8; 20]>;
 ```
 
 `docs/spec/ecall-abi.md` is the normative document for all of it, and
 `docs/guest-program-manual.md` is the walkthrough for someone writing a guest:
 the crate layout, the I/O rules, the build, and exporting the result as a
 `ProgramImage` artifact with `tools/artifact-dump`.
+
+**Each delegation declaration record has a `link_section` of its own** —
+`.rodata.apogee.delegations.<family>`, not a shared `.rodata.apogee.delegations`.
+`--gc-sections` collects at *section* granularity, so records sharing one output section
+are kept or dropped together, and `guests/keccak-test` declared `ECRECOVER` until they
+were split (S22). That is `#[used]`'s failure from the other direction; `link.ld`'s
+`*(.rodata*)` absorbs the suffixed names unchanged and `crates/program`'s scan reads
+bytes, never section names.
 
 ## Two things about this crate that are true of nothing else
 1. **It is not a workspace member.** It defines `#[panic_handler]` and
