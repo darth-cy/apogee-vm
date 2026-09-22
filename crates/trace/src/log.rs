@@ -25,6 +25,29 @@ pub enum AddressSpace {
     /// has a space of its own — the tag *is* the delegation type — so a
     /// keccak request cannot consume another type's answer.
     KeccakF,
+    /// `family::ECRECOVER`'s **delegation anchor** space (S22): [`KeccakF`]'s
+    /// rule with the next tag and nothing else new.
+    ///
+    /// [`KeccakF`]: AddressSpace::KeccakF
+    Ecrecover,
+    /// `family::ECRECOVER`'s **scratch** space (S22), and the one space that
+    /// is neither memory nor an anchor.
+    ///
+    /// A recovery spans a block of rows, and a value one row computes another
+    /// reads; this engine has no cross-row wiring, so the carry rides the one
+    /// global multiset here (`docs/spec/ecrecover.md` §2.3). Its addresses are
+    /// **not** guest pointers — they are `(invocation index, value id)` packed
+    /// — so [`holds`] admits any address at all, and like every delegation
+    /// space it does not chain.
+    ///
+    /// **No event of this space ever reaches a [`MemoryEventLog`].** It is the
+    /// circuit's leaves and nothing else, exactly as the anchor's two tuples
+    /// are (`docs/spec/delegation.md` §5.4); the variant exists so that
+    /// `constants::address_space`'s tags and this enum stay in bijection,
+    /// which `crates/trace/tests/log.rs` holds them to.
+    ///
+    /// [`holds`]: AddressSpace::holds
+    EcrecoverScratch,
 }
 
 impl AddressSpace {
@@ -35,6 +58,19 @@ impl AddressSpace {
             AddressSpace::Ram => address_space::RAM,
             AddressSpace::Pc => address_space::PC,
             AddressSpace::KeccakF => address_space::DELEGATION_KECCAK_F,
+            AddressSpace::Ecrecover => address_space::DELEGATION_ECRECOVER,
+            AddressSpace::EcrecoverScratch => address_space::DELEGATION_ECRECOVER_SCRATCH,
+        }
+    }
+
+    /// The anchor space of a delegation family, or `None` for a family that is
+    /// not one. The tag *is* the delegation type
+    /// (`docs/spec/delegation.md` §3).
+    pub fn delegation(family: u32) -> Option<AddressSpace> {
+        match family {
+            constants::family::KECCAK_F => Some(AddressSpace::KeccakF),
+            constants::family::ECRECOVER => Some(AddressSpace::Ecrecover),
+            _ => None,
         }
     }
 
@@ -45,6 +81,8 @@ impl AddressSpace {
             address_space::RAM => Some(AddressSpace::Ram),
             address_space::PC => Some(AddressSpace::Pc),
             address_space::DELEGATION_KECCAK_F => Some(AddressSpace::KeccakF),
+            address_space::DELEGATION_ECRECOVER => Some(AddressSpace::Ecrecover),
+            address_space::DELEGATION_ECRECOVER_SCRATCH => Some(AddressSpace::EcrecoverScratch),
             _ => None,
         }
     }
@@ -56,12 +94,15 @@ impl AddressSpace {
     pub fn holds(self, addr: u32) -> bool {
         match self {
             AddressSpace::Reg => addr < 32,
-            AddressSpace::Ram | AddressSpace::KeccakF => {
+            AddressSpace::Ram | AddressSpace::KeccakF | AddressSpace::Ecrecover => {
                 addr.is_multiple_of(4)
                     && addr >= guest_memory::RAM_ORIGIN
                     && addr - guest_memory::RAM_ORIGIN < guest_memory::RAM_LENGTH
             }
             AddressSpace::Pc => addr == 0,
+            // Scratch addresses are packed `(invocation, value id)` pairs, not
+            // pointers, and no event of this space reaches a log anyway.
+            AddressSpace::EcrecoverScratch => true,
         }
     }
 
@@ -76,7 +117,9 @@ impl AddressSpace {
     pub fn chains(self) -> bool {
         match self {
             AddressSpace::Reg | AddressSpace::Ram | AddressSpace::Pc => true,
-            AddressSpace::KeccakF => false,
+            AddressSpace::KeccakF | AddressSpace::Ecrecover | AddressSpace::EcrecoverScratch => {
+                false
+            }
         }
     }
 }
@@ -444,7 +487,9 @@ impl MemoryEventLog {
             AddressSpace::Reg => self.regs[addr as usize],
             AddressSpace::Pc => self.pc,
             AddressSpace::Ram => self.ram.get(&addr).copied(),
-            AddressSpace::KeccakF => None,
+            AddressSpace::KeccakF | AddressSpace::Ecrecover | AddressSpace::EcrecoverScratch => {
+                None
+            }
         }
     }
 
@@ -458,7 +503,7 @@ impl MemoryEventLog {
             }
             // An unchained space keeps no last write: there is nothing for a
             // later query there to read, and nothing to tear down.
-            AddressSpace::KeccakF => {}
+            AddressSpace::KeccakF | AddressSpace::Ecrecover | AddressSpace::EcrecoverScratch => {}
         }
     }
 }
@@ -471,6 +516,8 @@ fn initial_value(image: &ProgramImage, space: AddressSpace, addr: u32) -> u32 {
         AddressSpace::Reg => 0,
         AddressSpace::Pc => image.entry,
         AddressSpace::Ram => image.initial_word(addr),
-        AddressSpace::KeccakF => 0,
+        // A delegation space is not memory: nothing initializes it, and its
+        // balance is a bijection rather than a chain.
+        AddressSpace::KeccakF | AddressSpace::Ecrecover | AddressSpace::EcrecoverScratch => 0,
     }
 }

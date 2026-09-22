@@ -22,12 +22,13 @@
 use std::fmt;
 
 pub mod lookup_tables;
+pub mod secp256k1;
 
 use constants::extra_mask::{
     add_sub_lui_auipc as alu, atomics, jump_branch_slt as jbs, mem_subword, mem_word, mul_div,
     shift_bitwise as sb, system_code,
 };
-use constants::{delegation, ecall, family, guest_memory, keccak};
+use constants::{delegation, ecall, ecrecover, family, guest_memory, keccak};
 use curve::G1Affine;
 use field::Fr;
 use isa::{decode, Instr};
@@ -55,6 +56,7 @@ pub const FAMILIES: [FamilyId; family::COUNT as usize] = [
     family::INIT_TEARDOWN,
     family::ZERO_WINDOWS,
     family::KECCAK_F,
+    family::ECRECOVER,
 ];
 
 /// Every **delegation** family, with the ecall number that invokes it and the
@@ -65,11 +67,18 @@ pub const FAMILIES: [FamilyId; family::COUNT as usize] = [
 /// answered by that family's circuit, the frame it dereferences is that many
 /// words, and a guest declares it by linking the shim that emits the marker
 /// record of §7.
-pub const DELEGATIONS: [(FamilyId, u32, usize); 1] = [(
-    family::KECCAK_F,
-    ecall::PRECOMPILE_KECCAK_F,
-    keccak::FRAME_WORDS,
-)];
+pub const DELEGATIONS: [(FamilyId, u32, usize); 2] = [
+    (
+        family::KECCAK_F,
+        ecall::PRECOMPILE_KECCAK_F,
+        keccak::FRAME_WORDS,
+    ),
+    (
+        family::ECRECOVER,
+        ecall::PRECOMPILE_ECRECOVER,
+        ecrecover::FRAME_WORDS,
+    ),
+];
 
 /// The family that answers `number`, or `None` if it is not a delegation call.
 pub fn delegation_family(number: u32) -> Option<FamilyId> {
@@ -119,6 +128,7 @@ pub fn family_name(family: FamilyId) -> &'static str {
         family::INIT_TEARDOWN => "INIT_TEARDOWN",
         family::ZERO_WINDOWS => "ZERO_WINDOWS",
         family::KECCAK_F => "KECCAK_F",
+        family::ECRECOVER => "ECRECOVER",
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -253,7 +263,7 @@ pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
         | family::MEM_WORD
         | family::MEM_SUBWORD => &[Pc, NextPc, Rs1, Rs2, Rd, Imm, ExtraMask],
         family::MUL_DIV | family::ATOMICS => &[Pc, NextPc, Rs1, Rs2, Rd, ExtraMask],
-        family::INIT_TEARDOWN | family::ZERO_WINDOWS | family::KECCAK_F => &[],
+        family::INIT_TEARDOWN | family::ZERO_WINDOWS | family::KECCAK_F | family::ECRECOVER => &[],
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -925,7 +935,7 @@ pub fn setup_commitments(
             // no decoded table at all: it is invoked, never decoded, so there
             // is nothing about it for identity to commit but its presence in
             // the `VM_CONFIG` message.
-            family::ZERO_WINDOWS | family::KECCAK_F => Vec::new(),
+            family::ZERO_WINDOWS | family::KECCAK_F | family::ECRECOVER => Vec::new(),
             // One column at a time: at 2^22 rows an `Fr` column is 128 MiB.
             _ => (0..table.columns.len())
                 .map(|c| cm(table, &table.column_poly(c)))

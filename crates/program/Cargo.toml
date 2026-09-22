@@ -23,5 +23,8 @@ srs.workspace = true
 verifier-core.workspace = true
 
 [dev-dependencies]
+# The bignum oracle for `src/secp256k1.rs`: every limb routine is differenced
+# against it, and the 512-by-256 division exhaustively at reduced width.
+num-bigint.workspace = true
 test-support.workspace = true
 transcript.workspace = true

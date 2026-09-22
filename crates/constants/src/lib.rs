@@ -1063,9 +1063,24 @@ pub mod family {
     /// Claims no pc, owns no cycle, and is in a `VmConfig` only when the
     /// linked binary declares it (`docs/spec/delegation.md` §7).
     pub const KECCAK_F: u32 = 9;
+    /// The secp256k1 **ecrecover** delegation family (S22): one public-key
+    /// recovery per invocation, invoked by the [`ecall::PRECOMPILE_ECRECOVER`]
+    /// ecall and never decoded. Claims no pc, owns no cycle, and is in a
+    /// `VmConfig` only when the linked binary declares it
+    /// (`docs/spec/delegation.md` §7).
+    ///
+    /// Unlike [`KECCAK_F`] one of its rows is **not** one invocation: a
+    /// recovery is 259 point doublings and 133 point additions over a
+    /// non-native 256-bit field, which no single row can hold, so an
+    /// invocation is a fixed aligned block of
+    /// [`ecrecover::ROWS_PER_INVOCATION`] rows and the values crossing between
+    /// them ride the global memory multiset in
+    /// [`address_space::DELEGATION_ECRECOVER_SCRATCH`]
+    /// (`docs/spec/ecrecover.md` §2).
+    pub const ECRECOVER: u32 = 10;
 
     /// How many families this table defines.
-    pub const COUNT: u32 = 10;
+    pub const COUNT: u32 = 11;
 
     /// Whether a family's rows are **execution cycles**, indexed by
     /// `FamilyId`. Append-only, beside the ids themselves.
@@ -1089,6 +1104,7 @@ pub mod family {
         false, // INIT_TEARDOWN
         false, // ZERO_WINDOWS
         false, // KECCAK_F
+        false, // ECRECOVER
     ];
 
     /// The trace-height menu, ascending. Even powers of two only, so that a
@@ -1128,6 +1144,7 @@ pub mod family {
         1 << 22, // INIT_TEARDOWN
         1 << 22, // ZERO_WINDOWS
         1 << 8,  // KECCAK_F
+        1 << 20, // ECRECOVER
     ];
 
     /// The default `bytecode_size_words`: `2^20` words, a 4 MiB ceiling on the
@@ -1343,6 +1360,20 @@ pub mod ecall {
     /// under `qemu-riscv32` with its software fallback.
     pub const PRECOMPILE_KECCAK_F: u32 = 0x0501;
 
+    /// secp256k1 public-key recovery over a 168-byte frame, `a0` = the frame
+    /// base pointer, read and written in place. The second **delegation**
+    /// call: `docs/spec/delegation.md` is its ABI, `docs/spec/ecrecover.md`
+    /// its frame table and its circuit, and the family that proves it is
+    /// `constants::family::ECRECOVER`. Returns 0 on an executor that has the
+    /// circuit and `-ENOSYS` on one that does not.
+    ///
+    /// **`0x0502` and not `0x0500`.** `docs/spec/delegation.md` §3 said "S22
+    /// gives [`PRECOMPILE_POSEIDON2`] one and takes address-space tag 5",
+    /// written at S21 when the next stage's subject was still open. S22 is
+    /// ecrecover, and ecall numbers are append-only forever, so the number
+    /// after keccak's is this one; §3's sentence is amended, not honoured.
+    pub const PRECOMPILE_ECRECOVER: u32 = 0x0502;
+
     /// Public input, committed: the fd 0 byte stream the public I/O digest
     /// binds first.
     pub const FD_PUBLIC_INPUT: u32 = 0;
@@ -1401,6 +1432,36 @@ pub mod address_space {
     /// same frame base; the anchor's address is the frame base and carries no
     /// type of its own.
     pub const DELEGATION_KECCAK_F: u8 = 4;
+
+    /// The **delegation** anchor space of `family::ECRECOVER` (S22), which is
+    /// [`DELEGATION_KECCAK_F`]'s rule with the next tag and nothing else new.
+    pub const DELEGATION_ECRECOVER: u8 = 5;
+
+    /// `family::ECRECOVER`'s **scratch** space (S22), and the one address
+    /// space that is neither memory nor an anchor.
+    ///
+    /// A recovery does not fit in one row (`family::ECRECOVER`), so an
+    /// invocation is a block of rows and a value computed on one row is read
+    /// on another. This engine has no cross-row wiring — a gate list is
+    /// row-wise or halving — so the carry rides the one global multiset: the
+    /// producing row writes `T(SCRATCH, addr, cycle, value)` and the consuming
+    /// row reads it, and they cancel only when both fields agree. The address
+    /// is `(invocation index, value id)` packed, and the timestamp is the
+    /// requesting cycle, which is distinct per invocation, so no two
+    /// invocations' tuples can meet (`docs/spec/ecrecover.md` §2.3).
+    ///
+    /// **It does not chain, and needs no gap check**, for
+    /// [`DELEGATION_KECCAK_F`]'s reason: nothing here is read twice and
+    /// nothing is initialized. That is also why it may not live in [`RAM`],
+    /// where every row of an invocation shares one timestamp
+    /// (`delegation::FRAME_DELTA`) and a scratch word written and read inside
+    /// one invocation would need a gap of −1.
+    ///
+    /// **This takes the tag S21 pencilled in for S23.** The comment above said
+    /// "S22's and S23's are 5 and 6"; S22 needs two, so S23's is 7. Tags are
+    /// append-only and nothing is published — `PROTOCOL_VERSION` is still 0 —
+    /// so the cost of the shift is this sentence.
+    pub const DELEGATION_ECRECOVER_SCRATCH: u8 = 6;
 }
 
 /// The memory argument's clock, frozen at S12 from the master's memory
@@ -1571,4 +1632,374 @@ pub mod keccak {
         0x0000_0000_8000_0001,
         0x8000_0000_8000_8008,
     ];
+}
+
+/// secp256k1, the curve `family::ECRECOVER` recovers a public key over
+/// (S22). Frozen; `docs/spec/ecrecover.md` section 1 is normative.
+///
+/// `y^2 = x^3 + 7` over `F_p`, with `a = 0`, `b = 7`, cofactor 1 and group
+/// order `n`. **Neither `p` nor `n` fits in `Fr`** -- both are 256 bits and
+/// `Fr` is 254 -- which is the whole reason the circuit is non-native: every
+/// value here is four 64-bit limbs and every product carries a witnessed
+/// quotient (`docs/spec/ecrecover.md` section 3).
+///
+/// Zero logic, as everywhere in this crate. The limb tables below were
+/// computed from `p = 2^256 - 2^32 - 977` and the generator, not transcribed,
+/// and `crates/trace/tests/secp256k1.rs` re-derives every one of them from the
+/// curve equation and the group law -- the pattern [`keccak::ROUND_CONSTANTS`]
+/// uses.
+pub mod secp256k1 {
+    /// Limbs per 256-bit value. **Four, of 64 bits**, pinned by the stage
+    /// prompt: a schoolbook 4x4 product accumulates at most
+    /// `4 * (2^64 - 1)^2 < 2^131`, which is well inside `Fr`'s 254 bits, so a
+    /// position equation needs no gadget and stays degree 2.
+    pub const LIMBS: usize = 4;
+
+    /// Bits per limb.
+    pub const LIMB_BITS: u32 = 64;
+
+    /// A limb's range-check chunks, on `lookup_channel::RANGE16`. Four 16-bit
+    /// chunks a limb: 16 divides 64, so a limb is bounded **exactly** at
+    /// `2^64` and not at some wider power -- which matters, because a limb
+    /// loose by even one bit stops `sum 2^(64i) * a_i` being a unique
+    /// representation and the canonicality borrow chain stops meaning what it
+    /// says.
+    pub const CHUNKS_PER_LIMB: usize = 4;
+
+    /// The window width of both scalar multiplications: **4**, so a 256-bit
+    /// scalar is 64 digits.
+    pub const WINDOW_BITS: u32 = 4;
+
+    /// Digits in a 256-bit scalar at [`WINDOW_BITS`].
+    pub const WINDOWS: usize = 64;
+
+    /// Non-zero entries in a window table, `1 ..= 15`. The zero digit is not a
+    /// table entry: it is the identity, and the identity has no affine form.
+    pub const WINDOW_ENTRIES: usize = 15;
+
+    /// The field modulus `p = 2^256 - 2^32 - 977`, four 64-bit limbs,
+    /// least significant first.
+    pub const P: [u64; LIMBS] = [
+        0xfffffffefffffc2f,
+        0xffffffffffffffff,
+        0xffffffffffffffff,
+        0xffffffffffffffff,
+    ];
+
+    /// The group order `n`, four 64-bit limbs, least significant first.
+    pub const N: [u64; LIMBS] = [
+        0xbfd25e8cd0364141,
+        0xbaaedce6af48a03b,
+        0xfffffffffffffffe,
+        0xffffffffffffffff,
+    ];
+
+    /// `(p + 1) / 4`, the square-root exponent: `p = 3 mod 4`, so a
+    /// residue's root is `c^((p+1)/4)`. Not read by any circuit -- it is the
+    /// witness generator's exponent (`docs/spec/ecrecover.md` section 4.2).
+    pub const P_PLUS_1_OVER_4: [u64; LIMBS] = [
+        0xffffffffbfffff0c,
+        0xffffffffffffffff,
+        0xffffffffffffffff,
+        0x3fffffffffffffff,
+    ];
+
+    /// The generator's affine coordinates, four 64-bit limbs each.
+    pub const G_X: [u64; LIMBS] = [
+        0x59f2815b16f81798,
+        0x029bfcdb2dce28d9,
+        0x55a06295ce870b07,
+        0x79be667ef9dcbbac,
+    ];
+    pub const G_Y: [u64; LIMBS] = [
+        0x9c47d08ffb10d4b8,
+        0xfd17b448a6855419,
+        0x5da4fbfc0e1108a8,
+        0x483ada7726a3c465,
+    ];
+
+    /// `k * G` for `k` in `1 ..= 15`, indexed by `k - 1`: `[k][0]` is `x`,
+    /// `[k][1]` is `y`, each four 64-bit limbs.
+    ///
+    /// The fixed-window table of the joint ladder. It is the **same on every
+    /// row**, so the circuit spends it as gate literals rather than as setup
+    /// columns: `sum_k (lit(T_k), sel_k)` is one `Linear` gate, where a setup
+    /// column constant on every row would be the same number with 120 more
+    /// commitments and an identity binding for no gain
+    /// (`docs/spec/ecrecover.md` section 5.1).
+    ///
+    /// `crates/trace/tests/secp256k1.rs` re-derives every entry from [`G_X`],
+    /// [`G_Y`] and the group law rather than trusting these digits.
+    pub const G_MULTIPLES: [[[u64; LIMBS]; 2]; WINDOW_ENTRIES] = [
+        // 1 * G
+        [
+            [
+                0x59f2815b16f81798,
+                0x029bfcdb2dce28d9,
+                0x55a06295ce870b07,
+                0x79be667ef9dcbbac,
+            ],
+            [
+                0x9c47d08ffb10d4b8,
+                0xfd17b448a6855419,
+                0x5da4fbfc0e1108a8,
+                0x483ada7726a3c465,
+            ],
+        ],
+        // 2 * G
+        [
+            [
+                0xabac09b95c709ee5,
+                0x5c778e4b8cef3ca7,
+                0x3045406e95c07cd8,
+                0xc6047f9441ed7d6d,
+            ],
+            [
+                0x236431a950cfe52a,
+                0xf7f632653266d0e1,
+                0xa3c58419466ceaee,
+                0x1ae168fea63dc339,
+            ],
+        ],
+        // 3 * G
+        [
+            [
+                0x8601f113bce036f9,
+                0xb531c845836f99b0,
+                0x49344f85f89d5229,
+                0xf9308a019258c310,
+            ],
+            [
+                0x6cb9fd7584b8e672,
+                0x6500a99934c2231b,
+                0x0fe337e62a37f356,
+                0x388f7b0f632de814,
+            ],
+        ],
+        // 4 * G
+        [
+            [
+                0x74fa94abe8c4cd13,
+                0xcc6c13900ee07584,
+                0x581e4904930b1404,
+                0xe493dbf1c10d80f3,
+            ],
+            [
+                0xcfe97bdc47739922,
+                0xd967ae33bfbdfe40,
+                0x5642e2098ea51448,
+                0x51ed993ea0d455b7,
+            ],
+        ],
+        // 5 * G
+        [
+            [
+                0xcba8d569b240efe4,
+                0xe88b84bddc619ab7,
+                0x55b4a7250a5c5128,
+                0x2f8bde4d1a072093,
+            ],
+            [
+                0xdca87d3aa6ac62d6,
+                0xf788271bab0d6840,
+                0xd4dba9dda6c9c426,
+                0xd8ac222636e5e3d6,
+            ],
+        ],
+        // 6 * G
+        [
+            [
+                0x2f057a1460297556,
+                0x82f6472f8568a18b,
+                0x20453a14355235d3,
+                0xfff97bd5755eeea4,
+            ],
+            [
+                0x3c870c36b075f297,
+                0xde80f0f6518fe4a0,
+                0xf3be96017f45c560,
+                0xae12777aacfbb620,
+            ],
+        ],
+        // 7 * G
+        [
+            [
+                0xe92bddedcac4f9bc,
+                0x3d419b7e0330e39c,
+                0xa398f365f2ea7a0e,
+                0x5cbdf0646e5db4ea,
+            ],
+            [
+                0xa5082628087264da,
+                0xa813d0b813fde7b5,
+                0xa3178d6d861a54db,
+                0x6aebca40ba255960,
+            ],
+        ],
+        // 8 * G
+        [
+            [
+                0x67784ef3e10a2a01,
+                0x0a1bdd05e5af888a,
+                0xaff3843fb70f3c2f,
+                0x2f01e5e15cca351d,
+            ],
+            [
+                0xb5da2cb76cbde904,
+                0xc2e213d6ba5b7617,
+                0x293d082a132d13b4,
+                0x5c4da8a741539949,
+            ],
+        ],
+        // 9 * G
+        [
+            [
+                0xc35f110dfc27ccbe,
+                0xe09796974c57e714,
+                0x09ad178a9f559abd,
+                0xacd484e2f0c7f653,
+            ],
+            [
+                0x05cc262ac64f9c37,
+                0xadd888a4375f8e0f,
+                0x64380971763b61e9,
+                0xcc338921b0a7d9fd,
+            ],
+        ],
+        // 10 * G
+        [
+            [
+                0x52a68e2a47e247c7,
+                0x3442d49b1943c2b7,
+                0x35477c7b1ae6ae5d,
+                0xa0434d9e47f3c862,
+            ],
+            [
+                0x3cbee53b037368d7,
+                0x6f794c2ed877a159,
+                0xa3b6c7e693a24c69,
+                0x893aba425419bc27,
+            ],
+        ],
+        // 11 * G
+        [
+            [
+                0xbbec17895da008cb,
+                0x5649980be5c17891,
+                0x5ef4246b70c65aac,
+                0x774ae7f858a9411e,
+            ],
+            [
+                0x301d74c9c953c61b,
+                0x372db1e2dff9d6a8,
+                0x0243dd56d7b7b365,
+                0xd984a032eb6b5e19,
+            ],
+        ],
+        // 12 * G
+        [
+            [
+                0xc5b0f47070afe85a,
+                0x687cf4419620095b,
+                0x15c38f004d734633,
+                0xd01115d548e7561b,
+            ],
+            [
+                0x6b051b13f4062327,
+                0x79238c5dd9a86d52,
+                0xa8b64537e17bd815,
+                0xa9f34ffdc815e0d7,
+            ],
+        ],
+        // 13 * G
+        [
+            [
+                0xdeeddf8f19405aa8,
+                0xb075fbc6610e58cd,
+                0xc7d1d205c3748651,
+                0xf28773c2d975288b,
+            ],
+            [
+                0x29b5cb52db03ed81,
+                0x3a1a06da521fa91f,
+                0x758212eb65cdaf47,
+                0x0ab0902e8d880a89,
+            ],
+        ],
+        // 14 * G
+        [
+            [
+                0xe49b241a60e823e4,
+                0x26aa7b63678949e6,
+                0xfd64e67f07d38e32,
+                0x499fdf9e895e719c,
+            ],
+            [
+                0xc65f40d403a13f5b,
+                0x464279c27a3f95bc,
+                0x90f044e4a7b3d464,
+                0xcac2f6c4b54e8551,
+            ],
+        ],
+        // 15 * G
+        [
+            [
+                0x44adbcf8e27e080e,
+                0x31e5946f3c85f79e,
+                0x5a465ae3095ff411,
+                0xd7924d4f7d43ea96,
+            ],
+            [
+                0xc504dc9ff6a26b58,
+                0xea40af2bd896d3a5,
+                0x83842ec228cc6def,
+                0x581e2872a86c72a6,
+            ],
+        ],
+    ];
+}
+
+/// `family::ECRECOVER`'s frame and its row schedule (S22).
+/// `docs/spec/ecrecover.md` section 2 is normative; this module is the numbers.
+pub mod ecrecover {
+    use super::secp256k1::LIMBS;
+
+    /// A 256-bit frame value, in 32-bit words: eight, **little-endian**, so
+    /// word `2i` is limb `i`'s low half and word `2i + 1` its high half.
+    ///
+    /// Little-endian and not the EVM's big-endian on purpose. The circuit's
+    /// unit is a 64-bit limb; if the frame held big-endian bytes the circuit
+    /// would have to reverse them at byte granularity, which its 16-bit chunks
+    /// cannot do. The shim reverses instead, in guest code, at a few hundred
+    /// instructions a call. `docs/spec/ecrecover.md` section 2.1.
+    pub const VALUE_WORDS: usize = 2 * LIMBS;
+
+    /// Frame word offsets. Each 256-bit field takes [`VALUE_WORDS`] words.
+    pub const OFF_HASH: usize = 0;
+    pub const OFF_V: usize = OFF_HASH + VALUE_WORDS;
+    pub const OFF_R: usize = OFF_V + 1;
+    pub const OFF_S: usize = OFF_R + VALUE_WORDS;
+    pub const OFF_PUBKEY_X: usize = OFF_S + VALUE_WORDS;
+    pub const OFF_PUBKEY_Y: usize = OFF_PUBKEY_X + VALUE_WORDS;
+    pub const OFF_SUCCESS: usize = OFF_PUBKEY_Y + VALUE_WORDS;
+
+    /// The frame's width in words: `h`, `v`, `r`, `s`, then the outputs
+    /// `pubkey.x`, `pubkey.y` and the success flag. 42 words, 168 bytes.
+    pub const FRAME_WORDS: usize = OFF_SUCCESS + 1;
+
+    /// The accepted `v` values, the two the EVM precompile takes. Recovery ids
+    /// 2 and 3 -- the `x = r + n` candidates -- have no encoding here and are
+    /// unreachable through the precompile (`docs/spec/ecrecover.md` 1.2).
+    pub const V_MIN: u32 = 27;
+    pub const V_MAX: u32 = 28;
+
+    /// Rows one invocation occupies: a fixed, power-of-two, **aligned** block.
+    ///
+    /// A recovery is 259 point doublings and 133 point additions, which is
+    /// about 1,180 non-native congruences; one congruence a row is what keeps
+    /// a row's `RANGE16` obligations under 128, where the channel's fraction
+    /// tree stops doubling (`docs/spec/ecrecover.md` section 6). At
+    /// `family::DEFAULT_HEIGHTS[ECRECOVER]` = `2^20` that is 512 recoveries a
+    /// shard.
+    pub const ROWS_PER_INVOCATION: usize = 2048;
 }

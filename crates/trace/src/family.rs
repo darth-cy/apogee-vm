@@ -64,16 +64,25 @@ impl Role {
         }
     }
 
-    /// The address space.
+    /// The address space, given the delegation family the row requested if it
+    /// requested one.
     ///
-    /// [`Role::Delegate`]'s is a constant because S21 registers one delegation
-    /// family and a delegation family's anchor space *is* its type
-    /// (`constants::address_space`). A second delegation type makes this a
-    /// function of the row's ecall number, and this match is where that lands.
-    pub fn space(self) -> AddressSpace {
+    /// [`Role::Delegate`]'s is the **only** role whose space is not a constant,
+    /// because a delegation family's anchor space *is* its type
+    /// (`constants::address_space`, `docs/spec/delegation.md` §3). S21 could
+    /// return a constant here with one family registered; S22 is the second,
+    /// and this is where that lands. A `Delegate` query with no family is a
+    /// staged row the caller built wrong, not anything a guest can cause.
+    pub fn space(self, delegation: Option<FamilyId>) -> AddressSpace {
         match self {
             Role::Load | Role::Ram => AddressSpace::Ram,
-            Role::Delegate => AddressSpace::KeccakF,
+            Role::Delegate => {
+                let family =
+                    delegation.expect("a Delegate query is a request, and a request names a type");
+                AddressSpace::delegation(family).unwrap_or_else(|| {
+                    panic!("family {family} is not a delegation family and has no anchor space")
+                })
+            }
             _ => AddressSpace::Reg,
         }
     }

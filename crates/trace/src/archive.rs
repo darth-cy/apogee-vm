@@ -684,23 +684,17 @@ fn check_parts(
             read_value: row.pc,
             write_value: row.next_pc,
         };
-        let queries = ROLES.iter().filter_map(|role| {
-            row.query(*role).map(|q| MemoryEvent {
-                space: role.space(),
-                addr: q.addr,
-                ts: base + role.delta(),
-                read_ts: q.read_ts,
-                read_value: q.read_value,
-                write_value: q.write_value,
-            })
-        });
         // An invocation's frame accesses ride the requesting cycle, at slot
         // `FRAME_DELTA`, so they follow the pc query and precede the row's
         // roles — the log is in timestamp order
-        // (`docs/spec/delegation.md` §4.1).
+        // (`docs/spec/delegation.md` §4.1). The family is read out first
+        // because the row's own `Delegate` query lands in *that family's*
+        // anchor space, which since S22 is not a constant.
         let mut frame: Vec<MemoryEvent> = Vec::new();
+        let mut delegation: Option<program::FamilyId> = None;
         if pending.peek().is_some_and(|(c, _, _)| *c == row.cycle) {
             let (_, trace, r) = pending.next().expect("peeked");
+            delegation = Some(trace.family);
             frame = trace
                 .words
                 .iter()
@@ -714,6 +708,16 @@ fn check_parts(
                 })
                 .collect();
         }
+        let queries = ROLES.iter().filter_map(|role| {
+            row.query(*role).map(|q| MemoryEvent {
+                space: role.space(delegation),
+                addr: q.addr,
+                ts: base + role.delta(),
+                read_ts: q.read_ts,
+                read_value: q.read_value,
+                write_value: q.write_value,
+            })
+        });
         for want in std::iter::once(pc).chain(frame).chain(queries) {
             if events.get(next) != Some(&want) {
                 return Err(format!(

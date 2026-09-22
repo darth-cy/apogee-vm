@@ -34,4 +34,10 @@ ark-ec.workspace = true
 ark-ff.workspace = true
 ark-poly.workspace = true
 num-bigint.workspace = true
+# The `ecrecover` group's oracle: an outside secp256k1 ECDSA recovery, the
+# `tiny-keccak` case of master rule 2. `default-features = false` keeps `std`,
+# `hmac` and `sha2` out of the graph, so nothing here can feature-unify into
+# the `no_std` crates during `cargo test --workspace` -- the hazard
+# `tools/transcript-ref` lives outside the workspace to avoid.
+libsecp256k1 = { version = "0.7", default-features = false, features = ["static-context"] }
 

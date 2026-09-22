@@ -27,7 +27,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use constants::{delegation, ecall, guest_memory, keccak, memory};
+use constants::{delegation, ecall, family as family_ids, guest_memory, keccak, memory};
 use isa::{decode, Instr};
 use loader::{ProgramImage, Slot};
 use program::{row_kind, DecodedTables, FamilyId, VmConfig};
@@ -426,17 +426,28 @@ impl<'a> Machine<'a> {
         Ok(word)
     }
 
-    /// Run keccak-f[1600] over the 200-byte frame at `base`, in place, and
-    /// return its 50 word queries as `(address, old, new)` in frame order.
+    /// Run `family`'s delegated function over the frame at `base`, in place,
+    /// and return its word queries as `(address, old, new)` in frame order.
     ///
     /// The two frame rules of `docs/spec/delegation.md` §4, and nothing else
     /// checks them: the base is word-aligned, and the whole frame lies inside
     /// the RAM window. Both are fatal guest errors, as a misaligned load is —
     /// the circuit refuses the same two, so an execution this refuses is one
     /// no proof could cover. The bound is computed in `u64` because
-    /// `base + 200` wraps a `u32` at the top of the window, and a wrapped
-    /// comparison passes a check it should fail.
-    fn keccak_frame(&mut self, pc: u32, base: u32) -> Result<Vec<(u32, u32, u32)>, EmuError> {
+    /// `base + <frame bytes>` wraps a `u32` at the top of the window, and a
+    /// wrapped comparison passes a check it should fail.
+    ///
+    /// **The width comes from the registry**, `program::delegation_frame_words`,
+    /// so the frame this reads is the frame the family's circuit constrains;
+    /// only the transform itself is per family.
+    fn delegation_frame(
+        &mut self,
+        family: FamilyId,
+        pc: u32,
+        base: u32,
+    ) -> Result<Vec<(u32, u32, u32)>, EmuError> {
+        let words = program::delegation_frame_words(family)
+            .expect("the caller matched the delegation registry");
         if !base.is_multiple_of(4) {
             return Err(EmuError::Misaligned {
                 pc,
@@ -446,17 +457,14 @@ impl<'a> Machine<'a> {
         }
         let window = guest_memory::RAM_ORIGIN as u64 + guest_memory::RAM_LENGTH as u64;
         if (base as u64) < guest_memory::RAM_ORIGIN as u64
-            || base as u64 + keccak::STATE_BYTES as u64 > window
+            || base as u64 + 4 * words as u64 > window
         {
             return Err(EmuError::OutOfBounds { pc, addr: base });
         }
-        let old: [u32; keccak::FRAME_WORDS] =
-            core::array::from_fn(|j| self.word(base + 4 * j as u32));
-        let mut lanes = lanes_of(&old);
-        keccak_f(&mut lanes);
-        let new = words_of(&lanes);
-        let mut frame = Vec::with_capacity(keccak::FRAME_WORDS);
-        for j in 0..keccak::FRAME_WORDS {
+        let old: Vec<u32> = (0..words).map(|j| self.word(base + 4 * j as u32)).collect();
+        let new = delegated(family, &old);
+        let mut frame = Vec::with_capacity(words);
+        for j in 0..words {
             let addr = base + 4 * j as u32;
             self.set_word(addr, new[j]);
             frame.push((addr, old[j], new[j]));
@@ -756,7 +764,7 @@ impl<'a> Machine<'a> {
                         return Err(EmuError::DelegationFamilyAbsent { pc, number: n });
                     }
                 }
-                let frame = self.keccak_frame(pc, base)?;
+                let frame = self.delegation_frame(family, pc, base)?;
                 // The mirror query: the request consumes the invocation's
                 // answer tuple, whose timestamp and value are both 0
                 // (`docs/spec/delegation.md` §5). Its write-back is 0 too,
@@ -855,6 +863,30 @@ impl<'a> Machine<'a> {
 /// SDK builds only for the guest target and is not a workspace member, and a
 /// crate whose only purpose was to be shared by two callers would be the
 /// abstraction the master's anti-goals refuse.
+/// The delegated function of `family`, over a frame's words.
+///
+/// **The one per-family line in the emulator's delegation path.** Everything
+/// else — the ABI, the bounds, the frame's queries, the anchor — is
+/// `docs/spec/delegation.md`'s and the same for every family. A family with no
+/// arm here is a registry entry no executor answers, which is a broken
+/// invariant of this crate rather than anything a guest can cause.
+fn delegated(family: FamilyId, old: &[u32]) -> Vec<u32> {
+    match family {
+        family_ids::KECCAK_F => {
+            let words: [u32; keccak::FRAME_WORDS] = old.try_into().expect("the registry's width");
+            let mut lanes = lanes_of(&words);
+            keccak_f(&mut lanes);
+            words_of(&lanes).to_vec()
+        }
+        family_ids::ECRECOVER => {
+            let mut words = old.to_vec();
+            program::secp256k1::apply_frame(&mut words);
+            words
+        }
+        other => panic!("family {other} is in the delegation registry and has no transform here"),
+    }
+}
+
 pub fn keccak_f(lanes: &mut [u64; keccak::LANES]) {
     for round in 0..keccak::ROUNDS {
         // theta
@@ -943,11 +975,19 @@ impl Recorder<'_> {
             present: 0,
             queries: [Query::ABSENT; 8],
         };
+        // The row's `Delegate` query, if it has one, lands in the anchor space
+        // of the family it requested; every other role's space is a constant
+        // (`docs/spec/delegation.md` §3).
+        let delegation = queries.delegation.as_ref().map(|(family, _, _)| *family);
         for role in ROLES {
             if let Some((addr, read, write)) = queries.queries[role as usize] {
-                let event = self
-                    .log
-                    .record(role.space(), addr, base + role.delta(), read, write);
+                let event = self.log.record(
+                    role.space(delegation),
+                    addr,
+                    base + role.delta(),
+                    read,
+                    write,
+                );
                 row.queries[role as usize] = Query {
                     addr,
                     read_ts: event.read_ts,

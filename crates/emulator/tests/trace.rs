@@ -663,10 +663,18 @@ fn the_rows_rebuild_the_log_exactly() {
                 read_value: row.pc,
                 write_value: row.next_pc,
             });
+            // A `Delegate` query lands in the anchor space of the family the
+            // row requested, so find the invocation that rides this cycle.
+            let delegation = t
+                .traces
+                .delegations
+                .iter()
+                .find(|d| d.cycle.contains(&row.cycle))
+                .map(|d| d.family);
             for role in ROLES {
                 if let Some(q) = row.query(role) {
                     events.push(MemoryEvent {
-                        space: role.space(),
+                        space: role.space(delegation),
                         addr: q.addr,
                         ts: base + SLOT[role as usize],
                         read_ts: q.read_ts,

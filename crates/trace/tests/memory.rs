@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use constants::family;
 use constraints::memory::{
     frame_queries, gap_hi, ARG1, ARG2, DELEG, FRAME_DELTA, FRAME_NAMES, FRAME_SPACE, LOAD, PC, RAM,
     RD, RS1, RS2,
@@ -44,7 +45,11 @@ fn the_frame_table_is_the_pc_query_then_the_roles() {
         };
         assert_eq!(
             (FRAME_SPACE[1 + i], FRAME_DELTA[1 + i], FRAME_NAMES[1 + i]),
-            (role.space().tag(), role.delta(), name.as_str()),
+            (
+                role.space(Some(family::KECCAK_F)).tag(),
+                role.delta(),
+                name.as_str()
+            ),
             "{role:?}"
         );
     }

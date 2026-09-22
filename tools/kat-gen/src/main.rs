@@ -28,6 +28,7 @@
 //! | `lookup`  | `crates/constraints/tests/vectors/lookup_toy.bin` (S15's combined toy) |
 //! | `family`  | `crates/constraints/tests/vectors/{add_sub,jump_branch_slt}.bin` (S16's and S17's family circuits) |
 //! | `keccak`  | `crates/constraints/tests/vectors/keccak.txt` (S21's delegation circuit, by digest: the artifact is 100 MB) |
+//! | `ecrecover` | `crates/program/tests/vectors/ecrecover.txt` (S22's recovery corpus, from `libsecp256k1`) |
 //! | `guests`  | the guest ELFs themselves -- opt-in only, see `DEFAULT_GROUPS` |
 
 use std::fs;
@@ -36,6 +37,7 @@ use std::path::PathBuf;
 use test_support::{sha256, to_hex};
 
 mod curve;
+mod ecrecover;
 mod family;
 mod field;
 mod gkr;
@@ -56,7 +58,7 @@ mod tape;
 mod tower;
 
 /// Every group, in the order a reader of the tower would meet them.
-const GROUPS: [(&str, fn()); 18] = [
+const GROUPS: [(&str, fn()); 19] = [
     ("field", field::generate),
     ("poly", poly::generate),
     ("curve", curve::generate),
@@ -73,6 +75,7 @@ const GROUPS: [(&str, fn()); 18] = [
     ("lookup", lookup::generate),
     ("family", family::generate),
     ("keccak", keccak::generate),
+    ("ecrecover", ecrecover::generate),
     ("tape", tape::generate),
     ("guests", guests::generate),
 ];

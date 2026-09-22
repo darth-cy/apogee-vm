@@ -310,7 +310,10 @@ pub fn build_boundary_finals(log: &MemoryEventLog) -> BoundaryFinals {
             AddressSpace::Pc => pc = Some(f),
             // A RAM word's final value is a window family's row, and a
             // delegation space has no final state at all.
-            AddressSpace::Ram | AddressSpace::KeccakF => {}
+            AddressSpace::Ram
+            | AddressSpace::KeccakF
+            | AddressSpace::Ecrecover
+            | AddressSpace::EcrecoverScratch => {}
         }
     }
     let pc = pc.expect("build_boundary_finals: the log has no pc query, so no final pc");
