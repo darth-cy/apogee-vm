@@ -27,7 +27,7 @@
 use core::alloc::{GlobalAlloc, Layout};
 use core::arch::global_asm;
 
-use constants::{delegation, ecall, guest_memory, keccak};
+use constants::{delegation, ecall, guest_memory, keccak, poseidon2};
 
 // ---------------------------------------------------------------------------
 // crt0
@@ -282,26 +282,121 @@ const EXIT_PANIC: i32 = 101;
 /// Poseidon2 over a width-3 state, as a precompile.
 ///
 /// `state` is three canonical little-endian `Fr` elements, 32 bytes each, in
-/// lane order, permuted in place.
+/// lane order, permuted in place. S10 froze this signature and S23 gave the
+/// number a circuit; the call is now a **delegation**
+/// (`docs/spec/delegation.md` §12), so an executor that has the circuit
+/// answers 0 and one that does not answers `-ENOSYS`.
 ///
-/// Returns `false` when the executor answers exactly `-ENOSYS`, which every
-/// executor does today: [`constants::ecall::PRECOMPILE_POSEIDON2`] has a number
-/// and a documented calling convention but no circuit behind it yet. A caller
-/// must have a software path and take it on `false` — that path is the one the
-/// proof is about until a delegation circuit exists.
+/// Returns `false` on exactly `-ENOSYS`, and a caller must have a software
+/// path and take it on `false` — under `qemu-riscv32` that is the path the
+/// proof is about.
 ///
-/// Any *other* nonzero answer exits nonzero rather than falling back. Collapsing
-/// every error into "run the software path" would let a half-implemented
-/// precompile fail silently, and the difference between "this VM does not have
-/// this yet" and "this call went wrong" is exactly the difference worth keeping.
+/// Any *other* nonzero answer exits nonzero rather than falling back.
+/// Collapsing every error into "run the software path" would let a
+/// half-implemented precompile fail silently, and the difference between "this
+/// VM does not have this yet" and "this call went wrong" is exactly the
+/// difference worth keeping.
+///
+/// The buffer is copied into an aligned frame and back: the ABI requires a
+/// word-aligned base (`docs/spec/delegation.md` §4) and a bare `[u8; 96]` has
+/// alignment 1, so a caller's buffer cannot be handed over as it stands. A
+/// caller that wants the copies gone calls [`recursion::poseidon2`] with a
+/// [`recursion::Poseidon2Frame`] of its own, which is what `transcript` does.
 pub fn poseidon2_permute(state: &mut [u8; 96]) -> bool {
-    // SAFETY: `state` is a live, writable 96-byte buffer, which is the whole of
-    // this call's contract.
-    let ret = unsafe { ecall1(ecall::PRECOMPILE_POSEIDON2, state.as_mut_ptr() as u32) };
-    match ret {
-        0 => true,
-        n if n == -(ecall::ENOSYS as i32) => false,
-        _ => exit(EXIT_PRECOMPILE_ERROR),
+    let mut frame = recursion::Poseidon2Frame([0u8; poseidon2::FRAME_BYTES]);
+    frame.0.copy_from_slice(state);
+    let answered = recursion::poseidon2(&mut frame);
+    if answered {
+        state.copy_from_slice(&frame.0);
+    }
+    answered
+}
+
+/// The delegation shims the recursion guest's field and hash work rides on.
+///
+/// Every entry point here is a raw delegation call over a word-aligned frame:
+/// it hands the frame over, and it answers `false` on exactly `-ENOSYS` so the
+/// caller can run its own software path. **There is no software path in this
+/// module**, and there must not be: the callers are `field` and `transcript`,
+/// whose own implementations *are* the fallback, so the delegated path and the
+/// fallback are the same function by construction rather than two copies held
+/// equal by a test.
+///
+/// The declaration records live here too. One per shim, referenced by that
+/// shim and by nothing else, so a guest that never reaches a shim drops the
+/// record with it and declares nothing (`docs/spec/delegation.md` §7).
+pub mod recursion {
+    use super::{delegation_number, ecall1, exit, EXIT_PRECOMPILE_ERROR};
+    use constants::{delegation, ecall, fr_arith, poseidon2};
+
+    /// The Poseidon2 delegation's declaration record.
+    #[link_section = ".rodata.apogee.delegations.poseidon2"]
+    static DELEGATION_POSEIDON2: [u8; delegation::MARKER_BYTES] =
+        super::record(ecall::PRECOMPILE_POSEIDON2);
+
+    /// The Fr-arithmetic delegation's declaration record.
+    #[link_section = ".rodata.apogee.delegations.fr_arith"]
+    static DELEGATION_FR_ARITH: [u8; delegation::MARKER_BYTES] =
+        super::record(ecall::PRECOMPILE_FR_ARITH);
+
+    /// The Poseidon2 delegation's 96-byte frame: three canonical
+    /// little-endian `Fr` lanes, permuted in place.
+    ///
+    /// Word-aligned **by its type**, because nothing else supplies it: a bare
+    /// `[u8; 96]` has alignment 1, a stack local's address is the code
+    /// generator's to choose, and a misaligned base is a fatal
+    /// `EmuError::Misaligned` under this VM while `qemu-riscv32` answers
+    /// `-ENOSYS` and never dereferences it — the same binary correct under one
+    /// executor and dead under the other, decided by codegen.
+    #[repr(C, align(4))]
+    pub struct Poseidon2Frame(pub [u8; poseidon2::FRAME_BYTES]);
+
+    /// The Fr-arithmetic delegation's 100-byte frame: the operation code, then
+    /// `a`, `b` and the result, each 32 bytes of `Fr`'s in-memory
+    /// representation (`docs/spec/delegation.md` §13).
+    #[repr(C, align(4))]
+    pub struct FrArithFrame(pub [u8; fr_arith::FRAME_BYTES]);
+
+    // The frame rule of `docs/spec/delegation.md` §4 as a type-level
+    // assertion: what the ecall hands over is word-aligned or this crate does
+    // not build.
+    const _: () = assert!(core::mem::align_of::<Poseidon2Frame>() >= 4);
+    const _: () = assert!(core::mem::align_of::<FrArithFrame>() >= 4);
+
+    /// Permute the frame in place. `false` on exactly `-ENOSYS`.
+    pub fn poseidon2(frame: &mut Poseidon2Frame) -> bool {
+        // SAFETY: `frame` is a live, writable, word-aligned buffer of the
+        // declared width, which is the whole of this call's contract.
+        let ret = unsafe {
+            ecall1(
+                delegation_number(&DELEGATION_POSEIDON2),
+                frame.0.as_mut_ptr() as u32,
+            )
+        };
+        answered(ret)
+    }
+
+    /// Run one `Fr` operation over the frame in place. `false` on exactly
+    /// `-ENOSYS`.
+    pub fn fr_arith(frame: &mut FrArithFrame) -> bool {
+        // SAFETY: as [`poseidon2`].
+        let ret = unsafe {
+            ecall1(
+                delegation_number(&DELEGATION_FR_ARITH),
+                frame.0.as_mut_ptr() as u32,
+            )
+        };
+        answered(ret)
+    }
+
+    /// 0 is "the circuit ran it", `-ENOSYS` is "this executor has no circuit",
+    /// and anything else is a call that went wrong.
+    fn answered(ret: i32) -> bool {
+        match ret {
+            0 => true,
+            n if n == -(ecall::ENOSYS as i32) => false,
+            _ => exit(EXIT_PRECOMPILE_ERROR),
+        }
     }
 }
 
@@ -317,6 +412,14 @@ pub fn poseidon2_permute(state: &mut [u8; 96]) -> bool {
 /// loader change is needed: `crates/program` scans the image's own file-backed
 /// bytes for it, and program identity binds it through the image column.
 ///
+/// **Each record has a section name of its own**, and that is load-bearing:
+/// the linker's garbage collection works at section granularity, so three
+/// records sharing one `#[link_section]` are one input section and are kept
+/// or dropped together. With one name every guest that reached *any* shim
+/// declared *every* family, and detachment said nothing. The names all begin
+/// `.rodata.`, so `link.ld` absorbs them unchanged and the byte-wise scan does
+/// not care what they are called.
+///
 /// [`keccak_f1600`] reads its ecall number **out of this record**, which is
 /// what makes the record load-bearing rather than decorative: a shim that
 /// exists has one, and the number it calls is the number it declares.
@@ -330,8 +433,13 @@ pub fn poseidon2_permute(state: &mut [u8; 96]) -> bool {
 /// `keccak256` drops the chain and the record with it.
 /// `crates/program/tests/delegation.rs` holds every committed guest to that,
 /// at both optimisation levels.
-#[link_section = ".rodata.apogee.delegations"]
-static DELEGATION_KECCAK_F: [u8; delegation::MARKER_BYTES] = {
+#[link_section = ".rodata.apogee.delegations.keccak_f"]
+static DELEGATION_KECCAK_F: [u8; delegation::MARKER_BYTES] = record(ecall::PRECOMPILE_KECCAK_F);
+
+/// One declaration record: the magic, then the declared number as a
+/// little-endian `u32`. `const`-evaluated, so it is a constant in `.rodata`
+/// and not code that runs.
+const fn record(number: u32) -> [u8; delegation::MARKER_BYTES] {
     let mut record = [0u8; delegation::MARKER_BYTES];
     let magic = delegation::MARKER_MAGIC;
     let mut i = 0;
@@ -339,14 +447,14 @@ static DELEGATION_KECCAK_F: [u8; delegation::MARKER_BYTES] = {
         record[i] = magic[i];
         i += 1;
     }
-    let number = ecall::PRECOMPILE_KECCAK_F.to_le_bytes();
+    let number = number.to_le_bytes();
     let mut j = 0;
     while j < number.len() {
         record[magic.len() + j] = number[j];
         j += 1;
     }
     record
-};
+}
 
 /// The declared ecall number, read back out of the record.
 ///

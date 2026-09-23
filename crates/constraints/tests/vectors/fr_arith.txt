@@ -1,0 +1,5 @@
+# the FR_ARITH delegation family's circuit, by SHA-256 of `artifact(n).to_bytes()`
+# docs/spec/delegation.md is normative; docs/spec/constraint-manifest.md §14 is the accounting
+# the artifact itself is megabytes, so what is committed is its digest
+# n memory witness layers inner relations outputs bytes sha256
+8 104 2576 14 142 2843 2 1063214 282e9592257906237da9a0a184597546e3dec271e8f1cf719199a64a349bb0b2

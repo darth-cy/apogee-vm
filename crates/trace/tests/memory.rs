@@ -7,8 +7,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use constraints::memory::{
-    frame_queries, gap_hi, ARG1, ARG2, DELEG, FRAME_DELTA, FRAME_NAMES, FRAME_SPACE, LOAD, PC, RAM,
-    RD, RS1, RS2,
+    frame_queries, frame_query_takes, gap_hi, ARG1, ARG2, DELEG, FRAME_DELTA, FRAME_NAMES,
+    FRAME_SPACE, LOAD, PC, RAM, RD, RS1, RS2,
 };
 use constraints::PolyAddress;
 use field::Fr;
@@ -43,10 +43,29 @@ fn the_frame_table_is_the_pc_query_then_the_roles() {
             _ => format!("{role:?}").to_lowercase(),
         };
         assert_eq!(
-            (FRAME_SPACE[1 + i], FRAME_DELTA[1 + i], FRAME_NAMES[1 + i]),
-            (role.space().tag(), role.delta(), name.as_str()),
+            (FRAME_DELTA[1 + i], FRAME_NAMES[1 + i]),
+            (role.delta(), name.as_str()),
             "{role:?}"
         );
+        // `Role::Delegate` names no single space: one `deleg` query serves
+        // every delegation type, and `frame_query_takes` is the rule. Every
+        // other role's space is the table's literal.
+        match role {
+            Role::Delegate => {
+                assert_eq!(FRAME_SPACE[1 + i], 0, "the deleg query names no space");
+                for space in trace::DELEGATION_SPACES {
+                    assert!(
+                        frame_query_takes(1 + i, space.tag(), role.delta()),
+                        "the deleg query takes {space:?}"
+                    );
+                    assert_eq!(role.space(Some(space)), space);
+                }
+            }
+            _ => assert!(
+                frame_query_takes(1 + i, role.space(None).tag(), role.delta()),
+                "{role:?}"
+            ),
+        }
     }
 }
 

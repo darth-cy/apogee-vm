@@ -1,0 +1,5 @@
+# the POSEIDON2 delegation family's circuit, by SHA-256 of `artifact(n).to_bytes()`
+# docs/spec/delegation.md is normative; docs/spec/constraint-manifest.md §13 is the accounting
+# the artifact itself is megabytes, so what is committed is its digest
+# n memory witness layers inner relations outputs bytes sha256
+8 100 4092 201 2020 6268 2 2056361 4465582d182ebcbe7f6025bb5afe4ec23859fe0cc45bb6d2f960b4f13f7d18c3

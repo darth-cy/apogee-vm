@@ -457,6 +457,7 @@ dependencies = [
  "ark-bn254",
  "ark-ff",
  "constants",
+ "guest-sdk",
  "postcard",
  "serde",
  "test-support",
@@ -1174,6 +1175,7 @@ version = "0.1.0"
 dependencies = [
  "constants",
  "field",
+ "guest-sdk",
  "postcard",
  "serde",
  "test-support",

@@ -73,8 +73,55 @@ fn internal_matrix(s: &mut [Fr; 3]) {
     s[2] = s[2] + s[2] + sum;
 }
 
+/// The guest-target backend: the permutation, delegated.
+///
+/// `docs/spec/delegation.md` §12. One ecall over a 24-word frame against 240
+/// Montgomery multiplies and 80 constant decodes in software, and the circuit
+/// that proves it is this function's own rounds. An executor without the
+/// circuit answers `-ENOSYS` and the software path below runs — which is this
+/// function, so the two are one definition.
+///
+/// Selected by `#[cfg(target_arch = "riscv32")]` alone; there is no cargo
+/// feature here (master anti-goal 1).
+#[cfg(target_arch = "riscv32")]
+mod delegated {
+    use constants::poseidon2 as p2;
+    use field::Fr;
+
+    /// Permute `state` in place, or `false` on an executor with no circuit.
+    ///
+    /// The lanes cross the frame as **canonical** little-endian `Fr` — the
+    /// mathematical value, which is what `to_bytes` writes — because the
+    /// circuit computes the permutation over those values. That is the other
+    /// delegation's opposite choice and deliberately so: here the conversion
+    /// is six Montgomery operations against 240 the delegation removes, and
+    /// the circuit gets to be `poseidon2_permute` itself rather than
+    /// `poseidon2_permute` conjugated by a scaling.
+    pub fn permute(state: &mut [Fr; p2::WIDTH]) -> bool {
+        let mut frame = guest_sdk::recursion::Poseidon2Frame([0u8; p2::FRAME_BYTES]);
+        for (i, lane) in state.iter().enumerate() {
+            frame.0[32 * i..32 * i + 32].copy_from_slice(&lane.to_bytes());
+        }
+        if !guest_sdk::recursion::poseidon2(&mut frame) {
+            return false;
+        }
+        for (i, lane) in state.iter_mut().enumerate() {
+            let mut bytes = [0u8; 32];
+            bytes.copy_from_slice(&frame.0[32 * i..32 * i + 32]);
+            // The circuit's canonicity gates refuse a non-canonical lane, so
+            // an executor that answered 0 wrote one that decodes.
+            *lane = Fr::from_bytes(&bytes).expect("a delegation writes a canonical Fr");
+        }
+        true
+    }
+}
+
 /// The Poseidon2 permutation, in place.
 pub fn poseidon2_permute(state: &mut [Fr; 3]) {
+    #[cfg(target_arch = "riscv32")]
+    if delegated::permute(state) {
+        return;
+    }
     external_matrix(state);
 
     for row in POSEIDON2_RC3_INITIAL.iter() {

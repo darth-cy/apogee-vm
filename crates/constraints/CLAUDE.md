@@ -219,6 +219,37 @@ pub mod keccak {                                   // docs/spec/delegation.md §
     pub fn artifact(trace_vars: u32) -> CircuitArtifact;
     pub fn channels() -> Vec<lookup::ChannelSpec>;           // EMPTY
 }
+
+pub mod delegation {          // docs/spec/delegation.md §4 and §5; S23, shared by the two below
+    pub const CYCLE: PolyAddress;  LIVE;  BASE;  ANCHOR_VALUE;                 // M[0..4]
+    pub const WORD_ADDR: u32 = 0;  WORD_READ_TS;  WORD_READ_VALUE;  WORD_WRITE_VALUE;
+    pub const HEAD_COLUMNS: usize = 4;  GAP_BITS: usize = 38;
+    pub const BASE_LOW_BITS: usize = 29;  BASE_ROOM_BITS: usize = 31;
+    pub const VALUE_BITS: usize = 256;  CANONICITY_BITS: usize = 264;  WORDS_PER_VALUE = 8;
+    pub fn word(j: usize, field: u32) -> PolyAddress;        // M[4 + 4j + f]
+    pub fn gap_bit(j, bit) -> PolyAddress;  base_low_bit(words, bit);  base_room_bit(words, bit);
+    pub fn memory_names(words) -> Vec<String>;  witness_names(words);  frame_witness(words);
+    pub fn leaves_a_side(words: usize) -> usize;
+}
+
+pub mod poseidon2 {                               // docs/spec/delegation.md §12; S23
+    pub const CYCLE; LIVE; BASE; ANCHOR_VALUE; WORD_*;       // delegation's, re-exported
+    pub fn word(j, field);  gap_bit(j, bit);  base_low_bit(bit);  base_room_bit(bit);
+    pub fn value_bit(v, k, t);  diff_bit(v, k, t);  borrow_bit(v, k);   // v < 6: 3 in, 3 out
+    pub const MEMORY_COLUMNS: usize = 100;  WITNESS_COLUMNS: usize = 4092;
+    pub fn artifact(trace_vars: u32) -> CircuitArtifact;
+    pub fn channels() -> Vec<lookup::ChannelSpec>;           // EMPTY
+}
+
+pub mod fr_arith {                                // docs/spec/delegation.md §13; S23
+    pub const CYCLE; LIVE; BASE; ANCHOR_VALUE; WORD_*;
+    pub fn word(j, field);  gap_bit(j, bit);  base_low_bit(bit);  base_room_bit(bit);
+    pub fn value_bit(v, k, t);  diff_bit(v, k, t);  borrow_bit(v, k);   // v < 3: a, b, out
+    pub fn selector(i: usize);  prod();  inv();  is_zero();
+    pub const MEMORY_COLUMNS: usize = 104;  WITNESS_COLUMNS: usize = 2576;
+    pub fn artifact(trace_vars: u32) -> CircuitArtifact;
+    pub fn channels() -> Vec<lookup::ChannelSpec>;           // EMPTY
+}
 ```
 
 ## Frozen invariants
@@ -461,13 +492,15 @@ them, CI regenerates and diffs them, and `tests/memory.rs` pins their SHA-256 an
 each to its constructor's bytes. The leaves' independent description is the plain
 arithmetic of `crates/gkr/tests/memory.rs`.
 
-`tests/vectors/keccak.txt`: **a digest, not an artifact.** `keccak::artifact(8).to_bytes()`
-is 100,254,040 bytes — 974 times the largest committed circuit — so what is committed is one
-line: the shape counts and the artifact's SHA-256. `cargo run -p kat-gen -- keccak` writes
-it, kat-gen's own unit test holds it to the constructor, and CI regenerates and diffs it like
-every other fixture. The owner chose the digest at S21 over committing the bytes or
-committing nothing. Its readable account is `docs/spec/constraint-manifest.md` §12; there is
-no `checker dump` of it, because a 358,525-relation listing is not a readable account of
+`tests/vectors/{keccak,poseidon2,fr_arith}.txt`: **digests, not artifacts.**
+`keccak::artifact(8).to_bytes()` is 100,254,040 bytes — 974 times the largest committed
+circuit — and the two S23 circuits are 2.1 MB and 1.1 MB, so what is committed is one line
+apiece: the shape counts and the artifact's SHA-256. `cargo run -p kat-gen -- delegation`
+writes them, kat-gen's own unit test holds each to its constructor, and CI regenerates and
+diffs them like every other fixture. The owner chose the digest at S21 over committing the
+bytes or committing nothing. Their readable accounts are
+`docs/spec/constraint-manifest.md` §12, §13 and §14; there is
+no `checker dump` of keccak's, because a 358,525-relation listing is not a readable account of
 anything.
 
 `tests/vectors/{add_sub,jump_branch_slt,shift_bitwise,mul_div}.bin`: one per registered
@@ -489,7 +522,8 @@ suite in `crates/checker/tests` pins each SHA-256 and holds its gates to
 | `src/shift_bitwise.rs` (unit) | the legal masks are twelve distinct single bits; the two halves and the two shift directions partition the kinds; and through the private `assemble` seam, the honest family spec gives `artifact`, and the build is refused for an obligation dropped, for `residue`'s direct pair moved under a narrower selector than its scaled obligation (S18's tightened copower check) and for a gate nonzero on the all-zero row |
 | `src/mul_div.rs` (unit) | the legal masks are eight distinct single bits; the multiplies and the divisions partition the kinds; `arithmetic_gates` built at 1 and 32 bits and refused at 0 and 33; and through the `assemble` seam, the honest spec gives `artifact` and the build is refused for a dropped obligation and for a gate nonzero on the all-zero row |
 | `src/jump_branch_slt.rs` (unit) | the legal masks are twelve distinct single bits; through the private `assemble` seam, the honest family spec gives `artifact`, and the build is refused for an obligation dropped (the channel count), for `next_pc`'s direct bound replaced (the copower check) and for a gate nonzero on the all-zero row |
-| `src/add_sub.rs` (unit, and four `const` assertions) | the three system codes pairwise distinct, which is what lets `system_split`, `ecall_code` and `fence_code` refuse every `ebreak` row; and, since S21, four `const _: () = assert!(..)` items holding the two provable ecall numbers distinct and each in its ABI range — what makes `ecall_is_exit` and `keccak_number` a partition rather than two gates that can both hold. A `const` assertion rather than a test, because a violation there is a mis-numbered ABI and should not compile. Neither gate spells a number: both read `constants::ecall`. The gates themselves are `crates/checker/tests/add_sub.rs`' |
+| `src/add_sub.rs` (unit, and four `const` assertions) | the three system codes pairwise distinct, which is what lets `system_split`, `ecall_code` and `fence_code` refuse every `ebreak` row; and, since S21, `const _: () = assert!(..)` items holding the provable ecall numbers **pairwise** distinct and each in its ABI range, and every delegation type's address-space tag distinct too — what makes `ecall_is_exit` and the per-type number gates a partition rather than gates that can all hold. S23 made that loop over `constants::delegation::TYPES` rather than naming one number. A `const` assertion rather than a test, because a violation there is a mis-numbered ABI and should not compile. Neither gate spells a number: both read `constants::ecall`. The gates themselves are `crates/checker/tests/add_sub.rs`' |
+| `src/poseidon2.rs`, `src/fr_arith.rs` (`check_shape`, run on every build) | the same discipline as `keccak`'s, over each circuit's own shape: the column counts, no setup column and **no channel**, every row-wise layer's width equal to its three regions' (poseidon2), the depth, the named relations present **by name**, and every counted family of gates counted on the emitted artifact. `fr_arith` additionally asserts that no relation's name contains `assume` |
 | `src/keccak.rs` (`check_shape`, run on every build) | every row-wise layer's width equal to its three parts' — the offset helpers all index off that split, and a layer one column out would read a neighbour's with no other symptom; the column counts; no setup column and **no channel**; the depth; gate list 0's enforcing count; `base_aligned` and `base_in_window` present **by name**; and 50 each of `addr_w`, `gap_w`, `input_w` and `output_w`, counted on the emitted artifact. S21's must-be-exact 4: a bound that exists only in a comment is not a bound, and a name check is what an `assume_*` hypothesis cannot stand in for |
 | `src/memory.rs` (unit) | acceptance 12: the frame with one obligation dropped before the artifact is written panics at the count assertion |
 | `tests/audit.rs` | every `GateDef` variant, all six, emitted across both compilations, counts written by hand; the catalogue; the two compilations' identical shape |

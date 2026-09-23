@@ -149,10 +149,13 @@ control C8). S16's family constraints make:
   - a transfer row shares its ecall's pc and table row and uses `pc` and `ram` only, so
     `is_transfer` is a witness that is itself constrained;
   - on an ecall row, `rs2`, `arg1` and `arg2` (`a0`, `a1`, `a2`) follow the number read at
-    slot 1: all three for `READ` and `WRITE`, `rs2` alone for `EXIT` and
-    `PRECOMPILE_POSEIDON2`, none otherwise (`execution-trace.md` §6). Each such `uses_q`
-    comes from `is-zero(a7_read − n)`, split across layers to keep every gate at degree 2
-    or below.
+    slot 1: all three for `READ` and `WRITE`, `rs2` alone for `EXIT` and for every
+    **delegation** number, none otherwise (`execution-trace.md` §6). A delegation row uses
+    `deleg` as well, whose mask is `m_pc` times the sum of the row's type selectors
+    (`delegation.md` §5.1). Each such `uses_q` comes from `is-zero(a7_read − n)`, split
+    across layers to keep every gate at degree 2 or below — except where the family
+    commits a selector per number and pins it, which is what `ADD_SUB_LUI_AUIPC` does for
+    the four ecalls it proves.
 
 **Status at S16.** `ADD_SUB_LUI_AUIPC` discharges this section for its own rows
 (`docs/spec/shard-proof.md` §8): `m_pc` is the decoder lookup's selector and every other
@@ -698,10 +701,15 @@ discharged** but the I/O-binding stage's transfer rows.
 
 S20 reconciles every shard.
 
-**Status at S21.** The delegation families ride this argument and add nothing to it. An
-invocation's 50 frame accesses are ordinary `(RAM, base + 4j)` tuples with ordinary gap bounds,
+**Status at S21, unchanged at S23.** The delegation families ride this argument and add
+nothing to it. An
+invocation's frame accesses are ordinary `(RAM, base + 4j)` tuples with ordinary gap bounds,
 and its anchor pair lives in an address space of its own, above RAM's, whose only writer is an
-invocation and whose only reader is a request's `deleg` query. So a delegation shard's two roots
+invocation of that family and whose only reader is a request's `deleg` query. With three
+families registered, one `deleg` query serves them all and the requested *type* rides the
+frame's `deleg_space` column, which the requesting family pins to its type selectors
+(`docs/spec/delegation.md` §5.1): the leaf still reads only `M` columns, which is what §8's
+provenance rule asks of it. So a delegation shard's two roots
 enter `reconciles`' product exactly as a CPU shard's do, the boundary factors are unchanged, and
 **no new global rule exists**: what makes a request and an invocation pair 1:1 is a timestamp-0
 tuple that no cycle can write and three gates that pin the read side

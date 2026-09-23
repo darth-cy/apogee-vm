@@ -94,6 +94,14 @@ pub const FRAME_NAMES: [&str; FRAME_QUERIES] = [
 pub const FRAME_READ_ONLY: [usize; 5] = [RS1, RS2, ARG1, ARG2, LOAD];
 
 /// Each query's address space, `constants::address_space`.
+///
+/// **[`DELEG`]'s entry is 0, which is no space at all**, and that is not an
+/// omission: one `deleg` query serves every delegation type, so its space is a
+/// property of the row rather than of the table. Which space it is rides the
+/// frame's [`deleg_space`] column, and which events it takes is
+/// [`frame_query_takes`]. A reader that compares this entry against a real
+/// event's tag matches nothing — every address-space tag is nonzero — so the
+/// mistake is a loud "no free frame query takes" rather than a silent skip.
 pub const FRAME_SPACE: [u8; FRAME_QUERIES] = [
     address_space::PC,
     address_space::REG,
@@ -103,8 +111,25 @@ pub const FRAME_SPACE: [u8; FRAME_QUERIES] = [
     address_space::RAM,
     address_space::RAM,
     address_space::REG,
-    address_space::DELEGATION_KECCAK_F,
+    0,
 ];
+
+/// Whether query `q` takes a memory event in address space `space` at in-cycle
+/// slot `delta`.
+///
+/// Every query but [`DELEG`] names exactly one space ([`FRAME_SPACE`]); the
+/// delegation mirror takes an event in **any** of `address_space::DELEGATION`,
+/// because one query serves every delegation type and the type is carried per
+/// row by [`deleg_space`]. This is the one routing rule: `trace`'s frame
+/// builder and every test read it rather than the table.
+pub fn frame_query_takes(q: usize, space: u8, delta: u64) -> bool {
+    FRAME_DELTA[q] == delta
+        && if q == DELEG {
+            address_space::DELEGATION.contains(&space)
+        } else {
+            FRAME_SPACE[q] == space
+        }
+}
 
 /// Each query's in-cycle slot `Δ`: its write is at `4·cycle + Δ`.
 pub const FRAME_DELTA: [u64; FRAME_QUERIES] = [0, 1, 2, 2, 2, 2, 3, 3, 3];
@@ -114,6 +139,19 @@ pub const FRAME_DELTA: [u64; FRAME_QUERIES] = [0, 1, 2, 2, 2, 2, 3, 3, 3];
 /// for a family holding every query, and none does.
 pub fn frame(slot: usize, field: u32) -> PolyAddress {
     PolyAddress::Memory(1 + 5 * slot as u32 + field)
+}
+
+/// `M[1 + 5·width]`: the delegation type a request asks for, as its
+/// `constants::address_space` tag, and 0 on every row that asks for none.
+///
+/// A frame holding the [`DELEG`] query carries this one extra `M` column, and
+/// a frame without it does not. It exists because the mirror's leaf must name
+/// the delegation type and a leaf may read no `W` column ([`check_memory`]'s
+/// provenance rule): the type selectors a family commits are witness columns,
+/// so the tag crosses into the leaf through a memory column the family pins to
+/// them. `docs/spec/delegation.md` §5.1.
+pub fn deleg_space(width: usize) -> PolyAddress {
+    PolyAddress::Memory(1 + 5 * width as u32)
 }
 
 /// `W[slot]`: the high chunk of a query's timestamp gap, `gap >> 19`.
@@ -175,10 +213,10 @@ pub fn frame_queries(family: u32) -> &'static [usize] {
             "family {family} initializes RAM and runs no cycles, so it has no frame; \
              `docs/spec/memory.md` §3.3 is its artifact"
         ),
-        family::KECCAK_F => panic!(
-            "family {family} is invoked, not decoded, and its frame is 50 fixed-offset \
-             words rather than a subset of the query table; `docs/spec/delegation.md` \
-             §4 is its artifact"
+        family::KECCAK_F | family::POSEIDON2 | family::FR_ARITH => panic!(
+            "family {family} is invoked, not decoded, and its frame is a run of \
+             fixed-offset words rather than a subset of the query table; \
+             `docs/spec/delegation.md` §4 is its artifact"
         ),
         other => panic!("family {other} is not in constants::family"),
     }
@@ -210,10 +248,22 @@ fn slot(s: u32) -> Coeff {
 /// A coefficient is one literal or one slot, so `α_ts·4·cycle` is a term
 /// repeated four times and `α_ts·Δ·m` one repeated `Δ` times. The read tuple
 /// has one term per part, so its term `PART_*` is that part.
-fn tuple(query: usize, at: usize, write: bool) -> GateDef {
+///
+/// [`DELEG`]'s `AS` part is the exception, and `space` is where it comes from:
+/// one `deleg` query serves every delegation type, so its tag is not a literal
+/// of the table but the value of the frame's [`deleg_space`] column, which the
+/// leaf reads at coefficient 1. Passing `None` for a frame holding `deleg` is
+/// a programmer error and panics.
+fn tuple(query: usize, at: usize, write: bool, space: Option<PolyAddress>) -> GateDef {
     let mask = frame(at, FIELD_MASK);
     let mut parts: [Vec<(Coeff, PolyAddress)>; 4] = Default::default();
-    parts[memory::PART_AS] = vec![(lit(FRAME_SPACE[query] as u64), mask)];
+    parts[memory::PART_AS] = match query {
+        DELEG => vec![(
+            lit(1),
+            space.expect("a frame holding the deleg query carries a deleg_space column"),
+        )],
+        _ => vec![(lit(FRAME_SPACE[query] as u64), mask)],
+    };
     parts[memory::PART_ADDR] = vec![(slot(challenge_slot::MEM_ALPHA_ADDR), frame(at, FIELD_ADDR))];
     let alpha_ts = slot(challenge_slot::MEM_ALPHA_TS);
     parts[memory::PART_TS] = match write {
@@ -245,7 +295,7 @@ fn tuple(query: usize, at: usize, write: bool) -> GateDef {
 /// holding every query would address it. The verifier's boundary reads only
 /// the coefficients and their `PART_*` positions, which no slot changes.
 pub fn read_tuple(query: usize) -> GateDef {
-    tuple(query, query, false)
+    tuple(query, query, false, None)
 }
 
 /// Query `query`'s write tuple, unmasked: `γ_M + AS·m + α_addr·addr +
@@ -253,7 +303,7 @@ pub fn read_tuple(query: usize) -> GateDef {
 /// `T(AS, addr, 4·cycle + Δ, write_value)`.
 #[cfg(test)]
 fn write_tuple(query: usize) -> GateDef {
-    tuple(query, query, true)
+    tuple(query, query, true, None)
 }
 
 /// A product-tree leaf, one flat `Quadratic`: at `mask = 1` the tuple, at
@@ -394,7 +444,8 @@ fn gap_lookups(query: usize, at: usize) -> [LookupExpr; 2] {
 
 /// The memory subtree an execution family carries, `docs/spec/memory.md` §2,
 /// over `2^trace_vars` rows and the `queries` of [`frame_queries`]: with
-/// `w = queries.len()`, `1 + 5w` `M` columns, `w + 3` `W` columns, `2w` leaves
+/// `w = queries.len()`, `1 + 5w` `M` columns — one more, [`deleg_space`], when
+/// the frame holds the delegation mirror — `w + 3` `W` columns, `2w` leaves
 /// padded to the next power of two a side, `w` booleanity gates, one
 /// write-back gate per read-only query, the four x0 gates and `2w` gap
 /// obligations. Validated and held to [`check_memory`]; panics if either
@@ -498,6 +549,13 @@ fn frame_body(
             columns.push(format!("{}_{field}", FRAME_NAMES[query]));
         }
     }
+    // A frame holding the delegation mirror carries one more `M` column, the
+    // requested type's address-space tag, which its two leaves read. See
+    // `deleg_space`.
+    let space = queries.contains(&DELEG).then(|| {
+        columns.push(String::from("deleg_space"));
+        deleg_space(width)
+    });
     let mut witness: Vec<String> = queries
         .iter()
         .map(|&query| format!("{}_gap_hi", FRAME_NAMES[query]))
@@ -524,8 +582,14 @@ fn frame_body(
     let mut lookups = gaps;
     for (at, &query) in queries.iter().enumerate() {
         let (name, mask) = (FRAME_NAMES[query], frame(at, FIELD_MASK));
-        reads.push((format!("read_{name}"), leaf(&tuple(query, at, false), mask)));
-        writes.push((format!("write_{name}"), leaf(&tuple(query, at, true), mask)));
+        reads.push((
+            format!("read_{name}"),
+            leaf(&tuple(query, at, false, space), mask),
+        ));
+        writes.push((
+            format!("write_{name}"),
+            leaf(&tuple(query, at, true, space), mask),
+        ));
         enforcing.push((format!("{name}_mask_boolean"), booleanity(mask)));
     }
     for (at, &query) in queries.iter().enumerate() {
@@ -663,7 +727,7 @@ pub fn zero_window_artifact(trace_vars: u32) -> CircuitArtifact {
 /// Asserts first that `lookups` holds exactly two obligations per read of the
 /// read side (`docs/spec/memory.md` §2.4; S14 must-be-exact 5), then validates
 /// through `assemble` and runs [`check_memory`], panicking on any refusal.
-fn assemble(
+pub(crate) fn assemble(
     trace_vars: u32,
     layout: [Vec<String>; 3],
     virtuals: Vec<(VirtualKind, String)>,
@@ -941,7 +1005,11 @@ mod tests {
         for (id, width) in widths {
             assert_eq!(frame_queries(id).len(), width, "family {id}");
             let a = family_frame_artifact(id, 6);
-            assert_eq!(a.memory.len(), 1 + 5 * width, "family {id}");
+            // `1 + 5w`, and one more when the frame holds the delegation
+            // mirror: that query's leaf names the requested type through a
+            // memory column rather than a literal (`deleg_space`).
+            let extra = usize::from(frame_queries(id).contains(&DELEG));
+            assert_eq!(a.memory.len(), 1 + 5 * width + extra, "family {id}");
             assert_eq!(a.witness.len(), width + 3, "family {id}");
             assert_eq!(a.lookups.len(), 2 * width, "family {id}");
             assert_eq!(

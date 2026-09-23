@@ -1269,7 +1269,10 @@ fn a_prefix_claiming_halt_pc_does_not_reconcile() {
             AddressSpace::Pc => (finals.pc_ts, pc) = (v.ts, v.value),
             // A RAM word's final value is a window family's row, and a
             // delegation space reports no final state at all.
-            AddressSpace::Ram | AddressSpace::KeccakF => {}
+            AddressSpace::Ram
+            | AddressSpace::KeccakF
+            | AddressSpace::Poseidon2
+            | AddressSpace::FrArith => {}
         }
     }
     assert_ne!(pc, HALT_PC);

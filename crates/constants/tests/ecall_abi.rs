@@ -29,6 +29,7 @@ fn constants_table() -> BTreeMap<&'static str, u32> {
         ("EXIT", ecall::EXIT),
         ("PRECOMPILE_POSEIDON2", ecall::PRECOMPILE_POSEIDON2),
         ("PRECOMPILE_KECCAK_F", ecall::PRECOMPILE_KECCAK_F),
+        ("PRECOMPILE_FR_ARITH", ecall::PRECOMPILE_FR_ARITH),
         ("FD_PUBLIC_INPUT", ecall::FD_PUBLIC_INPUT),
         ("FD_PUBLIC_OUTPUT", ecall::FD_PUBLIC_OUTPUT),
         ("FD_STDERR", ecall::FD_STDERR),

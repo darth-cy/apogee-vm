@@ -50,7 +50,7 @@ fn the_global_transcript_is_the_frozen_order() {
         absorb(tags::COMMITMENT, 4 * 2),
         absorb(tags::MEMORY_GROUP, 2),
         absorb(tags::MEMORY_GROUP, 2),
-        absorb(tags::COMMITMENT, 4 * 41),
+        absorb(tags::COMMITMENT, 4 * 42),
         absorb(tags::MEMORY_BOUNDARY, 64),
     ];
     want.extend(

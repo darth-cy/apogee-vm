@@ -23,6 +23,8 @@ use field::Fr;
 pub mod add_sub;
 pub mod atomics;
 mod build;
+pub mod delegation;
+pub mod fr_arith;
 pub mod gadgets;
 pub mod jump_branch_slt;
 pub mod keccak;
@@ -32,6 +34,7 @@ pub mod mem_subword;
 pub mod mem_word;
 pub mod memory;
 pub mod mul_div;
+pub mod poseidon2;
 pub mod shift_bitwise;
 mod wire;
 
@@ -131,6 +134,8 @@ pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
         // applies to it — and none could: at a channel's height its
         // permutation does not fit (`docs/spec/delegation.md` §9).
         f::KECCAK_F => (keccak::artifact(trace_vars), keccak::channels()),
+        f::POSEIDON2 => (poseidon2::artifact(trace_vars), poseidon2::channels()),
+        f::FR_ARITH => (fr_arith::artifact(trace_vars), fr_arith::channels()),
         _ => return None,
     };
     Some(FamilyCircuit {

@@ -684,23 +684,17 @@ fn check_parts(
             read_value: row.pc,
             write_value: row.next_pc,
         };
-        let queries = ROLES.iter().filter_map(|role| {
-            row.query(*role).map(|q| MemoryEvent {
-                space: role.space(),
-                addr: q.addr,
-                ts: base + role.delta(),
-                read_ts: q.read_ts,
-                read_value: q.read_value,
-                write_value: q.write_value,
-            })
-        });
         // An invocation's frame accesses ride the requesting cycle, at slot
         // `FRAME_DELTA`, so they follow the pc query and precede the row's
         // roles — the log is in timestamp order
-        // (`docs/spec/delegation.md` §4.1).
+        // (`docs/spec/delegation.md` §4.1). The invocation also says which
+        // delegation family the row's mirror query names, which is the row's
+        // and not the role's (`trace::Role::space`).
         let mut frame: Vec<MemoryEvent> = Vec::new();
+        let mut delegation: Option<AddressSpace> = None;
         if pending.peek().is_some_and(|(c, _, _)| *c == row.cycle) {
             let (_, trace, r) = pending.next().expect("peeked");
+            delegation = program::delegation_space(trace.family).and_then(AddressSpace::from_tag);
             frame = trace
                 .words
                 .iter()
@@ -714,6 +708,26 @@ fn check_parts(
                 })
                 .collect();
         }
+        // A row claiming the mirror query with no invocation at its cycle is
+        // parts that disagree, not a panic: the row says a delegation was
+        // requested and no delegation buffer holds one there, which is the
+        // forgery the anchor refuses in the circuit.
+        if delegation.is_none() && row.query(crate::Role::Delegate).is_some() {
+            return Err(format!(
+                "cycle {} claims a delegation request and no invocation rides it",
+                row.cycle
+            ));
+        }
+        let queries = ROLES.iter().filter_map(|role| {
+            row.query(*role).map(|q| MemoryEvent {
+                space: role.space(delegation),
+                addr: q.addr,
+                ts: base + role.delta(),
+                read_ts: q.read_ts,
+                read_value: q.read_value,
+                write_value: q.write_value,
+            })
+        });
         for want in std::iter::once(pc).chain(frame).chain(queries) {
             if events.get(next) != Some(&want) {
                 return Err(format!(
@@ -989,10 +1003,12 @@ mod tests {
             ),
             // Bit 7 is `Role::Delegate`, a real role since S21, so a row
             // claiming it is not refused for naming a role that does not exist
-            // — the mask is full — but for claiming a query the log has no
-            // event for.
+            // — the mask is full — but for claiming a delegation request that
+            // no invocation answers. Since S23 the mirror query's address space
+            // is the *invocation's*, so a row claiming one without an
+            // invocation has no space to name, and that is the refusal.
             (
-                "the log disagrees with the row",
+                "claims a delegation request and no invocation rides it",
                 post(|a| a.traces.families[0].present[0] = 0x80, None),
             ),
             (

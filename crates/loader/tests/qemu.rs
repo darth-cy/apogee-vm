@@ -816,3 +816,53 @@ fn keccak_falls_back_to_software_and_agrees() {
         );
     }
 }
+
+/// `guests/recursion-ops` and `guests/recursion-unused`: S23's acceptances 1,
+/// 2 and 9, the **software-fallback half**, and the sharper version of the
+/// test above it.
+///
+/// S21's shim was one the guest called by name. S23's two are not: a guest
+/// writes ordinary `field::Fr` arithmetic and calls
+/// `transcript::poseidon2_permute`, and the backends inside those two crates
+/// route them through `guest_sdk::recursion` under `#[cfg(target_arch =
+/// "riscv32")]` (`docs/spec/delegation.md` §13.4). So what "the same binary on
+/// two executors" means here is stronger than at S21 — the *fallback is the
+/// same source*, one branch below the ecall, and not a second implementation.
+/// `qemu-riscv32` knows neither `0x500` nor `0x502`, answers `-ENOSYS` to
+/// both, and every operation takes `field`'s and `transcript`'s own software
+/// path.
+///
+/// `recursion-ops` checks its own answers in-guest — the Fr round trips and
+/// the three permutation known-answers — and exits 9 either way, which is the
+/// property: 33,164 proven cycles under the emulator against 2,865,234 of
+/// software here, bit-identical results. The emulator's half is
+/// `crates/emulator/tests/guests.rs`, where the same run makes 2 `POSEIDON2`
+/// and 29 `FR_ARITH` invocations.
+///
+/// `recursion-unused` links both backends behind a `black_box` the optimiser
+/// cannot fold and reaches neither, so it exits 11 on either executor. As with
+/// `keccak-unused`, detachment is invisible at run time — it is the *image*
+/// that declares a family — and what this adds is that linking two backends
+/// costs a guest that calls neither nothing at all.
+#[test]
+#[ignore = "needs a Linux host with qemu-user; run with --ignored"]
+fn the_recursion_guests_fall_back_to_software_and_agree() {
+    let qemu = qemu();
+
+    for (name, status) in [("recursion-ops", 9), ("recursion-unused", 11)] {
+        let run = execute(&qemu, name, name, &[], None);
+        assert_eq!(
+            run.status,
+            Some(status),
+            "{name} exited {:?} rather than {status}, so an answer disagreed \
+             between the delegated path and the software one: {}",
+            run.status,
+            run.stderr
+        );
+        assert!(
+            run.stdout.is_empty(),
+            "{name} commits nothing to fd 1: an ecall other than EXIT and the \
+             delegation calls would make the fixture unprovable"
+        );
+    }
+}

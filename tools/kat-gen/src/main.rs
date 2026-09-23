@@ -27,7 +27,7 @@
 //! | `memory`  | `crates/constraints/tests/vectors/{memory_frame,image_window,zero_window}.bin` (S14's memory artifacts) |
 //! | `lookup`  | `crates/constraints/tests/vectors/lookup_toy.bin` (S15's combined toy) |
 //! | `family`  | `crates/constraints/tests/vectors/{add_sub,jump_branch_slt}.bin` (S16's and S17's family circuits) |
-//! | `keccak`  | `crates/constraints/tests/vectors/keccak.txt` (S21's delegation circuit, by digest: the artifact is 100 MB) |
+//! | `delegation` | `crates/constraints/tests/vectors/{keccak,poseidon2,fr_arith}.txt` (the three delegation circuits, by digest: the artifacts are megabytes) |
 //! | `guests`  | the guest ELFs themselves -- opt-in only, see `DEFAULT_GROUPS` |
 
 use std::fs;
@@ -36,12 +36,12 @@ use std::path::PathBuf;
 use test_support::{sha256, to_hex};
 
 mod curve;
+mod delegation;
 mod family;
 mod field;
 mod gkr;
 mod guests;
 mod isa;
-mod keccak;
 mod loader;
 mod lookup;
 mod memory;
@@ -72,7 +72,7 @@ const GROUPS: [(&str, fn()); 18] = [
     ("memory", memory::generate),
     ("lookup", lookup::generate),
     ("family", family::generate),
-    ("keccak", keccak::generate),
+    ("delegation", delegation::generate),
     ("tape", tape::generate),
     ("guests", guests::generate),
 ];
@@ -91,8 +91,23 @@ const GROUPS: [(&str, fn()); 18] = [
 /// reproduce from them -- the objdump and nm listings -- is in `loader`, which
 /// does run by default.
 const DEFAULT_GROUPS: [&str; 17] = [
-    "field", "poly", "curve", "tower", "pairing", "msm", "srs", "pcs", "loader", "isa", "program",
-    "gkr", "memory", "lookup", "family", "keccak", "tape",
+    "field",
+    "poly",
+    "curve",
+    "tower",
+    "pairing",
+    "msm",
+    "srs",
+    "pcs",
+    "loader",
+    "isa",
+    "program",
+    "gkr",
+    "memory",
+    "lookup",
+    "family",
+    "delegation",
+    "tape",
 ];
 
 fn main() {

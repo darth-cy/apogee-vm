@@ -63,6 +63,7 @@ name = "field"
 version = "0.1.0"
 dependencies = [
  "constants",
+ "guest-sdk",
  "serde",
 ]
 
@@ -132,6 +133,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "recursion-ops"
+version = "0.1.0"
+dependencies = [
+ "field",
+ "guest-sdk",
+ "transcript",
+]
+
+[[package]]
+name = "recursion-unused"
+version = "0.1.0"
+dependencies = [
+ "field",
+ "guest-sdk",
+ "transcript",
+]
+
+[[package]]
 name = "rvc-dense"
 version = "0.1.0"
 dependencies = [
@@ -188,6 +207,7 @@ version = "0.1.0"
 dependencies = [
  "constants",
  "field",
+ "guest-sdk",
  "serde",
 ]
 

@@ -652,6 +652,19 @@ fn the_rows_rebuild_the_log_exactly() {
     );
     for name in TRACED {
         let t = traced(name);
+        // The cycles that made a delegation request, and which family: the
+        // mirror query's address space is the row's, not the role's.
+        let requested: std::collections::HashMap<u64, AddressSpace> = t
+            .traces
+            .delegations
+            .iter()
+            .flat_map(|d| {
+                let space = program::delegation_space(d.family)
+                    .and_then(AddressSpace::from_tag)
+                    .expect("a delegation family has an anchor space");
+                d.cycle.iter().map(move |c| (*c, space))
+            })
+            .collect();
         let mut events = Vec::new();
         for (_, row) in rows_by_cycle(&t) {
             let base = memory::TS_STEP * row.cycle;
@@ -666,7 +679,7 @@ fn the_rows_rebuild_the_log_exactly() {
             for role in ROLES {
                 if let Some(q) = row.query(role) {
                     events.push(MemoryEvent {
-                        space: role.space(),
+                        space: role.space(requested.get(&row.cycle).copied()),
                         addr: q.addr,
                         ts: base + SLOT[role as usize],
                         read_ts: q.read_ts,
@@ -842,18 +855,17 @@ fn every_ecall_answers_as_the_abi_says() {
                 (read, 1000, 4, neg(ecall::EBADF)),
                 (write, 1000, 4, neg(ecall::EBADF)),
                 (read, 3, 4, 0),
-                (ecall::PRECOMPILE_POSEIDON2, 0, 0, neg(ecall::ENOSYS)),
+                // The top of the precompile range, which no family answers:
+                // since S23 the low numbers are *delegations*, and calling one
+                // a guest did not declare is fatal rather than `-ENOSYS`.
+                (ecall::PRECOMPILE_LAST, 0, 0, neg(ecall::ENOSYS)),
                 (ecall::ZKVM_IO_LAST, 0, 0, neg(ecall::ENOSYS)),
             ];
-            // The precompile's a0 is its state pointer, wherever the stack is.
+            // The unassigned precompile's a0 is a pointer, wherever the stack is.
             let calls: Vec<_> = calls
                 .iter()
                 .map(|&(n, a0, count, result)| {
-                    let a0 = if n == ecall::PRECOMPILE_POSEIDON2 {
-                        0
-                    } else {
-                        a0
-                    };
+                    let a0 = if n == ecall::PRECOMPILE_LAST { 0 } else { a0 };
                     (n, a0, count, result)
                 })
                 .collect();

@@ -90,6 +90,10 @@ fn reduce_once(a: &mut [u64; 4]) {
 
 /// `(a + b) mod p` for reduced `a`, `b`.
 fn add_limbs(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
+    #[cfg(target_arch = "riscv32")]
+    if let Some(out) = delegated::op(constants::fr_arith::OP_ADD, &Fr(*a), &Fr(*b)) {
+        return out.0;
+    }
     let mut r = [0u64; 4];
     let mut carry = 0u64;
     for i in 0..4 {
@@ -134,10 +138,18 @@ fn neg_limbs(a: &[u64; 4]) -> [u64; 4] {
 
 /// Montgomery product `a * b * R^{-1} mod p` for reduced `a`, `b`.
 ///
+/// On the guest target this is the delegation's `OP_MUL`, which is the same
+/// function: the frame carries the representatives, and `a·b·R^-1` over `Fr`
+/// is what one Montgomery multiply of them is.
+///
 /// CIOS (Koc-Acar-Kaliski) over `s = 4` limbs. With `a < p` the running
 /// accumulator stays below `2p`, and `2p < 2^255`, so it never spills past the
 /// fourth limb and one conditional subtraction reduces the result.
 fn mont_mul(a: &[u64; 4], b: &[u64; 4]) -> [u64; 4] {
+    #[cfg(target_arch = "riscv32")]
+    if let Some(out) = delegated::op(constants::fr_arith::OP_MUL, &Fr(*a), &Fr(*b)) {
+        return out.0;
+    }
     let mut t = [0u64; 6];
     for &b_i in b.iter() {
         // t += a * b_i
@@ -219,12 +231,21 @@ impl Fr {
     }
 
     /// Multiplicative inverse by Fermat, `self^(p-2)`. `None` for zero.
+    ///
+    /// On the guest target this is the one operation the delegation is worth
+    /// three orders of magnitude on: Fermat is 383 Montgomery multiplies, the
+    /// delegated call is a frame and an ecall. The zero case never reaches the
+    /// delegation — `None` is this crate's answer and `0` is the frame ABI's,
+    /// and the two are reconciled here rather than in the circuit.
     pub fn inverse(&self) -> Option<Fr> {
         if *self == Fr::ZERO {
-            None
-        } else {
-            Some(self.pow(&FR_MODULUS_MINUS_TWO))
+            return None;
         }
+        #[cfg(target_arch = "riscv32")]
+        if let Some(out) = delegated::op(constants::fr_arith::OP_INV, self, &Fr::ZERO) {
+            return Some(out);
+        }
+        Some(self.pow(&FR_MODULUS_MINUS_TWO))
     }
 
     /// Canonical (non-Montgomery) 32-byte little-endian encoding.
@@ -284,6 +305,41 @@ impl Fr {
         }
         Some(Fr(mont_mul(&limbs, &FR_R2)))
     }
+
+    /// The element's **in-memory** representation, as 32 little-endian bytes:
+    /// the four Montgomery limbs written out, nothing converted.
+    ///
+    /// This is a canonical little-endian encoding of a field element like
+    /// [`to_bytes`]'s — the limbs are always reduced below `p` — but of a
+    /// *different* element: of `self · R`, where `R = 2^256 mod p`, rather
+    /// than of `self`. It exists for one caller, the Fr-arithmetic delegation
+    /// of `docs/spec/delegation.md` §13, whose frame carries operands in this
+    /// form precisely so that crossing it costs no Montgomery conversion.
+    /// Everything that is not that delegation uses [`to_bytes`].
+    ///
+    /// [`to_bytes`]: Fr::to_bytes
+    pub fn to_memory_bytes(&self) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        for i in 0..4 {
+            out[8 * i..8 * i + 8].copy_from_slice(&self.0[i].to_le_bytes());
+        }
+        out
+    }
+
+    /// The inverse of [`to_memory_bytes`]. `None` if the value is `>= p`,
+    /// which is what the delegation circuit's canonicity gates refuse.
+    pub fn from_memory_bytes(b: &[u8; 32]) -> Option<Fr> {
+        let mut limbs = [0u64; 4];
+        for (limb, chunk) in limbs.iter_mut().zip(b.chunks_exact(8)) {
+            let mut w = [0u8; 8];
+            w.copy_from_slice(chunk);
+            *limb = u64::from_le_bytes(w);
+        }
+        if is_ge_modulus(&limbs) {
+            return None;
+        }
+        Some(Fr(limbs))
+    }
 }
 
 /// One lowercase hex digit's value, or `None`.
@@ -329,6 +385,48 @@ pub fn batch_inverse(xs: &mut [Fr]) {
 // ---------------------------------------------------------------------------
 // Operators. The macro collapses six near-identical impls per operator.
 // ---------------------------------------------------------------------------
+
+/// The guest-target backend: `Fr`'s arithmetic, delegated.
+///
+/// `docs/spec/delegation.md` §13. The frame carries operands in **this**
+/// representation — the four Montgomery limbs, little-endian, which
+/// [`Fr::to_memory_bytes`] writes — precisely so that crossing it costs no
+/// conversion, and the three operations the circuit proves are the three this
+/// module's callers compute. An executor without the circuit answers
+/// `-ENOSYS`, the shim answers `None`, and the caller runs the software path
+/// below it — which is this crate's own, so the delegated path and the
+/// fallback are one definition rather than two held equal by a test.
+///
+/// Selected by `#[cfg(target_arch = "riscv32")]` alone. There is no cargo
+/// feature here and there must not be: the workspace has one build
+/// configuration (master anti-goal 1), and the guest target is not the host.
+#[cfg(target_arch = "riscv32")]
+mod delegated {
+    use super::Fr;
+    use constants::fr_arith as f;
+
+    /// One delegated operation, or `None` on an executor with no circuit.
+    ///
+    /// Nothing here touches `Mul`, `Add` or `inverse`: the frame is written
+    /// with [`Fr::to_memory_bytes`] and read back with
+    /// [`Fr::from_memory_bytes`], both of which are limb copies, so a
+    /// delegated multiply cannot recurse into itself.
+    pub fn op(code: u32, a: &Fr, b: &Fr) -> Option<Fr> {
+        let mut frame = guest_sdk::recursion::FrArithFrame([0u8; f::FRAME_BYTES]);
+        frame.0[4 * f::OPCODE_WORD..4 * f::OPCODE_WORD + 4].copy_from_slice(&code.to_le_bytes());
+        frame.0[4 * f::A_WORD..4 * f::A_WORD + 32].copy_from_slice(&a.to_memory_bytes());
+        frame.0[4 * f::B_WORD..4 * f::B_WORD + 32].copy_from_slice(&b.to_memory_bytes());
+        if !guest_sdk::recursion::fr_arith(&mut frame) {
+            return None;
+        }
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&frame.0[4 * f::OUT_WORD..4 * f::OUT_WORD + 32]);
+        // The circuit's canonicity gates refuse a non-canonical result, so an
+        // executor that answered 0 wrote one that decodes. A `None` here would
+        // be a broken executor, not a fallback.
+        Some(Fr::from_memory_bytes(&out).expect("a delegation writes a canonical Fr"))
+    }
+}
 
 macro_rules! impl_binop {
     ($Op:ident, $op:ident, $OpAssign:ident, $op_assign:ident, $limbs:ident) => {

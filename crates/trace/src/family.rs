@@ -66,14 +66,19 @@ impl Role {
 
     /// The address space.
     ///
-    /// [`Role::Delegate`]'s is a constant because S21 registers one delegation
-    /// family and a delegation family's anchor space *is* its type
-    /// (`constants::address_space`). A second delegation type makes this a
-    /// function of the row's ecall number, and this match is where that lands.
-    pub fn space(self) -> AddressSpace {
+    /// [`Role::Delegate`]'s is **the row's**, not the role's: a delegation
+    /// family's anchor space *is* its type (`constants::address_space`), and
+    /// with more than one registered type the role alone no longer says which.
+    /// `delegation` is the requested family's space, which the row knows
+    /// because the invocation riding its cycle names the family; every other
+    /// role ignores it, and passing `None` on a row that has this role is a
+    /// programmer error rather than a default.
+    pub fn space(self, delegation: Option<AddressSpace>) -> AddressSpace {
         match self {
             Role::Load | Role::Ram => AddressSpace::Ram,
-            Role::Delegate => AddressSpace::KeccakF,
+            Role::Delegate => {
+                delegation.expect("a delegation request's row knows which family it is requesting")
+            }
             _ => AddressSpace::Reg,
         }
     }

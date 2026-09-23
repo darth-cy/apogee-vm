@@ -1,0 +1,12 @@
+[package]
+name = "recursion-unused"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# S23's zero-shard fixture: it links both backends — so its image carries both
+# delegation declaration records — and reaches neither at run time.
+[dependencies]
+guest-sdk.workspace = true
+field = { path = "../../crates/field" }
+transcript = { path = "../../crates/transcript" }

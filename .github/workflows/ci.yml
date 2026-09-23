@@ -38,14 +38,24 @@ jobs:
       - name: guests execute
         run: cargo test -p loader --test qemu -- --include-ignored
 
-      # The same eleven cases, same expected bytes, at `--release`. This is what
+      # The same fifteen cases, same expected bytes, at `--release`. This is what
       # holds the profile pin in `guests/Cargo.toml` honest: with cargo's
       # defaults `overflow-checks` is off in release, and a guest then commits a
       # wrapped `u32` on fd 1 where the dev build panics and exits 101. fd 1 is
       # the committed public output, so that would make the optimisation level
-      # part of the statement being proven. It also builds at `--release` the
-      # ten guests this suite runs; `consistency`'s release build is the
-      # consistency step below, and `opcodes` and `heap` have none in CI.
+      # part of the statement being proven. It also builds at `--release` every
+      # guest this suite runs; `consistency`'s release build is the consistency
+      # step below, and `opcodes` and `heap` have none in CI.
+      #
+      # Two of the fifteen are the delegation families' **software-fallback**
+      # half, and they are the reason this step is not redundant with the
+      # emulator's: `qemu-riscv32` answers `-ENOSYS` to every precompile number,
+      # so `keccak-test` takes `guest_sdk`'s in-guest keccak-f and S23's
+      # `recursion-ops` takes `field`'s and `transcript`'s own arithmetic, one
+      # branch below the ecall. Each checks its answers in-guest and exits the
+      # same status it exits under the emulator -- 6 and 9 -- which is the only
+      # place in CI where the delegated path and the software path are compared
+      # at all.
       - name: guests execute (release)
         env:
           APOGEE_GUEST_PROFILE: release
@@ -122,7 +132,7 @@ jobs:
       # rows holds at most `2^n` values, and a Mercury opening needs an even
       # variable count, so the smallest circuit carrying a gap obligation is
       # `2^20` rows. One forward pass over it holds 4.63 GB of inner cells and the
-      # file peaks at 18.8 GB, so
+      # file peaks at 17.5 GB, so
       # the file must run single-threaded: two at once would not fit the
       # runner. It is slow because the circuit is the real size, which is
       # exactly the case rule 7 covers, so it runs locally on the stage PR that
@@ -155,11 +165,15 @@ jobs:
       # timestamp channel sets, so it cannot shrink -- and one statement's
       # proof peaks at 8.6 GB resident -- more in the tamper file, which
       # keeps the honest statement beside each re-proof -- so each file runs
-      # single-threaded. Locally, on 18 cores, the three take 322 s, 20 s and,
-      # with every stage's twins through S21, 2568 s; the logup step above ran
+      # single-threaded. Locally, on 18 cores, the three take 374 s, 44 s and,
+      # with every stage's twins through S23, 4231 s; the logup step above ran
       # nine times slower on the runner than locally, which puts these at about
-      # 50, 3 and 380 minutes. The tamper file's peak is 19.2 GB: a statement's
-      # proof with the honest one held beside it. They run locally on every PR
+      # 56, 7 and 630 minutes. The tamper file's peak is 17.9 GB: a statement's
+      # proof with the honest one held beside it. **S23 added its sixth
+      # statement -- `guests/recursion-ops`, a ten-shard block -- and that is
+      # where the 1,663 extra seconds went; it is now the slowest file in the
+      # repository by a wide margin, and splitting it per stage is the open
+      # question S21 left. They run locally on every PR
       # that touches the prover, the verifier, a family circuit or the memory
       # and lookup arguments, and the handoff note records the result.
       # The CI-sized halves -- the add/sub circuit row by row, the core's
@@ -176,7 +190,7 @@ jobs:
       # the three request-side zeroings are asserted through `verify_shard`
       # instead, where `Constraint` comes first and the gate is the answer.
       # `docs/spec/delegation.md` §5.2 is why that distinction matters for
-      # S22 and S23.
+      # a later delegation family.
       #
       # - name: S16's statement, proved and verified
       #   run: |
@@ -254,10 +268,10 @@ jobs:
       # carrying a timestamp gap obligation can have, so a two-shard family is
       # two `2^20` shards whatever the guest. The file proves seven blocks --
       # the demo five times over, once of them on a single thread, and
-      # `guests/mem`'s five-family block once -- and takes 804 s locally on 18
-      # cores at a 38.0 GB peak (33.4 GB on another run of the same file, and
-      # 25.3 and 33.4 at S20: the spread is what the allocator happens to hold
-      # when the largest shard's forward pass runs -- plan for 38), so it
+      # `guests/mem`'s five-family block once -- and takes 840 s locally on 18
+      # cores at a 34.9 GB peak (38.0 and 33.4 on other runs of the same file,
+      # and 25.3 and 33.4 at S20: the spread is what the allocator happens to
+      # hold when the largest shard's forward pass runs -- plan for 38), so it
       # runs single-threaded. Its CI-sized halves
       # are `crates/verifier-core/tests/block.rs` (the record layout, the wire
       # forms, the structural rule and the window rule) and
@@ -268,9 +282,9 @@ jobs:
       #   run: cargo test --release -p prover --test block -- --include-ignored --test-threads=1
 
       # DEFERRED: cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1
-      # Master rule 7, for S21's acceptances 4 and 8, and **the heaviest suite
-      # in the repository**: 38.9 GB peak, 124 s locally on 18 cores, so it runs
-      # single-threaded. `guests/keccak-test` is nine shards -- six `2^20`
+      # Master rule 7, for S21's acceptances 4 and 8. 33.7 GB peak, 131 s
+      # locally on 18 cores, so it runs single-threaded. It was the heaviest
+      # suite in the repository until S23's `recursion` passed it. `guests/keccak-test` is nine shards -- six `2^20`
       # execution shards, two `2^16` window shards and one `2^8` KECCAK_F shard
       # -- and it is the delegation shard that costs, not the count: one keccak
       # row is a whole keccak-f[1600] permutation, so the circuit is 354,762
@@ -290,11 +304,40 @@ jobs:
       # the step of its own above). The anchor's four tamper twins
       # are in `crates/checker/tests/tamper.rs`, deferred with it.
       #
-      # Measured: 2 passed, 130 s, 38.9 GB peak on its own and 33.5 GB inside a
-      # batch -- the same spread `block` above has, so plan for 39.
+      # Measured: 2 passed, 131 s, 33.7 GB peak in a batch (38.9 GB on its own
+      # at S21 -- the same spread `block` above has, so plan for 39).
       #
       # - name: S21's block with a delegation shard, proved and verified
       #   run: cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1
+
+      # DEFERRED: cargo test --release -p prover --test recursion -- --include-ignored --test-threads=1
+      # Master rule 7, for S23's acceptances 4 and 9. `guests/recursion-ops`
+      # does ordinary `field::Fr` arithmetic and calls
+      # `transcript::poseidon2_permute`, and the guest-target backends route
+      # both through the two delegations: ten shards, of which eight are the
+      # `2^20` and `2^16` ones every statement has and two are `2^8` delegation
+      # shards. The delegation shards are cheap -- 51 MB and 23 MB of forward
+      # pass -- and the peak is the execution shards' as usual.
+      # `guests/recursion-unused` is acceptance 9's other half: both families
+      # declared, zero invocations, zero shards.
+      # Its CI-sized halves are `crates/checker/tests/poseidon2.rs` and
+      # `crates/checker/tests/fr_arith.rs` (each circuit's forward pass against
+      # its definition, with ten negative controls apiece),
+      # `crates/emulator/tests/guests.rs` (the guest run on the emulator and its
+      # invocation counts) and `crates/program/tests/delegation.rs` (static
+      # detachment over every committed guest), all in the `test` step. The two
+      # anchors' tamper twins are in `crates/checker/tests/tamper.rs`, deferred
+      # with it.
+      #
+      # Measured: 2 passed, 120 s, 35.2 GB peak on 18 cores, which makes it
+      # **the heaviest suite in the repository by memory**, past `keccak`'s
+      # 33.7 GB. That is S20's parallel-shard price read off a ten-shard block
+      # -- one shard's forward pass per worker, and a block with more families
+      # holds more of them at once -- and not the two delegation circuits being
+      # large: each is about 2% of a keccak shard.
+      #
+      # - name: S23's block with both recursion delegation shards
+      #   run: cargo test --release -p prover --test recursion -- --include-ignored --test-threads=1
 
       # The crates the recursion guest links compile unchanged for the guest.
       - name: guest target builds

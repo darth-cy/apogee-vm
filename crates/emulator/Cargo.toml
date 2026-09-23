@@ -6,14 +6,18 @@ publish.workspace = true
 
 [dependencies]
 constants.workspace = true
+# S23's two delegations are `field::Fr`'s arithmetic and
+# `transcript::poseidon2_permute`, and the executor runs *those*, not a second
+# copy of either: a delegation whose executor and whose circuit were written
+# twice would be two definitions to keep equal.
+field.workspace = true
+transcript.workspace = true
 isa.workspace = true
 loader.workspace = true
 program.workspace = true
 trace.workspace = true
 
 [dev-dependencies]
-field.workspace = true
-transcript.workspace = true
 test-support.workspace = true
 tiny-keccak.workspace = true
 # `guests/consistency`'s library half: the program the three-way consistency

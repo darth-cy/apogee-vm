@@ -225,8 +225,11 @@ The family is registered by one arm in `constraints::family_circuit` and one in
 2. **`guest_sdk::keccak256(&[u8]) -> [u8; 32]` is frozen.** S24's revm hash hook routes
    through it. Which path runs is not part of the signature and a guest cannot tell.
 3. **`ecall::PRECOMPILE_KECCAK_F = 0x0501` and `address_space::DELEGATION_KECCAK_F = 4`**
-   are append-only like every number beside them. The next delegation family takes `0x0502`
-   and space 5.
+   are append-only like every number beside them. The next delegation family takes the next
+   free space. *(S23 took spaces 5 and 6 for `POSEIDON2` and `FR_ARITH`. The ecall numbers
+   went the other way: `POSEIDON2` claimed `PRECOMPILE_POSEIDON2 = 0x0500`, reserved since
+   S10 and older than `0x0501`, and only `FR_ARITH` took `0x0502`. "Append-only" is a rule
+   about never **redefining** a number, not about handing them out in order.)*
 4. **The keccak `CircuitArtifact`, its frame layout and `2^8`.** The frame is the 200-byte
    state in SHA-3 byte order at `base + 4j`, word `2i` being lane `i`'s low half.
 5. **`checker::assert_anchor_twins_refused` and `AnchorTwins`.** S22 and S23 fill the struct
@@ -629,8 +632,9 @@ of the old comment was true and is kept, with its argument stated: the buffer is
 local, the stack lies below `__stack_top`, and `__stack_top` is the top of the RAM window.
 
 `poseidon2_permute` takes a **caller-supplied** `&mut [u8; 96]` and has the same exposure.
-It is inert today — every executor answers `-ENOSYS` — but S22 should give it a `Frame` of
-its own rather than inherit this.
+It is inert today — every executor answers `-ENOSYS` — but the next delegation stage should
+give it a `Frame` of its own rather than inherit this. *(S23 did: it is
+`guest_sdk::recursion::Poseidon2Frame`, and `poseidon2_permute` copies through one.)*
 
 ### `delegation.md` carried the pre-split Δ, and one frozen order backwards
 
@@ -748,6 +752,15 @@ directory before and after. Far too cheap to defer, so it runs in CI.
 ---
 
 ## Open for the next stage
+
+> **Editorial note, added at S23.** This section was written expecting S22 to be the next
+> delegation stage. **S22 is cancelled and was never implemented** (`prompts/00-master.md`,
+> "Stage register: cancelled stages"): there is no ecrecover delegation in this repository.
+> S23 is the stage that answered these items — read "S22" below as "the next delegation
+> stage", and `docs/handoff/S23-fr-poseidon2.md` for what each answer turned out to be.
+> Items 1, 2, 5 and 6 were all decided there, and item 2 the opposite way from the guess
+> here: the frame stayed at eight queries, but what selects the type is a **memory** column
+> and not a family flag, because a leaf may read no `W` column.
 
 1. **`docs/spec/delegation.md` §10 is the append list**, and S22 and S23 should read it
    before anything else. A second delegation family is: one `FamilyId`, one ecall number,

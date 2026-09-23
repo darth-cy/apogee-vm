@@ -122,7 +122,7 @@ fn the_rvc_fixture_runs() {
 /// its software path, and that path computes the real S02 permutation —
 /// with fd 1 an exact echo and the hint kept off it, as under QEMU.
 #[test]
-fn a_precompile_answers_enosys_and_the_fallback_completes() {
+fn a_precompile_runs_and_its_state_is_the_s02_permutation() {
     let input: Vec<u8> = (0..100u8)
         .map(|i| i.wrapping_mul(7).wrapping_add(3))
         .collect();
@@ -135,12 +135,16 @@ fn a_precompile_answers_enosys_and_the_fallback_completes() {
     assert_eq!(to_hex(&execution.io.output), to_hex(&input));
     let stderr = String::from_utf8_lossy(&execution.stderr);
     assert!(stderr.contains("hint=private-advice"), "{stderr}");
-    assert!(stderr.contains("precompile=software"), "{stderr}");
+    // Since S23 the number has a circuit, so this executor answers it: what
+    // used to be the fallback's branch is now the delegated one. Under
+    // `qemu-riscv32` the same binary still takes the software branch, which is
+    // `crates/loader/tests/qemu.rs`'.
+    assert!(stderr.contains("precompile=accelerated"), "{stderr}");
     let mut state = [Fr::from_u64(1), Fr::from_u64(2), Fr::from_u64(3)];
     transcript::poseidon2_permute(&mut state);
     assert!(
         stderr.contains(&format!("state0={}", to_hex(&state[0].to_bytes()))),
-        "the software fallback did not produce the S02 permutation: {stderr}"
+        "the delegated permutation is not the S02 one: {stderr}"
     );
 }
 
@@ -456,4 +460,112 @@ fn keccak_test_checks_its_corpus_under_the_delegation_ecall() {
         );
         assert!(execution.io.output.is_empty(), "{name} writes nothing");
     }
+}
+
+// ---------------------------------------------------------------------------
+// S23: the two recursion delegations
+// ---------------------------------------------------------------------------
+
+/// The `KAT_OUT` literal in `guests/recursion-ops/src/main.rs`, read out of
+/// the source file.
+///
+/// Reading the guest's source rather than restating its table is the whole
+/// point, as it is for `keccak_guest_digests`: two stale literals agree.
+fn recursion_guest_kat() -> Vec<String> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../guests/recursion-ops/src/main.rs");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+    let head = "const KAT_OUT: [&str; 3] = [";
+    let start = text.find(head).expect("recursion-ops declares KAT_OUT") + head.len();
+    let body = &text[start..start + text[start..].find("\n];").expect("KAT_OUT ends")];
+    let out: Vec<String> = body
+        .split('"')
+        .filter(|s| s.starts_with("0x"))
+        .map(str::to_string)
+        .collect();
+    assert_eq!(out.len(), 3, "three lanes");
+    out
+}
+
+/// Acceptance 2's pin: the state `guests/recursion-ops` checks itself against
+/// is `transcript::poseidon2_permute`'s, re-derived here rather than copied.
+///
+/// The guest compares in-guest and exits 9, so a wrong literal would make the
+/// guest fail — but only if the emulator's delegation were right. Re-deriving
+/// from the crate is what closes that: this test fixes the *answer*, and the
+/// one below fixes the path to it.
+#[test]
+fn the_recursion_guests_kat_is_the_transcripts() {
+    let mut state = [
+        field::Fr::ZERO,
+        field::Fr::from_u64(1),
+        field::Fr::from_u64(2),
+    ];
+    transcript::poseidon2_permute(&mut state);
+    for (lane, want) in state.iter().zip(recursion_guest_kat()) {
+        assert_eq!(
+            *lane,
+            field::Fr::from_hex(&want).expect("a pinned lane is canonical hex"),
+            "recursion-ops' known-answer state is stale"
+        );
+    }
+}
+
+/// Acceptances 1 and 2, the delegated half: the guest runs on the emulator,
+/// whose two ecalls perform the arithmetic and the permutation, and exits 9 —
+/// one per check.
+///
+/// `guests/recursion-unused` links both backends and reaches neither, so it
+/// makes no invocation and exits 11; that it still *declares* both families is
+/// `crates/program/tests/delegation.rs`'.
+#[test]
+fn recursion_ops_checks_itself_under_both_delegation_ecalls() {
+    for (name, status) in [("recursion-ops", 9), ("recursion-unused", 11)] {
+        let execution = run(&image(name), &io(&[])).unwrap();
+        assert_eq!(
+            execution.exit_code, status,
+            "{name} exited {}, and 200 + i would name the check that failed",
+            execution.exit_code
+        );
+        assert!(execution.io.output.is_empty(), "{name} writes nothing");
+    }
+}
+
+/// The invocation counts the two delegation families actually see, which is
+/// what a shard plan divides by the height.
+///
+/// `run` has no `VmConfig` and records nothing; `trace_run` does both, so this
+/// is also the test that the families are in the config at all.
+#[test]
+fn recursion_ops_invokes_both_families() {
+    let image = image("recursion-ops");
+    let (tables, config) = preprocess(&image);
+    let (traces, ..) = trace_run(&image, &io(&[]), &tables, &config).expect("it traces");
+    for family in [constants::family::POSEIDON2, constants::family::FR_ARITH] {
+        let trace = traces
+            .delegation(family)
+            .unwrap_or_else(|| panic!("{} has no buffer", program::family_name(family)));
+        assert!(
+            !trace.is_empty(),
+            "{} is invoked at least once",
+            program::family_name(family)
+        );
+        assert!(
+            trace.len() <= 256,
+            "{} makes {} invocations, past one 2^8 shard",
+            program::family_name(family),
+            trace.len()
+        );
+    }
+    // The permutation runs twice, which is what the guest's second call is
+    // for: one row would not show a shard holding more than one invocation.
+    assert_eq!(
+        traces
+            .delegation(constants::family::POSEIDON2)
+            .expect("a buffer")
+            .len(),
+        2,
+        "the guest permutes twice"
+    );
 }

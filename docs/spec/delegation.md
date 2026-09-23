@@ -1,8 +1,14 @@
-# Delegation: the ABI, the anchor, and the keccak-f family
+# Delegation: the ABI, the anchor, and the three delegation families
 
-Frozen as of S21. **This page is the delegation ABI** — every delegation family
-obeys it, and S22 and S23 consume it as written and may append only their own
-frame tables (§10). Changing anything else here is a protocol-version change.
+Frozen as of S21 and **appended to at S23**, which added two families under
+§10's rule and amended §3 and §5.1 where more than one delegation type made a
+literal impossible (§10.1). **This page is the delegation ABI** — every
+delegation family obeys it. Changing anything here but by §10's append rule is
+a protocol-version change.
+
+S22 was cancelled and never shipped (`prompts/00-master.md`, "Stage register:
+cancelled stages"); every sentence that promised it a number, a tag or a frame
+table is gone.
 
 It cites `docs/spec/ecall-abi.md` for the calling convention, `docs/spec/memory.md`
 for the memory argument, `docs/spec/execution-trace.md` for the clock and the
@@ -16,7 +22,7 @@ restates none of them.
 | `crates/emulator` | the ecall, the frame's execution, and the invocation record |
 | `crates/trace` | the delegation address space, the `Delegate` role, and `DelegationTrace` |
 | `crates/program` | the declared set, and the family's place in a `VmConfig` |
-| `crates/constraints` | `keccak`, the circuit; `add_sub`, the request-side gates |
+| `crates/constraints` | `delegation`, the shared frame; `keccak`, `poseidon2` and `fr_arith`, the circuits; `add_sub`, the request-side gates |
 | `crates/prover` | the fill and the shard's ts window |
 | `crates/checker` | the anchor-tamper helper and the block-level hook |
 
@@ -87,9 +93,17 @@ One table ties a family, its number and its frame width together:
 | family | id | ecall | frame words | address space |
 | --- | --- | --- | --- | --- |
 | `KECCAK_F` | 9 | `PRECOMPILE_KECCAK_F` = `0x0501` | 50 | `DELEGATION_KECCAK_F` = 4 |
+| `POSEIDON2` | 10 | `PRECOMPILE_POSEIDON2` = `0x0500` | 24 | `DELEGATION_POSEIDON2` = 5 |
+| `FR_ARITH` | 11 | `PRECOMPILE_FR_ARITH` = `0x0502` | 25 | `DELEGATION_FR_ARITH` = 6 |
 
-`0x0500` is `PRECOMPILE_POSEIDON2`, assigned at S10 and still without a circuit;
-S22 gives it one and takes address-space tag 5.
+`0x0500` was assigned at S10 with a calling convention and no circuit; S23 gave
+it one. The numbers are not in family-id order and need not be: a family id
+orders the statement, an ecall number names the call, and this table is what
+ties them together.
+
+The table itself is `constants::delegation::TYPES`, which `program::DELEGATIONS`
+*is* — one array, read by the emulator's dispatch, by the request-side gates and
+by this page's tests.
 
 **Each delegation family has an address-space tag of its own**
 (`constants::address_space`), append-only beside `REG = 1`, `RAM = 2` and
@@ -112,13 +126,13 @@ It is read and written **in place**, and its contents are the delegated
 function's input and output.
 
 - The frame base is the value of `a0` on the requesting cycle.
-- The frame is `4 · <frame words>` bytes; for `KECCAK_F` that is 50 words, 200
-  bytes, one keccak-f[1600] state.
+- The frame is `4 · <frame words>` bytes; §3's registry is the width per
+  family, and §6, §12.1 and §13.1 are the three frame tables.
 - **Frame word `j` is at byte offset `4j`.** Word indices are the frame's whole
   addressing: there are no sub-word accesses and no offsets of any other kind.
-- The bytes are in **SHA-3 byte order**: lane `A[x][y]` takes index `i = 5y + x`
-  and occupies words `2i` and `2i + 1`, **low half first**, so the frame read as
-  bytes is the state read as bytes.
+- `KECCAK_F`'s bytes are in **SHA-3 byte order**: lane `A[x][y]` takes index
+  `i = 5y + x` and occupies words `2i` and `2i + 1`, **low half first**, so the
+  frame read as bytes is the state read as bytes.
 
 **Two frame rules, and the circuit carries both:**
 
@@ -128,9 +142,10 @@ function's input and output.
    not word-aligned has no witness at all (`keccak.rs`'s `base_aligned`).
 2. **Bounds.** The whole frame lies inside the RAM window: `RAM_ORIGIN ≤ base`
    and `base + <frame bytes> ≤ 2^31`. The upper half is its own decomposition,
-   `2^31 − 200 − base` as a sum of 31 booleans (`base_in_window`). The emulator
-   computes the same bound in `u64`, because `base + 200` wraps a `u32` at the
-   top of the window and a wrapped comparison passes a check it should fail.
+   `2^31 − <frame bytes> − base` as a sum of 31 booleans (`base_in_window`). The
+   emulator computes the same bound in `u64`, because `base + <frame bytes>`
+   wraps a `u32` at the top of the window and a wrapped comparison passes a
+   check it should fail.
 
 Both are fatal guest errors in the emulator — `Misaligned` and `OutOfBounds`,
 the same two a misaligned load raises — so an execution the emulator refuses is
@@ -183,8 +198,30 @@ address space.
 **The requesting row** is an ordinary ecall row of the family that owns ecall
 cycles — `ADD_SUB_LUI_AUIPC`, by `program::row_kind`. It carries one extra
 query, the **mirror**, at `constraints::memory::DELEG` (query id 8, the eighth
-role, `Δ = 3`), whose mask is `m_deleg = m_pc · is_delegation` and whose address
-is the frame base the row read from `a0`.
+role, `Δ = 3`), whose mask is `m_deleg = m_pc · Σ_t is_deleg_t` over the type
+selectors and whose address is the frame base the row read from `a0`.
+
+**One `deleg` query serves every delegation type, and the type rides a memory
+column.** The mirror's leaf must name the requested type — its `AS` term is that
+type's tag — and a leaf may read no `W` column, because `W` is committed after
+the memory challenges (`docs/spec/memory.md` §8, `check_memory`'s provenance
+rule). The type selectors a family commits *are* witness columns, so the tag
+crosses into the leaf through one more `M` column of the frame, `deleg_space` at
+`M[1 + 5w]`, which the family pins with a degree-1 enforcing gate:
+
+```text
+deleg_space − Σ_t tag_t · is_deleg_t = 0        add_sub's `deleg_space_rule`
+```
+
+It is 0 on every row that requests nothing, because each `is_deleg_t` is 0
+unless the row is an ecall and `is_ecall` is 0 on a padding row. A frame without
+the `deleg` query does not carry the column at all, and `trace`'s frame builder
+writes it from the mirror event's own address space.
+
+Why not one query per type: a second mirror query would need a ninth
+`trace::Role`, and `trace::Row::present` is a full `u8`
+(`docs/spec/execution-trace.md` §7). Why not a literal: with one delegation
+family the tag *was* a literal on the mask, and with three it cannot be.
 
 **The invocation row** carries two anchor leaves beside its frame words:
 
@@ -227,7 +264,7 @@ consumes, and both sides are the prover's; an honest fill writes 0 on both.
 
 **What the twins found, and what (2) therefore buys.** In *this* family the
 chain above is not mountable by editing cells at all, and the reason is worth
-recording for S22 and S23. Switching an invocation off drops its **50 RAM frame
+recording for every later family. Switching an invocation off drops its **50 RAM frame
 accesses** with it, so the word at `base + 4j` loses a write that the next
 invocation's `read_ts` still names; repairing the anchor side does not repair
 that, and repairing that means re-pointing the next invocation's 50 reads,
@@ -525,7 +562,7 @@ permutation does not fit.
 
 ---
 
-## 10. What S22 and S23 may append
+## 10. What a later delegation family may append
 
 Everything above is frozen. A later delegation family appends, and appends only:
 
@@ -541,11 +578,25 @@ rule are the same for every delegation family, and a family that wrote its own
 would be a family whose pairing nobody had argued. What varies with the type is
 the address-space tag, and nothing else.
 
-The request-side gates are `ADD_SUB_LUI_AUIPC`'s and grow by one term per
-delegation type — the mirror's mask is `m_pc` times the sum of the type
-selectors, and its leaf's `AS` term is the sum over types of `(tag_t, m_t)`.
-That is the same shape as every `uses_q` rule of `docs/spec/memory.md` §2.1, and
-it is the one place a new delegation type touches an existing family's circuit.
+The request-side gates are `ADD_SUB_LUI_AUIPC`'s and grow by one selector and
+three gates per delegation type — `is_deleg_t`'s booleanity, the gate making it
+an ecall's, and the gate pinning `a7` to that type's number — while
+`deleg_mask_rule`, `deleg_space_rule`, `ecall_is_exit`, `exit_status` and
+`next_pc_rule` each gain one term per type on an existing product's *other*
+factor. Every one of them stays degree 2. That is the one place a new delegation
+type touches an existing family's circuit.
+
+### 10.1 What S23 amended, and why
+
+S21 wrote this rule as "its leaf's `AS` term is the sum over types of
+`(tag_t, m_t)`". **That is not implementable**: a leaf carries `γ_M` and the
+three `α`s, so `check_memory`'s provenance rule refuses it the moment it reads a
+`W` column, and a type selector is one. The repair is §5.1's `deleg_space`
+column — a memory column the family pins to its witness selectors — and it costs
+one `M` column on the one frame that holds the `deleg` query. Nothing else in §5
+moved: the two leaves, the three zeroings, the addressing rule and §5.3's
+argument are S21's unchanged, and the keccak circuit's bytes did not move at
+all.
 
 ---
 
@@ -565,3 +616,218 @@ it is the one place a new delegation type touches an existing family's circuit.
 - **It does not change the proof's shape.** A delegation `ShardProof` is a
   `ShardProof`, and `verify_shard`, `verify_block`, `PublicInputs` and
   `VerifyingKey` are S16's and S20's unchanged.
+
+---
+
+## 12. The Poseidon2 circuit
+
+`constants::family::POSEIDON2`, one width-3 Poseidon2 permutation a row.
+`constraints::poseidon2` is the circuit; `docs/spec/constraint-manifest.md` §13
+is its column-by-column account.
+
+The function is `transcript::poseidon2_permute` — the same 4 + 56 + 4 rounds,
+the same `x^5` S-box, the same external and internal matrices and the *same*
+round constants, read from `constants::POSEIDON2_RC3_*` with no second copy.
+`docs/spec/transcript.md` is that function's page, and this one restates none
+of it.
+
+### 12.1 The frame
+
+24 words: three lanes of eight, read and written in place.
+
+| words | what |
+| --- | --- |
+| `0..8` | lane 0, canonical little-endian `Fr` |
+| `8..16` | lane 1 |
+| `16..24` | lane 2 |
+
+**Canonical, in the mathematical sense**: the 32 bytes of lane `i` are
+`Fr::to_bytes` of its value, and the circuit's canonicity gates (§13.3's pattern)
+refuse any encoding at or above the modulus. That is the opposite of the
+Fr-arithmetic frame's choice (§13.2) and deliberately so: here the conversion
+costs six Montgomery operations against 240 the delegation removes, and it buys
+a circuit that is `poseidon2_permute` itself rather than `poseidon2_permute`
+conjugated by a scaling.
+
+### 12.2 The columns
+
+| subtree | columns |
+| --- | --- |
+| `M[0..4]` | `cycle`, `live`, `base`, `anchor_value` |
+| `M[4 + 4j ..]` | frame word `j`: `addr`, `read_ts`, `read_value`, `write_value` |
+| `W[0..912]` | 38 gap bits a frame read, in frame order |
+| `W[912..941]` | `(base − RAM_ORIGIN) / 4`, 29 bits |
+| `W[941..972]` | `2^31 − 96 − base`, 31 bits |
+| `W[972..4092]` | six values' bits: the three lanes in, then the three out, each 256 word bits then 264 canonicity bits |
+
+No setup column, no virtual table and no lookup channel (§9).
+
+### 12.3 The round block
+
+Sixty-four identical blocks of **three** sub-layers, the same three whether the
+round is full or partial:
+
+| sub-layer | writes | gate |
+| --- | --- | --- |
+| 1 | `q_i = (state_i + c_i)^2`, and `t_i = state_i + c_i` | the round constant folds into both |
+| 2 | `q2_i = q_i · q_i`, `t_i` carried | |
+| 3 | the linear layer over `v_i = q2_i · t_i` | the matrix folds into the products' coefficients |
+
+`x^5 = x^4 · x` needs `x^4`, and `x^4 = (x^2)^2` needs `x^2`: two
+multiplication layers per S-box, which is the degree ceiling's price and not a
+choice. The constant add and both matrices are degree 1 and fold into a
+neighbour, so a round costs three gate lists and no more. A partial round
+S-boxes lane 0 alone and carries lanes 1 and 2 through the first two
+sub-layers.
+
+The initial `external_matrix` — the one before round 1 — folds into round 0's
+first square, so it costs no layer of its own.
+
+**`x^2` is computed, not committed.** A committed helper is readable by gate
+list 0 alone (`docs/spec/gkr.md` §2), so the 80 of them would have to be
+carried up through every layer that had not consumed them yet: 5,040
+pass-through columns against 736 of actual work. Computing it costs one more
+gate list a round and nothing else, and it is *stronger* — a layer value is
+forced by its gate, where a committed one would need an enforcing gate to be
+forced at all.
+
+### 12.4 The output
+
+The permutation's three final lanes are compared with the three the invocation
+*wrote*, at the last gate list, gated on `live`:
+
+```text
+live · (final_j − Σ_k 2^{32k}·write_value(8j + k)) = 0        `out_lane{j}`
+```
+
+Gated, and it must be: a padding row's committed cells are zero, the circuit
+still computes the permutation of the zero state there, and an ungated gate
+would demand the written lane equal it. `live` and the three recomposed written
+lanes are therefore carried to the top — four columns through 192 layers, which
+is what a layered circuit pays to let its last gate read a committed column.
+
+---
+
+## 13. The Fr-arithmetic circuit
+
+`constants::family::FR_ARITH`, **one `Fr` operation a row**.
+`constraints::fr_arith` is the circuit; `docs/spec/constraint-manifest.md` §14
+is its column-by-column account.
+
+### 13.1 The frame, and one operation an invocation
+
+25 words.
+
+| words | what |
+| --- | --- |
+| `0` | the operation code: 1 add, 2 multiply, 3 inverse |
+| `1..9` | operand `a` |
+| `9..17` | operand `b` |
+| `17..25` | the result, the only words the invocation computes |
+
+**One invocation is one operation and one row.** `ops/row = 1` is the cost model
+the recursion guest's contraction is sized against, and it is also what the
+anchor forces: §5's two leaves are the *row's*, so an invocation spanning
+several rows would write several answer tuples against one mirror read and the
+honest prover would be refused. A batch would have to be several operations in
+one row, and it would buy nothing — the circuit's cost is per operation either
+way, and the guest's marshalling, which dominates, does not amortize. The
+delegated backend of §13.4 makes one-operation calls in any case: `Mul` has one
+multiplication in it.
+
+The words the invocation does not compute are written back unchanged, so the
+guest's operands survive the call.
+
+### 13.2 The encoding, and why it is not the mathematical value
+
+The three values cross the frame in **`field::Fr`'s in-memory representation** —
+the four Montgomery limbs written little-endian, which `Fr::to_memory_bytes`
+writes. Each 32-byte group is still a canonical little-endian encoding of a
+field element, and §13.3's gates refuse one at or above the modulus; it is just
+that the element it encodes is `x·R` rather than `x`, where `R = 2^256 mod p`.
+
+That is the whole reason the delegation is worth making. A mathematically
+canonical frame would cost a Montgomery conversion per operand — `to_bytes` is
+a Montgomery reduction and `from_bytes` a Montgomery multiply — which is about
+twice the software multiply the delegation replaces, so a delegated multiply
+would be *slower* than not delegating at all.
+
+The three operations are therefore exactly what `Fr`'s own `Add`, `Mul` and
+`inverse` compute on those representatives:
+
+```text
+add   out = a + b
+mul   out = a·b·R^-1          which is what one Montgomery multiply is
+inv   out = R^2·a^-1, and 0 at a = 0
+```
+
+`R^-1` and `R^2` are literals the circuit derives from `constants::FR_R` rather
+than restating. `inverse(0) = 0` is this delegation's convention where `Fr`'s is
+`None`; the two are reconciled in the backend, which answers `None` itself and
+never makes the call.
+
+### 13.3 The gates
+
+Over the three values `a`, `b`, `out` recomposed from their frame words:
+
+| gate | what |
+| --- | --- |
+| `<v>_word{k}` | word `k` is `Σ 2^t·bit`, which is its 32-bit bound and its decode at once |
+| `<v>_canonical{i}` | `w_i − p_i − b_{i−1} + 2^32·b_i = d_i`, the borrow chain of `X − p` over eight 32-bit limbs |
+| `<v>_below_modulus` | `b_7 = live`: the subtraction borrowed out, so `X < p` |
+| `opcode_rule` | the opcode word is `1·f_add + 2·f_mul + 3·f_inv` |
+| `one_op_a_live_row` | `f_add + f_mul + f_inv = live` |
+| `prod_rule` | `prod = a·b`, ungated |
+| `inv_is_an_inverse` | `a·inv + z − f_inv = 0` |
+| `is_zero_at_nonzero` | `a·z = 0` |
+| `inverse_of_zero_is_zero` | `z·inv = 0` |
+| `out_rule` | `out = f_add·(a + b) + R^-1·f_mul·prod + R^2·f_inv·inv` |
+
+Four of those deserve a sentence.
+
+**Canonicity is a borrow chain, not a comparison.** Every term of a limb
+equation is a small integer in a range far below `p`, so the `Fr` equation *is*
+the integer equation; the eight of them telescope to `X − p + 2^256·b_7 = D`
+with `D` below `2^256`, and `b_7 = 1` puts `X` below `p`. Without it a frame
+value would have several encodings and the delegated path and the software
+fallback would disagree on which.
+
+**`one_op_a_live_row` is load-bearing and the opcode does not replace it.** The
+codes are 1, 2 and 3, so `add + mul` spells the same opcode word as `inv`: on
+an inverse row a prover may set `f_add` and `f_mul` instead and `opcode_rule`
+still holds. Exactly one selector a live row is the only thing that refuses it.
+
+**The product helper is what buys the degree.** `f_mul·a·b` is degree 3, so the
+product is pinned by an ungated gate of its own and the selected relation reads
+it.
+
+**The inverse needs three gates, not two.** `a·inv + z = f_inv` alone lets a
+prover set `z = 1` at `a ≠ 0` and prove `inv(a) = 0`; `a·z = 0` fixes that and
+still leaves `inv` free at `a = 0`, so "inverse(0) = 0" would be prose. `z·inv =
+0` is the third, and it is what makes the convention a constraint.
+
+### 13.4 The guest-target backend
+
+`field` and `transcript` route their own operations through the two
+delegations when compiled for `riscv32`, and fall back to their own software
+path on `-ENOSYS`:
+
+| crate | what routes | to |
+| --- | --- | --- |
+| `field` | `add_limbs`, `mont_mul`, `Fr::inverse` | `guest_sdk::recursion::fr_arith` |
+| `transcript` | `poseidon2_permute` | `guest_sdk::recursion::poseidon2` |
+
+Selected by `#[cfg(target_arch = "riscv32")]` and a **target dependency** on
+`guest-sdk` — not a cargo feature, which the master's anti-goal 1 bans and
+`crates/prover/tests/one_feature.rs` enforces. The direction is forced: cargo
+refuses a dependency cycle, so `guest-sdk` may not name `Fr` and its shims take
+frames of bytes.
+
+Two consequences worth stating.
+
+- **The fallback is bit-identical by construction.** It is not a second
+  implementation held equal by a test; it is the same function, one branch
+  below the ecall.
+- **A guest that does field arithmetic declares both families**, because the
+  shims are reachable from `Fr`'s operators. That is the seam working: a guest
+  doing field work is a guest whose proof needs those circuits.

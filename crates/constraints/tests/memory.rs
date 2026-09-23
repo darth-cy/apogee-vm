@@ -15,11 +15,11 @@
 
 use constants::{address_space, challenge_slot, family, lookup_channel, memory};
 use constraints::memory::{
-    check_memory, family_frame_artifact, frame, frame_artifact, frame_queries, gap_hi,
-    image_window_artifact, rd_inv, rd_is_zero, rd_selected, read_tuple, zero_window_artifact, ARG1,
-    ARG2, CYCLE, DELEG, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE,
-    FRAME_DELTA, FRAME_NAMES, FRAME_QUERIES, FRAME_READ_ONLY, FRAME_SPACE, LOAD, PC, RAM, RD, RS1,
-    RS2,
+    check_memory, deleg_space, family_frame_artifact, frame, frame_artifact, frame_queries,
+    frame_query_takes, gap_hi, image_window_artifact, rd_inv, rd_is_zero, rd_selected, read_tuple,
+    zero_window_artifact, ARG1, ARG2, CYCLE, DELEG, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS,
+    FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA, FRAME_NAMES, FRAME_QUERIES, FRAME_READ_ONLY,
+    FRAME_SPACE, LOAD, PC, RAM, RD, RS1, RS2,
 };
 use constraints::{
     CachedEntry, CircuitArtifact, Coeff, ConstraintError, EnforcingEntry, GateDef, LayerSpec,
@@ -30,7 +30,7 @@ use field::Fr;
 use std::collections::HashSet;
 use test_support::{sha256, to_hex};
 
-const FRAME_ALU_SHA256: &str = "b16651f6def235bd51056b6508bd56c7c97a2e3a611427a1ac4270b8f98d4945";
+const FRAME_ALU_SHA256: &str = "5bb8ed11eef28755d3209e72e3621ee117cf5eb254c5e396bd63c63d21179391";
 const FRAME_REG_SHA256: &str = "f94da36c6f7052acd10c36a3a0bd04ce09fe2419cdbfa046db4a58b1a716cbc0";
 const FRAME_MEM_SHA256: &str = "7a31fd867d4b5490821bcef24e356daf34d834a397efed8fa41b8e821b6fee6f";
 const FRAME_ATOMICS_SHA256: &str =
@@ -58,13 +58,18 @@ const EXECUTION_FAMILIES: [u32; 7] = [
 /// `w`, the `M` and `W` column counts, the leaves a side, the obligations and
 /// the enforcing gates — `w` booleanity gates, one write-back per read-only
 /// query the family holds, and the four x0 gates.
+///
+/// The `M` count is `1 + 5w`, and `1 + 5w + 1` for the one family whose frame
+/// holds the delegation mirror: that query's leaf names the requested type
+/// through the `deleg_space` column rather than through a literal
+/// (`docs/spec/delegation.md` §5.1).
 #[allow(clippy::type_complexity)]
 const FRAME_SHAPES: [(u32, &[usize], usize, usize, usize, usize, usize); 7] = [
     //  family                      queries                                w    M   W  side  lk  enf
     (
         family::ADD_SUB_LUI_AUIPC,
         &[PC, RS1, RS2, ARG1, ARG2, RAM, RD, DELEG],
-        41,
+        42,
         11,
         8,
         16,
@@ -283,7 +288,13 @@ fn every_artifact_has_two_named_roots_and_an_all_zero_padding_row() {
 #[test]
 fn the_read_tuples_parts_are_at_their_named_positions() {
     let slot = Coeff::Challenge;
-    for (q, space) in FRAME_SPACE.iter().enumerate() {
+    // `read_tuple` is the tuple a frame holding *every* query would address,
+    // and the verifier's boundary reads it for queries 0 and 1 alone. The
+    // delegation mirror is the one query it cannot build: its `AS` term names
+    // a column whose address depends on the family's frame width, so
+    // `read_tuple(DELEG)` panics by design rather than answering with a
+    // literal that would be wrong (`docs/spec/delegation.md` §5.1).
+    for (q, space) in FRAME_SPACE.iter().enumerate().filter(|(q, _)| *q != DELEG) {
         let GateDef::Linear { terms, constant } = read_tuple(q) else {
             panic!("a tuple is Linear");
         };
@@ -340,8 +351,16 @@ fn the_query_table_is_the_documents() {
     );
     assert_eq!(FRAME_DELTA, [0, 1, 2, 2, 2, 2, 3, 3, 3]);
     let (pc, reg, ram) = (address_space::PC, address_space::REG, address_space::RAM);
-    let del = address_space::DELEGATION_KECCAK_F;
-    assert_eq!(FRAME_SPACE, [pc, reg, reg, reg, reg, ram, ram, reg, del]);
+    // The `deleg` query names **no** space: one query serves every delegation
+    // type and the row's `deleg_space` column carries the tag. 0 is a value no
+    // real tag takes, so a stale comparison against this entry matches nothing
+    // and reaches a panic rather than dropping an event
+    // (`docs/spec/delegation.md` §5.1).
+    assert_eq!(FRAME_SPACE, [pc, reg, reg, reg, reg, ram, ram, reg, 0]);
+    for space in address_space::DELEGATION {
+        assert!(frame_query_takes(DELEG, space, FRAME_DELTA[DELEG]));
+        assert!(!frame_query_takes(RAM, space, FRAME_DELTA[RAM]));
+    }
     assert_eq!(FRAME_READ_ONLY, [RS1, RS2, ARG1, ARG2, LOAD]);
     assert_eq!(CYCLE, PolyAddress::Memory(0));
 }
@@ -374,6 +393,11 @@ fn the_frame_layout_is_the_documents() {
             for f in ["mask", "addr", "read_ts", "read_value", "write_value"] {
                 columns.push(format!("{}_{f}", FRAME_NAMES[q]));
             }
+        }
+        // The one extra memory column: the delegation mirror's leaf names the
+        // requested type through it rather than through a literal.
+        if queries.contains(&DELEG) {
+            columns.push(String::from("deleg_space"));
         }
         assert_eq!(a.memory, columns, "family {id}");
         assert_eq!(a.memory.len(), memory_columns, "family {id}");
@@ -452,8 +476,9 @@ fn the_frame_layout_is_the_documents() {
 /// The widest frame's layout written out once, undeduced, as the document's
 /// §2.1 reads it: `ADD_SUB_LUI_AUIPC` holds every query but `load`, so `rd`
 /// sits at slot 6 and its mask is `M[31]`, not the `M[36]` a frame of all nine
-/// queries would give it, and S21's `deleg` follows at slot 7. Kills a layout
-/// that silently kept the table's width.
+/// queries would give it, S21's `deleg` follows at slot 7, and S23's
+/// `deleg_space` follows the frame at `M[41]`. Kills a layout that silently
+/// kept the table's width.
 #[test]
 fn the_widest_frame_is_eight_queries_with_rd_at_slot_six() {
     let a = family_frame_artifact(family::ADD_SUB_LUI_AUIPC, 12);
@@ -501,9 +526,11 @@ fn the_widest_frame_is_eight_queries_with_rd_at_slot_six() {
             "deleg_read_ts",
             "deleg_read_value",
             "deleg_write_value",
+            "deleg_space",
         ]
     );
-    assert_eq!(a.memory.len(), 41);
+    assert_eq!(a.memory.len(), 42);
+    assert_eq!(deleg_space(8), PolyAddress::Memory(41));
     assert_eq!(frame(0, FIELD_MASK), PolyAddress::Memory(1));
     assert_eq!(frame(6, FIELD_MASK), PolyAddress::Memory(31));
     assert_eq!(frame(6, FIELD_WRITE_VALUE), PolyAddress::Memory(35));
@@ -605,35 +632,44 @@ fn a_query_at_a_slot_that_is_not_its_id_keeps_its_own_space_and_delta() {
         for (at, &q) in queries.iter().enumerate() {
             displaced += (at != q) as usize;
             let m = frame(at, FIELD_MASK);
-            let head = vec![
+            // The `AS` term: a literal on the mask for every query but the
+            // delegation mirror, whose type is the row's and rides the frame's
+            // `deleg_space` column, so its term is a product of two `M`
+            // columns instead (`docs/spec/delegation.md` §5.1).
+            let mut head = vec![
                 (Coeff::Challenge(challenge_slot::MEM_GAMMA), m),
                 (Coeff::Literal(Fr::MINUS_ONE), m),
-                (lit(FRAME_SPACE[q] as u64), m),
             ];
-            let read = GateDef::Quadratic {
-                constant: lit(1),
-                linear: head.clone(),
-                products: vec![
-                    (
-                        Coeff::Challenge(challenge_slot::MEM_ALPHA_ADDR),
-                        frame(at, FIELD_ADDR),
-                        m,
-                    ),
-                    (alpha_ts, frame(at, FIELD_READ_TS), m),
-                    (
-                        Coeff::Challenge(challenge_slot::MEM_ALPHA_VAL),
-                        frame(at, FIELD_READ_VALUE),
-                        m,
-                    ),
-                ],
-            };
-            let mut linear = head;
-            linear.extend(vec![(alpha_ts, m); FRAME_DELTA[q] as usize]);
-            let mut products = vec![(
+            let mut space: Vec<(Coeff, PolyAddress, PolyAddress)> = Vec::new();
+            match q {
+                DELEG => space.push((lit(1), deleg_space(queries.len()), m)),
+                _ => head.push((lit(FRAME_SPACE[q] as u64), m)),
+            }
+            let mut read_products = space.clone();
+            read_products.push((
                 Coeff::Challenge(challenge_slot::MEM_ALPHA_ADDR),
                 frame(at, FIELD_ADDR),
                 m,
-            )];
+            ));
+            read_products.push((alpha_ts, frame(at, FIELD_READ_TS), m));
+            read_products.push((
+                Coeff::Challenge(challenge_slot::MEM_ALPHA_VAL),
+                frame(at, FIELD_READ_VALUE),
+                m,
+            ));
+            let read = GateDef::Quadratic {
+                constant: lit(1),
+                linear: head.clone(),
+                products: read_products,
+            };
+            let mut linear = head;
+            linear.extend(vec![(alpha_ts, m); FRAME_DELTA[q] as usize]);
+            let mut products = space;
+            products.push((
+                Coeff::Challenge(challenge_slot::MEM_ALPHA_ADDR),
+                frame(at, FIELD_ADDR),
+                m,
+            ));
             products.extend(vec![(alpha_ts, CYCLE, m); memory::TS_STEP as usize]);
             products.push((
                 Coeff::Challenge(challenge_slot::MEM_ALPHA_VAL),
@@ -877,7 +913,11 @@ fn the_read_sets_are_pinned() {
         );
         for &id in &EXECUTION_FAMILIES {
             let w = frame_queries(id).len() as u32;
-            let mut expected: Vec<PolyAddress> = (0..1 + 5 * w).map(PolyAddress::Memory).collect();
+            // `1 + 5w`, and one more where the frame holds the delegation
+            // mirror: its leaf reads `deleg_space` too.
+            let extra = u32::from(frame_queries(id).contains(&DELEG));
+            let mut expected: Vec<PolyAddress> =
+                (0..1 + 5 * w + extra).map(PolyAddress::Memory).collect();
             expected.extend((0..w + 3).map(PolyAddress::Witness));
             assert_eq!(
                 read_set(&family_frame_artifact(id, trace_vars)),
@@ -1350,4 +1390,16 @@ fn a_global_slot_over_an_inner_column_is_refused() {
                 .to_string()
         )
     );
+}
+
+/// `read_tuple` refuses the delegation mirror, loudly.
+///
+/// Its `AS` term is not a literal of the query table but the `deleg_space`
+/// column of the family's own frame, whose address depends on that frame's
+/// width. A `read_tuple(DELEG)` that answered anything would be answering with
+/// the wrong term, so it panics instead (`docs/spec/delegation.md` §5.1).
+#[test]
+#[should_panic(expected = "a frame holding the deleg query carries a deleg_space column")]
+fn the_delegation_mirror_has_no_standalone_read_tuple() {
+    read_tuple(DELEG);
 }

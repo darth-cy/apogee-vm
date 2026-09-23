@@ -9,8 +9,8 @@
 use constants::lookup_channel;
 use constants::memory::{HALT_PC, RAM_LIVE_BIT, TS_STEP};
 use constraints::memory::{
-    frame, gap_hi, rd_inv, rd_is_zero, rd_selected, CYCLE, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS,
-    FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA, FRAME_QUERIES, FRAME_SPACE, RD,
+    deleg_space, frame, frame_query_takes, gap_hi, rd_inv, rd_is_zero, rd_selected, CYCLE, DELEG,
+    FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA, RD,
 };
 use constraints::PolyAddress;
 use field::Fr;
@@ -84,24 +84,22 @@ fn frame_rows(
         let Some(&Some(i)) = row_of.get(event.cycle() as usize) else {
             continue;
         };
-        // An event whose `(space, Δ)` pair no query of the table has belongs
-        // to no cycle's row: it is a **delegation invocation's** frame access,
-        // which rides the requesting cycle's timestamp at
+        // A **delegation invocation's** frame access belongs to no cycle's
+        // row: it rides the requesting cycle's timestamp at
         // `constants::delegation::FRAME_DELTA` and is that family's row, not
-        // this one's (`docs/spec/delegation.md` §4.1). The panic below is
-        // unchanged for every pair the table *does* have.
-        let in_table = (0..FRAME_QUERIES)
-            .any(|q| FRAME_SPACE[q] == event.space.tag() && FRAME_DELTA[q] == event.delta());
-        if !in_table {
+        // this one's (`docs/spec/delegation.md` §4.1). That is the one pair
+        // skipped here, named rather than inferred — an event that matches no
+        // query for any *other* reason must reach the panic below, and a
+        // silently dropped event would leave a frame column zero and an
+        // honest prover refused.
+        if event.space == AddressSpace::Ram && event.delta() == constants::delegation::FRAME_DELTA {
             continue;
         }
         let row = &mut rows[i];
         let at = (0..queries.len())
             .find(|&at| {
                 let q = queries[at];
-                row[at].is_none()
-                    && FRAME_SPACE[q] == event.space.tag()
-                    && FRAME_DELTA[q] == event.delta()
+                row[at].is_none() && frame_query_takes(q, event.space.tag(), event.delta())
             })
             .unwrap_or_else(|| {
                 panic!(
@@ -160,6 +158,17 @@ pub fn build_memory_columns(
             frame(at, FIELD_WRITE_VALUE),
             field(|e| e.write_value as u64),
         ));
+    }
+    // The delegation mirror's leaf names the requested *type* through one more
+    // `M` column, and the type is the mirror event's own address space — one
+    // `deleg` query serves them all (`docs/spec/delegation.md` §5.1). Zero on
+    // every row that requests nothing, which the leaf reads as no tuple at
+    // all because the mask is zero there too.
+    if let Some(at) = queries.iter().position(|&q| q == DELEG) {
+        let values = rows
+            .iter()
+            .map(|row| row[at].as_ref().map_or(0, |e| e.space.tag() as u64));
+        out.push((deleg_space(queries.len()), column(values.collect(), height)));
     }
     out
 }
@@ -310,7 +319,10 @@ pub fn build_boundary_finals(log: &MemoryEventLog) -> BoundaryFinals {
             AddressSpace::Pc => pc = Some(f),
             // A RAM word's final value is a window family's row, and a
             // delegation space has no final state at all.
-            AddressSpace::Ram | AddressSpace::KeccakF => {}
+            AddressSpace::Ram
+            | AddressSpace::KeccakF
+            | AddressSpace::Poseidon2
+            | AddressSpace::FrArith => {}
         }
     }
     let pc = pc.expect("build_boundary_finals: the log has no pc query, so no final pc");

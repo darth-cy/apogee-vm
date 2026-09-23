@@ -28,6 +28,25 @@ A RISC-V zkVM proving RV32IMAC guest programs (Rust, no-std), arithmetized as **
 6. Commit with the repository's configured git credential exactly as `git config user.name`/`user.email` report it — never pass `-c user.name`/`-c user.email`, and never substitute an address from anywhere else.
 7. **Keep CI fast while the build is in progress.** A step that is slow because the *circuit* is large — a full-height constraint system, a whole-shard proof — may be run locally on the stage's own PR instead of on every push. Comment it out of `.github/workflows/ci.yml` under a `# DEFERRED:` line carrying the command and the reason, and record in the stage's handoff note that you ran it, and what it reported. Nothing else defers: fmt, clippy, `cargo test --workspace`, the guest-target build and the regenerate-and-diff run on every push, and a test is never given `#[ignore]` in order to fall out of them. Before the project is called finished, every `# DEFERRED:` step goes back in and one run is green with all of them.
 
+### Stage register: cancelled stages
+
+A stage prompt sitting in `prompts/` is not by itself a commitment to build it. This
+section is the authority on which numbered stages will never ship, and it outranks every
+forward reference to them elsewhere in the repository.
+
+- **S22 — secp256k1 `ecrecover` delegation family: CANCELLED. It failed and will NOT be
+  implemented.** `prompts/S22-ecrecover.md` stays in the tree for reference only; the
+  branch `s22-ecrecover` is scrapped and is not to be read, merged or built on. There is
+  **no ecrecover delegation ecall in this repository**, no ecrecover family id, no
+  ecrecover address space, and no `guest_sdk::ecrecover`. S24's revm guest proves
+  `ecrecover` with ordinary RV32IMAC instructions through the existing execution
+  families, like any other guest computation; the specialized delegation is discarded,
+  not deferred.
+- Consequently, every statement written before this decision that promises S22 something —
+  a family id, an ecall number, an address-space tag, a frame table, a gadget API, or "S22
+  gives it one" — is **stale by construction**. A later stage that meets one corrects it
+  where it lives rather than routing around it, and takes the next free number for itself.
+
 ### Implementation Rules
 1. **Concrete types.** No trait-generic field, polynomial, commitment, or transcript abstractions. `Fr` is a struct, not a `F: Field`. Prefer readability and succinctness over generality. (Deliberate, narrow exceptions may be named by a stage prompt.)
 2. **Own the crypto.** Field, curve, pairing, MSM, Poseidon2, transcript, polynomials, sumcheck, GKR, Mercury are all implemented in this repo. Allowed runtime dependencies: serialization (`serde`/`postcard`), parallelism (`rayon`), CLI/tooling, error handling. Reference libraries (arkworks, plonky3, QEMU/spike) appear ONLY as dev-dependencies or fixture generators for differential tests.
