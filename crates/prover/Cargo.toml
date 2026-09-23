@@ -41,7 +41,15 @@ verifier-core.workspace = true
 [dev-dependencies]
 # `tests/common` traces the S16 guest.
 emulator.workspace = true
+# Hex, for printing an identity a handoff note records.
+test-support.workspace = true
 # S20 acceptance 3: the transcript-tape validator over the statement the block
 # was actually proved for. A dev-dependency cycle -- `checker` depends on this
 # crate -- which cargo resolves: the dev graph is built separately.
 checker.workspace = true
+# S24's workload guest. `tests/revm.rs` -- and not `tests/common`, which stays
+# free of the guest workspace because `crates/checker` includes it too -- builds
+# its embedded-witness binary and checks the digest it publishes against the
+# same library's own answer. A path into the guest workspace, and a test
+# dependency only.
+revm-block = { path = "../../guests/revm-block" }

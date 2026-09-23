@@ -24,3 +24,9 @@ tiny-keccak.workspace = true
 # suite calls on the host, from the same source it builds the guest from. A
 # path into the guest workspace, and a test dependency only.
 consistency = { path = "../../guests/consistency" }
+# S24's workload guest, likewise: `tests/revm.rs` calls `revm_block::run` on
+# the host as the native-revm oracle the guest's committed output is held to.
+revm-block = { path = "../../guests/revm-block" }
+# `tests/revm.rs`' negative controls encode a witness the decoder must refuse,
+# so they need the encoder without `BlockWitness::encode`'s canonicity assert.
+postcard.workspace = true

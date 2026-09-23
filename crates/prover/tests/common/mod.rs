@@ -11,6 +11,11 @@
 //! - S19's: `guests/mem`'s, with five — add/sub, jump/branch/slt and the three
 //!   families S19 proves — at `2^20`. It is the first statement whose rows
 //!   touch RAM, so it is also the first with a `ZERO_WINDOWS` shard.
+//!
+//! S24's statement is the one that is **not** here: `guests/revm-block`'s is
+//! built from source rather than from a committed ELF, so it lives in
+//! `tests/revm.rs` beside the suite that proves it, and this module stays free
+//! of the guest workspace — `crates/checker`'s suites include it too.
 //! - S20's: `guests/shards`', with add/sub and jump/branch/slt at `2^20`. Its
 //!   add/sub family runs 1,064,970 cycles, past `2^20`, so it is the first
 //!   statement with **two shards of one family** — and it touches no RAM, so
@@ -261,7 +266,7 @@ pub fn recursion_unused_archive(program: &Program) -> TraceArchive {
 }
 
 /// A run with no input and no hint, which must exit with `status`.
-fn trace(program: &Program, status: u32) -> TraceArchive {
+pub fn trace(program: &Program, status: u32) -> TraceArchive {
     let io = GuestIo {
         input: Vec::new(),
         hint: Vec::new(),
