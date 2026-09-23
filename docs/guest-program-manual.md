@@ -66,7 +66,7 @@ A guest is an ordinary `no_std` binary crate that lives in the `guests/`
 workspace. Three files, one of which already exists.
 
 `hello` below is the guest this manual builds; you are creating it now. The
-repository ships seventeen, and every command here works on those too with the name
+repository ships twenty, and every command here works on those too with the name
 changed. They are worth reading before you write your own, because between them
 they cover most of what a guest can do:
 
@@ -91,6 +91,7 @@ they cover most of what a guest can do:
 | `keccak-unused` | the other half of that story, and the guest to read when you want to know what *linking* a delegation costs: it links `keccak256` behind a `core::hint::black_box` branch the optimiser cannot fold away, and never calls it. The shim is reachable, so its declaration record is in the image, so `KECCAK_F` is in the `VmConfig` — and the run invokes it zero times, so the execution proves zero shards of it. A guest that links no shim declares nothing at all (`docs/spec/delegation.md` §7). It exits 7 |
 | `recursion-ops` | S23's guest, and the one to read when you want to know what a delegation costs a *caller*: it does ordinary `field::Fr` arithmetic and calls `transcript::poseidon2_permute`, and names no shim at all. The guest-target backends inside those two crates route every multiply, add and inverse through the `FR_ARITH` delegation and the permutation through the `POSEIDON2` one, so a guest that does field work is a guest whose `VmConfig` holds both families. Under `qemu-riscv32` the same ecalls answer `-ENOSYS` and the crates' own software paths run, which is why the delegated path and the fallback cannot disagree: they are the same code. It exits with the number of checks, 9 |
 | `recursion-unused` | `keccak-unused`'s counterpart for S23: it links both backends behind a `core::hint::black_box` branch the optimiser cannot fold away and reaches neither, so both families are in its `VmConfig` and the execution proves zero shards of each. It exits 11 |
+| `revm-block` | S24's guest, and the first with a crates.io dependency: [revm](https://github.com/bluealloy/revm) executing a block over a synthetic pre-state, `no_std` and `default-features = false`. Read it for three things a workload guest needs and the others do not. **A library plus two thin binaries**, the `consistency` pattern of §2a, so the host can run the same source as the native oracle. **A hash hook**: `alloy-primitives`' `native-keccak` feature turns every `keccak256` in the image — revm's `KECCAK256` opcode, a contract's code hash, the guest's own commitments — into an `extern "C"` call the guest implements as `guest_sdk::keccak256`, which is how a dependency that has never heard of this VM ends up using its delegation. **Two binaries for one program**: `revm-block` takes its witness on fd 0 and commits on fd 1, and `revm-block-embedded` carries the same witness in `.rodata` and leaves `keccak256` of its output in `x24..x31` — because `read` and `write` are not provable ecalls yet, so the second is the one that has a proof (`docs/handoff/S24-revm.md`). It is also the only guest with no committed ELF: 2.2 MB at `--release` is not a fixture worth keeping, and its suites build it from source |
 
 If you are looking for a pattern to copy, `amm` is the one to read for arithmetic
 and framing, `orderbook` for anything that takes prover advice, `vault` for
@@ -128,7 +129,7 @@ fn main() {
 **`guests/Cargo.toml`** — add the crate to the member list:
 
 ```toml
-members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "consistency", "addsub", "control", "alu", "mem", "shards", "keccak-test", "keccak-unused", "recursion-ops", "recursion-unused", "hello"]
+members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "consistency", "addsub", "control", "alu", "mem", "shards", "keccak-test", "keccak-unused", "recursion-ops", "recursion-unused", "revm-block", "hello"]
 ```
 
 Four things about that source file are not negotiable:
