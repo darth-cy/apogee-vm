@@ -262,6 +262,47 @@ pub fn exit(code: i32) -> ! {
     }
 }
 
+/// Exit with `code`, leaving `words` in `x24..x31`.
+///
+/// **This is how a guest publishes a value while `write` is not a provable
+/// ecall.** `prompts/00-master.md`'s frozen invariants describe it: a proof
+/// carries the final value of every register, `PublicInputs` decodes them, and
+/// `x24..x31` are eight of them — so eight words left here are eight words a
+/// verifier reads out of the statement, bound by the same memory argument that
+/// binds everything else the execution did. `docs/spec/memory.md` §4.1 is the
+/// boundary's scalars; S24's `guests/revm-block` is the first caller, leaving
+/// `keccak256` of its output commitment.
+///
+/// One `asm!` block, and it has to be: the eight registers are set and the
+/// `ecall` issued with no instruction in between, because `x28..x31` are
+/// caller-saved temporaries that any code between a write and the exit is free
+/// to clobber. `options(noreturn)` is how a block that does not return says so;
+/// [`exit`] reaches the same `!` with a loop around its `ecall`, because it has
+/// no eight registers to keep intact and a loop is the plainer way to write it.
+///
+/// `code` is the exit status, as [`exit`] takes it. A guest that wants only
+/// the status calls [`exit`].
+pub fn exit_with_public_words(code: i32, words: [u32; 8]) -> ! {
+    // SAFETY: sets eight registers and issues `EXIT`, which does not return
+    // under any executor. It touches no memory and dereferences no pointer.
+    unsafe {
+        core::arch::asm!(
+            "ecall",
+            in("a7") ecall::EXIT,
+            in("a0") code as u32,
+            in("s8") words[0],
+            in("s9") words[1],
+            in("s10") words[2],
+            in("s11") words[3],
+            in("t3") words[4],
+            in("t4") words[5],
+            in("t5") words[6],
+            in("t6") words[7],
+            options(noreturn, nomem, nostack),
+        )
+    }
+}
+
 /// Status used for an executor-level I/O failure.
 const EXIT_IO_ERROR: i32 = 70;
 
