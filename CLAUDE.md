@@ -138,7 +138,7 @@ cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
 cargo clippy -p prover --all-targets --features metrics -- -D warnings   # the ONE feature's configuration
-cargo test --workspace                      # 1,028 tests as of S23; 73 more are #[ignore]d
+cargo test --workspace                      # 1,028 tests as of S23; 74 more are #[ignore]d
 cargo test -p prover --features metrics --test metrics  # the metrics harness; 10 more, 2 #[ignore]d
 cargo test -p program --test delegation -- --ignored --test-threads=1  # static detachment at BOTH guest profiles; builds six guest images, 2.9 s
 cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 17.5 GB peak, 203 s, 30 min on a runner
@@ -217,7 +217,7 @@ cargo test -p loader --test qemu -- --include-ignored   # a Linux host with qemu
 cargo test -p loader --test layout -- --ignored         # after editing link.ld
 
 APOGEE_GUEST_PROFILE=release \
-  cargo test -p loader --test qemu -- --include-ignored   # the same ten, optimised
+  cargo test -p loader --test qemu -- --include-ignored   # the same fifteen, optimised
 ```
 
 **Guests build at `--release` too, and both profiles are pinned.** In a zkVM

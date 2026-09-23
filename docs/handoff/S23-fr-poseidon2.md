@@ -517,7 +517,7 @@ once, at the end, per the owner's standing instruction.
 | `cargo clippy --workspace --all-targets -- -D warnings` | clean |
 | `cargo clippy` — `transcript-ref`, `guest-sdk` at `riscv32imac`, `guests --bins` | clean |
 | `cargo clippy -p prover --all-targets --features metrics` | clean |
-| `cargo test --workspace` | **1,028 passed, 0 failed, 73 ignored** |
+| `cargo test --workspace` | **1,028 passed, 0 failed, 74 ignored** |
 | `cargo test -p prover --features metrics --test metrics` | 10 passed, 2 ignored |
 | `cargo test -p program --test delegation -- --ignored` | 1 passed (six guest images, 2.9 s) |
 | `cargo build … --target riscv32imac-unknown-none-elf` | clean, eight crates |
@@ -557,6 +557,32 @@ line in `CLAUDE.md` and in `.github/workflows/ci.yml` were re-pinned to them:
   peak is one shard's forward pass per worker, and a block with more families holds more
   of them at once. It is not the delegation circuits being large — each is about 2% of a
   keccak shard (see "Measurements").
+
+### The QEMU battery — the `-ENOSYS` fallback half
+
+`qemu-riscv32` has no macOS build, so these ran in a Linux container
+(`rust:latest` + `qemu-user` 10.0.13, under Colima on the same machine), which is the
+arrangement the root `CLAUDE.md` documents.
+
+| Suite | Result |
+| --- | --- |
+| `loader --test qemu` (dev) | 15 passed, 1.8 s |
+| `loader --test qemu` (`APOGEE_GUEST_PROFILE=release`) | 15 passed, 2.0 s |
+| `emulator --test differential` | 3 passed, 0.9 s |
+| `emulator --test consistency` (dev) | 8 passed, 29.2 s |
+| `emulator --test consistency` (release) | 8 passed, 16.6 s |
+
+**The fifteenth test is new and this stage owes it.** `qemu.rs` had
+`keccak_falls_back_to_software_and_agrees` for S21 and nothing for S23, so the claim in
+acceptance 1 and 2 that `recursion-ops` "exits 9 under both executors" was asserted on the
+emulator alone. `the_recursion_guests_fall_back_to_software_and_agree` runs both S23
+guests under QEMU, where neither `0x0500` nor `0x0502` is answered and every operation
+takes `field`'s and `transcript`'s own software path: `recursion-ops` exits **9** and
+`recursion-unused` exits **11**, at both optimisation levels. That is the delegated
+half's oracle, and it is a sharper test than S21's — S21's fallback was a second
+implementation of keccak-f, while S23's is the *same source*, one branch below the ecall,
+so a disagreement could only come from the circuit or the emulator and not from two
+copies drifting apart.
 
 ### Four suites failed on the first pass, and what that found
 

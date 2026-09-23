@@ -38,14 +38,24 @@ jobs:
       - name: guests execute
         run: cargo test -p loader --test qemu -- --include-ignored
 
-      # The same eleven cases, same expected bytes, at `--release`. This is what
+      # The same fifteen cases, same expected bytes, at `--release`. This is what
       # holds the profile pin in `guests/Cargo.toml` honest: with cargo's
       # defaults `overflow-checks` is off in release, and a guest then commits a
       # wrapped `u32` on fd 1 where the dev build panics and exits 101. fd 1 is
       # the committed public output, so that would make the optimisation level
-      # part of the statement being proven. It also builds at `--release` the
-      # ten guests this suite runs; `consistency`'s release build is the
-      # consistency step below, and `opcodes` and `heap` have none in CI.
+      # part of the statement being proven. It also builds at `--release` every
+      # guest this suite runs; `consistency`'s release build is the consistency
+      # step below, and `opcodes` and `heap` have none in CI.
+      #
+      # Two of the fifteen are the delegation families' **software-fallback**
+      # half, and they are the reason this step is not redundant with the
+      # emulator's: `qemu-riscv32` answers `-ENOSYS` to every precompile number,
+      # so `keccak-test` takes `guest_sdk`'s in-guest keccak-f and S23's
+      # `recursion-ops` takes `field`'s and `transcript`'s own arithmetic, one
+      # branch below the ecall. Each checks its answers in-guest and exits the
+      # same status it exits under the emulator -- 6 and 9 -- which is the only
+      # place in CI where the delegated path and the software path are compared
+      # at all.
       - name: guests execute (release)
         env:
           APOGEE_GUEST_PROFILE: release
