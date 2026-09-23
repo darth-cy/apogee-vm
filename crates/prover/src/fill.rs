@@ -107,12 +107,27 @@ fn invocations<'a>(src: &'a ShardSource, family: FamilyId) -> Result<Invocations
 /// this does **not** rerun the delegated function: what it writes is what the
 /// execution did, and the circuit is what says that was the function. Padding
 /// rows are zero in every column, which is the artifact's padding row.
+///
+/// `witness_base` is where the family's circuit starts the frame's **witness**
+/// columns, and it is not always 0. `constraints::delegation` puts the gap and
+/// base bits at `W[0]` and a family's own bits above them, which is what S23's
+/// two circuits do; S21's `keccak` predates that module and puts its 1,600
+/// state bits first, so its frame's bits begin at `W[1600]`. The `M` layout is
+/// the same in both — four head columns then four a word — so only the witness
+/// side needs shifting, and getting this wrong writes the frame's bits over
+/// the state's and leaves the top of `W` unfilled, which is a `gkr_part` panic
+/// on "a witness column" and not a wrong proof.
 fn delegation_frame(
     inv: &Invocations,
     words: usize,
     frame_bytes: u64,
+    witness_base: usize,
 ) -> Vec<(PolyAddress, MultilinearPoly)> {
     let (trace, rows, h) = (inv.trace, inv.rows.clone(), inv.height);
+    let wit = |a: PolyAddress| match a {
+        PolyAddress::Witness(i) => PolyAddress::Witness(i + witness_base as u32),
+        other => other,
+    };
     let mut out: Vec<(PolyAddress, MultilinearPoly)> = Vec::new();
     let cycles: Vec<Fr> = rows.clone().map(|r| Fr::from_u64(trace.cycle[r])).collect();
     out.push((deleg::CYCLE, fr_column(cycles, h)));
@@ -158,7 +173,7 @@ fn delegation_frame(
                     ((gap >> bit) & 1) as u32
                 })
                 .collect();
-            out.push((deleg::gap_bit(j, bit), u32_column(values, h)));
+            out.push((wit(deleg::gap_bit(j, bit)), u32_column(values, h)));
         }
     }
     for bit in 0..deleg::BASE_LOW_BITS {
@@ -166,7 +181,7 @@ fn delegation_frame(
             .clone()
             .map(|r| (((trace.base[r] - guest_memory::RAM_ORIGIN) / 4) >> bit) & 1)
             .collect();
-        out.push((deleg::base_low_bit(words, bit), u32_column(values, h)));
+        out.push((wit(deleg::base_low_bit(words, bit)), u32_column(values, h)));
     }
     for bit in 0..deleg::BASE_ROOM_BITS {
         let values: Vec<u32> = rows
@@ -176,7 +191,7 @@ fn delegation_frame(
                 ((room >> bit) & 1) as u32
             })
             .collect();
-        out.push((deleg::base_room_bit(words, bit), u32_column(values, h)));
+        out.push((wit(deleg::base_room_bit(words, bit)), u32_column(values, h)));
     }
     out
 }
@@ -264,7 +279,14 @@ fn value_columns(
 /// plus the input state's 1600 bits.
 fn keccak_f(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     let inv = invocations(src, family::KECCAK_F)?;
-    let mut out = delegation_frame(&inv, keccak::FRAME_WORDS, keccak::STATE_BYTES as u64);
+    // S21's circuit puts the state's 1,600 bits at `W[0]`, so the frame's own
+    // bits start above them (`constraints::keccak::gap_bit`).
+    let mut out = delegation_frame(
+        &inv,
+        keccak::FRAME_WORDS,
+        keccak::STATE_BYTES as u64,
+        keccak::STATE_BITS,
+    );
     let (trace, rows, h) = (inv.trace, inv.rows.clone(), inv.height);
     // The state's bits: frame word `2i + half` is lane `i`'s half, so bit `t`
     // of word `j` is state bit `64·(j/2) + 32·(j%2) + t`.
@@ -284,7 +306,7 @@ fn keccak_f(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, St
 /// written.
 fn poseidon2(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     let inv = invocations(src, family::POSEIDON2)?;
-    let mut out = delegation_frame(&inv, p2::FRAME_WORDS, p2::FRAME_BYTES as u64);
+    let mut out = delegation_frame(&inv, p2::FRAME_WORDS, p2::FRAME_BYTES as u64, 0);
     for v in 0..2 * p2::WIDTH {
         let lane = v % p2::WIDTH;
         let field = if v < p2::WIDTH {
@@ -309,7 +331,7 @@ fn poseidon2(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, S
 /// scalars — the product helper, the inverse and the is-zero flag.
 fn fr_arith(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     let inv = invocations(src, family::FR_ARITH)?;
-    let mut out = delegation_frame(&inv, fa::FRAME_WORDS, fa::FRAME_BYTES as u64);
+    let mut out = delegation_frame(&inv, fa::FRAME_WORDS, fa::FRAME_BYTES as u64, 0);
     let (trace, rows, h) = (inv.trace, inv.rows.clone(), inv.height);
     for (v, (first, field)) in [
         (fa::A_WORD, deleg::WORD_READ_VALUE),

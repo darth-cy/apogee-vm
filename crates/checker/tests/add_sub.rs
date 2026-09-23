@@ -184,7 +184,7 @@ const CYCLE: u64 = 9;
 ///
 /// An ecall row whose `a7` is a **delegation** number rather than 93 is a
 /// delegation request (`docs/spec/delegation.md` §2): it takes the same ecall
-/// frame, carries `is_keccak` beside `is_ecall`, makes the mirror query at the
+/// frame, carries its type's `is_deleg_t` beside `is_ecall`, makes the mirror query at the
 /// `a0` it read, writes 0 into `a0`, and falls through rather than halting.
 fn honest(i: Instr, rs1v: u32, rs2v: u32, rd_old: u32) -> Row {
     let system_ecall = i.bit == kind::SYSTEM && i.imm == 0;
@@ -702,7 +702,7 @@ fn every_row_kind_satisfies_every_gate_and_every_bound() {
         "a delegation row does not halt"
     );
     // And the exit row is still the only one that halts: the two ecall kinds
-    // differ in exactly `is_keccak`.
+    // differ in exactly the row's `is_deleg_t`.
     assert_eq!(get("exit 42", "is_deleg_9"), Fr::ZERO);
 }
 

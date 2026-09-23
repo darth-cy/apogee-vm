@@ -7498,6 +7498,14 @@ layers: only gate list 0 can read a committed column, and the comparison happens
 | `W[38j + i]` | `gap{j}_{i}` | bit `i` of word `j`'s timestamp gap |
 | `W[912 + i]` | `base_low{i}` | bit `i` of `(base − RAM_ORIGIN) / 4`, 29 bits |
 | `W[941 + i]` | `base_room{i}` | bit `i` of `2^31 − 96 − base`, 31 bits |
+
+**The frame's witness columns start at `W[0]` here and at `W[1600]` in `KECCAK_F`.** S21's
+circuit put the input state's bits first and the frame's above them (§12.3); S23's two put the
+frame's first, because `constraints::delegation` owns them and cannot know what a family will
+add. The `M` side is identical in both, so nothing about a frame's *memory* layout depends on
+the family. `prover::fill::delegation_frame` therefore takes the witness base as an argument,
+and `crates/prover/tests/fills.rs` holds each family's fill to covering `0..WITNESS_COLUMNS`
+exactly once — a family added here that copies either layout must say which it copied.
 | `W[972 + 520v + ..]` | `in{v}_*` / `out{v−3}_*` | value `v`'s 256 word bits, then 256 difference bits and 8 borrow bits |
 
 Values `0..3` are the lanes read, `3..6` the lanes written. §13.4's canonicity gates are what

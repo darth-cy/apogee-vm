@@ -174,7 +174,8 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
     assert_eq!(&claim[81..], &table[..]);
 
     let claim = reduced(&proofs[1]);
-    // 41 + 33 since S21's eighth frame query (`deleg`).
-    assert_eq!(claim.len(), 41 + 33 + 7);
-    assert_eq!(&claim[74..], &setup.vk.setup_commitments[0][..]);
+    // 41 + 33 since S21's eighth frame query (`deleg`), 42 + 35 since S23 gave
+    // that query its `deleg_space` column and one selector per delegation type.
+    assert_eq!(claim.len(), 42 + 35 + 7);
+    assert_eq!(&claim[77..], &setup.vk.setup_commitments[0][..]);
 }

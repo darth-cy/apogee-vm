@@ -272,7 +272,7 @@ registry.
 4. **End to end.** `crates/prover/tests/recursion.rs`' first test: ten shards, the two
    delegation families' last and in id order, `verify_block` returns `Ok`, every shard also
    verifies through `verify_shard`, the roots reconcile across the CPU and both delegation
-   shards together, and the block round-trips through its own bytes. 125 s, 26.0 GB peak.
+   shards together, and the block round-trips through its own bytes. 120 s, 35.2 GB peak.
 5. **Witness tamper twins.** `crates/checker/tests/tamper.rs`'
    `s23_a5_a6_the_recursion_witnesses_and_anchors_are_pinned` corrupts a written lane word
    and an input lane word in poseidon2 and an op result and the product helper in fr-arith,
@@ -386,9 +386,10 @@ registry.
 10. **Three existing guests changed behaviour, correctly.** `guests/echo`, `vault` and
     `consistency` link `field` and `transcript`, so they now declare both families and take
     the delegated path under this VM. `echo`'s stderr says `precompile=accelerated` where it
-    said `precompile=software`; under `qemu-riscv32` it still says `software`, which is
-    `crates/loader/tests/qemu.rs`'. No proven statement changed: none of the three is a
-    fixture any prover test proves.
+    said `precompile=software`; under `qemu-riscv32` it still says `software`, which is what
+    `crates/loader/tests/qemu.rs:168` asserts against `crates/emulator/tests/guests.rs:142`'s
+    `accelerated` — the two executors disagreeing there is the point. No proven statement
+    changed: none of the three is a fixture any prover test proves.
 11. **`read_tuple(DELEG)` panics, by design.** The delegation mirror's `AS` term names a
     column whose address depends on the family's frame width, so there is no standalone
     tuple to return and answering with a literal would answer wrongly.
@@ -402,7 +403,7 @@ registry.
     | enforcing gates | 55 | **62** |
     | relations at `n = 20` | 423 | **430** |
     | inner columns at `n = 20` | 368 | **368**, unchanged |
-    | proof bytes at `n = 20` | 57,100 | **57,660** |
+    | proof bytes at `n = 20` | 62,260 | **62,484** |
     | `add_sub.bin` SHA-256 | `3df1bda9…2114e518` | `96012f12…af8e811c` |
 
     Enforcing gates produce no inner column, which is why the circuit grew by seven gates
@@ -410,6 +411,36 @@ registry.
     number gates and `deleg_space_rule`; `ecall_is_exit`, `deleg_mask_rule`, `exit_status`
     and `next_pc_rule` each gained terms on an existing product's other factor, which is the
     same shape S21 used and keeps every one of them at degree 2.
+
+    The 224 proof bytes are the whole width change and nothing else: the base layer's claim
+    is three evaluations wider (`42 + 35 + 7` against `41 + 33 + 7`), which is 96 bytes, and
+    two more witness columns are two more uncompressed G1 commitments, which is 128. The
+    layer count, the round count and every round message are untouched, because a proof's
+    shape is the circuit's *widths* and its *depth*, and only the first moved.
+    `crates/prover/tests/acceptance.rs` and `tests/control.rs` pin both halves.
+13. **The shared fill had to learn that keccak's frame starts at `W[1600]`.** Folding
+    `fill::keccak_f` onto the new `delegation_frame` builder was the one place S21's frozen
+    circuit and S23's shared module genuinely disagree: `constraints::delegation` puts the
+    frame's 38-bit gap decompositions and 60 base bits at `W[0]` and a family's own columns
+    above them, while `constraints::keccak` — written before that module existed — puts the
+    input state's 1,600 bits at `W[0]` and the frame's bits above *them*. The `M` side is
+    identical in both, so nothing caught it until a keccak shard was actually proved: the
+    frame's bits landed on the state's, `W[1600..3560]` was never written, and
+    `prove_shard` panicked `"a witness column"` 113 seconds in, naming none.
+
+    The builder now takes `witness_base` — `keccak::STATE_BITS` for S21's family, 0 for
+    S23's two — and **`crates/prover/tests/fills.rs` is the fast test that owes for it**
+    (CLAUDE.md's rule: a change whose only coverage is a deferred suite owes one). It runs
+    each delegation family's fill over a real archive, which costs 0.11 s because it proves
+    nothing, and holds the address set it returns to `0..MEMORY_COLUMNS` and
+    `0..WITNESS_COLUMNS` exactly once each. With the base put back to 0 it reports
+    `KECCAK_F writes an address twice: 1600`, which is the bug named on the line that
+    causes it. A third test states the two layouts side by side so a later family copying
+    either sees the choice rather than inheriting it.
+
+    **This is the argument for deviation 6 landing the other way round.** Leaving
+    `constraints::keccak` alone kept a 100 MB frozen artifact's bytes safe, and the price
+    is exactly this: one divergence, in one parameter, with a test naming it.
 
 ---
 
@@ -461,17 +492,83 @@ each one's software path calls the other's operations.
 
 | Suite | Result |
 | --- | --- |
-| `cargo test --workspace` | see "Verification performed" |
+| `cargo test --workspace` | 1,028 passed, 0 failed, 73 ignored |
 | `cargo test -p checker --test poseidon2` | 8 passed, 0.6 s |
 | `cargo test -p checker --test fr_arith` | 12 passed, 0.1 s |
 | `cargo test -p program --test delegation` | 9 passed, 1 `#[ignore]`d |
 | `cargo test -p emulator --test guests` | 15 passed |
+| `cargo test -p prover --test fills` | 3 passed, 0.1 s (deviation 13) |
 
 ---
 
 ## Verification performed
 
-See "Verification performed, final tree" below for the full run.
+One machine, 18 cores, macOS, on the final tree. Peaks are `/usr/bin/time -l`'s maximum
+resident set size over the whole `cargo test` process, so they include cargo and the test
+binary and are *not* comparable with a figure measured inside `prove_block`; every number
+in this section came from the same batch and the same method. The deferred suites ran
+once, at the end, per the owner's standing instruction.
+
+### Above the line — every CI gate
+
+| Gate | Result |
+| --- | --- |
+| `cargo fmt --all -- --check`, and the three out-of-workspace manifests | clean |
+| `cargo clippy --workspace --all-targets -- -D warnings` | clean |
+| `cargo clippy` — `transcript-ref`, `guest-sdk` at `riscv32imac`, `guests --bins` | clean |
+| `cargo clippy -p prover --all-targets --features metrics` | clean |
+| `cargo test --workspace` | **1,028 passed, 0 failed, 73 ignored** |
+| `cargo test -p prover --features metrics --test metrics` | 10 passed, 2 ignored |
+| `cargo test -p program --test delegation -- --ignored` | 1 passed (six guest images, 2.9 s) |
+| `cargo build … --target riscv32imac-unknown-none-elf` | clean, eight crates |
+| `cd guests/fib && cargo build --target riscv32imac…` | clean |
+| `cargo run -p kat-gen` then `git diff --exit-code` on every vectors directory | **no diff** |
+| `cargo run --manifest-path tools/transcript-ref/Cargo.toml` | no diff |
+
+The fixture check is the one worth naming: every committed vector regenerates byte-identical,
+`crates/constraints/tests/vectors/keccak.txt` included, which is the evidence that S21's
+circuit did not move under a stage that refactored its fill (deviations 6 and 13).
+
+### Below the line — the deferred suites, one batch
+
+| Suite | Result | Wall | Peak |
+| --- | --- | --- | --- |
+| `checker --test logup` | 9 passed | 203 s | 17.5 GB |
+| `prover --test acceptance` | 7 passed | 374 s | 10.7 GB |
+| `verifier --test cli` | 2 passed | 44 s | 10.7 GB |
+| `prover --test control` | 2 passed | 59 s | 19.6 GB |
+| `prover --test alu` (release) | 1 passed | 53 s | 31.7 GB |
+| `prover --test mem` (release) | 1 passed | 61 s | 33.5 GB |
+| `prover --test keccak` (release) | 2 passed | 131 s | 33.7 GB |
+| **`prover --test recursion`** (release) | **2 passed** | **120 s** | **35.2 GB** |
+| `prover --test block` (release) | 7 passed | 840 s | 34.9 GB |
+| `prover --features metrics --test metrics` | 12 passed | 60 s | 21.0 GB |
+| **`checker --test tamper`** (release) | **12 passed** | **4,231 s** | 17.9 GB |
+
+About 1 h 47 m in total. Two of these moved materially this stage and the numbers above the
+line in `CLAUDE.md` and in `.github/workflows/ci.yml` were re-pinned to them:
+
+- **`tamper` went from 2,568 s to 4,231 s** and is now the slowest suite in the repository
+  by a wide margin. S23 added a sixth statement — `guests/recursion-ops`, a ten-shard block
+  — and each of its four witness twins and its anchor twins is a re-proof. It is still under
+  18 GB, because its statements are proved one at a time.
+- **`recursion` peaks at 35.2 GB**, which makes it the heaviest suite by memory, past
+  `keccak`'s 33.7 GB. That is S20's parallel-shard price read off a ten-shard block: the
+  peak is one shard's forward pass per worker, and a block with more families holds more
+  of them at once. It is not the delegation circuits being large — each is about 2% of a
+  keccak shard (see "Measurements").
+
+### Four suites failed on the first pass, and what that found
+
+`acceptance`, `control` and `alu` failed on **stale pinned shapes**: each asserts the add/sub
+claim is `41 + 33 + 7` wide or the proof 62,260 bytes, which S23's two extra witness selectors
+and one extra memory column moved to `42 + 35 + 7` and 62,484 (deviation 12). Those are
+expectation updates and nothing more.
+
+`keccak` failed on a **real bug**, and it is the one thing in this stage that a deferred suite
+caught and no fast test would have: deviation 13. It is fixed, `crates/prover/tests/fills.rs`
+is the fast test that now owes for it, and `s21_a5_a6_…` in `tamper` — which re-proves a
+keccak statement five times — passed on the batch that ran after the fix.
 
 ---
 
@@ -508,3 +605,16 @@ See "Verification performed, final tree" below for the full run.
 6. **The manifest's §3 was rewritten from the artifact, and §15's observations were not
    re-derived.** A stage that changes `ADD_SUB_LUI_AUIPC` again should re-read §15 for
    anything the new accounting turns up.
+7. **`checker --test tamper` is now 70 minutes and six statements**, up from S21's 33 and
+   five. S21's open item 7 asked whether to split it per stage and left it whole; at
+   4,231 s it is the slowest thing in the repository by more than a factor of five, and
+   the next stage that adds a statement to it should answer that question rather than
+   inherit it. The natural split is by the statement each twin re-proves, since the file
+   is already organised that way — one `#[ignore]`d test per stage's guest.
+8. **A delegation family's fill must say where its circuit starts the frame's witness
+   columns.** `prover::fill::delegation_frame` takes `witness_base` and the two layouts in
+   the tree disagree (deviation 13). `crates/prover/tests/fills.rs` catches a wrong answer
+   in 0.11 s, which is the only reason this is an open note rather than an open bug — but
+   the deeper fix, if a fourth delegation family is ever written, is to have
+   `constraints::delegation` hand out the family's own witness range too, so the circuit
+   and the fill read the offset from one place instead of agreeing about it.

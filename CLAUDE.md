@@ -138,20 +138,20 @@ cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
 cargo clippy -p prover --all-targets --features metrics -- -D warnings   # the ONE feature's configuration
-cargo test --workspace                      # 1,025 tests as of S23; 73 more are #[ignore]d
+cargo test --workspace                      # 1,028 tests as of S23; 73 more are #[ignore]d
 cargo test -p prover --features metrics --test metrics  # the metrics harness; 10 more, 2 #[ignore]d
 cargo test -p program --test delegation -- --ignored --test-threads=1  # static detachment at BOTH guest profiles; builds six guest images, 2.9 s
-cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 18.8 GB peak, 200 s, 30 min on a runner
-cargo test -p prover --test acceptance -- --include-ignored --test-threads=1  # DEFERRED; S16's statement, 11.5 GB peak, 361 s
-cargo test -p verifier --test cli -- --include-ignored --test-threads=1       # DEFERRED; ditto, 11.5 GB, 44 s
-cargo test --release -p checker --test tamper -- --include-ignored --test-threads=1  # DEFERRED; one re-proof a twin, five statements, 19.2 GB peak, 2568 s; --release since S21
-cargo test -p prover --test control -- --include-ignored --test-threads=1     # DEFERRED; S17's statement, 21.1 GB peak, 61 s
-cargo test --release -p prover --test alu -- --include-ignored --test-threads=1  # DEFERRED; S18's statement, 30.3 GB peak, 53 s
+cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 17.5 GB peak, 203 s, 30 min on a runner
+cargo test -p prover --test acceptance -- --include-ignored --test-threads=1  # DEFERRED; S16's statement, 10.7 GB peak, 374 s
+cargo test -p verifier --test cli -- --include-ignored --test-threads=1       # DEFERRED; ditto, 10.7 GB, 44 s
+cargo test --release -p checker --test tamper -- --include-ignored --test-threads=1  # DEFERRED; one re-proof a twin, SIX statements since S23, 17.9 GB peak, 4231 s -- the slowest by wall clock; --release since S21
+cargo test -p prover --test control -- --include-ignored --test-threads=1     # DEFERRED; S17's statement, 19.6 GB peak, 59 s
+cargo test --release -p prover --test alu -- --include-ignored --test-threads=1  # DEFERRED; S18's statement, 31.7 GB peak, 53 s
 cargo test --release -p prover --test mem -- --include-ignored --test-threads=1  # DEFERRED; S19's statement, 33.5 GB peak, 61 s
-cargo test --release -p prover --test block -- --include-ignored --test-threads=1  # DEFERRED; S20's block, 38.0 GB peak, 804 s
-cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1  # DEFERRED; S21's nine-shard block, 38.9 GB peak, 130 s -- the heaviest in the repository
-cargo test --release -p prover --test recursion -- --include-ignored --test-threads=1  # DEFERRED; S23's ten-shard block, 26.0 GB peak, 125 s
-cargo test -p prover --features metrics --test metrics -- --include-ignored --nocapture  # DEFERRED; S16's statement twice, 11.6 GB peak, and prints both reports
+cargo test --release -p prover --test block -- --include-ignored --test-threads=1  # DEFERRED; S20's block, 34.9 GB peak, 840 s
+cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1  # DEFERRED; S21's nine-shard block, 33.7 GB peak, 131 s
+cargo test --release -p prover --test recursion -- --include-ignored --test-threads=1  # DEFERRED; S23's ten-shard block, 35.2 GB peak, 120 s -- the heaviest by memory
+cargo test -p prover --features metrics --test metrics -- --include-ignored --nocapture  # DEFERRED; S16's statement twice, 21.0 GB peak, 60 s, and prints both reports
 cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify -p verifier-core --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
