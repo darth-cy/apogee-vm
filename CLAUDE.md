@@ -78,7 +78,15 @@ crates/
                  and witness-row checks, the native lookup evaluator, the memory_roots hook,
                  the artifact cross-check, the circuit dump, the transcript-tape validator,
                  the `checker` CLI, and TamperHarness, the tamper-twin prover; std
-  guest-sdk/     crt0, entry!, linker script, bump allocator, ecall shims; no_std,
+  host/          the host SDK: `prove` and `verify`, thin wrappers over S20's entry points
+                 with their arguments unchanged, `execute`, which is the one caller that
+                 measures the execution phase's wall clock, a hand-written JSON reader and a
+                 curl-backed JSON-RPC client with a content-addressed cache, and
+                 WitnessRecorder, which pre-executes a block with native revm against that
+                 client. **RPC is confined to a manual refresh; nothing else may reach the
+                 network.** std
+  guest-sdk/     crt0, entry!, linker script, bump allocator, ecall shims, and the two
+                 public stream buffers whose bytes `io_digest` covers; no_std,
                  guest-only, and NOT a workspace member
 guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, opcodes/, heap/, consistency/,
                  addsub/, control/, alu/, mem/, shards/, keccak-test/, keccak-unused/,
@@ -130,7 +138,12 @@ the `riscv32imac` build and `cargo test --workspace`; a change whose only covera
 be a deferred suite owes a **fast** test pinning the same property — a synthetic key and
 statement in a unit test rather than a real proof — so the workspace run still guards it.
 Then run the deferred suites in one batch when no further commits are expected, and
-record their timings and peaks in the handoff note.
+record their timings and peaks in the handoff note. **The peaks and timings below are
+S24's measurement and S25a did not re-take them**: the I/O binding moved every guest's
+cycle count — `guests/revm-block` at `--release` went 221,239 → 388,598 cycles and ten
+shards → twelve — so the numbers will move when S25's batch runs on the dev box, and they
+are kept here until then because a stale measurement of the right suite is more useful
+than none.
 ```
 cargo fmt --all -- --check
 cargo fmt --manifest-path tools/transcript-ref/Cargo.toml --all -- --check
@@ -141,7 +154,7 @@ cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
 cargo clippy -p prover --all-targets --features metrics -- -D warnings   # the ONE feature's configuration
-cargo test --workspace                      # 1,036 tests as of S24; 83 more are #[ignore]d
+cargo test --workspace                      # 1,048 tests as of S25a; 83 more are #[ignore]d
 cargo test -p prover --features metrics --test metrics  # the metrics harness; 10 more, 2 #[ignore]d
 cargo test -p program --test delegation -- --ignored --test-threads=1  # static detachment at BOTH guest profiles; builds six guest images, 2.9 s
 APOGEE_GUEST_PROFILE=release cargo test -p emulator --test revm -- --ignored --test-threads=1 --skip a3_  # S24's guest against native revm; builds the revm guest, 47 s
@@ -381,7 +394,15 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   advice. `docs/spec/ecall-abi.md` is the table and a test holds it to the constants.
 - **`io_digest` is frozen.** `transcript::io_digest(input, output)` is two `append_bytes`
   messages under `PUBLIC_INPUT_STREAM` and `PUBLIC_OUTPUT_STREAM` and one raw `sample`, in
-  a sponge of its own. Later stages recompute it; nobody redefines it.
+  a sponge of its own. Later stages recompute it; nobody redefines it. **Since S25 the
+  guest computes it too**: `transcript::exit_with_io_digest` hashes the two streams the run
+  moved and leaves the eight LE `u32` words in `x24..x31`, and `verify_global_memory`
+  recomputes them from the statement's own streams and compares — unconditionally, once per
+  block, no new message and no new wire form. A run that moved nothing publishes
+  `constants::IO_DIGEST_EMPTY`, so the check is never skipped. The length is absorbed
+  before the bytes, so the digest is **not streamable**: a guest pays for it at exit, over
+  the whole of both streams, and on `guests/revm-block` at `--release` that is +76% of the
+  cycles (221,239 → 388,598) and two extra delegation shards. `docs/spec/memory.md` §10.
 - **A guest ELF is not byte-reproducible across machines**, and CI does not pretend
   otherwise. rustc embeds absolute paths in the panic-location strings of every crate
   outside the guest workspace and of `core`, and stable Rust cannot remap them. Two clean
@@ -419,9 +440,16 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   Timestamp `4·cycle + Δ` over four in-cycle slots, **cycles numbered from 1** (timestamp
   0 is every address's initial write, which a cycle-0 pc query could not strictly follow),
   a 38-bit clock that is a fatal error to exhaust, the frame of each instruction class, the
-  x0 rule, and the ecall frame — `a7` at slot 1, its arguments at slot 2, `a0` at slot 3,
-  and a `read`/`write`'s one **transfer cycle** per word moved *before* its own row. S14's
-  multiset fill and S16's ecall constraints cite it; they do not reinvent it.
+  x0 rule, and the ecall frame — `a7` at slot 1, its arguments at slot 2, `a0` at slot 3.
+  S14's multiset fill and S16's ecall constraints cite it; they do not reinvent it.
+  **Every instruction is one cycle, with no exception since S25.** A `read` or a `write`
+  that moved bytes used to be preceded by one **transfer cycle** per word — a live row at
+  the same pc with `next_pc = pc` — and S14's open question 10 asked how such a row's RAM
+  write could be confined to its ecall's buffer. It cannot be: a transfer row is a
+  *different* row from its ecall, and this arithmetization has no cross-row constraint. So
+  S25 took the answer S14 recommended and removed the row: a provable `read` moves exactly
+  one 4-aligned word and carries that word's RAM query **on the ecall's own row**, beside
+  the `a1` and `a2` it is held against, and a `write` stages no memory event at all.
 - **Address-space tags are nonzero**: `constants::address_space` `REG = 1`, `RAM = 2`,
   `PC = 3`, so no real memory tuple is all zeros. A RAM event's address is the byte address
   of its 4-aligned word. Since S21 there is **one space per delegation family** — 4, 5 and
@@ -439,9 +467,13 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   pointer, until the guest writes it — is about the environment, not an instruction.
 - **Misaligned halfword/word accesses, RAM-window violations (ecall buffers included),
   `ebreak` and a pc that is not an instruction are fatal guest errors**, in `run` and
-  `trace_run` alike, and a fatal error returns no trace. `read`/`write` on a descriptor
+  `trace_run` alike, and a fatal error returns no trace. A `read` of anything but one
+  4-aligned word is fatal too, by name (`ReadNotOneWord`). `read`/`write` on a descriptor
   the ABI does not give that call return `-EBADF`; the recorded fd 0 stream is the bytes
-  the guest consumed.
+  the guest consumed. **A refused `read` is not provable** — it stages no RAM query and
+  `ram_mask_rule` demands one on every `read` row — so `fill::add_sub` refuses such a cycle
+  by name rather than handing a verifier a shard that fails as `Constraint`. The SDK never
+  issues one: `read_fd` checks the descriptor before the ecall.
 - **The trace archive's deterministic payload is a byte prefix of the file**; the timing
   section follows it, so determinism excludes timing by construction, not by comparison.
 - **The heap never meets the stack.** guest-sdk's allocator refuses a block, with
@@ -719,7 +751,10 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   one: `mem_word`'s `rd_selected` carries a 16+16 pair even though it is a copy of a RAM
   word, so **every register write in every family is locally bounded**, and the RAM side
   then follows from the register side and from `mem_subword`'s and `atomics`' own local
-  bounds. The I/O-binding stage owes its transfer rows' `ram_write_value` the same.
+  bounds. **S25 closed the one hole that was left**: the word a provable `read` delivers is
+  the only value add/sub writes to RAM, it is computed rather than copied — it comes from
+  the prover's fd 0 stream and from no register — and it carries its own 16+16 pair under
+  `m_pc`, so the induction is whole across every family.
 - **`sc.w` always succeeds, and that is a conformance deviation, not a soundness one.**
   It stores `rs2` and writes `rd = 0` with no reservation state anywhere in the machine.
   The emulator has the same semantics, so emulator and circuit agree, and the QEMU
@@ -731,25 +766,30 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   four min/max kinds and nothing else in the circuit would catch it. Likewise every arm
   indexes `KINDS` through its `constants::extra_mask` constant and never by position: the
   stage prompt lists `amoand` and `amoor` in the opposite order to the constants.
-- **EXIT and a registered delegation number are the provable ecalls** (owner's decision,
-  S16; S21 added the second and S23 the third and fourth). The add/sub family commits one
-  boolean selector per delegation type and holds every ecall row to `a7 = 93` **or** that
-  type's number; what makes the gates a *partition* is that the numbers are pairwise
-  distinct, which a `const` assertion over `constants::delegation::TYPES` enforces. Its fill
-  refuses any other ecall and any transfer cycle by name. A delegation row falls through rather than halting,
-  writes 0 into `a0`, and carries the `deleg` mirror query that pairs it with an invocation.
-  The I/O-binding stage owes `read` and `write`, and until then fd 0 and fd 1 are bound only
-  by the public I/O digest in the statement, which no row reads. **S24 met that wall head
-  on and did not route around it**: a guest whose whole input arrives on fd 0 has no
-  proof, and the work is not a gate or two — a transfer row that is permitted but not
-  constrained against its ecall's buffer and length can write any value to any RAM word,
-  which needs cross-row constraints this arithmetization has nowhere. What S24 proves
-  instead is a second binary of the same program, with its witness in `.rodata` — which
-  identity commits — and `keccak256` of its output in `x24..x31`, which the register
-  boundary carries; that is the arrangement the master's own frozen invariants describe,
-  and it is a demonstration rather than a substitute, since a per-block witness in the
-  image means a per-block identity. `guest_sdk::exit_with_public_words` is the one
-  addition it needed. `docs/handoff/S24-revm.md` §1.
+- **EXIT, a registered delegation number, `read` and `write` are the provable ecalls**
+  (owner's decision, S16; S21 added the second, S23 the third and fourth, S25 the last two).
+  The add/sub family commits one boolean selector per kind and holds every ecall row to
+  `a7 = 93` **or** that kind's number; what makes the gates a *partition* is that the
+  numbers are pairwise distinct, which a `const` assertion over
+  `constants::delegation::TYPES` and `constants::ecall` enforces. Its fill refuses any other
+  ecall by name, and since S25 also a `read` that moved no word — a refused descriptor,
+  which `ram_mask_rule` cannot admit. A delegation row falls through rather than halting,
+  writes 0 into `a0`, and carries the `deleg` mirror query that pairs it with an invocation;
+  a `read` and a `write` fall through too and write into `a0` a byte count no gate can fix.
+- **A provable `read` is confined by two gates, and its bytes by the digest.**
+  `ram_addr_is_the_buffer` makes the RAM query's address the `a1` the row read, and
+  `read_count_is_one_word` makes the `a2` it read the literal 4 — both degree 2 over cells
+  of one row, because the query and the arguments it is checked against are on that row.
+  What the circuit does *not* fix is deliberate: the word delivered (bounded below `2^32`
+  by a new `RANGE16` pair and free otherwise), the count written back, and everything a
+  `write` emits are fd 0's and fd 1's content, and they are bound by the guest's own
+  `io_digest` in `x24..x31` (`docs/spec/memory.md` §10) and not by any row. Alignment and
+  residence are the memory argument's: a query at an unaligned address, or at one in no
+  window the statement lists, reads a tuple nothing wrote. **S24's embedded binary is
+  retired**: it proved a second binary of the same program with its witness in `.rodata`,
+  which meant a per-block identity, and `crates/prover/tests/revm.rs` now proves the
+  normative fd 0 / fd 1 guest instead. `guest_sdk::exit_with_public_words` is what S24 left
+  behind and what the binding uses. `docs/handoff/S24-revm.md` §1.
 - **The delegation ABI is `docs/spec/delegation.md`, and it is frozen**: the ecall
   convention (`a7` the number, `a0` the frame base, `a0 ← 0`, fall-through), the indirect
   frame, the anchor and its 1:1 pairing, the three request-side zeroings, static detachment
@@ -944,3 +984,4 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 | S22 — secp256k1 ecrecover delegation | **cancelled** | `prompts/00-master.md`, "Stage register" |
 | S23 — Fr-arithmetic + Poseidon2 delegations | done | `docs/handoff/S23-fr-poseidon2.md` |
 | S24 — revm guest, synthetic-state block | done | `docs/handoff/S24-revm.md` |
+| S25 — Witness pipeline, real blocks, bench harness | **in progress**: S25a, the public-I/O binding, is the first of its PRs | at the stage's end |

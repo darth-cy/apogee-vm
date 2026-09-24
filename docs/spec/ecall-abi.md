@@ -134,6 +134,14 @@ Added at S12, where the first zkVM executor pinned what the table above left ope
   its **length must be a multiple of four**, or the last call would consume a
   whole word and keep part of it. The SDK refuses such a buffer with exit 70
   rather than dropping bytes silently.
+
+  **A refused `read` is not provable.** A descriptor fd 0 and fd 3 do not name
+  answers `-EBADF` and moves no word, and the add/sub family's `ram_mask_rule`
+  demands the RAM query on every `read` row, so no such row satisfies the
+  circuit. `prover::fill::add_sub` refuses the cycle by name rather than proving
+  a shard that cannot verify. The SDK never issues one — `read_fd` takes the
+  descriptor from its caller and the two public entry points pass 0 and 3 — so
+  this is a completeness gap only a hand-written ecall can reach.
 * **`write` is unrestricted, and moves no memory event.** Any buffer, any
   alignment, any count, one cycle. The RAM query it used to make bound nothing:
   fd 1 is bound by the guest's own `io_digest` over the bytes it assembled with

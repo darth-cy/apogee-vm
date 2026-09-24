@@ -438,5 +438,9 @@ produces the digest every shard is seeded with.
 - **Nothing for a delegation family beyond §4's scoping.** S21 added `KECCAK_F` and
   `verify_block` did not change; S23's two families appended the same way
   (`docs/spec/delegation.md` §10).
-- **No binding of fd 0 and fd 1 to the execution.** The public I/O digest is in the
-  statement and no row reads it, as at S16; the I/O-binding stage owes it.
+- **Nothing for the I/O binding either.** S25 tied fd 0 and fd 1 to the execution and
+  `verify_block` did not change: the guest publishes `io_digest` in `x24..x31` and
+  `verify_global_memory` — which a block already runs exactly once, being the check that
+  reads only the statement (§3) — recomputes and compares it. The register boundary was
+  already there to carry the eight words, so the statement, the wire forms and this page's
+  check order are as S20 left them (`docs/spec/memory.md` §10).

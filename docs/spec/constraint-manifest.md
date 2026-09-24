@@ -12,13 +12,16 @@
 > the code: the `PolyAddress`, the artifact's own name for it, and the Rust constant or
 > constructor that makes it.
 >
-> **Status: S21.** All ten circuits are registered: `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT`,
+> **Status: S25.** All twelve circuits are registered: `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT`,
 > `SHIFT_BITWISE`, `MUL_DIV`, `MEM_WORD`, `MEM_SUBWORD`, `ATOMICS`, `INIT_TEARDOWN`,
-> `ZERO_WINDOWS` and `KECCAK_F`. Every execution family the decoder routes to has a circuit and
-> a fill, and no `FamilyId` in `constants::family` is without one. S21 added the first family
-> that is **invoked rather than decoded** (§12) and, with it, the eighth memory query — the
-> `deleg` mirror — which changed `ADD_SUB_LUI_AUIPC`'s frame, its shape and every relation
-> number in §3.
+> `ZERO_WINDOWS`, `KECCAK_F`, `POSEIDON2` and `FR_ARITH`. Every execution family the decoder
+> routes to has a circuit and a fill, and no `FamilyId` in `constants::family` is without one.
+> S21 added the first family that is **invoked rather than decoded** (§12) and, with it, the
+> eighth memory query — the `deleg` mirror — which changed `ADD_SUB_LUI_AUIPC`'s frame, its
+> shape and every relation number in §3. **S25 changed one circuit and one only**: `read` and
+> `write` became provable ecalls, which cost `ADD_SUB_LUI_AUIPC` three witness columns, ten
+> enforcing gates, two `RANGE16` obligations and every relation number from 100 up (§3). No
+> other family moved a column, a gate or a number.
 >
 > **Descriptive, not normative.** Where this page and the code disagree, the registry is right
 > and this page is wrong; where it and a spec disagree, the spec rules. The descriptive names
@@ -34,7 +37,7 @@
 > checked; the `n = 16` and `n = 20` counts were read from `family_circuit` directly, and the
 > §3.10 and §4.10 probes by a program over `family_circuit` and those two suites' `honest_rows`
 > that is not committed. Each family's §x.9 shows a handful of the rows its suite holds to every
-> gate, every range obligation and, from §4 on, both table channels in CI: nine of the sixteen
+> gate, every range obligation and, from §4 on, both table channels in CI: twelve of the twenty
 > in `crates/checker/tests/add_sub.rs`, nine of the 47 in `jump_branch_slt.rs`, nine of the 35
 > in `shift_bitwise.rs` and nine of the 64 in `mul_div.rs`. §12 has no such table: a keccak row
 > is 3,764 committed cells and a whole permutation, so §12.9 is its suite's forward pass against
@@ -307,8 +310,8 @@ the seam a property of the binary rather than of the call site.
 
 ```text
 circuit             n  lists (row-wise + halving)  top     M      W   S  V  committed    inner  enforcing (d1/d2)  lookups (ts/r16/gen/dec)  outputs  relations        bytes
-ADD_SUB_LUI_AUIPC  20  26 (6 + 20)                 L26    42     35   7  2         84      368  62 (10/52)         21 (16/4/0/1)                   8        430       87,635
-ADD_SUB_LUI_AUIPC  22  28 (6 + 22)                 L28    42     35   7  2         84      384  62 (10/52)         21 (16/4/0/1)                   8        446       88,725
+ADD_SUB_LUI_AUIPC  20  26 (6 + 20)                 L26    42     38   7  2         87      368  72 (7/65)          23 (16/6/0/1)                   8        440       92,123
+ADD_SUB_LUI_AUIPC  22  28 (6 + 22)                 L28    42     38   7  2         87      384  72 (7/65)          23 (16/6/0/1)                   8        456       93,213
 JUMP_BRANCH_SLT    20  25 (5 + 20)                 L25    21     44  10  2         75      372  42 (3/39)          22 (8/11/2/1)                  10        414       75,608
 JUMP_BRANCH_SLT    22  27 (5 + 22)                 L27    21     44  10  2         75      392  42 (3/39)          22 (8/11/2/1)                  10        434       76,980
 SHIFT_BITWISE      20  26 (6 + 20)                 L26    21     61  10  2         92      458  48 (9/39)          39 (8/24/6/1)                  10        506      101,465
@@ -414,12 +417,16 @@ assembled by `keccak.rs` itself and its depth is not that formula; its bullet is
   with **32** fractions, `range16` with 8, `decoder` with 2; so `R = 5`, the 32-fraction
   timestamp tree setting it alone — 16 obligations and a table fraction is 17 leaves, one past
   16, mul/div's shape exactly (§6.6). Layers `L1 … L6` are 100, 50, 26, 14, 10 and 8 wide, and
-  `L7 … L{n+6}` 8 each: `inner = 208 + 8n`. Relations 0–99 are list 0's leaves, 100–154 its
-  enforcing gates, 155–204 list 1, 205–230 list 2, 231–244 list 3, 245–254 list 4, 255–262
-  list 5, and halving list `k` (`6 ≤ k ≤ n + 5`) holds `263 + 8(k − 6)` to `270 + 8(k − 6)`.
-  The roots are relations `255 + 8n` to `262 + 8n`: 415–422 at `n = 20`, 431–438 at `n = 22`.
-  **All of this moved at S21**, when the frame took its eighth query; the numbers before it are
-  in `docs/handoff/S21-keccak256.md`.
+  `L7 … L{n+6}` 8 each: `inner = 208 + 8n`. Relations 0–99 are list 0's leaves, 100–171 its
+  enforcing gates, 172–221 list 1, 222–247 list 2, 248–261 list 3, 262–271 list 4, 272–279
+  list 5, and halving list `k` (`6 ≤ k ≤ n + 5`) holds `280 + 8(k − 6)` to `287 + 8(k − 6)`.
+  The roots are relations `272 + 8n` to `279 + 8n`: 432–439 at `n = 20`, 448–455 at `n = 22`.
+  **The layer widths are S21's and the relation numbers are not.** S21 moved both, when the
+  frame took its eighth query; S23 and S25 moved only the count of enforcing gates — 55, then
+  62, then 72 — and with it every number from 172 up. **S25's two new `RANGE16` obligations
+  cost no leaf**: the `range16` tree's five leaves had padded to eight, and its seven now pad
+  to eight too, so `R` is still 5 and list 0 still writes 100 leaves. The numbers before S21
+  are in `docs/handoff/S21-keccak256.md`.
 - **jump/branch/slt.** Six trees: `read` and `write` with 4 leaves each, `timestamp` with 16
   fractions, `range16` with 16, `generic` with 4, `decoder` with 2; so `R = 4`, the two
   16-fraction trees setting it. Layers `L1 … L5` are 84, 42, 22, 14 and 10 wide, and
@@ -611,11 +618,11 @@ For the query `<q>` at slot `s`, with `m = <q>_mask`:
 constants are private to `add_sub.rs`). Normative spec: `shard-proof.md` §8. Fill:
 `prover::family_fill(0)`, the private `fill::add_sub`.
 
-**84 committed columns (42 `M`, 35 `W`, 7 `S`)** and two virtual tables. Gate list 0 writes 100
-leaves and holds 62 enforcing gates. 21 lookups on three channels, 8 outputs. At `n = 20`, the
+**87 committed columns (42 `M`, 38 `W`, 7 `S`)** and two virtual tables. Gate list 0 writes 100
+leaves and holds 72 enforcing gates. 23 lookups on three channels, 8 outputs. At `n = 20`, the
 height S16 proves, there are 26 gate lists, the top is `L26`, and the circuit has 368 inner
-columns and 430 relations. `artifact` panics unless the frame is `QUERIES` and the channels
-carry exactly 16, 4 and 1 obligations.
+columns and 440 relations. `artifact` panics unless the frame is `QUERIES` and the channels
+carry exactly 16, 6 and 1 obligations.
 
 **Every number in that paragraph moved at S21**, when the frame took its eighth query — the
 `deleg` mirror of a delegation request (`delegation.md` §5.1, §2.2 here). It was 74 columns
@@ -626,15 +633,32 @@ relations; `docs/handoff/S21-keccak256.md` keeps the before-and-after.
 the relation count — when the request side became multi-type: one more `M` column,
 `deleg_space`, which carries the requested type's address-space tag into the mirror's leaf;
 three `W` selectors where S21 had one, one per registered delegation type; and seven more
-enforcing gates, three per type where S21 had four for the one. It was 81 columns (41/33/7), 55
-enforcing gates and 423 relations. **Nothing else moved**, and that is the shape of the change:
-the same 100 leaves, the same 21 lookups, the same eight outputs, the same 26 gate lists and the
-same 368 inner columns, because a delegation type is a selector and a tag and not a tree. Nor
-did anything S16 froze about the family's *meaning*: `EXIT` is still the only ecall that halts,
-and the family still refuses every ecall number but `EXIT`'s and the three registered
-delegations' (gates 130, 133, 136 and 137). `artifact` also panics on every refusal of the
-assembly, among them `n < 19` (the 19-bit timestamp table needs 19 variables) and `n > 30`
-(`MAX_TRACE_VARS`); `family_circuit` returns `None` for both rather than calling it.
+enforcing gates, three per type where S21 had four for the one. Before S23 it was 81 columns
+(41/33/7), 55 enforcing gates and 423 relations; after S23 and until S25, 84 columns (42/35/7),
+62 enforcing gates and 430 relations. **Nothing else moved at either stage**, and that is the
+shape of the change: the same 100 leaves, the same eight outputs, the same 26 gate lists and the same 368
+inner columns, because a delegation type is a selector and a tag and not a tree.
+
+**S25 made `read` (63) and `write` (64) provable**, which moved the same three numbers and two
+more. Three `W` columns: `is_read` and `is_write`, two more selectors of the ecall partition,
+and `ram_value_hi`, the high halfword of the word a `read` delivers. Ten enforcing gates: three
+apiece for the two numbers, exactly as a delegation type takes three (gates 137–142); the two
+argument queries' address rules (154, 155); and the two confinement gates that are the whole of
+the design — `ram_addr_is_the_buffer` (158) and `read_count_is_one_word` (159). Two `RANGE16`
+obligations, which bound that word below `2^32`. And three gates that were `m_q = 0` became
+ordinary mask rules (146, 147, 148), because the `arg1`, `arg2` and `ram` queries are no longer
+held absent on every row.
+
+**Still the same 100 leaves, the same eight outputs, the same 26 gate lists and the same 368
+inner columns.** The two new obligations replaced two of the `range16` tree's three pads, and
+the queries were already in the frame, so nothing this family commits is a new *shape* — only
+new cells and new gates over cells that were there. What did change is the family's *meaning*:
+`EXIT` is still the only ecall that **halts**, but it is no longer the only one the family
+proves. An ecall row is now the exit, a delegation request of one of the three registered types,
+a `read` or a `write`, and the family refuses every other number (gates 130, 133, 136, 139, 142
+and 143). `artifact` also panics on every refusal of the assembly, among them `n < 19` (the
+19-bit timestamp table needs 19 variables) and `n > 30` (`MAX_TRACE_VARS`); `family_circuit`
+returns `None` for both rather than calling it.
 
 ### 3.2 Row kinds
 
@@ -652,22 +676,38 @@ kind is split by the code the decoded table puts in `imm`
 | system: fence | 0 (1) | `FENCE` = 2 | pc | 0 | 0; as on a lui row, only `wrap_boolean` constrains it | the fall-through | yes, `is_fence = 1` |
 | system: ecall | 0 (1) | `ECALL` = 0 | pc; rs1 = `x17`, reading 93; rs2 = `x10`; rd = `x10` | `a0` as read | 0; as on a lui row, only `wrap_boolean` constrains it | `HALT_PC` = 1 | `EXIT` only, `is_ecall = 1`, every `is_deleg_t = 0` |
 | system: a **delegation request** (S21; one row kind per type since S23) | 0 (1) | `ECALL` = 0 | pc; rs1 = `x17`, reading the type's number — `0x501`, `0x500` or `0x502`; rs2 = `x10`, the frame base; rd = `x10`; **deleg**, at that base | 0 | 0; as above | the fall-through | yes, `is_ecall = 1` **and** exactly one `is_deleg_t = 1` |
-| system: an ecall's transfer cycle | 0 (1) | `ECALL` = 0, its ecall's table row | pc; ram = the word moved | — | — | the pc, unchanged | never: `fill::add_sub` refuses it by name, and its decoded row forces `is_ecall = 1`, so `rs1_mask_rule`, `rs2_mask_rule` and `rd_mask_rule` demand queries it lacks, `ram_mask_rule` forbids its RAM query, and `next_pc_rule` demands `HALT_PC` |
+| system: a **`read`** (S25) | 0 (1) | `ECALL` = 0 | pc; rs1 = `x17`, reading 63; rs2 = `x10`, the descriptor; **arg1** = `x11`, the buffer; **arg2** = `x12`, reading 4; **ram**, at the buffer; rd = `x10` | the byte count delivered, 0 to 4 | 0; as above | the fall-through | yes, `is_ecall = 1` **and** `is_read = 1` |
+| system: a **`write`** (S25) | 0 (1) | `ECALL` = 0 | pc; rs1 = `x17`, reading 64; rs2 = `x10`, the descriptor; **arg1** = `x11`, the buffer; **arg2** = `x12`, the count; rd = `x10`; **no RAM query** | the byte count taken | 0; as above | the fall-through | yes, `is_ecall = 1` **and** `is_write = 1` |
 | system: ebreak | 0 (1) | `EBREAK` = 1 | — | — | — | — | never: no row satisfies `system_split` with the two code gates |
 | padding | none; all 0 | 0 | none | 0 | 0 | 0 | every row past the shard's last cycle |
 
 A compressed instruction (`c.add`, `c.li`, …) is one of these kinds at its own length: its
 table row's `next_pc` is `pc + 2`.
 
-A delegation request is the family's second provable ecall kind and the only row kind it has
-gained since S16. It is an ordinary ecall row with one type selector set, one extra query, one
-extra memory column and three zeroings; what makes it *an invocation of that type* is nothing
-here — it is the mirror query's tuple meeting an invocation's in the one global multiset
+A delegation request is the family's second provable ecall kind. It is an ordinary ecall row
+with one type selector set, one extra query, one extra memory column and three zeroings; what
+makes it *an invocation of that type* is nothing here — it is the mirror query's tuple meeting an invocation's in the one global multiset
 (§12.4 and its counterparts in §13 and §14, `delegation.md` §5.3). **Which type is a property of the row, not of the
-frame**: the selector says which, and `deleg_space_rule` (§3.5, gate 158) copies that type's
+frame**: the selector says which, and `deleg_space_rule` (§3.5, gate 168) copies that type's
 address-space tag into the row's `deleg_space` cell, which is what the mirror's leaf reads.
 The three types are one row kind here and three families elsewhere; this family never sees a
 delegation frame, a permutation or a delegation shard.
+
+**The `read` and `write` kinds are S25's, and the transfer cycle is gone.** Until S25 an ecall
+that moved bytes was preceded by one *transfer cycle* per word, a live row with `next_pc = pc`
+and a RAM query and nothing else — the one exception to "every instruction is one cycle" — and
+this table carried a row for it saying it was never provable. S14's open question 10 asked
+whether to bound such a row's transfers or to move one word per ecall instead, and recorded a
+recommendation for the second; S25 took it. A provable `read` now carries its RAM query on its
+own row, beside the `a1` and `a2` it is held against, and a `write` carries none at all. So the
+row kind is not constrained here — **it does not exist**, in the emulator or in the spec
+(`execution-trace.md` §1, §6). What would have needed cross-row constraints this arithmetization
+has nowhere is two degree-2 gates on one row (§3.5, gates 158 and 159).
+
+A `read` and a `write` differ from each other in exactly three cells — `is_read` against
+`is_write`, the `a7` the `rs1` query reads, and whether the RAM query is present — and from an
+exit row in those plus the `arg1` and `arg2` groups. Neither halts: `next_pc_rule` puts both on
+the fall-through branch, as it does a delegation request.
 
 ### 3.3 The base layer
 
@@ -695,21 +735,21 @@ the artifact. A leaf or obligation is named as in §3.4 and §3.6.
 | `M[13]` | `rs2_read_ts` | `frame(2, FIELD_READ_TS)` | rs2 previous write | | leaf `read_rs2`; `gap_lo_rs2` |
 | `M[14]` | `rs2_read_value` | `frame(2, FIELD_READ_VALUE)` | rs2 value | the frame base on a request row | leaf `read_rs2`; `rs2_writes_back`, `rs2_value_masked`, `add_addi_auipc`, `sub`, `deleg_addr_rule` |
 | `M[15]` | `rs2_write_value` | `frame(2, FIELD_WRITE_VALUE)` | rs2 written back | `rs2_read_value` | leaf `write_rs2`; `rs2_writes_back` |
-| `M[16]` | `arg1_mask` | `frame(3, FIELD_MASK)` | a1 present | 0: `arg1_mask_rule` | leaves `read_arg1`, `write_arg1`; `arg1_mask_boolean`, `arg1_mask_rule`; selector of `gap_hi_arg1`, `gap_lo_arg1` |
-| `M[17]` | `arg1_addr` | `frame(3, FIELD_ADDR)` | a1 register | 0 | leaves `read_arg1`, `write_arg1` |
-| `M[18]` | `arg1_read_ts` | `frame(3, FIELD_READ_TS)` | a1 previous write | 0 | leaf `read_arg1`; `gap_lo_arg1` |
-| `M[19]` | `arg1_read_value` | `frame(3, FIELD_READ_VALUE)` | a1 value | 0 | leaf `read_arg1`; `arg1_writes_back` |
-| `M[20]` | `arg1_write_value` | `frame(3, FIELD_WRITE_VALUE)` | a1 written back | 0 | leaf `write_arg1`; `arg1_writes_back` |
-| `M[21]` | `arg2_mask` | `frame(4, FIELD_MASK)` | a2 present | 0: `arg2_mask_rule` | leaves `read_arg2`, `write_arg2`; `arg2_mask_boolean`, `arg2_mask_rule`; selector of `gap_hi_arg2`, `gap_lo_arg2` |
-| `M[22]` | `arg2_addr` | `frame(4, FIELD_ADDR)` | a2 register | 0 | leaves `read_arg2`, `write_arg2` |
-| `M[23]` | `arg2_read_ts` | `frame(4, FIELD_READ_TS)` | a2 previous write | 0 | leaf `read_arg2`; `gap_lo_arg2` |
-| `M[24]` | `arg2_read_value` | `frame(4, FIELD_READ_VALUE)` | a2 value | 0 | leaf `read_arg2`; `arg2_writes_back` |
-| `M[25]` | `arg2_write_value` | `frame(4, FIELD_WRITE_VALUE)` | a2 written back | 0 | leaf `write_arg2`; `arg2_writes_back` |
-| `M[26]` | `ram_mask` | `frame(5, FIELD_MASK)` | RAM word present | 0: `ram_mask_rule` | leaves `read_ram`, `write_ram`; `ram_mask_boolean`, `ram_mask_rule`; selector of `gap_hi_ram`, `gap_lo_ram` |
-| `M[27]` | `ram_addr` | `frame(5, FIELD_ADDR)` | RAM word address | 0 | leaves `read_ram`, `write_ram` |
-| `M[28]` | `ram_read_ts` | `frame(5, FIELD_READ_TS)` | RAM word previous write | 0 | leaf `read_ram`; `gap_lo_ram` |
-| `M[29]` | `ram_read_value` | `frame(5, FIELD_READ_VALUE)` | RAM word read | 0 | leaf `read_ram` |
-| `M[30]` | `ram_write_value` | `frame(5, FIELD_WRITE_VALUE)` | RAM word written | 0 | leaf `write_ram` |
+| `M[16]` | `arg1_mask` | `frame(3, FIELD_MASK)` | a1 present | 1 on a `read` or a `write` row, 0 elsewhere | leaves `read_arg1`, `write_arg1`; `arg1_mask_boolean`, `arg1_mask_rule`, `arg1_addr_rule`; selector of `gap_hi_arg1`, `gap_lo_arg1` |
+| `M[17]` | `arg1_addr` | `frame(3, FIELD_ADDR)` | a1 register | 11 (`a1`) on those rows, 0 elsewhere | leaves `read_arg1`, `write_arg1`; `arg1_addr_rule` |
+| `M[18]` | `arg1_read_ts` | `frame(3, FIELD_READ_TS)` | a1 previous write | | leaf `read_arg1`; `gap_lo_arg1` |
+| `M[19]` | `arg1_read_value` | `frame(3, FIELD_READ_VALUE)` | a1 value: the I/O buffer | the buffer pointer the call was passed | leaf `read_arg1`; `arg1_writes_back`, **`ram_addr_is_the_buffer`** |
+| `M[20]` | `arg1_write_value` | `frame(3, FIELD_WRITE_VALUE)` | a1 written back | `arg1_read_value` | leaf `write_arg1`; `arg1_writes_back` |
+| `M[21]` | `arg2_mask` | `frame(4, FIELD_MASK)` | a2 present | 1 on a `read` or a `write` row, 0 elsewhere | leaves `read_arg2`, `write_arg2`; `arg2_mask_boolean`, `arg2_mask_rule`, `arg2_addr_rule`; selector of `gap_hi_arg2`, `gap_lo_arg2` |
+| `M[22]` | `arg2_addr` | `frame(4, FIELD_ADDR)` | a2 register | 12 (`a2`) on those rows, 0 elsewhere | leaves `read_arg2`, `write_arg2`; `arg2_addr_rule` |
+| `M[23]` | `arg2_read_ts` | `frame(4, FIELD_READ_TS)` | a2 previous write | | leaf `read_arg2`; `gap_lo_arg2` |
+| `M[24]` | `arg2_read_value` | `frame(4, FIELD_READ_VALUE)` | a2 value: the byte count asked for | 4 on a `read` row; whatever the `write` named | leaf `read_arg2`; `arg2_writes_back`, **`read_count_is_one_word`** |
+| `M[25]` | `arg2_write_value` | `frame(4, FIELD_WRITE_VALUE)` | a2 written back | `arg2_read_value` | leaf `write_arg2`; `arg2_writes_back` |
+| `M[26]` | `ram_mask` | `frame(5, FIELD_MASK)` | RAM word present | 1 on a `read` row alone | leaves `read_ram`, `write_ram`; `ram_mask_boolean`, `ram_mask_rule`, `ram_addr_is_the_buffer`, `read_count_is_one_word`; selector of `gap_hi_ram`, `gap_lo_ram` |
+| `M[27]` | `ram_addr` | `frame(5, FIELD_ADDR)` | RAM word address | `arg1_read_value`: the buffer | leaves `read_ram`, `write_ram`; `ram_addr_is_the_buffer` |
+| `M[28]` | `ram_read_ts` | `frame(5, FIELD_READ_TS)` | RAM word previous write | | leaf `read_ram`; `gap_lo_ram` |
+| `M[29]` | `ram_read_value` | `frame(5, FIELD_READ_VALUE)` | RAM word before the read | the word the buffer held | leaf `read_ram` **and nothing else**: a `read` overwrites, so what was there binds nothing |
+| `M[30]` | `ram_write_value` | `frame(5, FIELD_WRITE_VALUE)` | RAM word after the read | the word fd 0 or fd 3 delivered, with any tail past the stream's end left as it was | leaf `write_ram`; `ram_value_lo_range` |
 | `M[31]` | `rd_mask` | `frame(6, FIELD_MASK)` | rd present | 1 on every kind but the fence | leaves `read_rd`, `write_rd`; `rd_mask_boolean`, `rd_is_zero_inverse`, `rd_mask_rule`, `rd_addr_rule`; selector of `gap_hi_rd`, `gap_lo_rd` |
 | `M[32]` | `rd_addr` | `frame(6, FIELD_ADDR)` | rd register | the decoded `rd`, or 10 (`a0`) on the exit row | leaves `read_rd`, `write_rd`; `rd_is_zero_inverse`, `rd_is_zero_at_nonzero`, `rd_addr_rule` |
 | `M[33]` | `rd_read_ts` | `frame(6, FIELD_READ_TS)` | rd previous write | | leaf `read_rd`; `gap_lo_rd` |
@@ -725,11 +765,16 @@ the artifact. A leaf or obligation is named as in §3.4 and §3.6.
 The frame's slots in `add_sub.rs` are `SLOT_PC = 0` through `SLOT_RD = 6` and, since S21,
 `SLOT_DELEG = 7`, so `frame(1, ..)` is `frame(SLOT_RS1, ..)` there. `deleg_space` is not in
 that grid: it sits past the last query's five fields at `M[1 + 5w]`, and a frame without the
-`deleg` query does not carry it at all (§2.2). The `arg1`, `arg2` and `ram`
-queries are held absent on every row. Their fifteen columns and three gap chunks are committed
-and opened, and carry nothing until the I/O-binding stage; **the `deleg` group is not among
-them**, and S21 is the stage that made three of the four wide-frame query groups inert rather
-than four (§15 observation 2).
+`deleg` query does not carry it at all (§2.2).
+
+**No query group in this frame is inert since S25.** From S16 to S23 the `arg1`, `arg2` and
+`ram` groups were held to 0 on every row by three degree-1 gates, their fifteen columns and
+three gap chunks committed and opened and carrying nothing — the reservation the I/O-binding
+stage was to spend. S21 spent one of the four on `deleg`; S25 spent the other three, on one
+row kind that makes all three (`read`) and one that makes the first two (`write`). The frame
+did not change shape at either stage, which is the point of having reserved the queries in
+S16's frame rather than adding them later: a frame is committed in the verifying key's own
+column layout, and widening one moves every index below it (§2.2).
 
 **Why the type rides a memory column, and why one query serves all three.** The mirror's leaf
 has to name the requested type — the tag is its `AS` term — and a leaf may read no `W` column,
@@ -741,8 +786,8 @@ rather than one query apiece because a second mirror query would need a ninth `t
 and `trace::Row::present` is a full `u8` (`execution-trace.md` §7). `delegation.md` §5.1 is
 that rule, and §10.1 records what S21 wrote instead and why it was not implementable.
 
-**Witness columns, `W[0..35]`** — `W[0..11]` filled by `trace::build_frame_witness`, `W[10..32]`
-by `fill::add_sub` (which overwrites `rd_selected`), `W[32..35]` by
+**Witness columns, `W[0..38]`** — `W[0..11]` filled by `trace::build_frame_witness`, `W[10..35]`
+by `fill::add_sub` (which overwrites `rd_selected`), `W[35..38]` by
 `trace::build_multiplicities` inside `prover::shard_columns`; committed in
 `ShardProof::witness_commitments`, absorbed at S3 before `g` and `β`.
 
@@ -751,14 +796,14 @@ by `fill::add_sub` (which overwrites `rd_selected`), `W[32..35]` by
 | `W[0]` | `pc_gap_hi` | `memory::gap_hi(0)` | pc gap, high chunk | 0: a pc read's gap is always 3 | `gap_hi_pc`, `gap_lo_pc` |
 | `W[1]` | `rs1_gap_hi` | `gap_hi(1)` | rs1 gap, high chunk | `gap >> 19` | `gap_hi_rs1`, `gap_lo_rs1` |
 | `W[2]` | `rs2_gap_hi` | `gap_hi(2)` | rs2 gap, high chunk | | `gap_hi_rs2`, `gap_lo_rs2` |
-| `W[3]` | `arg1_gap_hi` | `gap_hi(3)` | a1 gap, high chunk | 0 | `gap_hi_arg1`, `gap_lo_arg1` |
-| `W[4]` | `arg2_gap_hi` | `gap_hi(4)` | a2 gap, high chunk | 0 | `gap_hi_arg2`, `gap_lo_arg2` |
-| `W[5]` | `ram_gap_hi` | `gap_hi(5)` | RAM gap, high chunk | 0 | `gap_hi_ram`, `gap_lo_ram` |
+| `W[3]` | `arg1_gap_hi` | `gap_hi(3)` | a1 gap, high chunk | `(4c + 1 − arg1_read_ts) >> 19` on a `read` or `write` row, 0 elsewhere | `gap_hi_arg1`, `gap_lo_arg1` |
+| `W[4]` | `arg2_gap_hi` | `gap_hi(4)` | a2 gap, high chunk | ditto for `a2` | `gap_hi_arg2`, `gap_lo_arg2` |
+| `W[5]` | `ram_gap_hi` | `gap_hi(5)` | RAM gap, high chunk | `(4c + 2 − ram_read_ts) >> 19` on a `read` row, 0 elsewhere | `gap_hi_ram`, `gap_lo_ram` |
 | `W[6]` | `rd_gap_hi` | `gap_hi(6)` | rd gap, high chunk | | `gap_hi_rd`, `gap_lo_rd` |
 | `W[7]` | `deleg_gap_hi` | `gap_hi(7)` | Mirror-query gap, high chunk | `(4c + 2) >> 19` on a delegation row, 0 elsewhere | `gap_hi_deleg`, `gap_lo_deleg` |
 | `W[8]` | `rd_inv` | `memory::rd_inv(8)` | Inverse of the rd index | `rd_addr⁻¹`, or 0 | `rd_is_zero_inverse` |
 | `W[9]` | `rd_is_zero` | `memory::rd_is_zero(8)` | rd is `x0` | | `rd_is_zero_inverse`, `rd_is_zero_at_nonzero`, `rd_is_zero_boolean`, `rd_write_masked` |
-| `W[10]` | `rd_selected` | `memory::rd_selected(8)`; `sel` in `add_sub.rs` | Result | the kind's result (§3.2), `rd = x0` included: `fill::add_sub` overwrites the 0 that S14's builder writes there | `rd_write_masked`, `add_addi_auipc`, `sub`, `lui`, `exit_status`, `deleg_writes_no_register`; `rd_lo_range` |
+| `W[10]` | `rd_selected` | `memory::rd_selected(8)`; `sel` in `add_sub.rs` | Result | the kind's result (§3.2), `rd = x0` included: `fill::add_sub` overwrites the 0 that S14's builder writes there. On a `read` or a `write` row it is the byte count the call moved, which no gate fixes | `rd_write_masked`, `add_addi_auipc`, `sub`, `lui`, `exit_status`, `deleg_writes_no_register`; `rd_lo_range` |
 | `W[11]` | `decoded_next_pc` | `add_sub::DECODED[0]` | Decoded fall-through | the table row's `next_pc` | `next_pc_rule`; `decode_row` position 1 |
 | `W[12]` | `decoded_rs1` | `add_sub::DECODED[1]` | Decoded rs1 | | `rs1_addr_rule`; `decode_row` position 2 |
 | `W[13]` | `decoded_rs2` | `add_sub::DECODED[2]` | Decoded rs2 | | `rs2_addr_rule`; `decode_row` position 3 |
@@ -776,20 +821,26 @@ by `fill::add_sub` (which overwrites `rd_selected`), `W[32..35]` by
 | `W[25]` | `is_deleg_9` | `add_sub::IS_DELEGATION[0]`; `add_sub::IS_KECCAK`, S21's name kept | `KECCAK_F` request row | 1 on an ecall row whose `a7` is `0x501` | `is_deleg_9_boolean`, `deleg_9_is_an_ecall`, `deleg_9_number`, `ecall_is_exit`, `deleg_mask_rule`, `exit_status`, `deleg_space_rule`, `next_pc_rule` |
 | `W[26]` | `is_deleg_10` | `add_sub::IS_DELEGATION[1]` | `POSEIDON2` request row (S23) | 1 on an ecall row whose `a7` is `0x500` | `is_deleg_10_boolean`, `deleg_10_is_an_ecall`, `deleg_10_number`, `ecall_is_exit`, `deleg_mask_rule`, `exit_status`, `deleg_space_rule`, `next_pc_rule` |
 | `W[27]` | `is_deleg_11` | `add_sub::IS_DELEGATION[2]` | `FR_ARITH` request row (S23) | 1 on an ecall row whose `a7` is `0x502` | `is_deleg_11_boolean`, `deleg_11_is_an_ecall`, `deleg_11_number`, `ecall_is_exit`, `deleg_mask_rule`, `exit_status`, `deleg_space_rule`, `next_pc_rule` |
-| `W[28]` | `wrap` | `add_sub::WRAP` | Carry or borrow | | `add_addi_auipc`, `sub`, `wrap_boolean` |
-| `W[29]` | `rd_hi` | `add_sub::RD_HI` | Result, high halfword | `rd_selected >> 16` | `rd_hi_range`, `rd_lo_range` |
-| `W[30]` | `pc_wrap` | `add_sub::PC_WRAP` | Next-pc overflow | 0 | `pc_wrap_boolean`, `next_pc_rule` |
-| `W[31]` | `next_pc_hi` | `add_sub::NEXT_PC_HI` | Next pc, high halfword | `pc_write_value >> 16` | `next_pc_hi_range`, `next_pc_lo_range` |
-| `W[32]` | `mult_timestamp` | `add_sub::MULTIPLICITIES[0]` | Timestamp-table count | per table row `t`: the gated gap chunks (`mask·chunk`) equal to `t`, credited to rows below `2^19` | leaf `timestamp_table_num` |
-| `W[33]` | `mult_range16` | `add_sub::MULTIPLICITIES[1]` | 16-bit-table count | per table row `t`: the gated halfwords (`pc_mask·halfword`) equal to `t`, credited to rows below `2^16` | leaf `range16_table_num` |
-| `W[34]` | `mult_decoder` | `add_sub::MULTIPLICITIES[2]` | Decoder-table count | per table row `t`: the live cycles at pc `2t`; and every padding row's switched-off tuple (`MINUS_ONE` in all seven positions) on the table's lowest non-live row, which is row 0, since pc 0 lies below `RAM_ORIGIN` and holds no instruction | leaf `decoder_table_num` |
+| `W[28]` | `is_read` | `add_sub::IS_READ` | `read` row (S25) | 1 on an ecall row whose `a7` is 63 | `is_read_boolean`, `is_read_is_an_ecall`, `read_number`, `ecall_is_exit`, `arg1_mask_rule`, `arg2_mask_rule`, `ram_mask_rule`, `exit_status`, `next_pc_rule` |
+| `W[29]` | `is_write` | `add_sub::IS_WRITE` | `write` row (S25) | 1 on an ecall row whose `a7` is 64 | `is_write_boolean`, `is_write_is_an_ecall`, `write_number`, `ecall_is_exit`, `arg1_mask_rule`, `arg2_mask_rule`, `exit_status`, `next_pc_rule` |
+| `W[30]` | `ram_value_hi` | `add_sub::RAM_VALUE_HI` | Delivered word, high halfword (S25) | `ram_write_value >> 16` | `ram_value_hi_range`, `ram_value_lo_range` |
+| `W[31]` | `wrap` | `add_sub::WRAP` | Carry or borrow | | `add_addi_auipc`, `sub`, `wrap_boolean` |
+| `W[32]` | `rd_hi` | `add_sub::RD_HI` | Result, high halfword | `rd_selected >> 16` | `rd_hi_range`, `rd_lo_range` |
+| `W[33]` | `pc_wrap` | `add_sub::PC_WRAP` | Next-pc overflow | 0 | `pc_wrap_boolean`, `next_pc_rule` |
+| `W[34]` | `next_pc_hi` | `add_sub::NEXT_PC_HI` | Next pc, high halfword | `pc_write_value >> 16` | `next_pc_hi_range`, `next_pc_lo_range` |
+| `W[35]` | `mult_timestamp` | `add_sub::MULTIPLICITIES[0]` | Timestamp-table count | per table row `t`: the gated gap chunks (`mask·chunk`) equal to `t`, credited to rows below `2^19` | leaf `timestamp_table_num` |
+| `W[36]` | `mult_range16` | `add_sub::MULTIPLICITIES[1]` | 16-bit-table count | per table row `t`: the gated halfwords (`pc_mask·halfword`) equal to `t`, credited to rows below `2^16` | leaf `range16_table_num` |
+| `W[37]` | `mult_decoder` | `add_sub::MULTIPLICITIES[2]` | Decoder-table count | per table row `t`: the live cycles at pc `2t`; and every padding row's switched-off tuple (`MINUS_ONE` in all seven positions) on the table's lowest non-live row, which is row 0, since pc 0 lies below `RAM_ORIGIN` and holds no instruction | leaf `decoder_table_num` |
 
 A switched-off obligation's gated tuple is 0 (`s·e` at `s = 0`), so row 0 of `mult_timestamp`
-and `mult_range16` counts every switched-off obligation: all 16 timestamp and all 4 `RANGE16`
-obligations of each padding row, and in `mult_timestamp` also each live row's six `arg1`,
-`arg2` and `ram` gap chunks, the two `deleg` chunks of every row that is not a delegation
-request, and the two chunks of any `rs1`, `rs2` or `rd` query the row does not make. The `RANGE16` obligations are selected by `pc_mask`, so none is off on a live row.
-Row 0 also counts every live chunk whose value is 0, such as `pc_gap_hi` on every live row.
+and `mult_range16` counts every switched-off obligation: all 16 timestamp and all **6**
+`RANGE16` obligations of each padding row, and in `mult_timestamp` also the `arg1` and `arg2`
+chunks of every row that is neither a `read` nor a `write`, the `ram` chunks of every row that
+is not a `read`, the two `deleg` chunks of every row that is not a delegation request, and the
+two chunks of any `rs1`, `rs2` or `rd` query the row does not make. The `RANGE16` obligations
+are selected by `pc_mask`, so none is off on a live row.
+Row 0 also counts every live chunk whose value is 0, such as `pc_gap_hi` on every live row, and
+`ram_value_hi` and `ram_value_lo` on every live row that is not a `read`.
 
 **Setup columns, `S[0..7]`** — the family's decoded table, `program::lookup_tuple(0)` order,
 filled by `program::FamilyTable::column_poly(j)`; committed in program identity
@@ -920,9 +971,13 @@ delegation row — a real value below `2^19` only for the first 131,071 cycles, 
 | 2 | 84, 85 | `rd_lo_range` | 1 | `g + pc_mask·rd_selected − 2^16·pc_mask·rd_hi` |
 | 3 | 86, 87 | `next_pc_hi_range` | 1 | `g + pc_mask·next_pc_hi` |
 | 4 | 88, 89 | `next_pc_lo_range` | 1 | `g + pc_mask·pc_write_value − 2^16·pc_mask·next_pc_hi` |
-| 5 | 90, 91 | `range16_pad_0` | 0 | 1 |
-| 6 | 92, 93 | `range16_pad_1` | 0 | 1 |
-| 7 | 94, 95 | `range16_pad_2` | 0 | 1 |
+| 5 | 90, 91 | `ram_value_hi_range` | 1 | `g + pc_mask·ram_value_hi` |
+| 6 | 92, 93 | `ram_value_lo_range` | 1 | `g + pc_mask·ram_write_value − 2^16·pc_mask·ram_value_hi` |
+| 7 | 94, 95 | `range16_pad_0` | 0 | 1 |
+
+**S25's two obligations took two of the three pads**, so this tree is still eight leaves, gate
+list 0 still writes 100, and `R` is still 5 (§1.3). A tree padded above its obligations is
+slack a later stage can spend without moving a layer, and this is the stage that spent add/sub's.
 
 **The `decoder` fraction tree**, `L1[96..100]`: 2 fractions.
 
@@ -941,9 +996,9 @@ L{1}[99]  decode_row_den
               the claimed row at pc_mask = 1, and the table's MINUS_ONE padding row at 0
 ```
 
-### 3.5 Gate list 0: the 62 enforcing gates
+### 3.5 Gate list 0: the 72 enforcing gates
 
-Relations 100–161, in list order. Each block gives the relation number, the name, what the gate
+Relations 100–171, in list order. Each block gives the relation number, the name, what the gate
 is for, its shape and degree, the constructor, the stored positional form, and the named form,
 factored where that is easier to read. Every factoring re-expands to the stored terms.
 
@@ -979,7 +1034,7 @@ factored where that is easier to read. Every factoring re-expands to the stored 
   reads as  a query that only reads writes back what it read, so reading x0 cannot put 5 in it.
             `deleg` is NOT read-only and has no such gate: it reads the answer tuple an
             invocation wrote and writes a tuple of its own, which is what makes the pairing
-            1:1 (delegation.md §5.3). Gates 155–158 pin what it may read instead.
+            1:1 (delegation.md §5.3). Gates 165–168 pin what it may read instead.
 
 ────────────────────────────────────────────────────────────────────────────────────────────
 112     rd_is_zero_inverse — the x0 flag, with gate 113                 Quadratic, degree 2
@@ -1019,7 +1074,7 @@ factored where that is easier to read. Every factoring re-expands to the stored 
             write-backs and x0's initial 0, every read of x0 returns 0.
 ```
 
-**B. What the row is (116–137)**
+**B. What the row is (116–143)**
 
 ```text
 ────────────────────────────────────────────────────────────────────────────────────────────
@@ -1042,10 +1097,10 @@ factored where that is easier to read. Every factoring re-expands to the stored 
                   + 32·kind_lui − decoded_mask
 
   reads as  the bits are the mask the decoder lookup binds. One-hotness is not here: on a
-            live row an all-zero mask satisfies all 62 gates, and only the decoder table,
+            live row an all-zero mask satisfies all 72 gates, and only the decoder table,
             whose masks are single bits, refuses it (lookup.md §10). Two bits that each ask
             for an rd write (any two of addi, auipc, add, sub, lui, or the system bit read as
-            is_ecall beside one of them) are refused by 143 with 106, since rd_mask comes out
+            is_ecall beside one of them) are refused by 149 with 106, since rd_mask comes out
             2. The system bit read as is_fence beside any one other bit passes every gate,
             and only the decoder table refuses it. On a padding row the decoder lookup is
             off, so no table row binds the bits and only the gates above constrain them; the
@@ -1103,73 +1158,123 @@ factored where that is easier to read. Every factoring re-expands to the stored 
 
   reads as  each is_deleg_t = 1 forces is_ecall = 1, so a delegation request is a system row
             with code ECALL and carries the whole ecall frame. Each flag is free on every
-            other row, where its booleanity gate alone holds it to 0 or 1 — and 144 then
-            makes a stray 1 ask for a deleg query, 158 makes it name that type's address
-            space, the number gate makes it ask a7 for that type's number, and 137 and 153
+            other row, where its booleanity gate alone holds it to 0 or 1 — and 150 then
+            makes a stray 1 ask for a deleg query, 168 makes it name that type's address
+            space, the number gate makes it ask a7 for that type's number, and 143 and 163
             turn the exit gates off; the honest fill writes 0 in all three.
 
             The three numbers are ecall::PRECOMPILE_KECCAK_F, PRECOMPILE_POSEIDON2 and
             PRECOMPILE_FR_ARITH read straight from constants::delegation::TYPES, which is
             also where the family ids in the names come from: no gate here spells a number
-            of its own, and neither does 137. S21 had one flag and four gates for the one
-            delegation family; S23 has three gates per type, the fourth having become 137's
-            sum over types.
+            of its own, and neither does 143. S21 had one flag and four gates for the one
+            delegation family; S23 has three gates per type, the fourth having become 143's
+            sum over kinds — which is what let S25 add two more ecalls to it for two terms
+            apiece.
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-137     ecall_is_exit — every ecall that is not a delegation is EXIT    Quadratic, degree 2
+137–142  three gates per I/O ecall, `read` then `write`                  Quadratic, degree 2
+         code  add_sub::artifact, the loop over [(IS_READ, READ), (IS_WRITE, WRITE)]     S25
+
+  137 is_read_boolean       0 = W[28] − W[28]·W[28]     0 = is_read  − is_read²
+  138 is_read_is_an_ecall   0 = W[28] − W[28]·W[23]     0 = is_read·(1 − is_ecall)
+  139 read_number           0 = −63·W[28] + W[28]·M[9]
+                                                       0 = is_read·(rs1_read_value − 63)
+  140 is_write_boolean      0 = W[29] − W[29]·W[29]     0 = is_write − is_write²
+  141 is_write_is_an_ecall  0 = W[29] − W[29]·W[23]     0 = is_write·(1 − is_ecall)
+  142 write_number          0 = −64·W[29] + W[29]·M[9]
+                                                       0 = is_write·(rs1_read_value − 64)
+
+  reads as  the same three gates a delegation type takes (128–136), for the same reason: a
+            selector that forces is_ecall and pins a7 to one number. 63 and 64 are
+            ecall::READ and ecall::WRITE — the Linux numbers, so a guest runs unmodified
+            under qemu-riscv32 — read from constants::ecall and never spelled here.
+
+            What differs from a delegation is everything *downstream*: these two selectors
+            appear in 146, 147 and 148, where a type flag does not, because a `read` and a
+            `write` make queries the frame had held absent on every row since S16.
+
+────────────────────────────────────────────────────────────────────────────────────────────
+143     ecall_is_exit — the only ecall left is EXIT                     Quadratic, degree 2
         code  add_sub::artifact                                                     amended
 
-  positional  0 = −93·W[23] + 93·W[25] + 93·W[26] + 93·W[27]
+  positional  0 = −93·W[23] + 93·W[25] + 93·W[26] + 93·W[27] + 93·W[28] + 93·W[29]
                   + W[23]·M[9] − W[25]·M[9] − W[26]·M[9] − W[27]·M[9]
-  named       0 = (is_ecall − is_deleg_9 − is_deleg_10 − is_deleg_11)·(rs1_read_value − 93)
+                  − W[28]·M[9] − W[29]·M[9]
+  named       0 = (is_ecall − is_deleg_9 − is_deleg_10 − is_deleg_11 − is_read − is_write)
+                  · (rs1_read_value − 93)
 
-  reads as  an ecall row's rs1 query reads a7 (gate 145), and a7 is 93 unless this row is a
-            delegation of some type. This is S16's `is_ecall·(rs1_read_value − 93)` with
-            every delegation row subtracted out, one linear term and one product per type.
+  reads as  an ecall row's rs1 query reads a7 (gate 151), and a7 is 93 unless this row is a
+            delegation of some type, a `read` or a `write`. This is S16's
+            `is_ecall·(rs1_read_value − 93)` with every other provable ecall subtracted out,
+            one linear term and one product apiece.
 
-  reads as (128–137)  **an ecall row is an exit or a delegation request of exactly one
-                      type.** Each is_deleg_t is a free boolean and is_exit is written out
-                      as is_ecall − Σ_t is_deleg_t, so a row setting two type flags at once
-                      would need a7 to be two distinct numbers, and a row setting one beside
-                      the exit would need a7 to be 93 as well. The partition therefore holds
-                      because the ecall numbers are **pairwise distinct** and each is in its
-                      ABI range (delegation.md §2, §3) — a `const` assertion in add_sub.rs
-                      over every pair of registry rows, not a test, because a violation
-                      there is a mis-numbered ABI and should not compile. So the factor is 0
-                      or 1 on every row and never −1 or 2, which is what the three amended
-                      gates 137, 153 and 161 need of it.
+  reads as (128–143)  **an ecall row is an exit, a delegation request of exactly one type, a
+                      `read` or a `write`.** Each selector is a free boolean and is_exit is
+                      written out as is_ecall − Σ others, so a row setting two selectors at
+                      once would need a7 to be two distinct numbers, and a row setting one
+                      beside the exit would need a7 to be 93 as well. The partition
+                      therefore holds because the five ecall numbers are **pairwise
+                      distinct** and each is in its ABI range (ecall-abi.md §3,
+                      delegation.md §2) — a `const` assertion in add_sub.rs over every pair,
+                      not a test, because a violation there is a mis-numbered ABI and should
+                      not compile. So the factor is 0 or 1 on every row and never negative
+                      or 2, which is what the three amended gates 143, 163 and 171 need of
+                      it. **Adding S25's two ecalls cost that assertion nothing**: it was
+                      already quantified over a list, and the list grew.
 ```
 
-**C. Which queries a row makes, and where (138–149)**
+**C. Which queries a row makes, and where (144–159)**
 
 ```text
 ────────────────────────────────────────────────────────────────────────────────────────────
-138     rs1_mask_rule — rs1 is read exactly by add, sub, addi, ecall    Quadratic, degree 2
+144     rs1_mask_rule — rs1 is read exactly by add, sub, addi, ecall    Quadratic, degree 2
         code  add_sub::mask_rule(frame(1, FIELD_MASK), [KIND_ADD, KIND_SUB, KIND_ADDI, IS_ECALL])
 
   positional  0 = M[6] − M[1]·W[20] − M[1]·W[21] − M[1]·W[18] − M[1]·W[23]
   named       0 = rs1_mask − pc_mask·(kind_add + kind_sub + kind_addi + is_ecall)
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-139     rs2_mask_rule — rs2 is read exactly by add, sub, ecall          Quadratic, degree 2
+145     rs2_mask_rule — rs2 is read exactly by add, sub, ecall          Quadratic, degree 2
         code  mask_rule(frame(2, FIELD_MASK), [KIND_ADD, KIND_SUB, IS_ECALL])
 
   positional  0 = M[11] − M[1]·W[20] − M[1]·W[21] − M[1]·W[23]
   named       0 = rs2_mask − pc_mask·(kind_add + kind_sub + is_ecall)
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-140     arg1_mask_rule        0 = M[16]      0 = arg1_mask
-141     arg2_mask_rule        0 = M[21]      0 = arg2_mask
-142     ram_mask_rule         0 = M[26]      0 = ram_mask
-        Linear, degree 1; code  add_sub::artifact
+146     arg1_mask_rule — a1 is read exactly by read and write          Quadratic, degree 2
+147     arg2_mask_rule — a2 likewise                                                    S25
+        code  mask_rule(frame(SLOT_ARG1, FIELD_MASK), &[IS_READ, IS_WRITE]), and SLOT_ARG2
 
-  reads as  no row reads a1 or a2 or touches RAM: neither EXIT nor a delegation takes a
-            second or third argument — a delegation's one argument is a0, the frame base,
-            which the rs2 query already reads (delegation.md §2) — and no transfer cycle is
-            provable.
+  146 positional  0 = M[16] − M[1]·W[28] − M[1]·W[29]
+      named       0 = arg1_mask − pc_mask·(is_read + is_write)
+  147 positional  0 = M[21] − M[1]·W[28] − M[1]·W[29]
+      named       0 = arg2_mask − pc_mask·(is_read + is_write)
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-143     rd_mask_rule — rd is written by every kind but the fence        Quadratic, degree 2
+148     ram_mask_rule — RAM is touched exactly by a read               Quadratic, degree 2
+        code  mask_rule(frame(SLOT_RAM, FIELD_MASK), &[IS_READ])                        S25
+
+  positional  0 = M[26] − M[1]·W[28]
+  named       0 = ram_mask − pc_mask·is_read
+
+  reads as (146–148)  until S25 these three were the literal `0 = m_q`, degree 1: no row of
+                      the family read a1 or a2 or touched RAM, because neither EXIT nor a
+                      delegation takes a second or third argument — a delegation's one
+                      argument is a0, the frame base, which the rs2 query already reads
+                      (delegation.md §2) — and no transfer cycle was provable. They are
+                      ordinary mask rules now, keyed on the two I/O selectors, and they are
+                      what make the confinement local: **a `read` must carry its RAM query,
+                      and only a `read` may.** A refused `read` — a descriptor fd 0 and fd 3
+                      do not name — moves no word and so cannot satisfy 148, which is why
+                      `fill::add_sub` refuses such a cycle by name (ecall-abi.md §4).
+
+                      The `write` selector is in 146 and 147 and **not** in 148: a `write`
+                      reads its buffer pointer and its count into a1 and a2, and stages no
+                      memory event at all. The bytes are bound by the guest's own io_digest
+                      instead (memory.md §10).
+
+────────────────────────────────────────────────────────────────────────────────────────────
+149     rd_mask_rule — rd is written by every kind but the fence        Quadratic, degree 2
         code  mask_rule(frame(6, FIELD_MASK),
                         [KIND_ADD, KIND_SUB, KIND_ADDI, KIND_AUIPC, KIND_LUI, IS_ECALL])
 
@@ -1178,14 +1283,14 @@ factored where that is easier to read. Every factoring re-expands to the stored 
   named       0 = rd_mask − pc_mask·(kind_add + kind_sub + kind_addi + kind_auipc
                                      + kind_lui + is_ecall)
 
-  reads as (138, 139, 143)  on a live row the bits are one-hot, so each sum is 0 or 1 and the
-                            mask is the kind's use of the query. A delegation row is an ecall
-                            row, so it makes all three: a7 at slot 1, a0 at slot 2, a0 at
-                            slot 3. On a padding row pc_mask = 0 and every mask is 0,
-                            whatever the bits hold.
+  reads as (144, 145, 149)  on a live row the bits are one-hot, so each sum is 0 or 1 and the
+                            mask is the kind's use of the query. Every ecall row is an ecall
+                            row, so all five kinds make these three: a7 at slot 1, a0 at
+                            slot 2, a0 at slot 3. On a padding row pc_mask = 0 and every
+                            mask is 0, whatever the bits hold.
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-144     deleg_mask_rule — the mirror query is a delegation row's alone  Quadratic, degree 2
+150     deleg_mask_rule — the mirror query is a delegation row's alone  Quadratic, degree 2
         code  mask_rule(frame(7, FIELD_MASK), &IS_DELEGATION)                       amended
 
   positional  0 = M[36] − M[1]·W[25] − M[1]·W[26] − M[1]·W[27]
@@ -1196,66 +1301,125 @@ factored where that is easier to read. Every factoring re-expands to the stored 
             query, or made the query without any flag, fails here — and since the mirror
             query is the request's half of the anchor, a request with no mirror query cannot
             balance against its invocation (delegation.md §5.3). The sum is 0 or 1 on every
-            row that passes 128–137, so this is the ordinary mask rule of 138–143 with the
-            three type flags as its `uses` list; it is what 158 pairs with, one saying the
+            row that passes 128–143, so this is the ordinary mask rule of 144–149 with the
+            three type flags as its `uses` list; it is what 168 pairs with, one saying the
             query is made and the other which type it names.
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-145     rs1_addr_rule — rs1's register is the decoded one, or a7        Quadratic, degree 2
+151     rs1_addr_rule — rs1's register is the decoded one, or a7        Quadratic, degree 2
         code  add_sub::addr_rule(1, DECODED_RS1, 17)
 
   positional  0 = M[6]·M[7] − M[6]·W[12] − 17·M[6]·W[23]
   named       0 = rs1_mask·(rs1_addr − decoded_rs1 − 17·is_ecall)
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-146     rs2_addr_rule — rs2's register is the decoded one, or a0        Quadratic, degree 2
+152     rs2_addr_rule — rs2's register is the decoded one, or a0        Quadratic, degree 2
         code  addr_rule(2, DECODED_RS2, 10)
 
   positional  0 = M[11]·M[12] − M[11]·W[13] − 10·M[11]·W[23]
   named       0 = rs2_mask·(rs2_addr − decoded_rs2 − 10·is_ecall)
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-147     rd_addr_rule — rd's register is the decoded one, or a0          Quadratic, degree 2
+153     rd_addr_rule — rd's register is the decoded one, or a0          Quadratic, degree 2
         code  addr_rule(6, DECODED_RD, 10)
 
   positional  0 = M[31]·M[32] − M[31]·W[14] − 10·M[31]·W[23]
   named       0 = rd_mask·(rd_addr − decoded_rd − 10·is_ecall)
 
-  reads as (145–147)  a present query's register is the table's; a system row's decoded
-                      registers are 0, so on an ecall row — exit or delegation of any type
-                      alike — the constants name a7 and a0. The three gates key on is_ecall
-                      and on no type flag, which is why a delegation row needs no address
-                      rule of its own and why adding a type adds none: it is an ecall row and
-                      takes the ecall frame.
+  reads as (151–153)  a present query's register is the table's; a system row's decoded
+                      registers are 0, so on an ecall row — exit, delegation of any type,
+                      `read` or `write` alike — the constants name a7 and a0. The three
+                      gates key on is_ecall and on no kind selector, which is why no ecall
+                      kind needs an address rule of its own for these three and why adding
+                      a kind adds none: it is an ecall row and takes the ecall frame.
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-148     rs1_value_masked — an absent rs1 reads 0                        Quadratic, degree 2
+154     arg1_addr_rule — the first argument query reads a1             Quadratic, degree 2
+155     arg2_addr_rule — the second reads a2                                            S25
+        code  add_sub::fixed_addr_rule(SLOT_ARG1, A1), and fixed_addr_rule(SLOT_ARG2, A2)
+
+  154 positional  0 = −11·M[16] + M[16]·M[17]
+      named       0 = arg1_mask·(arg1_addr − 11)
+  155 positional  0 = −12·M[21] + M[21]·M[22]
+      named       0 = arg2_mask·(arg2_addr − 12)
+
+  reads as  a1 is x11 and a2 is x12, the ABI's argument registers (ecall-abi.md §2), and
+            the two literals are A1 and A2 in add_sub.rs. These are addr_rule's shape with
+            the decoded register dropped: a system row's decoded rs1, rs2 and rd are 0 and
+            it has no decoded a1 or a2 at all, so there is nothing to add the constant to.
+            The gates key on the query's own mask and not on the selectors, so a row that
+            made the query without being a `read` or a `write` is refused by 146 and 147
+            rather than here.
+
+────────────────────────────────────────────────────────────────────────────────────────────
+156     rs1_value_masked — an absent rs1 reads 0                        Quadratic, degree 2
         code  add_sub::value_masked(1)
 
   positional  0 = M[9] − M[6]·M[9]
   named       0 = (1 − rs1_mask)·rs1_read_value
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-149     rs2_value_masked — an absent rs2 reads 0                        Quadratic, degree 2
+157     rs2_value_masked — an absent rs2 reads 0                        Quadratic, degree 2
         code  value_masked(2)
 
   positional  0 = M[14] − M[11]·M[14]
   named       0 = (1 − rs2_mask)·rs2_read_value
 
-  reads as (148, 149)  the sum gate can add both operands on every kind: an addi row's
+  reads as (156, 157)  the sum gate can add both operands on every kind: an addi row's
                        absent rs2, and an auipc row's absent rs1 and rs2, add 0.
+                       **The arg1 and arg2 queries have no such gate**, and need none:
+                       nothing sums their values, and what reads them — 158 and 159 — is
+                       gated by ram_mask, which is 0 wherever they are absent.
+
+────────────────────────────────────────────────────────────────────────────────────────────
+158     ram_addr_is_the_buffer — a read writes at the pointer it got   Quadratic, degree 2
+        code  add_sub::artifact                                                         S25
+
+  positional  0 = M[26]·M[27] − M[26]·M[19]
+  named       0 = ram_mask·(ram_addr − arg1_read_value)
+
+────────────────────────────────────────────────────────────────────────────────────────────
+159     read_count_is_one_word — and asks for exactly one word         Quadratic, degree 2
+        code  add_sub::artifact                                                         S25
+
+  positional  0 = −4·M[26] + M[26]·M[24]
+  named       0 = ram_mask·(arg2_read_value − 4)
+
+  reads as (158, 159)  **this is the whole confinement of a provable `read`.** Its RAM query
+                       sits on the same row as the a1 and a2 it is held against — slot 2 for
+                       the arguments, slot 3 for the word — so both gates are degree 2 over
+                       cells of one row and nothing crosses a row boundary. The literal 4 is
+                       ecall::READ_WORD_BYTES.
+
+                       What this does **not** fix is deliberate. The word delivered
+                       (ram_write_value, bounded below 2^32 by the range pair and free
+                       otherwise) is host input: fd 0 is nondeterministic prover advice
+                       (ecall-abi.md §2), and the bytes are tied to the statement by the
+                       guest's own io_digest and not by this row. The buffer's alignment and
+                       residence are the memory argument's: every RAM address a window
+                       initializes is 4-aligned, so a query at an unaligned address, or at an
+                       address in no window the statement lists, reads a tuple nothing wrote
+                       and cannot balance.
+
+                       The alternative S14 open question 10 offered — a transfer cycle per
+                       word, bounded to [buf, buf + count) by re-reading a1, a2 and a7 — was
+                       not implementable here: a transfer row is a *different* row from its
+                       ecall, and this arithmetization has no cross-row constraint to hold
+                       the two together. A transfer row permitted but not constrained against
+                       its ecall's buffer can write any value to any RAM word, which is the
+                       wall S24 recorded (shard-proof.md §8.5).
 ```
 
-**D. What the row computes (150–161)**
+**D. What the row computes (160–171)**
 
 ```text
 ────────────────────────────────────────────────────────────────────────────────────────────
-150     add_addi_auipc — the three sums, one gate                       Quadratic, degree 2
+160     add_addi_auipc — the three sums, one gate                       Quadratic, degree 2
         code  add_sub::artifact, the `sum` loop over [KIND_ADD, KIND_ADDI, KIND_AUIPC]
 
-  positional  0 = W[20]·M[9] + W[20]·M[14] + W[20]·W[15] − W[20]·W[10] − 2^32·W[20]·W[28]
-                + W[18]·M[9] + W[18]·M[14] + W[18]·W[15] − W[18]·W[10] − 2^32·W[18]·W[28]
-                + W[19]·M[9] + W[19]·M[14] + W[19]·W[15] − W[19]·W[10] − 2^32·W[19]·W[28]
+  positional  0 = W[20]·M[9] + W[20]·M[14] + W[20]·W[15] − W[20]·W[10] − 2^32·W[20]·W[31]
+                + W[18]·M[9] + W[18]·M[14] + W[18]·W[15] − W[18]·W[10] − 2^32·W[18]·W[31]
+                + W[19]·M[9] + W[19]·M[14] + W[19]·W[15] − W[19]·W[10] − 2^32·W[19]·W[31]
                 + W[19]·M[4]
   named, factored
     0 =   kind_add   · ( rs1_read_value + rs2_read_value + decoded_imm − rd_selected − 2^32·wrap )
@@ -1271,38 +1435,43 @@ factored where that is easier to read. Every factoring re-expands to the stored 
             its carry: both addends are below 2^32, so the sum is below 2^33.
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-151     sub — the difference                                            Quadratic, degree 2
+161     sub — the difference                                            Quadratic, degree 2
         code  add_sub::artifact
 
-  positional  0 = W[21]·M[9] − W[21]·M[14] − W[21]·W[10] + 2^32·W[21]·W[28]
+  positional  0 = W[21]·M[9] − W[21]·M[14] − W[21]·W[10] + 2^32·W[21]·W[31]
   named       0 = kind_sub·(rs1_read_value − rs2_read_value − rd_selected + 2^32·wrap)
 
   reads as  rs1 − rs2 = sel − 2^32·wrap: wrap is the borrow.
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-152     lui — the loaded value                                          Quadratic, degree 2
+162     lui — the loaded value                                          Quadratic, degree 2
         code  add_sub::artifact
 
   positional  0 = W[22]·W[15] − W[22]·W[10]
   named       0 = kind_lui·(decoded_imm − rd_selected)
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-153     exit_status — the exit row writes a0 back                       Quadratic, degree 2
+163     exit_status — the exit row writes a0 back                       Quadratic, degree 2
         code  add_sub::artifact                                                     amended
 
   positional  0 = W[23]·M[34] − W[23]·W[10] − W[25]·M[34] + W[25]·W[10]
                   − W[26]·M[34] + W[26]·W[10] − W[27]·M[34] + W[27]·W[10]
-  named       0 = (is_ecall − is_deleg_9 − is_deleg_10 − is_deleg_11)
+                  − W[28]·M[34] + W[28]·W[10] − W[29]·M[34] + W[29]·W[10]
+  named       0 = (is_ecall − is_deleg_9 − is_deleg_10 − is_deleg_11 − is_read − is_write)
                   · (rd_read_value − rd_selected)
 
   reads as  the exit row's result is a0 as read, and its rd query is x10, so x10's final
             value is the exit status verify_shard's step 10 compares with v_10. A delegation
-            row of any type is subtracted out here and answered by 154 instead: it writes 0
-            into a0, not a0 back (delegation.md §2). Same shape as 137's amendment, same
-            reason, and a new type costs it two more products and no degree.
+            row of any type is subtracted out here and answered by 164 instead: it writes 0
+            into a0, not a0 back (delegation.md §2). **A `read` and a `write` are subtracted
+            out and answered by nothing**: each writes the byte count it moved into a0, and
+            that count is host advice no gate can fix — it is the value the SDK's loop reads
+            to decide whether the stream ended (ecall-abi.md §4). Same shape as 143's
+            amendment, same reason, and a new ecall kind costs it two more products and no
+            degree.
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-154     deleg_writes_no_register — a delegation answers 0               Quadratic, degree 2
+164     deleg_writes_no_register — a delegation answers 0               Quadratic, degree 2
         code  add_sub::artifact                                                         S21
 
   positional  0 = M[36]·W[10]
@@ -1310,26 +1479,26 @@ factored where that is easier to read. Every factoring re-expands to the stored 
 
   reads as  on a delegation row rd_selected is 0, so with 115 the rd query writes 0 into a0 —
             the frozen answer of every delegation call on an executor that has the circuit
-            (delegation.md §2). This is the first of the three request-side zeroings; 155 and
-            156 are the other two. All three key on deleg_mask and not on a type flag, so
+            (delegation.md §2). This is the first of the three request-side zeroings; 165 and
+            166 are the other two. All three key on deleg_mask and not on a type flag, so
             they are one gate apiece however many types there are.
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-155     deleg_read_ts_zero — the mirror query reads the answer tuple    Quadratic, degree 2
+165     deleg_read_ts_zero — the mirror query reads the answer tuple    Quadratic, degree 2
         code  add_sub::artifact                                                         S21
 
   positional  0 = M[36]·M[38]
   named       0 = deleg_mask·deleg_read_ts
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-156     deleg_read_value_zero                                           Quadratic, degree 2
+166     deleg_read_value_zero                                           Quadratic, degree 2
         code  add_sub::artifact                                                         S21
 
   positional  0 = M[36]·M[39]
   named       0 = deleg_mask·deleg_read_value
 
-  reads as (155, 156)  the tuple the request reads is T(deleg_space, deleg_addr, 0, 0)
-                       exactly, and 158 is what fixes deleg_space. Only an invocation writes
+  reads as (165, 166)  the tuple the request reads is T(deleg_space, deleg_addr, 0, 0)
+                       exactly, and 168 is what fixes deleg_space. Only an invocation writes
                        a timestamp-0 tuple in its own space, and it writes one per row, so
                        the read pairs with an invocation of the type it named and with
                        nothing else.
@@ -1338,18 +1507,18 @@ factored where that is easier to read. Every factoring re-expands to the stored 
                        tag (delegation.md §5.2, §5.3).
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-157     deleg_addr_rule — the mirror is at the frame base handed over   Quadratic, degree 2
+167     deleg_addr_rule — the mirror is at the frame base handed over   Quadratic, degree 2
         code  add_sub::artifact                                                         S21
 
   positional  0 = M[36]·M[37] − M[36]·M[14]
   named       0 = deleg_mask·(deleg_addr − rs2_read_value)
 
   reads as  the anchor's address is the a0 the request passed — the same a0 the rs2 query
-            read at slot 2 and gate 146 pinned to register 10. So the invocation that answers
+            read at slot 2 and gate 152 pinned to register 10. So the invocation that answers
             this request permutes the frame at this pointer and no other (delegation.md §5.1).
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-158     deleg_space_rule — the mirror's leaf names the requested type   Linear, degree 1
+168     deleg_space_rule — the mirror's leaf names the requested type   Linear, degree 1
         code  add_sub::artifact                                                         S23
 
   positional  0 = M[41] − 4·W[25] − 5·W[26] − 6·W[27]
@@ -1363,49 +1532,59 @@ factored where that is easier to read. Every factoring re-expands to the stored 
             (memory.md §8, delegation.md §5.1, §10.1). Ungated and degree 1, so it holds on
             every row of the shard — on a row requesting nothing it forces deleg_space = 0,
             because each is_deleg_t is 0 unless is_ecall is 1 and is_ecall is 0 on a padding
-            row. With 144 it is the whole of "which delegation, if any, this row asks for".
+            row. With 150 it is the whole of "which delegation, if any, this row asks for".
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-159     wrap_boolean          0 = W[28] − W[28]·W[28]      0 = wrap − wrap²
-160     pc_wrap_boolean       0 = W[30] − W[30]·W[30]      0 = pc_wrap − pc_wrap²
+169     wrap_boolean          0 = W[31] − W[31]·W[31]      0 = wrap − wrap²
+170     pc_wrap_boolean       0 = W[33] − W[33]·W[33]      0 = pc_wrap − pc_wrap²
         Quadratic, degree 2; code  add_sub::booleanity
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-161     next_pc_rule — the fall-through, or HALT_PC on the exit row     Quadratic, degree 2
+171     next_pc_rule — the fall-through, or HALT_PC on the exit row     Quadratic, degree 2
         code  add_sub::artifact                                                     amended
 
-  positional  0 = M[5] + 2^32·W[30] − W[11] − W[23] + W[25] + W[26] + W[27]
+  positional  0 = M[5] + 2^32·W[33] − W[11] − W[23] + W[25] + W[26] + W[27] + W[28] + W[29]
                   + W[23]·W[11] − W[25]·W[11] − W[26]·W[11] − W[27]·W[11]
+                  − W[28]·W[11] − W[29]·W[11]
   named       0 = pc_write_value + 2^32·pc_wrap
-                  − (1 − is_ecall + is_deleg_9 + is_deleg_10 + is_deleg_11)·decoded_next_pc
-                  − HALT_PC·(is_ecall − is_deleg_9 − is_deleg_10 − is_deleg_11)
+                  − (1 − is_ecall + is_deleg_9 + is_deleg_10 + is_deleg_11
+                       + is_read + is_write)·decoded_next_pc
+                  − HALT_PC·(is_ecall − is_deleg_9 − is_deleg_10 − is_deleg_11
+                             − is_read − is_write)
                                                                       (HALT_PC = 1)
 
   reads as  next_pc + 2^32·pc_wrap is decoded_next_pc on every row but the exit row, and 1
-            (HALT_PC) there. **A delegation row falls through, whatever its type**: its two
-            terms put it back on the decoded_next_pc branch, because a delegation call
-            returns to pc + 4 and the program goes on (delegation.md §2); a new type costs
-            one linear term and one product and no degree. On a live row decoded_next_pc
-            is the table's fall-through, bound by decode_row; on a padding row nothing else
+            (HALT_PC) there. **A delegation row falls through, whatever its type, and so do
+            a `read` and a `write`**: their two terms apiece put them back on the
+            decoded_next_pc branch, because each of those calls returns to pc + 4 and the
+            program goes on (delegation.md §2, ecall-abi.md §4); a new ecall kind costs one
+            linear term and one product and no degree. **Since S25 that is the whole of pc
+            advance in this family**: no row of the machine holds next_pc = pc any more, the
+            transfer cycle having been removed, so `execution-trace.md` §5's formula lost its
+            transfer term and this gate did not gain one. On a live row decoded_next_pc is
+            the table's fall-through, bound by decode_row; on a padding row nothing else
             binds decoded_next_pc, so it and next_pc are free together (the honest fill
             writes 0 in both). next_pc is range-checked below 2^32 on a live row and the
             fall-through is below 2^31, so pc_wrap is 0 on every live row.
 ```
 
-Of the 62 gates, 10 are degree 1: the four write-backs, `decoded_mask_bits`, `system_split`,
-the three `arg1`/`arg2`/`ram` mask rules and S23's `deleg_space_rule`. **Every gate S23 added or
-amended is degree 2, and `deleg_space_rule` is degree 1** — the seven new gates and the four
-amended ones (137, 144, 153 and 161) raised no degree anywhere, exactly as S21's eight did not:
-each amendment gained terms on an existing product's *other* factor, never a third factor, and
-`deleg_space_rule` adds only literal-weighted columns. That is what makes a registered
-delegation type cost three gates and a handful of terms rather than a gate list: a type flag
-multiplies nothing but `is_ecall`, `pc_mask`, `rd_read_value`, `rd_selected`, `rs1_read_value`
-and `decoded_next_pc`, each of which some gate already multiplies. All 62 have constant 0, so
-each is 0 on the all-zero row, and the private `memory::assemble` records
-`zero_row_valid = true` (`build::zero_on_zero_row`). The padding row itself is all zeros in
-every assembled artifact (`build::assemble`), whatever its gates.
+Of the 72 gates, **7 are degree 1**: the four write-backs, `decoded_mask_bits`, `system_split`
+and S23's `deleg_space_rule`. It was 10 until S25, when the three `arg1`/`arg2`/`ram` mask
+rules stopped being the literal `m_q = 0` and became ordinary degree-2 mask rules. **Every gate
+S23 and S25 added or amended is degree 2** — S23's seven new and four amended (137, 144, 153
+and 161 in its numbering), S25's ten new and three amended (143, 163 and 171) — and so was
+every one of S21's eight: each amendment gained terms on an existing product's *other* factor,
+never a third factor, and `deleg_space_rule` adds only literal-weighted columns. That is what
+makes a registered ecall kind cost three gates and a handful of terms rather than a gate list:
+a kind selector multiplies nothing but `is_ecall`, `pc_mask`, `rd_read_value`, `rd_selected`,
+`rs1_read_value` and `decoded_next_pc`, each of which some gate already multiplies. **S25's two
+confinement gates are the only new products over cells no gate multiplied before**, and both
+are `ram_mask` against a frame column of the same row. All 72 have constant 0, so each is 0 on
+the all-zero row, and the private `memory::assemble` records `zero_row_valid = true`
+(`build::zero_on_zero_row`). The padding row itself is all zeros in every assembled artifact
+(`build::assemble`), whatever its gates.
 
-### 3.6 The 21 lookups
+### 3.6 The 23 lookups
 
 `CircuitArtifact::lookups`, in order. The frame's 16 come from the private
 `memory::gap_lookups`; the rest from `add_sub::artifact` (`range16`, `low_half` and the inline
@@ -1429,11 +1608,13 @@ every assembled artifact (`build::assemble`), whatever its gates.
 | 13 | `gap_lo_rd` | `TIMESTAMP` | `M[31]` | `4·M[0] − M[33] − 2^19·W[6] + 2` | `4·cycle − rd_read_ts − 2^19·rd_gap_hi + 2` | `< 2^19` |
 | 14 | `gap_hi_deleg` | `TIMESTAMP` | `M[36]` | `W[7]` | `deleg_gap_hi` | `< 2^19` |
 | 15 | `gap_lo_deleg` | `TIMESTAMP` | `M[36]` | `4·M[0] − M[38] − 2^19·W[7] + 2` | `4·cycle − deleg_read_ts − 2^19·deleg_gap_hi + 2` | `< 2^19` |
-| 16 | `rd_hi_range` | `RANGE16` (1) | `M[1]` | `W[29]` | `rd_hi` | `< 2^16` |
-| 17 | `rd_lo_range` | `RANGE16` | `M[1]` | `W[10] − 2^16·W[29]` | `rd_selected − 2^16·rd_hi` | `< 2^16` |
-| 18 | `next_pc_hi_range` | `RANGE16` | `M[1]` | `W[31]` | `next_pc_hi` | `< 2^16` |
-| 19 | `next_pc_lo_range` | `RANGE16` | `M[1]` | `M[5] − 2^16·W[31]` | `pc_write_value − 2^16·next_pc_hi` | `< 2^16` |
-| 20 | `decode_row` | `DECODER` (3) | `M[1]` | `(M[4], W[11], W[12], W[13], W[14], W[15], W[16])` | `(pc_read_value, decoded_next_pc, decoded_rs1, decoded_rs2, decoded_rd, decoded_imm, decoded_mask)` | a row of `S[0..7]` |
+| 16 | `rd_hi_range` | `RANGE16` (1) | `M[1]` | `W[32]` | `rd_hi` | `< 2^16` |
+| 17 | `rd_lo_range` | `RANGE16` | `M[1]` | `W[10] − 2^16·W[32]` | `rd_selected − 2^16·rd_hi` | `< 2^16` |
+| 18 | `next_pc_hi_range` | `RANGE16` | `M[1]` | `W[34]` | `next_pc_hi` | `< 2^16` |
+| 19 | `next_pc_lo_range` | `RANGE16` | `M[1]` | `M[5] − 2^16·W[34]` | `pc_write_value − 2^16·next_pc_hi` | `< 2^16` |
+| 20 | `ram_value_hi_range` | `RANGE16` | `M[1]` | `W[30]` | `ram_value_hi` | `< 2^16` |
+| 21 | `ram_value_lo_range` | `RANGE16` | `M[1]` | `M[30] − 2^16·W[30]` | `ram_write_value − 2^16·ram_value_hi` | `< 2^16` |
+| 22 | `decode_row` | `DECODER` (3) | `M[1]` | `(M[4], W[11], W[12], W[13], W[14], W[15], W[16])` | `(pc_read_value, decoded_next_pc, decoded_rs1, decoded_rs2, decoded_rd, decoded_imm, decoded_mask)` | a row of `S[0..7]` |
 
 Read in pairs: `gap_hi_<q>` and `gap_lo_<q>` together say
 `gap = 4·cycle + Δ_q − <q>_read_ts − 1 = lo + 2^19·hi` lies in `[0, 2^38)`, so the read strictly
@@ -1441,17 +1622,26 @@ precedes its own write. `rd_hi_range` and `rd_lo_range` bound `rd_selected` belo
 the `next_pc` pair bounds the next pc the same way (`memory.md` §7's range convention).
 **Lookups 14 and 15 are S21's**, and the `deleg` query is bounded exactly as the seven before
 it: the pair is what makes the mirror query's read obey the clock like any other, even though
-the timestamp it reads is the literal 0 (§3.5, gate 155). **S23 added no lookup and moved
+the timestamp it reads is the literal 0 (§3.5, gate 165). **S23 added no lookup and moved
 none**: a delegation type is a selector, a tag and three gates, and none of the three is a
 key of any channel.
+
+**Lookups 20 and 21 are S25's**, and they are S19's write-side induction applied to the one
+value this family writes to RAM. The word a `read` delivers is **computed**, not copied — it
+comes from the prover's fd 0 stream and from no register — so it carries a local 16+16 bound
+like every other computed write, and the RAM side of the induction then follows from the
+register side (`memory-ops.md` §5, and this page's §15). Their selector is `pc_mask`, not
+`ram_mask`, so the bound holds on every live row; on a row with no RAM query
+`ram_write_value` and `ram_value_hi` are both 0 and both obligations read 0, which the table
+holds.
 
 The channels, `add_sub::channels()`, in output order:
 
 | outputs | channel | id | table | multiplicity | obligations | fractions, padded |
 | --- | --- | --- | --- | --- | --- | --- |
-| 2, 3 | `TIMESTAMP` | 0 | `V[range19]` | `W[32]` | **16** | **32** |
-| 4, 5 | `RANGE16` | 1 | `V[range16]` | `W[33]` | 4 | 8 |
-| 6, 7 | `DECODER` | 3 | `S[0..7]` | `W[34]` | 1 | 2 |
+| 2, 3 | `TIMESTAMP` | 0 | `V[range19]` | `W[35]` | **16** | **32** |
+| 4, 5 | `RANGE16` | 1 | `V[range16]` | `W[36]` | **6** | 8 |
+| 6, 7 | `DECODER` | 3 | `S[0..7]` | `W[37]` | 1 | 2 |
 
 **The timestamp tree's padding is where S21's two new obligations cost a gate list.** Sixteen
 obligations and one table fraction is 17 leaves, one past a 16-leaf tree, so the tree pads to 32
@@ -1472,83 +1662,87 @@ fraction-node pair (§0.6), `copy` a `Linear` copy of each column. A fraction no
 two columns named `<node>_num` and `<node>_den` (relations `define_<node>_num` and
 `define_<node>_den`), as in §3.4; a product node is one column named `<node>`.
 
-**`L2`, gate list 1, 50 columns, relations 162–211.**
+**`L2`, gate list 1, 50 columns, relations 172–221.**
 
 | `L2` | relations | node | formula |
 | --- | --- | --- | --- |
-| 0 | 162 | `read_2_0` | `read_pc · read_rs1` |
-| 1 | 163 | `read_2_1` | `read_rs2 · read_arg1` |
-| 2 | 164 | `read_2_2` | `read_arg2 · read_ram` |
-| 3 | 165 | `read_2_3` | `read_rd · read_deleg` |
-| 4 | 166 | `write_2_0` | `write_pc · write_rs1` |
-| 5 | 167 | `write_2_1` | `write_rs2 · write_arg1` |
-| 6 | 168 | `write_2_2` | `write_arg2 · write_ram` |
-| 7 | 169 | `write_2_3` | `write_rd · write_deleg` |
-| 8, 9 | 170, 171 | `timestamp_2_0` | `timestamp_table + gap_hi_pc` |
-| 10, 11 | 172, 173 | `timestamp_2_1` | `gap_lo_pc + gap_hi_rs1` |
-| 12, 13 | 174, 175 | `timestamp_2_2` | `gap_lo_rs1 + gap_hi_rs2` |
-| 14, 15 | 176, 177 | `timestamp_2_3` | `gap_lo_rs2 + gap_hi_arg1` |
-| 16, 17 | 178, 179 | `timestamp_2_4` | `gap_lo_arg1 + gap_hi_arg2` |
-| 18, 19 | 180, 181 | `timestamp_2_5` | `gap_lo_arg2 + gap_hi_ram` |
-| 20, 21 | 182, 183 | `timestamp_2_6` | `gap_lo_ram + gap_hi_rd` |
-| 22, 23 | 184, 185 | `timestamp_2_7` | `gap_lo_rd + gap_hi_deleg` |
-| 24, 25 | 186, 187 | `timestamp_2_8` | `gap_lo_deleg + timestamp_pad_0` |
-| 26, 27 … 38, 39 | 188, 189 … 200, 201 | `timestamp_2_9` … `timestamp_2_15` | `timestamp_pad_{2i−17} + timestamp_pad_{2i−16}`, two pads apiece |
-| 40, 41 | 202, 203 | `range16_2_0` | `range16_table + rd_hi_range` |
-| 42, 43 | 204, 205 | `range16_2_1` | `rd_lo_range + next_pc_hi_range` |
-| 44, 45 | 206, 207 | `range16_2_2` | `next_pc_lo_range + range16_pad_0` |
-| 46, 47 | 208, 209 | `range16_2_3` | `range16_pad_1 + range16_pad_2` |
-| 48, 49 | 210, 211 | `decoder_2_0` | `decoder_table + decode_row` |
+| 0 | 172 | `read_2_0` | `read_pc · read_rs1` |
+| 1 | 173 | `read_2_1` | `read_rs2 · read_arg1` |
+| 2 | 174 | `read_2_2` | `read_arg2 · read_ram` |
+| 3 | 175 | `read_2_3` | `read_rd · read_deleg` |
+| 4 | 176 | `write_2_0` | `write_pc · write_rs1` |
+| 5 | 177 | `write_2_1` | `write_rs2 · write_arg1` |
+| 6 | 178 | `write_2_2` | `write_arg2 · write_ram` |
+| 7 | 179 | `write_2_3` | `write_rd · write_deleg` |
+| 8, 9 | 180, 181 | `timestamp_2_0` | `timestamp_table + gap_hi_pc` |
+| 10, 11 | 182, 183 | `timestamp_2_1` | `gap_lo_pc + gap_hi_rs1` |
+| 12, 13 | 184, 185 | `timestamp_2_2` | `gap_lo_rs1 + gap_hi_rs2` |
+| 14, 15 | 186, 187 | `timestamp_2_3` | `gap_lo_rs2 + gap_hi_arg1` |
+| 16, 17 | 188, 189 | `timestamp_2_4` | `gap_lo_arg1 + gap_hi_arg2` |
+| 18, 19 | 190, 191 | `timestamp_2_5` | `gap_lo_arg2 + gap_hi_ram` |
+| 20, 21 | 192, 193 | `timestamp_2_6` | `gap_lo_ram + gap_hi_rd` |
+| 22, 23 | 194, 195 | `timestamp_2_7` | `gap_lo_rd + gap_hi_deleg` |
+| 24, 25 | 196, 197 | `timestamp_2_8` | `gap_lo_deleg + timestamp_pad_0` |
+| 26, 27 … 38, 39 | 198, 199 … 210, 211 | `timestamp_2_9` … `timestamp_2_15` | `timestamp_pad_{2i−17} + timestamp_pad_{2i−16}`, two pads apiece |
+| 40, 41 | 212, 213 | `range16_2_0` | `range16_table + rd_hi_range` |
+| 42, 43 | 214, 215 | `range16_2_1` | `rd_lo_range + next_pc_hi_range` |
+| 44, 45 | 216, 217 | `range16_2_2` | `next_pc_lo_range + ram_value_hi_range` |
+| 46, 47 | 218, 219 | `range16_2_3` | `ram_value_lo_range + range16_pad_0` |
+| 48, 49 | 220, 221 | `decoder_2_0` | `decoder_table + decode_row` |
 
 Positionally, `timestamp_2_0` is `L{2}[8] = L{1}[16]·L{1}[19] + L{1}[18]·L{1}[17]` and
 `L{2}[9] = L{1}[17]·L{1}[19]`: `−mult/(T + g) + 1/(E_gap_hi_pc + g)`, the node `lookup.md` §6
 puts first on purpose. The `read_2_3` and `write_2_3` nodes are the ones that changed shape at
-S21: they were `read_rd · read_pad_0` and now multiply two real leaves.
+S21: they were `read_rd · read_pad_0` and now multiply two real leaves. `range16_2_2` and
+`range16_2_3` are the ones that changed at S25, for the same kind of reason: two of the three
+pads they combined became real obligations, and **not one relation number here moved because
+of it** — the ten that moved are gate list 0's ten new enforcing gates, which shifted every
+number from 172 up by ten.
 
-**`L3`, gate list 2, 26 columns, relations 212–237.**
+**`L3`, gate list 2, 26 columns, relations 222–247.**
 
 | `L3` | relations | node | formula |
 | --- | --- | --- | --- |
-| 0 | 212 | `read_3_0` | `read_2_0 · read_2_1` |
-| 1 | 213 | `read_3_1` | `read_2_2 · read_2_3` |
-| 2 | 214 | `write_3_0` | `write_2_0 · write_2_1` |
-| 3 | 215 | `write_3_1` | `write_2_2 · write_2_3` |
-| 4, 5 … 18, 19 | 216, 217 … 230, 231 | `timestamp_3_0` … `timestamp_3_7` | `timestamp_2_{2i} + timestamp_2_{2i+1}` |
-| 20, 21 | 232, 233 | `range16_3_0` | `range16_2_0 + range16_2_1` |
-| 22, 23 | 234, 235 | `range16_3_1` | `range16_2_2 + range16_2_3` |
-| 24, 25 | 236, 237 | `decoder_3_0` | copy of `decoder_2_0` |
+| 0 | 222 | `read_3_0` | `read_2_0 · read_2_1` |
+| 1 | 223 | `read_3_1` | `read_2_2 · read_2_3` |
+| 2 | 224 | `write_3_0` | `write_2_0 · write_2_1` |
+| 3 | 225 | `write_3_1` | `write_2_2 · write_2_3` |
+| 4, 5 … 18, 19 | 226, 227 … 240, 241 | `timestamp_3_0` … `timestamp_3_7` | `timestamp_2_{2i} + timestamp_2_{2i+1}` |
+| 20, 21 | 242, 243 | `range16_3_0` | `range16_2_0 + range16_2_1` |
+| 22, 23 | 244, 245 | `range16_3_1` | `range16_2_2 + range16_2_3` |
+| 24, 25 | 246, 247 | `decoder_3_0` | copy of `decoder_2_0` |
 
-**`L4`, gate list 3, 14 columns, relations 238–251.**
+**`L4`, gate list 3, 14 columns, relations 248–261.**
 
 | `L4` | relations | node | formula |
 | --- | --- | --- | --- |
-| 0 | 238 | `read_4_0` | `read_3_0 · read_3_1` |
-| 1 | 239 | `write_4_0` | `write_3_0 · write_3_1` |
-| 2, 3 … 8, 9 | 240, 241 … 246, 247 | `timestamp_4_0` … `timestamp_4_3` | `timestamp_3_{2i} + timestamp_3_{2i+1}` |
-| 10, 11 | 248, 249 | `range16_4_0` | `range16_3_0 + range16_3_1` |
-| 12, 13 | 250, 251 | `decoder_4_0` | copy of `decoder_3_0` |
+| 0 | 248 | `read_4_0` | `read_3_0 · read_3_1` |
+| 1 | 249 | `write_4_0` | `write_3_0 · write_3_1` |
+| 2, 3 … 8, 9 | 250, 251 … 256, 257 | `timestamp_4_0` … `timestamp_4_3` | `timestamp_3_{2i} + timestamp_3_{2i+1}` |
+| 10, 11 | 258, 259 | `range16_4_0` | `range16_3_0 + range16_3_1` |
+| 12, 13 | 260, 261 | `decoder_4_0` | copy of `decoder_3_0` |
 
-**`L5`, gate list 4, 10 columns, relations 252–261.**
+**`L5`, gate list 4, 10 columns, relations 262–271.**
 
 | `L5` | relations | node | formula |
 | --- | --- | --- | --- |
-| 0 | 252 | `read_5_0` | copy of `read_4_0` |
-| 1 | 253 | `write_5_0` | copy of `write_4_0` |
-| 2, 3 | 254, 255 | `timestamp_5_0` | `timestamp_4_0 + timestamp_4_1` |
-| 4, 5 | 256, 257 | `timestamp_5_1` | `timestamp_4_2 + timestamp_4_3` |
-| 6, 7 | 258, 259 | `range16_5_0` | copy of `range16_4_0` |
-| 8, 9 | 260, 261 | `decoder_5_0` | copy of `decoder_4_0` |
+| 0 | 262 | `read_5_0` | copy of `read_4_0` |
+| 1 | 263 | `write_5_0` | copy of `write_4_0` |
+| 2, 3 | 264, 265 | `timestamp_5_0` | `timestamp_4_0 + timestamp_4_1` |
+| 4, 5 | 266, 267 | `timestamp_5_1` | `timestamp_4_2 + timestamp_4_3` |
+| 6, 7 | 268, 269 | `range16_5_0` | copy of `range16_4_0` |
+| 8, 9 | 270, 271 | `decoder_5_0` | copy of `decoder_4_0` |
 
-**`L6`, gate list 5, 8 columns, relations 262–269** — the row-wise top: one value per row per
+**`L6`, gate list 5, 8 columns, relations 272–279** — the row-wise top: one value per row per
 tree.
 
 | `L6` | relations | node | formula | value at row `y` |
 | --- | --- | --- | --- | --- |
-| 0 | 262 | `read_6_0` | copy of `read_5_0` | the product of row `y`'s 8 read leaves |
-| 1 | 263 | `write_6_0` | copy of `write_5_0` | the product of row `y`'s 8 write leaves |
-| 2, 3 | 264, 265 | `timestamp_6_0` | `timestamp_5_0 + timestamp_5_1` | the sum of row `y`'s 32 timestamp fractions |
-| 4, 5 | 266, 267 | `range16_6_0` | copy of `range16_5_0` | the sum of row `y`'s 8 range16 fractions |
-| 6, 7 | 268, 269 | `decoder_6_0` | copy of `decoder_5_0` | the sum of row `y`'s 2 decoder fractions |
+| 0 | 272 | `read_6_0` | copy of `read_5_0` | the product of row `y`'s 8 read leaves |
+| 1 | 273 | `write_6_0` | copy of `write_5_0` | the product of row `y`'s 8 write leaves |
+| 2, 3 | 274, 275 | `timestamp_6_0` | `timestamp_5_0 + timestamp_5_1` | the sum of row `y`'s 32 timestamp fractions |
+| 4, 5 | 276, 277 | `range16_6_0` | copy of `range16_5_0` | the sum of row `y`'s 8 range16 fractions |
+| 6, 7 | 278, 279 | `decoder_6_0` | copy of `decoder_5_0` | the sum of row `y`'s 2 decoder fractions |
 
 `checker::memory_roots` recomputes the two roots from `L6[0]` and `L6[1]`, the layer the first
 halving list reads.
@@ -1556,7 +1750,7 @@ halving list reads.
 ### 3.8 The halving layers and the outputs
 
 Gate list `k`, for `6 ≤ k ≤ n + 5`, halves layer `k` into layer `k + 1`, which has
-`n + 5 − k` variables. Its eight gates, relation `r = 270 + 8(k − 6)`:
+`n + 5 − k` variables. Its eight gates, relation `r = 280 + 8(k − 6)`:
 
 | `L{k+1}` | relation | node | shape | formula |
 | --- | --- | --- | --- | --- |
@@ -1597,11 +1791,12 @@ ordinary RAM tuples, and its anchor pair cancels against a request's.
 
 ### 3.9 Witness rows
 
-The table shows ten of the seventeen `honest_rows` in `crates/checker/tests/add_sub.rs`. The
-other seven are `add, not carrying`, `sub, not borrowing`, `addi from x0, as c.li` (a 4-byte
+The table shows twelve of the twenty `honest_rows` in `crates/checker/tests/add_sub.rs`. The
+other eight are `add, not carrying`, `sub, not borrowing`, `addi from x0, as c.li` (a 4-byte
 `addi`, despite its name), `auipc, not carrying`, `sub to x0, borrowing`, `nop`
-(`addi x0, x0, 0`) and `c.add, two bytes` (an `add` whose fall-through is `0x10012`); §3.10
-probes all seventeen. Each row is built from Rust's own `u32` arithmetic, and
+(`addi x0, x0, 0`), `c.add, two bytes` (an `add` whose fall-through is `0x10012`) and
+`read at end of stream` (below); §3.10 probes all twenty. Each row is built from Rust's own
+`u32` arithmetic, and
 `every_row_kind_satisfies_every_gate_and_every_bound` holds it to every gate and range
 obligation in CI.
 
@@ -1617,56 +1812,81 @@ them by pc, not by cycle; the table below omits them. Every live row shown has c
 `x29 = x6 − x5`. `C` addi of −1, carrying: `x5 = x5 − 1`. `D` auipc, carrying:
 `x31 = pc + 0xfffff000`. `E` lui: `x6 = 0x12345000`. `F` add into `x0`, carrying. `G` fence.
 `H` exit 42. **`I` keccak delegation request** (S21): `a7 = 0x501`, `a0 = 0x10400`, the frame
-base it hands over, and `a0` written back 0. `P` padding. A `POSEIDON2` or `FR_ARITH` request
-is the same row with `a7` `0x500` or `0x502`, its own selector at `W[26]` or `W[27]` and its
-own tag 5 or 6 at `M[41]`; the suite carries one of the three, the gates being one loop over
-the registry.
+base it hands over, and `a0` written back 0. **`J` read of one word** (S25): `a7 = 63`,
+`a0 = 0` (fd 0), `a1 = 0x10200`, `a2 = 4`, the word at `0x10200` going from `0xdeadbeef` to
+`0x01234567`, and `a0` written back 4 — the count delivered. **`K` write of nine bytes**
+(S25): `a7 = 64`, `a0 = 1` (fd 1), `a1 = 0x10300`, `a2 = 9`, no RAM query, and `a0` written
+back 9. `P` padding. A `POSEIDON2` or `FR_ARITH` request is the same row as `I` with `a7`
+`0x500` or `0x502`, its own selector at `W[26]` or `W[27]` and its own tag 5 or 6 at `M[41]`;
+the suite carries one of the three, the gates being one loop over the registry.
 
-| column | `A` | `B` | `C` | `D` | `E` | `F` | `G` | `H` | `I` | `P` |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `M[0]` `cycle` | 9 | 9 | 9 | 9 | 9 | 9 | 9 | 9 | 9 | 0 |
-| `M[1]` `pc_mask` | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 0 |
-| `M[2]` `pc_addr` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| `M[3]` `pc_read_ts` | 32 | 32 | 32 | 32 | 32 | 32 | 32 | 32 | 32 | 0 |
-| `M[4]` `pc_read_value` | `0x10010` | `0x10010` | `0x10010` | `0x10010` | `0x10010` | `0x10010` | `0x10010` | `0x10010` | `0x10010` | 0 |
-| `M[5]` `pc_write_value` | `0x10014` | `0x10014` | `0x10014` | `0x10014` | `0x10014` | `0x10014` | `0x10014` | 1 | `0x10014` | 0 |
-| `M[6]` `rs1_mask` | 1 | 1 | 1 | 0 | 0 | 1 | 0 | 1 | 1 | 0 |
-| `M[7]` `rs1_addr` | 5 | 6 | 5 | 0 | 0 | 5 | 0 | 17 | 17 | 0 |
-| `M[8]` `rs1_read_ts` | 29 | 29 | 29 | 0 | 0 | 29 | 0 | 29 | 29 | 0 |
-| `M[9]`, `M[10]` `rs1_read_value`, `rs1_write_value` | `0xffffefff` | `0x12345678` | `0xfffff000` | 0 | 0 | `0xffffefff` | 0 | 93 | `0x501` | 0 |
-| `M[11]` `rs2_mask` | 1 | 1 | 0 | 0 | 0 | 1 | 0 | 1 | 1 | 0 |
-| `M[12]` `rs2_addr` | 6 | 5 | 0 | 0 | 0 | 6 | 0 | 10 | 10 | 0 |
-| `M[13]` `rs2_read_ts` | 30 | 30 | 0 | 0 | 0 | 30 | 0 | 30 | 30 | 0 |
-| `M[14]`, `M[15]` `rs2_read_value`, `rs2_write_value` | `0x12345678` | `0xffffefff` | 0 | 0 | 0 | `0x12345678` | 0 | 42 | `0x10400` | 0 |
-| `M[16..31]` arg1, arg2 and ram | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| `M[31]` `rd_mask` | 1 | 1 | 1 | 1 | 1 | 1 | 0 | 1 | 1 | 0 |
-| `M[32]` `rd_addr` | 7 | 29 | 5 | 31 | 6 | 0 | 0 | 10 | 10 | 0 |
-| `M[33]` `rd_read_ts` | 31 | 31 | 31 | 31 | 31 | 31 | 0 | 31 | 31 | 0 |
-| `M[34]` `rd_read_value` | 3 | 1 | `0xfffff000` | 0 | 0 | 0 | 0 | 42 | 7 | 0 |
-| `M[35]` `rd_write_value` | `0x12344677` | `0x12346679` | `0xffffefff` | `0xf010` | `0x12345000` | 0 | 0 | 42 | 0 | 0 |
-| `M[36]` `deleg_mask` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 |
-| `M[37]` `deleg_addr` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | `0x10400` | 0 |
-| `M[38]`, `M[39]`, `M[40]` `deleg_read_ts`, `deleg_read_value`, `deleg_write_value` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| `M[41]` `deleg_space` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 4 | 0 |
-| `W[0..8]` `<q>_gap_hi` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| `W[8]` `rd_inv` | `7⁻¹` | `29⁻¹` | `5⁻¹` | `31⁻¹` | `6⁻¹` | 0 | 0 | `10⁻¹` | `10⁻¹` | 0 |
-| `W[9]` `rd_is_zero` | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 |
-| `W[10]` `rd_selected` | `0x12344677` | `0x12346679` | `0xffffefff` | `0xf010` | `0x12345000` | `0x12344677` | 0 | 42 | 0 | 0 |
-| `W[11]` `decoded_next_pc` | `0x10014` | `0x10014` | `0x10014` | `0x10014` | `0x10014` | `0x10014` | `0x10014` | `0x10014` | `0x10014` | 0 |
-| `W[12]` `decoded_rs1` | 5 | 6 | 5 | 0 | 0 | 5 | 0 | 0 | 0 | 0 |
-| `W[13]` `decoded_rs2` | 6 | 5 | 0 | 0 | 0 | 6 | 0 | 0 | 0 | 0 |
-| `W[14]` `decoded_rd` | 7 | 29 | 5 | 31 | 6 | 0 | 0 | 0 | 0 | 0 |
-| `W[15]` `decoded_imm` | 0 | 0 | `0xffffffff` | `0xfffff000` | `0x12345000` | 0 | 2 | 0 | 0 | 0 |
-| `W[16]` `decoded_mask` | 8 | 16 | 2 | 4 | 32 | 8 | 1 | 1 | 1 | 0 |
-| `W[17..23]` the kind bit set | `add` | `sub` | `addi` | `auipc` | `lui` | `add` | `system` | `system` | `system` | none |
-| `W[23]` `is_ecall` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 | 0 |
-| `W[24]` `is_fence` | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
-| `W[25]` `is_deleg_9` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 |
-| `W[26]`, `W[27]` `is_deleg_10`, `is_deleg_11` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| `W[28]` `wrap` | 1 | 1 | 1 | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| `W[29]` `rd_hi` | `0x1234` | `0x1234` | `0xffff` | 0 | `0x1234` | `0x1234` | 0 | 0 | 0 | 0 |
-| `W[30]` `pc_wrap` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| `W[31]` `next_pc_hi` | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 0 | 1 | 0 |
+The suite's third S25 row, **`read at end of stream`**, is `J` with the word at `0x10204`
+left unchanged — `0x11112222` both sides of the query — and `a0` written back 0. It is the
+row that shows why a `read` stages its RAM query even when it moves nothing: `ram_mask_rule`
+demands the query on every `read` row, so the end of a stream is a write-back of what was
+there and not an absent query, and the circuit needs no "did it move anything" selector
+(`ecall-abi.md` §4).
+
+| column | `A` | `B` | `C` | `D` | `E` | `F` | `G` | `H` | `I` | `J` | `K` | `P` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `M[0]` `cycle` | 9 | 9 | 9 | 9 | 9 | 9 | 9 | 9 | 9 | 9 | 9 | 0 |
+| `M[1]` `pc_mask` | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 0 |
+| `M[2]` `pc_addr` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `M[3]` `pc_read_ts` | 32 | 32 | 32 | 32 | 32 | 32 | 32 | 32 | 32 | 32 | 32 | 0 |
+| `M[4]` `pc_read_value` | `0x10010` | `0x10010` | `0x10010` | `0x10010` | `0x10010` | `0x10010` | `0x10010` | `0x10010` | `0x10010` | `0x10010` | `0x10010` | 0 |
+| `M[5]` `pc_write_value` | `0x10014` | `0x10014` | `0x10014` | `0x10014` | `0x10014` | `0x10014` | `0x10014` | 1 | `0x10014` | `0x10014` | `0x10014` | 0 |
+| `M[6]` `rs1_mask` | 1 | 1 | 1 | 0 | 0 | 1 | 0 | 1 | 1 | 1 | 1 | 0 |
+| `M[7]` `rs1_addr` | 5 | 6 | 5 | 0 | 0 | 5 | 0 | 17 | 17 | 17 | 17 | 0 |
+| `M[8]` `rs1_read_ts` | 29 | 29 | 29 | 0 | 0 | 29 | 0 | 29 | 29 | 29 | 29 | 0 |
+| `M[9]`, `M[10]` `rs1_read_value`, `rs1_write_value` | `0xffffefff` | `0x12345678` | `0xfffff000` | 0 | 0 | `0xffffefff` | 0 | 93 | `0x501` | 63 | 64 | 0 |
+| `M[11]` `rs2_mask` | 1 | 1 | 0 | 0 | 0 | 1 | 0 | 1 | 1 | 1 | 1 | 0 |
+| `M[12]` `rs2_addr` | 6 | 5 | 0 | 0 | 0 | 6 | 0 | 10 | 10 | 10 | 10 | 0 |
+| `M[13]` `rs2_read_ts` | 30 | 30 | 0 | 0 | 0 | 30 | 0 | 30 | 30 | 30 | 30 | 0 |
+| `M[14]`, `M[15]` `rs2_read_value`, `rs2_write_value` | `0x12345678` | `0xffffefff` | 0 | 0 | 0 | `0x12345678` | 0 | 42 | `0x10400` | 0 | 1 | 0 |
+| `M[16]` `arg1_mask` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 | 0 |
+| `M[17]` `arg1_addr` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 11 | 11 | 0 |
+| `M[18]` `arg1_read_ts` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 30 | 30 | 0 |
+| `M[19]`, `M[20]` `arg1_read_value`, `arg1_write_value` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | `0x10200` | `0x10300` | 0 |
+| `M[21]` `arg2_mask` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 | 0 |
+| `M[22]` `arg2_addr` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 12 | 12 | 0 |
+| `M[23]` `arg2_read_ts` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 30 | 30 | 0 |
+| `M[24]`, `M[25]` `arg2_read_value`, `arg2_write_value` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 4 | 9 | 0 |
+| `M[26]` `ram_mask` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 |
+| `M[27]` `ram_addr` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | `0x10200` | 0 | 0 |
+| `M[28]` `ram_read_ts` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 31 | 0 | 0 |
+| `M[29]` `ram_read_value` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | `0xdeadbeef` | 0 | 0 |
+| `M[30]` `ram_write_value` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | `0x01234567` | 0 | 0 |
+| `M[31]` `rd_mask` | 1 | 1 | 1 | 1 | 1 | 1 | 0 | 1 | 1 | 1 | 1 | 0 |
+| `M[32]` `rd_addr` | 7 | 29 | 5 | 31 | 6 | 0 | 0 | 10 | 10 | 10 | 10 | 0 |
+| `M[33]` `rd_read_ts` | 31 | 31 | 31 | 31 | 31 | 31 | 0 | 31 | 31 | 31 | 31 | 0 |
+| `M[34]` `rd_read_value` | 3 | 1 | `0xfffff000` | 0 | 0 | 0 | 0 | 42 | 7 | 4 | 9 | 0 |
+| `M[35]` `rd_write_value` | `0x12344677` | `0x12346679` | `0xffffefff` | `0xf010` | `0x12345000` | 0 | 0 | 42 | 0 | 4 | 9 | 0 |
+| `M[36]` `deleg_mask` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
+| `M[37]` `deleg_addr` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | `0x10400` | 0 | 0 | 0 |
+| `M[38]`, `M[39]`, `M[40]` `deleg_read_ts`, `deleg_read_value`, `deleg_write_value` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `M[41]` `deleg_space` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 4 | 0 | 0 | 0 |
+| `W[0..8]` `<q>_gap_hi` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `W[8]` `rd_inv` | `7⁻¹` | `29⁻¹` | `5⁻¹` | `31⁻¹` | `6⁻¹` | 0 | 0 | `10⁻¹` | `10⁻¹` | `10⁻¹` | `10⁻¹` | 0 |
+| `W[9]` `rd_is_zero` | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `W[10]` `rd_selected` | `0x12344677` | `0x12346679` | `0xffffefff` | `0xf010` | `0x12345000` | `0x12344677` | 0 | 42 | 0 | 4 | 9 | 0 |
+| `W[11]` `decoded_next_pc` | `0x10014` | `0x10014` | `0x10014` | `0x10014` | `0x10014` | `0x10014` | `0x10014` | `0x10014` | `0x10014` | `0x10014` | `0x10014` | 0 |
+| `W[12]` `decoded_rs1` | 5 | 6 | 5 | 0 | 0 | 5 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `W[13]` `decoded_rs2` | 6 | 5 | 0 | 0 | 0 | 6 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `W[14]` `decoded_rd` | 7 | 29 | 5 | 31 | 6 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `W[15]` `decoded_imm` | 0 | 0 | `0xffffffff` | `0xfffff000` | `0x12345000` | 0 | 2 | 0 | 0 | 0 | 0 | 0 |
+| `W[16]` `decoded_mask` | 8 | 16 | 2 | 4 | 32 | 8 | 1 | 1 | 1 | 1 | 1 | 0 |
+| `W[17..23]` the kind bit set | `add` | `sub` | `addi` | `auipc` | `lui` | `add` | `system` | `system` | `system` | `system` | `system` | none |
+| `W[23]` `is_ecall` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 | 1 | 1 | 0 |
+| `W[24]` `is_fence` | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 |
+| `W[25]` `is_deleg_9` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
+| `W[26]`, `W[27]` `is_deleg_10`, `is_deleg_11` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `W[28]` `is_read` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 |
+| `W[29]` `is_write` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 |
+| `W[30]` `ram_value_hi` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | `0x123` | 0 | 0 |
+| `W[31]` `wrap` | 1 | 1 | 1 | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `W[32]` `rd_hi` | `0x1234` | `0x1234` | `0xffff` | 0 | `0x1234` | `0x1234` | 0 | 0 | 0 | 0 | 0 | 0 |
+| `W[33]` `pc_wrap` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `W[34]` `next_pc_hi` | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 0 | 1 | 1 | 1 | 0 |
 
 `F` computes the same sum as `A` and writes 0: `rd_selected` still holds the result, and
 `rd_write_masked` masks it. `H`'s decoded fall-through is `0x10014` while its next pc is 1.
@@ -1678,51 +1898,65 @@ names address space 4 in `deleg_space` (`deleg_space_rule`), makes the answer 0
 turns `ecall_is_exit` and `exit_status` off. That is the whole of the delegation row kind, and
 the type is the whole of what one delegation row differs from another by.
 
+**`J`, `K`, `I` and `H` are all the same instruction word**, and that is worth saying plainly:
+`ecall` decodes to one table row, and which of the five kinds a row *is* comes from the `a7`
+its `rs1` query reads and from nothing in the program image. 63 sets `is_read`, which makes
+`a1`, `a2` and the RAM query present (`arg1_mask_rule`, `arg2_mask_rule`, `ram_mask_rule`), the
+RAM address `a1` (`ram_addr_is_the_buffer`) and the count 4 (`read_count_is_one_word`), and
+which turns `ecall_is_exit` and `exit_status` off and puts `next_pc_rule` on the fall-through.
+64 sets `is_write`, which does the same but for the RAM query. The `rd` write differs too and
+no gate says so: `H` writes back the `a0` it read, `I` writes 0, and `J` and `K` write a count
+the host chose.
+
 ### 3.10 What fixes each cell
 
-All seventeen `honest_rows`, probed one cell at a time: a cell is listed below when adding 5 to
+All twenty `honest_rows`, probed one cell at a time: a cell is listed below when adding 5 to
 it alone breaks no gate and no range obligation, evaluated row-locally (as `violated_relations`
 and `violated_lookups` evaluate a row). Adding 5 never probes a boolean column, whose
 booleanity gate refuses 5, so each boolean column was also flipped between 0 and 1; that finds
-two more cells, marked (flip). A cell listed is fixed, if at all, by something that is not
+more cells, marked (flip). A cell listed is fixed, if at all, by something that is not
 row-local: the **memory argument**, when the cell is in a leaf whose mask is 1; the **decoder
 table**, when it is in `decode_row`'s tuple on a live row; or nothing. The multiplicities
-`W[32..35]` appear on every row and are not a row's property at all.
+`W[35..38]` appear on every row and are not a row's property at all.
 
 A read timestamp is a case apart. Its gap obligations hold it only in
 `[4·cycle + Δ_q − 2^38, 4·cycle + Δ_q)`, which the timestamp of any earlier write satisfies, so
 the memory argument alone fixes it. `+5` happens to stay inside a register's synthetic gap of 7,
-so `M[8]`, `M[13]` and `M[33]` show up on every row; the pc's gap is 3, so `M[3]` shows up on
-padding alone, but on a live row a rise of 1 to 3 passes too, and so does a fall to any earlier
-timestamp once `pc_gap_hi` is re-chosen (a fall of less than `2^19 − 3` passes with it unchanged).
+so every `<q>_read_ts` shows up on every row that makes the query; the pc's gap is 3, so `M[3]`
+shows up on padding alone, but on a live row a rise of 1 to 3 passes too, and so does a fall to
+any earlier timestamp once `pc_gap_hi` is re-chosen (a fall of less than `2^19 − 3` passes with
+it unchanged).
 
 | cell | fixed, on the rows that use it, by | rows where less fixes it, or nothing |
 | --- | --- | --- |
-| `M[0]` `cycle` | the memory argument (every write leaf's timestamp), with the gap obligations bounding it below | padding: nothing |
+| `M[0]` `cycle` | the memory argument (every write leaf's timestamp), with the gap obligations bounding it below | padding: nothing, in either direction |
 | `M[1]` `pc_mask` (flip) | its booleanity gate, the mask rules through the row's other masks, and the memory argument | fence: the memory argument alone (1 → 0 breaks no gate, since the row has no other query for a mask rule to tie to it, and it switches every lookup off); padding: 0 → 1 is refused by `gap_lo_pc`, whose gap becomes −1 |
 | `M[2]` `pc_addr` | the memory argument alone: no gate holds it to 0, but a pc chain at any other address has no initial and no final tuple, and cannot balance (`memory.md` §4.2's counting) | padding: nothing |
 | `M[4]` `pc_read_value` | the memory argument and the decoder table; on an auipc row, also `add_addi_auipc` | padding: nothing |
-| `M[3]`, `M[8]`, `M[13]`, `M[33]` read timestamps | the memory argument alone; the gap obligations only hold each below its own write | rows without that query, padding included: nothing |
+| every `<q>_read_ts` — `M[3]`, `M[8]`, `M[13]`, `M[18]`, `M[23]`, `M[28]`, `M[33]`, `M[38]` | the memory argument alone; the gap obligations only hold each below its own write. `M[38]` is `deleg_read_ts_zero`'s besides | rows without that query, padding included: nothing |
 | `M[7]` `rs1_addr` | `rs1_addr_rule` | auipc, lui, fence, padding: nothing |
 | `M[12]` `rs2_addr` | `rs2_addr_rule` | addi (nop included), auipc, lui, fence, padding: nothing |
+| `M[17]` `arg1_addr`, `M[22]` `arg2_addr` | **`arg1_addr_rule`, `arg2_addr_rule`** (S25) | every row but a `read` or a `write`: nothing, the mask being 0 |
+| `M[19]`/`M[20]` and `M[24]`/`M[25]`, each pair moved together | **on a `read` row**: `ram_addr_is_the_buffer` and `read_count_is_one_word` (S25), which read `arg1_read_value` and `arg2_read_value`; on a `write` row and wherever the mask is 1, the memory argument, the two being real reads of `a1` and `a2` | `write` and every row with no `arg` query: nothing but their write-back gate, which a pair moved together keeps |
+| `M[27]` `ram_addr` | **`ram_addr_is_the_buffer`** (S25), and the memory argument | every row but a `read`: nothing, the mask being 0 |
+| `M[29]` `ram_read_value` | the memory argument alone, **on every row including a `read`**: no gate reads it. A `read` overwrites the word, so what was there binds nothing locally | every row: no gate |
+| `M[30]` `ram_write_value` | its `RANGE16` pair, which bounds it below `2^32` but is satisfied by `+5`; then the memory argument, which carries the word to whatever loads it next | every row: nothing row-local refuses `+5` |
 | `M[32]` `rd_addr` | `rd_addr_rule` | fence, padding: nothing |
-| `M[34]` `rd_read_value` | the memory argument; on the exit row, also `exit_status` | fence, **the delegation row**, padding: nothing — `exit_status` is off there, and 154 reads `rd_selected` rather than what `a0` held |
-| `M[17]`, `M[18]`, `M[22]`, `M[23]`, `M[27]`–`M[30]`; `W[3]`, `W[4]`, `W[5]` | nothing: the `arg1`, `arg2` and `ram` masks are 0 on every row | every row |
-| `M[19]`/`M[20]` and `M[24]`/`M[25]`, each pair together | nothing but their write-back gate, which a pair moved together keeps | every row |
+| `M[34]` `rd_read_value` | the memory argument; **on the exit row alone**, also `exit_status` | every other row, padding included: nothing — `exit_status` is off on a delegation, a `read` and a `write`, and 164 reads `rd_selected` rather than what `a0` held |
 | `M[37]` `deleg_addr` | `deleg_addr_rule`, and the memory argument | every row but the delegation row: nothing, the mask being 0 |
-| `M[38]` `deleg_read_ts` | `deleg_read_ts_zero`, with `gap_lo_deleg` | every row but the delegation row: nothing |
 | `M[39]` `deleg_read_value` | `deleg_read_value_zero` | every row but the delegation row: nothing |
 | `M[40]` `deleg_write_value` | the memory argument alone, **on every row including the delegation row**: no gate reads it | every row: no gate |
 | `W[0]` `pc_gap_hi` | its gap obligations | padding: nothing |
-| `W[1]`, `W[2]`, `W[6]`, `W[7]` gap chunks | their gap obligations | rows without that query: nothing |
+| `W[1]`–`W[7]` gap chunks | their gap obligations | rows without that query: nothing |
 | `W[8]` `rd_inv` | `rd_is_zero_inverse`, where `rd_addr ≠ 0` | rows writing `x0` (nop included), fence, padding: nothing |
-| `W[11]` `decoded_next_pc` | `next_pc_rule` and the decoder table | the exit row: the decoder table alone, since `next_pc_rule` cancels it there — **but not the delegation row**, which falls through, so `next_pc_rule` ties it there like any ordinary row; padding: `next_pc_rule` alone, which only ties it to `pc_write_value` and `pc_wrap` |
+| `W[11]` `decoded_next_pc` | `next_pc_rule` and the decoder table | **the exit row alone**: the decoder table, since `next_pc_rule` cancels it there — a delegation, a `read` and a `write` all fall through, so `next_pc_rule` ties it there like any ordinary row; padding: `next_pc_rule` alone, which only ties it to `pc_write_value` and `pc_wrap` |
 | `W[12]` `decoded_rs1` | `rs1_addr_rule` and the decoder table | auipc, lui and fence rows: the decoder table alone; padding: nothing |
 | `W[13]` `decoded_rs2` | `rs2_addr_rule` and the decoder table | addi, auipc, lui and fence rows: the decoder table alone; padding: nothing |
 | `W[14]` `decoded_rd` | `rd_addr_rule` and the decoder table | fence rows: the decoder table alone; padding: nothing |
 | `W[15]` `decoded_imm` | the gate its kind reads it in, and the decoder table | sub rows: the decoder table alone; padding: nothing |
-| `W[28]` `wrap` (flip) | `add_addi_auipc` or `sub` | lui, fence, exit, **the delegation row** and padding: `wrap_boolean` alone, since the two gates that read it are gated off there |
-| `W[29]` `rd_hi`, `W[31]` `next_pc_hi` | their range obligations | padding: nothing |
+| `W[30]` `ram_value_hi` (S25) | its two range obligations: `+5` on the high half drives the low half below zero | padding: nothing |
+| `W[31]` `wrap` (flip) | `add_addi_auipc` or `sub` | lui, fence, exit, the delegation row, **a `read`, a `write`** and padding: `wrap_boolean` alone, since the two gates that read it are gated off there |
+| `W[32]` `rd_hi`, `W[34]` `next_pc_hi` | their range obligations | padding: nothing |
 
 On a padding row every mask is 0 and every lookup is switched off, so no cell there reaches a
 memory event or a table. The gates still hold `pc_write_value + 2^32·pc_wrap = decoded_next_pc`
@@ -1742,6 +1976,18 @@ one half of the anchor's answer pair, and its other half is §12's `anchor_value
 either locally, and the two must be equal or the multiset does not balance. A prover that writes
 7 on both sides proves the same statement; a prover that writes 7 on one is refused as
 `MemoryArgument`, which is `delegation.md` §5.2's whole argument.
+
+**What S25 moved in this table, and what it did not.** Five cells that were fixed by *nothing*
+on every row are now fixed on the rows that use them: `arg1_addr` and `arg2_addr` by their new
+address rules, `ram_addr` by `ram_addr_is_the_buffer`, and the `arg1` and `arg2` read/write
+pairs by the two confinement gates on a `read` row and by the memory argument wherever their
+mask is 1. `ram_value_hi` is a new cell that its own range pair fixes on every live row. And
+three cells stay free by design: `ram_read_value`, which a `read` overwrites; `ram_write_value`,
+which is the host's answer and bounded but not determined; and `rd_selected` on a `read` or a
+`write` row, which is the byte count the host claims to have moved. **Each of those three is fd
+0's or fd 3's content, and each is bound by the guest's own `io_digest` and not by any row**
+(`memory.md` §10) — which is exactly the division of labour S25 chose: the circuit confines
+*where* a `read` may write, and the digest fixes *what* it wrote.
 
 ---
 
@@ -7728,12 +7974,16 @@ Facts this accounting turned up. None changes a circuit.
    That the menu's new entry is an *even* power is not a coincidence a stage may spend: Mercury
    needs `n` even for `b = sqrt(2^n)` to exist, so the menu below `2^16` had exactly `2^8`,
    `2^10`, `2^12` and `2^14` to choose from.
-2. **Eighteen of add/sub's 74 `M` and `W` columns are inert.** The `arg1`, `arg2` and
-   `ram` queries (`M[16..31]`, `W[3..6]`) are held absent on every row, but `frame_queries`
-   fixes the frame, so they are committed, opened and carried by every shard. They are the
-   I/O-binding stage's. **`deleg`, the query S21 added, is not among them**: it is the first
-   query this family carried that its own rows actually make, and it is why the count is now 18
-   of 74 rather than 18 of 67. **No other family has an inert query.** The three four-query frames —
+2. **No column of add/sub is inert any more, and until S25 eighteen were.** The `arg1`, `arg2`
+   and `ram` queries (`M[16..31]`, `W[3..6]`) were held absent on every row by three degree-1
+   gates from S16 to S23, but `frame_queries` fixes the frame, so they were committed, opened
+   and carried by every shard regardless: eighteen columns a shard paid for and no instruction
+   could reach. They were the I/O-binding stage's reservation, S21 spent the fourth such group
+   on `deleg`, and **S25 spent these three** — `ram` on a `read` row, `arg1` and `arg2` on a
+   `read` or a `write` row (§3.2). The lesson the reservation taught is the one worth keeping:
+   a frame is fixed at S16 for every height and every key, so a query a later stage will need
+   is cheaper reserved than added, and the price of the reservation is exactly the commitment
+   and opening of columns that are 0. **No other family ever had an inert query.** The three four-query frames —
    jump/branch/slt's, shift/bitwise's and mul/div's — are the same 21 `M` columns and the same
    bare frame artifact, `memory_frame_reg.bin` (§2.2); the two six-query frames, mem_word's and
    mem_subword's, share `memory_frame_mem.bin`, and every one of their six queries is used by
@@ -7759,7 +8009,11 @@ Facts this accounting turned up. None changes a circuit.
    copies it, and six of atomics' gates do. **S21 adds two more such columns, and they are a
    pair**: add/sub's `deleg_write_value` (`M[40]`, §3.3) and keccak's `anchor_value` (`M[3]`,
    §12.3) are each read by one leaf and by nothing else, and the memory argument is the only
-   thing that says they are equal — which is observation 19.
+   thing that says they are equal — which is observation 19. **S25 adds one more, and it is not
+   a pair**: add/sub's `ram_read_value` (`M[29]`) joined `MEM_WORD`'s, for the same reason — a
+   `read` overwrites the word, so what was there binds nothing — and its `ram_write_value`
+   (`M[30]`) is read by `write_ram` and by one `RANGE16` pair and no gate, which bounds it
+   without determining it.
 5. **A `sub` row's `decoded_imm` is fixed by the decoder table alone.** No gate constrains it
    there: `sub` has no `imm` term, and the gates that read it (`add_addi_auipc`, `lui`,
    `ecall_code`, `fence_code`) are gated off by bits that are 0 on a sub row. On an `add` row
@@ -8012,8 +8266,8 @@ catalogue. A relation number, an `L{k}[j]` and a node name in this page are the 
 that the leaf and inner-layer subsections write a fraction node by its stem `x`: the dump names
 its two columns `x_num` and `x_den`, defined by relations `define_x_num` and `define_x_den`. The
 halving lists repeat one pattern, so the dump at `n = 22` gives every `n`: the row-wise layers do
-not depend on `n` — `L1`–`L5` for add/sub, jump/branch/slt and mem_word, `L1`–`L6` for the two
-S18 families and for mem_subword and atomics — nor do relations 0–183 of add/sub, 0–213 of
+not depend on `n` — `L1`–`L5` for jump/branch/slt and mem_word, `L1`–`L6` for add/sub, for the
+two S18 families and for mem_subword and atomics — nor do relations 0–279 of add/sub, 0–213 of
 jump/branch/slt, 0–305 of shift/bitwise, 0–297 of mul/div, 0–170 of mem_word, 0–304 of
 mem_subword and 0–317 of atomics, and the halving lists follow §3.8's, §4.8's, §5.8's, §6.8's,
 §7.8's, §8.8's and §9.8's formulas.
