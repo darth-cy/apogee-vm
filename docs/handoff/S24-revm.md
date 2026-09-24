@@ -114,10 +114,10 @@ directly as the native-revm oracle and `tools/kat-gen` builds the committed witn
 against it. `guest-sdk` and `alloy-primitives` are dependencies of the `riscv32` target
 alone.
 
-Frozen public API:
+Public API. The witness half is **not frozen** — see §4 — and the rest is:
 
 ```rust
-// the witness, docs/spec/revm-block.md §1
+// the witness, docs/spec/revm-block.md §1. Not frozen: a later stage appends.
 pub type Address20 = [u8; 20];
 pub type Word32 = [u8; 32];                       // big-endian: an EVM word, not an Fr
 pub struct BlockWitness   { pub env: BlockEnvWitness, pub accounts: Vec<AccountWitness>,
@@ -141,7 +141,8 @@ impl BlockWitness { pub fn encode(&self) -> Vec<u8>;
 impl BlockEnvWitness { pub fn spec(&self) -> Option<SpecId>; }
 pub use revm::primitives::hardfork::SpecId;
 
-// the program, docs/spec/revm-block.md §2
+// the program, docs/spec/revm-block.md §2. `run` is the block executor, so it is
+// also what enforces the block's gas limit as a running bound (§1.4).
 pub fn run(witness: &BlockWitness) -> Result<Vec<u8>, String>;   // fd 1's bytes
 pub fn keccak(bytes: &[u8]) -> Word32;                           // the image's one keccak
 pub fn output_digest_words(output: &[u8]) -> [u32; 8];           // what x24..x31 carry
@@ -188,9 +189,10 @@ sees the panic-location strings that make an ELF machine-dependent.
 
 ### Specs and docs
 
-- `docs/spec/revm-block.md` — **frozen**: `BlockWitness`, its canonicity rules, and the
-  output-commitment structure. S25 produces the first for real blocks; S25 and S26
-  consume the second as-is.
+- `docs/spec/revm-block.md` — the **output commitment is frozen**; `BlockWitness` and its
+  canonicity rules are **not** (owner's decision at the close of the stage, §4). S25
+  produces the witness for real blocks and may append to it; S25 and S26 consume the
+  output commitment as-is.
 - `docs/guest-program-manual.md` — `revm-block`'s row in §2 and the `members` line.
 
 ---
@@ -206,14 +208,14 @@ these and `crates/emulator/tests/revm.rs::a10_…` asserts both):
 
 | | `--release` | `debug` |
 | --- | --- | --- |
-| ELF | 2,233,392 B | 7,791,596 B |
-| `.text` | **1,680,244 B** | 5,359,128 B |
-| file-backed end | `0x1c68d4` | `0x563e64` |
-| span from `RAM_ORIGIN` | **449,077 words** | 1,396,633 words |
+| ELF | 2,233,608 B | 7,792,472 B |
+| `.text` | **1,680,898 B** | 5,360,184 B |
+| file-backed end | `0x1c695c` | `0x563efc` |
+| span from `RAM_ORIGIN` | **449,111 words** | 1,396,671 words |
 | against `BYTECODE_SIZE_WORDS = 2^21` | 21.4 % | 66.6 % |
-| expanded slots | 840,122 | 2,679,564 |
-| instruction slots | **520,757** | 1,876,912 |
-| last instruction pc | `0x1aa370` | `0x52c614` |
+| expanded slots | 840,449 | 2,680,092 |
+| instruction slots | **520,944** | 1,877,332 |
+| last instruction pc | `0x1aa5fe` | `0x52ca34` |
 | smallest height that holds it | **2^20** | 2^22 |
 
 The height is what matters. A decoded table is pc/2-indexed and absolute, so a family's
@@ -224,15 +226,15 @@ would need 2^22 — four times the rows in every shard. That percentage is the n
 watch as the workload grows: there is no menu step above 2^22.
 
 `bytecode_size_words` had to move off its `2^20` default: the debug image's span is
-1,396,633 words, past the 1,048,576 the default allows. One pinned value, `2^21`, covers
+1,396,671 words, past the 1,048,576 the default allows. One pinned value, `2^21`, covers
 both profiles, so the two builds differ in their code and in nothing else.
 
 ### The run (acceptance 9)
 
-`revm-block` at `--release`, on the committed witness: **221,165 cycles**, exit 0, 122
-bytes on fd 1, **9 keccak-f delegations**. (Debug: 1,467,839 cycles — 6.6× more, which is
+`revm-block` at `--release`, on the committed witness: **221,239 cycles**, exit 0, 122
+bytes on fd 1, **9 keccak-f delegations**. (Debug: 1,474,727 cycles — 6.7× more, which is
 what the profile is worth in a VM where an instruction is proving cost.)
-`revm-block-embedded`: **220,984 cycles**, 10 delegations — one more, for the digest it
+`revm-block-embedded`: **220,962 cycles**, 10 delegations — one more, for the digest it
 publishes.
 
 About 16,000 of those cycles are the canonicity check: `BlockWitness::decode` re-encodes
@@ -242,12 +244,12 @@ more than `2^32` fd 0 encodings.
 
 | Family | Rows | Height | Occupancy | Shards |
 | --- | ---: | ---: | ---: | ---: |
-| `ADD_SUB_LUI_AUIPC` | 75,863 | 1,048,576 | 7.23 % | 1 |
-| `JUMP_BRANCH_SLT` | 42,460 | 1,048,576 | 4.05 % | 1 |
-| `SHIFT_BITWISE` | 22,928 | 1,048,576 | 2.19 % | 1 |
-| `MUL_DIV` | 3,123 | 1,048,576 | 0.30 % | 1 |
-| `MEM_WORD` | 56,318 | 1,048,576 | 5.37 % | 1 |
-| `MEM_SUBWORD` | 20,389 | 1,048,576 | 1.94 % | 1 |
+| `ADD_SUB_LUI_AUIPC` | 75,999 | 1,048,576 | 7.25 % | 1 |
+| `JUMP_BRANCH_SLT` | 42,513 | 1,048,576 | 4.05 % | 1 |
+| `SHIFT_BITWISE` | 22,799 | 1,048,576 | 2.17 % | 1 |
+| `MUL_DIV` | 3,126 | 1,048,576 | 0.30 % | 1 |
+| `MEM_WORD` | 56,258 | 1,048,576 | 5.37 % | 1 |
+| `MEM_SUBWORD` | 20,460 | 1,048,576 | 1.95 % | 1 |
 | `ATOMICS` | 84 | 1,048,576 | 0.01 % | 1 |
 | `INIT_TEARDOWN` | — | 1,048,576 | — | 1 |
 | `ZERO_WINDOWS` | — | 1,048,576 | — | 1 (window 511) |
@@ -258,13 +260,13 @@ execution families runs. The only RAM window above 0 is 511, the stack's: revm's
 allocation for this block stays inside window 0's remaining ~2.3 MiB.
 
 Occupancy at the debug profile, for contrast, since the from-source suites trace that
-build: 1,467,839 cycles, every family at `2^22`, `ADD_SUB_LUI_AUIPC` the busiest at
-415,220 rows (9.9 %) — and one RAM window above 0, 127, the same stack at four times the
+build: 1,474,727 cycles, every family at `2^22`, `ADD_SUB_LUI_AUIPC` the busiest at
+417,085 rows (9.94 %) — and one RAM window above 0, 127, the same stack at four times the
 window size.
 
 Occupancy is low because a cycle-owning family's shard cannot be smaller than 2^20 rows
 whatever the guest (`docs/spec/lookup.md` §3). Seven families' worth of that is what a
-2^20-floor VM costs a 204,000-cycle program, and it is exactly what the occupancy table
+2^20-floor VM costs a 221,000-cycle program, and it is exactly what the occupancy table
 exists to show.
 
 ### The block
@@ -320,6 +322,60 @@ Found by adversarial review after the trailing-byte fix, which is the useful les
 first fix looked complete and was not, because it treated the symptom the author had
 thought of rather than the class.
 
+### `BLOCKHASH` reads a placeholder, and that is why `BlockWitness` is not frozen
+
+Raised by the owner at the close of the stage, and confirmed: revm answers the
+`BLOCKHASH` opcode from its `Database`, and `run` gives it a `CacheDB<EmptyDB>` whose
+block-hash cache is empty. Every lookup falls through to `EmptyDB`, which returns
+**`keccak256` of the block number's decimal string**. EIP-2935's history contract does
+not rescue it — revm 42 serves the opcode from the host, not from state — and a contract
+reading `BLOCKHASH(n)` for an `n` within the last 256 blocks therefore computes on a
+made-up word while the block still "executes". It is deterministic and the guest and the
+host agree on it, so nothing in this stage's acceptance would ever have caught it.
+
+The fix is a witness field — `block_hashes: Vec<(u64, [u8; 32])>` loaded into that cache
+before execution — which is work for the stage that records a real block. The owner
+therefore **withdrew the freeze on `BlockWitness`**: freezing a type with a field
+already known to be missing would mean S25 either amends a frozen spec or carries a
+known-wrong `BLOCKHASH`. The output commitment stays frozen; §1.1's canonicity rules
+survive any field the type gains.
+
+`crates/emulator/tests/revm.rs::blockhash_reads_a_placeholder_today` asserts the
+placeholder itself rather than "not zero", so closing the gap fails that test and has to
+be a decision.
+
+### The block's gas limit was not enforced, because revm cannot enforce it
+
+Also raised by the owner, and also real. revm validates `tx.gas_limit <= block.gas_limit`
+for each transaction — `revm-handler`'s `validate_env`, and `optional_block_gas_limit` is
+off here, so the check is never skipped — and that is the most it can do: `transact_one`
+is *one* transaction and revm keeps no state across a block. Nothing in revm 42 tracks
+cumulative gas at all; a grep for it finds one doc comment.
+
+In a real client the block executor holds that state, and `revm_block::run` **is** the
+block executor. It now keeps a running `gasUsed` and refuses a transaction whose gas
+limit does not fit in what the block has left, which is the Yellow Paper's
+intrinsic-validity condition and what makes the block's own `gasUsed <= gasLimit` true at
+the end. Before the fix, a witness could carry two hundred transactions of twenty million
+gas each under a thirty-million-gas header and the guest would commit an output for a
+block no Ethereum node would accept.
+
+The committed fixture is nowhere near the bound — 221,000 gas of limits under 30,000,000
+— so no fixture, digest or gas number moved. What did move is the image: the check costs
+654 bytes of `.text` and 74 cycles. `docs/spec/revm-block.md` §1.4 is the rule and
+`crates/emulator/tests/revm.rs::a_block_past_its_gas_limit_is_refused` tests both
+directions, including the case revm cannot see — two transactions that each fit the
+header and together do not.
+
+### `revm`'s version is pinned exactly
+
+`=42.0.1`, at the owner's instruction. A guest's `ProgramIdentity` is a digest of its
+compiled image, so a patch bump anywhere in revm's tree silently moves it, and with it
+every identity, gas number and output digest pinned in this stage's suites. Both
+lockfiles resolved it already — `guests/` has its own workspace and `revm-block` is a
+path dependency of `crates/emulator`, `crates/prover` and `tools/kat-gen` in the main one
+— and `=` is what stops a `cargo update` in either from moving it without a decision.
+
 ### The `0x…02` collision
 
 The fixture's first draft put its accounts at `0x00…01`, `0x00…02` and so on. The
@@ -333,7 +389,7 @@ a nonzero leading byte.
 
 `isa::decode` is RV32IMA's 59 instructions exactly, and `rvc::expand` refuses every F/D
 and Zcb/Zcmp encoding — so a build that picked up Zba/Zbb would kill the whole image.
-It does not: `decode_program` accepts all 520,757 instruction slots in 54 ms. No
+It does not: `decode_program` accepts all 520,944 instruction slots in 54 ms. No
 `.option` juggling and no toolchain flag was needed.
 
 ### `native-keccak` is the hook, and it covers everything
@@ -412,11 +468,15 @@ rather than left for a machine that does not exist yet.
 
 | Suite | Result | Cost |
 | --- | --- | --- |
-| `cargo test --workspace` | 1,034 passed, 82 ignored | the fast gate |
+| `cargo test --workspace` | 1,036 passed, 83 ignored | the fast gate |
 | `cargo run -p kat-gen` then `git diff --exit-code` | clean, twice | the `revm` group builds and traces the guest |
 | `…emulator --test revm -- --ignored --skip a3_` at `--release` | 5 passed | 47 s, of which 25 s is the guest build |
 | `…emulator --test revm -- --ignored a3_` (acceptance 3) | 1 passed | in a `rust:latest` container with `qemu-user`, 35 s |
 | `…prover --test revm` (acceptances 1, 6, 7, 8) | 3 passed | **see below** |
+
+The table is the state after the owner's three post-stage changes — the `=42.0.1` pin,
+the block gas limit and the withdrawn freeze — **except the last row**, which is the
+caveat below.
 
 ### The deferred suite's numbers, and the one caveat on them
 
@@ -433,6 +493,14 @@ then the block, then the twins — is **3 passed in 536 s at a 38.4 GB peak**. T
 byte-identical either way (S20's must-be-exact 8), so what the bound changes is the
 measurement and not the proof.
 
+**The deferred suite was not re-run for the owner's three post-stage changes**, on the
+owner's instruction ("you don't need to run the deferred suite with these minor
+changes"). What they moved in the proved image is 654 bytes of `.text` and 74 cycles, on
+an image with 82.7 % of a `2^20` table's reach in use and nine shards at that height, so
+no shard count, family set or peak can have moved. Everything else was re-measured and
+the numbers above are the new ones — including the identity below, which two clean builds
+agreed on again.
+
 **The unbounded peak has not been measured**, and it is the number a machine-sizing
 decision would want. `prompts/S24-revm.md` directs the heavier suites to an
 `r8i.8xlarge` provisioned through `../apogee-aws`, and `./scripts/status.sh` reports that
@@ -447,7 +515,7 @@ unbounded run would add is a number, not a verdict.
 agreed on every byte:
 
 ```
-5f73c3ff2a3805f6004a3dc3579f5284db5be8f7c5089e50d8f4031cde737019
+3cfd2ca46b565f3d8db89fb9b80c8b5a6758dcaa0b74c4764209236dd2cafa0d
 ```
 
 That is not the ceremony's identity and is not meant to be: acceptance 1 asks whether two
@@ -457,14 +525,21 @@ business, and this program is not pinned there.
 
 ## 7. For the next stage
 
-- **`BlockWitness` is frozen** (`docs/spec/revm-block.md` §1). S25's witness recorder
-  produces this exact type for a real block. Nothing in it is synthetic-specific: an
-  account carries general code and storage, a transaction carries the full EIP-1559/2930
-  envelope, and `stateless` is the section S25 defines. `caller` is already recovered —
-  there is no `ecrecover` delegation in this repository. **It stops at transaction type
-  2**: blob hashes (EIP-4844) and authorization lists (EIP-7702) are two and one fields
-  appended at the end of `TxWitness`, left out rather than guessed at, and
-  `docs/spec/revm-block.md` §1.2 says what a stage that meets one has to decide.
+- **`BlockWitness` is NOT frozen**, by the owner's decision at the close of the stage
+  (`docs/spec/revm-block.md` §1). S25's recorder starts from this type and appends what a
+  real block needs. Nothing in it is synthetic-specific: an account carries general code
+  and storage, a transaction carries the full EIP-1559/2930 envelope, and `stateless` is
+  the section S25 defines. `caller` is already recovered — there is no `ecrecover`
+  delegation in this repository. What is known to be missing:
+  - **`block_hashes`** — the reason the type is open. `BLOCKHASH` reads a placeholder
+    today; §4 is the account and §1.2 of the spec is the standing note.
+  - **Transaction types 3 and 4** — blob hashes (EIP-4844) and authorization lists
+    (EIP-7702), two and one fields appended at the end of `TxWitness`, left out rather
+    than guessed at. `docs/spec/revm-block.md` §1.2 says what a stage that meets one has
+    to decide.
+
+  What a change must keep is §1.1: the field order is the canonical order and `decode`
+  refuses anything else, so one logical state still has exactly one encoding.
 - **The output commitment is frozen** (§2 of the same page). S25 and S26 consume it
   as-is; they are the fd 1 bytes S10's `io_digest` binds.
 - **The I/O-binding work is owed and is scoped in §1.** It is the thing standing between

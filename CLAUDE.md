@@ -24,7 +24,8 @@ docs/
                  delegation.md, THE delegation ABI: the ecall convention, the frame, the
                  anchor, static detachment, the three delegation circuits, and the
                  guest-target backend; and
-                 revm-block.md, S24's two wire formats: BlockWitness and the output commitment
+                 revm-block.md, S24's two wire formats: the output commitment, frozen,
+                 and BlockWitness, deliberately NOT frozen
   handoff/       one note per completed stage: frozen API, artifacts, deviations
 crates/
   constants/     frozen constants and tags; zero logic; no_std
@@ -140,7 +141,7 @@ cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
 cargo clippy -p prover --all-targets --features metrics -- -D warnings   # the ONE feature's configuration
-cargo test --workspace                      # 1,034 tests as of S24; 83 more are #[ignore]d
+cargo test --workspace                      # 1,036 tests as of S24; 83 more are #[ignore]d
 cargo test -p prover --features metrics --test metrics  # the metrics harness; 10 more, 2 #[ignore]d
 cargo test -p program --test delegation -- --ignored --test-threads=1  # static detachment at BOTH guest profiles; builds six guest images, 2.9 s
 APOGEE_GUEST_PROFILE=release cargo test -p emulator --test revm -- --ignored --test-threads=1 --skip a3_  # S24's guest against native revm; builds the revm guest, 47 s
@@ -863,6 +864,31 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   existing one at `2^16`: the stage prompt's `2^16` is impossible
   (`docs/spec/lookup.md` §3), and the two guests that read an fd 0 input are unprovable
   while `EXIT` is the only provable ecall.
+- **`BlockWitness` is NOT frozen, and `revm`'s version is** (owner's decisions, S24).
+  `prompts/S24-revm.md` asked to freeze the witness; the owner withdrew that at the close
+  of the stage because a field it is already known to need is missing. revm answers
+  `BLOCKHASH` from its `Database` and `revm_block::run` gives it an empty one, so the
+  opcode returns **`keccak256` of the block number's decimal string** — a placeholder,
+  agreed on by guest and host, not any block's hash, and EIP-2935's history contract does
+  not rescue it because revm 42 serves the opcode from the host and not from state. The
+  field that closes it is a `block_hashes: Vec<(u64, Word32)>` loaded into `CacheDB`'s
+  cache, and the stage that records a real block adds it; `crates/emulator/tests/revm.rs::
+  blockhash_reads_a_placeholder_today` pins today's answer so it cannot close by accident.
+  The **output commitment stays frozen**, and so does §1.1: whatever fields the witness
+  gains, the field order is the canonical order and `decode` re-encodes and compares, so
+  one logical state has exactly one encoding. `revm` is pinned `=42.0.1` for the opposite
+  reason — a guest's identity is a digest of its compiled image, so a patch bump moves it
+  and every number pinned against it, in both lockfiles.
+- **The block's gas limit is a running bound, and `run` is what enforces it.** revm checks
+  `tx.gas_limit <= block.gas_limit` per transaction and can check no more: `transact_one`
+  is one transaction and revm keeps no cumulative gas anywhere. In a real client that is
+  the block executor's job, and `revm_block::run` **is** the block executor, so it carries
+  a running `gasUsed` and refuses a transaction whose limit does not fit in what the block
+  has left — the Yellow Paper's intrinsic-validity condition, and what makes the block's
+  own `gasUsed <= gasLimit` true. Without it a witness may carry any number of
+  transactions that individually fit the header and together do not.
+  `docs/spec/revm-block.md` §1.4. The total is not added to the output commitment: every
+  transaction's `gas_used` is already a field there.
 - **A guest may take a crates.io dependency when the guest is the workload.** S24's
   `revm` is the first, and the distinction is the whole licence: master rule 2 keeps the
   *proving stack's* cryptography in this repository, and a guest program is the thing
