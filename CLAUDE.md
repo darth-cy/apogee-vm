@@ -23,7 +23,9 @@ docs/
                  block-proof.md, the block layer: BlockProof, verify_block, ts windows; and
                  delegation.md, THE delegation ABI: the ecall convention, the frame, the
                  anchor, static detachment, the three delegation circuits, and the
-                 guest-target backend
+                 guest-target backend; and
+                 revm-block.md, S24's two wire formats: the output commitment, frozen,
+                 and BlockWitness, deliberately NOT frozen
   handoff/       one note per completed stage: frozen API, artifacts, deviations
 crates/
   constants/     frozen constants and tags; zero logic; no_std
@@ -80,7 +82,7 @@ crates/
                  guest-only, and NOT a workspace member
 guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, opcodes/, heap/, consistency/,
                  addsub/, control/, alu/, mem/, shards/, keccak-test/, keccak-unused/,
-                 recursion-ops/, recursion-unused/
+                 recursion-ops/, recursion-unused/, revm-block/
                  -- their own workspace; see guests/Cargo.toml and docs/guest-program-manual.md
 assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 handoff
 tools/
@@ -92,8 +94,9 @@ tools/
                  S15's lookup toy, every registered execution family's circuit, written from
                  `constraints`, the three delegation circuits **by digest** (the artifacts
                  are megabytes),
-                 the generic table's commitments over the ceremony, and S20's global
-                 transcript tape
+                 the generic table's commitments over the ceremony, S20's global
+                 transcript tape, and S24's synthetic block -- the witness, what native
+                 revm makes of it, and the keccak-f frames the guest delegates
   bench/         one routine per measurement, individually selectable
   artifact-dump/ a guest ELF out as the frozen ProgramImage artifact, plus a
                  readable report of it; `tables` prints the decoded tables and identity
@@ -138,9 +141,11 @@ cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
 cargo clippy -p prover --all-targets --features metrics -- -D warnings   # the ONE feature's configuration
-cargo test --workspace                      # 1,028 tests as of S23; 74 more are #[ignore]d
+cargo test --workspace                      # 1,036 tests as of S24; 83 more are #[ignore]d
 cargo test -p prover --features metrics --test metrics  # the metrics harness; 10 more, 2 #[ignore]d
 cargo test -p program --test delegation -- --ignored --test-threads=1  # static detachment at BOTH guest profiles; builds six guest images, 2.9 s
+APOGEE_GUEST_PROFILE=release cargo test -p emulator --test revm -- --ignored --test-threads=1 --skip a3_  # S24's guest against native revm; builds the revm guest, 47 s
+APOGEE_GUEST_PROFILE=release cargo test -p emulator --test revm -- --ignored a3_  # ditto under qemu-riscv32, so a Linux host
 cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 17.5 GB peak, 203 s, 30 min on a runner
 cargo test -p prover --test acceptance -- --include-ignored --test-threads=1  # DEFERRED; S16's statement, 10.7 GB peak, 374 s
 cargo test -p verifier --test cli -- --include-ignored --test-threads=1       # DEFERRED; ditto, 10.7 GB, 44 s
@@ -151,6 +156,7 @@ cargo test --release -p prover --test mem -- --include-ignored --test-threads=1 
 cargo test --release -p prover --test block -- --include-ignored --test-threads=1  # DEFERRED; S20's block, 34.9 GB peak, 840 s
 cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1  # DEFERRED; S21's nine-shard block, 33.7 GB peak, 131 s
 cargo test --release -p prover --test recursion -- --include-ignored --test-threads=1  # DEFERRED; S23's ten-shard block, 35.2 GB peak, 120 s -- the heaviest by memory
+RAYON_NUM_THREADS=6 cargo test --release -p prover --test revm -- --include-ignored --test-threads=1  # DEFERRED; S24's ten-shard revm block, and it builds the guest; 38.4 GB peak, 536 s -- NINE 2^20 shards, so the thread bound is not optional on a 48 GB machine
 cargo test -p prover --features metrics --test metrics -- --include-ignored --nocapture  # DEFERRED; S16's statement twice, 21.0 GB peak, 60 s, and prints both reports
 cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify -p verifier-core --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
@@ -159,10 +165,10 @@ cd guests/fib && cargo build --target riscv32imac-unknown-none-elf
 APOGEE_GUEST_PROFILE=release cargo test -p loader --test qemu -- --include-ignored
 cargo test -p emulator --test differential -- --include-ignored
 cargo test -p emulator --test consistency -- --include-ignored   # and again at APOGEE_GUEST_PROFILE=release
-git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constraints/tests/vectors/ crates/checker/tests/vectors/
+git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constraints/tests/vectors/ crates/checker/tests/vectors/ crates/emulator/tests/vectors/
 -------------------------------------------------------------------------------
 cargo run -p kat-gen                        # refresh every fixture (manual, deliberate)
-cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader | isa | program | gkr | memory | lookup | family | delegation | tape
+cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader | isa | program | gkr | memory | lookup | family | delegation | tape | revm
 cargo run -p checker -- laws <artifact>     # Laws 1-4 and the lookup rules, the standalone validators
 cargo run -p checker -- padding <artifact>  # the padding contract
 cargo run -p checker -- dump <artifact>     # a circuit, readably: layers, gates, relations, catalogue
@@ -733,7 +739,17 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   refuses any other ecall and any transfer cycle by name. A delegation row falls through rather than halting,
   writes 0 into `a0`, and carries the `deleg` mirror query that pairs it with an invocation.
   The I/O-binding stage owes `read` and `write`, and until then fd 0 and fd 1 are bound only
-  by the public I/O digest in the statement, which no row reads.
+  by the public I/O digest in the statement, which no row reads. **S24 met that wall head
+  on and did not route around it**: a guest whose whole input arrives on fd 0 has no
+  proof, and the work is not a gate or two — a transfer row that is permitted but not
+  constrained against its ecall's buffer and length can write any value to any RAM word,
+  which needs cross-row constraints this arithmetization has nowhere. What S24 proves
+  instead is a second binary of the same program, with its witness in `.rodata` — which
+  identity commits — and `keccak256` of its output in `x24..x31`, which the register
+  boundary carries; that is the arrangement the master's own frozen invariants describe,
+  and it is a demonstration rather than a substitute, since a per-block witness in the
+  image means a per-block identity. `guest_sdk::exit_with_public_words` is the one
+  addition it needed. `docs/handoff/S24-revm.md` §1.
 - **The delegation ABI is `docs/spec/delegation.md`, and it is frozen**: the ecall
   convention (`a7` the number, `a0` the frame base, `a0 ← 0`, fall-through), the indirect
   frame, the anchor and its 1:1 pairing, the three request-side zeroings, static detachment
@@ -848,6 +864,56 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   existing one at `2^16`: the stage prompt's `2^16` is impossible
   (`docs/spec/lookup.md` §3), and the two guests that read an fd 0 input are unprovable
   while `EXIT` is the only provable ecall.
+- **`BlockWitness` is NOT frozen, and `revm`'s version is** (owner's decisions, S24).
+  `prompts/S24-revm.md` asked to freeze the witness; the owner withdrew that at the close
+  of the stage because a field it is already known to need is missing. revm answers
+  `BLOCKHASH` from its `Database` and `revm_block::run` gives it an empty one, so the
+  opcode returns **`keccak256` of the block number's decimal string** — a placeholder,
+  agreed on by guest and host, not any block's hash, and EIP-2935's history contract does
+  not rescue it because revm 42 serves the opcode from the host and not from state. The
+  field that closes it is a `block_hashes: Vec<(u64, Word32)>` loaded into `CacheDB`'s
+  cache, and the stage that records a real block adds it; `crates/emulator/tests/revm.rs::
+  blockhash_reads_a_placeholder_today` pins today's answer so it cannot close by accident.
+  The **output commitment stays frozen**, and so does §1.1: whatever fields the witness
+  gains, the field order is the canonical order and `decode` re-encodes and compares, so
+  one logical state has exactly one encoding. `revm` is pinned `=42.0.1` for the opposite
+  reason — a guest's identity is a digest of its compiled image, so a patch bump moves it
+  and every number pinned against it, in both lockfiles.
+- **The block's gas limit is a running bound, and `run` is what enforces it.** revm checks
+  `tx.gas_limit <= block.gas_limit` per transaction and can check no more: `transact_one`
+  is one transaction and revm keeps no cumulative gas anywhere. In a real client that is
+  the block executor's job, and `revm_block::run` **is** the block executor, so it carries
+  a running `gasUsed` and refuses a transaction whose limit does not fit in what the block
+  has left — the Yellow Paper's intrinsic-validity condition, and what makes the block's
+  own `gasUsed <= gasLimit` true. Without it a witness may carry any number of
+  transactions that individually fit the header and together do not.
+  `docs/spec/revm-block.md` §1.4. The total is not added to the output commitment: every
+  transaction's `gas_used` is already a field there.
+- **A guest may take a crates.io dependency when the guest is the workload.** S24's
+  `revm` is the first, and the distinction is the whole licence: master rule 2 keeps the
+  *proving stack's* cryptography in this repository, and a guest program is the thing
+  being proven, not part of it. `revm-precompile` brings arkworks, `k256`, `p256`, `sha2`
+  and `ripemd` with it for the EVM's own precompiles, and the same reading covers them —
+  nothing there is reachable from a prover, a verifier or another guest. A dependency's
+  own `[features]` table is invisible to `crates/prover/tests/one_feature.rs`, which reads
+  only manifests inside the repository; a `features = [...]` key in *our* dependency entry
+  selects an upstream crate's features and always was allowed, which is how
+  `alloy-primitives`' `native-keccak` routes every keccak in a revm image through the S21
+  shim.
+- **`guests/revm-block` has no committed ELF**, and it is the one guest that does not
+  (owner's decision, S24). It is 2.2 MB at `--release` and 7.8 MB at `debug`, where it
+  expands to 1.88 million instruction slots; nothing is derived from its bytes but its
+  identity, which needs the ceremony. Committing it would enrol it in every suite that
+  decodes every committed guest — at `2^22` rows across 12 families, inside
+  `cargo test --workspace`. `tools/artifact-dump/tests/manual.rs`'s
+  `NOT_A_COMMITTED_FIXTURE` is the one exemption, checked in both directions so it cannot
+  outlive its reason.
+- **A decoded table's height is 1.9375 MiB of `.text` at `2^20`, and 7.9375 MiB at
+  `2^22`.** Row `i` is pc `2i`, absolute, so a family's height must satisfy
+  `last_pc <= 2*height - 4` — and `.text` starts at `RAM_ORIGIN` exactly. S24's release
+  image uses 82% of the `2^20` reach and its debug image does not fit at all, which is why
+  that guest is proven at `--release`. `2^22` is the menu's last entry; there is no step
+  above it.
 - **Boring beats clever.** Added surface area is a defect. Every verifier entry point is
   `(&VerifyingKey, &Proof, &PublicInputs)` and nothing else.
 
@@ -877,3 +943,4 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 | S21 — keccak256 delegation + the delegation ABI | done | `docs/handoff/S21-keccak256.md` |
 | S22 — secp256k1 ecrecover delegation | **cancelled** | `prompts/00-master.md`, "Stage register" |
 | S23 — Fr-arithmetic + Poseidon2 delegations | done | `docs/handoff/S23-fr-poseidon2.md` |
+| S24 — revm guest, synthetic-state block | done | `docs/handoff/S24-revm.md` |

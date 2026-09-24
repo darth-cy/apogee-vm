@@ -198,6 +198,16 @@ pub fn guest_profile() -> String {
 /// `guests/.cargo/config.toml`, and nothing from the ambient environment that
 /// could reach rustc.
 pub fn build_guest(name: &str, profile: &str) -> Vec<u8> {
+    build_bin(name, name, profile)
+}
+
+/// The same, for one named binary of a package that has more than one.
+///
+/// The target directory is keyed on `bin` and not on `name`, and that matters:
+/// this function wipes the directory before and after every build, so two
+/// binaries of one package sharing a key would each delete the other's work and
+/// a suite that builds both would pay two cold 158-crate builds.
+pub fn build_bin(name: &str, bin: &str, profile: &str) -> Vec<u8> {
     assert!(
         matches!(profile, "debug" | "release"),
         "unknown guest profile {profile:?}: expected \"debug\" or \"release\""
@@ -206,7 +216,7 @@ pub fn build_guest(name: &str, profile: &str) -> Vec<u8> {
         .join("../../guests")
         .join(name);
     let target_dir = std::env::temp_dir().join(format!(
-        "apogee-emulator-{name}-{profile}-{}",
+        "apogee-emulator-{bin}-{profile}-{}",
         std::process::id()
     ));
     let _ = fs::remove_dir_all(&target_dir);
@@ -239,7 +249,7 @@ pub fn build_guest(name: &str, profile: &str) -> Vec<u8> {
     let elf = target_dir
         .join("riscv32imac-unknown-none-elf")
         .join(profile)
-        .join(name);
+        .join(bin);
     let bytes = fs::read(&elf).unwrap_or_else(|e| panic!("reading {}: {e}", elf.display()));
     let _ = fs::remove_dir_all(&target_dir);
     bytes

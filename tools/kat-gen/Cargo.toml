@@ -29,6 +29,14 @@ constraints.workspace = true
 # pre-fork order the checker writes out independently.
 checker.workspace = true
 verifier-core.workspace = true
+# The `revm` group builds and traces S24's guest, so that a regeneration is
+# itself the guest-versus-native-revm differential.
+emulator.workspace = true
+# `guests/revm-block`'s library half: the program the guest runs, called here
+# on the host to build the committed witness and to produce the answer the
+# guest is held to. A path into the guest workspace, exactly as
+# `crates/emulator` takes one to `guests/consistency`.
+revm-block = { path = "../../guests/revm-block" }
 ark-bn254.workspace = true
 ark-ec.workspace = true
 ark-ff.workspace = true

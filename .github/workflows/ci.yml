@@ -125,6 +125,26 @@ jobs:
       - name: static detachment survives the optimiser
         run: cargo test -p program --test delegation -- --ignored --test-threads=1
 
+      # S24's acceptance 2, 4, 5, 9 and 10 over `guests/revm-block`. The guest
+      # is built from source rather than from a committed ELF -- 2.2 MB at
+      # `--release` is not a fixture worth keeping, and nothing but its identity
+      # is derived from its bytes -- so the suite is `#[ignore]`d and asked for
+      # by name here, the way static detachment above is. `--release` because
+      # that is the profile the statement is pinned to and the only one whose
+      # image fits a `2^20` table; the fast half of the file, which needs no
+      # build, already ran in the `test` step.
+      #
+      # Measured: 5 passed, 47 s cold on 18 cores, of which 25 s is the guest
+      # build. Not a deferred suite: it proves nothing.
+      - name: the revm guest against native revm
+        run: APOGEE_GUEST_PROFILE=release cargo test -p emulator --test revm -- --ignored --test-threads=1 --skip a3_
+
+      # S24's acceptance 3, the other executor. Split out because it is the one
+      # test in that file that needs `qemu-riscv32`, and it runs beside the
+      # other QEMU steps' dependency rather than silently passing without one.
+      - name: the revm guest under QEMU commits the same bytes
+        run: APOGEE_GUEST_PROFILE=release cargo test -p emulator --test revm -- --ignored a3_
+
       # DEFERRED: cargo test -p checker --test logup -- --include-ignored --test-threads=1
       # Master rule 7. S15's acceptance over the combined toy took 30m18s of a
       # 45-minute run here -- two thirds of it -- and cannot be made to take
@@ -339,6 +359,45 @@ jobs:
       # - name: S23's block with both recursion delegation shards
       #   run: cargo test --release -p prover --test recursion -- --include-ignored --test-threads=1
 
+      # DEFERRED: cargo test --release -p prover --test revm -- --include-ignored --test-threads=1
+      # Master rule 7, for S24's acceptances 6, 7 and 8. `guests/revm-block`'s
+      # embedded-witness binary runs revm over a synthetic block -- an ether
+      # transfer and a call into a counter contract -- in about 205,000 cycles,
+      # and every one of the seven execution families runs: ten shards, seven
+      # `2^20` execution shards, two `2^20` window shards and one `2^8` KECCAK_F
+      # shard. The window families are at `2^20` here and not `2^16`, which is
+      # new: the guest's image is about 1.7 MB and ends well past the 256 KiB a
+      # `2^16` window 0 covers, and a decoded table is pc/2-indexed and absolute
+      # so every family is pinned by the top of `.text`. The exact figures are
+      # in docs/handoff/S24-revm.md; they are a build's and move with it, so
+      # they are not pinned here.
+      #
+      # The suite also BUILDS the guest, at `--release`, into a fresh target
+      # directory -- about 25 s, and network access for 158 crates on a cold
+      # machine.
+      #
+      # Measured: 3 passed, 536 s, 38.4 GB peak, with RAYON_NUM_THREADS=6 on an
+      # 18-core / 48 GB machine. The bound is not optional there: shard proving
+      # holds one forward pass per worker, and nine `2^20` shards unbounded on
+      # 18 cores does not fit 48 GB. The block is byte-identical either way
+      # (S20 must-be-exact 8), so the bound changes the measurement and not the
+      # proof. docs/handoff/S24-revm.md §6.
+      #
+      # It proves the *embedded-witness* binary and not the normative one,
+      # because `read` and `write` are not provable ecalls: the add/sub family's
+      # `ecall_is_exit` gate partitions every ecall row to EXIT or a registered
+      # delegation number, and `prover::fill::add_sub` refuses a read row, a
+      # write row and their transfer cycles by name. That is the deferred
+      # I/O-binding stage's work; `docs/handoff/S24-revm.md` is the account.
+      #
+      # Its CI-sized halves are `crates/emulator/tests/revm.rs` -- the witness's
+      # canonicity, the output commitment's shape, native revm against the
+      # committed output and every delegated permutation against tiny-keccak,
+      # all in the `test` step -- and the two named steps above.
+      #
+      # - name: S24's revm block, proved and verified
+      #   run: cargo test --release -p prover --test revm -- --include-ignored --test-threads=1
+
       # The crates the recursion guest links compile unchanged for the guest.
       - name: guest target builds
         run: cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify -p verifier-core --target riscv32imac-unknown-none-elf
@@ -378,8 +437,16 @@ jobs:
       #
       # The `gkr` group writes S13's toy circuit, cached and cache-free, from its
       # one definition in kat-gen; the diff holds the committed artifacts to it.
+      #
+      # The `revm` group DOES build a guest, unlike `guests`, and it does run
+      # here. The reason `guests` is opt-in does not apply: what it commits is
+      # not the ELF's bytes but the run's behaviour -- the synthetic witness,
+      # what native revm makes of it, and the keccak-f frames the guest
+      # delegates -- and a keccak preimage never sees the panic-location strings
+      # that make an ELF machine-dependent. The group also holds the guest's
+      # fd 1 to native revm's answer, so a regeneration *is* S24's acceptance 4.
       - name: committed fixtures are reproducible
         run: |
           cargo run -p kat-gen
           cargo run --manifest-path tools/transcript-ref/Cargo.toml
-          git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constraints/tests/vectors/ crates/checker/tests/vectors/
+          git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constraints/tests/vectors/ crates/checker/tests/vectors/ crates/emulator/tests/vectors/

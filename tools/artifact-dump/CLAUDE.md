@@ -75,10 +75,18 @@ that list from the manifest rather than carrying its own, so a guest that exists
 is a guest whose walkthrough is checked. It also fails when a guest has no
 committed ELF fixture, when the manual stops naming one, and when the `members`
 line section 2 prints stops being the manifest's — that last one is the line a
-reader copies into `guests/Cargo.toml`, so a stale copy of it deletes guests. Twenty guest builds
-— ten guests, each built twice — cost about fifteen seconds, which is why it is not `#[ignore]`d: a walkthrough
-nothing runs is a walkthrough that has already stopped working and not been
-told.
+reader copies into `guests/Cargo.toml`, so a stale copy of it deletes guests. Thirty-eight
+guest builds — nineteen guests, each built twice — cost about fifty seconds, which is why it
+is not `#[ignore]`d: a walkthrough nothing runs is a walkthrough that has already stopped
+working and not been told.
+
+`NOT_A_COMMITTED_FIXTURE` is the one exemption from both of those rules, and since S24 it
+holds `revm-block`: 2.2 MB at `--release` and 7.8 MB at `debug`, where it expands to 1.88
+million instruction slots, so committing its ELF would put the repository's largest fixture
+into git and render two full instruction listings of it per run, for a guest nothing but
+its identity is derived from. `the_exemptions_are_real_and_still_needed` checks the list in
+both directions — the name must be a real guest, and it must really have no committed ELF —
+so an exemption cannot outlive the reason it was granted.
 
 ## `tables`: the decoded tables, printed (S11)
 ```
