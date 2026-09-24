@@ -166,12 +166,20 @@ fn complete((pc, regs): (u32, [Option<u32>; 32])) -> Result<Record, String> {
 
 /// The emulator's per-instruction register trace, replayed from its log.
 ///
-/// A cycle is an instruction unless it is an ecall transfer — a cycle at an
-/// `ecall` with no register query — which QEMU has no record of. The register
-/// file before each instruction is the fold of every register write logged
-/// before it, and every register read in the log is checked against that
-/// fold, so a log that disagrees with itself panics here rather than
-/// comparing.
+/// **Every cycle is an instruction**, which is what makes this a
+/// per-instruction comparison at all. It was not always: until S25 a `read` or
+/// a `write` that moved bytes was preceded by one *transfer cycle* per word,
+/// a cycle at an `ecall` with no register query and no counterpart in QEMU's
+/// record, and this function skipped them. S25's one-word `read` put that
+/// query on the ecall's own row and dropped the `write` query altogether
+/// (`docs/spec/execution-trace.md` §1), so there is nothing left to skip — and
+/// the assertion below is what says so, rather than a filter that would
+/// silently start dropping real instructions if the shape ever changed back.
+///
+/// The register file before each instruction is the fold of every register
+/// write logged before it, and every register read in the log is checked
+/// against that fold, so a log that disagrees with itself panics here rather
+/// than comparing.
 pub fn emulator_steps(image: &ProgramImage, log: &MemoryEventLog) -> Vec<Step> {
     let events = log.events();
     let mut regs = [0u32; 32];
@@ -197,17 +205,20 @@ pub fn emulator_steps(image: &ProgramImage, log: &MemoryEventLog) -> Vec<Step> {
             other => panic!("the log ran pc {pc:#010x}, which is {other:?}"),
         };
         let registers = || events.iter().filter(|e| e.space == AddressSpace::Reg);
-        if !(instr == Instr::Ecall && registers().count() == 0) {
-            let writes = registers()
-                .filter(|e| e.delta() == 3)
-                .fold(0u32, |mask, e| mask | 1 << e.addr);
-            steps.push(Step {
-                pc,
-                regs,
-                instr,
-                writes,
-            });
-        }
+        assert!(
+            registers().count() > 0,
+            "cycle {cycle} at pc {pc:#010x} makes no register query, so it is not an \
+             instruction QEMU has a record of"
+        );
+        let writes = registers()
+            .filter(|e| e.delta() == 3)
+            .fold(0u32, |mask, e| mask | 1 << e.addr);
+        steps.push(Step {
+            pc,
+            regs,
+            instr,
+            writes,
+        });
         for e in registers() {
             assert_eq!(
                 e.read_value, regs[e.addr as usize],

@@ -100,6 +100,15 @@ pub enum EmuError {
     /// execution the emulator let through here would be one no proof could
     /// cover (`docs/spec/delegation.md` §13).
     DelegationFrame { pc: u32, detail: &'static str },
+    /// A `read` on fd 0 or fd 3 whose `a2` is not
+    /// [`constants::ecall::READ_WORD_BYTES`].
+    ///
+    /// Fatal, not a short answer. One provable `read` moves exactly one
+    /// 4-aligned word (`docs/spec/ecall-abi.md` §4), and the circuit pins
+    /// `a2 = 4` on every row that makes the query — so an executor that
+    /// answered a different count would produce a trace no prover can prove,
+    /// which is the one divergence this crate exists to prevent.
+    ReadNotOneWord { pc: u32, count: u32 },
 }
 
 impl fmt::Display for EmuError {
@@ -116,6 +125,11 @@ impl fmt::Display for EmuError {
             EmuError::Misaligned { pc, addr, width } => write!(
                 f,
                 "misaligned data access at pc {pc:#010x}: a {width}-byte access at {addr:#010x}"
+            ),
+            EmuError::ReadNotOneWord { pc, count } => write!(
+                f,
+                "read at pc {pc:#010x} asked for {count} bytes; one read moves exactly {}",
+                ecall::READ_WORD_BYTES
             ),
             EmuError::OutOfBounds { pc, addr } => write!(
                 f,
@@ -850,7 +864,11 @@ impl<'a> Machine<'a> {
                 let fd = self.read(&mut row, Role::Rs2, 10);
                 let buf = self.read(&mut row, Role::Arg1, 11);
                 let count = self.read(&mut row, Role::Arg2, 12);
-                self.transfer(instr, pc, number == ecall::READ, fd, buf, count)?
+                if number == ecall::READ {
+                    self.read_word(&mut row, pc, fd, buf, count)?
+                } else {
+                    self.write_stream(pc, fd, buf, count)?
+                }
             }
             ecall::EXIT => {
                 let status = self.read(&mut row, Role::Rs2, 10);
@@ -889,29 +907,104 @@ impl<'a> Machine<'a> {
         self.commit(&row, instr, pc, next_pc)
     }
 
-    /// Move a `read`'s or a `write`'s bytes, one transfer cycle per word they
-    /// touch — the pc re-written unchanged at slot 0, the word at slot 3 —
+    /// Deliver **one 4-aligned word** of a `read`, into the ecall's own row,
     /// and return what `a0` gets.
-    fn transfer(
+    ///
+    /// # Why one word, and why on this row
+    ///
+    /// S14's open question 10 asked how an ecall's RAM traffic is confined and
+    /// offered two answers; S25 took the one it recommended. A multi-word
+    /// transfer needs rows of its own, and a row of its own has nothing on it
+    /// to bound its own address with — so confining it needs the buffer and
+    /// the count carried across rows, which this arithmetization can only do
+    /// through the global memory multiset. Delivering one word per ecall puts
+    /// the RAM query on the row that already reads `a1` and `a2`, and the
+    /// whole confinement becomes two degree-2 gates on that row.
+    ///
+    /// So **there are no transfer cycles**: every instruction is one cycle
+    /// again (`docs/spec/execution-trace.md` §1), and this query rides slot 3
+    /// beside the `a0` write, at a different address — which §3 permits and
+    /// the atomics family has always done.
+    ///
+    /// `count` must be exactly [`ecall::READ_WORD_BYTES`] and `buf` must be
+    /// 4-aligned and inside the RAM window. Each is a **fatal guest error**
+    /// rather than a short answer, because the circuit pins `a2 = 4` and
+    /// `ram_addr = a1` on every row that makes this query: an executor that
+    /// answered otherwise would produce a trace no prover can prove, and a
+    /// silent divergence between the executor and the circuit is the one
+    /// failure this file exists to prevent.
+    ///
+    /// **The query is staged even at end of stream**, writing the word back
+    /// unchanged. That is what lets the circuit key the query's mask on
+    /// `is_read` alone, with no "did it move anything" selector to constrain.
+    fn read_word(
         &mut self,
-        instr: Instr,
+        row: &mut Cycle,
         pc: u32,
-        reading: bool,
         fd: u32,
         buf: u32,
         count: u32,
     ) -> Result<u32, EmuError> {
-        let left = |stream: &[u8], at: usize| (count as usize).min(stream.len() - at) as u32;
-        let n = match (reading, fd) {
-            (true, ecall::FD_PUBLIC_INPUT) => left(self.input, self.input_at),
-            (true, ecall::FD_HINT) => left(self.hint, self.hint_at),
-            (false, ecall::FD_PUBLIC_OUTPUT | ecall::FD_STDERR) => count,
-            _ => return Ok(ecall::EBADF.wrapping_neg()),
+        if !matches!(fd, ecall::FD_PUBLIC_INPUT | ecall::FD_HINT) {
+            return Ok(ecall::EBADF.wrapping_neg());
+        }
+        if count != ecall::READ_WORD_BYTES {
+            return Err(EmuError::ReadNotOneWord { pc, count });
+        }
+        if buf % 4 != 0 {
+            return Err(EmuError::Misaligned {
+                pc,
+                addr: buf,
+                width: ecall::READ_WORD_BYTES,
+            });
+        }
+        let top = guest_memory::RAM_ORIGIN as u64 + guest_memory::RAM_LENGTH as u64;
+        if (buf as u64) < guest_memory::RAM_ORIGIN as u64
+            || buf as u64 + ecall::READ_WORD_BYTES as u64 > top
+        {
+            return Err(EmuError::OutOfBounds { pc, addr: buf });
+        }
+
+        let (source, at) = if fd == ecall::FD_HINT {
+            (self.hint, self.hint_at)
+        } else {
+            (self.input, self.input_at)
         };
-        if n == 0 {
+        let n = (ecall::READ_WORD_BYTES as usize).min(source.len() - at);
+        let old = self.word(buf);
+        let mut bytes = old.to_le_bytes();
+        bytes[..n].copy_from_slice(&source[at..at + n]);
+        self.ram_write(row, buf, old, u32::from_le_bytes(bytes));
+        if fd == ecall::FD_HINT {
+            self.hint_at += n;
+        } else {
+            self.input_at += n;
+        }
+        Ok(n as u32)
+    }
+
+    /// Append a `write`'s bytes to its stream, and return what `a0` gets.
+    ///
+    /// **It stages no memory query at all.** A write reads the guest's buffer
+    /// and writes it back unchanged, so the query it used to make bound
+    /// nothing: what ties fd 1 to the execution is the guest's own
+    /// `io_digest` over the bytes it passed to `commit`, which it assembled
+    /// with ordinary loads and stores that the memory argument does bind
+    /// (`docs/spec/memory.md` §10). Dropping the query is the other half of
+    /// S14's open question 10, and the half its recorded recommendation also
+    /// took.
+    ///
+    /// So a `write` is unrestricted: any buffer, any alignment, any count, one
+    /// cycle. Only the RAM-window bound survives, because reading outside the
+    /// window is a fatal guest error however the bytes are used.
+    fn write_stream(&mut self, pc: u32, fd: u32, buf: u32, count: u32) -> Result<u32, EmuError> {
+        if !matches!(fd, ecall::FD_PUBLIC_OUTPUT | ecall::FD_STDERR) {
+            return Ok(ecall::EBADF.wrapping_neg());
+        }
+        if count == 0 {
             return Ok(0);
         }
-        let (start, end) = (buf as u64, buf as u64 + n as u64);
+        let (start, end) = (buf as u64, buf as u64 + count as u64);
         let top = guest_memory::RAM_ORIGIN as u64 + guest_memory::RAM_LENGTH as u64;
         if start < guest_memory::RAM_ORIGIN as u64 || end > top {
             let addr = if start < guest_memory::RAM_ORIGIN as u64 {
@@ -921,40 +1014,17 @@ impl<'a> Machine<'a> {
             };
             return Err(EmuError::OutOfBounds { pc, addr });
         }
-
-        let (source, source_at) = if fd == ecall::FD_HINT {
-            (self.hint, self.hint_at)
+        let mut written = Vec::with_capacity(count as usize);
+        for addr in start..end {
+            let word = self.word((addr as u32) & !3);
+            written.push(word.to_le_bytes()[(addr & 3) as usize]);
+        }
+        if fd == ecall::FD_PUBLIC_OUTPUT {
+            self.output.extend_from_slice(&written);
         } else {
-            (self.input, self.input_at)
-        };
-        let mut written = Vec::new();
-        let mut word = buf & !3;
-        while (word as u64) < end {
-            let old = self.word(word);
-            let mut bytes = old.to_le_bytes();
-            for (k, byte) in bytes.iter_mut().enumerate() {
-                let addr = word as u64 + k as u64;
-                if addr >= start && addr < end {
-                    if reading {
-                        *byte = source[source_at + (addr - start) as usize];
-                    } else {
-                        written.push(*byte);
-                    }
-                }
-            }
-            let new = u32::from_le_bytes(bytes);
-            let mut cycle = Cycle::new();
-            self.ram_write(&mut cycle, word, old, new);
-            self.commit(&cycle, instr, pc, pc)?;
-            word += 4;
+            self.stderr.extend_from_slice(&written);
         }
-        match (reading, fd) {
-            (true, ecall::FD_HINT) => self.hint_at += n as usize,
-            (true, _) => self.input_at += n as usize,
-            (false, ecall::FD_PUBLIC_OUTPUT) => self.output.extend_from_slice(&written),
-            (false, _) => self.stderr.extend_from_slice(&written),
-        }
-        Ok(n)
+        Ok(count)
     }
 }
 

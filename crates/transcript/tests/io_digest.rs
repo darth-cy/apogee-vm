@@ -193,3 +193,32 @@ fn parse(text: &str) -> Vec<Case> {
         })
         .collect()
 }
+
+/// `constants::IO_DIGEST_EMPTY` is `io_digest(&[], &[])`'s words, recomputed.
+///
+/// The constant exists because `crates/guest-sdk` cannot name `Fr` and cannot
+/// depend on this crate (the dependency runs the other way, for S23's
+/// delegation shims). That makes it the one value in the binding written down
+/// twice, so it is checked here rather than trusted: a guest that did no I/O
+/// publishes the constant, and a verifier compares it against what this
+/// function computes.
+#[test]
+fn the_empty_stream_constant_is_the_digest_of_two_empty_streams() {
+    assert_eq!(
+        constants::IO_DIGEST_EMPTY,
+        transcript::io_digest_words(&[], &[]),
+        "constants::IO_DIGEST_EMPTY is not io_digest(&[], &[])"
+    );
+}
+
+/// The words are the digest's canonical little-endian bytes, in order.
+#[test]
+fn the_words_are_the_canonical_bytes_in_order() {
+    let input = b"apogee";
+    let output = b"block";
+    let bytes = transcript::io_digest(input, output).to_bytes();
+    let words = transcript::io_digest_words(input, output);
+    for (i, word) in words.iter().enumerate() {
+        assert_eq!(word.to_le_bytes(), bytes[4 * i..4 * i + 4], "word {i}");
+    }
+}

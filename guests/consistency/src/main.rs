@@ -31,6 +31,12 @@ fn main() {
         Some(&MODE_HEAP_UNDER_DEEP_STACK) => descend(DEPTH),
         _ => consistency::run(&input, &mut |section| guest_sdk::commit(section)),
     }
+    // Publish the public I/O digest of the two streams this run moved, in
+    // `x24..x31`, which is what binds fd 0 and fd 1 to the execution
+    // (`docs/spec/memory.md` §10). Falling out of `main` instead would reach
+    // `guest_sdk::exit`, which publishes the empty-stream constant, and the
+    // prover would refuse the trace by name.
+    transcript::exit_with_io_digest(0)
 }
 
 /// All of fd 0. `read_input` stops short only at the end of the stream.

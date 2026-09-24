@@ -48,13 +48,13 @@ use revm::context::{BlockEnv, CfgEnv, TxEnv};
 use revm::context_interface::block::BlobExcessGasAndPrice;
 use revm::context_interface::result::{ExecutionResult, Output};
 use revm::context_interface::transaction::{AccessList, AccessListItem};
-use revm::database::{CacheDB, EmptyDB};
+use revm::database::DBErrorMarker;
 use revm::primitives::eip4844::{
     BLOB_BASE_FEE_UPDATE_FRACTION_CANCUN, BLOB_BASE_FEE_UPDATE_FRACTION_PRAGUE,
 };
-use revm::primitives::{keccak256, Address, Bytes, Log, StorageKey, TxKind, B256, U256};
+use revm::primitives::{keccak256, Address, Bytes, Log, StorageKey, StorageValue, TxKind, B256, U256};
 use revm::state::{AccountInfo, Bytecode};
-use revm::{Context, ExecuteEvm, MainBuilder, MainContext};
+use revm::{Context, Database, ExecuteEvm, MainBuilder, MainContext};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -235,6 +235,21 @@ pub struct BlockEnvWitness {
     pub excess_blob_gas: Option<u64>,
     /// EIP-7843 slot number.
     pub slot_num: u64,
+    /// The block hashes the `BLOCKHASH` opcode may read, **ascending by
+    /// number, without repeats**.
+    ///
+    /// S24 had no such field and answered the opcode from an empty database,
+    /// which returned `keccak256` of the block number's decimal string — a
+    /// placeholder, agreed on by the guest and the host and equal to no
+    /// block's hash. `docs/spec/revm-block.md` §1.2 called it the one *gap*
+    /// rather than a decision, and named this field as what closes it. S25
+    /// adds it: [`WitnessDb::block_hash`] answers from here, and a number this
+    /// list does not carry is an error rather than a made-up word.
+    ///
+    /// The recorder fills it with exactly the numbers the execution asked
+    /// for, so a block whose transactions never read `BLOCKHASH` carries an
+    /// empty list.
+    pub block_hashes: Vec<(u64, Word32)>,
 }
 
 /// One pre-state account.
@@ -305,6 +320,9 @@ pub enum WitnessError {
     /// Two slots of one account share a key, or the slots are not ascending
     /// by key. `account` and `at` name it.
     SlotsNotSorted { account: usize, at: usize },
+    /// Two block hashes share a number, or they are not ascending by number.
+    /// `at` is the offending index.
+    BlockHashesNotSorted { at: usize },
     /// `spec_id` is a discriminant no `SpecId` takes.
     UnknownSpec { spec_id: u8 },
 }
@@ -371,6 +389,11 @@ impl BlockWitness {
                 spec_id: self.env.spec_id,
             });
         }
+        for (i, pair) in self.env.block_hashes.windows(2).enumerate() {
+            if pair[0].0 >= pair[1].0 {
+                return Err(WitnessError::BlockHashesNotSorted { at: i + 1 });
+            }
+        }
         for (i, pair) in self.accounts.windows(2).enumerate() {
             if pair[0].address >= pair[1].address {
                 return Err(WitnessError::AccountsNotSorted { at: i + 1 });
@@ -424,53 +447,53 @@ const STATUS_SUCCESS: u8 = 2;
 /// the running total below, a witness carrying two hundred transactions of
 /// twenty million gas each under a thirty-million-gas header executes happily
 /// and commits a block no Ethereum node would accept.
+/// # One executor, two databases
+///
+/// The body is [`execute`], which takes the database as an argument. That is
+/// not generality for its own sake: S25's `host::WitnessRecorder` runs the
+/// *same* block executor against a live, RPC-backed database to harvest the
+/// touch-set, and if it ran a second copy of this loop the two could drift —
+/// in the gas rule, in the environment, or in the output encoding — and the
+/// differential that compares them would be comparing two programs. One
+/// function, two callers, one block executor.
 pub fn run(witness: &BlockWitness) -> Result<Vec<u8>, String> {
-    let spec = witness
-        .env
-        .spec()
-        .ok_or_else(|| alloc::format!("spec id {} is not a hardfork", witness.env.spec_id))?;
+    execute(&witness.env, &witness.txs, WitnessDb::new(witness))
+}
 
-    let mut db = CacheDB::new(EmptyDB::default());
-    for account in &witness.accounts {
-        let address = Address::from(account.address);
-        let code = Bytes::copy_from_slice(&account.code);
-        db.insert_account_info(
-            address,
-            AccountInfo {
-                balance: U256::from_be_bytes(account.balance),
-                nonce: account.nonce,
-                code_hash: keccak256(&code),
-                // A hint the journal uses to skip an address lookup; a witness
-                // has no such hint to give.
-                account_id: None,
-                code: Some(Bytecode::new_raw(code)),
-            },
-        );
-        for (key, value) in &account.slots {
-            db.insert_account_storage(
-                address,
-                StorageKey::from_be_bytes(*key),
-                U256::from_be_bytes(*value),
-            )
-            .map_err(|_| "the in-memory database has no failure mode")?;
-        }
-    }
+/// The block executor: one journal, one `transact_one` per transaction — so
+/// transaction 2 sees transaction 1's writes — one `finalize`, and the block's
+/// running gas bound.
+///
+/// `db` is the pre-state oracle and nothing else; revm's journal holds every
+/// write. [`run`] passes a [`WitnessDb`]; S25's recorder passes one backed by
+/// JSON-RPC.
+pub fn execute<DB: Database>(
+    env: &BlockEnvWitness,
+    txs: &[TxWitness],
+    db: DB,
+) -> Result<Vec<u8>, String>
+where
+    DB::Error: core::fmt::Display,
+{
+    let spec = env
+        .spec()
+        .ok_or_else(|| alloc::format!("spec id {} is not a hardfork", env.spec_id))?;
 
     let mut cfg = CfgEnv::new_with_spec(spec);
-    cfg.chain_id = witness.env.chain_id;
+    cfg.chain_id = env.chain_id;
     let mut evm = Context::mainnet()
         .with_db(db)
-        .with_block(block_env(&witness.env, spec))
+        .with_block(block_env(env, spec))
         .with_cfg(cfg)
         .build_mainnet();
 
-    let mut results = Vec::with_capacity(witness.txs.len());
-    // The invariant this loop keeps: `gas_used <= witness.env.gas_limit`, so
-    // the subtraction below never wraps. It holds at 0 and is re-established
-    // by the checked accumulation after every transaction.
+    let mut results = Vec::with_capacity(txs.len());
+    // The invariant this loop keeps: `gas_used <= env.gas_limit`, so the
+    // subtraction below never wraps. It holds at 0 and is re-established by
+    // the checked accumulation after every transaction.
     let mut gas_used: u64 = 0;
-    for (i, tx) in witness.txs.iter().enumerate() {
-        let remaining = witness.env.gas_limit - gas_used;
+    for (i, tx) in txs.iter().enumerate() {
+        let remaining = env.gas_limit - gas_used;
         if tx.gas_limit > remaining {
             return Err(alloc::format!(
                 "transaction {i}'s gas limit {} does not fit in the block's remaining {remaining}",
@@ -487,11 +510,11 @@ pub fn run(witness: &BlockWitness) -> Result<Vec<u8>, String> {
         // `u64` — or, in a guest built with `overflow-checks`, a panic.
         gas_used = gas_used
             .checked_add(result.tx_gas_used())
-            .filter(|total| *total <= witness.env.gas_limit)
+            .filter(|total| *total <= env.gas_limit)
             .ok_or_else(|| {
                 alloc::format!(
                     "transaction {i} took the block past its gas limit of {}",
-                    witness.env.gas_limit
+                    env.gas_limit
                 )
             })?;
         results.push(result);
@@ -499,6 +522,137 @@ pub fn run(witness: &BlockWitness) -> Result<Vec<u8>, String> {
     let state = evm.finalize();
 
     Ok(encode_output(&results, &state))
+}
+
+// ---------------------------------------------------------------------------
+// The witness database
+// ---------------------------------------------------------------------------
+
+/// Why a lookup failed. Every variant is "the witness does not carry this",
+/// which is a broken witness and never an empty answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MissingState {
+    /// No account at this address.
+    Account(Address20),
+    /// The account exists in the witness but not this slot of it.
+    Slot(Address20, Word32),
+    /// `BLOCKHASH` was asked for a number the witness does not carry.
+    BlockHash(u64),
+    /// An account was loaded without its code, which cannot happen: every
+    /// [`AccountInfo`] this database returns carries its code inline.
+    Code,
+}
+
+impl DBErrorMarker for MissingState {}
+
+// `DBErrorMarker` requires `core::error::Error`, which requires `Display`.
+// Both are one line here and neither is an error-type architecture: master
+// anti-goal 8 bans hierarchies and source chains, and this is a flat `enum`
+// that an upstream trait bound asks to be nameable.
+impl core::error::Error for MissingState {}
+
+impl core::fmt::Display for MissingState {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            MissingState::Account(a) => write!(f, "the witness has no account {}", Address::from(*a)),
+            MissingState::Slot(a, k) => write!(
+                f,
+                "the witness has no slot {} of account {}",
+                B256::from(*k),
+                Address::from(*a)
+            ),
+            MissingState::BlockHash(n) => write!(f, "the witness has no hash for block {n}"),
+            MissingState::Code => f.write_str("an account was loaded without its code"),
+        }
+    }
+}
+
+/// revm's `Database`, answered from a [`BlockWitness`] and **nothing else**.
+///
+/// # A miss is an error, not an empty account
+///
+/// This is the whole reason the type exists, and it is a change from S24,
+/// which handed revm a `CacheDB<EmptyDB>`. `EmptyDB` answers every miss: a
+/// missing account reads as non-existent, a missing slot as zero, a missing
+/// block hash as `keccak256` of the number's decimal string. So a witness with
+/// a storage slot deleted from it executed happily against the wrong state and
+/// committed an output for it — the guest could not tell an incomplete witness
+/// from a complete one, and S25 acceptance 3 is exactly the demand that it
+/// can. Here every lookup the witness does not answer is a
+/// [`MissingState`], the block executor returns `Err`, and the guest exits
+/// nonzero.
+///
+/// What is *not* an error is an account the witness carries as empty — nonce
+/// 0, no balance, no code. That reads back as "does not exist", which is
+/// EIP-161's notion of an empty account and the one revm uses, and it is how a
+/// recording writes down an address it looked up and did not find.
+pub struct WitnessDb<'a> {
+    witness: &'a BlockWitness,
+}
+
+impl<'a> WitnessDb<'a> {
+    pub fn new(witness: &'a BlockWitness) -> WitnessDb<'a> {
+        WitnessDb { witness }
+    }
+
+    /// The witness's account at `address`, by binary search: the accounts are
+    /// ascending by address and `decode` refuses a witness where they are not.
+    fn account(&self, address: &Address20) -> Option<&AccountWitness> {
+        self.witness
+            .accounts
+            .binary_search_by(|a| a.address.cmp(address))
+            .ok()
+            .map(|i| &self.witness.accounts[i])
+    }
+}
+
+impl Database for WitnessDb<'_> {
+    type Error = MissingState;
+
+    fn basic(&mut self, address: Address) -> Result<Option<AccountInfo>, MissingState> {
+        let key: Address20 = address.into();
+        let account = self.account(&key).ok_or(MissingState::Account(key))?;
+        if account.nonce == 0 && account.balance == [0u8; 32] && account.code.is_empty() {
+            // An empty account, which post-EIP-161 is indistinguishable from
+            // one that does not exist. This is how a recording writes down an
+            // address it looked up and did not find.
+            return Ok(None);
+        }
+        let code = Bytes::copy_from_slice(&account.code);
+        Ok(Some(AccountInfo {
+            balance: U256::from_be_bytes(account.balance),
+            nonce: account.nonce,
+            code_hash: keccak256(&code),
+            // A hint the journal uses to skip an address lookup; a witness has
+            // no such hint to give.
+            account_id: None,
+            code: Some(Bytecode::new_raw(code)),
+        }))
+    }
+
+    fn code_by_hash(&mut self, _code_hash: B256) -> Result<Bytecode, MissingState> {
+        Err(MissingState::Code)
+    }
+
+    fn storage(&mut self, address: Address, index: StorageKey) -> Result<StorageValue, MissingState> {
+        let key: Address20 = address.into();
+        let slot: Word32 = index.to_be_bytes();
+        let account = self.account(&key).ok_or(MissingState::Account(key))?;
+        account
+            .slots
+            .binary_search_by(|(k, _)| k.cmp(&slot))
+            .map(|i| U256::from_be_bytes(account.slots[i].1))
+            .map_err(|_| MissingState::Slot(key, slot))
+    }
+
+    fn block_hash(&mut self, number: u64) -> Result<B256, MissingState> {
+        self.witness
+            .env
+            .block_hashes
+            .binary_search_by(|(n, _)| n.cmp(&number))
+            .map(|i| B256::from(self.witness.env.block_hashes[i].1))
+            .map_err(|_| MissingState::BlockHash(number))
+    }
 }
 
 /// The witness's header fields as revm's `BlockEnv`.
@@ -682,25 +836,3 @@ fn encode_post_state(state: &revm::state::EvmState) -> Vec<u8> {
 // ---------------------------------------------------------------------------
 // The output digest
 // ---------------------------------------------------------------------------
-
-/// `keccak256` of the output commitment, as eight little-endian words.
-///
-/// The embedded-witness guest (`src/embedded.rs`) leaves these in `x24..x31`,
-/// where the statement's register boundary carries them — the arrangement
-/// `prompts/00-master.md` describes for binding public output while `write`
-/// is not a provable ecall. It is this crate's one function that exists for
-/// the proof rather than for the workload; `docs/handoff/S24-revm.md` §"The
-/// I/O blocker" says why.
-pub fn output_digest_words(output: &[u8]) -> [u32; 8] {
-    let digest = keccak256(output);
-    let mut words = [0u32; 8];
-    for (i, word) in words.iter_mut().enumerate() {
-        *word = u32::from_le_bytes([
-            digest[4 * i],
-            digest[4 * i + 1],
-            digest[4 * i + 2],
-            digest[4 * i + 3],
-        ]);
-    }
-    words
-}

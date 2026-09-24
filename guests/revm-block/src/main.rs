@@ -42,13 +42,18 @@ fn main() {
     let mut buffer = vec![0u8; WITNESS_CAPACITY];
     let len = guest_sdk::read_input(&mut buffer);
     if len == buffer.len() {
-        guest_sdk::exit(EXIT_WITNESS_TOO_LARGE);
+        transcript::exit_with_io_digest(EXIT_WITNESS_TOO_LARGE);
     }
     let Ok(witness) = BlockWitness::decode(&buffer[..len]) else {
-        guest_sdk::exit(EXIT_WITNESS_MALFORMED);
+        transcript::exit_with_io_digest(EXIT_WITNESS_MALFORMED);
     };
     let Ok(output) = revm_block::run(&witness) else {
-        guest_sdk::exit(EXIT_NOT_EXECUTABLE);
+        transcript::exit_with_io_digest(EXIT_NOT_EXECUTABLE);
     };
     guest_sdk::commit(&output);
+    // Publish the public I/O digest of the two streams this run moved, in
+    // `x24..x31`, which is what binds fd 0 and fd 1 to the execution
+    // (`docs/spec/memory.md` §10). The three failure exits above publish it too:
+    // each happens after the `read`, so each has a non-empty fd 0 stream.
+    transcript::exit_with_io_digest(0)
 }

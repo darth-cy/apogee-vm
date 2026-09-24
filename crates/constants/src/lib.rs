@@ -1396,7 +1396,42 @@ pub mod ecall {
     /// [`FD_STDERR`], return `-EBADF` in `a0` — Linux's answer, and so
     /// `qemu-riscv32`'s. Added at S12.
     pub const EBADF: u32 = 9;
+
+    /// How many bytes one provable [`READ`] moves: exactly one 4-aligned word.
+    ///
+    /// This is the confinement S14's open question 10 left open and S25
+    /// answered (the owner chose the recorded recommendation, "one word per
+    /// read"): a `read`'s RAM query rides the ecall's **own** row, so there
+    /// are no transfer cycles at all and the address it writes is bounded by
+    /// `a1`, which that same row read. `docs/spec/ecall-abi.md` §4.
+    ///
+    /// A `read` whose `a2` is not this is a fatal guest error, not a short
+    /// answer: the circuit pins `a2 = 4` on every row that makes a RAM query,
+    /// so an executor that answered one would produce a trace no prover can
+    /// prove. `guest_sdk::read_input` loops a word at a time and never asks
+    /// for anything else.
+    pub const READ_WORD_BYTES: u32 = 4;
 }
+
+/// `transcript::io_digest(&[], &[])`, as the eight little-endian `u32` words a
+/// guest leaves in `x24..x31`.
+///
+/// **The value an execution that touched neither fd 0 nor fd 1 publishes.**
+/// Every guest publishes eight words at exit — the verifier's check is
+/// unconditional (`docs/spec/memory.md` §10) — and a guest that did no I/O has
+/// no streams to hash, so `guest_sdk::exit` publishes this rather than linking
+/// Poseidon2 into an image that has nothing to hash with it.
+///
+/// It lives here because `crates/guest-sdk`'s only dependency is this crate
+/// and it cannot name `Fr`. It is **not** a second definition: the value is the
+/// committed vector `crates/transcript/tests/vectors/io_digest.txt`'s
+/// `empty_empty` case, and `crates/transcript/tests/io_digest.rs` recomputes it
+/// from [`transcript::io_digest_words`] and fails if the two disagree.
+///
+/// [`transcript::io_digest_words`]: ../transcript/fn.io_digest_words.html
+pub const IO_DIGEST_EMPTY: [u32; 8] = [
+    0xd395bc93, 0xad5f53a9, 0xcb66ba5f, 0xa92efb6e, 0x91540038, 0xd14044a0, 0xf3697210, 0x26546d96,
+];
 
 /// The memory argument's address spaces, frozen at S12.
 ///

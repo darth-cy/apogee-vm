@@ -5,4 +5,11 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+# The public I/O digest this guest publishes at exit. Every execution leaves
+# eight words in `x24..x31` and the verifier checks them against `io_digest` of
+# the statement's streams (`docs/spec/memory.md` §10); a guest that moved
+# committed bytes publishes the digest of those bytes, and
+# `transcript::exit_with_io_digest` is the one spelling of that.
+transcript = { path = "../../crates/transcript" }
+
 guest-sdk.workspace = true

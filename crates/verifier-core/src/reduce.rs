@@ -26,6 +26,13 @@ use crate::types::{OpeningClaim, PublicInputs, ShardProof, VerifyError, Verifyin
 /// `x10`'s position in `BoundaryFinals::reg_values`, which starts at `x1`.
 const EXIT_STATUS_REGISTER: usize = 10 - 1;
 
+/// `x24`'s position in `BoundaryFinals::reg_values`, which starts at `x1`.
+///
+/// `x24..x31` are the eight words a guest publishes at exit: the public I/O
+/// digest of the streams it moved. `prompts/00-master.md`'s frozen invariants
+/// name those eight registers, and `docs/spec/memory.md` §10 is the check.
+const IO_DIGEST_REGISTERS: usize = 24 - 1;
+
 /// What the global commit phase leaves every shard of a statement: the four
 /// memory challenges `γ_M, α_addr, α_ts, α_val` and the global state digest.
 ///
@@ -282,6 +289,32 @@ pub fn verify_global_memory(
     }
     if b.reg_values[EXIT_STATUS_REGISTER] != public.exit_status {
         return Err(memory("x10's final value is not the exit status"));
+    }
+    // **The public I/O binding** (`docs/spec/memory.md` §10), and the reason
+    // this statement says anything about fd 0 and fd 1 at all.
+    //
+    // The guest computes `io_digest` over the bytes it actually read and
+    // wrote and leaves its eight little-endian words in `x24..x31`; those are
+    // ordinary register finals, absorbed in the `MEMORY_BOUNDARY` message
+    // before the memory challenges are squeezed and tied by the multiset to
+    // the execution that produced them. So comparing them against the digest
+    // of the statement's own streams is what turns "these bytes are in the
+    // statement" into "these are the bytes the program moved".
+    //
+    // **Unconditional.** A guest that touched neither stream publishes
+    // `constants::IO_DIGEST_EMPTY`, which is this digest for two empty
+    // streams — so there is no case in which the check is skipped, and no way
+    // to claim an execution did no I/O when it did.
+    //
+    // It belongs here rather than in `verify_shard_local` because it reads
+    // only the statement: one answer per block, whatever the shard count
+    // (`docs/spec/block-proof.md` §5). Its class is this function's, beside
+    // the exit status it sits next to.
+    let published: [u32; 8] = core::array::from_fn(|i| b.reg_values[IO_DIGEST_REGISTERS + i]);
+    if published != transcript::io_digest_words(&public.input, &public.output) {
+        return Err(memory(
+            "x24..x31 are not the public I/O digest of the statement's streams",
+        ));
     }
     let drawn = crate::statement::memory_slots(&global.memory);
     let reads: Vec<Fr> = public.memory_roots.iter().map(|r| r[READ_ROOT]).collect();

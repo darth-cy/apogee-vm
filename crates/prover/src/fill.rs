@@ -16,7 +16,8 @@ use constants::fr_arith as fa;
 use constants::poseidon2 as p2;
 use constants::{delegation, ecall, family, guest_memory, keccak, memory};
 use constraints::add_sub::{
-    DECODED, IS_ECALL, IS_FENCE, KINDS, NEXT_PC_HI, PC_WRAP, RD_HI, TABLE_WIDTH, WRAP,
+    DECODED, IS_ECALL, IS_FENCE, IS_READ, IS_WRITE, KINDS, NEXT_PC_HI, PC_WRAP, RAM_VALUE_HI, RD_HI,
+    TABLE_WIDTH, WRAP,
 };
 use constraints::atomics as at_circuit;
 use constraints::delegation as deleg;
@@ -466,6 +467,7 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
     let mut kinds: [Vec<u32>; 6] = Default::default();
     let (mut is_ecall, mut is_fence, mut wrap) = (Vec::new(), Vec::new(), Vec::new());
     let mut is_deleg: [Vec<u32>; constraints::add_sub::IS_DELEGATION.len()] = Default::default();
+    let (mut is_read, mut is_write, mut ram_value_hi) = (Vec::new(), Vec::new(), Vec::new());
     let (mut sel, mut rd_hi, mut next_pc_hi) = (Vec::new(), Vec::new(), Vec::new());
     for r in start..end {
         let row = trace.row(r);
@@ -487,6 +489,8 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
         let (mut ecall_row, mut fence_row) = (0, 0);
         // One selector per delegation type, in `IS_DELEGATION` order.
         let mut deleg_row = [0u32; constraints::add_sub::IS_DELEGATION.len()];
+        // S25's two: `read` and `write`, the provable I/O ecalls.
+        let (mut read_row, mut write_row) = (0u32, 0u32);
         let (value, carry) = match bit {
             kind::ADD => add(a, b),
             kind::ADDI => add(a, imm),
@@ -494,11 +498,13 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
             kind::SUB => (a.wrapping_sub(b), (a < b) as u32),
             kind::LUI => (imm, 0),
             kind::SYSTEM => match imm {
-                system_code::ECALL if row.query(Role::Rs1).is_none() => {
-                    return Err(format!(
-                        "cycle {} is an ecall's transfer cycle, and S16 proves EXIT alone",
-                        row.cycle
-                    ))
+                system_code::ECALL if a == ecall::READ => {
+                    read_row = 1;
+                    (read(Role::Rd), 0)
+                }
+                system_code::ECALL if a == ecall::WRITE => {
+                    write_row = 1;
+                    (read(Role::Rd), 0)
                 }
                 system_code::ECALL if a == ecall::EXIT => {
                     ecall_row = 1;
@@ -552,7 +558,13 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
             column.push((k as u32 == bit) as u32);
         }
         let requests: u32 = deleg_row.iter().sum();
-        is_ecall.push(ecall_row | requests);
+        is_ecall.push(ecall_row | requests | read_row | write_row);
+        is_read.push(read_row);
+        is_write.push(write_row);
+        // The word a `read` delivers, whose 16+16 pair bounds it. A row that
+        // makes no RAM query carries 0, which is what the frame's own fill
+        // writes into the query's columns and what the pair then holds.
+        ram_value_hi.push(row.query(Role::Ram).map_or(0, |q| q.write_value >> 16));
         for (column, v) in is_deleg.iter_mut().zip(deleg_row) {
             column.push(v);
         }
@@ -582,6 +594,9 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
     for (address, values) in constraints::add_sub::IS_DELEGATION.iter().zip(is_deleg) {
         out.push((*address, u32_column(values, h)));
     }
+    out.push((IS_READ, u32_column(is_read, h)));
+    out.push((IS_WRITE, u32_column(is_write, h)));
+    out.push((RAM_VALUE_HI, u32_column(ram_value_hi, h)));
     out.push((WRAP, u32_column(wrap, h)));
     out.push((RD_HI, u32_column(rd_hi, h)));
     out.push((PC_WRAP, u32_column(Vec::new(), h)));

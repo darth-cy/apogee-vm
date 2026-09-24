@@ -109,6 +109,7 @@ name = "amm"
 version = "0.1.0"
 dependencies = [
  "guest-sdk",
+ "transcript",
 ]
 
 [[package]]
@@ -254,6 +255,7 @@ name = "atomics"
 version = "0.1.0"
 dependencies = [
  "guest-sdk",
+ "transcript",
 ]
 
 [[package]]
@@ -617,6 +619,7 @@ name = "fib"
 version = "0.1.0"
 dependencies = [
  "guest-sdk",
+ "transcript",
 ]
 
 [[package]]
@@ -690,6 +693,7 @@ name = "heap"
 version = "0.1.0"
 dependencies = [
  "guest-sdk",
+ "transcript",
 ]
 
 [[package]]
@@ -884,6 +888,7 @@ name = "opcodes"
 version = "0.1.0"
 dependencies = [
  "guest-sdk",
+ "transcript",
 ]
 
 [[package]]
@@ -891,6 +896,7 @@ name = "orderbook"
 version = "0.1.0"
 dependencies = [
  "guest-sdk",
+ "transcript",
 ]
 
 [[package]]
@@ -1085,6 +1091,7 @@ dependencies = [
  "postcard",
  "revm",
  "serde",
+ "transcript",
 ]
 
 [[package]]
@@ -1301,6 +1308,7 @@ name = "rvc-dense"
 version = "0.1.0"
 dependencies = [
  "guest-sdk",
+ "transcript",
 ]
 
 [[package]]

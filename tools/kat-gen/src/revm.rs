@@ -218,6 +218,13 @@ pub fn synthetic_block() -> BlockWitness {
             // so the excess is zero and the blob gas price is its floor.
             excess_blob_gas: Some(0),
             slot_num: 0,
+            // This block's two transactions read no `BLOCKHASH`, so the list
+            // is empty — and empty is now a *refusal* rather than a
+            // placeholder: `WitnessDb::block_hash` answers from this list and
+            // errors on a number it does not hold (S25). S24 handed revm an
+            // empty database, which answered every lookup with `keccak256` of
+            // the number's decimal string.
+            block_hashes: Vec::new(),
         },
         accounts,
         txs: vec![

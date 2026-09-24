@@ -1,0 +1,35 @@
+[package]
+name = "host"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The host SDK: the witness recorder that turns a mainnet block into a
+# `BlockWitness`, and the two convenience wrappers around S20's entry points.
+# `docs/spec/witness-pipeline.md` is normative.
+[dependencies]
+# Content-addressing the RPC cache, and the public I/O digest the wrappers
+# recompute. Poseidon2 is the repository's one hash and this crate uses it
+# rather than reaching for a dependency.
+transcript.workspace = true
+field.workspace = true
+
+# The proving stack the wrappers wrap.
+prover.workspace = true
+verifier.workspace = true
+trace.workspace = true
+program.workspace = true
+loader.workspace = true
+emulator.workspace = true
+constants.workspace = true
+
+# Native revm, as the recorder's executor, and the witness type it fills.
+# Master rule 2 admits a reference implementation as a fixture generator, and
+# that is exactly what the recorder is: it produces the committed witness a
+# later differential holds the guest to. Nothing here is reachable from the
+# prover, the verifier or a guest. `docs/handoff/S25-block.md` records it.
+revm-block = { path = "../../guests/revm-block" }
+revm = { version = "=42.0.1", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+test-support.workspace = true

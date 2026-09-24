@@ -27,6 +27,9 @@
 use core::alloc::{GlobalAlloc, Layout};
 use core::arch::global_asm;
 
+
+extern crate alloc;
+
 use constants::{delegation, ecall, guest_memory, keccak, poseidon2};
 
 // ---------------------------------------------------------------------------
@@ -87,7 +90,16 @@ global_asm!(
 /// The named function keeps its own name and may be called `main`: what this
 /// emits is a separate wrapper carrying the exported symbol, so the two never
 /// collide. The function takes no arguments and returns `()`; returning from it
-/// is an `exit(0)`.
+/// is an [`exit(0)`](exit).
+///
+/// **Returning goes through [`exit`], not through crt0's tail.** Since S25
+/// every execution publishes eight words in `x24..x31` at its exit row and the
+/// verifier checks them (`docs/spec/memory.md` §10), so the exit that ends a
+/// guest has to be one that publishes. crt0 still carries its own inlined
+/// `ecall` after `call main`, and that is now genuinely unreachable — the
+/// backstop it always claimed to be — which is why the call is added here
+/// rather than in the startup assembly: an extra instruction in `.text._start`
+/// would move every address in every guest, and this moves only the wrapper.
 ///
 /// This is a `macro_rules!` and not the `#[entry]` attribute the stage prompt
 /// names, because an attribute macro requires a `proc-macro` crate — which
@@ -98,7 +110,8 @@ macro_rules! entry {
     ($f:ident) => {
         #[export_name = "main"]
         pub extern "C" fn __apogee_guest_entry() {
-            $f()
+            $f();
+            $crate::exit(0)
         }
     };
 }
@@ -161,34 +174,74 @@ unsafe fn ecall1(num: u32, a0: u32) -> i32 {
 /// Read from `fd` into `buf` until it is full or the stream ends.
 ///
 /// Returns the number of bytes read, which is `buf.len()` unless the stream
-/// ended first. A short `read` is not an end of stream, so this loops.
+/// ended first. A short `read` **is** an end of stream here and the loop
+/// stops: one call moves at most one word, so a call that moved fewer than
+/// four bytes moved the last of them.
 ///
-/// **The returned count is checked against the buffer.** The executor is the
-/// prover, so `a0` is a value an adversary picks; a count larger than the space
-/// offered would make `filled` run past `buf.len()`, and every caller — which
-/// then slices `buf[..n]` — would panic. A negative return and an over-large
-/// one are the same class of executor-level failure and take the same exit.
+/// # One word per `ecall`
+///
+/// A provable `read` delivers exactly one 4-aligned word
+/// (`docs/spec/ecall-abi.md` §4), so this loop issues one `ecall` per word and
+/// the guest does its own copying. That is S14's open question 10 answered the
+/// way it recommended, and what it buys is that the whole confinement of a
+/// `read`'s RAM write is two gates on the ecall's own row: the row reads `a1`
+/// and `a2` itself, so nothing has to be carried across rows.
+///
+/// It costs about six cycles a word. On S24's 716-byte witness that is ~1,100
+/// cycles against ~180 for a bulk transfer — noise beside a revm block — and
+/// it grows linearly, which is the number to watch if a much larger stream
+/// ever arrives on fd 0.
+///
+/// # The scratch word
+///
+/// The ecall needs a 4-aligned destination and `buf` is very often not one:
+/// `Vec<u8>` has alignment 1 and the bump allocator honours that, and a
+/// `[u8; N]` local sits wherever the code generator puts it. So every word
+/// lands in an aligned `u32` on the stack and is copied out. Copying always,
+/// rather than only when it is needed, keeps one path: a fast path taken only
+/// on lucky alignment is a path most runs never execute.
+///
+/// **The returned count is checked.** The executor is the prover, so `a0` is a
+/// value an adversary picks; a count past the word offered would make `filled`
+/// run beyond `buf.len()`, and every caller — which then slices `buf[..n]` —
+/// would panic. A negative return and an over-large one are the same class of
+/// executor-level failure and take the same exit.
 fn read_fd(fd: u32, buf: &mut [u8]) -> usize {
+    let word_bytes = ecall::READ_WORD_BYTES as usize;
+    // fd 0 and fd 3 are **word-granular**: one call moves one word, so a
+    // buffer whose length is not a multiple of four would make the last call
+    // consume a whole word from the stream and keep only part of it, silently
+    // dropping the rest. Refused rather than documented. The end of a stream
+    // is a different thing and is handled: a final call that moves 1-3 bytes
+    // loses nothing, because there is nothing after it.
+    if !buf.len().is_multiple_of(word_bytes) {
+        exit(EXIT_IO_ERROR);
+    }
     let mut filled = 0;
     while filled < buf.len() {
-        // SAFETY: `buf[filled..]` is a live, writable slice of exactly the
-        // length passed as the count, and `READ`'s contract is to write at most
-        // that many bytes through the pointer.
+        let mut scratch: u32 = 0;
+        // SAFETY: `&mut scratch` is a live, writable, 4-aligned `u32`, which is
+        // exactly the one word `READ`'s contract writes through the pointer.
         let n = unsafe {
             ecall3(
                 ecall::READ,
                 fd,
-                buf[filled..].as_mut_ptr() as u32,
-                (buf.len() - filled) as u32,
+                &mut scratch as *mut u32 as u32,
+                ecall::READ_WORD_BYTES,
             )
         };
-        if n < 0 || n as usize > buf.len() - filled {
+        if n < 0 || n as usize > word_bytes {
             exit(EXIT_IO_ERROR);
         }
         if n == 0 {
             break;
         }
-        filled += n as usize;
+        let n = (n as usize).min(buf.len() - filled);
+        buf[filled..filled + n].copy_from_slice(&scratch.to_le_bytes()[..n]);
+        filled += n;
+        if n < word_bytes {
+            break;
+        }
     }
     filled
 }
@@ -219,6 +272,53 @@ fn write_fd(fd: u32, bytes: &[u8]) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The committed streams
+// ---------------------------------------------------------------------------
+
+/// The fd 0 bytes this execution has consumed, and the fd 1 bytes it has
+/// committed.
+///
+/// **Kept because the digest cannot be streamed.** `io_digest` absorbs each
+/// stream's byte *length* before its bytes (`docs/spec/ecall-abi.md` §6), so
+/// there is no incremental sponge to carry: the whole of fd 0 has to be in
+/// hand before any of it is absorbed. Keeping them here rather than in each
+/// guest is what makes "the streams" one definition — a guest can forget to
+/// publish the digest, and the prover catches that by name, but it cannot
+/// publish a digest of the wrong bytes.
+///
+/// fd 2 and fd 3 are **not** here and must not be: a hint is prover advice and
+/// a diagnostic is verifier-ignored, so neither is bound and neither belongs
+/// in a digest that says what the execution read and wrote.
+///
+/// # Safety
+///
+/// A guest is single-threaded and has no interrupts — `crt0` enters `main` and
+/// nothing else ever runs — so the exclusive borrows below cannot overlap.
+/// This is the same argument the bump allocator in this file already makes.
+static mut PUBLIC_INPUT: Option<alloc::vec::Vec<u8>> = None;
+static mut PUBLIC_OUTPUT: Option<alloc::vec::Vec<u8>> = None;
+
+fn stream(which: &'static mut Option<alloc::vec::Vec<u8>>) -> &'static mut alloc::vec::Vec<u8> {
+    which.get_or_insert_with(alloc::vec::Vec::new)
+}
+
+/// The fd 0 bytes this execution has read, in order.
+///
+/// A guest hands these and [`public_output`] to `transcript::io_digest_words`
+/// and publishes the result with [`exit_with_public_words`]. That is the whole
+/// of a guest's obligation under `docs/spec/memory.md` §10.
+pub fn public_input() -> &'static [u8] {
+    // SAFETY: see [`PUBLIC_INPUT`]. The borrow ends with this expression.
+    unsafe { stream(&mut *core::ptr::addr_of_mut!(PUBLIC_INPUT)) }
+}
+
+/// The fd 1 bytes this execution has committed, in order.
+pub fn public_output() -> &'static [u8] {
+    // SAFETY: see [`PUBLIC_INPUT`].
+    unsafe { stream(&mut *core::ptr::addr_of_mut!(PUBLIC_OUTPUT)) }
+}
+
 /// Read public input: the fd 0 stream, which the public I/O digest binds.
 ///
 /// Returns the number of bytes read. A caller that needs exactly `buf.len()`
@@ -226,13 +326,18 @@ fn write_fd(fd: u32, bytes: &[u8]) {
 /// silently proceeding on a partly-filled buffer is how a guest ends up proving
 /// something about zeroes.
 pub fn read_input(buf: &mut [u8]) -> usize {
-    read_fd(ecall::FD_PUBLIC_INPUT, buf)
+    let n = read_fd(ecall::FD_PUBLIC_INPUT, buf);
+    // SAFETY: see [`PUBLIC_INPUT`].
+    unsafe { stream(&mut *core::ptr::addr_of_mut!(PUBLIC_INPUT)) }.extend_from_slice(&buf[..n]);
+    n
 }
 
 /// Commit to public output: append `bytes` to the fd 1 journal, which the
 /// public I/O digest binds.
 pub fn commit(bytes: &[u8]) {
     write_fd(ecall::FD_PUBLIC_OUTPUT, bytes);
+    // SAFETY: see [`PUBLIC_INPUT`].
+    unsafe { stream(&mut *core::ptr::addr_of_mut!(PUBLIC_OUTPUT)) }.extend_from_slice(bytes);
 }
 
 /// Read private hint bytes from fd 3.
@@ -250,16 +355,34 @@ pub fn log(bytes: &[u8]) {
     write_fd(ecall::FD_STDERR, bytes);
 }
 
-/// Exit with `code`. A nonzero status is a failed execution.
+/// Exit with `code`, publishing the **empty-stream** public I/O digest.
+///
+/// A nonzero status is a failed execution.
+///
+/// # What it publishes, and when that is wrong
+///
+/// Every execution publishes eight words in `x24..x31` at its exit row, and a
+/// verifier checks them against `io_digest` of the statement's fd 0 and fd 1
+/// streams (`docs/spec/memory.md` §10). A guest that moved no bytes on either
+/// has nothing to hash, so this publishes [`constants::IO_DIGEST_EMPTY`] — the
+/// constant rather than a computation, which is what keeps Poseidon2 out of an
+/// image that has no use for it.
+///
+/// **A guest that did touch fd 0 or fd 1 must not end here.** It ends at
+/// [`exit_with_public_words`] with `transcript::io_digest_words` of the two
+/// streams it actually moved; ending here instead publishes the empty constant
+/// for a non-empty statement and the proof will not verify. The executor
+/// catches that before a proof is ever made — `crates/prover` refuses a trace
+/// whose `x24..x31` are not the digest of its own streams — so the failure is
+/// a named error at proving time and not a mysterious rejection at
+/// verification time.
+///
+/// The consequence worth stating plainly: **a guest that panics after touching
+/// fd 0 or fd 1 is unprovable.** `#[panic_handler]` cannot know the streams and
+/// cannot allocate, so it cannot publish their digest. `docs/spec/ecall-abi.md`
+/// §6 records it.
 pub fn exit(code: i32) -> ! {
-    // Asked again rather than spun on: `EXIT` does not return under any
-    // executor, so the loop exists only so that a broken one cannot fall
-    // through into whatever follows, and asking a second time is a more useful
-    // thing to do about that than burning cycles.
-    loop {
-        // SAFETY: `EXIT` takes a status in `a0` and does not return.
-        unsafe { ecall1(ecall::EXIT, code as u32) };
-    }
+    exit_with_public_words(code, constants::IO_DIGEST_EMPTY)
 }
 
 /// Exit with `code`, leaving `words` in `x24..x31`.

@@ -31,7 +31,7 @@ const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../constraints/tests/vectors/add_sub.bin"
 );
-const FIXTURE_SHA256: &str = "96012f120814993368a37943d981c25252d47f7879da7cef17e9edffaf8e811c";
+const FIXTURE_SHA256: &str = "2778a865d11cf6f285c54c6127ad77ccd12a01f64c38e10414d359fff2163c96";
 
 fn artifact() -> CircuitArtifact {
     add_sub::artifact(VARS)
@@ -189,7 +189,11 @@ const CYCLE: u64 = 9;
 fn honest(i: Instr, rs1v: u32, rs2v: u32, rd_old: u32) -> Row {
     let system_ecall = i.bit == kind::SYSTEM && i.imm == 0;
     let delegation = system_ecall && rs1v == ecall::PRECOMPILE_KECCAK_F;
-    let exit = system_ecall && !delegation;
+    // S25's two. Like a delegation request they are ecalls that fall through,
+    // and like it they leave `a0`'s write free — here it is the byte count the
+    // executor claims, which nothing in the circuit can check.
+    let io = system_ecall && (rs1v == ecall::READ || rs1v == ecall::WRITE);
+    let exit = system_ecall && !delegation && !io;
     let fence = i.bit == kind::SYSTEM && i.imm == 2;
     let (sel, wrap) = match i.bit {
         kind::ADD => add(rs1v, rs2v),
@@ -197,7 +201,7 @@ fn honest(i: Instr, rs1v: u32, rs2v: u32, rd_old: u32) -> Row {
         kind::AUIPC => add(i.pc, i.imm),
         kind::SUB => (rs1v.wrapping_sub(rs2v), (rs1v < rs2v) as u32),
         kind::LUI => (i.imm, 0),
-        _ if exit => (rd_old, 0),
+        _ if exit || io => (rd_old, 0),
         _ => (0, 0),
     };
     let fall = i.pc + if i.compressed { 2 } else { 4 };
@@ -354,8 +358,60 @@ fn honest_rows() -> Vec<(&'static str, Row)> {
                 7,
             ),
         ),
-        ("padding", Row::default()),
+        // S25's two row kinds. A `read` asks for exactly one 4-aligned word
+        // and carries the RAM query that delivers it, on this row; a `write`
+        // carries no RAM query at all (`docs/spec/ecall-abi.md` §4).
+        (
+            "read of one word",
+            read_row(guest_memory::RAM_ORIGIN + 0x200, 4, 0xdead_beef, 0x0123_4567),
+        ),
+        (
+            "read at end of stream",
+            read_row(guest_memory::RAM_ORIGIN + 0x204, 0, 0x1111_2222, 0x1111_2222),
+        ),
+        ("write of nine bytes", write_row(guest_memory::RAM_ORIGIN + 0x300, 9)),
     ]
+}
+
+/// A provable `read`: `a7 = READ`, fd 0 in `a0`, the buffer in `a1`, one word
+/// in `a2`, the count delivered written back to `a0`, and the RAM query at the
+/// buffer — all on this one row.
+fn read_row(buf: u32, delivered: u32, old: u32, new: u32) -> Row {
+    let mut r = honest(
+        Instr::new(kind::SYSTEM, 0, 0, 0, 0),
+        ecall::READ,
+        ecall::FD_PUBLIC_INPUT,
+        delivered,
+    );
+    r.set("is_read", Fr::ONE);
+    r.query("arg1", CYCLE, 2, 11, buf as u64, buf as u64);
+    r.query(
+        "arg2",
+        CYCLE,
+        2,
+        12,
+        ecall::READ_WORD_BYTES as u64,
+        ecall::READ_WORD_BYTES as u64,
+    );
+    r.query("ram", CYCLE, 3, buf as u64, old as u64, new as u64);
+    r.set("ram_value_hi", f(new as u64 >> 16));
+    r
+}
+
+/// A provable `write`: the same shell, and **no RAM query** — the bytes never
+/// enter the memory argument, because the guest's own `io_digest` is what
+/// binds fd 1 (`docs/spec/memory.md` §10).
+fn write_row(buf: u32, count: u32) -> Row {
+    let mut r = honest(
+        Instr::new(kind::SYSTEM, 0, 0, 0, 0),
+        ecall::WRITE,
+        ecall::FD_PUBLIC_OUTPUT,
+        count,
+    );
+    r.set("is_write", Fr::ONE);
+    r.query("arg1", CYCLE, 2, 11, buf as u64, buf as u64);
+    r.query("arg2", CYCLE, 2, 12, count as u64, count as u64);
+    r
 }
 
 fn violated(a: &CircuitArtifact, r: &Row) -> (Vec<String>, Vec<String>) {
@@ -449,6 +505,9 @@ fn the_layout_and_the_gates_are_the_specs() {
         "is_deleg_9",
         "is_deleg_10",
         "is_deleg_11",
+        "is_read",
+        "is_write",
+        "ram_value_hi",
         "wrap",
         "rd_hi",
         "pc_wrap",
@@ -520,6 +579,12 @@ fn the_layout_and_the_gates_are_the_specs() {
         "is_deleg_11_boolean",
         "deleg_11_is_an_ecall",
         "deleg_11_number",
+        "is_read_boolean",
+        "is_read_is_an_ecall",
+        "read_number",
+        "is_write_boolean",
+        "is_write_is_an_ecall",
+        "write_number",
         "ecall_is_exit",
         "rs1_mask_rule",
         "rs2_mask_rule",
@@ -531,8 +596,12 @@ fn the_layout_and_the_gates_are_the_specs() {
         "rs1_addr_rule",
         "rs2_addr_rule",
         "rd_addr_rule",
+        "arg1_addr_rule",
+        "arg2_addr_rule",
         "rs1_value_masked",
         "rs2_value_masked",
+        "ram_addr_is_the_buffer",
+        "read_count_is_one_word",
         "add_addi_auipc",
         "sub",
         "lui",
@@ -553,7 +622,7 @@ fn the_layout_and_the_gates_are_the_specs() {
         .iter()
         .map(|l| (l.name.clone(), l.channel))
         .collect();
-    assert_eq!(lookups.len(), 21);
+    assert_eq!(lookups.len(), 23);
     assert_eq!(
         lookups[16..],
         [
@@ -561,6 +630,8 @@ fn the_layout_and_the_gates_are_the_specs() {
             ("rd_lo_range".to_string(), lookup_channel::RANGE16),
             ("next_pc_hi_range".to_string(), lookup_channel::RANGE16),
             ("next_pc_lo_range".to_string(), lookup_channel::RANGE16),
+            ("ram_value_hi_range".to_string(), lookup_channel::RANGE16),
+            ("ram_value_lo_range".to_string(), lookup_channel::RANGE16),
             ("decode_row".to_string(), lookup_channel::DECODER),
         ]
     );
@@ -568,7 +639,7 @@ fn the_layout_and_the_gates_are_the_specs() {
         .iter()
         .all(|(_, c)| *c == lookup_channel::TIMESTAMP));
     // The frame's gap obligations are each under their own query's mask; the
-    // family's five are under the row's.
+    // family's seven are under the row's.
     let pc_mask = PolyAddress::Memory(1);
     for (at, l) in a.lookups[..16].iter().enumerate() {
         assert_eq!(
@@ -583,7 +654,7 @@ fn the_layout_and_the_gates_are_the_specs() {
         "every new obligation is the row's"
     );
 
-    let mult = |i: u32| PolyAddress::Witness(32 + i);
+    let mult = |i: u32| PolyAddress::Witness(35 + i);
     assert_eq!(
         add_sub::channels(),
         vec![
@@ -800,9 +871,56 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         };
         cases.push(("an exit reading a1 or a2", r, vec![rule]));
     }
+    // An exit row that stores a word breaks three gates, not one: it has no
+    // RAM query to make, and the word it claims is neither at `a1` — which it
+    // does not read — nor a one-word request.
     let mut r = row("exit 42");
     r.query("ram", CYCLE, 3, 0x7fff_fffc, 7, 9);
-    cases.push(("the exit row storing a word", r, vec!["ram_mask_rule"]));
+    r.set("ram_value_hi", f(0));
+    cases.push((
+        "the exit row storing a word",
+        r,
+        vec![
+            "ram_mask_rule",
+            "ram_addr_is_the_buffer",
+            "read_count_is_one_word",
+        ],
+    ));
+
+    // S25's two confinement gates, each on a row that breaks it alone.
+    let base = guest_memory::RAM_ORIGIN + 0x200;
+    let mut r = read_row(base, 4, 1, 2);
+    r.query("ram", CYCLE, 3, (base + 4) as u64, 1, 2);
+    cases.push((
+        "a read writing the word after its buffer",
+        r,
+        vec!["ram_addr_is_the_buffer"],
+    ));
+
+    let mut r = read_row(base, 4, 1, 2);
+    r.query("arg2", CYCLE, 2, 12, 8, 8);
+    cases.push((
+        "a read asking for two words",
+        r,
+        vec!["read_count_is_one_word"],
+    ));
+
+    // A `write` makes no RAM query, so claiming one is the mask rule's alone:
+    // its `a1` and its count are whatever the call named, and the two
+    // confinement gates are satisfied by naming them.
+    let mut r = write_row(base, 4);
+    r.query("ram", CYCLE, 3, base as u64, 1, 2);
+    r.set("ram_value_hi", f(0));
+    cases.push(("a write storing a word", r, vec!["ram_mask_rule"]));
+
+    // The number pins, each the lone refusal of a row claiming the wrong one.
+    let mut r = read_row(base, 4, 1, 2);
+    r.query("rs1", CYCLE, 1, 17, ecall::WRITE as u64, ecall::WRITE as u64);
+    cases.push(("a read row whose a7 says write", r, vec!["read_number"]));
+
+    let mut r = write_row(base, 4);
+    r.query("rs1", CYCLE, 1, 17, ecall::READ as u64, ecall::READ as u64);
+    cases.push(("a write row whose a7 says read", r, vec!["write_number"]));
     let mut r = row("fence");
     r.query("rd", CYCLE, 3, 0, 0, 0);
     r.set("rd_is_zero", Fr::ONE);
@@ -834,10 +952,20 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         r,
         vec!["rs1_mask_rule", "rd_mask_rule"],
     ));
-    // A padding row storing into RAM, which no row of this family may do.
+    // A padding row storing into RAM. Three gates refuse it: a padding row
+    // makes no RAM query, and the word it claims is neither at the `a1` it
+    // does not read nor a one-word request.
     let mut r = Row::default();
     r.query("ram", CYCLE, 3, 0x7fff_fffc, 0, 7);
-    cases.push(("a padding row storing a word", r, vec!["ram_mask_rule"]));
+    cases.push((
+        "a padding row storing a word",
+        r,
+        vec![
+            "ram_mask_rule",
+            "ram_addr_is_the_buffer",
+            "read_count_is_one_word",
+        ],
+    ));
     // Its second: a live row's rd write masked off.
     let mut r = row("add, not carrying");
     r.drop_query("rd");

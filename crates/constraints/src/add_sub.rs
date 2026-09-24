@@ -56,9 +56,18 @@ const TYPES: usize = DELEGATIONS.len();
 // above, the one place an ecall number lives. A `const` assertion rather than a
 // test, because a violation here is a mis-numbered ABI and should not compile.
 const _: () = {
+    // The three numbers this family pins outside the delegation registry.
+    // `ecall_is_exit` and the five per-number gates partition an ecall row
+    // only because no two of the six numbers are equal: a row claiming two
+    // selectors would need `a7` to be two numbers at once.
+    assert!(constants::ecall::READ != constants::ecall::WRITE);
+    assert!(constants::ecall::READ != constants::ecall::EXIT);
+    assert!(constants::ecall::WRITE != constants::ecall::EXIT);
     let mut i = 0;
     while i < TYPES {
         assert!(constants::ecall::EXIT != DELEGATIONS[i].1);
+        assert!(constants::ecall::READ != DELEGATIONS[i].1);
+        assert!(constants::ecall::WRITE != DELEGATIONS[i].1);
         assert!(DELEGATIONS[i].1 >= constants::ecall::PRECOMPILE_FIRST);
         assert!(DELEGATIONS[i].1 <= constants::ecall::PRECOMPILE_LAST);
         let mut j = i + 1;
@@ -150,20 +159,45 @@ pub const IS_DELEGATION: [PolyAddress; TYPES] = [
 /// The keccak-f request selector, S21's `IS_KECCAK`, now the first of
 /// [`IS_DELEGATION`].
 pub const IS_KECCAK: PolyAddress = IS_DELEGATION[0];
-/// `W[28]`: the sum's carry, or the difference's borrow.
-pub const WRAP: PolyAddress = w(FRAME_WITNESS + 14 + TYPES as u32);
-/// `W[29]`: the computed `rd` value's high halfword.
-pub const RD_HI: PolyAddress = w(FRAME_WITNESS + 15 + TYPES as u32);
-/// `W[30]`: `next_pc`'s wrap, 0 on every honest row.
-pub const PC_WRAP: PolyAddress = w(FRAME_WITNESS + 16 + TYPES as u32);
-/// `W[31]`: `next_pc`'s high halfword.
-pub const NEXT_PC_HI: PolyAddress = w(FRAME_WITNESS + 17 + TYPES as u32);
-/// `W[32..35]`: the channels' multiplicities, in channel order — timestamp,
-/// range16, decoder — last in the witness subtree (`docs/spec/lookup.md` §7).
+/// 1 exactly on an ecall row whose `a7` is `READ` (S25).
+///
+/// A free boolean, pinned by [`artifact`]'s `read_number` gate, exactly as a
+/// delegation type's selector is. It is what turns on the row's `arg1`,
+/// `arg2` and **`ram`** queries: a provable `read` delivers one 4-aligned word
+/// into `a1`, on this row, and the whole confinement of that write is two
+/// gates here rather than a binding carried across rows
+/// (`docs/spec/ecall-abi.md` §4).
+pub const IS_READ: PolyAddress = w(FRAME_WITNESS + 14 + TYPES as u32);
+/// 1 exactly on an ecall row whose `a7` is `WRITE` (S25).
+///
+/// It turns on `arg1` and `arg2` and **nothing else**: a `write` makes no RAM
+/// query at all, because the query it used to make bound nothing. fd 1 is
+/// bound by the guest's own `io_digest` over the bytes it assembled with
+/// ordinary loads and stores, which the memory argument does bind
+/// (`docs/spec/memory.md` §10).
+pub const IS_WRITE: PolyAddress = w(FRAME_WITNESS + 15 + TYPES as u32);
+/// The high halfword of the word a `read` delivers.
+///
+/// The delivered value is advice — nothing pins *what* arrives, which is the
+/// point — but it is still a 32-bit word written into RAM, so it carries the
+/// range convention's 16+16 pair like every other value a family writes. Root
+/// `CLAUDE.md`, "A copied value is not range-checked; a computed one is",
+/// names this stage as the one that owes it.
+pub const RAM_VALUE_HI: PolyAddress = w(FRAME_WITNESS + 16 + TYPES as u32);
+/// The sum's carry, or the difference's borrow.
+pub const WRAP: PolyAddress = w(FRAME_WITNESS + 17 + TYPES as u32);
+/// The computed `rd` value's high halfword.
+pub const RD_HI: PolyAddress = w(FRAME_WITNESS + 18 + TYPES as u32);
+/// `next_pc`'s wrap, 0 on every honest row.
+pub const PC_WRAP: PolyAddress = w(FRAME_WITNESS + 19 + TYPES as u32);
+/// `next_pc`'s high halfword.
+pub const NEXT_PC_HI: PolyAddress = w(FRAME_WITNESS + 20 + TYPES as u32);
+/// The channels' multiplicities, in channel order — timestamp, range16,
+/// decoder — last in the witness subtree (`docs/spec/lookup.md` §7).
 pub const MULTIPLICITIES: [PolyAddress; 3] = [
-    w(FRAME_WITNESS + 18 + TYPES as u32),
-    w(FRAME_WITNESS + 19 + TYPES as u32),
-    w(FRAME_WITNESS + 20 + TYPES as u32),
+    w(FRAME_WITNESS + 21 + TYPES as u32),
+    w(FRAME_WITNESS + 22 + TYPES as u32),
+    w(FRAME_WITNESS + 23 + TYPES as u32),
 ];
 
 /// The decoded table's width, `program::lookup_tuple(ADD_SUB_LUI_AUIPC)`:
@@ -179,6 +213,10 @@ const A7: u64 = 17;
 /// `a0`'s register, which an ecall row reads as its `rs2` and writes as its
 /// `rd`.
 const A0: u64 = 10;
+/// `a1`'s register, the buffer a `read` or a `write` names, read as `arg1`.
+const A1: u64 = 11;
+/// `a2`'s register, the byte count, read as `arg2`.
+const A2: u64 = 12;
 
 fn lit(v: u64) -> Coeff {
     Coeff::Literal(Fr::from_u64(v))
@@ -245,6 +283,20 @@ fn addr_rule(slot: usize, decoded: PolyAddress, register: u64) -> GateDef {
     )
 }
 
+/// `m_q·(a_q − register)`: a present query's address is that literal register.
+///
+/// [`addr_rule`]'s sibling, for the two queries whose address comes from the
+/// ABI rather than from a decoded field: an `ecall`'s encoding names no
+/// registers, so `a1` and `a2` have nothing to be compared against but their
+/// numbers.
+fn fixed_addr_rule(slot: usize, register: u64) -> GateDef {
+    let m = frame(slot, FIELD_MASK);
+    quadratic(
+        vec![(neg(register), m)],
+        vec![(lit(1), m, frame(slot, FIELD_ADDR))],
+    )
+}
+
 /// `v_q − m_q·v_q`: an absent operand reads 0.
 fn value_masked(slot: usize) -> GateDef {
     let (m, v) = (frame(slot, FIELD_MASK), frame(slot, FIELD_READ_VALUE));
@@ -270,6 +322,20 @@ fn low_half(x: PolyAddress, hi: PolyAddress) -> GateDef {
     ])
 }
 
+/// Every provable-ecall selector but the exit's, in gate order: the three
+/// delegation requests, then `read` and `write`.
+///
+/// `is_exit` is the remainder — `is_ecall` minus all of these — so a gate that
+/// means "on an exit row" subtracts exactly this list, and a gate that means
+/// "on a call row" adds `is_ecall`. One list, so the two cannot drift apart
+/// when a number is added.
+fn non_exit_ecalls() -> Vec<PolyAddress> {
+    let mut all = IS_DELEGATION.to_vec();
+    all.push(IS_READ);
+    all.push(IS_WRITE);
+    all
+}
+
 fn names(list: &[&str]) -> Vec<String> {
     list.iter().map(|s| s.to_string()).collect()
 }
@@ -280,7 +346,7 @@ fn names(list: &[&str]) -> Vec<String> {
 ///
 /// Panics if the family's frame is not the eight queries this file addresses,
 /// or if any obligation count is not §8.3's — 16 timestamp (two a query, and
-/// S21's `deleg` is the eighth), 4 `RANGE16`, 1 decoder — and on every refusal
+/// S21's `deleg` is the eighth), 6 `RANGE16`, 1 decoder — and on every refusal
 /// of the assembly.
 pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     assert_eq!(
@@ -317,7 +383,15 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
             .iter()
             .map(|(family, ..)| format!("is_deleg_{family}")),
     );
-    witness.extend(names(&["wrap", "rd_hi", "pc_wrap", "next_pc_hi"]));
+    witness.extend(names(&[
+        "is_read",
+        "is_write",
+        "ram_value_hi",
+        "wrap",
+        "rd_hi",
+        "pc_wrap",
+        "next_pc_hi",
+    ]));
     witness.extend(
         [
             lookup_channel::TIMESTAMP,
@@ -394,11 +468,35 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
             ),
         ));
     }
-    // is_exit·(a7 - EXIT) = 0, with is_exit written out as is_ecall - Σ is_t.
+    // S25's two, the same three gates apiece: a free boolean, 0 off an ecall
+    // row, and `a7` pinned to its number. `read` and `write` are ordinary
+    // provable ecalls now, and the only thing that distinguishes them from a
+    // delegation request here is what their selectors go on to switch on.
+    for (name, is_io, number) in [
+        ("read", IS_READ, constants::ecall::READ),
+        ("write", IS_WRITE, constants::ecall::WRITE),
+    ] {
+        enforcing.push((format!("is_{name}_boolean"), booleanity(is_io)));
+        enforcing.push((
+            format!("is_{name}_is_an_ecall"),
+            quadratic(vec![(lit(1), is_io)], vec![(neg(1), is_io, IS_ECALL)]),
+        ));
+        enforcing.push((
+            format!("{name}_number"),
+            quadratic(
+                vec![(neg(number as u64), is_io)],
+                vec![(lit(1), is_io, v_rs1)],
+            ),
+        ));
+    }
+
+    // is_exit·(a7 - EXIT) = 0, with is_exit written out as
+    // `is_ecall - Σ is_deleg_t - is_read - is_write`: the remainder of the
+    // partition, and the only route to `HALT_PC`.
     {
         let mut linear = vec![(neg(constants::ecall::EXIT as u64), IS_ECALL)];
         let mut products = vec![(lit(1), IS_ECALL, v_rs1)];
-        for is_t in IS_DELEGATION {
+        for is_t in non_exit_ecalls() {
             linear.push((lit(constants::ecall::EXIT as u64), is_t));
             products.push((neg(1), is_t, v_rs1));
         }
@@ -416,13 +514,21 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
         "rs2_mask_rule".into(),
         mask_rule(frame(SLOT_RS2, FIELD_MASK), &[KIND_ADD, KIND_SUB, IS_ECALL]),
     ));
-    for (name, slot) in [
-        ("arg1_mask_rule", SLOT_ARG1),
-        ("arg2_mask_rule", SLOT_ARG2),
-        ("ram_mask_rule", SLOT_RAM),
-    ] {
-        enforcing.push((name.into(), linear(vec![(lit(1), frame(slot, FIELD_MASK))])));
-    }
+    // `a1` and `a2` are read by a `read` and by a `write`; the RAM query is a
+    // `read`'s alone. Until S25 all three masks were held to 0 — the family
+    // proved `EXIT` and the delegation numbers, none of which reads a buffer.
+    enforcing.push((
+        "arg1_mask_rule".into(),
+        mask_rule(frame(SLOT_ARG1, FIELD_MASK), &[IS_READ, IS_WRITE]),
+    ));
+    enforcing.push((
+        "arg2_mask_rule".into(),
+        mask_rule(frame(SLOT_ARG2, FIELD_MASK), &[IS_READ, IS_WRITE]),
+    ));
+    enforcing.push((
+        "ram_mask_rule".into(),
+        mask_rule(frame(SLOT_RAM, FIELD_MASK), &[IS_READ]),
+    ));
     enforcing.push((
         "rd_mask_rule".into(),
         mask_rule(
@@ -439,8 +545,60 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     enforcing.push(("rs1_addr_rule".into(), addr_rule(SLOT_RS1, DECODED_RS1, A7)));
     enforcing.push(("rs2_addr_rule".into(), addr_rule(SLOT_RS2, DECODED_RS2, A0)));
     enforcing.push(("rd_addr_rule".into(), addr_rule(SLOT_RD, DECODED_RD, A0)));
+    // `a1` and `a2` have no decoded field to come from — an `ecall`'s encoding
+    // names no registers — so their addresses are the two literals, under
+    // their own masks.
+    enforcing.push((
+        "arg1_addr_rule".into(),
+        fixed_addr_rule(SLOT_ARG1, A1),
+    ));
+    enforcing.push((
+        "arg2_addr_rule".into(),
+        fixed_addr_rule(SLOT_ARG2, A2),
+    ));
     enforcing.push(("rs1_value_masked".into(), value_masked(SLOT_RS1)));
     enforcing.push(("rs2_value_masked".into(), value_masked(SLOT_RS2)));
+
+    // ---- the `read` ecall's RAM write, confined ------------------------
+    //
+    // These two gates are the whole of S14's open question 10, answered the
+    // way that handoff recommended: **one word per read, on the ecall's own
+    // row.** Because the query rides the row that reads `a1` and `a2`, the
+    // buffer and the count it is confined to are columns of this row, and
+    // nothing has to be carried across rows — which this arithmetization has
+    // no way to do but the global memory multiset.
+    //
+    // Together they say: the word written is the word at `a1`, and the call
+    // asked for exactly that one word. Everything else a malicious prover
+    // might try is already refused elsewhere:
+    //
+    //   * a RAM query on a row that is not a `read` — `ram_mask_rule`;
+    //   * an address that is not a 4-aligned word of a declared RAM window —
+    //     it has no init tuple, so the multiset cannot balance
+    //     (`docs/spec/memory.md` §9, Coverage);
+    //   * a value outside `[0, 2^32)` — the two obligations below;
+    //   * *what* the word contains — nothing pins it, and nothing should: the
+    //     delivered bytes are advice, and what ties them to `public.input` is
+    //     the guest's own `io_digest` over the buffer it read them into
+    //     (`docs/spec/memory.md` §10).
+    let m_ram = frame(SLOT_RAM, FIELD_MASK);
+    enforcing.push((
+        "ram_addr_is_the_buffer".into(),
+        quadratic(
+            vec![],
+            vec![
+                (lit(1), m_ram, frame(SLOT_RAM, FIELD_ADDR)),
+                (neg(1), m_ram, frame(SLOT_ARG1, FIELD_READ_VALUE)),
+            ],
+        ),
+    ));
+    enforcing.push((
+        "read_count_is_one_word".into(),
+        quadratic(
+            vec![(neg(constants::ecall::READ_WORD_BYTES as u64), m_ram)],
+            vec![(lit(1), m_ram, frame(SLOT_ARG2, FIELD_READ_VALUE))],
+        ),
+    ));
 
     // (add + addi + auipc)·(rs1 + rs2 + imm − sel − 2^32·wrap) + auipc·pc: an
     // R-type row's imm is 0, an I-type or U-type row's absent rs2 reads 0, and
@@ -474,11 +632,19 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
             vec![(lit(1), KIND_LUI, DECODED_IMM), (neg(1), KIND_LUI, sel)],
         ),
     ));
-    // The exit row's `a0` write is its read. A delegation request's is not:
-    // it writes 0, which is the first of the three request-side zeroings.
+    // The exit row's `a0` write is its read. No other provable ecall's is: a
+    // delegation request writes 0 (the first of its three request-side
+    // zeroings), and a `read` or a `write` writes the byte count the executor
+    // claims — a **free witness**, bounded only by the family's own `rd` pair.
+    //
+    // Free, and deliberately so. The count is advice like the bytes are: what
+    // the guest does with a short answer is the guest's business, and
+    // `guest_sdk::read_fd` checks it against the word it offered. Nothing here
+    // could check it — the number of bytes a stream had left is not a fact any
+    // row holds.
     enforcing.push(("exit_status".into(), {
         let mut products = vec![(lit(1), IS_ECALL, v_rd), (neg(1), IS_ECALL, sel)];
-        for is_t in IS_DELEGATION {
+        for is_t in non_exit_ecalls() {
             products.push((neg(1), is_t, v_rd));
             products.push((lit(1), is_t, sel));
         }
@@ -541,8 +707,13 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     enforcing.push(("wrap_boolean".into(), booleanity(WRAP)));
     enforcing.push(("pc_wrap_boolean".into(), booleanity(PC_WRAP)));
     // next_pc + 2^32·pc_wrap = decoded_next_pc, or HALT_PC on the exit row.
-    // A delegation request is not an exit: its next_pc is the fall-through,
-    // so `is_exit = is_ecall - is_keccak` is what carries the sentinel.
+    // Only an exit is an exit: a delegation request, a `read` and a `write`
+    // each fall through, so `is_exit = is_ecall - Σ (the other five)` is what
+    // carries the sentinel.
+    //
+    // Since S25 **every live row advances the pc**. The machine's one
+    // `next_pc = pc` row shape was the ecall transfer cycle, and there are no
+    // transfer cycles any more (`docs/spec/execution-trace.md` §1).
     enforcing.push(("next_pc_rule".into(), {
         let mut linear = vec![
             (lit(1), next_pc),
@@ -551,7 +722,7 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
             (neg(mem::HALT_PC as u64), IS_ECALL),
         ];
         let mut products = vec![(lit(1), IS_ECALL, DECODED_NEXT_PC)];
-        for is_t in IS_DELEGATION {
+        for is_t in non_exit_ecalls() {
             linear.push((lit(mem::HALT_PC as u64), is_t));
             products.push((neg(1), is_t, DECODED_NEXT_PC));
         }
@@ -565,6 +736,19 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
         range16("rd_lo_range", low_half(sel, RD_HI)),
         range16("next_pc_hi_range", column(NEXT_PC_HI)),
         range16("next_pc_lo_range", low_half(next_pc, NEXT_PC_HI)),
+        // The word a `read` delivers. Its *content* is advice and nothing
+        // pins it, but it is a 32-bit value this family writes into RAM, so
+        // it carries the range convention's pair like every other one — root
+        // `CLAUDE.md`, "A copied value is not range-checked; a computed one
+        // is", which names the I/O-binding stage as owing exactly this. The
+        // selector is the row's `m_pc`, as every obligation of this family's
+        // is: on a live row that makes no RAM query the write value is 0 and
+        // the pair holds with `ram_value_hi = 0`.
+        range16("ram_value_hi_range", column(RAM_VALUE_HI)),
+        range16(
+            "ram_value_lo_range",
+            low_half(frame(SLOT_RAM, FIELD_WRITE_VALUE), RAM_VALUE_HI),
+        ),
         LookupExpr {
             name: "decode_row".into(),
             channel: lookup_channel::DECODER,
@@ -593,7 +777,7 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     // per-channel form).
     for (channel, want) in [
         (lookup_channel::TIMESTAMP, 2 * QUERIES.len()),
-        (lookup_channel::RANGE16, 4),
+        (lookup_channel::RANGE16, 6),
         (lookup_channel::DECODER, 1),
     ] {
         let got = a.lookups.iter().filter(|l| l.channel == channel).count();

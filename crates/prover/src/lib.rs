@@ -361,6 +361,31 @@ fn statement_inputs_rec(
     });
     rec.end(total);
     let io = archive.io_streams();
+    // The public I/O binding, checked on the honest side so that a guest that
+    // forgot it fails **here**, by name, rather than as a proof that will not
+    // verify for a reason nothing in the prover mentioned.
+    //
+    // `verify_global_memory` makes exactly this comparison
+    // (`docs/spec/memory.md` §10): the eight words the guest left in
+    // `x24..x31` against `io_digest` of the streams it moved. A guest that
+    // ends at `guest_sdk::exit` after touching fd 0 or fd 1 publishes the
+    // empty-stream constant instead and is caught right here, and so is one
+    // that publishes something else in those registers — which is why S24's
+    // embedded-witness binary, whose output digest lived there, is retired
+    // rather than kept beside this.
+    //
+    // It costs one Poseidon2 sponge over the two streams, once per block.
+    let published: [u32; 8] = core::array::from_fn(|i| boundary.reg_values[24 - 1 + i]);
+    if published != transcript::io_digest_words(&io.input, &io.output) {
+        return Err(ProverError::Trace(format!(
+            "the guest left x24..x31 = {published:08x?}, which is not the public I/O digest of \
+             its {} input and {} output bytes. A guest that touches fd 0 or fd 1 must exit \
+             through `guest_sdk::exit_with_public_words` with `transcript::io_digest_words` of \
+             the two streams (`docs/spec/memory.md` §10).",
+            io.input.len(),
+            io.output.len()
+        )));
+    }
     Ok(StatementInputs {
         input: io.input.clone(),
         output: io.output.clone(),

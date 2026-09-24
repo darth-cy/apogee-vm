@@ -107,8 +107,15 @@ fn main() {
         // SAFETY: as the blocks above; the misaligned address is inside
         // `scratch`.
         2..=8 => unsafe { misaligned(mode, scratch) },
-        _ => guest_sdk::exit(2),
+        // This run read fd 0, so its exit publishes the real digest too.
+        _ => transcript::exit_with_io_digest(2),
     }
+    // Publish the public I/O digest of the two streams this run moved, in
+    // `x24..x31`, which is what binds fd 0 and fd 1 to the execution
+    // (`docs/spec/memory.md` §10). Falling out of `main` instead would reach
+    // `guest_sdk::exit`, which publishes the empty-stream constant, and the
+    // prover would refuse the trace by name.
+    transcript::exit_with_io_digest(0)
 }
 
 // ---------------------------------------------------------------------------

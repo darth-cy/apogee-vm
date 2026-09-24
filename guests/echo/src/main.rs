@@ -101,6 +101,12 @@ fn main() {
     guest_sdk::log(b"state0=");
     log_hex(&state_bytes[..32]);
     guest_sdk::log(b"\n");
+    // Publish the public I/O digest of the two streams this run moved, in
+    // `x24..x31`, which is what binds fd 0 and fd 1 to the execution
+    // (`docs/spec/memory.md` §10). Falling out of `main` instead would reach
+    // `guest_sdk::exit`, which publishes the empty-stream constant, and the
+    // prover would refuse the trace by name.
+    transcript::exit_with_io_digest(0)
 }
 
 /// The precompile's software twin: the frozen S02 permutation, over the same

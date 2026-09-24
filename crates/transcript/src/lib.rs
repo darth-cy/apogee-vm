@@ -473,6 +473,57 @@ pub fn io_digest(public_input: &[u8], public_output: &[u8]) -> Fr {
     sponge.sample()
 }
 
+/// [`io_digest`]'s eight little-endian `u32` words.
+///
+/// **The one spelling of the split**, called by both sides of the binding: a
+/// guest leaves these in `x24..x31` at exit, and a verifier compares them with
+/// the register boundary's `reg_values[23..31]`. Two spellings of "the digest
+/// as words" would be two chances to disagree about byte order over a value
+/// nothing else cross-checks, and the disagreement would look like a broken
+/// guest.
+///
+/// `docs/spec/ecall-abi.md` §6 is the digest; `docs/spec/memory.md` §10 is the
+/// check.
+pub fn io_digest_words(public_input: &[u8], public_output: &[u8]) -> [u32; 8] {
+    let bytes = io_digest(public_input, public_output).to_bytes();
+    core::array::from_fn(|i| {
+        u32::from_le_bytes([
+            bytes[4 * i],
+            bytes[4 * i + 1],
+            bytes[4 * i + 2],
+            bytes[4 * i + 3],
+        ])
+    })
+}
+
+/// Exit a guest, publishing the public I/O digest of the streams it moved.
+///
+/// **This is how a guest that touches fd 0 or fd 1 ends.** `guest_sdk::exit`
+/// publishes `constants::IO_DIGEST_EMPTY`, which is right only for an
+/// execution that moved no committed bytes; this publishes the digest of what
+/// `guest-sdk` actually recorded, which is what `verify_block` checks
+/// (`docs/spec/memory.md` §10).
+///
+/// # Why it lives here
+///
+/// It is the one place both halves are in scope. `crates/guest-sdk` owns the
+/// streams but cannot name `Fr`, and the dependency runs this way round —
+/// `field` and `transcript` route their arithmetic through `guest-sdk`'s
+/// delegation shims (`docs/spec/delegation.md` §12), so `guest-sdk` may not
+/// depend on this crate. Writing the three lines into each of the eleven
+/// guests that need them instead would be eleven chances to hash the wrong
+/// pair of buffers, over a value nothing else cross-checks.
+///
+/// Guest-only, by target and not by a cargo feature, exactly as
+/// [`poseidon2_permute`]'s backend is.
+#[cfg(target_arch = "riscv32")]
+pub fn exit_with_io_digest(code: i32) -> ! {
+    guest_sdk::exit_with_public_words(
+        code,
+        io_digest_words(guest_sdk::public_input(), guest_sdk::public_output()),
+    )
+}
+
 // ---------------------------------------------------------------------------
 // G1 points, curve-free.
 // ---------------------------------------------------------------------------

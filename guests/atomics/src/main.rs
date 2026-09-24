@@ -96,6 +96,12 @@ fn main() {
     guest_sdk::commit(&HIGH.load(SeqCst).to_le_bytes());
     guest_sdk::commit(&STEPS.load(SeqCst).to_le_bytes());
     guest_sdk::commit(&old.to_le_bytes());
+    // Publish the public I/O digest of the two streams this run moved, in
+    // `x24..x31`, which is what binds fd 0 and fd 1 to the execution
+    // (`docs/spec/memory.md` §10). Falling out of `main` instead would reach
+    // `guest_sdk::exit`, which publishes the empty-stream constant, and the
+    // prover would refuse the trace by name.
+    transcript::exit_with_io_digest(0)
 }
 
 /// One step of an order-sensitive fold: multiplying by an odd number is
