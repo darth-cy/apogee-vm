@@ -39,7 +39,7 @@ use constants::{family, guest_memory, keccak};
 use emulator::{lanes_of, trace_run, GuestIo};
 use loader::{load_elf, ProgramImage, Slot};
 use program::{decode_program, DecodedTables, ProgramParams, VmConfig};
-use revm_block::BlockWitness;
+use revm_block::{AccountWitness, BlockWitness, TxWitness};
 use trace::plan_shards;
 
 /// The normative guest: its witness arrives on fd 0.
@@ -70,6 +70,22 @@ fn output_bytes() -> Vec<u8> {
 }
 
 /// Every keccak-f frame the committed run delegated, as 50-word states.
+/// The output commitment's `count` per-transaction records, and the offset the
+/// two 32-byte commitments begin at. `docs/spec/revm-block.md` §2.
+fn tx_records(bytes: &[u8], count: usize) -> (Vec<(u8, u64, Vec<u8>)>, usize) {
+    let mut at = 0;
+    let mut records = Vec::new();
+    for _ in 0..count {
+        let status = bytes[at];
+        let gas = u64::from_le_bytes(bytes[at + 1..at + 9].try_into().unwrap());
+        let len = u32::from_le_bytes(bytes[at + 9..at + 13].try_into().unwrap()) as usize;
+        at += 13;
+        records.push((status, gas, bytes[at..at + len].to_vec()));
+        at += len;
+    }
+    (records, at)
+}
+
 fn committed_frames() -> Vec<[u32; keccak::FRAME_WORDS]> {
     let bytes = vector("revm_block_keccak.bin");
     let width = 4 * keccak::FRAME_WORDS;
@@ -345,19 +361,12 @@ fn native_revm_produces_the_committed_output() {
 #[test]
 fn the_output_commitment_has_the_frozen_shape() {
     let bytes = output_bytes();
-    let mut at = 0;
+    let (records, mut at) = tx_records(&bytes, 2);
     let mut take = |n: usize| {
         let slice = bytes[at..at + n].to_vec();
         at += n;
         slice
     };
-    let mut records = Vec::new();
-    for _ in 0..2 {
-        let status = take(1)[0];
-        let gas = u64::from_le_bytes(take(8).try_into().unwrap());
-        let len = u32::from_le_bytes(take(4).try_into().unwrap()) as usize;
-        records.push((status, gas, take(len)));
-    }
     // 2 = Success, in `revm_block`'s encoding.
     assert_eq!(records[0].0, 2, "the transfer succeeds");
     assert_eq!(
@@ -399,6 +408,153 @@ fn the_output_commitment_has_the_frozen_shape() {
         test_support::to_hex(&post_state),
         "ba19b113ca39ae7bb3f7aacabebca642a63029dac677c0c10fe88c07b8d8b2f5",
         "the post-state summary"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// What the synthetic mode does not carry
+// ---------------------------------------------------------------------------
+
+/// The fixture's header, one funded sender, one account holding `code`, and
+/// one transaction per entry of `gas_limits` calling it.
+///
+/// Built here rather than committed: these are blocks the workload does not
+/// contain, written to pin behaviour the committed fixture cannot reach. The
+/// addresses lead with `0xee` for the reason `docs/spec/revm-block.md` §1.3
+/// gives — every precompile's address is nineteen zero bytes and a label.
+fn synthetic_witness(block_gas_limit: u64, code: Vec<u8>, gas_limits: &[u64]) -> BlockWitness {
+    let committed = BlockWitness::decode(&witness_bytes()).expect("the committed witness decodes");
+    let (mut sender, mut callee) = ([0xeeu8; 20], [0xeeu8; 20]);
+    sender[19] = 1;
+    callee[19] = 2;
+    let mut balance = [0u8; 32];
+    balance[23] = 1; // 2^64 wei, far above anything this block can spend
+
+    let mut env = committed.env.clone();
+    env.gas_limit = block_gas_limit;
+
+    BlockWitness {
+        env,
+        accounts: vec![
+            AccountWitness {
+                address: sender,
+                nonce: 0,
+                balance,
+                code: Vec::new(),
+                slots: Vec::new(),
+            },
+            AccountWitness {
+                address: callee,
+                nonce: 0,
+                balance: [0u8; 32],
+                code,
+                slots: Vec::new(),
+            },
+        ],
+        txs: gas_limits
+            .iter()
+            .enumerate()
+            .map(|(i, limit)| TxWitness {
+                caller: sender,
+                to: Some(callee),
+                value: [0u8; 32],
+                data: Vec::new(),
+                gas_limit: *limit,
+                gas_price: 10,
+                gas_priority_fee: None,
+                nonce: i as u64,
+                chain_id: Some(committed.env.chain_id),
+                access_list: Vec::new(),
+            })
+            .collect(),
+        stateless: None,
+    }
+}
+
+/// The block's gas limit is a **running** bound, and `revm_block::run` is what
+/// enforces it.
+///
+/// revm checks `tx.gas_limit <= block.gas_limit` per transaction and can check
+/// no more — `transact_one` is one transaction and revm keeps nothing across a
+/// block — so without the accumulator in `run` a witness may carry any number
+/// of transactions that individually fit and together do not. That is a block
+/// no Ethereum node would accept, and the guest would commit an output for it.
+#[test]
+fn a_block_past_its_gas_limit_is_refused() {
+    // A plain transfer to a codeless account: 21,000 gas, the intrinsic cost
+    // exactly, so the arithmetic below is the test's and not a gas schedule's.
+    const TRANSFER: u64 = 21_000;
+
+    // The control, and it comes first: two transactions that fit, execute.
+    let ok = synthetic_witness(50_000, Vec::new(), &[TRANSFER, TRANSFER]);
+    let output = revm_block::run(&ok).expect("two transfers inside a 50,000-gas block execute");
+    let (records, _) = tx_records(&output, 2);
+    assert_eq!(
+        records.iter().map(|r| r.1).sum::<u64>(),
+        2 * TRANSFER,
+        "and together they spend what the block had room for"
+    );
+
+    // One transaction over the whole block limit. revm refuses this one too,
+    // with `CallerGasLimitMoreThanBlock`; `run` reaches it first and says so
+    // in the block's terms.
+    let over = synthetic_witness(20_000, Vec::new(), &[TRANSFER]);
+    let refused = revm_block::run(&over).expect_err("a transaction may not exceed the block");
+    assert!(
+        refused.contains("does not fit in the block's remaining"),
+        "unexpected refusal: {refused}"
+    );
+
+    // The one revm cannot see: each transaction fits the block's limit, and
+    // the second does not fit what the first left. This is the case the
+    // accumulator exists for.
+    let cumulative = synthetic_witness(30_000, Vec::new(), &[TRANSFER, TRANSFER]);
+    let refused = revm_block::run(&cumulative)
+        .expect_err("the second transfer does not fit in the 9,000 gas the first left");
+    assert!(
+        refused.starts_with("transaction 1's gas limit 21000"),
+        "unexpected refusal: {refused}"
+    );
+}
+
+/// `BLOCKHASH` reads a placeholder today, and this is the pin on that.
+///
+/// The witness carries no block hashes, so `run` hands revm a
+/// `CacheDB<EmptyDB>` whose block-hash cache is empty and every lookup falls
+/// through to `EmptyDB`, which answers `keccak256` of the block number's
+/// **decimal string**. It is deterministic, the guest and the host agree on
+/// it, and it is not any block's hash — so a contract that reads it computes
+/// on a made-up word. `BlockWitness` is not frozen at S24 for exactly this
+/// reason (owner's decision): the field that closes the gap is a
+/// `block_hashes: Vec<(u64, Word32)>` loaded into that cache, and the stage
+/// that needs it adds it. `docs/spec/revm-block.md` §1.2.
+///
+/// The assertion is the placeholder itself rather than "not zero", so closing
+/// the gap fails here and has to be a decision.
+#[test]
+fn blockhash_reads_a_placeholder_today() {
+    let number = {
+        let committed =
+            BlockWitness::decode(&witness_bytes()).expect("the committed witness decodes");
+        u64::from_be_bytes(committed.env.number[24..].try_into().unwrap())
+    };
+    let previous = number - 1;
+
+    // PUSH4 <previous> ‖ BLOCKHASH ‖ PUSH0 ‖ MSTORE ‖ PUSH1 0x20 ‖ PUSH0 ‖ RETURN
+    let mut code = vec![0x63];
+    code.extend_from_slice(&(previous as u32).to_be_bytes());
+    code.extend_from_slice(&[0x40, 0x5f, 0x52, 0x60, 0x20, 0x5f, 0xf3]);
+
+    let witness = synthetic_witness(1_000_000, code, &[100_000]);
+    let output = revm_block::run(&witness).expect("the blockhash block executes");
+    let (records, _) = tx_records(&output, 1);
+    assert_eq!(records[0].0, 2, "the call succeeds");
+
+    assert_eq!(
+        records[0].2,
+        revm_block::keccak(previous.to_string().as_bytes()).to_vec(),
+        "BLOCKHASH answered something other than EmptyDB's placeholder; if the \
+         witness now carries block hashes, this test is the one to rewrite"
     );
 }
 
