@@ -10,7 +10,8 @@ use constants::lookup_channel;
 use constants::memory::{HALT_PC, RAM_LIVE_BIT, TS_STEP};
 use constraints::memory::{
     deleg_space, frame, frame_query_takes, gap_hi, rd_inv, rd_is_zero, rd_selected, CYCLE, DELEG,
-    FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA, RD,
+    FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA, LOAD,
+    RD,
 };
 use constraints::PolyAddress;
 use field::Fr;
@@ -159,12 +160,24 @@ pub fn build_memory_columns(
             field(|e| e.write_value as u64),
         ));
     }
-    // The delegation mirror's leaf names the requested *type* through one more
-    // `M` column, and the type is the mirror event's own address space — one
-    // `deleg` query serves them all (`docs/spec/delegation.md` §5.1). Zero on
-    // every row that requests nothing, which the leaf reads as no tuple at
-    // all because the mask is zero there too.
-    if let Some(at) = queries.iter().position(|&q| q == DELEG) {
+    // Two queries name their address space per row rather than by the table,
+    // and each reads it from one more `M` column whose value is **the event's
+    // own tag**:
+    //
+    // - the delegation mirror's is the requested type, one `deleg` query
+    //   serving them all (`docs/spec/delegation.md` §5.1);
+    // - a load's is `RAM` or `ADVICE` by its address
+    //   (`docs/spec/advice.md` §3.2).
+    //
+    // One fill serves both because the rule is the same one. Zero on every row
+    // without the query, which the leaf reads as no tuple at all because the
+    // mask is zero there too. No frame holds both queries, so the column each
+    // would take is the same one and there is never a clash.
+    let space_at = queries
+        .iter()
+        .position(|&q| q == DELEG)
+        .or_else(|| queries.iter().position(|&q| q == LOAD));
+    if let Some(at) = space_at {
         let values = rows
             .iter()
             .map(|row| row[at].as_ref().map_or(0, |e| e.space.tag() as u64));

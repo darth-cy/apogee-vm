@@ -1435,8 +1435,10 @@ fn mem_word(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, St
 
     let mut decoded: [Vec<u32>; 6] = Default::default();
     let mut kinds: [Vec<u32>; 2] = Default::default();
-    // wrap word_index word_index_hi rd_hi, then rd_selected.
-    let mut cells: [Vec<u32>; 5] = Default::default();
+    // wrap word_index word_index_hi is_advice word_index_hi_rest rd_hi, then
+    // rd_selected. `is_advice` is bit 13 of `word_index_hi`, which is bit 31
+    // of the byte address (`docs/spec/advice.md` §3.1).
+    let mut cells: [Vec<u32>; 7] = Default::default();
     for r in start..end {
         let row = trace.row(r);
         let slot = row.pc as usize / 2;
@@ -1495,7 +1497,16 @@ fn mem_word(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, St
                 row.cycle
             );
         }
-        let values = [wrap, address / 4, (address / 4) >> 16, sel >> 16, sel];
+        let word_index_hi = (address / 4) >> 16;
+        let values = [
+            wrap,
+            address / 4,
+            word_index_hi,
+            word_index_hi >> 13,
+            word_index_hi & ((1 << 13) - 1),
+            sel >> 16,
+            sel,
+        ];
         for (column, v) in cells.iter_mut().zip(values) {
             column.push(v);
         }
@@ -1508,7 +1519,7 @@ fn mem_word(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, St
     }
 
     let mut out = frame_columns(src, fam, cycles);
-    let [wrap, word_index, word_index_hi, rd_hi, sel] = cells;
+    let [wrap, word_index, word_index_hi, is_advice, word_index_hi_rest, rd_hi, sel] = cells;
     out.push((rd_selected(frame_queries(fam).len()), u32_column(sel, h)));
     for (address, values) in mw_circuit::DECODED.iter().zip(decoded) {
         out.push((*address, u32_column(values, h)));
@@ -1520,6 +1531,8 @@ fn mem_word(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, St
         (mw_circuit::WRAP, wrap),
         (mw_circuit::WORD_INDEX, word_index),
         (mw_circuit::WORD_INDEX_HI, word_index_hi),
+        (mw_circuit::IS_ADVICE, is_advice),
+        (mw_circuit::WORD_INDEX_HI_REST, word_index_hi_rest),
         (mw_circuit::RD_HI, rd_hi),
     ] {
         out.push((address, u32_column(values, h)));
@@ -1559,12 +1572,16 @@ fn mem_subword(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>,
 
     let mut decoded: [Vec<u32>; 6] = Default::default();
     let mut kinds: [Vec<u32>; 6] = Default::default();
-    // wrap word_index word_index_hi bit0 bit1 p pcopow wph p_ram word
+    // wrap word_index word_index_hi is_advice word_index_hi_rest
+    // bit0 bit1 p pcopow wph p_ram word
     // high high_hi high_scaled high_scaled_hi sub sub_scaled sub_scaled_hi
     // low low_hi low_scaled low_scaled_hi
     // src_sub src_sub_scaled src_sub_scaled_hi src_high src_high_hi
     // sign_in sign se rd_hi, then rd_selected.
-    let mut cells: [Vec<u32>; 31] = Default::default();
+    // `from_fn` rather than `Default::default()`: the standard library stops
+    // implementing `Default` for arrays at 32, and S25b's two advice columns
+    // took this one past it.
+    let mut cells: [Vec<u32>; 33] = core::array::from_fn(|_| Vec::new());
     for r in start..end {
         let row = trace.row(r);
         let slot = row.pc as usize / 2;
@@ -1641,10 +1658,13 @@ fn mem_subword(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>,
             );
         }
         let p_ram = if is_load { 0 } else { p };
+        let word_index_hi = ((address / 4) >> 16) as u64;
         let values = [
             wrap as u64,
             (address / 4) as u64,
-            ((address / 4) >> 16) as u64,
+            word_index_hi,
+            word_index_hi >> 13,
+            word_index_hi & ((1 << 13) - 1),
             bit0 as u64,
             bit1 as u64,
             p,
@@ -1686,7 +1706,7 @@ fn mem_subword(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>,
     }
 
     let mut out = frame_columns(src, fam, cycles);
-    let [wrap, word_index, word_index_hi, bit0, bit1, p, pcopow, wph, p_ram, word, high, high_hi, high_scaled, high_scaled_hi, sub, sub_scaled, sub_scaled_hi, low, low_hi, low_scaled, low_scaled_hi, src_sub, src_sub_scaled, src_sub_scaled_hi, src_high, src_high_hi, sign_in, sign, se, rd_hi, sel] =
+    let [wrap, word_index, word_index_hi, is_advice, word_index_hi_rest, bit0, bit1, p, pcopow, wph, p_ram, word, high, high_hi, high_scaled, high_scaled_hi, sub, sub_scaled, sub_scaled_hi, low, low_hi, low_scaled, low_scaled_hi, src_sub, src_sub_scaled, src_sub_scaled_hi, src_high, src_high_hi, sign_in, sign, se, rd_hi, sel] =
         cells;
     out.push((rd_selected(frame_queries(fam).len()), u32_column(sel, h)));
     for (address, values) in ms_circuit::DECODED.iter().zip(decoded) {
@@ -1699,6 +1719,8 @@ fn mem_subword(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>,
         (ms_circuit::WRAP, wrap),
         (ms_circuit::WORD_INDEX, word_index),
         (ms_circuit::WORD_INDEX_HI, word_index_hi),
+        (ms_circuit::IS_ADVICE, is_advice),
+        (ms_circuit::WORD_INDEX_HI_REST, word_index_hi_rest),
         (ms_circuit::BIT0, bit0),
         (ms_circuit::BIT1, bit1),
         (ms_circuit::P, p),

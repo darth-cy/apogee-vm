@@ -117,17 +117,28 @@ pub const FRAME_SPACE: [u8; FRAME_QUERIES] = [
 /// Whether query `q` takes a memory event in address space `space` at in-cycle
 /// slot `delta`.
 ///
-/// Every query but [`DELEG`] names exactly one space ([`FRAME_SPACE`]); the
-/// delegation mirror takes an event in **any** of `address_space::DELEGATION`,
-/// because one query serves every delegation type and the type is carried per
-/// row by [`deleg_space`]. This is the one routing rule: `trace`'s frame
-/// builder and every test read it rather than the table.
+/// **Two queries name more than one space**, and both carry the one they got
+/// per row in an `M` column of the frame rather than in [`FRAME_SPACE`]:
+///
+/// - [`DELEG`] takes an event in **any** of `address_space::DELEGATION`,
+///   because one query serves every delegation type and the type is carried
+///   by [`deleg_space`] (`docs/spec/delegation.md` §5.1);
+/// - [`LOAD`] takes `RAM` **or** `ADVICE`, because a load reaches either and
+///   the two address ranges are disjoint, so the address decides. The tag is
+///   carried by [`load_space`] (`docs/spec/advice.md` §3.2).
+///
+/// [`RAM`] is not the same as [`LOAD`] and takes `RAM` alone: a store and an
+/// atomic may never reach advice, which is what makes the region read-only
+/// by frame construction rather than by a rule of its own.
+///
+/// This is the one routing rule: `trace`'s frame builder and every test read
+/// it rather than the table.
 pub fn frame_query_takes(q: usize, space: u8, delta: u64) -> bool {
     FRAME_DELTA[q] == delta
-        && if q == DELEG {
-            address_space::DELEGATION.contains(&space)
-        } else {
-            FRAME_SPACE[q] == space
+        && match q {
+            DELEG => address_space::DELEGATION.contains(&space),
+            LOAD => space == address_space::RAM || space == address_space::ADVICE,
+            _ => FRAME_SPACE[q] == space,
         }
 }
 
@@ -151,6 +162,24 @@ pub fn frame(slot: usize, field: u32) -> PolyAddress {
 /// so the tag crosses into the leaf through a memory column the family pins to
 /// them. `docs/spec/delegation.md` §5.1.
 pub fn deleg_space(width: usize) -> PolyAddress {
+    PolyAddress::Memory(1 + 5 * width as u32)
+}
+
+/// `M[1 + 5·width]`: the address space a load's word came from, as its
+/// `constants::address_space` tag, and 0 on every row that makes no load.
+///
+/// The **same column position** as [`deleg_space`], and that is sound rather
+/// than a collision: no frame holds both queries. `ADD_SUB_LUI_AUIPC` holds
+/// `deleg` and no `load`; the two memory families hold `load` and no `deleg`;
+/// `ATOMICS` holds neither. A frame holding both would need two extra columns
+/// and `assemble` asserts it does not happen.
+///
+/// It exists for [`deleg_space`]'s reason exactly. A load's leaf must name
+/// `RAM` or `ADVICE` depending on the address, a leaf may read no `W` column
+/// ([`check_memory`]'s provenance rule), and the `is_advice` bit a family
+/// commits is a witness column — so the tag crosses into the leaf through a
+/// memory column the family pins to that bit. `docs/spec/advice.md` §3.2.
+pub fn load_space(width: usize) -> PolyAddress {
     PolyAddress::Memory(1 + 5 * width as u32)
 }
 
@@ -249,18 +278,23 @@ fn slot(s: u32) -> Coeff {
 /// repeated four times and `α_ts·Δ·m` one repeated `Δ` times. The read tuple
 /// has one term per part, so its term `PART_*` is that part.
 ///
-/// [`DELEG`]'s `AS` part is the exception, and `space` is where it comes from:
-/// one `deleg` query serves every delegation type, so its tag is not a literal
-/// of the table but the value of the frame's [`deleg_space`] column, which the
-/// leaf reads at coefficient 1. Passing `None` for a frame holding `deleg` is
-/// a programmer error and panics.
+/// [`DELEG`]'s and [`LOAD`]'s `AS` parts are the exceptions, and `space` is
+/// where both come from: one `deleg` query serves every delegation type and
+/// one `load` query serves RAM and advice alike, so neither tag is a literal
+/// of the table. Each is the value of the frame's one extra `M` column —
+/// [`deleg_space`] or [`load_space`] — which the leaf reads at coefficient 1.
+/// Passing `None` for a frame holding either is a programmer error and panics.
+///
+/// That column is **zero on a row without the query**, which is what keeps the
+/// masked leaf right: for every other query the `AS` term is `tag·m` and
+/// vanishes with the mask, and here the mask is inside the column instead.
 fn tuple(query: usize, at: usize, write: bool, space: Option<PolyAddress>) -> GateDef {
     let mask = frame(at, FIELD_MASK);
     let mut parts: [Vec<(Coeff, PolyAddress)>; 4] = Default::default();
     parts[memory::PART_AS] = match query {
-        DELEG => vec![(
+        DELEG | LOAD => vec![(
             lit(1),
-            space.expect("a frame holding the deleg query carries a deleg_space column"),
+            space.expect("a frame holding the deleg or load query carries its space column"),
         )],
         _ => vec![(lit(FRAME_SPACE[query] as u64), mask)],
     };
@@ -549,13 +583,23 @@ fn frame_body(
             columns.push(format!("{}_{field}", FRAME_NAMES[query]));
         }
     }
-    // A frame holding the delegation mirror carries one more `M` column, the
-    // requested type's address-space tag, which its two leaves read. See
-    // `deleg_space`.
-    let space = queries.contains(&DELEG).then(|| {
+    // A frame holding the delegation mirror, or a load, carries one more `M`
+    // column: the address space that query named on this row, which its two
+    // leaves read. One column serves both because no frame holds both queries
+    // — see `load_space`, which asserts it here rather than trusting it.
+    assert!(
+        !(queries.contains(&DELEG) && queries.contains(&LOAD)),
+        "memory artifact: a frame holding both `deleg` and `load` would need two space columns"
+    );
+    let space = if queries.contains(&DELEG) {
         columns.push(String::from("deleg_space"));
-        deleg_space(width)
-    });
+        Some(deleg_space(width))
+    } else if queries.contains(&LOAD) {
+        columns.push(String::from("load_space"));
+        Some(load_space(width))
+    } else {
+        None
+    };
     let mut witness: Vec<String> = queries
         .iter()
         .map(|&query| format!("{}_gap_hi", FRAME_NAMES[query]))
@@ -1006,9 +1050,13 @@ mod tests {
             assert_eq!(frame_queries(id).len(), width, "family {id}");
             let a = family_frame_artifact(id, 6);
             // `1 + 5w`, and one more when the frame holds the delegation
-            // mirror: that query's leaf names the requested type through a
-            // memory column rather than a literal (`deleg_space`).
-            let extra = usize::from(frame_queries(id).contains(&DELEG));
+            // mirror or a load: that query's leaf names its address space
+            // through a memory column rather than a literal (`deleg_space`,
+            // `load_space`). Never two — no frame holds both queries, which
+            // is why one column position serves them.
+            let extra = usize::from(
+                frame_queries(id).contains(&DELEG) || frame_queries(id).contains(&LOAD),
+            );
             assert_eq!(a.memory.len(), 1 + 5 * width + extra, "family {id}");
             assert_eq!(a.witness.len(), width + 3, "family {id}");
             assert_eq!(a.lookups.len(), 2 * width, "family {id}");

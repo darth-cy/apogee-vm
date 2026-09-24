@@ -28,7 +28,7 @@ use checker::{
     violated_relations, WitnessRow,
 };
 use constants::extra_mask::mem_subword as kind;
-use constants::{challenge_slot, family, generic_table, lookup_channel};
+use constants::{address_space, challenge_slot, family, generic_table, lookup_channel};
 use constraints::lookup::{check_discharge, ChannelSpec};
 use constraints::memory::{
     check_memory, frame, frame_queries, rd_selected, FIELD_MASK, FIELD_READ_VALUE,
@@ -47,7 +47,7 @@ const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../constraints/tests/vectors/mem_subword.bin"
 );
-const FIXTURE_SHA256: &str = "2c423eb1c5dc9b8a3c326dcb32b57f2a0edecffbb5ca9041e1a6cc9f9f596181";
+const FIXTURE_SHA256: &str = "9cfc3bd2f74c289700cb9508cfb2e208ff41333f2d45e315369eafa91d033d4e";
 
 /// The cycle every hand-built row runs at, and the row it is evaluated at.
 const CYCLE: u64 = 7;
@@ -337,6 +337,20 @@ fn honest(i: Instr, rs1v: u32, rs2v: u32, mem: u32, rd_old: u32) -> Row {
         ("wrap", wrap),
         ("word_index", word_index),
         ("word_index_hi", word_index >> 16),
+        // The advice bit is the address's bit 31, which is bit 13 of
+        // `word_index_hi` (`docs/spec/advice.md` §3.1). Derived rather than
+        // assumed zero: the top half of the address space is the advice
+        // region now, so a row up there is an advice load and says so.
+        ("is_advice", word_index >> 16 >> 13),
+        ("word_index_hi_rest", (word_index >> 16) & ((1 << 13) - 1)),
+        (
+            "load_space",
+            match (load, word_index >> 16 >> 13) {
+                (false, _) => 0,
+                (true, 1) => address_space::ADVICE as u64,
+                (true, _) => address_space::RAM as u64,
+            },
+        ),
         ("bit0", bit0),
         ("bit1", bit1),
         ("p_ram", if load { 0 } else { p }),
@@ -538,6 +552,8 @@ fn the_layout_and_the_gates_are_the_spec() {
             "rd_read_ts",
             "rd_read_value",
             "rd_write_value",
+            // The load's address space, per row (`docs/spec/advice.md` §3.2).
+            "load_space",
         ])
     );
     assert_eq!(
@@ -594,6 +610,8 @@ fn the_layout_and_the_gates_are_the_spec() {
             "sign",
             "se",
             "rd_hi",
+            "is_advice",
+            "word_index_hi_rest",
             "mult_timestamp",
             "mult_range16",
             "mult_generic",
@@ -617,9 +635,9 @@ fn the_layout_and_the_gates_are_the_spec() {
     );
     // 31 memory, 55 witness, 10 setup: a six-query frame's `1 + 5w` and
     // `w + 3`, then this family's own 46 and the two tables.
-    assert_eq!(a.memory.len(), 1 + 5 * 6);
-    assert_eq!(a.witness.len(), 6 + 3 + 46);
-    assert_eq!(a.committed().len(), 96);
+    assert_eq!(a.memory.len(), 1 + 5 * 6 + 1);
+    assert_eq!(a.witness.len(), 6 + 3 + 48);
+    assert_eq!(a.committed().len(), 99);
     assert_eq!(
         a.virtuals,
         vec![
@@ -671,6 +689,10 @@ fn the_layout_and_the_gates_are_the_spec() {
             "rd_addr_rule",
             "load_addr_rule",
             "ram_addr_rule",
+            "advice_split",
+            "is_advice_boolean",
+            "load_space_rule",
+            "no_store_to_advice",
             "rs1_value_masked",
             "rs2_value_masked",
             "addr_split",
@@ -693,7 +715,7 @@ fn the_layout_and_the_gates_are_the_spec() {
             "next_pc_rule",
         ])
     );
-    assert_eq!(enforcing.len(), 53);
+    assert_eq!(enforcing.len(), 57);
     // The eleven gates the width seam owns are the eleven of its documented
     // list plus the store's merge, and they are the tail of the family's own
     // gates but for `next_pc_rule`.
@@ -756,7 +778,8 @@ fn the_layout_and_the_gates_are_the_spec() {
             ("word_index_lo_range", range, m(1)),
             // `4·word_index` is the memory tuple's address, so the word index
             // is bounded a second time, scaled by the four bytes of a word.
-            ("word_index_hi_scaled", range, m(1)),
+            ("word_index_hi_rest_range", range, m(1)),
+            ("word_index_hi_rest_scaled", range, m(1)),
             ("high_hi_range", range, m(1)),
             ("high_lo_range", range, m(1)),
             ("high_scaled_hi_range", range, m(1)),
@@ -784,10 +807,10 @@ fn the_layout_and_the_gates_are_the_spec() {
             ("decode_row", decoder, m(1)),
         ]
     );
-    assert_eq!(lookups.len(), 36);
+    assert_eq!(lookups.len(), 37);
     // The per-channel counts the constructor asserts when it builds the
     // circuit; here they are read off the artifact instead.
-    for (channel, want) in [(timestamp, 12), (range, 22), (generic, 1), (decoder, 1)] {
+    for (channel, want) in [(timestamp, 12), (range, 23), (generic, 1), (decoder, 1)] {
         let got = a.lookups.iter().filter(|l| l.channel == channel).count();
         assert_eq!(got, want, "channel {channel}");
     }
@@ -801,26 +824,26 @@ fn the_layout_and_the_gates_are_the_spec() {
             ChannelSpec {
                 channel: timestamp,
                 table: vec![PolyAddress::Virtual(VirtualKind::Range19)],
-                multiplicity: w(51),
+                multiplicity: w(53),
             },
             ChannelSpec {
                 channel: range,
                 table: vec![PolyAddress::Virtual(VirtualKind::Range16)],
-                multiplicity: w(52),
+                multiplicity: w(54),
             },
             ChannelSpec {
                 channel: generic,
                 table: (7..10).map(PolyAddress::Setup).collect(),
-                multiplicity: w(53),
+                multiplicity: w(55),
             },
             ChannelSpec {
                 channel: decoder,
                 table: (0..7).map(PolyAddress::Setup).collect(),
-                multiplicity: w(54),
+                multiplicity: w(56),
             },
         ]
     );
-    assert_eq!(mem_subword::MULTIPLICITIES, [w(51), w(52), w(53), w(54)]);
+    assert_eq!(mem_subword::MULTIPLICITIES, [w(53), w(54), w(55), w(56)]);
     assert_eq!(mem_subword::GENERIC_TABLE.len(), generic_table::WIDTH);
     assert_eq!(mem_subword::TABLE_WIDTH, 7);
 
@@ -1095,7 +1118,14 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     let mut r = row("sb at 0");
     let addr = small_int(r.get("ram_addr")).expect("a word address");
     r.query("load", 2, addr, 0, 0);
-    cases.push(("an sb making a load query", r, vec!["load_mask_rule"]));
+    // Two gates, and they read the same column: `load_space_rule` is
+    // `load_space = m_load·(RAM + …)`, so switching the load query on without
+    // a load breaks it as surely as the mask rule does.
+    cases.push((
+        "an sb making a load query",
+        r,
+        vec!["load_mask_rule", "load_space_rule"],
+    ));
     // A load making a RAM query, dressed so that the store's own merge still
     // holds: `p_ram` follows the mask and the word written back is the word
     // read with its accessed byte cleared.
@@ -1105,6 +1135,51 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     r.query("ram", 3, addr, 0, kept);
     r.set("p_ram", Fr::ONE);
     cases.push(("an lbu making a ram query", r, vec!["ram_mask_rule"]));
+
+    // The advice selector, `docs/spec/advice.md` §3 and §4 — `mem_word`'s four
+    // cases over this family's row shapes.
+    let mut r = row("lbu at 0");
+    r.set("is_advice", Fr::ONE);
+    cases.push((
+        "a RAM load claiming to be an advice load",
+        r,
+        vec!["advice_split", "load_space_rule"],
+    ));
+    let mut r = row("lbu at 0");
+    let hi = r.get("word_index_hi");
+    r.set("is_advice", f(2))
+        .set("word_index_hi", hi + f(2 << 13))
+        .set("word_index_hi_rest", hi);
+    // `advice_split` is kept satisfied so the booleanity gate is alone with
+    // the job; `load_space_rule` follows because the space term is then a
+    // multiple of the tag rather than the tag.
+    cases.push((
+        "an advice bit that is neither 0 nor 1",
+        r,
+        vec!["is_advice_boolean", "load_space_rule"],
+    ));
+    let mut r = row("lbu at 0");
+    r.set("load_space", f(address_space::ADVICE as u64));
+    cases.push((
+        "a load naming the advice space with a RAM address",
+        r,
+        vec!["load_space_rule"],
+    ));
+    // **A store into the advice region**, which is what makes the region
+    // read-only locally rather than leaving it to the multiset.
+    let mut r = row("sb at 0");
+    let hi = r.get("word_index_hi");
+    let index = r.get("word_index");
+    let ram_addr = r.get("ram_addr");
+    r.set("is_advice", Fr::ONE)
+        .set("word_index_hi", hi + f(1 << 13))
+        .set("word_index", index + f(1 << 29))
+        .set("ram_addr", ram_addr + f(1 << 31));
+    cases.push((
+        "a store into the advice region",
+        r,
+        vec!["no_store_to_advice", "addr_split"],
+    ));
 
     // Addresses.
     let mut r = row("lbu at 0");
@@ -1410,7 +1485,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         .map(|e| a.relations[e.relation as usize].name.as_str())
         .filter(|n| !frame.contains(n) && !n.ends_with("_boolean"))
         .collect();
-    assert_eq!(owed.len(), 31);
+    assert_eq!(owed.len(), 34);
     for gate in owed {
         assert!(named.contains(&gate), "no row above is refused by `{gate}`");
     }

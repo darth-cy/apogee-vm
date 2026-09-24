@@ -11,7 +11,8 @@
 //! from a table (`docs/spec/memory-ops.md` §4.1).
 //!
 //! ```text
-//! frame      M[0..31], W[0..9]: pc rs1 rs2 load ram rd at slots 0..6
+//! frame      M[0..32], W[0..9]: pc rs1 rs2 load ram rd at slots 0..6,
+//!            then M[31] load_space, the load's address space for this row
 //! W[9..15]   the claimed decoded row: next_pc rs1 rs2 rd imm mask
 //! W[15..21]  the mask's six bits, extra_mask::mem_subword order
 //! W[21..26]  wrap, word_index, word_index_hi, bit0, bit1
@@ -22,7 +23,8 @@
 //! W[42..47]  src_sub, src_sub_scaled, src_sub_scaled_hi, src_high, src_high_hi
 //! W[47..50]  sign_in, sign, se
 //! W[50]      rd_hi
-//! W[51..55]  one multiplicity per channel: timestamp, range16, generic, decoder
+//! W[51..53]  is_advice, word_index_hi_rest -- the advice selector, S25b
+//! W[53..57]  one multiplicity per channel: timestamp, range16, generic, decoder
 //! S[0..7]    the decoded table, program::lookup_tuple order
 //! S[7..10]   the packed generic table, constants::generic_table
 //! ```
@@ -33,13 +35,13 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use constants::extra_mask::mem_subword as kind;
-use constants::{family, generic_table, lookup_channel};
+use constants::{address_space, family, generic_table, lookup_channel};
 use field::Fr;
 
 use crate::lookup::{check_copowers, ChannelSpec};
 use crate::memory::{
-    frame, frame_queries, frame_with_channels_artifact, rd_selected, FamilySpec, FIELD_ADDR,
-    FIELD_MASK, FIELD_READ_VALUE, FIELD_WRITE_VALUE, LOAD, PC, RAM, RD, RS1, RS2,
+    frame, frame_queries, frame_with_channels_artifact, load_space, rd_selected, FamilySpec,
+    FIELD_ADDR, FIELD_MASK, FIELD_READ_VALUE, FIELD_WRITE_VALUE, LOAD, PC, RAM, RD, RS1, RS2,
 };
 use crate::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
 
@@ -164,10 +166,18 @@ pub const SIGN: PolyAddress = w(39);
 pub const SE: PolyAddress = w(40);
 /// `W[50]`: the written `rd` value's high halfword.
 pub const RD_HI: PolyAddress = w(41);
-/// `W[51..55]`: the channels' multiplicities, in channel order — timestamp,
+/// `W[51]`: whether the accessed address is in the **advice** region — bit 31
+/// of the byte address, which is bit 13 of [`WORD_INDEX_HI`]. `mem_word`'s
+/// column of the same name, for the same reason and pinned the same way
+/// (`docs/spec/advice.md` §3.1).
+pub const IS_ADVICE: PolyAddress = w(42);
+/// `W[52]`: [`WORD_INDEX_HI`] with bit 13 removed, bounded below `2^13` by its
+/// own scaled obligation.
+pub const WORD_INDEX_HI_REST: PolyAddress = w(43);
+/// `W[53..57]`: the channels' multiplicities, in channel order — timestamp,
 /// range16, generic, decoder — last in the witness subtree
 /// (`docs/spec/lookup.md` §7).
-pub const MULTIPLICITIES: [PolyAddress; 4] = [w(42), w(43), w(44), w(45)];
+pub const MULTIPLICITIES: [PolyAddress; 4] = [w(44), w(45), w(46), w(47)];
 
 /// The decoded table's width, `program::lookup_tuple(MEM_SUBWORD)`:
 /// `pc next_pc rs1 rs2 rd imm extra_mask`, at `S[0..7]`.
@@ -531,6 +541,8 @@ fn family_spec() -> FamilySpec {
         "sign",
         "se",
         "rd_hi",
+        "is_advice",
+        "word_index_hi_rest",
     ]));
     witness.extend(
         [
@@ -597,6 +609,40 @@ fn family_spec() -> FamilySpec {
     enforcing.push(("rd_addr_rule".into(), addr_rule(SLOT_RD, DECODED_RD)));
     enforcing.push(("load_addr_rule".into(), word_addr_rule(SLOT_LOAD)));
     enforcing.push(("ram_addr_rule".into(), word_addr_rule(SLOT_RAM)));
+    // The advice selector and its two consequences, `docs/spec/advice.md` §3
+    // and §4. `mem_word` carries the same four gates; the only difference here
+    // is which selectors make up a store.
+    enforcing.push((
+        "advice_split".into(),
+        linear(vec![
+            (lit(1), WORD_INDEX_HI),
+            (neg(1 << 13), IS_ADVICE),
+            (neg(1), WORD_INDEX_HI_REST),
+        ]),
+    ));
+    enforcing.push(("is_advice_boolean".into(), booleanity(IS_ADVICE)));
+    let m_load = frame(SLOT_LOAD, FIELD_MASK);
+    enforcing.push((
+        "load_space_rule".into(),
+        quadratic(
+            vec![
+                (lit(1), load_space(QUERIES.len())),
+                (neg(address_space::RAM as u64), m_load),
+            ],
+            vec![(
+                neg((address_space::ADVICE - address_space::RAM) as u64),
+                m_load,
+                IS_ADVICE,
+            )],
+        ),
+    ));
+    enforcing.push((
+        "no_store_to_advice".into(),
+        quadratic(
+            vec![],
+            vec![(lit(1), frame(SLOT_RAM, FIELD_MASK), IS_ADVICE)],
+        ),
+    ));
     enforcing.push(("rs1_value_masked".into(), value_masked(SLOT_RS1)));
     enforcing.push(("rs2_value_masked".into(), value_masked(SLOT_RS2)));
 
@@ -652,9 +698,14 @@ fn family_spec() -> FamilySpec {
     let mut lookups = Vec::new();
     lookups.extend(range32("word_index", WORD_INDEX, WORD_INDEX_HI));
     lookups.push(range16(
-        "word_index_hi_scaled",
-        linear(vec![(lit(4), WORD_INDEX_HI)]),
+        "word_index_hi_rest_range",
+        column(WORD_INDEX_HI_REST),
     ));
+    lookups.push(range16(
+        "word_index_hi_rest_scaled",
+        linear(vec![(lit(8), WORD_INDEX_HI_REST)]),
+    ));
+
     lookups.extend(range32("high", HIGH, HIGH_HI));
     lookups.extend(range32("high_scaled", HIGH_SCALED, HIGH_SCALED_HI));
     // `sub` and `src_sub` are below the access width, at most a halfword, so
@@ -721,7 +772,7 @@ fn assemble(trace_vars: u32, family_spec: FamilySpec) -> CircuitArtifact {
     );
     for (channel, want) in [
         (lookup_channel::TIMESTAMP, 2 * QUERIES.len()),
-        (lookup_channel::RANGE16, 22),
+        (lookup_channel::RANGE16, 23),
         (lookup_channel::GENERIC, 1),
         (lookup_channel::DECODER, 1),
     ] {
@@ -735,8 +786,8 @@ fn assemble(trace_vars: u32, family_spec: FamilySpec) -> CircuitArtifact {
     }
     assert_eq!(
         a.layers[0].enforcing.len(),
-        53,
-        "mem_subword: the circuit's enforcing gates are the frame's 13 and this family's 40"
+        57,
+        "mem_subword: the circuit's enforcing gates are the frame's 13 and this family's 44"
     );
     // Every column a copower or a literal scales carries its own direct bound
     // under the same selector; a scaled bound alone bounds nothing
@@ -745,7 +796,7 @@ fn assemble(trace_vars: u32, family_spec: FamilySpec) -> CircuitArtifact {
     if let Err(e) = check_copowers(
         &a,
         &[
-            (WORD_INDEX_HI, m_pc),
+            (WORD_INDEX_HI_REST, m_pc),
             (HIGH, m_pc),
             (SUB, m_pc),
             (LOW, m_pc),
@@ -810,7 +861,7 @@ mod tests {
     /// An obligation dropped on the way to the assembly is refused by its
     /// channel's count.
     #[test]
-    #[should_panic(expected = "channel `range16` carries 21 obligations, not 22")]
+    #[should_panic(expected = "channel `range16` carries 22 obligations, not 23")]
     fn a_dropped_obligation_fails_the_build() {
         let mut e = family_spec();
         e.lookups.retain(|l| l.name != "low_lo_range");

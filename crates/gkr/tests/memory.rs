@@ -83,17 +83,18 @@ fn column(slot: usize, field: usize) -> usize {
     1 + 5 * slot + field
 }
 
-/// `M[1 + 5w]`, the delegation mirror's type tag, on the one family whose frame
-/// holds that query (`docs/spec/delegation.md` §5.1). A frame without `deleg`
-/// does not carry the column.
-fn deleg_space(queries: &[usize]) -> Option<usize> {
-    queries.contains(&DELEG).then(|| 1 + 5 * queries.len())
+/// `M[1 + 5w]`, the per-row address-space tag, on the frames that carry one:
+/// the delegation mirror's requested type (`docs/spec/delegation.md` §5.1) or
+/// a load's `RAM`-or-`ADVICE` (`docs/spec/advice.md` §3.2). One column serves
+/// both, no frame holding both queries; a frame with neither does not carry it.
+fn space_column(queries: &[usize]) -> Option<usize> {
+    (queries.contains(&DELEG) || queries.contains(&LOAD)).then(|| 1 + 5 * queries.len())
 }
 
 /// The memory columns of a frame over `queries`: `1 + 5w`, and one more where
-/// the delegation mirror's tag rides.
+/// a per-row address-space tag rides.
 fn memory_columns(queries: &[usize]) -> usize {
-    1 + 5 * queries.len() + usize::from(queries.contains(&DELEG))
+    1 + 5 * queries.len() + usize::from(space_column(queries).is_some())
 }
 
 /// `W[s]`, the gap's high chunk of the query at slot `s`, in a frame over
@@ -195,13 +196,14 @@ fn frame_leaves_are_one_when_masked_and_the_tuple_when_live() {
                 let (addr, read_ts) = (row[column(s, 1)], row[column(s, 2)]);
                 let (read_value, write_value) = (row[column(s, 3)], row[column(s, 4)]);
                 let write_ts = int(4) * cycle + int(DELTA[q]);
-                // The mirror's `AS` is not a literal of the table: one `deleg`
-                // query serves every delegation type, so the tag is the row's
-                // own `deleg_space` column (`docs/spec/delegation.md` §5.1).
-                // Here that column is one more random cell, which is exactly
-                // the sweep this test wants of it.
+                // Two queries' `AS` is not a literal of the table: the
+                // delegation mirror's type and, since S25b, a load's space,
+                // each riding the frame's one extra column
+                // (`docs/spec/delegation.md` §5.1, `docs/spec/advice.md`
+                // §3.2). Here that column is one more random cell, which is
+                // exactly the sweep this test wants of it.
                 let space = match q {
-                    DELEG => row[deleg_space(queries).expect("the frame holds deleg")],
+                    DELEG | LOAD => row[space_column(queries).expect("the frame carries one")],
                     _ => int(SPACE[q]),
                 };
                 let (read, write) = if live[s] {
@@ -500,13 +502,16 @@ fn frame_columns(queries: &[usize], rng: &mut Rng) -> Vec<Vec<Fr>> {
             };
             row[column(s, 1)] = addr;
             row[column(s, 4)] = write_value;
-            // The mirror's leaf reads the requested type's tag from the frame's
-            // own `deleg_space` column, so a live `deleg` query needs one; any
-            // delegation tag will do here, the frame constraining none of them
-            // (`docs/spec/delegation.md` §5.1).
-            if q == DELEG {
-                let at = deleg_space(queries).expect("the frame holds deleg");
-                row[at] = int(constants::address_space::DELEGATION_KECCAK_F as u64);
+            // A leaf whose `AS` rides the frame's space column needs that
+            // column set; any tag the query may name will do here, the frame
+            // constraining none of them (`docs/spec/delegation.md` §5.1,
+            // `docs/spec/advice.md` §3.2).
+            if q == DELEG || q == LOAD {
+                let at = space_column(queries).expect("the frame carries one");
+                row[at] = int(match q {
+                    DELEG => constants::address_space::DELEGATION_KECCAK_F,
+                    _ => constants::address_space::RAM,
+                } as u64);
             }
         }
         for (column, value) in cols.iter_mut().zip(row) {

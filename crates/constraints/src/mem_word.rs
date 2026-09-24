@@ -11,12 +11,14 @@
 //! columns are the decoded table alone.
 //!
 //! ```text
-//! frame     M[0..31], W[0..9]: pc rs1 rs2 load ram rd at slots 0..6
+//! frame     M[0..32], W[0..9]: pc rs1 rs2 load ram rd at slots 0..6,
+//!           then M[31] load_space, the load's address space for this row
 //! W[9..15]  the claimed decoded row: next_pc rs1 rs2 rd imm mask
 //! W[15..17] the mask's two bits, extra_mask::mem_word order
 //! W[17..20] wrap, word_index, word_index_hi
 //! W[20]     rd_hi
-//! W[21..24] one multiplicity per channel: timestamp, range16, decoder
+//! W[21..23] is_advice, word_index_hi_rest -- the advice selector, S25b
+//! W[23..26] one multiplicity per channel: timestamp, range16, decoder
 //! S[0..7]   the decoded table, program::lookup_tuple order
 //! ```
 
@@ -26,13 +28,13 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use constants::extra_mask::mem_word as kind;
-use constants::{family, lookup_channel};
+use constants::{address_space, family, lookup_channel};
 use field::Fr;
 
 use crate::lookup::{check_copowers, ChannelSpec};
 use crate::memory::{
-    frame, frame_queries, frame_with_channels_artifact, rd_selected, FamilySpec, FIELD_ADDR,
-    FIELD_MASK, FIELD_READ_VALUE, FIELD_WRITE_VALUE, LOAD, PC, RAM, RD, RS1, RS2,
+    frame, frame_queries, frame_with_channels_artifact, load_space, rd_selected, FamilySpec,
+    FIELD_ADDR, FIELD_MASK, FIELD_READ_VALUE, FIELD_WRITE_VALUE, LOAD, PC, RAM, RD, RS1, RS2,
 };
 use crate::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
 
@@ -78,11 +80,27 @@ pub const WORD_INDEX: PolyAddress = w(9);
 pub const WORD_INDEX_HI: PolyAddress = w(10);
 /// `W[20]`: the written `rd` value's high halfword.
 pub const RD_HI: PolyAddress = w(11);
-/// `W[21..24]`: the channels' multiplicities, in channel order — timestamp,
+/// `W[21]`: whether the accessed address is in the **advice** region — bit 31
+/// of the byte address, which is bit 13 of [`WORD_INDEX_HI`]
+/// (`docs/spec/advice.md` §3.1).
+///
+/// Split out of a column that already exists rather than compared against a
+/// base: the advice region starts at `2^31`, so the predicate *is* a bit of
+/// the address decomposition. It is pinned in both directions by
+/// `advice_split` below — `is_advice = 1` forces the address into the region
+/// and `0` forces it out — so neither a free value at a RAM address nor a RAM
+/// read of an advice word is representable.
+pub const IS_ADVICE: PolyAddress = w(12);
+/// `W[22]`: [`WORD_INDEX_HI`] with bit 13 removed, bounded below `2^13` by
+/// its own scaled obligation. What used to bound `word_index_hi` below `2^14`
+/// directly (`4·word_index_hi < 2^16`) now bounds this instead, and the bound
+/// on `word_index_hi` follows from the split.
+pub const WORD_INDEX_HI_REST: PolyAddress = w(13);
+/// `W[23..26]`: the channels' multiplicities, in channel order — timestamp,
 /// range16, decoder — last in the witness subtree (`docs/spec/lookup.md` §7).
 /// There is no generic channel: this family looks nothing up in the packed
 /// table.
-pub const MULTIPLICITIES: [PolyAddress; 3] = [w(12), w(13), w(14)];
+pub const MULTIPLICITIES: [PolyAddress; 3] = [w(14), w(15), w(16)];
 
 /// The decoded table's width, `program::lookup_tuple(MEM_WORD)`:
 /// `pc next_pc rs1 rs2 rd imm extra_mask`, at `S[0..7]`.
@@ -237,7 +255,14 @@ fn family_spec() -> FamilySpec {
         "decoded_mask",
     ]);
     witness.extend(kind_names.iter().map(|k| format!("kind_{k}")));
-    witness.extend(names(&["wrap", "word_index", "word_index_hi", "rd_hi"]));
+    witness.extend(names(&[
+        "wrap",
+        "word_index",
+        "word_index_hi",
+        "rd_hi",
+        "is_advice",
+        "word_index_hi_rest",
+    ]));
     witness.extend(
         [
             lookup_channel::TIMESTAMP,
@@ -300,6 +325,52 @@ fn family_spec() -> FamilySpec {
     enforcing.push(("rd_addr_rule".into(), addr_rule(SLOT_RD, DECODED_RD)));
     enforcing.push(("load_addr_rule".into(), word_addr_rule(SLOT_LOAD)));
     enforcing.push(("ram_addr_rule".into(), word_addr_rule(SLOT_RAM)));
+    // The advice selector, `docs/spec/advice.md` §3. `word_index_hi =
+    // 2^13·is_advice + word_index_hi_rest` with `is_advice` boolean and
+    // `word_index_hi_rest < 2^13` from its scaled obligation below, so the
+    // bit is the address's bit 31 in **both** directions.
+    enforcing.push((
+        "advice_split".into(),
+        linear(vec![
+            (lit(1), WORD_INDEX_HI),
+            (neg(1 << 13), IS_ADVICE),
+            (neg(1), WORD_INDEX_HI_REST),
+        ]),
+    ));
+    enforcing.push(("is_advice_boolean".into(), booleanity(IS_ADVICE)));
+    // The load's leaf names `RAM` or `ADVICE` by this row's bit, through the
+    // frame's one extra `M` column, because a leaf may read no `W` column
+    // (`check_memory`'s provenance rule; `docs/spec/advice.md` §3.2). The
+    // `m_load` factor is what makes the column 0 on a row that makes no load,
+    // which every other query gets from its `tag·m` term.
+    let m_load = frame(SLOT_LOAD, FIELD_MASK);
+    enforcing.push((
+        "load_space_rule".into(),
+        quadratic(
+            vec![
+                (lit(1), load_space(QUERIES.len())),
+                (neg(address_space::RAM as u64), m_load),
+            ],
+            vec![(
+                neg((address_space::ADVICE - address_space::RAM) as u64),
+                m_load,
+                IS_ADVICE,
+            )],
+        ),
+    ));
+    // **Advice is read-only.** `m_ram` is `m_pc·sw` (`ram_mask_rule`), so this
+    // is "no store's address is in the advice region", vacuous on a padding
+    // row and degree 2. The multiset would refuse such a store anyway — the
+    // `ram` query's tag is the literal `RAM`, so it would write at an address
+    // no RAM window initialized — but that refusal is global and nameless,
+    // and this one is local and named (`docs/spec/advice.md` §4).
+    enforcing.push((
+        "no_store_to_advice".into(),
+        quadratic(
+            vec![],
+            vec![(lit(1), frame(SLOT_RAM, FIELD_MASK), IS_ADVICE)],
+        ),
+    ));
     enforcing.push(("rs1_value_masked".into(), value_masked(SLOT_RS1)));
     enforcing.push(("rs2_value_masked".into(), value_masked(SLOT_RS2)));
 
@@ -343,12 +414,21 @@ fn family_spec() -> FamilySpec {
 
     let mut lookups = Vec::new();
     lookups.extend(range32("word_index", WORD_INDEX, WORD_INDEX_HI));
-    // `4·word_index_hi < 2^16` is `word_index_hi < 2^14`, so `word_index` is
-    // below `2^30` and `4·word_index` is a 32-bit byte address. This is the
-    // one obligation that makes the base-4 split genuinely base-4.
+    // `8·word_index_hi_rest < 2^16` is `word_index_hi_rest < 2^13`, which with
+    // `advice_split` and `is_advice`'s booleanity gives `word_index_hi < 2^14`
+    // — so `word_index < 2^30` and `4·word_index` is a 32-bit byte address.
+    // This is the one obligation that makes the base-4 split genuinely
+    // base-4, and since S25b it carries the advice selector's bound too: it is
+    // `4·word_index_hi < 2^16` re-split about bit 13 (`docs/spec/advice.md`
+    // §3.1). `check_copowers` wants the direct pair under the same selector,
+    // which is the obligation above it.
     lookups.push(range16(
-        "word_index_hi_scaled",
-        linear(vec![(lit(4), WORD_INDEX_HI)]),
+        "word_index_hi_rest_range",
+        column(WORD_INDEX_HI_REST),
+    ));
+    lookups.push(range16(
+        "word_index_hi_rest_scaled",
+        linear(vec![(lit(8), WORD_INDEX_HI_REST)]),
     ));
     lookups.extend(range32("rd", sel, RD_HI));
     let mut decode = vec![column(pc)];
@@ -389,7 +469,7 @@ fn assemble(trace_vars: u32, family_spec: FamilySpec) -> CircuitArtifact {
     // form).
     for (channel, want) in [
         (lookup_channel::TIMESTAMP, 2 * QUERIES.len()),
-        (lookup_channel::RANGE16, 5),
+        (lookup_channel::RANGE16, 6),
         (lookup_channel::DECODER, 1),
     ] {
         let got = a.lookups.iter().filter(|l| l.channel == channel).count();
@@ -402,12 +482,14 @@ fn assemble(trace_vars: u32, family_spec: FamilySpec) -> CircuitArtifact {
     }
     assert_eq!(
         a.layers[0].enforcing.len(),
-        33,
-        "mem_word: the circuit's enforcing gates are the frame's 13 and this family's 20"
+        37,
+        "mem_word: the circuit's enforcing gates are the frame's 13 and this family's 24"
     );
-    // The alignment obligation scales `word_index_hi` by 4, which bounds
-    // nothing unless `word_index_hi` is bounded directly too.
-    if let Err(e) = check_copowers(&a, &[(WORD_INDEX_HI, frame(SLOT_PC, FIELD_MASK))]) {
+    // The alignment obligation scales `word_index_hi_rest` by 8, which bounds
+    // nothing unless that column is bounded directly too. Since S25b it is
+    // `word_index_hi`'s old `4·` obligation re-split about bit 13, so the
+    // column named here moved with it (`docs/spec/advice.md` §3.1).
+    if let Err(e) = check_copowers(&a, &[(WORD_INDEX_HI_REST, frame(SLOT_PC, FIELD_MASK))]) {
         panic!("mem_word: {e}");
     }
     a
@@ -460,16 +542,16 @@ mod tests {
     /// An obligation dropped on the way to the assembly is refused by its
     /// channel's count.
     #[test]
-    #[should_panic(expected = "channel `range16` carries 4 obligations, not 5")]
+    #[should_panic(expected = "channel `range16` carries 5 obligations, not 6")]
     fn a_dropped_obligation_fails_the_build() {
         let mut e = family_spec();
-        e.lookups.retain(|l| l.name != "word_index_hi_scaled");
+        e.lookups.retain(|l| l.name != "word_index_hi_rest_scaled");
         assemble(20, e);
     }
 
-    /// `word_index_hi`'s direct bound replaced by one that bounds nothing the
-    /// scaled obligation needs: the count holds, and the copower check refuses
-    /// it.
+    /// `word_index_hi_rest`'s direct bound replaced by one that bounds nothing
+    /// the scaled obligation needs: the count holds, and the copower check
+    /// refuses it.
     #[test]
     #[should_panic(expected = "copower pairing")]
     fn word_index_without_its_direct_bound_fails_the_build() {
@@ -477,9 +559,9 @@ mod tests {
         let l = e
             .lookups
             .iter_mut()
-            .find(|l| l.name == "word_index_hi_range")
+            .find(|l| l.name == "word_index_hi_rest_range")
             .expect("the direct bound");
-        l.tuple = vec![linear(vec![(lit(2), WORD_INDEX_HI)])];
+        l.tuple = vec![linear(vec![(lit(2), WORD_INDEX_HI_REST)])];
         assemble(20, e);
     }
 
