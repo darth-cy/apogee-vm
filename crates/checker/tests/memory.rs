@@ -14,8 +14,8 @@ use checker::{
     violated_relations,
 };
 use common::{
-    frame_height, frame_plan, frame_shard, memory_challenges, prove_and_verify, shards, traced,
-    delegation_shards, window_shards, witness_row, FAMILY_NAMES, GUESTS, HEIGHT,
+    delegation_shards, frame_height, frame_plan, frame_shard, memory_challenges, prove_and_verify,
+    shards, traced, window_shards, witness_row, FAMILY_NAMES, GUESTS, HEIGHT,
 };
 use constants::challenge_slot::{MEM_ALPHA_VAL, MEM_GAMMA};
 use constants::family;

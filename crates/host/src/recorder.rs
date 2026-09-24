@@ -145,11 +145,15 @@ impl WitnessRecorder {
 
     /// The block's header, with its transactions, checked against `job.hash`.
     fn block_header(&self, job: &Job) -> Result<Json, String> {
-        let header = self
-            .rpc
-            .call("eth_getBlockByNumber", &format!(r#"["{:#x}",true]"#, job.number))?;
+        let header = self.rpc.call(
+            "eth_getBlockByNumber",
+            &format!(r#"["{:#x}",true]"#, job.number),
+        )?;
         if header.is_null() {
-            return Err(format!("recorder: block {} is not on this node", job.number));
+            return Err(format!(
+                "recorder: block {} is not on this node",
+                job.number
+            ));
         }
         let hash = hex_word(field_str(&header, "hash")?)?;
         if hash != job.hash {
@@ -169,7 +173,9 @@ impl WitnessRecorder {
             .rpc
             .call("eth_getBlockByHash", &format!(r#"["{parent_hash}",false]"#))?;
         if parent.is_null() {
-            return Err(format!("recorder: the parent {parent_hash} is not on this node"));
+            return Err(format!(
+                "recorder: the parent {parent_hash} is not on this node"
+            ));
         }
         hex_word(field_str(&parent, "stateRoot")?)
     }
@@ -257,11 +263,11 @@ fn tx_witness(tx: &Json) -> Result<TxWitness, String> {
         gas_price: hex_u128(field_str(tx, "gasPrice").or_else(|_| field_str(tx, "maxFeePerGas"))?)?,
         gas_priority_fee: match tx.get("maxPriorityFeePerGas") {
             None | Some(Json::Null) => None,
-            Some(value) => Some(hex_u128(
-                value
-                    .as_str()
-                    .ok_or_else(|| String::from("`maxPriorityFeePerGas` is not a string"))?,
-            )?),
+            Some(value) => {
+                Some(hex_u128(value.as_str().ok_or_else(|| {
+                    String::from("`maxPriorityFeePerGas` is not a string")
+                })?)?)
+            }
         },
         nonce: hex_u64(field_str(tx, "nonce")?)?,
         chain_id: match tx.get("chainId") {
@@ -415,7 +421,7 @@ impl<'a> RpcDb<'a> {
                 });
             }
         }
-        out.sort_by(|a, b| a.address.cmp(&b.address));
+        out.sort_by_key(|a| a.address);
         out
     }
 
@@ -541,7 +547,9 @@ impl Database for &mut RpcDb<'_> {
             .call("eth_getBlockByNumber", &format!(r#"["{number:#x}",false]"#))
             .map_err(DbError)?;
         if value.is_null() {
-            return Err(DbError(format!("recorder: block {number} is not on this node")));
+            return Err(DbError(format!(
+                "recorder: block {number} is not on this node"
+            )));
         }
         let hash = hex_word(field_str(&value, "hash").map_err(DbError)?).map_err(DbError)?;
         self.block_hashes.insert(number, hash);
@@ -574,11 +582,11 @@ fn field_str<'a>(value: &'a Json, name: &str) -> Result<&'a str, String> {
 fn optional_u64(value: &Json, name: &str) -> Result<Option<u64>, String> {
     match value.get(name) {
         None | Some(Json::Null) => Ok(None),
-        Some(field) => Ok(Some(hex_u64(
-            field
-                .as_str()
-                .ok_or_else(|| format!("field `{name}` is not a string"))?,
-        )?)),
+        Some(field) => {
+            Ok(Some(hex_u64(field.as_str().ok_or_else(|| {
+                format!("field `{name}` is not a string")
+            })?)?))
+        }
     }
 }
 
@@ -606,7 +614,8 @@ mod tests {
 
     #[test]
     fn a_transaction_type_this_witness_cannot_express_is_refused() {
-        let tx = crate::json::parse(r#"{"type":"0x3","from":"0x00","value":"0x0"}"#).expect("parses");
+        let tx =
+            crate::json::parse(r#"{"type":"0x3","from":"0x00","value":"0x0"}"#).expect("parses");
         let error = tx_witness(&tx).expect_err("type 3");
         assert!(error.contains("type 3"), "{error}");
     }

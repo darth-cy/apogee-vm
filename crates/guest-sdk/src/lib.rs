@@ -27,7 +27,6 @@
 use core::alloc::{GlobalAlloc, Layout};
 use core::arch::global_asm;
 
-
 extern crate alloc;
 
 use constants::{delegation, ecall, guest_memory, keccak, poseidon2};

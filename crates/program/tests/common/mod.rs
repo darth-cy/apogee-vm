@@ -42,9 +42,25 @@ pub const GUESTS: [&str; 19] = [
 /// The guests whose image declares a delegation family, and which
 /// (`docs/spec/delegation.md` §7). Every other guest declares none, which is
 /// what `tests/delegation.rs` holds them to.
-pub const DECLARING_GUESTS: [(&str, &[u32]); 7] = [
+///
+/// **Every guest that touches fd 0 or fd 1 is on this list since S25.**
+/// Publishing the public I/O digest at exit means calling
+/// `transcript::io_digest_words` (`docs/spec/memory.md` §10), which links
+/// `transcript` and `field`, whose guest-target backends are the Poseidon2 and
+/// Fr-arithmetic delegation shims. So the list is now "the guests that do
+/// committed I/O, plus the three that reach a shim for their own reasons", and
+/// the control for `#[used]`-free reachability has to be a guest that does
+/// neither: `addsub`, `control`, `alu`, `mem` and `shards` are the five left.
+pub const DECLARING_GUESTS: [(&str, &[u32]); 14] = [
+    ("fib", &[family::POSEIDON2, family::FR_ARITH]),
     ("echo", &[family::POSEIDON2, family::FR_ARITH]),
+    ("rvc-dense", &[family::POSEIDON2, family::FR_ARITH]),
+    ("amm", &[family::POSEIDON2, family::FR_ARITH]),
+    ("orderbook", &[family::POSEIDON2, family::FR_ARITH]),
     ("vault", &[family::POSEIDON2, family::FR_ARITH]),
+    ("atomics", &[family::POSEIDON2, family::FR_ARITH]),
+    ("opcodes", &[family::POSEIDON2, family::FR_ARITH]),
+    ("heap", &[family::POSEIDON2, family::FR_ARITH]),
     ("consistency", &[family::POSEIDON2, family::FR_ARITH]),
     ("keccak-test", &[family::KECCAK_F]),
     ("keccak-unused", &[family::KECCAK_F]),
@@ -62,7 +78,7 @@ pub const PINS: [(&str, &str); 3] = [
     ),
     (
         "identity.txt",
-        "3232810e92795fef2ce795c3c0b84044d54294cc7238da4bb5b11022c4a8032b",
+        "809e611a5b903fab03c962d6f6c5ba6a55b35439b223c60e5a2620072f904e6c",
     ),
     (
         "generic_table.txt",

@@ -548,14 +548,8 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     // `a1` and `a2` have no decoded field to come from — an `ecall`'s encoding
     // names no registers — so their addresses are the two literals, under
     // their own masks.
-    enforcing.push((
-        "arg1_addr_rule".into(),
-        fixed_addr_rule(SLOT_ARG1, A1),
-    ));
-    enforcing.push((
-        "arg2_addr_rule".into(),
-        fixed_addr_rule(SLOT_ARG2, A2),
-    ));
+    enforcing.push(("arg1_addr_rule".into(), fixed_addr_rule(SLOT_ARG1, A1)));
+    enforcing.push(("arg2_addr_rule".into(), fixed_addr_rule(SLOT_ARG2, A2)));
     enforcing.push(("rs1_value_masked".into(), value_masked(SLOT_RS1)));
     enforcing.push(("rs2_value_masked".into(), value_masked(SLOT_RS2)));
 

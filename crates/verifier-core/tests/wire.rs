@@ -67,9 +67,9 @@ fn the_layouts_are_the_specs() {
     assert_eq!(u32_at(4), 0);
     assert_eq!((u64_at(8), u64_at(16)), (0, 1 << 38));
     assert_eq!(&b[24..56], &proof.global_digest.to_bytes());
-    assert_eq!(u32_at(56), 35);
+    assert_eq!(u32_at(56), 38);
     assert_eq!(&b[60..124], &blob(400));
-    let outputs = 60 + 35 * 64;
+    let outputs = 60 + 38 * 64;
     assert_eq!(u32_at(outputs), 2);
     let gkr = outputs + 4 + 2 * 32;
     assert_eq!(u32_at(gkr), 2, "two transitions");

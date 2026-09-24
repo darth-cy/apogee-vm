@@ -363,13 +363,26 @@ fn honest_rows() -> Vec<(&'static str, Row)> {
         // carries no RAM query at all (`docs/spec/ecall-abi.md` §4).
         (
             "read of one word",
-            read_row(guest_memory::RAM_ORIGIN + 0x200, 4, 0xdead_beef, 0x0123_4567),
+            read_row(
+                guest_memory::RAM_ORIGIN + 0x200,
+                4,
+                0xdead_beef,
+                0x0123_4567,
+            ),
         ),
         (
             "read at end of stream",
-            read_row(guest_memory::RAM_ORIGIN + 0x204, 0, 0x1111_2222, 0x1111_2222),
+            read_row(
+                guest_memory::RAM_ORIGIN + 0x204,
+                0,
+                0x1111_2222,
+                0x1111_2222,
+            ),
         ),
-        ("write of nine bytes", write_row(guest_memory::RAM_ORIGIN + 0x300, 9)),
+        (
+            "write of nine bytes",
+            write_row(guest_memory::RAM_ORIGIN + 0x300, 9),
+        ),
     ]
 }
 
@@ -915,7 +928,14 @@ fn each_gate_is_the_one_that_refuses_its_row() {
 
     // The number pins, each the lone refusal of a row claiming the wrong one.
     let mut r = read_row(base, 4, 1, 2);
-    r.query("rs1", CYCLE, 1, 17, ecall::WRITE as u64, ecall::WRITE as u64);
+    r.query(
+        "rs1",
+        CYCLE,
+        1,
+        17,
+        ecall::WRITE as u64,
+        ecall::WRITE as u64,
+    );
     cases.push(("a read row whose a7 says write", r, vec!["read_number"]));
 
     let mut r = write_row(base, 4);

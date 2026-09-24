@@ -33,7 +33,12 @@ fn with_height(config: &VmConfig, families: &[u32], height: u32) -> VmConfig {
 #[test]
 fn the_vm_config_wire_form_is_frozen_and_round_trips() {
     let config = fib_config();
-    let mut want: Vec<u32> = vec![8];
+    // Ten families since S25, not eight: `fib` reads fd 0 and commits to
+    // fd 1, so it computes `io_digest` at exit (`docs/spec/memory.md` §10) and
+    // the guest-target backends route Poseidon2 and `Fr`'s arithmetic through
+    // their delegations. Declaring a delegation is what puts it in the config
+    // (`docs/spec/delegation.md` §7), at its own `2^8` height.
+    let mut want: Vec<u32> = vec![10];
     for (f, h) in [
         (family::ADD_SUB_LUI_AUIPC, 1 << 22),
         (family::JUMP_BRANCH_SLT, 1 << 22),
@@ -43,6 +48,8 @@ fn the_vm_config_wire_form_is_frozen_and_round_trips() {
         (family::MEM_SUBWORD, 1 << 22),
         (family::INIT_TEARDOWN, 1 << 22),
         (family::ZERO_WINDOWS, 1 << 22),
+        (family::POSEIDON2, 1 << 8),
+        (family::FR_ARITH, 1 << 8),
     ] {
         want.extend([f, h]);
     }
@@ -116,7 +123,8 @@ fn a_config_of_every_family_round_trips() {
 #[test]
 fn the_statement_descriptor_is_three_adjacent_messages() {
     let config = fib_config();
-    let counts = [3, 1, 1, 0, 2, 1, 1, 1];
+    // Ten families since S25; see the wire-form test above.
+    let counts = [3, 1, 1, 0, 2, 1, 1, 1, 1, 1];
     let windows = [127];
 
     let mut tr = Transcript::new();
@@ -126,11 +134,11 @@ fn the_statement_descriptor_is_three_adjacent_messages() {
         &[
             TranscriptEvent::Absorb {
                 tag: tags::VM_CONFIG,
-                n_scalars: 2 * 8 + 1,
+                n_scalars: 2 * 10 + 1,
             },
             TranscriptEvent::Absorb {
                 tag: tags::SHARD_COUNTS,
-                n_scalars: 8,
+                n_scalars: 10,
             },
             TranscriptEvent::Absorb {
                 tag: tags::MEMORY_WINDOWS,
@@ -152,7 +160,12 @@ fn the_statement_descriptor_is_three_adjacent_messages() {
 
     // Shard counts are per proof: changing one moves the sponge.
     let mut other = Transcript::new();
-    absorb_statement_descriptor(&mut other, &config, &[3, 1, 1, 0, 2, 1, 1, 2], &windows);
+    absorb_statement_descriptor(
+        &mut other,
+        &config,
+        &[3, 1, 1, 0, 2, 1, 1, 2, 1, 1],
+        &windows,
+    );
     assert_ne!(tr.snapshot(), other.snapshot());
 
     // So is the window list: one id differs.
@@ -162,7 +175,7 @@ fn the_statement_descriptor_is_three_adjacent_messages() {
 
     // An execution touching no window above 0 still absorbs the message, empty.
     let mut empty = Transcript::new();
-    absorb_statement_descriptor(&mut empty, &config, &[3, 1, 1, 0, 2, 1, 1, 0], &[]);
+    absorb_statement_descriptor(&mut empty, &config, &[3, 1, 1, 0, 2, 1, 1, 0, 1, 1], &[]);
     assert_eq!(
         empty.event_log()[2],
         TranscriptEvent::Absorb {
@@ -197,7 +210,7 @@ fn a_config_without_both_init_families_at_one_height_is_refused() {
         assert_eq!(err.unwrap_err(), missing, "{init} detached");
         let mut config = fib_config();
         config.families.retain(|(f, _)| *f != init);
-        assert_eq!(config.families.len(), 7);
+        assert_eq!(config.families.len(), 9);
         assert_eq!(
             VmConfig::from_bytes(&config.to_bytes()),
             None,
@@ -239,9 +252,11 @@ fn a_config_without_both_init_families_at_one_height_is_refused() {
 fn the_window_rules_hold_at_their_boundaries() {
     let config = fib_config();
     // One shard for each instruction family, then INIT_TEARDOWN's and
-    // ZERO_WINDOWS'.
-    let counts = |init: u32, zero: u32| [1, 1, 1, 1, 1, 1, init, zero];
-    let check = |counts: [u32; 8], windows: &[u32]| check_memory_windows(&config, &counts, windows);
+    // ZERO_WINDOWS', then one for each of the two delegation families S25's
+    // exit-time `io_digest` brings in.
+    let counts = |init: u32, zero: u32| [1, 1, 1, 1, 1, 1, init, zero, 1, 1];
+    let check =
+        |counts: [u32; 10], windows: &[u32]| check_memory_windows(&config, &counts, windows);
     let refused = |rule| Err(ProgramError::WindowRule { rule });
 
     assert_eq!(check(counts(1, 0), &[]), Ok(()), "no window above 0");
@@ -290,7 +305,7 @@ fn the_window_rules_hold_at_their_boundaries() {
     let mut missing = config.clone();
     missing.families.retain(|(f, _)| *f != family::ZERO_WINDOWS);
     assert_eq!(
-        check_memory_windows(&missing, &[1, 1, 1, 1, 1, 1, 1], &[]),
+        check_memory_windows(&missing, &[1, 1, 1, 1, 1, 1, 1, 1, 1], &[]),
         refused("INIT_TEARDOWN and ZERO_WINDOWS are in every VmConfig")
     );
 }

@@ -109,7 +109,8 @@ impl Rpc {
         // Parsed before it is cached: a cache is a record of answers, and an
         // error response or a malformed body is not one.
         let value = result_of(&text, method)?;
-        std::fs::create_dir_all(&self.cache).map_err(|e| format!("rpc: {}: {e}", self.cache.display()))?;
+        std::fs::create_dir_all(&self.cache)
+            .map_err(|e| format!("rpc: {}: {e}", self.cache.display()))?;
         std::fs::write(&path, &text).map_err(|e| format!("rpc: {}: {e}", path.display()))?;
         Ok(value)
     }
@@ -238,7 +239,8 @@ fn curl(endpoint: &str, body: &str) -> Result<Answer, String> {
             first_line(&String::from_utf8_lossy(&out.stderr))
         ));
     }
-    let text = String::from_utf8(out.stdout).map_err(|_| String::from("rpc: curl's output is not UTF-8"))?;
+    let text = String::from_utf8(out.stdout)
+        .map_err(|_| String::from("rpc: curl's output is not UTF-8"))?;
     let split = text
         .rfind('\n')
         .ok_or_else(|| String::from("rpc: curl wrote no status line"))?;
@@ -255,7 +257,12 @@ fn curl(endpoint: &str, body: &str) -> Result<Answer, String> {
 }
 
 fn first_line(text: &str) -> String {
-    text.lines().next().unwrap_or("").chars().take(200).collect()
+    text.lines()
+        .next()
+        .unwrap_or("")
+        .chars()
+        .take(200)
+        .collect()
 }
 
 #[cfg(test)]

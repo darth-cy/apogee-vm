@@ -2,7 +2,8 @@
 //! fib's committed ELF traced with every family at `h = 2^16` — one frame per
 //! family that ran, each over that family's cycles at the smallest power-of-two
 //! height holding them, `INIT_TEARDOWN`'s window 0, `ZERO_WINDOWS`' stack
-//! window 8191, and its boundary — each tampered as an adversarial prover
+//! window 8191, one shard per delegation family its exit-time `io_digest`
+//! invokes, and its boundary — each tampered as an adversarial prover
 //! would, beside its honest twin. "Does not reconcile" means: the tampered base
 //! forwarded honestly, its roots recomputed by `memory_roots`, and
 //! `gkr::reconciles` false. Where a tamper breaks a gate, `gkr::self_check`
@@ -33,9 +34,9 @@ use checker::{
     check_padding_identity, memory_roots, violated_lookups, violated_relations, WitnessRow,
 };
 use common::{
-    cell, forwarded_shard, frame_height, frame_plan, frame_shard, memory_challenges,
-    prove_and_verify, reconciled, roots, shards, traced, window_shard, window_shards, with_cells,
-    witness_row, Shard, Traced, GUESTS, HEIGHT,
+    cell, delegation_shards, forwarded_shard, frame_height, frame_plan, frame_shard,
+    memory_challenges, prove_and_verify, reconciled, roots, shards, traced, window_shard,
+    window_shards, with_cells, witness_row, Shard, Traced, GUESTS, HEIGHT,
 };
 use constants::challenge_slot::{
     MEM_ALPHA_ADDR, MEM_ALPHA_TS, MEM_ALPHA_VAL, MEM_GAMMA, MEM_WINDOW_CONSTANT,
@@ -72,7 +73,13 @@ use trace::{
 /// whose invocations need shards of their own for the anchors to pair.
 const ALU: usize = 0;
 const JUMP: usize = 1;
+/// `MUL_DIV`'s frame. `io_digest`'s multiplies are what brought that family
+/// into fib's trace at S25; before it, fib ran none.
+const MUL: usize = 3;
 const MEM: usize = 4;
+/// `MEM_SUBWORD`'s frame: fib's byte and halfword accesses, which since S25
+/// are the first RAM events of its execution.
+const SUB: usize = 5;
 /// How many frames fib's statement has; the windows follow them.
 const FRAMES: usize = 6;
 /// `INIT_TEARDOWN`'s shard, RAM window 0.
@@ -87,9 +94,10 @@ fn int(v: u64) -> Fr {
     Fr::from_u64(v)
 }
 
-/// fib's honest statement: its trace, slots 1–4, its frame plan, its seven
+/// fib's honest statement: its trace, slots 1–4, its frame plan, its ten
 /// shards — one frame per family that ran, then window 0 and the stack window,
-/// in that order — and its finals.
+/// then the two delegation families its exit invokes, in that order — and its
+/// finals.
 struct Fib {
     t: Traced,
     memory: ExternalChallenges,
@@ -294,8 +302,15 @@ fn first_empty(f: &Fib, q: usize) -> (usize, usize, usize) {
 
 /// The first two queries of one register, taken in register order, that are
 /// both `rd` writes — no query of the register between them — and that `keep`
-/// accepts. The two need not be in one family's frame.
-fn rd_writes_in_a_row(f: &Fib, keep: impl Fn(&MemoryEvent) -> bool) -> (MemoryEvent, MemoryEvent) {
+/// accepts. The two need not be in one family's frame, and a caller that wants
+/// a forgery *spanning* two frames says so here, by asking `keep` for two
+/// cycles whose frames differ: which registers hold such a pair is a property
+/// of the execution, so it belongs in the search and not in an assertion after
+/// it.
+fn rd_writes_in_a_row(
+    f: &Fib,
+    keep: impl Fn(&MemoryEvent, &MemoryEvent) -> bool,
+) -> (MemoryEvent, MemoryEvent) {
     let rd = |e: &MemoryEvent| e.delta() == FRAME_DELTA[RD];
     for r in 0..32 {
         let on_r: Vec<MemoryEvent> = (f.t.log.events().iter().copied())
@@ -303,7 +318,7 @@ fn rd_writes_in_a_row(f: &Fib, keep: impl Fn(&MemoryEvent) -> bool) -> (MemoryEv
             .collect();
         let pair = on_r
             .windows(2)
-            .find(|p| rd(&p[0]) && rd(&p[1]) && keep(&p[0]));
+            .find(|p| rd(&p[0]) && rd(&p[1]) && keep(&p[0], &p[1]));
         if let Some(p) = pair {
             return (p[0], p[1]);
         }
@@ -364,12 +379,20 @@ fn window_row(addr: u32, w: u32) -> usize {
 // Acceptance
 // ---------------------------------------------------------------------------
 
-/// S14 acceptance 2, one value. fib's first RAM store — its `ram` query, at
-/// slot 4 of `MEM_WORD`'s frame — reads the word it overwrites; that read value
-/// moved by one leaves every gate and every obligation holding, since none reads
-/// a store's read value, and the roots do not reconcile: the read tuple is no
-/// write's. The honest twin keeps every gate and obligation and reconciles. A
-/// value tamper's failure surface is reconciliation alone.
+/// S14 acceptance 2, one value. fib's first RAM **word** store — its `ram`
+/// query, at slot 4 of `MEM_WORD`'s frame — reads the word it overwrites; that
+/// read value moved by one leaves every gate and every obligation holding,
+/// since none reads a word store's read value, and the roots do not reconcile:
+/// the read tuple is no write's. The honest twin keeps every gate and
+/// obligation and reconciles. A value tamper's failure surface is
+/// reconciliation alone.
+///
+/// The store is looked for in `MEM_WORD`'s frame rather than taken as the
+/// log's first: since S25 fib's first RAM store is a byte store, on a
+/// `MEM_SUBWORD` row, and *that* family does read its `ram` read value — the
+/// word it splices a byte into. A frame artifact carries no family gate, so
+/// either store would pass here, but only the word store's read value is one
+/// nothing anywhere reads.
 ///
 /// Fails if the frame's read leaf did not bind `read_value`.
 #[test]
@@ -381,8 +404,12 @@ fn one_changed_value_does_not_reconcile() {
             .events()
             .iter()
             .copied()
-            .find(|e| e.space == AddressSpace::Ram && e.delta() == FRAME_DELTA[RAM])
-            .expect("a store");
+            .find(|e| {
+                e.space == AddressSpace::Ram
+                    && e.delta() == FRAME_DELTA[RAM]
+                    && at_cycle(&f, e.cycle()).0 == MEM
+            })
+            .expect("a word store");
     let (i, row, at) = locate(&f, &store);
     assert_eq!(
         (i, at),
@@ -397,13 +424,13 @@ fn one_changed_value_does_not_reconcile() {
     assert_eq!(surface(&f, &forged, &f.finals), expected);
 }
 
-/// S14 acceptance 3, one timestamp, in both of its places on row 11 of
-/// `ADD_SUB_LUI_AUIPC`'s frame, cycle 18:
+/// S14 acceptance 3, one timestamp, in both of its places on row 15 of
+/// `ADD_SUB_LUI_AUIPC`'s frame, cycle 34:
 ///
-/// - its pc query's read timestamp moved one earlier, 68 to 67, with `gap_hi`
-///   rewritten for the new gap (it stays 0): no gate and no obligation breaks,
-///   and the roots do not reconcile — acceptance 2's surface;
-/// - its cycle moved one earlier, 18 to 17, which moves every write timestamp
+/// - its pc query's read timestamp moved one earlier, 132 to 131, with
+///   `gap_hi` rewritten for the new gap (it stays 0): no gate and no obligation
+///   breaks, and the roots do not reconcile — acceptance 2's surface;
+/// - its cycle moved one earlier, 34 to 33, which moves every write timestamp
 ///   of the row four earlier: the roots do not reconcile, and the lookup
 ///   evaluator also names, on that row, the low chunk of every live query whose
 ///   gap was below 4 and went negative — measured: the pc query's, whose gap is
@@ -412,20 +439,24 @@ fn one_changed_value_does_not_reconcile() {
 /// So the surfaces differ: a value enters no obligation, and a timestamp that
 /// moves a gap below 0 is caught by the lookup evaluator as well as by
 /// reconciliation. The row is pinned because the second half's short set is a
-/// measurement, not a rule. Fails if the read leaf did not bind `read_ts`, the
-/// write leaf `cycle`, or the gap obligations `cycle`.
+/// measurement, not a rule: row 15 is the earliest row of that frame whose
+/// short set is that pair, S14's row 11 — cycle 26 since S25 — now measuring
+/// the pc query's and `rd`'s. Fails if the read leaf did not bind `read_ts`,
+/// the write leaf `cycle`, or the gap obligations `cycle`.
 #[test]
 fn one_changed_timestamp_does_not_reconcile_and_a_moved_cycle_breaks_a_gap() {
     let f = fib();
-    const ROW: usize = 11;
-    const CYCLE_AT_ROW: u64 = 18;
+    const ROW: usize = 15;
+    const CYCLE_AT_ROW: u64 = 34;
+    /// The pc's own last write, `4·33`, so the row's pc gap is the constant 3.
+    const PC_READ_TS: u64 = 132;
     assert_eq!(cell(&f.shards[ALU], CYCLE, ROW), int(CYCLE_AT_ROW));
     let pc = slot(&f, ALU, PC).expect("every frame has the pc query");
     let read_ts = frame(pc, FIELD_READ_TS);
-    assert_eq!(cell(&f.shards[ALU], read_ts, ROW), int(68));
-    let gap = TS_STEP * CYCLE_AT_ROW - 67 - 1;
+    assert_eq!(cell(&f.shards[ALU], read_ts, ROW), int(PC_READ_TS));
+    let gap = TS_STEP * CYCLE_AT_ROW - (PC_READ_TS - 1) - 1;
     let cells = [
-        (ALU, read_ts, ROW, int(67)),
+        (ALU, read_ts, ROW, int(PC_READ_TS - 1)),
         (ALU, gap_hi(pc), ROW, int(gap >> 19)),
     ];
     let expected = Surface {
@@ -458,15 +489,18 @@ fn one_changed_timestamp_does_not_reconcile_and_a_moved_cycle_breaks_a_gap() {
 }
 
 /// S14 acceptance 4, the future-read attack. fib's first three queries of
-/// `x0`, Q1 < Q2 < Q3, each an `rs1` read of 0 written back, all three in
-/// `ADD_SUB_LUI_AUIPC`'s frame at slot 1: Q1 reads the init at 0, Q2 reads Q1's
-/// write and Q3 Q2's. Swapping Q1's and Q3's read timestamps permutes the read
-/// multiset, so the multisets balance and the roots reconcile — while Q1 now
-/// reads Q2's write, from its own future. No gate reads a read timestamp, so
-/// `gkr::self_check` passes; the lookup evaluator names exactly `gap_lo_rs1` on
-/// Q1's row, whose gap `4·cycle + Δ − read_ts − 1` is negative, and no high
-/// chunk rescues it: every `gap_hi` tried, from 1 to `−1`, names an obligation
-/// too.
+/// `x0`, Q1 < Q2 < Q3, each a read of 0 written back or a write of 0: Q1 reads
+/// the init at 0, Q2 reads Q1's write and Q3 Q2's. Since S25 Q1's and Q3's
+/// cycles are byte loads and Q2's a jump, so the two the tamper touches are
+/// `rs2` reads at slot 2 of `MEM_SUBWORD`'s frame — the obligation is named
+/// after the query their slot holds, rather than assumed to be `rs1`'s.
+/// Swapping Q1's and Q3's read timestamps
+/// permutes the read multiset, so the multisets balance and the roots reconcile
+/// — while Q1 now reads Q2's write, from its own future. No gate reads a read
+/// timestamp, so `gkr::self_check` passes; the lookup evaluator names exactly
+/// `gap_lo_rs2` on Q1's row, whose gap `4·cycle + Δ − read_ts − 1` is negative,
+/// and no high chunk rescues it: every `gap_hi` tried, from 1 to `−1`, names an
+/// obligation too.
 ///
 /// The cryptographic discharge of this obligation is S15's gate: until the
 /// LogUp argument lands, the native evaluator is the only check that catches
@@ -488,8 +522,13 @@ fn a_future_read_balances_and_only_its_gap_obligation_catches_it() {
     assert!(q3.read_ts > q1.ts, "Q1 reads from its future");
     let (i1, r1, k1) = locate(&f, &q1);
     let (i3, r3, k3) = locate(&f, &q3);
-    let rs1 = slot(&f, ALU, RS1).expect("rs1 is in every frame");
-    assert_eq!((i1, k1, i3, k3), (ALU, rs1, ALU, rs1));
+    let rs2 = slot(&f, SUB, RS2).expect("mem_subword has rs2");
+    assert_eq!((i1, k1, i3, k3), (SUB, rs2, SUB, rs2));
+    // The obligation is named after the query the two sit at, so a frame that
+    // moved them would rename it rather than drop the assertion.
+    let query = frame_queries(f.shards[i1].family.expect("a frame shard"))[k1];
+    let obligation = format!("gap_lo_{}", FRAME_NAMES[query]);
+    assert_eq!(obligation, "gap_lo_rs2");
     let cells = [
         (i1, frame(k1, FIELD_READ_TS), r1, int(q3.read_ts)),
         (i3, frame(k3, FIELD_READ_TS), r3, int(q1.read_ts)),
@@ -497,7 +536,7 @@ fn a_future_read_balances_and_only_its_gap_obligation_catches_it() {
     let forged = tampered(&f.shards, &cells);
     let expected = Surface {
         gate: Ok(()),
-        lookups: vec![(r1, "gap_lo_rs1".to_string())],
+        lookups: vec![(r1, obligation)],
         reconciles: true,
     };
     assert_eq!(surface(&f, &forged, &f.finals), expected);
@@ -529,13 +568,15 @@ fn flipped(image: &ProgramImage, addr: u32) -> ProgramImage {
     panic!("{addr:#x} is not a file-backed byte")
 }
 
-/// S14 acceptance 5, the program image. fib touches one word of window 0,
-/// `0x12000`, a file-backed word first touched by a read — a slot-2 RAM query,
-/// `load`, which only `MEM_WORD`'s and `MEM_SUBWORD`'s frames have, and which
-/// writes back what it read. One of its bytes flipped in the `ProgramImage`,
-/// and window 0's columns, `S[0]` and teardown, rebuilt from the flipped image
-/// beside the honest trace: the roots do not reconcile, because the init tuple
-/// no longer holds the value the read consumed. The same flip in a word nothing
+/// S14 acceptance 5, the program image. fib touches 42 words of window 0; the
+/// first of them whose own first touch is a read is `0x1d000`, a file-backed
+/// word a `lw` loads — the `load` query, which only `MEM_WORD`'s and
+/// `MEM_SUBWORD`'s frames have, and which writes back what it read.
+/// `read_ts = 0` is what says the touch is the word's first: the read consumes
+/// the init tuple, which is the image's word. One of its bytes flipped in the
+/// `ProgramImage`, and window 0's columns, `S[0]` and teardown, rebuilt from
+/// the flipped image beside the honest trace: the roots do not reconcile,
+/// because the init tuple no longer holds the value the read consumed. The same flip in a word nothing
 /// touches, the entry instruction's first byte, reconciles: that row's init and
 /// teardown are both the flipped image's word and cancel — which is why the
 /// test flips a word the trace reads.
@@ -547,12 +588,19 @@ fn a_flipped_image_byte_under_a_read_word_does_not_reconcile() {
     let in_window_0 =
         |e: &&MemoryEvent| e.space == AddressSpace::Ram && (e.addr as u64) < 4 * HEIGHT as u64;
     let touched: Vec<&MemoryEvent> = f.t.log.events().iter().filter(in_window_0).collect();
-    let read = touched[0];
+    // The word is searched for rather than taken as `touched[0]`: since S25
+    // fib's first window-0 event is a store, and the claim this test makes is
+    // about a word a *read* consumed the init tuple of. `read_ts == 0` is the
+    // first-touch condition and the `load` delta is the read.
+    let read = *touched
+        .iter()
+        .find(|e| e.read_ts == 0 && e.delta() == FRAME_DELTA[LOAD])
+        .expect("a window-0 word whose first touch is a load");
     assert_eq!(
         (read.addr, read.read_ts, read.delta()),
-        (0x12000, 0, FRAME_DELTA[LOAD])
+        (0x1d000, 0, FRAME_DELTA[LOAD])
     );
-    assert_eq!(locate(&f, read).0, MEM, "a load is in MEM_WORD's frame");
+    assert_eq!(locate(&f, read).0, MEM, "a word load, so MEM_WORD's frame");
     let mut statement = f.shards.clone();
     let image = flipped(&f.t.image, read.addr);
     assert_ne!(image.initial_word(read.addr), read.read_value);
@@ -589,7 +637,8 @@ fn a_flipped_image_byte_under_a_read_word_does_not_reconcile() {
 /// accept. With `M[2]` all zero it is the real window's polynomial and fib's
 /// honest trace reconciles; with `M[2] = 7` on the row of the first stack word
 /// fib touches, `0x7ffffffc`, it does not. fib reads no stack word before
-/// writing it — each of its 29 is first touched by a store, asserted here — but
+/// writing it — each of its 1,066 is first touched by a store, asserted here —
+/// but
 /// every query reads, and that store's read side consumes the init tuple
 /// `(0, 0)`.
 ///
@@ -631,7 +680,9 @@ fn a_forged_nonzero_init_value_does_not_reconcile() {
     for e in f.t.log.events().iter().filter(in_stack) {
         stack_words.entry(e.addr).or_insert(e.delta());
     }
-    assert_eq!(stack_words.len(), 29);
+    // fib's whole stack footprint, and it grew with the trace: 29 words
+    // before S25, 1,066 once `io_digest` runs at exit.
+    assert_eq!(stack_words.len(), 1066);
     assert!(stack_words.values().all(|d| *d == FRAME_DELTA[RAM]));
     let stack = &f.shards[STACK];
     let window = |value: Fr| {
@@ -705,9 +756,9 @@ fn every_touched_ram_word_has_exactly_one_teardown_row() {
 
 /// S14 acceptance 7, uniqueness is load-bearing (`docs/spec/memory.md` §9, the
 /// design review's attack). fib's first store to a stack word already holding a
-/// nonzero value, at `0x7fffff70` — a `ram` query at slot 4 of `MEM_WORD`'s
+/// nonzero value, at `0x7fffff54` — a `ram` query at slot 4 of `MEM_WORD`'s
 /// frame — made stale: it reads the init `(0, 0)` instead of the last write
-/// `(195, 0x12728)`. Against the honest statement no gate or obligation breaks
+/// `(262, 4)`. Against the honest statement no gate or obligation breaks
 /// and the roots do not reconcile. With a second `ZERO_WINDOWS` shard for window
 /// 8191 — every word of the window given an init row twice — holding that last
 /// write as teardown on the word's row and zeros elsewhere, the stale read
@@ -732,7 +783,7 @@ fn a_duplicated_window_lets_a_stale_read_balance() {
     let stale = stale.expect("a store over a written stack word");
     assert_eq!(
         (stale.addr, stale.read_ts, stale.read_value),
-        (0x7fff_ff70, 195, 0x12728)
+        (0x7fff_ff54, 262, 4)
     );
     let (i, row, at) = locate(&f, stale);
     assert_eq!(
@@ -774,7 +825,8 @@ fn a_duplicated_window_lets_a_stale_read_balance() {
 /// S14 acceptance 8, the honest half: across every frame of fib's statement,
 /// every live query at REG address 0 — `rs1`, `rs2`, `arg1`, `arg2` or `rd`,
 /// wherever its family holds it — reads 0 and writes 0, and there are as many as
-/// the log has `x0` queries, 432. Every frame is swept, so the count is over the
+/// the log has `x0` queries, 52,000. Every frame is swept, so the count is over
+/// the
 /// whole execution however the families split it. Fails if the builders or the
 /// execution let `x0` hold anything but 0.
 #[test]
@@ -799,7 +851,9 @@ fn every_read_of_x0_returns_0() {
     let log = f.t.log.events().iter();
     let expected = log.filter(|e| e.space == AddressSpace::Reg && e.addr == 0);
     assert_eq!(x0, expected.count());
-    assert_eq!(x0, 432);
+    // fib's own count, and it moved with the trace: 432 before S25, 52,000
+    // once `io_digest` runs at exit.
+    assert_eq!(x0, 52_000);
 }
 
 /// S14 acceptance 8, the forged half, `docs/spec/memory.md` §2.4's note. fib's
@@ -815,7 +869,7 @@ fn every_read_of_x0_returns_0() {
 #[test]
 fn a_write_of_5_to_x0_balances_and_rd_write_masked_refuses_it() {
     let f = fib();
-    let (w1, w2) = rd_writes_in_a_row(&f, |e| e.addr == 0);
+    let (w1, w2) = rd_writes_in_a_row(&f, |e, _| e.addr == 0);
     let (i1, r1, k1) = locate(&f, &w1);
     let (i2, r2, k2) = locate(&f, &w2);
     assert_eq!((i1, i2), (JUMP, JUMP));
@@ -835,13 +889,15 @@ fn a_write_of_5_to_x0_balances_and_rd_write_masked_refuses_it() {
 /// only it refuses, and each forgery balanced, so reconciliation cannot stand
 /// in for the gate:
 ///
-/// - `rd_is_zero_at_nonzero`: fib's first two `rd` writes in a row to one
-///   nonzero register, `x11`, R1 writing a nonzero value. R1 is a cycle of
-///   `ADD_SUB_LUI_AUIPC` and R2 one of `MEM_WORD`, so this forgery spans two
-///   frames, `rd` sitting at slot 6 of the first and slot 5 of the second. R1
-///   claims `rd_is_zero = 1` with `rd_inv = 0` and writes 0, and R2 reads that 0
-///   — a register write zeroed. The inverse gate holds (`addr·0 + 1 − 1`), and
-///   so does `rd_write_masked` (`0 − sel + 1·sel`).
+/// - `rd_is_zero_at_nonzero`: the first two `rd` writes in a row to one
+///   nonzero register whose two cycles are of *different* families and whose
+///   first writes a nonzero value — `x10`'s, at cycles 9,911 and 9,912. That
+///   the frames differ is asked of the search, because it is what makes this a
+///   cross-shard forgery: R1 is a cycle of `ADD_SUB_LUI_AUIPC` and R2 one of
+///   `MEM_WORD`, `rd` sitting at slot 6 of the first and slot 5 of the second.
+///   R1 claims `rd_is_zero = 1` with `rd_inv = 0` and writes 0, and R2 reads
+///   that 0 — a register write zeroed. The inverse gate holds
+///   (`addr·0 + 1 − 1`), and so does `rd_write_masked` (`0 − sel + 1·sel`).
 /// - `rd_is_zero_inverse`: the pair of `rd` writes to `x0` above, both in
 ///   `JUMP_BRANCH_SLT`'s frame. R1 claims `rd_is_zero = 0` with
 ///   `rd_selected = 5` and writes 5, and R2 reads 5 — `x0` holding 5. `addr·z`
@@ -856,7 +912,9 @@ fn a_write_of_5_to_x0_balances_and_rd_write_masked_refuses_it() {
 #[test]
 fn a_zeroed_register_write_and_a_nonzero_x0_write_are_each_refused_by_their_gate() {
     let f = fib();
-    let (w1, w2) = rd_writes_in_a_row(&f, |e| e.addr != 0 && e.write_value != 0);
+    let spans =
+        |a: &MemoryEvent, b: &MemoryEvent| at_cycle(&f, a.cycle()).0 != at_cycle(&f, b.cycle()).0;
+    let (w1, w2) = rd_writes_in_a_row(&f, |a, b| a.addr != 0 && a.write_value != 0 && spans(a, b));
     let (i1, r1, k1) = locate(&f, &w1);
     let (i2, r2, k2) = locate(&f, &w2);
     assert_eq!((i1, i2), (ALU, MEM), "the pair spans two families' frames");
@@ -869,7 +927,7 @@ fn a_zeroed_register_write_and_a_nonzero_x0_write_are_each_refused_by_their_gate
     let forged = tampered(&f.shards, &cells);
     balanced_and_refused_by(&f, &forged, i1, r1, "rd_is_zero_at_nonzero");
 
-    let (w1, w2) = rd_writes_in_a_row(&f, |e| e.addr == 0);
+    let (w1, w2) = rd_writes_in_a_row(&f, |e, _| e.addr == 0);
     let (i1, r1, k1) = locate(&f, &w1);
     let (i2, r2, k2) = locate(&f, &w2);
     assert_eq!((i1, i2), (JUMP, JUMP));
@@ -921,25 +979,32 @@ fn a_read_only_query_writing_back_another_value_is_refused_by_its_gate() {
     );
 }
 
-/// S14 acceptance 10, padding. `ADD_SUB_LUI_AUIPC`'s frame at the menu height
-/// 2^16 — 657 live rows and 64,879 padding rows — keeps every gate, proves,
-/// verifies and discharges its base claims. Every committed cell of every
-/// padding row is the artifact's padding row, all zeros, `cycle` included
-/// (`docs/spec/memory.md` §2.1). On every padding row each of the 16 leaves —
-/// 14 for the family's seven queries and two constant-1 pad leaves, 8 a side —
-/// and every row-wise product above them, is exactly 1 in the forwarded values;
-/// so its roots are the 2^10 frame's, and they reconcile with fib's other frames
-/// and windows. `check_padding_identity` holds the artifact to the same clause.
-/// Fails if any padding cell were not 0 — a cycle filled on a padding row past
-/// the first, which no leaf sees on a mask-0 row — or if a masked leaf were not
-/// 1: a padding row would move a root. The row-wise depth is read from the
-/// artifact, so a family whose leaves need fewer lists is measured, not assumed.
+/// S14 acceptance 10, padding. `MUL_DIV`'s frame at the menu height 2^16 —
+/// 3,241 live rows and 62,295 padding rows — keeps every gate, proves, verifies
+/// and discharges its base claims. Every committed cell of every padding row is
+/// the artifact's padding row, all zeros, `cycle` included
+/// (`docs/spec/memory.md` §2.1). On every padding row each of the 8 leaves —
+/// two for each of the family's four queries, 4 a side, which is a power of two
+/// already and takes no pad leaf — and every row-wise product above them, is
+/// exactly 1 in the forwarded values; so its roots are the 2^12 frame's, and
+/// they reconcile with fib's other frames and windows.
+/// `check_padding_identity` holds the artifact to the same clause. Fails if any
+/// padding cell were not 0 — a cycle filled on a padding row past the first,
+/// which no leaf sees on a mask-0 row — or if a masked leaf were not 1: a
+/// padding row would move a root. The row-wise depth is read from the artifact,
+/// so a family whose leaves need fewer lists is measured, not assumed.
+///
+/// The family is `MUL_DIV` because the frame has to be *mostly* padding and
+/// `ADD_SUB_LUI_AUIPC`'s no longer fits at this height at all: fib runs 98,551
+/// of its cycles since S25, against 3,241 of `MUL_DIV`'s, which `io_digest`'s
+/// multiplies brought into the trace. Its four-query frame is also the one that
+/// makes the measured depth worth measuring — eight leaves, not sixteen.
 #[test]
 fn the_frame_padded_to_2_16_proves_and_its_padding_rows_are_1() {
     let f = fib();
-    let (family, cycles) = &f.plan[ALU];
+    let (family, cycles) = &f.plan[MUL];
     let live = cycles.len();
-    assert_eq!(live, 657);
+    assert_eq!(live, 3241);
     let tall = frame_shard(&f.t.log, *family, cycles, 1 << 16, &f.memory);
     let padding = &tall.artifact.padding.row;
     assert!(
@@ -963,10 +1028,7 @@ fn the_frame_padded_to_2_16_proves_and_its_padding_rows_are_1() {
         .iter()
         .take_while(|l| !l.halving)
         .count();
-    assert_eq!(
-        row_wise, 4,
-        "16 leaves take three row-wise lists above them"
-    );
+    assert_eq!(row_wise, 3, "8 leaves take two row-wise lists above them");
     for (k, layer) in values.layers[..row_wise].iter().enumerate() {
         for (j, column) in layer.iter().enumerate() {
             for y in live..1 << 16 {
@@ -979,13 +1041,13 @@ fn the_frame_padded_to_2_16_proves_and_its_padding_rows_are_1() {
             }
         }
     }
-    let short = forwarded_shard(&f.shards[ALU]);
+    let short = forwarded_shard(&f.shards[MUL]);
     assert_eq!(
         memory_roots(&tall.artifact, &values),
-        memory_roots(&f.shards[ALU].artifact, &short)
+        memory_roots(&f.shards[MUL].artifact, &short)
     );
     let mut statement = f.shards.clone();
-    statement[ALU] = tall.clone();
+    statement[MUL] = tall.clone();
     assert!(reconciled(
         &statement,
         &f.memory,
@@ -1237,8 +1299,9 @@ fn the_finals_refuse_a_trace_stopped_before_its_exit_row() {
 
 /// Control C4, halting, the verifier's half: the same prefix's statement — one
 /// frame per family over that family's cycles below the exit row's, its
-/// windows, and finals written by hand from its final state, as a prover
-/// claiming `HALT_PC` would carry them — does not reconcile: the verifier fixes
+/// windows, the delegation shards its anchors need, and finals written by hand
+/// from its final state, as a prover claiming `HALT_PC` would carry them — does
+/// not reconcile: the verifier fixes
 /// the pc's final value to `HALT_PC`, and the prefix's last pc write is the exit
 /// row's pc. With that one boundary tuple read at the prefix's own final pc
 /// instead, it reconciles — without the sentinel every prefix balances
@@ -1264,6 +1327,12 @@ fn a_prefix_claiming_halt_pc_does_not_reconcile() {
     for w in init_windows(&log, HEIGHT) {
         shards.push(window_shard(&log, &t.image, w, &memory));
     }
+    // The prefix's delegation shards are the whole trace's: the one cycle it
+    // drops is the exit row, an `ecall exit`, which invokes no delegation, so
+    // every request it keeps still has its invocation. Without them one half
+    // of every anchor pair is missing and *no* boundary makes this statement
+    // reconcile, which would make the test pass for the wrong reason.
+    shards.extend(delegation_shards(&t, &memory));
     let mut finals = BoundaryFinals {
         reg_ts: [0; 32],
         pc_ts: 0,
@@ -1304,9 +1373,10 @@ fn a_prefix_claiming_halt_pc_does_not_reconcile() {
 }
 
 /// Control C5, mask booleanity (`docs/spec/memory.md` §2.4). On the first
-/// padding row of `ADD_SUB_LUI_AUIPC`'s frame, row 657, the pc query — slot 0 of
-/// every frame — forged with mask −1: address 10, reading `x10`'s last write and
-/// writing 42 at `4·2,118`, the row's cycle set to 2,118, one past fib's last,
+/// padding row of `ADD_SUB_LUI_AUIPC`'s frame, row 98,551, the pc query — slot 0
+/// of every frame — forged with mask −1: address 10, reading `x10`'s last write
+/// and writing 42 at `4·316,405`, the row's cycle set to 316,405, one past fib's
+/// last,
 /// with the boundary claiming `x10` ends at 42 there — the exit status. At
 /// `m = −1` each of the query's two leaves is `−T(AS − 2, …)`: the pc query reads
 /// and writes as a REG query, one sign flip on each side of the equation, so the
@@ -1454,16 +1524,17 @@ fn a_query_reading_its_own_write_balances_where_no_row_is_and_only_its_gap_catch
 /// reconciles:
 ///
 /// 1. **a query on a row with no pc query**: the first padding row of
-///    `ADD_SUB_LUI_AUIPC`'s frame, row 657, at cycle 2,118, pc mask 0 and `rd`
-///    mask 1 — `rd` being slot 6 of that seven-query frame — reading `x10`'s last
-///    write and writing 42, with `rd_inv = 1/10` and `rd_selected = 42` at
-///    `W[7]` and `W[9]`, and the finals claiming `x10 = 42` — the exit status
-///    rewritten after the exit row;
-/// 2. **its reverse, a live row dropping a query**: fib's first two `rd` writes
-///    in a row to one nonzero register, the first masked to 0 and the second
-///    reading the write before it. The two are cycles of different families, so
-///    the forgery spans `ADD_SUB_LUI_AUIPC`'s frame and `MEM_WORD`'s, `rd`
-///    sitting at slot 6 of the one and slot 5 of the other;
+///    `ADD_SUB_LUI_AUIPC`'s frame, row 98,551, at cycle 316,405, pc mask 0 and
+///    `rd` mask 1 — `rd` being slot 6 of that eight-query frame — reading
+///    `x10`'s last write and writing 42, with `rd_inv = 1/10` and
+///    `rd_selected = 42` at `W[8]` and `W[10]`, and the finals claiming
+///    `x10 = 42` — the exit status rewritten after the exit row;
+/// 2. **its reverse, a live row dropping a query**: the first two `rd` writes
+///    in a row to one nonzero register whose cycles are of different families
+///    — `x10`'s, at cycles 9,911 and 9,912 — the first masked to 0 and the
+///    second reading the write before it. The forgery spans
+///    `ADD_SUB_LUI_AUIPC`'s frame and `MEM_WORD`'s, `rd` sitting at slot 6 of
+///    the one and slot 5 of the other;
 /// 3. **a query a live row's instruction does not have**: the exit row, the last
 ///    cycle of `ADD_SUB_LUI_AUIPC`, which has no `ram` query, given one at slot 5
 ///    over the first stack word's last write, writing 99, and the stack window's
@@ -1502,7 +1573,9 @@ fn queries_their_row_does_not_have_reconcile_until_s16_couples_the_masks() {
     (finals.reg_ts[10], finals.reg_values[9]) = (ts, 42);
     assert_eq!(surface(&f, &tampered(&f.shards, &cells), &finals), honest());
 
-    let (w1, w2) = rd_writes_in_a_row(&f, |e| e.addr != 0);
+    let spans =
+        |a: &MemoryEvent, b: &MemoryEvent| at_cycle(&f, a.cycle()).0 != at_cycle(&f, b.cycle()).0;
+    let (w1, w2) = rd_writes_in_a_row(&f, |a, b| a.addr != 0 && spans(a, b));
     let (i1, r1, k1) = locate(&f, &w1);
     let (i2, r2, k2) = locate(&f, &w2);
     assert_eq!((i1, i2), (ALU, MEM), "the pair spans two families' frames");

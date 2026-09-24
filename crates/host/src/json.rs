@@ -382,9 +382,10 @@ mod tests {
         assert_eq!(hex_u64("0x18d6bf9").expect("odd digits"), 26_045_433);
         assert_eq!(hex_u128("0x1bf08eb000").expect("a fee"), 120_000_000_000);
         assert_eq!(hex_bytes("0x").expect("empty"), Vec::<u8>::new());
-        assert_eq!(hex_bytes("0xdeadBEEF").expect("mixed case"), [
-            0xde, 0xad, 0xbe, 0xef
-        ]);
+        assert_eq!(
+            hex_bytes("0xdeadBEEF").expect("mixed case"),
+            [0xde, 0xad, 0xbe, 0xef]
+        );
         assert_eq!(hex_word("0x1").expect("a word")[31], 1);
         assert!(hex_u64("18d6bf9").is_err(), "no prefix");
         assert!(hex_bytes("0xabc").is_err(), "odd digits are not bytes");

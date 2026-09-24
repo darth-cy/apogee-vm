@@ -295,8 +295,15 @@ fn code_above_a_shorter_familys_table_is_padding_there() {
 
 /// Must-be-exact 5: `bytecode_size_words` is an explicit input, and a program
 /// above it fails loudly. The span ends at the last file-backed byte: fib's
-/// heap-and-stack reservation lies above it with no file bytes and counts for
-/// nothing.
+/// heap-and-stack reservation lies above it, contributes no file bytes, and
+/// counts for nothing.
+///
+/// The precondition is stated as `mem_len > bytes.len()` rather than as a
+/// segment with *no* file bytes, because fib's layout changed at S25: the
+/// stream buffers `guest-sdk` now keeps put 24 bytes of `.data` at the foot of
+/// the reservation, so the linker emits one `PT_LOAD` carrying both instead of
+/// a bare `NOBITS` one. What matters to this test is unchanged — there is
+/// memory above the last file byte that no file byte backs.
 #[test]
 fn a_program_above_bytecode_size_words_fails_loudly() {
     let image = common::guest("fib");
@@ -311,7 +318,7 @@ fn a_program_above_bytecode_size_words_fails_loudly() {
         image
             .segments
             .iter()
-            .any(|s| s.bytes.is_empty() && s.vaddr as u64 >= end),
+            .any(|s| s.vaddr as u64 + s.mem_len as u64 > end && s.mem_len as usize > s.bytes.len()),
         "fib's reservation lies above its file bytes"
     );
     let words = (end - guest_memory::RAM_ORIGIN as u64).div_ceil(4);

@@ -253,8 +253,14 @@ fn every_guest_declares_exactly_what_it_links() {
     }
     // The two halves are both non-empty, so neither clause is vacuous, and
     // every registered family is declared by at least one guest.
-    assert_eq!(common::DECLARING_GUESTS.len(), 7);
-    assert!(common::GUESTS.len() > common::DECLARING_GUESTS.len() + 4);
+    //
+    // The declaring half grew from 7 to 14 at S25: publishing the public I/O
+    // digest at exit links `transcript` and `field`, whose guest-target
+    // backends are two of the shims, so every guest that touches fd 0 or fd 1
+    // declares them. Five guests declare nothing — `addsub`, `control`, `alu`,
+    // `mem` and `shards` — and they are what keeps the negative clause real.
+    assert_eq!(common::DECLARING_GUESTS.len(), 14);
+    assert!(common::GUESTS.len() >= common::DECLARING_GUESTS.len() + 5);
     for (fam, ..) in DELEGATIONS {
         assert!(
             common::DECLARING_GUESTS

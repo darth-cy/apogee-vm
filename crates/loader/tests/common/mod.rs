@@ -29,43 +29,43 @@ use test_support::{sha256, to_hex};
 pub const PINS: [(&str, &str); 23] = [
     (
         "fib.elf",
-        "6b517e814c13c977248b8eae51277d411cccce75009d8a5396f6b5aa6af5c749",
+        "2cbe471d2da09e38d0c999612c0c60c84cffaaa027438d7b970a56dc258b40d3",
     ),
     (
         "echo.elf",
-        "934407e4d89707b10c8340d87c133d8a037e302f22bd6830a1cbd66cc3199482",
+        "936d7c9ab23c0f30639ce5d3b98f99765aed7af00d8068e80fad5d5ed3414c6c",
     ),
     (
         "rvc-dense.elf",
-        "af87f2cd34281d9afe92acfb8d896c13830a0ce7b04978c4de0d67dc03205b09",
+        "fb4d520dfbcb79f43d26ea8670275e17e968964aece9309e3dc1f7c27baa2c32",
     ),
     (
         "amm.elf",
-        "36732ff38b60feb9a24587f8c55baadcad8673b9894a1204b41c1346acf6c649",
+        "9f375b816f867b681ced96a6c2c6c136615cb74ee412c0cbf0bf1fae0e32df2a",
     ),
     (
         "orderbook.elf",
-        "8e05021a96ce975a75950ec6be7186f0021873bb5e556672e12910aa62fc3cb2",
+        "d292d9c8339cba67fed4caf8d3542472b7ef7054b549ddf2ab9445dbbf504196",
     ),
     (
         "vault.elf",
-        "dbadf3770c409b64c86481ea71203b5cb5db1b3d8a98c085813ff23311fa3966",
+        "55470ac1379796ac8a824ae9bb051b100dedc2d45e5f2ed120d52ae2ef458b42",
     ),
     (
         "atomics.elf",
-        "4ea691b7ee988e96453a7203c9d3ebcd1de243db33e3e31ffc2b20d635fc7f69",
+        "7675258a42b02b91adc68dc806c4c2724ec640c867b192d1166c559380ece920",
     ),
     (
         "opcodes.elf",
-        "e29f9a0b850f7b6d5159f37037d679f7ae66afcbef8cd82ef9bc47a966126a9f",
+        "3794448bf3b6c4087325301e7bc6c8c4c69f08928a349470c52b63a12fd13ba5",
     ),
     (
         "heap.elf",
-        "c94969998512d987bff3f860e9d67b10992f5bbe068ab48e4e69f6e2c7c69ba5",
+        "f6c7d7609bb4063cf2793ce937df9865b4b61f24f11b84d804aed5350af9b293",
     ),
     (
         "consistency.elf",
-        "0a3040d1215f8f335c78ada939b6c055f36549ddc5fecfe3a3ebbfb8a0d65b5e",
+        "a191dcdeb94e2898357ac1fcf79a7720e493c5f02a9e94e80ebe5530ba495e7e",
     ),
     (
         "addsub.elf",
@@ -85,19 +85,19 @@ pub const PINS: [(&str, &str); 23] = [
     ),
     (
         "fib.objdump.txt",
-        "edb521661d782689e9e0ebc4ccf972838de6d93cc1ef42915ec830997a630489",
+        "ef8432ea4eec4ddcbb73a6a133d28cb9b7526668a52f1ce101a0c0cb8074cd45",
     ),
     (
         "rvc-dense.objdump.txt",
-        "f0ba5063259581040592218f52059d935c5b1eb4c14a6b32c25f28c028f6567e",
+        "375c39ebb1e7ea5d27e4fb155cdf42e779fdc984899a81e51d03eeab3a838538",
     ),
     (
         "amm.objdump.txt",
-        "bb54985d4ded03480c628ae80372b072314b50400e0f3fa317e76e77db0a78e4",
+        "8fc60e80a1de1914f6e08ad2f75ac9ffd9e7b804fcb107f945392eb5678ce0ad",
     ),
     (
         "rvc-dense.nm.txt",
-        "06362b158abae3b1d13cfd74781817c574e746ec1c7b9121daed0cfea53706e7",
+        "bfb63e4e814055732cb361916c34202250f52ad8d67ce4f351fd69d444acf336",
     ),
     (
         "shards.elf",
@@ -105,19 +105,19 @@ pub const PINS: [(&str, &str); 23] = [
     ),
     (
         "keccak-test.elf",
-        "c1d134ee91f5d32c7ce5291542c37d093034731f9b2b3b3d862956c0cd89cac3",
+        "368a0aa51208a4e52ab42c5fc8fd35c4172c3646cb165311f56144e5e1989c62",
     ),
     (
         "keccak-unused.elf",
-        "49bd8a9ba53e561fc19d0ec066afe91e3301842d36e0f584a37b7414557729b1",
+        "6c3ea1de6f1fc2e871cc94bad83cd532139075d281a00176459367296d32d455",
     ),
     (
         "recursion-ops.elf",
-        "4dc91d5bb40a1d9187cae204df0ee6913ae3444c1b0f186003bef23e36f94580",
+        "05b8555a4d5d2e231c948d935fd99e9120bec5700c050188ddf17b2ed5ace943",
     ),
     (
         "recursion-unused.elf",
-        "8b4b503a1f89348c512df28e11d5cd2111b987fa2f95a2b4f5362fd1fd7e877e",
+        "58a4f00dc80e822ce46fd9ca74d84d74a7e92d33dff5ceb7d4aa58d84d09ded4",
     ),
 ];
 

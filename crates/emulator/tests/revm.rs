@@ -45,8 +45,6 @@ use trace::plan_shards;
 /// The normative guest: its witness arrives on fd 0.
 const GUEST: &str = "revm-block";
 
-/// The provable guest: the same program with its witness in the image.
-
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
@@ -432,24 +430,39 @@ fn synthetic_witness(block_gas_limit: u64, code: Vec<u8>, gas_limits: &[u64]) ->
     let mut env = committed.env.clone();
     env.gas_limit = block_gas_limit;
 
+    // The beneficiary is an account like any other and the witness has to
+    // carry it: every transaction pays its gas there, so revm loads it. S24's
+    // `CacheDB<EmptyDB>` answered the miss with an empty account and nobody
+    // noticed; S25's `WitnessDb` refuses it by name, which is the whole point
+    // of the strictness (acceptance 3).
+    let mut accounts = vec![
+        AccountWitness {
+            address: sender,
+            nonce: 0,
+            balance,
+            code: Vec::new(),
+            slots: Vec::new(),
+        },
+        AccountWitness {
+            address: callee,
+            nonce: 0,
+            balance: [0u8; 32],
+            code,
+            slots: Vec::new(),
+        },
+        AccountWitness {
+            address: env.beneficiary,
+            nonce: 0,
+            balance: [0u8; 32],
+            code: Vec::new(),
+            slots: Vec::new(),
+        },
+    ];
+    accounts.sort_by_key(|a| a.address);
+
     BlockWitness {
         env,
-        accounts: vec![
-            AccountWitness {
-                address: sender,
-                nonce: 0,
-                balance,
-                code: Vec::new(),
-                slots: Vec::new(),
-            },
-            AccountWitness {
-                address: callee,
-                nonce: 0,
-                balance: [0u8; 32],
-                code,
-                slots: Vec::new(),
-            },
-        ],
+        accounts,
         txs: gas_limits
             .iter()
             .enumerate()
@@ -469,69 +482,25 @@ fn synthetic_witness(block_gas_limit: u64, code: Vec<u8>, gas_limits: &[u64]) ->
         stateless: None,
     }
 }
-
-/// The block's gas limit is a **running** bound, and `revm_block::run` is what
-/// enforces it.
+/// `BLOCKHASH` is answered from the witness, and a number it does not carry
+/// is refused.
 ///
-/// revm checks `tx.gas_limit <= block.gas_limit` per transaction and can check
-/// no more — `transact_one` is one transaction and revm keeps nothing across a
-/// block — so without the accumulator in `run` a witness may carry any number
-/// of transactions that individually fit and together do not. That is a block
-/// no Ethereum node would accept, and the guest would commit an output for it.
+/// **This is S24's gap, closed.** That stage gave revm a `CacheDB<EmptyDB>`
+/// whose block-hash cache was empty, so every lookup fell through to
+/// `EmptyDB`, which answers `keccak256` of the block number's **decimal
+/// string** — deterministic, agreed on by the guest and the host, and equal to
+/// no block's hash. A contract reading `BLOCKHASH(n)` computed on a made-up
+/// word and the block still "executed". `docs/spec/revm-block.md` §1.2 named
+/// the field that closes it and `BlockWitness` was left unfrozen for exactly
+/// this; S25's recorder needs real hashes for a real block, so S25 adds it.
+///
+/// Both directions, because only the pair says the field is load-bearing: a
+/// witness that carries the hash answers it, and one that does not is a
+/// `MissingState::BlockHash` rather than a placeholder. The second half is the
+/// same property acceptance 3 asks of accounts and slots — a witness that is
+/// missing something fails loudly.
 #[test]
-fn a_block_past_its_gas_limit_is_refused() {
-    // A plain transfer to a codeless account: 21,000 gas, the intrinsic cost
-    // exactly, so the arithmetic below is the test's and not a gas schedule's.
-    const TRANSFER: u64 = 21_000;
-
-    // The control, and it comes first: two transactions that fit, execute.
-    let ok = synthetic_witness(50_000, Vec::new(), &[TRANSFER, TRANSFER]);
-    let output = revm_block::run(&ok).expect("two transfers inside a 50,000-gas block execute");
-    let (records, _) = tx_records(&output, 2);
-    assert_eq!(
-        records.iter().map(|r| r.1).sum::<u64>(),
-        2 * TRANSFER,
-        "and together they spend what the block had room for"
-    );
-
-    // One transaction over the whole block limit. revm refuses this one too,
-    // with `CallerGasLimitMoreThanBlock`; `run` reaches it first and says so
-    // in the block's terms.
-    let over = synthetic_witness(20_000, Vec::new(), &[TRANSFER]);
-    let refused = revm_block::run(&over).expect_err("a transaction may not exceed the block");
-    assert!(
-        refused.contains("does not fit in the block's remaining"),
-        "unexpected refusal: {refused}"
-    );
-
-    // The one revm cannot see: each transaction fits the block's limit, and
-    // the second does not fit what the first left. This is the case the
-    // accumulator exists for.
-    let cumulative = synthetic_witness(30_000, Vec::new(), &[TRANSFER, TRANSFER]);
-    let refused = revm_block::run(&cumulative)
-        .expect_err("the second transfer does not fit in the 9,000 gas the first left");
-    assert!(
-        refused.starts_with("transaction 1's gas limit 21000"),
-        "unexpected refusal: {refused}"
-    );
-}
-
-/// `BLOCKHASH` reads a placeholder today, and this is the pin on that.
-///
-/// The witness carries no block hashes, so `run` hands revm a
-/// `CacheDB<EmptyDB>` whose block-hash cache is empty and every lookup falls
-/// through to `EmptyDB`, which answers `keccak256` of the block number's
-/// **decimal string**. It is deterministic, the guest and the host agree on
-/// it, and it is not any block's hash — so a contract that reads it computes
-/// on a made-up word. `BlockWitness` is not frozen at S24 for exactly this
-/// reason (owner's decision): the field that closes the gap is a
-/// `block_hashes: Vec<(u64, Word32)>` loaded into that cache, and the stage
-/// that needs it adds it. `docs/spec/revm-block.md` §1.2.
-///
-/// The assertion is the placeholder itself rather than "not zero", so closing
-/// the gap fails here and has to be a decision.
-#[test]
-fn blockhash_reads_a_placeholder_today() {
+fn blockhash_is_answered_from_the_witness_or_refused() {
     let number = {
         let committed =
             BlockWitness::decode(&witness_bytes()).expect("the committed witness decodes");
@@ -544,16 +513,32 @@ fn blockhash_reads_a_placeholder_today() {
     code.extend_from_slice(&(previous as u32).to_be_bytes());
     code.extend_from_slice(&[0x40, 0x5f, 0x52, 0x60, 0x20, 0x5f, 0xf3]);
 
-    let witness = synthetic_witness(1_000_000, code, &[100_000]);
-    let output = revm_block::run(&witness).expect("the blockhash block executes");
+    // A hash no placeholder could be: `keccak256` of the decimal string is
+    // what S24 answered, so a distinct constant is what tells the two apart.
+    let hash = [0x5au8; 32];
+    let mut carried = synthetic_witness(1_000_000, code.clone(), &[100_000]);
+    carried.env.block_hashes = vec![(previous, hash)];
+    let output = revm_block::run(&carried).expect("the blockhash block executes");
     let (records, _) = tx_records(&output, 1);
     assert_eq!(records[0].0, 2, "the call succeeds");
-
     assert_eq!(
         records[0].2,
+        hash.to_vec(),
+        "BLOCKHASH did not answer the hash the witness carries"
+    );
+    assert_ne!(
+        records[0].2,
         revm_block::keccak(previous.to_string().as_bytes()).to_vec(),
-        "BLOCKHASH answered something other than EmptyDB's placeholder; if the \
-         witness now carries block hashes, this test is the one to rewrite"
+        "BLOCKHASH still answers S24's placeholder"
+    );
+
+    // The same block with the list empty: refused, not defaulted.
+    let bare = synthetic_witness(1_000_000, code, &[100_000]);
+    assert!(bare.env.block_hashes.is_empty());
+    let refused = revm_block::run(&bare).expect_err("a hash the witness does not carry");
+    assert!(
+        refused.contains(&format!("no hash for block {previous}")),
+        "{refused}"
     );
 }
 

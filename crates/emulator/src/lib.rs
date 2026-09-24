@@ -951,7 +951,7 @@ impl<'a> Machine<'a> {
         if count != ecall::READ_WORD_BYTES {
             return Err(EmuError::ReadNotOneWord { pc, count });
         }
-        if buf % 4 != 0 {
+        if !buf.is_multiple_of(4) {
             return Err(EmuError::Misaligned {
                 pc,
                 addr: buf,

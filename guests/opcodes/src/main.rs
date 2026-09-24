@@ -553,11 +553,23 @@ cover_ecall:
     mv      t0, a0
     li      t1, 0
 
-    /* read(0, scratch + 1, 6): the rest of fd 0, into two partial words */
+    /* read(0, scratch, 4) twice: the rest of fd 0, one word a call.
+       It was one `read(0, scratch + 1, 6)` until S25, covering an unaligned
+       buffer and a multi-word count. Both are **fatal guest errors** now: a
+       provable `read` moves exactly one 4-aligned word, on the ecall's own
+       row (`docs/spec/ecall-abi.md` §4). The second call is the edge worth
+       keeping — six bytes left, four delivered, then two — so the pair covers
+       a full word and a short final one. */
     li      a7, 63
     li      a0, 0
-    addi    a1, t0, 1
-    li      a2, 6
+    mv      a1, t0
+    li      a2, 4
+    ecall
+    add     t1, t1, a0
+    li      a7, 63
+    li      a0, 0
+    addi    a1, t0, 4
+    li      a2, 4
     ecall
     add     t1, t1, a0
     lw      t2, 0(t0)
@@ -565,9 +577,24 @@ cover_ecall:
     add     t1, t1, t2
     xor     t1, t1, t3
 
-    /* write(1, scratch + 1, 6): the same bytes back out, unaligned */
+    /* write(1, scratch, 6): the same six bytes back out, a count that is
+       neither a word nor a multiple of one, spanning two words. The payload
+       sits at offset 0 now that the reads above are word-aligned, so this is
+       where the echo comes from. */
     li      a7, 64
     li      a0, 1
+    mv      a1, t0
+    li      a2, 6
+    ecall
+    add     t1, t1, a0
+
+    /* write(2, scratch + 1, 6): the same bytes from an **unaligned** base.
+       A `write` is unrestricted — any buffer, any alignment, any count, and
+       no memory query at all (`docs/spec/ecall-abi.md` §4) — and this is what
+       covers that edge. It goes to fd 2, which is verifier-ignored, so it
+       does not disturb the echo on fd 1. */
+    li      a7, 64
+    li      a0, 2
     addi    a1, t0, 1
     li      a2, 6
     ecall

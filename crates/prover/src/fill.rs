@@ -16,8 +16,8 @@ use constants::fr_arith as fa;
 use constants::poseidon2 as p2;
 use constants::{delegation, ecall, family, guest_memory, keccak, memory};
 use constraints::add_sub::{
-    DECODED, IS_ECALL, IS_FENCE, IS_READ, IS_WRITE, KINDS, NEXT_PC_HI, PC_WRAP, RAM_VALUE_HI, RD_HI,
-    TABLE_WIDTH, WRAP,
+    DECODED, IS_ECALL, IS_FENCE, IS_READ, IS_WRITE, KINDS, NEXT_PC_HI, PC_WRAP, RAM_VALUE_HI,
+    RD_HI, TABLE_WIDTH, WRAP,
 };
 use constraints::atomics as at_circuit;
 use constraints::delegation as deleg;

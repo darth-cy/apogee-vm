@@ -52,7 +52,9 @@ use revm::database::DBErrorMarker;
 use revm::primitives::eip4844::{
     BLOB_BASE_FEE_UPDATE_FRACTION_CANCUN, BLOB_BASE_FEE_UPDATE_FRACTION_PRAGUE,
 };
-use revm::primitives::{keccak256, Address, Bytes, Log, StorageKey, StorageValue, TxKind, B256, U256};
+use revm::primitives::{
+    keccak256, Address, Bytes, Log, StorageKey, StorageValue, TxKind, B256, U256,
+};
 use revm::state::{AccountInfo, Bytecode};
 use revm::{Context, Database, ExecuteEvm, MainBuilder, MainContext};
 use serde::{Deserialize, Serialize};
@@ -162,7 +164,7 @@ pub const TRACE_HEIGHT_DEBUG: u32 = 1 << 22;
 /// here instead of an exit 70 at run time.
 pub const WITNESS_CAPACITY: usize = (2 * COMMITTED_WITNESS_BYTES).next_multiple_of(4);
 
-const _: () = assert!(WITNESS_CAPACITY % 4 == 0);
+const _: () = assert!(WITNESS_CAPACITY.is_multiple_of(4));
 const _: () = assert!(WITNESS_CAPACITY >= 2 * COMMITTED_WITNESS_BYTES);
 
 /// Everything one block's execution needs, and nothing an execution derives.
@@ -564,7 +566,9 @@ impl core::error::Error for MissingState {}
 impl core::fmt::Display for MissingState {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            MissingState::Account(a) => write!(f, "the witness has no account {}", Address::from(*a)),
+            MissingState::Account(a) => {
+                write!(f, "the witness has no account {}", Address::from(*a))
+            }
             MissingState::Slot(a, k) => write!(
                 f,
                 "the witness has no slot {} of account {}",
@@ -644,7 +648,11 @@ impl Database for WitnessDb<'_> {
         Err(MissingState::Code)
     }
 
-    fn storage(&mut self, address: Address, index: StorageKey) -> Result<StorageValue, MissingState> {
+    fn storage(
+        &mut self,
+        address: Address,
+        index: StorageKey,
+    ) -> Result<StorageValue, MissingState> {
         let key: Address20 = address.into();
         let slot: Word32 = index.to_be_bytes();
         let account = self.account(&key).ok_or(MissingState::Account(key))?;

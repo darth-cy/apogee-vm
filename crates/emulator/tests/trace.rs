@@ -381,17 +381,27 @@ fn frame(instr: &Instr, row: &Row) -> u8 {
         | AmomaxW { .. }
         | AmominuW { .. }
         | AmomaxuW { .. } => roles(&[Rs1, Rs2, Ram, Rd]),
-        Ecall if row.next_pc == row.pc => roles(&[Ram]),
         Ecall => match row.queries[Rs1 as usize].read_value {
+            // S25: a `read` carries the word it delivers, on this row, at
+            // slot 3 beside the `a0` write — a different address, which
+            // `docs/spec/execution-trace.md` §3 permits. A `write` carries no
+            // RAM query at all, and there are no transfer cycles any more.
+            // A `read` on a descriptor the ABI does not give it answers
+            // `-EBADF` and moves nothing, so it has no `ram` query either.
+            ecall::READ if row.query(Ram).is_some() => roles(&[Rs1, Rs2, Arg1, Arg2, Ram, Rd]),
             ecall::READ | ecall::WRITE => roles(&[Rs1, Rs2, Arg1, Arg2, Rd]),
-            ecall::EXIT | ecall::PRECOMPILE_POSEIDON2 => roles(&[Rs1, Rs2, Rd]),
+            ecall::EXIT => roles(&[Rs1, Rs2, Rd]),
             // A delegation call reads its frame base from `a0` and carries the
             // mirror query besides, at slot 3 in the delegation family's own
             // address space (`docs/spec/delegation.md` §5.1). Asked of the
             // registry rather than of a number spelled here, because the
-            // registry is where a delegation's number lives. No guest traced
-            // here makes one — `guests/keccak-test` is the one that does — so
-            // this arm is the restated frame and not coverage of it.
+            // registry is where a delegation's number lives.
+            //
+            // Since S25 the guests traced here *do* make one: every guest that
+            // touches fd 0 or fd 1 computes `io_digest` at exit, which routes
+            // Poseidon2 and `Fr`'s arithmetic through their delegations. The
+            // arm used to group `PRECOMPILE_POSEIDON2` with `EXIT`, which was
+            // only ever right because nothing here reached it.
             n if program::delegation_family(n).is_some() => roles(&[Rs1, Rs2, Rd, Delegate]),
             _ => roles(&[Rs1, Rd]),
         },
@@ -541,85 +551,114 @@ fn the_exit_row_alone_writes_the_halting_sentinel() {
     }
 }
 
-/// Must-be-exact 3's ecall transfers: a `read` or `write` that moved `n`
-/// bytes is preceded by one transfer cycle per word those bytes touch, in
-/// address order, each at the ecall's pc, re-writing that pc, and holding one
-/// slot-3 RAM query; and every transfer cycle belongs to such an ecall. The
-/// words' values too: a `read`'s transfer writes the stream's next bytes into
-/// the buffer and leaves the word's other bytes as they were, a `write`'s
-/// reads the stream's bytes out and writes the word back unchanged — and the
-/// recorded fd 0, fd 1 and fd 2 streams are exactly the bytes the transfers
-/// moved.
+/// A `read` carries the word it delivers, on its own row, and a `write`
+/// carries no memory event at all (`docs/spec/execution-trace.md` §6).
+///
+/// S25 deleted the transfer cycle. Until then a `read` or a `write` that moved
+/// `n` bytes was preceded by one cycle per word those bytes touched, and this
+/// test walked them; now a provable `read` moves exactly one 4-aligned word
+/// and its RAM query sits at slot 3 of the ecall's own row, beside the `a0`
+/// write. What is checked here is the same three things, in the new shape:
+///
+/// * the word's address is the `a1` this row read, and its count is one word;
+/// * the delivered bytes are the stream's next ones and **every other byte of
+///   the word is left as it was** — the end-of-stream case, where fewer than
+///   four arrive, is the one that makes that a real assertion;
+/// * the recorded fd 0, fd 1 and fd 2 streams are exactly the bytes the ecalls
+///   moved, and no other row makes a RAM query at an ecall's pc.
 #[test]
-fn an_ecall_s_transfers_precede_it_one_word_each() {
-    let mut calls = 0;
+fn a_read_carries_its_word_and_a_write_carries_none() {
+    let mut reads = 0;
+    let mut writes = 0;
     for name in TRACED {
         let t = traced(name);
         let rows = rows_by_cycle(&t);
         let io = &t.execution.io;
         let streams: [&[u8]; 4] = [&io.input, &io.output, &t.execution.stderr, &[]];
         let mut moved_so_far = [0usize; 4];
-        let mut claimed = 0;
-        for (i, (_, row)) in rows.iter().enumerate() {
-            if instr_at(&t.image, row.pc) != Instr::Ecall || row.next_pc == row.pc {
+        for (_, row) in rows.iter() {
+            if instr_at(&t.image, row.pc) != Instr::Ecall {
                 continue;
             }
             let number = row.queries[Role::Rs1 as usize].read_value;
-            let moved = row.queries[Role::Rd as usize].write_value as i32;
-            if !(number == 63 || number == 64) || moved <= 0 {
+            if number != ecall::READ && number != ecall::WRITE {
                 continue;
             }
+            let moved = row.queries[Role::Rd as usize].write_value as i32;
             let fd = row.queries[Role::Rs2 as usize].read_value as usize;
-            let buf = row.queries[Role::Arg1 as usize].read_value;
-            let (start, end) = (buf as u64, buf as u64 + moved as u64);
-            let first = buf & !3;
-            let words = ((buf + moved as u32 - 1) & !3) - first;
-            let words = (words / 4 + 1) as usize;
-            for k in 0..words {
-                let (_, transfer) = &rows[i - words + k];
-                assert_eq!((transfer.pc, transfer.next_pc), (row.pc, row.pc), "{name}");
-                assert_eq!(transfer.present, 1 << Role::Ram as u8, "{name}");
-                let q = transfer.queries[Role::Ram as usize];
-                assert_eq!(q.addr, first + 4 * k as u32, "{name}");
-                assert_eq!(transfer.cycle + (words - k) as u64, row.cycle, "{name}");
-                let (old, new) = (q.read_value.to_le_bytes(), q.write_value.to_le_bytes());
-                for (b, (old, new)) in old.iter().zip(&new).enumerate() {
-                    let addr = q.addr as u64 + b as u64;
-                    if addr < start || addr >= end {
-                        assert_eq!(new, old, "{name}: a byte beside the buffer changed");
-                        continue;
-                    }
-                    let byte = streams[fd][moved_so_far[fd] + (addr - start) as usize];
-                    if number == ecall::READ {
-                        assert_eq!(*new, byte, "{name}: read delivered the wrong byte");
-                    } else {
-                        assert_eq!(
-                            (*old, *new),
-                            (byte, byte),
-                            "{name}: write moved the wrong byte"
-                        );
-                    }
+            if number == ecall::WRITE {
+                assert!(
+                    row.query(Role::Ram).is_none(),
+                    "{name}: a write carries a RAM query"
+                );
+                if moved > 0 {
+                    moved_so_far[fd] += moved as usize;
+                    writes += 1;
                 }
+                continue;
+            }
+
+            // A `read` that answered `-EBADF` moved nothing and made no
+            // query. One that reached the **end of its stream** answered 0 and
+            // made the query anyway, writing the word back unchanged — which
+            // is what lets the circuit key the query's mask on "this row is a
+            // `read`" with no "did it move anything" selector to constrain
+            // (`docs/spec/execution-trace.md` §6).
+            if moved < 0 {
+                assert!(
+                    row.query(Role::Ram).is_none(),
+                    "{name}: a refused read carries a RAM query"
+                );
+                continue;
+            }
+            let buf = row.queries[Role::Arg1 as usize].read_value;
+            assert_eq!(
+                row.queries[Role::Arg2 as usize].read_value,
+                ecall::READ_WORD_BYTES,
+                "{name}: a provable read asks for exactly one word"
+            );
+            let q = row
+                .query(Role::Ram)
+                .unwrap_or_else(|| panic!("{name}: a read that moved bytes has no RAM query"));
+            assert_eq!(q.addr, buf, "{name}: the word is not the buffer");
+            assert_eq!(q.addr % 4, 0, "{name}: the buffer is not word-aligned");
+            assert!(
+                moved as u32 <= ecall::READ_WORD_BYTES,
+                "{name}: a read delivered more than one word"
+            );
+
+            let (old, new) = (q.read_value.to_le_bytes(), q.write_value.to_le_bytes());
+            if moved == 0 {
+                assert_eq!(new, old, "{name}: an end-of-stream read changed the word");
+                continue;
+            }
+            for (b, (old, new)) in old.iter().zip(&new).enumerate() {
+                if b >= moved as usize {
+                    assert_eq!(new, old, "{name}: a byte past the delivered ones changed");
+                    continue;
+                }
+                assert_eq!(
+                    *new,
+                    streams[fd][moved_so_far[fd] + b],
+                    "{name}: read delivered the wrong byte"
+                );
             }
             moved_so_far[fd] += moved as usize;
-            claimed += words;
-            calls += 1;
+            reads += 1;
         }
         assert_eq!(
             moved_so_far,
             [io.input.len(), io.output.len(), t.execution.stderr.len(), 0],
-            "{name}: the recorded streams are the bytes the transfers moved"
+            "{name}: the recorded streams are the bytes the ecalls moved"
         );
-        let transfers = rows
-            .iter()
-            .filter(|(_, r)| r.pc == r.next_pc && instr_at(&t.image, r.pc) == Instr::Ecall)
-            .count();
-        assert_eq!(
-            transfers, claimed,
-            "{name}: a transfer cycle belongs to no ecall"
+        assert!(
+            rows.iter()
+                .all(|(_, r)| r.pc != r.next_pc || instr_at(&t.image, r.pc) != Instr::Ecall),
+            "{name}: a cycle re-writes its own pc, which no row does since S25"
         );
     }
-    assert!(calls >= 10, "only {calls} ecalls moved bytes");
+    assert!(reads >= 5, "only {reads} reads moved bytes");
+    assert!(writes >= 10, "only {writes} writes moved bytes");
 }
 
 /// The buffers carry everything the log does: rebuilt from the rows alone,
@@ -689,7 +728,38 @@ fn the_rows_rebuild_the_log_exactly() {
                 }
             }
         }
-        assert_eq!(events, t.log.events(), "{name}");
+        // A delegation **invocation's** frame accesses are not roles and are
+        // not any row's: they ride the requesting cycle at
+        // `delegation::FRAME_DELTA`, which is 0, so `(RAM, 0)` is a pair no
+        // role has and is exactly how `trace`'s frame builder tells them apart
+        // (`docs/spec/execution-trace.md` §7). Filtered out here rather than
+        // rebuilt, because what this test is about is that the *rows* carry
+        // the whole of their own contribution.
+        //
+        // Before S25 no guest traced here delegated and this filter removed
+        // nothing. It does now: every guest that touches fd 0 or fd 1 computes
+        // `io_digest` at exit. The count is asserted so that a future event
+        // going missing cannot hide behind it.
+        let is_frame = |e: &&MemoryEvent| e.space == AddressSpace::Ram && e.delta() == 0;
+        let frame_events = t.log.events().iter().filter(is_frame).count();
+        let words: usize = t
+            .traces
+            .delegations
+            .iter()
+            .map(|d| d.cycle.len() * d.words.len())
+            .sum();
+        assert_eq!(
+            frame_events, words,
+            "{name}: the events at (RAM, slot 0) are not the invocations' frames"
+        );
+        let rest: Vec<MemoryEvent> = t
+            .log
+            .events()
+            .iter()
+            .filter(|e| !is_frame(e))
+            .copied()
+            .collect();
+        assert_eq!(events, rest, "{name}");
     }
 }
 
@@ -849,8 +919,17 @@ fn every_ecall_answers_as_the_abi_says() {
         if name == "opcodes" {
             let (read, write) = (ecall::READ, ecall::WRITE);
             let edges = [
-                (read, 0, 6, 6),
+                // Two word reads where there was one six-byte read until S25:
+                // a provable `read` moves exactly one 4-aligned word, so the
+                // six payload bytes arrive as 4 then 2, and the short second
+                // one is the end-of-stream edge worth having.
+                (read, 0, 4, 4),
+                (read, 0, 4, 2),
+                // A `write` is unrestricted, so its edges are unchanged: a
+                // count that is neither a word nor a multiple of one, the same
+                // from an unaligned base on fd 2, and a zero-byte call.
                 (write, 1, 6, 6),
+                (write, 2, 6, 6),
                 (write, 1, 0, 0),
                 (read, 1000, 4, neg(ecall::EBADF)),
                 (write, 1000, 4, neg(ecall::EBADF)),

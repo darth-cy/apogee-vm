@@ -128,13 +128,21 @@ pub fn finals(status: u32) -> BoundaryFinals {
 /// and one more since S23, `deleg_space`, which carries the requested
 /// delegation type's tag into the mirror's leaf.
 pub fn statement() -> PublicInputs {
+    let (input, output) = (vec![1u8, 2, 3], Vec::new());
+    // The public I/O binding (`docs/spec/memory.md` §10): `verify_global_memory`
+    // compares `x24..x31` with `io_digest` of the statement's own streams,
+    // unconditionally, so a statement that does not carry the digest of the
+    // streams it carries is refused before anything else here is reached.
+    // A real guest publishes these words at its exit row.
+    let mut boundary = finals(42);
+    boundary.reg_values[23..31].copy_from_slice(&transcript::io_digest_words(&input, &output));
     PublicInputs {
-        input: vec![1, 2, 3],
-        output: vec![],
+        input,
+        output,
         exit_status: 42,
         shard_counts: vec![1, 1, 0],
         windows: vec![],
-        boundary: finals(42),
+        boundary,
         memory_commitments: vec![
             (200..202).map(blob).collect(),
             (300..342).map(blob).collect(),
@@ -147,16 +155,17 @@ pub fn statement() -> PublicInputs {
 }
 
 /// A proof of the `ADD_SUB_LUI_AUIPC` shard with the right digest and the
-/// right widths — 35 witness commitments since S23: the frame's `w + 3 = 11`
-/// and the family's own 24, one delegation-request selector per registered
-/// type among them — and no transitions at all.
+/// right widths — 38 witness commitments since S25: the frame's `w + 3 = 11`
+/// and the family's own 27, one delegation-request selector per registered
+/// type among them and S25's `is_read`, `is_write` and `ram_value_hi` — and no
+/// transitions at all.
 pub fn shell(vk: &VerifyingKey, public: &PublicInputs) -> ShardProof {
     ShardProof {
         family: ADD,
         shard_index: 0,
         ts_window: TRIVIAL_TS_WINDOW,
         global_digest: global_commit(vk, public).digest,
-        witness_commitments: (400..435).map(blob).collect(),
+        witness_commitments: (400..438).map(blob).collect(),
         outputs: vec![Fr::ZERO; 8],
         gkr: GkrProof { layers: vec![] },
         opening: [3; OPENING_BYTES],
