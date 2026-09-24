@@ -114,6 +114,31 @@ Added at S12, where the first zkVM executor pinned what the table above left ope
 * **`read` returns what the stream has.** It delivers `min(count, bytes left)` and
   returns that count, so a `read` at the end of a stream returns 0. `write`
   delivers all `count` bytes and returns `count`.
+* **A provable `read` moves exactly one 4-aligned word** (S25). On fd 0 and fd 3,
+  `count` must be `constants::ecall::READ_WORD_BYTES = 4` and `buf` must be a
+  4-aligned address inside the RAM window; each is a **fatal guest error**
+  otherwise, joining the list above rather than answering short. The call still
+  returns `min(4, bytes left)`, so end of stream is still a 0, and the word's RAM
+  query rides the ecall's own row (`docs/spec/execution-trace.md` §6).
+
+  This is S14's open question 10, answered as it recommended, and the reason is
+  soundness rather than tidiness: a bulk transfer needs rows of its own, and a
+  row of its own carries nothing to bound its own address with. Confining one
+  would mean carrying the buffer and the count across rows, which this
+  arithmetization can do only through the global memory multiset. One word on
+  the row that already read `a1` and `a2` makes the whole confinement two
+  degree-2 gates.
+
+  **The guest does its own copying.** `guest_sdk::read_input` loops a word at a
+  time through an aligned scratch, so a caller's buffer needs no alignment — but
+  its **length must be a multiple of four**, or the last call would consume a
+  whole word and keep part of it. The SDK refuses such a buffer with exit 70
+  rather than dropping bytes silently.
+* **`write` is unrestricted, and moves no memory event.** Any buffer, any
+  alignment, any count, one cycle. The RAM query it used to make bound nothing:
+  fd 1 is bound by the guest's own `io_digest` over the bytes it assembled with
+  ordinary loads and stores, which the memory argument does bind (section 6 and
+  `docs/spec/memory.md` §10). Only the RAM-window bound survives.
 * **A buffer outside the RAM window is a fatal guest error**, exactly as a load or
   store there is: the bytes a call would move must lie in `[RAM_ORIGIN,
   RAM_ORIGIN + RAM_LENGTH)` (section 7). Linux would answer `-EFAULT`; this VM has
@@ -150,10 +175,22 @@ number in the zkVM host-call range — where a reviewer will see it.
 
 One `Fr` binds the fd 0 and fd 1 byte streams. **Frozen at S10**: later stages
 recompute it and never redefine it. This is the value the statement-binding
-order absorbs as "public I/O digest". Absorbing it does not tie it to an
-execution: that the digest is of the bytes the guest actually read and wrote —
-the guest computing it and leaving its words in `x24`…`x31` at exit — is
-deferred past S14 (`docs/spec/memory.md` §10).
+order absorbs as "public I/O digest".
+
+**Since S25 it is tied to the execution.** The guest computes this digest over
+the streams it moved and leaves its eight little-endian `u32` words in
+`x24`…`x31` at exit; the verifier recomputes them from the statement's own
+streams and compares, unconditionally, in `verify_global_memory`
+(`docs/spec/memory.md` §10). `transcript::io_digest_words` is the one spelling
+of the split both sides use, and `transcript::exit_with_io_digest` is how a
+guest that touched either stream ends. A guest that touched neither publishes
+`constants::IO_DIGEST_EMPTY`, which is this digest for two empty streams.
+
+**A guest that panics after touching fd 0 or fd 1 is unprovable**, and that is
+a consequence rather than an oversight: `#[panic_handler]` cannot know the
+streams and cannot allocate, so it cannot publish their digest. A guest whose
+failure paths must be provable exits through
+`transcript::exit_with_io_digest(status)` rather than panicking.
 
 ```rust
 transcript::io_digest(public_input: &[u8], public_output: &[u8]) -> Fr

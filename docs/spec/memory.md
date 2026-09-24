@@ -146,8 +146,8 @@ control C8). S16's family constraints make:
 - every other mask `m_q = m_pc·uses_q`, with `uses_q` read from the looked-up row kind:
   - `rs1`, `rs2` and `rd` follow the instruction's form, `x0` included
     (`execution-trace.md` §4);
-  - a transfer row shares its ecall's pc and table row and uses `pc` and `ram` only, so
-    `is_transfer` is a witness that is itself constrained;
+  - a `read` row uses `ram` as well — the one word it delivers, at the `a1` it read on
+    that same row (S25). There is no `is_transfer` and there are no transfer rows;
   - on an ecall row, `rs2`, `arg1` and `arg2` (`a0`, `a1`, `a2`) follow the number read at
     slot 1: all three for `READ` and `WRITE`, `rs2` alone for `EXIT` and for every
     **delegation** number, none otherwise (`execution-trace.md` §6). A delegation row uses
@@ -161,9 +161,17 @@ control C8). S16's family constraints make:
 (`docs/spec/shard-proof.md` §8): `m_pc` is the decoder lookup's selector and every other
 mask is `m_pc` times its kind's use. It proves `EXIT` alone, so it needs no `is-zero`: a
 gate holds every ecall row's `a7` read to 93, and `arg1`, `arg2` and `ram` are masked off
-on every row. No transfer row is provable, so `is_transfer` does not exist yet; the
-I/O-binding stage owes it. Every other execution family owed this section at its own stage,
-and until then had no circuit, so no statement containing it could be proved.
+on every row. Every other execution family owed this section at its own stage, and until
+then had no circuit, so no statement containing it could be proved.
+
+**Status at S25.** The same family proves `READ` and `WRITE` as well, with a free boolean
+apiece pinning `a7` to its number, so an ecall row is now an exit, a `read`, a `write` or
+a delegation request of exactly one type — a partition, because the six numbers are
+pairwise distinct by `const` assertion. `arg1` and `arg2` are on for a `read` and a
+`write`, `ram` for a `read` alone; two gates confine that query to the word at `a1` and
+hold `a2` to one word, and the delivered value carries the range convention's 16+16 pair.
+**There is no `is_transfer`**: S14's open question 10 was answered by deleting the
+transfer cycle rather than confining it (`docs/spec/execution-trace.md` §1).
 
 **Status at S17.** `JUMP_BRANCH_SLT` discharges this section for its own rows
 (`docs/spec/jump-branch-slt.md` §4.1): `m_pc` is the decoder lookup's selector, and `rs1`,
@@ -469,8 +477,9 @@ balances: a fib run that panics has 889 prefixes ending with `a0 = 0`.
 
 What S16's constraints owe the sentinel: `jalr`'s bit-0 clear and every jump's and branch's
 wrap bit booleanity-constrained; `is_exit` from `a7 = 93` on the system row kind, gated off
-transfer rows; the system row's `next_pc = is_exit·HALT_PC + is_transfer·pc +
-(1 − is_exit − is_transfer)·table_next_pc`; the decoded-table lookup on every live row
+transfer rows; the system row's `next_pc = is_exit·HALT_PC + (1 − is_exit)·table_next_pc`
+— S25 deleted the `is_transfer` term with the transfer cycle; the decoded-table lookup on
+every live row
 (`m_pc = 1`), transfer rows included, with every other mask coupled to it as §2.1 says; and
 the exit row's `a0` write equal to its read.
 
@@ -478,7 +487,9 @@ the exit row's `a0` write equal to its read.
 `a7 = 93`, writes `a0` back, and writes `HALT_PC`; every other live row of the family writes
 the decoded fall-through, with a boolean wrap its range check forces to 0
 (`docs/spec/shard-proof.md` §8.4). `jalr`'s bit and the jumps' and branches' wraps are the
-jump family's stage's, and `is_transfer` the I/O-binding stage's.
+jump family's stage's. `is_transfer` was the I/O-binding stage's and no longer exists:
+S25 deleted the transfer cycle, so the system row's `next_pc` is `is_exit·HALT_PC +
+(1 − is_exit)·table_next_pc` and every live row advances the pc.
 
 **Status at S17.** The jump family's share is done (`docs/spec/jump-branch-slt.md` §4.3,
 §4.4): one boolean wrap on whichever sum `next_pc` is, a boolean dropped bit on a `jalr`
@@ -696,8 +707,12 @@ statement over ℤ and nothing over `Fr`, and it is the range check on `word_ind
 makes it base-4. `MEM_WORD` carries no offset bits at all, so a misaligned `lw` or `sw` has
 no witness; `half_aligned` clears bit 0 at halfword width; and `ATOMICS` derives
 `rs1 < 2^32` from `rs1 = 4·word_index` rather than assuming it.
-`docs/spec/memory-ops.md` §2 is that section, and with it **every item this list owed is
-discharged** but the I/O-binding stage's transfer rows.
+`docs/spec/memory-ops.md` §2 is that section.
+
+**Status at S25.** The last item: `read` and `write` are provable ecalls, a `read`'s RAM
+query rides its own row and is confined to the word at `a1`, its delivered value carries
+a 32-bit bound, and §10 below is discharged. **With it every item this list owed is
+discharged.**
 
 S20 reconciles every shard.
 
@@ -723,9 +738,42 @@ further touched 16 MiB window adds `2^22` rows; at most `2^29`. S14's tests run 
 
 ---
 
-## 10. Deferred: binding I/O
+## 10. Binding I/O
 
-The guest computes `io_digest` itself and leaves its eight little-endian `u32` words in
-`x24 … x31` at exit; the verifier compares them, and `a0`, with its public inputs. S14 lands
-none of it: no test or document here claims fd 0 or fd 1 is bound. `docs/handoff/S14-multiset.md`
-lists what that stage owes.
+**Discharged at S25.** The guest computes `io_digest` itself and leaves its eight
+little-endian `u32` words in `x24 … x31` at exit; the verifier recomputes them from the
+statement's own streams and compares, and compares `a0` with the exit status beside them.
+
+```text
+    reg_values[23..31]  ==  transcript::io_digest_words(public.input, public.output)
+```
+
+in `verify_global_memory`, beside the exit-status check and in the same class
+(`MemoryArgument`). It reads only the statement, so it runs **once per block** whatever
+the shard count (`docs/spec/block-proof.md` §5).
+
+**Unconditional.** A guest that moved no committed bytes publishes
+`constants::IO_DIGEST_EMPTY`, which is this digest for two empty streams, so there is no
+case in which the check is skipped — and therefore no way to claim an execution did no
+I/O when it did. `guest_sdk::exit` publishes that constant;
+`transcript::exit_with_io_digest` publishes the real one and is how a guest that touched
+either stream ends.
+
+**What makes it a binding rather than an assertion.** The eight words are ordinary
+register finals: §4's `MEMORY_BOUNDARY` message absorbs them before the memory challenges
+are squeezed, and the multiset ties them to the execution that produced them. Program
+identity binds the code that computed them. The bytes the guest hashed are the bytes in
+its own buffers, which it filled with `read` — whose RAM write is confined to the word at
+`a1` (§2.1) — and read back with ordinary loads. So the digest is over the bytes the
+program moved, and the statement's streams are those bytes or a Poseidon2 collision.
+
+**What it does not bind.** fd 2 and fd 3. A diagnostic is verifier-ignored and a hint is
+prover advice; neither is in the digest, and a guest that lets a hint reach fd 1 without
+checking it has made its proof meaningless (`docs/spec/ecall-abi.md` §4).
+
+**The honest side checks it too.** `prover::statement_inputs` makes the same comparison
+and refuses by name, so a guest that forgot to publish fails at proving time rather than
+as a proof nobody can verify.
+
+**A guest that panics after touching either stream is unprovable**: `#[panic_handler]`
+cannot know the streams and cannot allocate, so it cannot publish their digest.

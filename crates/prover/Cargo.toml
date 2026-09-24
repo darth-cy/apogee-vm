@@ -39,6 +39,10 @@ verifier.workspace = true
 verifier-core.workspace = true
 
 [dev-dependencies]
+# `tests/revm.rs` runs the guest over its witness on fd 0, which is what
+# `host::execute` does and what `common::trace` (empty streams) does not.
+host.workspace = true
+
 # `tests/common` traces the S16 guest.
 emulator.workspace = true
 # Hex, for printing an identity a handoff note records.

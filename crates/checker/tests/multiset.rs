@@ -61,13 +61,20 @@ use trace::{
     build_boundary_finals, init_windows, plan_shards, AddressSpace, MemoryEvent, MemoryEventLog,
 };
 
-/// fib's five frame shards, in `shards` order — the families that ran, ascending
-/// — and then its two windows. `fib` pins the whole list.
+/// fib's six frame shards, in `shards` order — the families that ran,
+/// ascending — then its two windows, then the two delegation families its exit
+/// invokes. `fib` pins the whole list.
+///
+/// It was five frames and no delegation until S25. `fib` reads fd 0 and
+/// commits to fd 1, so it now computes `io_digest` at exit
+/// (`docs/spec/memory.md` §10): that brings in `MUL_DIV`, and on the guest
+/// target it routes Poseidon2 and `Fr`'s arithmetic through their delegations,
+/// whose invocations need shards of their own for the anchors to pair.
 const ALU: usize = 0;
 const JUMP: usize = 1;
-const MEM: usize = 3;
+const MEM: usize = 4;
 /// How many frames fib's statement has; the windows follow them.
-const FRAMES: usize = 5;
+const FRAMES: usize = 6;
 /// `INIT_TEARDOWN`'s shard, RAM window 0.
 const WINDOW_0: usize = FRAMES;
 /// The `ZERO_WINDOWS` shard of fib's stack window.
@@ -104,10 +111,13 @@ fn fib() -> Fib {
             "frame of add_sub_lui_auipc",
             "frame of jump_branch_slt",
             "frame of shift_bitwise",
+            "frame of mul_div",
             "frame of mem_word",
             "frame of mem_subword",
             "window 0",
             "window 8191",
+            "delegation family 10",
+            "delegation family 11",
         ]
     );
     let families: Vec<u32> = plan.iter().map(|(id, _)| *id).collect();
@@ -117,6 +127,7 @@ fn fib() -> Fib {
             family::ADD_SUB_LUI_AUIPC,
             family::JUMP_BRANCH_SLT,
             family::SHIFT_BITWISE,
+            family::MUL_DIV,
             family::MEM_WORD,
             family::MEM_SUBWORD,
         ]

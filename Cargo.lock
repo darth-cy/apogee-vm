@@ -2175,6 +2175,7 @@ dependencies = [
  "emulator",
  "field",
  "gkr",
+ "host",
  "loader",
  "pcs",
  "poly",

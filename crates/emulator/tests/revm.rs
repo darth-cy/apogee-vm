@@ -46,7 +46,6 @@ use trace::plan_shards;
 const GUEST: &str = "revm-block";
 
 /// The provable guest: the same program with its witness in the image.
-const EMBEDDED: &str = "revm-block-embedded";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -671,18 +670,16 @@ fn a4_the_guest_agrees_with_native_revm() {
         "the guest consumed the whole witness"
     );
 
-    // The embedded-witness binary is the same program over the same witness,
-    // so it computes the same commitment -- it publishes the digest of it
-    // rather than the bytes. `crates/prover/tests/revm.rs` proves that one.
-    let embedded = traced(EMBEDDED, &[]);
-    assert!(
-        embedded.execution.io.output.is_empty(),
-        "the embedded binary writes no fd 1"
-    );
+    // The public I/O binding, on the guest that has it (S25): the eight words
+    // the run left in `x24..x31` are `io_digest` of the two streams it moved,
+    // which is exactly what `verify_block` recomputes from the statement
+    // (`docs/spec/memory.md` §10). `revm-block-embedded`, which used to own
+    // those registers for the output's keccak, is retired: it existed because
+    // `read` and `write` were not provable ecalls, and they are.
     assert_eq!(
-        embedded.execution.regs[24..32],
-        revm_block::output_digest_words(&run.execution.io.output),
-        "the embedded binary leaves keccak256 of the same commitment in x24..x31"
+        run.execution.regs[24..32],
+        transcript::io_digest_words(&run.execution.io.input, &run.execution.io.output),
+        "the guest publishes the digest of the streams it moved"
     );
 }
 
@@ -785,23 +782,6 @@ fn a9_the_cycle_and_occupancy_report() {
     let plan = plan_shards(&run.profile, &run.config);
     println!("revm-block at {}", common::guest_profile());
     println!("  cycles: {}", run.profile.total());
-    // The provable binary's, beside it: the same program, its witness in the
-    // image instead of on fd 0 and its output digest in `x24..x31` instead of
-    // on fd 1, which is what `crates/prover/tests/revm.rs` proves.
-    let embedded = traced(EMBEDDED, &[]);
-    println!(
-        "  {EMBEDDED} cycles: {} ({} keccak invocations against {})",
-        embedded.profile.total(),
-        embedded
-            .traces
-            .delegation(family::KECCAK_F)
-            .expect("the keccak family")
-            .len(),
-        run.traces
-            .delegation(family::KECCAK_F)
-            .expect("the keccak family")
-            .len()
-    );
     println!(
         "  {:<22} {:>10} {:>10} {:>9}  shards",
         "family", "rows", "height", "occupancy"
@@ -852,12 +832,11 @@ fn a9_the_cycle_and_occupancy_report() {
 #[test]
 #[ignore = "builds the revm guest from source"]
 fn a10_the_image_fits_its_declared_ceiling() {
-    // Both binaries: the normative one is what the stage reports, and the
-    // embedded one is what is *proved*, so it is the one whose image has to fit
-    // window 0 and whose last instruction has to fit a `2^20` table.
-    for bin in [GUEST, EMBEDDED] {
-        measure(bin);
-    }
+    // One binary since S25: `read` and `write` are provable, so the guest the
+    // stage reports on is the guest that is proved, and it is the one whose
+    // image has to fit window 0 and whose last instruction has to fit a `2^20`
+    // table.
+    measure(GUEST);
 }
 
 fn measure(bin: &str) {

@@ -101,7 +101,7 @@ pub type Word32 = [u8; 32];
 /// The committed synthetic witness's length in bytes, pinned here and
 /// asserted against `crates/emulator/tests/vectors/revm_block_witness.bin` by
 /// `crates/emulator/tests/revm.rs`.
-pub const COMMITTED_WITNESS_BYTES: usize = 716;
+pub const COMMITTED_WITNESS_BYTES: usize = 717;
 
 /// The hardfork enum a witness's `spec_id` names, re-exported so that a
 /// fixture builder can write `SpecId::PRAGUE as u8` rather than a number.
@@ -153,7 +153,17 @@ pub const TRACE_HEIGHT_DEBUG: u32 = 1 << 22;
 /// than half again still fits and a larger one exits loudly rather than
 /// decoding a prefix. The bump allocator never frees, so this is also the
 /// largest single allocation the guest makes.
-pub const WITNESS_CAPACITY: usize = 2 * COMMITTED_WITNESS_BYTES;
+///
+/// **Rounded up to a whole number of words.** fd 0 is word-granular since S25
+/// — one `read` moves one 4-aligned word — so a buffer whose length is not a
+/// multiple of four would make the last call keep part of a word and drop the
+/// rest, and `guest_sdk::read_input` refuses one rather than dropping bytes
+/// silently. The `const` assertion below is what makes that a compile error
+/// here instead of an exit 70 at run time.
+pub const WITNESS_CAPACITY: usize = (2 * COMMITTED_WITNESS_BYTES).next_multiple_of(4);
+
+const _: () = assert!(WITNESS_CAPACITY % 4 == 0);
+const _: () = assert!(WITNESS_CAPACITY >= 2 * COMMITTED_WITNESS_BYTES);
 
 /// Everything one block's execution needs, and nothing an execution derives.
 ///

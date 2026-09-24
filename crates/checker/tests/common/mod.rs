@@ -255,9 +255,14 @@ pub const GUESTS: [(&str, u32); 2] = [("fib", 24), ("heap", 40)];
 pub struct Traced {
     pub image: ProgramImage,
     pub config: VmConfig,
+    /// The decoded tables, kept so that [`delegation_shards`] can rebuild the
+    /// `Program` the prover's fills take.
+    pub tables: program::DecodedTables,
     pub traces: FamilyTraces,
     pub log: MemoryEventLog,
     pub profile: CycleProfile,
+    /// The two committed streams, kept for the same reason.
+    pub io: trace::IoStreams,
     /// `1..=n`, every cycle the execution ran.
     pub cycles: Vec<u64>,
 }
@@ -271,9 +276,23 @@ pub fn traced(name: &str, input: u32) -> Traced {
     );
     let elf = std::fs::read(&path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
     let image = load_elf(&elf).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+    // Every family at [`HEIGHT`] **except a delegation family**, which keeps
+    // its own default. A delegation row is a whole permutation, so a shard of
+    // them at `2^16` is hundreds of gigabytes of forward pass
+    // (`docs/spec/delegation.md` §9) — the menu entry `2^8` exists for exactly
+    // that reason, and `constants::family::DEFAULT_HEIGHTS` already holds it.
+    let defaults = ProgramParams::defaults();
+    let mut heights = [HEIGHT; family::COUNT as usize];
+    for (f, height) in heights.iter_mut().enumerate() {
+        if !family::CYCLE_OWNING[f]
+            && !matches!(f as u32, family::INIT_TEARDOWN | family::ZERO_WINDOWS)
+        {
+            *height = defaults.heights[f];
+        }
+    }
     let params = ProgramParams {
-        heights: [HEIGHT; family::COUNT as usize],
-        ..ProgramParams::defaults()
+        heights,
+        ..defaults
     };
     let (tables, config) =
         decode_program(&image, &params).unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -287,9 +306,14 @@ pub fn traced(name: &str, input: u32) -> Traced {
     Traced {
         image,
         config,
+        tables,
         traces,
         log,
         profile,
+        io: trace::IoStreams {
+            input: execution.io.input,
+            output: execution.io.output,
+        },
         cycles: (1..=execution.cycle_count).collect(),
     }
 }
@@ -375,11 +399,80 @@ pub fn frame_shards(t: &Traced, memory: &ExternalChallenges) -> Vec<Shard> {
     frame_plan(t).into_iter().map(shard).collect()
 }
 
+/// One shard per **delegation** family `t` invoked, after the windows.
+///
+/// These exist because an invocation's anchor is half of a pair: the request's
+/// `deleg` query writes a tuple into that family's own address space and the
+/// invocation reads it (`docs/spec/delegation.md` §5), so a statement whose
+/// shards stop at the frames and the windows leaves one side of every pair
+/// unmatched and cannot reconcile. Before S25 no committed guest this harness
+/// used invoked one; since S25 every guest that touches fd 0 or fd 1 computes
+/// `io_digest` at exit, which on the guest target routes through the Poseidon2
+/// and Fr-arithmetic delegations (`docs/spec/memory.md` §10).
+///
+/// Unlike a frame, a delegation family has no memory-only artifact: its
+/// circuit *is* its memory argument plus its permutation. So this builds the
+/// registered circuit and fills it with the prover's own fill, rather than
+/// with a second copy of a fill that decides what the anchor is.
+///
+/// They come **after** the windows so that a caller's index into the frames
+/// and the two windows does not move.
+pub fn delegation_shards(t: &Traced, memory: &ExternalChallenges) -> Vec<Shard> {
+    let program = prover::Program {
+        image: t.image.clone(),
+        tables: t.tables.clone(),
+        config: t.config.clone(),
+    };
+    let archive = trace::TraceArchive::from_execution(
+        t.traces.clone(),
+        t.log.clone(),
+        t.profile.clone(),
+        t.io.clone(),
+        trace::PhaseTiming { wall_nanos: 0 },
+    );
+    let mut out = Vec::new();
+    for (family, height) in &t.config.families {
+        if family::CYCLE_OWNING[*family as usize]
+            || matches!(*family, family::INIT_TEARDOWN | family::ZERO_WINDOWS)
+        {
+            continue;
+        }
+        let invoked = t.traces.delegation(*family).map_or(0, |d| d.len());
+        if invoked == 0 {
+            continue;
+        }
+        let vars = height.trailing_zeros();
+        let artifact = constraints::family_circuit(*family, vars)
+            .unwrap_or_else(|| panic!("family {family} has no circuit at 2^{vars}"))
+            .artifact;
+        let fill = prover::family_fill(*family).unwrap_or_else(|| panic!("family {family} fills"));
+        let columns = fill(&prover::ShardSource {
+            program: &program,
+            archive: &archive,
+            family: *family,
+            index: 0,
+            height: *height as usize,
+            window: 0,
+        })
+        .unwrap_or_else(|e| panic!("family {family}: {e}"));
+        out.push(Shard {
+            label: format!("delegation family {family}"),
+            family: None,
+            artifact,
+            base: BaseLayer::new(columns),
+            challenges: memory.clone(),
+        });
+    }
+    out
+}
+
 /// Every memory shard of `t`'s statement: one frame per family that ran, in
-/// `frame_plan` order, then its windows.
+/// `frame_plan` order, then its windows, then any delegation family it
+/// invoked.
 pub fn shards(t: &Traced, memory: &ExternalChallenges) -> Vec<Shard> {
     let mut out = frame_shards(t, memory);
     out.extend(window_shards(t, memory));
+    out.extend(delegation_shards(t, memory));
     out
 }
 

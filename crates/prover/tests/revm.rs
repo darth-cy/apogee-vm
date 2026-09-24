@@ -61,7 +61,7 @@ const REVM_RESULT: u32 = 0;
 /// neither is a provable ecall yet; this one runs the same program over the
 /// same committed witness with the witness in its image.
 /// `docs/handoff/S24-revm.md` is the whole argument.
-const REVM_BIN: &str = "revm-block-embedded";
+const REVM_BIN: &str = "revm-block";
 
 /// S24's heights: every family but the delegation one at `2^20`, with
 /// `revm-block`'s own span ceiling.
@@ -100,8 +100,17 @@ fn revm_program() -> Program {
     }
 }
 
+/// The guest's run **over its witness on fd 0**, which is what S25 made
+/// provable. `common::trace` runs a guest with empty streams and this one has
+/// two, so it builds the archive itself.
 fn revm_archive(program: &Program) -> TraceArchive {
-    common::trace(program, REVM_RESULT)
+    let archive = host::execute(program, &witness_bytes(), &[]).expect("the guest traces");
+    assert_eq!(
+        archive.io_streams().input,
+        witness_bytes(),
+        "the guest consumed the whole witness"
+    );
+    archive
 }
 
 fn revm_setup() -> ProverSetup {
@@ -310,15 +319,21 @@ fn a6_the_revm_block_proves_and_verifies() {
         );
     }
 
-    // The public output, and the point of the embedded binary: `x24..x31` of
-    // the statement's boundary are `keccak256` of the output commitment the
-    // same program computes on the host, over the same committed witness.
+    // **The statement says what the block executed and what it produced.**
+    // Since S25 that is the whole point of the proof rather than a
+    // demonstration beside it: fd 0 is the committed witness, fd 1 is the
+    // output commitment native revm computes from it, and `x24..x31` are
+    // `io_digest` of the pair — which `verify_block` has already recomputed
+    // and compared above, so what this asserts is that the streams the
+    // statement carries are the ones the fixture names.
     let witness = revm_block::BlockWitness::decode(&witness_bytes()).expect("the witness decodes");
     let output = revm_block::run(&witness).expect("the block executes on the host");
+    assert_eq!(block.statement().input, witness_bytes(), "fd 0");
+    assert_eq!(block.statement().output, output, "fd 1");
     assert_eq!(
         public_words(block.statement()),
-        revm_block::output_digest_words(&output),
-        "the proof's register boundary is not the digest of native revm's output"
+        transcript::io_digest_words(&witness_bytes(), &output),
+        "the proof's register boundary is not the public I/O digest"
     );
     assert_eq!(block.statement().exit_status, REVM_RESULT);
 

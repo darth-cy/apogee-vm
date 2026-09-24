@@ -3,7 +3,10 @@
 Frozen at S12. S14 amended §4, §6 and §9 for the halting sentinel and the register and
 PC boundary of `docs/spec/memory.md` §4–§5. S21 appended the eighth role, `delegate`, and
 a delegation call's row and its invocation's frame (§4, §6, §7;
-`docs/spec/delegation.md` §4.1 and §5.1).
+`docs/spec/delegation.md` §4.1 and §5.1). **S25 deleted the transfer cycle** (§1, §4, §6):
+a provable `read` moves one word, on the ecall's own row, and a `write` moves no memory
+event at all — so every instruction is one cycle again and every live row advances the pc.
+No role was added and none moved.
 
 **This document is the timestamp convention**: what every memory query
 of an execution is, when it happens, and in what order the trace records it. S14's
@@ -27,10 +30,15 @@ all four.
 - **The clock is 38 bits**: every timestamp is below `2^38` (`TS_BITS = 38`), so the
   last cycle is `2^36 - 1`. An execution that would run past it stops with the named
   fatal error `ClockOverflow`, never a wrap.
-- **Every instruction is one cycle**, except a `read` or `write` ecall that moves bytes,
-  which is one cycle per word moved and then its own (section 5). Those extra cycles are
-  **transfer cycles**, and they count: an execution's cycle count, its cycle profile and
-  its shard plan all include them.
+- **Every instruction is one cycle.** No exception. Until S25 a `read` or a `write` that
+  moved bytes was preceded by one *transfer cycle* per word — a cycle at the same pc with
+  `next_pc = pc` — and S14's open question 10 asked how such a cycle's RAM write could be
+  confined. The answer this repository took is that it is not: a provable `read` delivers
+  exactly one 4-aligned word and carries that word's RAM query on **its own row**, which
+  already reads the buffer and the count it must be checked against
+  (`docs/spec/ecall-abi.md` §4). A `write` carries no RAM query at all. So the exception
+  is gone rather than amended, and with it the machine's only row that did not advance the
+  pc.
 
 ## 2. Address spaces
 
@@ -49,8 +57,8 @@ or halfword access queries the word it lies in.
 A memory query is one event at one address: a **read** of `read_value`, last written at
 `read_ts`, and a **write** of `write_value` at `ts = 4·cycle + Δ`.
 
-- A query that only reads writes back what it read — so a register read, a load's data
-  read and a `write` transfer are each one query, never two.
+- A query that only reads writes back what it read — so a register read and a load's
+  data read are each one query, never two.
 - `read_ts < ts`, strictly: the gap `ts - read_ts - 1` is non-negative and, by the
   clock, below `2^38`.
 - **Queries at distinct addresses may share a slot; two queries at one address never
@@ -78,15 +86,18 @@ form has, whatever register it names** — `x0` included — and for none it lac
 | `fence` | | | |
 | an ecall's own row | `a7` | its arguments | `a0` ← the result |
 | a **delegation** request's row | `a7` | `a0`, the frame base | `a0` ← 0; and `delegate`, the mirror query |
-| an ecall transfer | | | the word |
+| a `read`'s row | `a7` | `a0` fd, `a1` buf, `a2` count | `a0` ← the count delivered; and the **word at `a1`** |
 
-`ebreak` has no row: it is a fatal guest error. The atomics family is the one that fills
-all four slots in one cycle, and it does so with slot 3 shared by the RAM query and the
-`rd` write, which sit at distinct addresses.
+`ebreak` has no row: it is a fatal guest error. A `read`'s row and the atomics family
+both fill all four slots in one cycle, each with slot 3 shared by the RAM query and the
+`rd` write, which sit at distinct addresses. A `write`'s row is an ordinary ecall row:
+its bytes leave through no memory event, because the query it used to make bound nothing
+(§6).
 
 **`next_pc`** is the sequential fall-through — `pc + 2` for a two-byte instruction,
-`pc + 4` otherwise — except where control moves: a jump's target, a taken branch's, an
-ecall transfer's unchanged `pc`, and the exit row's `HALT_PC` (section 6).
+`pc + 4` otherwise — except where control moves: a jump's target, a taken branch's, and
+the exit row's `HALT_PC` (section 6). **Every live row advances the pc**, since S25 left
+no row that rewrites it unchanged.
 
 ## 5. The x0 rule
 
@@ -115,16 +126,27 @@ pc that ends there ended on an exit row.
 The three slot-2 reads sit at distinct registers, which is what lets them share the
 slot. `docs/spec/ecall-abi.md` is the normative meaning of each call.
 
-**Transfer cycles.** A `read` or `write` that moves `n > 0` bytes to or from
-`[buf, buf + n)` is preceded, immediately, by one transfer cycle for each word those
-bytes touch, in ascending address order. A transfer cycle's slot 0 re-writes the
-unchanged `pc` (`next_pc = pc`), and its slot 3 is the word's RAM query: for a `read`,
-the word with the delivered bytes merged in — partial words at either end keep their
-other bytes — and for a `write`, the word read and written back. Nothing else. The
-ecall's own row then comes last and writes the real `next_pc`, so pc continuity holds
-through every transfer, and every ecall row has the same fixed shape whether or not
-bytes moved. A call that moves nothing has no transfer cycles. A byte outside the RAM
-window is the fatal guest error `OutOfBounds`, never an answer.
+**A `read` moves one word, on this row.** A `read` on fd 0 or fd 3 requires
+`a2 = constants::ecall::READ_WORD_BYTES = 4` and a 4-aligned `a1` inside the RAM window;
+anything else is a **fatal guest error**, not a short answer, because the circuit pins
+both (`docs/spec/ecall-abi.md` §4). Its slot-3 RAM query is the word at `a1`, read and
+written back with the delivered bytes merged into the low `n` of them, where `n` is what
+`a0` gets — `min(4, left)`. **The query is made even at end of stream**, writing the word
+back unchanged, which is what lets the circuit key the query's mask on "this row is a
+`read`" and have no "did it move anything" selector to constrain. A `read` answering
+`-EBADF` moves nothing and makes no query.
+
+**A `write` moves no memory event at all.** It reads its bytes out of RAM and appends
+them to its stream, and the query it used to make bound nothing: what ties fd 1 to the
+execution is the guest's own `io_digest` over the bytes it assembled with ordinary loads
+and stores, which the memory argument does bind (`docs/spec/memory.md` §10). Only the
+RAM-window bound survives, because reading outside the window is a fatal guest error
+however the bytes are used.
+
+**What a guest pays for this.** One `ecall` per word read, and its own copying:
+`guest_sdk::read_input` loops a word at a time through an aligned scratch, about six
+cycles a word. On S24's 717-byte witness that is ~1,100 cycles; it grows linearly, and it
+is the number to watch if a much larger stream ever arrives on fd 0.
 
 ## 7. The order of the log
 
@@ -138,7 +160,7 @@ query per role present, in this frozen order**:
 | `arg1` | 2 | REG | an ecall row's `a1` |
 | `arg2` | 2 | REG | an ecall row's `a2` |
 | `load` | 2 | RAM | a load's word |
-| `ram` | 3 | RAM | a store's, an atomic's or a transfer's word |
+| `ram` | 3 | RAM | a store's, an atomic's or a `read`'s word |
 | `rd` | 3 | REG | `rd`; an ecall row's `a0` result |
 | `delegate` | 3 | the delegation family's own | a delegation request's mirror query, at the frame base it handed over |
 
@@ -161,10 +183,9 @@ frame, as the stage prompt keeps the whole A extension in one circuit.
 
 ## 8. Routing
 
-Every cycle goes to exactly one family: the one whose decoded table claims its pc.
-Transfer cycles sit at their ecall's pc, so they belong to the add/sub/lui/auipc family
-with it. A pc no table claims is impossible after S11's partition; the tracer panics on
-one rather than skipping it.
+Every cycle goes to exactly one family: the one whose decoded table claims its pc. A pc
+no table claims is impossible after S11's partition; the tracer panics on one rather than
+skipping it.
 
 ## 9. The trace-level memory argument
 

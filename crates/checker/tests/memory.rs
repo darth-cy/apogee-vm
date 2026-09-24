@@ -15,7 +15,7 @@ use checker::{
 };
 use common::{
     frame_height, frame_plan, frame_shard, memory_challenges, prove_and_verify, shards, traced,
-    window_shards, witness_row, FAMILY_NAMES, GUESTS, HEIGHT,
+    delegation_shards, window_shards, witness_row, FAMILY_NAMES, GUESTS, HEIGHT,
 };
 use constants::challenge_slot::{MEM_ALPHA_VAL, MEM_GAMMA};
 use constants::family;
@@ -231,10 +231,11 @@ fn honest_statement(name: &str, input: u32, prove_frames: bool) {
     let plan = frame_plan(&t);
     let shards = shards(&t, &memory);
     assert!(plan.len() > 1, "{name}: more than one family ran");
+    let delegations = delegation_shards(&t, &memory).len();
     assert_eq!(
         shards.len(),
-        plan.len() + 1 + init_windows(&t.log, HEIGHT).len(),
-        "{name}: one shard per frame and per window"
+        plan.len() + 1 + init_windows(&t.log, HEIGHT).len() + delegations,
+        "{name}: one shard per frame, per window and per delegation family invoked"
     );
     assert!(
         plan.iter().any(|(_, c)| frame_height(c.len()) > c.len()),
@@ -345,6 +346,9 @@ fn a_frame_per_family_in_any_order_reconciles() {
         }
         assert!(shards.len() > 1, "{name}: more than one family ran");
         shards.extend(window_shards(&t, &memory));
+        // The anchors the guest's `io_digest` made at exit; without them one
+        // side of every request/invocation pair is unmatched.
+        shards.extend(delegation_shards(&t, &memory));
         let (mut reads, mut writes) = (Vec::new(), Vec::new());
         for shard in &shards {
             let (a, label) = (&shard.artifact, &shard.label);
