@@ -157,16 +157,36 @@ pub const WITNESS_CAPACITY: usize = 2 * COMMITTED_WITNESS_BYTES;
 
 /// Everything one block's execution needs, and nothing an execution derives.
 ///
-/// **Frozen at S24.** `postcard` writes a struct's fields in declaration
-/// order, so the field order below *is* must-be-exact 6's canonical order:
-/// the env, then the pre-state accounts, then the transactions, then the
-/// optional stateless section. [`BlockWitness::decode`] refuses a witness that
-/// is not in canonical order, so one logical state has exactly one encoding.
+/// **Not frozen** (owner's decision, S24). `prompts/S24-revm.md` asked for this
+/// type to be frozen here and the owner withdrew that before the stage closed,
+/// because a field this stage cannot fill is already known to be missing —
+/// see "The `BLOCKHASH` gap" below. A later stage adds fields and this
+/// type's shape moves with them. What *is* settled is the two rules a
+/// change must keep: `postcard` writes a struct's fields in
+/// declaration order, so the field order below is the canonical order, and
+/// [`BlockWitness::decode`] refuses a witness that is not in it — one logical
+/// state has exactly one encoding, whatever the fields are.
 ///
 /// Nothing here is synthetic-specific: S25's witness recorder produces this
 /// same type for a real block, which is why an account carries general code
 /// and storage entries and a transaction carries the full EIP-1559/2930
 /// envelope rather than the subset this stage's two transactions use.
+///
+/// # The `BLOCKHASH` gap
+///
+/// A `block_hashes` field does not exist here, and that is the concrete
+/// reason this type is not frozen. revm answers the `BLOCKHASH` opcode from
+/// its `Database`, and [`run`] gives it a `CacheDB<EmptyDB>` whose block-hash
+/// cache is empty, so every miss falls through to `EmptyDB`, which returns
+/// **`keccak256` of the block number's decimal string** — a deterministic
+/// placeholder, not any block's hash. A contract reading `BLOCKHASH(n)` for an
+/// `n` in the last 256 blocks therefore gets a made-up word today, the guest
+/// and the host agree on it, and the block still "executes". The witness is
+/// where a real one would have to come from, as a
+/// `block_hashes: Vec<(u64, Word32)>` loaded into `CacheDB`'s cache before
+/// execution. `docs/spec/revm-block.md` §1.2 is the standing note;
+/// `crates/emulator/tests/revm.rs::blockhash_reads_a_placeholder_today` pins
+/// the current behaviour so the gap cannot close by accident.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlockWitness {
     /// The header fields revm reads.
@@ -200,6 +220,10 @@ pub struct BlockEnvWitness {
     /// Seconds since the epoch.
     pub timestamp: Word32,
     /// The block gas limit.
+    ///
+    /// [`run`] enforces it as a **running** bound — a transaction's gas limit
+    /// must fit in what the block has left — which is the consensus rule and
+    /// is more than revm checks on its own. See [`run`]'s note.
     pub gas_limit: u64,
     /// EIP-1559 base fee per gas.
     pub basefee: u64,
@@ -386,6 +410,20 @@ const STATUS_SUCCESS: u8 = 2;
 /// unpayable gas limit) is a broken witness, not an outcome: it returns `Err`
 /// rather than a record, because the fixture builder's whole job is to hand
 /// over a block whose transactions are executable.
+///
+/// # The block's gas limit is enforced here, because revm cannot
+///
+/// revm validates `tx.gas_limit <= block.gas_limit` for every transaction and
+/// that is the most it can do: `transact_one` is *one* transaction and revm
+/// carries no state across a block, so it has no cumulative gas to check
+/// against. The consensus rule is the stronger one — the Yellow Paper's
+/// intrinsic validity requires a transaction's gas limit to fit in what the
+/// block has **left**, which is what makes the header's `gasUsed <= gasLimit`
+/// true — and in a real client it is the block executor, not the EVM, that
+/// applies it. This function is that block executor, so it applies it: without
+/// the running total below, a witness carrying two hundred transactions of
+/// twenty million gas each under a thirty-million-gas header executes happily
+/// and commits a block no Ethereum node would accept.
 pub fn run(witness: &BlockWitness) -> Result<Vec<u8>, String> {
     let spec = witness
         .env
@@ -427,10 +465,35 @@ pub fn run(witness: &BlockWitness) -> Result<Vec<u8>, String> {
         .build_mainnet();
 
     let mut results = Vec::with_capacity(witness.txs.len());
+    // The invariant this loop keeps: `gas_used <= witness.env.gas_limit`, so
+    // the subtraction below never wraps. It holds at 0 and is re-established
+    // by the checked accumulation after every transaction.
+    let mut gas_used: u64 = 0;
     for (i, tx) in witness.txs.iter().enumerate() {
+        let remaining = witness.env.gas_limit - gas_used;
+        if tx.gas_limit > remaining {
+            return Err(alloc::format!(
+                "transaction {i}'s gas limit {} does not fit in the block's remaining {remaining}",
+                tx.gas_limit
+            ));
+        }
         let result = evm
             .transact_one(tx_env(tx))
             .map_err(|e| alloc::format!("transaction {i} is not executable: {e}"))?;
+        // `tx_gas_used` is the receipt's `gasUsed`, which is what a block's
+        // `gasUsed` accumulates, and it is bounded by the transaction's own
+        // gas limit and hence by `remaining`. The checked form is here anyway:
+        // a revm whose accounting changed should be a refusal, not a wrapped
+        // `u64` — or, in a guest built with `overflow-checks`, a panic.
+        gas_used = gas_used
+            .checked_add(result.tx_gas_used())
+            .filter(|total| *total <= witness.env.gas_limit)
+            .ok_or_else(|| {
+                alloc::format!(
+                    "transaction {i} took the block past its gas limit of {}",
+                    witness.env.gas_limit
+                )
+            })?;
         results.push(result);
     }
     let state = evm.finalize();

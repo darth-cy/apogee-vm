@@ -16,7 +16,7 @@
 //! | 0 | the block ran and its commitment is on fd 1 |
 //! | 60 | fd 0 filled the whole buffer, so the witness may be truncated |
 //! | 61 | fd 0's bytes are not a canonical `BlockWitness` |
-//! | 62 | revm refused a transaction, so the witness is not executable |
+//! | 62 | a transaction is not executable, so the witness is not a block |
 
 extern crate alloc;
 
@@ -30,7 +30,8 @@ guest_sdk::entry!(main);
 const EXIT_WITNESS_TOO_LARGE: i32 = 60;
 /// fd 0's bytes are not a canonical `BlockWitness`.
 const EXIT_WITNESS_MALFORMED: i32 = 61;
-/// revm refused a transaction outright.
+/// A transaction is not executable: revm refused it outright, or it does not
+/// fit in the gas the block has left (`docs/spec/revm-block.md` §1.4).
 const EXIT_NOT_EXECUTABLE: i32 = 62;
 
 fn main() {
