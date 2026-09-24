@@ -317,9 +317,12 @@ pub fn build_boundary_finals(log: &MemoryEventLog) -> BoundaryFinals {
                 }
             }
             AddressSpace::Pc => pc = Some(f),
-            // A RAM word's final value is a window family's row, and a
-            // delegation space has no final state at all.
+            // A RAM word's final value is a window family's row — an advice
+            // word's is `ADVICE_WINDOWS`' — and a delegation space has no
+            // final state at all. None of the three is a register or the pc,
+            // which is all this boundary carries.
             AddressSpace::Ram
+            | AddressSpace::Advice
             | AddressSpace::KeccakF
             | AddressSpace::Poseidon2
             | AddressSpace::FrArith => {}

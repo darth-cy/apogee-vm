@@ -32,6 +32,18 @@ pub enum AddressSpace {
     Poseidon2,
     /// `family::FR_ARITH`'s delegation anchor space (S23).
     FrArith,
+    /// The **advice** region (S25b): private, prover-supplied, read-only, and
+    /// addressed like RAM — the address is the byte address of the 4-aligned
+    /// word, at [`guest_memory::ADVICE_ORIGIN`] and above.
+    ///
+    /// Memory, unlike a delegation anchor: it **chains**, so a second read of
+    /// one advice word is held to what the first read, which is the whole
+    /// reason a guest may parse it more than once. What separates it from
+    /// [`Ram`] is only where its initial values come from — the prover, not
+    /// the image and not a literal zero — and that no query may write it.
+    ///
+    /// [`Ram`]: AddressSpace::Ram
+    Advice,
 }
 
 /// Every delegation anchor space, ascending by tag. One `deleg` frame query
@@ -53,6 +65,7 @@ impl AddressSpace {
             AddressSpace::KeccakF => address_space::DELEGATION_KECCAK_F,
             AddressSpace::Poseidon2 => address_space::DELEGATION_POSEIDON2,
             AddressSpace::FrArith => address_space::DELEGATION_FR_ARITH,
+            AddressSpace::Advice => address_space::ADVICE,
         }
     }
 
@@ -65,6 +78,7 @@ impl AddressSpace {
             address_space::DELEGATION_KECCAK_F => Some(AddressSpace::KeccakF),
             address_space::DELEGATION_POSEIDON2 => Some(AddressSpace::Poseidon2),
             address_space::DELEGATION_FR_ARITH => Some(AddressSpace::FrArith),
+            address_space::ADVICE => Some(AddressSpace::Advice),
             _ => None,
         }
     }
@@ -84,6 +98,11 @@ impl AddressSpace {
                     && addr >= guest_memory::RAM_ORIGIN
                     && addr - guest_memory::RAM_ORIGIN < guest_memory::RAM_LENGTH
             }
+            AddressSpace::Advice => {
+                addr.is_multiple_of(4)
+                    && addr >= guest_memory::ADVICE_ORIGIN
+                    && addr - guest_memory::ADVICE_ORIGIN < guest_memory::ADVICE_LENGTH
+            }
             AddressSpace::Pc => addr == 0,
         }
     }
@@ -98,9 +117,25 @@ impl AddressSpace {
     /// (`docs/spec/delegation.md` §5).
     pub fn chains(self) -> bool {
         match self {
-            AddressSpace::Reg | AddressSpace::Ram | AddressSpace::Pc => true,
+            AddressSpace::Reg | AddressSpace::Ram | AddressSpace::Pc | AddressSpace::Advice => true,
             AddressSpace::KeccakF | AddressSpace::Poseidon2 | AddressSpace::FrArith => false,
         }
+    }
+
+    /// Whether any query may **write** this space.
+    ///
+    /// False for [`Advice`] alone. Every other space is written by some
+    /// query — a register by `rd`, RAM by a store, the pc by every cycle, a
+    /// delegation anchor by its request — and advice by none: only the `load`
+    /// frame query carries its tag, and that query is in
+    /// `constraints::memory::FRAME_READ_ONLY`, so its write-back value is
+    /// gated equal to what it read. This function is what the log's
+    /// self-check holds the emulator to, so the executor and the circuit
+    /// refuse the same thing for the same reason.
+    ///
+    /// [`Advice`]: AddressSpace::Advice
+    pub fn writable(self) -> bool {
+        !matches!(self, AddressSpace::Advice)
     }
 }
 
@@ -178,6 +213,13 @@ pub struct MemoryEventLog {
     /// Per RAM word address. A hash map because it is only ever looked up;
     /// everything that reads it out sorts first.
     ram: HashMap<u32, (u64, u32)>,
+    /// Per **advice** word address, as [`ram`] is. Advice chains, so it needs
+    /// a last write like any memory space — even though every query there
+    /// writes back what it read, so the value never moves and only the
+    /// timestamp does. That timestamp is what the teardown read carries.
+    ///
+    /// [`ram`]: MemoryEventLog::ram
+    advice: HashMap<u32, (u64, u32)>,
 }
 
 impl PartialEq for MemoryEventLog {
@@ -314,6 +356,18 @@ impl MemoryEventLog {
             .collect();
         ram.sort_by_key(|f| f.addr);
         out.extend(ram);
+        let mut advice: Vec<FinalValue> = self
+            .advice
+            .iter()
+            .map(|(addr, (ts, value))| FinalValue {
+                space: AddressSpace::Advice,
+                addr: *addr,
+                ts: *ts,
+                value: *value,
+            })
+            .collect();
+        advice.sort_by_key(|f| f.addr);
+        out.extend(advice);
         if let Some((ts, value)) = self.pc {
             out.push(FinalValue {
                 space: AddressSpace::Pc,
@@ -393,6 +447,31 @@ impl MemoryEventLog {
                     "a second query at this address and timestamp".into(),
                 ));
             }
+            // A read-only space is written back with what it read, and this is
+            // the executor-side twin of the gate that says so: `load` is in
+            // `constraints::memory::FRAME_READ_ONLY`, whose `write_value −
+            // read_value = 0` refuses the same event in the circuit. Stated
+            // over `writable()` rather than over `Advice` so a later read-only
+            // space inherits it.
+            if !e.space.writable() && e.write_value != e.read_value {
+                return Err(refuse(
+                    e,
+                    format!(
+                        "a read-only space was written: read {:#x}, wrote {:#x}",
+                        e.read_value, e.write_value
+                    ),
+                ));
+            }
+        }
+
+        // Every advice address's first-read value, in timestamp order: the
+        // init write `initial_value` credits it with. The events were checked
+        // above to be in timestamp order, so `or_insert` takes the earliest.
+        let mut advice_init: BTreeMap<u32, u32> = BTreeMap::new();
+        for e in &self.events {
+            if e.space == AddressSpace::Advice {
+                advice_init.entry(e.addr).or_insert(e.read_value);
+            }
         }
 
         // +1 per write, -1 per read, keyed by the whole tuple.
@@ -424,7 +503,7 @@ impl MemoryEventLog {
             }
         }
         for (&(space, addr), &(ts, value)) in &last {
-            let init = initial_value(image, space, addr);
+            let init = initial_value(image, &advice_init, space, addr);
             *balance.entry((space, addr, 0, init)).or_default() += 1;
             *balance.entry((space, addr, ts, value)).or_default() -= 1;
         }
@@ -437,7 +516,7 @@ impl MemoryEventLog {
         // name the first query whose read is not the last write before it: the
         // corrupted read itself, or the reader of a corrupted write. A stale
         // read is named where it is, not at the honest reader of that write.
-        let mut last = (0, initial_value(image, space, addr));
+        let mut last = (0, initial_value(image, &advice_init, space, addr));
         let at = self
             .events
             .iter()
@@ -467,6 +546,7 @@ impl MemoryEventLog {
             AddressSpace::Reg => self.regs[addr as usize],
             AddressSpace::Pc => self.pc,
             AddressSpace::Ram => self.ram.get(&addr).copied(),
+            AddressSpace::Advice => self.advice.get(&addr).copied(),
             AddressSpace::KeccakF | AddressSpace::Poseidon2 | AddressSpace::FrArith => None,
         }
     }
@@ -479,6 +559,9 @@ impl MemoryEventLog {
             AddressSpace::Ram => {
                 self.ram.insert(e.addr, last);
             }
+            AddressSpace::Advice => {
+                self.advice.insert(e.addr, last);
+            }
             // An unchained space keeps no last write: there is nothing for a
             // later query there to read, and nothing to tear down.
             AddressSpace::KeccakF | AddressSpace::Poseidon2 | AddressSpace::FrArith => {}
@@ -487,13 +570,31 @@ impl MemoryEventLog {
 }
 
 /// An address's value before the first cycle: 0 for a register, the entry
-/// point for the pc, and the image's bytes for a RAM word — zero wherever no
-/// segment has a file byte.
-fn initial_value(image: &ProgramImage, space: AddressSpace, addr: u32) -> u32 {
+/// point for the pc, the image's bytes for a RAM word — zero wherever no
+/// segment has a file byte — and, for an **advice** word, whatever the first
+/// query there read.
+///
+/// That last one is not a shortcut around missing data; it is the same rule
+/// the circuit enforces, stated at the level of a log. An advice word's
+/// initial value is a **free committed column**: the prover chooses it and
+/// nothing outside the guest constrains it (`docs/spec/advice.md` §2). Advice
+/// is read-only, so every query there writes back what it read, so the whole
+/// chain at an address holds one value — and the first read's value *is* the
+/// init write's, necessarily. Taking it from the log therefore checks what
+/// this function is for, that later reads agree with earlier ones, and needs
+/// no advice bytes here. `advice` is that map, first-read value per address,
+/// built by the caller in timestamp order.
+fn initial_value(
+    image: &ProgramImage,
+    advice: &BTreeMap<u32, u32>,
+    space: AddressSpace,
+    addr: u32,
+) -> u32 {
     match space {
         AddressSpace::Reg => 0,
         AddressSpace::Pc => image.entry,
         AddressSpace::Ram => image.initial_word(addr),
+        AddressSpace::Advice => *advice.get(&addr).unwrap_or(&0),
         AddressSpace::KeccakF | AddressSpace::Poseidon2 | AddressSpace::FrArith => 0,
     }
 }

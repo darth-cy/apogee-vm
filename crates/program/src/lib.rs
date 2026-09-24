@@ -57,6 +57,7 @@ pub const FAMILIES: [FamilyId; family::COUNT as usize] = [
     family::KECCAK_F,
     family::POSEIDON2,
     family::FR_ARITH,
+    family::ADVICE_WINDOWS,
 ];
 
 /// Every **delegation** family, with the ecall number that invokes it, its
@@ -129,6 +130,7 @@ pub fn family_name(family: FamilyId) -> &'static str {
         family::KECCAK_F => "KECCAK_F",
         family::POSEIDON2 => "POSEIDON2",
         family::FR_ARITH => "FR_ARITH",
+        family::ADVICE_WINDOWS => "ADVICE_WINDOWS",
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -265,6 +267,7 @@ pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
         family::MUL_DIV | family::ATOMICS => &[Pc, NextPc, Rs1, Rs2, Rd, ExtraMask],
         family::INIT_TEARDOWN
         | family::ZERO_WINDOWS
+        | family::ADVICE_WINDOWS
         | family::KECCAK_F
         | family::POSEIDON2
         | family::FR_ARITH => &[],
@@ -939,9 +942,20 @@ pub fn setup_commitments(
             // no decoded table at all: it is invoked, never decoded, so there
             // is nothing about it for identity to commit but its presence in
             // the `VM_CONFIG` message.
-            family::ZERO_WINDOWS | family::KECCAK_F | family::POSEIDON2 | family::FR_ARITH => {
-                Vec::new()
-            }
+            //
+            // **`ADVICE_WINDOWS` has none for a different reason, and it is the
+            // point of the family**: its rows' initial values are the prover's
+            // private witness. Committing them here would put them in program
+            // identity, which is a public, per-program constant — so a program
+            // could be run on exactly one advice blob, and the blob would not
+            // be private. Identity binds that the family is *present*, at its
+            // height, and nothing about what it holds
+            // (`docs/spec/advice.md` §2).
+            family::ZERO_WINDOWS
+            | family::ADVICE_WINDOWS
+            | family::KECCAK_F
+            | family::POSEIDON2
+            | family::FR_ARITH => Vec::new(),
             // One column at a time: at 2^22 rows an `Fr` column is 128 MiB.
             _ => (0..table.columns.len())
                 .map(|c| cm(table, &table.column_poly(c)))

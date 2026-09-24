@@ -1072,9 +1072,23 @@ pub mod family {
     /// or inverse a row, invoked by the [`ecall::PRECOMPILE_FR_ARITH`] ecall
     /// (`docs/spec/delegation.md` §13).
     pub const FR_ARITH: u32 = 11;
+    /// Initialisation of the **advice** region, one shard per window of it the
+    /// prover supplies, at the height of [`INIT_TEARDOWN`] (S25b). Claims no
+    /// pc and owns no cycle; present in every `VmConfig`, like the two RAM
+    /// window families, and proving **zero** shards in a run that reads no
+    /// advice.
+    ///
+    /// It is the two RAM window families' third sibling in every respect but
+    /// one: its rows' initial values are **free**. Window 0's come from the
+    /// image column and identity commits them; a zero window's are the literal
+    /// 0; an advice window's are whatever the prover supplies, and nothing in
+    /// the statement, the key or identity binds them. That is the whole point
+    /// — advice is private nondeterministic witness, and its soundness is the
+    /// guest's job, not the verifier's (`docs/spec/advice.md` §1).
+    pub const ADVICE_WINDOWS: u32 = 12;
 
     /// How many families this table defines.
-    pub const COUNT: u32 = 12;
+    pub const COUNT: u32 = 13;
 
     /// Whether a family's rows are **execution cycles**, indexed by
     /// `FamilyId`. Append-only, beside the ids themselves.
@@ -1100,6 +1114,7 @@ pub mod family {
         false, // KECCAK_F
         false, // POSEIDON2
         false, // FR_ARITH
+        false, // ADVICE_WINDOWS
     ];
 
     /// The trace-height menu, ascending. Even powers of two only, so that a
@@ -1141,6 +1156,7 @@ pub mod family {
         1 << 8,  // KECCAK_F
         1 << 8,  // POSEIDON2
         1 << 8,  // FR_ARITH
+        1 << 22, // ADVICE_WINDOWS
     ];
 
     /// The default `bytecode_size_words`: `2^20` words, a 4 MiB ceiling on the
@@ -1292,6 +1308,28 @@ pub mod guest_memory {
     /// part of the linker's map — `link.ld` has no symbol for it — but a
     /// number the SDK, its documents and its probe guest must agree on.
     pub const STACK_RESERVE: u32 = 0x0080_0000;
+
+    /// First byte of the **advice** region, and it is not a free choice:
+    /// `RAM_ORIGIN + RAM_LENGTH` is exactly `0x8000_0000`, so the upper half
+    /// of the address space is the one span no guest RAM can ever reach.
+    /// `verifier_core::check_memory_windows` caps a RAM window id at
+    /// `2^29/h − 1`, which is the same ceiling stated in window units, so the
+    /// disjointness is enforced on both sides and not merely arranged.
+    ///
+    /// Sitting on a power of two is what makes the selector cheap: `addr ≥
+    /// 2^31` is bit 31 of the address, which is bit 13 of the `word_index_hi`
+    /// the memory families already commit and already bound below `2^14`
+    /// (`docs/spec/memory-ops.md` §2). So routing a load to this space costs a
+    /// re-split of a column that exists, not a comparison
+    /// (`docs/spec/advice.md` §3).
+    pub const ADVICE_ORIGIN: u32 = 0x8000_0000;
+
+    /// Length of the advice region: the whole upper half. What a run actually
+    /// supplies is `shard_counts[family::ADVICE_WINDOWS]` windows from
+    /// [`ADVICE_ORIGIN`] upwards, contiguously, and a load past that is an
+    /// address no window initialized — fatal in the emulator and unbalanced in
+    /// the argument, exactly as for RAM.
+    pub const ADVICE_LENGTH: u32 = 0x8000_0000;
 }
 
 /// The guest ecall ABI: syscall numbers, range boundaries and file
@@ -1490,6 +1528,36 @@ pub mod address_space {
         DELEGATION_POSEIDON2,
         DELEGATION_FR_ARITH,
     ];
+
+    /// The **advice** region (S25b): private, prover-supplied, read-only, and
+    /// addressed by the guest with ordinary loads.
+    ///
+    /// Memory in every way [`RAM`] is — word-granular, a query's address is
+    /// the 4-aligned word's byte address, it chains, and one window family
+    /// initializes it — and private in the one way that matters: an advice
+    /// word's initial value is the prover's to choose and nothing outside the
+    /// guest constrains it. A guest earns the right to believe it by checking
+    /// it against something public (`docs/spec/advice.md` §2).
+    ///
+    /// **It cannot alias [`RAM`] twice over.** The tags differ, so no RAM
+    /// tuple and no advice tuple are ever equal; and the *addresses* are
+    /// disjoint as well, advice occupying [`guest_memory::ADVICE_ORIGIN`]
+    /// upwards, which is exactly where `guest_memory::RAM_ORIGIN +
+    /// RAM_LENGTH` stops. Guest pointer arithmetic therefore cannot walk from
+    /// one into the other, which tags alone would not prevent.
+    ///
+    /// **Read-only is structural.** Only the `load` frame query carries this
+    /// tag, and `constraints::memory::FRAME_READ_ONLY` already holds that
+    /// query's write-back value equal to what it read. A store and an atomic
+    /// use the `ram` query, whose tag is the literal [`RAM`], so a store into
+    /// the advice range stages a RAM write at an address no RAM window
+    /// initializes and cannot balance — and the family refuses it by a gate
+    /// first, so the failure is local and named (`docs/spec/advice.md` §4).
+    ///
+    /// The next **delegation** family takes 8: this tag took the number the
+    /// sequence was up to, and [`DELEGATION`] is the list a reader tells a
+    /// delegation anchor by, never a range.
+    pub const ADVICE: u8 = 7;
 }
 
 /// The memory argument's clock, frozen at S12 from the master's memory
