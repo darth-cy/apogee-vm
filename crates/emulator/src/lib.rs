@@ -40,11 +40,25 @@ use trace::{
     MemoryEventLog, Query, Role, Row, ROLES,
 };
 
-/// What a guest can read: the fd 0 public input and the fd 3 hint stream.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// What a guest can read: the fd 0 public input, the fd 3 hint stream, and
+/// the **advice** region.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GuestIo {
     pub input: Vec<u8>,
     pub hint: Vec<u8>,
+    /// The advice region's bytes, mapped read-only at
+    /// `guest_memory::ADVICE_ORIGIN` (`docs/spec/advice.md`).
+    ///
+    /// Unlike `input` and `hint` this is not a stream and is not consumed: the
+    /// guest addresses it, a word at a time, with ordinary loads, and the same
+    /// word may be read any number of times. Nothing outside the guest
+    /// constrains what is here — it is the prover's to choose — so a guest
+    /// that has not checked a value it read against something public has
+    /// learned nothing it can rely on.
+    ///
+    /// A load at or above `ADVICE_ORIGIN + advice.len()` rounded up to a word
+    /// is a fatal guest error, as an out-of-window RAM access is.
+    pub advice: Vec<u8>,
 }
 
 /// A finished execution: the guest called `exit`.
@@ -81,6 +95,25 @@ pub enum EmuError {
     Misaligned { pc: u32, addr: u32, width: u32 },
     /// A data access, or a byte an ecall would move, outside the RAM window.
     OutOfBounds { pc: u32, addr: u32 },
+    /// A store or an atomic whose address is in the **advice** region.
+    ///
+    /// Fatal, as a misaligned access is, and for the same reason: the circuit
+    /// refuses it too — a store's RAM query carries the literal `RAM` tag and
+    /// each storing family gates `is_store · is_advice = 0` — so an execution
+    /// that did this is one no proof could cover. Advice is read-only in the
+    /// executor and in the argument, and they refuse it at the same point
+    /// (`docs/spec/advice.md` §4).
+    AdviceWrite { pc: u32, addr: u32 },
+    /// A load at or above the end of the advice the prover supplied.
+    ///
+    /// Its own error rather than [`OutOfBounds`], which says "outside the RAM
+    /// window" and would be a lie here: the address *is* in the advice space,
+    /// and what it is past is the extent of this run's region. In the argument
+    /// it is the same failure an out-of-window RAM address is — a read of a
+    /// tuple no window initialized.
+    ///
+    /// [`OutOfBounds`]: EmuError::OutOfBounds
+    AdviceOutOfBounds { pc: u32, addr: u32, len: usize },
     /// Cycle `cycle`'s timestamps would pass the 38-bit clock.
     ClockOverflow { cycle: u64 },
     /// A delegation ecall whose family the `VmConfig` does not hold.
@@ -135,6 +168,14 @@ impl fmt::Display for EmuError {
             EmuError::OutOfBounds { pc, addr } => write!(
                 f,
                 "data access outside the RAM window at pc {pc:#010x}: address {addr:#010x}"
+            ),
+            EmuError::AdviceWrite { pc, addr } => write!(
+                f,
+                "write to the read-only advice region at pc {pc:#010x}: address {addr:#010x}"
+            ),
+            EmuError::AdviceOutOfBounds { pc, addr, len } => write!(
+                f,
+                "load past the advice region at pc {pc:#010x}: address {addr:#010x},                  {len} bytes supplied"
             ),
             EmuError::ClockOverflow { cycle } => write!(
                 f,
@@ -355,6 +396,11 @@ struct Machine<'a> {
     input_at: usize,
     hint: &'a [u8],
     hint_at: usize,
+    /// The advice region's bytes, addressed at
+    /// `guest_memory::ADVICE_ORIGIN`. Read-only and never consumed: a load
+    /// reads it, nothing writes it, and its extent is its length rounded up
+    /// to a word (`docs/spec/advice.md` §8).
+    advice: &'a [u8],
     output: Vec<u8>,
     stderr: Vec<u8>,
     exit: Option<i32>,
@@ -383,6 +429,7 @@ impl<'a> Machine<'a> {
             cycle: 1,
             input: &io.input,
             input_at: 0,
+            advice: &io.advice,
             hint: &io.hint,
             hint_at: 0,
             output: Vec::new(),
@@ -496,8 +543,14 @@ impl<'a> Machine<'a> {
             .or_insert_with(|| Box::new([0; PAGE as usize]))
     }
 
-    /// The word at a 4-aligned address.
+    /// The word at a 4-aligned address, in RAM or in the advice region.
+    ///
+    /// The address decides which, totally: the two ranges are disjoint by
+    /// construction (`docs/spec/advice.md` §1.1), so no caller has to say.
     fn word(&self, addr: u32) -> u32 {
+        if addr >= guest_memory::ADVICE_ORIGIN {
+            return self.advice_word(addr);
+        }
         match self.ram.get(&(addr / PAGE)) {
             Some(page) => {
                 let at = (addr % PAGE) as usize;
@@ -507,6 +560,27 @@ impl<'a> Machine<'a> {
         }
     }
 
+    /// The advice word at a 4-aligned address, little-endian, zero-padded
+    /// where the supplied bytes run out mid-word.
+    ///
+    /// The padding is not a way past the extent check: `load_word` refuses an
+    /// address at or above the region's end before this is reached. It is
+    /// only what a final partial word holds, so that a caller need not supply
+    /// a multiple of four bytes.
+    fn advice_word(&self, addr: u32) -> u32 {
+        let at = (addr - guest_memory::ADVICE_ORIGIN) as usize;
+        let mut bytes = [0u8; 4];
+        for (i, b) in bytes.iter_mut().enumerate() {
+            *b = self.advice.get(at + i).copied().unwrap_or(0);
+        }
+        u32::from_le_bytes(bytes)
+    }
+
+    /// The end of this run's advice region: its length rounded up to a word.
+    fn advice_end(&self) -> u32 {
+        guest_memory::ADVICE_ORIGIN + (self.advice.len() as u32).next_multiple_of(4)
+    }
+
     fn set_word(&mut self, addr: u32, value: u32) {
         let at = (addr % PAGE) as usize;
         self.page(addr)[at..at + 4].copy_from_slice(&value.to_le_bytes());
@@ -514,15 +588,53 @@ impl<'a> Machine<'a> {
 
     /// The word a `width`-byte access at `addr` touches, refusing a
     /// misaligned access and one outside the RAM window.
+    ///
+    /// **RAM only.** An address in the advice region is `AdviceWrite`: every
+    /// caller of this is a write — a store, an atomic's read-modify-write, or
+    /// the buffer an ecall moves bytes through — and advice is read-only. A
+    /// load calls [`load_word`] instead.
+    ///
+    /// [`load_word`]: Machine::load_word
     fn data_word(&self, pc: u32, addr: u32, width: u32) -> Result<u32, EmuError> {
         if !addr.is_multiple_of(width) {
             return Err(EmuError::Misaligned { pc, addr, width });
+        }
+        if addr >= guest_memory::ADVICE_ORIGIN {
+            return Err(EmuError::AdviceWrite { pc, addr });
         }
         let word = addr & !3;
         if word < guest_memory::RAM_ORIGIN
             || word - guest_memory::RAM_ORIGIN >= guest_memory::RAM_LENGTH
         {
             return Err(EmuError::OutOfBounds { pc, addr });
+        }
+        Ok(word)
+    }
+
+    /// The word a `width`-byte **load** at `addr` touches: [`data_word`]'s
+    /// rules, plus the advice region, which a load alone may reach.
+    ///
+    /// Misalignment is checked first and identically, so an unaligned advice
+    /// load is `Misaligned` and not something else. Past the region's end is
+    /// `AdviceOutOfBounds`, the advice counterpart of an out-of-window RAM
+    /// address: in the argument both are a read of a tuple no window
+    /// initialized.
+    ///
+    /// [`data_word`]: Machine::data_word
+    fn load_word(&self, pc: u32, addr: u32, width: u32) -> Result<u32, EmuError> {
+        if !addr.is_multiple_of(width) {
+            return Err(EmuError::Misaligned { pc, addr, width });
+        }
+        if addr < guest_memory::ADVICE_ORIGIN {
+            return self.data_word(pc, addr, width);
+        }
+        let word = addr & !3;
+        if word >= self.advice_end() {
+            return Err(EmuError::AdviceOutOfBounds {
+                pc,
+                addr,
+                len: self.advice.len(),
+            });
         }
         Ok(word)
     }
@@ -803,7 +915,7 @@ impl<'a> Machine<'a> {
         extend: fn(u32) -> u32,
     ) -> Result<(), EmuError> {
         let addr = self.read(c, Role::Rs1, rs1).wrapping_add(imm as u32);
-        let word = self.data_word(pc, addr, width)?;
+        let word = self.load_word(pc, addr, width)?;
         let value = self.word(word);
         c.stage(Role::Load, word, value, value);
         self.write(c, rd, extend(value >> (8 * (addr & 3))));
@@ -1145,7 +1257,7 @@ impl Recorder<'_> {
         for role in ROLES {
             if let Some((addr, read, write)) = queries.queries[role as usize] {
                 let event = self.log.record(
-                    role.space(delegation),
+                    role.space(addr, delegation),
                     addr,
                     base + role.delta(),
                     read,
@@ -1253,6 +1365,7 @@ mod tests {
         let io = GuestIo {
             input: Vec::new(),
             hint: Vec::new(),
+            advice: Vec::new(),
         };
         let image = spin();
         let mut machine = Machine::new(&image, &io);

@@ -718,7 +718,7 @@ fn the_rows_rebuild_the_log_exactly() {
             for role in ROLES {
                 if let Some(q) = row.query(role) {
                     events.push(MemoryEvent {
-                        space: role.space(requested.get(&row.cycle).copied()),
+                        space: role.space(q.addr, requested.get(&row.cycle).copied()),
                         addr: q.addr,
                         ts: base + SLOT[role as usize],
                         read_ts: q.read_ts,

@@ -74,6 +74,7 @@ pub fn execute(program: &Program, input: &[u8], hint: &[u8]) -> Result<TraceArch
     let io = GuestIo {
         input: input.to_vec(),
         hint: hint.to_vec(),
+        advice: Vec::new(),
     };
     let started = Instant::now();
     let (traces, log, profile, execution) =

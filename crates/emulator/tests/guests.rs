@@ -132,6 +132,7 @@ fn a_precompile_runs_and_its_state_is_the_s02_permutation() {
     let guest = GuestIo {
         input: input.clone(),
         hint: b"private-advice".to_vec(),
+        advice: Vec::new(),
     };
     let execution = run(&image("echo"), &guest).unwrap();
     assert_eq!(execution.exit_code, 0);
@@ -179,6 +180,7 @@ fn orderbook_ignores_advice_it_cannot_verify() {
                     &GuestIo {
                         input: input.clone(),
                         hint,
+                        advice: Vec::new(),
                     },
                 )
                 .unwrap();

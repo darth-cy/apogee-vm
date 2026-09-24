@@ -1735,6 +1735,7 @@ fn traced(image: loader::ProgramImage, height: u32) -> (prover::Program, trace::
     let io = emulator::GuestIo {
         input: Vec::new(),
         hint: Vec::new(),
+        advice: Vec::new(),
     };
     let (traces, log, profile, execution) =
         emulator::trace_run(&image, &io, &tables, &config).expect("the image traces");

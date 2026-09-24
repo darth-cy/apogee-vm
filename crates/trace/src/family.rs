@@ -6,6 +6,7 @@
 //! constraint system that has not been built yet, and a buffer that guessed
 //! would be a buffer someone has to un-guess.
 
+use constants::guest_memory;
 use program::FamilyId;
 
 use crate::log::AddressSpace;
@@ -64,7 +65,16 @@ impl Role {
         }
     }
 
-    /// The address space.
+    /// The address space of a query this role made at `addr`.
+    ///
+    /// [`Role::Load`]'s is **the address's**: a load reaches RAM or the
+    /// advice region, and the two ranges are disjoint, so the address alone
+    /// decides and no column has to carry it. That is what lets a row be
+    /// replayed into events without storing a space
+    /// (`docs/spec/advice.md` §1.1). [`Role::Ram`] is not the same: a store
+    /// and an atomic may never reach advice, so its space is the literal
+    /// `Ram` whatever the address — an advice address there is an execution
+    /// the emulator refused before staging anything.
     ///
     /// [`Role::Delegate`]'s is **the row's**, not the role's: a delegation
     /// family's anchor space *is* its type (`constants::address_space`), and
@@ -73,8 +83,9 @@ impl Role {
     /// because the invocation riding its cycle names the family; every other
     /// role ignores it, and passing `None` on a row that has this role is a
     /// programmer error rather than a default.
-    pub fn space(self, delegation: Option<AddressSpace>) -> AddressSpace {
+    pub fn space(self, addr: u32, delegation: Option<AddressSpace>) -> AddressSpace {
         match self {
+            Role::Load if addr >= guest_memory::ADVICE_ORIGIN => AddressSpace::Advice,
             Role::Load | Role::Ram => AddressSpace::Ram,
             Role::Delegate => {
                 delegation.expect("a delegation request's row knows which family it is requesting")

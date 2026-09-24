@@ -171,6 +171,7 @@ fn traced(bin: &str, input: &[u8]) -> Traced {
     let io = GuestIo {
         input: input.to_vec(),
         hint: Vec::new(),
+        advice: Vec::new(),
     };
     let (traces, log, profile, execution) =
         trace_run(image, &io, &tables, &config).unwrap_or_else(|e| panic!("{bin}: {e}"));

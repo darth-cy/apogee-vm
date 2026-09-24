@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use constants::guest_memory;
 use constraints::memory::{
     frame_queries, frame_query_takes, gap_hi, ARG1, ARG2, DELEG, FRAME_DELTA, FRAME_NAMES,
     FRAME_SPACE, LOAD, PC, RAM, RD, RS1, RS2,
@@ -58,16 +59,34 @@ fn the_frame_table_is_the_pc_query_then_the_roles() {
                         frame_query_takes(1 + i, space.tag(), role.delta()),
                         "the deleg query takes {space:?}"
                     );
-                    assert_eq!(role.space(Some(space)), space);
+                    assert_eq!(role.space(RAM_WORD, Some(space)), space);
                 }
             }
             _ => assert!(
-                frame_query_takes(1 + i, role.space(None).tag(), role.delta()),
+                frame_query_takes(1 + i, role.space(RAM_WORD, None).tag(), role.delta()),
                 "{role:?}"
             ),
         }
     }
+    // A load's space is its address's: RAM below the advice region and
+    // `Advice` at or above it, which is what lets one query slot serve both
+    // and a row be replayed without storing a space
+    // (`docs/spec/advice.md` §1.1). A store's is `Ram` whatever the address —
+    // an advice address on the `ram` slot is an execution the emulator
+    // refused before it staged anything.
+    assert_eq!(Role::Load.space(RAM_WORD, None), AddressSpace::Ram);
+    assert_eq!(
+        Role::Load.space(guest_memory::ADVICE_ORIGIN, None),
+        AddressSpace::Advice
+    );
+    assert_eq!(
+        Role::Ram.space(guest_memory::ADVICE_ORIGIN, None),
+        AddressSpace::Ram
+    );
 }
+
+/// A RAM word address, for the roles whose space does not depend on one.
+const RAM_WORD: u32 = guest_memory::RAM_ORIGIN;
 
 /// Cycles 1 and 2 of a two-cycle program at entry 0x10000: `addi x5, x0, 7`,
 /// then an exit row writing `HALT_PC`, or `end_pc` in its place.

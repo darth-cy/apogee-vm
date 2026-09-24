@@ -270,6 +270,7 @@ pub fn trace(program: &Program, status: u32) -> TraceArchive {
     let io = GuestIo {
         input: Vec::new(),
         hint: Vec::new(),
+        advice: Vec::new(),
     };
     let (traces, log, profile, execution) =
         trace_run(&program.image, &io, &program.tables, &program.config).expect("the guest traces");

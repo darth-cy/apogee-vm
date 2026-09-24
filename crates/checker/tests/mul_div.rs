@@ -2046,6 +2046,7 @@ fn alu() -> (prover::Program, trace::TraceArchive) {
     let io = emulator::GuestIo {
         input: Vec::new(),
         hint: Vec::new(),
+        advice: Vec::new(),
     };
     let (traces, log, profile, execution) =
         emulator::trace_run(&image, &io, &tables, &config).expect("the image traces");

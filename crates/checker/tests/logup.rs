@@ -164,6 +164,7 @@ fn toy() -> Toy {
     let io = GuestIo {
         input: 24u32.to_le_bytes().to_vec(),
         hint: Vec::new(),
+        advice: Vec::new(),
     };
     let (traces, log, _, execution) = trace_run(&image, &io, &tables, &config).expect("fib traces");
     assert_eq!(execution.exit_code, 0);

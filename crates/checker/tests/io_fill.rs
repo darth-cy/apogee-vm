@@ -138,7 +138,13 @@ fn traced_over(read_fd: u32, write_fd: u32) -> (prover::Program, TraceArchive, I
     let (tables, config) = decode_program(&image, &params).expect("the program decodes");
     let io = GuestIo {
         input: PAYLOAD.to_vec(),
+        // The same four bytes on fd 3, so the guest sees them whichever
+        // descriptor `traced_over` names.
         hint: PAYLOAD.to_vec(),
+        // The program reads its payload from a stream, not from the region:
+        // what this file is about is the ecall's answer in `a0`, which the
+        // advice path does not have (`docs/spec/advice.md` §7).
+        advice: Vec::new(),
     };
     let (traces, log, profile, execution) =
         trace_run(&image, &io, &tables, &config).expect("the program runs");

@@ -720,7 +720,7 @@ fn check_parts(
         }
         let queries = ROLES.iter().filter_map(|role| {
             row.query(*role).map(|q| MemoryEvent {
-                space: role.space(delegation),
+                space: role.space(q.addr, delegation),
                 addr: q.addr,
                 ts: base + role.delta(),
                 read_ts: q.read_ts,

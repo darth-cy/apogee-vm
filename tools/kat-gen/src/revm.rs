@@ -316,6 +316,7 @@ fn guest_frames(input: &[u8], want_output: &[u8]) -> Vec<Vec<u32>> {
     let io = emulator::GuestIo {
         input: input.to_vec(),
         hint: Vec::new(),
+        advice: Vec::new(),
     };
     let (traces, _log, profile, execution) =
         emulator::trace_run(&image, &io, &tables, &config).expect("the guest runs");

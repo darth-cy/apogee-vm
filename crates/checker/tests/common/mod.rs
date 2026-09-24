@@ -299,6 +299,7 @@ pub fn traced(name: &str, input: u32) -> Traced {
     let io = GuestIo {
         input: input.to_le_bytes().to_vec(),
         hint: Vec::new(),
+        advice: Vec::new(),
     };
     let (traces, log, profile, execution) =
         trace_run(&image, &io, &tables, &config).unwrap_or_else(|e| panic!("{name}: {e}"));

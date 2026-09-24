@@ -34,6 +34,7 @@ pub fn io(input: &[u8]) -> GuestIo {
     GuestIo {
         input: input.to_vec(),
         hint: Vec::new(),
+        advice: Vec::new(),
     }
 }
 
