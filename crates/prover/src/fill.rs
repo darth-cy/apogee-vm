@@ -498,11 +498,31 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
             kind::SUB => (a.wrapping_sub(b), (a < b) as u32),
             kind::LUI => (imm, 0),
             kind::SYSTEM => match imm {
+                // A `read` carries the word it delivers on this very row, so
+                // `ram_mask_rule` demands the RAM query. A refusal — a
+                // descriptor the ABI does not give the call — makes none, and
+                // is therefore not provable: say so here rather than let the
+                // shard fail as a `Constraint` on bytes a verifier was handed
+                // (`docs/spec/shard-proof.md` §8.5).
                 system_code::ECALL if a == ecall::READ => {
+                    if row.query(Role::Ram).is_none() {
+                        return Err(format!(
+                            "cycle {} is a `read` that moved no word, so it is a refusal \
+                             (a descriptor fd 0 and fd 3 do not name), which no family proves",
+                            row.cycle
+                        ));
+                    }
                     read_row = 1;
                     (read(Role::Rd), 0)
                 }
                 system_code::ECALL if a == ecall::WRITE => {
+                    if row.query(Role::Ram).is_some() {
+                        return Err(format!(
+                            "cycle {} is a `write` carrying a RAM query, which `ram_mask_rule` \
+                             forbids: a `write` moves no memory event",
+                            row.cycle
+                        ));
+                    }
                     write_row = 1;
                     (read(Role::Rd), 0)
                 }

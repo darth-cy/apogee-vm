@@ -383,6 +383,7 @@ fn honest_rows() -> Vec<(&'static str, Row)> {
             "write of nine bytes",
             write_row(guest_memory::RAM_ORIGIN + 0x300, 9),
         ),
+        ("padding", Row::default()),
     ]
 }
 
@@ -917,6 +918,16 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         r,
         vec!["read_count_is_one_word"],
     ));
+
+    // The shape a refused `read` would have: the ecall happened, the
+    // descriptor was not one fd 0 or fd 3 names, so no word moved. The mask
+    // rule refuses it, which is why `fill::add_sub` refuses such a cycle by
+    // name rather than proving a shard that cannot verify
+    // (`docs/spec/shard-proof.md` §8.5).
+    let mut r = read_row(base, 4, 1, 2);
+    r.drop_query("ram");
+    r.set("ram_value_hi", Fr::ZERO);
+    cases.push(("a read that moved no word", r, vec!["ram_mask_rule"]));
 
     // A `write` makes no RAM query, so claiming one is the mask rule's alone:
     // its `a1` and its count are whatever the call named, and the two
