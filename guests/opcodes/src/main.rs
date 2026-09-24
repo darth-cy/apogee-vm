@@ -24,8 +24,8 @@
 //!   succeeds, a conformance deviation exercised on purpose;
 //! - `cover_rvc`: every executable compressed form (all but `c.ebreak` and
 //!   `c.unimp`, which trap), each instruction of the block executed;
-//! - `cover_ecall`: `read` into and `write` from an unaligned buffer, a
-//!   zero-length `write`, `-EBADF` for both calls, the empty hint stream, and
+//! - `cover_ecall`: two word-aligned `read`s, the second short; a `write` from
+//!   an unaligned buffer, a zero-length one, `-EBADF`, the hint stream, and
 //!   `-ENOSYS` for an unassigned precompile number and an unassigned
 //!   host-call number.
 //!

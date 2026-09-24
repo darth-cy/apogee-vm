@@ -2,7 +2,7 @@
 #![no_main]
 //! The ecall-shim fixture: a byte-for-byte echo of fd 0 to fd 1, plus the three
 //! shims that are not an echo — the private hint channel, diagnostics, and a
-//! precompile that is not there yet.
+//! precompile this VM delegates and `qemu-riscv32` does not.
 //!
 //! Its buffers are heap-allocated on purpose. Nothing else in `guests/` needs
 //! `alloc`, so without this the bump allocator would be dead-stripped out of
@@ -26,7 +26,7 @@
 //! ```text
 //! hint=<the fd 3 bytes, raw>
 //! heap=ok
-//! precompile=software              or `accelerated`, once a circuit exists
+//! precompile=accelerated           under this VM; `software` under QEMU
 //! state0=<64 hex digits>           lane 0 of the permuted state
 //! ```
 //!
@@ -76,8 +76,8 @@ fn main() {
     guest_sdk::log(&h[..n]);
     guest_sdk::log(b"\n");
 
-    // The precompile has a number and a calling convention but no circuit, so
-    // every executor answers -ENOSYS and this takes the software path.
+    // Since S23 the precompile has a circuit: this VM answers the ecall
+    // natively, and qemu-riscv32 answers -ENOSYS so the software twin runs.
     // A four-byte-aligned allocation as well as the byte ones above, so the
     // allocator's alignment rounding runs.
     let mut words: Vec<u32> = vec![0u32; 4];

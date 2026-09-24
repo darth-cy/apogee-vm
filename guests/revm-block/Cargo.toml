@@ -7,7 +7,7 @@ publish.workspace = true
 # S24's workload guest. `src/lib.rs` is the program and it compiles for the
 # host as well as for the guest: `crates/emulator/tests/revm.rs` calls it
 # directly as the native-revm oracle and `tools/kat-gen` builds the committed
-# witness against it. Only the two binaries are guest-only, so the guest
+# witness against it. Only the binary is guest-only, so the guest
 # runtime is a dependency of the guest target alone -- unconditionally, a host
 # build would try to assemble crt0 and link a second `#[panic_handler]`. That
 # is a condition on the target, not a cargo feature: each target still has

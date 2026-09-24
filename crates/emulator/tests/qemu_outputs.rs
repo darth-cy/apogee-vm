@@ -54,8 +54,8 @@ use emulator::{run, trace_run, EmuError};
 /// 42, `control`, S17's, which exits 16, and `alu` and `mem`.
 ///
 /// `tests/consistency.rs` runs `guests/consistency`'s whole corpus, with the
-/// host as a third leg; this file is one input per guest across the corpus
-/// S12 required.
+/// host as a third leg; this file is one input per guest, over the corpus as
+/// it has grown since S12.
 const SUITE: [&str; 10] = [
     "opcodes",
     "rvc-dense",
@@ -77,6 +77,9 @@ struct Qemu {
 
 /// Run a committed guest under QEMU: `input` on fd 0, an empty hint on fd 3,
 /// both regular files, and fd 1 captured to a file.
+///
+/// `tag` names the scratch directory, which this function removes on entry and
+/// on exit, so no two tests may share one: libtest runs them concurrently.
 ///
 /// No `-d` flags. The register log this harness used to ask for is what made a
 /// run cost 46 seconds and 15.5 GB once a guest delegated at exit, and nothing
@@ -166,7 +169,7 @@ fn the_suite_computes_the_same_thing_under_both_executors() {
 #[ignore = "needs a Linux host with qemu-user; run with --include-ignored"]
 fn a_different_input_gives_a_different_answer() {
     let execution = emulated("fib", &24u32.to_le_bytes());
-    let q = qemu("control", "fib", &12u32.to_le_bytes());
+    let q = qemu("different-input", "fib", &12u32.to_le_bytes());
     assert_eq!(q.status, Some(execution.exit_code), "both still exit 0");
     assert!(
         !q.stdout.is_empty() && !execution.io.output.is_empty(),

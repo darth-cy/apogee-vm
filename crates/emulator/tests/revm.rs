@@ -587,9 +587,9 @@ fn a5_every_delegated_permutation_is_the_reference() {
 /// (`docs/spec/memory.md` §10) and that digest is a Poseidon2 sponge over
 /// `Fr`, whose backends are those two shims. Until S25 they were absent, and
 /// that absence was this test's illustration of static detachment; what
-/// carries it now is `crates/program/tests/delegation.rs`, where five guests
-/// declare nothing and are held to it at both optimisation levels
-/// (`docs/spec/delegation.md` §7).
+/// carries it now is `crates/program/tests/delegation.rs`, where five of the
+/// committed guests declare nothing and `addsub` is held to declaring nothing
+/// at both optimisation levels (`docs/spec/delegation.md` §7).
 ///
 /// The partition is checked inside `decode_program`, which panics on a pc two
 /// families claim; what is asserted here is the other half, that every

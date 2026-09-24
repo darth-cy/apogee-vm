@@ -118,9 +118,12 @@ fn the_rvc_fixture_runs() {
     assert_eq!(word(2), 2 * word(1));
 }
 
-/// Acceptance 10: the precompile number answers `-ENOSYS`, the guest takes
-/// its software path, and that path computes the real S02 permutation —
-/// with fd 1 an exact echo and the hint kept off it, as under QEMU.
+/// Acceptance 10: the precompile number is answered, the guest takes the
+/// delegated path, and that path computes the real S02 permutation — with
+/// fd 1 an exact echo and the hint kept off it, as under QEMU. It was the
+/// `-ENOSYS` fallback's path until S23 gave the number a circuit; the
+/// software branch is still there, and `crates/loader/tests/qemu.rs` is where
+/// the same binary takes it.
 #[test]
 fn a_precompile_runs_and_its_state_is_the_s02_permutation() {
     let input: Vec<u8> = (0..100u8)

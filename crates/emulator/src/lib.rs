@@ -853,10 +853,11 @@ impl<'a> Machine<'a> {
 
     // -- ecall ------------------------------------------------------------
 
-    /// An ecall: its transfer cycles, if it moves bytes, then its own row —
-    /// `a7` at slot 1, the arguments its number uses at slot 2, `a0` written
-    /// at slot 3, and `next_pc` the fall-through — except an exit's, which is
-    /// the halting sentinel `HALT_PC` (`docs/spec/memory.md` §5).
+    /// An ecall: **one row**, since S25 removed the transfer cycle — `a7` at
+    /// slot 1, the arguments its number uses at slot 2, `a0` written at slot 3
+    /// with a provable `read`'s delivered word beside it, and `next_pc` the
+    /// fall-through — except an exit's, which is the halting sentinel
+    /// `HALT_PC` (`docs/spec/memory.md` §5).
     fn ecall(&mut self, instr: Instr, pc: u32, fall: u32) -> Result<(), EmuError> {
         let mut row = Cycle::new();
         let number = self.read(&mut row, Role::Rs1, 17);

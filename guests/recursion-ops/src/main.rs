@@ -18,9 +18,9 @@
 //!
 //! # fd 0, fd 1, fd 2, fd 3
 //!
-//! Unused. The guest reads nothing and writes nothing: `EXIT` and the two
-//! delegation calls are its only ecalls, so a `write` would make the fixture
-//! unprovable.
+//! Unused. The guest reads nothing and writes nothing — it has nothing to
+//! commit, its result being its exit status — so `EXIT` and the two delegation
+//! calls are its only ecalls.
 //!
 //! # The result
 //!

@@ -494,7 +494,7 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   family's row suite over its fill. Those run in `cargo test --workspace`, on every push,
   with no emulator to install.
 - **`sc.w` always succeeds in the emulator**, and the circuits share that semantics, so
-  emulator and constraint agree (`docs/spec/memory-ops.md` §6.5). It is a conformance
+  emulator and constraint agree (`docs/spec/memory-ops.md` §6.6). It is a conformance
   deviation and never a soundness one. It is no longer a whitelist entry anywhere, there
   being no register comparison to exempt it from; what would catch it if it ever mattered
   is a guest whose committed output depended on it, which is the comparison above.

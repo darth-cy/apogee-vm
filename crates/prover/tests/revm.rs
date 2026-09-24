@@ -1,35 +1,32 @@
 //! S24's acceptance 6, 7 and 8: the revm block proved, verified and tampered.
 //!
 //! `#[ignore]`d and deferred out of CI under master rule 7: the statement is
-//! seven `2^20` execution shards, two `2^20` window shards and one `2^8`
-//! keccak shard, over a `--release` guest this suite builds from source. Run
-//! it with
+//! seven `2^20` execution shards, two `2^20` window shards and a `2^8` shard
+//! for each of the three delegation families the guest declares, over a
+//! `--release` guest this suite builds from source. Run it with
 //!
 //! ```text
 //! cargo test --release -p prover --test revm -- --include-ignored --test-threads=1
 //! ```
 //!
-//! # What is proved, and what is not
+//! # What is proved
 //!
-//! The binary is `guests/revm-block`'s **embedded-witness** one, and that is
-//! the stage's one deviation from must-be-exact 1. The normative guest reads
-//! its `BlockWitness` on fd 0 and commits its output on fd 1, and **neither
-//! is a provable ecall**: the add/sub family's circuit holds every ecall row
-//! to `a7 = EXIT` or a registered delegation number
-//! (`crates/constraints/src/add_sub.rs`, `ecall_is_exit`), and
-//! `prover::fill::add_sub` refuses a `read` row, a `write` row and their
-//! transfer cycles by name. Binding fd 0 and fd 1 is the deferred I/O-binding
-//! stage's work — `prompts/00-master.md` lists it among the frozen invariants
-//! — and it is not a gate or two: a transfer row that is permitted but not
-//! tied to its ecall's buffer and length can write any value to any RAM word.
-//! `docs/handoff/S24-revm.md` is the full account.
+//! The normative guest, and since S25a nothing else: it reads its
+//! `BlockWitness` on fd 0 and commits its output on fd 1, and **both are
+//! provable ecalls** now. The add/sub family's circuit holds a `read` row's
+//! RAM query to the `a1` that row read and its count to the literal 4, and a
+//! `write` stages no memory event at all (`docs/spec/ecall-abi.md` §4).
 //!
-//! So the binary proved here binds the same two streams by the two means the
-//! machine already has, and both are checked below:
+//! What binds the two streams is not a row but the guest's own **public I/O
+//! digest**: `transcript::exit_with_io_digest` leaves it in `x24..x31`, the
+//! statement's register boundary carries it, and `verify_global_memory`
+//! recomputes it from the statement's own streams and compares
+//! (`docs/spec/memory.md` §10). So the streams are checked below against the
+//! fixture and against native revm, and the digest against both.
 //!
-//! - the **input** is a `.rodata` constant, which program identity commits;
-//! - the **output** is `keccak256` of the commitment, left in `x24..x31`,
-//!   which the statement's register boundary carries.
+//! S24 proved a second binary, `revm-block-embedded`, which carried the
+//! witness in `.rodata` because neither ecall was provable then. It is
+//! retired; `docs/handoff/S24-revm.md` §1 is that account.
 
 mod common;
 
@@ -53,14 +50,14 @@ const ZERO: u32 = family::ZERO_WINDOWS;
 // The statement
 // ---------------------------------------------------------------------------
 
-/// `guests/revm-block`'s embedded-witness binary, which exits 0 with
-/// `keccak256` of its output commitment in `x24..x31`.
+/// `guests/revm-block` exits 0, with the public I/O digest of the two streams
+/// it moved in `x24..x31`.
 const REVM_RESULT: u32 = 0;
 
-/// The binary S24 proves. The normative guest reads fd 0 and writes fd 1, and
-/// neither is a provable ecall yet; this one runs the same program over the
-/// same committed witness with the witness in its image.
-/// `docs/handoff/S24-revm.md` is the whole argument.
+/// The binary proved here: the normative guest, which reads its witness on
+/// fd 0 and commits its output on fd 1. Both are provable ecalls since S25a,
+/// which is what retired the embedded-witness binary S24 proved instead
+/// (`docs/handoff/S24-revm.md` §1).
 const REVM_BIN: &str = "revm-block";
 
 /// S24's heights: every family but the delegation one at `2^20`, with
@@ -174,7 +171,7 @@ fn build_guest_bin_in(name: &str, bin: &str, slot: &str) -> Vec<u8> {
     bytes
 }
 
-/// The committed witness, which is also the binary's `.rodata` constant.
+/// The committed witness, which this suite hands the guest on fd 0.
 fn witness_bytes() -> Vec<u8> {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../emulator/tests/vectors/revm_block_witness.bin");
@@ -189,10 +186,9 @@ fn public_words(public: &PublicInputs) -> [u32; 8] {
 /// Acceptance 1: two clean builds of the guest give one `ProgramIdentity`.
 ///
 /// Identity is what a verifier takes from a channel the prover does not
-/// control, and for the embedded binary it is also what binds the witness —
-/// so a build that is not reproducible is a program nobody can name. Two
-/// builds into two fresh target directories, each preprocessed and committed
-/// on its own, and the two digests compared.
+/// control, so a build that is not reproducible is a program nobody can name.
+/// Two builds into two fresh target directories, each preprocessed and
+/// committed on its own, and the two digests compared.
 ///
 /// Over the **toy SRS**, deliberately. Identity is a digest over commitments
 /// to the program's own columns, and what acceptance 1 asks about is the
@@ -228,7 +224,7 @@ fn a1_two_clean_builds_give_one_identity() {
         "two clean builds of the guest gave different program identities"
     );
     println!(
-        "revm-block-embedded identity over the toy SRS: {}",
+        "{REVM_BIN} identity over the toy SRS: {}",
         test_support::to_hex(&identities[0].to_bytes())
     );
 }
@@ -243,8 +239,12 @@ fn a6_the_revm_block_proves_and_verifies() {
     let mut archive = revm_archive(&setup.program);
 
     // Acceptance 2, restated on the statement the proof is about: the family
-    // set is derived, `KECCAK_F` is in it at the delegation height, and S23's
-    // two families are not — nothing in this image does `Fr` arithmetic.
+    // set is derived, and every registered family is in it at its own height.
+    // S23's two are there since S25a, because the guest publishes `io_digest`
+    // at exit and that digest is a Poseidon2 sponge over `Fr`, whose backends
+    // are those two shims; until then their absence was this test's
+    // illustration of static detachment, and what carries that now is
+    // `crates/program/tests/delegation.rs`.
     let families: Vec<u32> = setup
         .program
         .config
@@ -252,13 +252,21 @@ fn a6_the_revm_block_proves_and_verifies() {
         .iter()
         .map(|(f, _)| *f)
         .collect();
-    assert_eq!(families.last(), Some(&KECCAK));
-    assert!(!families.contains(&family::POSEIDON2));
-    assert!(!families.contains(&family::FR_ARITH));
-    assert_eq!(
-        setup.program.config.height(KECCAK),
-        Some(1 << common::KECCAK_VARS)
-    );
+    for f in 0..family::COUNT {
+        assert!(
+            families.contains(&f),
+            "family {f} ({}) is not present",
+            program::family_name(f)
+        );
+    }
+    for f in [KECCAK, family::POSEIDON2, family::FR_ARITH] {
+        assert_eq!(
+            setup.program.config.height(f),
+            Some(1 << common::DELEGATION_VARS),
+            "{} keeps the delegation height",
+            program::family_name(f)
+        );
+    }
 
     let plan = plan_shards(archive.cycle_profile(), &setup.program.config);
     let shards = |f: u32| {
@@ -274,6 +282,14 @@ fn a6_the_revm_block_proves_and_verifies() {
     // `native-keccak` hook had silently fallen back to `alloy-primitives`'
     // own Keccak.
     assert!(shards(KECCAK) >= 1, "the workload delegates keccak");
+    // And S23's two, which every guest that publishes `io_digest` reaches.
+    for f in [family::POSEIDON2, family::FR_ARITH] {
+        assert!(
+            shards(f) >= 1,
+            "{} has a shard: the exit digest delegates it",
+            program::family_name(f)
+        );
+    }
     // Every cycle-owning family runs in this workload and fits one shard.
     for f in 0..=family::ATOMICS {
         assert_eq!(
@@ -293,10 +309,14 @@ fn a6_the_revm_block_proves_and_verifies() {
 
     // The structural counts: one shard per planned shard, in statement order,
     // with the two window families' overriding the plan's zeroes and the
-    // delegation family's last.
+    // delegation families last, ascending.
     let expected = statement_shards(&setup.program.config, block.shard_counts());
     assert_eq!(block.shards.len(), expected.len());
-    assert_eq!(expected.last(), Some(&(KECCAK, 0)));
+    assert_eq!(
+        expected.last().map(|(f, _)| *f),
+        Some(family::FR_ARITH),
+        "the delegation families are last, in ascending order"
+    );
     assert_eq!(
         block.shard_counts()[families.iter().position(|f| *f == INIT).unwrap()],
         1,
@@ -373,10 +393,11 @@ fn a7_a_changed_statement_is_refused() {
     let honest = block.statement().clone();
     assert_eq!(verify_block(&setup.vk, &block, &honest), Ok(()));
 
-    // The embedded binary reads no fd 0 and writes no fd 1, so its streams are
-    // empty and its public I/O digest is `io_digest(&[], &[])`.
-    assert!(honest.input.is_empty());
-    assert!(honest.output.is_empty());
+    // The guest reads its witness on fd 0 and commits its output on fd 1, so
+    // the statement carries both streams and its public I/O digest covers
+    // them. Flipping a byte of either is what 7(a) below does.
+    assert_eq!(honest.input, witness_bytes(), "fd 0");
+    assert!(!honest.output.is_empty(), "fd 1");
 
     // 7(a) A public I/O digest differing in one byte. First the shape a
     // verifier faces — the statement it was given is not the one the block

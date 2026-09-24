@@ -757,8 +757,11 @@ fn mem_passes_its_checks() {
 /// checks its own two answers — the accumulator reached `64 * 16384` and the
 /// counter reached 0 — exiting with the number of checks, 2, or 1 from `fail`.
 ///
-/// It is not in `crates/emulator/tests/qemu_outputs.rs`' suite, which is S12's
-/// corpus and unchanged. What this run covers is the semantics — a real
+/// It is not in `crates/emulator/tests/qemu_outputs.rs`' suite. It was kept
+/// out because that comparison read QEMU's per-instruction register log and a
+/// million instructions of it is gigabytes; since S25 the comparison is the
+/// exit status and fd 1, so that reason is void and what keeps it out is only
+/// that nothing has put it in. What this run covers is the semantics — a real
 /// executor reaching the same two answers — and the emulator's own reading of
 /// the same guest is the block suite, which proves the trace it produced.
 #[test]

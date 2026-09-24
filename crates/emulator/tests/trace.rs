@@ -664,10 +664,10 @@ fn a_read_carries_its_word_and_a_write_carries_none() {
 /// The buffers carry everything the log does: rebuilt from the rows alone,
 /// in cycle order, the log comes back event for event — the pc query's read
 /// timestamp included, which a row does not store because it is always the
-/// previous cycle's. No guest here delegates, so every event is some row's:
-/// an invocation's frame words are logged too, but they ride the requesting
-/// cycle and live in a `DelegationTrace`, never in a `Row`
-/// (`docs/spec/delegation.md` §4.1).
+/// previous cycle's. Every guest here that moves committed bytes delegates at
+/// exit, so an invocation's frame words are filtered out rather than rebuilt:
+/// they ride the requesting cycle and live in a `DelegationTrace`, never in a
+/// `Row` (`docs/spec/delegation.md` §4.1).
 #[test]
 fn the_rows_rebuild_the_log_exactly() {
     // Each role's slot, restated from `docs/spec/execution-trace.md` §7 — and,

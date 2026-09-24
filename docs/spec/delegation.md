@@ -83,9 +83,10 @@ same value. That is why nothing compares their instruction streams: the
 comparison is the guest's *answer* — its exit status and its fd 1 — in
 `crates/emulator/tests/qemu_outputs.rs` and, against expected bytes, in
 `crates/loader/tests/qemu.rs` at both optimisation levels. In-guest,
-`guests/keccak-test` and `guests/recursion-ops` check the delegated result
-against the software one directly and exit the same status under either
-executor, which is what holds the two paths to one another. A per-instruction
+`guests/keccak-test` and `guests/recursion-ops` each check the one path their
+executor took against expectations pinned in their own source, and exit the
+same status under either, which is what holds the two paths to one another.
+Neither guest ever holds both results: a run takes one path or the other. A per-instruction
 comparison with QEMU was S12's acceptance and is **withdrawn** (owner's
 decision, S25); `crates/emulator/CLAUDE.md` records why.
 
