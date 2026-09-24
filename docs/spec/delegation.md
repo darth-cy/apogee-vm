@@ -77,6 +77,18 @@ guest binary run under `qemu-riscv32` and under this VM. An executor **with** th
 circuit answers 0. A shim treats exactly `-ENOSYS` as "run the software path" and
 every other nonzero as a hard `exit(72)`.
 
+The two executors therefore run **different instructions** from the first
+delegation on, by construction and not by disagreement, while computing the
+same value. That is why nothing compares their instruction streams: the
+comparison is the guest's *answer* — its exit status and its fd 1 — in
+`crates/emulator/tests/qemu_outputs.rs` and, against expected bytes, in
+`crates/loader/tests/qemu.rs` at both optimisation levels. In-guest,
+`guests/keccak-test` and `guests/recursion-ops` check the delegated result
+against the software one directly and exit the same status under either
+executor, which is what holds the two paths to one another. A per-instruction
+comparison with QEMU was S12's acceptance and is **withdrawn** (owner's
+decision, S25); `crates/emulator/CLAUDE.md` records why.
+
 An executor that has the circuit but whose `VmConfig` lacks the family answers
 neither: it is `EmuError::DelegationFamilyAbsent`, a fatal trace-time failure
 (§7). A program that calls a delegation it did not declare is one no trace

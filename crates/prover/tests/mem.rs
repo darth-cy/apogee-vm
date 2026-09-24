@@ -70,8 +70,8 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
 /// `docs/spec/memory-ops.md` §7 states, and as the numbers read off the
 /// registry's circuit — so a change to any of them shows on both sides. What
 /// the trace holds, instruction by instruction, is the three row suites in
-/// `crates/checker/tests` over the same fixture, and its QEMU differential is
-/// `crates/emulator/tests/differential.rs`'.
+/// `crates/checker/tests` over the same fixture; that QEMU reaches the same
+/// exit status is `crates/emulator/tests/qemu_outputs.rs`'.
 #[test]
 #[ignore = "five 2^20-row execution shards: one statement's proof is the heaviest in the repository"]
 fn a1_the_guest_proves_and_every_shard_verifies() {

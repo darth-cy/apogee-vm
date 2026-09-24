@@ -4,8 +4,8 @@
 //! `jalr`, the six branches, `slt`, `sltu`, `slti`, `sltiu` — with the
 //! operands and control flow the stage's acceptance names, checking every
 //! result itself and exiting with the number of checks that passed. It is the
-//! one program S17 proves end to end (`docs/spec/jump-branch-slt.md`), and the
-//! QEMU differential compares it instruction by instruction.
+//! one program S17 proves end to end (`docs/spec/jump-branch-slt.md`), and
+//! `qemu-riscv32` reaches the same exit status on the same binary.
 //!
 //! Everything in its image is an instruction of the two families S17 proves,
 //! add/sub/lui/auipc and jump/branch/slt, plus the exit ecall: no SDK, no

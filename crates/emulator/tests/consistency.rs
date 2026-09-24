@@ -7,8 +7,8 @@
 //! repository's own field and permutation, allocation patterns — and a thin
 //! guest `main`. The host calls the library directly. The guest is built from
 //! that same source here, at test time, so the legs are always one program: the
-//! committed `consistency.elf` is the loader's fixture and the
-//! instruction-by-instruction differential's, and a stale one would have this
+//! committed `consistency.elf` is the loader's fixture and `tests/qemu_outputs.rs`'s,
+//! and a stale one would have this
 //! suite comparing two programs.
 //!
 //! Which legs disagree says what broke:
@@ -35,7 +35,7 @@
 //!
 //! Without QEMU the suite compares the host and the emulator, which says *that*
 //! they differ but not which is wrong. The QEMU leg is `#[ignore]`d for the
-//! reason `tests/differential.rs` gives, and CI asks for it by name:
+//! reason `tests/qemu_outputs.rs` gives, and CI asks for it by name:
 //!
 //! ```text
 //! cargo test -p emulator --test consistency -- --include-ignored

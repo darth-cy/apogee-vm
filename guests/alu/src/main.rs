@@ -4,8 +4,8 @@
 //! family's eight, with the operands the stage's acceptance names, checking
 //! every result itself and exiting with the number of checks that passed. It
 //! is the program S18 proves end to end (`docs/spec/shift-bitwise.md`,
-//! `docs/spec/mul-div.md`), and the QEMU differential compares it instruction
-//! by instruction.
+//! `docs/spec/mul-div.md`), and `qemu-riscv32` reaches the same exit status on
+//! the same binary.
 //!
 //! Everything in its image is an instruction of the four families S18 proves —
 //! add/sub/lui/auipc, jump/branch/slt, shift/bitwise and mul/div — plus the
@@ -14,7 +14,7 @@
 //!
 //! Every expected value below was computed from an exact RV32IM model, not by
 //! hand; the emulator, `qemu-riscv32` and the guest's own checks are three
-//! independent readings of the same twenty instructions.
+//! independent readings of what the twenty instructions compute.
 //!
 //! The sections, in order:
 //!

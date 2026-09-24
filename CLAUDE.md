@@ -45,8 +45,8 @@ crates/
   trace/         the memory event log and its self-check, the family buffers, the cycle
                  profile and shard plan, the TraceArchive snapshot, and the memory
                  argument's column builders; std
-  emulator/      the RV32IMAC reference emulator, its tracing path, and the QEMU
-                 differential harness; std
+  emulator/      the RV32IMAC reference emulator and its tracing path, plus the
+                 output-level QEMU oracle; std
   constraints/   circuits as data: PolyAddress, GateDef, LayerSpec, CircuitArtifact, the
                  laws, the cache-free compilation and the wire form; `memory`: the per-family frames,
                  the two window artifacts and check_memory; and `lookup`: the LogUp
@@ -154,7 +154,7 @@ cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
 cargo clippy -p prover --all-targets --features metrics -- -D warnings   # the ONE feature's configuration
-cargo test --workspace                      # 1,048 tests as of S25a; 83 more are #[ignore]d
+cargo test --workspace                      # 1,041 tests as of S25a; 83 more are #[ignore]d
 cargo test -p prover --features metrics --test metrics  # the metrics harness; 10 more, 2 #[ignore]d
 cargo test -p program --test delegation -- --ignored --test-threads=1  # static detachment at BOTH guest profiles; builds six guest images, 2.9 s
 APOGEE_GUEST_PROFILE=release cargo test -p emulator --test revm -- --ignored --test-threads=1 --skip a3_  # S24's guest against native revm; builds the revm guest, 47 s
@@ -176,7 +176,7 @@ cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
 cd guests/fib && cargo build --target riscv32imac-unknown-none-elf
 APOGEE_GUEST_PROFILE=release cargo test -p loader --test qemu -- --include-ignored
-cargo test -p emulator --test differential -- --include-ignored
+cargo test -p emulator --test qemu_outputs -- --include-ignored
 cargo test -p emulator --test consistency -- --include-ignored   # and again at APOGEE_GUEST_PROFILE=release
 git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constraints/tests/vectors/ crates/checker/tests/vectors/ crates/emulator/tests/vectors/
 -------------------------------------------------------------------------------
@@ -225,7 +225,8 @@ those components: `kat-gen -- loader` disassembles the committed guest ELFs with
 the disassembler is pinned to the same LLVM as the compiler.
 
 `qemu-riscv32` runs the guests; it was the only executor before S12, and since S12 it is the
-oracle `crates/emulator/tests/differential.rs` holds the emulator's trace to. It is user-mode
+oracle `crates/emulator/tests/qemu_outputs.rs` holds the emulator's **answers** to — its exit
+status and its fd 1, and nothing below that. It is user-mode
 emulation: it translates Linux syscalls into host ones, so it builds for Linux hosts only
 and no macOS build of it exists. That is a claim about *native* builds — a Linux VM is an
 ordinary arrangement and the suite runs fine inside one. The tests stay `#[ignore]`d so a
@@ -402,7 +403,15 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   `constants::IO_DIGEST_EMPTY`, so the check is never skipped. The length is absorbed
   before the bytes, so the digest is **not streamable**: a guest pays for it at exit, over
   the whole of both streams, and on `guests/revm-block` at `--release` that is +76% of the
-  cycles (221,239 → 388,598) and two extra delegation shards. `docs/spec/memory.md` §10.
+  cycles (221,239 → 388,598) and two extra delegation shards. At the committed fixtures'
+  `debug` profile the epilogue costs far more than the small guests themselves — `fib` runs
+  9,963 instructions of its own and 306,441 more to publish, nearly all of it marshalling
+  delegation frames through `copy_from_slice` at `opt-level = 0` — which is why every
+  guest's cycle count moved at S25a. Under an executor with no circuit it costs far more
+  again — `qemu-riscv32` answers `-ENOSYS` and runs the software permutation, 80 hex decodes
+  and 240 Montgomery multiplies apiece, so `fib`'s four-byte digest is 25.7 **million**
+  instructions there — which is why nothing compares the two executors' instruction streams.
+  `docs/spec/memory.md` §10.
 - **A guest ELF is not byte-reproducible across machines**, and CI does not pretend
   otherwise. rustc embeds absolute paths in the panic-location strings of every crate
   outside the guest workspace and of `core`, and stable Rust cannot remap them. Two clean
@@ -462,9 +471,33 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   address, value and timestamps per row. No padding and no `MultilinearPoly` in them: the
   memory argument's padded columns are filled from the log by `trace`'s memory builders,
   keyed by `constraints::memory`'s layout.
-- **`sc.w` always succeeds in the emulator.** That is the one divergence the QEMU
-  differential whitelists; the harness's other rule — `x2` differs at entry, Linux's stack
-  pointer, until the guest writes it — is about the environment, not an instruction.
+- **QEMU is an oracle for what a guest computes, never for how this emulator computes it**
+  (owner's decision, S25). The comparison is the **exit status and fd 1**, and nothing
+  else: no instruction count, no pc, no intermediate register, no trace. S12 built
+  `crates/emulator/tests/differential.rs` as a per-instruction register-file comparison
+  with an entry-state rule for `x2` and a one-entry `sc.w` whitelist; that file is now
+  `tests/qemu_outputs.rs`, `emulator::qemu` is **deleted**, and the invariant is
+  **withdrawn from every spec that stated it**. It was never the property the project
+  needs, and since S23 it is not even true: a **delegation** ecall runs natively here and
+  takes the `-ENOSYS` software fallback under QEMU, so the two instruction streams differ
+  *by design* and agree on the answer. S25 made that universal — publishing `io_digest` at
+  exit means Poseidon2, so every guest that moves committed bytes delegates — and the
+  register comparison would have been a suite asserting this VM must execute the way a
+  foreign emulator does. Keeping it was also not free: QEMU's software permutation turns
+  `fib`'s four-byte digest into 25.7 million instructions, and `-one-insn-per-tb -d cpu`
+  logs that at about 630 bytes each, a 15.5 GB file per guest.
+- **A trace's correctness is held against this VM's own semantics, not against QEMU's
+  execution.** `crates/emulator/tests/trace.rs` (the frame table, the four-slot clock,
+  routing, the halting sentinel, every ecall's answer against the ABI), `crates/trace`'s
+  log self-check, `crates/checker/tests/multiset.rs` and `memory.rs` (the memory argument
+  over real guests' logs, every forgery refused by the gate that refuses it), and each
+  family's row suite over its fill. Those run in `cargo test --workspace`, on every push,
+  with no emulator to install.
+- **`sc.w` always succeeds in the emulator**, and the circuits share that semantics, so
+  emulator and constraint agree (`docs/spec/memory-ops.md` §6.5). It is a conformance
+  deviation and never a soundness one. It is no longer a whitelist entry anywhere, there
+  being no register comparison to exempt it from; what would catch it if it ever mattered
+  is a guest whose committed output depended on it, which is the comparison above.
 - **Misaligned halfword/word accesses, RAM-window violations (ecall buffers included),
   `ebreak` and a pc that is not an instruction are fatal guest errors**, in `run` and
   `trace_run` alike, and a fatal error returns no trace. A `read` of anything but one
@@ -757,9 +790,11 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   `m_pc`, so the induction is whole across every family.
 - **`sc.w` always succeeds, and that is a conformance deviation, not a soundness one.**
   It stores `rs2` and writes `rd = 0` with no reservation state anywhere in the machine.
-  The emulator has the same semantics, so emulator and circuit agree, and the QEMU
-  differential carries it as its one whitelist entry — counted, asserted and never a
-  silently-ignored diff (`crates/emulator/src/qemu.rs`).
+  The emulator has the same semantics, so emulator and circuit agree. It was the QEMU
+  differential's one whitelist entry until S25; there is no register comparison now, so
+  what would show it is a guest whose committed output depended on spurious failure, and
+  compiled code has none — LLVM never emits an unpaired `sc.w` and the standard CAS loop
+  exits on its first pass.
 - **A gadget's parameters can be a family's whole soundness, and then they are asserted.**
   `atomics::assemble` holds the comparison gadget's selector, `lhs`, `rhs` and `signed` to
   what `docs/spec/memory-ops.md` §6.4 states, because each wrong choice silently breaks the

@@ -1726,8 +1726,8 @@ fn corrupt(cx: &mut Ctx, small: &Value) {
         record("flip", &flipped);
 
         // The two that move every later byte cost a decode each and say the
-        // least, so scale 0 -- which the instruction-by-instruction
-        // differential runs -- leaves them out.
+        // least, so scale 0 -- the size the traced per-guest runs use --
+        // leaves them out.
         if reshape {
             let mut shorter = enc.clone();
             shorter.remove(at);

@@ -280,9 +280,12 @@ fn every_guest_declares_exactly_what_it_links() {
 /// record's number into an immediate, the record becomes unreferenced, and
 /// `keccak-test` declares **nothing** at `--release` while declaring
 /// `KECCAK_F` at `--debug` — a guest whose provable family set depends on its
-/// optimisation level. `fib` is the control in the other direction: it links
-/// the same SDK object file and must declare nothing at either level, which is
-/// what `#[used]` would break.
+/// optimisation level. `addsub` is the control in the other direction: it
+/// links the same SDK object file and must declare nothing at either level,
+/// which is what `#[used]` would break. It was `fib` until S25, which
+/// publishes `io_digest` at exit now and so reaches two of the shims; the
+/// control has to be a guest that moves no committed bytes, and `addsub`'s
+/// result is its exit status.
 ///
 /// `#[ignore]`d because it builds three guests from source into fresh target
 /// directories; run it with `--ignored`.
@@ -293,7 +296,7 @@ fn reachability_survives_the_optimiser() {
         for (name, want) in [
             ("keccak-test", vec![family::KECCAK_F]),
             ("recursion-ops", vec![family::POSEIDON2, family::FR_ARITH]),
-            ("fib", Vec::new()),
+            ("addsub", Vec::new()),
         ] {
             let bytes = common::build_profile(name, &format!("deleg-{profile}"), profile);
             let image = loader::load_elf(&bytes).unwrap_or_else(|e| panic!("{name}: {e:?}"));

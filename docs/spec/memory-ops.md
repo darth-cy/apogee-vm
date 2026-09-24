@@ -520,12 +520,15 @@ in the machine. The ISA requires an `sc.w` without a valid reservation to fail. 
 conformance deviation, not a soundness one**: the verifier still knows exactly which program
 ran and what it computed, and fidelity would cost a reservation flag in machine state that
 every family would then have to carry. LLVM never emits an unpaired `sc.w` and never relies
-on spurious failure. The emulator has the same semantics, so emulator and circuit agree, and
-the QEMU differential carries it as its **one** whitelist entry — `crates/emulator/src/qemu.rs`'s
-`WHITELIST`, one entry, held to one by a test: after an `sc.w`, `rd` may hold 1 in QEMU where
-the emulator has 0, in that register and until the emulator next writes it, counted and
-asserted. Never a silently-ignored diff. Frozen at S12, and S19 is the stage that gives it a
-circuit.
+on spurious failure. The emulator has the same semantics, so emulator and circuit agree.
+Frozen at S12, and S19 is the stage that gives it a circuit.
+
+It was the QEMU differential's **one** whitelist entry — after an `sc.w`, `rd` could hold 1
+in QEMU where the emulator had 0 — from S12 until S25. That whitelist is **gone with the
+comparison it belonged to** (owner's decision, S25): nothing holds this emulator to QEMU's
+registers any more, only to what a guest computes, so there is no exemption to grant. What
+would surface the deviation is a guest whose committed output depended on spurious failure,
+and compiled code has none, for the reason above.
 
 ### 6.7 Gates and lookups, in counts
 
@@ -571,9 +574,10 @@ exiting with the number of checks, **50**. Its statement is five execution famil
 the guest writes near the top of RAM as well as inside window 0, so the derived window list
 is `[8191]` at `h = 2^16`.
 
-`crates/prover/tests/mem.rs` proves and verifies it; `crates/emulator/tests/differential.rs`
-holds its trace to QEMU instruction by instruction; `crates/checker/tests/mem_fill.rs` runs
-all three fills over its archive in ordinary CI, with every channel counted.
+`crates/prover/tests/mem.rs` proves and verifies it;
+`crates/emulator/tests/qemu_outputs.rs` holds what it computes — its exit status and its
+fd 1 — to QEMU's; `crates/checker/tests/mem_fill.rs` runs all three fills over its archive
+in ordinary CI, with every channel counted, and that is where the trace itself is checked.
 
 ## 9. What these families do not do, and the controls
 

@@ -67,8 +67,8 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
 /// the numbers read off the registry's circuit — so that a change to either
 /// family shows up on both sides. What the trace holds, instruction by
 /// instruction, is `crates/checker/tests/shift_bitwise.rs` and `crates/checker/
-/// tests/mul_div.rs` over the same fixture, and its QEMU differential is
-/// `crates/emulator/tests/differential.rs`'.
+/// tests/mul_div.rs` over the same fixture; that QEMU reaches the same exit
+/// status is `crates/emulator/tests/qemu_outputs.rs`'.
 #[test]
 #[ignore = "four 2^20-row execution shards: one statement's proof peaks at 14.1 GB"]
 fn a1_the_guest_proves_and_every_shard_verifies() {

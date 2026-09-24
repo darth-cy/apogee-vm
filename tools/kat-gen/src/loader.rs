@@ -45,7 +45,7 @@ pub const ELF_FIXTURES: [(&str, &str); 19] = [
     (
         "opcodes",
         "every RV32IMAC instruction executed with edge-case operands: the \
-         S12 QEMU differential's coverage fixture, and its misalignment one",
+         ISA-coverage fixture the emulator's suites run, and the misalignment one",
     ),
     (
         "heap",

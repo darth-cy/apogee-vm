@@ -18,8 +18,11 @@
 //! **`sc.w` always succeeds**: it stores and writes 0 to `rd`. The ISA
 //! requires an `sc.w` without a valid reservation to fail, so this is a
 //! conformance deviation — never a soundness one, since the verifier still
-//! knows exactly which program ran — and it is the one divergence
-//! [`qemu::WHITELIST`] names. A halfword or word access at an address that is
+//! knows exactly which program ran — and one this VM's circuits share, so
+//! emulator and constraint agree on it. It is **not** held against
+//! `qemu-riscv32`: since S25 nothing below the level of what a guest computes
+//! is (`crates/emulator/tests/qemu_outputs.rs`).
+//! A halfword or word access at an address that is
 //! not a multiple of its width, and any access outside the RAM window, is a
 //! fatal guest error, never rotated, split or emulated. So is `ebreak`, and
 //! so is a pc that is not the start of an instruction.
@@ -36,8 +39,6 @@ use trace::{
     AddressSpace, CycleProfile, DelegationTrace, FamilyTrace, FamilyTraces, IoStreams,
     MemoryEventLog, Query, Role, Row, ROLES,
 };
-
-pub mod qemu;
 
 /// What a guest can read: the fd 0 public input and the fd 3 hint stream.
 #[derive(Clone, Debug, PartialEq, Eq)]

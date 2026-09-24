@@ -2,10 +2,10 @@
 #![no_main]
 //! Every RV32IMAC instruction, executed.
 //!
-//! The fixture for S12's QEMU differential: every one of the 59 RV32IMA
-//! instructions runs here with edge-case operands, and a block of compressed
-//! code runs every compressed form a program can execute, so the emulator's
-//! register trace is compared with `qemu-riscv32`'s for each of them.
+//! The ISA-coverage fixture: every one of the 59 RV32IMA instructions runs
+//! here with edge-case operands, and a block of compressed code runs every
+//! compressed form a program can execute. The emulator and `qemu-riscv32` are
+//! held to the same answer on it, never to the same instruction stream.
 //! `crates/emulator/tests/` checks that every mnemonic really does execute,
 //! rather than trusting this comment.
 //!
@@ -21,7 +21,7 @@
 //!   division by zero and the one signed overflow, `INT_MIN / -1`;
 //! - `cover_a`: all nine AMOs with `aq`/`rl` variants, paired `lr.w`/`sc.w`,
 //!   and one **unpaired** `sc.w` — which QEMU fails and the emulator
-//!   succeeds, the whitelisted divergence, exercised on purpose;
+//!   succeeds, a conformance deviation exercised on purpose;
 //! - `cover_rvc`: every executable compressed form (all but `c.ebreak` and
 //!   `c.unimp`, which trap), each instruction of the block executed;
 //! - `cover_ecall`: `read` into and `write` from an unaligned buffer, a
@@ -42,8 +42,8 @@
 //!   `lr.w`, `sc.w`, `amoadd.w` — which the zkVM refuses as a fatal guest
 //!   error. QEMU performs the first four and the `amoadd.w` — its default
 //!   CPU allows a misaligned AMO inside an aligned 16-byte block — and
-//!   faults on `lr.w` and `sc.w`. None of it is compared: the emulator's
-//!   refusal is what these modes are for.
+//!   faults on `lr.w` and `sc.w`. The emulator's refusal is what these modes
+//!   are for; how the two executors get there is not compared.
 //!
 //! # fd 1, the public output (mode 0)
 //!
@@ -455,8 +455,8 @@ cover_a:
 
     /* An unpaired sc.w: no reservation is held. QEMU fails it -- t6 = 1 and
        nothing stored -- and the emulator succeeds -- t6 = 0 and t0 stored.
-       This is the whitelisted divergence, so t6 and the word are both
-       overwritten before either is read again. */
+       A conformance deviation, so t6 and the word are both overwritten
+       before either is read again and it never reaches fd 1. */
     sc.w        t6, t0, (a6)
     li          t6, 0
     sw          x0, 0(a6)

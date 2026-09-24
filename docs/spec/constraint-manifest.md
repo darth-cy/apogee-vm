@@ -288,10 +288,12 @@ The S21 statement is `crates/prover/tests/keccak.rs`': its config is
 (9, 2^8)]` and its shard counts are `[1, 1, 1, 1, 1, 1, 1, 1, 1]` — **nine shards**, and the
 first statement of any stage that is not one family one height: eight of the nine are the
 shards a CPU family or a RAM window gets, and the ninth is a **delegation shard**, 256 rows of
-which 10 are invocations. `guests/keccak-test` decodes into 1,707 live `ADD_SUB_LUI_AUIPC`
-rows, 1,018 `JUMP_BRANCH_SLT`, 315 `SHIFT_BITWISE`, 25 `MUL_DIV`, 1,868 `MEM_WORD` and 145
-`MEM_SUBWORD`; it runs 154,708 cycles and exits with 6, the number of corpus entries it
-checked. Its `KECCAK_F` entry is in the config because **its image declares the family**, not
+which 10 are invocations. `guests/keccak-test` decodes into 1,729 live `ADD_SUB_LUI_AUIPC`
+rows, 1,017 `JUMP_BRANCH_SLT`, 315 `SHIFT_BITWISE`, 25 `MUL_DIV`, 1,888 `MEM_WORD` and 145
+`MEM_SUBWORD`; it runs 156,424 cycles and exits with 6, the number of corpus entries it
+checked. Those six counts and that cycle count are S25's: the guest's own source did not
+change, but `guest-sdk`'s `read` and `write` shims did, and a guest's decoded rows are its
+image's. Its `KECCAK_F` entry is in the config because **its image declares the family**, not
 because any pc claims it — the third presence rule, and the one S21 adds
 (`delegation.md` §7). `guests/keccak-unused` decodes to exactly the same nine families and
 proves **eight** shards: `plan_shards`' `ceil(0 / h)` is 0, so a declared family with no
@@ -6481,8 +6483,9 @@ satisfy (`memory-ops.md` §6.1).
 **`sc.w` always succeeds**, storing `rs2` and writing `rd = 0` with no reservation state anywhere
 in the machine. That is a conformance deviation and not a soundness one — the verifier still
 knows exactly which program ran and what it computed — and it is the emulator's semantics too,
-so emulator and circuit agree and the QEMU differential carries it as its one whitelist entry
-(`memory-ops.md` §6.6). `sc_w_always_succeeds` in the row suite refuses both halves of failure:
+so emulator and circuit agree (`memory-ops.md` §6.6; it was the QEMU differential's one
+whitelist entry until S25, when that comparison was withdrawn).
+`sc_w_always_succeeds` in the row suite refuses both halves of failure:
 a nonzero code by `rd_value_rule`, and the word left alone by `ram_value_rule`.
 
 ### 9.3 The base layer

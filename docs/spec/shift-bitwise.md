@@ -412,7 +412,7 @@ both a register `rs2` and a nonzero immediate.
 instructions of the four families S18 proves plus the exit ecall, checking every result
 itself and exiting with the number of checks, 96. Every expected value in it was computed
 from an exact RV32IM model rather than by hand, and the emulator, `qemu-riscv32` and the
-guest's own checks are three independent readings of the same twenty instructions.
+guest's own checks are three independent readings of what the twenty instructions compute.
 
 Its shift/bitwise coverage is the stage's acceptance 2 in full: shamt 0, 1 and 31 for each
 immediate shift; `rs2 = 32` and `rs2 = 33`, which truncate to 0 and 1; `sra` of a negative

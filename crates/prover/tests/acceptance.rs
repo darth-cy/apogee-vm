@@ -66,8 +66,8 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
 /// `ADD_SUB_LUI_AUIPC` shard; `verify_shard` accepts both against one
 /// statement; and every proof has its circuit's shape — its round counts, its
 /// claim counts, and a byte length that is a function of the key and the family
-/// alone. (Its QEMU differential is `crates/emulator/tests/differential.rs`'s,
-/// where `addsub` is in the suite.)
+/// alone. (That QEMU reaches the same exit status is
+/// `crates/emulator/tests/qemu_outputs.rs`'s, where `addsub` is in the suite.)
 #[test]
 #[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
 fn a1_the_tiny_guest_proves_and_both_shards_verify() {

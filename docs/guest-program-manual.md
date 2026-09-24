@@ -79,7 +79,7 @@ they cover most of what a guest can do:
 | `orderbook` | a uniform-price auction: `Vec`, `BTreeMap`, sorting, and the reference demonstration of hint-then-verify |
 | `vault` | Merkle-gated withdrawals over Poseidon2: `crates/field` and `crates/transcript` running inside the proof, and the deepest call chain in `guests/` |
 | `atomics` | every A-extension instruction as the compiler emits it, from `core::sync::atomic` on one hart; the fixture for the atomics circuit family |
-| `opcodes` | every RV32IMAC instruction in hand-written assembly at its edge cases, which the emulator is compared against `qemu-riscv32` on; fd 0 selects the `ebreak` and misaligned-access modes |
+| `opcodes` | every RV32IMAC instruction in hand-written assembly at its edge cases, run under both the emulator and `qemu-riscv32` and required to compute the same answer under each; fd 0 selects the `ebreak` and misaligned-access modes |
 | `heap` | `Vec` and `Box` churned through the bump allocator, so the heap's traffic is in the trace |
 | `consistency` | ordinary Rust — numerics, collections, text, traits and closures, a codec, hashes, allocation patterns — as a `no_std` library the host calls directly and a thin guest `main`. The consistency suite runs it on the host, under QEMU and on the emulator and holds the three to one answer; §2a is the pattern to copy |
 | `addsub` | S16's tiny guest, the first program proven end to end: a straight run of `add`, `sub`, `addi`, `lui` and `auipc` in both lengths, a `fence`, and an exit whose status, 42, is its result. It is hand-written assembly with no `guest-sdk` under it, one of the two guests that do not use `guest_sdk::entry!` — its own `_start` is the whole program, because crt0's `.bss` loop and its call to `main` are branches, stores and jumps, which S16 has no circuit for — so read it as a proof fixture, not a pattern |
@@ -697,8 +697,12 @@ Three things to see there, and each was a real failure:
    first push dies on a signal before `main` runs.
 
 **Execution.** `qemu-riscv32` was the only executor before S12; since S12
-`crates/emulator` runs a guest too (`emulator::run`), and its trace is held to QEMU's
-instruction by instruction. It is user-mode
+`crates/emulator` runs a guest too (`emulator::run`), and what QEMU holds it to is the
+guest's **answer** — the exit status and the fd 1 bytes — and nothing below that
+(`crates/emulator/tests/qemu_outputs.rs`). The two are not expected to execute the same
+instructions: a delegation ecall runs natively under the emulator and takes the
+`-ENOSYS` software fallback under QEMU, which is the same value by a different route.
+It is user-mode
 emulation — it translates the guest's Linux syscalls into the host's — so it
 builds for Linux hosts only and there is no native macOS build of it. The tests
 stay `#[ignore]`d so a machine with no emulator cannot report silent coverage,

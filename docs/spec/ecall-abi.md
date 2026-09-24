@@ -30,8 +30,19 @@ to prevent.
 
 The standard calls keep their Linux numbers, which is what lets `qemu-riscv32`
 run a guest **unmodified** — QEMU was the only executor S10 had, and since S12 it is
-the oracle the emulator is compared against instruction by instruction, so
-the choice is load-bearing rather than decorative.
+the oracle the emulator's *answers* are compared against, so the choice is
+load-bearing rather than decorative.
+
+**What is compared is the exit status and fd 1, and nothing below them**
+(owner's decision, S25). S12 compared per-instruction register files and this
+page said so; that invariant is **withdrawn**. This emulator is not a QEMU
+clone — it takes the execution path its trace generation needs — and a
+delegation ecall settles it: QEMU has no circuit for a precompile number,
+answers `-ENOSYS`, and the guest computes in software what this VM delegates,
+so the two run different instructions *by design* and agree on the result
+(`docs/spec/delegation.md` §2). `crates/emulator/tests/qemu_outputs.rs` is the
+comparison; a trace's correctness is held against this VM's own semantics and
+constraints instead.
 
 Precompile arguments travel as **pointers** in `a0`–`a5`, because their operands
 do not fit in registers: a Poseidon2 state is 96 bytes. Dispatch is by ecall and

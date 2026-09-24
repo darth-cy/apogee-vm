@@ -733,7 +733,7 @@ block's ts-window disjointness, which is per **cycle-owning** family and always 
 (`docs/spec/block-proof.md` §4).
 
 **Cost** at `h = 2^22`: at least two window shards per proof (window 0 and the stack window),
-`2^23` leaf pairs and four committed `2^22`-entry columns, even for fib's 2,117 cycles; each
+`2^23` leaf pairs and four committed `2^22`-entry columns, even for fib's 316,404 cycles; each
 further touched 16 MiB window adds `2^22` rows; at most `2^29`. S14's tests run at `h = 2^16`.
 
 ---

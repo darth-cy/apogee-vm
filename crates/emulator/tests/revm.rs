@@ -580,11 +580,16 @@ fn a5_every_delegated_permutation_is_the_reference() {
 
 /// Acceptance 2: the derived `VmConfig` is the program's own.
 ///
-/// `KECCAK_F` is in it because the image declares it — the guest reaches
-/// `guest_sdk::keccak256` through `alloy-primitives`' `native-keccak` hook —
-/// and S23's two delegation families are **not**, because nothing in this
-/// image does `Fr` arithmetic. That is static detachment doing its job on a
-/// program nobody wrote for it (`docs/spec/delegation.md` §7).
+/// Every registered family is in it, and since S25 that includes S23's two.
+/// `KECCAK_F` is there because the guest reaches `guest_sdk::keccak256`
+/// through `alloy-primitives`' `native-keccak` hook; `POSEIDON2` and
+/// `FR_ARITH` are there because the guest publishes `io_digest` at exit
+/// (`docs/spec/memory.md` §10) and that digest is a Poseidon2 sponge over
+/// `Fr`, whose backends are those two shims. Until S25 they were absent, and
+/// that absence was this test's illustration of static detachment; what
+/// carries it now is `crates/program/tests/delegation.rs`, where five guests
+/// declare nothing and are held to it at both optimisation levels
+/// (`docs/spec/delegation.md` §7).
 ///
 /// The partition is checked inside `decode_program`, which panics on a pc two
 /// families claim; what is asserted here is the other half, that every
@@ -597,15 +602,10 @@ fn a2_the_family_set_is_the_program_s() {
     let families: Vec<u32> = config.families.iter().map(|(f, _)| *f).collect();
 
     for f in 0..family::COUNT {
-        let present = families.contains(&f);
-        let expected = f != family::POSEIDON2 && f != family::FR_ARITH;
-        assert_eq!(
-            present,
-            expected,
-            "family {} ({}) is {}present",
-            f,
-            program::family_name(f),
-            if present { "" } else { "not " }
+        assert!(
+            families.contains(&f),
+            "family {f} ({}) is not present",
+            program::family_name(f)
         );
     }
     assert_eq!(
@@ -706,11 +706,9 @@ fn a5_the_harvested_frames_are_the_committed_ones() {
 /// `-ENOSYS` and the SDK's software fallback runs. Neither the witness nor the
 /// commitment changes, which is the whole claim.
 ///
-/// The comparison is at the level of fd 1 and the exit status, not
-/// instruction by instruction: `crates/emulator/tests/differential.rs` logs a
-/// register file per instruction, and this workload runs two hundred thousand
-/// of them (`docs/handoff/S20-orchestration.md` kept `guests/shards` out of
-/// that suite for the same reason).
+/// The comparison is fd 1 and the exit status, which since S25 is the only
+/// level anything compares the two executors at: they do not run the same
+/// instructions here and are not meant to (`crates/emulator/tests/qemu_outputs.rs`).
 #[test]
 #[ignore = "needs qemu-riscv32, and builds the revm guest from source"]
 fn a3_the_two_executors_commit_the_same_bytes() {

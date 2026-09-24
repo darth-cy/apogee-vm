@@ -2,7 +2,7 @@
 //!
 //! Every guest here is the committed ELF under `crates/loader/tests/vectors`,
 //! pinned by digest in `crates/loader/tests/common/mod.rs` — the same bytes
-//! QEMU runs in `tests/differential.rs`.
+//! QEMU runs in `tests/qemu_outputs.rs`.
 
 #![allow(dead_code)]
 
@@ -104,9 +104,10 @@ pub fn input_of(name: &str) -> Vec<u8> {
         "rvc-dense" => 7u32.to_le_bytes().to_vec(),
         // Reads nothing: its exit status is its result.
         "addsub" | "control" | "alu" | "mem" => Vec::new(),
-        // The hazards workload alone, at scale 0: 25,945 instructions, which is
-        // all of a guest this size that an instruction-by-instruction log can
-        // afford. `tests/consistency.rs` is where the rest of it runs.
+        // The hazards workload alone, at scale 0: one cheap input, because
+        // this file wants a traced run per guest and not a corpus.
+        // `tests/consistency.rs` is where the rest of it runs, all 80-odd
+        // inputs of it, against the host and QEMU both.
         "consistency" => consistency::Input {
             seed: 1,
             scale: 0,

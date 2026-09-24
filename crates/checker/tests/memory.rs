@@ -303,14 +303,19 @@ fn honest_statement(name: &str, input: u32, prove_frames: bool) {
     assert!(reconciles(&reads, &writes, factors), "{name}");
 }
 
-/// fib's 2,117 cycles, split across the families that ran: window 0 and the
-/// stack window 8191 beside them, every shard proved.
+/// fib's 316,404 cycles, split across the families that ran: window 0 and
+/// the stack window 8191 beside them, every shard proved, and since S25 the
+/// delegation shards its `io_digest` at exit invokes. It was 2,117 cycles
+/// until S25: publishing the digest is 306 thousand of them at the committed
+/// fixtures' `debug` profile, nearly all of it marshalling delegation frames
+/// (`docs/spec/memory.md` §10), which is why this file is the slowest binary
+/// in the workspace run.
 #[test]
 fn fib_honest_statement_reconciles_and_proves() {
     honest_statement("fib", 24, true);
 }
 
-/// heap's 141,832 cycles: its frames forwarded and checked row by row but not
+/// heap's 444,356 cycles: its frames forwarded and checked row by row but not
 /// proved — their proofs alone take minutes in a debug build, and fib's frames
 /// prove the same artifacts — and its two windows, proved.
 #[test]

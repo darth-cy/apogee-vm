@@ -61,11 +61,23 @@ jobs:
           APOGEE_GUEST_PROFILE: release
         run: cargo test -p loader --test qemu -- --include-ignored
 
-      # S12's differential: the emulator's trace against qemu-riscv32's
-      # per-instruction register log, over the committed guests. `#[ignore]`d
-      # for the reason the suite above is, and asked for by name the same way.
-      - name: emulator matches QEMU
-        run: cargo test -p emulator --test differential -- --include-ignored
+      # The emulator against qemu-riscv32 on what a guest **computes** -- its
+      # exit status and the bytes it commits to fd 1 -- over the committed
+      # guests. It was a per-instruction register-file comparison from S12
+      # until S25, and that invariant is **withdrawn** (owner's decision): this
+      # emulator is not a QEMU clone, it takes the execution path its trace
+      # generation needs, and a delegation ecall is the proof -- QEMU has no
+      # circuit, answers `-ENOSYS` and computes the value in software where
+      # this VM runs the delegation natively, so the two instruction streams
+      # differ by design and agree on the answer. Since S25 that is the exit
+      # sequence of every guest that moves committed bytes, because publishing
+      # `io_digest` means Poseidon2. What covers a trace is this VM's own
+      # semantics and constraints -- `tests/trace.rs`, the log's self-check,
+      # the memory argument's suites and each family's rows -- all of which run
+      # in the `test` step below. `#[ignore]`d for the reason the suites above
+      # are, and asked for by name the same way.
+      - name: emulator and QEMU compute the same thing
+        run: cargo test -p emulator --test qemu_outputs -- --include-ignored
 
       # The three-way consistency suite: `guests/consistency` on the host,
       # under qemu-riscv32 and on the emulator, over one corpus of inputs. The
