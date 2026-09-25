@@ -152,15 +152,15 @@ APOGEE_GUEST_PROFILE=release cargo test -p emulator --test revm -- --ignored a3_
 cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 17.5 GB peak, 203 s, 30 min on a runner
 cargo test -p prover --test acceptance -- --include-ignored --test-threads=1  # DEFERRED; S16's statement, 10.7 GB peak, 374 s
 cargo test -p verifier --test cli -- --include-ignored --test-threads=1       # DEFERRED; ditto, 10.7 GB, 44 s
-cargo test --release -p checker --test tamper -- --include-ignored --test-threads=1  # DEFERRED; one re-proof a twin, SIX statements since S23, 17.9 GB peak, 4231 s -- the slowest by wall clock; --release since S21
+cargo test --release -p checker --test tamper -- --include-ignored --test-threads=1  # DEFERRED; one re-proof a twin, SIX statements since S23, 17.9 GB peak, 4231 s -- the slowest by wall clock, and longer since S-IO gave every statement two more shards; --release since S21
 cargo test -p prover --test control -- --include-ignored --test-threads=1     # DEFERRED; S17's statement, 19.6 GB peak, 59 s
 cargo test --release -p prover --test alu -- --include-ignored --test-threads=1  # DEFERRED; S18's statement, 31.7 GB peak, 53 s
 cargo test --release -p prover --test mem -- --include-ignored --test-threads=1  # DEFERRED; S19's statement, 33.5 GB peak, 61 s
 cargo test --release -p prover --test block -- --include-ignored --test-threads=1  # DEFERRED; S20's block, 34.9 GB peak, 840 s
-cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1  # DEFERRED; S21's nine-shard block, 33.7 GB peak, 131 s
-cargo test --release -p prover --test recursion -- --include-ignored --test-threads=1  # DEFERRED; S23's ten-shard block, 35.2 GB peak, 120 s -- the heaviest by memory
+cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1  # DEFERRED; S21's block, ELEVEN shards since S-IO, 33.7 GB peak and 131 s at S21, 254 s here at RAYON_NUM_THREADS=6
+cargo test --release -p prover --test recursion -- --include-ignored --test-threads=1  # DEFERRED; S23's block, TWELVE shards since S-IO, 35.2 GB peak and 120 s at S23, 238 s here at RAYON_NUM_THREADS=6 -- the heaviest by memory
 cargo test --release -p prover --test public_io -- --include-ignored --test-threads=1  # DEFERRED; S-IO's statement: public input in, advice checked against it, journal out
-RAYON_NUM_THREADS=6 cargo test --release -p prover --test revm -- --include-ignored --test-threads=1  # DEFERRED; the revm block, thirteen shards since S-IO, and it builds the guest; 38.4 GB peak, 536 s AT S24 -- a floor, not the current figure, S-IO having added three shards and not re-measured; ELEVEN 2^20 shards, so the thread bound is not optional on a 48 GB machine
+RAYON_NUM_THREADS=6 cargo test --release -p prover --test revm -- --include-ignored --test-threads=1  # DEFERRED; the revm block, thirteen shards since S-IO, and it builds the guest; 38.4 GB peak and 536 s at S24, 523 s here at RAYON_NUM_THREADS=6 over S-IO's thirteen shards; ELEVEN 2^20 shards, so the thread bound is not optional on a 48 GB machine
 cargo test -p prover --features metrics --test metrics -- --include-ignored --nocapture  # DEFERRED; S16's statement twice, 21.0 GB peak, 60 s, and prints both reports
 cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify -p verifier-core --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen

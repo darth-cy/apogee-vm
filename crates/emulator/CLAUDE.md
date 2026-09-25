@@ -38,11 +38,15 @@ because `TraceArchive::from_execution` needs the two public byte strings and non
 other three carries them. Put to the repository owner, who chose it over a second execution
 or rebuilding them from the log.
 
-**`GuestIo` is the three things a guest is given**: `input`, the statement's public input,
-which the executor lays out in the public input window with `program::public_io_words` *and*
-serves on fd 0, so one source runs under both executors; `advice`, the prover's private
-bytes at `guest_memory::ADVICE_ORIGIN`, framed by `trace::advice_word`; and `hint`, the
-fd 3 stream, the older unprovable spelling of the same idea.
+**`GuestIo` is the four things a guest is given, and the split into two pairs is the
+point.** `input` is the statement's public input, which the executor lays out in the public
+input window with `program::public_io_words`, and `advice` the prover's private bytes at
+`guest_memory::ADVICE_ORIGIN`, framed by `trace::advice_word` — both are *memory*, and both
+are what a proof is about. `stdin` is the fd 0 stream and `hint` the fd 3 one — both are
+*streams*, and a proof binds neither. `input` does **not** also serve fd 0: a guest is
+provable or runnable under `qemu-riscv32`, never both, the windows and the advice region
+being unmapped there, so one field serving two roles would only cap fd 0 at the window's
+1,020 bytes for no gain.
 
 **`Execution::io` is the execution's public values, not its streams** (S-IO). `io.input` is
 the public input it was given — the window's contents, whether or not the guest read a byte
@@ -104,8 +108,9 @@ none of; `stderr` is fd 2, diagnostics, archived nowhere.
   layout, shared with `trace`'s column builder and the verifier's own extension, so the
   three cannot drift — and the advice region is `trace::advice_word` over `io.advice`. The
   journal window starts at 0 and stays there until the guest stores into it, which is
-  `PUBLIC_OUTPUT`'s literal-0 init leaf. The same bytes are also served on fd 0, so a guest
-  built for a POSIX host reads them under `qemu-riscv32`.
+  `PUBLIC_OUTPUT`'s literal-0 init leaf. **fd 0 is a different stream**, `io.stdin`, and
+  `Machine::new` does not touch it: a guest built for a POSIX host reads that one under
+  `qemu-riscv32` and reads no window at all.
 - **`Execution::io` is the public values and `Execution::stdout` is fd 1** (S-IO). `io.input`
   is the window's whole contents — what the *statement* carries, whether or not the guest
   read a byte of it, because a window is not a stream cursor — and `io.output` is the
@@ -167,8 +172,8 @@ docker run --rm -v "$PWD":/w -w /w -e CARGO_TARGET_DIR=/tmp/t rust:latest bash -
 | `tests/trace.rs` | acceptance 3 (balance, heap traffic included), 4 (a corrupted RAM read, register write mid-chain, pc write and gap, a forged initial value, and a stale read, each named), 5 (the four-slot clock over every event; `amoadd.w` fills all four slots), 6 (routing), the frame table — roles and slots — restated from the spec and checked on every row, the halting sentinel (the exit row alone writes `HALT_PC`, as the last pc write; every other pc write even), ecall transfers with every byte held to the recorded streams, every ecall answering as the ABI says (must-be-exact 2 without QEMU), the rows rebuilding the log exactly, `final_state`, and `trace::init_windows` (fib's stack window at 2^22, 2^20 and 2^16; every traced guest's list exactly its touched windows above 0 at every height, and passing `program::check_memory_windows`) |
 | `tests/archive.rs` | acceptance 7 (byte-identical round trip, hash-equal payloads, answers without re-execution, `io_digest`) and 8 (five phases, the timing section byte for byte, out-of-order refused by byte patch) |
 | `tests/qemu_outputs.rs` | **`#[ignore]`d** — the ten-guest suite (`opcodes`, `rvc-dense`, `fib`, `heap`, `atomics`, `consistency` and the four family guests) run under both executors, agreeing on the exit status and on fd 1; the negative control, which holds one QEMU run against the emulator's answer for a *different* input and requires a disagreement; and `ebreak`, which stops both executors and neither cleanly |
-| `tests/revm.rs` | **S24**, over `guests/revm-block`, which is built from source rather than read from a committed ELF. In the `test` step: the committed `BlockWitness` is canonical and re-encodes to itself, each canonicity rule refuses by name, the output commitment's three sections read back field by field, native host revm produces the committed output, every keccak-f frame the workload delegated is `tiny-keccak`'s answer, a block whose transactions do not fit its gas limit is refused — including the case revm cannot see, two transactions that each fit the header and together do not — and `BLOCKHASH` still answers `EmptyDB`'s placeholder, which is the pin on the gap that keeps `BlockWitness` unfrozen. **`#[ignore]`d, and CI asks for them by name** at `APOGEE_GUEST_PROFILE=release`: the derived family set (`KECCAK_F` in, S23's two out, every instruction a live row of exactly one family), the guest's fd 1 against native revm's on the same witness, the harvested frames against the committed ones, the cycle and occupancy report, and the image against the two ceilings its height turns on. One more needs `qemu-riscv32`: the same binary under both executors commits the same bytes, which is the delegation against the software fallback end to end |
-| `tests/consistency.rs` | the three-way consistency suite over `guests/consistency`: host and emulator agree on every corpus input (fd 1 by section, exit status, a panic's message, line and column); every workload, fault and bad input exercised; `trace_run` == `run` and the log balances and ends on `HALT_PC`, a nonzero exit included, with every family but the two init families and all eight M instructions executed; the heap probes exit 71; a flipped byte caught at its workload and every leg's flip classified; **`#[ignore]`d** — the same corpus with QEMU as the third leg |
+| `tests/revm.rs` | **S24**, over `guests/revm-block`, which is built from source rather than read from a committed ELF. In the `test` step: the committed `BlockWitness` is canonical and re-encodes to itself, each canonicity rule refuses by name, the output commitment's three sections read back field by field, native host revm produces the committed output, every keccak-f frame the workload delegated is `tiny-keccak`'s answer, a block whose transactions do not fit its gas limit is refused — including the case revm cannot see, two transactions that each fit the header and together do not — and `BLOCKHASH` still answers `EmptyDB`'s placeholder, which is the pin on the gap that keeps `BlockWitness` unfrozen. **`#[ignore]`d, and CI asks for them by name** at `APOGEE_GUEST_PROFILE=release`: the derived family set (`KECCAK_F` in, S23's two out, every instruction a live row of exactly one family), the guest's **journal** against native revm's answer on the same witness — and its fd 1 empty, the provable binary writing none — the harvested frames against the committed ones, the cycle and occupancy report, and the image against the two ceilings its height turns on. One more needs `qemu-riscv32`: the same binary under both executors commits the same bytes, which is the delegation against the software fallback end to end |
+| `tests/consistency.rs` | the three-way consistency suite over `guests/consistency`: host and emulator agree on every corpus input (fd 1 by section, exit status, a panic's message, line and column); every workload, fault and bad input exercised; `trace_run` == `run` and the log balances and ends on `HALT_PC`, a nonzero exit included, with every **cycle-owning** family and all eight M instructions executed — the exemption is `constants::family::CYCLE_OWNING`, so it covers the two RAM window families, the three delegation ones and, since S-IO, the two public value families and `ADVICE_WINDOWS`; the heap probes exit 71; a flipped byte caught at its workload and every leg's flip classified; **`#[ignore]`d** — the same corpus with QEMU as the third leg |
 
 The guests are the committed ELFs in `crates/loader/tests/vectors/`, pinned there — except
 in `tests/consistency.rs`, which builds `guests/consistency` from source at test time so

@@ -800,15 +800,25 @@ fn s18_a8_the_residue_and_the_product_high_are_pinned() {
     let archive = common::alu_archive(&setup.program);
     let h = TamperHarness::new(&setup, &archive);
 
-    // The structural counts: five shards, `ZERO_WINDOWS` the one family of the
-    // config that does not run, and each new family's committed width —
-    // `docs/spec/shift-bitwise.md` §6 and `docs/spec/mul-div.md` §6.
+    // The structural counts: seven shards, `ZERO_WINDOWS` and `ADVICE_WINDOWS`
+    // the two families of the config that do not run, and each new family's
+    // committed width — `docs/spec/shift-bitwise.md` §6 and
+    // `docs/spec/mul-div.md` §6. The two public value families prove one shard
+    // each whatever the program does (`docs/spec/public-values.md` §4).
     let (public, proofs) = h.honest();
-    assert_eq!(public.shard_counts, vec![1, 1, 1, 1, 1, 0]);
+    assert_eq!(public.shard_counts, vec![1, 1, 1, 1, 1, 0, 1, 1, 0]);
     let shards: Vec<(u32, u32)> = proofs.iter().map(|p| (p.family, p.shard_index)).collect();
     assert_eq!(
         shards,
-        vec![(INIT, 0), (ADD, 0), (JBS, 0), (SHB, 0), (MD, 0)]
+        vec![
+            (INIT, 0),
+            (ADD, 0),
+            (JBS, 0),
+            (SHB, 0),
+            (MD, 0),
+            (constants::family::PUBLIC_INPUT, 0),
+            (constants::family::PUBLIC_OUTPUT, 0)
+        ]
     );
     for (family, want) in [(SHB, (21, 61, 10)), (MD, (21, 54, 9))] {
         let a = &setup.vk.circuit(family).expect("a circuit").artifact;
@@ -949,10 +959,12 @@ fn s19_a8_the_old_word_the_splice_and_the_old_value_are_pinned() {
     let archive = common::mem_archive(&setup.program);
     let h = TamperHarness::new(&setup, &archive);
 
-    // The structural counts: seven shards, the first `ZERO_WINDOWS` one any
-    // acceptance statement has had, and each new family's committed width.
+    // The structural counts: nine shards, the first `ZERO_WINDOWS` one any
+    // acceptance statement has had, S-IO's two public value ones, and each new
+    // family's committed width. `ADVICE_WINDOWS` proves none, this guest having
+    // no advice.
     let (public, proofs) = h.honest();
-    assert_eq!(public.shard_counts, vec![1, 1, 1, 1, 1, 1, 1]);
+    assert_eq!(public.shard_counts, vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 0]);
     assert_eq!(public.windows, vec![8191]);
     let shards: Vec<(u32, u32)> = proofs.iter().map(|p| (p.family, p.shard_index)).collect();
     assert_eq!(
@@ -964,7 +976,9 @@ fn s19_a8_the_old_word_the_splice_and_the_old_value_are_pinned() {
             (JBS, 0),
             (MW, 0),
             (MS, 0),
-            (AT, 0)
+            (AT, 0),
+            (constants::family::PUBLIC_INPUT, 0),
+            (constants::family::PUBLIC_OUTPUT, 0)
         ]
     );
     for (family, want) in [(MW, (31, 24, 7)), (MS, (31, 55, 10)), (AT, (26, 54, 9))] {
@@ -1085,15 +1099,24 @@ fn s21_a5_a6_the_delegation_witness_and_the_anchor_are_pinned() {
     let archive = common::keccak_archive(&setup.program);
     let h = TamperHarness::new(&setup, &archive);
 
-    // The structural counts. Nine shards — six `2^20` execution ones, the two
-    // `2^16` windows and one `2^8` delegation shard — the delegation family's
-    // last, and its circuit's width: 204 memory columns (`cycle`, `live`,
-    // `base`, `anchor_value` and four a frame word) and 3,560 witness ones (the
-    // state's 1,600 bits, 38 gap bits a read, and the frame pointer's 60).
+    // The structural counts. Eleven shards — six `2^20` execution ones, the two
+    // `2^16` windows, one `2^8` delegation shard and S-IO's two `2^8` public
+    // value ones — and the delegation circuit's width: 204 memory columns
+    // (`cycle`, `live`, `base`, `anchor_value` and four a frame word) and 3,560
+    // witness ones (the state's 1,600 bits, 38 gap bits a read, and the frame
+    // pointer's 60). The delegation shard is no longer the last: S-IO's
+    // families take the highest ids, and the statement's tail is ascending.
     let (public, proofs) = h.honest();
     let shards: Vec<(u32, u32)> = proofs.iter().map(|p| (p.family, p.shard_index)).collect();
-    assert_eq!(shards.len(), 9, "nine shards: {shards:?}");
-    assert_eq!(shards.last(), Some(&(KEC, 0)));
+    assert_eq!(shards.len(), 11, "eleven shards: {shards:?}");
+    assert_eq!(
+        &shards[shards.len() - 3..],
+        &[
+            (KEC, 0),
+            (constants::family::PUBLIC_INPUT, 0),
+            (constants::family::PUBLIC_OUTPUT, 0)
+        ]
+    );
     assert!(shards.contains(&(INIT, 0)) && shards.contains(&(ZERO, 0)));
     let a = &setup.vk.circuit(KEC).expect("a keccak circuit").artifact;
     assert_eq!(
@@ -1277,14 +1300,21 @@ fn s23_a5_a6_the_recursion_witnesses_and_anchors_are_pinned() {
     let archive = common::recursion_archive(&setup.program);
     let h = TamperHarness::new(&setup, &archive);
 
-    // The structural counts: a shard of each new family, last and in id order,
-    // each its circuit's width.
+    // The structural counts: a shard of each new family, in id order after
+    // every execution shard, each its circuit's width. They are **not** last
+    // since S-IO, whose two public value families take higher ids and prove one
+    // shard each; `ADVICE_WINDOWS` proves none, this guest having no advice.
     let (public, proofs) = h.honest();
     let shards: Vec<(u32, u32)> = proofs.iter().map(|p| (p.family, p.shard_index)).collect();
     assert_eq!(
-        &shards[shards.len() - 2..],
-        &[(P2, 0), (FA, 0)],
-        "the two delegation shards sort last: {shards:?}"
+        &shards[shards.len() - 4..],
+        &[
+            (P2, 0),
+            (FA, 0),
+            (constants::family::PUBLIC_INPUT, 0),
+            (constants::family::PUBLIC_OUTPUT, 0)
+        ],
+        "the two delegation shards sort after the execution ones: {shards:?}"
     );
     for (family, memory, witness) in [
         (P2, 4 + 4 * p2::FRAME_WORDS, p2_c::WITNESS_COLUMNS),

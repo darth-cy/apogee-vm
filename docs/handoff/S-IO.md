@@ -316,5 +316,46 @@ argument frame and one transfer cycle per word of a 716-byte witness. `revm-bloc
 figure is S24's `revm-block` figure unchanged, which is the check that the rename moved no
 code. The delegation counts agree, so the fd path costs cycles and changes no hashing.
 
-<!-- FILL: the deferred batch's timings and peaks, measured in one run at the end of the
-     progression, per the owner's S20 instruction. -->
+### The four deferred suites that pin a statement's shape
+
+Run here, at `RAYON_NUM_THREADS=6` on an 18-core / 48 GB machine. **They were failing**,
+and nothing in the workspace run could have said so: each pins the shape of a statement,
+and S-IO moved the tail of every statement there is.
+
+The three families take ids 12, 13 and 14, above every delegation family, and the
+statement's order is `INIT_TEARDOWN`, `ZERO_WINDOWS`, then every other family **ascending**
+(`verifier_core::statement_shards`). So a delegation family stopped being last — in the
+config's family list and in the shard list alike — and every assertion that said it was
+became false. Twelve of them, in four `#[ignore]`d suites:
+
+| file | pinned | actually |
+| --- | --- | --- |
+| `prover/tests/keccak.rs` | `families.last() == KECCAK_F`; the last shard is `(KECCAK_F, 0)` | the list ends `…, KECCAK_F, PUBLIC_INPUT, PUBLIC_OUTPUT, ADVICE_WINDOWS`; **11** shards, last `(PUBLIC_OUTPUT, 0)` |
+| `prover/tests/recursion.rs` | the last two families and the last two shards are `POSEIDON2, FR_ARITH` | they are `PUBLIC_OUTPUT, ADVICE_WINDOWS` and `(PUBLIC_INPUT, 0), (PUBLIC_OUTPUT, 0)` |
+| `prover/tests/revm.rs` | ditto, ending `(KECCAK_F, 0)` | ends `(ADVICE_WINDOWS, 0)` — the one statement in the repository where advice proves a shard |
+| `checker/tests/tamper.rs` | `shard_counts` of 6, 7 and 9 entries; the S23 twins' last two shards are the delegation pair | 9, 10 and **11** shards; the last two are the public value ones |
+
+Each is now pinned to the whole tail rather than to one end, so a family appended above
+these three moves the assertion rather than silently satisfying it.
+
+The shapes were taken **without proving anything**: `plan_shards` and
+`verifier_core::statement_shards` are pure, so a throwaway probe over the four setups
+printed every `shard_counts` and shard list in 40 s. The suites then confirmed them:
+
+| suite | result | wall clock |
+| --- | --- | --- |
+| `cargo test --release -p prover --test keccak -- --include-ignored` | 2 passed | 254 s |
+| `cargo test --release -p prover --test recursion -- --include-ignored` | 2 passed | 238 s |
+| `cargo test --release -p prover --test revm -- --include-ignored` | 3 passed | 523 s |
+| `cargo test --release -p checker --test tamper -- --include-ignored` | 12 passed | 4,257 s for eleven, then 2,586 s for `s23_a5_a6` alone |
+
+The tamper figure is in two parts because the twelfth assertion was found by grep while the
+suite was already running: the 4,257 s run failed `s23_a5_a6` at its structural assertion
+— `left: [(12, 0), (13, 0)]`, `right: [(10, 0), (11, 0)]`, the probe's prediction verbatim
+— and the fixed test was re-run alone. `CLAUDE.md`'s pinned 4,231 s therefore still holds
+for the suite at a six-thread bound; what it does not yet include is the cost of `s23`
+running to completion.
+
+<!-- FILL: the rest of the deferred batch -- logup, acceptance, cli, control, alu, mem,
+     block and metrics -- and every suite's peak memory, which this run did not
+     instrument. -->

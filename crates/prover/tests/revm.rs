@@ -266,7 +266,16 @@ fn a6_the_revm_block_proves_and_verifies() {
         .iter()
         .map(|(f, _)| *f)
         .collect();
-    assert_eq!(families.last(), Some(&KECCAK));
+    assert_eq!(
+        &families[families.len() - 4..],
+        &[
+            KECCAK,
+            family::PUBLIC_INPUT,
+            family::PUBLIC_OUTPUT,
+            family::ADVICE_WINDOWS
+        ],
+        "the delegation family sorts after every execution one and before S-IO's three"
+    );
     assert!(!families.contains(&family::POSEIDON2));
     assert!(!families.contains(&family::FR_ARITH));
     assert_eq!(
@@ -307,10 +316,20 @@ fn a6_the_revm_block_proves_and_verifies() {
 
     // The structural counts: one shard per planned shard, in statement order,
     // with the two window families' overriding the plan's zeroes and the
-    // delegation family's last.
+    // delegation shard followed by S-IO's three. This is the one statement in
+    // the repository where `ADVICE_WINDOWS` proves a shard, the witness being
+    // advice, so here it is the last shard of all.
     let expected = statement_shards(&setup.program.config, block.shard_counts());
     assert_eq!(block.shards.len(), expected.len());
-    assert_eq!(expected.last(), Some(&(KECCAK, 0)));
+    assert_eq!(
+        &expected[expected.len() - 4..],
+        &[
+            (KECCAK, 0),
+            (family::PUBLIC_INPUT, 0),
+            (family::PUBLIC_OUTPUT, 0),
+            (family::ADVICE_WINDOWS, 0)
+        ]
+    );
     assert_eq!(
         block.shard_counts()[families.iter().position(|f| *f == INIT).unwrap()],
         1,

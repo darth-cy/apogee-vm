@@ -41,9 +41,11 @@ fn a4_the_block_with_both_delegation_shards_proves_and_verifies() {
     let setup = common::recursion_setup();
     let mut archive = common::recursion_archive(&setup.program);
 
-    // The family set: both delegation families are in it, last and in id
-    // order, each at the delegation height. Every other family is there
-    // because it claims a pc.
+    // The family set: both delegation families are in it in id order, each at
+    // the delegation height, after every family that claims a pc and after the
+    // two RAM window families. They are **not** last since S-IO, whose three
+    // families take the highest ids. Every other family is there because it
+    // claims a pc.
     let families: Vec<u32> = setup
         .program
         .config
@@ -52,9 +54,15 @@ fn a4_the_block_with_both_delegation_shards_proves_and_verifies() {
         .map(|(f, _)| *f)
         .collect();
     assert_eq!(
-        &families[families.len() - 2..],
-        &[POSEIDON2, FR_ARITH],
-        "the two delegation families sort last"
+        &families[families.len() - 5..],
+        &[
+            POSEIDON2,
+            FR_ARITH,
+            family::PUBLIC_INPUT,
+            family::PUBLIC_OUTPUT,
+            family::ADVICE_WINDOWS
+        ],
+        "the two delegation families sort after the execution ones and before S-IO's three"
     );
     for f in [POSEIDON2, FR_ARITH] {
         assert_eq!(
@@ -103,13 +111,19 @@ fn a4_the_block_with_both_delegation_shards_proves_and_verifies() {
         "the block verifies"
     );
 
-    // One shard per planned shard, in statement order, with the delegation
-    // families' last.
+    // One shard per planned shard, in statement order: the two delegation
+    // shards, then S-IO's two public value ones. This guest has no advice, so
+    // `ADVICE_WINDOWS` proves no shard.
     let expected = statement_shards(&setup.program.config, block.shard_counts());
     assert_eq!(block.shards.len(), expected.len());
     assert_eq!(
-        &expected[expected.len() - 2..],
-        &[(POSEIDON2, 0), (FR_ARITH, 0)]
+        &expected[expected.len() - 4..],
+        &[
+            (POSEIDON2, 0),
+            (FR_ARITH, 0),
+            (family::PUBLIC_INPUT, 0),
+            (family::PUBLIC_OUTPUT, 0)
+        ]
     );
 
     // Each delegation shard's ts window overlaps the add/sub family's, which
