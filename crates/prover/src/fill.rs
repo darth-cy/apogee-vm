@@ -484,6 +484,15 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
         let row_values = [field(1), field(2), field(3), field(4), field(5), field(6)];
         let (fall, imm, mask) = (row_values[0], row_values[4], row_values[5]);
         let read = |role: Role| row.query(role).map_or(0, |q| q.read_value);
+        // What a query **wrote**, which is not what it read. On every row but
+        // an ecall's the two differ only at `rd`, and there the fill computes
+        // the written value rather than copying it. On an ecall's row `a0` is
+        // read *and* written by one query — the ABI puts the call's first
+        // argument and its answer in the same register — so a `read` or a
+        // `write` reads a descriptor and writes a byte count, and the
+        // frame's `rd_selected` must carry the second
+        // (`docs/spec/execution-trace.md` §7).
+        let written = |role: Role| row.query(role).map_or(0, |q| q.write_value);
         let (a, b) = (read(Role::Rs1), read(Role::Rs2));
         let bit = mask.trailing_zeros();
         let (mut ecall_row, mut fence_row) = (0, 0);
@@ -513,7 +522,14 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
                         ));
                     }
                     read_row = 1;
-                    (read(Role::Rd), 0)
+                    // The byte count the executor answered with, which is
+                    // `a0`'s **write** and not the fd it read. No gate fixes
+                    // it: what a `read` delivers and what it reports are fd
+                    // 0's content, bound by the guest's own `io_digest` and
+                    // by no row (`docs/spec/memory.md` §10), so there is
+                    // nothing to hold it against and the check below skips
+                    // this row.
+                    (written(Role::Rd), 0)
                 }
                 system_code::ECALL if a == ecall::WRITE => {
                     if row.query(Role::Ram).is_some() {
@@ -524,7 +540,9 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
                         ));
                     }
                     write_row = 1;
-                    (read(Role::Rd), 0)
+                    // Likewise fd 1's: the count written back, bound by
+                    // `io_digest` and by no row.
+                    (written(Role::Rd), 0)
                 }
                 system_code::ECALL if a == ecall::EXIT => {
                     ecall_row = 1;
@@ -555,12 +573,21 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
             },
             other => panic!("cycle {} has kind bit {other}", row.cycle),
         };
-        if let Some(rd) = row.query(Role::Rd).filter(|q| q.addr != 0) {
-            assert_eq!(
-                rd.write_value, value,
-                "cycle {}: the trace's rd write is not what the instruction computes",
-                row.cycle
-            );
+        // Every row whose `rd` write the circuit fixes: the trace's write is
+        // held to what the family computes. A `read`'s and a `write`'s is
+        // **not** one of those — `value` was taken from that very write above,
+        // so the comparison would be vacuous, and no gate constrains it — but
+        // an exit's is (it writes back the status it read) and a delegation
+        // request's is (it writes 0 over the frame base,
+        // `docs/spec/delegation.md` §5.2), and both are checked here.
+        if read_row | write_row == 0 {
+            if let Some(rd) = row.query(Role::Rd).filter(|q| q.addr != 0) {
+                assert_eq!(
+                    rd.write_value, value,
+                    "cycle {}: the trace's rd write is not what the instruction computes",
+                    row.cycle
+                );
+            }
         }
         let want_next = match ecall_row {
             1 => memory::HALT_PC,

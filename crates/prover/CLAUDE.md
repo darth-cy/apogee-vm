@@ -107,7 +107,23 @@ pub fn advance_metered(setup, archive, until)   -> Result<ProvingMetrics, Prover
   exactly that build, and a column the prover counted itself cannot disagree with it.
 - **The add/sub fill writes the computed `rd` value into `rd_selected`**, where S14's frame
   builder writes 0 on an `x0` write: the family's semantic gates read what the instruction
-  computed, and the frame's x0 rule masks it into the write. S17's jump/branch/slt fill
+  computed, and the frame's x0 rule masks it into the write.
+- **A `read`'s and a `write`'s `rd_selected` is the `rd` query's *write*, not its read**,
+  and they are the only rows where that distinction is visible. The ABI puts a call's first
+  argument and its answer in the same register, so on such a row `a0` is read as a
+  **descriptor** and written as a **byte count** — every other row's `rd` query reads a
+  value the fill ignores and writes one it computes. Both numbers are sitting on the row,
+  so taking the wrong one yields a plausible-looking column that breaks the frame's
+  `rd_write_masked` (`write_value − sel + z·sel = 0`) and nothing else. The fill's
+  "the trace's rd write is not what the instruction computes" assertion **skips these two
+  row kinds**: the count is fd 0's and fd 1's content, bound by the guest's own `io_digest`
+  and by no gate (`docs/spec/memory.md` §10), so there is nothing to hold it against, and
+  comparing `value` against the write it was taken from would be vacuous. An exit's and a
+  delegation request's `a0` write *are* checked there — an exit writes back the status it
+  read, a request writes 0 over the frame base. `crates/checker/tests/io_fill.rs` is the
+  fast pin; without it the only coverage is the `# DEFERRED` `prover/tests/revm.rs`,
+  because no guest in the fast suites links the SDK and so none issues a `read` or a
+  `write` at all. S17's jump/branch/slt fill
   does the same with the link or `lt`, computes every comparison cell from Rust's own
   `u32`/`i32` ordering — `cmp_gap` is `(rs1 − cmp_rhs) mod 2^32` whatever the signedness —
   and writes the packed generic table (`program::lookup_tables::generic_table`) as its
