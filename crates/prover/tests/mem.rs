@@ -70,8 +70,9 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
 /// `docs/spec/memory-ops.md` §7 states, and as the numbers read off the
 /// registry's circuit — so a change to any of them shows on both sides. What
 /// the trace holds, instruction by instruction, is the three row suites in
-/// `crates/checker/tests` over the same fixture, and its QEMU differential is
-/// `crates/emulator/tests/differential.rs`'.
+/// `crates/checker/tests` over the same fixture, and QEMU's reading of it is
+/// `crates/emulator/tests/qemu_outputs.rs`', which compares the exit status and
+/// fd 1 and nothing below that.
 #[test]
 #[ignore = "five 2^20-row execution shards: one statement's proof is the heaviest in the repository"]
 fn a1_the_guest_proves_and_every_shard_verifies() {
@@ -86,7 +87,10 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
             (MS, 1 << 20),
             (AT, 1 << 20),
             (INIT, 1 << 16),
-            (ZERO, 1 << 16)
+            (ZERO, 1 << 16),
+            (family::PUBLIC_INPUT, family::PUBLIC_WINDOW_HEIGHT),
+            (family::PUBLIC_OUTPUT, family::PUBLIC_WINDOW_HEIGHT),
+            (family::ADVICE_WINDOWS, 1 << 16)
         ],
         "the guest runs no shift/bitwise and no mul/div, so neither is derived"
     );
@@ -99,10 +103,14 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
     assert_eq!((live(ADD), live(JBS)), (180, 56));
     assert_eq!((live(MW), live(MS), live(AT)), (53, 21, 15));
     assert_eq!(
-        archive.memory_log().self_check(&setup.program.image),
+        archive.memory_log().self_check(&trace::InitialMemory {
+            image: &setup.program.image,
+            public_input: &archive.io_streams().input,
+            advice: archive.advice(),
+        }),
         Ok(())
     );
-    assert_eq!(public.shard_counts, vec![1, 1, 1, 1, 1, 1, 1]);
+    assert_eq!(public.shard_counts, vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 0]);
     assert_eq!(
         public.windows,
         vec![8191],
@@ -120,7 +128,9 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
             (JBS, 0),
             (MW, 0),
             (MS, 0),
-            (AT, 0)
+            (AT, 0),
+            (family::PUBLIC_INPUT, 0),
+            (family::PUBLIC_OUTPUT, 0)
         ],
         "one shard per family that runs, in the global transcript's group order"
     );

@@ -26,46 +26,46 @@ use test_support::{sha256, to_hex};
 /// The synthetic ELFs are not listed one by one: `synthetic_elfs.txt` carries
 /// their digests and is itself pinned here, so the chain is one constant long
 /// either way and the index stays readable.
-pub const PINS: [(&str, &str); 23] = [
+pub const PINS: [(&str, &str); 24] = [
     (
         "fib.elf",
-        "6b517e814c13c977248b8eae51277d411cccce75009d8a5396f6b5aa6af5c749",
+        "110a004f6f9d615506a63f6d85d9b2600d33b5c2c80af5f6c32fe90a6e2228fe",
     ),
     (
         "echo.elf",
-        "934407e4d89707b10c8340d87c133d8a037e302f22bd6830a1cbd66cc3199482",
+        "42930358224d45142d7c6e035ab33124c9c2b34134731997dc3bf178a9f23d8f",
     ),
     (
         "rvc-dense.elf",
-        "af87f2cd34281d9afe92acfb8d896c13830a0ce7b04978c4de0d67dc03205b09",
+        "a8f608f6a25d1b4411b5b170f181761ae52aa28a979e2e2c74018321465352cc",
     ),
     (
         "amm.elf",
-        "36732ff38b60feb9a24587f8c55baadcad8673b9894a1204b41c1346acf6c649",
+        "fcc40a7cb1716774b12bdaf75c4269d68000c8de9d56fc9610ae1bdb9ee1d8e8",
     ),
     (
         "orderbook.elf",
-        "8e05021a96ce975a75950ec6be7186f0021873bb5e556672e12910aa62fc3cb2",
+        "5fa9a0fc6e3a3c383211c59b771576d5d99eb262ce797aa6dab1a0978381440b",
     ),
     (
         "vault.elf",
-        "dbadf3770c409b64c86481ea71203b5cb5db1b3d8a98c085813ff23311fa3966",
+        "ee39551bcfcde0a4d16d012ab30f7b3db8c082927aa79e8244647b64bbbb634e",
     ),
     (
         "atomics.elf",
-        "4ea691b7ee988e96453a7203c9d3ebcd1de243db33e3e31ffc2b20d635fc7f69",
+        "5513d253e4db8fbb217073ccbaff450d0f4a50e2673cdd414727e6327fd5288b",
     ),
     (
         "opcodes.elf",
-        "e29f9a0b850f7b6d5159f37037d679f7ae66afcbef8cd82ef9bc47a966126a9f",
+        "520bb1988095b581e1e17898ca46c07fc6fc74e7ce177d576ec4c4ae9ea5acc3",
     ),
     (
         "heap.elf",
-        "c94969998512d987bff3f860e9d67b10992f5bbe068ab48e4e69f6e2c7c69ba5",
+        "a780b55f22ed648fc3e0a4faf05e3f7af687543de187a8c4c0acae50a4e397b5",
     ),
     (
         "consistency.elf",
-        "0a3040d1215f8f335c78ada939b6c055f36549ddc5fecfe3a3ebbfb8a0d65b5e",
+        "e06a8f3431924e1470c86e9be14d098248339af75e026f24a8e2bc21b5b4df74",
     ),
     (
         "addsub.elf",
@@ -85,19 +85,19 @@ pub const PINS: [(&str, &str); 23] = [
     ),
     (
         "fib.objdump.txt",
-        "edb521661d782689e9e0ebc4ccf972838de6d93cc1ef42915ec830997a630489",
+        "94b517b8585b5b8a44115bb918b33a5f75c871659798a89c8f27e4bc9700e060",
     ),
     (
         "rvc-dense.objdump.txt",
-        "f0ba5063259581040592218f52059d935c5b1eb4c14a6b32c25f28c028f6567e",
+        "5c5a319f34472c7c52fd16ec94de24a9a3f58083fba6b72f65bedfa92dd7b812",
     ),
     (
         "amm.objdump.txt",
-        "bb54985d4ded03480c628ae80372b072314b50400e0f3fa317e76e77db0a78e4",
+        "9ca5e5ab996910382a4fd9838d8105a3fae0e172e66da3ede6b1d2e265ead124",
     ),
     (
         "rvc-dense.nm.txt",
-        "06362b158abae3b1d13cfd74781817c574e746ec1c7b9121daed0cfea53706e7",
+        "80d307baa758172d3126ab6ff38b78e3cf1ded52f1fba1940f98e495aa1a4ee5",
     ),
     (
         "shards.elf",
@@ -105,19 +105,23 @@ pub const PINS: [(&str, &str); 23] = [
     ),
     (
         "keccak-test.elf",
-        "c1d134ee91f5d32c7ce5291542c37d093034731f9b2b3b3d862956c0cd89cac3",
+        "2bae76b84db83cd467be56e7615d9c971e6e3b5679002fb7194dc305a88a971e",
     ),
     (
         "keccak-unused.elf",
-        "49bd8a9ba53e561fc19d0ec066afe91e3301842d36e0f584a37b7414557729b1",
+        "c47db58280ab8ab1132a39786f3ad11fca1b4cd3293a00f1218ff96aa20c803d",
     ),
     (
         "recursion-ops.elf",
-        "4dc91d5bb40a1d9187cae204df0ee6913ae3444c1b0f186003bef23e36f94580",
+        "f6958d7a9f9d10710dcfbeb6748d05b6be55dc14f29a25b49087b8b4f9751c20",
     ),
     (
         "recursion-unused.elf",
-        "8b4b503a1f89348c512df28e11d5cd2111b987fa2f95a2b4f5362fd1fd7e877e",
+        "cb26d3481ba3d5bb8bf2301b6fdda242d4f66b3170db95a71c22fa775116d2a3",
+    ),
+    (
+        "public-io.elf",
+        "ae501a6dc95058189d8a57ddffb325492d1368c68daf868268830e70c652e6eb",
     ),
 ];
 

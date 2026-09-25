@@ -254,7 +254,7 @@
 000102d4 4591 c.li a1, 4
 000102d6 cc2e c.swsp a1, 24(sp)
 000102d8 00000097 auipc ra, 0
-000102dc 654080e7 jalr ra, 1620(ra) <_ZN9guest_sdk10read_input17h3e98bf88357b48efE>
+000102dc 654080e7 jalr ra, 1620(ra) <_ZN9guest_sdk10read_stdin17hd34b2e57db9292a7E>
 000102e0 45e2 c.lwsp a1, 24(sp)
 000102e2 00b50663 beq a0, a1, 0x102ee <_ZN9rvc_dense4main17h6a2d48cb411edb69E+0x58>
 000102e6 a009 c.j 0x102e8 <_ZN9rvc_dense4main17h6a2d48cb411edb69E+0x52>
@@ -306,7 +306,7 @@
 00010366 4591 c.li a1, 4
 00010368 c62e c.swsp a1, 12(sp)
 0001036a 00000097 auipc ra, 0
-0001036e 60a080e7 jalr ra, 1546(ra) <_ZN9guest_sdk6commit17he2063f86fd49b05fE>
+0001036e 5da080e7 jalr ra, 1498(ra) <_ZN9guest_sdk12write_stdout17h2cbc2f534b1f176bE>
 00010372 4542 c.lwsp a0, 16(sp)
 00010374 00000097 auipc ra, 0
 00010378 e98080e7 jalr ra, -360(ra) <_ZN4core3num21_$LT$impl$u20$u32$GT$11to_le_bytes17hdedf8fb96a2a2378E>
@@ -316,7 +316,7 @@
 00010382 da2a c.swsp a0, 52(sp)
 00010384 1848 c.addi4spn a0, sp, 52
 00010386 00000097 auipc ra, 0
-0001038a 5ee080e7 jalr ra, 1518(ra) <_ZN9guest_sdk6commit17he2063f86fd49b05fE>
+0001038a 5be080e7 jalr ra, 1470(ra) <_ZN9guest_sdk12write_stdout17h2cbc2f534b1f176bE>
 0001038e 4552 c.lwsp a0, 20(sp)
 00010390 00000097 auipc ra, 0
 00010394 e7c080e7 jalr ra, -388(ra) <_ZN4core3num21_$LT$impl$u20$u32$GT$11to_le_bytes17hdedf8fb96a2a2378E>
@@ -326,7 +326,7 @@
 0001039e dc2a c.swsp a0, 56(sp)
 000103a0 1828 c.addi4spn a0, sp, 56
 000103a2 00000097 auipc ra, 0
-000103a6 5d2080e7 jalr ra, 1490(ra) <_ZN9guest_sdk6commit17he2063f86fd49b05fE>
+000103a6 5a2080e7 jalr ra, 1442(ra) <_ZN9guest_sdk12write_stdout17h2cbc2f534b1f176bE>
 000103aa 40b6 c.lwsp ra, 76(sp)
 000103ac 6161 c.addi16sp sp, 80
 000103ae 8082 c.jr ra
@@ -373,7 +373,7 @@
 00010420 0d8080e7 jalr ra, 216(ra) <_ZN4core3fmt5Write9write_fmt17h26f9856611fe310bE>
 00010424 06500513 addi a0, zero, 101
 00010428 00000097 auipc ra, 0
-0001042c 534080e7 jalr ra, 1332(ra) <_ZN9guest_sdk4exit17h329eea3715aa49a9E>
+0001042c 54c080e7 jalr ra, 1356(ra) <_ZN9guest_sdk4exit17h329eea3715aa49a9E>
 00010430 1141 c.addi sp, -16
 00010432 c036 c.swsp a3, 0(sp)
 00010434 c232 c.swsp a2, 4(sp)
@@ -850,7 +850,7 @@
 000108c0 852e c.mv a0, a1
 000108c2 45a2 c.lwsp a1, 8(sp)
 000108c4 00000097 auipc ra, 0
-000108c8 080080e7 jalr ra, 128(ra) <_ZN9guest_sdk3log17h52ec56609710bb9dE>
+000108c8 098080e7 jalr ra, 152(ra) <_ZN9guest_sdk3log17h52ec56609710bb9dE>
 000108cc 4501 c.li a0, 0
 000108ce 40b2 c.lwsp ra, 12(sp)
 000108d0 0141 c.addi sp, 16
@@ -902,7 +902,7 @@
 00010946 c606 c.swsp ra, 12(sp)
 00010948 862e c.mv a2, a1
 0001094a 85aa c.mv a1, a0
-0001094c 4509 c.li a0, 2
+0001094c 4505 c.li a0, 1
 0001094e 00000097 auipc ra, 0
 00010952 14e080e7 jalr ra, 334(ra) <_ZN9guest_sdk8write_fd17h0c0972d92717c229E>
 00010956 40b2 c.lwsp ra, 12(sp)
@@ -910,23 +910,23 @@
 0001095a 8082 c.jr ra
 0001095c 1141 c.addi sp, -16
 0001095e c606 c.swsp ra, 12(sp)
-00010960 c42a c.swsp a0, 8(sp)
-00010962 a009 c.j 0x10964 <_ZN9guest_sdk4exit17h329eea3715aa49a9E+0x8>
-00010964 45a2 c.lwsp a1, 8(sp)
-00010966 05d00513 addi a0, zero, 93
-0001096a 00000097 auipc ra, 0
-0001096e 022080e7 jalr ra, 34(ra) <_ZN9guest_sdk6ecall117h890abe59c3a89e3eE>
-00010972 bfcd c.j 0x10964 <_ZN9guest_sdk4exit17h329eea3715aa49a9E+0x8>
+00010960 862e c.mv a2, a1
+00010962 85aa c.mv a1, a0
+00010964 4509 c.li a0, 2
+00010966 00000097 auipc ra, 0
+0001096a 136080e7 jalr ra, 310(ra) <_ZN9guest_sdk8write_fd17h0c0972d92717c229E>
+0001096e 40b2 c.lwsp ra, 12(sp)
+00010970 0141 c.addi sp, 16
+00010972 8082 c.jr ra
 00010974 1141 c.addi sp, -16
 00010976 c606 c.swsp ra, 12(sp)
-00010978 862e c.mv a2, a1
-0001097a 85aa c.mv a1, a0
-0001097c 4505 c.li a0, 1
-0001097e 00000097 auipc ra, 0
-00010982 11e080e7 jalr ra, 286(ra) <_ZN9guest_sdk8write_fd17h0c0972d92717c229E>
-00010986 40b2 c.lwsp ra, 12(sp)
-00010988 0141 c.addi sp, 16
-0001098a 8082 c.jr ra
+00010978 c42a c.swsp a0, 8(sp)
+0001097a a009 c.j 0x1097c <_ZN9guest_sdk4exit17h329eea3715aa49a9E+0x8>
+0001097c 45a2 c.lwsp a1, 8(sp)
+0001097e 05d00513 addi a0, zero, 93
+00010982 00000097 auipc ra, 0
+00010986 00a080e7 jalr ra, 10(ra) <_ZN9guest_sdk6ecall117h890abe59c3a89e3eE>
+0001098a bfcd c.j 0x1097c <_ZN9guest_sdk4exit17h329eea3715aa49a9E+0x8>
 0001098c 1141 c.addi sp, -16
 0001098e c42e c.swsp a1, 8(sp)
 00010990 88aa c.mv a7, a0
@@ -1006,7 +1006,7 @@
 00010a4a a039 c.j 0x10a58 <_ZN9guest_sdk7read_fd17hba7337b0d1af363bE+0x98>
 00010a4c 04600513 addi a0, zero, 70
 00010a50 00000097 auipc ra, 0
-00010a54 f0c080e7 jalr ra, -244(ra) <_ZN9guest_sdk4exit17h329eea3715aa49a9E>
+00010a54 f24080e7 jalr ra, -220(ra) <_ZN9guest_sdk4exit17h329eea3715aa49a9E>
 00010a58 4522 c.lwsp a0, 8(sp)
 00010a5a 45b2 c.lwsp a1, 12(sp)
 00010a5c feb568e3 bltu a0, a1, 0x10a4c <_ZN9guest_sdk7read_fd17hba7337b0d1af363bE+0x8c>
@@ -1087,7 +1087,7 @@
 00010b28 a039 c.j 0x10b36 <_ZN9guest_sdk8write_fd17h0c0972d92717c229E+0x9a>
 00010b2a 04600513 addi a0, zero, 70
 00010b2e 00000097 auipc ra, 0
-00010b32 e2e080e7 jalr ra, -466(ra) <_ZN9guest_sdk4exit17h329eea3715aa49a9E>
+00010b32 e46080e7 jalr ra, -442(ra) <_ZN9guest_sdk4exit17h329eea3715aa49a9E>
 00010b36 4522 c.lwsp a0, 8(sp)
 00010b38 45b2 c.lwsp a1, 12(sp)
 00010b3a feb568e3 bltu a0, a1, 0x10b2a <_ZN9guest_sdk8write_fd17h0c0972d92717c229E+0x8e>

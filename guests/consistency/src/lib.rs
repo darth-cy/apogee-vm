@@ -47,9 +47,10 @@
 //! - **Bounded allocation.** The guest allocator never frees, so the *total* a
 //!   run allocates is what counts: stay under 4 MiB per workload at
 //!   [`MAX_SCALE`].
-//! - **Bounded work.** [`hazards`] alone is held near 20k guest instructions,
-//!   because it is the one workload the instruction-by-instruction QEMU
-//!   differential runs. Every other workload's budget is the three-way suite's
+//! - **Bounded work.** [`hazards`] alone is held near 20k guest instructions:
+//!   it is the one workload the QEMU leg runs, and the bound was set when that
+//!   comparison read a register file per instruction rather than the guest's
+//!   output. Every other workload's budget is the three-way suite's
 //!   wall clock: hundreds of thousands of instructions at scale 0 and a few
 //!   million at [`MAX_SCALE`] is the shape it has settled at, and `crypto` is
 //!   thirty times that because the repository's own field and permutation

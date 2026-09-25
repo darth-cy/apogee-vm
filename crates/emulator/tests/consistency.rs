@@ -7,9 +7,8 @@
 //! repository's own field and permutation, allocation patterns — and a thin
 //! guest `main`. The host calls the library directly. The guest is built from
 //! that same source here, at test time, so the legs are always one program: the
-//! committed `consistency.elf` is the loader's fixture and the
-//! instruction-by-instruction differential's, and a stale one would have this
-//! suite comparing two programs.
+//! committed `consistency.elf` is the loader's fixture and the output oracle's,
+//! and a stale one would have this suite comparing two programs.
 //!
 //! Which legs disagree says what broke:
 //!
@@ -29,13 +28,20 @@
 //! the pointer-width ones must actually differ, so the list cannot go stale by
 //! quietly becoming false.
 //!
+//! Every one of those is **observable output** — what the guest computed — and
+//! never an execution internal, so this suite sits inside the invariant
+//! `tests/qemu_outputs.rs` states rather than being an exception to it: QEMU is
+//! an oracle for what a guest computes, never for how this emulator computes
+//! it. A panic's file, line, column and message reach fd 2 because the guest
+//! printed them; no register, pc, instruction count or trace is read here.
+//!
 //! The host leg runs with overflow checks on, as both guest profiles do, and on
 //! a thread with a 64 MiB stack: a test thread's 2 MiB would make deep
 //! recursion a difference between the legs for no reason worth finding.
 //!
 //! Without QEMU the suite compares the host and the emulator, which says *that*
 //! they differ but not which is wrong. The QEMU leg is `#[ignore]`d for the
-//! reason `tests/differential.rs` gives, and CI asks for it by name:
+//! reason `tests/qemu_outputs.rs` gives, and CI asks for it by name:
 //!
 //! ```text
 //! cargo test -p emulator --test consistency -- --include-ignored
@@ -65,7 +71,7 @@ use consistency::{
     sections, Input, HEADER_LEN, MAX_SCALE, MODE_HEAP_CEILING, MODE_HEAP_UNDER_DEEP_STACK,
     TAG_BAD_INPUT, WORKLOADS,
 };
-use constants::{family, memory};
+use constants::memory;
 use emulator::{run, trace_run};
 use loader::{load_elf, ProgramImage};
 use test_support::{to_hex, Rng};
@@ -232,7 +238,7 @@ fn emulate(image: &ProgramImage, input: &[u8]) -> Outcome {
     match run(image, &io(input)) {
         Ok(e) => Outcome::Exit {
             code: e.exit_code,
-            output: e.io.output,
+            output: e.stdout,
             panic: parse_panic(&String::from_utf8_lossy(&e.stderr)),
         },
         Err(e) => Outcome::Stopped(format!("the emulator stopped it: {e}")),
@@ -873,8 +879,12 @@ fn a_traced_run_is_the_same_execution_and_its_memory_balances() {
             .unwrap_or_else(|e| panic!("input {k}: {e}"));
         let plain = run(&guest.image, &io(input)).expect("run");
         assert_eq!(plain, execution, "input {k}: run and trace_run");
-        log.self_check(&guest.image)
-            .unwrap_or_else(|e| panic!("input {k}: the memory log does not balance: {e:?}"));
+        log.self_check(&trace::InitialMemory {
+            image: &guest.image,
+            public_input: input,
+            advice: &[],
+        })
+        .unwrap_or_else(|e| panic!("input {k}: the memory log does not balance: {e:?}"));
         // `docs/spec/memory.md` §5: a failed run halts on the sentinel too.
         let final_pc = log.final_state().pop().expect("a run has a final state");
         assert_eq!(
@@ -887,9 +897,12 @@ fn a_traced_run_is_the_same_execution_and_its_memory_balances() {
 
         if k == 0 {
             for trace in &traces.families {
+                // Every **window** family owns addresses and not cycles, so
+                // an empty buffer is what it is supposed to have: the two RAM
+                // window ones and, since S25, the two public value ones and
+                // `ADVICE_WINDOWS` (`docs/spec/public-values.md` §4).
                 assert!(
-                    trace.family == family::INIT_TEARDOWN
-                        || trace.family == family::ZERO_WINDOWS
+                    !constants::family::CYCLE_OWNING[trace.family as usize]
                         || !trace.cycle.is_empty(),
                     "family {} never runs",
                     program::family_name(trace.family)
@@ -1125,7 +1138,7 @@ fn workload_costs() {
                 &io(&fd0(1, scale, 1 << i, 0, TEXT.as_bytes())),
             )
             .unwrap_or_else(|e| panic!("{}: {e}", w.name));
-            (e.cycle_count, e.io.output.len())
+            (e.cycle_count, e.stdout.len())
         };
         let ((small, _), (large, bytes)) = (cost(0), cost(MAX_SCALE));
         println!("{:<16} {small:>14} {large:>14} {bytes:>12}", w.name);

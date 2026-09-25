@@ -130,6 +130,18 @@ pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
         f::ATOMICS => (atomics::artifact(trace_vars), atomics::channels()),
         f::INIT_TEARDOWN => (memory::image_window_artifact(trace_vars), Vec::new()),
         f::ZERO_WINDOWS => (memory::zero_window_artifact(trace_vars), Vec::new()),
+        // The public output window is `ZERO_WINDOWS`' circuit, byte for byte,
+        // and that is the point: its init leaf is the literal 0, so a prover
+        // cannot supply the journal at timestamp 0 instead of storing it.
+        // Nothing checks that — there is nothing to check
+        // (`docs/spec/public-values.md` §5).
+        f::PUBLIC_OUTPUT => (memory::zero_window_artifact(trace_vars), Vec::new()),
+        // The public input window and the advice windows share one circuit and
+        // differ only in what the verifier does with the committed init
+        // column: holds it to the statement's `input`, or to nothing at all.
+        f::PUBLIC_INPUT | f::ADVICE_WINDOWS => {
+            (memory::value_window_artifact(trace_vars), Vec::new())
+        }
         // A delegation family carries no channel at all, so no minimum height
         // applies to it — and none could: at a channel's height its
         // permutation does not fit (`docs/spec/delegation.md` §9).

@@ -12,6 +12,8 @@
 use alloc::vec::Vec;
 
 use constants::memory::{READ_ROOT, TS_BITS, WRITE_ROOT};
+use constants::{family, guest_memory};
+use constraints::PolyAddress;
 use field::Fr;
 use gkr_verify::{
     boundary_factors, channel_holds, reconciles, verify, ExternalChallenges, GkrError, OutputClaims,
@@ -19,7 +21,8 @@ use gkr_verify::{
 use poly::{MultilinearPoly, PolyBacking};
 
 use crate::statement::{
-    check_memory_windows, global_commit, shard_challenges, shard_transcript, statement_shards,
+    check_memory_windows, global_commit, public_io_words, shard_challenges, shard_transcript,
+    statement_shards,
 };
 use crate::types::{OpeningClaim, PublicInputs, ShardProof, VerifyError, VerifyingKey};
 
@@ -70,8 +73,19 @@ pub fn derive_global_phase(
         ));
     }
 
-    // 2. The window rules.
+    // 2. The window rules, and the two public payloads' ceiling. A public
+    //    window carries `guest_memory::PUBLIC_PAYLOAD_BYTES` payload bytes, so
+    //    a longer `input` or `output` describes bytes no window could have
+    //    held. Checked here, before `public_io_words` is asked to lay either
+    //    out (`docs/spec/public-values.md` §3).
     check_memory_windows(config, &public.shard_counts, &public.windows).map_err(statement)?;
+    let payload = guest_memory::PUBLIC_PAYLOAD_BYTES as usize;
+    if public.input.len() > payload {
+        return Err(statement("the public input is longer than its window"));
+    }
+    if public.output.len() > payload {
+        return Err(statement("the public output is longer than its window"));
+    }
 
     // 3. One commitment list and one root pair per statement shard, each list
     //    its family's memory width. The total is bounded before anything is
@@ -229,6 +243,60 @@ pub fn verify_shard_local(
     let own = [proof.outputs[READ_ROOT], proof.outputs[WRITE_ROOT]];
     if own != public.memory_roots[position] {
         return Err(memory("the shard's roots are not the statement's"));
+    }
+
+    // 10c. A public value shard's committed column **is** the statement's
+    //      byte string, at this shard's own opening point. `claims` are the
+    //      base claims in layout order M, W, S, and neither family has a `W`
+    //      or an `S` column, so `claims[1]` is `M[1] teardown_value` and
+    //      `claims[2]` is `M[2] init_value`.
+    //
+    //      What each check is worth rests on the memory argument, not on this
+    //      comparison alone (`docs/spec/public-values.md` §5): the multiset
+    //      already forces a window's init column to be each address's **first**
+    //      value and its teardown column to be its **last**. So holding
+    //      `PUBLIC_INPUT`'s init column to `public.input` says the guest's
+    //      first read of every input word read the statement's input, and
+    //      holding `PUBLIC_OUTPUT`'s teardown column to `public.output` says
+    //      the statement's output is what the guest's stores left behind. The
+    //      journal cannot be pre-loaded at timestamp 0 instead, because that
+    //      family's init leaf is a literal 0 with no column to choose.
+    //      The column is named by **address** and not by position: a base
+    //      claim carries the `PolyAddress` it is a claim about, so a future
+    //      artifact that reordered its columns fails here loudly instead of
+    //      quietly comparing the wrong one.
+    let public_value = match proof.family {
+        // `M[2] init_value`: the window's contents at timestamp 0.
+        family::PUBLIC_INPUT => Some((
+            2,
+            &public.input,
+            "the public input window is not the statement's input",
+        )),
+        // `M[1] teardown_value`: its contents at the end of the execution.
+        family::PUBLIC_OUTPUT => Some((
+            1,
+            &public.output,
+            "the public output window is not the statement's output",
+        )),
+        _ => None,
+    };
+    if let Some((slot, bytes, wrong)) = public_value {
+        // The payload ceiling again, because this function is public and
+        // `no_std`: `derive_global_phase` refuses a longer one as `Statement`,
+        // but a caller that hands this a statement it did not derive the
+        // global phase from must not reach `public_io_words`' panic. Nothing
+        // a proof or public inputs carry makes this crate panic.
+        if bytes.len() > guest_memory::PUBLIC_PAYLOAD_BYTES as usize {
+            return Err(statement("a public value is longer than its window"));
+        }
+        let got = claims
+            .get(slot)
+            .filter(|c| c.address == PolyAddress::Memory(slot as u32))
+            .ok_or(malformed("a public value shard has no value column"))?;
+        let want = MultilinearPoly::new(PolyBacking::U32(public_io_words(bytes))).evaluate(&point);
+        if got.value != want {
+            return Err(memory(wrong));
+        }
     }
 
     // 11. The opening the wrapper owes: M from the statement, W from the

@@ -67,8 +67,9 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
 /// the numbers read off the registry's circuit — so that a change to either
 /// family shows up on both sides. What the trace holds, instruction by
 /// instruction, is `crates/checker/tests/shift_bitwise.rs` and `crates/checker/
-/// tests/mul_div.rs` over the same fixture, and its QEMU differential is
-/// `crates/emulator/tests/differential.rs`'.
+/// tests/mul_div.rs` over the same fixture, and QEMU's reading of it is
+/// `crates/emulator/tests/qemu_outputs.rs`', which compares the exit status and
+/// fd 1 and nothing below that.
 #[test]
 #[ignore = "four 2^20-row execution shards: one statement's proof peaks at 14.1 GB"]
 fn a1_the_guest_proves_and_every_shard_verifies() {
@@ -82,7 +83,10 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
             (SHB, 1 << 20),
             (MD, 1 << 20),
             (INIT, 1 << 16),
-            (ZERO, 1 << 16)
+            (ZERO, 1 << 16),
+            (family::PUBLIC_INPUT, family::PUBLIC_WINDOW_HEIGHT),
+            (family::PUBLIC_OUTPUT, family::PUBLIC_WINDOW_HEIGHT),
+            (family::ADVICE_WINDOWS, 1 << 16)
         ]
     );
     let live = |f: u32| {
@@ -94,17 +98,29 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
     assert_eq!((live(ADD), live(JBS)), (452, 96));
     assert_eq!((live(SHB), live(MD)), (45, 54));
     assert_eq!(
-        archive.memory_log().self_check(&setup.program.image),
+        archive.memory_log().self_check(&trace::InitialMemory {
+            image: &setup.program.image,
+            public_input: &archive.io_streams().input,
+            advice: archive.advice(),
+        }),
         Ok(())
     );
-    assert_eq!(public.shard_counts, vec![1, 1, 1, 1, 1, 0]);
+    assert_eq!(public.shard_counts, vec![1, 1, 1, 1, 1, 0, 1, 1, 0]);
     assert!(public.windows.is_empty(), "alu touches no RAM");
     assert_eq!(public.exit_status, common::ALU_RESULT);
     assert!(public.input.is_empty() && public.output.is_empty());
     let shards: Vec<(u32, u32)> = proofs.iter().map(|p| (p.family, p.shard_index)).collect();
     assert_eq!(
         shards,
-        vec![(INIT, 0), (ADD, 0), (JBS, 0), (SHB, 0), (MD, 0)],
+        vec![
+            (INIT, 0),
+            (ADD, 0),
+            (JBS, 0),
+            (SHB, 0),
+            (MD, 0),
+            (family::PUBLIC_INPUT, 0),
+            (family::PUBLIC_OUTPUT, 0)
+        ],
         "one shard per family that runs, in the global transcript's group order"
     );
 

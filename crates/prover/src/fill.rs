@@ -35,7 +35,8 @@ use poly::{MultilinearPoly, PolyBacking};
 use program::lookup_tables::generic_table;
 use program::FamilyId;
 use trace::{
-    build_frame_witness, build_init_teardown_columns, build_memory_columns, Role, TraceArchive,
+    build_frame_witness, build_init_teardown_columns, build_memory_columns,
+    build_value_window_columns, Role, TraceArchive,
 };
 
 use crate::Program;
@@ -66,7 +67,12 @@ pub fn family_fill(family: FamilyId) -> Option<Fill> {
         family::MEM_WORD => Some(mem_word),
         family::MEM_SUBWORD => Some(mem_subword),
         family::ATOMICS => Some(atomics),
-        family::INIT_TEARDOWN | family::ZERO_WINDOWS => Some(window),
+        // The journal's window is `ZERO_WINDOWS`' circuit and `ZERO_WINDOWS`'
+        // fill: its init leaf is the literal 0, so there is no init column to
+        // fill (`docs/spec/public-values.md` §5).
+        family::INIT_TEARDOWN | family::ZERO_WINDOWS | family::PUBLIC_OUTPUT => Some(window),
+        family::PUBLIC_INPUT => Some(public_input),
+        family::ADVICE_WINDOWS => Some(advice),
         family::KECCAK_F => Some(keccak_f),
         family::POSEIDON2 => Some(poseidon2),
         family::FR_ARITH => Some(fr_arith),
@@ -405,6 +411,46 @@ fn window(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Stri
     Ok(build_init_teardown_columns(
         src.archive.memory_log(),
         &src.program.image,
+        src.window,
+        src.height,
+    ))
+}
+
+/// The public input window: a value window whose init column is the statement's
+/// `input`, laid out by `program::public_io_words`.
+///
+/// The verifier holds that column to its own multilinear extension of the same
+/// words at the shard's opening point, so this is the one place the prover can
+/// put the bytes and have the proof verify
+/// (`docs/spec/public-values.md` §5).
+fn public_input(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    let input = &src.archive.io_streams().input;
+    if input.len() > guest_memory::PUBLIC_PAYLOAD_BYTES as usize {
+        return Err(format!(
+            "the public input is {} bytes, above the window's {}",
+            input.len(),
+            guest_memory::PUBLIC_PAYLOAD_BYTES
+        ));
+    }
+    Ok(build_value_window_columns(
+        src.archive.memory_log(),
+        &program::public_io_words(input),
+        src.window,
+        src.height,
+    ))
+}
+
+/// An advice window: a value window whose init column is this window's slice
+/// of the bytes the host supplied, and which **nothing binds**.
+fn advice(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    let bytes = src.archive.advice();
+    let first = src.height as u64 * src.index as u64;
+    let words: Vec<u32> = (0..src.height as u64)
+        .map(|y| trace::advice_word(bytes, first + y))
+        .collect();
+    Ok(build_value_window_columns(
+        src.archive.memory_log(),
+        &words,
         src.window,
         src.height,
     ))

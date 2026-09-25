@@ -82,17 +82,28 @@ fn the_layouts_are_the_specs() {
 
     let public = statement();
     let b = public.to_bytes();
-    // input (4 + 3), output (4), status, counts (4 + 12), windows (4), then
-    // the 64 boundary scalars: x10's value is scalar 33 + 9.
-    let boundary = 7 + 4 + 4 + 16 + 4;
+    // input (4 + 3), output (4), status, counts (4 + 24 — six families since
+    // S25), windows (4), then the 64 boundary scalars: x10's value is scalar
+    // 33 + 9.
+    let boundary = 7 + 4 + 4 + (4 + 4 * 6) + 4;
     assert_eq!(u32::from_le_bytes(b[11..15].try_into().unwrap()), 42);
     assert_eq!(
         &b[boundary + 32 * 42..boundary + 32 * 43],
         &Fr::from_u64(42).to_bytes()
     );
+    // Four shards: the init window, add/sub, and S25's two public windows,
+    // whose memory widths are 3 and 2 (`docs/spec/public-values.md` §4).
     assert_eq!(
         b.len(),
-        boundary + 64 * 32 + 4 + (4 + 2 * 64) + (4 + 42 * 64) + 4 + 2 * 64
+        boundary
+            + 64 * 32
+            + 4
+            + (4 + 2 * 64)
+            + (4 + 42 * 64)
+            + (4 + 3 * 64)
+            + (4 + 2 * 64)
+            + 4
+            + 4 * 64
     );
 
     // The key: the header up to the circuits, S17's generic table three raw
@@ -108,7 +119,11 @@ fn the_layouts_are_the_specs() {
     assert_eq!(u32_at(at), 0x1_0000, "the entry pc");
     assert_eq!(&b[at + 4..at + 36], &key.identity.to_bytes());
     at += 36;
-    assert_eq!(u32_at(at), 4, "one setup list per family");
+    assert_eq!(
+        u32_at(at),
+        key.config.families.len() as u32,
+        "one setup list per family"
+    );
     at += 4;
     for list in &key.setup_commitments {
         assert_eq!(u32_at(at) as usize, list.len());
@@ -126,7 +141,11 @@ fn the_layouts_are_the_specs() {
     }
     assert_eq!(&b[at..at + 32], &key.srs_digest.to_bytes());
     at += 32;
-    assert_eq!(u32_at(at), 4, "one circuit per family");
+    assert_eq!(
+        u32_at(at),
+        key.config.families.len() as u32,
+        "one circuit per family"
+    );
     assert_eq!(u32_at(at + 4), family::ADD_SUB_LUI_AUIPC);
     let artifact = key.circuits[0].artifact.to_bytes();
     assert_eq!(u32_at(at + 8) as usize, artifact.len());
@@ -183,7 +202,7 @@ fn the_readers_refuse_rather_than_panic() {
     );
 
     // A boundary timestamp of 2^38 and a boundary value of 2^32.
-    let boundary = 7 + 4 + 4 + 16 + 4;
+    let boundary = 7 + 4 + 4 + (4 + 4 * 6) + 4;
     let mut ts = public.clone();
     ts[boundary..boundary + 32].copy_from_slice(&Fr::from_u64(1 << 38).to_bytes());
     assert_eq!(
@@ -374,7 +393,11 @@ fn a_key_that_breaks_a_load_rule_is_refused() {
     // circuit under a config of S17's family alone, whose circuit exists.
     let mut k = honest.clone();
     k.config = VmConfig {
-        families: vec![(JBS, 1 << 20), (7, 1 << 16), (8, 1 << 16)],
+        families: {
+            let mut f = vec![(JBS, 1 << 20), (7, 1 << 16), (8, 1 << 16)];
+            f.extend(common::window_families(1 << 16));
+            f
+        },
         bytecode_size_words: 1 << 20,
     };
     k.identity = identity_digest(k.code_version, &k.config, k.entry_pc, &k.setup_commitments);

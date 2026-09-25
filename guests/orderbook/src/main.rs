@@ -182,7 +182,7 @@ impl Order {
 fn read_orders() -> Vec<Order> {
     let mut header = [0u8; 4];
     assert_eq!(
-        guest_sdk::read_input(&mut header),
+        guest_sdk::read_stdin(&mut header),
         header.len(),
         "orderbook: fd 0 must open with a u32 order count"
     );
@@ -197,7 +197,7 @@ fn read_orders() -> Vec<Order> {
     // something about the zeroes left in the tail of this buffer.
     let mut body = vec![0u8; declared * RECORD_BYTES];
     assert_eq!(
-        guest_sdk::read_input(&mut body),
+        guest_sdk::read_stdin(&mut body),
         body.len(),
         "orderbook: fd 0 ended before the declared orders did"
     );
@@ -252,7 +252,7 @@ fn commit_result(
     record[16..20].copy_from_slice(&bids_filled.to_le_bytes());
     record[20..24].copy_from_slice(&asks_filled.to_le_bytes());
     record[24..28].copy_from_slice(&orders_rejected.to_le_bytes());
-    guest_sdk::commit(&record);
+    guest_sdk::write_stdout(&record);
 }
 
 // ---------------------------------------------------------------------------

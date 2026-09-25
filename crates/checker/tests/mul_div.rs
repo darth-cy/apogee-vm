@@ -2041,9 +2041,14 @@ fn alu() -> (prover::Program, trace::TraceArchive) {
             family::MUL_DIV,
             family::INIT_TEARDOWN,
             family::ZERO_WINDOWS,
+            family::PUBLIC_INPUT,
+            family::PUBLIC_OUTPUT,
+            family::ADVICE_WINDOWS,
         ]
     );
     let io = emulator::GuestIo {
+        stdin: Vec::new(),
+        advice: Vec::new(),
         input: Vec::new(),
         hint: Vec::new(),
     };
@@ -2058,6 +2063,7 @@ fn alu() -> (prover::Program, trace::TraceArchive) {
             input: execution.io.input,
             output: execution.io.output,
         },
+        Vec::new(),
         trace::PhaseTiming { wall_nanos: 0 },
     );
     (

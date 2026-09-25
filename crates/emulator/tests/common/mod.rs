@@ -2,7 +2,7 @@
 //!
 //! Every guest here is the committed ELF under `crates/loader/tests/vectors`,
 //! pinned by digest in `crates/loader/tests/common/mod.rs` — the same bytes
-//! QEMU runs in `tests/differential.rs`.
+//! QEMU runs in `tests/qemu_outputs.rs`.
 
 #![allow(dead_code)]
 
@@ -30,9 +30,25 @@ pub fn image(name: &str) -> ProgramImage {
     load_elf(&elf(name)).unwrap_or_else(|e| panic!("{name}: {e:?}"))
 }
 
-pub fn io(input: &[u8]) -> GuestIo {
+/// A run whose bytes arrive on **fd 0**, which is what every committed guest
+/// but `public-io` reads: they call `guest_sdk::read_stdin`, the compatibility
+/// path, and are not provable (`docs/spec/public-values.md` §1).
+pub fn io(stdin: &[u8]) -> GuestIo {
+    GuestIo {
+        input: Vec::new(),
+        advice: Vec::new(),
+        stdin: stdin.to_vec(),
+        hint: Vec::new(),
+    }
+}
+
+/// A run with `input` in the **public input window** and `advice` in the
+/// advice region — the provable path, and neither is an ecall.
+pub fn with_advice(input: &[u8], advice: &[u8]) -> GuestIo {
     GuestIo {
         input: input.to_vec(),
+        advice: advice.to_vec(),
+        stdin: Vec::new(),
         hint: Vec::new(),
     }
 }
@@ -104,9 +120,9 @@ pub fn input_of(name: &str) -> Vec<u8> {
         "rvc-dense" => 7u32.to_le_bytes().to_vec(),
         // Reads nothing: its exit status is its result.
         "addsub" | "control" | "alu" | "mem" => Vec::new(),
-        // The hazards workload alone, at scale 0: 25,945 instructions, which is
-        // all of a guest this size that an instruction-by-instruction log can
-        // afford. `tests/consistency.rs` is where the rest of it runs.
+        // The hazards workload alone, at scale 0: 25,945 instructions, a
+        // small deterministic slice of a guest this size.
+        // `tests/consistency.rs` is where the rest of it runs.
         "consistency" => consistency::Input {
             seed: 1,
             scale: 0,
@@ -144,6 +160,21 @@ pub struct Traced {
     pub log: MemoryEventLog,
     pub profile: CycleProfile,
     pub execution: Execution,
+    pub advice: Vec<u8>,
+    /// The fd 0 bytes this run was given: what its `read` transfers moved.
+    pub stdin: Vec<u8>,
+}
+
+impl Traced {
+    /// What every address held before this run started: what the log's
+    /// self-check reconstructs each address's first write from.
+    pub fn initial(&self) -> trace::InitialMemory<'_> {
+        trace::InitialMemory {
+            image: &self.image,
+            public_input: &self.execution.io.input,
+            advice: &self.advice,
+        }
+    }
 }
 
 pub fn traced(name: &str) -> Traced {
@@ -166,6 +197,8 @@ pub fn traced(name: &str) -> Traced {
         log,
         profile,
         execution,
+        advice: Vec::new(),
+        stdin: input_of(name),
     }
 }
 

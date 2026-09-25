@@ -288,6 +288,52 @@ pub fn build_init_teardown_columns(
     out
 }
 
+/// A **value window**'s committed columns at `height` rows,
+/// `docs/spec/public-values.md` §4: `M[0] teardown_ts`, `M[1] teardown_value`
+/// and `M[2] init_value` per row `y` at address `a = 4·height·ram_window + 4y`.
+///
+/// `initial[y]` is the word the window starts on — the statement's public
+/// input for `PUBLIC_INPUT`, the prover's advice for `ADVICE_WINDOWS` — and 0
+/// past the end of the slice. `M[2]` is exactly that vector; `M[0]` and `M[1]`
+/// are [`build_init_teardown_columns`]'s teardown, an untouched row keeping
+/// `(0, initial[y])` so that its init and teardown tuples cancel.
+///
+/// Panics unless the window lies inside the 32-bit address space, or if
+/// `height` is not a power of two.
+pub fn build_value_window_columns(
+    log: &MemoryEventLog,
+    initial: &[u32],
+    ram_window: u32,
+    height: usize,
+) -> Vec<(PolyAddress, MultilinearPoly)> {
+    let words = 4 * height as u64;
+    let first = words * ram_window as u64;
+    assert!(
+        first + words <= 1 << 32,
+        "build_value_window_columns: window {ram_window} at height {height} is not inside \
+         [0, 2^32)"
+    );
+    let init: Vec<u64> = (0..height)
+        .map(|y| initial.get(y).copied().unwrap_or(0) as u64)
+        .collect();
+    let mut ts = vec![0u64; height];
+    let mut value = init.clone();
+    for f in log.final_state() {
+        let a = f.addr as u64;
+        if f.space != AddressSpace::Ram || a < first || a >= first + words {
+            continue;
+        }
+        let y = ((a - first) / 4) as usize;
+        ts[y] = f.ts;
+        value[y] = f.value as u64;
+    }
+    vec![
+        (PolyAddress::Memory(0), column(ts, height)),
+        (PolyAddress::Memory(1), column(value, height)),
+        (PolyAddress::Memory(2), column(init, height)),
+    ]
+}
+
 /// The register and PC finals, `docs/spec/memory.md` §4.1, from the log's
 /// final state: each register's last write timestamp and value, `(0, 0)` for
 /// one never queried, and the pc's last write timestamp.

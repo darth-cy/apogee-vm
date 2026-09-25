@@ -213,7 +213,8 @@ use checker::{memory_roots, WitnessRow};
 use constants::challenge_slot::{MEM_ALPHA_VAL, MEM_GAMMA};
 use constants::{family, transcript_tags};
 use constraints::memory::{
-    family_frame_artifact, frame_queries, image_window_artifact, zero_window_artifact,
+    family_frame_artifact, frame_queries, image_window_artifact, value_window_artifact,
+    zero_window_artifact,
 };
 use emulator::{trace_run, GuestIo};
 use gkr::{
@@ -225,8 +226,8 @@ use poly::{MultilinearPoly, PolyBacking};
 use program::{decode_program, ProgramParams, VmConfig};
 use sumcheck::{absorb_witness_digest, witness_digest};
 use trace::{
-    build_frame_witness, build_init_teardown_columns, build_memory_columns, init_windows,
-    CycleProfile, FamilyTraces, MemoryEventLog,
+    build_frame_witness, build_init_teardown_columns, build_memory_columns,
+    build_value_window_columns, init_windows, CycleProfile, FamilyTraces, MemoryEventLog,
 };
 
 /// Each execution family's name, indexed by `FamilyId`: what a frame shard is
@@ -260,6 +261,12 @@ pub struct Traced {
     pub profile: CycleProfile,
     /// `1..=n`, every cycle the execution ran.
     pub cycles: Vec<u64>,
+    /// The public input this run was given: what seeds the `PUBLIC_INPUT`
+    /// window, whether or not the guest looked (`docs/spec/public-values.md`
+    /// §5).
+    pub input: Vec<u8>,
+    /// The advice this run was given. Empty for every committed guest.
+    pub advice: Vec<u8>,
 }
 
 /// The ELF is `crates/loader/tests/vectors`', pinned by digest in that crate's
@@ -277,8 +284,13 @@ pub fn traced(name: &str, input: u32) -> Traced {
     };
     let (tables, config) =
         decode_program(&image, &params).unwrap_or_else(|e| panic!("{name}: {e}"));
+    // Every committed guest this helper traces reads fd 0, the compatibility
+    // path; its public input window stays empty, which a statement carries as
+    // an empty `input` (`docs/spec/public-values.md` §1).
     let io = GuestIo {
-        input: input.to_le_bytes().to_vec(),
+        input: Vec::new(),
+        advice: Vec::new(),
+        stdin: input.to_le_bytes().to_vec(),
         hint: Vec::new(),
     };
     let (traces, log, profile, execution) =
@@ -291,6 +303,8 @@ pub fn traced(name: &str, input: u32) -> Traced {
         log,
         profile,
         cycles: (1..=execution.cycle_count).collect(),
+        input: io.input,
+        advice: io.advice,
     }
 }
 
@@ -406,14 +420,75 @@ pub fn window_shard(
     }
 }
 
-/// `t`'s window shards at `HEIGHT`: `INIT_TEARDOWN`, window 0, and one
-/// `ZERO_WINDOWS` shard per id of `init_windows`.
+/// `t`'s window shards at `HEIGHT`: `INIT_TEARDOWN`, window 0, one
+/// `ZERO_WINDOWS` shard per id of `init_windows`, the two public value shards
+/// at their own pinned height, and one `ADVICE_WINDOWS` shard per window the
+/// advice spans (`docs/spec/public-values.md` §4).
 pub fn window_shards(t: &Traced, memory: &ExternalChallenges) -> Vec<Shard> {
     let mut out = vec![window_shard(&t.log, &t.image, 0, memory)];
     for w in init_windows(&t.log, HEIGHT) {
         out.push(window_shard(&t.log, &t.image, w, memory));
     }
+    let public = family::PUBLIC_WINDOW_HEIGHT;
+    out.push(value_window_shard(
+        &t.log,
+        &program::public_io_words(&t.input),
+        family::PUBLIC_INPUT_WINDOW,
+        public,
+        "public input",
+        memory,
+    ));
+    // The journal's window takes `ZERO_WINDOWS`' artifact, so it has no init
+    // column at all: that is what stops a prover supplying the journal at
+    // timestamp 0 instead of storing it.
+    let vars = public.trailing_zeros();
+    out.push(Shard {
+        label: "public output".to_string(),
+        family: None,
+        artifact: zero_window_artifact(vars),
+        base: BaseLayer::new(build_init_teardown_columns(
+            &t.log,
+            &t.image,
+            family::PUBLIC_OUTPUT_WINDOW,
+            public as usize,
+        )),
+        challenges: window_challenges(memory, family::PUBLIC_OUTPUT_WINDOW, vars),
+    });
+    let first = program::advice_first_window(HEIGHT);
+    for i in 0..trace::advice_window_count(&t.advice, HEIGHT) {
+        let words: Vec<u32> = (0..HEIGHT as u64)
+            .map(|y| trace::advice_word(&t.advice, HEIGHT as u64 * i as u64 + y))
+            .collect();
+        out.push(value_window_shard(
+            &t.log,
+            &words,
+            first + i,
+            HEIGHT,
+            "advice",
+            memory,
+        ));
+    }
     out
+}
+
+/// A **value window** shard: `constraints::memory::value_window_artifact` over
+/// `initial`, the words the window starts on.
+pub fn value_window_shard(
+    log: &MemoryEventLog,
+    initial: &[u32],
+    w: u32,
+    height: u32,
+    label: &str,
+    memory: &ExternalChallenges,
+) -> Shard {
+    let vars = height.trailing_zeros();
+    Shard {
+        label: format!("{label} window {w}"),
+        family: None,
+        artifact: value_window_artifact(vars),
+        base: BaseLayer::new(build_value_window_columns(log, initial, w, height as usize)),
+        challenges: window_challenges(memory, w, vars),
+    }
 }
 
 /// A shard's committed columns, in layout order.

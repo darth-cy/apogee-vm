@@ -220,6 +220,78 @@ pub fn recursion_unused_program() -> Program {
     program_of("recursion-unused", &recursion_params())
 }
 
+/// S25's guest: `guests/public-io`, which reads its public input and its
+/// advice with ordinary loads and writes its journal with ordinary stores
+/// (`docs/spec/public-values.md`). Its execution families at `2^20`, the rest
+/// at `2^16`.
+pub fn public_io_program() -> Program {
+    program_of(
+        "public-io",
+        &heights(&[
+            family::ADD_SUB_LUI_AUIPC,
+            family::JUMP_BRANCH_SLT,
+            family::SHIFT_BITWISE,
+            family::MUL_DIV,
+            family::MEM_WORD,
+            family::MEM_SUBWORD,
+        ]),
+    )
+}
+
+pub fn public_io_setup() -> ProverSetup {
+    ProverSetup::new(public_io_program(), toy_srs(ADD_VARS)).expect("public-io registers")
+}
+
+/// The eight public input bytes `guests/public-io` reads: the advice's length
+/// and the checksum it must have.
+pub fn public_io_input(advice: &[u8]) -> Vec<u8> {
+    let mut sum = 0u32;
+    for (i, byte) in advice.iter().enumerate() {
+        sum = sum.wrapping_add((*byte as u32).wrapping_mul(i as u32 + 1));
+    }
+    let mut input = (advice.len() as u32).to_le_bytes().to_vec();
+    input.extend_from_slice(&sum.to_le_bytes());
+    input
+}
+
+/// The journal `guests/public-io` commits for `advice`: the checksum, then the
+/// first eight advice bytes.
+pub fn public_io_journal(advice: &[u8]) -> Vec<u8> {
+    let mut out = public_io_input(advice)[4..].to_vec();
+    out.extend_from_slice(&advice[..8.min(advice.len())]);
+    out
+}
+
+/// The post-execution archive of one `guests/public-io` run on `advice`, with
+/// the public input that advice checks against.
+pub fn public_io_archive(program: &Program, advice: &[u8]) -> TraceArchive {
+    let io = GuestIo {
+        stdin: Vec::new(),
+        input: public_io_input(advice),
+        advice: advice.to_vec(),
+        hint: Vec::new(),
+    };
+    let (traces, log, profile, execution) =
+        trace_run(&program.image, &io, &program.tables, &program.config).expect("the guest traces");
+    assert_eq!(execution.exit_code, 0, "the guest accepted its advice");
+    assert_eq!(
+        execution.io.output,
+        public_io_journal(advice),
+        "the journal is what the guest committed"
+    );
+    TraceArchive::from_execution(
+        traces,
+        log,
+        profile,
+        IoStreams {
+            input: execution.io.input,
+            output: execution.io.output,
+        },
+        io.advice,
+        PhaseTiming { wall_nanos: 0 },
+    )
+}
+
 /// The post-execution archive of `addsub`'s one run.
 pub fn archive(program: &Program) -> TraceArchive {
     trace(program, RESULT)
@@ -268,7 +340,9 @@ pub fn recursion_unused_archive(program: &Program) -> TraceArchive {
 /// A run with no input and no hint, which must exit with `status`.
 pub fn trace(program: &Program, status: u32) -> TraceArchive {
     let io = GuestIo {
+        stdin: Vec::new(),
         input: Vec::new(),
+        advice: Vec::new(),
         hint: Vec::new(),
     };
     let (traces, log, profile, execution) =
@@ -282,6 +356,7 @@ pub fn trace(program: &Program, status: u32) -> TraceArchive {
             input: execution.io.input,
             output: execution.io.output,
         },
+        Vec::new(),
         PhaseTiming { wall_nanos: 0 },
     )
 }

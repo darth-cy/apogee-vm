@@ -33,6 +33,14 @@ are S18's. §5.1 and §11 gain the three new families, two of which read the gen
 and one of which does not. `docs/spec/memory-ops.md` is their page. With them
 `family_circuit` holds every family the master prompt names.
 
+S25 added three window families and **changed nothing in this page's protocol**: no
+message, no tag, no challenge, no wire form and no field of `PublicInputs`. §2 says so
+explicitly. What moved is §1.1's reading of `input` and `output` — they are the two public
+windows' payloads, not two byte streams — two `Statement` refusals in §6's step 2, and one
+new per-shard check, step 10c, which holds a public value shard's committed column to
+those bytes. §1.2's order is unchanged and the three families fall in its “every other
+family” part. `docs/spec/public-values.md` is their page.
+
 This page is S16's vertical slice as the repository owner decided it: the statement a
 proof is about, the global and per-shard transcripts, the three proof-side types and
 their wire forms, the order `verify_shard` checks things in, the `ADD_SUB_LUI_AUIPC`
@@ -80,8 +88,8 @@ aggregates them.
 
 | field | what |
 | --- | --- |
-| `input: Vec<u8>` | the fd 0 bytes the guest consumed |
-| `output: Vec<u8>` | the fd 1 bytes it wrote |
+| `input: Vec<u8>` | the **public input window**'s payload, at most `PUBLIC_PAYLOAD_BYTES` (`docs/spec/public-values.md` §3) |
+| `output: Vec<u8>` | the **journal**: the public output window's payload, same ceiling |
 | `exit_status: u32` | the guest's result: `x10`'s final value |
 | `shard_counts: Vec<u32>` | one per family of the `VmConfig`, in its order (S11) |
 | `windows: Vec<u32>` | `ZERO_WINDOWS`' window ids, `docs/spec/memory.md` §3.5 |
@@ -109,6 +117,14 @@ then every other family of the VmConfig, ascending by id, shards 0 … count −
 has no entry. `ZERO_WINDOWS` shard `i` is window `windows[i]`; `INIT_TEARDOWN` shard 0
 is window 0.
 
+**The rule is unchanged at S25**, and S25's three families — `PUBLIC_INPUT` (12),
+`PUBLIC_OUTPUT` (13) and `ADVICE_WINDOWS` (14) — fall in the “every other family,
+ascending” part, after the delegation families, exactly as their ids say. Only the two
+init families lead. `PUBLIC_INPUT` shard 0 is window `PUBLIC_INPUT_WINDOW` and
+`PUBLIC_OUTPUT` shard 0 is window `PUBLIC_OUTPUT_WINDOW`, both constants;
+`ADVICE_WINDOWS` shard `i` is window `advice_first_window(h) + i`
+(`docs/spec/memory.md` §3.3).
+
 ---
 
 ## 2. The global transcript
@@ -133,6 +149,15 @@ is window 0.
 G3 to G5 are `absorb_statement_descriptor`, S11's three adjacent messages as S14
 amended them. G1 is the protocol suite tag carrying `PROTOCOL_VERSION`: the suite is
 the tag, the version its payload.
+
+**S25 added nothing to this table.** The public values and the advice region cost the
+global transcript **no new message, no new tag and no new challenge**: the three families
+enter it only where every family does — G3, as three more `(id, height)` pairs in
+`VM_CONFIG`; G4, as three more counts in `SHARD_COUNTS`; and G8, as three more
+memory-column groups. `io_digest` keeps its G7 position and its S10 recipe, which is what
+fixes the statement's two byte strings before any challenge exists, and the columns that
+are held to them are committed at G8, also before the squeeze
+(`docs/spec/public-values.md` §5.1). Nothing on this page's order moved.
 
 **The generic table has no step of its own (S17).** The packed generic table of
 `docs/spec/lookup.md` §9 is committed setup that program identity does not bind (owner's
@@ -333,7 +358,7 @@ and the first that fails names the class:
 | step | class | check |
 | --- | --- | --- |
 | 1 | `Statement` | one shard count per `VmConfig` family; the key's circuits are its config's families, in order |
-| 2 | `Statement` | `docs/spec/memory.md` §3.5's window rules (`check_memory_windows`) |
+| 2 | `Statement` | `docs/spec/memory.md` §3.5's window rules (`check_memory_windows`); then `input` and `output` each no longer than `guest_memory::PUBLIC_PAYLOAD_BYTES` — bytes no public window could have held, refused before `public_io_words` is asked to lay either out (S25) |
 | 3 | `Statement` | `memory_commitments` has one list per statement shard, each as long as its family's `M` layout; `memory_roots` one pair per statement shard |
 | 4 | `Statement` | the time window is a window: `start <= end <= 2^38` (S20; at S16, `[0, 2^38)` exactly) |
 | 5 | `Statement` | the replayed global state digest (§2) equals the one the proof carries |
@@ -342,6 +367,7 @@ and the first that fails names the class:
 | 8 | `Constraint` | every base claim at one point |
 | 9 | `Lookup` | `gkr_verify::channel_holds` on every channel's root pair, in channel order |
 | 10a | `MemoryArgument` | the proof's two memory roots are the statement's for its shard |
+| 10c | `MemoryArgument` | a public value shard's committed column **is** the statement's byte string at this shard's own point: for `PUBLIC_INPUT`, base claim 2 (`M[2] init_value`) against the multilinear extension of `public_io_words(public.input)`; for `PUBLIC_OUTPUT`, base claim 1 (`M[1] teardown_value`) against `public_io_words(public.output)`. Every other family: nothing. S25 |
 | 10b | `MemoryArgument` | every boundary timestamp below `2^38`; `v_10 = exit_status`; `gkr_verify::reconciles` over every shard's roots with `boundary_factors(memory challenges, vk.entry_pc, boundary)` |
 | 11 | — | return the opening claim (§5.1) |
 | 12 | `Opening` | decode every commitment, the `SrsVerifier` and the Mercury proof, and `pcs::batch_verify` |
@@ -358,7 +384,7 @@ exactly as often as its operands change:
 | --- | --- | --- |
 | `verifier_core::derive_global_phase(vk, public) -> Result<GlobalChallenges, VerifyError>` | the key and the statement | steps 1 to 3 and the global transcript, **once per statement** |
 | `verifier_core::verify_global_memory(vk, global, public) -> Result<(), VerifyError>` | the key, the statement and the memory challenges | step 10b, **once per statement** |
-| `verifier_core::verify_shard_local(vk, global, proof, public) -> Result<OpeningClaim, VerifyError>` | one `ShardProof` besides | steps 4 to 10a and 11, **once per shard** |
+| `verifier_core::verify_shard_local(vk, global, proof, public) -> Result<OpeningClaim, VerifyError>` | one `ShardProof` besides | steps 4 to 10a, 10c and 11, **once per shard** |
 
 **Step 10b names no `ShardProof`, and that is the whole of why it is its own
 function.** Its operands are `vk.entry_pc`, `public.boundary`, `public.memory_roots`
@@ -369,6 +395,22 @@ for that one answer. What puts a *particular* shard's proof into that product is
 10a, which holds the roots its own GKR outputs claim to the statement's entry for its
 position; with shard-set exactness on top (`docs/spec/block-proof.md` §2.1) every root
 the product reads belongs to a shard that was verified.
+
+**Step 10c is per shard because it reads one**, and it is where the statement's public
+values are bound to the execution. It sits above 10b in the table because that is the
+first-failure order: 10c is inside `verify_shard_local` and 10b is not run there at all,
+so a shard failing both returns 10c's `MemoryArgument`. A shard's base claims arrive in
+layout order `M`, `W`, `S`, and neither public family has a `W` or an `S` column, so the
+two positions above are
+fixed by the artifact and not chosen. What each comparison is *worth* rests on the memory
+argument and not on the comparison: the multiset already forces a window's init column to
+be each address's first value and its teardown column to be its last
+(`docs/spec/memory.md` §4.2), so holding `PUBLIC_INPUT`'s init column to `public.input`
+says the guest's first read of every input word read the statement's input, and holding
+`PUBLIC_OUTPUT`'s teardown column to `public.output` says the statement's output is what
+the guest's stores left behind. `PUBLIC_OUTPUT` has no init column to check because it
+has none to choose — its artifact's init leaf is a literal 0. `docs/spec/public-values.md`
+§5 is normative; the verifier's whole cost is two 256-point multilinear evaluations.
 
 `reduce_shard` is `derive_global_phase`, then `verify_shard_local`, then
 `verify_global_memory`, and `verifier::verify_shard` is that plus step 12. **The order
@@ -619,8 +661,12 @@ event, and every lookup is switched off by its selector.
 
 ### 8.5 Owed elsewhere, and what this family does not do
 
-- `read`, `write`, `-EBADF`, `-ENOSYS` and transfer rows: the I/O-binding stage, which
-  also chooses how a transfer is confined (S14's open question 10). **A delegation call is
+- `read`, `write`, `-EBADF`, `-ENOSYS` and transfer rows: **never provable**, and S25
+  settled it (`docs/spec/public-values.md` §1). An execution's public values are not a
+  syscall's business, so the I/O-binding stage made the two calls permanently unprovable
+  rather than giving them a circuit, and S14's open question 10 — how a transfer row's RAM
+  write is confined to its ecall's buffer — went with them. This family's fill still
+  refuses both by name. **A delegation call is
   no longer among them**: S21 made `PRECOMPILE_KECCAK_F` the second provable ecall, with
   four gates of its own and three S16 gates amended (§8.2), and S23 added
   `PRECOMPILE_POSEIDON2` and `PRECOMPILE_FR_ARITH` beside it — one selector and three gates
@@ -628,8 +674,12 @@ event, and every lookup is switched off by its selector.
   2 (`delegation.md` §10). What makes it *correct* is not here but in the delegation
   family's circuit; this family only witnesses that the request was made
   (`docs/spec/delegation.md` §5).
-- Binding fd 0 and fd 1 to the execution: that stage too (S14's D3, D5). At S16 the
-  public I/O digest is in the statement, and nothing ties the streams to a row.
+- Binding the public values to the execution (S14's D3, D5): **done at S25**, and not by
+  this family. At S16 the public I/O digest was in the statement and nothing tied it to a
+  row; since S25 the statement's `input` and `output` are the payloads of two RAM windows
+  of their own, bound by the memory argument and by step 10c of §6
+  (`docs/spec/public-values.md`). No gate here changed, and fd 0 and fd 1 are not what is
+  bound — nothing a proof covers travels on either.
 - The generic channel: the family does not look it up. **S17**, the first family that
   does, binds the exact packed-table commitment into the proof's statement or
   transcript before its lookup challenges are drawn — not into program identity

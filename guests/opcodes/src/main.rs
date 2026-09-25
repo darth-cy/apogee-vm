@@ -2,10 +2,11 @@
 #![no_main]
 //! Every RV32IMAC instruction, executed.
 //!
-//! The fixture for S12's QEMU differential: every one of the 59 RV32IMA
-//! instructions runs here with edge-case operands, and a block of compressed
-//! code runs every compressed form a program can execute, so the emulator's
-//! register trace is compared with `qemu-riscv32`'s for each of them.
+//! S12's coverage fixture, and the QEMU output oracle's: every one of the 59
+//! RV32IMA instructions runs here with edge-case operands, and a block of
+//! compressed code runs every compressed form a program can execute, so both
+//! executors run all of them and are held to one exit status and one fd 1
+//! (`crates/emulator/tests/qemu_outputs.rs`).
 //! `crates/emulator/tests/` checks that every mnemonic really does execute,
 //! rather than trusting this comment.
 //!
@@ -21,7 +22,8 @@
 //!   division by zero and the one signed overflow, `INT_MIN / -1`;
 //! - `cover_a`: all nine AMOs with `aq`/`rl` variants, paired `lr.w`/`sc.w`,
 //!   and one **unpaired** `sc.w` — which QEMU fails and the emulator
-//!   succeeds, the whitelisted divergence, exercised on purpose;
+//!   succeeds, the conformance deviation, exercised on purpose and kept out
+//!   of what the two executors are compared on;
 //! - `cover_rvc`: every executable compressed form (all but `c.ebreak` and
 //!   `c.unimp`, which trap), each instruction of the block executed;
 //! - `cover_ecall`: `read` into and `write` from an unaligned buffer, a
@@ -73,7 +75,7 @@ extern "C" {
 
 fn main() {
     let mut mode = [0u8; 4];
-    let mode = match guest_sdk::read_input(&mut mode) {
+    let mode = match guest_sdk::read_stdin(&mut mode) {
         4 => u32::from_le_bytes(mode),
         _ => 0,
     };
@@ -95,12 +97,12 @@ fn main() {
                 ]
             };
             for fold in folds {
-                guest_sdk::commit(&fold.to_le_bytes());
+                guest_sdk::write_stdout(&fold.to_le_bytes());
             }
             let begin = core::ptr::addr_of!(__cover_rvc_begin) as u32;
             let end = core::ptr::addr_of!(__cover_rvc_end) as u32;
-            guest_sdk::commit(&begin.to_le_bytes());
-            guest_sdk::commit(&end.to_le_bytes());
+            guest_sdk::write_stdout(&begin.to_le_bytes());
+            guest_sdk::write_stdout(&end.to_le_bytes());
         }
         // SAFETY: `ebreak` touches no memory and no register.
         1 => unsafe { core::arch::asm!("ebreak") },
@@ -448,8 +450,10 @@ cover_a:
 
     /* An unpaired sc.w: no reservation is held. QEMU fails it -- t6 = 1 and
        nothing stored -- and the emulator succeeds -- t6 = 0 and t0 stored.
-       This is the whitelisted divergence, so t6 and the word are both
-       overwritten before either is read again. */
+       This is the conformance deviation (docs/spec/memory-ops.md 6.6), so t6
+       and the word are both overwritten before either is read again: it must
+       reach neither fd 1 nor the exit status, which is all the two executors
+       are held to. */
     sc.w        t6, t0, (a6)
     li          t6, 0
     sw          x0, 0(a6)

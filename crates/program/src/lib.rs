@@ -57,6 +57,9 @@ pub const FAMILIES: [FamilyId; family::COUNT as usize] = [
     family::KECCAK_F,
     family::POSEIDON2,
     family::FR_ARITH,
+    family::PUBLIC_INPUT,
+    family::PUBLIC_OUTPUT,
+    family::ADVICE_WINDOWS,
 ];
 
 /// Every **delegation** family, with the ecall number that invokes it, its
@@ -129,6 +132,9 @@ pub fn family_name(family: FamilyId) -> &'static str {
         family::KECCAK_F => "KECCAK_F",
         family::POSEIDON2 => "POSEIDON2",
         family::FR_ARITH => "FR_ARITH",
+        family::PUBLIC_INPUT => "PUBLIC_INPUT",
+        family::PUBLIC_OUTPUT => "PUBLIC_OUTPUT",
+        family::ADVICE_WINDOWS => "ADVICE_WINDOWS",
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -267,7 +273,10 @@ pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
         | family::ZERO_WINDOWS
         | family::KECCAK_F
         | family::POSEIDON2
-        | family::FR_ARITH => &[],
+        | family::FR_ARITH
+        | family::PUBLIC_INPUT
+        | family::PUBLIC_OUTPUT
+        | family::ADVICE_WINDOWS => &[],
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -377,7 +386,9 @@ impl ProgramParams {
 // moved to `crates/verifier-core` at S16, so the no_std verifier binds a
 // statement with the same code the prover does. They are re-exported here, and
 // every path that named them still does.
-pub use verifier_core::{absorb_statement_descriptor, ProgramIdentity, VmConfig};
+pub use verifier_core::{
+    absorb_statement_descriptor, advice_first_window, public_io_words, ProgramIdentity, VmConfig,
+};
 
 /// The init families' one height, or the window rule a config breaks, as a
 /// `ProgramError`. `verifier_core::window_height` is the rule.
@@ -644,6 +655,29 @@ pub fn declared_delegations(image: &ProgramImage) -> Result<Vec<FamilyId>, Progr
     Ok(found)
 }
 
+/// The height derivation gives `family`: the caller's, except where the height
+/// is not a choice.
+///
+/// The two **public value** families are pinned to
+/// `family::PUBLIC_WINDOW_HEIGHT` whatever `params` says, because a window's
+/// first address is `4 * height * window` — the height is what places the
+/// windows, and only that one entry of the menu puts
+/// `guest_memory::PUBLIC_INPUT_ORIGIN` and `guest_memory::PUBLIC_OUTPUT_ORIGIN`
+/// in two distinct windows (`docs/spec/public-values.md` §2). So there is
+/// nothing a caller could usefully say, and "every family at `h`" keeps
+/// meaning every family whose height is a choice.
+///
+/// Derivation pins it; **decoding refuses** a wrong one. The check that
+/// matters for soundness is `verifier_core::window_height`, which runs on
+/// `VmConfig::from_bytes` — bytes a verifier was handed — and not here, where
+/// the input is the caller's own.
+fn height_of(family: FamilyId, params: &ProgramParams) -> u32 {
+    match family {
+        family::PUBLIC_INPUT | family::PUBLIC_OUTPUT => family::PUBLIC_WINDOW_HEIGHT,
+        _ => params.heights[family as usize],
+    }
+}
+
 pub fn decode_program(
     image: &ProgramImage,
     params: &ProgramParams,
@@ -670,7 +704,7 @@ pub fn decode_program_detaching(
         });
     }
     for family in FAMILIES {
-        let height = params.heights[family as usize];
+        let height = height_of(family, params);
         if !family::HEIGHT_MENU.contains(&height) {
             return Err(ProgramError::HeightNotOnMenu { family, height });
         }
@@ -726,18 +760,23 @@ pub fn decode_program_detaching(
     for family in FAMILIES {
         let rows = &claims[family as usize];
         // Three presence rules, and no fourth. A family that claims a pc is
-        // present because it claims one. The two init families are present in
-        // every config (`docs/spec/memory.md` §3.2). A delegation family is
-        // present exactly when the linked binary declares it
+        // present because it claims one. A **window** family is present in
+        // every config — the two RAM window ones (`docs/spec/memory.md` §3.2)
+        // and, since S25, the two public value ones and `ADVICE_WINDOWS`
+        // (`docs/spec/public-values.md` §4). A delegation family is present
+        // exactly when the linked binary declares it
         // (`docs/spec/delegation.md` §7) — never because a caller asked.
         let always = (family == family::INIT_TEARDOWN
             || family == family::ZERO_WINDOWS
+            || family == family::ADVICE_WINDOWS
+            || family == family::PUBLIC_INPUT
+            || family == family::PUBLIC_OUTPUT
             || declared.contains(&family))
             && !detached.contains(&family);
         if rows.is_empty() && !always {
             continue;
         }
-        let height = params.heights[family as usize];
+        let height = height_of(family, params);
         if let Some((last, values)) = rows.last() {
             // Slots are swept in address order, so the last claim is the
             // highest row.
@@ -938,10 +977,19 @@ pub fn setup_commitments(
             // `ZERO_WINDOWS` has no setup column, and a delegation family has
             // no decoded table at all: it is invoked, never decoded, so there
             // is nothing about it for identity to commit but its presence in
-            // the `VM_CONFIG` message.
-            family::ZERO_WINDOWS | family::KECCAK_F | family::POSEIDON2 | family::FR_ARITH => {
-                Vec::new()
-            }
+            // the `VM_CONFIG` message. The three S25 window families are
+            // empty for a stronger reason: an `S` column is bound by program
+            // identity, and one execution's public values — or one
+            // execution's advice — have no business in every execution's
+            // identity. Theirs is an `M` column instead
+            // (`docs/spec/public-values.md` §4).
+            family::ZERO_WINDOWS
+            | family::KECCAK_F
+            | family::POSEIDON2
+            | family::FR_ARITH
+            | family::PUBLIC_INPUT
+            | family::PUBLIC_OUTPUT
+            | family::ADVICE_WINDOWS => Vec::new(),
             // One column at a time: at 2^22 rows an `Fr` column is 128 MiB.
             _ => (0..table.columns.len())
                 .map(|c| cm(table, &table.column_poly(c)))

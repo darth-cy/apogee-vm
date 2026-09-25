@@ -61,11 +61,12 @@ jobs:
           APOGEE_GUEST_PROFILE: release
         run: cargo test -p loader --test qemu -- --include-ignored
 
-      # S12's differential: the emulator's trace against qemu-riscv32's
-      # per-instruction register log, over the committed guests. `#[ignore]`d
-      # for the reason the suite above is, and asked for by name the same way.
-      - name: emulator matches QEMU
-        run: cargo test -p emulator --test differential -- --include-ignored
+      # The output oracle: this emulator and qemu-riscv32 on the committed
+      # guests, compared on the exit status and on fd 1 and nothing below that
+      # (S25). `#[ignore]`d for the reason the suite above is, and asked for by
+      # name the same way.
+      - name: emulator matches QEMU on the outputs
+        run: cargo test -p emulator --test qemu_outputs -- --include-ignored
 
       # The three-way consistency suite: `guests/consistency` on the host,
       # under qemu-riscv32 and on the emulator, over one corpus of inputs. The
@@ -359,9 +360,30 @@ jobs:
       # - name: S23's block with both recursion delegation shards
       #   run: cargo test --release -p prover --test recursion -- --include-ignored --test-threads=1
 
+      # DEFERRED: cargo test --release -p prover --test public_io -- --include-ignored --test-threads=1
+      # Master rule 7, for S25's acceptance. `guests/public-io` reads a
+      # commitment out of the **public input**, checks its **advice** against
+      # it, and publishes the result in the **journal** — the first statement in
+      # the repository whose public input and public output are bound to the
+      # execution (`docs/spec/public-values.md`). Its execution families are at
+      # `2^20`, the timestamp channel's floor, so it is deferred for the reason
+      # every proving suite is.
+      #
+      # What needs no proof runs in ordinary CI, in
+      # `crates/checker/tests/public_values.rs`: the window layout's
+      # injectivity on byte strings, the prover's column against the verifier's
+      # own extension, the journal's family having no init column to pre-load,
+      # and each statement rule's negative control.
+      #
+      # - name: S25's public values, bound end to end
+      #   run: cargo test --release -p prover --test public_io -- --include-ignored --test-threads=1
+
       # DEFERRED: cargo test --release -p prover --test revm -- --include-ignored --test-threads=1
-      # Master rule 7, for S24's acceptances 6, 7 and 8. `guests/revm-block`'s
-      # embedded-witness binary runs revm over a synthetic block -- an ether
+      # Master rule 7, for S24's acceptances 6, 7 and 8, over the binary S25
+      # made provable: the witness arrives as **advice** and the output
+      # commitment leaves in the **journal**, so the embedded-witness binary and
+      # `exit_with_public_words` are both gone. `guests/revm-block`
+      # runs revm over a synthetic block -- an ether
       # transfer and a call into a counter contract -- in about 205,000 cycles,
       # and every one of the seven execution families runs: ten shards, seven
       # `2^20` execution shards, two `2^20` window shards and one `2^8` KECCAK_F

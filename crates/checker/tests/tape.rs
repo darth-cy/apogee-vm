@@ -24,7 +24,9 @@ use verifier_core::{
 const POINT: [u8; 64] = [0; 64];
 
 /// S20's two-shard statement's shape: add/sub in two shards, jump/branch/slt
-/// in one, `INIT_TEARDOWN` in one, `ZERO_WINDOWS` in none.
+/// in one, `INIT_TEARDOWN` in one, `ZERO_WINDOWS` in none — and, since S25,
+/// the two public value families in one each and `ADVICE_WINDOWS` in none
+/// (`docs/spec/public-values.md` §4).
 fn key_and_statement() -> (VerifyingKey, PublicInputs) {
     let config = VmConfig {
         families: vec![
@@ -32,6 +34,9 @@ fn key_and_statement() -> (VerifyingKey, PublicInputs) {
             (family::JUMP_BRANCH_SLT, 1 << 20),
             (family::INIT_TEARDOWN, 1 << 16),
             (family::ZERO_WINDOWS, 1 << 16),
+            (family::PUBLIC_INPUT, family::PUBLIC_WINDOW_HEIGHT),
+            (family::PUBLIC_OUTPUT, family::PUBLIC_WINDOW_HEIGHT),
+            (family::ADVICE_WINDOWS, 1 << 16),
         ],
         bytecode_size_words: family::DEFAULT_BYTECODE_SIZE_WORDS,
     };
@@ -67,6 +72,8 @@ fn key_and_statement() -> (VerifyingKey, PublicInputs) {
         vec![POINT; width(family::ADD_SUB_LUI_AUIPC)],
         vec![POINT; width(family::ADD_SUB_LUI_AUIPC)],
         vec![POINT; width(family::JUMP_BRANCH_SLT)],
+        vec![POINT; width(family::PUBLIC_INPUT)],
+        vec![POINT; width(family::PUBLIC_OUTPUT)],
     ];
     let mut boundary = BoundaryFinals {
         reg_ts: [0; 32],
@@ -78,11 +85,11 @@ fn key_and_statement() -> (VerifyingKey, PublicInputs) {
         input: Vec::new(),
         output: Vec::new(),
         exit_status: 2,
-        shard_counts: vec![2, 1, 1, 0],
+        shard_counts: vec![2, 1, 1, 0, 1, 1, 0],
         windows: Vec::new(),
         boundary,
         memory_commitments,
-        memory_roots: vec![[Fr::ZERO; 2]; 4],
+        memory_roots: vec![[Fr::ZERO; 2]; 6],
     };
     let vk = VerifyingKey {
         code_version: family::CODE_VERSION,
@@ -122,8 +129,8 @@ fn the_global_tape_is_the_frozen_order_and_the_committed_fixture() {
         &[
             "absorb PROTOCOL_SUITE 1",
             "absorb SRS_DIGEST 1",
-            "absorb VM_CONFIG 9",
-            "absorb SHARD_COUNTS 4",
+            "absorb VM_CONFIG 15",
+            "absorb SHARD_COUNTS 7",
             "absorb MEMORY_WINDOWS 0",
             "absorb PROGRAM_IDENTITY 1",
             "absorb PUBLIC_INPUTS 2",
@@ -141,20 +148,21 @@ fn the_global_tape_is_the_frozen_order_and_the_committed_fixture() {
         "no challenge is drawn before the statement is absorbed"
     );
     // G8: a group header per config family, a family with no shards included,
-    // then one commitment message per shard, four limbs to a point.
+    // then one commitment message per shard, four limbs to a point. Seven
+    // families since S25, two of which run no shard here.
     assert_eq!(
         lines
             .iter()
             .filter(|l| *l == "absorb MEMORY_GROUP 2")
             .count(),
-        4
+        7
     );
     assert_eq!(
         lines
             .iter()
             .filter(|l| l.starts_with("absorb COMMITMENT"))
             .count(),
-        4,
+        6,
         "one message per statement shard"
     );
 }

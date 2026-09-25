@@ -96,7 +96,7 @@ fn main() {
     );
 
     let mut input = [0u8; 4];
-    let n = guest_sdk::read_input(&mut input);
+    let n = guest_sdk::read_stdin(&mut input);
     let x = if n == 4 { u32::from_le_bytes(input) } else { 3 };
 
     // SAFETY: both are `extern "C"` leaf routines taking one `u32` in `a0` and
@@ -105,9 +105,9 @@ fn main() {
     let b = unsafe { norvc_exec(x) };
     assert_eq!(a, b, "the compressed and uncompressed routines disagree");
 
-    guest_sdk::commit(&a.to_le_bytes());
-    guest_sdk::commit(&rvc_len.to_le_bytes());
-    guest_sdk::commit(&norvc_len.to_le_bytes());
+    guest_sdk::write_stdout(&a.to_le_bytes());
+    guest_sdk::write_stdout(&rvc_len.to_le_bytes());
+    guest_sdk::write_stdout(&norvc_len.to_le_bytes());
 }
 
 fn span(begin: *const u8, end: *const u8) -> u32 {

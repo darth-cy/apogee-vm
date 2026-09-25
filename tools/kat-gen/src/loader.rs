@@ -16,7 +16,7 @@ use std::process::Command;
 use crate::write_vectors;
 
 /// The guest ELFs the loader tests read, and what each is for.
-pub const ELF_FIXTURES: [(&str, &str); 19] = [
+pub const ELF_FIXTURES: [(&str, &str); 20] = [
     (
         "fib",
         "real compiler output: the address and boundary oracle",
@@ -45,7 +45,7 @@ pub const ELF_FIXTURES: [(&str, &str); 19] = [
     (
         "opcodes",
         "every RV32IMAC instruction executed with edge-case operands: the \
-         S12 QEMU differential's coverage fixture, and its misalignment one",
+         output oracle's coverage fixture, and its misalignment one",
     ),
     (
         "heap",
@@ -102,6 +102,11 @@ pub const ELF_FIXTURES: [(&str, &str); 19] = [
         "recursion-unused",
         "S23's zero-shard fixture: it links both backends, so its image declares both \
          families, and reaches neither",
+    ),
+    (
+        "public-io",
+        "S25's guest: its public input and its advice are ordinary loads and its \
+         journal ordinary stores, so it issues no ecall but EXIT and is provable",
     ),
 ];
 

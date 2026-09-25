@@ -162,6 +162,8 @@ fn toy() -> Toy {
     };
     let (tables, config) = decode_program(&image, &params).expect("fib decodes");
     let io = GuestIo {
+        stdin: Vec::new(),
+        advice: Vec::new(),
         input: 24u32.to_le_bytes().to_vec(),
         hint: Vec::new(),
     };

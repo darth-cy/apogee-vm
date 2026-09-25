@@ -12,20 +12,24 @@
 > the code: the `PolyAddress`, the artifact's own name for it, and the Rust constant or
 > constructor that makes it.
 >
-> **Status: S21.** All ten circuits are registered: `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT`,
-> `SHIFT_BITWISE`, `MUL_DIV`, `MEM_WORD`, `MEM_SUBWORD`, `ATOMICS`, `INIT_TEARDOWN`,
-> `ZERO_WINDOWS` and `KECCAK_F`. Every execution family the decoder routes to has a circuit and
-> a fill, and no `FamilyId` in `constants::family` is without one. S21 added the first family
-> that is **invoked rather than decoded** (§12) and, with it, the eighth memory query — the
-> `deleg` mirror — which changed `ADD_SUB_LUI_AUIPC`'s frame, its shape and every relation
-> number in §3.
+> **Status: S25.** All **fifteen** circuits are registered: `ADD_SUB_LUI_AUIPC`,
+> `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MUL_DIV`, `MEM_WORD`, `MEM_SUBWORD`, `ATOMICS`,
+> `INIT_TEARDOWN`, `ZERO_WINDOWS`, `KECCAK_F`, `POSEIDON2`, `FR_ARITH`, `PUBLIC_INPUT`,
+> `PUBLIC_OUTPUT` and `ADVICE_WINDOWS`. Every execution family the decoder routes to has a
+> circuit and a fill, and no `FamilyId` in `constants::family` is without one. S21 added the
+> first family that is **invoked rather than decoded** (§12) and, with it, the eighth memory
+> query — the `deleg` mirror — which changed `ADD_SUB_LUI_AUIPC`'s frame, its shape and every
+> relation number in §3. S25 added the three **RAM window** families that carry an execution's
+> public input, its public output and the prover's advice (§15, §16, §17), and one new artifact
+> constructor, `memory::value_window_artifact`, shared by two of them; it changed no existing
+> circuit, added no enforcing gate anywhere, and drew no new challenge.
 >
 > **Descriptive, not normative.** Where this page and the code disagree, the registry is right
 > and this page is wrong; where it and a spec disagree, the spec rules. The descriptive names
 > are documentation only, as the artifact's own names are (`gkr.md` §4.2): no code reads either.
 >
 > **Kept current by rule.** A stage that adds or changes a circuit family updates its entry
-> here in the same pull request (`prompts/00-master.md`, implementation rule 12). §14 is what an
+> here in the same pull request (`prompts/00-master.md`, implementation rule 12). §19 is what an
 > entry must hold.
 >
 > **Machine-derived.** Every count, position, name and formula below was read out of
@@ -42,8 +46,13 @@
 > §7.9, §8.9 and §9.9 show instead
 > rows of `guests/mem`'s own shards, as the three fills write them and as
 > `crates/checker/tests/mem_fill.rs` holds them in CI, and name the hand-built catalogue each
-> family's row suite carries beside them. §5.10, §6.10, §7.10, §8.10 and §9.10, unlike §3.10 and
-> §4.10, are read from their suites' own committed tamper tables rather than from a probe.
+> family's row suite carries beside them. §15, §16 and §17 have no such table either, for §10's
+> and §11's reason — a window family has no enforcing gate, so there is no per-cell account to
+> give — and what holds them in CI is `crates/checker/tests/public_values.rs`, which pins each
+> family's shape, the layout of both public windows and of the advice region, and the equality
+> of the prover's committed column with the verifier's own extension of the same bytes.
+> §5.10, §6.10, §7.10, §8.10 and §9.10, unlike §3.10 and §4.10, are read from their suites'
+> own committed tamper tables rather than from a probe.
 
 ---
 
@@ -62,11 +71,11 @@
 | the sub-word circuit, and its width seam | `constraints::mem_subword::{artifact, channels, splice_gates}`, `crates/constraints/src/mem_subword.rs` |
 | the atomics circuit | `constraints::atomics::{artifact, channels}`, `crates/constraints/src/atomics.rs` |
 | the is-zero and comparison gadgets | `constraints::gadgets::{is_zero, comparison, comparison_equation}`, `crates/constraints/src/gadgets.rs` |
-| the frame, the memory tuples, the two window circuits | `constraints::memory`, `crates/constraints/src/memory.rs` |
+| the frame, the memory tuples, the **three** window circuits | `constraints::memory::{image_window_artifact, zero_window_artifact, value_window_artifact}`, `crates/constraints/src/memory.rs` |
 | the fraction trees and their denominators | `constraints::lookup`, `crates/constraints/src/lookup.rs` |
 | the layer assembly: reduction, halving, the names of inner nodes | `crates/constraints/src/build.rs`, `assemble` |
 | a circuit, printed | `cargo run -p checker -- dump <artifact>` (Appendix A) |
-| the columns' values | `trace::{build_memory_columns, build_frame_witness, build_init_teardown_columns, build_multiplicities}` and `prover::family_fill`, `crates/prover/src/fill.rs`; the packed generic table, `program::lookup_tables::generic_table` |
+| the columns' values | `trace::{build_memory_columns, build_frame_witness, build_init_teardown_columns, build_value_window_columns, build_multiplicities}` and `prover::family_fill`, `crates/prover/src/fill.rs`; the packed generic table, `program::lookup_tables::generic_table`; the two public windows' and the advice region's layouts, `verifier_core::public_io_words` and `trace::advice_word` |
 | the copower check every scaled bound must pass | `constraints::lookup::check_copowers`, `crates/constraints/src/lookup.rs` |
 
 ### 0.2 Notation
@@ -95,7 +104,7 @@
   neither (`memory.md` §1). **Named form** replaces each `M`, `W`, `S` and inner address by
   its artifact name and merges the repeats. A virtual table's artifact name is the word in its
   address (`V[ram_live]` is `ram_live`): §3's, §4's, §5's and §6's tables keep the address form,
-  §10 and §11 write the bare word.
+  §10, §11 and §15–§17 write the bare word.
 - **`n`** is the circuit's `trace_vars`: a shard has `h = 2^n` rows, and RAM window `w` starts
   at byte address `4h·w`.
 
@@ -110,7 +119,7 @@ Columns of one layer do not all index the same thing.
 | a decoded-table `S` column | the halfword at pc `2y`; `MINUS_ONE` in every column where no instruction of the family starts (`crates/program/CLAUDE.md`) |
 | a generic-table `S` column (`JUMP_BRANCH_SLT`'s, `SHIFT_BITWISE`'s and `MEM_SUBWORD`'s `S[7..10]`, `MUL_DIV`'s and `ATOMICS`' `S[6..9]`) | row `y` of the packed table (`lookup.md` §9): row 0 the `ZeroEntry`, all 0; rows 1 to `2^16` the AND byte table's `(AND_BASE + a + 1, b, a & b)`; rows `2^16 + 1` to `2^17` `U16GetSign`'s `(SIGN_BASE + h + 1, h >> 15, 0)`; rows `2^17 + 1` to `2^17 + 32` S18's `ShiftPowers`, `(SHIFT_BASE + s + 1, 2^s, 2^(31 − s))`; every later row 0. `AND_BASE = 0`, `SIGN_BASE = 256` and `SHIFT_BASE = SIGN_BASE + 2^16` are `constants::generic_table`'s, so the three key ranges are pairwise disjoint |
 | `V[range19]`, `V[range16]` | the value `y mod 2^19`, `y mod 2^16` |
-| a window family's `M` columns, `S[0]`, `V[row]`, `V[ram_live]` | the RAM word at byte address `4h·w + 4y`, `w` being the shard's window (§10, §11) |
+| a window family's `M` columns, `S[0]`, `V[row]`, `V[ram_live]` | the RAM word at byte address `4h·w + 4y`, `w` being the shard's window: 0 for `INIT_TEARDOWN`, the statement's `windows[i]` for `ZERO_WINDOWS`, the constants 32 and 33 for the two public families, and `advice_first_window(h) + i` for `ADVICE_WINDOWS` (§10, §11, §15, §16, §17) |
 
 ### 0.4 The challenges
 
@@ -123,10 +132,10 @@ this page's.
 | --- | --- | --- | --- | --- | --- |
 | 0 | `TOY` | — | — | — | S13's toy only |
 | 1 | `MEM_GAMMA` | `γ_M` | drawn once per statement | G10 (`shard-proof.md` §2) | frame leaves; §12's 102 invocation leaves |
-| 2 | `MEM_ALPHA_ADDR` | `α_addr` | drawn | G10 | frame leaves, window tuples; §12's 102 invocation leaves |
+| 2 | `MEM_ALPHA_ADDR` | `α_addr` | drawn | G10 | frame leaves, every window tuple of all **five** window families; §12's 102 invocation leaves |
 | 3 | `MEM_ALPHA_TS` | `α_ts` | drawn | G10 | frame leaves, window teardown tuples; §12's invocation leaves **but `write_anchor`**, whose timestamp is the literal 0 |
-| 4 | `MEM_ALPHA_VAL` | `α_val` | drawn | G10 | frame leaves; window tuples carrying a value; §12's invocation leaves **but `write_anchor`**, whose value is the literal 0 |
-| 5 | `MEM_WINDOW_CONSTANT` | `WC` | derived per window shard: `γ_M + 2 + α_addr·4h·w` (2 is `address_space::RAM`) | `gkr_verify::window_challenges` | window tuples |
+| 4 | `MEM_ALPHA_VAL` | `α_val` | drawn | G10 | frame leaves; window tuples carrying a value — every teardown tuple, `INIT_TEARDOWN`'s `α_val·S[0]` init tuple, and `PUBLIC_INPUT`'s and `ADVICE_WINDOWS`' `α_val·M[2]` init tuple, but **not** the init tuple of `ZERO_WINDOWS` or `PUBLIC_OUTPUT`, whose value is the literal 0; §12's invocation leaves **but `write_anchor`**, whose value is the literal 0 |
+| 5 | `MEM_WINDOW_CONSTANT` | `WC` | derived per window shard: `γ_M + 2 + α_addr·4h·w` (2 is `address_space::RAM`) | `gkr_verify::window_challenges`, off the window `verifier_core::shard_challenges` names for the shard's family | window tuples |
 | 6 | `LOOKUP_G` | `g` | drawn per shard | S4 (`shard-proof.md` §4) | every table denominator, and every lookup row denominator except `decode_row`'s (a pad denominator is the literal 1) |
 | 7 | `LOOKUP_BETA` | `β` | drawn per shard, after `g` | S4 | every circuit's decoder denominators; and every generic denominator of the **five** circuits that read that channel — its table's, jump/branch/slt's two sign lookups', shift/bitwise's sign lookup, `shift_powers` and four `and_byte_j`, mul/div's two sign lookups, mem_subword's one sign lookup, atomics' two sign lookups and four `and_byte_j`. Not `MEM_WORD`'s: it reads no generic channel |
 | 8 | `LOOKUP_BETA_2` | `β²` | derived: a power of `β` | `gkr_verify::insert_lookup_challenges` | every circuit's decoder denominators; the generic **table**'s denominator in all five that carry it; and of the generic lookups only those whose third tuple position is a column — shift/bitwise's `shift_powers` (`copow`) and its four `and_byte_j` (`byte_and_j`), and atomics' four `and_byte_j`. A sign lookup's third position is the constant 0 and adds no term |
@@ -135,11 +144,12 @@ this page's.
 | 13 | `LOOKUP_DECODER_NEUTRAL` | `g_dec` | derived: `g − Σ_{j<W} β^j`, `W` the artifact's own decoder tuple width — 7 in add/sub, jump/branch/slt, shift/bitwise, mem_word and mem_subword, **6 in mul/div and atomics** | `insert_lookup_challenges` | `decode_row`'s denominator |
 
 **`KECCAK_F` reads slots 1 to 4 and nothing else.** It carries no lookup channel at all
-(§12.1), so `g`, `β` and every derived power and neutral are absent from it — the one
-registered circuit of which that is true besides the two window families, and for the
-opposite reason: a window family has no witness to bound, and a keccak row's every bound is a
-bit decomposition. Its 26 pad leaves and its `write_anchor` leaf read no challenge past
-`γ_M`, and the two frame-pointer checks, the 3,561 booleanity gates, the 50 `addr_w`, 50
+(§12.1), so `g`, `β` and every derived power and neutral are absent from it — one of the
+**eight** registered circuits of which that is true, the others being the five window families
+and the two other delegation families, and for the opposite reason: a window family has no
+witness to bound, and a keccak row's every bound is a bit decomposition. Its 26 pad leaves and
+its `write_anchor` leaf read no challenge past `γ_M`, and the two frame-pointer checks, the
+3,561 booleanity gates, the 50 `addr_w`, 50
 `gap_w`, 50 `input_w` and 50 `output_w` gates and all 145,920 permutation gates read none at
 all.
 
@@ -151,12 +161,12 @@ all.
 
 | tag | shape | `G` | list kind | used by |
 | --- | --- | --- | --- | --- |
-| 0 | `Linear { terms, constant }` | `Σ c_i·x_i + c_0` | row-wise | add/sub, 88: 63 leaves of list 0 (the 21 leaf numerators, the 3 table numerators and 3 table denominators, the 36 pad-fraction columns — **no memory pad since S21**, eight queries filling an eight-leaf tree), 9 degree-1 enforcing gates, 16 copies in lists 2–5; jump/branch/slt, 71: 54 leaves of list 0 (the 26 leaf numerators, 4 of tables and 22 of lookups, the 4 table denominators, the 24 pad-fraction columns), 3 degree-1 enforcing gates, 14 copies in lists 2–4; shift/bitwise, 108: 77 leaves of list 0 (the 43 leaf numerators, 4 of tables and 39 of lookups, the 4 table denominators, the 30 pad-fraction columns), 9 degree-1 enforcing gates, 22 copies in lists 2–5; mul/div, 108: 81 leaves of list 0 (the 31 leaf numerators, 4 of tables and 27 of lookups, the 4 table denominators, the 46 pad-fraction columns), 5 degree-1 enforcing gates, 22 copies in lists 2–5; mem_word, 54: 38 leaves of list 0 (the 4 memory pads, the 21 leaf numerators, 3 of tables and 18 of lookups, the 3 table denominators, the 10 pad-fraction columns), 6 degree-1 enforcing gates, 10 copies in lists 2–4; mem_subword, 100: 72 leaves of list 0 (the 4 memory pads, the 40 leaf numerators, the 4 table denominators, the 24 pad-fraction columns), 6 degree-1 enforcing gates, 22 copies in lists 2–5; atomics, 113: 86 leaves of list 0 (the **6** memory pads, the 40 leaf numerators, the 4 table denominators, the 36 pad-fraction columns), 9 degree-1 enforcing gates, 18 copies in lists 2–5; `ZERO_WINDOWS`, 2 leaves; **keccak, 170,248**: 1,727 in list 0 (26 pad leaves, the 51 columns carried to the top, round 0's 1,600 state copies, and the 50 degree-1 `input_w` gates), 8,517 more carried copies over lists 1–167, 324 copies of the two memory roots over lists 6–167, and 159,680 state copies inside the 24 round blocks |
+| 0 | `Linear { terms, constant }` | `Σ c_i·x_i + c_0` | row-wise | add/sub, 88: 63 leaves of list 0 (the 21 leaf numerators, the 3 table numerators and 3 table denominators, the 36 pad-fraction columns — **no memory pad since S21**, eight queries filling an eight-leaf tree), 9 degree-1 enforcing gates, 16 copies in lists 2–5; jump/branch/slt, 71: 54 leaves of list 0 (the 26 leaf numerators, 4 of tables and 22 of lookups, the 4 table denominators, the 24 pad-fraction columns), 3 degree-1 enforcing gates, 14 copies in lists 2–4; shift/bitwise, 108: 77 leaves of list 0 (the 43 leaf numerators, 4 of tables and 39 of lookups, the 4 table denominators, the 30 pad-fraction columns), 9 degree-1 enforcing gates, 22 copies in lists 2–5; mul/div, 108: 81 leaves of list 0 (the 31 leaf numerators, 4 of tables and 27 of lookups, the 4 table denominators, the 46 pad-fraction columns), 5 degree-1 enforcing gates, 22 copies in lists 2–5; mem_word, 54: 38 leaves of list 0 (the 4 memory pads, the 21 leaf numerators, 3 of tables and 18 of lookups, the 3 table denominators, the 10 pad-fraction columns), 6 degree-1 enforcing gates, 10 copies in lists 2–4; mem_subword, 100: 72 leaves of list 0 (the 4 memory pads, the 40 leaf numerators, the 4 table denominators, the 24 pad-fraction columns), 6 degree-1 enforcing gates, 22 copies in lists 2–5; atomics, 113: 86 leaves of list 0 (the **6** memory pads, the 40 leaf numerators, the 4 table denominators, the 36 pad-fraction columns), 9 degree-1 enforcing gates, 18 copies in lists 2–5; `ZERO_WINDOWS`, `PUBLIC_INPUT`, `PUBLIC_OUTPUT` and `ADVICE_WINDOWS`, 2 unmasked leaves each; **keccak, 170,248**: 1,727 in list 0 (26 pad leaves, the 51 columns carried to the top, round 0's 1,600 state copies, and the 50 degree-1 `input_w` gates), 8,517 more carried copies over lists 1–167, 324 copies of the two memory roots over lists 6–167, and 159,680 state copies inside the 24 round blocks |
 | 1 | `Product { coeff, left, right }` | `c·x·y` | row-wise | add/sub, 53: the 14 row-wise product-tree nodes (lists 1–3) and the 39 row-wise fraction-node denominators (lists 1–5); jump/branch/slt, 40: the 6 row-wise product-tree nodes (lists 1–2) and the 34 row-wise fraction-node denominators (lists 1–4); shift/bitwise, 59: the 6 product-tree nodes (lists 1–2) and the 53 fraction-node denominators (lists 1–5); mul/div, 56: the 6 product-tree nodes and the 50 fraction-node denominators; mem_word, 37: the 14 row-wise product-tree nodes (lists 1–3) and the 23 fraction-node denominators (lists 1–4); mem_subword, 62: the 14 product-tree nodes and the 48 fraction-node denominators (lists 1–5); atomics, 68: the 14 product-tree nodes and the 54 fraction-node denominators; **keccak, 38,526**: the 126 product-tree nodes that reduce 128 leaves to 2 over lists 1–6, and the 38,400 `v = B'·B'` gates of chi's first step, 1,600 a round. It has no fraction node at all |
 | 2 | `MaskIntoIdentity { input, mask }` | `x·m + 1 − m` | row-wise | no registered circuit (`memory.md` §2.2 says why) |
 | 3 | `AffineProduct { .. }` | `(Σ a_i·x_i + a_0)·(Σ b_j·y_j + b_0)` | row-wise | no registered circuit |
-| 4 | `TreeProduct { input }` | `x(y,0)·x(y,1)` | halving | add/sub, 5 per halving list (100, `n = 20`); jump/branch/slt, 6 per halving list (120); shift/bitwise and mul/div, 6 per halving list (120 each); mem_word, 5 per halving list (100); mem_subword and atomics, 6 per halving list (120 each); each window circuit, 2 per list (40); **keccak, 2 per list (16 at `n = 8`)** — the two memory roots and nothing else |
-| 5 | `Quadratic { constant, linear, products }` | `c_0 + Σ a_i·x_i + Σ b_j·y_j·z_j` | row-wise | add/sub, 122: **16** memory leaves and 21 lookup row denominators (list 0), 46 degree-2 enforcing gates, and the 39 row-wise fraction-node numerators (lists 1–5); jump/branch/slt, 103: 8 memory leaves and 22 lookup row denominators (list 0), 39 degree-2 enforcing gates, and the 34 row-wise fraction-node numerators (lists 1–4); shift/bitwise, 139: 8 memory leaves and 39 lookup row denominators (list 0), 39 degree-2 enforcing gates, and the 53 fraction-node numerators (lists 1–5); mul/div, 134: 8 memory leaves and 27 lookup row denominators, 49 degree-2 enforcing gates, and the 50 fraction-node numerators; mem_word, 80: 12 memory leaves and 18 lookup row denominators (list 0), 27 degree-2 enforcing gates, and the 23 fraction-node numerators (lists 1–4); mem_subword, 143: 12 memory leaves and 36 lookup row denominators, 47 degree-2 enforcing gates, and the 48 fraction-node numerators (lists 1–5); atomics, 137: 10 memory leaves and 36 lookup row denominators, 37 degree-2 enforcing gates, and the 54 fraction-node numerators; `INIT_TEARDOWN`, 2 leaves; **keccak, 149,735**: 4,405 in list 0 (the 102 real memory leaves, round 0's 640 parity XORs, and 3,663 enforcing gates — 3,561 booleanity, 50 `addr_w`, 50 `gap_w` and the two frame-pointer checks), 145,280 XOR and chi gates over the other round layers, and the 50 `output_w` gates of the last list |
+| 4 | `TreeProduct { input }` | `x(y,0)·x(y,1)` | halving | add/sub, 5 per halving list (100, `n = 20`); jump/branch/slt, 6 per halving list (120); shift/bitwise and mul/div, 6 per halving list (120 each); mem_word, 5 per halving list (100); mem_subword and atomics, 6 per halving list (120 each); **each of the five window circuits, 2 per halving list** — 40 at `n = 20`, 44 at `n = 22` and 16 at the two public families' pinned `n = 8`; **keccak, 2 per list (16 at `n = 8`)** — the two memory roots and nothing else |
+| 5 | `Quadratic { constant, linear, products }` | `c_0 + Σ a_i·x_i + Σ b_j·y_j·z_j` | row-wise | add/sub, 122: **16** memory leaves and 21 lookup row denominators (list 0), 46 degree-2 enforcing gates, and the 39 row-wise fraction-node numerators (lists 1–5); jump/branch/slt, 103: 8 memory leaves and 22 lookup row denominators (list 0), 39 degree-2 enforcing gates, and the 34 row-wise fraction-node numerators (lists 1–4); shift/bitwise, 139: 8 memory leaves and 39 lookup row denominators (list 0), 39 degree-2 enforcing gates, and the 53 fraction-node numerators (lists 1–5); mul/div, 134: 8 memory leaves and 27 lookup row denominators, 49 degree-2 enforcing gates, and the 50 fraction-node numerators; mem_word, 80: 12 memory leaves and 18 lookup row denominators (list 0), 27 degree-2 enforcing gates, and the 23 fraction-node numerators (lists 1–4); mem_subword, 143: 12 memory leaves and 36 lookup row denominators, 47 degree-2 enforcing gates, and the 48 fraction-node numerators (lists 1–5); atomics, 137: 10 memory leaves and 36 lookup row denominators, 37 degree-2 enforcing gates, and the 54 fraction-node numerators; `INIT_TEARDOWN`, 2 leaves — **the only window circuit with a `Quadratic` gate**, the other four being unmasked and degree 1 throughout; **keccak, 149,735**: 4,405 in list 0 (the 102 real memory leaves, round 0's 640 parity XORs, and 3,663 enforcing gates — 3,561 booleanity, 50 `addr_w`, 50 `gap_w` and the two frame-pointer checks), 145,280 XOR and chi gates over the other round layers, and the 50 `output_w` gates of the last list |
 | 6 | `TreeCross { left, right }` | `p(y,0)·q(y,1) + p(y,1)·q(y,0)` | halving | **keccak, none: a circuit with no lookup channel has no fraction tree, and this shape is a fraction tree's alone**; add/sub, 3 per halving list (60, `n = 20`); jump/branch/slt, 4 per halving list (80); shift/bitwise and mul/div, 4 per halving list (80 each); mem_word, 3 per halving list (60); mem_subword and atomics, 4 per halving list (80 each) |
 
 ### 0.6 The compound expressions
@@ -184,16 +194,22 @@ Each is stored as one `Quadratic` with constant 1: linear terms `(γ_M, m)`, `(�
 is `m·T + 1 − m` at every `m`, but it is 1 or a tuple only where `m` is 0 or 1, which is why
 every mask carries a booleanity gate.
 
-**A window tuple** (`memory.md` §3.3); code: the private `memory::window_tuple`, and the
-inline init tuple in `zero_window_artifact`:
+**A window tuple** (`memory.md` §3.3, `public-values.md` §4); code: the private
+`memory::window_tuple`, and the inline init tuple in `zero_window_artifact`:
 
 ```text
 WC       = γ_M + 2 + α_addr·4h·w                                  one value per shard
 teardown = WC + 4·α_addr·row + α_ts·teardown_ts + α_val·teardown_value
-         = T(RAM, 4h·w + 4·row, teardown_ts, teardown_value)
-init     = WC + 4·α_addr·row + α_val·init_value     = T(RAM, 4·row, 0, init_value)          INIT_TEARDOWN, w = 0
-init     = WC + 4·α_addr·row                          = T(RAM, 4h·w + 4·row, 0, 0)            ZERO_WINDOWS
+         = T(RAM, 4h·w + 4·row, teardown_ts, teardown_value)                                  every window family
+init     = WC + 4·α_addr·row + α_val·S[0]           = T(RAM, 4·row, 0, init_value)            INIT_TEARDOWN, w = 0
+init     = WC + 4·α_addr·row                        = T(RAM, 4h·w + 4·row, 0, 0)              ZERO_WINDOWS, PUBLIC_OUTPUT
+init     = WC + 4·α_addr·row + α_val·M[2]           = T(RAM, 4h·w + 4·row, 0, init_value)     PUBLIC_INPUT, ADVICE_WINDOWS
 ```
+
+The three init forms are the three window artifacts: the init value comes from a **setup**
+column that program identity binds, from **nothing** — a literal 0 — or from a **memory** column
+committed at G8 that one execution chose. `INIT_TEARDOWN` masks both of its leaves by
+`V[ram_live]`, which makes them `Quadratic`; the other four carry no mask and are `Linear`.
 
 **A lookup's fraction** (`lookup.md` §4 to §6). With selector `s` and tuple `e_0 … e_{W−1}`, the
 gated tuple is `s·e_j` on a range channel, `s·(e_0 + 1)` then `s·e_j` on the generic channel,
@@ -253,17 +269,38 @@ product nodes means the one `Product`.
 | 9 | `KECCAK_F` | `keccak::artifact(n)` | `keccak::channels()`: **none** | `0 ≤ n ≤ 30` | `2^8` | — | — | — | — | **one shard at `2^8`**, 10 invocations |
 | 10 | `POSEIDON2` | `poseidon2::artifact(n)` | `poseidon2::channels()`: **none** | `0 ≤ n ≤ 30` | `2^8` | — | — | — | — | — |
 | 11 | `FR_ARITH` | `fr_arith::artifact(n)` | `fr_arith::channels()`: **none** | `0 ≤ n ≤ 30` | `2^8` | — | — | — | — | — |
+| 12 | `PUBLIC_INPUT` | `memory::value_window_artifact(n)` | none | `0 ≤ n ≤ 30` | `2^8`, **pinned** | one shard at `2^8`, window 32 | one shard at `2^8`, window 32 | one shard at `2^8`, window 32 | one shard at `2^8`, window 32 | one shard at `2^8`, window 32 |
+| 13 | `PUBLIC_OUTPUT` | `memory::zero_window_artifact(n)` — `ZERO_WINDOWS`' artifact, byte for byte | none | `0 ≤ n ≤ 30` | `2^8`, **pinned** | one shard at `2^8`, window 33 | one shard at `2^8`, window 33 | one shard at `2^8`, window 33 | one shard at `2^8`, window 33 | one shard at `2^8`, window 33 |
+| 14 | `ADVICE_WINDOWS` | `memory::value_window_artifact(n)` — `PUBLIC_INPUT`'s artifact at another height | none | `0 ≤ n ≤ 30` | the window height, `2^22` | in the config, with no shard: the guest is handed no advice | ditto | ditto | ditto | ditto |
 
 A verifying key carries only menu heights (`constants::family::HEIGHT_MENU`, **`2^8` to `2^22`
 since S21**),
 which `VmConfig::from_bytes` enforces, so `n` is 8, 16, 18, 20 or 22 in any key — **8 since
-S21**, the delegation height the menu opens with (§12.1); §13 notes the other values the
-registry accepts. The prover pairs each circuit with a fill,
+S21**, the delegation height the menu opens with (§12.1) and the two public families' pinned
+height (§15.1, §16.1); §18 observation 1 notes the other values the registry accepts. The
+prover pairs each circuit with a fill,
 `prover::family_fill`: the private `fill::add_sub` for family 0, `fill::jump_branch_slt` for 1,
 `fill::shift_bitwise` for 2, `fill::mul_div` for 3, `fill::mem_word` for 4, `fill::mem_subword`
-for 5, `fill::atomics` for 6, `fill::window` for 7 and 8, `fill::keccak_f` for 9,
-`fill::poseidon2` for 10 and `fill::fr_arith` for 11.
-**Every family is provable at S23.**
+for 5, `fill::atomics` for 6, `fill::window` for 7, 8 **and 13**, `fill::keccak_f` for 9,
+`fill::poseidon2` for 10, `fill::fr_arith` for 11, `fill::public_input` for 12 and
+`fill::advice` for 14.
+**Every family is provable at S25.**
+
+**The last three rows are in every `VmConfig`, and two of them prove a shard in every
+statement.** `program::decode_program` lists families 12, 13 and 14 unconditionally, under the
+same presence rule that lists `INIT_TEARDOWN` and `ZERO_WINDOWS` — a **window family is in every
+config**, and `decode_program`'s three rules stay three — and `verifier_core::window_height`,
+inside `VmConfig::from_bytes`, refuses a config missing any of them or carrying either public
+family at a height other than
+`family::PUBLIC_WINDOW_HEIGHT`. `verifier_core::check_memory_windows` then requires
+`shard_counts[PUBLIC_INPUT]` and `shard_counts[PUBLIC_OUTPUT]` to be exactly 1, because a count a
+prover could drop is a way to publish nothing while having published something; a program that
+ignores public values publishes an empty input and an empty journal and pays two `2^8`-row
+shards for it. `ADVICE_WINDOWS` is the other way round: `trace::advice_region_words` is 0 for
+empty advice, so `advice_window_count` is 0 and a program with no advice pays nothing
+(`public-values.md` §4, §6). **The shard-count vectors quoted below are the pre-S25 ones**, one
+entry per family of the config as it then was; every statement in the repository gains three
+entries, two of them 1.
 The S16 statement is `crates/prover/tests/acceptance.rs`': its config lists families 0, 7 and 8, and its
 shard counts are `[1, 1, 0]`. The S17 statement is `crates/prover/tests/control.rs`': its config
 lists families 0, 1, 7 and 8, and its shard counts are `[1, 1, 1, 0]`. The S18 statement is
@@ -303,6 +340,18 @@ in its `VmConfig` because `Fr`'s operators reach the declaration records, which 
 the seam a property of the binary rather than of the call site.
 `guests/recursion-unused` declares the same two and proves zero shards of each.
 
+The S25 statement is `crates/prover/tests/public_io.rs`', and it is the first in the repository
+whose public input and public output are **bound to the execution**. `guests/public-io` reads
+eight public input bytes — a length and a position-dependent checksum — checksums that many
+**advice** bytes against them, and commits the checksum and the advice's first eight bytes to
+its **journal**; it issues no ecall but `EXIT`, which is what makes it provable, and every one
+of those three accesses is an ordinary load or store. Its config holds families 0 through 5 at
+`2^20`, `INIT_TEARDOWN`, `ZERO_WINDOWS` and `ADVICE_WINDOWS` at `2^16`, and `PUBLIC_INPUT` and
+`PUBLIC_OUTPUT` at the pinned `2^8`; its shard counts for the three new families are **1, 1 and
+1** — 64 bytes of advice is a 68-byte region, 17 words, one window. `guests/addsub` under the
+same suite is the other control: two empty byte strings, two public shards, and **no** advice
+window (`a5_a_guest_that_publishes_nothing_still_binds_that`).
+
 ### 1.2 Master table
 
 ```text
@@ -328,6 +377,10 @@ ZERO_WINDOWS       22  23 (1 + 22)                 L23     2      0   0  1      
 KECCAK_F            8  177 (169 + 8)               L177  204  3,560   0  0      3,764  354,762  3,763 (50/3,713)   0                               2    358,525  100,254,040
 POSEIDON2           8  201 (193 + 8)               L201  100  4,092   0  0      4,192    2,020  4,248 (54/4,194)   0                               2      6,268    2,056,361
 FR_ARITH            8   14 (6 + 8)                  L14   104  2,576   0  0      2,680      142  2,701 (46/2,655)   0                               2      2,843    1,063,214
+PUBLIC_INPUT        8   9 (1 + 8)                  L9      3      0   0  1          3       18  0                  0                               2         18        2,027
+PUBLIC_OUTPUT       8   9 (1 + 8)                  L9      2      0   0  1          2       18  0                  0                               2         18        1,910
+ADVICE_WINDOWS     16  17 (1 + 16)                 L17     3      0   0  1          3       34  0                  0                               2         34        2,887
+ADVICE_WINDOWS     22  23 (1 + 22)                 L23     3      0   0  1          3       46  0                  0                               2         46        3,535
 ```
 
 `committed` is layer 0's width, `M + W + S`. `inner` is the width of every layer above 0,
@@ -338,13 +391,26 @@ committed fixtures: `crates/constraints/tests/vectors/add_sub.bin` (SHA-256 `960
 `mul_div.bin` (`98f9f3bd…a30c357a`), `mem_word.bin` (`2c8d94ca…f7ca4500`), `mem_subword.bin`
 (`2c423eb1…9f596181`), `atomics.bin` (`ae58b1ca…643d3108`), `image_window.bin`
 (`39a8655d…2df67ecc`) and `zero_window.bin` (`f08dde67…aa51ec1c`), each pinned by its suite.
+**`zero_window.bin` is `PUBLIC_OUTPUT`'s circuit too**, at `n = 22` rather than at the pinned
+`n = 8`: the two families take one constructor and `family_circuit(13, n)` and
+`family_circuit(8, n)` agree byte for byte at every `n`. `value_window_artifact` has no committed
+fixture of its own; §15, §16 and §17 were read from `family_circuit(12, 8)`,
+`family_circuit(13, 8)` and `family_circuit(14, 22)` and from a `checker dump` of their bytes
+(Appendix A).
+
+**The two public families are the smallest circuits in the registry**, and by a wide margin:
+`PUBLIC_OUTPUT` at its pinned `n = 8` is 1,910 bytes and two gates of list 0 and `PUBLIC_INPUT`
+2,027, against `atomics.bin`'s 102,965 on 132 leaves and `KECCAK_F`'s 100 MB. The whole
+public-values and advice mechanism costs 8 committed columns across three families — three, two
+and three — and not one enforcing gate, lookup or channel.
 **`atomics.bin` is the largest circuit artifact committed as bytes**, 102,965 of them to
 `shift_bitwise.bin`'s 102,837, on 132 leaves to its 124. **`KECCAK_F` is the largest circuit,
 and it is not committed as bytes at all**: 100,254,040 of them, 974 times `atomics.bin`, so what
 `crates/constraints/tests/vectors/keccak.txt` holds is the artifact's SHA-256 beside the shape
 line above, written by `cargo run -p kat-gen -- keccak` and diffed by CI like every other
-fixture (§12.1). It is at `n = 8` because that is the family's one height, and 8 is the only
-row of this table that is not 16, 20 or 22.
+fixture (§12.1). It is at `n = 8` because that is the family's one height, as it is for the two
+other delegation families and for `PUBLIC_INPUT` and `PUBLIC_OUTPUT` — five of this table's
+rows and, since S25, no longer the odd ones.
 
 **`ADD_SUB_LUI_AUIPC` moved at S21, and by more than a column.** The eighth memory query — the
 `deleg` mirror a delegation request makes (`delegation.md` §5.1) — gave it a five-column `M`
@@ -465,10 +531,14 @@ assembled by `keccak.rs` itself and its depth is not that formula; its bullet is
   296–307 list 4, 308–317 list 5, and halving list `k` (`6 ≤ k ≤ n + 5`) holds
   `318 + 10(k − 6)` to `327 + 10(k − 6)`. The roots are relations `308 + 10n` to `317 + 10n`:
   508–517 at `n = 20`, 528–537 at `n = 22`.
-- **The two windows.** Two trees of one leaf each, so `R = 0`: `L1 … L{n+1}` are 2 wide and
-  `inner = 2n + 2`. Relation 0 is the teardown leaf, 1 the init leaf, and halving list `k`
-  (`1 ≤ k ≤ n`) holds `2k` (read side) and `2k + 1` (write side). The roots are relations `2n`
-  and `2n + 1`.
+- **The five windows.** `INIT_TEARDOWN`, `ZERO_WINDOWS`, `PUBLIC_INPUT`, `PUBLIC_OUTPUT` and
+  `ADVICE_WINDOWS` share one shape. Two trees of one leaf each, so `R = 0`: `L1 … L{n+1}` are 2
+  wide and `inner = 2n + 2`. Relation 0 is the teardown leaf, 1 the init leaf, and halving list
+  `k` (`1 ≤ k ≤ n`) holds `2k` (read side) and `2k + 1` (write side). The roots are relations
+  `2n` and `2n + 1`: 16 and 17 at the two public families' `n = 8`, 44 and 45 at
+  `ADVICE_WINDOWS`' default `n = 22`. The three constructors differ only in the base layer and
+  the init leaf — `S[0]`, nothing, or `M[2]` (§0.6) — so every relation number, node name and
+  layer width above `L1` is the same in all five.
 - **keccak.** Two trees, `read` and `write`, of 64 leaves each — 50 frame words, the anchor, and
   13 pads a side — and no fraction tree at all, the family having no channel. `R` is 6, but the
   depth is **not** `1 + R + n`: the permutation's 24 blocks of 7 sub-layers stack above gate list
@@ -729,7 +799,7 @@ that grid: it sits past the last query's five fields at `M[1 + 5w]`, and a frame
 queries are held absent on every row. Their fifteen columns and three gap chunks are committed
 and opened, and carry nothing until the I/O-binding stage; **the `deleg` group is not among
 them**, and S21 is the stage that made three of the four wide-frame query groups inert rather
-than four (§15 observation 2).
+than four (§18 observation 2).
 
 **Why the type rides a memory column, and why one query serves all three.** The mirror's leaf
 has to name the requested type — the tag is its `AS` term — and a leaf may read no `W` column,
@@ -1455,7 +1525,7 @@ The channels, `add_sub::channels()`, in output order:
 
 **The timestamp tree's padding is where S21's two new obligations cost a gate list.** Sixteen
 obligations and one table fraction is 17 leaves, one past a 16-leaf tree, so the tree pads to 32
-and half of its `L2` nodes combine two pads — mul/div's shape exactly (§6.6, §15 observation 11)
+and half of its `L2` nodes combine two pads — mul/div's shape exactly (§6.6, §18 observation 11)
 — and the circuit is six row-wise lists deep where it was five.
 
 `GENERIC` (2) is not used here. S17's jump/branch/slt family is the first to look it up. S17
@@ -1737,7 +1807,7 @@ as on the delegation row, and no other gate, obligation or table is needed to fi
 is what a type tag has to be — the mirror's leaf reads it on every row, and a leaf is not gated
 by anything a row chooses.
 
-**`deleg_write_value` is free on every row, and that is the design** (§15 observation 19). It is
+**`deleg_write_value` is free on every row, and that is the design** (§18 observation 19). It is
 one half of the anchor's answer pair, and its other half is §12's `anchor_value`: nothing fixes
 either locally, and the two must be equal or the multiset does not balance. A prover that writes
 7 on both sides proves the same statement; a prover that writes 7 on one is refused as
@@ -6235,8 +6305,9 @@ satisfy (`memory-ops.md` §6.1).
 **`sc.w` always succeeds**, storing `rs2` and writing `rd = 0` with no reservation state anywhere
 in the machine. That is a conformance deviation and not a soundness one — the verifier still
 knows exactly which program ran and what it computed — and it is the emulator's semantics too,
-so emulator and circuit agree and the QEMU differential carries it as its one whitelist entry
-(`memory-ops.md` §6.6). `sc_w_always_succeeds` in the row suite refuses both halves of failure:
+so emulator and circuit agree (`memory-ops.md` §6.6); `qemu-riscv32` may fail an
+unpaired `sc.w` where this machine succeeds, and that is not compared, QEMU being an oracle for
+what a guest computes and never for how this emulator computes it. `sc_w_always_succeeds` in the row suite refuses both halves of failure:
 a nonzero code by `rd_value_rule`, and the word left alone by `ram_value_rule`.
 
 ### 9.3 The base layer
@@ -7007,7 +7078,7 @@ It also panics on every refusal of `validate` and of `memory::check_memory`.
 
 **The height is `2^8` and in practice it is the only one.** `artifact` accepts `0 ≤ n ≤ 30` and
 `family_circuit` returns `Some` over that whole range — there is no minimum-height arm, because
-a family with no channel reaches no `BITS ≤ trace_vars` assertion (§15 observation 1) — but
+a family with no channel reaches no `BITS ≤ trace_vars` assertion (§18 observation 1) — but
 `DEFAULT_HEIGHTS[KECCAK_F]` is `2^8`, `HEIGHT_MENU` opens with `2^8` for this family's sake, and
 nothing derives another: a delegation family's rows are **invocations, not halfwords**, so its
 height answers "how many permutations may a shard hold", not "how long is the program".
@@ -7412,7 +7483,7 @@ each group has one answer, and the suite's ten negative controls name the gate f
 | `cycle` | the memory argument (every write leaf's timestamp) and the request's own row, through the anchor's `4·cycle + 3` |
 | `live` | `live_boolean` and, at 1, every leaf and `output_w{j}`; at 0 the whole row leaves the multiset, which is a shard one invocation short and does not balance |
 | `base` | `base_aligned` and `base_in_window` locally, `addr_w{j}` against the words, and `deleg_addr_rule` on the request's side through the anchor |
-| `anchor_value` | **nothing local**: the request's `deleg_write_value` must equal it, and the memory argument is what says so (§15 observation 19) |
+| `anchor_value` | **nothing local**: the request's `deleg_write_value` must equal it, and the memory argument is what says so (§18 observation 19) |
 | `w{j}_addr` | `addr_w{j}` |
 | `w{j}_read_ts` | the memory argument alone; `gap_w{j}` only holds it below this row's own write |
 | `w{j}_read_value` | `input_w{j}`, against the state bits, and the memory argument |
@@ -7700,19 +7771,330 @@ nothing else above gate list 0 — this circuit's whole statement is enforcing.
 
 ---
 
-## 15. Observations
+## 15. `PUBLIC_INPUT` — family 12
+
+### 15.1 Header
+
+`family_circuit(12, n)` is `memory::value_window_artifact(n)` with no channels. RAM window
+`family::PUBLIC_INPUT_WINDOW` = 32, the statement's public input: exactly one shard in every
+statement, whether or not the execution read a word of it. Spec: `public-values.md` §4 and §5;
+`memory.md` §3 is the window machinery it inherits. Fill: `prover::family_fill(12)`, the private
+`fill::public_input`, which is `trace::build_value_window_columns(log,
+program::public_io_words(input), 32, h)`. **Three** committed columns, one virtual table, two
+unmasked leaves, no enforcing gate, no lookup, no channel, two outputs. At `n = 8`, its one
+height: 9 gate lists, top `L9`, 18 inner columns and relations.
+
+**Its height is pinned at `2^8` and nothing derives another.** A window's first address is
+`4h·w`, so the height is what places the window, and `family::PUBLIC_WINDOW_HEIGHT` = `2^8` is
+the only menu entry putting `guest_memory::PUBLIC_INPUT_ORIGIN` = `0x8000` and
+`PUBLIC_OUTPUT_ORIGIN` = `0x8400` in two distinct windows: `4·2^8·32 = 0x8000` and
+`4·2^8·33 = 0x8400`. `program::decode_program` writes the constant and ignores what a caller
+asked for, and `verifier_core::window_height` refuses any other inside `VmConfig::from_bytes`
+(`public-values.md` §2). The registry itself is looser — `family_circuit(12, n)` is `Some` for
+`0 ≤ n ≤ 30`, the family carrying no channel and so meeting no `BITS ≤ trace_vars` guard —
+and that looseness is never reachable through a key (§18 observation 1).
+
+### 15.2 Columns
+
+| address | name | Rust | descriptive name | row `y` holds | read by |
+| --- | --- | --- | --- | --- | --- |
+| `M[0]` | `teardown_ts` | `PolyAddress::Memory(0)` | Last write time | the timestamp of the last write to the word at `0x8000 + 4y`; 0 if the word is untouched | leaf `teardown` |
+| `M[1]` | `teardown_value` | `PolyAddress::Memory(1)` | Final word | the last value written; `init_value` if untouched | leaf `teardown` |
+| `M[2]` | `init_value` | `PolyAddress::Memory(2)` | Input word | `public_io_words(public.input)[y]`: word 0 the payload's byte length, then the payload little-endian, 0 to the end of the window | leaf `init`; **`verify_shard_local` step 10c** |
+| `V[row]` | `row` | `VirtualKind::RowIndex`, wire tag 0 | Row index | `y` | both leaves |
+
+All three are committed in `PublicInputs::memory_commitments`, in the global commit phase at G8
+— **before** the memory challenges are squeezed, which is what `check_memory` requires of any
+column a leaf weights by a global slot (`memory.md` §8). There is no `W` column and no `S`
+column: `program::setup_commitments(12)` is empty, deliberately, because an `S` column is bound
+by program identity and one execution's public input has no business in every execution's
+identity (`public-values.md` §4). `M[2]` is `INIT_TEARDOWN`'s `S[0]` moved into the `M` group,
+and that move is the whole difference between the two artifacts.
+
+### 15.3 Leaves and layers
+
+| `L1` | relation | node | positional | named |
+| --- | --- | --- | --- | --- |
+| 0 | 0 | `teardown` (read side) | `α_addr·V[row] ×4 + α_ts·M[0] + α_val·M[1] + WC` | `T(RAM, 0x8000 + 4·row, teardown_ts, teardown_value)` |
+| 1 | 1 | `init` (write side) | `α_addr·V[row] ×4 + α_val·M[2] + WC` | `T(RAM, 0x8000 + 4·row, 0, init_value)` |
+
+Here `WC = γ_M + 2 + α_addr·0x8000`, the window constant at `h = 2^8`, `w = 32`; the `2` is
+`address_space::RAM`, the tag a public window shares with ordinary RAM and with the advice
+region — which is what makes these families cost `MEM_WORD`, `MEM_SUBWORD` and `ATOMICS`
+nothing: a load's memory leaf names its space with a literal, so a region with a tag of its own
+would put a space *column* on all three load paths (`public-values.md` §2). Both leaves are
+`Linear` and carry no mask: every row of the window is a RAM word, and `V[ram_live]` is not
+here and could not be — its extension is 0 on every row at `n ≤ 14`, so it would mask the whole
+window off. Code: the private
+`memory::window_tuple`, twice — `window_tuple(Some(M[0]), M[1])` and `window_tuple(None, M[2])`
+— with no `memory::leaf` wrapper, there being nothing to mask. Degree 1 throughout: the circuit
+has no `Quadratic` and no `Product` gate at all, its only other shape being the halving lists'
+`TreeProduct`.
+
+Halving list `k`, for `1 ≤ k ≤ n`, writes `L{k+1}` (`n − k` variables), exactly as §10.3:
+
+| `L{k+1}` | relation | node | shape |
+| --- | --- | --- | --- |
+| 0 | `2k` | `read_{k+1}_0` | `TreeProduct { L{k}[0] }` |
+| 1 | `2k + 1` | `write_{k+1}_0` | `TreeProduct { L{k}[1] }` |
+
+In the last list, `k = n`, the two nodes are `read_root` and `write_root`.
+
+| output | address, `n = 8` | node | value | verifier |
+| --- | --- | --- | --- | --- |
+| 0 | `L{9}[0]` | `read_root` | the product of every row's teardown leaf | step 10a: must equal `PublicInputs::memory_roots[p][0]`, `p` being the position of `(12, 0)` in `verifier_core::statement_shards` — after `INIT_TEARDOWN`'s shard, every `ZERO_WINDOWS` shard and every execution and delegation shard, the group order being `INIT_TEARDOWN`, `ZERO_WINDOWS`, then every other family ascending; a factor of `reconciles` |
+| 1 | `L{9}[1]` | `write_root` | the product of every row's init leaf | step 10a: `memory_roots[p][1]`, the same `p`; a factor of `reconciles` |
+
+**Step 10c is what makes the family mean anything**, and it reads a base claim, not an output.
+A shard's base claims arrive in layout order `M`, `W`, `S`; this family has neither a `W` nor an
+`S` column, so `claims[2]` is `M[2] init_value` at the shard's own opening point. The verifier
+evaluates its own multilinear extension of `public_io_words(public.input)` there and compares,
+returning `MemoryArgument("the public input window is not the statement's input")` on a
+mismatch — after step 10a and before the opening (`reduce.rs`, `verify_shard_local`). What that
+comparison is worth rests on the multiset and not on itself: the multiset already forces a
+window's init column to be each address's **first** value (`memory.md` §4.2), so holding `M[2]`
+to the statement says the guest's first read of every input word read the statement's input.
+`claims[1]`, `M[1] teardown_value`, is held to **nothing**: a guest may overwrite its own input
+buffer.
+
+### 15.4 Rows
+
+A window shard has no padding: every row is an address, and all 256 of them are live.
+`zero_row_valid` is `true` and the padding contract is `M[0] = 0, M[1] = 0, M[2] = 0`; here that
+all-zero row is an ordinary row and a common one — a word past the payload that no cycle
+touched — whose two leaves are equal and cancel.
+
+| row | `teardown_ts` | `teardown_value` | `init_value` | leaves |
+| --- | --- | --- | --- | --- |
+| word 0 | 0, or the last write's timestamp if the guest overwrote it | the payload's byte length, or what overwrote it | the payload's byte length | the length word is a committed cell like any other, and it is what makes the binding exact (`public-values.md` §3) |
+| a payload word the guest only read | 0 | the input word `v` | `v` | both `T(RAM, 0x8000 + 4y, 0, v)`: they cancel |
+| a payload word the guest overwrote | the last query's write timestamp `t` | the value it wrote, `v'` | the input word `v` | `T(RAM, 0x8000 + 4y, t, v')` read against `T(RAM, 0x8000 + 4y, 0, v)` written |
+| a word past the payload | 0 | 0 | 0 | both `T(RAM, 0x8000 + 4y, 0, 0)`: they cancel |
+
+Nothing in this circuit checks a row alone — there is no enforcing gate to check one with.
+`M[0]` and `M[1]` are fixed by the memory argument; `M[2]` is fixed by step 10c, on every row at
+once, through one multilinear evaluation.
+
+**What holds this in CI**: `crates/checker/tests/public_values.rs`'
+`the_input_window_column_is_the_verifiers_own_layout`, which builds `M[2]` from a real log with
+`build_value_window_columns` and compares it row by row with `public_io_words`, and
+`the_three_families_are_two_leaves_and_a_product_tree`, which refuses a channel, a lookup, a
+setup column, a witness column or a third output. The proof half —
+`MemoryArgument` for a claimed input that is not the committed column, and the control that the
+journal's shard does not care about it — is `crates/prover/tests/public_io.rs`'
+`a3_a_claimed_public_value_is_the_committed_column`, `#[ignore]`d for size.
+
+---
+
+## 16. `PUBLIC_OUTPUT` — family 13
+
+### 16.1 Header
+
+`family_circuit(13, n)` is `memory::zero_window_artifact(n)` with no channels — **`ZERO_WINDOWS`'
+artifact, byte for byte**, and §11's entry describes it column for column and gate for gate. RAM
+window `family::PUBLIC_OUTPUT_WINDOW` = 33, the journal: exactly one shard in every statement,
+whether or not the execution committed a byte. Spec: `public-values.md` §4 and §5. Fill:
+`prover::family_fill(13)`, the private `fill::window` — `ZERO_WINDOWS`' fill too — which is
+`trace::build_init_teardown_columns(log, image, 33, h)`. Two committed columns, one virtual
+table, two unmasked leaves, no enforcing gate, no lookup, no channel, two outputs. At `n = 8`,
+its one height: 9 gate lists, top `L9`, 18 inner columns and relations. Its height is pinned for
+§15.1's reason, and by the same constants.
+
+**That it is the *same* artifact is the design, not a saving.** `value_window_artifact` was
+written for this stage and the journal does not take it: a committed init column is a column a
+prover chooses, and it would choose the answer at timestamp 0, never store a word, and leave a
+teardown column that matched anyway. The init leaf here is the literal 0 — no `M[2]`, no `S[0]`,
+nothing to choose — so the only way the window ends holding the journal is that the guest's
+stores put it there. Jolt closes the same hole with a mask; here the family simply has no column
+to fill, which is cheaper and cannot be forgotten (`public-values.md` §5). Nothing checks this,
+because there is nothing to check: the absence of a column is not a constraint.
+
+### 16.2 Columns
+
+| address | name | Rust | descriptive name | row `y` holds | read by |
+| --- | --- | --- | --- | --- | --- |
+| `M[0]` | `teardown_ts` | `PolyAddress::Memory(0)` | Last write time | the timestamp of the last write to the word at `0x8400 + 4y`, or 0 | leaf `teardown` |
+| `M[1]` | `teardown_value` | `PolyAddress::Memory(1)` | Final word | the last value written, or 0 | leaf `teardown`; **`verify_shard_local` step 10c** |
+| `V[row]` | `row` | `VirtualKind::RowIndex`, wire tag 0 | Row index | `y` | both leaves |
+
+Both are committed in `PublicInputs::memory_commitments` at G8. There is no `W`, no `S` and no
+`M[2]`: `program::setup_commitments(13)` is empty, and the last row of `public-values.md` §5's
+table — "there is no `M[2]`" — is the one place the design could have gone wrong.
+
+`fill::window` reads `image.initial_word` for every window above 0, and here it returns 0 on
+every row, which is what lets `ZERO_WINDOWS`' fill serve this family unchanged: the journal
+window is `[0x8400, 0x8800)`, below `RAM_ORIGIN`, and both `loader`'s ELF parser and
+`ProgramImage`'s own validator refuse a segment that leaves `[RAM_ORIGIN, RAM_ORIGIN +
+RAM_LENGTH)` — "a segment leaves the guest RAM window" — so no image byte can land there. An
+untouched row's teardown value is therefore 0, and its two leaves cancel against the
+literal-zero init leaf.
+
+### 16.3 Leaves and layers
+
+| `L1` | relation | node | positional | named |
+| --- | --- | --- | --- | --- |
+| 0 | 0 | `teardown` (read side) | `α_addr·V[row] ×4 + α_ts·M[0] + α_val·M[1] + WC` | `T(RAM, 0x8400 + 4·row, teardown_ts, teardown_value)` |
+| 1 | 1 | `init` (write side) | `α_addr·V[row] ×4 + WC` | `T(RAM, 0x8400 + 4·row, 0, 0)` |
+
+Here `WC = γ_M + 2 + α_addr·0x8400`, the window constant at `h = 2^8`, `w = 33`. Both are
+`Linear` and carry no mask, for §15.3's reason. Code: `memory::window_tuple(Some(M[0]), M[1])`
+for the read side and the inline `Linear` of `zero_window_artifact` — four `(α_addr, V[row])`
+terms on the window constant, and no value term at all — for the write side. The halving lists
+and the outputs are §10.3's and §15.3's, with the same names, relation numbers and addresses;
+`p` in step 10a is the position of `(13, 0)` in `statement_shards`, one past `PUBLIC_INPUT`'s.
+
+**Step 10c reads `claims[1]`**: base claims arrive in layout order `M`, `W`, `S`, and this
+family's whole layout is `M[0]`, `M[1]`, so index 1 is `teardown_value` and can be nothing
+else — where `PUBLIC_INPUT`'s step 10c reads index 2. The verifier evaluates its own
+multilinear extension of `public_io_words(public.output)` at the shard's opening point and
+compares, returning
+`MemoryArgument("the public output window is not the statement's output")` on a mismatch. The
+multiset forces a window's teardown column to be each address's **last** value (`memory.md`
+§4.2), so the comparison says the statement's output is what the guest's stores left behind.
+
+### 16.4 Rows
+
+A window shard has no padding: every row is an address. `zero_row_valid` is `true` and the
+padding contract is `M[0] = 0, M[1] = 0`.
+
+| row | `teardown_ts` | `teardown_value` | leaves |
+| --- | --- | --- | --- |
+| word 0, a run that committed nothing | 0 | 0 | both `T(RAM, 0x8400, 0, 0)`: they cancel |
+| word 0, a run that committed `b` bytes | the last `commit`'s store timestamp | `b` | the final tuple read against the zero tuple written |
+| a journal word the guest stored | that store's timestamp | the word it stored | as above |
+| a word past the journal | 0 | 0 | both `T(RAM, 0x8400 + 4y, 0, 0)`: they cancel |
+
+A guest that panics has still published what it committed: the journal is memory and the panic
+handler does not have to know about it (`public-values.md` §7).
+
+**What holds this in CI**: `crates/checker/tests/public_values.rs`'
+`the_journals_family_has_no_init_column`, which asserts `family_circuit(13, 8).to_bytes() ==
+zero_window_artifact(8).to_bytes()` and that the family commits exactly two columns — and whose
+doc comment records the consequence of ever failing, that the verifier would then owe a check
+that the init column is zero, and a check can be forgotten where a missing column cannot.
+
+---
+
+## 17. `ADVICE_WINDOWS` — family 14
+
+### 17.1 Header
+
+`family_circuit(14, n)` is `memory::value_window_artifact(n)` with no channels —
+**`PUBLIC_INPUT`'s artifact at a different height**, and the two differ only in what the
+verifier does with `M[2]`: holds it to the statement's `input`, or to nothing at all. The
+prover-supplied advice region from `guest_memory::ADVICE_ORIGIN` = `0x8000_0000` up: `k ≥ 0`
+shards, shard `i` being window `verifier_core::advice_first_window(h) + i`, consecutive from
+the origin, so the statement carries a **count** and no window list. Spec:
+`public-values.md` §6. Fill: `prover::family_fill(14)`, the private `fill::advice`, which is
+`trace::build_value_window_columns(log, [trace::advice_word(bytes, h·i + y)]_y,
+advice_first_window(h) + i, h)`. Three committed columns, one virtual table, two unmasked
+leaves, no enforcing gate, no lookup, no channel, two outputs. At `n = 22`, its default and the
+window height: 23 gate lists, top `L23`, 46 inner columns and relations; at `n = 16`, the window
+height the prover suites set, 17 lists, top `L17`, 34 of each.
+
+**It is in every `VmConfig` and usually proves zero shards.** `program::decode_program` lists it
+always, at the window height — `verifier_core::window_height` requires `INIT_TEARDOWN`,
+`ZERO_WINDOWS` and `ADVICE_WINDOWS` to be present and equal — while
+`trace::advice_window_count` is `ceil(advice_region_words / h)` and
+`trace::advice_region_words` is **0** for empty advice, not 1. No advice is no region, not a
+region holding a zero length word; otherwise every program in the repository would pay a whole
+window at the window height to say it has none. `verifier_core::check_memory_windows` bounds the
+count from above instead, `advice_first_window(h) + k ≤ 2^30 / h`, which is the top of the
+address space; the `ZERO_WINDOWS` ids stop at `2^29 / h − 1` and the advice ids start at
+`2^29 / h`, so the two families' windows are disjoint by arithmetic and no disjointness rule is
+needed.
+
+### 17.2 Columns
+
+| address | name | Rust | descriptive name | row `y` of shard `i` holds | read by |
+| --- | --- | --- | --- | --- | --- |
+| `M[0]` | `teardown_ts` | `PolyAddress::Memory(0)` | Last write time | the timestamp of the last write to the word at `0x8000_0000 + 4h·i + 4y`, or 0 | leaf `teardown` |
+| `M[1]` | `teardown_value` | `PolyAddress::Memory(1)` | Final word | the last value written; `init_value` if untouched | leaf `teardown` |
+| `M[2]` | `init_value` | `PolyAddress::Memory(2)` | Advice word | `trace::advice_word(advice, h·i + y)`: word 0 of shard 0 the payload's byte length, then the payload little-endian, 0 past the end | leaf `init` — **and nothing else, anywhere** |
+| `V[row]` | `row` | `VirtualKind::RowIndex`, wire tag 0 | Row index | `y` | both leaves |
+
+All three are committed in `PublicInputs::memory_commitments` at G8. **`M[2]` is the one
+committed column in the registry that no gate, no opening against identity or the SRS digest and
+no step of `verify_shard` fixes**: only its own init leaf reads it, and a leaf constrains nothing
+by itself — it balances against whatever the guest read, whatever that was. That is not an
+omission; it is the definition of advice (`public-values.md` §6). What a guest owes in return
+is a check of the advice against something a proof *does* bind — the public input carrying a
+commitment to it, or the journal naming the state roots a block began and ended on, as
+`guests/revm-block` does — and the VM cannot discharge that obligation for it.
+
+A store into the advice region is an ordinary store and the multiset carries it like any other:
+the region is **not** enforced read-only (owner's decision, S25), because enforcing it would need
+a space selector on the load path of three frozen families and would buy no soundness on a column
+nothing binds.
+
+### 17.3 Leaves and layers
+
+| `L1` | relation | node | positional | named |
+| --- | --- | --- | --- | --- |
+| 0 | 0 | `teardown` (read side) | `α_addr·V[row] ×4 + α_ts·M[0] + α_val·M[1] + WC` | `T(RAM, 4h·w + 4·row, teardown_ts, teardown_value)` |
+| 1 | 1 | `init` (write side) | `α_addr·V[row] ×4 + α_val·M[2] + WC` | `T(RAM, 4h·w + 4·row, 0, init_value)` |
+
+Here `w = advice_first_window(h) + i` and `WC = γ_M + 2 + α_addr·4h·w`, so at `h = 2^22` the
+first window is 128 and shard `i` starts at `0x8000_0000 + i·2^24`. The address-space tag is
+`RAM`, as it is for ordinary RAM and for the two public windows: what tells an advice word from
+a heap word is which family initializes the address, and the ranges are disjoint by construction
+(`public-values.md` §2). Both leaves are `Linear`, unmasked, degree 1, and the constructor is
+§15.3's. The halving lists and the outputs are §10.3's, with the same names, relation numbers
+and addresses; at `n = 22` the outputs are `L{23}[0]` and `L{23}[1]`, relations 44 and 45, and
+`p` in step 10a is the position of `(14, i)` in `statement_shards`, last of all.
+
+**There is no step 10c for this family.** `verify_shard_local`'s `public_value` match arm names
+`PUBLIC_INPUT` and `PUBLIC_OUTPUT` and falls through to `None` for every other family, family 14
+included.
+
+### 17.4 Rows
+
+A window shard has no padding: every row is an address. `zero_row_valid` is `true` and the
+padding contract is `M[0] = 0, M[1] = 0, M[2] = 0`.
+
+| row | `teardown_ts` | `teardown_value` | `init_value` | leaves |
+| --- | --- | --- | --- | --- |
+| shard 0's word 0 | 0, or a store's timestamp | the payload's byte length, or what overwrote it | the payload's byte length | the length word, laid out by `trace::advice_word` |
+| an advice word the guest only read | 0 | the advice word `v` | `v` | both `T(RAM, a, 0, v)`: they cancel |
+| an advice word the guest stored to | that store's timestamp | the value it stored, `v'` | the advice word `v` | `T(RAM, a, t, v')` read against `T(RAM, a, 0, v)` written |
+| a word past the supplied advice | 0 | 0 | 0 | both `T(RAM, a, 0, 0)`: they cancel |
+
+The last row is why the shard count is a function of what the **host supplied** and not of what
+the guest read: the words a guest never touched still have to be initialized, and their two
+tuples cancel. Above `0x8000_0000 + 4·advice_region_words` the executor's read is the fatal
+`OutOfBounds`, because no window of this execution initializes an address there and nothing an
+executor did with it could balance.
+
+**What holds this in CI**: `crates/checker/tests/public_values.rs`'
+`the_advice_region_is_a_length_word_then_a_payload`, `the_window_rules_take_an_honest_statement`
+and `the_window_rules_refuse_each_of_their_controls`. That nothing binds `M[2]` is a negative
+and no test asserts it directly; what stands in is
+`crates/prover/tests/public_io.rs`' `a4_the_advice_is_unbound_and_the_guest_checks_it`, which
+proves the same program twice over two different advices — both verify — and shows that the
+guest, not the VM, is what makes the swap visible.
+
+---
+
+## 18. Observations
 
 Facts this accounting turned up. None changes a circuit.
 
 1. **The registry and the height menu disagree both ways.** `family_circuit` builds
-   all **seven** registered execution circuits at every `n` from 19 to 30, and the two window
-   circuits and `KECCAK_F` at every `n` from 0 to 30. A key's heights come from `VmConfig`,
-   which `VmConfig::from_bytes` holds to `HEIGHT_MENU` (`n` = **8**, 16, 18, 20, 22 since S21).
+   all **seven** registered execution circuits at every `n` from 19 to 30, and the **five**
+   window circuits and the three delegation circuits at every `n` from 0 to 30. A key's heights
+   come from `VmConfig`, which `VmConfig::from_bytes` holds to `HEIGHT_MENU` (`n` = **8**, 16,
+   18, 20, 22 since S21).
    So the seven execution circuits are reachable only at 20 and 22, which is `shard-proof.md` §8's,
    `jump-branch-slt.md` §2's, `shift-bitwise.md` §2's, `mul-div.md` §2's and `memory-ops.md`
-   §7.1's `trace_vars ≥ 20`: the timestamp channel's 19 variables, made even for Mercury. The
-   windows are reachable only at 16, 18, 20 and 22, never at `n ≤ 14`, where `V[ram_live]` is 0
-   on every row and `INIT_TEARDOWN` would mask its whole window. Conversely, no execution
+   §7.1's `trace_vars ≥ 20`: the timestamp channel's 19 variables, made even for Mercury.
+   `INIT_TEARDOWN` and `ZERO_WINDOWS` are reachable only at 16, 18, 20 and 22, never at
+   `n ≤ 14`, where `V[ram_live]` is 0 on every row and `INIT_TEARDOWN` would mask its whole
+   window — and since S25 `verifier_core::window_height` refuses a window height below `2^16`
+   for a second reason, that both public windows must lie inside RAM window 0;
+   `ADVICE_WINDOWS` shares that height. **`PUBLIC_INPUT` and `PUBLIC_OUTPUT` are the opposite
+   case**: reachable over the whole 0–30 range, like a delegation family and for the same
+   reason — no channel, so no `BITS ≤ trace_vars` guard — but derivable at `2^8` and nowhere
+   else, because the height is what places their windows (§15.1). Conversely, no execution
    circuit exists at the menu's 16 and 18, so a `VmConfig` placing one there decodes but no key
    for it loads (`VerifyingKey::check`) — and since S19 the `trace_vars < 19 ⇒ None` arm names
    all seven, so such a key is a clean `Err` and not a panic inside `lookup::channel_trees`,
@@ -7751,7 +8133,8 @@ Facts this accounting turned up. None changes a circuit.
    has initial and final pc tuples at address 0 only (§3.10); the same holds for every family's
    frame. **`rd_read_value` is read by the leaf `read_rd` alone in every registered family but
    add/sub**, whose `exit_status` reads it, so in six of the seven execution families it is
-   fixed by the memory argument alone; the two window families carry no `rd` query at all. `MEM_WORD` adds a second such column: **`ram_read_value`, the word a store
+   fixed by the memory argument alone; **no** window family carries an `rd` query — none has a
+   frame at all. `MEM_WORD` adds a second such column: **`ram_read_value`, the word a store
    overwrites, is read by `read_ram` and by nothing else** — no gate, no obligation, no table
    (§7.3). That is exactly the property `memory-ops.md` §9 wants of a tamper target, and it is
    why the `MEM_WORD` twin moves that cell and is refused as `MemoryArgument` rather than as
@@ -7895,9 +8278,10 @@ Facts this accounting turned up. None changes a circuit.
     shim at all, and `crates/prover/tests/keccak.rs` asserts exactly that containment.
     `verify_block`'s `check_ts_windows` therefore requires non-emptiness, ordering and pairwise
     disjointness **per cycle-owning family** (`constants::family::CYCLE_OWNING`), which is
-    `false` for this family as it is for the two window families — and for a different reason:
-    a window family owns no cycle because its rows are addresses, and a delegation family
-    because its rows are invocations of someone else's cycle (§12.8, `block-proof.md` §4).
+    `false` for this family as it is for all **five** window families — and for a different
+    reason: a window family owns no cycle because its rows are addresses, and a delegation
+    family because its rows are invocations of someone else's cycle (§12.8,
+    `block-proof.md` §4).
 23. **A forgery's error class depends on which entry point verifies it, and S21 is where
     that first mattered.** `verify_shard`'s order is `Statement`, `Malformed`, `Constraint`,
     `Lookup`, `MemoryArgument`; `verify_block` runs `verify_global_memory` — the memory
@@ -7911,10 +8295,31 @@ Facts this accounting turned up. None changes a circuit.
     `Constraint` at block level is asserting something false. It did, until S21's first full
     deferred run. No earlier stage met this: every tamper before S21 either broke a gate
     without unbalancing anything or was run through `verify_shard` alone.
+24. **Two families share one artifact byte for byte, and the sharing is the soundness
+    argument.** `family_circuit(13, n)` and `family_circuit(8, n)` are the same bytes at every
+    `n`, so `crates/constraints/tests/vectors/zero_window.bin` pins both. That is not reuse for
+    economy: the journal's window takes `ZERO_WINDOWS`' artifact **because** its init leaf is
+    the literal 0, leaving a prover no init column to pre-load the answer into at timestamp 0
+    (§16.1). `PUBLIC_INPUT` and `ADVICE_WINDOWS` likewise share `value_window_artifact` and
+    differ only in what `verify_shard_local` step 10c does with `M[2]` — holds it to the
+    statement's `input`, or does not look at it at all. So three of the five S25-era window
+    families are two artifacts, and **what tells them apart is a verifier step and a window
+    id, not a gate**. It is the first place in this registry where two `FamilyId`s carry
+    identical circuits, and `VerifyingKey::check` is untroubled by it: a key's circuits are the
+    registry's, family by family, and two families returning equal bytes is not a collision.
+25. **`ADVICE_WINDOWS`' `M[2]` is the only committed column in the whole registry that nothing
+    binds.** Every other committed column is reached by a gate, a leaf, a lookup, an opening
+    against identity or the SRS digest, or a verifier step. `M[2]` is reached by its init leaf
+    alone, and a leaf constrains nothing by itself — it balances against whatever the guest read
+    (§17.2). That is the definition of advice and not a gap, but it is worth writing down beside
+    §18 observation 6's unconstrained `INIT_TEARDOWN` cells and §18 observation 19's free anchor
+    value, because the three are the registry's whole inventory of deliberately free committed
+    cells, and each is free for a different reason: masked off, paired by the multiset, or
+    chosen by the prover on purpose.
 
 ---
 
-## 16. Maintaining this page
+## 19. Maintaining this page
 
 A stage that adds a circuit family, or changes one, updates this page in the same pull request
 (`prompts/00-master.md`, implementation rule 12). **Changing one is the same obligation as
@@ -7945,7 +8350,7 @@ query moved every relation number in it. A new family's entry is a section like 
    better source: it runs in CI and a probe does not. A family too wide for a row table says so
    and gives the chain that stands in for one instead (§12.9).
 9. **Its rows in §1.1, §1.2 and §1.3, its counts in §0.5, the challenge slots it reads in
-   §0.4**, and any §15 observation the accounting turns up. A family whose decoded tuple is not
+   §0.4**, and any §18 observation the accounting turns up. A family whose decoded tuple is not
    seven wide also moves §0.4's `β⁶` and `g_dec` rows, as `MUL_DIV`'s and `ATOMICS`' six-wide
    ones did; a family that reads or does not read the generic channel moves §0.4's `β` and `β²`
    rows, as `MEM_WORD`'s absence from them records.
@@ -7975,6 +8380,14 @@ cargo run -p checker -- dump crates/constraints/tests/vectors/mem_subword.bin   
 cargo run -p checker -- dump crates/constraints/tests/vectors/atomics.bin           # n = 22
 cargo run -p checker -- dump crates/constraints/tests/vectors/image_window.bin      # n = 22
 cargo run -p checker -- dump crates/constraints/tests/vectors/zero_window.bin       # n = 22
+#   zero_window.bin is PUBLIC_OUTPUT's circuit too: family_circuit(13, n) and
+#   family_circuit(8, n) are one constructor and agree byte for byte at every n.
+# PUBLIC_INPUT's and ADVICE_WINDOWS' artifact has NO committed fixture, value_window_artifact
+#   being S25's one new constructor. To read §15 and §17 from it, write the bytes and dump them:
+#     memory::value_window_artifact(8).to_bytes()  -> value_window_8.bin   (2,027 bytes)
+#     memory::value_window_artifact(22).to_bytes() -> value_window_22.bin  (3,535 bytes)
+#     memory::zero_window_artifact(8).to_bytes()   -> zero_window_8.bin    (1,910 bytes)
+#   then `checker dump`, `checker laws` and `checker padding` over each.
 # §12 has no dump: `keccak::artifact(8).to_bytes()` is 100,254,040 bytes, so what is
 # committed is its SHA-256 and the shape line beside it.
 cat crates/constraints/tests/vectors/keccak.txt
@@ -8003,6 +8416,13 @@ cargo test -p checker --test keccak             # §12.9's forward pass and §12
 cargo test -p emulator --test keccak            # emulator::keccak_f against tiny-keccak, which
                                                 # is what §12.9's chain rests on
 cargo test -p constants --test keccak           # ROTATIONS and ROUND_CONSTANTS re-derived
+cargo test -p checker --test public_values      # §15's, §16's and §17's shapes, both public
+                                                # windows' and the advice region's layouts, and
+                                                # the window rules, in ordinary CI
+cargo test -p prover --test public_io -- --include-ignored --test-threads=1
+                                                # S25's statement: guests/public-io proved and
+                                                # verified, step 10c isolated, and the advice
+                                                # shown unbound. DEFERRED; a 2^20 statement
 ```
 
 The dump prints the header, the committed columns, the virtual tables, every gate list with
@@ -8019,7 +8439,10 @@ mem_subword and 0–317 of atomics, and the halving lists follow §3.8's, §4.8'
 §7.8's, §8.8's and §9.8's formulas.
 
 The counts at `n = 16` and `n = 20` were read from `family_circuit` directly (its artifact's
-`depth()`, layer widths, `relations`, `lookups` and `to_bytes()`), which has no CLI. The §3.10
+`depth()`, layer widths, `relations`, `lookups` and `to_bytes()`), which has no CLI; §15's,
+§16's and §17's counts were read the same way, from `family_circuit(12, 8)`,
+`family_circuit(13, 8)`, `family_circuit(14, 16)` and `family_circuit(14, 22)`, and their
+columns, gates, relation numbers, outputs and padding contracts from the dumps above. The §3.10
 probe is add/sub's `honest_rows` with one cell moved at a time, run through
 `violated_relations` and `violated_lookups`; the §4.10 probe is the same over
 jump/branch/slt's `honest_rows`, run also through that suite's own table check,

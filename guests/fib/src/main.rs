@@ -35,7 +35,7 @@ guest_sdk::entry!(main);
 fn main() {
     let mut n = [0u8; 4];
     assert_eq!(
-        guest_sdk::read_input(&mut n),
+        guest_sdk::read_stdin(&mut n),
         4,
         "fib: public input is one u32"
     );
@@ -48,5 +48,5 @@ fn main() {
         a = b;
         b = next;
     }
-    guest_sdk::commit(&a.to_le_bytes());
+    guest_sdk::write_stdout(&a.to_le_bytes());
 }

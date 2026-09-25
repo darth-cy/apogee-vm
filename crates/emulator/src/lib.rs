@@ -18,11 +18,12 @@
 //! **`sc.w` always succeeds**: it stores and writes 0 to `rd`. The ISA
 //! requires an `sc.w` without a valid reservation to fail, so this is a
 //! conformance deviation — never a soundness one, since the verifier still
-//! knows exactly which program ran — and it is the one divergence
-//! [`qemu::WHITELIST`] names. A halfword or word access at an address that is
-//! not a multiple of its width, and any access outside the RAM window, is a
-//! fatal guest error, never rotated, split or emulated. So is `ebreak`, and
-//! so is a pc that is not the start of an instruction.
+//! knows exactly which program ran, and the circuits share the semantics
+//! (`docs/spec/memory-ops.md` §6.5). A halfword or word access at an address
+//! that is not a multiple of its width, and any access outside the
+//! addressable regions, is a fatal guest error, never rotated, split or
+//! emulated. So is `ebreak`, and so is a pc that is not the start of an
+//! instruction.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -37,12 +38,28 @@ use trace::{
     MemoryEventLog, Query, Role, Row, ROLES,
 };
 
-pub mod qemu;
-
-/// What a guest can read: the fd 0 public input and the fd 3 hint stream.
+/// What a guest is given to read. **Four fields, because there are four
+/// things, and what tells them apart is what binds them**
+/// (`docs/spec/public-values.md`).
+///
+/// | field | where the guest finds it | what binds it |
+/// | --- | --- | --- |
+/// | `input` | the public input window, an ordinary load | the statement, at the window's init column |
+/// | `advice` | `guest_memory::ADVICE_ORIGIN`, an ordinary load | **nothing**; the guest owes a check |
+/// | `stdin` | fd 0, a `read` ecall | nothing; `read` is not provable |
+/// | `hint` | fd 3, a `read` ecall | nothing; the older spelling of advice |
+///
+/// `input` and `stdin` are **not** the same bytes and neither seeds the other.
+/// They were one field briefly and the coupling was wrong in both directions: a
+/// public input is capped at `guest_memory::PUBLIC_PAYLOAD_BYTES` and an fd 0
+/// stream is not, and a guest cannot be both provable and runnable under
+/// `qemu-riscv32` anyway — the windows and the advice region are unmapped
+/// there, so no guest reads both paths.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GuestIo {
     pub input: Vec<u8>,
+    pub advice: Vec<u8>,
+    pub stdin: Vec<u8>,
     pub hint: Vec<u8>,
 }
 
@@ -57,8 +74,14 @@ pub struct Execution {
     /// Cycles run, transfer cycles included. Cycles are numbered from 1, so
     /// this is also the last cycle's number.
     pub cycle_count: u64,
-    /// The fd 0 bytes the guest consumed and the fd 1 bytes it wrote.
+    /// The execution's **public values**: the public input it was given, and
+    /// the journal its stores left in the public output window
+    /// (`docs/spec/public-values.md`). These are the two byte strings a
+    /// statement carries and a proof binds.
     pub io: IoStreams,
+    /// The fd 1 bytes: the POSIX compatibility stream, uncommitted. It is what
+    /// `qemu-riscv32` can be compared against; a proof binds none of it.
+    pub stdout: Vec<u8>,
     /// The fd 2 bytes: diagnostics, uncommitted, and never archived.
     pub stderr: Vec<u8>,
 }
@@ -82,6 +105,23 @@ pub enum EmuError {
     OutOfBounds { pc: u32, addr: u32 },
     /// Cycle `cycle`'s timestamps would pass the 38-bit clock.
     ClockOverflow { cycle: u64 },
+    /// The public input handed to the run is longer than a public window's
+    /// payload, so no statement could carry it.
+    ///
+    /// Checked before the first cycle rather than left to panic inside the
+    /// window's layout: a host that offers too much input has made a mistake,
+    /// and the executor says so by name.
+    PublicInputTooLong { len: usize },
+    /// The journal's length word is above `guest_memory::PUBLIC_PAYLOAD_BYTES`
+    /// at exit, so the public output window does not describe a byte string
+    /// any statement could carry.
+    ///
+    /// Fatal, and it has to be: the verifier reads the window back through
+    /// `program::public_io_words`, which has no encoding for such a length, so
+    /// an execution this let through would be one no proof could cover.
+    /// `guest_sdk::commit` refuses to overflow the window rather than reach
+    /// here.
+    JournalTooLong { len: u32 },
     /// A delegation ecall whose family the `VmConfig` does not hold.
     ///
     /// Only the tracing path raises it: the family set is a property of the
@@ -113,6 +153,16 @@ impl fmt::Display for EmuError {
                 "illegal instruction at pc {pc:#010x}: {word:#010x} is not RV32IMAC"
             ),
             EmuError::Ebreak { pc } => write!(f, "ebreak at pc {pc:#010x}"),
+            EmuError::PublicInputTooLong { len } => write!(
+                f,
+                "the public input is {len} bytes, above the window's {}",
+                guest_memory::PUBLIC_PAYLOAD_BYTES
+            ),
+            EmuError::JournalTooLong { len } => write!(
+                f,
+                "the journal's length word is {len}, above the window's {} payload bytes",
+                guest_memory::PUBLIC_PAYLOAD_BYTES
+            ),
             EmuError::Misaligned { pc, addr, width } => write!(
                 f,
                 "misaligned data access at pc {pc:#010x}: a {width}-byte access at {addr:#010x}"
@@ -211,11 +261,25 @@ fn write_value(frame: &mut [u32], first: usize, bytes: &[u8; 32]) {
     }
 }
 
+/// What a run's inputs must satisfy before the first cycle: the public input
+/// fits the window that will carry it (`docs/spec/public-values.md` §3).
+///
+/// The advice needs no such rule — the region is sized to what it was given.
+fn check_io(io: &GuestIo) -> Result<(), EmuError> {
+    if io.input.len() > guest_memory::PUBLIC_PAYLOAD_BYTES as usize {
+        return Err(EmuError::PublicInputTooLong {
+            len: io.input.len(),
+        });
+    }
+    Ok(())
+}
+
 /// Run a guest to its `exit`.
 pub fn run(image: &ProgramImage, io: &GuestIo) -> Result<Execution, EmuError> {
+    check_io(io)?;
     let mut machine = Machine::new(image, io);
     machine.run()?;
-    Ok(machine.finish())
+    machine.finish()
 }
 
 /// Run a guest to its `exit`, recording its trace: the family buffers, the
@@ -241,6 +305,7 @@ pub fn trace_run(
                 .all(|(t, (f, h))| t.family == *f && t.height == *h),
         "trace_run: the decoded tables and the VmConfig describe different VMs"
     );
+    check_io(io)?;
     let mut machine = Machine::new(image, io);
     machine.recorder = Some(Recorder {
         tables,
@@ -267,7 +332,7 @@ pub fn trace_run(
         .recorder
         .take()
         .expect("trace_run installed a recorder");
-    let execution = machine.finish();
+    let execution = machine.finish()?;
     let profile = CycleProfile {
         counts: recorder.traces.row_counts(),
     };
@@ -336,11 +401,21 @@ struct Machine<'a> {
     /// initial write of every address, and a cycle-0 pc query could not
     /// strictly follow it.
     cycle: u64,
-    input: &'a [u8],
-    input_at: usize,
+    /// The public input this run was given: the window's payload, which
+    /// `finish` reports as the statement's `input` whether or not the guest
+    /// looked (`docs/spec/public-values.md` §9).
+    public_input: &'a [u8],
+    stdin: &'a [u8],
+    stdin_at: usize,
     hint: &'a [u8],
     hint_at: usize,
-    output: Vec<u8>,
+    /// One past the highest advice byte the host supplied, rounded up to a
+    /// word: the top of what a guest may load. Above it the advice region is
+    /// addressable in principle and initialized by nothing in this execution,
+    /// so a read there is refused loudly here rather than left to fail as an
+    /// unprovable trace.
+    advice_end: u32,
+    stdout: Vec<u8>,
     stderr: Vec<u8>,
     exit: Option<i32>,
     recorder: Option<Recorder<'a>>,
@@ -366,11 +441,14 @@ impl<'a> Machine<'a> {
             pc: image.entry,
             ram: HashMap::new(),
             cycle: 1,
-            input: &io.input,
-            input_at: 0,
+            public_input: &io.input,
+            stdin: &io.stdin,
+            stdin_at: 0,
             hint: &io.hint,
             hint_at: 0,
-            output: Vec::new(),
+            advice_end: guest_memory::ADVICE_ORIGIN
+                + 4 * trace::advice_region_words(&io.advice) as u32,
+            stdout: Vec::new(),
             stderr: Vec::new(),
             exit: None,
             recorder: None,
@@ -384,7 +462,40 @@ impl<'a> Machine<'a> {
                 }
             }
         }
+        // The public input window: word 0 the payload's byte length, then the
+        // payload. `program::public_io_words` is the one spelling of the
+        // layout, shared with the prover's column builder and the verifier's
+        // check, so the three cannot drift.
+        for (y, word) in program::public_io_words(&io.input).iter().enumerate() {
+            machine.set_word(guest_memory::PUBLIC_INPUT_ORIGIN + 4 * y as u32, *word);
+        }
+        // The advice region: its length word, then the payload. Laid out by
+        // `trace::advice_word`, the one spelling `guest_sdk::advice` reads
+        // back and the prover's fill commits. The journal window starts at 0
+        // and stays there until the guest stores into it.
+        for y in 0..trace::advice_region_words(&io.advice) {
+            let word = trace::advice_word(&io.advice, y);
+            if word != 0 {
+                machine.set_word(guest_memory::ADVICE_ORIGIN + 4 * y as u32, word);
+            }
+        }
         machine
+    }
+
+    /// The journal at exit: the public output window's length word, then that
+    /// many payload bytes (`docs/spec/public-values.md` §3).
+    fn journal(&self) -> Result<Vec<u8>, EmuError> {
+        let len = self.word(guest_memory::PUBLIC_OUTPUT_ORIGIN);
+        if len > guest_memory::PUBLIC_PAYLOAD_BYTES {
+            return Err(EmuError::JournalTooLong { len });
+        }
+        let mut out = Vec::with_capacity(len as usize);
+        for y in 0..len.div_ceil(4) {
+            let word = self.word(guest_memory::PUBLIC_OUTPUT_ORIGIN + 4 + 4 * y);
+            out.extend_from_slice(&word.to_le_bytes());
+        }
+        out.truncate(len as usize);
+        Ok(out)
     }
 
     fn run(&mut self) -> Result<(), EmuError> {
@@ -394,17 +505,22 @@ impl<'a> Machine<'a> {
         Ok(())
     }
 
-    fn finish(self) -> Execution {
-        Execution {
+    fn finish(self) -> Result<Execution, EmuError> {
+        let output = self.journal()?;
+        Ok(Execution {
             regs: self.regs,
             exit_code: self.exit.expect("an execution finishes at its exit"),
             cycle_count: self.cycle - 1,
+            // The public input is what the statement carries, whether or not
+            // the guest read a byte of it: it is the window's contents, not a
+            // stream cursor.
             io: IoStreams {
-                input: self.input[..self.input_at].to_vec(),
-                output: self.output,
+                input: self.public_input.to_vec(),
+                output,
             },
+            stdout: self.stdout,
             stderr: self.stderr,
-        }
+        })
     }
 
     fn fetch(&self, pc: u32) -> Result<(Instr, bool), EmuError> {
@@ -504,9 +620,9 @@ impl<'a> Machine<'a> {
             return Err(EmuError::Misaligned { pc, addr, width });
         }
         let word = addr & !3;
-        if word < guest_memory::RAM_ORIGIN
-            || word - guest_memory::RAM_ORIGIN >= guest_memory::RAM_LENGTH
-        {
+        let reachable = trace::addressable(word)
+            && (word < guest_memory::ADVICE_ORIGIN || word < self.advice_end);
+        if !reachable {
             return Err(EmuError::OutOfBounds { pc, addr });
         }
         Ok(word)
@@ -903,9 +1019,9 @@ impl<'a> Machine<'a> {
     ) -> Result<u32, EmuError> {
         let left = |stream: &[u8], at: usize| (count as usize).min(stream.len() - at) as u32;
         let n = match (reading, fd) {
-            (true, ecall::FD_PUBLIC_INPUT) => left(self.input, self.input_at),
+            (true, ecall::FD_STDIN) => left(self.stdin, self.stdin_at),
             (true, ecall::FD_HINT) => left(self.hint, self.hint_at),
-            (false, ecall::FD_PUBLIC_OUTPUT | ecall::FD_STDERR) => count,
+            (false, ecall::FD_STDOUT | ecall::FD_STDERR) => count,
             _ => return Ok(ecall::EBADF.wrapping_neg()),
         };
         if n == 0 {
@@ -925,7 +1041,7 @@ impl<'a> Machine<'a> {
         let (source, source_at) = if fd == ecall::FD_HINT {
             (self.hint, self.hint_at)
         } else {
-            (self.input, self.input_at)
+            (self.stdin, self.stdin_at)
         };
         let mut written = Vec::new();
         let mut word = buf & !3;
@@ -950,8 +1066,8 @@ impl<'a> Machine<'a> {
         }
         match (reading, fd) {
             (true, ecall::FD_HINT) => self.hint_at += n as usize,
-            (true, _) => self.input_at += n as usize,
-            (false, ecall::FD_PUBLIC_OUTPUT) => self.output.extend_from_slice(&written),
+            (true, _) => self.stdin_at += n as usize,
+            (false, ecall::FD_STDOUT) => self.stdout.extend_from_slice(&written),
             (false, _) => self.stderr.extend_from_slice(&written),
         }
         Ok(n)
@@ -1172,6 +1288,8 @@ mod tests {
     fn the_clock_refuses_the_first_cycle_past_38_bits() {
         let io = GuestIo {
             input: Vec::new(),
+            advice: Vec::new(),
+            stdin: Vec::new(),
             hint: Vec::new(),
         };
         let image = spin();

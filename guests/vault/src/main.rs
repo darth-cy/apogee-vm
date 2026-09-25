@@ -333,7 +333,7 @@ fn parse_record(bytes: &[u8], depth: usize) -> Result<Withdrawal, &'static str> 
 fn main() {
     let mut header = [0u8; HEADER_LEN];
     assert_eq!(
-        guest_sdk::read_input(&mut header),
+        guest_sdk::read_stdin(&mut header),
         HEADER_LEN,
         "vault: fd 0 ended inside the header"
     );
@@ -383,7 +383,7 @@ fn main() {
         // many records there are, and proceeding on a partly-filled buffer
         // would settle a withdrawal against zeros.
         assert_eq!(
-            guest_sdk::read_input(&mut record[..record_len]),
+            guest_sdk::read_stdin(&mut record[..record_len]),
             record_len,
             "vault: fd 0 ended inside a withdrawal record"
         );
@@ -462,7 +462,7 @@ fn main() {
     // One `commit`, because the journal is one record and writing it in pieces
     // would let a panic between two of them leave a half-written statement on
     // fd 1.
-    guest_sdk::commit(&out);
+    guest_sdk::write_stdout(&out);
 }
 
 // ---------------------------------------------------------------------------

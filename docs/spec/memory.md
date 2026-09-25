@@ -2,7 +2,10 @@
 
 Frozen as of S14. Changing anything here is a protocol-version change. S21 appended the ninth
 query — `deleg`, a delegation request's mirror (§2.1) — and a new address space above RAM's;
-`docs/spec/delegation.md` is normative for both, and nothing else on this page moved.
+`docs/spec/delegation.md` is normative for both, and nothing else on this page moved for it.
+S25 appended three window families and extended the window tiling to the whole address space
+(§3); `docs/spec/public-values.md` is normative for them, and the tuple, the frame, the
+boundary and the reconciliation are unmoved.
 
 This page is the global memory argument of `prompts/00-master.md`, as the repository owner
 decided it at S14: RAM initialization and teardown in fixed **RAM windows**, the register and
@@ -296,35 +299,62 @@ order above.
 
 ### 3.1 Geometry
 
-Let `h = 2^n` be the height of the init/teardown families. **Window `w` covers byte addresses
-`[4h·w, 4h·(w+1))`** for `0 ≤ w < N = 2^29 / h`. Row `y` of window `w` is the word at
-`ADDR = 4h·w + 4y`. The windows tile `[0, 2^31)` exactly: 128 of them at `h = 2^22`, 8,192 at
-`2^16`.
+Let `h = 2^n` be the height of the window families. **Window `w` covers byte addresses
+`[4h·w, 4h·(w+1))`** for `0 ≤ w < 2^30 / h`. Row `y` of window `w` is the word at
+`ADDR = 4h·w + 4y`. Since S25 the windows tile `[0, 2^32)` exactly — 256 of them at
+`h = 2^22`, 16,384 at `2^16` — and `N = 2^29 / h` is where ordinary RAM ends and the advice
+region begins.
 
-- RAM is `[RAM_ORIGIN, 2^31) = [2^16, 2^31)`, `2^29 − 2^14` words, a count no menu height
-  divides. The only rows outside RAM are **window 0's rows `y < 2^14`** (addresses
-  `0x0..0xFFFC`), at every height.
+- RAM is `[RAM_ORIGIN, ADVICE_ORIGIN) = [2^16, 2^31)`, `2^29 − 2^14` words, a count no menu
+  height divides. A `ZERO_WINDOWS` id is in **`[1, N − 1]`**, exactly as at S14: that bound
+  did not move.
+- The only rows below `ADVICE_ORIGIN` outside RAM are **window 0's rows `y < 2^14`**
+  (addresses `0x0..0xFFFC`), at every height, and `INIT_TEARDOWN` masks every one of them
+  with `V[ram_live]`. Two sub-ranges of that masked span are the **public value windows**,
+  claimed by two families of their own at their own pinned height
+  (`docs/spec/public-values.md` §2); the rest of it stays a hole no family initializes, so a
+  null dereference reads a tuple nothing wrote and cannot balance.
 - Window 0 holds the image, which starts at `RAM_ORIGIN`. Window `N − 1` holds the initial
   `sp`, `0x8000_0000 − 4` and below; every traced guest touches it.
+- The windows from `N` up are the **advice region**, `[ADVICE_ORIGIN, 2^32)`: `ADVICE_WINDOWS`
+  shard `i` is window `N + i`, `verifier_core::advice_first_window(h)` being that `N`. The two
+  families' ids are therefore disjoint **by arithmetic and not by a rule** — `2^29 / h` is the
+  exclusive top of one range and the inclusive bottom of the other, one number serving as both
+  — and a statement carries no advice window list, only the count already in `SHARD_COUNTS`
+  (`docs/spec/public-values.md` §6).
 
-### 3.2 Two families of one height
+### 3.2 Three families of one height, and two at a pinned one
 
 | family | id | shards | window | init value |
 | --- | --- | --- | --- | --- |
 | `INIT_TEARDOWN` | 7 | exactly 1 | 0, the image window | `S[0]`, the image column, committed in program identity |
 | `ZERO_WINDOWS` | 8 | `k ≥ 0` | `w_1 < … < w_k`, each in `[1, N − 1]` | literal 0 |
+| `ADVICE_WINDOWS` | 14 | `k_a ≥ 0` | `N … N + k_a − 1`, consecutive | `M[2]`, committed and bound to nothing |
+| `PUBLIC_INPUT` | 12 | exactly 1 | `PUBLIC_INPUT_WINDOW` = 32, at `2^8` | `M[2]`, held to the statement's `input` |
+| `PUBLIC_OUTPUT` | 13 | exactly 1 | `PUBLIC_OUTPUT_WINDOW` = 33, at `2^8` | literal 0 |
 
-Both families are present in every `VmConfig`, never detached, and have **one height**:
-`decode_program` and `VmConfig::from_bytes` refuse a config where they differ or either is
-missing. A `ZERO_WINDOWS` height below `INIT_TEARDOWN`'s would put zero windows with id ≥ 1
-inside the image window, giving image words a second init row. The default height of both is
-`2^22`.
+All five are present in every `VmConfig` and never detached. The first three have **one
+height** `h`: `decode_program` and `VmConfig::from_bytes` refuse a config where any of them
+differs or is missing. A `ZERO_WINDOWS` height below `INIT_TEARDOWN`'s would put zero windows
+with id ≥ 1 inside the image window, giving image words a second init row; an
+`ADVICE_WINDOWS` height of its own would put the advice windows on a different grid from the
+one `advice_first_window(h)` computes, and the statement, carrying a count and no list, would
+have no way to say which. The default height of all three is `2^22`.
+
+The last two are at **`family::PUBLIC_WINDOW_HEIGHT` = `2^8`, and only that**, because a
+window's first address is `4h·w` and the height is therefore what *places* the windows: `2^8`
+is the one menu entry putting the two public origins in two distinct windows.
+`decode_program` writes the constant and ignores what a caller asked for, so “every family at
+`h`” keeps meaning every family whose height is a choice, and `verifier_core::window_height`
+refuses any other — the check that matters, because it is the one on bytes a verifier was
+handed. `docs/spec/public-values.md` §2 is normative for both families.
 
 ### 3.3 The artifacts
 
-Both: `trace_vars = n`; memory columns `M[0] = teardown_ts`, `M[1] = teardown_value`; no
-witness columns; no enforcing gates; virtual `V[row]`. `INIT_TEARDOWN` adds `S[0] = init_value`
-and `V[ram_live]`. `WC` is slot 5.
+All three artifacts: `trace_vars = n`, which is `8` for the two public families, whose
+height is pinned; memory columns `M[0] = teardown_ts`, `M[1] = teardown_value`; no witness
+columns; no enforcing gates; no lookups and no channel; virtual `V[row]`. `INIT_TEARDOWN` adds `S[0] = init_value`
+and `V[ram_live]`; `value_window_artifact` adds `M[2] = init_value` instead. `WC` is slot 5.
 
 ```text
 ZERO_WINDOWS
@@ -336,7 +366,22 @@ INIT_TEARDOWN     (live = V[ram_live]; each leaf is live·tuple + 1 − live)
                                [(α_addr, V[row], live) × 4, (α_ts, M[0], live), (α_val, M[1], live)] }
   L1[1] init     = Quadratic { 1, [(WC, live), (−1, live)],
                                [(α_addr, V[row], live) × 4, (α_val, S[0], live)] }
+
+value_window_artifact     (`docs/spec/public-values.md` §4)
+  M[0] teardown_ts    M[1] teardown_value    M[2] init_value    V[row]
+
+  L1[0] teardown = Linear { [(α_addr, V[row]) × 4, (α_ts, M[0]), (α_val, M[1])], WC }   read side
+  L1[1] init     = Linear { [(α_addr, V[row]) × 4,                (α_val, M[2])], WC }   write side
 ```
+
+`constraints::memory::value_window_artifact` is `zero_window_artifact` with that one column
+added, and the two families that take it — `PUBLIC_INPUT` and `ADVICE_WINDOWS` — differ only
+in what the verifier does with the column: holds it to the statement's `input` at the shard's
+own opening point, or to nothing at all. It is `M` and not `S` because an `S` column is bound
+by program identity, and one execution's public input — or one execution's advice — has no
+business in every execution's identity. `PUBLIC_OUTPUT` takes `zero_window_artifact` byte for
+byte: its init leaf is the literal 0, so there is no init column for a prover to choose
+(`docs/spec/public-values.md` §5).
 
 Then `n` halving lists to a 0-variable top of width 2, and `outputs = [L{N}[0], L{N}[1]]`:
 read root (teardown), write root (init). The init timestamp is literal 0. Padding row: zeros,
@@ -350,20 +395,33 @@ is the mask on window 0's rows below `RAM_ORIGIN`, on both leaves.
 
 The window constant for a shard of window `w` is
 `WC = γ_M + RAM + α_addr·4h·w`, computed by `gkr_verify::window_challenges` from the drawn
-slots and the window id bound in the statement (§6); `w = 0` for `INIT_TEARDOWN`.
+slots and the window id bound in the statement (§6). `verifier_core::shard_challenges` is
+what supplies `w`: 0 for `INIT_TEARDOWN`, `windows[index]` for `ZERO_WINDOWS`, the constants
+`PUBLIC_INPUT_WINDOW` and `PUBLIC_OUTPUT_WINDOW` for the two public families — their ids are
+constants because their height is — and `advice_first_window(h) + index` for `ADVICE_WINDOWS`,
+whose shards are consecutive from the origin and so need no list.
 
 `kat-gen`'s `memory` group writes `memory_frame_{alu,reg,mem,atomics}.bin`,
-`image_window.bin` and `zero_window.bin` — one file per *distinct* frame of §2, and both
-window artifacts — at `n = 22` to `crates/constraints/tests/vectors/`; CI regenerates and
-diffs them. Families sharing a query list share their artifact byte for byte, so `reg` is
-`JUMP_BRANCH_SLT`, `SHIFT_BITWISE` and `MUL_DIV`, and `mem` is `MEM_WORD` and `MEM_SUBWORD`;
+`image_window.bin` and `zero_window.bin` — one file per *distinct* frame of §2, and the
+`INIT_TEARDOWN` and `ZERO_WINDOWS` artifacts — at `n = 22` to
+`crates/constraints/tests/vectors/`; CI regenerates and diffs them. `value_window_artifact`
+has no fixture of its own; `crates/checker/tests/memory.rs` runs the laws and
+§8's `check_memory` over it beside the others. Families sharing a query list share their
+artifact byte for byte, so `reg` is `JUMP_BRANCH_SLT`, `SHIFT_BITWISE` and `MUL_DIV`, and
+`mem` is `MEM_WORD` and `MEM_SUBWORD`;
 a test holds each of the seven execution families to one of the four files, so four fixtures
 pin all seven frames.
 
 ### 3.4 The columns a prover fills
 
-`trace::init_windows(log, h)`: the ascending distinct `⌊a / 4h⌋` over every touched RAM word
-`a`, **without 0**. That is `ZERO_WINDOWS`'s shard list.
+`trace::init_windows(log, h)`: the ascending distinct `⌊a / 4h⌋` over every touched word `a`
+of **ordinary RAM**, **without 0**. That is `ZERO_WINDOWS`'s shard list.
+
+“Ordinary RAM” is `trace::in_ram(a)`, `[RAM_ORIGIN, ADVICE_ORIGIN)`, and the filter is
+load-bearing since S25: a public value and an advice word are `RAM`-tagged tuples like any
+other (`docs/spec/public-values.md` §2), and each sits in a window some *other* family
+initializes. A zero window over either would give those words a second init row and a prover
+a second value to choose, which is the same failure a `ZERO_WINDOWS` id of 0 would be.
 
 `trace::build_init_teardown_columns(log, image, w, h)`, per row `y` at `a = 4h·w + 4y`:
 
@@ -374,6 +432,15 @@ pin all seven frames.
 | `a` untouched | 0 | `image.initial_word(a)` |
 
 and, for `w = 0`, `S[0]`. An untouched row's init and teardown tuples are equal and cancel.
+
+`trace::build_value_window_columns(log, initial, w, h)` is the same three columns for a
+family whose init column is committed: `M[0]` and `M[1]` as above, and `M[2][y] = initial[y]`
+— the statement's public input for `PUBLIC_INPUT`, the prover's advice for `ADVICE_WINDOWS`,
+0 past the end of either. An untouched row again keeps `(0, initial[y])` on the teardown
+side, so it cancels. `trace::advice_window_count(advice, h)` is how many of those windows the
+supplied advice spans, and `trace::advice_word` is the one spelling of its layout — the
+executor writes it, `guest_sdk::advice` reads it back and this builder commits it, so the
+three cannot drift.
 
 **The image column** `program::image_init_column(image, h)`: row `y` is
 `image.initial_word(4y)`, `2^n` rows. `ProgramImage::initial_word(a)` assembles the word at `a`
@@ -388,9 +455,26 @@ bytes may end inside a word.
 ### 3.5 The verifier's window rules
 
 Before the memory challenges, from the statement: the `VmConfig` has equal heights for
-families 7 and 8; `SHARD_COUNTS[INIT_TEARDOWN] = 1`; the window list's length is
+families 7, 8 and 14; `SHARD_COUNTS[INIT_TEARDOWN] = 1`; the window list's length is
 `SHARD_COUNTS[ZERO_WINDOWS]`; the list is strictly increasing; every id is in `[1, N − 1]`.
-`ZERO_WINDOWS` shard `i` is window `w_i`. `program::check_memory_windows` is these rules.
+`ZERO_WINDOWS` shard `i` is window `w_i`. Since S25, three rules more:
+
+- families 12 and 13 are present at exactly `family::PUBLIC_WINDOW_HEIGHT`, and
+  `SHARD_COUNTS[PUBLIC_INPUT] = SHARD_COUNTS[PUBLIC_OUTPUT] = 1`. **One shard each, whether
+  or not the execution used them**: a count a prover could drop is a way to publish nothing
+  while having published something, and a program that ignores public values publishes an
+  empty input and an empty journal;
+- `N + SHARD_COUNTS[ADVICE_WINDOWS] ≤ 2^30 / h`, the top of the address space. The advice
+  windows need no list and no disjointness rule — they start where the `ZERO_WINDOWS` ids
+  stop (§3.1) — so this is the whole of what is asked of them;
+- `4h ≥ PUBLIC_OUTPUT_ORIGIN + PUBLIC_WINDOW_BYTES`, so both public windows lie inside RAM
+  window 0, whose rows below `RAM_ORIGIN` are masked at every height. Every menu height but
+  `2^8` satisfies it. Without it a `ZERO_WINDOWS` id could claim a public window and give a
+  public word a second init row.
+
+`program::check_memory_windows` is these rules; the height and presence half of them is
+`verifier_core::window_height`, which `VmConfig::from_bytes` also calls, so a config that
+breaks them never decodes.
 
 ---
 
@@ -419,9 +503,11 @@ the constant `HALT_PC` (§5). `gkr_verify::BoundaryFinals` holds them as
 `{ reg_ts: [u64; 32], pc_ts: u64, reg_values: [u32; 31] }`, `reg_values[i]` being `x_{i+1}`,
 and `trace::build_boundary_finals(log)` fills it from the log's final state.
 
-What the public statement reads from them later: `v_10` is `a0` at exit, the exit status; the
-guest-computed I/O digest's words will be `v_24 … v_31` (the D3 convention, deferred).
-`t_pc` is **not** a cycle count: nothing may read `t_pc / 4` as the number of cycles proven.
+What the public statement reads from them: `v_10` is `a0` at exit, the exit status, and that
+is all of it. S14's D3 convention would have put a guest-computed I/O digest's words in
+`v_24 … v_31`; S25 **withdrew** it, and no register carries a public value
+(§10, `docs/spec/public-values.md`). `t_pc` is **not** a cycle count: nothing may read
+`t_pc / 4` as the number of cycles proven.
 
 ### 4.2 The factors and the reconciliation
 
@@ -541,7 +627,12 @@ A fresh sponge absorbs, in order:
 5. one raw squeeze, the identity.
 
 It binds the image's file-backed bytes inside window 0 and the entry pc, and nothing an
-execution chooses: no shard count, no window list. `program::setup_commitments` is step 4's
+execution chooses: no shard count, no window list. Step 4's list is empty for every family
+that has no setup column, which since S21 is every delegation family and since S25 the three
+new window families too — an `S` column is bound by identity, and one execution's public
+values or advice have no business in every execution's identity
+(`docs/spec/public-values.md` §4). Step 2 still lists the whole family set, so **adding a
+family moves every program's identity**, and S25 did. `program::setup_commitments` is step 4's
 commitments (it needs the SRS); `program::identity_from_commitments` is the digest over them
 (it does not), which is what a verifying-key loader recomputes.
 
@@ -627,7 +718,11 @@ No S14 artifact uses `RANGE16`.
   terms weighted by a global slot. A `W` mask is refused by provenance first.
 
 The window artifacts' read sets are pinned by test: `ZERO_WINDOWS` reads `M[0], M[1], V[row]`;
-`INIT_TEARDOWN` reads those and `S[0]`, `V[ram_live]`.
+`INIT_TEARDOWN` reads those and `S[0]`, `V[ram_live]`. `value_window_artifact` (§3.3) reads
+`M[0], M[1], M[2], V[row]` and is admitted by the same rules: `M[2]` is a memory column, so a
+global slot may weight it, and no root's cone reaches a `W` column because the artifact has
+none. `crates/checker/tests/memory.rs` runs the laws, the padding contract and
+`check_memory` over all three.
 
 The padding contract gains its product-tree clause (`docs/spec/gkr.md` §4.3): for a family
 whose shards have inactive rows, every column the first halving list reads is 1 at
@@ -647,10 +742,17 @@ count.
 would equal its write timestamps as multisets while each write is strictly later than its
 read. This, too, needs the gap obligation.
 
-**The RAM-window bound** — no access below `RAM_ORIGIN`, or at `2^31` and above — rests on the
-`V[ram_live]` mask, `1 ≤ id ≤ N − 1` for `ZERO_WINDOWS`, and the gap obligation. A zero window
-at id 0 has no mask, so its rows would give the words below `RAM_ORIGIN` init rows
-(`crates/checker/tests/multiset.rs`, control C1).
+**The RAM-window bound** is that an address **no family initializes** has no init row, and
+since S25 the initialized regions are not one contiguous span. Below `RAM_ORIGIN` the masked
+span holds the two public windows, each claimed by a family of its own at `2^8`, and the rest
+of it — `[0, 0x8000)` and `[0x8800, RAM_ORIGIN)` — is a hole. At `2^31` and above is the
+advice region, claimed by the `k_a` consecutive `ADVICE_WINDOWS` shards the statement counts
+and by nothing past them. The bound rests on the `V[ram_live]` mask, `1 ≤ id ≤ N − 1` for
+`ZERO_WINDOWS`, `N + k_a ≤ 2^30 / h` for the advice windows, the pinned public window height
+with §3.5's `4h` rule under it, and the gap obligation. A zero window at id 0 has no mask, so
+its rows would give the words below `RAM_ORIGIN` init rows
+(`crates/checker/tests/multiset.rs`, control C1); the `4h` rule is what keeps a zero window
+with id ≥ 1 off a public one.
 
 **That the initial values are the program's** rests on something else: the image refusal of
 §3.4, which keeps every file-backed byte inside window 0's column, and the opening of `S[0]`
@@ -717,15 +819,44 @@ tuple that no cycle can write and three gates that pin the read side
 block's ts-window disjointness, which is per **cycle-owning** family and always was
 (`docs/spec/block-proof.md` §4).
 
-**Cost** at `h = 2^22`: at least two window shards per proof (window 0 and the stack window),
-`2^23` leaf pairs and four committed `2^22`-entry columns, even for fib's 2,117 cycles; each
-further touched 16 MiB window adds `2^22` rows; at most `2^29`. S14's tests run at `h = 2^16`.
+**Status at S25.** The **I/O-binding** item this list has carried since S14 is
+**discharged**, and `docs/spec/public-values.md` is normative for it. It needed no gate and no
+new rule here: the statement's public input and its journal are two RAM windows in the hole
+below `RAM_ORIGIN`, so §4.2's first-and-last-value rule is the multiset half of the binding
+and one comparison at each shard's own opening point is the other
+(`docs/spec/shard-proof.md` §6, step 10c). The **transfer rows** the same item carried are
+**withdrawn rather than discharged**, and S14's open question 10 — how a transfer row's RAM
+write is confined to its ecall's buffer — is moot: a public value does not travel through a
+syscall, `read` and `write` are not provable ecalls and will not be
+(`docs/spec/public-values.md` §1), and `prover::fill::add_sub` refuses a transfer cycle by
+name, so no execution a proof covers holds one. `docs/spec/execution-trace.md` §6 still
+describes them, because the executor still answers both calls. Three window families were
+added; the tuple, the frame, the boundary and the reconciliation are unmoved. **Every item
+this list owed is now discharged or withdrawn.**
+
+**Cost** at `h = 2^22`: at least two `h`-sized window shards per proof (window 0 and the
+stack window), `2^23` leaf pairs and four committed `2^22`-entry columns, even for fib's
+2,117 cycles; each further touched 16 MiB window adds `2^22` rows; at most `2^29`. S14's
+tests run at `h = 2^16`. Since S25, two `2^8` shards more in every proof — the two public
+families, 5 committed columns of 256 rows between them — and one `h`-sized shard per advice
+window the prover supplies.
 
 ---
 
-## 10. Deferred: binding I/O
+## 10. Binding I/O, landed at S25
 
-The guest computes `io_digest` itself and leaves its eight little-endian `u32` words in
-`x24 … x31` at exit; the verifier compares them, and `a0`, with its public inputs. S14 lands
-none of it: no test or document here claims fd 0 or fd 1 is bound. `docs/handoff/S14-multiset.md`
-lists what that stage owes.
+**`docs/spec/public-values.md` is normative**, and it supersedes what this section used to
+describe.
+
+The statement's `input` and `output` are bound to the execution by two RAM window families of
+their own, `PUBLIC_INPUT` and `PUBLIC_OUTPUT` (§3.2). What fixes the two byte strings is
+`io_digest(input, output)`, absorbed at G7 before any memory column is committed and long
+before the challenges are squeezed (§6.1, unchanged). What ties them to the *execution* is
+§4.2 plus one comparison: the multiset forces a window's init column to be each address's
+first value and its teardown column to be its last, and `verify_shard_local` step 10c holds
+`PUBLIC_INPUT`'s init column and `PUBLIC_OUTPUT`'s teardown column to the verifier's own
+multilinear extension of those bytes.
+
+The design this section carried until S25 — the guest computing `io_digest` and leaving its
+words in `x24 … x31` at exit — is **withdrawn**: it rested the output's soundness on the guest
+hashing honestly, and a guest that panicked published nothing.

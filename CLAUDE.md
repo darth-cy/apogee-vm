@@ -25,7 +25,10 @@ docs/
                  anchor, static detachment, the three delegation circuits, and the
                  guest-target backend; and
                  revm-block.md, S24's two wire formats: the output commitment, frozen,
-                 and BlockWitness, deliberately NOT frozen
+                 and BlockWitness, deliberately NOT frozen; and
+                 public-values.md, S25's THREE KINDS OF MEMORY: the two public windows
+                 and what binds them, the advice region and what does not, and why the
+                 fd/syscall API is a compatibility wrapper and not the source of truth
   handoff/       one note per completed stage: frozen API, artifacts, deviations
 crates/
   constants/     frozen constants and tags; zero logic; no_std
@@ -45,8 +48,8 @@ crates/
   trace/         the memory event log and its self-check, the family buffers, the cycle
                  profile and shard plan, the TraceArchive snapshot, and the memory
                  argument's column builders; std
-  emulator/      the RV32IMAC reference emulator, its tracing path, and the QEMU
-                 differential harness; std
+  emulator/      the RV32IMAC reference emulator and its tracing path, plus the
+                 output-level QEMU oracle; std
   constraints/   circuits as data: PolyAddress, GateDef, LayerSpec, CircuitArtifact, the
                  laws, the cache-free compilation and the wire form; `memory`: the per-family frames,
                  the two window artifacts and check_memory; and `lookup`: the LogUp
@@ -82,7 +85,7 @@ crates/
                  guest-only, and NOT a workspace member
 guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, opcodes/, heap/, consistency/,
                  addsub/, control/, alu/, mem/, shards/, keccak-test/, keccak-unused/,
-                 recursion-ops/, recursion-unused/, revm-block/
+                 recursion-ops/, recursion-unused/, revm-block/, public-io/
                  -- their own workspace; see guests/Cargo.toml and docs/guest-program-manual.md
 assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 handoff
 tools/
@@ -156,6 +159,7 @@ cargo test --release -p prover --test mem -- --include-ignored --test-threads=1 
 cargo test --release -p prover --test block -- --include-ignored --test-threads=1  # DEFERRED; S20's block, 34.9 GB peak, 840 s
 cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1  # DEFERRED; S21's nine-shard block, 33.7 GB peak, 131 s
 cargo test --release -p prover --test recursion -- --include-ignored --test-threads=1  # DEFERRED; S23's ten-shard block, 35.2 GB peak, 120 s -- the heaviest by memory
+cargo test --release -p prover --test public_io -- --include-ignored --test-threads=1  # DEFERRED; S25's statement: public input in, advice checked against it, journal out
 RAYON_NUM_THREADS=6 cargo test --release -p prover --test revm -- --include-ignored --test-threads=1  # DEFERRED; S24's ten-shard revm block, and it builds the guest; 38.4 GB peak, 536 s -- NINE 2^20 shards, so the thread bound is not optional on a 48 GB machine
 cargo test -p prover --features metrics --test metrics -- --include-ignored --nocapture  # DEFERRED; S16's statement twice, 21.0 GB peak, 60 s, and prints both reports
 cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify -p verifier-core --target riscv32imac-unknown-none-elf
@@ -163,7 +167,7 @@ cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
 cd guests/fib && cargo build --target riscv32imac-unknown-none-elf
 APOGEE_GUEST_PROFILE=release cargo test -p loader --test qemu -- --include-ignored
-cargo test -p emulator --test differential -- --include-ignored
+cargo test -p emulator --test qemu_outputs -- --include-ignored
 cargo test -p emulator --test consistency -- --include-ignored   # and again at APOGEE_GUEST_PROFILE=release
 git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constraints/tests/vectors/ crates/checker/tests/vectors/ crates/emulator/tests/vectors/
 -------------------------------------------------------------------------------
@@ -212,7 +216,8 @@ those components: `kat-gen -- loader` disassembles the committed guest ELFs with
 the disassembler is pinned to the same LLVM as the compiler.
 
 `qemu-riscv32` runs the guests; it was the only executor before S12, and since S12 it is the
-oracle `crates/emulator/tests/differential.rs` holds the emulator's trace to. It is user-mode
+oracle `crates/emulator/tests/qemu_outputs.rs` holds the emulator's **answers** to — its exit
+status and its fd 1, and nothing below that. It is user-mode
 emulation: it translates Linux syscalls into host ones, so it builds for Linux hosts only
 and no macOS build of it exists. That is a claim about *native* builds — a Linux VM is an
 ordinary arrangement and the suite runs fine inside one. The tests stay `#[ignore]`d so a
@@ -377,11 +382,20 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   their Linux numbers (read 63, write 64, exit 93) so `qemu-riscv32` runs a guest
   unmodified; zkVM host calls take `0x0400..=0x04FF` and precompiles `0x0500..=0x05FF`,
   disjoint because a host call is nondeterministic prover advice and a precompile is a
-  deterministic function of memory. fd 0 and fd 1 are committed, fd 2 is ignored, fd 3 is
-  advice. `docs/spec/ecall-abi.md` is the table and a test holds it to the constants.
-- **`io_digest` is frozen.** `transcript::io_digest(input, output)` is two `append_bytes`
-  messages under `PUBLIC_INPUT_STREAM` and `PUBLIC_OUTPUT_STREAM` and one raw `sample`, in
-  a sponge of its own. Later stages recompute it; nobody redefines it.
+  deterministic function of memory. **No descriptor names a public value since S25**: fd 0
+  and fd 1 are POSIX compatibility streams (`FD_STDIN`, `FD_STDOUT` — the numbers frozen,
+  only the names moved), fd 2 is ignored and fd 3 is advice, and a proof binds none of the
+  four (`docs/spec/public-values.md` §1). `docs/spec/ecall-abi.md` is the table and a test
+  holds it to the constants.
+- **`io_digest` is frozen, and since S25 it is worth something.**
+  `transcript::io_digest(input, output)` is two `append_bytes` messages under
+  `PUBLIC_INPUT_STREAM` and `PUBLIC_OUTPUT_STREAM` and one raw `sample`, in a sponge of its
+  own. Later stages recompute it; nobody redefines it, and **the guest never computes it**.
+  S10 froze it, S14 recorded that it bound nothing to the execution, and S25 connected it:
+  G7 absorbs it before the memory challenges are squeezed, which fixes both byte strings
+  before any challenge exists, and step 10c then holds the two public windows' committed
+  columns to those same bytes (`docs/spec/public-values.md` §5.1). It needed no new message,
+  no new tag and no new challenge to do it.
 - **A guest ELF is not byte-reproducible across machines**, and CI does not pretend
   otherwise. rustc embeds absolute paths in the panic-location strings of every crate
   outside the guest workspace and of `core`, and stable Rust cannot remap them. Two clean
@@ -434,9 +448,24 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   address, value and timestamps per row. No padding and no `MultilinearPoly` in them: the
   memory argument's padded columns are filled from the log by `trace`'s memory builders,
   keyed by `constraints::memory`'s layout.
-- **`sc.w` always succeeds in the emulator.** That is the one divergence the QEMU
-  differential whitelists; the harness's other rule — `x2` differs at entry, Linux's stack
-  pointer, until the guest writes it — is about the environment, not an instruction.
+- **QEMU is an oracle for what a guest computes, never for how this emulator computes it**
+  (owner's decision, S25). The comparison is the guest's **exit status** and its **fd 1
+  bytes**, and nothing below that: no register, no pc, no instruction count, no trace. S12
+  built `crates/emulator/tests/differential.rs` as a per-instruction register-file
+  comparison; that file is now `tests/qemu_outputs.rs`, `emulator::qemu` is **deleted**, and
+  the claim is **withdrawn from every spec that stated it**. It was never the property this
+  project needs — this VM is not a clone of QEMU, and its internals exist for the witness
+  and the proof — and since S23 it is not even true: a **delegation** ecall runs natively
+  here and takes the `-ENOSYS` software fallback under QEMU, so the two instruction streams
+  differ *by design* and agree on the answer. What holds a trace to *this* VM's own
+  semantics is `crates/emulator/tests/trace.rs`, `crates/trace`'s log self-check,
+  `crates/checker`'s multiset and memory suites and each family's row suite — all of which
+  run in `cargo test --workspace`, with no emulator to install.
+- **`sc.w` always succeeds in the emulator**, and the circuits share that semantics, so
+  emulator and constraint agree (`docs/spec/memory-ops.md` §6.6). It is a conformance
+  deviation and never a soundness one, and nothing exempts it by name any more, there being
+  no register comparison to exempt it from: what would catch it if it ever mattered is a
+  guest whose committed output depended on it, which is the comparison above.
 - **Misaligned halfword/word accesses, RAM-window violations (ecall buffers included),
   `ebreak` and a pc that is not an instruction are fatal guest errors**, in `run` and
   `trace_run` alike, and a fatal error returns no trace. `read`/`write` on a descriptor
@@ -719,12 +748,15 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   one: `mem_word`'s `rd_selected` carries a 16+16 pair even though it is a copy of a RAM
   word, so **every register write in every family is locally bounded**, and the RAM side
   then follows from the register side and from `mem_subword`'s and `atomics`' own local
-  bounds. The I/O-binding stage owes its transfer rows' `ram_write_value` the same.
+  bounds. **Nothing is owed on top of that since S25**: a public value is written by an
+  ordinary `sw`, which `mem_word` already bounds, and a transfer row is still not provable.
 - **`sc.w` always succeeds, and that is a conformance deviation, not a soundness one.**
   It stores `rs2` and writes `rd = 0` with no reservation state anywhere in the machine.
-  The emulator has the same semantics, so emulator and circuit agree, and the QEMU
-  differential carries it as its one whitelist entry — counted, asserted and never a
-  silently-ignored diff (`crates/emulator/src/qemu.rs`).
+  The emulator has the same semantics, so emulator and circuit agree. Until S25 the QEMU
+  comparison exempted it by name; there is no register comparison now, so what would show
+  it is a guest whose committed output depended on spurious failure, and compiled code has
+  none — LLVM never emits an unpaired `sc.w` and the standard CAS loop exits on its first
+  pass (`docs/spec/memory-ops.md` §6.6).
 - **A gadget's parameters can be a family's whole soundness, and then they are asserted.**
   `atomics::assemble` holds the comparison gadget's selector, `lhs`, `rhs` and `signed` to
   what `docs/spec/memory-ops.md` §6.4 states, because each wrong choice silently breaks the
@@ -738,18 +770,60 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   distinct, which a `const` assertion over `constants::delegation::TYPES` enforces. Its fill
   refuses any other ecall and any transfer cycle by name. A delegation row falls through rather than halting,
   writes 0 into `a0`, and carries the `deleg` mirror query that pairs it with an invocation.
-  The I/O-binding stage owes `read` and `write`, and until then fd 0 and fd 1 are bound only
-  by the public I/O digest in the statement, which no row reads. **S24 met that wall head
-  on and did not route around it**: a guest whose whole input arrives on fd 0 has no
-  proof, and the work is not a gate or two — a transfer row that is permitted but not
-  constrained against its ecall's buffer and length can write any value to any RAM word,
-  which needs cross-row constraints this arithmetization has nowhere. What S24 proves
-  instead is a second binary of the same program, with its witness in `.rodata` — which
-  identity commits — and `keccak256` of its output in `x24..x31`, which the register
-  boundary carries; that is the arrangement the master's own frozen invariants describe,
-  and it is a demonstration rather than a substitute, since a per-block witness in the
-  image means a per-block identity. `guest_sdk::exit_with_public_words` is the one
-  addition it needed. `docs/handoff/S24-revm.md` §1.
+  **`read` (63) and `write` (64) are not among them and will not be** (owner's decision,
+  S25). S24 met that wall head on and did not route around it, proving a second binary with
+  its witness in `.rodata` and `keccak256` of its output in `x24..x31`; S25 removed the wall
+  instead of climbing it. Making a syscall provable is not a gate or two — a transfer row
+  that is permitted but not constrained against its ecall's buffer and length can write any
+  value to any RAM word, which needs cross-row constraints this arithmetization has nowhere
+  — and it was never the right shape: **an execution's public values are not a syscall's
+  business** (`docs/spec/public-values.md`). The two calls stay in the ABI and the executor
+  still answers them, because a guest built for a POSIX host runs under `qemu-riscv32` and
+  `crates/emulator/tests/qemu_outputs.rs` holds the two executors to the same fd 1 bytes;
+  `guest_sdk::read_stdin` and `write_stdout` are that path and say they are unprovable.
+  `guest_sdk::exit_with_public_words` is **deleted**, the journal being what it stood in
+  for.
+- **Public values are a proof-system concept, not a stream**
+  (`docs/spec/public-values.md`, and it is normative). Two families hold two fixed windows
+  of memory in the hole below `RAM_ORIGIN` that no RAM window initializes: `PUBLIC_INPUT`
+  at `0x8000` and `PUBLIC_OUTPUT` — the journal — at `0x8400`, a kilobyte each, both at a
+  **pinned** `2^8`, because the height is what places the windows. Both are in every
+  `VmConfig` and both prove exactly one shard in every statement, because a count a prover
+  could drop is a way to publish nothing while having published something.
+  The guest reads its input with ordinary loads (`guest_sdk::public_input`) and writes its
+  journal with ordinary stores (`guest_sdk::commit`); word 0 of each window is the
+  payload's byte length, which is what makes the proof bind a byte string rather than a
+  zero-padded word vector. `guest_sdk::exit` publishes **nothing**, so a guest that panics
+  has still published what it committed.
+  **Two things bind it and neither is a gate.** The multiset already forces a window's init
+  column to be each address's first value and its teardown column to be its last
+  (`docs/spec/memory.md` §4.2); `verify_shard_local` step 10c then holds `PUBLIC_INPUT`'s
+  `M[2]` to the verifier's own multilinear extension of `public.input` and `PUBLIC_OUTPUT`'s
+  `M[1]` to `public.output`. **The journal's family is `ZERO_WINDOWS`' circuit byte for
+  byte**, so its init leaf is a literal 0 and there is no column a prover could pre-load the
+  answer into at timestamp 0 — a structural guarantee where the alternative was a check that
+  could be forgotten. Nothing new is absorbed, no challenge is drawn, no wire form moves,
+  and the verifier's whole cost is two 256-point multilinear evaluations.
+  **What it is not for**: a megabyte of private witness, which belongs in advice. 1,020
+  bytes each is the ceiling, and it is deliberate.
+- **Advice is memory whose initial values the prover chose, and nothing binds it.**
+  `ADVICE_WINDOWS` initializes `[ADVICE_ORIGIN, …)` — `0x8000_0000`, above RAM — from a
+  committed `M[2]` that identity does not bind, the statement does not carry and no gate
+  reads. That is the definition, not an omission. Its windows are the `k` **consecutive**
+  windows from `advice_first_window(h)` up, so the statement needs no advice window list:
+  `shard_counts` already carries `k`. **No advice means no region**, so a program that uses
+  none pays no shard, and `guest_sdk::advice` on such a run is a fatal `OutOfBounds`.
+  **It is not enforced read-only** (owner's decision, S25): that would need a space column
+  on the load path of three frozen families and a gate refusing a store, and it would buy no
+  soundness, advice being unbound either way. What a guest owes is a **check** of the advice
+  against something a proof does bind — the public input, or a result that names it.
+  `guests/public-io` is that pattern in twenty lines and `guests/revm-block` is it at scale.
+- **The address-space tag of all three regions is `RAM`**, and that is what makes them cost
+  the execution families nothing. What tells a public value, an advice word and a heap word
+  apart is **which family initializes the address**, never a tag a load would have to name:
+  a region with a tag of its own would put a space column on `mem_word`'s, `mem_subword`'s
+  and `atomics`' load path. Those three circuits are untouched by S25, and their range
+  obligations already admitted every 4-aligned address below `2^32`.
 - **The delegation ABI is `docs/spec/delegation.md`, and it is frozen**: the ecall
   convention (`a7` the number, `a0` the frame base, `a0 ← 0`, fall-through), the indirect
   frame, the anchor and its 1:1 pairing, the three request-side zeroings, static detachment
@@ -944,3 +1018,4 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 | S22 — secp256k1 ecrecover delegation | **cancelled** | `prompts/00-master.md`, "Stage register" |
 | S23 — Fr-arithmetic + Poseidon2 delegations | done | `docs/handoff/S23-fr-poseidon2.md` |
 | S24 — revm guest, synthetic-state block | done | `docs/handoff/S24-revm.md` |
+| S25 — Public values, private advice, and the I/O binding | done | `docs/handoff/S25-io-binding.md` |

@@ -66,8 +66,9 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
 /// `ADD_SUB_LUI_AUIPC` shard; `verify_shard` accepts both against one
 /// statement; and every proof has its circuit's shape — its round counts, its
 /// claim counts, and a byte length that is a function of the key and the family
-/// alone. (Its QEMU differential is `crates/emulator/tests/differential.rs`'s,
-/// where `addsub` is in the suite.)
+/// alone. (QEMU's reading of the same guest is
+/// `crates/emulator/tests/qemu_outputs.rs`'s, where `addsub` is in the suite:
+/// the exit status and fd 1, and nothing below that.)
 #[test]
 #[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
 fn a1_the_tiny_guest_proves_and_both_shards_verify() {
@@ -78,7 +79,10 @@ fn a1_the_tiny_guest_proves_and_both_shards_verify() {
         vec![
             (ADD, 1 << 20),
             (INIT, 1 << 16),
-            (family::ZERO_WINDOWS, 1 << 16)
+            (family::ZERO_WINDOWS, 1 << 16),
+            (family::PUBLIC_INPUT, family::PUBLIC_WINDOW_HEIGHT),
+            (family::PUBLIC_OUTPUT, family::PUBLIC_WINDOW_HEIGHT),
+            (family::ADVICE_WINDOWS, 1 << 16)
         ]
     );
     let table = setup.program.tables.family(ADD).expect("the add/sub table");
@@ -87,7 +91,11 @@ fn a1_the_tiny_guest_proves_and_both_shards_verify() {
         .count();
     assert_eq!(live, 29, "every instruction of addsub is the family's");
     assert_eq!(
-        archive.memory_log().self_check(&setup.program.image),
+        archive.memory_log().self_check(&trace::InitialMemory {
+            image: &setup.program.image,
+            public_input: &archive.io_streams().input,
+            advice: archive.advice(),
+        }),
         Ok(())
     );
     assert_eq!(
@@ -95,12 +103,23 @@ fn a1_the_tiny_guest_proves_and_both_shards_verify() {
         vec![(ADD, 29), (INIT, 0), (family::ZERO_WINDOWS, 0)]
     );
 
-    assert_eq!(public.shard_counts, vec![1, 1, 0]);
+    // S25: the two public value families are in every config and prove one
+    // shard each whatever the program does, and `ADVICE_WINDOWS` proves none
+    // for a program with no advice (`docs/spec/public-values.md` §4).
+    assert_eq!(public.shard_counts, vec![1, 1, 0, 1, 1, 0]);
     assert!(public.windows.is_empty(), "addsub touches no RAM");
     assert_eq!(public.exit_status, common::RESULT);
     assert!(public.input.is_empty() && public.output.is_empty());
     let shards: Vec<(u32, u32)> = proofs.iter().map(|p| (p.family, p.shard_index)).collect();
-    assert_eq!(shards, vec![(INIT, 0), (ADD, 0)]);
+    assert_eq!(
+        shards,
+        vec![
+            (INIT, 0),
+            (ADD, 0),
+            (family::PUBLIC_INPUT, 0),
+            (family::PUBLIC_OUTPUT, 0)
+        ]
+    );
 
     for proof in &proofs {
         assert_eq!(verify_shard(&setup.vk, proof, &public), Ok(()));

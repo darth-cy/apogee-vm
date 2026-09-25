@@ -177,10 +177,15 @@ mod tests {
                 (family::JUMP_BRANCH_SLT, 1 << 20),
                 (family::INIT_TEARDOWN, 1 << 16),
                 (family::ZERO_WINDOWS, 1 << 16),
+                // S25's three, in every `VmConfig`
+                // (`docs/spec/public-values.md` §4).
+                (family::PUBLIC_INPUT, family::PUBLIC_WINDOW_HEIGHT),
+                (family::PUBLIC_OUTPUT, family::PUBLIC_WINDOW_HEIGHT),
+                (family::ADVICE_WINDOWS, 1 << 16),
             ],
             bytecode_size_words: 1 << 20,
         };
-        let setup = vec![vec![point; 7], vec![point], vec![]];
+        let setup = vec![vec![point; 7], vec![point], vec![], vec![], vec![], vec![]];
         let srs_verifier = encode_srs_verifier(&SrsVerifier {
             g1_gen: G1Affine::GENERATOR,
             g2_gen: G2Affine::GENERATOR,
@@ -217,12 +222,13 @@ mod tests {
         use verifier_core::{BoundaryFinals, GkrProof, PublicInputs};
 
         let vk = key();
-        let width = vk
-            .circuit(family::INIT_TEARDOWN)
-            .expect("the key's window family")
-            .artifact
-            .memory
-            .len();
+        let width = |f: u32| {
+            vk.circuit(f)
+                .expect("the key's window family")
+                .artifact
+                .memory
+                .len()
+        };
         let mut boundary = BoundaryFinals {
             reg_ts: [0; 32],
             pc_ts: 0,
@@ -235,12 +241,17 @@ mod tests {
             output: vec![],
             exit_status: 0,
             // Positional over the config: no jump shard, the one window-0
-            // shard the window rules require, no zero window.
-            shard_counts: vec![0, 1, 0],
+            // shard the window rules require, no zero window, and — since S25
+            // — one shard for each public value family and no advice window.
+            shard_counts: vec![0, 1, 0, 1, 1, 0],
             windows: vec![],
             boundary,
-            memory_commitments: vec![vec![[0u8; 64]; width]],
-            memory_roots: vec![[field::Fr::ONE, field::Fr::ONE]],
+            memory_commitments: vec![
+                vec![[0u8; 64]; width(family::INIT_TEARDOWN)],
+                vec![[0u8; 64]; width(family::PUBLIC_INPUT)],
+                vec![[0u8; 64]; width(family::PUBLIC_OUTPUT)],
+            ],
+            memory_roots: vec![[field::Fr::ONE, field::Fr::ONE]; 3],
         };
         let shell = ShardProof {
             family: family::INIT_TEARDOWN,
@@ -252,10 +263,18 @@ mod tests {
             gkr: GkrProof { layers: vec![] },
             opening: [0; OPENING_BYTES],
         };
+        let public_shell = |f: u32| ShardProof {
+            family: f,
+            ..shell.clone()
+        };
         let block = BlockProof {
             config: vk.config.clone(),
             statement: statement.clone(),
-            shards: vec![shell.clone()],
+            shards: vec![
+                shell.clone(),
+                public_shell(family::PUBLIC_INPUT),
+                public_shell(family::PUBLIC_OUTPUT),
+            ],
         };
         assert_eq!(
             verify_block(&vk, &block, &statement),

@@ -30,8 +30,8 @@ fn constants_table() -> BTreeMap<&'static str, u32> {
         ("PRECOMPILE_POSEIDON2", ecall::PRECOMPILE_POSEIDON2),
         ("PRECOMPILE_KECCAK_F", ecall::PRECOMPILE_KECCAK_F),
         ("PRECOMPILE_FR_ARITH", ecall::PRECOMPILE_FR_ARITH),
-        ("FD_PUBLIC_INPUT", ecall::FD_PUBLIC_INPUT),
-        ("FD_PUBLIC_OUTPUT", ecall::FD_PUBLIC_OUTPUT),
+        ("FD_STDIN", ecall::FD_STDIN),
+        ("FD_STDOUT", ecall::FD_STDOUT),
         ("FD_STDERR", ecall::FD_STDERR),
         ("FD_HINT", ecall::FD_HINT),
         ("ZKVM_IO_FIRST", ecall::ZKVM_IO_FIRST),
@@ -146,8 +146,8 @@ fn the_ranges_are_above_linux_and_disjoint() {
 #[test]
 fn the_file_descriptors_are_distinct() {
     let fds = [
-        ecall::FD_PUBLIC_INPUT,
-        ecall::FD_PUBLIC_OUTPUT,
+        ecall::FD_STDIN,
+        ecall::FD_STDOUT,
         ecall::FD_STDERR,
         ecall::FD_HINT,
     ];
@@ -240,8 +240,8 @@ fn the_shims_use_the_constants() {
         "ecall::READ",
         "ecall::WRITE",
         "ecall::EXIT",
-        "ecall::FD_PUBLIC_INPUT",
-        "ecall::FD_PUBLIC_OUTPUT",
+        "ecall::FD_STDIN",
+        "ecall::FD_STDOUT",
         "ecall::FD_STDERR",
         "ecall::FD_HINT",
         "ecall::PRECOMPILE_POSEIDON2",
@@ -279,8 +279,8 @@ fn the_emulator_dispatches_on_the_constants() {
         "ecall::READ",
         "ecall::WRITE",
         "ecall::EXIT",
-        "ecall::FD_PUBLIC_INPUT",
-        "ecall::FD_PUBLIC_OUTPUT",
+        "ecall::FD_STDIN",
+        "ecall::FD_STDOUT",
         "ecall::FD_STDERR",
         "ecall::FD_HINT",
         "ecall::ENOSYS",

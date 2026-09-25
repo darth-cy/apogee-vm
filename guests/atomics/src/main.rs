@@ -51,7 +51,7 @@ static UNSIGNED_LOW: AtomicU32 = AtomicU32::new(u32::MAX);
 fn main() {
     let mut n = [0u8; 4];
     assert_eq!(
-        guest_sdk::read_input(&mut n),
+        guest_sdk::read_stdin(&mut n),
         4,
         "atomics: public input is one u32"
     );
@@ -90,12 +90,12 @@ fn main() {
     SUM.fetch_add(UNSIGNED_LOW.load(SeqCst), SeqCst);
 
     for cell in [&SUM, &LAST, &MIXED, &MASKED, &FLAGS] {
-        guest_sdk::commit(&cell.load(SeqCst).to_le_bytes());
+        guest_sdk::write_stdout(&cell.load(SeqCst).to_le_bytes());
     }
-    guest_sdk::commit(&LOW.load(SeqCst).to_le_bytes());
-    guest_sdk::commit(&HIGH.load(SeqCst).to_le_bytes());
-    guest_sdk::commit(&STEPS.load(SeqCst).to_le_bytes());
-    guest_sdk::commit(&old.to_le_bytes());
+    guest_sdk::write_stdout(&LOW.load(SeqCst).to_le_bytes());
+    guest_sdk::write_stdout(&HIGH.load(SeqCst).to_le_bytes());
+    guest_sdk::write_stdout(&STEPS.load(SeqCst).to_le_bytes());
+    guest_sdk::write_stdout(&old.to_le_bytes());
 }
 
 /// One step of an order-sensitive fold: multiplying by an odd number is

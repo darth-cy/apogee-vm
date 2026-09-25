@@ -19,11 +19,14 @@ pub use family::{
     DelegationTrace, FamilyTrace, FamilyTraces, Query, QueryColumns, Role, Row, ROLES,
 };
 pub use log::{
-    AddressSpace, FinalValue, MemoryEvent, MemoryEventLog, SelfCheckError, DELEGATION_SPACES,
+    addressable, in_ram, AddressSpace, FinalValue, InitialMemory, MemoryEvent, MemoryEventLog,
+    SelfCheckError, DELEGATION_SPACES,
 };
+
 pub use lookup::{build_multiplicities, check_multiplicities};
 pub use memory::{
     build_boundary_finals, build_frame_witness, build_init_teardown_columns, build_memory_columns,
+    build_value_window_columns,
 };
 
 use std::collections::BTreeSet;
@@ -100,16 +103,74 @@ pub fn plan_shards(profile: &CycleProfile, config: &VmConfig) -> ShardPlan {
 }
 
 /// The `ZERO_WINDOWS` family's shard list: the distinct RAM window ids
-/// `addr / (4 * height)` of every RAM word the log touches, ascending, without
-/// window 0, which is `INIT_TEARDOWN`'s. `height` is the two init families'
-/// one height. `docs/spec/memory.md` §3.4.
+/// `addr / (4 * height)` of every **ordinary RAM** word the log touches,
+/// ascending, without window 0, which is `INIT_TEARDOWN`'s. `height` is the
+/// window families' one height. `docs/spec/memory.md` §3.4.
+///
+/// Only ordinary RAM: the two public windows and the advice region are
+/// `AddressSpace::Ram` tuples too, and each has a family of its own that
+/// initializes it. A zero window over either would give those words a second
+/// init row and a prover a second value to choose
+/// (`docs/spec/public-values.md` §2).
 pub fn init_windows(log: &MemoryEventLog, height: u32) -> Vec<u32> {
     let windows: BTreeSet<u32> = log
         .touched_addresses()
         .into_iter()
-        .filter(|(space, _)| *space == AddressSpace::Ram)
+        .filter(|(space, addr)| *space == AddressSpace::Ram && log::in_ram(*addr))
         .map(|(_, addr)| addr / (4 * height))
         .filter(|w| *w != 0)
         .collect();
     windows.into_iter().collect()
+}
+
+/// How many words the advice region holds for `advice`: its length word and
+/// its payload, `docs/spec/public-values.md` §6.
+///
+/// Word 0 at `guest_memory::ADVICE_ORIGIN` is the payload's **byte length**
+/// and the payload follows, exactly as a public window is laid out. The
+/// executor writes it, `guest_sdk::advice` reads it, and the prover's fill
+/// commits it, so there is one layout and not three — and a host never has to
+/// frame the bytes itself.
+///
+/// **No advice means no region**, not a region holding a zero length word.
+/// Otherwise every program in the repository would pay one `ADVICE_WINDOWS`
+/// shard — a whole window at the window height — to say that it has no advice.
+/// The consequence is that `guest_sdk::advice` is a fatal `OutOfBounds` on a
+/// run that was given none, which is the right answer to a guest asking for
+/// what it was not handed.
+pub fn advice_region_words(advice: &[u8]) -> u64 {
+    match advice.is_empty() {
+        true => 0,
+        false => 1 + (advice.len() as u64).div_ceil(4),
+    }
+}
+
+/// Word `index` of the advice region, counting from
+/// `guest_memory::ADVICE_ORIGIN`: the length word, then the payload
+/// little-endian, and 0 past the end.
+pub fn advice_word(advice: &[u8], index: u64) -> u32 {
+    match index.checked_sub(1) {
+        None => advice.len() as u32,
+        Some(i) => {
+            let at = 4 * i as usize;
+            let mut word = [0u8; 4];
+            for (k, b) in word.iter_mut().enumerate() {
+                *b = advice.get(at + k).copied().unwrap_or(0);
+            }
+            u32::from_le_bytes(word)
+        }
+    }
+}
+
+/// The `ADVICE_WINDOWS` family's shard count: how many windows of `height`
+/// rows the advice region spans, counted from `guest_memory::ADVICE_ORIGIN`
+/// up.
+///
+/// A count and not a list, because the windows are consecutive from the origin
+/// (`docs/spec/public-values.md` §6). It is a function of what the host
+/// supplied and not of what the guest read: the words a guest never touched
+/// still have to be initialized, and their init and teardown tuples cancel.
+pub fn advice_window_count(advice: &[u8], height: u32) -> u32 {
+    let n = advice_region_words(advice).div_ceil(height as u64);
+    u32::try_from(n).expect("the advice region is at most 2^29 words, so at most 2^21 windows")
 }

@@ -19,6 +19,12 @@ pub const ADD: u32 = family::ADD_SUB_LUI_AUIPC;
 pub const JBS: u32 = family::JUMP_BRANCH_SLT;
 pub const INIT: u32 = family::INIT_TEARDOWN;
 pub const ZERO: u32 = family::ZERO_WINDOWS;
+pub const PIN: u32 = family::PUBLIC_INPUT;
+pub const POUT: u32 = family::PUBLIC_OUTPUT;
+pub const ADV: u32 = family::ADVICE_WINDOWS;
+/// The two public value families' pinned height, and the vars of their
+/// circuits (`docs/spec/public-values.md` §2).
+pub const PUB_VARS: u32 = family::PUBLIC_WINDOW_HEIGHT.trailing_zeros();
 
 /// A 64-byte string that is not all zero, distinct per `i`.
 pub fn blob(i: u32) -> [u8; 64] {
@@ -28,9 +34,35 @@ pub fn blob(i: u32) -> [u8; 64] {
     p
 }
 
+/// S25's three window families, which are in **every** `VmConfig`
+/// (`docs/spec/public-values.md` §4), at the heights the window rules require.
+pub fn window_families(height: u32) -> Vec<(u32, u32)> {
+    vec![
+        (PIN, family::PUBLIC_WINDOW_HEIGHT),
+        (POUT, family::PUBLIC_WINDOW_HEIGHT),
+        (ADV, height),
+    ]
+}
+
+/// Their circuits, in the same order.
+pub fn window_circuits(height: u32) -> Vec<constraints::FamilyCircuit> {
+    vec![
+        family_circuit(PIN, PUB_VARS).unwrap(),
+        family_circuit(POUT, PUB_VARS).unwrap(),
+        family_circuit(ADV, height.trailing_zeros()).unwrap(),
+    ]
+}
+
+/// Their setup lists: empty, all three.
+pub fn window_setup() -> Vec<Vec<[u8; 64]>> {
+    vec![vec![], vec![], vec![]]
+}
+
 pub fn config() -> VmConfig {
+    let mut families = vec![(ADD, 1 << 20), (INIT, 1 << 16), (ZERO, 1 << 16)];
+    families.extend(window_families(1 << 16));
     VmConfig {
-        families: vec![(ADD, 1 << 20), (INIT, 1 << 16), (ZERO, 1 << 16)],
+        families,
         bytecode_size_words: 1 << 20,
     }
 }
@@ -42,7 +74,8 @@ pub fn generic_table() -> [[u8; 64]; 3] {
 
 pub fn vk() -> VerifyingKey {
     let config = config();
-    let setup = vec![(0..7).map(blob).collect(), vec![blob(100)], vec![]];
+    let mut setup = vec![(0..7).map(blob).collect(), vec![blob(100)], vec![]];
+    setup.extend(window_setup());
     let srs_verifier = [9u8; SRS_VERIFIER_BYTES];
     VerifyingKey {
         code_version: family::CODE_VERSION,
@@ -53,11 +86,15 @@ pub fn vk() -> VerifyingKey {
         srs_verifier,
         generic_table: generic_table(),
         srs_digest: srs_digest(&srs_verifier, &generic_table()),
-        circuits: vec![
-            family_circuit(ADD, 20).unwrap(),
-            family_circuit(INIT, 16).unwrap(),
-            family_circuit(ZERO, 16).unwrap(),
-        ],
+        circuits: {
+            let mut c = vec![
+                family_circuit(ADD, 20).unwrap(),
+                family_circuit(INIT, 16).unwrap(),
+                family_circuit(ZERO, 16).unwrap(),
+            ];
+            c.extend(window_circuits(1 << 16));
+            c
+        },
     }
 }
 
@@ -66,20 +103,25 @@ pub fn vk() -> VerifyingKey {
 /// ten setup columns.
 pub fn jbs_vk() -> VerifyingKey {
     let config = VmConfig {
-        families: vec![
-            (ADD, 1 << 20),
-            (JBS, 1 << 20),
-            (INIT, 1 << 16),
-            (ZERO, 1 << 16),
-        ],
+        families: {
+            let mut f = vec![
+                (ADD, 1 << 20),
+                (JBS, 1 << 20),
+                (INIT, 1 << 16),
+                (ZERO, 1 << 16),
+            ];
+            f.extend(window_families(1 << 16));
+            f
+        },
         bytecode_size_words: 1 << 20,
     };
-    let setup = vec![
+    let mut setup = vec![
         (0..7).map(blob).collect(),
         (10..17).map(blob).collect(),
         vec![blob(100)],
         vec![],
     ];
+    setup.extend(window_setup());
     let srs_verifier = [9u8; SRS_VERIFIER_BYTES];
     VerifyingKey {
         code_version: family::CODE_VERSION,
@@ -90,12 +132,16 @@ pub fn jbs_vk() -> VerifyingKey {
         srs_verifier,
         generic_table: generic_table(),
         srs_digest: srs_digest(&srs_verifier, &generic_table()),
-        circuits: vec![
-            family_circuit(ADD, 20).unwrap(),
-            family_circuit(JBS, 20).unwrap(),
-            family_circuit(INIT, 16).unwrap(),
-            family_circuit(ZERO, 16).unwrap(),
-        ],
+        circuits: {
+            let mut c = vec![
+                family_circuit(ADD, 20).unwrap(),
+                family_circuit(JBS, 20).unwrap(),
+                family_circuit(INIT, 16).unwrap(),
+                family_circuit(ZERO, 16).unwrap(),
+            ];
+            c.extend(window_circuits(1 << 16));
+            c
+        },
     }
 }
 
@@ -103,9 +149,16 @@ pub fn jbs_vk() -> VerifyingKey {
 /// that run.
 pub fn jbs_statement() -> PublicInputs {
     let mut s = statement();
-    s.shard_counts = vec![1, 1, 1, 0];
+    // One add/sub, one jump, one init, no zero window, then S25's three.
+    s.shard_counts = vec![1, 1, 1, 0, 1, 1, 0];
+    // Statement order is INIT, ZERO, then ascending, so the jump family's
+    // lists go before the two public ones this pushes back on at the end.
+    let public = s.memory_commitments.split_off(2);
+    let roots = s.memory_roots.split_off(2);
     s.memory_commitments.push((600..621).map(blob).collect());
     s.memory_roots.push([Fr::from_u64(5), Fr::from_u64(6)]);
+    s.memory_commitments.extend(public);
+    s.memory_roots.extend(roots);
     s
 }
 
@@ -132,16 +185,23 @@ pub fn statement() -> PublicInputs {
         input: vec![1, 2, 3],
         output: vec![],
         exit_status: 42,
-        shard_counts: vec![1, 1, 0],
+        // One init shard, no zero window, one add/sub shard, then S25's
+        // three: one public input, one journal, no advice window.
+        shard_counts: vec![1, 1, 0, 1, 1, 0],
         windows: vec![],
         boundary: finals(42),
         memory_commitments: vec![
             (200..202).map(blob).collect(),
             (300..342).map(blob).collect(),
+            // `PUBLIC_INPUT` commits three columns, the journal two.
+            (700..703).map(blob).collect(),
+            (710..712).map(blob).collect(),
         ],
         memory_roots: vec![
             [Fr::from_u64(1), Fr::from_u64(2)],
             [Fr::from_u64(3), Fr::from_u64(4)],
+            [Fr::from_u64(7), Fr::from_u64(8)],
+            [Fr::from_u64(9), Fr::from_u64(10)],
         ],
     }
 }
