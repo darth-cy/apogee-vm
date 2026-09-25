@@ -384,10 +384,14 @@ jobs:
       # commitment leaves in the **journal**, so the embedded-witness binary and
       # `exit_with_public_words` are both gone. `guests/revm-block`
       # runs revm over a synthetic block -- an ether
-      # transfer and a call into a counter contract -- in about 205,000 cycles,
-      # and every one of the seven execution families runs: ten shards, seven
-      # `2^20` execution shards, two `2^20` window shards and one `2^8` KECCAK_F
-      # shard. The window families are at `2^20` here and not `2^16`, which is
+      # transfer and a call into a counter contract -- in 219,885 cycles at
+      # `--release` on the committed witness, against `revm-block-stdio`'s
+      # 221,239, the difference being the `read` this binary no longer makes --
+      # and every one of the seven execution families runs: THIRTEEN shards
+      # since S25 -- seven `2^20` execution shards, two `2^20` RAM window
+      # shards, one `2^20` ADVICE_WINDOWS shard for the witness, one `2^8`
+      # KECCAK_F shard and one `2^8` shard each for PUBLIC_INPUT and
+      # PUBLIC_OUTPUT. The window families are at `2^20` here and not `2^16`, which is
       # new: the guest's image is about 1.7 MB and ends well past the 256 KiB a
       # `2^16` window 0 covers, and a decoded table is pc/2-indexed and absolute
       # so every family is pinned by the top of `.text`. The exact figures are
@@ -398,19 +402,25 @@ jobs:
       # directory -- about 25 s, and network access for 158 crates on a cold
       # machine.
       #
-      # Measured: 3 passed, 536 s, 38.4 GB peak, with RAYON_NUM_THREADS=6 on an
-      # 18-core / 48 GB machine. The bound is not optional there: shard proving
-      # holds one forward pass per worker, and nine `2^20` shards unbounded on
-      # 18 cores does not fit 48 GB. The block is byte-identical either way
-      # (S20 must-be-exact 8), so the bound changes the measurement and not the
-      # proof. docs/handoff/S24-revm.md §6.
+      # Measured at S24: 3 passed, 536 s, 38.4 GB peak, with RAYON_NUM_THREADS=6
+      # on an 18-core / 48 GB machine. That measurement PREDATES S25 and is a
+      # floor, not the current figure: the statement gained three shards, one of
+      # them a `2^20` advice window, and this suite has not been re-measured
+      # since. The bound is not optional: shard proving holds one forward pass
+      # per worker, and ELEVEN `2^20` shards unbounded on 18 cores does not fit
+      # 48 GB. The block is byte-identical either way (S20 must-be-exact 8), so
+      # the bound changes the measurement and not the proof.
+      # docs/handoff/S24-revm.md §6; docs/handoff/S25-io-binding.md §6.
       #
-      # It proves the *embedded-witness* binary and not the normative one,
-      # because `read` and `write` are not provable ecalls: the add/sub family's
-      # `ecall_is_exit` gate partitions every ecall row to EXIT or a registered
-      # delegation number, and `prover::fill::add_sub` refuses a read row, a
-      # write row and their transfer cycles by name. That is the deferred
-      # I/O-binding stage's work; `docs/handoff/S24-revm.md` is the account.
+      # It proves `guests/revm-block`'s OWN binary. S24 could not: `read` and
+      # `write` are not provable ecalls, and still are not -- the add/sub
+      # family's `ecall_is_exit` gate partitions every ecall row to EXIT or a
+      # registered delegation number, and `prover::fill::add_sub` refuses a
+      # read row, a write row and their transfer cycles by name. S25 removed
+      # the wall rather than climbing it, so the guest issues no ecall but
+      # EXIT; `revm-block-stdio` is the fd 0 / fd 1 compatibility binary and is
+      # still not provable, which is what `crates/emulator/tests/revm.rs`
+      # exercises. `docs/handoff/S25-io-binding.md` is the account.
       #
       # Its CI-sized halves are `crates/emulator/tests/revm.rs` -- the witness's
       # canonicity, the output commitment's shape, native revm against the

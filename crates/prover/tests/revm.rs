@@ -202,10 +202,11 @@ fn host_output() -> Vec<u8> {
 /// Acceptance 1: two clean builds of the guest give one `ProgramIdentity`.
 ///
 /// Identity is what a verifier takes from a channel the prover does not
-/// control, and for the embedded binary it is also what binds the witness —
-/// so a build that is not reproducible is a program nobody can name. Two
-/// builds into two fresh target directories, each preprocessed and committed
-/// on its own, and the two digests compared.
+/// control — so a build that is not reproducible is a program nobody can name.
+/// Since S25 it binds the program and nothing else: the witness is advice, so
+/// one identity serves every block, which is the whole point of the change.
+/// Two builds into two fresh target directories, each preprocessed and
+/// committed on its own, and the two digests compared.
 ///
 /// Over the **toy SRS**, deliberately. Identity is a digest over commitments
 /// to the program's own columns, and what acceptance 1 asks about is the

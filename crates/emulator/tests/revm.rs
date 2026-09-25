@@ -809,14 +809,16 @@ fn a9_the_cycle_and_occupancy_report() {
     let plan = plan_shards(&run.profile, &run.config);
     println!("revm-block at {}", common::guest_profile());
     println!("  cycles: {}", run.profile.total());
-    // The provable binary's, beside it: the same program, its witness in the
-    // image instead of on fd 0 and its output digest in `x24..x31` instead of
-    // on fd 1, which is what `crates/prover/tests/revm.rs` proves.
-    let embedded = traced(STDIO_BIN, &[]);
+    // The compatibility binary's, beside it: the same computation over the same
+    // witness, read off fd 0 and written to fd 1 instead of loaded out of
+    // advice and stored into the journal. The gap between the two counts is
+    // what the fd path costs, and it is the only thing this line reports --
+    // `crates/prover/tests/revm.rs` proves the binary above, not this one.
+    let stdio = traced(STDIO_BIN, &witness_bytes());
     println!(
         "  {STDIO_BIN} cycles: {} ({} keccak invocations against {})",
-        embedded.profile.total(),
-        embedded
+        stdio.profile.total(),
+        stdio
             .traces
             .delegation(family::KECCAK_F)
             .expect("the keccak family")
@@ -876,9 +878,10 @@ fn a9_the_cycle_and_occupancy_report() {
 #[test]
 #[ignore = "builds the revm guest from source"]
 fn a10_the_image_fits_its_declared_ceiling() {
-    // Both binaries: the normative one is what the stage reports, and the
-    // embedded one is what is *proved*, so it is the one whose image has to fit
-    // window 0 and whose last instruction has to fit a `2^20` table.
+    // Both binaries. `GUEST` is the one that is *proved*, so it is the one
+    // whose image has to fit window 0 and whose last instruction has to fit a
+    // `2^20` table; the compatibility binary is measured beside it because it
+    // is the same program and a divergence there would be a build problem.
     for bin in [GUEST, STDIO_BIN] {
         measure(bin);
     }

@@ -49,7 +49,7 @@ test-support.workspace = true
 checker.workspace = true
 # S24's workload guest. `tests/revm.rs` -- and not `tests/common`, which stays
 # free of the guest workspace because `crates/checker` includes it too -- builds
-# its embedded-witness binary and checks the digest it publishes against the
-# same library's own answer. A path into the guest workspace, and a test
-# dependency only.
+# the guest's own binary and checks the output commitment it leaves in the
+# journal against the same library's own answer, byte for byte. A path into the
+# guest workspace, and a test dependency only.
 revm-block = { path = "../../guests/revm-block" }

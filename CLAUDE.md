@@ -160,7 +160,7 @@ cargo test --release -p prover --test block -- --include-ignored --test-threads=
 cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1  # DEFERRED; S21's nine-shard block, 33.7 GB peak, 131 s
 cargo test --release -p prover --test recursion -- --include-ignored --test-threads=1  # DEFERRED; S23's ten-shard block, 35.2 GB peak, 120 s -- the heaviest by memory
 cargo test --release -p prover --test public_io -- --include-ignored --test-threads=1  # DEFERRED; S25's statement: public input in, advice checked against it, journal out
-RAYON_NUM_THREADS=6 cargo test --release -p prover --test revm -- --include-ignored --test-threads=1  # DEFERRED; S24's ten-shard revm block, and it builds the guest; 38.4 GB peak, 536 s -- NINE 2^20 shards, so the thread bound is not optional on a 48 GB machine
+RAYON_NUM_THREADS=6 cargo test --release -p prover --test revm -- --include-ignored --test-threads=1  # DEFERRED; the revm block, thirteen shards since S25, and it builds the guest; 38.4 GB peak, 536 s AT S24 -- a floor, not the current figure, S25 having added three shards and not re-measured; ELEVEN 2^20 shards, so the thread bound is not optional on a 48 GB machine
 cargo test -p prover --features metrics --test metrics -- --include-ignored --nocapture  # DEFERRED; S16's statement twice, 21.0 GB peak, 60 s, and prints both reports
 cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify -p verifier-core --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen

@@ -181,6 +181,13 @@ pub fn log(&[u8]);                           // fd 2 — as before
 
 **`exit_with_public_words` is deleted.** The journal is what it stood in for.
 
+**`revm_block::output_digest_words` is deleted too**, and with it the last of the
+embedded-witness arrangement. It was S24's `keccak256` of the output commitment, as the
+eight little-endian words `revm-block-embedded` left in `x24..x31` for the register
+boundary to carry — S24's frozen API listed it. The journal carries the commitment's own
+bytes, not a digest of them, so nothing reads it; `guests/revm-block/src/lib.rs` is back
+to naming no transport at all, taking the witness's bytes and returning the commitment's.
+
 ---
 
 ## 3. Artifacts
@@ -277,6 +284,26 @@ cargo build -p field -p constants ... --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen                            (and -- guests, on this machine)
 git diff --exit-code -- <every vectors directory>
 ```
+
+Named in CI and run here, on this machine:
+
+```
+APOGEE_GUEST_PROFILE=release cargo test -p emulator --test revm -- --ignored --skip a3_
+                                                5 passed, 33 s
+```
+
+That suite's acceptance 9 is where the two binaries meet. At `--release`, on the committed
+witness:
+
+| binary | cycles | keccak-f invocations |
+| --- | --- | --- |
+| `revm-block` — advice in, journal out, **provable** | **219,885** | 9 |
+| `revm-block-stdio` — fd 0 in, fd 1 out, not provable | 221,239 | 9 |
+
+The 1,354-cycle gap is the `read` the provable binary no longer makes: one ecall row, its
+argument frame and one transfer cycle per word of a 716-byte witness. `revm-block-stdio`'s
+figure is S24's `revm-block` figure unchanged, which is the check that the rename moved no
+code. The delegation counts agree, so the fd path costs cycles and changes no hashing.
 
 <!-- FILL: the deferred batch's timings and peaks, measured in one run at the end of the
      progression, per the owner's S20 instruction. -->

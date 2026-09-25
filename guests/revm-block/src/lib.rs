@@ -4,8 +4,12 @@
 //! This file is the program, and it compiles from one source twice — for the
 //! host, where `crates/emulator/tests/revm.rs` calls [`run`] directly as the
 //! native-revm oracle, and for `riscv32imac-unknown-none-elf`, where
-//! `src/main.rs` hands it fd 0 and commits what it returns to fd 1. The two
-//! halves differ in exactly two ways and in nothing else:
+//! `src/main.rs` hands it the **advice** region and commits what it returns to
+//! the **journal**. This file names no transport: it takes the witness's bytes
+//! and returns the commitment's, and which memory those bytes arrive in and
+//! leave by is the binary's business, not the workload's — `src/stdio.rs` is
+//! the same computation over fd 0 and fd 1. The two halves differ in exactly
+//! two ways and in nothing else:
 //!
 //! - **keccak256.** `revm::primitives::keccak256` is `alloy-primitives`'
 //!   one-shot hash. On the guest this crate enables that crate's
@@ -32,11 +36,15 @@
 //!
 //! # The two wire formats this file owns
 //!
-//! [`BlockWitness`] is fd 0 and the output commitment is fd 1, and S10's
-//! frozen `io_digest` binds both. Neither carries an `Fr`, so the workspace's
-//! little-endian rule for field elements does not reach them: an EVM word is
-//! Ethereum's **big-endian** 32 bytes here, as it is everywhere else in
-//! Ethereum, and the small integers around them are little-endian, as
+//! [`BlockWitness`] is what goes in and the output commitment is what comes
+//! out. Since S25 the witness is **advice**, which nothing binds, and the
+//! commitment is the **journal**, whose bytes the statement carries
+//! (`docs/spec/public-values.md`); what stands in for binding the witness is
+//! this file's own checks and the commitment itself, which names the state
+//! roots the block began and ended on. Neither carries an `Fr`, so the
+//! workspace's little-endian rule for field elements does not reach them: an
+//! EVM word is Ethereum's **big-endian** 32 bytes here, as it is everywhere
+//! else in Ethereum, and the small integers around them are little-endian, as
 //! `postcard` and the rest of this repository write them.
 
 extern crate alloc;
@@ -146,7 +154,11 @@ pub const TRACE_HEIGHT_RELEASE: u32 = 1 << 20;
 /// a table that holds the code.
 pub const TRACE_HEIGHT_DEBUG: u32 = 1 << 22;
 
-/// The fd 0 buffer the guest reads its witness into, in one `read`.
+/// The fd 0 buffer `src/stdio.rs` reads its witness into, in one `read`.
+///
+/// The provable binary has no buffer at all: advice *is* memory, so
+/// `src/main.rs` decodes the region in place and this constant does not
+/// reach it.
 ///
 /// **A tunable**, and the one number here that is a policy rather than a
 /// fact: twice the largest committed witness, so a witness that grows by less
@@ -310,7 +322,7 @@ pub enum WitnessError {
 }
 
 impl BlockWitness {
-    /// This witness as fd 0's bytes.
+    /// This witness as the bytes a prover hands over.
     ///
     /// Panics on a witness that is not in canonical order, because an encoder
     /// that emitted one would be writing bytes [`BlockWitness::decode`]
@@ -323,18 +335,22 @@ impl BlockWitness {
         postcard::to_allocvec(self).expect("a BlockWitness encodes into an allocated vector")
     }
 
-    /// fd 0's bytes as a witness, or the rule they break.
+    /// Those bytes as a witness, or the rule they break.
     ///
     /// Canonicity is checked here rather than assumed, so that the same
     /// logical state has exactly one encoding: the guest and the host agree on
-    /// what the prover handed over, and two encodings of one state cannot
-    /// produce two `io_digest`s.
+    /// what the prover handed over. Since S25 the witness is **advice**, which
+    /// nothing in the proof system binds, so this is not a tidiness check — it
+    /// is one of the two things standing between a prover-supplied byte string
+    /// and the block the journal claims was executed
+    /// (`docs/spec/public-values.md` §6). The other is the commitment, which
+    /// names the state roots the block began and ended on.
     ///
     /// **The bytes must be exactly what [`BlockWitness::encode`] would write**,
     /// which is checked by re-encoding and comparing, because nothing cheaper
     /// pins `postcard`'s byte-level form. Two padding channels are open
-    /// otherwise, and both are a second encoding of one state — a second
-    /// `io_digest` for one execution, chosen by whoever writes fd 0:
+    /// otherwise, and both are a second encoding of one state, chosen by
+    /// whoever supplies the bytes:
     ///
     /// - **Trailing bytes.** `postcard::from_bytes` decodes a prefix and
     ///   ignores whatever follows, so a witness with a byte appended, or with
@@ -345,8 +361,8 @@ impl BlockWitness {
     ///   `01` does, and every length, `Option` tag, nonce and gas field in this
     ///   type is a varint. On the committed witness alone, 32 byte positions
     ///   take a two-byte non-minimal form and the widest field takes nine
-    ///   extra forms — far more than `2^32` distinct fd 0 streams for one
-    ///   block, every one of them a different digest.
+    ///   extra forms — far more than `2^32` distinct advice regions decoding
+    ///   to one block.
     ///
     /// The re-encode subsumes both, and the ordering rules in [`canonical`]
     /// are checked first so that a witness out of order is refused by the rule
@@ -401,7 +417,7 @@ const STATUS_REVERT: u8 = 1;
 /// Ran to completion.
 const STATUS_SUCCESS: u8 = 2;
 
-/// Run the block and return fd 1's bytes.
+/// Run the block and return the output commitment's bytes.
 ///
 /// One in-memory database built from the pre-state, one `transact_one` per
 /// transaction against one journal — so transaction 2 sees transaction 1's
@@ -570,8 +586,10 @@ fn access_list(list: &[(Address20, Vec<Word32>)]) -> AccessList {
 // The output commitment
 // ---------------------------------------------------------------------------
 
-/// fd 1's bytes: must-be-exact 7's three sections, in order and always all
-/// three.
+/// The output commitment: must-be-exact 7's three sections, in order and
+/// always all three. `src/main.rs` commits these bytes to the journal, where
+/// the statement carries them; `src/stdio.rs` writes them to fd 1, where
+/// nothing does.
 ///
 /// ```text
 ///   per-tx records, in execution order, one per transaction:
@@ -584,10 +602,11 @@ fn access_list(list: &[(Address20, Vec<Word32>)]) -> AccessList {
 /// ```
 ///
 /// The section *list* is fixed — three sections, never an optional one — and
-/// the record count is the witness's transaction count, which fd 0 carries
-/// and `io_digest` binds alongside these bytes. A record's `output` is the
-/// transaction's own return data and is as long as the transaction made it;
-/// `output_len` is what makes the stream parseable without it.
+/// the record count is the witness's transaction count, so a reader who has
+/// the witness knows how many records to expect and one who does not reads
+/// them sequentially. A record's `output` is the transaction's own return data
+/// and is as long as the transaction made it; `output_len` is what makes the
+/// stream parseable without it.
 fn encode_output(results: &[ExecutionResult], state: &revm::state::EvmState) -> Vec<u8> {
     let mut out = Vec::new();
     let mut logs: Vec<&Log> = Vec::new();
@@ -677,30 +696,4 @@ fn encode_post_state(state: &revm::state::EvmState) -> Vec<u8> {
         }
     }
     out
-}
-
-// ---------------------------------------------------------------------------
-// The output digest
-// ---------------------------------------------------------------------------
-
-/// `keccak256` of the output commitment, as eight little-endian words.
-///
-/// The embedded-witness guest (`src/embedded.rs`) leaves these in `x24..x31`,
-/// where the statement's register boundary carries them — the arrangement
-/// `prompts/00-master.md` describes for binding public output while `write`
-/// is not a provable ecall. It is this crate's one function that exists for
-/// the proof rather than for the workload; `docs/handoff/S24-revm.md` §"The
-/// I/O blocker" says why.
-pub fn output_digest_words(output: &[u8]) -> [u32; 8] {
-    let digest = keccak256(output);
-    let mut words = [0u32; 8];
-    for (i, word) in words.iter_mut().enumerate() {
-        *word = u32::from_le_bytes([
-            digest[4 * i],
-            digest[4 * i + 1],
-            digest[4 * i + 2],
-            digest[4 * i + 3],
-        ]);
-    }
-    words
 }
