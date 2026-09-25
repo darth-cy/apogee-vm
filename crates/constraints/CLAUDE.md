@@ -62,11 +62,16 @@ pub mod memory {                                   // docs/spec/memory.md §2, �
     pub const FRAME_QUERIES: usize = 9;            // the QUERY TABLE's size, never a frame's width
     pub const FRAME_NAMES: [&str; 9];              // pc rs1 rs2 arg1 arg2 load ram rd deleg
     pub const FRAME_SPACE: [u8; 9];                // PC REG REG REG REG RAM RAM REG DELEGATION_KECCAK_F
+                                                   // LOAD's and DELEG's entries are defaults: both
+                                                   // name their space per row, below
     pub const FRAME_DELTA: [u64; 9];               // 0 1 2 2 2 2 3 3 3
     pub const PC: usize = 0;  RS1 = 1;  RS2 = 2;  ARG1 = 3;  ARG2 = 4;  LOAD = 5;  RAM = 6;  RD = 7;  DELEG = 8;
     pub const FRAME_READ_ONLY: [usize; 5];         // RS1 RS2 ARG1 ARG2 LOAD, the write-back queries
     pub fn frame_queries(family: u32) -> &'static [usize];   // the frozen per-family subset
+    pub fn frame_query_takes(q: usize, space: u8, delta: u64) -> bool;   // THE routing rule
     pub fn frame(slot: usize, field: u32) -> PolyAddress;            // M[1 + 5·slot + field]
+    pub fn deleg_space(width: usize) -> PolyAddress;                 // M[1 + 5w]: the requested type
+    pub fn load_space(width: usize) -> PolyAddress;                  // M[1 + 5w]: RAM or ADVICE; S25b
     pub fn gap_hi(slot: usize) -> PolyAddress;                       // W[slot]
     pub fn rd_inv(width: usize) -> PolyAddress;    // W[width]; rd_is_zero W[width+1], rd_selected W[width+2]
     pub fn read_tuple(query: usize) -> GateDef;    // unmasked, Linear, constant γ_M; term PART_* is that part
@@ -80,6 +85,7 @@ pub mod memory {                                   // docs/spec/memory.md §2, �
         -> CircuitArtifact;      // S16's shape; panics on an empty family_spec.channels
     pub fn image_window_artifact(trace_vars: u32) -> CircuitArtifact;  // INIT_TEARDOWN
     pub fn zero_window_artifact(trace_vars: u32) -> CircuitArtifact;   // ZERO_WINDOWS
+    pub fn advice_window_artifact(trace_vars: u32) -> CircuitArtifact; // ADVICE_WINDOWS; S25b
     pub fn check_memory(a: &CircuitArtifact) -> Result<(), String>;
 }
 
@@ -152,7 +158,8 @@ pub mod mem_word {                                 // docs/spec/memory-ops.md §
     pub const DECODED: [PolyAddress; 6];           // W[9..15]: next_pc rs1 rs2 rd imm mask
     pub const KINDS: [PolyAddress; 2];             // W[15..17]: extra_mask::mem_word order
     pub const WRAP: PolyAddress;  WORD_INDEX;  WORD_INDEX_HI;  RD_HI;      // W[17..21]
-    pub const MULTIPLICITIES: [PolyAddress; 3];    // W[21..24]: timestamp, range16, decoder
+    pub const IS_ADVICE: PolyAddress;  WORD_INDEX_HI_REST;                 // W[21..23]; S25b
+    pub const MULTIPLICITIES: [PolyAddress; 3];    // W[23..26]: timestamp, range16, decoder
     pub const TABLE_WIDTH: usize = 7;              // S[0..7]; NO generic table
     pub const LEGAL_MASKS: [u32; 2];
     pub fn artifact(trace_vars: u32) -> CircuitArtifact;
@@ -171,7 +178,8 @@ pub mod mem_subword {                              // docs/spec/memory-ops.md §
     pub const SRC_SUB: PolyAddress;  SRC_SUB_SCALED;  SRC_SUB_SCALED_HI;
     pub const SRC_HIGH: PolyAddress;  SRC_HIGH_HI;                             // W[42..47]
     pub const SIGN_IN: PolyAddress;  SIGN;  SE;  RD_HI;                        // W[47..51]
-    pub const MULTIPLICITIES: [PolyAddress; 4];    // W[51..55]
+    pub const IS_ADVICE: PolyAddress;  WORD_INDEX_HI_REST;                     // W[51..53]; S25b
+    pub const MULTIPLICITIES: [PolyAddress; 4];    // W[53..57]
     pub const TABLE_WIDTH: usize = 7;              // S[0..7]
     pub const GENERIC_TABLE: [PolyAddress; 3];     // S[7..10]
     pub const LEGAL_MASKS: [u32; 6];
@@ -328,6 +336,21 @@ pub mod fr_arith {                                // docs/spec/delegation.md §1
   private `leaf` turns a tuple into the flat `Quadratic` of §2.2 and §3.3 by rule, so the
   window leaves and the frame leaves are one construction. The gadgets' constructors are
   private too: nothing outside this file builds a gate from them.
+- **Two queries name their address space per row, and both do it through an `M` column.**
+  `DELEG`'s is the delegation type (S21, `docs/spec/delegation.md` §5.1) and, since S25b,
+  `LOAD`'s is `RAM` or `ADVICE` by the address (`docs/spec/advice.md` §3.2). For every
+  other query the `AS` term is the literal `FRAME_SPACE[q]` times the mask and vanishes
+  with it; for these two it is the frame's one extra column at coefficient 1, which is
+  **0 on a row without the query** — the mask is inside the column instead. The reason is
+  `check_memory`'s provenance rule: a leaf may read no `W` column, and the `is_advice` bit
+  a family commits is one, so the tag crosses into the leaf through a memory column the
+  family pins to that bit with a literal-coefficient gate. `deleg_space` and `load_space`
+  are the **same slot**, `M[1 + 5w]`, and `frame_body` asserts no frame holds both queries:
+  add/sub holds `deleg` and no `load`, the two memory families `load` and no `deleg`,
+  `ATOMICS` neither. `frame_query_takes` is the routing rule both sides read — `DELEG`
+  takes any of `address_space::DELEGATION`, `LOAD` takes `RAM` or `ADVICE`, and `RAM`, the
+  store-and-atomic query, takes `RAM` alone, which is what makes advice read-only by frame
+  construction rather than by a rule of its own.
 - **A memory artifact is built by one private assembly** from complete vectors: leaves, row-wise
   `Product` lists to `[read, write]`, `trace_vars` halving lists, outputs at `READ_ROOT` and
   `WRITE_ROOT` named `read_root` and `write_root`, relations and scratch mirroring every gate,
@@ -340,15 +363,27 @@ pub mod fr_arith {                                // docs/spec/delegation.md §1
   a global slot over anything but `M`, `S`, `V`, and a leaf mask that is committed without
   its booleanity gate in list 0 or virtual but not `V[ram_live]`. It assumes an artifact that
   passed `validate`.
+- **`advice_window_artifact` is `zero_window_artifact`'s shape plus one free column**
+  (S25b, `docs/spec/advice.md` §5): `M[0]` teardown ts, `M[1]` teardown value, `M[2]`
+  **init value**, `V[row]`, no enforcing gate and no obligation. That third column is the
+  whole family, and `M` is what it must be — `check_memory` refuses a `W` column in a leaf
+  and `S` is what program identity commits, which is where the privacy would go, so
+  `program::setup_commitments` returns an empty list for this family deliberately. Nothing
+  outside the guest constrains an advice word: the prover picks it. What the circuit does
+  give is *consistency* — only this family's init leaf writes a tuple stamped 0 in the
+  advice space, so every read of an address chains back to one value — and §2 of that page
+  is what the value itself is worth.
 - **`family_circuit` is the one registry of circuits** (`docs/spec/shard-proof.md` §11).
   A verifying key's circuits are byte for byte what it returns for the key's families and
   heights, so a circuit is a protocol constant given a family and a height; a later family
   is one arm here and one fill in `crates/prover`. It returns `None` above
   `MAX_TRACE_VARS` and for **any of the seven execution families below 19 variables**, the
-  timestamp channel's bound. The two window families have no channels and take any height.
-  Since S19 it holds every family the master prompt names, and since S21 the first that it
-  does not: `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MUL_DIV`, `MEM_WORD`,
-  `MEM_SUBWORD`, `ATOMICS`, the two windows and `KECCAK_F`. **The minimum-height guard must
+  timestamp channel's bound. The **three** window families have no channels and take any
+  height. Since S19 it holds every family the master prompt names, and since S21 the ones
+  it does not: `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MUL_DIV`,
+  `MEM_WORD`, `MEM_SUBWORD`, `ATOMICS`, the three windows — `INIT_TEARDOWN`,
+  `ZERO_WINDOWS` and S25b's `ADVICE_WINDOWS` — and the three delegation families
+  `KECCAK_F`, `POSEIDON2` and `FR_ARITH`. **The minimum-height guard must
   name every execution family**: `HEIGHT_MENU` legally holds `2^16` and `2^18`,
   `VerifyingKey::check` builds a circuit from a key's own `VmConfig`, and a family missing
   from the guard would reach `lookup::channel_trees`' `BITS <= trace_vars` assertion — a
@@ -356,7 +391,11 @@ pub mod fr_arith {                                // docs/spec/delegation.md §1
   verifier was handed. **`KECCAK_F`'s arm sits below the guard, deliberately**: a family with
   no lookup channel reaches no such assertion, so there is nothing to pre-empt, and putting
   it in the guard would refuse the only height it has, `2^8`. That is why a delegation
-  family **must** carry no channel (`docs/spec/lookup.md` §3).
+  family **must** carry no channel (`docs/spec/lookup.md` §3). `ADVICE_WINDOWS`' arm sits
+  outside the guard for the same reason and beside its two siblings: a window family has no
+  channel either. It takes `INIT_TEARDOWN`'s height by derivation and not by any rule here
+  — `verifier_core::window_height` binds the two RAM families to one because they tile one
+  region between them, and advice is a region of its own (`docs/spec/advice.md` §5.0).
 - **A circuit that reads the `GENERIC` channel names the packed table as its last three
   setup columns** (S17). `FamilyCircuit::reads_generic_table` is whether any channel spec
   is `GENERIC`. At S17 only `JUMP_BRANCH_SLT` reads it: its `S[0..7]` are identity's
@@ -437,20 +476,41 @@ pub mod fr_arith {                                // docs/spec/delegation.md §1
 - **`mem_word`, `mem_subword` and `atomics` are `docs/spec/memory-ops.md` as data** (S19),
   and **§2's addressing is shared by all three**: `addr = 4·word_index (+ 2·bit1 + bit0)`
   is an alignment check over the integers and nothing at all over `Fr`, so what makes the
-  split base-4 is three `RANGE16` obligations on `word_index` — the direct pair and
-  `4·word_index_hi`, which caps `word_index` at `2^30 − 1` and is exactly tight at the top
+  split base-4 is three `RANGE16` obligations on `word_index` — the direct pair and a
+  scaled one, which caps `word_index` at `2^30 − 1` and is exactly tight at the top
   of the address space. Every RAM query's address is `4·word_index`, so a sub-word access,
-  a word access and an atomic name one cell. All three pass `(word_index_hi, m_pc)` to
-  `check_copowers`.
-  - **`mem_word`**: the six-query frame plus 15 witness columns, S11's seven-column
-    decoded table as `S`, 33 enforcing gates, 18 lookups and **three** channels — it reads
+  a word access and an atomic name one cell. `atomics` scales `word_index_hi` by 4 and
+  passes `(word_index_hi, m_pc)` to `check_copowers`; **since S25b the two load-carrying
+  families scale `word_index_hi_rest` by 8 and pass that instead**, the same obligation
+  re-split about bit 13 (`docs/spec/advice.md` §3.1).
+  - **The advice selector is four gates, and the two load-carrying families carry the same
+    four** (S25b). `advice_split` is `word_index_hi − 2^13·is_advice − word_index_hi_rest
+    = 0` with `is_advice_boolean` beside it, and `8·word_index_hi_rest < 2^16` bounds the
+    remainder below `2^13`, so `is_advice` **is** the address's bit 31 in both directions:
+    an advice address cannot be read as RAM and a RAM address cannot be read as advice.
+    `load_space_rule` moves that bit into the frame's `load_space` column,
+    `load_space − RAM·m_load − (ADVICE − RAM)·m_load·is_advice = 0`, and
+    `no_store_to_advice` is `m_ram·is_advice = 0`, which refuses a store into the region
+    **locally, as `Constraint`, naming the gate** where the multiset would refuse it
+    globally and namelessly. The region starting at a power of two is what keeps all of
+    this to one boolean and one re-split rather than a comparison gadget, a gap column and
+    its obligation.
+  - **`atomics` carries no advice gate of its own**, having no `load` query: an atomic's
+    address rides the `ram` query, whose tag is the literal `RAM`, so an atomic on the
+    advice range stages a RAM write at an address no RAM window initialized and the global
+    multiset refuses it. The emulator refuses it fatally first.
+  - **`mem_word`**: the six-query frame — 32 `M` columns since S25b, `1 + 5·6` plus the
+    `load_space` one — and 17 witness columns, S11's seven-column decoded table as `S`,
+    37 enforcing gates (the frame's 13 and this family's 24), 19 lookups and **three**
+    channels — it reads
     no generic lookup, the second registered family after `ADD_SUB_LUI_AUIPC` with none,
     so `reads_generic_table` is false and its setup list is identity's alone. It carries no
     offset bits at all, which is what makes a misaligned `lw` or `sw` unrepresentable.
     `rd_selected` carries a 16+16 pair, which is what keeps every register value in the VM
     locally 32-bit (`memory-ops.md` §5.1).
-  - **`mem_subword`**: the same frame plus 46 witness columns, the decoded table and the
-    packed generic table as `S`, 53 enforcing gates, 36 lookups and four channels.
+  - **`mem_subword`**: the same frame plus 48 witness columns, the decoded table and the
+    packed generic table as `S`, 57 enforcing gates (13 and 44), 37 lookups and four
+    channels.
     **There is no `MemoryOffsetGetBits` table**: the splice power `p` and its halved
     copower are degree-2 gates over the address's own two offset bits (`p_rule`,
     `pcopow_rule`, `wph_rule`), which is the owner's decision at S19 and strictly stronger
@@ -498,12 +558,14 @@ them, and every suite that reads them pins their SHA-256 first. They are this cr
 output, not an oracle: the independent description of the toy is
 `crates/checker/tests/cross_check.rs`.
 
-`tests/vectors/memory_frame_{alu,reg,mem,atomics}.bin`, `image_window.bin` and
-`zero_window.bin`: the `memory` constructors at `trace_vars` 22. One frame fixture per
+`tests/vectors/memory_frame_{alu,reg,mem,atomics}.bin`, `image_window.bin`,
+`zero_window.bin` and, since S25b, `advice_window.bin`: the `memory` constructors at
+`trace_vars` 22 — four distinct frames and three windows. One frame fixture per
 *distinct* frame — families sharing a query list share their artifact byte for byte, so
 `reg` is `JUMP_BRANCH_SLT`, `SHIFT_BITWISE` and `MUL_DIV`, and `mem` is `MEM_WORD` and
 `MEM_SUBWORD` — with a test holding each of the seven execution families to one of the
-four files, so four fixtures pin all seven. `cargo run -p kat-gen -- memory` rewrites
+four files, so four fixtures pin all seven. The `mem` frame's bytes moved at S25b, where
+a load's frame gained its `load_space` column. `cargo run -p kat-gen -- memory` rewrites
 them, CI regenerates and diffs them, and `tests/memory.rs` pins their SHA-256 and holds
 each to its constructor's bytes. The leaves' independent description is the plain
 arithmetic of `crates/gkr/tests/memory.rs`.
@@ -533,7 +595,7 @@ suite in `crates/checker/tests` pins each SHA-256 and holds its gates to
 | --- | --- |
 | `tests/wire.rs` | both fixtures round-trip byte for byte; a format version other than 1 refused before decoding; `VirtualKind`'s tags and `V[ram_live]`'s address and name; a lookup against its hand-written bytes; `Quadratic` against its hand-written bytes for no terms, linear only, products only and both, and each malformed `Quadratic` refused; every refusal of the reader; every single-bit flip of a fixture decodes or errors, never panics |
 | `tests/laws.rs` | one mutation of the toy per rule, each refused with its error — structured variants matched whole, prose details by the rule and the address or name they carry — beside the toy validating; each lookup rule broken alone, refused naming the lookup, beside one and two lawful lookups and an `M` selector; the degree-3 gate; `Quadratic`'s degree, its identically zero and unread-column cases, Law 4 against an `AffineProduct` relation, and its refusal to inline; cache-free inlining and its refusals |
-| `tests/memory.rs` | the three fixtures pinned and equal to their constructors; every constructor validating and passing `check_memory` at 12 and 22; two roots named `read_root`, `write_root`, an all-zero padding row, `trace_vars` halving lists; every read tuple's parts at their `PART_*` positions; the frame's layout, leaf order, widths and enforcing gates by name; its 16 obligations whole, `gap_lo_pc`'s constant `−1`; acceptance 11 exhaustively at reduced width, 5-bit chunks over a 10-bit clock, each query's own `gap_lo` expression read from the frame with its high chunk at 0, every `(cycle, read_ts)` pair admitted exactly when `read_ts < 4·cycle + Δ`; §8's pinned read sets; `check_memory` refusing a leaf fed from `W` (acceptance 9); the forward-provenance counterexample as a producing and as an enforcing gate of list 1, each beside its lawful control; a slot and a `W` column meeting through two cached entries, a cached entry itself carrying both, and a slot over a cached entry; a frame without `pc_mask_boolean` and one without `rd_mask_boolean`, whose mask another gate still reads; a window leaf masked by `S[0]` and by `V[row]`; a global slot over an inner column; and a write root read from a `W` column alone, which provenance does not see — each mutant still passing `validate`, each test run against the mutant it names |
+| `tests/memory.rs` | every committed fixture pinned and equal to its constructor — the four frames and, since S25b, all **three** windows; every constructor validating and passing `check_memory` at 12 and 22; two roots named `read_root`, `write_root`, an all-zero padding row, `trace_vars` halving lists; every read tuple's parts at their `PART_*` positions; the frame's layout, leaf order, widths and enforcing gates by name; its 16 obligations whole, `gap_lo_pc`'s constant `−1`; acceptance 11 exhaustively at reduced width, 5-bit chunks over a 10-bit clock, each query's own `gap_lo` expression read from the frame with its high chunk at 0, every `(cycle, read_ts)` pair admitted exactly when `read_ts < 4·cycle + Δ`; §8's pinned read sets; `check_memory` refusing a leaf fed from `W` (acceptance 9); the forward-provenance counterexample as a producing and as an enforcing gate of list 1, each beside its lawful control; a slot and a `W` column meeting through two cached entries, a cached entry itself carrying both, and a slot over a cached entry; a frame without `pc_mask_boolean` and one without `rd_mask_boolean`, whose mask another gate still reads; a window leaf masked by `S[0]` and by `V[row]`; a global slot over an inner column; and a write root read from a `W` column alone, which provenance does not see — each mutant still passing `validate`, each test run against the mutant it names |
 | `src/gadgets.rs` (unit) | two range halfwords are the comparison's 32-bit word; the comparison returns two gates and eight lookups, each sign lookup the generic table's width; the equation built at 1 and 32 bits and refused at 0 and 33; a `const` assertion holds `U16GetSign`'s keys above AND's |
 | `src/shift_bitwise.rs` (unit) | the legal masks are twelve distinct single bits; the two halves and the two shift directions partition the kinds; and through the private `assemble` seam, the honest family spec gives `artifact`, and the build is refused for an obligation dropped, for `residue`'s direct pair moved under a narrower selector than its scaled obligation (S18's tightened copower check) and for a gate nonzero on the all-zero row |
 | `src/mul_div.rs` (unit) | the legal masks are eight distinct single bits; the multiplies and the divisions partition the kinds; `arithmetic_gates` built at 1 and 32 bits and refused at 0 and 33; and through the `assemble` seam, the honest spec gives `artifact` and the build is refused for a dropped obligation and for a gate nonzero on the all-zero row |

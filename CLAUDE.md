@@ -24,8 +24,10 @@ docs/
                  delegation.md, THE delegation ABI: the ecall convention, the frame, the
                  anchor, static detachment, the three delegation circuits, and the
                  guest-target backend; and
-                 revm-block.md, S24's two wire formats: the output commitment, frozen,
-                 and BlockWitness, deliberately NOT frozen
+                 revm-block.md, S24's three wire formats: the output commitment, frozen,
+                 the compact fd 0 PublicHeader, and BlockWitness, deliberately NOT frozen; and
+                 advice.md, S25b's read-only private ADVICE region: the space, the soundness
+                 argument, the ADVICE_WINDOWS family and what the mechanism costs
   handoff/       one note per completed stage: frozen API, artifacts, deviations
 crates/
   constants/     frozen constants and tags; zero logic; no_std
@@ -49,7 +51,7 @@ crates/
                  output-level QEMU oracle; std
   constraints/   circuits as data: PolyAddress, GateDef, LayerSpec, CircuitArtifact, the
                  laws, the cache-free compilation and the wire form; `memory`: the per-family frames,
-                 the two window artifacts and check_memory; and `lookup`: the LogUp
+                 the three window artifacts and check_memory; and `lookup`: the LogUp
                  channels, their gated tuples, the fraction tree and the discharge rules;
                  `add_sub`: S16's family circuit; `jump_branch_slt`: S17's; `shift_bitwise`
                  and `mul_div`: S18's two; `mem_word`, `mem_subword` and `atomics`: S19's
@@ -85,9 +87,10 @@ crates/
                  WitnessRecorder, which pre-executes a block with native revm against that
                  client. **RPC is confined to a manual refresh; nothing else may reach the
                  network.** std
-  guest-sdk/     crt0, entry!, linker script, bump allocator, ecall shims, and the two
-                 public stream buffers whose bytes `io_digest` covers; no_std,
-                 guest-only, and NOT a workspace member
+  guest-sdk/     crt0, entry!, linker script, bump allocator, ecall shims, the two
+                 public stream buffers whose bytes `io_digest` covers, and `advice`, the
+                 read-only private region as a slice; no_std, guest-only, and NOT a
+                 workspace member
 guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, opcodes/, heap/, consistency/,
                  addsub/, control/, alu/, mem/, shards/, keccak-test/, keccak-unused/,
                  recursion-ops/, recursion-unused/, revm-block/
@@ -139,11 +142,14 @@ be a deferred suite owes a **fast** test pinning the same property — a synthet
 statement in a unit test rather than a real proof — so the workspace run still guards it.
 Then run the deferred suites in one batch when no further commits are expected, and
 record their timings and peaks in the handoff note. **The peaks and timings below are
-S24's measurement and S25a did not re-take them**: the I/O binding moved every guest's
-cycle count — `guests/revm-block` at `--release` went 221,239 → 388,598 cycles and ten
-shards → twelve — so the numbers will move when S25's batch runs on the dev box, and they
-are kept here until then because a stale measurement of the right suite is more useful
-than none.
+S24's measurement and neither S25a nor S25b re-took them**: the I/O binding moved every
+guest's cycle count — `guests/revm-block` at `--release` went 221,239 → 388,598 cycles and
+ten shards → twelve — so the numbers will move when S25's batch runs on the dev box, and
+they are kept here until then because a stale measurement of the right suite is more useful
+than none. **S25b moved them again and the other way**: that guest reads its witness from
+the advice region now and hashes 76 bytes at exit rather than 717, which is **272,516
+cycles**, giving back 69% of what the binding cost; its block is thirteen shards, the
+thirteenth being one `ADVICE_WINDOWS` (`docs/handoff/S25b-advice.md` §6).
 ```
 cargo fmt --all -- --check
 cargo fmt --manifest-path tools/transcript-ref/Cargo.toml --all -- --check
@@ -154,11 +160,10 @@ cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
 cargo clippy -p prover --all-targets --features metrics -- -D warnings   # the ONE feature's configuration
-cargo test --workspace                      # 1,046 tests as of S25a; 83 more are #[ignore]d
+cargo test --workspace                      # 1,063 tests as of S25b; 82 more are #[ignore]d
 cargo test -p prover --features metrics --test metrics  # the metrics harness; 10 more, 2 #[ignore]d
 cargo test -p program --test delegation -- --ignored --test-threads=1  # static detachment at BOTH guest profiles; builds six guest images, 2.9 s
-APOGEE_GUEST_PROFILE=release cargo test -p emulator --test revm -- --ignored --test-threads=1 --skip a3_  # S24's guest against native revm; builds the revm guest, 47 s
-APOGEE_GUEST_PROFILE=release cargo test -p emulator --test revm -- --ignored a3_  # ditto under qemu-riscv32, so a Linux host
+APOGEE_GUEST_PROFILE=release cargo test -p emulator --test revm -- --ignored --test-threads=1  # S24's guest against native revm; builds the revm guest, 47 s. Acceptance 3, the QEMU leg, is retired at S25b: an advice guest does not run under qemu-user
 cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 17.5 GB peak, 203 s, 30 min on a runner
 cargo test -p prover --test acceptance -- --include-ignored --test-threads=1  # DEFERRED; S16's statement, 10.7 GB peak, 374 s
 cargo test -p verifier --test cli -- --include-ignored --test-threads=1       # DEFERRED; ditto, 10.7 GB, 44 s
@@ -434,6 +439,9 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   `ZERO_WINDOWS` absorbs an empty list. It binds nothing an execution chooses — no shard
   count, no window list — and not a `NOBITS` segment's size. `decode_program` refuses file
   bytes past window 0 (`ImageOutsideWindow`), so no image byte escapes the column.
+  **A family added to *every* `VmConfig` moves every program's identity**, because the
+  `VM_CONFIG` message lists the family set: S25b's `ADVICE_WINDOWS` did, where S21's and
+  S23's delegation families moved only the identities of programs that declared them.
   `identity_from_commitments` is the SRS-free digest a verifying-key loader recomputes.
   Identity needs the 2^22 ceremony SRS, so its full tests are `#[ignore]`d and run locally
   only. A verifier takes identity from a channel the prover does not control, never from
@@ -460,7 +468,10 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   one 4-aligned word and carries that word's RAM query **on the ecall's own row**, beside
   the `a1` and `a2` it is held against, and a `write` stages no memory event at all.
 - **Address-space tags are nonzero**: `constants::address_space` `REG = 1`, `RAM = 2`,
-  `PC = 3`, so no real memory tuple is all zeros. A RAM event's address is the byte address
+  `PC = 3`, so no real memory tuple is all zeros. **`ADVICE = 7`** is S25b's, the read-only
+  private region at `[0x8000_0000, 2^32)` the prover supplies and no verifier commits to
+  (`docs/spec/advice.md`): an ordinary `lw` reaches it, the address decides the space, and
+  a store or an atomic that names it is refused by a gate. A RAM event's address is the byte address
   of its 4-aligned word. Since S21 there is **one space per delegation family** — 4, 5 and
   6 — holding that family's anchor tuples and nothing else, which is what makes a request's
   mirror read answerable by an invocation of *that type* and by nothing in RAM or a
@@ -592,6 +603,24 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   window ids go in the statement as `MEMORY_WINDOWS`, and `program::check_memory_windows`
   holds them strictly increasing in `[1, 2^29/h − 1]` before the challenges. A window is a
   slice of the address space; a shard's cycles are a slice of the execution.
+- **The advice region is initialized the same way, by a third window family that shares
+  none of RAM's height.** `ADVICE_WINDOWS` is in every `VmConfig` too — it is one of
+  `constants::family::WINDOW_FAMILIES`, which is what let it join `decode_program`'s three
+  presence rules without a fourth — and proves **zero** shards in a run that reads no
+  advice. Its windows are **contiguous from 0**, so shard `i` *is* advice window `i`: there
+  is no id list, no new transcript tag, no new `PublicInputs` field and no amendment to the
+  frozen absorb order, and the extent is already `SHARD_COUNTS`' entry at that family's
+  position. It is **not** held to the RAM families' one height: that rule exists because
+  those two tile one region between them, and advice is a region of its own.
+  `gkr_verify::window_challenges` takes the address space beside the window, deriving
+  `γ_M + space + α_addr·(origin + 4h·w)` where the literal `RAM` used to be. The one thing
+  that differs from its two siblings is the point of the family: an advice word's initial
+  value is a **free** committed `M` column, which no gate, no statement field and no
+  identity digest constrains. `program::setup_commitments` returns an empty list for it
+  deliberately — committing that column would put the advice into program identity.
+  **What a proof over advice is worth is what the guest checks it against**, and nothing
+  else: `docs/spec/advice.md` §2 is the argument, and §10 is exactly what
+  `guests/revm-block`'s proof does and does not say.
 - **Registers and the pc have no rows: they are the verifier's boundary.** A proof carries
   64 scalars — final timestamps of `x0..x31` and the pc, final values of `x1..x31` — which
   S16's global transcript absorbs as one `MEMORY_BOUNDARY` message after every memory-column
@@ -960,17 +989,20 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   while `EXIT` is the only provable ecall.
 - **`BlockWitness` is NOT frozen, and `revm`'s version is** (owner's decisions, S24).
   `prompts/S24-revm.md` asked to freeze the witness; the owner withdrew that at the close
-  of the stage because a field it is already known to need is missing. revm answers
-  `BLOCKHASH` from its `Database` and `revm_block::run` gives it an empty one, so the
-  opcode returns **`keccak256` of the block number's decimal string** — a placeholder,
-  agreed on by guest and host, not any block's hash, and EIP-2935's history contract does
-  not rescue it because revm 42 serves the opcode from the host and not from state. The
-  field that closes it is a `block_hashes: Vec<(u64, Word32)>` loaded into `CacheDB`'s
-  cache, and the stage that records a real block adds it; `crates/emulator/tests/revm.rs::
-  blockhash_reads_a_placeholder_today` pins today's answer so it cannot close by accident.
-  The **output commitment stays frozen**, and so does §1.1: whatever fields the witness
-  gains, the field order is the canonical order and `decode` re-encodes and compares, so
-  one logical state has exactly one encoding. `revm` is pinned `=42.0.1` for the opposite
+  of the stage because a field it was already known to need was missing — `BLOCKHASH` was
+  answered from an empty `CacheDB` with `keccak256` of the block number's decimal string,
+  a placeholder equal to no block's hash. **S25a closed that**: `block_hashes` is a field,
+  `WitnessDb::block_hash` answers from it, and a number the list lacks is an error;
+  `crates/emulator/tests/revm.rs::blockhash_is_answered_from_the_witness_or_refused` is
+  the pin. The type stays unfrozen — a later stage may append — and **S25b moved it off
+  fd 0 into the advice region** without changing a byte of its encoding. fd 0 now carries
+  `revm_block::PublicHeader`: 76 bytes, the region's length, the chain id, the height and
+  the parent hash, which the guest recomputes from the decoded advice and compares whole.
+  **That check fixes which block the witness claims to be and nothing about its state**,
+  and `docs/spec/advice.md` §10 is the standing statement of what the proof therefore does
+  and does not say. The **output commitment stays frozen**, and so does §1.1: whatever
+  fields the witness gains, the field order is the canonical order and `decode` re-encodes
+  and compares, so one logical state has exactly one encoding. `revm` is pinned `=42.0.1` for the opposite
   reason — a guest's identity is a digest of its compiled image, so a patch bump moves it
   and every number pinned against it, in both lockfiles.
 - **The block's gas limit is a running bound, and `run` is what enforces it.** revm checks
@@ -1038,4 +1070,4 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 | S22 — secp256k1 ecrecover delegation | **cancelled** | `prompts/00-master.md`, "Stage register" |
 | S23 — Fr-arithmetic + Poseidon2 delegations | done | `docs/handoff/S23-fr-poseidon2.md` |
 | S24 — revm guest, synthetic-state block | done | `docs/handoff/S24-revm.md` |
-| S25 — Witness pipeline, real blocks, bench harness | **in progress**: S25a, the public-I/O binding, is the first of its PRs | at the stage's end |
+| S25 — Witness pipeline, real blocks, bench harness | **in progress**: S25a, the public-I/O binding, is the first of its PRs; S25b, the ADVICE region, is the second | at the stage's end |

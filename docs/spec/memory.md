@@ -33,7 +33,9 @@ T(AS, ADDR, TS, VAL) = γ_M + AS + α_addr·ADDR + α_ts·TS + α_val·VAL
   additive and `AS` is added to it unweighted; `ADDR`, `TS`, `VAL` are weighted by
   `α_addr`, `α_ts`, `α_val` in that order.
 - **Address spaces**: `REG = 1`, `RAM = 2`, `PC = 3` (`constants::address_space`, frozen at
-  S12). A RAM address is the byte address of a 4-aligned word.
+  S12), one per delegation family since S21 (4, 5, 6), and `ADVICE = 7` since S25b. A RAM
+  address is the byte address of a 4-aligned word, and an advice address is too
+  (`docs/spec/advice.md`).
 - **Challenge slots** (`constants::challenge_slot`, append-only after S13's `TOY = 0`):
 
 | slot | name | value |
@@ -42,7 +44,7 @@ T(AS, ADDR, TS, VAL) = γ_M + AS + α_addr·ADDR + α_ts·TS + α_val·VAL
 | 2 | `MEM_ALPHA_ADDR` | `α_addr`, drawn |
 | 3 | `MEM_ALPHA_TS` | `α_ts`, drawn |
 | 4 | `MEM_ALPHA_VAL` | `α_val`, drawn |
-| 5 | `MEM_WINDOW_CONSTANT` | derived, per window shard: `γ_M + RAM + α_addr·4h·w` (§3.3) |
+| 5 | `MEM_WINDOW_CONSTANT` | derived, per window shard: `γ_M + space + α_addr·(origin + 4h·w)` (§3.3). The space is `RAM` at origin 0 for the two RAM families and `ADVICE` at `ADVICE_ORIGIN` for `ADVICE_WINDOWS`; it was the literal `RAM` until S25b |
 
 Slots 1–4 are drawn once per statement, after everything §6 lists. Slot 5 is a **derived
 slot** (`docs/spec/gkr.md` §5.1): a fixed function of drawn challenges and of statement data
@@ -116,7 +118,15 @@ M[1 + 5s + f]   the query at slot s, field f:
                 0 mask   1 addr   2 read_ts   3 read_value   4 write_value
 ```
 
-`1 + 5w` memory columns and `w + 3` witness columns, `w` being the family's query count. For
+`1 + 5w` memory columns and `w + 3` witness columns, `w` being the family's query count, plus
+**one more `M` column at `M[1 + 5w]` for a frame holding the `deleg` or the `load` query**: the
+address space that query names, which the family pins to its own witness selectors with a
+literal-coefficient gate. A memory leaf may read no `W` column (§8), and a space selector is
+one, so the tag has to cross through `M`. `deleg` took the column at S21
+(`docs/spec/delegation.md` §5.1) and `load` takes the **same position** at S25b
+(`docs/spec/advice.md` §3.2), which is sound and not a collision because no frame holds both
+queries: `ADD_SUB_LUI_AUIPC` holds `deleg` and no `load`, the two memory families hold `load`
+and no `deleg`, `ATOMICS` holds neither, and `constraints::memory::assemble` asserts it. For
 the pc query, `addr = 0`, `read_value = pc`, `write_value = next_pc` and `read_ts` is the
 previous cycle's pc write. The honest fill sets `mask` to 1 exactly when the row is live and
 its instruction has that query. **A row or query with mask 0 carries 0 in every one of its
@@ -333,11 +343,24 @@ missing. A `ZERO_WINDOWS` height below `INIT_TEARDOWN`'s would put zero windows 
 inside the image window, giving image words a second init row. The default height of both is
 `2^22`.
 
+**A third window family exists and is not held to that height.** `ADVICE_WINDOWS = 12`
+tiles the **advice** region, `[2^31, 2^32)`, from a free committed column
+(`docs/spec/advice.md` §5). It is in every `VmConfig` too — `constants::family::
+WINDOW_FAMILIES` is the list — but the rule above exists because the two RAM families tile
+*one* region between them, and a third region tiled by one family is not that case. So
+`window_height` still means "the two RAM families' one height", and advice's extent rule is
+stated in advice's own height.
+
 ### 3.3 The artifacts
 
 Both: `trace_vars = n`; memory columns `M[0] = teardown_ts`, `M[1] = teardown_value`; no
 witness columns; no enforcing gates; virtual `V[row]`. `INIT_TEARDOWN` adds `S[0] = init_value`
 and `V[ram_live]`. `WC` is slot 5.
+
+`ADVICE_WINDOWS` is `ZERO_WINDOWS`' artifact with `M[2] = init_value` in place of the
+literal 0, and its `WC` carries `ADVICE` and `ADVICE_ORIGIN`. `M` and not `S`: `S` is bound
+by program identity, which is where the privacy would go — and not `W`, which §8 refuses in
+a leaf.
 
 ```text
 ZERO_WINDOWS
@@ -451,7 +474,10 @@ on the same tuple gate the circuits use, and `gkr_verify::reconciles` is the che
 ∏ read roots · R_b  =  ∏ write roots · W_b   and   ∏ read roots · R_b ≠ 0
 ```
 
-over every shard of every family in the statement, `INIT_TEARDOWN` and `ZERO_WINDOWS` included.
+over every shard of every family in the statement — the three window families,
+`ADVICE_WINDOWS` among them, included. An advice window's init and teardown tuples enter this
+product exactly as a RAM window's do; what differs is only their address-space term
+(`docs/spec/advice.md` §5).
 
 No timestamp relation is checked on the finals, and none is needed. Per address, the init
 write is consumed once, every query consumes one write and produces one strictly later (the
@@ -460,13 +486,23 @@ timestamps, and the final read can only balance against its highest.
 
 That chain is over `Fr`, and that it cannot close on itself is a matter of counting. Each
 matched step adds an integer in `[1, 2^38]`, one plus a gap, so a closed loop of `k` steps
-needs `k·2^38 ≥ p`: more than `2^215` steps. A statement has fewer than `2^70` tuples: at most
-`2^32` shards per family (a `u32` count), times `family::COUNT = 9` families, times `2^30`
-rows (`MAX_TRACE_VARS`), times at most 16 leaves a row, plus the 66 boundary tuples. So no loop
-closes, each address's writes form one path from its init at timestamp 0, and every timestamp
-on that path is below `2^70·2^38 = 2^108 < p`: a canonical integer, so "strictly later" holds
-as integers. Re-check this count if the shard-count width, `MAX_TRACE_VARS`, the family count,
-the leaves per row or the gap width grows.
+needs `k·2^38 ≥ p`: more than `2^215` steps. A statement has fewer than `2^73` tuples: at most
+`2^32` shards per family (a `u32` count), times `family::COUNT = 13` families, times `2^30`
+rows (`MAX_TRACE_VARS`), times at most **128** memory leaves a row, plus the 66 boundary
+tuples — `13·2^(32+30+7)` is below `2^73`. So no loop closes, each address's writes form one
+path from its init at timestamp 0, and every timestamp on that path is below
+`2^73·2^38 = 2^111 < p`: a canonical integer, so "strictly later" holds as integers.
+
+The margin is `2^143`, so no growth this arithmetization can plausibly take moves the
+conclusion. **Re-check the count anyway if the shard-count width, `MAX_TRACE_VARS`, the family
+count, the leaves per row or the gap width grows** — and note that two of those already had
+when this paragraph was last re-derived at S25b. It was written at `family::COUNT = 9`, before
+the three delegation families and `ADVICE_WINDOWS`, and its "16 leaves a row" was the widest
+*execution* frame: add/sub's 8 queries padded to 8 a side. A **delegation** frame is far wider
+— `KECCAK_F`'s row carries its mirror query and 50 frame words, 51 padded to 64 a side and so
+128 leaves (`constraint-manifest.md` §12.4) — which is where the 8× comes from. Advice
+contributes nothing to this bound beyond one more family: an advice window's row is two leaves,
+like a RAM window's.
 
 ---
 

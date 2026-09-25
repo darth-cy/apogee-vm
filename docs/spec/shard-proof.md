@@ -103,7 +103,7 @@ aggregates them.
 | `output: Vec<u8>` | the fd 1 bytes it wrote |
 | `exit_status: u32` | the guest's result: `x10`'s final value |
 | `shard_counts: Vec<u32>` | one per family of the `VmConfig`, in its order (S11) |
-| `windows: Vec<u32>` | `ZERO_WINDOWS`' window ids, `docs/spec/memory.md` §3.5 |
+| `windows: Vec<u32>` | `ZERO_WINDOWS`' window ids, `docs/spec/memory.md` §3.5. **`ADVICE_WINDOWS` adds no field**: its windows are contiguous, so its extent is already its `shard_counts` entry (`docs/spec/advice.md` §6) |
 | `boundary: BoundaryFinals` | the 64 boundary scalars, `docs/spec/memory.md` §4.1 |
 | `memory_commitments: Vec<Vec<G1>>` | per shard, in statement order (§1.2), that shard's memory columns `M[0..]` in layout order |
 | `memory_roots: Vec<[Fr; 2]>` | per shard, in statement order, its `[read_root, write_root]` |
@@ -127,6 +127,14 @@ then every other family of the VmConfig, ascending by id, shards 0 … count −
 `verifier_core::statement_shards(config, counts)` is this list. A family with count 0
 has no entry. `ZERO_WINDOWS` shard `i` is window `windows[i]`; `INIT_TEARDOWN` shard 0
 is window 0.
+
+**`ADVICE_WINDOWS` is a window family and is nonetheless in "every other family"**, not
+lifted to the front with its two siblings. The two names above are literal ids, not a
+category, and id 12 is the highest, so the advice group is **last in every statement**.
+That is deliberate: this order is frozen, the memory argument is a multiset, and lifting
+the new family would have reordered G8 and every committed transcript tape to change
+nothing that any check reads. `ADVICE_WINDOWS` shard `i` is advice window `i` — contiguous
+from `ADVICE_ORIGIN`, so there is no id list to consult (`docs/spec/advice.md` §6).
 
 ---
 
@@ -275,10 +283,15 @@ columns before G10, the setup columns through the identity before G10, the gener
 table's columns through the SRS digest at G2 (S17), the witness columns at S3.
 
 **The external challenges** the shard's circuit reads: slots 1 to 4 from G10; for a
-RAM window family, the derived slot 5 through
-`gkr_verify::window_challenges(memory, window, trace_vars)`, window 0 for
-`INIT_TEARDOWN` and `windows[index]` for `ZERO_WINDOWS`; then
-`gkr_verify::insert_lookup_challenges(g, β, artifact)`.
+window family, the derived slot 5 through
+`gkr_verify::window_challenges(memory, space, window, trace_vars)` — `RAM` at window 0 for
+`INIT_TEARDOWN`, `RAM` at `windows[index]` for `ZERO_WINDOWS`, and `ADVICE` at `index` for
+`ADVICE_WINDOWS`; then `gkr_verify::insert_lookup_challenges(g, β, artifact)`.
+
+The address space is a **parameter of that constant since S25b**, standing exactly where
+the literal `RAM` used to. A new challenge slot was not an option: it would fall outside
+`constraints::memory::check_memory`'s `global()` range and silently disable all four of
+its provenance rules.
 
 **The output claims** are the top layer, which has zero variables: one value per
 output-map entry, in output-map order — the memory roots, then each channel's

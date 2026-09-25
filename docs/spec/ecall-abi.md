@@ -111,6 +111,13 @@ The classes are:
 So `read(63)` on fd 0 is **committed** and on fd 3 is **advice**; `write(64)` on
 fd 1 is **committed** and on fd 2 is neither, being ignored entirely.
 
+Since S25b there is a second, larger channel for prover advice, and it is **not** an
+ecall: the read-only **advice region** at `[0x8000_0000, 2^32)`, which a guest reads with
+ordinary loads (`docs/spec/advice.md`). Nothing in this table changes — no new number, no
+new descriptor — and the two are the same kind of thing in soundness terms, both being
+bytes the prover picks. Use fd 3 for a few words and the region for bulk; `guest_sdk::advice`
+is its accessor.
+
 A guest that lets a hint change what it writes to fd 1, without checking the
 hint against something else, has made its proof meaningless: the prover picks
 the hint, so it picks the output. A hint is a shortcut to a value the guest then

@@ -1,8 +1,11 @@
 # The advice region
 
-**Status: in progress (S25b).** Sections 1–6 are the design as decided; the circuit and
-prover sections are written against the implementation as it lands and are not frozen
-until the stage's handoff note says so.
+**Status: normative (S25b).** `docs/handoff/S25b-advice.md` is the stage's record and this
+page is the specification it closes on. What is **not** frozen is §10: the revm guest's
+split between its public header and its private witness is that guest's, not the
+mechanism's, and the stage that validates a real block's state against a root will move
+it. §2's argument, §3's addressing, §4's read-only rules, §5's family and §6's contiguity
+are frozen.
 
 A read-only, prover-supplied address space a guest reads with ordinary loads. It exists
 so that a large execution witness — an Ethereum block's touched state, a Merkle proof
@@ -81,19 +84,30 @@ Step 3 is the whole soundness argument. Without it, advice is a channel through 
 prover chooses what the program computes on, and a proof of such a run proves only that
 *some* input gave this output.
 
-**This repository has step 3 for nothing yet.** `guests/revm-block` reads its
-`BlockWitness` from advice and does not validate it against a state root, because the
-committed fixture is a synthetic pre-state with no real root to validate against. That
-gap is deliberate, documented here and at `docs/spec/revm-block.md`, and is not to be
-described as if it were closed. §10 states exactly what that guest's proof does and does
-not say.
+**This repository has step 3 in a partial form and for one guest.**
+`guests/revm-block` reads a public header on fd 0 and checks the advice's chain id,
+block number and parent hash against it, which is step 3 for *which block this is*. It
+does **not** validate the accounts, the storage, the code or the transactions against
+anything, because the committed fixture is a synthetic pre-state with no real root to
+validate against. That gap is deliberate, documented here and at
+`docs/spec/revm-block.md`, and is not to be described as if it were closed. §10 states
+exactly what that guest's proof does and does not say.
 
 ### 2.1 What the verifier learns
 
 The extent, and only to window granularity: `shard_counts[ADVICE_WINDOWS]` is in the
 statement descriptor, so a verifier knows the advice region spans that many windows of
-`4h` bytes. It learns nothing about the contents. A prover wanting to hide even the size
-pads to a fixed window count and pays for the padding.
+`4a` bytes, `a` being that family's height. It learns nothing about the contents.
+
+The count is derived from the **highest advice word the execution read**, rounded up to a
+window (`trace::advice_windows`), and not from the blob the prover supplied. So a prover
+that supplies a megabyte and reads the first word proves one window, and the count leaks
+what was *touched* rather than what was offered.
+
+**Padding to a fixed window count is not implemented.** A prover wanting to hide even
+that much would supply a count rather than have it derived, and pay for the padding
+windows; nothing in the prover's path takes such an argument today. It is recorded here
+as available and unbuilt, not as a property this stage has.
 
 ---
 
@@ -167,14 +181,26 @@ That refusal is correct but late and global — `MemoryArgument` at `verify_shar
 naming no instruction. So each storing family also carries
 
 ```text
-no_store_to_advice    is_store · is_advice = 0        degree 2
+no_store_to_advice    m_ram · is_advice = 0        degree 2
 ```
 
-which refuses the same execution locally, as `Constraint`, naming the gate. `ATOMICS` has
-no `load` query at all and takes the simpler rule: its address may never have bit 31 set,
-so `lr.w` cannot read advice either. Refusing that costs nothing — an atomic
-read-modify-write on a region nothing may write has no meaning — and admitting it would
-cost a per-row space column on the `ram` slot plus an exclusion gate over all eleven arms.
+which refuses the same execution locally, as `Constraint`, naming the gate. `m_ram` is the
+`ram` query's own mask, which those two families raise on a store row and nowhere else.
+
+**`ATOMICS` carries no such gate, and its refusal is the global one.** It has no `load`
+query, so it has no space column and no `is_advice` bit; its `word_index_hi` is still
+scaled by 4, which bounds the address below `2^32` and therefore *permits* bit 31. An
+`lr.w` or an AMO at an advice address stages a **RAM-space** tuple there — the `ram`
+slot's tag is the literal `RAM` — and no RAM window initializes an address at or above
+`2^31`, so its read has no writer and its write no reader, and the multiset refuses it at
+`verify_shard` step 10.
+
+That is weaker than the two memory families' treatment: `MemoryArgument` at block level
+rather than `Constraint` naming a gate. It is deliberate. Giving `ATOMICS` the local
+refusal would mean a per-row space column on the `ram` slot plus an exclusion gate over
+all eleven arms, to make an already-impossible execution fail one step earlier with a
+better message. An atomic read-modify-write on a region nothing may write has no meaning
+in the first place.
 
 The emulator refuses the same three things fatally, before any event is staged, so an
 execution the circuit could not prove is one no trace describes.
@@ -186,21 +212,54 @@ executor-side twin of `FRAME_READ_ONLY`'s gate.
 
 ## 5. Initialisation: `ADVICE_WINDOWS`
 
-The two RAM window families' third sibling, differing in exactly one thing.
+The two RAM window families' third sibling, differing in exactly one thing — and sharing
+neither their region nor their height (§5.0).
 
 | Family | Window | Initial values |
 | --- | --- | --- |
-| `INIT_TEARDOWN` | RAM window 0 | the image column; **identity commits them** |
+| `INIT_TEARDOWN` | RAM window 0 | the image column, `S[0]`; **identity commits them** |
 | `ZERO_WINDOWS` | RAM windows above 0 | the literal `0` |
-| `ADVICE_WINDOWS` | advice windows | **free**: a committed column nothing constrains |
+| `ADVICE_WINDOWS` | advice windows | **free**: `M[2]`, a committed column nothing constrains |
 
-Everything else it shares: no pc, no cycle, no lookup channel, the same window height `h`,
-one shard per window, `V[row]` addressing, and one init tuple per address by construction.
+Everything else it shares: no pc, no cycle, no lookup channel, one shard per window,
+`V[row]` addressing, and one init tuple per address by construction.
+
+`M` is what the free column must be. `check_memory`'s provenance rule refuses a `W`
+column in a leaf — `W` is committed after the memory challenges, so a leaf over one is
+chosen after them and balances any trace — and `S` is bound by program identity, which is
+where the privacy would go. An `M` column is committed in the memory phase, before the
+challenges, and binds to nothing else.
+
+`M[1]` (teardown) and `M[2]` (init) hold the same values in every provable trace, and no
+gate says so: the `load` query's `write_back` gate copies each read's value into its
+write, so the chain from the init write through every read to the teardown read carries
+one value the whole way, and a prover that separated them would not balance. They are two
+columns because the artifact mirrors its two siblings', not because a trace can tell them
+apart.
 
 **It is present in every `VmConfig`**, like the other two, and proves **zero** shards in a
 run that reads no advice. That keeps `program::decode_program`'s three presence rules
-intact — rule 2 is "the family is a window family" and this is one — at the cost of one
-more circuit in every verifying key and one more group in every statement's G8.
+intact — rule 2 is "the family is a window family", `constants::family::WINDOW_FAMILIES`
+is the list, and this is one — at the cost of one more circuit in every verifying key and
+one more group in every statement's G8. Its presence is a **statement** rule, checked in
+`verifier_core::check_memory_windows` beside the shard counts, and not a decoding rule:
+a config without it proves no advice shard and is unsound in no way, so `VmConfig::from_bytes`
+does not need to know about it.
+
+### 5.0 It does not share the RAM windows' height
+
+`verifier_core::window_height` holds `INIT_TEARDOWN` and `ZERO_WINDOWS` to one height
+because **they tile one region between them**, and a `ZERO_WINDOWS` height below
+`INIT_TEARDOWN`'s would give an image word a second init row (`docs/spec/memory.md` §3.2).
+Advice is a different region, tiled by this family alone, so that reason does not reach
+it and no rule invents one: `ADVICE_WINDOWS` takes a height off the menu like any other
+family, and its extent rule is stated in **its own** height — `ADVICE_LENGTH` is `2^31`
+bytes, so at height `a` the region is `2^29 / a` windows of `4a`.
+
+A first draft of this section required one height for all three. It was withdrawn before
+the stage closed: it forced every test that varies the RAM window height to vary a third
+family for no reason it could state, which is the shape of a rule that exists because it
+was easy to write.
 
 ### 5.1 The range obligation it does not carry
 
@@ -224,8 +283,10 @@ floor and force its height off `2^8`.
 ## 6. The statement, and why there is no advice window list
 
 **Advice is contiguous from `ADVICE_ORIGIN`.** Windows `0 .. k` with no gaps, where
-`k = shard_counts[ADVICE_WINDOWS]`. The extent is therefore already in the statement
-descriptor's `SHARD_COUNTS` message, and there is nothing further to carry:
+`k = shard_counts[ADVICE_WINDOWS]` — shard `i` *is* advice window `i`, by position and
+by nothing else, which is what `prover::window_of` reads. The extent is therefore already
+in the statement descriptor's `SHARD_COUNTS` message, and there is nothing further to
+carry:
 
 - no new transcript tag,
 - no new `PublicInputs` field,
@@ -235,9 +296,16 @@ descriptor's `SHARD_COUNTS` message, and there is nothing further to carry:
 A sparse advice map — its own id list beside `MEMORY_WINDOWS` — would have needed all
 four, for flexibility nothing has asked for. Advice is a blob; a blob has no holes.
 
-A load above `ADVICE_ORIGIN + 4hk` is an address no window initialized. It is fatal in the
+A load above `ADVICE_ORIGIN + 4ak` is an address no window initialized. It is fatal in the
 emulator and unbalanced in the argument, exactly as an out-of-window RAM address is
 (`docs/spec/memory-ops.md` §2, "What no gate here does").
+
+The window shard's own challenge carries the space: `gkr_verify::window_challenges` takes
+an address space beside the window id and derives
+`MEM_WINDOW_CONSTANT = γ_M + space + α_addr·(origin + 4·2^trace_vars·window)`, where the
+origin is 0 for RAM and `ADVICE_ORIGIN` for advice. The literal `RAM` that used to sit in
+that constant is where the space goes, so a window shard of one space cannot answer a
+query of the other: their tuples differ in the first term.
 
 ---
 
@@ -245,12 +313,12 @@ emulator and unbalanced in the argument, exactly as an out-of-window RAM address
 
 Per 4-byte word of witness consumed:
 
-| | fd 0 `read` (S25) | advice |
+| | fd 0 `read` (S25a) | advice (S25b) |
 | --- | --- | --- |
 | guest cycles | one `ecall` row, plus SDK marshalling | one load |
 | RAM writes | one — the copy into the guest's buffer | none |
 | committed memory rows | RAM init + the copy's write + the read | advice init + the read |
-| `io_digest` | Poseidon2 over the **whole** stream, at exit | none |
+| `io_digest` | Poseidon2 over the **whole** stream, at exit | none: only the compact public header is hashed |
 
 The `io_digest` term dominates and it disappears: a guest that takes its witness on fd 0
 hashes every byte of it through a Poseidon2 sponge at exit, which since S25 is delegated
@@ -258,13 +326,20 @@ and so grows the `POSEIDON2` and `FR_ARITH` shard counts with the witness size.
 
 **What does not disappear is the committed memory row.** An advice word is still one init
 tuple in a window shard, so the shard count still grows with the witness — one
-`ADVICE_WINDOWS` shard per `4h` bytes supplied. The honest claim is
+`ADVICE_WINDOWS` shard per `4a` bytes *read*, `a` being that family's height. The honest
+claim is
 
 > no ecall per word, no second copy in RAM, no whole-witness hash, and no Poseidon2/Fr
 > delegation growth proportional to the witness
 
 and **not** "free random access". A megabyte of advice is a megabyte of committed
 columns, exactly as a megabyte of RAM is.
+
+`cargo run --release -p bench -- advice` measures the first two rows in isolation, over
+hand-encoded programs summing the same words through each path. It measures neither of
+the last two — a bare `EXIT` program pays no `io_digest` and allocates no buffer — and it
+says so in its own output. The end-to-end number, where the SDK and the digest are both
+present, is `docs/handoff/S25b-advice.md` §6 on `guests/revm-block`.
 
 ---
 
@@ -294,19 +369,41 @@ keep that coverage, and it is the ISA that those suites were really covering.
 ## 10. `guests/revm-block`: what its proof says
 
 ```text
-fd 0    block number, parent hash, the header fields, the advice length   public, bound
-ADVICE  accounts, storage, code — the bulk BlockWitness                   private, UNVALIDATED
-fd 1    the output commitment                                             public, bound
+fd 0    advice_len, chain id, block number, parent hash   76 bytes, public, bound
+ADVICE  the whole BlockWitness                            private, PARTLY CHECKED
+fd 1    the output commitment                             public, bound
 ```
 
-The guest does **not** validate the advice against a state root. There is no real root to
-validate against: the committed witness is synthetic. So the proof says
+fd 0 carries `revm_block::PublicHeader`, and it is 76 bytes whatever the block: the
+region's length, the chain id, the height, and the parent hash the witness's
+`block_hashes` answers for `number − 1` (zeros when it answers none). The guest's one
+check of the advice is `BlockWitness::matches`, which recomputes that header from the
+decoded witness and compares it whole; a mismatch is exit 63.
 
-> there exist accounts, storage and code under which this block's transactions execute to
-> this output commitment, consistent with the public header
+**What that check is worth, exactly.** It fixes *which block* the witness claims to be —
+chain, height, parent — and it fixes **nothing** about the accounts, the storage, the
+code or the transactions. There is no state root here to validate them against: the
+committed witness is a synthetic pre-state and has none. So the proof says
 
-and it does **not** say that those accounts are Ethereum's at that block. Closing the gap
-means a Merkle-Patricia validator in the guest and a witness recorded from a real block;
-`crates/host`'s `WitnessRecorder` already carries `parent_state_root`, which is where the
-check will anchor. Until then this distinction is not to be blurred in a summary, a
-handoff note or a commit message.
+> there exist accounts, storage, code and transactions under which the block at this
+> height on this chain, with this parent, executes to this output commitment
+
+and it does **not** say that those accounts are Ethereum's at that block, nor that those
+are the block's transactions. Both halves matter: the transactions moved into advice with
+the rest of the witness, so what was public and bound at S25a is private and unchecked
+now, and that is a **reduction** in what fd 0 binds, bought for the cost removed in §7.
+
+Closing the gap means a Merkle-Patricia validator in the guest, a transaction root in the
+header, and a witness recorded from a real block; `crates/host`'s `WitnessRecorder`
+already carries `parent_state_root`, which is where the state check will anchor. Until
+then this distinction is not to be blurred in a summary, a handoff note or a commit
+message.
+
+### 10.1 The consequence for the suites
+
+`crates/emulator/tests/revm.rs::a3_the_two_executors_commit_the_same_bytes` is **retired**.
+It ran the same binary under `qemu-riscv32` and compared fd 1, and an advice guest cannot
+run there at all (§9). What it established — that the delegated keccak and the SDK's
+software fallback compute one function — is
+`a5_every_delegated_permutation_is_the_reference`, which checks it directly and needs no
+emulator. Every other guest keeps its QEMU coverage.

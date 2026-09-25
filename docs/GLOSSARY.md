@@ -292,6 +292,15 @@ apart at a glance.
 **Hint** — bytes the guest reads from fd 3. Uncommitted prover advice: a shortcut to a
 value the guest then checks against something bound, never an input in its own right.
 
+**Advice region** — the read-only address space at `[0x8000_0000, 2^32)`
+(`constants::address_space::ADVICE`), whose contents the prover supplies and no verifier
+commits to. A guest reads it with an ordinary `lw`: no ecall per word, no copy into RAM,
+and no `io_digest` over it. `family::ADVICE_WINDOWS` initializes it, one shard per window,
+from a **free** committed column — nothing outside the guest says what an advice word is.
+It is the same kind of thing as a **hint** and differs only in mechanism and scale: a hint
+is a few words through fd 3, advice is megabytes through the memory argument. Both are
+worth exactly what the guest checks them against. `docs/spec/advice.md`.
+
 **Public I/O digest** — the single `Fr` binding the guest's fd 0 and fd 1 byte streams,
 `transcript::io_digest`. Frozen at S10; the statement-binding order absorbs it.
 `docs/spec/ecall-abi.md` §6. Tying it to the streams an execution actually read and wrote

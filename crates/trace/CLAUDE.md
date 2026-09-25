@@ -8,11 +8,14 @@ argument's columns filled from the log. `crates/emulator` is the only producer.
 **`docs/spec/execution-trace.md` is normative** for every value here — the clock, the
 address spaces, the frame of each instruction class, the x0 rule, the ecall frame and the
 order of the log — **`docs/spec/memory.md`** for the memory columns,
-**`docs/spec/lookup.md` §7** for the multiplicity columns, and, since S21,
-**`docs/spec/delegation.md`** for the eighth role, the invocation frame and the anchor.
+**`docs/spec/lookup.md` §7** for the multiplicity columns, since S21
+**`docs/spec/delegation.md`** for the eighth role, the invocation frame and the anchor,
+and, since S25b, **`docs/spec/advice.md`** for the advice space, its window columns and
+its shard count.
 
 ```rust
-pub enum AddressSpace { Reg, Ram, Pc, KeccakF }   // tags: constants::address_space, 1 2 3 4
+pub enum AddressSpace { Reg, Ram, Pc, KeccakF, Poseidon2, FrArith, Advice }
+                                                 // tags: constants::address_space, 1..=7
 pub struct MemoryEvent { pub space: AddressSpace, pub addr: u32, pub ts: u64,
                          pub read_ts: u64, pub read_value: u32, pub write_value: u32 }
 pub struct FinalValue { pub space: AddressSpace, pub addr: u32, pub ts: u64, pub value: u32 }
@@ -26,7 +29,8 @@ impl MemoryEventLog {
     pub fn final_state(&self) -> Vec<FinalValue>;                   // sorted: last write per address
     pub fn self_check(&self, image: &ProgramImage) -> Result<(), SelfCheckError>;
 }
-impl AddressSpace { pub fn chains(&self) -> bool; }   // S21: false for a delegation space
+impl AddressSpace { pub fn chains(&self) -> bool;     // S21: false for a delegation space
+                    pub fn writable(self) -> bool; }  // S25b: false for Advice, and only for it
 pub const DELEGATION_SPACES: [AddressSpace; 3];       // S23: every delegation anchor space
 
 pub enum Role { Rs1, Rs2, Arg1, Arg2, Load, Ram, Rd, Delegate }   // S21's eighth
@@ -51,6 +55,7 @@ pub struct CycleProfile { pub counts: Vec<(FamilyId, u64)> }
 pub struct ShardPlan { pub shards: Vec<(FamilyId, u32)> }
 pub fn plan_shards(profile: &CycleProfile, config: &VmConfig) -> ShardPlan;
 pub fn init_windows(log: &MemoryEventLog, height: u32) -> Vec<u32>;   // ZERO_WINDOWS' shard list
+pub fn advice_windows(log: &MemoryEventLog, height: u32) -> u32;      // ADVICE_WINDOWS' count; S25b
 
 // src/memory.rs, docs/spec/memory.md §2.1, §2.4, §3.4, §4.1; columns keyed by constraints::memory
 pub fn build_memory_columns(log: &MemoryEventLog, queries: &[usize], cycles: &[u64], height: usize)
@@ -59,6 +64,8 @@ pub fn build_frame_witness(log: &MemoryEventLog, queries: &[usize], cycles: &[u6
     -> Vec<(PolyAddress, MultilinearPoly)>;                    // its w + 3 W columns
 pub fn build_init_teardown_columns(log: &MemoryEventLog, image: &ProgramImage, ram_window: u32,
     height: usize) -> Vec<(PolyAddress, MultilinearPoly)>;          // M[0], M[1]; S[0] at window 0
+pub fn build_advice_window_columns(log: &MemoryEventLog, window: u32, height: usize)
+    -> Vec<(PolyAddress, MultilinearPoly)>;      // M[0], M[1], M[2] the free init column; S25b
 pub fn build_boundary_finals(log: &MemoryEventLog) -> BoundaryFinals;   // gkr_verify's
 
 // docs/spec/lookup.md §7
@@ -94,7 +101,8 @@ impl TraceArchive {
   vector in timestamp order — cycle order, and inside a cycle the pc query then the
   roles by slot and then by role number, which today is exactly `ROLES` order; a role
   appended later takes its place by slot and renumbers nothing. The last-access tables (a 32-entry array for the registers, an
-  `Option` for the pc, a hash map keyed by RAM word address) fill each new event's read
+  `Option` for the pc, a hash map keyed by RAM word address and, since S25b, a second one
+  keyed by advice word address) fill each new event's read
   side and are never serialized; `from_events` rebuilds them.
 - **`record` panics on a broken invariant**: an address outside its space, a timestamp
   past 38 bits or out of order, a read that does not strictly precede its write, or a
@@ -105,7 +113,17 @@ impl TraceArchive {
   every gap non-negative, one query per address per timestamp), then multiset balance:
   init (timestamp 0, value from the image — `ProgramImage::initial_word` for a RAM word —
   never from the log) plus every write, against
-  every read plus teardown (each address's last write, taken from the log). When the
+  every read plus teardown (each address's last write, taken from the log). **An advice
+  word's init value is the one exception and comes from the log**, and that is the rule
+  rather than a shortcut: an advice word's initial value is a free committed column, the
+  prover's to choose (`docs/spec/advice.md` §2), and since advice is read-only every query
+  there writes back what it read, so the whole chain at an address carries one value and
+  the *first read's value is necessarily the init write's*. Taking it from the log still
+  checks what this function is for — that later reads agree with earlier ones — and needs
+  no advice bytes here. Before the balance, a query in a space where `writable()` is false
+  whose write value differs from its read value is refused by name: the executor-side twin
+  of `constraints::memory::FRAME_READ_ONLY`'s `write_value − read_value = 0`, stated over
+  the predicate so a later read-only space inherits it. When the
   balance fails it replays the unbalanced address and names the first query whose read
   is not the last write before it — the corrupted read, the reader of a corrupted write,
   or a stale read, never the honest reader beside it. **Its blind spot is everything
@@ -134,7 +152,15 @@ impl TraceArchive {
   every delegation type — a second would need a ninth bit — so `Role::space` takes the
   requested family's space and panics on `None` for this role. What supplies it is the
   invocation riding the cycle, which both the recorder and the archive's replay have in
-  hand. Every other role ignores the argument.
+  hand. Every other role ignores that argument.
+- **`Role::Load`'s address space is its address's** (S25b). `Role::space` takes the query's
+  address beside the delegation family, and a load at or above
+  `guest_memory::ADVICE_ORIGIN` is `AddressSpace::Advice` — RAM and advice occupy disjoint
+  ranges by construction, so the address decides totally and **no column has to carry the
+  space**, which is what lets the archive replay a row into events without storing one
+  (`docs/spec/advice.md` §1.1). `Role::Ram` is deliberately *not* the same: a store and an
+  atomic are `Ram` whatever the address, because an advice address there is an execution
+  the emulator refused before staging anything.
 - **`FamilyTraces` has one buffer per `VmConfig` family, in its order**, the ones the run
   never reached included, and `CycleProfile` one count per buffer. **A delegation family's
   buffer is a `DelegationTrace` and its rows are invocations**, so `CycleProfile::total()`
@@ -142,7 +168,10 @@ impl TraceArchive {
   `plan_shards` still counts them into that family's shard count
   (`docs/spec/delegation.md` §8). The cycle-owning counts sum to the cycle count, transfer
   cycles included.
-- **A delegation space does not chain.** `AddressSpace::chains()` is false for all three, so
+- **Chaining and writability are two predicates, not one.** `AddressSpace::chains()` is
+  false for the three delegation spaces and `writable()` is false for `Advice` alone;
+  advice is the one space that chains and cannot be written, and a delegation anchor is
+  the one kind that is written and does not chain. A delegation space does not chain, so
   `record` fills such an event's read side with `(0, 0)` rather than from the last-access
   tables, and `self_check` credits the invocation's own pair per event instead of an initial
   write and a teardown read. That is what makes the anchor's timestamp-0 tuple a *write with
@@ -158,12 +187,20 @@ impl TraceArchive {
   `constraints::memory::frame_query_takes` is the routing rule and the `deleg` query takes
   any delegation space.
 - **`plan_shards` is `ceil(occupancy / height)`**, a pure function, zero for a family that
-  never ran. `INIT_TEARDOWN` and `ZERO_WINDOWS` count 0 cycles and so plan 0 shards here;
+  never ran. The **three** window families count 0 cycles and so plan 0 shards here;
   their rows are addresses, not cycles, and the prover assembles exactly 1 `INIT_TEARDOWN`
-  shard (RAM window 0) and `init_windows(log, h).len()` `ZERO_WINDOWS` shards.
+  shard (RAM window 0), `init_windows(log, h).len()` `ZERO_WINDOWS` shards and
+  `advice_windows(log, a)` `ADVICE_WINDOWS` shards.
 - **`init_windows(log, h)` is `ZERO_WINDOWS`' shard list**: the distinct `addr / 4h` of
   every touched RAM word, ascending, without window 0 (`docs/spec/memory.md` §3.4). `h`
-  is the two init families' one height.
+  is the two RAM window families' one height.
+- **`advice_windows(log, a)` is a count, not a list**, and that is the whole difference
+  (S25b, `docs/spec/advice.md` §6): advice is contiguous from
+  `guest_memory::ADVICE_ORIGIN`, so the count *is* the map and shard `i` is window `i`. It
+  is enough windows to cover the **highest advice word the execution read**, 0 for a run
+  that read none — so the extent a verifier learns is what was touched rather than what
+  the prover offered, and a window inside that span the guest never touched is proved
+  anyway, its init and teardown tuples cancelling over committed zeros.
 - **The memory columns are `docs/spec/memory.md`'s, keyed by `constraints::memory`'s
   layout**, which is the one place the layout lives. `build_memory_columns` and
   `build_frame_witness` fill one row per cycle of `cycles` — a shard's, in the order given —
@@ -171,6 +208,13 @@ impl TraceArchive {
   padding row are 0 in every column, `cycle` included. The pc query's fields are its
   event's: address 0, the pc read, `next_pc` written, the previous pc write's timestamp.
   A cycle the log lacks or `cycles` repeats panics, naming it.
+- **The frame's one extra `M` column is filled with the event's own tag**, whichever of
+  the two queries the family holds: `deleg`'s is the requested delegation type
+  (`docs/spec/delegation.md` §5.1) and, since S25b, `load`'s is `RAM` or `ADVICE` by its
+  address (`docs/spec/advice.md` §3.2). One fill serves both, because it is the same rule
+  and no frame holds both queries, so the column each would take is the same slot. It is 0
+  on a row without the query, which the leaf reads as no tuple at all: the mask is 0 there
+  too.
 - **`queries` is the family's query list**, `constraints::memory::frame_queries(family)`,
   and a column's position is a **slot** in that list, not a query id. A family's frame
   holds only the queries its instructions can make, so the builders must be handed that
@@ -186,6 +230,18 @@ impl TraceArchive {
   by role. An ecall reading `a1` without `a0` would break it.
 - **A column takes the narrowest backing its largest value fits**: `U1`, `U8`, `U16`,
   `U32`, or `Fr` for a timestamp past 32 bits; `rd_inv` is always `Fr`.
+- **`build_advice_window_columns` is the advice window's three columns**: `M[0]` the
+  teardown timestamp, `M[1]` the teardown value and `M[2]` the **free initial value**,
+  filled with the same values — they are equal in any provable trace, since the `load`
+  query's write-back gate carries one value from the init write through every read to the
+  teardown read, and they are two columns only because the artifact mirrors its two
+  siblings'. **The memory log is the only source.** No advice blob is stored in
+  `TraceArchive`, `IoStreams` gained no field and the archive's wire form did not move:
+  a word the execution read carries the value it read, which is the blob's by construction
+  because the executor read it from there, and a word it never read is 0 in both columns
+  and cancels. That is a design point, not an omission — the prover needs no second copy
+  of the advice at proving time, and an archive is the same bytes whether the run's advice
+  was a kilobyte or a megabyte.
 - **`build_init_teardown_columns` is §3.4's table**, per row `y` at `4h·w + 4y`: 0 on
   window 0's rows below `2^14`; a touched word's last write; an untouched word's
   `image.initial_word`; plus `program::image_init_column` as `S[0]` for window 0. The
@@ -207,8 +263,10 @@ predecessor is empty, so the prefix rule holds in memory as it does on import �
 back through `content`; their schemas are `docs/spec/shard-proof.md` §10. No compression.
 - **The reader takes exactly what the writer writes.** A snapshot's parts must agree —
   every buffer well formed (a family `constants::family` has, and one that claims a pc —
-  the two init families claim none, so their buffers are empty — one column length, height on the
-  menu, no unknown role, an absent role all zero, families ascending), the profile
+  **every `family::WINDOW_FAMILIES` member** claims none, so its buffer is empty, read
+  from that list rather than named one id at a time, which is how S25b's third window
+  family would otherwise have arrived with a buffer full of rows — one column length,
+  height on the menu, no unknown role, an absent role all zero, families ascending), the profile
   counting the buffers, the rows'
   cycles `1..=n` each once, every event in its space and on the clock, and the log
   exactly the one the rows rebuild — and `from_execution` applies the same rule, so every
@@ -225,10 +283,10 @@ back through `content`; their schemas are `docs/spec/shard-proof.md` §10. No co
 ## Tests
 | File | What |
 | --- | --- |
-| `src/archive.rs` (unit) | `fill` keeping the phases a prefix: post-execution, a refill and an out-of-order phase refused, each later phase's content and timing read back; `content` panicking on post-execution; an in-order later phase accepted; out-of-order, timing without content, content without timing, trailing bytes and an overlong varint refused; every one of the reader's fifteen part-disagreement refusals (a buffer of rows for each init family among them), a mis-tagged section and bytes after the post-execution content refused as a named `Err`, never a panic, beside the untouched content; the constructor refusing parts that disagree |
-| `tests/log.rs` | the address-space tags against `constants::address_space` (all three delegation spaces included, and 7 as the next unclaimed tag), exactly which addresses each space has — a delegation anchor's address is a frame base, so a delegation space has RAM's — and which spaces chain |
+| `src/archive.rs` (unit) | `fill` keeping the phases a prefix: post-execution, a refill and an out-of-order phase refused, each later phase's content and timing read back; `content` panicking on post-execution; an in-order later phase accepted; out-of-order, timing without content, content without timing, trailing bytes and an overlong varint refused; every one of the reader's sixteen part-disagreement refusals (a buffer of rows for each of the three window families among them — sixteen since S25b, where `ADVICE_WINDOWS` joined the list), a mis-tagged section and bytes after the post-execution content refused as a named `Err`, never a panic, beside the untouched content; the constructor refusing parts that disagree |
+| `tests/log.rs` | the address-space tags against `constants::address_space` (all three delegation spaces and S25b's `Advice` = 7 included, with **8** now the next unclaimed tag — which is why the delegation tags stop being contiguous and why the `DELEGATION` set, never a range, is what tells them apart), exactly which addresses each space has — a delegation anchor's address is a frame base, so a delegation space has RAM's — which spaces chain, and which are writable: advice is the one that is not, and the only memory space whose initial values are the prover's |
 | `tests/plan.rs` | acceptance 9: occupancy 0 / 1 / height / height+1 → 0 / 1 / 1 / 2 at every menu height, zero-occurrence families (both init families among them), the whole 38-bit clock at 2^16, purity, a mismatched profile refused |
-| `tests/memory.rs` | `constraints::memory`'s query table against `Role` in `ROLES` order, the pc query first, names included — queries 1–8, `Role::Delegate`'s frame columns spelled `deleg_*` rather than `delegate_*`, which is written out rather than derived so a rename on one side alone still fails; `frame_queries(KECCAK_F)` panicking, since a delegation family is invoked rather than decoded; **every family's frame equal to the union of its instructions' queries**, taken over all 59 `Instr` variants with the per-instruction queries written from `execution-trace.md` §4 and the routing from `program::row_kind`, so the two tables cannot drift; the finals of a hand-written two-cycle log; `build_boundary_finals` refusing a pc that does not end at `HALT_PC` and a nonzero `x0`; `build_memory_columns` refusing a cycle the log lacks; `build_frame_witness`' gap columns at the chunk's edge, gaps `2^19 − 1`, `2^19` and `2^19 + 3`; a RAM write at `4h`, the first word of window 1, in window 1's columns alone |
+| `tests/memory.rs` | `constraints::memory`'s query table against `Role` in `ROLES` order, the pc query first, names included — queries 1–8, `Role::Delegate`'s frame columns spelled `deleg_*` rather than `delegate_*`, which is written out rather than derived so a rename on one side alone still fails; `frame_queries(KECCAK_F)` panicking, since a delegation family is invoked rather than decoded; **every family's frame equal to the union of its instructions' queries**, taken over all 59 `Instr` variants with the per-instruction queries written from `execution-trace.md` §4 and the routing from `program::row_kind`, so the two tables cannot drift; the finals of a hand-written two-cycle log; `build_boundary_finals` refusing a pc that does not end at `HALT_PC` and a nonzero `x0`; `build_memory_columns` refusing a cycle the log lacks; `build_frame_witness`' gap columns at the chunk's edge, gaps `2^19 − 1`, `2^19` and `2^19 + 3`; a RAM write at `4h`, the first word of window 1, in window 1's columns alone; and S25b's load routing — `Role::Load`'s space is `Ram` below `ADVICE_ORIGIN` and `Advice` at or above it, while `Role::Ram`'s is `Ram` either way |
 
 The self-check, the buffers, `init_windows` and the archive are exercised over real
 executions in `crates/emulator/tests/{trace,archive}.rs`, which is where executions exist;

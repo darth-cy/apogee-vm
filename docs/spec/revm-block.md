@@ -1,20 +1,47 @@
 # The revm block workload
 
-This page is normative for two wire formats and nothing else: `BlockWitness`, which is
-the revm guest's fd 0, and the **output commitment**, which is its fd 1. S10's
-`io_digest` binds both and this page defines neither of its halves —
-`docs/spec/ecall-abi.md` §6 froze that computation and S24 changed nothing about it.
+This page is normative for three wire formats and nothing else: `PublicHeader` (§0.1),
+which is the revm guest's fd 0; `BlockWitness` (§1), which since S25b is its **advice
+region**; and the **output commitment** (§2), which is its fd 1. S10's `io_digest` binds
+the first and the third and **not** the second — this page defines neither of the
+digest's halves, `docs/spec/ecall-abi.md` §6 froze that computation and nothing since has
+changed it.
 
 **The output commitment (§2) is frozen at S24. `BlockWitness` (§1) is not**, by the
-owner's decision at the close of the stage. `prompts/S24-revm.md` asked for both and the
-withdrawal has a concrete reason: a field the type is already known to need is missing,
-because this stage cannot fill it. revm answers `BLOCKHASH` from its database and S24
-gives it an empty one, so the opcode returns a **placeholder** — §1.2. A later stage adds
-`block_hashes` and whatever else a real block needs, and §1's shape moves with it. What a
-change must keep is §1.1: one logical state, exactly one encoding.
+owner's decision at the close of that stage, and it has moved twice since: S25a appended
+`block_hashes`, closing the gap that was the concrete reason for the withdrawal, and
+S25b moved the whole type off fd 0 into advice without changing a byte of its encoding.
+What a change must keep is §1.1: one logical state, exactly one encoding.
 
-The guest that reads and writes them is `guests/revm-block`; what it *is* — its two
-binaries, why one exists, and what it costs — is `docs/handoff/S24-revm.md`.
+The guest that reads them is `guests/revm-block`; what it *is* and what it costs is
+`docs/handoff/S24-revm.md`.
+
+## 0.1 `PublicHeader` — fd 0
+
+76 bytes, whatever the block:
+
+```text
+0..4    advice_len    u32 LE    the advice region's exact length in bytes
+4..12   chain_id      u64 LE    EIP-155 chain id
+12..44  number        32 BE     the block height
+44..76  parent_hash   32 BE     block_hashes' entry for number − 1, or zeros
+```
+
+Fixed-width and hand-written rather than `postcard`: a header this small has one shape,
+and a length-prefixed encoder would put a varint in front of every field. Every 76-byte
+string decodes — there is no field a reader can refuse — which is what keeps the guest's
+one refusal the comparison against the witness.
+
+`BlockWitness::public_header(advice_len)` is the only producer and
+`BlockWitness::matches` the only consumer: the guest recomputes the header from the
+decoded advice and compares it whole, exiting 63 on any difference. **That check fixes
+which block the witness claims to be and nothing about its state**;
+`docs/spec/advice.md` §10 states exactly what the resulting proof does and does not say,
+and that distinction is not to be blurred.
+
+`parent_hash` is zeros when the witness carries no `block_hashes` entry for `number − 1`,
+which is the case for the synthetic fixture and for any real block whose transactions
+never read `BLOCKHASH`. Zeros are therefore not a claim that the parent hash is zero.
 
 ## 0. Byte order
 
@@ -26,11 +53,15 @@ Everything that is not an EVM word is little-endian: `postcard` writes the witne
 integers that way, and the output commitment's lengths and counters are written that way
 by hand.
 
-## 1. `BlockWitness`
+## 1. `BlockWitness` — the advice region
 
-**Not frozen** — see the note above; this is S24's shape, and a later stage may append to
-it. `postcard` over the type in `guests/revm-block/src/lib.rs`, which is the workspace's
-one wire encoding. Fields in declaration order, which is the canonical order:
+**Not frozen** — see the note above; a later stage may append to it. `postcard` over the
+type in `guests/revm-block/src/lib.rs`, which is the workspace's one wire encoding.
+Fields in declaration order, which is the canonical order:
+
+Since S25b these bytes are the **advice region**, not fd 0: private, prover-supplied,
+read-only, read by ordinary loads, and covered by no digest (`docs/spec/advice.md`). The
+encoding did not change when they moved, and neither did `decode`.
 
 ```
 BlockWitness
@@ -107,19 +138,15 @@ recomputes, so a witness cannot claim a hash its code does not have.
 
 ### 1.2 What is deliberately absent
 
-- **Block hashes, and this is the one that is a *gap* rather than a decision.** revm
-  answers the `BLOCKHASH` opcode from its `Database`, and `revm_block::run` hands it a
-  `CacheDB<EmptyDB>` whose block-hash cache is empty. Every lookup therefore falls
-  through to `EmptyDB`, which returns **`keccak256` of the block number's decimal
-  string** — deterministic, agreed on by the guest and the host, and not any block's
-  hash. So a contract reading `BLOCKHASH(n)` for an `n` within the last 256 blocks
-  computes on a made-up word and the block still "executes". EIP-2935's history contract
-  does not rescue it either: revm 42 serves the opcode from the host, not from state.
-  The field that closes this is a `block_hashes: Vec<(u64, [u8; 32])>` on
-  `BlockEnvWitness` or `BlockWitness`, loaded into that cache before execution, and it is
-  why §1 is **not frozen** — the stage that records a real block adds it.
-  `crates/emulator/tests/revm.rs::blockhash_reads_a_placeholder_today` pins today's
-  answer, so closing the gap is a decision rather than an accident.
+**Block hashes are no longer among them.** S24 answered `BLOCKHASH` from an empty
+`CacheDB<EmptyDB>`, which returned `keccak256` of the block number's decimal string — a
+placeholder equal to no block's hash — and this section called that the one *gap* rather
+than a decision. **S25a closed it**: `BlockEnvWitness::block_hashes` is a
+`Vec<(u64, Word32)>`, ascending by number and without repeats, `WitnessDb::block_hash`
+answers from it, and a number the list does not carry is an error rather than a made-up
+word. `crates/emulator/tests/revm.rs::blockhash_is_answered_from_the_witness_or_refused`
+is the pin. What remains below is deliberate absence, not debt.
+
 - **A parent header, and the header rules that need one.** EIP-1559's bound on
   `gas_limit` against the parent's, and the `≥ 5000` floor, are checks against a block
   this witness does not carry. What *is* enforced is §1.4.
@@ -151,8 +178,13 @@ recomputes, so a witness cannot claim a hash its code does not have.
 `crates/emulator/tests/vectors/revm_block_witness.bin`, written by
 `cargo run -p kat-gen -- revm`, which is where the synthetic pre-state is constructed and
 where every balance, gas limit and address is a named constant. `revm_block::
-COMMITTED_WITNESS_BYTES` pins its length and `revm_block::WITNESS_CAPACITY` — twice it —
-is the buffer the guest reads it into, in one `read`, and the one tunable in the guest.
+COMMITTED_WITNESS_BYTES` pins its length.
+
+There is **no second fixture for fd 0**: the suites derive the public header from this
+one, `witness.public_header(bytes.len())`, so the two cannot drift. And there is no
+buffer any more — `revm_block::WITNESS_CAPACITY`, the guest's one tunable at S24 and
+S25a, is **gone**, because a witness in advice is decoded where it lies and never copied
+into RAM.
 
 The fixture's addresses all lead with `0xee`. That is load-bearing: every precompile
 lives at an address whose first nineteen bytes are zero, so a "put the label in the last
@@ -259,12 +291,13 @@ revm uses only the one-shot form; `alloy-primitives`' streaming `Keccak256` — 
 | the fixture is canonical, and re-encodes to itself | `crates/emulator/tests/revm.rs::the_committed_witness_is_canonical` |
 | every non-minimal varint in it is refused, swept byte by byte | `…::a_witness_out_of_canonical_order_is_refused` |
 | every canonicity rule refuses, by name | `…::a_witness_out_of_canonical_order_is_refused` |
-| §1.2's placeholder block hash is what `BLOCKHASH` still answers | `…::blockhash_reads_a_placeholder_today` |
+| `BLOCKHASH` is answered from the witness, and a number it lacks is refused | `…::blockhash_is_answered_from_the_witness_or_refused` |
 | §1.4, both directions: a block that fits executes, one that does not is refused | `…::a_block_past_its_gas_limit_is_refused` |
 | §2's shape, field by field | `…::the_output_commitment_has_the_frozen_shape` |
 | native revm produces the committed output | `…::native_revm_produces_the_committed_output` |
 | the guest produces it too | `…::a4_the_guest_agrees_with_native_revm` |
-| the same bytes under `qemu-riscv32` | `…::a3_the_two_executors_commit_the_same_bytes` |
+| the same bytes under `qemu-riscv32` | **retired at S25b**: an advice guest does not run under QEMU (`docs/spec/advice.md` §9) |
+| §0.1's header is what fd 0 carries, and it alone | `…::a4_the_guest_agrees_with_native_revm` |
 | every delegated permutation is the reference | `…::a5_every_delegated_permutation_is_the_reference` |
 | and the harvested frames are the committed ones | `…::a5_the_harvested_frames_are_the_committed_ones` |
 | the fixture is what the builder still writes | `cargo run -p kat-gen`, regenerated and diffed in CI |

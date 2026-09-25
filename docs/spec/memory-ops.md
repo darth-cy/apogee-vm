@@ -99,7 +99,7 @@ satisfies it for any address whatever. What makes the split genuinely base-4 is 
 ```text
 word_index_hi_range     word_index_hi
 word_index_lo_range     word_index − 2^16·word_index_hi
-word_index_hi_scaled    4·word_index_hi
+word_index_hi_scaled    4·word_index_hi        (ATOMICS)
 ```
 
 The third gives `word_index_hi < 2^14`, so `word_index ≤ 2^30 − 1` and
@@ -108,8 +108,40 @@ top word of the address space, `0xfffffffc`, needs `word_index = 2^30 − 1`,
 `word_index_hi = 2^14 − 1` and `4·word_index_hi = 65532 < 2^16`. Scaling by 2 instead of 4
 would make the top quarter of the address space unprovable; dropping the obligation would
 let `4·word_index` reach `2^33`, which only the statement-level multiset would then refuse.
-`lookup::check_copowers` takes `(word_index_hi, m_pc)` in all three families, so a later
-edit that narrows or drops the direct obligation fails the build rather than the argument.
+`lookup::check_copowers` takes the scaled column with `m_pc` in all three families, so a
+later edit that narrows or drops the direct obligation fails the build rather than the
+argument.
+
+### 2.1 The two load families re-split `word_index_hi` about bit 13 (S25b)
+
+`MEM_WORD` and `MEM_SUBWORD` are the families that can reach the **advice** region, and
+its selector is a bit of the column above: `addr ≥ 2^31 ⟺ word_index ≥ 2^29 ⟺ bit 13 of
+word_index_hi` (`docs/spec/advice.md` §3.1). So in those two, `word_index_hi_scaled` is
+replaced by a split and its own pair:
+
+```text
+advice_split             word_index_hi − 2^13·is_advice − word_index_hi_rest = 0
+is_advice_boolean        is_advice² − is_advice                              = 0
+word_index_hi_rest_range        word_index_hi_rest            (RANGE16, m_pc)
+word_index_hi_rest_scaled     8·word_index_hi_rest            (RANGE16, m_pc)
+```
+
+The scaled pair gives `word_index_hi_rest < 2^13`, so with the boolean bit
+`word_index_hi < 2^14` exactly as before: the bound is the same and is tight in the same
+place. What is gained is that `is_advice` **is** the address's bit 31, in both directions —
+an advice address cannot be presented as RAM and a RAM address cannot be presented as
+advice — which is what two further gates in each family then key on:
+
+```text
+load_space_rule     load_space − RAM·m_load − (ADVICE − RAM)·m_load·is_advice = 0
+no_store_to_advice  m_ram · is_advice                                        = 0
+```
+
+`load_space` is the frame's `M[1 + 5w]` column, and the literal coefficients are what let
+this gate read a `W` column at all: `check_memory` reaches only gates carrying a memory
+challenge (`docs/spec/memory.md` §8). `ATOMICS` keeps `word_index_hi_scaled` unchanged and
+carries neither gate: it has no `load` query, its `ram` slot's space is the literal `RAM`,
+and an atomic read-modify-write on a region nothing may write has no meaning.
 
 With `word_index < 2^30` both sides of `addr_split` are integers below `2^34`, far under the
 modulus, so the field equality is an integer equality. That pins `wrap` in both directions —
@@ -164,18 +196,22 @@ gap chunks, `rd_inv`, `rd_is_zero`, `rd_selected`) are the frame's. The circuit 
 | `W[17]` | `wrap` | the wrap of `rs1 + imm` |
 | `W[18]`, `W[19]` | `word_index`, `word_index_hi` | §2 |
 | `W[20]` | `rd_hi` | the written `rd` value's high halfword |
-| `W[21]`–`W[23]` | `mult_timestamp`, `mult_range16`, `mult_decoder` | one multiplicity per channel, last |
+| `W[21]`, `W[22]` | `is_advice`, `word_index_hi_rest` | §2.1's re-split of `word_index_hi` about bit 13 |
+| `W[23]`–`W[25]` | `mult_timestamp`, `mult_range16`, `mult_decoder` | one multiplicity per channel, last |
 | `S[0]`–`S[6]` | `table_pc` … `table_extra_mask` | the decoded table, bound by identity |
 | `V[range19]`, `V[range16]` | | the two range tables |
 
-**31 `M`, 24 `W`, 7 `S`: 62 committed columns.** There is **no generic channel**:
-`FamilyCircuit::reads_generic_table` is false, the setup list is identity's alone, and a
-shard opens 62 commitments. `ADD_SUB_LUI_AUIPC` is the precedent for that shape.
+**32 `M`, 26 `W`, 7 `S`: 65 committed columns.** The frame gained `load_space` at
+`M[1 + 5w] = M[31]` at S25b — the queried address space, as an `M` column pinned by a
+literal-coefficient gate (§2.1) — and the two witness columns above went with it. There is
+**no generic channel**: `FamilyCircuit::reads_generic_table` is false, the setup list is
+identity's alone, and a shard opens 65 commitments. `ADD_SUB_LUI_AUIPC` is the precedent
+for that shape.
 
 ### 3.2 Gates
 
-Twenty beside the frame's thirteen (six mask booleanity, three write-backs on `rs1`, `rs2`
-and `load`, four x0), thirty-three in all:
+Twenty-four beside the frame's thirteen (six mask booleanity, three write-backs on `rs1`,
+`rs2` and `load`, four x0), thirty-seven in all:
 
 | gate | polynomial | what it holds |
 | --- | --- | --- |
@@ -187,6 +223,10 @@ and `load`, four x0), thirty-three in all:
 | `load_mask_rule`, `rd_mask_rule` | `m_q − m_pc·b_lw` | a load's alone |
 | `rs1_addr_rule`, `rs2_addr_rule`, `rd_addr_rule` | `m_q·(a_q − decoded_q)` | |
 | `load_addr_rule`, `ram_addr_rule` | `m_q·(a_q − 4·word_index)` | §2 |
+| `advice_split` | `word_index_hi − 2^13·is_advice − word_index_hi_rest` | §2.1 |
+| `is_advice_boolean` | `b − b²` | |
+| `load_space_rule` | `load_space − RAM·m_load − (ADVICE − RAM)·m_load·is_advice` | the `load` query's space is its address's |
+| `no_store_to_advice` | `m_ram · is_advice` | a store may not name the advice region |
 | `rs1_value_masked`, `rs2_value_masked` | `v_q − m_q·v_q` | an absent operand reads 0 |
 | `addr_split` | §2 | |
 | `rd_value_rule` | `rd_selected − b_lw·load_read_value` | a load writes the word it read |
@@ -201,9 +241,10 @@ does not reach one that copies one.
 
 ### 3.3 Lookups
 
-After the frame's twelve timestamp obligations, all under `m_pc`: §2's three on
-`word_index`, and `rd_hi_range` / `rd_lo_range`, the 16+16 pair on `rd_selected`. **Five
-`RANGE16`**, one decoder, no generic; `artifact` asserts the counts.
+After the frame's twelve timestamp obligations, all under `m_pc`: §2's first two on
+`word_index`, §2.1's pair on `word_index_hi_rest`, and `rd_hi_range` / `rd_lo_range`, the
+16+16 pair on `rd_selected`. **Six `RANGE16`**, one decoder, no generic; `artifact`
+asserts the counts.
 
 ### 3.4 Why it is sound
 
@@ -283,13 +324,14 @@ MemoryOffsetGetBits schema and its generation path" is replaced by freezing `p_r
 
 ### 4.3 Columns
 
-The frame is the same six queries as `MEM_WORD`'s, so `M[0..31]` and `W[0..9]` are the
-frame's. The circuit adds `W[9..15]` the decoded row, `W[15..21]` the six kind bits,
-`W[21..26]` `wrap word_index word_index_hi bit0 bit1`, `W[26..30]` `p pcopow wph p_ram`,
-`W[30]` `word`, `W[31..42]` the splice's three parts with the columns their bounds scale,
-`W[42..47]` the store source's split, `W[47..50]` `sign_in sign se`, `W[50]` `rd_hi`, and
-`W[51..55]` the four multiplicities. `S[0..7]` is the decoded table and `S[7..10]` the
-packed generic table. **31 `M`, 55 `W`, 10 `S`: 96 committed columns.**
+The frame is the same six queries as `MEM_WORD`'s, so `M[0..32]` — `load_space` at `M[31]`
+since S25b (§2.1) — and `W[0..9]` are the frame's. The circuit adds `W[9..15]` the decoded
+row, `W[15..21]` the six kind bits, `W[21..26]` `wrap word_index word_index_hi bit0 bit1`,
+`W[26..30]` `p pcopow wph p_ram`, `W[30]` `word`, `W[31..42]` the splice's three parts with
+the columns their bounds scale, `W[42..47]` the store source's split, `W[47..50]`
+`sign_in sign se`, `W[50]` `rd_hi`, `W[51]`, `W[52]` `is_advice word_index_hi_rest`, and
+`W[53..57]` the four multiplicities. `S[0..7]` is the decoded table and `S[7..10]` the
+packed generic table. **32 `M`, 57 `W`, 10 `S`: 99 committed columns.**
 
 ### 4.4 The splice's gates, and the width seam
 
@@ -371,12 +413,14 @@ with it.
 
 ### 4.6 Gates and lookups, in counts
 
-**Fifty-three enforcing gates**: the frame's thirteen and this family's forty — six kind
-booleanity, `decoded_mask_bits`, `wrap_boolean`, `bit0_boolean`, `bit1_boolean`, five mask
-rules, five address rules, two `value_masked`, `addr_split`, `half_aligned`, `word_rule`,
-`p_ram_rule`, `se_rule`, the **twelve** of `splice_gates`, and `next_pc_rule`. **Twelve
-timestamp, 22 `RANGE16`, 1 generic and 1 decoder obligations**; `artifact` asserts every
-count and the gate total, so a dropped obligation or a stray gate panics at construction.
+**Fifty-seven enforcing gates**: the frame's thirteen and this family's forty-four — six
+kind booleanity, `decoded_mask_bits`, `wrap_boolean`, `bit0_boolean`, `bit1_boolean`, five
+mask rules, five address rules, two `value_masked`, `addr_split`, `half_aligned`,
+`word_rule`, `p_ram_rule`, `se_rule`, the **twelve** of `splice_gates`, §2.1's four
+(`advice_split`, `is_advice_boolean`, `load_space_rule`, `no_store_to_advice`), and
+`next_pc_rule`. **Twelve timestamp, 23 `RANGE16`, 1 generic and 1 decoder obligations**;
+`artifact` asserts every count and the gate total, so a dropped obligation or a stray gate
+panics at construction.
 
 ### 4.7 Why it is sound
 

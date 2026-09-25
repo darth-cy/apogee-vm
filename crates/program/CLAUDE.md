@@ -10,14 +10,14 @@ every program.
 
 ```rust
 pub type FamilyId = u32;                                   // constants::family
-pub const FAMILIES: [FamilyId; 10];                        // ascending: the canonical order
+pub const FAMILIES: [FamilyId; 13];                        // = family::COUNT; ascending, the canonical order
 pub fn row_kind(instr: &Instr) -> (FamilyId, u32);         // the pc-claiming rule + mask bit
 pub enum RowField { Pc, NextPc, Rs1, Rs2, Rd, Imm, Funct3, ExtraMask }
 pub const ROW_FIELDS: [RowField; 8];                       // frozen column order
 pub fn lookup_tuple(family: FamilyId) -> &'static [RowField];
 pub fn field_mask(family: FamilyId) -> u8;                 // derived from the tuple
 
-pub struct ProgramParams { pub bytecode_size_words: u32, pub heights: [u32; 10], pub code_version: u32 }
+pub struct ProgramParams { pub bytecode_size_words: u32, pub heights: [u32; 13], pub code_version: u32 }
 impl ProgramParams { pub fn defaults() -> ProgramParams; }
 pub struct VmConfig { pub families: Vec<(FamilyId, u32)>, pub bytecode_size_words: u32 }
 impl VmConfig { pub fn to_bytes(&self) -> Vec<u8>; pub fn from_bytes(b: &[u8]) -> Option<VmConfig>;
@@ -94,18 +94,27 @@ is claimed by exactly one family by construction.
 | 7 | `INIT_TEARDOWN` | no pc; RAM window 0, the image window, exactly one shard; present in every `VmConfig`; an **empty** table: no columns, no live rows | 2^22 |
 | 8 | `ZERO_WINDOWS` | no pc; the zero-initialized RAM windows above window 0, one shard per touched window; present in every `VmConfig`; an **empty** table | 2^22 |
 | 9 | `KECCAK_F` | no pc; **invoked, not decoded**: ecall `0x501`, one keccak-f[1600] permutation a row, present exactly when the image declares it; an **empty** table | 2^8 |
+| 10 | `POSEIDON2` | no pc; invoked, not decoded: ecall `0x500`, one width-3 permutation a row; an **empty** table | 2^8 |
+| 11 | `FR_ARITH` | no pc; invoked, not decoded: ecall `0x502`, one `Fr` add, multiply or inverse a row; an **empty** table | 2^8 |
+| 12 | `ADVICE_WINDOWS` | no pc; the **advice** region's windows, one shard per window the prover supplies and **zero** in a run that reads none; present in every `VmConfig`; an **empty** table | 2^22 |
 
-The two init families have **one height**, `h`: RAM window `w` is the bytes
-`[4h·w, 4h·(w+1))` (`docs/spec/memory.md` §3). `bytecode_size_words` defaults to 2^20
-(a 4 MiB ceiling), the code version to 0.
+The two **RAM** window families have **one height**, `h`: RAM window `w` is the bytes
+`[4h·w, 4h·(w+1))` (`docs/spec/memory.md` §3). **`ADVICE_WINDOWS` is not held to it**
+(S25b, `docs/spec/advice.md` §5.0): that rule exists because those two tile one region
+between them and a mismatch would give an image word a second init row, and advice is a
+different region tiled by one family, so nothing about RAM's stride reaches it and no rule
+invents one. `bytecode_size_words` defaults to 2^20 (a 4 MiB ceiling), the code version
+to 0.
 
 **Static detachment.** A family is in the `VmConfig` exactly when it claims at least one
-pc, the two init families always, and — since S21 — **a delegation family exactly when the
-image declares it**. Those are the three presence rules and there are no others. The
+pc, **every `constants::family::WINDOW_FAMILIES` member** always, and — since S21 — **a
+delegation family exactly when the image declares it**. Those are the three presence rules
+and there are still no others: S25b's `ADVICE_WINDOWS` joined rule 2 rather than adding a
+fourth, which is what the frozen list is for. The
 preprocessor derives the set; nothing selects it. A pc whose family is unavailable is
 claimed by nobody, which is the same loud failure as an unknown instruction — that is what
-makes detachment sound. `decode_program_detaching` exists only to show it; detaching an init
-family leaves it out of the set, which is refused.
+makes detachment sound. `decode_program_detaching` exists only to show it; detaching a
+window family leaves it out of the set, which is refused.
 
 **A delegation family claims no pc, so the instruction sweep can never learn that a program
 calls one**: the ecall number lives in `a7` at run time and no instruction word carries it.
@@ -170,7 +179,7 @@ cover is therefore not expressible.
 | --- | --- | --- |
 | `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MEM_WORD`, `MEM_SUBWORD` | `pc next_pc rs1 rs2 rd imm extra_mask` | `0b1011_1111` |
 | `MUL_DIV`, `ATOMICS` | `pc next_pc rs1 rs2 rd extra_mask` | `0b1001_1111` |
-| `INIT_TEARDOWN`, `ZERO_WINDOWS`, `KECCAK_F` | — | `0` |
+| `INIT_TEARDOWN`, `ZERO_WINDOWS`, `ADVICE_WINDOWS`, `KECCAK_F`, `POSEIDON2`, `FR_ARITH` | — | `0` |
 
 **`funct3` is in no tuple.** The extra mask is one-hot per mnemonic, which leaves it
 nothing to say; it remains a row field so a later family that wants it can take it.
@@ -249,7 +258,9 @@ Every one is an `Err`, and `Display` names what it refused.
 - `TableTooShort { family, pc, height }`.
 - `WindowRule { rule }` — the derived family set lacks `INIT_TEARDOWN` or `ZERO_WINDOWS`
   (only a detaching test can make it), or their heights differ: a `ZERO_WINDOWS` height
-  below `INIT_TEARDOWN`'s would give image words a second init row.
+  below `INIT_TEARDOWN`'s would give image words a second init row. `ADVICE_WINDOWS` is
+  **not** part of that height rule and derivation does not check it here; its presence and
+  its extent are statement rules, in `check_memory_windows` below.
 - `UnknownDelegation { addr, number }` — a declaration record in the image names an ecall
   number no registered family answers. Loud rather than ignored: the guest and this
   preprocessor disagree about the ABI, and a silently dropped declaration makes the guest's
@@ -273,26 +284,41 @@ not move a byte, and every path above still resolves.
 
 `VmConfig` is the static shape: the family set ascending with each height, and
 `bytecode_size_words`. **Per-proof shard counts are not in it.** A delegation family's id is
-above the two window families', so a config lists it last;
-`crates/program/tests/delegation.rs` holds every registered delegation to that. Wire form, frozen: `u32`
+above the two **RAM** window families', so a config lists it after both; it is **no longer
+last**, S25b having appended `ADVICE_WINDOWS = 12` above all three delegation ids, so the
+tail of an ascending family list is now always that same entry whatever the program
+declares. `crates/program/tests/delegation.rs` holds every registered delegation to
+both halves. Wire form, frozen: `u32`
 LE family count `k`, then `k` pairs `u32` LE `(family, height)`, then `u32` LE
 `bytecode_size_words`; `from_bytes` refuses a wrong length, an unknown or out-of-order
 family, a height off the menu, a family set without `INIT_TEARDOWN` or `ZERO_WINDOWS`,
-and those two at different heights. Presence, not position: since S21 the init families no
-longer have the highest ids, `KECCAK_F` being 9.
+and those two at different heights. It does **not** require `ADVICE_WINDOWS`, which
+derivation nonetheless puts in every config: a family absent from a config proves no
+shard, so nothing is unsound without it, and its presence is checked where the shard
+counts are. Presence, not position: since S21 the init families no longer have the highest
+ids — `KECCAK_F` is 9, and since S25b `ADVICE_WINDOWS` is 12, above all three delegation
+families.
 
 The **statement descriptor** is the static `VmConfig`, the per-proof shard count of each
 of its families, and the RAM window list, as three adjacent typed messages: `VM_CONFIG`
 carrying `[ids..., heights..., bytecode_size_words]` (length `2k+1`, which fixes `k`),
 `SHARD_COUNTS` carrying one count per family in the same order, and `MEMORY_WINDOWS`
 carrying `ZERO_WINDOWS`' window ids `[w_1 … w_k]`, empty when there are none.
-`absorb_statement_descriptor` is it, and checks nothing.
+`absorb_statement_descriptor` is it, and checks nothing. **There is still no fourth
+message**, and S25b is why that is worth saying: the advice region's extent is already the
+second message's count at `ADVICE_WINDOWS`' position, so advice cost no new tag, no new
+`PublicInputs` field and no amendment to the absorb order `docs/spec/memory.md` §7 freezes
+(`docs/spec/advice.md` §6).
 
 `check_memory_windows` is the verifier's rule over the same three, before the memory
 challenges (`docs/spec/memory.md` §3.5): both init families present at one height `h`;
 `INIT_TEARDOWN`'s shard count 1; one window id per `ZERO_WINDOWS` shard; the ids strictly
-increasing; every id in `[1, 2^29 / h − 1]`. `ZERO_WINDOWS` shard `i` is window `w_i`. A
-breach is `WindowRule`, its `rule` naming which. It takes the `VmConfig` as
+increasing; every id in `[1, 2^29 / h − 1]`. `ZERO_WINDOWS` shard `i` is window `w_i`.
+**Then `ADVICE_WINDOWS`' two rules** (S25b, `docs/spec/advice.md` §5 and §6): it is in the
+config, and its shard count fits the region, `2^29 / a` windows of `4a` at its **own**
+height `a`. It has no id list and needs none — advice is contiguous from `ADVICE_ORIGIN`,
+so shard `i` is advice window `i` by position, which is also why the statement gained no
+fourth message. A breach is `WindowRule`, its `rule` naming which. It takes the `VmConfig` as
 `decode_program` derives it or `VmConfig::from_bytes` decodes it — families strictly
 ascending — and does not check that shape again.
 
@@ -306,7 +332,11 @@ ascending — and does not check that shape again.
 4. for each family ascending: `append_g1_list(COMMITMENT, points)`, **one**
    length-delimited message per family, each point four `Fr` limbs — an instruction
    family's exported columns in lookup-tuple order; `INIT_TEARDOWN`'s
-   `[cm(image_init_column(image, h))]`; `ZERO_WINDOWS`' empty list;
+   `[cm(image_init_column(image, h))]`; an empty list for `ZERO_WINDOWS`, for every
+   delegation family and for `ADVICE_WINDOWS` — the last **deliberately**, not for want of
+   a column: committing its init column here would put the advice contents into program
+   identity, a public per-program constant, and a program that could only ever run on one
+   blob would have neither privacy nor generality (`docs/spec/advice.md` §2);
 5. one raw `sample()`: the identity. Raw, not a `challenge_scalar`, because a challenge
    under a scalars tag would be one tag in two kinds.
 
@@ -349,9 +379,9 @@ useless. The verifier never sees an ELF.
 | File | What |
 | --- | --- |
 | `tests/partition.rs` | Acceptance 3 over every guest (claimed pcs are the instruction slots, each once; both init families in every config), 4 (`guests/atomics` with atomics detached fails at its first atomic's pc), 5 (fib has no atomics; `atomics` has them; `mul_free.elf` has no mul/div), and an unknown opcode's named failure |
-| `tests/delegation.rs` | **S21.** The registry read three ways and its two rules (every number in the precompile range, every family above the window ones, none claiming a pc or carrying a table); the byte-wise scan at every offset 0–7; a family declared twice counted once; a truncated record declaring nothing; a segment with no file bytes carrying none; an unknown number refused by name; and **acceptance 8 over every committed guest** — the two keccak guests declare `KECCAK_F`, no other guest declares anything at all, and each config's delegation families are exactly its declared ones. The second clause is the one that matters: `#[used]` would put the record in all seventeen. Plus, `#[ignore]`d, `reachability_survives_the_optimiser`: `keccak-test` and `fib` built from source at **both** optimisation levels, since the committed fixtures are `debug` and the `core::hint::black_box` in the shim exists for `opt-level = 3` |
+| `tests/delegation.rs` | **S21.** The registry read three ways and its rules (every number in the precompile range, every id above the **two RAM** window families' and — since S25b — **below `ADVICE_WINDOWS`**, so a delegation family is no longer the tail of a config and a new one takes 13; none claiming a pc or carrying a table); the byte-wise scan at every offset 0–7; a family declared twice counted once; a truncated record declaring nothing; a segment with no file bytes carrying none; an unknown number refused by name; and **acceptance 8 over every guest in the tree** — each declares exactly the families whose shims it links, and each config's delegation families are exactly its declared ones. The clause that matters is that a guest linking no shim declares nothing: `#[used]` would put the record in every guest that links the SDK. Plus, `#[ignore]`d, `reachability_survives_the_optimiser`, built from source at **both** optimisation levels, since the committed fixtures are `debug` and the `core::hint::black_box` in the shim exists for `opt-level = 3` |
 | `tests/tables.rs` | Acceptance 6 (every exported column of every table scanned: non-live rows are all `MINUS_ONE`, live rows equal to the stored values and neither padding nor zero), code above a shorter family's table, the 59 row kinds pinned numerically, `narrowest` at each width boundary, 7 (`next_pc` against the loader's halfword map), exact heights, `TableTooShort` at the boundary, `ProgramTooLarge` at the ceiling with segments without file bytes not counted, `ImageOutsideWindow` at `4h − 1` / `4h`, the image column of every guest against `initial_word` and the segment bytes, menu and version refusals, the frozen field masks, one-hot kinds naming exactly 59 mnemonics over the ISA corpus, narrowest storage, determinism, fixture pins |
-| `tests/config.rs` | The `VmConfig` wire form byte for byte, its refusals, a config without either init family or with the two at different heights refused by derivation and by `from_bytes`, a nine-family round trip, the identity wire form, the statement descriptor as three adjacent messages, and every `check_memory_windows` rule at its boundary |
+| `tests/config.rs` | The `VmConfig` wire form byte for byte, its refusals, a config without either init family or with the two at different heights refused by derivation and by `from_bytes`, an every-family round trip, the identity wire form, the statement descriptor as three adjacent messages (`fib`'s config is **eleven** families since S25b — the three delegations its `io_digest` epilogue reaches, and `ADVICE_WINDOWS`, which is in every config and proves nothing there), and every RAM window rule of `check_memory_windows` at its boundary |
 | `tests/identity.rs` | **All but two `#[ignore]`d — they need `assets/ptau/ppot_0080_24.ptau`.** fib at the defaults twice in-process and against the pin; the recipe rebuilt message by message; acceptance 9's moves plus a `.rodata` byte, a `.data` byte and the entry pc; a segment without file bytes resized does not move it; fib rebuilt from source twice. In CI: `identity_from_commitments` rebuilt message by message over a distinct point per family, and moved by the entry pc and by each commitment. `setup_commitments` — which column `INIT_TEARDOWN` commits, at which height — is reached only by the ignored recipe test |
 | `tests/lookup_tables.rs` | S15's acceptance 10 — the packed table against an independent reference, and a poisoned row caught — a height below the table's 131,105 rows refused with a panic, and the three key ranges pairwise disjoint and off zero; and S17's pin: in CI, `the_generic_table_commitments_are_pinned_over_the_ceremony` holds `generic_table.txt` to `identity.txt`'s ceremony and to three 64-byte points; `#[ignore]`d, `the_generic_table_commitments_are_the_ceremonys_at_every_height` recomputes `generic_commitments` over the ceremony, holds it to the pin, and holds the table over `2^18`, `2^20` and `2^22` to the same three points |
 

@@ -33,9 +33,10 @@ pub fn verify_sumcheck(claim: Fr, rounds: &[[Fr; 4]], t: &mut Transcript) -> Opt
 pub fn verify(artifact: &CircuitArtifact, proof: &GkrProof, outputs: &OutputClaims,
               challenges: &ExternalChallenges, t: &mut Transcript) -> Result<Vec<BaseClaim>, GkrError>;
 
-// src/memory.rs, docs/spec/memory.md §3.3 and §4
+// src/memory.rs, docs/spec/memory.md §3.3 and §4, docs/spec/advice.md §6
 pub struct BoundaryFinals { pub reg_ts: [u64; 32], pub pc_ts: u64, pub reg_values: [u32; 31] }
-pub fn window_challenges(memory: &ExternalChallenges, window: u32, trace_vars: u32) -> ExternalChallenges;
+pub fn window_challenges(memory: &ExternalChallenges, space: u8, window: u32, trace_vars: u32)
+    -> ExternalChallenges;                     // `space` is RAM or ADVICE; S25b
 pub fn boundary_factors(memory: &ExternalChallenges, entry_pc: u32, finals: &BoundaryFinals) -> (Fr, Fr);  // (W_b, R_b)
 pub fn reconciles(read_roots: &[Fr], write_roots: &[Fr], factors: (Fr, Fr)) -> bool;
 
@@ -87,8 +88,16 @@ pub fn channel_holds(root: (Fr, Fr)) -> bool;    // num == 0 AND den != 0, and n
   `virtual_at_row` and `virtual_at_point` for `V[row]` and `V[ram_live]`,
   `docs/spec/gkr.md` §2.1.
 - **The memory argument's verifier share is `src/memory.rs`.** `window_challenges` copies
-  slots 1–4 and derives slot 5, `γ_M + RAM + α_addr·4·2^trace_vars·window`, never read from a
-  proof. `boundary_factors` evaluates every register and PC tuple through `eval_gate` on
+  slots 1–4 and derives slot 5, `γ_M + space + α_addr·(origin + 4·2^trace_vars·window)`, never
+  read from a proof. **The space is a parameter since S25b**, standing exactly where the
+  literal `RAM` used to: `address_space::RAM` at origin 0 for the two RAM window families,
+  `address_space::ADVICE` at `guest_memory::ADVICE_ORIGIN` for `ADVICE_WINDOWS`, and a
+  panic for any other — the private `window_origin` knows two regions and a caller naming
+  a third has mistaken a delegation anchor for one. A window shard of one space therefore
+  cannot answer a query of the other: their tuples differ in the first term
+  (`docs/spec/advice.md` §6). Advice windows are numbered from 0 at `ADVICE_ORIGIN` and are
+  contiguous, so the shard index *is* the window and there is no id list to consult.
+  `boundary_factors` evaluates every register and PC tuple through `eval_gate` on
   `constraints::memory::read_tuple` — the circuits' own tuple gate, at operand values
   placed by `constants::memory::PART_*`, the mask 1, `addr`, `ts`, `value` — with `x0`'s
   final value 0 and the pc's `HALT_PC`; `BoundaryFinals` documents the 64-scalar

@@ -155,7 +155,7 @@ it and nothing else. Checks run in this order, and the first that fails names th
 
 **B5 is the cross-shard reconciliation, and it is one check, not one per shard.** It
 multiplies the read-side roots and the write-side roots across **every** shard of every
-family in the statement, `INIT_TEARDOWN` and `ZERO_WINDOWS` included, applies the
+family in the statement, the three window families included, applies the
 boundary factors once, and requires the products equal and nonzero
 (`docs/spec/memory.md` §4.2). Every operand is the statement's or the key's — the
 boundary, the root list, `vk.entry_pc` and the four memory challenges B2 drew — and no
@@ -246,9 +246,12 @@ families, but two families interleave: `ADD_SUB_LUI_AUIPC` may own cycles 1 and 
 `JUMP_BRANCH_SLT` owns 2, so their windows overlap by construction. A block-wide
 disjointness rule could never hold for any real execution.
 
-**Which families own cycles.** The seven instruction families do; `INIT_TEARDOWN` and
-`ZERO_WINDOWS` do not, their rows being RAM words rather than cycles
-(`docs/spec/memory.md` §3). **`KECCAK_F` does not either, and S21 is where that was paid
+**Which families own cycles.** The seven instruction families do; the three window
+families do not, their rows being addresses rather than cycles (`docs/spec/memory.md` §3,
+`docs/spec/advice.md` §5). `ADVICE_WINDOWS` slotted in with no change here at all — it
+appended to `family::CYCLE_OWNING` as `false` and takes `TRIVIAL_TS_WINDOW` like its two
+siblings — and that is load-bearing rather than incidental: its `M[0]` is a teardown
+timestamp, not a cycle column, so a window read off it would mean nothing. **`KECCAK_F` does not either, and S21 is where that was paid
 out**: it appended to `family::CYCLE_OWNING` as `false`, and its shard record carries a
 min/max invocation timestamp with no disjointness requirement — per-address ordering is
 already carried by the multiset gap checks. **S21 slotted in with zero `verify_block`
@@ -309,10 +312,11 @@ section and every phase snapshot is left in `archive`.
 prompt's `&TraceArchive` widened by must-be-exact 7, which requires the block-level
 snapshots to *be* the archive's phase sections.
 
-**The two RAM window families run no cycles**, so `plan_shards` counts 0 for both. Their
+**The three window families run no cycles**, so `plan_shards` counts 0 for each. Their
 shards are the statement's, not the plan's: exactly one `INIT_TEARDOWN` shard for window
-0, and one `ZERO_WINDOWS` shard per window the execution touches
-(`docs/spec/memory.md` §3).
+0, one `ZERO_WINDOWS` shard per RAM window the execution touches
+(`docs/spec/memory.md` §3), and `trace::advice_windows` advice shards, contiguous from
+`ADVICE_ORIGIN` (`docs/spec/advice.md` §6).
 
 ### 5.1 The shard cut
 

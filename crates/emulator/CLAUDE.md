@@ -6,15 +6,18 @@ dispatch, and the tracing path that fills `crates/trace`'s structures. **It is n
 QEMU clone**: it takes the execution path its trace generation needs, and since S25
 nothing holds it to QEMU's below the level of what a guest computes (see "QEMU is an
 output oracle" below). **`docs/spec/execution-trace.md` is the convention the trace
-follows; `docs/spec/ecall-abi.md` is the ABI the ecalls implement**; and, since S21,
-**`docs/spec/delegation.md`** for what a delegation ecall does.
+follows; `docs/spec/ecall-abi.md` is the ABI the ecalls implement**; since S21,
+**`docs/spec/delegation.md`** for what a delegation ecall does; and, since S25b,
+**`docs/spec/advice.md`** §8 for the advice region a load may reach.
 
 ```rust
-pub struct GuestIo { pub input: Vec<u8>, pub hint: Vec<u8> }
+pub struct GuestIo { pub input: Vec<u8>, pub hint: Vec<u8>, pub advice: Vec<u8> }   // + Default
 pub struct Execution { pub regs: [u32; 32], pub exit_code: i32, pub cycle_count: u64,
                        pub io: IoStreams, pub stderr: Vec<u8> }
 pub enum EmuError { NotAnInstruction { pc }, IllegalInstruction { pc, word }, Ebreak { pc },
                     Misaligned { pc, addr, width }, OutOfBounds { pc, addr },
+                    AdviceWrite { pc, addr },                                // S25b
+                    AdviceOutOfBounds { pc, addr, len },                     // S25b
                     ClockOverflow { cycle },
                     DelegationFamilyAbsent { pc, number } }                  // + Display
 
@@ -53,9 +56,25 @@ or rebuilding the streams from the log.
   `remu`), and `INT_MIN / -1` gives `INT_MIN` remainder 0.
 - **Fatal guest errors, never emulated around**: a halfword or word access not a multiple
   of its width (`Misaligned`, in both paths — must-be-exact 9), any data access or
-  ecall byte outside the RAM window (`OutOfBounds`), `ebreak`, a pc that is not the
+  ecall byte outside the RAM window (`OutOfBounds`), a store or an atomic in the advice
+  region (`AdviceWrite`) and a load past the advice the prover supplied
+  (`AdviceOutOfBounds`), `ebreak`, a pc that is not the
   start of an instruction (the all-zero halfword included), a slot the decoder refuses,
   and the 38-bit clock running out (`ClockOverflow`).
+- **The advice region is addressed, not streamed** (S25b, `docs/spec/advice.md` §8).
+  `GuestIo::advice` is mapped read-only at `guest_memory::ADVICE_ORIGIN`, and the address
+  decides the space **totally**: `word` reads the blob at or above the origin and RAM
+  below it, because the two ranges are disjoint by construction and no caller has to say
+  which it meant. A load goes through `load_word`, which is `data_word`'s rules plus the
+  region; every other caller — a store, an atomic's read-modify-write, an ecall's buffer —
+  keeps `data_word`, which refuses an advice address as `AdviceWrite`. Misalignment is
+  checked first and identically, so an unaligned advice load is `Misaligned` and not
+  something else, and a final partial word is zero-padded — padding is not a way past the
+  extent, which `load_word` checks first. `AdviceOutOfBounds` is its own error rather than
+  `OutOfBounds`, which says "outside the RAM window" and would be a lie: the address *is*
+  in the advice space, and what it is past is this run's extent. All three refusals are
+  the circuit's too, which is the point: an execution the argument could not prove is one
+  no trace describes.
 - **A nonzero exit is an execution.** `run` returns it with its `exit_code`; refusing to
   prove one is a later stage's policy.
 - **The exit row writes the halting sentinel.** An `EXIT` ecall's row commits
@@ -83,7 +102,12 @@ or rebuilding the streams from the log.
   program whose `VmConfig` lacks the family it calls is `DelegationFamilyAbsent`, loudly:
   the executor and the preprocessor disagreeing about the ABI is not something to answer
   `-ENOSYS` to. An executor *without* the circuit — `qemu-riscv32` — answers `-ENOSYS` and
-  the guest's software fallback runs, which is the whole of acceptance 3.
+  the guest's software fallback runs; what holds the two paths to one function is
+  `tests/revm.rs::a5_every_delegated_permutation_is_the_reference`, which checks it
+  directly and needs no emulator. It used to be acceptance 3, a run of the same binary
+  under both executors, and that test is **retired at S25b**: `guests/revm-block` reads
+  its witness from advice now, and an advice guest cannot run under QEMU at all
+  (`docs/spec/advice.md` §9, §10.1).
 - **`keccak_f` is the one keccak permutation in the repository** and the emulator owns it, because
   the emulator is what executes it; the circuit's forward pass is checked against it and
   `tests/keccak.rs` checks it against `tiny-keccak` on all 1,600 single-bit states. The
@@ -105,6 +129,14 @@ design* while computing the same value. S25 made that universal — publishing `
 at exit means Poseidon2, so every guest that moves committed bytes delegates — and the
 register comparison, kept alive, would have been a suite asserting that this VM must
 execute the way a foreign emulator does.
+
+**A guest that reads advice is out of these suites entirely** (owner's decision, S25b).
+A host loader maps only the `PT_LOAD` segments the image declares, and the advice region
+is in none of them, so under QEMU it is unmapped and the guest's first advice load faults:
+there is no run to compare, not a run that disagrees. `guests/revm-block` is the one such
+guest today, which is why `tests/revm.rs`' acceptance 3 is retired
+(`docs/spec/advice.md` §9, §10.1). Every other guest keeps its coverage, and it is the ISA
+those suites were really covering.
 
 What covers a trace instead is this VM's own semantics and constraints: `tests/trace.rs`
 for the frame, the clock, routing, the halting sentinel and every ecall's answer;
@@ -132,12 +164,13 @@ docker run --rm -v "$PWD":/w -w /w -e CARGO_TARGET_DIR=/tmp/t rust:latest bash -
 | --- | --- |
 | `src/lib.rs` (unit) | the last cycle on the 38-bit clock runs and the next is `ClockOverflow` |
 | `tests/keccak.rs` | `keccak_f` against `tiny-keccak`: the all-zero state, the all-ones state, **all 1,600 single-bit states**, a random walk, and `lanes_of`/`words_of` round-tripping. 7 tests |
-| `tests/guests.rs` | the guests' host-computed answers (fib, heap, atomics, rvc-dense), acceptance 10 (echo's delegated permutation is the S02 one; it was the `-ENOSYS` fallback's until S23, which QEMU still takes), orderbook's advice invariance, `opcodes` executes all 58 non-trapping mnemonics and every instruction of its compressed block, acceptance 11 (seven misaligned kinds, both paths), `run` == `trace_run`, the recorded fd 0 stream is what the guest consumed; and **S21's acceptance 3**: the six digests `guests/keccak-test` checks itself against, re-derived from `tiny-keccak` and read out of the guest's own source so a stale literal cannot pass, and both keccak guests run to their exit statuses under the delegation ecall |
+| `tests/guests.rs` | the guests' host-computed answers (fib, heap, atomics, rvc-dense), acceptance 10 (echo's delegated permutation is the S02 one; it was the `-ENOSYS` fallback's until S23, which QEMU still takes), orderbook's **fd 3 hint** invariance — `orderbook_ignores_advice_it_cannot_verify`, which predates and is not S25b's advice *region*: it is the hint stream, and what it shows is that a guest ignores what it cannot verify — `opcodes` executes all 58 non-trapping mnemonics and every instruction of its compressed block, acceptance 11 (seven misaligned kinds, both paths), `run` == `trace_run`, the recorded fd 0 stream is what the guest consumed; and **S21's acceptance 3**: the six digests `guests/keccak-test` checks itself against, re-derived from `tiny-keccak` and read out of the guest's own source so a stale literal cannot pass, and both keccak guests run to their exit statuses under the delegation ecall |
 | `tests/trace.rs` | acceptance 3 (balance, heap traffic included), 4 (a corrupted RAM read, register write mid-chain, pc write and gap, a forged initial value, and a stale read, each named), 5 (the four-slot clock over every event; `amoadd.w` fills all four slots), 6 (routing), the frame table — roles and slots — restated from the spec and checked on every row, the halting sentinel (the exit row alone writes `HALT_PC`, as the last pc write; every other pc write even), ecall transfers with every byte held to the recorded streams, every ecall answering as the ABI says (must-be-exact 2 without QEMU), the rows rebuilding the log exactly, `final_state`, and `trace::init_windows` (fib's stack window at 2^22, 2^20 and 2^16; every traced guest's list exactly its touched windows above 0 at every height, and passing `program::check_memory_windows`) |
+| `tests/advice.rs` | **S25b**, twelve tests over hand-encoded programs — the property under test is the address map, a guest reaching `0x8000_0000` with an ordinary `lw`, and no committed guest does that: what a load reads, a partial final word zero-padded, a second read of one word chaining to the first, `run` == `trace_run` over advice; the fatal ones — a word store, a byte store and an atomic, each `AdviceWrite`; a load past the supplied extent and a load with no advice supplied, each `AdviceOutOfBounds`; and a misaligned advice load, which is `Misaligned` and not something else; plus the two ranges being disjoint and a run touching both keeping its events apart. These guests would fault under `qemu-riscv32` and are in no cross-executor suite |
 | `tests/archive.rs` | acceptance 7 (byte-identical round trip, hash-equal payloads, answers without re-execution, `io_digest`) and 8 (five phases, the timing section byte for byte, out-of-order refused by byte patch) |
 | `tests/qemu_outputs.rs` | **`#[ignore]`d** — the ten-guest suite computes the same exit status and the same fd 1 under both executors; a different input gives a different answer, which is what keeps the comparison from passing on nothing; `ebreak` stops both. Internals are not compared (see above) |
-| `tests/revm.rs` | **S24**, over `guests/revm-block`, which is built from source rather than read from a committed ELF. In the `test` step: the committed `BlockWitness` is canonical and re-encodes to itself, each canonicity rule refuses by name, the output commitment's three sections read back field by field, native host revm produces the committed output, every keccak-f frame the workload delegated is `tiny-keccak`'s answer, a block whose transactions do not fit its gas limit is refused — including the case revm cannot see, two transactions that each fit the header and together do not — and `BLOCKHASH` still answers `EmptyDB`'s placeholder, which is the pin on the gap that keeps `BlockWitness` unfrozen. **`#[ignore]`d, and CI asks for them by name** at `APOGEE_GUEST_PROFILE=release`: the derived family set (every registered family present, S23's two included since the guest publishes `io_digest` at exit; every instruction a live row of exactly one family), the guest's fd 1 against native revm's on the same witness, the harvested frames against the committed ones, the cycle and occupancy report, and the image against the two ceilings its height turns on. One more needs `qemu-riscv32`: the same binary under both executors commits the same bytes, which is the delegation against the software fallback end to end |
-| `tests/consistency.rs` | the three-way consistency suite over `guests/consistency`: host and emulator agree on every corpus input (fd 1 by section, exit status, a panic's message, line and column); every workload, fault and bad input exercised; `trace_run` == `run` and the log balances and ends on `HALT_PC`, a nonzero exit included, with every family but the two init families and all eight M instructions executed; the heap probes exit 71; a flipped byte caught at its workload and every leg's flip classified; **`#[ignore]`d** — the same corpus with QEMU as the third leg |
+| `tests/revm.rs` | **S24**, over `guests/revm-block`, which is built from source rather than read from a committed ELF. In the `test` step: the committed `BlockWitness` is canonical and re-encodes to itself, each canonicity rule refuses by name, the output commitment's three sections read back field by field, native host revm produces the committed output, every keccak-f frame the workload delegated is `tiny-keccak`'s answer, a block whose transactions do not fit its gas limit is refused — including the case revm cannot see, two transactions that each fit the header and together do not — and `BLOCKHASH` still answers `EmptyDB`'s placeholder, which is the pin on the gap that keeps `BlockWitness` unfrozen. **`#[ignore]`d, and CI asks for them by name** at `APOGEE_GUEST_PROFILE=release`: the derived family set (every registered family present, S23's two included since the guest publishes `io_digest` at exit; every instruction a live row of exactly one family), the guest's fd 1 against native revm's on the same witness, the harvested frames against the committed ones, the cycle and occupancy report, and the image against the two ceilings its height turns on. **Since S25b every run here supplies both streams**: a 76-byte `revm_block::PublicHeader` on fd 0, derived from the committed witness rather than pinned beside it, and the bulk `BlockWitness` as advice. Acceptance 3 — the same binary under both executors — is **retired**, an advice guest not running under QEMU at all; what it established is `a5_every_delegated_permutation_is_the_reference`'s |
+| `tests/consistency.rs` | the three-way consistency suite over `guests/consistency`: host and emulator agree on every corpus input (fd 1 by section, exit status, a panic's message, line and column); every workload, fault and bad input exercised; `trace_run` == `run` and the log balances and ends on `HALT_PC`, a nonzero exit included, with every family but the **three window families** and all eight M instructions executed; the heap probes exit 71; a flipped byte caught at its workload and every leg's flip classified; **`#[ignore]`d** — the same corpus with QEMU as the third leg |
 
 The guests are the committed ELFs in `crates/loader/tests/vectors/`, pinned there — except
 in `tests/consistency.rs`, which builds `guests/consistency` from source at test time so

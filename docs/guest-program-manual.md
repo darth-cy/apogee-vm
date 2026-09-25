@@ -218,6 +218,7 @@ list, for when something has already gone wrong.
 pub fn read_input(buf: &mut [u8]) -> usize;    // fd 0, committed
 pub fn commit(bytes: &[u8]);                   // fd 1, committed
 pub fn hint(buf: &mut [u8]) -> usize;          // fd 3, prover advice
+pub fn advice(len: usize) -> &'static [u8];    // the ADVICE region, prover advice in bulk
 pub fn log(bytes: &[u8]);                      // fd 2, verifier-ignored
 pub fn exit(code: i32) -> !;
 pub fn poseidon2_permute(state: &mut [u8; 96]) -> bool;   // false on -ENOSYS
@@ -231,26 +232,41 @@ pub fn keccak256(input: &[u8]) -> [u8; 32];    // delegated, or the same thing i
 | 2 | no | diagnostics. Free-form, and the verifier never looks at it |
 | 3 | **no** | private hints: **nondeterministic prover advice** |
 
-Six rules worth having in front of you while you write:
+Beside those four there is the **advice region** (`docs/spec/advice.md`): a read-only
+address space at `0x8000_0000` the prover fills and `guest_sdk::advice` hands you as a
+slice. It is the same kind of thing as fd 3 in soundness terms — the prover picks the
+bytes and nothing binds them — and differs in mechanism and scale: a hint is a few words
+through an ecall, advice is megabytes through ordinary loads. Use it when the witness is
+large, and read rule 2 twice.
+
+Seven rules worth having in front of you while you write:
 
 1. **`read_input` and `hint` may return short.** They fill the buffer or stop
    at the end of the stream. If you need an exact length, check the count. A
    guest that proceeds on a partly-filled buffer proves something about zeroes.
-2. **A hint binds nothing.** The prover chooses fd 3's bytes. If a hint can
-   change what you write to fd 1, and you have not checked it against something
-   the public I/O digest *does* bind, your proof is meaningless — the prover
-   picked the output. A hint is a shortcut to a value you then verify.
+2. **A hint binds nothing, and neither does advice.** The prover chooses fd 3's
+   bytes and the advice region's. If either can change what you write to fd 1,
+   and you have not checked it against something the public I/O digest *does*
+   bind, your proof is meaningless — the prover picked the output. A hint is a
+   shortcut to a value you then verify, and advice is the same shortcut at
+   scale: read a commitment on fd 0, read the bulk from advice, and validate
+   what you use against that commitment before you use it.
 3. **Anything that would return host data is refused.** `getrandom`,
    `clock_gettime`, `gettimeofday`, and whatever `HashMap` reaches for to seed
    its `RandomState` all answer `-ENOSYS`. That is deliberate: each is
    nondeterministic advice wearing the costume of a library call.
-4. **`poseidon2_permute` returns `true` on an executor that has the circuit**,
+4. **A guest that reads advice does not run under `qemu-riscv32`.** A host
+   loader maps only the `PT_LOAD` segments your image declares, and the advice
+   region is in none of them, so the first advice load faults. Such a guest is
+   out of the QEMU suites by construction (owner's decision, S25b) — which also
+   means you lose that oracle, so weigh it before moving a small input there.
+5. **`poseidon2_permute` returns `true` on an executor that has the circuit**,
    which this VM has had since S23, and `false` on one that answers `-ENOSYS`,
    which `qemu-riscv32` does. You must still have a software path and take it
    on `false`, or your guest computes nothing under QEMU. Any *other* failure
    exits nonzero rather than falling back silently. Rule 6 is the same story
    for `keccak256`, which hides the fallback inside the shim.
-5. **`hint` needs an fd 3 to read.** The zkVM always has one. `qemu-riscv32`
+6. **`hint` needs an fd 3 to read.** The zkVM always has one. `qemu-riscv32`
    only has the descriptors you give it, and a `read` on a closed one answers
    `-EBADF`, which the SDK treats as an executor fault and exits 70 on. Running
    a guest that calls `hint` by hand means opening fd 3 yourself, even at an
@@ -260,7 +276,7 @@ Six rules worth having in front of you while you write:
    sh -c 'exec 3</dev/null; exec qemu-riscv32 ./yourguest' < input
    ```
 
-6. **`keccak256` is a delegation, and you call it like a function.** The sponge
+7. **`keccak256` is a delegation, and you call it like a function.** The sponge
    and the padding run in guest code and one ecall covers each keccak-f[1600]
    block: this VM answers that ecall out of the circuit the `KECCAK_F` family
    proves, and an executor without the circuit — `qemu-riscv32` — answers

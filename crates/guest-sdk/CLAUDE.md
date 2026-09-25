@@ -10,8 +10,12 @@ guest_sdk::entry!(main);                       // gives a function the `main` sy
 pub fn read_input(buf: &mut [u8]) -> usize;    // fd 0, committed
 pub fn commit(bytes: &[u8]);                   // fd 1, committed
 pub fn hint(buf: &mut [u8]) -> usize;          // fd 3, prover advice
+pub fn advice(len: usize) -> &'static [u8];    // S25b: the ADVICE region, no ecall
+pub fn public_input() -> &'static [u8];        // what fd 0 has given this run, in order
+pub fn public_output() -> &'static [u8];       // what fd 1 has taken, in order
 pub fn log(bytes: &[u8]);                      // fd 2, verifier-ignored
 pub fn exit(code: i32) -> !;
+pub fn exit_with_public_words(code: i32, words: [u32; 8]) -> !;   // S24: x24..x31, then EXIT
 pub fn poseidon2_permute(state: &mut [u8; 96]) -> bool;   // false on -ENOSYS
 
 // S21, docs/spec/delegation.md §2. The signature is frozen; the path is not.
@@ -77,6 +81,24 @@ the crate layout, the I/O rules, the build, and exporting the result as a
 - **A hint binds nothing.** The prover chooses fd 3's bytes. A guest that lets them change
   what it writes to fd 1, without checking them against something the public I/O digest
   does bind, has made its proof meaningless.
+- **`advice` binds nothing either, and it is the same rule at a different scale** (S25b,
+  `docs/spec/advice.md`). A hint is a few words through fd 3; advice is a read-only region
+  the guest addresses with ordinary loads, so `advice(len)` returns a slice and issues
+  **no ecall** — a megabyte of advice costs a megabyte of loads, no copy into RAM, no
+  `io_digest` over it and no delegation growth with its size. What does not change is what
+  it is worth: a guest that does not check what it read against something public has
+  proved only that *some* advice gave its output. `len` is the guest's and the prover's
+  agreement, and the convention here is to carry it in a compact public header on fd 0, so
+  that reading past the supplied extent is a guest bug rather than a silent zero; `advice`
+  itself only asserts `len` fits `ADVICE_LENGTH`, and a load past what the prover supplied
+  is a **fatal** executor error, the same class as a misaligned access.
+- **A guest that reads advice cannot run under `qemu-riscv32`** (owner's decision, S25b).
+  Every other rule here is about making an image a host loader can map; this one is the
+  limit of that. The advice region is by definition not in the image, so it is in no
+  `PT_LOAD`, so it is unmapped and the first advice load faults. Such a guest is out of
+  `crates/emulator/tests/qemu_outputs.rs`, `crates/loader/tests/qemu.rs` and the
+  three-way consistency suite by construction — not by an exclusion list — and the
+  non-advice guests keep that coverage (`docs/spec/advice.md` §9).
 - **The heap never meets the stack.** The allocator refuses a block — `exit(71)`, never a
   null — that would end above `__stack_top - STACK_RESERVE` (`constants::guest_memory`,
   8 MiB) or above the live `sp`, which it reads with one `mv` from inside `alloc`.

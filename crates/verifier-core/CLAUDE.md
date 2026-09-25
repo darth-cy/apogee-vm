@@ -27,9 +27,10 @@ Everything a shard's verification does except its one Mercury opening, `#![no_st
 pub struct VmConfig { pub families: Vec<(u32, u32)>, pub bytecode_size_words: u32 }
 impl VmConfig { pub fn height(&self, f: u32) -> Option<u32>; pub fn to_bytes(&self) -> Vec<u8>;
                 pub fn from_bytes(b: &[u8]) -> Option<VmConfig>; }
-pub fn window_height(config: &VmConfig) -> Result<u32, &'static str>;
+pub fn window_height(config: &VmConfig) -> Result<u32, &'static str>;   // the two RAM ones only
 pub fn absorb_statement_descriptor(tr: &mut Transcript, config: &VmConfig, shard_counts: &[u32], windows: &[u32]);
 pub fn check_memory_windows(config: &VmConfig, shard_counts: &[u32], windows: &[u32]) -> Result<(), &'static str>;
+                                                    // + ADVICE_WINDOWS' presence and extent, S25b
 pub struct ProgramIdentity(pub Fr);                        // to_bytes, from_bytes
 pub fn identity_digest(code_version: u32, config: &VmConfig, entry_pc: u32,
                        commitments: &[Vec<[u8; 64]>]) -> ProgramIdentity;
@@ -119,6 +120,34 @@ pub const OPENING_BYTES: usize = 704;  pub const SRS_VERIFIER_BYTES: usize = 320
 - **One statement, many shards.** A statement is proven when every one of its shards'
   proofs verifies against one `PublicInputs`: a shard checks the memory argument's
   reconciliation over roots the other shards' proofs establish.
+- **There are three window families, and only two of them share a height.**
+  `window_height` is `INIT_TEARDOWN` and `ZERO_WINDOWS` alone, because those two tile one
+  region between them and a `ZERO_WINDOWS` height below `INIT_TEARDOWN`'s would give an
+  image word a second init row (`docs/spec/memory.md` §3.2). S25b's `ADVICE_WINDOWS` tiles
+  a **different** region by itself, so that reason does not reach it and no rule invents
+  one: it takes a height off the menu like any other family and its extent is stated in
+  that height, `2^29 / a` windows of `4a` (`docs/spec/advice.md` §5.0).
+  `check_memory_windows` carries its two rules — present in the config, and a shard count
+  that fits the region — after the RAM ones. **Its presence is a statement rule and not a
+  decoding one**: `VmConfig::from_bytes` does not ask for it, because a family absent from
+  a config proves no shard and is unsound in no way, and a config no derivation produces is
+  refused where the rest of the statement is.
+- **Advice adds no message, no tag and no field.** Its windows are `0 .. k` contiguous from
+  `guest_memory::ADVICE_ORIGIN`, so shard `i` *is* advice window `i` by position and the
+  extent is already `SHARD_COUNTS` at that family's slot. `shard_challenges` therefore
+  passes `address_space::ADVICE` and the shard's own `index` to `window_challenges`, where
+  the RAM families pass `address_space::RAM` and 0 or `windows[index]`; the space is what
+  keeps a window shard of one region from answering a query of the other
+  (`docs/spec/advice.md` §6). A sparse advice map would have needed a tag, a field, an
+  amendment to the frozen absorb order and a movement in every key's bytes, for flexibility
+  nothing has asked for.
+- **`ADVICE_WINDOWS` is not lifted to the front of the statement with its two siblings**,
+  and that is deliberate. `groups`' order — `INIT_TEARDOWN`, `ZERO_WINDOWS`, then every
+  other family ascending — is `docs/spec/shard-proof.md` §1.2's frozen one, and those two
+  names are literal ids rather than a category: id 12 falls in "every other family
+  ascending" and lands last in every statement. Making it third would reorder statement
+  order, G8 and every committed transcript tape, to no end — the memory argument is a
+  multiset, and this is an absorb order, not a sequence of events.
 - **The global transcript is §2's G1–G11, implemented once** (`global_commit`), called by
   the prover's global commit phase and by `reduce_shard`. It has no step for the generic
   table: since S17 the table's commitments are inside the SRS digest, which G2 absorbs.
