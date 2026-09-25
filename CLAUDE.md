@@ -26,7 +26,7 @@ docs/
                  guest-target backend; and
                  revm-block.md, S24's two wire formats: the output commitment, frozen,
                  and BlockWitness, deliberately NOT frozen; and
-                 public-values.md, S25's THREE KINDS OF MEMORY: the two public windows
+                 public-values.md, S-IO's THREE KINDS OF MEMORY: the two public windows
                  and what binds them, the advice region and what does not, and why the
                  fd/syscall API is a compatibility wrapper and not the source of truth
   handoff/       one note per completed stage: frozen API, artifacts, deviations
@@ -159,8 +159,8 @@ cargo test --release -p prover --test mem -- --include-ignored --test-threads=1 
 cargo test --release -p prover --test block -- --include-ignored --test-threads=1  # DEFERRED; S20's block, 34.9 GB peak, 840 s
 cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1  # DEFERRED; S21's nine-shard block, 33.7 GB peak, 131 s
 cargo test --release -p prover --test recursion -- --include-ignored --test-threads=1  # DEFERRED; S23's ten-shard block, 35.2 GB peak, 120 s -- the heaviest by memory
-cargo test --release -p prover --test public_io -- --include-ignored --test-threads=1  # DEFERRED; S25's statement: public input in, advice checked against it, journal out
-RAYON_NUM_THREADS=6 cargo test --release -p prover --test revm -- --include-ignored --test-threads=1  # DEFERRED; the revm block, thirteen shards since S25, and it builds the guest; 38.4 GB peak, 536 s AT S24 -- a floor, not the current figure, S25 having added three shards and not re-measured; ELEVEN 2^20 shards, so the thread bound is not optional on a 48 GB machine
+cargo test --release -p prover --test public_io -- --include-ignored --test-threads=1  # DEFERRED; S-IO's statement: public input in, advice checked against it, journal out
+RAYON_NUM_THREADS=6 cargo test --release -p prover --test revm -- --include-ignored --test-threads=1  # DEFERRED; the revm block, thirteen shards since S-IO, and it builds the guest; 38.4 GB peak, 536 s AT S24 -- a floor, not the current figure, S-IO having added three shards and not re-measured; ELEVEN 2^20 shards, so the thread bound is not optional on a 48 GB machine
 cargo test -p prover --features metrics --test metrics -- --include-ignored --nocapture  # DEFERRED; S16's statement twice, 21.0 GB peak, 60 s, and prints both reports
 cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify -p verifier-core --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
@@ -382,16 +382,16 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   their Linux numbers (read 63, write 64, exit 93) so `qemu-riscv32` runs a guest
   unmodified; zkVM host calls take `0x0400..=0x04FF` and precompiles `0x0500..=0x05FF`,
   disjoint because a host call is nondeterministic prover advice and a precompile is a
-  deterministic function of memory. **No descriptor names a public value since S25**: fd 0
+  deterministic function of memory. **No descriptor names a public value since S-IO**: fd 0
   and fd 1 are POSIX compatibility streams (`FD_STDIN`, `FD_STDOUT` — the numbers frozen,
   only the names moved), fd 2 is ignored and fd 3 is advice, and a proof binds none of the
   four (`docs/spec/public-values.md` §1). `docs/spec/ecall-abi.md` is the table and a test
   holds it to the constants.
-- **`io_digest` is frozen, and since S25 it is worth something.**
+- **`io_digest` is frozen, and since S-IO it is worth something.**
   `transcript::io_digest(input, output)` is two `append_bytes` messages under
   `PUBLIC_INPUT_STREAM` and `PUBLIC_OUTPUT_STREAM` and one raw `sample`, in a sponge of its
   own. Later stages recompute it; nobody redefines it, and **the guest never computes it**.
-  S10 froze it, S14 recorded that it bound nothing to the execution, and S25 connected it:
+  S10 froze it, S14 recorded that it bound nothing to the execution, and S-IO connected it:
   G7 absorbs it before the memory challenges are squeezed, which fixes both byte strings
   before any challenge exists, and step 10c then holds the two public windows' committed
   columns to those same bytes (`docs/spec/public-values.md` §5.1). It needed no new message,
@@ -449,7 +449,7 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   memory argument's padded columns are filled from the log by `trace`'s memory builders,
   keyed by `constraints::memory`'s layout.
 - **QEMU is an oracle for what a guest computes, never for how this emulator computes it**
-  (owner's decision, S25). The comparison is the guest's **exit status** and its **fd 1
+  (owner's decision, S-IO). The comparison is the guest's **exit status** and its **fd 1
   bytes**, and nothing below that: no register, no pc, no instruction count, no trace. S12
   built `crates/emulator/tests/differential.rs` as a per-instruction register-file
   comparison; that file is now `tests/qemu_outputs.rs`, `emulator::qemu` is **deleted**, and
@@ -748,11 +748,11 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   one: `mem_word`'s `rd_selected` carries a 16+16 pair even though it is a copy of a RAM
   word, so **every register write in every family is locally bounded**, and the RAM side
   then follows from the register side and from `mem_subword`'s and `atomics`' own local
-  bounds. **Nothing is owed on top of that since S25**: a public value is written by an
+  bounds. **Nothing is owed on top of that since S-IO**: a public value is written by an
   ordinary `sw`, which `mem_word` already bounds, and a transfer row is still not provable.
 - **`sc.w` always succeeds, and that is a conformance deviation, not a soundness one.**
   It stores `rs2` and writes `rd = 0` with no reservation state anywhere in the machine.
-  The emulator has the same semantics, so emulator and circuit agree. Until S25 the QEMU
+  The emulator has the same semantics, so emulator and circuit agree. Until S-IO the QEMU
   comparison exempted it by name; there is no register comparison now, so what would show
   it is a guest whose committed output depended on spurious failure, and compiled code has
   none — LLVM never emits an unpaired `sc.w` and the standard CAS loop exits on its first
@@ -771,8 +771,8 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   refuses any other ecall and any transfer cycle by name. A delegation row falls through rather than halting,
   writes 0 into `a0`, and carries the `deleg` mirror query that pairs it with an invocation.
   **`read` (63) and `write` (64) are not among them and will not be** (owner's decision,
-  S25). S24 met that wall head on and did not route around it, proving a second binary with
-  its witness in `.rodata` and `keccak256` of its output in `x24..x31`; S25 removed the wall
+  S-IO). S24 met that wall head on and did not route around it, proving a second binary with
+  its witness in `.rodata` and `keccak256` of its output in `x24..x31`; S-IO removed the wall
   instead of climbing it. Making a syscall provable is not a gate or two — a transfer row
   that is permitted but not constrained against its ecall's buffer and length can write any
   value to any RAM word, which needs cross-row constraints this arithmetization has nowhere
@@ -813,7 +813,7 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   windows from `advice_first_window(h)` up, so the statement needs no advice window list:
   `shard_counts` already carries `k`. **No advice means no region**, so a program that uses
   none pays no shard, and `guest_sdk::advice` on such a run is a fatal `OutOfBounds`.
-  **It is not enforced read-only** (owner's decision, S25): that would need a space column
+  **It is not enforced read-only** (owner's decision, S-IO): that would need a space column
   on the load path of three frozen families and a gate refusing a store, and it would buy no
   soundness, advice being unbound either way. What a guest owes is a **check** of the advice
   against something a proof does bind — the public input, or a result that names it.
@@ -822,7 +822,7 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   the execution families nothing. What tells a public value, an advice word and a heap word
   apart is **which family initializes the address**, never a tag a load would have to name:
   a region with a tag of its own would put a space column on `mem_word`'s, `mem_subword`'s
-  and `atomics`' load path. Those three circuits are untouched by S25, and their range
+  and `atomics`' load path. Those three circuits are untouched by S-IO, and their range
   obligations already admitted every 4-aligned address below `2^32`.
 - **The delegation ABI is `docs/spec/delegation.md`, and it is frozen**: the ecall
   convention (`a7` the number, `a0` the frame base, `a0 ← 0`, fall-through), the indirect
@@ -1018,4 +1018,13 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 | S22 — secp256k1 ecrecover delegation | **cancelled** | `prompts/00-master.md`, "Stage register" |
 | S23 — Fr-arithmetic + Poseidon2 delegations | done | `docs/handoff/S23-fr-poseidon2.md` |
 | S24 — revm guest, synthetic-state block | done | `docs/handoff/S24-revm.md` |
-| S25 — Public values, private advice, and the I/O binding | done | `docs/handoff/S25-io-binding.md` |
+| S-IO — Public values, private advice, and the I/O binding | done | `docs/handoff/S-IO.md` |
+
+**S-IO takes no number, and that is deliberate** (owner's decision). It is not one of the
+original twenty-seven stages — it is the stage those twenty-seven forgot, inserted after
+S24 because nothing in the plan bound an execution's inputs and outputs and S24 hit that
+wall head on. **`S25` is still free and still means what `prompts/S24-revm.md` says it
+means**: the recorder that produces a `BlockWitness` for real blocks. The forward
+references to `S25` in that prompt and in `docs/handoff/S24-revm.md` are the owner's, are
+about that stage and are left alone; every `S25` in this repository that meant *this* stage
+now reads `S-IO`.

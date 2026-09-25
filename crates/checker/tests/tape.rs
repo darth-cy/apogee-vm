@@ -24,7 +24,7 @@ use verifier_core::{
 const POINT: [u8; 64] = [0; 64];
 
 /// S20's two-shard statement's shape: add/sub in two shards, jump/branch/slt
-/// in one, `INIT_TEARDOWN` in one, `ZERO_WINDOWS` in none — and, since S25,
+/// in one, `INIT_TEARDOWN` in one, `ZERO_WINDOWS` in none — and, since S-IO,
 /// the two public value families in one each and `ADVICE_WINDOWS` in none
 /// (`docs/spec/public-values.md` §4).
 fn key_and_statement() -> (VerifyingKey, PublicInputs) {
@@ -149,7 +149,7 @@ fn the_global_tape_is_the_frozen_order_and_the_committed_fixture() {
     );
     // G8: a group header per config family, a family with no shards included,
     // then one commitment message per shard, four limbs to a point. Seven
-    // families since S25, two of which run no shard here.
+    // families since S-IO, two of which run no shard here.
     assert_eq!(
         lines
             .iter()

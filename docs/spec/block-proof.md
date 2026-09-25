@@ -438,11 +438,11 @@ produces the digest every shard is seeded with.
 - **Nothing for a delegation family beyond §4's scoping.** S21 added `KECCAK_F` and
   `verify_block` did not change; S23's two families appended the same way
   (`docs/spec/delegation.md` §10).
-- **Nothing for S25's three window families.** `PUBLIC_INPUT`, `PUBLIC_OUTPUT` and
+- **Nothing for S-IO's three window families.** `PUBLIC_INPUT`, `PUBLIC_OUTPUT` and
   `ADVICE_WINDOWS` are not cycle-owning, so §4's ts-window rule does not reach them, and
   their shards enter the root product exactly as `ZERO_WINDOWS`' do. The public values'
   binding is `verify_shard_local`'s step 10c, which is per shard and therefore already
   inside the per-shard half a block runs (`docs/spec/public-values.md` §5). *Amended at
-  S25: this bullet read "No binding of fd 0 and fd 1 to the execution. The public I/O
+  S-IO: this bullet read "No binding of fd 0 and fd 1 to the execution. The public I/O
   digest is in the statement and no row reads it, as at S16; the I/O-binding stage owes
   it." It is bound now, and not through a descriptor.*

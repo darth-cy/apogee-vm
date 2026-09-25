@@ -34,7 +34,7 @@ pub fn generate() {
             (family::JUMP_BRANCH_SLT, 1 << 20),
             (family::INIT_TEARDOWN, 1 << 16),
             (family::ZERO_WINDOWS, 1 << 16),
-            // S25's three, in every `VmConfig`
+            // S-IO's three, in every `VmConfig`
             // (`docs/spec/public-values.md` §4).
             (family::PUBLIC_INPUT, family::PUBLIC_WINDOW_HEIGHT),
             (family::PUBLIC_OUTPUT, family::PUBLIC_WINDOW_HEIGHT),

@@ -41,7 +41,7 @@ fn the_global_transcript_is_the_frozen_order() {
     let mut want = vec![
         absorb(tags::PROTOCOL_SUITE, 1),
         absorb(tags::SRS_DIGEST, 1),
-        // Six families: add/sub, the two RAM window ones and S25's three.
+        // Six families: add/sub, the two RAM window ones and S-IO's three.
         absorb(tags::VM_CONFIG, 2 * 6 + 1),
         absorb(tags::SHARD_COUNTS, 6),
         absorb(tags::MEMORY_WINDOWS, 0),
@@ -52,7 +52,7 @@ fn the_global_transcript_is_the_frozen_order() {
         absorb(tags::MEMORY_GROUP, 2),
         absorb(tags::MEMORY_GROUP, 2),
         absorb(tags::COMMITMENT, 4 * 42),
-        // S25's three, in the ascending tail like any other family. The
+        // S-IO's three, in the ascending tail like any other family. The
         // public input window commits three columns and the journal two, and
         // `ADVICE_WINDOWS` has no shard here, so it is a header and nothing
         // else — exactly as `ZERO_WINDOWS` is above

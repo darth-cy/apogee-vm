@@ -74,7 +74,7 @@ impl AddressSpace {
     /// a delegation space — a frame base pointer, which is a 4-aligned word
     /// address inside ordinary RAM.
     ///
-    /// The `Ram` space is wider than ordinary RAM since S25: it also holds the
+    /// The `Ram` space is wider than ordinary RAM since S-IO: it also holds the
     /// two public windows below `RAM_ORIGIN` and the advice region above RAM.
     /// All three are `address_space::RAM` tuples — what tells a public value,
     /// an advice word and a heap word apart is which family initializes the

@@ -3,10 +3,10 @@
 This page is normative for two wire formats and nothing else: `BlockWitness`, which is
 the revm guest's **advice**, and the **output commitment**, which is its **journal**.
 S10's `io_digest` binds the second and this page defines neither of its halves —
-`docs/spec/ecall-abi.md` §6 froze that computation and neither S24 nor S25 changed
+`docs/spec/ecall-abi.md` §6 froze that computation and neither S24 nor S-IO changed
 anything about it.
 
-*Amended at S25: both were fd streams until then — the witness on fd 0 and the commitment
+*Amended at S-IO: both were fd streams until then — the witness on fd 0 and the commitment
 on fd 1 — and neither was bound to the execution, which is why S24 had to prove a second
 binary with the witness in its image. The witness is advice now, so one program identity
 serves every block, and the commitment is the journal, so the statement carries its bytes.

@@ -296,7 +296,7 @@ value the guest then checks against something bound, never an input in its own r
 `transcript::io_digest`. Frozen at S10, recipe and position unchanged; the
 statement-binding order absorbs it at G7, which fixes both strings before any challenge
 exists. `docs/spec/ecall-abi.md` §6. What ties them to the *execution* is the two **public
-value** windows, not this hash, and since S25 it is not deferred:
+value** windows, not this hash, and since S-IO it is not deferred:
 `docs/spec/public-values.md`.
 
 **RVC expansion** — rewriting a 16-bit compressed instruction as the exact 32-bit
@@ -392,7 +392,7 @@ by a verifier from a channel the prover does not control. Since S14 it binds `.t
 no window list. `docs/spec/memory.md` §6.2.
 
 **Init/teardown families** — `INIT_TEARDOWN` (7) and `ZERO_WINDOWS` (8): claim no pc,
-present in every `VmConfig`, at **one height** `h`, which since S25 `ADVICE_WINDOWS` (14)
+present in every `VmConfig`, at **one height** `h`, which since S-IO `ADVICE_WINDOWS` (14)
 shares. A shard is one RAM window, a row one
 word of it: the init tuple on the write side, the teardown tuple — the word's last write,
 or its initial value if untouched — on the read side. No witness columns, no enforcing

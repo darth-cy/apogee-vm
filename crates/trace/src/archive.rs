@@ -97,7 +97,7 @@ pub struct PhaseTiming {
 
 /// An execution's **public values**: the public input window's payload and the
 /// journal's (`docs/spec/public-values.md`). `transcript::io_digest(&input,
-/// &output)` is the public I/O digest, and since S25 the two windows are what
+/// &output)` is the public I/O digest, and since S-IO the two windows are what
 /// bind it to the execution.
 ///
 /// The shape is S12's and the meaning is not: these were the fd 0 bytes the
@@ -574,7 +574,7 @@ fn check_parts(
             return Err(format!("family {} is not in constants::family", t.family));
         }
         // A family whose rows are not cycles owns no buffer rows: the two RAM
-        // window families, the three S25 ones, and a delegation family, whose
+        // window families, the three S-IO ones, and a delegation family, whose
         // invocations live in a `DelegationTrace` and not here.
         if !family::CYCLE_OWNING[t.family as usize] && n != 0 {
             return Err(format!(

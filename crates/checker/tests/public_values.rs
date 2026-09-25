@@ -1,4 +1,4 @@
-//! S25's public values and advice: the parts that can be checked without a
+//! S-IO's public values and advice: the parts that can be checked without a
 //! proof, and the negative control for each.
 //!
 //! The expensive half — a real statement, tampered, refused by class — is

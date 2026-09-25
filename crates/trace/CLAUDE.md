@@ -10,7 +10,7 @@ address spaces, the frame of each instruction class, the x0 rule, the ecall fram
 order of the log — **`docs/spec/memory.md`** for the memory columns,
 **`docs/spec/lookup.md` §7** for the multiplicity columns, since S21
 **`docs/spec/delegation.md`** for the eighth role, the invocation frame and the anchor, and,
-since S25, **`docs/spec/public-values.md`** for the two public windows, the advice region and
+since S-IO, **`docs/spec/public-values.md`** for the two public windows, the advice region and
 the value window's committed init column.
 
 ```rust
@@ -28,7 +28,7 @@ impl MemoryEventLog {
     pub fn final_state(&self) -> Vec<FinalValue>;                   // sorted: last write per address
     pub fn self_check(&self, initial: &InitialMemory) -> Result<(), SelfCheckError>;
 }
-// S25: what every address holds before the execution starts, three regions and three
+// S-IO: what every address holds before the execution starts, three regions and three
 // sources. docs/spec/public-values.md §2.
 pub struct InitialMemory<'a> { pub image: &'a ProgramImage,
                                pub public_input: &'a [u8], pub advice: &'a [u8] }   // + Copy
@@ -60,7 +60,7 @@ pub struct CycleProfile { pub counts: Vec<(FamilyId, u64)> }
 pub struct ShardPlan { pub shards: Vec<(FamilyId, u32)> }
 pub fn plan_shards(profile: &CycleProfile, config: &VmConfig) -> ShardPlan;
 pub fn init_windows(log: &MemoryEventLog, height: u32) -> Vec<u32>;   // ZERO_WINDOWS' shard list
-// S25, docs/spec/public-values.md §6. The advice region's layout, in one place.
+// S-IO, docs/spec/public-values.md §6. The advice region's layout, in one place.
 pub fn advice_region_words(advice: &[u8]) -> u64;              // 0 for empty; else 1 + ceil(len/4)
 pub fn advice_word(advice: &[u8], index: u64) -> u32;          // the length word, then the payload
 pub fn advice_window_count(advice: &[u8], height: u32) -> u32; // ADVICE_WINDOWS' shard count
@@ -72,7 +72,7 @@ pub fn build_frame_witness(log: &MemoryEventLog, queries: &[usize], cycles: &[u6
     -> Vec<(PolyAddress, MultilinearPoly)>;                    // its w + 3 W columns
 pub fn build_init_teardown_columns(log: &MemoryEventLog, image: &ProgramImage, ram_window: u32,
     height: usize) -> Vec<(PolyAddress, MultilinearPoly)>;          // M[0], M[1]; S[0] at window 0
-// S25, docs/spec/public-values.md §4: a value window's M[0], M[1] and the committed M[2].
+// S-IO, docs/spec/public-values.md §4: a value window's M[0], M[1] and the committed M[2].
 pub fn build_value_window_columns(log: &MemoryEventLog, initial: &[u32], ram_window: u32,
     height: usize) -> Vec<(PolyAddress, MultilinearPoly)>;
 pub fn build_boundary_finals(log: &MemoryEventLog) -> BoundaryFinals;   // gkr_verify's
@@ -84,17 +84,17 @@ pub fn check_multiplicities(artifact, columns, specs, given) -> Result<(), Strin
 
 pub enum Phase { PostExecution, PostCommit, PostGkr, PostOpening, Final }   // tags 0..5
 pub struct PhaseTiming { pub wall_nanos: u64 }
-// S25: the shape is S12's, the meaning is not. `input` is the PUBLIC INPUT WINDOW's payload
+// S-IO: the shape is S12's, the meaning is not. `input` is the PUBLIC INPUT WINDOW's payload
 // and `output` is the JOURNAL — not fd 0 and fd 1, which are uncommitted compatibility
 // streams a proof binds nothing of (`docs/spec/public-values.md` §1). `transcript::io_digest`
 // over the pair is unchanged and in the position it has always had.
 pub struct IoStreams { pub input: Vec<u8>, pub output: Vec<u8> }
 impl TraceArchive {
     pub fn from_execution(FamilyTraces, MemoryEventLog, CycleProfile, IoStreams,
-                          advice: Vec<u8>, PhaseTiming) -> TraceArchive;       // S25's fifth argument
+                          advice: Vec<u8>, PhaseTiming) -> TraceArchive;       // S-IO's fifth argument
     pub fn family_traces(&self) -> &FamilyTraces;  pub fn memory_log(&self) -> &MemoryEventLog;
     pub fn cycle_profile(&self) -> &CycleProfile;  pub fn io_streams(&self) -> &IoStreams;
-    pub fn advice(&self) -> &[u8];                                             // S25
+    pub fn advice(&self) -> &[u8];                                             // S-IO
     pub fn is_filled(&self, Phase) -> bool;        pub fn timing(&self, Phase) -> Option<PhaseTiming>;
     pub fn fill(&mut self, Phase, content: Vec<u8>, PhaseTiming) -> Result<(), String>;   // S16
     pub fn content(&self, Phase) -> Option<&[u8]>;                                        // S16
@@ -134,7 +134,7 @@ impl TraceArchive {
   added, trailing cycles removed — by the argument's own shape; for a snapshot the
   archive binds the log to the rows.
 - **`InitialMemory` is the one answer to "what did this address hold at timestamp 0?"**
-  (S25). Three regions and three sources: the image in ordinary RAM, the statement's public
+  (S-IO). Three regions and three sources: the image in ordinary RAM, the statement's public
   input in its window, the prover's advice above RAM; the journal window and every untouched
   address start at 0, which is `PUBLIC_OUTPUT`'s literal-0 init leaf. A slice shorter than
   its region reads 0 past its end, and that is what the prover commits there too. It is what
@@ -209,7 +209,7 @@ impl TraceArchive {
 - **`init_windows(log, h)` is `ZERO_WINDOWS`' shard list**: the distinct `addr / 4h` of
   every touched **ordinary RAM** word, ascending, without window 0
   (`docs/spec/memory.md` §3.4). `h` is the window families' one height. **Ordinary RAM and
-  not every `AddressSpace::Ram` tuple** since S25: the two public windows and the advice
+  not every `AddressSpace::Ram` tuple** since S-IO: the two public windows and the advice
   region are `Ram` tuples too, and each has a family of its own that initializes it, so a
   zero window over either would give those words a second init row and a prover a second
   value to choose. The filter is `log::in_ram`.
@@ -240,7 +240,7 @@ impl TraceArchive {
   `image.initial_word`; plus `program::image_init_column` as `S[0]` for window 0. The
   window is `ram_window`, never `window`.
 - **`build_value_window_columns` is the same table with the init column committed**
-  (S25, `docs/spec/public-values.md` §4). `initial[y]` is the word the window starts on —
+  (S-IO, `docs/spec/public-values.md` §4). `initial[y]` is the word the window starts on —
   `verifier_core::public_io_words(input)` for `PUBLIC_INPUT`, `advice_word` for
   `ADVICE_WINDOWS` — and 0 past the end of the slice. `M[2]` is exactly that vector; `M[0]`
   and `M[1]` are the teardown, an untouched row keeping `(0, initial[y])` so its init and
@@ -258,7 +258,7 @@ impl TraceArchive {
   value's bytes, so timing is outside it by construction. Filled phases are a prefix,
   post-execution always among them; a phase is timed exactly when it is filled; import
   refuses anything else. The post-execution content's own layout is in
-  `src/archive.rs`'s module docs; **since S25 it has a seventh field, `advice: [u8]`,
+  `src/archive.rs`'s module docs; **since S-IO it has a seventh field, `advice: [u8]`,
   after `input` and `output`**, and `TraceArchive::from_execution` takes it as an
   argument and `TraceArchive::advice()` reads it back. It is an input of the execution
   like the public input, and a resumed prover needs it to rebuild `ADVICE_WINDOWS`' init

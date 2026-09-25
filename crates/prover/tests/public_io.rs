@@ -1,4 +1,4 @@
-//! S25's acceptance over the real statement: `guests/public-io` proved and
+//! S-IO's acceptance over the real statement: `guests/public-io` proved and
 //! verified, with its witness in the advice region, its commitment in the
 //! public input and its result in the journal.
 //!

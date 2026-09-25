@@ -15,7 +15,7 @@ Everything a shard's verification does except its one Mercury opening, `#![no_st
   since S20 in three public parts, split by what each reads — `derive_global_phase`
   (steps 1–3 and the global transcript) and `verify_global_memory` (step 10b, the
   boundary and the cross-shard root product) read the statement and run **once** for
-  it; `verify_shard_local` (steps 4–10a, S25's 10c, and 11) is the only one that reads a
+  it; `verify_shard_local` (steps 4–10a, S-IO's 10c, and 11) is the only one that reads a
   `ShardProof`, and is the only one a block runs per shard.
 - **The block** (S20, `docs/spec/block-proof.md`): `BlockProof`, `ShardRecord`,
   `BlockReconciliation`, their wire forms, the structural rule a decoded block keeps, and
@@ -30,7 +30,7 @@ impl VmConfig { pub fn height(&self, f: u32) -> Option<u32>; pub fn to_bytes(&se
 pub fn window_height(config: &VmConfig) -> Result<u32, &'static str>;
 pub fn absorb_statement_descriptor(tr: &mut Transcript, config: &VmConfig, shard_counts: &[u32], windows: &[u32]);
 pub fn check_memory_windows(config: &VmConfig, shard_counts: &[u32], windows: &[u32]) -> Result<(), &'static str>;
-// S25, docs/spec/public-values.md. Neither adds a message, a tag or a challenge.
+// S-IO, docs/spec/public-values.md. Neither adds a message, a tag or a challenge.
 pub fn public_io_words(bytes: &[u8]) -> Vec<u32>;   // the window: length word, LE payload, zero pad
 pub fn advice_first_window(height: u32) -> u32;     // 2^29 / h: the window holding ADVICE_ORIGIN
 pub struct ProgramIdentity(pub Fr);                        // to_bytes, from_bytes
@@ -101,7 +101,7 @@ pub const OPENING_BYTES: usize = 704;  pub const SRS_VERIFIER_BYTES: usize = 320
   `reduce_shard` calls `verify_global_memory` after `verify_shard_local` returns, and step
   11, the only step between 10c and 10b, builds the opening claim and cannot fail — so the
   first failure, its class and its message are S16's for every input.
-- **Step 10c is S25's one new check, it sits between 10a and 11, and its class is
+- **Step 10c is S-IO's one new check, it sits between 10a and 11, and its class is
   `MemoryArgument`** (`docs/spec/public-values.md` §5). It is in `verify_shard_local`,
   because it reads a `ShardProof`'s own base claims, and it runs only on the two public
   value shards. Their base claims arrive in layout order `M`, `W`, `S`, and neither family
@@ -114,7 +114,7 @@ pub const OPENING_BYTES: usize = 704;  pub const SRS_VERIFIER_BYTES: usize = 320
   to be each address's first value and its teardown column to be its last. `PUBLIC_OUTPUT`
   has no `M[2]` at all — its circuit is `ZERO_WINDOWS`', whose init leaf is a literal 0 —
   so there is nothing to pre-load the journal into and nothing here to check about it.
-- **The global transcript did not change at S25, and that is the claim to hold.** No new
+- **The global transcript did not change at S-IO, and that is the claim to hold.** No new
   message, no new tag, no new challenge, no new statement field, no new address space, and
   no change to any execution family's circuit. `io_digest(input, output)` is S10's, absorbed
   at G7 where it has always been — before the memory challenges are squeezed, which is what
@@ -133,7 +133,7 @@ pub const OPENING_BYTES: usize = 704;  pub const SRS_VERIFIER_BYTES: usize = 320
   against the key before anything is indexed, and the total shard count is bounded before
   anything is built from it. The key is assumed loaded (`VerifyingKey::check`); a key edited
   in memory meets steps 1–5 as `Statement` only where its config or its circuit list
-  changed, and an edit inside a circuit is not caught there. **S25 added two `Statement`
+  changed, and an edit inside a circuit is not caught there. **S-IO added two `Statement`
   refusals to `derive_global_phase`**, both at step 2 and both before `public_io_words` is
   ever asked to lay a window out: `public.input` longer than
   `guest_memory::PUBLIC_PAYLOAD_BYTES`, and `public.output` longer than it. Bytes no window
@@ -143,7 +143,7 @@ pub const OPENING_BYTES: usize = 704;  pub const SRS_VERIFIER_BYTES: usize = 320
   it: that is a precondition of the three-part split, and a caller that reaches
   `verify_shard_local` without having derived the global phase from the *same*
   `PublicInputs` has skipped step 2.
-- **`window_height` and `check_memory_windows` grew S25's rules, and `window_height` is the
+- **`window_height` and `check_memory_windows` grew S-IO's rules, and `window_height` is the
   one that matters** — it runs inside `VmConfig::from_bytes`, on bytes a verifier was
   handed. It now requires `INIT_TEARDOWN`, `ZERO_WINDOWS` **and `ADVICE_WINDOWS`** all
   present at one height `h` — an `ADVICE_WINDOWS` height of its own would put the advice

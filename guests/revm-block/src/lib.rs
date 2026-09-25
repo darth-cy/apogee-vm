@@ -37,7 +37,7 @@
 //! # The two wire formats this file owns
 //!
 //! [`BlockWitness`] is what goes in and the output commitment is what comes
-//! out. Since S25 the witness is **advice**, which nothing binds, and the
+//! out. Since S-IO the witness is **advice**, which nothing binds, and the
 //! commitment is the **journal**, whose bytes the statement carries
 //! (`docs/spec/public-values.md`); what stands in for binding the witness is
 //! this file's own checks and the commitment itself, which names the state
@@ -339,7 +339,7 @@ impl BlockWitness {
     ///
     /// Canonicity is checked here rather than assumed, so that the same
     /// logical state has exactly one encoding: the guest and the host agree on
-    /// what the prover handed over. Since S25 the witness is **advice**, which
+    /// what the prover handed over. Since S-IO the witness is **advice**, which
     /// nothing in the proof system binds, so this is not a tidiness check — it
     /// is one of the two things standing between a prover-supplied byte string
     /// and the block the journal claims was executed

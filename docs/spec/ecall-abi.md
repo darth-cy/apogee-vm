@@ -64,7 +64,7 @@ how a nondeterministic call ends up treated as proven.
 
 The zkVM host-call range is **reserved and empty**, at S10 and still. The
 compatibility streams of section 4 use the Linux calls, because a guest that
-used `0x0400` for its input could not run under QEMU at all; and since S25 an
+used `0x0400` for its input could not run under QEMU at all; and since S-IO an
 execution's **public values** use no call whatever — they are two fixed windows
 of memory a guest reads and writes with ordinary loads and stores
 (`docs/spec/public-values.md`).
@@ -97,7 +97,7 @@ The classes are:
 ## 4. File descriptors
 
 **All four are uncommitted POSIX compatibility streams, and a proof binds none
-of them.** That is S25's correction, and it is the one place this document was
+of them.** That is S-IO's correction, and it is the one place this document was
 wrong rather than incomplete: fd 0 and fd 1 were `FD_PUBLIC_INPUT` and
 `FD_PUBLIC_OUTPUT` and were described here as committed. An execution's public
 values are not a syscall's business — they are two fixed windows of memory, and
@@ -131,7 +131,7 @@ fd 1, and nothing below them — and `guests/revm-block` carries a binary for ea
 
 A guest that lets a hint change what it writes to fd 1, without checking the
 hint against something else, has made its output the prover's choice. That
-warning stands, and since S25 it has a provable counterpart: the **journal** is
+warning stands, and since S-IO it has a provable counterpart: the **journal** is
 what a proof binds, the **advice region** is where the prover's bytes belong,
 and the obligation to check one against something public is the guest's either
 way (`docs/spec/public-values.md` §6).
@@ -152,7 +152,7 @@ Added at S12, where the first zkVM executor pinned what the table above left ope
   no trace at all, so there is nothing to report back to.
 * **fd 0 is served from the statement's public input**, and `read` delivers a
   prefix of it and advances a cursor. Nothing records or binds which prefix the
-  guest consumed: since S25 the executor reports the **whole** public input as
+  guest consumed: since S-IO the executor reports the **whole** public input as
   the execution's, because that is what the window held and what the statement
   carries, whether or not a byte of it was read
   (`docs/spec/public-values.md` §9).
@@ -182,18 +182,18 @@ asking for a number in the zkVM host-call range — where a reviewer will see it
 ## 6. The public I/O digest
 
 One `Fr` over the statement's two public byte strings. **Frozen at S10**: later
-stages recompute it and never redefine it, and S25 did not — the recipe below,
+stages recompute it and never redefine it, and S-IO did not — the recipe below,
 its tags, its position in the statement-binding order and its test vectors are
 all unchanged.
 
-**S25 is what makes it worth something.** Absorbing the digest fixes the two
+**S-IO is what makes it worth something.** Absorbing the digest fixes the two
 byte strings before any challenge exists; what ties them to an *execution* is
 the two public value windows, not this hash. The statement's `input` and
 `output` are the payloads of two RAM windows, their memory columns are
 committed at G8 — also before the memory challenges are squeezed — and
 `verify_shard_local` step 10c holds each committed column to the verifier's own
 extension of those bytes (`docs/spec/public-values.md` §5,
-`docs/spec/shard-proof.md` §6). The design deferred here until S25 — the guest
+`docs/spec/shard-proof.md` §6). The design deferred here until S-IO — the guest
 computing the digest itself and leaving its words in `x24`…`x31` at exit — is
 withdrawn, and the guest never computes `io_digest`.
 
@@ -257,7 +257,7 @@ does not lie inside the window: a program is linked into RAM and nowhere else, s
 wants to be elsewhere is not one this VM can run — and enforcing it is also what stops a
 hostile `p_memsz` from sizing the loader's slot vector.
 
-**The RAM window is not the whole addressable space, and has not been since S25.** Two
+**The RAM window is not the whole addressable space, and has not been since S-IO.** Two
 1 KiB **public value** windows sit below it at `PUBLIC_INPUT_ORIGIN` = `0x8000` and
 `PUBLIC_OUTPUT_ORIGIN` = `0x8400`, and the **advice** region sits above it at
 `ADVICE_ORIGIN` = `0x8000_0000`; `trace::addressable` is the executor's rule and everything

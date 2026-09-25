@@ -220,7 +220,7 @@ pub fn recursion_unused_program() -> Program {
     program_of("recursion-unused", &recursion_params())
 }
 
-/// S25's guest: `guests/public-io`, which reads its public input and its
+/// S-IO's guest: `guests/public-io`, which reads its public input and its
 /// advice with ordinary loads and writes its journal with ordinary stores
 /// (`docs/spec/public-values.md`). Its execution families at `2^20`, the rest
 /// at `2^16`.

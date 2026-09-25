@@ -7,7 +7,7 @@ allocator, a panic handler, and the ecall shims. Everything here runs *inside* t
 ```rust
 guest_sdk::entry!(main);                       // gives a function the `main` symbol
 
-// S25's public values and advice: ordinary loads and stores, NO ecall at all.
+// S-IO's public values and advice: ordinary loads and stores, NO ecall at all.
 pub fn public_input() -> &'static [u8];        // the input window's payload
 pub fn read_input(buf: &mut [u8]) -> usize;    // the same, copied, for a ported program
 pub fn commit(bytes: &[u8]);                   // append to the journal
@@ -80,7 +80,7 @@ the crate layout, the I/O rules, the build, and exporting the result as a
   start zeroed.
 - **Guests link with `--no-relax`.** Relaxation rewrites instruction sequences and shifts
   every later address; S11's program identity is a function of those addresses.
-- **The provable surface issues no ecall** (S25, `docs/spec/public-values.md` §7).
+- **The provable surface issues no ecall** (S-IO, `docs/spec/public-values.md` §7).
   `public_input`, `read_input`, `commit`, `journal` and `advice` are plain volatile loads
   and stores against the three regions of `constants::guest_memory`: the public input
   window at `PUBLIC_INPUT_ORIGIN`, the journal at `PUBLIC_OUTPUT_ORIGIN`, the advice at

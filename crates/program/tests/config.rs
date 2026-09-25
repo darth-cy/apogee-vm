@@ -43,7 +43,7 @@ fn the_vm_config_wire_form_is_frozen_and_round_trips() {
         (family::MEM_SUBWORD, 1 << 22),
         (family::INIT_TEARDOWN, 1 << 22),
         (family::ZERO_WINDOWS, 1 << 22),
-        // S25's three, in every config: the two public value families at their
+        // S-IO's three, in every config: the two public value families at their
         // pinned height and the advice windows at the window height
         // (`docs/spec/public-values.md` §4).
         (family::PUBLIC_INPUT, family::PUBLIC_WINDOW_HEIGHT),
@@ -253,7 +253,7 @@ fn a_config_without_both_init_families_at_one_height_is_refused() {
 fn the_window_rules_hold_at_their_boundaries() {
     let config = fib_config();
     // One shard for each instruction family, then INIT_TEARDOWN's and
-    // ZERO_WINDOWS', then S25's three: one public input shard, one journal
+    // ZERO_WINDOWS', then S-IO's three: one public input shard, one journal
     // shard and no advice window (`docs/spec/public-values.md` §4).
     let counts = |init: u32, zero: u32| [1, 1, 1, 1, 1, 1, init, zero, 1, 1, 0];
     let check =

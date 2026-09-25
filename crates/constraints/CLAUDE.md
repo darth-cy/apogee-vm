@@ -80,7 +80,7 @@ pub mod memory {                                   // docs/spec/memory.md §2, �
         -> CircuitArtifact;      // S16's shape; panics on an empty family_spec.channels
     pub fn image_window_artifact(trace_vars: u32) -> CircuitArtifact;  // INIT_TEARDOWN
     pub fn zero_window_artifact(trace_vars: u32) -> CircuitArtifact;   // ZERO_WINDOWS, and PUBLIC_OUTPUT
-    pub fn value_window_artifact(trace_vars: u32) -> CircuitArtifact;  // PUBLIC_INPUT, ADVICE_WINDOWS; S25
+    pub fn value_window_artifact(trace_vars: u32) -> CircuitArtifact;  // PUBLIC_INPUT, ADVICE_WINDOWS; S-IO
     pub fn check_memory(a: &CircuitArtifact) -> Result<(), String>;
 }
 
@@ -318,7 +318,7 @@ pub mod fr_arith {                                // docs/spec/delegation.md §1
   fills the columns, `gkr-verify`'s boundary evaluates `read_tuple` through the kernel, and
   `kat-gen` writes the constructors' bytes. One exception since S17: the x0 rule's first
   two gates come from `gadgets::is_zero`, with their bytes unchanged.
-- **`value_window_artifact` is S25's one new constructor, and two families share it**
+- **`value_window_artifact` is S-IO's one new constructor, and two families share it**
   (`docs/spec/public-values.md` §4). It is `zero_window_artifact` with one committed column
   added: `M[0] teardown_ts`, `M[1] teardown_value`, `M[2] init_value`, `V[row]`; the
   teardown tuple on the read side and the init tuple, value `M[2]`, on the write side; then
@@ -358,7 +358,7 @@ pub mod fr_arith {                                // docs/spec/delegation.md §1
   Since S19 it holds every family the master prompt names, and since S21 the first that it
   does not: `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MUL_DIV`, `MEM_WORD`,
   `MEM_SUBWORD`, `ATOMICS`, the two RAM windows, `KECCAK_F` and S23's `POSEIDON2` and
-  `FR_ARITH`. **S25 added three arms and exactly one constructor.** `PUBLIC_OUTPUT` takes
+  `FR_ARITH`. **S-IO added three arms and exactly one constructor.** `PUBLIC_OUTPUT` takes
   `memory::zero_window_artifact` — the *same* function `ZERO_WINDOWS` takes, so the journal's
   circuit is `ZERO_WINDOWS`' **byte for byte**, and that is the point: its init leaf is the
   literal 0, so there is no init column for a prover to pre-load the journal into at

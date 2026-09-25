@@ -33,7 +33,7 @@ fn fib_commits_the_recorded_value() {
 }
 
 // ---------------------------------------------------------------------------
-// S25: the public values and the advice region, executed
+// S-IO: the public values and the advice region, executed
 // ---------------------------------------------------------------------------
 
 /// The public input `guests/public-io` reads for `advice`: the advice's length
@@ -479,7 +479,7 @@ fn a_misaligned_access_is_a_named_fatal_error_in_both_paths() {
 /// held those bytes, not that anybody read them
 /// (`docs/spec/public-values.md` §9).
 ///
-/// Until S25 this recorded the consumed prefix of fd 0, which was the right
+/// Until S-IO this recorded the consumed prefix of fd 0, which was the right
 /// answer for a stream and is the wrong one for a window: a cursor is guest
 /// state, and the statement is not.
 #[test]

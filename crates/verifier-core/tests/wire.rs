@@ -83,7 +83,7 @@ fn the_layouts_are_the_specs() {
     let public = statement();
     let b = public.to_bytes();
     // input (4 + 3), output (4), status, counts (4 + 24 — six families since
-    // S25), windows (4), then the 64 boundary scalars: x10's value is scalar
+    // S-IO), windows (4), then the 64 boundary scalars: x10's value is scalar
     // 33 + 9.
     let boundary = 7 + 4 + 4 + (4 + 4 * 6) + 4;
     assert_eq!(u32::from_le_bytes(b[11..15].try_into().unwrap()), 42);
@@ -91,7 +91,7 @@ fn the_layouts_are_the_specs() {
         &b[boundary + 32 * 42..boundary + 32 * 43],
         &Fr::from_u64(42).to_bytes()
     );
-    // Four shards: the init window, add/sub, and S25's two public windows,
+    // Four shards: the init window, add/sub, and S-IO's two public windows,
     // whose memory widths are 3 and 2 (`docs/spec/public-values.md` §4).
     assert_eq!(
         b.len(),

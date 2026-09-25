@@ -34,7 +34,7 @@ pub fn blob(i: u32) -> [u8; 64] {
     p
 }
 
-/// S25's three window families, which are in **every** `VmConfig`
+/// S-IO's three window families, which are in **every** `VmConfig`
 /// (`docs/spec/public-values.md` §4), at the heights the window rules require.
 pub fn window_families(height: u32) -> Vec<(u32, u32)> {
     vec![
@@ -149,7 +149,7 @@ pub fn jbs_vk() -> VerifyingKey {
 /// that run.
 pub fn jbs_statement() -> PublicInputs {
     let mut s = statement();
-    // One add/sub, one jump, one init, no zero window, then S25's three.
+    // One add/sub, one jump, one init, no zero window, then S-IO's three.
     s.shard_counts = vec![1, 1, 1, 0, 1, 1, 0];
     // Statement order is INIT, ZERO, then ascending, so the jump family's
     // lists go before the two public ones this pushes back on at the end.
@@ -185,7 +185,7 @@ pub fn statement() -> PublicInputs {
         input: vec![1, 2, 3],
         output: vec![],
         exit_status: 42,
-        // One init shard, no zero window, one add/sub shard, then S25's
+        // One init shard, no zero window, one add/sub shard, then S-IO's
         // three: one public input, one journal, no advice window.
         shard_counts: vec![1, 1, 0, 1, 1, 0],
         windows: vec![],

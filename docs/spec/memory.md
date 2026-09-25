@@ -3,7 +3,7 @@
 Frozen as of S14. Changing anything here is a protocol-version change. S21 appended the ninth
 query — `deleg`, a delegation request's mirror (§2.1) — and a new address space above RAM's;
 `docs/spec/delegation.md` is normative for both, and nothing else on this page moved for it.
-S25 appended three window families and extended the window tiling to the whole address space
+S-IO appended three window families and extended the window tiling to the whole address space
 (§3); `docs/spec/public-values.md` is normative for them, and the tuple, the frame, the
 boundary and the reconciliation are unmoved.
 
@@ -301,7 +301,7 @@ order above.
 
 Let `h = 2^n` be the height of the window families. **Window `w` covers byte addresses
 `[4h·w, 4h·(w+1))`** for `0 ≤ w < 2^30 / h`. Row `y` of window `w` is the word at
-`ADDR = 4h·w + 4y`. Since S25 the windows tile `[0, 2^32)` exactly — 256 of them at
+`ADDR = 4h·w + 4y`. Since S-IO the windows tile `[0, 2^32)` exactly — 256 of them at
 `h = 2^22`, 16,384 at `2^16` — and `N = 2^29 / h` is where ordinary RAM ends and the advice
 region begins.
 
@@ -418,7 +418,7 @@ pin all seven frames.
 of **ordinary RAM**, **without 0**. That is `ZERO_WINDOWS`'s shard list.
 
 “Ordinary RAM” is `trace::in_ram(a)`, `[RAM_ORIGIN, ADVICE_ORIGIN)`, and the filter is
-load-bearing since S25: a public value and an advice word are `RAM`-tagged tuples like any
+load-bearing since S-IO: a public value and an advice word are `RAM`-tagged tuples like any
 other (`docs/spec/public-values.md` §2), and each sits in a window some *other* family
 initializes. A zero window over either would give those words a second init row and a prover
 a second value to choose, which is the same failure a `ZERO_WINDOWS` id of 0 would be.
@@ -457,7 +457,7 @@ bytes may end inside a word.
 Before the memory challenges, from the statement: the `VmConfig` has equal heights for
 families 7, 8 and 14; `SHARD_COUNTS[INIT_TEARDOWN] = 1`; the window list's length is
 `SHARD_COUNTS[ZERO_WINDOWS]`; the list is strictly increasing; every id is in `[1, N − 1]`.
-`ZERO_WINDOWS` shard `i` is window `w_i`. Since S25, three rules more:
+`ZERO_WINDOWS` shard `i` is window `w_i`. Since S-IO, three rules more:
 
 - families 12 and 13 are present at exactly `family::PUBLIC_WINDOW_HEIGHT`, and
   `SHARD_COUNTS[PUBLIC_INPUT] = SHARD_COUNTS[PUBLIC_OUTPUT] = 1`. **One shard each, whether
@@ -505,7 +505,7 @@ and `trace::build_boundary_finals(log)` fills it from the log's final state.
 
 What the public statement reads from them: `v_10` is `a0` at exit, the exit status, and that
 is all of it. S14's D3 convention would have put a guest-computed I/O digest's words in
-`v_24 … v_31`; S25 **withdrew** it, and no register carries a public value
+`v_24 … v_31`; S-IO **withdrew** it, and no register carries a public value
 (§10, `docs/spec/public-values.md`). `t_pc` is **not** a cycle count: nothing may read
 `t_pc / 4` as the number of cycles proven.
 
@@ -628,11 +628,11 @@ A fresh sponge absorbs, in order:
 
 It binds the image's file-backed bytes inside window 0 and the entry pc, and nothing an
 execution chooses: no shard count, no window list. Step 4's list is empty for every family
-that has no setup column, which since S21 is every delegation family and since S25 the three
+that has no setup column, which since S21 is every delegation family and since S-IO the three
 new window families too — an `S` column is bound by identity, and one execution's public
 values or advice have no business in every execution's identity
 (`docs/spec/public-values.md` §4). Step 2 still lists the whole family set, so **adding a
-family moves every program's identity**, and S25 did. `program::setup_commitments` is step 4's
+family moves every program's identity**, and S-IO did. `program::setup_commitments` is step 4's
 commitments (it needs the SRS); `program::identity_from_commitments` is the digest over them
 (it does not), which is what a verifying-key loader recomputes.
 
@@ -743,7 +743,7 @@ would equal its write timestamps as multisets while each write is strictly later
 read. This, too, needs the gap obligation.
 
 **The RAM-window bound** is that an address **no family initializes** has no init row, and
-since S25 the initialized regions are not one contiguous span. Below `RAM_ORIGIN` the masked
+since S-IO the initialized regions are not one contiguous span. Below `RAM_ORIGIN` the masked
 span holds the two public windows, each claimed by a family of its own at `2^8`, and the rest
 of it — `[0, 0x8000)` and `[0x8800, RAM_ORIGIN)` — is a hole. At `2^31` and above is the
 advice region, claimed by the `k_a` consecutive `ADVICE_WINDOWS` shards the statement counts
@@ -819,7 +819,7 @@ tuple that no cycle can write and three gates that pin the read side
 block's ts-window disjointness, which is per **cycle-owning** family and always was
 (`docs/spec/block-proof.md` §4).
 
-**Status at S25.** The **I/O-binding** item this list has carried since S14 is
+**Status at S-IO.** The **I/O-binding** item this list has carried since S14 is
 **discharged**, and `docs/spec/public-values.md` is normative for it. It needed no gate and no
 new rule here: the statement's public input and its journal are two RAM windows in the hole
 below `RAM_ORIGIN`, so §4.2's first-and-last-value rule is the multiset half of the binding
@@ -837,13 +837,13 @@ this list owed is now discharged or withdrawn.**
 **Cost** at `h = 2^22`: at least two `h`-sized window shards per proof (window 0 and the
 stack window), `2^23` leaf pairs and four committed `2^22`-entry columns, even for fib's
 2,117 cycles; each further touched 16 MiB window adds `2^22` rows; at most `2^29`. S14's
-tests run at `h = 2^16`. Since S25, two `2^8` shards more in every proof — the two public
+tests run at `h = 2^16`. Since S-IO, two `2^8` shards more in every proof — the two public
 families, 5 committed columns of 256 rows between them — and one `h`-sized shard per advice
 window the prover supplies.
 
 ---
 
-## 10. Binding I/O, landed at S25
+## 10. Binding I/O, landed at S-IO
 
 **`docs/spec/public-values.md` is normative**, and it supersedes what this section used to
 describe.
@@ -857,6 +857,6 @@ first value and its teardown column to be its last, and `verify_shard_local` ste
 `PUBLIC_INPUT`'s init column and `PUBLIC_OUTPUT`'s teardown column to the verifier's own
 multilinear extension of those bytes.
 
-The design this section carried until S25 — the guest computing `io_digest` and leaving its
+The design this section carried until S-IO — the guest computing `io_digest` and leaving its
 words in `x24 … x31` at exit — is **withdrawn**: it rested the output's soundness on the guest
 hashing honestly, and a guest that panicked published nothing.

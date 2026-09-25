@@ -1,10 +1,21 @@
-# S25 — Public values, private advice, and the I/O binding
+# S-IO — Public values, private advice, and the I/O binding
 
-**Branch** `s25-io-binding`. **Normative page: `docs/spec/public-values.md`.**
+**Branch** `s25-io-binding` (the branch was cut before the stage was named; the stage is
+`S-IO`). **Normative page: `docs/spec/public-values.md`.**
 
 The stage closes the gap S10 opened and S14 named: a proof now binds what went into an
 execution and what came out of it. It also withdraws the QEMU per-instruction oracle and
 retires two stopgaps — the embedded-witness binary and `exit_with_public_words`.
+
+## The name
+
+**This stage is `S-IO`, not `S25`** (owner's decision). It is not one of the original
+twenty-seven: it is the stage those twenty-seven forgot, inserted after S24 because
+nothing in the plan bound an execution's inputs and outputs and S24 hit that wall head on.
+It therefore takes no number, and **`S25` still means what `prompts/S24-revm.md` says it
+means** — the recorder that produces a `BlockWitness` for real blocks. Those forward
+references, in that prompt and in `docs/handoff/S24-revm.md`, are the owner's and are left
+alone; every reference elsewhere in the repository that means *this* stage says `S-IO`.
 
 ---
 

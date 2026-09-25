@@ -33,7 +33,7 @@ are S18's. §5.1 and §11 gain the three new families, two of which read the gen
 and one of which does not. `docs/spec/memory-ops.md` is their page. With them
 `family_circuit` holds every family the master prompt names.
 
-S25 added three window families and **changed nothing in this page's protocol**: no
+S-IO added three window families and **changed nothing in this page's protocol**: no
 message, no tag, no challenge, no wire form and no field of `PublicInputs`. §2 says so
 explicitly. What moved is §1.1's reading of `input` and `output` — they are the two public
 windows' payloads, not two byte streams — two `Statement` refusals in §6's step 2, and one
@@ -117,7 +117,7 @@ then every other family of the VmConfig, ascending by id, shards 0 … count −
 has no entry. `ZERO_WINDOWS` shard `i` is window `windows[i]`; `INIT_TEARDOWN` shard 0
 is window 0.
 
-**The rule is unchanged at S25**, and S25's three families — `PUBLIC_INPUT` (12),
+**The rule is unchanged at S-IO**, and S-IO's three families — `PUBLIC_INPUT` (12),
 `PUBLIC_OUTPUT` (13) and `ADVICE_WINDOWS` (14) — fall in the “every other family,
 ascending” part, after the delegation families, exactly as their ids say. Only the two
 init families lead. `PUBLIC_INPUT` shard 0 is window `PUBLIC_INPUT_WINDOW` and
@@ -150,7 +150,7 @@ G3 to G5 are `absorb_statement_descriptor`, S11's three adjacent messages as S14
 amended them. G1 is the protocol suite tag carrying `PROTOCOL_VERSION`: the suite is
 the tag, the version its payload.
 
-**S25 added nothing to this table.** The public values and the advice region cost the
+**S-IO added nothing to this table.** The public values and the advice region cost the
 global transcript **no new message, no new tag and no new challenge**: the three families
 enter it only where every family does — G3, as three more `(id, height)` pairs in
 `VM_CONFIG`; G4, as three more counts in `SHARD_COUNTS`; and G8, as three more
@@ -358,7 +358,7 @@ and the first that fails names the class:
 | step | class | check |
 | --- | --- | --- |
 | 1 | `Statement` | one shard count per `VmConfig` family; the key's circuits are its config's families, in order |
-| 2 | `Statement` | `docs/spec/memory.md` §3.5's window rules (`check_memory_windows`); then `input` and `output` each no longer than `guest_memory::PUBLIC_PAYLOAD_BYTES` — bytes no public window could have held, refused before `public_io_words` is asked to lay either out (S25) |
+| 2 | `Statement` | `docs/spec/memory.md` §3.5's window rules (`check_memory_windows`); then `input` and `output` each no longer than `guest_memory::PUBLIC_PAYLOAD_BYTES` — bytes no public window could have held, refused before `public_io_words` is asked to lay either out (S-IO) |
 | 3 | `Statement` | `memory_commitments` has one list per statement shard, each as long as its family's `M` layout; `memory_roots` one pair per statement shard |
 | 4 | `Statement` | the time window is a window: `start <= end <= 2^38` (S20; at S16, `[0, 2^38)` exactly) |
 | 5 | `Statement` | the replayed global state digest (§2) equals the one the proof carries |
@@ -367,7 +367,7 @@ and the first that fails names the class:
 | 8 | `Constraint` | every base claim at one point |
 | 9 | `Lookup` | `gkr_verify::channel_holds` on every channel's root pair, in channel order |
 | 10a | `MemoryArgument` | the proof's two memory roots are the statement's for its shard |
-| 10c | `MemoryArgument` | a public value shard's committed column **is** the statement's byte string at this shard's own point: for `PUBLIC_INPUT`, base claim 2 (`M[2] init_value`) against the multilinear extension of `public_io_words(public.input)`; for `PUBLIC_OUTPUT`, base claim 1 (`M[1] teardown_value`) against `public_io_words(public.output)`. Every other family: nothing. S25 |
+| 10c | `MemoryArgument` | a public value shard's committed column **is** the statement's byte string at this shard's own point: for `PUBLIC_INPUT`, base claim 2 (`M[2] init_value`) against the multilinear extension of `public_io_words(public.input)`; for `PUBLIC_OUTPUT`, base claim 1 (`M[1] teardown_value`) against `public_io_words(public.output)`. Every other family: nothing. S-IO |
 | 10b | `MemoryArgument` | every boundary timestamp below `2^38`; `v_10 = exit_status`; `gkr_verify::reconciles` over every shard's roots with `boundary_factors(memory challenges, vk.entry_pc, boundary)` |
 | 11 | — | return the opening claim (§5.1) |
 | 12 | `Opening` | decode every commitment, the `SrsVerifier` and the Mercury proof, and `pcs::batch_verify` |
@@ -661,7 +661,7 @@ event, and every lookup is switched off by its selector.
 
 ### 8.5 Owed elsewhere, and what this family does not do
 
-- `read`, `write`, `-EBADF`, `-ENOSYS` and transfer rows: **never provable**, and S25
+- `read`, `write`, `-EBADF`, `-ENOSYS` and transfer rows: **never provable**, and S-IO
   settled it (`docs/spec/public-values.md` §1). An execution's public values are not a
   syscall's business, so the I/O-binding stage made the two calls permanently unprovable
   rather than giving them a circuit, and S14's open question 10 — how a transfer row's RAM
@@ -674,9 +674,9 @@ event, and every lookup is switched off by its selector.
   2 (`delegation.md` §10). What makes it *correct* is not here but in the delegation
   family's circuit; this family only witnesses that the request was made
   (`docs/spec/delegation.md` §5).
-- Binding the public values to the execution (S14's D3, D5): **done at S25**, and not by
+- Binding the public values to the execution (S14's D3, D5): **done at S-IO**, and not by
   this family. At S16 the public I/O digest was in the statement and nothing tied it to a
-  row; since S25 the statement's `input` and `output` are the payloads of two RAM windows
+  row; since S-IO the statement's `input` and `output` are the payloads of two RAM windows
   of their own, bound by the memory argument and by step 10c of §6
   (`docs/spec/public-values.md`). No gate here changed, and fd 0 and fd 1 are not what is
   bound — nothing a proof covers travels on either.

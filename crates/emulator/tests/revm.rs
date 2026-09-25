@@ -42,7 +42,7 @@ use program::{decode_program, DecodedTables, ProgramParams, VmConfig};
 use revm_block::{AccountWitness, BlockWitness, TxWitness};
 use trace::plan_shards;
 
-/// The guest, and since S25 the **provable** one: its witness arrives in the
+/// The guest, and since S-IO the **provable** one: its witness arrives in the
 /// advice region and its output commitment leaves in the journal.
 const GUEST: &str = "revm-block";
 

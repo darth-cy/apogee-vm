@@ -3,7 +3,7 @@
 //! The provable guest: one `BlockWitness` out of the **advice** region, revm
 //! over it, the output commitment into the **journal**.
 //!
-//! This is the shape the target architecture asks for, and the reason S25
+//! This is the shape the target architecture asks for, and the reason S-IO
 //! exists (`docs/spec/public-values.md`):
 //!
 //! ```text
@@ -20,7 +20,7 @@
 //! block began and ended on, so a witness describing a different block
 //! publishes a different commitment rather than the same one.
 //!
-//! Until S25 this program could not be proven at all. `read` and `write` are
+//! Until S-IO this program could not be proven at all. `read` and `write` are
 //! not provable ecalls, so S24 proved a second binary with the witness baked
 //! into its `.rodata` — which moved the program identity with every block, and
 //! is what made per-block proving impossible. The witness is data now, not

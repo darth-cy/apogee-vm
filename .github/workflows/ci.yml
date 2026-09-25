@@ -63,7 +63,7 @@ jobs:
 
       # The output oracle: this emulator and qemu-riscv32 on the committed
       # guests, compared on the exit status and on fd 1 and nothing below that
-      # (S25). `#[ignore]`d for the reason the suite above is, and asked for by
+      # (S-IO). `#[ignore]`d for the reason the suite above is, and asked for by
       # name the same way.
       - name: emulator matches QEMU on the outputs
         run: cargo test -p emulator --test qemu_outputs -- --include-ignored
@@ -361,7 +361,7 @@ jobs:
       #   run: cargo test --release -p prover --test recursion -- --include-ignored --test-threads=1
 
       # DEFERRED: cargo test --release -p prover --test public_io -- --include-ignored --test-threads=1
-      # Master rule 7, for S25's acceptance. `guests/public-io` reads a
+      # Master rule 7, for S-IO's acceptance. `guests/public-io` reads a
       # commitment out of the **public input**, checks its **advice** against
       # it, and publishes the result in the **journal** — the first statement in
       # the repository whose public input and public output are bound to the
@@ -375,11 +375,11 @@ jobs:
       # own extension, the journal's family having no init column to pre-load,
       # and each statement rule's negative control.
       #
-      # - name: S25's public values, bound end to end
+      # - name: S-IO's public values, bound end to end
       #   run: cargo test --release -p prover --test public_io -- --include-ignored --test-threads=1
 
       # DEFERRED: cargo test --release -p prover --test revm -- --include-ignored --test-threads=1
-      # Master rule 7, for S24's acceptances 6, 7 and 8, over the binary S25
+      # Master rule 7, for S24's acceptances 6, 7 and 8, over the binary S-IO
       # made provable: the witness arrives as **advice** and the output
       # commitment leaves in the **journal**, so the embedded-witness binary and
       # `exit_with_public_words` are both gone. `guests/revm-block`
@@ -388,7 +388,7 @@ jobs:
       # `--release` on the committed witness, against `revm-block-stdio`'s
       # 221,239, the difference being the `read` this binary no longer makes --
       # and every one of the seven execution families runs: THIRTEEN shards
-      # since S25 -- seven `2^20` execution shards, two `2^20` RAM window
+      # since S-IO -- seven `2^20` execution shards, two `2^20` RAM window
       # shards, one `2^20` ADVICE_WINDOWS shard for the witness, one `2^8`
       # KECCAK_F shard and one `2^8` shard each for PUBLIC_INPUT and
       # PUBLIC_OUTPUT. The window families are at `2^20` here and not `2^16`, which is
@@ -403,24 +403,24 @@ jobs:
       # machine.
       #
       # Measured at S24: 3 passed, 536 s, 38.4 GB peak, with RAYON_NUM_THREADS=6
-      # on an 18-core / 48 GB machine. That measurement PREDATES S25 and is a
+      # on an 18-core / 48 GB machine. That measurement PREDATES S-IO and is a
       # floor, not the current figure: the statement gained three shards, one of
       # them a `2^20` advice window, and this suite has not been re-measured
       # since. The bound is not optional: shard proving holds one forward pass
       # per worker, and ELEVEN `2^20` shards unbounded on 18 cores does not fit
       # 48 GB. The block is byte-identical either way (S20 must-be-exact 8), so
       # the bound changes the measurement and not the proof.
-      # docs/handoff/S24-revm.md §6; docs/handoff/S25-io-binding.md §6.
+      # docs/handoff/S24-revm.md §6; docs/handoff/S-IO.md §6.
       #
       # It proves `guests/revm-block`'s OWN binary. S24 could not: `read` and
       # `write` are not provable ecalls, and still are not -- the add/sub
       # family's `ecall_is_exit` gate partitions every ecall row to EXIT or a
       # registered delegation number, and `prover::fill::add_sub` refuses a
-      # read row, a write row and their transfer cycles by name. S25 removed
+      # read row, a write row and their transfer cycles by name. S-IO removed
       # the wall rather than climbing it, so the guest issues no ecall but
       # EXIT; `revm-block-stdio` is the fd 0 / fd 1 compatibility binary and is
       # still not provable, which is what `crates/emulator/tests/revm.rs`
-      # exercises. `docs/handoff/S25-io-binding.md` is the account.
+      # exercises. `docs/handoff/S-IO.md` is the account.
       #
       # Its CI-sized halves are `crates/emulator/tests/revm.rs` -- the witness's
       # canonicity, the output commitment's shape, native revm against the

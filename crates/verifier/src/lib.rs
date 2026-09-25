@@ -177,7 +177,7 @@ mod tests {
                 (family::JUMP_BRANCH_SLT, 1 << 20),
                 (family::INIT_TEARDOWN, 1 << 16),
                 (family::ZERO_WINDOWS, 1 << 16),
-                // S25's three, in every `VmConfig`
+                // S-IO's three, in every `VmConfig`
                 // (`docs/spec/public-values.md` §4).
                 (family::PUBLIC_INPUT, family::PUBLIC_WINDOW_HEIGHT),
                 (family::PUBLIC_OUTPUT, family::PUBLIC_WINDOW_HEIGHT),
@@ -241,7 +241,7 @@ mod tests {
             output: vec![],
             exit_status: 0,
             // Positional over the config: no jump shard, the one window-0
-            // shard the window rules require, no zero window, and — since S25
+            // shard the window rules require, no zero window, and — since S-IO
             // — one shard for each public value family and no advice window.
             shard_counts: vec![0, 1, 0, 1, 1, 0],
             windows: vec![],

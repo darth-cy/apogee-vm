@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-//! S25's guest: the whole public-values architecture in one small program.
+//! S-IO's guest: the whole public-values architecture in one small program.
 //!
 //! ```text
 //! bulk data               -> ADVICE          prover-supplied, bound by nothing

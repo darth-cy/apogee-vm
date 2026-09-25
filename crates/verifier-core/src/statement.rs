@@ -611,7 +611,7 @@ mod tests {
                 (family::ZERO_WINDOWS, 1),
                 (family::ADD_SUB_LUI_AUIPC, 0),
                 (family::ADD_SUB_LUI_AUIPC, 1),
-                // S25's three, in the same ascending tail as any other family.
+                // S-IO's three, in the same ascending tail as any other family.
                 (family::PUBLIC_INPUT, 0),
                 (family::PUBLIC_OUTPUT, 0),
             ]

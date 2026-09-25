@@ -762,7 +762,7 @@ pub fn decode_program_detaching(
         // Three presence rules, and no fourth. A family that claims a pc is
         // present because it claims one. A **window** family is present in
         // every config — the two RAM window ones (`docs/spec/memory.md` §3.2)
-        // and, since S25, the two public value ones and `ADVICE_WINDOWS`
+        // and, since S-IO, the two public value ones and `ADVICE_WINDOWS`
         // (`docs/spec/public-values.md` §4). A delegation family is present
         // exactly when the linked binary declares it
         // (`docs/spec/delegation.md` §7) — never because a caller asked.
@@ -977,7 +977,7 @@ pub fn setup_commitments(
             // `ZERO_WINDOWS` has no setup column, and a delegation family has
             // no decoded table at all: it is invoked, never decoded, so there
             // is nothing about it for identity to commit but its presence in
-            // the `VM_CONFIG` message. The three S25 window families are
+            // the `VM_CONFIG` message. The three S-IO window families are
             // empty for a stronger reason: an `S` column is bound by program
             // identity, and one execution's public values — or one
             // execution's advice — have no business in every execution's

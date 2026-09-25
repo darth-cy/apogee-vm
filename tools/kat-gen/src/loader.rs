@@ -105,7 +105,7 @@ pub const ELF_FIXTURES: [(&str, &str); 20] = [
     ),
     (
         "public-io",
-        "S25's guest: its public input and its advice are ordinary loads and its \
+        "S-IO's guest: its public input and its advice are ordinary loads and its \
          journal ordinary stores, so it issues no ecall but EXIT and is provable",
     ),
 ];

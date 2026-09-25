@@ -301,10 +301,10 @@ fn reachability_survives_the_optimiser() {
 }
 
 /// A declared family is in the `VmConfig` **in ascending id order**, after the
-/// RAM window families and before S25's three, and carries a table with no
+/// RAM window families and before S-IO's three, and carries a table with no
 /// columns — it is invoked, never decoded.
 ///
-/// It was last until S25; the config is one ascending list and three families
+/// It was last until S-IO; the config is one ascending list and three families
 /// were appended above it (`docs/spec/public-values.md` §4).
 #[test]
 fn a_declared_family_is_last_and_has_no_table() {
@@ -319,7 +319,7 @@ fn a_declared_family_is_last_and_has_no_table() {
     assert_eq!(
         ids.last().copied(),
         Some(family::ADVICE_WINDOWS),
-        "S25's three are the highest ids"
+        "S-IO's three are the highest ids"
     );
     let table = tables
         .family(family::KECCAK_F)

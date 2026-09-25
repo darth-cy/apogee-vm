@@ -528,7 +528,7 @@ property of the proved statement rather than a hole in it.
 CI.
 
 `qemu-riscv32` keeps a reservation set and may therefore fail an unpaired `sc.w` where this
-machine succeeds. That is not compared and no longer needs to be: since S25 QEMU is an oracle
+machine succeeds. That is not compared and no longer needs to be: since S-IO QEMU is an oracle
 for what a guest computes and never for how this emulator computes it
 (`crates/emulator/tests/qemu_outputs.rs`), so what would catch the deviation if it ever
 mattered is a guest whose **committed output** depended on spurious failure — and compiled

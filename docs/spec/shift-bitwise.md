@@ -413,7 +413,7 @@ instructions of the four families S18 proves plus the exit ecall, checking every
 itself and exiting with the number of checks, 96. Every expected value in it was computed
 from an exact RV32IM model rather than by hand, and the emulator, `qemu-riscv32` and the
 guest's own checks are three independent readings of the same twenty instructions — at the
-level the two executors are compared, which since S25 is the exit status and fd 1 alone
+level the two executors are compared, which since S-IO is the exit status and fd 1 alone
 (`crates/emulator/tests/qemu_outputs.rs`). The guest checks every value itself and exits
 with the count, so one wrong value on either executor is a different exit status, 96 being
 the number that says all of them held.

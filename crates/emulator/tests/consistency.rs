@@ -899,7 +899,7 @@ fn a_traced_run_is_the_same_execution_and_its_memory_balances() {
             for trace in &traces.families {
                 // Every **window** family owns addresses and not cycles, so
                 // an empty buffer is what it is supposed to have: the two RAM
-                // window ones and, since S25, the two public value ones and
+                // window ones and, since S-IO, the two public value ones and
                 // `ADVICE_WINDOWS` (`docs/spec/public-values.md` §4).
                 assert!(
                     !constants::family::CYCLE_OWNING[trace.family as usize]

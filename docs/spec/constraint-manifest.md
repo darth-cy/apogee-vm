@@ -12,14 +12,14 @@
 > the code: the `PolyAddress`, the artifact's own name for it, and the Rust constant or
 > constructor that makes it.
 >
-> **Status: S25.** All **fifteen** circuits are registered: `ADD_SUB_LUI_AUIPC`,
+> **Status: S-IO.** All **fifteen** circuits are registered: `ADD_SUB_LUI_AUIPC`,
 > `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MUL_DIV`, `MEM_WORD`, `MEM_SUBWORD`, `ATOMICS`,
 > `INIT_TEARDOWN`, `ZERO_WINDOWS`, `KECCAK_F`, `POSEIDON2`, `FR_ARITH`, `PUBLIC_INPUT`,
 > `PUBLIC_OUTPUT` and `ADVICE_WINDOWS`. Every execution family the decoder routes to has a
 > circuit and a fill, and no `FamilyId` in `constants::family` is without one. S21 added the
 > first family that is **invoked rather than decoded** (§12) and, with it, the eighth memory
 > query — the `deleg` mirror — which changed `ADD_SUB_LUI_AUIPC`'s frame, its shape and every
-> relation number in §3. S25 added the three **RAM window** families that carry an execution's
+> relation number in §3. S-IO added the three **RAM window** families that carry an execution's
 > public input, its public output and the prover's advice (§15, §16, §17), and one new artifact
 > constructor, `memory::value_window_artifact`, shared by two of them; it changed no existing
 > circuit, added no enforcing gate anywhere, and drew no new challenge.
@@ -284,7 +284,7 @@ prover pairs each circuit with a fill,
 for 5, `fill::atomics` for 6, `fill::window` for 7, 8 **and 13**, `fill::keccak_f` for 9,
 `fill::poseidon2` for 10, `fill::fr_arith` for 11, `fill::public_input` for 12 and
 `fill::advice` for 14.
-**Every family is provable at S25.**
+**Every family is provable at S-IO.**
 
 **The last three rows are in every `VmConfig`, and two of them prove a shard in every
 statement.** `program::decode_program` lists families 12, 13 and 14 unconditionally, under the
@@ -298,7 +298,7 @@ prover could drop is a way to publish nothing while having published something; 
 ignores public values publishes an empty input and an empty journal and pays two `2^8`-row
 shards for it. `ADVICE_WINDOWS` is the other way round: `trace::advice_region_words` is 0 for
 empty advice, so `advice_window_count` is 0 and a program with no advice pays nothing
-(`public-values.md` §4, §6). **The shard-count vectors quoted below are the pre-S25 ones**, one
+(`public-values.md` §4, §6). **The shard-count vectors quoted below are the pre-S-IO ones**, one
 entry per family of the config as it then was; every statement in the repository gains three
 entries, two of them 1.
 The S16 statement is `crates/prover/tests/acceptance.rs`': its config lists families 0, 7 and 8, and its
@@ -340,7 +340,7 @@ in its `VmConfig` because `Fr`'s operators reach the declaration records, which 
 the seam a property of the binary rather than of the call site.
 `guests/recursion-unused` declares the same two and proves zero shards of each.
 
-The S25 statement is `crates/prover/tests/public_io.rs`', and it is the first in the repository
+The S-IO statement is `crates/prover/tests/public_io.rs`', and it is the first in the repository
 whose public input and public output are **bound to the execution**. `guests/public-io` reads
 eight public input bytes — a length and a position-dependent checksum — checksums that many
 **advice** bytes against them, and commits the checksum and the advice's first eight bytes to
@@ -410,7 +410,7 @@ and it is not committed as bytes at all**: 100,254,040 of them, 974 times `atomi
 line above, written by `cargo run -p kat-gen -- keccak` and diffed by CI like every other
 fixture (§12.1). It is at `n = 8` because that is the family's one height, as it is for the two
 other delegation families and for `PUBLIC_INPUT` and `PUBLIC_OUTPUT` — five of this table's
-rows and, since S25, no longer the odd ones.
+rows and, since S-IO, no longer the odd ones.
 
 **`ADD_SUB_LUI_AUIPC` moved at S21, and by more than a column.** The eighth memory query — the
 `deleg` mirror a delegation request makes (`delegation.md` §5.1) — gave it a five-column `M`
@@ -8023,7 +8023,7 @@ commitment to it, or the journal naming the state roots a block began and ended 
 `guests/revm-block` does — and the VM cannot discharge that obligation for it.
 
 A store into the advice region is an ordinary store and the multiset carries it like any other:
-the region is **not** enforced read-only (owner's decision, S25), because enforcing it would need
+the region is **not** enforced read-only (owner's decision, S-IO), because enforcing it would need
 a space selector on the load path of three frozen families and would buy no soundness on a column
 nothing binds.
 
@@ -8089,7 +8089,7 @@ Facts this accounting turned up. None changes a circuit.
    §7.1's `trace_vars ≥ 20`: the timestamp channel's 19 variables, made even for Mercury.
    `INIT_TEARDOWN` and `ZERO_WINDOWS` are reachable only at 16, 18, 20 and 22, never at
    `n ≤ 14`, where `V[ram_live]` is 0 on every row and `INIT_TEARDOWN` would mask its whole
-   window — and since S25 `verifier_core::window_height` refuses a window height below `2^16`
+   window — and since S-IO `verifier_core::window_height` refuses a window height below `2^16`
    for a second reason, that both public windows must lie inside RAM window 0;
    `ADVICE_WINDOWS` shares that height. **`PUBLIC_INPUT` and `PUBLIC_OUTPUT` are the opposite
    case**: reachable over the whole 0–30 range, like a delegation family and for the same
@@ -8302,7 +8302,7 @@ Facts this accounting turned up. None changes a circuit.
     the literal 0, leaving a prover no init column to pre-load the answer into at timestamp 0
     (§16.1). `PUBLIC_INPUT` and `ADVICE_WINDOWS` likewise share `value_window_artifact` and
     differ only in what `verify_shard_local` step 10c does with `M[2]` — holds it to the
-    statement's `input`, or does not look at it at all. So three of the five S25-era window
+    statement's `input`, or does not look at it at all. So three of the five S-IO-era window
     families are two artifacts, and **what tells them apart is a verifier step and a window
     id, not a gate**. It is the first place in this registry where two `FamilyId`s carry
     identical circuits, and `VerifyingKey::check` is untroubled by it: a key's circuits are the
@@ -8383,7 +8383,7 @@ cargo run -p checker -- dump crates/constraints/tests/vectors/zero_window.bin   
 #   zero_window.bin is PUBLIC_OUTPUT's circuit too: family_circuit(13, n) and
 #   family_circuit(8, n) are one constructor and agree byte for byte at every n.
 # PUBLIC_INPUT's and ADVICE_WINDOWS' artifact has NO committed fixture, value_window_artifact
-#   being S25's one new constructor. To read §15 and §17 from it, write the bytes and dump them:
+#   being S-IO's one new constructor. To read §15 and §17 from it, write the bytes and dump them:
 #     memory::value_window_artifact(8).to_bytes()  -> value_window_8.bin   (2,027 bytes)
 #     memory::value_window_artifact(22).to_bytes() -> value_window_22.bin  (3,535 bytes)
 #     memory::zero_window_artifact(8).to_bytes()   -> zero_window_8.bin    (1,910 bytes)
@@ -8420,7 +8420,7 @@ cargo test -p checker --test public_values      # §15's, §16's and §17's shap
                                                 # windows' and the advice region's layouts, and
                                                 # the window rules, in ordinary CI
 cargo test -p prover --test public_io -- --include-ignored --test-threads=1
-                                                # S25's statement: guests/public-io proved and
+                                                # S-IO's statement: guests/public-io proved and
                                                 # verified, step 10c isolated, and the advice
                                                 # shown unbound. DEFERRED; a 2^20 statement
 ```

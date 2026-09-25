@@ -81,7 +81,7 @@ fn an_imported_archive_answers_without_reexecution() {
         assert_eq!((trace.family, trace.len() as u64), (*family, *count));
     }
 
-    // The archive carries the **public values**, which since S25 are the two
+    // The archive carries the **public values**, which since S-IO are the two
     // windows and not the fd streams: `fib` reads fd 0 and writes fd 1, so
     // both of its public values are empty and its bytes are in `stdout`
     // (`docs/spec/public-values.md` §1).

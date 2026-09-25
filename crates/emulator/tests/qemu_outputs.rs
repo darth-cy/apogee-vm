@@ -3,8 +3,8 @@
 //!
 //! The comparison is the guest's **exit status** and its **fd 1 bytes**, and
 //! nothing below that — no register, no pc, no instruction count, no trace.
-//! S12 compared the two register file by register file; S25 withdrew that
-//! (`docs/handoff/S25-io-binding.md`). It was never the property this project
+//! S12 compared the two register file by register file; S-IO withdrew that
+//! (`docs/handoff/S-IO.md`). It was never the property this project
 //! needs — this VM is not a clone of QEMU, and its internals exist for the
 //! witness and the proof — and since S23 it is not even true: a delegation
 //! ecall runs natively here and takes the `-ENOSYS` software fallback under

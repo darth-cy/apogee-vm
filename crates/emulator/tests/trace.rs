@@ -558,7 +558,7 @@ fn an_ecall_s_transfers_precede_it_one_word_each() {
         let t = traced(name);
         let rows = rows_by_cycle(&t);
         let io = &t.execution.io;
-        // fd 1 is `stdout` since S25, `io.output` being the journal, which no
+        // fd 1 is `stdout` since S-IO, `io.output` being the journal, which no
         // transfer cycle ever touches: the journal is written by ordinary
         // stores (`docs/spec/public-values.md` §1).
         let streams: [&[u8]; 4] = [&t.stdin, &t.execution.stdout, &t.execution.stderr, &[]];

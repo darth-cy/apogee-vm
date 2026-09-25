@@ -10,7 +10,7 @@ every program.
 
 ```rust
 pub type FamilyId = u32;                                   // constants::family
-pub const FAMILIES: [FamilyId; family::COUNT as usize];    // 15 since S25; ascending, the canonical order
+pub const FAMILIES: [FamilyId; family::COUNT as usize];    // 15 since S-IO; ascending, the canonical order
 pub fn row_kind(instr: &Instr) -> (FamilyId, u32);         // the pc-claiming rule + mask bit
 pub enum RowField { Pc, NextPc, Rs1, Rs2, Rd, Imm, Funct3, ExtraMask }
 pub const ROW_FIELDS: [RowField; 8];                       // frozen column order
@@ -62,7 +62,7 @@ pub fn absorb_statement_descriptor(tr: &mut Transcript, config: &VmConfig, shard
 pub fn check_memory_windows(config: &VmConfig, shard_counts: &[u32], windows: &[u32])
     -> Result<(), ProgramError>;
 pub fn family_name(family: FamilyId) -> &'static str;
-// S25: re-exported from verifier-core beside VmConfig and the descriptor.
+// S-IO: re-exported from verifier-core beside VmConfig and the descriptor.
 pub use verifier_core::{advice_first_window, public_io_words};
 
 pub mod lookup_tables {                  // docs/spec/lookup.md §9
@@ -103,21 +103,21 @@ is claimed by exactly one family by construction.
 | 13 | `PUBLIC_OUTPUT` | no pc; the journal at `0x8400`, exactly one shard, present in every `VmConfig` at the same pinned height; an **empty** table | 2^8 |
 | 14 | `ADVICE_WINDOWS` | no pc; the prover's advice from `0x8000_0000` up, `k >= 0` consecutive windows, present in every `VmConfig` at the window height; an **empty** table | 2^22 |
 
-The **three** window families — `INIT_TEARDOWN`, `ZERO_WINDOWS` and, since S25,
+The **three** window families — `INIT_TEARDOWN`, `ZERO_WINDOWS` and, since S-IO,
 `ADVICE_WINDOWS` — have **one height**, `h`: RAM window `w` is the bytes
 `[4h·w, 4h·(w+1))` (`docs/spec/memory.md` §3). `bytecode_size_words` defaults to 2^20
 (a 4 MiB ceiling), the code version to 0.
 
 **Static detachment.** A family is in the `VmConfig` exactly when it claims at least one
 pc, a **window family** always, and — since S21 — **a delegation family exactly when the
-image declares it**. Those are the three presence rules and there are no others. S25 added
+image declares it**. Those are the three presence rules and there are no others. S-IO added
 no fourth: its three families join the second, so "always" now names five — the two init
 families, the two public value families and `ADVICE_WINDOWS`. The two public families are
 in every `VmConfig` **whether or not the execution uses them**, and each proves exactly one
 shard, because a count a prover could drop is a way to publish nothing while having
 published something; a program that ignores public values simply publishes an empty input
 and an empty journal (`docs/spec/public-values.md` §4). The consequence is that **every
-program's identity moved at S25** relative to a tree without them, the `VM_CONFIG` message
+program's identity moved at S-IO** relative to a tree without them, the `VM_CONFIG` message
 listing the family set. The
 preprocessor derives the set; nothing selects it. A pc whose family is unavailable is
 claimed by nobody, which is the same loud failure as an unknown instruction — that is what
@@ -278,7 +278,7 @@ Every one is an `Err`, and `Display` names what it refused.
   family set lacks one of the **three** window families (only a detaching test can make it)
   or their heights differ — a `ZERO_WINDOWS` height below `INIT_TEARDOWN`'s would give image
   words a second init row, and an `ADVICE_WINDOWS` height of its own would put the advice
-  region on another grid than `advice_first_window` computes — or, since S25, the set lacks
+  region on another grid than `advice_first_window` computes — or, since S-IO, the set lacks
   a public value family, one of them is not at `family::PUBLIC_WINDOW_HEIGHT`, or `4h` is
   below `PUBLIC_OUTPUT_ORIGIN + PUBLIC_WINDOW_BYTES`, which would let a `ZERO_WINDOWS` id
   claim a public window.
@@ -309,7 +309,7 @@ above the two window families', so a config lists it last;
 `crates/program/tests/delegation.rs` holds every registered delegation to that. Wire form, frozen: `u32`
 LE family count `k`, then `k` pairs `u32` LE `(family, height)`, then `u32` LE
 `bytecode_size_words`; `from_bytes` refuses a wrong length, an unknown or out-of-order
-family, a height off the menu, and **anything `window_height` refuses** — which since S25
+family, a height off the menu, and **anything `window_height` refuses** — which since S-IO
 is every rule in the `WindowRule` list above, the public families' pinned height included.
 That is the check that matters, because it is the one on bytes a verifier was handed.
 Presence, not position: since S21 the init families no
@@ -325,7 +325,7 @@ carrying `ZERO_WINDOWS`' window ids `[w_1 … w_k]`, empty when there are none.
 `check_memory_windows` is the verifier's rule over the same three, before the memory
 challenges (`docs/spec/memory.md` §3.5): `window_height`'s rules; `INIT_TEARDOWN`'s shard
 count 1; one window id per `ZERO_WINDOWS` shard; the ids strictly increasing; every id in
-`[1, 2^29 / h − 1]`; and, since S25, exactly one `PUBLIC_INPUT` shard, exactly one
+`[1, 2^29 / h − 1]`; and, since S-IO, exactly one `PUBLIC_INPUT` shard, exactly one
 `PUBLIC_OUTPUT` shard, and `advice_first_window(h) + k <= 2^30 / h` for `ADVICE_WINDOWS`'
 count `k`. `ZERO_WINDOWS` shard `i` is window `w_i`; the advice windows need no list, being
 the `k` consecutive windows from `advice_first_window(h) = 2^29 / h` up — exactly where the

@@ -23,7 +23,7 @@ fn block() -> BlockProof {
     init.outputs = vec![Fr::ZERO; 2];
     let mut add = shell(&vk, &public);
     add.ts_window = [4, 400];
-    // S25's two public value shards, which every statement has
+    // S-IO's two public value shards, which every statement has
     // (`docs/spec/public-values.md` §4). Neither is cycle-owning, so each
     // carries the trivial window like the init family's.
     let mut input = shell(&vk, &public);

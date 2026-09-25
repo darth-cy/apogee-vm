@@ -75,7 +75,7 @@ fn each_space_has_exactly_its_addresses() {
         }
     }
 
-    // **`Ram` is wider than ordinary RAM since S25** and a delegation space is
+    // **`Ram` is wider than ordinary RAM since S-IO** and a delegation space is
     // not: the two public windows sit below `RAM_ORIGIN` and the advice region
     // above RAM, and all three are `address_space::RAM` tuples
     // (`docs/spec/public-values.md` §2). A delegation frame may be in none of

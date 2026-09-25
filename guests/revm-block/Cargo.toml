@@ -24,7 +24,7 @@ publish.workspace = true
 name = "revm_block"
 path = "src/lib.rs"
 
-# The guest, and the provable one since S25: its witness is advice and its
+# The guest, and the provable one since S-IO: its witness is advice and its
 # output commitment is the journal.
 [[bin]]
 name = "revm-block"

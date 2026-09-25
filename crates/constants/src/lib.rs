@@ -1072,7 +1072,7 @@ pub mod family {
     /// or inverse a row, invoked by the [`ecall::PRECOMPILE_FR_ARITH`] ecall
     /// (`docs/spec/delegation.md` §13).
     pub const FR_ARITH: u32 = 11;
-    /// The **public input** window (S25): the verifier-known input of the
+    /// The **public input** window (S-IO): the verifier-known input of the
     /// statement, at [`guest_memory::PUBLIC_INPUT_ORIGIN`]. Claims no pc,
     /// owns no cycle, and is in **every** `VmConfig` at
     /// [`PUBLIC_WINDOW_HEIGHT`], proving exactly one shard.
@@ -1081,7 +1081,7 @@ pub mod family {
     /// its teardown column is free, because a guest may overwrite its own
     /// input buffer (`docs/spec/public-values.md` §5).
     pub const PUBLIC_INPUT: u32 = 12;
-    /// The **public output** window — the journal — (S25), at
+    /// The **public output** window — the journal — (S-IO), at
     /// [`guest_memory::PUBLIC_OUTPUT_ORIGIN`]. In every `VmConfig` at
     /// [`PUBLIC_WINDOW_HEIGHT`], proving exactly one shard.
     ///
@@ -1090,7 +1090,7 @@ pub mod family {
     /// storing it; its teardown column is what the verifier holds to the
     /// statement's `output` (`docs/spec/public-values.md` §5).
     pub const PUBLIC_OUTPUT: u32 = 13;
-    /// The **advice** windows (S25): prover-supplied initial values for the
+    /// The **advice** windows (S-IO): prover-supplied initial values for the
     /// region at [`guest_memory::ADVICE_ORIGIN`], one shard per window, `k`
     /// of them counted from [`guest_memory::ADVICE_ORIGIN`] upward. In every
     /// `VmConfig` at the window height, with `k >= 0` shards.
@@ -1484,7 +1484,7 @@ pub mod ecall {
     /// (`docs/spec/public-values.md` §1). `read` is not a provable ecall, so a
     /// guest that takes this path is not a guest that can be proven.
     ///
-    /// Named `FD_PUBLIC_INPUT` until S25, when the public values stopped being
+    /// Named `FD_PUBLIC_INPUT` until S-IO, when the public values stopped being
     /// a stream. The **number** is frozen at its Linux value, as every number
     /// in this module is; only the name moved.
     pub const FD_STDIN: u32 = 0;
@@ -1493,7 +1493,7 @@ pub mod ecall {
     ///
     /// The compatibility path for a guest whose result is compared against
     /// another executor's; the journal — `guest_sdk::commit` — is what a proof
-    /// binds. Named `FD_PUBLIC_OUTPUT` until S25.
+    /// binds. Named `FD_PUBLIC_OUTPUT` until S-IO.
     pub const FD_STDOUT: u32 = 1;
 
     /// Diagnostics. Free-form, uncommitted, and ignored by the verifier.

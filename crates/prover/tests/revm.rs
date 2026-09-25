@@ -2,7 +2,7 @@
 //!
 //! `#[ignore]`d and deferred out of CI under master rule 7: the statement is
 //! seven `2^20` execution shards, two `2^20` RAM window shards, one `2^8`
-//! keccak shard and S25's three — two `2^8` public value shards and one
+//! keccak shard and S-IO's three — two `2^8` public value shards and one
 //! `2^20` advice window — over a `--release` guest this suite builds from
 //! source. Run it with
 //!
@@ -10,9 +10,9 @@
 //! cargo test --release -p prover --test revm -- --include-ignored --test-threads=1
 //! ```
 //!
-//! # What is proved, and what changed at S25
+//! # What is proved, and what changed at S-IO
 //!
-//! The binary is `guests/revm-block`'s **own** one, and since S25 that is the
+//! The binary is `guests/revm-block`'s **own** one, and since S-IO that is the
 //! whole program: its `BlockWitness` arrives in the **advice** region and its
 //! output commitment leaves in the **journal**, both ordinary loads and stores
 //! (`docs/spec/public-values.md`). It issues no ecall but `EXIT`.
@@ -57,7 +57,7 @@ const ZERO: u32 = family::ZERO_WINDOWS;
 /// `guests/revm-block` exits 0 with its output commitment in the journal.
 const REVM_RESULT: u32 = 0;
 
-/// The binary proved here: the guest itself, provable since S25.
+/// The binary proved here: the guest itself, provable since S-IO.
 /// `src/stdio.rs` is the fd 0 / fd 1 compatibility binary, which is not.
 const REVM_BIN: &str = "revm-block";
 
@@ -203,7 +203,7 @@ fn host_output() -> Vec<u8> {
 ///
 /// Identity is what a verifier takes from a channel the prover does not
 /// control — so a build that is not reproducible is a program nobody can name.
-/// Since S25 it binds the program and nothing else: the witness is advice, so
+/// Since S-IO it binds the program and nothing else: the witness is advice, so
 /// one identity serves every block, which is the whole point of the change.
 /// Two builds into two fresh target directories, each preprocessed and
 /// committed on its own, and the two digests compared.
@@ -434,7 +434,7 @@ fn a7_a_changed_statement_is_refused() {
         ))
     );
 
-    // 7(c) What the guest published. Since S25 that is the **journal**, and a
+    // 7(c) What the guest published. Since S-IO that is the **journal**, and a
     // changed journal is a changed statement twice over: `io_digest` absorbs
     // it at G7 before the memory challenges are squeezed, and step 10c holds
     // the journal window's committed teardown column to those same bytes

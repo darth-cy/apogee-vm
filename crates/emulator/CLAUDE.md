@@ -5,16 +5,21 @@ The reference emulator — RV32IMAC on one hart over a `ProgramImage` — its ec
 dispatch, and the tracing path that fills `crates/trace`'s structures.
 **`docs/spec/execution-trace.md` is the convention the trace
 follows; `docs/spec/ecall-abi.md` is the ABI the ecalls implement**; since S21,
-**`docs/spec/delegation.md`** for what a delegation ecall does; and, since S25,
+**`docs/spec/delegation.md`** for what a delegation ecall does; and, since S-IO,
 **`docs/spec/public-values.md`** for the two public windows and the advice region.
 
 ```rust
-pub struct GuestIo { pub input: Vec<u8>, pub advice: Vec<u8>, pub hint: Vec<u8> }   // S25's advice
+// S-IO: FOUR fields, and the split is the point. `input` and `advice` are memory
+// the proof knows about; `stdin` and `hint` are fd streams it does not. A guest is
+// provable or QEMU-runnable, never both, so one field cannot serve two roles.
+pub struct GuestIo { pub input: Vec<u8>, pub advice: Vec<u8>,
+                     pub stdin: Vec<u8>, pub hint: Vec<u8> }
 pub struct Execution { pub regs: [u32; 32], pub exit_code: i32, pub cycle_count: u64,
                        pub io: IoStreams, pub stdout: Vec<u8>, pub stderr: Vec<u8> }
 pub enum EmuError { NotAnInstruction { pc }, IllegalInstruction { pc, word }, Ebreak { pc },
                     Misaligned { pc, addr, width }, OutOfBounds { pc, addr },
-                    ClockOverflow { cycle }, JournalTooLong { len },
+                    ClockOverflow { cycle },
+                    PublicInputTooLong { len }, JournalTooLong { len },   // S-IO
                     DelegationFamilyAbsent { pc, number },
                     DelegationFrame { pc, detail } }                         // + Display
 
@@ -39,7 +44,7 @@ serves on fd 0, so one source runs under both executors; `advice`, the prover's 
 bytes at `guest_memory::ADVICE_ORIGIN`, framed by `trace::advice_word`; and `hint`, the
 fd 3 stream, the older unprovable spelling of the same idea.
 
-**`Execution::io` is the execution's public values, not its streams** (S25). `io.input` is
+**`Execution::io` is the execution's public values, not its streams** (S-IO). `io.input` is
 the public input it was given — the window's contents, whether or not the guest read a byte
 of it, because it is not a stream cursor — and `io.output` is the **journal** `Machine::
 finish` reads back out of the public output window at exit. `stdout` is the fd 1
@@ -53,7 +58,7 @@ none of; `stderr` is fd 2, diagnostics, archived nowhere.
   roles in order — only when it completes, so a fatal error leaves nothing behind.
 - **Machine state is plain**: `[u32; 32]` registers, the pc, RAM as a hash map of 4 KiB
   pages (absent is zeros), every slot decoded once up front. Registers start at 0, `x0`
-  included; the pc starts at the entry point; RAM starts as the image, plus — since S25 —
+  included; the pc starts at the entry point; RAM starts as the image, plus — since S-IO —
   the public input window and the advice region, seeded below.
 - **Semantics.** Every A instruction is its plain read-modify-write; `aq`/`rl` order
   nothing. **`sc.w` always succeeds** — it stores and writes 0 — a conformance deviation
@@ -66,9 +71,9 @@ none of; `stderr` is fd 2, diagnostics, archived nowhere.
   **addressable regions** or an ecall byte outside the RAM window (`OutOfBounds`),
   `ebreak`, a pc that is not the start of an instruction (the all-zero halfword included),
   a slot the decoder refuses, the 38-bit clock running out (`ClockOverflow`), and, since
-  S25, a journal whose length word is above `guest_memory::PUBLIC_PAYLOAD_BYTES` at exit
+  S-IO, a journal whose length word is above `guest_memory::PUBLIC_PAYLOAD_BYTES` at exit
   (`JournalTooLong`).
-- **The addressable set is `trace::addressable`, not the RAM window** (S25). A load or a
+- **The addressable set is `trace::addressable`, not the RAM window** (S-IO). A load or a
   store reaches ordinary RAM, either public window, or the advice region; the two holes —
   `[0, PUBLIC_INPUT_ORIGIN)` and the gap between the windows and `RAM_ORIGIN` — are
   `OutOfBounds`, so a null dereference is still a loud error and not a trace nothing can
@@ -101,7 +106,7 @@ none of; `stderr` is fd 2, diagnostics, archived nowhere.
   journal window starts at 0 and stays there until the guest stores into it, which is
   `PUBLIC_OUTPUT`'s literal-0 init leaf. The same bytes are also served on fd 0, so a guest
   built for a POSIX host reads them under `qemu-riscv32`.
-- **`Execution::io` is the public values and `Execution::stdout` is fd 1** (S25). `io.input`
+- **`Execution::io` is the public values and `Execution::stdout` is fd 1** (S-IO). `io.input`
   is the window's whole contents — what the *statement* carries, whether or not the guest
   read a byte of it, because a window is not a stream cursor — and `io.output` is the
   journal read out at exit. fd 2 is kept in `Execution::stderr` for diagnostics and
@@ -133,7 +138,7 @@ none of; `stderr` is fd 2, diagnostics, archived nowhere.
 `qemu-riscv32 <elf>`, fd 0 and fd 3 regular files (an empty hint), fd 1 captured to a
 file. The comparison is the guest's **exit status** and its **fd 1 bytes**, and nothing
 below that — no register, no pc, no instruction count, no trace. S12 held the two to each
-other register file by register file; S25 withdrew that. It was never the property this
+other register file by register file; S-IO withdrew that. It was never the property this
 project needs — this VM is not a clone of QEMU, and its internals exist for the witness
 and the proof — and since S23 it is not even true: a delegation ecall runs natively here
 and takes the `-ENOSYS` software fallback under QEMU, so the two instruction streams
@@ -158,7 +163,7 @@ docker run --rm -v "$PWD":/w -w /w -e CARGO_TARGET_DIR=/tmp/t rust:latest bash -
 | --- | --- |
 | `src/lib.rs` (unit) | the last cycle on the 38-bit clock runs and the next is `ClockOverflow` |
 | `tests/keccak.rs` | `keccak_f` against `tiny-keccak`: the all-zero state, the all-ones state, **all 1,600 single-bit states**, a random walk, and `lanes_of`/`words_of` round-tripping. 7 tests |
-| `tests/guests.rs` | the guests' host-computed answers (fib, heap, atomics, rvc-dense), acceptance 10 (echo's `-ENOSYS` fallback computes the S02 permutation), orderbook's fd 3 invariance, `opcodes` executes all 58 non-trapping mnemonics and every instruction of its compressed block, acceptance 11 (seven misaligned kinds, both paths), `run` == `trace_run`, **the recorded public input is what the host supplied and not the prefix the guest consumed** — a cursor is guest state and a statement is not; **S25's mechanism executed**, over `guests/public-io` — the guest reads its public input with ordinary loads, checks its advice against it and leaves its result in the journal, which the executor reads back out of the window at exit; advice the public input does not commit to publishes nothing; asking for advice that was not supplied is the fatal `OutOfBounds`, because no advice means no region; and a public input longer than its window is refused by name before the first cycle; and **S21's acceptance 3**: the six digests `guests/keccak-test` checks itself against, re-derived from `tiny-keccak` and read out of the guest's own source so a stale literal cannot pass, and both keccak guests run to their exit statuses under the delegation ecall |
+| `tests/guests.rs` | the guests' host-computed answers (fib, heap, atomics, rvc-dense), acceptance 10 (echo's `-ENOSYS` fallback computes the S02 permutation), orderbook's fd 3 invariance, `opcodes` executes all 58 non-trapping mnemonics and every instruction of its compressed block, acceptance 11 (seven misaligned kinds, both paths), `run` == `trace_run`, **the recorded public input is what the host supplied and not the prefix the guest consumed** — a cursor is guest state and a statement is not; **S-IO's mechanism executed**, over `guests/public-io` — the guest reads its public input with ordinary loads, checks its advice against it and leaves its result in the journal, which the executor reads back out of the window at exit; advice the public input does not commit to publishes nothing; asking for advice that was not supplied is the fatal `OutOfBounds`, because no advice means no region; and a public input longer than its window is refused by name before the first cycle; and **S21's acceptance 3**: the six digests `guests/keccak-test` checks itself against, re-derived from `tiny-keccak` and read out of the guest's own source so a stale literal cannot pass, and both keccak guests run to their exit statuses under the delegation ecall |
 | `tests/trace.rs` | acceptance 3 (balance, heap traffic included), 4 (a corrupted RAM read, register write mid-chain, pc write and gap, a forged initial value, and a stale read, each named), 5 (the four-slot clock over every event; `amoadd.w` fills all four slots), 6 (routing), the frame table — roles and slots — restated from the spec and checked on every row, the halting sentinel (the exit row alone writes `HALT_PC`, as the last pc write; every other pc write even), ecall transfers with every byte held to the recorded streams, every ecall answering as the ABI says (must-be-exact 2 without QEMU), the rows rebuilding the log exactly, `final_state`, and `trace::init_windows` (fib's stack window at 2^22, 2^20 and 2^16; every traced guest's list exactly its touched windows above 0 at every height, and passing `program::check_memory_windows`) |
 | `tests/archive.rs` | acceptance 7 (byte-identical round trip, hash-equal payloads, answers without re-execution, `io_digest`) and 8 (five phases, the timing section byte for byte, out-of-order refused by byte patch) |
 | `tests/qemu_outputs.rs` | **`#[ignore]`d** — the ten-guest suite (`opcodes`, `rvc-dense`, `fib`, `heap`, `atomics`, `consistency` and the four family guests) run under both executors, agreeing on the exit status and on fd 1; the negative control, which holds one QEMU run against the emulator's answer for a *different* input and requires a disagreement; and `ebreak`, which stops both executors and neither cleanly |

@@ -9,6 +9,12 @@ convention S10 sketched and S14 deferred.
 Read `docs/spec/memory.md` first: the tuple, RAM windows, the boundary and the
 reconciliation are its, and all three families here are RAM window families.
 
+The stage that wrote this page is **`S-IO`**, and it has no number: it is not one of the
+original twenty-seven but the one they forgot, inserted after S24. `docs/handoff/S-IO.md`
+is its note. `S25` in `prompts/S24-revm.md` and `docs/handoff/S24-revm.md` means a
+different, still-future stage — the recorder that produces a `BlockWitness` for real
+blocks — and is not this one.
+
 ---
 
 ## 0. The shape, and why it is this shape
@@ -280,7 +286,7 @@ guest checks one against the other — or, as `guests/revm-block` does, the jour
 state roots the block began and ended on, so a witness describing a different block
 publishes a different result rather than the same one.
 
-**Advice is not enforced read-only** (owner's decision, S25). A store into the advice region
+**Advice is not enforced read-only** (owner's decision, S-IO). A store into the advice region
 is an ordinary store and the multiset carries it like any other. Enforcing read-only would
 need a space selector on the load path of three frozen families and a gate refusing a store
 there, and it would buy no soundness: advice is unbound whether or not the guest writes it.

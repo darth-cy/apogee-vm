@@ -103,7 +103,7 @@ fn a1_the_tiny_guest_proves_and_both_shards_verify() {
         vec![(ADD, 29), (INIT, 0), (family::ZERO_WINDOWS, 0)]
     );
 
-    // S25: the two public value families are in every config and prove one
+    // S-IO: the two public value families are in every config and prove one
     // shard each whatever the program does, and `ADVICE_WINDOWS` proves none
     // for a program with no advice (`docs/spec/public-values.md` §4).
     assert_eq!(public.shard_counts, vec![1, 1, 0, 1, 1, 0]);
