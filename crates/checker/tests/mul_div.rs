@@ -2041,6 +2041,7 @@ fn alu() -> (prover::Program, trace::TraceArchive) {
             family::MUL_DIV,
             family::INIT_TEARDOWN,
             family::ZERO_WINDOWS,
+            family::ADVICE_WINDOWS,
         ]
     );
     let io = emulator::GuestIo {

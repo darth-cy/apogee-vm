@@ -1219,7 +1219,7 @@ fn a_query_below_ram_origin_balances_only_without_the_head_mask() {
             (PolyAddress::Memory(0), column(ts_column)),
             (PolyAddress::Memory(1), column(value_column)),
         ]),
-        challenges: window_challenges(&f.memory, 0, vars),
+        challenges: window_challenges(&f.memory, address_space::RAM, 0, vars),
     });
     assert_eq!(surface(&f, &forged, &f.finals), honest());
 }

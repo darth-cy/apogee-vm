@@ -5,10 +5,14 @@
 //! storage slot and emits a log. `tools/kat-gen/src/revm.rs` builds the
 //! witness and the answer; this suite is what holds the guest to them.
 //!
+//! Since S25b the witness reaches the guest through the **advice** region and
+//! fd 0 carries only a 76-byte public header (`docs/spec/advice.md` §10), so
+//! every run here supplies both.
+//!
 //! | Acceptance | Test |
 //! | --- | --- |
 //! | 2 family set and partition | [`a2_the_family_set_is_the_program_s`] |
-//! | 3 emulator against QEMU | [`a3_the_two_executors_commit_the_same_bytes`] |
+//! | 3 emulator against QEMU | **retired at S25b**: an advice guest does not run under QEMU |
 //! | 4 guest against native host revm | [`a4_the_guest_agrees_with_native_revm`] |
 //! | 5 the delegated keccak against the software one | [`a5_every_delegated_permutation_is_the_reference`] |
 //! | 9 cycles and occupancy | [`a9_the_cycle_and_occupancy_report`] |
@@ -29,10 +33,7 @@
 mod common;
 
 use std::fs;
-use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
 use constants::{family, guest_memory, keccak};
@@ -42,7 +43,8 @@ use program::{decode_program, DecodedTables, ProgramParams, VmConfig};
 use revm_block::{AccountWitness, BlockWitness, TxWitness};
 use trace::plan_shards;
 
-/// The normative guest: its witness arrives on fd 0.
+/// The normative guest: a compact public header on fd 0, its bulk witness in
+/// the advice region (`docs/spec/advice.md` §10).
 const GUEST: &str = "revm-block";
 
 // ---------------------------------------------------------------------------
@@ -56,9 +58,18 @@ fn vector(name: &str) -> Vec<u8> {
     fs::read(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
 }
 
-/// fd 0's committed bytes.
+/// The advice region's committed bytes: the bulk `BlockWitness`, which since
+/// S25b is private prover witness rather than fd 0's public input.
 fn witness_bytes() -> Vec<u8> {
     vector("revm_block_witness.bin")
+}
+
+/// fd 0's committed bytes: the 76-byte public header of the committed witness,
+/// derived from it rather than pinned separately — one fixture, two readers.
+fn header_bytes() -> Vec<u8> {
+    let advice = witness_bytes();
+    let witness = BlockWitness::decode(&advice).expect("the committed witness decodes");
+    witness.public_header(advice.len() as u32).encode().to_vec()
 }
 
 /// fd 1's committed bytes: what native revm makes of the witness.
@@ -165,13 +176,13 @@ fn guest_elf(bin: &str) -> Vec<u8> {
 }
 
 /// One traced run: `(tables, config, traces, profile, execution)`.
-fn traced(bin: &str, input: &[u8]) -> Traced {
+fn traced(bin: &str, input: &[u8], advice: &[u8]) -> Traced {
     let image = guest(bin);
     let (tables, config) = preprocess(image);
     let io = GuestIo {
         input: input.to_vec(),
         hint: Vec::new(),
-        advice: Vec::new(),
+        advice: advice.to_vec(),
     };
     let (traces, log, profile, execution) =
         trace_run(image, &io, &tables, &config).unwrap_or_else(|e| panic!("{bin}: {e}"));
@@ -642,9 +653,9 @@ fn a2_the_family_set_is_the_program_s() {
 #[test]
 #[ignore = "builds the revm guest from source"]
 fn a4_the_guest_agrees_with_native_revm() {
-    let input = witness_bytes();
-    let run = traced(GUEST, &input);
-    let witness = BlockWitness::decode(&input).expect("the witness decodes");
+    let advice = witness_bytes();
+    let run = traced(GUEST, &header_bytes(), &advice);
+    let witness = BlockWitness::decode(&advice).expect("the witness decodes");
     assert_eq!(
         run.execution.io.output,
         revm_block::run(&witness).expect("the block executes on the host"),
@@ -652,8 +663,14 @@ fn a4_the_guest_agrees_with_native_revm() {
     );
     assert_eq!(run.execution.io.output, output_bytes());
     assert_eq!(
-        run.execution.io.input, input,
-        "the guest consumed the whole witness"
+        run.execution.io.input,
+        header_bytes(),
+        "the guest consumed the whole public header, and nothing else, on fd 0"
+    );
+    assert_eq!(
+        run.execution.io.input.len(),
+        revm_block::PUBLIC_HEADER_BYTES,
+        "fd 0 is 76 bytes whatever the block: the witness is not on it"
     );
 
     // The public I/O binding, on the guest that has it (S25): the eight words
@@ -679,7 +696,7 @@ fn a4_the_guest_agrees_with_native_revm() {
 #[test]
 #[ignore = "builds the revm guest from source"]
 fn a5_the_harvested_frames_are_the_committed_ones() {
-    let run = traced(GUEST, &witness_bytes());
+    let run = traced(GUEST, &header_bytes(), &witness_bytes());
     let buffer = run
         .traces
         .delegation(family::KECCAK_F)
@@ -700,69 +717,29 @@ fn a5_the_harvested_frames_are_the_committed_ones() {
     }
 }
 
-/// Acceptance 3: the same binary under both executors commits the same bytes.
-///
-/// Under `crates/emulator` the delegation ecall runs the circuit's
-/// permutation; under `qemu-riscv32`, which has no circuit, it answers
-/// `-ENOSYS` and the SDK's software fallback runs. Neither the witness nor the
-/// commitment changes, which is the whole claim.
-///
-/// The comparison is fd 1 and the exit status, which since S25 is the only
-/// level anything compares the two executors at: they do not run the same
-/// instructions here and are not meant to (`crates/emulator/tests/qemu_outputs.rs`).
-#[test]
-#[ignore = "needs qemu-riscv32, and builds the revm guest from source"]
-fn a3_the_two_executors_commit_the_same_bytes() {
-    let input = witness_bytes();
-    let ours = traced(GUEST, &input);
-    let (code, theirs) = under_qemu(&guest_elf(GUEST), &input);
-    assert_eq!(code, 0, "qemu ran the guest to a clean exit");
-    assert_eq!(
-        theirs, ours.execution.io.output,
-        "the delegated and the software keccak give different commitments"
-    );
-    assert_eq!(theirs, output_bytes());
-}
-
-/// Run one guest under `qemu-riscv32` with `input` on fd 0, returning its exit
-/// status and fd 1.
-fn under_qemu(elf: &[u8], input: &[u8]) -> (i32, Vec<u8>) {
-    let dir = std::env::temp_dir().join(format!("apogee-revm-qemu-{}", std::process::id()));
-    fs::create_dir_all(&dir).expect("creating the run directory");
-    let path = dir.join(GUEST);
-    fs::write(&path, elf).expect("writing the guest");
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("marking the guest");
-    let mut child = Command::new(common::qemu_binary())
-        .arg(&path)
-        .current_dir(&dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawning qemu");
-    child
-        .stdin
-        .take()
-        .expect("stdin was piped")
-        .write_all(input)
-        .expect("writing fd 0");
-    let out = child.wait_with_output().expect("waiting for qemu");
-    let _ = fs::remove_dir_all(&dir);
-    let code = out.status.code().unwrap_or_else(|| {
-        panic!(
-            "qemu ended on a signal: {}",
-            String::from_utf8_lossy(&out.stderr)
-        )
-    });
-    (code, out.stdout)
-}
+// Acceptance 3 — the same binary under both executors commits the same bytes —
+// is **retired at S25b**, and it is the one acceptance this stage withdraws
+// rather than keeps.
+//
+// This guest reads its witness from the advice region, and a host loader maps
+// only the `PT_LOAD` segments the image declares. Advice is in none of them,
+// so under `qemu-riscv32` the region is unmapped and the guest's first advice
+// load faults: there is no run to compare (`docs/spec/advice.md` §9, the
+// owner's decision at S25b). What the test used to establish — that the
+// delegated keccak and the SDK's software fallback compute the same function —
+// is `a5_every_delegated_permutation_is_the_reference`, which checks it
+// directly and needs no emulator.
+//
+// The other guests keep their QEMU coverage: `crates/emulator/tests/
+// qemu_outputs.rs` and `crates/loader/tests/qemu.rs` still run, and it is the
+// ISA those suites were really covering.
 
 /// Acceptance 9: the cycle count, the per-family occupancy and the shard plan,
 /// printed for the handoff and asserted where a number is load-bearing.
 #[test]
 #[ignore = "builds the revm guest from source"]
 fn a9_the_cycle_and_occupancy_report() {
-    let run = traced(GUEST, &witness_bytes());
+    let run = traced(GUEST, &header_bytes(), &witness_bytes());
     let plan = plan_shards(&run.profile, &run.config);
     println!("revm-block at {}", common::guest_profile());
     println!("  cycles: {}", run.profile.total());
@@ -793,6 +770,21 @@ fn a9_the_cycle_and_occupancy_report() {
             .expect("a window family"),
     );
     println!("  RAM windows above 0: {windows:?}");
+    // The three window families run no cycles, so the `shards` column above is
+    // the *plan*, which is 0 for each; their real counts are the statement's.
+    // `INIT_TEARDOWN` proves one, `ZERO_WINDOWS` one per id listed above, and
+    // `ADVICE_WINDOWS` this many (`docs/spec/advice.md` §6).
+    let advice = trace::advice_windows(
+        &run.log,
+        run.config
+            .height(family::ADVICE_WINDOWS)
+            .expect("a window family"),
+    );
+    println!("  advice windows: {advice}");
+    assert_eq!(
+        advice, 1,
+        "the 717-byte witness is one advice window at this height"
+    );
 
     assert!(run.profile.total() > 0);
     assert_eq!(

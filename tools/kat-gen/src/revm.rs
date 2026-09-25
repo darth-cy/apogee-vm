@@ -306,17 +306,27 @@ pub fn generate() {
 /// Build and trace the guest on this witness, hold its fd 1 to native revm's
 /// answer, and return every keccak-f frame its delegation handed over.
 ///
+/// **The witness is the advice region and fd 0 is the 76-byte public header**
+/// since S25b (`docs/spec/advice.md` §10). The header is derived from the
+/// witness here rather than pinned beside it, so the two cannot drift: the
+/// committed fixture is the witness alone, and every reader recomputes the
+/// header from it.
+///
 /// The build is the manual's, with everything that could reach rustc from the
 /// ambient environment cleared, because this is the same command every other
 /// from-source guest build in the repository runs.
-fn guest_frames(input: &[u8], want_output: &[u8]) -> Vec<Vec<u32>> {
+fn guest_frames(witness: &[u8], want_output: &[u8]) -> Vec<Vec<u32>> {
     let elf = build_guest("revm-block");
     let image = loader::load_elf(&elf).expect("the guest loads");
     let (tables, config) = preprocess(&image);
+    let decoded = revm_block::BlockWitness::decode(witness).expect("the witness decodes");
     let io = emulator::GuestIo {
-        input: input.to_vec(),
+        input: decoded
+            .public_header(witness.len() as u32)
+            .encode()
+            .to_vec(),
         hint: Vec::new(),
-        advice: Vec::new(),
+        advice: witness.to_vec(),
     };
     let (traces, _log, profile, execution) =
         emulator::trace_run(&image, &io, &tables, &config).expect("the guest runs");

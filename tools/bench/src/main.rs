@@ -14,6 +14,7 @@
 //!
 //! Numbers are internal only. Machine-dependent; make no public claims.
 
+mod advice;
 mod fr_arith;
 mod gkr_prove;
 mod mercury;
@@ -27,7 +28,7 @@ mod zerocheck_verify;
 
 /// Every routine: selector, one line of what it measures, and the entry point.
 /// The order here is the order a bare `cargo run` runs them in.
-const ROUTINES: [(&str, &str, fn()); 8] = [
+const ROUTINES: [(&str, &str, fn()); 9] = [
     (
         "fr-arith",
         "S01: Fr mul, square, inverse and batch inverse against ark-bn254",
@@ -62,6 +63,11 @@ const ROUTINES: [(&str, &str, fn()); 8] = [
         "zerocheck-verify",
         "S04: sumcheck verification against naive verification at 2^20",
         zerocheck_verify::run,
+    ),
+    (
+        "advice",
+        "S25b: the advice region against the fd 0 `read` path, per word of witness",
+        advice::run,
     ),
     (
         "gkr-prove",

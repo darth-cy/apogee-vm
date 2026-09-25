@@ -284,9 +284,7 @@ pub fn traced(name: &str, input: u32) -> Traced {
     let defaults = ProgramParams::defaults();
     let mut heights = [HEIGHT; family::COUNT as usize];
     for (f, height) in heights.iter_mut().enumerate() {
-        if !family::CYCLE_OWNING[f]
-            && !matches!(f as u32, family::INIT_TEARDOWN | family::ZERO_WINDOWS)
-        {
+        if !family::CYCLE_OWNING[f] && !family::WINDOW_FAMILIES.contains(&(f as u32)) {
             *height = defaults.heights[f];
         }
     }
@@ -433,9 +431,7 @@ pub fn delegation_shards(t: &Traced, memory: &ExternalChallenges) -> Vec<Shard> 
     );
     let mut out = Vec::new();
     for (family, height) in &t.config.families {
-        if family::CYCLE_OWNING[*family as usize]
-            || matches!(*family, family::INIT_TEARDOWN | family::ZERO_WINDOWS)
-        {
+        if family::CYCLE_OWNING[*family as usize] || family::WINDOW_FAMILIES.contains(family) {
             continue;
         }
         let invoked = t.traces.delegation(*family).map_or(0, |d| d.len());
@@ -496,7 +492,7 @@ pub fn window_shard(
         family: None,
         artifact,
         base: BaseLayer::new(columns),
-        challenges: window_challenges(memory, w, vars),
+        challenges: window_challenges(memory, constants::address_space::RAM, w, vars),
     }
 }
 

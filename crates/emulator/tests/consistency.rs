@@ -888,9 +888,7 @@ fn a_traced_run_is_the_same_execution_and_its_memory_balances() {
         if k == 0 {
             for trace in &traces.families {
                 assert!(
-                    trace.family == family::INIT_TEARDOWN
-                        || trace.family == family::ZERO_WINDOWS
-                        || !trace.cycle.is_empty(),
+                    family::WINDOW_FAMILIES.contains(&trace.family) || !trace.cycle.is_empty(),
                     "family {} never runs",
                     program::family_name(trace.family)
                 );

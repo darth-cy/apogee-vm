@@ -41,7 +41,8 @@ use prover::{prove_block, Program, ProverSetup};
 use trace::{plan_shards, IoStreams, PhaseTiming, TraceArchive};
 use verifier::{BlockProof, PublicInputs, VerifyError, VerifyingKey};
 
-/// Trace `setup`'s program on `input` and `hint`, then prove the block.
+/// Trace `setup`'s program on `input`, `hint` and `advice`, then prove the
+/// block.
 ///
 /// Returns the proof and the archive it was proved from. The archive is the
 /// second half of the answer on purpose: it carries the cycle profile, the
@@ -56,25 +57,40 @@ pub fn prove(
     setup: &ProverSetup,
     input: &[u8],
     hint: &[u8],
+    advice: &[u8],
 ) -> Result<(BlockProof, TraceArchive), String> {
-    let mut archive = execute(&setup.program, input, hint)?;
+    let mut archive = execute(&setup.program, input, hint, advice)?;
     let plan = plan_shards(archive.cycle_profile(), &setup.program.config);
     let proof = prove_block(setup, &mut archive, &plan).map_err(|e| format!("{e:?}"))?;
     Ok((proof, archive))
 }
 
-/// Run `program` on `input` and `hint` and snapshot it as a post-execution
-/// archive, with the execution's wall clock in the phase's timing field.
+/// Run `program` on `input`, `hint` and `advice` and snapshot it as a
+/// post-execution archive, with the execution's wall clock in the phase's
+/// timing field.
+///
+/// `advice` is the **advice region**'s contents: private, read-only,
+/// prover-supplied bytes the guest reads with ordinary loads
+/// (`docs/spec/advice.md`). Nothing binds them and nothing carries them into
+/// the archive — what survives is the events the execution staged, which is
+/// all the prover needs to fill the `ADVICE_WINDOWS` shards. An empty slice is
+/// a run with no advice region, and a guest that loads one then is refused
+/// fatally.
 ///
 /// A nonzero exit status is **not** an error here: a guest that exits 62 has
 /// executed, and proving that it did is a statement about the program as much
 /// as a clean exit is. The caller reads the status out of the archive's
 /// statement.
-pub fn execute(program: &Program, input: &[u8], hint: &[u8]) -> Result<TraceArchive, String> {
+pub fn execute(
+    program: &Program,
+    input: &[u8],
+    hint: &[u8],
+    advice: &[u8],
+) -> Result<TraceArchive, String> {
     let io = GuestIo {
         input: input.to_vec(),
         hint: hint.to_vec(),
-        advice: Vec::new(),
+        advice: advice.to_vec(),
     };
     let started = Instant::now();
     let (traces, log, profile, execution) =

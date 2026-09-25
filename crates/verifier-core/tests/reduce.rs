@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::{blob, jbs_statement, jbs_vk, shell, statement, vk, ADD, INIT, JBS, ZERO};
+use common::{blob, jbs_statement, jbs_vk, shell, statement, vk, ADD, ADVICE, INIT, JBS, ZERO};
 use constants::transcript_tags as tags;
 use field::Fr;
 use gkr_verify::SumcheckProof;
@@ -30,8 +30,9 @@ fn refusal(
 
 /// G1 to G11, event for event: the suite, the SRS digest, the descriptor's
 /// three messages, the identity, the I/O digest's bytes, one group per config
-/// family — `INIT_TEARDOWN`, `ZERO_WINDOWS`, then the rest — each a header and
-/// one list per shard, the boundary, four memory challenges, the digest.
+/// family — `INIT_TEARDOWN`, `ZERO_WINDOWS`, then the rest ascending, which
+/// since S25b puts `ADVICE_WINDOWS` last — each a header and one list per
+/// shard, the boundary, four memory challenges, the digest.
 #[test]
 fn the_global_transcript_is_the_frozen_order() {
     let (key, public) = (vk(), statement());
@@ -41,8 +42,8 @@ fn the_global_transcript_is_the_frozen_order() {
     let mut want = vec![
         absorb(tags::PROTOCOL_SUITE, 1),
         absorb(tags::SRS_DIGEST, 1),
-        absorb(tags::VM_CONFIG, 7),
-        absorb(tags::SHARD_COUNTS, 3),
+        absorb(tags::VM_CONFIG, 9),
+        absorb(tags::SHARD_COUNTS, 4),
         absorb(tags::MEMORY_WINDOWS, 0),
         absorb(tags::PROGRAM_IDENTITY, 1),
         absorb(tags::PUBLIC_INPUTS, 2),
@@ -51,6 +52,9 @@ fn the_global_transcript_is_the_frozen_order() {
         absorb(tags::MEMORY_GROUP, 2),
         absorb(tags::MEMORY_GROUP, 2),
         absorb(tags::COMMITMENT, 4 * 42),
+        // `ADVICE_WINDOWS`, last in statement order and with no shard: a
+        // header and nothing after it (`docs/spec/advice.md` §5).
+        absorb(tags::MEMORY_GROUP, 2),
         absorb(tags::MEMORY_BOUNDARY, 64),
     ];
     want.extend(
@@ -125,7 +129,7 @@ fn the_generic_table_is_bound_through_the_srs_digest() {
             },
             Absorb {
                 tag: tags::VM_CONFIG,
-                n_scalars: 9
+                n_scalars: 11
             },
         ]
     );
@@ -237,9 +241,10 @@ fn g_is_the_first_lookup_squeeze_and_beta_the_second() {
 }
 
 /// The challenges a shard's circuit reads (§4): slots 1 to 4 from the memory
-/// challenges; the window constant at the shard's own window — 0 for
-/// `INIT_TEARDOWN`, `windows[index]` for each `ZERO_WINDOWS` shard, and none
-/// for an execution family; and the LogUp slots from `g` and `β`.
+/// challenges; the window constant at the shard's own space and window — RAM
+/// window 0 for `INIT_TEARDOWN`, RAM window `windows[index]` for each
+/// `ZERO_WINDOWS` shard, advice window `index` for each `ADVICE_WINDOWS` shard,
+/// and none for an execution family; and the LogUp slots from `g` and `β`.
 #[test]
 fn a_shard_reads_the_window_constant_of_its_own_window() {
     use constants::challenge_slot as slot;
@@ -247,14 +252,18 @@ fn a_shard_reads_the_window_constant_of_its_own_window() {
     let memory = [11, 12, 13, 14].map(Fr::from_u64);
     let (g, beta) = (Fr::from_u64(21), Fr::from_u64(22));
     let windows = [3, 9];
-    let expected = |circuit: &constraints::FamilyCircuit, window: u32| {
+    let expected_in = |circuit: &constraints::FamilyCircuit, space: u8, window: u32| {
         let mut want = gkr_verify::window_challenges(
             &memory_slots(&memory),
+            space,
             window,
             circuit.artifact.trace_vars,
         );
         gkr_verify::insert_lookup_challenges(&mut want, g, beta, &circuit.artifact);
         want
+    };
+    let expected = |circuit: &constraints::FamilyCircuit, window: u32| {
+        expected_in(circuit, constants::address_space::RAM, window)
     };
     let (add, init, zero) = (&key.circuits[0], &key.circuits[1], &key.circuits[2]);
     assert_eq!((init.family, zero.family), (INIT, ZERO));
@@ -271,6 +280,30 @@ fn a_shard_reads_the_window_constant_of_its_own_window() {
     assert_eq!(
         shard_challenges(init, 0, &windows, &memory, g, beta),
         expected(init, 0)
+    );
+
+    // An `ADVICE_WINDOWS` shard reads its **own** space at its **own** window,
+    // and the window is the shard index: advice windows are contiguous from
+    // `ADVICE_ORIGIN`, so there is no id list to consult
+    // (`docs/spec/advice.md` §6). The window list above is deliberately passed
+    // and deliberately ignored.
+    let advice_circuit = &key.circuits[3];
+    assert_eq!(advice_circuit.family, ADVICE);
+    for i in [0u32, 1, 5] {
+        assert_eq!(
+            shard_challenges(advice_circuit, i, &windows, &memory, g, beta),
+            expected_in(advice_circuit, constants::address_space::ADVICE, i),
+            "advice shard {i} is advice window {i}"
+        );
+    }
+    // And the space is in the constant, not only the address: RAM window 0 and
+    // advice window 0 are different constants, which is what keeps a window
+    // shard of one space from answering a query of the other.
+    assert_ne!(
+        shard_challenges(advice_circuit, 0, &windows, &memory, g, beta)
+            .get(slot::MEM_WINDOW_CONSTANT),
+        expected(advice_circuit, 0).get(slot::MEM_WINDOW_CONSTANT),
+        "the advice region's window 0 is not RAM's"
     );
 
     let own = shard_challenges(add, 0, &windows, &memory, g, beta);

@@ -1086,8 +1086,10 @@ fn s21_a5_a6_the_delegation_witness_and_the_anchor_are_pinned() {
     let h = TamperHarness::new(&setup, &archive);
 
     // The structural counts. Nine shards — six `2^20` execution ones, the two
-    // `2^16` windows and one `2^8` delegation shard — the delegation family's
-    // last, and its circuit's width: 204 memory columns (`cycle`, `live`,
+    // `2^16` RAM windows and one `2^8` delegation shard — the delegation
+    // family's last. `ADVICE_WINDOWS` is in the config above it and proves
+    // **zero** shards, so it adds no entry here (`docs/spec/advice.md` §5).
+    // And its circuit's width: 204 memory columns (`cycle`, `live`,
     // `base`, `anchor_value` and four a frame word) and 3,560 witness ones (the
     // state's 1,600 bits, 38 gap bits a read, and the frame pointer's 60).
     let (public, proofs) = h.honest();

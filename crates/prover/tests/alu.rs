@@ -82,7 +82,8 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
             (SHB, 1 << 20),
             (MD, 1 << 20),
             (INIT, 1 << 16),
-            (ZERO, 1 << 16)
+            (ZERO, 1 << 16),
+            (family::ADVICE_WINDOWS, 1 << 16),
         ]
     );
     let live = |f: u32| {
@@ -97,7 +98,8 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
         archive.memory_log().self_check(&setup.program.image),
         Ok(())
     );
-    assert_eq!(public.shard_counts, vec![1, 1, 1, 1, 1, 0]);
+    // The trailing 0 is `ADVICE_WINDOWS`, in every `VmConfig` since S25b.
+    assert_eq!(public.shard_counts, vec![1, 1, 1, 1, 1, 0, 0]);
     assert!(public.windows.is_empty(), "alu touches no RAM");
     assert_eq!(public.exit_status, common::ALU_RESULT);
     assert!(public.input.is_empty() && public.output.is_empty());

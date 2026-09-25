@@ -15,11 +15,11 @@
 
 use constants::{address_space, challenge_slot, family, lookup_channel, memory};
 use constraints::memory::{
-    check_memory, deleg_space, family_frame_artifact, frame, frame_artifact, frame_queries,
-    frame_query_takes, gap_hi, image_window_artifact, load_space, rd_inv, rd_is_zero, rd_selected,
-    read_tuple, zero_window_artifact, ARG1, ARG2, CYCLE, DELEG, FIELD_ADDR, FIELD_MASK,
-    FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA, FRAME_NAMES, FRAME_QUERIES,
-    FRAME_READ_ONLY, FRAME_SPACE, LOAD, PC, RAM, RD, RS1, RS2,
+    advice_window_artifact, check_memory, deleg_space, family_frame_artifact, frame,
+    frame_artifact, frame_queries, frame_query_takes, gap_hi, image_window_artifact, load_space,
+    rd_inv, rd_is_zero, rd_selected, read_tuple, zero_window_artifact, ARG1, ARG2, CYCLE, DELEG,
+    FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA,
+    FRAME_NAMES, FRAME_QUERIES, FRAME_READ_ONLY, FRAME_SPACE, LOAD, PC, RAM, RD, RS1, RS2,
 };
 use constraints::{
     CachedEntry, CircuitArtifact, Coeff, ConstraintError, EnforcingEntry, GateDef, LayerSpec,
@@ -38,6 +38,8 @@ const FRAME_ATOMICS_SHA256: &str =
 const IMAGE_WINDOW_SHA256: &str =
     "39a8655d430ed5c031e4f27075662fe92a9a1274cd23dc300ae5e2e82df67ecc";
 const ZERO_WINDOW_SHA256: &str = "f08dde677a70c8a15cc7b67b35806e6ee5d9afff9cb703586f21426baa51ec1c";
+const ADVICE_WINDOW_SHA256: &str =
+    "132e780761cedb255927e5d5b5696f0d12d4fb641f9135a0f2bf64b172928a8d";
 
 /// The seven execution families, ascending: every family that runs cycles and
 /// so carries a frame. `INIT_TEARDOWN` and `ZERO_WINDOWS` have none — their
@@ -137,6 +139,10 @@ fn every_artifact(trace_vars: u32) -> Vec<(String, CircuitArtifact)> {
         String::from("zero window"),
         zero_window_artifact(trace_vars),
     ));
+    all.push((
+        String::from("advice window"),
+        advice_window_artifact(trace_vars),
+    ));
     all
 }
 
@@ -146,7 +152,7 @@ fn fixture(name: &str) -> Vec<u8> {
 }
 
 /// Each committed fixture is pinned, then held to its constructor's bytes at
-/// `trace_vars` 22 — the four distinct frames and the two windows. The
+/// `trace_vars` 22 — the four distinct frames and the three windows. The
 /// constructors are the only definition; the pin is what makes a changed
 /// circuit a deliberate refresh.
 #[test]
@@ -181,6 +187,11 @@ fn the_fixtures_are_the_constructors_bytes() {
             "zero_window.bin",
             ZERO_WINDOW_SHA256,
             zero_window_artifact(22),
+        ),
+        (
+            "advice_window.bin",
+            ADVICE_WINDOW_SHA256,
+            advice_window_artifact(22),
         ),
     ];
     for (name, digest, artifact) in fixtures {
@@ -234,7 +245,7 @@ fn the_seven_families_frames_are_the_four_fixtures() {
 fn every_constructor_validates_and_keeps_the_memory_rules_at_12_and_22() {
     for trace_vars in [12, 22] {
         let all = every_artifact(trace_vars);
-        assert_eq!(all.len(), EXECUTION_FAMILIES.len() + 2);
+        assert_eq!(all.len(), EXECUTION_FAMILIES.len() + 3);
         for (label, a) in all {
             assert_eq!(a.validate(), Ok(()), "{label} at {trace_vars}");
             assert_eq!(check_memory(&a), Ok(()), "{label} at {trace_vars}");
@@ -247,7 +258,7 @@ fn inner(layer: u32, offset: u32) -> PolyAddress {
     PolyAddress::Inner { layer, offset }
 }
 
-/// The shape every memory artifact shares — the seven frames and the two
+/// The shape every memory artifact shares — the seven frames and the three
 /// windows: two output roots at the top, named, a padding row of zeros whose
 /// zero row is valid, `trace_vars` halving lists whatever the width below
 /// them, and no cached entries anywhere.

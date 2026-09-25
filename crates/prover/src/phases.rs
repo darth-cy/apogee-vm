@@ -408,9 +408,10 @@ pub(crate) fn advance_rec(
 /// proved from its own forked transcript, and the five phase sections left in
 /// `archive`, so a killed run resumes to the same bytes.
 ///
-/// The two RAM window families run no cycles, so `plan` counts 0 for both;
+/// The three window families run no cycles, so `plan` counts 0 for each;
 /// their shards — exactly one `INIT_TEARDOWN`, one `ZERO_WINDOWS` per touched
-/// window — are the statement's, `docs/spec/memory.md` §3.
+/// RAM window, `trace::advice_windows` for `ADVICE_WINDOWS` — are the
+/// statement's, `docs/spec/memory.md` §3 and `docs/spec/advice.md` §6.
 pub fn prove_block(
     setup: &ProverSetup,
     archive: &mut TraceArchive,

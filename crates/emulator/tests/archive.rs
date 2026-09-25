@@ -71,12 +71,17 @@ fn an_imported_archive_answers_without_reexecution() {
     let archive = TraceArchive::import(&bytes[..]).unwrap();
 
     assert_eq!(archive.cycle_profile().total(), t.execution.cycle_count);
-    for (trace, (family, count)) in archive
-        .family_traces()
-        .families
-        .iter()
-        .zip(&archive.cycle_profile().counts)
-    {
+    // By id rather than by position: `row_counts` sorts every buffer ascending
+    // while `families` holds only the non-delegation ones in config order, so
+    // the two lists stopped lining up when `ADVICE_WINDOWS = 12` joined above
+    // the delegation ids.
+    for trace in &archive.family_traces().families {
+        let (family, count) = archive
+            .cycle_profile()
+            .counts
+            .iter()
+            .find(|(f, _)| *f == trace.family)
+            .expect("every buffer is a counted family");
         assert_eq!((trace.family, trace.len() as u64), (*family, *count));
     }
 

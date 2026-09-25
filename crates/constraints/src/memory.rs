@@ -761,6 +761,47 @@ pub fn zero_window_artifact(trace_vars: u32) -> CircuitArtifact {
     )
 }
 
+/// `ADVICE_WINDOWS`, one advice window, `docs/spec/advice.md` §5: `M[0]
+/// teardown_ts`, `M[1] teardown_value`, `M[2] init_value`, `V[row]`; the
+/// teardown tuple on the read side and the init tuple, value `M[2]`, on the
+/// write side; no enforcing gates, no obligations. Validated and held to
+/// [`check_memory`]; panics if either refuses it.
+///
+/// It is [`zero_window_artifact`]'s shape with one column added, and that
+/// column is the whole family: an advice word's initial value is **free**,
+/// chosen by the prover, constrained by nothing. `M` is what it must be —
+/// `check_memory` refuses a `W` column in a leaf, because `W` is committed
+/// after the memory challenges, and `S` is bound by program identity, which
+/// would publish the advice in the verifying key
+/// (`program::setup_commitments` returns an empty list for this family
+/// deliberately). An `M` column is committed in the memory phase, before the
+/// challenges, and binds to nothing else.
+///
+/// What holds the prover to one value per address is the multiset alone: a
+/// guest's first read of an advice word reads `(ADVICE, addr, 0, v)`, and only
+/// this family's init leaf writes a tuple stamped 0 in that space, so `v` is
+/// this column's row. Every later read chains to the write before it. That is
+/// the *consistency* guarantee, and it is the only one — §2 is what the value
+/// itself is worth.
+pub fn advice_window_artifact(trace_vars: u32) -> CircuitArtifact {
+    let teardown = window_tuple(Some(PolyAddress::Memory(0)), PolyAddress::Memory(1));
+    let init = window_tuple(None, PolyAddress::Memory(2));
+    let mut columns = window_memory();
+    columns.push(String::from("init_value"));
+    assemble(
+        trace_vars,
+        [columns, vec![], vec![]],
+        vec![(VirtualKind::RowIndex, String::from("row"))],
+        [
+            vec![(String::from("teardown"), teardown)],
+            vec![(String::from("init"), init)],
+        ],
+        vec![],
+        vec![],
+        &[],
+    )
+}
+
 /// A whole memory artifact: two product trees, the read side then the write
 /// side, over `leaves`; `enforcing` on gate list 0; row-wise `Product` lists
 /// down to `[read, write]`, then `trace_vars` halving lists, and

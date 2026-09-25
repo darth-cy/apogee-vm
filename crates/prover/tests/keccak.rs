@@ -70,7 +70,11 @@ fn a4_the_block_with_a_delegation_shard_proves_and_verifies() {
         .iter()
         .map(|(f, _)| *f)
         .collect();
-    assert_eq!(families.last(), Some(&KECCAK));
+    // `KECCAK_F` is the last family this *program* adds; `ADVICE_WINDOWS` is
+    // above it and in every `VmConfig` since S25b, so it is the tail of every
+    // ascending family list whatever the guest declares.
+    assert_eq!(families.last(), Some(&family::ADVICE_WINDOWS));
+    assert_eq!(families.iter().rev().nth(1), Some(&KECCAK));
     assert_eq!(
         setup.program.config.height(KECCAK),
         Some(1 << common::KECCAK_VARS)
@@ -116,7 +120,8 @@ fn a4_the_block_with_a_delegation_shard_proves_and_verifies() {
     );
 
     // One shard per planned shard, in statement order, with the delegation
-    // family's last.
+    // family's last — `ADVICE_WINDOWS` sits above it in the config but proves
+    // no shard here, so it contributes no entry (`docs/spec/advice.md` §5).
     let expected = statement_shards(&setup.program.config, block.shard_counts());
     assert_eq!(block.shards.len(), expected.len());
     assert_eq!(expected.last(), Some(&(KECCAK, 0)));

@@ -149,13 +149,18 @@ jobs:
       # Measured: 5 passed, 47 s cold on 18 cores, of which 25 s is the guest
       # build. Not a deferred suite: it proves nothing.
       - name: the revm guest against native revm
-        run: APOGEE_GUEST_PROFILE=release cargo test -p emulator --test revm -- --ignored --test-threads=1 --skip a3_
+        run: APOGEE_GUEST_PROFILE=release cargo test -p emulator --test revm -- --ignored --test-threads=1
 
-      # S24's acceptance 3, the other executor. Split out because it is the one
-      # test in that file that needs `qemu-riscv32`, and it runs beside the
-      # other QEMU steps' dependency rather than silently passing without one.
-      - name: the revm guest under QEMU commits the same bytes
-        run: APOGEE_GUEST_PROFILE=release cargo test -p emulator --test revm -- --ignored a3_
+      # S24's acceptance 3 -- the same binary under `qemu-riscv32` -- was a step
+      # of its own here and is **retired at S25b**. That guest reads its witness
+      # from the advice region now, and a host loader maps only the `PT_LOAD`s
+      # the image declares, so the region is unmapped and the first advice load
+      # faults: there is no run to compare (`docs/spec/advice.md` §9, §10.1).
+      # What it established -- that the delegated keccak and the SDK's software
+      # fallback compute one function -- is
+      # `a5_every_delegated_permutation_is_the_reference`, which checks it
+      # directly, needs no emulator, and runs in the step above. The other
+      # guests keep their QEMU steps unchanged.
 
       # DEFERRED: cargo test -p checker --test logup -- --include-ignored --test-threads=1
       # Master rule 7. S15's acceptance over the combined toy took 30m18s of a

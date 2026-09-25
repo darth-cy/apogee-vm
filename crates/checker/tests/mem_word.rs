@@ -794,8 +794,12 @@ fn honest_rows() -> Vec<(&'static str, Row)> {
     push("a compressed lw", honest(i, LW_RS1V, 0, LW_WORD, LW_RD_OLD));
 
     // The two ends. `0xfffffffc` is the last word the base-4 split admits:
-    // `word_index = 2^30 − 1`, whose high chunk is `0x3fff` and whose scaled
-    // obligation is `0xfffc`, just inside `2^16`.
+    // `word_index = 2^30 − 1`, whose high chunk is `0x3fff`. Since S25b that
+    // chunk is re-split about bit 13, so what the scaled obligation carries is
+    // `8 · word_index_hi_rest = 8 × 0x1fff = 0xfff8`, just inside `2^16` — and
+    // `is_advice` is 1, because the top word of the address space is an
+    // **advice** address (`docs/spec/advice.md` §3.1). This row is therefore
+    // the mechanism working in-circuit and not only a range-check edge.
     push(
         "lw at the top of the address space",
         honest(Instr::lw(0), 0xFFFF_FFFC, 0, LW_WORD, LW_RD_OLD),

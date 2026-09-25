@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::{blob, shell, statement, vk, ADD, INIT, JBS, ZERO};
+use common::{blob, shell, statement, vk, ADD, ADVICE, INIT, JBS, ZERO};
 use field::Fr;
 use verifier_core::{
     check_ts_windows, BlockProof, BlockReconciliation, ShardRecord, TRIVIAL_TS_WINDOW,
@@ -60,14 +60,16 @@ fn the_public_data_reads_through_the_wire_form() {
     let back = BlockProof::from_bytes(&bytes).expect("a block round-trips");
     assert_eq!(back.to_bytes(), bytes, "byte for byte");
     assert_eq!(back.config(), &vk().config);
-    assert_eq!(back.shard_counts(), &[1, 1, 0]);
+    assert_eq!(back.shard_counts(), &[1, 1, 0, 0]);
     assert_eq!(back.shard_count(ADD), 1);
     assert_eq!(back.shard_count(INIT), 1);
-    assert_eq!(
-        back.shard_count(ZERO),
-        0,
-        "a family with no shards this run"
-    );
+    for empty in [ZERO, ADVICE] {
+        assert_eq!(
+            back.shard_count(empty),
+            0,
+            "a family with no shards this run"
+        );
+    }
     assert_eq!(
         back.shard_count(JBS),
         0,

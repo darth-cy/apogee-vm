@@ -60,11 +60,11 @@ fn every_instruction_is_claimed_by_exactly_one_family() {
             })
             .collect();
         println!("{name}: {} instructions; {}", slots.len(), sizes.join(", "));
-        for init in [family::INIT_TEARDOWN, family::ZERO_WINDOWS] {
+        for window in family::WINDOW_FAMILIES {
             assert!(
-                config.height(init).is_some(),
+                config.height(window).is_some(),
                 "{name}: {} is in every VmConfig",
-                family_name(init)
+                family_name(window)
             );
         }
     }
@@ -150,6 +150,7 @@ fn each_program_derives_only_the_families_it_uses() {
             family::MEM_SUBWORD,
             family::INIT_TEARDOWN,
             family::ZERO_WINDOWS,
+            family::ADVICE_WINDOWS,
         ],
         "a mul-free program derives no mul/div family"
     );

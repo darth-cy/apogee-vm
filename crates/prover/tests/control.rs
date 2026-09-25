@@ -78,7 +78,8 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
             (ADD, 1 << 20),
             (JBS, 1 << 20),
             (INIT, 1 << 16),
-            (ZERO, 1 << 16)
+            (ZERO, 1 << 16),
+            (family::ADVICE_WINDOWS, 1 << 16),
         ]
     );
     let live = |f: u32| {
@@ -92,7 +93,9 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
         archive.memory_log().self_check(&setup.program.image),
         Ok(())
     );
-    assert_eq!(public.shard_counts, vec![1, 1, 1, 0]);
+    // The trailing 0 is `ADVICE_WINDOWS`, in every `VmConfig` since S25b and
+    // proving nothing in a guest that reads no advice.
+    assert_eq!(public.shard_counts, vec![1, 1, 1, 0, 0]);
     assert!(public.windows.is_empty(), "control touches no RAM");
     assert_eq!(public.exit_status, common::CONTROL_RESULT);
     assert!(public.input.is_empty() && public.output.is_empty());

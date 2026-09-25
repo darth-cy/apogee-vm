@@ -34,6 +34,7 @@ pub fn generate() {
             (family::JUMP_BRANCH_SLT, 1 << 20),
             (family::INIT_TEARDOWN, 1 << 16),
             (family::ZERO_WINDOWS, 1 << 16),
+            (family::ADVICE_WINDOWS, 1 << 16),
         ],
         bytecode_size_words: family::DEFAULT_BYTECODE_SIZE_WORDS,
     };
@@ -83,7 +84,7 @@ pub fn generate() {
         circuits,
     };
     // Statement order: INIT_TEARDOWN, ZERO_WINDOWS (none), then ascending.
-    let shard_counts = vec![2, 1, 1, 0];
+    let shard_counts = vec![2, 1, 1, 0, 0];
     let statement = PublicInputs {
         input: Vec::new(),
         output: Vec::new(),

@@ -3,7 +3,7 @@
 //! the reconciliation of every shard's roots.
 
 use constants::memory::{HALT_PC, PART_ADDR, PART_AS, PART_TS, PART_VAL};
-use constants::{address_space, challenge_slot};
+use constants::{address_space, challenge_slot, guest_memory};
 use constraints::memory::read_tuple;
 use constraints::MAX_TRACE_VARS;
 use field::Fr;
@@ -27,17 +27,42 @@ pub struct BoundaryFinals {
     pub reg_values: [u32; 31],
 }
 
-/// The challenges one RAM window shard's artifact reads: slots `MEM_GAMMA`
-/// through `MEM_ALPHA_VAL` copied from `memory`, and the derived
-/// `MEM_WINDOW_CONSTANT = γ_M + RAM + α_addr·4·2^trace_vars·window`, the tuple
-/// part every row of window `window` shares (`docs/spec/memory.md` §3.3).
-/// `window` is 0 for `INIT_TEARDOWN`.
+/// The byte address a window family's window 0 begins at. RAM's windows start
+/// at address 0 — window 0 is `INIT_TEARDOWN`'s, and its rows below
+/// `RAM_ORIGIN` are masked by `V[ram_live]` — and the advice region's start at
+/// `guest_memory::ADVICE_ORIGIN`, which is exactly where RAM's reach stops
+/// (`docs/spec/advice.md` §1.1).
+///
+/// Panics on any other space: only these two are initialized by windows, and a
+/// caller naming a third has confused a delegation anchor for a region.
+fn window_origin(space: u8) -> u64 {
+    match space {
+        address_space::RAM => 0,
+        address_space::ADVICE => guest_memory::ADVICE_ORIGIN as u64,
+        _ => panic!("window_challenges: address space {space} is not initialized in windows"),
+    }
+}
+
+/// The challenges one window shard's artifact reads: slots `MEM_GAMMA` through
+/// `MEM_ALPHA_VAL` copied from `memory`, and the derived
+/// `MEM_WINDOW_CONSTANT = γ_M + space + α_addr·(origin + 4·2^trace_vars·window)`,
+/// the tuple part every row of window `window` of `space` shares
+/// (`docs/spec/memory.md` §3.3).
+///
+/// `space` is `address_space::RAM` for the two RAM window families — `window`
+/// then being 0 for `INIT_TEARDOWN` — and `address_space::ADVICE` for
+/// `ADVICE_WINDOWS`, whose windows are numbered from 0 at
+/// [`window_origin`]'s `ADVICE_ORIGIN` and are contiguous
+/// (`docs/spec/advice.md` §6). The space enters the constant where the literal
+/// `RAM` used to be, so a window shard of one space can never answer a query
+/// of the other: the tuples differ in their first term.
 ///
 /// `4·2^trace_vars·window` is the integer, which fits a `u64` for any `u32`
-/// window at `trace_vars <= MAX_TRACE_VARS`. Panics above that, or naming the
-/// slot `memory` lacks.
+/// window at `trace_vars <= MAX_TRACE_VARS`. Panics above that, on a space
+/// with no windows, or naming a slot `memory` lacks.
 pub fn window_challenges(
     memory: &ExternalChallenges,
+    space: u8,
     window: u32,
     trace_vars: u32,
 ) -> ExternalChallenges {
@@ -55,14 +80,14 @@ pub fn window_challenges(
         });
         out.insert(slot, value);
     }
-    let first_address = (4u64 << trace_vars) * window as u64;
+    let first_address = window_origin(space) + (4u64 << trace_vars) * window as u64;
     let gamma = out.get(challenge_slot::MEM_GAMMA).expect("copied above");
     let alpha_addr = out
         .get(challenge_slot::MEM_ALPHA_ADDR)
         .expect("copied above");
     out.insert(
         challenge_slot::MEM_WINDOW_CONSTANT,
-        gamma + Fr::from_u64(address_space::RAM as u64) + alpha_addr * Fr::from_u64(first_address),
+        gamma + Fr::from_u64(space as u64) + alpha_addr * Fr::from_u64(first_address),
     );
     out
 }

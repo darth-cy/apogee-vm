@@ -1,9 +1,10 @@
 //! S24's acceptance 6, 7 and 8: the revm block proved, verified and tampered.
 //!
 //! `#[ignore]`d and deferred out of CI under master rule 7: the statement is
-//! seven `2^20` execution shards, two `2^20` window shards and a `2^8` shard
-//! for each of the three delegation families the guest declares, over a
-//! `--release` guest this suite builds from source. Run it with
+//! seven `2^20` execution shards, **three** `2^20` window shards — the two RAM
+//! ones and, since S25b, one `ADVICE_WINDOWS` shard holding the witness — and a
+//! `2^8` shard for each of the three delegation families the guest declares,
+//! over a `--release` guest this suite builds from source. Run it with
 //!
 //! ```text
 //! cargo test --release -p prover --test revm -- --include-ignored --test-threads=1
@@ -11,18 +12,25 @@
 //!
 //! # What is proved
 //!
-//! The normative guest, and since S25a nothing else: it reads its
-//! `BlockWitness` on fd 0 and commits its output on fd 1, and **both are
-//! provable ecalls** now. The add/sub family's circuit holds a `read` row's
-//! RAM query to the `a1` that row read and its count to the literal 4, and a
-//! `write` stages no memory event at all (`docs/spec/ecall-abi.md` §4).
+//! The normative guest, and since S25a nothing else: it reads on fd 0 and
+//! commits on fd 1, and **both are provable ecalls** now. The add/sub family's
+//! circuit holds a `read` row's RAM query to the `a1` that row read and its
+//! count to the literal 4, and a `write` stages no memory event at all
+//! (`docs/spec/ecall-abi.md` §4).
 //!
-//! What binds the two streams is not a row but the guest's own **public I/O
-//! digest**: `transcript::exit_with_io_digest` leaves it in `x24..x31`, the
+//! **Since S25b fd 0 carries only a 76-byte public header** — the advice
+//! length, the chain id, the block number and the parent hash — and the bulk
+//! `BlockWitness` is the **advice** region: private, prover-supplied, covered
+//! by no digest, and proved by its own window shards
+//! (`docs/spec/advice.md` §10).
+//!
+//! What binds the two public streams is not a row but the guest's own **public
+//! I/O digest**: `transcript::exit_with_io_digest` leaves it in `x24..x31`, the
 //! statement's register boundary carries it, and `verify_global_memory`
 //! recomputes it from the statement's own streams and compares
 //! (`docs/spec/memory.md` §10). So the streams are checked below against the
-//! fixture and against native revm, and the digest against both.
+//! fixture and against native revm, and the digest against both. **The witness
+//! appears in no assertion and cannot**: nothing in the statement carries it.
 //!
 //! S24 proved a second binary, `revm-block-embedded`, which carried the
 //! witness in `.rodata` because neither ecall was provable then. It is
@@ -97,15 +105,17 @@ fn revm_program() -> Program {
     }
 }
 
-/// The guest's run **over its witness on fd 0**, which is what S25 made
-/// provable. `common::trace` runs a guest with empty streams and this one has
-/// two, so it builds the archive itself.
+/// The guest's run over its **public header on fd 0 and its bulk witness in
+/// the advice region**, which is what S25b made provable. `common::trace` runs
+/// a guest with empty streams and this one has three, so it builds the archive
+/// itself.
 fn revm_archive(program: &Program) -> TraceArchive {
-    let archive = host::execute(program, &witness_bytes(), &[]).expect("the guest traces");
+    let archive =
+        host::execute(program, &header_bytes(), &[], &witness_bytes()).expect("the guest traces");
     assert_eq!(
         archive.io_streams().input,
-        witness_bytes(),
-        "the guest consumed the whole witness"
+        header_bytes(),
+        "the guest consumed the whole public header, and only it, on fd 0"
     );
     archive
 }
@@ -171,11 +181,22 @@ fn build_guest_bin_in(name: &str, bin: &str, slot: &str) -> Vec<u8> {
     bytes
 }
 
-/// The committed witness, which this suite hands the guest on fd 0.
+/// The committed witness, which this suite hands the guest as **advice**.
+/// Since S25b it is private: nothing in the statement carries it and
+/// `io_digest` does not cover it (`docs/spec/advice.md` §10).
 fn witness_bytes() -> Vec<u8> {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../emulator/tests/vectors/revm_block_witness.bin");
     std::fs::read(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
+}
+
+/// The committed witness's public header, which this suite hands the guest on
+/// fd 0: 76 bytes whatever the block, derived from the witness rather than
+/// pinned beside it.
+fn header_bytes() -> Vec<u8> {
+    let advice = witness_bytes();
+    let witness = revm_block::BlockWitness::decode(&advice).expect("the committed witness decodes");
+    witness.public_header(advice.len() as u32).encode().to_vec()
 }
 
 /// `x24..x31` of a statement's boundary, as the guest left them.
@@ -308,14 +329,29 @@ fn a6_the_revm_block_proves_and_verifies() {
     );
 
     // The structural counts: one shard per planned shard, in statement order,
-    // with the two window families' overriding the plan's zeroes and the
-    // delegation families last, ascending.
+    // with the three window families' overriding the plan's zeroes and
+    // everything above `ZERO_WINDOWS` ascending after them.
     let expected = statement_shards(&setup.program.config, block.shard_counts());
     assert_eq!(block.shards.len(), expected.len());
     assert_eq!(
         expected.last().map(|(f, _)| *f),
+        Some(family::ADVICE_WINDOWS),
+        "ADVICE_WINDOWS is id 12 and so last in statement order, above the \
+         delegation families — it is a window family and is deliberately not \
+         lifted to the front with its two siblings (`docs/spec/advice.md` §6)"
+    );
+    assert_eq!(
+        expected.iter().rev().nth(1).map(|(f, _)| *f),
         Some(family::FR_ARITH),
-        "the delegation families are last, in ascending order"
+        "the delegation families follow the rest, in ascending order"
+    );
+    assert_eq!(
+        block.shard_counts()[families
+            .iter()
+            .position(|f| *f == family::ADVICE_WINDOWS)
+            .unwrap()],
+        1,
+        "the witness is one advice window: 717 bytes inside a 2^20 window's 4 MiB"
     );
     assert_eq!(
         block.shard_counts()[families.iter().position(|f| *f == INIT).unwrap()],
@@ -341,18 +377,38 @@ fn a6_the_revm_block_proves_and_verifies() {
 
     // **The statement says what the block executed and what it produced.**
     // Since S25 that is the whole point of the proof rather than a
-    // demonstration beside it: fd 0 is the committed witness, fd 1 is the
-    // output commitment native revm computes from it, and `x24..x31` are
-    // `io_digest` of the pair — which `verify_block` has already recomputed
+    // demonstration beside it, and since S25b what fd 0 carries is the 76-byte
+    // public header rather than the witness: fd 1 is the output commitment
+    // native revm computes from the advice, and `x24..x31` are `io_digest` of
+    // the header and that output — which `verify_block` has already recomputed
     // and compared above, so what this asserts is that the streams the
     // statement carries are the ones the fixture names.
+    //
+    // **The witness itself appears in no assertion here, and cannot.** It is
+    // advice: the statement does not carry it, the digest does not cover it,
+    // and the verifying key says nothing about it. What the proof binds is the
+    // header, the output and the fact that *some* advice took one to the other
+    // (`docs/spec/advice.md` §10).
     let witness = revm_block::BlockWitness::decode(&witness_bytes()).expect("the witness decodes");
     let output = revm_block::run(&witness).expect("the block executes on the host");
-    assert_eq!(block.statement().input, witness_bytes(), "fd 0");
+    assert_eq!(block.statement().input, header_bytes(), "fd 0");
+    assert_eq!(
+        block.statement().input.len(),
+        revm_block::PUBLIC_HEADER_BYTES,
+        "fd 0 is the compact header, not the witness"
+    );
+    assert!(
+        !block
+            .statement()
+            .input
+            .windows(8)
+            .any(|w| w == &witness_bytes()[witness_bytes().len() - 8..]),
+        "no tail of the witness is on fd 0"
+    );
     assert_eq!(block.statement().output, output, "fd 1");
     assert_eq!(
         public_words(block.statement()),
-        transcript::io_digest_words(&witness_bytes(), &output),
+        transcript::io_digest_words(&header_bytes(), &output),
         "the proof's register boundary is not the public I/O digest"
     );
     assert_eq!(block.statement().exit_status, REVM_RESULT);
@@ -393,10 +449,11 @@ fn a7_a_changed_statement_is_refused() {
     let honest = block.statement().clone();
     assert_eq!(verify_block(&setup.vk, &block, &honest), Ok(()));
 
-    // The guest reads its witness on fd 0 and commits its output on fd 1, so
-    // the statement carries both streams and its public I/O digest covers
-    // them. Flipping a byte of either is what 7(a) below does.
-    assert_eq!(honest.input, witness_bytes(), "fd 0");
+    // The guest reads its public header on fd 0 and commits its output on
+    // fd 1, so the statement carries both streams and its public I/O digest
+    // covers them. Flipping a byte of either is what 7(a) below does. The
+    // advice is in neither, which is why no twin below can be built out of it.
+    assert_eq!(honest.input, header_bytes(), "fd 0");
     assert!(!honest.output.is_empty(), "fd 1");
 
     // 7(a) A public I/O digest differing in one byte. First the shape a

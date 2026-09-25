@@ -12,7 +12,7 @@
 use alloc::vec::Vec;
 
 use constants::memory::TS_BITS;
-use constants::{challenge_slot, family, transcript_tags as tags, PROTOCOL_VERSION};
+use constants::{address_space, challenge_slot, family, transcript_tags as tags, PROTOCOL_VERSION};
 use field::Fr;
 use gkr_verify::{window_challenges, BoundaryFinals, ExternalChallenges};
 use transcript::{append_g1_points, io_digest, Transcript};
@@ -64,10 +64,18 @@ impl VmConfig {
     /// `ZERO_WINDOWS` — which derivation puts in every config — or those two
     /// at different heights. `None` rather than a panic.
     ///
-    /// The two init families are required to be *present*, not last. They
-    /// have the highest ids today, but `FamilyId`s are append-only and the
-    /// delegation families take ids above them, so a config holding one lists
-    /// it after both.
+    /// The two init families are required to be *present*, not last, and they
+    /// no longer are last: `FamilyId`s are append-only, the delegation
+    /// families took ids above them at S21 and S23, and `ADVICE_WINDOWS` took
+    /// the id above those at S25b. The window families are 7, 8 and 12, and a
+    /// config lists whichever it holds in ascending order like any other.
+    ///
+    /// `ADVICE_WINDOWS` is in every derived config too, and this decoder does
+    /// **not** require it: presence and extent are statement rules, checked by
+    /// [`check_memory_windows`] where the shard counts are. Nothing here is
+    /// unsound without it — a family absent from a config proves no shard —
+    /// and a config it could not have derived is refused where the rest of the
+    /// statement is.
     pub fn from_bytes(bytes: &[u8]) -> Option<VmConfig> {
         let word = |i: usize| -> Option<u32> {
             Some(u32::from_le_bytes(
@@ -98,10 +106,17 @@ impl VmConfig {
     }
 }
 
-/// The one height of the two init families, or the rule a config breaks:
-/// `INIT_TEARDOWN` and `ZERO_WINDOWS` both present, at one height.
+/// The one height of the two **RAM** window families, or the rule a config
+/// breaks: `INIT_TEARDOWN` and `ZERO_WINDOWS` both present, at one height.
 /// `docs/spec/memory.md` §3.2: a `ZERO_WINDOWS` height below
 /// `INIT_TEARDOWN`'s would give image words a second init row.
+///
+/// **`ADVICE_WINDOWS` is not here, and deliberately.** The rule above exists
+/// because those two tile *one* region between them and a mismatch would give
+/// a word two init rows. Advice is a different region, tiled by that family
+/// alone, so nothing about RAM's stride constrains it and it takes a height of
+/// its own (`docs/spec/advice.md` §5). Its presence and its extent are
+/// [`check_memory_windows`]'.
 pub fn window_height(config: &VmConfig) -> Result<u32, &'static str> {
     match (
         config.height(family::INIT_TEARDOWN),
@@ -137,7 +152,13 @@ fn absorb_vm_config(tr: &mut Transcript, config: &VmConfig) {
 /// 0 — it still has a slot, so the counts line up with the families by
 /// position and by nothing else. The third is `ZERO_WINDOWS`' window ids
 /// `[w_1 … w_k]` under `MEMORY_WINDOWS`, empty when `k = 0`: its length varies
-/// per execution exactly as the counts do. Absorbing checks nothing;
+/// per execution exactly as the counts do.
+///
+/// **There is no fourth message, and advice is why that is worth saying.**
+/// `ADVICE_WINDOWS`' windows are contiguous from 0, so its extent is already
+/// the second message's count at its position and there is nothing to list
+/// (`docs/spec/advice.md` §6). No new tag, no new field, and no amendment to
+/// the absorb order `docs/spec/memory.md` §7 freezes. Absorbing checks nothing;
 /// [`check_memory_windows`] is the rule over the same three.
 /// `docs/spec/memory.md` §6.1.
 pub fn absorb_statement_descriptor(
@@ -161,13 +182,21 @@ pub fn absorb_statement_descriptor(
     tr.append_scalars(tags::MEMORY_WINDOWS, &ids);
 }
 
-/// The verifier's RAM window rules over the statement, checked before the
-/// memory challenges (`docs/spec/memory.md` §3.5): `INIT_TEARDOWN` and
-/// `ZERO_WINDOWS` present at one height `h`; exactly one `INIT_TEARDOWN`
-/// shard; one window id per `ZERO_WINDOWS` shard; the ids strictly increasing;
-/// every id in `[1, 2^29 / h - 1]`. `ZERO_WINDOWS` shard `i` is window
-/// `windows[i]`, so together they give every RAM word exactly one init row.
-/// The error names the rule broken.
+/// The verifier's window rules over the statement, checked before the memory
+/// challenges (`docs/spec/memory.md` §3.5): `INIT_TEARDOWN` and `ZERO_WINDOWS`
+/// present at one height `h`; exactly one `INIT_TEARDOWN` shard; one window id
+/// per `ZERO_WINDOWS` shard; the ids strictly increasing; every id in
+/// `[1, 2^29 / h - 1]`. `ZERO_WINDOWS` shard `i` is window `windows[i]`, so
+/// together they give every RAM word exactly one init row. The error names the
+/// rule broken.
+///
+/// Then `ADVICE_WINDOWS`, which is in every `VmConfig` too and carries two
+/// rules of its own (`docs/spec/advice.md` §5 and §6). It has **no id list and
+/// needs none**: its windows are `0 .. k` contiguous from `ADVICE_ORIGIN`, so
+/// shard `i` is advice window `i` by position. What is left is the extent,
+/// stated in that family's own height `a` — `ADVICE_LENGTH` is `2^31` bytes,
+/// which is `2^29 / a` windows of `4a` — and a count above it would claim an
+/// advice window past the top of the address space.
 ///
 /// `config` is one derivation produced or [`VmConfig::from_bytes`] decoded —
 /// families strictly ascending, heights on the menu — and nothing here checks
@@ -186,12 +215,13 @@ pub fn check_memory_windows(
     let height = window_height(config)?;
     let count = |id: u32| {
         let i = config.families.iter().position(|(f, _)| *f == id);
-        shard_counts[i.expect("window_height found both init families")]
+        i.map(|i| shard_counts[i])
     };
-    if count(family::INIT_TEARDOWN) != 1 {
+    let shards = |id: u32| count(id).expect("its height was found above");
+    if shards(family::INIT_TEARDOWN) != 1 {
         return Err("INIT_TEARDOWN proves exactly one shard");
     }
-    if windows.len() as u64 != count(family::ZERO_WINDOWS) as u64 {
+    if windows.len() as u64 != shards(family::ZERO_WINDOWS) as u64 {
         return Err("the window list has one id per ZERO_WINDOWS shard");
     }
     if windows.windows(2).any(|pair| pair[0] >= pair[1]) {
@@ -200,6 +230,13 @@ pub fn check_memory_windows(
     let n = (1u64 << 29) / height as u64;
     if windows.iter().any(|w| *w == 0 || *w as u64 >= n) {
         return Err("every window id is in [1, 2^29 / h - 1]");
+    }
+    let Some(advice_height) = config.height(family::ADVICE_WINDOWS) else {
+        return Err("ADVICE_WINDOWS is in every VmConfig");
+    };
+    let advice = count(family::ADVICE_WINDOWS).expect("its height was found just above");
+    if advice as u64 > (1u64 << 29) / advice_height as u64 {
+        return Err("the advice windows fit the advice region");
     }
     Ok(())
 }
@@ -312,6 +349,15 @@ pub fn statement_shards(config: &VmConfig, shard_counts: &[u32]) -> Vec<(u32, u3
 
 /// `(family, count)` per family of `config`, in the global transcript's group
 /// order: `INIT_TEARDOWN`, `ZERO_WINDOWS`, then every other family ascending.
+///
+/// **`ADVICE_WINDOWS` is not lifted to the front with its two siblings**, and
+/// that is deliberate rather than an omission. It is a window family, but this
+/// order is the frozen one of `docs/spec/shard-proof.md` §1.2 and the two
+/// names here are literal ids, not a category: id 12 falls in "every other
+/// family ascending" and lands last in every statement. Making it third would
+/// reorder statement order, G8 and every committed transcript tape, for
+/// nothing — the memory argument is a multiset and this order is an absorb
+/// order, not a sequence of events.
 fn groups(config: &VmConfig, shard_counts: &[u32]) -> Vec<(u32, u32)> {
     let pairs = config
         .families
@@ -447,10 +493,11 @@ pub fn memory_slots(memory: &[Fr; 4]) -> ExternalChallenges {
 }
 
 /// The external challenges shard `(family, index)`'s circuit reads,
-/// `docs/spec/shard-proof.md` §4: slots 1 to 4 from `memory`; for a RAM window
-/// family, the derived slot 5 at its window — 0 for `INIT_TEARDOWN`,
-/// `windows[index]` for `ZERO_WINDOWS`; then the LogUp slots from `g`, `β` and
-/// the circuit.
+/// `docs/spec/shard-proof.md` §4: slots 1 to 4 from `memory`; for a window
+/// family, the derived slot 5 at its space and window — RAM window 0 for
+/// `INIT_TEARDOWN`, RAM window `windows[index]` for `ZERO_WINDOWS`, advice
+/// window `index` for `ADVICE_WINDOWS`, whose windows are contiguous and so
+/// carry no list; then the LogUp slots from `g`, `β` and the circuit.
 ///
 /// `index` is below the family's count and `windows` is the statement's list,
 /// which the window rules hold to that count; anything else panics.
@@ -465,8 +512,16 @@ pub fn shard_challenges(
     let drawn = memory_slots(memory);
     let trace_vars = circuit.artifact.trace_vars;
     let mut out = match circuit.family {
-        family::INIT_TEARDOWN => window_challenges(&drawn, 0, trace_vars),
-        family::ZERO_WINDOWS => window_challenges(&drawn, windows[index as usize], trace_vars),
+        family::INIT_TEARDOWN => window_challenges(&drawn, address_space::RAM, 0, trace_vars),
+        family::ZERO_WINDOWS => window_challenges(
+            &drawn,
+            address_space::RAM,
+            windows[index as usize],
+            trace_vars,
+        ),
+        family::ADVICE_WINDOWS => {
+            window_challenges(&drawn, address_space::ADVICE, index, trace_vars)
+        }
         _ => drawn,
     };
     gkr_verify::insert_lookup_challenges(&mut out, g, beta, &circuit.artifact);

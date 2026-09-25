@@ -72,7 +72,15 @@ fn the_registry_is_one_table() {
         );
         assert!(
             fam > family::ZERO_WINDOWS,
-            "a delegation family's id is above the window families', so a config lists it last"
+            "a delegation family's id is above the two RAM window families'"
+        );
+        // Not above *every* window family any more: `ADVICE_WINDOWS = 12` was
+        // appended above the three delegation ids at S25b, so a config lists
+        // it last and a delegation family is no longer the tail
+        // (`docs/spec/advice.md` §1.2).
+        assert!(
+            fam < family::ADVICE_WINDOWS,
+            "S25b appended ADVICE_WINDOWS above the delegation families; a new one takes 13"
         );
         assert!(
             !program::claims_pcs(fam),
@@ -309,16 +317,27 @@ fn reachability_survives_the_optimiser() {
     }
 }
 
-/// A declared family is in the `VmConfig` **last**, after the two window
-/// families, and carries a table with no columns — it is invoked, never
-/// decoded.
+/// A declared family is in the `VmConfig` after the two RAM window families
+/// and carries a table with no columns — it is invoked, never decoded.
+///
+/// It is **no longer last**: S25b appended `ADVICE_WINDOWS = 12` above the
+/// three delegation ids, and that family is in every config, so the tail of an
+/// ascending family list is now always the same entry whatever the program
+/// declares (`docs/spec/advice.md` §1.2).
 #[test]
 fn a_declared_family_is_last_and_has_no_table() {
     let image = common::guest("keccak-test");
     let (tables, config) = decode_program(&image, &common::fitting(&image)).expect("it decodes");
+    let ids: Vec<u32> = config.families.iter().map(|(f, _)| *f).collect();
+    assert_eq!(ids.last().copied(), Some(family::ADVICE_WINDOWS));
     assert_eq!(
-        config.families.last().map(|(f, _)| *f),
-        Some(family::KECCAK_F)
+        ids.iter().rev().nth(1).copied(),
+        Some(family::KECCAK_F),
+        "the declared family is the last one a program's own code puts there"
+    );
+    assert!(
+        ids.windows(2).all(|p| p[0] < p[1]),
+        "and the list is ascending"
     );
     let table = tables
         .family(family::KECCAK_F)

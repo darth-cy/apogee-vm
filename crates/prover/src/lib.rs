@@ -53,7 +53,10 @@ use program::lookup_tables::generic_commitments;
 use program::{setup_commitments, DecodedTables, FamilyId};
 use rayon::prelude::*;
 use srs::Srs;
-use trace::{build_boundary_finals, build_multiplicities, init_windows, plan_shards, TraceArchive};
+use trace::{
+    advice_windows, build_boundary_finals, build_multiplicities, init_windows, plan_shards,
+    TraceArchive,
+};
 use transcript::{Transcript, TranscriptEvent, TranscriptSnapshot};
 use verifier_core::{
     global_commit, identity_digest, shard_challenges, shard_transcript, srs_digest,
@@ -276,24 +279,37 @@ pub struct GlobalCommitState {
 
 /// The shard counts of an execution: one per config family, in its order —
 /// exactly one for `INIT_TEARDOWN`, one per touched window above 0 for
-/// `ZERO_WINDOWS`, and `ceil(cycles / height)` for every other.
-fn shard_counts(config: &VmConfig, archive: &TraceArchive, windows: &[u32]) -> Vec<u32> {
+/// `ZERO_WINDOWS`, `advice` for `ADVICE_WINDOWS`, and `ceil(cycles / height)`
+/// for every other.
+///
+/// The three window families run no cycles, so `plan_shards` plans 0 for each
+/// and their counts come from the log's addresses instead.
+fn shard_counts(
+    config: &VmConfig,
+    archive: &TraceArchive,
+    windows: &[u32],
+    advice: u32,
+) -> Vec<u32> {
     let plan = plan_shards(archive.cycle_profile(), config);
     plan.shards
         .iter()
         .map(|&(f, count)| match f {
             family::INIT_TEARDOWN => 1,
             family::ZERO_WINDOWS => windows.len() as u32,
+            family::ADVICE_WINDOWS => advice,
             _ => count,
         })
         .collect()
 }
 
-/// The RAM window shard `(family, index)` covers: 0 for `INIT_TEARDOWN`,
-/// `windows[index]` for `ZERO_WINDOWS`, 0 (unused) for every other family.
+/// The window shard `(family, index)` covers: RAM window 0 for
+/// `INIT_TEARDOWN`, RAM window `windows[index]` for `ZERO_WINDOWS`, advice
+/// window `index` for `ADVICE_WINDOWS` — whose windows are contiguous, so the
+/// index *is* the window — and 0 (unused) for every other family.
 fn window_of(family: FamilyId, index: u32, windows: &[u32]) -> u32 {
     match family {
         family::ZERO_WINDOWS => windows[index as usize],
+        family::ADVICE_WINDOWS => index,
         _ => 0,
     }
 }
@@ -328,7 +344,7 @@ fn statement_inputs_rec(
     let log = archive.memory_log();
     let h = window_height(config).map_err(|e| ProverError::Trace(e.to_string()))?;
     let windows = init_windows(log, h);
-    let counts = shard_counts(config, archive, &windows);
+    let counts = shard_counts(config, archive, &windows, advice_windows(log, h));
     let boundary = build_boundary_finals(log);
     let mut memory_columns = Vec::new();
     for (family, index) in statement_shards(config, &counts) {
@@ -706,9 +722,12 @@ fn low64(v: Fr) -> u64 {
 /// invocations interleave with the cycles that request them and two delegation
 /// shards are consecutive invocations, not consecutive times.
 ///
-/// For a family whose rows are words rather than cycles — the two RAM window
+/// For a family whose rows are words rather than cycles — the three window
 /// families — it is [`TRIVIAL_TS_WINDOW`]: such a family owns no part of the
-/// execution's time at all, and there is no column to read one off.
+/// execution's time at all, and there is no column to read one off. That
+/// matters for `ADVICE_WINDOWS` in particular: its `M[0]` is a teardown
+/// timestamp, not a cycle column, and reading a window off it would give a
+/// number that means nothing.
 fn ts_window(family: FamilyId, base: &BaseLayer) -> [u64; 2] {
     let delegation = program::delegation_frame_words(family).is_some();
     if !constants::family::CYCLE_OWNING[family as usize] && !delegation {

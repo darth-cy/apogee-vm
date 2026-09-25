@@ -349,6 +349,53 @@ pub fn hint(buf: &mut [u8]) -> usize {
     read_fd(ecall::FD_HINT, buf)
 }
 
+/// The **advice** region as a slice: `len` bytes from
+/// `constants::guest_memory::ADVICE_ORIGIN`.
+///
+/// Advice is private nondeterministic witness the prover supplies through a
+/// read-only address space of its own (`docs/spec/advice.md`). A guest reads
+/// it with ordinary loads — this returns a slice and issues no ecall, so a
+/// megabyte of advice costs a megabyte of loads and nothing else. There is no
+/// copy into RAM, no `io_digest` over it, and no delegation growth with its
+/// size.
+///
+/// **Nothing binds these bytes**, exactly as nothing binds [`hint`]'s. The
+/// difference is only in the mechanism and the scale: a hint is a few words
+/// through fd 3, advice is a region. A guest that does not check what it read
+/// against something public has proved that *some* advice gave its output.
+/// `docs/spec/advice.md` §2 is the argument and the pattern.
+///
+/// `len` is the guest's own business — the prover and the guest agree it, and
+/// the convention this repository uses is to carry it in a compact public
+/// header on fd 0, so that a read past the supplied extent is a guest bug
+/// rather than a silent zero. It **is** checked against the address space:
+/// a `len` past `ADVICE_LENGTH` is a caller error and panics here rather than
+/// handing back a slice that wraps.
+///
+/// A load past what the prover supplied is a **fatal** guest error in the
+/// executor, the same class as a misaligned access, so an over-long `len` is
+/// caught at the first load beyond the region and not by this function.
+///
+/// # Under `qemu-riscv32`
+///
+/// It faults. A host loader maps only the image's `PT_LOAD` segments and
+/// advice is in none of them, so the region is unmapped
+/// (`docs/spec/advice.md` §9). A guest that reads advice is out of the QEMU
+/// suites by construction; that is the owner's decision at S25b, not an
+/// oversight.
+pub fn advice(len: usize) -> &'static [u8] {
+    assert!(
+        len as u64 <= constants::guest_memory::ADVICE_LENGTH as u64,
+        "guest_sdk::advice: the advice region is not that long"
+    );
+    // SAFETY: the advice region is `ADVICE_LENGTH` bytes of read-only address
+    // space at a fixed address, outside RAM and outside the image, so this
+    // slice aliases nothing the guest owns and nothing may write it. The
+    // assertion above keeps it inside the region. A `len` past what the prover
+    // supplied is not unsound here: the executor refuses the load.
+    unsafe { core::slice::from_raw_parts(constants::guest_memory::ADVICE_ORIGIN as *const u8, len) }
+}
+
 /// Write diagnostics to fd 2. Free-form, uncommitted, verifier-ignored.
 pub fn log(bytes: &[u8]) {
     write_fd(ecall::FD_STDERR, bytes);

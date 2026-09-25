@@ -1729,7 +1729,8 @@ fn traced(image: loader::ProgramImage, height: u32) -> (prover::Program, trace::
             family::ADD_SUB_LUI_AUIPC,
             family::JUMP_BRANCH_SLT,
             family::INIT_TEARDOWN,
-            family::ZERO_WINDOWS
+            family::ZERO_WINDOWS,
+            family::ADVICE_WINDOWS
         ]
     );
     let io = emulator::GuestIo {

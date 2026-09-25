@@ -86,7 +86,8 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
             (MS, 1 << 20),
             (AT, 1 << 20),
             (INIT, 1 << 16),
-            (ZERO, 1 << 16)
+            (ZERO, 1 << 16),
+            (family::ADVICE_WINDOWS, 1 << 16),
         ],
         "the guest runs no shift/bitwise and no mul/div, so neither is derived"
     );
@@ -102,7 +103,8 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
         archive.memory_log().self_check(&setup.program.image),
         Ok(())
     );
-    assert_eq!(public.shard_counts, vec![1, 1, 1, 1, 1, 1, 1]);
+    // The trailing 0 is `ADVICE_WINDOWS`, in every `VmConfig` since S25b.
+    assert_eq!(public.shard_counts, vec![1, 1, 1, 1, 1, 1, 1, 0]);
     assert_eq!(
         public.windows,
         vec![8191],

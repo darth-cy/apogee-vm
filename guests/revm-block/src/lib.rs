@@ -1,5 +1,6 @@
 #![no_std]
-//! The revm block workload: `BlockWitness` in, the output commitment out.
+//! The revm block workload: a compact public header on fd 0, the bulk
+//! `BlockWitness` in the advice region, the output commitment out on fd 1.
 //!
 //! This file is the program, and it compiles from one source twice — for the
 //! host, where `crates/emulator/tests/revm.rs` calls [`run`] directly as the
@@ -30,10 +31,13 @@
 //! `ripemd` in with it, for the EVM's own precompiles; the same reading covers
 //! them, and `docs/handoff/S24-revm.md` records it.
 //!
-//! # The two wire formats this file owns
+//! # The three wire formats this file owns
 //!
-//! [`BlockWitness`] is fd 0 and the output commitment is fd 1, and S10's
-//! frozen `io_digest` binds both. Neither carries an `Fr`, so the workspace's
+//! [`PublicHeader`] is fd 0 and the output commitment is fd 1, and S10's
+//! frozen `io_digest` binds both. [`BlockWitness`] is the **advice** region,
+//! and `io_digest` binds nothing of it: it is private prover witness, and what
+//! it is worth is `docs/spec/advice.md` §2 and §10. None of the three carries
+//! an `Fr`, so the workspace's
 //! little-endian rule for field elements does not reach them: an EVM word is
 //! Ethereum's **big-endian** 32 bytes here, as it is everywhere else in
 //! Ethereum, and the small integers around them are little-endian, as
@@ -148,24 +152,91 @@ pub const TRACE_HEIGHT_RELEASE: u32 = 1 << 20;
 /// a table that holds the code.
 pub const TRACE_HEIGHT_DEBUG: u32 = 1 << 22;
 
-/// The fd 0 buffer the guest reads its witness into, in one `read`.
+/// The fd 0 header's length: 4 + 8 + 32 + 32 bytes.
 ///
-/// **A tunable**, and the one number here that is a policy rather than a
-/// fact: twice the largest committed witness, so a witness that grows by less
-/// than half again still fits and a larger one exits loudly rather than
-/// decoding a prefix. The bump allocator never frees, so this is also the
-/// largest single allocation the guest makes.
-///
-/// **Rounded up to a whole number of words.** fd 0 is word-granular since S25
-/// — one `read` moves one 4-aligned word — so a buffer whose length is not a
-/// multiple of four would make the last call keep part of a word and drop the
-/// rest, and `guest_sdk::read_input` refuses one rather than dropping bytes
-/// silently. The `const` assertion below is what makes that a compile error
-/// here instead of an exit 70 at run time.
-pub const WITNESS_CAPACITY: usize = (2 * COMMITTED_WITNESS_BYTES).next_multiple_of(4);
+/// **A multiple of four**, and it has to be: fd 0 is word-granular since S25,
+/// one `read` moving one 4-aligned word, so a buffer whose length is not a
+/// multiple of four would leave the last call holding part of a word. The
+/// `const` assertion below makes that a compile error rather than an exit at
+/// run time.
+pub const PUBLIC_HEADER_BYTES: usize = 4 + 8 + 32 + 32;
 
-const _: () = assert!(WITNESS_CAPACITY.is_multiple_of(4));
-const _: () = assert!(WITNESS_CAPACITY >= 2 * COMMITTED_WITNESS_BYTES);
+const _: () = assert!(PUBLIC_HEADER_BYTES.is_multiple_of(4));
+
+/// What fd 0 carries, and it is all fd 0 carries since S25b: a compact public
+/// header, 76 bytes whatever the block.
+///
+/// The bulk [`BlockWitness`] moved to the **advice** region
+/// (`docs/spec/advice.md`), which is private, uncommitted, and read with
+/// ordinary loads. What stays public is what a verifier can be expected to
+/// know independently — which block this is — plus the region's extent, so a
+/// read past it is a guest bug and not a silent zero.
+///
+/// **This header is not a state commitment**, and the guest's check against it
+/// is not validation of the witness. It fixes the chain, the height and the
+/// parent, and it fixes nothing about the accounts, the storage, the code or
+/// the transactions. `docs/spec/advice.md` §10 states exactly what the
+/// resulting proof says; that distinction is not to be blurred.
+///
+/// # The encoding
+///
+/// Fixed-width and hand-written rather than `postcard`, because a header this
+/// small has one shape and a length-prefixed encoder would put a varint in
+/// front of every field. Little-endian for the two integers, as the rest of
+/// this repository writes small integers; big-endian for the two EVM words, as
+/// Ethereum writes them.
+///
+/// ```text
+/// 0..4    advice_len    u32 LE
+/// 4..12   chain_id      u64 LE
+/// 12..44  number        32 bytes, big-endian
+/// 44..76  parent_hash   32 bytes, big-endian
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PublicHeader {
+    /// How many advice bytes the prover supplied: the exact length of the
+    /// [`BlockWitness`] encoding in the advice region, not a capacity.
+    pub advice_len: u32,
+    /// EIP-155 chain id, which must be the witness's.
+    pub chain_id: u64,
+    /// The block height, which must be the witness's.
+    pub number: Word32,
+    /// The parent block's hash — the witness's `block_hashes` entry for
+    /// `number - 1` — or all zeros when the witness carries none, which is
+    /// the case for a synthetic block and for a real one whose transactions
+    /// never read `BLOCKHASH`.
+    pub parent_hash: Word32,
+}
+
+impl PublicHeader {
+    /// This header as fd 0's bytes.
+    pub fn encode(&self) -> [u8; PUBLIC_HEADER_BYTES] {
+        let mut out = [0u8; PUBLIC_HEADER_BYTES];
+        out[0..4].copy_from_slice(&self.advice_len.to_le_bytes());
+        out[4..12].copy_from_slice(&self.chain_id.to_le_bytes());
+        out[12..44].copy_from_slice(&self.number);
+        out[44..76].copy_from_slice(&self.parent_hash);
+        out
+    }
+
+    /// The header `bytes` encode, or `None` if they are not exactly
+    /// [`PUBLIC_HEADER_BYTES`] of them. Every 76-byte string is a header:
+    /// there is no field here a reader can refuse, which is what keeps the
+    /// guest's one refusal the comparison against the witness.
+    pub fn decode(bytes: &[u8]) -> Option<PublicHeader> {
+        let bytes: &[u8; PUBLIC_HEADER_BYTES] = bytes.try_into().ok()?;
+        let mut number = [0u8; 32];
+        let mut parent_hash = [0u8; 32];
+        number.copy_from_slice(&bytes[12..44]);
+        parent_hash.copy_from_slice(&bytes[44..76]);
+        Some(PublicHeader {
+            advice_len: u32::from_le_bytes(bytes[0..4].try_into().expect("four bytes")),
+            chain_id: u64::from_le_bytes(bytes[4..12].try_into().expect("eight bytes")),
+            number,
+            parent_hash,
+        })
+    }
+}
 
 /// Everything one block's execution needs, and nothing an execution derives.
 ///
@@ -184,21 +255,19 @@ const _: () = assert!(WITNESS_CAPACITY >= 2 * COMMITTED_WITNESS_BYTES);
 /// and storage entries and a transaction carries the full EIP-1559/2930
 /// envelope rather than the subset this stage's two transactions use.
 ///
-/// # The `BLOCKHASH` gap
+/// # What moved, and what did not
 ///
-/// A `block_hashes` field does not exist here, and that is the concrete
-/// reason this type is not frozen. revm answers the `BLOCKHASH` opcode from
-/// its `Database`, and [`run`] gives it a `CacheDB<EmptyDB>` whose block-hash
-/// cache is empty, so every miss falls through to `EmptyDB`, which returns
-/// **`keccak256` of the block number's decimal string** — a deterministic
-/// placeholder, not any block's hash. A contract reading `BLOCKHASH(n)` for an
-/// `n` in the last 256 blocks therefore gets a made-up word today, the guest
-/// and the host agree on it, and the block still "executes". The witness is
-/// where a real one would have to come from, as a
-/// `block_hashes: Vec<(u64, Word32)>` loaded into `CacheDB`'s cache before
-/// execution. `docs/spec/revm-block.md` §1.2 is the standing note;
-/// `crates/emulator/tests/revm.rs::blockhash_reads_a_placeholder_today` pins
-/// the current behaviour so the gap cannot close by accident.
+/// S25a appended [`BlockEnvWitness::block_hashes`], which closed the one *gap*
+/// this type was known to have: `BLOCKHASH` used to be answered by an empty
+/// `CacheDB<EmptyDB>` with `keccak256` of the block number's decimal string —
+/// a placeholder equal to no block's hash — and it is now answered from the
+/// witness, a number the list lacks being an error.
+///
+/// S25b moved these bytes off fd 0 into the **advice** region and changed the
+/// encoding not at all. What reaches the guest publicly is
+/// [`PublicHeader`], 76 bytes; this is private, and nothing outside the guest
+/// says what it is (`docs/spec/advice.md` §2 and §10).
+///
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlockWitness {
     /// The header fields revm reads.
@@ -392,6 +461,51 @@ impl BlockWitness {
             return Err(WitnessError::Malformed);
         }
         Ok(witness)
+    }
+
+    /// The public header this witness must be presented under, for a region
+    /// of `advice_len` bytes.
+    ///
+    /// The parent hash is the `block_hashes` entry for `number - 1` when the
+    /// number fits a `u64` and the list carries it, and all zeros otherwise.
+    /// Zeros are therefore *not* a claim that the parent hash is zero; they
+    /// are a claim that this witness answers no `BLOCKHASH` for the parent,
+    /// which is exactly as much as the header can say about a block whose
+    /// transactions never asked.
+    pub fn public_header(&self, advice_len: u32) -> PublicHeader {
+        let number = u64::from_be_bytes(
+            self.env.number[24..32]
+                .try_into()
+                .expect("a Word32's low eight bytes"),
+        );
+        let fits = self.env.number[..24].iter().all(|b| *b == 0);
+        let parent_hash = match fits && number > 0 {
+            false => [0u8; 32],
+            true => self
+                .env
+                .block_hashes
+                .iter()
+                .find(|(n, _)| *n == number - 1)
+                .map(|(_, h)| *h)
+                .unwrap_or([0u8; 32]),
+        };
+        PublicHeader {
+            advice_len,
+            chain_id: self.env.chain_id,
+            number: self.env.number,
+            parent_hash,
+        }
+    }
+
+    /// Whether this witness is the block `header` names.
+    ///
+    /// The guest's one check of the advice against something public, and the
+    /// whole of it. It holds the chain id, the height and the parent hash;
+    /// it holds **nothing** about the accounts, the storage, the code or the
+    /// transactions, because there is no public commitment here to hold them
+    /// against (`docs/spec/advice.md` §10).
+    pub fn matches(&self, header: &PublicHeader) -> bool {
+        self.public_header(header.advice_len) == *header
     }
 
     /// `Ok` when this witness is in must-be-exact 6's canonical order.

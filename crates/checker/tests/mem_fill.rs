@@ -289,3 +289,141 @@ fn the_atomics_fill_satisfies_every_gate_and_every_table() {
     assert_rows_hold(&a, &columns, &rows, "ATOMICS");
     assert_every_scaled_column_is_bounded(&a, "ATOMICS");
 }
+
+// ---------------------------------------------------------------------------
+// The advice path, which no committed guest takes
+// ---------------------------------------------------------------------------
+
+/// A hand-encoded program that loads one **advice** word and one RAM word,
+/// entered at `RAM_ORIGIN`, with `scratch` bytes of RAM after the code.
+///
+/// Hand-encoded rather than compiled because the property is the address map:
+/// no committed guest reaches `0x8000_0000`, and one that did would drop out of
+/// the QEMU suites (`docs/spec/advice.md` §9). `crates/emulator/tests/advice.rs`
+/// builds its programs the same way and for the same reason.
+fn advice_and_ram_program() -> loader::ProgramImage {
+    const OP_LOAD: u32 = 0x03;
+    const OP_STORE: u32 = 0x23;
+    const OP_OP_IMM: u32 = 0x13;
+    const OP_LUI: u32 = 0x37;
+    const OP_SYSTEM: u32 = 0x73;
+    let i_type = |op: u32, funct3: u32, rd: u32, rs1: u32, imm: i32| {
+        ((imm as u32 & 0xfff) << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | op
+    };
+    let s_type = |funct3: u32, rs1: u32, rs2: u32, imm: i32| {
+        let imm = imm as u32;
+        ((imm >> 5 & 0x7f) << 25)
+            | (rs2 << 20)
+            | (rs1 << 15)
+            | (funct3 << 12)
+            | ((imm & 0x1f) << 7)
+            | OP_STORE
+    };
+    let lui = |rd: u32, imm20: u32| (imm20 << 12) | (rd << 7) | OP_LUI;
+    let words = [
+        lui(1, constants::guest_memory::ADVICE_ORIGIN >> 12), // x1 = ADVICE_ORIGIN
+        i_type(OP_LOAD, 2, 10, 1, 0),                         // lw x10, 0(x1): advice
+        lui(2, 0x11),                                         // x2 = 0x11000: RAM
+        s_type(2, 2, 10, 0),                                  // sw x10, 0(x2)
+        i_type(OP_LOAD, 2, 11, 2, 0),                         // lw x11, 0(x2): RAM
+        i_type(OP_OP_IMM, 0, 17, 0, constants::ecall::EXIT as i32),
+        OP_SYSTEM,
+    ];
+    let at = constants::guest_memory::RAM_ORIGIN;
+    let mut slots = Vec::new();
+    for word in words {
+        slots.push(loader::Slot::Instruction {
+            word,
+            compressed: false,
+        });
+        slots.push(loader::Slot::MidInstruction);
+    }
+    let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+    loader::ProgramImage {
+        entry: at,
+        segments: vec![loader::Segment {
+            vaddr: at,
+            mem_len: bytes.len() as u32 + 4096,
+            bytes,
+        }],
+        slot_base: at,
+        slots,
+    }
+}
+
+/// **`MEM_WORD`'s fill on an advice load**, which is the one branch of it no
+/// committed guest reaches and whose only other coverage is the deferred
+/// `crates/prover/tests/revm.rs`.
+///
+/// The program loads one advice word and one RAM word, so the family's two live
+/// rows exercise both sides of `advice_split` in one trace: `is_advice` is 1 on
+/// the advice row and 0 on the RAM row, `load_space` is `ADVICE` and then `RAM`,
+/// and every gate and obligation holds on both. A fill that read the space from
+/// the slot rather than the address, or that forgot the re-split, fails here
+/// rather than in a suite that takes forty minutes.
+#[test]
+fn the_mem_word_fill_reads_advice_and_ram_in_one_trace() {
+    use constants::address_space;
+
+    let image = advice_and_ram_program();
+    let mut params = program::ProgramParams::defaults();
+    params.heights = [1 << VARS; family::COUNT as usize];
+    for f in [family::KECCAK_F, family::POSEIDON2, family::FR_ARITH] {
+        params.heights[f as usize] = 1 << 8;
+    }
+    let (tables, config) = program::decode_program(&image, &params).expect("it decodes");
+    let io = emulator::GuestIo {
+        advice: vec![7, 0, 0, 0],
+        ..emulator::GuestIo::default()
+    };
+    let (traces, log, profile, execution) =
+        emulator::trace_run(&image, &io, &tables, &config).expect("it traces");
+    assert_eq!(execution.exit_code, 7, "the advice word reached x10 and a0");
+    log.self_check(&image).expect("the log balances");
+    let archive = trace::TraceArchive::from_execution(
+        traces,
+        log,
+        profile,
+        trace::IoStreams {
+            input: Vec::new(),
+            output: Vec::new(),
+        },
+        trace::PhaseTiming { wall_nanos: 0 },
+    );
+    let program = prover::Program {
+        image,
+        tables,
+        config,
+    };
+
+    let (a, columns) = filled(
+        &program,
+        &archive,
+        family::MEM_WORD,
+        mem_word::TABLE_WIDTH,
+        false,
+    );
+    let n = live(&archive, family::MEM_WORD);
+    assert_eq!(n, 3, "two loads and one store are MEM_WORD's");
+
+    // Row 0 is the advice load, row 2 the RAM load; row 1 is the store. The
+    // space column and the selector agree with the address on each.
+    let space = constraints::memory::load_space(6);
+    assert_eq!(at(&columns, mem_word::IS_ADVICE, 0), Fr::ONE);
+    assert_eq!(
+        at(&columns, space, 0),
+        Fr::from_u64(address_space::ADVICE as u64)
+    );
+    assert_eq!(at(&columns, mem_word::IS_ADVICE, 2), Fr::ZERO);
+    assert_eq!(
+        at(&columns, space, 2),
+        Fr::from_u64(address_space::RAM as u64)
+    );
+    // The store neither loads nor names a space.
+    assert_eq!(at(&columns, mem_word::IS_ADVICE, 1), Fr::ZERO);
+    assert_eq!(at(&columns, space, 1), Fr::ZERO);
+
+    let rows: Vec<usize> = (0..n + 2).chain([(1 << VARS) - 1]).collect();
+    assert_rows_hold(&a, &columns, &rows, "MEM_WORD over advice");
+    assert_every_scaled_column_is_bounded(&a, "MEM_WORD over advice");
+}

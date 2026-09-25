@@ -299,7 +299,19 @@ fn every_cycle_lands_in_the_family_of_its_pc() {
     let t = traced("fib");
     assert_eq!(t.profile.total(), t.execution.cycle_count);
     let mut seen = vec![false; t.execution.cycle_count as usize + 1];
-    for (trace, (f, n)) in t.traces.families.iter().zip(&t.profile.counts) {
+    // Looked up by id, not zipped. `FamilyTraces::families` holds the
+    // non-delegation families in config order and `row_counts` sorts every
+    // buffer ascending, so the two lists interleave differently the moment a
+    // family id above a delegation one exists — `ADVICE_WINDOWS` is 12 and
+    // sits after `FR_ARITH` in the profile but right after `ZERO_WINDOWS`
+    // here.
+    for trace in &t.traces.families {
+        let (f, n) = t
+            .profile
+            .counts
+            .iter()
+            .find(|(f, _)| *f == trace.family)
+            .expect("every buffer is a counted family");
         assert_eq!((trace.family, trace.len() as u64), (*f, *n));
         for (pc, cycle) in trace.pc.iter().zip(&trace.cycle) {
             let (owner, _) = row_kind(&instr_at(&t.image, *pc));

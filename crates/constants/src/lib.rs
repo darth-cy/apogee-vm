@@ -1073,13 +1073,20 @@ pub mod family {
     /// (`docs/spec/delegation.md` §13).
     pub const FR_ARITH: u32 = 11;
     /// Initialisation of the **advice** region, one shard per window of it the
-    /// prover supplies, at the height of [`INIT_TEARDOWN`] (S25b). Claims no
-    /// pc and owns no cycle; present in every `VmConfig`, like the two RAM
-    /// window families, and proving **zero** shards in a run that reads no
-    /// advice.
+    /// prover supplies (S25b). Claims no pc and owns no cycle; present in
+    /// every `VmConfig`, like the two RAM window families, and proving
+    /// **zero** shards in a run that reads no advice.
     ///
-    /// It is the two RAM window families' third sibling in every respect but
-    /// one: its rows' initial values are **free**. Window 0's come from the
+    /// It takes a height off the menu **of its own**.
+    /// `verifier_core::window_height` holds [`INIT_TEARDOWN`] and
+    /// [`ZERO_WINDOWS`] to one height because those two tile one region
+    /// between them and a mismatch would give an image word two init rows;
+    /// advice is a separate region tiled by this family alone, so that reason
+    /// does not reach it and no rule invents one
+    /// (`docs/spec/advice.md` §5.0).
+    ///
+    /// It is the two RAM window families' third sibling in every other respect
+    /// but one: its rows' initial values are **free**. Window 0's come from the
     /// image column and identity commits them; a zero window's are the literal
     /// 0; an advice window's are whatever the prover supplies, and nothing in
     /// the statement, the key or identity binds them. That is the whole point
@@ -1089,6 +1096,22 @@ pub mod family {
 
     /// How many families this table defines.
     pub const COUNT: u32 = 13;
+
+    /// Every **window** family, ascending: the families present in every
+    /// `VmConfig` whatever the program, whose rows are addresses rather than
+    /// cycles and whose shards initialize one window of a region each.
+    ///
+    /// The two RAM ones are `docs/spec/memory.md` §3.2's;
+    /// [`ADVICE_WINDOWS`] is `docs/spec/advice.md` §5's, and being one of
+    /// these is what let it join `program::decode_program`'s three presence
+    /// rules without needing a fourth.
+    ///
+    /// They are **not** held to one height. `verifier_core::window_height`
+    /// holds the two RAM ones to one because they tile one region between
+    /// them and a mismatch would give a word two init rows; advice is a
+    /// separate region tiled by one family, so that reason does not reach it
+    /// and no rule invents one.
+    pub const WINDOW_FAMILIES: [u32; 3] = [INIT_TEARDOWN, ZERO_WINDOWS, ADVICE_WINDOWS];
 
     /// Whether a family's rows are **execution cycles**, indexed by
     /// `FamilyId`. Append-only, beside the ids themselves.

@@ -254,8 +254,8 @@ pub const ROW_FIELDS: [RowField; 8] = [
 /// This is the one place a family's columns are chosen; [`field_mask`] and
 /// the committed column order are both read off it. `funct3` is in no tuple:
 /// the extra mask is one-hot per mnemonic, which leaves it nothing to say.
-/// A family that claims no pc — the two init families, and every delegation
-/// family — has an empty table with no columns.
+/// A family that claims no pc — the three window families, and every
+/// delegation family — has an empty table with no columns.
 pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
     use RowField::*;
     match family {
@@ -382,8 +382,9 @@ impl ProgramParams {
 // every path that named them still does.
 pub use verifier_core::{absorb_statement_descriptor, ProgramIdentity, VmConfig};
 
-/// The init families' one height, or the window rule a config breaks, as a
-/// `ProgramError`. `verifier_core::window_height` is the rule.
+/// The two RAM window families' one height, or the rule a config breaks, as a
+/// `ProgramError`. `verifier_core::window_height` is the rule, and its doc is
+/// why `ADVICE_WINDOWS` is not held to that height.
 fn window_height(config: &VmConfig) -> Result<u32, ProgramError> {
     verifier_core::window_height(config).map_err(|rule| ProgramError::WindowRule { rule })
 }
@@ -580,7 +581,7 @@ fn narrowest(values: Vec<u32>) -> PolyBacking {
 /// Decode a program into its family tables, and derive its `VmConfig`.
 ///
 /// The family set is derived, never chosen: a family is present exactly when
-/// it claims at least one pc, and `INIT_TEARDOWN` and `ZERO_WINDOWS` are
+/// it claims at least one pc, and every `family::WINDOW_FAMILIES` member is
 /// always present. See `crates/program/CLAUDE.md` for every refusal.
 ///
 /// `image` must satisfy `ProgramImage`'s documented invariants, which
@@ -660,8 +661,8 @@ pub fn decode_program(
 /// that detachment is sound: an instruction whose family is not available is
 /// claimed by no family, which is the same loud failure as an instruction no
 /// family knows. Production derivation detaches nothing it did not derive.
-/// Detaching `INIT_TEARDOWN` or `ZERO_WINDOWS` leaves it out of the family
-/// set, which is refused.
+/// Detaching a window family leaves it out of the family set, which is
+/// refused.
 pub fn decode_program_detaching(
     image: &ProgramImage,
     params: &ProgramParams,
@@ -729,13 +730,13 @@ pub fn decode_program_detaching(
     for family in FAMILIES {
         let rows = &claims[family as usize];
         // Three presence rules, and no fourth. A family that claims a pc is
-        // present because it claims one. The two init families are present in
-        // every config (`docs/spec/memory.md` §3.2). A delegation family is
-        // present exactly when the linked binary declares it
-        // (`docs/spec/delegation.md` §7) — never because a caller asked.
-        let always = (family == family::INIT_TEARDOWN
-            || family == family::ZERO_WINDOWS
-            || declared.contains(&family))
+        // present because it claims one. A **window** family is present in
+        // every config — the two RAM ones by `docs/spec/memory.md` §3.2 and
+        // `ADVICE_WINDOWS` by `docs/spec/advice.md` §5, which is why advice
+        // needed no fourth rule. A delegation family is present exactly when
+        // the linked binary declares it (`docs/spec/delegation.md` §7) — never
+        // because a caller asked.
+        let always = (family::WINDOW_FAMILIES.contains(&family) || declared.contains(&family))
             && !detached.contains(&family);
         if rows.is_empty() && !always {
             continue;
@@ -900,7 +901,9 @@ pub fn program_identity(
 /// Every family's setup commitments, one list per family of `config`, in its
 /// order: an instruction family's decoded-table columns in lookup-tuple order;
 /// `INIT_TEARDOWN`'s one, the [`image_init_column`] at its height;
-/// `ZERO_WINDOWS`' none.
+/// `ZERO_WINDOWS`' none, and `ADVICE_WINDOWS`' none — the second for want of a
+/// setup column and the third **deliberately**, its init column being the
+/// prover's private witness (`docs/spec/advice.md` §2).
 ///
 /// `tables` and `config` must be `image`'s derivation, and `srs` must hold as
 /// many powers as the tallest table has rows; either failing is a broken

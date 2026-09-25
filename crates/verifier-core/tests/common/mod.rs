@@ -19,6 +19,8 @@ pub const ADD: u32 = family::ADD_SUB_LUI_AUIPC;
 pub const JBS: u32 = family::JUMP_BRANCH_SLT;
 pub const INIT: u32 = family::INIT_TEARDOWN;
 pub const ZERO: u32 = family::ZERO_WINDOWS;
+/// The third window family (S25b): in every `VmConfig`, proving nothing here.
+pub const ADVICE: u32 = family::ADVICE_WINDOWS;
 
 /// A 64-byte string that is not all zero, distinct per `i`.
 pub fn blob(i: u32) -> [u8; 64] {
@@ -30,7 +32,12 @@ pub fn blob(i: u32) -> [u8; 64] {
 
 pub fn config() -> VmConfig {
     VmConfig {
-        families: vec![(ADD, 1 << 20), (INIT, 1 << 16), (ZERO, 1 << 16)],
+        families: vec![
+            (ADD, 1 << 20),
+            (INIT, 1 << 16),
+            (ZERO, 1 << 16),
+            (ADVICE, 1 << 16),
+        ],
         bytecode_size_words: 1 << 20,
     }
 }
@@ -42,7 +49,7 @@ pub fn generic_table() -> [[u8; 64]; 3] {
 
 pub fn vk() -> VerifyingKey {
     let config = config();
-    let setup = vec![(0..7).map(blob).collect(), vec![blob(100)], vec![]];
+    let setup = vec![(0..7).map(blob).collect(), vec![blob(100)], vec![], vec![]];
     let srs_verifier = [9u8; SRS_VERIFIER_BYTES];
     VerifyingKey {
         code_version: family::CODE_VERSION,
@@ -57,6 +64,7 @@ pub fn vk() -> VerifyingKey {
             family_circuit(ADD, 20).unwrap(),
             family_circuit(INIT, 16).unwrap(),
             family_circuit(ZERO, 16).unwrap(),
+            family_circuit(ADVICE, 16).unwrap(),
         ],
     }
 }
@@ -71,6 +79,7 @@ pub fn jbs_vk() -> VerifyingKey {
             (JBS, 1 << 20),
             (INIT, 1 << 16),
             (ZERO, 1 << 16),
+            (ADVICE, 1 << 16),
         ],
         bytecode_size_words: 1 << 20,
     };
@@ -78,6 +87,7 @@ pub fn jbs_vk() -> VerifyingKey {
         (0..7).map(blob).collect(),
         (10..17).map(blob).collect(),
         vec![blob(100)],
+        vec![],
         vec![],
     ];
     let srs_verifier = [9u8; SRS_VERIFIER_BYTES];
@@ -95,6 +105,7 @@ pub fn jbs_vk() -> VerifyingKey {
             family_circuit(JBS, 20).unwrap(),
             family_circuit(INIT, 16).unwrap(),
             family_circuit(ZERO, 16).unwrap(),
+            family_circuit(ADVICE, 16).unwrap(),
         ],
     }
 }
@@ -103,7 +114,7 @@ pub fn jbs_vk() -> VerifyingKey {
 /// that run.
 pub fn jbs_statement() -> PublicInputs {
     let mut s = statement();
-    s.shard_counts = vec![1, 1, 1, 0];
+    s.shard_counts = vec![1, 1, 1, 0, 0];
     s.memory_commitments.push((600..621).map(blob).collect());
     s.memory_roots.push([Fr::from_u64(5), Fr::from_u64(6)]);
     s
@@ -140,7 +151,7 @@ pub fn statement() -> PublicInputs {
         input,
         output,
         exit_status: 42,
-        shard_counts: vec![1, 1, 0],
+        shard_counts: vec![1, 1, 0, 0],
         windows: vec![],
         boundary,
         memory_commitments: vec![

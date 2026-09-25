@@ -78,7 +78,8 @@ fn a1_the_tiny_guest_proves_and_both_shards_verify() {
         vec![
             (ADD, 1 << 20),
             (INIT, 1 << 16),
-            (family::ZERO_WINDOWS, 1 << 16)
+            (family::ZERO_WINDOWS, 1 << 16),
+            (family::ADVICE_WINDOWS, 1 << 16),
         ]
     );
     let table = setup.program.tables.family(ADD).expect("the add/sub table");
@@ -92,10 +93,17 @@ fn a1_the_tiny_guest_proves_and_both_shards_verify() {
     );
     assert_eq!(
         archive.cycle_profile().counts,
-        vec![(ADD, 29), (INIT, 0), (family::ZERO_WINDOWS, 0)]
+        vec![
+            (ADD, 29),
+            (INIT, 0),
+            (family::ZERO_WINDOWS, 0),
+            (family::ADVICE_WINDOWS, 0)
+        ]
     );
 
-    assert_eq!(public.shard_counts, vec![1, 1, 0]);
+    // `ADVICE_WINDOWS` is in every `VmConfig` and proves nothing here: this
+    // guest reads no advice (`docs/spec/advice.md` §5).
+    assert_eq!(public.shard_counts, vec![1, 1, 0, 0]);
     assert!(public.windows.is_empty(), "addsub touches no RAM");
     assert_eq!(public.exit_status, common::RESULT);
     assert!(public.input.is_empty() && public.output.is_empty());

@@ -77,8 +77,13 @@ pub const PINS: [(&str, &str); 3] = [
         "17a27f6ea5370cd865bb08afa7b2796274b41f0ede49f63d11a6314d7b4477fb",
     ),
     (
+        // Re-pinned at S25b: `ADVICE_WINDOWS` is in every `VmConfig`, so the
+        // `VM_CONFIG` message program identity absorbs lists one more family
+        // and **every** program's identity moved — unlike S21's and S23's
+        // delegation families, which moved only the identities of programs
+        // that declared them (`docs/spec/advice.md` §5).
         "identity.txt",
-        "809e611a5b903fab03c962d6f6c5ba6a55b35439b223c60e5a2620072f904e6c",
+        "498b339f2e7e461bc625de012ab2ef4e5ea9f249e09b274f6e77d75e369e32e1",
     ),
     (
         "generic_table.txt",

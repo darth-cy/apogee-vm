@@ -177,10 +177,11 @@ mod tests {
                 (family::JUMP_BRANCH_SLT, 1 << 20),
                 (family::INIT_TEARDOWN, 1 << 16),
                 (family::ZERO_WINDOWS, 1 << 16),
+                (family::ADVICE_WINDOWS, 1 << 16),
             ],
             bytecode_size_words: 1 << 20,
         };
-        let setup = vec![vec![point; 7], vec![point], vec![]];
+        let setup = vec![vec![point; 7], vec![point], vec![], vec![]];
         let srs_verifier = encode_srs_verifier(&SrsVerifier {
             g1_gen: G1Affine::GENERATOR,
             g2_gen: G2Affine::GENERATOR,
@@ -235,8 +236,8 @@ mod tests {
             output: vec![],
             exit_status: 0,
             // Positional over the config: no jump shard, the one window-0
-            // shard the window rules require, no zero window.
-            shard_counts: vec![0, 1, 0],
+            // shard the window rules require, no zero window, no advice.
+            shard_counts: vec![0, 1, 0, 0],
             windows: vec![],
             boundary,
             memory_commitments: vec![vec![[0u8; 64]; width]],

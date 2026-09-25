@@ -527,7 +527,11 @@ fn check_parts(
         if !program::FAMILIES.contains(&t.family) {
             return Err(format!("family {} is not in constants::family", t.family));
         }
-        if (t.family == family::INIT_TEARDOWN || t.family == family::ZERO_WINDOWS) && n != 0 {
+        // Every **window** family claims no pc: the two RAM ones and, since
+        // S25b, `ADVICE_WINDOWS`. Naming them one by one here is what let the
+        // third slip in unnoticed with a buffer full of rows, so the list is
+        // read from `constants` rather than repeated.
+        if family::WINDOW_FAMILIES.contains(&t.family) && n != 0 {
             return Err(format!(
                 "{} claims no pc, yet its buffer holds {n} rows",
                 program::family_name(t.family)
@@ -965,7 +969,7 @@ mod tests {
             tiny()
         );
         let pc = (address_space::PC, 0, 4, 0, 0x1_0000, 0x1_0004);
-        let cases: [(&str, Vec<u8>); 15] = [
+        let cases: [(&str, Vec<u8>); 16] = [
             // The profile renames the family too, so only the id is wrong.
             (
                 "family 42 is not in constants::family",
@@ -993,6 +997,16 @@ mod tests {
                     |a| {
                         a.traces.families[0].family = constants::family::ZERO_WINDOWS;
                         a.profile.counts[0].0 = constants::family::ZERO_WINDOWS;
+                    },
+                    None,
+                ),
+            ),
+            (
+                "ADVICE_WINDOWS claims no pc",
+                post(
+                    |a| {
+                        a.traces.families[0].family = constants::family::ADVICE_WINDOWS;
+                        a.profile.counts[0].0 = constants::family::ADVICE_WINDOWS;
                     },
                     None,
                 ),

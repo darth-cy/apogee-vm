@@ -375,3 +375,59 @@ fn a_run_touching_both_spaces_keeps_their_events_apart() {
         assert!(*r < guest_memory::ADVICE_ORIGIN);
     }
 }
+
+// ---------------------------------------------------------------------------
+// The shard count the prover derives from the log
+// ---------------------------------------------------------------------------
+
+/// `trace::advice_windows` is the `ADVICE_WINDOWS` shard count, and it is the
+/// **highest advice word the execution read**, rounded up to a window — not
+/// the blob the prover supplied (`docs/spec/advice.md` §2.1 and §6).
+///
+/// Advice windows are contiguous from `ADVICE_ORIGIN`, so a gap costs shards:
+/// a run reading word 0 and word 500 at a 1,024-byte window proves both
+/// windows, and the one in between if there were one. There is no id list to
+/// skip a window with, and that is the design — a blob has no holes.
+///
+/// A run that reads no advice proves **zero** shards of the family, which is
+/// what keeps `ADVICE_WINDOWS` free for every guest that does not want it.
+#[test]
+fn the_advice_shard_count_is_the_highest_word_read_rounded_up() {
+    // Word 0 and the word at byte 2,000, with 3 KiB of advice supplied. What
+    // decides the count is the second read, not the 3 KiB.
+    let program = image_of(&[
+        advice_base(1),
+        i_type(OP_LOAD, 2, 10, 1, 0),    // advice word at offset 0
+        i_type(OP_LOAD, 2, 11, 1, 2000), // and at offset 2,000
+        exit_words()[0],
+        exit_words()[1],
+    ]);
+    let mut advice = vec![0u8; 3 * 1024];
+    advice[0] = 5;
+    let io = with_advice(advice);
+    let (tables, config) = preprocess(&program);
+    let (_, log, _, execution) = trace_run(&program, &io, &tables, &config).expect("it traces");
+    assert_eq!(execution.exit_code, 5);
+    log.self_check(&program).expect("the log balances");
+
+    // At a 256-row window each window is 1,024 bytes, so byte 2,000 is in
+    // window 1 and the count is 2 — the empty window between them, if the
+    // reads had been further apart, would be proved too.
+    assert_eq!(trace::advice_windows(&log, 1 << 8), 2);
+    // Wider windows swallow both reads.
+    assert_eq!(trace::advice_windows(&log, 1 << 16), 1);
+    assert_eq!(trace::advice_windows(&log, 1 << 22), 1);
+
+    // And a run that reads none proves none, whatever the prover supplied.
+    let none = image_of(&[exit_words()[0], exit_words()[1]]);
+    let io = with_advice(vec![9u8; 4096]);
+    let (tables, config) = preprocess(&none);
+    let (_, log, _, _) = trace_run(&none, &io, &tables, &config).expect("it traces");
+    for height in [1u32 << 8, 1 << 16, 1 << 22] {
+        assert_eq!(
+            trace::advice_windows(&log, height),
+            0,
+            "no advice read, no advice shard at height {height}"
+        );
+    }
+}

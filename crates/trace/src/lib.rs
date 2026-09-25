@@ -23,7 +23,8 @@ pub use log::{
 };
 pub use lookup::{build_multiplicities, check_multiplicities};
 pub use memory::{
-    build_boundary_finals, build_frame_witness, build_init_teardown_columns, build_memory_columns,
+    build_advice_window_columns, build_boundary_finals, build_frame_witness,
+    build_init_teardown_columns, build_memory_columns,
 };
 
 use std::collections::BTreeSet;
@@ -69,10 +70,12 @@ pub struct ShardPlan {
 /// families of `config`, in its order — a profile from another config is a
 /// caller error and panics.
 ///
-/// `INIT_TEARDOWN` and `ZERO_WINDOWS` run no cycles, so both plan 0 shards
-/// here. Their rows are addresses rather than cycles: the prover assembles
-/// exactly 1 `INIT_TEARDOWN` shard, RAM window 0, and one `ZERO_WINDOWS`
-/// shard per entry of [`init_windows`] (`docs/spec/memory.md` §3).
+/// The three window families run no cycles, so each plans 0 shards here.
+/// Their rows are addresses rather than cycles, and the prover assembles them
+/// from the log instead: exactly 1 `INIT_TEARDOWN` shard, RAM window 0; one
+/// `ZERO_WINDOWS` shard per entry of [`init_windows`]
+/// (`docs/spec/memory.md` §3); and [`advice_windows`] `ADVICE_WINDOWS` shards
+/// (`docs/spec/advice.md` §6).
 pub fn plan_shards(profile: &CycleProfile, config: &VmConfig) -> ShardPlan {
     assert!(
         profile.counts.len() == config.families.len()
@@ -112,4 +115,27 @@ pub fn init_windows(log: &MemoryEventLog, height: u32) -> Vec<u32> {
         .filter(|w| *w != 0)
         .collect();
     windows.into_iter().collect()
+}
+
+/// The `ADVICE_WINDOWS` family's shard count: enough windows, contiguous from
+/// `guest_memory::ADVICE_ORIGIN`, to cover every advice word the log touches;
+/// 0 for a run that read no advice. `docs/spec/advice.md` §6.
+///
+/// There is no id list, and that is the difference from [`init_windows`]:
+/// advice is a blob and a blob has no holes, so the count *is* the map. A
+/// window between `ADVICE_ORIGIN` and the highest word read is proved whether
+/// or not the guest touched it — its rows cost an init tuple and a teardown
+/// tuple that cancel, and its committed values are 0.
+pub fn advice_windows(log: &MemoryEventLog, height: u32) -> u32 {
+    let stride = 4 * height as u64;
+    let last = log
+        .touched_addresses()
+        .into_iter()
+        .filter(|(space, _)| *space == AddressSpace::Advice)
+        .map(|(_, addr)| addr as u64 - constants::guest_memory::ADVICE_ORIGIN as u64)
+        .max();
+    match last {
+        None => 0,
+        Some(offset) => (offset / stride + 1) as u32,
+    }
 }

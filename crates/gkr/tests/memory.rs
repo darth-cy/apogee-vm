@@ -21,8 +21,10 @@ use constants::challenge_slot::{
 };
 use constants::family;
 use constants::transcript_tags;
+use constants::{address_space, guest_memory};
 use constraints::memory::{
-    family_frame_artifact, frame_artifact, image_window_artifact, zero_window_artifact,
+    advice_window_artifact, family_frame_artifact, frame_artifact, image_window_artifact,
+    zero_window_artifact,
 };
 use constraints::{CircuitArtifact, VirtualKind};
 use field::Fr;
@@ -145,8 +147,55 @@ fn random_memory(rng: &mut Rng) -> ([Fr; 4], ExternalChallenges) {
 }
 
 /// `T(AS, ADDR, TS, VAL) = γ_M + AS + α_addr·ADDR + α_ts·TS + α_val·VAL`.
+/// `constants::address_space::ADVICE`, as a `u64` for the arithmetic below.
+const ADVICE_SPACE: u64 = address_space::ADVICE as u64;
+
 fn t(c: &[Fr; 4], space: Fr, addr: Fr, ts: Fr, value: Fr) -> Fr {
     c[0] + space + c[1] * addr + c[2] * ts + c[3] * value
+}
+
+/// **An advice tuple and a RAM tuple are never equal, whatever their address,
+/// timestamp and value.** This is the "cannot alias" half of
+/// `docs/spec/advice.md` §1.1 stated arithmetically: the multiset matches
+/// tuples, and the space term is what keeps a query of one region from being
+/// answered by a write in the other.
+///
+/// It holds unconditionally because `γ_M` is additive and the space is added to
+/// it **unweighted** (`docs/spec/memory.md` §2): two tuples that agree in
+/// `addr`, `ts` and `value` differ by exactly `ADVICE − RAM = 5`, which is not
+/// zero in `Fr`. So the separation does not rest on the addresses being
+/// disjoint, and disjoint addresses buy something else — they stop a guest
+/// **pointer** walking from one region into the other, which is arithmetic and
+/// not a tuple.
+///
+/// Swept over random challenges and random field values in every position,
+/// including the degenerate ones a real trace cannot produce.
+#[test]
+fn an_advice_tuple_is_never_a_ram_tuple() {
+    let mut rng = Rng::new(0x5714_3106);
+    let (ram, advice) = (int(address_space::RAM as u64), int(ADVICE_SPACE));
+    for trial in 0..64 {
+        let (c, _) = random_memory(&mut rng);
+        let (addr, ts, value) = (fr(&mut rng), fr(&mut rng), fr(&mut rng));
+        assert_ne!(
+            t(&c, ram, addr, ts, value),
+            t(&c, advice, addr, ts, value),
+            "trial {trial}: one address, one timestamp, one value, two spaces"
+        );
+        // And the difference is the constant 5, whatever the challenges: the
+        // space is not weighted by one.
+        assert_eq!(
+            t(&c, advice, addr, ts, value) - t(&c, ram, addr, ts, value),
+            int(ADVICE_SPACE - address_space::RAM as u64),
+            "trial {trial}"
+        );
+        // Degenerate rows too: a tuple of zeros in every other position.
+        assert_ne!(
+            t(&c, ram, Fr::ZERO, Fr::ZERO, Fr::ZERO),
+            t(&c, advice, Fr::ZERO, Fr::ZERO, Fr::ZERO),
+            "trial {trial}: the all-zero tuple"
+        );
+    }
 }
 
 /// Every frame leaf of every execution family is exactly 1 at `m = 0`, whatever
@@ -231,14 +280,19 @@ fn frame_leaves_are_one_when_masked_and_the_tuple_when_live() {
 /// window: `INIT_TEARDOWN`'s two leaves are 1 below `2^14`, and from it the
 /// teardown tuple `T(RAM, 4y, ts, value)` and the init tuple
 /// `T(RAM, 4y, 0, init_value)`; `ZERO_WINDOWS`' leaves at window `w` are
-/// `T(RAM, 4h·w + 4y, ts, value)` and `T(RAM, 4h·w + 4y, 0, 0)` on every row.
-/// Both through `window_challenges`. Kills a wrong window constant, address
-/// step, mask or timestamp.
+/// `T(RAM, 4h·w + 4y, ts, value)` and `T(RAM, 4h·w + 4y, 0, 0)` on every row;
+/// and `ADVICE_WINDOWS`' are the same pair one space over, with `M[2]` where
+/// the literal 0 was: `T(ADVICE, A + 4h·w + 4y, ts, value)` and
+/// `T(ADVICE, A + 4h·w + 4y, 0, init_value)`, `A` being `ADVICE_ORIGIN`. All
+/// three through `window_challenges`. Kills a wrong window constant, address
+/// step, mask, timestamp or space — and, for advice, an init leaf that read
+/// the teardown column instead of its own.
 #[test]
 fn window_leaves_are_the_tuples_of_their_rows() {
     let (vars, h) = (16u32, 1u64 << 16);
     let image = image_window_artifact(vars);
     let zero = zero_window_artifact(vars);
+    let advice = advice_window_artifact(vars);
     let mut rng = Rng::new(0x5714_3102);
     let rows = [
         0usize,
@@ -263,7 +317,7 @@ fn window_leaves_are_the_tuples_of_their_rows() {
                 &[ts, value, init],
                 &[],
                 &[row_index, live],
-                &window_challenges(&slots, 0, vars),
+                &window_challenges(&slots, address_space::RAM, 0, vars),
             );
             let expected = if y < 1 << 14 {
                 vec![Fr::ONE, Fr::ONE]
@@ -282,7 +336,7 @@ fn window_leaves_are_the_tuples_of_their_rows() {
                 &[ts, value],
                 &[],
                 &[row_index],
-                &window_challenges(&slots, window, vars),
+                &window_challenges(&slots, address_space::RAM, window, vars),
             );
             let addr = int(4 * h * window as u64 + 4 * y as u64);
             let expected = vec![
@@ -290,13 +344,39 @@ fn window_leaves_are_the_tuples_of_their_rows() {
                 t(&c, int(RAM_SPACE), addr, Fr::ZERO, Fr::ZERO),
             ];
             assert_eq!(values, expected, "trial {trial}, window {window} row {y}");
+
+            // The advice window's three columns, and a window id of its own:
+            // advice windows are numbered from 0 at `ADVICE_ORIGIN`, so the
+            // whole range `[0, 2^29/h)` is available to it where RAM reserves
+            // 0 for `INIT_TEARDOWN`.
+            let advice_window = (rng.next_u64() % ((1 << 29) / h)) as u32;
+            let values = gate_values(
+                &advice,
+                0,
+                &[ts, value, init],
+                &[],
+                &[row_index],
+                &window_challenges(&slots, address_space::ADVICE, advice_window, vars),
+            );
+            let addr = int(guest_memory::ADVICE_ORIGIN as u64
+                + 4 * h * advice_window as u64
+                + 4 * y as u64);
+            let expected = vec![
+                t(&c, int(address_space::ADVICE as u64), addr, ts, value),
+                t(&c, int(address_space::ADVICE as u64), addr, Fr::ZERO, init),
+            ];
+            assert_eq!(
+                values, expected,
+                "trial {trial}, advice window {advice_window} row {y}"
+            );
         }
     }
 }
 
-/// Slot 5 at window 3 of height `2^16`, `γ_M = 11`, `α_addr = 7`:
+/// Slot 5 at RAM window 3 of height `2^16`, `γ_M = 11`, `α_addr = 7`:
 /// `11 + 2 + 7·(4·65536·3) = 13 + 7·786432 = 5505037`. Slots 1–4 are copied,
-/// slot 0 is not; and the top window of height `2^22` against its integer.
+/// slot 0 is not; the top RAM window of height `2^22` against its integer; and
+/// the advice region's own windows, whose space term and origin both differ.
 #[test]
 fn the_window_constant_is_pinned() {
     let mut memory = ExternalChallenges::new();
@@ -308,7 +388,7 @@ fn the_window_constant_is_pinned() {
     ] {
         memory.insert(slot, int(v));
     }
-    let w = window_challenges(&memory, 3, 16);
+    let w = window_challenges(&memory, address_space::RAM, 3, 16);
     assert_eq!(w.get(MEM_WINDOW_CONSTANT), Some(int(5_505_037)));
     for (slot, v) in [
         (MEM_GAMMA, 11),
@@ -320,11 +400,38 @@ fn the_window_constant_is_pinned() {
     }
     assert_eq!(w.get(0), None);
     // Window 127 of 128 at 2^22: its first address is 0x7F00_0000.
-    let top = window_challenges(&memory, 127, 22);
+    let top = window_challenges(&memory, address_space::RAM, 127, 22);
     assert_eq!(
         top.get(MEM_WINDOW_CONSTANT),
         Some(int(13 + 7 * 0x7F00_0000))
     );
+    // The same window id one space over is a different constant twice: the
+    // space term is 7 rather than 2, and the address is offset by
+    // `ADVICE_ORIGIN`. Advice window 0 is the first advice word, not address 0.
+    let advice = window_challenges(&memory, address_space::ADVICE, 3, 16);
+    assert_eq!(
+        advice.get(MEM_WINDOW_CONSTANT),
+        Some(int(11 + 7 + 7 * (0x8000_0000 + 4 * 65536 * 3)))
+    );
+    let first = window_challenges(&memory, address_space::ADVICE, 0, 16);
+    assert_eq!(
+        first.get(MEM_WINDOW_CONSTANT),
+        Some(int(18 + 7 * 0x8000_0000))
+    );
+}
+
+/// Only the two spaces windows initialize may be named. A delegation anchor's
+/// space has no windows — its tuples are written by the requesting row, not by
+/// an init family — and asking for one is a caller bug, not a soundness hole
+/// to be papered over with a constant.
+#[test]
+#[should_panic(expected = "address space 4 is not initialized in windows")]
+fn the_window_constant_refuses_a_space_with_no_windows() {
+    let mut memory = ExternalChallenges::new();
+    for slot in [MEM_GAMMA, MEM_ALPHA_ADDR, MEM_ALPHA_TS, MEM_ALPHA_VAL] {
+        memory.insert(slot, Fr::ONE);
+    }
+    window_challenges(&memory, address_space::DELEGATION_KECCAK_F, 0, 16);
 }
 
 #[test]
@@ -334,7 +441,7 @@ fn the_window_constant_needs_every_drawn_slot() {
     for slot in [MEM_GAMMA, MEM_ALPHA_ADDR, MEM_ALPHA_TS] {
         memory.insert(slot, Fr::ONE);
     }
-    window_challenges(&memory, 1, 16);
+    window_challenges(&memory, address_space::RAM, 1, 16);
 }
 
 /// `(W_b, R_b)` against §4.2's products written out: 32 register inits and the
@@ -395,11 +502,11 @@ fn reconciles_is_the_product_equation_and_nonzero() {
 }
 
 /// Bind the base's digest, then draw slots 1–4 after it — and, for a window
-/// shard, derive slot 5 from them.
+/// shard, derive slot 5 from them at that shard's `(space, window)`.
 fn bind(
     a: &CircuitArtifact,
     base: &BaseLayer,
-    window: Option<u32>,
+    window: Option<(u8, u32)>,
 ) -> (Transcript, ExternalChallenges) {
     let mut t = Transcript::new();
     absorb_witness_digest(&mut t, witness_digest(&committed_columns(a, base)));
@@ -411,7 +518,7 @@ fn bind(
         );
     }
     let challenges = match window {
-        Some(w) => window_challenges(&memory, w, a.trace_vars),
+        Some((space, w)) => window_challenges(&memory, space, w, a.trace_vars),
         None => memory,
     };
     (t, challenges)
@@ -421,7 +528,7 @@ fn bind(
 fn prove_and_verify(
     a: &CircuitArtifact,
     base: &BaseLayer,
-    window: Option<u32>,
+    window: Option<(u8, u32)>,
 ) -> Result<(), GkrError> {
     let (mut prover, challenges) = bind(a, base, window);
     let values = forward(a, base, &challenges);
@@ -438,9 +545,16 @@ fn prove_and_verify(
     Ok(())
 }
 
-/// Both window artifacts at `2^16` rows over random columns — every row of a
-/// window is an address, so any columns are a witness — prove, verify and
-/// discharge, `ZERO_WINDOWS` at a random window.
+/// All three window artifacts at `2^16` rows over random columns — every row
+/// of a window is an address, so any columns are a witness — prove, verify and
+/// discharge, each at a window of its own.
+///
+/// The advice one is here because nothing else proves it: no committed guest
+/// reads advice, so the honest-statement suites over real guests' logs never
+/// build an `ADVICE_WINDOWS` shard, and its only other coverage would be a
+/// deferred proof. It has three columns rather than two, and its third is the
+/// free init value, so "any columns are a witness" is if anything more true of
+/// it than of its siblings.
 #[test]
 fn window_artifacts_prove_and_verify() {
     let mut rng = Rng::new(0x5714_3105);
@@ -450,13 +564,24 @@ fn window_artifacts_prove_and_verify() {
             .map(|_| (0..rows).map(|_| int(rng.next_u64() >> 26)).collect())
             .collect()
     };
+    let ram = address_space::RAM;
     let image = image_window_artifact(16);
     let base = fr_base(&image, random(3));
-    assert_eq!(prove_and_verify(&image, &base, Some(0)), Ok(()));
+    assert_eq!(prove_and_verify(&image, &base, Some((ram, 0))), Ok(()));
 
     let zero = zero_window_artifact(16);
     let base = fr_base(&zero, random(2));
-    assert_eq!(prove_and_verify(&zero, &base, Some(5000)), Ok(()));
+    assert_eq!(prove_and_verify(&zero, &base, Some((ram, 5000))), Ok(()));
+
+    let advice = advice_window_artifact(16);
+    let base = fr_base(&advice, random(3));
+    for window in [0u32, 1, 8191] {
+        assert_eq!(
+            prove_and_verify(&advice, &base, Some((address_space::ADVICE, window))),
+            Ok(()),
+            "advice window {window}"
+        );
+    }
 }
 
 /// A satisfying base for the frame holding `queries`, over 16 rows, in layout

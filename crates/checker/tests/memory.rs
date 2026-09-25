@@ -63,7 +63,7 @@ fn forwarded(a: &CircuitArtifact, seed: u64) -> LayerValues {
             (address, MultilinearPoly::new(PolyBacking::Fr(column)))
         })
         .collect();
-    let challenges = window_challenges(&memory, 9, a.trace_vars);
+    let challenges = window_challenges(&memory, constants::address_space::RAM, 9, a.trace_vars);
     forward(a, &BaseLayer::new(columns), &challenges)
 }
 

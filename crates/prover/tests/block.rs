@@ -62,7 +62,8 @@ fn a1_a3_a8_a9_the_two_shard_block_proves_and_verifies() {
             (ADD, 1 << 20),
             (JBS, 1 << 20),
             (INIT, 1 << 16),
-            (ZERO, 1 << 16)
+            (ZERO, 1 << 16),
+            (family::ADVICE_WINDOWS, 1 << 16),
         ]
     );
     let occupancy = |f: u32| {
@@ -80,7 +81,8 @@ fn a1_a3_a8_a9_the_two_shard_block_proves_and_verifies() {
         "the add/sub family spills into exactly one more shard"
     );
     assert!(occupancy(JBS) <= 1 << 20, "the jump family fits one shard");
-    assert_eq!(block.shard_counts(), &[2, 1, 1, 0]);
+    // The trailing 0 is `ADVICE_WINDOWS`, in every `VmConfig` since S25b.
+    assert_eq!(block.shard_counts(), &[2, 1, 1, 0, 0]);
     assert_eq!(
         block.reconciliation().records.len(),
         4,
@@ -123,7 +125,7 @@ fn a1_a3_a8_a9_the_two_shard_block_proves_and_verifies() {
     let read = BlockProof::from_bytes(&bytes).expect("a block round-trips");
     assert_eq!(read.to_bytes(), bytes, "byte for byte");
     assert_eq!(read.config(), &setup.program.config);
-    assert_eq!(read.shard_counts(), &[2, 1, 1, 0]);
+    assert_eq!(read.shard_counts(), &[2, 1, 1, 0, 0]);
     assert_eq!(read.shard_count(ADD), 2);
     assert_eq!(read.shard_count(ZERO), 0);
     assert_eq!(read.shard_proofs().len(), 4);

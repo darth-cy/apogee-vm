@@ -1,14 +1,17 @@
-//! The `memory` group: S14's three memory artifacts at `trace_vars` 22, the
-//! height every family defaults to.
+//! The `memory` group: S14's memory artifacts at `trace_vars` 22, the height
+//! every family defaults to, and S25b's advice window beside them.
 //!
 //! `constraints::memory`'s constructors are the only definition of these
 //! circuits; this group writes their bytes, and CI regenerates and diffs them.
 //! Neither file is an oracle. What each holds is `docs/spec/memory.md` §2 (the
-//! execution family's memory subtree) and §3.3 (the two window artifacts), and
+//! execution family's memory subtree), §3.3 (the two RAM window artifacts) and
+//! `docs/spec/advice.md` §5 (the advice one), and
 //! `crates/gkr/tests/memory.rs` holds the leaves to hand-written arithmetic.
 
 use constants::family;
-use constraints::memory::{family_frame_artifact, image_window_artifact, zero_window_artifact};
+use constraints::memory::{
+    advice_window_artifact, family_frame_artifact, image_window_artifact, zero_window_artifact,
+};
 
 use crate::write_bytes;
 
@@ -40,5 +43,9 @@ pub fn generate() {
     write_bytes(
         "crates/constraints/tests/vectors/zero_window.bin",
         &zero_window_artifact(TRACE_VARS).to_bytes(),
+    );
+    write_bytes(
+        "crates/constraints/tests/vectors/advice_window.bin",
+        &advice_window_artifact(TRACE_VARS).to_bytes(),
     );
 }

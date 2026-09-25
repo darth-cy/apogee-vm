@@ -24,7 +24,9 @@ use verifier_core::{
 const POINT: [u8; 64] = [0; 64];
 
 /// S20's two-shard statement's shape: add/sub in two shards, jump/branch/slt
-/// in one, `INIT_TEARDOWN` in one, `ZERO_WINDOWS` in none.
+/// in one, `INIT_TEARDOWN` in one, `ZERO_WINDOWS` in none, `ADVICE_WINDOWS` in
+/// none — the third window family is in every `VmConfig` and proves nothing in
+/// a run that reads no advice (`docs/spec/advice.md` §5).
 fn key_and_statement() -> (VerifyingKey, PublicInputs) {
     let config = VmConfig {
         families: vec![
@@ -32,6 +34,7 @@ fn key_and_statement() -> (VerifyingKey, PublicInputs) {
             (family::JUMP_BRANCH_SLT, 1 << 20),
             (family::INIT_TEARDOWN, 1 << 16),
             (family::ZERO_WINDOWS, 1 << 16),
+            (family::ADVICE_WINDOWS, 1 << 16),
         ],
         bytecode_size_words: family::DEFAULT_BYTECODE_SIZE_WORDS,
     };
@@ -78,7 +81,7 @@ fn key_and_statement() -> (VerifyingKey, PublicInputs) {
         input: Vec::new(),
         output: Vec::new(),
         exit_status: 2,
-        shard_counts: vec![2, 1, 1, 0],
+        shard_counts: vec![2, 1, 1, 0, 0],
         windows: Vec::new(),
         boundary,
         memory_commitments,
@@ -122,8 +125,8 @@ fn the_global_tape_is_the_frozen_order_and_the_committed_fixture() {
         &[
             "absorb PROTOCOL_SUITE 1",
             "absorb SRS_DIGEST 1",
-            "absorb VM_CONFIG 9",
-            "absorb SHARD_COUNTS 4",
+            "absorb VM_CONFIG 11",
+            "absorb SHARD_COUNTS 5",
             "absorb MEMORY_WINDOWS 0",
             "absorb PROGRAM_IDENTITY 1",
             "absorb PUBLIC_INPUTS 2",
@@ -141,13 +144,16 @@ fn the_global_tape_is_the_frozen_order_and_the_committed_fixture() {
         "no challenge is drawn before the statement is absorbed"
     );
     // G8: a group header per config family, a family with no shards included,
-    // then one commitment message per shard, four limbs to a point.
+    // then one commitment message per shard, four limbs to a point. Five
+    // headers since S25b: `ADVICE_WINDOWS` is in every `VmConfig` and its
+    // header is absorbed whether or not it proves anything, which is what one
+    // more family costs every statement (`docs/spec/advice.md` §5).
     assert_eq!(
         lines
             .iter()
             .filter(|l| *l == "absorb MEMORY_GROUP 2")
             .count(),
-        4
+        5
     );
     assert_eq!(
         lines

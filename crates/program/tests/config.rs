@@ -33,12 +33,14 @@ fn with_height(config: &VmConfig, families: &[u32], height: u32) -> VmConfig {
 #[test]
 fn the_vm_config_wire_form_is_frozen_and_round_trips() {
     let config = fib_config();
-    // Ten families since S25, not eight: `fib` reads fd 0 and commits to
+    // Eleven families since S25b, not eight: `fib` reads fd 0 and commits to
     // fd 1, so it computes `io_digest` at exit (`docs/spec/memory.md` §10) and
     // the guest-target backends route Poseidon2 and `Fr`'s arithmetic through
     // their delegations. Declaring a delegation is what puts it in the config
-    // (`docs/spec/delegation.md` §7), at its own `2^8` height.
-    let mut want: Vec<u32> = vec![10];
+    // (`docs/spec/delegation.md` §7), at its own `2^8` height. The eleventh is
+    // `ADVICE_WINDOWS`, which is in every config whatever the program and
+    // proves nothing here (`docs/spec/advice.md` §5).
+    let mut want: Vec<u32> = vec![11];
     for (f, h) in [
         (family::ADD_SUB_LUI_AUIPC, 1 << 22),
         (family::JUMP_BRANCH_SLT, 1 << 22),
@@ -50,6 +52,7 @@ fn the_vm_config_wire_form_is_frozen_and_round_trips() {
         (family::ZERO_WINDOWS, 1 << 22),
         (family::POSEIDON2, 1 << 8),
         (family::FR_ARITH, 1 << 8),
+        (family::ADVICE_WINDOWS, 1 << 22),
     ] {
         want.extend([f, h]);
     }
@@ -123,8 +126,8 @@ fn a_config_of_every_family_round_trips() {
 #[test]
 fn the_statement_descriptor_is_three_adjacent_messages() {
     let config = fib_config();
-    // Ten families since S25; see the wire-form test above.
-    let counts = [3, 1, 1, 0, 2, 1, 1, 1, 1, 1];
+    // Eleven families since S25b; see the wire-form test above.
+    let counts = [3, 1, 1, 0, 2, 1, 1, 1, 1, 1, 0];
     let windows = [127];
 
     let mut tr = Transcript::new();
@@ -134,11 +137,11 @@ fn the_statement_descriptor_is_three_adjacent_messages() {
         &[
             TranscriptEvent::Absorb {
                 tag: tags::VM_CONFIG,
-                n_scalars: 2 * 10 + 1,
+                n_scalars: 2 * 11 + 1,
             },
             TranscriptEvent::Absorb {
                 tag: tags::SHARD_COUNTS,
-                n_scalars: 10,
+                n_scalars: 11,
             },
             TranscriptEvent::Absorb {
                 tag: tags::MEMORY_WINDOWS,
@@ -163,7 +166,7 @@ fn the_statement_descriptor_is_three_adjacent_messages() {
     absorb_statement_descriptor(
         &mut other,
         &config,
-        &[3, 1, 1, 0, 2, 1, 1, 2, 1, 1],
+        &[3, 1, 1, 0, 2, 1, 1, 2, 1, 1, 0],
         &windows,
     );
     assert_ne!(tr.snapshot(), other.snapshot());
@@ -175,7 +178,7 @@ fn the_statement_descriptor_is_three_adjacent_messages() {
 
     // An execution touching no window above 0 still absorbs the message, empty.
     let mut empty = Transcript::new();
-    absorb_statement_descriptor(&mut empty, &config, &[3, 1, 1, 0, 2, 1, 1, 0, 1, 1], &[]);
+    absorb_statement_descriptor(&mut empty, &config, &[3, 1, 1, 0, 2, 1, 1, 0, 1, 1, 0], &[]);
     assert_eq!(
         empty.event_log()[2],
         TranscriptEvent::Absorb {
@@ -210,7 +213,7 @@ fn a_config_without_both_init_families_at_one_height_is_refused() {
         assert_eq!(err.unwrap_err(), missing, "{init} detached");
         let mut config = fib_config();
         config.families.retain(|(f, _)| *f != init);
-        assert_eq!(config.families.len(), 9);
+        assert_eq!(config.families.len(), 10);
         assert_eq!(
             VmConfig::from_bytes(&config.to_bytes()),
             None,
@@ -253,36 +256,37 @@ fn the_window_rules_hold_at_their_boundaries() {
     let config = fib_config();
     // One shard for each instruction family, then INIT_TEARDOWN's and
     // ZERO_WINDOWS', then one for each of the two delegation families S25's
-    // exit-time `io_digest` brings in.
-    let counts = |init: u32, zero: u32| [1, 1, 1, 1, 1, 1, init, zero, 1, 1];
+    // exit-time `io_digest` brings in, then `ADVICE_WINDOWS`', which this
+    // program has none of.
+    let counts = |init: u32, zero: u32, advice: u32| [1, 1, 1, 1, 1, 1, init, zero, 1, 1, advice];
     let check =
-        |counts: [u32; 10], windows: &[u32]| check_memory_windows(&config, &counts, windows);
+        |counts: [u32; 11], windows: &[u32]| check_memory_windows(&config, &counts, windows);
     let refused = |rule| Err(ProgramError::WindowRule { rule });
 
-    assert_eq!(check(counts(1, 0), &[]), Ok(()), "no window above 0");
-    assert_eq!(check(counts(1, 1), &[127]), Ok(()));
+    assert_eq!(check(counts(1, 0, 0), &[]), Ok(()), "no window above 0");
+    assert_eq!(check(counts(1, 1, 0), &[127]), Ok(()));
 
     let one = "INIT_TEARDOWN proves exactly one shard";
-    assert_eq!(check(counts(0, 1), &[127]), refused(one));
-    assert_eq!(check(counts(2, 1), &[127]), refused(one));
+    assert_eq!(check(counts(0, 1, 0), &[127]), refused(one));
+    assert_eq!(check(counts(2, 1, 0), &[127]), refused(one));
 
     let length = "the window list has one id per ZERO_WINDOWS shard";
-    assert_eq!(check(counts(1, 2), &[127]), refused(length));
-    assert_eq!(check(counts(1, 0), &[127]), refused(length));
-    assert_eq!(check(counts(1, 1), &[]), refused(length));
-    assert_eq!(check(counts(1, 2), &[1, 127]), Ok(()));
+    assert_eq!(check(counts(1, 2, 0), &[127]), refused(length));
+    assert_eq!(check(counts(1, 0, 0), &[127]), refused(length));
+    assert_eq!(check(counts(1, 1, 0), &[]), refused(length));
+    assert_eq!(check(counts(1, 2, 0), &[1, 127]), Ok(()));
 
     let increasing = "the window ids are strictly increasing";
-    assert_eq!(check(counts(1, 2), &[5, 5]), refused(increasing));
-    assert_eq!(check(counts(1, 2), &[6, 5]), refused(increasing));
-    assert_eq!(check(counts(1, 2), &[5, 6]), Ok(()));
+    assert_eq!(check(counts(1, 2, 0), &[5, 5]), refused(increasing));
+    assert_eq!(check(counts(1, 2, 0), &[6, 5]), refused(increasing));
+    assert_eq!(check(counts(1, 2, 0), &[5, 6]), Ok(()));
 
     let range = "every window id is in [1, 2^29 / h - 1]";
-    assert_eq!(check(counts(1, 1), &[0]), refused(range));
-    assert_eq!(check(counts(1, 1), &[1]), Ok(()));
-    assert_eq!(check(counts(1, 1), &[128]), refused(range));
-    assert_eq!(check(counts(1, 2), &[0, 1]), refused(range));
-    assert_eq!(check(counts(1, 2), &[126, 128]), refused(range));
+    assert_eq!(check(counts(1, 1, 0), &[0]), refused(range));
+    assert_eq!(check(counts(1, 1, 0), &[1]), Ok(()));
+    assert_eq!(check(counts(1, 1, 0), &[128]), refused(range));
+    assert_eq!(check(counts(1, 2, 0), &[0, 1]), refused(range));
+    assert_eq!(check(counts(1, 2, 0), &[126, 128]), refused(range));
 
     // At 2^16 rows there are 8,192 windows.
     let short = with_height(
@@ -290,22 +294,60 @@ fn the_window_rules_hold_at_their_boundaries() {
         &[family::INIT_TEARDOWN, family::ZERO_WINDOWS],
         1 << 16,
     );
-    assert_eq!(check_memory_windows(&short, &counts(1, 1), &[8191]), Ok(()));
     assert_eq!(
-        check_memory_windows(&short, &counts(1, 1), &[8192]),
+        check_memory_windows(&short, &counts(1, 1, 0), &[8191]),
+        Ok(())
+    );
+    assert_eq!(
+        check_memory_windows(&short, &counts(1, 1, 0), &[8192]),
         refused(range)
     );
 
     // The config's own rule: the two init families present, at one height.
     let apart = with_height(&config, &[family::ZERO_WINDOWS], 1 << 16);
     assert_eq!(
-        check_memory_windows(&apart, &counts(1, 0), &[]),
+        check_memory_windows(&apart, &counts(1, 0, 0), &[]),
         refused("INIT_TEARDOWN and ZERO_WINDOWS have one height")
     );
     let mut missing = config.clone();
     missing.families.retain(|(f, _)| *f != family::ZERO_WINDOWS);
     assert_eq!(
-        check_memory_windows(&missing, &[1, 1, 1, 1, 1, 1, 1, 1, 1], &[]),
+        check_memory_windows(&missing, &[1, 1, 1, 1, 1, 1, 1, 1, 1, 0], &[]),
         refused("INIT_TEARDOWN and ZERO_WINDOWS are in every VmConfig")
+    );
+
+    // `ADVICE_WINDOWS`' two rules (`docs/spec/advice.md` §5 and §6). Its
+    // windows are contiguous from 0, so there is no id list and nothing to
+    // order — the whole rule is the extent. The region is `2^31` bytes, which
+    // at this config's `2^22` advice height is `2^29 / 2^22 = 128` windows of
+    // `4a`; unlike RAM's ids the count is 0-based and 128 tiles the region
+    // exactly, so the boundary is `<= n` and not `< n`.
+    let extent = "the advice windows fit the advice region";
+    assert_eq!(check(counts(1, 0, 0), &[]), Ok(()), "no advice at all");
+    assert_eq!(check(counts(1, 0, 128), &[]), Ok(()), "the whole region");
+    assert_eq!(check(counts(1, 0, 129), &[]), refused(extent));
+
+    // And the ceiling is stated in **advice's own** height, which is why that
+    // family is not held to the RAM families'. At `2^16` there are 8,192.
+    let small = with_height(&config, &[family::ADVICE_WINDOWS], 1 << 16);
+    assert_eq!(
+        check_memory_windows(&small, &counts(1, 0, 8192), &[]),
+        Ok(()),
+        "a height of its own moves its ceiling and nothing else"
+    );
+    assert_eq!(
+        check_memory_windows(&small, &counts(1, 0, 8193), &[]),
+        refused(extent)
+    );
+
+    // Presence is a statement rule and not a decoding one: a config without
+    // the family is refused here, where the shard counts are.
+    let mut no_advice = config.clone();
+    no_advice
+        .families
+        .retain(|(f, _)| *f != family::ADVICE_WINDOWS);
+    assert_eq!(
+        check_memory_windows(&no_advice, &[1, 1, 1, 1, 1, 1, 1, 0, 1, 1], &[]),
+        refused("ADVICE_WINDOWS is in every VmConfig")
     );
 }

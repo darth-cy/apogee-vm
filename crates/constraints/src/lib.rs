@@ -130,6 +130,11 @@ pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
         f::ATOMICS => (atomics::artifact(trace_vars), atomics::channels()),
         f::INIT_TEARDOWN => (memory::image_window_artifact(trace_vars), Vec::new()),
         f::ZERO_WINDOWS => (memory::zero_window_artifact(trace_vars), Vec::new()),
+        // A window family carries no lookup channel either, so the minimum
+        // height above does not name it. `ADVICE_WINDOWS` shares
+        // `INIT_TEARDOWN`'s height by derivation, not by anything here
+        // (`docs/spec/advice.md` §5).
+        f::ADVICE_WINDOWS => (memory::advice_window_artifact(trace_vars), Vec::new()),
         // A delegation family carries no channel at all, so no minimum height
         // applies to it — and none could: at a channel's height its
         // permutation does not fit (`docs/spec/delegation.md` §9).

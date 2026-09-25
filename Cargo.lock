@@ -608,13 +608,17 @@ dependencies = [
  "constants",
  "constraints",
  "curve",
+ "emulator",
  "field",
  "gkr",
+ "loader",
  "pcs",
  "poly",
+ "program",
  "srs",
  "sumcheck",
  "test-support",
+ "trace",
  "transcript",
 ]
 

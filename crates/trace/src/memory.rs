@@ -3,11 +3,12 @@
 //! and PC finals the verifier's boundary reads.
 //!
 //! `docs/spec/memory.md` is normative: §2.1 the frame, §2.4 its witness, §3.4
-//! a window's columns, §4.1 the finals. Every column is keyed by
+//! a window's columns, §4.1 the finals; and `docs/spec/advice.md` §5 for the
+//! advice window's third column. Every column is keyed by
 //! `constraints::memory`'s layout, which is where the layout lives.
 
-use constants::lookup_channel;
 use constants::memory::{HALT_PC, RAM_LIVE_BIT, TS_STEP};
+use constants::{guest_memory, lookup_channel};
 use constraints::memory::{
     deleg_space, frame, frame_query_takes, gap_hi, rd_inv, rd_is_zero, rd_selected, CYCLE, DELEG,
     FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, FRAME_DELTA, LOAD,
@@ -299,6 +300,56 @@ pub fn build_init_teardown_columns(
         out.push((PolyAddress::Setup(0), init));
     }
     out
+}
+
+/// An advice window shard's three columns, `docs/spec/advice.md` §5: `M[0]`
+/// the teardown timestamp, `M[1]` the teardown value, `M[2]` the **initial**
+/// value — the free column that is the whole family.
+///
+/// `window` is numbered from 0 at `guest_memory::ADVICE_ORIGIN`, so row `y`
+/// is the advice word at `ADVICE_ORIGIN + 4h·window + 4y`.
+///
+/// `M[1]` and `M[2]` are filled with the same values, and they are equal in
+/// any provable trace: advice is read-only, so the `load` query's
+/// `write_back` gate copies each read's value into its write, and the chain
+/// from the init write through every read to the teardown read carries one
+/// value the whole way. They are two columns because the artifact mirrors the
+/// RAM window families', not because a trace can separate them.
+///
+/// **The log is the only source.** A word the execution never read is 0 in
+/// both, and its init write and teardown read cancel in the multiset; a word
+/// it did read carries the value it read, which is the advice blob's by
+/// construction — the executor read it from there. So the prover needs no
+/// second copy of the blob at proving time, and nothing about the advice has
+/// to survive in the trace archive beyond the events themselves.
+pub fn build_advice_window_columns(
+    log: &MemoryEventLog,
+    window: u32,
+    height: usize,
+) -> Vec<(PolyAddress, MultilinearPoly)> {
+    let words = 4 * height as u64;
+    let first = guest_memory::ADVICE_ORIGIN as u64 + words * window as u64;
+    assert!(
+        first + words <= 1 << 32,
+        "build_advice_window_columns: window {window} at height {height} runs past the top of \
+         the address space"
+    );
+    let mut ts = vec![0u64; height];
+    let mut value = vec![0u64; height];
+    for f in log.final_state() {
+        let a = f.addr as u64;
+        if f.space != AddressSpace::Advice || a < first || a >= first + words {
+            continue;
+        }
+        let y = ((a - first) / 4) as usize;
+        ts[y] = f.ts;
+        value[y] = f.value as u64;
+    }
+    vec![
+        (PolyAddress::Memory(0), column(ts, height)),
+        (PolyAddress::Memory(1), column(value.clone(), height)),
+        (PolyAddress::Memory(2), column(value, height)),
+    ]
 }
 
 /// The register and PC finals, `docs/spec/memory.md` §4.1, from the log's

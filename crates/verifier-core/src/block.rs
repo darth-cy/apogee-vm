@@ -231,7 +231,7 @@ impl BlockReconciliation {
 /// Per family, because cycle numbers are global and two families interleave:
 /// `ADD_SUB_LUI_AUIPC` may own cycles 1 and 3 while `JUMP_BRANCH_SLT` owns 2,
 /// so their windows overlap by construction and a block-wide disjointness
-/// rule could never hold. A family that owns no cycles — the two RAM window
+/// rule could never hold. A family that owns no cycles — the three window
 /// families, whose rows are words, and the delegation families to come — is
 /// exempt: its window is a claim about invocations, not a slice of the
 /// execution (`constants::family::CYCLE_OWNING`).

@@ -36,13 +36,14 @@ use poly::{MultilinearPoly, PolyBacking};
 use program::lookup_tables::generic_table;
 use program::FamilyId;
 use trace::{
-    build_frame_witness, build_init_teardown_columns, build_memory_columns, Role, TraceArchive,
+    build_advice_window_columns, build_frame_witness, build_init_teardown_columns,
+    build_memory_columns, Role, TraceArchive,
 };
 
 use crate::Program;
 
 /// What a fill reads: the program, the archived execution, and which shard —
-/// its family, its index, its height, and for a RAM window family its window.
+/// its family, its index, its height, and for a window family its window.
 pub struct ShardSource<'a> {
     pub program: &'a Program,
     pub archive: &'a TraceArchive,
@@ -68,6 +69,7 @@ pub fn family_fill(family: FamilyId) -> Option<Fill> {
         family::MEM_SUBWORD => Some(mem_subword),
         family::ATOMICS => Some(atomics),
         family::INIT_TEARDOWN | family::ZERO_WINDOWS => Some(window),
+        family::ADVICE_WINDOWS => Some(advice_window),
         family::KECCAK_F => Some(keccak_f),
         family::POSEIDON2 => Some(poseidon2),
         family::FR_ARITH => Some(fr_arith),
@@ -406,6 +408,17 @@ fn window(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Stri
     Ok(build_init_teardown_columns(
         src.archive.memory_log(),
         &src.program.image,
+        src.window,
+        src.height,
+    ))
+}
+
+/// An advice window shard: `trace::build_advice_window_columns` over its
+/// window. It reads neither the program nor a setup column — advice is in no
+/// image and in no identity (`docs/spec/advice.md` §2).
+fn advice_window(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    Ok(build_advice_window_columns(
+        src.archive.memory_log(),
         src.window,
         src.height,
     ))
