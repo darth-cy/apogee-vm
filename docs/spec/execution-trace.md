@@ -87,12 +87,14 @@ form has, whatever register it names** — `x0` included — and for none it lac
 | an ecall's own row | `a7` | its arguments | `a0` ← the result |
 | a **delegation** request's row | `a7` | `a0`, the frame base | `a0` ← 0; and `delegate`, the mirror query |
 | a `read`'s row | `a7` | `a0` fd, `a1` buf, `a2` count | `a0` ← the count delivered; and the **word at `a1`** |
+| a `write`'s row | `a7` | `a0` fd, `a1` buf, `a2` count | `a0` ← `a2`, the count taken; **no memory event** |
 
 `ebreak` has no row: it is a fatal guest error. A `read`'s row and the atomics family
 both fill all four slots in one cycle, each with slot 3 shared by the RAM query and the
-`rd` write, which sit at distinct addresses. A `write`'s row is an ordinary ecall row:
-its bytes leave through no memory event, because the query it used to make bound nothing
-(§6).
+`rd` write, which sit at distinct addresses. A `write`'s row makes the same slot-2 reads
+and no memory event at all, because the query it used to make bound nothing (§6) — but
+since S25a its slot-3 write is not free: the circuit holds it equal to the `a2` it read,
+and holds the `a0` it read to fd 1 or fd 2.
 
 **`next_pc`** is the sequential fall-through — `pc + 2` for a two-byte instruction,
 `pc + 4` otherwise — except where control moves: a jump's target, a taken branch's, and
@@ -117,8 +119,8 @@ pc that ends there ended on an exit row.
 
 | Number | Arguments read | `a0` written |
 | --- | --- | --- |
-| `READ` 63 | `a0` fd, `a1` buf, `a2` count | bytes delivered, `min(count, left)`; `-EBADF` for a descriptor other than 0 and 3 |
-| `WRITE` 64 | `a0` fd, `a1` buf, `a2` count | `count`; `-EBADF` for a descriptor other than 1 and 2 |
+| `READ` 63 | `a0` fd, `a1` buf, `a2` count | bytes delivered, `min(count, left)`; `-EBADF` for a descriptor other than 0 and 3, **which is not a provable row** (S25a) |
+| `WRITE` 64 | `a0` fd, `a1` buf, `a2` count | `count`; `-EBADF` for a descriptor other than 1 and 2, **which is not a provable row** (S25a) |
 | `EXIT` 93 | `a0` status | the status, unchanged; `next_pc` is `HALT_PC`, and execution stops after this row |
 | a **delegation** number | `a0`, the frame base | 0, and the row carries its mirror query; `-ENOSYS` on an executor without the circuit |
 | anything else | none | `-ENOSYS` |
@@ -136,12 +138,23 @@ back unchanged, which is what lets the circuit key the query's mask on "this row
 `read`" and have no "did it move anything" selector to constrain. A `read` answering
 `-EBADF` moves nothing and makes no query.
 
+**A refusal is not a provable row** (S25a). The executor still answers `-EBADF` on a
+descriptor a call does not name — Linux's answer, and so `qemu-riscv32`'s — but the
+add/sub circuit now pins each call's `a0` to its own pair of descriptors, fd 0 or fd 3
+for a `read` and fd 1 or fd 2 for a `write`, so a row claiming such a call succeeded is
+refused by a gate, and `prover::fill::add_sub` declines the cycle by name
+(`docs/spec/shard-proof.md` §8.2, `docs/spec/ecall-abi.md` §4.1). A `write`'s `a0` is
+pinned to the count it was asked for, too. What the circuit does **not** fix is a
+`read`'s exact answer: it is bounded to `[0, 4]` and free inside it, because the
+stream's cursor lives in the executor and no row holds it.
+
 **A `write` moves no memory event at all.** It reads its bytes out of RAM and appends
 them to its stream, and the query it used to make bound nothing: what ties fd 1 to the
 execution is the guest's own `io_digest` over the bytes it assembled with ordinary loads
-and stores, which the memory argument does bind (`docs/spec/memory.md` §10). Only the
-RAM-window bound survives, because reading outside the window is a fatal guest error
-however the bytes are used.
+and stores, which the memory argument does bind (`docs/spec/memory.md` §10). Of the
+*executor's* rules only the RAM-window bound survives, because reading outside the window
+is a fatal guest error however the bytes are used. **The circuit keeps two more** (S25a):
+`a0` is fd 1 or fd 2, and the count written back is the `a2` the row read.
 
 **What a guest pays for this.** One `ecall` per word read, and its own copying:
 `guest_sdk::read_input` loops a word at a time through an aligned scratch, about six

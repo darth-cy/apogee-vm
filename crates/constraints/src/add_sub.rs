@@ -13,8 +13,9 @@
 //! W[11..17] the claimed decoded row: next_pc rs1 rs2 rd imm mask
 //! W[17..23] the mask's six bits; W[23], W[24] is_ecall, is_fence
 //! W[25..28] is_deleg_*: one delegation request selector per type
-//! W[28..32] wrap, rd_hi, pc_wrap, next_pc_hi
-//! W[32..35] one multiplicity per channel: timestamp, range16, decoder
+//! W[28..30] is_read, is_write; W[30] fd_uncommitted, W[31] ram_value_hi
+//! W[32..36] wrap, rd_hi, pc_wrap, next_pc_hi
+//! W[36..39] one multiplicity per channel: timestamp, range16, decoder
 //! S[0..7]   the decoded table, program::lookup_tuple order
 //! ```
 
@@ -86,6 +87,16 @@ const _: () = {
     }
 };
 const _: () = assert!(constants::ecall::EXIT < constants::ecall::ZKVM_IO_FIRST);
+
+// The descriptors each I/O ecall may name, as `descriptor_rule` reads them: the
+// committed stream first, the uncommitted one second, and the second strictly
+// above the first so `high - low` is the positive coefficient the gate carries.
+// Distinct is what makes `fd_uncommitted` *decide* which of the two a row
+// names; ordered is what lets one subtraction say it.
+const _: () = {
+    assert!(constants::ecall::FD_PUBLIC_INPUT < constants::ecall::FD_HINT);
+    assert!(constants::ecall::FD_PUBLIC_OUTPUT < constants::ecall::FD_STDERR);
+};
 
 /// The family's queries, in slot order: its frame is `memory::frame_queries`'
 /// list, and this file addresses its columns by these slots.
@@ -166,16 +177,41 @@ pub const IS_KECCAK: PolyAddress = IS_DELEGATION[0];
 /// `arg2` and **`ram`** queries: a provable `read` delivers one 4-aligned word
 /// into `a1`, on this row, and the whole confinement of that write is two
 /// gates here rather than a binding carried across rows
-/// (`docs/spec/ecall-abi.md` §4).
+/// (`docs/spec/ecall-abi.md` §4). It is also the selector of
+/// `read_descriptor`, which holds the call's `a0` to fd 0 or fd 3, and of the
+/// `read_count_gap_range` obligation, which holds the count it answers with to
+/// `[0, READ_WORD_BYTES]`.
 pub const IS_READ: PolyAddress = w(FRAME_WITNESS + 14 + TYPES as u32);
 /// 1 exactly on an ecall row whose `a7` is `WRITE` (S25).
 ///
-/// It turns on `arg1` and `arg2` and **nothing else**: a `write` makes no RAM
-/// query at all, because the query it used to make bound nothing. fd 1 is
-/// bound by the guest's own `io_digest` over the bytes it assembled with
-/// ordinary loads and stores, which the memory argument does bind
-/// (`docs/spec/memory.md` §10).
+/// It turns on `arg1` and `arg2` and **no query beyond them**: a `write`
+/// makes no RAM query at all, because the query it used to make bound
+/// nothing. fd 1 is bound by the guest's own `io_digest` over the bytes it
+/// assembled with ordinary loads and stores, which the memory argument does
+/// bind (`docs/spec/memory.md` §10).
+///
+/// It is also the selector of two gates over what the row read and wrote:
+/// `write_descriptor`, which holds `a0` to fd 1 or fd 2, and
+/// `write_count_is_the_request`, which holds the count written back to the
+/// count `a2` asked for.
 pub const IS_WRITE: PolyAddress = w(FRAME_WITNESS + 15 + TYPES as u32);
+/// 1 exactly when a `read` or a `write` names the **uncommitted** one of the
+/// two descriptors its call may use (S25a): fd 3 for a `read`, fd 2 for a
+/// `write`. 0 where it names the committed one — fd 0 for a `read`, fd 1 for a
+/// `write`.
+///
+/// One column for both calls, because the split is the same split. fd 0 and
+/// fd 1 are the two streams `io_digest` binds; fd 3 is prover advice and fd 2
+/// is verifier-ignored (`constants::ecall`), so each call's pair is exactly
+/// "the committed stream, or the uncommitted one". A free boolean off a
+/// `read` and a `write` row, and the two rows are disjoint — the ecall
+/// partition — so one column can carry both without either gate seeing the
+/// other's value.
+///
+/// It exists because a descriptor set of two is not an interval and cannot be
+/// range-checked: `is_read·fd·(fd − 3)` is degree 3, which `validate` refuses.
+/// With this column the pin is one degree-2 gate per call.
+pub const FD_UNCOMMITTED: PolyAddress = w(FRAME_WITNESS + 16 + TYPES as u32);
 /// The high halfword of the word a `read` delivers.
 ///
 /// The delivered value is advice — nothing pins *what* arrives, which is the
@@ -183,21 +219,21 @@ pub const IS_WRITE: PolyAddress = w(FRAME_WITNESS + 15 + TYPES as u32);
 /// range convention's 16+16 pair like every other value a family writes. Root
 /// `CLAUDE.md`, "A copied value is not range-checked; a computed one is",
 /// names this stage as the one that owes it.
-pub const RAM_VALUE_HI: PolyAddress = w(FRAME_WITNESS + 16 + TYPES as u32);
+pub const RAM_VALUE_HI: PolyAddress = w(FRAME_WITNESS + 17 + TYPES as u32);
 /// The sum's carry, or the difference's borrow.
-pub const WRAP: PolyAddress = w(FRAME_WITNESS + 17 + TYPES as u32);
+pub const WRAP: PolyAddress = w(FRAME_WITNESS + 18 + TYPES as u32);
 /// The computed `rd` value's high halfword.
-pub const RD_HI: PolyAddress = w(FRAME_WITNESS + 18 + TYPES as u32);
+pub const RD_HI: PolyAddress = w(FRAME_WITNESS + 19 + TYPES as u32);
 /// `next_pc`'s wrap, 0 on every honest row.
-pub const PC_WRAP: PolyAddress = w(FRAME_WITNESS + 19 + TYPES as u32);
+pub const PC_WRAP: PolyAddress = w(FRAME_WITNESS + 20 + TYPES as u32);
 /// `next_pc`'s high halfword.
-pub const NEXT_PC_HI: PolyAddress = w(FRAME_WITNESS + 20 + TYPES as u32);
+pub const NEXT_PC_HI: PolyAddress = w(FRAME_WITNESS + 21 + TYPES as u32);
 /// The channels' multiplicities, in channel order — timestamp, range16,
 /// decoder — last in the witness subtree (`docs/spec/lookup.md` §7).
 pub const MULTIPLICITIES: [PolyAddress; 3] = [
-    w(FRAME_WITNESS + 21 + TYPES as u32),
     w(FRAME_WITNESS + 22 + TYPES as u32),
     w(FRAME_WITNESS + 23 + TYPES as u32),
+    w(FRAME_WITNESS + 24 + TYPES as u32),
 ];
 
 /// The decoded table's width, `program::lookup_tuple(ADD_SUB_LUI_AUIPC)`:
@@ -297,20 +333,48 @@ fn fixed_addr_rule(slot: usize, register: u64) -> GateDef {
     )
 }
 
+/// `is_io·(fd − low − (high − low)·fd_uncommitted)`: an I/O ecall's descriptor
+/// is one of the two its call may name, and [`FD_UNCOMMITTED`] says which.
+///
+/// `fd` is the row's `a0` read, which `rs2_addr_rule` has already pinned to
+/// register 10. A set of two is not an interval, so this cannot be a range
+/// check: `is_io·fd·(fd − high)` would say it in one gate and `validate`
+/// refuses it at degree 3. One committed boolean buys the same statement at
+/// degree 2 — and buys it once, because a row is a `read` or a `write` and
+/// never both.
+fn descriptor_rule(is_io: PolyAddress, low: u32, high: u32, fd: PolyAddress) -> GateDef {
+    let mut linear = Vec::new();
+    if low != 0 {
+        linear.push((neg(low as u64), is_io));
+    }
+    quadratic(
+        linear,
+        vec![
+            (lit(1), is_io, fd),
+            (neg((high - low) as u64), is_io, FD_UNCOMMITTED),
+        ],
+    )
+}
+
 /// `v_q − m_q·v_q`: an absent operand reads 0.
 fn value_masked(slot: usize) -> GateDef {
     let (m, v) = (frame(slot, FIELD_MASK), frame(slot, FIELD_READ_VALUE));
     quadratic(vec![(lit(1), v)], vec![(neg(1), m, v)])
 }
 
-/// A `RANGE16` obligation under the row's pc mask.
-fn range16(name: &str, expression: GateDef) -> LookupExpr {
+/// A `RANGE16` obligation under `selector`.
+fn range16_under(name: &str, selector: PolyAddress, expression: GateDef) -> LookupExpr {
     LookupExpr {
         name: name.to_string(),
         channel: lookup_channel::RANGE16,
-        selector: frame(SLOT_PC, FIELD_MASK),
+        selector,
         tuple: vec![expression],
     }
+}
+
+/// A `RANGE16` obligation under the row's pc mask.
+fn range16(name: &str, expression: GateDef) -> LookupExpr {
+    range16_under(name, frame(SLOT_PC, FIELD_MASK), expression)
 }
 
 /// `x − 2^16·hi`, the low halfword of a value bounded by the range convention
@@ -386,6 +450,7 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     witness.extend(names(&[
         "is_read",
         "is_write",
+        "fd_uncommitted",
         "ram_value_hi",
         "wrap",
         "rd_hi",
@@ -489,6 +554,42 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
             ),
         ));
     }
+    // ---- the descriptors those two calls may name (S25a) ----------------
+    //
+    // `a7` says which call this is; `a0` says which stream it names, and until
+    // this gate nothing said anything about it. A `read` from fd 7 and a
+    // `write` to fd 7 are both refusals in the executor — they move no bytes
+    // and answer `-EBADF` (`constants::ecall::EBADF`) — and the circuit used
+    // to admit a row claiming one had succeeded. What made that worth closing
+    // is not the refusal itself but its neighbours: fd 0 and fd 1 are the two
+    // streams `io_digest` binds, so a prover free to relabel a descriptor is a
+    // prover who can move bytes between the bound streams and the unbound
+    // ones. Pinning `a0` to the call's own pair is what makes the digest's
+    // two streams the streams the rows actually named.
+    //
+    // fd 3 and fd 2 stay provable, and must: a hint is the prover's to choose
+    // and a diagnostic is the verifier's to ignore, which is exactly why
+    // neither is in the digest (`crates/guest-sdk`'s stream buffers hold fd 0
+    // and fd 1 and no other).
+    enforcing.push(("fd_uncommitted_boolean".into(), booleanity(FD_UNCOMMITTED)));
+    enforcing.push((
+        "read_descriptor".into(),
+        descriptor_rule(
+            IS_READ,
+            constants::ecall::FD_PUBLIC_INPUT,
+            constants::ecall::FD_HINT,
+            v_rs2,
+        ),
+    ));
+    enforcing.push((
+        "write_descriptor".into(),
+        descriptor_rule(
+            IS_WRITE,
+            constants::ecall::FD_PUBLIC_OUTPUT,
+            constants::ecall::FD_STDERR,
+            v_rs2,
+        ),
+    ));
 
     // is_exit·(a7 - EXIT) = 0, with is_exit written out as
     // `is_ecall - Σ is_deleg_t - is_read - is_write`: the remainder of the
@@ -571,6 +672,8 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     //     it has no init tuple, so the multiset cannot balance
     //     (`docs/spec/memory.md` §9, Coverage);
     //   * a value outside `[0, 2^32)` — the two obligations below;
+    //   * a descriptor the call does not name — `read_descriptor` above;
+    //   * a byte count above the word asked for — `read_count_gap_range`;
     //   * *what* the word contains — nothing pins it, and nothing should: the
     //     delivered bytes are advice, and what ties them to `public.input` is
     //     the guest's own `io_digest` over the buffer it read them into
@@ -591,6 +694,36 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
         quadratic(
             vec![(neg(constants::ecall::READ_WORD_BYTES as u64), m_ram)],
             vec![(lit(1), m_ram, frame(SLOT_ARG2, FIELD_READ_VALUE))],
+        ),
+    ));
+
+    // ---- what a `write` answers (S25a) ----------------------------------
+    //
+    // A `write` moves no memory event, so it has no confinement to state; what
+    // it does have is an answer, and the answer is not free. The executor
+    // appends `a2` bytes to the stream and reports `a2` — it writes all of
+    // them or it refuses the descriptor, and a refusal is not this row
+    // (`read_descriptor`'s sibling above pins the fd). So the count written
+    // back is the count asked for, on the same row, and one degree-2 gate says
+    // it.
+    //
+    // Without it `a0` was a free cell on every `write` row. That is not a
+    // violation of anything the digest checks — `io_digest` is over the bytes,
+    // not over the counts — but it is a free cell a guest reads and branches
+    // on: `guest_sdk::write_fd` loops until the counts sum to the length, and
+    // a prover choosing them chooses how many times that loop runs.
+    //
+    // A `read`'s answer is **not** pinned this way and cannot be: a short read
+    // is a real answer, so the count is only bounded, by the obligation
+    // `read_count_gap_range` below. `docs/spec/ecall-abi.md` §4.1.
+    enforcing.push((
+        "write_count_is_the_request".into(),
+        quadratic(
+            vec![],
+            vec![
+                (lit(1), IS_WRITE, sel),
+                (neg(1), IS_WRITE, frame(SLOT_ARG2, FIELD_READ_VALUE)),
+            ],
         ),
     ));
 
@@ -628,14 +761,19 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     ));
     // The exit row's `a0` write is its read. No other provable ecall's is: a
     // delegation request writes 0 (the first of its three request-side
-    // zeroings), and a `read` or a `write` writes the byte count the executor
-    // claims — a **free witness**, bounded only by the family's own `rd` pair.
+    // zeroings), and a `read` or a `write` writes a byte count, which this
+    // gate leaves alone and its own gate constrains —
+    // `write_count_is_the_request` for a `write`, `read_count_gap_range` for a
+    // `read`.
     //
-    // Free, and deliberately so. The count is advice like the bytes are: what
-    // the guest does with a short answer is the guest's business, and
-    // `guest_sdk::read_fd` checks it against the word it offered. Nothing here
-    // could check it — the number of bytes a stream had left is not a fact any
-    // row holds.
+    // A `read`'s count is the one number this family bounds rather than fixes.
+    // How many bytes fd 0 had left is not a fact any row holds: the stream's
+    // cursor lives in the executor, and this arithmetization has no
+    // cross-row state to keep it in. So the circuit says what it can — the
+    // answer is between 0 and the one word the call asked for — and the guest
+    // says the rest: `guest_sdk::read_fd` stops on a short answer and every
+    // caller slices to what it got. `docs/spec/ecall-abi.md` §4.1 is the
+    // standing statement of that limit.
     enforcing.push(("exit_status".into(), {
         let mut products = vec![(lit(1), IS_ECALL, v_rd), (neg(1), IS_ECALL, sel)];
         for is_t in non_exit_ecalls() {
@@ -743,6 +881,32 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
             "ram_value_lo_range",
             low_half(frame(SLOT_RAM, FIELD_WRITE_VALUE), RAM_VALUE_HI),
         ),
+        // A `read` answers with a byte count in `[0, READ_WORD_BYTES]`, and
+        // this is the whole of that bound (S25a). `rd_hi_range` and
+        // `rd_lo_range` already hold `sel` below `2^32` on every live row, so
+        // one more obligation closes the interval from above: `4 - sel` is a
+        // halfword exactly when `sel` is 0, 1, 2, 3 or 4, and for any larger
+        // `sel` below `2^32` the difference is `p - (sel - 4)`, which is
+        // within `2^32` of the modulus and nowhere near `2^16`.
+        //
+        // The gap, rather than a decomposition of the count: the count is one
+        // of five values and a three-bit split would need two more columns and
+        // a cross gate to exclude 5, 6 and 7. This is `mul_div`'s and
+        // `jump_branch_slt`'s pattern — a bound is a range-checked
+        // difference — and it commits nothing.
+        //
+        // The selector is `IS_READ` and not the row's `m_pc`: off a `read` row
+        // the gated key is 0, which is a real and in-range entry of the table
+        // (`lookup::Gating::Range`), and `sel` there is an arithmetic result
+        // that has no business being small.
+        range16_under(
+            "read_count_gap_range",
+            IS_READ,
+            GateDef::Linear {
+                terms: vec![(neg(1), sel)],
+                constant: lit(constants::ecall::READ_WORD_BYTES as u64),
+            },
+        ),
         LookupExpr {
             name: "decode_row".into(),
             channel: lookup_channel::DECODER,
@@ -771,7 +935,7 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     // per-channel form).
     for (channel, want) in [
         (lookup_channel::TIMESTAMP, 2 * QUERIES.len()),
-        (lookup_channel::RANGE16, 6),
+        (lookup_channel::RANGE16, 7),
         (lookup_channel::DECODER, 1),
     ] {
         let got = a.lookups.iter().filter(|l| l.channel == channel).count();

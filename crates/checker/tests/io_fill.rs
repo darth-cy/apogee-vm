@@ -65,20 +65,25 @@ fn load_imm(rd: u32, value: u32) -> Vec<u32> {
     out
 }
 
-/// `read(0, buf, 4)`, then `write(1, buf, 4)`, then `exit(0)`.
+/// `read(read_fd, buf, 4)`, then `write(write_fd, buf, 4)`, then `exit(0)`.
 ///
 /// `a1` and `a2` are set once and survive both calls; `a0` is reloaded before
 /// each, which is the whole point — the first call leaves the byte count there
 /// and the descriptor of the second has to overwrite it.
-fn io_program() -> ProgramImage {
-    let mut words = vec![addi(17, 0, ecall::READ as i32), addi(10, 0, 0)];
+///
+/// The descriptors are parameters because S25a pins them: fd 0 and fd 3 are
+/// the two a `read` may name, fd 1 and fd 2 the two a `write` may, and
+/// anything else is a refusal the fill must decline to prove
+/// (`docs/spec/ecall-abi.md` §4.1).
+fn io_program(read_fd: u32, write_fd: u32) -> ProgramImage {
+    let mut words = vec![addi(17, 0, ecall::READ as i32), addi(10, 0, read_fd as i32)];
     // The buffer, one word past the last instruction this function emits.
     let buffer_at = guest_memory::RAM_ORIGIN + 4 * 16;
     words.extend(load_imm(11, buffer_at));
     words.push(addi(12, 0, ecall::READ_WORD_BYTES as i32));
     words.push(OP_SYSTEM);
     words.push(addi(17, 0, ecall::WRITE as i32));
-    words.push(addi(10, 0, 1));
+    words.push(addi(10, 0, write_fd as i32));
     words.push(OP_SYSTEM);
     words.push(addi(17, 0, ecall::EXIT as i32));
     words.push(addi(10, 0, 0));
@@ -115,9 +120,16 @@ fn io_program() -> ProgramImage {
     }
 }
 
-/// The program run once on [`PAYLOAD`], exiting 0.
-fn traced() -> (prover::Program, TraceArchive) {
-    let image = io_program();
+/// The program run on [`PAYLOAD`] over fd 0 and fd 1, exiting 0, beside the
+/// two committed streams it moved.
+fn traced() -> (prover::Program, TraceArchive, IoStreams) {
+    traced_over(ecall::FD_PUBLIC_INPUT, ecall::FD_PUBLIC_OUTPUT)
+}
+
+/// The same, reading `read_fd` and writing `write_fd`. [`PAYLOAD`] is on both
+/// fd 0 and fd 3, so the guest sees the same four bytes whichever it names.
+fn traced_over(read_fd: u32, write_fd: u32) -> (prover::Program, TraceArchive, IoStreams) {
+    let image = io_program(read_fd, write_fd);
     let mut params = ProgramParams::defaults();
     params.heights = [1 << VARS; family::COUNT as usize];
     for f in [family::KECCAK_F, family::POSEIDON2, family::FR_ARITH] {
@@ -126,27 +138,20 @@ fn traced() -> (prover::Program, TraceArchive) {
     let (tables, config) = decode_program(&image, &params).expect("the program decodes");
     let io = GuestIo {
         input: PAYLOAD.to_vec(),
-        hint: Vec::new(),
+        hint: PAYLOAD.to_vec(),
     };
     let (traces, log, profile, execution) =
         trace_run(&image, &io, &tables, &config).expect("the program runs");
     assert_eq!(execution.exit_code, 0);
-    assert_eq!(
-        execution.io.input, PAYLOAD,
-        "the run consumed the whole of fd 0"
-    );
-    assert_eq!(
-        execution.io.output, PAYLOAD,
-        "the run wrote what it read to fd 1"
-    );
+    let io = IoStreams {
+        input: execution.io.input,
+        output: execution.io.output,
+    };
     let archive = TraceArchive::from_execution(
         traces,
         log,
         profile,
-        IoStreams {
-            input: execution.io.input,
-            output: execution.io.output,
-        },
+        io.clone(),
         PhaseTiming { wall_nanos: 0 },
     );
     (
@@ -156,6 +161,7 @@ fn traced() -> (prover::Program, TraceArchive) {
             config,
         },
         archive,
+        io,
     )
 }
 
@@ -288,7 +294,9 @@ fn assert_rows_hold(
 /// so that a failure says *which* value was taken rather than naming a gate.
 #[test]
 fn a_read_and_a_write_select_the_byte_count_and_not_the_descriptor() {
-    let (program, archive) = traced();
+    let (program, archive, io) = traced();
+    assert_eq!(io.input, PAYLOAD, "the run consumed the whole of fd 0");
+    assert_eq!(io.output, PAYLOAD, "the run wrote what it read to fd 1");
     let (_, columns) = filled(&program, &archive);
     let sel = rd_selected(frame_queries(family::ADD_SUB_LUI_AUIPC).len());
     let n = archive
@@ -322,6 +330,84 @@ fn a_read_and_a_write_select_the_byte_count_and_not_the_descriptor() {
     // reading `a0` instead would have produced them and not the count.
     assert_ne!(four, Fr::ZERO, "fd 0 and the count are distinguishable");
     assert_ne!(four, Fr::ONE, "fd 1 and the count are distinguishable");
+    // S25a: the same two rows carry the descriptor the call named, and the
+    // column that says which of its pair it was. Both rows name a committed
+    // stream here, so both leave it 0.
+    let rs2 = constraints::memory::frame(2, constraints::memory::FIELD_READ_VALUE);
+    for (row, fd) in [
+        (reads[0], ecall::FD_PUBLIC_INPUT),
+        (writes[0], ecall::FD_PUBLIC_OUTPUT),
+    ] {
+        assert_eq!(at(&columns, rs2, row), Fr::from_u64(fd as u64));
+        assert_eq!(at(&columns, add_sub::FD_UNCOMMITTED, row), Fr::ZERO);
+    }
+}
+
+/// The uncommitted half of each call's pair fills and proves too: fd 3 is
+/// prover advice and fd 2 is verifier-ignored, and `fd_uncommitted` is what
+/// tells the circuit which of the two a row named.
+#[test]
+fn the_uncommitted_descriptors_fill_and_satisfy_every_gate() {
+    let (program, archive, io) = traced_over(ecall::FD_HINT, ecall::FD_STDERR);
+    let (a, columns) = filled(&program, &archive);
+    assert!(
+        io.input.is_empty() && io.output.is_empty(),
+        "neither committed stream moved: the run read fd 3 and wrote fd 2"
+    );
+    let n = archive
+        .family_traces()
+        .family(family::ADD_SUB_LUI_AUIPC)
+        .expect("the add/sub buffer")
+        .len();
+    let row = |which: PolyAddress| {
+        (0..n)
+            .find(|r| at(&columns, which, *r) == Fr::ONE)
+            .expect("the row")
+    };
+    for r in [row(add_sub::IS_READ), row(add_sub::IS_WRITE)] {
+        assert_eq!(at(&columns, add_sub::FD_UNCOMMITTED, r), Fr::ONE);
+    }
+    let rows: Vec<usize> = (0..n + 2).chain([(1 << VARS) - 1]).collect();
+    assert_rows_hold(&a, &columns, &rows);
+}
+
+/// A descriptor outside the call's pair is a **refusal**, and the fill says so
+/// by name rather than proving a shard that cannot verify.
+///
+/// The executor answers `-EBADF` and moves nothing, exactly as Linux and
+/// `qemu-riscv32` do, so the trace is well formed and the emulator is
+/// unchanged. What changed at S25a is downstream: `read_descriptor` and
+/// `write_descriptor` refuse a row claiming such a call succeeded, so
+/// `fill::add_sub` must decline the cycle — the same rule a `read` that moved
+/// no word has taken since S25 (`docs/spec/shard-proof.md` §8.5).
+#[test]
+fn a_refused_descriptor_is_not_provable() {
+    let bad = 7;
+    assert!(
+        !matches!(
+            bad,
+            ecall::FD_PUBLIC_INPUT | ecall::FD_PUBLIC_OUTPUT | ecall::FD_STDERR | ecall::FD_HINT
+        ),
+        "fd {bad} is a descriptor the ABI gives no call"
+    );
+    for (read_fd, write_fd, want) in [
+        (bad, ecall::FD_PUBLIC_OUTPUT, "is a `read` from fd 7"),
+        (ecall::FD_PUBLIC_INPUT, bad, "is a `write` to fd 7"),
+    ] {
+        let (program, archive, _) = traced_over(read_fd, write_fd);
+        let fam = family::ADD_SUB_LUI_AUIPC;
+        let fill = prover::family_fill(fam).expect("the add/sub fill");
+        let err = fill(&prover::ShardSource {
+            program: &program,
+            archive: &archive,
+            family: fam,
+            index: 0,
+            height: 1 << VARS,
+            window: 0,
+        })
+        .expect_err("a refusal is not provable");
+        assert!(err.contains(want), "{err}");
+    }
 }
 
 /// The filled shard satisfies every gate and every bound on every live row, on
@@ -330,7 +416,7 @@ fn a_read_and_a_write_select_the_byte_count_and_not_the_descriptor() {
 /// include the provable I/O ecalls.
 #[test]
 fn the_io_fill_satisfies_every_gate() {
-    let (program, archive) = traced();
+    let (program, archive, _) = traced();
     let (a, columns) = filled(&program, &archive);
     let n = archive
         .family_traces()

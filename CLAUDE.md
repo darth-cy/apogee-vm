@@ -154,7 +154,7 @@ cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
 cargo clippy -p prover --all-targets --features metrics -- -D warnings   # the ONE feature's configuration
-cargo test --workspace                      # 1,043 tests as of S25a; 83 more are #[ignore]d
+cargo test --workspace                      # 1,046 tests as of S25a; 83 more are #[ignore]d
 cargo test -p prover --features metrics --test metrics  # the metrics harness; 10 more, 2 #[ignore]d
 cargo test -p program --test delegation -- --ignored --test-threads=1  # static detachment at BOTH guest profiles; builds six guest images, 2.9 s
 APOGEE_GUEST_PROFILE=release cargo test -p emulator --test revm -- --ignored --test-threads=1 --skip a3_  # S24's guest against native revm; builds the revm guest, 47 s
@@ -503,10 +503,12 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   `trace_run` alike, and a fatal error returns no trace. A `read` of anything but one
   4-aligned word is fatal too, by name (`ReadNotOneWord`). `read`/`write` on a descriptor
   the ABI does not give that call return `-EBADF`; the recorded fd 0 stream is the bytes
-  the guest consumed. **A refused `read` is not provable** — it stages no RAM query and
-  `ram_mask_rule` demands one on every `read` row — so `fill::add_sub` refuses such a cycle
-  by name rather than handing a verifier a shard that fails as `Constraint`. The SDK never
-  issues one: `read_fd` checks the descriptor before the ecall.
+  the guest consumed. **Neither a refused `read` nor a refused `write` is provable** — since
+  S25a `read_descriptor` and `write_descriptor` hold each call's `a0` to its own pair of
+  descriptors, and a refused `read` also stages no RAM query where `ram_mask_rule` demands
+  one — so `fill::add_sub` refuses such a cycle by name rather than handing a verifier a
+  shard that fails as `Constraint`. A refused `write` used to prove as an ordinary `write`
+  row. The SDK never issues either: it passes fd 0, fd 1, fd 2 and fd 3 and no other.
 - **The trace archive's deterministic payload is a byte prefix of the file**; the timing
   section follows it, so determinism excludes timing by construction, not by comparison.
 - **The heap never meets the stack.** guest-sdk's allocator refuses a block, with
@@ -810,13 +812,30 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   ecall by name, and since S25 also a `read` that moved no word — a refused descriptor,
   which `ram_mask_rule` cannot admit. A delegation row falls through rather than halting,
   writes 0 into `a0`, and carries the `deleg` mirror query that pairs it with an invocation;
-  a `read` and a `write` fall through too and write into `a0` a byte count no gate can fix.
-- **A provable `read` is confined by two gates, and its bytes by the digest.**
-  `ram_addr_is_the_buffer` makes the RAM query's address the `a1` the row read, and
-  `read_count_is_one_word` makes the `a2` it read the literal 4 — both degree 2 over cells
-  of one row, because the query and the arguments it is checked against are on that row.
-  What the circuit does *not* fix is deliberate: the word delivered (bounded below `2^32`
-  by a new `RANGE16` pair and free otherwise), the count written back, and everything a
+  a `read` and a `write` fall through too and write into `a0` a byte count. **Since S25a
+  that count and the descriptor beside it are constrained**: one shared boolean says which of
+  its call's two descriptors the row named — fd 0 or fd 3 for a `read`, fd 1 or fd 2 for a
+  `write` — a `write` answers the count `a2` asked for, and a `read` answers something in
+  `[0, 4]`. A descriptor outside the pair is a call the executor **refused**, with `-EBADF`
+  and no byte moved, so the fill declines that cycle by name too.
+- **A provable `read` is confined by two gates, its descriptor and its answer by three more,
+  and its bytes by the digest.** `ram_addr_is_the_buffer` makes the RAM query's address the
+  `a1` the row read, and `read_count_is_one_word` makes the `a2` it read the literal 4 — both
+  degree 2 over cells of one row, because the query and the arguments it is checked against
+  are on that row. **S25a added the three that say which stream a call named and what it
+  answered**: `read_descriptor` and `write_descriptor`, over one shared boolean
+  `fd_uncommitted` (a set of two descriptors is not an interval, so it cannot be a range
+  check and `is_read·fd·(fd − 3)` is degree 3), and `write_count_is_the_request`; a `read`'s
+  answer is bounded to `[0, 4]` by the `read_count_gap_range` obligation. What that buys is
+  not the refusal it refuses but the line it protects: fd 0 and fd 1 are the streams
+  `io_digest` binds and fd 3 and fd 2 are the streams it does not, so a prover free to
+  relabel a descriptor is a prover who can move bytes across that line.
+  **The one number left free is a `read`'s exact count inside `[0, 4]`**, and it cannot be
+  fixed here: how many bytes a stream had left is not a fact any row holds — the cursor lives
+  in the executor, and this arithmetization has no cross-row state to keep one in. That is
+  the standing limitation, stated in `docs/spec/ecall-abi.md` §4.1.
+  What the circuit does *not* fix otherwise is deliberate: the word delivered (bounded below
+  `2^32` by a new `RANGE16` pair and free otherwise) and everything a
   `write` emits are fd 0's and fd 1's content, and they are bound by the guest's own
   `io_digest` in `x24..x31` (`docs/spec/memory.md` §10) and not by any row. Alignment and
   residence are the memory argument's: a query at an unaligned address, or at one in no

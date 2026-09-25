@@ -135,11 +135,20 @@ fn a1_the_tiny_guest_proves_and_both_shards_verify() {
     // claim is three wider and the proof 224 bytes longer. The layer count and
     // the round count are unchanged — the seven gates S23 added are enforcing
     // and produce no inner column (`constraint-manifest.md` §1.2).
-    assert_eq!(add.to_bytes().len(), 62_484);
+    //
+    // S25 and S25a moved the base layer alone again, and in the same
+    // direction: `is_read`, `is_write` and `ram_value_hi` at S25, then
+    // `fd_uncommitted` at S25a, four more witness columns and no new leaf, no
+    // new layer and no new round. Each costs the proof one 64-byte commitment
+    // and one 32-byte final evaluation, so the length is S23's plus `4 · 96`.
+    // **Derived, not measured**: this suite is `# DEFERRED` and has not run
+    // since S23, so the batch at the end of the S25 progression is what
+    // confirms it.
+    assert_eq!(add.to_bytes().len(), 62_868);
     assert_eq!(init.to_bytes().len(), 20_524);
     assert_eq!(add.gkr.layers.len(), 26);
     assert_eq!(add.gkr.layers[0].rounds.len(), 20);
-    assert_eq!(add.gkr.layers[0].final_evals.len(), 42 + 35 + 7);
+    assert_eq!(add.gkr.layers[0].final_evals.len(), 42 + 39 + 7);
 }
 
 // ---------------------------------------------------------------------------

@@ -355,7 +355,7 @@ rows.
   identity's list is the seven commitments of `S[0..7]` and the key's three are those of
   `S[7..10]`, so a shard opens 21 + 44 + 10 = 75 commitments, the table's last, and the
   table columns the circuit read are checked against the key's points. A family that reads
-  no generic channel opens identity's list alone: add/sub's shard opens 36 + 31 + 7.
+  no generic channel opens identity's list alone: add/sub's shard opens 42 + 39 + 7.
 - **Loaded.** `VerifyingKey::check` (`shard-proof.md` §7.2) recomputes the SRS digest over
   the key's `SrsVerifier` and generic table, and refuses a key whose digest differs: "the
   SRS digest is not the digest of the key's SrsVerifier and generic table". Per family, it

@@ -417,11 +417,17 @@ one:
   one of eight arms, each bounded by §6.5's chain. No step reads back into the register
   induction.
 
-**Owed by the I/O-binding stage**: when ecall transfer cycles become provable, that family's
-`ram_write_value` must carry a 32-bit bound of its own. Today no `ADD_SUB_LUI_AUIPC` row can
-reach RAM at all — its `ram_mask_rule` is the ungated `ram_mask = 0`
-(`docs/spec/shard-proof.md` §8) — so the induction rests on a circuit gate and not on
-`prover::fill::add_sub` refusing a transfer cycle by name, which is a completeness check.
+**Discharged at S25, and it was owed.** An `ADD_SUB_LUI_AUIPC` row *can* reach RAM now: a
+provable `read` carries the word it delivers on the ecall's own row, and `ram_mask_rule` is an
+ordinary mask rule keyed on `is_read` rather than the ungated `ram_mask = 0` it was from S16
+to S23. That word is the one value in the machine that is **computed and not copied** without
+coming from a register — it comes from the prover's fd 0 stream — so it carries a 32-bit bound
+of its own, the `ram_value_hi_range` / `ram_value_lo_range` pair under the row's `m_pc`
+(`docs/spec/shard-proof.md` §8.3). With it the write-side induction is whole across every
+family. There are no transfer cycles to refuse: S14's open question 10 was answered by deleting
+the row kind, and what `prover::fill::add_sub` refuses by name is a *refusal* — a `read` or a
+`write` on a descriptor the call may not name (`docs/spec/ecall-abi.md` §4.1) — which is a
+completeness check over rows the circuit's own gates already reject.
 
 ### 5.2 What the induction is for
 

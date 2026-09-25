@@ -31,7 +31,7 @@ const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../constraints/tests/vectors/add_sub.bin"
 );
-const FIXTURE_SHA256: &str = "2778a865d11cf6f285c54c6127ad77ccd12a01f64c38e10414d359fff2163c96";
+const FIXTURE_SHA256: &str = "7198e023c78379d3e8ae40cc4006c8ebd6c91686b3eabdf6fbbd53a23ac6fde3";
 
 fn artifact() -> CircuitArtifact {
     add_sub::artifact(VARS)
@@ -190,8 +190,9 @@ fn honest(i: Instr, rs1v: u32, rs2v: u32, rd_old: u32) -> Row {
     let system_ecall = i.bit == kind::SYSTEM && i.imm == 0;
     let delegation = system_ecall && rs1v == ecall::PRECOMPILE_KECCAK_F;
     // S25's two. Like a delegation request they are ecalls that fall through,
-    // and like it they leave `a0`'s write free — here it is the byte count the
-    // executor claims, which nothing in the circuit can check.
+    // and like it their `a0` write is not what the instruction computes — it is
+    // the byte count the executor answered with, which since S25a is pinned to
+    // `a2` on a `write` and bounded to `[0, READ_WORD_BYTES]` on a `read`.
     let io = system_ecall && (rs1v == ecall::READ || rs1v == ecall::WRITE);
     let exit = system_ecall && !delegation && !io;
     let fence = i.bit == kind::SYSTEM && i.imm == 2;
@@ -276,6 +277,12 @@ fn honest(i: Instr, rs1v: u32, rs2v: u32, rd_old: u32) -> Row {
     }
     if fence {
         r.set("is_fence", Fr::ONE);
+    }
+    // S25a: which of its call's two descriptors an I/O row names. fd 0 and
+    // fd 1 are the committed streams and leave it 0; fd 3 and fd 2 are the
+    // uncommitted ones and set it.
+    if io && (rs2v == ecall::FD_HINT || rs2v == ecall::FD_STDERR) {
+        r.set("fd_uncommitted", Fr::ONE);
     }
     r
 }
@@ -379,22 +386,58 @@ fn honest_rows() -> Vec<(&'static str, Row)> {
                 0x1111_2222,
             ),
         ),
+        // A short read: fd 0 had one byte left, so `a0` answers 1 and the
+        // other three bytes of the word are the old ones. It is a real answer
+        // and stays provable — `read_count_gap_range` bounds the count, it
+        // does not fix it (`docs/spec/ecall-abi.md` §4.1).
+        (
+            "short read of one byte",
+            read_row(
+                guest_memory::RAM_ORIGIN + 0x208,
+                1,
+                0x1111_2222,
+                0x1111_2233,
+            ),
+        ),
+        // The uncommitted descriptors, which stay provable and set
+        // `fd_uncommitted`: fd 3 is prover advice and fd 2 is verifier-ignored,
+        // and neither is in `io_digest`.
+        (
+            "read of one word from the hint stream",
+            read_row_from(
+                ecall::FD_HINT,
+                guest_memory::RAM_ORIGIN + 0x20c,
+                4,
+                0x0000_0000,
+                0x89ab_cdef,
+            ),
+        ),
         (
             "write of nine bytes",
             write_row(guest_memory::RAM_ORIGIN + 0x300, 9),
+        ),
+        (
+            "write of three bytes to stderr",
+            write_row_to(ecall::FD_STDERR, guest_memory::RAM_ORIGIN + 0x304, 3),
         ),
         ("padding", Row::default()),
     ]
 }
 
-/// A provable `read`: `a7 = READ`, fd 0 in `a0`, the buffer in `a1`, one word
-/// in `a2`, the count delivered written back to `a0`, and the RAM query at the
-/// buffer — all on this one row.
+/// A provable `read` of fd 0, the committed input stream.
 fn read_row(buf: u32, delivered: u32, old: u32, new: u32) -> Row {
+    read_row_from(ecall::FD_PUBLIC_INPUT, buf, delivered, old, new)
+}
+
+/// A provable `read`: `a7 = READ`, `fd` in `a0`, the buffer in `a1`, one word
+/// in `a2`, the count delivered written back to `a0`, and the RAM query at the
+/// buffer — all on this one row. `fd` is fd 0 or fd 3, the two descriptors
+/// `read_descriptor` admits (S25a).
+fn read_row_from(fd: u32, buf: u32, delivered: u32, old: u32, new: u32) -> Row {
     let mut r = honest(
         Instr::new(kind::SYSTEM, 0, 0, 0, 0),
         ecall::READ,
-        ecall::FD_PUBLIC_INPUT,
+        fd,
         delivered,
     );
     r.set("is_read", Fr::ONE);
@@ -416,10 +459,15 @@ fn read_row(buf: u32, delivered: u32, old: u32, new: u32) -> Row {
 /// enter the memory argument, because the guest's own `io_digest` is what
 /// binds fd 1 (`docs/spec/memory.md` §10).
 fn write_row(buf: u32, count: u32) -> Row {
+    write_row_to(ecall::FD_PUBLIC_OUTPUT, buf, count)
+}
+
+/// The same, to `fd` — fd 1 or fd 2, the two `write_descriptor` admits.
+fn write_row_to(fd: u32, buf: u32, count: u32) -> Row {
     let mut r = honest(
         Instr::new(kind::SYSTEM, 0, 0, 0, 0),
         ecall::WRITE,
-        ecall::FD_PUBLIC_OUTPUT,
+        fd,
         count,
     );
     r.set("is_write", Fr::ONE);
@@ -521,6 +569,7 @@ fn the_layout_and_the_gates_are_the_specs() {
         "is_deleg_11",
         "is_read",
         "is_write",
+        "fd_uncommitted",
         "ram_value_hi",
         "wrap",
         "rd_hi",
@@ -599,6 +648,9 @@ fn the_layout_and_the_gates_are_the_specs() {
         "is_write_boolean",
         "is_write_is_an_ecall",
         "write_number",
+        "fd_uncommitted_boolean",
+        "read_descriptor",
+        "write_descriptor",
         "ecall_is_exit",
         "rs1_mask_rule",
         "rs2_mask_rule",
@@ -616,6 +668,7 @@ fn the_layout_and_the_gates_are_the_specs() {
         "rs2_value_masked",
         "ram_addr_is_the_buffer",
         "read_count_is_one_word",
+        "write_count_is_the_request",
         "add_addi_auipc",
         "sub",
         "lui",
@@ -636,7 +689,7 @@ fn the_layout_and_the_gates_are_the_specs() {
         .iter()
         .map(|l| (l.name.clone(), l.channel))
         .collect();
-    assert_eq!(lookups.len(), 23);
+    assert_eq!(lookups.len(), 24);
     assert_eq!(
         lookups[16..],
         [
@@ -646,6 +699,7 @@ fn the_layout_and_the_gates_are_the_specs() {
             ("next_pc_lo_range".to_string(), lookup_channel::RANGE16),
             ("ram_value_hi_range".to_string(), lookup_channel::RANGE16),
             ("ram_value_lo_range".to_string(), lookup_channel::RANGE16),
+            ("read_count_gap_range".to_string(), lookup_channel::RANGE16),
             ("decode_row".to_string(), lookup_channel::DECODER),
         ]
     );
@@ -663,12 +717,25 @@ fn the_layout_and_the_gates_are_the_specs() {
             l.name
         );
     }
+    // Every family obligation is under the row's own mask but S25a's, whose
+    // selector is `is_read`: off a `read` row a gated range key is 0, which is
+    // a real and in-range entry, and `rd_selected` there is an arithmetic
+    // result that no byte-count bound should touch.
+    let read_count_gap = a
+        .lookups
+        .iter()
+        .position(|l| l.name == "read_count_gap_range")
+        .expect("S25a's obligation");
+    assert_eq!(a.lookups[read_count_gap].selector, add_sub::IS_READ);
     assert!(
-        a.lookups[16..].iter().all(|l| l.selector == pc_mask),
-        "every new obligation is the row's"
+        a.lookups[16..]
+            .iter()
+            .enumerate()
+            .all(|(at, l)| at + 16 == read_count_gap || l.selector == pc_mask),
+        "every other new obligation is the row's"
     );
 
-    let mult = |i: u32| PolyAddress::Witness(35 + i);
+    let mult = |i: u32| PolyAddress::Witness(36 + i);
     assert_eq!(
         add_sub::channels(),
         vec![
@@ -789,6 +856,33 @@ fn every_row_kind_satisfies_every_gate_and_every_bound() {
     // And the exit row is still the only one that halts: the two ecall kinds
     // differ in exactly the row's `is_deleg_t`.
     assert_eq!(get("exit 42", "is_deleg_9"), Fr::ZERO);
+    // S25a's column really does split the four descriptors the way the two
+    // gates read it, and the committed rows are the ones that leave it 0.
+    for (what, fd) in [
+        ("read of one word", ecall::FD_PUBLIC_INPUT),
+        ("write of nine bytes", ecall::FD_PUBLIC_OUTPUT),
+    ] {
+        assert_eq!(get(what, "rs2_read_value"), f(fd as u64), "{what}");
+        assert_eq!(get(what, "fd_uncommitted"), Fr::ZERO, "{what}");
+    }
+    for (what, fd) in [
+        ("read of one word from the hint stream", ecall::FD_HINT),
+        ("write of three bytes to stderr", ecall::FD_STDERR),
+    ] {
+        assert_eq!(get(what, "rs2_read_value"), f(fd as u64), "{what}");
+        assert_eq!(get(what, "fd_uncommitted"), Fr::ONE, "{what}");
+    }
+    // A `write` answers the count it was asked for; a `read` answers at most
+    // the one word it asked for, and a short read answers less.
+    assert_eq!(
+        get("write of nine bytes", "rd_selected"),
+        get("write of nine bytes", "arg2_read_value")
+    );
+    assert_eq!(get("short read of one byte", "rd_selected"), Fr::ONE);
+    assert_eq!(
+        get("short read of one byte", "arg2_read_value"),
+        f(ecall::READ_WORD_BYTES as u64)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -952,6 +1046,91 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     let mut r = write_row(base, 4);
     r.query("rs1", CYCLE, 1, 17, ecall::READ as u64, ecall::READ as u64);
     cases.push(("a write row whose a7 says read", r, vec!["write_number"]));
+
+    // S25a's descriptor pins. `a0` is read as the fd and written as the count,
+    // so a forged descriptor moves the read half of one query and nothing
+    // else: the row still looks like a call, and until S25a it proved as one.
+    // Each case is the lone refusal of the gate that owns that call's pair.
+    let fd = |r: &mut Row, v: u32| {
+        r.set("rs2_read_value", f(v as u64))
+            .set("rs2_write_value", f(v as u64));
+    };
+    for (what, bad) in [
+        // The other call's committed stream: a `read` of fd 1 would let a
+        // prover pull bytes out of the *output* stream.
+        ("a read from fd 1", ecall::FD_PUBLIC_OUTPUT),
+        // The other call's uncommitted one, which `fd_uncommitted = 1` does
+        // not reach either: fd 2 is not 3.
+        ("a read from fd 2", ecall::FD_STDERR),
+        ("a read from a descriptor the ABI gives no call", 7),
+    ] {
+        let mut r = read_row(base, 4, 1, 2);
+        fd(&mut r, bad);
+        cases.push((what, r, vec!["read_descriptor"]));
+    }
+    // The column and the descriptor disagreeing, each way round. Neither is a
+    // forged *fd* — both name a legal one — and both are refused, which is
+    // what makes `fd_uncommitted` decide rather than merely accompany.
+    let mut r = read_row_from(ecall::FD_HINT, base, 4, 1, 2);
+    r.set("fd_uncommitted", Fr::ZERO);
+    cases.push((
+        "a read of the hint stream claiming fd 0",
+        r,
+        vec!["read_descriptor"],
+    ));
+    let mut r = read_row(base, 4, 1, 2);
+    r.set("fd_uncommitted", Fr::ONE);
+    cases.push((
+        "a read of fd 0 claiming the hint stream",
+        r,
+        vec!["read_descriptor"],
+    ));
+    for (what, bad) in [
+        ("a write to fd 0", ecall::FD_PUBLIC_INPUT),
+        ("a write to fd 3", ecall::FD_HINT),
+        ("a write to a descriptor the ABI gives no call", 7),
+    ] {
+        let mut r = write_row(base, 4);
+        fd(&mut r, bad);
+        cases.push((what, r, vec!["write_descriptor"]));
+    }
+    let mut r = write_row_to(ecall::FD_STDERR, base, 4);
+    r.set("fd_uncommitted", Fr::ZERO);
+    cases.push((
+        "a write to stderr claiming fd 1",
+        r,
+        vec!["write_descriptor"],
+    ));
+    let mut r = write_row(base, 4);
+    r.set("fd_uncommitted", Fr::ONE);
+    cases.push((
+        "a write to fd 1 claiming stderr",
+        r,
+        vec!["write_descriptor"],
+    ));
+
+    // A `write` answering a count other than the one it was asked for. `a0`'s
+    // write is the only cell that moves, and `exit_status` leaves it alone —
+    // `is_ecall` and `is_write` cancel on this row — so the new gate is the
+    // one refusal.
+    let mut r = write_row(base, 4);
+    r.set("rd_selected", f(3))
+        .set("rd_write_value", f(3))
+        .set("rd_hi", Fr::ZERO);
+    cases.push((
+        "a write claiming it moved fewer bytes than it was given",
+        r,
+        vec!["write_count_is_the_request"],
+    ));
+    let mut r = write_row(base, 4);
+    r.set("rd_selected", f(5))
+        .set("rd_write_value", f(5))
+        .set("rd_hi", Fr::ZERO);
+    cases.push((
+        "a write claiming it moved more bytes than it was given",
+        r,
+        vec!["write_count_is_the_request"],
+    ));
     let mut r = row("fence");
     r.query("rd", CYCLE, 3, 0, 0, 0);
     r.set("rd_is_zero", Fr::ONE);
@@ -1197,7 +1376,7 @@ fn each_gate_is_the_one_that_refuses_its_row() {
 #[test]
 fn every_booleanity_gate_refuses_a_value_of_two() {
     let a = artifact();
-    let cases: [(&str, &str, &str); 5] = [
+    let cases: [(&str, &str, &str); 6] = [
         ("add, carrying", "wrap", "wrap_boolean"),
         ("add, carrying", "pc_wrap", "pc_wrap_boolean"),
         ("exit 42", "is_ecall", "is_ecall_boolean"),
@@ -1206,6 +1385,11 @@ fn every_booleanity_gate_refuses_a_value_of_two() {
             "keccak delegation request",
             "is_deleg_9",
             "is_deleg_9_boolean",
+        ),
+        (
+            "read of one word",
+            "fd_uncommitted",
+            "fd_uncommitted_boolean",
         ),
     ];
     for (base, column, gate) in cases {
@@ -1311,4 +1495,51 @@ fn the_negative_controls_break_what_they_say_they_break() {
     zero.drop_query("rd");
     zero.set("rd_inv", Fr::ZERO);
     assert_eq!(violated(&a, &zero), (vec![], vec![]));
+}
+
+/// S25a's bound on what a `read` answers: `[0, READ_WORD_BYTES]`, and the
+/// range channel is the whole of it.
+///
+/// A short read is a real answer — fd 0's cursor lives in the executor and no
+/// row holds it — so the count is bounded and not fixed
+/// (`docs/spec/ecall-abi.md` §4.1). What the bound buys is the other side: a
+/// count above the one word the call asked for is a count the guest's own loop
+/// would run past the buffer on, and the `-EBADF` a refused `read` answers is
+/// a 32-bit word whose two halfwords are both in range, so `rd_hi_range` and
+/// `rd_lo_range` admit it and only this obligation does not.
+#[test]
+fn a_read_answers_at_most_the_word_it_asked_for() {
+    let a = artifact();
+    let base = guest_memory::RAM_ORIGIN + 0x200;
+
+    // Every legal answer, the empty one and the full one included.
+    for n in 0..=ecall::READ_WORD_BYTES {
+        let r = read_row(base, n, 0x1111_2222, 0x3333_4444);
+        assert_eq!(violated(&a, &r), (vec![], vec![]), "a read of {n} bytes");
+    }
+
+    // One byte past it, and nothing else on the row moved: `rd_hi` and the low
+    // halfword still pair, so the two `rd` obligations pass.
+    let mut r = read_row(base, 0, 0x1111_2222, 0x3333_4444);
+    r.set("rd_selected", f(u64::from(ecall::READ_WORD_BYTES) + 1))
+        .set("rd_write_value", f(u64::from(ecall::READ_WORD_BYTES) + 1));
+    assert_eq!(violated(&a, &r), (vec![], names(&["read_count_gap_range"])));
+
+    // The shape that made this obligation worth its leaf: `-EBADF` in `a0`,
+    // which is what the executor answers a `read` on a descriptor the call
+    // does not name. `read_descriptor` refuses the descriptor; this refuses
+    // the answer, so a row forging both is refused twice over.
+    let ebadf = u64::from(ecall::EBADF.wrapping_neg());
+    let mut r = read_row(base, 0, 0x1111_2222, 0x3333_4444);
+    r.set("rd_selected", f(ebadf))
+        .set("rd_write_value", f(ebadf))
+        .set("rd_hi", f(ebadf >> 16));
+    assert_eq!(violated(&a, &r), (vec![], names(&["read_count_gap_range"])));
+
+    // And it is a `read`'s alone: the selector is `is_read`, so an ordinary
+    // sum whose result is nowhere near a byte count discharges it on the
+    // switched-off row's key of 0.
+    let big = row("add, carrying");
+    assert!(small_int(big.get("rd_selected")) > u64::from(ecall::READ_WORD_BYTES));
+    assert_eq!(violated(&a, &big), (vec![], vec![]));
 }

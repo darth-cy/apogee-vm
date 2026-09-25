@@ -925,9 +925,15 @@ fn every_ecall_answers_as_the_abi_says() {
                 // one is the end-of-stream edge worth having.
                 (read, 0, 4, 4),
                 (read, 0, 4, 2),
-                // A `write` is unrestricted, so its edges are unchanged: a
-                // count that is neither a word nor a multiple of one, the same
-                // from an unaligned base on fd 2, and a zero-byte call.
+                // A `write` is unrestricted *in the executor*, so its edges
+                // are unchanged: a count that is neither a word nor a multiple
+                // of one, the same from an unaligned base on fd 2, and a
+                // zero-byte call. The circuit is stricter since S25a — fd 1 or
+                // fd 2, and the count answered equal to the count asked for —
+                // which costs this guest nothing, because it is not a provable
+                // guest either way: the two `-EBADF` edges below and the two
+                // unassigned numbers after them are each a cycle
+                // `prover::fill::add_sub` refuses by name.
                 (write, 1, 6, 6),
                 (write, 2, 6, 6),
                 (write, 1, 0, 0),

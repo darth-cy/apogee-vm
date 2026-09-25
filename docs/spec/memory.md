@@ -170,6 +170,11 @@ a delegation request of exactly one type — a partition, because the six number
 pairwise distinct by `const` assertion. `arg1` and `arg2` are on for a `read` and a
 `write`, `ram` for a `read` alone; two gates confine that query to the word at `a1` and
 hold `a2` to one word, and the delivered value carries the range convention's 16+16 pair.
+**S25a added three more pins over the same two row kinds**: a third free boolean says
+which of its call's two descriptors the row named — fd 0 or fd 3 for a `read`, fd 1 or
+fd 2 for a `write` — and a `write`'s `a0` write is held equal to the `a2` it read, with a
+`read`'s bounded to `[0, READ_WORD_BYTES]` by a `RANGE16` obligation
+(`docs/spec/shard-proof.md` §8.2, `docs/spec/ecall-abi.md` §4.1).
 **There is no `is_transfer`**: S14's open question 10 was answered by deleting the
 transfer cycle rather than confining it (`docs/spec/execution-trace.md` §1).
 
@@ -770,6 +775,15 @@ program moved, and the statement's streams are those bytes or a Poseidon2 collis
 **What it does not bind.** fd 2 and fd 3. A diagnostic is verifier-ignored and a hint is
 prover advice; neither is in the digest, and a guest that lets a hint reach fd 1 without
 checking it has made its proof meaningless (`docs/spec/ecall-abi.md` §4).
+
+**Which stream a row named is a circuit fact since S25a, not only a digest fact.** Until
+then `a0`'s read on a `read` or a `write` row was free, so the descriptor a row claimed and
+the descriptor it "really" used were the same choice, and this digest was the only thing
+standing between the two bound streams and the two unbound ones. `read_descriptor` and
+`write_descriptor` now hold each call's `a0` to its own pair — fd 0 or fd 3, fd 1 or fd 2 —
+so a prover cannot relabel a `read` of the hint stream as a `read` of fd 0, or a `write` to
+stderr as a `write` to fd 1, and then have the digest cover the relabelling rather than
+catch it. The digest still does the work this section describes; it no longer does it alone.
 
 **The honest side checks it too.** `prover::statement_inputs` makes the same comparison
 and refuses by name, so a guest that forgot to publish fails at proving time rather than

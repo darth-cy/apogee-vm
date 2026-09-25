@@ -442,10 +442,18 @@ fn signed(v: i128) -> Fr {
 /// leaves 0 on an `x0` write — `next_pc`'s wrap and high halfword, and the
 /// family's decoded table as `S[0..7]`.
 ///
-/// Refuses, naming the cycle, an ecall other than `EXIT`: S16 proves no other.
+/// Refuses, naming the cycle, an ecall this family does not prove, and an I/O
+/// ecall the circuit cannot admit: a `read` or a `write` on a descriptor
+/// outside its call's pair, which the executor answered `-EBADF`, and a `read`
+/// that moved no word. Each is a refusal rather than a call, and the S25a
+/// gates hold every row that claims one to what a call does
+/// (`docs/spec/shard-proof.md` §8.5).
+///
 /// Panics if the trace and the decoded table disagree — a cycle at a pc the
 /// table does not hold, an `rd` write or a `next_pc` that is not what the
-/// instruction computes — which the emulator cannot produce.
+/// instruction computes, a `read` answering more than one word or a `write`
+/// answering a count other than the one it was asked for — which the emulator
+/// cannot produce.
 fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     let fam = family::ADD_SUB_LUI_AUIPC;
     let traces = src.archive.family_traces();
@@ -468,6 +476,7 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
     let (mut is_ecall, mut is_fence, mut wrap) = (Vec::new(), Vec::new(), Vec::new());
     let mut is_deleg: [Vec<u32>; constraints::add_sub::IS_DELEGATION.len()] = Default::default();
     let (mut is_read, mut is_write, mut ram_value_hi) = (Vec::new(), Vec::new(), Vec::new());
+    let mut fd_uncommitted_column = Vec::new();
     let (mut sel, mut rd_hi, mut next_pc_hi) = (Vec::new(), Vec::new(), Vec::new());
     for r in start..end {
         let row = trace.row(r);
@@ -500,6 +509,11 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
         let mut deleg_row = [0u32; constraints::add_sub::IS_DELEGATION.len()];
         // S25's two: `read` and `write`, the provable I/O ecalls.
         let (mut read_row, mut write_row) = (0u32, 0u32);
+        // 1 where an I/O ecall names the uncommitted one of its two
+        // descriptors — fd 3 for a `read`, fd 2 for a `write` — and 0 where it
+        // names fd 0 or fd 1. `read_descriptor` and `write_descriptor` read it
+        // (`docs/spec/shard-proof.md` §8.2).
+        let mut fd_uncommitted = 0u32;
         let (value, carry) = match bit {
             kind::ADD => add(a, b),
             kind::ADDI => add(a, imm),
@@ -514,6 +528,23 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
                 // shard fail as a `Constraint` on bytes a verifier was handed
                 // (`docs/spec/shard-proof.md` §8.5).
                 system_code::ECALL if a == ecall::READ => {
+                    // The two refusals a `read` row can carry, each by name.
+                    // A descriptor outside the call's pair is refused by
+                    // `read_descriptor` and moves no word besides; the
+                    // executor answers `-EBADF` and stages no RAM query, which
+                    // `ram_mask_rule` also demands. Neither shape is provable,
+                    // so say so here rather than hand a verifier a shard that
+                    // fails as a `Constraint` (`docs/spec/shard-proof.md`
+                    // §8.5).
+                    if !matches!(b, ecall::FD_PUBLIC_INPUT | ecall::FD_HINT) {
+                        return Err(format!(
+                            "cycle {} is a `read` from fd {b}, which is neither fd {} nor \
+                             fd {}, so it is a refusal, which no family proves",
+                            row.cycle,
+                            ecall::FD_PUBLIC_INPUT,
+                            ecall::FD_HINT
+                        ));
+                    }
                     if row.query(Role::Ram).is_none() {
                         return Err(format!(
                             "cycle {} is a `read` that moved no word, so it is a refusal \
@@ -521,7 +552,18 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
                             row.cycle
                         ));
                     }
+                    // A short read is a real answer and stays provable; a
+                    // count above the one word asked for is not, and
+                    // `read_count_gap_range` is what refuses it.
+                    assert!(
+                        written(Role::Rd) <= ecall::READ_WORD_BYTES,
+                        "cycle {}: a `read` answered {} bytes, more than the one word it asked \
+                         for",
+                        row.cycle,
+                        written(Role::Rd)
+                    );
                     read_row = 1;
+                    fd_uncommitted = (b == ecall::FD_HINT) as u32;
                     // The byte count the executor answered with, which is
                     // `a0`'s **write** and not the fd it read. No gate fixes
                     // it: what a `read` delivers and what it reports are fd
@@ -532,6 +574,19 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
                     (written(Role::Rd), 0)
                 }
                 system_code::ECALL if a == ecall::WRITE => {
+                    // Its refusal, the sibling of a `read`'s: the executor
+                    // answers `-EBADF` and appends nothing, and since S25a
+                    // `write_descriptor` refuses the row, where before it
+                    // proved a `write` that had not happened.
+                    if !matches!(b, ecall::FD_PUBLIC_OUTPUT | ecall::FD_STDERR) {
+                        return Err(format!(
+                            "cycle {} is a `write` to fd {b}, which is neither fd {} nor \
+                             fd {}, so it is a refusal, which no family proves",
+                            row.cycle,
+                            ecall::FD_PUBLIC_OUTPUT,
+                            ecall::FD_STDERR
+                        ));
+                    }
                     if row.query(Role::Ram).is_some() {
                         return Err(format!(
                             "cycle {} is a `write` carrying a RAM query, which `ram_mask_rule` \
@@ -539,7 +594,18 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
                             row.cycle
                         ));
                     }
+                    // Unlike a `read`'s, a `write`'s answer is fixed: the
+                    // executor appends every byte or refuses the descriptor,
+                    // and `write_count_is_the_request` holds the row to that.
+                    assert_eq!(
+                        written(Role::Rd),
+                        read(Role::Arg2),
+                        "cycle {}: a `write` answered a count other than the one it was asked \
+                         for",
+                        row.cycle
+                    );
                     write_row = 1;
+                    fd_uncommitted = (b == ecall::FD_STDERR) as u32;
                     // Likewise fd 1's: the count written back, bound by
                     // `io_digest` and by no row.
                     (written(Role::Rd), 0)
@@ -608,6 +674,7 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
         is_ecall.push(ecall_row | requests | read_row | write_row);
         is_read.push(read_row);
         is_write.push(write_row);
+        fd_uncommitted_column.push(fd_uncommitted);
         // The word a `read` delivers, whose 16+16 pair bounds it. A row that
         // makes no RAM query carries 0, which is what the frame's own fill
         // writes into the query's columns and what the pair then holds.
@@ -643,6 +710,10 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
     }
     out.push((IS_READ, u32_column(is_read, h)));
     out.push((IS_WRITE, u32_column(is_write, h)));
+    out.push((
+        constraints::add_sub::FD_UNCOMMITTED,
+        u32_column(fd_uncommitted_column, h),
+    ));
     out.push((RAM_VALUE_HI, u32_column(ram_value_hi, h)));
     out.push((WRAP, u32_column(wrap, h)));
     out.push((RD_HI, u32_column(rd_hi, h)));

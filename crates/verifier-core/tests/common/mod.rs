@@ -155,17 +155,17 @@ pub fn statement() -> PublicInputs {
 }
 
 /// A proof of the `ADD_SUB_LUI_AUIPC` shard with the right digest and the
-/// right widths — 38 witness commitments since S25: the frame's `w + 3 = 11`
-/// and the family's own 27, one delegation-request selector per registered
-/// type among them and S25's `is_read`, `is_write` and `ram_value_hi` — and no
-/// transitions at all.
+/// right widths — 39 witness commitments since S25a: the frame's `w + 3 = 11`
+/// and the family's own 28, one delegation-request selector per registered
+/// type among them, S25's `is_read`, `is_write` and `ram_value_hi`, and S25a's
+/// `fd_uncommitted` — and no transitions at all.
 pub fn shell(vk: &VerifyingKey, public: &PublicInputs) -> ShardProof {
     ShardProof {
         family: ADD,
         shard_index: 0,
         ts_window: TRIVIAL_TS_WINDOW,
         global_digest: global_commit(vk, public).digest,
-        witness_commitments: (400..438).map(blob).collect(),
+        witness_commitments: (400..439).map(blob).collect(),
         outputs: vec![Fr::ZERO; 8],
         gkr: GkrProof { layers: vec![] },
         opening: [3; OPENING_BYTES],

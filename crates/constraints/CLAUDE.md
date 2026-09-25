@@ -199,9 +199,12 @@ pub mod atomics {                                  // docs/spec/memory-ops.md §
 pub mod add_sub {                                  // docs/spec/shard-proof.md §8
     pub const DECODED: [PolyAddress; 6];           // W[11..17]: next_pc rs1 rs2 rd imm mask
     pub const KINDS: [PolyAddress; 6];             // W[17..23]: system addi auipc add sub lui
-    pub const IS_ECALL: PolyAddress;  IS_FENCE;  IS_KECCAK;                    // W[23..26]
-    pub const WRAP: PolyAddress;  RD_HI;  PC_WRAP;  NEXT_PC_HI;                // W[26..30]
-    pub const MULTIPLICITIES: [PolyAddress; 3];    // W[30..33]: timestamp, range16, decoder
+    pub const IS_ECALL: PolyAddress;  IS_FENCE;                                // W[23..25]
+    pub const IS_DELEGATION: [PolyAddress; 3];     // W[25..28]; IS_KECCAK is IS_DELEGATION[0]
+    pub const IS_READ: PolyAddress;  IS_WRITE;                                 // W[28..30]; S25
+    pub const FD_UNCOMMITTED: PolyAddress;  RAM_VALUE_HI;                      // W[30..32]; S25a
+    pub const WRAP: PolyAddress;  RD_HI;  PC_WRAP;  NEXT_PC_HI;                // W[32..36]
+    pub const MULTIPLICITIES: [PolyAddress; 3];    // W[36..39]: timestamp, range16, decoder
     pub const TABLE_WIDTH: usize = 7;              // S[0..7], program::lookup_tuple order
     pub fn artifact(trace_vars: u32) -> CircuitArtifact;
     pub fn channels() -> Vec<lookup::ChannelSpec>;
@@ -368,16 +371,29 @@ pub mod fr_arith {                                // docs/spec/delegation.md §1
   collected once and handed to `frame_with_channels_artifact`. `add_sub` builds one
   inline, `jump_branch_slt` behind the private `family_spec` function its `assemble` seam
   takes; a later family names its own the same way. S15 called the type `Extras`.
-- **`add_sub` is §8 as data**, S15's `frame_with_channels_artifact` over the family's seven
-  frame queries plus 21 witness columns, the 7-column decoded table as `S`, 31 enforcing
-  gates, five lookups and three channels. Its gates are the family's whole semantics:
+- **`add_sub` is §8 as data**, S15's `frame_with_channels_artifact` over the family's **eight**
+  frame queries plus 28 witness columns, the 7-column decoded table as `S`, 76 enforcing
+  gates, 24 lookups and three channels. Its gates are the family's whole semantics:
   one-hot kinds and the packed mask the table's domain; each query's mask the row kind's
   use of it times `m_pc`; each written value the kind's arithmetic with a boolean carry
-  and a 16+16-bit range split; `ecall` only as `exit` (`a7 = 93`), its status `a0`, its
-  `next_pc` `HALT_PC`; every other row's `next_pc` the decoded fall-through, with a
-  boolean `pc_wrap`. A `const` assertion pins `system_code::ECALL == 0`, so a renumbering
-  fails the build, and `artifact` asserts each channel's obligation count — 14, 4, 1 —
-  when it builds the circuit, so a dropped obligation panics at construction.
+  and a 16+16-bit range split; every other row's `next_pc` the decoded fall-through, with a
+  boolean `pc_wrap`. **Its ecall rows are a partition of five kinds** — the exit
+  (`a7 = 93`, status `a0`, `next_pc = HALT_PC`), a request of each of the three registered
+  delegation types, a `read` and a `write` — each a free boolean selector with three gates,
+  and `is_exit` written out as the remainder. **S25a pinned what an I/O row may claim**:
+  `read_descriptor` and `write_descriptor` hold the call's `a0` to its own pair of file
+  descriptors through one shared boolean, `FD_UNCOMMITTED`;
+  `write_count_is_the_request` holds a `write`'s answer to the count `a2` asked for; and the
+  `read_count_gap_range` obligation bounds a `read`'s answer to `[0, READ_WORD_BYTES]`, the
+  one number this family bounds rather than fixes (`docs/spec/ecall-abi.md` §4.1). A set of
+  two descriptors is not an interval, which is why it is a committed boolean and not a range
+  check: `is_read·fd·(fd − 3)` is degree 3 and `validate` refuses it.
+  `const` assertions pin `system_code::ECALL == 0`, every provable ecall number pairwise
+  distinct, and each descriptor pair ordered and distinct, so a renumbering fails the build;
+  `artifact` asserts each channel's obligation count — 16, 7, 1 — when it builds the circuit,
+  so a dropped obligation panics at construction. **The `RANGE16` tree has no pad left**:
+  seven obligations and the table fraction fill its eight leaves exactly, so the next
+  obligation this family takes costs a gate list.
 - **`jump_branch_slt` is `docs/spec/jump-branch-slt.md` as data** (S17): the four-query
   frame plus 37 witness columns, S11's seven-column decoded table and the packed generic
   table as `S`, 42 enforcing gates, 22 lookups and four channels. Its semantics are linear

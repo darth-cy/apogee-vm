@@ -996,9 +996,17 @@ impl<'a> Machine<'a> {
     /// S14's open question 10, and the half its recorded recommendation also
     /// took.
     ///
-    /// So a `write` is unrestricted: any buffer, any alignment, any count, one
-    /// cycle. Only the RAM-window bound survives, because reading outside the
-    /// window is a fatal guest error however the bytes are used.
+    /// So a `write` is unrestricted here: any buffer, any alignment, any count,
+    /// one cycle. Only the RAM-window bound survives, because reading outside
+    /// the window is a fatal guest error however the bytes are used.
+    ///
+    /// **The `-EBADF` below is still Linux's answer and is no longer provable**
+    /// (S25a). This executor is unchanged — a descriptor fd 1 and fd 2 do not
+    /// name returns `-EBADF`, as Linux and `qemu-riscv32` do, so one source
+    /// tree means the same thing under both — but the add/sub circuit now pins
+    /// a `write` row's `a0` to fd 1 or fd 2 and its answer to the count `a2`
+    /// asked for, so `prover::fill::add_sub` refuses such a cycle by name
+    /// (`docs/spec/ecall-abi.md` §4.1).
     fn write_stream(&mut self, pc: u32, fd: u32, buf: u32, count: u32) -> Result<u32, EmuError> {
         if !matches!(fd, ecall::FD_PUBLIC_OUTPUT | ecall::FD_STDERR) {
             return Ok(ecall::EBADF.wrapping_neg());

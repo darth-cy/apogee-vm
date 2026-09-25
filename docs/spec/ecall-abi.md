@@ -147,17 +147,27 @@ Added at S12, where the first zkVM executor pinned what the table above left ope
   rather than dropping bytes silently.
 
   **A refused `read` is not provable.** A descriptor fd 0 and fd 3 do not name
-  answers `-EBADF` and moves no word, and the add/sub family's `ram_mask_rule`
-  demands the RAM query on every `read` row, so no such row satisfies the
-  circuit. `prover::fill::add_sub` refuses the cycle by name rather than proving
-  a shard that cannot verify. The SDK never issues one — `read_fd` takes the
-  descriptor from its caller and the two public entry points pass 0 and 3 — so
-  this is a completeness gap only a hand-written ecall can reach.
-* **`write` is unrestricted, and moves no memory event.** Any buffer, any
-  alignment, any count, one cycle. The RAM query it used to make bound nothing:
+  answers `-EBADF` and moves no word, and three gates each refuse the row:
+  `read_descriptor` holds `a0` to fd 0 or fd 3 (S25a), `ram_mask_rule` demands
+  the RAM query on every `read` row, and `read_count_gap_range` refuses the
+  `-EBADF`. `prover::fill::add_sub` refuses the cycle by name rather than
+  proving a shard that cannot verify. The SDK never issues one — `read_fd` takes
+  the descriptor from its caller and the two public entry points pass 0 and 3 —
+  so this is a completeness gap only a hand-written ecall can reach.
+* **`write` names one of two descriptors and moves no memory event.** Any buffer,
+  any alignment, any count, one cycle; the descriptor is fd 1 or fd 2 and nothing
+  else, which the circuit pins since S25a. The RAM query it used to make bound nothing:
   fd 1 is bound by the guest's own `io_digest` over the bytes it assembled with
   ordinary loads and stores, which the memory argument does bind (section 6 and
   `docs/spec/memory.md` §10). Only the RAM-window bound survives.
+
+  **A refused `write` is not provable either** (S25a). It was until then: a
+  descriptor fd 1 and fd 2 do not name answers `-EBADF`, appends nothing and
+  makes no query, which was an ordinary `write` row and proved as one.
+  `write_descriptor` now holds `a0` to fd 1 or fd 2 and
+  `write_count_is_the_request` holds the count answered to the count asked for,
+  so the row is refused twice over and `prover::fill::add_sub` declines the
+  cycle by name.
 * **A buffer outside the RAM window is a fatal guest error**, exactly as a load or
   store there is: the bytes a call would move must lie in `[RAM_ORIGIN,
   RAM_ORIGIN + RAM_LENGTH)` (section 7). Linux would answer `-EFAULT`; this VM has
@@ -170,6 +180,50 @@ Added at S12, where the first zkVM executor pinned what the table above left ope
 
 How a call's register reads and its buffer traffic appear in the execution trace
 is `docs/spec/execution-trace.md`, not this document.
+
+### 4.1 What the circuit pins about a call, and what it does not
+
+Since S25a the `ADD_SUB_LUI_AUIPC` circuit fixes four of the five numbers an I/O
+ecall row carries. `docs/spec/shard-proof.md` §8.2 is the normative gate list;
+this is what it adds up to, per call, and the one thing left over.
+
+| the row's | a `read` | a `write` |
+| --- | --- | --- |
+| `a7`, the call | pinned to `ecall::READ` (`read_number`) | pinned to `ecall::WRITE` (`write_number`) |
+| `a0` read, the descriptor | pinned to fd 0 or fd 3 (`read_descriptor`) | pinned to fd 1 or fd 2 (`write_descriptor`) |
+| `a1`, the buffer | the RAM query's address (`ram_addr_is_the_buffer`) | not pinned; the bytes enter no leaf |
+| `a2`, the count asked for | pinned to `READ_WORD_BYTES` (`read_count_is_one_word`) | not pinned |
+| `a0` written, the answer | **bounded** to `[0, READ_WORD_BYTES]` (`read_count_gap_range`) | pinned to `a2` (`write_count_is_the_request`) |
+
+**The remaining limitation is a `read`'s exact count.** The circuit bounds it and
+cannot fix it, because a short read is a real answer and how many bytes a stream
+had left is not a fact any row holds: the cursor lives in the executor, and this
+arithmetization has no cross-row state to keep one in. So within `[0, 4]` the
+count is the prover's choice, and a prover may claim a stream ended earlier than
+it did — a `read` answering 0 where 4 bytes were available, and every later
+`read` answering 0 after it.
+
+What that can and cannot do:
+
+* It cannot change the **committed bytes**. fd 0's content is bound by the
+  guest's own `io_digest` over the stream it consumed (section 6), which the
+  verifier recomputes from the statement's own fd 0. A prover that truncates the
+  stream is proving a different, shorter public input, and the verifier compares
+  against the input it was given.
+* It cannot reach the bytes **already delivered**: the word a `read` moves is
+  confined to the buffer by `ram_addr_is_the_buffer`, whatever the count says.
+* It **can** change the guest's control flow. `guest_sdk::read_fd` stops on a
+  short answer and returns what it filled, so a caller sees a truncated input and
+  takes whatever branch that leads to. A guest that must not accept a short read
+  checks the length itself — `revm_block::PublicHeader` is the pattern: fd 0
+  carries the region's length and the guest compares what it decoded against it
+  (`docs/spec/advice.md` §10).
+
+Closing it properly needs a stream cursor the circuit can see — a committed
+column advanced by each `read` row and reconciled against the statement's stream
+length — which is a cross-row binding of the kind only the global memory
+multiset carries today. Not attempted at S25a, and deliberately out of scope
+there.
 
 ## 5. Every other number
 

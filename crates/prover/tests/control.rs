@@ -137,12 +137,13 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
     assert_eq!(&claim[65..72], &setup.vk.setup_commitments[1][..]);
     assert_eq!(&claim[72..], &table[..]);
     let add = reduced(&proofs[1]);
-    // 41 + 33 since S21's eighth frame query (`deleg`), and 42 + 35 since S23
+    // 41 + 33 since S21's eighth frame query (`deleg`), 42 + 35 since S23
     // gave that query the `deleg_space` column and split `is_keccak` into one
-    // selector per registered delegation type, so identity's seven setup
-    // commitments start at 77 rather than 74.
-    assert_eq!(add.len(), 42 + 35 + 7);
-    assert_eq!(&add[77..], &setup.vk.setup_commitments[0][..]);
+    // selector per registered delegation type, and 42 + 39 since S25's
+    // `is_read`, `is_write` and `ram_value_hi` and S25a's `fd_uncommitted`, so
+    // identity's seven setup commitments start at 81 rather than 74.
+    assert_eq!(add.len(), 42 + 39 + 7);
+    assert_eq!(&add[81..], &setup.vk.setup_commitments[0][..]);
 }
 
 /// The generic table's binding from the other side. A key whose table
