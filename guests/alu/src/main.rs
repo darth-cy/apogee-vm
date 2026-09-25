@@ -4,8 +4,10 @@
 //! family's eight, with the operands the stage's acceptance names, checking
 //! every result itself and exiting with the number of checks that passed. It
 //! is the program S18 proves end to end (`docs/spec/shift-bitwise.md`,
-//! `docs/spec/mul-div.md`), and the QEMU differential compares it instruction
-//! by instruction.
+//! `docs/spec/mul-div.md`), and `qemu-riscv32` runs the same binary: the two
+//! executors are held to one exit status, which — every result being checked
+//! here — is the number of checks that passed
+//! (`crates/emulator/tests/qemu_outputs.rs`).
 //!
 //! Everything in its image is an instruction of the four families S18 proves —
 //! add/sub/lui/auipc, jump/branch/slt, shift/bitwise and mul/div — plus the

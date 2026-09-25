@@ -7,18 +7,28 @@ allocator, a panic handler, and the ecall shims. Everything here runs *inside* t
 ```rust
 guest_sdk::entry!(main);                       // gives a function the `main` symbol
 
-pub fn read_input(buf: &mut [u8]) -> usize;    // fd 0, committed
-pub fn commit(bytes: &[u8]);                   // fd 1, committed
+// S-IO's public values and advice: ordinary loads and stores, NO ecall at all.
+pub fn public_input() -> &'static [u8];        // the input window's payload
+pub fn read_input(buf: &mut [u8]) -> usize;    // the same, copied, for a ported program
+pub fn commit(bytes: &[u8]);                   // append to the journal
+pub fn journal() -> &'static [u8];             // the journal so far
+pub fn advice() -> &'static [u8];              // the advice region; nothing binds it
+pub fn exit(code: i32) -> !;                   // publishes nothing
+
+// The fd path: POSIX compatibility, and NOT provable.
+pub fn read_stdin(buf: &mut [u8]) -> usize;    // fd 0
+pub fn write_stdout(bytes: &[u8]);             // fd 1
 pub fn hint(buf: &mut [u8]) -> usize;          // fd 3, prover advice
 pub fn log(bytes: &[u8]);                      // fd 2, verifier-ignored
-pub fn exit(code: i32) -> !;
+
 pub fn poseidon2_permute(state: &mut [u8; 96]) -> bool;   // false on -ENOSYS
 
 // S21, docs/spec/delegation.md §2. The signature is frozen; the path is not.
 pub fn keccak256(input: &[u8]) -> [u8; 32];
 ```
 
-`docs/spec/ecall-abi.md` is the normative document for all of it, and
+`docs/spec/ecall-abi.md` is the normative document for the ecalls and
+**`docs/spec/public-values.md` for the public values and the advice**;
 `docs/guest-program-manual.md` is the walkthrough for someone writing a guest:
 the crate layout, the I/O rules, the build, and exporting the result as a
 `ProgramImage` artifact with `tools/artifact-dump`.
@@ -70,13 +80,50 @@ the crate layout, the I/O rules, the build, and exporting the result as a
   start zeroed.
 - **Guests link with `--no-relax`.** Relaxation rewrites instruction sequences and shifts
   every later address; S11's program identity is a function of those addresses.
-- **`read_input` and `hint` may return short.** They fill the buffer or stop at the end of
-  the stream. A caller that needs an exact length must check the count — silently
-  proceeding on a partly-filled buffer is how a guest ends up proving something about
-  zeroes.
-- **A hint binds nothing.** The prover chooses fd 3's bytes. A guest that lets them change
-  what it writes to fd 1, without checking them against something the public I/O digest
-  does bind, has made its proof meaningless.
+- **The provable surface issues no ecall** (S-IO, `docs/spec/public-values.md` §7).
+  `public_input`, `read_input`, `commit`, `journal` and `advice` are plain volatile loads
+  and stores against the three regions of `constants::guest_memory`: the public input
+  window at `PUBLIC_INPUT_ORIGIN`, the journal at `PUBLIC_OUTPUT_ORIGIN`, the advice at
+  `ADVICE_ORIGIN`. Word 0 of each is the payload's byte length, and **every length this
+  module reads back out of memory is clamped to its region rather than trusted** — the
+  journal's is the guest's own bookkeeping and the advice region's is the prover's, and
+  neither is something the SDK put there. `read_stdin`, `write_stdout`, `hint` and `log`
+  are the fd path; they go through `read` (63) and `write` (64), and **neither of those is
+  a provable ecall**, so a guest that takes that path is one no proof covers. The path
+  exists because a guest built for a POSIX host runs under `qemu-riscv32`, and the executor
+  serves the same bytes on fd 0 that it lays out in the input window, so one source can be
+  compared under both executors.
+- **`exit_with_public_words` is deleted.** S24 used it to leave eight words in `x24..x31`,
+  where the register boundary made them public; that was the stopgap for having no journal,
+  and the journal is what it stood in for. `exit` publishes **nothing**, so a guest that
+  panics has still published what it committed — the journal is memory, and
+  `#[panic_handler]` does not have to know about it.
+- **`commit` exits `EXIT_IO_ERROR` rather than truncate**, because a caller reads `journal`
+  back and must not see one it did not write. The length word is a plain store like the
+  payload, so a partial `commit` is not a thing that can happen; and nothing orders the
+  journal's writes — the proof binds the window's final contents, and the length word is
+  what gives the bytes an order.
+- **`advice()` on a run given no advice is a fatal `OutOfBounds`, not an empty slice.**
+  No advice means no advice **region**: `trace::advice_region_words(&[])` is 0, so the
+  executor makes nothing above `ADVICE_ORIGIN` addressable and a program that uses no
+  advice pays no `ADVICE_WINDOWS` shard. The alternative would charge every program in the
+  repository one whole window at the window height to say that it has none. Asking for what
+  was not handed over costs the prover its trace and nobody else anything
+  (`docs/spec/public-values.md` §6).
+- **Under `qemu-riscv32` none of the three regions is mapped.** A host loader maps only the
+  image's `PT_LOAD` segments and none of them is in the ELF, so a guest using the provable
+  surface is out of the QEMU suites by construction, and a guest that must be in them uses
+  `read_stdin` and `write_stdout` and is not provable. `guests/revm-block` carries both
+  binaries for exactly that reason.
+- **`read_input`, `read_stdin` and `hint` may return short.** They fill the buffer or stop
+  at the end of what there is. A caller that needs an exact length must check the count —
+  silently proceeding on a partly-filled buffer is how a guest ends up proving something
+  about zeroes.
+- **Neither a hint nor advice binds anything.** The prover chooses fd 3's bytes and the
+  advice region's alike. A guest that lets either change what it commits, without checking
+  it against something a proof *does* bind — the public input, or a hash the public input
+  carries — has published a value the prover chose. The obligation is the guest's and the
+  VM cannot discharge it.
 - **The heap never meets the stack.** The allocator refuses a block — `exit(71)`, never a
   null — that would end above `__stack_top - STACK_RESERVE` (`constants::guest_memory`,
   8 MiB) or above the live `sp`, which it reads with one `mv` from inside `alloc`.

@@ -296,8 +296,8 @@ pub fn generate() {
     println!("  keccak-f invocations: {}", frames.len());
 }
 
-/// Build and trace the guest on this witness, hold its fd 1 to native revm's
-/// answer, and return every keccak-f frame its delegation handed over.
+/// Build and trace the guest on this witness, hold its **journal** to native
+/// revm's answer, and return every keccak-f frame its delegation handed over.
 ///
 /// The build is the manual's, with everything that could reach rustc from the
 /// ambient environment cleared, because this is the same command every other
@@ -306,8 +306,12 @@ fn guest_frames(input: &[u8], want_output: &[u8]) -> Vec<Vec<u32>> {
     let elf = build_guest("revm-block");
     let image = loader::load_elf(&elf).expect("the guest loads");
     let (tables, config) = preprocess(&image);
+    // The witness is advice: the provable binary reads it with ordinary loads
+    // from `guest_memory::ADVICE_ORIGIN` (`docs/spec/public-values.md` §6).
     let io = emulator::GuestIo {
-        input: input.to_vec(),
+        stdin: Vec::new(),
+        input: Vec::new(),
+        advice: input.to_vec(),
         hint: Vec::new(),
     };
     let (traces, _log, profile, execution) =
@@ -315,7 +319,7 @@ fn guest_frames(input: &[u8], want_output: &[u8]) -> Vec<Vec<u32>> {
     assert_eq!(execution.exit_code, 0, "the guest exits 0");
     assert_eq!(
         execution.io.output, want_output,
-        "the guest's fd 1 is not what native revm computed from the same witness"
+        "the guest's journal is not what native revm computed from the same witness"
     );
     println!("  guest cycles: {}", profile.total());
     let trace = traces

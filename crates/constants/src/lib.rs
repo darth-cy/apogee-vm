@@ -1072,9 +1072,55 @@ pub mod family {
     /// or inverse a row, invoked by the [`ecall::PRECOMPILE_FR_ARITH`] ecall
     /// (`docs/spec/delegation.md` §13).
     pub const FR_ARITH: u32 = 11;
+    /// The **public input** window (S-IO): the verifier-known input of the
+    /// statement, at [`guest_memory::PUBLIC_INPUT_ORIGIN`]. Claims no pc,
+    /// owns no cycle, and is in **every** `VmConfig` at
+    /// [`PUBLIC_WINDOW_HEIGHT`], proving exactly one shard.
+    ///
+    /// Its init column is what the verifier holds to the statement's `input`;
+    /// its teardown column is free, because a guest may overwrite its own
+    /// input buffer (`docs/spec/public-values.md` §5).
+    pub const PUBLIC_INPUT: u32 = 12;
+    /// The **public output** window — the journal — (S-IO), at
+    /// [`guest_memory::PUBLIC_OUTPUT_ORIGIN`]. In every `VmConfig` at
+    /// [`PUBLIC_WINDOW_HEIGHT`], proving exactly one shard.
+    ///
+    /// Its init leaf is the **literal 0** of [`ZERO_WINDOWS`]' artifact, which
+    /// is what stops a prover supplying the journal at timestamp 0 instead of
+    /// storing it; its teardown column is what the verifier holds to the
+    /// statement's `output` (`docs/spec/public-values.md` §5).
+    pub const PUBLIC_OUTPUT: u32 = 13;
+    /// The **advice** windows (S-IO): prover-supplied initial values for the
+    /// region at [`guest_memory::ADVICE_ORIGIN`], one shard per window, `k`
+    /// of them counted from [`guest_memory::ADVICE_ORIGIN`] upward. In every
+    /// `VmConfig` at the window height, with `k >= 0` shards.
+    ///
+    /// **Nothing binds its init column, by design.** Advice is what the
+    /// prover chose; a guest owes a check of it against something public
+    /// (`docs/spec/public-values.md` §6).
+    pub const ADVICE_WINDOWS: u32 = 14;
 
     /// How many families this table defines.
-    pub const COUNT: u32 = 12;
+    pub const COUNT: u32 = 15;
+
+    /// The pinned height of [`PUBLIC_INPUT`] and [`PUBLIC_OUTPUT`].
+    ///
+    /// **Pinned by arithmetic, not by taste.** A window's first address is
+    /// `4 * height * window`, so the height is what places the windows, and
+    /// only a height dividing [`guest_memory::PUBLIC_INPUT_ORIGIN`] and
+    /// [`guest_memory::PUBLIC_OUTPUT_ORIGIN`] into distinct windows will do.
+    /// `2^8` is the only entry of [`HEIGHT_MENU`] that does. It also caps the
+    /// verifier's work over the public values at two 256-point multilinear
+    /// evaluations, which is what keeps the check cheap inside the recursion
+    /// guest.
+    pub const PUBLIC_WINDOW_HEIGHT: u32 = 1 << 8;
+
+    /// [`PUBLIC_INPUT`]'s window id at [`PUBLIC_WINDOW_HEIGHT`].
+    pub const PUBLIC_INPUT_WINDOW: u32 =
+        crate::guest_memory::PUBLIC_INPUT_ORIGIN / (4 * PUBLIC_WINDOW_HEIGHT);
+    /// [`PUBLIC_OUTPUT`]'s window id at [`PUBLIC_WINDOW_HEIGHT`].
+    pub const PUBLIC_OUTPUT_WINDOW: u32 =
+        crate::guest_memory::PUBLIC_OUTPUT_ORIGIN / (4 * PUBLIC_WINDOW_HEIGHT);
 
     /// Whether a family's rows are **execution cycles**, indexed by
     /// `FamilyId`. Append-only, beside the ids themselves.
@@ -1100,6 +1146,9 @@ pub mod family {
         false, // KECCAK_F
         false, // POSEIDON2
         false, // FR_ARITH
+        false, // PUBLIC_INPUT
+        false, // PUBLIC_OUTPUT
+        false, // ADVICE_WINDOWS
     ];
 
     /// The trace-height menu, ascending. Even powers of two only, so that a
@@ -1141,6 +1190,9 @@ pub mod family {
         1 << 8,  // KECCAK_F
         1 << 8,  // POSEIDON2
         1 << 8,  // FR_ARITH
+        1 << 8,  // PUBLIC_INPUT, and it is the only admissible one
+        1 << 8,  // PUBLIC_OUTPUT, likewise
+        1 << 22, // ADVICE_WINDOWS, at the window height
     ];
 
     /// The default `bytecode_size_words`: `2^20` words, a 4 MiB ceiling on the
@@ -1292,6 +1344,57 @@ pub mod guest_memory {
     /// part of the linker's map — `link.ld` has no symbol for it — but a
     /// number the SDK, its documents and its probe guest must agree on.
     pub const STACK_RESERVE: u32 = 0x0080_0000;
+
+    /// First byte of the **public input** window: the verifier-known input a
+    /// statement is about (`docs/spec/public-values.md` §2).
+    ///
+    /// `[0, RAM_ORIGIN)` is already a hole. `INIT_TEARDOWN` masks RAM window
+    /// 0's rows below `2^14` with `V[ram_live]` and `ZERO_WINDOWS` never
+    /// claims window 0, so no RAM window family initializes an address there
+    /// (`docs/spec/memory.md` §3.3). Two windows of that hole are therefore
+    /// free to claim without moving a single existing row, and the rest of it
+    /// stays a hole: a null dereference is still a read of a tuple nothing
+    /// wrote, and cannot balance.
+    ///
+    /// The address is not a free choice either. A window's first address is
+    /// `4 * height * window`, so at [`family::PUBLIC_WINDOW_HEIGHT`] this is
+    /// exactly window [`family::PUBLIC_INPUT_WINDOW`], and the address-space
+    /// tag stays [`address_space::RAM`]. That is what keeps the three
+    /// memory-op families' address decomposition, their load path and their
+    /// store path untouched: to `mem_word` a public value is an ordinary RAM
+    /// word.
+    pub const PUBLIC_INPUT_ORIGIN: u32 = 0x0000_8000;
+
+    /// First byte of the **public output** window — the journal — the next
+    /// window up from [`PUBLIC_INPUT_ORIGIN`].
+    pub const PUBLIC_OUTPUT_ORIGIN: u32 = 0x0000_8400;
+
+    /// Bytes in each public window: `4 * family::PUBLIC_WINDOW_HEIGHT`.
+    pub const PUBLIC_WINDOW_BYTES: u32 = 4 * crate::family::PUBLIC_WINDOW_HEIGHT;
+
+    /// How many payload bytes a public window carries.
+    ///
+    /// Word 0 of each window is the payload's **byte length**, which is what
+    /// makes a proof bind a byte string rather than merely its zero-padded
+    /// word vector: without it `[1, 2, 3]` and `[1, 2, 3, 0]` fill the same
+    /// window and a prover picks whichever suits it
+    /// (`docs/spec/public-values.md` §3).
+    pub const PUBLIC_PAYLOAD_BYTES: u32 = PUBLIC_WINDOW_BYTES - 4;
+
+    /// First byte of the **advice** region: prover-supplied, uncommitted
+    /// witness data, read with ordinary loads
+    /// (`docs/spec/public-values.md` §6).
+    ///
+    /// It sits above RAM rather than inside it, so it competes with no heap
+    /// and no stack, and `[RAM_ORIGIN, ADVICE_ORIGIN)` keeps exactly the
+    /// meaning it had. The address-space tag is [`address_space::RAM`] here
+    /// too: what makes an advice word advice is that its window family's init
+    /// column is committed and bound to nothing, not a tag a load would have
+    /// to name.
+    pub const ADVICE_ORIGIN: u32 = 0x8000_0000;
+
+    /// Words the advice region spans: `[ADVICE_ORIGIN, 2^32)`, 2 GiB.
+    pub const ADVICE_WORDS: u32 = 1 << 29;
 }
 
 /// The guest ecall ABI: syscall numbers, range boundaries and file
@@ -1308,12 +1411,12 @@ pub mod guest_memory {
 /// non-Linux ranges sit above every Linux number and are disjoint from each
 /// other. `docs/spec/ecall-abi.md` is the normative table.
 pub mod ecall {
-    /// Linux `read`. zkVM meaning is per file descriptor: see [`FD_PUBLIC_INPUT`]
-    /// and [`FD_HINT`].
+    /// Linux `read`. Its meaning is per file descriptor: see [`FD_STDIN`]
+    /// and [`FD_HINT`]. Not a provable ecall (`docs/spec/public-values.md` §1).
     pub const READ: u32 = 63;
 
     /// Linux `write`. zkVM meaning is per file descriptor: see
-    /// [`FD_PUBLIC_OUTPUT`] and [`FD_STDERR`].
+    /// [`FD_STDOUT`] and [`FD_STDERR`]. Not a provable ecall either.
     pub const WRITE: u32 = 64;
 
     /// Linux `exit`. `a0` is the exit status; a nonzero status is a failed
@@ -1372,13 +1475,26 @@ pub mod ecall {
     /// path and the software fallback are the same function by construction.
     pub const PRECOMPILE_FR_ARITH: u32 = 0x0502;
 
-    /// Public input, committed: the fd 0 byte stream the public I/O digest
-    /// binds first.
-    pub const FD_PUBLIC_INPUT: u32 = 0;
+    /// The POSIX standard input stream, **uncommitted**.
+    ///
+    /// The executor serves the statement's public input here as well as in the
+    /// public input window, so a guest built for a POSIX host reads the same
+    /// bytes under `qemu-riscv32`. **A proof binds none of it**: the window is
+    /// what a statement carries and what the verifier checks
+    /// (`docs/spec/public-values.md` §1). `read` is not a provable ecall, so a
+    /// guest that takes this path is not a guest that can be proven.
+    ///
+    /// Named `FD_PUBLIC_INPUT` until S-IO, when the public values stopped being
+    /// a stream. The **number** is frozen at its Linux value, as every number
+    /// in this module is; only the name moved.
+    pub const FD_STDIN: u32 = 0;
 
-    /// Public output / journal, committed: the fd 1 byte stream the public I/O
-    /// digest binds second.
-    pub const FD_PUBLIC_OUTPUT: u32 = 1;
+    /// The POSIX standard output stream, **uncommitted**.
+    ///
+    /// The compatibility path for a guest whose result is compared against
+    /// another executor's; the journal — `guest_sdk::commit` — is what a proof
+    /// binds. Named `FD_PUBLIC_OUTPUT` until S-IO.
+    pub const FD_STDOUT: u32 = 1;
 
     /// Diagnostics. Free-form, uncommitted, and ignored by the verifier.
     pub const FD_STDERR: u32 = 2;
@@ -1391,8 +1507,8 @@ pub mod ecall {
     /// Linux `ENOSYS`. An unimplemented number returns `-ENOSYS` in `a0`.
     pub const ENOSYS: u32 = 38;
 
-    /// Linux `EBADF`. `read` on a descriptor other than [`FD_PUBLIC_INPUT`]
-    /// and [`FD_HINT`], and `write` on one other than [`FD_PUBLIC_OUTPUT`] and
+    /// Linux `EBADF`. `read` on a descriptor other than [`FD_STDIN`]
+    /// and [`FD_HINT`], and `write` on one other than [`FD_STDOUT`] and
     /// [`FD_STDERR`], return `-EBADF` in `a0` — Linux's answer, and so
     /// `qemu-riscv32`'s. Added at S12.
     pub const EBADF: u32 = 9;

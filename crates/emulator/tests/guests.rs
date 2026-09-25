@@ -17,13 +17,133 @@ use field::Fr;
 use loader::Slot;
 use test_support::to_hex;
 
+/// `fib` reads fd 0 and writes fd 1, the compatibility path: a proof binds
+/// neither, and its public values are empty
+/// (`docs/spec/public-values.md` §1).
 #[test]
 fn fib_commits_the_recorded_value() {
     let (input, output) = common::fib_record();
     let execution = run(&image("fib"), &io(&input)).unwrap();
     assert_eq!(execution.exit_code, 0);
-    assert_eq!(execution.io.input, input, "fib consumes its whole input");
-    assert_eq!(to_hex(&execution.io.output), to_hex(&output));
+    assert_eq!(to_hex(&execution.stdout), to_hex(&output));
+    assert!(
+        execution.io.input.is_empty() && execution.io.output.is_empty(),
+        "fd 0 and fd 1 are not the public values"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// S-IO: the public values and the advice region, executed
+// ---------------------------------------------------------------------------
+
+/// The public input `guests/public-io` reads for `advice`: the advice's length
+/// and the checksum it must have (`guests/public-io/src/main.rs`).
+fn public_io_input(advice: &[u8]) -> Vec<u8> {
+    let mut sum = 0u32;
+    for (i, byte) in advice.iter().enumerate() {
+        sum = sum.wrapping_add((*byte as u32).wrapping_mul(i as u32 + 1));
+    }
+    let mut input = (advice.len() as u32).to_le_bytes().to_vec();
+    input.extend_from_slice(&sum.to_le_bytes());
+    input
+}
+
+fn sample_advice() -> Vec<u8> {
+    (0..20u8)
+        .map(|i| i.wrapping_mul(37).wrapping_add(11))
+        .collect()
+}
+
+/// The whole mechanism, executed: the guest reads its public input with
+/// ordinary loads, checks its advice against it, and leaves its result in the
+/// journal — which the executor reads back out of the window at exit
+/// (`docs/spec/public-values.md`).
+#[test]
+fn public_io_reads_its_windows_and_commits_a_journal() {
+    let advice = sample_advice();
+    let guest = common::with_advice(&public_io_input(&advice), &advice);
+    let execution = run(&image("public-io"), &guest).unwrap();
+    assert_eq!(execution.exit_code, 0, "the guest accepted its advice");
+
+    // The journal is the checksum, then the first eight advice bytes; its
+    // byte length is what word 0 of the window carries, so a journal of 12
+    // bytes reads back as 12 bytes and not as three zero-padded words.
+    let mut want = public_io_input(&advice)[4..].to_vec();
+    want.extend_from_slice(&advice[..8]);
+    assert_eq!(to_hex(&execution.io.output), to_hex(&want));
+    assert_eq!(execution.io.output.len(), 12);
+
+    // And it issued no ecall but EXIT, which is what makes it provable: fd 1
+    // and fd 2 are untouched.
+    assert!(execution.stdout.is_empty() && execution.stderr.is_empty());
+
+    // The statement's public input is the window's payload, whether or not the
+    // guest looked — here it did.
+    assert_eq!(execution.io.input, public_io_input(&advice));
+}
+
+/// Advice is unbound, so the guest is what stands in for the binding: a run
+/// whose advice does not check against its public input publishes nothing.
+#[test]
+fn public_io_refuses_advice_its_public_input_does_not_commit_to() {
+    let advice = sample_advice();
+    let input = public_io_input(&advice);
+
+    let mut swapped = advice.clone();
+    swapped[0] ^= 0xFF;
+    let execution = run(&image("public-io"), &common::with_advice(&input, &swapped)).unwrap();
+    assert_eq!(execution.exit_code, 62, "the checksum did not match");
+    assert!(
+        execution.io.output.is_empty(),
+        "a refused run published a journal"
+    );
+
+    // A permutation is refused too: the checksum is position-dependent.
+    let mut rotated = advice.clone();
+    rotated.swap(0, 1);
+    let execution = run(&image("public-io"), &common::with_advice(&input, &rotated)).unwrap();
+    assert_eq!(execution.exit_code, 62);
+
+    // And a different length is refused before the checksum is even taken.
+    let short = &advice[..advice.len() - 1];
+    let execution = run(&image("public-io"), &common::with_advice(&input, short)).unwrap();
+    assert_eq!(execution.exit_code, 61);
+}
+
+/// **No advice means no advice region**, so a guest that asks for advice it
+/// was not given takes the fatal `OutOfBounds` rather than reading zeros
+/// (`docs/spec/public-values.md` §6). A prover that supplies nothing loses its
+/// own trace, which is the right cost.
+#[test]
+fn asking_for_advice_that_was_not_supplied_is_fatal() {
+    let guest = common::with_advice(&public_io_input(&[]), &[]);
+    match run(&image("public-io"), &guest) {
+        Err(EmuError::OutOfBounds { addr, .. }) => assert_eq!(
+            addr,
+            constants::guest_memory::ADVICE_ORIGIN,
+            "the fatal read is the region's length word"
+        ),
+        other => panic!("a run with no advice gave {other:?}"),
+    }
+}
+
+/// A public input longer than the window that would carry it is refused before
+/// the first cycle, by name: no statement could hold it
+/// (`docs/spec/public-values.md` §3).
+#[test]
+fn a_public_input_too_long_for_its_window_is_refused_by_name() {
+    let payload = constants::guest_memory::PUBLIC_PAYLOAD_BYTES as usize;
+    // The ceiling itself runs; one byte more does not.
+    let guest = common::with_advice(&vec![7u8; payload], &[]);
+    assert!(matches!(
+        run(&image("public-io"), &guest),
+        Ok(_) | Err(EmuError::OutOfBounds { .. })
+    ));
+    let guest = common::with_advice(&vec![7u8; payload + 1], &[]);
+    assert_eq!(
+        run(&image("public-io"), &guest),
+        Err(EmuError::PublicInputTooLong { len: payload + 1 })
+    );
 }
 
 /// Must-be-exact 12: one core. The tracing path is the plain path plus a
@@ -59,7 +179,7 @@ fn heap_churns_the_allocator_and_commits_the_host_values() {
 
     let execution = run(&image("heap"), &io(&n.to_le_bytes())).unwrap();
     assert_eq!(execution.exit_code, 0);
-    assert_eq!(to_hex(&execution.io.output), to_hex(&want));
+    assert_eq!(to_hex(&execution.stdout), to_hex(&want));
 }
 
 /// The host recomputation `tests/qemu.rs::atomics_computes_its_cells` makes,
@@ -105,7 +225,7 @@ fn atomics_computes_its_cells() {
 
     let execution = run(&image("atomics"), &io(&n.to_le_bytes())).unwrap();
     assert_eq!(execution.exit_code, 0);
-    assert_eq!(to_hex(&execution.io.output), to_hex(&want));
+    assert_eq!(to_hex(&execution.stdout), to_hex(&want));
 }
 
 #[test]
@@ -113,7 +233,7 @@ fn the_rvc_fixture_runs() {
     let execution = run(&image("rvc-dense"), &io(&7u32.to_le_bytes())).unwrap();
     assert_eq!(execution.exit_code, 0);
     let word =
-        |i: usize| u32::from_le_bytes(execution.io.output[4 * i..4 * i + 4].try_into().unwrap());
+        |i: usize| u32::from_le_bytes(execution.stdout[4 * i..4 * i + 4].try_into().unwrap());
     assert_eq!(word(0), 46, "rvc_exec(7) and norvc_exec(7) agree on 46");
     assert_eq!(word(2), 2 * word(1));
 }
@@ -127,12 +247,14 @@ fn a_precompile_runs_and_its_state_is_the_s02_permutation() {
         .map(|i| i.wrapping_mul(7).wrapping_add(3))
         .collect();
     let guest = GuestIo {
-        input: input.clone(),
+        input: Vec::new(),
+        advice: Vec::new(),
+        stdin: input.clone(),
         hint: b"private-advice".to_vec(),
     };
     let execution = run(&image("echo"), &guest).unwrap();
     assert_eq!(execution.exit_code, 0);
-    assert_eq!(to_hex(&execution.io.output), to_hex(&input));
+    assert_eq!(to_hex(&execution.stdout), to_hex(&input));
     let stderr = String::from_utf8_lossy(&execution.stderr);
     assert!(stderr.contains("hint=private-advice"), "{stderr}");
     // Since S23 the number has a circuit, so this executor answers it: what
@@ -174,13 +296,15 @@ fn orderbook_ignores_advice_it_cannot_verify() {
                 let e = run(
                     &image,
                     &GuestIo {
-                        input: input.clone(),
+                        input: Vec::new(),
+                        advice: Vec::new(),
+                        stdin: input.clone(),
                         hint,
                     },
                 )
                 .unwrap();
                 assert_eq!(e.exit_code, 0);
-                (e.io.output, String::from_utf8_lossy(&e.stderr).into_owned())
+                (e.stdout, String::from_utf8_lossy(&e.stderr).into_owned())
             })
             .collect();
     assert_eq!(outputs[0].0.len(), 28);
@@ -277,7 +401,7 @@ fn opcodes_executes_every_instruction() {
     assert!(missing.is_empty(), "opcodes never executes {missing:?}");
     assert_eq!(executed.len(), 58, "{executed:?}");
 
-    let out = &t.execution.io.output;
+    let out = &t.execution.stdout;
     assert_eq!(
         &out[..6],
         &common::opcodes_input()[4..],
@@ -346,19 +470,35 @@ fn a_misaligned_access_is_a_named_fatal_error_in_both_paths() {
     }
 }
 
-/// The recorded fd 0 stream is the bytes the guest consumed, not what it was
-/// offered: `heap` reads its four-byte `n` and never the four after it, so
-/// those are not part of the public input `io_digest` binds.
+/// **The recorded public input is what the host supplied, not what the guest
+/// read — and fd 0 is a different thing entirely.**
+///
+/// `heap` takes its four-byte `n` off fd 0 and never the four after it. The
+/// statement's public input is the *window's* contents, which this run fills
+/// independently and the guest never looks at: the binding is that the window
+/// held those bytes, not that anybody read them
+/// (`docs/spec/public-values.md` §9).
+///
+/// Until S-IO this recorded the consumed prefix of fd 0, which was the right
+/// answer for a stream and is the wrong one for a window: a cursor is guest
+/// state, and the statement is not.
 #[test]
-fn the_recorded_input_is_what_the_guest_consumed() {
+fn the_recorded_public_input_is_what_the_host_supplied() {
     let mut offered = 40u32.to_le_bytes().to_vec();
     offered.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+    let window = b"bytes the guest never reads".to_vec();
+    let guest = GuestIo {
+        input: window.clone(),
+        advice: Vec::new(),
+        stdin: offered.clone(),
+        hint: Vec::new(),
+    };
     let image = image("heap");
-    let plain = run(&image, &io(&offered)).unwrap();
-    assert_eq!(plain.io.input, &offered[..4]);
+    let plain = run(&image, &guest).unwrap();
+    assert_eq!(plain.io.input, window);
     let (tables, config) = preprocess(&image);
-    let (.., traced) = trace_run(&image, &io(&offered), &tables, &config).unwrap();
-    assert_eq!(traced.io.input, &offered[..4]);
+    let (.., traced) = trace_run(&image, &guest, &tables, &config).unwrap();
+    assert_eq!(traced.io.input, window);
 }
 
 // ---------------------------------------------------------------------------
@@ -458,7 +598,7 @@ fn keccak_test_checks_its_corpus_under_the_delegation_ecall() {
             "{name} exited {}, and 200 + i would name the corpus entry that failed",
             execution.exit_code
         );
-        assert!(execution.io.output.is_empty(), "{name} writes nothing");
+        assert!(execution.stdout.is_empty(), "{name} writes nothing");
     }
 }
 
@@ -528,7 +668,7 @@ fn recursion_ops_checks_itself_under_both_delegation_ecalls() {
             "{name} exited {}, and 200 + i would name the check that failed",
             execution.exit_code
         );
-        assert!(execution.io.output.is_empty(), "{name} writes nothing");
+        assert!(execution.stdout.is_empty(), "{name} writes nothing");
     }
 }
 

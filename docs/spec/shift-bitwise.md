@@ -412,7 +412,11 @@ both a register `rs2` and a nonzero immediate.
 instructions of the four families S18 proves plus the exit ecall, checking every result
 itself and exiting with the number of checks, 96. Every expected value in it was computed
 from an exact RV32IM model rather than by hand, and the emulator, `qemu-riscv32` and the
-guest's own checks are three independent readings of the same twenty instructions.
+guest's own checks are three independent readings of the same twenty instructions — at the
+level the two executors are compared, which since S-IO is the exit status and fd 1 alone
+(`crates/emulator/tests/qemu_outputs.rs`). The guest checks every value itself and exits
+with the count, so one wrong value on either executor is a different exit status, 96 being
+the number that says all of them held.
 
 Its shift/bitwise coverage is the stage's acceptance 2 in full: shamt 0, 1 and 31 for each
 immediate shift; `rs2 = 32` and `rs2 = 33`, which truncate to 0 and 1; `sra` of a negative

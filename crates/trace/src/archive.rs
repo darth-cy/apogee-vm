@@ -32,8 +32,15 @@
 //!               write_value u32)],
 //!   profile:  [(family u32, count u64)],
 //!   input:    [u8],
-//!   output:   [u8] )
+//!   output:   [u8],
+//!   advice:   [u8] )
 //! ```
+//!
+//! `input` and `output` are the execution's **public values** — the public
+//! input window's payload and the journal's — and `advice` is what the prover
+//! supplied at `guest_memory::ADVICE_ORIGIN`, which a resumed prover needs to
+//! rebuild `ADVICE_WINDOWS`' init column (`docs/spec/public-values.md`).
+//! Neither fd 0 nor fd 1 is here: a proof binds neither.
 //!
 //! The four later phases' contents are theirs to define; this stage carries
 //! them as opaque bytes and never interprets them.
@@ -88,9 +95,14 @@ pub struct PhaseTiming {
     pub wall_nanos: u64,
 }
 
-/// The two committed streams: the fd 0 bytes the guest consumed and the fd 1
-/// bytes it wrote. `transcript::io_digest(&input, &output)` is the public I/O
-/// digest.
+/// An execution's **public values**: the public input window's payload and the
+/// journal's (`docs/spec/public-values.md`). `transcript::io_digest(&input,
+/// &output)` is the public I/O digest, and since S-IO the two windows are what
+/// bind it to the execution.
+///
+/// The shape is S12's and the meaning is not: these were the fd 0 bytes the
+/// guest consumed and the fd 1 bytes it wrote, neither of which a proof bound.
+/// fd 1 is `Execution::stdout` now, and a proof binds none of it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IoStreams {
     pub input: Vec<u8>,
@@ -104,6 +116,12 @@ pub struct TraceArchive {
     log: MemoryEventLog,
     profile: CycleProfile,
     io: IoStreams,
+    /// The prover's advice bytes, from `guest_memory::ADVICE_ORIGIN` up: an
+    /// input of the execution, like the public input, and one a resumed
+    /// prover needs to rebuild `ADVICE_WINDOWS`' init column
+    /// (`docs/spec/public-values.md` §6). Nothing binds it; it is here so the
+    /// snapshot is self-contained.
+    advice: Vec<u8>,
     /// Post-commit through final, opaque. Every one is `None` at S12.
     later: [Option<Vec<u8>>; 4],
     timing: [Option<PhaseTiming>; 5],
@@ -122,6 +140,7 @@ impl TraceArchive {
         log: MemoryEventLog,
         profile: CycleProfile,
         io: IoStreams,
+        advice: Vec<u8>,
         timing: PhaseTiming,
     ) -> TraceArchive {
         if let Err(e) = check_parts(&traces, log.events(), &profile) {
@@ -132,6 +151,7 @@ impl TraceArchive {
             log,
             profile,
             io,
+            advice,
             later: [None, None, None, None],
             timing: [Some(timing), None, None, None, None],
         }
@@ -151,6 +171,11 @@ impl TraceArchive {
 
     pub fn io_streams(&self) -> &IoStreams {
         &self.io
+    }
+
+    /// The prover's advice bytes, from `guest_memory::ADVICE_ORIGIN` up.
+    pub fn advice(&self) -> &[u8] {
+        &self.advice
     }
 
     /// Whether `phase` has content.
@@ -283,13 +308,14 @@ impl TraceArchive {
         }
         let [(_, post), (_, a), (_, b), (_, c), (_, d)] = sections;
         let post = post.ok_or("the post-execution phase is empty")?;
-        let (traces, log, profile, io) = decode_post_execution(&post.0)?;
+        let (traces, log, profile, io, advice) = decode_post_execution(&post.0)?;
 
         let archive = TraceArchive {
             traces,
             log,
             profile,
             io,
+            advice,
             later: [
                 a.map(|s| s.0),
                 b.map(|s| s.0),
@@ -312,7 +338,13 @@ impl TraceArchive {
 
     fn post_execution_bytes(&self) -> Vec<u8> {
         let events: Vec<EventWire> = self.log.events().iter().map(event_wire).collect();
-        post_execution_wire(&self.traces, &events, &self.profile.counts, &self.io)
+        post_execution_wire(
+            &self.traces,
+            &events,
+            &self.profile.counts,
+            &self.io,
+            &self.advice,
+        )
     }
 }
 
@@ -346,6 +378,7 @@ type PostExecutionWire = (
     Seq<(u32, u64)>,
     Seq<u8>,
     Seq<u8>,
+    Seq<u8>,
 );
 
 fn event_wire(e: &MemoryEvent) -> EventWire {
@@ -364,6 +397,7 @@ fn post_execution_wire(
     events: &[EventWire],
     counts: &[(u32, u64)],
     io: &IoStreams,
+    advice: &[u8],
 ) -> Vec<u8> {
     let families: Vec<FamilyRef> = traces
         .families
@@ -418,18 +452,29 @@ fn post_execution_wire(
         counts,
         &io.input[..],
         &io.output[..],
+        advice,
     ))
 }
 
+#[allow(clippy::type_complexity)]
 fn decode_post_execution(
     bytes: &[u8],
-) -> Result<(FamilyTraces, MemoryEventLog, CycleProfile, IoStreams), String> {
+) -> Result<
+    (
+        FamilyTraces,
+        MemoryEventLog,
+        CycleProfile,
+        IoStreams,
+        Vec<u8>,
+    ),
+    String,
+> {
     let (wire, rest) = postcard::take_from_bytes::<PostExecutionWire>(bytes)
         .map_err(|e| format!("the post-execution payload does not decode: {e}"))?;
     if !rest.is_empty() {
         return Err("bytes follow the post-execution payload".into());
     }
-    let (families, delegations, events, counts, input, output) = wire;
+    let (families, delegations, events, counts, input, output, advice) = wire;
 
     let traces = FamilyTraces {
         delegations: delegations
@@ -496,6 +541,7 @@ fn decode_post_execution(
             input: input.0,
             output: output.0,
         },
+        advice.0,
     ))
 }
 
@@ -527,7 +573,10 @@ fn check_parts(
         if !program::FAMILIES.contains(&t.family) {
             return Err(format!("family {} is not in constants::family", t.family));
         }
-        if (t.family == family::INIT_TEARDOWN || t.family == family::ZERO_WINDOWS) && n != 0 {
+        // A family whose rows are not cycles owns no buffer rows: the two RAM
+        // window families, the three S-IO ones, and a delegation family, whose
+        // invocations live in a `DelegationTrace` and not here.
+        if !family::CYCLE_OWNING[t.family as usize] && n != 0 {
             return Err(format!(
                 "{} claims no pc, yet its buffer holds {n} rows",
                 program::family_name(t.family)
@@ -834,6 +883,7 @@ mod tests {
                 input: vec![1, 2],
                 output: vec![3],
             },
+            vec![4, 5, 6],
             PhaseTiming { wall_nanos: 7 },
         )
     }
@@ -862,7 +912,7 @@ mod tests {
         let mut a = tiny();
         edit(&mut a);
         let events = events.unwrap_or_else(|| a.log.events().iter().map(event_wire).collect());
-        post_execution_wire(&a.traces, &events, &a.profile.counts, &a.io)
+        post_execution_wire(&a.traces, &events, &a.profile.counts, &a.io, &a.advice)
     }
 
     /// The positive control for the refusals below: a later phase filled in
@@ -1088,6 +1138,7 @@ mod tests {
             MemoryEventLog::new(),
             a.profile,
             a.io,
+            a.advice,
             PhaseTiming { wall_nanos: 1 },
         );
     }

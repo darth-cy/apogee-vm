@@ -41,8 +41,9 @@ fn the_global_transcript_is_the_frozen_order() {
     let mut want = vec![
         absorb(tags::PROTOCOL_SUITE, 1),
         absorb(tags::SRS_DIGEST, 1),
-        absorb(tags::VM_CONFIG, 7),
-        absorb(tags::SHARD_COUNTS, 3),
+        // Six families: add/sub, the two RAM window ones and S-IO's three.
+        absorb(tags::VM_CONFIG, 2 * 6 + 1),
+        absorb(tags::SHARD_COUNTS, 6),
         absorb(tags::MEMORY_WINDOWS, 0),
         absorb(tags::PROGRAM_IDENTITY, 1),
         absorb(tags::PUBLIC_INPUTS, 2),
@@ -51,6 +52,16 @@ fn the_global_transcript_is_the_frozen_order() {
         absorb(tags::MEMORY_GROUP, 2),
         absorb(tags::MEMORY_GROUP, 2),
         absorb(tags::COMMITMENT, 4 * 42),
+        // S-IO's three, in the ascending tail like any other family. The
+        // public input window commits three columns and the journal two, and
+        // `ADVICE_WINDOWS` has no shard here, so it is a header and nothing
+        // else — exactly as `ZERO_WINDOWS` is above
+        // (`docs/spec/public-values.md` §4).
+        absorb(tags::MEMORY_GROUP, 2),
+        absorb(tags::COMMITMENT, 4 * 3),
+        absorb(tags::MEMORY_GROUP, 2),
+        absorb(tags::COMMITMENT, 4 * 2),
+        absorb(tags::MEMORY_GROUP, 2),
         absorb(tags::MEMORY_BOUNDARY, 64),
     ];
     want.extend(
@@ -64,7 +75,7 @@ fn the_global_transcript_is_the_frozen_order() {
     assert_eq!(log, want);
     assert_eq!(
         statement_shards(&key.config, &public.shard_counts),
-        vec![(INIT, 0), (ADD, 0)]
+        vec![(INIT, 0), (ADD, 0), (common::PIN, 0), (common::POUT, 0)]
     );
 
     // Every statement field moves the digest but two: the roots, computed
@@ -125,7 +136,7 @@ fn the_generic_table_is_bound_through_the_srs_digest() {
             },
             Absorb {
                 tag: tags::VM_CONFIG,
-                n_scalars: 9
+                n_scalars: 2 * 7 + 1
             },
         ]
     );
@@ -136,7 +147,13 @@ fn the_generic_table_is_bound_through_the_srs_digest() {
         }));
     assert_eq!(
         statement_shards(&key.config, &public.shard_counts),
-        vec![(INIT, 0), (ADD, 0), (JBS, 0)]
+        vec![
+            (INIT, 0),
+            (ADD, 0),
+            (JBS, 0),
+            (common::PIN, 0),
+            (common::POUT, 0)
+        ]
     );
     let moved = |k: &mut verifier_core::VerifyingKey| {
         assert!(k.check().is_err(), "a moved table without its digest loads");

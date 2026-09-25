@@ -80,9 +80,15 @@ fn int(v: u64) -> Fr {
     Fr::from_u64(v)
 }
 
-/// fib's honest statement: its trace, slots 1–4, its frame plan, its seven
+/// fib's honest statement: its trace, slots 1–4, its frame plan, its nine
 /// shards — one frame per family that ran, then window 0 and the stack window,
-/// in that order — and its finals.
+/// then the two public value windows, in that order — and its finals.
+///
+/// The public windows are here because they are in **every** statement
+/// (`docs/spec/public-values.md` §4). `fib` reads neither, so each window's
+/// init and teardown tuples are equal and cancel, and every tamper below
+/// reconciles or fails exactly as it did before they existed — which is the
+/// point: they cost the memory argument nothing.
 struct Fib {
     t: Traced,
     memory: ExternalChallenges,
@@ -108,6 +114,8 @@ fn fib() -> Fib {
             "frame of mem_subword",
             "window 0",
             "window 8191",
+            "public input window 32",
+            "public output",
         ]
     );
     let families: Vec<u32> = plan.iter().map(|(id, _)| *id).collect();
@@ -326,6 +334,10 @@ fn counts(t: &Traced, init: u32, zero: u32) -> Vec<u32> {
     let count = |(f, n): &(u32, u32)| match *f {
         family::INIT_TEARDOWN => init,
         family::ZERO_WINDOWS => zero,
+        // One shard each, always; `fib` supplies no advice, so no advice
+        // window (`docs/spec/public-values.md` §4).
+        family::PUBLIC_INPUT | family::PUBLIC_OUTPUT => 1,
+        family::ADVICE_WINDOWS => 0,
         _ => *n,
     };
     let plan = plan_shards(&t.profile, &t.config);

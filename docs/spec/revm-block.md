@@ -1,9 +1,17 @@
 # The revm block workload
 
 This page is normative for two wire formats and nothing else: `BlockWitness`, which is
-the revm guest's fd 0, and the **output commitment**, which is its fd 1. S10's
-`io_digest` binds both and this page defines neither of its halves —
-`docs/spec/ecall-abi.md` §6 froze that computation and S24 changed nothing about it.
+the revm guest's **advice**, and the **output commitment**, which is its **journal**.
+S10's `io_digest` binds the second and this page defines neither of its halves —
+`docs/spec/ecall-abi.md` §6 froze that computation and neither S24 nor S-IO changed
+anything about it.
+
+*Amended at S-IO: both were fd streams until then — the witness on fd 0 and the commitment
+on fd 1 — and neither was bound to the execution, which is why S24 had to prove a second
+binary with the witness in its image. The witness is advice now, so one program identity
+serves every block, and the commitment is the journal, so the statement carries its bytes.
+`docs/spec/public-values.md` is that architecture; `guests/revm-block/src/stdio.rs` is the
+fd 0 / fd 1 binary kept for the executors that have neither region.*
 
 **The output commitment (§2) is frozen at S24. `BlockWitness` (§1) is not**, by the
 owner's decision at the close of the stage. `prompts/S24-revm.md` asked for both and the
@@ -187,7 +195,7 @@ there, so the sum is derivable from bytes `io_digest` already binds.
 
 ## 2. The output commitment
 
-fd 1, in full, and always all three sections — there is no optional one:
+the journal, in full, and always all three sections — there is no optional one:
 
 ```
    per-tx records, in execution order, one per transaction:
@@ -201,8 +209,14 @@ fd 1, in full, and always all three sections — there is no optional one:
 
 The **section list** is fixed; a record's `output` is the transaction's own return data
 and is as long as the transaction made it. There is no record count: the count is the
-witness's transaction count, and fd 0 and fd 1 are bound by the same `io_digest`, so a
-reader of the output has the input.
+witness's transaction count, and a reader who has the witness has the count.
+
+**The journal is 1,020 bytes** (`docs/spec/public-values.md` §3), and this commitment
+carries per-transaction fields, so a **real** block's will outgrow it. The synthetic
+block's is 122 bytes and fits; the stage that records a real block either commits a digest
+of this structure instead of the structure, or grows the window. That is a guest-side
+choice, and §9 of the public-values page is why it should be the first one: public values
+are what a verifier reads, and a per-transaction record is not.
 
 ### 2.1 The logs commitment
 

@@ -24,18 +24,18 @@ publish.workspace = true
 name = "revm_block"
 path = "src/lib.rs"
 
-# The normative guest: its witness arrives on fd 0 and its output leaves on
-# fd 1, which is must-be-exact 1.
+# The guest, and the provable one since S-IO: its witness is advice and its
+# output commitment is the journal.
 [[bin]]
 name = "revm-block"
 path = "src/main.rs"
 
-# The same program with its witness in the image, which is what makes it
-# provable today: `read` and `write` are not yet provable ecalls, so this one
-# calls neither. `docs/handoff/S24-revm.md` says why it exists.
+# The same computation over fd 0 and fd 1, for the executors with no advice
+# region -- `qemu-riscv32`, and the native-revm oracle it is compared against.
+# Not provable, and it does not need to be.
 [[bin]]
-name = "revm-block-embedded"
-path = "src/embedded.rs"
+name = "revm-block-stdio"
+path = "src/stdio.rs"
 
 # `revm`'s version is pinned **exactly**, and that is not tidiness. A guest's
 # `ProgramIdentity` is a digest of its compiled image, so a patch bump to any

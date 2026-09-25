@@ -23,10 +23,19 @@ fn block() -> BlockProof {
     init.outputs = vec![Fr::ZERO; 2];
     let mut add = shell(&vk, &public);
     add.ts_window = [4, 400];
+    // S-IO's two public value shards, which every statement has
+    // (`docs/spec/public-values.md` §4). Neither is cycle-owning, so each
+    // carries the trivial window like the init family's.
+    let mut input = shell(&vk, &public);
+    input.family = common::PIN;
+    input.witness_commitments = Vec::new();
+    input.outputs = vec![Fr::ZERO; 2];
+    let mut journal = input.clone();
+    journal.family = common::POUT;
     BlockProof {
         config: vk.config.clone(),
         statement: public,
-        shards: vec![init, add],
+        shards: vec![init, add, input, journal],
     }
 }
 
@@ -36,7 +45,7 @@ fn block() -> BlockProof {
 fn the_reconciliation_is_the_statement_and_the_proofs() {
     let block = block();
     let records = block.reconciliation().records;
-    assert_eq!(records.len(), 2);
+    assert_eq!(records.len(), 4);
     assert_eq!(
         (records[0].family, records[0].shard_index),
         (INIT, 0),
@@ -60,7 +69,7 @@ fn the_public_data_reads_through_the_wire_form() {
     let back = BlockProof::from_bytes(&bytes).expect("a block round-trips");
     assert_eq!(back.to_bytes(), bytes, "byte for byte");
     assert_eq!(back.config(), &vk().config);
-    assert_eq!(back.shard_counts(), &[1, 1, 0]);
+    assert_eq!(back.shard_counts(), &[1, 1, 0, 1, 1, 0]);
     assert_eq!(back.shard_count(ADD), 1);
     assert_eq!(back.shard_count(INIT), 1);
     assert_eq!(
@@ -73,7 +82,7 @@ fn the_public_data_reads_through_the_wire_form() {
         0,
         "a family the config detaches reads 0, not a panic"
     );
-    assert_eq!(back.shard_proofs().len(), 2);
+    assert_eq!(back.shard_proofs().len(), 4);
     assert_eq!(back.statement(), &statement());
     assert_eq!(back.reconciliation(), block().reconciliation());
 }

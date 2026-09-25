@@ -75,9 +75,8 @@ pub fn run(cx: &mut Ctx) {
     // very differently: an element moved through a slice method costs a few
     // hundred cycles, and one sorted or put in a B-tree a few thousand. Most
     // of a section's cost is the number of methods it calls, not the size of
-    // their data, so scale 0 — the instruction-by-instruction QEMU
-    // differential's run — calls every method once on the smallest data each
-    // accepts. From scale 5 on, `n` passes a B-tree leaf's eleven keys, so the
+    // their data, so scale 0 — the QEMU leg's run — calls every method once on
+    // the smallest data each accepts. From scale 5 on, `n` passes a B-tree leaf's eleven keys, so the
     // maps and sets split, merge and rebalance nodes too.
     let n = 2 + 2 * scale;
     let long = 8 + 8 * scale;

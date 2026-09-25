@@ -56,12 +56,12 @@ use field::Fr;
 guest_sdk::entry!(main);
 
 fn main() {
-    // fd 0 to fd 1, byte for byte. `read_input` fills the buffer or stops at
+    // fd 0 to fd 1, byte for byte. `read_stdin` fills the buffer or stops at
     // the end of the stream, so a short read is the end.
     let mut buf: Vec<u8> = vec![0u8; 64];
     loop {
-        let n = guest_sdk::read_input(&mut buf);
-        guest_sdk::commit(&buf[..n]);
+        let n = guest_sdk::read_stdin(&mut buf);
+        guest_sdk::write_stdout(&buf[..n]);
         if n < buf.len() {
             break;
         }

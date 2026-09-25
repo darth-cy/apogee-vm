@@ -1,35 +1,36 @@
 //! S24's acceptance 6, 7 and 8: the revm block proved, verified and tampered.
 //!
 //! `#[ignore]`d and deferred out of CI under master rule 7: the statement is
-//! seven `2^20` execution shards, two `2^20` window shards and one `2^8`
-//! keccak shard, over a `--release` guest this suite builds from source. Run
-//! it with
+//! seven `2^20` execution shards, two `2^20` RAM window shards, one `2^8`
+//! keccak shard and S-IO's three — two `2^8` public value shards and one
+//! `2^20` advice window — over a `--release` guest this suite builds from
+//! source. Run it with
 //!
 //! ```text
 //! cargo test --release -p prover --test revm -- --include-ignored --test-threads=1
 //! ```
 //!
-//! # What is proved, and what is not
+//! # What is proved, and what changed at S-IO
 //!
-//! The binary is `guests/revm-block`'s **embedded-witness** one, and that is
-//! the stage's one deviation from must-be-exact 1. The normative guest reads
-//! its `BlockWitness` on fd 0 and commits its output on fd 1, and **neither
-//! is a provable ecall**: the add/sub family's circuit holds every ecall row
-//! to `a7 = EXIT` or a registered delegation number
-//! (`crates/constraints/src/add_sub.rs`, `ecall_is_exit`), and
-//! `prover::fill::add_sub` refuses a `read` row, a `write` row and their
-//! transfer cycles by name. Binding fd 0 and fd 1 is the deferred I/O-binding
-//! stage's work — `prompts/00-master.md` lists it among the frozen invariants
-//! — and it is not a gate or two: a transfer row that is permitted but not
-//! tied to its ecall's buffer and length can write any value to any RAM word.
-//! `docs/handoff/S24-revm.md` is the full account.
+//! The binary is `guests/revm-block`'s **own** one, and since S-IO that is the
+//! whole program: its `BlockWitness` arrives in the **advice** region and its
+//! output commitment leaves in the **journal**, both ordinary loads and stores
+//! (`docs/spec/public-values.md`). It issues no ecall but `EXIT`.
 //!
-//! So the binary proved here binds the same two streams by the two means the
-//! machine already has, and both are checked below:
+//! S24 could not prove that program. `read` and `write` are not provable
+//! ecalls, so it proved a second binary with the witness baked into `.rodata`
+//! — which identity commits, and which therefore moved the identity with every
+//! block — and published `keccak256` of the commitment in `x24..x31`, where the
+//! register boundary carries it. Both of those stopgaps are gone:
 //!
-//! - the **input** is a `.rodata` constant, which program identity commits;
-//! - the **output** is `keccak256` of the commitment, left in `x24..x31`,
-//!   which the statement's register boundary carries.
+//! - the **witness** is advice, so one identity serves every block;
+//! - the **output** is the journal, so the statement carries the commitment's
+//!   bytes and not a digest of them.
+//!
+//! What binds the witness is no longer identity but the guest: the commitment
+//! names the state roots the block began and ended on, so a witness describing
+//! a different block publishes a different journal rather than the same one
+//! (`docs/spec/public-values.md` §6).
 
 mod common;
 
@@ -43,7 +44,7 @@ use prover::{Program, ProverSetup};
 use trace::plan_shards;
 use trace::TraceArchive;
 use verifier::{verify_block, verify_shard};
-use verifier_core::{statement_shards, BlockProof, PublicInputs, VerifyError};
+use verifier_core::{statement_shards, BlockProof, VerifyError};
 
 const KECCAK: u32 = family::KECCAK_F;
 const INIT: u32 = family::INIT_TEARDOWN;
@@ -53,15 +54,12 @@ const ZERO: u32 = family::ZERO_WINDOWS;
 // The statement
 // ---------------------------------------------------------------------------
 
-/// `guests/revm-block`'s embedded-witness binary, which exits 0 with
-/// `keccak256` of its output commitment in `x24..x31`.
+/// `guests/revm-block` exits 0 with its output commitment in the journal.
 const REVM_RESULT: u32 = 0;
 
-/// The binary S24 proves. The normative guest reads fd 0 and writes fd 1, and
-/// neither is a provable ecall yet; this one runs the same program over the
-/// same committed witness with the witness in its image.
-/// `docs/handoff/S24-revm.md` is the whole argument.
-const REVM_BIN: &str = "revm-block-embedded";
+/// The binary proved here: the guest itself, provable since S-IO.
+/// `src/stdio.rs` is the fd 0 / fd 1 compatibility binary, which is not.
+const REVM_BIN: &str = "revm-block";
 
 /// S24's heights: every family but the delegation one at `2^20`, with
 /// `revm-block`'s own span ceiling.
@@ -100,8 +98,30 @@ fn revm_program() -> Program {
     }
 }
 
+/// One traced run of the guest over the committed witness, which reaches it
+/// as **advice**.
 fn revm_archive(program: &Program) -> TraceArchive {
-    common::trace(program, REVM_RESULT)
+    let io = emulator::GuestIo {
+        stdin: Vec::new(),
+        input: Vec::new(),
+        advice: witness_bytes(),
+        hint: Vec::new(),
+    };
+    let (traces, log, profile, execution) =
+        emulator::trace_run(&program.image, &io, &program.tables, &program.config)
+            .expect("the guest traces");
+    assert_eq!(execution.exit_code, REVM_RESULT as i32);
+    TraceArchive::from_execution(
+        traces,
+        log,
+        profile,
+        trace::IoStreams {
+            input: execution.io.input,
+            output: execution.io.output,
+        },
+        io.advice,
+        trace::PhaseTiming { wall_nanos: 0 },
+    )
 }
 
 fn revm_setup() -> ProverSetup {
@@ -172,18 +192,21 @@ fn witness_bytes() -> Vec<u8> {
     std::fs::read(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
 }
 
-/// `x24..x31` of a statement's boundary, as the guest left them.
-fn public_words(public: &PublicInputs) -> [u32; 8] {
-    core::array::from_fn(|i| public.boundary.reg_values[23 + i])
+/// The output commitment the same library computes on the host, over the same
+/// committed witness: what the journal must hold.
+fn host_output() -> Vec<u8> {
+    let witness = revm_block::BlockWitness::decode(&witness_bytes()).expect("the witness decodes");
+    revm_block::run(&witness).expect("the block executes on the host")
 }
 
 /// Acceptance 1: two clean builds of the guest give one `ProgramIdentity`.
 ///
 /// Identity is what a verifier takes from a channel the prover does not
-/// control, and for the embedded binary it is also what binds the witness —
-/// so a build that is not reproducible is a program nobody can name. Two
-/// builds into two fresh target directories, each preprocessed and committed
-/// on its own, and the two digests compared.
+/// control — so a build that is not reproducible is a program nobody can name.
+/// Since S-IO it binds the program and nothing else: the witness is advice, so
+/// one identity serves every block, which is the whole point of the change.
+/// Two builds into two fresh target directories, each preprocessed and
+/// committed on its own, and the two digests compared.
 ///
 /// Over the **toy SRS**, deliberately. Identity is a digest over commitments
 /// to the program's own columns, and what acceptance 1 asks about is the
@@ -219,7 +242,7 @@ fn a1_two_clean_builds_give_one_identity() {
         "two clean builds of the guest gave different program identities"
     );
     println!(
-        "revm-block-embedded identity over the toy SRS: {}",
+        "revm-block identity over the toy SRS: {}",
         test_support::to_hex(&identities[0].to_bytes())
     );
 }
@@ -243,7 +266,16 @@ fn a6_the_revm_block_proves_and_verifies() {
         .iter()
         .map(|(f, _)| *f)
         .collect();
-    assert_eq!(families.last(), Some(&KECCAK));
+    assert_eq!(
+        &families[families.len() - 4..],
+        &[
+            KECCAK,
+            family::PUBLIC_INPUT,
+            family::PUBLIC_OUTPUT,
+            family::ADVICE_WINDOWS
+        ],
+        "the delegation family sorts after every execution one and before S-IO's three"
+    );
     assert!(!families.contains(&family::POSEIDON2));
     assert!(!families.contains(&family::FR_ARITH));
     assert_eq!(
@@ -284,10 +316,20 @@ fn a6_the_revm_block_proves_and_verifies() {
 
     // The structural counts: one shard per planned shard, in statement order,
     // with the two window families' overriding the plan's zeroes and the
-    // delegation family's last.
+    // delegation shard followed by S-IO's three. This is the one statement in
+    // the repository where `ADVICE_WINDOWS` proves a shard, the witness being
+    // advice, so here it is the last shard of all.
     let expected = statement_shards(&setup.program.config, block.shard_counts());
     assert_eq!(block.shards.len(), expected.len());
-    assert_eq!(expected.last(), Some(&(KECCAK, 0)));
+    assert_eq!(
+        &expected[expected.len() - 4..],
+        &[
+            (KECCAK, 0),
+            (family::PUBLIC_INPUT, 0),
+            (family::PUBLIC_OUTPUT, 0),
+            (family::ADVICE_WINDOWS, 0)
+        ]
+    );
     assert_eq!(
         block.shard_counts()[families.iter().position(|f| *f == INIT).unwrap()],
         1,
@@ -310,25 +352,30 @@ fn a6_the_revm_block_proves_and_verifies() {
         );
     }
 
-    // The public output, and the point of the embedded binary: `x24..x31` of
-    // the statement's boundary are `keccak256` of the output commitment the
-    // same program computes on the host, over the same committed witness.
-    let witness = revm_block::BlockWitness::decode(&witness_bytes()).expect("the witness decodes");
-    let output = revm_block::run(&witness).expect("the block executes on the host");
+    // The public output: the statement's journal is the output commitment the
+    // same program computes on the host, byte for byte — not a digest of it,
+    // which is what S24 had to settle for.
     assert_eq!(
-        public_words(block.statement()),
-        revm_block::output_digest_words(&output),
-        "the proof's register boundary is not the digest of native revm's output"
+        block.statement().output,
+        host_output(),
+        "the statement's journal is not native revm's output commitment"
+    );
+    assert!(
+        block.statement().input.is_empty(),
+        "this guest reads no public input: its whole input is advice"
     );
     assert_eq!(block.statement().exit_status, REVM_RESULT);
+
+    // The advice region is a statement shard like any other, and the witness
+    // it carries is 716 bytes: one window at the window height.
+    assert_eq!(block.shard_count(family::PUBLIC_INPUT), 1);
+    assert_eq!(block.shard_count(family::PUBLIC_OUTPUT), 1);
+    assert_eq!(block.shard_count(family::ADVICE_WINDOWS), 1);
 
     // And it all reads back through the serialized block alone.
     let bytes = block.to_bytes();
     let read = BlockProof::from_bytes(&bytes).expect("the block round-trips");
-    assert_eq!(
-        public_words(read.statement()),
-        public_words(block.statement())
-    );
+    assert_eq!(read.statement().output, block.statement().output);
     assert_eq!(verify_block(&setup.vk, &read, read.statement()), Ok(()));
 }
 
@@ -358,10 +405,11 @@ fn a7_a_changed_statement_is_refused() {
     let honest = block.statement().clone();
     assert_eq!(verify_block(&setup.vk, &block, &honest), Ok(()));
 
-    // The embedded binary reads no fd 0 and writes no fd 1, so its streams are
-    // empty and its public I/O digest is `io_digest(&[], &[])`.
+    // The guest reads no public input, so the statement's input is empty; its
+    // output is the commitment, which is what `io_digest` now binds to the
+    // execution through the journal window (`docs/spec/public-values.md` §5.1).
     assert!(honest.input.is_empty());
-    assert!(honest.output.is_empty());
+    assert_eq!(honest.output, host_output());
 
     // 7(a) A public I/O digest differing in one byte. First the shape a
     // verifier faces — the statement it was given is not the one the block
@@ -405,16 +453,28 @@ fn a7_a_changed_statement_is_refused() {
         ))
     );
 
-    // 7(c) The word the guest published. `x24..x31` are the output commitment's
-    // digest and they are ordinary register finals, absorbed in the
-    // `MEMORY_BOUNDARY` message before the memory challenges are squeezed — so
-    // a changed one is a changed statement, not a changed opinion about one.
+    // 7(c) What the guest published. Since S-IO that is the **journal**, and a
+    // changed journal is a changed statement twice over: `io_digest` absorbs
+    // it at G7 before the memory challenges are squeezed, and step 10c holds
+    // the journal window's committed teardown column to those same bytes
+    // (`docs/spec/public-values.md` §5).
+    let mut edited = honest.clone();
+    edited.output[0] ^= 1;
+    let mut reworded = block.clone();
+    reworded.statement = edited.clone();
+    assert!(
+        verify_block(&setup.vk, &reworded, &edited).is_err(),
+        "a changed journal is refused"
+    );
+
+    // A boundary register final moves it too, for the older reason: the
+    // `MEMORY_BOUNDARY` message is absorbed before the squeeze as well.
     let mut word = honest.clone();
     word.boundary.reg_values[23] ^= 1;
     let mut reworded = block.clone();
     reworded.statement = word.clone();
     assert!(
         verify_block(&setup.vk, &reworded, &word).is_err(),
-        "a changed public word is refused"
+        "a changed boundary value is refused"
     );
 }

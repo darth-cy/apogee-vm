@@ -20,8 +20,8 @@ use common::{
 use constants::challenge_slot::{MEM_ALPHA_VAL, MEM_GAMMA};
 use constants::family;
 use constraints::memory::{
-    family_frame_artifact, frame, frame_queries, image_window_artifact, zero_window_artifact,
-    CYCLE, PC,
+    family_frame_artifact, frame, frame_queries, image_window_artifact, value_window_artifact,
+    zero_window_artifact, CYCLE, PC,
 };
 use constraints::{CircuitArtifact, PolyAddress};
 use field::Fr;
@@ -200,6 +200,7 @@ fn the_memory_artifacts_keep_the_laws_and_the_padding_contract() {
     }
     artifacts.push(("image window".to_string(), image_window_artifact(6)));
     artifacts.push(("zero window".to_string(), zero_window_artifact(6)));
+    artifacts.push(("value window".to_string(), value_window_artifact(6)));
     for (label, a) in &artifacts {
         assert_eq!(check_laws(a), Ok(()), "{label}");
         assert_eq!(check_padding(a), Ok(()), "{label}");
@@ -233,8 +234,8 @@ fn honest_statement(name: &str, input: u32, prove_frames: bool) {
     assert!(plan.len() > 1, "{name}: more than one family ran");
     assert_eq!(
         shards.len(),
-        plan.len() + 1 + init_windows(&t.log, HEIGHT).len(),
-        "{name}: one shard per frame and per window"
+        plan.len() + 3 + init_windows(&t.log, HEIGHT).len(),
+        "{name}: one shard per frame, per RAM window and per public window"
     );
     assert!(
         plan.iter().any(|(_, c)| frame_height(c.len()) > c.len()),
@@ -293,6 +294,8 @@ fn honest_statement(name: &str, input: u32, prove_frames: bool) {
         .map(|(f, n)| match *f {
             family::INIT_TEARDOWN => 1,
             family::ZERO_WINDOWS => windows.len() as u32,
+            family::PUBLIC_INPUT | family::PUBLIC_OUTPUT => 1,
+            family::ADVICE_WINDOWS => trace::advice_window_count(&t.advice, HEIGHT),
             _ => *n,
         })
         .collect();

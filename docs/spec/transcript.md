@@ -273,8 +273,9 @@ empty list. The squeeze that ends the identity sponge is a raw `sample`.
 `docs/spec/memory.md` §6.2 is normative for the recipe.
 
 Tags 20 and 21 are S10's, and they exist as a pair. They are the two domain tags
-of the **public I/O digest**: `transcript::io_digest` absorbs the guest's fd 0
-stream under the first and its fd 1 stream under the second, in a sponge of its
+of the **public I/O digest**: `transcript::io_digest` absorbs the statement's
+public **input** under the first and its public **output** — the journal — under
+the second, in a sponge of its
 own, and squeezes once. Two tags rather than one is exactly what makes swapping
 two unequal streams change the digest. Both frame byte messages, so the byte
 encoding of §10 supplies the packing and the byte length supplies the length,

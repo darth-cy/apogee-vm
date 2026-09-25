@@ -717,6 +717,45 @@ pub fn zero_window_artifact(trace_vars: u32) -> CircuitArtifact {
     )
 }
 
+/// A window whose initial values are **committed**, `docs/spec/public-values.md`
+/// §4: `M[0] teardown_ts`, `M[1] teardown_value`, `M[2] init_value`, `V[row]`;
+/// the teardown tuple on the read side and the init tuple, value `M[2]`, on
+/// the write side; no enforcing gates, no obligations, degree 1 throughout.
+///
+/// [`zero_window_artifact`] with one column added, and that column is what a
+/// prover fills with the words the window starts on. Two families take it, and
+/// they differ only in what the verifier does with the column:
+///
+/// * `PUBLIC_INPUT`, whose init column is held to the statement's `input` at
+///   the shard's own opening point;
+/// * `ADVICE_WINDOWS`, whose init column is held to **nothing** — that is what
+///   makes it advice.
+///
+/// `INIT_TEARDOWN`'s init column is `S[0]` instead, because program identity
+/// binds it. One execution's public values and one execution's advice have no
+/// business in every execution's identity, so theirs is `M`, committed in the
+/// global commit phase before the memory challenges are squeezed.
+///
+/// Validated and held to [`check_memory`]; panics if either refuses it.
+pub fn value_window_artifact(trace_vars: u32) -> CircuitArtifact {
+    let teardown = window_tuple(Some(PolyAddress::Memory(0)), PolyAddress::Memory(1));
+    let init = window_tuple(None, PolyAddress::Memory(2));
+    let mut memory = window_memory();
+    memory.push(String::from("init_value"));
+    assemble(
+        trace_vars,
+        [memory, vec![], vec![]],
+        vec![(VirtualKind::RowIndex, String::from("row"))],
+        [
+            vec![(String::from("teardown"), teardown)],
+            vec![(String::from("init"), init)],
+        ],
+        vec![],
+        vec![],
+        &[],
+    )
+}
+
 /// A whole memory artifact: two product trees, the read side then the write
 /// side, over `leaves`; `enforcing` on gate list 0; row-wise `Product` lists
 /// down to `[read, write]`, then `trace_vars` halving lists, and

@@ -219,35 +219,154 @@ fn write_fd(fd: u32, bytes: &[u8]) {
     }
 }
 
-/// Read public input: the fd 0 stream, which the public I/O digest binds.
+/// Read the POSIX standard input stream, fd 0. **Not provable, and not the
+/// public input.**
 ///
-/// Returns the number of bytes read. A caller that needs exactly `buf.len()`
-/// bytes must check the return value — a short read means the input ended, and
-/// silently proceeding on a partly-filled buffer is how a guest ends up proving
-/// something about zeroes.
-pub fn read_input(buf: &mut [u8]) -> usize {
-    read_fd(ecall::FD_PUBLIC_INPUT, buf)
+/// `read` is not a provable ecall (`docs/spec/public-values.md` §1), so a guest
+/// that takes this path is one no proof covers. It exists because a guest built
+/// for a POSIX host runs under `qemu-riscv32`, and the executor serves the same
+/// bytes here that it lays out in the public input window, so one source can be
+/// compared under both. A guest that wants to be proven calls [`public_input`],
+/// which issues no ecall at all.
+pub fn read_stdin(buf: &mut [u8]) -> usize {
+    read_fd(ecall::FD_STDIN, buf)
 }
 
-/// Commit to public output: append `bytes` to the fd 1 journal, which the
-/// public I/O digest binds.
-pub fn commit(bytes: &[u8]) {
-    write_fd(ecall::FD_PUBLIC_OUTPUT, bytes);
+/// Write the POSIX standard output stream, fd 1. **Not provable, and not the
+/// journal.** [`read_stdin`]'s note applies: this is the compatibility path,
+/// and [`commit`] is what a proof binds.
+pub fn write_stdout(bytes: &[u8]) {
+    write_fd(ecall::FD_STDOUT, bytes);
 }
 
-/// Read private hint bytes from fd 3.
+/// Read private hint bytes from fd 3. **Not provable**, for [`read_stdin`]'s
+/// reason; [`advice`] is the provable spelling of the same idea.
 ///
 /// Returns the number of bytes read. **These bytes are nondeterministic prover
 /// advice.** Nothing binds them: the prover chooses them, and it may choose
 /// them differently on every run. A hint is only ever a shortcut to a value the
-/// guest then *checks* against something the digest does bind.
+/// guest then *checks* against something a proof does bind.
 pub fn hint(buf: &mut [u8]) -> usize {
     read_fd(ecall::FD_HINT, buf)
 }
 
-/// Write diagnostics to fd 2. Free-form, uncommitted, verifier-ignored.
+/// Write diagnostics to fd 2. Free-form, uncommitted, verifier-ignored, and
+/// not provable.
 pub fn log(bytes: &[u8]) {
     write_fd(ecall::FD_STDERR, bytes);
+}
+
+// ---------------------------------------------------------------------------
+// Public values, and advice
+// ---------------------------------------------------------------------------
+
+/// The word at `addr`, read straight out of guest memory.
+///
+/// A plain volatile load: the public windows and the advice region are ordinary
+/// memory to every instruction, which is the whole point of putting them there
+/// (`docs/spec/public-values.md` §2). Volatile because the compiler has no
+/// reason to believe anything ever wrote them.
+fn word_at(addr: u32) -> u32 {
+    // SAFETY: `addr` is 4-aligned and inside a region the executor makes
+    // addressable; every caller here derives it from a window origin.
+    unsafe { core::ptr::read_volatile(addr as *const u32) }
+}
+
+/// A `&'static [u8]` over `len` bytes at `addr`.
+///
+/// # Safety
+/// `addr .. addr + len` must lie inside one addressable region.
+unsafe fn slice_at(addr: u32, len: usize) -> &'static [u8] {
+    core::slice::from_raw_parts(addr as *const u8, len)
+}
+
+/// The **public input**: the verifier-known bytes this execution is about.
+///
+/// No ecall, no stream, no cursor — the bytes are in memory at
+/// `guest_memory::PUBLIC_INPUT_ORIGIN`, and the proof binds them to the
+/// statement through the memory argument (`docs/spec/public-values.md` §5).
+/// Reading it is optional: nothing forces a guest to look.
+pub fn public_input() -> &'static [u8] {
+    let len = word_at(guest_memory::PUBLIC_INPUT_ORIGIN).min(guest_memory::PUBLIC_PAYLOAD_BYTES);
+    // SAFETY: `len` is clamped to the window's payload, so the slice is inside
+    // the window the executor initialized.
+    unsafe { slice_at(guest_memory::PUBLIC_INPUT_ORIGIN + 4, len as usize) }
+}
+
+/// The public input, copied into `buf`; returns how many bytes it copied,
+/// which is `min(buf.len(), public_input().len())`.
+///
+/// For a program ported from a stream API. [`public_input`] copies nothing.
+pub fn read_input(buf: &mut [u8]) -> usize {
+    let input = public_input();
+    let n = buf.len().min(input.len());
+    buf[..n].copy_from_slice(&input[..n]);
+    n
+}
+
+/// Append `bytes` to the **journal**: the public output this execution
+/// publishes.
+///
+/// Ordinary stores into the public output window, and word 0 of that window is
+/// the journal's byte length — which is what makes the proof bind a byte string
+/// rather than a zero-padded word vector (`docs/spec/public-values.md` §3).
+///
+/// Exits [`EXIT_IO_ERROR`] rather than truncating on a journal that would not
+/// fit: a caller reads [`journal`] back, and must not see one it did not write.
+///
+/// **A guest that panics has still published what it committed**, because the
+/// journal is memory and the panic handler does not have to know about it.
+pub fn commit(bytes: &[u8]) {
+    let len = word_at(guest_memory::PUBLIC_OUTPUT_ORIGIN) as usize;
+    if len > guest_memory::PUBLIC_PAYLOAD_BYTES as usize
+        || bytes.len() > guest_memory::PUBLIC_PAYLOAD_BYTES as usize - len
+    {
+        exit(EXIT_IO_ERROR);
+    }
+    let payload = guest_memory::PUBLIC_OUTPUT_ORIGIN + 4;
+    for (i, byte) in bytes.iter().enumerate() {
+        // SAFETY: `len + bytes.len()` is inside the window's payload, checked
+        // just above, so the address is inside the window.
+        unsafe { core::ptr::write_volatile((payload + (len + i) as u32) as *mut u8, *byte) };
+    }
+    // SAFETY: word 0 of the window, which the executor initialized.
+    unsafe {
+        core::ptr::write_volatile(
+            guest_memory::PUBLIC_OUTPUT_ORIGIN as *mut u32,
+            (len + bytes.len()) as u32,
+        )
+    };
+}
+
+/// The journal so far: everything [`commit`] has appended.
+pub fn journal() -> &'static [u8] {
+    let len = word_at(guest_memory::PUBLIC_OUTPUT_ORIGIN).min(guest_memory::PUBLIC_PAYLOAD_BYTES);
+    // SAFETY: `len` is clamped to the window's payload.
+    unsafe { slice_at(guest_memory::PUBLIC_OUTPUT_ORIGIN + 4, len as usize) }
+}
+
+/// The **advice**: prover-supplied bytes at `guest_memory::ADVICE_ORIGIN`.
+///
+/// **Nothing binds these bytes.** The prover chooses them and may choose them
+/// differently on every run, so a guest owes a check of them against something
+/// a proof *does* bind — the public input, or a hash the public input carries.
+/// That is the whole contract (`docs/spec/public-values.md` §6), and it is the
+/// same one [`hint`] carries; advice differs only in being ordinary memory, so
+/// a provable guest can read it.
+///
+/// The length word is the prover's too, so it is clamped to the region rather
+/// than trusted. Reading past what the host supplied is a fatal executor error,
+/// which costs the prover a trace and nobody else anything.
+///
+/// **Calling this on a run given no advice is that fatal error**, not an empty
+/// slice: no advice means no advice region at all, so that a program which uses
+/// none pays no `ADVICE_WINDOWS` shard (`docs/spec/public-values.md` §6).
+pub fn advice() -> &'static [u8] {
+    let len = word_at(guest_memory::ADVICE_ORIGIN);
+    let len = len.min(4 * guest_memory::ADVICE_WORDS - 4);
+    // SAFETY: `len` is clamped to the region, and the executor refuses a read
+    // past the bytes it was given rather than returning something else.
+    unsafe { slice_at(guest_memory::ADVICE_ORIGIN + 4, len as usize) }
 }
 
 /// Exit with `code`. A nonzero status is a failed execution.
@@ -259,47 +378,6 @@ pub fn exit(code: i32) -> ! {
     loop {
         // SAFETY: `EXIT` takes a status in `a0` and does not return.
         unsafe { ecall1(ecall::EXIT, code as u32) };
-    }
-}
-
-/// Exit with `code`, leaving `words` in `x24..x31`.
-///
-/// **This is how a guest publishes a value while `write` is not a provable
-/// ecall.** `prompts/00-master.md`'s frozen invariants describe it: a proof
-/// carries the final value of every register, `PublicInputs` decodes them, and
-/// `x24..x31` are eight of them — so eight words left here are eight words a
-/// verifier reads out of the statement, bound by the same memory argument that
-/// binds everything else the execution did. `docs/spec/memory.md` §4.1 is the
-/// boundary's scalars; S24's `guests/revm-block` is the first caller, leaving
-/// `keccak256` of its output commitment.
-///
-/// One `asm!` block, and it has to be: the eight registers are set and the
-/// `ecall` issued with no instruction in between, because `x28..x31` are
-/// caller-saved temporaries that any code between a write and the exit is free
-/// to clobber. `options(noreturn)` is how a block that does not return says so;
-/// [`exit`] reaches the same `!` with a loop around its `ecall`, because it has
-/// no eight registers to keep intact and a loop is the plainer way to write it.
-///
-/// `code` is the exit status, as [`exit`] takes it. A guest that wants only
-/// the status calls [`exit`].
-pub fn exit_with_public_words(code: i32, words: [u32; 8]) -> ! {
-    // SAFETY: sets eight registers and issues `EXIT`, which does not return
-    // under any executor. It touches no memory and dereferences no pointer.
-    unsafe {
-        core::arch::asm!(
-            "ecall",
-            in("a7") ecall::EXIT,
-            in("a0") code as u32,
-            in("s8") words[0],
-            in("s9") words[1],
-            in("s10") words[2],
-            in("s11") words[3],
-            in("t3") words[4],
-            in("t4") words[5],
-            in("t5") words[6],
-            in("t6") words[7],
-            options(noreturn, nomem, nostack),
-        )
     }
 }
 

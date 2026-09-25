@@ -300,16 +300,26 @@ fn reachability_survives_the_optimiser() {
     }
 }
 
-/// A declared family is in the `VmConfig` **last**, after the two window
-/// families, and carries a table with no columns — it is invoked, never
-/// decoded.
+/// A declared family is in the `VmConfig` **in ascending id order**, after the
+/// RAM window families and before S-IO's three, and carries a table with no
+/// columns — it is invoked, never decoded.
+///
+/// It was last until S-IO; the config is one ascending list and three families
+/// were appended above it (`docs/spec/public-values.md` §4).
 #[test]
 fn a_declared_family_is_last_and_has_no_table() {
     let image = common::guest("keccak-test");
     let (tables, config) = decode_program(&image, &common::fitting(&image)).expect("it decodes");
+    let ids: Vec<u32> = config.families.iter().map(|(f, _)| *f).collect();
+    assert!(ids.contains(&family::KECCAK_F));
+    assert!(
+        ids.windows(2).all(|p| p[0] < p[1]),
+        "the family list is strictly ascending"
+    );
     assert_eq!(
-        config.families.last().map(|(f, _)| *f),
-        Some(family::KECCAK_F)
+        ids.last().copied(),
+        Some(family::ADVICE_WINDOWS),
+        "S-IO's three are the highest ids"
     );
     let table = tables
         .family(family::KECCAK_F)

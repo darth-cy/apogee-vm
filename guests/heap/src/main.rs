@@ -38,7 +38,7 @@ guest_sdk::entry!(main);
 fn main() {
     let mut n = [0u8; 4];
     assert_eq!(
-        guest_sdk::read_input(&mut n),
+        guest_sdk::read_stdin(&mut n),
         4,
         "heap: public input is one u32"
     );
@@ -67,6 +67,6 @@ fn main() {
         .flatten()
         .fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(*b as u32));
     for word in [sum, boxed, lengths, content] {
-        guest_sdk::commit(&word.to_le_bytes());
+        guest_sdk::write_stdout(&word.to_le_bytes());
     }
 }

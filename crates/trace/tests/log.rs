@@ -56,9 +56,9 @@ fn each_space_has_exactly_its_addresses() {
         guest_memory::RAM_ORIGIN + guest_memory::RAM_LENGTH,
     );
     // A delegation anchor's address is a request's frame base pointer, and
-    // `docs/spec/delegation.md` §4 puts the whole frame inside the RAM
-    // window — so `KeccakF` has exactly `Ram`'s addresses. What says a tuple
-    // is a delegation's is the tag, never the address.
+    // `docs/spec/delegation.md` §4 puts the whole frame inside ordinary RAM,
+    // so a delegation space has exactly that. What says a tuple is a
+    // delegation's is the tag, never the address.
     for space in [AddressSpace::Ram, AddressSpace::KeccakF] {
         assert!(space.holds(origin) && space.holds(top - 4), "{space:?}");
         for addr in [origin + 1, origin + 2, origin + 3, top - 1] {
@@ -67,12 +67,36 @@ fn each_space_has_exactly_its_addresses() {
                 "{space:?}: {addr:#x} is not a word address"
             );
         }
-        for addr in [0, origin - 4, top, 0xffff_fffc] {
+        for addr in [0, origin - 4] {
             assert!(
                 !space.holds(addr),
-                "{space:?}: {addr:#x} is outside the RAM window"
+                "{space:?}: {addr:#x} is below RAM and in no public window"
             );
         }
+    }
+
+    // **`Ram` is wider than ordinary RAM since S-IO** and a delegation space is
+    // not: the two public windows sit below `RAM_ORIGIN` and the advice region
+    // above RAM, and all three are `address_space::RAM` tuples
+    // (`docs/spec/public-values.md` §2). A delegation frame may be in none of
+    // them.
+    for addr in [
+        guest_memory::PUBLIC_INPUT_ORIGIN,
+        guest_memory::PUBLIC_OUTPUT_ORIGIN,
+        guest_memory::ADVICE_ORIGIN,
+        0xffff_fffc,
+    ] {
+        assert!(AddressSpace::Ram.holds(addr), "Ram: {addr:#x}");
+        assert!(!AddressSpace::KeccakF.holds(addr), "KeccakF: {addr:#x}");
+    }
+    // And the hole stays a hole, at both ends of it.
+    for addr in [
+        0,
+        guest_memory::PUBLIC_INPUT_ORIGIN - 4,
+        guest_memory::PUBLIC_OUTPUT_ORIGIN + guest_memory::PUBLIC_WINDOW_BYTES,
+        origin - 4,
+    ] {
+        assert!(!AddressSpace::Ram.holds(addr), "Ram: {addr:#x} is the hole");
     }
 }
 

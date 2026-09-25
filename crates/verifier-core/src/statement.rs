@@ -12,7 +12,7 @@
 use alloc::vec::Vec;
 
 use constants::memory::TS_BITS;
-use constants::{challenge_slot, family, transcript_tags as tags, PROTOCOL_VERSION};
+use constants::{challenge_slot, family, guest_memory, transcript_tags as tags, PROTOCOL_VERSION};
 use field::Fr;
 use gkr_verify::{window_challenges, BoundaryFinals, ExternalChallenges};
 use transcript::{append_g1_points, io_digest, Transcript};
@@ -98,19 +98,87 @@ impl VmConfig {
     }
 }
 
-/// The one height of the two init families, or the rule a config breaks:
-/// `INIT_TEARDOWN` and `ZERO_WINDOWS` both present, at one height.
-/// `docs/spec/memory.md` §3.2: a `ZERO_WINDOWS` height below
-/// `INIT_TEARDOWN`'s would give image words a second init row.
+/// The one height of the three window families, or the rule a config breaks.
+///
+/// `INIT_TEARDOWN`, `ZERO_WINDOWS` and `ADVICE_WINDOWS` are all present, at
+/// one height `h`. `docs/spec/memory.md` §3.2: a `ZERO_WINDOWS` height below
+/// `INIT_TEARDOWN`'s would give image words a second init row, and an
+/// `ADVICE_WINDOWS` height of its own would put the advice region's windows on
+/// a different grid from the one [`advice_first_window`] computes.
+///
+/// It also checks the two **public value** families, because their height is
+/// what places their windows and every other rule about them reads it
+/// (`docs/spec/public-values.md` §2): both present, both at exactly
+/// `family::PUBLIC_WINDOW_HEIGHT`, and `h` large enough that both public
+/// windows lie inside RAM window 0 — whose rows below `RAM_ORIGIN` are masked
+/// by `V[ram_live]` at every height — so that no `ZERO_WINDOWS` id can claim
+/// one and give a public word a second init row.
 pub fn window_height(config: &VmConfig) -> Result<u32, &'static str> {
-    match (
+    let height = match (
         config.height(family::INIT_TEARDOWN),
         config.height(family::ZERO_WINDOWS),
+        config.height(family::ADVICE_WINDOWS),
     ) {
-        (Some(init), Some(zero)) if init == zero => Ok(init),
-        (Some(_), Some(_)) => Err("INIT_TEARDOWN and ZERO_WINDOWS have one height"),
-        _ => Err("INIT_TEARDOWN and ZERO_WINDOWS are in every VmConfig"),
+        (Some(init), Some(zero), Some(advice)) if init == zero && init == advice => init,
+        (Some(_), Some(_), Some(_)) => {
+            return Err("INIT_TEARDOWN, ZERO_WINDOWS and ADVICE_WINDOWS have one height")
+        }
+        _ => return Err("INIT_TEARDOWN, ZERO_WINDOWS and ADVICE_WINDOWS are in every VmConfig"),
+    };
+    match (
+        config.height(family::PUBLIC_INPUT),
+        config.height(family::PUBLIC_OUTPUT),
+    ) {
+        (Some(a), Some(b))
+            if a == family::PUBLIC_WINDOW_HEIGHT && b == family::PUBLIC_WINDOW_HEIGHT => {}
+        (Some(_), Some(_)) => {
+            return Err("the public value families are at family::PUBLIC_WINDOW_HEIGHT")
+        }
+        _ => return Err("PUBLIC_INPUT and PUBLIC_OUTPUT are in every VmConfig"),
     }
+    let public_end =
+        guest_memory::PUBLIC_OUTPUT_ORIGIN as u64 + guest_memory::PUBLIC_WINDOW_BYTES as u64;
+    if 4 * (height as u64) < public_end {
+        return Err("the window height puts a public window outside RAM window 0");
+    }
+    Ok(height)
+}
+
+/// The first advice window id at window height `h`: the window holding
+/// `guest_memory::ADVICE_ORIGIN`.
+///
+/// The advice region is the `k` **consecutive** windows from here up, `k` being
+/// `ADVICE_WINDOWS`' shard count, so a statement needs no advice window list —
+/// the count is already in `shard_counts` (`docs/spec/public-values.md` §6).
+pub fn advice_first_window(height: u32) -> u32 {
+    (guest_memory::ADVICE_ORIGIN as u64 / (4 * height as u64)) as u32
+}
+
+/// The `family::PUBLIC_WINDOW_HEIGHT` words a public window holds for `bytes`:
+/// word 0 the payload's **byte length**, then the payload little-endian,
+/// zero-padded to the end of the window.
+///
+/// The one spelling of the conversion; the executor seeding the input window,
+/// `trace`'s column builder and the verifier checking what it was handed all
+/// call it, so there is one layout and not three. `bytes` longer than
+/// `guest_memory::PUBLIC_PAYLOAD_BYTES` is a caller error and panics — a
+/// statement carrying one is refused as `Statement` before anything is built
+/// from it.
+pub fn public_io_words(bytes: &[u8]) -> Vec<u32> {
+    assert!(
+        bytes.len() <= guest_memory::PUBLIC_PAYLOAD_BYTES as usize,
+        "a public window carries at most {} payload bytes, not {}",
+        guest_memory::PUBLIC_PAYLOAD_BYTES,
+        bytes.len()
+    );
+    let mut words = alloc::vec![0u32; family::PUBLIC_WINDOW_HEIGHT as usize];
+    words[0] = bytes.len() as u32;
+    for (i, chunk) in bytes.chunks(4).enumerate() {
+        let mut word = [0u8; 4];
+        word[..chunk.len()].copy_from_slice(chunk);
+        words[1 + i] = u32::from_le_bytes(word);
+    }
+    words
 }
 
 /// The static `VmConfig` as one typed message: the family ids ascending, then
@@ -200,6 +268,23 @@ pub fn check_memory_windows(
     let n = (1u64 << 29) / height as u64;
     if windows.iter().any(|w| *w == 0 || *w as u64 >= n) {
         return Err("every window id is in [1, 2^29 / h - 1]");
+    }
+    // The two public windows are one shard each, always: a count a prover
+    // could drop is a way to publish nothing while having published something
+    // (`docs/spec/public-values.md` §4).
+    if count(family::PUBLIC_INPUT) != 1 {
+        return Err("PUBLIC_INPUT proves exactly one shard");
+    }
+    if count(family::PUBLIC_OUTPUT) != 1 {
+        return Err("PUBLIC_OUTPUT proves exactly one shard");
+    }
+    // The advice windows are the `k` consecutive windows from ADVICE_ORIGIN
+    // up, which must stay below the top of the address space. They need no
+    // list and no disjointness rule: they start where the `ZERO_WINDOWS` ids
+    // stop, `2^29 / h` being both bounds.
+    let advice = count(family::ADVICE_WINDOWS) as u64;
+    if advice_first_window(height) as u64 + advice > (1u64 << 30) / height as u64 {
+        return Err("the advice windows do not fit below the top of the address space");
     }
     Ok(())
 }
@@ -467,6 +552,17 @@ pub fn shard_challenges(
     let mut out = match circuit.family {
         family::INIT_TEARDOWN => window_challenges(&drawn, 0, trace_vars),
         family::ZERO_WINDOWS => window_challenges(&drawn, windows[index as usize], trace_vars),
+        // The public windows' ids are constants, because their height is.
+        family::PUBLIC_INPUT => window_challenges(&drawn, family::PUBLIC_INPUT_WINDOW, trace_vars),
+        family::PUBLIC_OUTPUT => {
+            window_challenges(&drawn, family::PUBLIC_OUTPUT_WINDOW, trace_vars)
+        }
+        // Shard `i` is the `i`-th window from the advice origin up.
+        family::ADVICE_WINDOWS => window_challenges(
+            &drawn,
+            advice_first_window(1 << trace_vars) + index,
+            trace_vars,
+        ),
         _ => drawn,
     };
     gkr_verify::insert_lookup_challenges(&mut out, g, beta, &circuit.artifact);
@@ -495,6 +591,9 @@ mod tests {
                 (family::MEM_WORD, 1 << 20),
                 (family::INIT_TEARDOWN, 1 << 16),
                 (family::ZERO_WINDOWS, 1 << 16),
+                (family::PUBLIC_INPUT, family::PUBLIC_WINDOW_HEIGHT),
+                (family::PUBLIC_OUTPUT, family::PUBLIC_WINDOW_HEIGHT),
+                (family::ADVICE_WINDOWS, 1 << 16),
             ],
             bytecode_size_words: 1 << 20,
         }
@@ -505,32 +604,60 @@ mod tests {
     #[test]
     fn the_statement_order_puts_the_init_families_first() {
         assert_eq!(
-            statement_shards(&config(), &[2, 0, 1, 2]),
+            statement_shards(&config(), &[2, 0, 1, 2, 1, 1, 0]),
             vec![
                 (family::INIT_TEARDOWN, 0),
                 (family::ZERO_WINDOWS, 0),
                 (family::ZERO_WINDOWS, 1),
                 (family::ADD_SUB_LUI_AUIPC, 0),
                 (family::ADD_SUB_LUI_AUIPC, 1),
+                // S-IO's three, in the same ascending tail as any other family.
+                (family::PUBLIC_INPUT, 0),
+                (family::PUBLIC_OUTPUT, 0),
             ]
         );
     }
 
-    /// The window height is `INIT_TEARDOWN`'s, and the two init families must
-    /// agree on it.
+    /// The window height is the three window families' one height, and the two
+    /// public value families are at their pinned one
+    /// (`docs/spec/public-values.md` §2).
     #[test]
-    fn the_window_height_is_the_init_families_one_height() {
+    fn the_window_height_is_the_window_families_one_height() {
         assert_eq!(window_height(&config()), Ok(1 << 16));
+
         let mut bad = config();
         bad.families[3].1 = 1 << 18;
         assert_eq!(
             window_height(&bad),
-            Err("INIT_TEARDOWN and ZERO_WINDOWS have one height")
+            Err("INIT_TEARDOWN, ZERO_WINDOWS and ADVICE_WINDOWS have one height")
         );
-        bad.families.pop();
+
+        let mut bad = config();
+        bad.families[6].1 = 1 << 18;
         assert_eq!(
             window_height(&bad),
-            Err("INIT_TEARDOWN and ZERO_WINDOWS are in every VmConfig")
+            Err("INIT_TEARDOWN, ZERO_WINDOWS and ADVICE_WINDOWS have one height")
+        );
+
+        let mut bad = config();
+        bad.families[4].1 = 1 << 16;
+        assert_eq!(
+            window_height(&bad),
+            Err("the public value families are at family::PUBLIC_WINDOW_HEIGHT")
+        );
+
+        let mut bad = config();
+        bad.families.remove(6);
+        assert_eq!(
+            window_height(&bad),
+            Err("INIT_TEARDOWN, ZERO_WINDOWS and ADVICE_WINDOWS are in every VmConfig")
+        );
+
+        let mut bad = config();
+        bad.families.remove(4);
+        assert_eq!(
+            window_height(&bad),
+            Err("PUBLIC_INPUT and PUBLIC_OUTPUT are in every VmConfig")
         );
     }
 

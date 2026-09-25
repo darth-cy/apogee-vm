@@ -79,7 +79,8 @@ pub mod memory {                                   // docs/spec/memory.md §2, �
     pub fn frame_with_channels_artifact(queries: &[usize], trace_vars: u32, family_spec: FamilySpec)
         -> CircuitArtifact;      // S16's shape; panics on an empty family_spec.channels
     pub fn image_window_artifact(trace_vars: u32) -> CircuitArtifact;  // INIT_TEARDOWN
-    pub fn zero_window_artifact(trace_vars: u32) -> CircuitArtifact;   // ZERO_WINDOWS
+    pub fn zero_window_artifact(trace_vars: u32) -> CircuitArtifact;   // ZERO_WINDOWS, and PUBLIC_OUTPUT
+    pub fn value_window_artifact(trace_vars: u32) -> CircuitArtifact;  // PUBLIC_INPUT, ADVICE_WINDOWS; S-IO
     pub fn check_memory(a: &CircuitArtifact) -> Result<(), String>;
 }
 
@@ -313,10 +314,21 @@ pub mod fr_arith {                                // docs/spec/delegation.md §1
   guest links `gkr-verify`. CI builds it for `riscv32imac-unknown-none-elf`.
 - **`memory` holds the memory argument's circuits as data, and `docs/spec/memory.md` is
   normative for it.** The frame layout, the AS and Δ tables, the tuple, leaf and gadget
-  gates, the names and the three artifact constructors are there and nowhere else: `trace`
+  gates, the names and the four artifact constructors are there and nowhere else: `trace`
   fills the columns, `gkr-verify`'s boundary evaluates `read_tuple` through the kernel, and
   `kat-gen` writes the constructors' bytes. One exception since S17: the x0 rule's first
   two gates come from `gadgets::is_zero`, with their bytes unchanged.
+- **`value_window_artifact` is S-IO's one new constructor, and two families share it**
+  (`docs/spec/public-values.md` §4). It is `zero_window_artifact` with one committed column
+  added: `M[0] teardown_ts`, `M[1] teardown_value`, `M[2] init_value`, `V[row]`; the
+  teardown tuple on the read side and the init tuple, value `M[2]`, on the write side; then
+  `trace_vars` halving lists to the two roots. **No enforcing gate, no lookup, no channel,
+  no setup column, degree 1 throughout** — two leaves and a product tree. `PUBLIC_INPUT` and
+  `ADVICE_WINDOWS` take it and differ only in what the verifier does with `M[2]`: holds it to
+  the statement's `input` at the shard's own opening point, or to nothing at all, which is
+  what makes advice advice. `INIT_TEARDOWN`'s init column is `S[0]` instead because program
+  identity binds it, and one execution's public values have no business in every execution's
+  identity.
 - **One tuple gate for circuits and boundary.** `read_tuple(q)` and the private write tuple
   are the *unmasked* tuple, a `Linear` whose `AS` and `Δ` terms sit on the mask column; with
   mask 1 each is exactly `T`. One private constructor writes both, each part's terms in slot
@@ -342,10 +354,18 @@ pub mod fr_arith {                                // docs/spec/delegation.md §1
   heights, so a circuit is a protocol constant given a family and a height; a later family
   is one arm here and one fill in `crates/prover`. It returns `None` above
   `MAX_TRACE_VARS` and for **any of the seven execution families below 19 variables**, the
-  timestamp channel's bound. The two window families have no channels and take any height.
+  timestamp channel's bound. The window families have no channels and take any height.
   Since S19 it holds every family the master prompt names, and since S21 the first that it
   does not: `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MUL_DIV`, `MEM_WORD`,
-  `MEM_SUBWORD`, `ATOMICS`, the two windows and `KECCAK_F`. **The minimum-height guard must
+  `MEM_SUBWORD`, `ATOMICS`, the two RAM windows, `KECCAK_F` and S23's `POSEIDON2` and
+  `FR_ARITH`. **S-IO added three arms and exactly one constructor.** `PUBLIC_OUTPUT` takes
+  `memory::zero_window_artifact` — the *same* function `ZERO_WINDOWS` takes, so the journal's
+  circuit is `ZERO_WINDOWS`' **byte for byte**, and that is the point: its init leaf is the
+  literal 0, so there is no init column for a prover to pre-load the journal into at
+  timestamp 0 and then never store a word. Nothing checks that, because there is nothing to
+  check; it is structural where a verifier-side check could be forgotten
+  (`docs/spec/public-values.md` §5). `PUBLIC_INPUT` and `ADVICE_WINDOWS` share
+  `memory::value_window_artifact`. **The minimum-height guard must
   name every execution family**: `HEIGHT_MENU` legally holds `2^16` and `2^18`,
   `VerifyingKey::check` builds a circuit from a key's own `VmConfig`, and a family missing
   from the guard would reach `lookup::channel_trees`' `BITS <= trace_vars` assertion — a

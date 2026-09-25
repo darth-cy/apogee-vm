@@ -616,7 +616,7 @@ fn settle(pool: Pool, fee_bps: u32, op: &Op) -> Option<Effect> {
 fn main() {
     let mut header = [0u8; HEADER_LEN];
     assert_eq!(
-        guest_sdk::read_input(&mut header),
+        guest_sdk::read_stdin(&mut header),
         HEADER_LEN,
         "amm: fd 0 ended inside the header"
     );
@@ -646,7 +646,7 @@ fn main() {
     for _ in 0..n_ops {
         let mut record = [0u8; RECORD_LEN];
         assert_eq!(
-            guest_sdk::read_input(&mut record),
+            guest_sdk::read_stdin(&mut record),
             RECORD_LEN,
             "amm: fd 0 ended inside an op record"
         );
@@ -690,7 +690,7 @@ fn main() {
         at, OUTPUT_LEN,
         "amm: the journal is not the declared length"
     );
-    guest_sdk::commit(&out);
+    guest_sdk::write_stdout(&out);
 }
 
 // ---------------------------------------------------------------------------

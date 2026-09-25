@@ -29,16 +29,16 @@ fn main() {
     match input.first() {
         Some(&MODE_HEAP_CEILING) => heap_ceiling(),
         Some(&MODE_HEAP_UNDER_DEEP_STACK) => descend(DEPTH),
-        _ => consistency::run(&input, &mut |section| guest_sdk::commit(section)),
+        _ => consistency::run(&input, &mut |section| guest_sdk::write_stdout(section)),
     }
 }
 
-/// All of fd 0. `read_input` stops short only at the end of the stream.
+/// All of fd 0. `read_stdin` stops short only at the end of the stream.
 fn read_all() -> Vec<u8> {
     let mut input = Vec::new();
     let mut buf = [0u8; 256];
     loop {
-        let n = guest_sdk::read_input(&mut buf);
+        let n = guest_sdk::read_stdin(&mut buf);
         input.extend_from_slice(&buf[..n]);
         if n < buf.len() {
             return input;
@@ -89,9 +89,9 @@ fn take_up_to(next: usize, end: usize) {
 fn heap_ceiling() {
     let ceiling = (RAM_ORIGIN + RAM_LENGTH - STACK_RESERVE) as usize;
     take_up_to(walk_to(ceiling), ceiling);
-    guest_sdk::commit(b"reached the ceiling\n");
+    guest_sdk::write_stdout(b"reached the ceiling\n");
     forget(black_box(Vec::<u8>::with_capacity(1)));
-    guest_sdk::commit(b"allocated past the ceiling\n");
+    guest_sdk::write_stdout(b"allocated past the ceiling\n");
 }
 
 /// Frames the deep probe recurses through.
@@ -125,8 +125,8 @@ fn under_deep_stack() {
     let local = Cell::new(0u8);
     let here = local.as_ptr() as usize;
     take_up_to(walk_to(here - CLEARANCE), here - CLEARANCE);
-    guest_sdk::commit(b"granted a block below the live stack\n");
+    guest_sdk::write_stdout(b"granted a block below the live stack\n");
     forget(black_box(Vec::<u8>::with_capacity(CLEARANCE + 1)));
     local.set(black_box(1));
-    guest_sdk::commit(b"allocated over the live stack\n");
+    guest_sdk::write_stdout(b"allocated over the live stack\n");
 }

@@ -4,8 +4,8 @@
 # `cargo run -p kat-gen -- tape`; see tools/kat-gen/src/tape.rs.
 absorb PROTOCOL_SUITE 1
 absorb SRS_DIGEST 1
-absorb VM_CONFIG 9
-absorb SHARD_COUNTS 4
+absorb VM_CONFIG 15
+absorb SHARD_COUNTS 7
 absorb MEMORY_WINDOWS 0
 absorb PROGRAM_IDENTITY 1
 absorb PUBLIC_INPUTS 2
@@ -17,6 +17,11 @@ absorb COMMITMENT 168
 absorb COMMITMENT 168
 absorb MEMORY_GROUP 2
 absorb COMMITMENT 84
+absorb MEMORY_GROUP 2
+absorb COMMITMENT 12
+absorb MEMORY_GROUP 2
+absorb COMMITMENT 8
+absorb MEMORY_GROUP 2
 absorb MEMORY_BOUNDARY 64
 squeeze MEMORY_CHALLENGE
 squeeze MEMORY_CHALLENGE

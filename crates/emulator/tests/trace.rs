@@ -31,7 +31,7 @@ fn the_memory_argument_balances() {
     for name in TRACED {
         let t = traced(name);
         t.log
-            .self_check(&t.image)
+            .self_check(&t.initial())
             .unwrap_or_else(|e| panic!("{name}: {e}"));
     }
 }
@@ -64,7 +64,7 @@ fn the_heap_traffic_is_in_the_balanced_log() {
         "heap changed only {} heap words",
         heap_words.len()
     );
-    t.log.self_check(&t.image).unwrap();
+    t.log.self_check(&t.initial()).unwrap();
 }
 
 /// Acceptance 4: one corrupted event fails the self-check, naming the
@@ -75,7 +75,8 @@ fn the_heap_traffic_is_in_the_balanced_log() {
 fn a_corrupted_event_is_named() {
     let t = traced("fib");
     let events = t.log.events();
-    let check = |events: Vec<MemoryEvent>| MemoryEventLog::from_events(events).self_check(&t.image);
+    let check =
+        |events: Vec<MemoryEvent>| MemoryEventLog::from_events(events).self_check(&t.initial());
     assert_eq!(
         check(events.to_vec()),
         Ok(()),
@@ -557,7 +558,10 @@ fn an_ecall_s_transfers_precede_it_one_word_each() {
         let t = traced(name);
         let rows = rows_by_cycle(&t);
         let io = &t.execution.io;
-        let streams: [&[u8]; 4] = [&io.input, &io.output, &t.execution.stderr, &[]];
+        // fd 1 is `stdout` since S-IO, `io.output` being the journal, which no
+        // transfer cycle ever touches: the journal is written by ordinary
+        // stores (`docs/spec/public-values.md` §1).
+        let streams: [&[u8]; 4] = [&t.stdin, &t.execution.stdout, &t.execution.stderr, &[]];
         let mut moved_so_far = [0usize; 4];
         let mut claimed = 0;
         for (i, (_, row)) in rows.iter().enumerate() {
@@ -605,10 +609,22 @@ fn an_ecall_s_transfers_precede_it_one_word_each() {
             claimed += words;
             calls += 1;
         }
+        // fd 0 is a *cursor* over the public input the host supplied, and a
+        // guest need not read all of it, so what the transfers moved is a
+        // prefix — the byte-wise check above is what holds it to one. fd 1 and
+        // fd 2 are accumulated by the transfers themselves and are exact.
+        assert!(
+            moved_so_far[0] <= t.stdin.len(),
+            "{name}: fd 0 moved more bytes than the host supplied"
+        );
         assert_eq!(
-            moved_so_far,
-            [io.input.len(), io.output.len(), t.execution.stderr.len(), 0],
+            moved_so_far[1..],
+            [t.execution.stdout.len(), t.execution.stderr.len(), 0],
             "{name}: the recorded streams are the bytes the transfers moved"
+        );
+        assert!(
+            io.output.is_empty(),
+            "{name}: no transfer cycle writes the journal"
         );
         let transfers = rows
             .iter()
@@ -747,6 +763,13 @@ fn fib_touches_only_the_image_window_and_the_stack_window() {
 /// Every RAM word every traced guest touches lies in window 0 or in a listed
 /// window, and every listed window holds one, at every menu height — and the
 /// list passes the verifier's window rules.
+///
+/// Every *admissible* window height, that is. `2^8` is on the menu for the
+/// delegation families and for the two public value ones, and it is not a
+/// window height: `4h` would be 1 KiB, so RAM window 0 would not contain the
+/// two public windows and a `ZERO_WINDOWS` id could claim one
+/// (`docs/spec/public-values.md` §2). The rule refuses it by name, which is
+/// asserted here rather than skipped.
 #[test]
 fn the_window_list_is_exactly_the_touched_windows_above_zero() {
     for name in TRACED {
@@ -757,7 +780,7 @@ fn the_window_list_is_exactly_the_touched_windows_above_zero() {
                 .log
                 .events()
                 .iter()
-                .filter(|e| e.space == AddressSpace::Ram)
+                .filter(|e| e.space == AddressSpace::Ram && trace::in_ram(e.addr))
                 .map(|e| e.addr / (4 * height))
                 .collect();
             for w in &touched {
@@ -773,9 +796,15 @@ fn the_window_list_is_exactly_the_touched_windows_above_zero() {
                 );
             }
 
+            // The three window families share one height; the two public
+            // value families keep their pinned one, which is not a choice
+            // (`docs/spec/public-values.md` §2).
             let mut config = t.config.clone();
             for (f, h) in config.families.iter_mut() {
-                if *f == family::INIT_TEARDOWN || *f == family::ZERO_WINDOWS {
+                if matches!(
+                    *f,
+                    family::INIT_TEARDOWN | family::ZERO_WINDOWS | family::ADVICE_WINDOWS
+                ) {
                     *h = height;
                 }
             }
@@ -785,11 +814,25 @@ fn the_window_list_is_exactly_the_touched_windows_above_zero() {
                 .map(|(f, _)| match *f {
                     family::INIT_TEARDOWN => 1,
                     family::ZERO_WINDOWS => windows.len() as u32,
+                    family::PUBLIC_INPUT | family::PUBLIC_OUTPUT => 1,
                     _ => 0,
                 })
                 .collect();
-            program::check_memory_windows(&config, &counts, &windows)
-                .unwrap_or_else(|e| panic!("{name} at {height}: {e}"));
+            let checked = program::check_memory_windows(&config, &counts, &windows);
+            if 4 * height as u64
+                >= constants::guest_memory::PUBLIC_OUTPUT_ORIGIN as u64
+                    + constants::guest_memory::PUBLIC_WINDOW_BYTES as u64
+            {
+                checked.unwrap_or_else(|e| panic!("{name} at {height}: {e}"));
+            } else {
+                assert_eq!(
+                    checked,
+                    Err(program::ProgramError::WindowRule {
+                        rule: "the window height puts a public window outside RAM window 0"
+                    }),
+                    "{name} at {height}: a window height too small was admitted"
+                );
+            }
         }
     }
 }

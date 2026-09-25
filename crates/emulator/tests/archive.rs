@@ -16,6 +16,7 @@ fn archive_of(t: &Traced, wall_nanos: u64) -> TraceArchive {
         t.log.clone(),
         t.profile.clone(),
         t.execution.io.clone(),
+        t.advice.clone(),
         PhaseTiming { wall_nanos },
     )
 }
@@ -80,9 +81,14 @@ fn an_imported_archive_answers_without_reexecution() {
         assert_eq!((trace.family, trace.len() as u64), (*family, *count));
     }
 
+    // The archive carries the **public values**, which since S-IO are the two
+    // windows and not the fd streams: `fib` reads fd 0 and writes fd 1, so
+    // both of its public values are empty and its bytes are in `stdout`
+    // (`docs/spec/public-values.md` §1).
     let io = archive.io_streams();
     assert_eq!(io, &t.execution.io);
-    assert_eq!((io.input.clone(), io.output.clone()), common::fib_record());
+    assert!(io.input.is_empty() && io.output.is_empty());
+    assert_eq!(t.execution.stdout, common::fib_record().1);
     assert_eq!(
         io_digest(&io.input, &io.output),
         io_digest(&t.execution.io.input, &t.execution.io.output)
@@ -104,7 +110,7 @@ fn an_imported_archive_answers_without_reexecution() {
     }
     assert_eq!(archive.memory_log(), &t.log);
     assert_eq!(archive.memory_log().final_state(), t.log.final_state());
-    archive.memory_log().self_check(&t.image).unwrap();
+    archive.memory_log().self_check(&t.initial()).unwrap();
 }
 
 /// Acceptance 8: the section table lists all five phases; post-execution is

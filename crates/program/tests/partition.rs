@@ -150,6 +150,11 @@ fn each_program_derives_only_the_families_it_uses() {
             family::MEM_SUBWORD,
             family::INIT_TEARDOWN,
             family::ZERO_WINDOWS,
+            // S-IO's three are in every config, derived or not
+            // (`docs/spec/public-values.md` §4).
+            family::PUBLIC_INPUT,
+            family::PUBLIC_OUTPUT,
+            family::ADVICE_WINDOWS,
         ],
         "a mul-free program derives no mul/div family"
     );

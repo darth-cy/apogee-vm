@@ -58,8 +58,9 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
 /// guest's 16 passed checks; and every proof has its circuit's shape. What the
 /// trace holds — the twelve instructions and the acceptance matrix — is
 /// `crates/checker/tests/jump_branch_slt.rs`' `the_guest_runs_the_acceptance_matrix`,
-/// over the same fixture, and its QEMU differential is
-/// `crates/emulator/tests/differential.rs`'.
+/// over the same fixture, and QEMU's reading of it is
+/// `crates/emulator/tests/qemu_outputs.rs`', which compares the exit status and
+/// fd 1 and nothing below that.
 ///
 /// The generic table, which this family is the first to read, is bound: the key
 /// carries the packed table's commitments — the ones
@@ -78,7 +79,10 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
             (ADD, 1 << 20),
             (JBS, 1 << 20),
             (INIT, 1 << 16),
-            (ZERO, 1 << 16)
+            (ZERO, 1 << 16),
+            (family::PUBLIC_INPUT, family::PUBLIC_WINDOW_HEIGHT),
+            (family::PUBLIC_OUTPUT, family::PUBLIC_WINDOW_HEIGHT),
+            (family::ADVICE_WINDOWS, 1 << 16)
         ]
     );
     let live = |f: u32| {
@@ -89,15 +93,28 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
     };
     assert_eq!((live(ADD), live(JBS)), (57, 90));
     assert_eq!(
-        archive.memory_log().self_check(&setup.program.image),
+        archive.memory_log().self_check(&trace::InitialMemory {
+            image: &setup.program.image,
+            public_input: &archive.io_streams().input,
+            advice: archive.advice(),
+        }),
         Ok(())
     );
-    assert_eq!(public.shard_counts, vec![1, 1, 1, 0]);
+    assert_eq!(public.shard_counts, vec![1, 1, 1, 0, 1, 1, 0]);
     assert!(public.windows.is_empty(), "control touches no RAM");
     assert_eq!(public.exit_status, common::CONTROL_RESULT);
     assert!(public.input.is_empty() && public.output.is_empty());
     let shards: Vec<(u32, u32)> = proofs.iter().map(|p| (p.family, p.shard_index)).collect();
-    assert_eq!(shards, vec![(INIT, 0), (ADD, 0), (JBS, 0)]);
+    assert_eq!(
+        shards,
+        vec![
+            (INIT, 0),
+            (ADD, 0),
+            (JBS, 0),
+            (family::PUBLIC_INPUT, 0),
+            (family::PUBLIC_OUTPUT, 0)
+        ]
+    );
 
     for proof in &proofs {
         assert_eq!(verify_shard(&setup.vk, proof, &public), Ok(()));

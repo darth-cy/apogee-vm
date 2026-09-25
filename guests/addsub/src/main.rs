@@ -26,8 +26,8 @@
 //! The exit status, `a0`, which is 42: `(t0 + t1) − t1 − t0` wraps twice back
 //! to 0, and the compressed rows add 4 and the last `addi` 38. It is below
 //! 256 on purpose — Linux, and so `qemu-riscv32`, reports eight bits of an exit
-//! status — and the QEMU differential still compares every register of every
-//! instruction in full.
+//! status, and that status is what the two executors are held to
+//! (`crates/emulator/tests/qemu_outputs.rs`).
 
 use core::arch::global_asm;
 

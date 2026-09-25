@@ -262,6 +262,7 @@ fn code_above_a_shorter_familys_table_is_padding_there() {
     let mut params = ProgramParams::defaults();
     params.heights[family::INIT_TEARDOWN as usize] = 1 << 20;
     params.heights[family::ZERO_WINDOWS as usize] = 1 << 20;
+    params.heights[family::ADVICE_WINDOWS as usize] = 1 << 20;
     let high = common::image_of(0x20_0000, &[addi]);
     let (tables, _) = decode_program(&high, &params).unwrap();
     for init in [family::INIT_TEARDOWN, family::ZERO_WINDOWS] {
@@ -367,6 +368,7 @@ fn file_bytes_past_the_image_window_are_refused() {
     let mut taller = params;
     taller.heights[family::INIT_TEARDOWN as usize] = 1 << 18;
     taller.heights[family::ZERO_WINDOWS as usize] = 1 << 18;
+    taller.heights[family::ADVICE_WINDOWS as usize] = 1 << 18;
     assert!(decode_program(&with_data_ending_at(0x4_0000), &taller).is_ok());
 }
 
@@ -409,8 +411,14 @@ fn the_image_column_is_window_zero_word_by_word() {
 fn parameters_off_the_menu_and_unknown_versions_are_refused() {
     let image = common::guest("fib");
     // Every family's height is checked, including the ones fib does not use
-    // and the two init families, which claim nothing.
+    // and the window families, which claim nothing. The two public value
+    // families are the exception: derivation writes their height rather than
+    // reading it, so there is nothing for a caller to get wrong
+    // (`docs/spec/public-values.md` §2).
     for family in FAMILIES {
+        if matches!(family, family::PUBLIC_INPUT | family::PUBLIC_OUTPUT) {
+            continue;
+        }
         for height in [0, 1, 1 << 17, 1 << 24, u32::MAX] {
             let mut params = ProgramParams::defaults();
             params.heights[family as usize] = height;
@@ -440,7 +448,7 @@ fn parameters_off_the_menu_and_unknown_versions_are_refused() {
 /// silently.
 #[test]
 fn the_field_masks_are_frozen() {
-    let want: [(FamilyId, u8); 12] = [
+    let want: [(FamilyId, u8); 15] = [
         (family::ADD_SUB_LUI_AUIPC, 0b1011_1111),
         (family::JUMP_BRANCH_SLT, 0b1011_1111),
         (family::SHIFT_BITWISE, 0b1011_1111),
@@ -453,6 +461,9 @@ fn the_field_masks_are_frozen() {
         (family::KECCAK_F, 0),
         (family::POSEIDON2, 0),
         (family::FR_ARITH, 0),
+        (family::PUBLIC_INPUT, 0),
+        (family::PUBLIC_OUTPUT, 0),
+        (family::ADVICE_WINDOWS, 0),
     ];
     assert_eq!(want.map(|(f, _)| f), FAMILIES, "every family, in order");
     for (family, mask) in want {

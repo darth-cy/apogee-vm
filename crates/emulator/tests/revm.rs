@@ -42,11 +42,13 @@ use program::{decode_program, DecodedTables, ProgramParams, VmConfig};
 use revm_block::{AccountWitness, BlockWitness, TxWitness};
 use trace::plan_shards;
 
-/// The normative guest: its witness arrives on fd 0.
+/// The guest, and since S-IO the **provable** one: its witness arrives in the
+/// advice region and its output commitment leaves in the journal.
 const GUEST: &str = "revm-block";
 
-/// The provable guest: the same program with its witness in the image.
-const EMBEDDED: &str = "revm-block-embedded";
+/// The compatibility binary: the same computation over fd 0 and fd 1, for the
+/// executors with no advice region. Not provable, and it does not need to be.
+const STDIO_BIN: &str = "revm-block-stdio";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -158,8 +160,8 @@ fn preprocess(image: &ProgramImage) -> (DecodedTables, VmConfig) {
 /// that needs one is `#[ignore]`d, and the ones CI asks for share the build.
 fn guest(bin: &str) -> &'static ProgramImage {
     static NORMATIVE: OnceLock<ProgramImage> = OnceLock::new();
-    static EMBED: OnceLock<ProgramImage> = OnceLock::new();
-    let cell = if bin == GUEST { &NORMATIVE } else { &EMBED };
+    static STDIO: OnceLock<ProgramImage> = OnceLock::new();
+    let cell = if bin == GUEST { &NORMATIVE } else { &STDIO };
     cell.get_or_init(|| load_elf(&guest_elf(bin)).unwrap_or_else(|e| panic!("{bin} loads: {e:?}")))
 }
 
@@ -171,9 +173,22 @@ fn guest_elf(bin: &str) -> Vec<u8> {
 fn traced(bin: &str, input: &[u8]) -> Traced {
     let image = guest(bin);
     let (tables, config) = preprocess(image);
-    let io = GuestIo {
-        input: input.to_vec(),
-        hint: Vec::new(),
+    // The provable binary reads its witness out of the advice region; the
+    // compatibility binary reads the same bytes off fd 0
+    // (`docs/spec/public-values.md` §6).
+    let io = match bin {
+        STDIO_BIN => GuestIo {
+            input: Vec::new(),
+            advice: Vec::new(),
+            stdin: input.to_vec(),
+            hint: Vec::new(),
+        },
+        _ => GuestIo {
+            input: Vec::new(),
+            advice: input.to_vec(),
+            stdin: Vec::new(),
+            hint: Vec::new(),
+        },
     };
     let (traces, log, profile, execution) =
         trace_run(image, &io, &tables, &config).unwrap_or_else(|e| panic!("{bin}: {e}"));
@@ -184,7 +199,12 @@ fn traced(bin: &str, input: &[u8]) -> Traced {
         execution.exit_code,
         String::from_utf8_lossy(&execution.stderr)
     );
-    log.self_check(image).expect("the memory log balances");
+    log.self_check(&trace::InitialMemory {
+        image,
+        public_input: &io.input,
+        advice: &io.advice,
+    })
+    .expect("the memory log balances");
     Traced {
         config,
         traces,
@@ -666,23 +686,22 @@ fn a4_the_guest_agrees_with_native_revm() {
         "the guest and native revm disagree on the same witness"
     );
     assert_eq!(run.execution.io.output, output_bytes());
-    assert_eq!(
-        run.execution.io.input, input,
-        "the guest consumed the whole witness"
+    assert!(
+        run.execution.stdout.is_empty(),
+        "the provable binary writes no fd 1: its output is the journal"
     );
 
-    // The embedded-witness binary is the same program over the same witness,
-    // so it computes the same commitment -- it publishes the digest of it
-    // rather than the bytes. `crates/prover/tests/revm.rs` proves that one.
-    let embedded = traced(EMBEDDED, &[]);
+    // The compatibility binary is the same program over the same witness, so
+    // it computes the same commitment -- onto fd 1, where an executor with no
+    // advice region and no public windows can read it.
+    let stdio = traced(STDIO_BIN, &input);
     assert!(
-        embedded.execution.io.output.is_empty(),
-        "the embedded binary writes no fd 1"
+        stdio.execution.io.output.is_empty(),
+        "the compatibility binary commits no journal"
     );
     assert_eq!(
-        embedded.execution.regs[24..32],
-        revm_block::output_digest_words(&run.execution.io.output),
-        "the embedded binary leaves keccak256 of the same commitment in x24..x31"
+        stdio.execution.stdout, run.execution.io.output,
+        "the two binaries disagree on the commitment"
     );
 }
 
@@ -724,20 +743,25 @@ fn a5_the_harvested_frames_are_the_committed_ones() {
 /// `-ENOSYS` and the SDK's software fallback runs. Neither the witness nor the
 /// commitment changes, which is the whole claim.
 ///
-/// The comparison is at the level of fd 1 and the exit status, not
-/// instruction by instruction: `crates/emulator/tests/differential.rs` logs a
-/// register file per instruction, and this workload runs two hundred thousand
-/// of them (`docs/handoff/S20-orchestration.md` kept `guests/shards` out of
-/// that suite for the same reason).
+/// The comparison is at the level of fd 1 and the exit status, which is the
+/// only level there is: QEMU is an oracle for what a guest computes and never
+/// for how this emulator computes it (`crates/emulator/tests/qemu_outputs.rs`).
+/// This guest is the case that makes the point — its delegation ecalls run
+/// natively here and take the `-ENOSYS` software fallback there, so the two
+/// instruction streams differ *by design* and agree on the answer.
 #[test]
 #[ignore = "needs qemu-riscv32, and builds the revm guest from source"]
 fn a3_the_two_executors_commit_the_same_bytes() {
     let input = witness_bytes();
-    let ours = traced(GUEST, &input);
-    let (code, theirs) = under_qemu(&guest_elf(GUEST), &input);
+    // The provable binary's witness is advice and its output is the journal,
+    // and `qemu-riscv32` maps neither -- a host loader maps only the image's
+    // `PT_LOAD` segments. The compatibility binary is the same computation
+    // over fd 0 and fd 1, which is what both executors can carry.
+    let ours = traced(STDIO_BIN, &input);
+    let (code, theirs) = under_qemu(&guest_elf(STDIO_BIN), &input);
     assert_eq!(code, 0, "qemu ran the guest to a clean exit");
     assert_eq!(
-        theirs, ours.execution.io.output,
+        theirs, ours.execution.stdout,
         "the delegated and the software keccak give different commitments"
     );
     assert_eq!(theirs, output_bytes());
@@ -785,14 +809,16 @@ fn a9_the_cycle_and_occupancy_report() {
     let plan = plan_shards(&run.profile, &run.config);
     println!("revm-block at {}", common::guest_profile());
     println!("  cycles: {}", run.profile.total());
-    // The provable binary's, beside it: the same program, its witness in the
-    // image instead of on fd 0 and its output digest in `x24..x31` instead of
-    // on fd 1, which is what `crates/prover/tests/revm.rs` proves.
-    let embedded = traced(EMBEDDED, &[]);
+    // The compatibility binary's, beside it: the same computation over the same
+    // witness, read off fd 0 and written to fd 1 instead of loaded out of
+    // advice and stored into the journal. The gap between the two counts is
+    // what the fd path costs, and it is the only thing this line reports --
+    // `crates/prover/tests/revm.rs` proves the binary above, not this one.
+    let stdio = traced(STDIO_BIN, &witness_bytes());
     println!(
-        "  {EMBEDDED} cycles: {} ({} keccak invocations against {})",
-        embedded.profile.total(),
-        embedded
+        "  {STDIO_BIN} cycles: {} ({} keccak invocations against {})",
+        stdio.profile.total(),
+        stdio
             .traces
             .delegation(family::KECCAK_F)
             .expect("the keccak family")
@@ -852,10 +878,11 @@ fn a9_the_cycle_and_occupancy_report() {
 #[test]
 #[ignore = "builds the revm guest from source"]
 fn a10_the_image_fits_its_declared_ceiling() {
-    // Both binaries: the normative one is what the stage reports, and the
-    // embedded one is what is *proved*, so it is the one whose image has to fit
-    // window 0 and whose last instruction has to fit a `2^20` table.
-    for bin in [GUEST, EMBEDDED] {
+    // Both binaries. `GUEST` is the one that is *proved*, so it is the one
+    // whose image has to fit window 0 and whose last instruction has to fit a
+    // `2^20` table; the compatibility binary is measured beside it because it
+    // is the same program and a divergence there would be a build problem.
+    for bin in [GUEST, STDIO_BIN] {
         measure(bin);
     }
 }

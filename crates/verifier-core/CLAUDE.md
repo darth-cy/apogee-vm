@@ -15,7 +15,7 @@ Everything a shard's verification does except its one Mercury opening, `#![no_st
   since S20 in three public parts, split by what each reads — `derive_global_phase`
   (steps 1–3 and the global transcript) and `verify_global_memory` (step 10b, the
   boundary and the cross-shard root product) read the statement and run **once** for
-  it; `verify_shard_local` (steps 4–10a and 11) is the only one that reads a
+  it; `verify_shard_local` (steps 4–10a, S-IO's 10c, and 11) is the only one that reads a
   `ShardProof`, and is the only one a block runs per shard.
 - **The block** (S20, `docs/spec/block-proof.md`): `BlockProof`, `ShardRecord`,
   `BlockReconciliation`, their wire forms, the structural rule a decoded block keeps, and
@@ -30,6 +30,9 @@ impl VmConfig { pub fn height(&self, f: u32) -> Option<u32>; pub fn to_bytes(&se
 pub fn window_height(config: &VmConfig) -> Result<u32, &'static str>;
 pub fn absorb_statement_descriptor(tr: &mut Transcript, config: &VmConfig, shard_counts: &[u32], windows: &[u32]);
 pub fn check_memory_windows(config: &VmConfig, shard_counts: &[u32], windows: &[u32]) -> Result<(), &'static str>;
+// S-IO, docs/spec/public-values.md. Neither adds a message, a tag or a challenge.
+pub fn public_io_words(bytes: &[u8]) -> Vec<u32>;   // the window: length word, LE payload, zero pad
+pub fn advice_first_window(height: u32) -> u32;     // 2^29 / h: the window holding ADVICE_ORIGIN
 pub struct ProgramIdentity(pub Fr);                        // to_bytes, from_bytes
 pub fn identity_digest(code_version: u32, config: &VmConfig, entry_pc: u32,
                        commitments: &[Vec<[u8; 64]>]) -> ProgramIdentity;
@@ -69,7 +72,7 @@ pub fn derive_global_phase(vk: &VerifyingKey, public: &PublicInputs)
 pub fn verify_global_memory(vk: &VerifyingKey, global: &GlobalChallenges,
                             public: &PublicInputs) -> Result<(), VerifyError>;   // step 10b
 pub fn verify_shard_local(vk: &VerifyingKey, global: &GlobalChallenges, proof: &ShardProof,
-                          public: &PublicInputs) -> Result<OpeningClaim, VerifyError>;  // 4-10a, 11
+                          public: &PublicInputs) -> Result<OpeningClaim, VerifyError>;  // 4-10a, 10c, 11
 pub struct ShardRecord { pub family: u32, pub shard_index: u32, pub ts_window: [u64; 2],
                          pub memory_commitments: Vec<[u8; 64]>, pub roots: [Fr; 2] }
 pub struct BlockReconciliation { pub records: Vec<ShardRecord> }    // to_bytes, from_bytes
@@ -91,13 +94,33 @@ pub const OPENING_BYTES: usize = 704;  pub const SRS_VERIFIER_BYTES: usize = 320
 ## Frozen invariants
 - **The check order is the class.** `reduce_shard` runs `docs/spec/shard-proof.md` §6's
   steps in order and returns the first failure: `Statement` (1–5), `Malformed` (6),
-  `Constraint` (7–8), `Lookup` (9), `MemoryArgument` (10a, 10b). `verifier::verify_shard`
-  adds `Opening` (12). A prover that proves a tampered witness honestly is refused by the
-  class of what the tamper broke, which is what `checker::TamperHarness` asserts. S20's
-  three-part split does not move a step: `reduce_shard` calls `verify_global_memory`
-  after `verify_shard_local` returns, and step 11, the only step between 10a and 10b,
-  builds the opening claim and cannot fail — so the first failure, its class and its
-  message are S16's for every input.
+  `Constraint` (7–8), `Lookup` (9), `MemoryArgument` (10a, **10c**, 10b).
+  `verifier::verify_shard` adds `Opening` (12). A prover that proves a tampered witness
+  honestly is refused by the class of what the tamper broke, which is what
+  `checker::TamperHarness` asserts. S20's three-part split does not move a step:
+  `reduce_shard` calls `verify_global_memory` after `verify_shard_local` returns, and step
+  11, the only step between 10c and 10b, builds the opening claim and cannot fail — so the
+  first failure, its class and its message are S16's for every input.
+- **Step 10c is S-IO's one new check, it sits between 10a and 11, and its class is
+  `MemoryArgument`** (`docs/spec/public-values.md` §5). It is in `verify_shard_local`,
+  because it reads a `ShardProof`'s own base claims, and it runs only on the two public
+  value shards. Their base claims arrive in layout order `M`, `W`, `S`, and neither family
+  has a `W` or an `S` column, so `claims[1]` is `M[1] teardown_value` and `claims[2]` is
+  `M[2] init_value`; the verifier evaluates the multilinear extension of
+  `public_io_words(...)` at that shard's own opening point and compares. `PUBLIC_INPUT`'s
+  `M[2]` is held to `public.input`, `PUBLIC_OUTPUT`'s `M[1]` to `public.output`, each with
+  a message naming which window disagreed. **What each is worth rests on the memory
+  argument and not on the comparison**: the multiset already forces a window's init column
+  to be each address's first value and its teardown column to be its last. `PUBLIC_OUTPUT`
+  has no `M[2]` at all — its circuit is `ZERO_WINDOWS`', whose init leaf is a literal 0 —
+  so there is nothing to pre-load the journal into and nothing here to check about it.
+- **The global transcript did not change at S-IO, and that is the claim to hold.** No new
+  message, no new tag, no new challenge, no new statement field, no new address space, and
+  no change to any execution family's circuit. `io_digest(input, output)` is S10's, absorbed
+  at G7 where it has always been — before the memory challenges are squeezed, which is what
+  fixes the two byte strings before any challenge exists — and `M[1]` and `M[2]` are
+  **memory** columns, committed at G8, which is also before the squeeze. Step 10c then says
+  the committed columns are those bytes. The whole schedule is S16's G1–G11, untouched.
 - **Step 10b is once per statement, and `verify_shard_local` is not a verification.**
   The memory argument's statement half names no `ShardProof`: its operands are
   `vk.entry_pc`, `public.boundary`, `public.memory_roots` and the four memory
@@ -110,7 +133,35 @@ pub const OPENING_BYTES: usize = 704;  pub const SRS_VERIFIER_BYTES: usize = 320
   against the key before anything is indexed, and the total shard count is bounded before
   anything is built from it. The key is assumed loaded (`VerifyingKey::check`); a key edited
   in memory meets steps 1–5 as `Statement` only where its config or its circuit list
-  changed, and an edit inside a circuit is not caught there.
+  changed, and an edit inside a circuit is not caught there. **S-IO added two `Statement`
+  refusals to `derive_global_phase`**, both at step 2 and both before `public_io_words` is
+  ever asked to lay a window out: `public.input` longer than
+  `guest_memory::PUBLIC_PAYLOAD_BYTES`, and `public.output` longer than it. Bytes no window
+  could have carried are a statement nobody can have proved, and `public_io_words` panics
+  on such a slice rather than encoding it, so the ceiling is checked where a decoded
+  statement first reaches the verifier. Step 10c then calls `public_io_words` **assuming**
+  it: that is a precondition of the three-part split, and a caller that reaches
+  `verify_shard_local` without having derived the global phase from the *same*
+  `PublicInputs` has skipped step 2.
+- **`window_height` and `check_memory_windows` grew S-IO's rules, and `window_height` is the
+  one that matters** — it runs inside `VmConfig::from_bytes`, on bytes a verifier was
+  handed. It now requires `INIT_TEARDOWN`, `ZERO_WINDOWS` **and `ADVICE_WINDOWS`** all
+  present at one height `h` — an `ADVICE_WINDOWS` height of its own would put the advice
+  region on a different grid from the one `advice_first_window` computes — `PUBLIC_INPUT`
+  and `PUBLIC_OUTPUT` present at exactly `family::PUBLIC_WINDOW_HEIGHT`, and
+  `4h >= PUBLIC_OUTPUT_ORIGIN + PUBLIC_WINDOW_BYTES`, so both public windows lie inside RAM
+  window 0, whose rows below `RAM_ORIGIN` are masked by `V[ram_live]` at every height. Every
+  menu height but `2^8` satisfies the last. Without it a `ZERO_WINDOWS` id could claim a
+  public window and give a public word a second init row.
+  `check_memory_windows` adds three: exactly one `PUBLIC_INPUT` shard, exactly one
+  `PUBLIC_OUTPUT` shard — a count a prover could drop is a way to publish nothing while
+  having published something — and `advice_first_window(h) + k <= 2^30 / h`, the top of the
+  address space, `k` being `ADVICE_WINDOWS`' shard count. **The advice windows need no
+  list and no disjointness rule**: they are the `k` consecutive windows from
+  `advice_first_window(h) = 2^29 / h` up, which is exactly where the `ZERO_WINDOWS` bound
+  `[1, 2^29/h − 1]` stops, so the two families' ids are disjoint by arithmetic and shard `i`
+  is window `advice_first_window(h) + i`. `MEMORY_WINDOWS` still carries `ZERO_WINDOWS`' ids
+  and nothing else (`docs/spec/public-values.md` §2, §6).
 - **Curve-free.** A `G1` point is its 64 canonical bytes, absorbed through
   `transcript::append_g1_points` (all-zero is infinity) and never decoded here: validating
   a point is `crates/verifier`'s. The Mercury proof is 704 opaque bytes. **`pcs` is not
@@ -182,7 +233,7 @@ pub const OPENING_BYTES: usize = 704;  pub const SRS_VERIFIER_BYTES: usize = 320
 ## Tests
 | File | Covers |
 | --- | --- |
-| `src/statement.rs` (unit) | the statement order puts the init families first; the window height and its two refusals; the boundary scalars' order; the trivial window |
+| `src/statement.rs` (unit) | the statement order puts the init families first; the window height and its five refusals (S-IO added three: `ADVICE_WINDOWS` at the window families' one height, both public families at `PUBLIC_WINDOW_HEIGHT`, and a height that would put a public window outside RAM window 0); the boundary scalars' order; the trivial window |
 | `tests/wire.rs` | every type round-trips byte for byte, S16's key and one with S17's family among them; §9's layouts read back field by field — the proof's, the statement's, and the key's through its first circuit's artifact, S17's family key with its three generic-table points raw between its `SrsVerifier` and its SRS digest; the statement's and the proof's readers refuse truncation at every length, each key's at every length before its circuits and at one in 97 after, and all three a trailing byte; an overlong count, a field element at the modulus and each out-of-range boundary scalar refused, one wider than 64 bits with in-range low bytes among them; each key with one bit flipped — one bit of every byte before its circuits, every bit of one circuit byte in 1009, and every one of the generic table's 1,536 bits, each of those refused with the SRS digest's message — refused, never loaded and never a panic; each of §7.2's load rules but the registry's own order check, which no key can trip, refuses its edited key, by name, in memory and from bytes — S17's among them: a generic-table byte flipped and two of its points swapped, each refused by the SRS digest, and the jump family's setup list at 10 or at 6, each refused by the setup-count rule; the SRS digest is the documented recipe, its second message the table's twelve limbs, and moves with each of the `SrsVerifier`'s 320 bytes and each of the table's 192 |
 | `tests/block.rs` | S20: the record list is statement order and each record is §2's layout read off the statement and the shard's own proof; the public data — descriptor, counts, a detached family's 0, the proofs, the reconciliation — through the wire form alone; every way a block's statement and proofs can be different shard sets refused at decode, by name; the reader refused a trailing byte, every truncation and a `VmConfig` no derivation produces; `BlockReconciliation`'s layout field by field over one record, and its reader the same way; the window rule per cycle-owning family, with the init family's trivial window inside add/sub's and exempt |
 | `tests/reduce.rs` | the global transcript event for event, G1–G11 and nothing else; S17's generic table bound through the SRS digest: a key with S17's family has S16's schedule and no `GENERIC_TABLE` message, the statement's digest moves with each of the table's points and with their order once the key's SRS digest is recomputed over them, and a key whose table moved without it does not load; every statement field but the roots and the exit status moving the digest, and those two not — the exit status is bound at step 10; the key's SRS digest and identity each moving it; the shard transcript's first five events and every part of its seed moving `g`; `g` and `β` the first and second `LOOKUP_CHALLENGE` squeezes of a transcript replayed by hand; each shard's challenges — the window constant at `INIT_TEARDOWN`'s window 0 and at each `ZERO_WINDOWS` shard's own window, none for an execution family, and the memory and LogUp slots; each of steps 1–5's refusals as `Statement`, by reason, a key one setup list short among them; each of step 6's as `Malformed`; two thousand garbage statements and proofs refused with no panic |

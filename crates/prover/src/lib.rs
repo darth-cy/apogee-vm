@@ -53,12 +53,15 @@ use program::lookup_tables::generic_commitments;
 use program::{setup_commitments, DecodedTables, FamilyId};
 use rayon::prelude::*;
 use srs::Srs;
-use trace::{build_boundary_finals, build_multiplicities, init_windows, plan_shards, TraceArchive};
+use trace::{
+    advice_window_count, build_boundary_finals, build_multiplicities, init_windows, plan_shards,
+    TraceArchive,
+};
 use transcript::{Transcript, TranscriptEvent, TranscriptSnapshot};
 use verifier_core::{
-    global_commit, identity_digest, shard_challenges, shard_transcript, srs_digest,
-    statement_shards, window_height, BoundaryFinals, FamilyCircuit, GkrProof, PublicInputs,
-    ShardProof, VerifyingKey, VmConfig, TRIVIAL_TS_WINDOW,
+    advice_first_window, global_commit, identity_digest, shard_challenges, shard_transcript,
+    srs_digest, statement_shards, window_height, BoundaryFinals, FamilyCircuit, GkrProof,
+    PublicInputs, ShardProof, VerifyingKey, VmConfig, TRIVIAL_TS_WINDOW,
 };
 
 pub use fill::{family_fill, Fill, ShardSource};
@@ -276,24 +279,41 @@ pub struct GlobalCommitState {
 
 /// The shard counts of an execution: one per config family, in its order —
 /// exactly one for `INIT_TEARDOWN`, one per touched window above 0 for
-/// `ZERO_WINDOWS`, and `ceil(cycles / height)` for every other.
-fn shard_counts(config: &VmConfig, archive: &TraceArchive, windows: &[u32]) -> Vec<u32> {
+/// `ZERO_WINDOWS`, one each for the two public value families, one per advice
+/// window the host supplied, and `ceil(cycles / height)` for every other.
+fn shard_counts(
+    config: &VmConfig,
+    archive: &TraceArchive,
+    windows: &[u32],
+    height: u32,
+) -> Vec<u32> {
     let plan = plan_shards(archive.cycle_profile(), config);
     plan.shards
         .iter()
         .map(|&(f, count)| match f {
             family::INIT_TEARDOWN => 1,
             family::ZERO_WINDOWS => windows.len() as u32,
+            // Always one each, whether or not this execution used them: a
+            // count a prover could drop is a way to publish nothing while
+            // having published something (`docs/spec/public-values.md` §4).
+            family::PUBLIC_INPUT | family::PUBLIC_OUTPUT => 1,
+            family::ADVICE_WINDOWS => advice_window_count(archive.advice(), height),
             _ => count,
         })
         .collect()
 }
 
 /// The RAM window shard `(family, index)` covers: 0 for `INIT_TEARDOWN`,
-/// `windows[index]` for `ZERO_WINDOWS`, 0 (unused) for every other family.
-fn window_of(family: FamilyId, index: u32, windows: &[u32]) -> u32 {
+/// `windows[index]` for `ZERO_WINDOWS`, the two constants for the public value
+/// families, the `index`-th window from the advice origin up for
+/// `ADVICE_WINDOWS`, and 0 (unused) for every other family. `height` is the
+/// family's own.
+fn window_of(family: FamilyId, index: u32, windows: &[u32], height: u32) -> u32 {
     match family {
         family::ZERO_WINDOWS => windows[index as usize],
+        family::PUBLIC_INPUT => family::PUBLIC_INPUT_WINDOW,
+        family::PUBLIC_OUTPUT => family::PUBLIC_OUTPUT_WINDOW,
+        family::ADVICE_WINDOWS => advice_first_window(height) + index,
         _ => 0,
     }
 }
@@ -328,7 +348,7 @@ fn statement_inputs_rec(
     let log = archive.memory_log();
     let h = window_height(config).map_err(|e| ProverError::Trace(e.to_string()))?;
     let windows = init_windows(log, h);
-    let counts = shard_counts(config, archive, &windows);
+    let counts = shard_counts(config, archive, &windows, h);
     let boundary = build_boundary_finals(log);
     let mut memory_columns = Vec::new();
     for (family, index) in statement_shards(config, &counts) {
@@ -521,7 +541,7 @@ fn shard_source<'a>(
         family,
         index,
         height: setup.registration(family).height as usize,
-        window: window_of(family, index, windows),
+        window: window_of(family, index, windows, setup.registration(family).height),
     }
 }
 

@@ -33,7 +33,7 @@ fn with_height(config: &VmConfig, families: &[u32], height: u32) -> VmConfig {
 #[test]
 fn the_vm_config_wire_form_is_frozen_and_round_trips() {
     let config = fib_config();
-    let mut want: Vec<u32> = vec![8];
+    let mut want: Vec<u32> = vec![11];
     for (f, h) in [
         (family::ADD_SUB_LUI_AUIPC, 1 << 22),
         (family::JUMP_BRANCH_SLT, 1 << 22),
@@ -43,6 +43,12 @@ fn the_vm_config_wire_form_is_frozen_and_round_trips() {
         (family::MEM_SUBWORD, 1 << 22),
         (family::INIT_TEARDOWN, 1 << 22),
         (family::ZERO_WINDOWS, 1 << 22),
+        // S-IO's three, in every config: the two public value families at their
+        // pinned height and the advice windows at the window height
+        // (`docs/spec/public-values.md` §4).
+        (family::PUBLIC_INPUT, family::PUBLIC_WINDOW_HEIGHT),
+        (family::PUBLIC_OUTPUT, family::PUBLIC_WINDOW_HEIGHT),
+        (family::ADVICE_WINDOWS, 1 << 22),
     ] {
         want.extend([f, h]);
     }
@@ -116,7 +122,7 @@ fn a_config_of_every_family_round_trips() {
 #[test]
 fn the_statement_descriptor_is_three_adjacent_messages() {
     let config = fib_config();
-    let counts = [3, 1, 1, 0, 2, 1, 1, 1];
+    let counts = [3, 1, 1, 0, 2, 1, 1, 1, 1, 1, 0];
     let windows = [127];
 
     let mut tr = Transcript::new();
@@ -126,11 +132,11 @@ fn the_statement_descriptor_is_three_adjacent_messages() {
         &[
             TranscriptEvent::Absorb {
                 tag: tags::VM_CONFIG,
-                n_scalars: 2 * 8 + 1,
+                n_scalars: 2 * 11 + 1,
             },
             TranscriptEvent::Absorb {
                 tag: tags::SHARD_COUNTS,
-                n_scalars: 8,
+                n_scalars: 11,
             },
             TranscriptEvent::Absorb {
                 tag: tags::MEMORY_WINDOWS,
@@ -152,7 +158,12 @@ fn the_statement_descriptor_is_three_adjacent_messages() {
 
     // Shard counts are per proof: changing one moves the sponge.
     let mut other = Transcript::new();
-    absorb_statement_descriptor(&mut other, &config, &[3, 1, 1, 0, 2, 1, 1, 2], &windows);
+    absorb_statement_descriptor(
+        &mut other,
+        &config,
+        &[3, 1, 1, 0, 2, 1, 1, 2, 1, 1, 0],
+        &windows,
+    );
     assert_ne!(tr.snapshot(), other.snapshot());
 
     // So is the window list: one id differs.
@@ -162,7 +173,7 @@ fn the_statement_descriptor_is_three_adjacent_messages() {
 
     // An execution touching no window above 0 still absorbs the message, empty.
     let mut empty = Transcript::new();
-    absorb_statement_descriptor(&mut empty, &config, &[3, 1, 1, 0, 2, 1, 1, 0], &[]);
+    absorb_statement_descriptor(&mut empty, &config, &[3, 1, 1, 0, 2, 1, 1, 0, 1, 1, 0], &[]);
     assert_eq!(
         empty.event_log()[2],
         TranscriptEvent::Absorb {
@@ -187,17 +198,17 @@ fn the_descriptor_needs_one_shard_count_per_family() {
 fn a_config_without_both_init_families_at_one_height_is_refused() {
     let image = common::guest("fib");
     let missing = ProgramError::WindowRule {
-        rule: "INIT_TEARDOWN and ZERO_WINDOWS are in every VmConfig",
+        rule: "INIT_TEARDOWN, ZERO_WINDOWS and ADVICE_WINDOWS are in every VmConfig",
     };
     let apart = ProgramError::WindowRule {
-        rule: "INIT_TEARDOWN and ZERO_WINDOWS have one height",
+        rule: "INIT_TEARDOWN, ZERO_WINDOWS and ADVICE_WINDOWS have one height",
     };
     for init in [family::INIT_TEARDOWN, family::ZERO_WINDOWS] {
         let err = decode_program_detaching(&image, &ProgramParams::defaults(), &[init]);
         assert_eq!(err.unwrap_err(), missing, "{init} detached");
         let mut config = fib_config();
         config.families.retain(|(f, _)| *f != init);
-        assert_eq!(config.families.len(), 7);
+        assert_eq!(config.families.len(), 10);
         assert_eq!(
             VmConfig::from_bytes(&config.to_bytes()),
             None,
@@ -224,10 +235,13 @@ fn a_config_without_both_init_families_at_one_height_is_refused() {
     };
     assert_eq!(VmConfig::from_bytes(&empty.to_bytes()), None);
 
-    // Just inside: both lowered together derives, and reads back.
+    // Just inside: all three window families lowered together derives, and
+    // reads back. The two public value families keep their pinned height,
+    // which derivation writes for them.
     let mut params = ProgramParams::defaults();
     params.heights[family::INIT_TEARDOWN as usize] = 1 << 20;
     params.heights[family::ZERO_WINDOWS as usize] = 1 << 20;
+    params.heights[family::ADVICE_WINDOWS as usize] = 1 << 20;
     let (_, config) = decode_program(&image, &params).unwrap();
     assert_eq!(VmConfig::from_bytes(&config.to_bytes()), Some(config));
 }
@@ -239,9 +253,11 @@ fn a_config_without_both_init_families_at_one_height_is_refused() {
 fn the_window_rules_hold_at_their_boundaries() {
     let config = fib_config();
     // One shard for each instruction family, then INIT_TEARDOWN's and
-    // ZERO_WINDOWS'.
-    let counts = |init: u32, zero: u32| [1, 1, 1, 1, 1, 1, init, zero];
-    let check = |counts: [u32; 8], windows: &[u32]| check_memory_windows(&config, &counts, windows);
+    // ZERO_WINDOWS', then S-IO's three: one public input shard, one journal
+    // shard and no advice window (`docs/spec/public-values.md` §4).
+    let counts = |init: u32, zero: u32| [1, 1, 1, 1, 1, 1, init, zero, 1, 1, 0];
+    let check =
+        |counts: [u32; 11], windows: &[u32]| check_memory_windows(&config, &counts, windows);
     let refused = |rule| Err(ProgramError::WindowRule { rule });
 
     assert_eq!(check(counts(1, 0), &[]), Ok(()), "no window above 0");
@@ -272,7 +288,11 @@ fn the_window_rules_hold_at_their_boundaries() {
     // At 2^16 rows there are 8,192 windows.
     let short = with_height(
         &config,
-        &[family::INIT_TEARDOWN, family::ZERO_WINDOWS],
+        &[
+            family::INIT_TEARDOWN,
+            family::ZERO_WINDOWS,
+            family::ADVICE_WINDOWS,
+        ],
         1 << 16,
     );
     assert_eq!(check_memory_windows(&short, &counts(1, 1), &[8191]), Ok(()));
@@ -281,16 +301,30 @@ fn the_window_rules_hold_at_their_boundaries() {
         refused(range)
     );
 
-    // The config's own rule: the two init families present, at one height.
+    // The config's own rule: the three window families present, at one
+    // height, and the two public value ones at their pinned height.
     let apart = with_height(&config, &[family::ZERO_WINDOWS], 1 << 16);
     assert_eq!(
         check_memory_windows(&apart, &counts(1, 0), &[]),
-        refused("INIT_TEARDOWN and ZERO_WINDOWS have one height")
+        refused("INIT_TEARDOWN, ZERO_WINDOWS and ADVICE_WINDOWS have one height")
+    );
+    let apart = with_height(&config, &[family::ADVICE_WINDOWS], 1 << 16);
+    assert_eq!(
+        check_memory_windows(&apart, &counts(1, 0), &[]),
+        refused("INIT_TEARDOWN, ZERO_WINDOWS and ADVICE_WINDOWS have one height")
     );
     let mut missing = config.clone();
     missing.families.retain(|(f, _)| *f != family::ZERO_WINDOWS);
     assert_eq!(
-        check_memory_windows(&missing, &[1, 1, 1, 1, 1, 1, 1], &[]),
-        refused("INIT_TEARDOWN and ZERO_WINDOWS are in every VmConfig")
+        check_memory_windows(&missing, &[1, 1, 1, 1, 1, 1, 1, 1, 1, 0], &[]),
+        refused("INIT_TEARDOWN, ZERO_WINDOWS and ADVICE_WINDOWS are in every VmConfig")
+    );
+    let mut missing = config.clone();
+    missing
+        .families
+        .retain(|(f, _)| *f != family::PUBLIC_OUTPUT);
+    assert_eq!(
+        check_memory_windows(&missing, &[1, 1, 1, 1, 1, 1, 1, 1, 1, 0], &[]),
+        refused("PUBLIC_INPUT and PUBLIC_OUTPUT are in every VmConfig")
     );
 }

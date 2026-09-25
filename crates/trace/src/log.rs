@@ -70,19 +70,22 @@ impl AddressSpace {
     }
 
     /// Whether `addr` is an address this space has: a register index, a
-    /// 4-aligned word inside the RAM window, the pc's one address, or — for a
-    /// delegation space — a frame base pointer, which is a 4-aligned word
-    /// address like any other.
+    /// 4-aligned word some family initializes, the pc's one address, or — for
+    /// a delegation space — a frame base pointer, which is a 4-aligned word
+    /// address inside ordinary RAM.
+    ///
+    /// The `Ram` space is wider than ordinary RAM since S-IO: it also holds the
+    /// two public windows below `RAM_ORIGIN` and the advice region above RAM.
+    /// All three are `address_space::RAM` tuples — what tells a public value,
+    /// an advice word and a heap word apart is which family initializes the
+    /// address, never a tag a load would have to name
+    /// (`docs/spec/public-values.md` §2).
     pub fn holds(self, addr: u32) -> bool {
         match self {
             AddressSpace::Reg => addr < 32,
-            AddressSpace::Ram
-            | AddressSpace::KeccakF
-            | AddressSpace::Poseidon2
-            | AddressSpace::FrArith => {
-                addr.is_multiple_of(4)
-                    && addr >= guest_memory::RAM_ORIGIN
-                    && addr - guest_memory::RAM_ORIGIN < guest_memory::RAM_LENGTH
+            AddressSpace::Ram => addr.is_multiple_of(4) && addressable(addr),
+            AddressSpace::KeccakF | AddressSpace::Poseidon2 | AddressSpace::FrArith => {
+                addr.is_multiple_of(4) && in_ram(addr)
             }
             AddressSpace::Pc => addr == 0,
         }
@@ -359,7 +362,7 @@ impl MemoryEventLog {
     /// itself. That the requests and the invocations pair 1:1 is the circuit's
     /// statement and the global multiset's, never the trace's
     /// (`docs/spec/delegation.md` §5.3).
-    pub fn self_check(&self, image: &ProgramImage) -> Result<(), SelfCheckError> {
+    pub fn self_check(&self, initial: &InitialMemory) -> Result<(), SelfCheckError> {
         let refuse = |e: &MemoryEvent, reason: String| SelfCheckError {
             space: e.space,
             addr: e.addr,
@@ -424,7 +427,7 @@ impl MemoryEventLog {
             }
         }
         for (&(space, addr), &(ts, value)) in &last {
-            let init = initial_value(image, space, addr);
+            let init = initial_value(initial, space, addr);
             *balance.entry((space, addr, 0, init)).or_default() += 1;
             *balance.entry((space, addr, ts, value)).or_default() -= 1;
         }
@@ -437,7 +440,7 @@ impl MemoryEventLog {
         // name the first query whose read is not the last write before it: the
         // corrupted read itself, or the reader of a corrupted write. A stale
         // read is named where it is, not at the honest reader of that write.
-        let mut last = (0, initial_value(image, space, addr));
+        let mut last = (0, initial_value(initial, space, addr));
         let at = self
             .events
             .iter()
@@ -489,11 +492,71 @@ impl MemoryEventLog {
 /// An address's value before the first cycle: 0 for a register, the entry
 /// point for the pc, and the image's bytes for a RAM word — zero wherever no
 /// segment has a file byte.
-fn initial_value(image: &ProgramImage, space: AddressSpace, addr: u32) -> u32 {
+fn initial_value(initial: &InitialMemory, space: AddressSpace, addr: u32) -> u32 {
     match space {
         AddressSpace::Reg => 0,
-        AddressSpace::Pc => image.entry,
-        AddressSpace::Ram => image.initial_word(addr),
+        AddressSpace::Pc => initial.image.entry,
+        AddressSpace::Ram => initial.word(addr),
         AddressSpace::KeccakF | AddressSpace::Poseidon2 | AddressSpace::FrArith => 0,
+    }
+}
+
+/// Whether `addr` lies in ordinary guest RAM: `[RAM_ORIGIN, ADVICE_ORIGIN)`,
+/// the image, the heap and the stack.
+pub fn in_ram(addr: u32) -> bool {
+    addr >= guest_memory::RAM_ORIGIN && addr - guest_memory::RAM_ORIGIN < guest_memory::RAM_LENGTH
+}
+
+/// Whether `addr` is in a region some family initializes: ordinary RAM, one of
+/// the two public windows, or the advice region.
+///
+/// Everything else — `[0, PUBLIC_INPUT_ORIGIN)` and the gap between the public
+/// windows and `RAM_ORIGIN` — is a **hole** no family initializes, so an
+/// access there could not balance whatever an executor did with it. Making it
+/// unaddressable is what turns a null dereference into a loud executor error
+/// rather than a trace nothing can prove.
+pub fn addressable(addr: u32) -> bool {
+    let public = addr >= guest_memory::PUBLIC_INPUT_ORIGIN
+        && addr - guest_memory::PUBLIC_INPUT_ORIGIN < 2 * guest_memory::PUBLIC_WINDOW_BYTES;
+    in_ram(addr) || public || addr >= guest_memory::ADVICE_ORIGIN
+}
+
+/// What every address holds before the execution starts, `docs/spec/memory.md`
+/// §4.2's write at timestamp 0.
+///
+/// Three regions and three sources: the image in ordinary RAM, the statement's
+/// public input in its window, and the prover's advice above RAM. The journal
+/// window and every untouched address start at 0. A slice shorter than its
+/// region reads 0 past its end, which is what the prover commits there too.
+#[derive(Clone, Copy, Debug)]
+pub struct InitialMemory<'a> {
+    pub image: &'a ProgramImage,
+    /// The statement's public input **payload**; word 0 of the window is its
+    /// byte length, as `verifier_core::public_io_words` lays it out.
+    pub public_input: &'a [u8],
+    /// The advice bytes the prover supplied, from `ADVICE_ORIGIN` up.
+    pub advice: &'a [u8],
+}
+
+impl InitialMemory<'_> {
+    /// The word at `addr`, which must be 4-aligned and [`addressable`].
+    pub fn word(&self, addr: u32) -> u32 {
+        if in_ram(addr) {
+            return self.image.initial_word(addr);
+        }
+        if addr >= guest_memory::ADVICE_ORIGIN {
+            let index = (addr - guest_memory::ADVICE_ORIGIN) as u64 / 4;
+            return crate::advice_word(self.advice, index);
+        }
+        if addr >= guest_memory::PUBLIC_INPUT_ORIGIN
+            && addr - guest_memory::PUBLIC_INPUT_ORIGIN < guest_memory::PUBLIC_WINDOW_BYTES
+        {
+            let y = ((addr - guest_memory::PUBLIC_INPUT_ORIGIN) / 4) as usize;
+            return program::public_io_words(self.public_input)[y];
+        }
+        // The journal window, and the hole. The journal starts at 0 — that is
+        // `PUBLIC_OUTPUT`'s literal-0 init leaf — and the hole is never
+        // reached, `holds` having refused it.
+        0
     }
 }

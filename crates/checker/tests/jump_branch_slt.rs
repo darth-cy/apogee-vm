@@ -1729,10 +1729,15 @@ fn traced(image: loader::ProgramImage, height: u32) -> (prover::Program, trace::
             family::ADD_SUB_LUI_AUIPC,
             family::JUMP_BRANCH_SLT,
             family::INIT_TEARDOWN,
-            family::ZERO_WINDOWS
+            family::ZERO_WINDOWS,
+            family::PUBLIC_INPUT,
+            family::PUBLIC_OUTPUT,
+            family::ADVICE_WINDOWS
         ]
     );
     let io = emulator::GuestIo {
+        stdin: Vec::new(),
+        advice: Vec::new(),
         input: Vec::new(),
         hint: Vec::new(),
     };
@@ -1746,6 +1751,7 @@ fn traced(image: loader::ProgramImage, height: u32) -> (prover::Program, trace::
             input: execution.io.input,
             output: execution.io.output,
         },
+        Vec::new(),
         trace::PhaseTiming { wall_nanos: 0 },
     );
     (

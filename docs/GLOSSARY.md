@@ -292,10 +292,12 @@ apart at a glance.
 **Hint** — bytes the guest reads from fd 3. Uncommitted prover advice: a shortcut to a
 value the guest then checks against something bound, never an input in its own right.
 
-**Public I/O digest** — the single `Fr` binding the guest's fd 0 and fd 1 byte streams,
-`transcript::io_digest`. Frozen at S10; the statement-binding order absorbs it.
-`docs/spec/ecall-abi.md` §6. Tying it to the streams an execution actually read and wrote
-is deferred: `docs/spec/memory.md` §10.
+**Public I/O digest** — the single `Fr` over the statement's two public byte strings,
+`transcript::io_digest`. Frozen at S10, recipe and position unchanged; the
+statement-binding order absorbs it at G7, which fixes both strings before any challenge
+exists. `docs/spec/ecall-abi.md` §6. What ties them to the *execution* is the two **public
+value** windows, not this hash, and since S-IO it is not deferred:
+`docs/spec/public-values.md`.
 
 **RVC expansion** — rewriting a 16-bit compressed instruction as the exact 32-bit
 instruction it abbreviates. A representation change only: addresses are preserved, never
@@ -372,9 +374,10 @@ and polynomials are the constraint system's.
 
 **Cycle profile** — how many cycles each family of a `VmConfig` ran, transfer cycles
 included; the counts sum to the cycle count. **Shard plan** — `ceil(occupancy / height)`
-shards per family, derived from it. The init/teardown families run no cycles and plan
-zero; their shards are RAM windows: exactly one `INIT_TEARDOWN` shard, window 0, and one
-`ZERO_WINDOWS` shard per touched window above 0.
+shards per family, derived from it. The window families run no cycles and plan zero; their
+shards are RAM windows: exactly one `INIT_TEARDOWN` shard, window 0, one `ZERO_WINDOWS`
+shard per touched window above 0, exactly one each of `PUBLIC_INPUT` and `PUBLIC_OUTPUT`,
+and one `ADVICE_WINDOWS` shard per window the supplied advice spans.
 
 **Trace archive** — the self-contained snapshot of a run: a section per **phase
 boundary** (post-execution, post-commit, post-GKR, post-opening, final), filled in
@@ -389,18 +392,21 @@ by a verifier from a channel the prover does not control. Since S14 it binds `.t
 no window list. `docs/spec/memory.md` §6.2.
 
 **Init/teardown families** — `INIT_TEARDOWN` (7) and `ZERO_WINDOWS` (8): claim no pc,
-present in every `VmConfig`, at **one height** `h`. A shard is one RAM window, a row one
+present in every `VmConfig`, at **one height** `h`, which since S-IO `ADVICE_WINDOWS` (14)
+shares. A shard is one RAM window, a row one
 word of it: the init tuple on the write side, the teardown tuple — the word's last write,
 or its initial value if untouched — on the read side. No witness columns, no enforcing
 gates. Registers and the pc have no rows in them: they are the **boundary**.
 `docs/spec/memory.md` §3.
 
 **RAM window** — `h` consecutive words of the address space: window `w` is the bytes
-`[4h·w, 4h·(w+1))`, row `y` the word at `4h·w + 4y`, for `w < 2^29 / h`. The windows tile
-`[0, 2^31)`, so addresses are distinct within a window by construction and across windows
-by distinct ids. A window is a slice of the *address space*, `h` rows whatever was
-touched; a shard's **cycles** — what `trace::build_memory_columns` takes — are a slice of
-the *execution*, one row per cycle.
+`[4h·w, 4h·(w+1))`, row `y` the word at `4h·w + 4y`, for `w < 2^30 / h`. The windows tile
+`[0, 2^32)`, so addresses are distinct within a window by construction and across windows
+by distinct ids; a `ZERO_WINDOWS` id stops at `2^29/h − 1` and the **advice** windows are
+the consecutive ids from `2^29/h` up, disjoint by that arithmetic and not by a rule.
+A window is a slice of the *address space*, `h` rows whatever was touched; a shard's
+**cycles** — what `trace::build_memory_columns` takes — are a slice of the *execution*,
+one row per cycle.
 
 **Image window** — RAM window 0, the one `INIT_TEARDOWN` shard. Its initial values are
 the **image column**, `program::image_init_column`, row `y` = `initial_word(4y)`, a setup
@@ -409,7 +415,32 @@ column program identity commits; rows `y < 2^14`, below `RAM_ORIGIN`, are masked
 
 **Zero window** — a RAM window above 0 the execution touches, one `ZERO_WINDOWS` shard
 each, initialized to 0 at timestamp 0. Their ids are the statement's window list, strictly
-increasing in `[1, 2^29/h − 1]`; `trace::init_windows` computes it.
+increasing in `[1, 2^29/h − 1]`; `trace::init_windows` computes it over **ordinary RAM**
+alone, the public windows and the advice region each having a family of their own.
+
+**Public values** — what a proof says an execution's input and output *were*: two fixed
+RAM windows in the hole below `RAM_ORIGIN`, the **public input** at `0x8000` and the
+**journal** at `0x8400`, a kilobyte each, word 0 the payload's byte length. `PUBLIC_INPUT`
+(12) and `PUBLIC_OUTPUT` (13) are their families, in every `VmConfig` at a pinned `2^8` and
+proving exactly one shard each. Bound by the memory argument plus one comparison per shard
+(`verify_shard_local` step 10c), and **not** by anything the guest does: no hash, no
+register convention, no syscall. A guest reads its input with ordinary loads and writes its
+journal with ordinary stores. Not a stream, and not fd 0 or fd 1, which are uncommitted
+compatibility descriptors. `docs/spec/public-values.md`.
+
+**Journal** — the public output window's payload: what `guest_sdk::commit` appended, in
+the order it appended it, and what the statement's `output` is held to. Bound as the
+window's **final** value, so nothing orders its writes and a guest that panics has still
+published what it committed. Its family's init leaf is a literal 0, which is what stops a
+prover supplying the journal at timestamp 0 instead of storing it.
+
+**Advice** — memory whose initial values the prover chose: `[ADVICE_ORIGIN, 2^32)`,
+initialized by the `ADVICE_WINDOWS` family (14) from a committed column **nothing binds**,
+read with ordinary loads. `k` consecutive windows from `advice_first_window(h) = 2^29/h`
+up, so the statement carries a count and no list. That nothing binds it is the definition,
+not an omission, and the guest owes a check of it against something a proof does bind.
+Distinct from a **hint**, which is the same idea on fd 3 and is not provable at all.
+`docs/spec/public-values.md` §6.
 
 **Frame** — an execution family's memory subtree, over the queries that family's
 instructions can make and no others (`constraints::memory::frame_queries`, `w` of the

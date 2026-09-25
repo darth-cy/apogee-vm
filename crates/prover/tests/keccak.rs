@@ -61,8 +61,10 @@ fn a4_the_block_with_a_delegation_shard_proves_and_verifies() {
     let setup = common::keccak_setup();
     let mut archive = common::keccak_archive(&setup.program);
 
-    // The family set: `KECCAK_F` is in it, last, and its height is the
-    // delegation one. Every other family is there because it claims a pc.
+    // The family set: `KECCAK_F` is in it at the delegation height, after every
+    // family that claims a pc and after the two RAM window families. It is
+    // **not** last since S-IO, whose three families take the highest ids; what
+    // the position says is that a delegation family is not an execution one.
     let families: Vec<u32> = setup
         .program
         .config
@@ -70,7 +72,15 @@ fn a4_the_block_with_a_delegation_shard_proves_and_verifies() {
         .iter()
         .map(|(f, _)| *f)
         .collect();
-    assert_eq!(families.last(), Some(&KECCAK));
+    assert_eq!(
+        &families[families.len() - 4..],
+        &[
+            KECCAK,
+            family::PUBLIC_INPUT,
+            family::PUBLIC_OUTPUT,
+            family::ADVICE_WINDOWS
+        ]
+    );
     assert_eq!(
         setup.program.config.height(KECCAK),
         Some(1 << common::KECCAK_VARS)
@@ -119,7 +129,15 @@ fn a4_the_block_with_a_delegation_shard_proves_and_verifies() {
     // family's last.
     let expected = statement_shards(&setup.program.config, block.shard_counts());
     assert_eq!(block.shards.len(), expected.len());
-    assert_eq!(expected.last(), Some(&(KECCAK, 0)));
+    assert_eq!(
+        &expected[expected.len() - 3..],
+        &[
+            (KECCAK, 0),
+            (family::PUBLIC_INPUT, 0),
+            (family::PUBLIC_OUTPUT, 0)
+        ],
+        "the delegation shard, then S-IO's two; this guest has no advice, so          `ADVICE_WINDOWS` proves no shard"
+    );
 
     // Its ts window is the min and max invocation timestamp, not the trivial
     // one the two window families take.
