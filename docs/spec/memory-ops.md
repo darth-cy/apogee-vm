@@ -520,12 +520,20 @@ in the machine. The ISA requires an `sc.w` without a valid reservation to fail. 
 conformance deviation, not a soundness one**: the verifier still knows exactly which program
 ran and what it computed, and fidelity would cost a reservation flag in machine state that
 every family would then have to carry. LLVM never emits an unpaired `sc.w` and never relies
-on spurious failure. The emulator has the same semantics, so emulator and circuit agree, and
-the QEMU differential carries it as its **one** whitelist entry — `crates/emulator/src/qemu.rs`'s
-`WHITELIST`, one entry, held to one by a test: after an `sc.w`, `rd` may hold 1 in QEMU where
-the emulator has 0, in that register and until the emulator next writes it, counted and
-asserted. Never a silently-ignored diff. Frozen at S12, and S19 is the stage that gives it a
-circuit.
+on spurious failure. The emulator has the same semantics, so **emulator and circuit agree**:
+the family holds every `sc.w` row to `rd = 0` and a store of `rs2`, and a row claiming failure
+is refused by `rd_value_rule` and by `ram_value_rule`, which is what makes the deviation a
+property of the proved statement rather than a hole in it.
+`crates/checker/tests/atomics.rs::sc_w_always_succeeds` is that proof, and it runs in ordinary
+CI.
+
+`qemu-riscv32` keeps a reservation set and may therefore fail an unpaired `sc.w` where this
+machine succeeds. That is not compared and no longer needs to be: since S25 QEMU is an oracle
+for what a guest computes and never for how this emulator computes it
+(`crates/emulator/tests/qemu_outputs.rs`), so what would catch the deviation if it ever
+mattered is a guest whose **committed output** depended on spurious failure — and compiled
+code has none, LLVM never emitting an unpaired `sc.w` and the standard CAS loop exiting on its
+first pass. Frozen at S12, and S19 is the stage that gives it a circuit.
 
 ### 6.7 Gates and lookups, in counts
 
@@ -571,9 +579,10 @@ exiting with the number of checks, **50**. Its statement is five execution famil
 the guest writes near the top of RAM as well as inside window 0, so the derived window list
 is `[8191]` at `h = 2^16`.
 
-`crates/prover/tests/mem.rs` proves and verifies it; `crates/emulator/tests/differential.rs`
-holds its trace to QEMU instruction by instruction; `crates/checker/tests/mem_fill.rs` runs
-all three fills over its archive in ordinary CI, with every channel counted.
+`crates/prover/tests/mem.rs` proves and verifies it; `crates/emulator/tests/qemu_outputs.rs`
+holds its exit status and its fd 1 to `qemu-riscv32`'s, the guest's 50 checks being what its
+exit status counts; `crates/checker/tests/mem_fill.rs` runs all three fills over its archive
+in ordinary CI, with every channel counted.
 
 ## 9. What these families do not do, and the controls
 

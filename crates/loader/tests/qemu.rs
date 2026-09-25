@@ -3,9 +3,10 @@
 //! `qemu-riscv32` runs every guest here **unmodified** — which is the whole
 //! reason the ecall ABI uses Linux numbers over Linux file descriptors. It was
 //! the only executor before S12; since then `crates/emulator` runs the guests
-//! too, and `crates/emulator/tests/differential.rs` holds its trace to QEMU's
-//! instruction by instruction. This file stays what it was: the guests'
-//! behaviour, under the executor with a decade of maintenance behind it.
+//! too, and `crates/emulator/tests/qemu_outputs.rs` holds the two executors to
+//! one **exit status** and one **fd 1** — what a guest computes, never how this
+//! emulator computes it. This file stays what it was: the guests' behaviour,
+//! under the executor with a decade of maintenance behind it.
 //!
 //! Each test builds its guest from source rather than reading the committed
 //! fixture, so behaviour is always checked against the current `guests/`. The
@@ -54,7 +55,7 @@
 //! `mul_div` and a 254-bit `Fr::pow` give the same answers on a 32-bit machine
 //! as on the host, and that the panic handler reports and exits nonzero. Before
 //! S12 QEMU was the only thing that could; now the emulator runs the same
-//! guests, and the differential compares the two.
+//! guests, and `tests/qemu_outputs.rs` compares what the two of them compute.
 
 mod common;
 
@@ -649,9 +650,9 @@ fn atomics_computes_its_cells() {
 ///
 /// It reads nothing and writes nothing, so its one observable is the exit
 /// status, which is its result: a chain of additions and subtractions that
-/// leaves 42 in `a0`. That the register file matches the emulator's at every
-/// instruction is `crates/emulator/tests/differential.rs`'s claim; this is the
-/// guest run the way every other one here is, in either profile.
+/// leaves 42 in `a0`. That the emulator reaches the same status is
+/// `crates/emulator/tests/qemu_outputs.rs`'s claim; this is the guest run the
+/// way every other one here is, in either profile.
 #[test]
 #[ignore = "needs a Linux host with qemu-user; run with --ignored"]
 fn addsub_exits_with_its_result() {
@@ -672,8 +673,8 @@ fn addsub_exits_with_its_result() {
 ///
 /// It reads nothing and writes nothing, and checks every jump, branch and
 /// comparison it makes itself: the exit status is the number of checks, 16,
-/// or 1 from its `fail` path. That the register file matches the emulator's
-/// at every instruction is `crates/emulator/tests/differential.rs`'s claim.
+/// or 1 from its `fail` path. That the emulator reaches the same status is
+/// `crates/emulator/tests/qemu_outputs.rs`'s claim.
 #[test]
 #[ignore = "needs a Linux host with qemu-user; run with --ignored"]
 fn control_passes_its_checks() {
@@ -698,8 +699,8 @@ fn control_passes_its_checks() {
 /// number of checks, 96, or 1 from its `fail` path. Every expected value in it
 /// was computed from an exact RV32IM model, so this run is the second of three
 /// independent readings — the emulator's is
-/// `crates/emulator/tests/differential.rs`'s, which also compares the register
-/// file at every instruction.
+/// `crates/emulator/tests/qemu_outputs.rs`'s, which holds the two executors to
+/// one exit status and one fd 1, and to nothing below that.
 #[test]
 #[ignore = "needs a Linux host with qemu-user; run with --ignored"]
 fn alu_passes_its_checks() {
@@ -723,8 +724,9 @@ fn alu_passes_its_checks() {
 /// atomic access it makes itself: the exit status is the number of checks, 48,
 /// or 1 from its `fail` path. Every expected value in it was computed from an
 /// exact RV32IMA model, so this run is the second of three independent
-/// readings — the emulator's is `crates/emulator/tests/differential.rs`'s,
-/// which also compares the register file at every instruction.
+/// readings — the emulator's is `crates/emulator/tests/qemu_outputs.rs`'s,
+/// which holds the two executors to one exit status and one fd 1, and to
+/// nothing below that.
 ///
 /// It is the first hand-written guest with memory traffic. Nothing in it
 /// depends on the environment's stack pointer: it loads both of its scratch
@@ -753,9 +755,10 @@ fn mem_passes_its_checks() {
 /// checks its own two answers — the accumulator reached `64 * 16384` and the
 /// counter reached 0 — exiting with the number of checks, 2, or 1 from `fail`.
 ///
-/// It is **not** in `crates/emulator/tests/differential.rs`' suite, and for one
-/// reason: that comparison reads QEMU's per-instruction register log, and a
-/// million instructions of it is gigabytes. What this run covers is the
+/// It is **not** in `crates/emulator/tests/qemu_outputs.rs`' suite, and for one
+/// reason: what that comparison reads is the exit status and fd 1, which for
+/// this guest is exactly what the run below already checks, and tracing a
+/// million cycles to re-derive it buys nothing. What this run covers is the
 /// semantics — a real executor reaching the same two answers — and the
 /// emulator's own reading of the same guest is the block suite, which proves
 /// the trace it produced.
