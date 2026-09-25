@@ -322,7 +322,7 @@ The shard plans diverge at the top size, and that is the second thing worth seei
 The fd 0 path needs a **second `2^20` add/sub shard** — the ecalls alone push that family
 past its height — where advice needs one advice window shard instead. A `2^20` execution
 shard and a `2^20` window shard are not the same price: the window artifact is three
-columns and two leaves against add/sub's 42 memory columns, 35 witness columns and 100
+columns and two leaves against add/sub's 42 memory columns, 39 witness columns and 100
 leaves. Trading one for the other is the whole mechanism in one line.
 
 ---
@@ -384,7 +384,8 @@ carries `parent_state_root`, which is where the state check will anchor.
      `CLAUDE.md` all still described it as open and still named the retired
      `blockhash_reads_a_placeholder_today`.
    - `crates/prover/CLAUDE.md` gave add/sub's opening claim as `36 + 31 + 7`. That was
-     S17's; `tests/control.rs:144` has asserted `42 + 35 + 7` since S23.
+     S17's; `tests/control.rs` has asserted `42 + 35 + 7` since S23, and `42 + 39 + 7`
+     since S25a.
    - `docs/spec/memory.md` §4.2's "16 leaves a row" was the widest *execution* frame and
      has been wrong since S21 gave `KECCAK_F` 128 (item 3 above).
    - `docs/spec/constraint-manifest.md` §7.6's tightness argument cited a row that is a
