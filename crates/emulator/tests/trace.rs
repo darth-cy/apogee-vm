@@ -857,7 +857,10 @@ fn the_window_list_is_exactly_the_touched_windows_above_zero() {
 
             let mut config = t.config.clone();
             for (f, h) in config.families.iter_mut() {
-                if *f == family::INIT_TEARDOWN || *f == family::ZERO_WINDOWS {
+                // All three window families move together: they share one
+                // height, and `check_memory_windows` refuses a config where
+                // any of them is apart (`docs/spec/advice.md` §5.0).
+                if family::WINDOW_FAMILIES.contains(f) {
                     *h = height;
                 }
             }

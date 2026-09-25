@@ -104,8 +104,8 @@ pub fn plan_shards(profile: &CycleProfile, config: &VmConfig) -> ShardPlan {
 
 /// The `ZERO_WINDOWS` family's shard list: the distinct RAM window ids
 /// `addr / (4 * height)` of every RAM word the log touches, ascending, without
-/// window 0, which is `INIT_TEARDOWN`'s. `height` is the two init families'
-/// one height. `docs/spec/memory.md` §3.4.
+/// window 0, which is `INIT_TEARDOWN`'s. `height` is the window families' one
+/// height, `verifier_core::window_height`. `docs/spec/memory.md` §3.4.
 pub fn init_windows(log: &MemoryEventLog, height: u32) -> Vec<u32> {
     let windows: BTreeSet<u32> = log
         .touched_addresses()
@@ -126,6 +126,12 @@ pub fn init_windows(log: &MemoryEventLog, height: u32) -> Vec<u32> {
 /// window between `ADVICE_ORIGIN` and the highest word read is proved whether
 /// or not the guest touched it — its rows cost an init tuple and a teardown
 /// tuple that cancel, and its committed values are 0.
+///
+/// `height` is the **same** `verifier_core::window_height` [`init_windows`]
+/// takes, and that is the reason all three window families share one: the
+/// advice stride is read here, to count the windows, and again in the fill, to
+/// size each one, and only a rule makes those the same number
+/// (`docs/spec/advice.md` §5.0).
 pub fn advice_windows(log: &MemoryEventLog, height: u32) -> u32 {
     let stride = 4 * height as u64;
     let last = log

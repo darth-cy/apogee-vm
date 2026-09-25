@@ -382,9 +382,9 @@ impl ProgramParams {
 // every path that named them still does.
 pub use verifier_core::{absorb_statement_descriptor, ProgramIdentity, VmConfig};
 
-/// The two RAM window families' one height, or the rule a config breaks, as a
+/// The window families' one height, or the rule a config breaks, as a
 /// `ProgramError`. `verifier_core::window_height` is the rule, and its doc is
-/// why `ADVICE_WINDOWS` is not held to that height.
+/// why all three of them are held to it.
 fn window_height(config: &VmConfig) -> Result<u32, ProgramError> {
     verifier_core::window_height(config).map_err(|rule| ProgramError::WindowRule { rule })
 }

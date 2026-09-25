@@ -59,23 +59,26 @@ impl VmConfig {
     }
 
     /// Decode, refusing anything [`VmConfig::to_bytes`] could not have written
-    /// from a derived config: a wrong length, an unknown or out-of-order family,
-    /// a height off the menu, a family set without `INIT_TEARDOWN` or
-    /// `ZERO_WINDOWS` — which derivation puts in every config — or those two
-    /// at different heights. `None` rather than a panic.
+    /// from a derived config: a wrong length, an unknown or out-of-order
+    /// family, a height off the menu, a family set missing any of
+    /// [`family::WINDOW_FAMILIES`] — which derivation puts in every config —
+    /// or those three at different heights. `None` rather than a panic.
     ///
-    /// The two init families are required to be *present*, not last, and they
+    /// The window families are required to be *present*, not last, and they
     /// no longer are last: `FamilyId`s are append-only, the delegation
     /// families took ids above them at S21 and S23, and `ADVICE_WINDOWS` took
     /// the id above those at S25b. The window families are 7, 8 and 12, and a
     /// config lists whichever it holds in ascending order like any other.
     ///
-    /// `ADVICE_WINDOWS` is in every derived config too, and this decoder does
-    /// **not** require it: presence and extent are statement rules, checked by
-    /// [`check_memory_windows`] where the shard counts are. Nothing here is
-    /// unsound without it — a family absent from a config proves no shard —
-    /// and a config it could not have derived is refused where the rest of the
-    /// statement is.
+    /// **`ADVICE_WINDOWS` is one of them here, and that is a consequence of
+    /// the height rule rather than a decision taken twice.** This decoder
+    /// enforces [`window_height`], and S25b's one-height rule covers all three
+    /// window families, so a config without advice is refused here as well as
+    /// in [`check_memory_windows`]. The earlier design left advice out of this
+    /// decoder deliberately, on the reading that its presence was a statement
+    /// rule alone; folding it into `window_height` made the two rules one, and
+    /// the stricter of the two is the one that survives. Nothing was unsound
+    /// either way — a family absent from a config proves no shard.
     pub fn from_bytes(bytes: &[u8]) -> Option<VmConfig> {
         let word = |i: usize| -> Option<u32> {
             Some(u32::from_le_bytes(
@@ -106,26 +109,32 @@ impl VmConfig {
     }
 }
 
-/// The one height of the two **RAM** window families, or the rule a config
-/// breaks: `INIT_TEARDOWN` and `ZERO_WINDOWS` both present, at one height.
-/// `docs/spec/memory.md` §3.2: a `ZERO_WINDOWS` height below
-/// `INIT_TEARDOWN`'s would give image words a second init row.
+/// The one height of the window families, or the rule a config breaks: every
+/// family of [`family::WINDOW_FAMILIES`] present, at one height.
 ///
-/// **`ADVICE_WINDOWS` is not here, and deliberately.** The rule above exists
-/// because those two tile *one* region between them and a mismatch would give
-/// a word two init rows. Advice is a different region, tiled by that family
-/// alone, so nothing about RAM's stride constrains it and it takes a height of
-/// its own (`docs/spec/advice.md` §5). Its presence and its extent are
-/// [`check_memory_windows`]'.
+/// Two reasons, and they are different reasons for the same number.
+/// `INIT_TEARDOWN` and `ZERO_WINDOWS` tile *one* region between them, so a
+/// `ZERO_WINDOWS` height below `INIT_TEARDOWN`'s would give image words a
+/// second init row (`docs/spec/memory.md` §3.2). `ADVICE_WINDOWS` tiles a
+/// region of its own, where that argument says nothing — what it owes instead
+/// is that one number tiles it, because the window stride is read twice on the
+/// prover's side, by `trace::advice_windows` counting the windows and by the
+/// fill sizing each one, and a config that let them differ would have the
+/// count and the contents disagree about where a window ends.
+///
+/// So the rule is one height for every window family, which is also the one
+/// `h` a prover derives once (`docs/spec/advice.md` §5).
 pub fn window_height(config: &VmConfig) -> Result<u32, &'static str> {
-    match (
-        config.height(family::INIT_TEARDOWN),
-        config.height(family::ZERO_WINDOWS),
-    ) {
-        (Some(init), Some(zero)) if init == zero => Ok(init),
-        (Some(_), Some(_)) => Err("INIT_TEARDOWN and ZERO_WINDOWS have one height"),
-        _ => Err("INIT_TEARDOWN and ZERO_WINDOWS are in every VmConfig"),
+    let mut one: Option<u32> = None;
+    for f in family::WINDOW_FAMILIES {
+        let Some(h) = config.height(f) else {
+            return Err("every window family is in every VmConfig");
+        };
+        if *one.get_or_insert(h) != h {
+            return Err("the window families have one height");
+        }
     }
+    one.ok_or("every window family is in every VmConfig")
 }
 
 /// The static `VmConfig` as one typed message: the family ids ascending, then
@@ -183,20 +192,22 @@ pub fn absorb_statement_descriptor(
 }
 
 /// The verifier's window rules over the statement, checked before the memory
-/// challenges (`docs/spec/memory.md` §3.5): `INIT_TEARDOWN` and `ZERO_WINDOWS`
-/// present at one height `h`; exactly one `INIT_TEARDOWN` shard; one window id
+/// challenges (`docs/spec/memory.md` §3.5): every window family present at one
+/// height `h`; exactly one `INIT_TEARDOWN` shard; one window id
 /// per `ZERO_WINDOWS` shard; the ids strictly increasing; every id in
 /// `[1, 2^29 / h - 1]`. `ZERO_WINDOWS` shard `i` is window `windows[i]`, so
 /// together they give every RAM word exactly one init row. The error names the
 /// rule broken.
 ///
-/// Then `ADVICE_WINDOWS`, which is in every `VmConfig` too and carries two
-/// rules of its own (`docs/spec/advice.md` §5 and §6). It has **no id list and
-/// needs none**: its windows are `0 .. k` contiguous from `ADVICE_ORIGIN`, so
-/// shard `i` is advice window `i` by position. What is left is the extent,
-/// stated in that family's own height `a` — `ADVICE_LENGTH` is `2^31` bytes,
-/// which is `2^29 / a` windows of `4a` — and a count above it would claim an
-/// advice window past the top of the address space.
+/// Then `ADVICE_WINDOWS`, whose presence and height are its two siblings' rule
+/// and whose extent is its own (`docs/spec/advice.md` §6). It has **no id list
+/// and needs none**: its windows are `0 .. k` contiguous from `ADVICE_ORIGIN`,
+/// so shard `i` is advice window `i` by position. What is left is the extent,
+/// and that is `n` again — `ADVICE_LENGTH` is `2^31` bytes, which is `2^29 / h`
+/// windows of `4h`, the same count RAM's ids are capped by — so a count above
+/// it claims an advice window past the top of the address space. The bound is
+/// `<= n` where RAM's is `< n`, because this is a count of windows from 0 and
+/// that is an id above window 0.
 ///
 /// `config` is one derivation produced or [`VmConfig::from_bytes`] decoded —
 /// families strictly ascending, heights on the menu — and nothing here checks
@@ -213,11 +224,16 @@ pub fn check_memory_windows(
         "check_memory_windows: one shard count per family in the VmConfig"
     );
     let height = window_height(config)?;
-    let count = |id: u32| {
-        let i = config.families.iter().position(|(f, _)| *f == id);
-        i.map(|i| shard_counts[i])
+    // Every family named below is a window family, and `window_height` above
+    // found all three, so the position always exists.
+    let shards = |id: u32| {
+        let at = config
+            .families
+            .iter()
+            .position(|(f, _)| *f == id)
+            .expect("its height was found above");
+        shard_counts[at]
     };
-    let shards = |id: u32| count(id).expect("its height was found above");
     if shards(family::INIT_TEARDOWN) != 1 {
         return Err("INIT_TEARDOWN proves exactly one shard");
     }
@@ -231,11 +247,7 @@ pub fn check_memory_windows(
     if windows.iter().any(|w| *w == 0 || *w as u64 >= n) {
         return Err("every window id is in [1, 2^29 / h - 1]");
     }
-    let Some(advice_height) = config.height(family::ADVICE_WINDOWS) else {
-        return Err("ADVICE_WINDOWS is in every VmConfig");
-    };
-    let advice = count(family::ADVICE_WINDOWS).expect("its height was found just above");
-    if advice as u64 > (1u64 << 29) / advice_height as u64 {
+    if shards(family::ADVICE_WINDOWS) as u64 > n {
         return Err("the advice windows fit the advice region");
     }
     Ok(())
@@ -550,6 +562,7 @@ mod tests {
                 (family::MEM_WORD, 1 << 20),
                 (family::INIT_TEARDOWN, 1 << 16),
                 (family::ZERO_WINDOWS, 1 << 16),
+                (family::ADVICE_WINDOWS, 1 << 16),
             ],
             bytecode_size_words: 1 << 20,
         }
@@ -560,33 +573,44 @@ mod tests {
     #[test]
     fn the_statement_order_puts_the_init_families_first() {
         assert_eq!(
-            statement_shards(&config(), &[2, 0, 1, 2]),
+            statement_shards(&config(), &[2, 0, 1, 2, 1]),
             vec![
                 (family::INIT_TEARDOWN, 0),
                 (family::ZERO_WINDOWS, 0),
                 (family::ZERO_WINDOWS, 1),
                 (family::ADD_SUB_LUI_AUIPC, 0),
                 (family::ADD_SUB_LUI_AUIPC, 1),
+                (family::ADVICE_WINDOWS, 0),
             ]
         );
     }
 
-    /// The window height is `INIT_TEARDOWN`'s, and the two init families must
-    /// agree on it.
+    /// One height for every window family, `ADVICE_WINDOWS` included: each of
+    /// the three apart from the others is refused, and so is each absent.
     #[test]
-    fn the_window_height_is_the_init_families_one_height() {
+    fn the_window_height_is_every_window_familys_one_height() {
         assert_eq!(window_height(&config()), Ok(1 << 16));
-        let mut bad = config();
-        bad.families[3].1 = 1 << 18;
-        assert_eq!(
-            window_height(&bad),
-            Err("INIT_TEARDOWN and ZERO_WINDOWS have one height")
-        );
-        bad.families.pop();
-        assert_eq!(
-            window_height(&bad),
-            Err("INIT_TEARDOWN and ZERO_WINDOWS are in every VmConfig")
-        );
+        for f in family::WINDOW_FAMILIES {
+            let mut apart = config();
+            let at = apart
+                .families
+                .iter()
+                .position(|(id, _)| *id == f)
+                .expect("the config holds all three");
+            apart.families[at].1 = 1 << 18;
+            assert_eq!(
+                window_height(&apart),
+                Err("the window families have one height"),
+                "{f} apart"
+            );
+            let mut missing = config();
+            missing.families.remove(at);
+            assert_eq!(
+                window_height(&missing),
+                Err("every window family is in every VmConfig"),
+                "{f} missing"
+            );
+        }
     }
 
     /// The boundary message is `t_0 … t_31, t_pc, v_1 … v_31`.

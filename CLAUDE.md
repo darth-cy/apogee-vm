@@ -603,15 +603,21 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   window ids go in the statement as `MEMORY_WINDOWS`, and `program::check_memory_windows`
   holds them strictly increasing in `[1, 2^29/h − 1]` before the challenges. A window is a
   slice of the address space; a shard's cycles are a slice of the execution.
-- **The advice region is initialized the same way, by a third window family that shares
-  none of RAM's height.** `ADVICE_WINDOWS` is in every `VmConfig` too — it is one of
+- **The advice region is initialized the same way, by a third window family at the same
+  height.** `ADVICE_WINDOWS` is in every `VmConfig` too — it is one of
   `constants::family::WINDOW_FAMILIES`, which is what let it join `decode_program`'s three
   presence rules without a fourth — and proves **zero** shards in a run that reads no
   advice. Its windows are **contiguous from 0**, so shard `i` *is* advice window `i`: there
   is no id list, no new transcript tag, no new `PublicInputs` field and no amendment to the
   frozen absorb order, and the extent is already `SHARD_COUNTS`' entry at that family's
-  position. It is **not** held to the RAM families' one height: that rule exists because
-  those two tile one region between them, and advice is a region of its own.
+  position. It **is** held to the RAM families' one height, and
+  `verifier_core::window_height` is that rule over all three of `WINDOW_FAMILIES` — but for
+  a different reason than theirs. The RAM pair owe it because they tile one region between
+  them; advice tiles a region of its own whose stride is read **twice**, by
+  `trace::advice_windows` counting the windows a log needs and by the fill sizing each one,
+  and one number is what makes those two readings agree. So a statement has exactly one
+  window stride `h`, and both extent rules are stated in it: RAM ids in `[1, 2^29/h − 1]`,
+  advice count at most `2^29/h`.
   `gkr_verify::window_challenges` takes the address space beside the window, deriving
   `γ_M + space + α_addr·(origin + 4h·w)` where the literal `RAM` used to be. The one thing
   that differs from its two siblings is the point of the family: an advice word's initial

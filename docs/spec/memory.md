@@ -343,13 +343,20 @@ missing. A `ZERO_WINDOWS` height below `INIT_TEARDOWN`'s would put zero windows 
 inside the image window, giving image words a second init row. The default height of both is
 `2^22`.
 
-**A third window family exists and is not held to that height.** `ADVICE_WINDOWS = 12`
+**A third window family exists and is held to the same height.** `ADVICE_WINDOWS = 12`
 tiles the **advice** region, `[2^31, 2^32)`, from a free committed column
 (`docs/spec/advice.md` §5). It is in every `VmConfig` too — `constants::family::
-WINDOW_FAMILIES` is the list — but the rule above exists because the two RAM families tile
-*one* region between them, and a third region tiled by one family is not that case. So
-`window_height` still means "the two RAM families' one height", and advice's extent rule is
-stated in advice's own height.
+WINDOW_FAMILIES` is the list, and `window_height` means "**every** window family's one
+height", refusing a config where any of the three is absent or apart. Its default is `2^22`
+like theirs.
+
+The reason is not the one above: advice tiles a region of its own, so nothing about the
+image window reaches it. It is that the advice region's stride is read twice on the
+prover's side — once by `trace::advice_windows`, counting the windows a log needs, and once
+by the fill sizing each one — and one height is what makes those two readings the same
+number (`docs/spec/advice.md` §5.0). A statement therefore has exactly one window stride
+`h`, and both extent rules are stated in it: RAM's ids in `[1, 2^29/h − 1]`, advice's count
+at most `2^29/h`.
 
 ### 3.3 The artifacts
 
@@ -424,9 +431,12 @@ bytes may end inside a word.
 ### 3.5 The verifier's window rules
 
 Before the memory challenges, from the statement: the `VmConfig` has equal heights for
-families 7 and 8; `SHARD_COUNTS[INIT_TEARDOWN] = 1`; the window list's length is
-`SHARD_COUNTS[ZERO_WINDOWS]`; the list is strictly increasing; every id is in `[1, N − 1]`.
-`ZERO_WINDOWS` shard `i` is window `w_i`. `program::check_memory_windows` is these rules.
+families 7, 8 and 12; `SHARD_COUNTS[INIT_TEARDOWN] = 1`; the window list's length is
+`SHARD_COUNTS[ZERO_WINDOWS]`; the list is strictly increasing; every id is in `[1, N − 1]`;
+and `SHARD_COUNTS[ADVICE_WINDOWS] ≤ N`, the advice region's extent in the same `N`.
+`ZERO_WINDOWS` shard `i` is window `w_i`, and `ADVICE_WINDOWS` shard `i` is advice window
+`i` — contiguous, so it needs no list (`docs/spec/advice.md` §6).
+`program::check_memory_windows` is these rules.
 
 ---
 

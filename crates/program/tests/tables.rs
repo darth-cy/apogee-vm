@@ -260,8 +260,11 @@ fn code_above_a_shorter_familys_table_is_padding_there() {
     let addi = 0x0000_0013;
     // pc 0x200000 is row 2^20: above both init families' whole tables.
     let mut params = ProgramParams::defaults();
-    params.heights[family::INIT_TEARDOWN as usize] = 1 << 20;
-    params.heights[family::ZERO_WINDOWS as usize] = 1 << 20;
+    // The window families share one height, so all three move together
+    // (`docs/spec/advice.md` §5.0).
+    for window in family::WINDOW_FAMILIES {
+        params.heights[window as usize] = 1 << 20;
+    }
     let high = common::image_of(0x20_0000, &[addi]);
     let (tables, _) = decode_program(&high, &params).unwrap();
     for init in [family::INIT_TEARDOWN, family::ZERO_WINDOWS] {
@@ -372,8 +375,9 @@ fn file_bytes_past_the_image_window_are_refused() {
     );
     // One menu step up, window 0 holds the same bytes.
     let mut taller = params;
-    taller.heights[family::INIT_TEARDOWN as usize] = 1 << 18;
-    taller.heights[family::ZERO_WINDOWS as usize] = 1 << 18;
+    for window in family::WINDOW_FAMILIES {
+        taller.heights[window as usize] = 1 << 18;
+    }
     assert!(decode_program(&with_data_ending_at(0x4_0000), &taller).is_ok());
 }
 

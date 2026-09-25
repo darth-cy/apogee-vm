@@ -393,9 +393,10 @@ pub mod fr_arith {                                // docs/spec/delegation.md §1
   it in the guard would refuse the only height it has, `2^8`. That is why a delegation
   family **must** carry no channel (`docs/spec/lookup.md` §3). `ADVICE_WINDOWS`' arm sits
   outside the guard for the same reason and beside its two siblings: a window family has no
-  channel either. It takes `INIT_TEARDOWN`'s height by derivation and not by any rule here
-  — `verifier_core::window_height` binds the two RAM families to one because they tile one
-  region between them, and advice is a region of its own (`docs/spec/advice.md` §5.0).
+  channel either. It takes `INIT_TEARDOWN`'s height by **rule**:
+  `verifier_core::window_height` binds all three window families to one number — the RAM
+  pair because they tile one region between them, advice because its region's stride is
+  read twice, by the window count and by the fill (`docs/spec/advice.md` §5.0).
 - **A circuit that reads the `GENERIC` channel names the packed table as its last three
   setup columns** (S17). `FamilyCircuit::reads_generic_table` is whether any channel spec
   is `GENERIC`. At S17 only `JUMP_BRANCH_SLT` reads it: its `S[0..7]` are identity's

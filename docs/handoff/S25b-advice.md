@@ -120,7 +120,7 @@ Per 4-byte word of witness consumed:
 
 **The honest claim is not "free random access".** An advice word is still one init tuple
 in a committed window shard, so the shard count still grows with the witness — one
-`ADVICE_WINDOWS` shard per `4a` bytes at that family's height `a`. A megabyte of advice is
+`ADVICE_WINDOWS` shard per `4h` bytes at the one window height `h`. A megabyte of advice is
 a megabyte of committed columns, exactly as a megabyte of RAM is. What disappears is the
 ecall, the second copy, the whole-witness hash, and the Poseidon2/Fr delegation growth
 proportional to the witness.
@@ -222,15 +222,20 @@ and a reader diffing it should expect that ratio rather than look for what they 
   advice. It is a window family, which is `decode_program`'s presence rule 2, so it joined
   without a fourth rule. `constants::family::WINDOW_FAMILIES` is the list every reader now
   consults.
-- **Withdrawn during the stage: one height for all three window families.** The first
-  draft made `window_height` hold `ADVICE_WINDOWS` to the RAM families' height. The rule
-  that binds `INIT_TEARDOWN` and `ZERO_WINDOWS` exists because they tile *one* region
-  between them and a mismatch would give an image word two init rows. Advice is a separate
-  region tiled by one family, so that reason does not reach it. The draft rule forced every
-  test that varies the RAM window height to vary a third family for no reason it could
-  state, which is the shape of a rule that exists because it was easy to write. Advice
-  takes a height off the menu like any other family and `check_memory_windows` states its
-  extent in that height.
+- **Withdrawn, then reinstated at the owner's instruction: one height for all three window
+  families.** The first draft made `window_height` hold `ADVICE_WINDOWS` to the RAM
+  families' height; it was withdrawn mid-stage on the reading that the rule binding
+  `INIT_TEARDOWN` and `ZERO_WINDOWS` exists only because they tile *one* region between
+  them, which advice does not. The owner reinstated it after the stage's first PR, and the
+  second argument — the one the withdrawal missed — is what carries it: the advice region's
+  stride is read **twice** on the prover's side, by `trace::advice_windows` counting the
+  windows a log needs and by the fill sizing each one, and only a rule makes those the same
+  number. `prover::statement_inputs_rec` already derived `h` once and handed it to the
+  count while the fill took the family's registered height, so the independent-height
+  design had the statement's shard count and the shard's own contents able to disagree
+  about where a window ends. `window_height` now covers
+  `constants::family::WINDOW_FAMILIES` whole, and `check_memory_windows` states RAM's ids
+  and advice's extent in the same `h`.
 - **Advice guests drop out of the QEMU suites** (owner's decision). A host loader maps
   only the image's `PT_LOAD` segments and advice is in none of them, so the region is
   unmapped and the first load faults. `crates/emulator/tests/revm.rs::
@@ -439,6 +444,7 @@ carries `parent_state_root`, which is where the state check will anchor.
 | `crates/checker/tests/mem_word.rs`, `mem_subword.rs` | four tamper cases each: a RAM load claiming the region, a bit that is neither 0 nor 1, the space column moved on its own, and a store into the region — each refused by the gate named |
 | `crates/checker/tests/mem_fill.rs` | **the prover's fill on an advice load**, which no committed guest reaches: a hand-encoded program loading one advice word and one RAM word, so both sides of `advice_split` are in one trace, with every gate and obligation checked on both |
 | `crates/gkr/tests/memory.rs` | the advice artifact **proves and verifies** at three windows; its two leaves are the tuples of their rows; the window constant is pinned at two windows and refuses a space with none; and an advice tuple is arithmetically never a RAM tuple |
-| `crates/program/tests/config.rs` | the extent rule at its boundary — `n` windows accepted and `n + 1` refused, at two heights — and a config without the family refused |
+| `crates/program/tests/config.rs` | the extent rule at its boundary — `n` windows accepted and `n + 1` refused, at two heights, the second reached by moving **all three** window families together — and, in `a_config_without_every_window_family_at_one_height_is_refused`, each of the three refused when absent and when apart, at derivation and at decode |
+| `crates/verifier-core/src/statement.rs` (unit) | `the_window_height_is_every_window_familys_one_height`: the rule itself, each of `WINDOW_FAMILIES` apart and each absent |
 | `crates/verifier-core/tests/reduce.rs` | an `ADVICE_WINDOWS` shard reads its own space at its own window, the index being the window; and advice window 0 is not RAM window 0 |
 | `crates/prover/tests/revm.rs` | **`# DEFERRED`**: the one end-to-end proof, one `ADVICE_WINDOWS` shard in a twelve-shard block |

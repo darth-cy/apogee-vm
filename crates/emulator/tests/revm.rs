@@ -763,23 +763,28 @@ fn a9_the_cycle_and_occupancy_report() {
             100.0 * rows as f64 / *height as f64
         );
     }
-    let windows = trace::init_windows(
-        &run.log,
-        run.config
-            .height(family::INIT_TEARDOWN)
-            .expect("a window family"),
-    );
+    // One stride for every window family, which is the rule
+    // `verifier_core::window_height` carries (`docs/spec/advice.md` §5.0) —
+    // read once here so that the RAM count and the advice count cannot be
+    // taken at two different numbers.
+    let h = run
+        .config
+        .height(family::INIT_TEARDOWN)
+        .expect("a window family");
+    for window in family::WINDOW_FAMILIES {
+        assert_eq!(
+            run.config.height(window),
+            Some(h),
+            "{window} is at the one window height"
+        );
+    }
+    let windows = trace::init_windows(&run.log, h);
     println!("  RAM windows above 0: {windows:?}");
     // The three window families run no cycles, so the `shards` column above is
     // the *plan*, which is 0 for each; their real counts are the statement's.
     // `INIT_TEARDOWN` proves one, `ZERO_WINDOWS` one per id listed above, and
     // `ADVICE_WINDOWS` this many (`docs/spec/advice.md` §6).
-    let advice = trace::advice_windows(
-        &run.log,
-        run.config
-            .height(family::ADVICE_WINDOWS)
-            .expect("a window family"),
-    );
+    let advice = trace::advice_windows(&run.log, h);
     println!("  advice windows: {advice}");
     assert_eq!(
         advice, 1,

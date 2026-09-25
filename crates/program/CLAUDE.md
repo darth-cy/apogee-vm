@@ -98,13 +98,14 @@ is claimed by exactly one family by construction.
 | 11 | `FR_ARITH` | no pc; invoked, not decoded: ecall `0x502`, one `Fr` add, multiply or inverse a row; an **empty** table | 2^8 |
 | 12 | `ADVICE_WINDOWS` | no pc; the **advice** region's windows, one shard per window the prover supplies and **zero** in a run that reads none; present in every `VmConfig`; an **empty** table | 2^22 |
 
-The two **RAM** window families have **one height**, `h`: RAM window `w` is the bytes
-`[4h·w, 4h·(w+1))` (`docs/spec/memory.md` §3). **`ADVICE_WINDOWS` is not held to it**
-(S25b, `docs/spec/advice.md` §5.0): that rule exists because those two tile one region
-between them and a mismatch would give an image word a second init row, and advice is a
-different region tiled by one family, so nothing about RAM's stride reaches it and no rule
-invents one. `bytecode_size_words` defaults to 2^20 (a 4 MiB ceiling), the code version
-to 0.
+Every **window** family has **one height**, `h`: RAM window `w` is the bytes
+`[4h·w, 4h·(w+1))` (`docs/spec/memory.md` §3), and advice window `i` is the `4h` bytes at
+`ADVICE_ORIGIN + 4h·i`. **`ADVICE_WINDOWS` is held to it too** (S25b,
+`docs/spec/advice.md` §5.0), for a reason of its own: the RAM pair owe one height because
+they tile one region between them and a mismatch would give an image word a second init
+row, while advice owes it because its region's stride is read twice — by
+`trace::advice_windows` counting the windows and by the fill sizing each one.
+`bytecode_size_words` defaults to 2^20 (a 4 MiB ceiling), the code version to 0.
 
 **Static detachment.** A family is in the `VmConfig` exactly when it claims at least one
 pc, **every `constants::family::WINDOW_FAMILIES` member** always, and — since S21 — **a
@@ -311,12 +312,13 @@ second message's count at `ADVICE_WINDOWS`' position, so advice cost no new tag,
 (`docs/spec/advice.md` §6).
 
 `check_memory_windows` is the verifier's rule over the same three, before the memory
-challenges (`docs/spec/memory.md` §3.5): both init families present at one height `h`;
+challenges (`docs/spec/memory.md` §3.5): every window family present at one height `h`;
 `INIT_TEARDOWN`'s shard count 1; one window id per `ZERO_WINDOWS` shard; the ids strictly
 increasing; every id in `[1, 2^29 / h − 1]`. `ZERO_WINDOWS` shard `i` is window `w_i`.
-**Then `ADVICE_WINDOWS`' two rules** (S25b, `docs/spec/advice.md` §5 and §6): it is in the
-config, and its shard count fits the region, `2^29 / a` windows of `4a` at its **own**
-height `a`. It has no id list and needs none — advice is contiguous from `ADVICE_ORIGIN`,
+**Then `ADVICE_WINDOWS`' extent** (S25b, `docs/spec/advice.md` §6): its shard count fits
+the region, `2^29 / h` windows of `4h` at the **same** `h` — its presence and its height
+are the window-family rule above, not a rule of its own. It has no id list and needs none
+— advice is contiguous from `ADVICE_ORIGIN`,
 so shard `i` is advice window `i` by position, which is also why the statement gained no
 fourth message. A breach is `WindowRule`, its `rule` naming which. It takes the `VmConfig` as
 `decode_program` derives it or `VmConfig::from_bytes` decodes it — families strictly

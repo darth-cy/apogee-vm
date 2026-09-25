@@ -122,7 +122,7 @@ Columns of one layer do not all index the same thing.
 | a generic-table `S` column (`JUMP_BRANCH_SLT`'s, `SHIFT_BITWISE`'s and `MEM_SUBWORD`'s `S[7..10]`, `MUL_DIV`'s and `ATOMICS`' `S[6..9]`) | row `y` of the packed table (`lookup.md` §9): row 0 the `ZeroEntry`, all 0; rows 1 to `2^16` the AND byte table's `(AND_BASE + a + 1, b, a & b)`; rows `2^16 + 1` to `2^17` `U16GetSign`'s `(SIGN_BASE + h + 1, h >> 15, 0)`; rows `2^17 + 1` to `2^17 + 32` S18's `ShiftPowers`, `(SHIFT_BASE + s + 1, 2^s, 2^(31 − s))`; every later row 0. `AND_BASE = 0`, `SIGN_BASE = 256` and `SHIFT_BASE = SIGN_BASE + 2^16` are `constants::generic_table`'s, so the three key ranges are pairwise disjoint |
 | `V[range19]`, `V[range16]` | the value `y mod 2^19`, `y mod 2^16` |
 | a RAM window family's `M` columns, `S[0]`, `V[row]`, `V[ram_live]` | the RAM word at byte address `4h·w + 4y`, `w` being the shard's window (§10, §11) |
-| `ADVICE_WINDOWS`' `M` columns, `V[row]` | the advice word at byte address `ADVICE_ORIGIN + 4a·i + 4y`, `a` the family's own height and `i` the shard's own position (§15) |
+| `ADVICE_WINDOWS`' `M` columns, `V[row]` | the advice word at byte address `ADVICE_ORIGIN + 4h·i + 4y`, `h` the one window height and `i` the shard's own position (§15) |
 
 ### 0.4 The challenges
 
@@ -295,9 +295,9 @@ it. None of the statements below reads any advice — the one that does is S25b'
 `crates/prover/tests/revm.rs`' (§15.1) — so each carries one more family entry and one more
 zero in its shard counts than the stage that measured it wrote; the heights are
 `crates/prover/tests/common/mod.rs`' `WINDOW_VARS`, `2^16`, that file setting every family not
-named to it. **It does not share the RAM windows' height**: `verifier_core::window_height` ties
-`INIT_TEARDOWN` and `ZERO_WINDOWS` together because they tile one region between them, and
-advice is a different region tiled by this family alone (`advice.md` §5.0).
+named to it. **It shares the RAM windows' height**: `verifier_core::window_height` ties all
+three window families to one number, so a statement has exactly one window stride
+(`advice.md` §5.0).
 The S16 statement is `crates/prover/tests/acceptance.rs`': its config lists families 0, 7, 8
 and 12, and its shard counts are `[1, 1, 0, 0]`. The S17 statement is
 `crates/prover/tests/control.rs`': its config lists families 0, 1, 7, 8 and 12, and its shard
@@ -8365,31 +8365,33 @@ nothing else above gate list 0 — this circuit's whole statement is enforcing.
 ### 15.1 Header
 
 `family_circuit(12, n)` is `memory::advice_window_artifact(n)` with no channels. One shard per
-advice window the execution reads, `trace::advice_windows(log, a)`; **shard `i` is advice
+advice window the execution reads, `trace::advice_windows(log, h)`; **shard `i` is advice
 window `i`**, by position and by nothing else, so there is no window-id list anywhere —
 advice is contiguous from `guest_memory::ADVICE_ORIGIN` and a blob has no holes
-(`advice.md` §6) — and `WC` is `γ_M + 7 + α_addr·(0x8000_0000 + 4a·i)`. Spec: `advice.md` §5.
+(`advice.md` §6) — and `WC` is `γ_M + 7 + α_addr·(0x8000_0000 + 4h·i)`. Spec: `advice.md` §5.
 Fill: `prover::family_fill(12)`, the private `fill::advice_window`,
-`trace::build_advice_window_columns(log, i, a)`. Three committed columns, one virtual table,
+`trace::build_advice_window_columns(log, i, h)`. Three committed columns, one virtual table,
 two unmasked leaves, no enforcing gate, no lookup, two outputs. `constants::family::
 DEFAULT_HEIGHTS` puts it at `2^22`, which is the committed fixture's height; the one statement
 with a shard of it is S25b's, `crates/prover/tests/revm.rs`', which proves **one** at `2^20`,
 the witness `guests/revm-block` reads fitting a single window there. Every other statement in
 the repository has it in the config and proves none.
 
-**`a` is this family's own height and not the RAM windows' `h`.**
-`verifier_core::window_height` ties `INIT_TEARDOWN` and `ZERO_WINDOWS` to one height because
-they tile one region between them and a mismatch would give an image word a second init row;
-advice is a different region, tiled by this family alone, so nothing about RAM's stride reaches
-it (`advice.md` §5.0). Its extent rule is stated in `a`: `ADVICE_LENGTH` is `2^31` bytes, so the
-region is `2^29 / a` windows of `4a`, and `check_memory_windows` refuses a shard count above
-that.
+**`h` is the window height, this family's and the two RAM ones' alike.**
+`verifier_core::window_height` ties all three of `constants::family::WINDOW_FAMILIES` to one
+number and refuses a config where any is absent or apart. The RAM pair owe it because they
+tile one region between them and a mismatch would give an image word a second init row; this
+family owes it because its region's stride is read twice — by `trace::advice_windows` counting
+the windows and by the fill sizing each one — and one number is what makes those agree
+(`advice.md` §5.0). Its extent rule is therefore stated in the same `h`: `ADVICE_LENGTH` is
+`2^31` bytes, so the region is `2^29 / h` windows of `4h`, and `check_memory_windows` refuses a
+shard count above that.
 
 ### 15.2 Columns
 
 | address | name | Rust | descriptive name | row `y` holds | read by |
 | --- | --- | --- | --- | --- | --- |
-| `M[0]` | `teardown_ts` | `PolyAddress::Memory(0)` | Last write time | the last write's timestamp to the word at `A + 4a·i + 4y`, or 0 | leaf `teardown` |
+| `M[0]` | `teardown_ts` | `PolyAddress::Memory(0)` | Last write time | the last write's timestamp to the word at `A + 4h·i + 4y`, or 0 | leaf `teardown` |
 | `M[1]` | `teardown_value` | `PolyAddress::Memory(1)` | Final word | the last value written, or 0 | leaf `teardown` |
 | `M[2]` | `init_value` | `PolyAddress::Memory(2)` | Initial word | the advice word the prover supplied there, or 0 | leaf `init` |
 | `V[row]` | `row` | `VirtualKind::RowIndex`, wire tag 0 | Row index | `y` | both leaves |
@@ -8439,8 +8441,8 @@ because the artifact mirrors its two siblings', not because a trace can tell the
 
 | `L1` | relation | node | positional | named |
 | --- | --- | --- | --- | --- |
-| 0 | 0 | `teardown` (read side) | `α_addr·V[row] ×4 + α_ts·M[0] + α_val·M[1] + WC` | `T(ADVICE, A + 4a·i + 4·row, teardown_ts, teardown_value)` |
-| 1 | 1 | `init` (write side) | `α_addr·V[row] ×4 + α_val·M[2] + WC` | `T(ADVICE, A + 4a·i + 4·row, 0, init_value)` |
+| 0 | 0 | `teardown` (read side) | `α_addr·V[row] ×4 + α_ts·M[0] + α_val·M[1] + WC` | `T(ADVICE, A + 4h·i + 4·row, teardown_ts, teardown_value)` |
+| 1 | 1 | `init` (write side) | `α_addr·V[row] ×4 + α_val·M[2] + WC` | `T(ADVICE, A + 4h·i + 4·row, 0, init_value)` |
 
 Both are `Linear` and carry no mask: every row of an advice window is an advice word, the
 region beginning exactly where RAM's reach stops. Code: the private `memory::window_tuple`,
@@ -8458,8 +8460,8 @@ A window shard has no padding: every row is an address.
 
 | row | `teardown_ts` | `teardown_value` | `init_value` | leaves |
 | --- | --- | --- | --- | --- |
-| a word the execution never read | 0 | 0 | 0 | both `T(ADVICE, A + 4a·i + 4y, 0, 0)`: they cancel |
-| a word it read | the last read's write-back timestamp | the value read, `v` | the same `v` | `T(ADVICE, A + 4a·i + 4y, t, v)` read against `T(ADVICE, A + 4a·i + 4y, 0, v)` written |
+| a word the execution never read | 0 | 0 | 0 | both `T(ADVICE, A + 4h·i + 4y, 0, 0)`: they cancel |
+| a word it read | the last read's write-back timestamp | the value read, `v` | the same `v` | `T(ADVICE, A + 4h·i + 4y, t, v)` read against `T(ADVICE, A + 4h·i + 4y, 0, v)` written |
 
 There is no third row kind, and that is the difference from §10 and §11: no query of any family
 may write an advice word, so a row's final value is a value some row *read*, never one some row

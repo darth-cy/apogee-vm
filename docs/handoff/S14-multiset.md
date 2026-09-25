@@ -663,7 +663,8 @@ The stage prompt's items as remapped by the owner's design. File paths are under
   (`2^19 − 1`, `2^19`, `2^19 + 3`) and a write at a window's first word.
 - **Construction-time rules**: `constraints/tests/memory.rs::the_read_tuples_parts_are_at_their_named_positions`
   and `::a_root_read_from_a_witness_column_alone_is_refused`.
-- **Program**: `program/tests/config.rs::a_config_without_both_init_families_at_one_height_is_refused`,
+- **Program**: `program/tests/config.rs::a_config_without_every_window_family_at_one_height_is_refused`
+  (named `..._without_both_init_families_...` until S25b folded `ADVICE_WINDOWS` into the rule),
   `::the_statement_descriptor_is_three_adjacent_messages`,
   `::a_config_of_every_family_round_trips`;
   `program/tests/tables.rs::file_bytes_past_the_image_window_are_refused`,

@@ -194,44 +194,49 @@ fn the_descriptor_needs_one_shard_count_per_family() {
     absorb_statement_descriptor(&mut Transcript::new(), &fib_config(), &[1, 2], &[]);
 }
 
-/// Derivation puts `INIT_TEARDOWN` and `ZERO_WINDOWS` in every config at one
-/// height, so derivation refuses to produce a config without either or with
-/// the two apart, and the wire form refuses to read one — the empty config
-/// included. Presence is what is checked, not position: delegation families
-/// are appended above both ids.
+/// Derivation puts **every window family** in every config at one height, so
+/// derivation refuses to produce a config without any of the three or with one
+/// apart from the others, and the wire form refuses to read one — the empty
+/// config included. Presence is what is checked, not position: delegation
+/// families are appended above all three ids.
+///
+/// `ADVICE_WINDOWS` joined this rule at S25b. It owes the shared height for a
+/// reason the other two do not — its region's stride is read twice, by the
+/// window count and by the fill (`docs/spec/advice.md` §5.0) — and the rule it
+/// is refused by is the same one.
 #[test]
-fn a_config_without_both_init_families_at_one_height_is_refused() {
+fn a_config_without_every_window_family_at_one_height_is_refused() {
     let image = common::guest("fib");
     let missing = ProgramError::WindowRule {
-        rule: "INIT_TEARDOWN and ZERO_WINDOWS are in every VmConfig",
+        rule: "every window family is in every VmConfig",
     };
     let apart = ProgramError::WindowRule {
-        rule: "INIT_TEARDOWN and ZERO_WINDOWS have one height",
+        rule: "the window families have one height",
     };
-    for init in [family::INIT_TEARDOWN, family::ZERO_WINDOWS] {
-        let err = decode_program_detaching(&image, &ProgramParams::defaults(), &[init]);
-        assert_eq!(err.unwrap_err(), missing, "{init} detached");
+    for window in family::WINDOW_FAMILIES {
+        let err = decode_program_detaching(&image, &ProgramParams::defaults(), &[window]);
+        assert_eq!(err.unwrap_err(), missing, "{window} detached");
         let mut config = fib_config();
-        config.families.retain(|(f, _)| *f != init);
+        config.families.retain(|(f, _)| *f != window);
         assert_eq!(config.families.len(), 10);
         assert_eq!(
             VmConfig::from_bytes(&config.to_bytes()),
             None,
-            "{init} missing"
+            "{window} missing"
         );
 
         let mut params = ProgramParams::defaults();
-        params.heights[init as usize] = 1 << 20;
+        params.heights[window as usize] = 1 << 20;
         assert_eq!(
             decode_program(&image, &params).unwrap_err(),
             apart,
-            "{init} lowered"
+            "{window} lowered"
         );
-        let config = with_height(&fib_config(), &[init], 1 << 20);
+        let config = with_height(&fib_config(), &[window], 1 << 20);
         assert_eq!(
             VmConfig::from_bytes(&config.to_bytes()),
             None,
-            "{init} lowered"
+            "{window} lowered"
         );
     }
     let empty = VmConfig {
@@ -240,10 +245,11 @@ fn a_config_without_both_init_families_at_one_height_is_refused() {
     };
     assert_eq!(VmConfig::from_bytes(&empty.to_bytes()), None);
 
-    // Just inside: both lowered together derives, and reads back.
+    // Just inside: all three lowered together derives, and reads back.
     let mut params = ProgramParams::defaults();
-    params.heights[family::INIT_TEARDOWN as usize] = 1 << 20;
-    params.heights[family::ZERO_WINDOWS as usize] = 1 << 20;
+    for window in family::WINDOW_FAMILIES {
+        params.heights[window as usize] = 1 << 20;
+    }
     let (_, config) = decode_program(&image, &params).unwrap();
     assert_eq!(VmConfig::from_bytes(&config.to_bytes()), Some(config));
 }
@@ -288,12 +294,21 @@ fn the_window_rules_hold_at_their_boundaries() {
     assert_eq!(check(counts(1, 2, 0), &[0, 1]), refused(range));
     assert_eq!(check(counts(1, 2, 0), &[126, 128]), refused(range));
 
-    // At 2^16 rows there are 8,192 windows.
-    let short = with_height(
-        &config,
-        &[family::INIT_TEARDOWN, family::ZERO_WINDOWS],
-        1 << 16,
-    );
+    // `ADVICE_WINDOWS`' extent (`docs/spec/advice.md` §6). Its windows are
+    // contiguous from 0, so there is no id list and nothing to order — the
+    // whole rule is the extent, and it is stated in the **same** `h` as the
+    // RAM ids' range. The region is `2^31` bytes, which at this config's
+    // `2^22` window height is `2^29 / 2^22 = 128` windows of `4h`; unlike
+    // RAM's ids the count is 0-based and 128 tiles the region exactly, so the
+    // boundary is `<= n` and not `< n`.
+    let extent = "the advice windows fit the advice region";
+    assert_eq!(check(counts(1, 0, 0), &[]), Ok(()), "no advice at all");
+    assert_eq!(check(counts(1, 0, 128), &[]), Ok(()), "the whole region");
+    assert_eq!(check(counts(1, 0, 129), &[]), refused(extent));
+
+    // One height moves **both** ceilings, which is the point of the rule: at
+    // `2^16` there are 8,192 RAM windows above 0 and 8,192 advice windows.
+    let short = with_height(&config, &family::WINDOW_FAMILIES, 1 << 16);
     assert_eq!(
         check_memory_windows(&short, &counts(1, 1, 0), &[8191]),
         Ok(())
@@ -302,52 +317,44 @@ fn the_window_rules_hold_at_their_boundaries() {
         check_memory_windows(&short, &counts(1, 1, 0), &[8192]),
         refused(range)
     );
-
-    // The config's own rule: the two init families present, at one height.
-    let apart = with_height(&config, &[family::ZERO_WINDOWS], 1 << 16);
     assert_eq!(
-        check_memory_windows(&apart, &counts(1, 0, 0), &[]),
-        refused("INIT_TEARDOWN and ZERO_WINDOWS have one height")
-    );
-    let mut missing = config.clone();
-    missing.families.retain(|(f, _)| *f != family::ZERO_WINDOWS);
-    assert_eq!(
-        check_memory_windows(&missing, &[1, 1, 1, 1, 1, 1, 1, 1, 1, 0], &[]),
-        refused("INIT_TEARDOWN and ZERO_WINDOWS are in every VmConfig")
-    );
-
-    // `ADVICE_WINDOWS`' two rules (`docs/spec/advice.md` §5 and §6). Its
-    // windows are contiguous from 0, so there is no id list and nothing to
-    // order — the whole rule is the extent. The region is `2^31` bytes, which
-    // at this config's `2^22` advice height is `2^29 / 2^22 = 128` windows of
-    // `4a`; unlike RAM's ids the count is 0-based and 128 tiles the region
-    // exactly, so the boundary is `<= n` and not `< n`.
-    let extent = "the advice windows fit the advice region";
-    assert_eq!(check(counts(1, 0, 0), &[]), Ok(()), "no advice at all");
-    assert_eq!(check(counts(1, 0, 128), &[]), Ok(()), "the whole region");
-    assert_eq!(check(counts(1, 0, 129), &[]), refused(extent));
-
-    // And the ceiling is stated in **advice's own** height, which is why that
-    // family is not held to the RAM families'. At `2^16` there are 8,192.
-    let small = with_height(&config, &[family::ADVICE_WINDOWS], 1 << 16);
-    assert_eq!(
-        check_memory_windows(&small, &counts(1, 0, 8192), &[]),
+        check_memory_windows(&short, &counts(1, 0, 8192), &[]),
         Ok(()),
-        "a height of its own moves its ceiling and nothing else"
+        "the same height, the same count of advice windows"
     );
     assert_eq!(
-        check_memory_windows(&small, &counts(1, 0, 8193), &[]),
+        check_memory_windows(&short, &counts(1, 0, 8193), &[]),
         refused(extent)
     );
 
-    // Presence is a statement rule and not a decoding one: a config without
-    // the family is refused here, where the shard counts are.
-    let mut no_advice = config.clone();
-    no_advice
-        .families
-        .retain(|(f, _)| *f != family::ADVICE_WINDOWS);
-    assert_eq!(
-        check_memory_windows(&no_advice, &[1, 1, 1, 1, 1, 1, 1, 0, 1, 1], &[]),
-        refused("ADVICE_WINDOWS is in every VmConfig")
-    );
+    // The config's own rule: every window family present, at one height. Each
+    // of the three apart from the others is refused, and so is each absent.
+    // Since S25b that is one rule and not two — `window_height` covers all
+    // three, and `VmConfig::from_bytes` calls it — so a config missing
+    // `ADVICE_WINDOWS` is refused here *and* at decode, which
+    // `a_config_without_every_window_family_at_one_height_is_refused` pins.
+    let apart = "the window families have one height";
+    let missing = "every window family is in every VmConfig";
+    for f in family::WINDOW_FAMILIES {
+        let one_off = with_height(&config, &[f], 1 << 16);
+        assert_eq!(
+            check_memory_windows(&one_off, &counts(1, 0, 0), &[]),
+            refused(apart),
+            "{f} apart"
+        );
+        let mut without = config.clone();
+        without.families.retain(|(id, _)| *id != f);
+        let short_counts: Vec<u32> = config
+            .families
+            .iter()
+            .zip(counts(1, 0, 0))
+            .filter(|((id, _), _)| *id != f)
+            .map(|(_, c)| c)
+            .collect();
+        assert_eq!(
+            check_memory_windows(&without, &short_counts, &[]),
+            refused(missing),
+            "{f} missing"
+        );
+    }
 }

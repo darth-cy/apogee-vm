@@ -97,7 +97,7 @@ exactly what that guest's proof does and does not say.
 
 The extent, and only to window granularity: `shard_counts[ADVICE_WINDOWS]` is in the
 statement descriptor, so a verifier knows the advice region spans that many windows of
-`4a` bytes, `a` being that family's height. It learns nothing about the contents.
+`4h` bytes, `h` being the one window height. It learns nothing about the contents.
 
 The count is derived from the **highest advice word the execution read**, rounded up to a
 window (`trace::advice_windows`), and not from the blob the prover supplied. So a prover
@@ -213,7 +213,7 @@ executor-side twin of `FRAME_READ_ONLY`'s gate.
 ## 5. Initialisation: `ADVICE_WINDOWS`
 
 The two RAM window families' third sibling, differing in exactly one thing — and sharing
-neither their region nor their height (§5.0).
+their height but not their region (§5.0).
 
 | Family | Window | Initial values |
 | --- | --- | --- |
@@ -241,25 +241,42 @@ apart.
 run that reads no advice. That keeps `program::decode_program`'s three presence rules
 intact — rule 2 is "the family is a window family", `constants::family::WINDOW_FAMILIES`
 is the list, and this is one — at the cost of one more circuit in every verifying key and
-one more group in every statement's G8. Its presence is a **statement** rule, checked in
-`verifier_core::check_memory_windows` beside the shard counts, and not a decoding rule:
-a config without it proves no advice shard and is unsound in no way, so `VmConfig::from_bytes`
-does not need to know about it.
+one more group in every statement's G8. Its presence is checked **twice**, and by one rule:
+`verifier_core::window_height` requires every window family, so `VmConfig::from_bytes`
+refuses a config without advice and `check_memory_windows` — which calls `window_height`
+first — refuses it again beside the shard counts. Nothing is unsound without it, a family
+absent from a config proving no shard; what the decoder gains is that a config no
+derivation could have produced does not reach the statement rules at all.
 
-### 5.0 It does not share the RAM windows' height
+### 5.0 It shares the RAM windows' height
 
-`verifier_core::window_height` holds `INIT_TEARDOWN` and `ZERO_WINDOWS` to one height
-because **they tile one region between them**, and a `ZERO_WINDOWS` height below
-`INIT_TEARDOWN`'s would give an image word a second init row (`docs/spec/memory.md` §3.2).
-Advice is a different region, tiled by this family alone, so that reason does not reach
-it and no rule invents one: `ADVICE_WINDOWS` takes a height off the menu like any other
-family, and its extent rule is stated in **its own** height — `ADVICE_LENGTH` is `2^31`
-bytes, so at height `a` the region is `2^29 / a` windows of `4a`.
+`verifier_core::window_height` holds **every** family of
+`constants::family::WINDOW_FAMILIES` to one height, and refuses a config where any of the
+three is absent or apart from the others. There is therefore exactly one window stride in
+a statement, `h`, and both of the rules stated in a height — RAM's `[1, 2^29/h − 1]` for
+its ids and advice's `≤ 2^29/h` for its count — read the same `h`.
 
-A first draft of this section required one height for all three. It was withdrawn before
-the stage closed: it forced every test that varies the RAM window height to vary a third
-family for no reason it could state, which is the shape of a rule that exists because it
-was easy to write.
+The three owe that number for two different reasons, and both are load-bearing:
+
+- **`INIT_TEARDOWN` and `ZERO_WINDOWS` tile one region between them.** A `ZERO_WINDOWS`
+  height below `INIT_TEARDOWN`'s would give an image word a second init row
+  (`docs/spec/memory.md` §3.2). That argument is about two families sharing a region and
+  says nothing about a third.
+- **`ADVICE_WINDOWS` tiles a region whose stride is read twice.** `trace::advice_windows`
+  counts the windows a log needs at one height; the fill sizes each window at the height
+  the family is registered at. Those are two readings of the same number, and only a rule
+  makes them the same number. `prover::statement_inputs_rec` derives `h` once and hands it
+  to the count, so a config that let the advice family differ would have the statement's
+  shard count and the shard's own contents disagree about where a window ends — which is a
+  prover that cannot prove its own trace, not a verifier that accepts a bad one, but it is
+  a disagreement a rule can simply remove.
+
+So the rule is **one height for every window family**. `ADVICE_WINDOWS` still takes that
+height off the menu like any other family; what it does not take is a height of its own.
+
+An earlier draft of this stage gave advice an independent height, on the reading that the
+first argument above is the only argument there is. It is not: the second argument holds
+for a region tiled by one family, and it is the one that applies here.
 
 ### 5.1 The range obligation it does not carry
 
@@ -296,7 +313,7 @@ carry:
 A sparse advice map — its own id list beside `MEMORY_WINDOWS` — would have needed all
 four, for flexibility nothing has asked for. Advice is a blob; a blob has no holes.
 
-A load above `ADVICE_ORIGIN + 4ak` is an address no window initialized. It is fatal in the
+A load above `ADVICE_ORIGIN + 4hk` is an address no window initialized. It is fatal in the
 emulator and unbalanced in the argument, exactly as an out-of-window RAM address is
 (`docs/spec/memory-ops.md` §2, "What no gate here does").
 
@@ -326,7 +343,7 @@ and so grows the `POSEIDON2` and `FR_ARITH` shard counts with the witness size.
 
 **What does not disappear is the committed memory row.** An advice word is still one init
 tuple in a window shard, so the shard count still grows with the witness — one
-`ADVICE_WINDOWS` shard per `4a` bytes *read*, `a` being that family's height. The honest
+`ADVICE_WINDOWS` shard per `4h` bytes *read*, `h` being the window height. The honest
 claim is
 
 > no ecall per word, no second copy in RAM, no whole-witness hash, and no Poseidon2/Fr

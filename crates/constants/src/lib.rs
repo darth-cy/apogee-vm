@@ -1077,13 +1077,12 @@ pub mod family {
     /// every `VmConfig`, like the two RAM window families, and proving
     /// **zero** shards in a run that reads no advice.
     ///
-    /// It takes a height off the menu **of its own**.
-    /// `verifier_core::window_height` holds [`INIT_TEARDOWN`] and
-    /// [`ZERO_WINDOWS`] to one height because those two tile one region
-    /// between them and a mismatch would give an image word two init rows;
-    /// advice is a separate region tiled by this family alone, so that reason
-    /// does not reach it and no rule invents one
-    /// (`docs/spec/advice.md` §5.0).
+    /// It takes the window families' **one** height, which
+    /// `verifier_core::window_height` holds all three of
+    /// [`WINDOW_FAMILIES`] to. The RAM pair owe it for one reason and this
+    /// family for another — they tile one region between them, and this one
+    /// tiles a region whose stride the prover reads twice, once to count the
+    /// windows and once to size them (`docs/spec/advice.md` §5.0).
     ///
     /// It is the two RAM window families' third sibling in every other respect
     /// but one: its rows' initial values are **free**. Window 0's come from the
@@ -1106,11 +1105,12 @@ pub mod family {
     /// these is what let it join `program::decode_program`'s three presence
     /// rules without needing a fourth.
     ///
-    /// They are **not** held to one height. `verifier_core::window_height`
-    /// holds the two RAM ones to one because they tile one region between
-    /// them and a mismatch would give a word two init rows; advice is a
-    /// separate region tiled by one family, so that reason does not reach it
-    /// and no rule invents one.
+    /// They are held to **one height**, which is what
+    /// `verifier_core::window_height` returns and the only window stride a
+    /// prover or a verifier derives. The RAM pair owe it because they tile one
+    /// region between them and a mismatch would give a word two init rows;
+    /// [`ADVICE_WINDOWS`] owes it because its region's stride is read twice,
+    /// by the count and by the fill, and one number is what makes those agree.
     pub const WINDOW_FAMILIES: [u32; 3] = [INIT_TEARDOWN, ZERO_WINDOWS, ADVICE_WINDOWS];
 
     /// Whether a family's rows are **execution cycles**, indexed by

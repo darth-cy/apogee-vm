@@ -27,10 +27,10 @@ Everything a shard's verification does except its one Mercury opening, `#![no_st
 pub struct VmConfig { pub families: Vec<(u32, u32)>, pub bytecode_size_words: u32 }
 impl VmConfig { pub fn height(&self, f: u32) -> Option<u32>; pub fn to_bytes(&self) -> Vec<u8>;
                 pub fn from_bytes(b: &[u8]) -> Option<VmConfig>; }
-pub fn window_height(config: &VmConfig) -> Result<u32, &'static str>;   // the two RAM ones only
+pub fn window_height(config: &VmConfig) -> Result<u32, &'static str>;   // all three window families
 pub fn absorb_statement_descriptor(tr: &mut Transcript, config: &VmConfig, shard_counts: &[u32], windows: &[u32]);
 pub fn check_memory_windows(config: &VmConfig, shard_counts: &[u32], windows: &[u32]) -> Result<(), &'static str>;
-                                                    // + ADVICE_WINDOWS' presence and extent, S25b
+                                                    // + ADVICE_WINDOWS' extent, S25b
 pub struct ProgramIdentity(pub Fr);                        // to_bytes, from_bytes
 pub fn identity_digest(code_version: u32, config: &VmConfig, entry_pc: u32,
                        commitments: &[Vec<[u8; 64]>]) -> ProgramIdentity;
@@ -120,18 +120,23 @@ pub const OPENING_BYTES: usize = 704;  pub const SRS_VERIFIER_BYTES: usize = 320
 - **One statement, many shards.** A statement is proven when every one of its shards'
   proofs verifies against one `PublicInputs`: a shard checks the memory argument's
   reconciliation over roots the other shards' proofs establish.
-- **There are three window families, and only two of them share a height.**
-  `window_height` is `INIT_TEARDOWN` and `ZERO_WINDOWS` alone, because those two tile one
-  region between them and a `ZERO_WINDOWS` height below `INIT_TEARDOWN`'s would give an
-  image word a second init row (`docs/spec/memory.md` §3.2). S25b's `ADVICE_WINDOWS` tiles
-  a **different** region by itself, so that reason does not reach it and no rule invents
-  one: it takes a height off the menu like any other family and its extent is stated in
-  that height, `2^29 / a` windows of `4a` (`docs/spec/advice.md` §5.0).
-  `check_memory_windows` carries its two rules — present in the config, and a shard count
-  that fits the region — after the RAM ones. **Its presence is a statement rule and not a
-  decoding one**: `VmConfig::from_bytes` does not ask for it, because a family absent from
-  a config proves no shard and is unsound in no way, and a config no derivation produces is
-  refused where the rest of the statement is.
+- **There are three window families and they share one height.**
+  `window_height` covers `constants::family::WINDOW_FAMILIES` whole and refuses a config
+  where any of the three is absent or apart, so a statement has exactly one window stride
+  `h`. The RAM pair owe it because they tile one region between them and a `ZERO_WINDOWS`
+  height below `INIT_TEARDOWN`'s would give an image word a second init row
+  (`docs/spec/memory.md` §3.2). S25b's `ADVICE_WINDOWS` tiles a **different** region, where
+  that argument says nothing; what it owes instead is that its region's stride is read
+  twice, by `trace::advice_windows` counting the windows and by the fill sizing each one,
+  and one number is what makes those agree. Its extent is stated in the same `h`: at most
+  `2^29 / h` windows of `4h` (`docs/spec/advice.md` §5.0).
+  `check_memory_windows` carries its extent — a shard count that fits the region — after
+  the RAM ones; its presence and its height are `window_height`'s, which
+  `check_memory_windows` calls first. **Its presence is therefore a decoding rule too**,
+  which it was not before S25b's height rule: `VmConfig::from_bytes` calls `window_height`,
+  so a config without advice is refused there as well. Nothing was unsound without it — a
+  family absent from a config proves no shard — and the stricter of the two readings is the
+  one that survived folding the rules into one.
 - **Advice adds no message, no tag and no field.** Its windows are `0 .. k` contiguous from
   `guest_memory::ADVICE_ORIGIN`, so shard `i` *is* advice window `i` by position and the
   extent is already `SHARD_COUNTS` at that family's slot. `shard_challenges` therefore
