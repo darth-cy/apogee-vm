@@ -1099,9 +1099,26 @@ pub mod family {
     /// prover chose; a guest owes a check of it against something public
     /// (`docs/spec/public-values.md` §6).
     pub const ADVICE_WINDOWS: u32 = 14;
+    /// The **256-bit modular multiplication** delegation family (S26): one
+    /// `out = a * b mod m` a row over 32-bit limbs, invoked by the
+    /// [`ecall::PRECOMPILE_MOD_MUL`] ecall and never decoded
+    /// (`docs/spec/delegation.md` §14).
+    ///
+    /// The modulus is in the **frame**, not in the circuit, and that is what
+    /// makes one family serve secp256k1's two fields, BN254's base field and
+    /// the EVM's `MULMOD` alike. It is the opposite choice from [`FR_ARITH`],
+    /// whose modulus is the circuit's own field and whose multiply is therefore
+    /// one degree-2 gate; a 256-bit modulus does not fit `Fr` at all, so this
+    /// one proves the schoolbook identity `a*b = q*m + out` limb by limb with a
+    /// signed carry chain.
+    ///
+    /// **Why it exists**: on a whole mainnet block, 44.4% of the guest's cycles
+    /// are 256-bit modular multiply and square inside `k256`, at ~1,300 cycles
+    /// a call (`docs/handoff/S26-cycle.md`).
+    pub const MOD_MUL: u32 = 15;
 
     /// How many families this table defines.
-    pub const COUNT: u32 = 15;
+    pub const COUNT: u32 = 16;
 
     /// The pinned height of [`PUBLIC_INPUT`] and [`PUBLIC_OUTPUT`].
     ///
@@ -1149,6 +1166,7 @@ pub mod family {
         false, // PUBLIC_INPUT
         false, // PUBLIC_OUTPUT
         false, // ADVICE_WINDOWS
+        false, // MOD_MUL
     ];
 
     /// The trace-height menu, ascending. Even powers of two only, so that a
@@ -1193,6 +1211,7 @@ pub mod family {
         1 << 8,  // PUBLIC_INPUT, and it is the only admissible one
         1 << 8,  // PUBLIC_OUTPUT, likewise
         1 << 22, // ADVICE_WINDOWS, at the window height
+        1 << 8,  // MOD_MUL
     ];
 
     /// The default `bytecode_size_words`: `2^20` words, a 4 MiB ceiling on the
@@ -1475,6 +1494,17 @@ pub mod ecall {
     /// path and the software fallback are the same function by construction.
     pub const PRECOMPILE_FR_ARITH: u32 = 0x0502;
 
+    /// One 256-bit modular multiplication over a 32-word frame, `a0` = the
+    /// frame base pointer, read and written in place. A **delegation** call
+    /// (S26); `constants::family::MOD_MUL` is the family that proves it and
+    /// `docs/spec/delegation.md` §14 the frame table.
+    ///
+    /// The three operands and the result cross the frame as eight 32-bit
+    /// little-endian limbs each — the modulus among them, so the call is
+    /// `out = a * b mod m` for **any** 256-bit `m` and not for one the circuit
+    /// fixes. The invocation writes the result's eight words and nothing else.
+    pub const PRECOMPILE_MOD_MUL: u32 = 0x0503;
+
     /// The POSIX standard input stream, **uncommitted**.
     ///
     /// The executor serves the statement's public input here as well as in the
@@ -1558,6 +1588,9 @@ pub mod address_space {
     /// The delegation anchor space of `family::FR_ARITH` (S23).
     pub const DELEGATION_FR_ARITH: u8 = 6;
 
+    /// The delegation anchor space of `family::MOD_MUL` (S26).
+    pub const DELEGATION_MOD_MUL: u8 = 7;
+
     /// Every delegation tag, ascending, **append-only**: the one place the set
     /// is written down, so a reader of a memory event can tell a delegation
     /// anchor from RAM, a register or the pc without knowing which family it
@@ -1566,10 +1599,11 @@ pub mod address_space {
     /// `constraints::memory::frame_query_takes` and `trace::AddressSpace` both
     /// read it; the `deleg` frame query takes an event in **any** of these
     /// spaces, and nothing else does.
-    pub const DELEGATION: [u8; 3] = [
+    pub const DELEGATION: [u8; 4] = [
         DELEGATION_KECCAK_F,
         DELEGATION_POSEIDON2,
         DELEGATION_FR_ARITH,
+        DELEGATION_MOD_MUL,
     ];
 }
 
@@ -1676,7 +1710,7 @@ pub mod delegation {
     ///
     /// `docs/spec/delegation.md` §3 is the same table in prose, and
     /// `crates/constants/tests/ecall_abi.rs` holds the two equal.
-    pub const TYPES: [(u32, u32, u8, usize); 3] = [
+    pub const TYPES: [(u32, u32, u8, usize); 4] = [
         (
             super::family::KECCAK_F,
             super::ecall::PRECOMPILE_KECCAK_F,
@@ -1694,6 +1728,12 @@ pub mod delegation {
             super::ecall::PRECOMPILE_FR_ARITH,
             super::address_space::DELEGATION_FR_ARITH,
             super::fr_arith::FRAME_WORDS,
+        ),
+        (
+            super::family::MOD_MUL,
+            super::ecall::PRECOMPILE_MOD_MUL,
+            super::address_space::DELEGATION_MOD_MUL,
+            super::mod_mul::FRAME_WORDS,
         ),
     ];
 }
@@ -1855,4 +1895,60 @@ pub mod fr_arith {
 
     /// The operation codes, ascending. Every live row carries exactly one.
     pub const OPS: [u32; 3] = [OP_ADD, OP_MUL, OP_INV];
+}
+
+/// The 256-bit modular multiplication delegation's frame and its bounds,
+/// frozen at S26. `docs/spec/delegation.md` §14.
+///
+/// **One operation, and there is no opcode word.** The family multiplies and
+/// does nothing else, because that is what the profile asked for: 256-bit
+/// modular multiply and square are 44.4% of a whole mainnet block at ~1,300
+/// cycles a call, and every other operation `k256` performs on a field element
+/// — add, negate, the modulus correction — costs under 100 cycles natively, so
+/// delegating one would be slower than not (`docs/handoff/S26-cycle.md`). A
+/// later operation is a later family or a frame append under §10, not a field
+/// this one reserves.
+pub mod mod_mul {
+    /// Limbs per 256-bit value: eight 32-bit words, little-endian.
+    pub const LIMBS: usize = 8;
+
+    /// The first word of the modulus `m`.
+    pub const M_WORD: usize = 0;
+
+    /// The first word of operand `a`.
+    pub const A_WORD: usize = M_WORD + LIMBS;
+
+    /// The first word of operand `b`.
+    pub const B_WORD: usize = A_WORD + LIMBS;
+
+    /// The first word of the result. The only words the invocation writes.
+    pub const OUT_WORD: usize = B_WORD + LIMBS;
+
+    /// The frame: four values of eight limbs.
+    pub const FRAME_WORDS: usize = OUT_WORD + LIMBS;
+
+    /// The frame in bytes, which is what a shim hands over.
+    pub const FRAME_BYTES: usize = 4 * FRAME_WORDS;
+
+    /// Positions of the schoolbook identity: `a*b` and `q*m` each have limb
+    /// products at `i + j` for `i, j < LIMBS`, so `0 ..= 2*LIMBS - 2`.
+    pub const POSITIONS: usize = 2 * LIMBS - 1;
+    /// The carries the identity needs: one out of every position but the last,
+    /// whose outgoing carry the identity forces to zero.
+    pub const CARRIES: usize = POSITIONS - 1;
+
+    /// Bits a signed carry takes, offset included.
+    ///
+    /// **Derived, not chosen.** At position `k` the identity is
+    /// `P_k - S_k - out_k + c_{k-1} = 2^32 * c_k`, where `P_k` and `S_k` are
+    /// each at most `LIMBS` products of two values below `2^32` — so under
+    /// `8 * 2^64 = 2^67` — and `out_k` is under `2^32`. Writing `C` for the
+    /// bound on `|c|`, the recurrence is
+    /// `C = (2^67 + 2^32 + C) / 2^32`, whose fixed point is just above `2^35`.
+    /// [`CARRY_OFFSET`] is `2^36` and a carry is written as
+    /// `sum of bits - CARRY_OFFSET`, so the bits span `[-2^36, 2^36)` — a full
+    /// factor of two of room over the bound.
+    pub const CARRY_BITS: usize = 37;
+    /// The offset a carry's bit decomposition carries: `2^36`.
+    pub const CARRY_OFFSET: u64 = 1 << (CARRY_BITS - 1);
 }

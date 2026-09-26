@@ -60,6 +60,7 @@ pub const FAMILIES: [FamilyId; family::COUNT as usize] = [
     family::PUBLIC_INPUT,
     family::PUBLIC_OUTPUT,
     family::ADVICE_WINDOWS,
+    family::MOD_MUL,
 ];
 
 /// Every **delegation** family, with the ecall number that invokes it, its
@@ -135,6 +136,7 @@ pub fn family_name(family: FamilyId) -> &'static str {
         family::PUBLIC_INPUT => "PUBLIC_INPUT",
         family::PUBLIC_OUTPUT => "PUBLIC_OUTPUT",
         family::ADVICE_WINDOWS => "ADVICE_WINDOWS",
+        family::MOD_MUL => "MOD_MUL",
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -274,6 +276,7 @@ pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
         | family::KECCAK_F
         | family::POSEIDON2
         | family::FR_ARITH
+        | family::MOD_MUL
         | family::PUBLIC_INPUT
         | family::PUBLIC_OUTPUT
         | family::ADVICE_WINDOWS => &[],
@@ -987,6 +990,7 @@ pub fn setup_commitments(
             | family::KECCAK_F
             | family::POSEIDON2
             | family::FR_ARITH
+            | family::MOD_MUL
             | family::PUBLIC_INPUT
             | family::PUBLIC_OUTPUT
             | family::ADVICE_WINDOWS => Vec::new(),

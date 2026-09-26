@@ -226,8 +226,8 @@ use poly::{MultilinearPoly, PolyBacking};
 use program::{decode_program, ProgramParams, VmConfig};
 use sumcheck::{absorb_witness_digest, witness_digest};
 use trace::{
-    build_frame_witness, build_init_teardown_columns, build_memory_columns,
-    build_value_window_columns, init_windows, CycleProfile, FamilyTraces, MemoryEventLog,
+    build_init_teardown_columns, build_value_window_columns, init_windows, CycleProfile,
+    FamilyTraces, MemoryEventLog,
 };
 
 /// Each execution family's name, indexed by `FamilyId`: what a frame shard is
@@ -270,8 +270,26 @@ pub struct Traced {
 }
 
 /// The ELF is `crates/loader/tests/vectors`', pinned by digest in that crate's
-/// suite.
+/// suite. The run must exit 0.
 pub fn traced(name: &str, input: u32) -> Traced {
+    traced_exiting(name, input, 0)
+}
+
+/// [`traced`] for a guest whose success is a **nonzero** status: the fixtures
+/// that count their own checks exit with the count — `keccak-test` 6,
+/// `recursion-ops` 9, `mod-mul-ops` 14 — so the status is the assertion and not
+/// a failure.
+pub fn traced_exiting(name: &str, input: u32, status: i32) -> Traced {
+    traced_exiting_at(name, input, status, HEIGHT)
+}
+
+/// [`traced_exiting`] at a height of the caller's choosing.
+///
+/// A decoded table's row `i` is pc `2i`, so a guest whose `.text` outgrows
+/// `2·HEIGHT` needs a taller one: `guests/mod-mul-ops` reaches pc `0x2161a` and
+/// takes `2^18`. It is the second committed guest to need that, `consistency`
+/// being the first (`crates/program/tests/partition.rs`).
+pub fn traced_exiting_at(name: &str, input: u32, status: i32, height: u32) -> Traced {
     let path = format!(
         "{}/../loader/tests/vectors/{name}.elf",
         env!("CARGO_MANIFEST_DIR")
@@ -279,7 +297,7 @@ pub fn traced(name: &str, input: u32) -> Traced {
     let elf = std::fs::read(&path).unwrap_or_else(|e| panic!("reading {path}: {e}"));
     let image = load_elf(&elf).unwrap_or_else(|e| panic!("{name}: {e:?}"));
     let params = ProgramParams {
-        heights: [HEIGHT; family::COUNT as usize],
+        heights: [height; family::COUNT as usize],
         ..ProgramParams::defaults()
     };
     let (tables, config) =
@@ -295,7 +313,7 @@ pub fn traced(name: &str, input: u32) -> Traced {
     };
     let (traces, log, profile, execution) =
         trace_run(&image, &io, &tables, &config).unwrap_or_else(|e| panic!("{name}: {e}"));
-    assert_eq!(execution.exit_code, 0, "{name}");
+    assert_eq!(execution.exit_code, status, "{name}");
     Traced {
         image,
         config,
@@ -359,8 +377,10 @@ pub fn frame_shard(
     memory: &ExternalChallenges,
 ) -> Shard {
     let queries = frame_queries(family);
-    let mut columns = build_memory_columns(log, queries, cycles, height);
-    columns.extend(build_frame_witness(log, queries, cycles, height));
+    let mut columns = checker::memory_columns_from_log(log, queries, cycles, height);
+    columns.extend(checker::frame_witness_from_log(
+        log, queries, cycles, height,
+    ));
     Shard {
         label: format!("frame of {}", FAMILY_NAMES[family as usize]),
         family: Some(family),
@@ -410,7 +430,7 @@ pub fn window_shard(
         0 => image_window_artifact(vars),
         _ => zero_window_artifact(vars),
     };
-    let columns = build_init_teardown_columns(log, image, w, HEIGHT as usize);
+    let columns = build_init_teardown_columns(log.state(), image, w, HEIGHT as usize);
     Shard {
         label: format!("window {w}"),
         family: None,
@@ -426,7 +446,7 @@ pub fn window_shard(
 /// advice spans (`docs/spec/public-values.md` §4).
 pub fn window_shards(t: &Traced, memory: &ExternalChallenges) -> Vec<Shard> {
     let mut out = vec![window_shard(&t.log, &t.image, 0, memory)];
-    for w in init_windows(&t.log, HEIGHT) {
+    for w in init_windows(t.log.state(), HEIGHT) {
         out.push(window_shard(&t.log, &t.image, w, memory));
     }
     let public = family::PUBLIC_WINDOW_HEIGHT;
@@ -447,7 +467,7 @@ pub fn window_shards(t: &Traced, memory: &ExternalChallenges) -> Vec<Shard> {
         family: None,
         artifact: zero_window_artifact(vars),
         base: BaseLayer::new(build_init_teardown_columns(
-            &t.log,
+            t.log.state(),
             &t.image,
             family::PUBLIC_OUTPUT_WINDOW,
             public as usize,
@@ -486,7 +506,12 @@ pub fn value_window_shard(
         label: format!("{label} window {w}"),
         family: None,
         artifact: value_window_artifact(vars),
-        base: BaseLayer::new(build_value_window_columns(log, initial, w, height as usize)),
+        base: BaseLayer::new(build_value_window_columns(
+            log.state(),
+            initial,
+            w,
+            height as usize,
+        )),
         challenges: window_challenges(memory, w, vars),
     }
 }

@@ -207,16 +207,18 @@ pub fn statement() -> PublicInputs {
 }
 
 /// A proof of the `ADD_SUB_LUI_AUIPC` shard with the right digest and the
-/// right widths — 35 witness commitments since S23: the frame's `w + 3 = 11`
-/// and the family's own 24, one delegation-request selector per registered
-/// type among them — and no transitions at all.
+/// right widths — **36** witness commitments since S26: the frame's `w + 3 = 11`
+/// and the family's own 25, one delegation-request selector per registered
+/// type among them, so this number moves by one with every delegation family
+/// the repository registers (`docs/spec/delegation.md` §10) — and no
+/// transitions at all.
 pub fn shell(vk: &VerifyingKey, public: &PublicInputs) -> ShardProof {
     ShardProof {
         family: ADD,
         shard_index: 0,
         ts_window: TRIVIAL_TS_WINDOW,
         global_digest: global_commit(vk, public).digest,
-        witness_commitments: (400..435).map(blob).collect(),
+        witness_commitments: (400..436).map(blob).collect(),
         outputs: vec![Fr::ZERO; 8],
         gkr: GkrProof { layers: vec![] },
         opening: [3; OPENING_BYTES],

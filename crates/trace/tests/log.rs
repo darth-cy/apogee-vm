@@ -14,6 +14,7 @@ fn the_tags_are_the_frozen_constants() {
         (AddressSpace::KeccakF, address_space::DELEGATION_KECCAK_F),
         (AddressSpace::Poseidon2, address_space::DELEGATION_POSEIDON2),
         (AddressSpace::FrArith, address_space::DELEGATION_FR_ARITH),
+        (AddressSpace::ModMul, address_space::DELEGATION_MOD_MUL),
     ] {
         assert_eq!(space.tag(), tag);
         assert_eq!(AddressSpace::from_tag(tag), Some(space));
@@ -26,16 +27,17 @@ fn the_tags_are_the_frozen_constants() {
             address_space::DELEGATION_KECCAK_F,
             address_space::DELEGATION_POSEIDON2,
             address_space::DELEGATION_FR_ARITH,
+            address_space::DELEGATION_MOD_MUL,
         ),
-        (1, 2, 3, 4, 5, 6)
+        (1, 2, 3, 4, 5, 6, 7)
     );
-    // Every tag is nonzero, so no real tuple is all zeros, and 7 is the tag the
+    // Every tag is nonzero, so no real tuple is all zeros, and 8 is the tag the
     // next delegation family takes — it names no space yet
     // (`docs/spec/delegation.md` §3).
-    for tag in [0u8, 7, 255] {
+    for tag in [0u8, 8, 255] {
         assert_eq!(AddressSpace::from_tag(tag), None, "tag {tag}");
     }
-    // The delegation set is the three tags and nothing else: one `deleg` frame
+    // The delegation set is the four tags and nothing else: one `deleg` frame
     // query serves them all, and `frame_query_takes` reads this array.
     assert_eq!(
         trace::DELEGATION_SPACES.map(|s| s.tag()),

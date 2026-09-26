@@ -545,7 +545,7 @@ fn garbage_is_refused_and_never_panics() {
             4 => q.family = (next() % 12) as u32,
             5 => q.shard_index = next() as u32,
             6 => q.outputs.truncate((next() % 9) as usize),
-            _ => q.witness_commitments.truncate((next() % 34) as usize),
+            _ => q.witness_commitments.truncate((next() % 35) as usize),
         }
         assert!(reduce_shard(&key, &q, &p).is_err());
     }

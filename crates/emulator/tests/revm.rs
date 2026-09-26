@@ -882,7 +882,7 @@ fn a9_the_cycle_and_occupancy_report() {
         );
     }
     let windows = trace::init_windows(
-        &run.log,
+        run.log.state(),
         run.config
             .height(family::INIT_TEARDOWN)
             .expect("a window family"),

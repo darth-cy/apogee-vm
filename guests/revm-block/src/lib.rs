@@ -63,9 +63,6 @@ use revm::context_interface::transaction::{AccessList, AccessListItem};
 use revm::context_interface::transaction::{
     Authorization, RecoveredAuthority, RecoveredAuthorization,
 };
-use revm::primitives::eip4844::{
-    BLOB_BASE_FEE_UPDATE_FRACTION_CANCUN, BLOB_BASE_FEE_UPDATE_FRACTION_PRAGUE,
-};
 use revm::primitives::{keccak256, Address, Bytes, Log, StorageKey, TxKind, B256, U256};
 use revm::state::{AccountInfo, Bytecode};
 use revm::{Context, ExecuteEvm, MainBuilder, MainContext};
@@ -115,7 +112,12 @@ pub type Word32 = [u8; 32];
 /// The committed synthetic witness's length in bytes, pinned here and
 /// asserted against `crates/emulator/tests/vectors/revm_block_witness.bin` by
 /// `crates/emulator/tests/revm.rs`.
-pub const COMMITTED_WITNESS_BYTES: usize = 723;
+///
+/// 725 since S26, which appended `BlockEnvWitness::blob_gasprice`: the synthetic
+/// block sets it to `Some(1)`, which is the `Option` tag plus a one-byte varint
+/// (`docs/spec/revm-block.md` §1.6). `cargo run -p kat-gen -- revm` prints the
+/// number it should be.
+pub const COMMITTED_WITNESS_BYTES: usize = 725;
 
 /// The hardfork enum a witness's `spec_id` names, re-exported so that a
 /// fixture builder can write `SpecId::PRAGUE as u8` rather than a number.
@@ -323,8 +325,34 @@ pub struct BlockEnvWitness {
     pub difficulty: Word32,
     /// Post-merge `prevrandao`, which replaces `difficulty`.
     pub prevrandao: Option<Word32>,
-    /// EIP-4844 excess blob gas; the blob gas price derives from it.
+    /// EIP-4844 excess blob gas.
     pub excess_blob_gas: Option<u64>,
+    /// EIP-4844's **blob gas price**, recorded rather than derived.
+    ///
+    /// The price is `fake_exponential(1, excess_blob_gas,
+    /// BLOB_BASE_FEE_UPDATE_FRACTION)`, and the update fraction is a
+    /// **fork parameter that keeps changing**: EIP-4844 set it at 3,338,477,
+    /// EIP-7691 raised it to 5,007,716 at Prague, and Fusaka's BPO forks
+    /// (EIP-7892) raise it again on a schedule revm 42 does not know — it
+    /// carries the Cancun and Prague constants and nothing after them. S25's
+    /// guest therefore computed Prague's answer for a post-Fusaka block and got
+    /// **4,387,037,219,060,994 where the chain says 5,055,772**, a factor of
+    /// 8.7e8, which made every block carrying a type-3 transaction refuse to
+    /// execute: revm checks `max_fee_per_blob_gas >= blob_gasprice` per
+    /// transaction, and no real transaction sets a limit anywhere near that.
+    ///
+    /// So it is recorded. `blobGasPrice` is on every receipt of every
+    /// post-Cancun block, which makes the chain itself the source, and the
+    /// guest does no `fake_exponential` at all — worth 2.0% of a mini-block's
+    /// cycles on its own (`docs/spec/profiling.md`). It is **advice like every
+    /// other field here**, bound by the journal the execution publishes and, in
+    /// the stateless mode, by the post-state root
+    /// (`docs/spec/revm-block.md` §1.3).
+    ///
+    /// `Some` exactly when `excess_blob_gas` is; [`BlockWitness::canonical`]
+    /// refuses any other pairing, because a witness that carried an excess and
+    /// no price would be one the guest had to derive a price for.
+    pub blob_gasprice: Option<u128>,
     /// EIP-7843 slot number.
     pub slot_num: u64,
     /// The ancestor hashes the `BLOCKHASH` opcode may read, **ascending by
@@ -465,6 +493,12 @@ pub enum WitnessError {
     NodesNotSorted { at: usize },
     /// Two withdrawals share an index, or they are not ascending by index.
     WithdrawalsNotSorted { at: usize },
+    /// `excess_blob_gas` and `blob_gasprice` are not both present or both
+    /// absent. They are one fact about the block — EIP-4844 is on or it is not
+    /// — and a witness carrying one without the other would be one the guest had
+    /// to derive the other for, which is the derivation
+    /// [`BlockEnvWitness::blob_gasprice`] exists to remove.
+    BlobPairing,
 }
 
 impl BlockWitness {
@@ -536,6 +570,9 @@ impl BlockWitness {
             return Err(WitnessError::UnknownSpec {
                 spec_id: self.env.spec_id,
             });
+        }
+        if self.env.excess_blob_gas.is_some() != self.env.blob_gasprice.is_some() {
+            return Err(WitnessError::BlobPairing);
         }
         for (i, pair) in self.accounts.windows(2).enumerate() {
             if pair[0].address >= pair[1].address {
@@ -808,7 +845,7 @@ pub fn run_against<DB: revm::Database>(witness: &BlockWitness, db: DB) -> Result
     cfg.chain_id = witness.env.chain_id;
     let mut evm = Context::mainnet()
         .with_db(db)
-        .with_block(block_env(&witness.env, spec))
+        .with_block(block_env(&witness.env))
         .with_cfg(cfg)
         .build_mainnet();
 
@@ -856,12 +893,7 @@ pub fn run_against<DB: revm::Database>(witness: &BlockWitness, db: DB) -> Result
 /// priced with the wrong one charges the wrong blob gas. It is picked here
 /// rather than in the witness because it is a property of the hardfork the
 /// witness already names.
-pub(crate) fn block_env(env: &BlockEnvWitness, spec: SpecId) -> BlockEnv {
-    let fraction = if spec.is_enabled_in(SpecId::PRAGUE) {
-        BLOB_BASE_FEE_UPDATE_FRACTION_PRAGUE
-    } else {
-        BLOB_BASE_FEE_UPDATE_FRACTION_CANCUN
-    };
+pub(crate) fn block_env(env: &BlockEnvWitness) -> BlockEnv {
     BlockEnv {
         number: U256::from_be_bytes(env.number),
         beneficiary: Address::from(env.beneficiary),
@@ -870,9 +902,15 @@ pub(crate) fn block_env(env: &BlockEnvWitness, spec: SpecId) -> BlockEnv {
         basefee: env.basefee,
         difficulty: U256::from_be_bytes(env.difficulty),
         prevrandao: env.prevrandao.map(B256::new),
-        blob_excess_gas_and_price: env
-            .excess_blob_gas
-            .map(|excess| BlobExcessGasAndPrice::new(excess, fraction)),
+        // Recorded, never derived: the update fraction the derivation needs is a
+        // fork parameter revm 42 does not know past Prague
+        // (`BlockEnvWitness::blob_gasprice`).
+        blob_excess_gas_and_price: env.excess_blob_gas.zip(env.blob_gasprice).map(
+            |(excess_blob_gas, blob_gasprice)| BlobExcessGasAndPrice {
+                excess_blob_gas,
+                blob_gasprice,
+            },
+        ),
         slot_num: env.slot_num,
     }
 }

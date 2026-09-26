@@ -446,7 +446,7 @@ pub fn poseidon2_permute(state: &mut [u8; 96]) -> bool {
 /// record with it and declares nothing (`docs/spec/delegation.md` §7).
 pub mod recursion {
     use super::{delegation_number, ecall1, exit, EXIT_PRECOMPILE_ERROR};
-    use constants::{delegation, ecall, fr_arith, poseidon2};
+    use constants::{delegation, ecall, fr_arith, mod_mul, poseidon2};
 
     /// The Poseidon2 delegation's declaration record.
     #[link_section = ".rodata.apogee.delegations.poseidon2"]
@@ -457,6 +457,11 @@ pub mod recursion {
     #[link_section = ".rodata.apogee.delegations.fr_arith"]
     static DELEGATION_FR_ARITH: [u8; delegation::MARKER_BYTES] =
         super::record(ecall::PRECOMPILE_FR_ARITH);
+
+    /// The 256-bit modular multiplication delegation's declaration record.
+    #[link_section = ".rodata.apogee.delegations.mod_mul"]
+    static DELEGATION_MOD_MUL: [u8; delegation::MARKER_BYTES] =
+        super::record(ecall::PRECOMPILE_MOD_MUL);
 
     /// The Poseidon2 delegation's 96-byte frame: three canonical
     /// little-endian `Fr` lanes, permuted in place.
@@ -476,11 +481,66 @@ pub mod recursion {
     #[repr(C, align(4))]
     pub struct FrArithFrame(pub [u8; fr_arith::FRAME_BYTES]);
 
+    /// The modular multiplication delegation's 128-byte frame: the modulus,
+    /// `a`, `b` and the result, each eight little-endian 32-bit limbs
+    /// (`docs/spec/delegation.md` §14).
+    ///
+    /// **Limbs and not bytes**, because every caller already holds its values as
+    /// 32-bit limbs and a byte frame would cost a pack and an unpack per call —
+    /// which on a 256-bit multiply is a fifth of what the delegation saves. The
+    /// `u32` element type is also what gives the type its alignment for free.
+    #[repr(C, align(4))]
+    pub struct ModMulFrame(pub [u32; mod_mul::FRAME_WORDS]);
+
+    // The frame's word layout, which [`ModMulFrame::of`]'s array literal spells
+    // out rather than indexing: a literal is 32 stores where an all-zero array
+    // followed by 24 writes was a `memset` and then those stores, and at 6,705
+    // invocations on S26's pinned mini-block that zeroing pass alone was 0.5
+    // million guest cycles — 6% of what the delegation saves. So the layout is
+    // pinned here instead, and a renumbering fails the build.
+    const _: () = assert!(mod_mul::M_WORD == 0);
+    const _: () = assert!(mod_mul::A_WORD == 8);
+    const _: () = assert!(mod_mul::B_WORD == 16);
+    const _: () = assert!(mod_mul::OUT_WORD == 24);
+    const _: () = assert!(mod_mul::FRAME_WORDS == 32);
+
+    impl ModMulFrame {
+        /// A callable frame: the modulus, then the two operands, then the eight
+        /// result words, which the delegation overwrites and whose initial value
+        /// is therefore free.
+        ///
+        /// One pass over the words and no zeroing pass before it. There is no
+        /// empty-then-fill constructor, because a frame with no modulus is not a
+        /// frame this ABI has a meaning for.
+        pub fn of(m: &[u32; 8], a: &[u32; 8], b: &[u32; 8]) -> ModMulFrame {
+            ModMulFrame([
+                m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], a[0], a[1], a[2], a[3], a[4], a[5],
+                a[6], a[7], b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], 0, 0, 0, 0, 0, 0, 0, 0,
+            ])
+        }
+
+        /// The result's eight limbs, after a successful call.
+        pub fn result(&self) -> [u32; 8] {
+            let w = &self.0;
+            [
+                w[mod_mul::OUT_WORD],
+                w[mod_mul::OUT_WORD + 1],
+                w[mod_mul::OUT_WORD + 2],
+                w[mod_mul::OUT_WORD + 3],
+                w[mod_mul::OUT_WORD + 4],
+                w[mod_mul::OUT_WORD + 5],
+                w[mod_mul::OUT_WORD + 6],
+                w[mod_mul::OUT_WORD + 7],
+            ]
+        }
+    }
+
     // The frame rule of `docs/spec/delegation.md` §4 as a type-level
     // assertion: what the ecall hands over is word-aligned or this crate does
     // not build.
     const _: () = assert!(core::mem::align_of::<Poseidon2Frame>() >= 4);
     const _: () = assert!(core::mem::align_of::<FrArithFrame>() >= 4);
+    const _: () = assert!(core::mem::align_of::<ModMulFrame>() >= 4);
 
     /// Permute the frame in place. `false` on exactly `-ENOSYS`.
     pub fn poseidon2(frame: &mut Poseidon2Frame) -> bool {
@@ -502,6 +562,19 @@ pub mod recursion {
         let ret = unsafe {
             ecall1(
                 delegation_number(&DELEGATION_FR_ARITH),
+                frame.0.as_mut_ptr() as u32,
+            )
+        };
+        answered(ret)
+    }
+
+    /// Compute `out = a * b mod m` over the frame in place. `false` on exactly
+    /// `-ENOSYS`, which is the caller's signal to run its own multiply.
+    pub fn mod_mul(frame: &mut ModMulFrame) -> bool {
+        // SAFETY: as [`poseidon2`].
+        let ret = unsafe {
+            ecall1(
+                delegation_number(&DELEGATION_MOD_MUL),
                 frame.0.as_mut_ptr() as u32,
             )
         };

@@ -31,7 +31,7 @@ const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../constraints/tests/vectors/add_sub.bin"
 );
-const FIXTURE_SHA256: &str = "96012f120814993368a37943d981c25252d47f7879da7cef17e9edffaf8e811c";
+const FIXTURE_SHA256: &str = "e74869e359099483b699f9d5a278cb3f7b98b0e4e5e8c0e54f579aac4946a469";
 
 fn artifact() -> CircuitArtifact {
     add_sub::artifact(VARS)
@@ -449,6 +449,7 @@ fn the_layout_and_the_gates_are_the_specs() {
         "is_deleg_9",
         "is_deleg_10",
         "is_deleg_11",
+        "is_deleg_15",
         "wrap",
         "rd_hi",
         "pc_wrap",
@@ -520,6 +521,9 @@ fn the_layout_and_the_gates_are_the_specs() {
         "is_deleg_11_boolean",
         "deleg_11_is_an_ecall",
         "deleg_11_number",
+        "is_deleg_15_boolean",
+        "deleg_15_is_an_ecall",
+        "deleg_15_number",
         "ecall_is_exit",
         "rs1_mask_rule",
         "rs2_mask_rule",
@@ -583,7 +587,9 @@ fn the_layout_and_the_gates_are_the_specs() {
         "every new obligation is the row's"
     );
 
-    let mult = |i: u32| PolyAddress::Witness(32 + i);
+    // 33 and not 32 since S26: `is_deleg_15` is a witness column before them
+    // (`docs/spec/delegation.md` §10's append rule, paid once per delegation type).
+    let mult = |i: u32| PolyAddress::Witness(33 + i);
     assert_eq!(
         add_sub::channels(),
         vec![

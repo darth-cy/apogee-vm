@@ -852,7 +852,17 @@ fn keccak_falls_back_to_software_and_agrees() {
 fn the_recursion_guests_fall_back_to_software_and_agree() {
     let qemu = qemu();
 
-    for (name, status) in [("recursion-ops", 9), ("recursion-unused", 11)] {
+    for (name, status) in [
+        ("recursion-ops", 9),
+        ("recursion-unused", 11),
+        // S26's fixture, and the same story one family further: under QEMU the
+        // `MOD_MUL` ecall answers `-ENOSYS`, so the guest's own `u128` path
+        // answers its ABI checks and `guests/vendor/k256`'s own `mul_inner`
+        // answers its curve checks — both against the same literals, so the
+        // status is the same. This test is the fallback half; the delegated half
+        // is `crates/emulator/tests/guests.rs`'.
+        ("mod-mul-ops", 12),
+    ] {
         let run = execute(&qemu, name, name, &[], None);
         assert_eq!(
             run.status,

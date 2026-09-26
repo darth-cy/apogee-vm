@@ -11,7 +11,14 @@ pub struct Program { pub image: ProgramImage, pub tables: DecodedTables, pub con
 pub struct FamilyRegistration { pub family: FamilyId, pub height: u32, pub circuit: FamilyCircuit, pub fill: Fill }
 pub fn register(config: &VmConfig) -> Result<Vec<FamilyRegistration>, ProverError>;
 pub type Fill = fn(&ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String>;
-pub struct ShardSource<'a> { program, archive, family, index, height, window }
+// S26: a fill reads THIS SHARD's rows and never the whole execution.
+pub struct ShardSource<'a> { program, input, advice, rows: ShardRows<'a>, index, height, window }
+pub enum ShardRows<'a> { Cycles(RowSlice<'a>), Invocations(FrameSlice<'a>),
+                         Window(&'a MemoryState) }
+impl<'a> ShardSource<'a> {
+    pub fn archived(program, archive, family, index, height, window)
+        -> Result<ShardSource<'a>, String>;
+}
 pub fn family_fill(family: FamilyId) -> Option<Fill>;
 pub struct ProverSetup { pub program: Program, pub families: Vec<FamilyRegistration>,
                          pub vk: VerifyingKey, pub srs: Srs }
@@ -38,6 +45,14 @@ pub fn advance(setup: &ProverSetup, archive: &mut TraceArchive, until: Phase) ->
 pub fn finish(archive: &TraceArchive) -> Result<(PublicInputs, Vec<ShardProof>), ProverError>;
 pub fn prove_block(setup: &ProverSetup, archive: &mut TraceArchive, plan: &ShardPlan)
     -> Result<BlockProof, ProverError>;                    // S20, docs/spec/block-proof.md §5
+// S26, docs/spec/streaming.md: the same block, from the guest rather than from an archive,
+// with a peak that does not grow with the shard count. `max_in_flight` is the backpressure.
+pub fn prove_block_streaming(setup: &ProverSetup, io: &GuestIo, max_in_flight: usize)
+    -> Result<(BlockProof, StreamingReport), ProverError>;
+pub struct StreamingReport { pub cycles: u64, pub shards: usize, pub peak_in_flight: usize,
+                             pub max_in_flight: usize, pub pass1_execute_ns: u64,
+                             pub pass1_commit_ns: u64, pub pass2_execute_ns: u64,
+                             pub pass2_prove_ns: u64 }
 pub enum ProverError { Unregistered { family, height }, Key(String), Trace(String), Archive(String) }
 
 // feature = "metrics" only -- THE WORKSPACE'S ONE CARGO FEATURE. docs/spec/metrics.md
@@ -85,6 +100,24 @@ pub fn advance_metered(setup, archive, until)   -> Result<ProvingMetrics, Prover
   `family::PUBLIC_INPUT_WINDOW` (32), `family::PUBLIC_OUTPUT_WINDOW` (33) and
   `verifier_core::advice_first_window(h) + index`. `setup_commitments` is empty for all
   three, so each opening claim is `M` alone (`docs/spec/public-values.md` §4).
+- **`prove_block_streaming` is the same block from a different order of work** (S26,
+  `docs/spec/streaming.md`). Pass 1 executes and commits each shard's `M` columns as the
+  shard fills, then runs G1–G11 over the ordered list; pass 2 re-executes and proves each
+  shard as it fills, at most `max_in_flight` at a time. It changes **when** a column exists
+  and nothing else: `crates/prover/tests/streaming.rs` holds its block to `prove_block`'s
+  byte for byte over three statements, and to itself at two backpressure bounds.
+  Three things are worth having in mind.
+  **Pass 2 does not recommit `M`**, because a shard's opening builds `cm*` from the
+  statement's commitments — pass 1's — while its polynomial side is pass 2's columns, so a
+  pass that built different columns produces an opening that *fails verification*. That is
+  stronger than a prover assertion and it costs nothing.
+  **There is no archive and no resume**: the archive's five sections rest on a
+  post-execution section holding the whole trace, which is the thing this path exists not to
+  have, so a killed streaming run re-executes — and execution is under 1% of a block's wall
+  clock. `prove_block` keeps resume, the tamper harness and every committed fixture.
+  **`max_in_flight` is an argument and not a constant** because the caller is the only one
+  that knows the machine; it is the knob `RAYON_NUM_THREADS` used to be, and the block does
+  not depend on it.
 - **A shard's proof is two crate-private halves**, `gkr_part` (through the GKR proof, to
   a `ShardGkr` — the post-GKR snapshot's entry) and `opening_part` (the batched opening),
   which `prove_shard_columns` runs back to back and `advance` runs a phase apart.
@@ -141,13 +174,21 @@ pub fn advance_metered(setup, archive, until)   -> Result<ProvingMetrics, Prover
   divide, if a quotient word is not its adjusted value or if a product does not fit two
   words. Its decoded row is **five** values, not six: the family's tuple has no immediate,
   so its table is `S[0..6]` and the packed table `S[6..9]`.
-- **One delegation frame fill, three families.** `fill::delegation_frame` writes the four
+- **One delegation frame fill, four families.** `fill::delegation_frame` writes the four
   head columns, the four per frame word, the 38 gap bits a read and the frame pointer's 60
   for any delegation family, and each family's own fill adds what is its own:
   `fill::keccak_f` the state's 1,600 bits, `fill::poseidon2` six values' 520 bits apiece,
-  `fill::fr_arith` three values' bits, the selectors and the three witnessed scalars. The
+  `fill::fr_arith` three values' bits, the selectors and the three witnessed scalars, and
+  S26's `fill::mod_mul` four values' 256 word bits, the quotient's eight limbs and their
+  bits, the `out < m` borrow chain and the fourteen signed carries. The
   canonicity witness — the borrow chain of `X − p` — is computed here, because it is a
-  function of the words the execution wrote and nothing records it.
+  function of the words the execution wrote and nothing records it. **`fill::mod_mul` is the
+  one delegation fill that computes something the execution did not record**: the quotient
+  and the carries are not in the frame, and `mod_mul_witness` derives them by long division
+  over eight limbs, asserting that every limb position divides, that every carry is inside
+  `[0, 2^37)` after the `2^36` offset, and that the last carry is 0. Those are assertions
+  about the honest prover's own arithmetic; the circuit is what says a *cheating* one's
+  carries were right (`docs/spec/delegation.md` §14.3).
 - **`fill::keccak_f` fills all 3,764 columns of a `2^8` delegation shard from the
   archive's `DelegationTrace`** (S21): the requesting cycle, the mask, the base, the free
   `anchor_value` (0), the 50 frame words' four fields each, the input state's 1,600 bits
@@ -199,6 +240,15 @@ pub fn advance_metered(setup, archive, until)   -> Result<ProvingMetrics, Prover
   losing the GKR phase on any late kill; holding every base layer across the boundary is
   free only while the shard count is below the thread count, and a regression above it.
   Neither is taken. What *was* removed is the third build, above.
+- **A fill reads its shard's rows, already cut** (S26). `ShardSource` carries a
+  `ShardRows` — a `RowSlice` for a cycle-owning family, a `FrameSlice` for a delegation one,
+  or the execution's **final** `MemoryState` for a window family — so every fill indexes
+  `0..rows.len()` and the `index · height` arithmetic that was in all ten of them is gone.
+  The three-way enum is what lets one fill serve a slice of an archive and a streaming
+  executor's freshly filled chunk alike, and the `Window` arm exists so that **no
+  cycle-owning fill can reach the memory state at all**: a teardown column is every
+  address's *last* write, which is not a fact until the last cycle has run, and an arm that
+  says so out loud is better than a comment.
 - **`prove_block` is orchestration and nothing else** (S20): it refuses a `ShardPlan`
   that is not `trace::plan_shards` over this archive's cycle profile, runs `advance` to
   `Phase::Final`, and assembles the block from `finish`. The shard cut is the one every
@@ -264,5 +314,6 @@ pub fn advance_metered(setup, archive, until)   -> Result<ProvingMetrics, Prover
 | `tests/keccak.rs` | **`#[ignore]`d; run with `cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1`** (124 s, **38.9 GB peak** — the heaviest suite in the repository). S21's acceptances 4 and 8: `guests/keccak-test`'s nine-shard block — six `2^20` execution shards, two `2^16` window shards and one `2^8` delegation shard — proves and verifies, every shard also verifies on the S16 path, the delegation shard is **last** in statement order, its ts window is its invocations' and is contained in the add/sub family's (which is why §4's disjointness is scoped to cycle-owning families), the cycle profile's total excludes the 10 invocations, the shard's proof is its circuit's 11,880,012 bytes, and the statement reads back through the serialized block alone; and `guests/keccak-unused`, which declares the family and never calls it, proving **zero** keccak shards with the family still in the config, the descriptor and the transcript's group list |
 | `tests/public_io.rs` | **`#[ignore]`d; run with `cargo test --release -p prover --test public_io -- --include-ignored --test-threads=1`.** S-IO's end-to-end half over `guests/public-io`, which reads a commitment out of the **public input**, checks 64 bytes of **advice** against it, and publishes its result in the **journal** — issuing no ecall but `EXIT`, which is what makes it provable. 1, the whole architecture: the statement's `input` is what the host put in the window, its `output` is what the guest's stores left behind, the block verifies, and the three families' shard counts are the rule — one each for the two public windows and one advice window for the region the advice spans. 2, a changed `input` or `output`, and a journal with one trailing zero byte, each refused as `Statement`, because `io_digest` moves at G7 before any challenge exists — the length word is what separates a payload from its zero extension. 3, **step 10c isolated**: the global phase derived from the honest statement and handed to `verify_shard_local` beside a statement whose public values differ, so step 5 passes and the public value check is the only thing left to refuse it — without it, deleting 10c would leave every other test green. 4, the advice is unbound and the *guest* stands in for the binding: a different advice is a different execution that proves perfectly well and publishes a different journal, and swapping it under a fixed public input makes the guest refuse the run. 5, `guests/addsub` publishes nothing and still pays exactly two shards and no advice window, with a claimed journal it never wrote refused as `MemoryArgument`. 5 tests. The proof-free half is `crates/checker/tests/public_values.rs`, in ordinary CI |
 | `tests/revm.rs` | **`#[ignore]`d; run with `cargo test --release -p prover --test revm -- --include-ignored --test-threads=1`, and it BUILDS the guest at `--release` (~25 s).** S24's acceptances 6, 7 and 8, and **since S-IO over `guests/revm-block`'s OWN binary**: its `BlockWitness` arrives as **advice** and its output commitment leaves in the **journal**, both ordinary loads and stores, and it issues no ecall but `EXIT`. S24 could prove neither, so it proved a second binary with the witness baked into `.rodata` — which identity commits, making a per-block witness a per-block identity — and published `keccak256` of the commitment in `x24..x31`; **both stopgaps are gone**, and `src/stdio.rs` remains only as the fd 0 / fd 1 compatibility binary, which is not provable. What binds the witness is no longer identity but the guest: `BlockWitness::decode`'s canonicity rules and, since S25, `WitnessDb`'s refusal to default on an account, a slot or an ancestor hash it was not given, so a witness describing a different block publishes a different journal or does not run at all. Naming the state roots is the **stateless** mode's journal (`docs/spec/revm-block.md` §5), which is a different binary. Seven `2^20` execution shards (the first statement in which *every* cycle-owning family runs), two `2^20` window shards — `2^20` and not `2^16` because the image ends at `0x1c48d4` — one `2^8` `KECCAK_F` shard, and S-IO's three: one `PUBLIC_INPUT`, one `PUBLIC_OUTPUT` and one `ADVICE_WINDOWS` shard for the 716-byte witness. It carries its own statement, not `tests/common`'s, because its program is built rather than read and `crates/checker` includes that module too. Checked: the block proves and verifies, every shard also verifies on the S16 path, the structural counts are statement order with one window-0 shard and one shard per touched window, the statement's **journal is native revm's output commitment byte for byte** — not a digest of it — and its `input` is empty, this guest's whole input being advice. Acceptance 7: a journal with one byte appended, another program's identity and a changed boundary register value, each refused, and the first carried past `verify_block`'s first two structural checks so that what refuses it is G7's absorption and not a struct comparison |
+| `tests/streaming.rs` | **`#[ignore]`d; run with `cargo test --release -p prover --test streaming -- --include-ignored --test-threads=1`.** S26's acceptance 5 and 6: the streamed block is `prove_block`'s **byte for byte** over three statements — S16's `addsub` (the `Cycles` arm and the cheapest real statement), `keccak-test` (the `Invocations` arm, and the statement whose delegation family is *last* in statement order while its buffer fills first), and S-IO's `public-io` (the `Window` arm over a state the execution chose, and the one whose `input` and `output` are not empty) — each also verifying through `verify_block`, with the report's shard count, cycle count and peak-in-flight bound checked; and the block byte-identical at `max_in_flight` 1 and 8. What runs in ordinary CI instead is `crates/emulator/tests/streaming.rs` and `crates/checker/tests/memory.rs`' two-reading comparison |
 | `tests/block.rs` | **`#[ignore]`d; run with `cargo test --release -p prover --test block -- --include-ignored --test-threads=1`** (779 s, 33.4 GB peak). S20's acceptance over `guests/shards`, whose add/sub family runs 1,064,970 cycles and so proves **two shards of one family**: 1, 3, 8 and 9 — the block proves and verifies, every shard also verifies on the S16 path, the records are statement order, the descriptor and counts read through the serialized proof alone, `ZERO_WINDOWS` proves zero shards and reads 0, the `ShardProof` and `BlockProof` schemas destructured exhaustively so a boundary-pc field could not be added unnoticed, the run's transcript tape equal to the committed fixture with its five squeezes after every absorb and no tag G1–G11 does not have, and the windows ordered and disjoint within add/sub while the jump family's overlaps both; 4 and 6 — a one-bit-different I/O digest, another identity, another config, a shard count altered with and without matching lists, and two shards' windows exchanged, each refused as `Statement` by the check named, the window swap also refused independently by the shard's own transcript; 5 — the truncated statement **re-proved as an honest prover would**, its counts, lists and roots adjusted and its global phase rerun, refused by `MemoryArgument` on the root product; 7 — one `wrap` cell of the **second** add/sub shard, re-proved, refused as `Constraint` with the honest twin still passing; 10 — killed and resumed at post-commit and post-GKR, byte-identical; must-be-exact 8 — byte-identical on one thread; and 2 — `guests/mem`'s five-family block, seven shards, every record carrying its family's memory commitments and both roots |
 | `tests/acceptance.rs` | **`#[ignore]`d; run with `--include-ignored --test-threads=1`** (a statement's proof peaks at 8.6 GB). Acceptance 1 (the guest's family set and trace; all four shards verify since S-IO — `INIT_TEARDOWN`, add/sub and the two public value families; round counts, claim counts and byte lengths from the circuit); 5 (every statement twin refused as `Statement`, on every shard); 6 and 8 (the shard transcript event for event: seed, window, commitments, `g` and `β`, then the GKR schedule rebuilt from the artifact's shape — outputs, every batch, round and claim message, every child challenge — with one outstanding point after every batch, then one batched opening whose column-RLC challenge follows every evaluation claim; the verifier's reduction re-deriving the prover's point; the global transcript's challenges after every memory commitment); 9 (stopped after post-execution — nothing filled — and resumed after it, post-commit, post-GKR and post-opening, byte-identical); 10's library half (proofs, statement and key round-trip, and the key loads back to itself); step 10a's root comparison, which is per shard and stayed there when S20 lifted 10b out (the init shard's statement roots scaled by one constant still reconcile — 10b passes — and that shard's proof refuses them exactly while the add/sub shard's accepts); and one-thread against all-threads determinism |

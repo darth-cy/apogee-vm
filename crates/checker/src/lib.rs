@@ -30,9 +30,11 @@ use gkr::{
 use poly::{MultilinearPoly, PolyBacking};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod memory;
 mod tamper;
 mod tape;
 
+pub use memory::{frame_witness_from_log, memory_columns_from_log};
 pub use tamper::{assert_anchor_twins_refused, AnchorTwins, Cell, Tamper, TamperHarness};
 pub use tape::{check_global_tape, expected_global_tape, global_tape, tape};
 

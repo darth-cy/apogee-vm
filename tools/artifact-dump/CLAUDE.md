@@ -38,7 +38,7 @@ design record.
 - **Symbols are read from the ELF and marked as such.** They come from
   `.symtab`, not from the artifact, because a listing of four thousand hex words
   with no names is one nobody can navigate. Every part of the report that names
-  them says where they came from, and `symbols.rs` cannot fail a dump: a file
+  them says where they came from, and `loader::symbol_names` cannot fail a dump: a file
   with no symbol table yields an empty index and a listing with no symbol
   column.
 - **`--out` defaults to the working directory, not the ELF's.** The ELF lives

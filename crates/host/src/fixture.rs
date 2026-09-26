@@ -158,3 +158,86 @@ pub fn witness_file(stem: &str) -> String {
 pub fn journal_file(stem: &str) -> String {
     format!("{stem}-journal.bin")
 }
+
+// ---------------------------------------------------------------------------
+// The revm guest, built from source
+// ---------------------------------------------------------------------------
+
+/// The `ProgramParams` the revm guest is proved at: every family at the height
+/// its **release** image needs, and each delegation family at its own default.
+///
+/// A decoded table's rows are absolute pcs, one per halfword, so a family's
+/// height has to reach past the last instruction — `revm_block::
+/// TRACE_HEIGHT_RELEASE` is that height, pinned beside the guest. A delegation
+/// family claims no pc and is not bound by it (`docs/spec/delegation.md` §1), so
+/// each keeps `constants::family::DEFAULT_HEIGHTS`' `2^8`.
+pub fn revm_params() -> program::ProgramParams {
+    let mut heights = [revm_block::TRACE_HEIGHT_RELEASE; constants::family::COUNT as usize];
+    for (f, h) in heights.iter_mut().enumerate() {
+        if program::delegation_ecall(f as u32).is_some() {
+            *h = constants::family::DEFAULT_HEIGHTS[f];
+        }
+    }
+    program::ProgramParams {
+        heights,
+        bytecode_size_words: revm_block::BYTECODE_SIZE_WORDS,
+        ..program::ProgramParams::defaults()
+    }
+}
+
+/// The revm guest binary for `mode`, built from source at `--release`.
+///
+/// **Always `--release`, whatever `APOGEE_GUEST_PROFILE` says**, for the reason
+/// `crates/prover/tests/revm.rs` gives: [`revm_params`]'s heights are pinned to
+/// the release image, and the debug image needs `2^22` — four times the rows in
+/// every shard, for a build nothing proves.
+///
+/// It builds in a scratch target directory of its own and removes it, and it
+/// clears every environment variable that would otherwise leak the host's build
+/// configuration into a `riscv32imac` build. There is no committed ELF for this
+/// guest (root `CLAUDE.md`), so building it is the only way to have it.
+pub fn build_revm_guest(mode: Mode) -> Result<Vec<u8>, String> {
+    let bin = mode.binary();
+    let guest_dir =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../guests/revm-block");
+    let target_dir = std::env::temp_dir().join(format!("apogee-guest-{bin}"));
+    let _ = std::fs::remove_dir_all(&target_dir);
+    let mut command =
+        std::process::Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+    command
+        .current_dir(&guest_dir)
+        .args([
+            "build",
+            "--release",
+            "--target",
+            "riscv32imac-unknown-none-elf",
+            "--bin",
+            bin,
+        ])
+        .env("CARGO_TARGET_DIR", &target_dir);
+    for key in [
+        "RUSTFLAGS",
+        "CARGO_ENCODED_RUSTFLAGS",
+        "CARGO_BUILD_RUSTFLAGS",
+        "CARGO_BUILD_TARGET",
+        "RUSTC_WRAPPER",
+        "RUSTC_WORKSPACE_WRAPPER",
+    ] {
+        command.env_remove(key);
+    }
+    let out = command
+        .output()
+        .map_err(|e| format!("running cargo for {bin}: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "{bin}: guest build failed\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    let elf = target_dir
+        .join("riscv32imac-unknown-none-elf/release")
+        .join(bin);
+    let bytes = std::fs::read(&elf).map_err(|e| format!("reading {}: {e}", elf.display()))?;
+    let _ = std::fs::remove_dir_all(&target_dir);
+    Ok(bytes)
+}

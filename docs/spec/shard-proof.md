@@ -669,9 +669,9 @@ event, and every lookup is switched off by its selector.
   refuses both by name. **A delegation call is
   no longer among them**: S21 made `PRECOMPILE_KECCAK_F` the second provable ecall, with
   four gates of its own and three S16 gates amended (§8.2), and S23 added
-  `PRECOMPILE_POSEIDON2` and `PRECOMPILE_FR_ARITH` beside it — one selector and three gates
-  per type, with the shared gates gaining a term apiece and every one of them still degree
-  2 (`delegation.md` §10). What makes it *correct* is not here but in the delegation
+  `PRECOMPILE_POSEIDON2` and `PRECOMPILE_FR_ARITH` beside it, S26 `PRECOMPILE_MOD_MUL` —
+  one selector and three gates per type, with the shared gates gaining a term apiece and
+  every one of them still degree 2 (`delegation.md` §10). What makes it *correct* is not here but in the delegation
   family's circuit; this family only witnesses that the request was made
   (`docs/spec/delegation.md` §5).
 - Binding the public values to the execution (S14's D3, D5): **done at S-IO**, and not by
@@ -795,3 +795,14 @@ this crate's: `global_commit_phase`, `prove_shard`, `reduce_shard` and `verify_s
 unchanged, and no key's SRS digest moved, the packed generic table having gained no row.
 `docs/spec/delegation.md` §12 and §13 are the two ABIs and
 `docs/spec/constraint-manifest.md` §13 and §14 the accounting.
+
+**S26's `MOD_MUL` was one more of each, and its only novelty is off the shard-proof path.**
+One constructor, one registry arm below the guard, one fill, `M ++ W`, `2^8`, a fourth
+`is_deleg_t` bit and a fourth `deleg_space` value — the same append `delegation.md` §10
+describes, and again no key's SRS digest moved. What is new is that the family's behaviour
+depends on a **witnessed parameter**: the modulus is a column of the row rather than a
+constant of the circuit, so one circuit proves a multiplication modulo secp256k1's `p`, its
+scalar field's, BN254's or any other 256-bit value a guest passes. Nothing in this page
+notices — a witnessed parameter is a witness column like any other, and the statement, the
+transcript and the opening are unchanged. `docs/spec/delegation.md` §14 is the ABI and
+`docs/spec/constraint-manifest.md` §18 the accounting.

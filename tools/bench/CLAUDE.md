@@ -10,7 +10,17 @@ cargo run --release -p bench -- zerocheck-verify # just that one
 cargo run --release -p bench -- --list           # the registry, and the verb
 
 cargo run --release -p bench -- prove mini-block --hourly-usd 2.36 --json report.json
+cargo run --release -p bench -- prove mini-block --in-flight 4   # S26: the STREAMING prover
 ```
+
+`--in-flight <n>` proves with `prover::prove_block_streaming` instead of `prove_block`:
+the same block byte for byte, at a peak that does not grow with the shard count
+(`docs/spec/streaming.md`). There is no archive on that path and so no five phase
+timings, so the report's four clocks read differently and the printed table says how —
+`execution` is **both** passes' executor, `commit` is pass 1's, `gkr` is pass 2's whole
+proving region (the GKR proof and the opening, fused over one base layer), and `opening`
+and `final` are 0 because there is no phase boundary there to measure. `BenchReport`
+gained one field, `in_flight`, and it is `None` on the archived path.
 
 **The charter moved by one line at S25, and only one.** It used to read "no assertions, no
 thresholds, no committed output"; the stage requires the report to be committed to its

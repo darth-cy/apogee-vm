@@ -2219,14 +2219,9 @@ fn filled(
 ) -> Vec<(PolyAddress, poly::MultilinearPoly)> {
     let a = artifact();
     let fill = prover::family_fill(family::MUL_DIV).expect("the family's fill");
-    let source = prover::ShardSource {
-        program,
-        archive,
-        family: family::MUL_DIV,
-        index,
-        height: 1 << vars,
-        window: 0,
-    };
+    let source =
+        prover::ShardSource::archived(program, archive, family::MUL_DIV, index, 1 << vars, 0)
+            .expect("the shard's rows");
     let mut columns = fill(&source).expect("the fill");
     let column = |address: PolyAddress| {
         columns

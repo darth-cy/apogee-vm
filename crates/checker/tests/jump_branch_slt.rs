@@ -2042,14 +2042,9 @@ fn a_jump_to_a_pc_holding_no_instruction_cannot_be_counted() {
     let (program, archive) = control();
     let a = artifact();
     let fill = prover::family_fill(family::JUMP_BRANCH_SLT).expect("the family's fill");
-    let source = prover::ShardSource {
-        program: &program,
-        archive: &archive,
-        family: family::JUMP_BRANCH_SLT,
-        index: 0,
-        height: 1 << VARS,
-        window: 0,
-    };
+    let source =
+        prover::ShardSource::archived(&program, &archive, family::JUMP_BRANCH_SLT, 0, 1 << VARS, 0)
+            .expect("the shard's rows");
     let mut columns = fill(&source).expect("the fill");
     let decoder: Vec<ChannelSpec> = jump_branch_slt::channels()
         .into_iter()
@@ -2136,14 +2131,15 @@ fn filled(
 ) -> Vec<(PolyAddress, poly::MultilinearPoly)> {
     let a = artifact();
     let fill = prover::family_fill(family::JUMP_BRANCH_SLT).expect("the family's fill");
-    let source = prover::ShardSource {
+    let source = prover::ShardSource::archived(
         program,
         archive,
-        family: family::JUMP_BRANCH_SLT,
+        family::JUMP_BRANCH_SLT,
         index,
-        height: 1 << vars,
-        window: 0,
-    };
+        1 << vars,
+        0,
+    )
+    .expect("the shard's rows");
     let mut columns = fill(&source).expect("the fill");
     let column = |columns: &[(PolyAddress, poly::MultilinearPoly)], address: PolyAddress| {
         columns

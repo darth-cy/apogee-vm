@@ -755,9 +755,9 @@ fn the_final_state_is_the_last_write_of_every_address() {
 #[test]
 fn fib_touches_only_the_image_window_and_the_stack_window() {
     let t = traced("fib");
-    assert_eq!(init_windows(&t.log, 1 << 22), [127]);
-    assert_eq!(init_windows(&t.log, 1 << 20), [511]);
-    assert_eq!(init_windows(&t.log, 1 << 16), [8191]);
+    assert_eq!(init_windows(t.log.state(), 1 << 22), [127]);
+    assert_eq!(init_windows(t.log.state(), 1 << 20), [511]);
+    assert_eq!(init_windows(t.log.state(), 1 << 16), [8191]);
 }
 
 /// Every RAM word every traced guest touches lies in window 0 or in a listed
@@ -775,7 +775,7 @@ fn the_window_list_is_exactly_the_touched_windows_above_zero() {
     for name in TRACED {
         let t = traced(name);
         for height in family::HEIGHT_MENU {
-            let windows = init_windows(&t.log, height);
+            let windows = init_windows(t.log.state(), height);
             let touched: BTreeSet<u32> = t
                 .log
                 .events()

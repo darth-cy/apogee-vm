@@ -78,9 +78,11 @@ their frozen order.
 | `Δ` | 0 | 1 | 2 | 2 | 2 | 2 | 3 | 3 | 3 |
 
 `deleg` is a **delegation request's mirror query** (`docs/spec/delegation.md` §5.1), in the
-address space of the family it calls — `DELEGATION_KECCAK_F = 4` for S21's one family — at the
-frame base the request read from `a0`. It is the eighth role and took `trace::Row::present`'s
-last spare bit.
+address space of the family it calls — `DELEGATION_KECCAK_F = 4` for S21's one family, and tags
+5, 6 and 7 for the three appended since — at the frame base the request read from `a0`. It is
+the eighth role and took `trace::Row::present`'s last spare bit. **Its space is not a literal
+in the circuit but the frame's own `deleg_space` `M` column**, because one query serves every
+registered type and which one a row names is the row's business (`delegation.md` §5.1, §10.1).
 
 **A family's frame holds a subset of that table, not all of it**: every query an instruction
 routed to it can make, and no other. The subsets are frozen in

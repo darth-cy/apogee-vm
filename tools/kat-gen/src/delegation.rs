@@ -22,7 +22,7 @@
 //! forward pass.
 
 use constants::family;
-use constraints::{fr_arith, keccak, poseidon2, CircuitArtifact};
+use constraints::{fr_arith, keccak, mod_mul, poseidon2, CircuitArtifact};
 use test_support::{sha256, to_hex};
 
 use crate::write_vectors;
@@ -66,7 +66,7 @@ fn line(name: &str, spec: &str, artifact: &CircuitArtifact) -> String {
 }
 
 /// Each fixture's relative path and its contents.
-fn fixtures() -> [(&'static str, String); 3] {
+fn fixtures() -> [(&'static str, String); 4] {
     [
         (
             "crates/constraints/tests/vectors/keccak.txt",
@@ -90,6 +90,14 @@ fn fixtures() -> [(&'static str, String); 3] {
                 "FR_ARITH",
                 "14",
                 &fr_arith::artifact(trace_vars(family::FR_ARITH)),
+            ),
+        ),
+        (
+            "crates/constraints/tests/vectors/mod_mul.txt",
+            line(
+                "MOD_MUL",
+                "18",
+                &mod_mul::artifact(trace_vars(family::MOD_MUL)),
             ),
         ),
     ]

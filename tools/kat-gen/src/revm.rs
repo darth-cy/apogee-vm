@@ -217,6 +217,9 @@ pub fn synthetic_block() -> BlockWitness {
             // Cancun and later require it, and this block carries no blob,
             // so the excess is zero and the blob gas price is its floor.
             excess_blob_gas: Some(0),
+            // The price at zero excess is the EIP's minimum, whatever the update
+            // fraction is: `fake_exponential(1, 0, f) = 1`.
+            blob_gasprice: Some(1),
             slot_num: 0,
             // The synthetic block's two transactions read no ancestor hash, so
             // nothing is recorded here. S25 added the field and closed

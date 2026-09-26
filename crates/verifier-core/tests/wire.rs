@@ -67,9 +67,12 @@ fn the_layouts_are_the_specs() {
     assert_eq!(u32_at(4), 0);
     assert_eq!((u64_at(8), u64_at(16)), (0, 1 << 38));
     assert_eq!(&b[24..56], &proof.global_digest.to_bytes());
-    assert_eq!(u32_at(56), 35);
+    // 36 since S26: the count is `shell`'s witness commitment list, which is
+    // `ADD_SUB_LUI_AUIPC`'s width and grows by one `is_deleg_t` selector per
+    // registered delegation family (`docs/spec/delegation.md` §10).
+    assert_eq!(u32_at(56), 36);
     assert_eq!(&b[60..124], &blob(400));
-    let outputs = 60 + 35 * 64;
+    let outputs = 60 + 36 * 64;
     assert_eq!(u32_at(outputs), 2);
     let gkr = outputs + 4 + 2 * 32;
     assert_eq!(u32_at(gkr), 2, "two transitions");

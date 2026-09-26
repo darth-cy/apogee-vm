@@ -41,7 +41,7 @@ use poly::{MultilinearPoly, PolyBacking};
 use program::lookup_tables::{generic_table, GENERIC_WIDTH, SIGN_BASE};
 use program::{decode_program, lookup_tuple, ProgramParams};
 use test_support::{sha256, to_hex};
-use trace::{build_frame_witness, build_memory_columns, build_multiplicities};
+use trace::build_multiplicities;
 use transcript::{Transcript, TranscriptEvent};
 
 const TOY: &str = concat!(
@@ -180,8 +180,8 @@ fn toy() -> Toy {
     assert!(live > 0 && live < ROWS);
 
     let queries = constraints::memory::frame_queries(FAMILY);
-    let mut columns = build_memory_columns(&log, queries, cycles, ROWS);
-    columns.extend(build_frame_witness(&log, queries, cycles, ROWS));
+    let mut columns = checker::memory_columns_from_log(&log, queries, cycles, ROWS);
+    columns.extend(checker::frame_witness_from_log(&log, queries, cycles, ROWS));
 
     // The decoded table, materialized once: it is both the channel's setup
     // columns and where the row's claimed values come from.

@@ -436,8 +436,11 @@ produces the digest every shard is seeded with.
   shard's verification. Folding those into one proof is S26 and S27's.
 - **No accumulator entries** (§1).
 - **Nothing for a delegation family beyond §4's scoping.** S21 added `KECCAK_F` and
-  `verify_block` did not change; S23's two families appended the same way
-  (`docs/spec/delegation.md` §10).
+  `verify_block` did not change; S23's two families appended the same way, and so did S26's
+  `MOD_MUL` (`docs/spec/delegation.md` §10). What S26 *did* make visible is how many shards
+  such a family's invocation count buys at `2^8` — 27 of them on a mini-block, where the
+  execution families it accelerates lost five — which is a cost of the height and not of this
+  page: `docs/spec/delegation.md` §9.1 has it.
 - **Nothing for S-IO's three window families.** `PUBLIC_INPUT`, `PUBLIC_OUTPUT` and
   `ADVICE_WINDOWS` are not cycle-owning, so §4's ts-window rule does not reach them, and
   their shards enter the root product exactly as `ZERO_WINDOWS`' do. The public values'

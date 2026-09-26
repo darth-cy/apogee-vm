@@ -13,6 +13,7 @@ use constants::extra_mask::mul_div as md;
 use constants::extra_mask::shift_bitwise as sb;
 use constants::extra_mask::system_code;
 use constants::fr_arith as fa;
+use constants::mod_mul as mm;
 use constants::poseidon2 as p2;
 use constants::{delegation, ecall, family, guest_memory, keccak, memory};
 use constraints::add_sub::{
@@ -26,6 +27,7 @@ use constraints::keccak as kec_circuit;
 use constraints::mem_subword as ms_circuit;
 use constraints::mem_word as mw_circuit;
 use constraints::memory::{frame_queries, rd_selected};
+use constraints::mod_mul as mm_circuit;
 use constraints::mul_div as md_circuit;
 use constraints::poseidon2 as p2_circuit;
 use constraints::shift_bitwise as sb_circuit;
@@ -36,20 +38,126 @@ use program::lookup_tables::generic_table;
 use program::FamilyId;
 use trace::{
     build_frame_witness, build_init_teardown_columns, build_memory_columns,
-    build_value_window_columns, Role, TraceArchive,
+    build_value_window_columns, FrameSlice, MemoryState, Role, RowSlice, TraceArchive,
 };
 
 use crate::Program;
 
-/// What a fill reads: the program, the archived execution, and which shard —
-/// its family, its index, its height, and for a RAM window family its window.
+/// What a fill reads: the program, the execution's two unbound inputs, **this
+/// shard's rows**, and which shard — its index, its height, and for a window
+/// family its window.
+///
+/// The rows are already cut to the shard (`docs/spec/block-proof.md` §5.1), so a
+/// fill indexes `0..rows.len()` and never the whole execution. That is what lets
+/// one fill serve a slice of an archived execution and a streaming executor's
+/// freshly filled chunk alike (`docs/spec/streaming.md` §2).
 pub struct ShardSource<'a> {
     pub program: &'a Program,
-    pub archive: &'a TraceArchive,
-    pub family: FamilyId,
+    /// The public input window's payload, which `PUBLIC_INPUT`'s fill commits
+    /// as its init column.
+    pub input: &'a [u8],
+    /// The advice bytes the host supplied, which `ADVICE_WINDOWS`' fill commits
+    /// and **nothing binds** (`docs/spec/public-values.md` §6).
+    pub advice: &'a [u8],
+    pub rows: ShardRows<'a>,
     pub index: u32,
     pub height: usize,
     pub window: u32,
+}
+
+/// The rows a shard proves, by the kind of family it belongs to — the three
+/// kinds `docs/spec/delegation.md` §1 and `docs/spec/memory.md` §3 name.
+pub enum ShardRows<'a> {
+    /// A cycle-owning family's shard: its cut of that family's buffer.
+    Cycles(RowSlice<'a>),
+    /// A delegation family's shard: its cut of that family's invocations.
+    Invocations(FrameSlice<'a>),
+    /// A window family's shard: its rows are addresses rather than trace rows,
+    /// and what fills them is the execution's **final** memory state.
+    ///
+    /// This arm exists so that no cycle-owning fill can reach the state at all,
+    /// and so that constructing one says out loud that the execution is over:
+    /// a teardown column is every address's *last* write, which is not a fact
+    /// until the last cycle has run.
+    Window(&'a MemoryState),
+}
+
+impl<'a> ShardSource<'a> {
+    /// The source for shard `(family, index)` of an **archived** execution: the
+    /// program, the archive's two unbound inputs, and this shard's rows cut out
+    /// of the archive by `docs/spec/block-proof.md` §5.1's rule.
+    ///
+    /// Which arm of [`ShardRows`] a family takes is the three presence rules of
+    /// `docs/spec/delegation.md` §1: a delegation family is invoked, a family
+    /// that claims pcs owns cycles, and everything else is a window family
+    /// whose rows are addresses. A streaming prover builds the same struct from
+    /// a chunk it has just filled, which is the whole of what the two paths do
+    /// differently (`docs/spec/streaming.md` §2).
+    pub fn archived(
+        program: &'a Program,
+        archive: &'a TraceArchive,
+        family: FamilyId,
+        index: u32,
+        height: u32,
+        window: u32,
+    ) -> Result<ShardSource<'a>, String> {
+        let missing = || format!("the archive has no {} buffer", program::family_name(family));
+        let traces = archive.family_traces();
+        let rows = if program::delegation_frame_words(family).is_some() {
+            ShardRows::Invocations(FrameSlice::shard(
+                traces.delegation(family).ok_or_else(missing)?,
+                index,
+                height as usize,
+            ))
+        } else if program::claims_pcs(family) {
+            ShardRows::Cycles(RowSlice::shard(
+                traces.family(family).ok_or_else(missing)?,
+                index,
+                height as usize,
+            ))
+        } else {
+            ShardRows::Window(archive.memory_log().state())
+        };
+        Ok(ShardSource {
+            program,
+            input: &archive.io_streams().input,
+            advice: archive.advice(),
+            rows,
+            index,
+            height: height as usize,
+            window,
+        })
+    }
+
+    /// This shard's rows, or why it has none of `family`'s.
+    fn cycles(&self, family: FamilyId) -> Result<&RowSlice<'a>, String> {
+        match &self.rows {
+            ShardRows::Cycles(rows) if rows.family() == family => Ok(rows),
+            _ => Err(format!(
+                "this shard holds no {} rows",
+                program::family_name(family)
+            )),
+        }
+    }
+
+    /// This shard's invocations, or why it has none of `family`'s.
+    fn invocations(&self, family: FamilyId) -> Result<&FrameSlice<'a>, String> {
+        match &self.rows {
+            ShardRows::Invocations(rows) if rows.family() == family => Ok(rows),
+            _ => Err(format!(
+                "this shard holds no {} invocations",
+                program::family_name(family)
+            )),
+        }
+    }
+
+    /// The execution's final memory state, or why this shard is not a window's.
+    fn state(&self) -> Result<&'a MemoryState, String> {
+        match self.rows {
+            ShardRows::Window(state) => Ok(state),
+            _ => Err("this shard is not a window family's".into()),
+        }
+    }
 }
 
 /// A family's fill: a shard's committed columns but its multiplicities, or why
@@ -76,30 +184,22 @@ pub fn family_fill(family: FamilyId) -> Option<Fill> {
         family::KECCAK_F => Some(keccak_f),
         family::POSEIDON2 => Some(poseidon2),
         family::FR_ARITH => Some(fr_arith),
+        family::MOD_MUL => Some(mod_mul),
         _ => None,
     }
 }
 
-/// A delegation shard's rows: the buffer, the slice of invocations this shard
-/// holds, and the height to pad to.
+/// A delegation shard's rows: the invocations this shard holds, and the height
+/// to pad to.
 struct Invocations<'a> {
-    trace: &'a trace::DelegationTrace,
-    rows: core::ops::Range<usize>,
+    frames: &'a FrameSlice<'a>,
     height: usize,
 }
 
 /// The invocations a delegation shard proves.
-fn invocations<'a>(src: &'a ShardSource, family: FamilyId) -> Result<Invocations<'a>, String> {
-    let trace = src
-        .archive
-        .family_traces()
-        .delegation(family)
-        .ok_or_else(|| format!("the archive has no {} buffer", program::family_name(family)))?;
-    let start = src.index as usize * src.height;
-    let end = (start + src.height).min(trace.len());
+fn invocations<'a>(src: &'a ShardSource<'a>, family: FamilyId) -> Result<Invocations<'a>, String> {
     Ok(Invocations {
-        trace,
-        rows: start..end,
+        frames: src.invocations(family)?,
         height: src.height,
     })
 }
@@ -129,28 +229,26 @@ fn delegation_frame(
     frame_bytes: u64,
     witness_base: usize,
 ) -> Vec<(PolyAddress, MultilinearPoly)> {
-    let (trace, rows, h) = (inv.trace, inv.rows.clone(), inv.height);
+    let (frames, h) = (inv.frames, inv.height);
+    let rows = 0..frames.len();
     let wit = |a: PolyAddress| match a {
         PolyAddress::Witness(i) => PolyAddress::Witness(i + witness_base as u32),
         other => other,
     };
     let mut out: Vec<(PolyAddress, MultilinearPoly)> = Vec::new();
-    let cycles: Vec<Fr> = rows.clone().map(|r| Fr::from_u64(trace.cycle[r])).collect();
+    let cycles: Vec<Fr> = frames.cycles().iter().map(|c| Fr::from_u64(*c)).collect();
     out.push((deleg::CYCLE, fr_column(cycles, h)));
     out.push((
         deleg::LIVE,
         u32_column(rows.clone().map(|_| 1).collect(), h),
     ));
-    out.push((
-        deleg::BASE,
-        u32_column(rows.clone().map(|r| trace.base[r]).collect(), h),
-    ));
+    out.push((deleg::BASE, u32_column(frames.bases().to_vec(), h)));
     // The value the request wrote back on its mirror query. Free on both
     // sides, and 0 on both in an honest fill (`docs/spec/delegation.md` §5.2).
     out.push((deleg::ANCHOR_VALUE, u32_column(Vec::new(), h)));
 
     for j in 0..words {
-        let w = &trace.words[j];
+        let w = frames.word(j);
         for (field, values) in [
             (
                 deleg::WORD_ADDR,
@@ -174,7 +272,7 @@ fn delegation_frame(
             let values: Vec<u32> = rows
                 .clone()
                 .map(|r| {
-                    let ts = memory::TS_STEP * trace.cycle[r] + delegation::FRAME_DELTA;
+                    let ts = memory::TS_STEP * frames.cycles()[r] + delegation::FRAME_DELTA;
                     let gap = ts - w.read_ts[r] - 1;
                     ((gap >> bit) & 1) as u32
                 })
@@ -185,7 +283,7 @@ fn delegation_frame(
     for bit in 0..deleg::BASE_LOW_BITS {
         let values: Vec<u32> = rows
             .clone()
-            .map(|r| (((trace.base[r] - guest_memory::RAM_ORIGIN) / 4) >> bit) & 1)
+            .map(|r| (((frames.bases()[r] - guest_memory::RAM_ORIGIN) / 4) >> bit) & 1)
             .collect();
         out.push((wit(deleg::base_low_bit(words, bit)), u32_column(values, h)));
     }
@@ -193,7 +291,7 @@ fn delegation_frame(
         let values: Vec<u32> = rows
             .clone()
             .map(|r| {
-                let room = (1u64 << 31) - frame_bytes - trace.base[r] as u64;
+                let room = (1u64 << 31) - frame_bytes - frames.bases()[r] as u64;
                 ((room >> bit) & 1) as u32
             })
             .collect();
@@ -203,9 +301,9 @@ fn delegation_frame(
 }
 
 /// A frame value's eight words on row `r`, from the field its circuit reads.
-fn value_words(trace: &trace::DelegationTrace, first: usize, field: u32, r: usize) -> [u32; 8] {
+fn value_words(frames: &FrameSlice, first: usize, field: u32, r: usize) -> [u32; 8] {
     core::array::from_fn(|k| {
-        let w = &trace.words[first + k];
+        let w = frames.word(first + k);
         match field {
             deleg::WORD_READ_VALUE => w.read_value[r],
             _ => w.write_value[r],
@@ -249,13 +347,14 @@ fn value_columns(
     diffs: &dyn Fn(usize, usize) -> PolyAddress,
     borrows: &dyn Fn(usize) -> PolyAddress,
 ) -> Vec<(PolyAddress, MultilinearPoly)> {
-    let (trace, rows, h) = (inv.trace, inv.rows.clone(), inv.height);
+    let (frames, h) = (inv.frames, inv.height);
+    let rows = 0..frames.len();
     let mut out: Vec<(PolyAddress, MultilinearPoly)> = Vec::new();
     for k in 0..8 {
         for t in 0..32 {
             let values: Vec<u32> = rows
                 .clone()
-                .map(|r| (value_words(trace, first, field, r)[k] >> t) & 1)
+                .map(|r| (value_words(frames, first, field, r)[k] >> t) & 1)
                 .collect();
             out.push((bits(k, t), u32_column(values, h)));
         }
@@ -265,7 +364,7 @@ fn value_columns(
             let values: Vec<u32> = rows
                 .clone()
                 .map(|r| {
-                    ((borrow_chain(&value_words(trace, first, field, r)).0[k] >> t) & 1) as u32
+                    ((borrow_chain(&value_words(frames, first, field, r)).0[k] >> t) & 1) as u32
                 })
                 .collect();
             out.push((diffs(k, t), u32_column(values, h)));
@@ -274,7 +373,7 @@ fn value_columns(
     for k in 0..8 {
         let values: Vec<u32> = rows
             .clone()
-            .map(|r| borrow_chain(&value_words(trace, first, field, r)).1[k] as u32)
+            .map(|r| borrow_chain(&value_words(frames, first, field, r)).1[k] as u32)
             .collect();
         out.push((borrows(k), u32_column(values, h)));
     }
@@ -293,15 +392,14 @@ fn keccak_f(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, St
         keccak::STATE_BYTES as u64,
         keccak::STATE_BITS,
     );
-    let (trace, rows, h) = (inv.trace, inv.rows.clone(), inv.height);
+    let (frames, h) = (inv.frames, inv.height);
+    let rows = 0..frames.len();
     // The state's bits: frame word `2i + half` is lane `i`'s half, so bit `t`
     // of word `j` is state bit `64·(j/2) + 32·(j%2) + t`.
     for b in 0..keccak::STATE_BITS {
         let (j, t) = (2 * (b / 64) + (b % 64) / 32, b % 32);
-        let values: Vec<u32> = rows
-            .clone()
-            .map(|r| (trace.words[j].read_value[r] >> t) & 1)
-            .collect();
+        let read = frames.word(j).read_value;
+        let values: Vec<u32> = rows.clone().map(|r| (read[r] >> t) & 1).collect();
         out.push((kec_circuit::in_bit(b), u32_column(values, h)));
     }
     Ok(out)
@@ -338,7 +436,8 @@ fn poseidon2(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, S
 fn fr_arith(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     let inv = invocations(src, family::FR_ARITH)?;
     let mut out = delegation_frame(&inv, fa::FRAME_WORDS, fa::FRAME_BYTES as u64, 0);
-    let (trace, rows, h) = (inv.trace, inv.rows.clone(), inv.height);
+    let (frames, h) = (inv.frames, inv.height);
+    let rows = 0..frames.len();
     for (v, (first, field)) in [
         (fa::A_WORD, deleg::WORD_READ_VALUE),
         (fa::B_WORD, deleg::WORD_READ_VALUE),
@@ -356,7 +455,8 @@ fn fr_arith(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, St
             &|k| fa_circuit::borrow_bit(v, k),
         ));
     }
-    let opcode = |r: usize| trace.words[fa::OPCODE_WORD].read_value[r];
+    let opcodes = frames.word(fa::OPCODE_WORD).read_value;
+    let opcode = |r: usize| opcodes[r];
     for (i, op) in fa::OPS.iter().enumerate() {
         let values: Vec<u32> = rows.clone().map(|r| u32::from(opcode(r) == *op)).collect();
         out.push((fa_circuit::selector(i), u32_column(values, h)));
@@ -365,7 +465,7 @@ fn fr_arith(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, St
     // read as `Fr`'s in-memory representation; every one is canonical, which
     // the emulator refused to run without.
     let value = |first: usize, field: u32, r: usize| -> Fr {
-        let words = value_words(trace, first, field, r);
+        let words = value_words(frames, first, field, r);
         let mut bytes = [0u8; 32];
         for k in 0..8 {
             bytes[4 * k..4 * k + 4].copy_from_slice(&words[k].to_le_bytes());
@@ -405,11 +505,260 @@ fn fr_arith(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, St
     Ok(out)
 }
 
+/// A `MOD_MUL` shard, `docs/spec/delegation.md` §14: the delegation frame, the
+/// four frame values' word bits, the quotient with its limbs and bits, the
+/// `out < m` borrow chain, and the fifteen positions' signed carries.
+///
+/// It computes no product: the frame's words are what the execution wrote and
+/// the circuit is what says that was `a * b mod m`. What it *does* compute is
+/// the witness the circuit needs and nothing records — the quotient, the
+/// carries and the borrow chain — each a function of the words alone.
+///
+/// Panics if the identity does not hold over those words, which the emulator
+/// cannot produce: `mod_mul_frame` computes `out` by long division, so
+/// `a * b - q * m - out` is zero by construction. The assertion is what says so
+/// out loud rather than leaving a wrong carry to surface as a proof nobody can
+/// verify.
+fn mod_mul(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    let inv = invocations(src, family::MOD_MUL)?;
+    let mut out = delegation_frame(&inv, mm::FRAME_WORDS, mm::FRAME_BYTES as u64, 0);
+    let (frames, h) = (inv.frames, inv.height);
+    let rows = 0..frames.len();
+
+    // The four values' limbs, and their bits.
+    let limbs = |first: usize, field: u32, r: usize| -> [u64; mm::LIMBS] {
+        core::array::from_fn(|k| {
+            let w = frames.word(first + k);
+            let column = match field {
+                deleg::WORD_READ_VALUE => w.read_value,
+                _ => w.write_value,
+            };
+            column[r] as u64
+        })
+    };
+    for (v, (first, field)) in [
+        (mm::M_WORD, deleg::WORD_READ_VALUE),
+        (mm::A_WORD, deleg::WORD_READ_VALUE),
+        (mm::B_WORD, deleg::WORD_READ_VALUE),
+        (mm::OUT_WORD, deleg::WORD_WRITE_VALUE),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for k in 0..mm::LIMBS {
+            for t in 0..32 {
+                let values: Vec<u32> = rows
+                    .clone()
+                    .map(|r| ((limbs(first, field, r)[k] >> t) & 1) as u32)
+                    .collect();
+                out.push((mm_circuit::value_bit(v, k, t), u32_column(values, h)));
+            }
+        }
+    }
+
+    // The quotient, and every position's signed carry. Both are computed per
+    // row and then transposed into columns, because each is a function of the
+    // whole row and not of one limb.
+    let witness: Vec<(Vec<u64>, Vec<i128>)> = rows
+        .clone()
+        .map(|r| {
+            mod_mul_witness(
+                &limbs(mm::M_WORD, deleg::WORD_READ_VALUE, r),
+                &limbs(mm::A_WORD, deleg::WORD_READ_VALUE, r),
+                &limbs(mm::B_WORD, deleg::WORD_READ_VALUE, r),
+                &limbs(mm::OUT_WORD, deleg::WORD_WRITE_VALUE, r),
+            )
+        })
+        .collect();
+    for k in 0..mm::LIMBS {
+        let values: Vec<u32> = witness.iter().map(|(q, _)| q[k] as u32).collect();
+        out.push((mm_circuit::q_limb(k), u32_column(values, h)));
+    }
+    for k in 0..mm::LIMBS {
+        for t in 0..32 {
+            let values: Vec<u32> = witness
+                .iter()
+                .map(|(q, _)| ((q[k] >> t) & 1) as u32)
+                .collect();
+            out.push((mm_circuit::q_bit(k, t), u32_column(values, h)));
+        }
+    }
+    for k in 0..mm::CARRIES {
+        for t in 0..mm::CARRY_BITS {
+            let values: Vec<u32> = witness
+                .iter()
+                .map(|(_, c)| {
+                    let offset = c[k] + mm::CARRY_OFFSET as i128;
+                    ((offset >> t) & 1) as u32
+                })
+                .collect();
+            out.push((mm_circuit::carry_bit(k, t), u32_column(values, h)));
+        }
+    }
+
+    // The `out < m` borrow chain, over the same words.
+    let chain = |r: usize| -> ([u64; mm::LIMBS], [u64; mm::LIMBS]) {
+        borrow_chain_against(
+            &limbs(mm::OUT_WORD, deleg::WORD_WRITE_VALUE, r),
+            &limbs(mm::M_WORD, deleg::WORD_READ_VALUE, r),
+        )
+    };
+    for i in 0..mm::LIMBS {
+        for t in 0..32 {
+            let values: Vec<u32> = rows
+                .clone()
+                .map(|r| ((chain(r).0[i] >> t) & 1) as u32)
+                .collect();
+            out.push((mm_circuit::diff_bit(i, t), u32_column(values, h)));
+        }
+    }
+    for i in 0..mm::LIMBS {
+        let values: Vec<u32> = rows.clone().map(|r| chain(r).1[i] as u32).collect();
+        out.push((mm_circuit::borrow_bit(i), u32_column(values, h)));
+    }
+    Ok(out)
+}
+
+/// The quotient and the fifteen signed carries of `a * b = q * m + out`.
+///
+/// `q` is the schoolbook long division of the 512-bit product by `m`, computed
+/// the same way `emulator::mod_mul_frame` computes the remainder, and the
+/// carries are then read straight off the limb identity the circuit states:
+/// `c_k = (P_k - S_k - out_k + c_{k-1}) / 2^32`, exactly, because the identity
+/// holds over the integers.
+///
+/// Panics unless every division is exact and the last carry is zero, which is
+/// the identity itself: a nonzero last carry would mean `a * b - q * m - out` is
+/// a nonzero multiple of `2^480`.
+fn mod_mul_witness(
+    m: &[u64; mm::LIMBS],
+    a: &[u64; mm::LIMBS],
+    b: &[u64; mm::LIMBS],
+    result: &[u64; mm::LIMBS],
+) -> (Vec<u64>, Vec<i128>) {
+    let big = |limbs: &[u64; mm::LIMBS]| -> Vec<u32> { limbs.iter().map(|w| *w as u32).collect() };
+    let q = wide_div(&wide_mul(&big(a), &big(b)), &big(m));
+    let q: [u64; mm::LIMBS] = core::array::from_fn(|k| q[k] as u64);
+
+    let part = |x: &[u64; mm::LIMBS], y: &[u64; mm::LIMBS], k: usize| -> i128 {
+        (0..mm::LIMBS)
+            .filter_map(|i| k.checked_sub(i).filter(|j| *j < mm::LIMBS).map(|j| (i, j)))
+            .map(|(i, j)| x[i] as i128 * y[j] as i128)
+            .sum()
+    };
+    let mut carries: Vec<i128> = Vec::with_capacity(mm::CARRIES);
+    let mut carry = 0i128;
+    for k in 0..mm::POSITIONS {
+        let mut lhs = part(a, b, k) - part(&q, m, k) + carry;
+        // The result has eight limbs and there are fifteen positions, so the top
+        // seven subtract nothing — which is what `result.get` says in one line.
+        if let Some(limb) = result.get(k) {
+            lhs -= *limb as i128;
+        }
+        let radix = 1i128 << 32;
+        assert_eq!(
+            lhs.rem_euclid(radix),
+            0,
+            "mod_mul: position {k}'s identity does not divide"
+        );
+        carry = lhs / radix;
+        if k < mm::CARRIES {
+            assert!(
+                carry.unsigned_abs() < mm::CARRY_OFFSET as u128,
+                "mod_mul: carry {k} is {carry}, outside the offset"
+            );
+            carries.push(carry);
+        }
+    }
+    assert_eq!(carry, 0, "mod_mul: the identity leaves a carry");
+    (q.to_vec(), carries)
+}
+
+/// `x * y` over eight 32-bit limbs, as sixteen.
+fn wide_mul(x: &[u32], y: &[u32]) -> Vec<u32> {
+    let mut out = vec![0u64; 2 * mm::LIMBS];
+    for (i, xi) in x.iter().enumerate() {
+        let mut carry = 0u64;
+        for (j, yj) in y.iter().enumerate() {
+            let total = out[i + j] + *xi as u64 * *yj as u64 + carry;
+            out[i + j] = total & 0xffff_ffff;
+            carry = total >> 32;
+        }
+        let mut at = i + y.len();
+        while carry != 0 {
+            let total = out[at] + carry;
+            out[at] = total & 0xffff_ffff;
+            carry = total >> 32;
+            at += 1;
+        }
+    }
+    out.into_iter().map(|w| w as u32).collect()
+}
+
+/// `x / m` over little-endian 32-bit limbs, by shift-and-subtract from the top.
+///
+/// The quotient has as many limbs as `x`; the caller takes the low eight, which
+/// is exact for the honest prover because the guest passes `a, b < m` and then
+/// `q < m` (`crates/constraints/src/mod_mul.rs`' soundness note).
+fn wide_div(x: &[u32], m: &[u32]) -> Vec<u32> {
+    let mut quotient = vec![0u32; x.len()];
+    let mut rem = vec![0u64; m.len() + 1];
+    for bit in (0..32 * x.len()).rev() {
+        let mut carry = ((x[bit / 32] >> (bit % 32)) & 1) as u64;
+        for word in rem.iter_mut() {
+            let total = (*word << 1) | carry;
+            *word = total & 0xffff_ffff;
+            carry = total >> 32;
+        }
+        let fits = rem[m.len()] != 0
+            || (0..m.len())
+                .rev()
+                .find(|k| rem[*k] != m[*k] as u64)
+                .is_none_or(|k| rem[k] > m[k] as u64);
+        if fits {
+            let mut borrow = 0i64;
+            for k in 0..m.len() {
+                let diff = rem[k] as i64 - m[k] as i64 - borrow;
+                borrow = i64::from(diff < 0);
+                rem[k] = (diff + if diff < 0 { 1i64 << 32 } else { 0 }) as u64;
+            }
+            rem[m.len()] -= borrow as u64;
+            quotient[bit / 32] |= 1 << (bit % 32);
+        }
+    }
+    quotient
+}
+
+/// The borrow chain of `x - y` over eight 32-bit limbs: the difference limbs and
+/// the borrows, the last of which is 1 exactly when `x < y`.
+///
+/// `delegation_frame`'s `borrow_chain` is the same computation against `p`'s
+/// literal limbs; this one takes the subtrahend as data, which is what carrying
+/// the modulus in the frame costs on this side too.
+fn borrow_chain_against(
+    x: &[u64; mm::LIMBS],
+    y: &[u64; mm::LIMBS],
+) -> ([u64; mm::LIMBS], [u64; mm::LIMBS]) {
+    let (mut diff, mut borrow) = ([0u64; mm::LIMBS], [0u64; mm::LIMBS]);
+    let mut carry = 0i64;
+    for i in 0..mm::LIMBS {
+        let d = x[i] as i64 - y[i] as i64 - carry;
+        carry = i64::from(d < 0);
+        diff[i] = if d < 0 {
+            (d + (1i64 << 32)) as u64
+        } else {
+            d as u64
+        };
+        borrow[i] = carry as u64;
+    }
+    (diff, borrow)
+}
+
 /// A RAM window shard: `trace::build_init_teardown_columns` over its window,
 /// with `S[0]`, the image column, for window 0.
 fn window(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     Ok(build_init_teardown_columns(
-        src.archive.memory_log(),
+        src.state()?,
         &src.program.image,
         src.window,
         src.height,
@@ -424,17 +773,17 @@ fn window(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Stri
 /// put the bytes and have the proof verify
 /// (`docs/spec/public-values.md` §5).
 fn public_input(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
-    let input = &src.archive.io_streams().input;
-    if input.len() > guest_memory::PUBLIC_PAYLOAD_BYTES as usize {
+    let state = src.state()?;
+    if src.input.len() > guest_memory::PUBLIC_PAYLOAD_BYTES as usize {
         return Err(format!(
             "the public input is {} bytes, above the window's {}",
-            input.len(),
+            src.input.len(),
             guest_memory::PUBLIC_PAYLOAD_BYTES
         ));
     }
     Ok(build_value_window_columns(
-        src.archive.memory_log(),
-        &program::public_io_words(input),
+        state,
+        &program::public_io_words(src.input),
         src.window,
         src.height,
     ))
@@ -443,16 +792,13 @@ fn public_input(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>
 /// An advice window: a value window whose init column is this window's slice
 /// of the bytes the host supplied, and which **nothing binds**.
 fn advice(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
-    let bytes = src.archive.advice();
+    let state = src.state()?;
     let first = src.height as u64 * src.index as u64;
     let words: Vec<u32> = (0..src.height as u64)
-        .map(|y| trace::advice_word(bytes, first + y))
+        .map(|y| trace::advice_word(src.advice, first + y))
         .collect();
     Ok(build_value_window_columns(
-        src.archive.memory_log(),
-        &words,
-        src.window,
-        src.height,
+        state, &words, src.window, src.height,
     ))
 }
 
@@ -493,19 +839,13 @@ fn signed(v: i128) -> Fr {
 /// instruction computes — which the emulator cannot produce.
 fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     let fam = family::ADD_SUB_LUI_AUIPC;
-    let traces = src.archive.family_traces();
-    let trace = traces
-        .family(fam)
-        .ok_or("the archive has no ADD_SUB_LUI_AUIPC buffer")?;
+    let rows = src.cycles(fam)?;
     let table = src
         .program
         .tables
         .family(fam)
         .ok_or("the program has no ADD_SUB_LUI_AUIPC table")?;
     let h = src.height;
-    let start = src.index as usize * h;
-    let end = (start + h).min(trace.len());
-    let cycles = &trace.cycle[start..end];
     let width = frame_queries(fam).len();
 
     let mut decoded: [Vec<u32>; 6] = Default::default();
@@ -513,8 +853,8 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
     let (mut is_ecall, mut is_fence, mut wrap) = (Vec::new(), Vec::new(), Vec::new());
     let mut is_deleg: [Vec<u32>; constraints::add_sub::IS_DELEGATION.len()] = Default::default();
     let (mut sel, mut rd_hi, mut next_pc_hi) = (Vec::new(), Vec::new(), Vec::new());
-    for r in start..end {
-        let row = trace.row(r);
+    for r in 0..rows.len() {
+        let row = rows.row(r);
         let slot = row.pc as usize / 2;
         let field = |column: usize| {
             table.get(column, slot).unwrap_or_else(|| {
@@ -615,7 +955,7 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
         next_pc_hi.push(row.next_pc >> 16);
     }
 
-    let mut out = frame_columns(src, fam, cycles);
+    let mut out = frame_columns(src, fam, rows);
     out.push((rd_selected(width), u32_column(sel, h)));
     for (address, values) in DECODED.iter().zip(decoded) {
         out.push((*address, u32_column(values, h)));
@@ -659,19 +999,13 @@ fn add(a: u32, b: u32) -> (u32, u32) {
 /// instruction computes — which the emulator cannot produce.
 fn jump_branch_slt(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     let fam = family::JUMP_BRANCH_SLT;
-    let traces = src.archive.family_traces();
-    let trace = traces
-        .family(fam)
-        .ok_or("the archive has no JUMP_BRANCH_SLT buffer")?;
+    let rows = src.cycles(fam)?;
     let table = src
         .program
         .tables
         .family(fam)
         .ok_or("the program has no JUMP_BRANCH_SLT table")?;
     let h = src.height;
-    let start = src.index as usize * h;
-    let end = (start + h).min(trace.len());
-    let cycles = &trace.cycle[start..end];
     let width = frame_queries(fam).len();
 
     let mut decoded: [Vec<u32>; 6] = Default::default();
@@ -680,8 +1014,8 @@ fn jump_branch_slt(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPol
     // eq taken jalr_drop pc_wrap next_pc_hi rd_hi, then rd_selected.
     let mut cells: [Vec<u32>; 15] = Default::default();
     let mut eq_inv = Vec::new();
-    for r in start..end {
-        let row = trace.row(r);
+    for r in 0..rows.len() {
+        let row = rows.row(r);
         let slot = row.pc as usize / 2;
         let field = |column: usize| {
             table.get(column, slot).unwrap_or_else(|| {
@@ -777,7 +1111,7 @@ fn jump_branch_slt(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPol
         }
     }
 
-    let mut out = frame_columns(src, fam, cycles);
+    let mut out = frame_columns(src, fam, rows);
     let [cmp_rhs, rs1_hi, rs1_sign, rhs_hi, rhs_sign, lt, gap, gap_hi, eq, taken, drop, wrap, next_hi, rd_hi, sel] =
         cells;
     out.push((rd_selected(width), u32_column(sel, h)));
@@ -836,19 +1170,13 @@ fn jump_branch_slt(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPol
 /// immediate — which the emulator cannot produce.
 fn shift_bitwise(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     let fam = family::SHIFT_BITWISE;
-    let traces = src.archive.family_traces();
-    let trace = traces
-        .family(fam)
-        .ok_or("the archive has no SHIFT_BITWISE buffer")?;
+    let rows = src.cycles(fam)?;
     let table = src
         .program
         .tables
         .family(fam)
         .ok_or("the program has no SHIFT_BITWISE table")?;
     let h = src.height;
-    let start = src.index as usize * h;
-    let end = (start + h).min(trace.len());
-    let cycles = &trace.cycle[start..end];
     let width = frame_queries(fam).len();
 
     let mut decoded: [Vec<u32>; 6] = Default::default();
@@ -858,8 +1186,8 @@ fn shift_bitwise(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)
     let mut cells: [Vec<u32>; 19] = Default::default();
     let mut bytes: [Vec<u32>; 12] = Default::default();
     let (mut shift_in, mut shift_prod) = (Vec::new(), Vec::new());
-    for r in start..end {
-        let row = trace.row(r);
+    for r in 0..rows.len() {
+        let row = rows.row(r);
         let slot = row.pc as usize / 2;
         let field = |column: usize| {
             table.get(column, slot).unwrap_or_else(|| {
@@ -983,7 +1311,7 @@ fn shift_bitwise(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)
         }
     }
 
-    let mut out = frame_columns(src, fam, cycles);
+    let mut out = frame_columns(src, fam, rows);
     let [f_shift, f_bitwise, rs1_hi, rs1_sign, src2_hi, amount, pow, copow, high, high_hi, se, ovf, ovf_hi, residue, residue_hi, scaled, scaled_hi, rd_hi, sel] =
         cells;
     out.push((rd_selected(width), u32_column(sel, h)));
@@ -1053,19 +1381,13 @@ fn shift_bitwise(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)
 /// instruction computes — which the emulator cannot produce.
 fn mul_div(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     let fam = family::MUL_DIV;
-    let traces = src.archive.family_traces();
-    let trace = traces
-        .family(fam)
-        .ok_or("the archive has no MUL_DIV buffer")?;
+    let rows = src.cycles(fam)?;
     let table = src
         .program
         .tables
         .family(fam)
         .ok_or("the program has no MUL_DIV table")?;
     let h = src.height;
-    let start = src.index as usize * h;
-    let end = (start + h).min(trace.len());
-    let cycles = &trace.cycle[start..end];
     let width = frame_queries(fam).len();
 
     let mut decoded: [Vec<u32>; 5] = Default::default();
@@ -1077,8 +1399,8 @@ fn mul_div(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
     let (mut mx_col, mut my_col) = (Vec::new(), Vec::new());
     let (mut r_inv_col, mut d_inv_col) = (Vec::new(), Vec::new());
     let word = 1i128 << 32;
-    for row_index in start..end {
-        let row = trace.row(row_index);
+    for row_index in 0..rows.len() {
+        let row = rows.row(row_index);
         let slot = row.pc as usize / 2;
         let field = |column: usize| {
             table.get(column, slot).unwrap_or_else(|| {
@@ -1240,7 +1562,7 @@ fn mul_div(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
         }
     }
 
-    let mut out = frame_columns(src, fam, cycles);
+    let mut out = frame_columns(src, fam, rows);
     let [f_div, rs1_hi, rs1_top, rs2_hi, rs2_top, s1, s2, p_low, p_low_hi, p_high, p_high_hi, p_sign, q, q_hi, q_sign, r, r_hi, r_sign, rz, d1, dz, abs_r, abs_d, gap, gap_hi, rd_hi, sel] =
         cells;
     out.push((rd_selected(width), u32_column(sel, h)));
@@ -1305,13 +1627,12 @@ fn mul_div(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
 fn frame_columns(
     src: &ShardSource,
     family: FamilyId,
-    cycles: &[u64],
+    rows: &RowSlice,
 ) -> Vec<(PolyAddress, MultilinearPoly)> {
-    let log = src.archive.memory_log();
     let queries = frame_queries(family);
     let width = queries.len();
-    let mut out = build_memory_columns(log, queries, cycles, src.height);
-    for (address, column) in build_frame_witness(log, queries, cycles, src.height) {
+    let mut out = build_memory_columns(rows, queries, src.height);
+    for (address, column) in build_frame_witness(rows, queries, src.height) {
         if address != rd_selected(width) {
             out.push((address, column));
         }
@@ -1332,26 +1653,20 @@ fn frame_columns(
 /// a fatal guest error before it stages an event.
 fn mem_word(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     let fam = family::MEM_WORD;
-    let traces = src.archive.family_traces();
-    let trace = traces
-        .family(fam)
-        .ok_or("the archive has no MEM_WORD buffer")?;
+    let rows = src.cycles(fam)?;
     let table = src
         .program
         .tables
         .family(fam)
         .ok_or("the program has no MEM_WORD table")?;
     let h = src.height;
-    let start = src.index as usize * h;
-    let end = (start + h).min(trace.len());
-    let cycles = &trace.cycle[start..end];
 
     let mut decoded: [Vec<u32>; 6] = Default::default();
     let mut kinds: [Vec<u32>; 2] = Default::default();
     // wrap word_index word_index_hi rd_hi, then rd_selected.
     let mut cells: [Vec<u32>; 5] = Default::default();
-    for r in start..end {
-        let row = trace.row(r);
+    for r in 0..rows.len() {
+        let row = rows.row(r);
         let slot = row.pc as usize / 2;
         let field = |column: usize| {
             table.get(column, slot).unwrap_or_else(|| {
@@ -1420,7 +1735,7 @@ fn mem_word(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, St
         }
     }
 
-    let mut out = frame_columns(src, fam, cycles);
+    let mut out = frame_columns(src, fam, rows);
     let [wrap, word_index, word_index_hi, rd_hi, sel] = cells;
     out.push((rd_selected(frame_queries(fam).len()), u32_column(sel, h)));
     for (address, values) in mw_circuit::DECODED.iter().zip(decoded) {
@@ -1456,19 +1771,13 @@ fn mem_word(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, St
 /// which the emulator refuses as a fatal guest error.
 fn mem_subword(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     let fam = family::MEM_SUBWORD;
-    let traces = src.archive.family_traces();
-    let trace = traces
-        .family(fam)
-        .ok_or("the archive has no MEM_SUBWORD buffer")?;
+    let rows = src.cycles(fam)?;
     let table = src
         .program
         .tables
         .family(fam)
         .ok_or("the program has no MEM_SUBWORD table")?;
     let h = src.height;
-    let start = src.index as usize * h;
-    let end = (start + h).min(trace.len());
-    let cycles = &trace.cycle[start..end];
 
     let mut decoded: [Vec<u32>; 6] = Default::default();
     let mut kinds: [Vec<u32>; 6] = Default::default();
@@ -1478,8 +1787,8 @@ fn mem_subword(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>,
     // src_sub src_sub_scaled src_sub_scaled_hi src_high src_high_hi
     // sign_in sign se rd_hi, then rd_selected.
     let mut cells: [Vec<u32>; 31] = Default::default();
-    for r in start..end {
-        let row = trace.row(r);
+    for r in 0..rows.len() {
+        let row = rows.row(r);
         let slot = row.pc as usize / 2;
         let field = |column: usize| {
             table.get(column, slot).unwrap_or_else(|| {
@@ -1598,7 +1907,7 @@ fn mem_subword(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>,
         }
     }
 
-    let mut out = frame_columns(src, fam, cycles);
+    let mut out = frame_columns(src, fam, rows);
     let [wrap, word_index, word_index_hi, bit0, bit1, p, pcopow, wph, p_ram, word, high, high_hi, high_scaled, high_scaled_hi, sub, sub_scaled, sub_scaled_hi, low, low_hi, low_scaled, low_scaled_hi, src_sub, src_sub_scaled, src_sub_scaled_hi, src_high, src_high_hi, sign_in, sign, se, rd_hi, sel] =
         cells;
     out.push((rd_selected(frame_queries(fam).len()), u32_column(sel, h)));
@@ -1666,19 +1975,13 @@ fn mem_subword(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>,
 /// emulator refuses as a fatal guest error.
 fn atomics(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     let fam = family::ATOMICS;
-    let traces = src.archive.family_traces();
-    let trace = traces
-        .family(fam)
-        .ok_or("the archive has no ATOMICS buffer")?;
+    let rows = src.cycles(fam)?;
     let table = src
         .program
         .tables
         .family(fam)
         .ok_or("the program has no ATOMICS table")?;
     let h = src.height;
-    let start = src.index as usize * h;
-    let end = (start + h).min(trace.len());
-    let cycles = &trace.cycle[start..end];
 
     let mut decoded: [Vec<u32>; 5] = Default::default();
     let mut kinds: [Vec<u32>; 11] = Default::default();
@@ -1686,8 +1989,8 @@ fn atomics(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
     // old_hi old_sign src_hi src_sign lt cmp_gap cmp_gap_hi lo, then rd_selected.
     let mut cells: [Vec<u32>; 15] = Default::default();
     let mut bytes: [Vec<u32>; 12] = Default::default();
-    for r in start..end {
-        let row = trace.row(r);
+    for r in 0..rows.len() {
+        let row = rows.row(r);
         let slot = row.pc as usize / 2;
         let field = |column: usize| {
             table.get(column, slot).unwrap_or_else(|| {
@@ -1792,7 +2095,7 @@ fn atomics(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
         }
     }
 
-    let mut out = frame_columns(src, fam, cycles);
+    let mut out = frame_columns(src, fam, rows);
     let [word_index, word_index_hi, sum, sum_hi, add_wrap, f_bitwise, old_hi, old_sign, src_hi, src_sign, lt, cmp_gap, cmp_gap_hi, lo, sel] =
         cells;
     out.push((rd_selected(frame_queries(fam).len()), u32_column(sel, h)));

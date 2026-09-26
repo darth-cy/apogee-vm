@@ -80,6 +80,9 @@ pub const RECURSION_RESULT: u32 = 9;
 /// `guests/recursion-unused`'s exit status.
 pub const RECURSION_UNUSED_RESULT: u32 = 11;
 
+/// `guests/mod-mul-ops`' exit status: the number of checks it passed.
+pub const MOD_MUL_RESULT: u32 = 12;
+
 /// S23's delegation heights, `2^8` like S21's.
 pub const DELEGATION_VARS: u32 = 8;
 
@@ -156,6 +159,28 @@ pub fn keccak_params() -> ProgramParams {
     params
 }
 
+/// S26's heights: the six execution families `mod-mul-ops` runs at `2^20`,
+/// `MOD_MUL` at `2^8`, and the window families at `2^18` — see
+/// [`mod_mul_program`] for why `2^16` does not fit.
+pub fn mod_mul_params() -> ProgramParams {
+    let mut heights = [1 << 18; family::COUNT as usize];
+    for f in [
+        family::ADD_SUB_LUI_AUIPC,
+        family::JUMP_BRANCH_SLT,
+        family::SHIFT_BITWISE,
+        family::MUL_DIV,
+        family::MEM_WORD,
+        family::MEM_SUBWORD,
+    ] {
+        heights[f as usize] = 1 << ADD_VARS;
+    }
+    heights[family::MOD_MUL as usize] = 1 << DELEGATION_VARS;
+    ProgramParams {
+        heights,
+        ..ProgramParams::defaults()
+    }
+}
+
 /// S23's heights: the execution families `recursion-ops` runs at `2^20`, and
 /// the two delegation families at `2^8`.
 pub fn recursion_params() -> ProgramParams {
@@ -218,6 +243,19 @@ pub fn recursion_program() -> Program {
 
 pub fn recursion_unused_program() -> Program {
     program_of("recursion-unused", &recursion_params())
+}
+
+/// S26's guest: `guests/mod-mul-ops`, which calls the `MOD_MUL` delegation by
+/// name over three moduli and reaches it a second time through
+/// `guests/vendor/k256`'s patched field multiply.
+///
+/// Its six execution families run at `2^20` and `MOD_MUL` at `2^8`, but its
+/// **window** families need `2^18` rather than `2^16`: the guest's `.text`
+/// reaches pc `0x2161a` and `decode_program` refuses an image byte past RAM
+/// window 0, which at `2^16` ends at `0x40000` — that one fits, but the decoded
+/// tables do not, a table's row `i` being pc `2i`.
+pub fn mod_mul_program() -> Program {
+    program_of("mod-mul-ops", &mod_mul_params())
 }
 
 /// S-IO's guest: `guests/public-io`, which reads its public input and its
@@ -337,6 +375,11 @@ pub fn recursion_unused_archive(program: &Program) -> TraceArchive {
     trace(program, RECURSION_UNUSED_RESULT)
 }
 
+/// The post-execution archive of `mod-mul-ops`' one run.
+pub fn mod_mul_archive(program: &Program) -> TraceArchive {
+    trace(program, MOD_MUL_RESULT)
+}
+
 /// A run with no input and no hint, which must exit with `status`.
 pub fn trace(program: &Program, status: u32) -> TraceArchive {
     let io = GuestIo {
@@ -396,6 +439,10 @@ pub fn recursion_setup() -> ProverSetup {
 pub fn recursion_unused_setup() -> ProverSetup {
     ProverSetup::new(recursion_unused_program(), toy_srs(ADD_VARS))
         .expect("recursion-unused registers")
+}
+
+pub fn mod_mul_setup() -> ProverSetup {
+    ProverSetup::new(mod_mul_program(), toy_srs(ADD_VARS)).expect("mod-mul-ops registers")
 }
 
 /// The toy SRS's `tau`.
