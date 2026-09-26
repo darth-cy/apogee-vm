@@ -1,0 +1,78 @@
+[package]
+name = "host"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The host SDK: the eight-step path from a guest ELF and its inputs to a
+# `BlockProof`, and the witness recorder that produces a real block's
+# `BlockWitness`. `prompts/00-master.md`'s projected workspace layout froze this
+# crate's name and its charter -- "host SDK: prove/verify API, input building,
+# witness recorder" -- long before S25 filled it in.
+#
+# `host::prove` and `host::verify` are convenience wrappers and nothing more:
+# `prover::prove_block` and `verifier::verify_block` remain the protocol entry
+# points, and master rule 6's verifier signature discipline holds because the
+# wrapper adds nothing to the verifier's inputs -- it reads the statement out of
+# the proof rather than taking a second copy of it.
+[dependencies]
+emulator.workspace = true
+loader.workspace = true
+program.workspace = true
+prover.workspace = true
+srs.workspace = true
+trace.workspace = true
+verifier.workspace = true
+verifier-core.workspace = true
+
+# The workspace's dependency-free helper crate: SHA-256 and the hex codec. It
+# names the cache's content addresses and pins the committed fixtures, which is
+# what its other four callers use it for -- `tools/kat-gen`, `tools/bench`,
+# `tools/artifact-dump` and `tools/transcript-ref` all take it the same way. Its
+# manifest declares no dependencies of its own, on purpose, so taking it cannot
+# unify a feature into anything.
+test-support.workspace = true
+
+# `BlockWitness` and `run` -- the wire format the recorder produces and the
+# native-revm oracle it is checked against. `tools/kat-gen` already takes this
+# same path dependency, and with it `revm`: the guest library compiles for the
+# host too (`guests/revm-block/src/lib.rs`), which is what makes one definition
+# of the witness serve the recorder, the guest and the differential.
+revm-block = { path = "../../guests/revm-block" }
+# The recorder's database wrapper implements revm's `Database` trait and its
+# harvest reads revm's own state types, so it names revm directly rather than
+# through the guest library.
+revm = { version = "=42.0.1", default-features = false, features = ["std"] }
+
+# JSON is the RPC wire format, and parsing `eth_getProof`'s nested response is
+# not "write the eight lines yourself". Master rule 2 lists serialization among
+# the allowed runtime dependencies; this is the second entry under it, after
+# `serde`/`postcard`. It is reachable from no prover, no verifier and no guest.
+#
+# `alloc` and not `std` on the serde entry, deliberately. `tools/transcript-ref`
+# is outside the workspace precisely so its graph cannot feature-unify
+# `serde/std` into `crates/field`, which must stay `no_std` for the guest
+# target; asking for `std` here would do the same thing from inside. `alloc` is
+# what `Vec` and `String` need and is what `guests/revm-block` already asks for.
+# `serde_json` reaches `serde_core/std`, not `serde/std`, so the flag
+# `crates/field` is compiled under does not move.
+serde = { workspace = true, features = ["derive", "alloc"] }
+serde_json.workspace = true
+
+[dev-dependencies]
+constants.workspace = true
+emulator.workspace = true
+loader.workspace = true
+# `tests/prove.rs`: the mini-block gate and its tamper twin. `checker` depends
+# on `prover` and this crate depends on both, so there is no cycle -- unlike
+# `crates/prover`, which dev-depends on `checker` and has one that cargo
+# resolves.
+checker.workspace = true
+constraints.workspace = true
+field.workspace = true
+curve.workspace = true
+rayon.workspace = true
+trace.workspace = true
+# `tests/stateless.rs` reads the recorded node set, which the refresh writes as
+# a `postcard` `StatelessWitness`.
+postcard.workspace = true

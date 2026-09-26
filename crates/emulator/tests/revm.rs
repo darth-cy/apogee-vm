@@ -453,24 +453,39 @@ fn synthetic_witness(block_gas_limit: u64, code: Vec<u8>, gas_limits: &[u64]) ->
     let mut env = committed.env.clone();
     env.gas_limit = block_gas_limit;
 
+    // Three accounts, not two: the **beneficiary** is read by every block that
+    // pays a fee, and since S25 an address the witness does not carry is an
+    // error rather than an empty account. It is recorded with every field zero,
+    // which is how the witness says "asked about, and not there" — revm creates
+    // it when the fee lands, exactly as it would on chain.
+    let mut accounts = vec![
+        AccountWitness {
+            address: sender,
+            nonce: 0,
+            balance,
+            code: Vec::new(),
+            slots: Vec::new(),
+        },
+        AccountWitness {
+            address: callee,
+            nonce: 0,
+            balance: [0u8; 32],
+            code,
+            slots: Vec::new(),
+        },
+        AccountWitness {
+            address: env.beneficiary,
+            nonce: 0,
+            balance: [0u8; 32],
+            code: Vec::new(),
+            slots: Vec::new(),
+        },
+    ];
+    accounts.sort_by_key(|a| a.address);
+
     BlockWitness {
         env,
-        accounts: vec![
-            AccountWitness {
-                address: sender,
-                nonce: 0,
-                balance,
-                code: Vec::new(),
-                slots: Vec::new(),
-            },
-            AccountWitness {
-                address: callee,
-                nonce: 0,
-                balance: [0u8; 32],
-                code,
-                slots: Vec::new(),
-            },
-        ],
+        accounts,
         txs: gas_limits
             .iter()
             .enumerate()
@@ -485,6 +500,9 @@ fn synthetic_witness(block_gas_limit: u64, code: Vec<u8>, gas_limits: &[u64]) ->
                 nonce: i as u64,
                 chain_id: Some(committed.env.chain_id),
                 access_list: Vec::new(),
+                blob_hashes: Vec::new(),
+                max_fee_per_blob_gas: None,
+                authorizations: Vec::new(),
             })
             .collect(),
         stateless: None,
@@ -536,23 +554,22 @@ fn a_block_past_its_gas_limit_is_refused() {
         "unexpected refusal: {refused}"
     );
 }
-
-/// `BLOCKHASH` reads a placeholder today, and this is the pin on that.
+/// `BLOCKHASH` reads what the witness recorded, and **refuses what it did
+/// not** — S24's one acknowledged gap, closed at S25.
 ///
-/// The witness carries no block hashes, so `run` hands revm a
-/// `CacheDB<EmptyDB>` whose block-hash cache is empty and every lookup falls
-/// through to `EmptyDB`, which answers `keccak256` of the block number's
-/// **decimal string**. It is deterministic, the guest and the host agree on
-/// it, and it is not any block's hash — so a contract that reads it computes
-/// on a made-up word. `BlockWitness` is not frozen at S24 for exactly this
-/// reason (owner's decision): the field that closes the gap is a
-/// `block_hashes: Vec<(u64, Word32)>` loaded into that cache, and the stage
-/// that needs it adds it. `docs/spec/revm-block.md` §1.2.
+/// S24 gave revm a `CacheDB<EmptyDB>` with an empty block-hash cache, so every
+/// lookup fell through to `EmptyDB`, which returns `keccak256` of the block
+/// number's decimal string. The old shape of this test asserted that
+/// placeholder *on purpose*, so that closing the gap would have to be a
+/// decision rather than an accident. This is that decision:
+/// `BlockEnvWitness::block_hashes` carries the ancestors and
+/// `WitnessDb::block_hash` errors on any other, which reaches the caller as a
+/// refusal to execute rather than as a made-up word.
 ///
-/// The assertion is the placeholder itself rather than "not zero", so closing
-/// the gap fails here and has to be a decision.
+/// Both directions, because only the pair is the property: a recorded ancestor
+/// is answered with the recorded hash, and an unrecorded one is refused.
 #[test]
-fn blockhash_reads_a_placeholder_today() {
+fn blockhash_reads_the_recorded_ancestor_and_refuses_the_rest() {
     let number = {
         let committed =
             BlockWitness::decode(&witness_bytes()).expect("the committed witness decodes");
@@ -565,16 +582,32 @@ fn blockhash_reads_a_placeholder_today() {
     code.extend_from_slice(&(previous as u32).to_be_bytes());
     code.extend_from_slice(&[0x40, 0x5f, 0x52, 0x60, 0x20, 0x5f, 0xf3]);
 
-    let witness = synthetic_witness(1_000_000, code, &[100_000]);
+    // Nothing recorded: the ancestor read is refused and the block does not
+    // execute at all.
+    let bare = synthetic_witness(1_000_000, code.clone(), &[100_000]);
+    assert!(
+        revm_block::run(&bare).is_err(),
+        "an ancestor hash the witness does not carry was answered rather than refused"
+    );
+
+    // Recorded: the opcode reads exactly what was recorded, and nothing else.
+    let mut ancestor = [0u8; 32];
+    ancestor[0] = 0xa1;
+    ancestor[31] = 0x5e;
+    let mut witness = bare.clone();
+    witness.env.block_hashes = vec![(previous, ancestor)];
     let output = revm_block::run(&witness).expect("the blockhash block executes");
     let (records, _) = tx_records(&output, 1);
     assert_eq!(records[0].0, 2, "the call succeeds");
-
     assert_eq!(
         records[0].2,
+        ancestor.to_vec(),
+        "BLOCKHASH answered something other than the recorded ancestor"
+    );
+    assert_ne!(
+        records[0].2,
         revm_block::keccak(previous.to_string().as_bytes()).to_vec(),
-        "BLOCKHASH answered something other than EmptyDB's placeholder; if the \
-         witness now carries block hashes, this test is the one to rewrite"
+        "BLOCKHASH is still answering EmptyDB's placeholder"
     );
 }
 

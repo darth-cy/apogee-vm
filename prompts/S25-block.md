@@ -1,0 +1,39 @@
+# S25 — Witness pipeline, real blocks, bench harness
+
+## Deliver
+- The `host` crate gains `WitnessRecorder`. It pre-executes txs with native revm against an RPC-backed state database, records every touched account, storage slot, and code blob, and emits a `BlockWitness`. You might need to modify `BlockWitness` to have a `block_hashes` field for previous hashes. `BlockWitness`, including MPT material, enters the guest through advice, never stdin/public input. The journal is the bound public output. Add the host convenience wrappers `host::prove`/`host::verify` around S20's entry points. S20's `prove_block`/`verify_block` remain the main protocol entry points, and verifier signature discipline holds per this rule: the wrapper adds nothing to the verifier's inputs.
+- **Mini-block mode** executes the first 1–2 txs of a *recent* mainnet block against a pseudo next-state. It claims no state-root recomputation.
+- **Stateless full-block mode** extends `BlockWitness`. The extension carries the MPT nodes needed to authenticate pre-state against the parent state root and to recompute the post-state root in-guest. Stateless full-block mode drives revm through the complete mainnet block transition, including required pre/post system calls and withdrawals, not only the transaction list.
+- `tools/bench` runs a proving job and emits a `BenchReport`. The report carries proving wall-clock, total guest cycles, shard count per family, and per-stage timings for execution, commit, GKR and opening, read from the `TraceArchive` phase sections. It adds peak memory if cheaply available and a $-cost estimate. Cost estimation methods should conform to ethproofs conventions. Its output mirrors what an ethproofs submission needs (block number/hash, proving time, cost, hardware description), as machine-readable JSON and a human table. Do this on the remote server. Only do mini-block mode locally but for stateless full-block mode, always use the remote dev server.
+
+## Core algorithm
+The recorder wraps an `eth_getProof`/`eth_getStorageAt`/`eth_getCode`-backed database behind revm's Database trait. It executes the target txs once natively, harvests the touch-set from the DB wrapper, and serializes it as a `BlockWitness`. Layer that wrapper once, as an on-disk cache implementing revm's Database trait. Hold the touch-set in `BTreeMap`s keyed by address and by slot, so serialization order is canonical. Both fixtures come from the most recent finalized mainnet block at refresh time. The mini-block tx count is two, so inter-tx state carry is exercised. Own the in-guest MPT verification, which is guest workload rather than proving stack. An RLP decode and node-hash trie walk hashes through S21's keccak256 shim, and one code path serves both pre-state authentication and post-state root recomputation.
+
+Testing-ladder order is normative: S24's synthetic state is done → mini-blocks here → stateless full block last. Do not attempt the full block before the mini-block gate passes. Full blocks are demo only with **rented high-core box per run, no continuous proving infrastructure**. The harness must be re-runnable. Nothing here schedules, daemonizes, or maintains a live cluster.
+
+## Must-be-exact
+1. Recorder output is deterministic given (block hash, tx range): the same inputs produce a byte-identical `BlockWitness`.
+2. Mini-block mode makes no state-root claim; stateless mode must recompute and check the root in-guest. The two modes are SEPARATE guest binary paths. Use two identities for two modes.
+3. Stateless pre-state authentication: every account, slot and code the guest reads is verified against the parent state root via the supplied MPT witness before use. An unauthenticated witness entry is a guest panic, never a silent default.
+4. Fixtures are pinned by hash and committed, and CI never touches RPC. Freshness = a manual refresh command that re-records and re-pins.
+5. Bench per-stage timings are read from the `TraceArchive` phase sections whose schemas S16 froze, not from ad-hoc stopwatches sprinkled in the prover. Phase snapshots ARE the corresponding phase sections of the S12-frozen TraceArchive container, with wall-clock in S12's per-phase timing fields. S16 defines the section schemas for the phases S12 left empty, and `TraceArchive`'s execution phase supplies the execution timing.
+6. RPC access is confined to the manual refresh command. That command uses a minimal JSON-RPC client rather than an Ethereum SDK, and reads its endpoint from `ETH_RPC_URL`. Responses are cached content-addressed under the fixture directory. Transport and 5xx failures retry five times with exponential backoff, then fail hard rather than default. User can provide an RPC endpoint from Alchemy if one is necessary. 
+7. `BenchReport` is a flat serde struct. Its cost estimate uses similar cost estimation models from ethproofs. The report has hardware description, so the cost is recomputable from the report.
+
+## Acceptance
+1. **Recorder determinism:** record the same (block, tx range) twice against a cached RPC snapshot; the `BlockWitness` bytes are identical.
+2. **Differential oracle — mini-block:** guest revm output over the recorded witness equals native revm output over the live-DB execution. Check the fixture block AND ≥3 recent mainnet blocks during one manual refresh session, which is register D15's repeated-blocks check. Only the pinned one is committed.
+3. **Witness-completeness negative control:** delete one recorded storage slot from a mini-block witness. The guest run fails loudly with a missing-state error, proving the touch-set is actually load-bearing.
+4. **Mini-block proof (the mini-block gate):** prove the mini-block fixture locally and get `verify` Ok. 
+5. **Tamper twin — mini-block:** one corrupted witness cell, argument-pinned, makes verification fail with the expected error class.
+6. **Bench report:** `tools/bench` emits a `BenchReport` as JSON + table with proving time, total cycles, per-family shard counts, per-stage timings summing to ≈ wall-clock, and a cost estimate. Commit the report to the handoff. No comparative or positioning claims appear anywhere in the output.
+7. **Stateless root check:** for the pinned full block, the guest-recomputed post-state root equals the header's state root. Corrupting one MPT witness node makes the guest reject, which is the authentication negative control. Corrupting one account balance in the witness flips the recomputed root and the guest asserts out.
+8. **Full-block pipeline automation:** the full stateless-block pipeline runs end-to-end. The provisioning script and run procedure for the rented high-core box are in a separate repo locally at `../apogee-aws`. The rented-box run itself is manual, not a CI item. The pinned block is proved on the box, and `verify` is Ok on a local machine from the downloaded proof + vk. The proof travels, so the verifier run is independent of the proving box.
+
+## Rented Infrastructure
+In the future, first check if the folder `../apogee-aws` is available locally. That's the repo for provisioning and managing aws resources. If it's not available, no heavier or deferred test suites may run. Use existing (or provision one, if not present) development server `r8i.8xlarge` for running the heavier tests. From this stage onward, we'll also test all "heavier" (use best judgement) including "DEFERRED" test groups on development server. 
+
+## Handoff
+- This stage freezes the `host::WitnessRecorder` API, `host::prove`/`host::verify`, and the stateless `BlockWitness` extension.
+- It hands on the pinned mini-block and full-block fixtures with their hashes, the manual refresh procedure, and the archived report from the manual rented-box run.
+- It freezes the `tools/bench` `BenchReport` schema. The measured full-block numbers ship with it.

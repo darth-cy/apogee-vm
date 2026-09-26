@@ -282,9 +282,13 @@ list**: `shard_counts[ADVICE_WINDOWS]` is `k`, and shard `i` is window
 it commits, without checking it against something a proof *does* bind, has published a value
 the prover chose. The obligation is the guest's and the VM cannot discharge it. The pattern
 is: the advice carries the bulk, the **public input** carries a commitment to it, and the
-guest checks one against the other — or, as `guests/revm-block` does, the journal names the
-state roots the block began and ended on, so a witness describing a different block
-publishes a different result rather than the same one.
+guest checks one against the other — or, as `guests/revm-block`'s **stateless** binary does
+since S25, the journal names the state roots the block began and ended on, so a witness
+describing a different pre-state publishes a different result rather than the same one
+(`docs/spec/revm-block.md` §5.1). Its **mini** binary publishes no root and claims none;
+what it owes instead is the strictness that makes its witness worth reading — a canonical
+encoding, and a database that refuses every value it was not given rather than defaulting
+(§1.0 of the same page).
 
 **Advice is not enforced read-only** (owner's decision, S-IO). A store into the advice region
 is an ordinary store and the multiset carries it like any other. Enforcing read-only would

@@ -16,6 +16,23 @@ constraints.workspace = true
 gkr.workspace = true
 srs.workspace = true
 pcs.workspace = true
+# S25: the `prove` verb runs a real proving job and reads its per-stage timings
+# out of the `TraceArchive`'s own phase sections. The metrics feature is
+# deliberately NOT enabled — turning it on from a dependency entry would turn it
+# on for every `cargo build --workspace`, and `docs/spec/metrics.md` §1's claim
+# that the feature-off build is the code that was there before would stop
+# holding. The archive's phase timings need no feature.
+host.workspace = true
+prover.workspace = true
+verifier-core.workspace = true
+emulator.workspace = true
+program.workspace = true
+trace.workspace = true
+revm-block = { path = "../../guests/revm-block" }
+rayon.workspace = true
+serde = { workspace = true, features = ["derive", "alloc"] }
+serde_json.workspace = true
+
 ark-bn254.workspace = true
 ark-ec.workspace = true
 ark-ff.workspace = true

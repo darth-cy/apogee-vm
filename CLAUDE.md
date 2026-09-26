@@ -73,6 +73,10 @@ crates/
                  BlockReconciliation and the ts-window rule; no_std, linked by the recursion guest
   verifier/      verify_shard and verify_block, the two verification paths, and the
                  `verifier` CLI; std
+  host/          the host SDK: setup/prove/verify around S20's entry points, the
+                 WitnessRecorder that records a real mainnet block, the minimal JSON-RPC
+                 client and its content-addressed cache, and what a recorded block is on
+                 disk; std
   prover/        the verifying key's construction, family registration and fills, the
                  global commit phase, prove_shard, prove_block, the phase snapshots and
                  resume, and `metrics`, the proving harness behind the workspace's one
@@ -160,6 +164,7 @@ cargo test --release -p prover --test block -- --include-ignored --test-threads=
 cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1  # DEFERRED; S21's block, ELEVEN shards since S-IO, 33.7 GB peak and 131 s at S21, 254 s here at RAYON_NUM_THREADS=6
 cargo test --release -p prover --test recursion -- --include-ignored --test-threads=1  # DEFERRED; S23's block, TWELVE shards since S-IO, 35.2 GB peak and 120 s at S23, 238 s here at RAYON_NUM_THREADS=6 -- the heaviest by memory
 cargo test --release -p prover --test public_io -- --include-ignored --test-threads=1  # DEFERRED; S-IO's statement: public input in, advice checked against it, journal out
+cargo test --release -p host --test prove -- --include-ignored --test-threads=1  # DEFERRED; S25's MINI-BLOCK GATE: a real mainnet block's first two transactions proved and verified, and the advice tamper twin
 RAYON_NUM_THREADS=6 cargo test --release -p prover --test revm -- --include-ignored --test-threads=1  # DEFERRED; the revm block, thirteen shards since S-IO, and it builds the guest; 38.4 GB peak and 536 s at S24, 523 s here at RAYON_NUM_THREADS=6 over S-IO's thirteen shards; ELEVEN 2^20 shards, so the thread bound is not optional on a 48 GB machine
 cargo test -p prover --features metrics --test metrics -- --include-ignored --nocapture  # DEFERRED; S16's statement twice, 21.0 GB peak, 60 s, and prints both reports
 cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify -p verifier-core --target riscv32imac-unknown-none-elf
@@ -184,8 +189,16 @@ cargo run --release -p verifier -- <verifying-key> <identity-hex> <public-inputs
 cargo run --release -p verifier -- block <verifying-key> <identity-hex> <public-inputs> <block>
                                             # verify a BlockProof file end to end
 cargo run -p kat-gen -- guests              # rebuild the guest ELFs; opt-in, one machine
+ETH_RPC_URL=... cargo run -p kat-gen -- block   # S25's manual fixture refresh: record the
+                                            # finalized block's mini-block, check three more
+                                            # recent ones, re-record from the cache. Opt-in,
+                                            # NOT in DEFAULT_GROUPS: CI never touches RPC
 cargo run --manifest-path tools/transcript-ref/Cargo.toml   # ditto, transcript vectors
 cargo run --release -p bench                # every routine; internal numbers only
+cargo run --release -p bench -- prove mini-block --hourly-usd <p> --json <path>
+                                            # S25: prove a recorded block and emit a
+                                            # BenchReport, table and JSON. Per-stage timings
+                                            # are the TraceArchive's own phase sections
 cargo run --release -p bench -- --list      # the routines, and what each measures
 cargo run --release -p bench -- <routine>   # just that one; setup is per-routine
 
@@ -988,6 +1001,44 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   image uses 82% of the `2^20` reach and its debug image does not fit at all, which is why
   that guest is proven at `--release`. `2^22` is the menu's last entry; there is no step
   above it.
+- **The witness is read strictly, and an absent entry is an error** (S25). S24 read an
+  address absent from `BlockWitness::accounts` as an empty account and a slot absent from
+  `AccountWitness::slots` as zero. Since S-IO the witness is **advice, which nothing binds**,
+  so a default is a value the prover chose — and a witness with an account deleted from it
+  ran happily and committed a journal for a state nobody supplied. `revm_block::WitnessDb`
+  refuses every miss by name, and **non-existence is recorded rather than inferred**: an
+  account that does not exist is in the list with every field zero, which is the one shape
+  the database answers revm `None` for. The encoding is injective on states Ethereum can
+  represent, EIP-161 deleting an empty touched account. It found a real gap in this
+  repository's own helper on the first run: `synthetic_witness` never recorded the
+  **beneficiary**, which every block that pays a fee reads.
+- **`BLOCKHASH` reads the witness, and refuses what it does not carry** (S25). S24's one
+  acknowledged *gap*, closed: `BlockEnvWitness::block_hashes` carries the ancestors and an
+  unrecorded one is a refusal to execute, never `EmptyDB`'s `keccak256` of the block
+  number's decimal string. **At most 256 entries are ever needed** — the interpreter pushes
+  zero without consulting the database outside that window — and EIP-2935 does not change
+  it, revm 42 serving the opcode from the host and not from state.
+- **The mini-block journal does not distinguish every witness, only every witness the
+  execution can tell apart** (S25). On the pinned block one recorded slot of thirty-seven is
+  read and then overwritten unconditionally, so its original value reaches nothing
+  observable. That is a fact about the workload, not a gap in the binding; a **balance** is
+  the cell a test moves when it wants a guaranteed difference, every touched account's
+  balance and nonce being in the post-state summary verbatim.
+- **A collapsing deletion needs a node `eth_getProof` cannot return** (S25). Deleting a key
+  whose branch is left with one child needs that *sibling's* type and path, and the sibling
+  is not on the deleted key's path and so not in its proof — measured at 29 % of randomized
+  trials, and not rare in practice, because writing zero to a storage slot is a deletion and
+  the gas refund makes it common. The endpoint cannot close it: `debug_executionWitness` is
+  not served, `debug_dbGet` answers `pebble: not found` for a node hash under Geth's
+  path-based state scheme, and `eth_getProof` takes a preimage. `mpt::MptError::
+  BlindedCollapse` names the hash and stops rather than guessing a shape and producing a
+  silently wrong root.
+- **`Bytecode::new_raw` panics and the guest must not** (S25). It is
+  `new_raw_checked(..).expect(..)` and refuses bytes beginning `0xef01` that are not a
+  23-byte EIP-7702 delegation; such accounts predate EIP-3541 and a handful exist on
+  mainnet. A panicking guest writes its message to fd 2, which is not provable, so the run
+  is one no proof can cover — both `WitnessDb` and the recorder use the checked form and
+  name the failure.
 - **Boring beats clever.** Added surface area is a defect. Every verifier entry point is
   `(&VerifyingKey, &Proof, &PublicInputs)` and nothing else.
 
@@ -1019,6 +1070,7 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 | S23 — Fr-arithmetic + Poseidon2 delegations | done | `docs/handoff/S23-fr-poseidon2.md` |
 | S24 — revm guest, synthetic-state block | done | `docs/handoff/S24-revm.md` |
 | S-IO — Public values, private advice, and the I/O binding | done | `docs/handoff/S-IO.md` |
+| S25 — Witness pipeline, real blocks, bench harness | done | `docs/handoff/S25-block.md` |
 
 **S-IO takes no number, and that is deliberate** (owner's decision). It is not one of the
 original twenty-seven stages — it is the stage those twenty-seven forgot, inserted after

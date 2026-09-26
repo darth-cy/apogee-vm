@@ -14,12 +14,14 @@
 //!
 //! Numbers are internal only. Machine-dependent; make no public claims.
 
+mod block;
 mod fr_arith;
 mod gkr_prove;
 mod mercury;
 mod mercury_batch;
 mod msm;
 mod poly_bind;
+mod report;
 mod square;
 mod timing;
 mod zerocheck_prove;
@@ -77,10 +79,29 @@ fn usage() {
     for (name, what, _) in ROUTINES {
         println!("  {name:width$}  {what}");
     }
+    println!("\nAnd one verb, which takes arguments of its own:\n");
+    println!("{}", block::usage());
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // One verb, and it takes arguments: a proving job has to be told which
+    // block and what the hardware costs, which the routine table's `fn()` has
+    // nowhere to put. It is matched before the table rather than added to it,
+    // so the eight existing routines keep their signature.
+    if args.first().map(String::as_str) == Some("prove") {
+        match block::parse(&args[1..]) {
+            Ok(options) => block::run(&options),
+            Err(why) => {
+                eprintln!("bench: {why}\n");
+                usage();
+                std::process::exit(2);
+            }
+        }
+        println!("\nMachine-dependent; internal use only.");
+        return;
+    }
 
     if args
         .iter()

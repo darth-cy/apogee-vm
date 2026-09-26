@@ -32,6 +32,13 @@ verifier-core.workspace = true
 # The `revm` group builds and traces S24's guest, so that a regeneration is
 # itself the guest-versus-native-revm differential.
 emulator.workspace = true
+# The `block` group: the manual fixture refresh, and the only thing in this
+# repository that talks to the network. It is not in `DEFAULT_GROUPS`, so CI
+# never reaches it.
+host.workspace = true
+# `block` again: one JSON-RPC parameter list, for the `finalized` probe.
+serde_json.workspace = true
+postcard.workspace = true
 # `guests/revm-block`'s library half: the program the guest runs, called here
 # on the host to build the committed witness and to produce the answer the
 # guest is held to. A path into the guest workspace, exactly as

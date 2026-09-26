@@ -28,7 +28,7 @@
 //!   bytes and not a digest of them.
 //!
 //! What binds the witness is no longer identity but the guest: the commitment
-//! names the state roots the block began and ended on, so a witness describing
+//! is checked by the guest itself, so a witness describing
 //! a different block publishes a different journal rather than the same one
 //! (`docs/spec/public-values.md` §6).
 
