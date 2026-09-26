@@ -395,7 +395,16 @@ fn the_system_contracts_are_the_addresses_their_eips_name() {
             "EIP-2935 history storage",
             "0000f90827f1c53a10cb7a02335b175320002935",
         ),
+        (
+            "EIP-7002 withdrawal requests",
+            "00000961ef480eb55e80d19ad83579a64c007002",
+        ),
+        (
+            "EIP-7251 consolidation requests",
+            "0000bbddc7ce488642fb579f8b00f3a590007251",
+        ),
     ];
+    assert_eq!(stateless::system_contracts().len(), want.len());
     for ((what, address), (also, expected)) in stateless::system_contracts().iter().zip(want) {
         assert_eq!(*what, also);
         assert_eq!(hex(address), expected, "{what}");
@@ -597,37 +606,57 @@ fn a_selfdestructed_then_refunded_account_is_not_removed() {
     );
 }
 
-/// The two Prague **post**-block system calls are not made, and that gap is
-/// pinned so it cannot close by accident.
+/// Prague's two **post**-block system calls are made, and the fixture can tell.
 ///
 /// EIP-7002's withdrawal-request predeploy and EIP-7251's consolidation-request
 /// predeploy each dequeue their request queue and rewrite the queue head and
 /// tail, the excess counter and the per-block count. revm makes neither for you
-/// — `revm-handler`'s `SystemCallEvm` says the client must — so a
-/// Prague-or-later block with either queue non-empty recomputes a post-state
-/// root the header does not carry.
+/// — `revm-handler`'s `SystemCallEvm` says the client must — so without them a
+/// Prague-or-later block with either queue non-empty recomputes a root the
+/// header does not carry.
 ///
-/// It is a completeness gap and not a soundness one: the claimed root arrives
-/// as public input, so a missing call produces a refusal and never a wrong root
-/// accepted. Closing it needs the two predeploys' real deployed bytecode in the
-/// witness, as `0x000F…ac02` and `0x0000…2935` already are — the strict
-/// database refuses a system call to an account the witness does not carry,
-/// which is what makes this loud rather than silent.
-///
-/// This is the arrangement S24 used for `BLOCKHASH`: pin today's answer, so the
-/// gap is closed on purpose or not at all. `docs/spec/revm-block.md` §5.2.
+/// What makes the committed root an actual check of that is the **excess
+/// counter starting at 5 rather than 0**. Each call recomputes the excess as
+/// `previous + count - target` when positive and 0 otherwise, so from zero with
+/// an empty queue the call writes 0 over 0 and a root computed without making
+/// the call at all is identical — the fixture would happily accept the code
+/// being deleted. From 5 it writes a smaller number, so
+/// `a7_the_transition_recomputes_the_pinned_root` moves if the calls go. This
+/// test guards that property of the fixture, which is what gives the other one
+/// its teeth.
 #[test]
-fn the_prague_post_block_system_calls_are_the_known_gap() {
-    let contracts = stateless::system_contracts();
-    assert_eq!(
-        contracts.len(),
-        2,
-        "a third system contract means EIP-7002 or EIP-7251 landed: close the gap in \
-         `docs/spec/revm-block.md` §5.2 and delete this test"
-    );
-    let names: Vec<&str> = contracts.iter().map(|(name, _)| *name).collect();
-    assert_eq!(
-        names,
-        vec!["EIP-4788 beacon roots", "EIP-2935 history storage"]
-    );
+fn the_prague_request_calls_move_the_root() {
+    let witness = BlockWitness::decode(&theirs("revm_stateless_witness.bin")).expect("the witness");
+    for (what, address) in stateless::system_contracts() {
+        let account = witness
+            .accounts
+            .iter()
+            .find(|a| a.address == address)
+            .unwrap_or_else(|| panic!("{what} is in the witness"));
+        assert!(
+            !account.code.is_empty(),
+            "{what} is in the witness with its real deployed code, or the strict \
+             database would refuse the system call"
+        );
+    }
+
+    // The two request predeploys, and their excess counter. Slot 0 is the
+    // excess; it must not start at zero, or the call writes 0 over 0.
+    for (what, address) in stateless::system_contracts().into_iter().skip(2) {
+        let account = witness
+            .accounts
+            .iter()
+            .find(|a| a.address == address)
+            .expect("a request predeploy");
+        let (_, excess) = account
+            .slots
+            .iter()
+            .find(|(slot, _)| *slot == [0u8; 32])
+            .unwrap_or_else(|| panic!("{what} carries its excess counter"));
+        assert_ne!(
+            *excess, [0u8; 32],
+            "{what}'s excess counter starts at zero, so the system call writes 0 over 0 \
+             and the committed root no longer detects the call being removed"
+        );
+    }
 }

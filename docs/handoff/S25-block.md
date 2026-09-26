@@ -253,7 +253,7 @@ it against the parent header — §10 carries that forward.
 | 1 | `mpt.rs` `long` | `at + len` was unchecked arithmetic on a length the node's own bytes declare. `bytes.get` refuses an out-of-range slice safely, but the range is *computed* first, and the guest's `usize` is four bytes with `overflow-checks` pinned on in both profiles — so `bb ff ff ff ff` panicked instead of returning `Malformed`. | abort |
 | 2 | `mpt.rs` `child_of` | The recursion into an inlined child was unbounded, and `[hp_string, [..]]` buys a stack frame for about four bytes. Some 16 KB of witness exhausts the guest's 8 MiB stack — and the guest has **no guard page**, so the frames descend into the bump-allocated heap and corrupt it, returning no error at all. Capped at 68, a well-formed trie being at most 64 nibbles deep. | abort |
 | 3 | `stateless.rs` `apply` | Removed an account on revm's `is_selfdestructed()`, which is **block-global**: `commit_tx` leaves the bit set, so a destroyed-then-refunded address was deleted from the trie. Emptiness alone is the test now. | wrong root |
-| 4 | `stateless.rs` `execute` | Prague's two **post**-block system calls are never made. **Not fixed** — see below. | wrong root |
+| 4 | `stateless.rs` `execute` | Prague's two **post**-block system calls were never made — EIP-7002's withdrawal-request predeploy and EIP-7251's consolidation-request predeploy, neither of which revm makes for you. Each rewrites its queue head and tail, the excess counter and the per-block count, so a Prague-or-later block reached a root the header does not carry. | wrong root |
 | 5 | `recorder.rs` `tx_witness` | The type cross-check used equality, so an EIP-2930 type-1 transaction with an *empty* access list — legal, and it executes exactly as a legacy one — refused the whole block. The narrowing direction is what the check is for; that one widening shape is now exempt and nothing else is. Also `max_fee_per_blob_gas.is_some()` where revm keys on `> 0`. | false refusal |
 | 6 | `recorder.rs` `load` | go-ethereum answers for an address with no state object out of a zero-valued `common.Hash`, so **both** hashes arrive as the zero word. No byte string hashes to zero, so `exists` went true and the `eth_getCode` cross-check then failed naming a code hash no code can have. Both fields are normalised together — repairing `codeHash` alone leaves `exists` true through `storageHash`, which hands revm `Some` where it must see `None`, and *that* failure is silent. | false refusal |
 
@@ -263,28 +263,43 @@ every abort reachable from advice is a run no proof can cover. A trie node is ad
 it reaches `build` *before* `check_root` can say anything about it, so the prover picks
 the bytes. Both are now `MptError::Malformed`.
 
-### Prague's post-block system calls are not made, and that is the one open gap
+### Prague's post-block system calls, and what closing them took
 
-Finding 4, left open deliberately. EIP-7002's withdrawal-request predeploy and EIP-7251's
-consolidation-request predeploy are **post**-block system calls, and revm makes neither
-for you — `revm-handler`'s `SystemCallEvm` says in as many words that the client must.
-Each dequeues its request queue and rewrites the queue head and tail, the excess counter
-and the per-block count, so a Prague-or-later block with either queue non-empty recomputes
-a root the header does not carry. The pinned block is **Osaka**, so it is in scope, and the
-synthetic fixture is **Prague** with empty queues, so it could not have caught it.
+Finding 4. EIP-7002's withdrawal-request predeploy `0x0000…7002` and EIP-7251's
+consolidation-request predeploy `0x0000…7251` are **post**-block system calls, and revm
+makes neither for you. The pinned block is **Osaka**, so it was in scope, and the
+synthetic fixture was **Prague** — so the code path was exercised on every regeneration
+and still nothing failed. That is the part worth keeping: the fixture ran the fork that
+needs the calls and could not see them missing.
 
-It is a completeness gap and not a soundness one, for §4's reason above: the claimed root
-is public input, so the result is a refusal, never a wrong root accepted.
+Closing it took three things, and only the first is the code.
 
-**Why it is not closed here.** Closing it needs the two predeploys' real deployed bytecode
-in the witness, exactly as `0x000F…ac02` and `0x0000…2935` already are — the strict
-database refuses a system call to an account the witness does not carry, which is what
-makes the gap loud instead of silent. That bytecode is not in this repository and this
-session had no endpoint to fetch it from, and a *guessed* predeploy is worse than an
-absent one. So the gap is named in `docs/spec/revm-block.md` §5.2 and pinned by
-`crates/host/tests/stateless.rs::the_prague_post_block_system_calls_are_the_known_gap`,
-which fails the moment a third system contract appears — the arrangement S24 used for
-`BLOCKHASH`, so that it is closed on purpose or not at all.
+1. The two calls, gated on Prague, with **empty calldata** — an empty input is the system
+   call and a non-empty one is a user's request submission, and they are different paths
+   in the same predeploy. Placed before the withdrawals, which is go-ethereum's order in
+   `Process`; nothing rests on it, the predeploys and the withdrawal recipients being
+   disjoint accounts.
+2. Both predeploys in the witness with their **real deployed bytecode**, read from mainnet
+   with `eth_getCode` — 504 bytes and 414 bytes. §1.0's strict database refuses a call to
+   an account the witness does not carry, so this is not optional and not silent. Their
+   four bookkeeping slots go in with them: an `SSTORE` reads the original value first, so
+   every slot written is also a slot read.
+3. **The excess counter starting at 5 rather than 0**, which is the part that is easy to
+   miss and was nearly missed here. Each call recomputes the excess as
+   `previous + count - target` when that is positive and 0 otherwise. From zero with an
+   empty queue the call writes 0 over 0 and changes nothing — so a post-state root
+   computed *without making the call at all* is byte-identical, and the fixture would
+   accept the code being deleted again. From 5 it writes a smaller number. Checked by
+   deleting the two calls and regenerating: the root moves from
+   `bcd8bfc3…` to `22abbb9d…`. `the_prague_request_calls_move_the_root` guards that the
+   counter stays non-zero, which is what gives
+   `a7_the_transition_recomputes_the_pinned_root` its teeth.
+
+The general lesson is the one the stage keeps relearning: **a fixture whose expected value
+is the code's own output only tests what the code already does differently**. The three
+system contracts the stage added were each found by a strict refusal rather than by a
+wrong answer, and this fourth one was found by neither — a reader had to go and read the
+EIP list.
 
 ## 5. Deviations, and the rules they touch
 
@@ -495,8 +510,8 @@ account balance flips the recomputed root and the guest asserts out"*. All three
 is §4's sibling gap: a witness recorded from this endpoint cannot be complete, so the
 recomputation half has no real block to run on. That is a limitation of the witness source,
 not of the guest — the trie code is the same code either way, and it is held to Ethereum's
-three published root vectors, to real mainnet authentication, and to the transition as
-§4's last finding scopes it: every step but Prague's two **post**-block system calls.
+three published root vectors, to real mainnet authentication, and to the whole transition:
+all four system calls, every transaction, and the withdrawals.
 
 ### Acceptance 8 — not run, by the owner's decision
 

@@ -68,6 +68,12 @@ const BEACON_ROOTS: Address = address!("0x000F3df6D732807Ef1319fB7B8bB8522d0Beac
 /// EIP-2935's block-hash history contract.
 const HISTORY_STORAGE: Address = address!("0x0000F90827F1C53a10cb7A02335B175320002935");
 
+/// EIP-7002's withdrawal-request predeploy.
+const WITHDRAWAL_REQUESTS: Address = address!("0x00000961Ef480Eb55e80D19ad83579A64c007002");
+
+/// EIP-7251's consolidation-request predeploy.
+const CONSOLIDATION_REQUESTS: Address = address!("0x0000BBdDc7CE488642fb579F8B00f3a590007251");
+
 /// Gwei to wei. A withdrawal's amount is the consensus layer's unit.
 const GWEI: u64 = 1_000_000_000;
 
@@ -300,19 +306,6 @@ fn execute(
         .map_err(|e| StatelessError::NotExecutable(format!("the 2935 system call: {e}")))?;
     }
 
-    // NOT MADE, and this is the mode's one acknowledged gap: EIP-7002's
-    //    withdrawal-request predeploy and EIP-7251's consolidation-request
-    //    predeploy, both **post**-block and both from Prague. revm makes
-    //    neither for you. Each dequeues its request queue and rewrites the
-    //    queue head and tail, the excess counter and the per-block count, so a
-    //    Prague-or-later block with either queue non-empty recomputes a root
-    //    the header does not carry. It is a completeness gap and not a
-    //    soundness one -- the claimed root is public input, so the result is a
-    //    refusal and never a wrong root accepted. Closing it needs the two
-    //    predeploys' real deployed bytecode in the witness, as the two above
-    //    already are. `docs/spec/revm-block.md` §5.2, and
-    //    `the_prague_post_block_system_calls_are_the_known_gap` pins the count.
-
     // 3. The transactions, under the block's running gas bound — the same rule
     //    `crate::run` applies and for the same reason (`docs/spec/revm-block.md`
     //    §1.4): revm checks one transaction against the header and has no
@@ -341,7 +334,31 @@ fn execute(
         results.push(result);
     }
 
-    // 4. EIP-4895's withdrawals. revm models none of this — a grep for
+    // 4. EIP-7002 and 5. EIP-7251, both from Prague and both **post**-block:
+    //    the withdrawal-request and consolidation-request predeploys. revm
+    //    makes neither for you -- `revm-handler`'s `SystemCallEvm` says in as
+    //    many words that the client should make the calls an EIP requires
+    //    before or after block execution -- and each dequeues its request queue
+    //    and rewrites the queue head and tail, the excess counter and the
+    //    per-block count. A block with either queue non-empty reaches a root
+    //    the header does not carry without them.
+    //
+    //    They are called with **empty** input: an empty calldata is the system
+    //    call, where a non-empty one is a user's request submission, and the
+    //    two are different code paths in the same predeploy.
+    //
+    //    Here rather than after the withdrawals because that is the order
+    //    go-ethereum's `Process` uses. Nothing rests on it: the two predeploys
+    //    and the withdrawal recipients are disjoint accounts, so the two
+    //    orderings give the same root.
+    if spec.is_enabled_in(SpecId::PRAGUE) {
+        evm.system_call_one(WITHDRAWAL_REQUESTS, Bytes::new())
+            .map_err(|e| StatelessError::NotExecutable(format!("the 7002 system call: {e}")))?;
+        evm.system_call_one(CONSOLIDATION_REQUESTS, Bytes::new())
+            .map_err(|e| StatelessError::NotExecutable(format!("the 7251 system call: {e}")))?;
+    }
+
+    // 6. EIP-4895's withdrawals. revm models none of this — a grep for
     //    `withdrawal` across all twelve revm 42 crates finds nothing — so the
     //    block executor credits them itself. Through the **journal**, not the
     //    database: `finalize` returns the journal's own state map, so a credit
@@ -500,9 +517,14 @@ fn journal(
 
 /// A contract address named by an EIP, for a test that checks this file's
 /// literals against the EIPs.
-pub fn system_contracts() -> [(&'static str, Address20); 2] {
+pub fn system_contracts() -> [(&'static str, Address20); 4] {
     [
         ("EIP-4788 beacon roots", BEACON_ROOTS.0 .0),
         ("EIP-2935 history storage", HISTORY_STORAGE.0 .0),
+        ("EIP-7002 withdrawal requests", WITHDRAWAL_REQUESTS.0 .0),
+        (
+            "EIP-7251 consolidation requests",
+            CONSOLIDATION_REQUESTS.0 .0,
+        ),
     ]
 }

@@ -440,27 +440,26 @@ Consensus, not a choice:
 1. **EIP-4788**, from Cancun: the parent beacon block root into `0x000F…ac02`.
 2. **EIP-2935**, from Prague: the parent hash into `0x0000…2935`.
 3. Every transaction, in order, under §1.4's running gas bound.
-4. **EIP-4895** withdrawals, credited in header order.
-5. **EIP-7002**, from Prague: the withdrawal-request predeploy `0x0000…7002`.
-6. **EIP-7251**, from Prague: the consolidation-request predeploy `0x0000…7251`.
+4. **EIP-7002**, from Prague: the withdrawal-request predeploy `0x0000…7002`.
+5. **EIP-7251**, from Prague: the consolidation-request predeploy `0x0000…7251`.
+6. **EIP-4895** withdrawals, credited in header order.
 
-**Steps 5 and 6 are NOT implemented, and that is this mode's one acknowledged gap**
-(S25). They are *post*-block system calls, and revm makes neither for you —
-`revm-handler`'s `SystemCallEvm` says in as many words that the client must. Each
-dequeues its request queue and rewrites the queue head and tail, the excess counter and
-the per-block count, so **a Prague-or-later block in which either queue is non-empty
-recomputes a post-state root the header does not carry** and is refused by §5's root
-check. It is a completeness gap and not a soundness one: the claimed root arrives as
-public input, so what a missing call produces is a refusal, never a wrong root accepted.
+Steps 4 and 5 are **post**-block system calls, and revm makes neither for you —
+`revm-handler`'s `SystemCallEvm` says in as many words that the client should make the
+calls an EIP requires before or after block execution. Each dequeues its request queue and
+rewrites the queue head and tail, the excess counter and the per-block count, so a
+Prague-or-later block reaches a root the header does not carry without them. Both are
+called with **empty** calldata: an empty input is the system call and a non-empty one is a
+user's request submission, and they are different paths in the same predeploy.
 
-Closing it needs the two predeploys' real deployed bytecode in the witness, the way
-`0x000F…ac02` and `0x0000…2935` already are — the strict database (§1.0) refuses a system
-call to an account the witness does not carry, which is exactly what should happen and
-what makes the gap loud rather than silent. `guests/revm-block/src/stateless.rs`'s
-`system_contracts()` returns two entries, and
-`crates/host/tests/stateless.rs::the_prague_post_block_system_calls_are_the_known_gap`
-pins that count so the gap cannot close by accident — the same arrangement S24 used for
-`BLOCKHASH`.
+They sit before the withdrawals because that is go-ethereum's order in `Process`. Nothing
+rests on it — the two predeploys and the withdrawal recipients are disjoint accounts, so
+either order gives the same root.
+
+All four system contracts must be in the witness **with their real deployed bytecode**.
+§1.0's strict database refuses a call to an account the witness does not carry, which is
+what makes a missing one a loud refusal rather than a call that hits an empty account,
+succeeds, changes nothing and yields a wrong root.
 
 System calls are gas-free and are **not** added to the block's `gasUsed`. revm models
 withdrawals not at all — a search across all twelve revm 42 crates finds nothing — so the
