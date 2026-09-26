@@ -309,6 +309,13 @@ What that suite would have caught about the *image* is also covered by `crates/l
 tests/layout.rs`, which reads the program headers and runs everywhere.
 
 ## The rules that bite most often
+- **Push every commit to its branch immediately; never change a PR's state.** `git push` is part
+  of committing, not a question — a commit sitting only in the local tree is work nobody can see,
+  review or run CI on, and the owner should never have to ask for it. The opposite holds for the
+  pull request itself: **a draft PR stays a draft**, and flipping draft/ready, closing, reopening,
+  merging or force-pushing happens only when the owner asked for that exact change. `gh pr view`
+  reports `state: OPEN` for a draft too — `isDraft` is the field that says so, so read that one
+  before claiming a PR's state.
 - **A decision that is the owner's is raised THE MOMENT it arises, never afterwards.**
   `prompts/00-master.md`'s "Raising a question" is the hard rule. The test, before acting:
   *would a different answer change what I am about to do?* If yes, ask **now** — do everything
