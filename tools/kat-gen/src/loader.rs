@@ -16,7 +16,7 @@ use std::process::Command;
 use crate::write_vectors;
 
 /// The guest ELFs the loader tests read, and what each is for.
-pub const ELF_FIXTURES: [(&str, &str); 20] = [
+pub const ELF_FIXTURES: [(&str, &str); 21] = [
     (
         "fib",
         "real compiler output: the address and boundary oracle",
@@ -107,6 +107,13 @@ pub const ELF_FIXTURES: [(&str, &str); 20] = [
         "public-io",
         "S-IO's guest: its public input and its advice are ordinary loads and its \
          journal ordinary stores, so it issues no ecall but EXIT and is provable",
+    ),
+    (
+        "mod-mul-ops",
+        "S26's guest: the MOD_MUL delegation by name over two moduli that fit a \
+         u64, so its -ENOSYS fallback is one u128 expression, and `k256`'s group \
+         arithmetic, which routes through the same delegation over secp256k1's p \
+         and names no shim at all",
     ),
 ];
 

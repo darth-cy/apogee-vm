@@ -1,0 +1,5 @@
+# the MOD_MUL delegation family's circuit, by SHA-256 of `artifact(n).to_bytes()`
+# docs/spec/delegation.md is normative; docs/spec/constraint-manifest.md §18 is the accounting
+# the artifact itself is megabytes, so what is committed is its digest
+# n memory witness layers inner relations outputs bytes sha256
+8 132 3346 15 270 3763 2 1420188 38cc74cc26d384438dc2fa913ef62d6d123ac7e0a0f277f6c9ca2b34893fb2fa

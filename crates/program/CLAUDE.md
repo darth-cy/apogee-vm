@@ -102,6 +102,7 @@ is claimed by exactly one family by construction.
 | 12 | `PUBLIC_INPUT` | no pc; the public input window at `0x8000`, **exactly one shard**, present in every `VmConfig` at the **pinned** `family::PUBLIC_WINDOW_HEIGHT`; an **empty** table | 2^8 |
 | 13 | `PUBLIC_OUTPUT` | no pc; the journal at `0x8400`, exactly one shard, present in every `VmConfig` at the same pinned height; an **empty** table | 2^8 |
 | 14 | `ADVICE_WINDOWS` | no pc; the prover's advice from `0x8000_0000` up, `k >= 0` consecutive windows, present in every `VmConfig` at the window height; an **empty** table | 2^22 |
+| 15 | `MOD_MUL` | no pc; **invoked, not decoded**: ecall `0x503`, one `a·b mod m` over eight 32-bit limbs a row, the modulus **witnessed** rather than a constant of the circuit; an **empty** table | 2^8 |
 
 The **three** window families — `INIT_TEARDOWN`, `ZERO_WINDOWS` and, since S-IO,
 `ADVICE_WINDOWS` — have **one height**, `h`: RAM window `w` is the bytes
@@ -197,7 +198,7 @@ cover is therefore not expressible.
 | --- | --- | --- |
 | `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MEM_WORD`, `MEM_SUBWORD` | `pc next_pc rs1 rs2 rd imm extra_mask` | `0b1011_1111` |
 | `MUL_DIV`, `ATOMICS` | `pc next_pc rs1 rs2 rd extra_mask` | `0b1001_1111` |
-| `INIT_TEARDOWN`, `ZERO_WINDOWS`, the three delegation families, `PUBLIC_INPUT`, `PUBLIC_OUTPUT`, `ADVICE_WINDOWS` | — | `0` |
+| `INIT_TEARDOWN`, `ZERO_WINDOWS`, the four delegation families, `PUBLIC_INPUT`, `PUBLIC_OUTPUT`, `ADVICE_WINDOWS` | — | `0` |
 
 **`funct3` is in no tuple.** The extra mask is one-hot per mnemonic, which leaves it
 nothing to say; it remains a row field so a later family that wants it can take it.

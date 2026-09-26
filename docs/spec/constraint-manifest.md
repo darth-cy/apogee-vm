@@ -12,10 +12,13 @@
 > the code: the `PolyAddress`, the artifact's own name for it, and the Rust constant or
 > constructor that makes it.
 >
-> **Status: S-IO.** All **fifteen** circuits are registered: `ADD_SUB_LUI_AUIPC`,
+> **Status: S26.** All **sixteen** circuits are registered: `ADD_SUB_LUI_AUIPC`,
 > `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MUL_DIV`, `MEM_WORD`, `MEM_SUBWORD`, `ATOMICS`,
 > `INIT_TEARDOWN`, `ZERO_WINDOWS`, `KECCAK_F`, `POSEIDON2`, `FR_ARITH`, `PUBLIC_INPUT`,
-> `PUBLIC_OUTPUT` and `ADVICE_WINDOWS`. Every execution family the decoder routes to has a
+> `PUBLIC_OUTPUT`, `ADVICE_WINDOWS` and S26's `MOD_MUL` (§18), the fourth delegation family
+> and the first whose behaviour depends on a **witnessed parameter** — the modulus is a
+> column of the row, so one circuit serves secp256k1's two fields, BN254's and the EVM's
+> `MULMOD`. Every execution family the decoder routes to has a
 > circuit and a fill, and no `FamilyId` in `constants::family` is without one. S21 added the
 > first family that is **invoked rather than decoded** (§12) and, with it, the eighth memory
 > query — the `deleg` mirror — which changed `ADD_SUB_LUI_AUIPC`'s frame, its shape and every
@@ -29,7 +32,7 @@
 > are documentation only, as the artifact's own names are (`gkr.md` §4.2): no code reads either.
 >
 > **Kept current by rule.** A stage that adds or changes a circuit family updates its entry
-> here in the same pull request (`prompts/00-master.md`, implementation rule 12). §19 is what an
+> here in the same pull request (`prompts/00-master.md`, implementation rule 12). §20 is what an
 > entry must hold.
 >
 > **Machine-derived.** Every count, position, name and formula below was read out of
@@ -272,19 +275,20 @@ product nodes means the one `Product`.
 | 12 | `PUBLIC_INPUT` | `memory::value_window_artifact(n)` | none | `0 ≤ n ≤ 30` | `2^8`, **pinned** | one shard at `2^8`, window 32 | one shard at `2^8`, window 32 | one shard at `2^8`, window 32 | one shard at `2^8`, window 32 | one shard at `2^8`, window 32 |
 | 13 | `PUBLIC_OUTPUT` | `memory::zero_window_artifact(n)` — `ZERO_WINDOWS`' artifact, byte for byte | none | `0 ≤ n ≤ 30` | `2^8`, **pinned** | one shard at `2^8`, window 33 | one shard at `2^8`, window 33 | one shard at `2^8`, window 33 | one shard at `2^8`, window 33 | one shard at `2^8`, window 33 |
 | 14 | `ADVICE_WINDOWS` | `memory::value_window_artifact(n)` — `PUBLIC_INPUT`'s artifact at another height | none | `0 ≤ n ≤ 30` | the window height, `2^22` | in the config, with no shard: the guest is handed no advice | ditto | ditto | ditto | ditto |
+| 15 | `MOD_MUL` | `mod_mul::artifact(n)` | `mod_mul::channels()`: **none** | `0 ≤ n ≤ 30` | `2^8` | — | — | — | — | — |
 
 A verifying key carries only menu heights (`constants::family::HEIGHT_MENU`, **`2^8` to `2^22`
 since S21**),
 which `VmConfig::from_bytes` enforces, so `n` is 8, 16, 18, 20 or 22 in any key — **8 since
 S21**, the delegation height the menu opens with (§12.1) and the two public families' pinned
-height (§15.1, §16.1); §18 observation 1 notes the other values the registry accepts. The
+height (§15.1, §16.1); §19 observation 1 notes the other values the registry accepts. The
 prover pairs each circuit with a fill,
 `prover::family_fill`: the private `fill::add_sub` for family 0, `fill::jump_branch_slt` for 1,
 `fill::shift_bitwise` for 2, `fill::mul_div` for 3, `fill::mem_word` for 4, `fill::mem_subword`
 for 5, `fill::atomics` for 6, `fill::window` for 7, 8 **and 13**, `fill::keccak_f` for 9,
-`fill::poseidon2` for 10, `fill::fr_arith` for 11, `fill::public_input` for 12 and
-`fill::advice` for 14.
-**Every family is provable at S-IO.**
+`fill::poseidon2` for 10, `fill::fr_arith` for 11, `fill::public_input` for 12,
+`fill::advice` for 14 and, since S26, `fill::mod_mul` for 15.
+**Every family is provable at S26.**
 
 **The last three rows are in every `VmConfig`, and two of them prove a shard in every
 statement.** `program::decode_program` lists families 12, 13 and 14 unconditionally, under the
@@ -381,12 +385,13 @@ PUBLIC_INPUT        8   9 (1 + 8)                  L9      3      0   0  1      
 PUBLIC_OUTPUT       8   9 (1 + 8)                  L9      2      0   0  1          2       18  0                  0                               2         18        1,910
 ADVICE_WINDOWS     16  17 (1 + 16)                 L17     3      0   0  1          3       34  0                  0                               2         34        2,887
 ADVICE_WINDOWS     22  23 (1 + 22)                 L23     3      0   0  1          3       46  0                  0                               2         46        3,535
+MOD_MUL             8   15 (7 + 8)                 L15   132  3,346   0  0      3,478      270  3,493 (73/3,420)    0                               2      3,763    1,420,188
 ```
 
 `committed` is layer 0's width, `M + W + S`. `inner` is the width of every layer above 0,
 summed: the multilinears that are never committed, one producing gate each. `relations` is
 producing plus enforcing gates. `bytes` is `to_bytes().len()`. The `n = 22` rows are the
-committed fixtures: `crates/constraints/tests/vectors/add_sub.bin` (SHA-256 `96012f12…af8e811c`),
+committed fixtures: `crates/constraints/tests/vectors/add_sub.bin` (SHA-256 `e74869e3…4946a469`),
 `jump_branch_slt.bin` (`99094d63…742c1305`), `shift_bitwise.bin` (`b0af9325…65e3fd4c`),
 `mul_div.bin` (`98f9f3bd…a30c357a`), `mem_word.bin` (`2c8d94ca…f7ca4500`), `mem_subword.bin`
 (`2c423eb1…9f596181`), `atomics.bin` (`ae58b1ca…643d3108`), `image_window.bin`
@@ -790,7 +795,7 @@ the artifact. A leaf or obligation is named as in §3.4 and §3.6.
 | `M[38]` | `deleg_read_ts` | `frame(7, FIELD_READ_TS)` | Answer-tuple timestamp | 0, the stamp no cycle can make | leaf `read_deleg`; `deleg_read_ts_zero`, `gap_lo_deleg` |
 | `M[39]` | `deleg_read_value` | `frame(7, FIELD_READ_VALUE)` | Answer-tuple value | 0 | leaf `read_deleg`; `deleg_read_value_zero` |
 | `M[40]` | `deleg_write_value` | `frame(7, FIELD_WRITE_VALUE)` | Consumed-anchor value | **free**; 0 in an honest fill | leaf `write_deleg` **and nothing else**: no gate, no obligation, no table (§3.10) |
-| `M[41]` | `deleg_space` | `memory::deleg_space(8)` | Requested delegation type | that type's `constants::address_space` tag — 4, 5 or 6 — on a request row, 0 on every other | leaves `read_deleg`, `write_deleg`; `deleg_space_rule` |
+| `M[41]` | `deleg_space` | `memory::deleg_space(8)` | Requested delegation type | that type's `constants::address_space` tag — 4, 5, 6 or 7 — on a request row, 0 on every other | leaves `read_deleg`, `write_deleg`; `deleg_space_rule` |
 
 The frame's slots in `add_sub.rs` are `SLOT_PC = 0` through `SLOT_RD = 6` and, since S21,
 `SLOT_DELEG = 7`, so `frame(1, ..)` is `frame(SLOT_RS1, ..)` there. `deleg_space` is not in
@@ -799,7 +804,7 @@ that grid: it sits past the last query's five fields at `M[1 + 5w]`, and a frame
 queries are held absent on every row. Their fifteen columns and three gap chunks are committed
 and opened, and carry nothing until the I/O-binding stage; **the `deleg` group is not among
 them**, and S21 is the stage that made three of the four wide-frame query groups inert rather
-than four (§18 observation 2).
+than four (§19 observation 2).
 
 **Why the type rides a memory column, and why one query serves all three.** The mirror's leaf
 has to name the requested type — the tag is its `AS` term — and a leaf may read no `W` column,
@@ -916,7 +921,7 @@ exactly, and this is the only registered family of which that is true (§2.2).
 **The `deleg` pair is the only one whose `AS` is a column and not a literal** (S23). Every
 other leaf takes its space from `memory::FRAME_SPACE`, a compile-time constant of the query, so
 the term is `(tag, mask)`; the mirror's is `(1, deleg_space, mask)`, the product
-`deleg_space · deleg_mask`, because one query serves three delegation types and which one is a
+`deleg_space · deleg_mask`, because one query serves every delegation type and which one is a
 property of the row (§2.2, `delegation.md` §5.1). `deleg_space` holds
 `address_space::DELEGATION_KECCAK_F` = 4, `DELEGATION_POSEIDON2` = 5 or `DELEGATION_FR_ARITH`
 = 6, and `deleg_space_rule` is what ties it to the row's type selector. A row requesting
@@ -1525,7 +1530,7 @@ The channels, `add_sub::channels()`, in output order:
 
 **The timestamp tree's padding is where S21's two new obligations cost a gate list.** Sixteen
 obligations and one table fraction is 17 leaves, one past a 16-leaf tree, so the tree pads to 32
-and half of its `L2` nodes combine two pads — mul/div's shape exactly (§6.6, §18 observation 11)
+and half of its `L2` nodes combine two pads — mul/div's shape exactly (§6.6, §19 observation 11)
 — and the circuit is six row-wise lists deep where it was five.
 
 `GENERIC` (2) is not used here. S17's jump/branch/slt family is the first to look it up. S17
@@ -1807,7 +1812,7 @@ as on the delegation row, and no other gate, obligation or table is needed to fi
 is what a type tag has to be — the mirror's leaf reads it on every row, and a leaf is not gated
 by anything a row chooses.
 
-**`deleg_write_value` is free on every row, and that is the design** (§18 observation 19). It is
+**`deleg_write_value` is free on every row, and that is the design** (§19 observation 19). It is
 one half of the anchor's answer pair, and its other half is §12's `anchor_value`: nothing fixes
 either locally, and the two must be equal or the multiset does not balance. A prover that writes
 7 on both sides proves the same statement; a prover that writes 7 on one is refused as
@@ -7078,7 +7083,7 @@ It also panics on every refusal of `validate` and of `memory::check_memory`.
 
 **The height is `2^8` and in practice it is the only one.** `artifact` accepts `0 ≤ n ≤ 30` and
 `family_circuit` returns `Some` over that whole range — there is no minimum-height arm, because
-a family with no channel reaches no `BITS ≤ trace_vars` assertion (§18 observation 1) — but
+a family with no channel reaches no `BITS ≤ trace_vars` assertion (§19 observation 1) — but
 `DEFAULT_HEIGHTS[KECCAK_F]` is `2^8`, `HEIGHT_MENU` opens with `2^8` for this family's sake, and
 nothing derives another: a delegation family's rows are **invocations, not halfwords**, so its
 height answers "how many permutations may a shard hold", not "how long is the program".
@@ -7483,7 +7488,7 @@ each group has one answer, and the suite's ten negative controls name the gate f
 | `cycle` | the memory argument (every write leaf's timestamp) and the request's own row, through the anchor's `4·cycle + 3` |
 | `live` | `live_boolean` and, at 1, every leaf and `output_w{j}`; at 0 the whole row leaves the multiset, which is a shard one invocation short and does not balance |
 | `base` | `base_aligned` and `base_in_window` locally, `addr_w{j}` against the words, and `deleg_addr_rule` on the request's side through the anchor |
-| `anchor_value` | **nothing local**: the request's `deleg_write_value` must equal it, and the memory argument is what says so (§18 observation 19) |
+| `anchor_value` | **nothing local**: the request's `deleg_write_value` must equal it, and the memory argument is what says so (§19 observation 19) |
 | `w{j}_addr` | `addr_w{j}` |
 | `w{j}_read_ts` | the memory argument alone; `gap_w{j}` only holds it below this row's own write |
 | `w{j}_read_value` | `input_w{j}`, against the state bits, and the memory argument |
@@ -7792,7 +7797,7 @@ the only menu entry putting `guest_memory::PUBLIC_INPUT_ORIGIN` = `0x8000` and
 asked for, and `verifier_core::window_height` refuses any other inside `VmConfig::from_bytes`
 (`public-values.md` §2). The registry itself is looser — `family_circuit(12, n)` is `Some` for
 `0 ≤ n ≤ 30`, the family carrying no channel and so meeting no `BITS ≤ trace_vars` guard —
-and that looseness is never reachable through a key (§18 observation 1).
+and that looseness is never reachable through a key (§19 observation 1).
 
 ### 15.2 Columns
 
@@ -8075,13 +8080,187 @@ guest, not the VM, is what makes the swap visible.
 
 ---
 
-## 18. Observations
+## 18. `MOD_MUL` — family 15
+
+### 18.1 Header
+
+`family_circuit(15, n)` is `mod_mul::artifact(n)` with `mod_mul::channels()`, which is
+**empty**. Like `FR_ARITH` it is built by `memory::assemble`: every constraint it makes fits
+as an enforcing gate on gate list 0, so above the leaves it is two product trees and nothing
+else. Normative spec: `delegation.md` §4, §5 and §14. Fill: `prover::family_fill(15)`, the
+private `fill::mod_mul`.
+
+**3,478 committed columns (132 `M`, 3,346 `W`, no `S`) and no virtual table.** Gate list 0
+writes 66 columns — the two sides' 33 leaves — and holds **3,493 enforcing gates
+(73 degree-1, 3,420 degree-2)**. **No lookup**, 2 outputs. At `n = 8` there are 15 gate
+lists (7 row-wise and 8 halving), the top is `L15`, and the circuit has 270 inner columns and
+3,763 relations, 1,420,188 bytes of wire form. `artifact` panics unless the column counts are
+`MEMORY_COLUMNS` and `WITNESS_COLUMNS`, there is one `W` name per `W` column, and the carries
+**close** the witness — a fill that wrote past them would be writing into nothing. It also
+panics on every refusal of `validate` and of `memory::check_memory`.
+
+**One row is one 256-bit modular multiplication**, and the modulus is a **column of the row**
+rather than a constant of the circuit. That is the family's whole design decision and §18.4
+is where it costs something. What it buys: one family serves secp256k1's base field — which
+`docs/handoff/S26-cycle.md` §4 measures at 31% to 57% of a mainnet block's guest cycles — its
+scalar field, BN254's, and the EVM's `MULMOD`. Two constant-modulus families would be two
+family ids, two ecall numbers, two circuits and two more request selectors on
+`ADD_SUB_LUI_AUIPC`: more surface, not less.
+
+**The height is `2^8`**, the delegation menu's opening entry (§12.1), so a shard holds 256
+invocations. That is worth reading twice on this family, because it is the one whose invocation
+count a real workload drives hard: S26's pinned mini-block makes 6,705 of them, so **27
+shards** appear where the delegation removed five `2^20` execution ones. `delegation.md` §9.1
+has the arithmetic and `docs/handoff/S26-cycle.md` §7 the recommendation; nothing here depends
+on the answer, `family_circuit`'s arm accepting `0 ≤ n ≤ 30` like every other delegation
+family's.
+
+### 18.2 Row kinds
+
+Two. **One row is one multiplication** — `ops/row = 1`, as every delegation family has it —
+and there is no no-op row kind: a row is live or it is padding.
+
+| row kind | `live` | what the row holds | what it adds to the multiset |
+| --- | --- | --- | --- |
+| a **multiplication** | 1 | the requesting cycle, the frame base, the 32 words read and written, four values' 256 word bits, the quotient's 8 limbs and 256 bits, the `out < m` chain's 256 difference bits and 8 borrows, 14 signed carries of 37 bits, and 32 × 38 gap bits with the frame pointer's 60 | 33 read tuples and 33 write tuples: the 32 frame words at `(RAM, base + 4j)`, and the anchor pair at `(DELEGATION_MOD_MUL, base)` |
+| **padding** | 0 | every committed cell 0 | nothing: all 66 leaves are 1 |
+
+Every gate holds on the all-zero row, and two of them are worth spelling out. `limb{k}` reads
+`0 − 0 − 0 + 0 − 2^32·0 = 0` because `carry_terms` puts `live` on the offset: a padding row's
+carry is `Σ 2^t·0 − 2^36·0 = 0` and not `−2^36`. `out_below_modulus` reads `live = borrow7`,
+so a padding row's last borrow is 0 where a live row's is 1 — which is the same gate saying
+"the subtraction borrowed out" on a live row and saying nothing on a padding one.
+
+### 18.3 The base layer
+
+| address | name | what it is |
+| --- | --- | --- |
+| `M[0..4]` | `cycle`, `live`, `base`, `anchor_value` | as §13.3 |
+| `M[4 + 4j + f]` | `w{j}_*` | frame word `j`, `j < 32`: words 0–7 the modulus `m`, 8–15 `a`, 16–23 `b`, 24–31 the result `out` |
+| `W[38j + i]` | `gap{j}_{i}` | bit `i` of word `j`'s timestamp gap, `1,216` in all |
+| `W[1216..1276]` | `base_low{i}`, then `base_room{i}` | 29 then 31 bits |
+| `W[1276 + 256v + 32k + t]` | `m_bit{k}_{t}`, `a_bit…`, `b_bit…`, `out_bit…` | bit `t` of limb `k` of value `v`, in frame order |
+| `W[2300 + k]` | `q_limb{k}` | limb `k` of the quotient — **the one value in the row the execution did not record** |
+| `W[2308 + 32k + t]` | `q_bit{k}_{t}` | bit `t` of limb `k` of `q` |
+| `W[2564 + 32i + t]` | `diff{i}_{t}` | bit `t` of difference limb `i` of the `out < m` chain |
+| `W[2820 + i]` | `borrow{i}` | borrow `i` of that chain; `borrow7` is pinned to `live` |
+| `W[2828 + 37k + t]` | `carry{k}_{t}` | bit `t` of signed carry `k`, `k < 14` |
+
+Every address is reached through `mod_mul::word`, `value_bit`, `q_limb`, `q_bit`, `diff_bit`,
+`borrow_bit` and `carry_bit`, so a fill, a checker and a tamper twin name a column and never a
+number.
+
+**Where the modulus reads from, and where the result does.** `m`, `a` and `b` are read from
+each word's `read_value`; `out` alone is read from `write_value`. That is the whole of what
+makes the call a function: the guest's modulus and operands are what it *passed*, and the
+result is what the invocation *wrote*. Twenty-four `writes_back_w{j}` gates then hold every
+non-result word to writing back what it read, so a call cannot rewrite the guest's operands
+under it.
+
+### 18.4 The gates
+
+| group | count | degree | what it says |
+| --- | --- | --- | --- |
+| `live_boolean`, `gap{j}_{i}_boolean`, `base_low{i}_boolean`, `base_room{i}_boolean` | 1 + 1,216 + 29 + 31 | 2 | the frame's own, §4's, shared with the other three delegation families |
+| `addr_w{j}`, `gap_w{j}`, `base_aligned`, `base_in_window` | 32 + 32 + 1 + 1 | 2 | ditto: word `j` is at `base + 4j`, its read precedes its write, the base is 4-aligned and its whole 128-byte frame is inside RAM. Degree 2 because each carries `live` as a factor — on a padding row `addr` and `base` are 0 and `4j` is not |
+| `writes_back_w{j}`, `j < 24` | 24 | 1 | `m`, `a` and `b` survive the call |
+| `{m,a,b,out}_bit{k}_{t}_boolean` | 1,024 | 2 | every bit of every frame value is a bit |
+| `{m,a,b,out}_word{k}` | 32 | 1 | each limb is its 32 bits — which **is** the `< 2^32` bound, there being no lookup channel to ask |
+| `q_bit{k}_{t}_boolean`, `q_word{k}` | 256 + 8 | 2, 1 | the same for the witnessed quotient |
+| `carry{k}_{t}_boolean` | 518 | 2 | 14 carries × 37 bits |
+| **`limb{k}`, `k < 15`** | 15 | 2 | the schoolbook identity, position by position |
+| `diff{i}_{t}_boolean`, `borrow{i}_boolean` | 256 + 8 | 2 | the `out < m` chain's bits |
+| `chain{i}`, `i < 8` | 8 | 1 | `out_i − m_i − b_{i−1} + 2^32·b_i = d_i` |
+| `out_below_modulus` | 1 | 1 | `borrow7 = live` |
+
+**The fifteen limb equations are the circuit.** With `P_k = Σ_{i+j=k} a_i·b_j` and
+`S_k = Σ_{i+j=k} q_i·m_j`, gate `limb{k}` is
+
+```text
+P_k − S_k − out_k + c_{k−1} − 2^32·c_k = 0
+```
+
+where `out_k` is absent past limb 7, `c_{−1}` is absent, and `c_14` is absent — which is the
+closing condition. Weight the fifteen equations by `2^{32k}` and sum: the carries telescope
+and what is left is `a·b − q·m − out = c_14·2^{480}`. A last carry that does not exist is a
+last carry of zero, so **the absence of a fifteenth carry column is the identity**. Each gate
+is one `Quadratic`: the products are pairs of committed columns and everything else is a
+column times a literal, so the degree is 2 and never 3.
+
+**Why the equation over `Fr` is the equation over ℤ.** Every operand is bounded to `2^32` by
+its own bits, so the largest term of any position is `8·(2^32 − 1)^2 < 2^67`, and the carry
+sum adds less than `2^69`. `p` is 254 bits. No limb equation can wrap, so there is no
+modular-arithmetic loophole to argue about — the same argument `delegation.md` §13.3's
+canonicity chain rests on, and the reason every limb is decomposed rather than range-checked.
+
+**The signed carry.** A position's partial sum can be negative, and `Fr` has no sign, so a
+carry is `Σ_{t<37} 2^t·carry{k}_{t} − 2^36·live`: a 37-bit unsigned witness read as an offset
+value in `[−2^36, 2^36)`. The bound is the fixed point of `C = (2^67 + 2^32 + C)/2^32`, which
+settles just above `2^35`, so 37 bits with a `2^36` offset is room to spare and one bit of
+margin against a recount. The `live` factor on the offset is what makes a padding row's carry
+0 (§18.2).
+
+**The one place the witnessed modulus costs a degree.** `delegation.md` §13.3's canonicity
+chain subtracts `p`, a *literal*, so its gates can be gated by `live` for free. Here the chain subtracts `m`,
+a **column**, and `live·m_i` would be degree 2 on top of the borrow term — so `chain{i}` is
+**ungated** instead, and holds on a padding row because every word there is zero and every
+borrow is zero. The gating moves to the single `out_below_modulus`, which is degree 1.
+
+**`m > 0` needs no gate.** `out` is a sum of boolean bits and so a non-negative integer, and
+`out_below_modulus` puts it strictly below `m` on a live row. A modulus of zero has no value
+below it, so the chain cannot hold — which is why `emulator::mod_mul_frame` refuses a zero
+modulus as `EmuError::DelegationFrame` rather than answering: the honest executor stops where
+the circuit would be unprovable.
+
+**What bounds `q`.** Its 256 bits, and nothing else. That is enough, and the reason is worth
+stating because it is *not* a soundness argument: the guest passes `a, b < m`, so
+`q = (a·b − out)/m < m < 2^256` and the honest prover can always fit it. A prover that passed
+unreduced operands would be unable to fit `q` at all — a cost to the **prover**, never a
+false statement to the verifier, since `out < m` and the identity together pin `out` to
+`a·b mod m` for whatever `q` does fit.
+
+### 18.5 The trees and the outputs
+
+§14.5's, with 33 leaves a side instead of 26: `d::leaves(DELEGATION_MOD_MUL, 32)` writes the
+32 frame words' read and write tuples plus the anchor pair, gate list 0's 66 columns are those
+leaves, the row-wise lists reduce each side to one node, and 8 halving lists take the two to a
+zero-variable top. The outputs are `read_root` and `write_root` at `READ_ROOT` and
+`WRITE_ROOT`, and `p` in step 10a is the position of `(15, i)` in `statement_shards` — **last**
+in every statement it appears in, family ids being the statement's order.
+
+### 18.6 What fixes each cell
+
+| cell | what fixes it |
+| --- | --- |
+| `cycle`, `base` | the multiset: the request's mirror write is `T(DELEGATION_MOD_MUL, base, 4·cycle + 3, v)` and this row's read is its only reader (§4's anchor) |
+| `live` | `live_boolean`, and every leaf's mask |
+| `anchor_value` | **nothing local**: the request's `deleg_write_value` must equal it, and the memory argument is what says so (§19 observation 19) |
+| `m`, `a`, `b` word values | the frame's read tuples, and `writes_back_w{j}` against their write values |
+| `out` word values | `limb{k}` and the chain: given `m`, `a`, `b` and the bits, integer division has one answer |
+| every `*_bit` | its own booleanity gate, and the `*_word{k}` decode that reads it |
+| `q_limb{k}` | `limb{k}`: fifteen equations in eight unknowns over the integers, whose solution is unique once `out < m` |
+| `diff{i}`, `borrow{i}` | `chain{i}` and their booleanity gates; `borrow7` by `out_below_modulus` |
+| `carry{k}_{t}` | `limb{k}` and `limb{k+1}`, which the carry joins, and its booleanity gate |
+| the padding row | `check_padding`'s all-zero row, and §18.2's two gates that hold there |
+
+`crates/checker/tests/mod_mul.rs` is the independent reading of all of it: its own `U256` over
+two `u128` halves, its own division, its own borrow chain and its own witness derivation,
+sharing no code with `prover::fill::mod_mul`. The twin worth knowing about is
+`a_result_not_below_the_modulus_is_refused`: `(q − 1, r + m)` satisfies **every** limb equation
+and every carry bound — it is the same product, decomposed one multiple of `m` differently —
+and `out_below_modulus` is the only thing that refuses it. It runs on the BN254 row rather
+than the secp256k1 one because `p = 2^256 − 2^32 − 977` leaves no room: `r + p` does not fit
+eight limbs, so on that row the forgery cannot even be written down.
+
+---
+
+## 19. Observations
 
 Facts this accounting turned up. None changes a circuit.
 
 1. **The registry and the height menu disagree both ways.** `family_circuit` builds
    all **seven** registered execution circuits at every `n` from 19 to 30, and the **five**
-   window circuits and the three delegation circuits at every `n` from 0 to 30. A key's heights
+   window circuits and the four delegation circuits at every `n` from 0 to 30. A key's heights
    come from `VmConfig`, which `VmConfig::from_bytes` holds to `HEIGHT_MENU` (`n` = **8**, 16,
    18, 20, 22 since S21).
    So the seven execution circuits are reachable only at 20 and 22, which is `shard-proof.md` §8's,
@@ -8312,14 +8491,14 @@ Facts this accounting turned up. None changes a circuit.
     against identity or the SRS digest, or a verifier step. `M[2]` is reached by its init leaf
     alone, and a leaf constrains nothing by itself — it balances against whatever the guest read
     (§17.2). That is the definition of advice and not a gap, but it is worth writing down beside
-    §18 observation 6's unconstrained `INIT_TEARDOWN` cells and §18 observation 19's free anchor
+    §19 observation 6's unconstrained `INIT_TEARDOWN` cells and §19 observation 19's free anchor
     value, because the three are the registry's whole inventory of deliberately free committed
     cells, and each is free for a different reason: masked off, paired by the multiset, or
     chosen by the prover on purpose.
 
 ---
 
-## 19. Maintaining this page
+## 20. Maintaining this page
 
 A stage that adds a circuit family, or changes one, updates this page in the same pull request
 (`prompts/00-master.md`, implementation rule 12). **Changing one is the same obligation as
@@ -8350,7 +8529,7 @@ query moved every relation number in it. A new family's entry is a section like 
    better source: it runs in CI and a probe does not. A family too wide for a row table says so
    and gives the chain that stands in for one instead (§12.9).
 9. **Its rows in §1.1, §1.2 and §1.3, its counts in §0.5, the challenge slots it reads in
-   §0.4**, and any §18 observation the accounting turns up. A family whose decoded tuple is not
+   §0.4**, and any §19 observation the accounting turns up. A family whose decoded tuple is not
    seven wide also moves §0.4's `β⁶` and `g_dec` rows, as `MUL_DIV`'s and `ATOMICS`' six-wide
    ones did; a family that reads or does not read the generic channel moves §0.4's `β` and `β²`
    rows, as `MEM_WORD`'s absence from them records.

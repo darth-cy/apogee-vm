@@ -222,9 +222,12 @@ set for a program is derived by the preprocessor and recorded in `VmConfig`.
 **Delegation family** — a family that is **invoked, not decoded**: a row is one call of a
 fixed function, not one cycle. It claims no pc, has no decoded table and no row kind, owns
 no cycle, carries no lookup channel, and is in a `VmConfig` exactly when the linked binary
-**declares** it. Three are registered: S21's `KECCAK_F`, one keccak-f[1600] permutation a
-row, and S23's `POSEIDON2` and `FR_ARITH`, one width-3 Poseidon2 permutation and one `Fr`
-add, multiply or inverse a row. All three at `2^8` rows. `docs/spec/delegation.md`.
+**declares** it. Four are registered: S21's `KECCAK_F`, one keccak-f[1600] permutation a
+row; S23's `POSEIDON2` and `FR_ARITH`, one width-3 Poseidon2 permutation and one `Fr`
+add, multiply or inverse a row; and S26's `MOD_MUL`, one `a·b mod m` over eight 32-bit
+limbs a row, whose modulus is **witnessed** — a column of the row rather than a constant of
+the circuit, so one family serves secp256k1's two fields, BN254's and the EVM's `MULMOD`.
+All four at `2^8` rows. `docs/spec/delegation.md`.
 
 **Delegation request** — the CPU-side row of a delegation call: an ecall whose `a7` is the
 family's number and whose `a0` is the **frame base**, a pointer to the bytes the function
@@ -242,6 +245,17 @@ request reads exactly that, which makes the pairing 1:1 over the one global mult
 gates pin the request's side (it writes no register; its mirror read is stamped 0 and
 valued 0); the fourth field, the value the request writes back, is **free on both sides** and
 balances only when the two agree. `docs/spec/delegation.md` §5.
+
+**Witnessed parameter** — a value a circuit's own behaviour depends on that arrives as a
+**column of the row** rather than as a literal in the circuit. S26's `MOD_MUL` is the first
+and so far the only one: its modulus comes out of the frame, so one family proves
+`a·b mod m` for secp256k1's base field, its scalar field, BN254's, or any other 256-bit value
+a guest passes, where a constant modulus would have meant one family per field. It is a
+witness column like any other — nothing in the statement, the transcript or the opening
+notices — and what it costs is arithmetic: the `out < m` borrow chain subtracts *m*'s columns
+where `FR_ARITH`'s subtracts `p`'s literals, so that chain cannot also be gated by `live`
+without reaching degree 3 and is ungated instead. `docs/spec/delegation.md` §14.1 and
+`docs/spec/constraint-manifest.md` §18.4.
 
 **Static detachment** — how a family no pc claims gets into a `VmConfig`: the SDK shim emits
 a twelve-byte **declaration record** into `.rodata`, referenced by the shim and by nothing

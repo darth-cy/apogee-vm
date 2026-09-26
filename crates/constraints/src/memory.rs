@@ -213,7 +213,7 @@ pub fn frame_queries(family: u32) -> &'static [usize] {
             "family {family} initializes RAM and runs no cycles, so it has no frame; \
              `docs/spec/memory.md` §3.3 is its artifact"
         ),
-        family::KECCAK_F | family::POSEIDON2 | family::FR_ARITH => panic!(
+        family::KECCAK_F | family::POSEIDON2 | family::FR_ARITH | family::MOD_MUL => panic!(
             "family {family} is invoked, not decoded, and its frame is a run of \
              fixed-offset words rather than a subset of the query table; \
              `docs/spec/delegation.md` §4 is its artifact"

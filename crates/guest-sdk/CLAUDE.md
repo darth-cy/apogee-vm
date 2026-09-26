@@ -142,23 +142,39 @@ for the sake of one spelling, and anti-goal 2 bans proc macros outright. The dec
 form was chosen with the repository owner. It emits a wrapper carrying `#[export_name =
 "main"]`, so the annotated function keeps its own name and may itself be called `main`.
 
-## `recursion`: the delegation shims the backends ride on (S23)
+## `recursion`: the delegation shims the backends ride on (S23, S26)
 
-`guest_sdk::recursion` is two raw delegation calls and their declaration records, and
+`guest_sdk::recursion` is three raw delegation calls and their declaration records, and
 nothing else:
 
 ```rust
 #[repr(C, align(4))] pub struct Poseidon2Frame(pub [u8; 96]);
 #[repr(C, align(4))] pub struct FrArithFrame(pub [u8; 100]);
+#[repr(C, align(4))] pub struct ModMulFrame(pub [u32; 32]);          // S26
 pub fn poseidon2(frame: &mut Poseidon2Frame) -> bool;
 pub fn fr_arith(frame: &mut FrArithFrame) -> bool;
+pub fn mod_mul(frame: &mut ModMulFrame) -> bool;                    // out = a * b mod m
+impl ModMulFrame {
+    pub fn of(m: &[u32; 8], a: &[u32; 8], b: &[u32; 8]) -> ModMulFrame;
+    pub fn result(&self) -> [u32; 8];
+}
 ```
 
 - **There is no software path in this module, and there must not be.** The callers are
   `field` and `transcript`, whose own implementations *are* the fallback, so the delegated
   path and the fallback are the same function rather than two copies held equal by a test.
   That is the opposite of `keccak256`, whose sponge and permutation this crate owns because
-  nothing else can.
+  nothing else can. S26's caller is a third kind: `guests/vendor/k256`, whose own
+  `mul_inner` is the fallback for the same reason.
+- **`ModMulFrame` is limbs and not bytes, and it has no empty constructor.** Every caller
+  already holds its values as 32-bit limbs, so a byte frame would cost a pack and an unpack
+  per call — a fifth of what the delegation saves on a 256-bit multiply — and the `u32`
+  element type is also what gives the type its alignment for free. `of` writes the modulus,
+  the two operands and eight zero result words in **one pass**: an all-zero array followed
+  by three `copy_from_slice`s was a `memset` plus three `memcpy`s, and on S26's pinned
+  mini-block, at 6,705 invocations, that was 1.4 million guest cycles — a quarter of what
+  the delegation saves. Five `const` assertions pin the word layout its array literal spells
+  out, so a renumbering fails the build rather than transposing the operands.
 - **The frames are word-aligned by their types.** A bare `[u8; N]` has alignment 1 and a
   stack local's address is the code generator's, so a misaligned base would be a guest that
   is correct under `qemu-riscv32` — which answers `-ENOSYS` and never dereferences the

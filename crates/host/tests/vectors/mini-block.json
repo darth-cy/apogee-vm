@@ -11,8 +11,8 @@
   "gas_used": 392997,
   "accounts": 17,
   "slots": 37,
-  "witness_bytes": 135104,
-  "witness_sha256": "2ff6552aad6ae3845f97d30f1e38a454fed87a289a0f4a42506f59169202398a",
+  "witness_bytes": 135109,
+  "witness_sha256": "afa5392def283a6cdc5aa93e1f9ae5d388779f96df74ba66e7ea26879488b2fd",
   "journal_bytes": 90,
   "journal_sha256": "2b526b965cb1e3bd7b37e4dfade2bc66e2997e6979198a9dcfb9eb8a8489bba1"
 }

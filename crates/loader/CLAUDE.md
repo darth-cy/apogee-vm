@@ -6,8 +6,21 @@ and the expanded instruction stream at halfword granularity. It parses static RV
 executables, refuses everything else by name, and expands every compressed instruction to
 the exact 32-bit instruction it abbreviates.
 
+Since S26 it also reads the ELF's **symbol table**, beside the image and never into it: a
+`ProgramImage` is what identity commits to, and a symbol table is what a linker wrote for a
+debugger. `tools/profiler` turns a pc into the function that owns it, which is the whole
+basis of a cycle profile (`docs/spec/profiling.md` §2); `tools/artifact-dump` annotates a
+listing with it. Nothing there can fail — a file with no symbol table gives an empty
+result — and nothing there can change what a proof is about.
+
 ```rust
 pub fn load_elf(bytes: &[u8]) -> Result<ProgramImage, LoaderError>;   // the only entry point
+
+// S26, src/symbols.rs. Read beside the image, never into it.
+pub struct FuncSymbol { pub addr: u32, pub size: u32, pub name: String }
+impl FuncSymbol { pub fn holds(&self, pc: u32) -> bool; }
+pub fn function_symbols(elf: &[u8]) -> Vec<FuncSymbol>;   // defined STT_FUNC, nonzero size
+pub fn symbol_names(elf: &[u8]) -> BTreeMap<u32, BTreeSet<String>>;   // every defined symbol
 
 pub struct ProgramImage {                                             // FROZEN AT S10
     pub entry: u32,
@@ -32,6 +45,15 @@ pub enum LoaderError { /* twelve variants, one per failure class */ }
 `docs/spec/ecall-abi.md` §7 is normative for the memory map and the linker symbols.
 
 ## Frozen invariants
+- **The symbol table is not part of the image, and `load_elf` does not read it.** An image
+  is the post-load memory, the entry pc and the instruction stream, and program identity is a
+  commitment over exactly that (`docs/spec/memory.md` §6.2). `function_symbols` and
+  `symbol_names` take the ELF **bytes** and return their own values; two ELFs differing only
+  in their symbols export the same artifact, which `tools/artifact-dump` says in its report.
+  `function_symbols` drops a zero-size entry (it owns no instruction, so an interval nothing
+  falls in) and an undefined one (an import, which a statically linked guest has none of),
+  and returns a **list** rather than a map because an alias shares an address and a size —
+  `guests/revm-block` has 28 such groups.
 - **Addresses are preserved, never compacted.** A `c.addi` at `0x1002` stays at `0x1002`
   and occupies two bytes; expansion changes representation, not layout. Compacting would
   shift every later address, break linker-resolved function pointers and computed jumps,

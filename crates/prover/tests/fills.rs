@@ -20,7 +20,9 @@
 
 use constants::family;
 use constraints::PolyAddress;
-use constraints::{fr_arith as fa_circuit, keccak as kec_circuit, poseidon2 as p2_circuit};
+use constraints::{
+    fr_arith as fa_circuit, keccak as kec_circuit, mod_mul as mm_circuit, poseidon2 as p2_circuit,
+};
 use prover::{family_fill, Program, ShardSource};
 
 mod common;
@@ -56,14 +58,8 @@ fn covers(program: &Program, archive: &trace::TraceArchive, family: u32, m: usiz
         .find(|(f, _)| *f == family)
         .map(|(_, h)| *h as usize)
         .unwrap_or_else(|| panic!("{name} is in the config"));
-    let src = ShardSource {
-        program,
-        archive,
-        family,
-        index: 0,
-        height,
-        window: 0,
-    };
+    let src = ShardSource::archived(program, archive, family, 0, height as u32, 0)
+        .expect("the shard's rows");
     let fill = family_fill(family).unwrap_or_else(|| panic!("{name} has a fill"));
     let out = fill(&src).unwrap_or_else(|e| panic!("{name} fills: {e}"));
     let (memory, witness, duplicates) = addresses(&out);
@@ -110,7 +106,26 @@ fn the_recursion_fills_cover_their_circuits_exactly() {
     );
 }
 
-/// The three circuits do **not** agree on where a frame's witness columns
+/// S26's, whose frame also starts at `W[0]` and whose quotient, borrow chain and
+/// carries sit above four values' bits.
+///
+/// It is the one delegation fill that computes a column the execution never
+/// recorded — the quotient — so "covers its circuit exactly" is also the check
+/// that `mod_mul_witness` wrote every carry it was supposed to.
+#[test]
+fn the_mod_mul_fill_covers_its_circuit_exactly() {
+    let program = common::mod_mul_program();
+    let archive = common::mod_mul_archive(&program);
+    covers(
+        &program,
+        &archive,
+        family::MOD_MUL,
+        mm_circuit::MEMORY_COLUMNS,
+        mm_circuit::WITNESS_COLUMNS,
+    );
+}
+
+/// The four circuits do **not** agree on where a frame's witness columns
 /// start, which is the whole reason the builder takes a base. Stated here so
 /// that a later family copying one of them sees the choice rather than
 /// inheriting it.
@@ -121,7 +136,15 @@ fn the_frame_witness_base_is_per_family() {
         PolyAddress::Witness(constants::keccak::STATE_BITS as u32),
         "keccak's frame bits sit above the state's"
     );
-    for a in [p2_circuit::gap_bit(0, 0), fa_circuit::gap_bit(0, 0)] {
-        assert_eq!(a, PolyAddress::Witness(0), "S23's frames start at W[0]");
+    for a in [
+        p2_circuit::gap_bit(0, 0),
+        fa_circuit::gap_bit(0, 0),
+        mm_circuit::gap_bit(0, 0),
+    ] {
+        assert_eq!(
+            a,
+            PolyAddress::Witness(0),
+            "S23's and S26's frames start at W[0]"
+        );
     }
 }

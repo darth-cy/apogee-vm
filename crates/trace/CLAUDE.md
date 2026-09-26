@@ -4,7 +4,8 @@
 The data an execution leaves behind, and nothing that produces it: the memory event log
 with its last-access bookkeeping and self-check, the per-family trace buffers, the cycle
 profile and the shard plan, the `TraceArchive` that snapshots them, and the memory
-argument's columns filled from the log. `crates/emulator` is the only producer.
+argument's columns — filled from a **shard's rows** and from the **last-access tables**
+since S26, never from the event log (`docs/spec/streaming.md`). `crates/emulator` is the only producer.
 **`docs/spec/execution-trace.md` is normative** for every value here — the clock, the
 address spaces, the frame of each instruction class, the x0 rule, the ecall frame and the
 order of the log — **`docs/spec/memory.md`** for the memory columns,
@@ -14,12 +15,27 @@ since S-IO, **`docs/spec/public-values.md`** for the two public windows, the adv
 the value window's committed init column.
 
 ```rust
-pub enum AddressSpace { Reg, Ram, Pc, KeccakF }   // tags: constants::address_space, 1 2 3 4
+pub enum AddressSpace { Reg, Ram, Pc, KeccakF, Poseidon2, FrArith, ModMul }   // tags 1..=7
 pub struct MemoryEvent { pub space: AddressSpace, pub addr: u32, pub ts: u64,
                          pub read_ts: u64, pub read_value: u32, pub write_value: u32 }
 pub struct FinalValue { pub space: AddressSpace, pub addr: u32, pub ts: u64, pub value: u32 }
 pub struct SelfCheckError { pub space: AddressSpace, pub addr: u32, pub ts: u64, pub reason: String }
+// S26: the last-access tables APART from the events. `O(touched addresses)` where the
+// events are `O(cycles)`, and everything a statement needs beyond a shard's own rows is a
+// function of exactly this (`docs/spec/streaming.md` §3.2).
+pub struct MemoryState { /* regs, pc, a RAM map, the last timestamp */ }
+impl MemoryState {
+    pub fn new() -> MemoryState;
+    pub fn record(&mut self, space, addr, ts, read_value, write_value) -> MemoryEvent;
+    pub fn reg(&self, r: u32) -> Option<(u64, u32)>;
+    pub fn pc(&self) -> Option<(u64, u32)>;
+    pub fn ram(&self, addr: u32) -> Option<(u64, u32)>;
+    pub fn touched_ram_windows(&self, height: u32) -> Vec<u32>;
+    pub fn touched_addresses(&self) -> Vec<(AddressSpace, u32)>;
+    pub fn final_state(&self) -> Vec<FinalValue>;
+}
 impl MemoryEventLog {
+    pub fn state(&self) -> &MemoryState;      // S26
     pub fn new() -> MemoryEventLog;
     pub fn record(&mut self, space, addr, ts, read_value, write_value) -> MemoryEvent;
     pub fn from_events(events: Vec<MemoryEvent>) -> MemoryEventLog;
@@ -36,7 +52,7 @@ impl InitialMemory<'_> { pub fn word(&self, addr: u32) -> u32; }
 pub fn in_ram(addr: u32) -> bool;        // [RAM_ORIGIN, ADVICE_ORIGIN): image, heap, stack
 pub fn addressable(addr: u32) -> bool;   // in_ram, a public window, or the advice region
 impl AddressSpace { pub fn chains(&self) -> bool; }   // S21: false for a delegation space
-pub const DELEGATION_SPACES: [AddressSpace; 3];       // S23: every delegation anchor space
+pub const DELEGATION_SPACES: [AddressSpace; 4];       // every delegation anchor space; S26's is the 4th
 
 pub enum Role { Rs1, Rs2, Arg1, Arg2, Load, Ram, Rd, Delegate }   // S21's eighth
 pub const ROLES: [Role; 8];                           // the frozen in-cycle order
@@ -52,6 +68,26 @@ impl DelegationTrace { pub fn new(family, height, width) -> Self; pub fn len(&se
                        pub fn is_empty(&self) -> bool; pub fn push(&mut self, cycle, base, &[Query]);
                        pub fn frame(&self, row: usize) -> Vec<Query>; }
 pub struct FamilyTraces { pub families: Vec<FamilyTrace>, pub delegations: Vec<DelegationTrace> }
+// S26: ONE SHARD's rows, borrowed. `docs/spec/block-proof.md` §5.1's cut, as a view, so one
+// fill serves a slice of an archive and a streaming executor's fresh chunk alike.
+pub struct RowSlice<'a> { /* a FamilyTrace, a start, a length */ }
+impl<'a> RowSlice<'a> {
+    pub fn shard(trace: &'a FamilyTrace, index: u32, height: usize) -> RowSlice<'a>;
+    pub fn len(&self) -> usize;  pub fn is_empty(&self) -> bool;
+    pub fn family(&self) -> FamilyId;  pub fn row(&self, i: usize) -> Row;
+    pub fn cycles(&self) -> &'a [u64];
+}
+pub struct FrameSlice<'a> { /* a DelegationTrace, a start, a length */ }
+impl<'a> FrameSlice<'a> {
+    pub fn shard(trace: &'a DelegationTrace, index: u32, height: usize) -> FrameSlice<'a>;
+    pub fn len(&self) -> usize;  pub fn is_empty(&self) -> bool;
+    pub fn family(&self) -> FamilyId;  pub fn width(&self) -> usize;
+    pub fn cycles(&self) -> &'a [u64];  pub fn bases(&self) -> &'a [u32];
+    pub fn word(&self, j: usize) -> WordSlice<'a>;
+}
+pub struct WordSlice<'a> { pub addr: &'a [u32], pub read_ts: &'a [u64],
+                           pub read_value: &'a [u32], pub write_value: &'a [u32] }
+impl Row { pub fn delegation_space(&self) -> Option<AddressSpace>; }   // S26, from a7
 impl FamilyTraces { pub fn family(&self, f) -> Option<&FamilyTrace>;
                     pub fn delegation(&self, f) -> Option<&DelegationTrace>;
                     pub fn row_counts(&self) -> Vec<(FamilyId, u64)>; }
@@ -59,23 +95,25 @@ impl FamilyTraces { pub fn family(&self, f) -> Option<&FamilyTrace>;
 pub struct CycleProfile { pub counts: Vec<(FamilyId, u64)> }
 pub struct ShardPlan { pub shards: Vec<(FamilyId, u32)> }
 pub fn plan_shards(profile: &CycleProfile, config: &VmConfig) -> ShardPlan;
-pub fn init_windows(log: &MemoryEventLog, height: u32) -> Vec<u32>;   // ZERO_WINDOWS' shard list
+pub fn init_windows(state: &MemoryState, height: u32) -> Vec<u32>;   // ZERO_WINDOWS' shard list
 // S-IO, docs/spec/public-values.md §6. The advice region's layout, in one place.
 pub fn advice_region_words(advice: &[u8]) -> u64;              // 0 for empty; else 1 + ceil(len/4)
 pub fn advice_word(advice: &[u8], index: u64) -> u32;          // the length word, then the payload
 pub fn advice_window_count(advice: &[u8], height: u32) -> u32; // ADVICE_WINDOWS' shard count
 
 // src/memory.rs, docs/spec/memory.md §2.1, §2.4, §3.4, §4.1; columns keyed by constraints::memory
-pub fn build_memory_columns(log: &MemoryEventLog, queries: &[usize], cycles: &[u64], height: usize)
+// S26: the frame builders read a SHARD'S ROWS and the window builders the last-access
+// tables. Neither takes the event log any more (`docs/spec/streaming.md` §3).
+pub fn build_memory_columns(rows: &RowSlice, queries: &[usize], height: usize)
     -> Vec<(PolyAddress, MultilinearPoly)>;                    // the frame's 1 + 5w M columns
-pub fn build_frame_witness(log: &MemoryEventLog, queries: &[usize], cycles: &[u64], height: usize)
+pub fn build_frame_witness(rows: &RowSlice, queries: &[usize], height: usize)
     -> Vec<(PolyAddress, MultilinearPoly)>;                    // its w + 3 W columns
-pub fn build_init_teardown_columns(log: &MemoryEventLog, image: &ProgramImage, ram_window: u32,
+pub fn build_init_teardown_columns(state: &MemoryState, image: &ProgramImage, ram_window: u32,
     height: usize) -> Vec<(PolyAddress, MultilinearPoly)>;          // M[0], M[1]; S[0] at window 0
 // S-IO, docs/spec/public-values.md §4: a value window's M[0], M[1] and the committed M[2].
-pub fn build_value_window_columns(log: &MemoryEventLog, initial: &[u32], ram_window: u32,
+pub fn build_value_window_columns(state: &MemoryState, initial: &[u32], ram_window: u32,
     height: usize) -> Vec<(PolyAddress, MultilinearPoly)>;
-pub fn build_boundary_finals(log: &MemoryEventLog) -> BoundaryFinals;   // gkr_verify's
+pub fn build_boundary_finals(state: &MemoryState) -> BoundaryFinals;   // gkr_verify's
 
 // docs/spec/lookup.md §7
 pub fn build_multiplicities(artifact: &CircuitArtifact, columns: &[(PolyAddress, MultilinearPoly)],
@@ -185,7 +223,7 @@ impl TraceArchive {
   `plan_shards` still counts them into that family's shard count
   (`docs/spec/delegation.md` §8). The cycle-owning counts sum to the cycle count, transfer
   cycles included.
-- **A delegation space does not chain.** `AddressSpace::chains()` is false for all three, so
+- **A delegation space does not chain.** `AddressSpace::chains()` is false for all four, so
   `record` fills such an event's read side with `(0, 0)` rather than from the last-access
   tables, and `self_check` credits the invocation's own pair per event instead of an initial
   write and a teardown read. That is what makes the anchor's timestamp-0 tuple a *write with
@@ -203,10 +241,38 @@ impl TraceArchive {
 - **`plan_shards` is `ceil(occupancy / height)`**, a pure function, zero for a family that
   never ran. Every **window** family counts 0 cycles and so plans 0 shards here — their rows
   are addresses, not cycles — and `prover::shard_counts` overrides each: exactly 1
-  `INIT_TEARDOWN` shard (RAM window 0), `init_windows(log, h).len()` `ZERO_WINDOWS` shards,
+  `INIT_TEARDOWN` shard (RAM window 0), `init_windows(log.state(), h).len()` `ZERO_WINDOWS` shards,
   exactly 1 each for `PUBLIC_INPUT` and `PUBLIC_OUTPUT` whether or not the execution used
   them, and `advice_window_count(advice, h)` for `ADVICE_WINDOWS`.
-- **`init_windows(log, h)` is `ZERO_WINDOWS`' shard list**: the distinct `addr / 4h` of
+- **`MemoryState` is the last-access tables and the log is those plus the events** (S26).
+  `record` is the state's: the tables are what fill each new query's read side, so the
+  assertions that catch a machine and a log disagreeing about memory live there. The split
+  exists because the two grow differently — the events are `O(cycles)`, about 128 bytes a
+  cycle, and the tables are `O(touched addresses)` — and **everything a statement needs
+  beyond a shard's own rows is a function of the tables alone**: the register and pc
+  boundary, the window list, and every RAM or value window's teardown columns. So a
+  streaming executor keeps the tables and never collects an event
+  (`docs/spec/streaming.md` §3.2). `trace_run` still keeps the whole log, because a
+  `TraceArchive` is every event.
+- **A shard's frame columns are built from that shard's ROWS, not from the log** (S26).
+  `build_memory_columns` and `build_frame_witness` take a `RowSlice` — one family's cut of
+  its buffer — and derive each row's events from the row: the pc query at `4·cycle` reading
+  `4·(cycle − 1)`, then the roles in `ROLES` order. That derivation is
+  `src/archive.rs`'s `check_parts` read backwards, and `crates/checker`'s
+  `memory_columns_from_log` is the **independent log reading** the two are held to, column
+  for column and row for row, over seven guests
+  (`crates/checker/tests/memory.rs::the_row_reading_and_the_log_reading_of_a_frame_agree`).
+  Two things follow. The builders are now `O(height)` where they were `O(total events)` per
+  shard — the old `frame_rows` scanned the whole log and allocated a `vec![None; max cycle]`
+  index, *three times per shard per block*. And the **delegation mirror query's address
+  space** has to be recovered from the row, which `Row::delegation_space` does through the
+  `a7` the row reads at slot 1: one role serves every delegation type and the type *is* the
+  space (`docs/spec/delegation.md` §5.1), so a row-based builder has nowhere else to get it.
+- **The window builders probe per row rather than filtering the final state** (S26). A
+  window is `height` addresses and an execution touches far more, so scanning
+  `final_state()` once per window was `O(windows × touched words)` where probing
+  `MemoryState::ram` per row is `O(windows × height)`.
+- **`init_windows(state, h)` is `ZERO_WINDOWS`' shard list**: the distinct `addr / 4h` of
   every touched **ordinary RAM** word, ascending, without window 0
   (`docs/spec/memory.md` §3.4). `h` is the window families' one height. **Ordinary RAM and
   not every `AddressSpace::Ram` tuple** since S-IO: the two public windows and the advice
@@ -288,7 +354,7 @@ back through `content`; their schemas are `docs/spec/shard-proof.md` §10. No co
 | File | What |
 | --- | --- |
 | `src/archive.rs` (unit) | `fill` keeping the phases a prefix: post-execution, a refill and an out-of-order phase refused, each later phase's content and timing read back; `content` panicking on post-execution; an in-order later phase accepted; out-of-order, timing without content, content without timing, trailing bytes and an overlong varint refused; every one of the reader's fifteen part-disagreement refusals (a buffer of rows for each init family among them), a mis-tagged section and bytes after the post-execution content refused as a named `Err`, never a panic, beside the untouched content; the constructor refusing parts that disagree |
-| `tests/log.rs` | the address-space tags against `constants::address_space` (all three delegation spaces included, and 7 as the next unclaimed tag), exactly which addresses each space has — **`Ram` is wider than ordinary RAM since S-IO and a delegation space is not**: a delegation anchor's address is a frame base, so its space is `in_ram`, while `Ram` is `addressable`, which also admits the two public windows and the advice region — and which spaces chain |
+| `tests/log.rs` | the address-space tags against `constants::address_space` (all four delegation spaces included, and 8 as the next unclaimed tag), exactly which addresses each space has — **`Ram` is wider than ordinary RAM since S-IO and a delegation space is not**: a delegation anchor's address is a frame base, so its space is `in_ram`, while `Ram` is `addressable`, which also admits the two public windows and the advice region — and which spaces chain |
 | `tests/plan.rs` | acceptance 9: occupancy 0 / 1 / height / height+1 → 0 / 1 / 1 / 2 at every menu height, zero-occurrence families (both init families among them), the whole 38-bit clock at 2^16, purity, a mismatched profile refused |
 | `tests/memory.rs` | `constraints::memory`'s query table against `Role` in `ROLES` order, the pc query first, names included — queries 1–8, `Role::Delegate`'s frame columns spelled `deleg_*` rather than `delegate_*`, which is written out rather than derived so a rename on one side alone still fails; `frame_queries(KECCAK_F)` panicking, since a delegation family is invoked rather than decoded; **every family's frame equal to the union of its instructions' queries**, taken over all 59 `Instr` variants with the per-instruction queries written from `execution-trace.md` §4 and the routing from `program::row_kind`, so the two tables cannot drift; the finals of a hand-written two-cycle log; `build_boundary_finals` refusing a pc that does not end at `HALT_PC` and a nonzero `x0`; `build_memory_columns` refusing a cycle the log lacks; `build_frame_witness`' gap columns at the chunk's edge, gaps `2^19 − 1`, `2^19` and `2^19 + 3`; a RAM write at `4h`, the first word of window 1, in window 1's columns alone |
 

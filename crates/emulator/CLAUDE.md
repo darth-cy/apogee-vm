@@ -27,6 +27,20 @@ pub fn run(image: &ProgramImage, io: &GuestIo) -> Result<Execution, EmuError>;
 pub fn trace_run(image: &ProgramImage, io: &GuestIo, tables: &DecodedTables, config: &VmConfig)
     -> Result<(FamilyTraces, MemoryEventLog, CycleProfile, Execution), EmuError>;
 
+// S26: the PULL-BASED tracer. One partial buffer per family and the last-access tables,
+// and nothing that grows with the cycle count. `docs/spec/streaming.md`.
+pub struct ShardChunk { pub family: FamilyId, pub index: u32, pub rows: ChunkRows }
+pub enum ChunkRows { Cycles(Box<FamilyTrace>), Invocations(DelegationTrace) }
+pub struct StreamedExecution { pub state: MemoryState, pub profile: CycleProfile,
+                               pub execution: Execution }
+pub struct StreamingRun<'a> { /* a Machine with a streaming recorder */ }
+impl<'a> StreamingRun<'a> {
+    pub fn new(image: &ProgramImage, io: &'a GuestIo, tables: &'a DecodedTables,
+               config: &VmConfig) -> Result<StreamingRun<'a>, EmuError>;
+    pub fn next_shards(&mut self) -> Result<Vec<ShardChunk>, EmuError>;  // empty == exited
+    pub fn finish(self) -> Result<(Vec<ShardChunk>, StreamedExecution), EmuError>;
+}
+
 // S21: the reference permutation, and the frame's two readings of it.
 pub fn keccak_f(state: &mut [u64; 25]);
 pub fn lanes_of(words: &[u32; 50]) -> [u64; 25];
@@ -56,10 +70,29 @@ compatibility stream, which `qemu-riscv32` can be compared against and which a p
 none of; `stderr` is fd 2, diagnostics, archived nowhere.
 
 ## Frozen invariants
-- **One core.** `run` and `trace_run` execute through the same `Machine`; the tracing
-  path differs only in a `Recorder` that receives each cycle's staged queries. A cycle
-  stages its queries by role as it executes, and commits them — pc query first, then
+- **One core.** `run`, `trace_run` and `StreamingRun` execute through the same `Machine`;
+  the tracing paths differ only in a `Recorder` that receives each cycle's staged queries.
+  A cycle stages its queries by role as it executes, and commits them — pc query first, then
   roles in order — only when it completes, so a fatal error leaves nothing behind.
+- **There is ONE `Recorder::record`, and the two tracing paths differ in what it keeps**
+  (S26). `Keep::Whole` holds a `MemoryEventLog` and every family's every row;
+  `Keep::Streaming` holds a `MemoryState` and hands a buffer away the moment it reaches its
+  family's height. Two `record` implementations would be two traces to keep equal and the
+  divergence would be silent, so the row building, the routing and the ordering are one
+  function and only the memory arm differs.
+- **A streaming buffer never holds more than `height − 1` rows at a record boundary**
+  (S26), because the flush happens inside `record` and not between instructions. That
+  matters: a `read` or `write` ecall commits one **transfer cycle** per word it moves, so a
+  single instruction can push tens of thousands of rows, and a flush that only ran per
+  instruction would overshoot a height and leave a chunk to split. With the flush where it
+  is, a chunk **is** `docs/spec/block-proof.md` §5.1's cut and there is nothing to split.
+  `tests/streaming.rs` holds every chunk to that buffer's own slice, row for row.
+- **The streaming run's shard indices and cycle profile survive a flush** (S26), because
+  the recorder counts rows per family rather than reading a buffer's length: a flushed
+  buffer is replaced by an empty one, so `len()` is no longer the occupancy.
+- **Two runs of one `(image, io)` are one execution** — no clock, no randomness, no
+  threads, and the one hash map is accessed by key — which is what lets the streaming
+  prover's two passes cut the same shards (`docs/spec/streaming.md` §2).
 - **Machine state is plain**: `[u32; 32]` registers, the pc, RAM as a hash map of 4 KiB
   pages (absent is zeros), every slot decoded once up front. Registers start at 0, `x0`
   included; the pc starts at the entry point; RAM starts as the image, plus — since S-IO —
@@ -121,6 +154,13 @@ none of; `stderr` is fd 2, diagnostics, archived nowhere.
   `-ENOSYS`, so its frame will not change when its circuit lands. A number the table does
   not list reads none. The emulator spells no ABI number itself;
   `crates/constants/tests/ecall_abi.rs` checks that.
+- **A delegation ecall's own answer can be a fatal error, and `MOD_MUL`'s is** (S26). The
+  other three delegations are total on their frames: any 200, 96 or 100 bytes are a state, a
+  triple of `Fr`s or an operand pair. A modular multiply is not — `a · b mod 0` is nothing —
+  so `mod_mul_frame` returns `EmuError::DelegationFrame { detail: "the modulus is zero" }`
+  and the execution stops. That is a **guest** error like a misaligned load, not an answer,
+  and the circuit agrees by construction: its `out < m` borrow chain cannot hold at `m = 0`,
+  so a zero-modulus row is unprovable rather than provable-with-a-wrong-answer.
 - **A delegation ecall performs the permutation and answers 0** (S21). The arm keys on
   `program::delegation_family(n)`, never on a literal: it reads `a0` as the frame base,
   refuses a misaligned or out-of-window one as the ordinary `Misaligned` / `OutOfBounds`
@@ -170,10 +210,11 @@ docker run --rm -v "$PWD":/w -w /w -e CARGO_TARGET_DIR=/tmp/t rust:latest bash -
 | `tests/keccak.rs` | `keccak_f` against `tiny-keccak`: the all-zero state, the all-ones state, **all 1,600 single-bit states**, a random walk, and `lanes_of`/`words_of` round-tripping. 7 tests |
 | `tests/guests.rs` | the guests' host-computed answers (fib, heap, atomics, rvc-dense), acceptance 10 (echo's `-ENOSYS` fallback computes the S02 permutation), orderbook's fd 3 invariance, `opcodes` executes all 58 non-trapping mnemonics and every instruction of its compressed block, acceptance 11 (seven misaligned kinds, both paths), `run` == `trace_run`, **the recorded public input is what the host supplied and not the prefix the guest consumed** — a cursor is guest state and a statement is not; **S-IO's mechanism executed**, over `guests/public-io` — the guest reads its public input with ordinary loads, checks its advice against it and leaves its result in the journal, which the executor reads back out of the window at exit; advice the public input does not commit to publishes nothing; asking for advice that was not supplied is the fatal `OutOfBounds`, because no advice means no region; and a public input longer than its window is refused by name before the first cycle; and **S21's acceptance 3**: the six digests `guests/keccak-test` checks itself against, re-derived from `tiny-keccak` and read out of the guest's own source so a stale literal cannot pass, and both keccak guests run to their exit statuses under the delegation ecall |
 | `tests/trace.rs` | acceptance 3 (balance, heap traffic included), 4 (a corrupted RAM read, register write mid-chain, pc write and gap, a forged initial value, and a stale read, each named), 5 (the four-slot clock over every event; `amoadd.w` fills all four slots), 6 (routing), the frame table — roles and slots — restated from the spec and checked on every row, the halting sentinel (the exit row alone writes `HALT_PC`, as the last pc write; every other pc write even), ecall transfers with every byte held to the recorded streams, every ecall answering as the ABI says (must-be-exact 2 without QEMU), the rows rebuilding the log exactly, `final_state`, and `trace::init_windows` (fib's stack window at 2^22, 2^20 and 2^16; every traced guest's list exactly its touched windows above 0 at every height, and passing `program::check_memory_windows`) |
+| `tests/streaming.rs` | **S26**: `StreamingRun` against `trace_run` over twelve guests — every chunk equal to that family's own slice of the whole buffer row for row, the chunk set equal to `trace::plan_shards`' counts, no chunk longer than its height, the final `MemoryState` equal to the log's (and the window list at three heights and the boundary read off it), and the profile and `Execution` equal. `keccak-test` and `recursion-ops` are in the list for the `Invocations` arm and `guests/shards` for the flush path: its add/sub family runs 1,064,970 cycles, so at `2^16` it fills **sixteen** buffers before its last short one, and without it every chunk would come from the tail |
 | `tests/archive.rs` | acceptance 7 (byte-identical round trip, hash-equal payloads, answers without re-execution, `io_digest`) and 8 (five phases, the timing section byte for byte, out-of-order refused by byte patch) |
 | `tests/qemu_outputs.rs` | **`#[ignore]`d** — the ten-guest suite (`opcodes`, `rvc-dense`, `fib`, `heap`, `atomics`, `consistency` and the four family guests) run under both executors, agreeing on the exit status and on fd 1; the negative control, which holds one QEMU run against the emulator's answer for a *different* input and requires a disagreement; and `ebreak`, which stops both executors and neither cleanly |
 | `tests/revm.rs` | **S24**, over `guests/revm-block`, which is built from source rather than read from a committed ELF. In the `test` step: the committed `BlockWitness` is canonical and re-encodes to itself, each canonicity rule refuses by name, the output commitment's three sections read back field by field, native host revm produces the committed output, every keccak-f frame the workload delegated is `tiny-keccak`'s answer, a block whose transactions do not fit its gas limit is refused — including the case revm cannot see, two transactions that each fit the header and together do not — and `BLOCKHASH` still answers `EmptyDB`'s placeholder, which is the pin on the gap that keeps `BlockWitness` unfrozen. **`#[ignore]`d, and CI asks for them by name** at `APOGEE_GUEST_PROFILE=release`: the derived family set (`KECCAK_F` in, S23's two out, every instruction a live row of exactly one family), the guest's **journal** against native revm's answer on the same witness — and its fd 1 empty, the provable binary writing none — the harvested frames against the committed ones, the cycle and occupancy report, and the image against the two ceilings its height turns on. One more needs `qemu-riscv32`: the same binary under both executors commits the same bytes, which is the delegation against the software fallback end to end |
-| `tests/consistency.rs` | the three-way consistency suite over `guests/consistency`: host and emulator agree on every corpus input (fd 1 by section, exit status, a panic's message, line and column); every workload, fault and bad input exercised; `trace_run` == `run` and the log balances and ends on `HALT_PC`, a nonzero exit included, with every **cycle-owning** family and all eight M instructions executed — the exemption is `constants::family::CYCLE_OWNING`, so it covers the two RAM window families, the three delegation ones and, since S-IO, the two public value families and `ADVICE_WINDOWS`; the heap probes exit 71; a flipped byte caught at its workload and every leg's flip classified; **`#[ignore]`d** — the same corpus with QEMU as the third leg |
+| `tests/consistency.rs` | the three-way consistency suite over `guests/consistency`: host and emulator agree on every corpus input (fd 1 by section, exit status, a panic's message, line and column); every workload, fault and bad input exercised; `trace_run` == `run` and the log balances and ends on `HALT_PC`, a nonzero exit included, with every **cycle-owning** family and all eight M instructions executed — the exemption is `constants::family::CYCLE_OWNING`, so it covers the two RAM window families, the four delegation ones and, since S-IO, the two public value families and `ADVICE_WINDOWS`; the heap probes exit 71; a flipped byte caught at its workload and every leg's flip classified; **`#[ignore]`d** — the same corpus with QEMU as the third leg |
 
 The guests are the committed ELFs in `crates/loader/tests/vectors/`, pinned there — except
 in `tests/consistency.rs`, which builds `guests/consistency` from source at test time so

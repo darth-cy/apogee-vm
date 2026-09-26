@@ -2154,6 +2154,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "profiler"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "emulator",
+ "host",
+ "isa",
+ "loader",
+ "program",
+ "serde",
+ "serde_json",
+ "trace",
+]
+
+[[package]]
 name = "program"
 version = "0.1.0"
 dependencies = [

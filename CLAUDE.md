@@ -22,10 +22,15 @@ docs/
                  jump-branch-slt.md, shift-bitwise.md, mul-div.md, memory-ops.md;
                  block-proof.md, the block layer: BlockProof, verify_block, ts windows; and
                  delegation.md, THE delegation ABI: the ecall convention, the frame, the
-                 anchor, static detachment, the three delegation circuits, and the
+                 anchor, static detachment, the four delegation circuits, and the
                  guest-target backend; and
                  revm-block.md, S24's two wire formats: the output commitment, frozen,
-                 and BlockWitness, deliberately NOT frozen; and
+                 and BlockWitness, deliberately NOT frozen -- §1.6 is S26's blob-price
+                 field, recorded rather than derived; and
+                 streaming.md, S26's two-pass prover: what survives an execution, the
+                 shard cut a flush makes, and the backpressure; and
+                 profiling.md, S26's cycle profiler: the pc histogram, the ordered
+                 classification rules and how a candidate is priced; and
                  public-values.md, S-IO's THREE KINDS OF MEMORY: the two public windows
                  and what binds them, the advice region and what does not, and why the
                  fd/syscall API is a compatibility wrapper and not the source of truth
@@ -40,25 +45,28 @@ crates/
   srs/           snarkjs .ptau ingestion, the SRS archive, univariate KZG; std
   pcs/           Mercury commit/open/verify, RLC batching, deferred pairings
                  and the accumulator, plus the typed G1 absorption; std
-  loader/        ELF parsing, RVC expansion, ProgramImage; std
+  loader/        ELF parsing, RVC expansion, ProgramImage, and the symbol table read
+                 beside the image and never into it; std
   isa/           the RV32IMAC instruction model and the 32-bit decoder; no deps
   program/       decoded per-family tables, VmConfig derivation, program identity and the image
                  column; re-exports the statement descriptor and window rules from
                  verifier-core; std
-  trace/         the memory event log and its self-check, the family buffers, the cycle
+  trace/         the memory event log and its self-check, the last-access tables apart
+                 from it, the family buffers and a shard's borrowed row slices, the cycle
                  profile and shard plan, the TraceArchive snapshot, and the memory
-                 argument's column builders; std
-  emulator/      the RV32IMAC reference emulator and its tracing path, plus the
-                 output-level QEMU oracle; std
+                 argument's column builders -- over rows and tables, never the log; std
+  emulator/      the RV32IMAC reference emulator, its tracing path, the pull-based
+                 streaming tracer, plus the output-level QEMU oracle; std
   constraints/   circuits as data: PolyAddress, GateDef, LayerSpec, CircuitArtifact, the
                  laws, the cache-free compilation and the wire form; `memory`: the per-family frames,
                  the two window artifacts and check_memory; and `lookup`: the LogUp
                  channels, their gated tuples, the fraction tree and the discharge rules;
                  `add_sub`: S16's family circuit; `jump_branch_slt`: S17's; `shift_bitwise`
                  and `mul_div`: S18's two; `mem_word`, `mem_subword` and `atomics`: S19's
-                 three; `delegation`: the frame, the anchor and the layered builder S23's
-                 two circuits share; `keccak`: S21's delegation circuit; `poseidon2` and
-                 `fr_arith`: S23's; `gadgets`: the is-zero and
+                 three; `delegation`: the frame, the anchor and the layered builder the
+                 delegation circuits share; `keccak`: S21's delegation circuit; `poseidon2`
+                 and `fr_arith`: S23's; `mod_mul`: S26's, `a·b mod m` over a WITNESSED
+                 modulus; `gadgets`: the is-zero and
                  comparison gadgets;
                  `family_circuit`: the registry, now every family; no_std
   gkr-verify/    the GKR verifier half: the gate kernel, the layer sumcheck verifier and
@@ -79,8 +87,9 @@ crates/
                  disk; std
   prover/        the verifying key's construction, family registration and fills, the
                  global commit phase, prove_shard, prove_block, the phase snapshots and
-                 resume, and `metrics`, the proving harness behind the workspace's one
-                 cargo feature; std
+                 resume, `streaming`, the two-pass prover whose peak does not grow with
+                 the shard count, and `metrics`, the proving harness behind the
+                 workspace's one cargo feature; std
   checker/       the standalone law validators and lookup rules, the padding, padding-identity
                  and witness-row checks, the native lookup evaluator, the memory_roots hook,
                  the artifact cross-check, the circuit dump, the transcript-tape validator,
@@ -89,17 +98,22 @@ crates/
                  guest-only, and NOT a workspace member
 guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, opcodes/, heap/, consistency/,
                  addsub/, control/, alu/, mem/, shards/, keccak-test/, keccak-unused/,
-                 recursion-ops/, recursion-unused/, revm-block/, public-io/
+                 recursion-ops/, recursion-unused/, revm-block/, public-io/, mod-mul-ops/
                  -- their own workspace; see guests/Cargo.toml and docs/guest-program-manual.md
+  vendor/        upstream crates vendored so a GUEST can patch them, through
+                 guests/Cargo.toml's [patch.crates-io]; see guests/vendor/README.md.
+                 S26 vendored k256 0.13.4 and routes its field multiply through MOD_MUL
 assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 handoff
 tools/
+  profiler/      the cycle profiler: where a guest's RV32 cycles go, by function and by
+                 semantic workload. Nothing proving-related
   kat-gen/       regenerates the committed Fr, multilinear, curve, MSM, SRS and G1-absorption
                  vectors from arkworks, the Mercury proof fixture from `pcs` itself, the ISA
                  corpus via llvm-objdump, the identity pin from `program` itself, S13's
                  toy circuit artifacts, defined there and compiled by `constraints`,
                  S14's memory artifacts, written from `constraints::memory`'s constructors,
                  S15's lookup toy, every registered execution family's circuit, written from
-                 `constraints`, the three delegation circuits **by digest** (the artifacts
+                 `constraints`, the four delegation circuits **by digest** (the artifacts
                  are megabytes),
                  the generic table's commitments over the ceremony, S20's global
                  transcript tape, and S24's synthetic block -- the witness, what native
@@ -156,11 +170,12 @@ APOGEE_GUEST_PROFILE=release cargo test -p emulator --test revm -- --ignored a3_
 cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 17.5 GB peak, 203 s, 30 min on a runner
 cargo test -p prover --test acceptance -- --include-ignored --test-threads=1  # DEFERRED; S16's statement, 10.7 GB peak, 374 s
 cargo test -p verifier --test cli -- --include-ignored --test-threads=1       # DEFERRED; ditto, 10.7 GB, 44 s
-cargo test --release -p checker --test tamper -- --include-ignored --test-threads=1  # DEFERRED; one re-proof a twin, SIX statements since S23, 17.9 GB peak, 4231 s -- the slowest by wall clock, and longer since S-IO gave every statement two more shards; --release since S21
+cargo test --release -p checker --test tamper -- --include-ignored --test-threads=1  # DEFERRED; one re-proof a twin, SEVEN statements since S26, 17.9 GB peak, 4231 s -- the slowest by wall clock, and longer since S-IO gave every statement two more shards; --release since S21
 cargo test -p prover --test control -- --include-ignored --test-threads=1     # DEFERRED; S17's statement, 19.6 GB peak, 59 s
 cargo test --release -p prover --test alu -- --include-ignored --test-threads=1  # DEFERRED; S18's statement, 31.7 GB peak, 53 s
 cargo test --release -p prover --test mem -- --include-ignored --test-threads=1  # DEFERRED; S19's statement, 33.5 GB peak, 61 s
 cargo test --release -p prover --test block -- --include-ignored --test-threads=1  # DEFERRED; S20's block, 34.9 GB peak, 840 s
+cargo test --release -p prover --test streaming -- --include-ignored --test-threads=1  # DEFERRED; S26: the streamed block IS the archived one, byte for byte, over three statements
 cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1  # DEFERRED; S21's block, ELEVEN shards since S-IO, 33.7 GB peak and 131 s at S21, 254 s here at RAYON_NUM_THREADS=6
 cargo test --release -p prover --test recursion -- --include-ignored --test-threads=1  # DEFERRED; S23's block, TWELVE shards since S-IO, 35.2 GB peak and 120 s at S23, 238 s here at RAYON_NUM_THREADS=6 -- the heaviest by memory
 cargo test --release -p prover --test public_io -- --include-ignored --test-threads=1  # DEFERRED; S-IO's statement: public input in, advice checked against it, journal out
@@ -199,6 +214,19 @@ cargo run --release -p bench -- prove mini-block --hourly-usd <p> --json <path>
                                             # S25: prove a recorded block and emit a
                                             # BenchReport, table and JSON. Per-stage timings
                                             # are the TraceArchive's own phase sections
+cargo run --release -p bench -- prove mini-block --in-flight <n>
+                                            # S26: the same block through the STREAMING
+                                            # prover, byte for byte, at a peak that does not
+                                            # grow with the shard count. No archive, so the
+                                            # four clocks read differently -- the table says how
+
+cargo run --release -p profiler -- block mini-block [--top <n>] [--json <p>]
+                                            # S26: where a guest's cycles go, by function and
+                                            # by semantic workload. No network, nothing proving-
+                                            # related. `elf <file>` profiles any guest
+ETH_RPC_URL=... cargo run --release -p profiler -- record <number|latest> [--txs <n>]
+                                            # ditto over a block recorded from mainnet. The one
+                                            # verb that reads RPC; its cache is under target/
 cargo run --release -p bench -- --list      # the routines, and what each measures
 cargo run --release -p bench -- <routine>   # just that one; setup is per-routine
 
@@ -451,10 +479,10 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   multiset fill and S16's ecall constraints cite it; they do not reinvent it.
 - **Address-space tags are nonzero**: `constants::address_space` `REG = 1`, `RAM = 2`,
   `PC = 3`, so no real memory tuple is all zeros. A RAM event's address is the byte address
-  of its 4-aligned word. Since S21 there is **one space per delegation family** — 4, 5 and
-  6 — holding that family's anchor tuples and nothing else, which is what makes a request's
+  of its 4-aligned word. Since S21 there is **one space per delegation family** — 4, 5, 6
+  and, since S26, 7 — holding that family's anchor tuples and nothing else, which is what makes a request's
   mirror read answerable by an invocation of *that type* and by nothing in RAM or a
-  register. One `deleg` frame query serves all three, so its tag is not a literal but the
+  register. One `deleg` frame query serves all four, so its tag is not a literal but the
   frame's own `deleg_space` M column: a memory leaf may read no `W` column, and a type
   selector is one (`docs/spec/delegation.md` §5.1 and §10.1).
 - **Family buffers are raw live rows**, column-major in small integer types, every query's
@@ -777,7 +805,7 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   indexes `KINDS` through its `constants::extra_mask` constant and never by position: the
   stage prompt lists `amoand` and `amoor` in the opposite order to the constants.
 - **EXIT and a registered delegation number are the provable ecalls** (owner's decision,
-  S16; S21 added the second and S23 the third and fourth). The add/sub family commits one
+  S16; S21 added the second, S23 the third and fourth, S26 the fifth). The add/sub family commits one
   boolean selector per delegation type and holds every ecall row to `a7 = 93` **or** that
   type's number; what makes the gates a *partition* is that the numbers are pairwise
   distinct, which a `const` assertion over `constants::delegation::TYPES` enforces. Its fill
@@ -933,6 +961,29 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   (`docs/spec/memory.md` §4.2). Cross-shard ordering, cycle uniqueness and pc continuity
   are carried by that and nothing else; there is no pc chaining and no tag that could
   carry one.
+- **The prover has two paths and they produce one block.** `prove_block` proves an archived
+  execution; `prove_block_streaming` (S26, `docs/spec/streaming.md`) proves the guest
+  directly in **two passes** — pass 1 executes and commits each shard's `M` columns as the
+  shard fills, then runs G1-G11 over the ordered list; pass 2 re-executes and proves each
+  shard as it fills, at most `max_in_flight` at a time. It changes **when** a column exists
+  and nothing else, and `crates/prover/tests/streaming.rs` holds the two blocks equal byte
+  for byte. What it buys is a peak that does not grow with the shard count: the archived path
+  is `O(total shards)` in the commit phase (~300 MB a shard, which put the pinned full block
+  at 500-600 GB) *and* `O(cycles)` before it (~305 B a cycle between the log and the buffers,
+  ~520 GB for the same block), and the streaming path is one partial buffer per family plus
+  the last-access tables plus `max_in_flight` shards. **The archived path keeps resume, the
+  tamper harness and every committed fixture**, and the streaming path has no archive and so
+  no resume: a killed run re-executes, and execution is under 1% of a block's wall clock.
+- **A shard's columns are built from that shard's ROWS and from the last-access tables**
+  (S26). `trace::build_memory_columns` and `build_frame_witness` take a `RowSlice` — one
+  family's cut of its buffer — and derive each row's events from the row; the window
+  builders and the boundary take a `trace::MemoryState`, the last-access tables apart from
+  the events. Nothing in the prover reads the event log any more. Two consequences worth
+  keeping: the builders are `O(height)` where they were `O(total events)` **per shard**, and
+  the delegation mirror query's address space has to be recovered from the row's own `a7`
+  (`trace::Row::delegation_space`), one role serving every delegation type. The independent
+  reading that holds all of it honest is `checker::memory_columns_from_log`, compared column
+  for column and row for row over seven guests.
 - **Shard proving is the block's one parallel step**, and it costs memory. It starts only
   after the global commit phase closes, each task forks its transcript from the same
   global state, and an indexed `map` collects in order — so a block is byte-identical for
@@ -951,6 +1002,18 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   existing one at `2^16`: the stage prompt's `2^16` is impossible
   (`docs/spec/lookup.md` §3), and the two guests that read an fd 0 input are unprovable
   while `EXIT` is the only provable ecall.
+- **A fork parameter is recorded, never hardcoded** (S26, `docs/spec/revm-block.md` §1.6).
+  EIP-4844's blob gas price derives from the excess through `BLOB_BASE_FEE_UPDATE_FRACTION`,
+  which **keeps moving** — 3,338,477 at Cancun, 5,007,716 at Prague, raised again on
+  Fusaka's BPO schedule — and **revm 42 knows it only up to Prague**. So the guest computed
+  4,387,037,219,060,994 where the chain says 5,055,772, and every block carrying a type-3
+  transaction refused to execute; S25 never saw it because the pinned mini-block's two
+  transactions are both type-2 and nothing read the number. `BlockEnvWitness::blob_gasprice`
+  carries it now, read from `eth_feeHistory`'s `baseFeePerBlobGas` — **not** a receipt's
+  `blobGasPrice`, which a node reports only on type-3 receipts — and the guest runs no
+  `fake_exponential` at all, which is worth 2.0% of a mini-block's cycles. It is the same
+  rule S25 learned twice: an absent account is recorded rather than inferred, an ancestor
+  hash is recorded rather than invented.
 - **`BlockWitness` is NOT frozen, and `revm`'s version is** (owner's decisions, S24).
   `prompts/S24-revm.md` asked to freeze the witness; the owner withdrew that at the close
   of the stage because a field it is already known to need is missing. revm answers
@@ -987,6 +1050,23 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   selects an upstream crate's features and always was allowed, which is how
   `alloy-primitives`' `native-keccak` routes every keccak in a revm image through the S21
   shim.
+- **A guest may also *vendor* one, and then the copy lives under `guests/vendor`**
+  (S26). The same licence, one step further: when the hook a delegation needs does not
+  exist upstream, the crate is copied in verbatim and patched, `guests/Cargo.toml`'s
+  `[patch.crates-io]` makes the copy the one that compiles, and `guests/vendor/README.md`
+  lists every changed file so the diff a reviewer reads is that list and not a crate. S26
+  vendored `k256` 0.13.4 to route `FieldElement10x26::mul` and `::square` through the
+  `MOD_MUL` delegation — two changed files, and **−24.2%** of the pinned mini-block's guest
+  cycles. Three consequences worth knowing. The **root workspace is not patched**, so
+  `crates/emulator/tests/revm.rs`' native revm oracle runs upstream's software multiply,
+  which is the only reason the oracle is worth anything. `crates/prover/tests/
+  one_feature.rs` **skips `guests/vendor`** — an upstream crate's `[features]` table is that
+  crate's, and it was already invisible when the same crate came from crates.io — and
+  `the_vendored_crates_are_the_ones_a_guest_patches` holds every directory there to being a
+  crate `[patch.crates-io]` names, so a copy nothing compiles fails rather than sitting
+  there. And cargo does **not** cap lints on a path dependency, so a guest build now prints
+  the 12 warnings `k256` 0.13.4's own source raises under this toolchain; they are
+  upstream's, and being able to read the code that runs is what they pay for.
 - **`guests/revm-block` has no committed ELF**, and it is the one guest that does not
   (owner's decision, S24). It is 2.2 MB at `--release` and 7.8 MB at `debug`, where it
   expands to 1.88 million instruction slots; nothing is derived from its bytes but its
@@ -1071,6 +1151,7 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
 | S24 — revm guest, synthetic-state block | done | `docs/handoff/S24-revm.md` |
 | S-IO — Public values, private advice, and the I/O binding | done | `docs/handoff/S-IO.md` |
 | S25 — Witness pipeline, real blocks, bench harness | done | `docs/handoff/S25-block.md` |
+| S26 — Cycle reduction: streaming prover, cycle profiler, `MOD_MUL` | done | `docs/handoff/S26-cycle.md` |
 
 **S-IO takes no number, and that is deliberate** (owner's decision). It is not one of the
 original twenty-seven stages — it is the stage those twenty-seven forgot, inserted after

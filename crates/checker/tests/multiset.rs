@@ -130,7 +130,7 @@ fn fib() -> Fib {
         ]
     );
     assert_eq!(plan.len(), FRAMES);
-    let finals = build_boundary_finals(&t.log);
+    let finals = build_boundary_finals(t.log.state());
     Fib {
         t,
         memory,
@@ -680,7 +680,7 @@ fn every_touched_ram_word_has_exactly_one_teardown_row() {
         let t = traced(name, input);
         let memory = memory_challenges();
         let mut ids = vec![0];
-        ids.extend(init_windows(&t.log, HEIGHT));
+        ids.extend(init_windows(t.log.state(), HEIGHT));
         let windows = window_shards(&t, &memory);
         let mut rows = Vec::new();
         for (w, shard) in ids.iter().zip(&windows) {
@@ -1174,7 +1174,7 @@ fn a_query_below_ram_origin_balances_only_without_the_head_mask() {
 #[test]
 fn window_rules_refuse_each_single_change_of_fibs_statement() {
     let t = traced("fib", 24);
-    let windows = init_windows(&t.log, HEIGHT);
+    let windows = init_windows(t.log.state(), HEIGHT);
     assert_eq!(windows, [STACK_WINDOW]);
     let check = |init, zero, windows: &[u32]| {
         check_memory_windows(&t.config, &counts(&t, init, zero), windows)
@@ -1233,7 +1233,7 @@ fn prefix(t: &Traced) -> MemoryEventLog {
 #[should_panic(expected = "not HALT_PC")]
 fn the_finals_refuse_a_trace_stopped_before_its_exit_row() {
     let t = traced("fib", 24);
-    build_boundary_finals(&prefix(&t));
+    build_boundary_finals(prefix(&t).state());
 }
 
 /// Control C4, halting, the verifier's half: the same prefix's statement — one
@@ -1262,7 +1262,7 @@ fn a_prefix_claiming_halt_pc_does_not_reconcile() {
     }
     assert!(shards.len() > 1, "more than one family ran");
     shards.push(window_shard(&log, &t.image, 0, &memory));
-    for w in init_windows(&log, HEIGHT) {
+    for w in init_windows(log.state(), HEIGHT) {
         shards.push(window_shard(&log, &t.image, w, &memory));
     }
     let mut finals = BoundaryFinals {
@@ -1284,7 +1284,8 @@ fn a_prefix_claiming_halt_pc_does_not_reconcile() {
             AddressSpace::Ram
             | AddressSpace::KeccakF
             | AddressSpace::Poseidon2
-            | AddressSpace::FrArith => {}
+            | AddressSpace::FrArith
+            | AddressSpace::ModMul => {}
         }
     }
     assert_ne!(pc, HALT_PC);

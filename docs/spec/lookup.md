@@ -99,7 +99,7 @@ reaching this channel's assertion and panicking inside `VerifyingKey::check`.
 **The way out of that floor is to carry no channel at all, and S21 took it.** A delegation
 family's rows are invocations rather than cycles, so `2^8` rows is a sensible shard and `2^16`
 is not reachable at any price (`docs/spec/delegation.md` §9). At `2^8` no range channel's table
-fits, so all three delegation families carry **none** — no `TIMESTAMP`, no `RANGE16`, no
+fits, so all four delegation families carry **none** — no `TIMESTAMP`, no `RANGE16`, no
 `GENERIC`, no `DECODER`, no multiplicity column — and every bound they make is a bit
 decomposition with a booleanity gate of its own. S23's two pay the same price in a second
 place: a frame value's **canonicity** is an eight-limb borrow chain against `p` whose limbs are

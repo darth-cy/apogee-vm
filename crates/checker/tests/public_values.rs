@@ -163,7 +163,7 @@ fn the_input_window_column_is_the_verifiers_own_layout() {
     let t = traced("fib", 24);
     let words = public_io_words(&t.input);
     let columns = build_value_window_columns(
-        &t.log,
+        t.log.state(),
         &words,
         family::PUBLIC_INPUT_WINDOW,
         family::PUBLIC_WINDOW_HEIGHT as usize,

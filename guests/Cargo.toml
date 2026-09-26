@@ -11,7 +11,20 @@
 # toolchain, because rustup walks up from the working directory.
 [workspace]
 resolver = "2"
-members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "consistency", "addsub", "control", "alu", "mem", "shards", "keccak-test", "keccak-unused", "recursion-ops", "recursion-unused", "revm-block", "public-io"]
+members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "consistency", "addsub", "control", "alu", "mem", "shards", "keccak-test", "keccak-unused", "recursion-ops", "recursion-unused", "revm-block", "public-io", "mod-mul-ops"]
+
+# `k256` is vendored and patched: `FieldElement10x26::mul` and `::square` route
+# through the `MOD_MUL` delegation on the guest target. It is the accelerator
+# S26's profile ranked first -- 36.8% and 7.6% of a whole mainnet block's cycles
+# in one function each -- and `guests/vendor/README.md` is the account of the
+# change and how to refresh it. The patch reaches `revm-precompile`'s `ecrecover`
+# through cargo's resolution and nothing else changes.
+#
+# The vendored crate is a workspace member by cargo's own rule (a path dependency
+# inside the workspace directory), which is why `cargo fmt --all` covers it; its
+# `[features]` table is the one `crates/prover/tests/one_feature.rs` skips.
+[patch.crates-io]
+k256 = { path = "vendor/k256" }
 
 [workspace.package]
 version = "0.1.0"

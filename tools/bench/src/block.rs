@@ -32,7 +32,6 @@ use std::time::Instant;
 
 use constants::family;
 use host::fixture::{self, Mode, Pin};
-use program::ProgramParams;
 use srs::Srs;
 
 use crate::report::{self, BenchReport, Phases};
@@ -69,6 +68,11 @@ pub struct Options {
     /// Use a toy SRS rather than the ceremony. Same timings, different
     /// identity.
     pub toy_srs: bool,
+    /// Prove with the **streaming** prover, holding at most this many filled
+    /// shards at once (`docs/spec/streaming.md` §5), rather than with the
+    /// archived `prove_block`. The block is byte-identical either way; what
+    /// differs is the peak.
+    pub in_flight: Option<usize>,
 }
 
 pub fn run(options: &Options) {
@@ -112,8 +116,14 @@ pub fn run(options: &Options) {
         None => return,
     };
 
-    let elf = build_guest(pin.mode);
-    let params = heights();
+    let elf = match fixture::build_revm_guest(pin.mode) {
+        Ok(elf) => elf,
+        Err(e) => {
+            println!("prove: {e}");
+            return;
+        }
+    };
+    let params = fixture::revm_params();
 
     let setup_started = Instant::now();
     let setup = match host::setup(&elf, &params, srs.0) {
@@ -131,34 +141,60 @@ pub fn run(options: &Options) {
         advice: witness,
         hint: Vec::new(),
     };
-    let proven = match host::prove(&setup, &io) {
-        Ok(proven) => proven,
-        Err(e) => {
-            println!("prove: {e}");
-            return;
+    let proving_started = Instant::now();
+    let (block, exit_code, cycles, phases) = match options.in_flight {
+        // The streaming path. There is no archive and so no five phase
+        // sections: the four clocks the `StreamingReport` carries are mapped
+        // onto the same four names the report already has, and the printed
+        // table says how (`crate::report::BenchReport::in_flight`).
+        Some(n) => {
+            let (block, report) = match prover::prove_block_streaming(&setup, &io, n) {
+                Ok(pair) => pair,
+                Err(e) => {
+                    println!("prove: {e}");
+                    return;
+                }
+            };
+            let phases = Phases {
+                execution_ms: millis(report.pass1_execute_ns + report.pass2_execute_ns),
+                commit_ms: millis(report.pass1_commit_ns),
+                gkr_ms: millis(report.pass2_prove_ns),
+                opening_ms: 0.0,
+                final_ms: 0.0,
+            };
+            let exit_code = block.statement().exit_status as i32;
+            (block, exit_code, report.cycles, phases)
+        }
+        None => {
+            let proven = match host::prove(&setup, &io) {
+                Ok(proven) => proven,
+                Err(e) => {
+                    println!("prove: {e}");
+                    return;
+                }
+            };
+            let phases = Phases {
+                execution_ms: phase_ms(&proven.archive, trace::Phase::PostExecution),
+                commit_ms: phase_ms(&proven.archive, trace::Phase::PostCommit),
+                gkr_ms: phase_ms(&proven.archive, trace::Phase::PostGkr),
+                opening_ms: phase_ms(&proven.archive, trace::Phase::PostOpening),
+                final_ms: phase_ms(&proven.archive, trace::Phase::Final),
+            };
+            (proven.block, proven.exit_code, proven.cycles, phases)
         }
     };
+    let proving_ms = millis(proving_started.elapsed().as_nanos() as u64);
     assert_eq!(
-        proven.exit_code, 0,
-        "the guest exited {}; a timing for a run that did not produce a journal \
-         is not a measurement of anything",
-        proven.exit_code
+        exit_code, 0,
+        "the guest exited {exit_code}; a timing for a run that did not produce a journal \
+         is not a measurement of anything"
     );
 
     let verify_started = Instant::now();
-    host::verify(&setup.vk, &proven.block).expect("the block verifies");
+    host::verify(&setup.vk, &block).expect("the block verifies");
     let verify_ms = millis(verify_started.elapsed().as_nanos() as u64);
-
-    let phases = Phases {
-        execution_ms: phase_ms(&proven.archive, trace::Phase::PostExecution),
-        commit_ms: phase_ms(&proven.archive, trace::Phase::PostCommit),
-        gkr_ms: phase_ms(&proven.archive, trace::Phase::PostGkr),
-        opening_ms: phase_ms(&proven.archive, trace::Phase::PostOpening),
-        final_ms: phase_ms(&proven.archive, trace::Phase::Final),
-    };
-    let proving_ms = millis(proven.wall_nanos);
     let (peak_rss_bytes, peak_rss_source) = report::peak_rss();
-    let statement = proven.block.statement();
+    let statement = block.statement();
 
     let mut out = BenchReport {
         fixture: options.fixture.clone(),
@@ -172,11 +208,12 @@ pub fn run(options: &Options) {
         gas_used: pin.gas_used,
         program_identity: hex(&setup.vk.identity.to_bytes()),
         srs: srs.1,
-        guest_cycles: proven.cycles,
+        in_flight: options.in_flight,
+        guest_cycles: cycles,
         cycles_per_gas: if pin.gas_used == 0 {
             0.0
         } else {
-            proven.cycles as f64 / pin.gas_used as f64
+            cycles as f64 / pin.gas_used as f64
         },
         shards: setup
             .program
@@ -187,7 +224,7 @@ pub fn run(options: &Options) {
             .map(|((f, _), count)| (family_name(*f), *count))
             .collect(),
         total_shards: statement.shard_counts.iter().sum(),
-        proof_bytes: proven.block.to_bytes().len(),
+        proof_bytes: block.to_bytes().len(),
         statement_bytes: statement.to_bytes().len(),
         setup_ms,
         phases,
@@ -208,7 +245,7 @@ pub fn run(options: &Options) {
     let journal = std::fs::read(dir.join(fixture::journal_file(&options.fixture)))
         .expect("the pinned journal");
     assert_eq!(
-        proven.journal, journal,
+        statement.output, journal,
         "the proved journal is not the pinned one, so the fixture is stale"
     );
 
@@ -305,68 +342,6 @@ fn toy_srs() -> Srs {
 }
 
 /// The heights this workload is preprocessed under.
-fn heights() -> ProgramParams {
-    let mut heights = [revm_block::TRACE_HEIGHT_RELEASE; family::COUNT as usize];
-    for (f, h) in heights.iter_mut().enumerate() {
-        if program::delegation_ecall(f as u32).is_some() {
-            *h = family::DEFAULT_HEIGHTS[f];
-        }
-    }
-    ProgramParams {
-        heights,
-        bytecode_size_words: revm_block::BYTECODE_SIZE_WORDS,
-        ..ProgramParams::defaults()
-    }
-}
-
-/// The guest binary for a mode, built from source at `--release`.
-///
-/// Always `--release`, whatever `APOGEE_GUEST_PROFILE` says, for the reason
-/// `crates/prover/tests/revm.rs` gives: the heights are pinned to the release
-/// image, and the debug image needs `2^22` — four times the rows in every
-/// shard, for a build nothing proves.
-fn build_guest(mode: Mode) -> Vec<u8> {
-    let bin = mode.binary();
-    let guest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../guests/revm-block");
-    let target_dir = std::env::temp_dir().join(format!("apogee-bench-{bin}"));
-    let _ = std::fs::remove_dir_all(&target_dir);
-    let mut command =
-        std::process::Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
-    command
-        .current_dir(&guest_dir)
-        .args([
-            "build",
-            "--release",
-            "--target",
-            "riscv32imac-unknown-none-elf",
-            "--bin",
-            bin,
-        ])
-        .env("CARGO_TARGET_DIR", &target_dir);
-    for key in [
-        "RUSTFLAGS",
-        "CARGO_ENCODED_RUSTFLAGS",
-        "CARGO_BUILD_RUSTFLAGS",
-        "CARGO_BUILD_TARGET",
-        "RUSTC_WRAPPER",
-        "RUSTC_WORKSPACE_WRAPPER",
-    ] {
-        command.env_remove(key);
-    }
-    let out = command.output().expect("running cargo for the guest");
-    assert!(
-        out.status.success(),
-        "{bin}: guest build failed\n{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let elf = target_dir
-        .join("riscv32imac-unknown-none-elf/release")
-        .join(bin);
-    let bytes = std::fs::read(&elf).unwrap_or_else(|e| panic!("reading {}: {e}", elf.display()));
-    let _ = std::fs::remove_dir_all(&target_dir);
-    bytes
-}
-
 fn phase_ms(archive: &trace::TraceArchive, phase: trace::Phase) -> f64 {
     archive
         .timing(phase)
@@ -400,6 +375,7 @@ fn family_name(id: u32) -> String {
         family::PUBLIC_INPUT => "PUBLIC_INPUT",
         family::PUBLIC_OUTPUT => "PUBLIC_OUTPUT",
         family::ADVICE_WINDOWS => "ADVICE_WINDOWS",
+        family::MOD_MUL => "MOD_MUL",
         _ => return format!("family {id}"),
     };
     name.to_string()
@@ -408,10 +384,14 @@ fn family_name(id: u32) -> String {
 /// `--help` for this verb.
 pub fn usage() -> &'static str {
     "  prove <fixture> [--json <path>] [--hourly-usd <price>] [--toy-srs]\n\
+     \x20            [--in-flight <n>]\n\
      \x20     prove a recorded block and emit a BenchReport as a table and, with\n\
      \x20     --json, as JSON. <fixture> is a stem under crates/host/tests/vectors,\n\
      \x20     e.g. mini-block. --hourly-usd is the machine's on-demand price, which\n\
-     \x20     is what the cost estimate is computed from."
+     \x20     is what the cost estimate is computed from. --in-flight <n> proves\n\
+     \x20     with the STREAMING prover, holding at most n filled shards at once:\n\
+     \x20     the same block byte for byte, at a peak that does not grow with the\n\
+     \x20     shard count (docs/spec/streaming.md)."
 }
 
 /// Parse the verb's arguments.
@@ -420,6 +400,7 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
     let mut json = None;
     let mut hourly_usd = None;
     let mut toy_srs = false;
+    let mut in_flight = None;
     let mut at = 0;
     while at < args.len() {
         match args[at].as_str() {
@@ -438,6 +419,18 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
                         .map_err(|e| format!("--hourly-usd is not a number: {e}"))?,
                 );
             }
+            "--in-flight" => {
+                at += 1;
+                let n = args
+                    .get(at)
+                    .ok_or("--in-flight needs a count")?
+                    .parse::<usize>()
+                    .map_err(|e| format!("--in-flight is not a count: {e}"))?;
+                if n == 0 {
+                    return Err("--in-flight must be at least 1".into());
+                }
+                in_flight = Some(n);
+            }
             "--toy-srs" => toy_srs = true,
             other if other.starts_with("--") => return Err(format!("unknown option `{other}`")),
             other if fixture.is_none() => fixture = Some(other.to_string()),
@@ -450,5 +443,6 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
         json,
         hourly_usd,
         toy_srs,
+        in_flight,
     })
 }

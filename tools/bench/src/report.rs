@@ -129,6 +129,14 @@ pub struct BenchReport {
     pub cycles_per_gas: f64,
 
     // --- the proof -------------------------------------------------------
+    /// The streaming prover's backpressure bound, or `None` for the archived
+    /// path. When it is set, the phases below read differently and the printed
+    /// table says so: `execution` is **both** passes' executor
+    /// (`docs/spec/streaming.md` §2), `commit` is pass 1's, `gkr` is pass 2's
+    /// whole proving region — the streaming path fuses the GKR proof and the
+    /// opening over one base layer — and `opening` and `final` are 0 because
+    /// there is no phase boundary there to measure.
+    pub in_flight: Option<usize>,
     /// Shards per family, by family name, in statement order.
     pub shards: Vec<(String, u32)>,
     /// Shards in the block.
@@ -248,6 +256,23 @@ impl BenchReport {
         );
 
         let _ = writeln!(out, "\ntiming (ms)");
+        if let Some(n) = self.in_flight {
+            row(
+                &mut out,
+                "prover",
+                format!("streaming, {n} shards in flight"),
+            );
+            let _ = writeln!(
+                out,
+                "  {:<24} execution is BOTH passes; gkr is pass 2's whole proving region,",
+                ""
+            );
+            let _ = writeln!(
+                out,
+                "  {:<24} the GKR proof and the opening fused over one base layer",
+                ""
+            );
+        }
         row(&mut out, "setup", ms(self.setup_ms));
         row(&mut out, "phase: execution", ms(self.phases.execution_ms));
         row(&mut out, "phase: commit", ms(self.phases.commit_ms));

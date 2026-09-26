@@ -16,11 +16,12 @@ mod memory;
 
 pub use archive::{IoStreams, Phase, PhaseTiming, TraceArchive, PHASES};
 pub use family::{
-    DelegationTrace, FamilyTrace, FamilyTraces, Query, QueryColumns, Role, Row, ROLES,
+    DelegationTrace, FamilyTrace, FamilyTraces, FrameSlice, Query, QueryColumns, Role, Row,
+    RowSlice, WordSlice, ROLES,
 };
 pub use log::{
     addressable, in_ram, AddressSpace, FinalValue, InitialMemory, MemoryEvent, MemoryEventLog,
-    SelfCheckError, DELEGATION_SPACES,
+    MemoryState, SelfCheckError, DELEGATION_SPACES,
 };
 
 pub use lookup::{build_multiplicities, check_multiplicities};
@@ -28,8 +29,6 @@ pub use memory::{
     build_boundary_finals, build_frame_witness, build_init_teardown_columns, build_memory_columns,
     build_value_window_columns,
 };
-
-use std::collections::BTreeSet;
 
 use program::{FamilyId, VmConfig};
 
@@ -103,7 +102,7 @@ pub fn plan_shards(profile: &CycleProfile, config: &VmConfig) -> ShardPlan {
 }
 
 /// The `ZERO_WINDOWS` family's shard list: the distinct RAM window ids
-/// `addr / (4 * height)` of every **ordinary RAM** word the log touches,
+/// `addr / (4 * height)` of every **ordinary RAM** word the execution touched,
 /// ascending, without window 0, which is `INIT_TEARDOWN`'s. `height` is the
 /// window families' one height. `docs/spec/memory.md` §3.4.
 ///
@@ -112,15 +111,12 @@ pub fn plan_shards(profile: &CycleProfile, config: &VmConfig) -> ShardPlan {
 /// initializes it. A zero window over either would give those words a second
 /// init row and a prover a second value to choose
 /// (`docs/spec/public-values.md` §2).
-pub fn init_windows(log: &MemoryEventLog, height: u32) -> Vec<u32> {
-    let windows: BTreeSet<u32> = log
-        .touched_addresses()
+pub fn init_windows(state: &MemoryState, height: u32) -> Vec<u32> {
+    state
+        .touched_ram_windows(height)
         .into_iter()
-        .filter(|(space, addr)| *space == AddressSpace::Ram && log::in_ram(*addr))
-        .map(|(_, addr)| addr / (4 * height))
         .filter(|w| *w != 0)
-        .collect();
-    windows.into_iter().collect()
+        .collect()
 }
 
 /// How many words the advice region holds for `advice`: its length word and

@@ -672,6 +672,51 @@ fn recursion_ops_checks_itself_under_both_delegation_ecalls() {
     }
 }
 
+/// S26's fixture: the `MOD_MUL` delegation over three moduli by name, and
+/// `k256`'s group arithmetic over the vendored field multiply, which names no
+/// shim at all. Exit 14, one per check.
+///
+/// **This is the only test of `guests/vendor/k256`'s `pack` and `unpack`.** Under
+/// `qemu-riscv32` the ecall answers `-ENOSYS` and upstream's own `mul_inner`
+/// runs, so the delegated path exists on this executor and nowhere else; what
+/// `crates/loader/tests/qemu.rs` adds is that the two agree on the answer.
+#[test]
+fn mod_mul_ops_checks_itself_under_the_delegation_ecall() {
+    let execution = run(&image("mod-mul-ops"), &io(&[])).unwrap();
+    assert_eq!(
+        execution.exit_code, 12,
+        "mod-mul-ops exited {}, and 200 + i would name the check that failed",
+        execution.exit_code
+    );
+    assert!(execution.stdout.is_empty(), "it writes nothing");
+}
+
+/// It invokes `MOD_MUL` and **only** `MOD_MUL`: it does secp256k1 field
+/// arithmetic and no `field::Fr` arithmetic, so S23's two families are not even
+/// in its config.
+#[test]
+fn mod_mul_ops_invokes_one_family() {
+    let image = image("mod-mul-ops");
+    let (tables, config) = preprocess(&image);
+    let (traces, ..) = trace_run(&image, &io(&[]), &tables, &config).expect("it traces");
+    let trace = traces
+        .delegation(constants::family::MOD_MUL)
+        .expect("MOD_MUL has a buffer");
+    assert!(!trace.is_empty(), "MOD_MUL is invoked");
+    let declared: Vec<u32> = config.families.iter().map(|(f, _)| *f).collect();
+    for absent in [
+        constants::family::POSEIDON2,
+        constants::family::FR_ARITH,
+        constants::family::KECCAK_F,
+    ] {
+        assert!(
+            !declared.contains(&absent),
+            "{} is in the config and should not be",
+            program::family_name(absent)
+        );
+    }
+}
+
 /// The invocation counts the two delegation families actually see, which is
 /// what a shard plan divides by the height.
 ///

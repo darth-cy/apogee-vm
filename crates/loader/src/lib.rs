@@ -50,6 +50,9 @@
 //! that check does not depend on any single encoding being fatal.
 
 mod rvc;
+mod symbols;
+
+pub use symbols::{function_symbols, symbol_names, FuncSymbol};
 
 use constants::guest_memory;
 

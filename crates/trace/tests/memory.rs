@@ -17,7 +17,7 @@ use loader::load_elf;
 use program::row_kind;
 use trace::{
     build_boundary_finals, build_frame_witness, build_init_teardown_columns, build_memory_columns,
-    AddressSpace, MemoryEventLog, Role, ROLES,
+    AddressSpace, FamilyTrace, MemoryEventLog, Query, Role, Row, RowSlice, ROLES,
 };
 
 /// `docs/spec/memory.md` §2.1: query 0 is the pc query, at `PC` and slot 0,
@@ -82,7 +82,7 @@ fn two_cycles(end_pc: u32, x0_write: u32) -> MemoryEventLog {
 
 #[test]
 fn the_finals_of_an_exit() {
-    let finals = build_boundary_finals(&two_cycles(1, 0));
+    let finals = build_boundary_finals(two_cycles(1, 0).state());
     assert_eq!(
         (finals.pc_ts, finals.reg_ts[0], finals.reg_ts[5]),
         (8, 5, 7)
@@ -93,19 +93,55 @@ fn the_finals_of_an_exit() {
 #[test]
 #[should_panic(expected = "build_boundary_finals: the pc's final value is 0x10008, not HALT_PC")]
 fn the_finals_refuse_a_log_that_did_not_exit() {
-    build_boundary_finals(&two_cycles(0x10008, 0));
+    build_boundary_finals(two_cycles(0x10008, 0).state());
 }
 
 #[test]
 #[should_panic(expected = "build_boundary_finals: x0's final value is 0x5, not 0")]
 fn the_finals_refuse_a_nonzero_x0() {
-    build_boundary_finals(&two_cycles(1, 5));
+    build_boundary_finals(two_cycles(1, 5).state());
 }
 
+/// A family buffer of `rows`, one row per `(cycle, queries present)` entry: the
+/// input the frame builders take since the streaming stage, which is a shard's
+/// rows rather than the whole execution's log.
+fn buffer(rows: &[Row]) -> FamilyTrace {
+    let mut trace = FamilyTrace::new(constants::family::JUMP_BRANCH_SLT, 4);
+    for row in rows {
+        trace.push(row);
+    }
+    trace
+}
+
+/// One row at `cycle` running `pc`, with one register query in `role` reading
+/// register 5, last written at `read_ts`.
+fn one_query_row(cycle: u64, pc: u32, role: Role, read_ts: u64) -> Row {
+    let mut queries = [Query::ABSENT; 8];
+    queries[role as usize] = Query {
+        addr: 5,
+        read_ts,
+        read_value: 0,
+        write_value: 0,
+    };
+    Row {
+        cycle,
+        pc,
+        next_pc: pc + 4,
+        present: 1 << role as u8,
+        queries,
+    }
+}
+
+/// `docs/spec/memory.md` §2.1: a shard holds at most its height's rows, and a
+/// builder handed more says so rather than writing a short column.
 #[test]
-#[should_panic(expected = "memory columns: the log has no cycle 3")]
-fn the_frame_refuses_a_cycle_the_log_lacks() {
-    build_memory_columns(&two_cycles(1, 0), REG_FRAME, &[2, 3], 4);
+#[should_panic(expected = "memory columns: 5 cycles do not fit 4 rows")]
+fn the_frame_refuses_more_rows_than_the_height() {
+    let rows: Vec<Row> = (1..=5)
+        .map(|c| one_query_row(c, 0x10000, Role::Rs1, 4 * c - 3))
+        .collect();
+    let trace = buffer(&rows);
+    build_memory_columns(&RowSlice::shard(&trace, 0, 5), REG_FRAME, 4);
 }
 
 /// `JUMP_BRANCH_SLT`'s query list, `[PC, RS1, RS2, RD]`: the narrowest frame,
@@ -361,36 +397,40 @@ fn the_delegation_family_has_no_query_table_frame() {
 }
 
 /// `docs/spec/memory.md` §2.4's high chunk at the chunk's edge. A hand-written
-/// log on four cycles reads `x5` with gaps 4, `2^19 − 1`, `2^19` and
-/// `2^19 + 3` — `rs1` at cycles 1 and `2^17 + 1`, `rs2` at the next two — and
-/// its pc with gaps 3, `2^19 − 1`, `2^19 − 1` and `2^19 + 3`. Each gap column
-/// holds `gap >> 19` on its rows and 0 where the cycle lacks the query, so the
-/// low chunk `gap − 2^19·hi` is below `2^19` on every row. Fails if the builder
-/// chunked `gap + 1`, or `gap` by any other width.
+/// buffer of four rows reads `x5` with gaps 4, `2^19 − 1`, `2^19` and
+/// `2^19 + 3` — `rs1` on the first two rows, `rs2` on the last two. Each gap
+/// column holds `gap >> 19` on its rows and 0 where the cycle lacks the query,
+/// so the low chunk `gap − 2^19·hi` is below `2^19` on every row. Fails if the
+/// builder chunked `gap + 1`, or `gap` by any other width.
+///
+/// The **pc** gap is 3 on every row of every execution and its high chunk is
+/// therefore always 0: the pc's last write before cycle `c` is cycle `c − 1`'s
+/// pc query, whatever family owned that cycle, so the gap is
+/// `4c − 4(c − 1) − 1`. That is also why a buffer does not store the pc query's
+/// read timestamp (`crates/trace/CLAUDE.md`), and the rows below are four
+/// cycles of one family with other families' cycles in between.
 #[test]
 fn the_gap_columns_hold_the_high_chunk_at_the_chunks_edge() {
     let c2 = (1 << 17) + 1;
     let c3 = c2 + (1 << 17);
     let c4 = c3 + (1 << 17) + 1;
-    let mut log = MemoryEventLog::new();
-    log.record(AddressSpace::Pc, 0, 4, 0x10000, 0x10004);
-    log.record(AddressSpace::Reg, 5, 5, 0, 0);
-    log.record(AddressSpace::Pc, 0, 4 * c2, 0x10004, 0x10008);
-    log.record(AddressSpace::Reg, 5, 4 * c2 + 1, 0, 0);
-    log.record(AddressSpace::Pc, 0, 4 * c3, 0x10008, 0x1000c);
-    log.record(AddressSpace::Reg, 5, 4 * c3 + 2, 0, 0);
-    log.record(AddressSpace::Pc, 0, 4 * c4, 0x1000c, 1);
-    log.record(AddressSpace::Reg, 5, 4 * c4 + 2, 0, 0);
-    let gap = |e: &trace::MemoryEvent| e.ts - e.read_ts - 1;
-    let x5: Vec<u64> = log
-        .events()
-        .iter()
-        .filter(|e| e.addr == 5)
-        .map(gap)
-        .collect();
-    assert_eq!(x5, [4, (1 << 19) - 1, 1 << 19, (1 << 19) + 3]);
-
-    let columns = build_frame_witness(&log, REG_FRAME, &[1, c2, c3, c4], 4);
+    let gap = |cycle: u64, role: Role, read_ts: u64| 4 * cycle + role.delta() - read_ts - 1;
+    assert_eq!(
+        [
+            gap(1, Role::Rs1, 0),
+            gap(c2, Role::Rs1, 5),
+            gap(c3, Role::Rs2, 4 * c2 + 1),
+            gap(c4, Role::Rs2, 4 * c3 + 2),
+        ],
+        [4, (1 << 19) - 1, 1 << 19, (1 << 19) + 3]
+    );
+    let trace = buffer(&[
+        one_query_row(1, 0x10000, Role::Rs1, 0),
+        one_query_row(c2, 0x10004, Role::Rs1, 5),
+        one_query_row(c3, 0x10008, Role::Rs2, 4 * c2 + 1),
+        one_query_row(c4, 0x1000c, Role::Rs2, 4 * c3 + 2),
+    ]);
+    let columns = build_frame_witness(&RowSlice::shard(&trace, 0, 4), REG_FRAME, 4);
     let at = |q: usize| {
         let column = &columns
             .iter()
@@ -400,7 +440,7 @@ fn the_gap_columns_hold_the_high_chunk_at_the_chunks_edge() {
         (0..4).map(|y| column.get(y)).collect::<Vec<Fr>>()
     };
     let chunks = |v: [u64; 4]| v.map(Fr::from_u64).to_vec();
-    assert_eq!(at(PC), chunks([0, 0, 0, 1]));
+    assert_eq!(at(PC), chunks([0, 0, 0, 0]));
     assert_eq!(at(RS1), chunks([0, 0, 0, 0]));
     assert_eq!(at(RS2), chunks([0, 0, 1, 1]));
 }
@@ -421,7 +461,7 @@ fn the_first_word_of_a_window_is_that_windows_alone() {
     log.record(AddressSpace::Pc, 0, 4, image.entry, 1);
     log.record(AddressSpace::Ram, 4 * h as u32, 7, 0, 0xabcd);
     let teardown = |w: u32, m: u32| {
-        let columns = build_init_teardown_columns(&log, &image, w, h);
+        let columns = build_init_teardown_columns(log.state(), &image, w, h);
         columns
             .into_iter()
             .find(|(a, _)| *a == PolyAddress::Memory(m))

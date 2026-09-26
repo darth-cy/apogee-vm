@@ -27,7 +27,7 @@
 //! | `memory`  | `crates/constraints/tests/vectors/{memory_frame,image_window,zero_window}.bin` (S14's memory artifacts) |
 //! | `lookup`  | `crates/constraints/tests/vectors/lookup_toy.bin` (S15's combined toy) |
 //! | `family`  | `crates/constraints/tests/vectors/{add_sub,jump_branch_slt}.bin` (S16's and S17's family circuits) |
-//! | `delegation` | `crates/constraints/tests/vectors/{keccak,poseidon2,fr_arith}.txt` (the three delegation circuits, by digest: the artifacts are megabytes) |
+//! | `delegation` | `crates/constraints/tests/vectors/{keccak,poseidon2,fr_arith,mod_mul}.txt` (the four delegation circuits, by digest: the artifacts are megabytes) |
 //! | `block`   | `crates/host/tests/vectors/*` (S25's recorded mini-block). **Needs `ETH_RPC_URL`; opt-in only, see `DEFAULT_GROUPS`** |
 //! | `revm`    | `crates/emulator/tests/vectors/revm_block_*` (S24's synthetic block, what native revm makes of it, and the keccak-f frames the guest delegates) |
 //! | `guests`  | the guest ELFs themselves -- opt-in only, see `DEFAULT_GROUPS` |

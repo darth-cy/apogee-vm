@@ -239,6 +239,16 @@ jobs:
       # `docs/spec/delegation.md` §5.2 is why that distinction matters for
       # a later delegation family.
       #
+      # S26 added its **seventh** statement, `guests/mod-mul-ops`: six execution
+      # shards at `2^20`, five `MOD_MUL` shards at `2^8` and the window ones,
+      # with the anchor's twins for the fourth delegation family and four
+      # witness twins of its own -- among them the quotient, the one column in a
+      # delegation row that the execution never produced, and a modulus word the
+      # call rewrote. The guest is deliberately small for this reason: its curve
+      # half is group operations and not a scalar ladder, because a ladder is
+      # constant-time over 256 bits whatever the scalar and would have made the
+      # statement forty shards (`docs/handoff/S26-cycle.md` §8).
+      #
       # - name: S16's statement, proved and verified
       #   run: |
       #     cargo test -p prover --test acceptance -- --include-ignored --test-threads=1
@@ -327,6 +337,29 @@ jobs:
       #
       # - name: S20's block, proved and verified
       #   run: cargo test --release -p prover --test block -- --include-ignored --test-threads=1
+
+      # DEFERRED: cargo test --release -p prover --test streaming -- --include-ignored --test-threads=1
+      # Master rule 7, for S26's acceptance 5: **the streamed block is the block
+      # `prove_block` makes, byte for byte** (`docs/spec/streaming.md` §7). It
+      # proves three statements twice each -- S16's, a delegation one and
+      # S-IO's -- plus S16's twice more at two backpressure bounds, so it is
+      # eight real blocks and it is deferred for the reason every proving suite
+      # is: a cycle-owning family's shard cannot be smaller than `2^20` rows.
+      #
+      # What runs in ordinary CI instead is everything the streaming path does
+      # differently, and it is deliberately where the risk is:
+      # `crates/emulator/tests/streaming.rs` holds the executor's chunks to
+      # `trace_run`'s buffers row for row and its final memory state to the
+      # log's, over twelve guests including the two that make delegation calls
+      # and the one whose buffers fill sixteen times; and
+      # `crates/checker/tests/memory.rs`'
+      # `the_row_reading_and_the_log_reading_of_a_frame_agree` holds the
+      # row-reading column builders to `crates/checker`'s independent
+      # log-reading ones, column for column and row for row, over seven guests.
+      # Both are in the `test` step.
+      #
+      # - name: S26's streamed block, byte for byte the archived one
+      #   run: cargo test --release -p prover --test streaming -- --include-ignored --test-threads=1
 
       # DEFERRED: cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1
       # Master rule 7, for S21's acceptances 4 and 8. 33.7 GB peak, 131 s

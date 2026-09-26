@@ -118,8 +118,11 @@ pub fn input_of(name: &str) -> Vec<u8> {
         "heap" => 40u32.to_le_bytes().to_vec(),
         "atomics" => 37u32.to_le_bytes().to_vec(),
         "rvc-dense" => 7u32.to_le_bytes().to_vec(),
-        // Reads nothing: its exit status is its result.
-        "addsub" | "control" | "alu" | "mem" => Vec::new(),
+        // Reads nothing: its exit status is its result. `keccak-test`,
+        // `recursion-ops` and `shards` are the same shape — each counts its own
+        // checks — and `tests/streaming.rs` streams all three.
+        "addsub" | "control" | "alu" | "mem" | "keccak-test" | "recursion-ops" | "shards"
+        | "mod-mul-ops" => Vec::new(),
         // The hazards workload alone, at scale 0: 25,945 instructions, a
         // small deterministic slice of a guest this size.
         // `tests/consistency.rs` is where the rest of it runs.
@@ -147,6 +150,10 @@ pub fn exit_code_of(name: &str) -> i32 {
         "control" => 16,
         "alu" => 96,
         "mem" => 50,
+        "keccak-test" => 6,
+        "recursion-ops" => 9,
+        "shards" => 2,
+        "mod-mul-ops" => 12,
         _ => 0,
     }
 }

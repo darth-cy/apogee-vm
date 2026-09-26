@@ -18,7 +18,8 @@ use gkr_verify::BoundaryFinals;
 use loader::ProgramImage;
 use poly::{MultilinearPoly, PolyBacking};
 
-use crate::log::{AddressSpace, MemoryEvent, MemoryEventLog};
+use crate::family::{Row, RowSlice, ROLES};
+use crate::log::{AddressSpace, MemoryEvent, MemoryState};
 
 /// `values`, zero-padded to `height` rows, in the narrowest backing that holds
 /// its largest entry: `U1`, `U8`, `U16`, `U32`, or `Fr` for a timestamp past
@@ -44,81 +45,95 @@ fn column(mut values: Vec<u64>, height: usize) -> MultilinearPoly {
     MultilinearPoly::new(backing)
 }
 
-/// Each of `cycles`' frame queries, `None` where the cycle has none, from one
-/// pass over the log. `queries` is the family's query list,
-/// `constraints::memory::frame_queries`, and a slot of the result is a slot of
-/// that list.
+/// The events one row of a family buffer stands for, in log order: its pc
+/// query, then one query per role it has in [`ROLES`] order
+/// (`docs/spec/execution-trace.md` §7).
 ///
-/// An event takes the first slot of its row still free whose space and slot
-/// are its own. That is exact for every query but the three slot-2 register
-/// ones, `rs2`, `arg1` and `arg2`, which the log files in that order and which
+/// A row is a complete encoding of its events. The pc query's read timestamp is
+/// the only field a buffer does not store, because it is always the previous
+/// cycle's pc write, `4·(cycle − 1)`; every other field is in the row. What is
+/// **not** here is a delegation invocation's frame accesses: they ride this
+/// cycle's timestamp but they are the delegation family's own rows, not this
+/// one's (`docs/spec/delegation.md` §4.1), and the frame builders skipped them
+/// when they read the log.
+///
+/// `crates/trace/src/archive.rs`'s `check_parts` is the same derivation in the
+/// other direction — it holds an archived log to the rows event for event — so
+/// the two together say a row and its events are one thing said twice.
+fn row_events(row: &Row) -> Vec<MemoryEvent> {
+    let base = TS_STEP * row.cycle;
+    let mut out = Vec::with_capacity(1 + row.present.count_ones() as usize);
+    out.push(MemoryEvent {
+        space: AddressSpace::Pc,
+        addr: 0,
+        ts: base,
+        read_ts: base - TS_STEP,
+        read_value: row.pc,
+        write_value: row.next_pc,
+    });
+    let delegation = row.delegation_space();
+    for role in ROLES {
+        if let Some(q) = row.query(role) {
+            out.push(MemoryEvent {
+                space: role.space(delegation),
+                addr: q.addr,
+                ts: base + role.delta(),
+                read_ts: q.read_ts,
+                read_value: q.read_value,
+                write_value: q.write_value,
+            });
+        }
+    }
+    out
+}
+
+/// Each of `rows`' frame queries, `None` where the row has none. `queries` is
+/// the family's query list, `constraints::memory::frame_queries`, and a slot of
+/// the result is a slot of that list.
+///
+/// An event takes the first slot of its row still free whose space and slot are
+/// its own. That is exact for every query but the three slot-2 register ones,
+/// `rs2`, `arg1` and `arg2`, which [`ROLES`] orders in that order and which
 /// fill in that order: a row with `arg1` has `rs2`, and one with `arg2` has
 /// `arg1`, because an ecall's arguments are a prefix of `a0, a1, a2`
 /// (`docs/spec/execution-trace.md` §6, §7) and no other row reads `arg1`.
 ///
-/// Panics on a cycle asked for twice or that the log lacks, on `cycles.len() >
-/// height`, and — naming the event — on a query no free slot takes, which is
-/// how a frame too narrow for the family filling it fails loudly rather than
-/// dropping the event.
-fn frame_rows(
-    log: &MemoryEventLog,
-    queries: &[usize],
-    cycles: &[u64],
-    height: usize,
-) -> Vec<Vec<Option<MemoryEvent>>> {
+/// Panics on `rows.len() > height`, and — naming the event — on a query no free
+/// slot takes, which is how a frame too narrow for the family filling it fails
+/// loudly rather than dropping the event.
+fn frame_rows(rows: &RowSlice, queries: &[usize], height: usize) -> Vec<Vec<Option<MemoryEvent>>> {
     assert!(
-        cycles.len() <= height,
+        rows.len() <= height,
         "memory columns: {} cycles do not fit {height} rows",
-        cycles.len()
+        rows.len()
     );
-    let top = cycles.iter().copied().max().unwrap_or(0);
-    let mut row_of: Vec<Option<usize>> = vec![None; top as usize + 1];
-    for (i, &cycle) in cycles.iter().enumerate() {
-        assert!(
-            row_of[cycle as usize].replace(i).is_none(),
-            "memory columns: cycle {cycle} is asked for twice"
-        );
-    }
-    let mut rows = vec![vec![None; queries.len()]; cycles.len()];
-    for event in log.events() {
-        let Some(&Some(i)) = row_of.get(event.cycle() as usize) else {
-            continue;
-        };
-        // A **delegation invocation's** frame access belongs to no cycle's
-        // row: it rides the requesting cycle's timestamp at
-        // `constants::delegation::FRAME_DELTA` and is that family's row, not
-        // this one's (`docs/spec/delegation.md` §4.1). That is the one pair
-        // skipped here, named rather than inferred — an event that matches no
-        // query for any *other* reason must reach the panic below, and a
-        // silently dropped event would leave a frame column zero and an
-        // honest prover refused.
-        if event.space == AddressSpace::Ram && event.delta() == constants::delegation::FRAME_DELTA {
-            continue;
+    let mut out = vec![vec![None; queries.len()]; rows.len()];
+    for (i, slots) in out.iter_mut().enumerate() {
+        let row = rows.row(i);
+        for event in row_events(&row) {
+            let at = (0..queries.len())
+                .find(|&at| {
+                    let q = queries[at];
+                    slots[at].is_none() && frame_query_takes(q, event.space.tag(), event.delta())
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "memory columns: cycle {} has a {:?} query at slot {} that no free frame \
+                         query of {queries:?} takes",
+                        event.cycle(),
+                        event.space,
+                        event.delta()
+                    )
+                });
+            slots[at] = Some(event);
         }
-        let row = &mut rows[i];
-        let at = (0..queries.len())
-            .find(|&at| {
-                let q = queries[at];
-                row[at].is_none() && frame_query_takes(q, event.space.tag(), event.delta())
-            })
-            .unwrap_or_else(|| {
-                panic!(
-                    "memory columns: cycle {} has a {:?} query at slot {} that no free frame \
-                     query of {queries:?} takes",
-                    event.cycle(),
-                    event.space,
-                    event.delta()
-                )
-            });
-        row[at] = Some(*event);
-    }
-    for (row, cycle) in rows.iter().zip(cycles) {
         assert!(
-            row[0].is_some(),
-            "memory columns: the log has no cycle {cycle}"
+            slots[0].is_some(),
+            "memory columns: the pc query of cycle {} took no slot",
+            row.cycle
         );
     }
-    rows
+    out
 }
 
 /// An execution family's `1 + 5·queries.len()` frame columns,
@@ -127,23 +142,22 @@ fn frame_rows(
 /// value and write value. `queries` is the family's query list,
 /// `constraints::memory::frame_queries`.
 ///
-/// Row `i` is cycle `cycles[i]` — a shard's cycles, in the order given — and
-/// rows `cycles.len()..height` are padding, 0 in every column. A query the
-/// cycle lacks is 0 in every one of its columns. The pc query's address is 0,
-/// its read value the pc, its write value `next_pc` and its read timestamp the
-/// previous cycle's pc write, all as the log records them. Each column takes
-/// the narrowest backing its largest value fits.
+/// Row `i` is `rows`' row `i` — one shard's rows, in the order the buffer holds
+/// them — and rows `rows.len()..height` are padding, 0 in every column. A query
+/// the cycle lacks is 0 in every one of its columns. The pc query's address is
+/// 0, its read value the pc, its write value `next_pc` and its read timestamp
+/// the previous cycle's pc write. Each column takes the narrowest backing its
+/// largest value fits.
 ///
-/// Panics naming a cycle the log lacks or `cycles` repeats, on a cycle with a
-/// query `queries` has no place for, and on `cycles.len() > height` or a
-/// `height` that is not a power of two.
+/// Panics on a cycle with a query `queries` has no place for, and on
+/// `rows.len() > height` or a `height` that is not a power of two.
 pub fn build_memory_columns(
-    log: &MemoryEventLog,
+    rows: &RowSlice,
     queries: &[usize],
-    cycles: &[u64],
     height: usize,
 ) -> Vec<(PolyAddress, MultilinearPoly)> {
-    let rows = frame_rows(log, queries, cycles, height);
+    let cycles = rows.cycles();
+    let rows = frame_rows(rows, queries, height);
     let mut out = vec![(CYCLE, column(cycles.to_vec(), height))];
     for at in 0..queries.len() {
         let field = |f: fn(&MemoryEvent) -> u64| {
@@ -174,8 +188,8 @@ pub fn build_memory_columns(
 }
 
 /// The frame's `queries.len() + 3` witness columns, `docs/spec/memory.md` §2.4,
-/// over the rows [`build_memory_columns`] fills for the same `queries`,
-/// `cycles` and `height`:
+/// over the rows [`build_memory_columns`] fills for the same `rows`, `queries`
+/// and `height`:
 ///
 /// - `W[s] <q>_gap_hi`: `gap >> 19`, `gap = 4·cycle + Δ_q − read_ts − 1`, where
 ///   the cycle has the query at slot `s`;
@@ -188,12 +202,11 @@ pub fn build_memory_columns(
 /// every enforcing gate and every obligation of `frame_artifact` holds on
 /// every row. Panics as [`build_memory_columns`] does.
 pub fn build_frame_witness(
-    log: &MemoryEventLog,
+    rows: &RowSlice,
     queries: &[usize],
-    cycles: &[u64],
     height: usize,
 ) -> Vec<(PolyAddress, MultilinearPoly)> {
-    let rows = frame_rows(log, queries, cycles, height);
+    let rows = frame_rows(rows, queries, height);
     let chunk = lookup_channel::BITS[lookup_channel::TIMESTAMP as usize];
     let mut out = Vec::new();
     for (at, &q) in queries.iter().enumerate() {
@@ -246,7 +259,7 @@ pub fn build_frame_witness(
 /// families' one height. Panics unless the window lies inside `[0, 2^31)`, or
 /// if `height` is not a power of two.
 pub fn build_init_teardown_columns(
-    log: &MemoryEventLog,
+    state: &MemoryState,
     image: &ProgramImage,
     ram_window: u32,
     height: usize,
@@ -266,15 +279,17 @@ pub fn build_init_teardown_columns(
             false => 0,
         })
         .collect();
-    for f in log.final_state() {
-        let a = f.addr as u64;
-        if f.space != AddressSpace::Ram || a < first || a >= first + words {
+    // Probed per row rather than filtered out of the whole final state: a
+    // window is `height` addresses and an execution touches far more, so
+    // scanning the state once per window is `O(windows x touched words)` where
+    // this is `O(windows x height)`.
+    for y in 0..height {
+        if !live(y) {
             continue;
         }
-        let y = ((a - first) / 4) as usize;
-        if live(y) {
-            ts[y] = f.ts;
-            value[y] = f.value as u64;
+        if let Some((t, v)) = state.ram((first + 4 * y as u64) as u32) {
+            ts[y] = t;
+            value[y] = v as u64;
         }
     }
     let mut out = vec![
@@ -301,7 +316,7 @@ pub fn build_init_teardown_columns(
 /// Panics unless the window lies inside the 32-bit address space, or if
 /// `height` is not a power of two.
 pub fn build_value_window_columns(
-    log: &MemoryEventLog,
+    state: &MemoryState,
     initial: &[u32],
     ram_window: u32,
     height: usize,
@@ -318,14 +333,11 @@ pub fn build_value_window_columns(
         .collect();
     let mut ts = vec![0u64; height];
     let mut value = init.clone();
-    for f in log.final_state() {
-        let a = f.addr as u64;
-        if f.space != AddressSpace::Ram || a < first || a >= first + words {
-            continue;
+    for y in 0..height {
+        if let Some((t, v)) = state.ram((first + 4 * y as u64) as u32) {
+            ts[y] = t;
+            value[y] = v as u64;
         }
-        let y = ((a - first) / 4) as usize;
-        ts[y] = f.ts;
-        value[y] = f.value as u64;
     }
     vec![
         (PolyAddress::Memory(0), column(ts, height)),
@@ -334,49 +346,40 @@ pub fn build_value_window_columns(
     ]
 }
 
-/// The register and PC finals, `docs/spec/memory.md` §4.1, from the log's
-/// final state: each register's last write timestamp and value, `(0, 0)` for
-/// one never queried, and the pc's last write timestamp.
+/// The register and PC finals, `docs/spec/memory.md` §4.1, from the execution's
+/// last-access tables: each register's last write timestamp and value, `(0, 0)`
+/// for one never queried, and the pc's last write timestamp.
 ///
-/// Panics naming the value if the pc's final value is not `HALT_PC` — the log
-/// did not end on an exit row, or has no pc query — or `x0`'s is not 0: the
-/// verifier fixes both, and neither is carried.
-pub fn build_boundary_finals(log: &MemoryEventLog) -> BoundaryFinals {
+/// Panics naming the value if the pc's final value is not `HALT_PC` — the
+/// execution did not end on an exit row, or ran no cycle — or `x0`'s is not 0:
+/// the verifier fixes both, and neither is carried.
+pub fn build_boundary_finals(state: &MemoryState) -> BoundaryFinals {
     let mut finals = BoundaryFinals {
         reg_ts: [0; 32],
         pc_ts: 0,
         reg_values: [0; 31],
     };
-    let mut pc = None;
-    for f in log.final_state() {
-        let r = f.addr as usize;
-        match f.space {
-            AddressSpace::Reg => {
-                finals.reg_ts[r] = f.ts;
-                match r {
-                    0 => assert_eq!(
-                        f.value, 0,
-                        "build_boundary_finals: x0's final value is {:#x}, not 0",
-                        f.value
-                    ),
-                    _ => finals.reg_values[r - 1] = f.value,
-                }
-            }
-            AddressSpace::Pc => pc = Some(f),
-            // A RAM word's final value is a window family's row, and a
-            // delegation space has no final state at all.
-            AddressSpace::Ram
-            | AddressSpace::KeccakF
-            | AddressSpace::Poseidon2
-            | AddressSpace::FrArith => {}
+    for r in 0..32u32 {
+        let Some((ts, value)) = state.reg(r) else {
+            continue;
+        };
+        finals.reg_ts[r as usize] = ts;
+        match r {
+            0 => assert_eq!(
+                value, 0,
+                "build_boundary_finals: x0's final value is {value:#x}, not 0"
+            ),
+            _ => finals.reg_values[r as usize - 1] = value,
         }
     }
-    let pc = pc.expect("build_boundary_finals: the log has no pc query, so no final pc");
+    let pc = state
+        .pc()
+        .expect("build_boundary_finals: the execution has no pc query, so no final pc");
     assert_eq!(
-        pc.value, HALT_PC,
+        pc.1, HALT_PC,
         "build_boundary_finals: the pc's final value is {:#x}, not HALT_PC",
-        pc.value
+        pc.1
     );
-    finals.pc_ts = pc.ts;
+    finals.pc_ts = pc.0;
     finals
 }

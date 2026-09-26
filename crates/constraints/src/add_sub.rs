@@ -137,7 +137,7 @@ const KIND_LUI: PolyAddress = KINDS[kind::LUI as usize];
 pub const IS_ECALL: PolyAddress = w(FRAME_WITNESS + 12);
 /// `W[24]`: 1 exactly on a system row whose code is `fence`.
 pub const IS_FENCE: PolyAddress = w(FRAME_WITNESS + 13);
-/// `W[25..28]`: one **delegation request** selector per type, in
+/// `W[25..29]`: one **delegation request** selector per type, in
 /// [`DELEGATIONS`] order — 1 exactly on an ecall row whose `a7` is that type's
 /// number (`docs/spec/delegation.md` §5.1). Each is a free boolean, pinned by
 /// the number gates below: an ecall row is an exit or a request of exactly one
@@ -146,6 +146,7 @@ pub const IS_DELEGATION: [PolyAddress; TYPES] = [
     w(FRAME_WITNESS + 14),
     w(FRAME_WITNESS + 15),
     w(FRAME_WITNESS + 16),
+    w(FRAME_WITNESS + 17),
 ];
 /// The keccak-f request selector, S21's `IS_KECCAK`, now the first of
 /// [`IS_DELEGATION`].
