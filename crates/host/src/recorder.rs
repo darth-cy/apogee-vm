@@ -179,6 +179,26 @@ impl WitnessRecorder {
         // reading that as an absence would hand revm `None` for an account
         // whose slots the witness then serves.
         let storage_hash = rpc::word_of(&proof["storageHash"], "the account storage hash")?;
+        // go-ethereum answers for an address with no state object out of a
+        // zero-valued `common.Hash`, so **both** hashes arrive as the zero word
+        // rather than as `keccak256("")` and the empty-trie root. That is the
+        // shape of an absence and not of an account: no byte string hashes to
+        // zero, so taking it literally made `exists` true and then failed the
+        // `eth_getCode` cross-check below with an error naming a code hash no
+        // code can have. Seen on Geth v10 and on one of 1rpc's backends; reth
+        // answers with the canonical empty values.
+        //
+        // The two are normalised **together**. Repairing `codeHash` alone
+        // would leave `exists` true through `storage_hash != EMPTY_TRIE_ROOT`,
+        // which hands revm `Some(AccountInfo)` where it must see `None` -- and
+        // that failure is silent, where this one at least stopped.
+        let absent = code_hash == [0u8; 32] && storage_hash == [0u8; 32];
+        let code_hash = if absent { empty_code_hash } else { code_hash };
+        let storage_hash = if absent {
+            EMPTY_TRIE_ROOT
+        } else {
+            storage_hash
+        };
         let exists = nonce != 0
             || balance != [0u8; 32]
             || code_hash != empty_code_hash
@@ -565,7 +585,12 @@ fn tx_witness(tx: &Value) -> Result<TxWitness, String> {
     // be recorded as a type-2 one and would run under different rules. The
     // envelope decides the type in revm (`TxEnv::derive_tx_type`), so this is
     // the one place the node's own `type` field is checked against it.
-    let derived = if !blob_hashes.is_empty() || max_fee_per_blob_gas.is_some() {
+    // revm keys on a *positive* blob fee and not on the field's presence
+    // (`TxEnv::derive_tx_type`), so a provider that writes
+    // `maxFeePerBlobGas: "0x0"` on a transaction carrying no blobs must not
+    // make it a type-3 one here.
+    let blob_fee_set = max_fee_per_blob_gas.is_some_and(|fee| fee != 0);
+    let derived = if !blob_hashes.is_empty() || blob_fee_set {
         3
     } else if !authorizations.is_empty() {
         4
@@ -576,7 +601,21 @@ fn tx_witness(tx: &Value) -> Result<TxWitness, String> {
     } else {
         0
     };
-    if derived != tx_type {
+    // What the check is for is the **narrowing** direction: a type-3 whose blob
+    // hashes did not arrive would be recorded as a type-2 one and would run
+    // under different rules. Equality over-reached into the widening direction
+    // and refused a whole block for a shape that is harmless -- EIP-2930
+    // permits an empty access list, so a type-1 transaction carrying one
+    // derives 0, and it then executes exactly as a legacy transaction does,
+    // same intrinsic gas and same gas-price mechanics. That is why `TxWitness`
+    // carries no type at all and the guest derives its own.
+    //
+    // That one shape is exempt and nothing else is. A declared type-2 whose
+    // `maxPriorityFeePerGas` did not arrive is still refused, because it
+    // changes the effective gas price -- which is why this is not the blanket
+    // "accept any node type at or above the derived one" it might look like.
+    let widened_harmlessly = tx_type == 1 && derived == 0;
+    if derived != tx_type && !widened_harmlessly {
         return Err(format!(
             "the node calls this a type-{tx_type} transaction and its fields make it type-{derived}"
         ));
@@ -721,4 +760,148 @@ fn push_proof(nodes: &mut Vec<Vec<u8>>, value: &Value, what: &str) -> Result<(),
         nodes.push(rpc::bytes_of(item, what)?);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// A cache directory of this test's own, seeded by the same key `call`
+    /// reads with, so `Rpc::cached` answers without any endpoint.
+    fn cache(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("apogee-recorder-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a cache directory");
+        dir
+    }
+
+    fn seed(dir: &std::path::Path, method: &str, params: Value, result: Value) {
+        let body = crate::rpc::request_body(method, &params);
+        let path = dir.join(format!("{}.json", rpc::digest_hex(body.as_bytes())));
+        let text = serde_json::to_string_pretty(&result).expect("re-encodable");
+        std::fs::write(path, text).expect("a seeded cache entry");
+    }
+
+    /// go-ethereum answers for an address with no state object out of a
+    /// zero-valued `common.Hash`, so both hashes come back as the zero word.
+    /// That is an absence, and the recorder must read it as one.
+    ///
+    /// Before the fix it read `exists = true` — no byte string hashes to zero,
+    /// so `codeHash` was "not empty" — and then failed the `eth_getCode`
+    /// cross-check with an error naming a code hash no code can have.
+    #[test]
+    fn geths_zero_hashes_are_an_absent_account_and_not_a_failure() {
+        let dir = cache("zero-hashes");
+        let address: Address20 = [0x7c; 20];
+        let zero = format!("0x{}", "00".repeat(32));
+        seed(
+            &dir,
+            "eth_getProof",
+            json!([
+                rpc::hex_data(&address),
+                Vec::<String>::new(),
+                rpc::hex_quantity(21_000_000)
+            ]),
+            json!({
+                "nonce": "0x0",
+                "balance": "0x0",
+                "codeHash": zero,
+                "storageHash": zero,
+                "accountProof": Vec::<String>::new(),
+                "storageProof": Vec::<String>::new(),
+            }),
+        );
+        let mut recorder = WitnessRecorder::new(Rpc::cached(dir), 21_000_000);
+        let info = revm::Database::basic(&mut recorder, Address::from(address))
+            .expect("the zero shape is an absence, not an error");
+        assert!(
+            info.is_none(),
+            "an account geth has no state object for must reach revm as `None`"
+        );
+    }
+
+    /// The canonical empty values still read as an absence, which is the
+    /// control: the normalisation must not be the only path to `None`.
+    #[test]
+    fn the_canonical_empty_values_are_also_an_absent_account() {
+        let dir = cache("canonical-empty");
+        let address: Address20 = [0x7d; 20];
+        seed(
+            &dir,
+            "eth_getProof",
+            json!([
+                rpc::hex_data(&address),
+                Vec::<String>::new(),
+                rpc::hex_quantity(21_000_000)
+            ]),
+            json!({
+                "nonce": "0x0",
+                "balance": "0x0",
+                "codeHash": rpc::hex_data(&revm::primitives::KECCAK_EMPTY.0),
+                "storageHash": rpc::hex_data(&EMPTY_TRIE_ROOT),
+                "accountProof": Vec::<String>::new(),
+                "storageProof": Vec::<String>::new(),
+            }),
+        );
+        let mut recorder = WitnessRecorder::new(Rpc::cached(dir), 21_000_000);
+        assert!(revm::Database::basic(&mut recorder, Address::from(address))
+            .expect("a well-formed answer")
+            .is_none());
+    }
+
+    /// A minimal transaction body, to which each test adds what it is about.
+    fn tx(kind: u64) -> Value {
+        json!({
+            "type": format!("0x{kind:x}"),
+            "from": "0x0000000000000000000000000000000000000001",
+            "to": "0x0000000000000000000000000000000000000002",
+            "value": "0x0",
+            "input": "0x",
+            "gas": "0x5208",
+            "gasPrice": "0x1",
+            "nonce": "0x0",
+            "chainId": "0x1",
+            "accessList": Vec::<String>::new(),
+        })
+    }
+
+    /// EIP-2930 permits an empty access list, and such a transaction executes
+    /// exactly as a legacy one does. Refusing it aborted the whole recording.
+    #[test]
+    fn a_type_one_transaction_with_an_empty_access_list_is_recorded() {
+        let witness = tx_witness(&tx(1)).expect("an empty access list is legal in a type-1");
+        assert!(witness.access_list.is_empty());
+    }
+
+    /// The exemption is that one shape and no other. A declared type-2 whose
+    /// `maxPriorityFeePerGas` did not arrive changes the effective gas price,
+    /// so it is still refused — this is what a blanket "node type at or above
+    /// the derived one" would have wrongly accepted.
+    #[test]
+    fn a_type_two_transaction_missing_its_priority_fee_is_still_refused() {
+        let error = tx_witness(&tx(2)).expect_err("a type-2 without its defining field");
+        assert!(
+            error.contains("type-2") && error.contains("type-0"),
+            "{error}"
+        );
+    }
+
+    /// revm derives the type from a *positive* blob fee, not from the field's
+    /// presence, so a provider that writes `0x0` on a transaction carrying no
+    /// blobs must not turn it into a type-3 one.
+    #[test]
+    fn a_zero_blob_fee_does_not_make_a_type_three_transaction() {
+        let mut body = tx(0);
+        body["maxFeePerBlobGas"] = json!("0x0");
+        assert!(tx_witness(&body).is_ok(), "a zero blob fee is not a blob");
+
+        // And a real one still is.
+        let mut body = tx(3);
+        body["maxFeePerBlobGas"] = json!("0x1");
+        body["blobVersionedHashes"] = json!([format!("0x{}", "01".repeat(32))]);
+        body["maxPriorityFeePerGas"] = json!("0x1");
+        body["maxFeePerGas"] = json!("0x1");
+        assert!(tx_witness(&body).is_ok(), "a real type-3 still records");
+    }
 }

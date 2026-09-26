@@ -559,3 +559,103 @@ fn a_single_slot_storage_trie_has_the_computed_root() {
         "821e2556a290c86405f8160a2d662042a431ba456b9db265c79bb837c04be5f0"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The decoder's two aborts. Both were found by the S25 adversarial review, and
+// both share a shape: a node is **advice**, it reaches `build` before
+// `check_root` can say anything about it, and the failure was an abort rather
+// than an `MptError`. A guest that aborts writes to fd 2, which is not
+// provable, so the run is one no proof can cover — the rule the root
+// `CLAUDE.md` states for `Bytecode::new_raw`, and the same rule here.
+
+/// A declared RLP length that overflows the address space is `Malformed`.
+///
+/// `long` bounded the length itself with `checked_mul`/`checked_add` and then
+/// computed `at + len` with a plain `+`. `bytes.get` would have refused the
+/// slice safely, but the range has to be built before `get` sees it: on the
+/// 64-bit host `0xbf` with eight `0xff` bytes overflowed, and on the guest —
+/// four-byte `usize`, `overflow-checks` pinned on in both profiles — the
+/// five-byte `bb ff ff ff ff` does.
+#[test]
+fn an_rlp_length_that_overflows_the_address_space_is_malformed() {
+    // The host's width: 0xbf is a long-form *string* of 8 length bytes.
+    assert_eq!(
+        mpt::decode_slot(&[0xbf, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]),
+        Err(MptError::Malformed)
+    );
+    // The guest's width, which must be refused on the host too: 0xbb is a
+    // long-form string of 4 length bytes. A host `usize` holds 0xFFFFFFFF, so
+    // this one reaches the `get` and fails there — the point is that neither
+    // width can reach an abort.
+    assert_eq!(
+        mpt::decode_slot(&[0xbb, 0xff, 0xff, 0xff, 0xff]),
+        Err(MptError::Malformed)
+    );
+    // And as a list, which is the form `build` actually parses: 0xfb is a
+    // long-form list of 4 length bytes. This is the reachable path — the node
+    // is advice, and its keccak is what the prover names as the parent root.
+    let node = vec![0xfb, 0xff, 0xff, 0xff, 0xff];
+    let root = revm_block::keccak(&node);
+    let db = NodeMap::new(&[node]);
+    assert_eq!(mpt::build(&db, &root), Err(MptError::Malformed));
+}
+
+/// A node nested past the depth limit is `Malformed`, not a stack overflow.
+///
+/// `child_of` follows an inlined child by its RLP *type* and not by its
+/// length, which is deliberate, so `[hp_string, [..]]` buys a stack frame for
+/// about four bytes. The guest has no guard page: unbounded, the frames walk
+/// off the stack into the bump-allocated heap and corrupt it, returning no
+/// error at all. A well-formed trie is at most 64 nibbles deep, so the limit
+/// refuses nothing real — the shallow case below is the control.
+#[test]
+fn a_node_nested_past_the_depth_limit_is_malformed() {
+    /// `[0x11, <inner>]` — a two-item list, so an extension whose child is an
+    /// inlined list, wrapped `depth` times over a minimal leaf.
+    fn nest(depth: usize) -> Vec<u8> {
+        /// `payload` wrapped in an RLP list header.
+        fn list(payload: &[u8]) -> Vec<u8> {
+            let mut out = Vec::new();
+            if payload.len() <= 55 {
+                out.push(0xc0 + payload.len() as u8);
+            } else {
+                let len = payload.len().to_be_bytes();
+                let first = len.iter().position(|b| *b != 0).expect("a nonzero length");
+                out.push(0xf7 + (len.len() - first) as u8);
+                out.extend_from_slice(&len[first..]);
+            }
+            out.extend_from_slice(payload);
+            out
+        }
+
+        // The innermost node: a terminating leaf, `[0x20, 0x01]`.
+        let mut leaf = Vec::new();
+        mpt::encode_bytes(&mut leaf, &[0x20]);
+        mpt::encode_bytes(&mut leaf, &[0x01]);
+        let mut inner = list(&leaf);
+
+        // Each level is an extension whose child is the level below, inlined.
+        for _ in 0..depth {
+            let mut body = Vec::new();
+            mpt::encode_bytes(&mut body, &[0x11]);
+            body.extend_from_slice(&inner);
+            inner = list(&body);
+        }
+        inner
+    }
+
+    // Shallow nesting parses. This is the control: the limit must not refuse a
+    // node a real trie could contain.
+    let shallow = nest(2);
+    let db = NodeMap::new(std::slice::from_ref(&shallow));
+    assert!(mpt::build(&db, &revm_block::keccak(&shallow)).is_ok());
+
+    // Deep nesting is refused, and refused as an error rather than an abort.
+    // 4,000 levels overflowed an 8 MiB stack before the limit existed.
+    let deep = nest(4_000);
+    let db = NodeMap::new(std::slice::from_ref(&deep));
+    assert_eq!(
+        mpt::build(&db, &revm_block::keccak(&deep)),
+        Err(MptError::Malformed)
+    );
+}

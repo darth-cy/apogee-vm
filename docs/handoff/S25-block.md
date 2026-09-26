@@ -231,6 +231,61 @@ than guessing a shape and producing a silently wrong root.
 
 ---
 
+### What an adversarial review found after the gate passed
+
+The stage's code was reviewed by three readers — one on the trie's encoding, one on its
+soundness, one on the recorder — each finding then handed to a refuter told to default to
+*refuted*. Fourteen candidates, **six confirmed and eight refuted**. All six are fixed on
+this branch and each carries a test that fails without its fix.
+
+Two of the refusals are worth recording, because they are the same mistake and it is an
+easy one to make about this design. A reader argued that a witness omitting
+`parent_beacon_block_root`, or carrying a fabricated withdrawal, forges a state
+transition. Neither does: **the post-state root arrives as public input**
+(`docs/spec/public-values.md` §5.1), so a prover who changes what the block does computes
+a root that does not match and the guest publishes nothing. What those shapes cost is
+liveness, not soundness. The residue that *is* real, and is not new, is that the journal's
+`parent_state_root` comes from the witness, so a reader of a stateless journal must check
+it against the parent header — §10 carries that forward.
+
+| # | where | what | class |
+| --- | --- | --- | --- |
+| 1 | `mpt.rs` `long` | `at + len` was unchecked arithmetic on a length the node's own bytes declare. `bytes.get` refuses an out-of-range slice safely, but the range is *computed* first, and the guest's `usize` is four bytes with `overflow-checks` pinned on in both profiles — so `bb ff ff ff ff` panicked instead of returning `Malformed`. | abort |
+| 2 | `mpt.rs` `child_of` | The recursion into an inlined child was unbounded, and `[hp_string, [..]]` buys a stack frame for about four bytes. Some 16 KB of witness exhausts the guest's 8 MiB stack — and the guest has **no guard page**, so the frames descend into the bump-allocated heap and corrupt it, returning no error at all. Capped at 68, a well-formed trie being at most 64 nibbles deep. | abort |
+| 3 | `stateless.rs` `apply` | Removed an account on revm's `is_selfdestructed()`, which is **block-global**: `commit_tx` leaves the bit set, so a destroyed-then-refunded address was deleted from the trie. Emptiness alone is the test now. | wrong root |
+| 4 | `stateless.rs` `execute` | Prague's two **post**-block system calls are never made. **Not fixed** — see below. | wrong root |
+| 5 | `recorder.rs` `tx_witness` | The type cross-check used equality, so an EIP-2930 type-1 transaction with an *empty* access list — legal, and it executes exactly as a legacy one — refused the whole block. The narrowing direction is what the check is for; that one widening shape is now exempt and nothing else is. Also `max_fee_per_blob_gas.is_some()` where revm keys on `> 0`. | false refusal |
+| 6 | `recorder.rs` `load` | go-ethereum answers for an address with no state object out of a zero-valued `common.Hash`, so **both** hashes arrive as the zero word. No byte string hashes to zero, so `exists` went true and the `eth_getCode` cross-check then failed naming a code hash no code can have. Both fields are normalised together — repairing `codeHash` alone leaves `exists` true through `storageHash`, which hands revm `Some` where it must see `None`, and *that* failure is silent. | false refusal |
+
+Findings 1 and 2 are the same shape as §4's `Bytecode::new_raw`, and it is worth naming
+the pattern rather than the three instances: **a guest that aborts publishes nothing**, so
+every abort reachable from advice is a run no proof can cover. A trie node is advice, and
+it reaches `build` *before* `check_root` can say anything about it, so the prover picks
+the bytes. Both are now `MptError::Malformed`.
+
+### Prague's post-block system calls are not made, and that is the one open gap
+
+Finding 4, left open deliberately. EIP-7002's withdrawal-request predeploy and EIP-7251's
+consolidation-request predeploy are **post**-block system calls, and revm makes neither
+for you — `revm-handler`'s `SystemCallEvm` says in as many words that the client must.
+Each dequeues its request queue and rewrites the queue head and tail, the excess counter
+and the per-block count, so a Prague-or-later block with either queue non-empty recomputes
+a root the header does not carry. The pinned block is **Osaka**, so it is in scope, and the
+synthetic fixture is **Prague** with empty queues, so it could not have caught it.
+
+It is a completeness gap and not a soundness one, for §4's reason above: the claimed root
+is public input, so the result is a refusal, never a wrong root accepted.
+
+**Why it is not closed here.** Closing it needs the two predeploys' real deployed bytecode
+in the witness, exactly as `0x000F…ac02` and `0x0000…2935` already are — the strict
+database refuses a system call to an account the witness does not carry, which is what
+makes the gap loud instead of silent. That bytecode is not in this repository and this
+session had no endpoint to fetch it from, and a *guessed* predeploy is worse than an
+absent one. So the gap is named in `docs/spec/revm-block.md` §5.2 and pinned by
+`crates/host/tests/stateless.rs::the_prague_post_block_system_calls_are_the_known_gap`,
+which fails the moment a third system contract appears — the arrangement S24 used for
+`BLOCKHASH`, so that it is closed on purpose or not at all.
+
 ## 5. Deviations, and the rules they touch
 
 1. **A trait generic in a guest.** `revm_block::run_against<DB: revm::Database>` is
@@ -440,7 +495,8 @@ account balance flips the recomputed root and the guest asserts out"*. All three
 is §4's sibling gap: a witness recorded from this endpoint cannot be complete, so the
 recomputation half has no real block to run on. That is a limitation of the witness source,
 not of the guest — the trie code is the same code either way, and it is held to Ethereum's
-three published root vectors, to real mainnet authentication, and to the whole transition.
+three published root vectors, to real mainnet authentication, and to the transition as
+§4's last finding scopes it: every step but Prague's two **post**-block system calls.
 
 ### Acceptance 8 — not run, by the owner's decision
 

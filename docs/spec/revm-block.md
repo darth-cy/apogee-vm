@@ -441,6 +441,26 @@ Consensus, not a choice:
 2. **EIP-2935**, from Prague: the parent hash into `0x0000…2935`.
 3. Every transaction, in order, under §1.4's running gas bound.
 4. **EIP-4895** withdrawals, credited in header order.
+5. **EIP-7002**, from Prague: the withdrawal-request predeploy `0x0000…7002`.
+6. **EIP-7251**, from Prague: the consolidation-request predeploy `0x0000…7251`.
+
+**Steps 5 and 6 are NOT implemented, and that is this mode's one acknowledged gap**
+(S25). They are *post*-block system calls, and revm makes neither for you —
+`revm-handler`'s `SystemCallEvm` says in as many words that the client must. Each
+dequeues its request queue and rewrites the queue head and tail, the excess counter and
+the per-block count, so **a Prague-or-later block in which either queue is non-empty
+recomputes a post-state root the header does not carry** and is refused by §5's root
+check. It is a completeness gap and not a soundness one: the claimed root arrives as
+public input, so what a missing call produces is a refusal, never a wrong root accepted.
+
+Closing it needs the two predeploys' real deployed bytecode in the witness, the way
+`0x000F…ac02` and `0x0000…2935` already are — the strict database (§1.0) refuses a system
+call to an account the witness does not carry, which is exactly what should happen and
+what makes the gap loud rather than silent. `guests/revm-block/src/stateless.rs`'s
+`system_contracts()` returns two entries, and
+`crates/host/tests/stateless.rs::the_prague_post_block_system_calls_are_the_known_gap`
+pins that count so the gap cannot close by accident — the same arrangement S24 used for
+`BLOCKHASH`.
 
 System calls are gas-free and are **not** added to the block's `gasUsed`. revm models
 withdrawals not at all — a search across all twelve revm 42 crates finds nothing — so the
@@ -449,5 +469,18 @@ block executor credits them itself, through the **journal** rather than the data
 would change every later read and be invisible in the post-state.
 
 At the end, EIP-161 applies: an account that is **touched and empty** is removed from the
-trie, as is a selfdestructed one, and a selfdestructed account's whole storage trie goes
-with it.
+trie.
+
+**Emptiness is the whole test, and revm's selfdestruct flag is not part of it** (S25).
+One journal serves the whole block and finalizes once, and under that arrangement revm's
+`SelfDestructed` bit is block-global: `commit_tx` clears the journal, the logs, the
+transient storage and `selfdestructed_addresses`, and leaves an account's status alone.
+So once any transaction destroys an address, every later transaction's finalized view of
+it still reads as destroyed — and removing on that flag deleted an address a later
+transaction had refunded or recreated, which Ethereum keeps, a non-zero balance not being
+empty. Emptiness reaches the right answer without it: destroyed and not refunded
+finalizes empty and goes, refunded or recreated is not empty and stays, and from Cancun
+EIP-6780 leaves a pre-existing contract's code in place so sweeping its balance never
+made it empty. Before Cancun a selfdestruct did wipe storage, so an address destroyed and
+then refunded without being recreated starts from an empty storage trie as a created one
+does.

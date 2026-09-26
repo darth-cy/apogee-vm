@@ -497,3 +497,137 @@ fn a7_the_guest_rejects_a_corrupted_witness() {
         "a corrupted balance was not refused as unauthenticated"
     );
 }
+
+// ---------------------------------------------------------------------------
+// revm's selfdestruct flag, and why `apply` may not read it.
+//
+// Found by the S25 adversarial review. `execute` keeps ONE journal for the
+// whole block and finalizes exactly once, which is what makes the post-state a
+// single `EvmState` — but revm's `SelfDestructed` status bit is **block-global**
+// under that arrangement. `commit_tx` clears the journal, the logs, the
+// transient storage and `selfdestructed_addresses`, and explicitly leaves the
+// account's status alone; only a revert clears the local bit. So once any
+// transaction destroys an address, every later transaction's finalized view of
+// that address still reads as destroyed.
+//
+// `apply` removed an account on that flag, so a destroyed-then-refunded address
+// was deleted from the state trie — an address real Ethereum keeps, a non-zero
+// balance not being empty — and deleted before the `is_created()` branch could
+// rebuild its storage. The fix is to test emptiness alone. This pins both
+// halves: revm's behaviour, so an upstream change is visible, and the predicate.
+
+/// A destroyed-then-refunded account is not empty, so the trie keeps it.
+#[test]
+fn a_selfdestructed_then_refunded_account_is_not_removed() {
+    use revm::context::TxEnv;
+    use revm::context_interface::{ContextTr, JournalTr};
+    use revm::database::{CacheDB, EmptyDB};
+    use revm::primitives::{Address, Bytes, TxKind, U256};
+    use revm::state::AccountInfo;
+    use revm::{Context, ExecuteEvm, MainBuilder, MainContext};
+    use revm_block::SpecId;
+
+    let sender = Address::from([0x11u8; 20]);
+    let beneficiary = Address::from([0x22u8; 20]);
+
+    let mut db = CacheDB::new(EmptyDB::default());
+    db.insert_account_info(
+        sender,
+        AccountInfo {
+            balance: U256::from(10u64).pow(U256::from(18u64)),
+            nonce: 0,
+            ..Default::default()
+        },
+    );
+
+    let mut cfg = revm::context::CfgEnv::new_with_spec(SpecId::CANCUN);
+    cfg.chain_id = 1;
+    cfg.disable_nonce_check = true;
+    let mut evm = Context::mainnet().with_db(db).with_cfg(cfg).build_mainnet();
+
+    // Init code: `PUSH20 <beneficiary> SELFDESTRUCT`. The contract is created
+    // and destroyed inside one transaction, which is the case EIP-6780 still
+    // permits to destroy fully.
+    let mut init = vec![0x73];
+    init.extend_from_slice(beneficiary.as_slice());
+    init.push(0xff);
+
+    let created = sender.create(0);
+    let create = TxEnv::builder()
+        .caller(sender)
+        .kind(TxKind::Create)
+        .data(Bytes::from(init))
+        .gas_limit(1_000_000)
+        .gas_price(0)
+        .nonce(0)
+        .chain_id(Some(1))
+        .build_fill();
+    evm.transact_one(create).expect("the create runs");
+
+    // A later transaction credits the destroyed address one wei.
+    let refund = TxEnv::builder()
+        .caller(sender)
+        .kind(TxKind::Call(created))
+        .value(U256::from(1u64))
+        .gas_limit(1_000_000)
+        .gas_price(0)
+        .nonce(1)
+        .chain_id(Some(1))
+        .build_fill();
+    evm.transact_one(refund).expect("the refund runs");
+    evm.ctx.journal_mut().commit_tx();
+    let state = evm.finalize();
+
+    let account = state
+        .get(&created)
+        .expect("the destroyed-then-refunded address is in the post-state");
+
+    // revm's own behaviour, pinned: the flag is still set two transactions on.
+    assert!(
+        account.is_selfdestructed(),
+        "revm no longer keeps `SelfDestructed` set across `commit_tx`; \
+         the reason `apply` must not read it has changed, so re-read the rule"
+    );
+    // And the account is not empty, so Ethereum keeps it — which is what
+    // `apply`'s predicate now says, and what the flag would have overruled.
+    assert_eq!(account.info.balance, U256::from(1u64));
+    assert!(
+        !account.state_clear_aware_is_empty(SpecId::CANCUN),
+        "a one-wei balance is not empty, so EIP-161 does not clear it"
+    );
+}
+
+/// The two Prague **post**-block system calls are not made, and that gap is
+/// pinned so it cannot close by accident.
+///
+/// EIP-7002's withdrawal-request predeploy and EIP-7251's consolidation-request
+/// predeploy each dequeue their request queue and rewrite the queue head and
+/// tail, the excess counter and the per-block count. revm makes neither for you
+/// — `revm-handler`'s `SystemCallEvm` says the client must — so a
+/// Prague-or-later block with either queue non-empty recomputes a post-state
+/// root the header does not carry.
+///
+/// It is a completeness gap and not a soundness one: the claimed root arrives
+/// as public input, so a missing call produces a refusal and never a wrong root
+/// accepted. Closing it needs the two predeploys' real deployed bytecode in the
+/// witness, as `0x000F…ac02` and `0x0000…2935` already are — the strict
+/// database refuses a system call to an account the witness does not carry,
+/// which is what makes this loud rather than silent.
+///
+/// This is the arrangement S24 used for `BLOCKHASH`: pin today's answer, so the
+/// gap is closed on purpose or not at all. `docs/spec/revm-block.md` §5.2.
+#[test]
+fn the_prague_post_block_system_calls_are_the_known_gap() {
+    let contracts = stateless::system_contracts();
+    assert_eq!(
+        contracts.len(),
+        2,
+        "a third system contract means EIP-7002 or EIP-7251 landed: close the gap in \
+         `docs/spec/revm-block.md` §5.2 and delete this test"
+    );
+    let names: Vec<&str> = contracts.iter().map(|(name, _)| *name).collect();
+    assert_eq!(
+        names,
+        vec!["EIP-4788 beacon roots", "EIP-2935 history storage"]
+    );
+}

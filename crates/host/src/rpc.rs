@@ -211,7 +211,9 @@ impl Rpc {
 /// `id` is a literal 1, not a counter: the body is the cache key, so a counter
 /// would give one logical request a different name on every run and the cache
 /// would never hit.
-fn request_body(method: &str, params: &Value) -> String {
+/// `pub(crate)` for the recorder's own tests, which seed a cache directory by
+/// the same key `call` reads it with.
+pub(crate) fn request_body(method: &str, params: &Value) -> String {
     let body = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 1,

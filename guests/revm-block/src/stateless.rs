@@ -300,6 +300,19 @@ fn execute(
         .map_err(|e| StatelessError::NotExecutable(format!("the 2935 system call: {e}")))?;
     }
 
+    // NOT MADE, and this is the mode's one acknowledged gap: EIP-7002's
+    //    withdrawal-request predeploy and EIP-7251's consolidation-request
+    //    predeploy, both **post**-block and both from Prague. revm makes
+    //    neither for you. Each dequeues its request queue and rewrites the
+    //    queue head and tail, the excess counter and the per-block count, so a
+    //    Prague-or-later block with either queue non-empty recomputes a root
+    //    the header does not carry. It is a completeness gap and not a
+    //    soundness one -- the claimed root is public input, so the result is a
+    //    refusal and never a wrong root accepted. Closing it needs the two
+    //    predeploys' real deployed bytecode in the witness, as the two above
+    //    already are. `docs/spec/revm-block.md` §5.2, and
+    //    `the_prague_post_block_system_calls_are_the_known_gap` pins the count.
+
     // 3. The transactions, under the block's running gas bound — the same rule
     //    `crate::run` applies and for the same reason (`docs/spec/revm-block.md`
     //    §1.4): revm checks one transaction against the header and has no
@@ -374,10 +387,24 @@ fn apply(
         let key = keccak256(address).0;
         let path = mpt::nibbles(&key);
 
-        // EIP-161: an account that is touched and empty is *removed*. So is a
-        // selfdestructed one, and its whole storage trie goes with it — which
-        // is why no storage node is needed for it.
-        if account.is_selfdestructed() || account.state_clear_aware_is_empty(spec) {
+        // EIP-161: an account that is touched and **empty at the end of the
+        // block** is removed. Emptiness is the whole test, and
+        // `is_selfdestructed()` is deliberately not part of it: revm's
+        // `SelfDestructed` bit is block-global and `commit_tx` leaves it set,
+        // so once any transaction destroys an address, every later
+        // transaction's view of that address still reads as destroyed. Reading
+        // it here deleted an account a later transaction had refunded or
+        // recreated -- one real Ethereum keeps, a non-zero balance not being
+        // empty -- and deleted it before the `is_created()` branch below could
+        // rebuild its storage.
+        //
+        // Emptiness reaches the same answer without the flag. An account
+        // destroyed and not refunded finalizes with a zero balance, a zero
+        // nonce and no code, so it is empty and goes; one refunded or recreated
+        // is not empty and stays; and post-Cancun EIP-6780 leaves a
+        // pre-existing contract's code in place, so sweeping its balance never
+        // made it empty to begin with.
+        if account.state_clear_aware_is_empty(spec) {
             *state = mpt::remove(core::mem::replace(state, Node::Empty), &path)?;
             continue;
         }
@@ -397,7 +424,16 @@ fn apply(
         // — but reading the old trie there would carry slots the account does
         // not have and give a wrong root, so the case is handled rather than
         // assumed away.
-        let mut trie = if account.is_created() {
+        // Before Cancun a selfdestruct wiped the account's storage outright, so
+        // an address destroyed and then refunded -- but not recreated, which
+        // would set `is_created()` -- must start from an empty trie too, or the
+        // authenticated pre-state's slots survive a destruction that removed
+        // them. EIP-6780 closed that path from Cancun on, where only a
+        // same-transaction creation is destroyed and `is_created()` covers the
+        // recreate.
+        let wiped = account.is_created()
+            || (!spec.is_enabled_in(SpecId::CANCUN) && account.is_selfdestructed());
+        let mut trie = if wiped {
             Node::Empty
         } else {
             core::mem::replace(&mut storage[at], Node::Empty)

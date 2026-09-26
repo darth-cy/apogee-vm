@@ -211,14 +211,24 @@ fn long(bytes: &[u8], width: usize, list: bool) -> Result<(Item<'_>, &[u8]), Mpt
         return Err(MptError::Malformed);
     }
     let at = 1 + width;
-    let body = bytes.get(at..at + len).ok_or(MptError::Malformed)?;
+    // `at + len` is arithmetic on a length the node's own bytes declare, so it
+    // is checked. `bytes.get` would refuse an out-of-range slice safely, but
+    // the range has to be *computed* before `get` ever sees it, and on the
+    // guest `usize` is four bytes with `overflow-checks` pinned on in both
+    // profiles -- so `bb ff ff ff ff` panicked here rather than returning
+    // `Malformed`. A panicking guest writes to fd 2, which is not provable, so
+    // that run is one no proof can cover; it is the rule `Bytecode::new_raw` is
+    // already held to. The node is advice and reaches this line *before*
+    // `check_root`, so the bytes are the prover's to choose.
+    let end = at.checked_add(len).ok_or(MptError::Malformed)?;
+    let body = bytes.get(at..end).ok_or(MptError::Malformed)?;
     Ok((
         Item {
             list,
             payload: body,
-            whole: &bytes[..at + len],
+            whole: &bytes[..end],
         },
-        &bytes[at + len..],
+        &bytes[end..],
     ))
 }
 
@@ -450,11 +460,30 @@ pub fn build(db: &NodeMap, root: &Word32) -> Result<Node, MptError> {
         return Ok(Node::Empty);
     }
     let bytes = db.get(root).ok_or(MptError::MissingNode { hash: *root })?;
-    parse(db, bytes)
+    parse_at(db, bytes, 0)
 }
 
 /// Parse one node's bytes, resolving its children through the map.
-fn parse(db: &NodeMap, bytes: &[u8]) -> Result<Node, MptError> {
+/// The deepest node nesting `parse` will follow.
+///
+/// A secure-trie key is `keccak256` of an address or a slot, so 32 bytes and
+/// 64 nibbles, and every level of a trie consumes at least one nibble: 64
+/// branches and a leaf is as deep as a well-formed trie goes. The slack above
+/// that is for the root and for nothing else.
+///
+/// There has to be a limit because `child_of` follows an inlined child by its
+/// RLP *type* rather than by its length -- which is deliberate -- and
+/// `[hp_string, [..]]` buys a stack frame for about four bytes. Unbounded, some
+/// 16 KB of witness, comfortably inside an ordinary node list, exhausts the
+/// guest's 8 MiB stack; and the guest has no guard page, so the frames descend
+/// into the bump-allocated heap and corrupt it rather than returning any
+/// `MptError` at all.
+const MAX_DEPTH: usize = 68;
+
+fn parse_at(db: &NodeMap, bytes: &[u8], depth: usize) -> Result<Node, MptError> {
+    if depth > MAX_DEPTH {
+        return Err(MptError::Malformed);
+    }
     let items = list_items(bytes)?;
     match items.len() {
         2 => {
@@ -470,14 +499,14 @@ fn parse(db: &NodeMap, bytes: &[u8]) -> Result<Node, MptError> {
                 }
                 Ok(Node::Ext {
                     path,
-                    child: Box::new(child_of(db, &items[1])?),
+                    child: Box::new(child_of(db, &items[1], depth)?),
                 })
             }
         }
         17 => {
             let mut children: Vec<Node> = Vec::with_capacity(16);
             for item in items.iter().take(16) {
-                children.push(child_of(db, item)?);
+                children.push(child_of(db, item, depth)?);
             }
             let array: [Node; 16] = children.try_into().expect("sixteen children");
             Ok(Node::Branch {
@@ -494,16 +523,16 @@ fn parse(db: &NodeMap, bytes: &[u8]) -> Result<Node, MptError> {
 /// The test is the RLP **type**, not the length. A list item is an inlined
 /// node and its whole encoding is the node; a 32-byte string is a hash; the
 /// empty string is an absent child. Any other string width is malformed.
-fn child_of(db: &NodeMap, item: &Item<'_>) -> Result<Node, MptError> {
+fn child_of(db: &NodeMap, item: &Item<'_>, depth: usize) -> Result<Node, MptError> {
     if item.list {
-        return parse(db, item.whole);
+        return parse_at(db, item.whole, depth + 1);
     }
     match item.payload.len() {
         0 => Ok(Node::Empty),
         32 => {
             let hash: Word32 = item.payload.try_into().expect("thirty-two bytes");
             match db.get(&hash) {
-                Some(bytes) => parse(db, bytes),
+                Some(bytes) => parse_at(db, bytes, depth + 1),
                 None => Ok(Node::Blinded(hash)),
             }
         }
