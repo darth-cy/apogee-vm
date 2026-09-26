@@ -1192,9 +1192,16 @@ pub mod family {
     /// that needs it (`docs/handoff/S16-add-sub.md` answer 7).
     ///
     /// A **delegation** family is the other way round: it carries no range
-    /// channel at all, so no floor applies, and its ceiling is its own circuit
-    /// — [`KECCAK_F`] sits at `2^8` because one row is a whole permutation
-    /// (`docs/spec/delegation.md` §9).
+    /// channel at all, so no floor applies, and its ceiling is its own
+    /// circuit's width. That width differs between the four by **three orders
+    /// of magnitude**, so they do not share a height and there is no reason
+    /// they should: [`KECCAK_F`] is 354,762 inner columns a row and `2^16` of
+    /// them is 744 GB of forward pass, where [`MOD_MUL`] is 270 and `2^16` is
+    /// 7.9 GB. Below that ceiling the height is a **proof-size** decision —
+    /// a `2^8` shard's proof does not shrink with its height, so a family's
+    /// height is what decides how many shards a block's invocations take, and
+    /// `MOD_MUL` at `2^8` cost a measured block 1,048 shards against 5 at
+    /// `2^16` (`docs/spec/delegation.md` §9 and §9.1).
     pub const DEFAULT_HEIGHTS: [u32; COUNT as usize] = [
         1 << 22, // ADD_SUB_LUI_AUIPC
         1 << 22, // JUMP_BRANCH_SLT
@@ -1211,7 +1218,7 @@ pub mod family {
         1 << 8,  // PUBLIC_INPUT, and it is the only admissible one
         1 << 8,  // PUBLIC_OUTPUT, likewise
         1 << 22, // ADVICE_WINDOWS, at the window height
-        1 << 8,  // MOD_MUL
+        1 << 16, // MOD_MUL, and NOT 2^8 — see the paragraph above
     ];
 
     /// The default `bytecode_size_words`: `2^20` words, a 4 MiB ceiling on the

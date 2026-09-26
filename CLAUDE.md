@@ -899,13 +899,20 @@ tests/layout.rs`, which reads the program headers and runs everywhere.
   than not delegating. Poseidon2's frame is the other way — canonical values, so the circuit
   is `poseidon2_permute` itself — because there the conversion is six operations against 240
   the delegation removes (`docs/spec/delegation.md` §12.1, §13.2).
-- **A delegation family carries no lookup channel, and that is load-bearing.** Its height is
-  `2^8` (rows are invocations, not halfwords; keccak at `2^16` is 744 GB of forward pass),
-  where no range channel's table fits, so every bound it makes is a bit decomposition with a
+- **A delegation family carries no lookup channel, and that is load-bearing.** Its rows are
+  invocations, not halfwords, so its ceiling is the width of one row's circuit — and **the
+  four families differ there by three orders of magnitude, so they do not share a height**:
+  `KECCAK_F`, `POSEIDON2` and `FR_ARITH` take `2^8` (keccak at `2^16` is 744 GB of forward
+  pass a shard), and `MOD_MUL` takes `2^16`, where it is 7.9 GB and a measured block falls
+  from 1,048 shards to 5 (`docs/spec/delegation.md` §9.2). Below `2^20` no timestamp table
+  fits at any of them, so every bound a delegation family makes is a bit decomposition with a
   booleanity gate — including a frame value's **canonicity**, an eight-limb borrow chain
   against `p` whose last borrow is 1 exactly when the value is below the modulus. That is also why its registry arm sits *below* `family_circuit`'s
   minimum-height guard: a family with no channel reaches no `BITS ≤ trace_vars` assertion,
-  and putting it in the guard would refuse the only height it has.
+  and putting it in the guard would refuse the heights these families actually take. **A
+  height changes no gate** — it adds one halving list per variable carrying one node per
+  output, and nothing else — which is what made `MOD_MUL`'s raise a re-pin and not a redesign
+  (`crates/checker/tests/mod_mul.rs::a_height_moves_only_the_halving_layers`).
 - **The anchor's value column is free on both sides, and the multiset is what pairs them.**
   A request writes `T(deleg_space, base, 4c+3, v)` and an invocation reads it; nothing fixes
   `v` locally on either side, and they cancel only when equal. What *is* pinned, by three

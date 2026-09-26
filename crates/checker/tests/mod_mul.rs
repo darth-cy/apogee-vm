@@ -746,8 +746,13 @@ fn a_modulus_the_call_rewrote_is_refused() {
 /// is the third reading, and the one a reviewer can compare against the page.
 #[test]
 fn the_shape_is_the_manifests() {
-    let a = mod_mul::artifact(8);
-    assert_eq!(a.trace_vars, 8);
+    let a = mod_mul::artifact(16);
+    assert_eq!(a.trace_vars, 16);
+    assert_eq!(
+        1u32 << a.trace_vars,
+        constants::family::DEFAULT_HEIGHTS[constants::family::MOD_MUL as usize],
+        "the manifest's row is the height the prover actually builds"
+    );
     assert_eq!(a.memory.len(), mod_mul::MEMORY_COLUMNS, "M");
     assert_eq!(a.witness.len(), mod_mul::WITNESS_COLUMNS, "W");
     assert!(a.setup.is_empty(), "no setup column");
@@ -757,14 +762,14 @@ fn the_shape_is_the_manifests() {
     assert_eq!(a.outputs.len(), 2, "the two memory roots");
 
     // `lists (row-wise + halving)` and `top`, §1.2's columns.
-    assert_eq!(a.layers.len(), 15, "gate lists");
+    assert_eq!(a.layers.len(), 23, "gate lists");
     let halving = a.layers.iter().filter(|l| l.halving).count();
-    assert_eq!(halving, 8, "one halving list per trace variable");
+    assert_eq!(halving, 16, "one halving list per trace variable");
 
     // `inner` is the width of every layer above the base, summed.
     let inner: usize = a.layers.iter().map(|l| l.width as usize).sum();
-    assert_eq!(inner, 270, "inner columns");
-    assert_eq!(a.relations.len(), 3_763, "relations");
+    assert_eq!(inner, 286, "inner columns");
+    assert_eq!(a.relations.len(), 3_779, "relations");
 
     // The `enforcing (d1/d2)` split. An enforcing relation is one with no
     // output, and **its degree is 1 exactly when no term multiplies two
@@ -783,5 +788,46 @@ fn the_shape_is_the_manifests() {
         (3_493, 73, 3_420),
         "enforcing (d1/d2)"
     );
-    assert_eq!(a.to_bytes().len(), 1_420_188, "wire bytes");
+    assert_eq!(a.to_bytes().len(), 1_421_100, "wire bytes");
+}
+
+/// What a height does and does not move — the property the manifest's repeated
+/// rows exist to show.
+///
+/// A family's row in `docs/spec/constraint-manifest.md` §1.2 appears once per
+/// height the repository builds, and across two such rows `committed`,
+/// `enforcing` and `lookups` are **identical**. A height is `trace_vars`, and
+/// the only thing it changes is how many halving lists sit above the row-wise
+/// ones: each carries one node per output, so `lists` grows by `Δn` and `inner`
+/// by `outputs · Δn`, and nothing else moves at all.
+///
+/// S26 raised this family from `2^8` to `2^16`, and this is what says the raise
+/// was a height and not a circuit change wearing a height's clothes.
+#[test]
+fn a_height_moves_only_the_halving_layers() {
+    let lo = mod_mul::artifact(8);
+    let hi = mod_mul::artifact(16);
+    let d = (hi.trace_vars - lo.trace_vars) as usize;
+
+    let committed = |a: &CircuitArtifact| (a.memory.len(), a.witness.len(), a.setup.len());
+    assert_eq!(committed(&lo), committed(&hi), "committed width");
+    let enforcing = |a: &CircuitArtifact| a.relations.iter().filter(|r| r.output.is_none()).count();
+    assert_eq!(enforcing(&lo), enforcing(&hi), "enforcing gates");
+    assert_eq!(lo.lookups.len(), hi.lookups.len(), "lookups");
+    assert_eq!(lo.outputs.len(), hi.outputs.len(), "outputs");
+
+    let halving = |a: &CircuitArtifact| a.layers.iter().filter(|l| l.halving).count();
+    assert_eq!(
+        halving(&hi) - halving(&lo),
+        d,
+        "one halving list per variable"
+    );
+    assert_eq!(hi.layers.len() - lo.layers.len(), d, "and no other list");
+
+    let inner = |a: &CircuitArtifact| a.layers.iter().map(|l| l.width as usize).sum::<usize>();
+    assert_eq!(
+        inner(&hi) - inner(&lo),
+        hi.outputs.len() * d,
+        "each halving list carries one node per output"
+    );
 }

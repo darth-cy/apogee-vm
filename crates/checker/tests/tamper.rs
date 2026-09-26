@@ -1563,7 +1563,7 @@ fn s26_the_mod_mul_witness_and_anchor_are_pinned() {
     let mm_shards = shards.iter().filter(|(f, _)| *f == MM).count();
     assert!(
         mm_shards >= 2,
-        "the guest's invocations need more than one 2^8 shard, and make {mm_shards}"
+        "the fixture keeps 2^8 so this stays multi-shard, and it makes {mm_shards}"
     );
 
     let a = &setup.vk.circuit(MM).expect("a MOD_MUL circuit").artifact;
@@ -1571,9 +1571,9 @@ fn s26_the_mod_mul_witness_and_anchor_are_pinned() {
         (a.memory.len(), a.witness.len(), a.setup.len()),
         (4 + 4 * mm::FRAME_WORDS, mm_c::WITNESS_COLUMNS, 0)
     );
-    assert_eq!(a.trace_vars, common::DELEGATION_VARS);
+    assert_eq!(a.trace_vars, common::MOD_MUL_FIXTURE_VARS);
 
-    let rows = 1usize << common::DELEGATION_VARS;
+    let rows = 1usize << common::MOD_MUL_FIXTURE_VARS;
     let columns = shard_columns(&setup, &archive, MM, 0, &public.windows)
         .expect("the MOD_MUL shard's columns");
     let at = |address: PolyAddress, row: usize| {

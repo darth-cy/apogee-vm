@@ -528,6 +528,12 @@ shards sort last. `verify_block` needs no edit at all.
 
 ## 9. The height, and why there is no lookup channel
 
+**Each delegation family takes its own height, and the four do not share one.**
+`KECCAK_F`, `POSEIDON2` and `FR_ARITH` take `2^8`; `MOD_MUL` takes `2^16`
+(§9.1). What follows is `KECCAK_F`'s argument, which is what put `2^8` on the
+menu — it is a *ceiling* derived from one family's width, never a rule about
+delegation.
+
 `KECCAK_F` takes **`2^8`**, added to `constants::family::HEIGHT_MENU` at S21.
 One row is a whole permutation, and a whole permutation is **354,762 inner
 columns** over 177 layers (`docs/spec/constraint-manifest.md` §12.7);
@@ -560,7 +566,11 @@ assertion inside `VerifyingKey::check` on bytes a verifier was handed.
 **A delegation family must therefore be absent from `family_circuit`'s
 minimum-height arm, and must carry no lookup channel.** The two go together: a
 family with a channel needs that channel's height, and at that height its
-permutation does not fit.
+permutation may not fit. The rule survives `MOD_MUL`'s `2^16` unchanged, and for
+a second reason besides the first: a frame's timestamp gap is the `TIMESTAMP`
+channel's obligation, `BITS = 19`, so even at `2^16` no table for it exists —
+a delegation family owes a bit decomposition at every height the menu offers
+below `2^20`, and having paid for one it has no use for a channel above.
 
 ### 9.1 `2^8` is not free, and S26 is where it shows
 
@@ -594,14 +604,48 @@ five `2^8` `KECCAK_F` shards are 59.4 MB — **97% of the proof**, against 3% fo
 thirty-two execution and window shards. A delegation family's height has been the
 dominant term in proof size since S21.
 
-S26 left `DEFAULT_HEIGHTS[MOD_MUL]` at `2^8`, consistent with the three families
-before it, and **recorded the height of the delegation families as an open
-decision** rather than changing one family's and not the others'
-(`docs/handoff/S26-cycle.md` §7). Nothing in this page depends on the answer:
-`family_circuit` accepts `0 ≤ n ≤ 30` for every delegation family, and the menu
-already holds `2^16`. What a later stage weighing it needs is the table above and
-the two numbers it is missing — a `2^16` `MOD_MUL` shard's real peak and its real
-proof size — which only a run produces.
+### 9.2 `DEFAULT_HEIGHTS[MOD_MUL]` is `2^16`, and the four families differ
+
+S26 first left it at `2^8` "consistent with the three families before it", and
+that reason was wrong: **consistency between delegation families has no
+technical content.** A family's ceiling is the width of one row's circuit, and
+those widths differ by three orders of magnitude — 354,762 inner columns for
+`KECCAK_F` against 270 for `MOD_MUL`. Holding the second down to the first's
+height bought nothing and cost the table above.
+
+So the heights are per family, which is what `DEFAULT_HEIGHTS` was always able
+to express:
+
+| family | inner | committed | height | why that one |
+| --- | --- | --- | --- | --- |
+| `KECCAK_F` | 354,762 | 3,764 | `2^8` | `2^16` is 744 GB of forward pass a shard |
+| `POSEIDON2` | 2,020 | 4,192 | `2^8` | `2^16` is 13.0 GB, and the guests that reach it invoke it in the hundreds |
+| `FR_ARITH` | 142 | 2,680 | `2^8` | ditto, 5.9 GB |
+| `MOD_MUL` | 270 | 3,478 | **`2^16`** | 7.9 GB, and a measured block goes from 1,048 shards to 5 |
+
+Two properties make the raise cheap. **A height changes no gate**: it adds one
+halving list per variable, each carrying one node per output, so `MOD_MUL` at
+`2^16` is 23 lists, 286 inner columns and 3,779 relations against `2^8`'s 15,
+270 and 3,763, with the committed width, the `3,493 (73/3,420)` gate split and
+the zero lookups identical
+(`crates/checker/tests/mod_mul.rs::a_height_moves_only_the_halving_layers`).
+And **a delegation family carries no channel**, so no minimum-height arm
+applies and `family_circuit` accepts `0 ≤ n ≤ 30` for it.
+
+What the raise is *not* free of: the height is in `VM_CONFIG`, which program
+identity absorbs, so **every guest declaring `MOD_MUL` has a new identity** and
+every verifying key over one has new bytes. That also means the height is a
+property of the **program**, not of the execution — it cannot be chosen per
+block, and `2^16` is the choice for the busiest block `guests/revm-block` is
+meant to prove. At 268,200 invocations that block is 5 shards with 18% padding;
+the same height costs S26's pinned mini-block one shard at 90% padding, and a
+`2^8` shard's proof being ~11 MB whatever its occupancy, that trade is the right
+way round.
+
+The one number still missing is a `2^16` `MOD_MUL` shard's **measured** peak and
+proof size, which only a run of the deferred `prover::revm` and `host::prove`
+suites produces; the figures above are computed from the widths in
+`docs/spec/constraint-manifest.md` §1.2.
 
 ---
 

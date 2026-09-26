@@ -384,7 +384,9 @@ pub mod mod_mul {                                 // docs/spec/delegation.md §1
   panic inside key validation, in a `no_std` crate the recursion guest links, on bytes a
   verifier was handed. **`KECCAK_F`'s arm sits below the guard, deliberately**: a family with
   no lookup channel reaches no such assertion, so there is nothing to pre-empt, and putting
-  it in the guard would refuse the only height it has, `2^8`. That is why a delegation
+  it in the guard would refuse the heights these families take — `2^8` for `KECCAK_F`,
+  `POSEIDON2` and `FR_ARITH`, and `2^16` for `MOD_MUL`, which are per family and deliberately
+  not one number (`docs/spec/delegation.md` §9.2). That is why a delegation
   family **must** carry no channel (`docs/spec/lookup.md` §3).
 - **A circuit that reads the `GENERIC` channel names the packed table as its last three
   setup columns** (S17). `FamilyCircuit::reads_generic_table` is whether any channel spec
@@ -524,7 +526,7 @@ them, CI regenerates and diffs them, and `tests/memory.rs` pins their SHA-256 an
 each to its constructor's bytes. The leaves' independent description is the plain
 arithmetic of `crates/gkr/tests/memory.rs`.
 
-`tests/vectors/{keccak,poseidon2,fr_arith}.txt`: **digests, not artifacts.**
+`tests/vectors/{keccak,poseidon2,fr_arith,mod_mul}.txt`: **digests, not artifacts.**
 `keccak::artifact(8).to_bytes()` is 100,254,040 bytes — 974 times the largest committed
 circuit — and the two S23 circuits are 2.1 MB and 1.1 MB, so what is committed is one line
 apiece: the shape counts and the artifact's SHA-256. `cargo run -p kat-gen -- delegation`

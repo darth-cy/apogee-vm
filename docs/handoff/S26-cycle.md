@@ -488,15 +488,22 @@ and window shards are the remaining 3%. The delegation height was the dominant t
 size before `MOD_MUL` existed. What `MOD_MUL` does is take it from 97% of 61 MB to 97% of
 350 MB, which is the same ratio and a number large enough to argue about.
 
-**The fix is a taller delegation height, and it is not this stage's to make.** `2^16` is on
-the menu, `family_circuit(15, n)` already accepts it, and one `2^16` `MOD_MUL` shard would
-hold 65,536 invocations — the mini-block's 6,705 in a single shard, with a base layer around
-1–2 GB, which is *less* than a `2^20` execution shard's. But the same argument applies to all
-four delegation families, S21 chose `2^8` for `KECCAK_F` with the forward-pass numbers in
-hand, and changing one family's height and not the others would make the registry
-inconsistent. So: `DEFAULT_HEIGHTS[MOD_MUL]` stays `2^8`, consistent with its three siblings,
-and **the height of the delegation families is put to the owner as a decision for the next
-stage**, with the numbers above. Nothing in this stage depends on the answer.
+**The fix is a taller delegation height, and it was put to the owner, who took it.**
+`2^16` is on the menu, `family_circuit(15, n)` already accepts it, and one `2^16` `MOD_MUL`
+shard holds 65,536 invocations — the mini-block's 6,705 in a single shard, with a base layer
+around 1–2 GB, which is *less* than a `2^20` execution shard's.
+
+This section first argued the other way: that the same argument applies to all four
+delegation families, and that changing one family's height and not the others would make the
+registry inconsistent. **That reasoning was wrong and the owner rejected it.** Consistency
+between delegation families has no technical content — a family's ceiling is the width of one
+row's circuit, and `KECCAK_F`'s 354,762 inner columns against `MOD_MUL`'s 270 is three orders
+of magnitude. Holding the second down to the first's height bought a uniform-looking table
+and cost a measured block 1,043 shards.
+
+So **`DEFAULT_HEIGHTS[MOD_MUL]` is `2^16`** (`docs/spec/delegation.md` §9.2). What that moved
+is recorded in §11; what it did not move is every gate — a height adds one halving list per
+variable and nothing else, which is why the raise is a re-pin and not a redesign.
 
 Two smaller candidates the profile ranks next, recorded and not taken:
 
@@ -652,8 +659,10 @@ rule 1.
 - **`prove_block_streaming` has no resume.** The archive's five sections rest on a
   post-execution section holding the whole trace, which is the thing the streaming path exists
   not to have. `prove_block` keeps resume, the tamper harness and every committed fixture.
-- **The delegation families' height is an open decision**, §7, and the one thing in this stage
-  a reviewer should weigh rather than accept.
+- **The delegation families' height is no longer one height.** §7 first left `MOD_MUL` at
+  `2^8` for consistency with its three siblings; the owner rejected that reasoning and the
+  family is at `2^16`. `KECCAK_F`, `POSEIDON2` and `FR_ARITH` stay at `2^8`, each for its own
+  width's sake (`docs/spec/delegation.md` §9.2).
 - **`guests/vendor/k256` is a fork and will drift.** `guests/vendor/README.md` names the two
   changed files and the refresh procedure. It is pinned at 0.13.4 like every other guest
   dependency, for `revm`'s reason: a guest's identity is a digest of its compiled image.

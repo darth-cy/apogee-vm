@@ -2,4 +2,4 @@
 # docs/spec/delegation.md is normative; docs/spec/constraint-manifest.md §18 is the accounting
 # the artifact itself is megabytes, so what is committed is its digest
 # n memory witness layers inner relations outputs bytes sha256
-8 132 3346 15 270 3763 2 1420188 38cc74cc26d384438dc2fa913ef62d6d123ac7e0a0f277f6c9ca2b34893fb2fa
+16 132 3346 23 286 3779 2 1421100 c1679287d07bfb81fbde690d9c5789d2ed78903020bf874fe2082bd20cb789c9

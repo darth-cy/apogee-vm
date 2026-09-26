@@ -385,7 +385,7 @@ PUBLIC_INPUT        8   9 (1 + 8)                  L9      3      0   0  1      
 PUBLIC_OUTPUT       8   9 (1 + 8)                  L9      2      0   0  1          2       18  0                  0                               2         18        1,910
 ADVICE_WINDOWS     16  17 (1 + 16)                 L17     3      0   0  1          3       34  0                  0                               2         34        2,887
 ADVICE_WINDOWS     22  23 (1 + 22)                 L23     3      0   0  1          3       46  0                  0                               2         46        3,535
-MOD_MUL             8   15 (7 + 8)                 L15   132  3,346   0  0      3,478      270  3,493 (73/3,420)    0                               2      3,763    1,420,188
+MOD_MUL            16   23 (7 + 16)                L23   132  3,346   0  0      3,478      286  3,493 (73/3,420)    0                               2      3,779    1,421,100
 ```
 
 `committed` is layer 0's width, `M + W + S`. `inner` is the width of every layer above 0,
@@ -8092,9 +8092,13 @@ private `fill::mod_mul`.
 
 **3,478 committed columns (132 `M`, 3,346 `W`, no `S`) and no virtual table.** Gate list 0
 writes 66 columns — the two sides' 33 leaves — and holds **3,493 enforcing gates
-(73 degree-1, 3,420 degree-2)**. **No lookup**, 2 outputs. At `n = 8` there are 15 gate
-lists (7 row-wise and 8 halving), the top is `L15`, and the circuit has 270 inner columns and
-3,763 relations, 1,420,188 bytes of wire form. `artifact` panics unless the column counts are
+(73 degree-1, 3,420 degree-2)**. **No lookup**, 2 outputs. At its `n = 16` there are 23 gate
+lists (7 row-wise and 16 halving), the top is `L23`, and the circuit has 286 inner columns and
+3,779 relations, 1,421,100 bytes of wire form. **None of the counts before that sentence
+depends on `n`** — a height adds halving lists and nothing else, one node per output each, so
+at `n = 8` the same circuit is 15 lists, 270 inner and 3,763 relations with the committed
+width, the gate split and the lookup count unmoved (`mod_mul.rs`'
+`a_height_moves_only_the_halving_layers`). `artifact` panics unless the column counts are
 `MEMORY_COLUMNS` and `WITNESS_COLUMNS`, there is one `W` name per `W` column, and the carries
 **close** the witness — a fill that wrote past them would be writing into nothing. It also
 panics on every refusal of `validate` and of `memory::check_memory`.

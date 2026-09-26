@@ -83,8 +83,22 @@ pub const RECURSION_UNUSED_RESULT: u32 = 11;
 /// `guests/mod-mul-ops`' exit status: the number of checks it passed.
 pub const MOD_MUL_RESULT: u32 = 12;
 
-/// S23's delegation heights, `2^8` like S21's.
+/// S21's and S23's delegation heights. **Not `MOD_MUL`'s**, which is `2^16`
+/// (`constants::family::DEFAULT_HEIGHTS`, `docs/spec/delegation.md` §9.1).
 pub const DELEGATION_VARS: u32 = 8;
+
+/// The height the **fixture** statement proves `MOD_MUL` at, and it is
+/// deliberately not the family's default.
+///
+/// `guests/mod-mul-ops` makes 1,227 invocations. At the real `2^16` that is a
+/// single shard, and the suites that read this statement — `prover`'s fill and
+/// `checker`'s tamper twins — are the only multi-shard coverage this family
+/// has of its anchor pairing and its last-shard padding rows. So the fixture
+/// keeps `2^8` to stay multi-shard, which is a test-design choice and says
+/// nothing about the default; `2^16` is proved end to end by the deferred
+/// `prover::revm` and `host::prove` suites, whose params read
+/// `DEFAULT_HEIGHTS` (`crates/host/src/fixture.rs`).
+pub const MOD_MUL_FIXTURE_VARS: u32 = 8;
 
 /// The committed ELF of guest `name`.
 pub fn fixture(name: &str) -> Vec<u8> {
@@ -160,8 +174,9 @@ pub fn keccak_params() -> ProgramParams {
 }
 
 /// S26's heights: the six execution families `mod-mul-ops` runs at `2^20`,
-/// `MOD_MUL` at `2^8`, and the window families at `2^18` — see
-/// [`mod_mul_program`] for why `2^16` does not fit.
+/// `MOD_MUL` at [`MOD_MUL_FIXTURE_VARS`] rather than its `2^16` default, and
+/// the window families at `2^18` — see [`mod_mul_program`] for why `2^16` does
+/// not fit them.
 pub fn mod_mul_params() -> ProgramParams {
     let mut heights = [1 << 18; family::COUNT as usize];
     for f in [
@@ -174,7 +189,7 @@ pub fn mod_mul_params() -> ProgramParams {
     ] {
         heights[f as usize] = 1 << ADD_VARS;
     }
-    heights[family::MOD_MUL as usize] = 1 << DELEGATION_VARS;
+    heights[family::MOD_MUL as usize] = 1 << MOD_MUL_FIXTURE_VARS;
     ProgramParams {
         heights,
         ..ProgramParams::defaults()
@@ -249,8 +264,9 @@ pub fn recursion_unused_program() -> Program {
 /// name over three moduli and reaches it a second time through
 /// `guests/vendor/k256`'s patched field multiply.
 ///
-/// Its six execution families run at `2^20` and `MOD_MUL` at `2^8`, but its
-/// **window** families need `2^18` rather than `2^16`: the guest's `.text`
+/// Its six execution families run at `2^20` and `MOD_MUL` at
+/// [`MOD_MUL_FIXTURE_VARS`], but its **window** families need `2^18` rather
+/// than `2^16`: the guest's `.text`
 /// reaches pc `0x2161a` and `decode_program` refuses an image byte past RAM
 /// window 0, which at `2^16` ends at `0x40000` — that one fits, but the decoded
 /// tables do not, a table's row `i` being pc `2i`.
