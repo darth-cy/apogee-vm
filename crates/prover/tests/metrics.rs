@@ -365,19 +365,6 @@ fn a_metered_block_is_the_block_prove_block_makes() {
     println!("{metrics}");
 }
 
-/// A convenience the report is for: the numbers a handoff note quotes, printed
-/// in one place for one statement. Deferred with the suite above.
-#[test]
-#[ignore]
-fn the_report_of_the_s16_statement() {
-    let setup = common::setup();
-    let mut archive = common::archive(&setup.program);
-    let plan = trace::plan_shards(archive.cycle_profile(), &setup.vk.config);
-    let (_, metrics) = prover::prove_block_metered(&setup, &mut archive, &plan).expect("the block");
-    println!("{metrics}");
-    println!("{}", metrics.to_json());
-}
-
 /// Two aggregates the deferred runs above are read through, held to their
 /// definitions on data the cheap tests can build.
 /// The speedup is **one task's whole body** over the region's wall, not

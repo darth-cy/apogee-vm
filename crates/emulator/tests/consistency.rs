@@ -1120,27 +1120,3 @@ fn the_host_qemu_and_the_emulator_agree_on_every_input() {
         assert_eq!(emulate(&guest.image, &[mode]), want, "heap probe {mode}");
     }
 }
-
-/// What each workload costs the guest, at scale 0 and at `MAX_SCALE`. A
-/// report for whoever tunes a workload, not a check.
-#[test]
-#[ignore = "a report: --ignored --nocapture"]
-fn workload_costs() {
-    let guest = guest();
-    println!(
-        "{:<16} {:>14} {:>14} {:>12}",
-        "workload", "cycles, 0", "cycles, max", "fd 1, max"
-    );
-    for (i, w) in WORKLOADS.iter().enumerate() {
-        let cost = |scale| {
-            let e = run(
-                &guest.image,
-                &io(&fd0(1, scale, 1 << i, 0, TEXT.as_bytes())),
-            )
-            .unwrap_or_else(|e| panic!("{}: {e}", w.name));
-            (e.cycle_count, e.stdout.len())
-        };
-        let ((small, _), (large, bytes)) = (cost(0), cost(MAX_SCALE));
-        println!("{:<16} {small:>14} {large:>14} {bytes:>12}", w.name);
-    }
-}

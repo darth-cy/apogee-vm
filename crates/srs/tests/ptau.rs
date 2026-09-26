@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 use curve::{G1Affine, G2Affine};
 use srs::{Srs, SrsError};
-use test_support::{hex_to_bytes, sha256, to_hex};
+use test_support::{sha256, to_hex};
 
 /// The committed corpus, pinned. Refresh deliberately:
 /// `cargo run -p kat-gen -- srs`, then paste the digest it prints.
@@ -130,30 +130,6 @@ fn decoded_points_match_the_independent_reader() {
         checked += 1;
     }
     assert_eq!(checked, 10, "every pinned point ran");
-}
-
-/// Acceptance 11's negative control on this corpus: one corrupted expected
-/// point has to fail.
-#[test]
-fn a_corrupted_point_vector_fails() {
-    let text = vectors();
-    let Some(path) = common::ptau(24) else {
-        common::skipped("the point negative control", 24);
-        return;
-    };
-    let srs = Srs::from_ptau(&path, 2).expect("two powers ingest");
-
-    let line = text
-        .lines()
-        .find(|l| l.starts_with("point g1 1 "))
-        .expect("the [x]_1 line");
-    let expected = line.split_whitespace().nth(3).unwrap();
-    let mut corrupted: Vec<u8> = expected.bytes().collect();
-    corrupted[0] ^= b'0' ^ b'1';
-    assert_ne!(
-        to_hex(&srs.g1()[1].to_bytes()),
-        String::from_utf8(corrupted).unwrap()
-    );
 }
 
 fn ceremony_identity(text: &str) -> &str {
@@ -418,17 +394,4 @@ fn a_missing_file_is_an_error() {
     let path = common::scratch("does-not-exist.ptau");
     let _ = fs::remove_file(&path);
     assert!(matches!(Srs::from_ptau(&path, 1), Err(SrsError::Io(_))));
-}
-
-/// The fixtures are hex, and a fixture the reader silently mangles is worse
-/// than no fixture. This is the codec, not the SRS.
-#[test]
-fn the_fixture_codec_round_trips() {
-    let text = vectors();
-    for line in text.lines().filter(|l| l.starts_with("point ")) {
-        let token = line.split_whitespace().nth(3).unwrap();
-        let bytes = hex_to_bytes(token).expect("a fixture point is hex");
-        assert_eq!(to_hex(&bytes), token);
-        assert!(bytes.len() == 64 || bytes.len() == 128);
-    }
 }

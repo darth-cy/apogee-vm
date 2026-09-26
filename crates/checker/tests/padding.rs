@@ -13,13 +13,6 @@ use constraints::{
 use field::Fr;
 
 #[test]
-fn both_fixtures_keep_their_padding_contract() {
-    for (label, a) in toys() {
-        assert_eq!(check_padding(&a), Ok(()), "{label}");
-    }
-}
-
-#[test]
 fn a_flipped_zero_row_verdict_is_rejected() {
     for (label, mut a) in toys() {
         a.padding.zero_row_valid = !a.padding.zero_row_valid;

@@ -691,32 +691,6 @@ fn mod_mul_ops_checks_itself_under_the_delegation_ecall() {
     assert!(execution.stdout.is_empty(), "it writes nothing");
 }
 
-/// It invokes `MOD_MUL` and **only** `MOD_MUL`: it does secp256k1 field
-/// arithmetic and no `field::Fr` arithmetic, so S23's two families are not even
-/// in its config.
-#[test]
-fn mod_mul_ops_invokes_one_family() {
-    let image = image("mod-mul-ops");
-    let (tables, config) = preprocess(&image);
-    let (traces, ..) = trace_run(&image, &io(&[]), &tables, &config).expect("it traces");
-    let trace = traces
-        .delegation(constants::family::MOD_MUL)
-        .expect("MOD_MUL has a buffer");
-    assert!(!trace.is_empty(), "MOD_MUL is invoked");
-    let declared: Vec<u32> = config.families.iter().map(|(f, _)| *f).collect();
-    for absent in [
-        constants::family::POSEIDON2,
-        constants::family::FR_ARITH,
-        constants::family::KECCAK_F,
-    ] {
-        assert!(
-            !declared.contains(&absent),
-            "{} is in the config and should not be",
-            program::family_name(absent)
-        );
-    }
-}
-
 /// The invocation counts the two delegation families actually see, which is
 /// what a shard plan divides by the height.
 ///

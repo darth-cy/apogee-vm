@@ -33,7 +33,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Stdio};
 
 use common::{image, input_of, io, preprocess, qemu_binary};
-use emulator::{run, trace_run, EmuError};
+use emulator::trace_run;
 
 /// Every guest the comparison covers: the stage's required corpus —
 /// `opcodes`, `rvc-dense`, `fib`, `heap` — `atomics`, the compiled AMOs,
@@ -151,24 +151,5 @@ fn the_oracle_can_fail() {
     assert!(
         q.status != Some(perturbed.0) || q.stdout != perturbed.1,
         "the oracle accepted a different execution's outputs"
-    );
-}
-
-/// `ebreak` stops both executors, neither cleanly: the emulator names the pc,
-/// QEMU takes a trap signal. The pc itself is the emulator's own semantics
-/// and is not compared.
-#[test]
-#[ignore = "needs a Linux host with qemu-user; run with --include-ignored"]
-fn ebreak_stops_both_executors() {
-    let input = 1u32.to_le_bytes();
-    let EmuError::Ebreak { pc } = run(&image("opcodes"), &io(&input)).unwrap_err() else {
-        panic!("mode 1 is an ebreak");
-    };
-    println!("the emulator stops at pc {pc:#010x}");
-    let q = qemu("ebreak", "opcodes", &input);
-    assert_ne!(
-        q.status,
-        Some(0),
-        "QEMU must not exit cleanly through an ebreak"
     );
 }

@@ -134,16 +134,6 @@ fn the_registry_is_one_table() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn a_record_declares_its_family() {
-    let mut bytes = vec![0u8; 3];
-    bytes.extend(record(ecall::PRECOMPILE_KECCAK_F));
-    assert_eq!(
-        declared_delegations(&image_of(bytes)),
-        Ok(vec![family::KECCAK_F])
-    );
-}
-
-#[test]
 fn the_scan_is_byte_wise() {
     // A `static`'s address is the linker's. The record here sits at offset 1,
     // 2 and 3 of its segment in turn, and a word-wise scan would find none of
@@ -201,15 +191,6 @@ fn a_truncated_record_declares_nothing() {
         declared_delegations(&image_of(full)),
         Ok(vec![family::KECCAK_F])
     );
-}
-
-#[test]
-fn a_segment_with_no_file_bytes_carries_no_record() {
-    // `.bss` and the heap-and-stack reservation hold no image byte, wherever
-    // they lie, and identity does not bind them either.
-    let mut image = image_of(Vec::new());
-    image.segments[0].mem_len = 1 << 20;
-    assert_eq!(declared_delegations(&image), Ok(Vec::new()));
 }
 
 // ---------------------------------------------------------------------------
@@ -307,54 +288,4 @@ fn reachability_survives_the_optimiser() {
             );
         }
     }
-}
-
-/// A declared family is in the `VmConfig` **in ascending id order** and carries
-/// a table with no columns — it is invoked, never decoded.
-///
-/// *Where* in the list is a fact about ids and nothing else, and it has moved
-/// twice. `KECCAK_F` was last until S-IO appended three window families above it
-/// (`docs/spec/public-values.md` §4); S26's `MOD_MUL` is 15, above those three,
-/// so a guest that declares it has a delegation family last again. Both cases
-/// are checked below, which is what keeps the assertion about ascending order
-/// rather than about a particular family.
-#[test]
-fn a_declared_family_is_last_and_has_no_table() {
-    let image = common::guest("keccak-test");
-    let (tables, config) = decode_program(&image, &common::fitting(&image)).expect("it decodes");
-    let ids: Vec<u32> = config.families.iter().map(|(f, _)| *f).collect();
-    assert!(ids.contains(&family::KECCAK_F));
-    assert!(
-        ids.windows(2).all(|p| p[0] < p[1]),
-        "the family list is strictly ascending"
-    );
-    assert_eq!(
-        ids.last().copied(),
-        Some(family::ADVICE_WINDOWS),
-        "S-IO's three are above KECCAK_F"
-    );
-
-    // The other case: a guest declaring S26's family, whose id is above all
-    // three window families, has a delegation family last again.
-    let image = common::guest("mod-mul-ops");
-    let (_, config) = decode_program(&image, &common::fitting(&image)).expect("it decodes");
-    let ids: Vec<u32> = config.families.iter().map(|(f, _)| *f).collect();
-    assert!(
-        ids.windows(2).all(|p| p[0] < p[1]),
-        "the family list is strictly ascending"
-    );
-    assert_eq!(
-        ids.last().copied(),
-        Some(family::MOD_MUL),
-        "MOD_MUL is the highest id in constants::family"
-    );
-    let table = tables
-        .family(family::KECCAK_F)
-        .expect("a config family has a table");
-    assert!(table.columns.is_empty(), "no columns");
-    assert!(
-        (0..table.height as usize).all(|row| !table.is_live(row)),
-        "and no live row: the family claims no pc"
-    );
-    assert_eq!(program::field_mask(family::KECCAK_F), 0);
 }

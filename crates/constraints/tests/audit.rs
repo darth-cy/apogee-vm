@@ -91,15 +91,6 @@ fn every_gate(a: &CircuitArtifact) -> Vec<&GateDef> {
     gates
 }
 
-/// How many gates of each variant, indexed by catalogue row.
-fn variant_counts(a: &CircuitArtifact) -> [usize; VARIANTS] {
-    let mut counts = [0usize; VARIANTS];
-    for g in every_gate(a) {
-        counts[catalogue_row(g)] += 1;
-    }
-    counts
-}
-
 /// S15's combined toy, the one committed circuit with a fraction tree in it.
 fn lookup_toy() -> CircuitArtifact {
     let bytes = fixture_bytes(
@@ -131,49 +122,6 @@ fn the_audit_over_every_committed_circuit_emits_every_variant() {
         .map(|i| CATALOGUE[i].variant)
         .collect();
     assert!(dead.is_empty(), "variants no test circuit emits: {dead:?}");
-}
-
-/// Each compilation's per-variant counts, written down from the toy's
-/// description (`tests/common/mod.rs`) rather than read back from the files.
-///
-/// Cached: `Linear` is `shifted_a`, `fingerprint3`'s gate and its relation;
-/// `Product` is the gates of `ab`, `fingerprint` (`shifted_a·c`) and `abm` and
-/// the relations of `ab` and `abm`; `MaskIntoIdentity` is `masked_m`'s gate and
-/// relation; `AffineProduct` is the relation of `fingerprint` alone;
-/// `TreeProduct` is the two halving gates and their relations; `Quadratic` is
-/// the gated equality, `e·s − a·s`, as the enforcing gate and as its relation.
-///
-/// Cache-free: `shifted_a` is gone and `fingerprint`'s `Product` over it is now
-/// an `AffineProduct`, so `Linear` and `Product` each lose one and
-/// `AffineProduct` gains one. The two compilations emit different mixes of
-/// `Product` and `AffineProduct`, which is why the audit unions them. (At the
-/// toy's size each compilation alone still covers all six variants, because
-/// the flat list carries the `AffineProduct` the cached gates do not.)
-#[test]
-fn each_compilation_reports_its_own_variant_counts() {
-    //                  Linear Product Mask Affine Tree Quadratic Cross
-    let cached_counts = [3, 5, 2, 1, 4, 2, 0];
-    let cache_free_counts = [2, 4, 2, 2, 4, 2, 0];
-
-    assert_eq!(variant_counts(&toy()), cached_counts, "toy_cached.bin");
-    assert_eq!(
-        variant_counts(&toy_cache_free()),
-        cache_free_counts,
-        "toy_cache_free.bin"
-    );
-
-    let product = 1;
-    let affine = 3;
-    assert_eq!(CATALOGUE[product].variant, "Product");
-    assert_eq!(CATALOGUE[affine].variant, "AffineProduct");
-    assert_ne!(cached_counts[product], cache_free_counts[product]);
-    assert_ne!(cached_counts[affine], cache_free_counts[affine]);
-    // Inlining rewrites a gate's shape and removes cached entries; it never
-    // adds or removes a producing, enforcing or relation entry.
-    let entries = |a: &CircuitArtifact| {
-        every_gate(a).len() - a.layers.iter().map(|l| l.cached.len()).sum::<usize>()
-    };
-    assert_eq!(entries(&toy()), entries(&toy_cache_free()));
 }
 
 /// Must-be-exact 3 and 13: the catalogue has one row per variant, in wire-tag

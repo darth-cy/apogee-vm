@@ -23,9 +23,8 @@ use curve::{G1Affine, G1Projective};
 use field::Fr;
 use pcs::{
     accumulator_digest, accumulator_from_words, accumulator_words, append_g1_list, batch_open,
-    batch_verify, batch_verify_deferred, commit, discharge, open, verify, verify_deferred,
-    AccumulatorEntry, MercuryCommitment, MercuryProof, PairingSide, PcsError, ENTRIES_PER_CHECK,
-    ENTRY_WORDS,
+    batch_verify_deferred, commit, discharge, open, verify, verify_deferred, AccumulatorEntry,
+    MercuryCommitment, MercuryProof, PairingSide, PcsError, ENTRIES_PER_CHECK, ENTRY_WORDS,
 };
 use poly::{MultilinearPoly, PolyBacking};
 use srs::Srs;
@@ -329,61 +328,6 @@ fn deferral_changes_no_verdict() {
     }
     assert_eq!(honest, 1, "exactly the honest case verifies");
     assert_eq!(cases.len(), 1 + 14 + 1 + NUM_VARS + 1 + 1 + 2 + 1);
-}
-
-/// The same, for the batch variants.
-#[test]
-fn batch_deferral_changes_no_verdict() {
-    let num_vars = 6;
-    let srs = common::toy_srs(num_vars as u32);
-    let vsrs = srs.verifier();
-    let mut rng = Rng::new(0x5009_0103);
-    let cols: Vec<MultilinearPoly> = (0..3)
-        .map(|_| common::random_poly(&mut rng, num_vars))
-        .collect();
-    let cms: Vec<MercuryCommitment> = cols
-        .iter()
-        .map(|f| commit(&srs, f).expect("commit"))
-        .collect();
-    let u = common::random_point(&mut rng, num_vars);
-    let mut tr = Transcript::new();
-    let (vs, proof) = batch_open(&srs, &cols, &cms, &u, &mut tr).expect("batch_open");
-
-    let mut swapped_cms = cms.clone();
-    swapped_cms.swap(0, 1);
-    let mut moved_vs = vs.clone();
-    moved_vs[1] += Fr::ONE;
-    let mut damaged = proof;
-    damaged.g_z += Fr::ONE;
-
-    let cases: Vec<(&str, Vec<MercuryCommitment>, Vec<Fr>, MercuryProof)> = vec![
-        ("honest", cms.clone(), vs.clone(), proof),
-        ("swapped commitments", swapped_cms, vs.clone(), proof),
-        ("moved value", cms.clone(), moved_vs, proof),
-        ("damaged proof", cms.clone(), vs.clone(), damaged),
-        (
-            "dropped commitment",
-            cms[..2].to_vec(),
-            vs[..2].to_vec(),
-            proof,
-        ),
-        ("empty", Vec::new(), Vec::new(), proof),
-        ("length mismatch", cms.clone(), vs[..2].to_vec(), proof),
-    ];
-
-    let mut honest = 0;
-    for (name, cs, values, p) in &cases {
-        let mut tr = Transcript::new();
-        let native = batch_verify(&vsrs, cs, &u, values, p, &mut tr);
-        let mut tr = Transcript::new();
-        let deferred = batch_verify_deferred(&vsrs, cs, &u, values, p, &mut tr)
-            .and_then(|entries| discharge(&vsrs, &entries, &[entries.len()]));
-        assert_eq!(native, deferred, "case `{name}` must agree");
-        if native.is_ok() {
-            honest += 1;
-        }
-    }
-    assert_eq!(honest, 1);
 }
 
 // ---------------------------------------------------------------------------

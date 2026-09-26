@@ -43,7 +43,7 @@ fn trace_vars(family: u32) -> u32 {
     assert!(height.is_power_of_two(), "a height is a power of two");
     let vars = height.trailing_zeros();
     assert!(
-        vars % 2 == 0,
+        vars.is_multiple_of(2),
         "{}'s height 2^{vars} is odd, and a Mercury opening needs b = sqrt(n)",
         program::family_name(family)
     );

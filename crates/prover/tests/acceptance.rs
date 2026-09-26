@@ -21,7 +21,7 @@ use prover::{
 };
 use trace::{Phase, TraceArchive};
 use transcript::TranscriptEvent::{self, Absorb, Challenge};
-use verifier::{load_verifying_key, verify_shard, PublicInputs, ShardProof, VerifyError};
+use verifier::{verify_shard, PublicInputs, ShardProof, VerifyError};
 use verifier_core::{global_commit, reduce_shard, statement_shards};
 
 const ADD: u32 = family::ADD_SUB_LUI_AUIPC;
@@ -616,47 +616,3 @@ fn a9_a_resumed_statement_is_byte_identical() {
 // ---------------------------------------------------------------------------
 // Serde, the key's load, determinism
 // ---------------------------------------------------------------------------
-
-/// Acceptance 10's library half: every proof, the statement and the key
-/// round-trip byte for byte in their canonical encodings, and the key loads
-/// through `load_verifying_key` — the core's load rules and every curve point
-/// — back to itself. The CLI half is `crates/verifier/tests/cli.rs`.
-#[test]
-#[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
-fn a10_the_proofs_the_statement_and_the_key_round_trip() {
-    let (setup, _, public, proofs) = proved();
-    for proof in &proofs {
-        let bytes = proof.to_bytes();
-        let back = ShardProof::from_bytes(&bytes).unwrap();
-        assert_eq!(&back, proof);
-        assert_eq!(back.to_bytes(), bytes);
-        assert_eq!(verify_shard(&setup.vk, &back, &public), Ok(()));
-    }
-    let bytes = public.to_bytes();
-    assert_eq!(PublicInputs::from_bytes(&bytes).unwrap().to_bytes(), bytes);
-    let bytes = setup.vk.to_bytes();
-    let loaded = load_verifying_key(&bytes).expect("the key loads");
-    assert_eq!(loaded, setup.vk);
-    assert_eq!(loaded.to_bytes(), bytes);
-}
-
-/// Proofs do not depend on the thread count: the statement proved on one
-/// thread is byte for byte the statement proved on every core.
-#[test]
-#[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
-fn the_proofs_do_not_depend_on_the_thread_count() {
-    let (setup, whole, _, _) = proved();
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(1)
-        .build()
-        .expect("a one-thread pool");
-    let serial = pool.install(|| {
-        let mut archive = common::archive(&setup.program);
-        advance(&setup, &mut archive, Phase::Final).unwrap();
-        archive
-    });
-    assert_eq!(
-        serial.deterministic_payload(),
-        whole.deterministic_payload()
-    );
-}

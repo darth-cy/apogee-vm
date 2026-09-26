@@ -146,9 +146,9 @@ anything: an unbounded `a` in an AND lookup's key `a + AND_BASE + 1` reaches
 family that reads a value out of a table channel without bounding the key it looked up has
 not proved what it thinks: it has proved that *something* is in the table. S15's combined
 toy leaves `sign_h` and `and_a` unbounded on purpose — it is a toy for the channels, not a
-family — so the forgery above works there, and
-`crates/checker/tests/logup.rs::an_unbounded_key_can_reach_the_neutral_entry` is the
-control that shows it. S17 and S18 own the bounds.
+family — so the forgery above works there. S17 and S18 own the bounds, and each family's own
+suite is where a key bound is held (`mem_subword.rs::the_generic_key_stays_inside_its_sub_table`,
+`atomics.rs::a_byte_key_outside_the_and_table_is_refused`).
 
 **A range channel needs no offset**, and cannot have one: the table is `[0, 2^BITS)`, so
 shifting the domain up by one would put `2^BITS` outside it and the top of the range

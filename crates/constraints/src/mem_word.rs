@@ -450,13 +450,6 @@ mod tests {
         }
     }
 
-    /// The honest family spec assembles, at the lowest height the registry
-    /// builds.
-    #[test]
-    fn the_seam_assembles_the_family() {
-        assert_eq!(assemble(19, family_spec()), artifact(19));
-    }
-
     /// An obligation dropped on the way to the assembly is refused by its
     /// channel's count.
     #[test]

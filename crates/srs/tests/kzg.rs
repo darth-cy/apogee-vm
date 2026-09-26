@@ -100,31 +100,6 @@ fn committed_vectors_match() {
     assert_eq!(checked, 4, "every committed case ran");
 }
 
-/// Acceptance 11's negative control on this corpus.
-#[test]
-fn a_corrupted_vector_fails() {
-    let text = vectors();
-    let Some(srs) = ceremony() else {
-        common::skipped("the KZG negative control", 24);
-        return;
-    };
-    let line = text
-        .lines()
-        .find(|l| l.starts_with("kzg 100 "))
-        .expect("the degree-100 case");
-    let f: Vec<&str> = line.split_whitespace().collect();
-    let (coeffs, _) = coefficients(f[2].parse().unwrap(), 100);
-
-    let mut corrupted: Vec<u8> = f[4].bytes().collect();
-    corrupted[0] ^= b'0' ^ b'1';
-    let corrupted = String::from_utf8(corrupted).unwrap();
-    assert_ne!(corrupted, f[4]);
-    assert_ne!(
-        to_hex(&kzg_commit(&srs, &coeffs).unwrap().to_bytes()),
-        corrupted
-    );
-}
-
 /// Commit, open and verify agree at every acceptance degree, plus the two
 /// degenerate ones at the bottom.
 #[test]

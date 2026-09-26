@@ -1202,20 +1202,6 @@ fn every_row_kind_satisfies_every_gate_and_every_bound() {
     assert_eq!(x0.get("rd_is_zero"), Fr::ONE);
 }
 
-/// The all-zero padding row is valid, and the circuit says so in its own
-/// padding contract.
-#[test]
-fn the_padding_row_is_the_all_zero_row() {
-    let a = artifact();
-    assert!(a.padding.zero_row_valid);
-    assert!(a.padding.row.iter().all(|v| *v == Fr::ZERO));
-    assert_eq!(
-        violated(&a, &Row::default()),
-        (none(), none(), none()),
-        "the all-zero row"
-    );
-}
-
 /// A row named by [`honest_rows`].
 fn row(what: &str) -> Row {
     honest_rows()

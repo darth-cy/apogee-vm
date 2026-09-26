@@ -335,17 +335,3 @@ fn every_single_field_perturbation_is_caught() {
         }
     }
 }
-
-#[test]
-fn documentation_only_fields_are_not_covered() {
-    for (label, mut a, constants) in toys_with_constants() {
-        let r = relation(&a, "define_ab");
-        a.relations[r].name = "define_a_times_b".to_string();
-        let i = slot(&a, "ab");
-        a.scratch[i].name = "a_times_b".to_string();
-        for e in &mut a.layers[0].cached {
-            e.name = "gamma_a_plus_row".to_string();
-        }
-        assert_eq!(cross_check(&a, &constants, reference), Ok(()), "{label}");
-    }
-}

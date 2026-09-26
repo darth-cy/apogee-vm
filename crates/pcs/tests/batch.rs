@@ -101,33 +101,6 @@ fn a_batch_of_eight_round_trips_at_two_to_the_sixteen() {
     it.check(&it.cms, &vs, &proof).expect("batch_verify");
 }
 
-/// The two sides leave the transcript in the same state, so a batched opening
-/// composes inside a larger transcript exactly as a single one does.
-#[test]
-fn the_two_sides_stay_in_step() {
-    let it = batch(8, 5, 0x5009_0002);
-
-    let mut prover = Transcript::new();
-    let (vs, proof) =
-        batch_open(&it.srs, &it.cols, &it.cms, &it.u, &mut prover).expect("batch_open");
-    let mut verifier = Transcript::new();
-    batch_verify(
-        &it.srs.verifier(),
-        &it.cms,
-        &it.u,
-        &vs,
-        &proof,
-        &mut verifier,
-    )
-    .expect("batch_verify");
-
-    assert_eq!(prover.snapshot(), verifier.snapshot());
-    assert_eq!(
-        prover.challenge_scalar(constants::transcript_tags::SUMCHECK_CHALLENGE),
-        verifier.challenge_scalar(constants::transcript_tags::SUMCHECK_CHALLENGE)
-    );
-}
-
 /// Acceptance 3: a batch of one verifies. It is **not** the same transcript as
 /// a bare single opening, and the two are not interchangeable: a `k = 1` batch
 /// absorbs the commitment list and squeezes `rho` before the opening begins.

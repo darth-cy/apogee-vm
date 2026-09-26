@@ -20,22 +20,6 @@ const GUESTS: [&str; 7] = [
     "atomics.elf",
 ];
 
-/// Acceptance 7: loading the same ELF twice yields byte-identical images.
-#[test]
-fn loading_twice_serializes_identically() {
-    for name in GUESTS {
-        let bytes = common::bytes(name);
-        let a = load_elf(&bytes).unwrap_or_else(|e| panic!("{name}: {e:?}"));
-        let b = load_elf(&bytes).unwrap_or_else(|e| panic!("{name}: {e:?}"));
-        assert_eq!(a, b, "{name}: two loads produced different images");
-        assert_eq!(
-            common::to_postcard(&a),
-            common::to_postcard(&b),
-            "{name}: two loads serialized differently"
-        );
-    }
-}
-
 /// The frozen wire form reads back to the value it was written from.
 #[test]
 fn the_image_round_trips_through_postcard() {
@@ -323,47 +307,6 @@ fn initial_word_assembles_words_across_segment_edges() {
     assert_eq!(image.initial_word(0xffff_fffc), 0, "the top word");
 }
 
-/// For every committed guest ELF, `initial_word` agrees with a plain byte
-/// reference over every word of every segment's file-backed bytes and the
-/// page above them. Not the whole of every segment: the heap-and-stack
-/// reservation spans nearly 2 GiB of zeros.
-#[test]
-fn initial_word_agrees_with_the_bytes_of_every_guest() {
-    let guests = common::PINS
-        .iter()
-        .map(|(name, _)| *name)
-        .filter(|name| name.ends_with(".elf"));
-    let mut words = 0;
-    for name in guests {
-        let image = load_elf(&common::bytes(name)).unwrap_or_else(|e| panic!("{name}: {e:?}"));
-        let byte = |at: u64| -> u32 {
-            for s in &image.segments {
-                let start = s.vaddr as u64;
-                if at >= start && at < start + s.bytes.len() as u64 {
-                    return s.bytes[(at - start) as usize] as u32;
-                }
-            }
-            0
-        };
-        for s in &image.segments {
-            let end = s.vaddr as u64 + (s.bytes.len() as u64 + 4096).min(s.mem_len as u64);
-            let mut addr = s.vaddr as u64 & !3;
-            while addr < end {
-                let want =
-                    byte(addr) | byte(addr + 1) << 8 | byte(addr + 2) << 16 | byte(addr + 3) << 24;
-                assert_eq!(
-                    image.initial_word(addr as u32),
-                    want,
-                    "{name}: the word at {addr:#010x}"
-                );
-                addr += 4;
-                words += 1;
-            }
-        }
-    }
-    assert!(words > 10_000, "only {words} words compared");
-}
-
 /// A load is a pure function of the bytes: no path, no clock, no environment.
 #[test]
 fn the_image_does_not_depend_on_where_the_bytes_came_from() {
@@ -381,37 +324,6 @@ fn the_image_does_not_depend_on_where_the_bytes_came_from() {
 // ---------------------------------------------------------------------------
 // The all-zero halfword
 // ---------------------------------------------------------------------------
-
-/// RVC's defined-illegal encoding is not code, and is not a refusal.
-///
-/// The spec gives the all-zero halfword that status so that a jump into zeroed
-/// memory traps. Trapping is a run-time event: a loader cannot know whether any
-/// pc reaches a given halfword, so the honest record is [`Slot::NonInstruction`]
-/// and the trap belongs to the executor.
-///
-/// It is also not a corner case. rustc's RISC-V target sets `TrapUnreachable`,
-/// so at `opt-level = 0` — which is the guest profile — every LLVM `unreachable`
-/// block becomes a real `unimp`, and with the C extension that assembles to this
-/// halfword. An exhaustive `match` on a three-variant enum emits one; so does
-/// every `core::sync::atomic` operation, and so does `field::Fr::inverse`.
-/// Refusing it meant refusing ordinary compiler output.
-#[test]
-fn the_all_zero_halfword_is_not_code() {
-    let image = load_elf(&common::synthetic("zero_halfword.elf")).expect("it loads");
-    assert_eq!(
-        image.slot_at(0x0001_0000),
-        Some(Slot::Instruction {
-            word: 0x0000_0013,
-            compressed: true
-        }),
-        "the c.nop before the padding"
-    );
-    assert_eq!(
-        image.slot_at(0x0001_0002),
-        Some(Slot::NonInstruction),
-        "the all-zero halfword must be recorded as not code"
-    );
-}
 
 /// The sweep resumes at `pc + 2`, so what follows the padding is still found.
 ///

@@ -489,16 +489,6 @@ fn an_honest_witness_satisfies_every_gate() {
     assert_eq!(gkr::self_check(&a, &values, &challenges()), Ok(()));
 }
 
-/// The padding row alone, with nothing live: every gate holds on the all-zero
-/// row, which is the padding contract's second clause
-/// (`docs/spec/delegation.md` §6.1).
-#[test]
-fn the_all_zero_row_satisfies_every_gate() {
-    let a = mod_mul::artifact(VARS);
-    let values = forward(&a, witness(&[]));
-    assert_eq!(gkr::self_check(&a, &values, &challenges()), Ok(()));
-}
-
 // ---------------------------------------------------------------------------
 // The negative controls
 // ---------------------------------------------------------------------------

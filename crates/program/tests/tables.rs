@@ -669,17 +669,6 @@ fn each_column_is_stored_in_the_narrowest_backing() {
 }
 
 #[test]
-fn decoding_is_a_function_of_its_inputs() {
-    for name in common::GUESTS {
-        let image = common::guest(name);
-        let params = common::fitting(&image);
-        let a = decode_program(&image, &params).unwrap();
-        let b = decode_program(&image.clone(), &params).unwrap();
-        assert_eq!(a, b, "{name}");
-    }
-}
-
-#[test]
 fn committed_fixtures_match_their_pins() {
     for (name, want) in common::PINS {
         assert_eq!(

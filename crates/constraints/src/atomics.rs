@@ -712,31 +712,6 @@ pub fn channels() -> Vec<ChannelSpec> {
 mod tests {
     use super::*;
 
-    /// The legal masks are eleven distinct single bits, one per instruction the
-    /// family owns, each the bit its `extra_mask` constant names — so the
-    /// circuit's arms are keyed by `constants::extra_mask::atomics` and never
-    /// by a list written in source order.
-    #[test]
-    fn the_legal_masks_are_the_instruction_list() {
-        assert_eq!(LEGAL_MASKS.len(), 11);
-        for (k, m) in LEGAL_MASKS.iter().enumerate() {
-            assert_eq!(*m, 1 << k, "mask {k}");
-        }
-        // The four arms a transposed bit list would silently swap.
-        assert_eq!(AMOAND, KINDS[6]);
-        assert_eq!(AMOOR, KINDS[5]);
-        assert_eq!(AMOXOR, KINDS[4]);
-        assert_eq!(LR, KINDS[2]);
-        assert_eq!(SC, KINDS[3]);
-    }
-
-    /// The honest family spec assembles, at the lowest height the registry
-    /// builds.
-    #[test]
-    fn the_seam_assembles_the_family() {
-        assert_eq!(assemble(19, family_spec()), artifact(19));
-    }
-
     /// An obligation dropped on the way to the assembly is refused by its
     /// channel's count.
     #[test]

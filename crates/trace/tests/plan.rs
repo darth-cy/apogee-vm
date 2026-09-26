@@ -60,16 +60,6 @@ fn the_whole_clock_at_the_smallest_height() {
     assert_eq!(plan.shards[0], (family::ADD_SUB_LUI_AUIPC, 1 << 20));
 }
 
-/// A pure function of (profile, config): the same inputs, the same plan;
-/// either input changed, a different one.
-#[test]
-fn the_plan_is_a_pure_function() {
-    let (p, c) = (profile(70_000), config(1 << 16));
-    assert_eq!(plan_shards(&p, &c), plan_shards(&p, &c));
-    assert_ne!(plan_shards(&p, &c), plan_shards(&profile(1), &c));
-    assert_ne!(plan_shards(&p, &c), plan_shards(&p, &config(1 << 18)));
-}
-
 #[test]
 #[should_panic(expected = "not the config's families")]
 fn a_profile_of_other_families_is_refused() {

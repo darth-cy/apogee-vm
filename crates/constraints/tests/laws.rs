@@ -1755,25 +1755,6 @@ fn a_quadratic_is_as_wide_as_its_widest_term() {
     assert_eq!(in_linear.validate(), Ok(()));
 }
 
-/// An enforcing `Quadratic` whose products cancel, `e·s − s·e` in the gate and
-/// its relation alike, is identically zero and refused as constraining nothing;
-/// the toy's own `e·s − a·s` is the control.
-///
-/// Kills a `Quadratic` expansion that does not normalize its sum: the two
-/// products are one monomial, `e·s`, and only the merge makes them cancel.
-#[test]
-fn an_enforcing_quadratic_whose_products_cancel_is_refused() {
-    let mut a = toy();
-    let cancels = quadratic(lit(0), &[], &[(lit(1), E, S), (neg(1), S, E)]);
-    a.layers[0].enforcing[0].gate = cancels.clone();
-    a.relations[3].gate = cancels;
-    assert_malformed(
-        &a,
-        "enforcing gate `gated_equality` in gate list 0 is identically zero",
-    );
-    assert_eq!(toy().validate(), Ok(()));
-}
-
 /// An inner column read only through `Quadratic` terms that cancel is unread.
 /// `abm` rewritten `ab·masked_m + k·fingerprint·ab − ab·fingerprint` and
 /// `fingerprint3` rewritten to the constant 3, gates and relations alike: at

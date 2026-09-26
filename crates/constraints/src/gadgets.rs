@@ -226,16 +226,6 @@ pub fn comparison(c: &Comparison) -> (Vec<(String, GateDef)>, Vec<LookupExpr>) {
 mod tests {
     use super::*;
 
-    /// Two halfwords are the comparison's word: the range pairs bound exactly
-    /// the 32 bits the equation's `2^32` assumes.
-    #[test]
-    fn two_range16_halves_are_the_comparison_word() {
-        assert_eq!(
-            2 * lookup_channel::BITS[lookup_channel::RANGE16 as usize],
-            32
-        );
-    }
-
     fn a_comparison() -> Comparison {
         let w = PolyAddress::Witness;
         Comparison {

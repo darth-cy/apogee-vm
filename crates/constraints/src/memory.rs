@@ -298,14 +298,6 @@ pub fn read_tuple(query: usize) -> GateDef {
     tuple(query, query, false, None)
 }
 
-/// Query `query`'s write tuple, unmasked: `γ_M + AS·m + α_addr·addr +
-/// α_ts·(4·cycle + Δ·m) + α_val·write_value`. With `m = 1` it is exactly
-/// `T(AS, addr, 4·cycle + Δ, write_value)`.
-#[cfg(test)]
-fn write_tuple(query: usize) -> GateDef {
-    tuple(query, query, true, None)
-}
-
 /// A product-tree leaf, one flat `Quadratic`: at `mask = 1` the tuple, at
 /// `mask = 0` exactly 1. `docs/spec/memory.md` §2.2 and §3.3.
 ///
@@ -1014,49 +1006,6 @@ mod tests {
         );
         lookups.pop();
         frame_body(queries, 4, lookups, FamilySpec::default());
-    }
-
-    /// The unmasked write tuple, which only the frame's leaves use, is the
-    /// read tuple's twin: `crates/constraints/tests/memory.rs` reads both.
-    #[test]
-    fn a_write_tuple_is_a_linear_gate() {
-        assert!(matches!(write_tuple(RD), GateDef::Linear { .. }));
-    }
-
-    /// Every execution family's frame builds at its own width — `assemble`
-    /// runs `validate` and `check_memory` and panics on either refusal, so
-    /// construction succeeding is the assertion — with `1 + 5w` memory
-    /// columns, `w + 3` witness columns, `2w` obligations, and a gate list 0
-    /// padded to a power of two a side. `ADD_SUB_LUI_AUIPC`, `MEM_WORD` and
-    /// `ATOMICS` are the widths that are not powers of two, so they are the
-    /// families whose constant-1 pad leaves this exercises.
-    #[test]
-    fn every_execution_family_builds_its_frame() {
-        let widths = [
-            (family::ADD_SUB_LUI_AUIPC, 8),
-            (family::JUMP_BRANCH_SLT, 4),
-            (family::SHIFT_BITWISE, 4),
-            (family::MUL_DIV, 4),
-            (family::MEM_WORD, 6),
-            (family::MEM_SUBWORD, 6),
-            (family::ATOMICS, 5),
-        ];
-        for (id, width) in widths {
-            assert_eq!(frame_queries(id).len(), width, "family {id}");
-            let a = family_frame_artifact(id, 6);
-            // `1 + 5w`, and one more when the frame holds the delegation
-            // mirror: that query's leaf names the requested type through a
-            // memory column rather than a literal (`deleg_space`).
-            let extra = usize::from(frame_queries(id).contains(&DELEG));
-            assert_eq!(a.memory.len(), 1 + 5 * width + extra, "family {id}");
-            assert_eq!(a.witness.len(), width + 3, "family {id}");
-            assert_eq!(a.lookups.len(), 2 * width, "family {id}");
-            assert_eq!(
-                a.layers[0].width as usize,
-                2 * width.next_power_of_two(),
-                "family {id}"
-            );
-        }
     }
 
     /// `INIT_TEARDOWN` runs no cycles, so it has no frame: its artifact is

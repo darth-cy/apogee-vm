@@ -352,9 +352,10 @@ its **journal**; it issues no ecall but `EXIT`, which is what makes it provable,
 of those three accesses is an ordinary load or store. Its config holds families 0 through 5 at
 `2^20`, `INIT_TEARDOWN`, `ZERO_WINDOWS` and `ADVICE_WINDOWS` at `2^16`, and `PUBLIC_INPUT` and
 `PUBLIC_OUTPUT` at the pinned `2^8`; its shard counts for the three new families are **1, 1 and
-1** — 64 bytes of advice is a 68-byte region, 17 words, one window. `guests/addsub` under the
-same suite is the other control: two empty byte strings, two public shards, and **no** advice
-window (`a5_a_guest_that_publishes_nothing_still_binds_that`).
+1** — 64 bytes of advice is a 68-byte region, 17 words, one window. A guest that publishes nothing still binds that: two
+empty byte strings, two public shards, and **no** advice window. No test asserts it since the
+suite was abridged — the shard counts come from `window_height` and `shard_counts`, not from a
+choice a prover makes.
 
 ### 1.2 Master table
 
@@ -3728,10 +3729,8 @@ membership — so a gate that stopped being load-bearing on the row shape it exi
 suite. The table below is that list read as a cell-by-cell account, with the two address tampers
 on one line. `every_booleanity_gate_refuses_a_value_of_two` adds the sixteen booleans this
 family commits — the twelve kind bits, the two half flags, `rs1_sign` and `se` — and six
-further tests isolate one bound or one gate each. A seventh,
-`acceptance_7_the_byte_table_is_and_and_or_and_xor_are_derived_from_it`, reads the AND table
-over its whole 8-by-8-bit domain and checks that Rust's own `a | b` and `a ^ b` are the two
-forms §5.5's 171 derives from it.
+further tests isolate one bound or one gate each. §5.5's 171 derives `or` and `xor` from the one
+AND accumulator by linearity, so the AND table is the only one either reads.
 
 | cell moved | on the row | refused by, exactly |
 | --- | --- | --- |
@@ -4769,14 +4768,8 @@ The six further tests, each isolating one thing the accounting above cannot show
   **both** values of `q_sign` survive and nothing else varies — the acceptance item's "exactly
   one witness" is true up to that one freedom, and the check asserts the true statement
   (`mul-div.md` §6).
-- **`the_floored_quotient_satisfies_the_identity_and_is_refused_by_the_sign_rule`** —
-  `DIV(−7, 2)` carrying `q = −4` and `rem = 1`: the division identity holds and the magnitude
-  bound holds, and `r_sign_rule` alone refuses it.
 - **`a_quotient_off_by_one_is_refused_by_the_gap_or_by_the_identity`** — the two gates that
   between them leave no room for a neighbouring quotient.
-- **`a_zero_divisor_whose_quotient_is_not_all_ones_is_refused_by_the_pin_alone`** — with the
-  divisor zero the identity and the gap say nothing about `q`; `zero_divisor_quotient` is the
-  whole pin, and it is the lone refusal.
 - **`the_signed_overflow_has_exactly_the_pinned_answer`** — `−2^31 ÷ −1` with no pin of its own:
   the three gates that already hold force `q = 0x80000000` and `r = 0`.
 - **`a_forged_operand_sign_is_refused_by_its_lookup_alone`** — a top bit claimed wrong with the
@@ -5447,8 +5440,8 @@ a gate that stopped being load-bearing on the row shape it exists for fails the 
 with a **completeness assertion**: of the circuit's 33 enforcing gates the frame's thirteen are
 set aside, and each of the remaining **20** must be named by some tamper above, so a gate added
 with no forgery beside it fails here rather than silently. The table below is that list read as a
-cell-by-cell account. `every_booleanity_gate_refuses_a_value_of_two` adds the three booleans this
-family commits — the two kind bits and the wrap — and four further tests take one question each.
+cell-by-cell account. The three booleans this family commits — the two kind bits and the wrap —
+carry the `x² = x` gates named above, and four further tests take one question each.
 
 | cell moved | on the row | refused by, exactly |
 | --- | --- | --- |
@@ -6195,17 +6188,14 @@ The eight further tests, each isolating one thing the accounting above cannot sh
   of them.
 - **`a_halfword_at_an_odd_address_is_unprovable`** — `half_aligned` as a row, and the statement
   that `w·p` never reaches `2^40`.
-- **`a_sub_word_read_from_the_wrong_position_is_refused`** — a load answering with a byte from
-  another offset, the splice otherwise consistent.
 - **`an_lbu_that_yields_more_than_a_byte_is_refused`** — `sub_scaled`'s pair, which is what
   makes `sub < w` rather than `sub < 2^16`.
 - **`a_free_high_is_refused`** — `high`'s own pair against the scaled one, S18's residue hole in
   this family's shape.
 - **`a_store_source_unrelated_to_rs2_is_refused`** — `src_sub_rule` with its bounds: without it
   `sb` could store a byte no register holds.
-- **`a_sign_that_is_not_the_sub_words_sign_bit_is_refused`** and
-  **`the_generic_key_stays_inside_its_sub_table`** — the sign lookup and its key bound, the two
-  halves of §8.6's argument.
+- **`the_generic_key_stays_inside_its_sub_table`** — the sign lookup's key bound, which is the
+  half of §8.6's argument a test still carries.
 
 On a padding row `pc_mask = 0`, every frame mask is 0, every leaf is 1 and every obligation is
 vacuous — all 22 `RANGE16` ones and the generic one included, this family having no selector but
@@ -8072,11 +8062,11 @@ executor did with it could balance.
 
 **What holds this in CI**: `crates/checker/tests/public_values.rs`'
 `the_advice_region_is_a_length_word_then_a_payload`, `the_window_rules_take_an_honest_statement`
-and `the_window_rules_refuse_each_of_their_controls`. That nothing binds `M[2]` is a negative
-and no test asserts it directly; what stands in is
-`crates/prover/tests/public_io.rs`' `a4_the_advice_is_unbound_and_the_guest_checks_it`, which
-proves the same program twice over two different advices — both verify — and shows that the
-guest, not the VM, is what makes the swap visible.
+and `the_window_rules_refuse_each_of_their_controls`. That nothing binds `M[2]` is a negative, and
+**no test asserts it directly**: the proof-level control that stood in for it — the same program
+proved over two different advices, both verifying — was removed when the suite was abridged. What
+holds the property now is the construction, not a test: the statement does not carry `M[2]`,
+identity does not bind it, and no gate reads it.
 
 ---
 

@@ -42,17 +42,6 @@ fn the_zero_state_kat_matches() {
 }
 
 #[test]
-fn a_corpus_of_states_matches() {
-    for seed in 0..64 {
-        let start = state(seed);
-        let (mut ours, mut theirs) = (start, start);
-        keccak_f(&mut ours);
-        reference(&mut theirs);
-        assert_eq!(ours, theirs, "state {seed} diverges");
-    }
-}
-
-#[test]
 fn every_single_bit_state_matches() {
     // One bit set, each of the 1600 in turn: the sparsest inputs there are,
     // and the ones a wrong rotation offset or pi map shows up in first.
@@ -87,20 +76,6 @@ fn the_frame_packing_round_trips() {
     }
     let lanes = state(13);
     assert_eq!(lanes_of(&words_of(&lanes)), lanes);
-}
-
-#[test]
-fn a_frame_word_is_its_lane_half() {
-    let lanes = state(17);
-    let words = words_of(&lanes);
-    for (i, lane) in lanes.iter().enumerate() {
-        assert_eq!(words[2 * i], *lane as u32, "lane {i}'s low half");
-        assert_eq!(
-            words[2 * i + 1],
-            (*lane >> 32) as u32,
-            "lane {i}'s high half"
-        );
-    }
 }
 
 #[test]

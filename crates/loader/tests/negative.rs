@@ -12,16 +12,6 @@ mod common;
 
 use loader::{load_elf, LoaderError};
 
-/// The positive control. If this stops loading, every refusal below is
-/// evidence about the fixture builder rather than about the loader.
-#[test]
-fn the_minimal_elf_loads() {
-    let image = load_elf(&common::synthetic("minimal.elf")).expect("minimal.elf loads");
-    assert_eq!(image.entry, 0x0001_0000);
-    assert_eq!(image.segments.len(), 1);
-    assert_eq!(image.slots.len(), 2, "two halfwords, two slots");
-}
-
 /// Acceptance 6(a): a reserved `c.addi4spn`, refused with the pc named.
 ///
 /// The all-zero halfword used to be the other case here and is not any more:

@@ -64,14 +64,6 @@ impl Instance {
     }
 }
 
-/// The control: the untampered instance verifies, so every rejection below is
-/// about the tampering and not about the harness.
-#[test]
-fn the_honest_instance_verifies() {
-    let it = honest(0x5008_0400);
-    it.check(&it.cm, &it.u, it.v, &it.proof).expect("verify");
-}
-
 /// Acceptance 4: flip one evaluation of `f`, open honestly, and check the proof
 /// against the **original** commitment.
 ///

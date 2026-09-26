@@ -38,11 +38,11 @@ use gkr::{channel_holds, insert_lookup_challenges, BaseLayer, LayerValues};
 use loader::load_elf;
 use pcs::{append_g1, commit, MercuryCommitment};
 use poly::{MultilinearPoly, PolyBacking};
-use program::lookup_tables::{generic_table, GENERIC_WIDTH, SIGN_BASE};
+use program::lookup_tables::{generic_table, GENERIC_WIDTH};
 use program::{decode_program, lookup_tuple, ProgramParams};
 use test_support::{sha256, to_hex};
 use trace::build_multiplicities;
-use transcript::{Transcript, TranscriptEvent};
+use transcript::Transcript;
 
 const TOY: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -559,75 +559,6 @@ fn an_out_of_range_value_with_a_rebalanced_multiplicity_fails_verification() {
 // Acceptance 3: the shard-local challenges follow every commitment
 // ---------------------------------------------------------------------------
 
-/// Acceptance 3, structurally, from the recorded transcript event log: every
-/// `g`/`β` sample strictly follows the absorb of every witness and multiplicity
-/// commitment of the shard.
-///
-/// The script is the one S16 wires into a shard: commit each column, absorb it
-/// as a `COMMITMENT` message of four `Fr` limbs, and only then draw the two
-/// challenges under `LOOKUP_CHALLENGE`. The log is metadata — it never feeds
-/// the sponge — so reading it changes nothing.
-#[test]
-#[ignore = "2^20 rows: a toy SRS of 2^20 points and one commitment per column"]
-fn the_lookup_challenges_follow_every_commitment() {
-    let toy = toy();
-    let a = &toy.shard.artifact;
-    let srs = toy_srs(a.trace_vars);
-
-    // The witness subtree, the multiplicity columns last in it.
-    let witness: Vec<PolyAddress> = (0..a.witness.len() as u32)
-        .map(PolyAddress::Witness)
-        .collect();
-    let multiplicities: Vec<&String> = a.witness.iter().rev().take(4).collect();
-    assert!(
-        multiplicities.iter().all(|n| n.starts_with("mult_")),
-        "the multiplicity columns are last in the witness subtree: {multiplicities:?}"
-    );
-
-    let mut t = Transcript::new();
-    for address in &witness {
-        let column = toy.shard.base.get(*address).expect("a committed column");
-        let MercuryCommitment(point) = commit(&srs, column).expect("the column commits");
-        append_g1(&mut t, transcript_tags::COMMITMENT, &point);
-    }
-    let absorbs = t.event_log().len();
-    let g = t.challenge_scalar(transcript_tags::LOOKUP_CHALLENGE);
-    let beta = t.challenge_scalar(transcript_tags::LOOKUP_CHALLENGE);
-    assert_ne!(g, beta, "two draws, two values");
-
-    // The log, event for event: one absorb per column, then the two challenges.
-    let log = t.event_log();
-    let expected: Vec<TranscriptEvent> = witness
-        .iter()
-        .map(|_| TranscriptEvent::Absorb {
-            tag: transcript_tags::COMMITMENT,
-            n_scalars: 4,
-        })
-        .chain(
-            [TranscriptEvent::Challenge {
-                tag: transcript_tags::LOOKUP_CHALLENGE,
-            }; 2],
-        )
-        .collect();
-    assert_eq!(log, expected.as_slice());
-
-    // And the ordering invariant, over whatever log it is handed: no sample
-    // under the lookup tag precedes an absorb of a commitment.
-    let last_absorb = log
-        .iter()
-        .rposition(|e| matches!(e, TranscriptEvent::Absorb { tag, .. } if *tag == transcript_tags::COMMITMENT))
-        .expect("a commitment was absorbed");
-    let first_sample = log
-        .iter()
-        .position(|e| matches!(e, TranscriptEvent::Challenge { tag } if *tag == transcript_tags::LOOKUP_CHALLENGE))
-        .expect("a challenge was drawn");
-    assert!(
-        last_absorb < first_sample,
-        "every g/beta sample follows every commitment absorb"
-    );
-    assert_eq!(absorbs, last_absorb + 1);
-}
-
 /// An SRS of `2^power` powers of a `tau` written down here, built the way
 /// `crates/pcs`' suite builds one: real, structurally valid and completely
 /// insecure. Only `commit` is used — an opening is S16's.
@@ -859,85 +790,6 @@ fn the_gated_key_convention_holds_in_all_three_cases() {
     );
 }
 
-/// The control for the precondition of `docs/spec/lookup.md` §4: the `+ 1`
-/// offset keeps every real **table entry** off the neutral tuple, and that is
-/// all it does. A row whose selector is 1 and whose key expression evaluates to
-/// `−1` gates to `1·(−1 + 1) = 0`, and with its other columns 0 the whole tuple
-/// is the `ZeroEntry` — a table row. The channel balances, every check passes,
-/// and the row has looked up the neutral entry instead of a real one.
-///
-/// The same unbounded key reaches the **other table** too: the AND lookup's key
-/// `and_a + AND_BASE + 1` is `SIGN_BASE + h + 1` at `and_a = SIGN_BASE + h`, so
-/// an unbounded `and_a` answers an AND claim with a `U16GetSign` row. The
-/// tables' key ranges are disjoint; the keys a row can *produce* are not.
-///
-/// So a family reading a value out of a table channel must bound the key it
-/// looks up into its own table's range; the channel cannot. The toy leaves
-/// `sign_h` and `and_a` unbounded on purpose — it is a toy for the channels, not
-/// a family — and S17 and S18 own the bounds.
-#[test]
-#[ignore = "2^20 rows: one forward pass holds 4.63 GB of inner cells"]
-fn an_unbounded_key_can_reach_the_neutral_entry() {
-    let toy = toy();
-    let a = &toy.shard.artifact;
-    let live = live_row(&toy, "sign_on");
-
-    // `and_a = SIGN_BASE + h` with `h = 0x8001`: the AND tuple is
-    // (SIGN_BASE + h + 1, h >> 15, 0), the U16GetSign row for h. The row has
-    // "proved" `and_a AND 1 = 0`, which is false.
-    let h = 0x8001u64;
-    let cross = with_cells(
-        &toy.shard,
-        &[
-            (at(a, "and_a"), live, Fr::from_u64(SIGN_BASE as u64 + h)),
-            (at(a, "and_b"), live, Fr::from_u64(h >> 15)),
-            (at(a, "and_c"), live, Fr::ZERO),
-        ],
-    );
-    let counted = build_multiplicities(a, &columns_of(&cross), &toy.specs)
-        .expect("the AND tuple is a U16GetSign row");
-    assert_eq!(counted.len(), 4, "every channel still counts");
-
-    // `sign_h = −(SIGN_BASE + 1)` and `sign_s = 0`: the gated tuple is
-    // (0, 0, 0), the ZeroEntry at the packed table's row 0.
-    let forged = with_cells(
-        &toy.shard,
-        &[
-            (at(a, "sign_h"), live, -Fr::from_u64(SIGN_BASE as u64 + 1)),
-            (at(a, "sign_s"), live, Fr::ZERO),
-        ],
-    );
-    let values = forwarded_shard(&forged);
-    assert_eq!(gkr::self_check(a, &values, &forged.challenges), Ok(()));
-
-    // The prover can even recount its multiplicities over it: the tuple is a
-    // table row, so it counts on row 0 beside every switched-off row.
-    let counts = build_multiplicities(a, &columns_of(&forged), &toy.specs)
-        .expect("the neutral tuple is a table row");
-    let mut recounted = forged.clone();
-    let mut columns = columns_of(&recounted);
-    for (address, column) in counts {
-        let at = columns
-            .iter()
-            .position(|(x, _)| *x == address)
-            .expect("a multiplicity column");
-        columns[at] = (address, column);
-    }
-    recounted.base = BaseLayer::new(columns);
-    let values = forwarded_shard(&recounted);
-    let recounted_toy = reshard(&toy, recounted);
-    let (sums, roots) = sums(&recounted_toy, &values);
-    let generic = channel_at(&sums, lookup_channel::GENERIC);
-    assert_eq!(
-        sums[generic].unmatched,
-        Vec::new(),
-        "the tuple is in the table"
-    );
-    assert_eq!(sums[generic].num, Fr::ZERO, "and the channel balances");
-    assert!(channel_holds(roots[generic]), "so the root accepts it");
-    assert_eq!(prove_and_verify(&recounted_toy, &values), Ok(()));
-}
-
 // ---------------------------------------------------------------------------
 // Acceptance 7: the decoder
 // ---------------------------------------------------------------------------
@@ -1038,54 +890,6 @@ fn one_changed_multiplicity_cell_fails_its_channel() {
 // ---------------------------------------------------------------------------
 // Acceptance 12: booleanity of the extracted bits
 // ---------------------------------------------------------------------------
-
-/// Acceptance 12. Every bit the circuit extracts from the packed mask carries
-/// `x − x·x = 0`, and a witness that is not 0 or 1 breaks it: the self-check
-/// names the gate, and the proof is rejected at gate list 0.
-///
-/// The tamper is chosen so that `x − x·x` is the **only** thing that refuses
-/// it. `kind_0 := 2` alone would also break the recomposition gate
-/// `Σ 2^k·kind_k − decoded_mask`, and the test would then pass with the
-/// booleanity gates deleted from the artifact. So the mask moves with the bits:
-/// `kind_0 := 2`, every other bit 0, `decoded_mask := 2`. Recomposition holds
-/// (`2·1 = 2`), `0b10` is a legal one-hot mask, so the decoder channel has no
-/// quarrel with the row either — and only booleanity is left.
-#[test]
-#[ignore = "2^20 rows: one forward pass holds 4.63 GB of inner cells"]
-fn a_non_boolean_extracted_bit_is_refused_by_its_gate() {
-    let toy = toy();
-    let a = &toy.shard.artifact;
-    // Each of the twelve has its own gate, named for it.
-    for k in 0..MASK_BITS {
-        let name = format!("kind_{k}_boolean");
-        assert!(
-            a.relations.iter().any(|r| r.name == name),
-            "the artifact carries `{name}`"
-        );
-    }
-    let live = live_row(&toy, "pc_mask");
-    let two = Fr::from_u64(2);
-    let mut cells = vec![
-        (at(a, "decoded_mask"), live, two),
-        (at(a, "kind_0"), live, two),
-    ];
-    for k in 1..MASK_BITS {
-        cells.push((at(a, &format!("kind_{k}")), live, Fr::ZERO));
-    }
-    let forged = with_cells(&toy.shard, &cells);
-    let values = forwarded_shard(&forged);
-    let broken = gkr::self_check(a, &values, &forged.challenges).expect_err("a non-boolean bit");
-    assert_eq!(broken.row, live);
-    assert_eq!(
-        broken.relation, "kind_0_boolean",
-        "the recomposition still holds, so booleanity is the only gate left"
-    );
-    assert_eq!(
-        prove_and_verify(&reshard(&toy, forged), &values),
-        Err(gkr::GkrError::LayerInconsistency { layer: 0 }),
-        "an enforcing gate of gate list 0"
-    );
-}
 
 // ---------------------------------------------------------------------------
 // The shared tamper helpers

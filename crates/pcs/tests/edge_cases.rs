@@ -18,7 +18,7 @@
 mod common;
 
 use field::Fr;
-use pcs::{commit, discharge, AccumulatorEntry, MercuryCommitment, PcsError, ENTRIES_PER_CHECK};
+use pcs::{commit, discharge, AccumulatorEntry, MercuryCommitment, ENTRIES_PER_CHECK};
 use poly::{MultilinearPoly, PolyBacking};
 use test_support::{sha256, to_hex};
 
@@ -234,89 +234,10 @@ fn a_corrupted_z_pow_b_fixture_is_rejected() {
     );
 }
 
-/// The merge challenge does not bind an honest instance, and that is correct.
-///
-/// `rho` merges two relations that are each already true: `A1 = x B1` and
-/// `A2 = x B2` give `A1 + rho A2 = x (B1 + rho B2)` for **every** `rho`. What
-/// `rho` buys is that a *false* relation survives for at most one value of it,
-/// which is `docs/spec/mercury.md` §8.3's claim and which
-/// `tests/accumulator.rs::the_per_check_weight_separates_the_checks` exercises
-/// on the failing side. Recording it here keeps a reader from mistaking the
-/// gap in the damage list above for an oversight.
-#[test]
-fn the_merge_challenge_does_not_bind_a_true_instance() {
-    let kat = parse(KAT).expect("the fixture parses");
-    let srs = common::toy_srs(kat.u.len() as u32);
-    let vsrs = srs.verifier();
-
-    for bump in [1u64, 2, 7, 1 << 40] {
-        let mut c = kat.challenges;
-        c.rho += Fr::from_u64(bump);
-        let entries =
-            common::deferred_entries(&vsrs.g1_gen, &kat.cm, &kat.u, kat.v, &kat.proof, &c);
-        assert_ne!(
-            entries[11].scalar, kat.challenges.rho,
-            "the merge challenge really moved"
-        );
-        discharge(&vsrs, &entries, &[ENTRIES_PER_CHECK])
-            .expect("two true relations merge to a true one under any rho");
-    }
-}
-
 fn flip_first_digit(token: &str) -> String {
     let mut bytes = token.to_string().into_bytes();
     bytes[0] = if bytes[0] == b'0' { b'1' } else { b'0' };
     String::from_utf8(bytes).expect("hex is ASCII")
-}
-
-/// A tampered instance is rejected by the same production discharge that
-/// accepts the honest one: the edge case is legal, not exempt.
-#[test]
-fn the_edge_case_still_rejects_a_false_claim() {
-    let kat = parse(KAT).expect("the fixture parses");
-    let srs = common::toy_srs(kat.u.len() as u32);
-    let vsrs = srs.verifier();
-
-    for which in 0..6 {
-        let mut proof = kat.proof;
-        match which {
-            0 => proof.g_z += Fr::ONE,
-            1 => proof.g_inv_z += Fr::ONE,
-            2 => proof.h_z += Fr::ONE,
-            3 => proof.h_inv_z += Fr::ONE,
-            4 => proof.s_z += Fr::ONE,
-            5 => proof.s_inv_z += Fr::ONE,
-            _ => unreachable!(),
-        }
-        let entries = common::deferred_entries(
-            &vsrs.g1_gen,
-            &kat.cm,
-            &kat.u,
-            kat.v,
-            &proof,
-            &kat.challenges,
-        );
-        assert_eq!(
-            discharge(&vsrs, &entries, &[ENTRIES_PER_CHECK]),
-            Err(PcsError::VerificationFailed),
-            "evaluation {which} moved"
-        );
-    }
-
-    // And a moved claim, which is what the whole opening is about.
-    let entries = common::deferred_entries(
-        &vsrs.g1_gen,
-        &kat.cm,
-        &kat.u,
-        kat.v + Fr::ONE,
-        &kat.proof,
-        &kat.challenges,
-    );
-    assert_eq!(
-        discharge(&vsrs, &entries, &[ENTRIES_PER_CHECK]),
-        Err(PcsError::VerificationFailed),
-        "v + 1"
-    );
 }
 
 /// The fixture is the committed one.

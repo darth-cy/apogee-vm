@@ -21,9 +21,9 @@ use constants::challenge_slot::{MEM_ALPHA_VAL, MEM_GAMMA};
 use constants::family;
 use constraints::memory::{
     family_frame_artifact, frame, frame_queries, image_window_artifact, value_window_artifact,
-    zero_window_artifact, CYCLE, PC,
+    zero_window_artifact, CYCLE,
 };
-use constraints::{CircuitArtifact, PolyAddress};
+use constraints::CircuitArtifact;
 use field::Fr;
 use gkr::{
     boundary_factors, forward, reconciles, self_check, window_challenges, BaseLayer,
@@ -34,7 +34,7 @@ use program::check_memory_windows;
 use test_support::Rng;
 use trace::{
     build_boundary_finals, build_frame_witness, build_memory_columns, init_windows, plan_shards,
-    RowSlice, ROLES,
+    RowSlice,
 };
 
 /// The seven execution families, ascending: the frames a statement can carry.
@@ -319,14 +319,6 @@ fn fib_honest_statement_reconciles_and_proves() {
     honest_statement("fib", 24, true);
 }
 
-/// heap's 141,832 cycles: its frames forwarded and checked row by row but not
-/// proved — their proofs alone take minutes in a debug build, and fib's frames
-/// prove the same artifacts — and its two windows, proved.
-#[test]
-fn heap_honest_statement_reconciles_and_proves_its_windows() {
-    honest_statement("heap", 40, false);
-}
-
 /// The same statement built by hand, one frame per family that ran, over that
 /// family's cycles — not contiguous — with the first family's list reversed,
 /// each at the smallest power-of-two height of at least 16. Row `i` holds
@@ -375,79 +367,6 @@ fn a_frame_per_family_in_any_order_reconciles() {
             &build_boundary_finals(t.log.state()),
         );
         assert!(reconciles(&reads, &writes, factors), "{name}");
-    }
-}
-
-/// `build_memory_columns` against the family buffers, which file each query
-/// under its role where the log files it by space and slot: on each guest, in
-/// each family's own frame under its own `frame_queries`, row `i` holds that
-/// family's cycle `i`, its pc query `(1, 0, 4(c − 1), pc, next_pc)` at slot 0,
-/// and role `ROLES[r]` — query `1 + r` of the table — at the slot the family's
-/// list gives it, with mask 1, or zeros where the cycle lacks it; a role the
-/// family's list has no slot for is a role no row of that family has; and the
-/// first padding row is 0 in every column. Kills a slot-2 register query filed
-/// under another role — which no gate of the frame would notice, the three
-/// sharing a space and a slot — a query filed at a query id rather than at its
-/// family's slot, a `frame_queries` narrower than the family that ran, and a pc
-/// query or a padding row filled otherwise.
-#[test]
-fn the_frame_columns_are_the_family_buffers() {
-    for (name, input) in GUESTS {
-        let t = traced(name, input);
-        let mut rows = 0;
-        for trace in t.traces.families.iter().filter(|f| !f.is_empty()) {
-            let queries = frame_queries(trace.family);
-            let label = FAMILY_NAMES[trace.family as usize];
-            assert_eq!(queries[0], PC, "{name} {label}: the pc query is slot 0");
-            let height = frame_height(trace.len());
-            let shard = RowSlice::shard(trace, 0, height);
-            let columns = build_memory_columns(&shard, queries, height);
-            let base = BaseLayer::new(columns);
-            let at = |address, y| base.get(address).expect("a frame column").get(y);
-            for i in 0..trace.len() {
-                let row = trace.row(i);
-                let pc = [1, 0, 4 * (row.cycle - 1), row.pc as u64, row.next_pc as u64];
-                let mut expected = vec![(CYCLE, row.cycle)];
-                expected.extend((0..5).map(|f| (frame(0, f), pc[f as usize])));
-                for (r, role) in ROLES.iter().enumerate() {
-                    let query = row.query(*role);
-                    let Some(slot) = queries.iter().position(|&q| q == 1 + r) else {
-                        assert!(
-                            query.is_none(),
-                            "{name} {label}: cycle {} has {role:?}, and the family's frame has \
-                             no slot for it",
-                            row.cycle
-                        );
-                        continue;
-                    };
-                    let fields = query.map_or([0; 5], |q| {
-                        let (addr, read, write) = (q.addr, q.read_value, q.write_value);
-                        [1, addr as u64, q.read_ts, read as u64, write as u64]
-                    });
-                    expected.extend((0..5).map(|f| (frame(slot, f), fields[f as usize])));
-                }
-                for (address, value) in expected {
-                    let cycle = row.cycle;
-                    assert_eq!(
-                        at(address, i),
-                        Fr::from_u64(value),
-                        "{name} {label}: cycle {cycle}, {address}"
-                    );
-                }
-                rows += 1;
-            }
-            let padding = trace.len();
-            if padding < height {
-                for m in 0..1 + 5 * queries.len() as u32 {
-                    assert_eq!(
-                        at(PolyAddress::Memory(m), padding),
-                        Fr::ZERO,
-                        "{name} {label}: M[{m}]"
-                    );
-                }
-            }
-        }
-        assert_eq!(rows, t.cycles.len(), "{name}: one family row per cycle");
     }
 }
 

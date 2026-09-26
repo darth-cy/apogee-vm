@@ -152,6 +152,16 @@ be a deferred suite owes a **fast** test pinning the same property — a synthet
 statement in a unit test rather than a real proof — so the workspace run still guards it.
 Then run the deferred suites in one batch when no further commits are expected, and
 record their timings and peaks in the handoff note.
+
+**Reason more, run less: a test run confirms a conclusion, it never explores for one.**
+`prompts/00-master.md`'s "Test discipline" is the rule and this is the reminder. Before
+invoking any suite you should be *almost certain* it is green — if you are not, the gap is in
+your reading of the repository, and another run will not close it. So: scope the run to the
+change (`cargo test -p <crate> --test <file> <name>` before `-p <crate>` before `--workspace`;
+`cargo check -p <crate>` before either), never re-invoke a suite to settle a question the
+source answers or "to see whether that fixed it", never run two at once, and read a failure
+rather than re-running it. A minor change does not earn a workspace run, and a theory does not
+earn a deferred one. **The test suite is not a trial-and-error playground.**
 ```
 cargo fmt --all -- --check
 cargo fmt --manifest-path tools/transcript-ref/Cargo.toml --all -- --check
@@ -162,7 +172,7 @@ cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
 cargo clippy -p prover --all-targets --features metrics -- -D warnings   # the ONE feature's configuration
-cargo test --workspace                      # 1,036 tests as of S24; 83 more are #[ignore]d
+cargo test --workspace                      # ~1,065 tests; 54 more are #[ignore]d (marker counts, not a run)
 cargo test -p prover --features metrics --test metrics  # the metrics harness; 10 more, 2 #[ignore]d
 cargo test -p program --test delegation -- --ignored --test-threads=1  # static detachment at BOTH guest profiles; builds six guest images, 2.9 s
 APOGEE_GUEST_PROFILE=release cargo test -p emulator --test revm -- --ignored --test-threads=1 --skip a3_  # S24's guest against native revm; builds the revm guest, 47 s
@@ -299,6 +309,28 @@ What that suite would have caught about the *image* is also covered by `crates/l
 tests/layout.rs`, which reads the program headers and runs everywhere.
 
 ## The rules that bite most often
+- **A decision that is the owner's is raised THE MOMENT it arises, never afterwards.**
+  `prompts/00-master.md`'s "Raising a question" is the hard rule. The test, before acting:
+  *would a different answer change what I am about to do?* If yes, ask **now** — do everything
+  the answer does not gate, then ask, and never finish the gated part on a guess and report the
+  guess afterwards. A question raised after the work is done is a disclaimer, not a question,
+  and it is worse than silence: the guess has already propagated into every file the work
+  touched. **Finishing and then writing "one judgement call worth your eye" is the forbidden
+  case**, as is "flagging rather than acting on it" about something already acted on. A closing
+  message introduces no new decisions. Ask with options and a recommendation, not an open
+  question. Deleting tests or files, rewriting history, pushing, opening or closing a PR and any
+  edit to `prompts/` are always questions unless that exact step was already authorized.
+- **A test is worth the information it gives**, and information is the set of source mutations
+  that make it fail. Two tests with the same mutation set are one test's information at two
+  tests' cost — wall clock, peak memory, and everyone's attention on a failure. So a negative
+  control lives at the cheapest level that can observe it, **once**: a gate's refusal is proven
+  on the circuit, never replayed at statement level and again at block level unless the larger
+  proof reaches wiring the smaller cannot — a refusal *class*, a cross-shard product, a
+  commitment the component never made. Before adding a test, name the mutation it catches that
+  nothing else catches; if you cannot name one, you are adding cost. **A numbered acceptance
+  item in a stage prompt is satisfied by that information existing somewhere in the suite, not
+  by a test function carrying its number** (owner's decision), and deleting a test that
+  yields nothing new is part of the work.
 - **Concrete types.** `Fr` is a struct. There is no `F: Field`, and there never will be.
 - **No cargo features. Zero — with exactly one exception, and it is closed.** One build
   configuration for the whole workspace. The exception is `prover/metrics`, granted by the

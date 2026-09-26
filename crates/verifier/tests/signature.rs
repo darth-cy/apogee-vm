@@ -35,16 +35,6 @@ const _: fn(
     &PublicInputs,
 ) -> Result<verifier_core::OpeningClaim, VerifyError> = verifier_core::reduce_shard;
 
-/// The pins above are the test; this one says so at run time too.
-#[test]
-fn the_verifier_entry_points_take_the_key_the_proof_and_the_public_inputs() {
-    let shard: fn(&VerifyingKey, &ShardProof, &PublicInputs) -> Result<(), VerifyError> =
-        verify_shard;
-    let block: fn(&VerifyingKey, &BlockProof, &PublicInputs) -> Result<(), VerifyError> =
-        verify_block;
-    let _ = (shard, block);
-}
-
 /// The SRS verifier's bytes are S07's layout, and every point goes back
 /// through its validating decoder.
 #[test]
