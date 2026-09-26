@@ -30,6 +30,16 @@ path = "src/lib.rs"
 name = "revm-block"
 path = "src/main.rs"
 
+# S25's second mode, and a **second program identity**, which is what
+# must-be-exact 2 asks for: the whole block transition, the pre-state
+# authenticated against the parent's state root and the post-state root
+# recomputed and checked against the header's. It publishes a different journal
+# from `revm-block`'s -- 148 fixed bytes rather than a record per transaction,
+# which a real block's would not fit in a public window.
+[[bin]]
+name = "revm-block-stateless"
+path = "src/stateless_main.rs"
+
 # The same computation over fd 0 and fd 1, for the executors with no advice
 # region -- `qemu-riscv32`, and the native-revm oracle it is compared against.
 # Not provable, and it does not need to be.

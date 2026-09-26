@@ -146,6 +146,32 @@ jobs:
       - name: the revm guest under QEMU commits the same bytes
         run: APOGEE_GUEST_PROFILE=release cargo test -p emulator --test revm -- --ignored a3_
 
+      # DEFERRED: RAYON_NUM_THREADS=6 cargo test --release -p host --test prove -- --include-ignored --test-threads=1
+      # Master rule 7, and this one is S25's **mini-block gate**: block
+      # 26,057,509's first two transactions, recorded from mainnet, proved end
+      # to end and verified, plus the advice tamper twin and its control.
+      #
+      # It is the real thing and it costs what the real thing costs. The
+      # statement is **37 shards**, eleven more than any previous one in this
+      # repository, because 393,000 gas of real mainnet transactions is
+      # 24,206,626 guest cycles -- 61.6 cycles per unit of gas -- where S24's
+      # synthetic block was 220,000 cycles for 50,000 gas. Measured on an
+      # 18-core / 48 GB macOS laptop at RAYON_NUM_THREADS=6: one proof is
+      # 850 s at a 34.1 GiB peak, and this file proves the statement five
+      # times (two tests, then the harness's honest run and two twins).
+      #
+      # The thread bound is not optional. Shard proving is the block's one
+      # parallel step and its peak is one shard's forward pass per worker
+      # (docs/handoff/S20-orchestration.md); unbounded on 18 cores this does
+      # not fit 48 GB.
+      #
+      # Its CI-sized half is `cargo test --workspace`, which runs
+      # crates/host/tests/{witness,mpt,stateless}.rs -- the recorder's
+      # determinism, the witness-completeness controls, the trie against
+      # Ethereum's three published root vectors, and the stateless
+      # authentication against the real mainnet state root. Everything but the
+      # proof.
+
       # DEFERRED: cargo test -p checker --test logup -- --include-ignored --test-threads=1
       # Master rule 7. S15's acceptance over the combined toy took 30m18s of a
       # 45-minute run here -- two thirds of it -- and cannot be made to take

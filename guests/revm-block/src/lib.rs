@@ -40,14 +40,18 @@
 //! out. Since S-IO the witness is **advice**, which nothing binds, and the
 //! commitment is the **journal**, whose bytes the statement carries
 //! (`docs/spec/public-values.md`); what stands in for binding the witness is
-//! this file's own checks and the commitment itself, which names the state
-//! roots the block began and ended on. Neither carries an `Fr`, so the
+//! this file's own checks — [`BlockWitness::decode`]'s canonicity rules and
+//! [`WitnessDb`]'s refusal to default — plus, in the **stateless** mode, the
+//! two state roots its journal publishes (`src/stateless.rs`). Neither carries an `Fr`, so the
 //! workspace's little-endian rule for field elements does not reach them: an
 //! EVM word is Ethereum's **big-endian** 32 bytes here, as it is everywhere
 //! else in Ethereum, and the small integers around them are little-endian, as
 //! `postcard` and the rest of this repository write them.
 
 extern crate alloc;
+
+pub mod mpt;
+pub mod stateless;
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -56,7 +60,9 @@ use revm::context::{BlockEnv, CfgEnv, TxEnv};
 use revm::context_interface::block::BlobExcessGasAndPrice;
 use revm::context_interface::result::{ExecutionResult, Output};
 use revm::context_interface::transaction::{AccessList, AccessListItem};
-use revm::database::{CacheDB, EmptyDB};
+use revm::context_interface::transaction::{
+    Authorization, RecoveredAuthority, RecoveredAuthorization,
+};
 use revm::primitives::eip4844::{
     BLOB_BASE_FEE_UPDATE_FRACTION_CANCUN, BLOB_BASE_FEE_UPDATE_FRACTION_PRAGUE,
 };
@@ -109,7 +115,7 @@ pub type Word32 = [u8; 32];
 /// The committed synthetic witness's length in bytes, pinned here and
 /// asserted against `crates/emulator/tests/vectors/revm_block_witness.bin` by
 /// `crates/emulator/tests/revm.rs`.
-pub const COMMITTED_WITNESS_BYTES: usize = 716;
+pub const COMMITTED_WITNESS_BYTES: usize = 723;
 
 /// The hardfork enum a witness's `spec_id` names, re-exported so that a
 /// fixture builder can write `SpecId::PRAGUE as u8` rather than a number.
@@ -203,17 +209,91 @@ pub const WITNESS_CAPACITY: usize = 2 * COMMITTED_WITNESS_BYTES;
 pub struct BlockWitness {
     /// The header fields revm reads.
     pub env: BlockEnvWitness,
-    /// Every account the execution may touch, **sorted by address**, each
-    /// with its slots **sorted by key**. An account absent from this list
-    /// reads as empty.
+    /// Every account the execution touches, **sorted by address**, each with
+    /// its slots **sorted by key**.
+    ///
+    /// **An address absent from this list is an error, not an empty account**
+    /// (S25). S24 read an absent address as empty, which made an incomplete
+    /// witness indistinguishable from a complete one describing a sparser
+    /// chain — and since S-IO nothing binds the witness at all, so a silent
+    /// default is a value the prover chose. An account that genuinely does not
+    /// exist is *recorded*, with nonce 0, balance 0, no code and no slots, and
+    /// [`WitnessDb`] reports exactly that shape to revm as `None`. S25's
+    /// must-be-exact 3 asks for this in the stateless mode and there is no
+    /// reason for the mini mode to be laxer: `crates/host/tests/witness.rs`'s
+    /// completeness control deletes one recorded slot and requires the run to
+    /// fail loudly.
     pub accounts: Vec<AccountWitness>,
     /// The transactions, in execution order.
     pub txs: Vec<TxWitness>,
-    /// Reserved for the stateless mode: a later stage defines these bytes and
-    /// what they prove about [`BlockWitness::accounts`]. S24 runs over a
-    /// synthetic pre-state, so it is `None` here, and its absence changes the
-    /// encoding of nothing before it.
-    pub stateless: Option<Vec<u8>>,
+    /// The stateless section, absent in the synthetic and mini modes.
+    ///
+    /// Its presence is what tells the two modes apart in the data, and
+    /// `src/stateless.rs` is the binary that requires it. S24 left the shape to
+    /// the stage that needed it; S25 is that stage and [`StatelessWitness`] is
+    /// the shape.
+    pub stateless: Option<StatelessWitness>,
+}
+
+/// What a **stateless** execution needs beyond the values: the trie nodes that
+/// authenticate them, and the block-level work that is not a transaction.
+///
+/// # The completeness requirement, which is normative
+///
+/// **`nodes` carries every trie node needed to apply the block's state updates
+/// deterministically — siblings and boundary nodes included, not merely the
+/// nodes on each touched key's own path** (owner's decision, S25). The guest
+/// authenticates every node it uses against the trie hash that names it, and
+/// refuses by name when one is missing; it never reconstructs, infers or
+/// guesses a node it was not given.
+///
+/// The rule is not bureaucratic. Deleting a key whose branch is left with
+/// exactly one child requires merging that child upward, which needs the
+/// child's **type and path** and not just its hash — and the child is a
+/// *sibling* of the deleted key, so it is on no touched key's path and appears
+/// in no `eth_getProof` response. Measured over 300 randomised
+/// build-prove-update-recompute trials, 29 % needed at least one such node.
+/// Writing zero to a storage slot is a deletion, and the gas refund makes it
+/// common, so this is the ordinary case rather than a corner of it.
+///
+/// A witness that omits one is **incomplete, and the guest says so**
+/// ([`mpt::MptError::BlindedCollapse`], which names the hash). The producer's
+/// job is to supply them; nothing here infers them, because an inference in the
+/// guest would be a shape nobody authenticated.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatelessWitness {
+    /// The parent block's state root. Every recorded account and slot is
+    /// authenticated against this before it is used, and the journal publishes
+    /// it, so a witness describing a different pre-state publishes a different
+    /// result rather than the same one.
+    pub parent_state_root: Word32,
+    /// The parent block's hash, which EIP-2935's system call writes into the
+    /// history contract.
+    pub parent_hash: Word32,
+    /// EIP-4788's parent beacon block root, from the header. `None` before
+    /// Cancun.
+    pub parent_beacon_block_root: Option<Word32>,
+    /// EIP-4895 withdrawals, in the header's order.
+    pub withdrawals: Vec<WithdrawalWitness>,
+    /// The trie nodes, **sorted by their `keccak256`, without repeats** — one
+    /// pool for the state trie and every storage trie, because a node is named
+    /// by its hash and nothing else. See the completeness requirement above.
+    pub nodes: Vec<Vec<u8>>,
+}
+
+/// One EIP-4895 withdrawal: a credit the block executor applies after the last
+/// transaction, which is not a transaction and which revm does not model.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WithdrawalWitness {
+    /// The withdrawal's index, which the header orders by.
+    pub index: u64,
+    /// The validator it belongs to.
+    pub validator_index: u64,
+    /// Where the ether goes.
+    pub address: Address20,
+    /// How much, **in gwei** — the consensus layer's unit, which the execution
+    /// layer multiplies by `10^9`.
+    pub amount_gwei: u64,
 }
 
 /// The header fields revm reads, one per `revm::context::BlockEnv` field plus
@@ -247,6 +327,25 @@ pub struct BlockEnvWitness {
     pub excess_blob_gas: Option<u64>,
     /// EIP-7843 slot number.
     pub slot_num: u64,
+    /// The ancestor hashes the `BLOCKHASH` opcode may read, **ascending by
+    /// number, without repeats**.
+    ///
+    /// S24 had no such field and that was the one *gap* in this type rather
+    /// than a decision (`docs/spec/revm-block.md` §1.2): revm answers
+    /// `BLOCKHASH` from its database, S24's database had an empty block-hash
+    /// cache, and every lookup fell through to `EmptyDB`, which returns
+    /// `keccak256` of the block number's decimal string — a made-up word the
+    /// guest and the host happened to agree on. S25 closes it, which is why
+    /// `crates/emulator/tests/revm.rs::blockhash_reads_a_placeholder_today`
+    /// had to be rewritten rather than merely kept passing: it pinned the
+    /// placeholder precisely so that closing the gap would be a decision.
+    ///
+    /// **At most 256 entries are ever needed**, and a witness carrying more is
+    /// carrying dead weight rather than lying: the opcode is served from
+    /// `revm-interpreter`'s `blockhash` instruction, which pushes zero without
+    /// consulting the database when the requested height is the current one or
+    /// more than `BLOCK_HASH_HISTORY = 256` behind it.
+    pub block_hashes: Vec<(u64, Word32)>,
 }
 
 /// One pre-state account.
@@ -262,7 +361,12 @@ pub struct AccountWitness {
     /// hash is *not* carried: it is `keccak256(code)`, which the guest
     /// recomputes, so the witness cannot claim one the code does not have.
     pub code: Vec<u8>,
-    /// Its non-zero storage, **sorted by key**. A slot absent here reads 0.
+    /// Every storage slot of this account that the execution reads, **sorted
+    /// by key**, including the ones whose value is zero.
+    ///
+    /// A slot absent here is an error and not a zero: see [`BlockWitness::
+    /// accounts`]. A zero-valued slot is therefore a recorded fact, which is
+    /// what makes deleting one from a witness detectable.
     pub slots: Vec<(Word32, Word32)>,
 }
 
@@ -291,6 +395,39 @@ pub struct TxWitness {
     pub chain_id: Option<u64>,
     /// EIP-2930 access list: an address and the slots of it being warmed.
     pub access_list: Vec<(Address20, Vec<Word32>)>,
+    /// EIP-4844 blob versioned hashes, in the transaction's own order. Empty
+    /// for every transaction that is not type 3.
+    ///
+    /// The blobs themselves are not here and must not be: a type-3
+    /// transaction's payload is not part of the execution-layer block, and the
+    /// EVM sees only these hashes, through `BLOBHASH`.
+    pub blob_hashes: Vec<Word32>,
+    /// EIP-4844 max fee per blob gas. `Some` exactly on a type-3 transaction.
+    pub max_fee_per_blob_gas: Option<u128>,
+    /// EIP-7702 authorization list, in the transaction's own order. Empty for
+    /// every transaction that is not type 4.
+    pub authorizations: Vec<AuthorizationWitness>,
+}
+
+/// One EIP-7702 authorization, **already recovered**.
+///
+/// `authority` is the address the signature recovers to, or `None` when it
+/// recovers to nothing — which is not an error, because EIP-7702 says an
+/// authorization that fails to recover is skipped and the transaction still
+/// runs. Recovery is the witness producer's job for the same reason `caller`
+/// is: there is no `ecrecover` delegation in this repository
+/// (`prompts/00-master.md`, "Stage register"), and revm's own
+/// `RecoveredAuthorization` takes a recovered authority for the same reason.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthorizationWitness {
+    /// The chain the authorization is for; `0` means every chain.
+    pub chain_id: Word32,
+    /// The address whose code the authority delegates to.
+    pub address: Address20,
+    /// The authority's nonce at signing time.
+    pub nonce: u64,
+    /// The recovered signer, or `None` when the signature recovers to nothing.
+    pub authority: Option<Address20>,
 }
 
 impl BlockEnvWitness {
@@ -319,6 +456,15 @@ pub enum WitnessError {
     SlotsNotSorted { account: usize, at: usize },
     /// `spec_id` is a discriminant no `SpecId` takes.
     UnknownSpec { spec_id: u8 },
+    /// Two ancestor hashes share a number, or they are not ascending by
+    /// number. `at` is the offending index.
+    BlockHashesNotSorted { at: usize },
+    /// Two stateless trie nodes are equal, or they are not ascending by
+    /// `keccak256`. Sorting by hash is what gives one node set exactly one
+    /// encoding, a node being named by its hash and nothing else.
+    NodesNotSorted { at: usize },
+    /// Two withdrawals share an index, or they are not ascending by index.
+    WithdrawalsNotSorted { at: usize },
 }
 
 impl BlockWitness {
@@ -343,8 +489,12 @@ impl BlockWitness {
     /// nothing in the proof system binds, so this is not a tidiness check — it
     /// is one of the two things standing between a prover-supplied byte string
     /// and the block the journal claims was executed
-    /// (`docs/spec/public-values.md` §6). The other is the commitment, which
-    /// names the state roots the block began and ended on.
+    /// (`docs/spec/public-values.md` §6). The other depends on the mode: the
+    /// **stateless** one publishes the state roots the block began and ended on
+    /// (`src/stateless.rs`), so a witness describing a different pre-state
+    /// publishes a different result; the **mini** one publishes no root, which
+    /// is what "claims no state-root recomputation" means, and what it binds is
+    /// the journal to the witness and nothing further.
     ///
     /// **The bytes must be exactly what [`BlockWitness::encode`] would write**,
     /// which is checked by re-encoding and comparing, because nothing cheaper
@@ -402,7 +552,189 @@ impl BlockWitness {
                 }
             }
         }
+        for (i, pair) in self.env.block_hashes.windows(2).enumerate() {
+            if pair[0].0 >= pair[1].0 {
+                return Err(WitnessError::BlockHashesNotSorted { at: i + 1 });
+            }
+        }
+        if let Some(stateless) = &self.stateless {
+            for (i, pair) in stateless.nodes.windows(2).enumerate() {
+                if keccak(&pair[0]) >= keccak(&pair[1]) {
+                    return Err(WitnessError::NodesNotSorted { at: i + 1 });
+                }
+            }
+            for (i, pair) in stateless.withdrawals.windows(2).enumerate() {
+                if pair[0].index >= pair[1].index {
+                    return Err(WitnessError::WithdrawalsNotSorted { at: i + 1 });
+                }
+            }
+        }
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The database
+// ---------------------------------------------------------------------------
+
+/// Everything [`WitnessDb`] refuses, and it refuses rather than defaults.
+///
+/// Since S-IO the witness is **advice**, which nothing in the proof system
+/// binds (`docs/spec/public-values.md` §6). A database that answered an
+/// unrecorded read with a plausible default would therefore be answering it
+/// with a value the prover chose, and the guest would commit an output for a
+/// state nobody supplied. Every miss is an error instead, and the error names
+/// what was missing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DbError {
+    /// The execution read an account the witness does not carry.
+    UnknownAccount { address: Address20 },
+    /// The execution read a storage slot the witness does not carry.
+    UnknownSlot { address: Address20, key: Word32 },
+    /// The execution asked for an ancestor hash the witness does not carry.
+    /// Only the 256 blocks below this one can be asked for; the interpreter
+    /// answers anything else with zero without consulting a database.
+    UnknownBlockHash { number: u64 },
+    /// The execution asked for code by hash that no recorded account has.
+    /// Unreachable in practice — every [`AccountInfo`] this database returns
+    /// carries its code inline, so revm never falls back to the hash — and an
+    /// error rather than an empty `Bytecode` so that "unreachable" stays a
+    /// claim something would notice breaking.
+    UnknownCode { code_hash: Word32 },
+    /// An account's recorded code is bytes revm refuses to make a `Bytecode`
+    /// of: the only such shape is one beginning `0xef01`, EIP-7702's magic,
+    /// that is not a 23-byte delegation. Code like that predates EIP-3541 —
+    /// which stopped `0xef` deployments at London — and a handful of such
+    /// accounts exist on mainnet. It is an error rather than a panic because a
+    /// panicking guest publishes no journal and cannot be proven at all
+    /// (`docs/spec/public-values.md` §9), so a crash here would turn a rare
+    /// account into an unprovable block.
+    MalformedCode { address: Address20 },
+}
+
+impl core::fmt::Display for DbError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            DbError::UnknownAccount { .. } => f.write_str("the witness carries no such account"),
+            DbError::UnknownSlot { .. } => f.write_str("the witness carries no such storage slot"),
+            DbError::UnknownBlockHash { .. } => {
+                f.write_str("the witness carries no such ancestor hash")
+            }
+            DbError::UnknownCode { .. } => f.write_str("the witness carries no such code"),
+            DbError::MalformedCode { .. } => {
+                f.write_str("an account's recorded code is not bytecode revm accepts")
+            }
+        }
+    }
+}
+
+impl core::error::Error for DbError {}
+impl revm::database_interface::DBErrorMarker for DbError {}
+
+/// The pre-state, exactly as the witness recorded it and no more.
+///
+/// It replaces S24's `CacheDB<EmptyDB>`, which had two silent defaults: an
+/// address it had not been given read as a non-existent account, and a
+/// `BLOCKHASH` it had not been given read as `keccak256` of the block number's
+/// decimal string (`docs/spec/revm-block.md` §1.2, the one acknowledged *gap*
+/// in S24's witness). Both are errors here.
+///
+/// **Non-existence is recorded, not inferred.** An account that does not exist
+/// on chain is in [`BlockWitness::accounts`] with nonce 0, balance 0, no code
+/// and no slots, and [`WitnessDb::basic`] answers `None` for exactly that
+/// shape — which is what revm needs in order to mark it `LoadedAsNotExisting`
+/// and leave it out of the post-state. The encoding is injective on states
+/// Ethereum can represent: EIP-161 deletes an account with nonce 0, balance 0
+/// and no code at the end of any transaction that touches it, so the state
+/// trie holds no such entry to confuse with an absence, and an account that
+/// has storage has had code and so has a nonzero nonce.
+///
+/// The lookups are binary searches over the witness's own sorted vectors
+/// rather than maps built up front. The witness is canonical — accounts ascend
+/// by address, slots ascend by key, ancestors ascend by number, all checked by
+/// [`BlockWitness::decode`] before this type is built — so the order is free,
+/// and a `no_std` guest that builds no maps allocates nothing here. A bump
+/// allocator that never frees makes that worth having.
+pub struct WitnessDb<'a> {
+    witness: &'a BlockWitness,
+}
+
+impl<'a> WitnessDb<'a> {
+    /// A database over a witness [`BlockWitness::decode`] has accepted.
+    pub fn new(witness: &'a BlockWitness) -> WitnessDb<'a> {
+        WitnessDb { witness }
+    }
+
+    fn account(&self, address: Address20) -> Result<&'a AccountWitness, DbError> {
+        let at = self
+            .witness
+            .accounts
+            .binary_search_by(|a| a.address.cmp(&address))
+            .map_err(|_| DbError::UnknownAccount { address })?;
+        Ok(&self.witness.accounts[at])
+    }
+}
+
+impl revm::Database for WitnessDb<'_> {
+    type Error = DbError;
+
+    fn basic(&mut self, address: Address) -> Result<Option<AccountInfo>, DbError> {
+        let account = self.account(address.0 .0)?;
+        if account.nonce == 0 && account.balance == [0u8; 32] && account.code.is_empty() {
+            // Recorded, and recorded as not existing.
+            return Ok(None);
+        }
+        let code = Bytes::copy_from_slice(&account.code);
+        let bytecode =
+            Bytecode::new_raw_checked(code.clone()).map_err(|_| DbError::MalformedCode {
+                address: account.address,
+            })?;
+        Ok(Some(AccountInfo {
+            balance: U256::from_be_bytes(account.balance),
+            nonce: account.nonce,
+            // `KECCAK_EMPTY` by name rather than by hashing nothing: an
+            // externally-owned account is most of a real block's touch set, and
+            // each one would otherwise cost a keccak permutation — which on
+            // this VM is a `KECCAK_F` delegation row, not a free call.
+            code_hash: if code.is_empty() {
+                revm::primitives::KECCAK_EMPTY
+            } else {
+                keccak256(&code)
+            },
+            // A hint the journal uses to skip an address lookup; a witness has
+            // no such hint to give.
+            account_id: None,
+            code: Some(bytecode),
+        }))
+    }
+
+    fn code_by_hash(&mut self, code_hash: B256) -> Result<Bytecode, DbError> {
+        Err(DbError::UnknownCode {
+            code_hash: code_hash.0,
+        })
+    }
+
+    fn storage(&mut self, address: Address, index: StorageKey) -> Result<U256, DbError> {
+        let account = self.account(address.0 .0)?;
+        let key = index.to_be_bytes::<32>();
+        let at = account
+            .slots
+            .binary_search_by(|slot| slot.0.cmp(&key))
+            .map_err(|_| DbError::UnknownSlot {
+                address: address.0 .0,
+                key,
+            })?;
+        Ok(U256::from_be_bytes(account.slots[at].1))
+    }
+
+    fn block_hash(&mut self, number: u64) -> Result<B256, DbError> {
+        let at = self
+            .witness
+            .env
+            .block_hashes
+            .binary_search_by(|entry| entry.0.cmp(&number))
+            .map_err(|_| DbError::UnknownBlockHash { number })?;
+        Ok(B256::new(self.witness.env.block_hashes[at].1))
     }
 }
 
@@ -441,36 +773,36 @@ const STATUS_SUCCESS: u8 = 2;
 /// twenty million gas each under a thirty-million-gas header executes happily
 /// and commits a block no Ethereum node would accept.
 pub fn run(witness: &BlockWitness) -> Result<Vec<u8>, String> {
+    run_against(witness, WitnessDb::new(witness))
+}
+
+/// The same block against a database the caller supplies.
+///
+/// [`run`] is this with [`WitnessDb`], and that is the *only* instantiation
+/// inside the guest, so the image is exactly what it was. The second caller is
+/// `host::recorder::WitnessRecorder`, which answers revm's reads from a cached
+/// JSON-RPC endpoint and remembers what it was asked; the recording and the
+/// proved run therefore share one block executor rather than two that have to
+/// be kept equal. That is what makes the differential in
+/// `crates/host/tests/witness.rs` mean something: if the two were separate
+/// code paths, "the guest agrees with native revm" would be comparing two
+/// implementations of the same idea rather than one implementation over two
+/// databases.
+///
+/// # The generic
+///
+/// Master anti-goal 2 bans trait generics, and names what it is about: the
+/// proving stack's field, polynomial, commitment and transcript types. This is
+/// none of those — it is workload code parameterised by *revm's own* database
+/// trait, which is how revm itself is built — and anti-goal 3's rule is met in
+/// the direction it asks for: the second caller exists, and the generic was
+/// introduced for it rather than in case of it.
+/// `docs/handoff/S25-block.md` records it.
+pub fn run_against<DB: revm::Database>(witness: &BlockWitness, db: DB) -> Result<Vec<u8>, String> {
     let spec = witness
         .env
         .spec()
         .ok_or_else(|| alloc::format!("spec id {} is not a hardfork", witness.env.spec_id))?;
-
-    let mut db = CacheDB::new(EmptyDB::default());
-    for account in &witness.accounts {
-        let address = Address::from(account.address);
-        let code = Bytes::copy_from_slice(&account.code);
-        db.insert_account_info(
-            address,
-            AccountInfo {
-                balance: U256::from_be_bytes(account.balance),
-                nonce: account.nonce,
-                code_hash: keccak256(&code),
-                // A hint the journal uses to skip an address lookup; a witness
-                // has no such hint to give.
-                account_id: None,
-                code: Some(Bytecode::new_raw(code)),
-            },
-        );
-        for (key, value) in &account.slots {
-            db.insert_account_storage(
-                address,
-                StorageKey::from_be_bytes(*key),
-                U256::from_be_bytes(*value),
-            )
-            .map_err(|_| "the in-memory database has no failure mode")?;
-        }
-    }
 
     let mut cfg = CfgEnv::new_with_spec(spec);
     cfg.chain_id = witness.env.chain_id;
@@ -524,7 +856,7 @@ pub fn run(witness: &BlockWitness) -> Result<Vec<u8>, String> {
 /// priced with the wrong one charges the wrong blob gas. It is picked here
 /// rather than in the witness because it is a property of the hardfork the
 /// witness already names.
-fn block_env(env: &BlockEnvWitness, spec: SpecId) -> BlockEnv {
+pub(crate) fn block_env(env: &BlockEnvWitness, spec: SpecId) -> BlockEnv {
     let fraction = if spec.is_enabled_in(SpecId::PRAGUE) {
         BLOB_BASE_FEE_UPDATE_FRACTION_PRAGUE
     } else {
@@ -549,7 +881,7 @@ fn block_env(env: &BlockEnvWitness, spec: SpecId) -> BlockEnv {
 ///
 /// `tx_type` is derived from the envelope rather than carried, so a witness
 /// cannot claim a type its fields do not support.
-fn tx_env(tx: &TxWitness) -> TxEnv {
+pub(crate) fn tx_env(tx: &TxWitness) -> TxEnv {
     let mut env = TxEnv::builder()
         .caller(Address::from(tx.caller))
         .kind(match tx.to {
@@ -564,10 +896,42 @@ fn tx_env(tx: &TxWitness) -> TxEnv {
         .nonce(tx.nonce)
         .chain_id(tx.chain_id)
         .access_list(access_list(&tx.access_list))
+        .blob_hashes(tx.blob_hashes.iter().map(|h| B256::new(*h)).collect())
+        .max_fee_per_blob_gas(tx.max_fee_per_blob_gas.unwrap_or(0))
+        .authorization_list_recovered(
+            tx.authorizations
+                .iter()
+                .map(recovered_authorization)
+                .collect(),
+        )
         .build_fill();
     env.derive_tx_type()
         .expect("a witness transaction's envelope names a transaction type");
     env
+}
+
+/// One witness authorization as revm's, with no recovery performed.
+///
+/// `RecoveredAuthorization::new_unchecked` is the constructor for exactly this
+/// situation and says so: the authority is supplied rather than derived. That
+/// is the same arrangement `TxWitness::caller` has, and for the same reason —
+/// this VM has no `ecrecover` delegation, so recovery is the witness
+/// producer's job. `RecoveredAuthority::Invalid` is the faithful encoding of
+/// an authorization whose signature recovers to nothing: EIP-7702 skips such
+/// an entry and runs the transaction anyway, so dropping it from the witness
+/// would change the nonce bookkeeping revm does over the list.
+fn recovered_authorization(auth: &AuthorizationWitness) -> RecoveredAuthorization {
+    RecoveredAuthorization::new_unchecked(
+        Authorization {
+            chain_id: U256::from_be_bytes(auth.chain_id),
+            address: Address::from(auth.address),
+            nonce: auth.nonce,
+        },
+        match auth.authority {
+            Some(address) => RecoveredAuthority::Valid(Address::from(address)),
+            None => RecoveredAuthority::Invalid,
+        },
+    )
 }
 
 /// The EIP-2930 access list, as revm's type.
@@ -611,26 +975,36 @@ fn encode_output(results: &[ExecutionResult], state: &revm::state::EvmState) -> 
     let mut out = Vec::new();
     let mut logs: Vec<&Log> = Vec::new();
     for result in results {
-        let (status, output) = match result {
-            ExecutionResult::Success { output, .. } => (
-                STATUS_SUCCESS,
-                match output {
-                    Output::Call(data) => data.clone(),
-                    Output::Create(data, _) => data.clone(),
-                },
-            ),
-            ExecutionResult::Revert { output, .. } => (STATUS_REVERT, output.clone()),
-            ExecutionResult::Halt { .. } => (STATUS_HALT, Bytes::new()),
-        };
-        out.push(status);
-        out.extend_from_slice(&result.tx_gas_used().to_le_bytes());
-        out.extend_from_slice(&(output.len() as u32).to_le_bytes());
-        out.extend_from_slice(&output);
+        push_record(&mut out, result);
         logs.extend(result.logs());
     }
     out.extend_from_slice(keccak256(encode_logs(&logs)).as_slice());
     out.extend_from_slice(keccak256(encode_post_state(state)).as_slice());
     out
+}
+
+/// One transaction's record, as the output commitment's first section writes
+/// it: `status ‖ gas_used ‖ output_len ‖ output`.
+///
+/// Factored out because the **stateless** mode digests this stream rather than
+/// carrying it (`src/stateless.rs`), and two encodings of one record would be
+/// two things to keep equal.
+pub(crate) fn push_record(out: &mut Vec<u8>, result: &ExecutionResult) {
+    let (status, output) = match result {
+        ExecutionResult::Success { output, .. } => (
+            STATUS_SUCCESS,
+            match output {
+                Output::Call(data) => data.clone(),
+                Output::Create(data, _) => data.clone(),
+            },
+        ),
+        ExecutionResult::Revert { output, .. } => (STATUS_REVERT, output.clone()),
+        ExecutionResult::Halt { .. } => (STATUS_HALT, Bytes::new()),
+    };
+    out.push(status);
+    out.extend_from_slice(&result.tx_gas_used().to_le_bytes());
+    out.extend_from_slice(&(output.len() as u32).to_le_bytes());
+    out.extend_from_slice(&output);
 }
 
 /// The log list, canonically: the count, then every log in emission order
@@ -645,7 +1019,7 @@ fn encode_output(results: &[ExecutionResult], state: &revm::state::EvmState) -> 
 ///       data_len     u32 LE
 ///       data         data_len bytes
 /// ```
-fn encode_logs(logs: &[&Log]) -> Vec<u8> {
+pub(crate) fn encode_logs(logs: &[&Log]) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&(logs.len() as u32).to_le_bytes());
     for log in logs {

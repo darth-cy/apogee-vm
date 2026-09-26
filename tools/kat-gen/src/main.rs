@@ -28,6 +28,7 @@
 //! | `lookup`  | `crates/constraints/tests/vectors/lookup_toy.bin` (S15's combined toy) |
 //! | `family`  | `crates/constraints/tests/vectors/{add_sub,jump_branch_slt}.bin` (S16's and S17's family circuits) |
 //! | `delegation` | `crates/constraints/tests/vectors/{keccak,poseidon2,fr_arith}.txt` (the three delegation circuits, by digest: the artifacts are megabytes) |
+//! | `block`   | `crates/host/tests/vectors/*` (S25's recorded mini-block). **Needs `ETH_RPC_URL`; opt-in only, see `DEFAULT_GROUPS`** |
 //! | `revm`    | `crates/emulator/tests/vectors/revm_block_*` (S24's synthetic block, what native revm makes of it, and the keccak-f frames the guest delegates) |
 //! | `guests`  | the guest ELFs themselves -- opt-in only, see `DEFAULT_GROUPS` |
 
@@ -36,6 +37,7 @@ use std::path::PathBuf;
 
 use test_support::{sha256, to_hex};
 
+mod block;
 mod curve;
 mod delegation;
 mod family;
@@ -54,11 +56,12 @@ mod program;
 mod revm;
 mod shared;
 mod srs;
+mod stateless;
 mod tape;
 mod tower;
 
 /// Every group, in the order a reader of the tower would meet them.
-const GROUPS: [(&str, fn()); 19] = [
+const GROUPS: [(&str, fn()); 20] = [
     ("field", field::generate),
     ("poly", poly::generate),
     ("curve", curve::generate),
@@ -77,6 +80,7 @@ const GROUPS: [(&str, fn()); 19] = [
     ("delegation", delegation::generate),
     ("tape", tape::generate),
     ("revm", revm::generate),
+    ("block", block::generate),
     ("guests", guests::generate),
 ];
 
@@ -175,6 +179,24 @@ pub fn write_bytes(relative_path: &str, contents: &[u8]) {
 
 /// A generator whose input stream had collapsed would still write a thousand
 /// lines that all "match".
+/// The same as [`write_bytes`], but at an absolute path.
+///
+/// The `block` group writes into `crates/host/tests/vectors/`, which it names
+/// itself rather than as a string relative to the workspace root, because it
+/// also reads that directory back.
+pub fn write_bytes_at(path: &std::path::Path, contents: &[u8]) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap_or_else(|e| panic!("creating {}: {e}", parent.display()));
+    }
+    fs::write(path, contents).unwrap_or_else(|e| panic!("writing {}: {e}", path.display()));
+    println!(
+        "  {} ({} bytes, sha256 {})",
+        path.display(),
+        contents.len(),
+        to_hex(&sha256(contents))
+    );
+}
+
 pub fn assert_distinct(values: &[String], what: &str) {
     let mut sorted = values.to_vec();
     sorted.sort();

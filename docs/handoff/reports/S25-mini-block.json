@@ -1,0 +1,95 @@
+{
+  "fixture": "mini-block",
+  "mode": "mini",
+  "block_number": 26057509,
+  "block_hash": "0xaa564e43eee9604a0051b58c0995fe7f79c557c71d49faf31019e9d47ac97dc5",
+  "txs": 2,
+  "gas_used": 392997,
+  "program_identity": "47404735c5b5e1df69824eedf6cc806faa6e1ba5c65920b26e61c45569148f2d",
+  "srs": "PSE perpetual powers of tau, contribution 80, 2^22 of assets/ptau/ppot_0080_24.ptau",
+  "guest_cycles": 24206626,
+  "cycles_per_gas": 61.594938383753565,
+  "shards": [
+    [
+      "ADD_SUB_LUI_AUIPC",
+      8
+    ],
+    [
+      "JUMP_BRANCH_SLT",
+      6
+    ],
+    [
+      "SHIFT_BITWISE",
+      3
+    ],
+    [
+      "MUL_DIV",
+      2
+    ],
+    [
+      "MEM_WORD",
+      5
+    ],
+    [
+      "MEM_SUBWORD",
+      2
+    ],
+    [
+      "ATOMICS",
+      1
+    ],
+    [
+      "INIT_TEARDOWN",
+      1
+    ],
+    [
+      "ZERO_WINDOWS",
+      1
+    ],
+    [
+      "KECCAK_F",
+      5
+    ],
+    [
+      "PUBLIC_INPUT",
+      1
+    ],
+    [
+      "PUBLIC_OUTPUT",
+      1
+    ],
+    [
+      "ADVICE_WINDOWS",
+      1
+    ]
+  ],
+  "total_shards": 37,
+  "proof_bytes": 61323886,
+  "statement_bytes": 122626,
+  "setup_ms": 28052.877375,
+  "phases": {
+    "execution_ms": 4280.694125,
+    "commit_ms": 131661.691208,
+    "gkr_ms": 620719.737542,
+    "opening_ms": 90000.199875,
+    "final_ms": 26.476
+  },
+  "proving_ms": 849920.54775,
+  "unattributed_ms": 3231.7489999999525,
+  "verify_ms": 9582.01325,
+  "peak_rss_bytes": null,
+  "peak_rss_source": "not measured: macos has no /proc/self/status, and reading peak RSS in-process otherwise needs unsafe, which master anti-goal 4 bans. Wrap the run in /usr/bin/time -l, which docs/spec/metrics.md §4.1 names as this repository's ground truth",
+  "hourly_price_usd": 2.36,
+  "cost_usd": 0.5571701368583333,
+  "cost_per_mgas_usd": 1.4177465396894462,
+  "cost_basis": "hourly_price_usd * proving_ms / 3600000, ethproofs' own formula with a CPU instance's on-demand price in place of num_gpus * gpu_price; 2.36 USD/h was given on the command line",
+  "hardware": {
+    "description": "Apple M5 Pro, 18 logical cpus, 48 GiB, macos aarch64, rayon 6",
+    "cpu": "Apple M5 Pro",
+    "logical_cpus": 18,
+    "memory_bytes": 51539607552,
+    "os": "macos",
+    "arch": "aarch64",
+    "rayon_threads": 6
+  }
+}

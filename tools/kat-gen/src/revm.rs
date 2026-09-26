@@ -218,6 +218,12 @@ pub fn synthetic_block() -> BlockWitness {
             // so the excess is zero and the blob gas price is its floor.
             excess_blob_gas: Some(0),
             slot_num: 0,
+            // The synthetic block's two transactions read no ancestor hash, so
+            // nothing is recorded here. S25 added the field and closed
+            // `docs/spec/revm-block.md` §1.2's `BLOCKHASH` gap: an ancestor the
+            // witness does not carry is now `DbError::UnknownBlockHash` rather
+            // than `keccak256` of the block number's decimal string.
+            block_hashes: Vec::new(),
         },
         accounts,
         txs: vec![
@@ -233,6 +239,9 @@ pub fn synthetic_block() -> BlockWitness {
                 nonce: 0,
                 chain_id: Some(CHAIN_ID),
                 access_list: Vec::new(),
+                blob_hashes: Vec::new(),
+                max_fee_per_blob_gas: None,
+                authorizations: Vec::new(),
             },
             // 2: a call into the counter, with the slot it writes warmed by an
             // EIP-2930 access list -- which is what puts a non-empty access
@@ -248,6 +257,9 @@ pub fn synthetic_block() -> BlockWitness {
                 nonce: 1,
                 chain_id: Some(CHAIN_ID),
                 access_list: vec![(COUNTER, vec![word(COUNTER_SLOT as u128)])],
+                blob_hashes: Vec::new(),
+                max_fee_per_blob_gas: None,
+                authorizations: Vec::new(),
             },
         ],
         stateless: None,
@@ -294,6 +306,11 @@ pub fn generate() {
         &bytes,
     );
     println!("  keccak-f invocations: {}", frames.len());
+
+    // S25's stateless mode, over a block built here rather than recorded: a
+    // recorded one cannot have a complete node set, `eth_getProof` returning no
+    // siblings (`src/stateless.rs`).
+    crate::stateless::generate();
 }
 
 /// Build and trace the guest on this witness, hold its **journal** to native
@@ -371,8 +388,19 @@ fn preprocess(image: &ProgramImage) -> (DecodedTables, VmConfig) {
 
 /// One guest, built from source into a fresh target directory.
 fn build_guest(name: &str) -> Vec<u8> {
+    build_guest_bin(name, name)
+}
+
+/// One *binary* of one guest package, built from source into a fresh target
+/// directory keyed on the binary rather than the package — so two binaries of
+/// `guests/revm-block` do not wipe each other's work and pay two cold builds.
+///
+/// Public because the `block` group runs the same guest over recorded
+/// witnesses; the two groups share one build helper rather than keeping two
+/// copies equal.
+pub fn build_guest_bin(name: &str, bin: &str) -> Vec<u8> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let target_dir = std::env::temp_dir().join(format!("apogee-kat-gen-{name}"));
+    let target_dir = std::env::temp_dir().join(format!("apogee-kat-gen-{bin}"));
     let _ = fs::remove_dir_all(&target_dir);
     let mut command = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
     command
@@ -397,7 +425,7 @@ fn build_guest(name: &str) -> Vec<u8> {
     );
     let elf = target_dir
         .join("riscv32imac-unknown-none-elf/debug")
-        .join(name);
+        .join(bin);
     let bytes = fs::read(&elf).unwrap_or_else(|e| panic!("reading {}: {e}", elf.display()));
     let _ = fs::remove_dir_all(&target_dir);
     bytes

@@ -21,6 +21,7 @@ members = [
     "crates/verifier-core",
     "crates/verifier",
     "crates/prover",
+    "crates/host",
     "tools/kat-gen",
     "tools/bench",
     "tools/artifact-dump",
@@ -57,6 +58,7 @@ checker = { path = "crates/checker" }
 verifier-core = { path = "crates/verifier-core" }
 verifier = { path = "crates/verifier" }
 prover = { path = "crates/prover" }
+host = { path = "crates/host" }
 
 # Test-only, and a dev-dependency everywhere it appears: SHA-256 for pinning
 # committed fixtures, and the hex codec those files are written in.
@@ -93,6 +95,14 @@ num-bigint = { version = "0.4", default-features = false }
 
 # Test only. Exercises the `Fr` serde impls over a real wire format.
 postcard = { version = "1", default-features = false }
+
+# JSON, and only for the host's manual fixture refresh: the Ethereum JSON-RPC
+# responses `host::rpc` reads, and the `BenchReport` `tools/bench` writes.
+# Master rule 2's allowed runtime list names serialization, and this is the
+# second entry under it. Nothing here is reachable from the prover, the
+# verifier or a guest -- `crates/host` and `tools/bench` are the only crates
+# that name it, and CI never lets either of them touch the network.
+serde_json = "1"
 
 # Test only, S21. The reference keccak-f[1600] and keccak256 the emulator's
 # permutation, the guest SDK's software fallback and the delegation circuit's
