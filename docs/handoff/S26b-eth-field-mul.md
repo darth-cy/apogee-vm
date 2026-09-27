@@ -486,7 +486,15 @@ level in ordinary CI. What only a deferred run can show:
    logic as an ecall number. BLS12-381 — the `0x0a` point-evaluation
    precompile's field — is 381 bits and does not fit this frame at all, so it
    would be a different family.
-4. **The `256-bit arithmetic` profiler candidate is still 2.47% of the
+4. **`docs/handoff/reports/*.json` are frozen machine output and were not
+   regenerated.** They are S26's profiler runs, and each carries a
+   `frame_words` per candidate — 32 for the `256-bit arithmetic` one, 30 for
+   `secp256k1`. Those are the hypothetical frames the *candidate model* uses
+   and not `constants::mod_mul::FRAME_WORDS`, so they are still correct as a
+   record of what S26 measured; but anyone re-running the profiler and diffing
+   will see the tables move, and nothing in the files says they are historical.
+   Read them as a handoff note reads: what that stage measured, then.
+5. **The `256-bit arithmetic` profiler candidate is still 2.47% of the
    mini-block and still has no accelerator.** It is the EVM's own `MULMOD`,
    `ADDMOD` and friends inlined into 27 opcode handlers, and the instruction is
    explicit that this family is not to serve it. `tools/profiler`'s candidate

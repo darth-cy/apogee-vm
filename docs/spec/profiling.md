@@ -143,7 +143,10 @@ directions:
   call per 256-bit **multiply** inside it — S22's cancellation having ruled out a
   family that verifies a signature. The ceiling was 30.98% to 56.66% of a block;
   the realized saving on the pinned mini-block was 54% of the category and 24.2%
-  of the execution (`docs/handoff/S26-cycle.md` §6.2).
+  of the execution (`docs/handoff/S26-cycle.md` §6.2), and **18.7% of the
+  execution since S26b**, which made the delegation's operands canonical field
+  elements and so put a reduction back on the caller
+  (`docs/handoff/S26b-eth-field-mul.md` §6).
 
 **The gap between the ceiling and the realized saving is marshalling, and it is
 large enough to be the whole engineering problem.** S26 measured three versions of

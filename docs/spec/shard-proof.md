@@ -809,12 +809,18 @@ unchanged, and no key's SRS digest moved, the packed generic table having gained
 `docs/spec/constraint-manifest.md` §13 and §14 the accounting.
 
 **S26's `MOD_MUL` was one more of each, and its only novelty is off the shard-proof path.**
-One constructor, one registry arm below the guard, one fill, `M ++ W`, `2^8`, a fourth
+One constructor, one registry arm below the guard, one fill, `M ++ W`, `2^16`, a fourth
 `is_deleg_t` bit and a fourth `deleg_space` value — the same append `delegation.md` §10
 describes, and again no key's SRS digest moved. What is new is that the family's behaviour
-depends on a **witnessed parameter**: the modulus is a column of the row rather than a
-constant of the circuit, so one circuit proves a multiplication modulo secp256k1's `p`, its
-scalar field's, BN254's or any other 256-bit value a guest passes. Nothing in this page
-notices — a witnessed parameter is a witness column like any other, and the statement, the
-transcript and the opening are unchanged. `docs/spec/delegation.md` §14 is the ABI and
+depends on a **selector**: one frame word names one of four fixed Ethereum fields and the
+circuit supplies the modulus' limbs as literals, so one circuit proves a multiplication
+modulo secp256k1's `p` or `n` or BN254's `q` or `r`. Nothing in this page notices — a
+selector is a witness column like any other, and the statement, the transcript and the
+opening are unchanged. `docs/spec/delegation.md` §14 is the ABI and
 `docs/spec/constraint-manifest.md` §18 the accounting.
+
+**S26b moved the family's ecall number and one literal of `ADD_SUB_LUI_AUIPC`'s circuit.**
+`PRECOMPILE_MOD_MUL` is `0x0504`, `0x0503` being retired and burned when the frame changed
+shape (`docs/spec/ecall-abi.md` §4), and §8.2's `deleg_15_number` gate carries the new
+literal — so `add_sub`'s artifact bytes moved and its committed fixture regenerated. No
+key's SRS digest moved for that either: the generic table is untouched.

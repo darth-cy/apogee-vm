@@ -163,9 +163,10 @@ this page's.
 
 **`KECCAK_F` reads slots 1 to 4 and nothing else.** It carries no lookup channel at all
 (§12.1), so `g`, `β` and every derived power and neutral are absent from it — one of the
-**eight** registered circuits of which that is true, the others being the five window families
-and the two other delegation families, and for the opposite reason: a window family has no
-witness to bound, and a keccak row's every bound is a bit decomposition. Its 26 pad leaves and
+**nine** registered circuits of which that is true, the others being the five window families
+and the three other delegation families, and for the opposite reason: a window family has no
+witness to bound, and a delegation row's every bound is a bit decomposition — or, for
+`MOD_MUL`'s modulus alone, a selector pinning it to a literal (§18.4). Its 26 pad leaves and
 its `write_anchor` leaf read no challenge past `γ_M`, and the two frame-pointer checks, the
 3,561 booleanity gates, the 50 `addr_w`, 50
 `gap_w`, 50 `input_w` and 50 `output_w` gates and all 145,920 permutation gates read none at
@@ -8133,6 +8134,11 @@ what it bought. The four are secp256k1's base and scalar fields and BN254's — 
 cycles — and between them they are every 256-bit field Ethereum block execution multiplies
 in. **The EVM's `MULMOD` is not among them**: an arbitrary modulus has no representation in
 this frame and nothing routes the opcode here.
+
+**This family has no §0.5 row**, like the other three delegation families but `KECCAK_F`:
+§0.5 counts gate *shapes* over one circuit at `n = 20`, which is not a height this family is
+built at, and §18.4's table is the same information grouped by what each gate says rather
+than by `GateDef` variant. §18.1's `3,502 (86/3,416)` is the split §0.5 would carry.
 
 **The height is `2^16`**, not the delegation menu's opening `2^8`, so a shard holds 65,536
 invocations. It is the one delegation family whose invocation count a real workload drives
