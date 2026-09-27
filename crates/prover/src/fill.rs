@@ -4,6 +4,7 @@
 //! A fill returns every `M`, `W` and `S` column but the multiplicities, which
 //! the common path counts over the family's channels.
 
+use constants::ec_add as ea;
 use constants::extra_mask::add_sub_lui_auipc as kind;
 use constants::extra_mask::atomics as at;
 use constants::extra_mask::jump_branch_slt as jbs;
@@ -15,12 +16,14 @@ use constants::extra_mask::system_code;
 use constants::fr_arith as fa;
 use constants::mod_mul as mm;
 use constants::poseidon2 as p2;
+use constants::sha256 as sh;
 use constants::{delegation, ecall, family, guest_memory, keccak, memory};
 use constraints::add_sub::{
     DECODED, IS_ECALL, IS_FENCE, KINDS, NEXT_PC_HI, PC_WRAP, RD_HI, TABLE_WIDTH, WRAP,
 };
 use constraints::atomics as at_circuit;
 use constraints::delegation as deleg;
+use constraints::ec_add as ea_circuit;
 use constraints::fr_arith as fa_circuit;
 use constraints::jump_branch_slt as jbs_circuit;
 use constraints::keccak as kec_circuit;
@@ -30,6 +33,7 @@ use constraints::memory::{frame_queries, rd_selected};
 use constraints::mod_mul as mm_circuit;
 use constraints::mul_div as md_circuit;
 use constraints::poseidon2 as p2_circuit;
+use constraints::sha256 as sh_circuit;
 use constraints::shift_bitwise as sb_circuit;
 use constraints::PolyAddress;
 use field::Fr;
@@ -185,6 +189,8 @@ pub fn family_fill(family: FamilyId) -> Option<Fill> {
         family::POSEIDON2 => Some(poseidon2),
         family::FR_ARITH => Some(fr_arith),
         family::MOD_MUL => Some(mod_mul),
+        family::SHA256_COMP => Some(sha256_comp),
+        family::EC_ADD => Some(ec_add),
         _ => None,
     }
 }
@@ -660,6 +666,610 @@ fn mod_mul(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
         }
     }
     Ok(out)
+}
+
+/// `SHA256_COMP`'s fill: one compression a row.
+///
+/// Every committed column but the frame's own is a **bit**, and every bit comes
+/// from re-running the compression over the frame's read values. That is not
+/// re-deciding what the row says — the frame words come from the buffer, which
+/// the tracer filled from the log — it is producing the intermediate sequences
+/// the circuit's gates read, which no log event carries.
+fn sha256_comp(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    let inv = invocations(src, family::SHA256_COMP)?;
+    let mut out = delegation_frame(&inv, sh::FRAME_WORDS, sh::FRAME_BYTES as u64, 0);
+    let (frames, h) = (inv.frames, inv.height);
+    let rows = 0..frames.len();
+
+    /// One row's intermediates: the schedule, the two working sequences, and
+    /// every carry the circuit commits. `a[i + 3]` is `A_i`, so indices 0..4
+    /// are `A_{-3}..A_0` — the state words standing in for `D`, `C`, `B`, `A`.
+    struct Row {
+        w: [u32; sh::ROUNDS],
+        cw: [u32; sh::ROUNDS],
+        a: Vec<u32>,
+        e: Vec<u32>,
+        ca: [u32; sh::ROUNDS],
+        ce: [u32; sh::ROUNDS],
+        co: [u32; sh::STATE_WORDS],
+    }
+
+    let witness: Vec<Row> = rows
+        .clone()
+        .map(|r| {
+            let read = |j: usize| frames.word(j).read_value[r];
+            let mut w = [0u32; sh::ROUNDS];
+            let mut cw = [0u32; sh::ROUNDS];
+            for (i, slot) in w.iter_mut().take(sh::BLOCK_WORDS).enumerate() {
+                *slot = read(sh::BLOCK_WORD + i);
+            }
+            for i in sh::BLOCK_WORDS..sh::ROUNDS {
+                let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+                let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+                let raw = s1 as u64 + w[i - 7] as u64 + s0 as u64 + w[i - 16] as u64;
+                cw[i] = (raw >> 32) as u32;
+                w[i] = raw as u32;
+            }
+            let mut a = vec![read(3), read(2), read(1), read(0)];
+            let mut e = vec![read(7), read(6), read(5), read(4)];
+            let mut ca = [0u32; sh::ROUNDS];
+            let mut ce = [0u32; sh::ROUNDS];
+            for i in 0..sh::ROUNDS {
+                let (ai, am1, am2, am3) = (a[i + 3], a[i + 2], a[i + 1], a[i]);
+                let (ei, em1, em2, em3) = (e[i + 3], e[i + 2], e[i + 1], e[i]);
+                let s1 = ei.rotate_right(6) ^ ei.rotate_right(11) ^ ei.rotate_right(25);
+                let ch = (ei & em1) ^ (!ei & em2);
+                let t1 = em3 as u64
+                    + s1 as u64
+                    + ch as u64
+                    + sh::ROUND_CONSTANTS[i] as u64
+                    + w[i] as u64;
+                let s0 = ai.rotate_right(2) ^ ai.rotate_right(13) ^ ai.rotate_right(22);
+                let maj = (ai & am1) ^ (ai & am2) ^ (am1 & am2);
+                let t2 = s0 as u64 + maj as u64;
+                ca[i] = ((t1 + t2) >> 32) as u32;
+                ce[i] = ((am3 as u64 + t1) >> 32) as u32;
+                a.push((t1 + t2) as u32);
+                e.push((am3 as u64 + t1) as u32);
+            }
+            let v = [
+                a[sh::ROUNDS + 3],
+                a[sh::ROUNDS + 2],
+                a[sh::ROUNDS + 1],
+                a[sh::ROUNDS],
+                e[sh::ROUNDS + 3],
+                e[sh::ROUNDS + 2],
+                e[sh::ROUNDS + 1],
+                e[sh::ROUNDS],
+            ];
+            let co: [u32; sh::STATE_WORDS] =
+                core::array::from_fn(|j| ((read(j) as u64 + v[j] as u64) >> 32) as u32);
+            Row {
+                w,
+                cw,
+                a,
+                e,
+                ca,
+                ce,
+                co,
+            }
+        })
+        .collect();
+
+    // A bit column from a per-row extractor. Padding rows are the zeros
+    // `u32_column` pads with, which is what every gate wants of them.
+    let bit_column = |out: &mut Vec<(PolyAddress, MultilinearPoly)>,
+                      address: PolyAddress,
+                      pick: &dyn Fn(&Row) -> u32,
+                      t: usize| {
+        let values: Vec<u32> = witness.iter().map(|row| (pick(row) >> t) & 1).collect();
+        out.push((address, u32_column(values, h)));
+    };
+
+    for j in 0..sh::FRAME_WORDS {
+        for t in 0..32 {
+            let values: Vec<u32> = rows
+                .clone()
+                .map(|r| (frames.word(j).read_value[r] >> t) & 1)
+                .collect();
+            out.push((sh_circuit::in_bit(j, t), u32_column(values, h)));
+        }
+    }
+    for j in 0..sh::STATE_WORDS {
+        for t in 0..32 {
+            let values: Vec<u32> = rows
+                .clone()
+                .map(|r| (frames.word(j).write_value[r] >> t) & 1)
+                .collect();
+            out.push((sh_circuit::out_bit(j, t), u32_column(values, h)));
+        }
+    }
+    for j in 0..sh::STATE_WORDS {
+        bit_column(&mut out, sh_circuit::out_carry(j), &|row| row.co[j], 0);
+    }
+    for i in sh::BLOCK_WORDS..sh::ROUNDS {
+        for t in 0..32 {
+            bit_column(&mut out, sh_circuit::sched_bit(i, t), &|row| row.w[i], t);
+        }
+    }
+    for i in sh::BLOCK_WORDS..sh::ROUNDS {
+        for t in 0..sh::CARRY_W_BITS {
+            bit_column(
+                &mut out,
+                sh_circuit::sched_carry_bit(i, t),
+                &|row| row.cw[i],
+                t,
+            );
+        }
+    }
+    for i in 1..=sh::ROUNDS {
+        for t in 0..32 {
+            bit_column(
+                &mut out,
+                sh_circuit::a_bit(i as isize, t),
+                &|row| row.a[i + 3],
+                t,
+            );
+        }
+    }
+    for i in 1..=sh::ROUNDS {
+        for t in 0..32 {
+            bit_column(
+                &mut out,
+                sh_circuit::e_bit(i as isize, t),
+                &|row| row.e[i + 3],
+                t,
+            );
+        }
+    }
+    for i in 0..sh::ROUNDS {
+        for t in 0..sh::CARRY_A_BITS {
+            bit_column(&mut out, sh_circuit::ca_bit(i, t), &|row| row.ca[i], t);
+        }
+    }
+    for i in 0..sh::ROUNDS {
+        for t in 0..sh::CARRY_E_BITS {
+            bit_column(&mut out, sh_circuit::ce_bit(i, t), &|row| row.ce[i], t);
+        }
+    }
+    Ok(out)
+}
+
+/// `EC_ADD`'s fill: one third of a point addition a row.
+///
+/// The frame's own columns are **not** `delegation_frame`'s: this family
+/// range-checks through `RANGE16` where the other five decompose into bits, so
+/// its timestamp gap is two committed chunks rather than 38 booleans and its
+/// two base decompositions are one column each. The `M` side is identical, so
+/// only the witness side differs.
+fn ec_add(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    let inv = invocations(src, family::EC_ADD)?;
+    let (frames, h) = (inv.frames, inv.height);
+    let rows = 0..frames.len();
+    let mut out: Vec<(PolyAddress, MultilinearPoly)> = Vec::new();
+
+    // --- the M side, as every delegation family has it ---------------------
+    let cycles: Vec<Fr> = frames.cycles().iter().map(|c| Fr::from_u64(*c)).collect();
+    out.push((deleg::CYCLE, fr_column(cycles, h)));
+    out.push((
+        deleg::LIVE,
+        u32_column(rows.clone().map(|_| 1).collect(), h),
+    ));
+    out.push((deleg::BASE, u32_column(frames.bases().to_vec(), h)));
+    out.push((deleg::ANCHOR_VALUE, u32_column(Vec::new(), h)));
+    for j in 0..ea::FRAME_WORDS {
+        let w = frames.word(j);
+        for (field, values) in [
+            (
+                deleg::WORD_ADDR,
+                rows.clone().map(|r| w.addr[r]).collect::<Vec<u32>>(),
+            ),
+            (
+                deleg::WORD_READ_VALUE,
+                rows.clone().map(|r| w.read_value[r]).collect(),
+            ),
+            (
+                deleg::WORD_WRITE_VALUE,
+                rows.clone().map(|r| w.write_value[r]).collect(),
+            ),
+        ] {
+            out.push((deleg::word(j, field), u32_column(values, h)));
+        }
+        let read_ts: Vec<Fr> = rows.clone().map(|r| Fr::from_u64(w.read_ts[r])).collect();
+        out.push((deleg::word(j, deleg::WORD_READ_TS), fr_column(read_ts, h)));
+    }
+
+    // --- the frame's RANGE16 decompositions --------------------------------
+    let gap_of = |j: usize, r: usize| -> u64 {
+        let ts = memory::TS_STEP * frames.cycles()[r] + delegation::FRAME_DELTA;
+        ts - frames.word(j).read_ts[r] - 1
+    };
+    for j in 0..ea::FRAME_WORDS {
+        for c in 0..2 {
+            let values: Vec<u32> = rows
+                .clone()
+                .map(|r| ((gap_of(j, r) >> (16 * (c as u32 + 1))) & 0xffff) as u32)
+                .collect();
+            out.push((ea_circuit::gap_chunk(j, c), u32_column(values, h)));
+        }
+    }
+    let low: Vec<u32> = rows
+        .clone()
+        .map(|r| (frames.bases()[r] - guest_memory::RAM_ORIGIN) / 4)
+        .collect();
+    out.push((ea_circuit::base_low(), u32_column(low.clone(), h)));
+    out.push((
+        ea_circuit::base_low_hi(),
+        u32_column(low.iter().map(|v| v >> 16).collect(), h),
+    ));
+    let room: Vec<u32> = rows
+        .clone()
+        .map(|r| ((1u64 << 31) - ea::FRAME_BYTES as u64 - frames.bases()[r] as u64) as u32)
+        .collect();
+    out.push((ea_circuit::base_room(), u32_column(room.clone(), h)));
+    out.push((
+        ea_circuit::base_room_hi(),
+        u32_column(room.iter().map(|v| v >> 16).collect(), h),
+    ));
+    for j in 0..ea::FRAME_WORDS {
+        let values: Vec<u32> = rows
+            .clone()
+            .map(|r| frames.word(j).read_value[r] >> 16)
+            .collect();
+        out.push((ea_circuit::word_high(j), u32_column(values, h)));
+    }
+
+    // --- one pass over the live rows ---------------------------------------
+    let witness: Vec<EcAddRow> = rows.clone().map(|r| ec_add_row(frames, r)).collect();
+
+    for i in 0..ea::CODES.len() {
+        let values: Vec<u32> = witness.iter().map(|w| u32::from(w.code == i)).collect();
+        out.push((ea_circuit::selector(i), u32_column(values, h)));
+    }
+    for k in 0..ea::LIMBS {
+        let values: Vec<u32> = witness.iter().map(|w| w.m[k] as u32).collect();
+        out.push((ea_circuit::m_limb(k), u32_column(values, h)));
+    }
+    out.push((
+        ea_circuit::b3(),
+        u32_column(witness.iter().map(|w| w.b3).collect(), h),
+    ));
+    // The three curve-scaled helpers are limb-wise products, not reductions, so
+    // `b3 * zz_k` reaches 21 * 2^32 and `byz3` is signed: `Fr` columns, not
+    // `u32` ones.
+    for (pick, address) in [
+        (0usize, ea_circuit::bzz3_limb as fn(usize) -> PolyAddress),
+        (1, ea_circuit::byz3_limb as fn(usize) -> PolyAddress),
+        (2, ea_circuit::bxx9_limb as fn(usize) -> PolyAddress),
+    ] {
+        for k in 0..ea::LIMBS {
+            let values: Vec<Fr> = witness.iter().map(|w| signed(w.helpers[pick][k])).collect();
+            out.push((address(k), fr_column(values, h)));
+        }
+    }
+    for v in 0..12 {
+        for i in 0..ea::LIMBS {
+            let values: Vec<u32> = witness.iter().map(|w| w.chains[v].0[i] as u32).collect();
+            out.push((ea_circuit::diff(v, i), u32_column(values, h)));
+        }
+        for i in 0..ea::LIMBS {
+            let values: Vec<u32> = witness
+                .iter()
+                .map(|w| (w.chains[v].0[i] >> 16) as u32)
+                .collect();
+            out.push((ea_circuit::diff_hi(v, i), u32_column(values, h)));
+        }
+        for i in 0..ea::LIMBS {
+            let values: Vec<u32> = witness.iter().map(|w| w.chains[v].1[i] as u32).collect();
+            out.push((ea_circuit::borrow(v, i), u32_column(values, h)));
+        }
+    }
+    for r in 0..ea::GROUPS {
+        for which in 0..4 {
+            for k in 0..ea::LIMBS {
+                let values: Vec<Fr> = witness
+                    .iter()
+                    .map(|w| signed(w.slots[r].operands[which][k]))
+                    .collect();
+                out.push((ea_circuit::operand(r, which, k), fr_column(values, h)));
+            }
+        }
+        for k in 0..ea::LIMBS {
+            let values: Vec<u32> = witness.iter().map(|w| w.slots[r].out[k] as u32).collect();
+            out.push((ea_circuit::out_limb(r, k), u32_column(values, h)));
+        }
+        for k in 0..ea::LIMBS {
+            let values: Vec<u32> = witness
+                .iter()
+                .map(|w| (w.slots[r].out[k] >> 16) as u32)
+                .collect();
+            out.push((ea_circuit::out_hi(r, k), u32_column(values, h)));
+        }
+        for i in 0..ea::QUOTIENT_LIMBS {
+            let values: Vec<u32> = witness.iter().map(|w| w.slots[r].q[i] as u32).collect();
+            out.push((ea_circuit::q_limb(r, i), u32_column(values, h)));
+        }
+        for i in 0..ea::QUOTIENT_LIMBS {
+            let values: Vec<u32> = witness
+                .iter()
+                .map(|w| (w.slots[r].q[i] >> 16) as u32)
+                .collect();
+            out.push((ea_circuit::q_hi(r, i), u32_column(values, h)));
+        }
+        // The carry is committed as the **unsigned** `c + 2^45`, which reaches
+        // 2^46 and so is an `Fr` column; its two chunks are halfwords.
+        let offset = 1i128 << ea::CARRY_OFFSET_BITS;
+        for c in 0..ea::CARRIES {
+            let values: Vec<Fr> = witness
+                .iter()
+                .map(|w| signed(w.slots[r].carries[c] + offset))
+                .collect();
+            out.push((ea_circuit::carry(r, c), fr_column(values, h)));
+        }
+        for c in 0..ea::CARRIES {
+            for j in 0..2 {
+                let values: Vec<u32> = witness
+                    .iter()
+                    .map(|w| {
+                        let u = w.slots[r].carries[c] + offset;
+                        ((u >> (16 * (j as u32 + 1))) & 0xffff) as u32
+                    })
+                    .collect();
+                out.push((ea_circuit::carry_chunk(r, c, j), u32_column(values, h)));
+            }
+        }
+        for i in 0..ea::LIMBS {
+            let values: Vec<u32> = witness
+                .iter()
+                .map(|w| w.slots[r].chain.0[i] as u32)
+                .collect();
+            out.push((ea_circuit::out_diff(r, i), u32_column(values, h)));
+        }
+        for i in 0..ea::LIMBS {
+            let values: Vec<u32> = witness
+                .iter()
+                .map(|w| (w.slots[r].chain.0[i] >> 16) as u32)
+                .collect();
+            out.push((ea_circuit::out_diff_hi(r, i), u32_column(values, h)));
+        }
+        for i in 0..ea::LIMBS {
+            let values: Vec<u32> = witness
+                .iter()
+                .map(|w| w.slots[r].chain.1[i] as u32)
+                .collect();
+            out.push((ea_circuit::out_borrow(r, i), u32_column(values, h)));
+        }
+    }
+    Ok(out)
+}
+
+/// One `EC_ADD` row's witness.
+struct EcAddRow {
+    code: usize,
+    m: [u64; ea::LIMBS],
+    b3: u32,
+    /// `bzz3`, `byz3` and `bxx9`, limb-wise and signed.
+    helpers: [[i128; ea::LIMBS]; 3],
+    /// The twelve frame values' `< m` chains, in `VALUES` order.
+    chains: [([u64; ea::LIMBS], [u64; ea::LIMBS]); 12],
+    slots: [EcAddSlot; ea::GROUPS],
+}
+
+/// One reduction slot's witness.
+struct EcAddSlot {
+    /// `A`, `B`, `C`, `D`, limb-wise and signed.
+    operands: [[i128; ea::LIMBS]; 4],
+    out: [u64; ea::LIMBS],
+    q: [u64; ea::QUOTIENT_LIMBS],
+    carries: [i128; ea::CARRIES],
+    chain: ([u64; ea::LIMBS], [u64; ea::LIMBS]),
+}
+
+/// One row's witness: the selector, the curve's constants, the twelve values'
+/// chains, and the three slots' operands, quotients and carries.
+fn ec_add_row(frames: &FrameSlice, r: usize) -> EcAddRow {
+    let read = |first: usize| -> [u64; ea::LIMBS] {
+        core::array::from_fn(|k| frames.word(first + k).read_value[r] as u64)
+    };
+    let code_word = frames.word(ea::SELECTOR_WORD).read_value[r];
+    let code = ea::code_index(code_word)
+        .unwrap_or_else(|| panic!("ec_add: selector {code_word} names no curve and group"));
+    let m: [u64; ea::LIMBS] = {
+        let sel = ea::CURVE_MODULI[ea::CODE_CURVE[code]];
+        core::array::from_fn(|k| sel[k] as u64)
+    };
+    let b3 = ea::CURVE_B3[ea::CODE_CURVE[code]];
+    let g = ea::CODE_GROUP[code];
+
+    // The twelve frame values, in `constraints::ec_add::VALUES` order.
+    let firsts = [
+        ea::X1_WORD,
+        ea::Y1_WORD,
+        ea::Z1_WORD,
+        ea::X2_WORD,
+        ea::Y2_WORD,
+        ea::Z2_WORD,
+        ea::XX_WORD,
+        ea::YY_WORD,
+        ea::ZZ_WORD,
+        ea::M4_WORD,
+        ea::M5_WORD,
+        ea::M6_WORD,
+    ];
+    let values: [[u64; ea::LIMBS]; 12] = core::array::from_fn(|v| read(firsts[v]));
+    // A value's chain is live exactly on the groups that read it, because the
+    // `< m` gate holds its last borrow to that sum: the six intermediates hold
+    // whatever the guest's scratch held on a group-0 row.
+    let reads = |v: usize| -> bool {
+        if v < 6 {
+            g < 2
+        } else {
+            g == 2
+        }
+    };
+    let chains: [([u64; ea::LIMBS], [u64; ea::LIMBS]); 12] = core::array::from_fn(|v| {
+        if reads(v) {
+            let (d, b) = borrow_chain_against(&values[v], &m);
+            (
+                core::array::from_fn(|i| d[i]),
+                core::array::from_fn(|i| b[i]),
+            )
+        } else {
+            ([0u64; ea::LIMBS], [0u64; ea::LIMBS])
+        }
+    });
+
+    let (xx, yy, zz) = (values[6], values[7], values[8]);
+    let m5 = values[10];
+    let lim = |v: &[u64; ea::LIMBS], k: usize| v[k] as i128;
+    // The three curve-scaled helpers, limb-wise and ungated: their gates hold
+    // on every row, and only group 2's operand pins read them.
+    let helpers: [[i128; ea::LIMBS]; 3] = [
+        core::array::from_fn(|k| b3 as i128 * lim(&zz, k)),
+        core::array::from_fn(|k| b3 as i128 * (lim(&m5, k) - lim(&yy, k) - lim(&zz, k))),
+        core::array::from_fn(|k| 3 * b3 as i128 * lim(&xx, k)),
+    ];
+
+    // Each group's three slots, as `(A, B, C, D, the output's frame word)`.
+    let zero = [0i128; ea::LIMBS];
+    let lin = |terms: &[(usize, i128)]| -> [i128; ea::LIMBS] {
+        core::array::from_fn(|k| terms.iter().map(|(v, c)| c * lim(&values[*v], k)).sum())
+    };
+    let xy = lin(&[(9, 1), (6, -1), (7, -1)]);
+    let yz = lin(&[(10, 1), (7, -1), (8, -1)]);
+    let xz = lin(&[(11, 1), (6, -1), (8, -1)]);
+    let nxz = lin(&[(6, 1), (8, 1), (11, -1)]);
+    let ym: [i128; ea::LIMBS] = core::array::from_fn(|k| lim(&yy, k) - helpers[0][k]);
+    let yp: [i128; ea::LIMBS] = core::array::from_fn(|k| lim(&yy, k) + helpers[0][k]);
+    let xx3: [i128; ea::LIMBS] = core::array::from_fn(|k| 3 * lim(&xx, k));
+    let schedule: [[[i128; ea::LIMBS]; 4]; ea::GROUPS] = match g {
+        0 => [
+            [lin(&[(0, 1)]), lin(&[(3, 1)]), zero, zero],
+            [lin(&[(1, 1)]), lin(&[(4, 1)]), zero, zero],
+            [lin(&[(2, 1)]), lin(&[(5, 1)]), zero, zero],
+        ],
+        1 => [
+            [lin(&[(0, 1), (1, 1)]), lin(&[(3, 1), (4, 1)]), zero, zero],
+            [lin(&[(1, 1), (2, 1)]), lin(&[(4, 1), (5, 1)]), zero, zero],
+            [lin(&[(0, 1), (2, 1)]), lin(&[(3, 1), (5, 1)]), zero, zero],
+        ],
+        _ => [
+            [xy, ym, helpers[1], nxz],
+            [yp, ym, helpers[2], xz],
+            [yz, yp, xx3, xy],
+        ],
+    };
+    let out_words = match g {
+        0 => [ea::XX_WORD, ea::YY_WORD, ea::ZZ_WORD],
+        1 => [ea::M4_WORD, ea::M5_WORD, ea::M6_WORD],
+        _ => [ea::X1_WORD, ea::Y1_WORD, ea::Z1_WORD],
+    };
+
+    let slots: [EcAddSlot; ea::GROUPS] = core::array::from_fn(|slot| {
+        let operands = schedule[slot];
+        let result: [u64; ea::LIMBS] =
+            core::array::from_fn(|k| frames.word(out_words[slot] + k).write_value[r] as u64);
+        let (q, carries) = ec_add_witness(&m, &operands, &result);
+        let (d, b) = borrow_chain_against(&result, &m);
+        EcAddSlot {
+            operands,
+            out: result,
+            q,
+            carries,
+            chain: (
+                core::array::from_fn(|i| d[i]),
+                core::array::from_fn(|i| b[i]),
+            ),
+        }
+    });
+
+    EcAddRow {
+        code,
+        m,
+        b3,
+        helpers,
+        chains,
+        slots,
+    }
+}
+
+/// One slot's quotient and carries, from the limb identity
+/// `A*B + C*D + 256*m^2 = q*m + out`.
+///
+/// The positions are computed first as unnormalized signed sums — every one
+/// below `2^80`, which an `i128` holds — then normalized into the non-negative
+/// big integer `N = A*B + C*D + 256*m^2 - out`, which is `q*m` exactly, and
+/// divided. The carries then fall out of the identity position by position,
+/// each an exact division by `2^32`.
+fn ec_add_witness(
+    m: &[u64; ea::LIMBS],
+    operands: &[[i128; ea::LIMBS]; 4],
+    result: &[u64; ea::LIMBS],
+) -> ([u64; ea::QUOTIENT_LIMBS], [i128; ea::CARRIES]) {
+    // `pos[k] = P_k + O_k - out_k`, the identity's left-hand side less the
+    // quotient's product.
+    let mut pos = [0i128; ea::POSITIONS];
+    for i in 0..ea::LIMBS {
+        for j in 0..ea::LIMBS {
+            let at = i + j;
+            pos[at] += operands[0][i] * operands[1][j];
+            pos[at] += operands[2][i] * operands[3][j];
+            pos[at] += ea::OFFSET_MULTIPLE as i128 * m[i] as i128 * m[j] as i128;
+        }
+    }
+    for k in 0..ea::LIMBS {
+        pos[k] -= result[k] as i128;
+    }
+
+    // `N`, normalized. It is non-negative because the `256 * m^2` offset
+    // dominates every negative term (`constraints::ec_add`'s
+    // `the_carry_offset_covers_every_slot` is the same arithmetic).
+    let mut limbs: Vec<u32> = Vec::with_capacity(ea::POSITIONS + 4);
+    let mut carry = 0i128;
+    for at in pos.iter() {
+        let total = at + carry;
+        let limb = total.rem_euclid(1i128 << 32);
+        limbs.push(limb as u32);
+        carry = (total - limb) >> 32;
+    }
+    while carry != 0 {
+        let limb = carry.rem_euclid(1i128 << 32);
+        limbs.push(limb as u32);
+        carry = (carry - limb) >> 32;
+    }
+    assert!(
+        carry == 0,
+        "ec_add: the identity's left-hand side is negative"
+    );
+
+    let modulus: Vec<u32> = m.iter().map(|w| *w as u32).collect();
+    let quotient = wide_div(&limbs, &modulus);
+    for (i, w) in quotient.iter().enumerate().skip(ea::QUOTIENT_LIMBS) {
+        assert_eq!(*w, 0, "ec_add: the quotient needs limb {i}");
+    }
+    let q: [u64; ea::QUOTIENT_LIMBS] = core::array::from_fn(|i| quotient[i] as u64);
+
+    // The carries, from the identity: `c_k = (pos[k] - S_k + c_{k-1}) / 2^32`.
+    let mut carries = [0i128; ea::CARRIES];
+    let mut running = 0i128;
+    for k in 0..ea::POSITIONS {
+        let mut residue = pos[k] + running;
+        for (i, qi) in q.iter().enumerate() {
+            let Some(j) = k.checked_sub(i) else { continue };
+            if j >= ea::LIMBS {
+                continue;
+            }
+            residue -= *qi as i128 * m[j] as i128;
+        }
+        if k + 1 == ea::POSITIONS {
+            assert_eq!(residue, 0, "ec_add: the identity does not close");
+        } else {
+            assert_eq!(residue % (1i128 << 32), 0, "ec_add: a carry is not exact");
+            carries[k] = residue >> 32;
+            running = carries[k];
+        }
+    }
+    (q, carries)
 }
 
 /// Whether `x < y` over eight little-endian 32-bit limbs.
