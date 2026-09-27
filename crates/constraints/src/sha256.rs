@@ -673,7 +673,7 @@ fn xor_kind(k: usize) -> XorKind {
     } else {
         let j = (k - 3 * f::ROUNDS) / 2;
         let i = f::BLOCK_WORDS + j;
-        if (k - 3 * f::ROUNDS) % 2 == 0 {
+        if (k - 3 * f::ROUNDS).is_multiple_of(2) {
             XorKind::SmallSigma0(i - 15)
         } else {
             XorKind::SmallSigma1(i - 2)
@@ -1183,14 +1183,14 @@ mod tests {
                     .wrapping_add(s1);
             }
             let [mut a, mut b, mut c, mut dd, mut e, mut ff, mut g, mut h] = state;
-            for i in 0..64 {
+            for (i, wi) in w.iter().enumerate() {
                 let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
                 let ch = (e & ff) ^ (!e & g);
                 let t1 = h
                     .wrapping_add(s1)
                     .wrapping_add(ch)
                     .wrapping_add(f::ROUND_CONSTANTS[i])
-                    .wrapping_add(w[i]);
+                    .wrapping_add(*wi);
                 let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
                 let maj = (a & b) ^ (a & c) ^ (b & c);
                 let t2 = s0.wrapping_add(maj);
