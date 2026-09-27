@@ -318,7 +318,15 @@ now a spare no role names and nothing reads. `import` returned `Ok`, and the cas
 `unwrap_err()` would have panicked. A deletion that reads as a pure deletion was a
 renumbering.
 
-Green at the commit that closes this stage, each run scoped to what changed:
+**CI is green on `16238fc`**, the commit that closes this stage: 192 suites, **1,042
+passed, 0 failed**, over fmt, clippy (including the one feature's configuration), the
+`riscv32imac` guest-target build, the guest workspace's own clippy, `cargo test
+--workspace` and the regenerate-and-diff gate. That is the tally this section owed. The
+two commits before it are red in CI for exactly the assertions repaired here, and the
+first of them died at `program --test tables` and stopped — CI is fail-fast too, so
+finding the other eighteen that way would have taken eighteen more pushes.
+
+Green locally as well, each run scoped to what changed:
 `cargo fmt --all -- --check` over all four workspaces, `cargo clippy --workspace
 --all-targets -- -D warnings`, `cargo test -p trace --lib`, `-p verifier-core` (26
 tests), `-p program --test tables` (14), `-p program --test delegation`,
