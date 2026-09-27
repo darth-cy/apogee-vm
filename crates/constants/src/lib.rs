@@ -2238,6 +2238,47 @@ pub mod ec_add {
     /// The frame, in bytes.
     pub const FRAME_BYTES: usize = 4 * FRAME_WORDS;
 
+    /// The [`CODES`] index of `code`, or `None` for a selector word no code
+    /// names.
+    ///
+    /// A `const fn` and a search rather than `code - 1`, so the table stays the
+    /// one authority on which codes exist: a later curve appended out of order
+    /// must not silently become a different group.
+    pub const fn code_index(code: u32) -> Option<usize> {
+        let mut i = 0;
+        while i < CODES.len() {
+            if CODES[i] == code {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    /// The modulus `code` selects.
+    pub const fn modulus(code: u32) -> Option<[u32; LIMBS]> {
+        match code_index(code) {
+            Some(i) => Some(CURVE_MODULI[CODE_CURVE[i]]),
+            None => None,
+        }
+    }
+
+    /// The `b3 = 3b` that `code` selects.
+    pub const fn b3(code: u32) -> Option<u32> {
+        match code_index(code) {
+            Some(i) => Some(CURVE_B3[CODE_CURVE[i]]),
+            None => None,
+        }
+    }
+
+    /// The group of three reductions `code` selects, `0..GROUPS`.
+    pub const fn reduction_group(code: u32) -> Option<usize> {
+        match code_index(code) {
+            Some(i) => Some(CODE_GROUP[i]),
+            None => None,
+        }
+    }
+
     /// Limbs of a quotient. Group 2's operands are bounded linear combinations
     /// of canonical values rather than canonical values themselves — the worst
     /// is `byz3 <= 63m` against `xz <= 3m` — and every slot's identity carries

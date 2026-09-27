@@ -1251,6 +1251,7 @@ name = "emulator"
 version = "0.1.0"
 dependencies = [
  "constants",
+ "curve",
  "field",
  "isa",
  "loader",

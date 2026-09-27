@@ -29,7 +29,8 @@ use std::collections::HashMap;
 use std::fmt;
 
 use constants::{
-    delegation, ecall, family, fr_arith, guest_memory, keccak, memory, mod_mul, poseidon2,
+    delegation, ec_add, ecall, family, fr_arith, guest_memory, keccak, memory, mod_mul, poseidon2,
+    sha256,
 };
 use field::Fr;
 use isa::{decode, Instr};
@@ -299,6 +300,282 @@ fn mod_mul_frame(pc: u32, old: &[u32]) -> Result<Vec<u32>, EmuError> {
     let mut frame = old.to_vec();
     for k in 0..mod_mul::LIMBS {
         frame[mod_mul::OUT_WORD + k] = rem[k] as u32;
+    }
+    Ok(frame)
+}
+
+/// One SHA-256 compression, in place over the 24-word frame.
+///
+/// Words 0..8 are the chaining state and 8..24 the block's sixteen
+/// big-endian-decoded schedule words; the invocation writes the eight state
+/// words and leaves the schedule alone. FIPS 180-4, and it takes no `pc`
+/// because there is no frame it can refuse: every `u32` is a legal state word
+/// and a legal schedule word.
+fn sha256_frame(old: &[u32]) -> Vec<u32> {
+    let mut w = [0u32; sha256::ROUNDS];
+    for (i, slot) in w.iter_mut().take(sha256::BLOCK_WORDS).enumerate() {
+        *slot = old[sha256::BLOCK_WORD + i];
+    }
+    for i in sha256::BLOCK_WORDS..sha256::ROUNDS {
+        let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+        let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+        w[i] = w[i - 16]
+            .wrapping_add(s0)
+            .wrapping_add(w[i - 7])
+            .wrapping_add(s1);
+    }
+    let state: [u32; sha256::STATE_WORDS] = core::array::from_fn(|j| old[sha256::STATE_WORD + j]);
+    let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = state;
+    for (i, wi) in w.iter().enumerate() {
+        let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+        let ch = (e & f) ^ (!e & g);
+        let t1 = h
+            .wrapping_add(s1)
+            .wrapping_add(ch)
+            .wrapping_add(sha256::ROUND_CONSTANTS[i])
+            .wrapping_add(*wi);
+        let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+        let maj = (a & b) ^ (a & c) ^ (b & c);
+        let t2 = s0.wrapping_add(maj);
+        h = g;
+        g = f;
+        f = e;
+        e = d.wrapping_add(t1);
+        d = c;
+        c = b;
+        b = a;
+        a = t1.wrapping_add(t2);
+    }
+    let v = [a, b, c, d, e, f, g, h];
+    let mut frame = old.to_vec();
+    for j in 0..sha256::STATE_WORDS {
+        frame[sha256::STATE_WORD + j] = state[j].wrapping_add(v[j]);
+    }
+    frame
+}
+
+/// One eight-limb value of the `EC_ADD` frame.
+type Wide = [u64; ec_add::LIMBS];
+
+/// `a + b mod m`, both operands below `m`.
+fn add_mod(a: &Wide, b: &Wide, m: &Wide) -> Wide {
+    let mut out = [0u64; ec_add::LIMBS];
+    let mut carry = 0u64;
+    for k in 0..ec_add::LIMBS {
+        let total = a[k] + b[k] + carry;
+        out[k] = total & 0xffff_ffff;
+        carry = total >> 32;
+    }
+    // `a + b < 2m`, so one conditional subtraction reduces it — and a carry out
+    // of the top limb means it is at least `2^256`, hence at least `m`.
+    if carry != 0 || !less_than(&out, m) {
+        out = sub_wide(&out, m);
+    }
+    out
+}
+
+/// `a - b mod m`, both operands below `m`.
+fn sub_mod(a: &Wide, b: &Wide, m: &Wide) -> Wide {
+    if less_than(a, b) {
+        sub_wide(&add_wide(a, m), b)
+    } else {
+        sub_wide(a, b)
+    }
+}
+
+/// `a + b` over the integers, modulo `2^256` — the carry out is dropped, and
+/// every caller has established it is zero or accounted for.
+fn add_wide(a: &Wide, b: &Wide) -> Wide {
+    let mut out = [0u64; ec_add::LIMBS];
+    let mut carry = 0u64;
+    for k in 0..ec_add::LIMBS {
+        let total = a[k] + b[k] + carry;
+        out[k] = total & 0xffff_ffff;
+        carry = total >> 32;
+    }
+    out
+}
+
+/// `a - b` over the integers, for `a >= b`.
+fn sub_wide(a: &Wide, b: &Wide) -> Wide {
+    let mut out = [0u64; ec_add::LIMBS];
+    let mut borrow = 0i64;
+    for k in 0..ec_add::LIMBS {
+        let total = a[k] as i64 - b[k] as i64 - borrow;
+        if total < 0 {
+            out[k] = (total + (1i64 << 32)) as u64;
+            borrow = 1;
+        } else {
+            out[k] = total as u64;
+            borrow = 0;
+        }
+    }
+    out
+}
+
+/// `a * b mod m`, through the same 16-limb schoolbook product and the same
+/// bitwise reduction `mod_mul_frame` uses. One implementation of the reduction,
+/// so the two families cannot disagree about what `mod m` means.
+fn mul_mod(a: &Wide, b: &Wide, m: &Wide) -> Wide {
+    let mut product = [0u64; 2 * ec_add::LIMBS];
+    for (i, ai) in a.iter().enumerate() {
+        let mut carry = 0u64;
+        for (j, bj) in b.iter().enumerate() {
+            let at = i + j;
+            let total = product[at] + ai * bj + carry;
+            product[at] = total & 0xffff_ffff;
+            carry = total >> 32;
+        }
+        let mut at = i + ec_add::LIMBS;
+        while carry != 0 {
+            let total = product[at] + carry;
+            product[at] = total & 0xffff_ffff;
+            carry = total >> 32;
+            at += 1;
+        }
+    }
+    reduce(&product, m)
+}
+
+/// `k * a mod m` for a small `k`.
+fn scale_mod(k: u32, a: &Wide, m: &Wide) -> Wide {
+    let mut scalar = [0u64; ec_add::LIMBS];
+    scalar[0] = k as u64;
+    mul_mod(&scalar, a, m)
+}
+
+/// One third of a complete point addition, in place over the 97-word frame.
+///
+/// Frame word 0 selects the curve **and** the group; the three invocations of
+/// one addition go in ascending group order, and the intermediates each leaves
+/// in words 49..97 are what the next reads. `docs/spec/delegation.md` §16.
+///
+/// **Every bad frame is refused by name**, which is `docs/spec/delegation.md`
+/// §14.3's lesson: the reduction answers correctly for operands below `2^256`,
+/// so without the refusals a guest with an unreduced coordinate runs clean and
+/// the only thing that fails is a gate — anonymously, hours into a block proof.
+fn ec_add_frame(pc: u32, old: &[u32]) -> Result<Vec<u32>, EmuError> {
+    let code = old[ec_add::SELECTOR_WORD];
+    let (Some(selected), Some(b3), Some(g)) = (
+        ec_add::modulus(code),
+        ec_add::b3(code),
+        ec_add::reduction_group(code),
+    ) else {
+        return Err(EmuError::DelegationFrame {
+            pc,
+            detail: "the selector names no curve and group",
+        });
+    };
+    let m: Wide = core::array::from_fn(|k| selected[k] as u64);
+    let value = |first: usize| -> Wide { core::array::from_fn(|k| old[first + k] as u64) };
+
+    // The six words this group reads must be canonical: the quotient's nine
+    // limbs are what the circuit bounds, and an operand at or above `m` is a
+    // quotient no honest prover can fit.
+    let reads: [(&str, usize); 6] = if g == 2 {
+        [
+            ("xx", ec_add::XX_WORD),
+            ("yy", ec_add::YY_WORD),
+            ("zz", ec_add::ZZ_WORD),
+            ("m4", ec_add::M4_WORD),
+            ("m5", ec_add::M5_WORD),
+            ("m6", ec_add::M6_WORD),
+        ]
+    } else {
+        [
+            ("x1", ec_add::X1_WORD),
+            ("y1", ec_add::Y1_WORD),
+            ("z1", ec_add::Z1_WORD),
+            ("x2", ec_add::X2_WORD),
+            ("y2", ec_add::Y2_WORD),
+            ("z2", ec_add::Z2_WORD),
+        ]
+    };
+    for (name, first) in reads {
+        if !less_than(&value(first), &m) {
+            return Err(EmuError::DelegationFrame {
+                pc,
+                detail: match name {
+                    "x1" => "coordinate x1 is not below the modulus",
+                    "y1" => "coordinate y1 is not below the modulus",
+                    "z1" => "coordinate z1 is not below the modulus",
+                    "x2" => "coordinate x2 is not below the modulus",
+                    "y2" => "coordinate y2 is not below the modulus",
+                    "z2" => "coordinate z2 is not below the modulus",
+                    "xx" => "the intermediate xx is not below the modulus",
+                    "yy" => "the intermediate yy is not below the modulus",
+                    "zz" => "the intermediate zz is not below the modulus",
+                    "m4" => "the intermediate m4 is not below the modulus",
+                    "m5" => "the intermediate m5 is not below the modulus",
+                    _ => "the intermediate m6 is not below the modulus",
+                },
+            });
+        }
+    }
+
+    let mut frame = old.to_vec();
+    let put = |frame: &mut Vec<u32>, first: usize, v: &Wide| {
+        for k in 0..ec_add::LIMBS {
+            frame[first + k] = v[k] as u32;
+        }
+    };
+    match g {
+        0 => {
+            let (x1, y1, z1) = (
+                value(ec_add::X1_WORD),
+                value(ec_add::Y1_WORD),
+                value(ec_add::Z1_WORD),
+            );
+            let (x2, y2, z2) = (
+                value(ec_add::X2_WORD),
+                value(ec_add::Y2_WORD),
+                value(ec_add::Z2_WORD),
+            );
+            put(&mut frame, ec_add::XX_WORD, &mul_mod(&x1, &x2, &m));
+            put(&mut frame, ec_add::YY_WORD, &mul_mod(&y1, &y2, &m));
+            put(&mut frame, ec_add::ZZ_WORD, &mul_mod(&z1, &z2, &m));
+        }
+        1 => {
+            let (x1, y1, z1) = (
+                value(ec_add::X1_WORD),
+                value(ec_add::Y1_WORD),
+                value(ec_add::Z1_WORD),
+            );
+            let (x2, y2, z2) = (
+                value(ec_add::X2_WORD),
+                value(ec_add::Y2_WORD),
+                value(ec_add::Z2_WORD),
+            );
+            let m4 = mul_mod(&add_mod(&x1, &y1, &m), &add_mod(&x2, &y2, &m), &m);
+            let m5 = mul_mod(&add_mod(&y1, &z1, &m), &add_mod(&y2, &z2, &m), &m);
+            let m6 = mul_mod(&add_mod(&x1, &z1, &m), &add_mod(&x2, &z2, &m), &m);
+            put(&mut frame, ec_add::M4_WORD, &m4);
+            put(&mut frame, ec_add::M5_WORD, &m5);
+            put(&mut frame, ec_add::M6_WORD, &m6);
+        }
+        _ => {
+            let xx = value(ec_add::XX_WORD);
+            let yy = value(ec_add::YY_WORD);
+            let zz = value(ec_add::ZZ_WORD);
+            let m4 = value(ec_add::M4_WORD);
+            let m5 = value(ec_add::M5_WORD);
+            let m6 = value(ec_add::M6_WORD);
+            let xy = sub_mod(&sub_mod(&m4, &xx, &m), &yy, &m);
+            let yz = sub_mod(&sub_mod(&m5, &yy, &m), &zz, &m);
+            let xz = sub_mod(&sub_mod(&m6, &xx, &m), &zz, &m);
+            let bzz3 = scale_mod(b3, &zz, &m);
+            let ym = sub_mod(&yy, &bzz3, &m);
+            let yp = add_mod(&yy, &bzz3, &m);
+            let byz3 = scale_mod(b3, &yz, &m);
+            let xx3 = scale_mod(3, &xx, &m);
+            let bxx9 = scale_mod(3 * b3, &xx, &m);
+            let x3 = sub_mod(&mul_mod(&xy, &ym, &m), &mul_mod(&byz3, &xz, &m), &m);
+            let y3 = add_mod(&mul_mod(&yp, &ym, &m), &mul_mod(&bxx9, &xz, &m), &m);
+            let z3 = add_mod(&mul_mod(&yz, &yp, &m), &mul_mod(&xx3, &xy, &m), &m);
+            put(&mut frame, ec_add::X1_WORD, &x3);
+            put(&mut frame, ec_add::Y1_WORD, &y3);
+            put(&mut frame, ec_add::Z1_WORD, &z3);
+        }
     }
     Ok(frame)
 }
@@ -922,6 +1199,8 @@ impl<'a> Machine<'a> {
             family::POSEIDON2 => poseidon2_frame(&old),
             family::FR_ARITH => fr_arith_frame(pc, &old)?,
             family::MOD_MUL => mod_mul_frame(pc, &old)?,
+            family::SHA256_COMP => sha256_frame(&old),
+            family::EC_ADD => ec_add_frame(pc, &old)?,
             other => panic!("emulator: delegation family {other} has no implementation"),
         };
         assert_eq!(new.len(), words, "a delegation writes its whole frame");
@@ -1630,6 +1909,182 @@ mod tests {
     /// reduction. Two operand shapes per modulus: pseudo-random values below
     /// `2^253`, which every modulus exceeds, and `m − 1` squared — the largest
     /// operand the frame admits, and the one a bound off by one would break.
+    /// One SHA-256 compression, against the standard one-block test vector.
+    ///
+    /// `abc` padded to 64 bytes, compressed from the FIPS initial state, is the
+    /// published digest `ba7816bf…` — so this checks the frame convention (the
+    /// schedule words big-endian decoded, the state written back) as well as
+    /// the arithmetic.
+    #[test]
+    fn sha256_frame_compresses_the_published_test_vector() {
+        let mut block = [0u8; 64];
+        block[..3].copy_from_slice(b"abc");
+        block[3] = 0x80;
+        block[62] = 0;
+        block[63] = 24; // the bit length, big-endian
+        let mut old = vec![0u32; sha256::FRAME_WORDS];
+        old[..sha256::STATE_WORDS].copy_from_slice(&sha256::IV);
+        for i in 0..sha256::BLOCK_WORDS {
+            old[sha256::BLOCK_WORD + i] =
+                u32::from_be_bytes(block[4 * i..4 * i + 4].try_into().unwrap());
+        }
+        let new = sha256_frame(&old);
+        let want = [
+            0xba78_16bf_u32,
+            0x8f01_cfea,
+            0x4141_40de,
+            0x5dae_2223,
+            0xb003_61a3,
+            0x9617_7a9c,
+            0xb410_ff61,
+            0xf200_15ad,
+        ];
+        assert_eq!(&new[..sha256::STATE_WORDS], &want, "the `abc` digest");
+        assert_eq!(
+            &new[sha256::BLOCK_WORD..],
+            &old[sha256::BLOCK_WORD..],
+            "the schedule is written back unchanged"
+        );
+    }
+
+    /// The three invocations of one point addition, against **this
+    /// repository's own** BN254 G1 arithmetic.
+    ///
+    /// `curve::G1Projective` is Jacobian — `(X/Z^2, Y/Z^3)` — and this
+    /// delegation is homogeneous projective, so the two share no formula. They
+    /// are compared on the result cross-multiplied against the oracle's affine
+    /// one, which needs no inversion. The identity, `-P`, `P + P` and a
+    /// non-normalized `Z` are all in the grid, because the completeness of
+    /// Renes-Costello-Batina Algorithm 7 is exactly what lets the guest branch
+    /// on nothing.
+    #[test]
+    fn ec_add_frame_is_this_crate_s_own_bn254_group_law() {
+        use curve::{G1Affine, G1Projective};
+
+        let m: Wide = {
+            let sel = ec_add::modulus(ec_add::BN254_G1).unwrap();
+            core::array::from_fn(|k| sel[k] as u64)
+        };
+        let limbs_of = |bytes: &[u8], at: usize| -> Wide {
+            core::array::from_fn(|k| {
+                u32::from_le_bytes(bytes[at + 4 * k..at + 4 * k + 4].try_into().unwrap()) as u64
+            })
+        };
+        // A point as the frame carries it: `(x : y : 1)`, or `(0 : 1 : 0)` for
+        // the identity, optionally scaled by `lambda` to test that a
+        // non-normalized representative comes out the same.
+        let frame_point = |a: &G1Affine, lambda: u32| -> [Wide; 3] {
+            if a.infinity {
+                let mut one = [0u64; ec_add::LIMBS];
+                one[0] = 1;
+                return [[0u64; ec_add::LIMBS], one, [0u64; ec_add::LIMBS]];
+            }
+            let bytes = a.to_bytes();
+            let (x, y) = (limbs_of(&bytes, 0), limbs_of(&bytes, 32));
+            let mut z = [0u64; ec_add::LIMBS];
+            z[0] = 1;
+            if lambda == 1 {
+                [x, y, z]
+            } else {
+                [
+                    scale_mod(lambda, &x, &m),
+                    scale_mod(lambda, &y, &m),
+                    scale_mod(lambda, &z, &m),
+                ]
+            }
+        };
+        let projective = |a: &G1Affine| -> G1Projective { G1Projective::IDENTITY.add_affine(a) };
+
+        // The delegation, run as the guest runs it: three invocations in
+        // ascending group order over one frame.
+        let run = |p: [Wide; 3], q: [Wide; 3]| -> Vec<u32> {
+            let mut frame = vec![0u32; ec_add::FRAME_WORDS];
+            for (first, v) in [
+                (ec_add::X1_WORD, p[0]),
+                (ec_add::Y1_WORD, p[1]),
+                (ec_add::Z1_WORD, p[2]),
+                (ec_add::X2_WORD, q[0]),
+                (ec_add::Y2_WORD, q[1]),
+                (ec_add::Z2_WORD, q[2]),
+            ] {
+                for k in 0..ec_add::LIMBS {
+                    frame[first + k] = v[k] as u32;
+                }
+            }
+            for code in [ec_add::BN254_G1, ec_add::BN254_G2, ec_add::BN254_G3] {
+                frame[ec_add::SELECTOR_WORD] = code;
+                frame = ec_add_frame(0, &frame).expect("a canonical frame");
+            }
+            frame
+        };
+
+        // The grid: the identity, `G` through `7G`, and `-G`.
+        let g = G1Affine::GENERATOR;
+        let mut points = vec![G1Affine::IDENTITY, g];
+        let mut acc = projective(&g);
+        for _ in 0..6 {
+            acc = acc.add_affine(&g);
+            points.push(acc.to_affine());
+        }
+        points.push(G1Affine {
+            x: g.x,
+            y: -g.y,
+            infinity: false,
+        });
+
+        let mut checked = 0;
+        for (i, p) in points.iter().enumerate() {
+            for q in points.iter() {
+                // Every fourth pair goes in with a scaled `Z`, so the
+                // projective-invariance of the formula is exercised without
+                // quadrupling the run.
+                let lambda = if i % 4 == 3 { 7 } else { 1 };
+                let frame = run(frame_point(p, lambda), frame_point(q, 1));
+                let got =
+                    |first: usize| -> Wide { core::array::from_fn(|k| frame[first + k] as u64) };
+                let (x3, y3, z3) = (
+                    got(ec_add::X1_WORD),
+                    got(ec_add::Y1_WORD),
+                    got(ec_add::Z1_WORD),
+                );
+                let want = projective(p).add(&projective(q));
+                checked += 1;
+                if want.is_identity() {
+                    assert_eq!(z3, [0u64; ec_add::LIMBS], "P + (-P) is the identity");
+                    continue;
+                }
+                let bytes = want.to_affine().to_bytes();
+                let (xa, ya) = (limbs_of(&bytes, 0), limbs_of(&bytes, 32));
+                // `(X3 : Y3 : Z3) == (x : y : 1)` iff `X3 == x*Z3` and
+                // `Y3 == y*Z3`, which needs no inversion.
+                assert_eq!(x3, mul_mod(&xa, &z3, &m), "X3");
+                assert_eq!(y3, mul_mod(&ya, &z3, &m), "Y3");
+            }
+        }
+        assert_eq!(checked, points.len() * points.len());
+    }
+
+    /// Every bad `EC_ADD` frame is refused by name, not by a gate hours later.
+    #[test]
+    fn ec_add_frame_refuses_a_bad_selector_and_an_unreduced_coordinate() {
+        let mut frame = vec![0u32; ec_add::FRAME_WORDS];
+        frame[ec_add::SELECTOR_WORD] = 0;
+        assert!(ec_add_frame(4, &frame).is_err(), "selector 0 names nothing");
+        frame[ec_add::SELECTOR_WORD] = 99;
+        assert!(ec_add_frame(4, &frame).is_err(), "a code nothing names");
+
+        // The modulus itself is not below the modulus.
+        frame[ec_add::SELECTOR_WORD] = ec_add::SECP256K1_G1;
+        let m = ec_add::modulus(ec_add::SECP256K1_G1).unwrap();
+        frame[ec_add::X1_WORD..ec_add::X1_WORD + 8].copy_from_slice(&m);
+        match ec_add_frame(4, &frame) {
+            Err(EmuError::DelegationFrame { detail, .. }) => {
+                assert!(detail.contains("x1"), "named the coordinate: {detail}")
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+
     #[test]
     fn mod_mul_frame_computes_a_times_b_mod_the_selected_modulus() {
         let frame_of = |code: u32, a: [u32; 8], b: [u32; 8]| -> Vec<u32> {
