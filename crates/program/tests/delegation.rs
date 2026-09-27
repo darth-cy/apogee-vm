@@ -115,9 +115,21 @@ fn the_registry_is_one_table() {
                 constants::address_space::DELEGATION_MOD_MUL,
                 25
             ),
+            (
+                family::SHA256_COMP,
+                ecall::PRECOMPILE_SHA256_COMP,
+                constants::address_space::DELEGATION_SHA256_COMP,
+                24
+            ),
+            (
+                family::EC_ADD,
+                ecall::PRECOMPILE_EC_ADD,
+                constants::address_space::DELEGATION_EC_ADD,
+                97
+            ),
         ],
         DELEGATIONS,
-        "the four families, their numbers, their tags and their frames"
+        "the six families, their numbers, their tags and their frames"
     );
     // Every number and every tag is its own: the request-side gates partition
     // ecall rows on exactly that (`crates/constraints/src/add_sub.rs`).

@@ -24,6 +24,7 @@ pub mod add_sub;
 pub mod atomics;
 mod build;
 pub mod delegation;
+pub mod ec_add;
 pub mod fr_arith;
 pub mod gadgets;
 pub mod jump_branch_slt;
@@ -36,6 +37,7 @@ pub mod memory;
 pub mod mod_mul;
 pub mod mul_div;
 pub mod poseidon2;
+pub mod sha256;
 pub mod shift_bitwise;
 mod wire;
 
@@ -89,74 +91,93 @@ impl FamilyCircuit {
 /// **The one registry of circuits**, `docs/spec/shard-proof.md` §11: a
 /// verifying key's circuits must be byte for byte what this returns, and a
 /// later family is added here, with one constructor, and nowhere in the
-/// verifier. Every execution family needs 19 variables for its timestamp
-/// channel (`docs/spec/lookup.md` §3) — which also holds the packed generic
-/// table's rows, which five of the seven read; the two RAM window families and
-/// every delegation family take any height up to `MAX_TRACE_VARS`. **The
-/// minimum-height arm names every execution family**: one missing from it
-/// would reach `lookup::channel_trees`' assertion and panic inside
-/// `VerifyingKey::check`, on bytes a verifier was handed, instead of returning
-/// `None`. A family with no channel reaches no such assertion, which is why a
-/// delegation family is not in the arm and must carry no channel.
+/// verifier.
+///
+/// **The minimum height is derived from the family's own channels, not from a
+/// list.** A range channel's table is the closed form over `BITS[channel]`
+/// variables, so `lookup::channel_trees` asserts `BITS <= trace_vars` — and
+/// that assertion would panic inside `VerifyingKey::check`, on bytes a
+/// verifier was handed, rather than returning a clean `Err`. Until S26c the
+/// guard was a hand-written arm naming the seven execution families and one
+/// threshold, `BITS[TIMESTAMP]`; a family missing from it, or a family whose
+/// widest channel was not TIMESTAMP, reached the assertion anyway. It is now
+/// the max of `BITS` over the range channels the family declares, taken from
+/// `channels()` before the artifact is built, which closes the class rather
+/// than one instance of it. A family with no range channel keeps a floor of 0,
+/// which is what the RAM window families and `KECCAK_F`, `POSEIDON2`,
+/// `FR_ARITH` and `SHA256_COMP` take.
+///
+/// `EC_ADD` is the first delegation family to carry a channel at all
+/// (`docs/spec/delegation.md` §10.3, which amends §9): RANGE16 at 16 bits, so
+/// its floor is `2^16`, which is also its `DEFAULT_HEIGHTS` entry.
 pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
     use constants::family as f;
     if trace_vars > MAX_TRACE_VARS {
         return None;
     }
-    let timestamp = constants::lookup_channel::BITS[constants::lookup_channel::TIMESTAMP as usize];
-    let (artifact, channels) = match family {
-        f::ADD_SUB_LUI_AUIPC
-        | f::JUMP_BRANCH_SLT
-        | f::SHIFT_BITWISE
-        | f::MUL_DIV
-        | f::MEM_WORD
-        | f::MEM_SUBWORD
-        | f::ATOMICS
-            if trace_vars < timestamp =>
-        {
-            return None
-        }
-        f::ADD_SUB_LUI_AUIPC => (add_sub::artifact(trace_vars), add_sub::channels()),
-        f::JUMP_BRANCH_SLT => (
-            jump_branch_slt::artifact(trace_vars),
-            jump_branch_slt::channels(),
-        ),
-        f::SHIFT_BITWISE => (
-            shift_bitwise::artifact(trace_vars),
-            shift_bitwise::channels(),
-        ),
-        f::MUL_DIV => (mul_div::artifact(trace_vars), mul_div::channels()),
-        f::MEM_WORD => (mem_word::artifact(trace_vars), mem_word::channels()),
-        f::MEM_SUBWORD => (mem_subword::artifact(trace_vars), mem_subword::channels()),
-        f::ATOMICS => (atomics::artifact(trace_vars), atomics::channels()),
-        f::INIT_TEARDOWN => (memory::image_window_artifact(trace_vars), Vec::new()),
-        f::ZERO_WINDOWS => (memory::zero_window_artifact(trace_vars), Vec::new()),
-        // The public output window is `ZERO_WINDOWS`' circuit, byte for byte,
-        // and that is the point: its init leaf is the literal 0, so a prover
-        // cannot supply the journal at timestamp 0 instead of storing it.
-        // Nothing checks that — there is nothing to check
-        // (`docs/spec/public-values.md` §5).
-        f::PUBLIC_OUTPUT => (memory::zero_window_artifact(trace_vars), Vec::new()),
-        // The public input window and the advice windows share one circuit and
-        // differ only in what the verifier does with the committed init
-        // column: holds it to the statement's `input`, or to nothing at all.
-        f::PUBLIC_INPUT | f::ADVICE_WINDOWS => {
-            (memory::value_window_artifact(trace_vars), Vec::new())
-        }
-        // A delegation family carries no channel at all, so no minimum height
-        // applies to it — and none could: at a channel's height its
-        // permutation does not fit (`docs/spec/delegation.md` §9).
-        f::KECCAK_F => (keccak::artifact(trace_vars), keccak::channels()),
-        f::POSEIDON2 => (poseidon2::artifact(trace_vars), poseidon2::channels()),
-        f::FR_ARITH => (fr_arith::artifact(trace_vars), fr_arith::channels()),
-        f::MOD_MUL => (mod_mul::artifact(trace_vars), mod_mul::channels()),
-        _ => return None,
-    };
+    // One match, and the artifact is a function pointer rather than a built
+    // artifact: the floor below has to be tested BEFORE the artifact is built,
+    // because building it is what reaches `channel_trees`' assertion. Two
+    // matches over the same families would be two lists to keep in step, which
+    // is the defect this guard exists to prevent.
+    let (build, channels): (fn(u32) -> CircuitArtifact, Vec<crate::lookup::ChannelSpec>) =
+        match family {
+            f::ADD_SUB_LUI_AUIPC => (add_sub::artifact, add_sub::channels()),
+            f::JUMP_BRANCH_SLT => (jump_branch_slt::artifact, jump_branch_slt::channels()),
+            f::SHIFT_BITWISE => (shift_bitwise::artifact, shift_bitwise::channels()),
+            f::MUL_DIV => (mul_div::artifact, mul_div::channels()),
+            f::MEM_WORD => (mem_word::artifact, mem_word::channels()),
+            f::MEM_SUBWORD => (mem_subword::artifact, mem_subword::channels()),
+            f::ATOMICS => (atomics::artifact, atomics::channels()),
+            f::INIT_TEARDOWN => (memory::image_window_artifact, Vec::new()),
+            f::ZERO_WINDOWS => (memory::zero_window_artifact, Vec::new()),
+            // The public output window is `ZERO_WINDOWS`' circuit, byte for byte,
+            // and that is the point: its init leaf is the literal 0, so a prover
+            // cannot supply the journal at timestamp 0 instead of storing it.
+            // Nothing checks that — there is nothing to check
+            // (`docs/spec/public-values.md` §5).
+            f::PUBLIC_OUTPUT => (memory::zero_window_artifact, Vec::new()),
+            // The public input window and the advice windows share one circuit and
+            // differ only in what the verifier does with the committed init
+            // column: holds it to the statement's `input`, or to nothing at all.
+            f::PUBLIC_INPUT | f::ADVICE_WINDOWS => (memory::value_window_artifact, Vec::new()),
+            // The delegation families. Their heights differ by three orders of
+            // magnitude because their rows do (`docs/spec/delegation.md` §9.2);
+            // what each one may take is the floor below, and for the four that
+            // carry no channel that floor is 0.
+            f::KECCAK_F => (keccak::artifact, keccak::channels()),
+            f::POSEIDON2 => (poseidon2::artifact, poseidon2::channels()),
+            f::FR_ARITH => (fr_arith::artifact, fr_arith::channels()),
+            f::MOD_MUL => (mod_mul::artifact, mod_mul::channels()),
+            f::SHA256_COMP => (sha256::artifact, sha256::channels()),
+            f::EC_ADD => (ec_add::artifact, ec_add::channels()),
+            _ => return None,
+        };
+    if trace_vars < minimum_trace_vars(&channels) {
+        return None;
+    }
     Some(FamilyCircuit {
         family,
-        artifact,
+        artifact: build(trace_vars),
         channels,
     })
+}
+
+/// The fewest variables a circuit declaring `channels` may be built at: the
+/// widest range channel's bound, or 0 where there is none.
+///
+/// This is `lookup::channel_trees`' assertion read forwards. Keeping the two
+/// in step is what makes a bad height a clean `None` from
+/// [`family_circuit`] — and so a clean `Err` from `VerifyingKey::check` —
+/// rather than a panic on bytes a verifier was handed.
+fn minimum_trace_vars(channels: &[crate::lookup::ChannelSpec]) -> u32 {
+    use constants::lookup_channel::{BITS, IS_RANGE};
+    channels
+        .iter()
+        .filter(|spec| IS_RANGE[spec.channel as usize])
+        .map(|spec| BITS[spec.channel as usize])
+        .max()
+        .unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------

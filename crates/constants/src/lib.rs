@@ -1124,8 +1124,31 @@ pub mod family {
     /// a call (`docs/handoff/S26-cycle.md`).
     pub const MOD_MUL: u32 = 15;
 
+    /// Invoked. One SHA-256 compression a row, over a 24-word frame: eight
+    /// state words and the sixteen schedule words of one 64-byte block.
+    ///
+    /// **Why it exists**: Ethereum's `0x02` precompile. The guest keeps the
+    /// padding and the block loop, exactly as `guest_sdk::keccak256` keeps the
+    /// sponge (`docs/spec/delegation.md` §11), and delegates one compression a
+    /// block.
+    pub const SHA256_COMP: u32 = 16;
+
+    /// Invoked. One third of a complete elliptic-curve point addition a row,
+    /// over a 97-word frame that is also the scratch the three invocations
+    /// pass their intermediates through.
+    ///
+    /// **Why it exists**: after S26 routed `k256`'s field multiply through
+    /// [`MOD_MUL`], 26% of a measured block's guest cycles were still
+    /// secp256k1 — the shim's marshalling, `operand`'s reduction and the
+    /// ladder's bookkeeping around 12 delegated multiplies a point operation
+    /// (`docs/handoff/S26-cycle.md`). Delegating the point operation removes
+    /// all of it. The curve is a frame word, because the Renes-Costello-Batina
+    /// formula is the same for secp256k1 and BN254 G1 — both `a = 0`, and `b`
+    /// never appears.
+    pub const EC_ADD: u32 = 17;
+
     /// How many families this table defines.
-    pub const COUNT: u32 = 16;
+    pub const COUNT: u32 = 18;
 
     /// The pinned height of [`PUBLIC_INPUT`] and [`PUBLIC_OUTPUT`].
     ///
@@ -1174,6 +1197,8 @@ pub mod family {
         false, // PUBLIC_OUTPUT
         false, // ADVICE_WINDOWS
         false, // MOD_MUL
+        false, // SHA256_COMP
+        false, // EC_ADD
     ];
 
     /// The trace-height menu, ascending. Even powers of two only, so that a
@@ -1226,6 +1251,8 @@ pub mod family {
         1 << 8,  // PUBLIC_OUTPUT, likewise
         1 << 22, // ADVICE_WINDOWS, at the window height
         1 << 16, // MOD_MUL, and NOT 2^8 — see the paragraph above
+        1 << 8,  // SHA256_COMP: ~20,000 inner columns a row, so 2^16 is 42 GB
+        1 << 16, // EC_ADD, where its RANGE16 table fits and its peak is 10.5 GiB
     ];
 
     /// The default `bytecode_size_words`: `2^20` words, a 4 MiB ceiling on the
@@ -1543,6 +1570,34 @@ pub mod ecall {
     /// here and the EVM's opcode runs through the ordinary RV32 path.
     pub const PRECOMPILE_MOD_MUL: u32 = 0x0504;
 
+    /// One **SHA-256 compression** over a 24-word frame, `a0` = the frame base
+    /// pointer, read and written in place. A **delegation** call (S26c);
+    /// `constants::family::SHA256_COMP` is the family that proves it and
+    /// `docs/spec/delegation.md` §15 the frame table.
+    ///
+    /// Frame words 0..8 are the chaining state `H0..H7` and words 8..24 the
+    /// sixteen big-endian-decoded schedule words `W0..W15` of one 64-byte
+    /// block. The invocation writes the eight state words and nothing else.
+    ///
+    /// **It is not the hash.** Padding, the length encoding and the block loop
+    /// stay in guest code, exactly as they do for keccak.
+    pub const PRECOMPILE_SHA256_COMP: u32 = 0x0505;
+
+    /// One **third of an elliptic-curve point addition** over a 97-word frame,
+    /// `a0` = the frame base pointer, read and written in place. A
+    /// **delegation** call (S26c); `constants::family::EC_ADD` is the family
+    /// that proves it and `docs/spec/delegation.md` §16 the frame table.
+    ///
+    /// Frame word 0 selects the curve **and** the group of three reductions
+    /// this invocation performs, one of [`super::ec_add::CODES`]; the two
+    /// input points and the six intermediates follow it as eight 32-bit
+    /// little-endian limbs each. Three invocations in ascending group order
+    /// complete one addition, and the intermediates each leaves in the frame
+    /// are what the next picks up.
+    ///
+    /// **It is not a scalar multiplication.** The ladder stays in guest code.
+    pub const PRECOMPILE_EC_ADD: u32 = 0x0506;
+
     /// Linux `ENOSYS`. An unimplemented number returns `-ENOSYS` in `a0`.
     ///
     /// It survives the deletion of the POSIX layer because it is not part of
@@ -1601,6 +1656,12 @@ pub mod address_space {
     /// The delegation anchor space of `family::MOD_MUL` (S26).
     pub const DELEGATION_MOD_MUL: u8 = 7;
 
+    /// The delegation anchor space of `family::SHA256_COMP` (S26c).
+    pub const DELEGATION_SHA256_COMP: u8 = 8;
+
+    /// The delegation anchor space of `family::EC_ADD` (S26c).
+    pub const DELEGATION_EC_ADD: u8 = 9;
+
     /// Every delegation tag, ascending, **append-only**: the one place the set
     /// is written down, so a reader of a memory event can tell a delegation
     /// anchor from RAM, a register or the pc without knowing which family it
@@ -1609,11 +1670,13 @@ pub mod address_space {
     /// `constraints::memory::frame_query_takes` and `trace::AddressSpace` both
     /// read it; the `deleg` frame query takes an event in **any** of these
     /// spaces, and nothing else does.
-    pub const DELEGATION: [u8; 4] = [
+    pub const DELEGATION: [u8; 6] = [
         DELEGATION_KECCAK_F,
         DELEGATION_POSEIDON2,
         DELEGATION_FR_ARITH,
         DELEGATION_MOD_MUL,
+        DELEGATION_SHA256_COMP,
+        DELEGATION_EC_ADD,
     ];
 }
 
@@ -1720,7 +1783,7 @@ pub mod delegation {
     ///
     /// `docs/spec/delegation.md` §3 is the same table in prose, and
     /// `crates/constants/tests/ecall_abi.rs` holds the two equal.
-    pub const TYPES: [(u32, u32, u8, usize); 4] = [
+    pub const TYPES: [(u32, u32, u8, usize); 6] = [
         (
             super::family::KECCAK_F,
             super::ecall::PRECOMPILE_KECCAK_F,
@@ -1744,6 +1807,18 @@ pub mod delegation {
             super::ecall::PRECOMPILE_MOD_MUL,
             super::address_space::DELEGATION_MOD_MUL,
             super::mod_mul::FRAME_WORDS,
+        ),
+        (
+            super::family::SHA256_COMP,
+            super::ecall::PRECOMPILE_SHA256_COMP,
+            super::address_space::DELEGATION_SHA256_COMP,
+            super::sha256::FRAME_WORDS,
+        ),
+        (
+            super::family::EC_ADD,
+            super::ecall::PRECOMPILE_EC_ADD,
+            super::address_space::DELEGATION_EC_ADD,
+            super::ec_add::FRAME_WORDS,
         ),
     ];
 }
@@ -1923,6 +1998,292 @@ pub mod fr_arith {
 ///
 /// **This is not `MULMOD`.** The EVM's opcode takes an arbitrary modulus and
 /// runs through the ordinary RV32 path; nothing here serves it.
+/// SHA-256's compression function, frozen at S26c.
+///
+/// The frame's shape and the algorithm's two constant tables. Three consumers
+/// read them and none restates them: `constraints::sha256` builds the circuit,
+/// `emulator` executes the frame, and `guest_sdk` runs the padding and the
+/// block loop around the shim.
+///
+/// `docs/spec/delegation.md` §15 is the frame table. FIPS 180-4 is the
+/// algorithm, and `crates/constants/tests/sha256.rs` **re-derives** both tables
+/// from their generators rather than trusting the transcription.
+pub mod sha256 {
+    /// Words of chaining state, and words the invocation writes.
+    pub const STATE_WORDS: usize = 8;
+
+    /// Schedule words the frame carries: one 64-byte block, big-endian
+    /// decoded. The remaining 48 are the circuit's, derived by the message
+    /// schedule and committed as its advice.
+    pub const BLOCK_WORDS: usize = 16;
+
+    /// Rounds of the compression function.
+    pub const ROUNDS: usize = 64;
+
+    /// Frame word 0: the chaining state `H0..H7`, read and written.
+    pub const STATE_WORD: usize = 0;
+
+    /// Frame word 8: the block's schedule words `W0..W15`, read and written
+    /// back unchanged.
+    pub const BLOCK_WORD: usize = STATE_WORD + STATE_WORDS;
+
+    /// The frame, in 32-bit words.
+    pub const FRAME_WORDS: usize = BLOCK_WORD + BLOCK_WORDS;
+
+    /// The frame, in bytes.
+    pub const FRAME_BYTES: usize = 4 * FRAME_WORDS;
+
+    /// The carry out of `a_{i+1} = T1 + T2 - 2^32 * ca`, in bits.
+    ///
+    /// **Derived, not observed.** `T1 = h + Sigma1 + Ch + K + W` is five
+    /// values below `2^32`, so `T1 < 5 * 2^32`, and `T2 = Sigma0 + Maj < 2 *
+    /// 2^32`, so the carry is at most 6. Three bits.
+    pub const CARRY_A_BITS: usize = 3;
+
+    /// The carry out of `e_{i+1} = a_{i-3} + T1 - 2^32 * ce`, in bits: at most
+    /// 5, by the same arithmetic.
+    pub const CARRY_E_BITS: usize = 3;
+
+    /// The carry out of the message schedule's four-term sum, in bits: at most
+    /// 3.
+    pub const CARRY_W_BITS: usize = 2;
+
+    /// The carry out of the final `H_j + V_j`, in bits: two values below
+    /// `2^32`, so exactly one.
+    pub const CARRY_OUT_BITS: usize = 1;
+
+    /// The initial hash value `H0..H7`: the first 32 bits of the fractional
+    /// parts of the square roots of the first eight primes. **The guest's**,
+    /// not the circuit's — a compression takes its chaining state from the
+    /// frame, so this is here for `guest_sdk` and the fixture guest alone.
+    pub const IV: [u32; STATE_WORDS] = [
+        0x6a09_e667,
+        0xbb67_ae85,
+        0x3c6e_f372,
+        0xa54f_f53a,
+        0x510e_527f,
+        0x9b05_688c,
+        0x1f83_d9ab,
+        0x5be0_cd19,
+    ];
+
+    /// The round constants `K[0..64]`: the first 32 bits of the fractional
+    /// parts of the cube roots of the first sixty-four primes.
+    pub const ROUND_CONSTANTS: [u32; ROUNDS] = [
+        0x428a_2f98,
+        0x7137_4491,
+        0xb5c0_fbcf,
+        0xe9b5_dba5,
+        0x3956_c25b,
+        0x59f1_11f1,
+        0x923f_82a4,
+        0xab1c_5ed5,
+        0xd807_aa98,
+        0x1283_5b01,
+        0x2431_85be,
+        0x550c_7dc3,
+        0x72be_5d74,
+        0x80de_b1fe,
+        0x9bdc_06a7,
+        0xc19b_f174,
+        0xe49b_69c1,
+        0xefbe_4786,
+        0x0fc1_9dc6,
+        0x240c_a1cc,
+        0x2de9_2c6f,
+        0x4a74_84aa,
+        0x5cb0_a9dc,
+        0x76f9_88da,
+        0x983e_5152,
+        0xa831_c66d,
+        0xb003_27c8,
+        0xbf59_7fc7,
+        0xc6e0_0bf3,
+        0xd5a7_9147,
+        0x06ca_6351,
+        0x1429_2967,
+        0x27b7_0a85,
+        0x2e1b_2138,
+        0x4d2c_6dfc,
+        0x5338_0d13,
+        0x650a_7354,
+        0x766a_0abb,
+        0x81c2_c92e,
+        0x9272_2c85,
+        0xa2bf_e8a1,
+        0xa81a_664b,
+        0xc24b_8b70,
+        0xc76c_51a3,
+        0xd192_e819,
+        0xd699_0624,
+        0xf40e_3585,
+        0x106a_a070,
+        0x19a4_c116,
+        0x1e37_6c08,
+        0x2748_774c,
+        0x34b0_bcb5,
+        0x391c_0cb3,
+        0x4ed8_aa4a,
+        0x5b9c_ca4f,
+        0x682e_6ff3,
+        0x748f_82ee,
+        0x78a5_636f,
+        0x84c8_7814,
+        0x8cc7_0208,
+        0x90be_fffa,
+        0xa450_6ceb,
+        0xbef9_a3f7,
+        0xc671_78f2,
+    ];
+}
+
+/// The elliptic-curve point addition, frozen at S26c.
+///
+/// One **complete** addition in homogeneous projective coordinates, by
+/// Renes-Costello-Batina 2015 Algorithm 7 for `a = 0` — the formula
+/// `guests/vendor/k256` already uses, which is why the delegation is
+/// projective and not affine. Complete means no exceptional case: `P + P`,
+/// `P + (-P)`, `P + O` and a non-normalized `Z` all come out right, so the
+/// guest branches on nothing and the circuit has no degenerate row.
+///
+/// **Three invocations make one addition**, and the frame is the scratch they
+/// pass intermediates through (`docs/spec/delegation.md` §16). The alternative
+/// — nine reductions on one row — is 19,316 committed columns and 28.9 GiB of
+/// peak a shard; three rows of three reductions is 10.5 GiB, which is below an
+/// execution shard's and so raises a block's peak by nothing.
+pub mod ec_add {
+    /// Limbs in a coordinate: eight 32-bit little-endian words.
+    pub const LIMBS: usize = 8;
+
+    /// Selector: secp256k1, the first group of reductions.
+    pub const SECP256K1_G1: u32 = 1;
+    /// Selector: secp256k1, the second group.
+    pub const SECP256K1_G2: u32 = 2;
+    /// Selector: secp256k1, the third group.
+    pub const SECP256K1_G3: u32 = 3;
+    /// Selector: BN254 G1, the first group.
+    pub const BN254_G1: u32 = 4;
+    /// Selector: BN254 G1, the second group.
+    pub const BN254_G2: u32 = 5;
+    /// Selector: BN254 G1, the third group.
+    pub const BN254_G3: u32 = 6;
+
+    /// Every selector code, ascending. **Codes start at 1**, as
+    /// [`super::mod_mul::CODES`] does and for the same reason: a live row
+    /// whose selector word is 0 — a caller that built a frame and forgot it —
+    /// then satisfies no selector and is unprovable, where a 0-based code
+    /// would have silently meant secp256k1's first group.
+    pub const CODES: [u32; 6] = [
+        SECP256K1_G1,
+        SECP256K1_G2,
+        SECP256K1_G3,
+        BN254_G1,
+        BN254_G2,
+        BN254_G3,
+    ];
+
+    /// The curve each code names, as an index into [`CURVE_MODULI`].
+    pub const CODE_CURVE: [usize; CODES.len()] = [0, 0, 0, 1, 1, 1];
+
+    /// The group of three reductions each code names, `0..3`.
+    pub const CODE_GROUP: [usize; CODES.len()] = [0, 1, 2, 0, 1, 2];
+
+    /// Invocations one complete addition takes.
+    pub const GROUPS: usize = 3;
+
+    /// The two curves' base-field moduli, little-endian limbs, indexed by
+    /// [`CODE_CURVE`]: secp256k1's `p = 2^256 - 2^32 - 977`, then BN254's `q`.
+    ///
+    /// They are `super::mod_mul::MODULI`'s first and third entries, and
+    /// `crates/constants/tests/moduli.rs` holds them equal rather than letting
+    /// a second transcription drift.
+    pub const CURVE_MODULI: [[u32; LIMBS]; 2] =
+        [super::mod_mul::MODULI[0], super::mod_mul::MODULI[2]];
+
+    /// `b3 = 3b`, the one curve constant the formula reads: 21 for
+    /// secp256k1's `b = 7`, 9 for BN254's `b = 3`. The curve's `a` is 0 on
+    /// both and never appears.
+    pub const CURVE_B3: [u32; 2] = [21, 9];
+
+    /// Frame word 0: the selector, one of [`CODES`].
+    pub const SELECTOR_WORD: usize = 0;
+    /// Frame word 1: `X1`, and where `X3` is written back.
+    pub const X1_WORD: usize = SELECTOR_WORD + 1;
+    /// `Y1`, and where `Y3` is written back.
+    pub const Y1_WORD: usize = X1_WORD + LIMBS;
+    /// `Z1`, and where `Z3` is written back.
+    pub const Z1_WORD: usize = Y1_WORD + LIMBS;
+    /// `X2`.
+    pub const X2_WORD: usize = Z1_WORD + LIMBS;
+    /// `Y2`.
+    pub const Y2_WORD: usize = X2_WORD + LIMBS;
+    /// `Z2`.
+    pub const Z2_WORD: usize = Y2_WORD + LIMBS;
+    /// `xx = X1*X2`, written by group 0 and read by groups 1 and 2.
+    pub const XX_WORD: usize = Z2_WORD + LIMBS;
+    /// `yy = Y1*Y2`.
+    pub const YY_WORD: usize = XX_WORD + LIMBS;
+    /// `zz = Z1*Z2`.
+    pub const ZZ_WORD: usize = YY_WORD + LIMBS;
+    /// `m4 = (X1+Y1)*(X2+Y2)`, written by group 1 and read by group 2.
+    pub const M4_WORD: usize = ZZ_WORD + LIMBS;
+    /// `m5 = (Y1+Z1)*(Y2+Z2)`.
+    pub const M5_WORD: usize = M4_WORD + LIMBS;
+    /// `m6 = (X1+Z1)*(X2+Z2)`.
+    pub const M6_WORD: usize = M5_WORD + LIMBS;
+
+    /// The frame, in 32-bit words.
+    pub const FRAME_WORDS: usize = M6_WORD + LIMBS;
+
+    /// The frame, in bytes.
+    pub const FRAME_BYTES: usize = 4 * FRAME_WORDS;
+
+    /// Limbs of a quotient. Group 2's operands are bounded linear combinations
+    /// of canonical values rather than canonical values themselves — the worst
+    /// is `byz3 <= 63m` against `xz <= 3m` — and every slot's identity carries
+    /// [`OFFSET_MULTIPLE`] copies of `m^2` to keep the quotient non-negative,
+    /// so the quotient reaches about `511m` and needs a ninth limb.
+    /// `constraints::ec_add`'s `the_quotient_bound_covers_every_group`
+    /// computes the bound rather than trusting this sentence.
+    pub const QUOTIENT_LIMBS: usize = LIMBS + 1;
+
+    /// Positions in the limb identity: `q * m` is the widest product, at
+    /// `QUOTIENT_LIMBS + LIMBS - 1`.
+    pub const POSITIONS: usize = QUOTIENT_LIMBS + LIMBS - 1;
+
+    /// Carries in the limb identity: one fewer than [`POSITIONS`], the last
+    /// position having no outgoing carry.
+    pub const CARRIES: usize = POSITIONS - 1;
+
+    /// Copies of `m^2` every slot's identity adds to its left-hand side.
+    ///
+    /// **It is one literal for every group, and that is deliberate.** A
+    /// group-dependent offset would be `sum_g offset_g * g_sel * m_i * m_j`,
+    /// which is degree 3; one literal keeps it degree 2 and costs group 0 and
+    /// group 1 nothing but a slightly larger honest quotient. What it buys is
+    /// an **unsigned** quotient: without it group 2's slot 0 is
+    /// `xy*ym - byz3*xz`, whose value is as low as `-189 m^2`, and a signed
+    /// quotient cannot take a `live`-gated offset of `256*m` without going
+    /// degree 3 — `m` being a column rather than a literal.
+    pub const OFFSET_MULTIPLE: u64 = 256;
+
+    /// A signed carry's offset, as a bit position: the carry spans
+    /// `[-2^45, 2^45)`, so `u = c + 2^45` spans `[0, 2^46)`.
+    ///
+    /// **Derived, and the derivation moved it.** The widest position is group
+    /// 2's `Y3`, whose left-hand side is `yp*ym + bxx9*xz` at `22*22 + 63*3`
+    /// multiples of `m^2` plus [`OFFSET_MULTIPLE`] more — 929 of them — so a
+    /// position reaches `2^77` and the carry's fixed point `2^45`. Every other
+    /// slot needs only `2^44`, which is what this constant first said.
+    /// `constraints::ec_add`'s `the_carry_offset_covers_every_slot` recomputes
+    /// it from the operand ceilings rather than trusting this paragraph.
+    pub const CARRY_OFFSET_BITS: u32 = 45;
+
+    /// A carry's unsigned range, in bits: one more than
+    /// [`CARRY_OFFSET_BITS`].
+    pub const CARRY_BITS: u32 = CARRY_OFFSET_BITS + 1;
+}
+
 pub mod mod_mul {
     /// Limbs per 256-bit value: eight 32-bit words, little-endian.
     pub const LIMBS: usize = 8;

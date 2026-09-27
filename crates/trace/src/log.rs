@@ -34,16 +34,22 @@ pub enum AddressSpace {
     FrArith,
     /// `family::MOD_MUL`'s delegation anchor space (S26).
     ModMul,
+    /// `family::SHA256_COMP`'s delegation anchor space (S26c).
+    Sha256Comp,
+    /// `family::EC_ADD`'s delegation anchor space (S26c).
+    EcAdd,
 }
 
 /// Every delegation anchor space, ascending by tag. One `deleg` frame query
 /// serves them all, and which one a request names is the row's business:
 /// `constraints::memory::frame_query_takes` is the routing rule.
-pub const DELEGATION_SPACES: [AddressSpace; 4] = [
+pub const DELEGATION_SPACES: [AddressSpace; 6] = [
     AddressSpace::KeccakF,
     AddressSpace::Poseidon2,
     AddressSpace::FrArith,
     AddressSpace::ModMul,
+    AddressSpace::Sha256Comp,
+    AddressSpace::EcAdd,
 ];
 
 impl AddressSpace {
@@ -57,6 +63,8 @@ impl AddressSpace {
             AddressSpace::Poseidon2 => address_space::DELEGATION_POSEIDON2,
             AddressSpace::FrArith => address_space::DELEGATION_FR_ARITH,
             AddressSpace::ModMul => address_space::DELEGATION_MOD_MUL,
+            AddressSpace::Sha256Comp => address_space::DELEGATION_SHA256_COMP,
+            AddressSpace::EcAdd => address_space::DELEGATION_EC_ADD,
         }
     }
 
@@ -92,7 +100,9 @@ impl AddressSpace {
             AddressSpace::KeccakF
             | AddressSpace::Poseidon2
             | AddressSpace::FrArith
-            | AddressSpace::ModMul => addr.is_multiple_of(4) && in_ram(addr),
+            | AddressSpace::ModMul
+            | AddressSpace::Sha256Comp
+            | AddressSpace::EcAdd => addr.is_multiple_of(4) && in_ram(addr),
             AddressSpace::Pc => addr == 0,
         }
     }
@@ -111,7 +121,9 @@ impl AddressSpace {
             AddressSpace::KeccakF
             | AddressSpace::Poseidon2
             | AddressSpace::FrArith
-            | AddressSpace::ModMul => false,
+            | AddressSpace::ModMul
+            | AddressSpace::Sha256Comp
+            | AddressSpace::EcAdd => false,
         }
     }
 }
@@ -355,7 +367,9 @@ impl MemoryState {
             AddressSpace::KeccakF
             | AddressSpace::Poseidon2
             | AddressSpace::FrArith
-            | AddressSpace::ModMul => None,
+            | AddressSpace::ModMul
+            | AddressSpace::Sha256Comp
+            | AddressSpace::EcAdd => None,
         }
     }
 
@@ -372,7 +386,9 @@ impl MemoryState {
             AddressSpace::KeccakF
             | AddressSpace::Poseidon2
             | AddressSpace::FrArith
-            | AddressSpace::ModMul => {}
+            | AddressSpace::ModMul
+            | AddressSpace::Sha256Comp
+            | AddressSpace::EcAdd => {}
         }
     }
 }
@@ -606,7 +622,9 @@ fn initial_value(initial: &InitialMemory, space: AddressSpace, addr: u32) -> u32
         AddressSpace::KeccakF
         | AddressSpace::Poseidon2
         | AddressSpace::FrArith
-        | AddressSpace::ModMul => 0,
+        | AddressSpace::ModMul
+        | AddressSpace::Sha256Comp
+        | AddressSpace::EcAdd => 0,
     }
 }
 
