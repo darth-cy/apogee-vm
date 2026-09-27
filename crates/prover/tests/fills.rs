@@ -168,7 +168,10 @@ fn every_mod_mul_shard_the_fill_writes_satisfies_every_gate() {
         .expect("MOD_MUL has a buffer")
         .len();
     let shards = invocations.div_ceil(height as usize);
-    assert!(shards >= 2, "{shards} shards: the fixture is not multi-shard");
+    assert!(
+        shards >= 2,
+        "{shards} shards: the fixture is not multi-shard"
+    );
     for shard in 0..shards as u32 {
         let src = ShardSource::archived(&program, &archive, family::MOD_MUL, shard, height, 0)
             .expect("the shard's rows");

@@ -108,10 +108,10 @@ pub const ELF_FIXTURES: [(&str, &str); 20] = [
     ),
     (
         "mod-mul-ops",
-        "S26's guest: the MOD_MUL delegation by name over two moduli that fit a \
-         u64, so its -ENOSYS fallback is one u128 expression, and `k256`'s group \
-         arithmetic, which routes through the same delegation over secp256k1's p \
-         and names no shim at all",
+        "S26's guest, specialized at S26b: the MOD_MUL delegation by name over \
+         all four selectors, each answer computed a second way in software and \
+         compared, and the three vendored callers that name no shim at all -- \
+         `k256`'s group arithmetic and its scalar, and ark-bn254's two fields",
     ),
 ];
 

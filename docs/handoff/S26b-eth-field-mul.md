@@ -422,7 +422,8 @@ Deleted: `emulator::mod_mul_refuses_a_zero_modulus`, whose input cannot exist.
 
 ### 9.1 What was run
 
-Green, locally, on this tree:
+Green, locally, on this tree — the workspace run last, and it is the one that
+found something: see §9.2.
 
 ```
 cargo fmt --all -- --check                                    (and the three other manifests)
@@ -440,7 +441,38 @@ cargo test -p emulator                     every binary
 cargo test -p checker --test mod_mul       15
 cargo test -p checker --test add_sub       7
 cargo test -p prover  --test fills         5
+cargo test --workspace --no-fail-fast      1,040 passed, 0 failed, 65 ignored, 166 binaries
 ```
+
+`--no-fail-fast` on the last line is not decoration. The first workspace run
+stopped at `loader --test differential`, and `cargo test` stops at the **first
+failing test binary**, so the ~85 binaries after it never executed and were
+unverified rather than green. The flag is what brought the whole remainder back
+in one pass instead of one resumed guess at a time.
+
+### 9.2 What the workspace run caught: fourteen stale ELF digests
+
+`cargo run -p kat-gen -- guests` regenerated all twenty committed guest ELFs
+(§9.1), and `crates/loader/tests/common/mod.rs`'s `PINS` table was not updated
+with them. Fourteen of its nineteen digests were the pre-stage values and
+`committed_fixtures_match_their_pins` — master rule 11's check — failed on the
+first of them.
+
+**The rebuild itself is benign, and that was checked rather than assumed.**
+`fib.elf` differs from its S-NATIVE-IO bytes in exactly 560 bytes, all inside
+`.strtab`, and all of them one `.Lanon.<hash>` prefix repeated across 100 local
+anonymous symbols: `guest-sdk`'s compilation-unit metadata hash, which moved
+because its source moved. `.text`, `.rodata` and `.symtab` are byte-identical,
+which is why no *derived* fixture drifted — `fib.objdump.txt`, `fib_io.txt` and
+`rvc-dense.nm.txt` are all unchanged, and the `kat-gen` diff came back clean.
+Five ELFs (`addsub`, `alu`, `control`, `mem`, `shards`) did not change at all.
+
+Three repairs, each digest re-derived from the committed bytes rather than
+typed: the fourteen pins, the `PINS` entry §11.2 had recorded as missing, and
+`ELF_FIXTURES`' description of `mod-mul-ops`, which still described the
+two-modulus S26 guest. A fourth, unrelated: `crates/prover/tests/fills.rs:168`
+was committed unformatted in `df7923f`, so `cargo fmt --all -- --check` was red
+on this tree until it was fixed — the earlier green fmt predated that edit.
 
 The `# DEFERRED` suites are the batch this stage owes at the end of the
 progression; §10 is what each of them is expected to show and what it would
@@ -477,10 +509,15 @@ level in ordinary CI. What only a deferred run can show:
    coverage. `guests/mod-mul-ops` is the partial answer — it runs its software
    path unconditionally — and the three library patches' fallbacks remain
    unexercised.
-2. **`crates/loader/tests/vectors/mod-mul-ops.elf` still has no `PINS` entry**,
-   a gap recorded as open twice in `S-NATIVE-IO.md` and not closed here. It
-   matters more now: this stage regenerated that ELF on one machine, and nothing
-   would have noticed a stale one.
+2. ~~**`crates/loader/tests/vectors/mod-mul-ops.elf` still has no `PINS`
+   entry**~~ — **closed**, and the reasoning that left it open was wrong.
+   The gap was recorded as open twice in `S-NATIVE-IO.md` and a third time
+   here, on a tree where this stage had just regenerated that very ELF. §9.2 is
+   what came of that: the same run that would have caught a stale
+   `mod-mul-ops.elf` caught fourteen other stale digests instead, because
+   nothing was pinning the one file the stage rewrote. `PINS` is twenty-four
+   entries now and its doc comment — "Every committed fixture, and the digest
+   it must have" — is true for the first time.
 3. **A fifth modulus is a decision, not an append.** The selector codes are
    frozen the moment a verifying key exists over them, by the same append-only
    logic as an ecall number. BLS12-381 — the `0x0a` point-evaluation
