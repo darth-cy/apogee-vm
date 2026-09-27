@@ -1674,7 +1674,7 @@ mod tests {
                 // Every word but the result's is written back, the selector
                 // included: an invocation that could rewrite word 0 would be
                 // reporting a field it was not asked for.
-                let mut old = vec![0u32; mod_mul::FRAME_WORDS];
+                let mut old = [0u32; mod_mul::FRAME_WORDS];
                 old[mod_mul::SELECTOR_WORD] = *code;
                 old[mod_mul::A_WORD..mod_mul::A_WORD + 8].copy_from_slice(&a);
                 old[mod_mul::B_WORD..mod_mul::B_WORD + 8].copy_from_slice(&b);
