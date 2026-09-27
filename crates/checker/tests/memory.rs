@@ -402,7 +402,7 @@ fn the_row_reading_and_the_log_reading_of_a_frame_agree() {
         // S26's fixture, at `2^18` for the reason `deleg_space_tags` gives: its
         // `.text` reaches pc `0x2161a`. It is the third guest here that makes
         // delegation calls, and the only one that makes S26's.
-        ("mod-mul-ops", 0, 12, 1 << 18),
+        ("mod-mul-ops", 0, 28, 1 << 18),
         ("mem", 0, 50, HEIGHT),
         ("alu", 0, 96, HEIGHT),
         ("control", 0, 16, HEIGHT),
@@ -480,7 +480,7 @@ fn the_delegation_space_column_is_the_requested_family() {
         ("keccak-test", 6, HEIGHT),
         ("recursion-ops", 9, HEIGHT),
         // `2^18`: its `.text` reaches pc `0x2161a` and a table's row `i` is pc `2i`.
-        ("mod-mul-ops", 12, 1 << 18),
+        ("mod-mul-ops", 28, 1 << 18),
     ]
     .into_iter()
     .flat_map(|(name, status, height)| deleg_space_tags(name, status, height))

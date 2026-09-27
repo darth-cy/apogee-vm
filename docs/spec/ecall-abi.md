@@ -90,7 +90,7 @@ Every number this VM implements, with its nondeterminism class. The
 | 0x0500 | `PRECOMPILE_POSEIDON2` | deterministic | Poseidon2 over `[Fr; 3]`, `a0` = the 96-byte frame base pointer, permuted in place. A **delegation** call since S23: `docs/spec/delegation.md` §12 is its frame table, `constants::family::POSEIDON2` the circuit that proves it. The three lanes cross the frame as canonical little-endian `Fr`, 8 words each |
 | 0x0501 | `PRECOMPILE_KECCAK_F` | deterministic | keccak-f[1600] over the 200-byte state frame at `a0`, permuted in place. The first **delegation** call: `docs/spec/delegation.md` is its ABI, `constants::family::KECCAK_F` the circuit that proves it. An executor with the circuit answers 0; one without answers `-ENOSYS` and the caller runs its software path |
 | 0x0502 | `PRECOMPILE_FR_ARITH` | deterministic | one `Fr` add, multiply or inverse over the 100-byte frame at `a0`, in place. A **delegation** call: `docs/spec/delegation.md` §13 is its frame table, `constants::family::FR_ARITH` the circuit. The operands cross the frame in `field::Fr`'s **in-memory** representation, which is what makes the call cheaper than the software operation it replaces |
-| 0x0503 | `PRECOMPILE_MOD_MUL` | deterministic | `out = a · b mod m` over the 128-byte frame at `a0`, in place: four runs of eight little-endian 32-bit limbs, the modulus first. A **delegation** call: `docs/spec/delegation.md` §14 is its frame table, `constants::family::MOD_MUL` the circuit. The modulus is **witnessed**, not a constant of the circuit, so one family serves secp256k1's `F_p` and its scalar field, BN254's, and the EVM's `MULMOD`; a zero modulus is a fatal guest error and not an answer |
+| 0x0504 | `PRECOMPILE_MOD_MUL` | deterministic | `out = a · b mod m` over the 100-byte frame at `a0`, in place: a modulus **selector** word, then three runs of eight little-endian 32-bit limbs. A **delegation** call: `docs/spec/delegation.md` §14 is its frame table, `constants::family::MOD_MUL` the circuit. The modulus is one of **four fixed** Ethereum fields the selector names (`constants::mod_mul::CODES`), not an operand; a selector outside that set, or an operand at or above the selected modulus, is a fatal guest error and not an answer |
 
 The classes are:
 
@@ -112,7 +112,8 @@ can issue that a proof does not cover.
 
 ## 4. The retired numbers
 
-**`read` and `write` are gone, and their numbers are burned.** They were 63 and
+Three numbers have been retired. **`read` and `write` are gone, and their
+numbers are burned.** They were 63 and
 64 — their Linux values, chosen when a guest was expected to run under a host
 program loader — and they carried four file descriptors with them: standard
 input, standard output, diagnostics, and a private hint stream. None of it
@@ -123,12 +124,17 @@ between guest memory and anything outside it.
 | --- | --- | --- |
 | 63 | `read(fd, buf, len)` | an execution's input is the public input window and the advice region, both of them memory (`docs/spec/public-values.md`) |
 | 64 | `write(fd, buf, len)` | an execution's output is the journal, which is memory, and a proof binds its final contents |
+| 0x0503 | `RETIRED_MOD_MUL_WITNESSED_MODULUS` | it was S26's `out = a · b mod m` over a 128-byte frame whose first eight words were a **witnessed** modulus. S26b fixed the modulus to one of four a selector names, which is a different 100-byte frame with different semantics, and redefining `0x0503` would not fail loudly: an old binary calling it would have its modulus read as a selector and the rest of its frame misread word for word. The specialized call took `0x0504`. The number stays a constant so a test can hold it to being unanswered |
 
-The numbers are **burned, not freed**: append-only forbids reassigning 63 and 64
-to anything else, forever, for the same reason it forbids redefining 93. A
-program built against the old ABI that issues one gets `-ENOSYS` (§5), which is
-the right answer — that call no longer exists — rather than a silently different
-computation.
+The numbers are **burned, not freed**: append-only forbids reassigning 63, 64
+and `0x0503` to anything else, forever, for the same reason it forbids
+redefining 93. A program built against the old ABI that issues one gets
+`-ENOSYS` (§5), which is the right answer — that call no longer exists — rather
+than a silently different computation. **That last clause is what a burned
+number buys and why `0x0503` is here rather than reused**: the alternative was
+an old `MOD_MUL` caller getting a plausible answer to a question nobody asked.
+
+The rest of this section is about 63 and 64 alone.
 
 **Why they went rather than getting a circuit.** Making a byte-moving syscall
 provable is not a gate or two. The call's buffer traffic reached RAM through

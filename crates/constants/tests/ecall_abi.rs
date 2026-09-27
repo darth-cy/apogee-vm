@@ -30,6 +30,10 @@ fn constants_table() -> BTreeMap<&'static str, u32> {
         ("PRECOMPILE_KECCAK_F", ecall::PRECOMPILE_KECCAK_F),
         ("PRECOMPILE_FR_ARITH", ecall::PRECOMPILE_FR_ARITH),
         ("PRECOMPILE_MOD_MUL", ecall::PRECOMPILE_MOD_MUL),
+        (
+            "RETIRED_MOD_MUL_WITNESSED_MODULUS",
+            ecall::RETIRED_MOD_MUL_WITNESSED_MODULUS,
+        ),
         ("ZKVM_IO_FIRST", ecall::ZKVM_IO_FIRST),
         ("ZKVM_IO_LAST", ecall::ZKVM_IO_LAST),
         ("PRECOMPILE_FIRST", ecall::PRECOMPILE_FIRST),

@@ -132,7 +132,7 @@ pub fn exit_code_of(name: &str) -> i32 {
         "keccak-test" => 6,
         "recursion-ops" => 9,
         "shards" => 2,
-        "mod-mul-ops" => 12,
+        "mod-mul-ops" => 28,
         _ => 0,
     }
 }

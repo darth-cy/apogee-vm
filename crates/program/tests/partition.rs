@@ -175,7 +175,7 @@ fn each_program_derives_only_the_families_it_uses() {
 /// this nothing would notice a guest — or growth in an existing one — crossing
 /// a default. A family's table is indexed by absolute pc, so `2^16` rows run
 /// out at pc `0x20000`, and a guest whose `.text` reaches past that needs a
-/// taller one: `guests/mod-mul-ops` reaches `0x21d3a` and takes `2^18`. Every
+/// taller one: `guests/mod-mul-ops` reaches `0x452c6` and takes `2^18`. Every
 /// guest fits at the frozen defaults; the second half shortens one family back
 /// to `2^16` so the refusal keeps a test.
 #[test]

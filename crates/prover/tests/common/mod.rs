@@ -81,7 +81,7 @@ pub const RECURSION_RESULT: u32 = 9;
 pub const RECURSION_UNUSED_RESULT: u32 = 11;
 
 /// `guests/mod-mul-ops`' exit status: the number of checks it passed.
-pub const MOD_MUL_RESULT: u32 = 12;
+pub const MOD_MUL_RESULT: u32 = 28;
 
 /// S21's and S23's delegation heights. **Not `MOD_MUL`'s**, which is `2^16`
 /// (`constants::family::DEFAULT_HEIGHTS`, `docs/spec/delegation.md` §9.1).
@@ -90,7 +90,7 @@ pub const DELEGATION_VARS: u32 = 8;
 /// The height the **fixture** statement proves `MOD_MUL` at, and it is
 /// deliberately not the family's default.
 ///
-/// `guests/mod-mul-ops` makes 1,227 invocations. At the real `2^16` that is a
+/// `guests/mod-mul-ops` makes 1,567 invocations. At the real `2^16` that is a
 /// single shard, and the suites that read this statement — `prover`'s fill and
 /// `checker`'s tamper twins — are the only multi-shard coverage this family
 /// has of its anchor pairing and its last-shard padding rows. So the fixture

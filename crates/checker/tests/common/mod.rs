@@ -277,7 +277,7 @@ pub fn traced(name: &str, input: u32) -> Traced {
 
 /// [`traced`] for a guest whose success is a **nonzero** status: the fixtures
 /// that count their own checks exit with the count — `keccak-test` 6,
-/// `recursion-ops` 9, `mod-mul-ops` 14 — so the status is the assertion and not
+/// `recursion-ops` 9, `mod-mul-ops` 28 — so the status is the assertion and not
 /// a failure.
 pub fn traced_exiting(name: &str, input: u32, status: i32) -> Traced {
     traced_exiting_at(name, input, status, HEIGHT)
@@ -286,7 +286,7 @@ pub fn traced_exiting(name: &str, input: u32, status: i32) -> Traced {
 /// [`traced_exiting`] at a height of the caller's choosing.
 ///
 /// A decoded table's row `i` is pc `2i`, so a guest whose `.text` outgrows
-/// `2·HEIGHT` needs a taller one: `guests/mod-mul-ops` reaches pc `0x2161a` and
+/// `2·HEIGHT` needs a taller one: `guests/mod-mul-ops` reaches pc `0x452c6` and
 /// takes `2^18`. It is the only committed guest that needs one.
 pub fn traced_exiting_at(name: &str, input: u32, status: i32, height: u32) -> Traced {
     let path = format!(
