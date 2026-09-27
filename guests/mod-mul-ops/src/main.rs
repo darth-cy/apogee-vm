@@ -1,35 +1,50 @@
 #![no_std]
 #![no_main]
-//! S26's guest for the `MOD_MUL` delegation: `256`-bit modular multiplication
-//! over a **witnessed** modulus, checked two ways in one binary.
+//! S26's guest for the `MOD_MUL` delegation, specialized at S26b: Ethereum
+//! field multiplication over four fixed moduli, checked four ways in one
+//! binary.
 //!
-//! # The two halves, and why both
+//! # The four halves, and why each
 //!
 //! **The ABI, called by name.** [`guest_sdk::recursion::mod_mul`] over frames
-//! this guest writes itself, so the modulus is a value and not a constant:
-//! `2^32` and the Mersenne prime `2^61 - 1`, with the curve half below
-//! contributing a third, secp256k1's `p`. That is what
-//! `docs/spec/delegation.md` §14.1 means by a witnessed modulus.
+//! this guest writes itself, once per selector, so every modulus the circuit
+//! holds is exercised at the frame level and not only through a library.
+//! Every expectation here is a **literal** — `7·9 = 63`, `(m−1)² mod m = 1`,
+//! `(m−1)·2 mod m = m−2` — so none of the checks is a second computation of
+//! the thing it checks.
 //!
-//! **Both of this half's moduli fit a `u64`, and that is the whole reason they
-//! were chosen.** The ABI's fall-through convention requires every caller to
-//! have a software path (§2): on an executor with no circuit the ecall answers
-//! `-ENOSYS` and the caller runs its own. A 256-bit modulus would make that path a
-//! second 512-bit long division living in a guest — a duplicate of
-//! `emulator::mod_mul_frame` with no way to share code with it — where a
-//! `u64` modulus makes it one `u128` expression. The circuit's coverage over
-//! 256-bit moduli is `crates/checker/tests/mod_mul.rs`', whose honest rows are
-//! a secp256k1 product and a BN254 one, and the executor's is its own unit
-//! tests'. This guest is the *ABI's* test, not the arithmetic's.
+//! **The software path, run rather than reserved.** §2 of
+//! `docs/spec/delegation.md` requires a caller to have one, and S26 chose
+//! `u64` moduli precisely so that path could be a single `u128` expression.
+//! A fixed-modulus family has no such exit: every selectable modulus is 256
+//! bits, so the fallback is [`soft_mul_mod`], a schoolbook multiply and a
+//! shift-and-subtract division. Rather than leave forty lines nothing ever
+//! runs, this guest runs **both** paths on every ABI check and compares —
+//! which makes the fallback a live differential oracle against
+//! `emulator::mod_mul_frame` instead of dead weight.
 //!
-//! **The seam, called by nobody.** `k256`'s group arithmetic, which reaches the
-//! delegation through `guests/vendor/k256`'s patched `FieldElement10x26::mul`
-//! and `::square` and names no shim at all. This is the same shape a
-//! `revm-precompile` `ecrecover` runs, and it is the only test of the patch's
-//! `pack`/`unpack`: the 10×26 limbs a field element is stored in are not the
-//! 8×32 limbs the frame carries, and under every executor but this VM's the
-//! ecall answers `-ENOSYS` and the software multiply runs instead — so a host
-//! test could not see the delegated path at all.
+//! **The `k256` seam, called by nobody.** secp256k1's group and scalar
+//! arithmetic, which reach the delegation through `guests/vendor/k256`'s
+//! patched `FieldElement10x26::mul`/`::square` and `Scalar::mul` and name no
+//! shim at all. This is the same shape a `revm-precompile` `ecrecover` runs,
+//! and it is the only test of the patches' packing: the 10×26 limbs a field
+//! element is stored in are not the 8×32 limbs the frame carries, and under
+//! every executor but this VM's the ecall answers `-ENOSYS` and upstream's
+//! software multiply runs instead.
+//!
+//! **The `ark-bn254` seam, likewise.** BN254's two fields through
+//! `guests/vendor/ark-ff`'s patched `MontBackend::mul_assign` and
+//! `::square_in_place`, which is the shape `revm-precompile`'s `0x06`, `0x07`
+//! and `0x08` precompiles run. It is the only place the **two-call**
+//! Montgomery correction is exercised: arkworks holds `x·R` and the
+//! delegation multiplies plain integers, so one arkworks multiply is two
+//! invocations.
+//!
+//! **Nothing in this guest can observe whether a seam is live**, and that is
+//! by construction — a delegated multiply and a software one agree on the
+//! value. What observes it is the *invocation count*, pinned host-side in
+//! `crates/emulator/tests/guests.rs`; if a patch stops routing, the count
+//! moves and that test fails.
 //!
 //! # Input, advice and the journal
 //!
@@ -38,26 +53,20 @@
 //!
 //! # The result
 //!
-//! The exit status, `a0`: **12**, one per check passed but the first, as every
-//! fixture guest here reports it, or `200 + i` on the first that fails — which
-//! names the check rather than leaving a count one short. It is the same status
-//! under both executors, which is what §3 rule 6 of
-//! `docs/guest-program-manual.md` asks of a delegation's caller.
+//! The exit status, `a0`: one per check passed but the first, as every fixture
+//! guest here reports it, or `200 + i` on the first that fails — which names
+//! the check rather than leaving a count one short.
 
-use guest_sdk::recursion::{mod_mul, ModMulFrame};
+use ark_bn254::{Fq, Fr};
+use ark_ff::{AdditiveGroup, Field};
+use guest_sdk::recursion::{
+    mod_mul, ModMulFrame, BN254_P, BN254_R, MODULI, SECP256K1_N, SECP256K1_P,
+};
 use guest_sdk::{entry, exit};
 use k256::elliptic_curve::sec1::ToEncodedPoint;
-use k256::ProjectivePoint;
+use k256::{ProjectivePoint, Scalar};
 
 entry!(main);
-
-/// `2^32`, and `2^61 - 1`: the two moduli this half calls the delegation with.
-///
-/// Both fit a `u64`, so the software path is one `u128` expression. `2^32` is
-/// where a product's wrap is arithmetic a reader can do; `2^61 - 1` is a prime
-/// wide enough that a 61-bit reduction is not the trivial one.
-const TWO_32: u64 = 1 << 32;
-const MERSENNE: u64 = (1 << 61) - 1;
 
 /// The compressed SEC1 encodings of `G`, `2G`, `3G` and `7G`. Absolute values,
 /// not identities: an identity-only test passes under a multiply that is wrong
@@ -67,42 +76,83 @@ const G2: &str = "02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c70
 const G3: &str = "02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9";
 const G7: &str = "025cbdf0646e5db4eaa398f365f2ea7a0e3d419b7e0330e39ce92bddedcac4f9bc";
 
-/// An operand with every byte of its eight low limbs set to something, below
-/// both moduli, so a reduction has work to do.
-const A: u64 = 0x1BB8_E645_AE21_6DA7;
-const B: u64 = 0x0123_4567_89AB_CDEF;
-
-/// `a · b mod m`, delegated, over three operands that fit a `u64`.
+/// `a · b mod m` for the modulus `code` selects, computed **twice** and
+/// compared: once by the delegation and once by [`soft_mul_mod`].
 ///
-/// `false` from the shim is exactly `-ENOSYS` — this executor has no `MOD_MUL`
-/// circuit, which is every executor but this VM's — and then the answer comes
-/// from `u128`. **That is the ABI's fall-through convention, not a shortcut**
-/// (`docs/spec/delegation.md` §2): a caller with no software path is a binary
-/// that runs on one executor, and every check below is the same check either
-/// way.
-fn mul_mod(m: u64, a: u64, b: u64) -> u64 {
-    let mut frame = ModMulFrame::of(&limbs(m), &limbs(a), &limbs(b));
-    match mod_mul(&mut frame) {
-        true => value(&frame.result()),
-        false => ((a as u128 * b as u128) % m as u128) as u64,
+/// `false` from the shim is exactly `-ENOSYS` — an executor with no `MOD_MUL`
+/// circuit, which is every executor but this VM's — and then the software
+/// answer is the only one. That is the ABI's fall-through convention
+/// (`docs/spec/delegation.md` §2), and running the software path on both
+/// executors is what keeps it a path somebody has checked.
+fn mul_mod(code: u32, a: &[u32; 8], b: &[u32; 8]) -> [u32; 8] {
+    let m = &MODULI[code as usize - 1];
+    let soft = soft_mul_mod(m, a, b);
+    let mut frame = ModMulFrame::of(code, a, b);
+    if mod_mul(&mut frame) && frame.result() != soft {
+        // The two implementations disagree. There is no honest way to pick
+        // one, so the run ends naming the disagreement.
+        exit(251);
     }
+    soft
 }
 
-/// A `u64` as the frame's eight little-endian 32-bit limbs.
-fn limbs(x: u64) -> [u32; 8] {
-    [x as u32, (x >> 32) as u32, 0, 0, 0, 0, 0, 0]
-}
-
-/// [`limbs`]' inverse. The six high limbs must be zero, which they are for a
-/// result below a modulus that fits a `u64`; a nonzero one is the delegation
-/// answering something impossible, and there is no honest way to continue.
-fn value(w: &[u32; 8]) -> u64 {
-    for high in &w[2..] {
-        if *high != 0 {
-            exit(252);
+/// `a · b mod m` over eight little-endian 32-bit limbs, in software.
+///
+/// Schoolbook into sixteen lanes, then long division from the top bit. It
+/// shares no line with `emulator::mod_mul_frame` or with the prover's fill,
+/// which is what makes [`mul_mod`]'s comparison worth making.
+fn soft_mul_mod(m: &[u32; 8], a: &[u32; 8], b: &[u32; 8]) -> [u32; 8] {
+    let mut product = [0u64; 16];
+    for (i, ai) in a.iter().enumerate() {
+        let mut carry = 0u64;
+        for (j, bj) in b.iter().enumerate() {
+            let total = product[i + j] + *ai as u64 * *bj as u64 + carry;
+            product[i + j] = total & 0xffff_ffff;
+            carry = total >> 32;
+        }
+        product[i + 8] += carry;
+    }
+    let mut rem = [0u64; 8];
+    for bit in (0..512).rev() {
+        let mut carry = (product[bit / 32] >> (bit % 32)) & 1;
+        for word in rem.iter_mut() {
+            let total = (*word << 1) | carry;
+            *word = total & 0xffff_ffff;
+            carry = total >> 32;
+        }
+        if carry == 1 || !below(&rem, m) {
+            let mut borrow = 0i64;
+            for (k, word) in rem.iter_mut().enumerate() {
+                let d = *word as i64 - m[k] as i64 - borrow;
+                borrow = i64::from(d < 0);
+                *word = (d + if d < 0 { 1i64 << 32 } else { 0 }) as u64;
+            }
         }
     }
-    w[0] as u64 | ((w[1] as u64) << 32)
+    core::array::from_fn(|k| rem[k] as u32)
+}
+
+/// Whether `x < y` over eight little-endian limbs, `x` held in `u64` lanes.
+fn below(x: &[u64; 8], y: &[u32; 8]) -> bool {
+    for k in (0..8).rev() {
+        if x[k] != y[k] as u64 {
+            return x[k] < y[k] as u64;
+        }
+    }
+    false
+}
+
+/// A small integer as eight little-endian limbs.
+fn small(x: u32) -> [u32; 8] {
+    [x, 0, 0, 0, 0, 0, 0, 0]
+}
+
+/// `m − n` for a small `n`, over eight limbs. Every selectable modulus has a
+/// low limb far above any `n` this guest uses, so there is no borrow.
+fn modulus_minus(code: u32, n: u32) -> [u32; 8] {
+    let mut m = MODULI[code as usize - 1];
+    m[0] -= n;
+    m
 }
 
 /// A point's compressed SEC1 encoding, as lowercase hex, compared against
@@ -133,56 +183,74 @@ fn nibble(n: u8) -> u8 {
 
 fn main() {
     let mut passed = 0i32;
-    let mut check = |i: i32, ok: bool| {
+    let mut i = 0i32;
+    let mut check = |ok: bool| {
         if !ok {
             exit(200 + i);
         }
+        i += 1;
         passed += 1;
     };
 
-    // --- The ABI, over two moduli read from the frame.
-    //
-    // Every expectation here is a **literal**, not a second computation of the
-    // same product, so none of these checks is vacuous on either executor.
+    // --- The ABI, over all four selectors, against literal expectations.
+    for code in [SECP256K1_P, SECP256K1_N, BN254_P, BN254_R] {
+        // `7 · 9 = 63`, below every modulus, so the reduction is the identity
+        // and the arithmetic is one a reader can do.
+        check(mul_mod(code, &small(7), &small(9)) == small(63));
+        // `(m − 1)² mod m = 1`: the largest operand pair the frame admits,
+        // and the row a bound off by one would refuse.
+        let minus_one = modulus_minus(code, 1);
+        check(mul_mod(code, &minus_one, &minus_one) == small(1));
+        // `(m − 1) · 2 mod m = m − 2`: one subtraction's worth of reduction,
+        // with an expectation that is not 1 and not a small number.
+        check(mul_mod(code, &minus_one, &small(2)) == modulus_minus(code, 2));
+    }
 
-    // `7 · 9 mod 2^32 = 63`: arithmetic a reader can do.
-    check(0, mul_mod(TWO_32, 7, 9) == 63);
-    // And one that wraps: `(2^32 - 1)^2 = 2^64 - 2^33 + 1`, so mod `2^32` it
-    // is 1.
-    check(1, mul_mod(TWO_32, TWO_32 - 1, TWO_32 - 1) == 1);
-    // `2^31 · 2^31 = 2^62 = 2·(2^61 - 1) + 2`, so mod the Mersenne prime it
-    // is 2.
-    check(2, mul_mod(MERSENNE, 1 << 31, 1 << 31) == 2);
-    // `(m - 1)^2 mod m = 1`: the largest operand the modulus admits, squared.
-    check(3, mul_mod(MERSENNE, MERSENNE - 1, MERSENNE - 1) == 1);
+    // The same operands under two selectors give two answers, which is what
+    // says the modulus is read from the selector and not fixed in the
+    // circuit. `2^200` squared exceeds BN254's `r` and not secp256k1's `p`.
+    let mut wide = [0u32; 8];
+    wide[6] = 0x0100; // 2^200
+    check(mul_mod(SECP256K1_P, &wide, &wide) != mul_mod(BN254_R, &wide, &wide));
 
-    // The two rows where a wrong quotient is least visible.
-    check(4, mul_mod(MERSENNE, A, 1) == A);
-    check(5, mul_mod(MERSENNE, A, 0) == 0);
-
-    // Commutativity, and — the point of a witnessed modulus — the same
-    // operands under two moduli giving two answers, which says the modulus is
-    // read from the frame and not from the circuit.
-    //
-    // The second call is also the one row here whose **operands are far above
-    // its modulus**: `A` and `B` are about `2^61` against `2^32`, so the
-    // quotient is 85 bits. `docs/spec/delegation.md` §14.3 says that is fine as
-    // long as the quotient fits eight limbs, and this is where that is run.
-    let mersenne = mul_mod(MERSENNE, A, B);
-    check(6, mul_mod(MERSENNE, B, A) == mersenne);
-    check(7, mul_mod(TWO_32, A, B) != mersenne);
-
-    // --- The seam, through `k256`'s group arithmetic.
+    // --- The `k256` seam: secp256k1's base field, through group arithmetic.
 
     let g = ProjectivePoint::GENERATOR;
-    check(8, is(&g, G1));
-    check(9, is(&g.double(), G2));
-    check(10, is(&(g.double() + g), G3));
+    check(is(&g, G1));
+    check(is(&g.double(), G2));
+    check(is(&(g.double() + g), G3));
     // Two routes to `7G`, so a wrong field multiply would have to be wrong
     // identically on both: `4G + 2G + G`, and `4G + 3G`.
     let seven_g = g.double().double() + g.double() + g;
-    check(11, is(&seven_g, G7));
-    check(12, g.double().double() + (g.double() + g) == seven_g);
+    check(is(&seven_g, G7));
+    check(g.double().double() + (g.double() + g) == seven_g);
+
+    // --- The `k256` seam: secp256k1's scalar field.
+
+    let seven = Scalar::from(7u64);
+    let nine = Scalar::from(9u64);
+    check(seven * nine == Scalar::from(63u64));
+    // `−1` squared is 1, which at the scalar field is `(n − 1)²`: the widest
+    // operands the type holds.
+    check((-Scalar::ONE) * (-Scalar::ONE) == Scalar::ONE);
+    // An inversion, which is an addition chain of some 250 multiplies and
+    // squares and is where `ecrecover` spends its scalar cycles.
+    let inv = Option::<Scalar>::from(seven.invert()).unwrap_or(Scalar::ZERO);
+    check(seven * inv == Scalar::ONE);
+
+    // --- The `ark-bn254` seam: both BN254 fields, through arkworks.
+
+    check(Fq::from(7u64) * Fq::from(9u64) == Fq::from(63u64));
+    check((-Fq::ONE) * (-Fq::ONE) == Fq::ONE);
+    check(Fq::from(7u64).square() == Fq::from(49u64));
+    let fq_inv = Fq::from(7u64).inverse().unwrap_or(Fq::ZERO);
+    check(Fq::from(7u64) * fq_inv == Fq::ONE);
+
+    check(Fr::from(7u64) * Fr::from(9u64) == Fr::from(63u64));
+    check((-Fr::ONE) * (-Fr::ONE) == Fr::ONE);
+    check(Fr::from(7u64).square() == Fr::from(49u64));
+    let fr_inv = Fr::from(7u64).inverse().unwrap_or(Fr::ZERO);
+    check(Fr::from(7u64) * fr_inv == Fr::ONE);
 
     exit(passed - 1);
 }

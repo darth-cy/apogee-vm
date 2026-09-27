@@ -370,9 +370,18 @@ pub mod recursion {
     #[repr(C, align(4))]
     pub struct FrArithFrame(pub [u8; fr_arith::FRAME_BYTES]);
 
-    /// The modular multiplication delegation's 128-byte frame: the modulus,
-    /// `a`, `b` and the result, each eight little-endian 32-bit limbs
-    /// (`docs/spec/delegation.md` §14).
+    /// The modulus codes [`ModMulFrame::of`] takes, the limbs each names, and
+    /// the two Montgomery corrections a caller holding arkworks-style
+    /// representatives needs — re-exported so a caller, including a vendored
+    /// crate under `guests/vendor` whose only apogee dependency is this one,
+    /// names the constant rather than spelling a number a second time.
+    pub use constants::mod_mul::{
+        BN254_P, BN254_P_R_INV, BN254_R, BN254_R_R_INV, MODULI, SECP256K1_N, SECP256K1_P,
+    };
+
+    /// The Ethereum field multiplication delegation's 100-byte frame: the
+    /// modulus selector, then `a`, `b` and the result, each eight
+    /// little-endian 32-bit limbs (`docs/spec/delegation.md` §14).
     ///
     /// **Limbs and not bytes**, because every caller already holds its values as
     /// 32-bit limbs and a byte frame would cost a pack and an unpack per call —
@@ -382,29 +391,41 @@ pub mod recursion {
     pub struct ModMulFrame(pub [u32; mod_mul::FRAME_WORDS]);
 
     // The frame's word layout, which [`ModMulFrame::of`]'s array literal spells
-    // out rather than indexing: a literal is 32 stores where an all-zero array
-    // followed by 24 writes was a `memset` and then those stores, and at 6,705
+    // out rather than indexing: a literal is 25 stores where an all-zero array
+    // followed by 17 writes was a `memset` and then those stores, and at 6,705
     // invocations on S26's pinned mini-block that zeroing pass alone was 0.5
     // million guest cycles — 6% of what the delegation saves. So the layout is
     // pinned here instead, and a renumbering fails the build.
-    const _: () = assert!(mod_mul::M_WORD == 0);
-    const _: () = assert!(mod_mul::A_WORD == 8);
-    const _: () = assert!(mod_mul::B_WORD == 16);
-    const _: () = assert!(mod_mul::OUT_WORD == 24);
-    const _: () = assert!(mod_mul::FRAME_WORDS == 32);
+    //
+    // **Re-point these, never delete them.** They are the only thing holding
+    // this hand-spelled literal equal to the executor's indexed reads: a
+    // 25-word executor reading `out` from words 17..25 against a guest whose
+    // `result()` reads 24..32 is a wrong answer with no error anywhere in the
+    // emulator, the trace, the prover or the verifier.
+    const _: () = assert!(mod_mul::SELECTOR_WORD == 0);
+    const _: () = assert!(mod_mul::A_WORD == 1);
+    const _: () = assert!(mod_mul::B_WORD == 9);
+    const _: () = assert!(mod_mul::OUT_WORD == 17);
+    const _: () = assert!(mod_mul::FRAME_WORDS == 25);
 
     impl ModMulFrame {
-        /// A callable frame: the modulus, then the two operands, then the eight
-        /// result words, which the delegation overwrites and whose initial value
-        /// is therefore free.
+        /// A callable frame: the modulus selector, then the two operands, then
+        /// the eight result words, which the delegation overwrites and whose
+        /// initial value is therefore free.
+        ///
+        /// `modulus` is one of [`SECP256K1_P`], [`SECP256K1_N`], [`BN254_P`]
+        /// and [`BN254_R`], and **both operands must already be below it** —
+        /// the circuit enforces `a < m` and `b < m`, and the executor refuses
+        /// a frame that is not, by name, so a caller holding a lazily reduced
+        /// representation reduces before it calls.
         ///
         /// One pass over the words and no zeroing pass before it. There is no
         /// empty-then-fill constructor, because a frame with no modulus is not a
         /// frame this ABI has a meaning for.
-        pub fn of(m: &[u32; 8], a: &[u32; 8], b: &[u32; 8]) -> ModMulFrame {
+        pub fn of(modulus: u32, a: &[u32; 8], b: &[u32; 8]) -> ModMulFrame {
             ModMulFrame([
-                m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], a[0], a[1], a[2], a[3], a[4], a[5],
-                a[6], a[7], b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], 0, 0, 0, 0, 0, 0, 0, 0,
+                modulus, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], b[0], b[1], b[2], b[3],
+                b[4], b[5], b[6], b[7], 0, 0, 0, 0, 0, 0, 0, 0,
             ])
         }
 
@@ -457,8 +478,12 @@ pub mod recursion {
         answered(ret)
     }
 
-    /// Compute `out = a * b mod m` over the frame in place. `false` on exactly
-    /// `-ENOSYS`, which is the caller's signal to run its own multiply.
+    /// Compute `out = a * b mod m` over the frame in place, `m` being the
+    /// field the frame's selector names. `false` on exactly `-ENOSYS`, which
+    /// is the caller's signal to run its own multiply.
+    ///
+    /// Both operands must already be below the selected modulus; a frame that
+    /// breaks that is a fatal guest error, not a wrapped answer.
     pub fn mod_mul(frame: &mut ModMulFrame) -> bool {
         // SAFETY: as [`poseidon2`].
         let ret = unsafe {

@@ -644,22 +644,69 @@ fn recursion_ops_checks_itself_under_both_delegation_ecalls() {
     }
 }
 
-/// S26's fixture: the `MOD_MUL` delegation over three moduli by name, and
-/// `k256`'s group arithmetic over the vendored field multiply, which names no
-/// shim at all. Exit 12, one per check.
+/// The `MOD_MUL` fixture: the delegation over all four selectors by name and
+/// against a software oracle of the guest's own, then `k256`'s group and
+/// scalar arithmetic and `ark-bn254`'s two fields, none of which names a shim
+/// at all. Exit 28, one per check.
 ///
-/// **This is the only test of `guests/vendor/k256`'s `pack` and `unpack`.** The
-/// vendored multiply routes through the ecall, so an executor that answered it
-/// wrongly would fail one of the guest's own checks and exit `200 + i`.
+/// **This is the only test of the three vendored patches' marshalling.** Each
+/// routes a library's multiply through the ecall over a representation that is
+/// not the frame's — `k256`'s ten 26-bit field limbs, its `U256` scalar,
+/// arkworks' Montgomery `Fp256` — so an executor or a patch that got the
+/// packing wrong would fail one of the guest's own checks and exit `200 + i`.
+/// A disagreement between the delegation and the guest's own long division
+/// exits 251.
 #[test]
 fn mod_mul_ops_checks_itself_under_the_delegation_ecall() {
     let execution = run(&image("mod-mul-ops"), &io(&[])).unwrap();
     assert_eq!(
-        execution.exit_code, 12,
+        execution.exit_code, 28,
         "mod-mul-ops exited {}, and 200 + i would name the check that failed",
         execution.exit_code
     );
     assert!(execution.io.output.is_empty(), "it commits nothing");
+}
+
+/// The `MOD_MUL` invocation count, and **the only thing in the repository that
+/// can see whether a vendored patch still routes**.
+///
+/// A delegated multiply and a software one agree on the value, so no check
+/// inside the guest can tell them apart; what changes is how many invocations
+/// the execution makes. If `guests/vendor/k256`'s field or scalar patch or
+/// `guests/vendor/ark-ff`'s Montgomery patch stopped reaching the ecall — a
+/// refreshed vendor copy with the change dropped, a `cfg` that stopped
+/// matching — every guest check would still pass and this number would fall.
+///
+/// It is a pin over a build, so it moves when the guest or a vendored crate
+/// changes; when it does, re-derive it rather than accepting it, and check the
+/// three lower bounds below still hold for the reason each states.
+#[test]
+fn mod_mul_ops_routes_every_vendored_patch_through_the_ecall() {
+    let image = image("mod-mul-ops");
+    let (tables, config) = preprocess(&image);
+    let (traces, ..) = trace_run(&image, &io(&[]), &tables, &config).expect("it traces");
+    let trace = traces
+        .delegation(constants::family::MOD_MUL)
+        .expect("MOD_MUL has a buffer");
+    // The ABI half is 13 calls the guest makes by name, so anything above
+    // that is a library seam.
+    assert!(
+        trace.len() > 13,
+        "only {} invocations: no vendored patch is routing",
+        trace.len()
+    );
+    // Above one `2^8` shard, which is what makes the `MOD_MUL` fixture in
+    // `crates/prover/tests/common` multi-shard — the only coverage this
+    // family's anchor pairing and last-shard padding rows have.
+    assert!(
+        trace.len() > 256,
+        "{} invocations, so the 2^8 fixture would be one shard",
+        trace.len()
+    );
+    // The equality is the part that separates the three seams: each
+    // contributes a different amount, so any one of them falling back moves
+    // this number and nothing else in the suite would notice.
+    assert_eq!(trace.len(), 1_567, "the pinned invocation count");
 }
 
 /// The invocation counts the two delegation families actually see, which is

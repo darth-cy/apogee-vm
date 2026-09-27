@@ -505,27 +505,50 @@ fn fr_arith(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, St
     Ok(out)
 }
 
+/// One `MOD_MUL` row's witness, computed once and then transposed.
+///
+/// Every field here is a function of the **whole** row rather than of one
+/// limb, and the circuit reads each of them across 256 or 264 bit columns, so
+/// computing them inside the `(k, t)` loops would redo the same long division
+/// and the same three borrow chains hundreds of times a row.
+struct ModMulRow {
+    /// The index into `mm::CODES` the frame's selector word names.
+    selector: usize,
+    /// The selected modulus' limbs — the circuit's `m_limb` columns.
+    m: [u64; mm::LIMBS],
+    /// `a`, `b` and `out`, in `mm_circuit::{A, B, OUT}` order.
+    values: [[u64; mm::LIMBS]; 3],
+    /// The quotient, which nothing in the trace records.
+    q: [u64; mm::LIMBS],
+    /// The fourteen signed carries of the limb identity.
+    carries: Vec<i128>,
+    /// Each value's `< m` borrow chain: difference limbs, then borrows.
+    chains: [([u64; mm::LIMBS], [u64; mm::LIMBS]); 3],
+}
+
 /// A `MOD_MUL` shard, `docs/spec/delegation.md` §14: the delegation frame, the
-/// four frame values' word bits, the quotient with its limbs and bits, the
-/// `out < m` borrow chain, and the fifteen positions' signed carries.
+/// modulus selector and the limbs it names, the three frame values' word bits
+/// and `< m` chains, the quotient with its limbs and bits, and the fifteen
+/// positions' signed carries.
 ///
 /// It computes no product: the frame's words are what the execution wrote and
 /// the circuit is what says that was `a * b mod m`. What it *does* compute is
-/// the witness the circuit needs and nothing records — the quotient, the
-/// carries and the borrow chain — each a function of the words alone.
+/// the witness the circuit needs and nothing records — the modulus, the
+/// quotient, the carries and the three borrow chains — each a function of the
+/// words alone.
 ///
-/// Panics if the identity does not hold over those words, which the emulator
-/// cannot produce: `mod_mul_frame` computes `out` by long division, so
-/// `a * b - q * m - out` is zero by construction. The assertion is what says so
-/// out loud rather than leaving a wrong carry to surface as a proof nobody can
-/// verify.
+/// Panics on anything the emulator refuses: a selector naming no modulus, an
+/// operand at or above it, or an identity that does not hold over those words.
+/// None of the three is producible by `emulator::mod_mul_frame`, which refuses
+/// each by name — the assertions are what say so out loud rather than leaving
+/// a wrong witness to surface as an anonymous layer inconsistency in a proof
+/// nobody can verify.
 fn mod_mul(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     let inv = invocations(src, family::MOD_MUL)?;
     let mut out = delegation_frame(&inv, mm::FRAME_WORDS, mm::FRAME_BYTES as u64, 0);
     let (frames, h) = (inv.frames, inv.height);
     let rows = 0..frames.len();
 
-    // The four values' limbs, and their bits.
     let limbs = |first: usize, field: u32, r: usize| -> [u64; mm::LIMBS] {
         core::array::from_fn(|k| {
             let w = frames.word(first + k);
@@ -536,50 +559,92 @@ fn mod_mul(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
             column[r] as u64
         })
     };
-    for (v, (first, field)) in [
-        (mm::M_WORD, deleg::WORD_READ_VALUE),
-        (mm::A_WORD, deleg::WORD_READ_VALUE),
-        (mm::B_WORD, deleg::WORD_READ_VALUE),
-        (mm::OUT_WORD, deleg::WORD_WRITE_VALUE),
-    ]
-    .into_iter()
-    .enumerate()
-    {
+
+    // One pass over the live rows. Padding rows are the zeros `u32_column`
+    // pads with, which is what every gate wants of them: a zero modulus, zero
+    // selectors, and a borrow chain whose last borrow is 0 = `live`.
+    let witness: Vec<ModMulRow> = rows
+        .clone()
+        .map(|r| {
+            let code = frames.word(mm::SELECTOR_WORD).read_value[r];
+            let selector = mm::CODES
+                .iter()
+                .position(|c| *c == code)
+                .unwrap_or_else(|| panic!("mod_mul: selector {code} names no modulus"));
+            let m: [u64; mm::LIMBS] =
+                core::array::from_fn(|k| mm::MODULI[selector][k] as u64);
+            let values = [
+                limbs(mm::A_WORD, deleg::WORD_READ_VALUE, r),
+                limbs(mm::B_WORD, deleg::WORD_READ_VALUE, r),
+                limbs(mm::OUT_WORD, deleg::WORD_WRITE_VALUE, r),
+            ];
+            // The three bounds the circuit states. `out < m` is the emulator's
+            // own output and cannot fail; `a < m` and `b < m` are the guest's
+            // to get right, and naming the operand here is the difference
+            // between a panic a reader can act on and a layer number.
+            for (v, name) in [(mm_circuit::A, "a"), (mm_circuit::B, "b")] {
+                assert!(
+                    below(&values[v], &m),
+                    "mod_mul: operand {name} is not below the selected modulus"
+                );
+            }
+            let (q, carries) = mod_mul_witness(&m, &values[0], &values[1], &values[2]);
+            let q: [u64; mm::LIMBS] = core::array::from_fn(|k| q[k]);
+            ModMulRow {
+                selector,
+                m,
+                values,
+                q,
+                carries,
+                chains: core::array::from_fn(|v| borrow_chain_against(&values[v], &m)),
+            }
+        })
+        .collect();
+
+    // The four selectors, one-hot on a live row, and the eight limbs they name.
+    for i in 0..mm::CODES.len() {
+        let values: Vec<u32> = witness.iter().map(|w| u32::from(w.selector == i)).collect();
+        out.push((mm_circuit::selector(i), u32_column(values, h)));
+    }
+    for k in 0..mm::LIMBS {
+        let values: Vec<u32> = witness.iter().map(|w| w.m[k] as u32).collect();
+        out.push((mm_circuit::m_limb(k), u32_column(values, h)));
+    }
+
+    // Each value's 256 word bits, then its 264 chain columns.
+    for v in [mm_circuit::A, mm_circuit::B, mm_circuit::OUT] {
         for k in 0..mm::LIMBS {
             for t in 0..32 {
-                let values: Vec<u32> = rows
-                    .clone()
-                    .map(|r| ((limbs(first, field, r)[k] >> t) & 1) as u32)
+                let values: Vec<u32> = witness
+                    .iter()
+                    .map(|w| ((w.values[v][k] >> t) & 1) as u32)
                     .collect();
                 out.push((mm_circuit::value_bit(v, k, t), u32_column(values, h)));
             }
         }
+        for i in 0..mm::LIMBS {
+            for t in 0..32 {
+                let values: Vec<u32> = witness
+                    .iter()
+                    .map(|w| ((w.chains[v].0[i] >> t) & 1) as u32)
+                    .collect();
+                out.push((mm_circuit::diff_bit(v, i, t), u32_column(values, h)));
+            }
+        }
+        for i in 0..mm::LIMBS {
+            let values: Vec<u32> = witness.iter().map(|w| w.chains[v].1[i] as u32).collect();
+            out.push((mm_circuit::borrow_bit(v, i), u32_column(values, h)));
+        }
     }
 
-    // The quotient, and every position's signed carry. Both are computed per
-    // row and then transposed into columns, because each is a function of the
-    // whole row and not of one limb.
-    let witness: Vec<(Vec<u64>, Vec<i128>)> = rows
-        .clone()
-        .map(|r| {
-            mod_mul_witness(
-                &limbs(mm::M_WORD, deleg::WORD_READ_VALUE, r),
-                &limbs(mm::A_WORD, deleg::WORD_READ_VALUE, r),
-                &limbs(mm::B_WORD, deleg::WORD_READ_VALUE, r),
-                &limbs(mm::OUT_WORD, deleg::WORD_WRITE_VALUE, r),
-            )
-        })
-        .collect();
+    // The quotient, its bits, and every position's signed carry.
     for k in 0..mm::LIMBS {
-        let values: Vec<u32> = witness.iter().map(|(q, _)| q[k] as u32).collect();
+        let values: Vec<u32> = witness.iter().map(|w| w.q[k] as u32).collect();
         out.push((mm_circuit::q_limb(k), u32_column(values, h)));
     }
     for k in 0..mm::LIMBS {
         for t in 0..32 {
-            let values: Vec<u32> = witness
-                .iter()
-                .map(|(q, _)| ((q[k] >> t) & 1) as u32)
-                .collect();
+            let values: Vec<u32> = witness.iter().map(|w| ((w.q[k] >> t) & 1) as u32).collect();
             out.push((mm_circuit::q_bit(k, t), u32_column(values, h)));
         }
     }
@@ -587,36 +652,25 @@ fn mod_mul(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
         for t in 0..mm::CARRY_BITS {
             let values: Vec<u32> = witness
                 .iter()
-                .map(|(_, c)| {
-                    let offset = c[k] + mm::CARRY_OFFSET as i128;
+                .map(|w| {
+                    let offset = w.carries[k] + mm::CARRY_OFFSET as i128;
                     ((offset >> t) & 1) as u32
                 })
                 .collect();
             out.push((mm_circuit::carry_bit(k, t), u32_column(values, h)));
         }
     }
+    Ok(out)
+}
 
-    // The `out < m` borrow chain, over the same words.
-    let chain = |r: usize| -> ([u64; mm::LIMBS], [u64; mm::LIMBS]) {
-        borrow_chain_against(
-            &limbs(mm::OUT_WORD, deleg::WORD_WRITE_VALUE, r),
-            &limbs(mm::M_WORD, deleg::WORD_READ_VALUE, r),
-        )
-    };
-    for i in 0..mm::LIMBS {
-        for t in 0..32 {
-            let values: Vec<u32> = rows
-                .clone()
-                .map(|r| ((chain(r).0[i] >> t) & 1) as u32)
-                .collect();
-            out.push((mm_circuit::diff_bit(i, t), u32_column(values, h)));
+/// Whether `x < y` over eight little-endian 32-bit limbs.
+fn below(x: &[u64; mm::LIMBS], y: &[u64; mm::LIMBS]) -> bool {
+    for k in (0..mm::LIMBS).rev() {
+        if x[k] != y[k] {
+            return x[k] < y[k];
         }
     }
-    for i in 0..mm::LIMBS {
-        let values: Vec<u32> = rows.clone().map(|r| chain(r).1[i] as u32).collect();
-        out.push((mm_circuit::borrow_bit(i), u32_column(values, h)));
-    }
-    Ok(out)
+    false
 }
 
 /// The quotient and the fifteen signed carries of `a * b = q * m + out`.
@@ -697,9 +751,13 @@ fn wide_mul(x: &[u32], y: &[u32]) -> Vec<u32> {
 
 /// `x / m` over little-endian 32-bit limbs, by shift-and-subtract from the top.
 ///
-/// The quotient has as many limbs as `x`; the caller takes the low eight, which
-/// is exact for the honest prover because the guest passes `a, b < m` and then
-/// `q < m` (`crates/constraints/src/mod_mul.rs`' soundness note).
+/// The quotient has as many limbs as `x`; the caller takes the low eight,
+/// which is exact for **every** frame the circuit accepts, not merely for an
+/// honest prover's: `a < m` and `b < m` are gates since S26b, so
+/// `q = (a·b − out)/m < m <= 2^256` and the high eight limbs are zero
+/// (`crates/constraints/src/mod_mul.rs`' soundness note). The caller asserts
+/// the two operand bounds before reaching here, so a truncation would be a
+/// panic upstream and never a silent one.
 fn wide_div(x: &[u32], m: &[u32]) -> Vec<u32> {
     let mut quotient = vec![0u32; x.len()];
     let mut rem = vec![0u64; m.len() + 1];
@@ -733,8 +791,11 @@ fn wide_div(x: &[u32], m: &[u32]) -> Vec<u32> {
 /// the borrows, the last of which is 1 exactly when `x < y`.
 ///
 /// `delegation_frame`'s `borrow_chain` is the same computation against `p`'s
-/// literal limbs; this one takes the subtrahend as data, which is what carrying
-/// the modulus in the frame costs on this side too.
+/// literal limbs, which is what `FR_ARITH`'s canonicity needs; this one takes
+/// the subtrahend as data, because `MOD_MUL`'s modulus is one of four and the
+/// row's selector says which. **Never substitute the other one here**: it
+/// chains against `constants::FR_MODULUS`, which is right for exactly one of
+/// the four selectors and silently wrong for the other three.
 fn borrow_chain_against(
     x: &[u64; mm::LIMBS],
     y: &[u64; mm::LIMBS],

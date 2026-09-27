@@ -108,7 +108,17 @@ impl Scalar {
     }
 
     /// Modulo multiplies two scalars.
+    ///
+    /// apogee-vm: on the guest target this is the `MOD_MUL` delegation under
+    /// the `SECP256K1_N` selector. A `Scalar`'s representative is already
+    /// below `n` — every constructor here reduces — so the delegation's
+    /// `a < m` and `b < m` requirement costs this path nothing at all, which
+    /// is not true of the base field's.
     pub fn mul(&self, rhs: &Scalar) -> Scalar {
+        #[cfg(target_arch = "riscv32")]
+        if let Some(out) = apogee::mul_mod_n(self, rhs) {
+            return out;
+        }
         WideScalar::mul_wide(self, rhs).reduce()
     }
 
@@ -1229,6 +1239,43 @@ mod tests {
             let s = <Scalar as Reduce<U512>>::reduce(U512::from_be_slice(&bytes));
             let s_bu = s.to_biguint().unwrap();
             assert!(s_bu < m);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// apogee-vm's vendored change. `guests/vendor/README.md` is the account of it;
+// `docs/spec/delegation.md` §14 is the circuit and the ABI.
+// ---------------------------------------------------------------------------
+
+/// secp256k1's scalar-field multiply, routed through the `MOD_MUL` delegation.
+///
+/// The frame's selector is `SECP256K1_N` and the circuit supplies `n`; nothing
+/// about the modulus crosses the frame. What reaches here is `ecrecover`'s
+/// scalar arithmetic — the inversion of `r` above all, which is an addition
+/// chain of some 250 multiplies and squares.
+///
+/// **No packing and no reduction.** A `Scalar` is a `U256` whose representative
+/// is already below `n`, and `crypto-bigint`'s `Word` is `u32` on this target,
+/// so `to_words` and `from_words` are the identity on the frame's limb layout
+/// and the operand bound is satisfied by the type's own invariant.
+#[cfg(target_arch = "riscv32")]
+mod apogee {
+    use super::{Scalar, U256};
+    use guest_sdk::recursion::{mod_mul, ModMulFrame, SECP256K1_N};
+
+    /// `a * b mod n`, or `None` on exactly `-ENOSYS` — an executor with no
+    /// circuit for this family, which is every executor but this VM's — and
+    /// then the caller runs upstream's own `mul_wide().reduce()`.
+    ///
+    /// The `Word = u32` assumption needs no assertion: `ModMulFrame::of`
+    /// takes `&[u32; 8]` and `to_words()` is `[Word; LIMBS]`, so a target with
+    /// 64-bit limbs is a type error here rather than a silent miscoding.
+    pub(super) fn mul_mod_n(a: &Scalar, b: &Scalar) -> Option<Scalar> {
+        let mut frame = ModMulFrame::of(SECP256K1_N, &a.0.to_words(), &b.0.to_words());
+        match mod_mul(&mut frame) {
+            true => Some(Scalar(U256::from_words(frame.result()))),
+            false => None,
         }
     }
 }
