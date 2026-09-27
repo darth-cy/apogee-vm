@@ -7,8 +7,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use constraints::memory::{
-    frame_queries, frame_query_takes, gap_hi, ARG1, ARG2, DELEG, FRAME_DELTA, FRAME_NAMES,
-    FRAME_SPACE, LOAD, PC, RAM, RD, RS1, RS2,
+    frame_queries, frame_query_takes, gap_hi, DELEG, FRAME_DELTA, FRAME_NAMES, FRAME_SPACE, LOAD,
+    PC, RAM, RD, RS1, RS2,
 };
 use constraints::PolyAddress;
 use field::Fr;
@@ -291,10 +291,12 @@ fn every_instruction() -> Vec<Instr> {
 /// Slot 0 is the pc query, on every row. The register queries are the form's
 /// own register fields, `x0` included and none it lacks — which is exactly
 /// `Instr::fields()`. The rest are the class's: a load's word at slot 2, a
-/// store's or an atomic's at slot 3. An ecall's own row reads `a7`, `a0`, `a1`
-/// and `a2` and writes `a0`, and each of its transfer rows moves one RAM word,
-/// so its family needs both; its register fields are not encoded, so
-/// `fields()` says nothing about it. Since S21 an ecall row may also carry
+/// store's or an atomic's at slot 3. An ecall reads `a7` and `a0` — its one
+/// argument — and writes `a0`; its register fields are not encoded, so
+/// `fields()` says nothing about it. It read `a1` and `a2` and brought a RAM
+/// transfer row with it while `read` and `write` existed, which is what
+/// `arg1`, `arg2` and add/sub's `ram` query were for; all three went with the
+/// POSIX layer. Since S21 an ecall row may also carry
 /// `DELEG`, the delegation request's mirror query at slot 3 in the delegation
 /// family's own address space, whose address is the frame base the row read
 /// from `a0` (`docs/spec/delegation.md` §5.1) — a delegation call is an
@@ -304,7 +306,7 @@ fn queries_of(instr: &Instr) -> Vec<usize> {
     use Instr::*;
     match instr {
         Ebreak => return Vec::new(),
-        Ecall => return vec![PC, RS1, RS2, ARG1, ARG2, RAM, RD, DELEG],
+        Ecall => return vec![PC, RS1, RS2, RD, DELEG],
         _ => {}
     }
     let fields = instr.fields();

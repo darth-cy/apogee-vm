@@ -62,7 +62,7 @@ fn two_runs_have_hash_equal_payloads() {
 }
 
 /// ... and an imported archive yields the cycle count, the per-family
-/// occupancy and the fd 0/1 streams, `io_digest` of those equals the live
+/// occupancy and the two public values, `io_digest` of those equals the live
 /// run's, and the family columns and the log rebuild without executing
 /// anything.
 #[test]
@@ -81,14 +81,15 @@ fn an_imported_archive_answers_without_reexecution() {
         assert_eq!((trace.family, trace.len() as u64), (*family, *count));
     }
 
-    // The archive carries the **public values**, which since S-IO are the two
-    // windows and not the fd streams: `fib` reads fd 0 and writes fd 1, so
-    // both of its public values are empty and its bytes are in `stdout`
-    // (`docs/spec/public-values.md` §1).
+    // The archive carries the **public values**, which are the two windows:
+    // `fib` reads its `n` out of the public input window with ordinary loads
+    // and leaves its term in the journal, so the committed record is both of
+    // them (`docs/spec/public-values.md` §1).
     let io = archive.io_streams();
     assert_eq!(io, &t.execution.io);
-    assert!(io.input.is_empty() && io.output.is_empty());
-    assert_eq!(t.execution.stdout, common::fib_record().1);
+    let (input, output) = common::fib_record();
+    assert_eq!(io.input, input);
+    assert_eq!(io.output, output);
     assert_eq!(
         io_digest(&io.input, &io.output),
         io_digest(&t.execution.io.input, &t.execution.io.output)

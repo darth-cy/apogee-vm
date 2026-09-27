@@ -208,3 +208,93 @@ fn the_vendored_crates_are_the_ones_a_guest_patches() {
         }
     }
 }
+
+/// **The guest profiles differ only in `opt-level`**, and neither turns
+/// `overflow-checks` or `debug-assertions` off.
+///
+/// This is not tidiness. In a zkVM the journal is the *committed public
+/// output*, so a guest that wraps a `u32` under cargo's default release
+/// profile commits `00000000` where the dev build panics and exits 101 — which
+/// would make the optimisation level part of the statement being proven.
+/// Cargo's dev defaults already have both checks on, so only `[profile.release]`
+/// has to spell them; what the dev table must not do is switch either off.
+/// Neither table spells `opt-level`, so each takes its default — 0 and 3 — and
+/// that is the one difference between them.
+///
+/// It is asserted over the manifest rather than witnessed by running the
+/// guests twice. Until the POSIX layer was deleted, CI ran
+/// `crates/loader/tests/qemu.rs` at both profiles and compared fd 1 byte for
+/// byte, and the pin was what that comparison rested on; the comparison went
+/// with QEMU, and a manifest assertion is both cheaper and more direct than
+/// re-running fifteen guests to infer one boolean. The mutation it catches —
+/// deleting either line from `[profile.release]`, switching one off in
+/// `[profile.dev]`, or letting the two drift apart on anything else — is
+/// caught by nothing else in the repository.
+#[test]
+fn the_guest_profiles_differ_only_in_opt_level() {
+    let text = fs::read_to_string(root().join("guests/Cargo.toml"))
+        .expect("guests/Cargo.toml is readable");
+
+    // The keys of one `[profile.<name>]` table, as `key = value` pairs.
+    let table = |name: &str| -> Vec<(String, String)> {
+        let header = format!("[profile.{name}]");
+        let at = text
+            .find(&header)
+            .unwrap_or_else(|| panic!("guests/Cargo.toml has no {header}"));
+        let rest = &text[at + header.len()..];
+        let end = rest.find("\n[").map_or(rest.len(), |i| i + 1);
+        rest[..end]
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .map(|l| {
+                let (k, v) = l
+                    .split_once('=')
+                    .unwrap_or_else(|| panic!("not an assignment: {l}"));
+                (k.trim().to_string(), v.trim().to_string())
+            })
+            .collect()
+    };
+
+    let (dev, release) = (table("dev"), table("release"));
+    let value =
+        |t: &[(String, String)], k: &str| t.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+
+    for key in ["overflow-checks", "debug-assertions"] {
+        assert_eq!(
+            value(&release, key).as_deref(),
+            Some("true"),
+            "guests/Cargo.toml's [profile.release] must pin {key} = true: a \
+             guest's journal is the committed public output, and the \
+             optimisation level must not change it"
+        );
+        assert_ne!(
+            value(&dev, key).as_deref(),
+            Some("false"),
+            "guests/Cargo.toml's [profile.dev] switches {key} off"
+        );
+    }
+
+    // No table spells `opt-level`: each takes cargo's default, which is the
+    // one difference the two profiles are allowed.
+    for (name, t) in [("dev", &dev), ("release", &release)] {
+        assert_eq!(
+            value(t, "opt-level"),
+            None,
+            "[profile.{name}] spells opt-level; the profiles take cargo's \
+             defaults, and this test can no longer say what differs"
+        );
+    }
+
+    // Every other key either table spells must agree with the other, where the
+    // other spells it at all.
+    for (k, v) in dev.iter().chain(&release) {
+        if k == "overflow-checks" || k == "debug-assertions" {
+            continue;
+        }
+        if let (Some(d), Some(r)) = (value(&dev, k), value(&release, k)) {
+            assert_eq!(&d, &r, "the guest profiles disagree on {k}");
+        }
+        let _ = v;
+    }
+}

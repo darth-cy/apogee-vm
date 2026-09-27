@@ -14,7 +14,7 @@
 //! without it `opt-level = 3` would prove the branch dead, drop the calls,
 //! drop the shims and drop the records with them.
 //!
-//! # fd 0, fd 1, fd 2, fd 3
+//! # Input, advice and the journal
 //!
 //! Unused.
 //!

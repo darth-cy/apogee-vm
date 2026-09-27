@@ -136,10 +136,8 @@ pub fn run(options: &Options) {
     let setup_ms = millis(setup_started.elapsed().as_nanos() as u64);
 
     let io = emulator::GuestIo {
-        stdin: Vec::new(),
         input: Vec::new(),
         advice: witness,
-        hint: Vec::new(),
     };
     let proving_started = Instant::now();
     let (block, exit_code, cycles, phases) = match options.in_flight {

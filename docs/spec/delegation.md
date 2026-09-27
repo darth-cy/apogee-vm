@@ -72,10 +72,17 @@ is a deterministic function of guest memory and never prover advice. Numbers are
 does not fail loudly, it quietly makes an old program compute something else.
 
 An executor without the circuit answers `-ENOSYS` and the caller runs its
-software path — `docs/spec/ecall-abi.md` §5's convention, which is what lets one
-guest binary run under `qemu-riscv32` and under this VM. An executor **with** the
+software path — `docs/spec/ecall-abi.md` §5's convention. An executor **with** the
 circuit answers 0. A shim treats exactly `-ENOSYS` as "run the software path" and
 every other nonzero as a hard `exit(72)`.
+
+**This VM implements all four, so its executor never answers `-ENOSYS` to one**, and
+the fallback is a rule of the ABI rather than a path taken here. It is what makes a
+delegation *optional*: an executor may register any subset of the families and a guest
+compiled against the full set still runs, which is why the number is a delegation and
+not a new instruction. The obligation it puts on a caller is real either way — a shim
+with no software path behind it turns a missing circuit into a wrong answer instead of
+a slower one — and §14.1 is where choosing that path shapes a caller's design.
 
 An executor that has the circuit but whose `VmConfig` lacks the family answers
 neither: it is `EmuError::DelegationFamilyAbsent`, a fatal trace-time failure
@@ -697,9 +704,9 @@ all.
 - **It does not delegate the sponge.** `guest_sdk::keccak256` runs its padding
   and its rate absorption in guest code and delegates one ecall per keccak-f
   block. The delegated path and the software fallback are bit-identical, which
-  `crates/emulator/tests/guests.rs` and `crates/loader/tests/qemu.rs` hold over
-  `guests/keccak-test`'s six digests — themselves re-derived from `tiny-keccak`
-  rather than restated — and the fallback is what runs under `qemu-riscv32`.
+  `crates/emulator/tests/guests.rs` holds over `guests/keccak-test`'s six digests —
+  themselves re-derived from `tiny-keccak` rather than restated. The guest never
+  chooses the path and cannot tell which ran.
 - **It does not change the proof's shape.** A delegation `ShardProof` is a
   `ShardProof`, and `verify_shard`, `verify_block`, `PublicInputs` and
   `VerifyingKey` are S16's and S20's unchanged.
@@ -1077,11 +1084,12 @@ cycles on that same block. §2's shim model charges `4 + 2·frame_words` for a c
 that is the *floor*, and a caller that marshals badly pays several times it.
 
 **A caller owes a software path, and choosing the delegation's parameters is part
-of writing one.** `guests/mod-mul-ops` calls this family by name over `2^32` and
-`2^61 - 1` rather than over two 256-bit moduli, because under `qemu-riscv32` the
-ecall answers `-ENOSYS` and the caller runs its own arithmetic: at `u64` that is one
-`u128` expression, and at 256 bits it would be a second 512-bit long division in a
-guest with nothing holding it equal to `emulator::mod_mul_frame`. The 256-bit
+of writing one.** §2 requires one behind every shim, and what it costs to write is a
+real constraint on what a caller delegates. `guests/mod-mul-ops` calls this family by
+name over `2^32` and `2^61 - 1` rather than over two 256-bit moduli for exactly that
+reason: at `u64` the fallback is one `u128` expression, and at 256 bits it would be a
+second 512-bit long division living in a guest, with nothing holding it equal to
+`emulator::mod_mul_frame`. The 256-bit
 modulus the fixture does exercise is secp256k1's `p`, through the vendored patch,
 whose fallback is upstream's own `mul_inner` and so is the same code by
 construction — which is the shape §13.4 describes for `field` and `transcript`, and

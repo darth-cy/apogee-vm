@@ -52,10 +52,10 @@ const GUESTS: [(&str, u32); 13] = [
     ("mem", 16),
     ("keccak-test", 16),
     ("recursion-ops", 16),
-    // **`2^18` and not `2^16`**: its `.text` reaches pc `0x2161a`, and a decoded
-    // table's row `i` is pc `2i`, so `2^16` rows run out at `0x20000`. It is the
-    // second committed guest to need a taller table, `consistency` being the
-    // first (`crates/program/tests/partition.rs`).
+    // **`2^18` and not `2^16`**: its `.text` runs past pc `0x20000`, and a
+    // decoded table's row `i` is pc `2i`, so `2^16` rows stop there. Since
+    // `guests/consistency` was deleted it is the *only* committed guest that
+    // needs a taller table (`crates/program/tests/partition.rs`).
     ("mod-mul-ops", 18),
     // S20's counted loop: 1,064,970 add/sub cycles, so **seventeen** shards at
     // `2^16` and the only committed guest whose buffers fill mid-execution.
@@ -298,9 +298,12 @@ fn the_executor_holds_one_partial_shard_per_family() {
         s.stops
     );
     // Nothing is longer than a height, which is the invariant that makes a
-    // chunk a shard: a `read` or `write` ecall commits one transfer cycle per
-    // word it moves, so a single instruction can push many rows at once and a
-    // flush that only ran between instructions could overshoot.
+    // chunk a shard. Every instruction commits exactly one cycle now, so no
+    // instruction can overshoot a height by more than a row — but the flush
+    // still happens inside `record` rather than between instructions, so the
+    // property holds by construction and not by an argument about which
+    // instructions exist. It was load-bearing at S26: a `read` or `write`
+    // ecall committed one transfer cycle per word it moved.
     for chunk in &s.chunks {
         if let ChunkRows::Cycles(rows) = &chunk.rows {
             assert!(rows.len() <= 1 << 16, "a chunk of {} rows", rows.len());

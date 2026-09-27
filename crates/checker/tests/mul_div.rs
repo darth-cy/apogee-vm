@@ -1952,10 +1952,8 @@ fn alu() -> (prover::Program, trace::TraceArchive) {
         ]
     );
     let io = emulator::GuestIo {
-        stdin: Vec::new(),
         advice: Vec::new(),
         input: Vec::new(),
-        hint: Vec::new(),
     };
     let (traces, log, profile, execution) =
         emulator::trace_run(&image, &io, &tables, &config).expect("the image traces");

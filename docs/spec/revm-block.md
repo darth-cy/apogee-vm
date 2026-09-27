@@ -10,8 +10,9 @@ anything about it.
 on fd 1 — and neither was bound to the execution, which is why S24 had to prove a second
 binary with the witness in its image. The witness is advice now, so one program identity
 serves every block, and the commitment is the journal, so the statement carries its bytes.
-`docs/spec/public-values.md` is that architecture; `guests/revm-block/src/stdio.rs` is the
-fd 0 / fd 1 binary kept for the executors that have neither region.*
+`docs/spec/public-values.md` is that architecture. The fd binary that was kept beside them
+is **deleted** with the syscall it used: there is no executor left that wants one, and both
+of this guest's binaries read the advice region and write the journal.*
 
 **The output commitment (§2) is frozen at S24. `BlockWitness` (§1) is not**, by the
 owner's decision at the close of that stage, and **S25 moved it** — `block_hashes`,
@@ -407,8 +408,8 @@ Every keccak in the image is `revm::primitives::keccak256`, which is
 feature turns it into an `extern "C"` call the guest implements as `guest_sdk::keccak256`
 — the S21 delegation, with its bit-identical software fallback behind it
 (`docs/spec/delegation.md` §2). So revm's `KECCAK256` opcode, a contract's code hash and
-this page's two commitments all reach the same shim, and a guest run under
-`qemu-riscv32`, where the ecall answers `-ENOSYS`, computes the same bytes.
+this page's two commitments all reach the same shim — a dependency that has never heard of
+this VM ends up using its delegation, and the bytes are the same whichever path answers.
 
 revm uses only the one-shot form; `alloy-primitives`' streaming `Keccak256` — which
 `native-keccak` does **not** cover — is not reachable from this workload.
@@ -425,7 +426,6 @@ revm uses only the one-shot form; `alloy-primitives`' streaming `Keccak256` — 
 | §2's shape, field by field | `…::the_output_commitment_has_the_frozen_shape` |
 | native revm produces the committed output | `…::native_revm_produces_the_committed_output` |
 | the guest produces it too | `…::a4_the_guest_agrees_with_native_revm` |
-| the same bytes under `qemu-riscv32` | `…::a3_the_two_executors_commit_the_same_bytes` |
 | every delegated permutation is the reference | `…::a5_every_delegated_permutation_is_the_reference` |
 | and the harvested frames are the committed ones | `…::a5_the_harvested_frames_are_the_committed_ones` |
 | the fixture is what the builder still writes | `cargo run -p kat-gen`, regenerated and diffed in CI |

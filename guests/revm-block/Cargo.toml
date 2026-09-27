@@ -7,11 +7,11 @@ publish.workspace = true
 # S24's workload guest. `src/lib.rs` is the program and it compiles for the
 # host as well as for the guest: `crates/emulator/tests/revm.rs` calls it
 # directly as the native-revm oracle and `tools/kat-gen` builds the committed
-# witness against it. Only the two binaries are guest-only, so the guest
-# runtime is a dependency of the guest target alone -- unconditionally, a host
-# build would try to assemble crt0 and link a second `#[panic_handler]`. That
-# is a condition on the target, not a cargo feature: each target still has
-# exactly one build configuration.
+# witness against it. Only the binaries are guest-only, so the guest runtime is
+# a dependency of the guest target alone -- unconditionally, a host build would
+# try to assemble crt0 and link a second `#[panic_handler]`. That is a
+# condition on the target, not a cargo feature: each target still has exactly
+# one build configuration.
 #
 # `revm` is the workload being proven, which `prompts/S24-revm.md` names a
 # permitted guest dependency; it is reachable from no prover, no verifier and
@@ -39,13 +39,6 @@ path = "src/main.rs"
 [[bin]]
 name = "revm-block-stateless"
 path = "src/stateless_main.rs"
-
-# The same computation over fd 0 and fd 1, for the executors with no advice
-# region -- `qemu-riscv32`, and the native-revm oracle it is compared against.
-# Not provable, and it does not need to be.
-[[bin]]
-name = "revm-block-stdio"
-path = "src/stdio.rs"
 
 # `revm`'s version is pinned **exactly**, and that is not tidiness. A guest's
 # `ProgramIdentity` is a digest of its compiled image, so a patch bump to any

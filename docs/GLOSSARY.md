@@ -290,11 +290,14 @@ nothing pending just permutes again.
 challenge stream exactly. The unit of master rule 9's archivable phase boundaries.
 
 **Guest** — a program proven by this VM: `no_std` Rust built for
-`riscv32imac-unknown-none-elf`, linking `crates/guest-sdk`. It runs unmodified under
-`qemu-riscv32`, which is what the Linux ecall numbers buy.
+`riscv32imac-unknown-none-elf`, linking `crates/guest-sdk`. **An Apogee-SDK program, not
+a Linux one**: no file descriptors, no streams, no I/O syscall. Its input and output are
+memory — **public input**, **advice**, **journal** — reached with ordinary loads and
+stores.
 
-**ecall** — the guest's one way out. Number in `a7`, arguments in `a0`–`a5`, result in
-`a0`, errors as a negated errno. `docs/spec/ecall-abi.md` is the table.
+**ecall** — the guest's one way out, and it is a short list: `EXIT` and the four
+delegation numbers, every one of which a circuit admits. Number in `a7`, argument in
+`a0`, result in `a0`, errors as a negated errno. `docs/spec/ecall-abi.md` is the table.
 
 **Precompile** — a deterministic function of guest memory, dispatched by an ecall in
 `0x0500..=0x05FF` with pointer arguments. A delegation circuit proves exactly that
@@ -303,8 +306,10 @@ SDK's shim runs a software fallback behind the **same frozen signature**, bit fo
 nondeterministic prover advice. The two ranges are separate so a reviewer can tell them
 apart at a glance.
 
-**Hint** — bytes the guest reads from fd 3. Uncommitted prover advice: a shortcut to a
-value the guest then checks against something bound, never an input in its own right.
+**Hint** — the retired name for prover advice reached through a descriptor. There are no
+descriptors; the thing itself is **advice**, and the rule that it is a shortcut to a value
+the guest then checks against something bound, never an input in its own right, is
+unchanged.
 
 **Public I/O digest** — the single `Fr` over the statement's two public byte strings,
 `transcript::io_digest`. Frozen at S10, recipe and position unchanged; the
@@ -374,20 +379,17 @@ program counter (`PC`, tag 3). The tags are nonzero so no real tuple is all zero
 the register write or a store's word. Not a `ProgramImage` slot, which is a halfword.
 Distinct addresses may share a slot; one address never queries twice in one.
 
-**Role** — what a query does in its cycle — `rs1`, `rs2`, `arg1`, `arg2`, `load`, `ram`,
-`rd` — which fixes its address space, its slot, and its place among the cycle's events.
-
-**Transfer cycle** — a cycle an ecall spends moving one word of a `read`'s or `write`'s
-buffer: the pc re-written unchanged at slot 0, the word at slot 3, nothing else. A
-call's transfer cycles come immediately before its own row, which writes the real
-`next_pc`.
+**Role** — what a query does in its cycle — `rs1`, `rs2`, `load`, `ram`, `rd`, `delegate`
+— which fixes its address space, its slot, and its place among the cycle's events. Six of
+them, and `trace::Row::present` is a `u8` with one bit each, so a ninth is a schema change.
+`arg1` and `arg2` were an ecall row's `a1` and `a2` and went with the I/O syscall.
 
 **Family buffer** — one family's executed cycles, one row each, column-major in small
 integer types, holding every value the cycle's queries carried. Live rows only: padding
 and polynomials are the constraint system's.
 
-**Cycle profile** — how many cycles each family of a `VmConfig` ran, transfer cycles
-included; the counts sum to the cycle count. **Shard plan** — `ceil(occupancy / height)`
+**Cycle profile** — how many cycles each family of a `VmConfig` ran; every instruction is
+one cycle and nothing else is a cycle, so the counts sum to the cycle count. **Shard plan** — `ceil(occupancy / height)`
 shards per family, derived from it. The window families run no cycles and plan zero; their
 shards are RAM windows: exactly one `INIT_TEARDOWN` shard, window 0, one `ZERO_WINDOWS`
 shard per touched window above 0, exactly one each of `PUBLIC_INPUT` and `PUBLIC_OUTPUT`,
@@ -439,8 +441,8 @@ RAM windows in the hole below `RAM_ORIGIN`, the **public input** at `0x8000` and
 proving exactly one shard each. Bound by the memory argument plus one comparison per shard
 (`verify_shard_local` step 10c), and **not** by anything the guest does: no hash, no
 register convention, no syscall. A guest reads its input with ordinary loads and writes its
-journal with ordinary stores. Not a stream, and not fd 0 or fd 1, which are uncommitted
-compatibility descriptors. `docs/spec/public-values.md`.
+journal with ordinary stores. Not a stream, and not a syscall: there is no descriptor and
+no I/O call to be one. `docs/spec/public-values.md`.
 
 **Journal** — the public output window's payload: what `guest_sdk::commit` appended, in
 the order it appended it, and what the statement's `output` is held to. Bound as the
@@ -453,17 +455,18 @@ initialized by the `ADVICE_WINDOWS` family (14) from a committed column **nothin
 read with ordinary loads. `k` consecutive windows from `advice_first_window(h) = 2^29/h`
 up, so the statement carries a count and no list. That nothing binds it is the definition,
 not an omission, and the guest owes a check of it against something a proof does bind.
-Distinct from a **hint**, which is the same idea on fd 3 and is not provable at all.
-`docs/spec/public-values.md` §6.
+It is the one place prover-chosen bytes belong, and it is ordinary memory, so a guest that
+reads it is as provable as one that does not. `docs/spec/public-values.md` §6.
 
 **Frame** — an execution family's memory subtree, over the queries that family's
 instructions can make and no others (`constraints::memory::frame_queries`, `w` of the
-eight in the **query table**, `4 ≤ w ≤ 7`): `1 + 5w` `M` columns (`cycle`, and mask,
+seven in the **query table**, `4 ≤ w ≤ 6`): `1 + 5w` `M` columns (`cycle`, and mask,
 address, read timestamp, read value and write value per query), `w + 3` `W` columns (each
 query's high gap chunk, then the x0 gadget's `rd_inv`, `rd_is_zero` and `rd_selected`), a
 read and a write leaf per query — padded to a power of two a side with leaves that are
-literally 1 — and a product tree to the read and write roots. No family holds all eight:
-`arg1` and `arg2` are an ecall row's alone, and `load` a load's.
+literally 1 — and a product tree to the read and write roots. No family holds all seven:
+`deleg` is an ecall row's alone, and `load` a load's. The one frame that holds `deleg`
+carries one extra `M` column, `deleg_space`, for the type its leaf names.
 `constraints::memory::frame_artifact`; `docs/spec/memory.md` §2.
 
 **Slot** (of a frame) — a query's position in its family's query list, which is how its

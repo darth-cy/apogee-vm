@@ -17,17 +17,15 @@
 //! lengths, so the decoder's fall-through is `pc + 2` on some rows and `pc + 4`
 //! on others; a fence; and the exit.
 //!
-//! # fd 0, fd 1, fd 2, fd 3
+//! # Input, advice and the journal
 //!
-//! Unused. The guest reads nothing and writes nothing.
+//! Unused. The guest reads nothing and commits nothing: `EXIT` is its only
+//! ecall, and its result is the status.
 //!
 //! # The result
 //!
 //! The exit status, `a0`, which is 42: `(t0 + t1) − t1 − t0` wraps twice back
-//! to 0, and the compressed rows add 4 and the last `addi` 38. It is below
-//! 256 on purpose — Linux, and so `qemu-riscv32`, reports eight bits of an exit
-//! status, and that status is what the two executors are held to
-//! (`crates/emulator/tests/qemu_outputs.rs`).
+//! to 0, and the compressed rows add 4 and the last `addi` 38.
 
 use core::arch::global_asm;
 
@@ -63,7 +61,7 @@ global_asm!(
     "  c.add  a2, t4",        // add a2, a2, t4
     "  c.lui  a3, 31",        // lui a3, 31
     "  c.nop",                // addi x0, x0, 0
-    "  c.li   sp, 16",        // sp is written before it is read: QEMU starts it elsewhere
+    "  c.li   sp, 16",        // sp is written before it is read: nothing sets it here
     "  c.addi16sp sp, 32",    // sp = 48
     "  c.addi4spn a4, sp, 8", // a4 = 56
     ".option norvc",

@@ -378,8 +378,8 @@ with.
 
 - **It computes no pc.** `next_pc` is the decoded fall-through, so `HALT_PC` is unreachable
   from here and S17's evenness obligation has nothing to bite on.
-- **It reads no RAM.** Its frame is four queries; `arg1`, `arg2`, `load` and `ram` are not
-  in it, and a trace routing such an event here fails in the honest prover's
+- **It reads no RAM.** Its frame is four queries — `pc`, `rs1`, `rs2`, `rd` — so `load` and
+  `ram` are not in it, and a trace routing such an event here fails in the honest prover's
   `frame_rows`, loudly (`memory.md` §2.1).
 - **It does not bound `rs2` on its own where `src2` suffices.** The bound that matters is on
   `rs2 + imm`, which is what both halves read; a separate bound on `rs2` would be a second
@@ -411,12 +411,10 @@ both a register `rs2` and a nonzero immediate.
 `guests/alu`, shared with `MUL_DIV` (`mul-div.md` §8): a hand-written `_start` in the
 instructions of the four families S18 proves plus the exit ecall, checking every result
 itself and exiting with the number of checks, 96. Every expected value in it was computed
-from an exact RV32IM model rather than by hand, and the emulator, `qemu-riscv32` and the
-guest's own checks are three independent readings of the same twenty instructions — at the
-level the two executors are compared, which since S-IO is the exit status and fd 1 alone
-(`crates/emulator/tests/qemu_outputs.rs`). The guest checks every value itself and exits
-with the count, so one wrong value on either executor is a different exit status, 96 being
-the number that says all of them held.
+from an exact RV32IM model rather than by hand, so the model, the emulator and the guest's
+own checks are three independent readings of the same twenty instructions. The guest checks
+every value itself and exits with the count, so one wrong value is a different exit status,
+96 being the number that says all of them held.
 
 Its shift/bitwise coverage is the stage's acceptance 2 in full: shamt 0, 1 and 31 for each
 immediate shift; `rs2 = 32` and `rs2 = 33`, which truncate to 0 and 1; `sra` of a negative

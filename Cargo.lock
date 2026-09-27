@@ -858,16 +858,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "consistency"
-version = "0.1.0"
-dependencies = [
- "constants",
- "field",
- "guest-sdk",
- "transcript",
-]
-
-[[package]]
 name = "const-hex"
 version = "1.19.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1249,7 +1239,6 @@ checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
 name = "emulator"
 version = "0.1.0"
 dependencies = [
- "consistency",
  "constants",
  "field",
  "isa",

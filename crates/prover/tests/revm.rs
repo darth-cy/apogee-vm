@@ -102,10 +102,8 @@ fn revm_program() -> Program {
 /// as **advice**.
 fn revm_archive(program: &Program) -> TraceArchive {
     let io = emulator::GuestIo {
-        stdin: Vec::new(),
         input: Vec::new(),
         advice: witness_bytes(),
-        hint: Vec::new(),
     };
     let (traces, log, profile, execution) =
         emulator::trace_run(&program.image, &io, &program.tables, &program.config)

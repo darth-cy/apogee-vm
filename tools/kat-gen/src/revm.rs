@@ -329,10 +329,8 @@ fn guest_frames(input: &[u8], want_output: &[u8]) -> Vec<Vec<u32>> {
     // The witness is advice: the provable binary reads it with ordinary loads
     // from `guest_memory::ADVICE_ORIGIN` (`docs/spec/public-values.md` §6).
     let io = emulator::GuestIo {
-        stdin: Vec::new(),
         input: Vec::new(),
         advice: input.to_vec(),
-        hint: Vec::new(),
     };
     let (traces, _log, profile, execution) =
         emulator::trace_run(&image, &io, &tables, &config).expect("the guest runs");

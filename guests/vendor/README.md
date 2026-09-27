@@ -90,7 +90,7 @@ VM's the ecall answers `-ENOSYS` and upstream's own `mul_inner` runs, so a host
 test cannot see the patched path at all. The guest's expectations are the absolute
 compressed SEC1 encodings of `G`, `2G`, `3G` and `7G`, because an identity-only
 test passes under a multiply that is wrong the same way everywhere; `crates/loader/
-tests/qemu.rs` then runs the same binary under `qemu-riscv32`, where the software
+tests/` then runs the same binary on an executor with no `MOD_MUL` circuit, where the software
 path answers, and requires the same exit status — which is what makes it a
 consistency statement and not one reading.
 

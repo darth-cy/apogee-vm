@@ -8,7 +8,6 @@
 //! | Acceptance | Test |
 //! | --- | --- |
 //! | 2 family set and partition | [`a2_the_family_set_is_the_program_s`] |
-//! | 3 emulator against QEMU | [`a3_the_two_executors_commit_the_same_bytes`] |
 //! | 4 guest against native host revm | [`a4_the_guest_agrees_with_native_revm`] |
 //! | 5 the delegated keccak against the software one | [`a5_every_delegated_permutation_is_the_reference`] |
 //! | 9 cycles and occupancy | [`a9_the_cycle_and_occupancy_report`] |
@@ -29,10 +28,7 @@
 mod common;
 
 use std::fs;
-use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
 use constants::{family, guest_memory, keccak};
@@ -42,13 +38,9 @@ use program::{decode_program, DecodedTables, ProgramParams, VmConfig};
 use revm_block::{AccountWitness, BlockWitness, TxWitness};
 use trace::plan_shards;
 
-/// The guest, and since S-IO the **provable** one: its witness arrives in the
-/// advice region and its output commitment leaves in the journal.
+/// The guest: its witness arrives in the advice region and its output
+/// commitment leaves in the journal.
 const GUEST: &str = "revm-block";
-
-/// The compatibility binary: the same computation over fd 0 and fd 1, for the
-/// executors with no advice region. Not provable, and it does not need to be.
-const STDIO_BIN: &str = "revm-block-stdio";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -61,12 +53,12 @@ fn vector(name: &str) -> Vec<u8> {
     fs::read(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
 }
 
-/// fd 0's committed bytes.
+/// The committed witness: the bytes the guest is handed as advice.
 fn witness_bytes() -> Vec<u8> {
     vector("revm_block_witness.bin")
 }
 
-/// fd 1's committed bytes: what native revm makes of the witness.
+/// The committed journal: what native revm makes of that witness.
 fn output_bytes() -> Vec<u8> {
     vector("revm_block_output.bin")
 }
@@ -154,50 +146,38 @@ fn preprocess(image: &ProgramImage) -> (DecodedTables, VmConfig) {
     panic!("{}", refused.expect("the two heights are tried"))
 }
 
-/// One binary of `guests/revm-block`, built once per test binary per name.
+/// `guests/revm-block`, built once per test binary.
 ///
 /// The build is 25 s at `--release`, which is why it is cached: every test
-/// that needs one is `#[ignore]`d, and the ones CI asks for share the build.
-fn guest(bin: &str) -> &'static ProgramImage {
-    static NORMATIVE: OnceLock<ProgramImage> = OnceLock::new();
-    static STDIO: OnceLock<ProgramImage> = OnceLock::new();
-    let cell = if bin == GUEST { &NORMATIVE } else { &STDIO };
-    cell.get_or_init(|| load_elf(&guest_elf(bin)).unwrap_or_else(|e| panic!("{bin} loads: {e:?}")))
+/// that needs it is `#[ignore]`d, and the ones CI asks for share the build.
+fn guest() -> &'static ProgramImage {
+    static IMAGE: OnceLock<ProgramImage> = OnceLock::new();
+    IMAGE.get_or_init(|| load_elf(&guest_elf()).unwrap_or_else(|e| panic!("{GUEST} loads: {e:?}")))
 }
 
-fn guest_elf(bin: &str) -> Vec<u8> {
-    common::build_bin(GUEST, bin, &common::guest_profile())
+fn guest_elf() -> Vec<u8> {
+    common::build_guest(GUEST, &common::guest_profile())
 }
 
 /// One traced run: `(tables, config, traces, profile, execution)`.
-fn traced(bin: &str, input: &[u8]) -> Traced {
-    let image = guest(bin);
+///
+/// The witness is **advice**, which is the only provable way in: it is
+/// megabytes, and a statement has no room for it
+/// (`docs/spec/public-values.md` §6). A guest that refuses it exits 61 or 62,
+/// so a nonzero status is the whole diagnosis there is.
+fn traced(input: &[u8]) -> Traced {
+    let image = guest();
     let (tables, config) = preprocess(image);
-    // The provable binary reads its witness out of the advice region; the
-    // compatibility binary reads the same bytes off fd 0
-    // (`docs/spec/public-values.md` §6).
-    let io = match bin {
-        STDIO_BIN => GuestIo {
-            input: Vec::new(),
-            advice: Vec::new(),
-            stdin: input.to_vec(),
-            hint: Vec::new(),
-        },
-        _ => GuestIo {
-            input: Vec::new(),
-            advice: input.to_vec(),
-            stdin: Vec::new(),
-            hint: Vec::new(),
-        },
+    let io = GuestIo {
+        input: Vec::new(),
+        advice: input.to_vec(),
     };
     let (traces, log, profile, execution) =
-        trace_run(image, &io, &tables, &config).unwrap_or_else(|e| panic!("{bin}: {e}"));
+        trace_run(image, &io, &tables, &config).unwrap_or_else(|e| panic!("{GUEST}: {e}"));
     assert_eq!(
-        execution.exit_code,
-        0,
-        "{bin} exited {}: fd 2 said {}",
-        execution.exit_code,
-        String::from_utf8_lossy(&execution.stderr)
+        execution.exit_code, 0,
+        "{GUEST} exited {}",
+        execution.exit_code
     );
     log.self_check(&trace::InitialMemory {
         image,
@@ -234,7 +214,7 @@ fn the_committed_witness_is_canonical() {
     assert_eq!(
         bytes.len(),
         revm_block::COMMITTED_WITNESS_BYTES,
-        "revm_block::COMMITTED_WITNESS_BYTES is stale; the guest's fd 0 buffer is twice it"
+        "revm_block::COMMITTED_WITNESS_BYTES is stale"
     );
     let witness = BlockWitness::decode(&bytes).expect("the committed witness decodes");
     assert_eq!(witness.encode(), bytes, "re-encoding is the same bytes");
@@ -307,8 +287,8 @@ fn a_witness_out_of_canonical_order_is_refused() {
 
     // Trailing bytes, which is the canonicity failure that does not look like
     // one: `postcard::from_bytes` decodes a prefix and ignores the rest, so a
-    // padded witness would be a second encoding of one state — a second
-    // `io_digest` for one execution, chosen by whoever writes fd 0.
+    // padded witness would be a second encoding of one state — a second advice
+    // region for one execution, chosen by whoever fills it.
     for tail in [&witness_bytes()[..], &[0u8][..]] {
         let mut padded = witness_bytes();
         padded.extend_from_slice(tail);
@@ -622,11 +602,10 @@ fn blockhash_reads_the_recorded_ancestor_and_refuses_the_rest() {
 /// workload actually produced — and it runs in the fast gate, without a guest.
 ///
 /// The **software fallback** is a different function — `guest-sdk`'s own, which
-/// no host test can link — and what holds it to the delegation on this workload
-/// is [`a3_the_two_executors_commit_the_same_bytes`], where one binary runs
-/// under both executors and commits the same bytes. The two together are the
-/// chain: delegation against a reference here, delegation against fallback
-/// there.
+/// no host test can link — and this workload does not reach it: the executor
+/// has the circuit, so every keccak in the image is the delegation. What holds
+/// the fallback to the delegation is `guests/keccak-test`, which computes the
+/// same corpus both ways and checks itself.
 #[test]
 fn a5_every_delegated_permutation_is_the_reference() {
     let frames = committed_frames();
@@ -661,7 +640,7 @@ fn a5_every_delegated_permutation_is_the_reference() {
 #[test]
 #[ignore = "builds the revm guest from source"]
 fn a2_the_family_set_is_the_program_s() {
-    let image = guest(GUEST);
+    let image = guest();
     let (tables, config) = preprocess(image);
     let families: Vec<u32> = config.families.iter().map(|(f, _)| *f).collect();
 
@@ -711,7 +690,7 @@ fn a2_the_family_set_is_the_program_s() {
 #[ignore = "builds the revm guest from source"]
 fn a4_the_guest_agrees_with_native_revm() {
     let input = witness_bytes();
-    let run = traced(GUEST, &input);
+    let run = traced(&input);
     let witness = BlockWitness::decode(&input).expect("the witness decodes");
     assert_eq!(
         run.execution.io.output,
@@ -719,23 +698,6 @@ fn a4_the_guest_agrees_with_native_revm() {
         "the guest and native revm disagree on the same witness"
     );
     assert_eq!(run.execution.io.output, output_bytes());
-    assert!(
-        run.execution.stdout.is_empty(),
-        "the provable binary writes no fd 1: its output is the journal"
-    );
-
-    // The compatibility binary is the same program over the same witness, so
-    // it computes the same commitment -- onto fd 1, where an executor with no
-    // advice region and no public windows can read it.
-    let stdio = traced(STDIO_BIN, &input);
-    assert!(
-        stdio.execution.io.output.is_empty(),
-        "the compatibility binary commits no journal"
-    );
-    assert_eq!(
-        stdio.execution.stdout, run.execution.io.output,
-        "the two binaries disagree on the commitment"
-    );
 }
 
 /// Acceptance 5, end to end: the delegation and the software fallback are the
@@ -748,7 +710,7 @@ fn a4_the_guest_agrees_with_native_revm() {
 #[test]
 #[ignore = "builds the revm guest from source"]
 fn a5_the_harvested_frames_are_the_committed_ones() {
-    let run = traced(GUEST, &witness_bytes());
+    let run = traced(&witness_bytes());
     let buffer = run
         .traces
         .delegation(family::KECCAK_F)
@@ -769,93 +731,17 @@ fn a5_the_harvested_frames_are_the_committed_ones() {
     }
 }
 
-/// Acceptance 3: the same binary under both executors commits the same bytes.
-///
-/// Under `crates/emulator` the delegation ecall runs the circuit's
-/// permutation; under `qemu-riscv32`, which has no circuit, it answers
-/// `-ENOSYS` and the SDK's software fallback runs. Neither the witness nor the
-/// commitment changes, which is the whole claim.
-///
-/// The comparison is at the level of fd 1 and the exit status, which is the
-/// only level there is: QEMU is an oracle for what a guest computes and never
-/// for how this emulator computes it (`crates/emulator/tests/qemu_outputs.rs`).
-/// This guest is the case that makes the point — its delegation ecalls run
-/// natively here and take the `-ENOSYS` software fallback there, so the two
-/// instruction streams differ *by design* and agree on the answer.
-#[test]
-#[ignore = "needs qemu-riscv32, and builds the revm guest from source"]
-fn a3_the_two_executors_commit_the_same_bytes() {
-    let input = witness_bytes();
-    // The provable binary's witness is advice and its output is the journal,
-    // and `qemu-riscv32` maps neither -- a host loader maps only the image's
-    // `PT_LOAD` segments. The compatibility binary is the same computation
-    // over fd 0 and fd 1, which is what both executors can carry.
-    let ours = traced(STDIO_BIN, &input);
-    let (code, theirs) = under_qemu(&guest_elf(STDIO_BIN), &input);
-    assert_eq!(code, 0, "qemu ran the guest to a clean exit");
-    assert_eq!(
-        theirs, ours.execution.stdout,
-        "the delegated and the software keccak give different commitments"
-    );
-    assert_eq!(theirs, output_bytes());
-}
-
-/// Run one guest under `qemu-riscv32` with `input` on fd 0, returning its exit
-/// status and fd 1.
-fn under_qemu(elf: &[u8], input: &[u8]) -> (i32, Vec<u8>) {
-    let dir = std::env::temp_dir().join(format!("apogee-revm-qemu-{}", std::process::id()));
-    fs::create_dir_all(&dir).expect("creating the run directory");
-    let path = dir.join(GUEST);
-    fs::write(&path, elf).expect("writing the guest");
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("marking the guest");
-    let mut child = Command::new(common::qemu_binary())
-        .arg(&path)
-        .current_dir(&dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawning qemu");
-    child
-        .stdin
-        .take()
-        .expect("stdin was piped")
-        .write_all(input)
-        .expect("writing fd 0");
-    let out = child.wait_with_output().expect("waiting for qemu");
-    let _ = fs::remove_dir_all(&dir);
-    let code = out.status.code().unwrap_or_else(|| {
-        panic!(
-            "qemu ended on a signal: {}",
-            String::from_utf8_lossy(&out.stderr)
-        )
-    });
-    (code, out.stdout)
-}
-
 /// Acceptance 9: the cycle count, the per-family occupancy and the shard plan,
 /// printed for the handoff and asserted where a number is load-bearing.
 #[test]
 #[ignore = "builds the revm guest from source"]
 fn a9_the_cycle_and_occupancy_report() {
-    let run = traced(GUEST, &witness_bytes());
+    let run = traced(&witness_bytes());
     let plan = plan_shards(&run.profile, &run.config);
     println!("revm-block at {}", common::guest_profile());
     println!("  cycles: {}", run.profile.total());
-    // The compatibility binary's, beside it: the same computation over the same
-    // witness, read off fd 0 and written to fd 1 instead of loaded out of
-    // advice and stored into the journal. The gap between the two counts is
-    // what the fd path costs, and it is the only thing this line reports --
-    // `crates/prover/tests/revm.rs` proves the binary above, not this one.
-    let stdio = traced(STDIO_BIN, &witness_bytes());
     println!(
-        "  {STDIO_BIN} cycles: {} ({} keccak invocations against {})",
-        stdio.profile.total(),
-        stdio
-            .traces
-            .delegation(family::KECCAK_F)
-            .expect("the keccak family")
-            .len(),
+        "  keccak invocations: {}",
         run.traces
             .delegation(family::KECCAK_F)
             .expect("the keccak family")
@@ -911,17 +797,7 @@ fn a9_the_cycle_and_occupancy_report() {
 #[test]
 #[ignore = "builds the revm guest from source"]
 fn a10_the_image_fits_its_declared_ceiling() {
-    // Both binaries. `GUEST` is the one that is *proved*, so it is the one
-    // whose image has to fit window 0 and whose last instruction has to fit a
-    // `2^20` table; the compatibility binary is measured beside it because it
-    // is the same program and a divergence there would be a build problem.
-    for bin in [GUEST, STDIO_BIN] {
-        measure(bin);
-    }
-}
-
-fn measure(bin: &str) {
-    let image = guest(bin);
+    let image = guest();
     let text: usize = image
         .segments
         .iter()
@@ -949,7 +825,7 @@ fn measure(bin: &str) {
         .map(|i| image.slot_base as u64 + 2 * i as u64)
         .expect("the image has instructions");
 
-    println!("{bin} at {}", common::guest_profile());
+    println!("{GUEST} at {}", common::guest_profile());
     println!("  .text bytes:          {text}");
     println!("  file-backed end:      {file_end:#x}");
     println!(
@@ -963,7 +839,7 @@ fn measure(bin: &str) {
 
     assert!(
         span <= revm_block::BYTECODE_SIZE_WORDS as u64,
-        "{bin} spans {span} words, past the declared ceiling"
+        "{GUEST} spans {span} words, past the declared ceiling"
     );
     let config = preprocess(image).1;
     let height = config
@@ -977,11 +853,11 @@ fn measure(bin: &str) {
         .expect("a window family") as u64;
     assert!(
         file_end <= window,
-        "{bin}'s file bytes end at {file_end:#x}, past window 0's {window:#x}"
+        "{GUEST}'s file bytes end at {file_end:#x}, past window 0's {window:#x}"
     );
     assert!(
         top <= 2 * height as u64 - 4,
-        "{bin}: pc {top:#x} is past what a {height}-row table reaches"
+        "{GUEST}: pc {top:#x} is past what a {height}-row table reaches"
     );
     if common::guest_profile() == "release" {
         assert_eq!(

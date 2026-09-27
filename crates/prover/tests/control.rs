@@ -58,8 +58,8 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
 /// guest's 16 passed checks; and every proof has its circuit's shape. What the
 /// trace holds — the twelve instructions and the acceptance matrix — is
 /// `crates/checker/tests/jump_branch_slt.rs`' `the_guest_runs_the_acceptance_matrix`,
-/// over the same fixture, and QEMU's reading of it is
-/// `crates/emulator/tests/qemu_outputs.rs`', which compares the exit status and
+/// over the same fixture, and the emulator's reading of it is
+/// `crates/emulator/tests/guests.rs`', which checks the exit status and
 /// fd 1 and nothing below that.
 ///
 /// The generic table, which this family is the first to read, is bound: the key

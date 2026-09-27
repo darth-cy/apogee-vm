@@ -135,8 +135,8 @@ Master rule 2's runtime list is exhaustive, so both additions are recorded here 
   by name. Hand-rolling TLS is not what "own the crypto" means — that is about the
   *proving system's* cryptography. So the JSON-RPC client is ours (request framing, the
   retry policy, the cache) and only the HTTPS bytes are `curl`'s, spawned the way this
-  repository already spawns `cargo`, `qemu-riscv32` and `llvm-objdump`. It is an undeclared
-  host tool of the same class, reachable only from the manual refresh.
+  repository already spawns `cargo` and `llvm-objdump`. It is an undeclared host tool of the
+  same class, reachable only from the manual refresh.
   **Caveat worth stating:** the endpoint carries an API key and is passed on `curl`'s
   command line, so it is visible in `ps` output on the machine doing the refresh. The
   request body goes over stdin.

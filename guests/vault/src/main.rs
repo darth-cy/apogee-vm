@@ -31,10 +31,9 @@
 //! in `guests/`, which is the only thing here that puts the stack reservation
 //! `link.ld` declares under any load at all.
 //!
-//! # fd 0, the public input
+//! # The public input: the header, and nothing else
 //!
-//! A 104-byte header, then `n` records of `100 + depth * 32` bytes each. Every
-//! 32-byte field is a canonical little-endian `Fr`.
+//! 104 bytes. Every 32-byte field is a canonical little-endian `Fr`.
 //!
 //! ```text
 //! header    0..32    root            the tree root the batch opens against
@@ -42,7 +41,13 @@
 //!          64..96    total_shares    the vault's shares outstanding
 //!          96..100   depth           u32 LE, 1..=16
 //!         100..104   n               u32 LE, at most 32
+//! ```
 //!
+//! # The advice: the withdrawals, and why they belong there
+//!
+//! `n` records of `100 + depth * 32` bytes each, laid end to end:
+//!
+//! ```text
 //! record    0..32    account         the leaf's account identifier
 //!          32..64    balance         the leaf's current balance
 //!          64..96    amount          the amount to withdraw
@@ -52,9 +57,28 @@
 //!                                    nearest the leaf — first
 //! ```
 //!
-//! # fd 1, the public output
+//! A batch at the format's limits is 19,688 bytes and a public input window
+//! holds 1,020 (`docs/spec/public-values.md` §3), so a bound batch at this
+//! scale is not a thing this VM has. The records are advice, and **nothing
+//! binds advice** — but a Merkle path is the one kind of bulk input that
+//! authenticates *itself*: every record is checked against the running root,
+//! and the running root starts at the header's, which is public input and which
+//! the proof does bind. A prover who invents a leaf has to invent a path that
+//! rehashes to a root it did not choose.
 //!
-//! 104 bytes, written once at the end:
+//! What the prover does keep is the choice of *which* valid leaves the batch
+//! touches and by how much. So the statement this guest publishes is an
+//! existential one — **from the tree whose root is `root`, some sequence of
+//! valid withdrawals reached `final_root`, withdrawing `total_withdrawn` and
+//! burning `shares_burned`** — and the roots in the journal are what carry it.
+//! That is the shape a real settlement proof has, and it is the reason the
+//! header is public input rather than the first 104 bytes of the advice: a root
+//! compared against a root the prover supplied is a prover agreeing with
+//! itself.
+//!
+//! # The journal
+//!
+//! 104 bytes, committed once at the end:
 //!
 //! ```text
 //!           0..32    final_root      the root after the accepted withdrawals
@@ -64,37 +88,27 @@
 //!         100..104   rejected        u32 LE
 //! ```
 //!
-//! # fd 3, and why it is empty
-//!
-//! Unused, and the reason is worth stating because a Merkle path is exactly the
-//! shape of thing a hint channel exists for: the prover knows it, deriving it
-//! costs the verifier a whole tree, and it is discarded the moment it has been
-//! checked. It arrives on fd 0 regardless, because fd 0 is what the public I/O
-//! digest binds. A path read from fd 3 would let the prover choose, after the
-//! fact, which leaf it had proved — the root check would still pass, against a
-//! leaf nobody agreed to — and the statement would degrade from "these balances
-//! were debited" to "some balances were".
-//!
 //! # What is trusted, and what is merely public
 //!
-//! fd 0 is public but not well-formed by assumption; it is a byte string the
-//! prover hands over. The split is between structure and content. A header that
-//! is short, a depth outside `1..=16`, a batch larger than 32, or a stream that
-//! ends inside a record is a malformed statement rather than a rejected
+//! Neither region is well-formed by assumption; both are byte strings the
+//! prover hands over, and the public one is only *known* to the verifier, not
+//! vouched for. The split is between structure and content. A header that is
+//! short, a depth outside `1..=16`, a batch larger than 32, or an advice region
+//! that ends inside a record is a malformed statement rather than a rejected
 //! withdrawal — there is no batch to settle — so it panics, which fails the
-//! execution loudly and prints where on fd 2. A record whose contents do not
-//! satisfy the vault's rules is an ordinary rejection: it is counted, the root
-//! is left alone, and the batch carries on.
+//! execution and publishes nothing. A record whose contents do not satisfy the
+//! vault's rules is an ordinary rejection: it is counted, the root is left
+//! alone, and the batch carries on.
 
 use field::Fr;
 
 guest_sdk::entry!(main);
 
 // The heap is deliberately not used, and `guests/echo` is where the bump
-// allocator is exercised. Every buffer here has a bound the format states — a
-// record is at most 612 bytes and a batch at most 32 of them — so a fixed array
-// says the bound in the type, and an allocator whose `dealloc` does nothing
-// would leak a fresh record buffer on every iteration for no benefit.
+// allocator is exercised. Nothing here needs it: the header and the records are
+// memory the executor laid out, so a record is a borrowed slice of the advice
+// region rather than a buffer to copy it into, and every other buffer has a
+// bound the format states.
 
 // ---------------------------------------------------------------------------
 // The format's bounds
@@ -112,9 +126,6 @@ const HEADER_LEN: usize = 104;
 /// A record's fixed part: `account`, `balance`, `amount`, `path_bits`. The
 /// siblings follow and are `depth * 32` bytes long.
 const RECORD_FIXED_LEN: usize = 100;
-
-/// The largest record: the fixed part plus siblings at `MAX_DEPTH`.
-const MAX_RECORD_LEN: usize = RECORD_FIXED_LEN + MAX_DEPTH * 32;
 
 /// `final_root`, `total_withdrawn`, `shares_burned`, `accepted`, `rejected`.
 const OUTPUT_LEN: usize = 104;
@@ -279,10 +290,10 @@ fn decode_u32(bytes: &[u8]) -> u32 {
 
 /// Decode one record, or say why it cannot be settled.
 ///
-/// Every failure is a rejection rather than a panic. fd 0 is public but not
-/// trusted to be well-formed, and a single malformed record says nothing about
-/// the other thirty-one — refusing the batch over one would hand a prover a way
-/// to void a settlement it did not like by corrupting a field it controls.
+/// Every failure is a rejection rather than a panic. The advice is not trusted
+/// to be well-formed, and a single malformed record says nothing about the
+/// other thirty-one — refusing the batch over one would hand a prover a way to
+/// void a settlement it did not like by corrupting a field it controls.
 fn parse_record(bytes: &[u8], depth: usize) -> Result<Withdrawal, &'static str> {
     debug_assert_eq!(
         bytes.len(),
@@ -321,7 +332,7 @@ fn parse_record(bytes: &[u8], depth: usize) -> Result<Withdrawal, &'static str> 
 // ---------------------------------------------------------------------------
 
 /// Settle the batch: read the header, then take the withdrawals in the order
-/// fd 0 presents them.
+/// the advice presents them.
 ///
 /// The order is the statement, not an implementation detail. Each withdrawal is
 /// checked against the root its predecessors left, so the batch is a sequence of
@@ -331,11 +342,11 @@ fn parse_record(bytes: &[u8], depth: usize) -> Result<Withdrawal, &'static str> 
 /// seen had the rejected one never been sent. Nothing is unwound, because
 /// nothing was written before every check on it had passed.
 fn main() {
-    let mut header = [0u8; HEADER_LEN];
+    let header = guest_sdk::public_input();
     assert_eq!(
-        guest_sdk::read_stdin(&mut header),
+        header.len(),
         HEADER_LEN,
-        "vault: fd 0 ended inside the header"
+        "vault: the public input is not the 104-byte header"
     );
 
     // The three header field elements are the statement itself — the root the
@@ -370,39 +381,36 @@ fn main() {
     let assets_inverse = total_assets.inverse();
 
     let record_len = RECORD_FIXED_LEN + depth * 32;
-    let mut record = [0u8; MAX_RECORD_LEN];
+    let records = guest_sdk::advice();
+    assert_eq!(
+        records.len(),
+        count as usize * record_len,
+        "vault: the advice is not the {count} records the header declared"
+    );
 
     let mut accepted: u32 = 0;
     let mut rejected: u32 = 0;
     let mut total_withdrawn = Fr::ZERO;
     let mut shares_burned = Fr::ZERO;
 
-    for index in 0..count {
-        // A record has a fixed length once `depth` is known, so a short read is
-        // a truncated stream and not a small batch: `count` already said how
-        // many records there are, and proceeding on a partly-filled buffer
-        // would settle a withdrawal against zeros.
-        assert_eq!(
-            guest_sdk::read_stdin(&mut record[..record_len]),
-            record_len,
-            "vault: fd 0 ended inside a withdrawal record"
-        );
+    for index in 0..count as usize {
+        // A record has a fixed length once `depth` is known, so the whole
+        // advice region is `count` of them and its length was checked above:
+        // settling a withdrawal against a partly-filled buffer would prove
+        // something about zeros nobody supplied.
+        let at = index * record_len;
+        let record = &records[at..at + record_len];
 
-        let withdrawal = match parse_record(&record[..record_len], depth) {
+        let withdrawal = match parse_record(record, depth) {
             Ok(withdrawal) => withdrawal,
-            Err(why) => {
+            Err(_) => {
                 rejected += 1;
-                log_rejection(index, why);
                 continue;
             }
         };
 
         let Some(assets_inverse) = assets_inverse else {
             rejected += 1;
-            log_rejection(
-                index,
-                "the vault holds no assets, so there is no share price",
-            );
             continue;
         };
 
@@ -411,7 +419,6 @@ fn main() {
         // rejected there.
         if withdrawal.amount_int > withdrawal.balance_int {
             rejected += 1;
-            log_rejection(index, "the amount exceeds the balance");
             continue;
         }
 
@@ -422,7 +429,6 @@ fn main() {
         let proved = merkle_root(leaf, 0, depth, withdrawal.path_bits, &withdrawal.siblings);
         if proved != root {
             rejected += 1;
-            log_rejection(index, "the path does not reproduce the current root");
             continue;
         }
 
@@ -460,46 +466,7 @@ fn main() {
     out[96..100].copy_from_slice(&accepted.to_le_bytes());
     out[100..104].copy_from_slice(&rejected.to_le_bytes());
     // One `commit`, because the journal is one record and writing it in pieces
-    // would let a panic between two of them leave a half-written statement on
-    // fd 1.
-    guest_sdk::write_stdout(&out);
-}
-
-// ---------------------------------------------------------------------------
-// Diagnostics
-// ---------------------------------------------------------------------------
-
-/// Note a rejected withdrawal on fd 2.
-///
-/// The verifier ignores fd 2 entirely, so the reason can be as specific as it
-/// likes without becoming part of the statement — which is the point: a reason
-/// on fd 1 would be a claim the verifier has to interpret, whereas the count
-/// alone is checkable by re-running the rules.
-fn log_rejection(index: u32, why: &str) {
-    guest_sdk::log(b"vault: rejected withdrawal ");
-    log_u32(index);
-    guest_sdk::log(b": ");
-    guest_sdk::log(why.as_bytes());
-    guest_sdk::log(b"\n");
-}
-
-/// Write `value` to fd 2 in decimal.
-///
-/// Longhand rather than `write!`, because `core::fmt` on fd 2 would drag the
-/// formatting machinery into `.text` for a diagnostic — the panic handler is
-/// welcome to it, since by then the execution has already failed.
-fn log_u32(mut value: u32) {
-    // Ten digits is the width of `u32::MAX`, so the index never runs past the
-    // front of the buffer.
-    let mut digits = [b'0'; 10];
-    let mut at = digits.len();
-    loop {
-        at -= 1;
-        digits[at] = b'0' + (value % 10) as u8;
-        value /= 10;
-        if value == 0 {
-            break;
-        }
-    }
-    guest_sdk::log(&digits[at..]);
+    // would let a panic between two of them leave a half-written statement in
+    // the window.
+    guest_sdk::commit(&out);
 }

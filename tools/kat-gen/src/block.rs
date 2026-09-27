@@ -294,10 +294,8 @@ fn tx_gas(journal: &[u8], txs: usize) -> u64 {
 /// a tracing concern and this check is about the answer, not the trace.
 fn guest_journal(image: &loader::ProgramImage, witness: &[u8]) -> Vec<u8> {
     let io = emulator::GuestIo {
-        stdin: Vec::new(),
         input: Vec::new(),
         advice: witness.to_vec(),
-        hint: Vec::new(),
     };
     let execution = emulator::run(image, &io).expect("the guest runs");
     assert_eq!(

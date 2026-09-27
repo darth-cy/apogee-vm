@@ -31,7 +31,7 @@ const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../constraints/tests/vectors/add_sub.bin"
 );
-const FIXTURE_SHA256: &str = "e74869e359099483b699f9d5a278cb3f7b98b0e4e5e8c0e54f579aac4946a469";
+const FIXTURE_SHA256: &str = "33d0ce5b161f8d68ed4c0c761b748f4554cc705ea145df934a370243956d7f67";
 
 fn artifact() -> CircuitArtifact {
     add_sub::artifact(VARS)
@@ -419,14 +419,11 @@ fn the_circuit_is_the_fixture_and_keeps_every_rule() {
 #[test]
 fn the_layout_and_the_gates_are_the_specs() {
     let a = artifact();
-    assert_eq!(a.memory.len(), 42);
+    assert_eq!(a.memory.len(), 27);
     let mut witness = names(&[
         "pc_gap_hi",
         "rs1_gap_hi",
         "rs2_gap_hi",
-        "arg1_gap_hi",
-        "arg2_gap_hi",
-        "ram_gap_hi",
         "rd_gap_hi",
         "deleg_gap_hi",
         "rd_inv",
@@ -485,15 +482,10 @@ fn the_layout_and_the_gates_are_the_specs() {
         "pc_mask_boolean",
         "rs1_mask_boolean",
         "rs2_mask_boolean",
-        "arg1_mask_boolean",
-        "arg2_mask_boolean",
-        "ram_mask_boolean",
         "rd_mask_boolean",
         "deleg_mask_boolean",
         "rs1_writes_back",
         "rs2_writes_back",
-        "arg1_writes_back",
-        "arg2_writes_back",
         "rd_is_zero_inverse",
         "rd_is_zero_at_nonzero",
         "rd_is_zero_boolean",
@@ -527,9 +519,6 @@ fn the_layout_and_the_gates_are_the_specs() {
         "ecall_is_exit",
         "rs1_mask_rule",
         "rs2_mask_rule",
-        "arg1_mask_rule",
-        "arg2_mask_rule",
-        "ram_mask_rule",
         "rd_mask_rule",
         "deleg_mask_rule",
         "rs1_addr_rule",
@@ -557,9 +546,9 @@ fn the_layout_and_the_gates_are_the_specs() {
         .iter()
         .map(|l| (l.name.clone(), l.channel))
         .collect();
-    assert_eq!(lookups.len(), 21);
+    assert_eq!(lookups.len(), 15);
     assert_eq!(
-        lookups[16..],
+        lookups[10..],
         [
             ("rd_hi_range".to_string(), lookup_channel::RANGE16),
             ("rd_lo_range".to_string(), lookup_channel::RANGE16),
@@ -568,13 +557,13 @@ fn the_layout_and_the_gates_are_the_specs() {
             ("decode_row".to_string(), lookup_channel::DECODER),
         ]
     );
-    assert!(lookups[..16]
+    assert!(lookups[..10]
         .iter()
         .all(|(_, c)| *c == lookup_channel::TIMESTAMP));
     // The frame's gap obligations are each under their own query's mask; the
     // family's five are under the row's.
     let pc_mask = PolyAddress::Memory(1);
-    for (at, l) in a.lookups[..16].iter().enumerate() {
+    for (at, l) in a.lookups[..10].iter().enumerate() {
         assert_eq!(
             l.selector,
             PolyAddress::Memory(1 + 5 * (at as u32 / 2)),
@@ -583,13 +572,16 @@ fn the_layout_and_the_gates_are_the_specs() {
         );
     }
     assert!(
-        a.lookups[16..].iter().all(|l| l.selector == pc_mask),
+        a.lookups[10..].iter().all(|l| l.selector == pc_mask),
         "every new obligation is the row's"
     );
 
-    // 33 and not 32 since S26: `is_deleg_15` is a witness column before them
-    // (`docs/spec/delegation.md` §10's append rule, paid once per delegation type).
-    let mult = |i: u32| PolyAddress::Witness(33 + i);
+    // 30, three lower than S26's 33: the frame lost `arg1`, `arg2` and `ram`
+    // with the `read`/`write` ecalls, so three `*_gap_hi` witness columns went
+    // with them and every later column moved down. `is_deleg_15` is still a
+    // witness column before these (`docs/spec/delegation.md` §10's append
+    // rule, paid once per delegation type).
+    let mult = |i: u32| PolyAddress::Witness(30 + i);
     assert_eq!(
         add_sub::channels(),
         vec![
@@ -610,10 +602,12 @@ fn the_layout_and_the_gates_are_the_specs() {
             },
         ]
     );
-    // Four product-tree leaves a side beside the frame's, then one fraction
-    // tree per channel. The frame is eight queries since S21, so its product
-    // trees are 16 a side: 32 + 36 + 28 + 4.
-    assert_eq!(a.layers[0].width, 100);
+    // The frame's product-tree leaves, then one fraction tree per channel:
+    // 16 + 32 + 16 + 4. The frame is **five** queries since the `read`/`write`
+    // ecalls went — it was eight from S21 until then, and the width was 100 —
+    // so its leaves are five plus three literal-1 pads a side, 16 over the two
+    // sides; its ten timestamp obligations pad to sixteen pairs, 32 slots.
+    assert_eq!(a.layers[0].width, 68);
     assert_eq!(a.outputs.len(), 2 + 2 * 3);
 }
 
@@ -796,19 +790,12 @@ fn each_gate_is_the_one_that_refuses_its_row() {
     let mut r = row("addi of -1, carrying");
     r.query("rs2", CYCLE, 2, 0, 0, 0);
     cases.push(("an addi reading rs2", r, vec!["rs2_mask_rule"]));
-    for q in ["arg1", "arg2"] {
-        let mut r = row("exit 42");
-        r.query(q, CYCLE, 2, if q == "arg1" { 11 } else { 12 }, 5, 5);
-        let rule: &str = if q == "arg1" {
-            "arg1_mask_rule"
-        } else {
-            "arg2_mask_rule"
-        };
-        cases.push(("an exit reading a1 or a2", r, vec![rule]));
-    }
-    let mut r = row("exit 42");
-    r.query("ram", CYCLE, 3, 0x7fff_fffc, 7, 9);
-    cases.push(("the exit row storing a word", r, vec!["ram_mask_rule"]));
+    // An exit reading `a1` or `a2`, and any row of this family storing a word,
+    // were three cases here. All three are **unrepresentable** now: `arg1`,
+    // `arg2` and `ram` left the frame with the `read`/`write` ecalls, so there
+    // is no column for the forgery to live in and no `mask == 0` gate left to
+    // refuse it. A query that cannot be expressed is a stronger refusal than a
+    // gate that refuses it.
     let mut r = row("fence");
     r.query("rd", CYCLE, 3, 0, 0, 0);
     r.set("rd_is_zero", Fr::ONE);
@@ -840,10 +827,6 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         r,
         vec!["rs1_mask_rule", "rd_mask_rule"],
     ));
-    // A padding row storing into RAM, which no row of this family may do.
-    let mut r = Row::default();
-    r.query("ram", CYCLE, 3, 0x7fff_fffc, 0, 7);
-    cases.push(("a padding row storing a word", r, vec!["ram_mask_rule"]));
     // Its second: a live row's rd write masked off.
     let mut r = row("add, not carrying");
     r.drop_query("rd");

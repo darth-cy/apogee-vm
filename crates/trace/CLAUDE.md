@@ -10,7 +10,7 @@ since S26, never from the event log (`docs/spec/streaming.md`). `crates/emulator
 address spaces, the frame of each instruction class, the x0 rule, the ecall frame and the
 order of the log — **`docs/spec/memory.md`** for the memory columns,
 **`docs/spec/lookup.md` §7** for the multiplicity columns, since S21
-**`docs/spec/delegation.md`** for the eighth role, the invocation frame and the anchor, and,
+**`docs/spec/delegation.md`** for the `Delegate` role, the invocation frame and the anchor, and,
 since S-IO, **`docs/spec/public-values.md`** for the two public windows, the advice region and
 the value window's committed init column.
 
@@ -54,9 +54,11 @@ pub fn addressable(addr: u32) -> bool;   // in_ram, a public window, or the advi
 impl AddressSpace { pub fn chains(&self) -> bool; }   // S21: false for a delegation space
 pub const DELEGATION_SPACES: [AddressSpace; 4];       // every delegation anchor space; S26's is the 4th
 
-pub enum Role { Rs1, Rs2, Arg1, Arg2, Load, Ram, Rd, Delegate }   // S21's eighth
-pub const ROLES: [Role; 8];                           // the frozen in-cycle order
+pub enum Role { Rs1, Rs2, Load, Ram, Rd, Delegate }   // Arg1 and Arg2 went with `read`/`write`
+pub const ROLES: [Role; 6];                           // the frozen in-cycle order
 pub struct Query { pub addr: u32, pub read_ts: u64, pub read_value: u32, pub write_value: u32 }
+// `queries` stays eight wide and is indexed by `role as usize`: eight is the `present`
+// mask's ceiling, so the last two entries are always Query::ABSENT.
 pub struct Row { pub cycle: u64, pub pc: u32, pub next_pc: u32, pub present: u8, pub queries: [Query; 8] }
 pub struct QueryColumns { pub addr: Vec<u32>, pub read_ts: Vec<u64>, pub read_value: Vec<u32>, pub write_value: Vec<u32> }
 pub struct FamilyTrace { pub family: FamilyId, pub height: u32, pub cycle: Vec<u64>, pub pc: Vec<u32>,
@@ -123,9 +125,9 @@ pub fn check_multiplicities(artifact, columns, specs, given) -> Result<(), Strin
 pub enum Phase { PostExecution, PostCommit, PostGkr, PostOpening, Final }   // tags 0..5
 pub struct PhaseTiming { pub wall_nanos: u64 }
 // S-IO: the shape is S12's, the meaning is not. `input` is the PUBLIC INPUT WINDOW's payload
-// and `output` is the JOURNAL — not fd 0 and fd 1, which are uncommitted compatibility
-// streams a proof binds nothing of (`docs/spec/public-values.md` §1). `transcript::io_digest`
-// over the pair is unchanged and in the position it has always had.
+// and `output` is the JOURNAL — the two byte strings a proof binds, and since the POSIX
+// layer went the only two an execution has (`docs/spec/public-values.md` §1).
+// `transcript::io_digest` over the pair is unchanged and in the position it has always had.
 pub struct IoStreams { pub input: Vec<u8>, pub output: Vec<u8> }
 impl TraceArchive {
     pub fn from_execution(FamilyTraces, MemoryEventLog, CycleProfile, IoStreams,
@@ -205,14 +207,19 @@ impl TraceArchive {
   role in `ROLES` order `rs1.addr` `rs1.read_ts` `rs1.read_value` `rs1.write_value` …
   through `delegate.write_value`: the fields of `FamilyTrace` and `QueryColumns`.
   Append-only.
-- **`Role::Delegate` is S21's eighth role and it filled the `present` mask.** `present` is a
-  `u8` and there are now eight roles, so every bit of it names one and no value can mark a
-  role that does not exist; a ninth role widens the mask, which is a schema change
-  (`docs/spec/execution-trace.md` §7). `src/archive.rs` asserts `ROLES.len() == 8` where the
-  old "role that does not exist" refusal stood, because an unreachable refusal is worse than
-  none.
+- **There are six roles and `present` is a `u8`, so two of its bits are spare.** `Arg1` and
+  `Arg2` were an ecall row's `a1` and `a2`, which only `read` and `write` ever passed; both
+  became unreachable the moment those calls did, and a role no row can have is a column of
+  zeroes in every frame that holds it, so they were removed rather than kept. **The archive's
+  "names a role that does not exist" refusal is restored with them**: it was S12's, it was
+  unreachable for exactly the span in which `Role::Delegate` filled the mask (S21 to the
+  deletion of the POSIX layer), and `src/archive.rs` carried an assertion in its place
+  because an unreachable refusal is worse than none. It is reachable again — `present & (!0
+  << ROLES.len())` — so it stands again. A seventh role narrows the spare bits and a ninth
+  widens the mask; either is a schema change (`docs/spec/execution-trace.md` §7).
 - **`Role::Delegate`'s address space is the row's, not the role's** (S23). One role serves
-  every delegation type — a second would need a ninth bit — so `Role::space` takes the
+  every delegation type — a second would cost a bit and a schema change for nothing, the
+  type being recoverable from the row's own `a7` — so `Role::space` takes the
   requested family's space and panics on `None` for this role. What supplies it is the
   invocation riding the cycle, which both the recorder and the archive's replay have in
   hand. Every other role ignores the argument.
@@ -221,8 +228,9 @@ impl TraceArchive {
   buffer is a `DelegationTrace` and its rows are invocations**, so `CycleProfile::total()`
   filters on `program::claims_pcs` and leaves them out of the cycle count while
   `plan_shards` still counts them into that family's shard count
-  (`docs/spec/delegation.md` §8). The cycle-owning counts sum to the cycle count, transfer
-  cycles included.
+  (`docs/spec/delegation.md` §8). The cycle-owning counts sum to the cycle count, and since
+  an ecall is one cycle and no instruction commits two, a family's count is its instruction
+  count.
 - **A delegation space does not chain.** `AddressSpace::chains()` is false for all four, so
   `record` fills such an event's read side with `(0, 0)` rather than from the last-access
   tables, and `self_check` credits the invocation's own pair per event instead of an initial
@@ -293,12 +301,15 @@ impl TraceArchive {
   slot, which is how a frame too narrow for what it is filled with fails loudly instead
   of dropping the event. `crates/trace/tests/memory.rs` holds `frame_queries` to
   `program::row_kind` over all 59 instructions.
-- **An event takes the first free frame query of its space and slot.** Only the three
-  slot-2 register roles share both, and they fill in log order, `rs2`, `arg1`, `arg2`.
-  That is exact because an ecall's arguments are a prefix of `a0, a1, a2` and no other
-  row reads `arg1` (`docs/spec/execution-trace.md` §6); no gate could tell the three apart,
-  so `crates/checker/tests/memory.rs` holds the columns to the family buffers, which file
-  by role. An ecall reading `a1` without `a0` would break it.
+- **An event takes the first free frame query of its space and slot, and that pair is now
+  unique.** No two roles share both: `rs1` is `(REG, 1)`, `rs2` `(REG, 2)`, `load`
+  `(RAM, 2)`, `ram` `(RAM, 3)`, `rd` `(REG, 3)` and `deleg` a delegation space at slot 3,
+  with the pc query at `(PC, 0)`. The rule used to need an argument — `rs2`, `arg1` and
+  `arg2` all sat at `(REG, 2)` and filled in log order, exact only because an ecall's
+  arguments are a prefix of `a0, a1, a2` and nothing else read `a1`. Those two roles went
+  with `read` and `write`, and the tie-break went with them: the routing is now a lookup,
+  and `crates/checker/tests/memory.rs` still holds the columns to the family buffers, which
+  file by role.
 - **A column takes the narrowest backing its largest value fits**: `U1`, `U8`, `U16`,
   `U32`, or `Fr` for a timestamp past 32 bits; `rd_inv` is always `Fr`.
 - **`build_init_teardown_columns` is §3.4's table**, per row `y` at `4h·w + 4y`: 0 on

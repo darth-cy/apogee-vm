@@ -1,10 +1,11 @@
 //! `docs/spec/ecall-abi.md` is the ABI, and this holds it to `constants::ecall`.
 //!
 //! Acceptance 9 wants the single source of truth in code with the document
-//! checked against it. So the document's three tables — the numbers, the file
-//! descriptors and the ranges — are parsed here and compared to the constants,
-//! in both directions: a number in the document that is not a constant fails,
-//! and a constant the document does not mention fails too.
+//! checked against it. So the document's tables — the numbers and the ranges —
+//! are parsed here and compared to the constants, in both directions: a number
+//! in the document that is not a constant fails, and a constant the document
+//! does not mention fails too. There was a third table, the file descriptors;
+//! an Apogee guest has none since the POSIX layer was deleted.
 //!
 //! It also checks that `crates/guest-sdk` reaches those constants rather than
 //! spelling a number itself, because a shim with `93` written into it would
@@ -24,23 +25,16 @@ use constants::{ecall, guest_memory};
 /// Every `constants::ecall` item, by the name the document uses.
 fn constants_table() -> BTreeMap<&'static str, u32> {
     BTreeMap::from([
-        ("READ", ecall::READ),
-        ("WRITE", ecall::WRITE),
         ("EXIT", ecall::EXIT),
         ("PRECOMPILE_POSEIDON2", ecall::PRECOMPILE_POSEIDON2),
         ("PRECOMPILE_KECCAK_F", ecall::PRECOMPILE_KECCAK_F),
         ("PRECOMPILE_FR_ARITH", ecall::PRECOMPILE_FR_ARITH),
         ("PRECOMPILE_MOD_MUL", ecall::PRECOMPILE_MOD_MUL),
-        ("FD_STDIN", ecall::FD_STDIN),
-        ("FD_STDOUT", ecall::FD_STDOUT),
-        ("FD_STDERR", ecall::FD_STDERR),
-        ("FD_HINT", ecall::FD_HINT),
         ("ZKVM_IO_FIRST", ecall::ZKVM_IO_FIRST),
         ("ZKVM_IO_LAST", ecall::ZKVM_IO_LAST),
         ("PRECOMPILE_FIRST", ecall::PRECOMPILE_FIRST),
         ("PRECOMPILE_LAST", ecall::PRECOMPILE_LAST),
         ("ENOSYS", ecall::ENOSYS),
-        ("EBADF", ecall::EBADF),
     ])
 }
 
@@ -83,7 +77,7 @@ fn every_implemented_number_is_classified() {
     for row in rows {
         // `| Number | Constant | Class | What |`
         assert!(
-            ["deterministic", "per fd", "advice"].contains(&row[2].as_str()),
+            ["deterministic", "advice"].contains(&row[2].as_str()),
             "{}: `{}` is not a nondeterminism class",
             row[1],
             row[2]
@@ -141,22 +135,6 @@ fn the_ranges_are_above_linux_and_disjoint() {
         (ecall::PRECOMPILE_FIRST..=ecall::PRECOMPILE_LAST).contains(&ecall::PRECOMPILE_POSEIDON2),
         "PRECOMPILE_POSEIDON2 is outside the precompile range"
     );
-}
-
-/// The file descriptors are the four the document names, and distinct.
-#[test]
-fn the_file_descriptors_are_distinct() {
-    let fds = [
-        ecall::FD_STDIN,
-        ecall::FD_STDOUT,
-        ecall::FD_STDERR,
-        ecall::FD_HINT,
-    ];
-    assert_eq!(fds, [0, 1, 2, 3]);
-    let mut sorted = fds.to_vec();
-    sorted.sort_unstable();
-    sorted.dedup();
-    assert_eq!(sorted.len(), fds.len(), "two descriptors share a number");
 }
 
 /// The guest memory map is written down three times. They must agree.
@@ -238,13 +216,7 @@ fn the_shims_use_the_constants() {
         .expect("crates/guest-sdk/src/lib.rs is readable");
 
     for name in [
-        "ecall::READ",
-        "ecall::WRITE",
         "ecall::EXIT",
-        "ecall::FD_STDIN",
-        "ecall::FD_STDOUT",
-        "ecall::FD_STDERR",
-        "ecall::FD_HINT",
         "ecall::PRECOMPILE_POSEIDON2",
         // S21: the shim does not call this number directly — it reads it out
         // of the declaration record it emits (`docs/spec/delegation.md` §7) —
@@ -260,7 +232,7 @@ fn the_shims_use_the_constants() {
 
     // And it spells none of them. The numbers below are the ones a second copy
     // would most plausibly be written as.
-    for literal in [" 63", " 64", " 93", "0x0500", "0x0501"] {
+    for literal in [" 93", "0x0500", "0x0501"] {
         assert!(
             !source.contains(&format!("= {}", literal.trim())),
             "guest-sdk assigns the literal {literal}, which is an ABI number \
@@ -276,26 +248,14 @@ fn the_shims_use_the_constants() {
 fn the_emulator_dispatches_on_the_constants() {
     let source = fs::read_to_string(repo_root().join("crates/emulator/src/lib.rs"))
         .expect("crates/emulator/src/lib.rs is readable");
-    for name in [
-        "ecall::READ",
-        "ecall::WRITE",
-        "ecall::EXIT",
-        "ecall::FD_STDIN",
-        "ecall::FD_STDOUT",
-        "ecall::FD_STDERR",
-        "ecall::FD_HINT",
-        "ecall::ENOSYS",
-        "ecall::EBADF",
-    ] {
+    for name in ["ecall::EXIT", "ecall::ENOSYS"] {
         assert!(
             source.contains(name),
             "the emulator does not reference {name}, so either a call is missing \
              or it spells a number itself"
         );
     }
-    for literal in [
-        "63 =>", "64 =>", "93 =>", "== 63", "== 64", "== 93", "0x500", "0x501",
-    ] {
+    for literal in ["93 =>", "== 93", "0x500", "0x501"] {
         assert!(
             !source.contains(literal),
             "the emulator spells `{literal}`, an ABI number with a home in constants::ecall"
@@ -337,13 +297,13 @@ fn the_document_checker_can_fail() {
     );
 
     // A deleted row.
-    let missing = text.replace("| 63 | `READ` | per fd |", "");
+    let missing = text.replace("| 93 | `EXIT` | deterministic |", "");
     assert_ne!(
         missing, text,
-        "the syscall table no longer spells READ that way"
+        "the syscall table no longer spells EXIT that way"
     );
     assert!(
-        !document_table_of(&missing).contains_key("READ"),
+        !document_table_of(&missing).contains_key("EXIT"),
         "deleting a row must remove it from the parse"
     );
 

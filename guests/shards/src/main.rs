@@ -33,16 +33,15 @@
 //! about the shard cut, and uniform four-byte instructions keep the pc
 //! arithmetic obvious. `guests/control` is where RVC control flow is proven.
 //!
-//! # fd 0, fd 1, fd 2, fd 3
+//! # Input, advice and the journal
 //!
-//! Unused. The guest reads nothing and writes nothing: `EXIT` is still the
+//! Unused. The guest reads nothing and commits nothing: `EXIT` is still the
 //! only provable ecall (`docs/spec/shard-proof.md` §8.4).
 //!
 //! # The result
 //!
 //! The exit status, `a0`: 2, the number of checks — the accumulator reached
-//! `64 * 16384 = 0x100000` and the counter reached 0 — or 1 from `fail`. Both
-//! are below 256, which is all of an exit status `qemu-riscv32` reports.
+//! `64 * 16384 = 0x100000` and the counter reached 0 — or 1 from `fail`.
 
 use core::arch::global_asm;
 

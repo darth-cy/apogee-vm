@@ -3,7 +3,7 @@
 //!
 //! **Every test here is `#[ignore]`d, and CI runs the file by name with
 //! `--include-ignored --test-threads=1`.** `--include-ignored`, not
-//! `--ignored`, for the reason `.github/workflows/ci.yml` gives of the qemu
+//! `--ignored`, for the reason `.github/workflows/ci.yml` gives of the
 //! step: the latter runs *only* ignored tests, so a case added here without the
 //! attribute would be filtered out of the one step meant to run it. Not for
 //! want of an environment: the timestamp
@@ -162,10 +162,8 @@ fn toy() -> Toy {
     };
     let (tables, config) = decode_program(&image, &params).expect("fib decodes");
     let io = GuestIo {
-        stdin: Vec::new(),
         advice: Vec::new(),
         input: 24u32.to_le_bytes().to_vec(),
-        hint: Vec::new(),
     };
     let (traces, log, _, execution) = trace_run(&image, &io, &tables, &config).expect("fib traces");
     assert_eq!(execution.exit_code, 0);

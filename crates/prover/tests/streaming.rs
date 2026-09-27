@@ -44,10 +44,8 @@ use verifier_core::BlockProof;
 /// `public-io` takes.
 fn empty_io() -> GuestIo {
     GuestIo {
-        stdin: Vec::new(),
         input: Vec::new(),
         advice: Vec::new(),
-        hint: Vec::new(),
     }
 }
 
@@ -133,10 +131,8 @@ fn a3_the_public_value_and_advice_windows_stream_identically() {
         .map(|i| i.wrapping_mul(37).wrapping_add(11))
         .collect();
     let io = GuestIo {
-        stdin: Vec::new(),
         input: public_io_input(&advice),
         advice: advice.clone(),
-        hint: Vec::new(),
     };
     same_block(
         "public-io",

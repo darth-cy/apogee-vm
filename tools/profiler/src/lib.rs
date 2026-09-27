@@ -52,7 +52,7 @@ pub struct FuncProfile {
 
 /// One execution, profiled.
 pub struct Profile {
-    /// Cycles the execution ran, transfer cycles included.
+    /// Cycles the execution ran.
     pub cycles: u64,
     /// Per halfword slot of the image, how many cycles ran there. Slot `i` is
     /// pc `slot_base + 2i`, the same indexing `ProgramImage::slots` has.

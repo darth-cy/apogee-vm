@@ -6,9 +6,9 @@
 //! The arithmetic is Uniswap v2's — the `x*y` swap price, the pro-rata mint, the
 //! pro-rata burn, `sqrt(x*y)` for the first shares — with one deliberate
 //! deviation. The swap fee is taken *out* of the pool into a running total
-//! rather than left in the reserves, so that the `fees_x` and `fees_y` words on
-//! fd 1 are figures in their own right instead of something a reader has to
-//! infer from a reserve delta. It also keeps the constant-product assertion
+//! rather than left in the reserves, so that the `fees_x` and `fees_y` words in
+//! the journal are figures in their own right instead of something a reader has
+//! to infer from a reserve delta. It also keeps the constant-product assertion
 //! sharp: with the fee left in, the product grows for two unrelated reasons at
 //! once and the assertion stops telling them apart.
 //!
@@ -35,21 +35,21 @@
 //!
 //! It allocates nothing. Every buffer is a fixed array on the stack, because the
 //! format bounds every one of them — the batch is read one 36-byte record at a
-//! time and the journal is a single 104-byte write. `guests/echo` is where the
-//! bump allocator is exercised.
+//! time out of the public input window and the journal is a single 104-byte
+//! commit. `guests/echo` is where the bump allocator is exercised.
 //!
 //! # The pool's rules
 //!
 //! An op is **applied** or **rejected**, and rejection is an ordinary outcome
 //! rather than a fault: an op that would overflow, miss its limit, or empty the
 //! pool leaves the pool exactly as it was and is counted. Both tallies reach
-//! fd 1, so a batch that was refused in full is a different public statement
-//! from one that was applied in full.
+//! the journal, so a batch that was refused in full is a different public
+//! statement from one that was applied in full.
 //!
-//! Two things are *not* rejections. A malformed batch — a stream that ends
+//! Two things are *not* rejections. A malformed batch — an input that ends
 //! inside the header or inside a record, a fee outside `0..=1000`, more ops than
 //! the format allows — is a statement with no batch in it, so it panics, which
-//! fails the execution loudly and prints where on fd 2. And a constant product
+//! fails the execution and publishes nothing further. And a constant product
 //! that *fell* across a swap is a bug in this file rather than a property of the
 //! input, so it panics too; see [`accept_swap`].
 //!
@@ -59,13 +59,23 @@
 //! the full 256-bit product. A seed with either reserve empty mints nothing, and
 //! a pool with no shares refuses every op, because every price in here is a
 //! ratio against a reserve and every claim a ratio against the share count.
-//! A pool cannot be conjured out of nothing: fd 0 seeds it or nothing does.
+//! A pool cannot be conjured out of nothing: the public input seeds it or
+//! nothing does.
 //!
-//! # fd 0, the public input
+//! # The public input
 //!
 //! A 56-byte header, then `n_ops` records of 36 bytes. Every integer is
 //! little-endian, and a record's `u128` fields are not 16-aligned — everything
 //! goes through a byte copy, which has no alignment requirement of its own.
+//!
+//! **The whole batch is the statement's own input, and the window is what caps
+//! it.** A public input holds 1,020 bytes (`docs/spec/public-values.md` §3), so
+//! 56 bytes of header leave room for [`MAX_OPS`] records and no more. The batch
+//! could have gone in advice, where there is no such bound — and it is not
+//! there, because nothing binds advice: a journal computed from an advised
+//! batch is a statement about a batch the prover chose. Per-op cost is what
+//! makes this guest a wide-arithmetic fixture, and a swap is tens of thousands
+//! of instructions, so 26 of them is a long run either way.
 //!
 //! ```text
 //! header    0..16    reserve_x       u128
@@ -73,7 +83,7 @@
 //!          32..48    total_shares    u128; zero means an unclaimed seed
 //!          48..52    fee_bps         u32; basis points off every swap input,
 //!                                    at most 1000
-//!          52..56    n_ops           u32; at most 64
+//!          52..56    n_ops           u32; at most 26
 //!
 //! record    0..4     kind            u32; 0..=4, see below
 //!           4..20    amount          u128
@@ -95,9 +105,9 @@
 //! Anything else is an op this pool does not have and is rejected like any
 //! other, rather than voiding the batch.
 //!
-//! # fd 1, the public output
+//! # The journal
 //!
-//! 104 bytes, written once at the end:
+//! 104 bytes, committed once at the end:
 //!
 //! ```text
 //!           0..16    reserve_x       u128
@@ -110,15 +120,15 @@
 //!         100..104   rejected        u32
 //! ```
 //!
-//! # fd 3, and why it is empty
+//! # The advice, and why there is none
 //!
-//! Unused, and deliberately so. A hint is a shortcut to a value the guest then
-//! checks against something fd 0 binds, and it earns its keep when the value is
-//! expensive to derive and cheap to verify. Nothing here is either: every
-//! quantity this guest commits is a short, total, deterministic function of the
-//! header and the records — there is no search, no witness, and no root to
-//! open — so advice could only ever restate work the guest has to do anyway in
-//! order to check it.
+//! Unused, and deliberately so. Advice is a shortcut to a value the guest then
+//! checks against something the public input binds, and it earns its keep when
+//! the value is expensive to derive and cheap to verify. Nothing here is
+//! either: every quantity this guest commits is a short, total, deterministic
+//! function of the header and the records — there is no search, no witness, and
+//! no root to open — so advice could only ever restate work the guest has to do
+//! anyway in order to check it.
 //!
 //! # One thing to expect in the artifact
 //!
@@ -131,15 +141,21 @@
 //! the middle of the function — the only one in the image. It is expected, and
 //! no pc reaches it.
 
+use constants::guest_memory;
+
 guest_sdk::entry!(main);
 
 // ---------------------------------------------------------------------------
 // The format's bounds
 // ---------------------------------------------------------------------------
 
-/// The largest batch the format allows. It bounds the loop and nothing else:
-/// records are read one at a time, so no buffer is sized by it.
-const MAX_OPS: u32 = 64;
+/// The largest batch the format allows: as many 36-byte records as fit in a
+/// public input window beside the 56-byte header.
+///
+/// Records are read one at a time, so no buffer is sized by it — what it bounds
+/// is the input, and through the input the loop.
+const MAX_OPS: u32 =
+    ((guest_memory::PUBLIC_PAYLOAD_BYTES as usize - HEADER_LEN) / RECORD_LEN) as u32;
 
 /// The largest fee the format allows, in basis points — ten per cent.
 const MAX_FEE_BPS: u32 = 1_000;
@@ -355,7 +371,7 @@ fn is_empty(pool: Pool) -> bool {
     pool.x == 0 || pool.y == 0 || pool.shares == 0
 }
 
-/// The five ops, as fd 0 spells them.
+/// The five ops, as the public input spells them.
 #[derive(Clone, Copy)]
 #[repr(u32)]
 enum Kind {
@@ -370,9 +386,9 @@ impl Kind {
     /// Decode a record's tag, or refuse it.
     ///
     /// The refusal is the dispatch's explicit default, and it is a rejection
-    /// rather than a panic: fd 0 is public but not well formed by assumption,
-    /// and an op this pool does not have is a request it declines, not a
-    /// statement it cannot parse.
+    /// rather than a panic: the public input is known to the verifier but not
+    /// well formed by assumption, and an op this pool does not have is a
+    /// request it declines, not a statement it cannot parse.
     fn decode(tag: u32) -> Option<Kind> {
         match tag {
             0 => Some(Kind::SwapXForY),
@@ -614,11 +630,12 @@ fn settle(pool: Pool, fee_bps: u32, op: &Op) -> Option<Effect> {
 // ---------------------------------------------------------------------------
 
 fn main() {
+    let input = guest_sdk::public_input();
+    let mut at = 0;
     let mut header = [0u8; HEADER_LEN];
-    assert_eq!(
-        guest_sdk::read_stdin(&mut header),
-        HEADER_LEN,
-        "amm: fd 0 ended inside the header"
+    assert!(
+        take(input, &mut at, &mut header),
+        "amm: the public input ended inside the header"
     );
     let (mut pool, fee_bps, n_ops) = decode_header(&header);
     assert!(
@@ -632,7 +649,6 @@ fn main() {
     if pool.shares == 0 {
         let (hi, lo) = mul_u256(pool.x, pool.y);
         pool.shares = sqrt_u256(hi, lo);
-        guest_sdk::log(b"amm: minted sqrt(x*y) against the seed\n");
     }
 
     let mut fees_x: u128 = 0;
@@ -645,10 +661,9 @@ fn main() {
     // each op is priced against what the ops before it left behind.
     for _ in 0..n_ops {
         let mut record = [0u8; RECORD_LEN];
-        assert_eq!(
-            guest_sdk::read_stdin(&mut record),
-            RECORD_LEN,
-            "amm: fd 0 ended inside an op record"
+        assert!(
+            take(input, &mut at, &mut record),
+            "amm: the public input ended inside an op record"
         );
         let op = decode_op(&record);
 
@@ -677,25 +692,43 @@ fn main() {
     }
 
     let mut out = [0u8; OUTPUT_LEN];
-    let mut at = 0;
-    put_u128(&mut out, &mut at, pool.x);
-    put_u128(&mut out, &mut at, pool.y);
-    put_u128(&mut out, &mut at, pool.shares);
-    put_u128(&mut out, &mut at, fees_x);
-    put_u128(&mut out, &mut at, fees_y);
-    put_u128(&mut out, &mut at, last_quote);
-    put_u32(&mut out, &mut at, applied);
-    put_u32(&mut out, &mut at, rejected);
+    let mut written = 0;
+    put_u128(&mut out, &mut written, pool.x);
+    put_u128(&mut out, &mut written, pool.y);
+    put_u128(&mut out, &mut written, pool.shares);
+    put_u128(&mut out, &mut written, fees_x);
+    put_u128(&mut out, &mut written, fees_y);
+    put_u128(&mut out, &mut written, last_quote);
+    put_u32(&mut out, &mut written, applied);
+    put_u32(&mut out, &mut written, rejected);
     assert_eq!(
-        at, OUTPUT_LEN,
+        written, OUTPUT_LEN,
         "amm: the journal is not the declared length"
     );
-    guest_sdk::write_stdout(&out);
+    guest_sdk::commit(&out);
 }
 
 // ---------------------------------------------------------------------------
-// fd 0 in, fd 1 out
+// The public input in, the journal out
 // ---------------------------------------------------------------------------
+
+/// Copy the next `buf.len()` bytes of `input` into `buf` and advance `at`.
+///
+/// `false` when there are not that many left, which every caller treats as a
+/// malformed statement: the count in the header already said how many records
+/// there are, and proceeding on a partly-filled buffer would settle a batch
+/// against zeros.
+fn take(input: &[u8], at: &mut usize, buf: &mut [u8]) -> bool {
+    let Some(end) = at.checked_add(buf.len()) else {
+        return false;
+    };
+    if end > input.len() {
+        return false;
+    }
+    buf.copy_from_slice(&input[*at..end]);
+    *at = end;
+    true
+}
 
 /// The header, in its declared order.
 fn decode_header(b: &[u8; HEADER_LEN]) -> (Pool, u32, u32) {
@@ -738,7 +771,7 @@ fn get_u32(b: &[u8], at: usize) -> u32 {
 /// Append a little-endian `u128` to the journal and advance the cursor.
 ///
 /// The cursor is carried rather than the offsets being written out, because
-/// fd 1's layout is six fields of one width followed by two of another and a
+/// the journal's layout is six fields of one width followed by two of another and a
 /// transposed pair of hand-written offsets is precisely the mistake a verifier
 /// cannot see. `main` checks the cursor against the declared length at the end.
 fn put_u128(b: &mut [u8], at: &mut usize, v: u128) {

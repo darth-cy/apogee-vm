@@ -244,7 +244,7 @@ pub const FAMILY_NAMES: [&str; 7] = [
 use transcript::Transcript;
 
 /// Every family's height: the init families' `h`, and tall enough for every
-/// instruction table of every committed guest but `consistency`.
+/// instruction table of every committed guest but `mod-mul-ops`.
 pub const HEIGHT: u32 = 1 << 16;
 
 /// The guests, each on the input `crates/emulator/tests/common` runs it on:
@@ -287,8 +287,7 @@ pub fn traced_exiting(name: &str, input: u32, status: i32) -> Traced {
 ///
 /// A decoded table's row `i` is pc `2i`, so a guest whose `.text` outgrows
 /// `2·HEIGHT` needs a taller one: `guests/mod-mul-ops` reaches pc `0x2161a` and
-/// takes `2^18`. It is the second committed guest to need that, `consistency`
-/// being the first (`crates/program/tests/partition.rs`).
+/// takes `2^18`. It is the only committed guest that needs one.
 pub fn traced_exiting_at(name: &str, input: u32, status: i32, height: u32) -> Traced {
     let path = format!(
         "{}/../loader/tests/vectors/{name}.elf",
@@ -302,14 +301,12 @@ pub fn traced_exiting_at(name: &str, input: u32, status: i32, height: u32) -> Tr
     };
     let (tables, config) =
         decode_program(&image, &params).unwrap_or_else(|e| panic!("{name}: {e}"));
-    // Every committed guest this helper traces reads fd 0, the compatibility
-    // path; its public input window stays empty, which a statement carries as
-    // an empty `input` (`docs/spec/public-values.md` §1).
+    // The guests this helper traces read their argument out of the public
+    // input window (`docs/spec/public-values.md` §2), so the statement carries
+    // it and the proof binds it.
     let io = GuestIo {
-        input: Vec::new(),
+        input: input.to_le_bytes().to_vec(),
         advice: Vec::new(),
-        stdin: input.to_le_bytes().to_vec(),
-        hint: Vec::new(),
     };
     let (traces, log, profile, execution) =
         trace_run(&image, &io, &tables, &config).unwrap_or_else(|e| panic!("{name}: {e}"));

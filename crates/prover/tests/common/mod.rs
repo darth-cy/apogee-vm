@@ -320,10 +320,8 @@ pub fn public_io_journal(advice: &[u8]) -> Vec<u8> {
 /// the public input that advice checks against.
 pub fn public_io_archive(program: &Program, advice: &[u8]) -> TraceArchive {
     let io = GuestIo {
-        stdin: Vec::new(),
         input: public_io_input(advice),
         advice: advice.to_vec(),
-        hint: Vec::new(),
     };
     let (traces, log, profile, execution) =
         trace_run(&program.image, &io, &program.tables, &program.config).expect("the guest traces");
@@ -399,10 +397,8 @@ pub fn mod_mul_archive(program: &Program) -> TraceArchive {
 /// A run with no input and no hint, which must exit with `status`.
 pub fn trace(program: &Program, status: u32) -> TraceArchive {
     let io = GuestIo {
-        stdin: Vec::new(),
         input: Vec::new(),
         advice: Vec::new(),
-        hint: Vec::new(),
     };
     let (traces, log, profile, execution) =
         trace_run(&program.image, &io, &program.tables, &program.config).expect("the guest traces");

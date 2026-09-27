@@ -62,13 +62,12 @@ use verifier::VerifyError;
 /// inserted rather than appended would move every one of these silently, which
 /// is what `the_slot_constants_are_the_frames` below exists to catch. It runs
 /// in ordinary CI, unlike every proof test in this file.
-const WIDTH: usize = 8;
+const WIDTH: usize = 5;
 const PC: usize = 0;
 const RS1: usize = 1;
 const RS2: usize = 2;
-const RAM: usize = 5;
-const RD: usize = 6;
-const DELEG: usize = 7;
+const RD: usize = 3;
+const DELEG: usize = 4;
 
 /// The slot constants above against the frozen frame, and the witness columns
 /// they index against the circuit's own names. No proof, so this is the one
@@ -82,7 +81,6 @@ fn the_slot_constants_are_the_frames() {
         (PC, m::PC),
         (RS1, m::RS1),
         (RS2, m::RS2),
-        (RAM, m::RAM),
         (RD, m::RD),
         (DELEG, m::DELEG),
     ] {
@@ -410,14 +408,12 @@ fn the_targets_s14_left_to_s16_are_refused() {
     forgery.push(cell(ADD, gap_hi(RD), 5, Fr::ZERO));
     h.assert_rejects(&tamper(forgery), (ADD, 0), CONSTRAINT);
 
-    // C8, third: the exit row storing 7 into the top stack word, never
-    // written before.
-    let store = vec![
-        cell(ADD, frame(RAM, FIELD_MASK), 28, Fr::ONE),
-        cell(ADD, frame(RAM, FIELD_ADDR), 28, f(0x7fff_fffc)),
-        cell(ADD, frame(RAM, FIELD_WRITE_VALUE), 28, f(7)),
-    ];
-    h.assert_rejects(&tamper(store), (ADD, 0), CONSTRAINT);
+    // C8's third forgery — the exit row storing 7 into the top stack word,
+    // never written before — is **unrepresentable** and so is not tried. It
+    // wrote through the frame's `ram` query, which the family lost with the
+    // `read`/`write` ecalls: no instruction routed here touches memory, and
+    // the transfer rows that once brought a RAM query with them are gone. A
+    // forgery with no column to live in is a stronger refusal than a gate.
 
     // The exit rewriting a0.
     h.assert_rejects(
@@ -837,7 +833,7 @@ fn s21_a5_a6_the_delegation_witness_and_the_anchor_are_pinned() {
     );
     assert_eq!(
         delegation::ANCHOR_DELTA,
-        constraints::memory::FRAME_DELTA[DELEG],
+        constraints::memory::FRAME_DELTA[constraints::memory::DELEG],
         "the anchor's slot is the mirror query's"
     );
 
@@ -1044,7 +1040,7 @@ fn s23_a5_a6_the_recursion_witnesses_and_anchors_are_pinned() {
     };
     assert_eq!(
         delegation::ANCHOR_DELTA,
-        constraints::memory::FRAME_DELTA[DELEG],
+        constraints::memory::FRAME_DELTA[constraints::memory::DELEG],
         "the anchor's slot is the mirror query's"
     );
     for (family, live, anchor_value, tag) in [
@@ -1260,7 +1256,7 @@ fn s26_the_mod_mul_witness_and_anchor_are_pinned() {
     };
     assert_eq!(
         delegation::ANCHOR_DELTA,
-        constraints::memory::FRAME_DELTA[DELEG],
+        constraints::memory::FRAME_DELTA[constraints::memory::DELEG],
         "the anchor's slot is the mirror query's"
     );
     let tag = constants::address_space::DELEGATION_MOD_MUL;

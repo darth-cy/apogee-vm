@@ -66,8 +66,8 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
 /// `ADD_SUB_LUI_AUIPC` shard; `verify_shard` accepts both against one
 /// statement; and every proof has its circuit's shape — its round counts, its
 /// claim counts, and a byte length that is a function of the key and the family
-/// alone. (QEMU's reading of the same guest is
-/// `crates/emulator/tests/qemu_outputs.rs`'s, where `addsub` is in the suite:
+/// alone. (The emulator's reading of the same guest is
+/// `crates/emulator/tests/guests.rs`':
 /// the exit status and fd 1, and nothing below that.)
 #[test]
 #[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
@@ -98,9 +98,19 @@ fn a1_the_tiny_guest_proves_and_both_shards_verify() {
         }),
         Ok(())
     );
+    // One entry per config family, in the config's order — which is ascending
+    // `FamilyId`, so S-IO's three follow the two window families. Only `ADD`
+    // owns cycles here (`trace::plan_shards`).
     assert_eq!(
         archive.cycle_profile().counts,
-        vec![(ADD, 29), (INIT, 0), (family::ZERO_WINDOWS, 0)]
+        vec![
+            (ADD, 29),
+            (INIT, 0),
+            (family::ZERO_WINDOWS, 0),
+            (family::PUBLIC_INPUT, 0),
+            (family::PUBLIC_OUTPUT, 0),
+            (family::ADVICE_WINDOWS, 0),
+        ]
     );
 
     // S-IO: the two public value families are in every config and prove one

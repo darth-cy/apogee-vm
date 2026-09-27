@@ -26,46 +26,42 @@ use test_support::{sha256, to_hex};
 /// The synthetic ELFs are not listed one by one: `synthetic_elfs.txt` carries
 /// their digests and is itself pinned here, so the chain is one constant long
 /// either way and the index stays readable.
-pub const PINS: [(&str, &str); 24] = [
+pub const PINS: [(&str, &str); 23] = [
     (
         "fib.elf",
-        "110a004f6f9d615506a63f6d85d9b2600d33b5c2c80af5f6c32fe90a6e2228fe",
+        "cdc30b5bb6adb6025213871b5fa939cf3b0a01e2392ddd1b68b2d971084287a7",
     ),
     (
         "echo.elf",
-        "42930358224d45142d7c6e035ab33124c9c2b34134731997dc3bf178a9f23d8f",
+        "14353bb83c00dbc56347196b952e99a41067d64d0356bc2d140f263fb398b28a",
     ),
     (
         "rvc-dense.elf",
-        "a8f608f6a25d1b4411b5b170f181761ae52aa28a979e2e2c74018321465352cc",
+        "3818bdad9a78b1d44fa6fd9104532d6d3fc1fc3d6c4210f8eeda67ef2f29c420",
     ),
     (
         "amm.elf",
-        "fcc40a7cb1716774b12bdaf75c4269d68000c8de9d56fc9610ae1bdb9ee1d8e8",
+        "ba7de08297bb8b5108a2527440d7a22b1684355c846eb4f5749cd6190bfb6c3a",
     ),
     (
         "orderbook.elf",
-        "5fa9a0fc6e3a3c383211c59b771576d5d99eb262ce797aa6dab1a0978381440b",
+        "19fb3b7e4540b0aae90cc6cec53bdcac87db7ca2632ec91755fa486abe6648f1",
     ),
     (
         "vault.elf",
-        "ee39551bcfcde0a4d16d012ab30f7b3db8c082927aa79e8244647b64bbbb634e",
+        "3448255854c9612a0e59680585487f2e782d96d0fcbad73d9c431a24437ceb72",
     ),
     (
         "atomics.elf",
-        "5513d253e4db8fbb217073ccbaff450d0f4a50e2673cdd414727e6327fd5288b",
+        "78a8c83c660becd0fe86405b6f9d42e7bce73151e9cf7eb0c59b1c1cb934a069",
     ),
     (
         "opcodes.elf",
-        "520bb1988095b581e1e17898ca46c07fc6fc74e7ce177d576ec4c4ae9ea5acc3",
+        "b56f1379a7260ad3460ace802d09b3278e1269db144048ddaf5e71e582dc7502",
     ),
     (
         "heap.elf",
-        "a780b55f22ed648fc3e0a4faf05e3f7af687543de187a8c4c0acae50a4e397b5",
-    ),
-    (
-        "consistency.elf",
-        "e06a8f3431924e1470c86e9be14d098248339af75e026f24a8e2bc21b5b4df74",
+        "70b1729a42b95e9a64f28291eab80868e132131de804581bbedfd16f4ca2b431",
     ),
     (
         "addsub.elf",
@@ -85,19 +81,19 @@ pub const PINS: [(&str, &str); 24] = [
     ),
     (
         "fib.objdump.txt",
-        "94b517b8585b5b8a44115bb918b33a5f75c871659798a89c8f27e4bc9700e060",
+        "30be346529d47abb3739bb8140cbaee539f98091eec257e88297dedb90eaae7f",
     ),
     (
         "rvc-dense.objdump.txt",
-        "5c5a319f34472c7c52fd16ec94de24a9a3f58083fba6b72f65bedfa92dd7b812",
+        "fcb4f055fd0ce17e544d9b6d7ada4965fb4a0146efa3d1ac90daeb0a4c7020f3",
     ),
     (
         "amm.objdump.txt",
-        "9ca5e5ab996910382a4fd9838d8105a3fae0e172e66da3ede6b1d2e265ead124",
+        "ef8d923229aa9a9578d7d153ef640d254eae06985dbe8da632f9fab39dc0602b",
     ),
     (
         "rvc-dense.nm.txt",
-        "80d307baa758172d3126ab6ff38b78e3cf1ded52f1fba1940f98e495aa1a4ee5",
+        "6ac86268873ee7b8040377edc34673a54608faf08c62c59c9351896ccf6da3e0",
     ),
     (
         "shards.elf",
@@ -105,23 +101,23 @@ pub const PINS: [(&str, &str); 24] = [
     ),
     (
         "keccak-test.elf",
-        "2bae76b84db83cd467be56e7615d9c971e6e3b5679002fb7194dc305a88a971e",
+        "72128c0e2dd863368d19f2ea07b2f215323b6a96583ef30fdee86aaca80080f0",
     ),
     (
         "keccak-unused.elf",
-        "c47db58280ab8ab1132a39786f3ad11fca1b4cd3293a00f1218ff96aa20c803d",
+        "3afedf41f7f512dcf81cb2639abcad1c0ad1981167385f99bcac599ba54ca65d",
     ),
     (
         "recursion-ops.elf",
-        "f6958d7a9f9d10710dcfbeb6748d05b6be55dc14f29a25b49087b8b4f9751c20",
+        "010d7acc02885a963eb12528544bcd8c5bf2f48e6a436a2e56664496b24170d8",
     ),
     (
         "recursion-unused.elf",
-        "cb26d3481ba3d5bb8bf2301b6fdda242d4f66b3170db95a71c22fa775116d2a3",
+        "1d60f616c7c54e7c1b3902870fd46553038f4881b06343ff1625634cf1607ce1",
     ),
     (
         "public-io.elf",
-        "ae501a6dc95058189d8a57ddffb325492d1368c68daf868268830e70c652e6eb",
+        "d4594d1bb54aab5e24b638dd47a8f6b813abecbceed52581712ccb0785c65ee8",
     ),
 ];
 
@@ -285,14 +281,15 @@ pub fn build(name: &str, slot: &str) -> Vec<u8> {
 ///
 /// `guests/Cargo.toml` pins dev and release to the same *semantics* -- release
 /// keeps `overflow-checks` and `debug-assertions` on -- so every test that
-/// witnesses behaviour must give the same answer under either. CI runs
-/// `tests/qemu.rs` twice, once per profile, which is what holds that pin
-/// honest: unpinned, a release guest commits a wrapped `u32` on fd 1 where a
-/// dev guest panics.
+/// witnesses behaviour must give the same answer under either. That is what
+/// holds the pin
+/// honest: unpinned, a release guest commits a wrapped `u32` to its journal
+/// where a dev guest panics, which would make the optimisation level part of
+/// the statement being proven. `crates/prover/tests/one_feature.rs` is what
+/// asserts the pin itself.
 ///
-/// Only the QEMU suite reads this. `layout.rs` and `reproducible.rs` stay on
-/// debug deliberately -- they are about the committed artifacts, which are dev
-/// builds.
+/// `layout.rs` and `reproducible.rs` stay on debug deliberately -- they are
+/// about the committed artifacts, which are dev builds.
 pub fn profile() -> String {
     std::env::var("APOGEE_GUEST_PROFILE").unwrap_or_else(|_| "debug".into())
 }

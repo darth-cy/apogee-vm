@@ -4,6 +4,11 @@
 The guest-side runtime: the crt0 stub, the `entry!` macro, the linker script, a bump
 allocator, a panic handler, and the ecall shims. Everything here runs *inside* the proof.
 
+**An Apogee guest is an Apogee-SDK program, not a generic Linux/POSIX RISC-V
+executable.** It has no file descriptors, no streams and no I/O syscall, and there is
+nothing left to build one out of. The supported interface is **public input / advice /
+public output**, all three of them *memory*, reached with ordinary loads and stores.
+
 ```rust
 guest_sdk::entry!(main);                       // gives a function the `main` symbol
 
@@ -15,17 +20,18 @@ pub fn journal() -> &'static [u8];             // the journal so far
 pub fn advice() -> &'static [u8];              // the advice region; nothing binds it
 pub fn exit(code: i32) -> !;                   // publishes nothing
 
-// The fd path: POSIX compatibility, and NOT provable.
-pub fn read_stdin(buf: &mut [u8]) -> usize;    // fd 0
-pub fn write_stdout(bytes: &[u8]);             // fd 1
-pub fn hint(buf: &mut [u8]) -> usize;          // fd 3, prover advice
-pub fn log(bytes: &[u8]);                      // fd 2, verifier-ignored
-
 pub fn poseidon2_permute(state: &mut [u8; 96]) -> bool;   // false on -ENOSYS
 
 // S21, docs/spec/delegation.md §2. The signature is frozen; the path is not.
 pub fn keccak256(input: &[u8]) -> [u8; 32];
 ```
+
+That is the whole of it. `read_stdin`, `write_stdout`, `hint` and `log` are **deleted**,
+and with them the `Diagnostics` `fmt::Write` sink the panic handler used to print
+through. One raw shim survives, `ecall1`: every ecall a guest may now issue takes exactly
+one argument — `EXIT` a status, each delegation a frame base — so the three-argument
+`ecall3` the fd path needed went with it, and an unused `in(...)` register is still a
+constraint on the register allocator.
 
 `docs/spec/ecall-abi.md` is the normative document for the ecalls and
 **`docs/spec/public-values.md` for the public values and the advice**;
@@ -48,10 +54,15 @@ the crate layout, the I/O rules, the build, and exporting the result as a
 - **The ecall numbers live in `constants::ecall`, never here.** `crates/constants/tests/
   ecall_abi.rs` checks that this file references them and spells none of them itself.
 - **`keccak256`'s signature is the frozen surface, and both paths are behind it** (S21).
-  The shim tries the delegation ecall; on an executor without the circuit it answers
-  `-ENOSYS` and an in-guest software permutation runs instead. **The bytes are identical
-  either way** — that is acceptance 3, and `guests/keccak-test` checks its own six digests
-  under both executors. A guest never chooses the path and cannot tell which ran.
+  The shim tries the delegation ecall; an executor without the circuit answers `-ENOSYS`
+  and an in-guest software permutation runs instead. **The bytes are identical either
+  way**, and a guest never chooses the path and cannot tell which ran. The fallback is the
+  ABI's contract (`docs/spec/delegation.md` §2), not a path any executor in this repository
+  takes: this VM implements every delegation, and the second executor that used to exercise
+  the branch is gone. What holds the two implementations equal is
+  `crates/emulator/tests/keccak.rs`, which checks the emulator's permutation against
+  `tiny-keccak` on all 1,600 single-bit states, and `guests/keccak-test`, which checks its
+  own six digests in-guest.
 - **The declaration record is kept by reachability, not by `#[used]`** (S21). The static in
   `.rodata.apogee.delegations` is referenced by `delegation_number()` and by nothing else,
   so the linker keeps it exactly when the shim is linked and the preprocessor can see a
@@ -64,40 +75,56 @@ the crate layout, the I/O rules, the build, and exporting the result as a
 - **`link.ld` and its four symbols** — `__bss_start`, `__bss_end`, `__heap_start`,
   `__stack_top` — are frozen. `_start` sits in `.text._start` so the linker places it at
   `ORIGIN(RAM)`.
-- **The script must produce an image a *host* loader can map, not just one the zkVM can.**
-  The zkVM makes the whole RAM window addressable by construction; `qemu-riscv32` maps only
-  the `PT_LOAD`s the headers declare, page by page, at the declared permissions. So the
-  script reserves `__heap_start .. __stack_top` as one writable `NOBITS` segment reaching
-  the top of RAM — undeclared, the stack is unmapped and the first push faults — and
-  page-aligns `.text`, `.rodata`, `.data` and `.bss`, because two segments on one page take
-  the second mapping's permissions for all of it. Both rules were violated in the layout
-  S10 first shipped, and `crates/loader/tests/layout.rs` now pins them.
-  `docs/spec/ecall-abi.md` §7.1 is normative.
+- **The script declares every writable byte and page-aligns every segment, because that
+  is what a correct image looks like.** The script reserves `__heap_start .. __stack_top`
+  as one writable `NOBITS` segment reaching the top of RAM, and page-aligns `.text`,
+  `.rodata`, `.data` and `.bss`. An image whose stack is not in any `PT_LOAD` is an image
+  whose program headers are a lie about its own memory, and two segments sharing a page
+  cannot both keep their permissions — neither fact depends on who reads the headers. The
+  zkVM does not read them that way: it makes the whole RAM window addressable by
+  construction and is indifferent to both rules, which is exactly why they need a test of
+  their own rather than an executor to notice. Both were violated in the layout S10 first
+  shipped, and `crates/loader/tests/layout.rs` pins them — it parses the headers itself and
+  needs no compiler and no emulator. `docs/spec/ecall-abi.md` §7.1 is normative.
 - **Cargo does not track `link.ld` as a dependency.** Editing it and rebuilding relinks
   nothing; the stale binary is what you get. `cargo clean` first, or trust nothing.
 - **`.bss` is zeroed byte by byte**, because `__bss_end` carries no alignment promise, and
-  it is zeroed at all because the same binary must run under QEMU, where memory does not
-  start zeroed.
+  it is zeroed at all because `.bss` being zero is a guarantee the Rust above it relies on.
+  This VM's memory does start zeroed, so crt0's loop is redundant *on this executor* — and
+  that is the wrong place to put the guarantee. crt0 is the one thing that can make it true
+  of the **image** rather than of whatever runs it, and a `static mut` that is zero only by
+  the executor's grace is a guarantee nobody wrote down.
 - **Guests link with `--no-relax`.** Relaxation rewrites instruction sequences and shifts
   every later address; S11's program identity is a function of those addresses.
-- **The provable surface issues no ecall** (S-IO, `docs/spec/public-values.md` §7).
-  `public_input`, `read_input`, `commit`, `journal` and `advice` are plain volatile loads
-  and stores against the three regions of `constants::guest_memory`: the public input
-  window at `PUBLIC_INPUT_ORIGIN`, the journal at `PUBLIC_OUTPUT_ORIGIN`, the advice at
-  `ADVICE_ORIGIN`. Word 0 of each is the payload's byte length, and **every length this
-  module reads back out of memory is clamped to its region rather than trusted** — the
-  journal's is the guest's own bookkeeping and the advice region's is the prover's, and
-  neither is something the SDK put there. `read_stdin`, `write_stdout`, `hint` and `log`
-  are the fd path; they go through `read` (63) and `write` (64), and **neither of those is
-  a provable ecall**, so a guest that takes that path is one no proof covers. The path
-  exists because a guest built for a POSIX host runs under `qemu-riscv32`, and the executor
-  serves the same bytes on fd 0 that it lays out in the input window, so one source can be
-  compared under both executors.
+- **The I/O surface issues no ecall, and there is no other surface** (S-IO,
+  `docs/spec/public-values.md` §7). `public_input`, `read_input`, `commit`, `journal` and
+  `advice` are plain volatile loads and stores against the three regions of
+  `constants::guest_memory`: the public input window at `PUBLIC_INPUT_ORIGIN`, the journal
+  at `PUBLIC_OUTPUT_ORIGIN`, the advice at `ADVICE_ORIGIN`. Word 0 of each is the payload's
+  byte length, and **every length this module reads back out of memory is clamped to its
+  region rather than trusted** — the journal's is the guest's own bookkeeping and the
+  advice region's is the prover's, and neither is something the SDK put there. The fd path
+  that used to sit beside this one is gone: `read` (63) and `write` (64) were never
+  provable ecalls, so every guest that took it was a guest no proof covered, and a second
+  surface that quietly costs a program its proof is worse than no second surface. Every
+  guest in `guests/` that reads anything reads it from the public input window or from
+  advice, and every one that publishes anything publishes it with `commit`; the
+  self-checking family guests — `addsub`, `alu`, `shards` — read nothing and commit
+  nothing, and their exit status is the whole of what they say.
 - **`exit_with_public_words` is deleted.** S24 used it to leave eight words in `x24..x31`,
   where the register boundary made them public; that was the stopgap for having no journal,
   and the journal is what it stood in for. `exit` publishes **nothing**, so a guest that
   panics has still published what it committed — the journal is memory, and
   `#[panic_handler]` does not have to know about it.
+- **A panic is silent, and that is what makes a panicking guest provable.** The handler is
+  a bare `exit(EXIT_PANIC)` and writes nothing anywhere. It used to format the
+  `PanicInfo` into the `Diagnostics` sink and out on fd 2, through `write` — which is not a
+  provable ecall — so *every* panicking execution was one no proof could cover, whatever the
+  guest had done up to that point. Now the only bytes leaving an execution are
+  the journal, which a proof binds, and the exit status. Routing the message into the
+  journal instead would have been worse than losing it: it would break `exit` publishing
+  nothing, and a guest's last act before dying would rewrite what it had published
+  (`docs/spec/public-values.md` §7).
 - **`commit` exits `EXIT_IO_ERROR` rather than truncate**, because a caller reads `journal`
   back and must not see one it did not write. The length word is a plain store like the
   payload, so a partial `commit` is not a thing that can happen; and nothing orders the
@@ -110,18 +137,13 @@ the crate layout, the I/O rules, the build, and exporting the result as a
   repository one whole window at the window height to say that it has none. Asking for what
   was not handed over costs the prover its trace and nobody else anything
   (`docs/spec/public-values.md` §6).
-- **Under `qemu-riscv32` none of the three regions is mapped.** A host loader maps only the
-  image's `PT_LOAD` segments and none of them is in the ELF, so a guest using the provable
-  surface is out of the QEMU suites by construction, and a guest that must be in them uses
-  `read_stdin` and `write_stdout` and is not provable. `guests/revm-block` carries both
-  binaries for exactly that reason.
-- **`read_input`, `read_stdin` and `hint` may return short.** They fill the buffer or stop
-  at the end of what there is. A caller that needs an exact length must check the count —
-  silently proceeding on a partly-filled buffer is how a guest ends up proving something
-  about zeroes.
-- **Neither a hint nor advice binds anything.** The prover chooses fd 3's bytes and the
-  advice region's alike. A guest that lets either change what it commits, without checking
-  it against something a proof *does* bind — the public input, or a hash the public input
+- **`read_input` may return short.** It fills the buffer or stops at the end of what there
+  is. A caller that needs an exact length must check the count — silently proceeding on a
+  partly-filled buffer is how a guest ends up proving something about zeroes, and
+  `guests/fib` asserts the count for exactly that reason.
+- **Advice binds nothing.** The prover chooses those bytes and may choose them differently
+  on every run. A guest that lets them change what it commits, without checking them
+  against something a proof *does* bind — the public input, or a hash the public input
   carries — has published a value the prover chose. The obligation is the guest's and the
   VM cannot discharge it.
 - **The heap never meets the stack.** The allocator refuses a block — `exit(71)`, never a
@@ -129,11 +151,13 @@ the crate layout, the I/O rules, the build, and exporting the result as a
   8 MiB) or above the live `sp`, which it reads with one `mv` from inside `alloc`.
   The ceiling used to be `__stack_top` itself, so an exhausted heap handed out blocks
   over live frames, and safe code writing into a `Vec` rewrote the caller's locals and
-  return addresses. The consistency suite found that by running a guest's source on the
-  host and comparing the two runs. `guests/consistency`'s two heap probes pin each half
-  of the rule, and each half fails its probe when it is removed. `link.ld` is untouched:
-  the reserve is the allocator's policy, not a linker symbol. Still unguarded: a stack
-  that grows past its reserve after the heap has filled the space below it.
+  return addresses. What found that at S12 was the three-way consistency suite, running
+  one guest's source on the host and on RV32 and comparing; **that suite and the two heap
+  probes that pinned each half of the rule went with `guests/consistency`**, so the rule is
+  now asserted here and exercised nowhere — `guests/heap` churns the allocator but never
+  reaches the ceiling. `link.ld` is untouched: the reserve is the allocator's policy, not a
+  linker symbol. Still unguarded, and always was: a stack that grows past its reserve after
+  the heap has filled the space below it.
 
 ## `entry!` is a `macro_rules!`, not `#[entry]`
 The stage prompt names an `#[entry]` attribute macro. An attribute macro requires a
@@ -176,9 +200,11 @@ impl ModMulFrame {
   the delegation saves. Five `const` assertions pin the word layout its array literal spells
   out, so a renumbering fails the build rather than transposing the operands.
 - **The frames are word-aligned by their types.** A bare `[u8; N]` has alignment 1 and a
-  stack local's address is the code generator's, so a misaligned base would be a guest that
-  is correct under `qemu-riscv32` — which answers `-ENOSYS` and never dereferences the
-  pointer — and fatally `Misaligned` under this VM. `guest_sdk::poseidon2_permute` keeps its
+  stack local's address is the code generator's to choose — LLVM puts align-1 stack objects
+  at odd offsets whenever the frame packs that way, at every optimisation level — so an
+  unaligned buffer would be a guest killed by `EmuError::Misaligned` for where codegen
+  happened to put a local. The alignment is therefore the type's promise and not a
+  caller's. `guest_sdk::poseidon2_permute` keeps its
   S10 `&mut [u8; 96]` signature and copies through an aligned frame; a caller that wants the
   copies gone passes a `Poseidon2Frame` of its own, which is what `transcript` does.
 - **Each declaration record has a `#[link_section]` of its own.** The linker's garbage

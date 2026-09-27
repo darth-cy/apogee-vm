@@ -1855,7 +1855,8 @@ fn a_misaligned_atomic_is_unprovable() {
 /// success code of 0 and a store of `rs2`. A row claiming failure — `rd = 1`
 /// and the word left alone — is refused, which is what makes the deviation a
 /// property of the proved statement rather than a hole in it. Real RISC-V
-/// leaves the outcome to the reservation set, and `qemu-riscv32` keeps one, so
+/// leaves the outcome to the reservation set, and a machine that keeps one may
+/// fail it, so
 /// a guest that branched on it could see a failure there and success here. That
 /// is the conformance deviation and nothing compares it: what would catch it if
 /// it mattered is a guest whose committed output depended on spurious failure,

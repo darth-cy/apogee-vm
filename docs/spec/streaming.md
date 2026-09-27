@@ -102,10 +102,11 @@ A shard's rows are `[index·h, min((index+1)·h, len))` of its family's buffer �
 cut directly: it appends rows to one partial buffer per family and, **the moment
 a buffer reaches that family's height**, hands the buffer over as a
 `ShardChunk` and starts a fresh one. So a partial buffer never holds more than
-`height − 1` rows at a record boundary and a chunk never has to be split, which
-matters because one instruction can commit many cycles — a `read` or `write`
-ecall commits one *transfer cycle* per word it moves
-(`docs/spec/execution-trace.md` §6).
+`height − 1` rows at a record boundary and a chunk never has to be split. Every
+record appends at most one row to any one family's buffer — a cycle to the family
+whose table claims its pc, and a delegation request one more to the family it
+invokes — so a buffer can reach its height but never overshoot it
+(`docs/spec/execution-trace.md` §8).
 
 The tail is the partial buffers at exit, each the family's last short shard.
 

@@ -4,23 +4,21 @@
 //! checked in-guest against values the same two crates compute on the host.
 //!
 //! It is the fixture for both delegation families
-//! (`docs/spec/delegation.md` §12 and §13), and it is the same binary under
-//! both executors. Under `crates/emulator` every `Fr` multiply, add and
-//! inverse becomes an `FR_ARITH` invocation and the permutation a `POSEIDON2`
-//! one; under `qemu-riscv32` the same ecalls answer `-ENOSYS` and the software
-//! paths inside `field` and `transcript` run instead. **The values are the
-//! same either way** — they are the same code — which is what acceptances 1
-//! and 2 ask of the fallback.
+//! (`docs/spec/delegation.md` §12 and §13). Under `crates/emulator` every `Fr`
+//! multiply, add and inverse becomes an `FR_ARITH` invocation and the
+//! permutation a `POSEIDON2` one; on an executor with no circuit the same
+//! ecalls answer `-ENOSYS` and the software paths inside `field` and
+//! `transcript` run instead. **The values are the same either way** — they are
+//! the same code — which is what acceptances 1 and 2 ask of the fallback.
 //!
 //! It calls no shim by name. That is the point: `S26`'s verifier guest will
 //! write ordinary `Fr` arithmetic, and this guest is the evidence that
 //! ordinary `Fr` arithmetic is what the delegations accelerate.
 //!
-//! # fd 0, fd 1, fd 2, fd 3
+//! # Input, advice and the journal
 //!
-//! Unused. The guest reads nothing and writes nothing: `EXIT` and the two
-//! delegation calls are its only ecalls, so a `write` would make the fixture
-//! unprovable.
+//! Unused. The guest reads nothing and commits nothing: `EXIT` and the two
+//! delegation calls are its only ecalls, and its answer is its exit status.
 //!
 //! # The result
 //!

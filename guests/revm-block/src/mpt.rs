@@ -216,8 +216,8 @@ fn long(bytes: &[u8], width: usize, list: bool) -> Result<(Item<'_>, &[u8]), Mpt
     // the range has to be *computed* before `get` ever sees it, and on the
     // guest `usize` is four bytes with `overflow-checks` pinned on in both
     // profiles -- so `bb ff ff ff ff` panicked here rather than returning
-    // `Malformed`. A panicking guest writes to fd 2, which is not provable, so
-    // that run is one no proof can cover; it is the rule `Bytecode::new_raw` is
+    // `Malformed`. A panicking guest exits 101 and publishes no journal, so that
+    // run says nothing about the block; it is the rule `Bytecode::new_raw` is
     // already held to. The node is advice and reaches this line *before*
     // `check_root`, so the bytes are the prover's to choose.
     let end = at.checked_add(len).ok_or(MptError::Malformed)?;

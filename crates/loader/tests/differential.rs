@@ -268,7 +268,7 @@ fn committed_fixtures_match_their_pins() {
     );
     assert_eq!(
         common::digest("fib_io.txt"),
-        "7a8ba676b87ec976f4206cc58874c7a439bb903502f4ab7ea228df72e3e4dca2",
+        "5cba0ad4b4c9006919f6fb5cb8d24412e3eab2b0ffc234b47dc7d46282090070",
         "the fib public-I/O record has changed"
     );
 }

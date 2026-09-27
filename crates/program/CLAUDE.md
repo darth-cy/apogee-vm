@@ -165,15 +165,15 @@ something to ignore.
   atomics table would hold atomics at or below pc `0x1fffc` only, which is what the
   defaults gave until S19. A row above a *shorter*
   family's height is simply outside that table -- padding there -- so a program's code
-  may reach past every table but its own family's. Every committed guest's code ends
-  below `0x1c990` — `orderbook`'s is the highest — **except `consistency`**, which is
-  1.7 MB of it with an `Arc` inside: its atomics run up to pc `0x18e62a`, and until S19
-  the frozen defaults gave atomics 2^16 rows and refused that guest, which then took a
-  uniform 2^20 — the height its file bytes, ending at `0x1efea0`, need for window 0 too.
-  **S19 raised `DEFAULT_HEIGHTS[ATOMICS]` to 2^20**, the timestamp channel's floor, with
-  the circuit that needs it (`docs/spec/memory-ops.md` §7.1), so every committed guest now
-  preprocesses at the defaults and `TableTooShort` keeps a test of its own against an
-  explicit 2^16. Whether heights should be per family at all is an open question in
+  may reach past every table but its own family's. **S19 raised
+  `DEFAULT_HEIGHTS[ATOMICS]` to 2^20**, the timestamp channel's floor, with the circuit
+  that needs it (`docs/spec/memory-ops.md` §7.1), so every committed guest preprocesses at
+  the defaults and `TableTooShort` keeps a test of its own against an explicit 2^16. What
+  made that raise visible before the circuit demanded it was `guests/consistency` — 1.7 MB
+  of code with an `Arc` inside, its atomics running up to pc `0x18e62a`, which the frozen
+  2^16 default refused outright. That guest went with the POSIX layer, and the floor it
+  exposed did not: the bound is `lookup_channel::BITS[TIMESTAMP]`, not any one program.
+  Whether heights should be per family at all is an open question in
   `docs/handoff/S12-emulator.md`; the suites here that are not *about* the heights take
   `common::fitting`, the smallest menu height the code fits.
 - **Fields**, in frozen column order `pc, next_pc, rs1, rs2, rd, imm, funct3,

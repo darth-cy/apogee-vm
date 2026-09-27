@@ -1423,39 +1423,45 @@ pub mod guest_memory {
     pub const ADVICE_WORDS: u32 = 1 << 29;
 }
 
-/// The guest ecall ABI: syscall numbers, range boundaries and file
-/// descriptors, in one place forever.
+/// The guest ecall ABI: the numbers and the range boundaries, in one place
+/// forever.
 ///
 /// **Append-only.** Once a program's identity is published its ABI is frozen.
 /// Redefining a number does not fail loudly — it quietly makes an old program
 /// compute something else — so numbers here are assigned once and never
-/// reused, exactly like `transcript_tags`.
+/// reused, exactly like `transcript_tags`. *Retiring* a number obeys the same
+/// rule from the other side: it is struck out and never reassigned. `READ`
+/// (63) and `WRITE` (64) were retired when the POSIX compatibility layer was
+/// deleted, and **63 and 64 are burned** — append-only forbids giving them a
+/// second meaning, not deleting a call nothing may issue.
 ///
-/// An ecall follows the Linux RISC-V convention: number in `a7`, arguments in
-/// `a0`-`a5`, return in `a0`, errors as the negated errno. The standard subset
-/// keeps its Linux numbers so `qemu-riscv32` runs guests unmodified; the two
-/// non-Linux ranges sit above every Linux number and are disjoint from each
-/// other. `docs/spec/ecall-abi.md` is the normative table.
+/// An ecall carries its number in `a7`, its arguments in `a0`-`a5` and its
+/// result in `a0`, with errors as a negated errno. **An Apogee guest is an
+/// Apogee-SDK program, not a Linux one**: it has no file descriptors, no
+/// streams and no I/O syscall at all. Its public input, its advice and its
+/// journal are *memory the proof system binds* — ordinary loads and stores
+/// against three fixed regions (`docs/spec/public-values.md`) — so the only
+/// ecalls a guest issues are [`EXIT`] and the delegation numbers below, which
+/// are exactly the provable ones. `docs/spec/ecall-abi.md` is the normative
+/// table.
 pub mod ecall {
-    /// Linux `read`. Its meaning is per file descriptor: see [`FD_STDIN`]
-    /// and [`FD_HINT`]. Not a provable ecall (`docs/spec/public-values.md` §1).
-    pub const READ: u32 = 63;
-
-    /// Linux `write`. zkVM meaning is per file descriptor: see
-    /// [`FD_STDOUT`] and [`FD_STDERR`]. Not a provable ecall either.
-    pub const WRITE: u32 = 64;
-
-    /// Linux `exit`. `a0` is the exit status; a nonzero status is a failed
-    /// execution.
+    /// Terminate. `a0` is the exit status; a nonzero status is a failed
+    /// execution, which is still an execution and is reported rather than
+    /// refused.
+    ///
+    /// The only non-delegation ecall a guest may issue. Its number is 93
+    /// because that is what it has always been here, and append-only keeps it
+    /// there; nothing downstream reads any meaning into the value.
     pub const EXIT: u32 = 93;
 
     /// First number of the zkVM-specific host-call range, `0x0400..=0x04FF`.
     ///
-    /// Reserved and empty at S10. Calls here are **nondeterministic prover
-    /// advice**: whatever the host returns is a value the prover chose, and it
-    /// binds nothing unless it is folded into the public I/O digest. Kept
-    /// disjoint from [`PRECOMPILE_FIRST`] precisely so a reviewer can tell the
-    /// two apart at a glance.
+    /// **Reserved and empty, and it stays that way.** A call here would be
+    /// nondeterministic prover advice, and advice does not need a syscall: it
+    /// is a memory region the prover fills and the guest authenticates
+    /// (`docs/spec/public-values.md` §6). Kept disjoint from
+    /// [`PRECOMPILE_FIRST`] so a reviewer can tell prover advice from a proven
+    /// function at a glance.
     pub const ZKVM_IO_FIRST: u32 = 0x0400;
 
     /// Last number of the zkVM-specific host-call range.
@@ -1483,9 +1489,7 @@ pub mod ecall {
     /// keccak-f[1600] over a 200-byte state frame, `a0` = the frame base
     /// pointer, read and written in place. The first **delegation** call:
     /// `docs/spec/delegation.md` is its ABI, and the circuit that proves it is
-    /// `constants::family::KECCAK_F`. Returns 0 on an executor that has the
-    /// circuit and `-ENOSYS` on one that does not, so the same binary runs
-    /// under `qemu-riscv32` with its software fallback.
+    /// `constants::family::KECCAK_F`.
     pub const PRECOMPILE_KECCAK_F: u32 = 0x0501;
 
     /// One `Fr` add, multiply or inverse over a 25-word frame, `a0` = the
@@ -1512,43 +1516,15 @@ pub mod ecall {
     /// fixes. The invocation writes the result's eight words and nothing else.
     pub const PRECOMPILE_MOD_MUL: u32 = 0x0503;
 
-    /// The POSIX standard input stream, **uncommitted**.
-    ///
-    /// The executor serves the statement's public input here as well as in the
-    /// public input window, so a guest built for a POSIX host reads the same
-    /// bytes under `qemu-riscv32`. **A proof binds none of it**: the window is
-    /// what a statement carries and what the verifier checks
-    /// (`docs/spec/public-values.md` §1). `read` is not a provable ecall, so a
-    /// guest that takes this path is not a guest that can be proven.
-    ///
-    /// Named `FD_PUBLIC_INPUT` until S-IO, when the public values stopped being
-    /// a stream. The **number** is frozen at its Linux value, as every number
-    /// in this module is; only the name moved.
-    pub const FD_STDIN: u32 = 0;
-
-    /// The POSIX standard output stream, **uncommitted**.
-    ///
-    /// The compatibility path for a guest whose result is compared against
-    /// another executor's; the journal — `guest_sdk::commit` — is what a proof
-    /// binds. Named `FD_PUBLIC_OUTPUT` until S-IO.
-    pub const FD_STDOUT: u32 = 1;
-
-    /// Diagnostics. Free-form, uncommitted, and ignored by the verifier.
-    pub const FD_STDERR: u32 = 2;
-
-    /// Private hint channel, uncommitted: nondeterministic prover advice. A
-    /// guest that lets a hint change its committed output has made the proof
-    /// meaningless, because the prover picks the hint.
-    pub const FD_HINT: u32 = 3;
-
     /// Linux `ENOSYS`. An unimplemented number returns `-ENOSYS` in `a0`.
+    ///
+    /// It survives the deletion of the POSIX layer because it is not part of
+    /// it: it is the delegation ABI's "this executor has no circuit for that"
+    /// answer (`docs/spec/delegation.md` §2), which every shim checks for so a
+    /// caller can run its own software path. This VM implements all four
+    /// delegations, so its executor never answers `-ENOSYS` to one; what it
+    /// still answers `-ENOSYS` to is a number nobody has assigned.
     pub const ENOSYS: u32 = 38;
-
-    /// Linux `EBADF`. `read` on a descriptor other than [`FD_STDIN`]
-    /// and [`FD_HINT`], and `write` on one other than [`FD_STDOUT`] and
-    /// [`FD_STDERR`], return `-EBADF` in `a0` — Linux's answer, and so
-    /// `qemu-riscv32`'s. Added at S12.
-    pub const EBADF: u32 = 9;
 }
 
 /// The memory argument's address spaces, frozen at S12.

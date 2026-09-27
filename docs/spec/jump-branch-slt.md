@@ -435,9 +435,9 @@ and `a_key_with_another_generic_table_is_another_statement`.
 ## 8. The fixture
 
 `guests/control`, hand-written assembly over the two families S17 proves and the exit
-ecall, with no SDK. It checks every result itself and exits with the number of checks, 16.
-`crates/emulator/tests/qemu_outputs.rs` holds its exit status and its fd 1 to
-`qemu-riscv32`'s, the 16 being what that status counts; the rows the acceptance
+ecall, with no SDK. It checks every result itself and exits with the number of checks, 16 —
+so the exit status is the whole comparison: one wrong value is a different number, and 16
+is the one that says all of them held. The rows the acceptance
 names are held to its trace by `crates/checker/tests/jump_branch_slt.rs`'
 `the_guest_runs_the_acceptance_matrix`; its statement is proved and verified by
 `crates/prover/tests/control.rs`: one `INIT_TEARDOWN` shard at `2^16`, one

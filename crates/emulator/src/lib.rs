@@ -40,29 +40,24 @@ use trace::{
     MemoryEventLog, MemoryState, Query, Role, Row, ROLES,
 };
 
-/// What a guest is given to read. **Four fields, because there are four
-/// things, and what tells them apart is what binds them**
+/// What a guest is given to read. **Two fields, because there are two things,
+/// and what tells them apart is what binds them**
 /// (`docs/spec/public-values.md`).
 ///
 /// | field | where the guest finds it | what binds it |
 /// | --- | --- | --- |
 /// | `input` | the public input window, an ordinary load | the statement, at the window's init column |
 /// | `advice` | `guest_memory::ADVICE_ORIGIN`, an ordinary load | **nothing**; the guest owes a check |
-/// | `stdin` | fd 0, a `read` ecall | nothing; `read` is not provable |
-/// | `hint` | fd 3, a `read` ecall | nothing; the older spelling of advice |
 ///
-/// `input` and `stdin` are **not** the same bytes and neither seeds the other.
-/// They were one field briefly and the coupling was wrong in both directions: a
-/// public input is capped at `guest_memory::PUBLIC_PAYLOAD_BYTES` and an fd 0
-/// stream is not, and a guest cannot be both provable and runnable under
-/// `qemu-riscv32` anyway — the windows and the advice region are unmapped
-/// there, so no guest reads both paths.
+/// Both are *memory*. There is no third field and no stream: an Apogee guest
+/// has no file descriptors, so there is nothing a host could hand it that is
+/// neither of these two. It had four fields until the POSIX layer was deleted
+/// — `stdin` and `hint` were served over `read`, which was never a provable
+/// ecall, so a guest reading either was a guest no proof covered.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GuestIo {
     pub input: Vec<u8>,
     pub advice: Vec<u8>,
-    pub stdin: Vec<u8>,
-    pub hint: Vec<u8>,
 }
 
 /// A finished execution: the guest called `exit`.
@@ -73,7 +68,7 @@ pub struct Execution {
     /// The status passed to `exit`. A nonzero status is a failed execution,
     /// which is still an execution: it is reported, not refused.
     pub exit_code: i32,
-    /// Cycles run, transfer cycles included. Cycles are numbered from 1, so
+    /// Cycles run. Cycles are numbered from 1, so
     /// this is also the last cycle's number.
     pub cycle_count: u64,
     /// The execution's **public values**: the public input it was given, and
@@ -81,11 +76,6 @@ pub struct Execution {
     /// (`docs/spec/public-values.md`). These are the two byte strings a
     /// statement carries and a proof binds.
     pub io: IoStreams,
-    /// The fd 1 bytes: the POSIX compatibility stream, uncommitted. It is what
-    /// `qemu-riscv32` can be compared against; a proof binds none of it.
-    pub stdout: Vec<u8>,
-    /// The fd 2 bytes: diagnostics, uncommitted, and never archived.
-    pub stderr: Vec<u8>,
 }
 
 /// Every way an execution stops other than by `exit`. Each is a fatal guest
@@ -626,18 +616,12 @@ struct Machine<'a> {
     /// `finish` reports as the statement's `input` whether or not the guest
     /// looked (`docs/spec/public-values.md` §9).
     public_input: &'a [u8],
-    stdin: &'a [u8],
-    stdin_at: usize,
-    hint: &'a [u8],
-    hint_at: usize,
     /// One past the highest advice byte the host supplied, rounded up to a
     /// word: the top of what a guest may load. Above it the advice region is
     /// addressable in principle and initialized by nothing in this execution,
     /// so a read there is refused loudly here rather than left to fail as an
     /// unprovable trace.
     advice_end: u32,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
     exit: Option<i32>,
     recorder: Option<Recorder<'a>>,
 }
@@ -663,14 +647,8 @@ impl<'a> Machine<'a> {
             ram: HashMap::new(),
             cycle: 1,
             public_input: &io.input,
-            stdin: &io.stdin,
-            stdin_at: 0,
-            hint: &io.hint,
-            hint_at: 0,
             advice_end: guest_memory::ADVICE_ORIGIN
                 + 4 * trace::advice_region_words(&io.advice) as u32,
-            stdout: Vec::new(),
-            stderr: Vec::new(),
             exit: None,
             recorder: None,
         };
@@ -739,8 +717,6 @@ impl<'a> Machine<'a> {
                 input: self.public_input.to_vec(),
                 output,
             },
-            stdout: self.stdout,
-            stderr: self.stderr,
         })
     }
 
@@ -1176,20 +1152,19 @@ impl<'a> Machine<'a> {
 
     // -- ecall ------------------------------------------------------------
 
-    /// An ecall: its transfer cycles, if it moves bytes, then its own row —
-    /// `a7` at slot 1, the arguments its number uses at slot 2, `a0` written
-    /// at slot 3, and `next_pc` the fall-through — except an exit's, which is
-    /// the halting sentinel `HALT_PC` (`docs/spec/memory.md` §5).
+    /// An ecall: one row — `a7` at slot 1, its one argument `a0` at slot 2,
+    /// `a0` written at slot 3, and `next_pc` the fall-through — except an
+    /// exit's, which is the halting sentinel `HALT_PC`
+    /// (`docs/spec/memory.md` §5).
+    ///
+    /// Every ecall a guest may issue takes exactly one argument and moves no
+    /// bytes, so an ecall is one cycle. It was not always: `read` and `write`
+    /// brought a **transfer cycle** per word they moved, and both those calls
+    /// and that machinery went with the POSIX layer.
     fn ecall(&mut self, instr: Instr, pc: u32, fall: u32) -> Result<(), EmuError> {
         let mut row = Cycle::new();
         let number = self.read(&mut row, Role::Rs1, 17);
         let result = match number {
-            ecall::READ | ecall::WRITE => {
-                let fd = self.read(&mut row, Role::Rs2, 10);
-                let buf = self.read(&mut row, Role::Arg1, 11);
-                let count = self.read(&mut row, Role::Arg2, 12);
-                self.transfer(instr, pc, number == ecall::READ, fd, buf, count)?
-            }
             ecall::EXIT => {
                 let status = self.read(&mut row, Role::Rs2, 10);
                 self.exit = Some(status as i32);
@@ -1225,74 +1200,6 @@ impl<'a> Machine<'a> {
             fall
         };
         self.commit(&row, instr, pc, next_pc)
-    }
-
-    /// Move a `read`'s or a `write`'s bytes, one transfer cycle per word they
-    /// touch — the pc re-written unchanged at slot 0, the word at slot 3 —
-    /// and return what `a0` gets.
-    fn transfer(
-        &mut self,
-        instr: Instr,
-        pc: u32,
-        reading: bool,
-        fd: u32,
-        buf: u32,
-        count: u32,
-    ) -> Result<u32, EmuError> {
-        let left = |stream: &[u8], at: usize| (count as usize).min(stream.len() - at) as u32;
-        let n = match (reading, fd) {
-            (true, ecall::FD_STDIN) => left(self.stdin, self.stdin_at),
-            (true, ecall::FD_HINT) => left(self.hint, self.hint_at),
-            (false, ecall::FD_STDOUT | ecall::FD_STDERR) => count,
-            _ => return Ok(ecall::EBADF.wrapping_neg()),
-        };
-        if n == 0 {
-            return Ok(0);
-        }
-        let (start, end) = (buf as u64, buf as u64 + n as u64);
-        let top = guest_memory::RAM_ORIGIN as u64 + guest_memory::RAM_LENGTH as u64;
-        if start < guest_memory::RAM_ORIGIN as u64 || end > top {
-            let addr = if start < guest_memory::RAM_ORIGIN as u64 {
-                buf
-            } else {
-                buf.max(top as u32)
-            };
-            return Err(EmuError::OutOfBounds { pc, addr });
-        }
-
-        let (source, source_at) = if fd == ecall::FD_HINT {
-            (self.hint, self.hint_at)
-        } else {
-            (self.stdin, self.stdin_at)
-        };
-        let mut written = Vec::new();
-        let mut word = buf & !3;
-        while (word as u64) < end {
-            let old = self.word(word);
-            let mut bytes = old.to_le_bytes();
-            for (k, byte) in bytes.iter_mut().enumerate() {
-                let addr = word as u64 + k as u64;
-                if addr >= start && addr < end {
-                    if reading {
-                        *byte = source[source_at + (addr - start) as usize];
-                    } else {
-                        written.push(*byte);
-                    }
-                }
-            }
-            let new = u32::from_le_bytes(bytes);
-            let mut cycle = Cycle::new();
-            self.ram_write(&mut cycle, word, old, new);
-            self.commit(&cycle, instr, pc, pc)?;
-            word += 4;
-        }
-        match (reading, fd) {
-            (true, ecall::FD_HINT) => self.hint_at += n as usize,
-            (true, _) => self.stdin_at += n as usize,
-            (false, ecall::FD_STDOUT) => self.stdout.extend_from_slice(&written),
-            (false, _) => self.stderr.extend_from_slice(&written),
-        }
-        Ok(n)
     }
 }
 
@@ -1843,8 +1750,6 @@ mod tests {
         let io = GuestIo {
             input: Vec::new(),
             advice: Vec::new(),
-            stdin: Vec::new(),
-            hint: Vec::new(),
         };
         let image = spin();
         let mut machine = Machine::new(&image, &io);

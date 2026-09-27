@@ -2,13 +2,12 @@
 //!
 //! Every guest here is the committed ELF under `crates/loader/tests/vectors`,
 //! pinned by digest in `crates/loader/tests/common/mod.rs` — the same bytes
-//! QEMU runs in `tests/qemu_outputs.rs`.
 
 #![allow(dead_code)]
 
 use std::fs;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use constants::family;
 use emulator::{trace_run, Execution, GuestIo};
@@ -30,15 +29,12 @@ pub fn image(name: &str) -> ProgramImage {
     load_elf(&elf(name)).unwrap_or_else(|e| panic!("{name}: {e:?}"))
 }
 
-/// A run whose bytes arrive on **fd 0**, which is what every committed guest
-/// but `public-io` reads: they call `guest_sdk::read_stdin`, the compatibility
-/// path, and are not provable (`docs/spec/public-values.md` §1).
-pub fn io(stdin: &[u8]) -> GuestIo {
+/// A run whose bytes are its **public input**, which is where every guest that
+/// reads anything now finds them (`docs/spec/public-values.md` §2).
+pub fn io(input: &[u8]) -> GuestIo {
     GuestIo {
-        input: Vec::new(),
+        input: input.to_vec(),
         advice: Vec::new(),
-        stdin: stdin.to_vec(),
-        hint: Vec::new(),
     }
 }
 
@@ -48,13 +44,11 @@ pub fn with_advice(input: &[u8], advice: &[u8]) -> GuestIo {
     GuestIo {
         input: input.to_vec(),
         advice: advice.to_vec(),
-        stdin: Vec::new(),
-        hint: Vec::new(),
     }
 }
 
 /// Every family at the smallest height: every committed guest's code fits
-/// but `consistency`'s, and a table costs 2^16 rows rather than 2^22.
+/// but `mod-mul-ops`', and a table costs 2^16 rows rather than 2^22.
 pub fn smallest() -> ProgramParams {
     uniform(1 << 16)
 }
@@ -69,7 +63,7 @@ pub fn uniform(height: u32) -> ProgramParams {
 
 /// Decoded tables at the smallest menu height the guest's code fits.
 ///
-/// 2^16 rows for every committed guest but `consistency`, whose code is large
+/// 2^16 rows for every committed guest but `mod-mul-ops`, whose code is large
 /// enough to need a taller table: a table's rows are absolute pcs, one per
 /// halfword, so a family's height has to reach past the last instruction.
 pub fn preprocess(image: &ProgramImage) -> (DecodedTables, VmConfig) {
@@ -123,21 +117,6 @@ pub fn input_of(name: &str) -> Vec<u8> {
         // checks — and `tests/streaming.rs` streams all three.
         "addsub" | "control" | "alu" | "mem" | "keccak-test" | "recursion-ops" | "shards"
         | "mod-mul-ops" => Vec::new(),
-        // The hazards workload alone, at scale 0: 25,945 instructions, a
-        // small deterministic slice of a guest this size.
-        // `tests/consistency.rs` is where the rest of it runs.
-        "consistency" => consistency::Input {
-            seed: 1,
-            scale: 0,
-            workloads: 1
-                << consistency::WORKLOADS
-                    .iter()
-                    .position(|w| w.name == "hazards")
-                    .expect("the hazards workload"),
-            fault: 0,
-            payload: &[],
-        }
-        .encode(),
         other => panic!("no input chosen for {other}"),
     }
 }
@@ -168,8 +147,6 @@ pub struct Traced {
     pub profile: CycleProfile,
     pub execution: Execution,
     pub advice: Vec<u8>,
-    /// The fd 0 bytes this run was given: what its `read` transfers moved.
-    pub stdin: Vec<u8>,
 }
 
 impl Traced {
@@ -205,7 +182,6 @@ pub fn traced(name: &str) -> Traced {
         profile,
         execution,
         advice: Vec::new(),
-        stdin: input_of(name),
     }
 }
 
@@ -224,7 +200,7 @@ pub const TRACED: [&str; 9] = [
 
 /// The profile a from-source guest is built at: `debug`, unless
 /// `APOGEE_GUEST_PROFILE` names another — the variable
-/// `crates/loader/tests/qemu.rs` reads.
+/// the behaviour suites read.
 pub fn guest_profile() -> String {
     std::env::var("APOGEE_GUEST_PROFILE").unwrap_or_else(|_| "debug".into())
 }
@@ -293,28 +269,4 @@ pub fn build_bin(name: &str, bin: &str, profile: &str) -> Vec<u8> {
     let bytes = fs::read(&elf).unwrap_or_else(|e| panic!("reading {}: {e}", elf.display()));
     let _ = fs::remove_dir_all(&target_dir);
     bytes
-}
-
-/// The user-mode emulator the QEMU legs run under.
-///
-/// Panics when it is absent: those tests are `#[ignore]`d, so reaching here
-/// means someone asked for them by name, and a silent pass would report
-/// coverage that did not happen.
-pub fn qemu_binary() -> String {
-    for name in ["qemu-riscv32", "qemu-riscv32-static"] {
-        if Command::new(name)
-            .arg("--version")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
-        {
-            return name.to_string();
-        }
-    }
-    panic!(
-        "qemu-riscv32 is not on PATH, so the QEMU leg cannot run. User-mode \
-         QEMU is Linux-only; docs/guest-program-manual.md section 7 has the \
-         container recipe."
-    )
 }

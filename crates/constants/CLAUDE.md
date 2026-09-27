@@ -86,7 +86,7 @@ here.
 | `keccak` | **S21.** keccak-f[1600] and keccak-256 as data: `LANES`, `LANE_BITS`, `STATE_BITS`, `STATE_BYTES`, `FRAME_WORDS = 50`, `ROUNDS = 24`, `RATE_BYTES = 136`, `DIGEST_BYTES = 32`, the sponge's `PAD_FIRST`/`PAD_LAST`, and the two tables `ROTATIONS` and `ROUND_CONSTANTS`. The circuit, the emulator and the guest SDK all read them, which is the point: one permutation, three consumers, no second copy. `tests/keccak.rs` re-derives both tables. |
 | `extra_mask` | S11. Every family's `family_extra_mask` bit positions, one-hot per mnemonic, append-only, and the system codes `ecall`/`ebreak`/`fence` carry in `imm`. |
 | `guest_memory` | The frozen guest memory map: `RAM_ORIGIN` and `RAM_LENGTH`; since S12, `STACK_RESERVE`, the 8 MiB at the top of RAM guest-sdk's allocator leaves to the stack; and, since S-IO, the three regions of `docs/spec/public-values.md` §2. `PUBLIC_INPUT_ORIGIN = 0x0000_8000` and `PUBLIC_OUTPUT_ORIGIN = 0x0000_8400` are the two public windows, `PUBLIC_WINDOW_BYTES = 4 · family::PUBLIC_WINDOW_HEIGHT` (1024) each, of which `PUBLIC_PAYLOAD_BYTES = PUBLIC_WINDOW_BYTES − 4` (1020) is payload — word 0 is the payload's **byte length**, which is what makes a proof bind a byte string rather than its zero-padded word vector. Both sit in the hole below `RAM_ORIGIN` that `V[ram_live]` already masks, so they cost no existing row and the rest of the hole stays a hole. `ADVICE_ORIGIN = 0x8000_0000` opens the prover's advice region, `ADVICE_WORDS = 2^29` words to the top of the address space; it begins exactly where `RAM_ORIGIN + RAM_LENGTH` ends, so `[RAM_ORIGIN, ADVICE_ORIGIN)` keeps the meaning it had. All three regions are `address_space::RAM`. |
-| `ecall` | The guest ecall ABI: syscall numbers, range boundaries, file descriptors. **S-IO renamed two descriptors and changed no number**: `FD_PUBLIC_INPUT` → `FD_STDIN` (0) and `FD_PUBLIC_OUTPUT` → `FD_STDOUT` (1), because neither names a public value any more — the public input is a memory window and the journal is another (`docs/spec/public-values.md` §1). The numbers are frozen at their Linux values, as every number here is. |
+| `ecall` | The guest ecall ABI, and it is now short: `EXIT` (93), the two range boundaries, the four precompile numbers, and `ENOSYS` (38). **There are no file descriptors and no I/O call.** `READ` (63), `WRITE` (64), `FD_STDIN`, `FD_STDOUT`, `FD_STDERR`, `FD_HINT` and `EBADF` went with the POSIX layer: an Apogee guest is an Apogee-SDK program, its input is a memory window and its journal is another (`docs/spec/public-values.md`), and neither `read` nor `write` was ever a provable ecall. `ENOSYS` survives because it was never part of that layer — it is the delegation ABI's "this executor has no circuit" answer, which every shim checks for (`docs/spec/delegation.md` §2). `ZKVM_IO_FIRST..=ZKVM_IO_LAST` is now **reserved and empty**. |
 
 S11 added `PROGRAM_IDENTITY` (22), `VM_CONFIG` (23) and `SHARD_COUNTS` (24), all scalars:
 the program-identity sponge's opening message, and the first two of the statement
@@ -158,23 +158,26 @@ typed layer's `tag, length, payload` framing is only injective under that rule. 
 `docs/spec/transcript.md` section 8. S10 added `PUBLIC_INPUT_STREAM` (20) and
 `PUBLIC_OUTPUT_STREAM` (21), both bytes: the two domain tags of the public I/O digest.
 
-The `ecall` module holds the guest syscall numbers, the two non-Linux range boundaries and
-the four file descriptors. It obeys the same rule as the tags, for a sharper reason:
-**once a program's identity is published its ABI is frozen**, and redefining a number does
-not fail loudly — it quietly makes an old program compute something else. The standard
-calls keep their Linux numbers (`READ` 63, `WRITE` 64, `EXIT` 93) so `qemu-riscv32` runs a
-guest unmodified. `ZKVM_IO_FIRST..=ZKVM_IO_LAST` is `0x0400..=0x04FF` and
+The `ecall` module holds the guest's five call numbers, the two non-Linux range boundaries
+and `ENOSYS`. It obeys the same rule as the tags, for a sharper reason: **once a program's
+identity is published its ABI is frozen**, and redefining a number does not fail loudly —
+it quietly makes an old program compute something else. `EXIT` keeps 93 because that is
+what it has always had here and append-only keeps it there; nothing downstream reads any
+meaning into the value. `ZKVM_IO_FIRST..=ZKVM_IO_LAST` is `0x0400..=0x04FF` and
 `PRECOMPILE_FIRST..=PRECOMPILE_LAST` is `0x0500..=0x05FF`; both sit above the whole Linux
-number space and are disjoint from each other, because a host call is nondeterministic
-prover advice and a precompile is a deterministic function of memory, and a reviewer has
-to tell them apart at a glance. `docs/spec/ecall-abi.md` is normative, and
-`tests/ecall_abi.rs` holds it to this module in both directions.
+number space and are disjoint from each other, because a call in the first range would be
+nondeterministic prover advice and a precompile is a deterministic function of memory, and
+a reviewer has to tell them apart at a glance. The first range is **reserved and empty**,
+and stays that way: advice does not need a syscall, it is a region the prover fills and the
+guest authenticates (`docs/spec/public-values.md` §6). `docs/spec/ecall-abi.md` is
+normative, and `tests/ecall_abi.rs` holds it to this module in both directions — it used to
+parse a third table, the file descriptors, and there is none to parse.
 
-**A name may move where a number may not**, which is what S-IO did to fd 0 and fd 1:
-`FD_PUBLIC_INPUT` became `FD_STDIN` and `FD_PUBLIC_OUTPUT` became `FD_STDOUT`, the two
-values unchanged at 0 and 1. **No descriptor names a public value**, and none did after
-S-IO: `read` (63) and `write` (64) are not provable ecalls, fd 0 and fd 1 are POSIX
-compatibility streams a guest built for a host uses under `qemu-riscv32`, fd 2 is
-diagnostics and fd 3 is advice, and a proof binds none of the four
-(`docs/spec/public-values.md` §1). An execution's public values are memory windows, and
-`guest_memory` is where they live.
+**63 and 64 are retired and burned, and that is not a breach of append-only.** The rule
+forbids *reassigning* a number, because an old program would then compute something else
+under its published identity; it does not require carrying a call no guest may issue.
+`read` and `write` were never provable ecalls — a transfer row that is permitted but not
+constrained against its buffer and length can write any value to any RAM word — so every
+guest that took that path was one no proof covered, and the two numbers now name nothing.
+Nothing may ever take them. **An execution's public values are not a syscall's business**:
+they are memory windows, and `guest_memory` is where they live.

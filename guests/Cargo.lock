@@ -108,6 +108,7 @@ version = "0.1.0"
 name = "amm"
 version = "0.1.0"
 dependencies = [
+ "constants",
  "guest-sdk",
 ]
 
@@ -347,16 +348,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "consistency"
-version = "0.1.0"
-dependencies = [
- "constants",
- "field",
- "guest-sdk",
- "transcript",
-]
-
-[[package]]
 name = "const-hex"
 version = "1.19.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -523,6 +514,7 @@ dependencies = [
 name = "echo"
 version = "0.1.0"
 dependencies = [
+ "constants",
  "field",
  "guest-sdk",
  "transcript",
@@ -897,6 +889,7 @@ dependencies = [
 name = "orderbook"
 version = "0.1.0"
 dependencies = [
+ "constants",
  "guest-sdk",
 ]
 

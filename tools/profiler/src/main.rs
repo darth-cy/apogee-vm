@@ -131,12 +131,7 @@ fn elf(args: &[String]) -> Result<(), String> {
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
-    let io = emulator::GuestIo {
-        input,
-        advice,
-        stdin: Vec::new(),
-        hint: Vec::new(),
-    };
+    let io = emulator::GuestIo { input, advice };
     let report = run(&bytes, &name, &name, &io, None, common.top)?;
     emit(&report, &common)
 }
@@ -276,8 +271,6 @@ fn profile_revm(
     let io = emulator::GuestIo {
         input: Vec::new(),
         advice: witness.to_vec(),
-        stdin: Vec::new(),
-        hint: Vec::new(),
     };
     let report = run(
         &elf,

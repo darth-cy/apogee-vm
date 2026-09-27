@@ -880,12 +880,6 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
             kind::SUB => (a.wrapping_sub(b), (a < b) as u32),
             kind::LUI => (imm, 0),
             kind::SYSTEM => match imm {
-                system_code::ECALL if row.query(Role::Rs1).is_none() => {
-                    return Err(format!(
-                        "cycle {} is an ecall's transfer cycle, and S16 proves EXIT alone",
-                        row.cycle
-                    ))
-                }
                 system_code::ECALL if a == ecall::EXIT => {
                     ecall_row = 1;
                     (read(Role::Rd), 0)

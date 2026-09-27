@@ -173,12 +173,11 @@ fn each_program_derives_only_the_families_it_uses() {
 ///
 /// The suites that are not about the heights take `common::fitting`, so without
 /// this nothing would notice a guest — or growth in an existing one — crossing
-/// a default. Until S19 `consistency` crossed one: a family's table is indexed
-/// by absolute pc, the defaults gave atomics `2^16` rows, which run out at pc
-/// `0x20000`, and that guest's atomics run up to `0x18e62a`. S19 raised
-/// `DEFAULT_HEIGHTS[ATOMICS]` to `2^20` — the timestamp channel's floor, which
-/// the atomics circuit needs — so every guest now fits; the second half holds
-/// the refusal to the old height so the mechanism keeps a test.
+/// a default. A family's table is indexed by absolute pc, so `2^16` rows run
+/// out at pc `0x20000`, and a guest whose `.text` reaches past that needs a
+/// taller one: `guests/mod-mul-ops` reaches `0x21d3a` and takes `2^18`. Every
+/// guest fits at the frozen defaults; the second half shortens one family back
+/// to `2^16` so the refusal keeps a test.
 #[test]
 fn the_default_heights_hold_every_committed_guest() {
     for name in common::GUESTS {
@@ -187,14 +186,14 @@ fn the_default_heights_hold_every_committed_guest() {
         assert!(decoded.is_ok(), "{name}: {:?}", decoded.err());
     }
     let mut short = ProgramParams::defaults();
-    short.heights[family::ATOMICS as usize] = 1 << 16;
-    let image = common::guest("consistency");
+    short.heights[family::ADD_SUB_LUI_AUIPC as usize] = 1 << 16;
+    let image = common::guest("mod-mul-ops");
     let Err(program::ProgramError::TableTooShort { family, height, .. }) =
         decode_program(&image, &short)
     else {
-        panic!("consistency's atomics run past pc 0x20000 and cannot fit 2^16 rows");
+        panic!("mod-mul-ops' add/sub rows run past pc 0x20000 and cannot fit 2^16 rows");
     };
-    assert_eq!((family, height), (family::ATOMICS, 1 << 16));
+    assert_eq!((family, height), (family::ADD_SUB_LUI_AUIPC, 1 << 16));
 }
 
 /// A word no family knows is a loud failure naming its pc, with the decoder's

@@ -67,22 +67,30 @@ materialized layer the first halving list reads.
 ### 2.1 The frame columns
 
 Every execution family's memory-argument columns follow one layout, built by
-`trace::build_memory_columns`. A row is one cycle. The **query table** has **nine** entries
-since S21: query 0 is the pc query, queries 1–8 are the roles of `execution-trace.md` §7 in
+`trace::build_memory_columns`. A row is one cycle. The **query table** has **seven** entries:
+query 0 is the pc query, queries 1–6 are the roles of `execution-trace.md` §7 in
 their frozen order.
 
-| query `q` | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| what | pc | `rs1` | `rs2` | `arg1` | `arg2` | `load` | `ram` | `rd` | `deleg` |
-| `AS` | PC | REG | REG | REG | REG | RAM | RAM | REG | the delegation family's own |
-| `Δ` | 0 | 1 | 2 | 2 | 2 | 2 | 3 | 3 | 3 |
+| query `q` | 0 | 1 | 2 | 3 | 4 | 5 | 6 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| what | pc | `rs1` | `rs2` | `load` | `ram` | `rd` | `deleg` |
+| `AS` | PC | REG | REG | RAM | RAM | REG | the delegation family's own |
+| `Δ` | 0 | 1 | 2 | 2 | 3 | 3 | 3 |
+
+It was nine until the POSIX layer was deleted. `arg1` and `arg2` were an ecall row's `a1`
+and `a2`, which only `read` and `write` ever passed, so both became unreachable when those
+calls were retired and were removed rather than kept as columns nothing can make nonzero
+(`docs/spec/ecall-abi.md` §4). **`deleg` keeps id 6 and every other query its id**, because
+the two that went were the last two of slot 2 and nothing above them is addressed by id
+anyway — a family's columns are addressed by *slot*, its position in that family's own
+list.
 
 `deleg` is a **delegation request's mirror query** (`docs/spec/delegation.md` §5.1), in the
 address space of the family it calls — `DELEGATION_KECCAK_F = 4` for S21's one family, and tags
-5, 6 and 7 for the three appended since — at the frame base the request read from `a0`. It is
-the eighth role and took `trace::Row::present`'s last spare bit. **Its space is not a literal
-in the circuit but the frame's own `deleg_space` `M` column**, because one query serves every
-registered type and which one a row names is the row's business (`delegation.md` §5.1, §10.1).
+5, 6 and 7 for the three appended since — at the frame base the request read from `a0`.
+**Its space is not a literal in the circuit but the frame's own `deleg_space` `M` column**,
+because one query serves every registered type and which one a row names is the row's
+business (`delegation.md` §5.1, §10.1).
 
 **A family's frame holds a subset of that table, not all of it**: every query an instruction
 routed to it can make, and no other. The subsets are frozen in
@@ -91,7 +99,7 @@ routed to it can make, and no other. The subsets are frozen in
 
 | family | queries | `w` | `M` | `W` | leaves a side | obligations |
 | --- | --- | --- | --- | --- | --- | --- |
-| `ADD_SUB_LUI_AUIPC` | pc `rs1` `rs2` `arg1` `arg2` `ram` `rd` `deleg` | 8 | 41 | 11 | 8 | 16 |
+| `ADD_SUB_LUI_AUIPC` | pc `rs1` `rs2` `rd` `deleg` | 5 | 27 | 8 | 8 | 10 |
 | `JUMP_BRANCH_SLT` | pc `rs1` `rs2` `rd` | 4 | 21 | 7 | 4 | 8 |
 | `SHIFT_BITWISE` | pc `rs1` `rs2` `rd` | 4 | 21 | 7 | 4 | 8 |
 | `MUL_DIV` | pc `rs1` `rs2` `rd` | 4 | 21 | 7 | 4 | 8 |
@@ -99,14 +107,15 @@ routed to it can make, and no other. The subsets are frozen in
 | `MEM_SUBWORD` | pc `rs1` `rs2` `load` `ram` `rd` | 6 | 31 | 9 | 8 | 12 |
 | `ATOMICS` | pc `rs1` `rs2` `ram` `rd` | 5 | 26 | 8 | 8 | 10 |
 
-`arg1`, `arg2` and `deleg` are an ecall row's alone, and `load` is a load's word at slot 2, so
-no family holds all nine: the table above is a union no family reaches. The A extension keeps
+`deleg` is an ecall row's alone and `load` is a load's word at slot 2, so no family holds
+all seven: the table above is a union no family reaches. The A extension keeps
 its RAM query at slot 3 for every instruction it owns, `lr.w` included
-(`execution-trace.md` §7), so `ATOMICS` has no `load`. **`ADD_SUB_LUI_AUIPC`'s eight is a power
-of two**, so its two product trees carry no pad leaf — the only family of which that is true —
-and its sixteen gap obligations, with the table fraction, make seventeen `TIMESTAMP` leaves,
-which pads to 32 and costs the circuit one row-wise gate list
-(`docs/spec/constraint-manifest.md` §3.6).
+(`execution-trace.md` §7), so `ATOMICS` has no `load`. **`ADD_SUB_LUI_AUIPC` has no `ram`
+query**, and that is the transfer cycle's absence rather than an omission: no instruction
+routed to this family touches memory, and the RAM query it used to hold was the transfer
+rows' alone (`docs/spec/ecall-abi.md` §4). Its `M` count is one above `1 + 5w` because it is
+the one frame holding `deleg`, whose leaf reads the extra `deleg_space` column
+(`docs/spec/constraint-manifest.md` §3 is the per-relation accounting).
 
 **A delegation family has no frame and is not in this table.** Its rows are invocations, not
 cycles, and its memory columns are 50 fixed-offset words plus an anchor rather than a subset of
@@ -151,24 +160,23 @@ control C8). S16's family constraints make:
 - every other mask `m_q = m_pc·uses_q`, with `uses_q` read from the looked-up row kind:
   - `rs1`, `rs2` and `rd` follow the instruction's form, `x0` included
     (`execution-trace.md` §4);
-  - a transfer row shares its ecall's pc and table row and uses `pc` and `ram` only, so
-    `is_transfer` is a witness that is itself constrained;
-  - on an ecall row, `rs2`, `arg1` and `arg2` (`a0`, `a1`, `a2`) follow the number read at
-    slot 1: all three for `READ` and `WRITE`, `rs2` alone for `EXIT` and for every
-    **delegation** number, none otherwise (`execution-trace.md` §6). A delegation row uses
-    `deleg` as well, whose mask is `m_pc` times the sum of the row's type selectors
-    (`delegation.md` §5.1). Each such `uses_q` comes from `is-zero(a7_read − n)`, split
-    across layers to keep every gate at degree 2 or below — except where the family
-    commits a selector per number and pins it, which is what `ADD_SUB_LUI_AUIPC` does for
-    the four ecalls it proves.
+  - on an ecall row, `rs2` (`a0`, its one argument) is present for `EXIT` and for every
+    **delegation** number, which is every ecall a circuit admits (`execution-trace.md`
+    §6). A delegation row uses `deleg` as well, whose mask is `m_pc` times the sum of the
+    row's type selectors (`delegation.md` §5.1). Each such `uses_q` comes from
+    `is-zero(a7_read − n)`, split across layers to keep every gate at degree 2 or below —
+    except where the family commits a selector per number and pins it, which is what
+    `ADD_SUB_LUI_AUIPC` does for the five ecalls it proves.
 
 **Status at S16.** `ADD_SUB_LUI_AUIPC` discharges this section for its own rows
 (`docs/spec/shard-proof.md` §8): `m_pc` is the decoder lookup's selector and every other
-mask is `m_pc` times its kind's use. It proves `EXIT` alone, so it needs no `is-zero`: a
-gate holds every ecall row's `a7` read to 93, and `arg1`, `arg2` and `ram` are masked off
-on every row. No transfer row is provable, so `is_transfer` does not exist yet; the
-I/O-binding stage owes it. Every other execution family owed this section at its own stage,
-and until then had no circuit, so no statement containing it could be proved.
+mask is `m_pc` times its kind's use. It needs no `is-zero`, because it commits one boolean
+selector per ecall it proves and a gate holds that row's `a7` to that call's number — 93
+for the exit, and one delegation number apiece. There is no `is_transfer` and there will
+not be: the calls that produced a transfer row are retired, so the case the witness would
+have covered cannot arise (`docs/spec/ecall-abi.md` §4). Every other execution family owed
+this section at its own stage, and until then had no circuit, so no statement containing it
+could be proved.
 
 **Status at S17.** `JUMP_BRANCH_SLT` discharges this section for its own rows
 (`docs/spec/jump-branch-slt.md` §4.1): `m_pc` is the decoder lookup's selector, and `rs1`,
@@ -232,9 +240,9 @@ layer is `[read row product, write row product]`. Then `trace_vars` halving list
 Every list multiplies exactly two children per output, and every gate is degree ≤ 2.
 
 At the seven families' widths that is `2s = 8` leaves for the three 4-query families and 16
-for every other. **`ADD_SUB_LUI_AUIPC`, the widest, is the only one where `s = w`**: its
-eight queries fill an eight-leaf tree exactly, so since S21 it carries no pad leaf. It was
-`w = 7` and one pad a side until the `deleg` query.
+for every other. **The three 4-query families are the ones where `s = w`**: four queries fill
+a four-leaf tree exactly and carry no pad. Every other family pads — `ADD_SUB_LUI_AUIPC` and
+`ATOMICS` three leaves a side at `w = 5`, the two memory families two at `w = 6`.
 
 ### 2.4 The gadgets every execution family carries
 
@@ -243,13 +251,14 @@ or a tuple only at `m ∈ {0, 1}`; at `m = −1` a PC query's two leaves are eac
 `−T(AS − 2, …)`, one sign flip on each side, so the products still balance and the query
 reads as a REG query.
 
-**Read-only queries write back what they read.** For each of `rs1`, `rs2`, `arg1`, `arg2` and
-`load` **the family's frame holds**, the enforcing gate `write_value − read_value = 0`
+**Read-only queries write back what they read.** For each of `rs1`, `rs2` and `load`
+**the family's frame holds**, the enforcing gate `write_value − read_value = 0`
 (`execution-trace.md` §3). Without it a read of `x0` could write 5 there. So the count is the
-family's: 4 for `ADD_SUB_LUI_AUIPC`, 3 for the two memory families, 2 for the rest.
+family's: 3 for the two memory families, 2 for every other — only they hold `load`.
 
-**The x0 rule** (must-be-exact 7). On the `rd` query — query 7, at the family's last slot,
-every execution family having one — with witness columns `rd_inv`, `rd_is_zero` = `z` and
+**The x0 rule** (must-be-exact 7). On the `rd` query — query 5, and the family's last slot
+except where `deleg` follows it, every execution family having one — with witness columns
+`rd_inv`, `rd_is_zero` = `z` and
 `rd_selected` = `sel`:
 
 ```text
@@ -290,8 +299,8 @@ count, every list below is in **slot order**: `M` columns `cycle`, `<q>_mask`, `
 `w` queries, then `rd_inv`, `rd_is_zero`, `rd_selected` (`W[w]`–`W[w + 2]`); obligations
 `gap_hi_<q>` and `gap_lo_<q>`, two per query; leaves `read_<q>` then `write_<q>`, each side
 followed by its `read_pad_<i>` / `write_pad_<i>` up to the power of two; enforcing gates
-`<q>_mask_boolean` for the family's `w` masks, `<q>_writes_back` for each of `rs1`, `rs2`,
-`arg1`, `arg2` and `load` the family holds, and `rd_is_zero_inverse`,
+`<q>_mask_boolean` for the family's `w` masks, `<q>_writes_back` for each of `rs1`, `rs2`
+and `load` the family holds, and `rd_is_zero_inverse`,
 `rd_is_zero_at_nonzero`, `rd_is_zero_boolean`, `rd_write_masked` for the four x0 gates in the
 order above.
 
@@ -556,17 +565,17 @@ ends at `HALT_PC` ended on an exit row. Without the sentinel every prefix of an 
 balances: a fib run that panics has 889 prefixes ending with `a0 = 0`.
 
 What S16's constraints owe the sentinel: `jalr`'s bit-0 clear and every jump's and branch's
-wrap bit booleanity-constrained; `is_exit` from `a7 = 93` on the system row kind, gated off
-transfer rows; the system row's `next_pc = is_exit·HALT_PC + is_transfer·pc +
-(1 − is_exit − is_transfer)·table_next_pc`; the decoded-table lookup on every live row
-(`m_pc = 1`), transfer rows included, with every other mask coupled to it as §2.1 says; and
-the exit row's `a0` write equal to its read.
+wrap bit booleanity-constrained; `is_exit` from `a7 = 93` on the system row kind, and off
+on a delegation request, which is the other ecall this family proves; the system row's
+`next_pc = is_exit·HALT_PC + (1 − is_exit)·table_next_pc`, so a delegation row falls
+through; the decoded-table lookup on every live row (`m_pc = 1`), with every other mask
+coupled to it as §2.1 says; and the exit row's `a0` write equal to its read.
 
 **Status at S16.** The system row's share is done, for `EXIT` alone: every ecall row reads
 `a7 = 93`, writes `a0` back, and writes `HALT_PC`; every other live row of the family writes
 the decoded fall-through, with a boolean wrap its range check forces to 0
 (`docs/spec/shard-proof.md` §8.4). `jalr`'s bit and the jumps' and branches' wraps are the
-jump family's stage's, and `is_transfer` the I/O-binding stage's.
+jump family's stage's.
 
 **Status at S17.** The jump family's share is done (`docs/spec/jump-branch-slt.md` §4.3,
 §4.4): one boolean wrap on whichever sum `next_pc` is, a boolean dropped bit on a `jalr`
@@ -801,7 +810,7 @@ makes it base-4. `MEM_WORD` carries no offset bits at all, so a misaligned `lw` 
 no witness; `half_aligned` clears bit 0 at halfword width; and `ATOMICS` derives
 `rs1 < 2^32` from `rs1 = 4·word_index` rather than assuming it.
 `docs/spec/memory-ops.md` §2 is that section, and with it **every item this list owed is
-discharged** but the I/O-binding stage's transfer rows.
+discharged** but the I/O binding, which S-IO closes below.
 
 S20 reconciles every shard.
 
@@ -829,12 +838,12 @@ and one comparison at each shard's own opening point is the other
 (`docs/spec/shard-proof.md` §6, step 10c). The **transfer rows** the same item carried are
 **withdrawn rather than discharged**, and S14's open question 10 — how a transfer row's RAM
 write is confined to its ecall's buffer — is moot: a public value does not travel through a
-syscall, `read` and `write` are not provable ecalls and will not be
-(`docs/spec/public-values.md` §1), and `prover::fill::add_sub` refuses a transfer cycle by
-name, so no execution a proof covers holds one. `docs/spec/execution-trace.md` §6 still
-describes them, because the executor still answers both calls. Three window families were
-added; the tuple, the frame, the boundary and the reconciliation are unmoved. **Every item
-this list owed is now discharged or withdrawn.**
+syscall, and `read` and `write` are retired with their numbers burned
+(`docs/spec/ecall-abi.md` §4). No ecall moves bytes now, so no execution produces a
+transfer row and no circuit has one to refuse; the `arg1` and `arg2` queries those calls
+needed went with them, which is why §2.1's query table is seven and not nine. Three window
+families were added; the tuple, the frame, the boundary and the reconciliation are unmoved.
+**Every item this list owed is now discharged or withdrawn.**
 
 **Cost** at `h = 2^22`: at least two `h`-sized window shards per proof (window 0 and the
 stack window), `2^23` leaf pairs and four committed `2^22`-entry columns, even for fib's

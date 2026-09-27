@@ -48,20 +48,25 @@ use gkr::{
 };
 use trace::{build_boundary_finals, AddressSpace, MemoryEvent};
 
-/// fib's five frame shards, in `shards` order — the families that ran, ascending
+/// fib's six frame shards, in `shards` order — the families that ran, ascending
 /// — and then its two windows. `fib` pins the whole list.
 const ALU: usize = 0;
 const JUMP: usize = 1;
-const MEM: usize = 3;
+const MEM: usize = 4;
 /// How many frames fib's statement has; the windows follow them.
-const FRAMES: usize = 5;
+const FRAMES: usize = 6;
 fn int(v: u64) -> Fr {
     Fr::from_u64(v)
 }
 
-/// fib's honest statement: its trace, slots 1–4, its frame plan, its nine
+/// fib's honest statement: its trace, slots 1–4, its frame plan, its ten
 /// shards — one frame per family that ran, then window 0 and the stack window,
 /// then the two public value windows, in that order — and its finals.
+///
+/// `mul_div` is among them because `guest_sdk::read_input` copies the public
+/// input with `copy_from_slice`, and `core`'s copy reaches a multiply. Before
+/// the POSIX layer went, fib read fd 0 and executed no mul/div cycle, so the
+/// family had rows in its table and no shard.
 ///
 /// The public windows are here because they are in **every** statement
 /// (`docs/spec/public-values.md` §4). `fib` reads neither, so each window's
@@ -89,6 +94,7 @@ fn fib() -> Fib {
             "frame of add_sub_lui_auipc",
             "frame of jump_branch_slt",
             "frame of shift_bitwise",
+            "frame of mul_div",
             "frame of mem_word",
             "frame of mem_subword",
             "window 0",
@@ -104,6 +110,7 @@ fn fib() -> Fib {
             family::ADD_SUB_LUI_AUIPC,
             family::JUMP_BRANCH_SLT,
             family::SHIFT_BITWISE,
+            family::MUL_DIV,
             family::MEM_WORD,
             family::MEM_SUBWORD,
         ]
@@ -249,18 +256,26 @@ fn first_live(f: &Fib, q: usize) -> (usize, usize, usize) {
 /// accepts. The two need not be in one family's frame.
 fn rd_writes_in_a_row(f: &Fib, keep: impl Fn(&MemoryEvent) -> bool) -> (MemoryEvent, MemoryEvent) {
     let rd = |e: &MemoryEvent| e.delta() == FRAME_DELTA[RD];
+    let mut spanning_none: Option<(MemoryEvent, MemoryEvent)> = None;
     for r in 0..32 {
         let on_r: Vec<MemoryEvent> = (f.t.log.events().iter().copied())
             .filter(|e| e.space == AddressSpace::Reg && e.addr == r)
             .collect();
-        let pair = on_r
-            .windows(2)
-            .find(|p| rd(&p[0]) && rd(&p[1]) && keep(&p[0]));
-        if let Some(p) = pair {
-            return (p[0], p[1]);
+        for p in on_r.windows(2) {
+            if !(rd(&p[0]) && rd(&p[1]) && keep(&p[0])) {
+                continue;
+            }
+            // Prefer a pair whose two rows fall in different families' frames.
+            // The x0 gadget's three columns sit at each frame's own `w`, so a
+            // pair that spans two frames exercises both spellings; one inside
+            // a single frame exercises one twice.
+            if locate(f, &p[0]).0 != locate(f, &p[1]).0 {
+                return (p[0], p[1]);
+            }
+            spanning_none.get_or_insert((p[0], p[1]));
         }
     }
-    panic!("fib has no such pair of rd writes");
+    spanning_none.expect("fib has no such pair of rd writes")
 }
 
 /// `forged` keeps every obligation and reconciles, and shard `i`'s frame breaks
@@ -415,7 +430,7 @@ fn a_zeroed_register_write_and_a_nonzero_x0_write_are_each_refused_by_their_gate
     let (w1, w2) = rd_writes_in_a_row(&f, |e| e.addr != 0 && e.write_value != 0);
     let (i1, r1, k1) = locate(&f, &w1);
     let (i2, r2, k2) = locate(&f, &w2);
-    assert_eq!((i1, i2), (ALU, MEM), "the pair spans two families' frames");
+    assert_ne!(i1, i2, "the pair spans two families' frames");
     let cells = [
         (i1, rd_is_zero(width(&f, i1)), r1, Fr::ONE),
         (i1, rd_inv(width(&f, i1)), r1, Fr::ZERO),
@@ -440,15 +455,17 @@ fn a_zeroed_register_write_and_a_nonzero_x0_write_are_each_refused_by_their_gate
 }
 
 /// `docs/spec/memory.md` §2.4, the read-only queries. On the first live row of
-/// each of `rs1`, `rs2`, `arg1`, `arg2` and `load`, in the first frame of fib's
-/// statement whose family holds that query, that query's write value set to its
-/// read value plus one — a read that silently changes the register or word it
-/// read. `gkr::self_check` and the witness-row evaluator name exactly
-/// `<q>_writes_back` on that row. All five of `FRAME_READ_ONLY` are tried, so a
-/// gate built over another query's columns under the right name fails too; and
-/// since no family holds all five, this crosses frames — `arg1` and `arg2` are
-/// `ADD_SUB_LUI_AUIPC`'s alone and `load` `MEM_WORD`'s. Fails if a read-only
-/// query could write back a value it did not read.
+/// each of `rs1`, `rs2` and `load`, in the first frame of fib's statement whose
+/// family holds that query, that query's write value set to its read value plus
+/// one — a read that silently changes the register or word it read.
+/// `gkr::self_check` and the witness-row evaluator name exactly
+/// `<q>_writes_back` on that row. All of `FRAME_READ_ONLY` is tried, so a gate
+/// built over another query's columns under the right name fails too; and since
+/// no family holds all three, this crosses frames — `load` is a memory family's
+/// alone. Fails if a read-only query could write back a value it did not read.
+///
+/// It was five queries until the POSIX layer went: `arg1` and `arg2` were
+/// `ADD_SUB_LUI_AUIPC`'s alone and read an ecall's `a1` and `a2`.
 #[test]
 fn a_read_only_query_writing_back_another_value_is_refused_by_its_gate() {
     let f = fib();
@@ -470,11 +487,7 @@ fn a_read_only_query_writing_back_another_value_is_refused_by_its_gate() {
         let w = witness_row(a, &values, row);
         assert_eq!(violated_relations(a, &w, challenges), [relation]);
     }
-    assert_eq!(
-        families,
-        [ALU, ALU, ALU, ALU, MEM],
-        "five queries, two frames"
-    );
+    assert_eq!(families, [ALU, ALU, MEM], "three queries, two frames");
 }
 
 /// S14 acceptance 11, the full-width boundary: `ADD_SUB_LUI_AUIPC`'s own `rs1`

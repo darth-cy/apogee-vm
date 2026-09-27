@@ -431,10 +431,8 @@ fn a7_the_guest_recomputes_the_pinned_root() {
     let elf = common::build_guest_bin("revm-block-stateless", "a7");
     let image = loader::load_elf(&elf).expect("the stateless guest loads");
     let io = emulator::GuestIo {
-        stdin: Vec::new(),
         input: root.to_vec(),
         advice: theirs("revm_stateless_witness.bin"),
-        hint: Vec::new(),
     };
     let execution = emulator::run(&image, &io).expect("the guest runs");
     assert_eq!(
@@ -468,10 +466,8 @@ fn a7_the_guest_rejects_a_corrupted_witness() {
     let image = loader::load_elf(&elf).expect("the stateless guest loads");
     let run = |advice: Vec<u8>| -> i32 {
         let io = emulator::GuestIo {
-            stdin: Vec::new(),
             input: root.to_vec(),
             advice,
-            hint: Vec::new(),
         };
         emulator::run(&image, &io)
             .expect("the guest runs")

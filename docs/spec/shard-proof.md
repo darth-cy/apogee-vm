@@ -525,37 +525,44 @@ variables and Mercury an even count.
 
 ### 8.1 Columns
 
-The frame is `docs/spec/memory.md` §2.1's over the family's **eight** queries — `pc rs1
-rs2 arg1 arg2 ram rd deleg` at slots 0 to 7 — so `M[0..41]` and `W[0..11]` are the frame's,
-and `M[41] deleg_space` follows them: the one extra memory column a frame holding the
+The frame is `docs/spec/memory.md` §2.1's over the family's **five** queries — `pc rs1
+rs2 rd deleg` at slots 0 to 4 — so `M[0..26]` and `W[0..8]` are the frame's,
+and `M[26] deleg_space` follows them: the one extra memory column a frame holding the
 delegation mirror carries, which is the requested type's address-space tag and what that
 query's leaf reads for its `AS` term (`docs/spec/delegation.md` §5.1). `deleg` is S21's, a
-delegation request's mirror query; every column index below moved by five in `M` and by one
-in `W` when it was added, and so did every relation number in
-`docs/spec/constraint-manifest.md` §3. The circuit adds:
+delegation request's mirror query.
+
+**It was eight queries until the POSIX layer was deleted.** `arg1` and `arg2` were an
+ecall row's `a1` and `a2`, and `ram` was the transfer rows' word; all three existed for
+`read` and `write` alone, and with those calls retired no instruction routed here touches
+memory at all (`docs/spec/ecall-abi.md` §4). Dropping them narrowed the frame by three
+queries, so every column index below moved — by fifteen in `M` and by three in `W` — and
+with them every relation number in `docs/spec/constraint-manifest.md` §3. The circuit
+adds:
 
 | column | name | what |
 | --- | --- | --- |
-| `W[11]`–`W[16]` | `decoded_next_pc`, `decoded_rs1`, `decoded_rs2`, `decoded_rd`, `decoded_imm`, `decoded_mask` | the claimed decoded row |
-| `W[17]`–`W[22]` | `kind_system`, `kind_addi`, `kind_auipc`, `kind_add`, `kind_sub`, `kind_lui` | the mask's bits, `constants::extra_mask::add_sub_lui_auipc` order |
-| `W[23]`, `W[24]` | `is_ecall`, `is_fence` | the system kind, split by its code |
-| `W[25]`–`W[27]` | `is_deleg_9`, `is_deleg_10`, `is_deleg_11` | **S21**, widened at **S23**: the ecall row is a delegation request of exactly one type, not the exit. One selector per row of `constants::delegation::TYPES` |
-| `W[28]` | `wrap` | the sum's carry, or the difference's borrow |
-| `W[29]` | `rd_hi` | `rd_selected >> 16` |
-| `W[30]` | `pc_wrap` | `next_pc`'s wrap |
-| `W[31]` | `next_pc_hi` | `next_pc >> 16` |
-| `W[32]`–`W[34]` | `mult_timestamp`, `mult_range16`, `mult_decoder` | one multiplicity per channel, last |
+| `W[8]`–`W[13]` | `decoded_next_pc`, `decoded_rs1`, `decoded_rs2`, `decoded_rd`, `decoded_imm`, `decoded_mask` | the claimed decoded row |
+| `W[14]`–`W[19]` | `kind_system`, `kind_addi`, `kind_auipc`, `kind_add`, `kind_sub`, `kind_lui` | the mask's bits, `constants::extra_mask::add_sub_lui_auipc` order |
+| `W[20]`, `W[21]` | `is_ecall`, `is_fence` | the system kind, split by its code |
+| `W[22]`–`W[25]` | `is_deleg_9`, `is_deleg_10`, `is_deleg_11`, `is_deleg_15` | **S21**, widened at **S23** and **S26**: the ecall row is a delegation request of exactly one type, not the exit. One selector per row of `constants::delegation::TYPES` |
+| `W[26]` | `wrap` | the sum's carry, or the difference's borrow |
+| `W[27]` | `rd_hi` | `rd_selected >> 16` |
+| `W[28]` | `pc_wrap` | `next_pc`'s wrap |
+| `W[29]` | `next_pc_hi` | `next_pc >> 16` |
+| `W[30]`–`W[32]` | `mult_timestamp`, `mult_range16`, `mult_decoder` | one multiplicity per channel, last |
 | `S[0]`–`S[6]` | `table_pc` … `table_extra_mask` | the decoded table, `program::lookup_tuple` order |
 | `V[range19]`, `V[range16]` | | the two range tables |
 
-`rd_selected` (`W[10]`) is the value the instruction **computes**, before the x0 rule
+`rd_selected` (`W[7]`) is the value the instruction **computes**, before the x0 rule
 masks it: the family's fill writes it on every live row, `rd = x0` included, where
 S14's frame builder leaves it 0.
 
 ### 8.2 Gates
 
-In the frame's gate list 0, after its own **16** (eight booleanity, four write-backs, four
-x0 — `deleg` is not read-only and carries no write-back), with `m_q` the query `q`'s mask,
+In the frame's gate list 0, after its own **11** (five booleanity, two write-backs, four
+x0 — only `rs1` and `rs2` are read-only queries this family holds), with `m_q` the query
+`q`'s mask,
 `v_q` its read value, `a_q` its address,
 `pc` the pc query's read value, `next_pc` its write value, `sel = rd_selected`, and
 `b_kind` the kind bits:
@@ -573,8 +580,7 @@ x0 — `deleg` is not read-only and carries no write-back), with `m_q` the query
 | `deleg_{t}_number` | `is_deleg_t·(v_rs1 − N_t)` | **S21**: `a7` is that type's number. `N_t` is read from `constants::delegation::TYPES`, never spelled |
 | `ecall_is_exit` | `(is_ecall − Σ_t is_deleg_t)·(v_rs1 − 93)` | `a7 = EXIT` on every ecall row **that is not a delegation**. With the rows above these partition the ecalls this family proves — because the numbers are pairwise distinct, which a `const` assertion enforces |
 | `rs1_mask_rule` | `m_rs1 − m_pc·(b_add + b_sub + b_addi + is_ecall)` | |
-| `rs2_mask_rule` | `m_rs2 − m_pc·(b_add + b_sub + is_ecall)` | |
-| `arg1_mask_rule`, `arg2_mask_rule`, `ram_mask_rule` | `m_q` | no `read`/`write` arguments, no transfer |
+| `rs2_mask_rule` | `m_rs2 − m_pc·(b_add + b_sub + is_ecall)` | an ecall row's `a0` is its one argument |
 | `rd_mask_rule` | `m_rd − m_pc·(b_add + b_sub + b_addi + b_auipc + b_lui + is_ecall)` | |
 | `deleg_mask_rule` | `m_deleg − m_pc·Σ_t is_deleg_t` | **S21**: exactly the delegation rows make the mirror query |
 | `deleg_space_rule` | `deleg_space − Σ_t tag_t·is_deleg_t` | **S23**: the mirror's leaf names the requested type through this column, because a leaf may read no `W` column (`docs/spec/delegation.md` §5.1) |
@@ -593,8 +599,8 @@ x0 — `deleg` is not read-only and carries no write-back), with `m_q` the query
 | `wrap_boolean`, `pc_wrap_boolean` | `x − x²` | |
 | `next_pc_rule` | `next_pc + 2^32·pc_wrap − (1 − is_ecall + Σ_t is_deleg_t)·decoded_next_pc − HALT_PC·(is_ecall − Σ_t is_deleg_t)` | the fall-through, or `HALT_PC` on the exit row; **a delegation row falls through** |
 
-Every gate is of degree at most 2 — `decoded_mask_bits`, `system_split` and the three
-`arg1`/`arg2`/`ram` mask rules are linear — and 0 on the all-zero row. **All eight S21 gates
+Every gate is of degree at most 2 — `decoded_mask_bits` and `system_split` are linear — and
+0 on the all-zero row. **All eight S21 gates
 are degree 2, and the three they amended stayed degree 2**: each gained terms on an existing
 product's other factor, never a third factor. S23 did the same — three gates per type where
 S21 had four for the one, plus `deleg_space_rule`, which is degree 1. By
@@ -605,7 +611,7 @@ a padding row every mask is 0, so whatever the bits say reaches no memory event.
 
 ### 8.3 Lookups
 
-After the frame's **16** timestamp obligations — two per query, and `deleg` is the eighth —
+After the frame's **10** timestamp obligations — two per query, and `deleg` is the fifth —
 all under the selector `m_pc`:
 
 | lookup | channel | tuple |
@@ -616,9 +622,10 @@ all under the selector `m_pc`:
 | `next_pc_lo_range` | `RANGE16` | `next_pc − 2^16·next_pc_hi` |
 | `decode_row` | `DECODER` | `pc, decoded_next_pc, decoded_rs1, decoded_rs2, decoded_rd, decoded_imm, decoded_mask` |
 
-**16** timestamp, 4 `RANGE16` and 1 decoder obligation; the constructor asserts the counts.
-Seventeen `TIMESTAMP` leaves — sixteen obligations and the table fraction — pad to a 32-leaf
-tree, so this circuit is six row-wise gate lists deep rather than five
+**10** timestamp, 4 `RANGE16` and 1 decoder obligation; the constructor asserts the counts.
+Eleven `TIMESTAMP` leaves — ten obligations and the table fraction — pad to a 16-leaf tree,
+which is the depth every other execution family's already had: the seventeen leaves that
+made this circuit one row-wise gate list deeper than the rest were the transfer rows'
 (`docs/spec/constraint-manifest.md` §1.3).
 The channels, in output order, are `TIMESTAMP` over `V[range19]`, `RANGE16` over
 `V[range16]` and `DECODER` over `S[0..7]`.
@@ -650,23 +657,27 @@ table's fall-through is below `2^31`. The table's `next_pc` is `pc + 2` or `pc +
 the instruction's length (S11), so a compressed instruction of this family is proven at
 its own length.
 
-**EXIT only.** Every ecall row reads `a7 = 93`, writes `a0` back, and writes `HALT_PC`;
-no row reads `a1` or `a2` or touches RAM. A program that makes any other ecall is not
-provable at S16 — a completeness gap, not a soundness one — and the family's fill refuses
-such a trace by name. The first exit row writes `HALT_PC`, which no table row claims, so
-nothing follows it (`docs/spec/memory.md` §5).
+**Every ecall, and nothing but an ecall.** An ecall row is the exit or a delegation
+request of exactly one type: the exit reads `a7 = 93`, writes `a0` back and writes
+`HALT_PC`; a request reads its type's number, writes `a0 = 0` and falls through. No row of
+this family reads any register but `a7` and `a0`, and none touches RAM — it has no `ram`
+query to touch it with. Since the only ecalls in the ABI are those five numbers
+(`docs/spec/ecall-abi.md` §3), there is no ecall a guest can issue that these gates do not
+cover, and the family's fill refuses anything else by name. The first exit row writes
+`HALT_PC`, which no table row claims, so nothing follows it (`docs/spec/memory.md` §5).
 
 On a **padding row** every mask is 0 by the mask rules, so the row reaches no memory
 event, and every lookup is switched off by its selector.
 
 ### 8.5 Owed elsewhere, and what this family does not do
 
-- `read`, `write`, `-EBADF`, `-ENOSYS` and transfer rows: **never provable**, and S-IO
-  settled it (`docs/spec/public-values.md` §1). An execution's public values are not a
-  syscall's business, so the I/O-binding stage made the two calls permanently unprovable
-  rather than giving them a circuit, and S14's open question 10 — how a transfer row's RAM
-  write is confined to its ecall's buffer — went with them. This family's fill still
-  refuses both by name. **A delegation call is
+- `read`, `write` and their transfer rows: **retired, and their numbers burned**
+  (`docs/spec/ecall-abi.md` §4). S-IO settled that they were not the right shape — an
+  execution's public values are not a syscall's business — and made them permanently
+  unprovable rather than giving them a circuit; they are now gone from the ABI outright,
+  and with them the `arg1`, `arg2` and `ram` queries this family carried for their sake and
+  S14's open question 10, how a transfer row's RAM write is confined to its ecall's buffer.
+  There is no ecall left for a fill to refuse. **A delegation call is
   no longer among them**: S21 made `PRECOMPILE_KECCAK_F` the second provable ecall, with
   four gates of its own and three S16 gates amended (§8.2), and S23 added
   `PRECOMPILE_POSEIDON2` and `PRECOMPILE_FR_ARITH` beside it, S26 `PRECOMPILE_MOD_MUL` —
@@ -678,8 +689,9 @@ event, and every lookup is switched off by its selector.
   this family. At S16 the public I/O digest was in the statement and nothing tied it to a
   row; since S-IO the statement's `input` and `output` are the payloads of two RAM windows
   of their own, bound by the memory argument and by step 10c of §6
-  (`docs/spec/public-values.md`). No gate here changed, and fd 0 and fd 1 are not what is
-  bound — nothing a proof covers travels on either.
+  (`docs/spec/public-values.md`). No gate here changed, and nothing an execution publishes
+  travels through a call: the two windows are memory, and the binding is the multiset's and
+  the verifier's.
 - The generic channel: the family does not look it up. **S17**, the first family that
   does, binds the exact packed-table commitment into the proof's statement or
   transcript before its lookup challenges are drawn — not into program identity

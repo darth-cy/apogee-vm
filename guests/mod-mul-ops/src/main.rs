@@ -13,8 +13,8 @@
 //!
 //! **Both of this half's moduli fit a `u64`, and that is the whole reason they
 //! were chosen.** The ABI's fall-through convention requires every caller to
-//! have a software path (§2): under `qemu-riscv32` the ecall answers `-ENOSYS`
-//! and the caller runs its own. A 256-bit modulus would make that path a
+//! have a software path (§2): on an executor with no circuit the ecall answers
+//! `-ENOSYS` and the caller runs its own. A 256-bit modulus would make that path a
 //! second 512-bit long division living in a guest — a duplicate of
 //! `emulator::mod_mul_frame` with no way to share code with it — where a
 //! `u64` modulus makes it one `u128` expression. The circuit's coverage over
@@ -31,7 +31,7 @@
 //! ecall answers `-ENOSYS` and the software multiply runs instead — so a host
 //! test could not see the delegated path at all.
 //!
-//! # fd 0, fd 1, fd 2, fd 3
+//! # Input, advice and the journal
 //!
 //! Unused. `EXIT` and `PRECOMPILE_MOD_MUL` are this guest's only ecalls, which
 //! is what keeps it provable.

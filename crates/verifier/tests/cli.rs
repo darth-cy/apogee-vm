@@ -77,8 +77,8 @@ fn the_cli_verifies_the_dumped_files_and_refuses_a_flipped_bit() {
     args.extend(files.iter().map(|p| p.as_path()));
     let (code, text) = run(&args, &identity);
     assert_eq!(code, 0, "{text}");
-    assert_eq!(text.matches(" verifies").count(), 3, "{text}");
-    assert!(text.contains("the statement verifies: 2 shards"), "{text}");
+    assert_eq!(text.matches(" verifies").count(), 5, "{text}");
+    assert!(text.contains("the statement verifies: 4 shards"), "{text}");
 
     // Another identity than the key's: refused before any proof is read.
     let mut other = setup.vk.identity.to_bytes();
@@ -125,10 +125,10 @@ fn the_cli_verifies_the_dumped_files_and_refuses_a_flipped_bit() {
         let (code, text) = run(&[&key, &statement, one], &identity);
         assert_eq!(code, 1, "only proof {i}: {text}");
         assert!(text.contains(" verifies"), "{text}");
-        assert!(text.contains("not the statement's 2 shards"), "{text}");
+        assert!(text.contains("not the statement's 4 shards"), "{text}");
         let (code, text) = run(&[&key, &statement, one, one], &identity);
         assert_eq!(code, 1, "proof {i} twice: {text}");
-        assert!(text.contains("not the statement's 2 shards"), "{text}");
+        assert!(text.contains("not the statement's 4 shards"), "{text}");
     }
     let mut reversed = args.clone();
     reversed[2..].reverse();
@@ -170,7 +170,7 @@ fn the_cli_verifies_a_block_file() {
 
     let (code, text) = invoke(&["block"], &[&key, &statement, &file], &identity);
     assert_eq!(code, 0, "{text}");
-    assert!(text.contains("the block verifies: 2 shards"), "{text}");
+    assert!(text.contains("the block verifies: 4 shards"), "{text}");
 
     // Another identity, a statement that is not the block's, and a flipped bit
     // anywhere in the block are each refused.

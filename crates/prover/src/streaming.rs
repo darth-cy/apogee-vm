@@ -52,7 +52,7 @@ use crate::{
 /// with.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StreamingReport {
-    /// The execution's cycle count, transfer cycles included.
+    /// The execution's cycle count.
     pub cycles: u64,
     /// How many shards the statement holds.
     pub shards: usize,

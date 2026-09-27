@@ -354,7 +354,7 @@ fn ms(value: f64) -> String {
 /// No new dependency and no `unsafe`. On Linux everything comes from `/proc`
 /// through `std::fs`; on macOS there is no `/proc`, so the CPU and the memory
 /// size come from `sysctl`, which `std::process::Command` spawns exactly as
-/// this repository already spawns `cargo`, `qemu-riscv32` and `llvm-objdump`.
+/// this repository already spawns `cargo` and `llvm-objdump`.
 /// A field that cannot be read says so rather than guessing.
 pub fn hardware() -> Hardware {
     let logical_cpus = std::thread::available_parallelism()

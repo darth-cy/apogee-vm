@@ -10,13 +10,13 @@
 //! grows upward from `__heap_start`. `crates/emulator/tests/guests.rs` redoes
 //! the arithmetic on the host.
 //!
-//! # fd 0, the public input
+//! # The public input
 //!
 //! ```text
 //!           0..4     n               u32 LE; how many elements to allocate
 //! ```
 //!
-//! # fd 1, the public output
+//! # The journal
 //!
 //! ```text
 //!           0..4     sum             the squares 0^2 .. (n-1)^2, wrapping
@@ -27,6 +27,11 @@
 //!
 //! Row `i` is the bytes `0 .. i % 13`, and a row is kept when its length is
 //! even. The fold is `acc * 31 + byte`, wrapping.
+//!
+//! # The advice
+//!
+//! Unused. What this guest is a fixture for is the allocator, and the
+//! allocator does not care where the element count came from.
 
 extern crate alloc;
 
@@ -38,9 +43,9 @@ guest_sdk::entry!(main);
 fn main() {
     let mut n = [0u8; 4];
     assert_eq!(
-        guest_sdk::read_stdin(&mut n),
+        guest_sdk::read_input(&mut n),
         4,
-        "heap: public input is one u32"
+        "heap: the public input is one u32"
     );
     let n = u32::from_le_bytes(n);
 
@@ -67,6 +72,6 @@ fn main() {
         .flatten()
         .fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(*b as u32));
     for word in [sum, boxed, lengths, content] {
-        guest_sdk::write_stdout(&word.to_le_bytes());
+        guest_sdk::commit(&word.to_le_bytes());
     }
 }

@@ -35,7 +35,7 @@ use program::{FamilyId, VmConfig};
 /// How many rows each family filled: one count per family of the `VmConfig`,
 /// in its order, zero for a family the execution never reached.
 ///
-/// A cycle-owning family's count is its cycles, transfer cycles included, and
+/// A cycle-owning family's count is its cycles, and
 /// those counts sum to the execution's cycle count — [`CycleProfile::total`].
 /// A **delegation** family's count is its *invocations*, which are not cycles:
 /// they ride a requesting cycle that the add/sub family already counts

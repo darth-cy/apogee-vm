@@ -67,8 +67,8 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
 /// the numbers read off the registry's circuit — so that a change to either
 /// family shows up on both sides. What the trace holds, instruction by
 /// instruction, is `crates/checker/tests/shift_bitwise.rs` and `crates/checker/
-/// tests/mul_div.rs` over the same fixture, and QEMU's reading of it is
-/// `crates/emulator/tests/qemu_outputs.rs`', which compares the exit status and
+/// tests/mul_div.rs` over the same fixture, and the emulator's reading of it is
+/// `crates/emulator/tests/guests.rs`', which checks the exit status and
 /// fd 1 and nothing below that.
 #[test]
 #[ignore = "four 2^20-row execution shards: one statement's proof peaks at 14.1 GB"]

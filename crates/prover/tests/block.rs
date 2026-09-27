@@ -12,7 +12,10 @@
 //! whose `ADD_SUB_LUI_AUIPC` family runs 1,064,970 cycles, so the plan cuts it
 //! into **two shards of one family** — S20's stage gate — with
 //! `JUMP_BRANCH_SLT` in one shard, `INIT_TEARDOWN` in one, and `ZERO_WINDOWS`
-//! in none, because nothing in the guest touches RAM.
+//! in none, because nothing in the guest touches RAM. Since S-IO
+//! `PUBLIC_INPUT` and `PUBLIC_OUTPUT` each prove one shard in every statement
+//! and `ADVICE_WINDOWS` proves none without advice, so the block is **six**
+//! shards: three `2^20`, one `2^16` and two `2^8`.
 
 mod common;
 
@@ -53,16 +56,21 @@ fn a1_a3_a8_a9_the_two_shard_block_proves_and_verifies() {
     let (setup, archive, block) = proved();
 
     // The plan: two shards of ADD_SUB_LUI_AUIPC, one of JUMP_BRANCH_SLT, one
-    // INIT_TEARDOWN, no ZERO_WINDOWS. **Why** there are two is the occupancy:
-    // the guest's add/sub family runs past its height, and there is no smaller
-    // height a cycle-owning family can have.
+    // INIT_TEARDOWN, no ZERO_WINDOWS, and S-IO's three families — one shard
+    // each for the two public windows and none for the advice. **Why** there
+    // are two add/sub shards is the occupancy: the guest's add/sub family runs
+    // past its height, and there is no smaller height a cycle-owning family
+    // can have.
     assert_eq!(
         setup.program.config.families,
         vec![
             (ADD, 1 << 20),
             (JBS, 1 << 20),
             (INIT, 1 << 16),
-            (ZERO, 1 << 16)
+            (ZERO, 1 << 16),
+            (family::PUBLIC_INPUT, family::PUBLIC_WINDOW_HEIGHT),
+            (family::PUBLIC_OUTPUT, family::PUBLIC_WINDOW_HEIGHT),
+            (family::ADVICE_WINDOWS, 1 << 16),
         ]
     );
     let occupancy = |f: u32| {
@@ -80,10 +88,10 @@ fn a1_a3_a8_a9_the_two_shard_block_proves_and_verifies() {
         "the add/sub family spills into exactly one more shard"
     );
     assert!(occupancy(JBS) <= 1 << 20, "the jump family fits one shard");
-    assert_eq!(block.shard_counts(), &[2, 1, 1, 0]);
+    assert_eq!(block.shard_counts(), &[2, 1, 1, 0, 1, 1, 0]);
     assert_eq!(
         block.reconciliation().records.len(),
-        4,
+        6,
         "one record per statement shard"
     );
     assert_eq!(
@@ -123,10 +131,10 @@ fn a1_a3_a8_a9_the_two_shard_block_proves_and_verifies() {
     let read = BlockProof::from_bytes(&bytes).expect("a block round-trips");
     assert_eq!(read.to_bytes(), bytes, "byte for byte");
     assert_eq!(read.config(), &setup.program.config);
-    assert_eq!(read.shard_counts(), &[2, 1, 1, 0]);
+    assert_eq!(read.shard_counts(), &[2, 1, 1, 0, 1, 1, 0]);
     assert_eq!(read.shard_count(ADD), 2);
     assert_eq!(read.shard_count(ZERO), 0);
-    assert_eq!(read.shard_proofs().len(), 4);
+    assert_eq!(read.shard_proofs().len(), 6);
     assert_eq!(read.reconciliation(), block.reconciliation());
     assert_eq!(verify_block(&setup.vk, &read, read.statement()), Ok(()));
 
@@ -295,15 +303,19 @@ fn a4_a6_every_block_twin_is_refused() {
     // proofs'.
     let mut counted = block.clone();
     counted.statement.shard_counts[1] = 2;
-    let last = counted
-        .statement
-        .memory_commitments
-        .last()
-        .cloned()
-        .unwrap();
-    counted.statement.memory_commitments.push(last);
-    let root = *counted.statement.memory_roots.last().unwrap();
-    counted.statement.memory_roots.push(root);
+    // Pad with **`JUMP_BRANCH_SLT`'s own** list, at its own position, and not
+    // with the statement's last one: since S-IO that is `PUBLIC_OUTPUT`'s,
+    // whose memory width is a window family's, so step 3 would refuse the
+    // width before reaching the count check this case is about.
+    let at = block
+        .shards
+        .iter()
+        .position(|s| s.family == JBS)
+        .expect("the statement proves one JUMP_BRANCH_SLT shard");
+    let list = counted.statement.memory_commitments[at].clone();
+    counted.statement.memory_commitments.insert(at + 1, list);
+    let root = counted.statement.memory_roots[at];
+    counted.statement.memory_roots.insert(at + 1, root);
     let claimed = counted.statement.clone();
     assert_eq!(
         verify_block(&setup.vk, &counted, &claimed),
@@ -367,7 +379,7 @@ fn a5_a_block_missing_a_shard_does_not_reconcile() {
         global,
     };
     let kept = statement_shards(&setup.program.config, &ctx.global.statement.shard_counts);
-    assert_eq!(kept.len(), 3, "one shard fewer");
+    assert_eq!(kept.len(), 5, "one shard fewer");
     let proofs: Vec<ShardProof> = kept
         .iter()
         .map(|&(f, i)| prover::prove_shard(&ctx, &archive, f, i))
@@ -541,7 +553,9 @@ fn a2_a_multi_family_block_proves_and_verifies() {
     assert_eq!(block.shard_count(ZERO), 1, "mem writes above window 0");
 
     let records = block.reconciliation().records;
-    assert_eq!(records.len(), execution.len() + 2);
+    // `+ 4`: INIT_TEARDOWN, ZERO_WINDOWS and, since S-IO, PUBLIC_INPUT and
+    // PUBLIC_OUTPUT, each one shard beside the execution families'.
+    assert_eq!(records.len(), execution.len() + 4);
     for r in &records {
         assert_eq!(
             r.memory_commitments.len(),

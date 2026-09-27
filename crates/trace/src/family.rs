@@ -17,15 +17,12 @@ use crate::log::AddressSpace;
 pub enum Role {
     /// Slot 1, a register read: `rs1`. On an ecall row, `a7`.
     Rs1,
-    /// Slot 2, a register read: `rs2`. On an ecall row, `a0`, the first argument.
+    /// Slot 2, a register read: `rs2`. On an ecall row, `a0` — its one
+    /// argument, which is an exit status or a delegation frame base.
     Rs2,
-    /// Slot 2, a register read. On an ecall row, `a1`; nothing else uses it.
-    Arg1,
-    /// Slot 2, a register read. On an ecall row, `a2`; nothing else uses it.
-    Arg2,
     /// Slot 2, a RAM read: a load's word.
     Load,
-    /// Slot 3, a RAM query: a store's, an atomic's or an ecall transfer's word.
+    /// Slot 3, a RAM query: a store's or an atomic's word.
     Ram,
     /// Slot 3, a register write: `rd`. On an ecall row, `a0`, the result.
     Rd,
@@ -42,12 +39,14 @@ pub enum Role {
 ///
 /// Eight is the ceiling: `Row::present` is a `u8` with one bit per role, so a
 /// ninth role widens it, and that is a schema change
-/// (`docs/spec/execution-trace.md` §7). [`Role::Delegate`] took the last bit.
-pub const ROLES: [Role; 8] = [
+/// (`docs/spec/execution-trace.md` §7). There were eight until the POSIX layer
+/// was deleted: `Arg1` and `Arg2` were an ecall row's `a1` and `a2`, which only
+/// `read` and `write` ever passed, so both became unreachable with those calls
+/// and were removed rather than kept as roles no row can have. Two bits are
+/// spare again.
+pub const ROLES: [Role; 6] = [
     Role::Rs1,
     Role::Rs2,
-    Role::Arg1,
-    Role::Arg2,
     Role::Load,
     Role::Ram,
     Role::Rd,
@@ -59,7 +58,7 @@ impl Role {
     pub fn delta(self) -> u64 {
         match self {
             Role::Rs1 => 1,
-            Role::Rs2 | Role::Arg1 | Role::Arg2 | Role::Load => 2,
+            Role::Rs2 | Role::Load => 2,
             Role::Ram | Role::Rd | Role::Delegate => 3,
         }
     }

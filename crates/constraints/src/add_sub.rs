@@ -8,13 +8,13 @@
 //! S15's `memory::frame_with_channels_artifact` beside S14's frame.
 //!
 //! ```text
-//! frame     M[0..41], W[0..11]: pc rs1 rs2 arg1 arg2 ram rd deleg at slots 0..8
-//! M[41]     deleg_space: the requested delegation type's address-space tag
-//! W[11..17] the claimed decoded row: next_pc rs1 rs2 rd imm mask
-//! W[17..23] the mask's six bits; W[23], W[24] is_ecall, is_fence
-//! W[25..28] is_deleg_*: one delegation request selector per type
-//! W[28..32] wrap, rd_hi, pc_wrap, next_pc_hi
-//! W[32..35] one multiplicity per channel: timestamp, range16, decoder
+//! frame     M[0..26], W[0..8]: pc rs1 rs2 rd deleg at slots 0..5
+//! M[26]     deleg_space: the requested delegation type's address-space tag
+//! W[8..14]  the claimed decoded row: next_pc rs1 rs2 rd imm mask
+//! W[14..20] the mask's six bits; W[20], W[21] is_ecall, is_fence
+//! W[22..26] is_deleg_*: one delegation request selector per type
+//! W[26..30] wrap, rd_hi, pc_wrap, next_pc_hi
+//! W[30..33] one multiplicity per channel: timestamp, range16, decoder
 //! S[0..7]   the decoded table, program::lookup_tuple order
 //! ```
 
@@ -30,9 +30,9 @@ use field::Fr;
 
 use crate::lookup::ChannelSpec;
 use crate::memory::{
-    deleg_space, frame, frame_queries, frame_with_channels_artifact, rd_selected, FamilySpec, ARG1,
-    ARG2, DELEG, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, PC,
-    RAM, RD, RS1, RS2,
+    deleg_space, frame, frame_queries, frame_with_channels_artifact, rd_selected, FamilySpec,
+    DELEG, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS, FIELD_READ_VALUE, FIELD_WRITE_VALUE, PC, RD, RS1,
+    RS2,
 };
 use crate::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
 
@@ -80,25 +80,22 @@ const _: () = assert!(constants::ecall::EXIT < constants::ecall::ZKVM_IO_FIRST);
 
 /// The family's queries, in slot order: its frame is `memory::frame_queries`'
 /// list, and this file addresses its columns by these slots.
-const QUERIES: [usize; 8] = [PC, RS1, RS2, ARG1, ARG2, RAM, RD, DELEG];
+const QUERIES: [usize; 5] = [PC, RS1, RS2, RD, DELEG];
 const SLOT_PC: usize = 0;
 const SLOT_RS1: usize = 1;
 const SLOT_RS2: usize = 2;
-const SLOT_ARG1: usize = 3;
-const SLOT_ARG2: usize = 4;
-const SLOT_RAM: usize = 5;
-const SLOT_RD: usize = 6;
-const SLOT_DELEG: usize = 7;
+const SLOT_RD: usize = 3;
+const SLOT_DELEG: usize = 4;
 
-/// The frame's own witness columns: eight gap chunks, then the x0 gadget's
+/// The frame's own witness columns: five gap chunks, then the x0 gadget's
 /// three. Everything this file adds follows them.
-const FRAME_WITNESS: u32 = 8 + 3;
+const FRAME_WITNESS: u32 = 5 + 3;
 
 const fn w(i: u32) -> PolyAddress {
     PolyAddress::Witness(i)
 }
 
-/// `W[10..16]`: the claimed decoded row, `next_pc, rs1, rs2, rd, imm, mask` —
+/// `W[8..14]`: the claimed decoded row, `next_pc, rs1, rs2, rd, imm, mask` —
 /// `program::lookup_tuple` after `pc`, which the frame's own pc column is.
 pub const DECODED: [PolyAddress; 6] = [
     w(FRAME_WITNESS),
@@ -115,7 +112,7 @@ const DECODED_RD: PolyAddress = DECODED[3];
 const DECODED_IMM: PolyAddress = DECODED[4];
 const DECODED_MASK: PolyAddress = DECODED[5];
 
-/// `W[16..22]`: the packed mask's bits, bit `k` at index `k` —
+/// `W[14..20]`: the packed mask's bits, bit `k` at index `k` —
 /// `constants::extra_mask::add_sub_lui_auipc`'s order: system, addi, auipc,
 /// add, sub, lui.
 pub const KINDS: [PolyAddress; 6] = [
@@ -133,11 +130,11 @@ const KIND_ADD: PolyAddress = KINDS[kind::ADD as usize];
 const KIND_SUB: PolyAddress = KINDS[kind::SUB as usize];
 const KIND_LUI: PolyAddress = KINDS[kind::LUI as usize];
 
-/// `W[22]`: 1 exactly on a system row whose code is `ecall`.
+/// `W[20]`: 1 exactly on a system row whose code is `ecall`.
 pub const IS_ECALL: PolyAddress = w(FRAME_WITNESS + 12);
-/// `W[24]`: 1 exactly on a system row whose code is `fence`.
+/// `W[21]`: 1 exactly on a system row whose code is `fence`.
 pub const IS_FENCE: PolyAddress = w(FRAME_WITNESS + 13);
-/// `W[25..29]`: one **delegation request** selector per type, in
+/// `W[22..26]`: one **delegation request** selector per type, in
 /// [`DELEGATIONS`] order — 1 exactly on an ecall row whose `a7` is that type's
 /// number (`docs/spec/delegation.md` §5.1). Each is a free boolean, pinned by
 /// the number gates below: an ecall row is an exit or a request of exactly one
@@ -151,15 +148,15 @@ pub const IS_DELEGATION: [PolyAddress; TYPES] = [
 /// The keccak-f request selector, S21's `IS_KECCAK`, now the first of
 /// [`IS_DELEGATION`].
 pub const IS_KECCAK: PolyAddress = IS_DELEGATION[0];
-/// `W[28]`: the sum's carry, or the difference's borrow.
+/// `W[26]`: the sum's carry, or the difference's borrow.
 pub const WRAP: PolyAddress = w(FRAME_WITNESS + 14 + TYPES as u32);
-/// `W[29]`: the computed `rd` value's high halfword.
+/// `W[27]`: the computed `rd` value's high halfword.
 pub const RD_HI: PolyAddress = w(FRAME_WITNESS + 15 + TYPES as u32);
-/// `W[30]`: `next_pc`'s wrap, 0 on every honest row.
+/// `W[28]`: `next_pc`'s wrap, 0 on every honest row.
 pub const PC_WRAP: PolyAddress = w(FRAME_WITNESS + 16 + TYPES as u32);
-/// `W[31]`: `next_pc`'s high halfword.
+/// `W[29]`: `next_pc`'s high halfword.
 pub const NEXT_PC_HI: PolyAddress = w(FRAME_WITNESS + 17 + TYPES as u32);
-/// `W[32..35]`: the channels' multiplicities, in channel order — timestamp,
+/// `W[30..33]`: the channels' multiplicities, in channel order — timestamp,
 /// range16, decoder — last in the witness subtree (`docs/spec/lookup.md` §7).
 pub const MULTIPLICITIES: [PolyAddress; 3] = [
     w(FRAME_WITNESS + 18 + TYPES as u32),
@@ -279,7 +276,7 @@ fn names(list: &[&str]) -> Vec<String> {
 /// §8. `trace_vars` is at least 19, the timestamp channel's width, which the
 /// assembly refuses below; a Mercury opening needs it even as well.
 ///
-/// Panics if the family's frame is not the eight queries this file addresses,
+/// Panics if the family's frame is not the five queries this file addresses,
 /// or if any obligation count is not §8.3's — 16 timestamp (two a query, and
 /// S21's `deleg` is the eighth), 4 `RANGE16`, 1 decoder — and on every refusal
 /// of the assembly.
@@ -287,7 +284,7 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     assert_eq!(
         frame_queries(family::ADD_SUB_LUI_AUIPC),
         &QUERIES,
-        "add_sub: the family's frame is the eight queries this circuit addresses by slot"
+        "add_sub: the family's frame is the five queries this circuit addresses by slot"
     );
     let m_pc = frame(SLOT_PC, FIELD_MASK);
     let pc = frame(SLOT_PC, FIELD_READ_VALUE);
@@ -417,13 +414,6 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
         "rs2_mask_rule".into(),
         mask_rule(frame(SLOT_RS2, FIELD_MASK), &[KIND_ADD, KIND_SUB, IS_ECALL]),
     ));
-    for (name, slot) in [
-        ("arg1_mask_rule", SLOT_ARG1),
-        ("arg2_mask_rule", SLOT_ARG2),
-        ("ram_mask_rule", SLOT_RAM),
-    ] {
-        enforcing.push((name.into(), linear(vec![(lit(1), frame(slot, FIELD_MASK))])));
-    }
     enforcing.push((
         "rd_mask_rule".into(),
         mask_rule(

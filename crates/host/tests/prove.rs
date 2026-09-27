@@ -82,10 +82,8 @@ fn advice() -> Vec<u8> {
 
 fn io() -> emulator::GuestIo {
     emulator::GuestIo {
-        stdin: Vec::new(),
         input: Vec::new(),
         advice: advice(),
-        hint: Vec::new(),
     }
 }
 

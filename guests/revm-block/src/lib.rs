@@ -7,9 +7,8 @@
 //! `src/main.rs` hands it the **advice** region and commits what it returns to
 //! the **journal**. This file names no transport: it takes the witness's bytes
 //! and returns the commitment's, and which memory those bytes arrive in and
-//! leave by is the binary's business, not the workload's — `src/stdio.rs` is
-//! the same computation over fd 0 and fd 1. The two halves differ in exactly
-//! two ways and in nothing else:
+//! leave by is the binary's business, not the workload's. The two halves differ
+//! in exactly two ways and in nothing else:
 //!
 //! - **keccak256.** `revm::primitives::keccak256` is `alloy-primitives`'
 //!   one-shot hash. On the guest this crate enables that crate's
@@ -161,19 +160,6 @@ pub const TRACE_HEIGHT_RELEASE: u32 = 1 << 20;
 /// one — but the from-source suites trace the debug build, and a trace needs
 /// a table that holds the code.
 pub const TRACE_HEIGHT_DEBUG: u32 = 1 << 22;
-
-/// The fd 0 buffer `src/stdio.rs` reads its witness into, in one `read`.
-///
-/// The provable binary has no buffer at all: advice *is* memory, so
-/// `src/main.rs` decodes the region in place and this constant does not
-/// reach it.
-///
-/// **A tunable**, and the one number here that is a policy rather than a
-/// fact: twice the largest committed witness, so a witness that grows by less
-/// than half again still fits and a larger one exits loudly rather than
-/// decoding a prefix. The bump allocator never frees, so this is also the
-/// largest single allocation the guest makes.
-pub const WITNESS_CAPACITY: usize = 2 * COMMITTED_WITNESS_BYTES;
 
 /// Everything one block's execution needs, and nothing an execution derives.
 ///
@@ -990,8 +976,7 @@ fn access_list(list: &[(Address20, Vec<Word32>)]) -> AccessList {
 
 /// The output commitment: must-be-exact 7's three sections, in order and
 /// always all three. `src/main.rs` commits these bytes to the journal, where
-/// the statement carries them; `src/stdio.rs` writes them to fd 1, where
-/// nothing does.
+/// the statement carries them.
 ///
 /// ```text
 ///   per-tx records, in execution order, one per transaction:

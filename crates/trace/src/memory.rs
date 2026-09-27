@@ -93,10 +93,11 @@ fn row_events(row: &Row) -> Vec<MemoryEvent> {
 ///
 /// An event takes the first slot of its row still free whose space and slot are
 /// its own. That is exact for every query but the three slot-2 register ones,
-/// `rs2`, `arg1` and `arg2`, which [`ROLES`] orders in that order and which
-/// fill in that order: a row with `arg1` has `rs2`, and one with `arg2` has
-/// `arg1`, because an ecall's arguments are a prefix of `a0, a1, a2`
-/// (`docs/spec/execution-trace.md` §6, §7) and no other row reads `arg1`.
+/// `rs2` and `load`, which [`ROLES`] orders in that order. Since the POSIX
+/// layer went there is no ambiguity left to resolve: `arg1` and `arg2` shared
+/// slot 2 with them and are deleted, so each surviving role's
+/// `(space, Δ)` pair is unique and a query's events route by that pair alone
+/// (`docs/spec/execution-trace.md` §6, §7).
 ///
 /// Panics on `rows.len() > height`, and — naming the event — on a query no free
 /// slot takes, which is how a frame too narrow for the family filling it fails
