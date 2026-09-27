@@ -163,6 +163,18 @@ change (`cargo test -p <crate> --test <file> <name>` before `-p <crate>` before 
 source answers or "to see whether that fixed it", never run two at once, and read a failure
 rather than re-running it. A minor change does not earn a workspace run, and a theory does not
 earn a deferred one. **The test suite is not a trial-and-error playground.**
+
+**A red or interrupted workspace run is triaged, never restarted.** When the full suite
+fails, isolate the failing test and re-run *only* it; widen only as far as the fix could
+have reached. When a run is cut short — `cargo test` stops at the **first failing test
+binary**, so every suite after it never executed — resume from where it stopped rather
+than starting over, and treat the suites that did not run as *unverified* rather than
+green (`cargo test --workspace --no-run --message-format=json` lists every test binary and
+its source path; diff that against the `Running …` lines the partial log printed, and add
+`--no-fail-fast` to the remainder when more than one failure is likely). The whole-suite
+run is the **last** step and may be left to CI after a push; what may never be deferred is
+the scoped run that confirms the change in hand. `prompts/00-master.md`'s "Test
+discipline" rules 3 and 6-8 are the authority.
 ```
 cargo fmt --all -- --check
 cargo fmt --manifest-path tools/transcript-ref/Cargo.toml --all -- --check

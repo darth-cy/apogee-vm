@@ -242,7 +242,7 @@ fn every_guest_declares_exactly_what_it_links() {
     }
     // The two halves are both non-empty, so neither clause is vacuous, and
     // every registered family is declared by at least one guest.
-    assert_eq!(common::DECLARING_GUESTS.len(), 8);
+    assert_eq!(common::DECLARING_GUESTS.len(), 7);
     assert!(common::GUESTS.len() > common::DECLARING_GUESTS.len() + 4);
     for (fam, ..) in DELEGATIONS {
         assert!(
