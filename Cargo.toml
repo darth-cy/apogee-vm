@@ -84,6 +84,11 @@ serde = { version = "1", default-features = false }
 # a guest, and anti-goal 1 bans cargo features *of ours*, not an upstream
 # oracle's build configuration.
 ark-bn254 = "0.6"
+# The secp256k1 oracle, and the only reason it is here: `constants::mod_mul`
+# holds that curve's two moduli as literals since S26b, and the group order `n`
+# has no derivation inside this repository. Test/tool only, like every other
+# arkworks crate above.
+ark-secp256k1 = "0.6"
 ark-ec = { version = "0.6", features = ["parallel"] }
 ark-ff = { version = "0.6", features = ["parallel"] }
 ark-poly = "0.6"

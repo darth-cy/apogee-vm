@@ -48,6 +48,7 @@ mod isa;
 mod loader;
 mod lookup;
 mod memory;
+mod moduli;
 mod msm;
 mod pairing;
 mod pcs;
@@ -61,7 +62,7 @@ mod tape;
 mod tower;
 
 /// Every group, in the order a reader of the tower would meet them.
-const GROUPS: [(&str, fn()); 20] = [
+const GROUPS: [(&str, fn()); 21] = [
     ("field", field::generate),
     ("poly", poly::generate),
     ("curve", curve::generate),
@@ -78,6 +79,7 @@ const GROUPS: [(&str, fn()); 20] = [
     ("lookup", lookup::generate),
     ("family", family::generate),
     ("delegation", delegation::generate),
+    ("moduli", moduli::generate),
     ("tape", tape::generate),
     ("revm", revm::generate),
     ("block", block::generate),
@@ -97,7 +99,7 @@ const GROUPS: [(&str, fn()); 20] = [
 /// one machine, with `cargo run -p kat-gen -- guests`, and everything CI can
 /// reproduce from them -- the objdump and nm listings -- is in `loader`, which
 /// does run by default.
-const DEFAULT_GROUPS: [&str; 18] = [
+const DEFAULT_GROUPS: [&str; 19] = [
     "field",
     "poly",
     "curve",
@@ -114,6 +116,7 @@ const DEFAULT_GROUPS: [&str; 18] = [
     "lookup",
     "family",
     "delegation",
+    "moduli",
     "tape",
     "revm",
 ];

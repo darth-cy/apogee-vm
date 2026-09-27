@@ -263,13 +263,24 @@ pub const CANDIDATES: [Candidate; 5] = [
         category: Category::U256Arith,
         // No single entry: the arithmetic is inlined into 27 opcode handlers,
         // so this one's figure is a ceiling with no shim charged.
+        //
+        // **`MOD_MUL` is not this category's accelerator and never was.** The
+        // EVM's `MULMOD` takes an arbitrary modulus, which S26b's frame has no
+        // representation for; what would serve this category is a different
+        // family. The frame below is therefore a hypothetical one — two
+        // operands, a modulus and a result — and not
+        // `constants::mod_mul::FRAME_WORDS`.
         entries: &[],
-        // Two 256-bit operands, a 256-bit modulus, a 256-bit result.
         frame_words: 8 * 4,
     },
     Candidate {
         category: Category::Bn254,
         entries: &["bn128", "run_pair", "run_add", "run_mul"],
+        // Since S26b this category **is** delegated, through
+        // `guests/vendor/ark-ff`'s two calls a Montgomery multiply. What is
+        // left is the curve and tower arithmetic around those multiplies, so
+        // this figure is a ceiling on what a further family could remove and
+        // not a measurement of what one did.
         frame_words: 8 * 8,
     },
     Candidate {

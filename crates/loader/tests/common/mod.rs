@@ -26,42 +26,42 @@ use test_support::{sha256, to_hex};
 /// The synthetic ELFs are not listed one by one: `synthetic_elfs.txt` carries
 /// their digests and is itself pinned here, so the chain is one constant long
 /// either way and the index stays readable.
-pub const PINS: [(&str, &str); 23] = [
+pub const PINS: [(&str, &str); 24] = [
     (
         "fib.elf",
-        "cdc30b5bb6adb6025213871b5fa939cf3b0a01e2392ddd1b68b2d971084287a7",
+        "f1f272cdeab14c993d98ad65994cd96e7814ba40847593fbdb4b2ae03685d339",
     ),
     (
         "echo.elf",
-        "14353bb83c00dbc56347196b952e99a41067d64d0356bc2d140f263fb398b28a",
+        "803c10c8f4982273322a2c3b0bf6f618e2a9913dbe90048fb926fd1e240c190d",
     ),
     (
         "rvc-dense.elf",
-        "3818bdad9a78b1d44fa6fd9104532d6d3fc1fc3d6c4210f8eeda67ef2f29c420",
+        "f42f4d7a66a9558a987fd56469dc3bdb0ba1947734d02f97a3c0bb8ab83d351f",
     ),
     (
         "amm.elf",
-        "ba7de08297bb8b5108a2527440d7a22b1684355c846eb4f5749cd6190bfb6c3a",
+        "94c17fdd84f5d73be299d1528dfacc1810dcf0f34b238e9697beeb842d56da6c",
     ),
     (
         "orderbook.elf",
-        "19fb3b7e4540b0aae90cc6cec53bdcac87db7ca2632ec91755fa486abe6648f1",
+        "983f25696058f7968068d298c6b243526e406e60805e796498d5871b6e7334c1",
     ),
     (
         "vault.elf",
-        "3448255854c9612a0e59680585487f2e782d96d0fcbad73d9c431a24437ceb72",
+        "71ffc77d6d294b000784417389c63d7995c91c2c8c06392462398389efcccdab",
     ),
     (
         "atomics.elf",
-        "78a8c83c660becd0fe86405b6f9d42e7bce73151e9cf7eb0c59b1c1cb934a069",
+        "ac682257e5c660a18cab4a7eac9b18d2e36b5d97914a8dbcab3e69087a9eebe6",
     ),
     (
         "opcodes.elf",
-        "b56f1379a7260ad3460ace802d09b3278e1269db144048ddaf5e71e582dc7502",
+        "182442d788b6d6d91341ab86a8f418e6777fe3425527730c6c68e3a84e3ad51a",
     ),
     (
         "heap.elf",
-        "70b1729a42b95e9a64f28291eab80868e132131de804581bbedfd16f4ca2b431",
+        "0141d9860bec202f2f4f3a7283e1615bc0d01f8c998c3f08a24ec2b89b1f6028",
     ),
     (
         "addsub.elf",
@@ -101,23 +101,27 @@ pub const PINS: [(&str, &str); 23] = [
     ),
     (
         "keccak-test.elf",
-        "72128c0e2dd863368d19f2ea07b2f215323b6a96583ef30fdee86aaca80080f0",
+        "52ceaca90425efacdf424c6ec417cf7d365501644da8cf47959069c32a19653d",
     ),
     (
         "keccak-unused.elf",
-        "3afedf41f7f512dcf81cb2639abcad1c0ad1981167385f99bcac599ba54ca65d",
+        "2df5e321fccc18df84e43b565972e77b6b3b5e70725490f36f9051e9d4ddb868",
     ),
     (
         "recursion-ops.elf",
-        "010d7acc02885a963eb12528544bcd8c5bf2f48e6a436a2e56664496b24170d8",
+        "f9cd36a5891f0cac02263193304cd667a91103e3fc3f48abae8da3e24a02d822",
     ),
     (
         "recursion-unused.elf",
-        "1d60f616c7c54e7c1b3902870fd46553038f4881b06343ff1625634cf1607ce1",
+        "dba2738565f4ef29483704af916b4685b89d04cc2dfdad371e1ed75d2aeea2bc",
     ),
     (
         "public-io.elf",
-        "d4594d1bb54aab5e24b638dd47a8f6b813abecbceed52581712ccb0785c65ee8",
+        "91844633c800d8cbd4e89f9e683f3f30babf365bcf3bf562acf9c34d338afd35",
+    ),
+    (
+        "mod-mul-ops.elf",
+        "611d9c98afc4d64e3a607b65885bb006f13e7e1bae7bd1d35fcc8a96dae493ef",
     ),
 ];
 

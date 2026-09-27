@@ -125,6 +125,70 @@ fn the_mod_mul_fill_covers_its_circuit_exactly() {
     );
 }
 
+/// **Every gate of every `MOD_MUL` shard holds on the fill's own columns.**
+///
+/// `covers` above is set equality over addresses, and a permutation is
+/// invisible to it: swap two values in the fill's list and every column is
+/// still written exactly once, at an address the circuit has, with a value
+/// that belongs to another column. That failure surfaces as
+/// `LayerInconsistency { layer }` from a deferred proof, naming nothing.
+///
+/// This is the fast test that catches it, and the mutations it is here for are
+/// specific: the `A`/`B`/`OUT` value indices renumbered against
+/// `constraints::mod_mul::VALUES`, a `< m` chain computed against the wrong
+/// modulus — `fill::borrow_chain` subtracts `constants::FR_MODULUS` and would
+/// be right for one of the four selectors — a selector column set from the
+/// wrong code, and a padding row's chain computed against the shard's modulus
+/// rather than against its own zero one. None of those is visible to
+/// `covers`, to `checker`'s hand-built witness, or to anything else in
+/// ordinary CI.
+///
+/// It runs **every** shard rather than the first, because the last is where
+/// the padding rows are and their chains are the case above.
+#[test]
+fn every_mod_mul_shard_the_fill_writes_satisfies_every_gate() {
+    let program = common::mod_mul_program();
+    let archive = common::mod_mul_archive(&program);
+    let circuit = constraints::family_circuit(family::MOD_MUL, common::MOD_MUL_FIXTURE_VARS)
+        .expect("MOD_MUL is registered at the fixture height");
+    let mut challenges = gkr::ExternalChallenges::new();
+    for (slot, value) in [
+        (constants::challenge_slot::MEM_GAMMA, 3u64),
+        (constants::challenge_slot::MEM_ALPHA_ADDR, 5),
+        (constants::challenge_slot::MEM_ALPHA_TS, 7),
+        (constants::challenge_slot::MEM_ALPHA_VAL, 11),
+    ] {
+        challenges.insert(slot, field::Fr::from_u64(value));
+    }
+    let height = 1u32 << common::MOD_MUL_FIXTURE_VARS;
+    let fill = family_fill(family::MOD_MUL).expect("MOD_MUL has a fill");
+    let invocations = archive
+        .family_traces()
+        .delegation(family::MOD_MUL)
+        .expect("MOD_MUL has a buffer")
+        .len();
+    let shards = invocations.div_ceil(height as usize);
+    assert!(
+        shards >= 2,
+        "{shards} shards: the fixture is not multi-shard"
+    );
+    for shard in 0..shards as u32 {
+        let src = ShardSource::archived(&program, &archive, family::MOD_MUL, shard, height, 0)
+            .expect("the shard's rows");
+        let columns = fill(&src).expect("the shard fills");
+        let values = gkr::forward(
+            &circuit.artifact,
+            &gkr::BaseLayer::new(columns),
+            &challenges,
+        );
+        assert_eq!(
+            gkr::self_check(&circuit.artifact, &values, &challenges),
+            Ok(()),
+            "shard {shard}"
+        );
+    }
+}
+
 /// The four circuits do **not** agree on where a frame's witness columns
 /// start, which is the whole reason the builder takes a base. Stated here so
 /// that a later family copying one of them sees the choice rather than

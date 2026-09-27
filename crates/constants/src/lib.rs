@@ -1099,18 +1099,25 @@ pub mod family {
     /// prover chose; a guest owes a check of it against something public
     /// (`docs/spec/public-values.md` §6).
     pub const ADVICE_WINDOWS: u32 = 14;
-    /// The **256-bit modular multiplication** delegation family (S26): one
-    /// `out = a * b mod m` a row over 32-bit limbs, invoked by the
-    /// [`ecall::PRECOMPILE_MOD_MUL`] ecall and never decoded
+    /// The **Ethereum field multiplication** delegation family (S26,
+    /// specialized at S26b): one `out = a * b mod m` a row over 32-bit limbs,
+    /// invoked by the [`ecall::PRECOMPILE_MOD_MUL`] ecall and never decoded
     /// (`docs/spec/delegation.md` §14).
     ///
-    /// The modulus is in the **frame**, not in the circuit, and that is what
-    /// makes one family serve secp256k1's two fields, BN254's base field and
-    /// the EVM's `MULMOD` alike. It is the opposite choice from [`FR_ARITH`],
-    /// whose modulus is the circuit's own field and whose multiply is therefore
-    /// one degree-2 gate; a 256-bit modulus does not fit `Fr` at all, so this
-    /// one proves the schoolbook identity `a*b = q*m + out` limb by limb with a
-    /// signed carry chain.
+    /// The modulus is **one of four**, named by a selector word in the frame
+    /// and supplied by the circuit as a literal:
+    /// [`mod_mul::SECP256K1_P`], [`mod_mul::SECP256K1_N`],
+    /// [`mod_mul::BN254_P`] and [`mod_mul::BN254_R`]. Between them those are
+    /// every 256-bit field Ethereum block execution multiplies in, and
+    /// fixing them is what lets the circuit state `a < m` and `b < m` — so
+    /// the quotient is bounded by the statement rather than by the honest
+    /// prover's manners.
+    ///
+    /// It is the opposite choice from [`FR_ARITH`], whose modulus is the
+    /// circuit's own field and whose multiply is therefore one degree-2 gate;
+    /// a 256-bit modulus does not fit `Fr` at all, so this one proves the
+    /// schoolbook identity `a*b = q*m + out` limb by limb with a signed carry
+    /// chain.
     ///
     /// **Why it exists**: on a whole mainnet block, 44.4% of the guest's cycles
     /// are 256-bit modular multiply and square inside `k256`, at ~1,300 cycles
@@ -1505,16 +1512,36 @@ pub mod ecall {
     /// path and the software fallback are the same function by construction.
     pub const PRECOMPILE_FR_ARITH: u32 = 0x0502;
 
-    /// One 256-bit modular multiplication over a 32-word frame, `a0` = the
-    /// frame base pointer, read and written in place. A **delegation** call
-    /// (S26); `constants::family::MOD_MUL` is the family that proves it and
-    /// `docs/spec/delegation.md` §14 the frame table.
+    /// **Retired and burned at S26b.** `0x0503` was S26's modular
+    /// multiplication over a 32-word frame carrying a **witnessed** 256-bit
+    /// modulus. S26b specialized that family to four fixed moduli named by a
+    /// selector, which is a different 25-word frame with different semantics,
+    /// and append-only forbids giving a number a second meaning — an old
+    /// binary calling `0x0503` with a 32-word frame under the new executor
+    /// would read the modulus as a selector and compute something else, with
+    /// nothing failing loudly. So the specialized call took the next free
+    /// number and this one may never be issued or reassigned.
     ///
-    /// The three operands and the result cross the frame as eight 32-bit
-    /// little-endian limbs each — the modulus among them, so the call is
-    /// `out = a * b mod m` for **any** 256-bit `m` and not for one the circuit
-    /// fixes. The invocation writes the result's eight words and nothing else.
-    pub const PRECOMPILE_MOD_MUL: u32 = 0x0503;
+    /// It is a constant rather than a comment for the reason [`EXIT`]'s number
+    /// is: `crates/constants/tests/ecall_abi.rs` reads it, and a number in the
+    /// source is a number a test can hold to being unanswered.
+    pub const RETIRED_MOD_MUL_WITNESSED_MODULUS: u32 = 0x0503;
+
+    /// One **Ethereum field multiplication** over a 25-word frame, `a0` = the
+    /// frame base pointer, read and written in place. A **delegation** call
+    /// (S26, specialized at S26b); `constants::family::MOD_MUL` is the family
+    /// that proves it and `docs/spec/delegation.md` §14 the frame table.
+    ///
+    /// Frame word 0 is the modulus selector, one of
+    /// [`super::mod_mul::CODES`]; the two operands and the result follow it as
+    /// eight 32-bit little-endian limbs each. The call is
+    /// `out = a * b mod m` for the **selected** modulus, with `a` and `b`
+    /// required to be below it and the result below it too. The invocation
+    /// writes the result's eight words and nothing else.
+    ///
+    /// **It is not `MULMOD`.** An arbitrary modulus has no representation
+    /// here and the EVM's opcode runs through the ordinary RV32 path.
+    pub const PRECOMPILE_MOD_MUL: u32 = 0x0504;
 
     /// Linux `ENOSYS`. An unimplemented number returns `-ENOSYS` in `a0`.
     ///
@@ -1880,38 +1907,193 @@ pub mod fr_arith {
     pub const OPS: [u32; 3] = [OP_ADD, OP_MUL, OP_INV];
 }
 
-/// The 256-bit modular multiplication delegation's frame and its bounds,
-/// frozen at S26. `docs/spec/delegation.md` §14.
+/// The Ethereum field-multiplication delegation's frame, its four moduli and
+/// its bounds. Frozen at S26, **specialized at S26b**.
+/// `docs/spec/delegation.md` §14.
 ///
-/// **One operation, and there is no opcode word.** The family multiplies and
-/// does nothing else, because that is what the profile asked for: 256-bit
-/// modular multiply and square are 44.4% of a whole mainnet block at ~1,300
-/// cycles a call, and every other operation `k256` performs on a field element
-/// — add, negate, the modulus correction — costs under 100 cycles natively, so
-/// delegating one would be slower than not (`docs/handoff/S26-cycle.md`). A
-/// later operation is a later family or a frame append under §10, not a field
-/// this one reserves.
+/// **One operation, and the modulus is a selector.** The family computes
+/// `out = a * b mod m` and nothing else, over one of **four fixed moduli** a
+/// frame word names: the two secp256k1 fields and the two BN254 fields, which
+/// between them are every 256-bit field Ethereum block execution multiplies
+/// in. S26 carried the modulus in the frame as a witnessed 256-bit operand;
+/// S26b removed that, because a runtime modulus bought generality nothing
+/// asked for — no caller ever passed one this table does not hold — and cost
+/// eight frame words, 256 witness bits and the ability to state `a < m` at
+/// all. `docs/handoff/S26b-eth-field-mul.md` is the account.
+///
+/// **This is not `MULMOD`.** The EVM's opcode takes an arbitrary modulus and
+/// runs through the ordinary RV32 path; nothing here serves it.
 pub mod mod_mul {
     /// Limbs per 256-bit value: eight 32-bit words, little-endian.
     pub const LIMBS: usize = 8;
 
-    /// The first word of the modulus `m`.
-    pub const M_WORD: usize = 0;
+    // -----------------------------------------------------------------------
+    // The modulus selector
+    // -----------------------------------------------------------------------
 
-    /// The first word of operand `a`.
-    pub const A_WORD: usize = M_WORD + LIMBS;
+    /// secp256k1's base field, `p = 2^256 - 2^32 - 977`. The field a mainnet
+    /// block spends most of its `ecrecover` cycles in.
+    pub const SECP256K1_P: u32 = 1;
+    /// secp256k1's scalar field, the group order `n`.
+    pub const SECP256K1_N: u32 = 2;
+    /// BN254's base field, `q` — the coordinate field of the `0x06`, `0x07`
+    /// and `0x08` precompiles' curve. [`crate::FQ_MODULUS`] is the same
+    /// number in four 64-bit limbs.
+    pub const BN254_P: u32 = 3;
+    /// BN254's scalar field, `r` — this VM's own `Fr`.
+    /// [`crate::FR_MODULUS`] is the same number in four 64-bit limbs.
+    ///
+    /// It is **not** [`super::family::FR_ARITH`]'s duplicate: that family
+    /// multiplies Montgomery representatives and this one multiplies plain
+    /// integers, so a caller holding arkworks' `Fp256` reaches this one and a
+    /// caller holding `field::Fr` reaches that one.
+    pub const BN254_R: u32 = 4;
 
-    /// The first word of operand `b`.
+    /// The modulus codes, ascending, in selector order. A live row's selector
+    /// word is exactly one of these; the circuit's selector column `i` is this
+    /// entry's, and [`MODULI`]`[i]` is the modulus it names.
+    ///
+    /// **Codes start at 1, not 0**, for the reason
+    /// [`super::fr_arith::OPS`] does: a live row whose selector word is 0 —
+    /// a caller that built a frame and forgot the modulus — then satisfies no
+    /// selector and is unprovable, where a 0-based code would have silently
+    /// meant secp256k1's `p`.
+    pub const CODES: [u32; 4] = [SECP256K1_P, SECP256K1_N, BN254_P, BN254_R];
+
+    /// The four moduli, eight little-endian 32-bit limbs each, in [`CODES`]
+    /// order. The circuit's selector picks one of these by literal.
+    ///
+    /// `crates/constants/tests/moduli.rs` holds all four against
+    /// `crates/constants/tests/vectors/moduli.txt`, which `kat-gen` writes
+    /// from arkworks' own `ark-secp256k1` and `ark-bn254` — so none of these
+    /// numbers is trusted as a transcription. The same test re-derives
+    /// [`SECP256K1_P`]'s value as `2^256 - 2^32 - 977` and the two BN254
+    /// entries from [`crate::FQ_MODULUS`] and [`crate::FR_MODULUS`].
+    pub const MODULI: [[u32; LIMBS]; CODES.len()] = [
+        // secp256k1 p = 2^256 - 2^32 - 977
+        [
+            0xffff_fc2f,
+            0xffff_fffe,
+            0xffff_ffff,
+            0xffff_ffff,
+            0xffff_ffff,
+            0xffff_ffff,
+            0xffff_ffff,
+            0xffff_ffff,
+        ],
+        // secp256k1 n, the group order
+        [
+            0xd036_4141,
+            0xbfd2_5e8c,
+            0xaf48_a03b,
+            0xbaae_dce6,
+            0xffff_fffe,
+            0xffff_ffff,
+            0xffff_ffff,
+            0xffff_ffff,
+        ],
+        // BN254 q, the base field
+        [
+            0xd87c_fd47,
+            0x3c20_8c16,
+            0x6871_ca8d,
+            0x9781_6a91,
+            0x8181_585d,
+            0xb850_45b6,
+            0xe131_a029,
+            0x3064_4e72,
+        ],
+        // BN254 r, the scalar field
+        [
+            0xf000_0001,
+            0x43e1_f593,
+            0x79b9_7091,
+            0x2833_e848,
+            0x8181_585d,
+            0xb850_45b6,
+            0xe131_a029,
+            0x3064_4e72,
+        ],
+    ];
+
+    /// `R^-1 mod q` for BN254's base field, `R = 2^256`, eight little-endian
+    /// 32-bit limbs.
+    ///
+    /// **A caller-side constant, not the circuit's.** The delegation computes
+    /// a plain product; a caller holding **Montgomery** representatives —
+    /// arkworks' `Fp256` is the one in this repository's guest tree — wants
+    /// `a·b·R^-1`, which is this delegation twice: the plain product, then
+    /// that by `R^-1`. Two calls at ~90 cycles each against one software
+    /// Montgomery multiply at ~2,000. `guests/vendor/ark-ff` is the caller.
+    ///
+    /// secp256k1 has no sibling constant because `k256` stores plain
+    /// residues, so its multiply is one call and needs no correction.
+    pub const BN254_P_R_INV: [u32; LIMBS] = [
+        0x014a_fa37,
+        0xed84_884a,
+        0x0278_edf8,
+        0xeb20_2285,
+        0xb744_92d9,
+        0xcf63_e9cf,
+        0x59e5_c639,
+        0x2e67_1571,
+    ];
+
+    /// `R^-1 mod r` for BN254's scalar field. [`BN254_P_R_INV`]'s sibling, and
+    /// the inverse of [`crate::FR_R`].
+    pub const BN254_R_R_INV: [u32; LIMBS] = [
+        0x6db1_194e,
+        0xdc5b_a005,
+        0xe111_ec87,
+        0x090e_f5a9,
+        0xaeb8_5d5d,
+        0xc826_0de4,
+        0x82c5_551c,
+        0x15eb_f951,
+    ];
+
+    /// The limbs [`CODES`] entry `code` names, or `None` for a code no live
+    /// row may carry.
+    ///
+    /// The one lookup, so the executor, the fill and the circuit read the
+    /// table the same way and an unrecognized code is a `None` somebody has
+    /// to handle rather than a silent default.
+    pub const fn modulus(code: u32) -> Option<&'static [u32; LIMBS]> {
+        let mut i = 0;
+        while i < CODES.len() {
+            if CODES[i] == code {
+                return Some(&MODULI[i]);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    // -----------------------------------------------------------------------
+    // The frame
+    // -----------------------------------------------------------------------
+
+    /// The selector word: which of [`CODES`] this row multiplies under.
+    pub const SELECTOR_WORD: usize = 0;
+
+    /// The first word of operand `a`, which must be below the modulus.
+    pub const A_WORD: usize = SELECTOR_WORD + 1;
+
+    /// The first word of operand `b`, which must be below the modulus.
     pub const B_WORD: usize = A_WORD + LIMBS;
 
     /// The first word of the result. The only words the invocation writes.
     pub const OUT_WORD: usize = B_WORD + LIMBS;
 
-    /// The frame: four values of eight limbs.
+    /// The frame: the selector, then three values of eight limbs.
     pub const FRAME_WORDS: usize = OUT_WORD + LIMBS;
 
     /// The frame in bytes, which is what a shim hands over.
     pub const FRAME_BYTES: usize = 4 * FRAME_WORDS;
+
+    // -----------------------------------------------------------------------
+    // The limb identity's bounds
+    // -----------------------------------------------------------------------
 
     /// Positions of the schoolbook identity: `a*b` and `q*m` each have limb
     /// products at `i + j` for `i, j < LIMBS`, so `0 ..= 2*LIMBS - 2`.
@@ -1931,6 +2113,10 @@ pub mod mod_mul {
     /// [`CARRY_OFFSET`] is `2^36` and a carry is written as
     /// `sum of bits - CARRY_OFFSET`, so the bits span `[-2^36, 2^36)` — a full
     /// factor of two of room over the bound.
+    ///
+    /// **The selector does not tighten it.** Every limb of `m`, `a`, `b` and
+    /// `q` is still bounded only by `2^32`, which is what this arithmetic
+    /// reads; fixing the modulus changes no term of it.
     pub const CARRY_BITS: usize = 37;
     /// The offset a carry's bit decomposition carries: `2^36`.
     pub const CARRY_OFFSET: u64 = 1 << (CARRY_BITS - 1);

@@ -1184,7 +1184,7 @@ fn s26_the_mod_mul_witness_and_anchor_are_pinned() {
     // recomposition still holds: what refuses it is a limb equation, the gate
     // that says the multiplication was performed.
     let out0 = mm_c::word(mm::OUT_WORD, mm_c::WORD_WRITE_VALUE);
-    let out_bit = mm_c::value_bit(3, 0, 0);
+    let out_bit = mm_c::value_bit(mm_c::OUT, 0, 0);
     let word = at(out0, live);
     let bit = at(out_bit, live);
     h.assert_rejects(
@@ -1218,12 +1218,19 @@ fn s26_the_mod_mul_witness_and_anchor_are_pinned() {
         CONSTRAINT,
     );
 
-    // --- A modulus word the call rewrote. The read side is what the frame's
-    // tuples carry, so moving the **write** side alone is refused by
-    // `writes_back_w0` and by nothing in the multiset.
-    let m_write = mm_c::word(mm::M_WORD, mm_c::WORD_WRITE_VALUE);
+    // --- The selector word the call rewrote. The read side is what the
+    // frame's tuples carry, so moving the **write** side alone is refused by
+    // `writes_back_w0` and by nothing in the multiset. Word 0 is the modulus
+    // selector since S26b, so this is also what stops an invocation reporting
+    // a field it was not asked for.
+    let sel_write = mm_c::word(mm::SELECTOR_WORD, mm_c::WORD_WRITE_VALUE);
     h.assert_rejects(
-        &tamper(vec![cell(MM, m_write, live, at(m_write, live) + Fr::ONE)]),
+        &tamper(vec![cell(
+            MM,
+            sel_write,
+            live,
+            at(sel_write, live) + Fr::ONE,
+        )]),
         (MM, 0),
         CONSTRAINT,
     );

@@ -235,35 +235,55 @@ fn fr_arith_frame(pc: u32, old: &[u32]) -> Result<Vec<u32>, EmuError> {
     Ok(frame)
 }
 
-/// `MOD_MUL`'s frame, permuted: `out = a * b mod m` over eight 32-bit limbs.
+/// `MOD_MUL`'s frame, permuted: `out = a * b mod m` over eight 32-bit limbs,
+/// `m` being the modulus frame word 0 selects.
 ///
 /// **Schoolbook, in `u64` lanes, and long division by shift-and-subtract.** No
-/// Montgomery form, no reciprocal, no assumption about the modulus but that it
-/// is not zero: the circuit proves `a*b = q*m + out` with `out < m` and nothing
-/// else (`docs/spec/delegation.md` §14), so the executor computes exactly that
-/// and the two agree by definition rather than by a shared trick.
+/// Montgomery form and no reciprocal: the circuit proves `a*b = q*m + out` with
+/// `out < m` and nothing else (`docs/spec/delegation.md` §14), so the executor
+/// computes exactly that and the two agree by definition rather than by a
+/// shared trick.
 ///
-/// A zero modulus is a `DelegationFrame` error and not a wrapped answer: the
-/// circuit's borrow chain cannot put `out` below zero, so there is no witness
-/// for such a call and a trace carrying one is a trace no proof covers.
+/// **Three refusals, and each is a frame no proof could cover.** A selector
+/// outside `constants::mod_mul::CODES` names no modulus. An operand at or
+/// above the selected modulus has no witness: the circuit's `a < m` and
+/// `b < m` chains would reject it, and long division would happily return the
+/// right answer, so without the refusal here a guest runs clean and the
+/// failure surfaces as an anonymous layer inconsistency inside a block proof
+/// hours later. `docs/spec/delegation.md` §4's rule is that an execution this
+/// refuses is one no proof could have covered, and these are three of them.
 fn mod_mul_frame(pc: u32, old: &[u32]) -> Result<Vec<u32>, EmuError> {
     let limb = |first: usize, k: usize| old[first + k] as u64;
-    let m: [u64; mod_mul::LIMBS] = core::array::from_fn(|k| limb(mod_mul::M_WORD, k));
-    if m.iter().all(|w| *w == 0) {
+    let Some(selected) = mod_mul::modulus(old[mod_mul::SELECTOR_WORD]) else {
         return Err(EmuError::DelegationFrame {
             pc,
-            detail: "the modulus is zero",
+            detail: "the modulus selector names no field",
+        });
+    };
+    let m: [u64; mod_mul::LIMBS] = core::array::from_fn(|k| selected[k] as u64);
+    let a: [u64; mod_mul::LIMBS] = core::array::from_fn(|k| limb(mod_mul::A_WORD, k));
+    let b: [u64; mod_mul::LIMBS] = core::array::from_fn(|k| limb(mod_mul::B_WORD, k));
+    if !less_than(&a, &m) {
+        return Err(EmuError::DelegationFrame {
+            pc,
+            detail: "operand a is not below the modulus",
+        });
+    }
+    if !less_than(&b, &m) {
+        return Err(EmuError::DelegationFrame {
+            pc,
+            detail: "operand b is not below the modulus",
         });
     }
     // The 512-bit product, sixteen limbs, carried in `u64` lanes: each partial
     // product is below `2^64` and each accumulation below `2^64` again because
     // the running lane is reduced to 32 bits before the next addend.
     let mut product = [0u64; 2 * mod_mul::LIMBS];
-    for i in 0..mod_mul::LIMBS {
+    for (i, ai) in a.iter().enumerate() {
         let mut carry = 0u64;
-        for j in 0..mod_mul::LIMBS {
+        for (j, bj) in b.iter().enumerate() {
             let at = i + j;
-            let total = product[at] + limb(mod_mul::A_WORD, i) * limb(mod_mul::B_WORD, j) + carry;
+            let total = product[at] + ai * bj + carry;
             product[at] = total & 0xffff_ffff;
             carry = total >> 32;
         }
@@ -275,10 +295,24 @@ fn mod_mul_frame(pc: u32, old: &[u32]) -> Result<Vec<u32>, EmuError> {
             at += 1;
         }
     }
-    // `product mod m`, bit by bit from the top: the remainder doubles, takes the
-    // next bit, and the modulus is subtracted once if it fits. 512 iterations of
-    // 8-limb arithmetic, which is slow and is the executor's own cost, not the
-    // guest's.
+    let rem = reduce(&product, &m);
+    let mut frame = old.to_vec();
+    for k in 0..mod_mul::LIMBS {
+        frame[mod_mul::OUT_WORD + k] = rem[k] as u32;
+    }
+    Ok(frame)
+}
+
+/// `product mod m`, bit by bit from the top: the remainder doubles, takes the
+/// next bit, and the modulus is subtracted once if it fits. 512 iterations of
+/// 8-limb arithmetic, which is slow and is the executor's own cost, not the
+/// guest's.
+///
+/// Split out of [`mod_mul_frame`] so the unit test can drive it at a modulus a
+/// `u128` can hold. None of the four selectable moduli fits one, and an
+/// oracle written in the same 16-limb arithmetic as the thing it checks is not
+/// an oracle.
+fn reduce(product: &[u64; 2 * mod_mul::LIMBS], m: &[u64; mod_mul::LIMBS]) -> [u64; mod_mul::LIMBS] {
     let mut rem = [0u64; mod_mul::LIMBS];
     for bit in (0..32 * 2 * mod_mul::LIMBS).rev() {
         // rem = 2*rem + bit
@@ -290,7 +324,7 @@ fn mod_mul_frame(pc: u32, old: &[u32]) -> Result<Vec<u32>, EmuError> {
         }
         // The shifted-out bit and a remainder at or above `m` both mean one
         // subtraction. `carry` can only be 1 because `rem < m <= 2^256`.
-        if carry == 1 || !less_than(&rem, &m) {
+        if carry == 1 || !less_than(&rem, m) {
             let mut borrow = 0i64;
             for k in 0..mod_mul::LIMBS {
                 let diff = rem[k] as i64 - m[k] as i64 - borrow;
@@ -299,11 +333,7 @@ fn mod_mul_frame(pc: u32, old: &[u32]) -> Result<Vec<u32>, EmuError> {
             }
         }
     }
-    let mut frame = old.to_vec();
-    for k in 0..mod_mul::LIMBS {
-        frame[mod_mul::OUT_WORD + k] = rem[k] as u32;
-    }
-    Ok(frame)
+    rem
 }
 
 /// Whether `a < b` over eight little-endian 32-bit limbs.
@@ -1554,59 +1584,61 @@ mod tests {
     use super::*;
     use loader::Segment;
 
-    /// `mod_mul_frame` against `u128` arithmetic, which is an independent
+    /// The reduction against `u128` arithmetic, which is an independent
     /// reference for every case a `u128` can hold.
     ///
-    /// The executor's long division is 512 iterations of limb arithmetic and is
-    /// exactly the sort of loop that is right on most inputs. The comparison is
-    /// against `u128::checked_mul` and `%` on operands that fit 64 bits — which
-    /// leaves the top limbs untested, so the second half of the test is the
-    /// **identity** `a·b = q·m + out` recomputed over the full 256-bit width from
-    /// the frame the executor wrote, on wide random operands.
+    /// It drives [`reduce`] rather than [`mod_mul_frame`], because none of the
+    /// four selectable moduli fits a `u128` and an oracle written in the same
+    /// 16-limb arithmetic as the thing it checks is not an oracle. That is the
+    /// whole reason the reduction is a function of its own.
     #[test]
-    fn mod_mul_frame_computes_a_times_b_mod_m() {
-        let limbs = |x: u128| -> [u32; mod_mul::LIMBS] {
-            core::array::from_fn(|k| match k < 4 {
-                true => (x >> (32 * k)) as u32,
-                false => 0,
-            })
-        };
-        let frame_of = |m: [u32; 8], a: [u32; 8], b: [u32; 8]| -> Vec<u32> {
-            let mut old = vec![0u32; mod_mul::FRAME_WORDS];
-            old[mod_mul::M_WORD..mod_mul::M_WORD + 8].copy_from_slice(&m);
-            old[mod_mul::A_WORD..mod_mul::A_WORD + 8].copy_from_slice(&a);
-            old[mod_mul::B_WORD..mod_mul::B_WORD + 8].copy_from_slice(&b);
-            mod_mul_frame(0, &old).expect("a nonzero modulus")
-        };
-        // Small cases a `u128` answers directly, the corners included.
-        for (a, b, m) in [
-            (0u128, 0u128, 1u128),
-            (0, 12345, 97),
-            (1, 1, 2),
-            (u64::MAX as u128, u64::MAX as u128, (1u128 << 61) - 1),
-            (7, 9, 5),
-            (6, 7, 42),
-            (0xdead_beef, 0xfeed_face, 0xffff_fffb),
-            ((1u128 << 63) - 1, (1u128 << 63) + 1, (1u128 << 64) - 59),
+    fn the_reduction_agrees_with_u128() {
+        for (x, m) in [
+            (0u128, 1u128),
+            (12345, 97),
+            (1, 2),
+            ((u64::MAX as u128) * (u64::MAX as u128), (1u128 << 61) - 1),
+            (63, 5),
+            (42, 42),
+            (0xdead_beef * 0xfeed_face, 0xffff_fffb),
+            (u128::MAX, (1u128 << 64) - 59),
         ] {
-            let out = frame_of(limbs(m), limbs(a), limbs(b));
-            let got = (0..4).fold(0u128, |acc, k| {
-                acc | (out[mod_mul::OUT_WORD + k] as u128) << (32 * k)
-            });
-            assert_eq!(got, a * b % m, "{a} * {b} mod {m}");
-            for k in 4..8 {
-                assert_eq!(out[mod_mul::OUT_WORD + k], 0, "the result fits 128 bits");
+            let mut product = [0u64; 2 * mod_mul::LIMBS];
+            for (k, lane) in product.iter_mut().take(4).enumerate() {
+                *lane = ((x >> (32 * k)) & 0xffff_ffff) as u64;
             }
-            // The words the invocation does not compute are written back.
-            let mut old = [0u32; mod_mul::FRAME_WORDS];
-            old[mod_mul::M_WORD..mod_mul::M_WORD + 8].copy_from_slice(&limbs(m));
-            old[mod_mul::A_WORD..mod_mul::A_WORD + 8].copy_from_slice(&limbs(a));
-            old[mod_mul::B_WORD..mod_mul::B_WORD + 8].copy_from_slice(&limbs(b));
-            for j in 0..mod_mul::OUT_WORD {
-                assert_eq!(out[j], old[j], "word {j} is written back unchanged");
+            let m_limbs: [u64; mod_mul::LIMBS] = core::array::from_fn(|k| match k < 4 {
+                true => ((m >> (32 * k)) & 0xffff_ffff) as u64,
+                false => 0,
+            });
+            let rem = reduce(&product, &m_limbs);
+            let got = (0..4).fold(0u128, |acc, k| acc | (rem[k] as u128) << (32 * k));
+            assert_eq!(got, x % m, "{x} mod {m}");
+            for lane in &rem[4..] {
+                assert_eq!(*lane, 0, "the remainder fits 128 bits");
             }
         }
-        // The full width: the identity, over `i128`-free limb arithmetic.
+    }
+
+    /// `mod_mul_frame` over **every** selectable modulus, held to the identity
+    /// `a·b = q·m + out` with `out < m` over the full 256-bit width.
+    ///
+    /// The small-operand oracle above cannot reach here — these moduli are 254
+    /// and 256 bits — so what stands in for it is the identity itself,
+    /// recomputed from the frame the executor wrote by this file's own
+    /// `wide_mul16`, `sub16` and `divides16`, which share no line with the
+    /// reduction. Two operand shapes per modulus: pseudo-random values below
+    /// `2^253`, which every modulus exceeds, and `m − 1` squared — the largest
+    /// operand the frame admits, and the one a bound off by one would break.
+    #[test]
+    fn mod_mul_frame_computes_a_times_b_mod_the_selected_modulus() {
+        let frame_of = |code: u32, a: [u32; 8], b: [u32; 8]| -> Vec<u32> {
+            let mut old = vec![0u32; mod_mul::FRAME_WORDS];
+            old[mod_mul::SELECTOR_WORD] = code;
+            old[mod_mul::A_WORD..mod_mul::A_WORD + 8].copy_from_slice(&a);
+            old[mod_mul::B_WORD..mod_mul::B_WORD + 8].copy_from_slice(&b);
+            mod_mul_frame(0, &old).expect("a legal selector and reduced operands")
+        };
         let mut seed = 0x0123_4567_89ab_cdefu64;
         let mut next = move || {
             seed ^= seed << 13;
@@ -1614,29 +1646,96 @@ mod tests {
             seed ^= seed << 17;
             seed
         };
-        // secp256k1's `p`, the modulus this family exists for.
-        let mut p = [0xffff_ffffu32; 8];
-        p[0] = 0xffff_fc2f;
-        p[1] = 0xffff_fffe;
-        for _ in 0..8 {
-            let mut wide = || -> [u32; 8] { core::array::from_fn(|_| next() as u32) };
-            let (a, b) = (wide(), wide());
-            let out = frame_of(p, a, b);
-            let result: [u32; 8] = core::array::from_fn(|k| out[mod_mul::OUT_WORD + k]);
-            // `out < p`, and `a·b − out` divisible by `p`: the two halves of
-            // "out is the remainder", checked over 16-limb arithmetic here.
-            assert!(
-                super::less_than(
-                    &core::array::from_fn(|k| result[k] as u64),
-                    &core::array::from_fn(|k| p[k] as u64)
-                ),
-                "the result is reduced"
-            );
-            let product = wide_mul16(&a, &b);
-            let mut left = product;
-            sub16(&mut left, &result);
-            assert!(divides16(&left, &p), "a·b − out is a multiple of p");
+        for (code, m) in mod_mul::CODES.iter().zip(mod_mul::MODULI.iter()) {
+            let mut minus_one = *m;
+            minus_one[0] -= 1; // every modulus here is odd
+            let mut cases: Vec<([u32; 8], [u32; 8])> = vec![(minus_one, minus_one)];
+            for _ in 0..4 {
+                let mut wide = || -> [u32; 8] {
+                    let mut v: [u32; 8] = core::array::from_fn(|_| next() as u32);
+                    v[7] &= 0x1fff_ffff; // below 2^253, and every modulus is above it
+                    v
+                };
+                cases.push((wide(), wide()));
+            }
+            for (a, b) in cases {
+                let out = frame_of(*code, a, b);
+                let result: [u32; 8] = core::array::from_fn(|k| out[mod_mul::OUT_WORD + k]);
+                assert!(
+                    super::less_than(
+                        &core::array::from_fn(|k| result[k] as u64),
+                        &core::array::from_fn(|k| m[k] as u64)
+                    ),
+                    "the result is reduced under selector {code}"
+                );
+                let mut left = wide_mul16(&a, &b);
+                sub16(&mut left, &result);
+                assert!(divides16(&left, m), "a·b − out is a multiple of m");
+                // Every word but the result's is written back, the selector
+                // included: an invocation that could rewrite word 0 would be
+                // reporting a field it was not asked for.
+                let mut old = [0u32; mod_mul::FRAME_WORDS];
+                old[mod_mul::SELECTOR_WORD] = *code;
+                old[mod_mul::A_WORD..mod_mul::A_WORD + 8].copy_from_slice(&a);
+                old[mod_mul::B_WORD..mod_mul::B_WORD + 8].copy_from_slice(&b);
+                for j in 0..mod_mul::OUT_WORD {
+                    assert_eq!(out[j], old[j], "word {j} is written back unchanged");
+                }
+            }
         }
+    }
+
+    /// The three frames the executor refuses by name, each one the circuit has
+    /// no witness for: an unknown selector, and either operand at or above the
+    /// selected modulus.
+    ///
+    /// Without these the long division answers correctly, the guest exits
+    /// clean, and the only thing that fails is a gate — anonymously, inside a
+    /// block proof. `docs/spec/delegation.md` §14.
+    #[test]
+    fn mod_mul_refuses_a_frame_no_proof_could_cover() {
+        let frame = |code: u32, a: [u32; 8], b: [u32; 8]| -> Vec<u32> {
+            let mut old = vec![0u32; mod_mul::FRAME_WORDS];
+            old[mod_mul::SELECTOR_WORD] = code;
+            old[mod_mul::A_WORD..mod_mul::A_WORD + 8].copy_from_slice(&a);
+            old[mod_mul::B_WORD..mod_mul::B_WORD + 8].copy_from_slice(&b);
+            old
+        };
+        let p = mod_mul::MODULI[0];
+        let small = [1u32, 0, 0, 0, 0, 0, 0, 0];
+        // A selector the table does not hold — 0, which is what a caller that
+        // forgot the modulus leaves behind, and one past the last code.
+        for code in [0, mod_mul::CODES[mod_mul::CODES.len() - 1] + 1, 0xffff_ffff] {
+            assert_eq!(
+                mod_mul_frame(0x1234, &frame(code, small, small)),
+                Err(EmuError::DelegationFrame {
+                    pc: 0x1234,
+                    detail: "the modulus selector names no field",
+                }),
+                "selector {code}"
+            );
+        }
+        // An operand exactly at the modulus, which is the case the vendored
+        // `k256` patch produces whenever a field difference is zero.
+        assert_eq!(
+            mod_mul_frame(8, &frame(mod_mul::SECP256K1_P, p, small)),
+            Err(EmuError::DelegationFrame {
+                pc: 8,
+                detail: "operand a is not below the modulus",
+            })
+        );
+        assert_eq!(
+            mod_mul_frame(8, &frame(mod_mul::SECP256K1_P, small, p)),
+            Err(EmuError::DelegationFrame {
+                pc: 8,
+                detail: "operand b is not below the modulus",
+            })
+        );
+        // And `m − 1` on both sides is admitted, so the bound is `< m` and not
+        // something one short of it.
+        let mut minus_one = p;
+        minus_one[0] -= 1;
+        assert!(mod_mul_frame(8, &frame(mod_mul::SECP256K1_P, minus_one, minus_one)).is_ok());
     }
 
     /// `x · y` over eight 32-bit limbs, as sixteen. Test-only.
@@ -1698,19 +1797,6 @@ mod tests {
             }
         }
         rem.iter().all(|w| *w == 0)
-    }
-
-    /// A zero modulus is refused by name rather than wrapped.
-    #[test]
-    fn mod_mul_refuses_a_zero_modulus() {
-        let old = vec![0u32; mod_mul::FRAME_WORDS];
-        assert_eq!(
-            mod_mul_frame(0x1234, &old),
-            Err(EmuError::DelegationFrame {
-                pc: 0x1234,
-                detail: "the modulus is zero"
-            })
-        );
     }
 
     /// `addi a0, a0, 1` then `jal x0, -4`: an endless loop, two cycles a lap.

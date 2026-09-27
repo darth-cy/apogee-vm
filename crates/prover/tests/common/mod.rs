@@ -81,7 +81,7 @@ pub const RECURSION_RESULT: u32 = 9;
 pub const RECURSION_UNUSED_RESULT: u32 = 11;
 
 /// `guests/mod-mul-ops`' exit status: the number of checks it passed.
-pub const MOD_MUL_RESULT: u32 = 12;
+pub const MOD_MUL_RESULT: u32 = 28;
 
 /// S21's and S23's delegation heights. **Not `MOD_MUL`'s**, which is `2^16`
 /// (`constants::family::DEFAULT_HEIGHTS`, `docs/spec/delegation.md` §9.1).
@@ -90,7 +90,7 @@ pub const DELEGATION_VARS: u32 = 8;
 /// The height the **fixture** statement proves `MOD_MUL` at, and it is
 /// deliberately not the family's default.
 ///
-/// `guests/mod-mul-ops` makes 1,227 invocations. At the real `2^16` that is a
+/// `guests/mod-mul-ops` makes 1,567 invocations. At the real `2^16` that is a
 /// single shard, and the suites that read this statement — `prover`'s fill and
 /// `checker`'s tamper twins — are the only multi-shard coverage this family
 /// has of its anchor pairing and its last-shard padding rows. So the fixture
@@ -267,7 +267,7 @@ pub fn recursion_unused_program() -> Program {
 /// Its six execution families run at `2^20` and `MOD_MUL` at
 /// [`MOD_MUL_FIXTURE_VARS`], but its **window** families need `2^18` rather
 /// than `2^16`: the guest's `.text`
-/// reaches pc `0x2161a` and `decode_program` refuses an image byte past RAM
+/// reaches pc `0x452c6` and `decode_program` refuses an image byte past RAM
 /// window 0, which at `2^16` ends at `0x40000` — that one fits, but the decoded
 /// tables do not, a table's row `i` being pc `2i`.
 pub fn mod_mul_program() -> Program {

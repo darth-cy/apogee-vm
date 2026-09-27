@@ -174,14 +174,15 @@ jobs:
       # a later delegation family.
       #
       # S26 added its **seventh** statement, `guests/mod-mul-ops`: six execution
-      # shards at `2^20`, five `MOD_MUL` shards at `2^8` and the window ones,
-      # with the anchor's twins for the fourth delegation family and four
-      # witness twins of its own -- among them the quotient, the one column in a
-      # delegation row that the execution never produced, and a modulus word the
-      # call rewrote. The guest is deliberately small for this reason: its curve
-      # half is group operations and not a scalar ladder, because a ladder is
-      # constant-time over 256 bits whatever the scalar and would have made the
-      # statement forty shards (`docs/handoff/S26-cycle.md` §8).
+      # shards at `2^20`, seven `MOD_MUL` shards at `2^8` since S26b and the
+      # window ones, with the anchor's twins for the fourth delegation family
+      # and four witness twins of its own -- among them the quotient, the one
+      # column in a delegation row that the execution never produced, and the
+      # selector word the call rewrote. The guest is deliberately small for this
+      # reason: its curve half is group operations and not a scalar ladder,
+      # because a ladder is constant-time over 256 bits whatever the scalar and
+      # would have made the statement forty shards
+      # (`docs/handoff/S26-cycle.md` §8).
       #
       # - name: S16's statement, proved and verified
       #   run: |
@@ -474,4 +475,4 @@ jobs:
         run: |
           cargo run -p kat-gen
           cargo run --manifest-path tools/transcript-ref/Cargo.toml
-          git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constraints/tests/vectors/ crates/checker/tests/vectors/ crates/emulator/tests/vectors/
+          git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constants/tests/vectors/ crates/constraints/tests/vectors/ crates/checker/tests/vectors/ crates/emulator/tests/vectors/

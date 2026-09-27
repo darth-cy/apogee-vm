@@ -225,9 +225,12 @@ no cycle, carries no lookup channel, and is in a `VmConfig` exactly when the lin
 **declares** it. Four are registered: S21's `KECCAK_F`, one keccak-f[1600] permutation a
 row; S23's `POSEIDON2` and `FR_ARITH`, one width-3 Poseidon2 permutation and one `Fr`
 add, multiply or inverse a row; and S26's `MOD_MUL`, one `a·b mod m` over eight 32-bit
-limbs a row, whose modulus is **witnessed** — a column of the row rather than a constant of
-the circuit, so one family serves secp256k1's two fields, BN254's and the EVM's `MULMOD`.
-All four at `2^8` rows. `docs/spec/delegation.md`.
+limbs a row in one of **four fixed** Ethereum fields — secp256k1's two and BN254's two —
+which a selector word of the frame names and the circuit supplies as literals. The EVM's
+`MULMOD` takes an arbitrary modulus and is not served. **The four families do not share a
+height**: `KECCAK_F`, `POSEIDON2` and `FR_ARITH` are `2^8` rows and `MOD_MUL` is `2^16`,
+a row's circuit width differing between them by three orders of magnitude
+(`docs/spec/delegation.md` §9.2). `docs/spec/delegation.md`.
 
 **Delegation request** — the CPU-side row of a delegation call: an ecall whose `a7` is the
 family's number and whose `a0` is the **frame base**, a pointer to the bytes the function

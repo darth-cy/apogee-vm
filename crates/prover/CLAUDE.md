@@ -181,16 +181,23 @@ pub fn advance_metered(setup, archive, until)   -> Result<ProvingMetrics, Prover
   for any delegation family, and each family's own fill adds what is its own:
   `fill::keccak_f` the state's 1,600 bits, `fill::poseidon2` six values' 520 bits apiece,
   `fill::fr_arith` three values' bits, the selectors and the three witnessed scalars, and
-  S26's `fill::mod_mul` four values' 256 word bits, the quotient's eight limbs and their
-  bits, the `out < m` borrow chain and the fourteen signed carries. The
-  canonicity witness — the borrow chain of `X − p` — is computed here, because it is a
-  function of the words the execution wrote and nothing records it. **`fill::mod_mul` is the
-  one delegation fill that computes something the execution did not record**: the quotient
-  and the carries are not in the frame, and `mod_mul_witness` derives them by long division
-  over eight limbs, asserting that every limb position divides, that every carry is inside
-  `[0, 2^37)` after the `2^36` offset, and that the last carry is 0. Those are assertions
-  about the honest prover's own arithmetic; the circuit is what says a *cheating* one's
-  carries were right (`docs/spec/delegation.md` §14.3).
+  `fill::mod_mul` the four modulus selectors, the eight limbs they name, three values' 256
+  word bits and three `< m` chains, the quotient's eight limbs and their bits, and the
+  fourteen signed carries. The canonicity witness — the borrow chain of `X − p` — is
+  computed here, because it is a function of the words the execution wrote and nothing
+  records it. **`fill::mod_mul` is the one delegation fill that computes something the
+  execution did not record**: the modulus, the quotient and the carries are not in the
+  frame, and `mod_mul_witness` derives the last two by long division over eight limbs,
+  asserting that every limb position divides, that every carry is inside `[0, 2^37)` after
+  the `2^36` offset, and that the last carry is 0. It also asserts `a < m` and `b < m`
+  **naming the operand**, which the emulator refuses earlier and by name for the same
+  reason (`docs/spec/delegation.md` §14.3). Those are assertions about the honest prover's
+  own arithmetic; the circuit is what says a *cheating* one's carries were right.
+  **Two traps in this fill, both silent if sprung.** Its per-row witness — the modulus,
+  the quotient, the carries and the three chains — is hoisted out of the bit loops, which
+  read it 264 times a row apiece; and its chains go through `borrow_chain_against` and
+  never `borrow_chain`, which subtracts `constants::FR_MODULUS` and would therefore be
+  right for exactly one of the four selectors.
 - **`fill::keccak_f` fills all 3,764 columns of a `2^8` delegation shard from the
   archive's `DelegationTrace`** (S21): the requesting cycle, the mask, the base, the free
   `anchor_value` (0), the 50 frame words' four fields each, the input state's 1,600 bits

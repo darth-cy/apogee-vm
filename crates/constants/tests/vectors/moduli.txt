@@ -1,0 +1,7 @@
+# the four moduli `constants::mod_mul::MODULI` holds, from arkworks
+# docs/spec/delegation.md §14 is normative; the order is `mod_mul::CODES`
+# name, then eight little-endian 32-bit limbs in hex, low limb first
+SECP256K1_P fffffc2f fffffffe ffffffff ffffffff ffffffff ffffffff ffffffff ffffffff
+SECP256K1_N d0364141 bfd25e8c af48a03b baaedce6 fffffffe ffffffff ffffffff ffffffff
+BN254_P d87cfd47 3c208c16 6871ca8d 97816a91 8181585d b85045b6 e131a029 30644e72
+BN254_R f0000001 43e1f593 79b97091 2833e848 8181585d b85045b6 e131a029 30644e72

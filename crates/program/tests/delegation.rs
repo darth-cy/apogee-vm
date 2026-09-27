@@ -113,7 +113,7 @@ fn the_registry_is_one_table() {
                 family::MOD_MUL,
                 ecall::PRECOMPILE_MOD_MUL,
                 constants::address_space::DELEGATION_MOD_MUL,
-                32
+                25
             ),
         ],
         DELEGATIONS,
@@ -166,9 +166,18 @@ fn a_number_no_family_answers_is_refused() {
     // the ABI — not silently ignored, which would make the guest's own call
     // fail much later and much less clearly.
     let base = constants::guest_memory::RAM_ORIGIN;
-    // `PRECOMPILE_FIRST + 3` was `0x503` and unanswered until S26 gave it to
-    // `MOD_MUL`, so the unanswered numbers are now 4 and up.
-    for number in [0u32, ecall::EXIT, ecall::PRECOMPILE_FIRST + 4, 0x05ff] {
+    // `PRECOMPILE_FIRST + 3` is `0x503`, which S26 gave to `MOD_MUL` and S26b
+    // **retired and burned** when that family's frame changed shape; `+ 4` is
+    // the number the specialized call took. So the unanswered numbers are the
+    // retired one and 5 and up — and the retired one belongs in this sweep
+    // precisely because burning a number means nothing may answer it.
+    for number in [
+        0u32,
+        ecall::EXIT,
+        ecall::RETIRED_MOD_MUL_WITNESSED_MODULUS,
+        ecall::PRECOMPILE_FIRST + 5,
+        0x05ff,
+    ] {
         assert_eq!(
             declared_delegations(&image_of(record(number))),
             Err(ProgramError::UnknownDelegation { addr: base, number }),

@@ -778,27 +778,13 @@ mod tests {
 /// secp256k1's `F_p` multiply, routed through the `MOD_MUL` delegation.
 ///
 /// The delegation is `out = a * b mod m` over eight little-endian 32-bit limbs
-/// with a **witnessed** modulus, so one circuit serves this field, this curve's
-/// scalar field, BN254 and the EVM's `MULMOD`. Here `m` is `p`.
+/// for one of four **fixed** Ethereum moduli a frame word selects. Here the
+/// selector is `SECP256K1_P`, and the circuit supplies `p` itself; nothing
+/// about `p` crosses the frame.
 #[cfg(target_arch = "riscv32")]
 mod apogee {
     use super::FieldElement10x26;
-    use guest_sdk::recursion::{mod_mul, ModMulFrame};
-
-    /// `p = 2^256 - 2^32 - 977`, eight little-endian 32-bit limbs.
-    ///
-    /// Written out rather than derived from this file's 26-bit constants,
-    /// because the frame's encoding is the delegation's and not this crate's.
-    const P: [u32; 8] = [
-        0xFFFF_FC2F,
-        0xFFFF_FFFE,
-        0xFFFF_FFFF,
-        0xFFFF_FFFF,
-        0xFFFF_FFFF,
-        0xFFFF_FFFF,
-        0xFFFF_FFFF,
-        0xFFFF_FFFF,
-    ];
+    use guest_sdk::recursion::{mod_mul, ModMulFrame, SECP256K1_P};
 
     /// A 26-bit limb's mask.
     const MASK: u32 = 0x03FF_FFFF;
@@ -806,23 +792,16 @@ mod apogee {
     /// Is this element's value below `2^256` **and** in range limb by limb, so
     /// that [`pack`] loses nothing?
     ///
-    /// The frame's operands are 256 bits; a magnitude-8 element's value reaches
-    /// `2^259`, so something has to reduce. `normalize` always would, at 298
-    /// cycles an operand — more than a third of what the delegation saves. This
-    /// is the 13-cycle test that says whether it has to.
+    /// A magnitude-8 element's value reaches `2^259`, so something has to
+    /// reduce. This is the 13-cycle test that says whether it has to.
     ///
     /// The bound it makes is **exact**, not conservative: limbs 0 through 8 below
     /// `2^26` and limb 9 below `2^22` admit every value in `[0, 2^256)` and
     /// nothing above it, the maximum being `(2^22 - 1)·2^234 + (2^234 - 1)`,
-    /// which is `2^256 - 1`. So this test is precisely "does the value fit the
-    /// frame", which is all `pack` needs — the delegation reduces modulo the
-    /// modulus it is given, so an operand at or above `p` is no problem, only one
-    /// at or above `2^256` is.
+    /// which is `2^256 - 1`.
     ///
-    /// It passes on every fully normalized element, which since this patch is
-    /// **every `mul` and `square` result**, so a chain of multiplies normalizes
-    /// nothing at all. It fails on an `add`, a `negate` or a `mul_single`
-    /// result, which then takes the slow path and is still correct.
+    /// It is **not** on its own the test the frame needs: `[p, 2^256)` is
+    /// packable and the delegation refuses it. See [`operand`].
     fn packable(x: &FieldElement10x26) -> bool {
         let l = &x.0;
         let any = l[0] | l[1] | l[2] | l[3] | l[4] | l[5] | l[6] | l[7] | l[8];
@@ -865,28 +844,37 @@ mod apogee {
         ])
     }
 
-    /// An operand's eight frame words, reduced as little as it takes.
+    /// An operand's eight frame words, **below `p`**, reduced as little as it
+    /// takes.
     ///
-    /// Three steps, cheapest first, and each is correct on its own:
+    /// The delegation enforces `a < m` and `b < m` in-circuit, so this is a
+    /// correctness requirement and not a convention: a frame carrying a value
+    /// at or above `p` is one the executor refuses by name and no proof
+    /// covers. Two steps:
     ///
-    /// 1. already packable — every `mul` result, and so most operands — 13
+    /// 1. already packable **and** not overflowing — every `mul` and `square`
+    ///    result, since the delegated one is the canonical residue — about 25
     ///    cycles;
-    /// 2. weakly normalized, which brings limb 9 below `2^23` and so passes the
-    ///    test unless it lands in `[2^22, 2^23)` — about 86 cycles;
-    /// 3. fully normalized, which puts the value below `p` — about 298.
+    /// 2. fully normalized — about 298.
     ///
-    /// Step 2 is what an `add`, a `negate` or a `mul_single` result takes, and
-    /// on S26's pinned mini-block that is 43% of operands, so going straight to
-    /// step 3 cost 0.6 million guest cycles for nothing.
+    /// `get_overflow` is upstream's own "is this magnitude-1 value at or above
+    /// `p`" and is meaningful only after `packable`, which is why the guard is
+    /// ordered this way.
+    ///
+    /// **The `[p, 2^256)` window is small and the value `p` is not rare.** A
+    /// random operand lands in the window with probability about `2^-224`; the
+    /// raw limb pattern of `p` is upstream's second representation of zero —
+    /// `normalizes_to_zero`'s `z1` mask is exactly it — and the complete
+    /// projective formulas produce it whenever a coordinate difference
+    /// vanishes. S26 skipped this test and reduced only to `2^256`, which is
+    /// what the operand bound now forbids: the cost is the `normalize` that
+    /// S26 measured at 0.6 million guest cycles on the pinned mini-block, and
+    /// it buys a frame whose meaning is a canonical field element.
     fn operand(x: &FieldElement10x26) -> [u32; 8] {
-        if packable(x) {
+        if packable(x) && !bool::from(x.get_overflow()) {
             return pack(x);
         }
-        let weak = x.normalize_weak();
-        match packable(&weak) {
-            true => pack(&weak),
-            false => pack(&weak.normalize()),
-        }
+        pack(&x.normalize())
     }
 
     /// `a * b mod p`, fully normalized.
@@ -900,7 +888,7 @@ mod apogee {
     /// field elements by representation: every comparison is
     /// `normalizes_to_zero` over a difference.
     pub(super) fn mul_mod_p(a: &FieldElement10x26, b: &FieldElement10x26) -> FieldElement10x26 {
-        let mut frame = ModMulFrame::of(&P, &operand(a), &operand(b));
+        let mut frame = ModMulFrame::of(SECP256K1_P, &operand(a), &operand(b));
         match mod_mul(&mut frame) {
             true => unpack(&frame.result()),
             false => a.mul_inner(b),

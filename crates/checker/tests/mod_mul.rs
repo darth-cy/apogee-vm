@@ -1,19 +1,24 @@
-//! The 256-bit modular multiplication circuit, gate by gate.
+//! The Ethereum field-multiplication circuit, gate by gate.
 //!
-//! `docs/spec/delegation.md` §14 is what this suite restates: the 32-word frame,
-//! the anchor's two tuples, the schoolbook identity `a·b = q·m + out` with
-//! `out < m`, and the 32-bit bound on every limb that crosses the frame.
+//! `docs/spec/delegation.md` §14 is what this suite restates: the 25-word
+//! frame, the four-way modulus selector, the anchor's two tuples, the
+//! schoolbook identity `a·b = q·m + out` with `a`, `b` and `out` all below
+//! `m`, and the 32-bit bound on every limb that crosses the frame.
 //!
 //! The arithmetic is checked the only way a circuit can be — by running its
 //! forward pass over a witness built from **`u128` host arithmetic**, and
 //! asserting the circuit accepts it. Nothing here shares a line with
-//! `crates/prover`'s fill or with `crates/emulator`'s executor: the modulus, the
-//! operands, the product, the quotient, the remainder and every carry are
-//! computed here from `u128` primitives, so a circuit that stated anything but
-//! `a·b mod m` would reject an honest witness.
+//! `crates/prover`'s fill or with `crates/emulator`'s executor: the operands,
+//! the product, the quotient, the remainder and every carry are computed here
+//! from `u128` primitives, so a circuit that stated anything but `a·b mod m`
+//! would reject an honest witness. The moduli themselves are
+//! `constants::mod_mul::MODULI`, because the circuit's whole point since S26b
+//! is that those four numbers and no others are what it multiplies modulo;
+//! `crates/constants/tests/moduli.rs` is what holds them to an outside oracle.
 //!
-//! Every negative control corrupts one cell of an otherwise honest witness and
-//! names the relation that must catch it.
+//! Every negative control corrupts one cell of an otherwise honest witness, or
+//! supplies an honest witness for a claim the circuit must refuse, and names
+//! the relation that must catch it.
 
 use constants::mod_mul as f;
 use constants::{challenge_slot, guest_memory, memory as mem};
@@ -23,8 +28,9 @@ use field::Fr;
 use gkr::{BaseLayer, ExternalChallenges, LayerValues};
 use poly::{MultilinearPoly, PolyBacking};
 
-/// Four rows: room for live invocations and padding both.
-const VARS: u32 = 2;
+/// Eight rows: room for one invocation per selector, two corner rows and
+/// padding both.
+const VARS: u32 = 3;
 const ROWS: usize = 1 << VARS;
 
 /// A 256-bit value as eight little-endian 32-bit limbs, held as `u128` halves so
@@ -54,6 +60,23 @@ impl U256 {
             false => (self.hi >> (32 * (k - 4))) as u32,
         })
     }
+
+    const ZERO: U256 = U256 { lo: 0, hi: 0 };
+    const ONE: U256 = U256 { lo: 1, hi: 0 };
+}
+
+/// The modulus selector code `code` names, as a [`U256`].
+fn modulus(code: u32) -> U256 {
+    U256::from_limbs(f::MODULI[code as usize - 1])
+}
+
+/// `x − 1` over eight limbs. Every selectable modulus is odd, so nothing here
+/// borrows out of limb 0.
+fn minus_one(x: &U256) -> U256 {
+    let mut limbs = x.limbs();
+    assert_eq!(limbs[0] & 1, 1, "the caller passes an odd value");
+    limbs[0] -= 1;
+    U256::from_limbs(limbs)
 }
 
 /// `a · b mod m` and the quotient, over `u128` limb arithmetic.
@@ -119,34 +142,39 @@ fn mul_div(a: &U256, b: &U256, m: &U256) -> (U256, U256) {
 struct Invocation {
     cycle: u64,
     base: u32,
-    m: U256,
+    code: u32,
     a: U256,
     b: U256,
 }
 
 impl Invocation {
+    /// The modulus this row's selector names. Never a field of the frame.
+    fn m(&self) -> U256 {
+        modulus(self.code)
+    }
+
     fn result(&self) -> U256 {
-        mul_div(&self.a, &self.b, &self.m).0
+        mul_div(&self.a, &self.b, &self.m()).0
     }
 
     fn quotient(&self) -> U256 {
-        mul_div(&self.a, &self.b, &self.m).1
+        mul_div(&self.a, &self.b, &self.m()).1
     }
 
-    /// The four frame values, in frame order.
-    fn values(&self) -> [U256; 4] {
-        [self.m, self.a, self.b, self.result()]
+    /// The three frame values, in [`mod_mul::A`], [`mod_mul::B`],
+    /// [`mod_mul::OUT`] order.
+    fn values(&self) -> [U256; 3] {
+        [self.a, self.b, self.result()]
     }
 
-    /// The frame's 32 read values and 32 write values.
+    /// The frame's 25 read values and 25 write values.
     fn frame(&self) -> ([u32; f::FRAME_WORDS], [u32; f::FRAME_WORDS]) {
         let values = self.values();
         let mut read = [0u32; f::FRAME_WORDS];
         let mut write = [0u32; f::FRAME_WORDS];
-        for (v, first) in [f::M_WORD, f::A_WORD, f::B_WORD, f::OUT_WORD]
-            .into_iter()
-            .enumerate()
-        {
+        read[f::SELECTOR_WORD] = self.code;
+        write[f::SELECTOR_WORD] = self.code;
+        for (v, first) in [f::A_WORD, f::B_WORD, f::OUT_WORD].into_iter().enumerate() {
             for (k, word) in values[v].limbs().into_iter().enumerate() {
                 // The result's eight words are the only ones the invocation
                 // computes; the rest are written back unchanged. The result's
@@ -166,14 +194,8 @@ impl Invocation {
 
     /// The fifteen positions' signed carries of this invocation's identity.
     fn carries(&self) -> Vec<i128> {
-        let (m, a, b) = (self.m.limbs(), self.a.limbs(), self.b.limbs());
+        let (m, a, b) = (self.m().limbs(), self.a.limbs(), self.b.limbs());
         let (out, q) = (self.result().limbs(), self.quotient().limbs());
-        let part = |x: &[u32; f::LIMBS], y: &[u32; f::LIMBS], k: usize| -> i128 {
-            (0..f::LIMBS)
-                .filter_map(|i| k.checked_sub(i).filter(|j| *j < f::LIMBS).map(|j| (i, j)))
-                .map(|(i, j)| x[i] as i128 * y[j] as i128)
-                .sum()
-        };
         let mut out_carries = Vec::new();
         let mut carry = 0i128;
         for k in 0..f::POSITIONS {
@@ -190,6 +212,14 @@ impl Invocation {
         assert_eq!(carry, 0, "the identity leaves a carry");
         out_carries
     }
+}
+
+/// `Σ_{i+j=k} x_i·y_j`, one position of a schoolbook product.
+fn part(x: &[u32; f::LIMBS], y: &[u32; f::LIMBS], k: usize) -> i128 {
+    (0..f::LIMBS)
+        .filter_map(|i| k.checked_sub(i).filter(|j| *j < f::LIMBS).map(|j| (i, j)))
+        .map(|(i, j)| x[i] as i128 * y[j] as i128)
+        .sum()
 }
 
 /// The borrow chain of `x − y` over eight 32-bit limbs.
@@ -274,8 +304,23 @@ fn witness(live: &[Invocation]) -> Vec<(PolyAddress, MultilinearPoly)> {
             .collect();
         out.push((address, column(values)));
     }
-    // The four values' word bits.
-    for v in 0..4 {
+    // The four modulus selectors, one-hot on a live row, and the eight limbs
+    // they name. A padding row's are all zero, which is what makes its
+    // modulus zero and its three borrow chains hold at zero.
+    for (s, code) in f::CODES.into_iter().enumerate() {
+        let values = (0..ROWS)
+            .map(|r| live.get(r).map_or(0, |i| u64::from(i.code == code)))
+            .collect();
+        out.push((mod_mul::selector(s), column(values)));
+    }
+    for k in 0..f::LIMBS {
+        let values = (0..ROWS)
+            .map(|r| live.get(r).map_or(0, |i| i.m().limbs()[k] as u64))
+            .collect();
+        out.push((mod_mul::m_limb(k), column(values)));
+    }
+    // Each value's word bits, then its `< m` chain.
+    for v in [mod_mul::A, mod_mul::B, mod_mul::OUT] {
         for k in 0..f::LIMBS {
             for t in 0..32 {
                 let values = (0..ROWS)
@@ -286,6 +331,30 @@ fn witness(live: &[Invocation]) -> Vec<(PolyAddress, MultilinearPoly)> {
                     .collect();
                 out.push((mod_mul::value_bit(v, k, t), column(values)));
             }
+        }
+        for i in 0..f::LIMBS {
+            for t in 0..32 {
+                let values = (0..ROWS)
+                    .map(|r| {
+                        live.get(r).map_or(0, |inv| {
+                            let (diff, _) =
+                                borrow_chain(&inv.values()[v].limbs(), &inv.m().limbs());
+                            (diff[i] >> t) & 1
+                        })
+                    })
+                    .collect();
+                out.push((mod_mul::diff_bit(v, i, t), column(values)));
+            }
+        }
+        for i in 0..f::LIMBS {
+            let values = (0..ROWS)
+                .map(|r| {
+                    live.get(r).map_or(0, |inv| {
+                        borrow_chain(&inv.values()[v].limbs(), &inv.m().limbs()).1[i]
+                    })
+                })
+                .collect();
+            out.push((mod_mul::borrow_bit(v, i), column(values)));
         }
     }
     // The quotient: its limbs, then its bits.
@@ -305,30 +374,6 @@ fn witness(live: &[Invocation]) -> Vec<(PolyAddress, MultilinearPoly)> {
                 .collect();
             out.push((mod_mul::q_bit(k, t), column(values)));
         }
-    }
-    // The `out < m` chain.
-    for i in 0..f::LIMBS {
-        for t in 0..32 {
-            let values = (0..ROWS)
-                .map(|r| {
-                    live.get(r).map_or(0, |inv| {
-                        let (diff, _) = borrow_chain(&inv.result().limbs(), &inv.m.limbs());
-                        (diff[i] >> t) & 1
-                    })
-                })
-                .collect();
-            out.push((mod_mul::diff_bit(i, t), column(values)));
-        }
-    }
-    for i in 0..f::LIMBS {
-        let values = (0..ROWS)
-            .map(|r| {
-                live.get(r).map_or(0, |inv| {
-                    borrow_chain(&inv.result().limbs(), &inv.m.limbs()).1[i]
-                })
-            })
-            .collect();
-        out.push((mod_mul::borrow_bit(i), column(values)));
     }
     // The carries, offset.
     for k in 0..f::CARRIES {
@@ -389,27 +434,6 @@ fn refusal(a: &CircuitArtifact, columns: Vec<(PolyAddress, MultilinearPoly)>) ->
     }
 }
 
-/// secp256k1's base field prime, `2^256 − 2^32 − 977`: the modulus a mainnet
-/// block spends 44% of its cycles multiplying modulo
-/// (`docs/handoff/S26-cycle.md`), and the reason this family exists.
-fn secp256k1_p() -> U256 {
-    let mut limbs = [0xffff_ffffu32; f::LIMBS];
-    limbs[0] = 0xffff_fc2f;
-    limbs[1] = 0xffff_fffe;
-    U256::from_limbs(limbs)
-}
-
-/// BN254's scalar field modulus, the one `FR_ARITH` has as a constant: a second
-/// modulus, to say out loud that this family is not curve-specific.
-fn bn254_r() -> U256 {
-    let mut limbs = [0u32; f::LIMBS];
-    for (i, limb) in constants::FR_MODULUS.iter().enumerate() {
-        limbs[2 * i] = (limb & 0xffff_ffff) as u32;
-        limbs[2 * i + 1] = (limb >> 32) as u32;
-    }
-    U256::from_limbs(limbs)
-}
-
 /// A pseudo-random value below `m`, exercising every limb rather than the
 /// bottom one.
 fn wide(rng: &mut test_support::Rng, m: &U256) -> U256 {
@@ -418,40 +442,58 @@ fn wide(rng: &mut test_support::Rng, m: &U256) -> U256 {
         hi: rng.next_u64() as u128 | (rng.next_u64() as u128) << 64,
     };
     // `value mod m`, through the one reduction this file has.
-    mul_div(&value, &U256 { lo: 1, hi: 0 }, m).0
+    mul_div(&value, &U256::ONE, m).0
 }
 
-/// Three invocations: two moduli, and the corner where `a·b` is exactly a
-/// multiple of `m` so the remainder is zero.
+/// A base pointer, one frame apart from the last.
+fn base(k: u32) -> u32 {
+    guest_memory::RAM_ORIGIN + 4 * 1024 * k
+}
+
+/// Six invocations: **one per selector**, so every modulus the circuit holds
+/// is exercised; the corner where `a = 0` so the product, the remainder and
+/// every carry are zero; and the corner where both operands are `m − 1`, the
+/// largest the frame admits and the pair the `a < m` bound is tight against.
 fn honest() -> Vec<Invocation> {
     let mut rng = test_support::Rng::new(0x5236_0526);
-    let base = |k: u32| guest_memory::RAM_ORIGIN + 4 * k;
-    let p = secp256k1_p();
-    vec![
-        Invocation {
-            cycle: 7,
-            base: base(1000),
-            m: p,
-            a: wide(&mut rng, &p),
-            b: wide(&mut rng, &p),
-        },
-        Invocation {
-            cycle: 11,
-            base: base(4096),
-            m: bn254_r(),
-            a: wide(&mut rng, &bn254_r()),
-            b: wide(&mut rng, &bn254_r()),
-        },
-        // `a = 0`, so the product and the remainder are both zero and every
-        // carry is zero: the row where the identity is degenerate.
-        Invocation {
-            cycle: 13,
-            base: base(8192),
-            m: p,
-            a: U256 { lo: 0, hi: 0 },
-            b: wide(&mut rng, &p),
-        },
-    ]
+    let mut live: Vec<Invocation> = f::CODES
+        .into_iter()
+        .enumerate()
+        .map(|(k, code)| {
+            let m = modulus(code);
+            Invocation {
+                cycle: 7 + 2 * k as u64,
+                base: base(k as u32 + 1),
+                code,
+                a: wide(&mut rng, &m),
+                b: wide(&mut rng, &m),
+            }
+        })
+        .collect();
+    live.push(Invocation {
+        cycle: 31,
+        base: base(9),
+        code: f::SECP256K1_P,
+        a: U256::ZERO,
+        b: wide(&mut rng, &modulus(f::SECP256K1_P)),
+    });
+    let r = modulus(f::BN254_R);
+    live.push(Invocation {
+        cycle: 37,
+        base: base(11),
+        code: f::BN254_R,
+        a: minus_one(&r),
+        b: minus_one(&r),
+    });
+    live
+}
+
+/// The row index of the first invocation using `code` in [`honest`].
+fn row_of(code: u32) -> usize {
+    honest()
+        .iter()
+        .position(|i| i.code == code)
+        .expect("every selector is in the honest set")
 }
 
 // ---------------------------------------------------------------------------
@@ -475,16 +517,18 @@ fn the_circuit_validates_and_keeps_the_memory_rule() {
     assert_eq!(checker::check_padding(&a), Ok(()));
 }
 
-/// **Acceptance: the circuit computes `a·b mod m`.**
+/// **Acceptance: the circuit computes `a·b mod m` for every selector.**
 ///
 /// The witness is built from `u128` arithmetic in this file and from nothing the
 /// prover or the executor owns. If the circuit stated any other relation — a
-/// dropped carry, a wrong weight, a modulus read from the wrong words — an
-/// honest witness would fail its own gates.
+/// dropped carry, a wrong weight, a modulus the selector does not name — an
+/// honest witness would fail its own gates. Six rows and two padding rows, so
+/// the padding row's own satisfaction is part of what passes here.
 #[test]
 fn an_honest_witness_satisfies_every_gate() {
     let a = mod_mul::artifact(VARS);
     let live = honest();
+    assert_eq!(live.len(), f::CODES.len() + 2);
     let values = forward(&a, witness(&live));
     assert_eq!(gkr::self_check(&a, &values, &challenges()), Ok(()));
 }
@@ -508,7 +552,9 @@ fn a_changed_result_word_is_refused() {
     );
     let relation = refusal(&a, bad);
     assert!(
-        relation.starts_with("limb") || relation == "out_word0" || relation == "chain0",
+        relation.starts_with("limb")
+            || relation == "out_word0"
+            || relation.starts_with("out_canonical"),
         "a changed result is refused by the identity, its decode or the chain: {relation}"
     );
 }
@@ -524,7 +570,7 @@ fn a_changed_result_word_is_refused() {
 /// it — the result, the quotient, their bits, every carry and the whole borrow
 /// chain recomputed — and the one relation left to refuse it is named.
 ///
-/// It runs on the **BN254** row and not the secp256k1 one for an arithmetical
+/// It runs on a **BN254** row and not a secp256k1 one for an arithmetical
 /// reason worth recording: secp256k1's `p` is `2^256 − 2^32 − 977`, so `r + p`
 /// overflows eight limbs for all but the smallest `r` and the twin is not
 /// representable at all. BN254's `r` is just under `2^254`, so `r + m` fits.
@@ -532,10 +578,9 @@ fn a_changed_result_word_is_refused() {
 fn a_result_not_below_the_modulus_is_refused() {
     let a = mod_mul::artifact(VARS);
     let live = honest();
-    // Row 1 is the BN254 one.
-    let row = 1;
+    let row = row_of(f::BN254_R);
     let inv = live[row];
-    let (r, q) = mul_div(&inv.a, &inv.b, &inv.m);
+    let (r, q) = mul_div(&inv.a, &inv.b, &inv.m());
 
     let add = |x: &U256, y: &U256| -> U256 {
         let (xl, yl) = (x.limbs(), y.limbs());
@@ -561,18 +606,12 @@ fn a_result_not_below_the_modulus_is_refused() {
         assert_eq!(borrow, 0, "the quotient is not zero");
         U256::from_limbs(diff)
     };
-    let bumped = add(&r, &inv.m);
+    let bumped = add(&r, &inv.m());
     let lower = dec(&q);
 
     // The carries of the shifted identity, computed the same way the honest
     // ones are — which is also the assertion that it *is* an identity.
-    let part = |x: &[u32; f::LIMBS], y: &[u32; f::LIMBS], k: usize| -> i128 {
-        (0..f::LIMBS)
-            .filter_map(|i| k.checked_sub(i).filter(|j| *j < f::LIMBS).map(|j| (i, j)))
-            .map(|(i, j)| x[i] as i128 * y[j] as i128)
-            .sum()
-    };
-    let (ml, al, bl) = (inv.m.limbs(), inv.a.limbs(), inv.b.limbs());
+    let (ml, al, bl) = (inv.m().limbs(), inv.a.limbs(), inv.b.limbs());
     let (outl, ql) = (bumped.limbs(), lower.limbs());
     let mut carries = Vec::new();
     let mut carry = 0i128;
@@ -605,7 +644,7 @@ fn a_result_not_below_the_modulus_is_refused() {
         for t in 0..32 {
             columns = corrupt(
                 columns,
-                mod_mul::value_bit(3, k, t),
+                mod_mul::value_bit(mod_mul::OUT, k, t),
                 row,
                 Fr::from_u64(((outl[k] >> t) & 1) as u64),
             );
@@ -621,14 +660,14 @@ fn a_result_not_below_the_modulus_is_refused() {
     for i in 0..f::LIMBS {
         columns = corrupt(
             columns,
-            mod_mul::borrow_bit(i),
+            mod_mul::borrow_bit(mod_mul::OUT, i),
             row,
             Fr::from_u64(borrow[i]),
         );
         for t in 0..32 {
             columns = corrupt(
                 columns,
-                mod_mul::diff_bit(i, t),
+                mod_mul::diff_bit(mod_mul::OUT, i, t),
                 row,
                 Fr::from_u64((diff[i] >> t) & 1),
             );
@@ -650,6 +689,54 @@ fn a_result_not_below_the_modulus_is_refused() {
         "out_below_modulus",
         "the identity holds for (q−1, r+m) and only `out < m` refuses it"
     );
+}
+
+/// An operand at or above the modulus: the operand's own chain refuses it, and
+/// nothing else does.
+///
+/// **This is S26b's new statement and the one the vendored `k256` patch has to
+/// respect.** `a = m` is not a corner case: `m`'s raw limb pattern is
+/// upstream's second representation of zero, and a lazily reduced field
+/// element that is congruent to zero reaches a multiply as exactly that. The
+/// twin here is therefore an *honest* witness of `m · b mod m = 0` — the
+/// quotient is `b`, the result is 0, every limb is bounded, every carry
+/// divides and `out < m` holds — so the only thing left to refuse it is the
+/// operand's own chain.
+///
+/// What it buys is not soundness, which S26 had without it, but **totality**:
+/// with `a, b < m` the honest quotient is below `m` and so fits its eight
+/// limbs, which makes every frame the circuit accepts one a prover can fill.
+#[test]
+fn an_operand_not_below_the_modulus_is_refused() {
+    let a = mod_mul::artifact(VARS);
+    let p = modulus(f::SECP256K1_P);
+    let other = wide(&mut test_support::Rng::new(0x26b), &p);
+    for (name, live) in [
+        (
+            "a_below_modulus",
+            Invocation {
+                cycle: 5,
+                base: base(3),
+                code: f::SECP256K1_P,
+                a: p,
+                b: other,
+            },
+        ),
+        (
+            "b_below_modulus",
+            Invocation {
+                cycle: 5,
+                base: base(3),
+                code: f::SECP256K1_P,
+                a: other,
+                b: p,
+            },
+        ),
+    ] {
+        // Nothing is corrupted: this is the honest witness of a claim the
+        // circuit must refuse, quotient, carries, chains and all.
+        assert_eq!(refusal(&a, witness(&[live])), name);
+    }
 }
 
 /// A changed quotient limb: the identity no longer divides.
@@ -683,18 +770,18 @@ fn a_changed_carry_is_refused() {
 #[test]
 fn a_limb_above_its_bound_is_refused() {
     let a = mod_mul::artifact(VARS);
-    let columns = witness(&honest());
-    let bad = corrupt(
-        columns,
-        mod_mul::word(f::A_WORD, mod_mul::WORD_READ_VALUE),
-        0,
-        Fr::from_u64(1 << 33),
-    );
-    let relation = refusal(&a, bad);
-    assert!(
-        relation == "a_word0" || relation.starts_with("limb") || relation == "writes_back_w8",
-        "a limb past 2^32 is refused by its decode: {relation}"
-    );
+    let mut columns = witness(&honest());
+    // Both sides of the word, so the write-back rule still holds and the
+    // relation named is the decomposition that carries the bound.
+    for field in [mod_mul::WORD_READ_VALUE, mod_mul::WORD_WRITE_VALUE] {
+        columns = corrupt(
+            columns,
+            mod_mul::word(f::A_WORD, field),
+            0,
+            Fr::from_u64(1 << 33),
+        );
+    }
+    assert_eq!(refusal(&a, columns), "a_word0");
 }
 
 /// A non-boolean bit anywhere: the booleanity gate of that bit.
@@ -702,32 +789,105 @@ fn a_limb_above_its_bound_is_refused() {
 fn a_non_boolean_bit_is_refused() {
     let a = mod_mul::artifact(VARS);
     for (address, name) in [
-        (mod_mul::value_bit(0, 0, 0), "m_bit0_0_boolean"),
+        (mod_mul::value_bit(mod_mul::A, 0, 0), "a_bit0_0_boolean"),
         (mod_mul::q_bit(3, 5), "q_bit3_5_boolean"),
-        (mod_mul::diff_bit(2, 7), "diff2_7_boolean"),
+        (mod_mul::diff_bit(mod_mul::OUT, 2, 7), "out_diff2_7_boolean"),
         (mod_mul::carry_bit(4, 9), "carry4_9_boolean"),
+        (mod_mul::selector(1), "selector2_boolean"),
     ] {
         let bad = corrupt(witness(&honest()), address, 0, Fr::from_u64(2));
         assert_eq!(refusal(&a, bad), name, "{address}");
     }
 }
 
-/// A modulus word the invocation did not write back: the read-only rule.
+/// A selector word the invocation rewrote: the read-only rule.
+///
+/// Word 0 is inside the write-back set and must stay there. An invocation that
+/// could rewrite it would be reporting a field it was not asked for, which is
+/// the one thing the selector's other three gates cannot see — they tie the
+/// columns to the word the invocation *wrote*, and the multiset binds the word
+/// the guest *read*.
 #[test]
-fn a_modulus_the_call_rewrote_is_refused() {
+fn a_selector_the_call_rewrote_is_refused() {
     let a = mod_mul::artifact(VARS);
     let columns = witness(&honest());
     let bad = corrupt(
         columns,
-        mod_mul::word(f::M_WORD, mod_mul::WORD_WRITE_VALUE),
+        mod_mul::word(f::SELECTOR_WORD, mod_mul::WORD_WRITE_VALUE),
         0,
-        Fr::from_u64(3),
+        Fr::from_u64(f::BN254_P as u64),
     );
     assert_eq!(refusal(&a, bad), "writes_back_w0");
 }
 
+/// A selector the frame word does not name, and a code the table does not
+/// hold: `selector_rule` refuses both.
+///
+/// The first is a row multiplying in a field the guest did not ask for — the
+/// answer would be correct arithmetic and the wrong answer. The second is what
+/// stops the frame's selector word being anything at all: the weighted sum can
+/// only equal one of the four codes on a live row, so a code outside the table
+/// has no witness and needs no range check of its own.
+#[test]
+fn a_selector_word_that_names_another_field_is_refused() {
+    let a = mod_mul::artifact(VARS);
+    let row = row_of(f::SECP256K1_P);
+    for code in [f::BN254_R, 99] {
+        // Both sides of the word, so `writes_back_w0` still holds and the
+        // relation named is the selector's own.
+        let mut columns = witness(&honest());
+        for field in [mod_mul::WORD_READ_VALUE, mod_mul::WORD_WRITE_VALUE] {
+            columns = corrupt(
+                columns,
+                mod_mul::word(f::SELECTOR_WORD, field),
+                row,
+                Fr::from_u64(code as u64),
+            );
+        }
+        assert_eq!(refusal(&a, columns), "selector_rule", "code {code}");
+    }
+}
+
+/// Two selectors at once, spelling a third code: `one_modulus_a_live_row`.
+///
+/// `selector_rule` alone does not refuse this and cannot — the codes are
+/// 1, 2, 3, 4, so `1 + 3 = 4` and a row claiming secp256k1's `p` *and*
+/// BN254's `q` spells the word of a row claiming BN254's `r`. The sum gate is
+/// what refuses it, and it is load-bearing twice: two selectors would also put
+/// `m`'s limbs above `2^32`, and the limb identity's "every term is far below
+/// `p`" argument — the thing that makes it an integer equation at all — rests
+/// on them being below it.
+#[test]
+fn two_moduli_at_once_is_refused() {
+    let a = mod_mul::artifact(VARS);
+    assert_eq!(
+        f::SECP256K1_P + f::BN254_P,
+        f::BN254_R,
+        "the forgery this refuses is constructible"
+    );
+    let row = row_of(f::BN254_R);
+    let mut columns = witness(&honest());
+    for (s, on) in [(0usize, 1u64), (2, 1), (3, 0)] {
+        columns = corrupt(columns, mod_mul::selector(s), row, Fr::from_u64(on));
+    }
+    assert_eq!(refusal(&a, columns), "one_modulus_a_live_row");
+}
+
+/// A modulus limb that is not the selected literal: `m_limb{k}_rule`.
+///
+/// The eight `m` columns are the only place the modulus exists in the witness,
+/// and nothing about them is a frame word any more. Without this gate a prover
+/// would choose the modulus freely and the selector would be decoration.
+#[test]
+fn a_modulus_limb_that_is_not_the_selected_literal_is_refused() {
+    let a = mod_mul::artifact(VARS);
+    let columns = witness(&honest());
+    let bad = corrupt(columns, mod_mul::m_limb(3), 0, Fr::from_u64(7));
+    assert_eq!(refusal(&a, bad), "m_limb3_rule");
+}
+
 /// The shape `docs/spec/constraint-manifest.md` §18 accounts for, at the family's
-/// **own** height — not `VARS`, which the rest of this file shrinks to four rows
+/// **own** height — not `VARS`, which the rest of this file shrinks to eight rows
 /// so a forward pass fits an ordinary test.
 ///
 /// A digest that moves says only *that* something moved; these numbers say what.
@@ -752,21 +912,23 @@ fn the_shape_is_the_manifests() {
     assert_eq!(a.outputs.len(), 2, "the two memory roots");
 
     // `lists (row-wise + halving)` and `top`, §1.2's columns.
-    assert_eq!(a.layers.len(), 23, "gate lists");
+    assert_eq!(a.layers.len(), 22, "gate lists");
     let halving = a.layers.iter().filter(|l| l.halving).count();
     assert_eq!(halving, 16, "one halving list per trace variable");
 
     // `inner` is the width of every layer above the base, summed.
     let inner: usize = a.layers.iter().map(|l| l.width as usize).sum();
-    assert_eq!(inner, 286, "inner columns");
-    assert_eq!(a.relations.len(), 3_779, "relations");
+    assert_eq!(inner, 158, "inner columns");
+    assert_eq!(a.relations.len(), 3_660, "relations");
 
     // The `enforcing (d1/d2)` split. An enforcing relation is one with no
     // output, and **its degree is 1 exactly when no term multiplies two
     // columns** — which in this family means exactly `GateDef::Linear`, every
     // other gate here carrying either a `live` factor or a real product. The
-    // degree-1 gates are the 24 `writes_back_w`, the 32 `*_word`, the 8
-    // `q_word`, the 8 `chain` and `out_below_modulus`: 73, and nothing else.
+    // degree-1 gates are the 17 `writes_back_w`, `selector_rule`,
+    // `one_modulus_a_live_row`, the 8 `m_limb{k}_rule`, the 24 `*_word`, the 8
+    // `q_word`, the 24 `*_canonical` and the 3 `*_below_modulus`: 86, and
+    // nothing else.
     let enforcing: Vec<&constraints::Relation> =
         a.relations.iter().filter(|r| r.output.is_none()).collect();
     let degree1 = enforcing
@@ -775,10 +937,10 @@ fn the_shape_is_the_manifests() {
         .count();
     assert_eq!(
         (enforcing.len(), degree1, enforcing.len() - degree1),
-        (3_493, 73, 3_420),
+        (3_502, 86, 3_416),
         "enforcing (d1/d2)"
     );
-    assert_eq!(a.to_bytes().len(), 1_421_100, "wire bytes");
+    assert_eq!(a.to_bytes().len(), 1_404_716, "wire bytes");
 }
 
 /// What a height does and does not move — the property the manifest's repeated
