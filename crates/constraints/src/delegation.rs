@@ -34,12 +34,12 @@ use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
-use constants::{challenge_slot, guest_memory, memory as mem};
+use constants::{challenge_slot, guest_memory, lookup_channel, memory as mem};
 use field::Fr;
 
 use crate::{
-    CachedEntry, Coeff, EnforcingEntry, GateDef, LayerSpec, PolyAddress, ProducingEntry, Relation,
-    ScratchSlot,
+    CachedEntry, Coeff, EnforcingEntry, GateDef, LayerSpec, LookupExpr, PolyAddress,
+    ProducingEntry, Relation, ScratchSlot,
 };
 
 // The invocation's teardown read and the requesting row's mirror write are the
@@ -599,6 +599,203 @@ pub(crate) fn canonical_gates(
         format!("{name}_below_modulus"),
         linear(vec![(lit(1), LIVE), (neg(1), borrow(WORDS_PER_VALUE - 1))]),
     ));
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Range checks through the RANGE16 channel
+// ---------------------------------------------------------------------------
+//
+// `docs/spec/delegation.md` §9 forbade a delegation family a lookup channel
+// until §10.3 amended it. Two families take the channel now — `EC_ADD`, whose
+// row is otherwise 3,746 columns of gap bits, and `MOD_MUL`, whose row falls
+// from 3,468 committed columns to about 325 — and the three helpers below are
+// what they share. `KECCAK_F`, `POSEIDON2`, `FR_ARITH` and `SHA256_COMP` stay
+// on bit decompositions: they live at `2^8`, where no channel's table fits at
+// any price (`docs/spec/lookup.md` §3).
+
+/// Bits a `RANGE16` chunk holds.
+pub(crate) const CHUNK_BITS: u32 = 16;
+
+/// One `RANGE16` obligation.
+pub(crate) fn range16(name: String, selector: PolyAddress, tuple: GateDef) -> LookupExpr {
+    LookupExpr {
+        name,
+        channel: lookup_channel::RANGE16,
+        selector,
+        tuple: vec![tuple],
+    }
+}
+
+/// A 32-bit bound, `docs/spec/memory.md` §7's shape: the high halfword direct
+/// and the derived low half, **one committed column and two obligations**.
+///
+/// `hi <= 2^16 - 1` and `x - 2^16*hi <= 2^16 - 1` give
+/// `x = lo + 2^16*hi <= 2^32 - 1`, and the low expression is *defined* as the
+/// remainder, so no wrap is possible.
+pub(crate) fn bound32(
+    name: &str,
+    x: PolyAddress,
+    hi: PolyAddress,
+    selector: PolyAddress,
+) -> Vec<LookupExpr> {
+    vec![
+        range16(
+            format!("{name}_hi_range"),
+            selector,
+            linear(vec![(lit(1), hi)]),
+        ),
+        range16(
+            format!("{name}_lo_range"),
+            selector,
+            linear(vec![(lit(1), x), (Coeff::Literal(-pow2(CHUNK_BITS)), hi)]),
+        ),
+    ]
+}
+
+/// A bound of `[0, 2^bits)` for a `bits` that is **not** a multiple of sixteen,
+/// over `RANGE16`.
+///
+/// Write `bits = 16q + r` with `0 < r < 16`. Commit `q` chunks with weights
+/// `2^16 .. 2^{16q}`; the low remainder is derived. Obligations:
+///
+/// ```text
+/// chunk_c < 2^16                    direct, one per committed chunk
+/// 2^(16 - r) * chunk_top < 2^16     scaled, so chunk_top < 2^r
+/// x - sum 2^{16(c+1)} chunk_c < 2^16
+/// ```
+///
+/// The maximum is `(2^16 - 1)(1 + 2^16 + … + 2^{16(q-1)}) + 2^{16q}(2^r - 1)`,
+/// which is `2^bits - 1` exactly.
+///
+/// **The scaled obligation alone bounds nothing.** `2^{16-r}` is a unit in
+/// `Fr`, so an unbounded `x` sweeps a coset of which almost no member is a
+/// small integer, and the range check sees nothing wrong. It is the top
+/// chunk's own direct obligation that establishes the premise, which is why
+/// `lookup::check_copowers` requires the pair under the **same** selector — the
+/// S18 fix, and the reason every caller here passes one selector to both.
+pub(crate) fn bound_chunked(
+    name: &str,
+    x: Vec<(Coeff, PolyAddress)>,
+    chunks: &[PolyAddress],
+    bits: u32,
+    selector: PolyAddress,
+    constant: Coeff,
+) -> Vec<LookupExpr> {
+    let q = chunks.len() as u32;
+    assert!(
+        bits > CHUNK_BITS * q && bits < CHUNK_BITS * (q + 1),
+        "delegation: {name} needs {q} chunks for {bits} bits"
+    );
+    let r = bits - CHUNK_BITS * q;
+    let mut out: Vec<LookupExpr> = Vec::new();
+    for (c, chunk) in chunks.iter().enumerate() {
+        out.push(range16(
+            format!("{name}_c{c}_range"),
+            selector,
+            linear(vec![(lit(1), *chunk)]),
+        ));
+    }
+    out.push(range16(
+        format!("{name}_top_scaled"),
+        selector,
+        linear(vec![(
+            lit(1u64 << (CHUNK_BITS - r)),
+            chunks[chunks.len() - 1],
+        )]),
+    ));
+    let mut low = x;
+    for (c, chunk) in chunks.iter().enumerate() {
+        low.push((Coeff::Literal(-pow2(CHUNK_BITS * (c as u32 + 1))), *chunk));
+    }
+    out.push(range16(
+        format!("{name}_lo_range"),
+        selector,
+        GateDef::Linear {
+            terms: low,
+            constant,
+        },
+    ));
+    out
+}
+
+/// Chunks a 38-bit timestamp gap takes over `RANGE16`: two committed, the low
+/// one derived.
+///
+/// `TIMESTAMP` would be the natural channel and it does not fit — its table
+/// needs 19 variables and a delegation family that carries a channel at all is
+/// at `2^16` (`docs/spec/delegation.md` §10.3).
+pub(crate) const GAP_CHUNKS: usize = 2;
+
+/// The frame's own gates for a family that range-checks through `RANGE16`.
+///
+/// Three differences from [`frame_gates`], and no others: the timestamp gap is
+/// four obligations rather than 38 booleans, and the base's two decompositions
+/// are one committed value plus one chunk each rather than 29 and 31 booleans.
+/// [`frame_gates`] itself is untouched, so the four bit-decomposing families'
+/// artifacts do not move.
+///
+/// The caller supplies the witness addresses, because their position in the
+/// witness subtree is the family's business: `base_low` is the aligned
+/// quotient `(base - RAM_ORIGIN) / 4` and `base_room` is
+/// `2^31 - frame bytes - base`.
+pub(crate) fn frame_gates_range16(
+    words: usize,
+    frame_bytes: u64,
+    base_low: PolyAddress,
+    base_room: PolyAddress,
+) -> Vec<(String, GateDef)> {
+    let mut out: Vec<(String, GateDef)> = vec![("live_boolean".to_string(), booleanity(LIVE))];
+    for j in 0..words {
+        out.push((
+            format!("addr_w{j}"),
+            quadratic(
+                vec![(neg(4 * j as u64), LIVE)],
+                vec![(lit(1), LIVE, word(j, WORD_ADDR)), (neg(1), LIVE, BASE)],
+            ),
+        ));
+    }
+    out.push((
+        "base_aligned".to_string(),
+        quadratic(
+            vec![(neg(guest_memory::RAM_ORIGIN as u64), LIVE)],
+            vec![(lit(1), LIVE, BASE), (neg(4), LIVE, base_low)],
+        ),
+    ));
+    let top = (1u64 << 31) - frame_bytes;
+    out.push((
+        "base_in_window".to_string(),
+        quadratic(
+            vec![(lit(top), LIVE)],
+            vec![(neg(1), LIVE, BASE), (neg(1), LIVE, base_room)],
+        ),
+    ));
+    out
+}
+
+/// The frame's timestamp-gap obligations, `[0, 2^38)` apiece over `RANGE16`.
+///
+/// The expression is `4*cycle + FRAME_DELTA - 1 - read_ts`, and the selector is
+/// `live`: on a padding row it is `-1`, which is in no table, and the selector
+/// is what exempts it. There is **no** `gap_w{j}` gate — the obligations are
+/// the bound and the decomposition at once, exactly as `memory::gap_lookups`
+/// has it for an execution family.
+pub(crate) fn gap_lookups_range16(
+    words: usize,
+    chunk: &dyn Fn(usize, usize) -> PolyAddress,
+) -> Vec<LookupExpr> {
+    let mut out: Vec<LookupExpr> = Vec::new();
+    for j in 0..words {
+        let chunks: Vec<PolyAddress> = (0..GAP_CHUNKS).map(|c| chunk(j, c)).collect();
+        out.extend(bound_chunked(
+            &format!("gap{j}"),
+            vec![(lit(mem::TS_STEP), CYCLE), (neg(1), word(j, WORD_READ_TS))],
+            &chunks,
+            mem::TS_BITS,
+            LIVE,
+            Coeff::Literal(Fr::from_u64(constants::delegation::FRAME_DELTA) - Fr::from_u64(1)),
+        ));
+    }
     out
 }
 

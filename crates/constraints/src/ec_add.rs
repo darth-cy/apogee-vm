@@ -90,8 +90,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use constants::ec_add as f;
-use constants::{address_space, guest_memory, lookup_channel, memory as mem};
-use field::Fr;
+use constants::{address_space, lookup_channel};
 
 use crate::delegation as d;
 use crate::lookup::ChannelSpec;
@@ -108,9 +107,6 @@ const SLOTS: usize = 3;
 
 /// Limbs in a coordinate.
 const LIMBS: usize = f::LIMBS;
-
-/// Bits a `RANGE16` chunk holds.
-const CHUNK: u32 = 16;
 
 const fn w(i: usize) -> PolyAddress {
     PolyAddress::Witness(i as u32)
@@ -182,8 +178,8 @@ fn limb(v: usize, k: usize) -> PolyAddress {
 // The witness layout, in order
 // ---------------------------------------------------------------------------
 
-/// Chunks a 38-bit gap takes: two committed, the low one derived.
-const GAP_CHUNKS: usize = 2;
+/// Chunks a 38-bit gap takes, from the shared builder.
+use crate::delegation::GAP_CHUNKS;
 
 /// Chunks a signed carry's unsigned value takes beside the value itself.
 const CARRY_CHUNKS: usize = 2;
@@ -509,9 +505,8 @@ fn group_terms(g: usize) -> Vec<(Coeff, PolyAddress)> {
 pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     the_carry_offset_covers_every_slot();
 
-    let mut enforcing: Vec<(String, GateDef)> =
-        vec![("live_boolean".to_string(), d::booleanity(LIVE))];
-    enforcing.extend(frame_gates());
+    let mut enforcing =
+        d::frame_gates_range16(WORDS, f::FRAME_BYTES as u64, base_low(), base_room());
     enforcing.extend(selector_gates());
     enforcing.extend(helper_gates());
     enforcing.extend(chain_gates());
@@ -533,51 +528,6 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     }
     check_shape(&artifact);
     artifact
-}
-
-/// The frame's own gates, `RANGE16` where `delegation::frame_gates` has bits.
-///
-/// Three differences from the shared builder, and no others: the timestamp gap
-/// is four obligations rather than 38 booleans, the base's two decompositions
-/// are one column and three obligations each rather than 29 and 31 booleans,
-/// and every frame word carries a 32-bit bound the shared builder leaves to
-/// each family. `delegation::frame_gates` is untouched, so the other five
-/// delegation families' artifacts do not move.
-fn frame_gates() -> Vec<(String, GateDef)> {
-    let mut out: Vec<(String, GateDef)> = Vec::new();
-    // `live * (addr_j - base - 4j) = 0`.
-    for j in 0..WORDS {
-        out.push((
-            format!("addr_w{j}"),
-            d::quadratic(
-                vec![(d::neg(4 * j as u64), LIVE)],
-                vec![
-                    (d::lit(1), LIVE, word(j, d::WORD_ADDR)),
-                    (d::neg(1), LIVE, BASE),
-                ],
-            ),
-        ));
-    }
-    // `live * (base - RAM_ORIGIN - 4*base_low) = 0`: word-aligned, and at or
-    // above `RAM_ORIGIN`. Over `Fr` 4 is a unit, so alignment is not an
-    // equation but a decomposition.
-    out.push((
-        "base_aligned".to_string(),
-        d::quadratic(
-            vec![(d::neg(guest_memory::RAM_ORIGIN as u64), LIVE)],
-            vec![(d::lit(1), LIVE, BASE), (d::neg(4), LIVE, base_low())],
-        ),
-    ));
-    // `live * ((2^31 - frame bytes) - base - base_room) = 0`.
-    let top = (1u64 << 31) - f::FRAME_BYTES as u64;
-    out.push((
-        "base_in_window".to_string(),
-        d::quadratic(
-            vec![(d::lit(top), LIVE)],
-            vec![(d::neg(1), LIVE, BASE), (d::neg(1), LIVE, base_room())],
-        ),
-    ));
-    out
 }
 
 /// The selector: six booleans, one-hot on a live row, naming the curve and the
@@ -910,161 +860,76 @@ fn write_back_gates() -> Vec<(String, GateDef)> {
 // The lookups
 // ---------------------------------------------------------------------------
 
-fn range16(name: String, tuple: GateDef) -> LookupExpr {
-    LookupExpr {
-        name,
-        channel: lookup_channel::RANGE16,
-        selector: LIVE,
-        tuple: vec![tuple],
-    }
-}
-
-/// A 32-bit bound, `docs/spec/memory.md` §7's shape: the high halfword direct
-/// and the derived low half.
-fn bound32(name: &str, x: PolyAddress, hi: PolyAddress) -> Vec<LookupExpr> {
-    vec![
-        range16(format!("{name}_hi_range"), d::linear(vec![(d::lit(1), hi)])),
-        range16(
-            format!("{name}_lo_range"),
-            d::linear(vec![
-                (d::lit(1), x),
-                (Coeff::Literal(-Fr::from_u64(1 << CHUNK)), hi),
-            ]),
-        ),
-    ]
-}
-
-/// A bound of `[0, 2^bits)` for a `bits` that is not a multiple of sixteen,
-/// over `RANGE16`: `q = bits / 16` committed chunks, the low remainder
-/// derived, and one **scaled** obligation on the top chunk.
-///
-/// ```text
-/// chunk_c < 2^16                  direct, one per committed chunk
-/// 2^(16 - r) * chunk_top < 2^16   scaled, so chunk_top < 2^r
-/// x - sum 2^{16(c+1)} chunk_c < 2^16
-/// ```
-///
-/// is exactly `[0, 2^bits)`: the maximum is
-/// `(2^16 - 1)(1 + 2^16 + … ) + 2^{16q}(2^r - 1) = 2^bits - 1`. The scaled
-/// obligation alone bounds nothing — the scale is a unit in `Fr`, so an
-/// unbounded `x` sweeps a coset — which is why `check_copowers` requires the
-/// top chunk's direct obligation under the same selector.
-fn bound_chunked(
-    name: &str,
-    x: Vec<(Coeff, PolyAddress)>,
-    chunks: &[PolyAddress],
-    bits: u32,
-) -> Vec<LookupExpr> {
-    let q = chunks.len() as u32;
-    let r = bits - CHUNK * q;
-    assert!(r > 0 && r < CHUNK, "ec_add: {name} is a multiple of 16");
-    let mut out: Vec<LookupExpr> = Vec::new();
-    for (c, chunk) in chunks.iter().enumerate() {
-        out.push(range16(
-            format!("{name}_c{c}_range"),
-            d::linear(vec![(d::lit(1), *chunk)]),
-        ));
-    }
-    out.push(range16(
-        format!("{name}_top_scaled"),
-        d::linear(vec![(
-            d::lit(1u64 << (CHUNK - r)),
-            chunks[chunks.len() - 1],
-        )]),
-    ));
-    let mut low = x;
-    for (c, chunk) in chunks.iter().enumerate() {
-        low.push((Coeff::Literal(-d::pow2(CHUNK * (c as u32 + 1))), *chunk));
-    }
-    out.push(range16(format!("{name}_lo_range"), d::linear(low)));
-    out
-}
-
-/// The frame's timestamp gaps, `[0, 2^38)` apiece over `RANGE16`.
-///
-/// The expression is `4*cycle + FRAME_DELTA - 1 - read_ts`, and the selector
-/// is `live`: on a padding row it is `-1`, which is in no table, and the
-/// selector is what exempts it. There is no `gap_w{j}` gate — the obligations
-/// **are** the bound and the decomposition, exactly as `memory::gap_lookups`
-/// has it for an execution family.
-fn gap_lookups() -> Vec<LookupExpr> {
-    let mut out: Vec<LookupExpr> = Vec::new();
-    for j in 0..WORDS {
-        let chunks: Vec<PolyAddress> = (0..GAP_CHUNKS).map(|c| gap_chunk(j, c)).collect();
-        let x = vec![
-            (d::lit(mem::TS_STEP), CYCLE),
-            (d::neg(1), word(j, d::WORD_READ_TS)),
-        ];
-        let mut ls = bound_chunked(&format!("gap{j}"), x, &chunks, mem::TS_BITS);
-        // The gap's constant, `FRAME_DELTA - 1`, rides the derived low
-        // obligation's expression.
-        if let Some(last) = ls.last_mut() {
-            if let GateDef::Linear { constant, .. } = &mut last.tuple[0] {
-                *constant = Coeff::Literal(
-                    Fr::from_u64(constants::delegation::FRAME_DELTA) - Fr::from_u64(1),
-                );
-            }
-        }
-        out.extend(ls);
-    }
-    out
-}
-
 /// Every obligation the circuit carries.
 fn lookups() -> Vec<LookupExpr> {
-    let mut out = gap_lookups();
-    out.extend(bound_chunked(
+    let mut out = d::gap_lookups_range16(WORDS, &|j, c| gap_chunk(j, c));
+    out.extend(d::bound_chunked(
         "base_low",
         vec![(d::lit(1), base_low())],
         &[base_low_hi()],
         29,
+        LIVE,
+        d::lit(0),
     ));
-    out.extend(bound_chunked(
+    out.extend(d::bound_chunked(
         "base_room",
         vec![(d::lit(1), base_room())],
         &[base_room_hi()],
         31,
+        LIVE,
+        d::lit(0),
     ));
     for j in 0..WORDS {
-        out.extend(bound32(
+        out.extend(d::bound32(
             &format!("word{j}"),
             word(j, d::WORD_READ_VALUE),
             word_high(j),
+            LIVE,
         ));
     }
     for (v, (name, ..)) in VALUES.into_iter().enumerate() {
         for i in 0..LIMBS {
-            out.extend(bound32(
+            out.extend(d::bound32(
                 &format!("{name}_diff{i}"),
                 diff(v, i),
                 diff_hi(v, i),
+                LIVE,
             ));
         }
     }
     for r in 0..SLOTS {
         for k in 0..LIMBS {
-            out.extend(bound32(
+            out.extend(d::bound32(
                 &format!("out{r}_{k}"),
                 out_limb(r, k),
                 out_hi(r, k),
+                LIVE,
             ));
-            out.extend(bound32(
+            out.extend(d::bound32(
                 &format!("out{r}_diff{k}"),
                 out_diff(r, k),
                 out_diff_hi(r, k),
+                LIVE,
             ));
         }
         for i in 0..f::QUOTIENT_LIMBS {
-            out.extend(bound32(&format!("q{r}_{i}"), q_limb(r, i), q_hi(r, i)));
+            out.extend(d::bound32(
+                &format!("q{r}_{i}"),
+                q_limb(r, i),
+                q_hi(r, i),
+                LIVE,
+            ));
         }
         for c in 0..f::CARRIES {
             let chunks: Vec<PolyAddress> =
                 (0..CARRY_CHUNKS).map(|j| carry_chunk(r, c, j)).collect();
-            out.extend(bound_chunked(
+            out.extend(d::bound_chunked(
                 &format!("carry{r}_{c}"),
                 vec![(d::lit(1), carry(r, c))],
                 &chunks,
                 f::CARRY_BITS,
+                LIVE,
+                d::lit(0),
             ));
         }
     }
