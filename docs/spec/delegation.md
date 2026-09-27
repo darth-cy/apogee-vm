@@ -1,10 +1,12 @@
 # Delegation: the ABI, the anchor, and the four delegation families
 
-Frozen as of S21 and **appended to at S23**, which added two families under
-§10's rule and amended §3 and §5.1 where more than one delegation type made a
-literal impossible (§10.1). **This page is the delegation ABI** — every
-delegation family obeys it. Changing anything here but by §10's append rule is
-a protocol-version change.
+Frozen as of S21, **appended to at S23**, which added two families under §10's
+rule and amended §3 and §5.1 where more than one delegation type made a literal
+impossible (§10.1), and **amended at S26b**, which specialized §14's family to
+four fixed moduli and moved its ecall number (§10.2). **This page is the
+delegation ABI** — every delegation family obeys it. Changing anything here but
+by §10's append rule is a protocol-version change, and §10.1 and §10.2 are the
+two that have been made.
 
 S22 was cancelled and never shipped (`prompts/00-master.md`, "Stage register:
 cancelled stages"); every sentence that promised it a number, a tag or a frame
@@ -22,7 +24,7 @@ restates none of them.
 | `crates/emulator` | the ecall, the frame's execution, and the invocation record |
 | `crates/trace` | the delegation address space, the `Delegate` role, and `DelegationTrace` |
 | `crates/program` | the declared set, and the family's place in a `VmConfig` |
-| `crates/constraints` | `delegation`, the shared frame; `keccak`, `poseidon2` and `fr_arith`, the circuits; `add_sub`, the request-side gates |
+| `crates/constraints` | `delegation`, the shared frame; `keccak`, `poseidon2`, `fr_arith` and `mod_mul`, the circuits; `add_sub`, the request-side gates |
 | `crates/prover` | the fill and the shard's ts window |
 | `crates/checker` | the anchor-tamper helper and the block-level hook |
 
@@ -102,13 +104,24 @@ One table ties a family, its number and its frame width together:
 | `KECCAK_F` | 9 | `PRECOMPILE_KECCAK_F` = `0x0501` | 50 | `DELEGATION_KECCAK_F` = 4 |
 | `POSEIDON2` | 10 | `PRECOMPILE_POSEIDON2` = `0x0500` | 24 | `DELEGATION_POSEIDON2` = 5 |
 | `FR_ARITH` | 11 | `PRECOMPILE_FR_ARITH` = `0x0502` | 25 | `DELEGATION_FR_ARITH` = 6 |
-| `MOD_MUL` | 15 | `PRECOMPILE_MOD_MUL` = `0x0503` | 32 | `DELEGATION_MOD_MUL` = 7 |
+| `MOD_MUL` | 15 | `PRECOMPILE_MOD_MUL` = `0x0504` | 25 | `DELEGATION_MOD_MUL` = 7 |
 
 `0x0500` was assigned at S10 with a calling convention and no circuit; S23 gave
 it one. The numbers are not in family-id order and need not be: a family id
 orders the statement, an ecall number names the call, and this table is what
 ties them together. `MOD_MUL`'s id is 15 and not 12 because S-IO took 12, 13 and
 14 for its window families in between, which is what append-only means.
+
+`MOD_MUL`'s **number** is `0x0504` and not `0x0503` for the same rule read the
+other way. S26 gave it `0x0503` over a 32-word frame carrying a witnessed
+modulus; S26b made the frame 25 words with a selector, which is a different
+call, so `0x0503` is **retired and burned** — an old binary issuing it would
+have its modulus read as a selector and every later word misread, with nothing
+failing loudly, which is exactly what append-only exists to prevent.
+`constants::ecall::RETIRED_MOD_MUL_WITNESSED_MODULUS` keeps the number so a
+test can hold it to being unanswered, and `docs/spec/ecall-abi.md` §4 is the
+retired table. **The family id and the address-space tag did not move**: the
+family is the same family, refactored.
 
 The table itself is `constants::delegation::TYPES`, which `program::DELEGATIONS`
 *is* — one array, read by the emulator's dispatch, by the request-side gates and
@@ -623,17 +636,17 @@ height bought nothing and cost the table above.
 So the heights are per family, which is what `DEFAULT_HEIGHTS` was always able
 to express:
 
-| family | inner | committed | height | why that one |
+| family | inner at `2^8` | committed | height | why that one |
 | --- | --- | --- | --- | --- |
 | `KECCAK_F` | 354,762 | 3,764 | `2^8` | `2^16` is 744 GB of forward pass a shard |
 | `POSEIDON2` | 2,020 | 4,192 | `2^8` | `2^16` is 13.0 GB, and the guests that reach it invoke it in the hundreds |
 | `FR_ARITH` | 142 | 2,680 | `2^8` | ditto, 5.9 GB |
-| `MOD_MUL` | 270 | 3,478 | **`2^16`** | 7.9 GB, and a measured block goes from 1,048 shards to 5 |
+| `MOD_MUL` | 142 | 3,468 | **`2^16`** | 7.9 GB, and a measured block goes from 1,048 shards to 5 |
 
 Two properties make the raise cheap. **A height changes no gate**: it adds one
 halving list per variable, each carrying one node per output, so `MOD_MUL` at
-`2^16` is 23 lists, 286 inner columns and 3,779 relations against `2^8`'s 15,
-270 and 3,763, with the committed width, the `3,493 (73/3,420)` gate split and
+`2^16` is 22 lists, 158 inner columns and 3,660 relations against `2^8`'s 14,
+142 and 3,644, with the committed width, the `3,502 (86/3,416)` gate split and
 the zero lookups identical
 (`crates/checker/tests/mod_mul.rs::a_height_moves_only_the_halving_layers`).
 And **a delegation family carries no channel**, so no minimum-height arm
@@ -691,6 +704,34 @@ one `M` column on the one frame that holds the `deleg` query. Nothing else in §
 moved: the two leaves, the three zeroings, the addressing rule and §5.3's
 argument are S21's unchanged, and the keccak circuit's bytes did not move at
 all.
+
+### 10.2 What S26b amended, and why
+
+§10 says a later family **appends, and appends only**, and has no clause for a
+family that *changes*. S26b is one: it narrowed `MOD_MUL`'s frame from 32 words
+to 25 and replaced its witnessed modulus with a four-way selector. That is a
+protocol-version change and it is recorded here, in the rule it amends, as
+§10.1 is.
+
+What changed is confined to the three things §10 lets a family own — its row in
+§3, its frame table in §14.1, and its circuit, fill, shim and declaration
+record — plus the ecall number, which moved for the append-only reason §3 now
+states. **Nothing else in this page moved**: the calling convention, the frame
+rules, the anchor's two leaves and three zeroings, the ts-window convention and
+the no-channel rule are all untouched, and the other three families' bytes did
+not change. The one gate outside the family that moved is
+`ADD_SUB_LUI_AUIPC`'s `deleg_15_number`, whose literal is the ecall number, so
+`add_sub.bin` regenerated.
+
+**Why the generality went.** §14.1 argued for the witnessed modulus on the
+ground that "one family serves every 256-bit modulus", against two
+constant-modulus families costing two ids, two ecalls, two circuits and two
+request selectors. That argument was sound and its premise was wrong: the
+alternative was never *two* families, it was **one** family with a selector,
+which costs one frame word and four boolean columns. And the witnessed modulus
+had a price the argument did not count — with `m` an operand the circuit cannot
+state `a < m`, so the quotient's fit was the honest prover's business and not
+the statement's. §14.3 is what that cost, and §14.2 is what removing it bought.
 
 ---
 
@@ -928,11 +969,11 @@ Two consequences worth stating.
 
 ---
 
-## 14. The 256-bit modular multiplication circuit
+## 14. The Ethereum field-multiplication circuit
 
-New at S26, under §10's append rule. `constants::family::MOD_MUL`, **one
-multiplication a row**. `constraints::mod_mul` is the circuit;
-`docs/spec/constraint-manifest.md` §15 is its column-by-column account.
+`constants::family::MOD_MUL`, **one multiplication a row**, new at S26 and
+specialized at S26b under §10.2. `constraints::mod_mul` is the circuit;
+`docs/spec/constraint-manifest.md` §18 is its column-by-column account.
 
 ### 14.0 Why it exists
 
@@ -947,36 +988,51 @@ precompile called by contracts.
 **This is not an `ecrecover` delegation.** `prompts/00-master.md`'s stage register
 cancelled that and the cancellation stands: there is no ecrecover family, no
 signature in any frame, no curve anywhere in this circuit, and no recovery. What
-this family proves is one modular multiplication of two 256-bit integers, and the
-same circuit serves secp256k1's base field, its scalar field, BN254's base field
-and the EVM's `MULMOD`.
+this family proves is one modular multiplication of two 256-bit integers in one
+of four fixed fields.
+
+**And it is not `MULMOD`.** The EVM's opcode takes an arbitrary modulus, which
+this frame has no representation for; nothing routes the opcode here, and an
+accelerator for it would be a different family with a different frame.
 
 ### 14.1 The frame, and one multiplication an invocation
 
-32 words. Four values of eight little-endian 32-bit limbs.
+25 words.
 
 | words | what |
 | --- | --- |
-| `0..8` | the modulus `m` |
-| `8..16` | operand `a` |
-| `16..24` | operand `b` |
-| `24..32` | the result, the only words the invocation computes |
+| `0` | the modulus **selector**, one of `constants::mod_mul::CODES` |
+| `1..9` | operand `a`, **below the selected modulus** |
+| `9..17` | operand `b`, below it too |
+| `17..25` | the result, the only words the invocation computes |
 
-**The modulus is in the frame, not in the circuit**, and that is the one design
-decision worth arguing. §13's `FR_ARITH` multiplies modulo **the circuit's own
-field**, so its multiply is a single degree-2 gate: `prod = a·b` over `Fr` *is*
-the reduction. A 256-bit modulus cannot work that way at all — `p` is 254 bits, so
-a 256-bit value does not fit an `Fr` — and the choice is therefore between a
-constant modulus and a witnessed one, not between cheap and expensive.
+The selector's four codes, and the fields they name:
 
-Carrying `m` costs eight frame words, 256 witness bits, and a degree-2 product
-where a literal modulus would give a degree-1 term: about 15% more circuit. What
-it buys is that **one family serves every 256-bit modulus**. Two constant-modulus
-families — secp256k1's `p` and its `n`, which the profile shows both matter —
-would be two family ids, two ecall numbers, two circuits, two fills, two shims and
-two request selectors on `ADD_SUB_LUI_AUIPC`. Generality here *reduces* surface
-area for a need already measured, which is the only argument for it that master
-anti-goal 10 accepts.
+| code | constant | modulus |
+| --- | --- | --- |
+| 1 | `SECP256K1_P` | secp256k1's base field, `2^256 − 2^32 − 977` |
+| 2 | `SECP256K1_N` | secp256k1's scalar field, the group order |
+| 3 | `BN254_P` | BN254's base field `q` — the `0x06`/`0x07`/`0x08` precompiles' coordinate field |
+| 4 | `BN254_R` | BN254's scalar field `r`, which is also this VM's own `Fr` |
+
+**Codes start at 1**, as `fr_arith::OPS` does and for the same reason: a live
+row whose selector word is 0 — a caller that built a frame and forgot the
+modulus — then satisfies no selector and is unprovable, where a 0-based code
+would have silently meant secp256k1's `p`.
+
+**Those four and no others**, and the set is what makes the family Ethereum's
+rather than general. Between them they are every 256-bit field block execution
+multiplies in: `ecrecover`'s curve and its scalars, and the BN254 precompiles'
+tower. A fifth is a frame append under §10, not something this family reserves
+room for.
+
+**The modulus is not an operand, and that is the S26b change.** S26 carried it
+in eight frame words. The argument was that one family then served every
+256-bit modulus, against two constant-modulus families costing two ids, two
+ecalls and two circuits — and the argument missed that the alternative was one
+family with a selector. What the selector costs is one frame word and four
+boolean columns. What it buys is in §14.2 and §14.3, and §10.2 is the record of
+the change.
 
 **One operation, and there is no opcode word.** The family multiplies and does
 nothing else, because that is what the measurement asked for: every other
@@ -987,21 +1043,26 @@ field this one reserves.
 
 ### 14.2 The gates
 
-Over the five values `m`, `a`, `b`, `out` (frame words) and `q` (a witness):
+Over the three frame values `a`, `b`, `out`, the selector, the modulus `m` it
+names, and the quotient `q`:
 
 | gate | what |
 | --- | --- |
-| `writes_back_w{j}` | words 0 to 23 are written back unchanged, so the caller's modulus and operands survive |
-| `<v>_bit{k}_{t}_boolean` | every bit of every limb is a bit |
+| `writes_back_w{j}` | words 0 to 16 are written back unchanged, so the caller's selector and operands survive |
+| `selector{c}_boolean` | each of the four selectors is a bit |
+| `selector_rule` | `word 0 = Σ code_i·s_i`: the field the circuit reduces in is the one the guest asked for |
+| `one_modulus_a_live_row` | `Σ s_i = live`: exactly one field a live row |
+| `m_limb{k}_rule` | `m_k = Σ MODULI[i][k]·s_i`: the modulus is the selector's literal, which is also its `2^32` bound |
+| `<v>_bit{k}_{t}_boolean` | every bit of every limb of `a`, `b` and `out` is a bit |
 | `<v>_word{k}` | limb `k` is `Σ 2^t·bit`: its 32-bit bound and its decode at once |
 | `q_bit{k}_{t}_boolean`, `q_word{k}` | the same for the quotient, whose limbs are witnesses |
 | `carry{k}_{t}_boolean` | every carry bit is a bit |
 | `limb{k}` | `P_k − S_k − out_k + c_{k−1} − 2^32·c_k = 0`, where `P_k = Σ_{i+j=k} a_i·b_j` and `S_k = Σ_{i+j=k} q_i·m_j` |
-| `diff{i}_{t}_boolean`, `borrow{i}_boolean` | the `out < m` chain's bits |
-| `chain{i}` | `out_i − m_i − b_{i−1} + 2^32·b_i = d_i` |
-| `out_below_modulus` | `b_7 = live`: the subtraction borrowed out, so `out < m` |
+| `<v>_diff{i}_{t}_boolean`, `<v>_borrow{i}_boolean` | the three `< m` chains' bits |
+| `<v>_canonical{i}` | `v_i − m_i − b_{i−1} + 2^32·b_i = d_i` |
+| `<v>_below_modulus` | `b_7 = live`: the subtraction borrowed out, so `v < m` |
 
-Four of those deserve a sentence.
+Six of those deserve a sentence.
 
 **The limb identity is an integer identity, and the 32-bit bounds are what make
 it one.** Every term of `limb{k}` is a small integer: `P_k` and `S_k` are each at
@@ -1011,86 +1072,162 @@ it is far below `p`, so the `Fr` equation *is* the ℤ equation — the same arg
 §13.3's borrow chain rests on. Drop any word's decomposition and the gate becomes
 a statement modulo `p` instead, which is no statement about `a·b` at all.
 
+**`one_modulus_a_live_row` is load-bearing twice, and the second time is not
+about the selector.** The first is §13.3's lesson from `fr_arith`'s three
+opcodes: the codes are 1, 2, 3, 4, so `1 + 3 = 4` and a row claiming
+secp256k1's `p` *and* BN254's `q` spells the word of a row claiming BN254's
+`r`; `selector_rule` cannot see it and the sum gate is what refuses it. The
+second is the paragraph above: `m` has **no bit decomposition** — its limbs are
+bounded only by being one table entry each — and two selectors at once would
+put `m_0` above `2^32`, `S_k` above `2^68`, and the "far below `p`" argument
+out of reach. So the gate is not redundant at any code spacing, and a later
+table separated to 1, 2, 4, 8 would still need it.
+
+**`m` costs eight witness columns rather than four products a limb.** The
+alternative was inlining `Σ MODULI[i][k]·s_i` wherever `m_k` appears; the chains
+would read four terms instead of one, which is free, but every `q_i·m_j` in
+`limb{k}` would become four products, taking gate list 0 from 128 products to
+320. Eight committed columns and eight degree-1 gates is the cheaper half, and
+it is also what makes "the modulus is not the selected literal" a cell a tamper
+twin can corrupt.
+
 **The carries are signed, with an offset, and the offset is derived.** A carry is
 written `Σ 2^t·bit − 2^36·live`, so a padding row's carry is 0 and a live row's
 spans `[−2^36, 2^36)`. The bound it must cover is the fixed point of
 `C = (2^67 + 2^32 + C)/2^32`, just above `2^35` — a full factor of two of room,
 and `crates/constraints/src/mod_mul.rs`' `the_carry_offset_covers_the_bound`
-computes it rather than trusting the arithmetic in this paragraph.
+computes it rather than trusting the arithmetic in this paragraph. **The
+selector does not tighten it**: the bound reads only the limbs' `2^32` bounds.
 
 **The identity closes because the last position has no outgoing carry.** Summing
 the fifteen equations weighted by `2^{32k}` gives `a·b − q·m − out = c_14·2^{480}`,
 so the fifteenth equation, which has no `c_14` term, *is* the identity. Fourteen
 carries, fifteen positions.
 
-**`out < m` is the reduction and nothing else supplies it.** Without it a prover
-answers `r + m` with the quotient one lower: the identity holds over the integers
-just as well, every limb is still bounded and every carry still divides.
+**Three chains, and they are not three of the same thing.** `out < m` is the
+reduction and nothing else supplies it: without it a prover answers `r + m` with
+the quotient one lower, the identity holds over the integers just as well, every
+limb is still bounded and every carry still divides.
 `crates/checker/tests/mod_mul.rs`' `a_result_not_below_the_modulus_is_refused`
 builds exactly that twin — result, quotient, bits, carries and chain all
 recomputed, as an honest prover of that claim would — and requires
-`out_below_modulus` to be the one relation that catches it.
+`out_below_modulus` to be the one relation that catches it. `a < m` and `b < m`
+are **not** soundness; they are §14.3.
 
-**`m > 0` needs no gate.** `out` is a non-negative integer and `out < m`.
+Unlike §13.3's canonicity chain, these three are **ungated**: that one subtracts
+`p`, a literal, which has to be multiplied by `live` to vanish on a padding row,
+and here `m_i` is a column that `m_limb{k}_rule` already forces to zero there.
+The whole padding row is zeros and every gate above holds on it.
 
-### 14.3 What bounds the quotient, and what happens if it does not fit
+**`m > 0` needs no gate.** Every entry of the table is a 256-bit odd prime, and
+`crates/constraints/src/mod_mul.rs`' `every_modulus_is_a_256_bit_odd_value` is
+what says a fifth entry would have to be too.
 
-`q`'s bits bound it to `2^256`. That is enough for the honest prover, because the
-guest passes reduced operands: with `a, b < m`, `q = (a·b − out)/m < m ≤ 2^256`. A
-caller that passed an unreduced operand would be unable to fit `q` in eight limbs
-and its own fill would panic — a cost to the **prover** and never a hole for the
-verifier, which is the standing rule for everything the prover checks (S13).
+### 14.3 The operand bounds, and what they make true
 
-`crates/emulator`'s executor refuses a **zero** modulus by name, because the
-circuit's borrow chain cannot put `out` below zero and a trace carrying such a
-call is one no proof covers.
+`q`'s bits bound it to `2^256`. With `a < m` and `b < m` enforced,
+`q = (a·b − out)/m ≤ (m−1)²/m < m ≤ 2^256`, so the honest quotient **always**
+fits its eight limbs.
+
+That is the whole point of the operand bounds, and it is a completeness property
+rather than a soundness one. S26 had soundness without them: an unreduced operand
+made the quotient overflow eight limbs, the prover's own fill panicked, and the
+verifier was never at risk — "a cost to the prover and never a hole for the
+verifier", which was true. What it was not was *total*: there were frames the
+circuit would have accepted that no prover could fill, and whether a call was one
+depended on a caller's reduction discipline. Since S26b **every frame the circuit
+accepts has a witness and every witness it has is accepted**, and the frame's
+meaning is exactly "two canonical elements of the selected field".
+
+The price is paid by the caller, and it is real. `guests/vendor/k256` now
+reduces an operand below `p` where it used to reduce only below `2^256`
+(§14.4), which is the `normalize` S26 measured at 0.6 million guest cycles on
+the pinned mini-block and deliberately removed. Enforcing the bound put it
+back.
+
+`crates/emulator`'s executor refuses all three bad frames **by name** — a
+selector no code names, `a` at or above the modulus, `b` at or above it. That
+is not tidiness: long division answers correctly for any operands below
+`2^256`, so without the refusals a guest with an unreduced operand runs clean,
+every trace-level test passes, and the only thing that fails is a gate —
+anonymously, as `LayerInconsistency { layer }`, hours into a block proof. With
+them it is a fatal trace-time error that `kat-gen -- revm` catches on every
+push. The prover's fill asserts the same two operand bounds, naming the
+operand, for the same reason.
 
 ### 14.4 The guest-target backend
 
 `guest_sdk::recursion::mod_mul` is the shim and `ModMulFrame` its frame — limbs
 rather than bytes, because every caller already holds 32-bit limbs and a byte
 frame would cost a pack and an unpack per call, a fifth of what the delegation
-saves. `false` on exactly `-ENOSYS`, as every shim answers.
+saves. `false` on exactly `-ENOSYS`, as every shim answers. The four codes are
+re-exported from `guest_sdk::recursion` beside it, so a caller names the field
+rather than spelling a number twice.
 
-What routes through it is `k256`'s field multiply and square, through a
-**vendored** copy of that crate under `guests/vendor/` and a `[patch.crates-io]`
-entry (`docs/handoff/S26-cycle.md` §5). `k256` offers no hook — no `extern`, no
-feature, nothing to override — and the alternative was writing signature recovery
-ourselves; the owner chose the patch, which is twenty lines against about six
-hundred and keeps the audited curve code. `crates/prover/tests/one_feature.rs`
+**All four selectors have a library caller**, each through a **vendored** copy
+under `guests/vendor/` and a `[patch.crates-io]` entry
+(`guests/vendor/README.md`):
+
+| selector | what routes | where |
+| --- | --- | --- |
+| `SECP256K1_P` | `FieldElement10x26::mul` and `::square` | `guests/vendor/k256`, `src/arithmetic/field/field_10x26.rs` |
+| `SECP256K1_N` | `Scalar::mul` (and `::square` through it) | `guests/vendor/k256`, `src/arithmetic/scalar.rs` |
+| `BN254_P`, `BN254_R` | `MontBackend::mul_assign` and `::square_in_place` | `guests/vendor/ark-ff`, `src/fields/models/fp/montgomery_backend.rs` |
+
+Neither crate offers a hook — no `extern`, no feature, nothing to override — and
+the alternative was writing signature recovery and a pairing ourselves; the owner
+chose the patch, which keeps the audited code. `crates/prover/tests/one_feature.rs`
 skips `guests/vendor/**`, because master anti-goal 1's hazard — a configuration
 nobody builds — is about *this* repository's crates and not about a third party's
 feature table that a `[patch]` carries in unchanged.
 
-**Two operand-side rules a caller has to get right**, and `guests/vendor/k256`'s
-patch is the worked example of both.
+**Three caller-side rules, and the vendored patches are the worked examples.**
 
-*The operands need reducing to 256 bits and no further.* This family's frame
-carries four 8-limb values; a caller holding a wider or lazily-reduced
-representation has to bring each operand below `2^256` before it can cross. It
-does **not** have to bring it below `m` — §14.2's identity divides for any
-`a, b < 2^256` whose quotient fits eight limbs, and §14.3 is what that costs.
-`k256` stores a field element as ten 26-bit limbs with a magnitude up to 8, so its
-values reach `2^259`; the patch's `packable` is the exact test for whether a value
-fits (limbs 0–8 below `2^26` and limb 9 below `2^22` admit `[0, 2^256)` and nothing
-more), and it tries the three reductions cheapest-first. Reducing all the way every
-time cost 0.6 million guest cycles on S26's pinned mini-block — a tenth of the
-delegation's whole saving — for nothing.
+*An operand must be below the selected modulus, not merely below `2^256`.* This
+is §14.3's price and it is the rule S26's patch broke by design. `k256` stores a
+field element as ten 26-bit limbs with a magnitude up to 8, and the old
+`operand` reduced only until the value fit the frame — its doc said "an operand
+at or above `p` is no problem", which is now false. Worse, `p`'s own raw limb
+pattern is upstream's **second representation of zero** (`normalizes_to_zero`'s
+`z1` mask is exactly it), and the complete projective formulas produce it
+whenever a coordinate difference vanishes, so `a = p` is a structured case and
+not a `2^-224` accident. The patch's test is now `packable(x) &&
+!x.get_overflow()` — upstream's own "is this magnitude-1 value at or above `p`",
+ordered after `packable` because that is where it is meaningful — falling back
+to a full `normalize`. The **scalar** path pays none of this: a `Scalar` is a
+`U256` already below `n`, so its operands satisfy the bound by the type's own
+invariant.
 
-*The frame is built once, not zeroed and then filled.* `ModMulFrame::of` writes the
-modulus, both operands and eight zero result words in one pass. The obvious
+*A Montgomery caller pays two calls, not one.* The delegation multiplies plain
+integers. arkworks' `Fp256` holds `x·R` with `R = 2^256 mod p`, and a Montgomery
+multiply is `â·b̂·R^-1`, so `guests/vendor/ark-ff` issues `t = â·b̂ mod p` and
+then `out = t·R^-1 mod p`, with `R^-1` a literal from
+`constants::mod_mul::{BN254_P_R_INV, BN254_R_R_INV}`. Two delegated calls still
+beat one software Montgomery multiply by roughly an order of magnitude, and this
+is the trade §13.2 avoided for `FR_ARITH` by carrying the Montgomery
+representation in the frame instead — which this family cannot do, its four
+moduli having four different radices. The patch sits in `ark-ff` rather than
+`ark-bn254` because that crate's `#[derive(MontConfig)]` *generates* its own
+`mul_assign`, so the intercept has to be one level below it; the selector is an
+associated `const` matched on `T::MODULUS`, so it is decided at compile time and
+every other arkworks field — `ark-bls12-381`'s six-limb one included — is
+untouched.
+
+*The frame is built once, not zeroed and then filled.* `ModMulFrame::of` writes
+the selector, both operands and eight zero result words in one pass. The obvious
 `new()`-then-`set()` shape cost a `memset` and three `memcpy`s a call, 1.4 million
-cycles on that same block. §2's shim model charges `4 + 2·frame_words` for a call;
-that is the *floor*, and a caller that marshals badly pays several times it.
+cycles on S26's pinned block. §2's shim model charges `4 + 2·frame_words` for a
+call; that is the *floor*, and a caller that marshals badly pays several times it.
+The 25-word frame charges 54 where the 32-word one charged 68.
 
-**A caller owes a software path, and choosing the delegation's parameters is part
-of writing one.** §2 requires one behind every shim, and what it costs to write is a
-real constraint on what a caller delegates. `guests/mod-mul-ops` calls this family by
-name over `2^32` and `2^61 - 1` rather than over two 256-bit moduli for exactly that
-reason: at `u64` the fallback is one `u128` expression, and at 256 bits it would be a
-second 512-bit long division living in a guest, with nothing holding it equal to
-`emulator::mod_mul_frame`. The 256-bit
-modulus the fixture does exercise is secp256k1's `p`, through the vendored patch,
-whose fallback is upstream's own `mul_inner` and so is the same code by
-construction — which is the shape §13.4 describes for `field` and `transcript`, and
-the one to copy.
+**A caller owes a software path, and at 256 bits it is no longer one line.** §2
+requires one behind every shim. The three library callers get theirs for free —
+upstream's own multiply, one branch below the ecall, which is the shape §13.4
+describes and the reason the delegated and software answers cannot disagree by
+construction. `guests/mod-mul-ops`, which calls the family by name, cannot: S26
+chose `2^32` and `2^61 − 1` as its moduli precisely so its fallback could be one
+`u128` expression, and a fixed-modulus family has no such exit. So it carries a
+schoolbook 512-bit long division of its own — and **runs it on every call,
+comparing**, rather than reserving it for an executor that will never ask. That
+turns forty lines of dead code into a differential oracle against
+`emulator::mod_mul_frame`, which is the better of the two things to have.

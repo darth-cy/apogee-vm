@@ -113,7 +113,7 @@ fn the_registry_is_one_table() {
                 family::MOD_MUL,
                 ecall::PRECOMPILE_MOD_MUL,
                 constants::address_space::DELEGATION_MOD_MUL,
-                32
+                25
             ),
         ],
         DELEGATIONS,

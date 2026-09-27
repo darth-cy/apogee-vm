@@ -571,8 +571,7 @@ fn mod_mul(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
                 .iter()
                 .position(|c| *c == code)
                 .unwrap_or_else(|| panic!("mod_mul: selector {code} names no modulus"));
-            let m: [u64; mm::LIMBS] =
-                core::array::from_fn(|k| mm::MODULI[selector][k] as u64);
+            let m: [u64; mm::LIMBS] = core::array::from_fn(|k| mm::MODULI[selector][k] as u64);
             let values = [
                 limbs(mm::A_WORD, deleg::WORD_READ_VALUE, r),
                 limbs(mm::B_WORD, deleg::WORD_READ_VALUE, r),

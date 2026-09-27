@@ -65,8 +65,9 @@ crates/
                  and `mul_div`: S18's two; `mem_word`, `mem_subword` and `atomics`: S19's
                  three; `delegation`: the frame, the anchor and the layered builder the
                  delegation circuits share; `keccak`: S21's delegation circuit; `poseidon2`
-                 and `fr_arith`: S23's; `mod_mul`: S26's, `a·b mod m` over a WITNESSED
-                 modulus; `gadgets`: the is-zero and
+                 and `fr_arith`: S23's; `mod_mul`: S26's, specialized at S26b to
+                 `a·b mod m` over one of FOUR fixed Ethereum fields a frame word
+                 SELECTS; `gadgets`: the is-zero and
                  comparison gadgets;
                  `family_circuit`: the registry, now every family; no_std
   gkr-verify/    the GKR verifier half: the gate kernel, the layer sumcheck verifier and
@@ -103,7 +104,8 @@ guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, op
                  -- their own workspace; see guests/Cargo.toml and docs/guest-program-manual.md
   vendor/        upstream crates vendored so a GUEST can patch them, through
                  guests/Cargo.toml's [patch.crates-io]; see guests/vendor/README.md.
-                 S26 vendored k256 0.13.4 and routes its field multiply through MOD_MUL
+                 S26 vendored k256 0.13.4 and S26b ark-ff 0.6.0, routing secp256k1's
+                 two fields and BN254's two through MOD_MUL
 assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 handoff
 tools/
   profiler/      the cycle profiler: where a guest's RV32 cycles go, by function and by
@@ -208,10 +210,10 @@ cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constrain
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
 cd guests/fib && cargo build --target riscv32imac-unknown-none-elf
-git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constraints/tests/vectors/ crates/checker/tests/vectors/ crates/emulator/tests/vectors/
+git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constants/tests/vectors/ crates/constraints/tests/vectors/ crates/checker/tests/vectors/ crates/emulator/tests/vectors/
 -------------------------------------------------------------------------------
 cargo run -p kat-gen                        # refresh every fixture (manual, deliberate)
-cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader | isa | program | gkr | memory | lookup | family | delegation | tape | revm
+cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader | isa | program | gkr | memory | lookup | family | delegation | moduli | tape | revm
 cargo run -p checker -- laws <artifact>     # Laws 1-4 and the lookup rules, the standalone validators
 cargo run -p checker -- padding <artifact>  # the padding contract
 cargo run -p checker -- dump <artifact>     # a circuit, readably: layers, gates, relations, catalogue
@@ -931,12 +933,30 @@ is derivable *from* them is regenerated and diffed in CI.
   from 1,048 shards to 5 (`docs/spec/delegation.md` §9.2). Below `2^20` no timestamp table
   fits at any of them, so every bound a delegation family makes is a bit decomposition with a
   booleanity gate — including a frame value's **canonicity**, an eight-limb borrow chain
-  against `p` whose last borrow is 1 exactly when the value is below the modulus. That is also why its registry arm sits *below* `family_circuit`'s
+  whose last borrow is 1 exactly when the value is below the modulus: against `p`'s
+  literals for `FR_ARITH` and `POSEIDON2`, and against `MOD_MUL`'s eight `m_limb` columns,
+  which its selector pins to one of four tables of literals. That is also why its registry arm sits *below* `family_circuit`'s
   minimum-height guard: a family with no channel reaches no `BITS ≤ trace_vars` assertion,
   and putting it in the guard would refuse the heights these families actually take. **A
   height changes no gate** — it adds one halving list per variable carrying one node per
   output, and nothing else — which is what made `MOD_MUL`'s raise a re-pin and not a redesign
   (`crates/checker/tests/mod_mul.rs::a_height_moves_only_the_halving_layers`).
+- **`MOD_MUL` multiplies in one of FOUR fixed Ethereum fields, and the EVM's `MULMOD` is
+  not one of them** (S26b, `docs/spec/delegation.md` §14 and §10.2). Frame word 0 selects
+  secp256k1's `p` or `n` or BN254's `q` or `r`; the circuit supplies the limbs as literals
+  through eight `m_limb` columns a degree-1 gate pins to the selector, so a 25-word frame
+  replaced S26's 32-word one carrying a **witnessed** modulus. Three things follow and each
+  is easy to get wrong. **`a < m` and `b < m` are gates now**, which S26 could not state
+  with `m` an operand, and they are what makes `q < m ≤ 2^256` a property of the statement
+  rather than of the honest prover's manners — so a caller holding a lazily reduced
+  representation must reduce *below the modulus* and not merely below `2^256`, which is a
+  real cost (`guests/vendor/k256`'s `operand`, and `p`'s own limb pattern is upstream's
+  second spelling of zero). **`one_modulus_a_live_row` is load-bearing twice**: it refuses
+  the `1 + 3 = 4` two-selector forgery `selector_rule` cannot see, *and* it is the only
+  thing bounding `m`'s limbs below `2^32`, `m` having no bit decomposition — without it the
+  limb identity stops being an integer identity. And **ecall `0x0503` is retired and
+  burned**: the frame changed shape, append-only forbids a second meaning, and the call
+  took `0x0504` as S-NATIVE-IO's `read`/`write` took nothing.
 - **The anchor's value column is free on both sides, and the multiset is what pairs them.**
   A request writes `T(deleg_space, base, 4c+3, v)` and an invocation reads it; nothing fixes
   `v` locally on either side, and they cancel only when equal. What *is* pinned, by three
@@ -1090,7 +1110,12 @@ is derivable *from* them is regenerated and diffed in CI.
   lists every changed file so the diff a reviewer reads is that list and not a crate. S26
   vendored `k256` 0.13.4 to route `FieldElement10x26::mul` and `::square` through the
   `MOD_MUL` delegation — two changed files, and **−24.2%** of the pinned mini-block's guest
-  cycles. Three consequences worth knowing. The **root workspace is not patched**, so
+  cycles — and S26b added `Scalar::mul` there and vendored **`ark-ff` 0.6.0** to route
+  BN254's two fields at `MontBackend::mul_assign`, so every one of the four selectors has a
+  library caller. Patching `ark-ff` rather than `ark-bn254` is the interesting choice: the
+  latter's `#[derive(MontConfig)]` *generates* its own multiply, so the intercept has to
+  sit one level below it, where it is one function pair and covers `Fq2`, `Fq6` and `Fq12`
+  for free. Three consequences worth knowing. The **root workspace is not patched**, so
   `crates/emulator/tests/revm.rs`' native revm oracle runs upstream's software multiply,
   which is the only reason the oracle is worth anything. `crates/prover/tests/
   one_feature.rs` **skips `guests/vendor`** — an upstream crate's `[features]` table is that
@@ -1186,6 +1211,7 @@ is derivable *from* them is regenerated and diffed in CI.
 | S25 — Witness pipeline, real blocks, bench harness | done | `docs/handoff/S25-block.md` |
 | S26 — Cycle reduction: streaming prover, cycle profiler, `MOD_MUL` | done | `docs/handoff/S26-cycle.md` |
 | S-NATIVE-IO — The native I/O model: POSIX and QEMU deleted | done | `docs/handoff/S-NATIVE-IO.md` |
+| S26b — `MOD_MUL` specialized: four fixed Ethereum moduli | done | `docs/handoff/S26b-eth-field-mul.md` |
 
 **S-IO takes no number, and that is deliberate** (owner's decision). It is not one of the
 original twenty-seven stages — it is the stage those twenty-seven forgot, inserted after

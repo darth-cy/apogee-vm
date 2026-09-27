@@ -1225,7 +1225,12 @@ fn s26_the_mod_mul_witness_and_anchor_are_pinned() {
     // a field it was not asked for.
     let sel_write = mm_c::word(mm::SELECTOR_WORD, mm_c::WORD_WRITE_VALUE);
     h.assert_rejects(
-        &tamper(vec![cell(MM, sel_write, live, at(sel_write, live) + Fr::ONE)]),
+        &tamper(vec![cell(
+            MM,
+            sel_write,
+            live,
+            at(sel_write, live) + Fr::ONE,
+        )]),
         (MM, 0),
         CONSTRAINT,
     );

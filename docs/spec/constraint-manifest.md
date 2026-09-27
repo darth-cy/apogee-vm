@@ -12,13 +12,16 @@
 > the code: the `PolyAddress`, the artifact's own name for it, and the Rust constant or
 > constructor that makes it.
 >
-> **Status: S26.** All **sixteen** circuits are registered: `ADD_SUB_LUI_AUIPC`,
+> **Status: S26b.** All **sixteen** circuits are registered: `ADD_SUB_LUI_AUIPC`,
 > `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MUL_DIV`, `MEM_WORD`, `MEM_SUBWORD`, `ATOMICS`,
 > `INIT_TEARDOWN`, `ZERO_WINDOWS`, `KECCAK_F`, `POSEIDON2`, `FR_ARITH`, `PUBLIC_INPUT`,
 > `PUBLIC_OUTPUT`, `ADVICE_WINDOWS` and S26's `MOD_MUL` (§18), the fourth delegation family
-> and the first whose behaviour depends on a **witnessed parameter** — the modulus is a
-> column of the row, so one circuit serves secp256k1's two fields, BN254's and the EVM's
-> `MULMOD`. Every execution family the decoder routes to has a
+> and the first whose behaviour depends on a **selector** — one frame word names one of four
+> fixed Ethereum fields, secp256k1's two and BN254's two, and the circuit supplies the
+> modulus' limbs as literals. S26 carried that modulus as a witnessed operand instead;
+> S26b removed it, which is what let the circuit state `a < m` and `b < m`
+> (`delegation.md` §10.2). The EVM's `MULMOD` takes an arbitrary modulus and is **not**
+> served here. Every execution family the decoder routes to has a
 > circuit and a fill, and no `FamilyId` in `constants::family` is without one. S21 added the
 > first family that is **invoked rather than decoded** (§12) and, with it, the `deleg` memory
 > query — the mirror a delegation request makes — which changed `ADD_SUB_LUI_AUIPC`'s frame, its
@@ -287,7 +290,7 @@ product nodes means the one `Product`.
 | 12 | `PUBLIC_INPUT` | `memory::value_window_artifact(n)` | none | `0 ≤ n ≤ 30` | `2^8`, **pinned** | one shard at `2^8`, window 32 | one shard at `2^8`, window 32 | one shard at `2^8`, window 32 | one shard at `2^8`, window 32 | one shard at `2^8`, window 32 |
 | 13 | `PUBLIC_OUTPUT` | `memory::zero_window_artifact(n)` — `ZERO_WINDOWS`' artifact, byte for byte | none | `0 ≤ n ≤ 30` | `2^8`, **pinned** | one shard at `2^8`, window 33 | one shard at `2^8`, window 33 | one shard at `2^8`, window 33 | one shard at `2^8`, window 33 | one shard at `2^8`, window 33 |
 | 14 | `ADVICE_WINDOWS` | `memory::value_window_artifact(n)` — `PUBLIC_INPUT`'s artifact at another height | none | `0 ≤ n ≤ 30` | the window height, `2^22` | in the config, with no shard: the guest is handed no advice | ditto | ditto | ditto | ditto |
-| 15 | `MOD_MUL` | `mod_mul::artifact(n)` | `mod_mul::channels()`: **none** | `0 ≤ n ≤ 30` | `2^8` | — | — | — | — | — |
+| 15 | `MOD_MUL` | `mod_mul::artifact(n)` | `mod_mul::channels()`: **none** | `0 ≤ n ≤ 30` | `2^16` | — | — | — | — | — |
 
 A verifying key carries only menu heights (`constants::family::HEIGHT_MENU`, **`2^8` to `2^22`
 since S21**),
@@ -398,7 +401,7 @@ PUBLIC_INPUT        8   9 (1 + 8)                  L9      3      0   0  1      
 PUBLIC_OUTPUT       8   9 (1 + 8)                  L9      2      0   0  1          2       18  0                  0                               2         18        1,910
 ADVICE_WINDOWS     16  17 (1 + 16)                 L17     3      0   0  1          3       34  0                  0                               2         34        2,887
 ADVICE_WINDOWS     22  23 (1 + 22)                 L23     3      0   0  1          3       46  0                  0                               2         46        3,535
-MOD_MUL            16   23 (7 + 16)                L23   132  3,346   0  0      3,478      286  3,493 (73/3,420)    0                               2      3,779    1,421,100
+MOD_MUL            16   22 (6 + 16)                L22   104  3,364   0  0      3,468      158  3,502 (86/3,416)    0                               2      3,660    1,404,716
 ```
 
 `committed` is layer 0's width, `M + W + S`. `inner` is the width of every layer above 0,
@@ -773,7 +776,7 @@ kind is split by the code the decoded table puts in `imm`
 | `lui` | 5 (32) | the value loaded | pc rd | `imm` | 0; on this row only `wrap_boolean` constrains it, the sum and difference gates vanishing | the fall-through | yes |
 | system: fence | 0 (1) | `FENCE` = 2 | pc | 0 | 0; as on a lui row, only `wrap_boolean` constrains it | the fall-through | yes, `is_fence = 1` |
 | system: ecall | 0 (1) | `ECALL` = 0 | pc; rs1 = `x17`, reading 93; rs2 = `x10`; rd = `x10` | `a0` as read | 0; as on a lui row, only `wrap_boolean` constrains it | `HALT_PC` = 1 | `EXIT` only, `is_ecall = 1`, every `is_deleg_t = 0` |
-| system: a **delegation request** (S21; one row kind per type since S23) | 0 (1) | `ECALL` = 0 | pc; rs1 = `x17`, reading the type's number — `0x501`, `0x500`, `0x502` or `0x503`; rs2 = `x10`, the frame base; rd = `x10`; **deleg**, at that base | 0 | 0; as above | the fall-through | yes, `is_ecall = 1` **and** exactly one `is_deleg_t = 1` |
+| system: a **delegation request** (S21; one row kind per type since S23) | 0 (1) | `ECALL` = 0 | pc; rs1 = `x17`, reading the type's number — `0x501`, `0x500`, `0x502` or `0x504`; rs2 = `x10`, the frame base; rd = `x10`; **deleg**, at that base | 0 | 0; as above | the fall-through | yes, `is_ecall = 1` **and** exactly one `is_deleg_t = 1` |
 | system: ebreak | 0 (1) | `EBREAK` = 1 | — | — | — | — | never: no row satisfies `system_split` with the two code gates |
 | padding | none; all 0 | 0 | none | 0 | 0 | 0 | every row past the shard's last cycle |
 
@@ -890,7 +893,7 @@ by `fill::add_sub` (which overwrites `rd_selected`), `W[30..33]` by
 | `W[22]` | `is_deleg_9` | `add_sub::IS_DELEGATION[0]`; `add_sub::IS_KECCAK`, S21's name kept | `KECCAK_F` request row | 1 on an ecall row whose `a7` is `0x501` | `is_deleg_9_boolean`, `deleg_9_is_an_ecall`, `deleg_9_number`, `ecall_is_exit`, `deleg_mask_rule`, `exit_status`, `deleg_space_rule`, `next_pc_rule` |
 | `W[23]` | `is_deleg_10` | `add_sub::IS_DELEGATION[1]` | `POSEIDON2` request row (S23) | 1 on an ecall row whose `a7` is `0x500` | `is_deleg_10_boolean`, `deleg_10_is_an_ecall`, `deleg_10_number`, `ecall_is_exit`, `deleg_mask_rule`, `exit_status`, `deleg_space_rule`, `next_pc_rule` |
 | `W[24]` | `is_deleg_11` | `add_sub::IS_DELEGATION[2]` | `FR_ARITH` request row (S23) | 1 on an ecall row whose `a7` is `0x502` | `is_deleg_11_boolean`, `deleg_11_is_an_ecall`, `deleg_11_number`, `ecall_is_exit`, `deleg_mask_rule`, `exit_status`, `deleg_space_rule`, `next_pc_rule` |
-| `W[25]` | `is_deleg_15` | `add_sub::IS_DELEGATION[3]` | `MOD_MUL` request row (S26) | 1 on an ecall row whose `a7` is `0x503` | `is_deleg_15_boolean`, `deleg_15_is_an_ecall`, `deleg_15_number`, `ecall_is_exit`, `deleg_mask_rule`, `exit_status`, `deleg_space_rule`, `next_pc_rule` |
+| `W[25]` | `is_deleg_15` | `add_sub::IS_DELEGATION[3]` | `MOD_MUL` request row (S26) | 1 on an ecall row whose `a7` is `0x504` | `is_deleg_15_boolean`, `deleg_15_is_an_ecall`, `deleg_15_number`, `ecall_is_exit`, `deleg_mask_rule`, `exit_status`, `deleg_space_rule`, `next_pc_rule` |
 | `W[26]` | `wrap` | `add_sub::WRAP` | Carry or borrow | | `add_addi_auipc`, `sub`, `wrap_boolean` |
 | `W[27]` | `rd_hi` | `add_sub::RD_HI` | Result, high halfword | `rd_selected >> 16` | `rd_hi_range`, `rd_lo_range` |
 | `W[28]` | `pc_wrap` | `add_sub::PC_WRAP` | Next-pc overflow | 0 | `pc_wrap_boolean`, `next_pc_rule` |
@@ -1210,8 +1213,8 @@ factored where that is easier to read. Every factoring re-expands to the stored 
                                                        0 = is_deleg_11·(rs1_read_value − 0x502)
   100 is_deleg_15_boolean   0 = W[25] − W[25]·W[25]    0 = is_deleg_15 − is_deleg_15²
   101 deleg_15_is_an_ecall  0 = W[25] − W[25]·W[20]    0 = is_deleg_15·(1 − is_ecall)
-  102 deleg_15_number       0 = −1283·W[25] + W[25]·M[9]
-                                                       0 = is_deleg_15·(rs1_read_value − 0x503)
+  102 deleg_15_number       0 = −1284·W[25] + W[25]·M[9]
+                                                       0 = is_deleg_15·(rs1_read_value − 0x504)
 
   reads as  each is_deleg_t = 1 forces is_ecall = 1, so a delegation request is a system row
             with code ECALL and carries the whole ecall frame. Each flag is free on every
@@ -1719,7 +1722,7 @@ them by pc, not by cycle; the table below omits them. Every live row shown has c
 `x31 = pc + 0xfffff000`. `E` lui: `x6 = 0x12345000`. `F` add into `x0`, carrying. `G` fence.
 `H` exit 42. **`I` keccak delegation request** (S21): `a7 = 0x501`, `a0 = 0x10400`, the frame
 base it hands over, and `a0` written back 0. `P` padding. A `POSEIDON2`, `FR_ARITH` or
-`MOD_MUL` request is the same row with `a7` `0x500`, `0x502` or `0x503`, its own selector at
+`MOD_MUL` request is the same row with `a7` `0x500`, `0x502` or `0x504`, its own selector at
 `W[23]`, `W[24]` or `W[25]` and its own tag 5, 6 or 7 at `M[26]`; the suite carries one of the
 four, the gates being one loop over the registry.
 
@@ -8108,34 +8111,34 @@ as an enforcing gate on gate list 0, so above the leaves it is two product trees
 else. Normative spec: `delegation.md` §4, §5 and §14. Fill: `prover::family_fill(15)`, the
 private `fill::mod_mul`.
 
-**3,478 committed columns (132 `M`, 3,346 `W`, no `S`) and no virtual table.** Gate list 0
-writes 66 columns — the two sides' 33 leaves — and holds **3,493 enforcing gates
-(73 degree-1, 3,420 degree-2)**. **No lookup**, 2 outputs. At its `n = 16` there are 23 gate
-lists (7 row-wise and 16 halving), the top is `L23`, and the circuit has 286 inner columns and
-3,779 relations, 1,421,100 bytes of wire form. **None of the counts before that sentence
+**3,468 committed columns (104 `M`, 3,364 `W`, no `S`) and no virtual table.** Gate list 0
+writes 52 columns — the two sides' 26 leaves — and holds **3,502 enforcing gates
+(86 degree-1, 3,416 degree-2)**. **No lookup**, 2 outputs. At its `n = 16` there are 22 gate
+lists (6 row-wise and 16 halving), the top is `L22`, and the circuit has 158 inner columns and
+3,660 relations, 1,404,716 bytes of wire form. **None of the counts before that sentence
 depends on `n`** — a height adds halving lists and nothing else, one node per output each, so
-at `n = 8` the same circuit is 15 lists, 270 inner and 3,763 relations with the committed
+at `n = 8` the same circuit is 14 lists, 142 inner and 3,644 relations with the committed
 width, the gate split and the lookup count unmoved (`mod_mul.rs`'
 `a_height_moves_only_the_halving_layers`). `artifact` panics unless the column counts are
-`MEMORY_COLUMNS` and `WITNESS_COLUMNS`, there is one `W` name per `W` column, and the carries
-**close** the witness — a fill that wrote past them would be writing into nothing. It also
-panics on every refusal of `validate` and of `memory::check_memory`.
+`MEMORY_COLUMNS` and `WITNESS_COLUMNS`, there is one `W` name per `W` column, the carries
+**close** the witness — a fill that wrote past them would be writing into nothing — and
+`A`, `B` and `OUT` index their own values. It also panics on every refusal of `validate` and
+of `memory::check_memory`.
 
-**One row is one 256-bit modular multiplication**, and the modulus is a **column of the row**
-rather than a constant of the circuit. That is the family's whole design decision and §18.4
-is where it costs something. What it buys: one family serves secp256k1's base field — which
-`docs/handoff/S26-cycle.md` §4 measures at 31% to 57% of a mainnet block's guest cycles — its
-scalar field, BN254's, and the EVM's `MULMOD`. Two constant-modulus families would be two
-family ids, two ecall numbers, two circuits and two more request selectors on
-`ADD_SUB_LUI_AUIPC`: more surface, not less.
+**One row is one Ethereum field multiplication**, and since S26b the modulus is **one of
+four** a frame word selects, supplied by the circuit as literals. S26 carried it as a
+witnessed 256-bit operand; `delegation.md` §10.2 records the change and why, and §18.4 is
+what it bought. The four are secp256k1's base and scalar fields and BN254's — which
+`docs/handoff/S26-cycle.md` §4 measures together at 31% to 57% of a mainnet block's guest
+cycles — and between them they are every 256-bit field Ethereum block execution multiplies
+in. **The EVM's `MULMOD` is not among them**: an arbitrary modulus has no representation in
+this frame and nothing routes the opcode here.
 
-**The height is `2^8`**, the delegation menu's opening entry (§12.1), so a shard holds 256
-invocations. That is worth reading twice on this family, because it is the one whose invocation
-count a real workload drives hard: S26's pinned mini-block makes 6,705 of them, so **27
-shards** appear where the delegation removed five `2^20` execution ones. `delegation.md` §9.1
-has the arithmetic and `docs/handoff/S26-cycle.md` §7 the recommendation; nothing here depends
-on the answer, `family_circuit`'s arm accepting `0 ≤ n ≤ 30` like every other delegation
-family's.
+**The height is `2^16`**, not the delegation menu's opening `2^8`, so a shard holds 65,536
+invocations. It is the one delegation family whose invocation count a real workload drives
+hard: at `2^8` S26's measured block took 1,048 shards and at `2^16` it takes 5.
+`delegation.md` §9.2 has the arithmetic; nothing here depends on it, `family_circuit`'s arm
+accepting `0 ≤ n ≤ 30` like every other delegation family's.
 
 ### 18.2 Row kinds
 
@@ -8144,56 +8147,75 @@ and there is no no-op row kind: a row is live or it is padding.
 
 | row kind | `live` | what the row holds | what it adds to the multiset |
 | --- | --- | --- | --- |
-| a **multiplication** | 1 | the requesting cycle, the frame base, the 32 words read and written, four values' 256 word bits, the quotient's 8 limbs and 256 bits, the `out < m` chain's 256 difference bits and 8 borrows, 14 signed carries of 37 bits, and 32 × 38 gap bits with the frame pointer's 60 | 33 read tuples and 33 write tuples: the 32 frame words at `(RAM, base + 4j)`, and the anchor pair at `(DELEGATION_MOD_MUL, base)` |
-| **padding** | 0 | every committed cell 0 | nothing: all 66 leaves are 1 |
+| a **multiplication** | 1 | the requesting cycle, the frame base, the 25 words read and written, the four modulus selectors and the eight limbs they name, three values' 256 word bits and 264 `< m` chain bits each, the quotient's 8 limbs and 256 bits, 14 signed carries of 37 bits, and 25 × 38 gap bits with the frame pointer's 60 | 26 read tuples and 26 write tuples: the 25 frame words at `(RAM, base + 4j)`, and the anchor pair at `(DELEGATION_MOD_MUL, base)` |
+| **padding** | 0 | every committed cell 0 **as the honest fill writes it** | nothing: all 52 leaves are 1 |
 
-Every gate holds on the all-zero row, and two of them are worth spelling out. `limb{k}` reads
-`0 − 0 − 0 + 0 − 2^32·0 = 0` because `carry_terms` puts `live` on the offset: a padding row's
-carry is `Σ 2^t·0 − 2^36·0 = 0` and not `−2^36`. `out_below_modulus` reads `live = borrow7`,
-so a padding row's last borrow is 0 where a live row's is 1 — which is the same gate saying
-"the subtraction borrowed out" on a live row and saying nothing on a padding one.
+Every gate holds on the all-zero row, and three of them are worth spelling out. `limb{k}`
+reads `0 − 0 − 0 + 0 − 2^32·0 = 0` because `carry_terms` puts `live` on the offset: a padding
+row's carry is `Σ 2^t·0 − 2^36·0 = 0` and not `−2^36`. `one_modulus_a_live_row` forces every
+selector to 0 there, so `m_limb{k}_rule` forces every modulus limb to 0, which is what lets
+the three `<v>_canonical{i}` chains be **ungated** and still hold. And each
+`<v>_below_modulus` reads `live = borrow7`, so a padding row's last borrow must be 0 where a
+live row's must be 1 — three gates now say it where one did, and a fill that computed a
+padding row's chain against the shard's modulus rather than against the row's zero `m` would
+fail all three.
+
+**The padding row is all-zero because the fill writes it so, not because the gates force
+it.** With `m = 0` the limb identity reduces to `a·b = out` over ℤ and each chain to
+`v = D < 2^256`, so a padding row could legally carry a real, unreduced multiplication. It is
+harmless — the row's leaves are the multiset identity, it requests nothing, pairs with no
+anchor and writes no register — but a test asserting "a padding row's columns are zero" is
+asserting a property of the fill.
 
 ### 18.3 The base layer
 
 | address | name | what it is |
 | --- | --- | --- |
 | `M[0..4]` | `cycle`, `live`, `base`, `anchor_value` | as §13.3 |
-| `M[4 + 4j + f]` | `w{j}_*` | frame word `j`, `j < 32`: words 0–7 the modulus `m`, 8–15 `a`, 16–23 `b`, 24–31 the result `out` |
-| `W[38j + i]` | `gap{j}_{i}` | bit `i` of word `j`'s timestamp gap, `1,216` in all |
-| `W[1216..1276]` | `base_low{i}`, then `base_room{i}` | 29 then 31 bits |
-| `W[1276 + 256v + 32k + t]` | `m_bit{k}_{t}`, `a_bit…`, `b_bit…`, `out_bit…` | bit `t` of limb `k` of value `v`, in frame order |
-| `W[2300 + k]` | `q_limb{k}` | limb `k` of the quotient — **the one value in the row the execution did not record** |
-| `W[2308 + 32k + t]` | `q_bit{k}_{t}` | bit `t` of limb `k` of `q` |
-| `W[2564 + 32i + t]` | `diff{i}_{t}` | bit `t` of difference limb `i` of the `out < m` chain |
-| `W[2820 + i]` | `borrow{i}` | borrow `i` of that chain; `borrow7` is pinned to `live` |
-| `W[2828 + 37k + t]` | `carry{k}_{t}` | bit `t` of signed carry `k`, `k < 14` |
+| `M[4 + 4j + f]` | `w{j}_*` | frame word `j`, `j < 25`: word 0 the modulus selector, 1–8 `a`, 9–16 `b`, 17–24 the result `out` |
+| `W[38j + i]` | `gap{j}_{i}` | bit `i` of word `j`'s timestamp gap, `950` in all |
+| `W[950..1010]` | `base_low{i}`, then `base_room{i}` | 29 then 31 bits |
+| `W[1010..1014]` | `selector{c}` | the four modulus selectors, in `mod_mul::CODES` order: codes 1, 2, 3, 4 |
+| `W[1014..1022]` | `m_limb{k}` | limb `k` of the selected modulus — **a witness column, and the only place `m` exists** |
+| `W[1022 + 520v + 32k + t]` | `a_bit{k}_{t}`, `b_bit…`, `out_bit…` | bit `t` of limb `k` of value `v`, in frame order |
+| `W[1022 + 520v + 256 + 32i + t]` | `a_diff{i}_{t}`, … | bit `t` of difference limb `i` of value `v`'s `< m` chain |
+| `W[1022 + 520v + 512 + i]` | `a_borrow{i}`, … | borrow `i` of that chain; `borrow7` is pinned to `live` |
+| `W[2582 + k]` | `q_limb{k}` | limb `k` of the quotient — **the one value in the row the execution did not record** |
+| `W[2590 + 32k + t]` | `q_bit{k}_{t}` | bit `t` of limb `k` of `q` |
+| `W[2846 + 37k + t]` | `carry{k}_{t}` | bit `t` of signed carry `k`, `k < 14` |
 
-Every address is reached through `mod_mul::word`, `value_bit`, `q_limb`, `q_bit`, `diff_bit`,
-`borrow_bit` and `carry_bit`, so a fill, a checker and a tamper twin name a column and never a
-number.
+Every address is reached through `mod_mul::word`, `selector`, `m_limb`, `value_bit`,
+`diff_bit`, `borrow_bit`, `q_limb`, `q_bit` and `carry_bit`, so a fill, a checker and a tamper
+twin name a column and never a number. The value index is `mod_mul::A`, `::B` or `::OUT` and
+never a literal — three values where S26 had four, and a bare index would have silently
+renumbered every twin.
 
-**Where the modulus reads from, and where the result does.** `m`, `a` and `b` are read from
-each word's `read_value`; `out` alone is read from `write_value`. That is the whole of what
-makes the call a function: the guest's modulus and operands are what it *passed*, and the
-result is what the invocation *wrote*. Twenty-four `writes_back_w{j}` gates then hold every
-non-result word to writing back what it read, so a call cannot rewrite the guest's operands
-under it.
+**Where each value reads from.** The selector, `a` and `b` are read from each word's
+`read_value`; `out` alone is read from `write_value`. That is the whole of what makes the call
+a function: the guest's field and operands are what it *passed*, and the result is what the
+invocation *wrote*. Seventeen `writes_back_w{j}` gates then hold every non-result word to
+writing back what it read, so a call can rewrite neither the guest's operands nor — word 0
+being inside that set — the field it was asked to work in.
 
 ### 18.4 The gates
 
 | group | count | degree | what it says |
 | --- | --- | --- | --- |
-| `live_boolean`, `gap{j}_{i}_boolean`, `base_low{i}_boolean`, `base_room{i}_boolean` | 1 + 1,216 + 29 + 31 | 2 | the frame's own, §4's, shared with the other three delegation families |
-| `addr_w{j}`, `gap_w{j}`, `base_aligned`, `base_in_window` | 32 + 32 + 1 + 1 | 2 | ditto: word `j` is at `base + 4j`, its read precedes its write, the base is 4-aligned and its whole 128-byte frame is inside RAM. Degree 2 because each carries `live` as a factor — on a padding row `addr` and `base` are 0 and `4j` is not |
-| `writes_back_w{j}`, `j < 24` | 24 | 1 | `m`, `a` and `b` survive the call |
-| `{m,a,b,out}_bit{k}_{t}_boolean` | 1,024 | 2 | every bit of every frame value is a bit |
-| `{m,a,b,out}_word{k}` | 32 | 1 | each limb is its 32 bits — which **is** the `< 2^32` bound, there being no lookup channel to ask |
+| `live_boolean`, `gap{j}_{i}_boolean`, `base_low{i}_boolean`, `base_room{i}_boolean` | 1 + 950 + 29 + 31 | 2 | the frame's own, §4's, shared with the other three delegation families |
+| `addr_w{j}`, `gap_w{j}`, `base_aligned`, `base_in_window` | 25 + 25 + 1 + 1 | 2 | ditto: word `j` is at `base + 4j`, its read precedes its write, the base is 4-aligned and its whole 100-byte frame is inside RAM. Degree 2 because each carries `live` as a factor — on a padding row `addr` and `base` are 0 and `4j` is not |
+| `writes_back_w{j}`, `j < 17` | 17 | 1 | the selector, `a` and `b` survive the call |
+| `selector{c}_boolean` | 4 | 2 | each modulus selector is a bit |
+| `selector_rule` | 1 | 1 | `w0_read_value = Σ code_i·s_i` |
+| `one_modulus_a_live_row` | 1 | 1 | `Σ s_i = live` |
+| `m_limb{k}_rule` | 8 | 1 | `m_k = Σ MODULI[i][k]·s_i`, the literals of the four moduli |
+| `{a,b,out}_bit{k}_{t}_boolean` | 768 | 2 | every bit of every frame value is a bit |
+| `{a,b,out}_word{k}` | 24 | 1 | each limb is its 32 bits — which **is** the `< 2^32` bound, there being no lookup channel to ask |
 | `q_bit{k}_{t}_boolean`, `q_word{k}` | 256 + 8 | 2, 1 | the same for the witnessed quotient |
 | `carry{k}_{t}_boolean` | 518 | 2 | 14 carries × 37 bits |
 | **`limb{k}`, `k < 15`** | 15 | 2 | the schoolbook identity, position by position |
-| `diff{i}_{t}_boolean`, `borrow{i}_boolean` | 256 + 8 | 2 | the `out < m` chain's bits |
-| `chain{i}`, `i < 8` | 8 | 1 | `out_i − m_i − b_{i−1} + 2^32·b_i = d_i` |
-| `out_below_modulus` | 1 | 1 | `borrow7 = live` |
+| `{a,b,out}_diff{i}_{t}_boolean`, `{a,b,out}_borrow{i}_boolean` | 768 + 24 | 2 | the three `< m` chains' bits |
+| `{a,b,out}_canonical{i}`, `i < 8` | 24 | 1 | `v_i − m_i − b_{i−1} + 2^32·b_i = d_i` |
+| `{a,b,out}_below_modulus` | 3 | 1 | `borrow7 = live` |
 
 **The fifteen limb equations are the circuit.** With `P_k = Σ_{i+j=k} a_i·b_j` and
 `S_k = Σ_{i+j=k} q_i·m_j`, gate `limb{k}` is
@@ -8206,8 +8228,9 @@ where `out_k` is absent past limb 7, `c_{−1}` is absent, and `c_14` is absent 
 closing condition. Weight the fifteen equations by `2^{32k}` and sum: the carries telescope
 and what is left is `a·b − q·m − out = c_14·2^{480}`. A last carry that does not exist is a
 last carry of zero, so **the absence of a fifteenth carry column is the identity**. Each gate
-is one `Quadratic`: the products are pairs of committed columns and everything else is a
-column times a literal, so the degree is 2 and never 3.
+is one `Quadratic`: the products are pairs of committed columns — `a_i·b_j` two `M`s and
+`q_i·m_j` two `W`s — and everything else is a column times a literal, so the degree is 2 and
+never 3.
 
 **Why the equation over `Fr` is the equation over ℤ.** Every operand is bounded to `2^32` by
 its own bits, so the largest term of any position is `8·(2^32 − 1)^2 < 2^67`, and the carry
@@ -8215,40 +8238,66 @@ sum adds less than `2^69`. `p` is 254 bits. No limb equation can wrap, so there 
 modular-arithmetic loophole to argue about — the same argument `delegation.md` §13.3's
 canonicity chain rests on, and the reason every limb is decomposed rather than range-checked.
 
+**`m` has no bits, and `one_modulus_a_live_row` is what stands in for them.** Every other
+value in that paragraph is bounded by its own 256 booleans; `m`'s limbs are bounded only by
+`m_limb{k}_rule` pinning each to one entry of a four-row table of literals, which holds
+exactly while at most one selector is set. Two selectors at once would give
+`m_0 = 0xffff_fc2f + 0xd036_4141 > 2^32`, `S_k` above `2^68`, and the argument above out of
+reach. So the sum gate is **load-bearing for the integer semantics** and not only for the
+selector, and it is not made redundant by any code spacing: with the codes 1, 2, 3, 4,
+`1 + 3 = 4` so `selector_rule` cannot see the forgery, and with codes 1, 2, 4, 8 it could see
+it while `m`'s bound would still rest here.
+`crates/checker/tests/mod_mul.rs`' `two_moduli_at_once_is_refused` is the twin.
+
+**Eight columns for `m`, not four products a limb.** The alternative was substituting
+`Σ MODULI[i][k]·s_i` wherever `m_k` appears. The chains would take four linear terms instead
+of one, which is free; `limb{k}`'s 64 `q_i·m_j` products would become 256, taking gate list
+0 from 128 products to 320. Eight committed columns and eight degree-1 gates is the cheaper
+half, and it is also what makes "the modulus is not the selected literal" a cell a tamper
+twin can corrupt — `a_modulus_limb_that_is_not_the_selected_literal_is_refused`.
+
 **The signed carry.** A position's partial sum can be negative, and `Fr` has no sign, so a
 carry is `Σ_{t<37} 2^t·carry{k}_{t} − 2^36·live`: a 37-bit unsigned witness read as an offset
 value in `[−2^36, 2^36)`. The bound is the fixed point of `C = (2^67 + 2^32 + C)/2^32`, which
 settles just above `2^35`, so 37 bits with a `2^36` offset is room to spare and one bit of
-margin against a recount. The `live` factor on the offset is what makes a padding row's carry
-0 (§18.2).
+margin against a recount. **The selector does not tighten it** — the recurrence reads only
+the limbs' `2^32` bounds — and the `live` factor on the offset is what makes a padding row's
+carry 0 (§18.2).
 
-**The one place the witnessed modulus costs a degree.** `delegation.md` §13.3's canonicity
-chain subtracts `p`, a *literal*, so its gates can be gated by `live` for free. Here the chain subtracts `m`,
-a **column**, and `live·m_i` would be degree 2 on top of the borrow term — so `chain{i}` is
-**ungated** instead, and holds on a padding row because every word there is zero and every
-borrow is zero. The gating moves to the single `out_below_modulus`, which is degree 1.
+**Three chains, and the fixed modulus is what makes them free of `live`.**
+`delegation.md` §13.3's canonicity chain subtracts `p`, a *literal*, which has to be
+multiplied by `live` so the gate vanishes on a padding row. Here the chain subtracts `m_i`, a
+**column** that `m_limb{k}_rule` already forces to 0 on a padding row, so the gate is
+**ungated** and degree 1 with nothing paid for it. S26 reached the same shape from the
+opposite direction — `m` was a frame word then, and gating would have made the gate degree 3.
 
-**`m > 0` needs no gate.** `out` is a sum of boolean bits and so a non-negative integer, and
-`out_below_modulus` puts it strictly below `m` on a live row. A modulus of zero has no value
-below it, so the chain cannot hold — which is why `emulator::mod_mul_frame` refuses a zero
-modulus as `EmuError::DelegationFrame` rather than answering: the honest executor stops where
-the circuit would be unprovable.
+**`m > 0` needs no gate.** Every entry of `MODULI` is a 256-bit odd prime, which
+`mod_mul.rs`' `every_modulus_is_a_256_bit_odd_value` holds a fifth entry to as well. S26
+needed `emulator::mod_mul_frame` to refuse a zero modulus by name; there is no zero modulus
+to refuse any more, and that refusal is gone with the operand it read.
 
-**What bounds `q`.** Its 256 bits, and nothing else. That is enough, and the reason is worth
-stating because it is *not* a soundness argument: the guest passes `a, b < m`, so
-`q = (a·b − out)/m < m < 2^256` and the honest prover can always fit it. A prover that passed
-unreduced operands would be unable to fit `q` at all — a cost to the **prover**, never a
-false statement to the verifier, since `out < m` and the identity together pin `out` to
-`a·b mod m` for whatever `q` does fit.
+**What bounds `q`, and what the operand chains buy.** Its 256 bits bound it to `2^256`, and
+`a < m` with `b < m` make that **enough by construction**: `q = (a·b − out)/m ≤ (m−1)²/m < m
+≤ 2^256`. So the statement is now *total* — every frame the circuit accepts has a witness and
+every witness it has is accepted — where S26 had only soundness. S26's note here read "a cost
+to the **prover**, never a false statement to the verifier", which was true of an unreduced
+operand then and is not a thing that can happen now: `a_below_modulus` and `b_below_modulus`
+refuse the frame, `emulator::mod_mul_frame` refuses it earlier and by name, and the fill
+asserts it earlier still. `out < m` remains the **reduction** and is a different statement
+from the other two: without it a prover answers `r + m` with the quotient one lower and
+every limb equation still holds.
 
 ### 18.5 The trees and the outputs
 
-§14.5's, with 33 leaves a side instead of 26: `d::leaves(DELEGATION_MOD_MUL, 32)` writes the
-32 frame words' read and write tuples plus the anchor pair, gate list 0's 66 columns are those
-leaves, the row-wise lists reduce each side to one node, and 8 halving lists take the two to a
-zero-variable top. The outputs are `read_root` and `write_root` at `READ_ROOT` and
-`WRITE_ROOT`, and `p` in step 10a is the position of `(15, i)` in `statement_shards` — **last**
-in every statement it appears in, family ids being the statement's order.
+§14.5's, with 26 leaves a side: `d::leaves(DELEGATION_MOD_MUL, 25)` writes the 25 frame
+words' read and write tuples plus the anchor pair, gate list 0's 52 columns are those leaves,
+the row-wise lists reduce each side to one node, and 16 halving lists take the two to a
+zero-variable top. The frame narrowing from 32 words to 25 took the leaf count from 33 to 26
+and so the padded tree from 64 leaves to 32, which is **one row-wise list fewer** — 6 where
+S26 had 7 — and is the whole of why §18.1's list count fell. The outputs are `read_root` and
+`write_root` at `READ_ROOT` and `WRITE_ROOT`, and `p` in step 10a is the position of `(15, i)`
+in `statement_shards` — **last** in every statement it appears in, family ids being the
+statement's order.
 
 ### 18.6 What fixes each cell
 
@@ -8257,24 +8306,35 @@ in every statement it appears in, family ids being the statement's order.
 | `cycle`, `base` | the multiset: the request's mirror write is `T(DELEGATION_MOD_MUL, base, 4·cycle + 3, v)` and this row's read is its only reader (§4's anchor) |
 | `live` | `live_boolean`, and every leaf's mask |
 | `anchor_value` | **nothing local**: the request's `deleg_write_value` must equal it, and the memory argument is what says so (§19 observation 19) |
-| `m`, `a`, `b` word values | the frame's read tuples, and `writes_back_w{j}` against their write values |
-| `out` word values | `limb{k}` and the chain: given `m`, `a`, `b` and the bits, integer division has one answer |
+| word 0's value | the frame's read tuple, `writes_back_w0`, and `selector_rule` against the four selectors |
+| `selector{c}` | its booleanity gate, `selector_rule` and `one_modulus_a_live_row` — the three together are exactly "one of the four codes, the one the frame names" |
+| `m_limb{k}` | `m_limb{k}_rule`: a literal of `MODULI`, chosen by the selector, which is also its `2^32` bound |
+| `a`, `b` word values | the frame's read tuples, `writes_back_w{j}` against their write values, their own bits, and their `< m` chains |
+| `out` word values | `limb{k}` and `out`'s chain: given `m`, `a`, `b` and the bits, integer division has one answer |
 | every `*_bit` | its own booleanity gate, and the `*_word{k}` decode that reads it |
 | `q_limb{k}` | `limb{k}`: fifteen equations in eight unknowns over the integers, whose solution is unique once `out < m` |
-| `diff{i}`, `borrow{i}` | `chain{i}` and their booleanity gates; `borrow7` by `out_below_modulus` |
+| `<v>_diff{i}`, `<v>_borrow{i}` | `<v>_canonical{i}` and their booleanity gates; `borrow7` by `<v>_below_modulus` |
 | `carry{k}_{t}` | `limb{k}` and `limb{k+1}`, which the carry joins, and its booleanity gate |
-| the padding row | `check_padding`'s all-zero row, and §18.2's two gates that hold there |
+| the padding row | `check_padding`'s all-zero row, and §18.2's gates that hold there — subject to §18.2's last paragraph |
 
 `crates/checker/tests/mod_mul.rs` is the independent reading of all of it: its own `U256` over
 two `u128` halves, its own division, its own borrow chain and its own witness derivation,
-sharing no code with `prover::fill::mod_mul`. The twin worth knowing about is
+sharing no code with `prover::fill::mod_mul`. Its honest set is **one invocation per
+selector** plus the `a = 0` and the `(m−1)²` corners, so every modulus the circuit holds is
+run. Two twins are worth knowing about.
+
 `a_result_not_below_the_modulus_is_refused`: `(q − 1, r + m)` satisfies **every** limb equation
 and every carry bound — it is the same product, decomposed one multiple of `m` differently —
-and `out_below_modulus` is the only thing that refuses it. It runs on the BN254 row rather
-than the secp256k1 one because `p = 2^256 − 2^32 − 977` leaves no room: `r + p` does not fit
+and `out_below_modulus` is the only thing that refuses it. It runs on a BN254 row rather
+than a secp256k1 one because `p = 2^256 − 2^32 − 977` leaves no room: `r + p` does not fit
 eight limbs, so on that row the forgery cannot even be written down.
 
----
+`an_operand_not_below_the_modulus_is_refused`: `a = m` with the quotient, the result, the
+carries and all three chains computed honestly for it — `m·b mod m = 0` with `q = b`, which
+is a perfectly well-formed witness of a claim the circuit must refuse. Nothing is corrupted;
+`a_below_modulus` is the only gate that fails. It is not a hypothetical shape: `m`'s raw limb
+pattern is upstream `k256`'s second representation of zero, and the vendored patch handed it
+across the frame until S26b made it a refusal (`delegation.md` §14.4).
 
 ## 19. Observations
 

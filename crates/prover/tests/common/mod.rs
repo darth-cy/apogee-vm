@@ -267,7 +267,7 @@ pub fn recursion_unused_program() -> Program {
 /// Its six execution families run at `2^20` and `MOD_MUL` at
 /// [`MOD_MUL_FIXTURE_VARS`], but its **window** families need `2^18` rather
 /// than `2^16`: the guest's `.text`
-/// reaches pc `0x2161a` and `decode_program` refuses an image byte past RAM
+/// reaches pc `0x452c6` and `decode_program` refuses an image byte past RAM
 /// window 0, which at `2^16` ends at `0x40000` — that one fits, but the decoded
 /// tables do not, a table's row `i` being pc `2i`.
 pub fn mod_mul_program() -> Program {

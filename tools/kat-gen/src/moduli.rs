@@ -43,16 +43,12 @@ fn modulus_of<F: PrimeField>() -> Vec<u8> {
 pub fn generate() {
     let mut out = String::new();
     out.push_str("# the four moduli `constants::mod_mul::MODULI` holds, from arkworks\n");
-    out.push_str("# docs/spec/delegation.md \u{00a7}14 is normative; the order is `mod_mul::CODES`\n");
+    out.push_str(
+        "# docs/spec/delegation.md \u{00a7}14 is normative; the order is `mod_mul::CODES`\n",
+    );
     out.push_str("# name, then eight little-endian 32-bit limbs in hex, low limb first\n");
-    out.push_str(&line(
-        "SECP256K1_P",
-        &modulus_of::<ark_secp256k1::Fq>(),
-    ));
-    out.push_str(&line(
-        "SECP256K1_N",
-        &modulus_of::<ark_secp256k1::Fr>(),
-    ));
+    out.push_str(&line("SECP256K1_P", &modulus_of::<ark_secp256k1::Fq>()));
+    out.push_str(&line("SECP256K1_N", &modulus_of::<ark_secp256k1::Fr>()));
     out.push_str(&line("BN254_P", &modulus_of::<ark_bn254::Fq>()));
     out.push_str(&line("BN254_R", &modulus_of::<ark_bn254::Fr>()));
     write_vectors("crates/constants/tests/vectors/moduli.txt", &out);

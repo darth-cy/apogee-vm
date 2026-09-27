@@ -174,14 +174,18 @@ nothing else:
 ```rust
 #[repr(C, align(4))] pub struct Poseidon2Frame(pub [u8; 96]);
 #[repr(C, align(4))] pub struct FrArithFrame(pub [u8; 100]);
-#[repr(C, align(4))] pub struct ModMulFrame(pub [u32; 32]);          // S26
+#[repr(C, align(4))] pub struct ModMulFrame(pub [u32; 25]);          // S26, S26b
 pub fn poseidon2(frame: &mut Poseidon2Frame) -> bool;
 pub fn fr_arith(frame: &mut FrArithFrame) -> bool;
 pub fn mod_mul(frame: &mut ModMulFrame) -> bool;                    // out = a * b mod m
 impl ModMulFrame {
-    pub fn of(m: &[u32; 8], a: &[u32; 8], b: &[u32; 8]) -> ModMulFrame;
+    pub fn of(modulus: u32, a: &[u32; 8], b: &[u32; 8]) -> ModMulFrame;
     pub fn result(&self) -> [u32; 8];
 }
+// The selector codes and the two Montgomery corrections, re-exported from
+// `constants::mod_mul` so a vendored crate names a constant and not a number.
+pub use constants::mod_mul::{BN254_P, BN254_P_R_INV, BN254_R, BN254_R_R_INV,
+                             MODULI, SECP256K1_N, SECP256K1_P};
 ```
 
 - **There is no software path in this module, and there must not be.** The callers are
@@ -193,12 +197,19 @@ impl ModMulFrame {
 - **`ModMulFrame` is limbs and not bytes, and it has no empty constructor.** Every caller
   already holds its values as 32-bit limbs, so a byte frame would cost a pack and an unpack
   per call — a fifth of what the delegation saves on a 256-bit multiply — and the `u32`
-  element type is also what gives the type its alignment for free. `of` writes the modulus,
-  the two operands and eight zero result words in **one pass**: an all-zero array followed
-  by three `copy_from_slice`s was a `memset` plus three `memcpy`s, and on S26's pinned
-  mini-block, at 6,705 invocations, that was 1.4 million guest cycles — a quarter of what
-  the delegation saves. Five `const` assertions pin the word layout its array literal spells
-  out, so a renumbering fails the build rather than transposing the operands.
+  element type is also what gives the type its alignment for free. `of` writes the
+  selector, the two operands and eight zero result words in **one pass**: an all-zero array
+  followed by three `copy_from_slice`s was a `memset` plus three `memcpy`s, and on S26's
+  pinned mini-block, at 6,705 invocations, that was 1.4 million guest cycles — a quarter of
+  what the delegation saves. Five `const` assertions pin the word layout its array literal
+  spells out, so a renumbering fails the build rather than transposing the operands; **they
+  are re-pointed and never deleted**, being the only thing holding this literal equal to
+  the executor's indexed reads.
+- **The caller must reduce, and the shim cannot check it** (S26b). The circuit enforces
+  `a < m` and `b < m` for the selected modulus, so a frame carrying anything else is a
+  fatal guest error. That is a real obligation on a caller holding a lazily reduced
+  representation — `guests/vendor/k256`'s field elements are the worked example — and it
+  is why the four codes are re-exported here rather than left for a caller to spell.
 - **The frames are word-aligned by their types.** A bare `[u8; N]` has alignment 1 and a
   stack local's address is the code generator's to choose — LLVM puts align-1 stack objects
   at odd offsets whenever the frame packs that way, at every optimisation level — so an

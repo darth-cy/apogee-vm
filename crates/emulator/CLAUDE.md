@@ -156,13 +156,20 @@ the **journal** `Machine::finish` reads back out of the public output window at 
   touched, and both went with the POSIX layer. A number the ABI does not list reads `a7`
   and `a0` like any other and answers `-ENOSYS`. The emulator spells no ABI number itself;
   `crates/constants/tests/ecall_abi.rs` checks that.
-- **A delegation ecall's own answer can be a fatal error, and `MOD_MUL`'s is** (S26). The
-  other three delegations are total on their frames: any 200, 96 or 100 bytes are a state, a
-  triple of `Fr`s or an operand pair. A modular multiply is not — `a · b mod 0` is nothing —
-  so `mod_mul_frame` returns `EmuError::DelegationFrame { detail: "the modulus is zero" }`
-  and the execution stops. That is a **guest** error like a misaligned load, not an answer,
-  and the circuit agrees by construction: its `out < m` borrow chain cannot hold at `m = 0`,
-  so a zero-modulus row is unprovable rather than provable-with-a-wrong-answer.
+- **A delegation ecall's own answer can be a fatal error, and `MOD_MUL`'s is** (S26,
+  restated at S26b). The other three delegations are total on their frames: any 200, 96 or
+  100 bytes are a state, a triple of `Fr`s or an operand pair. `MOD_MUL`'s is not, and
+  since S26b it refuses **three** frames by name rather than one: a selector word no
+  `mod_mul::CODES` entry holds, and either operand at or above the modulus it selects.
+  (S26's zero-modulus refusal is gone with the operand it read — there is no zero modulus
+  in a four-entry table of primes.) Each is a **guest** error like a misaligned load, not
+  an answer, and each is a frame the circuit has no witness for.
+  **The operand refusals are not tidiness.** Long division answers correctly for any
+  operands below `2^256`, so an executor that accepted them would run a guest clean, pass
+  every trace-level test, and leave the failure to a gate — anonymously, as
+  `LayerInconsistency { layer }`, hours into a deferred block proof. `guests/vendor/k256`
+  handed the delegation an operand equal to `p` by design until S26b, so this is a case
+  that has actually occurred, not one imagined for the comment.
 - **A delegation ecall performs the permutation and answers 0** (S21). The arm keys on
   `program::delegation_family(n)`, never on a literal: it reads `a0` as the frame base,
   refuses a misaligned or out-of-window one as the ordinary `Misaligned` / `OutOfBounds`

@@ -312,10 +312,7 @@ fn mod_mul_frame(pc: u32, old: &[u32]) -> Result<Vec<u32>, EmuError> {
 /// `u128` can hold. None of the four selectable moduli fits one, and an
 /// oracle written in the same 16-limb arithmetic as the thing it checks is not
 /// an oracle.
-fn reduce(
-    product: &[u64; 2 * mod_mul::LIMBS],
-    m: &[u64; mod_mul::LIMBS],
-) -> [u64; mod_mul::LIMBS] {
+fn reduce(product: &[u64; 2 * mod_mul::LIMBS], m: &[u64; mod_mul::LIMBS]) -> [u64; mod_mul::LIMBS] {
     let mut rem = [0u64; mod_mul::LIMBS];
     for bit in (0..32 * 2 * mod_mul::LIMBS).rev() {
         // rem = 2*rem + bit
@@ -1610,11 +1607,10 @@ mod tests {
             for (k, lane) in product.iter_mut().take(4).enumerate() {
                 *lane = ((x >> (32 * k)) & 0xffff_ffff) as u64;
             }
-            let m_limbs: [u64; mod_mul::LIMBS] =
-                core::array::from_fn(|k| match k < 4 {
-                    true => ((m >> (32 * k)) & 0xffff_ffff) as u64,
-                    false => 0,
-                });
+            let m_limbs: [u64; mod_mul::LIMBS] = core::array::from_fn(|k| match k < 4 {
+                true => ((m >> (32 * k)) & 0xffff_ffff) as u64,
+                false => 0,
+            });
             let rem = reduce(&product, &m_limbs);
             let got = (0..4).fold(0u128, |acc, k| acc | (rem[k] as u128) << (32 * k));
             assert_eq!(got, x % m, "{x} mod {m}");

@@ -480,12 +480,7 @@ fn product_gates() -> Vec<(String, GateDef)> {
 /// honest quotient below `2^256`, so that every frame the circuit accepts is
 /// one an honest prover can fill. They are also what makes the frame's meaning
 /// exactly "two canonical elements of the selected field".
-fn below_modulus_gates(
-    name: &str,
-    first: usize,
-    field: u32,
-    v: usize,
-) -> Vec<(String, GateDef)> {
+fn below_modulus_gates(name: &str, first: usize, field: u32, v: usize) -> Vec<(String, GateDef)> {
     let mut out: Vec<(String, GateDef)> = Vec::new();
     for i in 0..f::LIMBS {
         for t in 0..32 {
@@ -671,7 +666,10 @@ mod tests {
         assert!(names.contains(&"selector_rule"));
         assert!(names.contains(&"one_modulus_a_live_row"));
         for k in 0..f::LIMBS {
-            assert!(names.contains(&&*format!("m_limb{k}_rule")), "m_limb{k}_rule");
+            assert!(
+                names.contains(&&*format!("m_limb{k}_rule")),
+                "m_limb{k}_rule"
+            );
         }
         for value in ["a", "b", "out"] {
             assert!(

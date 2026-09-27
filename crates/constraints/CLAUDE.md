@@ -255,14 +255,17 @@ pub mod fr_arith {                                // docs/spec/delegation.md §1
     pub fn channels() -> Vec<lookup::ChannelSpec>;           // EMPTY
 }
 
-pub mod mod_mul {                                 // docs/spec/delegation.md §14; S26
+pub mod mod_mul {                            // docs/spec/delegation.md §14; S26, S26b
     pub const CYCLE; LIVE; BASE; ANCHOR_VALUE; WORD_*;
     pub fn word(j, field);  gap_bit(j, bit);  base_low_bit(bit);  base_room_bit(bit);
-    pub fn value_bit(v, k, t);                      // v < 4: m, a, b, out -- 8x32 bits each
+    pub const A: usize = 0;  B: usize = 1;  OUT: usize = 2;  // never a bare index
+    pub fn selector(i);                             // i < 4, mod_mul::CODES order, one-hot
+    pub fn m_limb(k);                               // the selected modulus, pinned to the selector
+    pub fn value_bit(v, k, t);                      // v in {A, B, OUT} -- 8x32 bits each
+    pub fn diff_bit(v, i, t);  borrow_bit(v, i);    // v < m, one chain per value
     pub fn q_limb(k);  q_bit(k, t);                 // the quotient, witnessed
-    pub fn diff_bit(k, t);  borrow_bit(k);          // out < m, against m's OWN columns
     pub fn carry_bit(k, t);                         // 14 signed carries, offset 2^36, 37 bits
-    pub const MEMORY_COLUMNS: usize = 132;  WITNESS_COLUMNS: usize = 3346;
+    pub const MEMORY_COLUMNS: usize = 104;  WITNESS_COLUMNS: usize = 3364;
     pub fn artifact(trace_vars: u32) -> CircuitArtifact;
     pub fn channels() -> Vec<lookup::ChannelSpec>;           // EMPTY
 }
