@@ -506,9 +506,20 @@ pub fn toy_srs(power: u32) -> srs::Srs {
         bytes.extend_from_slice(&p.to_bytes());
     }
     std::fs::create_dir_all(&dir).expect("the test directory");
-    // Written aside and renamed, so a suite running beside this one never
-    // reads half a file.
-    let partial = dir.join(format!("s16-toy-{power}.{}.partial", std::process::id()));
+    // Written aside and renamed, so nothing ever reads half a file. The name
+    // must be unique per *call*, not per process: two tests in one binary are
+    // two threads of one process, so a pid alone gave both the same scratch
+    // path — one renamed it away and the other's rename found nothing, or a
+    // reader opened it mid-write and got `Truncated`. `rename` is atomic on
+    // POSIX and the content is a function of `power` alone, so two callers
+    // racing to place identical bytes is harmless once the scratch names
+    // differ.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let partial = dir.join(format!(
+        "s16-toy-{power}.{}.{}.partial",
+        std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     std::fs::write(&partial, &bytes).expect("writing the toy archive");
     std::fs::rename(&partial, &path).expect("placing the toy archive");
     srs::Srs::load(&path).expect("the toy archive loads")
