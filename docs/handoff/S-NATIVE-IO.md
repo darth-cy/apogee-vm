@@ -295,11 +295,34 @@ will need numbers re-measured rather than merely re-confirmed:
 | `host --test prove` | S25's mini-block gate, and the advice tamper twin. |
 | `prover --features metrics --test metrics` | Prints both reports; its two figures are quoted in `docs/spec/metrics.md`. |
 
-**2. The full `cargo test --workspace` run is still in flight** at the time this note was
-written, and its tally is not recorded here. What is known: the run before it was red on
-`loader --test differential` alone, for five stale *derived*-fixture pins (§9), and that
-suite is green after the refresh. Whatever the run reports is recorded in the commit that
-follows this one, not asserted here.
+**2. The full `cargo test --workspace` run is left to CI**, under the master's Test
+discipline rules 3 and 6-8 as amended at the close of this stage. Three local attempts
+each died at a different stale literal, and each cost three quarters of an hour to buy
+one bit; the fourth was replaced by a **static audit** of the suites that had never
+executed, which is what the amended rules now require.
+
+That audit is worth recording, because it is the method this stage recommends for a
+change of this shape. Of 165 test binaries, 48 had never executed against the change —
+every truncated run died before reaching them. Rather than run them, each was read
+against the change and every candidate finding independently checked by a second reader
+told to refute it. It confirmed **19** stale assertions, nine of them in suites that run
+in CI and seven in `#[ignore]`d suites no workspace run would ever reach. Running the
+scoped suites the audit pointed at then found **three more** it had missed, each a
+downstream consequence of a width it *had* found — which is the honest summary of what a
+static audit is for: it narrows where to look, it does not replace looking.
+
+The sharpest finding is worth naming, because it would have survived review. `Role` has
+no explicit discriminants, so deleting `Arg1` and `Arg2` silently renumbered `Rd` from 6
+to 4 — and `crates/trace/src/archive.rs`'s tamper case went on poking slot 6, which is
+now a spare no role names and nothing reads. `import` returned `Ok`, and the case's
+`unwrap_err()` would have panicked. A deletion that reads as a pure deletion was a
+renumbering.
+
+Green at the commit that closes this stage, each run scoped to what changed:
+`cargo fmt --all -- --check` over all four workspaces, `cargo clippy --workspace
+--all-targets -- -D warnings`, `cargo test -p trace --lib`, `-p verifier-core` (26
+tests), `-p program --test tables` (14), `-p program --test delegation`,
+`-p loader --test differential`, and `cargo check -p prover --all-targets`.
 
 **3. Two coverage losses stand** and are argued in §7 rather than repaid — there is no
 second executor to disagree with this one, and no test replaces what the QEMU output

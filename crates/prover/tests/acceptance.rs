@@ -171,11 +171,11 @@ fn a1_the_tiny_guest_proves_and_both_shards_verify() {
     // inner column — its three gates are enforcing. This number moves by 96
     // bytes for every delegation family the repository registers, which is the
     // standing price `docs/spec/delegation.md` §10 names.
-    assert_eq!(add.to_bytes().len(), 62_580);
+    assert_eq!(add.to_bytes().len(), 57_004);
     assert_eq!(init.to_bytes().len(), 20_524);
-    assert_eq!(add.gkr.layers.len(), 26);
+    assert_eq!(add.gkr.layers.len(), 25);
     assert_eq!(add.gkr.layers[0].rounds.len(), 20);
-    assert_eq!(add.gkr.layers[0].final_evals.len(), 42 + 36 + 7);
+    assert_eq!(add.gkr.layers[0].final_evals.len(), 27 + 33 + 7);
 }
 
 // ---------------------------------------------------------------------------

@@ -57,8 +57,8 @@ const ZERO: u32 = family::ZERO_WINDOWS;
 /// `guests/revm-block` exits 0 with its output commitment in the journal.
 const REVM_RESULT: u32 = 0;
 
-/// The binary proved here: the guest itself, provable since S-IO.
-/// `src/stdio.rs` is the fd 0 / fd 1 compatibility binary, which is not.
+/// The binary proved here: the guest itself. It is the only one — the
+/// `revm-block-stdio` companion went with the POSIX surface it wrapped.
 const REVM_BIN: &str = "revm-block";
 
 /// S24's heights: every family but the delegation one at `2^20`, with
@@ -397,9 +397,10 @@ fn a6_the_revm_block_proves_and_verifies() {
 /// block's own copy to match, so checks 1 and 2 pass and the twin is refused
 /// by the mechanism it is about.
 ///
-/// The public I/O digest is `transcript::io_digest` over the fd 0 and fd 1
-/// streams, and `PublicInputs` carries those streams rather than the digest,
-/// so "a digest differing in one byte" is a stream differing in one byte —
+/// The public I/O digest is `transcript::io_digest` over the public input
+/// window's bytes and the journal's, and `PublicInputs` carries those byte
+/// strings rather than the digest, so "a digest differing in one byte" is a
+/// byte string differing in one byte —
 /// the same absorption, at G7, and the same consequence.
 #[test]
 #[ignore]

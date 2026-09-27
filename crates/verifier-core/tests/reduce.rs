@@ -51,7 +51,7 @@ fn the_global_transcript_is_the_frozen_order() {
         absorb(tags::COMMITMENT, 4 * 2),
         absorb(tags::MEMORY_GROUP, 2),
         absorb(tags::MEMORY_GROUP, 2),
-        absorb(tags::COMMITMENT, 4 * 42),
+        absorb(tags::COMMITMENT, 4 * 27),
         // S-IO's three, in the ascending tail like any other family. The
         // public input window commits three columns and the journal two, and
         // `ADVICE_WINDOWS` has no shard here, so it is a header and nothing
@@ -92,7 +92,7 @@ fn the_global_transcript_is_the_frozen_order() {
     assert!(moved(|p| p.boundary.reg_ts[3] += 1));
     assert!(moved(|p| p.boundary.pc_ts += 1));
     assert!(moved(|p| p.boundary.reg_values[0] += 1));
-    assert!(moved(|p| p.memory_commitments[1][40] = blob(999)));
+    assert!(moved(|p| p.memory_commitments[1][26] = blob(999)));
     assert!(moved(|p| p.memory_commitments[1].swap(0, 1)));
     assert!(moved(|p| p.memory_commitments.swap(0, 1)));
     assert!(moved(|p| {

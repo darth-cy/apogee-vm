@@ -2,8 +2,9 @@
 //! block.
 //!
 //! `#[ignore]`d and deferred out of CI under master rule 7: the statement is
-//! six `2^20` execution shards, two `2^16` window shards and one `2^8` keccak
-//! shard, and the circuit is what makes it big — a keccak row is a whole
+//! six `2^20` execution shards, two `2^16` window shards, one `2^8` keccak
+//! shard and S-IO's two `2^8` public-value shards, and the circuit is what
+//! makes it big — a keccak row is a whole
 //! keccak-f[1600] permutation, 354,762 inner columns
 //! (`docs/spec/delegation.md` §9). Run it with
 //!

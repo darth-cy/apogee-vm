@@ -1076,7 +1076,7 @@ mod tests {
             ),
             (
                 "does not name",
-                post(|a| a.traces.families[0].queries[6].write_value[0] = 1, None),
+                post(|a| a.traces.families[0].queries[4].write_value[0] = 1, None),
             ),
             (
                 "not on the menu",

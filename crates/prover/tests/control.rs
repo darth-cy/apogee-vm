@@ -160,8 +160,8 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
     // fourth — so identity's seven setup commitments start at 78 rather than 77.
     // This pair moves by one for every delegation family
     // (`docs/spec/delegation.md` §10).
-    assert_eq!(add.len(), 42 + 36 + 7);
-    assert_eq!(&add[78..], &setup.vk.setup_commitments[0][..]);
+    assert_eq!(add.len(), 27 + 33 + 7);
+    assert_eq!(&add[60..], &setup.vk.setup_commitments[0][..]);
 }
 
 /// The generic table's binding from the other side. A key whose table

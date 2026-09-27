@@ -66,7 +66,7 @@ pub const PINS: [(&str, &str); 3] = [
     ),
     (
         "identity.txt",
-        "b6bae2218ca7af1707a1c8d6b0f2f8c279606b4c43ef6a5105f74024837cbf75",
+        "8d7afaf25ff3b2911ffded7a434528e2b89899cd14381c355b7b7ff119d12bda",
     ),
     (
         "generic_table.txt",
