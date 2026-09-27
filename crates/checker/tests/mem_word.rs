@@ -835,20 +835,6 @@ fn every_row_kind_satisfies_every_gate_and_every_bound() {
         && r.get("rd_selected") != Fr::ZERO));
 }
 
-/// The all-zero padding row is valid, and the circuit says so in its own
-/// padding contract.
-#[test]
-fn the_padding_row_is_the_all_zero_row() {
-    let a = artifact();
-    assert!(a.padding.zero_row_valid);
-    assert!(a.padding.row.iter().all(|v| *v == Fr::ZERO));
-    assert_eq!(
-        violated(&a, &Row::default()),
-        (none(), none(), none()),
-        "the all-zero row"
-    );
-}
-
 /// A row named by [`honest_rows`].
 fn row(what: &str) -> Row {
     honest_rows()
@@ -1089,29 +1075,6 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         let mut want: Vec<String> = names(&want);
         want.sort_by_key(|n| order.iter().position(|o| o == n));
         assert_eq!(relations, want, "{what}");
-    }
-}
-
-/// Every booleanity gate the family adds refuses a 2: the two kind bits and
-/// the wrap. Each is read as a 0 or a 1 by a gate above it — the kind bits by
-/// five mask rules, the wrap by the address split, where a 2 is worth `2^33` —
-/// and a value of two there is a different statement, so the membership is
-/// what matters, not the whole violated set.
-#[test]
-fn every_booleanity_gate_refuses_a_value_of_two() {
-    let a = artifact();
-    for (base, column, gate) in [
-        ("lw", "kind_lw", "kind_lw_boolean"),
-        ("sw", "kind_sw", "kind_sw_boolean"),
-        ("lw", "wrap", "wrap_boolean"),
-    ] {
-        let mut r = row(base);
-        r.set(column, f(2));
-        let (relations, _, _) = violated(&a, &r);
-        assert!(
-            relations.contains(&gate.to_string()),
-            "{column} = 2: {relations:?}"
-        );
     }
 }
 

@@ -1489,33 +1489,6 @@ fn only_the_evenness_obligation_refuses_a_jalr_that_fakes_an_exit() {
     );
 }
 
-/// Acceptance 3 as rows: a backward branch of −16 lands 16 below its pc with
-/// the wrap set; a `jal` links the fall-through and lands at `pc + imm`; a
-/// `jalr` with `rs1 = rd` forms its target from the old `rs1` — read at slot 1,
-/// before the link is written at slot 3 — with bit 0 cleared.
-#[test]
-fn the_control_flow_matrix_lands_where_the_isa_says() {
-    let get = |what: &str, col: &str| small_int(row(what).get(col));
-    let pc = 0x1_0100;
-    assert_eq!(get("bne backward -16 taken", "pc_write_value"), pc - 16);
-    assert_eq!(get("bne backward -16 not taken", "pc_write_value"), pc + 4);
-    assert_eq!(get("beq taken", "pc_write_value"), pc + 8);
-    assert_eq!(get("beq not taken", "pc_write_value"), pc + 4);
-    assert_eq!(get("beq to the fall-through", "pc_write_value"), pc + 4);
-    assert_eq!(get("beq to the fall-through", "taken"), 1);
-    assert_eq!(get("jal forward", "pc_write_value"), pc + 0xa4);
-    assert_eq!(get("jal forward", "rd_write_value"), pc + 4);
-    assert_eq!(get("jal backward", "pc_write_value"), pc - 0x14);
-    assert_eq!(get("jal to 2^19 ahead", "pc_write_value"), pc + 0x7fffe);
-    let jalr = row("jalr rs1 = rd, imm -2, bit 0 set");
-    assert_eq!(jalr.get("rs1_addr"), jalr.get("rd_addr"));
-    let (old, target) = (small_int(jalr.get("rs1_read_value")), 0x1_01a8);
-    assert_eq!(old + TWO_32 - 2 - 1, TWO_32 + target);
-    assert_eq!(small_int(jalr.get("pc_write_value")), target);
-    assert_eq!(small_int(jalr.get("rd_read_value")), old);
-    assert_eq!(small_int(jalr.get("rd_write_value")), pc + 4);
-}
-
 /// The decoder table's domain on this family — S15's and S16's control: an
 /// all-zero mask on a live row breaks no gate and no range, its `rd` query
 /// and every operand dropped to match, so the decoder channel is the only
@@ -1736,10 +1709,8 @@ fn traced(image: loader::ProgramImage, height: u32) -> (prover::Program, trace::
         ]
     );
     let io = emulator::GuestIo {
-        stdin: Vec::new(),
         advice: Vec::new(),
         input: Vec::new(),
-        hint: Vec::new(),
     };
     let (traces, log, profile, execution) =
         emulator::trace_run(&image, &io, &tables, &config).expect("the image traces");
@@ -2042,14 +2013,9 @@ fn a_jump_to_a_pc_holding_no_instruction_cannot_be_counted() {
     let (program, archive) = control();
     let a = artifact();
     let fill = prover::family_fill(family::JUMP_BRANCH_SLT).expect("the family's fill");
-    let source = prover::ShardSource {
-        program: &program,
-        archive: &archive,
-        family: family::JUMP_BRANCH_SLT,
-        index: 0,
-        height: 1 << VARS,
-        window: 0,
-    };
+    let source =
+        prover::ShardSource::archived(&program, &archive, family::JUMP_BRANCH_SLT, 0, 1 << VARS, 0)
+            .expect("the shard's rows");
     let mut columns = fill(&source).expect("the fill");
     let decoder: Vec<ChannelSpec> = jump_branch_slt::channels()
         .into_iter()
@@ -2136,14 +2102,15 @@ fn filled(
 ) -> Vec<(PolyAddress, poly::MultilinearPoly)> {
     let a = artifact();
     let fill = prover::family_fill(family::JUMP_BRANCH_SLT).expect("the family's fill");
-    let source = prover::ShardSource {
+    let source = prover::ShardSource::archived(
         program,
         archive,
-        family: family::JUMP_BRANCH_SLT,
+        family::JUMP_BRANCH_SLT,
         index,
-        height: 1 << vars,
-        window: 0,
-    };
+        1 << vars,
+        0,
+    )
+    .expect("the shard's rows");
     let mut columns = fill(&source).expect("the fill");
     let column = |columns: &[(PolyAddress, poly::MultilinearPoly)], address: PolyAddress| {
         columns

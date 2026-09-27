@@ -59,14 +59,8 @@ fn filled(
 ) -> (CircuitArtifact, Vec<(PolyAddress, MultilinearPoly)>) {
     let circuit = family_circuit(family, VARS).expect("the family's circuit");
     let fill = prover::family_fill(family).expect("the family's fill");
-    let source = prover::ShardSource {
-        program,
-        archive,
-        family,
-        index: 0,
-        height: 1 << VARS,
-        window: 0,
-    };
+    let source = prover::ShardSource::archived(program, archive, family, 0, 1 << VARS, 0)
+        .expect("the shard's rows");
     let mut columns = fill(&source).expect("the fill");
     let at = |columns: &[(PolyAddress, MultilinearPoly)], address: PolyAddress| {
         columns

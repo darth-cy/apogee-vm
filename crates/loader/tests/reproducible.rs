@@ -30,7 +30,6 @@ fn two_clean_builds_agree() {
         "atomics",
         "opcodes",
         "heap",
-        "consistency",
         "addsub",
         "control",
         "alu",

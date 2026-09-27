@@ -50,13 +50,34 @@ The four pieces you will touch:
 
 | Where | What it gives you |
 | --- | --- |
-| `crates/guest-sdk` | `entry!`, the ecall shims, the allocator, the panic handler, `link.ld` |
-| `guests/.cargo/config.toml` | the target, the QEMU runner, and the pinned linker flags |
+| `crates/guest-sdk` | `entry!`, the I/O surface, the allocator, the panic handler, `link.ld` |
+| `guests/.cargo/config.toml` | the target and the pinned linker flags |
 | `crates/loader` | `load_elf`, `ProgramImage` — the thing being exported |
 | `tools/artifact-dump` | the exporter |
 
 `docs/spec/ecall-abi.md` is the normative document for the ABI and the memory
-map. Where this manual and that document disagree, that document is right.
+map, and `docs/spec/public-values.md` for the I/O model. Where this manual and
+those documents disagree, they are right.
+
+### The one thing to know before you write a line
+
+**An Apogee guest is an Apogee-SDK program, not a generic Linux/POSIX RISC-V
+executable.** It has no file descriptors, no streams, no I/O syscall and no
+diagnostic output, and there is no host convention it is trying to match. The
+supported interface is three regions of *memory*, reached with ordinary loads
+and stores:
+
+| | who chooses it | what it is for |
+| --- | --- | --- |
+| **public input** | the statement | the verifier-known bytes this run is about — at most 1,020 |
+| **advice** | the prover | the bulk, bound by nothing, which your guest must check |
+| **journal** (public output) | your guest | what the proof publishes — at most 1,020 |
+
+A proof binds the first and the third and says nothing whatever about the
+second. That is the whole model; §3 is the API and `docs/spec/public-values.md`
+is normative. If you have written for another zkVM, the thing to unlearn is the
+stream: there is no cursor to advance and no descriptor to write to, and nothing
+your guest does makes a value public except storing it in the journal window.
 
 ---
 
@@ -73,31 +94,32 @@ they cover most of what a guest can do:
 | Guest | What it is, and what it shows you |
 | --- | --- |
 | `fib` | the smallest real guest: read a `u32`, commit a `u32` |
-| `echo` | the ecall shims end to end — fd 0 to fd 1, a hint, diagnostics, the heap, and the Poseidon2 precompile with its software fallback |
+| `echo` | the allocator's fixture: the advice region echoed into the journal through a heap buffer, plus the Poseidon2 delegation. Almost nothing else in `guests/` needs `alloc`, so without it the bump allocator would be dead-stripped out of every small binary and the largest `unsafe` surface in the workspace would run nowhere |
 | `rvc-dense` | hand-written assembly and the compressed-instruction table; a loader fixture more than a program |
 | `amm` | a constant-product market maker: exact 128- and 256-bit arithmetic, `mul_div`, integer `sqrt`, and no heap at all |
-| `orderbook` | a uniform-price auction: `Vec`, `BTreeMap`, sorting, and the reference demonstration of hint-then-verify |
+| `orderbook` | a uniform-price auction: `Vec`, `BTreeMap`, sorting, and the reference demonstration of **advise-then-verify** — a claimed sorted permutation taken from advice and checked against the public input before a single advised byte reaches the auction |
 | `vault` | Merkle-gated withdrawals over Poseidon2: `crates/field` and `crates/transcript` running inside the proof, and the deepest call chain in `guests/` |
 | `atomics` | every A-extension instruction as the compiler emits it, from `core::sync::atomic` on one hart; the fixture for the atomics circuit family |
-| `opcodes` | every RV32IMAC instruction in hand-written assembly at its edge cases, run under both executors and held to one exit status and one fd 1; fd 0 selects the `ebreak` and misaligned-access modes |
+| `opcodes` | every RV32IMAC instruction in hand-written assembly at its edge cases, each result checked by the guest itself; its public input is a mode word selecting the `ebreak` and misaligned-access runs, each of which is a fatal guest error and commits nothing |
 | `heap` | `Vec` and `Box` churned through the bump allocator, so the heap's traffic is in the trace |
-| `consistency` | ordinary Rust — numerics, collections, text, traits and closures, a codec, hashes, allocation patterns — as a `no_std` library the host calls directly and a thin guest `main`. The consistency suite runs it on the host, under QEMU and on the emulator and holds the three to one answer; §2a is the pattern to copy |
 | `addsub` | S16's tiny guest, the first program proven end to end: a straight run of `add`, `sub`, `addi`, `lui` and `auipc` in both lengths, a `fence`, and an exit whose status, 42, is its result. It is hand-written assembly with no `guest-sdk` under it, one of the two guests that do not use `guest_sdk::entry!` — its own `_start` is the whole program, because crt0's `.bss` loop and its call to `main` are branches, stores and jumps, which S16 has no circuit for — so read it as a proof fixture, not a pattern |
 | `control` | S17's guest, proven end to end the same way: the twelve jumps, branches and comparisons of the `JUMP_BRANCH_SLT` family at their edge cases — full-width and mixed-sign orderings, `slti`/`sltiu` against −1, `x0` as a destination, a loop closed by a backward branch, calls and returns in both lengths, and a `jalr` whose `rs1 + imm` has bit 0 set — each checked by the guest itself, exiting with the number of checks, 16. Hand-written assembly with no `guest-sdk`, for `addsub`'s reason: its only instructions are the two families S17 proves |
 | `alu` | S18's guest, proven end to end the same way: the twelve shifts and bitwise operations of the `SHIFT_BITWISE` family and the eight M operations of `MUL_DIV`, at the edge cases the stage names — shamt 0, 1 and 31, `rs2 = 32` and 33 for the shift amount's truncation, `sra` of a negative operand, all four sign quadrants of each multiply and each division, `−2^31 × −2^31`, the asymmetric `mulhsu` corner, division by zero for all four, and the one signed overflow — each checked by the guest itself, exiting with the number of checks, 96. Hand-written assembly with no `guest-sdk`, for `addsub`'s reason: its only instructions are the four families S18 proves |
 | `mem` | S19's guest, proven end to end the same way: `lw` and `sw` of the `MEM_WORD` family, the six sub-word loads and stores of `MEM_SUBWORD` at every legal byte and halfword offset, and the eleven instructions of `ATOMICS`, at the cases the stage names — a negative byte and a negative halfword sign-extended, `sb` and `sh` truncating a source whose high bytes are set and leaving the rest of the word alone, `amoadd` overflowing `2^32`, two consecutive AMOs to one address, all four min/max at `0x7fffffff` against `0x80000000`, an `lr.w`/`sc.w` pair, and `lw x0` and `amoadd.w x0` — each checked by the guest itself, exiting with the number of checks, 50. Hand-written assembly with no `guest-sdk`, for `addsub`'s reason. It is also the first guest that writes near the top of RAM as well as inside window 0, so its statement is the first with a `ZERO_WINDOWS` shard |
 | `shards` | S20's guest, and the only one written for its *size*: a counted loop whose body is 64 unrolled `add`s, so `ADD_SUB_LUI_AUIPC` runs 1,064,970 cycles — past `2^20`, the smallest height a family carrying a timestamp gap obligation can have — and one execution becomes **two shards of one family**, which is S20's stage gate. `JUMP_BRANCH_SLT` runs 16,386 and fits one shard; nothing touches RAM, so `ZERO_WINDOWS` proves zero shards and the block carries a family with a count of 0. It exits with the number of checks, 2. Hand-written assembly with no `guest-sdk`, for `addsub`'s reason, and a loop rather than a straight line because a family's height is both its shard height and its decoded table's row count: 2^20 four-byte instructions would need a 2^22 table, which is a 2^22 shard, which is one shard again |
-| `keccak-test` | S21's guest, and the first that calls a **delegation**: `guest_sdk::keccak256` over six inputs — empty, one byte, one short of the 136-byte rate, exactly the rate, one past it, and 400 bytes — each checked in the guest against a pinned digest, exiting with the number of checks, 6. Ten keccak-f[1600] permutations in all, which one `2^8` `KECCAK_F` shard holds with room to spare. It is *one* binary on both executors: here the delegation ecall runs the permutation the `KECCAK_F` circuit proves and the invocations reach that family's trace, under `qemu-riscv32` the same ecall answers `-ENOSYS` and the SDK's software permutation runs, and the digests are identical either way (§3 rule 6) |
+| `keccak-test` | S21's guest, and the first that calls a **delegation**: `guest_sdk::keccak256` over six inputs — empty, one byte, one short of the 136-byte rate, exactly the rate, one past it, and 400 bytes — each checked in the guest against a pinned digest, exiting with the number of checks, 6. Ten keccak-f[1600] permutations in all, which one `2^8` `KECCAK_F` shard holds with room to spare. Here the delegation ecall runs the permutation the `KECCAK_F` circuit proves and the invocations reach that family's trace; on an executor with no such circuit the same ecall answers `-ENOSYS` and the SDK's software permutation runs, and the digests are identical either way (§3 rule 5) |
 | `keccak-unused` | the other half of that story, and the guest to read when you want to know what *linking* a delegation costs: it links `keccak256` behind a `core::hint::black_box` branch the optimiser cannot fold away, and never calls it. The shim is reachable, so its declaration record is in the image, so `KECCAK_F` is in the `VmConfig` — and the run invokes it zero times, so the execution proves zero shards of it. A guest that links no shim declares nothing at all (`docs/spec/delegation.md` §7). It exits 7 |
-| `recursion-ops` | S23's guest, and the one to read when you want to know what a delegation costs a *caller*: it does ordinary `field::Fr` arithmetic and calls `transcript::poseidon2_permute`, and names no shim at all. The guest-target backends inside those two crates route every multiply, add and inverse through the `FR_ARITH` delegation and the permutation through the `POSEIDON2` one, so a guest that does field work is a guest whose `VmConfig` holds both families. Under `qemu-riscv32` the same ecalls answer `-ENOSYS` and the crates' own software paths run, which is why the delegated path and the fallback cannot disagree: they are the same code. It exits with the number of checks, 9 |
+| `recursion-ops` | S23's guest, and the one to read when you want to know what a delegation costs a *caller*: it does ordinary `field::Fr` arithmetic and calls `transcript::poseidon2_permute`, and names no shim at all. The guest-target backends inside those two crates route every multiply, add and inverse through the `FR_ARITH` delegation and the permutation through the `POSEIDON2` one, so a guest that does field work is a guest whose `VmConfig` holds both families. The fallback is each crate's own software path, which is why the delegated path and the fallback cannot disagree: they are the same code. It exits with the number of checks, 9 |
 | `recursion-unused` | `keccak-unused`'s counterpart for S23: it links both backends behind a `core::hint::black_box` branch the optimiser cannot fold away and reaches neither, so both families are in its `VmConfig` and the execution proves zero shards of each. It exits 11 |
-| `public-io` | S-IO's guest, and the one to read for the **provable** I/O surface: it issues no ecall but `EXIT`. Its public input is a length and a checksum, its advice is the bulk, and it commits to the journal only after checking the advice against the public input — which is the whole of what a guest owes for reading advice nothing binds (`docs/spec/public-values.md` §6). The checksum is position-dependent on purpose, so a permuted witness is a different answer. It is also the contrast: every other guest here that does I/O uses `read_stdin`/`write_stdout`, runs under `qemu-riscv32`, and cannot be proven. Exit 60, 61 or 62 name which half failed |
-| `revm-block` | S24's guest, and the first with a crates.io dependency: [revm](https://github.com/bluealloy/revm) executing a block over a synthetic pre-state, `no_std` and `default-features = false`. Read it for three things a workload guest needs and the others do not. **A library plus three thin binaries**, the `consistency` pattern of §2a, so the host can run the same source as the native oracle. **A hash hook**: `alloy-primitives`' `native-keccak` feature turns every `keccak256` in the image — revm's `KECCAK256` opcode, a contract's code hash, the guest's own commitments — into an `extern "C"` call the guest implements as `guest_sdk::keccak256`, which is how a dependency that has never heard of this VM ends up using its delegation. **Three binaries for one program** (§3a): `revm-block` reads its witness out of the **advice** region and publishes its output commitment to the **journal**, which is the one a mini-block proof is about; `revm-block-stateless` (S25) is the whole block transition — system calls, transactions, withdrawals — with the pre-state authenticated against the parent's state root, the post-state root recomputed and checked against the header's, which arrives as **public input**, and a fixed 148-byte journal naming both roots; and `revm-block-stdio` is the mini computation over fd 0 and fd 1, for the executors that have no advice region and no public windows. `read` and `write` are not provable ecalls, so the third is not provable and does not need to be: what it covers is the computation, not the binding. **The first two are separate binaries on purpose** and have separate program identities: they publish different journals, and a verifier holding one should not have to ask which of two meanings it has. It is also the only guest with no committed ELF: 2.2 MB at `--release` is not a fixture worth keeping, and its suites build it from source |
+| `public-io` | **the guest to read first**, and the whole I/O model in one small program: it issues no ecall but `EXIT`. Its public input is a length and a checksum, its advice is the bulk, and it commits to the journal only after checking the advice against the public input — which is the whole of what a guest owes for reading advice nothing binds (`docs/spec/public-values.md` §6). The checksum is position-dependent on purpose, so a permuted witness is a different answer. Exit 60, 61 or 62 name which half failed |
+| `mod-mul-ops` | S26's guest for the `MOD_MUL` delegation, and the one to read for a delegation with a **witnessed** parameter. Two halves, deliberately. It calls `guest_sdk::recursion::mod_mul` **by name** over frames it writes itself, and it calls `k256`'s group arithmetic, which names **no** shim at all and reaches the delegation through `guests/vendor/k256`'s patched `FieldElement10x26::mul` and `::square`. Between them three moduli cross the same circuit — `2^32`, `2^61 - 1` and secp256k1's `p` — which is what §14.1 of `docs/spec/delegation.md` means by witnessing the modulus. **The two moduli it names are `u64`-sized on purpose**, and that is the thing to copy: §3 rule 5 requires a delegation's caller to have a software path, and with a 256-bit modulus that path would be a second 512-bit long division living in a guest, a duplicate of `emulator::mod_mul_frame` with no way to share code with it. At `u64` it is one `u128` expression. The circuit's coverage over 256-bit moduli belongs in `crates/checker/tests/mod_mul.rs`, whose honest rows are a secp256k1 product and a BN254 one; this guest is the *ABI's* test. Its curve half is the only test of the vendored patch's `pack` and `unpack` — a field element is ten 26-bit limbs and the frame carries eight 32-bit ones — and its expectations there are absolute, the compressed SEC1 encodings of `G`, `2G`, `3G` and `7G`, because an identity-only test passes under a multiply that is wrong the same way everywhere. It is the **second guest with a crates.io dependency**, for `revm-block`'s reason: a guest is the thing being proven, not part of the proving stack. It exits with the number of checks, 12 |
+| `revm-block` | S24's guest, and the first with a crates.io dependency: [revm](https://github.com/bluealloy/revm) executing a block over a synthetic pre-state, `no_std` and `default-features = false`. Read it for three things a workload guest needs and the others do not. **A library plus two thin binaries**, the pattern of §2a, so the host can run the same source as the native oracle. **A hash hook**: `alloy-primitives`' `native-keccak` feature turns every `keccak256` in the image — revm's `KECCAK256` opcode, a contract's code hash, the guest's own commitments — into an `extern "C"` call the guest implements as `guest_sdk::keccak256`, which is how a dependency that has never heard of this VM ends up using its delegation. **Two binaries for one program**: `revm-block` reads its witness out of the **advice** region and publishes its output commitment to the **journal**, which is the one a mini-block proof is about; `revm-block-stateless` (S25) is the whole block transition — system calls, transactions, withdrawals — with the pre-state authenticated against the parent's state root, the post-state root recomputed and checked against the header's, which arrives as **public input**, and a fixed 148-byte journal naming both roots. **They are separate binaries on purpose** and have separate program identities: they publish different journals, and a verifier holding one should not have to ask which of two meanings it has. There used to be a third, the same computation over fd 0 and fd 1 for an executor that mapped neither region; it is deleted with the syscall it used. It is also the only guest with no committed ELF: 2.2 MB at `--release` is not a fixture worth keeping, and its suites build it from source |
 
-If you are looking for a pattern to copy, `public-io` is the one to read for a
-guest that is meant to be **proven**, `amm` for arithmetic and framing,
-`orderbook` for anything that takes prover advice, `vault` for anything that
-hashes, and `keccak-test` for calling a delegation.
+If you are looking for a pattern to copy, **`public-io` is the one to start
+with** — it is the input, the advice and the journal in twenty lines — then
+`amm` for arithmetic and framing, `orderbook` for anything that takes prover
+advice, `vault` for anything that hashes, `keccak-test` for calling a
+delegation, and `revm-block` for a real workload with a library behind it.
 
 **`guests/hello/Cargo.toml`**
 
@@ -127,15 +149,13 @@ fn main() {
 }
 ```
 
-That is the **provable** I/O surface: no ecall but the one `entry!` makes on the
-way out. §3 has it and the POSIX compatibility path beside it, and §3a is how to
-choose — read §3a first if you want `hello` to run under `qemu-riscv32`, where
-the public windows are not mapped.
+That is the whole I/O surface: no ecall but the one `entry!` makes on the way
+out. §3 is the rest of it.
 
 **`guests/Cargo.toml`** — add the crate to the member list:
 
 ```toml
-members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "consistency", "addsub", "control", "alu", "mem", "shards", "keccak-test", "keccak-unused", "recursion-ops", "recursion-unused", "revm-block", "public-io", "hello"]
+members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "addsub", "control", "alu", "mem", "shards", "keccak-test", "keccak-unused", "recursion-ops", "recursion-unused", "revm-block", "public-io", "mod-mul-ops", "hello"]
 ```
 
 Four things about that source file are not negotiable:
@@ -163,21 +183,27 @@ target on every run precisely so that this stays true.
 A guest you can only run inside the VM is a guest you can only debug there. Put
 the program in a `#![no_std]` library and keep `main.rs` to reading the input
 and publishing what the library returns — which is also what lets one library
-carry two `main`s, one per executor (§3a). `guests/consistency` is the worked example.
-Its `src/lib.rs` compiles for the host as well as for the guest, because its
-`Cargo.toml` makes `guest-sdk` a dependency of the guest target alone:
+carry more than one `main`, each publishing a different journal.
+`guests/revm-block` is the worked example. Its `src/lib.rs` compiles for the
+host as well as for the guest, because its `Cargo.toml` makes `guest-sdk` a
+dependency of the guest target alone:
 
 ```toml
 [target.'cfg(target_arch = "riscv32")'.dependencies]
 guest-sdk.workspace = true
 ```
 
-A host test can then call the library directly, and
-`crates/emulator/tests/consistency.rs` does exactly that. It runs one input on
-the host, under `qemu-riscv32` and on the emulator, and compares fd 1, the exit
-status, and a panic's message, line and column. Copy its shape for your own
-program: if the host and the guest disagree, the guest is what the proof will
-be about.
+A host test can then call the library directly, which is exactly how
+`crates/emulator/tests/revm.rs` runs native revm as the oracle its guest is held
+to. Copy that shape for your own program: run the same bytes through the library
+on the host and through the guest on the emulator, and compare the journals. If
+the two disagree, the guest is what the proof will be about.
+
+**A guest has no diagnostic output**, so this is not a convenience — it is the
+debugging strategy. A panic writes nothing anywhere; the only things that leave
+an execution are the journal and the exit status. So the library on the host is
+where you put a `dbg!`, and the guest is where you confirm the answer did not
+move.
 
 Some things legitimately differ between a 64-bit machine and the guest, so keep
 them out of anything you commit. **Two announce themselves and four do not**,
@@ -198,13 +224,14 @@ reach a verifier:
 - **`core::hash` of anything holding a slice, a `String` or a `usize` differs**
   — *silent*, because `#[derive(Hash)]` writes lengths with `write_usize`, four
   bytes here and eight there. Use `core::hash` for lookup, never for output. A
-  fingerprint that reaches fd 1 should come from a real hash over bytes you
-  chose, which the consistency suite holds identical on all three executors.
+  fingerprint that reaches the journal should come from a real hash over bytes
+  you chose — `guest_sdk::keccak256`, or `crates/transcript`'s Poseidon2 — each
+  of which is the same function on every target.
 - **NaN bits** — *silent*, and unreachable unless you use floats. Which NaN an
   operation produces is the platform's business: `0x7ff8…` from RISC-V's soft
   float and from AArch64, `0xfff8…` from x86-64. Only the raw bits differ —
   `NaN != NaN` and `{}` formatting agree everywhere — so it takes `to_bits()`
-  on a NaN reaching fd 1 to bite you. The target has no FPU, so every `f64`
+  on a NaN reaching the journal to bite you. The target has no FPU, so every `f64`
   operation is a software routine: a guest using floats pays for them in
   instruction count long before the NaN bits ever matter.
 - **The heap never frees**, so the total you allocate over the run is the limit,
@@ -212,115 +239,101 @@ reach a verifier:
 - **The stack has 8 MiB** reserved at the top of RAM — *silent* if you exceed
   it, and the one failure the SDK cannot catch for you.
 
-`guests/consistency/src/hazards.rs` emits each of these on purpose, and its
-`PLATFORM_DEPENDENT` table names them. The suite checks that the pointer-width
-ones really do differ on a 64-bit host. §7a is the symptom-first version of this
-list, for when something has already gone wrong.
+§7a is the symptom-first version of this list, for when something has already
+gone wrong.
 
 ---
 
 ## 3. The I/O surface
 
-There are **two** of them, and choosing between them is §3a. The provable one first:
+There is one, it is small, and it issues no ecall:
 
 ```rust
-pub fn public_input() -> &'static [u8];        // the public input, no ecall
+pub fn public_input() -> &'static [u8];        // the public input window's payload
 pub fn read_input(buf: &mut [u8]) -> usize;    // the same, copied into your buffer
-pub fn commit(bytes: &[u8]);                   // append to the journal, no ecall
+pub fn commit(bytes: &[u8]);                   // append to the journal
 pub fn journal() -> &'static [u8];             // the journal so far
 pub fn advice() -> &'static [u8];              // prover-chosen; nothing binds it
 pub fn exit(code: i32) -> !;
+
+pub fn keccak256(input: &[u8]) -> [u8; 32];               // delegated, or the same in software
 pub fn poseidon2_permute(state: &mut [u8; 96]) -> bool;   // false on -ENOSYS
-pub fn keccak256(input: &[u8]) -> [u8; 32];    // delegated, or the same thing in software
+pub mod recursion { /* the poseidon2, fr_arith and mod_mul frames */ }
 ```
 
-None of the first five issues an ecall. The **public input** and the **journal** are two
-fixed 1 KiB windows of memory, word 0 of each the payload's byte length, and you read one
-with loads and write the other with stores; the **advice region** is another, above RAM.
-What a proof binds is the input window's contents and the journal's final contents, and
-neither binding asks anything of you — no hash at exit, no register convention.
+**None of the first five is a system call.** The public input, the journal and
+the advice region are three fixed regions of memory that the executor lays out
+before your program starts; `public_input` is a bounds-checked slice over one of
+them and `commit` is a run of stores into another. There is no cursor, no
+buffering, no descriptor and nothing that can fail for an I/O reason. What a
+proof binds is the input window's contents and the journal's **final** contents,
+and neither binding asks anything of you — no hash at exit, no register
+convention, not even that you read your input.
 `docs/spec/public-values.md` is the normative page.
 
-And the compatibility one, which is the POSIX descriptors:
+That is the whole list. There is no second surface, no compatibility path and no
+`println!`: **a guest has no diagnostic output at all.** A panic exits 101
+silently, and the only bytes leaving an execution are the journal's.
 
-```rust
-pub fn read_stdin(buf: &mut [u8]) -> usize;    // fd 0
-pub fn write_stdout(bytes: &[u8]);             // fd 1
-pub fn hint(buf: &mut [u8]) -> usize;          // fd 3, prover advice
-pub fn log(bytes: &[u8]);                      // fd 2, diagnostics
-```
+Six rules worth having in front of you while you write:
 
-| fd | Committed | Provable | What it means for you |
-| --- | --- | --- | --- |
-| 0 | no | no | POSIX stdin. The executor serves the statement's public input here too, so one source can read either way — but a proof binds nothing that arrives on it |
-| 1 | no | no | POSIX stdout. This is what `qemu-riscv32` is compared against; the **journal** is what a proof publishes |
-| 2 | no | no | diagnostics. Free-form, and the verifier never looks at it |
-| 3 | no | no | private hints: **nondeterministic prover advice**; `advice()` is the provable spelling |
-
-**Nothing on that second list can be proven**, because `read` and `write` are not provable
-ecalls and will not be (`docs/spec/public-values.md` §1). They issue a real ecall, they run
-under both executors, and a guest that calls one is a guest with no proof.
-
-Seven rules worth having in front of you while you write:
-
-1. **`read_input`, `read_stdin` and `hint` may return short.** Each fills the
-   buffer or stops at what is there. If you need an exact length, check the
-   count. A guest that proceeds on a partly-filled buffer proves something about
-   zeroes. `public_input()` and `journal()` return slices and copy nothing, so
-   they cannot be short.
-2. **Advice and hints bind nothing.** The prover chooses what `advice()` returns
-   and what fd 3 delivers. If either can change what you `commit`, and you have
-   not checked it against something a proof *does* bind — the public input, or a
-   hash the public input carries — your proof is meaningless, because the prover
-   picked the output. Advice is a shortcut to a value you then verify, and the
-   obligation is yours: the VM cannot discharge it.
-3. **Anything that would return host data is refused.** `getrandom`,
+1. **`read_input` may return short.** It fills your buffer or stops at the end
+   of the input, and returns which. If you need an exact length, check the
+   count — a guest that proceeds on a partly-filled buffer proves something
+   about zeroes. `public_input()` and `journal()` return slices and copy
+   nothing, so they cannot be short.
+2. **Advice binds nothing, and this is the rule that matters most.** The prover
+   chooses every byte `advice()` returns and may choose them differently on
+   every run. If advice can change what you `commit`, and you have not checked
+   it against something a proof *does* bind — the public input, or a hash the
+   public input carries — then your proof is worth nothing, because the prover
+   picked the output. Advice is a shortcut to a value you then verify, never an
+   input in its own right, and the obligation is yours: the VM cannot discharge
+   it. Advice is also the *only* place a large input can go, the two public
+   windows being 1,020 bytes each, so any real workload meets this rule.
+3. **`commit` refuses rather than truncates.** A journal that would not fit its
+   1,020-byte window exits `EXIT_IO_ERROR` instead of being cut short, because
+   you can read `journal()` back and must not see one you did not write. Nothing
+   orders the writes, either: the proof binds the window's final contents, and
+   `commit`'s length word is what gives the bytes an order.
+4. **Anything that would return host data is refused.** `getrandom`,
    `clock_gettime`, `gettimeofday`, and whatever `HashMap` reaches for to seed
    its `RandomState` all answer `-ENOSYS`. That is deliberate: each is
-   nondeterministic advice wearing the costume of a library call.
-4. **`poseidon2_permute` returns `false` today**, on every executor, because
-   the precompile has a number and a calling convention but no circuit yet. You
-   must have a software path and take it on `false`. Any *other* failure exits
-   nonzero rather than falling back silently.
-5. **`hint` needs an fd 3 to read.** The zkVM always has one. `qemu-riscv32`
-   only has the descriptors you give it, and a `read` on a closed one answers
-   `-EBADF`, which the SDK treats as an executor fault and exits 70 on. Running
-   a guest that calls `hint` by hand means opening fd 3 yourself, even at an
-   empty file:
-
-   ```
-   sh -c 'exec 3</dev/null; exec qemu-riscv32 ./yourguest' < input
-   ```
-
-6. **`commit` refuses rather than truncates.** A journal that would not fit its
-   1,020-byte window exits `EXIT_IO_ERROR` instead of being cut short, because
-   you can read `journal()` back and must not see one you did not write. The
-   same ceiling applies to the public input. A megabyte of data belongs in the
-   advice region, checked against something public — that is what it is for
-   (`docs/spec/public-values.md` §9).
-7. **`keccak256` is a delegation, and you call it like a function.** The sponge
-   and the padding run in guest code and one ecall covers each keccak-f[1600]
-   block: this VM answers that ecall out of the circuit the `KECCAK_F` family
-   proves, and an executor without the circuit — `qemu-riscv32` — answers
-   `-ENOSYS`, whereupon the SDK runs the permutation in software. Both paths
-   produce the same digest, so unlike rule 4 there is no fallback for you to
-   write. Calling it is also what *declares* the family: the shim carries a
-   record the preprocessor scans the image for, kept exactly when the shim is
+   nondeterministic advice wearing the costume of a library call. If you want
+   such a value, take it from advice, where it is visibly yours to authenticate.
+5. **A delegation is a function call, and its caller owes a software path.**
+   `keccak256` is the worked example: the sponge and the padding run in guest
+   code and one ecall covers each keccak-f[1600] block, which this VM answers
+   out of the circuit the `KECCAK_F` family proves. An executor without that
+   circuit answers `-ENOSYS` and the SDK runs the permutation in software
+   instead, and the two paths produce the same digest — so for `keccak256` there
+   is no fallback for *you* to write. `poseidon2_permute` is the raw form and
+   hands you the choice: it returns `false` on exactly `-ENOSYS`, and you must
+   have a software path and take it on `false`. Any *other* failure exits
+   nonzero rather than falling back silently, because "this VM does not have
+   this yet" and "this call went wrong" are worth telling apart. Calling a
+   delegation is also what **declares** its family: the shim carries a record
+   the preprocessor scans your image for, kept exactly when the shim is
    reachable, so a guest that never calls `keccak256` declares nothing and a
    guest that links it and never calls it declares a family it proves zero
-   shards of. `docs/spec/delegation.md` is the normative page; `guests/keccak-test`
-   and `guests/keccak-unused` are the two halves worked out.
+   shards of. `docs/spec/delegation.md` is the normative page;
+   `guests/keccak-test` and `guests/keccak-unused` are the two halves worked
+   out, and `guests/mod-mul-ops` is what it looks like when the software path is
+   expensive enough to shape the design.
+6. **There is nowhere to print.** No `log`, no stderr, no tracing hook. Debug on
+   the host through the library of §2a, and use the exit status as your one
+   channel: every hand-written fixture in `guests/` exits with the number of
+   checks that passed, so one wrong value is a different number.
 
 `guests/orderbook` is the worked example of rule 2. It takes a sorted
-permutation of its orders from fd 3 — sorting costs `O(n log n)` and checking a
-claimed permutation is sorted costs `O(n)`, so the advice is worth having — and
-then verifies it three ways before a single advised byte reaches the auction. If
-any check fails it sorts the batch itself. **The two paths write identical
-bytes**, which is the whole point: not even a flag saying the advice verified
-reaches the output, because such a flag would be a published bit the prover
-chooses. Which path ran is written to fd 2 and nowhere else. It is a compatibility
-guest, so it reads fd 3 rather than `advice()`; the shape of the argument is the
-same either way.
+permutation of its orders from the advice region — sorting costs `O(n log n)`
+and checking that a claimed permutation is sorted costs `O(n)`, so the advice is
+worth having — and then verifies it three ways against the batch, which is
+public input, before a single advised byte reaches the auction. If any check
+fails it sorts the batch itself. **The two paths commit identical bytes**, which
+is the whole point: not even a flag saying the advice verified reaches the
+journal, because such a flag would be a published bit the prover chooses. And
+since there is nowhere else for it to go, which path ran is not recorded at all.
 
 The allocator bumps upward from `__heap_start` and `dealloc` does nothing, so
 `alloc` works but never reclaims. What runs a guest out of heap is therefore
@@ -368,37 +381,12 @@ its whole address space is discarded, so a free list would be cost paid for
 nothing.
 
 Before S12 the ceiling was `__stack_top` itself, and running out of heap handed
-out memory on top of live stack frames. `crates/emulator/tests/consistency.rs`
-pins the fix. A stack deeper than 8 MiB can still run down into heap blocks
-without any check noticing, but recursion that deep would overflow a native
-main thread as well.
-
-### 3a. Which of the two to write
-
-| you need | use |
-| --- | --- |
-| a proof of this guest | `public_input` / `commit` / `journal` / `advice` |
-| to run under `qemu-riscv32`, or to be an oracle for a guest that is proven | `read_stdin` / `write_stdout` / `hint` / `log` |
-
-The split is not a preference. **Under `qemu-riscv32` the public windows and the
-advice region do not exist**: a host loader maps only the `PT_LOAD` segments the
-ELF declares, and none of those three regions is in the ELF, so a guest that
-touches them dies on a signal. The other way round, `read` and `write` are not
-provable ecalls, so a guest that calls them has no proof. There is no spelling
-that is both.
-
-**A guest can carry both binaries**, which is usually the right answer for a
-workload: put the program in a library as §2a says, and give it two thin
-`main`s. `guests/revm-block` is the worked example — `src/main.rs` takes its
-witness out of the advice region and commits to the journal, and `src/stdio.rs`
-is the same computation over fd 0 and fd 1 so that
-`crates/emulator/tests/revm.rs` can hold it against native revm. One library,
-one set of `[[bin]]` entries in `Cargo.toml`, and each executor gets a binary it
-can run.
-
-Most of the guests in `guests/` are compatibility guests, because most of them
-exist to be run under both executors and compared. That is a fact about the
-fixtures, not a recommendation.
+out memory on top of live stack frames — safe code writing into a `Vec` rewrote
+its caller's locals and return address. The allocator now refuses such a block
+instead, and `guests/heap` is the fixture that puts real allocator traffic in a
+trace. A stack deeper than 8 MiB can still run down into heap blocks without any
+check noticing, but recursion that deep would overflow a native main thread as
+well.
 
 ---
 
@@ -411,11 +399,16 @@ cd guests/hello
 cargo build --target riscv32imac-unknown-none-elf
 ```
 
-Everything else comes from `guests/.cargo/config.toml`: the target, the
-`qemu-riscv32` runner, and the two linker flags that matter —
-`-T../crates/guest-sdk/link.ld` for the frozen memory map, and `--no-relax`,
-because linker relaxation rewrites instruction sequences and shifts every later
-address, and S11's program identity is a function of those addresses.
+Everything else comes from `guests/.cargo/config.toml`: the target, and the two
+linker flags that matter — `-T../crates/guest-sdk/link.ld` for the frozen memory
+map, and `--no-relax`, because linker relaxation rewrites instruction sequences
+and shifts every later address, and S11's program identity is a function of
+those addresses.
+
+There is deliberately **no `runner`**, so `cargo run` on a guest has nothing to
+run it with. An Apogee guest's input, advice and journal are windows of guest
+memory this VM lays out, and nothing outside the VM maps them; the executor is
+`crates/emulator`.
 
 The ELF lands at `guests/target/riscv32imac-unknown-none-elf/debug/hello` —
 one target directory for the whole guest workspace, not one per guest.
@@ -540,12 +533,14 @@ them, running to the top of RAM. A guest with no `.rodata` has two, as `addsub` 
 else. The
 writable segment's `file bytes` is zero whenever `.data` is empty, which is the
 common case — `hello`, `fib`, `echo` and `rvc-dense` are all like that, so the
-whole third segment is zero fill. It is declared because a host program loader
-maps exactly what the program headers declare and nothing else — an undeclared
-stack is unmapped memory whose first push dies on a signal. Each section is
-page-aligned for the same reason: two segments sharing a page take the second
-mapping's permissions for the whole page. `docs/spec/ecall-abi.md` §7.1 is
-normative, and `crates/loader/tests/layout.rs` enforces it.
+whole third segment is zero fill. It is declared because **the program headers
+are the image's own account of itself**: a header saying the program's writable
+memory ends at `.bss`, when the heap and the stack live above it, is wrong about
+the program, whatever reads it. Each section is page-aligned for the same
+reason — a `PT_LOAD` states its permissions over the pages it covers, so two
+segments on one page state two different things about the same bytes.
+`docs/spec/ecall-abi.md` §7.1 is normative, and `crates/loader/tests/layout.rs`
+enforces it.
 
 Note the artifact carries **no permission bits**. The zkVM has no pages and no
 permissions; the `instructions` column is what makes a segment executable as
@@ -722,11 +717,13 @@ is the test that holds it.
 
 **Mnemonics**, against the pinned disassembler, per §6.
 
-**Host loadability.** Your ELF has to satisfy two loaders: `crates/loader`,
-which reads `p_vaddr` and `p_memsz` into a flat window where every address
-exists by construction, and a *host* loader, which maps only what the headers
-declare, page by page, at the declared permissions. An image can be fine for
-the first and unrunnable under the second — S10 shipped exactly that, twice.
+**A well-formed image.** `crates/loader` reads `p_vaddr` and `p_memsz` into a
+flat window where every address exists by construction, and it would accept an
+ELF whose headers describe a different program from the one inside it. Nothing
+else would: the headers are what `llvm-readobj`, a disassembler, a debugger and
+any loader that is not this one read, and they are entitled to be true. S10
+shipped headers that were not, twice, and nothing inside the VM noticed
+(`docs/spec/ecall-abi.md` §7.1).
 
 The two rules are properties of `link.ld`, which every guest links against
 unmodified, so a guest that changes only its own source has the segment shape
@@ -754,62 +751,34 @@ Neither reads *your* ELF, so to check yours directly, look at its headers:
 
 Three things to see there, and each was a real failure:
 
-1. every `VirtAddr` is page-aligned, and `Offset ≡ VirtAddr (mod 0x1000)` —
-   a host loader maps from `page_down(offset)` to `page_down(vaddr)`, so
-   anything else maps the wrong bytes;
-2. no two `LOAD`s share a page, because the second mapping's permissions would
-   win for the whole page — an unaligned `.rodata` strips execute from the tail
-   of `.text`;
+1. every `VirtAddr` is page-aligned, and `Offset ≡ VirtAddr (mod 0x1000)` — a
+   mapping runs from `page_down(offset)` to `page_down(vaddr)`, so anything else
+   describes the wrong bytes at that address;
+2. no two `LOAD`s share a page, because a page can only carry one set of
+   permissions — an unaligned `.rodata` is a claim that the tail of `.text` is
+   not executable;
 3. the segment with `MemSiz` above `FileSiz` is the one marked `RW`, and it
-   reaches `0x80000000`. Zero fill on a read-only page is refused outright, and
-   the span up to `__stack_top` is the heap and the stack: undeclared, the
-   first push dies on a signal before `main` runs.
+   reaches `0x80000000`. Zero fill inside a read-only segment would be a claim
+   that the image writes to memory it declared read-only, and the span up to
+   `__stack_top` is the heap and the stack: undeclared, the headers say the
+   program's writable memory ends at `.bss` and its very first stack push is
+   outside every segment it names.
 
-**Execution.** `qemu-riscv32` was the only executor before S12; since S12
-`crates/emulator` runs a guest too (`emulator::run`), and QEMU is the oracle for what that
-guest **computes** — its exit status and its fd 1, and nothing below that
-(`crates/emulator/tests/qemu_outputs.rs`). It is user-mode
-emulation — it translates the guest's Linux syscalls into the host's — so it
-builds for Linux hosts only and there is no native macOS build of it. The tests
-stay `#[ignore]`d so a machine with no emulator cannot report silent coverage,
-and you ask for them by name:
+**Execution.** The executor is `crates/emulator` — `emulator::run` for a plain
+run and `emulator::trace_run` for one that produces a trace — and it is the only
+one. It needs no cross-emulator and no Linux: it is an ordinary Rust crate in
+this workspace, so `cargo test` runs your guest wherever you are.
 
-```
-cargo test -p loader --test qemu -- --include-ignored   # a Linux host with qemu-user
-```
+Give it the public input and the advice the run is about, and read back the exit
+status and the journal. `crates/emulator/tests/guests.rs` is the shape to copy;
+it runs every committed guest and checks each one's journal against arithmetic
+redone on the host, which is §2a's strategy as a test.
 
-**On macOS, borrow a Linux.** Apple Silicon runs one at native speed, so only
-the innermost hop is emulated: macOS -> arm64 Linux VM -> `qemu-riscv32` ->
-guest. About four minutes of setup, once:
-
-```
-brew install colima docker
-colima start --cpu 4 --memory 8 --disk 60
-
-docker run --rm -v "$PWD":/w -w /w -e CARGO_TARGET_DIR=/tmp/t rust:latest \
-  bash -c 'apt-get update -qq && apt-get install -y -qq qemu-user &&
-           cargo test -p loader --test qemu -- --include-ignored'
-```
-
-`rust:latest` ships rustup, which reads `rust-toolchain.toml` on the first
-cargo call and installs the pinned toolchain and the guest target, so nothing
-drifts from the pin. Set `CARGO_TARGET_DIR` somewhere outside the repository:
-cargo does not namespace `target/` by host triple, so sharing it with the macOS
-build makes each run rebuild over the other.
-
-A guest built inside that container is **not** the same bytes as one built on
-the host — rustc embeds absolute paths in `core`'s panic-location strings and
-stable Rust cannot remap them, so the two differ in size as well as content.
-That is why `crates/loader/tests/qemu.rs` builds every guest from source rather
-than reading a committed fixture: what it checks is the behaviour of the
-current `guests/` tree, and the fixtures are loader-differential inputs pinned
-separately. What does *not* differ is your own crate's panic locations, which
-are relative to the crate root, or anything a guest computes.
-
-To run your own guest by hand on a Linux host, `cargo run` from the guest's
-directory invokes it through QEMU already — that is what the `runner` line in
-the template config is for. Guests use Linux syscall numbers precisely so this
-works unmodified.
+A guest built on another machine is **not** the same bytes as one built here —
+rustc embeds absolute paths in `core`'s panic-location strings and stable Rust
+cannot remap them, so two builds differ in size as well as content. What does
+*not* differ is your own crate's panic locations, which are relative to the
+crate root, or anything a guest computes.
 
 ---
 
@@ -818,18 +787,19 @@ works unmodified.
 §9 covers an ELF the loader refuses, which is always a malformed or mis-targeted
 build. This section is the other failure: a guest that loads, runs, and is
 wrong. **Start by running the same input through the library on the host (§2a)
-and diffing fd 1.** Which side is wrong tells you which half of this table to
-read.
+and diffing the journal.** Which side is wrong tells you which half of this
+table to read — and it is the only diagnostic you get, since a guest prints
+nothing.
 
 Every exit code the SDK produces, none of which your program chooses:
 
 | Exit | Constant | What happened |
 | --- | --- | --- |
 | 0 | — | `main` returned, or you called `exit(0)` |
-| 70 | `EXIT_IO_ERROR` | an ecall the ABI guarantees failed. Under the zkVM this is a bug; by hand under QEMU it is usually fd 3 not being open (§3 rule 5) |
+| 70 | `EXIT_IO_ERROR` | `commit` was handed more bytes than the journal window holds. It refuses rather than truncating (§3 rule 3) |
 | 71 | `EXIT_OUT_OF_MEMORY` | the heap reached its ceiling. See below |
-| 72 | `EXIT_PRECOMPILE_ERROR` | a precompile failed for a reason other than "not implemented". `poseidon2_permute` returning `false` is *not* this — that is the software-fallback path (§3 rule 4) |
-| 101 | `EXIT_PANIC` | a Rust panic. The message, file, line and column go to fd 2 |
+| 72 | `EXIT_PRECOMPILE_ERROR` | a delegation answered something other than success or `-ENOSYS`. `poseidon2_permute` returning `false` is *not* this — that is the software-fallback path (§3 rule 5) |
+| 101 | `EXIT_PANIC` | a Rust panic. **Silently**: there is no message, no file and no line, because there is nowhere for them to go. What you have is the status and whatever the guest had already committed — the journal is memory, so a panicking run still published it |
 
 ### It exits 71
 
@@ -848,7 +818,8 @@ each buffer as it doubles.
 This is a clean stop, not corruption. Before S12 it was corruption: the
 allocator would hand out blocks sitting on top of live stack frames, and safe
 code writing into a `Vec` would rewrite its caller's locals and return address.
-That is fixed and pinned by two probes in `guests/consistency`.
+The allocator now refuses such a block instead, against both halves of the
+ceiling — the stack's 8 MiB reserve and the live `sp`.
 
 ### It commits different bytes than the host
 
@@ -857,16 +828,16 @@ In order of how often it is actually the cause:
 1. **`as usize` on a `u64`.** Keeps the low 32 bits here, all 64 on the host, in
    silence. Grep your guest for `as usize` and replace each with
    `usize::try_from(x)?`. This is the single highest-yield check on this page.
-2. **A `core::hash` fingerprint reached fd 1.** `#[derive(Hash)]` writes slice
-   and `String` lengths as `usize`, so every such hash differs by target. Move
-   to a real hash over bytes you control.
+2. **A `core::hash` fingerprint reached the journal.** `#[derive(Hash)]` writes
+   slice and `String` lengths as `usize`, so every such hash differs by target.
+   Move to a real hash over bytes you control — `guest_sdk::keccak256` is right
+   there, and it is the same function on every target.
 3. **`size_of` of something holding a pointer** fed an offset, a capacity or a
    serialized length.
 4. **Floats.** Only the bits of a NaN differ, so this needs `to_bits()` or a
    transmute on a NaN path. Rare, and a sign you should be using integers.
 
-§2a is the full list with the reasoning; `hazards::PLATFORM_DEPENDENT` is the
-machine-readable one.
+§2a is the full list with the reasoning.
 
 ### It panics on the guest but not on the host
 
@@ -977,8 +948,9 @@ Changing any of these is a protocol-version change, not a refactor:
 - **`ProgramImage`** — its four fields and their `postcard` encoding.
 - **`loader::load_elf(bytes) -> Result<ProgramImage, LoaderError>`** — the one
   way an image is built.
-- **The ecall numbers and the fd conventions**, in `constants::ecall`, with
-  `docs/spec/ecall-abi.md` as the table. Numbers are append-only forever.
+- **The ecall numbers**, in `constants::ecall`, with `docs/spec/ecall-abi.md` as
+  the table. Numbers are append-only forever, and a retired number stays burned
+  rather than being freed for something else.
 - **The memory map and the linker symbols** — `__bss_start`, `__bss_end`,
   `__heap_start`, `__stack_top` — and the segment-layout rules in
   `docs/spec/ecall-abi.md` §7.1.

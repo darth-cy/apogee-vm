@@ -18,7 +18,7 @@
 //! cryptography. So the JSON-RPC client is ours — request framing, the retry
 //! policy, the cache — and only the HTTPS bytes are `curl`'s, spawned through
 //! `std::process::Command` exactly as this repository already spawns `cargo`,
-//! `qemu-riscv32` and `llvm-objdump`. `curl` is an undeclared host tool of the
+//! `llvm-objdump`. `curl` is an undeclared host tool of the
 //! same class as those, and like them it is reachable only from a manual path:
 //! CI never runs this module (owner's decision, recorded in
 //! `docs/handoff/S25-block.md`).

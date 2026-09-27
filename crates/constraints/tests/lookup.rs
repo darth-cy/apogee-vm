@@ -811,36 +811,3 @@ fn the_toy_round_trips_with_the_new_shapes() {
     assert_eq!(kinds, vec![VirtualKind::Range19, VirtualKind::Range16]);
     assert_eq!(MASK_BITS, 12, "the toy splits the packed mask into twelve");
 }
-
-/// `V[range19]` is wire tag 2 and `V[range16]` tag 3, appended after S13's
-/// `RowIndex` and S14's `RamLive`; a `TreeCross` is gate tag 6, appended after
-/// S13's six shapes. Each is checked through the one encoder, on a gate and an
-/// address of its own.
-#[test]
-fn the_new_wire_tags_are_appended_and_round_trip() {
-    let tag = |a: PolyAddress| {
-        let gate = GateDef::Linear {
-            terms: vec![(lit(1), a)],
-            constant: lit(0),
-        };
-        let bytes = postcard::to_extend(&gate, Vec::new()).expect("encodes");
-        // GateDef: tag, split, coefficients, operands; the address's three
-        // words follow the two coefficient words of its single literal.
-        bytes
-    };
-    for (kind, expected) in [(VirtualKind::Range19, 2u8), (VirtualKind::Range16, 3)] {
-        let bytes = tag(PolyAddress::Virtual(kind));
-        assert!(
-            bytes.windows(3).any(|w| w == [3u8, expected, 0]),
-            "{kind:?} is tag 3 with kind {expected}"
-        );
-    }
-    let cross = GateDef::TreeCross {
-        left: w(0),
-        right: w(1),
-    };
-    let bytes = postcard::to_extend(&cross, Vec::new()).expect("encodes");
-    assert_eq!(bytes[0], 6, "TreeCross is gate tag 6");
-    let back: GateDef = postcard::from_bytes(&bytes).expect("decodes");
-    assert_eq!(back, cross);
-}

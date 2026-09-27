@@ -2,8 +2,8 @@
 //!
 //! `crates/loader` reads an ELF the way the zkVM will: it takes `p_vaddr` and
 //! `p_memsz` and lays the bytes into a flat RAM window where every address is
-//! addressable by construction. A host loader -- `qemu-riscv32`, or Linux
-//! itself -- does something narrower. It `mmap`s exactly the segments the
+//! addressable by construction. A host program loader does something
+//! narrower. It `mmap`s exactly the segments the
 //! program headers declare, page by page, with exactly the permissions each
 //! declares, and nothing else in the address space exists at all.
 //!
@@ -13,9 +13,14 @@
 //! shipped put `__stack_top` at the top of the RAM window with no segment
 //! declaring it, so the guest's first stack write hit unmapped memory and died
 //! on a signal before `main` ran; and it let `.bss` share a page with
-//! `.rodata`, which `qemu-riscv32` refuses outright rather than mapping a
+//! `.rodata`, which a host loader refuses outright rather than mapping a
 //! read-only page writable. [`the_layout_that_failed_in_ci_is_rejected`] pins
 //! both.
+//!
+//! **This is a property of the image, not of any executor.** Program headers
+//! that do not describe the memory the program needs are wrong whoever reads
+//! them, which is why this suite parses them itself and needs nothing
+//! installed.
 //!
 //! These tests read the committed ELFs and parse the headers here rather than
 //! through `loader`, for two reasons: `ProgramImage` deliberately drops the
@@ -141,8 +146,8 @@ fn page_separation(loads: &[Load]) -> Result<(), String> {
 /// Zero fill -- the `p_memsz - p_filesz` tail -- only ever lands on a writable
 /// mapping.
 ///
-/// This is the rule `qemu-riscv32` reports as "PT_LOAD with bss overlapping
-/// non-writable page", and it refuses to run the image at all.
+/// This is the rule a host loader reports as "PT_LOAD with bss overlapping
+/// non-writable page", refusing to run the image at all.
 fn zero_fill_is_writable(loads: &[Load]) -> Result<(), String> {
     for l in loads {
         if l.memsz > l.filesz && !l.writable() {
@@ -175,7 +180,7 @@ fn writable_at(loads: &[Load], addr: u64, what: &str) -> Result<(), String> {
 // The guests
 // ---------------------------------------------------------------------------
 
-const GUESTS: [&str; 14] = [
+const GUESTS: [&str; 13] = [
     "fib",
     "echo",
     "rvc-dense",
@@ -185,7 +190,6 @@ const GUESTS: [&str; 14] = [
     "atomics",
     "opcodes",
     "heap",
-    "consistency",
     "addsub",
     "control",
     "alu",
@@ -315,7 +319,7 @@ fn the_heap_and_the_stack_share_one_writable_segment() {
 /// The exact layout that failed in CI, rejected.
 ///
 /// A negative control, and a regression pin: these are the real program headers
-/// of the ELFs that `qemu-riscv32` killed, transcribed. Without the assertions
+/// of the ELFs that a host loader killed, transcribed. Without the assertions
 /// in this file a change that reintroduced either would go out green.
 #[test]
 fn the_layout_that_failed_in_ci_is_rejected() {
@@ -353,7 +357,7 @@ fn the_layout_that_failed_in_ci_is_rejected() {
     );
 
     // echo, as first shipped: a 4-byte .bss whose page was already mapped
-    // read-only by .rodata. qemu-riscv32 reported this one out loud, as
+    // read-only by .rodata, reported out loud as
     // "PT_LOAD with bss overlapping non-writable page".
     let echo_as_shipped = [
         Load {

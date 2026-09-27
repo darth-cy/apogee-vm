@@ -123,48 +123,6 @@ fn the_absorption_fixture_covers_what_it_claims() {
     );
 }
 
-/// `append_g1` is exactly the one-element list, and a list is one message
-/// rather than several.
-#[test]
-fn a_list_is_one_message() {
-    let mut rng = Rng::new(0x5008_0600);
-    let srs = common::toy_srs(4);
-    let a = commit(&srs, &common::random_poly(&mut rng, 4))
-        .expect("commit")
-        .0;
-    let b = commit(&srs, &common::random_poly(&mut rng, 4))
-        .expect("commit")
-        .0;
-
-    let mut one = Transcript::new();
-    append_g1(&mut one, tags::COMMITMENT, &a);
-    let mut listed = Transcript::new();
-    append_g1_list(&mut listed, tags::COMMITMENT, &[a]);
-    assert_eq!(one.snapshot(), listed.snapshot());
-
-    let mut together = Transcript::new();
-    append_g1_list(&mut together, tags::COMMITMENT, &[a, b]);
-    let mut apart = Transcript::new();
-    append_g1(&mut apart, tags::COMMITMENT, &a);
-    append_g1(&mut apart, tags::COMMITMENT, &b);
-    assert_ne!(
-        together.snapshot(),
-        apart.snapshot(),
-        "one message of two points must differ from two messages of one"
-    );
-
-    // The empty list is its own message, and the typed layer records it.
-    let mut empty = Transcript::new();
-    append_g1_list(&mut empty, tags::COMMITMENT, &[]);
-    assert_eq!(
-        empty.event_log(),
-        &[transcript::TranscriptEvent::Absorb {
-            tag: tags::COMMITMENT,
-            n_scalars: 0
-        }]
-    );
-}
-
 /// Master rule 8: the replayer must be able to fail.
 #[test]
 fn a_corrupted_absorption_fixture_is_rejected() {

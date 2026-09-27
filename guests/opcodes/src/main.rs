@@ -2,13 +2,10 @@
 #![no_main]
 //! Every RV32IMAC instruction, executed.
 //!
-//! S12's coverage fixture, and the QEMU output oracle's: every one of the 59
-//! RV32IMA instructions runs here with edge-case operands, and a block of
-//! compressed code runs every compressed form a program can execute, so both
-//! executors run all of them and are held to one exit status and one fd 1
-//! (`crates/emulator/tests/qemu_outputs.rs`).
-//! `crates/emulator/tests/` checks that every mnemonic really does execute,
-//! rather than trusting this comment.
+//! S12's coverage fixture: every one of the 59 RV32IMA instructions runs here
+//! with edge-case operands, and a block of compressed code runs every
+//! compressed form a program can execute. `crates/emulator/tests/` checks that
+//! every mnemonic really does execute, rather than trusting this comment.
 //!
 //! The instructions live in `global_asm!` blocks, not compiled Rust, so what
 //! runs is exactly what is written:
@@ -21,41 +18,38 @@
 //! - `cover_m`: the eight M operations over ten operand pairs, including
 //!   division by zero and the one signed overflow, `INT_MIN / -1`;
 //! - `cover_a`: all nine AMOs with `aq`/`rl` variants, paired `lr.w`/`sc.w`,
-//!   and one **unpaired** `sc.w` — which QEMU fails and the emulator
-//!   succeeds, the conformance deviation, exercised on purpose and kept out
-//!   of what the two executors are compared on;
+//!   and one **unpaired** `sc.w`, which this VM succeeds — the conformance
+//!   deviation of `docs/spec/memory-ops.md` §6.6, exercised on purpose;
 //! - `cover_rvc`: every executable compressed form (all but `c.ebreak` and
 //!   `c.unimp`, which trap), each instruction of the block executed;
-//! - `cover_ecall`: `read` into and `write` from an unaligned buffer, a
-//!   zero-length `write`, `-EBADF` for both calls, the empty hint stream, and
-//!   `-ENOSYS` for an unassigned precompile number and an unassigned
-//!   host-call number.
+//! - `cover_ecall`: the `ecall` instruction over the two numbers nothing
+//!   answers — one in the precompile range and one in the host-call range —
+//!   each returning `-ENOSYS`. There is no I/O call left to cover: the ABI
+//!   has no descriptors and no `read`/`write` (`docs/spec/public-values.md`
+//!   §1), and the calls it does have either do not return (`EXIT`) or are
+//!   refused to a guest that did not declare them (the delegations).
 //!
-//! # fd 0, the public input
+//! # The public input
 //!
 //! ```text
-//!           0..4     mode            u32 LE; a shorter stream means 0
-//!           4..10    payload         mode 0 only: six bytes cover_ecall reads
+//!           0..4     mode            u32 LE; a shorter input means 0
 //! ```
 //!
 //! - mode 0 runs every block;
-//! - mode 1 executes `ebreak`, which both executors trap on;
+//! - mode 1 executes `ebreak`, which is a fatal guest error;
 //! - modes 2 to 8 each make one misaligned access — `lw`, `sw`, `lh`, `sh`,
-//!   `lr.w`, `sc.w`, `amoadd.w` — which the zkVM refuses as a fatal guest
-//!   error. QEMU performs the first four and the `amoadd.w` — its default
-//!   CPU allows a misaligned AMO inside an aligned 16-byte block — and
-//!   faults on `lr.w` and `sc.w`. None of it is compared: the emulator's
-//!   refusal is what these modes are for.
+//!   `lr.w`, `sc.w`, `amoadd.w` — which this VM refuses as a fatal guest
+//!   error. That refusal is what these modes are for; nothing is committed
+//!   on any of them, because the run does not reach an exit.
 //!
-//! # fd 1, the public output (mode 0)
+//! # The journal (mode 0)
 //!
-//! The payload back, as `cover_ecall` wrote it; then seven `u32` LE words —
-//! the five blocks' folds in the order above, and the compressed block's
-//! first and one-past-last address.
+//! Seven `u32` LE words — the five blocks' folds in the order above, and the
+//! compressed block's first and one-past-last address.
 //!
-//! # fd 3
+//! # The advice
 //!
-//! Read once, expected empty.
+//! Unused.
 
 use core::arch::global_asm;
 
@@ -75,7 +69,7 @@ extern "C" {
 
 fn main() {
     let mut mode = [0u8; 4];
-    let mode = match guest_sdk::read_stdin(&mut mode) {
+    let mode = match guest_sdk::read_input(&mut mode) {
         4 => u32::from_le_bytes(mode),
         _ => 0,
     };
@@ -97,12 +91,12 @@ fn main() {
                 ]
             };
             for fold in folds {
-                guest_sdk::write_stdout(&fold.to_le_bytes());
+                guest_sdk::commit(&fold.to_le_bytes());
             }
             let begin = core::ptr::addr_of!(__cover_rvc_begin) as u32;
             let end = core::ptr::addr_of!(__cover_rvc_end) as u32;
-            guest_sdk::write_stdout(&begin.to_le_bytes());
-            guest_sdk::write_stdout(&end.to_le_bytes());
+            guest_sdk::commit(&begin.to_le_bytes());
+            guest_sdk::commit(&end.to_le_bytes());
         }
         // SAFETY: `ebreak` touches no memory and no register.
         1 => unsafe { core::arch::asm!("ebreak") },
@@ -448,12 +442,11 @@ cover_a:
     xor     a0, a0, t5
     add     a0, a0, t6
 
-    /* An unpaired sc.w: no reservation is held. QEMU fails it -- t6 = 1 and
-       nothing stored -- and the emulator succeeds -- t6 = 0 and t0 stored.
-       This is the conformance deviation (docs/spec/memory-ops.md 6.6), so t6
-       and the word are both overwritten before either is read again: it must
-       reach neither fd 1 nor the exit status, which is all the two executors
-       are held to. */
+    /* An unpaired sc.w: no reservation is held, and this VM succeeds anyway --
+       t6 = 0 and t0 stored. That is the conformance deviation
+       (docs/spec/memory-ops.md 6.6), so t6 and the word are both overwritten
+       before either is read again and the deviation reaches neither the
+       journal nor the exit status. */
     sc.w        t6, t0, (a6)
     li          t6, 0
     sw          x0, 0(a6)
@@ -535,9 +528,17 @@ __cover_rvc_end:
 );
 
 // ---------------------------------------------------------------------------
-// ecall: the calls a guest makes through the SDK, made directly, at their
-// edges. t0 holds the scratch words and t1 the fold, because a0 is every
-// call's argument and result.
+// ecall: the instruction, over numbers the ABI leaves unanswered. t0 holds the
+// scratch words and t1 the fold, because a0 is every call's argument and
+// result.
+//
+// There is nothing here to *call*. `EXIT` does not return, and the four
+// delegations are refused outright to a guest that did not declare them
+// (`docs/spec/delegation.md` §7) -- declaring one would make this coverage
+// fixture a delegation fixture and give it a family it has no rows for. What
+// is left, and what this block covers, is the `ecall` instruction itself: two
+// numbers in the two reserved ranges that nothing answers, each coming back
+// `-ENOSYS`, which is a value to fold and a cycle to trace.
 // ---------------------------------------------------------------------------
 
 global_asm!(
@@ -550,60 +551,12 @@ cover_ecall:
     mv      t0, a0
     li      t1, 0
 
-    /* read(0, scratch + 1, 6): the rest of fd 0, into two partial words */
-    li      a7, 63
-    li      a0, 0
-    addi    a1, t0, 1
-    li      a2, 6
-    ecall
-    add     t1, t1, a0
-    lw      t2, 0(t0)
-    lw      t3, 4(t0)
-    add     t1, t1, t2
-    xor     t1, t1, t3
-
-    /* write(1, scratch + 1, 6): the same bytes back out, unaligned */
-    li      a7, 64
-    li      a0, 1
-    addi    a1, t0, 1
-    li      a2, 6
-    ecall
-    add     t1, t1, a0
-
-    /* write(1, scratch, 0): nothing moves, and 0 comes back */
-    li      a7, 64
-    li      a0, 1
-    mv      a1, t0
-    li      a2, 0
-    ecall
-    add     t1, t1, a0
-
-    /* read and write on a descriptor neither has: -EBADF */
-    li      a7, 63
-    li      a0, 1000
-    mv      a1, t0
-    li      a2, 4
-    ecall
-    add     t1, t1, a0
-    li      a7, 64
-    li      a0, 1000
-    ecall
-    add     t1, t1, a0
-
-    /* read(3, scratch, 4): the hint stream, empty here, so 0 */
-    li      a7, 63
-    li      a0, 3
-    mv      a1, t0
-    li      a2, 4
-    ecall
-    add     t1, t1, a0
-
     /* the precompile range, and a host-call number nobody assigned: -ENOSYS.
-       0x5ff rather than 0x500: since S23 the low precompile numbers are
-       *delegations*, and calling one a guest did not declare is a fatal
-       trace-time failure rather than an -ENOSYS (`docs/spec/delegation.md`
-       §7). What this block covers is the `ecall` instruction over a number
-       nothing answers, which 0x5ff is and 0x500 no longer is. */
+       0x5ff rather than 0x500: the low precompile numbers are *delegations*,
+       and calling one a guest did not declare is a fatal trace-time failure
+       rather than an -ENOSYS (`docs/spec/delegation.md` §7). What this block
+       covers is the `ecall` instruction over a number nothing answers, which
+       0x5ff is and 0x500 no longer is. */
     li      a7, 0x5ff
     mv      a0, t0
     ecall

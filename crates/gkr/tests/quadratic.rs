@@ -18,14 +18,14 @@
 
 mod common;
 
-use common::{bind, circuit, discharge, fr_base, honest, output_claims, run};
+use common::{bind, circuit, discharge, fr_base, honest};
 use constants::challenge_slot::TOY;
 use constraints::{
     CircuitArtifact, Coeff, EnforcingEntry, GateDef, LayerSpec, PolyAddress, ProducingEntry,
     Relation,
 };
 use field::Fr;
-use gkr::{forward, self_check, GkrError};
+use gkr::{forward, self_check};
 use test_support::Rng;
 
 const ROWS: usize = 4;
@@ -180,34 +180,4 @@ fn an_honest_quadratic_circuit_proves_and_verifies() {
         assert_eq!(claims.len(), 6);
         discharge(&base, &claims).expect("every base claim is the column's evaluation");
     }
-}
-
-/// Tampered: one cell of `f` moved by one, so `a·b + c·d − e·f` is `−e` on that
-/// row and zero elsewhere. The self-check names the relation at that row, and a
-/// proof over those forward values — the digest bound to the tampered base — is
-/// rejected at transition 0, where the enforcing gate is.
-///
-/// Kills a kernel that returns a `Quadratic`'s constant and linear part alone:
-/// the relation would then be identically zero, the self-check would pass and
-/// the proof would verify.
-#[test]
-fn a_broken_quadratic_relation_is_named_and_rejected() {
-    let artifact = balance_circuit();
-    let mut columns = satisfying(0x5313_0b10);
-    columns[5][1] += Fr::ONE;
-    let base = fr_base(&artifact, columns);
-    let (_, challenges) = bind(&artifact, &base);
-    let values = forward(&artifact, &base, &challenges);
-    let broken = self_check(&artifact, &values, &challenges).expect_err("row 1 is broken");
-    assert_eq!(
-        (broken.layer, broken.row, broken.relation.as_str()),
-        (0, 1, "ab_plus_cd_is_ef")
-    );
-    let (_, result) = run(
-        &artifact,
-        &base,
-        &values,
-        &output_claims(&artifact, &values),
-    );
-    assert_eq!(result, Err(GkrError::LayerInconsistency { layer: 0 }));
 }

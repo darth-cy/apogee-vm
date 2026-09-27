@@ -217,6 +217,9 @@ pub fn synthetic_block() -> BlockWitness {
             // Cancun and later require it, and this block carries no blob,
             // so the excess is zero and the blob gas price is its floor.
             excess_blob_gas: Some(0),
+            // The price at zero excess is the EIP's minimum, whatever the update
+            // fraction is: `fake_exponential(1, 0, f) = 1`.
+            blob_gasprice: Some(1),
             slot_num: 0,
             // The synthetic block's two transactions read no ancestor hash, so
             // nothing is recorded here. S25 added the field and closed
@@ -326,10 +329,8 @@ fn guest_frames(input: &[u8], want_output: &[u8]) -> Vec<Vec<u32>> {
     // The witness is advice: the provable binary reads it with ordinary loads
     // from `guest_memory::ADVICE_ORIGIN` (`docs/spec/public-values.md` §6).
     let io = emulator::GuestIo {
-        stdin: Vec::new(),
         input: Vec::new(),
         advice: input.to_vec(),
-        hint: Vec::new(),
     };
     let (traces, _log, profile, execution) =
         emulator::trace_run(&image, &io, &tables, &config).expect("the guest runs");

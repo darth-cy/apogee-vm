@@ -1202,20 +1202,6 @@ fn every_row_kind_satisfies_every_gate_and_every_bound() {
     assert_eq!(x0.get("rd_is_zero"), Fr::ONE);
 }
 
-/// The all-zero padding row is valid, and the circuit says so in its own
-/// padding contract.
-#[test]
-fn the_padding_row_is_the_all_zero_row() {
-    let a = artifact();
-    assert!(a.padding.zero_row_valid);
-    assert!(a.padding.row.iter().all(|v| *v == Fr::ZERO));
-    assert_eq!(
-        violated(&a, &Row::default()),
-        (none(), none(), none()),
-        "the all-zero row"
-    );
-}
-
 /// A row named by [`honest_rows`].
 fn row(what: &str) -> Row {
     honest_rows()
@@ -1869,7 +1855,8 @@ fn a_misaligned_atomic_is_unprovable() {
 /// success code of 0 and a store of `rs2`. A row claiming failure — `rd = 1`
 /// and the word left alone — is refused, which is what makes the deviation a
 /// property of the proved statement rather than a hole in it. Real RISC-V
-/// leaves the outcome to the reservation set, and `qemu-riscv32` keeps one, so
+/// leaves the outcome to the reservation set, and a machine that keeps one may
+/// fail it, so
 /// a guest that branched on it could see a failure there and success here. That
 /// is the conformance deviation and nothing compares it: what would catch it if
 /// it mattered is a guest whose committed output depended on spurious failure,

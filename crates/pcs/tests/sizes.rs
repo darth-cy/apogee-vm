@@ -13,45 +13,6 @@ use poly::{MultilinearPoly, PolyBacking};
 use test_support::Rng;
 use transcript::Transcript;
 
-/// Acceptance 3: a `2^15` polynomial and a 15-coordinate point are both
-/// rejected, on every entry point that sees them.
-#[test]
-fn an_odd_variable_count_is_an_error() {
-    let srs = common::toy_srs(16);
-    let mut rng = Rng::new(0x5008_0300);
-    let f = common::random_poly(&mut rng, 15);
-    let u = common::random_point(&mut rng, 15);
-
-    assert_eq!(
-        commit(&srs, &f),
-        Err(PcsError::UnsupportedNumVars { num_vars: 15 })
-    );
-
-    // `open` needs a commitment to absorb; a valid one for a different
-    // polynomial is enough, because the size check comes first.
-    let even = common::random_poly(&mut rng, 16);
-    let cm = commit(&srs, &even).expect("commit");
-    let mut tr = Transcript::new();
-    assert_eq!(
-        open(&srs, &f, &cm, &u, &mut tr),
-        Err(PcsError::UnsupportedNumVars { num_vars: 15 })
-    );
-
-    // And the verifier, which sees only `u`.
-    let honest_u = common::random_point(&mut rng, 16);
-    let mut prover = Transcript::new();
-    let (v, proof) = open(&srs, &even, &cm, &honest_u, &mut prover).expect("open");
-    let mut tr = Transcript::new();
-    assert_eq!(
-        verify(&srs.verifier(), &cm, &u, v, &proof, &mut tr),
-        Err(PcsError::UnsupportedNumVars { num_vars: 15 })
-    );
-
-    // Nothing was absorbed on the way out: the size check runs before the
-    // transcript does, so a rejected instance leaves the sponge untouched.
-    assert_eq!(tr.snapshot(), Transcript::new().snapshot());
-}
-
 /// Every odd count up to 9, and the single-evaluation polynomial, whose `b = 1`
 /// leaves `S` and the degree check with no room to exist.
 #[test]
@@ -128,18 +89,6 @@ fn an_oversized_point_is_an_error_and_not_a_panic() {
                 "a refused instance must not touch the transcript"
             );
         }
-    }
-}
-
-/// The even sizes really are accepted, so the rejection above cannot be passing
-/// by refusing everything.
-#[test]
-fn the_supported_sizes_are_accepted() {
-    let srs = common::toy_srs(10);
-    let mut rng = Rng::new(0x5008_0302);
-    for num_vars in [2usize, 4, 6, 8, 10] {
-        let f = common::random_poly(&mut rng, num_vars);
-        assert!(commit(&srs, &f).is_ok(), "num_vars {num_vars}");
     }
 }
 

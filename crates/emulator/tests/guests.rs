@@ -1,34 +1,33 @@
 //! The committed guests, executed by the emulator, against what the host
-//! computes — the checks `crates/loader/tests/qemu.rs` makes under QEMU, made
-//! here without an emulator of anybody else's, so they run everywhere.
+//! computes: each guest's journal recomputed here from its inputs, so every
+//! check runs everywhere with no second executor to install.
 //!
-//! Acceptance 10 (a precompile answers `-ENOSYS` and the fallback completes)
-//! and 11 (a misaligned access is a named fatal error in both paths) are
-//! here, and so is the check that `opcodes` really executes every
-//! instruction it claims to.
+//! Acceptance 11 (a misaligned access is a named fatal error in both paths) is
+//! here, and so is the check that `opcodes` really executes every instruction
+//! it claims to.
 
 mod common;
 
 use std::collections::BTreeSet;
 
 use common::{image, instr_at, io, preprocess, traced, TRACED};
-use emulator::{run, trace_run, EmuError, GuestIo};
-use field::Fr;
+use emulator::{run, trace_run, EmuError};
 use loader::Slot;
 use test_support::to_hex;
 
-/// `fib` reads fd 0 and writes fd 1, the compatibility path: a proof binds
-/// neither, and its public values are empty
-/// (`docs/spec/public-values.md` §1).
+/// `fib` reads its `n` out of the public input window and leaves its term in
+/// the journal, so the committed record is both of its public values and a
+/// proof binds the pair (`docs/spec/public-values.md` §1).
 #[test]
 fn fib_commits_the_recorded_value() {
     let (input, output) = common::fib_record();
     let execution = run(&image("fib"), &io(&input)).unwrap();
     assert_eq!(execution.exit_code, 0);
-    assert_eq!(to_hex(&execution.stdout), to_hex(&output));
-    assert!(
-        execution.io.input.is_empty() && execution.io.output.is_empty(),
-        "fd 0 and fd 1 are not the public values"
+    assert_eq!(to_hex(&execution.io.output), to_hex(&output));
+    assert_eq!(
+        to_hex(&execution.io.input),
+        to_hex(&input),
+        "the window's contents are the statement's public input"
     );
 }
 
@@ -72,10 +71,6 @@ fn public_io_reads_its_windows_and_commits_a_journal() {
     want.extend_from_slice(&advice[..8]);
     assert_eq!(to_hex(&execution.io.output), to_hex(&want));
     assert_eq!(execution.io.output.len(), 12);
-
-    // And it issued no ecall but EXIT, which is what makes it provable: fd 1
-    // and fd 2 are untouched.
-    assert!(execution.stdout.is_empty() && execution.stderr.is_empty());
 
     // The statement's public input is the window's payload, whether or not the
     // guest looked — here it did.
@@ -179,11 +174,11 @@ fn heap_churns_the_allocator_and_commits_the_host_values() {
 
     let execution = run(&image("heap"), &io(&n.to_le_bytes())).unwrap();
     assert_eq!(execution.exit_code, 0);
-    assert_eq!(to_hex(&execution.stdout), to_hex(&want));
+    assert_eq!(to_hex(&execution.io.output), to_hex(&want));
 }
 
-/// The host recomputation `tests/qemu.rs::atomics_computes_its_cells` makes,
-/// against the emulator: every AMO's write and every value it returns.
+/// The host's own recomputation of `atomics`' cells, against the emulator's:
+/// every AMO's write and every value it returns, in the journal's order.
 #[test]
 fn atomics_computes_its_cells() {
     let n: u32 = 37;
@@ -225,7 +220,7 @@ fn atomics_computes_its_cells() {
 
     let execution = run(&image("atomics"), &io(&n.to_le_bytes())).unwrap();
     assert_eq!(execution.exit_code, 0);
-    assert_eq!(to_hex(&execution.stdout), to_hex(&want));
+    assert_eq!(to_hex(&execution.io.output), to_hex(&want));
 }
 
 #[test]
@@ -233,46 +228,45 @@ fn the_rvc_fixture_runs() {
     let execution = run(&image("rvc-dense"), &io(&7u32.to_le_bytes())).unwrap();
     assert_eq!(execution.exit_code, 0);
     let word =
-        |i: usize| u32::from_le_bytes(execution.stdout[4 * i..4 * i + 4].try_into().unwrap());
+        |i: usize| u32::from_le_bytes(execution.io.output[4 * i..4 * i + 4].try_into().unwrap());
     assert_eq!(word(0), 46, "rvc_exec(7) and norvc_exec(7) agree on 46");
     assert_eq!(word(2), 2 * word(1));
 }
 
-/// Acceptance 10: the precompile number answers `-ENOSYS`, the guest takes
-/// its software path, and that path computes the real S02 permutation —
-/// with fd 1 an exact echo and the hint kept off it, as under QEMU.
+/// `echo` is the bump allocator's fixture, and this is the allocator running:
+/// the advice region reaches the journal 64 bytes at a time through a
+/// heap-allocated buffer, so a real allocation and a real copy stand between
+/// the two regions.
+///
+/// Nothing binds advice, so this journal is a byte string the prover chose —
+/// the one shape `docs/spec/public-values.md` §6 tells a real program not to
+/// have, and exactly why this guest is a fixture and not a program.
+///
+/// Exit 0 carries the guest's own assertions besides, the four-byte-aligned
+/// allocation among them: a panicking guest exits 101 and keeps whatever it
+/// had already committed, so the pair — the status and the journal — is what
+/// says the run finished.
 #[test]
-fn a_precompile_runs_and_its_state_is_the_s02_permutation() {
-    let input: Vec<u8> = (0..100u8)
+fn echo_copies_its_advice_into_the_journal_through_the_heap() {
+    let advice: Vec<u8> = (0..100u8)
         .map(|i| i.wrapping_mul(7).wrapping_add(3))
         .collect();
-    let guest = GuestIo {
-        input: Vec::new(),
-        advice: Vec::new(),
-        stdin: input.clone(),
-        hint: b"private-advice".to_vec(),
-    };
-    let execution = run(&image("echo"), &guest).unwrap();
+    let execution = run(&image("echo"), &common::with_advice(&[], &advice)).unwrap();
     assert_eq!(execution.exit_code, 0);
-    assert_eq!(to_hex(&execution.stdout), to_hex(&input));
-    let stderr = String::from_utf8_lossy(&execution.stderr);
-    assert!(stderr.contains("hint=private-advice"), "{stderr}");
-    // Since S23 the number has a circuit, so this executor answers it: what
-    // used to be the fallback's branch is now the delegated one. Under
-    // `qemu-riscv32` the same binary still takes the software branch, which is
-    // `crates/loader/tests/qemu.rs`'.
-    assert!(stderr.contains("precompile=accelerated"), "{stderr}");
-    let mut state = [Fr::from_u64(1), Fr::from_u64(2), Fr::from_u64(3)];
-    transcript::poseidon2_permute(&mut state);
-    assert!(
-        stderr.contains(&format!("state0={}", to_hex(&state[0].to_bytes()))),
-        "the delegated permutation is not the S02 one: {stderr}"
-    );
+    assert_eq!(to_hex(&execution.io.output), to_hex(&advice));
 }
 
 /// `orderbook` commits the same bytes under a sorting permutation, a
-/// transposed one and no advice at all: fd 3 binds nothing, in this executor
-/// as in QEMU.
+/// transposed one and a region carrying no permutation at all.
+///
+/// Advice binds nothing, so which path ran — the checked permutation or the
+/// guest's own sort — is a fact about the prover and not about the auction, and
+/// the journal is where that shows: it is the same 28 bytes three times, with
+/// nothing anywhere saying which (`docs/spec/public-values.md` §6).
+///
+/// The third case supplies a *region* rather than nothing, because asking for
+/// advice a run was not given is a fatal executor error: "no permutation to
+/// offer" is a length word of 0, not an absent region.
 #[test]
 fn orderbook_ignores_advice_it_cannot_verify() {
     let mut input = 4u32.to_le_bytes().to_vec();
@@ -289,30 +283,17 @@ fn orderbook_ignores_advice_it_cannot_verify() {
         bytes
     };
     let image = image("orderbook");
-    let outputs: Vec<(Vec<u8>, String)> =
-        [advice(&[0, 2, 1, 3]), advice(&[0, 2, 3, 1]), Vec::new()]
-            .into_iter()
-            .map(|hint| {
-                let e = run(
-                    &image,
-                    &GuestIo {
-                        input: Vec::new(),
-                        advice: Vec::new(),
-                        stdin: input.clone(),
-                        hint,
-                    },
-                )
-                .unwrap();
-                assert_eq!(e.exit_code, 0);
-                (e.stdout, String::from_utf8_lossy(&e.stderr).into_owned())
-            })
-            .collect();
-    assert_eq!(outputs[0].0.len(), 28);
-    assert_eq!(outputs[0].0, outputs[1].0);
-    assert_eq!(outputs[0].0, outputs[2].0);
-    assert!(outputs[0].1.contains("advice=verified"), "{}", outputs[0].1);
-    assert!(outputs[1].1.contains("advice=rejected"), "{}", outputs[1].1);
-    assert!(outputs[2].1.contains("advice=rejected"), "{}", outputs[2].1);
+    let journals: Vec<Vec<u8>> = [advice(&[0, 2, 1, 3]), advice(&[0, 2, 3, 1]), advice(&[])]
+        .into_iter()
+        .map(|region| {
+            let e = run(&image, &common::with_advice(&input, &region)).unwrap();
+            assert_eq!(e.exit_code, 0);
+            e.io.output
+        })
+        .collect();
+    assert_eq!(journals[0].len(), 28);
+    assert_eq!(journals[0], journals[1]);
+    assert_eq!(journals[0], journals[2]);
 }
 
 /// The 59 RV32IMA mnemonics, from the ISA manual's tables rather than from
@@ -401,13 +382,13 @@ fn opcodes_executes_every_instruction() {
     assert!(missing.is_empty(), "opcodes never executes {missing:?}");
     assert_eq!(executed.len(), 58, "{executed:?}");
 
-    let out = &t.execution.stdout;
+    let out = &t.execution.io.output;
     assert_eq!(
-        &out[..6],
-        &common::opcodes_input()[4..],
-        "cover_ecall echoes its payload"
+        out.len(),
+        28,
+        "the journal is the five blocks' folds and the compressed block's bounds"
     );
-    let word = |i: usize| u32::from_le_bytes(out[6 + 4 * i..10 + 4 * i].try_into().unwrap());
+    let word = |i: usize| u32::from_le_bytes(out[4 * i..4 * i + 4].try_into().unwrap());
     let (begin, end) = (word(5), word(6));
     assert!(
         end > begin + 60,
@@ -471,28 +452,19 @@ fn a_misaligned_access_is_a_named_fatal_error_in_both_paths() {
 }
 
 /// **The recorded public input is what the host supplied, not what the guest
-/// read — and fd 0 is a different thing entirely.**
+/// read.**
 ///
-/// `heap` takes its four-byte `n` off fd 0 and never the four after it. The
-/// statement's public input is the *window's* contents, which this run fills
-/// independently and the guest never looks at: the binding is that the window
-/// held those bytes, not that anybody read them
-/// (`docs/spec/public-values.md` §9).
-///
-/// Until S-IO this recorded the consumed prefix of fd 0, which was the right
-/// answer for a stream and is the wrong one for a window: a cursor is guest
-/// state, and the statement is not.
+/// `heap` takes its four-byte `n` out of the window and never the four after
+/// it, and both runs record all eight. The statement's public input is the
+/// *window's* contents: the binding is that the window held those bytes, not
+/// that anybody read them (`docs/spec/public-values.md` §9). A window is not a
+/// cursor, and how far a guest got is guest state the statement has no room
+/// for.
 #[test]
 fn the_recorded_public_input_is_what_the_host_supplied() {
-    let mut offered = 40u32.to_le_bytes().to_vec();
-    offered.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
-    let window = b"bytes the guest never reads".to_vec();
-    let guest = GuestIo {
-        input: window.clone(),
-        advice: Vec::new(),
-        stdin: offered.clone(),
-        hint: Vec::new(),
-    };
+    let mut window = 40u32.to_le_bytes().to_vec();
+    window.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+    let guest = io(&window);
     let image = image("heap");
     let plain = run(&image, &guest).unwrap();
     assert_eq!(plain.io.input, window);
@@ -598,7 +570,7 @@ fn keccak_test_checks_its_corpus_under_the_delegation_ecall() {
             "{name} exited {}, and 200 + i would name the corpus entry that failed",
             execution.exit_code
         );
-        assert!(execution.stdout.is_empty(), "{name} writes nothing");
+        assert!(execution.io.output.is_empty(), "{name} commits nothing");
     }
 }
 
@@ -668,8 +640,26 @@ fn recursion_ops_checks_itself_under_both_delegation_ecalls() {
             "{name} exited {}, and 200 + i would name the check that failed",
             execution.exit_code
         );
-        assert!(execution.stdout.is_empty(), "{name} writes nothing");
+        assert!(execution.io.output.is_empty(), "{name} commits nothing");
     }
+}
+
+/// S26's fixture: the `MOD_MUL` delegation over three moduli by name, and
+/// `k256`'s group arithmetic over the vendored field multiply, which names no
+/// shim at all. Exit 12, one per check.
+///
+/// **This is the only test of `guests/vendor/k256`'s `pack` and `unpack`.** The
+/// vendored multiply routes through the ecall, so an executor that answered it
+/// wrongly would fail one of the guest's own checks and exit `200 + i`.
+#[test]
+fn mod_mul_ops_checks_itself_under_the_delegation_ecall() {
+    let execution = run(&image("mod-mul-ops"), &io(&[])).unwrap();
+    assert_eq!(
+        execution.exit_code, 12,
+        "mod-mul-ops exited {}, and 200 + i would name the check that failed",
+        execution.exit_code
+    );
+    assert!(execution.io.output.is_empty(), "it commits nothing");
 }
 
 /// The invocation counts the two delegation families actually see, which is

@@ -80,8 +80,25 @@ pub const RECURSION_RESULT: u32 = 9;
 /// `guests/recursion-unused`'s exit status.
 pub const RECURSION_UNUSED_RESULT: u32 = 11;
 
-/// S23's delegation heights, `2^8` like S21's.
+/// `guests/mod-mul-ops`' exit status: the number of checks it passed.
+pub const MOD_MUL_RESULT: u32 = 12;
+
+/// S21's and S23's delegation heights. **Not `MOD_MUL`'s**, which is `2^16`
+/// (`constants::family::DEFAULT_HEIGHTS`, `docs/spec/delegation.md` §9.1).
 pub const DELEGATION_VARS: u32 = 8;
+
+/// The height the **fixture** statement proves `MOD_MUL` at, and it is
+/// deliberately not the family's default.
+///
+/// `guests/mod-mul-ops` makes 1,227 invocations. At the real `2^16` that is a
+/// single shard, and the suites that read this statement — `prover`'s fill and
+/// `checker`'s tamper twins — are the only multi-shard coverage this family
+/// has of its anchor pairing and its last-shard padding rows. So the fixture
+/// keeps `2^8` to stay multi-shard, which is a test-design choice and says
+/// nothing about the default; `2^16` is proved end to end by the deferred
+/// `prover::revm` and `host::prove` suites, whose params read
+/// `DEFAULT_HEIGHTS` (`crates/host/src/fixture.rs`).
+pub const MOD_MUL_FIXTURE_VARS: u32 = 8;
 
 /// The committed ELF of guest `name`.
 pub fn fixture(name: &str) -> Vec<u8> {
@@ -156,6 +173,29 @@ pub fn keccak_params() -> ProgramParams {
     params
 }
 
+/// S26's heights: the six execution families `mod-mul-ops` runs at `2^20`,
+/// `MOD_MUL` at [`MOD_MUL_FIXTURE_VARS`] rather than its `2^16` default, and
+/// the window families at `2^18` — see [`mod_mul_program`] for why `2^16` does
+/// not fit them.
+pub fn mod_mul_params() -> ProgramParams {
+    let mut heights = [1 << 18; family::COUNT as usize];
+    for f in [
+        family::ADD_SUB_LUI_AUIPC,
+        family::JUMP_BRANCH_SLT,
+        family::SHIFT_BITWISE,
+        family::MUL_DIV,
+        family::MEM_WORD,
+        family::MEM_SUBWORD,
+    ] {
+        heights[f as usize] = 1 << ADD_VARS;
+    }
+    heights[family::MOD_MUL as usize] = 1 << MOD_MUL_FIXTURE_VARS;
+    ProgramParams {
+        heights,
+        ..ProgramParams::defaults()
+    }
+}
+
 /// S23's heights: the execution families `recursion-ops` runs at `2^20`, and
 /// the two delegation families at `2^8`.
 pub fn recursion_params() -> ProgramParams {
@@ -220,6 +260,20 @@ pub fn recursion_unused_program() -> Program {
     program_of("recursion-unused", &recursion_params())
 }
 
+/// S26's guest: `guests/mod-mul-ops`, which calls the `MOD_MUL` delegation by
+/// name over three moduli and reaches it a second time through
+/// `guests/vendor/k256`'s patched field multiply.
+///
+/// Its six execution families run at `2^20` and `MOD_MUL` at
+/// [`MOD_MUL_FIXTURE_VARS`], but its **window** families need `2^18` rather
+/// than `2^16`: the guest's `.text`
+/// reaches pc `0x2161a` and `decode_program` refuses an image byte past RAM
+/// window 0, which at `2^16` ends at `0x40000` — that one fits, but the decoded
+/// tables do not, a table's row `i` being pc `2i`.
+pub fn mod_mul_program() -> Program {
+    program_of("mod-mul-ops", &mod_mul_params())
+}
+
 /// S-IO's guest: `guests/public-io`, which reads its public input and its
 /// advice with ordinary loads and writes its journal with ordinary stores
 /// (`docs/spec/public-values.md`). Its execution families at `2^20`, the rest
@@ -266,10 +320,8 @@ pub fn public_io_journal(advice: &[u8]) -> Vec<u8> {
 /// the public input that advice checks against.
 pub fn public_io_archive(program: &Program, advice: &[u8]) -> TraceArchive {
     let io = GuestIo {
-        stdin: Vec::new(),
         input: public_io_input(advice),
         advice: advice.to_vec(),
-        hint: Vec::new(),
     };
     let (traces, log, profile, execution) =
         trace_run(&program.image, &io, &program.tables, &program.config).expect("the guest traces");
@@ -337,13 +389,16 @@ pub fn recursion_unused_archive(program: &Program) -> TraceArchive {
     trace(program, RECURSION_UNUSED_RESULT)
 }
 
+/// The post-execution archive of `mod-mul-ops`' one run.
+pub fn mod_mul_archive(program: &Program) -> TraceArchive {
+    trace(program, MOD_MUL_RESULT)
+}
+
 /// A run with no input and no hint, which must exit with `status`.
 pub fn trace(program: &Program, status: u32) -> TraceArchive {
     let io = GuestIo {
-        stdin: Vec::new(),
         input: Vec::new(),
         advice: Vec::new(),
-        hint: Vec::new(),
     };
     let (traces, log, profile, execution) =
         trace_run(&program.image, &io, &program.tables, &program.config).expect("the guest traces");
@@ -398,6 +453,10 @@ pub fn recursion_unused_setup() -> ProverSetup {
         .expect("recursion-unused registers")
 }
 
+pub fn mod_mul_setup() -> ProverSetup {
+    ProverSetup::new(mod_mul_program(), toy_srs(ADD_VARS)).expect("mod-mul-ops registers")
+}
+
 /// The toy SRS's `tau`.
 pub fn toy_tau() -> Fr {
     Fr::from_hex("0x0000000000000000000000000000000000000000000000000000000000c0ffee")
@@ -447,9 +506,20 @@ pub fn toy_srs(power: u32) -> srs::Srs {
         bytes.extend_from_slice(&p.to_bytes());
     }
     std::fs::create_dir_all(&dir).expect("the test directory");
-    // Written aside and renamed, so a suite running beside this one never
-    // reads half a file.
-    let partial = dir.join(format!("s16-toy-{power}.{}.partial", std::process::id()));
+    // Written aside and renamed, so nothing ever reads half a file. The name
+    // must be unique per *call*, not per process: two tests in one binary are
+    // two threads of one process, so a pid alone gave both the same scratch
+    // path — one renamed it away and the other's rename found nothing, or a
+    // reader opened it mid-write and got `Truncated`. `rename` is atomic on
+    // POSIX and the content is a function of `power` alone, so two callers
+    // racing to place identical bytes is harmless once the scratch names
+    // differ.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let partial = dir.join(format!(
+        "s16-toy-{power}.{}.{}.partial",
+        std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     std::fs::write(&partial, &bytes).expect("writing the toy archive");
     std::fs::rename(&partial, &path).expect("placing the toy archive");
     srs::Srs::load(&path).expect("the toy archive loads")

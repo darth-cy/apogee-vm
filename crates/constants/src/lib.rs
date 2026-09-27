@@ -1099,9 +1099,26 @@ pub mod family {
     /// prover chose; a guest owes a check of it against something public
     /// (`docs/spec/public-values.md` §6).
     pub const ADVICE_WINDOWS: u32 = 14;
+    /// The **256-bit modular multiplication** delegation family (S26): one
+    /// `out = a * b mod m` a row over 32-bit limbs, invoked by the
+    /// [`ecall::PRECOMPILE_MOD_MUL`] ecall and never decoded
+    /// (`docs/spec/delegation.md` §14).
+    ///
+    /// The modulus is in the **frame**, not in the circuit, and that is what
+    /// makes one family serve secp256k1's two fields, BN254's base field and
+    /// the EVM's `MULMOD` alike. It is the opposite choice from [`FR_ARITH`],
+    /// whose modulus is the circuit's own field and whose multiply is therefore
+    /// one degree-2 gate; a 256-bit modulus does not fit `Fr` at all, so this
+    /// one proves the schoolbook identity `a*b = q*m + out` limb by limb with a
+    /// signed carry chain.
+    ///
+    /// **Why it exists**: on a whole mainnet block, 44.4% of the guest's cycles
+    /// are 256-bit modular multiply and square inside `k256`, at ~1,300 cycles
+    /// a call (`docs/handoff/S26-cycle.md`).
+    pub const MOD_MUL: u32 = 15;
 
     /// How many families this table defines.
-    pub const COUNT: u32 = 15;
+    pub const COUNT: u32 = 16;
 
     /// The pinned height of [`PUBLIC_INPUT`] and [`PUBLIC_OUTPUT`].
     ///
@@ -1149,6 +1166,7 @@ pub mod family {
         false, // PUBLIC_INPUT
         false, // PUBLIC_OUTPUT
         false, // ADVICE_WINDOWS
+        false, // MOD_MUL
     ];
 
     /// The trace-height menu, ascending. Even powers of two only, so that a
@@ -1174,9 +1192,16 @@ pub mod family {
     /// that needs it (`docs/handoff/S16-add-sub.md` answer 7).
     ///
     /// A **delegation** family is the other way round: it carries no range
-    /// channel at all, so no floor applies, and its ceiling is its own circuit
-    /// — [`KECCAK_F`] sits at `2^8` because one row is a whole permutation
-    /// (`docs/spec/delegation.md` §9).
+    /// channel at all, so no floor applies, and its ceiling is its own
+    /// circuit's width. That width differs between the four by **three orders
+    /// of magnitude**, so they do not share a height and there is no reason
+    /// they should: [`KECCAK_F`] is 354,762 inner columns a row and `2^16` of
+    /// them is 744 GB of forward pass, where [`MOD_MUL`] is 270 and `2^16` is
+    /// 7.9 GB. Below that ceiling the height is a **proof-size** decision —
+    /// a `2^8` shard's proof does not shrink with its height, so a family's
+    /// height is what decides how many shards a block's invocations take, and
+    /// `MOD_MUL` at `2^8` cost a measured block 1,048 shards against 5 at
+    /// `2^16` (`docs/spec/delegation.md` §9 and §9.1).
     pub const DEFAULT_HEIGHTS: [u32; COUNT as usize] = [
         1 << 22, // ADD_SUB_LUI_AUIPC
         1 << 22, // JUMP_BRANCH_SLT
@@ -1193,6 +1218,7 @@ pub mod family {
         1 << 8,  // PUBLIC_INPUT, and it is the only admissible one
         1 << 8,  // PUBLIC_OUTPUT, likewise
         1 << 22, // ADVICE_WINDOWS, at the window height
+        1 << 16, // MOD_MUL, and NOT 2^8 — see the paragraph above
     ];
 
     /// The default `bytecode_size_words`: `2^20` words, a 4 MiB ceiling on the
@@ -1397,39 +1423,45 @@ pub mod guest_memory {
     pub const ADVICE_WORDS: u32 = 1 << 29;
 }
 
-/// The guest ecall ABI: syscall numbers, range boundaries and file
-/// descriptors, in one place forever.
+/// The guest ecall ABI: the numbers and the range boundaries, in one place
+/// forever.
 ///
 /// **Append-only.** Once a program's identity is published its ABI is frozen.
 /// Redefining a number does not fail loudly — it quietly makes an old program
 /// compute something else — so numbers here are assigned once and never
-/// reused, exactly like `transcript_tags`.
+/// reused, exactly like `transcript_tags`. *Retiring* a number obeys the same
+/// rule from the other side: it is struck out and never reassigned. `READ`
+/// (63) and `WRITE` (64) were retired when the POSIX compatibility layer was
+/// deleted, and **63 and 64 are burned** — append-only forbids giving them a
+/// second meaning, not deleting a call nothing may issue.
 ///
-/// An ecall follows the Linux RISC-V convention: number in `a7`, arguments in
-/// `a0`-`a5`, return in `a0`, errors as the negated errno. The standard subset
-/// keeps its Linux numbers so `qemu-riscv32` runs guests unmodified; the two
-/// non-Linux ranges sit above every Linux number and are disjoint from each
-/// other. `docs/spec/ecall-abi.md` is the normative table.
+/// An ecall carries its number in `a7`, its arguments in `a0`-`a5` and its
+/// result in `a0`, with errors as a negated errno. **An Apogee guest is an
+/// Apogee-SDK program, not a Linux one**: it has no file descriptors, no
+/// streams and no I/O syscall at all. Its public input, its advice and its
+/// journal are *memory the proof system binds* — ordinary loads and stores
+/// against three fixed regions (`docs/spec/public-values.md`) — so the only
+/// ecalls a guest issues are [`EXIT`] and the delegation numbers below, which
+/// are exactly the provable ones. `docs/spec/ecall-abi.md` is the normative
+/// table.
 pub mod ecall {
-    /// Linux `read`. Its meaning is per file descriptor: see [`FD_STDIN`]
-    /// and [`FD_HINT`]. Not a provable ecall (`docs/spec/public-values.md` §1).
-    pub const READ: u32 = 63;
-
-    /// Linux `write`. zkVM meaning is per file descriptor: see
-    /// [`FD_STDOUT`] and [`FD_STDERR`]. Not a provable ecall either.
-    pub const WRITE: u32 = 64;
-
-    /// Linux `exit`. `a0` is the exit status; a nonzero status is a failed
-    /// execution.
+    /// Terminate. `a0` is the exit status; a nonzero status is a failed
+    /// execution, which is still an execution and is reported rather than
+    /// refused.
+    ///
+    /// The only non-delegation ecall a guest may issue. Its number is 93
+    /// because that is what it has always been here, and append-only keeps it
+    /// there; nothing downstream reads any meaning into the value.
     pub const EXIT: u32 = 93;
 
     /// First number of the zkVM-specific host-call range, `0x0400..=0x04FF`.
     ///
-    /// Reserved and empty at S10. Calls here are **nondeterministic prover
-    /// advice**: whatever the host returns is a value the prover chose, and it
-    /// binds nothing unless it is folded into the public I/O digest. Kept
-    /// disjoint from [`PRECOMPILE_FIRST`] precisely so a reviewer can tell the
-    /// two apart at a glance.
+    /// **Reserved and empty, and it stays that way.** A call here would be
+    /// nondeterministic prover advice, and advice does not need a syscall: it
+    /// is a memory region the prover fills and the guest authenticates
+    /// (`docs/spec/public-values.md` §6). Kept disjoint from
+    /// [`PRECOMPILE_FIRST`] so a reviewer can tell prover advice from a proven
+    /// function at a glance.
     pub const ZKVM_IO_FIRST: u32 = 0x0400;
 
     /// Last number of the zkVM-specific host-call range.
@@ -1457,9 +1489,7 @@ pub mod ecall {
     /// keccak-f[1600] over a 200-byte state frame, `a0` = the frame base
     /// pointer, read and written in place. The first **delegation** call:
     /// `docs/spec/delegation.md` is its ABI, and the circuit that proves it is
-    /// `constants::family::KECCAK_F`. Returns 0 on an executor that has the
-    /// circuit and `-ENOSYS` on one that does not, so the same binary runs
-    /// under `qemu-riscv32` with its software fallback.
+    /// `constants::family::KECCAK_F`.
     pub const PRECOMPILE_KECCAK_F: u32 = 0x0501;
 
     /// One `Fr` add, multiply or inverse over a 25-word frame, `a0` = the
@@ -1475,43 +1505,26 @@ pub mod ecall {
     /// path and the software fallback are the same function by construction.
     pub const PRECOMPILE_FR_ARITH: u32 = 0x0502;
 
-    /// The POSIX standard input stream, **uncommitted**.
+    /// One 256-bit modular multiplication over a 32-word frame, `a0` = the
+    /// frame base pointer, read and written in place. A **delegation** call
+    /// (S26); `constants::family::MOD_MUL` is the family that proves it and
+    /// `docs/spec/delegation.md` §14 the frame table.
     ///
-    /// The executor serves the statement's public input here as well as in the
-    /// public input window, so a guest built for a POSIX host reads the same
-    /// bytes under `qemu-riscv32`. **A proof binds none of it**: the window is
-    /// what a statement carries and what the verifier checks
-    /// (`docs/spec/public-values.md` §1). `read` is not a provable ecall, so a
-    /// guest that takes this path is not a guest that can be proven.
-    ///
-    /// Named `FD_PUBLIC_INPUT` until S-IO, when the public values stopped being
-    /// a stream. The **number** is frozen at its Linux value, as every number
-    /// in this module is; only the name moved.
-    pub const FD_STDIN: u32 = 0;
-
-    /// The POSIX standard output stream, **uncommitted**.
-    ///
-    /// The compatibility path for a guest whose result is compared against
-    /// another executor's; the journal — `guest_sdk::commit` — is what a proof
-    /// binds. Named `FD_PUBLIC_OUTPUT` until S-IO.
-    pub const FD_STDOUT: u32 = 1;
-
-    /// Diagnostics. Free-form, uncommitted, and ignored by the verifier.
-    pub const FD_STDERR: u32 = 2;
-
-    /// Private hint channel, uncommitted: nondeterministic prover advice. A
-    /// guest that lets a hint change its committed output has made the proof
-    /// meaningless, because the prover picks the hint.
-    pub const FD_HINT: u32 = 3;
+    /// The three operands and the result cross the frame as eight 32-bit
+    /// little-endian limbs each — the modulus among them, so the call is
+    /// `out = a * b mod m` for **any** 256-bit `m` and not for one the circuit
+    /// fixes. The invocation writes the result's eight words and nothing else.
+    pub const PRECOMPILE_MOD_MUL: u32 = 0x0503;
 
     /// Linux `ENOSYS`. An unimplemented number returns `-ENOSYS` in `a0`.
+    ///
+    /// It survives the deletion of the POSIX layer because it is not part of
+    /// it: it is the delegation ABI's "this executor has no circuit for that"
+    /// answer (`docs/spec/delegation.md` §2), which every shim checks for so a
+    /// caller can run its own software path. This VM implements all four
+    /// delegations, so its executor never answers `-ENOSYS` to one; what it
+    /// still answers `-ENOSYS` to is a number nobody has assigned.
     pub const ENOSYS: u32 = 38;
-
-    /// Linux `EBADF`. `read` on a descriptor other than [`FD_STDIN`]
-    /// and [`FD_HINT`], and `write` on one other than [`FD_STDOUT`] and
-    /// [`FD_STDERR`], return `-EBADF` in `a0` — Linux's answer, and so
-    /// `qemu-riscv32`'s. Added at S12.
-    pub const EBADF: u32 = 9;
 }
 
 /// The memory argument's address spaces, frozen at S12.
@@ -1558,6 +1571,9 @@ pub mod address_space {
     /// The delegation anchor space of `family::FR_ARITH` (S23).
     pub const DELEGATION_FR_ARITH: u8 = 6;
 
+    /// The delegation anchor space of `family::MOD_MUL` (S26).
+    pub const DELEGATION_MOD_MUL: u8 = 7;
+
     /// Every delegation tag, ascending, **append-only**: the one place the set
     /// is written down, so a reader of a memory event can tell a delegation
     /// anchor from RAM, a register or the pc without knowing which family it
@@ -1566,10 +1582,11 @@ pub mod address_space {
     /// `constraints::memory::frame_query_takes` and `trace::AddressSpace` both
     /// read it; the `deleg` frame query takes an event in **any** of these
     /// spaces, and nothing else does.
-    pub const DELEGATION: [u8; 3] = [
+    pub const DELEGATION: [u8; 4] = [
         DELEGATION_KECCAK_F,
         DELEGATION_POSEIDON2,
         DELEGATION_FR_ARITH,
+        DELEGATION_MOD_MUL,
     ];
 }
 
@@ -1676,7 +1693,7 @@ pub mod delegation {
     ///
     /// `docs/spec/delegation.md` §3 is the same table in prose, and
     /// `crates/constants/tests/ecall_abi.rs` holds the two equal.
-    pub const TYPES: [(u32, u32, u8, usize); 3] = [
+    pub const TYPES: [(u32, u32, u8, usize); 4] = [
         (
             super::family::KECCAK_F,
             super::ecall::PRECOMPILE_KECCAK_F,
@@ -1694,6 +1711,12 @@ pub mod delegation {
             super::ecall::PRECOMPILE_FR_ARITH,
             super::address_space::DELEGATION_FR_ARITH,
             super::fr_arith::FRAME_WORDS,
+        ),
+        (
+            super::family::MOD_MUL,
+            super::ecall::PRECOMPILE_MOD_MUL,
+            super::address_space::DELEGATION_MOD_MUL,
+            super::mod_mul::FRAME_WORDS,
         ),
     ];
 }
@@ -1855,4 +1878,60 @@ pub mod fr_arith {
 
     /// The operation codes, ascending. Every live row carries exactly one.
     pub const OPS: [u32; 3] = [OP_ADD, OP_MUL, OP_INV];
+}
+
+/// The 256-bit modular multiplication delegation's frame and its bounds,
+/// frozen at S26. `docs/spec/delegation.md` §14.
+///
+/// **One operation, and there is no opcode word.** The family multiplies and
+/// does nothing else, because that is what the profile asked for: 256-bit
+/// modular multiply and square are 44.4% of a whole mainnet block at ~1,300
+/// cycles a call, and every other operation `k256` performs on a field element
+/// — add, negate, the modulus correction — costs under 100 cycles natively, so
+/// delegating one would be slower than not (`docs/handoff/S26-cycle.md`). A
+/// later operation is a later family or a frame append under §10, not a field
+/// this one reserves.
+pub mod mod_mul {
+    /// Limbs per 256-bit value: eight 32-bit words, little-endian.
+    pub const LIMBS: usize = 8;
+
+    /// The first word of the modulus `m`.
+    pub const M_WORD: usize = 0;
+
+    /// The first word of operand `a`.
+    pub const A_WORD: usize = M_WORD + LIMBS;
+
+    /// The first word of operand `b`.
+    pub const B_WORD: usize = A_WORD + LIMBS;
+
+    /// The first word of the result. The only words the invocation writes.
+    pub const OUT_WORD: usize = B_WORD + LIMBS;
+
+    /// The frame: four values of eight limbs.
+    pub const FRAME_WORDS: usize = OUT_WORD + LIMBS;
+
+    /// The frame in bytes, which is what a shim hands over.
+    pub const FRAME_BYTES: usize = 4 * FRAME_WORDS;
+
+    /// Positions of the schoolbook identity: `a*b` and `q*m` each have limb
+    /// products at `i + j` for `i, j < LIMBS`, so `0 ..= 2*LIMBS - 2`.
+    pub const POSITIONS: usize = 2 * LIMBS - 1;
+    /// The carries the identity needs: one out of every position but the last,
+    /// whose outgoing carry the identity forces to zero.
+    pub const CARRIES: usize = POSITIONS - 1;
+
+    /// Bits a signed carry takes, offset included.
+    ///
+    /// **Derived, not chosen.** At position `k` the identity is
+    /// `P_k - S_k - out_k + c_{k-1} = 2^32 * c_k`, where `P_k` and `S_k` are
+    /// each at most `LIMBS` products of two values below `2^32` — so under
+    /// `8 * 2^64 = 2^67` — and `out_k` is under `2^32`. Writing `C` for the
+    /// bound on `|c|`, the recurrence is
+    /// `C = (2^67 + 2^32 + C) / 2^32`, whose fixed point is just above `2^35`.
+    /// [`CARRY_OFFSET`] is `2^36` and a carry is written as
+    /// `sum of bits - CARRY_OFFSET`, so the bits span `[-2^36, 2^36)` — a full
+    /// factor of two of room over the bound.
+    pub const CARRY_BITS: usize = 37;
+    /// The offset a carry's bit decomposition carries: `2^36`.
+    pub const CARRY_OFFSET: u64 = 1 << (CARRY_BITS - 1);
 }

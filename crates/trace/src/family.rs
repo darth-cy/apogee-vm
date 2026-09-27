@@ -17,15 +17,12 @@ use crate::log::AddressSpace;
 pub enum Role {
     /// Slot 1, a register read: `rs1`. On an ecall row, `a7`.
     Rs1,
-    /// Slot 2, a register read: `rs2`. On an ecall row, `a0`, the first argument.
+    /// Slot 2, a register read: `rs2`. On an ecall row, `a0` — its one
+    /// argument, which is an exit status or a delegation frame base.
     Rs2,
-    /// Slot 2, a register read. On an ecall row, `a1`; nothing else uses it.
-    Arg1,
-    /// Slot 2, a register read. On an ecall row, `a2`; nothing else uses it.
-    Arg2,
     /// Slot 2, a RAM read: a load's word.
     Load,
-    /// Slot 3, a RAM query: a store's, an atomic's or an ecall transfer's word.
+    /// Slot 3, a RAM query: a store's or an atomic's word.
     Ram,
     /// Slot 3, a register write: `rd`. On an ecall row, `a0`, the result.
     Rd,
@@ -42,12 +39,14 @@ pub enum Role {
 ///
 /// Eight is the ceiling: `Row::present` is a `u8` with one bit per role, so a
 /// ninth role widens it, and that is a schema change
-/// (`docs/spec/execution-trace.md` §7). [`Role::Delegate`] took the last bit.
-pub const ROLES: [Role; 8] = [
+/// (`docs/spec/execution-trace.md` §7). There were eight until the POSIX layer
+/// was deleted: `Arg1` and `Arg2` were an ecall row's `a1` and `a2`, which only
+/// `read` and `write` ever passed, so both became unreachable with those calls
+/// and were removed rather than kept as roles no row can have. Two bits are
+/// spare again.
+pub const ROLES: [Role; 6] = [
     Role::Rs1,
     Role::Rs2,
-    Role::Arg1,
-    Role::Arg2,
     Role::Load,
     Role::Ram,
     Role::Rd,
@@ -59,7 +58,7 @@ impl Role {
     pub fn delta(self) -> u64 {
         match self {
             Role::Rs1 => 1,
-            Role::Rs2 | Role::Arg1 | Role::Arg2 | Role::Load => 2,
+            Role::Rs2 | Role::Load => 2,
             Role::Ram | Role::Rd | Role::Delegate => 3,
         }
     }
@@ -125,6 +124,153 @@ impl Row {
     pub fn query(&self, role: Role) -> Option<Query> {
         (self.present & (1 << role as u8) != 0).then(|| self.queries[role as usize])
     }
+
+    /// The **delegation anchor space** this row's mirror query names, or `None`
+    /// on a row that requests no delegation.
+    ///
+    /// [`Role::Delegate`]'s address space is the row's and not the role's: one
+    /// role serves every delegation type, and the type is the space
+    /// (`docs/spec/delegation.md` §5.1). What says which type is the ecall
+    /// number, which a delegation row reads into `a7` at slot 1 — that is
+    /// [`Role::Rs1`] on an ecall row (`docs/spec/execution-trace.md` §6) — so
+    /// the row answers this on its own, without the invocation beside it. That
+    /// is what lets a shard's columns be built from the shard's rows alone.
+    ///
+    /// Panics naming the number if a row claims the mirror query for an ecall
+    /// number no delegation family has, which is a buffer the emulator cannot
+    /// produce.
+    pub fn delegation_space(&self) -> Option<AddressSpace> {
+        self.query(Role::Delegate)?;
+        let number = self
+            .query(Role::Rs1)
+            .expect("a delegation request's row reads a7 at slot 1")
+            .read_value;
+        let family = program::delegation_family(number).unwrap_or_else(|| {
+            panic!(
+                "cycle {}: a delegation request whose ecall number {number:#x} names no family",
+                self.cycle
+            )
+        });
+        program::delegation_space(family).and_then(AddressSpace::from_tag)
+    }
+}
+
+/// One shard's rows of one cycle-owning family: a borrowed window into a trace
+/// buffer, `[index·height, min((index+1)·height, len))`
+/// (`docs/spec/block-proof.md` §5.1).
+///
+/// A fill reads its shard through this and never indexes the whole buffer, so
+/// one fill serves a slice of an archived execution and a streaming executor's
+/// freshly filled chunk alike — the two differ only in who owns the rows.
+#[derive(Clone, Copy, Debug)]
+pub struct RowSlice<'a> {
+    trace: &'a FamilyTrace,
+    start: usize,
+    len: usize,
+}
+
+impl<'a> RowSlice<'a> {
+    /// Shard `index`'s rows of `trace` at `height`. A shard past the buffer's
+    /// end is empty rather than an error: a plan cuts no such shard, and a
+    /// family that never ran has no rows at all.
+    pub fn shard(trace: &'a FamilyTrace, index: u32, height: usize) -> RowSlice<'a> {
+        let start = (index as usize * height).min(trace.len());
+        let len = (start + height).min(trace.len()) - start;
+        RowSlice { trace, start, len }
+    }
+
+    /// How many live rows this shard holds; at most the height.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// The family whose rows these are.
+    pub fn family(&self) -> FamilyId {
+        self.trace.family
+    }
+
+    /// Row `i` of the shard.
+    pub fn row(&self, i: usize) -> Row {
+        assert!(i < self.len, "row {i} of a {}-row shard", self.len);
+        self.trace.row(self.start + i)
+    }
+
+    /// The shard's cycle column: one cycle number per live row, ascending.
+    pub fn cycles(&self) -> &'a [u64] {
+        &self.trace.cycle[self.start..self.start + self.len]
+    }
+}
+
+/// One shard's invocations of one delegation family: a borrowed window into a
+/// [`DelegationTrace`], the same cut [`RowSlice`] takes over a `FamilyTrace`.
+#[derive(Clone, Copy, Debug)]
+pub struct FrameSlice<'a> {
+    trace: &'a DelegationTrace,
+    start: usize,
+    len: usize,
+}
+
+impl<'a> FrameSlice<'a> {
+    /// Shard `index`'s invocations of `trace` at `height`.
+    pub fn shard(trace: &'a DelegationTrace, index: u32, height: usize) -> FrameSlice<'a> {
+        let start = (index as usize * height).min(trace.len());
+        let len = (start + height).min(trace.len()) - start;
+        FrameSlice { trace, start, len }
+    }
+
+    /// How many invocations this shard holds; at most the height.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// The family whose invocations these are.
+    pub fn family(&self) -> FamilyId {
+        self.trace.family
+    }
+
+    /// The frame's width in words.
+    pub fn width(&self) -> usize {
+        self.trace.words.len()
+    }
+
+    /// The requesting cycle of each invocation this shard holds.
+    pub fn cycles(&self) -> &'a [u64] {
+        &self.trace.cycle[self.start..self.start + self.len]
+    }
+
+    /// The frame base pointer of each.
+    pub fn bases(&self) -> &'a [u32] {
+        &self.trace.base[self.start..self.start + self.len]
+    }
+
+    /// Frame word `j`'s four columns over this shard's invocations.
+    pub fn word(&self, j: usize) -> WordSlice<'a> {
+        let c = &self.trace.words[j];
+        let (a, b) = (self.start, self.start + self.len);
+        WordSlice {
+            addr: &c.addr[a..b],
+            read_ts: &c.read_ts[a..b],
+            read_value: &c.read_value[a..b],
+            write_value: &c.write_value[a..b],
+        }
+    }
+}
+
+/// One frame word's four columns over one shard's invocations.
+#[derive(Clone, Copy, Debug)]
+pub struct WordSlice<'a> {
+    pub addr: &'a [u32],
+    pub read_ts: &'a [u64],
+    pub read_value: &'a [u32],
+    pub write_value: &'a [u32],
 }
 
 /// One role's four columns.

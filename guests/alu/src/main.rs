@@ -4,10 +4,7 @@
 //! family's eight, with the operands the stage's acceptance names, checking
 //! every result itself and exiting with the number of checks that passed. It
 //! is the program S18 proves end to end (`docs/spec/shift-bitwise.md`,
-//! `docs/spec/mul-div.md`), and `qemu-riscv32` runs the same binary: the two
-//! executors are held to one exit status, which — every result being checked
-//! here — is the number of checks that passed
-//! (`crates/emulator/tests/qemu_outputs.rs`).
+//! `docs/spec/mul-div.md`).
 //!
 //! Everything in its image is an instruction of the four families S18 proves —
 //! add/sub/lui/auipc, jump/branch/slt, shift/bitwise and mul/div — plus the
@@ -15,8 +12,8 @@
 //! required of a `no_std` binary and is unreachable, so the linker drops it.
 //!
 //! Every expected value below was computed from an exact RV32IM model, not by
-//! hand; the emulator, `qemu-riscv32` and the guest's own checks are three
-//! independent readings of the same twenty instructions.
+//! hand; the emulator and the guest's own checks are two independent readings
+//! of the same twenty instructions.
 //!
 //! The sections, in order:
 //!
@@ -44,14 +41,14 @@
 //!
 //! Each check adds 1 to `s0`, and any wrong answer jumps to `fail`.
 //!
-//! # fd 0, fd 1, fd 2, fd 3
+//! # Input, advice and the journal
 //!
-//! Unused. The guest reads nothing and writes nothing.
+//! Unused. The guest reads nothing and commits nothing: `EXIT` is its only
+//! ecall, and its result is the status.
 //!
 //! # The result
 //!
 //! The exit status, `a0`: 96, the number of checks, on success; 1 from `fail`.
-//! Both are below 256, which is all of an exit status `qemu-riscv32` reports.
 
 use core::arch::global_asm;
 

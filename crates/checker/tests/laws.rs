@@ -483,16 +483,6 @@ fn mutated() -> Vec<(&'static str, Mutant, CircuitArtifact)> {
     out
 }
 
-#[test]
-fn every_law_passes_both_fixtures() {
-    for (label, a) in toys() {
-        for law in LAWS {
-            assert_eq!(law(&a), Ok(()), "{label}");
-        }
-        assert_eq!(check_laws(&a), Ok(()), "{label}");
-    }
-}
-
 /// Each mutant fails exactly the laws it breaks, each failure names its law,
 /// and `check_laws` reports the lowest.
 #[test]

@@ -364,7 +364,11 @@ pub fn record(rpc: Rpc, block_number: u64, range: TxRange) -> Result<Recording, 
     };
 
     let spec = mainnet_spec(block_number)?;
-    let mut env = block_env(&header, chain_id, spec)?;
+    let blob_gasprice = match header.get("excessBlobGas") {
+        Some(Value::Null) | None => None,
+        Some(_) => Some(blob_gasprice(&mut rpc, block_number)?),
+    };
+    let mut env = block_env(&header, chain_id, spec, blob_gasprice)?;
     let mut txs = Vec::with_capacity(take);
     for (i, tx) in transactions.iter().take(take).enumerate() {
         txs.push(tx_witness(tx).map_err(|e| format!("transaction {i}: {e}"))?);
@@ -489,7 +493,18 @@ pub fn mainnet_spec(block_number: u64) -> Result<SpecId, String> {
 /// `block_hashes` is left empty here and filled from the recorder afterwards:
 /// which ancestors a block reads is a property of its execution, and nothing
 /// but running it knows.
-fn block_env(header: &Value, chain_id: u64, spec: SpecId) -> Result<BlockEnvWitness, String> {
+///
+/// `blob_gasprice` is the one field that is **not** in the header:
+/// `revm_block::BlockEnvWitness::blob_gasprice` is the whole argument, and the
+/// short version is that the price derives from the excess through a fork
+/// parameter revm 42 does not know past Prague, so it is read off a receipt
+/// instead.
+fn block_env(
+    header: &Value,
+    chain_id: u64,
+    spec: SpecId,
+    blob_gasprice: Option<u128>,
+) -> Result<BlockEnvWitness, String> {
     Ok(BlockEnvWitness {
         chain_id,
         spec_id: spec as u8,
@@ -508,6 +523,7 @@ fn block_env(header: &Value, chain_id: u64, spec: SpecId) -> Result<BlockEnvWitn
             Some(Value::Null) | None => None,
             Some(value) => Some(rpc::u64_of(value, "the excess blob gas")?),
         },
+        blob_gasprice,
         // EIP-7843's slot number is not a header field and no JSON-RPC method
         // serves it: it is the beacon chain's slot, which an execution-layer
         // node does not carry. Zero, as S24's synthetic block has it, until a
@@ -635,6 +651,37 @@ fn tx_witness(tx: &Value) -> Result<TxWitness, String> {
         max_fee_per_blob_gas,
         authorizations,
     })
+}
+
+/// The block's **blob gas price**, from `eth_feeHistory`.
+///
+/// `eth_feeHistory`'s `baseFeePerBlobGas` is the block's own price and is served
+/// for every post-Cancun block, whether or not the block carries a blob
+/// transaction — which a receipt's `blobGasPrice` is **not**: a node reports that
+/// field only on the receipts of type-3 transactions, so a block with none has
+/// no receipt carrying it. That was the second thing this had to learn, and it
+/// matters because the `BLOBBASEFEE` opcode can read the price in any block.
+///
+/// One call, `blockCount = 1` and `newestBlock = block_number`, so
+/// `baseFeePerBlobGas[0]` is this block's and `oldestBlock` says so.
+fn blob_gasprice(rpc: &mut Rpc, block_number: u64) -> Result<u128, String> {
+    let history = rpc.call(
+        "eth_feeHistory",
+        json!(["0x1", rpc::hex_quantity(block_number), []]),
+    )?;
+    let oldest = rpc::u64_of(&history["oldestBlock"], "the fee history's oldest block")?;
+    if oldest != block_number {
+        return Err(format!(
+            "eth_feeHistory answered for block {oldest} and not {block_number}"
+        ));
+    }
+    let fees = history["baseFeePerBlobGas"]
+        .as_array()
+        .ok_or_else(|| format!("block {block_number}'s fee history has no baseFeePerBlobGas"))?;
+    let price = fees.first().ok_or_else(|| {
+        format!("block {block_number}'s fee history carries an empty baseFeePerBlobGas")
+    })?;
+    rpc::u128_of(price, "the blob gas price")
 }
 
 /// One JSON-RPC authorization-list entry as an [`AuthorizationWitness`].

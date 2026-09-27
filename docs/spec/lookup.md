@@ -99,7 +99,7 @@ reaching this channel's assertion and panicking inside `VerifyingKey::check`.
 **The way out of that floor is to carry no channel at all, and S21 took it.** A delegation
 family's rows are invocations rather than cycles, so `2^8` rows is a sensible shard and `2^16`
 is not reachable at any price (`docs/spec/delegation.md` §9). At `2^8` no range channel's table
-fits, so all three delegation families carry **none** — no `TIMESTAMP`, no `RANGE16`, no
+fits, so all four delegation families carry **none** — no `TIMESTAMP`, no `RANGE16`, no
 `GENERIC`, no `DECODER`, no multiplicity column — and every bound they make is a bit
 decomposition with a booleanity gate of its own. S23's two pay the same price in a second
 place: a frame value's **canonicity** is an eight-limb borrow chain against `p` whose limbs are
@@ -146,9 +146,9 @@ anything: an unbounded `a` in an AND lookup's key `a + AND_BASE + 1` reaches
 family that reads a value out of a table channel without bounding the key it looked up has
 not proved what it thinks: it has proved that *something* is in the table. S15's combined
 toy leaves `sign_h` and `and_a` unbounded on purpose — it is a toy for the channels, not a
-family — so the forgery above works there, and
-`crates/checker/tests/logup.rs::an_unbounded_key_can_reach_the_neutral_entry` is the
-control that shows it. S17 and S18 own the bounds.
+family — so the forgery above works there. S17 and S18 own the bounds, and each family's own
+suite is where a key bound is held (`mem_subword.rs::the_generic_key_stays_inside_its_sub_table`,
+`atomics.rs::a_byte_key_outside_the_and_table_is_refused`).
 
 **A range channel needs no offset**, and cannot have one: the table is `[0, 2^BITS)`, so
 shifting the domain up by one would put `2^BITS` outside it and the top of the range

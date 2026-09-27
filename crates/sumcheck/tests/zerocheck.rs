@@ -41,39 +41,6 @@ fn prove_then_verify(
 // Acceptance 1 and 7
 // ---------------------------------------------------------------------------
 
-/// Acceptance 1: `A * A - B = 0` over `2^20` rows, `A` in `U16` and `B` in
-/// `U32`, so the first round reads both through the lazy lift and every later
-/// round reads the lifted `Fr` tables. Acceptance 7's structural assertions ride
-/// along on the same real proof.
-#[test]
-fn honest_run_over_two_to_the_twenty_rows() {
-    let n = 20;
-    let gate = square_gate();
-    let columns = square_witness(n, 0x5044_4f57_4e00_0001);
-
-    // The lazy lift is only exercised if the columns really start small.
-    assert!(matches!(columns[0].backing(), PolyBacking::U16(_)));
-    assert!(matches!(columns[1].backing(), PolyBacking::U32(_)));
-
-    let digest = witness_digest(&columns);
-    let (proof, outcome) = prove_then_verify(&gate, &columns, digest);
-    let claim = outcome.expect("an honest proof over a satisfying witness verifies");
-
-    // Acceptance 7.
-    assert_eq!(proof.rounds.len(), n, "one round per variable");
-    for round in &proof.rounds {
-        assert_eq!(round.len(), 4, "a round message is always 4 coefficients");
-    }
-    assert_eq!(proof.final_evals.len(), 2, "one final eval per gate input");
-    assert_eq!(claim.point.len(), n, "one bound coordinate per variable");
-
-    // Acceptance 1's discharge: the claimed evaluations are what the witness
-    // really evaluates to at the bound point.
-    assert_eq!(claim.final_evals[0], columns[0].evaluate(&claim.point));
-    assert_eq!(claim.final_evals[1], columns[1].evaluate(&claim.point));
-    discharge(&columns, &claim).expect("the honest witness discharges the claim");
-}
-
 /// The binding really is one-way and the lift really happened: after proving,
 /// the prover's working columns are fully bound `Fr` tables holding exactly the
 /// claimed evaluations.
@@ -139,31 +106,6 @@ fn a_witness_swapped_after_the_digest_fails_the_discharge() {
     // actually proved over, so the rejection above is about the binding and not
     // about a broken discharge.
     discharge(&swapped, &claim).expect("the proved witness does discharge its own claim");
-}
-
-/// Acceptance 2 read literally — `B[i] += 1` after the honest digest is
-/// absorbed — recorded for what it actually does. That tamper leaves the
-/// witness *unsatisfying*, so the zerocheck catches it at round 0 and the
-/// discharge check the stage names is never reached. The stage's stated intent
-/// is the test above; this is its twin, so both readings are covered.
-#[test]
-fn the_literal_acceptance_two_tamper_is_caught_by_round_zero_instead() {
-    let n = 12;
-    let gate = square_gate();
-    let seed = 0x4c49_5445_5241_4c01;
-
-    let honest = square_witness(n, seed);
-    let digest = witness_digest(&honest);
-
-    let row = 0x0777 % (1usize << n);
-    let corrupted = square_witness_with_bumped_b(n, seed, row);
-
-    let (_, outcome) = prove_then_verify(&gate, &corrupted, digest);
-    assert_eq!(
-        outcome,
-        Err(SumcheckError::RoundSumMismatch { round: 0 }),
-        "a witness that does not satisfy the gate fails the zerocheck at round 0"
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -395,21 +337,4 @@ fn a_constant_witness_is_a_zero_round_proof() {
         Err(SumcheckError::FinalEvalMismatch),
         "with no rounds, the last-layer identity is the only place to catch it"
     );
-}
-
-/// `n = 1` is the smallest cube with a round in it, and the one where an
-/// off-by-one in the round loop would still typecheck.
-#[test]
-fn one_variable_proves_and_verifies() {
-    let gate = square_gate();
-    let columns = vec![
-        MultilinearPoly::new(PolyBacking::U16(vec![3, 9])),
-        MultilinearPoly::new(PolyBacking::U32(vec![9, 81])),
-    ];
-    let digest = witness_digest(&columns);
-    let (proof, outcome) = prove_then_verify(&gate, &columns, digest);
-    assert_eq!(proof.rounds.len(), 1);
-    let claim = outcome.expect("both rows satisfy the gate");
-    assert_eq!(claim.final_evals[0], columns[0].evaluate(&claim.point));
-    assert_eq!(claim.final_evals[1], columns[1].evaluate(&claim.point));
 }

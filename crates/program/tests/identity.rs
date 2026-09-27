@@ -134,9 +134,11 @@ fn the_identity_is_the_documented_recipe() {
     }
     assert_eq!(
         lists.iter().filter(|l| l.is_empty()).count(),
-        1,
-        "ZERO_WINDOWS absorbs an empty list, and here only it: fib declares no \
-         delegation family, whose list is empty too"
+        4,
+        "four families have no setup column and so absorb an empty list: \
+         ZERO_WINDOWS, and since S-IO PUBLIC_INPUT, PUBLIC_OUTPUT and \
+         ADVICE_WINDOWS. fib declares no delegation family, or each of those \
+         would add one more"
     );
     assert_eq!(lists, setup_commitments(&image, &tables, &config, &srs));
     assert_eq!(

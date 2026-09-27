@@ -33,10 +33,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use constants::guest_memory;
-use loader::{load_elf, ProgramImage, Slot};
+use loader::{load_elf, symbol_names, ProgramImage, Slot};
 use test_support::{sha256, to_hex};
 
-pub mod symbols;
 pub mod tables;
 
 /// One dump: the artifact, the report of it, and the image both describe.
@@ -108,7 +107,7 @@ fn render(
     source_label: &str,
     artifact_name: &str,
 ) -> String {
-    let names = symbols::read(elf);
+    let names = symbol_names(elf);
     let mut out = String::with_capacity(64 * image.slots.len());
 
     header(&mut out, artifact, elf, source_label, artifact_name);

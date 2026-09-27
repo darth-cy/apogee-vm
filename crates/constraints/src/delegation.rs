@@ -479,6 +479,56 @@ pub(crate) fn value_terms(first: usize, field: u32) -> Vec<(Coeff, PolyAddress)>
         .collect()
 }
 
+/// The eight word decompositions of one frame value: its bits' booleanity, then
+/// `word_k = sum of 2^t * bit`.
+///
+/// The word gate is ungated and degree 1 — both sides are 0 on a padding row —
+/// and it is the word's **32-bit bound** and its decode at once. That bound is
+/// what makes every later equation over those words an equation over the
+/// integers rather than over `Fr`, which is the whole basis of a limb identity.
+///
+/// [`canonical_gates`] emits the same two families of gate and does **not** call
+/// this, because its order interleaves them with the canonicity bits' and
+/// changing that order would move `fr_arith.bin` and `poseidon2.bin`. The
+/// duplication is twenty lines and is the cheaper of the two.
+pub(crate) fn word_gates(
+    name: &str,
+    first: usize,
+    field: u32,
+    bits: usize,
+) -> Vec<(String, GateDef)> {
+    let mut out: Vec<(String, GateDef)> = Vec::new();
+    for k in 0..WORDS_PER_VALUE {
+        for t in 0..32 {
+            out.push((
+                format!("{name}_bit{k}_{t}_boolean"),
+                booleanity(w(bits + 32 * k + t)),
+            ));
+        }
+    }
+    for k in 0..WORDS_PER_VALUE {
+        let mut terms = vec![(lit(1), word(first + k, field))];
+        for t in 0..32 {
+            terms.push((neg(1u64 << t), w(bits + 32 * k + t)));
+        }
+        out.push((format!("{name}_word{k}"), linear(terms)));
+    }
+    out
+}
+
+/// `2^n` as a field element, for an `n` a `u64` literal cannot hold.
+///
+/// A limb identity's coefficients reach `2^68` — `2^32` times a carry's `2^36`
+/// offset — and `lit`/`neg` take a `u64`.
+pub(crate) fn pow2(n: u32) -> Fr {
+    let mut out = Fr::ONE;
+    let two = Fr::from_u64(2);
+    for _ in 0..n {
+        out *= two;
+    }
+    out
+}
+
 /// The eight word decompositions and the canonicity proof of one frame value.
 ///
 /// `first` is its first frame word, `field` the field its words are read from

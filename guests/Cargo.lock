@@ -108,6 +108,7 @@ version = "0.1.0"
 name = "amm"
 version = "0.1.0"
 dependencies = [
+ "constants",
  "guest-sdk",
 ]
 
@@ -347,16 +348,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "consistency"
-version = "0.1.0"
-dependencies = [
- "constants",
- "field",
- "guest-sdk",
- "transcript",
-]
-
-[[package]]
 name = "const-hex"
 version = "1.19.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -523,6 +514,7 @@ dependencies = [
 name = "echo"
 version = "0.1.0"
 dependencies = [
+ "constants",
  "field",
  "guest-sdk",
  "transcript",
@@ -744,12 +736,11 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 [[package]]
 name = "k256"
 version = "0.13.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6e3919bbaa2945715f0bb6d3934a173d1e9a59ac23767fbaaef277265a7411b"
 dependencies = [
  "cfg-if",
  "ecdsa",
  "elliptic-curve",
+ "guest-sdk",
  "sha2 0.10.9",
 ]
 
@@ -793,6 +784,14 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 [[package]]
 name = "mem"
 version = "0.1.0"
+
+[[package]]
+name = "mod-mul-ops"
+version = "0.1.0"
+dependencies = [
+ "guest-sdk",
+ "k256",
+]
 
 [[package]]
 name = "nonmax"
@@ -890,6 +889,7 @@ dependencies = [
 name = "orderbook"
 version = "0.1.0"
 dependencies = [
+ "constants",
  "guest-sdk",
 ]
 

@@ -9,11 +9,20 @@ holds this file to them on every build.
 **Numbers are append-only, forever.** Once a program's identity is published its
 ABI is frozen. Redefining a number does not fail loudly — it quietly makes an
 old program compute something else — so a number here is assigned once and never
-reused, exactly as `transcript_tags` are.
+reused, exactly as `transcript_tags` are. Append-only forbids *reassigning* a
+number, not retiring one: a call may be withdrawn, and its number is then burned
+rather than freed (§4).
+
+**An Apogee guest is an Apogee-SDK program, not a Linux one.** It has no file
+descriptors, no streams and no I/O syscall, and there is no host whose
+conventions it is trying to match. What an execution reads and writes is
+*memory* — `docs/spec/public-values.md` is normative for all of it — and what is
+left in this document is the small set of calls that cannot be memory: ending
+the execution, and handing a frame to a circuit.
 
 ## 1. The calling convention
 
-An ecall follows the **Linux RISC-V syscall convention**:
+An ecall carries its number in `a7` and its argument and result in `a0`:
 
 | Register | Role |
 | --- | --- |
@@ -21,23 +30,22 @@ An ecall follows the **Linux RISC-V syscall convention**:
 | `a0`–`a5` | the arguments |
 | `a0` | the result, or a negated errno |
 
+**Every call defined today takes exactly one argument**, in `a0`: `EXIT` a
+status, and each delegation a frame base pointer. `crates/guest-sdk`'s shim is
+therefore one-argument, which is not a narrowing of this table but a use of it —
+an unused `in(...)` register is still a constraint on the register allocator, and
+`a1`–`a5` stay in the convention for a call that needs them.
+
 **An ecall preserves every register except `a0`.** That is part of the frozen ABI, not an
 accident of the current executor: `crates/guest-sdk`'s shims declare no clobbers at all,
-and every later delegation circuit is written against this table. A precompile that
+and every delegation circuit is written against this table. A precompile that
 scratched `t0` would produce silently wrong guest arithmetic with nothing to catch it,
 which is the "valid proof of a different computation" failure this whole document exists
 to prevent.
 
-The standard calls keep their Linux numbers, which is what lets `qemu-riscv32`
-run a guest **unmodified** — QEMU was the only executor S10 had, and since S12 it is the
-oracle for what a guest computes: one binary runs under both executors, so their exit
-status and their fd 1 can be compared at all
-(`crates/emulator/tests/qemu_outputs.rs`). The choice is load-bearing rather than
-decorative.
-
-Precompile arguments travel as **pointers** in `a0`–`a5`, because their operands
-do not fit in registers: a Poseidon2 state is 96 bytes. Dispatch is by ecall and
-never by a CSR write.
+Delegation arguments travel as **pointers**, because their operands do not fit
+in registers: a Poseidon2 state is 96 bytes and a keccak-f state is 200.
+Dispatch is by ecall and never by a CSR write.
 
 ## 2. The number ranges
 
@@ -48,26 +56,28 @@ never by a CSR write.
 | `PRECOMPILE_FIRST` | 0x0500 | first precompile |
 | `PRECOMPILE_LAST` | 0x05FF | last precompile |
 
-Everything at or below 1023 is a Linux number, at its Linux value.
+Both ranges sit **above 1023**, which is the whole of the Linux number space —
+not because anything here is Linux, but because a number below it is a number
+some other convention has already spent, and staying clear of all of them costs
+nothing. They are disjoint from each other, and the split does real security
+work:
 
-Both non-Linux ranges sit **above every Linux number**, and they are disjoint
-from each other. The split does real security work, and it is the reason there
-are two ranges rather than one:
-
-* a **zkVM host call** is nondeterministic prover advice — whatever the host
-  returns is a value the prover chose;
+* a **zkVM host call** would be nondeterministic prover advice — whatever the
+  host returns is a value the prover chose;
 * a **precompile** is a deterministic function of guest memory, and the circuit
   that replaces it proves exactly that function.
 
 A reviewer must be able to tell which a number is at a glance. Mixing them is
 how a nondeterministic call ends up treated as proven.
 
-The zkVM host-call range is **reserved and empty**, at S10 and still. The
-compatibility streams of section 4 use the Linux calls, because a guest that
-used `0x0400` for its input could not run under QEMU at all; and since S-IO an
-execution's **public values** use no call whatever — they are two fixed windows
-of memory a guest reads and writes with ordinary loads and stores
-(`docs/spec/public-values.md`).
+**The zkVM host-call range is reserved and empty, and it stays that way.** It
+was empty at S10 by accident of scheduling and is empty now by decision:
+advice does not need a syscall. It is a region of memory the prover fills and
+the guest authenticates, which costs no cycle, no gate and no number
+(`docs/spec/public-values.md` §6). A call here would be a second way to do the
+same thing, and the worse one — a value arriving in a register with nothing
+holding it to anything, where the memory form at least sits inside the multiset
+argument. The range is kept reserved so that nothing else claims it.
 
 ## 3. Syscall numbers
 
@@ -76,99 +86,81 @@ Every number this VM implements, with its nondeterminism class. The
 
 | Number | Constant | Class | What |
 | --- | --- | --- | --- |
-| 63 | `READ` | per fd | `read(fd, buf, len)`; see section 4. **Not a provable ecall** — no circuit proves it, and `prover::fill::add_sub` refuses a cycle that calls it by name (`docs/spec/public-values.md` §1) |
-| 64 | `WRITE` | per fd | `write(fd, buf, len)`; see section 4. **Not a provable ecall**, for the same reason |
-| 93 | `EXIT` | deterministic | `exit(status)`; nonzero is a failed execution |
+| 93 | `EXIT` | deterministic | `exit(status)`; nonzero is a failed execution. The one non-delegation call a guest may issue |
 | 0x0500 | `PRECOMPILE_POSEIDON2` | deterministic | Poseidon2 over `[Fr; 3]`, `a0` = the 96-byte frame base pointer, permuted in place. A **delegation** call since S23: `docs/spec/delegation.md` §12 is its frame table, `constants::family::POSEIDON2` the circuit that proves it. The three lanes cross the frame as canonical little-endian `Fr`, 8 words each |
 | 0x0501 | `PRECOMPILE_KECCAK_F` | deterministic | keccak-f[1600] over the 200-byte state frame at `a0`, permuted in place. The first **delegation** call: `docs/spec/delegation.md` is its ABI, `constants::family::KECCAK_F` the circuit that proves it. An executor with the circuit answers 0; one without answers `-ENOSYS` and the caller runs its software path |
 | 0x0502 | `PRECOMPILE_FR_ARITH` | deterministic | one `Fr` add, multiply or inverse over the 100-byte frame at `a0`, in place. A **delegation** call: `docs/spec/delegation.md` §13 is its frame table, `constants::family::FR_ARITH` the circuit. The operands cross the frame in `field::Fr`'s **in-memory** representation, which is what makes the call cheaper than the software operation it replaces |
+| 0x0503 | `PRECOMPILE_MOD_MUL` | deterministic | `out = a · b mod m` over the 128-byte frame at `a0`, in place: four runs of eight little-endian 32-bit limbs, the modulus first. A **delegation** call: `docs/spec/delegation.md` §14 is its frame table, `constants::family::MOD_MUL` the circuit. The modulus is **witnessed**, not a constant of the circuit, so one family serves secp256k1's `F_p` and its scalar field, BN254's, and the EVM's `MULMOD`; a zero modulus is a fatal guest error and not an answer |
 
 The classes are:
 
 * **deterministic** — the result is a function of the guest's own state, so
-  nothing needs to bind it.
-* **per fd** — see section 4; `read` and `write` are two calls each depending on
-  which descriptor they name. Neither is provable on any descriptor.
-* **advice** — the result is chosen by the prover. A proof says nothing about
-  which value was chosen unless the guest checks it against something a proof
-  does bind, which is the statement's public input or the journal it publishes
-  (`docs/spec/public-values.md` §6).
+  nothing needs to bind it. Every implemented number is one, and that is the
+  point of the table: a call that is not deterministic does not get a number.
+* **advice** — the result would be chosen by the prover. No number carries this
+  class today, and the range reserved for one is empty (§2); it is named here
+  because §5 is about the calls that would have it, and because the column has
+  to be able to say something other than "deterministic" for the distinction to
+  be worth writing down.
 
-## 4. File descriptors
+**Every one of these is provable except in the sense that `EXIT` and the four
+delegation numbers are the only ecalls any circuit admits.** The
+`ADD_SUB_LUI_AUIPC` family commits one boolean selector per delegation type and
+holds every ecall row's `a7` to 93 or to that type's number; its fill refuses any
+other ecall by name (`docs/spec/shard-proof.md` §8). There is no ecall a guest
+can issue that a proof does not cover.
 
-**All four are uncommitted POSIX compatibility streams, and a proof binds none
-of them.** That is S-IO's correction, and it is the one place this document was
-wrong rather than incomplete: fd 0 and fd 1 were `FD_PUBLIC_INPUT` and
-`FD_PUBLIC_OUTPUT` and were described here as committed. An execution's public
-values are not a syscall's business — they are two fixed windows of memory, and
-`docs/spec/public-values.md` §1 is normative. The **numbers** are frozen at
-their Linux values, as every number in this document is; only the names moved.
+## 4. The retired numbers
 
-| fd | Constant | Committed | What |
-| --- | --- | --- | --- |
-| 0 | `FD_STDIN` | no | POSIX standard input; **not** the public input |
-| 1 | `FD_STDOUT` | no | POSIX standard output; **not** the journal |
-| 2 | `FD_STDERR` | no | diagnostics, free-form, verifier-ignored |
-| 3 | `FD_HINT` | no | private hints: **nondeterministic prover advice** |
+**`read` and `write` are gone, and their numbers are burned.** They were 63 and
+64 — their Linux values, chosen when a guest was expected to run under a host
+program loader — and they carried four file descriptors with them: standard
+input, standard output, diagnostics, and a private hint stream. None of it
+exists. There are no descriptors, no `-EBADF`, and no ecall that moves bytes
+between guest memory and anything outside it.
 
-No gate constrains what any of the four moves. fd 0's and fd 3's bytes are the
-prover's outright, and `write(64)` on fd 1 and on fd 2 alike reaches no
-verifier. Since neither call is provable (section 3), a guest that takes any of
-these paths is not a guest that can be proven at all.
+| Number | Was | Why it is not coming back |
+| --- | --- | --- |
+| 63 | `read(fd, buf, len)` | an execution's input is the public input window and the advice region, both of them memory (`docs/spec/public-values.md`) |
+| 64 | `write(fd, buf, len)` | an execution's output is the journal, which is memory, and a proof binds its final contents |
 
-**fd 0 is its own stream and is not the public input.** `emulator::GuestIo`
-carries the two separately — `input` fills the public input window and `stdin`
-is served on fd 0 — and neither seeds the other. They were one field briefly and
-the coupling was wrong in both directions: a public input is capped at
-`guest_memory::PUBLIC_PAYLOAD_BYTES` and an fd 0 stream is not, and no guest
-reads both paths anyway. `qemu-riscv32` maps only the image's `PT_LOAD`
-segments, so the public windows and the advice region do not exist under it; a
-guest written for the QEMU oracle reads fd 0 and cannot be proven, and a
-provable guest reads the window and cannot run there.
-`crates/emulator/tests/qemu_outputs.rs` is that comparison — the exit status and
-fd 1, and nothing below them — and `guests/revm-block` carries a binary for each
-(`docs/spec/public-values.md` §7).
+The numbers are **burned, not freed**: append-only forbids reassigning 63 and 64
+to anything else, forever, for the same reason it forbids redefining 93. A
+program built against the old ABI that issues one gets `-ENOSYS` (§5), which is
+the right answer — that call no longer exists — rather than a silently different
+computation.
 
-A guest that lets a hint change what it writes to fd 1, without checking the
-hint against something else, has made its output the prover's choice. That
-warning stands, and since S-IO it has a provable counterpart: the **journal** is
-what a proof binds, the **advice region** is where the prover's bytes belong,
-and the obligation to check one against something public is the guest's either
-way (`docs/spec/public-values.md` §6).
-
-Added at S12, where the first zkVM executor pinned what the table above left open:
-
-* **Every other descriptor answers `-EBADF`.** `read` on anything but fd 0 and
-  fd 3, and `write` on anything but fd 1 and fd 2, move no bytes and return
-  `-EBADF` — Linux's answer, and so `qemu-riscv32`'s, which keeps one source tree
-  meaning the same thing under both executors.
-* **`read` returns what the stream has.** It delivers `min(count, bytes left)` and
-  returns that count, so a `read` at the end of a stream returns 0. `write`
-  delivers all `count` bytes and returns `count`.
-* **A buffer outside the RAM window is a fatal guest error.** The bytes a call
-  would move must lie in `[RAM_ORIGIN, RAM_ORIGIN + RAM_LENGTH)` (section 7) —
-  ordinary RAM, and not the public windows or the advice region, which these
-  calls have no business in. Linux would answer `-EFAULT`; a fatal error returns
-  no trace at all, so there is nothing to report back to.
-* **fd 0 is served from the statement's public input**, and `read` delivers a
-  prefix of it and advances a cursor. Nothing records or binds which prefix the
-  guest consumed: since S-IO the executor reports the **whole** public input as
-  the execution's, because that is what the window held and what the statement
-  carries, whether or not a byte of it was read
-  (`docs/spec/public-values.md` §9).
-
-How a call's register reads and its buffer traffic appear in the execution trace
-is `docs/spec/execution-trace.md`, not this document.
+**Why they went rather than getting a circuit.** Making a byte-moving syscall
+provable is not a gate or two. The call's buffer traffic reached RAM through
+*transfer cycles*, extra cycles carrying a RAM query apiece, and a transfer row
+that is permitted but not constrained against its ecall's buffer and length can
+write any value to any RAM word. Confining it needs cross-row constraints this
+arithmetization has nowhere to put. So the two calls were never provable, which
+made every guest that used them a guest no proof covered — and that was the
+smaller problem. The larger one is that the shape was wrong: **an execution's
+public values are not a syscall's business.** They are a property of the
+statement, bound by the memory argument at both ends, and they need no call, no
+descriptor, no cursor and no cooperation from the guest.
+`docs/spec/public-values.md` §1 is normative, and the transfer cycle went with
+the calls that were its only source (`docs/spec/execution-trace.md` §6).
 
 ## 5. Every other number
 
-**Unimplemented numbers return `-ENOSYS`**, which is what `qemu-riscv32` does for them
-today and what the S12 emulator will do.
+**Unimplemented numbers return `-ENOSYS`.**
 
 | Constant | Value | What |
 | --- | --- | --- |
 | `ENOSYS` | 38 | returned negated in `a0` for a number this VM does not implement |
-| `EBADF` | 9 | returned negated in `a0` for `read` or `write` on a descriptor section 4 does not give that call |
+
+The value is Linux's, and it is the one errno that survives the deletion of the
+POSIX layer, because it was never really part of it: it is the **delegation
+ABI's** "this executor has no circuit for that" answer
+(`docs/spec/delegation.md` §2). Every shim checks for exactly `-ENOSYS` and runs
+its own software path on it, and treats any other nonzero answer as a hard
+failure — the difference between "this VM does not have this yet" and "this call
+went wrong" is exactly the difference worth keeping. This VM implements all four
+delegations, so its executor never answers `-ENOSYS` to one; what it still
+answers `-ENOSYS` to is a number nobody has assigned.
 
 That includes, deliberately, every syscall that would return host data:
 `getrandom`, `clock_gettime`, `gettimeofday`, and anything Rust's `HashMap`
@@ -176,8 +168,9 @@ reaches for on first use to seed its `RandomState`. Each of those is
 nondeterministic prover advice wearing the costume of a library call: unless the
 guest checks what came back against something a proof binds, the proof does not
 pin down which execution happened, and a malicious prover picks the values. They
-are refused rather than answered, so a guest that wants one has to say so by
-asking for a number in the zkVM host-call range — where a reviewer will see it.
+are refused rather than answered — a guest that wants such a value takes it from
+the advice region, where its provenance is written on it and where the guest is
+visibly the one that has to authenticate it.
 
 ## 6. The public I/O digest
 
@@ -200,7 +193,8 @@ withdrawn, and the guest never computes `io_digest`.
 The two tags keep their S10 names, `PUBLIC_INPUT_STREAM` and
 `PUBLIC_OUTPUT_STREAM`. A tag is part of the absorbed stream, so renaming one is
 not free; they domain-separate the statement's two byte strings, which is the
-job they always did.
+job they always did. They name the **statement's** two strings and have never
+named a descriptor.
 
 ```rust
 transcript::io_digest(public_input: &[u8], public_output: &[u8]) -> Fr
@@ -262,9 +256,9 @@ hostile `p_memsz` from sizing the loader's slot vector.
 `PUBLIC_OUTPUT_ORIGIN` = `0x8400`, and the **advice** region sits above it at
 `ADVICE_ORIGIN` = `0x8000_0000`; `trace::addressable` is the executor's rule and everything
 else — `[0, 0x8000)` and `[0x8800, RAM_ORIGIN)` — is a hole, so a null dereference is still
-a loud error. None of the three is in the ELF, so no linker symbol names them and a host
-loader does not map them; a guest reaches them with ordinary loads and stores at the
-constants. `docs/spec/public-values.md` §2 is normative, and this section's `MEMORY` line
+a loud error. None of the three is in the ELF, so no linker symbol names them; a guest
+reaches them with ordinary loads and stores at the constants.
+`docs/spec/public-values.md` §2 is normative, and this section's `MEMORY` line
 stays exactly what `link.ld` says.
 
 | Symbol | What |
@@ -277,8 +271,9 @@ stays exactly what `link.ld` says.
 `_start` lives in its own `.text._start` input section so the linker places it
 at `ORIGIN(RAM)`. It sets `sp`, zeroes `.bss` byte by byte, calls `main`, and
 exits 0 if `main` returns. The `.bss` zeroing stays even though VM memory starts
-zeroed, because the same binary must run correctly under QEMU, where it does
-not.
+zeroed, because `.bss` being zero is a guarantee the Rust that runs above it
+relies on, and crt0 is the one place that can make that true of the *image*
+rather than of the executor.
 
 Guests link with `--no-relax`. Linker relaxation rewrites instruction sequences
 and shifts every later address, and S11's program identity is a function of
@@ -287,69 +282,86 @@ those addresses.
 ### 7.1 The segment layout, and why it is a normative part of this map
 
 The zkVM executor makes the whole window addressable by construction: it has no
-pages and no permissions, so the map above is the entire story for it. A host
-program loader — `qemu-riscv32`, which is the only executor before S12, or Linux
-itself — is narrower. It maps exactly the `PT_LOAD` segments the program headers
-declare, page by page, at the declared permissions, and nothing else in the
-address space exists at all. Two rules follow, and both are load-bearing:
+pages and no permissions, and `crates/loader` reads nothing from a program
+header but `p_vaddr` and `p_memsz`. So the two rules below buy this executor
+nothing at all, and they are still normative, because **an ELF's program headers
+are the image's own account of itself** and a reader is entitled to believe them.
+`llvm-readobj`, a disassembler, a debugger, `crates/loader/tests/layout.rs` and
+any loader that is not this one all read the headers and nothing else. A header
+that declares twenty kilobytes while the program writes to two gigabytes is
+wrong about the program, whatever today's executor is indifferent to; an image
+that is only well formed under an indifferent reader is one whose headers cannot
+be trusted for anything. The rules cost three pages of address space:
 
 - **Every writable byte a guest can touch is declared.** The heap and the stack
   grow toward each other between `__heap_start` and `__stack_top`, so the linker
   script reserves that whole span as one writable segment reaching the top of the
-  window. Undeclared, it is unmapped memory under a host loader and the guest's
-  first stack write dies on a signal before `main` runs. The reservation itself
-  must cost nothing on disk: `p_filesz` may cover an initialised `.data` — lld
-  folds one into this same segment — but must stop at or before `.bss`, or the
-  ELF carries the whole 2 GiB reservation as zeroes.
-- **No two segments share a page.** Each `PT_LOAD` is mapped independently, so a
-  shared page takes the second mapping's permissions for all of it: an unaligned
-  `.rodata` strips execute from the tail of `.text`, and zero fill landing on a
-  read-only page is refused outright. `.text`, `.rodata`, `.data` and `.bss` are
-  therefore each page-aligned, which costs three pages of address space.
+  window. Undeclared, the headers say the program's writable memory ends at
+  `.bss` and the guest's very first stack push is a write outside every segment
+  it declares. The reservation itself must cost nothing on disk: `p_filesz` may
+  cover an initialised `.data` — lld folds one into this same segment — but must
+  stop at or before `.bss`, or the ELF carries the whole 2 GiB reservation as
+  zeroes.
+- **No two segments share a page.** A `PT_LOAD` states its permissions over the
+  pages it covers, so two segments on one page state two different things about
+  the same bytes and the file no longer says which: an unaligned `.rodata` is a
+  claim that the tail of `.text` is not executable, and zero fill landing inside
+  a read-only segment is a claim that the image writes to memory it declared
+  read-only. `.text`, `.rodata`, `.data` and `.bss` are therefore each
+  page-aligned.
 
-`crates/loader/tests/layout.rs` holds the image to both rules by reading the
-program headers, and needs neither a cross-compiler nor an emulator to do it.
+S10 shipped both violations, and neither was visible from inside this VM — which
+is the argument for the rules rather than against them.
+`crates/loader/tests/layout.rs` holds the image to both by reading the program
+headers, and needs neither a cross-compiler nor an emulator to do it.
 
 ## 8. The guest-sdk surface
 
 ```rust
 guest_sdk::entry!(main);              // gives a function the `main` symbol
 
-pub fn public_input() -> &'static [u8];       // the input window, no ecall
+pub fn public_input() -> &'static [u8];       // the input window; no ecall
 pub fn read_input(buf: &mut [u8]) -> usize;   // the same, copied
-pub fn commit(bytes: &[u8]);                  // the journal, no ecall
+pub fn commit(bytes: &[u8]);                  // append to the journal; no ecall
 pub fn journal() -> &'static [u8];            // the journal so far
 pub fn advice() -> &'static [u8];             // prover-chosen, bound by nothing
-
-pub fn read_stdin(buf: &mut [u8]) -> usize;   // fd 0, unprovable
-pub fn write_stdout(bytes: &[u8]);            // fd 1, unprovable
-pub fn hint(buf: &mut [u8]) -> usize;         // fd 3, advice, unprovable
-pub fn log(bytes: &[u8]);                     // fd 2, ignored, unprovable
 pub fn exit(code: i32) -> !;
+
+pub fn keccak256(input: &[u8]) -> [u8; 32];               // delegated, or in software
 pub fn poseidon2_permute(state: &mut [u8; 96]) -> bool;   // false on -ENOSYS
+pub mod recursion { /* the poseidon2, fr_arith and mod_mul frames */ }
 ```
 
-The first group issues **no ecall at all** — the windows and the advice region
-are ordinary memory — and is the surface a guest that wants to be proven uses.
-The second is the POSIX compatibility path of section 4: it issues `read` and
-`write`, which are not provable ecalls, so a guest that takes it runs under
-`qemu-riscv32` and is not provable. `docs/spec/public-values.md` §7 is the full
-surface and `docs/guest-program-manual.md` §3 the guest author's version of the
-choice.
+**The first five issue no ecall at all.** The public windows and the advice
+region are ordinary memory, reached with loads and stores, so the whole of an
+execution's input and output crosses no ABI boundary and costs no cycle beyond
+the loads and stores themselves. `docs/spec/public-values.md` §7 is the full
+surface and `docs/guest-program-manual.md` §3 the guest author's version. There
+is no second surface and no compatibility path: what is listed above is what a
+guest has.
 
-`read_stdin` and `hint` fill the buffer or stop at the end of the stream, and
-return how many bytes they got; a caller that needs an exact length must check.
-`read_input` copies `min(buf.len(), public_input().len())` bytes and never
-blocks on anything. `commit` and `log` write all of their bytes; `commit` exits
-`EXIT_IO_ERROR` rather than truncating a journal that would not fit its window.
-The allocator bumps upward from
-`__heap_start` and `dealloc` does nothing. An allocation that would end above
-`__stack_top - STACK_RESERVE` (`constants::guest_memory`, 8 MiB), or above the
-live `sp`, exits 71 rather than returning null. The top of RAM therefore belongs
-to the stack, and no block is ever handed out over a frame in use.
+`read_input` copies `min(buf.len(), public_input().len())` bytes and may
+therefore return short — a caller that needs an exact length must check the
+count, because proceeding on a partly-filled buffer is how a guest ends up
+proving something about zeroes. `public_input` and `journal` return slices and
+copy nothing, so they cannot. `commit` writes all of its bytes or none: it exits
+`EXIT_IO_ERROR` rather than truncating a journal that would not fit its window,
+because a caller reads `journal` back and must not see one it did not write.
+
+The allocator bumps upward from `__heap_start` and `dealloc` does nothing. An
+allocation that would end above `__stack_top - STACK_RESERVE`
+(`constants::guest_memory`, 8 MiB), or above the live `sp`, exits 71 rather than
+returning null. The top of RAM therefore belongs to the stack, and no block is
+ever handed out over a frame in use.
 
 The ceiling was `__stack_top` until S12. With it, an exhausted heap handed out
 blocks over live stack frames, and safe code writing into one rewrote locals and
-return addresses. `crates/emulator/tests/consistency.rs` holds each half of the
-rule. What no allocator check can see is a stack that grows past its reserve
-after the heap has filled below it.
+return addresses. What no allocator check can see is a stack that grows past its
+reserve after the heap has filled below it.
+
+**A panic is silent.** The handler is a bare `exit(101)` with no message,
+because an Apogee guest has no diagnostic stream: the only bytes leaving an
+execution are the journal, which a proof binds, and the exit status. That is
+worth more than the message — with no write on the panic path, **a panicking
+guest is provable**, and it has published exactly what it committed before it
+died.

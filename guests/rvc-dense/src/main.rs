@@ -22,25 +22,25 @@
 //! tests pin the six expansions longhand.
 //!
 //! **The executed pair** `rvc_exec` and `norvc_exec` compute the same function
-//! two ways and run under QEMU, which is what says the fixture is real code at
+//! two ways and are executed, which is what says the fixture is real code at
 //! real addresses rather than a well-formed byte string.
 //!
-//! # fd 0, the public input
+//! # The public input
 //!
 //! ```text
 //!           0..4     x               u32 LE, optional
 //! ```
 //!
-//! Optional in a way no other guest's input is: a stream shorter than four
+//! Optional in a way no other guest's input is: an input shorter than four
 //! bytes leaves `x = 3` instead of faulting. This one is a loader fixture
 //! before it is a program, and it is dumped and disassembled far more often
 //! than it is executed, so it has to produce an image without an input to
 //! produce it from.
 //!
-//! # fd 1, the public output
+//! # The journal
 //!
-//! Twelve bytes — three little-endian `u32`s, written as three separate
-//! commits, because fd 1 is a stream and not a record:
+//! Twelve bytes — three little-endian `u32`s, appended as three separate
+//! commits, because the journal is a byte string and not a record:
 //!
 //! ```text
 //!           0..4     y               what both routines answered for x
@@ -61,10 +61,10 @@
 //! The two lengths are what make the last eight bytes worth committing. They
 //! are the regions' sizes as the linker laid them out, so a compressed region
 //! that quietly stopped being compressed — a toolchain that ignored
-//! `.option rvc`, or a relaxation pass that rewrote it — changes fd 1 rather
-//! than changing nothing.
+//! `.option rvc`, or a relaxation pass that rewrote it — changes the journal
+//! rather than changing nothing.
 //!
-//! # fd 2 and fd 3
+//! # The advice
 //!
 //! Unused.
 
@@ -96,7 +96,7 @@ fn main() {
     );
 
     let mut input = [0u8; 4];
-    let n = guest_sdk::read_stdin(&mut input);
+    let n = guest_sdk::read_input(&mut input);
     let x = if n == 4 { u32::from_le_bytes(input) } else { 3 };
 
     // SAFETY: both are `extern "C"` leaf routines taking one `u32` in `a0` and
@@ -105,9 +105,9 @@ fn main() {
     let b = unsafe { norvc_exec(x) };
     assert_eq!(a, b, "the compressed and uncompressed routines disagree");
 
-    guest_sdk::write_stdout(&a.to_le_bytes());
-    guest_sdk::write_stdout(&rvc_len.to_le_bytes());
-    guest_sdk::write_stdout(&norvc_len.to_le_bytes());
+    guest_sdk::commit(&a.to_le_bytes());
+    guest_sdk::commit(&rvc_len.to_le_bytes());
+    guest_sdk::commit(&norvc_len.to_le_bytes());
 }
 
 fn span(begin: *const u8, end: *const u8) -> u32 {
@@ -248,7 +248,7 @@ __norvcpair_end:
 );
 
 // ---------------------------------------------------------------------------
-// The executed pair. Same source, one region compressed and one not, so QEMU
+// The executed pair. Same source, one region compressed and one not, so a run
 // checks that the compressed encodings mean what the loader says they mean.
 // ---------------------------------------------------------------------------
 

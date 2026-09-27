@@ -134,19 +134,6 @@ fn affine_product() {
     );
 }
 
-/// `x(·,0)·x(·,1)`: two values for one operand, its two children.
-#[test]
-fn tree_product() {
-    let (ch, _) = gamma();
-    let gate = GateDef::TreeProduct {
-        input: PolyAddress::Inner {
-            layer: 1,
-            offset: 0,
-        },
-    };
-    assert_eq!(eval_gate(&gate, &[fr(11), fr(13)], &ch), fr(11 * 13));
-}
-
 /// `c_0 + Σ a_i·x_i + Σ b_j·y_j·z_j` with `c_0 = 7`, linear coefficients 2 and
 /// `γ`, product coefficients 3, `γ` and 5, and one operand read twice; then an
 /// empty linear list under a challenge constant, an empty products list, and

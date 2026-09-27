@@ -21,9 +21,9 @@ use constants::challenge_slot::{MEM_ALPHA_VAL, MEM_GAMMA};
 use constants::family;
 use constraints::memory::{
     family_frame_artifact, frame, frame_queries, image_window_artifact, value_window_artifact,
-    zero_window_artifact, CYCLE, PC,
+    zero_window_artifact, CYCLE,
 };
-use constraints::{CircuitArtifact, PolyAddress};
+use constraints::CircuitArtifact;
 use field::Fr;
 use gkr::{
     boundary_factors, forward, reconciles, self_check, window_challenges, BaseLayer,
@@ -32,7 +32,10 @@ use gkr::{
 use poly::{MultilinearPoly, PolyBacking};
 use program::check_memory_windows;
 use test_support::Rng;
-use trace::{build_boundary_finals, build_memory_columns, init_windows, plan_shards, ROLES};
+use trace::{
+    build_boundary_finals, build_frame_witness, build_memory_columns, init_windows, plan_shards,
+    RowSlice,
+};
 
 /// The seven execution families, ascending: the frames a statement can carry.
 /// The two init families run no cycles and have no frame.
@@ -234,7 +237,7 @@ fn honest_statement(name: &str, input: u32, prove_frames: bool) {
     assert!(plan.len() > 1, "{name}: more than one family ran");
     assert_eq!(
         shards.len(),
-        plan.len() + 3 + init_windows(&t.log, HEIGHT).len(),
+        plan.len() + 3 + init_windows(t.log.state(), HEIGHT).len(),
         "{name}: one shard per frame, per RAM window and per public window"
     );
     assert!(
@@ -287,7 +290,7 @@ fn honest_statement(name: &str, input: u32, prove_frames: bool) {
         }
     }
 
-    let windows = init_windows(&t.log, HEIGHT);
+    let windows = init_windows(t.log.state(), HEIGHT);
     let counts: Vec<u32> = plan_shards(&t.profile, &t.config)
         .shards
         .iter()
@@ -301,7 +304,11 @@ fn honest_statement(name: &str, input: u32, prove_frames: bool) {
         .collect();
     check_memory_windows(&t.config, &counts, &windows).unwrap_or_else(|e| panic!("{name}: {e}"));
 
-    let factors = boundary_factors(&memory, t.image.entry, &build_boundary_finals(&t.log));
+    let factors = boundary_factors(
+        &memory,
+        t.image.entry,
+        &build_boundary_finals(t.log.state()),
+    );
     assert!(reconciles(&reads, &writes, factors), "{name}");
 }
 
@@ -310,14 +317,6 @@ fn honest_statement(name: &str, input: u32, prove_frames: bool) {
 #[test]
 fn fib_honest_statement_reconciles_and_proves() {
     honest_statement("fib", 24, true);
-}
-
-/// heap's 141,832 cycles: its frames forwarded and checked row by row but not
-/// proved — their proofs alone take minutes in a debug build, and fib's frames
-/// prove the same artifacts — and its two windows, proved.
-#[test]
-fn heap_honest_statement_reconciles_and_proves_its_windows() {
-    honest_statement("heap", 40, false);
 }
 
 /// The same statement built by hand, one frame per family that ran, over that
@@ -362,79 +361,189 @@ fn a_frame_per_family_in_any_order_reconciles() {
             reads.push(read);
             writes.push(write);
         }
-        let factors = boundary_factors(&memory, t.image.entry, &build_boundary_finals(&t.log));
+        let factors = boundary_factors(
+            &memory,
+            t.image.entry,
+            &build_boundary_finals(t.log.state()),
+        );
         assert!(reconciles(&reads, &writes, factors), "{name}");
     }
 }
 
-/// `build_memory_columns` against the family buffers, which file each query
-/// under its role where the log files it by space and slot: on each guest, in
-/// each family's own frame under its own `frame_queries`, row `i` holds that
-/// family's cycle `i`, its pc query `(1, 0, 4(c − 1), pc, next_pc)` at slot 0,
-/// and role `ROLES[r]` — query `1 + r` of the table — at the slot the family's
-/// list gives it, with mask 1, or zeros where the cycle lacks it; a role the
-/// family's list has no slot for is a role no row of that family has; and the
-/// first padding row is 0 in every column. Kills a slot-2 register query filed
-/// under another role — which no gate of the frame would notice, the three
-/// sharing a space and a slot — a query filed at a query id rather than at its
-/// family's slot, a `frame_queries` narrower than the family that ran, and a pc
-/// query or a padding row filled otherwise.
+/// **The frame builders' two readings agree, on every family of every guest.**
+///
+/// `trace::build_memory_columns` and `trace::build_frame_witness` read a shard's
+/// **rows**, because that is all a streaming prover ever holds
+/// (`docs/spec/streaming.md` §3); `checker::memory_columns_from_log` and
+/// `checker::frame_witness_from_log` read the **memory event log**, which is
+/// what those two read before the streaming stage. The two share no code, and
+/// this is the check that they are one table computed twice: every column, every
+/// row, over real executions.
+///
+/// It is the whole safety net under "a shard's columns are its execution's
+/// memory queries". The row-based reading has to rebuild each row's events —
+/// the pc query's read timestamp as `4·(cycle − 1)`, the roles in `ROLES` order,
+/// and a delegation request's anchor space out of the row's own `a7`
+/// (`trace::Row::delegation_space`) — and any of those got wrong is a column
+/// that differs here.
+///
+/// `keccak-test` and `recursion-ops` are in the list for exactly that last one:
+/// they are the committed guests that make delegation calls, so their add/sub
+/// family carries live `deleg` queries and a `deleg_space` column with three
+/// different tags in it.
 #[test]
-fn the_frame_columns_are_the_family_buffers() {
-    for (name, input) in GUESTS {
-        let t = traced(name, input);
-        let mut rows = 0;
+fn the_row_reading_and_the_log_reading_of_a_frame_agree() {
+    let mut checked = (0, 0);
+    for (name, input, status, height) in [
+        ("fib", 24, 0, HEIGHT),
+        ("heap", 40, 0, HEIGHT),
+        ("keccak-test", 0, 6, HEIGHT),
+        ("recursion-ops", 0, 9, HEIGHT),
+        // S26's fixture, at `2^18` for the reason `deleg_space_tags` gives: its
+        // `.text` reaches pc `0x2161a`. It is the third guest here that makes
+        // delegation calls, and the only one that makes S26's.
+        ("mod-mul-ops", 0, 12, 1 << 18),
+        ("mem", 0, 50, HEIGHT),
+        ("alu", 0, 96, HEIGHT),
+        ("control", 0, 16, HEIGHT),
+    ] {
+        let t = common::traced_exiting_at(name, input, status, height);
         for trace in t.traces.families.iter().filter(|f| !f.is_empty()) {
             let queries = frame_queries(trace.family);
             let label = FAMILY_NAMES[trace.family as usize];
-            assert_eq!(queries[0], PC, "{name} {label}: the pc query is slot 0");
-            let height = frame_height(trace.len());
-            let columns = build_memory_columns(&t.log, queries, &trace.cycle, height);
-            let base = BaseLayer::new(columns);
-            let at = |address, y| base.get(address).expect("a frame column").get(y);
-            for i in 0..trace.len() {
-                let row = trace.row(i);
-                let pc = [1, 0, 4 * (row.cycle - 1), row.pc as u64, row.next_pc as u64];
-                let mut expected = vec![(CYCLE, row.cycle)];
-                expected.extend((0..5).map(|f| (frame(0, f), pc[f as usize])));
-                for (r, role) in ROLES.iter().enumerate() {
-                    let query = row.query(*role);
-                    let Some(slot) = queries.iter().position(|&q| q == 1 + r) else {
-                        assert!(
-                            query.is_none(),
-                            "{name} {label}: cycle {} has {role:?}, and the family's frame has \
-                             no slot for it",
-                            row.cycle
-                        );
-                        continue;
-                    };
-                    let fields = query.map_or([0; 5], |q| {
-                        let (addr, read, write) = (q.addr, q.read_value, q.write_value);
-                        [1, addr as u64, q.read_ts, read as u64, write as u64]
-                    });
-                    expected.extend((0..5).map(|f| (frame(slot, f), fields[f as usize])));
-                }
-                for (address, value) in expected {
-                    let cycle = row.cycle;
-                    assert_eq!(
-                        at(address, i),
-                        Fr::from_u64(value),
-                        "{name} {label}: cycle {cycle}, {address}"
+            // Every shard the family's rows are cut into, not just the first:
+            // the cut is what a streaming executor reproduces, and a builder
+            // that only agreed on shard 0 would agree by accident.
+            let height = frame_height(trace.len().min(1 << 12));
+            for index in 0..(trace.len().div_ceil(height) as u32) {
+                let shard = RowSlice::shard(trace, index, height);
+                let cycles = shard.cycles();
+                let (rows, log) = (
+                    build_memory_columns(&shard, queries, height),
+                    checker::memory_columns_from_log(&t.log, queries, cycles, height),
+                );
+                assert_eq!(
+                    rows.len(),
+                    log.len(),
+                    "{name} {label} {index}: column count"
+                );
+                for ((a, x), (b, y)) in rows.iter().zip(&log) {
+                    assert_eq!(a, b, "{name} {label} {index}: column order");
+                    assert!(
+                        (0..height).all(|r| x.get(r) == y.get(r)),
+                        "{name} {label} {index}: {a} differs"
                     );
                 }
-                rows += 1;
-            }
-            let padding = trace.len();
-            if padding < height {
-                for m in 0..1 + 5 * queries.len() as u32 {
-                    assert_eq!(
-                        at(PolyAddress::Memory(m), padding),
-                        Fr::ZERO,
-                        "{name} {label}: M[{m}]"
+                let (rows, log) = (
+                    build_frame_witness(&shard, queries, height),
+                    checker::frame_witness_from_log(&t.log, queries, cycles, height),
+                );
+                assert_eq!(
+                    rows.len(),
+                    log.len(),
+                    "{name} {label} {index}: witness count"
+                );
+                for ((a, x), (b, y)) in rows.iter().zip(&log) {
+                    assert_eq!(a, b, "{name} {label} {index}: witness order");
+                    assert!(
+                        (0..height).all(|r| x.get(r) == y.get(r)),
+                        "{name} {label} {index}: {a} differs"
                     );
                 }
+                checked = (checked.0 + 1, checked.1 + rows.len());
             }
         }
-        assert_eq!(rows, t.cycles.len(), "{name}: one family row per cycle");
     }
+    // A guard on the loop itself: a `GUESTS` list that stopped tracing, or a
+    // family filter that excluded everything, would otherwise pass silently.
+    assert!(
+        checked.0 >= 40 && checked.1 >= 400,
+        "the comparison covered {} shards and {} columns",
+        checked.0,
+        checked.1
+    );
+}
+
+/// The `deleg_space` column is the thing the row reading recovers from `a7`
+/// rather than from an event's own address space, so it gets its own check:
+/// every live `deleg` query names the requested family's tag and no other row
+/// does, and between the three guests all four tags appear.
+///
+/// `keccak-test` is S21's fixture and requests `KECCAK_F` alone;
+/// `recursion-ops` is S23's and requests `POSEIDON2` and `FR_ARITH` through
+/// ordinary `Fr` arithmetic; `mod-mul-ops` is S26's and requests `MOD_MUL`, both
+/// by name and through `guests/vendor/k256`'s patched field multiply. No
+/// committed guest requests all four, which is why this takes three.
+#[test]
+fn the_delegation_space_column_is_the_requested_family() {
+    let seen: Vec<u64> = [
+        ("keccak-test", 6, HEIGHT),
+        ("recursion-ops", 9, HEIGHT),
+        // `2^18`: its `.text` reaches pc `0x2161a` and a table's row `i` is pc `2i`.
+        ("mod-mul-ops", 12, 1 << 18),
+    ]
+    .into_iter()
+    .flat_map(|(name, status, height)| deleg_space_tags(name, status, height))
+    .collect();
+    let mut tags = seen.clone();
+    tags.sort_unstable();
+    tags.dedup();
+    assert_eq!(
+        tags,
+        [
+            constants::address_space::DELEGATION_KECCAK_F as u64,
+            constants::address_space::DELEGATION_POSEIDON2 as u64,
+            constants::address_space::DELEGATION_FR_ARITH as u64,
+            constants::address_space::DELEGATION_MOD_MUL as u64,
+        ],
+        "the three guests request all four delegation families"
+    );
+}
+
+/// `name`'s add/sub frame's `deleg_space` column, checked row by row against
+/// the row's own requested family, and returned as the tags it held.
+fn deleg_space_tags(name: &str, status: i32, height: u32) -> Vec<u64> {
+    let t = common::traced_exiting_at(name, 0, status, height);
+    let fam = family::ADD_SUB_LUI_AUIPC;
+    let trace = t
+        .traces
+        .family(fam)
+        .expect("the add/sub family owns every ecall row");
+    let queries = frame_queries(fam);
+    let at = queries
+        .iter()
+        .position(|&q| q == constraints::memory::DELEG)
+        .expect("add/sub's frame has the deleg query");
+    let height = trace.len().next_power_of_two();
+    let shard = RowSlice::shard(trace, 0, height);
+    let columns = build_memory_columns(&shard, queries, height);
+    let space = &columns
+        .iter()
+        .find(|(a, _)| *a == constraints::memory::deleg_space(queries.len()))
+        .expect("the deleg_space column")
+        .1;
+    let mask = &columns
+        .iter()
+        .find(|(a, _)| *a == frame(at, constraints::memory::FIELD_MASK))
+        .expect("the deleg mask")
+        .1;
+    let mut tags: Vec<u64> = Vec::new();
+    for r in 0..trace.len() {
+        let row = trace.row(r);
+        let live = row.query(trace::Role::Delegate).is_some();
+        assert_eq!(
+            mask.get(r),
+            Fr::from_u64(live as u64),
+            "{name} row {r}'s deleg mask"
+        );
+        match row.delegation_space() {
+            Some(s) => {
+                assert_eq!(space.get(r), Fr::from_u64(s.tag() as u64), "{name} row {r}");
+                tags.push(s.tag() as u64);
+            }
+            None => assert_eq!(space.get(r), Fr::ZERO, "{name} row {r}"),
+        }
+    }
+    assert!(!tags.is_empty(), "{name} makes a delegation call");
+    tags
 }

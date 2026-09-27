@@ -1,0 +1,547 @@
+{
+  "label": "block-26059900",
+  "guest": "revm-block",
+  "block_number": 26059900,
+  "txs": 376,
+  "gas_used": 60000000,
+  "guest_cycles": 2075897177,
+  "cycles_per_gas": 34.59828628333333,
+  "exit_code": 70,
+  "journal_bytes": 0,
+  "families": [
+    [
+      "ADD_SUB_LUI_AUIPC",
+      613338954
+    ],
+    [
+      "JUMP_BRANCH_SLT",
+      508127162
+    ],
+    [
+      "SHIFT_BITWISE",
+      229040755
+    ],
+    [
+      "MUL_DIV",
+      143598651
+    ],
+    [
+      "MEM_WORD",
+      416499663
+    ],
+    [
+      "MEM_SUBWORD",
+      165252938
+    ],
+    [
+      "ATOMICS",
+      39054
+    ],
+    [
+      "INIT_TEARDOWN",
+      0
+    ],
+    [
+      "ZERO_WINDOWS",
+      0
+    ],
+    [
+      "KECCAK_F",
+      52058
+    ],
+    [
+      "PUBLIC_INPUT",
+      0
+    ],
+    [
+      "PUBLIC_OUTPUT",
+      0
+    ],
+    [
+      "ADVICE_WINDOWS",
+      0
+    ]
+  ],
+  "categories": [
+    {
+      "category": "secp256k1",
+      "cycles": 992452327,
+      "share": 47.80835669492314,
+      "calls": 2766600
+    },
+    {
+      "category": "memory copy",
+      "cycles": 315129191,
+      "share": 15.180385352968761,
+      "calls": 5966771
+    },
+    {
+      "category": "evm interpreter",
+      "cycles": 304521595,
+      "share": 14.669396845564476,
+      "calls": 4478993
+    },
+    {
+      "category": "evm state + journal",
+      "cycles": 148461898,
+      "share": 7.151698053491789,
+      "calls": 111546
+    },
+    {
+      "category": "witness + block setup",
+      "cycles": 144933616,
+      "share": 6.981733854923008,
+      "calls": 38701
+    },
+    {
+      "category": "256-bit arithmetic",
+      "cycles": 99747137,
+      "share": 4.8050133747062755,
+      "calls": 877415
+    },
+    {
+      "category": "keccak256",
+      "cycles": 52941044,
+      "share": 2.550272941577395,
+      "calls": 37020
+    },
+    {
+      "category": "unattributed",
+      "cycles": 12533134,
+      "share": 0.6037454137353934,
+      "calls": 670958
+    },
+    {
+      "category": "core runtime",
+      "cycles": 4063484,
+      "share": 0.1957459186814049,
+      "calls": 202359
+    },
+    {
+      "category": "allocation",
+      "cycles": 1130556,
+      "share": 0.05446107892655032,
+      "calls": 31387
+    },
+    {
+      "category": "sha256/ripemd160",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0
+    },
+    {
+      "category": "bn254",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0
+    },
+    {
+      "category": "rlp + trie",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0
+    },
+    {
+      "category": "delegation shims",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0
+    }
+  ],
+  "top_functions": [
+    {
+      "path": "k256::arithmetic::field::field_impl::FieldElementImpl::mul",
+      "category": "secp256k1",
+      "cycles": 643978019,
+      "share": 31.021672274281435,
+      "calls": 488700,
+      "cycles_per_call": 1317.736891753632
+    },
+    {
+      "path": "compiler_builtins::mem::memcpy",
+      "category": "memory copy",
+      "cycles": 213688917,
+      "share": 10.293810279602303,
+      "calls": 2379110,
+      "cycles_per_call": 89.81884696378057
+    },
+    {
+      "path": "k256::arithmetic::field::FieldElement::square",
+      "category": "secp256k1",
+      "cycles": 133912504,
+      "share": 6.450825478433607,
+      "calls": 114750,
+      "cycles_per_call": 1166.9934989106753
+    },
+    {
+      "path": "revm_handler::handler::Handler::execution",
+      "category": "evm state + journal",
+      "cycles": 116501894,
+      "share": 5.612122569980257,
+      "calls": 376,
+      "cycles_per_call": 309845.46276595746
+    },
+    {
+      "path": "_<revm_interpreter::interpreter::stack::Stack as revm_interpreter::interpreter_types::StackTr>::push_slice",
+      "category": "evm interpreter",
+      "cycles": 92674156,
+      "share": 4.464294138784312,
+      "calls": 949655,
+      "cycles_per_call": 97.58718271372236
+    },
+    {
+      "path": "serde_core::de::SeqAccess::next_element",
+      "category": "witness + block setup",
+      "cycles": 68514558,
+      "share": 3.3004793666618104,
+      "calls": 2021,
+      "cycles_per_call": 33901.31519049975
+    },
+    {
+      "path": "k256::arithmetic::field::field_impl::FieldElementImpl::add",
+      "category": "secp256k1",
+      "cycles": 64240380,
+      "share": 3.094583908671118,
+      "calls": 1088820,
+      "cycles_per_call": 59.0
+    },
+    {
+      "path": "serde_core::ser::impls::_<impl serde_core::ser::Serialize for alloc::vec::Vec<T>>::serialize",
+      "category": "witness + block setup",
+      "cycles": 63146936,
+      "share": 3.0419105868845255,
+      "calls": 2021,
+      "cycles_per_call": 31245.391390400793
+    },
+    {
+      "path": "memcmp",
+      "category": "memory copy",
+      "cycles": 50890549,
+      "share": 2.4514966137939886,
+      "calls": 172745,
+      "cycles_per_call": 294.59925902341604
+    },
+    {
+      "path": "guest_sdk::keccak256",
+      "category": "keccak256",
+      "cycles": 50739623,
+      "share": 2.4442262151599814,
+      "calls": 9541,
+      "cycles_per_call": 5318.061314327639
+    },
+    {
+      "path": "revm_interpreter::instructions::stack::swap",
+      "category": "evm interpreter",
+      "cycles": 41486340,
+      "share": 1.9984775960798948,
+      "calls": 296331,
+      "cycles_per_call": 140.0
+    },
+    {
+      "path": "memset",
+      "category": "memory copy",
+      "cycles": 40188438,
+      "share": 1.9359551352191082,
+      "calls": 1010452,
+      "cycles_per_call": 39.77273339060143
+    },
+    {
+      "path": "revm_bytecode::legacy::analysis::analyze_legacy",
+      "category": "evm interpreter",
+      "cycles": 27292651,
+      "share": 1.3147400219235426,
+      "calls": 801,
+      "cycles_per_call": 34073.22222222222
+    },
+    {
+      "path": "k256::arithmetic::field::field_10x26::FieldElement10x26::add_modulus_correction",
+      "category": "secp256k1",
+      "cycles": 24555960,
+      "share": 1.182908299701397,
+      "calls": 372060,
+      "cycles_per_call": 66.0
+    },
+    {
+      "path": "revm_interpreter::instructions::arithmetic::mul",
+      "category": "256-bit arithmetic",
+      "cycles": 22174107,
+      "share": 1.0681698133067021,
+      "calls": 77901,
+      "cycles_per_call": 284.64470289213233
+    },
+    {
+      "path": "_<k256::arithmetic::projective::ProjectivePoint as subtle::ConditionallySelectable>::conditional_select",
+      "category": "secp256k1",
+      "cycles": 19367631,
+      "share": 0.9329764120585824,
+      "calls": 214830,
+      "cycles_per_call": 90.15328864683704
+    },
+    {
+      "path": "k256::arithmetic::scalar::wide::WideScalar::reduce_impl",
+      "category": "secp256k1",
+      "cycles": 18506880,
+      "share": 0.8915123641502019,
+      "calls": 27540,
+      "cycles_per_call": 672.0
+    },
+    {
+      "path": "k256::arithmetic::scalar::Scalar::mul",
+      "category": "secp256k1",
+      "cycles": 18038700,
+      "share": 0.8689592239856878,
+      "calls": 27540,
+      "cycles_per_call": 655.0
+    },
+    {
+      "path": "revm_interpreter::instructions::arithmetic::add",
+      "category": "256-bit arithmetic",
+      "cycles": 16372925,
+      "share": 0.7887156060234866,
+      "calls": 209526,
+      "cycles_per_call": 78.14268873552686
+    },
+    {
+      "path": "k256::arithmetic::projective::ProjectivePoint::add",
+      "category": "secp256k1",
+      "cycles": 16272000,
+      "share": 0.7838538526997573,
+      "calls": 28800,
+      "cycles_per_call": 565.0
+    }
+  ],
+  "mnemonics": [
+    [
+      "Add",
+      343802824
+    ],
+    [
+      "Lw",
+      237409973
+    ],
+    [
+      "Addi",
+      225490691
+    ],
+    [
+      "Sw",
+      179089690
+    ],
+    [
+      "Sltu",
+      158783273
+    ],
+    [
+      "Beq",
+      109110883
+    ],
+    [
+      "Bne",
+      106639054
+    ],
+    [
+      "Lbu",
+      96896020
+    ],
+    [
+      "Mul",
+      73922256
+    ],
+    [
+      "Mulhu",
+      69633828
+    ],
+    [
+      "Bltu",
+      67829466
+    ],
+    [
+      "Sb",
+      63849925
+    ],
+    [
+      "Slli",
+      54110229
+    ],
+    [
+      "Srli",
+      52121663
+    ],
+    [
+      "Or",
+      44304314
+    ],
+    [
+      "And",
+      30160793
+    ],
+    [
+      "Jalr",
+      27937117
+    ],
+    [
+      "Sub",
+      26191085
+    ],
+    [
+      "Andi",
+      23573882
+    ],
+    [
+      "Bgeu",
+      16149207
+    ],
+    [
+      "Xor",
+      11014959
+    ],
+    [
+      "Auipc",
+      11005257
+    ],
+    [
+      "Jal",
+      10614349
+    ],
+    [
+      "Lui",
+      6789169
+    ],
+    [
+      "Blt",
+      5541804
+    ],
+    [
+      "Srl",
+      4631814
+    ],
+    [
+      "Sll",
+      4422144
+    ],
+    [
+      "Lhu",
+      4161930
+    ],
+    [
+      "Srai",
+      3791889
+    ],
+    [
+      "Bge",
+      2853242
+    ],
+    [
+      "Sltiu",
+      2631790
+    ],
+    [
+      "Xori",
+      901584
+    ],
+    [
+      "Sh",
+      159023
+    ],
+    [
+      "Lh",
+      108727
+    ],
+    [
+      "Lb",
+      77313
+    ],
+    [
+      "Ecall",
+      52059
+    ],
+    [
+      "Divu",
+      42567
+    ],
+    [
+      "Slt",
+      36977
+    ],
+    [
+      "AmoaddW",
+      36110
+    ],
+    [
+      "Fence",
+      7869
+    ],
+    [
+      "Ori",
+      7484
+    ],
+    [
+      "LrW",
+      1472
+    ],
+    [
+      "ScW",
+      1472
+    ]
+  ],
+  "candidates": [
+    {
+      "category": "secp256k1",
+      "cycles": 992452327,
+      "share": 47.80835669492314,
+      "calls": 360,
+      "frame_words": 30,
+      "shim_cycles": 23040,
+      "removable_cycles": 992429287,
+      "removable_share": 47.8072468133618,
+      "entryless": false
+    },
+    {
+      "category": "256-bit arithmetic",
+      "cycles": 99747137,
+      "share": 4.8050133747062755,
+      "calls": 0,
+      "frame_words": 32,
+      "shim_cycles": 0,
+      "removable_cycles": 99747137,
+      "removable_share": 4.8050133747062755,
+      "entryless": true
+    },
+    {
+      "category": "bn254",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0,
+      "frame_words": 64,
+      "shim_cycles": 0,
+      "removable_cycles": 0,
+      "removable_share": 0.0,
+      "entryless": false
+    },
+    {
+      "category": "sha256/ripemd160",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0,
+      "frame_words": 24,
+      "shim_cycles": 0,
+      "removable_cycles": 0,
+      "removable_share": 0.0,
+      "entryless": false
+    },
+    {
+      "category": "keccak256",
+      "cycles": 52941044,
+      "share": 2.550272941577395,
+      "calls": 37020,
+      "frame_words": 50,
+      "shim_cycles": 3850080,
+      "removable_cycles": 49090964,
+      "removable_share": 2.364807108170175,
+      "entryless": false
+    }
+  ],
+  "unattributed_cycles": 585,
+  "unattributed_share": 0.000028180586518520035,
+  "function_symbols": 1303
+}

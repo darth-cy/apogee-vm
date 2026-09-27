@@ -16,21 +16,24 @@
 //! `compare_exchange` is an `lr.w`/`sc.w` loop. The `SeqCst` load in the
 //! compare-and-swap loop brings `fence` instructions with it.
 //!
-//! # fd 0, the public input
+//! # The public input
 //!
 //! ```text
 //!           0..4     n               u32 LE; how many rounds to run
 //! ```
 //!
-//! # fd 1, the public output
+//! # The journal
 //!
 //! Nine `u32` LE words: the final value of each cell in declaration order —
 //! `SUM`, `LAST`, `MIXED`, `MASKED`, `FLAGS`, `LOW`, `HIGH`, `STEPS`, the
 //! signed cell as its two's-complement bits — then `OLD`, every value an
-//! atomic returned, folded in order. An AMO has two halves, the memory write
-//! and the old value it hands back in `rd`, and `OLD` is what makes the
-//! second observable. See `crates/loader/tests/qemu.rs` for the host's
-//! recomputation.
+//! atomic returned, folded in order. An AMO has two
+//! halves, the memory write and the old value it hands back in `rd`, and
+//! `OLD` is what makes the second observable.
+//!
+//! # The advice
+//!
+//! Unused: every cell here is a short deterministic function of `n`.
 
 use core::sync::atomic::{AtomicI32, AtomicU32, Ordering::SeqCst};
 
@@ -51,9 +54,9 @@ static UNSIGNED_LOW: AtomicU32 = AtomicU32::new(u32::MAX);
 fn main() {
     let mut n = [0u8; 4];
     assert_eq!(
-        guest_sdk::read_stdin(&mut n),
+        guest_sdk::read_input(&mut n),
         4,
-        "atomics: public input is one u32"
+        "atomics: the public input is one u32"
     );
     let n = u32::from_le_bytes(n);
 
@@ -85,17 +88,17 @@ fn main() {
 
     // The signed maximum and the unsigned minimum fold into two other cells,
     // each by an operation that is one-to-one in the value folded, so each of
-    // the eleven instructions' memory effects reaches fd 1.
+    // the eleven instructions' memory effects reaches the journal.
     HIGH.fetch_xor(SIGNED_HIGH.load(SeqCst) as u32, SeqCst);
     SUM.fetch_add(UNSIGNED_LOW.load(SeqCst), SeqCst);
 
     for cell in [&SUM, &LAST, &MIXED, &MASKED, &FLAGS] {
-        guest_sdk::write_stdout(&cell.load(SeqCst).to_le_bytes());
+        guest_sdk::commit(&cell.load(SeqCst).to_le_bytes());
     }
-    guest_sdk::write_stdout(&LOW.load(SeqCst).to_le_bytes());
-    guest_sdk::write_stdout(&HIGH.load(SeqCst).to_le_bytes());
-    guest_sdk::write_stdout(&STEPS.load(SeqCst).to_le_bytes());
-    guest_sdk::write_stdout(&old.to_le_bytes());
+    guest_sdk::commit(&LOW.load(SeqCst).to_le_bytes());
+    guest_sdk::commit(&HIGH.load(SeqCst).to_le_bytes());
+    guest_sdk::commit(&STEPS.load(SeqCst).to_le_bytes());
+    guest_sdk::commit(&old.to_le_bytes());
 }
 
 /// One step of an order-sensitive fold: multiplying by an odd number is

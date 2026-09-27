@@ -33,6 +33,7 @@ pub mod lookup;
 pub mod mem_subword;
 pub mod mem_word;
 pub mod memory;
+pub mod mod_mul;
 pub mod mul_div;
 pub mod poseidon2;
 pub mod shift_bitwise;
@@ -148,6 +149,7 @@ pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
         f::KECCAK_F => (keccak::artifact(trace_vars), keccak::channels()),
         f::POSEIDON2 => (poseidon2::artifact(trace_vars), poseidon2::channels()),
         f::FR_ARITH => (fr_arith::artifact(trace_vars), fr_arith::channels()),
+        f::MOD_MUL => (mod_mul::artifact(trace_vars), mod_mul::channels()),
         _ => return None,
     };
     Some(FamilyCircuit {

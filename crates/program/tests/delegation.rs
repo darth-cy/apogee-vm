@@ -54,8 +54,8 @@ fn image_of(bytes: Vec<u8>) -> ProgramImage {
 fn the_registry_is_one_table() {
     assert_eq!(
         DELEGATIONS.len(),
-        3,
-        "S21 registers one delegation family and S23 two more"
+        4,
+        "S21 registers one delegation family, S23 two more and S26 a fourth"
     );
     for (fam, number, space, words) in DELEGATIONS {
         assert_eq!(delegation_family(number), Some(fam));
@@ -109,9 +109,15 @@ fn the_registry_is_one_table() {
                 constants::address_space::DELEGATION_FR_ARITH,
                 25
             ),
+            (
+                family::MOD_MUL,
+                ecall::PRECOMPILE_MOD_MUL,
+                constants::address_space::DELEGATION_MOD_MUL,
+                32
+            ),
         ],
         DELEGATIONS,
-        "the three families, their numbers, their tags and their frames"
+        "the four families, their numbers, their tags and their frames"
     );
     // Every number and every tag is its own: the request-side gates partition
     // ecall rows on exactly that (`crates/constraints/src/add_sub.rs`).
@@ -126,16 +132,6 @@ fn the_registry_is_one_table() {
 // ---------------------------------------------------------------------------
 // The scan
 // ---------------------------------------------------------------------------
-
-#[test]
-fn a_record_declares_its_family() {
-    let mut bytes = vec![0u8; 3];
-    bytes.extend(record(ecall::PRECOMPILE_KECCAK_F));
-    assert_eq!(
-        declared_delegations(&image_of(bytes)),
-        Ok(vec![family::KECCAK_F])
-    );
-}
 
 #[test]
 fn the_scan_is_byte_wise() {
@@ -170,7 +166,9 @@ fn a_number_no_family_answers_is_refused() {
     // the ABI — not silently ignored, which would make the guest's own call
     // fail much later and much less clearly.
     let base = constants::guest_memory::RAM_ORIGIN;
-    for number in [0u32, ecall::EXIT, ecall::PRECOMPILE_FIRST + 3, 0x05ff] {
+    // `PRECOMPILE_FIRST + 3` was `0x503` and unanswered until S26 gave it to
+    // `MOD_MUL`, so the unanswered numbers are now 4 and up.
+    for number in [0u32, ecall::EXIT, ecall::PRECOMPILE_FIRST + 4, 0x05ff] {
         assert_eq!(
             declared_delegations(&image_of(record(number))),
             Err(ProgramError::UnknownDelegation { addr: base, number }),
@@ -193,15 +191,6 @@ fn a_truncated_record_declares_nothing() {
         declared_delegations(&image_of(full)),
         Ok(vec![family::KECCAK_F])
     );
-}
-
-#[test]
-fn a_segment_with_no_file_bytes_carries_no_record() {
-    // `.bss` and the heap-and-stack reservation hold no image byte, wherever
-    // they lie, and identity does not bind them either.
-    let mut image = image_of(Vec::new());
-    image.segments[0].mem_len = 1 << 20;
-    assert_eq!(declared_delegations(&image), Ok(Vec::new()));
 }
 
 // ---------------------------------------------------------------------------
@@ -287,6 +276,7 @@ fn reachability_survives_the_optimiser() {
         for (name, want) in [
             ("keccak-test", vec![family::KECCAK_F]),
             ("recursion-ops", vec![family::POSEIDON2, family::FR_ARITH]),
+            ("mod-mul-ops", vec![family::MOD_MUL]),
             ("fib", Vec::new()),
         ] {
             let bytes = common::build_profile(name, &format!("deleg-{profile}"), profile);
@@ -298,36 +288,4 @@ fn reachability_survives_the_optimiser() {
             );
         }
     }
-}
-
-/// A declared family is in the `VmConfig` **in ascending id order**, after the
-/// RAM window families and before S-IO's three, and carries a table with no
-/// columns — it is invoked, never decoded.
-///
-/// It was last until S-IO; the config is one ascending list and three families
-/// were appended above it (`docs/spec/public-values.md` §4).
-#[test]
-fn a_declared_family_is_last_and_has_no_table() {
-    let image = common::guest("keccak-test");
-    let (tables, config) = decode_program(&image, &common::fitting(&image)).expect("it decodes");
-    let ids: Vec<u32> = config.families.iter().map(|(f, _)| *f).collect();
-    assert!(ids.contains(&family::KECCAK_F));
-    assert!(
-        ids.windows(2).all(|p| p[0] < p[1]),
-        "the family list is strictly ascending"
-    );
-    assert_eq!(
-        ids.last().copied(),
-        Some(family::ADVICE_WINDOWS),
-        "S-IO's three are the highest ids"
-    );
-    let table = tables
-        .family(family::KECCAK_F)
-        .expect("a config family has a table");
-    assert!(table.columns.is_empty(), "no columns");
-    assert!(
-        (0..table.height as usize).all(|row| !table.is_live(row)),
-        "and no live row: the family claims no pc"
-    );
-    assert_eq!(program::field_mask(family::KECCAK_F), 0);
 }

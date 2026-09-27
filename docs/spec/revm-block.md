@@ -10,8 +10,9 @@ anything about it.
 on fd 1 — and neither was bound to the execution, which is why S24 had to prove a second
 binary with the witness in its image. The witness is advice now, so one program identity
 serves every block, and the commitment is the journal, so the statement carries its bytes.
-`docs/spec/public-values.md` is that architecture; `guests/revm-block/src/stdio.rs` is the
-fd 0 / fd 1 binary kept for the executors that have neither region.*
+`docs/spec/public-values.md` is that architecture. The fd binary that was kept beside them
+is **deleted** with the syscall it used: there is no executor left that wants one, and both
+of this guest's binaries read the advice region and write the journal.*
 
 **The output commitment (§2) is frozen at S24. `BlockWitness` (§1) is not**, by the
 owner's decision at the close of that stage, and **S25 moved it** — `block_hashes`,
@@ -64,6 +65,8 @@ BlockEnvWitness
     difficulty        [u8; 32]     pre-merge
     prevrandao        Option<[u8; 32]>   post-merge; replaces difficulty
     excess_blob_gas   Option<u64>  EIP-4844; required from Cancun on
+    blob_gasprice     Option<u128> S26; RECORDED, never derived -- §1.6.
+                                   Some exactly when excess_blob_gas is
     slot_num          u64          EIP-7843
     block_hashes      Vec<(u64, [u8; 32])>   S25; ascending by number, at most 256
 
@@ -154,6 +157,53 @@ cycles, 7 % of the run; `docs/handoff/S24-revm.md` §4 is the account.
 
 An account's **code hash is not carried**: it is `keccak256(code)`, which the guest
 recomputes, so a witness cannot claim a hash its code does not have.
+
+### 1.6 The blob gas price is recorded, not derived (S26)
+
+EIP-4844's blob gas price is
+`fake_exponential(1, excess_blob_gas, BLOB_BASE_FEE_UPDATE_FRACTION)`, and the update
+fraction is a **fork parameter that keeps moving**: 3,338,477 at Cancun, 5,007,716 at
+Prague (EIP-7691), and raised again on Fusaka's BPO schedule (EIP-7892). **revm 42 carries
+the Cancun and Prague constants and nothing after them**, so a guest that derived the
+price computed Prague's answer for a post-Fusaka block.
+
+The number that found it: on block 26,045,657, `excessBlobGas` is 180,365,063 and the
+chain's `blobGasPrice` is **5,055,772**. Prague's fraction gives
+**4,387,037,219,060,994** — a factor of 8.7e8. revm checks
+`max_fee_per_blob_gas >= blob_gasprice` per transaction, so **every block carrying a
+type-3 transaction refused to execute**, naming the transaction:
+
+```
+transaction 32 is not executable: blob gas price (1864339984718618) is
+greater than max fee per blob gas (34515560)
+```
+
+S25 did not see it because the pinned mini-block is its first **two** transactions and
+neither is type-3: the wrong price was computed, carried in the `BlockEnv`, and read by
+nothing. S26's profiler is what hit it, on the first whole block it tried.
+
+So the price is recorded. `blobGasPrice` is on **every receipt of every post-Cancun
+block** — it is the block's price, not the transaction's — so one `eth_getBlockReceipts`
+answers it and the chain itself is the source. The guest constructs
+`BlobExcessGasAndPrice { excess_blob_gas, blob_gasprice }` from the two fields and runs no
+`fake_exponential` at all, which is worth **2.0% of a mini-block's cycles** on its own
+(`docs/spec/profiling.md`).
+
+It is **advice like every other field here** and it is bound the same way: by the journal
+the execution publishes, and in the stateless mode by the post-state root a wrong fee
+accounting would move. `BlockWitness::canonical` refuses a witness whose
+`excess_blob_gas` and `blob_gasprice` are not both present or both absent
+(`WitnessError::BlobPairing`), because a witness carrying one without the other is one the
+guest would have to derive the other for — which is the derivation this removes. A
+post-Cancun block with **no receipts** is refused by the recorder rather than given a
+derived price: it has no transactions, so nothing would read the price, and a number
+nothing reads is still a number a later reader would trust.
+
+**This is the general rule the witness keeps learning**, and it is S25's twice over — an
+absent account is recorded rather than inferred, an ancestor hash is recorded rather than
+invented, and now a fork parameter is recorded rather than hardcoded. What all three have
+in common is that the guest was deriving something the chain already knows, from a table
+that goes stale.
 
 ### 1.2 What is deliberately absent
 
@@ -358,8 +408,8 @@ Every keccak in the image is `revm::primitives::keccak256`, which is
 feature turns it into an `extern "C"` call the guest implements as `guest_sdk::keccak256`
 — the S21 delegation, with its bit-identical software fallback behind it
 (`docs/spec/delegation.md` §2). So revm's `KECCAK256` opcode, a contract's code hash and
-this page's two commitments all reach the same shim, and a guest run under
-`qemu-riscv32`, where the ecall answers `-ENOSYS`, computes the same bytes.
+this page's two commitments all reach the same shim — a dependency that has never heard of
+this VM ends up using its delegation, and the bytes are the same whichever path answers.
 
 revm uses only the one-shot form; `alloy-primitives`' streaming `Keccak256` — which
 `native-keccak` does **not** cover — is not reachable from this workload.
@@ -376,7 +426,6 @@ revm uses only the one-shot form; `alloy-primitives`' streaming `Keccak256` — 
 | §2's shape, field by field | `…::the_output_commitment_has_the_frozen_shape` |
 | native revm produces the committed output | `…::native_revm_produces_the_committed_output` |
 | the guest produces it too | `…::a4_the_guest_agrees_with_native_revm` |
-| the same bytes under `qemu-riscv32` | `…::a3_the_two_executors_commit_the_same_bytes` |
 | every delegated permutation is the reference | `…::a5_every_delegated_permutation_is_the_reference` |
 | and the harvested frames are the committed ones | `…::a5_the_harvested_frames_are_the_committed_ones` |
 | the fixture is what the builder still writes | `cargo run -p kat-gen`, regenerated and diffed in CI |

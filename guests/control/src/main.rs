@@ -4,10 +4,7 @@
 //! `jalr`, the six branches, `slt`, `sltu`, `slti`, `sltiu` — with the
 //! operands and control flow the stage's acceptance names, checking every
 //! result itself and exiting with the number of checks that passed. It is the
-//! one program S17 proves end to end (`docs/spec/jump-branch-slt.md`), and
-//! `qemu-riscv32` runs the same binary: the two executors are held to one exit
-//! status, which — every result being checked here — is the number of checks
-//! that passed (`crates/emulator/tests/qemu_outputs.rs`).
+//! one program S17 proves end to end (`docs/spec/jump-branch-slt.md`).
 //!
 //! Everything in its image is an instruction of the two families S17 proves,
 //! add/sub/lui/auipc and jump/branch/slt, plus the exit ecall: no SDK, no
@@ -39,14 +36,14 @@
 //! Each section ends by adding 1 to `s0` — each call adds 1 in its callee —
 //! and any wrong answer jumps to `fail`.
 //!
-//! # fd 0, fd 1, fd 2, fd 3
+//! # Input, advice and the journal
 //!
-//! Unused. The guest reads nothing and writes nothing.
+//! Unused. The guest reads nothing and commits nothing: `EXIT` is its only
+//! ecall, and its result is the status.
 //!
 //! # The result
 //!
 //! The exit status, `a0`: 16, the number of checks, on success; 1 from `fail`.
-//! Both are below 256, which is all of an exit status `qemu-riscv32` reports.
 
 use core::arch::global_asm;
 

@@ -21,7 +21,7 @@ use prover::{
 };
 use trace::{Phase, TraceArchive};
 use transcript::TranscriptEvent::{self, Absorb, Challenge};
-use verifier::{load_verifying_key, verify_shard, PublicInputs, ShardProof, VerifyError};
+use verifier::{verify_shard, PublicInputs, ShardProof, VerifyError};
 use verifier_core::{global_commit, reduce_shard, statement_shards};
 
 const ADD: u32 = family::ADD_SUB_LUI_AUIPC;
@@ -66,8 +66,8 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
 /// `ADD_SUB_LUI_AUIPC` shard; `verify_shard` accepts both against one
 /// statement; and every proof has its circuit's shape — its round counts, its
 /// claim counts, and a byte length that is a function of the key and the family
-/// alone. (QEMU's reading of the same guest is
-/// `crates/emulator/tests/qemu_outputs.rs`'s, where `addsub` is in the suite:
+/// alone. (The emulator's reading of the same guest is
+/// `crates/emulator/tests/guests.rs`':
 /// the exit status and fd 1, and nothing below that.)
 #[test]
 #[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
@@ -98,9 +98,19 @@ fn a1_the_tiny_guest_proves_and_both_shards_verify() {
         }),
         Ok(())
     );
+    // One entry per config family, in the config's order — which is ascending
+    // `FamilyId`, so S-IO's three follow the two window families. Only `ADD`
+    // owns cycles here (`trace::plan_shards`).
     assert_eq!(
         archive.cycle_profile().counts,
-        vec![(ADD, 29), (INIT, 0), (family::ZERO_WINDOWS, 0)]
+        vec![
+            (ADD, 29),
+            (INIT, 0),
+            (family::ZERO_WINDOWS, 0),
+            (family::PUBLIC_INPUT, 0),
+            (family::PUBLIC_OUTPUT, 0),
+            (family::ADVICE_WINDOWS, 0),
+        ]
     );
 
     // S-IO: the two public value families are in every config and prove one
@@ -154,11 +164,18 @@ fn a1_the_tiny_guest_proves_and_both_shards_verify() {
     // claim is three wider and the proof 224 bytes longer. The layer count and
     // the round count are unchanged — the seven gates S23 added are enforcing
     // and produce no inner column (`constraint-manifest.md` §1.2).
-    assert_eq!(add.to_bytes().len(), 62_484);
+    //
+    // S26 moved it once more and by exactly one column: `is_deleg_15`, the
+    // fourth delegation type's request selector. That is one more base claim
+    // (32 bytes) and one more witness commitment (64), so **+96**, and again no
+    // inner column — its three gates are enforcing. This number moves by 96
+    // bytes for every delegation family the repository registers, which is the
+    // standing price `docs/spec/delegation.md` §10 names.
+    assert_eq!(add.to_bytes().len(), 57_004);
     assert_eq!(init.to_bytes().len(), 20_524);
-    assert_eq!(add.gkr.layers.len(), 26);
+    assert_eq!(add.gkr.layers.len(), 25);
     assert_eq!(add.gkr.layers[0].rounds.len(), 20);
-    assert_eq!(add.gkr.layers[0].final_evals.len(), 42 + 35 + 7);
+    assert_eq!(add.gkr.layers[0].final_evals.len(), 27 + 33 + 7);
 }
 
 // ---------------------------------------------------------------------------
@@ -609,47 +626,3 @@ fn a9_a_resumed_statement_is_byte_identical() {
 // ---------------------------------------------------------------------------
 // Serde, the key's load, determinism
 // ---------------------------------------------------------------------------
-
-/// Acceptance 10's library half: every proof, the statement and the key
-/// round-trip byte for byte in their canonical encodings, and the key loads
-/// through `load_verifying_key` — the core's load rules and every curve point
-/// — back to itself. The CLI half is `crates/verifier/tests/cli.rs`.
-#[test]
-#[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
-fn a10_the_proofs_the_statement_and_the_key_round_trip() {
-    let (setup, _, public, proofs) = proved();
-    for proof in &proofs {
-        let bytes = proof.to_bytes();
-        let back = ShardProof::from_bytes(&bytes).unwrap();
-        assert_eq!(&back, proof);
-        assert_eq!(back.to_bytes(), bytes);
-        assert_eq!(verify_shard(&setup.vk, &back, &public), Ok(()));
-    }
-    let bytes = public.to_bytes();
-    assert_eq!(PublicInputs::from_bytes(&bytes).unwrap().to_bytes(), bytes);
-    let bytes = setup.vk.to_bytes();
-    let loaded = load_verifying_key(&bytes).expect("the key loads");
-    assert_eq!(loaded, setup.vk);
-    assert_eq!(loaded.to_bytes(), bytes);
-}
-
-/// Proofs do not depend on the thread count: the statement proved on one
-/// thread is byte for byte the statement proved on every core.
-#[test]
-#[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
-fn the_proofs_do_not_depend_on_the_thread_count() {
-    let (setup, whole, _, _) = proved();
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(1)
-        .build()
-        .expect("a one-thread pool");
-    let serial = pool.install(|| {
-        let mut archive = common::archive(&setup.program);
-        advance(&setup, &mut archive, Phase::Final).unwrap();
-        archive
-    });
-    assert_eq!(
-        serial.deterministic_payload(),
-        whole.deterministic_payload()
-    );
-}

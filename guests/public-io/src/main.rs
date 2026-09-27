@@ -9,10 +9,10 @@
 //! ```
 //!
 //! It issues **no ecall but `EXIT`**: `public_input`, `advice` and `commit` are
-//! ordinary loads and stores (`docs/spec/public-values.md`). That is what makes
-//! it provable, and it is the contrast this guest exists to draw — every other
-//! guest in this workspace that does I/O uses `read_stdin`/`write_stdout`, runs
-//! under `qemu-riscv32`, and cannot be proven.
+//! ordinary loads and stores (`docs/spec/public-values.md`). That is the whole
+//! I/O model — there are no descriptors, no streams and no I/O syscall to
+//! contrast it with any more — and this guest is the smallest program that uses
+//! all three of its regions at once.
 //!
 //! # What it does, and why that shape
 //!

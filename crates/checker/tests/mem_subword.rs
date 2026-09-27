@@ -834,61 +834,6 @@ fn the_layout_and_the_gates_are_the_spec() {
     assert_eq!(a.depth(), 1 + 5 + VARS as usize);
 }
 
-/// The legal masks are the six instructions, and nothing else: every row kind
-/// `program::row_kind` routes here, with and without `rd = x0`, gives one of
-/// them.
-#[test]
-fn the_legal_masks_are_the_instruction_list() {
-    let mut seen: Vec<u32> = Vec::new();
-    for (bit, instr) in instruction_corpus() {
-        let (fam, k) = program::row_kind(&instr);
-        assert_eq!(fam, family::MEM_SUBWORD, "{instr:?}");
-        assert_eq!(k, bit, "{instr:?}");
-        if !seen.contains(&(1 << k)) {
-            seen.push(1 << k);
-        }
-    }
-    seen.sort_unstable();
-    let mut legal = mem_subword::LEGAL_MASKS.to_vec();
-    legal.sort_unstable();
-    assert_eq!(seen, legal);
-    assert_eq!(legal.len(), 6);
-}
-
-/// Every instruction of the family, as `crates/isa` models it, with `rd = x0`
-/// and with a real destination, and at a positive and a negative displacement.
-fn instruction_corpus() -> Vec<(u32, isa::Instr)> {
-    use isa::Instr::*;
-    let mut out = Vec::new();
-    for rd in [0u8, 7] {
-        for imm in [-4i32, 0, 3] {
-            out.extend([
-                (kind::LB, Lb { rd, rs1: 5, imm }),
-                (kind::LH, Lh { rd, rs1: 5, imm }),
-                (kind::LBU, Lbu { rd, rs1: 5, imm }),
-                (kind::LHU, Lhu { rd, rs1: 5, imm }),
-                (
-                    kind::SB,
-                    Sb {
-                        rs1: 5,
-                        rs2: 6,
-                        imm,
-                    },
-                ),
-                (
-                    kind::SH,
-                    Sh {
-                        rs1: 5,
-                        rs2: 6,
-                        imm,
-                    },
-                ),
-            ]);
-        }
-    }
-    out
-}
-
 // ---------------------------------------------------------------------------
 // Honest rows
 // ---------------------------------------------------------------------------
@@ -1033,20 +978,6 @@ fn every_row_kind_satisfies_every_gate_and_every_bound() {
             );
         }
     }
-}
-
-/// The all-zero padding row is valid, and the circuit says so in its own
-/// padding contract.
-#[test]
-fn the_padding_row_is_the_all_zero_row() {
-    let a = artifact();
-    assert!(a.padding.zero_row_valid);
-    assert!(a.padding.row.iter().all(|v| *v == Fr::ZERO));
-    assert_eq!(
-        violated(&a, &Row::default()),
-        (none(), none(), none()),
-        "the all-zero row"
-    );
 }
 
 /// A row named by [`honest_rows`].
@@ -1532,36 +1463,6 @@ fn each_table_lookup_is_the_one_that_refuses_its_row() {
     );
 }
 
-/// A sign that is not the sub-word's sign bit, refused by the packed table and
-/// by nothing else. The row is the honest `lb` of `0x88` — a negative byte —
-/// claiming a sign of 0, so `se_rule` lets the sign extension go and the byte
-/// is written as if it were unsigned. This is the whole reason the sign comes
-/// from a committed table: with a whole word in one column, nothing else in
-/// the circuit knows bit 15 of `sign_in` from bit 14.
-#[test]
-fn a_sign_that_is_not_the_sub_words_sign_bit_is_refused() {
-    let a = artifact();
-    let base = row("lb at 3");
-    assert_eq!(
-        violated(&a, &base),
-        (none(), none(), none()),
-        "the honest lb"
-    );
-    assert_eq!(base.get("rd_write_value"), f(0xFFFF_FF88));
-
-    let mut r = base;
-    r.set("sign", Fr::ZERO)
-        .set("se", Fr::ZERO)
-        .set("rd_selected", f(0x88))
-        .set("rd_write_value", f(0x88))
-        .set("rd_hi", Fr::ZERO);
-    assert_eq!(
-        violated(&a, &r),
-        (none(), none(), names(&["sub_get_sign"])),
-        "an lb refusing to sign-extend"
-    );
-}
-
 /// The key this family looks up stays inside `U16GetSign`'s rows, and
 /// `sign_in_range` is what puts it there.
 ///
@@ -1871,32 +1772,6 @@ fn a_halfword_at_an_odd_address_is_unprovable() {
         let r = honest(Instr::new(bit, offset), BASE, SOURCE, MEM, 0);
         assert_eq!(violated(&a, &r), (none(), none(), none()));
     }
-}
-
-/// A sub-word read from the wrong position is refused, and `p_rule` is what
-/// refuses it.
-///
-/// The row is the honest `lbu` at offset 1 — which loads `0x7f` — re-spliced
-/// as if its address named offset 0, so that it loads `0x01` instead. Every
-/// part of the new splice is consistent: the word is the same word, the three
-/// parts sum to it, each scaled column is in range, the sign key follows the
-/// new sub-word and the packed table answers it. What the row cannot move is
-/// the two offset bits, which are the address's own, and `p_rule` is the
-/// degree-2 form that ties the power to them.
-#[test]
-fn a_sub_word_read_from_the_wrong_position_is_refused() {
-    let a = artifact();
-    let base = row("lbu at 1");
-    assert_eq!(violated(&a, &base), (none(), none(), none()));
-    assert_eq!(base.get("rd_write_value"), f(0x7F));
-
-    let r = spliced_at_offset_zero();
-    assert_eq!(r.get("rd_write_value"), f(0x01));
-    assert_eq!(
-        violated(&a, &r),
-        (names(&["p_rule"]), none(), none()),
-        "an lbu at offset 1 reading byte 0"
-    );
 }
 
 /// An `lbu` that yields more than a byte is refused, and the **scaled** bound

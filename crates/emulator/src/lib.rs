@@ -28,39 +28,36 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use constants::{delegation, ecall, family, fr_arith, guest_memory, keccak, memory, poseidon2};
+use constants::{
+    delegation, ecall, family, fr_arith, guest_memory, keccak, memory, mod_mul, poseidon2,
+};
 use field::Fr;
 use isa::{decode, Instr};
 use loader::{ProgramImage, Slot};
 use program::{row_kind, DecodedTables, FamilyId, VmConfig};
 use trace::{
-    AddressSpace, CycleProfile, DelegationTrace, FamilyTrace, FamilyTraces, IoStreams,
-    MemoryEventLog, Query, Role, Row, ROLES,
+    AddressSpace, CycleProfile, DelegationTrace, FamilyTrace, FamilyTraces, IoStreams, MemoryEvent,
+    MemoryEventLog, MemoryState, Query, Role, Row, ROLES,
 };
 
-/// What a guest is given to read. **Four fields, because there are four
-/// things, and what tells them apart is what binds them**
+/// What a guest is given to read. **Two fields, because there are two things,
+/// and what tells them apart is what binds them**
 /// (`docs/spec/public-values.md`).
 ///
 /// | field | where the guest finds it | what binds it |
 /// | --- | --- | --- |
 /// | `input` | the public input window, an ordinary load | the statement, at the window's init column |
 /// | `advice` | `guest_memory::ADVICE_ORIGIN`, an ordinary load | **nothing**; the guest owes a check |
-/// | `stdin` | fd 0, a `read` ecall | nothing; `read` is not provable |
-/// | `hint` | fd 3, a `read` ecall | nothing; the older spelling of advice |
 ///
-/// `input` and `stdin` are **not** the same bytes and neither seeds the other.
-/// They were one field briefly and the coupling was wrong in both directions: a
-/// public input is capped at `guest_memory::PUBLIC_PAYLOAD_BYTES` and an fd 0
-/// stream is not, and a guest cannot be both provable and runnable under
-/// `qemu-riscv32` anyway — the windows and the advice region are unmapped
-/// there, so no guest reads both paths.
+/// Both are *memory*. There is no third field and no stream: an Apogee guest
+/// has no file descriptors, so there is nothing a host could hand it that is
+/// neither of these two. It had four fields until the POSIX layer was deleted
+/// — `stdin` and `hint` were served over `read`, which was never a provable
+/// ecall, so a guest reading either was a guest no proof covered.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GuestIo {
     pub input: Vec<u8>,
     pub advice: Vec<u8>,
-    pub stdin: Vec<u8>,
-    pub hint: Vec<u8>,
 }
 
 /// A finished execution: the guest called `exit`.
@@ -71,7 +68,7 @@ pub struct Execution {
     /// The status passed to `exit`. A nonzero status is a failed execution,
     /// which is still an execution: it is reported, not refused.
     pub exit_code: i32,
-    /// Cycles run, transfer cycles included. Cycles are numbered from 1, so
+    /// Cycles run. Cycles are numbered from 1, so
     /// this is also the last cycle's number.
     pub cycle_count: u64,
     /// The execution's **public values**: the public input it was given, and
@@ -79,11 +76,6 @@ pub struct Execution {
     /// (`docs/spec/public-values.md`). These are the two byte strings a
     /// statement carries and a proof binds.
     pub io: IoStreams,
-    /// The fd 1 bytes: the POSIX compatibility stream, uncommitted. It is what
-    /// `qemu-riscv32` can be compared against; a proof binds none of it.
-    pub stdout: Vec<u8>,
-    /// The fd 2 bytes: diagnostics, uncommitted, and never archived.
-    pub stderr: Vec<u8>,
 }
 
 /// Every way an execution stops other than by `exit`. Each is a fatal guest
@@ -243,6 +235,87 @@ fn fr_arith_frame(pc: u32, old: &[u32]) -> Result<Vec<u32>, EmuError> {
     Ok(frame)
 }
 
+/// `MOD_MUL`'s frame, permuted: `out = a * b mod m` over eight 32-bit limbs.
+///
+/// **Schoolbook, in `u64` lanes, and long division by shift-and-subtract.** No
+/// Montgomery form, no reciprocal, no assumption about the modulus but that it
+/// is not zero: the circuit proves `a*b = q*m + out` with `out < m` and nothing
+/// else (`docs/spec/delegation.md` §14), so the executor computes exactly that
+/// and the two agree by definition rather than by a shared trick.
+///
+/// A zero modulus is a `DelegationFrame` error and not a wrapped answer: the
+/// circuit's borrow chain cannot put `out` below zero, so there is no witness
+/// for such a call and a trace carrying one is a trace no proof covers.
+fn mod_mul_frame(pc: u32, old: &[u32]) -> Result<Vec<u32>, EmuError> {
+    let limb = |first: usize, k: usize| old[first + k] as u64;
+    let m: [u64; mod_mul::LIMBS] = core::array::from_fn(|k| limb(mod_mul::M_WORD, k));
+    if m.iter().all(|w| *w == 0) {
+        return Err(EmuError::DelegationFrame {
+            pc,
+            detail: "the modulus is zero",
+        });
+    }
+    // The 512-bit product, sixteen limbs, carried in `u64` lanes: each partial
+    // product is below `2^64` and each accumulation below `2^64` again because
+    // the running lane is reduced to 32 bits before the next addend.
+    let mut product = [0u64; 2 * mod_mul::LIMBS];
+    for i in 0..mod_mul::LIMBS {
+        let mut carry = 0u64;
+        for j in 0..mod_mul::LIMBS {
+            let at = i + j;
+            let total = product[at] + limb(mod_mul::A_WORD, i) * limb(mod_mul::B_WORD, j) + carry;
+            product[at] = total & 0xffff_ffff;
+            carry = total >> 32;
+        }
+        let mut at = i + mod_mul::LIMBS;
+        while carry != 0 {
+            let total = product[at] + carry;
+            product[at] = total & 0xffff_ffff;
+            carry = total >> 32;
+            at += 1;
+        }
+    }
+    // `product mod m`, bit by bit from the top: the remainder doubles, takes the
+    // next bit, and the modulus is subtracted once if it fits. 512 iterations of
+    // 8-limb arithmetic, which is slow and is the executor's own cost, not the
+    // guest's.
+    let mut rem = [0u64; mod_mul::LIMBS];
+    for bit in (0..32 * 2 * mod_mul::LIMBS).rev() {
+        // rem = 2*rem + bit
+        let mut carry = (product[bit / 32] >> (bit % 32)) & 1;
+        for word in rem.iter_mut() {
+            let total = (*word << 1) | carry;
+            *word = total & 0xffff_ffff;
+            carry = total >> 32;
+        }
+        // The shifted-out bit and a remainder at or above `m` both mean one
+        // subtraction. `carry` can only be 1 because `rem < m <= 2^256`.
+        if carry == 1 || !less_than(&rem, &m) {
+            let mut borrow = 0i64;
+            for k in 0..mod_mul::LIMBS {
+                let diff = rem[k] as i64 - m[k] as i64 - borrow;
+                borrow = i64::from(diff < 0);
+                rem[k] = (diff + if diff < 0 { 1i64 << 32 } else { 0 }) as u64;
+            }
+        }
+    }
+    let mut frame = old.to_vec();
+    for k in 0..mod_mul::LIMBS {
+        frame[mod_mul::OUT_WORD + k] = rem[k] as u32;
+    }
+    Ok(frame)
+}
+
+/// Whether `a < b` over eight little-endian 32-bit limbs.
+fn less_than(a: &[u64; mod_mul::LIMBS], b: &[u64; mod_mul::LIMBS]) -> bool {
+    for k in (0..mod_mul::LIMBS).rev() {
+        if a[k] != b[k] {
+            return a[k] < b[k];
+        }
+    }
+    false
+}
+
 /// The 32 bytes a frame value occupies, from its eight little-endian words.
 fn value_bytes(frame: &[u32], first: usize) -> [u8; 32] {
     let mut bytes = [0u8; 32];
@@ -307,41 +380,179 @@ pub fn trace_run(
     );
     check_io(io)?;
     let mut machine = Machine::new(image, io);
-    machine.recorder = Some(Recorder {
+    machine.recorder = Some(Recorder::new(
         tables,
-        log: MemoryEventLog::new(),
-        traces: FamilyTraces {
-            families: config
-                .families
-                .iter()
-                .filter(|(family, _)| program::delegation_frame_words(*family).is_none())
-                .map(|(family, height)| FamilyTrace::new(*family, *height))
-                .collect(),
-            delegations: config
-                .families
-                .iter()
-                .filter_map(|(family, height)| {
-                    program::delegation_frame_words(*family)
-                        .map(|width| DelegationTrace::new(*family, *height, width))
-                })
-                .collect(),
-        },
-    });
+        config,
+        Keep::Whole(MemoryEventLog::new()),
+    ));
     machine.run()?;
     let recorder = machine
         .recorder
         .take()
         .expect("trace_run installed a recorder");
     let execution = machine.finish()?;
-    let profile = CycleProfile {
-        counts: recorder.traces.row_counts(),
-    };
+    let profile = recorder.profile();
     assert_eq!(
         profile.total(),
         execution.cycle_count,
         "routing: every cycle lands in exactly one family buffer"
     );
-    Ok((recorder.traces, recorder.log, profile, execution))
+    let Keep::Whole(log) = recorder.memory else {
+        unreachable!("trace_run keeps the whole log")
+    };
+    Ok((recorder.traces, log, profile, execution))
+}
+
+// ---------------------------------------------------------------------------
+// The streaming run
+// ---------------------------------------------------------------------------
+
+/// One completed shard's rows, handed back as soon as the family's buffer fills.
+///
+/// `index` is the shard index `docs/spec/block-proof.md` §5.1 gives it — rows
+/// `[index·h, min((index+1)·h, len))` of the family's buffer — so a streaming
+/// run's shards are the same shards `trace::plan_shards` counts and the same
+/// cut every family fill has made since S16.
+pub struct ShardChunk {
+    pub family: FamilyId,
+    pub index: u32,
+    pub rows: ChunkRows,
+}
+
+/// A shard's rows, by the kind of family: cycles for a cycle-owning family,
+/// invocations for a delegation one. A window family has neither — its rows are
+/// addresses, and what fills them is the final [`MemoryState`].
+///
+/// The cycle arm is boxed because a `FamilyTrace` is 872 bytes of column
+/// headers against a `DelegationTrace`'s 80, and one allocation a shard is
+/// nothing beside the rows it points at.
+pub enum ChunkRows {
+    Cycles(Box<FamilyTrace>),
+    Invocations(DelegationTrace),
+}
+
+/// What a streaming execution leaves behind when it ends: the last-access
+/// tables, the cycle profile and the same [`Execution`] [`run`] returns.
+///
+/// There is no memory event log and no whole-execution buffer here, and that is
+/// the point: both are `O(cycles)` — about 300 bytes a cycle between them — and
+/// a block of a billion cycles cannot hold either (`docs/spec/streaming.md` §1).
+pub struct StreamedExecution {
+    pub state: MemoryState,
+    pub profile: CycleProfile,
+    pub execution: Execution,
+}
+
+/// A guest executing under a **pull-based** tracer: the caller steps it, and
+/// every time one family's buffer reaches that family's height the buffer is
+/// handed over and a fresh one started.
+///
+/// The live state is one partial buffer per family — at most `height - 1` rows
+/// each — plus the last-access tables. Nothing accumulates: a shard the caller
+/// takes and drops is gone.
+///
+/// `tables` and `config` must be one `program::decode_program` of `image`, as
+/// [`trace_run`]'s must, and the execution is the same execution: the emulator
+/// is a pure function of `(image, io)`, so two runs give identical cycle
+/// numbering, identical rows and identical shard boundaries. That is what lets
+/// the streaming prover's two passes agree (`docs/spec/streaming.md` §2).
+pub struct StreamingRun<'a> {
+    machine: Machine<'a>,
+}
+
+impl<'a> StreamingRun<'a> {
+    pub fn new(
+        image: &ProgramImage,
+        io: &'a GuestIo,
+        tables: &'a DecodedTables,
+        config: &VmConfig,
+    ) -> Result<StreamingRun<'a>, EmuError> {
+        assert!(
+            tables.families.len() == config.families.len()
+                && tables
+                    .families
+                    .iter()
+                    .zip(&config.families)
+                    .all(|(t, (f, h))| t.family == *f && t.height == *h),
+            "StreamingRun: the decoded tables and the VmConfig describe different VMs"
+        );
+        check_io(io)?;
+        let mut machine = Machine::new(image, io);
+        machine.recorder = Some(Recorder::new(
+            tables,
+            config,
+            Keep::Streaming(MemoryState::new()),
+        ));
+        Ok(StreamingRun { machine })
+    }
+
+    /// Step the guest until at least one shard is ready, or until it exits.
+    ///
+    /// The shards are returned in the order they filled, which is **not**
+    /// statement order: a caller that needs statement order places them by
+    /// `(family, index)`. An empty result means the guest has exited and
+    /// [`StreamingRun::finish`] is what comes next.
+    pub fn next_shards(&mut self) -> Result<Vec<ShardChunk>, EmuError> {
+        loop {
+            let recorder = self.recorder();
+            if !recorder.ready.is_empty() {
+                return Ok(std::mem::take(&mut self.recorder().ready));
+            }
+            if self.machine.exit.is_some() {
+                return Ok(Vec::new());
+            }
+            self.machine.step()?;
+        }
+    }
+
+    /// The execution's tail: every partial buffer as a final short shard, and
+    /// what the execution left behind. Call it after [`StreamingRun::next_shards`]
+    /// has returned empty.
+    ///
+    /// Panics if the guest has not exited: a partial buffer is not a shard
+    /// until no more rows can reach it.
+    pub fn finish(mut self) -> Result<(Vec<ShardChunk>, StreamedExecution), EmuError> {
+        assert!(
+            self.machine.exit.is_some(),
+            "StreamingRun::finish before the guest exited"
+        );
+        let mut recorder = self
+            .machine
+            .recorder
+            .take()
+            .expect("a streaming run installed a recorder");
+        assert!(
+            recorder.ready.is_empty(),
+            "StreamingRun::finish with {} shards not taken",
+            recorder.ready.len()
+        );
+        let tail = recorder.flush_partial();
+        let profile = recorder.profile();
+        let execution = self.machine.finish()?;
+        assert_eq!(
+            profile.total(),
+            execution.cycle_count,
+            "routing: every cycle lands in exactly one family buffer"
+        );
+        let Keep::Streaming(state) = recorder.memory else {
+            unreachable!("a streaming run keeps the tables alone")
+        };
+        Ok((
+            tail,
+            StreamedExecution {
+                state,
+                profile,
+                execution,
+            },
+        ))
+    }
+
+    fn recorder(&mut self) -> &mut Recorder<'a> {
+        self.machine
+            .recorder
+            .as_mut()
+            .expect("a streaming run installed a recorder")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -405,18 +616,12 @@ struct Machine<'a> {
     /// `finish` reports as the statement's `input` whether or not the guest
     /// looked (`docs/spec/public-values.md` §9).
     public_input: &'a [u8],
-    stdin: &'a [u8],
-    stdin_at: usize,
-    hint: &'a [u8],
-    hint_at: usize,
     /// One past the highest advice byte the host supplied, rounded up to a
     /// word: the top of what a guest may load. Above it the advice region is
     /// addressable in principle and initialized by nothing in this execution,
     /// so a read there is refused loudly here rather than left to fail as an
     /// unprovable trace.
     advice_end: u32,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
     exit: Option<i32>,
     recorder: Option<Recorder<'a>>,
 }
@@ -442,14 +647,8 @@ impl<'a> Machine<'a> {
             ram: HashMap::new(),
             cycle: 1,
             public_input: &io.input,
-            stdin: &io.stdin,
-            stdin_at: 0,
-            hint: &io.hint,
-            hint_at: 0,
             advice_end: guest_memory::ADVICE_ORIGIN
                 + 4 * trace::advice_region_words(&io.advice) as u32,
-            stdout: Vec::new(),
-            stderr: Vec::new(),
             exit: None,
             recorder: None,
         };
@@ -518,8 +717,6 @@ impl<'a> Machine<'a> {
                 input: self.public_input.to_vec(),
                 output,
             },
-            stdout: self.stdout,
-            stderr: self.stderr,
         })
     }
 
@@ -694,6 +891,7 @@ impl<'a> Machine<'a> {
             }
             family::POSEIDON2 => poseidon2_frame(&old),
             family::FR_ARITH => fr_arith_frame(pc, &old)?,
+            family::MOD_MUL => mod_mul_frame(pc, &old)?,
             other => panic!("emulator: delegation family {other} has no implementation"),
         };
         assert_eq!(new.len(), words, "a delegation writes its whole frame");
@@ -954,20 +1152,19 @@ impl<'a> Machine<'a> {
 
     // -- ecall ------------------------------------------------------------
 
-    /// An ecall: its transfer cycles, if it moves bytes, then its own row —
-    /// `a7` at slot 1, the arguments its number uses at slot 2, `a0` written
-    /// at slot 3, and `next_pc` the fall-through — except an exit's, which is
-    /// the halting sentinel `HALT_PC` (`docs/spec/memory.md` §5).
+    /// An ecall: one row — `a7` at slot 1, its one argument `a0` at slot 2,
+    /// `a0` written at slot 3, and `next_pc` the fall-through — except an
+    /// exit's, which is the halting sentinel `HALT_PC`
+    /// (`docs/spec/memory.md` §5).
+    ///
+    /// Every ecall a guest may issue takes exactly one argument and moves no
+    /// bytes, so an ecall is one cycle. It was not always: `read` and `write`
+    /// brought a **transfer cycle** per word they moved, and both those calls
+    /// and that machinery went with the POSIX layer.
     fn ecall(&mut self, instr: Instr, pc: u32, fall: u32) -> Result<(), EmuError> {
         let mut row = Cycle::new();
         let number = self.read(&mut row, Role::Rs1, 17);
         let result = match number {
-            ecall::READ | ecall::WRITE => {
-                let fd = self.read(&mut row, Role::Rs2, 10);
-                let buf = self.read(&mut row, Role::Arg1, 11);
-                let count = self.read(&mut row, Role::Arg2, 12);
-                self.transfer(instr, pc, number == ecall::READ, fd, buf, count)?
-            }
             ecall::EXIT => {
                 let status = self.read(&mut row, Role::Rs2, 10);
                 self.exit = Some(status as i32);
@@ -1003,74 +1200,6 @@ impl<'a> Machine<'a> {
             fall
         };
         self.commit(&row, instr, pc, next_pc)
-    }
-
-    /// Move a `read`'s or a `write`'s bytes, one transfer cycle per word they
-    /// touch — the pc re-written unchanged at slot 0, the word at slot 3 —
-    /// and return what `a0` gets.
-    fn transfer(
-        &mut self,
-        instr: Instr,
-        pc: u32,
-        reading: bool,
-        fd: u32,
-        buf: u32,
-        count: u32,
-    ) -> Result<u32, EmuError> {
-        let left = |stream: &[u8], at: usize| (count as usize).min(stream.len() - at) as u32;
-        let n = match (reading, fd) {
-            (true, ecall::FD_STDIN) => left(self.stdin, self.stdin_at),
-            (true, ecall::FD_HINT) => left(self.hint, self.hint_at),
-            (false, ecall::FD_STDOUT | ecall::FD_STDERR) => count,
-            _ => return Ok(ecall::EBADF.wrapping_neg()),
-        };
-        if n == 0 {
-            return Ok(0);
-        }
-        let (start, end) = (buf as u64, buf as u64 + n as u64);
-        let top = guest_memory::RAM_ORIGIN as u64 + guest_memory::RAM_LENGTH as u64;
-        if start < guest_memory::RAM_ORIGIN as u64 || end > top {
-            let addr = if start < guest_memory::RAM_ORIGIN as u64 {
-                buf
-            } else {
-                buf.max(top as u32)
-            };
-            return Err(EmuError::OutOfBounds { pc, addr });
-        }
-
-        let (source, source_at) = if fd == ecall::FD_HINT {
-            (self.hint, self.hint_at)
-        } else {
-            (self.stdin, self.stdin_at)
-        };
-        let mut written = Vec::new();
-        let mut word = buf & !3;
-        while (word as u64) < end {
-            let old = self.word(word);
-            let mut bytes = old.to_le_bytes();
-            for (k, byte) in bytes.iter_mut().enumerate() {
-                let addr = word as u64 + k as u64;
-                if addr >= start && addr < end {
-                    if reading {
-                        *byte = source[source_at + (addr - start) as usize];
-                    } else {
-                        written.push(*byte);
-                    }
-                }
-            }
-            let new = u32::from_le_bytes(bytes);
-            let mut cycle = Cycle::new();
-            self.ram_write(&mut cycle, word, old, new);
-            self.commit(&cycle, instr, pc, pc)?;
-            word += 4;
-        }
-        match (reading, fd) {
-            (true, ecall::FD_HINT) => self.hint_at += n as usize,
-            (true, _) => self.stdin_at += n as usize,
-            (false, ecall::FD_STDOUT) => self.stdout.extend_from_slice(&written),
-            (false, _) => self.stderr.extend_from_slice(&written),
-        }
-        Ok(n)
     }
 }
 
@@ -1133,16 +1262,86 @@ pub fn words_of(lanes: &[u64; keccak::LANES]) -> [u32; keccak::FRAME_WORDS] {
 
 struct Recorder<'a> {
     tables: &'a DecodedTables,
-    log: MemoryEventLog,
+    /// The execution's memory: every event for [`trace_run`], the last-access
+    /// tables alone for a [`StreamingRun`].
+    memory: Keep,
     traces: FamilyTraces,
+    /// Rows pushed per `traces.families[i]`, flushed shards included, so the
+    /// cycle profile survives a buffer being handed away.
+    family_rows: Vec<u64>,
+    /// The same per `traces.delegations[i]`, whose rows are invocations.
+    deleg_rows: Vec<u64>,
+    /// Shards a streaming run has filled and the caller has not taken.
+    /// [`Keep::Whole`] never fills it: it holds every row to the end.
+    ready: Vec<ShardChunk>,
 }
 
-impl Recorder<'_> {
+/// How much of the memory argument a recorder keeps.
+///
+/// The events and the last-access tables answer different questions, and only
+/// the first grows with the cycle count: the tables are `O(touched addresses)`
+/// and are what the register and pc boundary, the RAM windows' teardown columns
+/// and the window list are functions of (`docs/spec/streaming.md` §3). So a
+/// streaming run keeps the tables and never collects an event at all.
+enum Keep {
+    /// The whole log, which is the tables plus every event.
+    Whole(MemoryEventLog),
+    /// The tables alone.
+    Streaming(MemoryState),
+}
+
+impl Keep {
+    fn record(
+        &mut self,
+        space: AddressSpace,
+        addr: u32,
+        ts: u64,
+        read_value: u32,
+        write_value: u32,
+    ) -> MemoryEvent {
+        match self {
+            Keep::Whole(log) => log.record(space, addr, ts, read_value, write_value),
+            Keep::Streaming(state) => state.record(space, addr, ts, read_value, write_value),
+        }
+    }
+}
+
+impl<'a> Recorder<'a> {
+    /// One recorder over `config`'s families: an empty buffer each, in the
+    /// config's order, with the delegation families' buffers apart because
+    /// their rows are invocations.
+    fn new(tables: &'a DecodedTables, config: &VmConfig, memory: Keep) -> Recorder<'a> {
+        let traces = FamilyTraces {
+            families: config
+                .families
+                .iter()
+                .filter(|(family, _)| program::delegation_frame_words(*family).is_none())
+                .map(|(family, height)| FamilyTrace::new(*family, *height))
+                .collect(),
+            delegations: config
+                .families
+                .iter()
+                .filter_map(|(family, height)| {
+                    program::delegation_frame_words(*family)
+                        .map(|width| DelegationTrace::new(*family, *height, width))
+                })
+                .collect(),
+        };
+        Recorder {
+            tables,
+            memory,
+            family_rows: vec![0; traces.families.len()],
+            deleg_rows: vec![0; traces.delegations.len()],
+            traces,
+            ready: Vec::new(),
+        }
+    }
+
     /// Log one cycle's queries — the pc query, then each role's in role
     /// order — and route its row to the family that owns its pc.
     fn record(&mut self, cycle: u64, pc: u32, next_pc: u32, instr: Instr, queries: &Cycle) {
         let base = memory::TS_STEP * cycle;
-        self.log.record(AddressSpace::Pc, 0, base, pc, next_pc);
+        self.memory.record(AddressSpace::Pc, 0, base, pc, next_pc);
         // An invocation's frame accesses ride this cycle at
         // `delegation::FRAME_DELTA`, which is 0, so they follow the pc query
         // and precede the row's roles: the log is in timestamp order
@@ -1150,7 +1349,7 @@ impl Recorder<'_> {
         let mut invocation: Vec<Query> = Vec::new();
         if let Some((_, _, frame)) = &queries.delegation {
             for (addr, read, write) in frame {
-                let event = self.log.record(
+                let event = self.memory.record(
                     AddressSpace::Ram,
                     *addr,
                     base + delegation::FRAME_DELTA,
@@ -1180,7 +1379,7 @@ impl Recorder<'_> {
         };
         for role in ROLES {
             if let Some((addr, read, write)) = queries.queries[role as usize] {
-                let event = self.log.record(
+                let event = self.memory.record(
                     role.space(delegation),
                     addr,
                     base + role.delta(),
@@ -1197,21 +1396,124 @@ impl Recorder<'_> {
             }
         }
         if let Some((family, frame_base, _)) = &queries.delegation {
-            let buffer = self
+            let at = self
                 .traces
                 .delegations
-                .iter_mut()
-                .find(|t| t.family == *family)
+                .iter()
+                .position(|t| t.family == *family)
                 .expect("the ecall checked the family is in the config");
-            buffer.push(cycle, *frame_base, &invocation);
+            self.traces.delegations[at].push(cycle, *frame_base, &invocation);
+            self.deleg_rows[at] += 1;
+            self.flush_delegation(at);
         }
         let owner = self.owner(pc, instr);
-        self.traces
+        let at = self
+            .traces
             .families
-            .iter_mut()
-            .find(|t| t.family == owner)
-            .expect("the owning family has a buffer")
-            .push(&row);
+            .iter()
+            .position(|t| t.family == owner)
+            .expect("the owning family has a buffer");
+        self.traces.families[at].push(&row);
+        self.family_rows[at] += 1;
+        self.flush_family(at);
+    }
+
+    /// Hand `traces.families[at]` away if it has just reached its height, so a
+    /// partial buffer never holds more than `height - 1` rows at a record
+    /// boundary — which is what makes a shard's rows exactly the cut
+    /// `docs/spec/block-proof.md` §5.1 defines, with nothing to split.
+    ///
+    /// A whole-run recorder flushes nothing: `Keep::Whole` is the archive's
+    /// input and holds every row.
+    fn flush_family(&mut self, at: usize) {
+        if !matches!(self.memory, Keep::Streaming(_)) {
+            return;
+        }
+        let buffer = &mut self.traces.families[at];
+        let height = buffer.height as usize;
+        if buffer.len() < height {
+            return;
+        }
+        let (family, rows) = (buffer.family, self.family_rows[at]);
+        let full = std::mem::replace(buffer, FamilyTrace::new(family, height as u32));
+        self.ready.push(ShardChunk {
+            family,
+            index: (rows / height as u64 - 1) as u32,
+            rows: ChunkRows::Cycles(Box::new(full)),
+        });
+    }
+
+    /// [`Recorder::flush_family`] for a delegation family, whose rows are
+    /// invocations.
+    fn flush_delegation(&mut self, at: usize) {
+        if !matches!(self.memory, Keep::Streaming(_)) {
+            return;
+        }
+        let buffer = &mut self.traces.delegations[at];
+        let height = buffer.height as usize;
+        if buffer.len() < height {
+            return;
+        }
+        let (family, rows, width) = (buffer.family, self.deleg_rows[at], buffer.words.len());
+        let full = std::mem::replace(buffer, DelegationTrace::new(family, height as u32, width));
+        self.ready.push(ShardChunk {
+            family,
+            index: (rows / height as u64 - 1) as u32,
+            rows: ChunkRows::Invocations(full),
+        });
+    }
+
+    /// Every partial buffer as a final shard, in family order: what an
+    /// execution's last, short shard of each family is.
+    fn flush_partial(&mut self) -> Vec<ShardChunk> {
+        let mut out = Vec::new();
+        for (at, buffer) in self.traces.families.iter_mut().enumerate() {
+            if buffer.is_empty() {
+                continue;
+            }
+            let (family, height) = (buffer.family, buffer.height);
+            let full = std::mem::replace(buffer, FamilyTrace::new(family, height));
+            out.push(ShardChunk {
+                family,
+                index: (self.family_rows[at] / height as u64) as u32,
+                rows: ChunkRows::Cycles(Box::new(full)),
+            });
+        }
+        for (at, buffer) in self.traces.delegations.iter_mut().enumerate() {
+            if buffer.is_empty() {
+                continue;
+            }
+            let (family, height, width) = (buffer.family, buffer.height, buffer.words.len());
+            let full = std::mem::replace(buffer, DelegationTrace::new(family, height, width));
+            out.push(ShardChunk {
+                family,
+                index: (self.deleg_rows[at] / height as u64) as u32,
+                rows: ChunkRows::Invocations(full),
+            });
+        }
+        out
+    }
+
+    /// The execution's cycle profile: every buffer's total row count, flushed
+    /// shards included, ascending by family id — the shape
+    /// `FamilyTraces::row_counts` has.
+    fn profile(&self) -> CycleProfile {
+        let mut counts: Vec<(FamilyId, u64)> = self
+            .traces
+            .families
+            .iter()
+            .zip(&self.family_rows)
+            .map(|(t, n)| (t.family, *n))
+            .chain(
+                self.traces
+                    .delegations
+                    .iter()
+                    .zip(&self.deleg_rows)
+                    .map(|(t, n)| (t.family, *n)),
+            )
+            .collect();
+        counts.sort_by_key(|(f, _)| *f);
+        CycleProfile { counts }
     }
 
     /// The one family whose table claims `pc`.
@@ -1252,6 +1554,165 @@ mod tests {
     use super::*;
     use loader::Segment;
 
+    /// `mod_mul_frame` against `u128` arithmetic, which is an independent
+    /// reference for every case a `u128` can hold.
+    ///
+    /// The executor's long division is 512 iterations of limb arithmetic and is
+    /// exactly the sort of loop that is right on most inputs. The comparison is
+    /// against `u128::checked_mul` and `%` on operands that fit 64 bits — which
+    /// leaves the top limbs untested, so the second half of the test is the
+    /// **identity** `a·b = q·m + out` recomputed over the full 256-bit width from
+    /// the frame the executor wrote, on wide random operands.
+    #[test]
+    fn mod_mul_frame_computes_a_times_b_mod_m() {
+        let limbs = |x: u128| -> [u32; mod_mul::LIMBS] {
+            core::array::from_fn(|k| match k < 4 {
+                true => (x >> (32 * k)) as u32,
+                false => 0,
+            })
+        };
+        let frame_of = |m: [u32; 8], a: [u32; 8], b: [u32; 8]| -> Vec<u32> {
+            let mut old = vec![0u32; mod_mul::FRAME_WORDS];
+            old[mod_mul::M_WORD..mod_mul::M_WORD + 8].copy_from_slice(&m);
+            old[mod_mul::A_WORD..mod_mul::A_WORD + 8].copy_from_slice(&a);
+            old[mod_mul::B_WORD..mod_mul::B_WORD + 8].copy_from_slice(&b);
+            mod_mul_frame(0, &old).expect("a nonzero modulus")
+        };
+        // Small cases a `u128` answers directly, the corners included.
+        for (a, b, m) in [
+            (0u128, 0u128, 1u128),
+            (0, 12345, 97),
+            (1, 1, 2),
+            (u64::MAX as u128, u64::MAX as u128, (1u128 << 61) - 1),
+            (7, 9, 5),
+            (6, 7, 42),
+            (0xdead_beef, 0xfeed_face, 0xffff_fffb),
+            ((1u128 << 63) - 1, (1u128 << 63) + 1, (1u128 << 64) - 59),
+        ] {
+            let out = frame_of(limbs(m), limbs(a), limbs(b));
+            let got = (0..4).fold(0u128, |acc, k| {
+                acc | (out[mod_mul::OUT_WORD + k] as u128) << (32 * k)
+            });
+            assert_eq!(got, a * b % m, "{a} * {b} mod {m}");
+            for k in 4..8 {
+                assert_eq!(out[mod_mul::OUT_WORD + k], 0, "the result fits 128 bits");
+            }
+            // The words the invocation does not compute are written back.
+            let mut old = [0u32; mod_mul::FRAME_WORDS];
+            old[mod_mul::M_WORD..mod_mul::M_WORD + 8].copy_from_slice(&limbs(m));
+            old[mod_mul::A_WORD..mod_mul::A_WORD + 8].copy_from_slice(&limbs(a));
+            old[mod_mul::B_WORD..mod_mul::B_WORD + 8].copy_from_slice(&limbs(b));
+            for j in 0..mod_mul::OUT_WORD {
+                assert_eq!(out[j], old[j], "word {j} is written back unchanged");
+            }
+        }
+        // The full width: the identity, over `i128`-free limb arithmetic.
+        let mut seed = 0x0123_4567_89ab_cdefu64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        // secp256k1's `p`, the modulus this family exists for.
+        let mut p = [0xffff_ffffu32; 8];
+        p[0] = 0xffff_fc2f;
+        p[1] = 0xffff_fffe;
+        for _ in 0..8 {
+            let mut wide = || -> [u32; 8] { core::array::from_fn(|_| next() as u32) };
+            let (a, b) = (wide(), wide());
+            let out = frame_of(p, a, b);
+            let result: [u32; 8] = core::array::from_fn(|k| out[mod_mul::OUT_WORD + k]);
+            // `out < p`, and `a·b − out` divisible by `p`: the two halves of
+            // "out is the remainder", checked over 16-limb arithmetic here.
+            assert!(
+                super::less_than(
+                    &core::array::from_fn(|k| result[k] as u64),
+                    &core::array::from_fn(|k| p[k] as u64)
+                ),
+                "the result is reduced"
+            );
+            let product = wide_mul16(&a, &b);
+            let mut left = product;
+            sub16(&mut left, &result);
+            assert!(divides16(&left, &p), "a·b − out is a multiple of p");
+        }
+    }
+
+    /// `x · y` over eight 32-bit limbs, as sixteen. Test-only.
+    fn wide_mul16(x: &[u32; 8], y: &[u32; 8]) -> [u32; 16] {
+        let mut out = [0u64; 16];
+        for i in 0..8 {
+            let mut carry = 0u64;
+            for j in 0..8 {
+                let total = out[i + j] + x[i] as u64 * y[j] as u64 + carry;
+                out[i + j] = total & 0xffff_ffff;
+                carry = total >> 32;
+            }
+            let mut at = i + 8;
+            while carry != 0 {
+                let total = out[at] + carry;
+                out[at] = total & 0xffff_ffff;
+                carry = total >> 32;
+                at += 1;
+            }
+        }
+        core::array::from_fn(|k| out[k] as u32)
+    }
+
+    /// `x -= y` over sixteen limbs against eight. Test-only.
+    fn sub16(x: &mut [u32; 16], y: &[u32; 8]) {
+        let mut borrow = 0i64;
+        for k in 0..16 {
+            let sub = if k < 8 { y[k] as i64 } else { 0 };
+            let d = x[k] as i64 - sub - borrow;
+            borrow = i64::from(d < 0);
+            x[k] = (d + if d < 0 { 1i64 << 32 } else { 0 }) as u32;
+        }
+        assert_eq!(borrow, 0, "a·b is at least the remainder");
+    }
+
+    /// Whether `x` is a multiple of `m`, by long division. Test-only.
+    fn divides16(x: &[u32; 16], m: &[u32; 8]) -> bool {
+        let mut rem = [0u64; 9];
+        for bit in (0..32 * 16).rev() {
+            let mut carry = ((x[bit / 32] >> (bit % 32)) & 1) as u64;
+            for word in rem.iter_mut() {
+                let total = (*word << 1) | carry;
+                *word = total & 0xffff_ffff;
+                carry = total >> 32;
+            }
+            let ge = rem[8] != 0
+                || (0..8)
+                    .rev()
+                    .find(|k| rem[*k] != m[*k] as u64)
+                    .is_none_or(|k| rem[k] > m[k] as u64);
+            if ge {
+                let mut borrow = 0i64;
+                for k in 0..8 {
+                    let d = rem[k] as i64 - m[k] as i64 - borrow;
+                    borrow = i64::from(d < 0);
+                    rem[k] = (d + if d < 0 { 1i64 << 32 } else { 0 }) as u64;
+                }
+                rem[8] -= borrow as u64;
+            }
+        }
+        rem.iter().all(|w| *w == 0)
+    }
+
+    /// A zero modulus is refused by name rather than wrapped.
+    #[test]
+    fn mod_mul_refuses_a_zero_modulus() {
+        let old = vec![0u32; mod_mul::FRAME_WORDS];
+        assert_eq!(
+            mod_mul_frame(0x1234, &old),
+            Err(EmuError::DelegationFrame {
+                pc: 0x1234,
+                detail: "the modulus is zero"
+            })
+        );
+    }
+
     /// `addi a0, a0, 1` then `jal x0, -4`: an endless loop, two cycles a lap.
     fn spin() -> ProgramImage {
         let words: [u32; 2] = [0x0015_0513, 0xffdf_f06f];
@@ -1289,8 +1750,6 @@ mod tests {
         let io = GuestIo {
             input: Vec::new(),
             advice: Vec::new(),
-            stdin: Vec::new(),
-            hint: Vec::new(),
         };
         let image = spin();
         let mut machine = Machine::new(&image, &io);

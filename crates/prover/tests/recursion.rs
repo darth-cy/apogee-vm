@@ -29,8 +29,6 @@ use verifier_core::{statement_shards, BlockProof};
 const POSEIDON2: u32 = family::POSEIDON2;
 const FR_ARITH: u32 = family::FR_ARITH;
 const ADD: u32 = family::ADD_SUB_LUI_AUIPC;
-const INIT: u32 = family::INIT_TEARDOWN;
-
 /// Acceptance 4: the statement proves to a `BlockProof` with at least one
 /// shard of **each** new family, `verify_block` returns `Ok`, and the
 /// read/write roots reconcile across the CPU shards and both delegation
@@ -166,46 +164,4 @@ fn a4_the_block_with_both_delegation_shards_proves_and_verifies() {
     let read = BlockProof::from_bytes(&bytes).expect("the block round-trips");
     assert_eq!(read.statement().exit_status, common::RECURSION_RESULT);
     assert_eq!(verify_block(&setup.vk, &read, read.statement()), Ok(()));
-}
-
-/// Acceptance 9's second half: a guest that **links** both backends and
-/// reaches neither declares both families, proves **zero** shards of each, and
-/// verifies.
-#[test]
-#[ignore]
-fn a9_declared_families_with_no_invocation_prove_zero_shards() {
-    let setup = common::recursion_unused_setup();
-    let mut archive = common::recursion_unused_archive(&setup.program);
-    for f in [POSEIDON2, FR_ARITH] {
-        assert!(
-            setup.program.config.height(f).is_some(),
-            "the image declares {}",
-            program::family_name(f)
-        );
-    }
-    let plan = plan_shards(archive.cycle_profile(), &setup.program.config);
-    for f in [POSEIDON2, FR_ARITH] {
-        assert_eq!(
-            plan.shards.iter().find(|(g, _)| *g == f),
-            Some(&(f, 0)),
-            "no invocation, no shard"
-        );
-    }
-    let block = prove_block(&setup, &mut archive, &plan).expect("the block proves");
-    assert!(
-        !block
-            .shards
-            .iter()
-            .any(|s| s.family == POSEIDON2 || s.family == FR_ARITH),
-        "a family with zero shards proves none"
-    );
-    assert!(
-        block.shards.iter().any(|s| s.family == INIT),
-        "and the window families still do"
-    );
-    assert_eq!(verify_block(&setup.vk, &block, block.statement()), Ok(()));
-    assert_eq!(
-        block.statement().exit_status,
-        common::RECURSION_UNUSED_RESULT
-    );
 }

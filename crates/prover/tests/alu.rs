@@ -67,8 +67,8 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
 /// the numbers read off the registry's circuit — so that a change to either
 /// family shows up on both sides. What the trace holds, instruction by
 /// instruction, is `crates/checker/tests/shift_bitwise.rs` and `crates/checker/
-/// tests/mul_div.rs` over the same fixture, and QEMU's reading of it is
-/// `crates/emulator/tests/qemu_outputs.rs`', which compares the exit status and
+/// tests/mul_div.rs` over the same fixture, and the emulator's reading of it is
+/// `crates/emulator/tests/guests.rs`', which checks the exit status and
 /// fd 1 and nothing below that.
 #[test]
 #[ignore = "four 2^20-row execution shards: one statement's proof peaks at 14.1 GB"]
@@ -191,7 +191,8 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
 
     let claim = reduced(&proofs[1]);
     // 41 + 33 since S21's eighth frame query (`deleg`), 42 + 35 since S23 gave
-    // that query its `deleg_space` column and one selector per delegation type.
-    assert_eq!(claim.len(), 42 + 35 + 7);
-    assert_eq!(&claim[77..], &setup.vk.setup_commitments[0][..]);
+    // that query its `deleg_space` column and one selector per delegation type,
+    // 42 + **36** since S26's fourth type (`docs/spec/delegation.md` §10).
+    assert_eq!(claim.len(), 27 + 33 + 7);
+    assert_eq!(&claim[60..], &setup.vk.setup_commitments[0][..]);
 }

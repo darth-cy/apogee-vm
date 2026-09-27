@@ -59,12 +59,14 @@ pub mod lookup {                                   // docs/spec/lookup.md
 pub mod memory {                                   // docs/spec/memory.md §2, §3.3, §7, §8
     pub const CYCLE: PolyAddress;                  // M[0]
     pub const FIELD_MASK: u32 = 0;  FIELD_ADDR = 1;  FIELD_READ_TS = 2;  FIELD_READ_VALUE = 3;  FIELD_WRITE_VALUE = 4;
-    pub const FRAME_QUERIES: usize = 9;            // the QUERY TABLE's size, never a frame's width
-    pub const FRAME_NAMES: [&str; 9];              // pc rs1 rs2 arg1 arg2 load ram rd deleg
-    pub const FRAME_SPACE: [u8; 9];                // PC REG REG REG REG RAM RAM REG DELEGATION_KECCAK_F
-    pub const FRAME_DELTA: [u64; 9];               // 0 1 2 2 2 2 3 3 3
-    pub const PC: usize = 0;  RS1 = 1;  RS2 = 2;  ARG1 = 3;  ARG2 = 4;  LOAD = 5;  RAM = 6;  RD = 7;  DELEG = 8;
-    pub const FRAME_READ_ONLY: [usize; 5];         // RS1 RS2 ARG1 ARG2 LOAD, the write-back queries
+    pub const FRAME_QUERIES: usize = 7;            // the QUERY TABLE's size, never a frame's width
+    pub const FRAME_NAMES: [&str; 7];              // pc rs1 rs2 load ram rd deleg
+    pub const FRAME_SPACE: [u8; 7];                // PC REG REG RAM RAM REG 0 — DELEG's space is the ROW's
+    pub const FRAME_DELTA: [u64; 7];               // 0 1 2 2 3 3 3
+    pub const PC: usize = 0;  RS1 = 1;  RS2 = 2;  LOAD = 3;  RAM = 4;  RD = 5;  DELEG = 6;
+    pub const FRAME_READ_ONLY: [usize; 3];         // RS1 RS2 LOAD, the write-back queries
+    pub fn frame_query_takes(q: usize, space: u8, delta: u64) -> bool;   // the one routing rule
+    pub fn deleg_space(width: usize) -> PolyAddress;                     // M[1 + 5·width]
     pub fn frame_queries(family: u32) -> &'static [usize];   // the frozen per-family subset
     pub fn frame(slot: usize, field: u32) -> PolyAddress;            // M[1 + 5·slot + field]
     pub fn gap_hi(slot: usize) -> PolyAddress;                       // W[slot]
@@ -198,9 +200,10 @@ pub mod atomics {                                  // docs/spec/memory-ops.md §
 }
 
 pub mod add_sub {                                  // docs/spec/shard-proof.md §8
-    pub const DECODED: [PolyAddress; 6];           // W[11..17]: next_pc rs1 rs2 rd imm mask
-    pub const KINDS: [PolyAddress; 6];             // W[17..23]: system addi auipc add sub lui
-    pub const IS_ECALL: PolyAddress;  IS_FENCE;  IS_KECCAK;                    // W[23..26]
+    pub const DECODED: [PolyAddress; 6];           // W[8..14]: next_pc rs1 rs2 rd imm mask
+    pub const KINDS: [PolyAddress; 6];             // W[14..20]: system addi auipc add sub lui
+    pub const IS_ECALL: PolyAddress;  IS_FENCE;                                // W[20..22]
+    pub const IS_DELEGATION: [PolyAddress; 4];     // W[22..26]; IS_KECCAK is IS_DELEGATION[0]
     pub const WRAP: PolyAddress;  RD_HI;  PC_WRAP;  NEXT_PC_HI;                // W[26..30]
     pub const MULTIPLICITIES: [PolyAddress; 3];    // W[30..33]: timestamp, range16, decoder
     pub const TABLE_WIDTH: usize = 7;              // S[0..7], program::lookup_tuple order
@@ -248,6 +251,18 @@ pub mod fr_arith {                                // docs/spec/delegation.md §1
     pub fn value_bit(v, k, t);  diff_bit(v, k, t);  borrow_bit(v, k);   // v < 3: a, b, out
     pub fn selector(i: usize);  prod();  inv();  is_zero();
     pub const MEMORY_COLUMNS: usize = 104;  WITNESS_COLUMNS: usize = 2576;
+    pub fn artifact(trace_vars: u32) -> CircuitArtifact;
+    pub fn channels() -> Vec<lookup::ChannelSpec>;           // EMPTY
+}
+
+pub mod mod_mul {                                 // docs/spec/delegation.md §14; S26
+    pub const CYCLE; LIVE; BASE; ANCHOR_VALUE; WORD_*;
+    pub fn word(j, field);  gap_bit(j, bit);  base_low_bit(bit);  base_room_bit(bit);
+    pub fn value_bit(v, k, t);                      // v < 4: m, a, b, out -- 8x32 bits each
+    pub fn q_limb(k);  q_bit(k, t);                 // the quotient, witnessed
+    pub fn diff_bit(k, t);  borrow_bit(k);          // out < m, against m's OWN columns
+    pub fn carry_bit(k, t);                         // 14 signed carries, offset 2^36, 37 bits
+    pub const MEMORY_COLUMNS: usize = 132;  WITNESS_COLUMNS: usize = 3346;
     pub fn artifact(trace_vars: u32) -> CircuitArtifact;
     pub fn channels() -> Vec<lookup::ChannelSpec>;           // EMPTY
 }
@@ -357,8 +372,8 @@ pub mod fr_arith {                                // docs/spec/delegation.md §1
   timestamp channel's bound. The window families have no channels and take any height.
   Since S19 it holds every family the master prompt names, and since S21 the first that it
   does not: `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MUL_DIV`, `MEM_WORD`,
-  `MEM_SUBWORD`, `ATOMICS`, the two RAM windows, `KECCAK_F` and S23's `POSEIDON2` and
-  `FR_ARITH`. **S-IO added three arms and exactly one constructor.** `PUBLIC_OUTPUT` takes
+  `MEM_SUBWORD`, `ATOMICS`, the two RAM windows, `KECCAK_F`, S23's `POSEIDON2` and
+  `FR_ARITH`, and S26's `MOD_MUL`. **S-IO added three arms and exactly one constructor.** `PUBLIC_OUTPUT` takes
   `memory::zero_window_artifact` — the *same* function `ZERO_WINDOWS` takes, so the journal's
   circuit is `ZERO_WINDOWS`' **byte for byte**, and that is the point: its init leaf is the
   literal 0, so there is no init column for a prover to pre-load the journal into at
@@ -372,7 +387,9 @@ pub mod fr_arith {                                // docs/spec/delegation.md §1
   panic inside key validation, in a `no_std` crate the recursion guest links, on bytes a
   verifier was handed. **`KECCAK_F`'s arm sits below the guard, deliberately**: a family with
   no lookup channel reaches no such assertion, so there is nothing to pre-empt, and putting
-  it in the guard would refuse the only height it has, `2^8`. That is why a delegation
+  it in the guard would refuse the heights these families take — `2^8` for `KECCAK_F`,
+  `POSEIDON2` and `FR_ARITH`, and `2^16` for `MOD_MUL`, which are per family and deliberately
+  not one number (`docs/spec/delegation.md` §9.2). That is why a delegation
   family **must** carry no channel (`docs/spec/lookup.md` §3).
 - **A circuit that reads the `GENERIC` channel names the packed table as its last three
   setup columns** (S17). `FamilyCircuit::reads_generic_table` is whether any channel spec
@@ -388,16 +405,28 @@ pub mod fr_arith {                                // docs/spec/delegation.md §1
   collected once and handed to `frame_with_channels_artifact`. `add_sub` builds one
   inline, `jump_branch_slt` behind the private `family_spec` function its `assemble` seam
   takes; a later family names its own the same way. S15 called the type `Extras`.
-- **`add_sub` is §8 as data**, S15's `frame_with_channels_artifact` over the family's seven
-  frame queries plus 21 witness columns, the 7-column decoded table as `S`, 31 enforcing
-  gates, five lookups and three channels. Its gates are the family's whole semantics:
+- **`add_sub` is §8 as data**, S15's `frame_with_channels_artifact` over the family's
+  **five** frame queries plus 25 witness columns, the 7-column decoded table as `S`, 46
+  enforcing gates of its own beside the frame's 11, five lookups and three channels. Its
+  gates are the family's whole semantics:
   one-hot kinds and the packed mask the table's domain; each query's mask the row kind's
   use of it times `m_pc`; each written value the kind's arithmetic with a boolean carry
-  and a 16+16-bit range split; `ecall` only as `exit` (`a7 = 93`), its status `a0`, its
-  `next_pc` `HALT_PC`; every other row's `next_pc` the decoded fall-through, with a
-  boolean `pc_wrap`. A `const` assertion pins `system_code::ECALL == 0`, so a renumbering
-  fails the build, and `artifact` asserts each channel's obligation count — 14, 4, 1 —
-  when it builds the circuit, so a dropped obligation panics at construction.
+  and a 16+16-bit range split; `ecall` as `exit` (`a7 = 93`) or one registered delegation
+  request, an exit's status `a0` and its `next_pc` `HALT_PC`; every other row's `next_pc`
+  the decoded fall-through, with a boolean `pc_wrap`. A `const` assertion pins
+  `system_code::ECALL == 0`, so a renumbering fails the build, and `artifact` asserts each
+  channel's obligation count — 10, 4, 1 — when it builds the circuit, so a dropped
+  obligation panics at construction.
+- **Three of that family's mask rules are gone, and they proved nothing.** Until the POSIX
+  layer went, the frame carried `arg1`, `arg2` and `ram`, and each had a `<q>_mask_rule`
+  reading `mask == 0`: an ecall's `a1` and `a2` were `read`'s and `write`'s alone, and the
+  `ram` query was the transfer row's. The family already forbade all three by holding the
+  mask to zero, so the columns were five `M` columns and two obligations apiece that no
+  honest row could make nonzero and no cheating one could use. Dropping the queries drops
+  the gates with them: **42 memory columns become 27, 11 witness become 8, 16 obligations
+  become 10, and the frame's own enforcing gates go 16 to 11.** The frame also starts paying
+  a pad: eight queries were a power of two a side, five are not, so gate list 0 carries
+  three literal-1 leaves a side, as `ATOMICS`' has always done.
 - **`jump_branch_slt` is `docs/spec/jump-branch-slt.md` as data** (S17): the four-query
   frame plus 37 witness columns, S11's seven-column decoded table and the packed generic
   table as `S`, 42 enforcing gates, 22 lookups and four channels. Its semantics are linear
@@ -512,7 +541,7 @@ them, CI regenerates and diffs them, and `tests/memory.rs` pins their SHA-256 an
 each to its constructor's bytes. The leaves' independent description is the plain
 arithmetic of `crates/gkr/tests/memory.rs`.
 
-`tests/vectors/{keccak,poseidon2,fr_arith}.txt`: **digests, not artifacts.**
+`tests/vectors/{keccak,poseidon2,fr_arith,mod_mul}.txt`: **digests, not artifacts.**
 `keccak::artifact(8).to_bytes()` is 100,254,040 bytes — 974 times the largest committed
 circuit — and the two S23 circuits are 2.1 MB and 1.1 MB, so what is committed is one line
 apiece: the shape counts and the artifact's SHA-256. `cargo run -p kat-gen -- delegation`
@@ -537,7 +566,7 @@ suite in `crates/checker/tests` pins each SHA-256 and holds its gates to
 | --- | --- |
 | `tests/wire.rs` | both fixtures round-trip byte for byte; a format version other than 1 refused before decoding; `VirtualKind`'s tags and `V[ram_live]`'s address and name; a lookup against its hand-written bytes; `Quadratic` against its hand-written bytes for no terms, linear only, products only and both, and each malformed `Quadratic` refused; every refusal of the reader; every single-bit flip of a fixture decodes or errors, never panics |
 | `tests/laws.rs` | one mutation of the toy per rule, each refused with its error — structured variants matched whole, prose details by the rule and the address or name they carry — beside the toy validating; each lookup rule broken alone, refused naming the lookup, beside one and two lawful lookups and an `M` selector; the degree-3 gate; `Quadratic`'s degree, its identically zero and unread-column cases, Law 4 against an `AffineProduct` relation, and its refusal to inline; cache-free inlining and its refusals |
-| `tests/memory.rs` | the three fixtures pinned and equal to their constructors; every constructor validating and passing `check_memory` at 12 and 22; two roots named `read_root`, `write_root`, an all-zero padding row, `trace_vars` halving lists; every read tuple's parts at their `PART_*` positions; the frame's layout, leaf order, widths and enforcing gates by name; its 16 obligations whole, `gap_lo_pc`'s constant `−1`; acceptance 11 exhaustively at reduced width, 5-bit chunks over a 10-bit clock, each query's own `gap_lo` expression read from the frame with its high chunk at 0, every `(cycle, read_ts)` pair admitted exactly when `read_ts < 4·cycle + Δ`; §8's pinned read sets; `check_memory` refusing a leaf fed from `W` (acceptance 9); the forward-provenance counterexample as a producing and as an enforcing gate of list 1, each beside its lawful control; a slot and a `W` column meeting through two cached entries, a cached entry itself carrying both, and a slot over a cached entry; a frame without `pc_mask_boolean` and one without `rd_mask_boolean`, whose mask another gate still reads; a window leaf masked by `S[0]` and by `V[row]`; a global slot over an inner column; and a write root read from a `W` column alone, which provenance does not see — each mutant still passing `validate`, each test run against the mutant it names |
+| `tests/memory.rs` | the three fixtures pinned and equal to their constructors; every constructor validating and passing `check_memory` at 12 and 22; two roots named `read_root`, `write_root`, an all-zero padding row, `trace_vars` halving lists; every read tuple's parts at their `PART_*` positions; the frame's layout, leaf order, widths and enforcing gates by name; each family's `2w` obligations whole, `gap_lo_pc`'s constant `−1`; acceptance 11 exhaustively at reduced width, 5-bit chunks over a 10-bit clock, each query's own `gap_lo` expression read from the frame with its high chunk at 0, every `(cycle, read_ts)` pair admitted exactly when `read_ts < 4·cycle + Δ`; §8's pinned read sets; `check_memory` refusing a leaf fed from `W` (acceptance 9); the forward-provenance counterexample as a producing and as an enforcing gate of list 1, each beside its lawful control; a slot and a `W` column meeting through two cached entries, a cached entry itself carrying both, and a slot over a cached entry; a frame without `pc_mask_boolean` and one without `rd_mask_boolean`, whose mask another gate still reads; a window leaf masked by `S[0]` and by `V[row]`; a global slot over an inner column; and a write root read from a `W` column alone, which provenance does not see — each mutant still passing `validate`, each test run against the mutant it names |
 | `src/gadgets.rs` (unit) | two range halfwords are the comparison's 32-bit word; the comparison returns two gates and eight lookups, each sign lookup the generic table's width; the equation built at 1 and 32 bits and refused at 0 and 33; a `const` assertion holds `U16GetSign`'s keys above AND's |
 | `src/shift_bitwise.rs` (unit) | the legal masks are twelve distinct single bits; the two halves and the two shift directions partition the kinds; and through the private `assemble` seam, the honest family spec gives `artifact`, and the build is refused for an obligation dropped, for `residue`'s direct pair moved under a narrower selector than its scaled obligation (S18's tightened copower check) and for a gate nonzero on the all-zero row |
 | `src/mul_div.rs` (unit) | the legal masks are eight distinct single bits; the multiplies and the divisions partition the kinds; `arithmetic_gates` built at 1 and 32 bits and refused at 0 and 33; and through the `assemble` seam, the honest spec gives `artifact` and the build is refused for a dropped obligation and for a gate nonzero on the all-zero row |

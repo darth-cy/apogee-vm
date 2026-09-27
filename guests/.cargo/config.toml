@@ -1,12 +1,14 @@
-# The guest template config. Two settings and two linker flags, and nothing
+# The guest template config. One setting and two linker flags, and nothing
 # that a guest author has to remember to type.
 [build]
 target = "riscv32imac-unknown-none-elf"
 
 [target.riscv32imac-unknown-none-elf]
-# `cargo run` executes a guest under user-mode QEMU. Guests use Linux syscall
-# numbers precisely so this works unmodified.
-runner = "qemu-riscv32"
+# No `runner`. An Apogee guest is an Apogee-SDK program and not a Linux
+# executable: its input, its advice and its journal are windows of guest memory
+# this VM lays out (`docs/spec/public-values.md`), which nothing outside the VM
+# maps. `cargo run` on a guest therefore has nothing to run it with, and the
+# executor is `crates/emulator`.
 
 # `-T`  the frozen memory map, which also defines the symbols crt0 and the bump
 #       allocator reference. Resolved relative to the directory cargo runs the

@@ -16,6 +16,8 @@ publish.workspace = true
 # wrapper adds nothing to the verifier's inputs -- it reads the statement out of
 # the proof rather than taking a second copy of it.
 [dependencies]
+# `family::COUNT` and `family::DEFAULT_HEIGHTS`, for the revm guest's heights.
+constants.workspace = true
 emulator.workspace = true
 loader.workspace = true
 program.workspace = true

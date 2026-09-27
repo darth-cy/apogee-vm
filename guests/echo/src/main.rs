@@ -1,83 +1,81 @@
 #![no_std]
 #![no_main]
-//! The ecall-shim fixture: a byte-for-byte echo of fd 0 to fd 1, plus the three
-//! shims that are not an echo — the private hint channel, diagnostics, and a
-//! precompile that is not there yet.
+//! The heap fixture: an echo of the advice region into the journal, run
+//! through the bump allocator, plus the one delegation call that is not an
+//! echo.
 //!
-//! Its buffers are heap-allocated on purpose. Nothing else in `guests/` needs
-//! `alloc`, so without this the bump allocator would be dead-stripped out of
-//! every binary and the largest `unsafe` surface in the workspace would run
-//! nowhere. Here it is linked and exercised under QEMU, at two alignments.
+//! Its buffers are heap-allocated on purpose. Almost nothing else in `guests/`
+//! needs `alloc`, so without this the bump allocator would be dead-stripped
+//! out of every small binary and the largest `unsafe` surface in the workspace
+//! would run nowhere. Here it is linked and exercised at two alignments — a
+//! `Vec<u8>` and a `Vec<u32>` — on an allocator whose `dealloc` does nothing.
 //!
-//! # fd 0, the public input
+//! # The advice
 //!
-//! Any number of bytes, with no structure of any kind. They are read 64 at a
-//! time until a read comes back short, which is the end of the stream.
+//! Any number of bytes, with no structure of any kind. They are copied 64 at a
+//! time into a heap buffer and appended to the journal from it, so the echo is
+//! a real allocation and a real copy rather than a slice handed straight on.
 //!
-//! # fd 1, the public output
+//! **This guest cannot run without an advice region.** Asking for advice a run
+//! was not given is a fatal executor error rather than an empty slice
+//! (`docs/spec/public-values.md` §6), so a run of this guest supplies advice —
+//! possibly zero bytes of it, which is a region whose length word is 0.
 //!
-//! The fd 0 stream, byte for byte, and nothing else. Neither the hint nor the
-//! permuted state ever reaches it; see below for why that is the point.
+//! # The journal
 //!
-//! # fd 2, the diagnostics
+//! The advice, byte for byte, truncated to what a journal holds. A journal is
+//! at most [`guest_memory::PUBLIC_PAYLOAD_BYTES`] bytes and advice has no such
+//! bound, so the echo stops there rather than exiting 70 on the first `commit`
+//! that would not fit.
 //!
-//! Four lines, in this order, none of which a verifier looks at:
+//! **Nothing binds the advice**, so this journal is a byte string the prover
+//! chose. That is what the guest is for — it is the allocator's fixture, not a
+//! statement about anything — and it is the one shape
+//! `docs/spec/public-values.md` §6 tells a real program not to have.
 //!
-//! ```text
-//! hint=<the fd 3 bytes, raw>
-//! heap=ok
-//! precompile=software              or `accelerated`, once a circuit exists
-//! state0=<64 hex digits>           lane 0 of the permuted state
-//! ```
+//! # The public input
 //!
-//! # fd 3, the prover's advice
+//! Unused.
 //!
-//! Up to 16 bytes, unstructured, and they reach fd 2 and nowhere else. That is
-//! the whole reason this guest reads them: a hint binds nothing, so one that
-//! reached fd 1 would be a committed value the prover chose.
+//! # The delegation
 //!
-//! **This guest cannot run without an fd 3 to read from.** The zkVM always has
-//! one. `qemu-riscv32` has only the descriptors it is given, and a `read` on a
-//! closed one answers `-EBADF`, which the SDK treats as an executor fault and
-//! exits 70 on. Running it by hand means opening fd 3 yourself, even on an
-//! empty file:
-//!
-//! ```text
-//! sh -c 'exec 3</dev/null; exec qemu-riscv32 ./echo' < input
-//! ```
+//! One `poseidon2_permute` over a three-lane state, compared against the same
+//! permutation reached through `crates/transcript`. Both entry points are
+//! linked here, which is what makes this guest's image declare the `POSEIDON2`
+//! and `FR_ARITH` families (`docs/spec/delegation.md` §7) — `crates/program/
+//! tests/delegation.rs` holds it to exactly those two — and what proves those
+//! two `no_std` crates compile and run on RV32.
 
 extern crate alloc;
 
 use alloc::vec;
 use alloc::vec::Vec;
 
+use constants::guest_memory;
 use field::Fr;
 
 guest_sdk::entry!(main);
 
+/// How many bytes of advice one heap buffer carries at a time.
+const CHUNK: usize = 64;
+
 fn main() {
-    // fd 0 to fd 1, byte for byte. `read_stdin` fills the buffer or stops at
-    // the end of the stream, so a short read is the end.
-    let mut buf: Vec<u8> = vec![0u8; 64];
-    loop {
-        let n = guest_sdk::read_stdin(&mut buf);
-        guest_sdk::write_stdout(&buf[..n]);
-        if n < buf.len() {
-            break;
-        }
+    // The advice, into the journal, through the heap. A fresh `Vec<u8>` and a
+    // copy per chunk: the point is the allocation and the copy, not the
+    // shortest path from one region to the other.
+    let advice = guest_sdk::advice();
+    let echoed = advice
+        .len()
+        .min(guest_memory::PUBLIC_PAYLOAD_BYTES as usize);
+    let mut buf: Vec<u8> = vec![0u8; CHUNK];
+    let mut at = 0;
+    while at < echoed {
+        let take = CHUNK.min(echoed - at);
+        buf[..take].copy_from_slice(&advice[at..at + take]);
+        guest_sdk::commit(&buf[..take]);
+        at += take;
     }
 
-    // fd 3 is private and uncommitted, so what it carries goes to fd 2 and
-    // never to fd 1. A guest that let a hint reach fd 1 would be proving a
-    // statement the prover gets to choose.
-    let mut h: Vec<u8> = vec![0u8; 16];
-    let n = guest_sdk::hint(&mut h);
-    guest_sdk::log(b"hint=");
-    guest_sdk::log(&h[..n]);
-    guest_sdk::log(b"\n");
-
-    // The precompile has a number and a calling convention but no circuit, so
-    // every executor answers -ENOSYS and this takes the software path.
     // A four-byte-aligned allocation as well as the byte ones above, so the
     // allocator's alignment rounding runs.
     let mut words: Vec<u32> = vec![0u32; 4];
@@ -86,21 +84,24 @@ fn main() {
         words[3], 0xdead_beef,
         "the heap did not hand back what it was given"
     );
-    guest_sdk::log(b"heap=ok\n");
 
-    let mut state_bytes = [0u8; 96];
-    state_bytes[0] = 1;
-    state_bytes[32] = 2;
-    state_bytes[64] = 3;
-    if guest_sdk::poseidon2_permute(&mut state_bytes) {
-        guest_sdk::log(b"precompile=accelerated\n");
-    } else {
-        software_poseidon2(&mut state_bytes);
-        guest_sdk::log(b"precompile=software\n");
+    // The delegation and the software twin, behind one frozen signature. On an
+    // executor with the circuit both reach it; on one without, both take the
+    // software path inside `transcript`. The states agree either way, which is
+    // the property the fallback exists to have.
+    let mut state = [0u8; 96];
+    state[0] = 1;
+    state[32] = 2;
+    state[64] = 3;
+    let mut want = state;
+    software_poseidon2(&mut want);
+    if !guest_sdk::poseidon2_permute(&mut state) {
+        software_poseidon2(&mut state);
     }
-    guest_sdk::log(b"state0=");
-    log_hex(&state_bytes[..32]);
-    guest_sdk::log(b"\n");
+    assert_eq!(
+        state, want,
+        "the delegated permutation is not the S02 permutation"
+    );
 }
 
 /// The precompile's software twin: the frozen S02 permutation, over the same
@@ -115,12 +116,5 @@ fn software_poseidon2(bytes: &mut [u8; 96]) {
     transcript::poseidon2_permute(&mut state);
     for (i, lane) in state.iter().enumerate() {
         bytes[32 * i..32 * (i + 1)].copy_from_slice(&lane.to_bytes());
-    }
-}
-
-fn log_hex(bytes: &[u8]) {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    for b in bytes {
-        guest_sdk::log(&[DIGITS[(b >> 4) as usize], DIGITS[(b & 0xf) as usize]]);
     }
 }

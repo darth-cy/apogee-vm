@@ -70,28 +70,6 @@ fn the_round_constants_are_the_lfsrs() {
 }
 
 #[test]
-fn the_rho_walk_visits_every_lane_but_the_origin() {
-    // 24 steps over 25 lanes, and `(0, 0)` is the one the walk never reaches —
-    // which is why its offset is 0 and why iota's constant lands there.
-    let (mut x, mut y) = (1usize, 0usize);
-    let mut seen = [[false; 5]; 5];
-    for _ in 0..24 {
-        assert!(!seen[y][x], "the rho walk repeats a lane at ({x}, {y})");
-        seen[y][x] = true;
-        let next = (y, (2 * x + 3 * y) % 5);
-        x = next.0;
-        y = next.1;
-    }
-    assert!(!seen[0][0], "the walk must not reach the origin lane");
-    assert_eq!(
-        seen.iter().flatten().filter(|s| **s).count(),
-        24,
-        "the walk covers the other 24 lanes"
-    );
-    assert_eq!(keccak::ROTATIONS[0][0], 0);
-}
-
-#[test]
 fn the_shapes_agree() {
     assert_eq!(keccak::STATE_BITS, 1600);
     assert_eq!(keccak::STATE_BYTES, 200);

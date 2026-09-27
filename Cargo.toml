@@ -24,6 +24,7 @@ members = [
     "crates/host",
     "tools/kat-gen",
     "tools/bench",
+    "tools/profiler",
     "tools/artifact-dump",
     "tools/test-support",
 ]

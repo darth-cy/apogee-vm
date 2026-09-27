@@ -14,7 +14,7 @@
 //! the shim and drop the record with it — and the guest would be
 //! `guests/addsub` with extra steps.
 //!
-//! # fd 0, fd 1, fd 2, fd 3
+//! # Input, advice and the journal
 //!
 //! Unused.
 //!

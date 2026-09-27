@@ -58,8 +58,8 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
 /// guest's 16 passed checks; and every proof has its circuit's shape. What the
 /// trace holds — the twelve instructions and the acceptance matrix — is
 /// `crates/checker/tests/jump_branch_slt.rs`' `the_guest_runs_the_acceptance_matrix`,
-/// over the same fixture, and QEMU's reading of it is
-/// `crates/emulator/tests/qemu_outputs.rs`', which compares the exit status and
+/// over the same fixture, and the emulator's reading of it is
+/// `crates/emulator/tests/guests.rs`', which checks the exit status and
 /// fd 1 and nothing below that.
 ///
 /// The generic table, which this family is the first to read, is bound: the key
@@ -154,12 +154,14 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
     assert_eq!(&claim[65..72], &setup.vk.setup_commitments[1][..]);
     assert_eq!(&claim[72..], &table[..]);
     let add = reduced(&proofs[1]);
-    // 41 + 33 since S21's eighth frame query (`deleg`), and 42 + 35 since S23
-    // gave that query the `deleg_space` column and split `is_keccak` into one
-    // selector per registered delegation type, so identity's seven setup
-    // commitments start at 77 rather than 74.
-    assert_eq!(add.len(), 42 + 35 + 7);
-    assert_eq!(&add[77..], &setup.vk.setup_commitments[0][..]);
+    // 41 + 33 since S21's eighth frame query (`deleg`), 42 + 35 since S23 gave
+    // that query the `deleg_space` column and split `is_keccak` into one selector
+    // per registered delegation type, and 42 + **36** since S26 registered a
+    // fourth — so identity's seven setup commitments start at 78 rather than 77.
+    // This pair moves by one for every delegation family
+    // (`docs/spec/delegation.md` §10).
+    assert_eq!(add.len(), 27 + 33 + 7);
+    assert_eq!(&add[60..], &setup.vk.setup_commitments[0][..]);
 }
 
 /// The generic table's binding from the other side. A key whose table

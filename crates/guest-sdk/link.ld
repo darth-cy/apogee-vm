@@ -7,16 +7,17 @@
 
    Every writable byte the guest can touch is declared as one loadable segment
    that runs to the top of RAM. The zkVM executor does not need that -- it makes
-   the whole RAM window addressable by construction -- but a host loader such as
-   qemu-riscv32 maps exactly what the program headers declare and nothing else,
-   so an undeclared stack or heap is unmapped memory and the first push faults.
-   Declaring it keeps the two executors agreeing on the memory map, which is the
-   property that matters; the segment is NOBITS, so the file does not grow. */
+   the whole RAM window addressable by construction -- but an image whose stack
+   and heap are in no PT_LOAD is an image whose program headers are a lie about
+   its own memory, and any loader that believes them leaves the first push
+   pointing at nothing. The headers say what the image needs, whoever reads
+   them; the segment is NOBITS, so the file does not grow.
+   crates/loader/tests/layout.rs reads the headers and pins this. */
 MEMORY { RAM (rwx) : ORIGIN = 0x00010000, LENGTH = 0x7FFF0000 }
 ENTRY(_start)
 SECTIONS {
-  /* Every segment starts on its own page. A host loader mmaps each PT_LOAD
-     independently at the page containing p_vaddr, so two segments sharing a
+  /* Every segment starts on its own page. A loader that maps each PT_LOAD
+     independently maps the page containing p_vaddr, so two segments sharing a
      page means the second mapping's permissions win for the whole page: an
      unaligned .rodata would strip execute from the tail of .text, and an
      unaligned .bss would put zero-fill on a read-only page, which is refused

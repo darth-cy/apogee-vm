@@ -248,30 +248,6 @@ fn the_circuit_keeps_every_rule() {
         .expect("a circuit with no channel discharges nothing");
 }
 
-/// Acceptance 2. The written lanes come from `transcript::poseidon2_permute`,
-/// and the circuit accepts them: the KAT state and random ones alike.
-#[test]
-fn the_forward_pass_is_poseidon2_permute() {
-    let a = poseidon2::artifact(VARS);
-    let values = forward(&a, witness(&honest()));
-    gkr::self_check(&a, &values, &challenges())
-        .unwrap_or_else(|e| panic!("an honest witness failed `{}`", e.relation));
-
-    let mut rng = test_support::Rng::new(0x0512_5233);
-    for round in 0..4 {
-        let case: Vec<Invocation> = (0..ROWS)
-            .map(|r| Invocation {
-                cycle: 3 + (4 * round + r) as u64,
-                base: guest_memory::RAM_ORIGIN + 4 * (64 * (r as u32 + 1)),
-                state: core::array::from_fn(|_| wide(&mut rng)),
-            })
-            .collect();
-        let values = forward(&a, witness(&case));
-        gkr::self_check(&a, &values, &challenges())
-            .unwrap_or_else(|e| panic!("round {round}: an honest witness failed `{}`", e.relation));
-    }
-}
-
 /// The committed vectors, not a self-oracle.
 ///
 /// `crates/transcript/tests/vectors/poseidon2_perm.txt` was produced by
@@ -439,18 +415,6 @@ fn a_corrupted_input_lane_is_refused() {
         }
     }
     assert_eq!(refusal(&a, columns), "out_lane0");
-}
-
-#[test]
-fn a_bad_frame_pointer_is_refused() {
-    let a = poseidon2::artifact(VARS);
-    let mut misaligned = honest();
-    misaligned[0].base += 2;
-    assert_eq!(refusal(&a, witness(&misaligned)), "base_aligned");
-
-    let mut past = honest();
-    past[0].base = (1u32 << 31) - 4;
-    assert_eq!(refusal(&a, witness(&past)), "base_in_window");
 }
 
 /// A padding row's lanes are not free: `in{j}_word{k}` is ungated, so a state

@@ -417,11 +417,13 @@ one:
   one of eight arms, each bounded by §6.5's chain. No step reads back into the register
   induction.
 
-**Owed by the I/O-binding stage**: when ecall transfer cycles become provable, that family's
-`ram_write_value` must carry a 32-bit bound of its own. Today no `ADD_SUB_LUI_AUIPC` row can
-reach RAM at all — its `ram_mask_rule` is the ungated `ram_mask = 0`
-(`docs/spec/shard-proof.md` §8) — so the induction rests on a circuit gate and not on
-`prover::fill::add_sub` refusing a transfer cycle by name, which is a completeness check.
+**Nothing is owed on top of that.** The one gap this list ever had was the
+`ADD_SUB_LUI_AUIPC` family's `ram_write_value`, which a provable ecall transfer cycle would
+have needed a 32-bit bound on. There is no such cycle and no such column: `read` and `write`
+are retired with their numbers burned, and the `ram` query that carried their buffer traffic
+went with them, so that family's frame has no RAM query to bound
+(`docs/spec/ecall-abi.md` §4, `docs/spec/shard-proof.md` §8). The induction rests on the
+frame's shape rather than on a fill refusing anything.
 
 ### 5.2 What the induction is for
 
@@ -527,13 +529,12 @@ property of the proved statement rather than a hole in it.
 `crates/checker/tests/atomics.rs::sc_w_always_succeeds` is that proof, and it runs in ordinary
 CI.
 
-`qemu-riscv32` keeps a reservation set and may therefore fail an unpaired `sc.w` where this
-machine succeeds. That is not compared and no longer needs to be: since S-IO QEMU is an oracle
-for what a guest computes and never for how this emulator computes it
-(`crates/emulator/tests/qemu_outputs.rs`), so what would catch the deviation if it ever
-mattered is a guest whose **committed output** depended on spurious failure — and compiled
-code has none, LLVM never emitting an unpaired `sc.w` and the standard CAS loop exiting on its
-first pass. Frozen at S12, and S19 is the stage that gives it a circuit.
+A machine that kept a reservation set would fail an unpaired `sc.w` where this one succeeds,
+so the deviation is real and it is a **conformance** deviation, never a soundness one: the
+circuit proves what the emulator does, and both do the same thing. What would catch it if it
+ever mattered is a guest whose **committed output** depended on spurious failure — and
+compiled code has none, LLVM never emitting an unpaired `sc.w` and the standard CAS loop
+exiting on its first pass. Frozen at S12, and S19 is the stage that gives it a circuit.
 
 ### 6.7 Gates and lookups, in counts
 
@@ -556,9 +557,9 @@ S16 answer 7 deferred to S19 "with the circuit that needs it".
 What moves with it: every `VmConfig` containing the family, and so program identity for
 every A-carrying program. The committed identity pins are `guests/fib`'s, which is A-free,
 so `crates/program/tests/vectors/identity.txt` does not move. What does change is
-`crates/program/tests/partition.rs`, where `guests/consistency` used to be the one guest the
-frozen defaults refused — its atomics run up to pc `0x18e62a`, past a `2^16` table — and now
-fits; the refusal keeps a test of its own against an explicit `2^16`.
+`crates/program/tests/partition.rs`, which holds every committed guest to the frozen
+defaults and keeps the refusal as a test of its own by shortening one family back to an
+explicit `2^16`.
 
 ### 7.2 The registry's minimum-height guard
 
@@ -579,10 +580,10 @@ exiting with the number of checks, **50**. Its statement is five execution famil
 the guest writes near the top of RAM as well as inside window 0, so the derived window list
 is `[8191]` at `h = 2^16`.
 
-`crates/prover/tests/mem.rs` proves and verifies it; `crates/emulator/tests/qemu_outputs.rs`
-holds its exit status and its fd 1 to `qemu-riscv32`'s, the guest's 50 checks being what its
-exit status counts; `crates/checker/tests/mem_fill.rs` runs all three fills over its archive
-in ordinary CI, with every channel counted.
+`crates/prover/tests/mem.rs` proves and verifies it; the guest's 50 checks are what its exit
+status counts, so one wrong value is a different status and nothing below it needs comparing;
+`crates/checker/tests/mem_fill.rs` runs all three fills over its archive in ordinary CI, with
+every channel counted.
 
 ## 9. What these families do not do, and the controls
 

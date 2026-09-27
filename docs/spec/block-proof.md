@@ -31,10 +31,11 @@ The owner's decisions this page records, each put before any code:
    obligation needing `lookup_channel::BITS[TIMESTAMP] = 19` variables and Mercury needs
    an even variable count, so `2^20` is the floor for every family that runs cycles
    (`docs/spec/lookup.md` §3), and `constraints::family_circuit` returns `None` below it
-   for all seven. No existing guest spills either: the two that read an fd 0 input, `fib`
-   and `heap`, are not provable at all while `EXIT` is the only provable ecall
-   (`docs/spec/shard-proof.md` §8.4). So S20 adds `guests/shards`, whose one loop runs
-   1,064,970 `ADD_SUB_LUI_AUIPC` cycles. §5.4.
+   for all seven. No existing guest spills either: `fib` and `heap`, the two that took
+   their input through the I/O syscall, were not provable at all at S20, `EXIT` being the
+   only provable ecall then (`docs/spec/shard-proof.md` §8.4) — both read the public input
+   window now — and none of the rest runs `2^20` cycles in one family. So S20 adds
+   `guests/shards`, whose one loop runs 1,064,970 `ADD_SUB_LUI_AUIPC` cycles. §5.4.
 2. **There is no row-0 anchoring obligation** (§4.1). The stage prompt asks for the
    claimed `ts_start` to be pinned to row 0's timestamp by a constraint. The owner's
    decision, on the ground that it buys no soundness: the global memory multiset already
@@ -436,8 +437,11 @@ produces the digest every shard is seeded with.
   shard's verification. Folding those into one proof is S26 and S27's.
 - **No accumulator entries** (§1).
 - **Nothing for a delegation family beyond §4's scoping.** S21 added `KECCAK_F` and
-  `verify_block` did not change; S23's two families appended the same way
-  (`docs/spec/delegation.md` §10).
+  `verify_block` did not change; S23's two families appended the same way, and so did S26's
+  `MOD_MUL` (`docs/spec/delegation.md` §10). What S26 *did* make visible is how many shards
+  such a family's invocation count buys at `2^8` — 27 of them on a mini-block, where the
+  execution families it accelerates lost five — which is a cost of the height and not of this
+  page: `docs/spec/delegation.md` §9.1 has it.
 - **Nothing for S-IO's three window families.** `PUBLIC_INPUT`, `PUBLIC_OUTPUT` and
   `ADVICE_WINDOWS` are not cycle-owning, so §4's ts-window rule does not reach them, and
   their shards enter the root product exactly as `ZERO_WINDOWS`' do. The public values'
@@ -445,4 +449,5 @@ produces the digest every shard is seeded with.
   inside the per-shard half a block runs (`docs/spec/public-values.md` §5). *Amended at
   S-IO: this bullet read "No binding of fd 0 and fd 1 to the execution. The public I/O
   digest is in the statement and no row reads it, as at S16; the I/O-binding stage owes
-  it." It is bound now, and not through a descriptor.*
+  it." It is bound now, and not through a stream — the descriptors it named no longer
+  exist.*

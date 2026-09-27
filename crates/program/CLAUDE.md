@@ -102,6 +102,7 @@ is claimed by exactly one family by construction.
 | 12 | `PUBLIC_INPUT` | no pc; the public input window at `0x8000`, **exactly one shard**, present in every `VmConfig` at the **pinned** `family::PUBLIC_WINDOW_HEIGHT`; an **empty** table | 2^8 |
 | 13 | `PUBLIC_OUTPUT` | no pc; the journal at `0x8400`, exactly one shard, present in every `VmConfig` at the same pinned height; an **empty** table | 2^8 |
 | 14 | `ADVICE_WINDOWS` | no pc; the prover's advice from `0x8000_0000` up, `k >= 0` consecutive windows, present in every `VmConfig` at the window height; an **empty** table | 2^22 |
+| 15 | `MOD_MUL` | no pc; **invoked, not decoded**: ecall `0x503`, one `a·b mod m` over eight 32-bit limbs a row, the modulus **witnessed** rather than a constant of the circuit; an **empty** table | 2^8 |
 
 The **three** window families — `INIT_TEARDOWN`, `ZERO_WINDOWS` and, since S-IO,
 `ADVICE_WINDOWS` — have **one height**, `h`: RAM window `w` is the bytes
@@ -164,15 +165,15 @@ something to ignore.
   atomics table would hold atomics at or below pc `0x1fffc` only, which is what the
   defaults gave until S19. A row above a *shorter*
   family's height is simply outside that table -- padding there -- so a program's code
-  may reach past every table but its own family's. Every committed guest's code ends
-  below `0x1c990` — `orderbook`'s is the highest — **except `consistency`**, which is
-  1.7 MB of it with an `Arc` inside: its atomics run up to pc `0x18e62a`, and until S19
-  the frozen defaults gave atomics 2^16 rows and refused that guest, which then took a
-  uniform 2^20 — the height its file bytes, ending at `0x1efea0`, need for window 0 too.
-  **S19 raised `DEFAULT_HEIGHTS[ATOMICS]` to 2^20**, the timestamp channel's floor, with
-  the circuit that needs it (`docs/spec/memory-ops.md` §7.1), so every committed guest now
-  preprocesses at the defaults and `TableTooShort` keeps a test of its own against an
-  explicit 2^16. Whether heights should be per family at all is an open question in
+  may reach past every table but its own family's. **S19 raised
+  `DEFAULT_HEIGHTS[ATOMICS]` to 2^20**, the timestamp channel's floor, with the circuit
+  that needs it (`docs/spec/memory-ops.md` §7.1), so every committed guest preprocesses at
+  the defaults and `TableTooShort` keeps a test of its own against an explicit 2^16. What
+  made that raise visible before the circuit demanded it was `guests/consistency` — 1.7 MB
+  of code with an `Arc` inside, its atomics running up to pc `0x18e62a`, which the frozen
+  2^16 default refused outright. That guest went with the POSIX layer, and the floor it
+  exposed did not: the bound is `lookup_channel::BITS[TIMESTAMP]`, not any one program.
+  Whether heights should be per family at all is an open question in
   `docs/handoff/S12-emulator.md`; the suites here that are not *about* the heights take
   `common::fitting`, the smallest menu height the code fits.
 - **Fields**, in frozen column order `pc, next_pc, rs1, rs2, rd, imm, funct3,
@@ -197,7 +198,7 @@ cover is therefore not expressible.
 | --- | --- | --- |
 | `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MEM_WORD`, `MEM_SUBWORD` | `pc next_pc rs1 rs2 rd imm extra_mask` | `0b1011_1111` |
 | `MUL_DIV`, `ATOMICS` | `pc next_pc rs1 rs2 rd extra_mask` | `0b1001_1111` |
-| `INIT_TEARDOWN`, `ZERO_WINDOWS`, the three delegation families, `PUBLIC_INPUT`, `PUBLIC_OUTPUT`, `ADVICE_WINDOWS` | — | `0` |
+| `INIT_TEARDOWN`, `ZERO_WINDOWS`, the four delegation families, `PUBLIC_INPUT`, `PUBLIC_OUTPUT`, `ADVICE_WINDOWS` | — | `0` |
 
 **`funct3` is in no tuple.** The extra mask is one-hot per mnemonic, which leaves it
 nothing to say; it remains a row field so a later family that wants it can take it.

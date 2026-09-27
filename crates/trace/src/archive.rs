@@ -605,16 +605,20 @@ fn check_parts(
         }
         for r in 0..n {
             let row = t.row(r);
-            // Since S21 there are eight roles, so the mask is full: every bit
-            // of the `u8` names one and no value of it can mark a role that
-            // does not exist. The check that used to stand here is therefore
-            // unreachable, and an unreachable refusal is worse than none —
-            // what catches a `present` bit the execution did not make is the
-            // log replay below, which finds the row and the log disagreeing.
-            // A ninth role widens this mask, which is a schema change
-            // (`docs/spec/execution-trace.md` §7); the assertion is what makes
-            // that a compile error here rather than a silently dropped check.
-            const _: () = assert!(ROLES.len() == 8);
+            // There are six roles and `present` is a `u8`, so bits 6 and 7
+            // name nothing and a row carrying one is malformed. The mask was
+            // full between S21 and the deletion of the POSIX layer — which
+            // took `Arg1` and `Arg2` with it — and this refusal was
+            // unreachable for exactly that span. It is reachable again, so it
+            // stands again. A seventh role narrows the spare bits, which is a
+            // schema change (`docs/spec/execution-trace.md` §7).
+            const SPARE: u8 = !0 << ROLES.len();
+            if row.present & SPARE != 0 {
+                return Err(format!(
+                    "family {} row {r}'s present mask names a role that does not exist",
+                    t.family
+                ));
+            }
             for role in ROLES {
                 if row.query(role).is_none() && row.queries[role as usize] != Query::ABSENT {
                     return Err(format!(
@@ -1015,7 +1019,7 @@ mod tests {
             tiny()
         );
         let pc = (address_space::PC, 0, 4, 0, 0x1_0000, 0x1_0004);
-        let cases: [(&str, Vec<u8>); 15] = [
+        let cases: [(&str, Vec<u8>); 16] = [
             // The profile renames the family too, so only the id is wrong.
             (
                 "family 42 is not in constants::family",
@@ -1051,19 +1055,28 @@ mod tests {
                 "differ in length",
                 post(|a| a.traces.families[0].pc.push(0), None),
             ),
-            // Bit 7 is `Role::Delegate`, a real role since S21, so a row
-            // claiming it is not refused for naming a role that does not exist
-            // — the mask is full — but for claiming a delegation request that
-            // no invocation answers. Since S23 the mirror query's address space
-            // is the *invocation's*, so a row claiming one without an
-            // invocation has no space to name, and that is the refusal.
+            // Bit 5 is `Role::Delegate`, the last real role, so a row claiming
+            // it is not refused for naming a role that does not exist but for
+            // claiming a delegation request that no invocation answers. Since
+            // S23 the mirror query's address space is the *invocation's*, so a
+            // row claiming one without an invocation has no space to name, and
+            // that is the refusal.
             (
                 "claims a delegation request and no invocation rides it",
+                post(|a| a.traces.families[0].present[0] = 0x20, None),
+            ),
+            // Bit 7 names nothing. The mask was full from S21 until the POSIX
+            // layer took `Arg1` and `Arg2` with it, and for exactly that span
+            // this refusal was unreachable and stood commented out rather than
+            // run; six roles leave two spare bits, so it is reachable again and
+            // this is what proves it fires.
+            (
+                "names a role that does not exist",
                 post(|a| a.traces.families[0].present[0] = 0x80, None),
             ),
             (
                 "does not name",
-                post(|a| a.traces.families[0].queries[6].write_value[0] = 1, None),
+                post(|a| a.traces.families[0].queries[4].write_value[0] = 1, None),
             ),
             (
                 "not on the menu",

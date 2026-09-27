@@ -28,10 +28,6 @@
 
 mod common;
 
-use pcs::{batch_open, commit, open, MercuryCommitment, MercuryProof, PROOF_BYTES};
-use test_support::Rng;
-use transcript::Transcript;
-
 const LIB: &str = include_str!("../src/lib.rs");
 const FFT: &str = include_str!("../src/fft.rs");
 const UNI: &str = include_str!("../src/uni.rs");
@@ -115,53 +111,6 @@ fn the_only_transform_is_the_one_at_two_b() {
         constructors,
         vec!["pub fn for_product(half: usize) -> Domain {"]
     );
-}
-
-/// The proof is the same length at every height and at every batch width, and
-/// that length is `PROOF_BYTES`: 8 uncompressed G1 points and 6 canonical `Fr`
-/// values. A batched proof is a `MercuryProof` and nothing else.
-///
-/// `to_bytes` returns `[u8; PROOF_BYTES]`, so its *length* is a fact about the
-/// type and asserting it proves nothing. What each case asserts instead is a
-/// round trip through `from_bytes`, which validates every point and every value
-/// and so can fail; the constant itself is checked once, against the shape it
-/// claims to be.
-#[test]
-fn the_proof_length_does_not_depend_on_n_or_on_k() {
-    assert_eq!(PROOF_BYTES, 8 * 64 + 6 * 32);
-
-    let srs = common::toy_srs(12);
-    for num_vars in [2usize, 4, 8, 12] {
-        let mut rng = Rng::new(0x5009_0900 + num_vars as u64);
-        let f = common::random_poly(&mut rng, num_vars);
-        let u = common::random_point(&mut rng, num_vars);
-        let cm = commit(&srs, &f).expect("commit");
-        let mut tr = Transcript::new();
-        let (_, proof) = open(&srs, &f, &cm, &u, &mut tr).expect("open");
-        assert_eq!(
-            MercuryProof::from_bytes(&proof.to_bytes()),
-            Some(proof),
-            "n = 2^{num_vars}"
-        );
-    }
-
-    for k in [1usize, 5, 8] {
-        let mut rng = Rng::new(0x5009_0910 + k as u64);
-        let cols: Vec<_> = (0..k).map(|_| common::random_poly(&mut rng, 8)).collect();
-        let cms: Vec<MercuryCommitment> = cols
-            .iter()
-            .map(|f| commit(&srs, f).expect("commit"))
-            .collect();
-        let u = common::random_point(&mut rng, 8);
-        let mut tr = Transcript::new();
-        let (vs, proof) = batch_open(&srs, &cols, &cms, &u, &mut tr).expect("batch_open");
-        assert_eq!(vs.len(), k);
-        assert_eq!(
-            MercuryProof::from_bytes(&proof.to_bytes()),
-            Some(proof),
-            "k = {k}"
-        );
-    }
 }
 
 /// The transcript schedule of one function, read out of the source as

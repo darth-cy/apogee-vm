@@ -1,0 +1,19 @@
+[package]
+name = "profiler"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# S26 step 2's cycle profiler. It invokes NOTHING proving-related: an execution,
+# an ELF symbol table and arithmetic. `docs/spec/profiling.md` is the design.
+
+[dependencies]
+constants.workspace = true
+emulator.workspace = true
+host.workspace = true
+isa.workspace = true
+loader.workspace = true
+program.workspace = true
+trace.workspace = true
+serde = { workspace = true, features = ["derive", "alloc"] }
+serde_json.workspace = true

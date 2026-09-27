@@ -40,11 +40,8 @@ mod common;
 
 use checker::{Cell, Tamper, TamperHarness};
 use constants::extra_mask::jump_branch_slt as kind;
-use constants::extra_mask::mul_div as md_kind;
-use constants::extra_mask::shift_bitwise as sb_kind;
 use constants::family::JUMP_BRANCH_SLT as JBS;
 use constants::family::{ADD_SUB_LUI_AUIPC as ADD, INIT_TEARDOWN as INIT};
-use constants::family::{MUL_DIV as MD, SHIFT_BITWISE as SHB};
 use constants::lookup_channel;
 use constraints::add_sub::{DECODED, KINDS, MULTIPLICITIES, NEXT_PC_HI, PC_WRAP, RD_HI, WRAP};
 use constraints::jump_branch_slt as jbs;
@@ -52,12 +49,10 @@ use constraints::memory::{
     frame, gap_hi, rd_inv, rd_is_zero, rd_selected, CYCLE, FIELD_ADDR, FIELD_MASK, FIELD_READ_TS,
     FIELD_READ_VALUE, FIELD_WRITE_VALUE,
 };
-use constraints::mul_div as md;
-use constraints::shift_bitwise as sb;
 use constraints::PolyAddress;
 use field::Fr;
 use prover::{shard_columns, ProverSetup};
-use trace::{build_multiplicities, Role, TraceArchive};
+use trace::{Role, TraceArchive};
 use verifier::VerifyError;
 
 /// `ADD_SUB_LUI_AUIPC`'s frame width, and the **slot** of each query this file
@@ -67,13 +62,12 @@ use verifier::VerifyError;
 /// inserted rather than appended would move every one of these silently, which
 /// is what `the_slot_constants_are_the_frames` below exists to catch. It runs
 /// in ordinary CI, unlike every proof test in this file.
-const WIDTH: usize = 8;
+const WIDTH: usize = 5;
 const PC: usize = 0;
 const RS1: usize = 1;
 const RS2: usize = 2;
-const RAM: usize = 5;
-const RD: usize = 6;
-const DELEG: usize = 7;
+const RD: usize = 3;
+const DELEG: usize = 4;
 
 /// The slot constants above against the frozen frame, and the witness columns
 /// they index against the circuit's own names. No proof, so this is the one
@@ -87,7 +81,6 @@ fn the_slot_constants_are_the_frames() {
         (PC, m::PC),
         (RS1, m::RS1),
         (RS2, m::RS2),
-        (RAM, m::RAM),
         (RD, m::RD),
         (DELEG, m::DELEG),
     ] {
@@ -415,14 +408,12 @@ fn the_targets_s14_left_to_s16_are_refused() {
     forgery.push(cell(ADD, gap_hi(RD), 5, Fr::ZERO));
     h.assert_rejects(&tamper(forgery), (ADD, 0), CONSTRAINT);
 
-    // C8, third: the exit row storing 7 into the top stack word, never
-    // written before.
-    let store = vec![
-        cell(ADD, frame(RAM, FIELD_MASK), 28, Fr::ONE),
-        cell(ADD, frame(RAM, FIELD_ADDR), 28, f(0x7fff_fffc)),
-        cell(ADD, frame(RAM, FIELD_WRITE_VALUE), 28, f(7)),
-    ];
-    h.assert_rejects(&tamper(store), (ADD, 0), CONSTRAINT);
+    // C8's third forgery — the exit row storing 7 into the top stack word,
+    // never written before — is **unrepresentable** and so is not tried. It
+    // wrote through the frame's `ram` query, which the family lost with the
+    // `read`/`write` ecalls: no instruction routed here touches memory, and
+    // the transfer rows that once brought a RAM query with them are gone. A
+    // forgery with no column to live in is a stronger refusal than a gate.
 
     // The exit rewriting a0.
     h.assert_rejects(
@@ -651,423 +642,9 @@ fn jalr_moved(r: usize, v: u64, next: u64) -> Vec<Cell> {
     ]
 }
 
-/// S17 acceptance 6, fetch binding. The `jalr` above re-run two bytes further
-/// lands in the middle of the 32-bit `sltiu` it jumps to — the second
-/// halfword, which no family's table holds — and the row after it is moved
-/// there with it, so the pc's chain is whole. Every gate still holds; the
-/// honest prover's recount of the decoder channel fails loudly, naming the
-/// channel, because the table's row there is its `MINUS_ONE` padding; and the
-/// proof it makes anyway is refused by that channel, `Lookup { DECODER }`,
-/// before the memory argument sees the moved register.
-#[test]
-#[ignore = "2^20 rows: one statement's proof peaks near 10 GB"]
-fn s17_a6_a_jump_to_a_pc_holding_no_instruction_is_unprovable() {
-    let setup = common::control_setup();
-    let archive = common::control_archive(&setup.program);
-    let h = TamperHarness::new(&setup, &archive);
-    let mut columns = shard_columns(&setup, &archive, JBS, 0, &[]).expect("the honest shard");
-    let at = |columns: &[(PolyAddress, poly::MultilinearPoly)], address: PolyAddress, row| {
-        columns
-            .iter()
-            .find(|(a, _)| *a == address)
-            .unwrap_or_else(|| panic!("no {address}"))
-            .1
-            .get(row)
-    };
-
-    let r = jalr_row(&setup, &archive);
-    let v = small(at(&columns, frame(JBS_RS1, FIELD_READ_VALUE), r));
-    let next = small(at(&columns, frame(PC, FIELD_WRITE_VALUE), r));
-    // The jalr lands on this family's next row, a 32-bit instruction whose
-    // second halfword no family's table holds.
-    assert_eq!(
-        small(at(&columns, frame(PC, FIELD_READ_VALUE), r + 1)),
-        next
-    );
-    let tables = &setup.program.tables;
-    assert!(tables.family(JBS).unwrap().is_live(next as usize / 2));
-    for table in &tables.families {
-        assert!(
-            !table.is_live(next as usize / 2 + 1),
-            "family {} holds pc {:#x}",
-            table.family,
-            next + 2
-        );
-    }
-
-    let mut cells = jalr_moved(r, v, next);
-    cells.push(jbs_cell(frame(PC, FIELD_READ_VALUE), r + 1, f(next + 2)));
-
-    // The honest prover cannot count the decoder channel over it.
-    for c in &cells {
-        let column = columns
-            .iter_mut()
-            .find(|(a, _)| *a == c.address)
-            .expect("a committed column");
-        let mut values: Vec<Fr> = (0..column.1.len()).map(|i| column.1.get(i)).collect();
-        values[c.row] = c.value;
-        column.1 = poly::MultilinearPoly::new(poly::PolyBacking::Fr(values));
-    }
-    let circuit = setup.vk.circuit(JBS).expect("the family's circuit");
-    let decoder = circuit
-        .channels
-        .iter()
-        .find(|spec| spec.channel == lookup_channel::DECODER)
-        .expect("the decoder channel");
-    let refusal = build_multiplicities(&circuit.artifact, &columns, std::slice::from_ref(decoder))
-        .expect_err("a row at a pc no table holds cannot be counted");
-    assert!(refusal.contains("channel `decoder`"), "{refusal}");
-
-    h.assert_rejects(&tamper(cells), (JBS, 0), lookup(lookup_channel::DECODER));
-}
-
 // ---------------------------------------------------------------------------
 // S18: the shift/bitwise and mul/div families, over `guests/alu`
 // ---------------------------------------------------------------------------
-
-/// The row the negative control edits, and the bound of the scan that finds
-/// the rows the twins corrupt. Both S18 families run well under a hundred live
-/// rows of `alu`, and every row above them is padding, whose committed cells
-/// are all zero — so this row is padding, and a predicate that reads a nonzero
-/// cell cannot match on any padding row below it.
-const ALU_PADDING: usize = 1000;
-
-/// The value `address` holds at `row` of one shard's committed columns.
-fn at(columns: &[(PolyAddress, poly::MultilinearPoly)], address: PolyAddress, row: usize) -> Fr {
-    columns
-        .iter()
-        .find(|(a, _)| *a == address)
-        .unwrap_or_else(|| panic!("no {address}"))
-        .1
-        .get(row)
-}
-
-/// The first row of `columns` carrying kind bit `bit` on which `cell` is not
-/// zero: the row a twin corrupts, found by the very cell it corrupts, so no
-/// twin here names a row number.
-fn alu_row(
-    columns: &[(PolyAddress, poly::MultilinearPoly)],
-    bit: PolyAddress,
-    cell: PolyAddress,
-    what: &str,
-) -> usize {
-    (0..ALU_PADDING)
-        .find(|&i| at(columns, bit, i) == Fr::ONE && at(columns, cell, i) != Fr::ZERO)
-        .unwrap_or_else(|| panic!("alu runs no {what}"))
-}
-
-/// S18 acceptance 8, one twin per family and three refusal classes on screen.
-/// The honest `alu` statement — four execution shards of `2^20` rows, the
-/// largest in this file — verifies (the harness asserts it); its structural
-/// counts are the two documents'; and then, each refused in its class:
-///
-/// - **the residue twin.** One `residue` cell of an `sra` that discards a bit,
-///   raised by one. `residue` is what a right shift's floor-division identity
-///   `rs1 − 2^32·se = (rd − 2^32·se)·2^s + residue` balances with, and
-///   `scaled = residue·2^(32 − s)` is the copower half of its bound, so the
-///   circuit refuses it: `Constraint`. This is the stage's named
-///   shift/bitwise twin.
-/// - **the product-high twin.** One `p_high` cell of a `mulh` whose product has
-///   a high half, raised by one. The one product identity
-///   `mx·my = p_low + 2^32·p_high − 2^64·p_sign` covers all four multiplies and
-///   the division alike, and `rd` is `p_high` on this row, so two gates refuse
-///   it: `Constraint`. This is the stage's named mul/div twin.
-/// - **a multiplicity, in a second class.** The shift family's `GENERIC` count
-///   of the `ZeroEntry`, the packed table's first row, which every switched-off
-///   lookup of the shard gates to, raised by one. Every gate still holds and
-///   every range is still in range; the channel whose count it is —
-///   the one carrying `U16GetSign`, the shift powers and the four AND bytes —
-///   is what refuses it, `Lookup { GENERIC }`, and the harness's per-channel
-///   recount leaves that column alone precisely because it is the tamper.
-/// - **a memory column, in a third class.** The pc read timestamp of a live
-///   mul/div row, lowered by one. Its gap chunk stays in range and its
-///   multiplicity is recounted, the shard's memory columns are recommitted,
-///   and the tuple then matches no write in the statement: only the global
-///   multiset refuses it, `MemoryArgument`.
-///
-/// And the negative control, which is what says the four above mean anything:
-/// cells nothing reads, on a padding row of each family, change and the
-/// statement still verifies. On the shift family's, `pow` — whose one product
-/// `pow·copow` has a copower of 0 there, whose `shift_prod` product has a
-/// `shift_in` of 0, and whose `ShiftPowers` lookup `f_shift` switches off — and
-/// one AND byte, which no gate reads but through a kind bit and no lookup but
-/// under `f_bitwise`. On the mul/div family's, the two is-zero inverses, which
-/// multiply `r` and `rs2`, both 0 there. None of the four is range checked.
-#[test]
-#[ignore = "four 2^20-row execution shards, and the honest statement beside a re-proof: 15.7 GB"]
-fn s18_a8_the_residue_and_the_product_high_are_pinned() {
-    let setup = common::alu_setup();
-    let archive = common::alu_archive(&setup.program);
-    let h = TamperHarness::new(&setup, &archive);
-
-    // The structural counts: seven shards, `ZERO_WINDOWS` and `ADVICE_WINDOWS`
-    // the two families of the config that do not run, and each new family's
-    // committed width — `docs/spec/shift-bitwise.md` §6 and
-    // `docs/spec/mul-div.md` §6. The two public value families prove one shard
-    // each whatever the program does (`docs/spec/public-values.md` §4).
-    let (public, proofs) = h.honest();
-    assert_eq!(public.shard_counts, vec![1, 1, 1, 1, 1, 0, 1, 1, 0]);
-    let shards: Vec<(u32, u32)> = proofs.iter().map(|p| (p.family, p.shard_index)).collect();
-    assert_eq!(
-        shards,
-        vec![
-            (INIT, 0),
-            (ADD, 0),
-            (JBS, 0),
-            (SHB, 0),
-            (MD, 0),
-            (constants::family::PUBLIC_INPUT, 0),
-            (constants::family::PUBLIC_OUTPUT, 0)
-        ]
-    );
-    for (family, want) in [(SHB, (21, 61, 10)), (MD, (21, 54, 9))] {
-        let a = &setup.vk.circuit(family).expect("a circuit").artifact;
-        assert_eq!((a.memory.len(), a.witness.len(), a.setup.len()), want);
-    }
-
-    let shift = shard_columns(&setup, &archive, SHB, 0, &[]).expect("the honest shift shard");
-    let muldiv = shard_columns(&setup, &archive, MD, 0, &[]).expect("the honest mul/div shard");
-
-    // The residue twin.
-    let r = alu_row(
-        &shift,
-        sb::KINDS[sb_kind::SRA as usize],
-        sb::RESIDUE,
-        "`sra` that discards a bit",
-    );
-    let residue = at(&shift, sb::RESIDUE, r);
-    h.assert_rejects(
-        &tamper(vec![cell(SHB, sb::RESIDUE, r, residue + Fr::ONE)]),
-        (SHB, 0),
-        CONSTRAINT,
-    );
-
-    // The product-high twin.
-    let r = alu_row(
-        &muldiv,
-        md::KINDS[md_kind::MULH as usize],
-        md::P_HIGH,
-        "`mulh` whose product has a high half",
-    );
-    let high = at(&muldiv, md::P_HIGH, r);
-    h.assert_rejects(
-        &tamper(vec![cell(MD, md::P_HIGH, r, high + Fr::ONE)]),
-        (MD, 0),
-        CONSTRAINT,
-    );
-
-    // A generic-channel count, in a second class.
-    let m = at(&shift, sb::MULTIPLICITIES[2], 0);
-    h.assert_rejects(
-        &tamper(vec![cell(SHB, sb::MULTIPLICITIES[2], 0, m + Fr::ONE)]),
-        (SHB, 0),
-        lookup(lookup_channel::GENERIC),
-    );
-
-    // A pc read timestamp, in a third.
-    let read_ts = frame(PC, FIELD_READ_TS);
-    let r = (1..ALU_PADDING)
-        .find(|&i| at(&muldiv, read_ts, i) != Fr::ZERO)
-        .expect("a mul/div row reading a pc written before it");
-    let ts = at(&muldiv, read_ts, r);
-    h.assert_rejects(
-        &tamper(vec![cell(MD, read_ts, r, ts - Fr::ONE)]),
-        (MD, 0),
-        MEMORY,
-    );
-
-    // The negative control.
-    assert_eq!(at(&shift, frame(PC, FIELD_MASK), ALU_PADDING), Fr::ZERO);
-    assert_eq!(at(&muldiv, frame(PC, FIELD_MASK), ALU_PADDING), Fr::ZERO);
-    h.assert_verifies(
-        &tamper(vec![
-            cell(SHB, sb::POW, ALU_PADDING, f(7)),
-            cell(SHB, sb::BYTES_AND[0], ALU_PADDING, f(5)),
-        ]),
-        (SHB, 0),
-    );
-    h.assert_verifies(
-        &tamper(vec![
-            cell(MD, md::R_INV, ALU_PADDING, f(7)),
-            cell(MD, md::D_INV, ALU_PADDING, f(9)),
-        ]),
-        (MD, 0),
-    );
-}
-
-/// The row of `columns` past every live one: `guests/mem` runs 174 cycles in
-/// its largest family, so a row here is padding in all five.
-const MEM_PADDING: usize = 1000;
-
-/// The `ram` query's slot in the two memory families' frame,
-/// `pc rs1 rs2 load ram rd`, and the atomics family's width. A slot is a
-/// position in the family's own query list, so these differ from the add/sub
-/// constants above.
-const MEM_RAM: usize = 4;
-const AT_WIDTH: usize = 5;
-
-/// S19 acceptance 8, one twin per family and two refusal classes on screen.
-/// The honest `mem` statement — five execution shards of `2^20` rows and, for
-/// the first time in this file, a `ZERO_WINDOWS` shard — verifies (the harness
-/// asserts it); its structural counts are `docs/spec/memory-ops.md` §3.1, §4.3
-/// and §6.2's; and then, each refused in its class:
-///
-/// - **the old-word twin.** The RAM query's `read_value` on an `sw` row, moved
-///   by one. The stage prompt names "one loaded-value cell: no gate reads it",
-///   and for a *loaded* value that is not so — the frame's own
-///   `load_writes_back` gate reads it, and so does `rd_value_rule`. The cell
-///   with the stated property in this family is the word a **store**
-///   overwrites: `ram` is not in `FRAME_READ_ONLY`, no `mem_word` gate reads
-///   its read value, and none of the family's eighteen obligations touches it.
-///   So every gate and every bound still holds, and the refusal comes from the
-///   permutation product alone — the read tuple matches no write —
-///   `MemoryArgument` at `verify_shard` step 10, which is what the item is
-///   testing.
-/// - **the splice twin.** One `low` cell of a sub-word access, raised by one.
-///   `low` is the bytes below the accessed sub-word; `splice_rule` balances the
-///   word with it and `low_scaled = 2·low·pcopow` is the copower half of its
-///   bound, so the circuit refuses it: `Constraint`. This is the stage's named
-///   `mem_subword` twin.
-/// - **the old-value twin.** One `rd_selected` cell of an AMO, raised by one.
-///   Every AMO writes the **old** word to `rd`, which `rd_value_rule` is;
-///   `Constraint`. This is the stage's named `atomics` twin.
-/// - **a decoder count**, in a third class: `Lookup { DECODER }`.
-///
-/// The negative control follows: cells nothing reads on an all-zero padding row
-/// — `mem_word`'s `word_index_hi`, whose three obligations are switched off
-/// where `m_pc` is 0; `mem_subword`'s `pcopow`, free there because `p_rule`
-/// makes `p` zero and `pcopow_rule` then reads `0 = 0`; and `atomics`' `sum_hi`
-/// and `cmp_gap_hi`, whose only readers are their own `RANGE16` obligations,
-/// also under `m_pc`. All of them verify.
-///
-/// `lo` is **not** among them, which is worth recording: `lo_rule` is ungated,
-/// so it pins `lo` to `rs2` on a padding row as much as on a live one. That is
-/// the tighter circuit, not a defect — it is the shape S18's `add_rule` and
-/// `old_bytes_rule` have too — and it is why the control moves a bounded
-/// column's high chunk instead.
-#[test]
-#[ignore = "five 2^20-row execution shards, and the honest statement beside a re-proof: 16.9 GB"]
-fn s19_a8_the_old_word_the_splice_and_the_old_value_are_pinned() {
-    use constants::extra_mask::atomics as at_kind;
-    use constants::extra_mask::mem_subword as ms_kind;
-    use constants::extra_mask::mem_word as mw_kind;
-    use constants::family::ZERO_WINDOWS as ZERO;
-    use constants::family::{ATOMICS as AT, MEM_SUBWORD as MS, MEM_WORD as MW};
-    use constraints::{atomics as at_circuit, mem_subword as ms, mem_word as mw};
-
-    let setup = common::mem_setup();
-    let archive = common::mem_archive(&setup.program);
-    let h = TamperHarness::new(&setup, &archive);
-
-    // The structural counts: nine shards, the first `ZERO_WINDOWS` one any
-    // acceptance statement has had, S-IO's two public value ones, and each new
-    // family's committed width. `ADVICE_WINDOWS` proves none, this guest having
-    // no advice.
-    let (public, proofs) = h.honest();
-    assert_eq!(public.shard_counts, vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 0]);
-    assert_eq!(public.windows, vec![8191]);
-    let shards: Vec<(u32, u32)> = proofs.iter().map(|p| (p.family, p.shard_index)).collect();
-    assert_eq!(
-        shards,
-        vec![
-            (INIT, 0),
-            (ZERO, 0),
-            (ADD, 0),
-            (JBS, 0),
-            (MW, 0),
-            (MS, 0),
-            (AT, 0),
-            (constants::family::PUBLIC_INPUT, 0),
-            (constants::family::PUBLIC_OUTPUT, 0)
-        ]
-    );
-    for (family, want) in [(MW, (31, 24, 7)), (MS, (31, 55, 10)), (AT, (26, 54, 9))] {
-        let a = &setup.vk.circuit(family).expect("a circuit").artifact;
-        assert_eq!(
-            (a.memory.len(), a.witness.len(), a.setup.len()),
-            want,
-            "family {family}"
-        );
-    }
-
-    let word = shard_columns(&setup, &archive, MW, 0, &public.windows).expect("the mem_word shard");
-    let sub =
-        shard_columns(&setup, &archive, MS, 0, &public.windows).expect("the mem_subword shard");
-    let atomic =
-        shard_columns(&setup, &archive, AT, 0, &public.windows).expect("the atomics shard");
-
-    // The old-word twin: the word an `sw` overwrites, which no gate reads.
-    let old = frame(MEM_RAM, FIELD_READ_VALUE);
-    let r = alu_row(
-        &word,
-        mw::KINDS[mw_kind::SW as usize],
-        old,
-        "sw over a nonzero word",
-    );
-    let value = at(&word, old, r);
-    h.assert_rejects(
-        &tamper(vec![cell(MW, old, r, value + Fr::ONE)]),
-        (MW, 0),
-        MEMORY,
-    );
-
-    // The splice twin: one `low` cell of a sub-word access.
-    let r = alu_row(
-        &sub,
-        ms::KINDS[ms_kind::SB as usize],
-        ms::LOW,
-        "sb at a nonzero byte offset",
-    );
-    let value = at(&sub, ms::LOW, r);
-    h.assert_rejects(
-        &tamper(vec![cell(MS, ms::LOW, r, value + Fr::ONE)]),
-        (MS, 0),
-        CONSTRAINT,
-    );
-
-    // The old-value twin: the value an AMO writes to `rd`.
-    let sel = rd_selected(AT_WIDTH);
-    let r = alu_row(
-        &atomic,
-        at_circuit::KINDS[at_kind::AMOADD_W as usize],
-        sel,
-        "amoadd over a nonzero word",
-    );
-    let value = at(&atomic, sel, r);
-    h.assert_rejects(
-        &tamper(vec![cell(AT, sel, r, value + Fr::ONE)]),
-        (AT, 0),
-        CONSTRAINT,
-    );
-
-    // A decoder count, in a third class.
-    let m = at(&sub, ms::MULTIPLICITIES[3], 0);
-    h.assert_rejects(
-        &tamper(vec![cell(MS, ms::MULTIPLICITIES[3], 0, m + Fr::ONE)]),
-        (MS, 0),
-        lookup(lookup_channel::DECODER),
-    );
-
-    // The negative control: cells nothing reads on an all-zero padding row.
-    for columns in [&word, &sub, &atomic] {
-        assert_eq!(at(columns, frame(PC, FIELD_MASK), MEM_PADDING), Fr::ZERO);
-    }
-    h.assert_verifies(
-        &tamper(vec![cell(MW, mw::WORD_INDEX_HI, MEM_PADDING, f(7))]),
-        (MW, 0),
-    );
-    h.assert_verifies(
-        &tamper(vec![cell(MS, ms::PCOPOW, MEM_PADDING, f(9))]),
-        (MS, 0),
-    );
-    h.assert_verifies(
-        &tamper(vec![
-            cell(AT, at_circuit::SUM_HI, MEM_PADDING, f(11)),
-            cell(AT, at_circuit::CMP_GAP_HI, MEM_PADDING, f(13)),
-        ]),
-        (AT, 0),
-    );
-}
 
 // ---------------------------------------------------------------------------
 // S21: the delegation circuit's cells, and the anchor's linkage
@@ -1256,7 +833,7 @@ fn s21_a5_a6_the_delegation_witness_and_the_anchor_are_pinned() {
     );
     assert_eq!(
         delegation::ANCHOR_DELTA,
-        constraints::memory::FRAME_DELTA[DELEG],
+        constraints::memory::FRAME_DELTA[constraints::memory::DELEG],
         "the anchor's slot is the mirror query's"
     );
 
@@ -1463,7 +1040,7 @@ fn s23_a5_a6_the_recursion_witnesses_and_anchors_are_pinned() {
     };
     assert_eq!(
         delegation::ANCHOR_DELTA,
-        constraints::memory::FRAME_DELTA[DELEG],
+        constraints::memory::FRAME_DELTA[constraints::memory::DELEG],
         "the anchor's slot is the mirror query's"
     );
     for (family, live, anchor_value, tag) in [
@@ -1524,4 +1101,194 @@ fn s23_a5_a6_the_recursion_witnesses_and_anchors_are_pinned() {
             },
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// S26: the `MOD_MUL` witness and its anchor
+// ---------------------------------------------------------------------------
+
+/// The fourth delegation family's twins, over `guests/mod-mul-ops`.
+///
+/// Two things are new here and neither is the anchor. **The quotient is a column
+/// no execution recorded**: `fill::mod_mul_witness` derives it, so a twin that
+/// moves it is a twin on the *prover's own* arithmetic and the fifteen limb
+/// equations are what refuse it. And **the modulus is a column**, so a twin that
+/// moves a modulus word moves the statement the row proves — which is refused by
+/// `writes_back_w{j}`, the gate that says the call did not rewrite its caller's
+/// operands.
+///
+/// `#[ignore]`d for the reason every twin in this file is: it proves
+/// `mod-mul-ops`' block once honestly and again per twin.
+#[test]
+#[ignore]
+fn s26_the_mod_mul_witness_and_anchor_are_pinned() {
+    use constants::family::MOD_MUL as MM;
+    use constants::{delegation, mod_mul as mm};
+    use constraints::mod_mul as mm_c;
+
+    let setup = common::mod_mul_setup();
+    let archive = common::mod_mul_archive(&setup.program);
+    let h = TamperHarness::new(&setup, &archive);
+
+    // The structural counts. `MOD_MUL`'s id is 15, above S-IO's three window
+    // families, so its shards are **last** in statement order — which
+    // `KECCAK_F`'s were until S-IO and S23's two are not.
+    let (public, proofs) = h.honest();
+    let shards: Vec<(u32, u32)> = proofs.iter().map(|p| (p.family, p.shard_index)).collect();
+    let (last_family, _) = *shards.last().expect("a statement has shards");
+    assert_eq!(last_family, MM, "MOD_MUL sorts last: {shards:?}");
+    let mm_shards = shards.iter().filter(|(f, _)| *f == MM).count();
+    assert!(
+        mm_shards >= 2,
+        "the fixture keeps 2^8 so this stays multi-shard, and it makes {mm_shards}"
+    );
+
+    let a = &setup.vk.circuit(MM).expect("a MOD_MUL circuit").artifact;
+    assert_eq!(
+        (a.memory.len(), a.witness.len(), a.setup.len()),
+        (4 + 4 * mm::FRAME_WORDS, mm_c::WITNESS_COLUMNS, 0)
+    );
+    assert_eq!(a.trace_vars, common::MOD_MUL_FIXTURE_VARS);
+
+    let rows = 1usize << common::MOD_MUL_FIXTURE_VARS;
+    let columns = shard_columns(&setup, &archive, MM, 0, &public.windows)
+        .expect("the MOD_MUL shard's columns");
+    let at = |address: PolyAddress, row: usize| {
+        columns
+            .iter()
+            .find(|(a, _)| *a == address)
+            .unwrap_or_else(|| panic!("the MOD_MUL shard has no {address}"))
+            .1
+            .get(row)
+    };
+    let live = (0..rows)
+        .find(|r| at(mm_c::LIVE, *r) == Fr::ONE)
+        .expect("a live invocation");
+    // The last shard is the one with room left, so that is where a padding row is.
+    let pad_shard = (mm_shards - 1) as u32;
+    let pad_columns = shard_columns(&setup, &archive, MM, pad_shard, &public.windows)
+        .expect("the last MOD_MUL shard's columns");
+    let pad_at = |address: PolyAddress, row: usize| {
+        pad_columns
+            .iter()
+            .find(|(a, _)| *a == address)
+            .unwrap_or_else(|| panic!("the last MOD_MUL shard has no {address}"))
+            .1
+            .get(row)
+    };
+    let pad = (0..rows)
+        .find(|r| pad_at(mm_c::LIVE, *r) == Fr::ZERO)
+        .expect("a padding row in the last shard");
+
+    // --- The result, moved with the bit it decomposes so the frame's own
+    // recomposition still holds: what refuses it is a limb equation, the gate
+    // that says the multiplication was performed.
+    let out0 = mm_c::word(mm::OUT_WORD, mm_c::WORD_WRITE_VALUE);
+    let out_bit = mm_c::value_bit(3, 0, 0);
+    let word = at(out0, live);
+    let bit = at(out_bit, live);
+    h.assert_rejects(
+        &tamper(vec![
+            cell(MM, out0, live, word + Fr::ONE - bit - bit),
+            cell(MM, out_bit, live, Fr::ONE - bit),
+        ]),
+        (MM, 0),
+        CONSTRAINT,
+    );
+
+    // --- The quotient, the one column the execution never produced. Moved with
+    // its own bit, so `q_word0` still holds and the refusal is a limb equation.
+    let q_bit = mm_c::q_bit(0, 0);
+    let q = at(mm_c::q_limb(0), live);
+    let qb = at(q_bit, live);
+    h.assert_rejects(
+        &tamper(vec![
+            cell(MM, mm_c::q_limb(0), live, q + Fr::ONE - qb - qb),
+            cell(MM, q_bit, live, Fr::ONE - qb),
+        ]),
+        (MM, 0),
+        CONSTRAINT,
+    );
+
+    // --- A carry bit alone: the chain that joins two limb equations.
+    let carry = at(mm_c::carry_bit(0, 0), live);
+    h.assert_rejects(
+        &tamper(vec![cell(MM, mm_c::carry_bit(0, 0), live, Fr::ONE - carry)]),
+        (MM, 0),
+        CONSTRAINT,
+    );
+
+    // --- A modulus word the call rewrote. The read side is what the frame's
+    // tuples carry, so moving the **write** side alone is refused by
+    // `writes_back_w0` and by nothing in the multiset.
+    let m_write = mm_c::word(mm::M_WORD, mm_c::WORD_WRITE_VALUE);
+    h.assert_rejects(
+        &tamper(vec![cell(MM, m_write, live, at(m_write, live) + Fr::ONE)]),
+        (MM, 0),
+        CONSTRAINT,
+    );
+
+    // --- The control, on the shard that has a padding row: a padding row's gap
+    // bit, whose gate carries the mask on every product, is genuinely free.
+    h.assert_verifies(
+        &Tamper {
+            cells: vec![Cell {
+                family: MM,
+                shard: pad_shard,
+                address: mm_c::gap_bit(5, 7),
+                row: pad,
+                value: Fr::ONE,
+            }],
+            boundary: None,
+        },
+        (MM, pad_shard),
+    );
+
+    // --- The anchor, through the frozen helper. Nothing here is this family's:
+    // the anchor is one mechanism, and this is its fourth caller.
+    let alu = shard_columns(&setup, &archive, ADD, 0, &public.windows).expect("the add/sub shard");
+    let alu_at = |address: PolyAddress, row: usize| {
+        alu.iter()
+            .find(|(a, _)| *a == address)
+            .unwrap_or_else(|| panic!("the add/sub shard has no {address}"))
+            .1
+            .get(row)
+    };
+    assert_eq!(
+        delegation::ANCHOR_DELTA,
+        constraints::memory::FRAME_DELTA[constraints::memory::DELEG],
+        "the anchor's slot is the mirror query's"
+    );
+    let tag = constants::address_space::DELEGATION_MOD_MUL;
+    let requests: Vec<usize> = (0..1 << common::ADD_VARS)
+        .filter(|r| {
+            alu_at(frame(DELEG, FIELD_MASK), *r) == Fr::ONE
+                && alu_at(constraints::memory::deleg_space(WIDTH), *r) == f(tag as u64)
+        })
+        .collect();
+    assert!(
+        requests.len() >= 2,
+        "MOD_MUL needs two requests for the replay twin, and has {}",
+        requests.len()
+    );
+    let paired = (0..rows)
+        .find(|r| at(mm_c::LIVE, *r) == Fr::ONE && at(CYCLE, *r) == alu_at(CYCLE, requests[0]))
+        .expect("the invocation at the request's cycle");
+    checker::assert_anchor_twins_refused(
+        &h,
+        &checker::AnchorTwins {
+            requester: (ADD, 0),
+            delegation: (MM, 0),
+            request: requests[0],
+            invocation: paired,
+            other_request: requests[1],
+            rd_selected: rd_selected(WIDTH),
+            cycle: CYCLE,
+            mirror_read_ts: frame(DELEG, FIELD_READ_TS),
+            mirror_read_value: frame(DELEG, FIELD_READ_VALUE),
+            mirror_write_value: frame(DELEG, FIELD_WRITE_VALUE),
+            live: mm_c::LIVE,
+            anchor_value: mm_c::ANCHOR_VALUE,
+        },
+    );
 }

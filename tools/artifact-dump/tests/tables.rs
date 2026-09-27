@@ -27,8 +27,8 @@ fn loader_vector(name: &str) -> Vec<u8> {
 ///
 /// A table's rows are absolute pcs, one per halfword, so a family's height has
 /// to reach past its last instruction, and the defaults give atomics 2^16 rows
-/// — pc below `0x20000`. `guests/consistency` is 1.7 MB of code with an `Arc`
-/// in it, so its atomics sit far above that and the defaults refuse it. This
+/// — pc below `0x20000`. `guests/mod-mul-ops`' `.text` reaches pc `0x2161a`,
+/// so the defaults refuse it and it takes `2^18`. This
 /// test is about the page, not about the heights; `docs/handoff/S12-emulator.md`
 /// records the question the refusal raises.
 fn fitting(elf: &[u8]) -> ProgramParams {
@@ -136,7 +136,6 @@ fn every_committed_guest_renders_and_the_listing_is_the_tables() {
         "atomics",
         "opcodes",
         "heap",
-        "consistency",
         "addsub",
         "control",
         "alu",

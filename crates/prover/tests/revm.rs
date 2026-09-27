@@ -57,8 +57,8 @@ const ZERO: u32 = family::ZERO_WINDOWS;
 /// `guests/revm-block` exits 0 with its output commitment in the journal.
 const REVM_RESULT: u32 = 0;
 
-/// The binary proved here: the guest itself, provable since S-IO.
-/// `src/stdio.rs` is the fd 0 / fd 1 compatibility binary, which is not.
+/// The binary proved here: the guest itself. It is the only one — the
+/// `revm-block-stdio` companion went with the POSIX surface it wrapped.
 const REVM_BIN: &str = "revm-block";
 
 /// S24's heights: every family but the delegation one at `2^20`, with
@@ -102,10 +102,8 @@ fn revm_program() -> Program {
 /// as **advice**.
 fn revm_archive(program: &Program) -> TraceArchive {
     let io = emulator::GuestIo {
-        stdin: Vec::new(),
         input: Vec::new(),
         advice: witness_bytes(),
-        hint: Vec::new(),
     };
     let (traces, log, profile, execution) =
         emulator::trace_run(&program.image, &io, &program.tables, &program.config)
@@ -256,9 +254,16 @@ fn a6_the_revm_block_proves_and_verifies() {
     let setup = revm_setup();
     let mut archive = revm_archive(&setup.program);
 
-    // Acceptance 2, restated on the statement the proof is about: the family
-    // set is derived, `KECCAK_F` is in it at the delegation height, and S23's
-    // two families are not — nothing in this image does `Fr` arithmetic.
+    // Acceptance 2, restated on the statement the proof is about: the family set
+    // is derived, and this image declares **two** delegation families — S21's
+    // `KECCAK_F`, through `alloy-primitives`' `native-keccak`, and S26's
+    // `MOD_MUL`, through `guests/vendor/k256`'s patched field multiply. S23's two
+    // are not here: nothing in this image does `Fr` arithmetic.
+    //
+    // `MOD_MUL`'s id is 15, above S-IO's three window families, so it sorts
+    // **last** where `KECCAK_F` at 9 sorts before them. The config is one
+    // ascending list and where a family lands in it is a fact about ids alone
+    // (`crates/program/tests/delegation.rs` says the same in both directions).
     let families: Vec<u32> = setup
         .program
         .config
@@ -266,15 +271,16 @@ fn a6_the_revm_block_proves_and_verifies() {
         .iter()
         .map(|(f, _)| *f)
         .collect();
+    assert!(families.contains(&KECCAK), "keccak is declared");
     assert_eq!(
         &families[families.len() - 4..],
         &[
-            KECCAK,
             family::PUBLIC_INPUT,
             family::PUBLIC_OUTPUT,
-            family::ADVICE_WINDOWS
+            family::ADVICE_WINDOWS,
+            family::MOD_MUL
         ],
-        "the delegation family sorts after every execution one and before S-IO's three"
+        "S-IO's three sort after KECCAK_F, and S26's MOD_MUL after all of them"
     );
     assert!(!families.contains(&family::POSEIDON2));
     assert!(!families.contains(&family::FR_ARITH));
@@ -391,9 +397,10 @@ fn a6_the_revm_block_proves_and_verifies() {
 /// block's own copy to match, so checks 1 and 2 pass and the twin is refused
 /// by the mechanism it is about.
 ///
-/// The public I/O digest is `transcript::io_digest` over the fd 0 and fd 1
-/// streams, and `PublicInputs` carries those streams rather than the digest,
-/// so "a digest differing in one byte" is a stream differing in one byte —
+/// The public I/O digest is `transcript::io_digest` over the public input
+/// window's bytes and the journal's, and `PublicInputs` carries those byte
+/// strings rather than the digest, so "a digest differing in one byte" is a
+/// byte string differing in one byte —
 /// the same absorption, at G7, and the same consequence.
 #[test]
 #[ignore]

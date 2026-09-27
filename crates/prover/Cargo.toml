@@ -22,6 +22,10 @@ metrics = []
 constants.workspace = true
 constraints.workspace = true
 curve.workspace = true
+# The streaming prover drives the executor: `emulator::StreamingRun` hands back
+# one shard at a time, so the prover's loop is what decides when a column
+# exists (`docs/spec/streaming.md` §2). Nothing else in this crate names it.
+emulator.workspace = true
 field.workspace = true
 gkr.workspace = true
 loader.workspace = true
@@ -39,8 +43,6 @@ verifier.workspace = true
 verifier-core.workspace = true
 
 [dev-dependencies]
-# `tests/common` traces the S16 guest.
-emulator.workspace = true
 # Hex, for printing an identity a handoff note records.
 test-support.workspace = true
 # S20 acceptance 3: the transcript-tape validator over the statement the block

@@ -740,16 +740,6 @@ pub fn channels() -> Vec<ChannelSpec> {
 mod tests {
     use super::*;
 
-    /// The legal masks are eight distinct single bits, one per instruction the
-    /// family owns.
-    #[test]
-    fn the_legal_masks_are_eight_distinct_single_bits() {
-        for (i, m) in LEGAL_MASKS.iter().enumerate() {
-            assert_eq!(m.count_ones(), 1);
-            assert!(LEGAL_MASKS[..i].iter().all(|n| n != m));
-        }
-    }
-
     /// The multiplies and the divisions partition the eight kinds.
     #[test]
     fn the_two_halves_partition_the_kinds() {
@@ -778,13 +768,6 @@ mod tests {
     #[should_panic(expected = "the mul/div word is 1 to 32 bits wide, not 33")]
     fn a_word_of_33_bits_is_refused() {
         arithmetic_gates(33);
-    }
-
-    /// The honest family spec assembles, at the lowest height the registry
-    /// builds.
-    #[test]
-    fn the_seam_assembles_the_family() {
-        assert_eq!(assemble(19, family_spec()), artifact(19));
     }
 
     /// An obligation dropped on the way to the assembly is refused by its

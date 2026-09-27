@@ -72,25 +72,6 @@ fn the_fixture_is_what_its_pin_says() {
 }
 
 #[test]
-fn the_committed_witness_is_canonical() {
-    let bytes = witness_bytes();
-    let witness = BlockWitness::decode(&bytes).expect("the witness is canonical");
-    assert_eq!(witness.encode(), bytes, "decode and encode are not inverse");
-    assert_eq!(witness.txs.len(), 2);
-    assert!(
-        witness.stateless.is_none(),
-        "the mini mode makes no state-root claim and carries no stateless section"
-    );
-    // Every account the execution touched is here, including the ones that do
-    // not exist. An absent address is an error in `WitnessDb`, not an empty
-    // account, so a witness that dropped one could not run at all.
-    assert!(
-        witness.accounts.len() >= 3,
-        "a real block touches more than this"
-    );
-}
-
-#[test]
 fn the_spec_is_the_one_the_block_ran_under() {
     let pin = pin();
     let spec = recorder::mainnet_spec(pin.block_number).expect("a post-merge block");

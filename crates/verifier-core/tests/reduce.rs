@@ -51,7 +51,7 @@ fn the_global_transcript_is_the_frozen_order() {
         absorb(tags::COMMITMENT, 4 * 2),
         absorb(tags::MEMORY_GROUP, 2),
         absorb(tags::MEMORY_GROUP, 2),
-        absorb(tags::COMMITMENT, 4 * 42),
+        absorb(tags::COMMITMENT, 4 * 27),
         // S-IO's three, in the ascending tail like any other family. The
         // public input window commits three columns and the journal two, and
         // `ADVICE_WINDOWS` has no shard here, so it is a header and nothing
@@ -92,7 +92,7 @@ fn the_global_transcript_is_the_frozen_order() {
     assert!(moved(|p| p.boundary.reg_ts[3] += 1));
     assert!(moved(|p| p.boundary.pc_ts += 1));
     assert!(moved(|p| p.boundary.reg_values[0] += 1));
-    assert!(moved(|p| p.memory_commitments[1][40] = blob(999)));
+    assert!(moved(|p| p.memory_commitments[1][26] = blob(999)));
     assert!(moved(|p| p.memory_commitments[1].swap(0, 1)));
     assert!(moved(|p| p.memory_commitments.swap(0, 1)));
     assert!(moved(|p| {
@@ -545,7 +545,7 @@ fn garbage_is_refused_and_never_panics() {
             4 => q.family = (next() % 12) as u32,
             5 => q.shard_index = next() as u32,
             6 => q.outputs.truncate((next() % 9) as usize),
-            _ => q.witness_commitments.truncate((next() % 34) as usize),
+            _ => q.witness_commitments.truncate((next() % 35) as usize),
         }
         assert!(reduce_shard(&key, &q, &p).is_err());
     }

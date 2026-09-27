@@ -56,10 +56,22 @@ pub mod fixture {
     impl Pin { pub fn to_bytes(&self) -> Vec<u8>; pub fn from_bytes(&[u8]) -> Result<Pin, String>;
                pub fn check(&self, witness: &[u8], journal: &[u8]) -> Result<(), String>; }
     pub fn pin_file(stem: &str) -> String;  // and witness_file, journal_file
+// S26: the revm guest, built from source. One copy, shared by `tools/bench`'s `prove`
+// verb, `tools/profiler` and the suites -- three copies of the same 60 lines before.
+pub fn revm_params() -> ProgramParams;
+pub fn build_revm_guest(mode: Mode) -> Result<Vec<u8>, String>;   // always --release
 }
 ```
 
 ## Frozen invariants
+- **The blob gas price is recorded, not derived** (S26, `docs/spec/revm-block.md` §1.6).
+  `block_env` takes it as an argument and `blob_gasprice` reads it from
+  `eth_feeHistory`'s `baseFeePerBlobGas` — **not** from a receipt's `blobGasPrice`, which a
+  node reports only on the receipts of type-3 transactions, so a block with none has no
+  receipt carrying it and the `BLOBBASEFEE` opcode can read the price in any block. What it
+  replaces is a `fake_exponential` in the guest whose update fraction revm 42 only knows up
+  to Prague: on a post-Fusaka block that computed 4,387,037,219,060,994 where the chain says
+  5,055,772, and **every block carrying a type-3 transaction refused to execute**.
 - **`verify` adds nothing to the verifier's inputs.** Master rule 6's signature discipline
   is `(&VerifyingKey, &Proof, &PublicInputs)` and nothing else; `host::verify` takes
   `(&VerifyingKey, &BlockProof)` and reads the statement out of the proof, which is what
@@ -123,8 +135,8 @@ Master rule 2's runtime list is exhaustive, so both additions are recorded here 
   by name. Hand-rolling TLS is not what "own the crypto" means — that is about the
   *proving system's* cryptography. So the JSON-RPC client is ours (request framing, the
   retry policy, the cache) and only the HTTPS bytes are `curl`'s, spawned the way this
-  repository already spawns `cargo`, `qemu-riscv32` and `llvm-objdump`. It is an undeclared
-  host tool of the same class, reachable only from the manual refresh.
+  repository already spawns `cargo` and `llvm-objdump`. It is an undeclared host tool of the
+  same class, reachable only from the manual refresh.
   **Caveat worth stating:** the endpoint carries an API key and is passed on `curl`'s
   command line, so it is visible in `ps` output on the machine doing the refresh. The
   request body goes over stdin.

@@ -4,13 +4,12 @@
 //! the sponge has, checked in-guest against digests a reference computed.
 //!
 //! It is the fixture for the keccak-f[1600] delegation family
-//! (`docs/spec/delegation.md`), and it is the same binary under both
-//! executors. Under `crates/emulator` the delegation ecall runs the circuit's
-//! function and the invocations reach the `KECCAK_F` trace buffer; under
-//! `qemu-riscv32` the same ecall answers `-ENOSYS` and the SDK's software
-//! fallback runs. **The digests are the same either way**, which is exactly
-//! what acceptance 3 asks: the two paths are bit-identical behind one frozen
-//! signature.
+//! (`docs/spec/delegation.md`). Under `crates/emulator` the delegation ecall
+//! runs the circuit's function and the invocations reach the `KECCAK_F` trace
+//! buffer; on an executor with no circuit the same ecall answers `-ENOSYS` and
+//! the SDK's software fallback runs. **The digests are the same either way**,
+//! which is exactly what acceptance 3 asks: the two paths are bit-identical
+//! behind one frozen signature.
 //!
 //! # The corpus
 //!
@@ -28,11 +27,10 @@
 //! Ten keccak-f permutations in all, so a `2^8` delegation shard holds them
 //! with room to spare.
 //!
-//! # fd 0, fd 1, fd 2, fd 3
+//! # Input, advice and the journal
 //!
-//! Unused. The guest reads nothing and writes nothing: `EXIT` and the
-//! delegation call are the only provable ecalls, so a `write` would make the
-//! fixture unprovable.
+//! Unused. The guest reads nothing and commits nothing: its corpus is
+//! generated in-guest and its answer is its exit status.
 //!
 //! # The result
 //!

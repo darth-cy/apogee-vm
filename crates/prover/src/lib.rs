@@ -39,6 +39,7 @@ macro_rules! metric {
 mod fill;
 pub mod metrics;
 mod phases;
+mod streaming;
 
 use constants::family;
 use constants::transcript_tags as tags;
@@ -64,8 +65,9 @@ use verifier_core::{
     PublicInputs, ShardProof, VerifyingKey, VmConfig, TRIVIAL_TS_WINDOW,
 };
 
-pub use fill::{family_fill, Fill, ShardSource};
+pub use fill::{family_fill, Fill, ShardRows, ShardSource};
 pub use phases::{advance, finish, prove_block};
+pub use streaming::{prove_block_streaming, StreamingReport};
 
 #[cfg(feature = "metrics")]
 pub use phases::{advance_metered, prove_block_metered};
@@ -281,13 +283,14 @@ pub struct GlobalCommitState {
 /// exactly one for `INIT_TEARDOWN`, one per touched window above 0 for
 /// `ZERO_WINDOWS`, one each for the two public value families, one per advice
 /// window the host supplied, and `ceil(cycles / height)` for every other.
-fn shard_counts(
+pub(crate) fn shard_counts(
     config: &VmConfig,
-    archive: &TraceArchive,
+    profile: &trace::CycleProfile,
+    advice: &[u8],
     windows: &[u32],
     height: u32,
 ) -> Vec<u32> {
-    let plan = plan_shards(archive.cycle_profile(), config);
+    let plan = plan_shards(profile, config);
     plan.shards
         .iter()
         .map(|&(f, count)| match f {
@@ -297,7 +300,7 @@ fn shard_counts(
             // count a prover could drop is a way to publish nothing while
             // having published something (`docs/spec/public-values.md` §4).
             family::PUBLIC_INPUT | family::PUBLIC_OUTPUT => 1,
-            family::ADVICE_WINDOWS => advice_window_count(archive.advice(), height),
+            family::ADVICE_WINDOWS => advice_window_count(advice, height),
             _ => count,
         })
         .collect()
@@ -308,7 +311,7 @@ fn shard_counts(
 /// families, the `index`-th window from the advice origin up for
 /// `ADVICE_WINDOWS`, and 0 (unused) for every other family. `height` is the
 /// family's own.
-fn window_of(family: FamilyId, index: u32, windows: &[u32], height: u32) -> u32 {
+pub(crate) fn window_of(family: FamilyId, index: u32, windows: &[u32], height: u32) -> u32 {
     match family {
         family::ZERO_WINDOWS => windows[index as usize],
         family::PUBLIC_INPUT => family::PUBLIC_INPUT_WINDOW,
@@ -347,9 +350,15 @@ fn statement_inputs_rec(
     let config = &setup.program.config;
     let log = archive.memory_log();
     let h = window_height(config).map_err(|e| ProverError::Trace(e.to_string()))?;
-    let windows = init_windows(log, h);
-    let counts = shard_counts(config, archive, &windows, h);
-    let boundary = build_boundary_finals(log);
+    let windows = init_windows(log.state(), h);
+    let counts = shard_counts(
+        config,
+        archive.cycle_profile(),
+        archive.advice(),
+        &windows,
+        h,
+    );
+    let boundary = build_boundary_finals(log.state());
     let mut memory_columns = Vec::new();
     for (family, index) in statement_shards(config, &counts) {
         // `M` alone, moved out of the fill: the statement commits nothing else,
@@ -406,6 +415,11 @@ fn commit_all(srs: &Srs, columns: &[&MultilinearPoly]) -> Vec<[u8; 64]> {
         .collect()
 }
 
+/// [`commit_all`] over columns the caller owns.
+pub(crate) fn commit_all_owned(srs: &Srs, columns: &[MultilinearPoly]) -> Vec<[u8; 64]> {
+    commit_all(srs, &columns.iter().collect::<Vec<_>>())
+}
+
 /// The global commit phase, `docs/spec/shard-proof.md` §2: every shard's
 /// memory columns committed, then the global transcript over the statement.
 /// Shard-count generic: `inputs` holds any number of shards per family.
@@ -458,9 +472,26 @@ fn global_commit_phase_rec(
         memory_roots: Vec::new(),
     };
     let span = rec.start(Stage::GlobalTranscript);
-    let global = global_commit(vk, &statement);
+    let global = global_commit_from_commitments(vk, statement);
     rec.end(span);
     rec.end(total);
+    global
+}
+
+/// The global commit phase's **second half**, `docs/spec/shard-proof.md` §2's
+/// G1-G11, over a statement whose memory commitments the caller already has.
+///
+/// The first half is committing the columns, which is an MSM per column and
+/// reads no transcript, so *when* it happens cannot matter — only the order the
+/// commitments are absorbed in, which is the statement's own order. That is what
+/// lets the streaming prover commit each shard as it fills and run this once at
+/// the end, over exactly the ordered list `statement_inputs` would have
+/// produced.
+pub(crate) fn global_commit_from_commitments(
+    vk: &VerifyingKey,
+    statement: PublicInputs,
+) -> GlobalCommitState {
+    let global = global_commit(vk, &statement);
     GlobalCommitState {
         statement,
         transcript: global.transcript.snapshot(),
@@ -527,22 +558,31 @@ pub fn shard_columns_metered(
     shard_columns_rec(setup, archive, family, index, windows, rec)
 }
 
-/// What a family's fill reads for shard `(family, index)`.
+/// What a family's fill reads for shard `(family, index)`: the program, the
+/// execution's two unbound inputs, and **this shard's rows**, cut out of the
+/// archive by `docs/spec/block-proof.md` §5.1's rule.
+///
+/// Which arm of [`ShardRows`] a family takes is the three presence rules of
+/// `docs/spec/delegation.md` §1: a delegation family is invoked, a family that
+/// claims pcs owns cycles, and everything else is a window family whose rows
+/// are addresses.
 fn shard_source<'a>(
     setup: &'a ProverSetup,
     archive: &'a TraceArchive,
     family: FamilyId,
     index: u32,
     windows: &[u32],
-) -> ShardSource<'a> {
-    ShardSource {
-        program: &setup.program,
+) -> Result<ShardSource<'a>, ProverError> {
+    let height = setup.registration(family).height;
+    ShardSource::archived(
+        &setup.program,
         archive,
         family,
         index,
-        height: setup.registration(family).height as usize,
-        window: window_of(family, index, windows, setup.registration(family).height),
-    }
+        height,
+        window_of(family, index, windows, height),
+    )
+    .map_err(ProverError::Trace)
 }
 
 /// Shard `(family, index)`'s **`M` columns alone**, in layout order, as the
@@ -591,9 +631,31 @@ fn shard_memory_columns_rec(
     windows: &[u32],
     rec: &mut Recorder,
 ) -> Result<Vec<MultilinearPoly>, ProverError> {
+    let source = shard_source(setup, archive, family, index, windows)?;
+    memory_columns_of_rec(setup, family, index, &source, rec)
+}
+
+/// [`shard_memory_columns`] over a source the caller built: the streaming
+/// prover's, whose rows are a chunk it has just filled rather than a slice of an
+/// archive.
+pub(crate) fn memory_columns_of(
+    setup: &ProverSetup,
+    family: FamilyId,
+    index: u32,
+    source: &ShardSource,
+) -> Result<Vec<MultilinearPoly>, ProverError> {
+    memory_columns_of_rec(setup, family, index, source, &mut Recorder::new())
+}
+
+fn memory_columns_of_rec(
+    setup: &ProverSetup,
+    family: FamilyId,
+    index: u32,
+    source: &ShardSource,
+    rec: &mut Recorder,
+) -> Result<Vec<MultilinearPoly>, ProverError> {
     let span = rec.start(Stage::StatementShardFill);
-    let source = shard_source(setup, archive, family, index, windows);
-    let columns = (setup.registration(family).fill)(&source).map_err(ProverError::Trace)?;
+    let columns = (setup.registration(family).fill)(source).map_err(ProverError::Trace)?;
     let width = setup.registration(family).circuit.artifact.memory.len();
     let mut memory: Vec<Option<MultilinearPoly>> = (0..width).map(|_| None).collect();
     for (address, column) in columns {
@@ -630,16 +692,34 @@ fn shard_columns_rec(
     windows: &[u32],
     rec: &mut Recorder,
 ) -> Result<Vec<(PolyAddress, MultilinearPoly)>, ProverError> {
+    let source = shard_source(setup, archive, family, index, windows)?;
+    shard_columns_of_rec(setup, family, &source, rec)
+}
+
+/// [`shard_columns`] over a source the caller built: the streaming prover's.
+pub(crate) fn shard_columns_of(
+    setup: &ProverSetup,
+    family: FamilyId,
+    source: &ShardSource,
+) -> Result<Vec<(PolyAddress, MultilinearPoly)>, ProverError> {
+    shard_columns_of_rec(setup, family, source, &mut Recorder::new())
+}
+
+fn shard_columns_of_rec(
+    setup: &ProverSetup,
+    family: FamilyId,
+    source: &ShardSource,
+    rec: &mut Recorder,
+) -> Result<Vec<(PolyAddress, MultilinearPoly)>, ProverError> {
     let total = rec.start(Stage::ShardColumnsTotal);
     let reg = setup.registration(family);
-    let source = shard_source(setup, archive, family, index, windows);
     let span = rec.start(Stage::ShardFill);
-    let mut columns = (reg.fill)(&source).map_err(ProverError::Trace)?;
+    let mut columns = (reg.fill)(source).map_err(ProverError::Trace)?;
     rec.end(span);
     metric!({
         // By address, and without materializing anything: sizing the columns
         // must not itself allocate a copy of them.
-        let id = ShardId::new(family, index);
+        let id = ShardId::new(family, source.index);
         let of = |want: fn(&PolyAddress) -> bool| -> u64 {
             columns
                 .iter()
@@ -663,7 +743,7 @@ fn shard_columns_rec(
         .map_err(ProverError::Trace)?;
     rec.end(span);
     metric!(rec.shard_bytes(
-        ShardId::new(family, index),
+        ShardId::new(family, source.index),
         ByteClass::Multiplicities,
         metrics::columns_bytes(&counted)
     ));

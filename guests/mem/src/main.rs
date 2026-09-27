@@ -24,7 +24,7 @@
 //! Every value is checked against a literal the comment gives, and a mismatch
 //! jumps to `fail`.
 //!
-//! # fd 0, fd 1, fd 2, fd 3
+//! # Input, advice and the journal
 //!
 //! Unused.
 //!

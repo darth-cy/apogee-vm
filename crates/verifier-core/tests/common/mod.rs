@@ -176,10 +176,10 @@ pub fn finals(status: u32) -> BoundaryFinals {
 
 /// One `INIT_TEARDOWN` shard and one `ADD_SUB_LUI_AUIPC` shard, in statement
 /// order, with memory commitments of the right widths: 2 for a window
-/// family's frame, and 42 for add/sub's — `1 + 5w` at `w = 8` queries, since
-/// S21 gave every frame the delegation mirror (`constraints::memory::DELEG`),
-/// and one more since S23, `deleg_space`, which carries the requested
-/// delegation type's tag into the mirror's leaf.
+/// family's frame, and 27 for add/sub's — `1 + 5w` at `w = 5` queries, since
+/// deleting the transfer cycle left `arg1`, `arg2` and `ram` unreachable in
+/// this family, and one more since S23, `deleg_space`, which carries the
+/// requested delegation type's tag into the mirror's leaf.
 pub fn statement() -> PublicInputs {
     PublicInputs {
         input: vec![1, 2, 3],
@@ -192,7 +192,7 @@ pub fn statement() -> PublicInputs {
         boundary: finals(42),
         memory_commitments: vec![
             (200..202).map(blob).collect(),
-            (300..342).map(blob).collect(),
+            (300..327).map(blob).collect(),
             // `PUBLIC_INPUT` commits three columns, the journal two.
             (700..703).map(blob).collect(),
             (710..712).map(blob).collect(),
@@ -207,16 +207,18 @@ pub fn statement() -> PublicInputs {
 }
 
 /// A proof of the `ADD_SUB_LUI_AUIPC` shard with the right digest and the
-/// right widths — 35 witness commitments since S23: the frame's `w + 3 = 11`
-/// and the family's own 24, one delegation-request selector per registered
-/// type among them — and no transitions at all.
+/// right widths — **33** witness commitments: the frame's `w + 3 = 8` and
+/// the family's own 25, one delegation-request selector per registered
+/// type among them, so this number moves by one with every delegation family
+/// the repository registers (`docs/spec/delegation.md` §10) — and no
+/// transitions at all.
 pub fn shell(vk: &VerifyingKey, public: &PublicInputs) -> ShardProof {
     ShardProof {
         family: ADD,
         shard_index: 0,
         ts_window: TRIVIAL_TS_WINDOW,
         global_digest: global_commit(vk, public).digest,
-        witness_commitments: (400..435).map(blob).collect(),
+        witness_commitments: (400..433).map(blob).collect(),
         outputs: vec![Fr::ZERO; 8],
         gkr: GkrProof { layers: vec![] },
         opening: [3; OPENING_BYTES],

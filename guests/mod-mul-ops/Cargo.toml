@@ -1,0 +1,24 @@
+[package]
+name = "mod-mul-ops"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# S26's fixture for the `MOD_MUL` delegation (`docs/spec/delegation.md` §14).
+#
+# Two dependencies and two kinds of check. `guest-sdk` is the shim, called by
+# name over frames this guest writes itself: that is the ABI's test, and the
+# only place a *witnessed* modulus is exercised with more than one modulus.
+# `k256` is the workload the profile ranked first, asked for from crates.io and
+# answered by `guests/vendor/k256` through the workspace's `[patch.crates-io]`:
+# that is the seam's test, and the only executor that runs the patched multiply
+# is this VM's own.
+#
+# `default-features = false` drops `ecdsa`, `schnorr`, `std` and the
+# precomputed tables, leaving the curve arithmetic — which is what an
+# `ecrecover` spends its cycles in. Selecting an upstream crate's features in a
+# dependency entry is not a cargo feature of ours (`crates/prover/tests/
+# one_feature.rs`).
+[dependencies]
+guest-sdk.workspace = true
+k256 = { version = "0.13.4", default-features = false, features = ["arithmetic"] }

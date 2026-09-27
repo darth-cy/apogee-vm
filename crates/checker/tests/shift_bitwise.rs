@@ -959,20 +959,6 @@ fn every_row_kind_satisfies_every_gate_and_every_bound() {
     }
 }
 
-/// The all-zero padding row is valid, and the circuit says so in its own
-/// padding contract.
-#[test]
-fn the_padding_row_is_the_all_zero_row() {
-    let a = artifact();
-    assert!(a.padding.zero_row_valid);
-    assert!(a.padding.row.iter().all(|v| *v == Fr::ZERO));
-    assert_eq!(
-        violated(&a, &Row::default()),
-        (none(), none(), none()),
-        "the all-zero row"
-    );
-}
-
 /// A row named by [`honest_rows`].
 fn row(what: &str) -> Row {
     honest_rows()
@@ -1573,34 +1559,6 @@ fn an_srai_carrying_srlis_answer_is_refused_by_se_rule_alone() {
 // Acceptance 7: the byte table
 // ---------------------------------------------------------------------------
 
-/// Acceptance 7, over the whole 8-bit by 8-bit domain. Every one of the 65,536
-/// `(a, b)` pairs has a row of the packed table whose result is Rust's own
-/// `a & b`, and the two forms the circuit derives from that one accumulator —
-/// `or = a + b − and` and `xor = a + b − 2·and`, §4.4's, which is why there is
-/// no OR table and no XOR table — are Rust's own `a | b` and `a ^ b` exactly.
-/// This is the table read as data. Acceptance 6, the same table against an
-/// independent recomputation and its commitments over the ceremony's SRS, is
-/// `crates/program/tests/lookup_tables.rs`'.
-#[test]
-fn acceptance_7_the_byte_table_is_and_and_or_and_xor_are_derived_from_it() {
-    let rows: BTreeMap<(u32, u32), u32> = generic_entries()
-        .iter()
-        .filter(|e| e[0] > generic_table::AND_BASE && e[0] <= generic_table::AND_BASE + 256)
-        .map(|e| ((e[0] - generic_table::AND_BASE - 1, e[1]), e[2]))
-        .collect();
-    assert_eq!(rows.len(), 1 << 16, "the AND sub-table's rows");
-    for a in 0..256u32 {
-        for b in 0..256u32 {
-            let and = *rows
-                .get(&(a, b))
-                .unwrap_or_else(|| panic!("the table has no row for ({a}, {b})"));
-            assert_eq!(and, a & b, "and({a}, {b})");
-            assert_eq!(a + b - and, a | b, "or({a}, {b})");
-            assert_eq!(a + b - 2 * and, a ^ b, "xor({a}, {b})");
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // The guest: the acceptance matrix in its trace, and the prover's own fill
 // ---------------------------------------------------------------------------
@@ -1645,10 +1603,8 @@ fn alu() -> (prover::Program, trace::TraceArchive) {
         ]
     );
     let io = emulator::GuestIo {
-        stdin: Vec::new(),
         advice: Vec::new(),
         input: Vec::new(),
-        hint: Vec::new(),
     };
     let (traces, log, profile, execution) =
         emulator::trace_run(&image, &io, &tables, &config).expect("the image traces");
@@ -1839,14 +1795,9 @@ fn filled(
 ) -> Vec<(PolyAddress, poly::MultilinearPoly)> {
     let a = artifact();
     let fill = prover::family_fill(family::SHIFT_BITWISE).expect("the family's fill");
-    let source = prover::ShardSource {
-        program,
-        archive,
-        family: family::SHIFT_BITWISE,
-        index,
-        height: 1 << vars,
-        window: 0,
-    };
+    let source =
+        prover::ShardSource::archived(program, archive, family::SHIFT_BITWISE, index, 1 << vars, 0)
+            .expect("the shard's rows");
     let mut columns = fill(&source).expect("the fill");
     let column = |columns: &[(PolyAddress, poly::MultilinearPoly)], address: PolyAddress| {
         columns

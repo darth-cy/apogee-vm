@@ -20,14 +20,11 @@
 //! block began and ended on, so a witness describing a different block
 //! publishes a different commitment rather than the same one.
 //!
-//! Until S-IO this program could not be proven at all. `read` and `write` are
-//! not provable ecalls, so S24 proved a second binary with the witness baked
-//! into its `.rodata` — which moved the program identity with every block, and
-//! is what made per-block proving impossible. The witness is data now, not
-//! code, and the identity is the same for every block.
-//!
-//! `src/stdio.rs` is the same computation over fd 0 and fd 1: the
-//! compatibility binary, for the executors that have no advice region.
+//! Until S-IO this program could not be proven at all. There was no provable
+//! way to get a witness in, so S24 proved a second binary with the witness
+//! baked into its `.rodata` — which moved the program identity with every
+//! block, and is what made per-block proving impossible. The witness is data
+//! now, not code, and the identity is the same for every block.
 //!
 //! # The exit status
 //!

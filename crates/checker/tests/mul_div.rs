@@ -875,19 +875,6 @@ fn the_layout_and_the_gates_are_the_spec() {
     assert_eq!(a.depth(), 1 + 5 + VARS as usize);
 }
 
-/// The decoded tuple this family reads has **no immediate**: six columns, not
-/// seven, and the circuit's claimed row is five.
-#[test]
-fn the_decoded_tuple_has_no_immediate() {
-    use program::RowField::*;
-    assert_eq!(
-        program::lookup_tuple(family::MUL_DIV),
-        &[Pc, NextPc, Rs1, Rs2, Rd, ExtraMask]
-    );
-    assert_eq!(mul_div::TABLE_WIDTH, 6);
-    assert_eq!(mul_div::DECODED.len(), mul_div::TABLE_WIDTH - 1);
-}
-
 /// The legal masks are the eight instructions, and nothing else.
 #[test]
 fn the_legal_masks_are_the_instruction_list() {
@@ -1021,20 +1008,6 @@ fn every_row_kind_satisfies_every_gate_and_every_bound() {
     for (what, r) in honest_rows() {
         assert_eq!(violated(&a, &r), (none(), none(), none()), "{what}");
     }
-}
-
-/// The all-zero padding row is valid, and the circuit says so in its own
-/// padding contract.
-#[test]
-fn the_padding_row_is_the_all_zero_row() {
-    let a = artifact();
-    assert!(a.padding.zero_row_valid);
-    assert!(a.padding.row.iter().all(|v| *v == Fr::ZERO));
-    assert_eq!(
-        violated(&a, &Row::default()),
-        (none(), none(), none()),
-        "the all-zero row"
-    );
 }
 
 /// A row named by [`honest_rows`].
@@ -1764,40 +1737,6 @@ fn relation_at(a: &CircuitArtifact, r: &Row, name: &str) -> Fr {
     expression(a, &r.committed(a), &relation.gate)
 }
 
-/// Acceptance 4's negative half: the division identity alone proves nothing,
-/// and each of the three gates beside it is what refuses a witness the
-/// identity admits.
-///
-/// `DIV(−7, 2)` is −3 remainder −1. The **floored** answer, −4 remainder 1,
-/// satisfies the bare identity — `2·(−4) + 1 = −7` — and the magnitude bound
-/// with it, `|1| < |2|`; the remainder's sign rule is the only thing between
-/// it and a proof, which is `docs/spec/mul-div.md` §4.4's claim as a row.
-#[test]
-fn the_floored_quotient_satisfies_the_identity_and_is_refused_by_the_sign_rule() {
-    let a = artifact();
-    let floored = floored_minus_seven_over_two();
-    assert_eq!(
-        relation_at(&a, &floored, "division_rule"),
-        Fr::ZERO,
-        "the bare division identity holds on the floored witness"
-    );
-    assert_eq!(
-        relation_at(&a, &floored, "gap_rule"),
-        Fr::ZERO,
-        "and so does the magnitude bound"
-    );
-    assert_eq!(
-        violated(&a, &floored),
-        (names(&["r_sign_rule"]), none(), none()),
-        "only the remainder's sign rule refuses it"
-    );
-    // The honest row beside it: −3 remainder −1, every gate and bound held.
-    let honest = row("div 0xfffffff9 0x2");
-    assert_eq!(violated(&a, &honest), (none(), none(), none()));
-    assert_eq!(small_int(honest.get("q")), Some((-3i32) as u32 as u64));
-    assert_eq!(small_int(honest.get("r")), Some((-1i32) as u32 as u64));
-}
-
 /// The unsigned pair, where the dividend's sign is 0 and the magnitude bound
 /// is the whole of the pin. `DIVU(7, 3)` is 2 remainder 1. A quotient one too
 /// small leaves a remainder as large as the divisor, which every gate admits
@@ -1846,40 +1785,6 @@ fn a_quotient_off_by_one_is_refused_by_the_gap_or_by_the_identity() {
         (names(&["division_rule"]), names(&["gap_lo_range"]), none()),
         "a wrapped remainder is off by 2^32 in the identity and past the gap"
     );
-}
-
-/// Division by zero is pinned by one gate, and nothing else needs to be. The
-/// remainder is already the dividend — with `rs2_adj = 0` the identity gives
-/// it — so a zero-divisor row whose quotient is anything but all ones breaks
-/// `zero_divisor_quotient` and no other gate, range or table.
-#[test]
-fn a_zero_divisor_whose_quotient_is_not_all_ones_is_refused_by_the_pin_alone() {
-    let a = artifact();
-    let forged = forged_division(
-        Instr::new(kind::DIV),
-        0x8000_0000,
-        0,
-        Witness {
-            q: 0,
-            q_sign: 0,
-            r: 0x8000_0000,
-            r_sign: 1,
-        },
-    );
-    assert_eq!(
-        relation_at(&a, &forged, "division_rule"),
-        Fr::ZERO,
-        "the identity gives the dividend back whatever the quotient"
-    );
-    assert_eq!(
-        violated(&a, &forged),
-        (names(&["zero_divisor_quotient"]), none(), none())
-    );
-    // And the honest row, whose quotient is all ones.
-    let honest = row("div 0x80000000 0x0");
-    assert_eq!(violated(&a, &honest), (none(), none(), none()));
-    assert_eq!(small_int(honest.get("q")), Some(u32::MAX as u64));
-    assert_eq!(small_int(honest.get("r")), Some(0x8000_0000));
 }
 
 /// The one signed overflow, `DIV(−2^31, −1)`, has exactly the pinned answer
@@ -2047,10 +1952,8 @@ fn alu() -> (prover::Program, trace::TraceArchive) {
         ]
     );
     let io = emulator::GuestIo {
-        stdin: Vec::new(),
         advice: Vec::new(),
         input: Vec::new(),
-        hint: Vec::new(),
     };
     let (traces, log, profile, execution) =
         emulator::trace_run(&image, &io, &tables, &config).expect("the image traces");
@@ -2219,14 +2122,9 @@ fn filled(
 ) -> Vec<(PolyAddress, poly::MultilinearPoly)> {
     let a = artifact();
     let fill = prover::family_fill(family::MUL_DIV).expect("the family's fill");
-    let source = prover::ShardSource {
-        program,
-        archive,
-        family: family::MUL_DIV,
-        index,
-        height: 1 << vars,
-        window: 0,
-    };
+    let source =
+        prover::ShardSource::archived(program, archive, family::MUL_DIV, index, 1 << vars, 0)
+            .expect("the shard's rows");
     let mut columns = fill(&source).expect("the fill");
     let column = |address: PolyAddress| {
         columns

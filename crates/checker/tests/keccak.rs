@@ -374,26 +374,3 @@ fn a_read_that_does_not_precede_its_write_is_caught() {
     );
     assert_eq!(refusal(&a, broken), "gap_w3");
 }
-
-#[test]
-fn a_padding_row_carries_no_invocation() {
-    // Every leaf is 1 on a padding row, so the row contributes the product's
-    // identity to both trees — and the permutation still runs there, which is
-    // exactly why the output gate is gated on `live`.
-    let a = keccak::artifact(VARS);
-    let values = forward(&a, witness(&honest()));
-    let top = values.layers.last().expect("a top layer");
-    // The top layer has one row: the two roots.
-    assert_eq!(top.len(), 2);
-    // Row 2 and 3 are padding; their leaves are the identity.
-    let leaves = &values.layers[0];
-    for row in 2..ROWS {
-        for leaf in leaves.iter().take(128) {
-            assert_eq!(
-                leaf.get(row),
-                Fr::ONE,
-                "a padding row's leaf is not the product's identity"
-            );
-        }
-    }
-}

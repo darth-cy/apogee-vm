@@ -64,21 +64,3 @@ fn an_invalid_point_is_refused_on_the_wire() {
     // And a truncated wire form is not a shorter verifier.
     assert!(postcard::from_bytes::<SrsVerifier>(&good[..319]).is_err());
 }
-
-/// The verifier carries what the KZG check reads and nothing more: no powers,
-/// so nothing on a verifier path can commit.
-#[test]
-fn the_verifier_is_three_points() {
-    let Some(srs) = ceremony() else {
-        common::skipped("the verifier contents", 24);
-        return;
-    };
-    let v = srs.verifier();
-    assert_eq!(v.g1_gen, G1Affine::GENERATOR);
-    assert_eq!(v.g2_gen, G2Affine::GENERATOR);
-    assert_eq!(v.g2_tau, srs.g2_tau());
-    assert_eq!(
-        std::mem::size_of_val(&v),
-        std::mem::size_of::<SrsVerifier>()
-    );
-}

@@ -32,15 +32,18 @@ pub enum AddressSpace {
     Poseidon2,
     /// `family::FR_ARITH`'s delegation anchor space (S23).
     FrArith,
+    /// `family::MOD_MUL`'s delegation anchor space (S26).
+    ModMul,
 }
 
 /// Every delegation anchor space, ascending by tag. One `deleg` frame query
 /// serves them all, and which one a request names is the row's business:
 /// `constraints::memory::frame_query_takes` is the routing rule.
-pub const DELEGATION_SPACES: [AddressSpace; 3] = [
+pub const DELEGATION_SPACES: [AddressSpace; 4] = [
     AddressSpace::KeccakF,
     AddressSpace::Poseidon2,
     AddressSpace::FrArith,
+    AddressSpace::ModMul,
 ];
 
 impl AddressSpace {
@@ -53,6 +56,7 @@ impl AddressSpace {
             AddressSpace::KeccakF => address_space::DELEGATION_KECCAK_F,
             AddressSpace::Poseidon2 => address_space::DELEGATION_POSEIDON2,
             AddressSpace::FrArith => address_space::DELEGATION_FR_ARITH,
+            AddressSpace::ModMul => address_space::DELEGATION_MOD_MUL,
         }
     }
 
@@ -65,6 +69,7 @@ impl AddressSpace {
             address_space::DELEGATION_KECCAK_F => Some(AddressSpace::KeccakF),
             address_space::DELEGATION_POSEIDON2 => Some(AddressSpace::Poseidon2),
             address_space::DELEGATION_FR_ARITH => Some(AddressSpace::FrArith),
+            address_space::DELEGATION_MOD_MUL => Some(AddressSpace::ModMul),
             _ => None,
         }
     }
@@ -84,9 +89,10 @@ impl AddressSpace {
         match self {
             AddressSpace::Reg => addr < 32,
             AddressSpace::Ram => addr.is_multiple_of(4) && addressable(addr),
-            AddressSpace::KeccakF | AddressSpace::Poseidon2 | AddressSpace::FrArith => {
-                addr.is_multiple_of(4) && in_ram(addr)
-            }
+            AddressSpace::KeccakF
+            | AddressSpace::Poseidon2
+            | AddressSpace::FrArith
+            | AddressSpace::ModMul => addr.is_multiple_of(4) && in_ram(addr),
             AddressSpace::Pc => addr == 0,
         }
     }
@@ -102,7 +108,10 @@ impl AddressSpace {
     pub fn chains(self) -> bool {
         match self {
             AddressSpace::Reg | AddressSpace::Ram | AddressSpace::Pc => true,
-            AddressSpace::KeccakF | AddressSpace::Poseidon2 | AddressSpace::FrArith => false,
+            AddressSpace::KeccakF
+            | AddressSpace::Poseidon2
+            | AddressSpace::FrArith
+            | AddressSpace::ModMul => false,
         }
     }
 }
@@ -167,45 +176,43 @@ impl fmt::Display for SelfCheckError {
     }
 }
 
-/// Every memory query of an execution, in cycle-then-delta order, beside the
-/// "last-access" tables that fill each new query's read side.
+/// The **last-access tables**: what every touched address last held, and when.
 ///
-/// The events are the log; the tables are bookkeeping, rebuilt from the events
-/// whenever a log is built from them, and are never serialized.
+/// This is the whole of what an execution's memory leaves behind that is not a
+/// row of some family's buffer. It is `O(touched addresses)` rather than
+/// `O(cycles)`, which is what lets a streaming prover keep it to the end of the
+/// execution and discard everything else (`docs/spec/streaming.md` §3): the
+/// register and pc boundary, the RAM windows' teardown columns and the window
+/// list are functions of exactly this and of nothing per-cycle.
+///
+/// [`MemoryEventLog`] is this plus the events, and `record` is this one's: the
+/// tables are what fill each new query's read side, so the assertions that
+/// catch a machine and a log disagreeing about memory live here.
 #[derive(Clone, Debug, Default)]
-pub struct MemoryEventLog {
-    events: Vec<MemoryEvent>,
+pub struct MemoryState {
     /// Per register: the last write's `(ts, value)`, or `None` if untouched.
     regs: [Option<(u64, u32)>; 32],
     pc: Option<(u64, u32)>,
     /// Per RAM word address. A hash map because it is only ever looked up;
     /// everything that reads it out sorts first.
     ram: HashMap<u32, (u64, u32)>,
+    /// The last timestamp recorded, so the order rule holds without the events.
+    last_ts: Option<u64>,
 }
 
-impl PartialEq for MemoryEventLog {
-    /// Two logs are equal when their events are; the tables follow from them.
-    fn eq(&self, other: &MemoryEventLog) -> bool {
-        self.events == other.events
-    }
-}
-
-impl Eq for MemoryEventLog {}
-
-impl MemoryEventLog {
-    pub fn new() -> MemoryEventLog {
-        MemoryEventLog::default()
+impl MemoryState {
+    pub fn new() -> MemoryState {
+        MemoryState::default()
     }
 
-    /// Append one query, filling its read side from the last-access tables,
-    /// and return it as recorded.
+    /// Record one query, filling its read side from the tables, and return it.
     ///
     /// `read_value` is what the machine read. On an address's first query it
     /// is the initial value, read at timestamp 0; on every later one it must
-    /// equal the last value written there, or the machine and the log disagree
-    /// about memory. That, a timestamp out of order, a read that does not
-    /// strictly precede its write, and an address outside its space are broken
-    /// invariants of the caller, and panic.
+    /// equal the last value written there, or the machine and the tables
+    /// disagree about memory. That, a timestamp out of order, a read that does
+    /// not strictly precede its write, and an address outside its space are
+    /// broken invariants of the caller, and panic.
     pub fn record(
         &mut self,
         space: AddressSpace,
@@ -223,12 +230,11 @@ impl MemoryEventLog {
             "memory event log: timestamp {ts} is past the {}-bit clock",
             memory::TS_BITS
         );
-        if let Some(last) = self.events.last() {
+        if let Some(last) = self.last_ts {
             assert!(
-                ts >= last.ts,
+                ts >= last,
                 "memory event log: events are appended in cycle-then-delta order, \
-                 but ts {ts} follows {}",
-                last.ts
+                 but ts {ts} follows {last}"
             );
         }
         let (read_ts, last_value) = if space.chains() {
@@ -255,36 +261,46 @@ impl MemoryEventLog {
             write_value,
         };
         self.remember(&event);
-        self.events.push(event);
+        self.last_ts = Some(ts);
         event
     }
 
-    /// A log holding exactly `events`, with its tables rebuilt from them.
+    /// Register `r`'s last write, or `None` if it was never queried.
+    pub fn reg(&self, r: u32) -> Option<(u64, u32)> {
+        self.regs[r as usize]
+    }
+
+    /// The pc's last write, or `None` if the execution ran no cycle.
+    pub fn pc(&self) -> Option<(u64, u32)> {
+        self.pc
+    }
+
+    /// RAM word `addr`'s last write, or `None` if it was never written.
+    pub fn ram(&self, addr: u32) -> Option<(u64, u32)> {
+        self.ram.get(&addr).copied()
+    }
+
+    /// The distinct RAM windows of `4·height` words the execution touched in
+    /// **ordinary** RAM, ascending — `ZERO_WINDOWS`' shard list with window 0
+    /// still in it (`crate::init_windows` drops it).
     ///
-    /// Checks nothing but that every address is one its space has: a log
-    /// built this way is the thing [`MemoryEventLog::self_check`] exists to
-    /// judge, so refusing a bad one here would leave nothing to judge.
-    pub fn from_events(events: Vec<MemoryEvent>) -> MemoryEventLog {
-        let mut log = MemoryEventLog::new();
-        for event in &events {
-            assert!(
-                event.space.holds(event.addr),
-                "memory event log: {:?} has no address {:#x}",
-                event.space,
-                event.addr
-            );
-            log.remember(event);
-        }
-        log.events = events;
-        log
+    /// Ordinary RAM and not every `Ram` tuple: the two public windows and the
+    /// advice region are `Ram` tuples too, and each has a family of its own
+    /// that initializes it (`docs/spec/public-values.md` §2).
+    pub fn touched_ram_windows(&self, height: u32) -> Vec<u32> {
+        let words = 4 * height as u64;
+        let mut out: Vec<u32> = self
+            .ram
+            .keys()
+            .filter(|addr| in_ram(**addr))
+            .map(|addr| (*addr as u64 / words) as u32)
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
     }
 
-    /// Every event, in order.
-    pub fn events(&self) -> &[MemoryEvent] {
-        &self.events
-    }
-
-    /// Every address the execution touched, ascending by space and address.
+    /// Every address this state touched, ascending by space and address.
     pub fn touched_addresses(&self) -> Vec<(AddressSpace, u32)> {
         self.final_state()
             .iter()
@@ -293,6 +309,9 @@ impl MemoryEventLog {
     }
 
     /// Every touched address's last write, ascending by space and address.
+    ///
+    /// `O(touched addresses)`, so a caller that wants one window's rows probes
+    /// [`MemoryState::ram`] per row instead of filtering this.
     pub fn final_state(&self) -> Vec<FinalValue> {
         let mut out = Vec::new();
         for (r, last) in self.regs.iter().enumerate() {
@@ -326,6 +345,116 @@ impl MemoryEventLog {
             });
         }
         out
+    }
+
+    fn last(&self, space: AddressSpace, addr: u32) -> Option<(u64, u32)> {
+        match space {
+            AddressSpace::Reg => self.regs[addr as usize],
+            AddressSpace::Pc => self.pc,
+            AddressSpace::Ram => self.ram.get(&addr).copied(),
+            AddressSpace::KeccakF
+            | AddressSpace::Poseidon2
+            | AddressSpace::FrArith
+            | AddressSpace::ModMul => None,
+        }
+    }
+
+    fn remember(&mut self, e: &MemoryEvent) {
+        let last = (e.ts, e.write_value);
+        match e.space {
+            AddressSpace::Reg => self.regs[e.addr as usize] = Some(last),
+            AddressSpace::Pc => self.pc = Some(last),
+            AddressSpace::Ram => {
+                self.ram.insert(e.addr, last);
+            }
+            // An unchained space keeps no last write: there is nothing for a
+            // later query there to read, and nothing to tear down.
+            AddressSpace::KeccakF
+            | AddressSpace::Poseidon2
+            | AddressSpace::FrArith
+            | AddressSpace::ModMul => {}
+        }
+    }
+}
+
+/// Every memory query of an execution, in cycle-then-delta order, beside the
+/// [`MemoryState`] that fills each new query's read side.
+///
+/// The events are the log; the state is bookkeeping, rebuilt from the events
+/// whenever a log is built from them, and is never serialized.
+#[derive(Clone, Debug, Default)]
+pub struct MemoryEventLog {
+    events: Vec<MemoryEvent>,
+    state: MemoryState,
+}
+
+impl PartialEq for MemoryEventLog {
+    /// Two logs are equal when their events are; the state follows from them.
+    fn eq(&self, other: &MemoryEventLog) -> bool {
+        self.events == other.events
+    }
+}
+
+impl Eq for MemoryEventLog {}
+
+impl MemoryEventLog {
+    pub fn new() -> MemoryEventLog {
+        MemoryEventLog::default()
+    }
+
+    /// Append one query, filling its read side from the last-access tables,
+    /// and return it as recorded. [`MemoryState::record`] is the whole of it.
+    pub fn record(
+        &mut self,
+        space: AddressSpace,
+        addr: u32,
+        ts: u64,
+        read_value: u32,
+        write_value: u32,
+    ) -> MemoryEvent {
+        let event = self.state.record(space, addr, ts, read_value, write_value);
+        self.events.push(event);
+        event
+    }
+
+    /// A log holding exactly `events`, with its state rebuilt from them.
+    ///
+    /// Checks nothing but that every address is one its space has: a log
+    /// built this way is the thing [`MemoryEventLog::self_check`] exists to
+    /// judge, so refusing a bad one here would leave nothing to judge.
+    pub fn from_events(events: Vec<MemoryEvent>) -> MemoryEventLog {
+        let mut log = MemoryEventLog::new();
+        for event in &events {
+            assert!(
+                event.space.holds(event.addr),
+                "memory event log: {:?} has no address {:#x}",
+                event.space,
+                event.addr
+            );
+            log.state.remember(event);
+        }
+        log.events = events;
+        log
+    }
+
+    /// Every event, in order.
+    pub fn events(&self) -> &[MemoryEvent] {
+        &self.events
+    }
+
+    /// The last-access tables: what the execution left at every address.
+    pub fn state(&self) -> &MemoryState {
+        &self.state
+    }
+
+    /// Every address the execution touched, ascending by space and address.
+    pub fn touched_addresses(&self) -> Vec<(AddressSpace, u32)> {
+        self.state.touched_addresses()
+    }
+
+    /// Every touched address's last write, ascending by space and address.
+    pub fn final_state(&self) -> Vec<FinalValue> {
+        self.state.final_state()
     }
 
     /// The trace-level memory argument, independent of any circuit.
@@ -464,29 +593,6 @@ impl MemoryEventLog {
             ),
         })
     }
-
-    fn last(&self, space: AddressSpace, addr: u32) -> Option<(u64, u32)> {
-        match space {
-            AddressSpace::Reg => self.regs[addr as usize],
-            AddressSpace::Pc => self.pc,
-            AddressSpace::Ram => self.ram.get(&addr).copied(),
-            AddressSpace::KeccakF | AddressSpace::Poseidon2 | AddressSpace::FrArith => None,
-        }
-    }
-
-    fn remember(&mut self, e: &MemoryEvent) {
-        let last = (e.ts, e.write_value);
-        match e.space {
-            AddressSpace::Reg => self.regs[e.addr as usize] = Some(last),
-            AddressSpace::Pc => self.pc = Some(last),
-            AddressSpace::Ram => {
-                self.ram.insert(e.addr, last);
-            }
-            // An unchained space keeps no last write: there is nothing for a
-            // later query there to read, and nothing to tear down.
-            AddressSpace::KeccakF | AddressSpace::Poseidon2 | AddressSpace::FrArith => {}
-        }
-    }
 }
 
 /// An address's value before the first cycle: 0 for a register, the entry
@@ -497,7 +603,10 @@ fn initial_value(initial: &InitialMemory, space: AddressSpace, addr: u32) -> u32
         AddressSpace::Reg => 0,
         AddressSpace::Pc => initial.image.entry,
         AddressSpace::Ram => initial.word(addr),
-        AddressSpace::KeccakF | AddressSpace::Poseidon2 | AddressSpace::FrArith => 0,
+        AddressSpace::KeccakF
+        | AddressSpace::Poseidon2
+        | AddressSpace::FrArith
+        | AddressSpace::ModMul => 0,
     }
 }
 

@@ -1,9 +1,18 @@
 # The execution trace
 
 Frozen at S12. S14 amended §4, §6 and §9 for the halting sentinel and the register and
-PC boundary of `docs/spec/memory.md` §4–§5. S21 appended the eighth role, `delegate`, and
+PC boundary of `docs/spec/memory.md` §4–§5. S21 appended the role `delegate`, and
 a delegation call's row and its invocation's frame (§4, §6, §7;
 `docs/spec/delegation.md` §4.1 and §5.1).
+
+**The POSIX layer's deletion removed two roles and one kind of cycle.** `arg1`
+and `arg2` were an ecall row's `a1` and `a2`, which only `read` and `write` ever
+passed, and the **transfer cycle** existed only to carry those two calls' buffer
+traffic into RAM. With the calls retired (`docs/spec/ecall-abi.md` §4) all three
+became unreachable, and they are removed rather than kept as a role no row can
+have and a cycle no execution can produce. §7's role table is **six** rows now
+and the query table of `docs/spec/memory.md` §2.1, which is the pc query and then
+those six, is seven.
 
 **This document is the timestamp convention**: what every memory query
 of an execution is, when it happens, and in what order the trace records it. S14's
@@ -27,10 +36,9 @@ all four.
 - **The clock is 38 bits**: every timestamp is below `2^38` (`TS_BITS = 38`), so the
   last cycle is `2^36 - 1`. An execution that would run past it stops with the named
   fatal error `ClockOverflow`, never a wrap.
-- **Every instruction is one cycle**, except a `read` or `write` ecall that moves bytes,
-  which is one cycle per word moved and then its own (section 5). Those extra cycles are
-  **transfer cycles**, and they count: an execution's cycle count, its cycle profile and
-  its shard plan all include them.
+- **Every instruction is one cycle, and nothing else is a cycle.** There is no
+  call that spends more than one, so an execution's cycle count, its cycle
+  profile and its shard plan all count instructions and only instructions.
 
 ## 2. Address spaces
 
@@ -49,8 +57,8 @@ or halfword access queries the word it lies in.
 A memory query is one event at one address: a **read** of `read_value`, last written at
 `read_ts`, and a **write** of `write_value` at `ts = 4·cycle + Δ`.
 
-- A query that only reads writes back what it read — so a register read, a load's data
-  read and a `write` transfer are each one query, never two.
+- A query that only reads writes back what it read — so an `rs1` or `rs2` register read
+  and a load's data read are each one query, never two.
 - `read_ts < ts`, strictly: the gap `ts - read_ts - 1` is non-negative and, by the
   clock, below `2^38`.
 - **Queries at distinct addresses may share a slot; two queries at one address never
@@ -76,17 +84,16 @@ form has, whatever register it names** — `x0` included — and for none it lac
 | `sc.w` | `rs1` | `rs2` | the word, rewritten to `rs2`; `rd` ← 0 |
 | AMOs | `rs1` | `rs2` | the word, rewritten to `op(old, rs2)`; `rd` ← `old` |
 | `fence` | | | |
-| an ecall's own row | `a7` | its arguments | `a0` ← the result |
+| an ecall's own row | `a7` | `a0`, its one argument | `a0` ← the result |
 | a **delegation** request's row | `a7` | `a0`, the frame base | `a0` ← 0; and `delegate`, the mirror query |
-| an ecall transfer | | | the word |
 
 `ebreak` has no row: it is a fatal guest error. The atomics family is the one that fills
 all four slots in one cycle, and it does so with slot 3 shared by the RAM query and the
 `rd` write, which sit at distinct addresses.
 
 **`next_pc`** is the sequential fall-through — `pc + 2` for a two-byte instruction,
-`pc + 4` otherwise — except where control moves: a jump's target, a taken branch's, an
-ecall transfer's unchanged `pc`, and the exit row's `HALT_PC` (section 6).
+`pc + 4` otherwise — except where control moves: a jump's target, a taken branch's,
+and the exit row's `HALT_PC` (section 6).
 
 ## 5. The x0 rule
 
@@ -98,33 +105,28 @@ over this fixed trace behaviour.
 
 ## 6. ecall
 
-An ecall's own row reads `a7` at slot 1, the argument registers its number uses at
-slot 2, and writes `a0` at slot 3; its `next_pc` is `pc + 4`, except on an `EXIT` row,
+An ecall's own row reads `a7` at slot 1, its argument `a0` at slot 2, and writes `a0`
+at slot 3; its `next_pc` is `pc + 4`, except on an `EXIT` row,
 which writes the halting sentinel `constants::memory::HALT_PC = 1` instead
 (`docs/spec/memory.md` §5). `HALT_PC` is odd and no instruction's `next_pc` is, so a
 pc that ends there ended on an exit row.
 
-| Number | Arguments read | `a0` written |
+| Number | Argument read | `a0` written |
 | --- | --- | --- |
-| `READ` 63 | `a0` fd, `a1` buf, `a2` count | bytes delivered, `min(count, left)`; `-EBADF` for a descriptor other than 0 and 3 |
-| `WRITE` 64 | `a0` fd, `a1` buf, `a2` count | `count`; `-EBADF` for a descriptor other than 1 and 2 |
 | `EXIT` 93 | `a0` status | the status, unchanged; `next_pc` is `HALT_PC`, and execution stops after this row |
 | a **delegation** number | `a0`, the frame base | 0, and the row carries its mirror query; `-ENOSYS` on an executor without the circuit |
 | anything else | none | `-ENOSYS` |
 
-The three slot-2 reads sit at distinct registers, which is what lets them share the
-slot. `docs/spec/ecall-abi.md` is the normative meaning of each call.
+**Every ecall row has one shape**, whatever its number: `a7` read, `a0` read, `a0`
+written, and the fall-through or `HALT_PC`. `docs/spec/ecall-abi.md` is the normative
+meaning of each call.
 
-**Transfer cycles.** A `read` or `write` that moves `n > 0` bytes to or from
-`[buf, buf + n)` is preceded, immediately, by one transfer cycle for each word those
-bytes touch, in ascending address order. A transfer cycle's slot 0 re-writes the
-unchanged `pc` (`next_pc = pc`), and its slot 3 is the word's RAM query: for a `read`,
-the word with the delivered bytes merged in — partial words at either end keep their
-other bytes — and for a `write`, the word read and written back. Nothing else. The
-ecall's own row then comes last and writes the real `next_pc`, so pc continuity holds
-through every transfer, and every ecall row has the same fixed shape whether or not
-bytes moved. A call that moves nothing has no transfer cycles. A byte outside the RAM
-window is the fatal guest error `OutOfBounds`, never an answer.
+**No ecall moves bytes.** Every call left in the ABI takes a single register
+argument, so no call has a buffer, a length or a cycle of its own beyond this
+row — the **transfer cycles** that carried `read`'s and `write`'s buffer traffic
+went with those calls and no execution produces one. A delegation is the one
+call that touches RAM, and it does so through its *invocation's* frame accesses,
+which are not this row's queries and not cycles at all (§7).
 
 ## 7. The order of the log
 
@@ -134,20 +136,20 @@ query per role present, in this frozen order**:
 | Role | Slot | Space | What |
 | --- | --- | --- | --- |
 | `rs1` | 1 | REG | `rs1`; an ecall row's `a7` |
-| `rs2` | 2 | REG | `rs2`; an ecall row's `a0` |
-| `arg1` | 2 | REG | an ecall row's `a1` |
-| `arg2` | 2 | REG | an ecall row's `a2` |
+| `rs2` | 2 | REG | `rs2`; an ecall row's `a0`, its one argument |
 | `load` | 2 | RAM | a load's word |
-| `ram` | 3 | RAM | a store's, an atomic's or a transfer's word |
+| `ram` | 3 | RAM | a store's or an atomic's word |
 | `rd` | 3 | REG | `rd`; an ecall row's `a0` result |
 | `delegate` | 3 | the delegation family's own | a delegation request's mirror query, at the frame base it handed over |
 
 The rule underneath is **by slot, then by role number**, and every role today is
 numbered in slot order, so it is exactly the table's order and the log is ordered by
-timestamp. A role appended later — an ecall's `a3`, say — keeps its new number and takes
-its place in a cycle by its slot, so appending one renumbers nothing. S21's `delegate` is
-the eighth and it took the last bit: **the `present` mask is a full `u8` now**, and a
-ninth role widens it, which is a schema change.
+timestamp. A role appended later keeps its new number and takes its place in a cycle by
+its slot, so appending one renumbers nothing. **`trace::Row::present` is a `u8` with one
+bit per role, so eight is the ceiling and a ninth role widens it**, which is a schema
+change. There were eight until the POSIX layer was deleted — `arg1` and `arg2`, an ecall
+row's `a1` and `a2`, which only `read` and `write` ever passed — and their removal leaves
+two bits spare again.
 
 A **delegation invocation's** frame accesses are not roles and are not this row's: they
 ride the requesting cycle at `constants::delegation::FRAME_DELTA`, which is 0, so they
@@ -162,9 +164,9 @@ frame, as the stage prompt keeps the whole A extension in one circuit.
 ## 8. Routing
 
 Every cycle goes to exactly one family: the one whose decoded table claims its pc.
-Transfer cycles sit at their ecall's pc, so they belong to the add/sub/lui/auipc family
-with it. A pc no table claims is impossible after S11's partition; the tracer panics on
-one rather than skipping it.
+A pc no table claims is impossible after S11's partition; the tracer panics on
+one rather than skipping it. A **delegation invocation** is routed by its type and not
+by a pc, because it owns no cycle and claims none (`docs/spec/delegation.md` §1).
 
 ## 9. The trace-level memory argument
 

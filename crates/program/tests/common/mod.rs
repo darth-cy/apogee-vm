@@ -27,7 +27,6 @@ pub const GUESTS: [&str; 19] = [
     "atomics",
     "opcodes",
     "heap",
-    "consistency",
     "addsub",
     "control",
     "alu",
@@ -37,6 +36,7 @@ pub const GUESTS: [&str; 19] = [
     "keccak-unused",
     "recursion-ops",
     "recursion-unused",
+    "mod-mul-ops",
 ];
 
 /// The guests whose image declares a delegation family, and which
@@ -45,11 +45,15 @@ pub const GUESTS: [&str; 19] = [
 pub const DECLARING_GUESTS: [(&str, &[u32]); 7] = [
     ("echo", &[family::POSEIDON2, family::FR_ARITH]),
     ("vault", &[family::POSEIDON2, family::FR_ARITH]),
-    ("consistency", &[family::POSEIDON2, family::FR_ARITH]),
     ("keccak-test", &[family::KECCAK_F]),
     ("keccak-unused", &[family::KECCAK_F]),
     ("recursion-ops", &[family::POSEIDON2, family::FR_ARITH]),
     ("recursion-unused", &[family::POSEIDON2, family::FR_ARITH]),
+    // S26's fixture declares **one** family and it is not one of S23's: it does
+    // secp256k1 field arithmetic through `k256` and no `field::Fr` arithmetic at
+    // all, so the two S23 records are unreachable and the linker drops them.
+    // That is static detachment saying something (`docs/spec/delegation.md` §7).
+    ("mod-mul-ops", &[family::MOD_MUL]),
 ];
 
 /// This crate's committed fixtures and their digests. Refresh with
@@ -62,7 +66,7 @@ pub const PINS: [(&str, &str); 3] = [
     ),
     (
         "identity.txt",
-        "b6bae2218ca7af1707a1c8d6b0f2f8c279606b4c43ef6a5105f74024837cbf75",
+        "8d7afaf25ff3b2911ffded7a434528e2b89899cd14381c355b7b7ff119d12bda",
     ),
     (
         "generic_table.txt",
@@ -123,7 +127,7 @@ pub fn instructions(image: &ProgramImage) -> Vec<(u32, u32, bool)> {
 /// therefore the menu's *second* entry, and the tests below spell that height
 /// out in their own arithmetic — pc `0x1fffe` is row 65535 — so it is
 /// asserted here rather than left to an index. A 2^16 table is cheap enough
-/// to export in full, and every committed guest but `consistency` fits in
+/// to export in full, and every committed guest but `mod-mul-ops` fits in
 /// one.
 pub fn smallest() -> ProgramParams {
     let height = family::HEIGHT_MENU[1];
@@ -138,12 +142,10 @@ pub fn smallest() -> ProgramParams {
 ///
 /// A table's rows are absolute pcs, one per halfword, so a family's height has
 /// to reach past its last instruction — and the heights are per family, which
-/// makes the *smallest* family's the binding one. `guests/consistency` is
-/// 1.7 MB of code with an `Arc` in it, so its atomics run up to pc `0x18e62a`,
-/// and neither `smallest()` (2^16 rows, pc below `0x20000`) nor the frozen
-/// defaults (2^16 for atomics) can hold them; a uniform 2^20 can. The S12 handoff records that as
-/// an open question about the defaults; a test that is not *about* the heights
-/// takes the ones that fit.
+/// makes the *smallest* family's the binding one. `guests/mod-mul-ops`' `.text`
+/// reaches pc `0x21d3a`, which `smallest()` (2^16 rows, pc below `0x20000`)
+/// cannot hold and `2^18` can. A test that is not *about* the heights takes
+/// the ones that fit.
 pub fn fitting(image: &ProgramImage) -> ProgramParams {
     for &height in &family::HEIGHT_MENU {
         let params = ProgramParams {

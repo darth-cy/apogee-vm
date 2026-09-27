@@ -6,3 +6,5 @@ publish.workspace = true
 
 [dependencies]
 guest-sdk.workspace = true
+# The public input window's payload bound, which is what caps the batch.
+constants = { path = "../../crates/constants" }

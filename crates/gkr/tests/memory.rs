@@ -34,37 +34,33 @@ use sumcheck::{absorb_witness_digest, witness_digest};
 use test_support::Rng;
 use transcript::Transcript;
 
-/// The query table, by **global query id**: pc, rs1, rs2, arg1, arg2, load,
-/// ram, rd, and — S21's eighth role — deleg, a delegation request's mirror, in
-/// the keccak family's own address space 4 (`docs/spec/delegation.md` §5.1).
-/// No family holds all nine.
-const SPACE: [u64; 9] = [3, 1, 1, 1, 1, 2, 2, 1, 4];
-const DELTA: [u64; 9] = [0, 1, 2, 2, 2, 2, 3, 3, 3];
+/// The query table, by **global query id**: pc, rs1, rs2, load, ram, rd, and —
+/// S21's last role — deleg, a delegation request's mirror, in the keccak
+/// family's own address space 4 (`docs/spec/delegation.md` §5.1).
+/// No family holds all seven.
+const SPACE: [u64; 7] = [3, 1, 1, 2, 2, 1, 4];
+const DELTA: [u64; 7] = [0, 1, 2, 2, 3, 3, 3];
 
 /// The query ids, in the table's frozen order.
 const PC: usize = 0;
 const RS1: usize = 1;
 const RS2: usize = 2;
-const ARG1: usize = 3;
-const ARG2: usize = 4;
-const LOAD: usize = 5;
-const RAM: usize = 6;
-const RD: usize = 7;
-const DELEG: usize = 8;
+const LOAD: usize = 3;
+const RAM: usize = 4;
+const RD: usize = 5;
+const DELEG: usize = 6;
 
 /// The queries that write back what they read, `docs/spec/memory.md` §2.4.
-const READ_ONLY: [usize; 5] = [RS1, RS2, ARG1, ARG2, LOAD];
+const READ_ONLY: [usize; 3] = [RS1, RS2, LOAD];
 
 /// Every execution family and the queries its frame holds, `docs/spec/memory.md`
 /// §2.1's table written out, with `deleg` on the family that owns ecall rows
-/// (`docs/spec/delegation.md` §5.1). Widths 8, 4, 6 and 5: the two that are not
-/// powers of two carry constant-1 pad leaves, and the 8- and the 4-wide ones
-/// carry none.
+/// (`docs/spec/delegation.md` §5.1). Widths 5, 4, 6 and 5: the ones that are
+/// not powers of two carry constant-1 pad leaves, and only the 4-wide one
+/// carries none. `ADD_SUB_LUI_AUIPC` was eight wide, and so padless, until the
+/// POSIX layer took `arg1`, `arg2` and its transfer row's `ram` away.
 const FAMILIES: [(u32, &[usize]); 7] = [
-    (
-        family::ADD_SUB_LUI_AUIPC,
-        &[PC, RS1, RS2, ARG1, ARG2, RAM, RD, DELEG],
-    ),
+    (family::ADD_SUB_LUI_AUIPC, &[PC, RS1, RS2, RD, DELEG]),
     (family::JUMP_BRANCH_SLT, &[PC, RS1, RS2, RD]),
     (family::SHIFT_BITWISE, &[PC, RS1, RS2, RD]),
     (family::MUL_DIV, &[PC, RS1, RS2, RD]),
@@ -161,9 +157,9 @@ fn t(c: &[Fr; 4], space: Fr, addr: Fr, ts: Fr, value: Fr) -> Fr {
 /// masked by another query's mask, a pad leaf that reads anything, and — the
 /// mutant the per-family frames add — a leaf taking its AS or Δ from its slot
 /// instead of its query id, which differs at `ATOMICS`' slot 3 (`ram`, AS 2,
-/// Δ 3, against `arg1`'s AS 1, Δ 2) and at `ADD_SUB_LUI_AUIPC`'s slots 5, 6 and
-/// 7 — the last of them `deleg`, whose AS is the row's `deleg_space` column
-/// against slot 7's `rd` AS 1 (`docs/spec/delegation.md` §5.1).
+/// Δ 3, against slot 3's `load`, AS 2 Δ 2) and at `ADD_SUB_LUI_AUIPC`'s slots
+/// 3 and 4 — the second of them `deleg`, whose AS is the row's `deleg_space`
+/// column against slot 4's `ram` AS 2 (`docs/spec/delegation.md` §5.1).
 /// Each family's query list is the test's own; `frame_artifact` over it is
 /// asserted equal to `family_frame_artifact`, so a changed `frame_queries` fails
 /// here rather than quietly moving what is swept.
@@ -517,7 +513,7 @@ fn frame_columns(queries: &[usize], rng: &mut Rng) -> Vec<Vec<Fr>> {
 }
 
 /// Every execution family's frame at `2^4` rows over a satisfying base proves
-/// and verifies — the four widths, 8, 6, 5 and 4, so both a padded and an
+/// and verifies — the three widths, 6, 5 and 4, so both a padded and an
 /// unpadded gate list 0 are proven. Then row 0's `rd` write, at address 0, is
 /// set to 5: the self-check names `rd_write_masked` and `verify` rejects at
 /// transition 0. `rd`'s **slot** is its position in that family's own ascending

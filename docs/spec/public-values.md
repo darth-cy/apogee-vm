@@ -51,29 +51,31 @@ already absorbed before any challenge is drawn. These families are what connect 
 
 ## 1. There is no I/O syscall
 
-**`read` (63) and `write` (64) are not provable ecalls**, and nothing in this mechanism
-uses one. `prover::fill::add_sub` refuses a cycle that calls either, by name, as it refuses
-every ecall but `EXIT` and a registered delegation number; the add/sub family's
-`ecall_is_exit` gate is S16's, unchanged.
+**There is no I/O syscall, and there are no descriptors.** Not a provable one and
+not an unprovable one; not a compatibility path kept for some other executor.
+`read` (63) and `write` (64) are retired and their numbers burned, and the four
+file descriptors — standard input, standard output, diagnostics and a private
+hint stream — went with them. `docs/spec/ecall-abi.md` §4 is the retirement.
 
-They stay in `constants::ecall` — the ABI is append-only — and the executor still answers
-them, because a guest built for a POSIX host runs under `qemu-riscv32` and
-`crates/emulator/tests/qemu_outputs.rs` holds the two executors to the same exit status and
-the same fd 1 bytes. `guest_sdk::read_stdin` and `guest_sdk::write_stdout` are that path
-and say so in their own documentation.
+**They were never provable, and that was the smaller reason.** A byte-moving
+syscall reaches RAM through *transfer cycles*, and a transfer row that is
+permitted but not constrained against its ecall's buffer and length can write any
+value to any RAM word; confining it needs cross-row constraints this
+arithmetization has nowhere to put. So the calls stayed outside every circuit,
+and a guest that used one was a guest no proof covered. The larger reason is that
+the shape was wrong. **An execution's public values are not a syscall's
+business.** They are a property of the statement, they are bound at both ends by
+a memory argument that already exists, and they ask the guest for nothing — no
+call, no cursor, no cooperation, not even that it look. A stream API cannot
+express that, because a stream is a thing the guest has to *use* for anything to
+be published at all.
 
-**fd 0 is not the public input**, and `emulator::GuestIo` carries the two as separate
-fields: `input` fills the window, `stdin` is served on fd 0, and neither seeds the other.
-A guest cannot read both paths usefully — the windows are unmapped under `qemu-riscv32`
-and `read` is unprovable here — so sharing the bytes would buy nothing and would cap an
-fd 0 stream at a public window's 1,020. The two descriptors were called `FD_PUBLIC_INPUT`
-and `FD_PUBLIC_OUTPUT` until this stage; their **numbers** are frozen at their Linux
-values, and only the names moved, to `FD_STDIN` and `FD_STDOUT`, because they no longer
-name a public value.
-
-A guest that wants to be proven calls `guest_sdk::public_input` and `guest_sdk::commit`,
-which issue no ecall at all. This is the whole of "fd/syscall APIs are SDK compatibility
-wrappers, not the cryptographic source of truth".
+So the fd model is gone rather than wrapped. An Apogee guest is an Apogee-SDK
+program, not a Linux one: `guest_sdk::public_input` and `guest_sdk::commit` issue
+no ecall, `guest_sdk::advice` issues no ecall, and the only ecalls left in the ABI
+are `EXIT` and the four delegation numbers, every one of which a circuit admits.
+`emulator::GuestIo` is `{ input, advice }` and nothing else — the two byte strings
+a run is given, one of which the statement carries and one of which nothing binds.
 
 ---
 
@@ -253,8 +255,8 @@ a hash, or a register convention. S10 froze `io_digest` and S14 recorded that it
 nothing to the execution; this is the stage that makes it worth something, and it needed no
 new message, no new tag and no new challenge to do it.
 
-What it does *not* say is anything about fd 1, fd 2, fd 3 or the advice region. Those are
-unbound by construction, and §6 is what a guest owes for reading one.
+What it does *not* say is anything about the advice region. That is unbound by
+construction, and §6 is what a guest owes for reading it.
 
 ---
 
@@ -320,12 +322,11 @@ guest_sdk::commit(&[u8])                     // append to the journal, no ecall
 guest_sdk::journal() -> &'static [u8]        // the journal so far
 guest_sdk::advice() -> &'static [u8]         // §6; nothing binds it
 guest_sdk::exit(code) -> !                   // publishes nothing; there is nothing to publish
-
-guest_sdk::read_stdin(&mut [u8]) -> usize    // fd 0  — compatibility, unprovable
-guest_sdk::write_stdout(&[u8])               // fd 1  — compatibility, unprovable
-guest_sdk::hint(&mut [u8]) -> usize          // fd 3  — compatibility, unprovable
-guest_sdk::log(&[u8])                        // fd 2  — diagnostics, unprovable
 ```
+
+**That is the whole of it**, and there is no second list. The five reading and
+writing calls issue no ecall at all — three regions of memory, loads and stores —
+so an execution's entire input and output crosses no ABI boundary.
 
 `commit` exits `EXIT_IO_ERROR` on a journal that would not fit the window rather than
 truncating: a caller reads `journal()` back and must not see one it did not write. The
@@ -340,11 +341,12 @@ replaces, where a hash computed at exit meant a guest that died published nothin
 `x24..x31`, where the register boundary made them public; that was the stopgap for having no
 journal, and the journal is what it was standing in for.
 
-**Under `qemu-riscv32` the public windows and the advice region are unmapped**: a host
-loader maps only the image's `PT_LOAD` segments, and none of these three regions is in the
-ELF. A guest that uses them is out of the QEMU suites by construction, and a guest that must
-be in them uses `read_stdin` and `write_stdout` and is not provable. `guests/revm-block`
-carries both binaries for exactly this reason (`docs/spec/revm-block.md`).
+**None of the three regions is in the ELF**, and none of them needs to be: no
+linker symbol names them, `link.ld` reserves nothing for them, and a guest
+reaches them with ordinary loads and stores at the constants of
+`constants::guest_memory`. What makes them addressable is `trace::addressable`,
+the executor's rule (§2) — the same mechanism that makes them a hole for every
+address a run was given nothing for.
 
 ---
 
@@ -387,7 +389,10 @@ the statement's input, not that anybody looked.
 run that produced it; `public.exit_status` is `x10`'s final value and `verify_global_memory`
 binds it (`docs/spec/memory.md` §4.1).
 
-**A panicking guest is provable only if its panic handler writes nothing.** Today
-`guest_sdk`'s writes the message to fd 2, and `write` is not a provable ecall, so the claim
-in §7 is about the journal surviving a panic and not yet about proving the panicking run
-itself. Making diagnostics provable is a separate change and this stage does not make it.
+**A panicking guest is provable.** `guest_sdk`'s handler is a bare `exit(101)`
+with no message: there is no diagnostic stream for it to reach and no ecall on
+the panic path, so a run that panics is an ordinary execution ending in a nonzero
+status, proven like any other. What it published is what it had committed before
+it died — §7's claim about the journal, and now the run itself. The message is the
+price, and the trade is deliberate: a diagnostic stream is bytes leaving an
+execution that no proof binds, which is the thing this page exists to refuse.

@@ -5,15 +5,19 @@
 //! Everything here runs *inside* the proof. It compiles only for
 //! `riscv32imac-unknown-none-elf` and links only into guest binaries.
 //!
-//! # The ABI in one paragraph
+//! # The I/O model in one paragraph
 //!
-//! An ecall carries its number in `a7`, arguments in `a0`-`a5`, and its result
-//! in `a0`, with errors as a negated errno — the Linux RISC-V convention, so
-//! `qemu-riscv32` runs a guest unmodified. The standard calls keep their Linux
-//! numbers. zkVM I/O is expressed with those calls over four fixed file
-//! descriptors: fd 0 public input, fd 1 public output, fd 2 diagnostics, fd 3
-//! private hints. `docs/spec/ecall-abi.md` is the normative table and every
-//! number below comes from [`constants::ecall`].
+//! **An Apogee guest is an Apogee-SDK program, not a Linux one.** It has no
+//! file descriptors, no streams and no I/O syscall. An execution's three kinds
+//! of input and output are *memory*, reached with ordinary loads and stores:
+//! [`public_input`] is the verifier-bound input, [`advice`] is prover-supplied
+//! and bound by nothing, and [`commit`] appends to the verifier-bound journal.
+//! `docs/spec/public-values.md` is normative for all three.
+//!
+//! What is left of the ecall ABI is [`exit`] and the four delegation calls. An
+//! ecall carries its number in `a7`, its argument in `a0` and its result in
+//! `a0`, with errors as a negated errno; `docs/spec/ecall-abi.md` is the
+//! normative table and every number comes from [`constants::ecall`].
 //!
 //! # Two anti-goals this crate is exempt from, and why
 //!
@@ -42,13 +46,12 @@ use constants::{delegation, ecall, guest_memory, keccak, poseidon2};
 // word-wise loop would need bounds this script does not promise. Guests have
 // kilobytes of `.bss`, not megabytes.
 //
-// The zeroing is kept even though VM memory starts zeroed: the same binary
-// must run correctly under QEMU, where it does not, and QEMU is the only
-// executor this stage has.
+// The zeroing is kept even though this VM's memory starts zeroed: `.bss` being
+// zero is a guarantee the Rust that runs above it relies on, and crt0 is the
+// one place that can make it true of the image rather than of the executor.
 //
-// The trailing `j .` is unreachable — `exit` does not return under any
-// executor — and exists so a hypothetical returning `exit` cannot fall into
-// whatever follows.
+// The trailing `j .` is unreachable — `exit` does not return — and exists so a
+// hypothetical returning `exit` cannot fall into whatever follows.
 global_asm!(
     ".section .text._start,\"ax\",@progbits",
     ".globl _start",
@@ -107,14 +110,14 @@ macro_rules! entry {
 // Raw ecall
 // ---------------------------------------------------------------------------
 
-// One shim per argument count, rather than one six-argument shim with zeroes
-// passed in: an unused `in(...)` register is still a constraint on the
-// register allocator, and three near-identical eight-line functions are easier
-// to read than a macro that generates them.
+// One shim, one argument: every ecall a guest may now issue takes exactly one.
+// `EXIT` takes a status and the four delegations take a frame base pointer.
+// A six-argument shim with zeroes passed in would be strictly worse -- an
+// unused `in(...)` register is still a constraint on the register allocator.
 //
-// No `options(...)`: the default is the conservative one. A `read` writes
-// through a pointer we handed the executor, so the compiler must not assume
-// this asm leaves memory alone.
+// No `options(...)`: the default is the conservative one. A delegation writes
+// its frame in place through the pointer in `a0`, so the compiler must not
+// assume this asm leaves memory alone.
 //
 // No clobber list either, and that is a load-bearing assumption rather than an
 // omission: **an ecall preserves every register except `a0`**, which
@@ -122,28 +125,12 @@ macro_rules! entry {
 // precompile circuit that scratched `t0` would produce silently wrong guest
 // arithmetic, which is why the rule is written down there and not only here.
 
-/// `ecall` with three arguments.
-///
-/// # Safety
-/// The caller guarantees that `num` names a call whose contract is satisfied by
-/// `a0`, `a1` and `a2` — in particular that any pointer among them is valid for
-/// the access that call performs.
-unsafe fn ecall3(num: u32, a0: u32, a1: u32, a2: u32) -> i32 {
-    let ret: i32;
-    core::arch::asm!(
-        "ecall",
-        in("a7") num,
-        inlateout("a0") a0 => ret,
-        in("a1") a1,
-        in("a2") a2,
-    );
-    ret
-}
-
 /// `ecall` with one argument.
 ///
 /// # Safety
-/// As [`ecall3`].
+/// The caller guarantees that `num` names a call whose contract is satisfied
+/// by `a0` — in particular that, where `a0` is a pointer, it is valid for the
+/// access that call performs.
 unsafe fn ecall1(num: u32, a0: u32) -> i32 {
     let ret: i32;
     core::arch::asm!(
@@ -152,108 +139,6 @@ unsafe fn ecall1(num: u32, a0: u32) -> i32 {
         inlateout("a0") a0 => ret,
     );
     ret
-}
-
-// ---------------------------------------------------------------------------
-// The I/O shims
-// ---------------------------------------------------------------------------
-
-/// Read from `fd` into `buf` until it is full or the stream ends.
-///
-/// Returns the number of bytes read, which is `buf.len()` unless the stream
-/// ended first. A short `read` is not an end of stream, so this loops.
-///
-/// **The returned count is checked against the buffer.** The executor is the
-/// prover, so `a0` is a value an adversary picks; a count larger than the space
-/// offered would make `filled` run past `buf.len()`, and every caller — which
-/// then slices `buf[..n]` — would panic. A negative return and an over-large
-/// one are the same class of executor-level failure and take the same exit.
-fn read_fd(fd: u32, buf: &mut [u8]) -> usize {
-    let mut filled = 0;
-    while filled < buf.len() {
-        // SAFETY: `buf[filled..]` is a live, writable slice of exactly the
-        // length passed as the count, and `READ`'s contract is to write at most
-        // that many bytes through the pointer.
-        let n = unsafe {
-            ecall3(
-                ecall::READ,
-                fd,
-                buf[filled..].as_mut_ptr() as u32,
-                (buf.len() - filled) as u32,
-            )
-        };
-        if n < 0 || n as usize > buf.len() - filled {
-            exit(EXIT_IO_ERROR);
-        }
-        if n == 0 {
-            break;
-        }
-        filled += n as usize;
-    }
-    filled
-}
-
-/// Write all of `bytes` to `fd`.
-///
-/// The returned count is checked against what was offered, for the reason
-/// [`read_fd`]'s is: an executor that claims to have written more than it was
-/// asked would end this loop early, and `commit` would return having delivered
-/// fewer bytes to the public journal than the guest believes it did.
-fn write_fd(fd: u32, bytes: &[u8]) {
-    let mut written = 0;
-    while written < bytes.len() {
-        // SAFETY: `bytes[written..]` is a live, readable slice of exactly the
-        // length passed as the count.
-        let n = unsafe {
-            ecall3(
-                ecall::WRITE,
-                fd,
-                bytes[written..].as_ptr() as u32,
-                (bytes.len() - written) as u32,
-            )
-        };
-        if n <= 0 || n as usize > bytes.len() - written {
-            exit(EXIT_IO_ERROR);
-        }
-        written += n as usize;
-    }
-}
-
-/// Read the POSIX standard input stream, fd 0. **Not provable, and not the
-/// public input.**
-///
-/// `read` is not a provable ecall (`docs/spec/public-values.md` §1), so a guest
-/// that takes this path is one no proof covers. It exists because a guest built
-/// for a POSIX host runs under `qemu-riscv32`, and the executor serves the same
-/// bytes here that it lays out in the public input window, so one source can be
-/// compared under both. A guest that wants to be proven calls [`public_input`],
-/// which issues no ecall at all.
-pub fn read_stdin(buf: &mut [u8]) -> usize {
-    read_fd(ecall::FD_STDIN, buf)
-}
-
-/// Write the POSIX standard output stream, fd 1. **Not provable, and not the
-/// journal.** [`read_stdin`]'s note applies: this is the compatibility path,
-/// and [`commit`] is what a proof binds.
-pub fn write_stdout(bytes: &[u8]) {
-    write_fd(ecall::FD_STDOUT, bytes);
-}
-
-/// Read private hint bytes from fd 3. **Not provable**, for [`read_stdin`]'s
-/// reason; [`advice`] is the provable spelling of the same idea.
-///
-/// Returns the number of bytes read. **These bytes are nondeterministic prover
-/// advice.** Nothing binds them: the prover chooses them, and it may choose
-/// them differently on every run. A hint is only ever a shortcut to a value the
-/// guest then *checks* against something a proof does bind.
-pub fn hint(buf: &mut [u8]) -> usize {
-    read_fd(ecall::FD_HINT, buf)
-}
-
-/// Write diagnostics to fd 2. Free-form, uncommitted, verifier-ignored, and
-/// not provable.
-pub fn log(bytes: &[u8]) {
-    write_fd(ecall::FD_STDERR, bytes);
 }
 
 // ---------------------------------------------------------------------------
@@ -350,9 +235,8 @@ pub fn journal() -> &'static [u8] {
 /// **Nothing binds these bytes.** The prover chooses them and may choose them
 /// differently on every run, so a guest owes a check of them against something
 /// a proof *does* bind — the public input, or a hash the public input carries.
-/// That is the whole contract (`docs/spec/public-values.md` §6), and it is the
-/// same one [`hint`] carries; advice differs only in being ordinary memory, so
-/// a provable guest can read it.
+/// That is the whole contract (`docs/spec/public-values.md` §6): advice is
+/// only ever a shortcut to a value the guest then checks.
 ///
 /// The length word is the prover's too, so it is clamped to the region rather
 /// than trusted. Reading past what the host supplied is a fatal executor error,
@@ -381,7 +265,11 @@ pub fn exit(code: i32) -> ! {
     }
 }
 
-/// Status used for an executor-level I/O failure.
+/// Status used when [`commit`] is handed more bytes than the journal holds.
+///
+/// Named for an executor-level I/O failure, which is what it meant while the
+/// SDK had descriptors to fail on; the journal overflow is the one case left,
+/// and the number is kept because it appears in recorded exit statuses.
 const EXIT_IO_ERROR: i32 = 70;
 
 /// Status used when an allocation would reach the stack: see [`BumpAllocator`].
@@ -407,8 +295,9 @@ const EXIT_PANIC: i32 = 101;
 /// answers 0 and one that does not answers `-ENOSYS`.
 ///
 /// Returns `false` on exactly `-ENOSYS`, and a caller must have a software
-/// path and take it on `false` — under `qemu-riscv32` that is the path the
-/// proof is about.
+/// path and take it on `false`. This VM implements every delegation, so its
+/// executor never answers `-ENOSYS` here; the fallback is the ABI's contract
+/// (`docs/spec/delegation.md` §2) rather than a path taken in this repository.
 ///
 /// Any *other* nonzero answer exits nonzero rather than falling back.
 /// Collapsing every error into "run the software path" would let a
@@ -446,7 +335,7 @@ pub fn poseidon2_permute(state: &mut [u8; 96]) -> bool {
 /// record with it and declares nothing (`docs/spec/delegation.md` §7).
 pub mod recursion {
     use super::{delegation_number, ecall1, exit, EXIT_PRECOMPILE_ERROR};
-    use constants::{delegation, ecall, fr_arith, poseidon2};
+    use constants::{delegation, ecall, fr_arith, mod_mul, poseidon2};
 
     /// The Poseidon2 delegation's declaration record.
     #[link_section = ".rodata.apogee.delegations.poseidon2"]
@@ -458,15 +347,20 @@ pub mod recursion {
     static DELEGATION_FR_ARITH: [u8; delegation::MARKER_BYTES] =
         super::record(ecall::PRECOMPILE_FR_ARITH);
 
+    /// The 256-bit modular multiplication delegation's declaration record.
+    #[link_section = ".rodata.apogee.delegations.mod_mul"]
+    static DELEGATION_MOD_MUL: [u8; delegation::MARKER_BYTES] =
+        super::record(ecall::PRECOMPILE_MOD_MUL);
+
     /// The Poseidon2 delegation's 96-byte frame: three canonical
     /// little-endian `Fr` lanes, permuted in place.
     ///
     /// Word-aligned **by its type**, because nothing else supplies it: a bare
     /// `[u8; 96]` has alignment 1, a stack local's address is the code
     /// generator's to choose, and a misaligned base is a fatal
-    /// `EmuError::Misaligned` under this VM while `qemu-riscv32` answers
-    /// `-ENOSYS` and never dereferences it — the same binary correct under one
-    /// executor and dead under the other, decided by codegen.
+    /// `EmuError::Misaligned` — a guest killed by where codegen happened to
+    /// put a local, which is why the alignment is the type's and not a
+    /// caller's promise.
     #[repr(C, align(4))]
     pub struct Poseidon2Frame(pub [u8; poseidon2::FRAME_BYTES]);
 
@@ -476,11 +370,66 @@ pub mod recursion {
     #[repr(C, align(4))]
     pub struct FrArithFrame(pub [u8; fr_arith::FRAME_BYTES]);
 
+    /// The modular multiplication delegation's 128-byte frame: the modulus,
+    /// `a`, `b` and the result, each eight little-endian 32-bit limbs
+    /// (`docs/spec/delegation.md` §14).
+    ///
+    /// **Limbs and not bytes**, because every caller already holds its values as
+    /// 32-bit limbs and a byte frame would cost a pack and an unpack per call —
+    /// which on a 256-bit multiply is a fifth of what the delegation saves. The
+    /// `u32` element type is also what gives the type its alignment for free.
+    #[repr(C, align(4))]
+    pub struct ModMulFrame(pub [u32; mod_mul::FRAME_WORDS]);
+
+    // The frame's word layout, which [`ModMulFrame::of`]'s array literal spells
+    // out rather than indexing: a literal is 32 stores where an all-zero array
+    // followed by 24 writes was a `memset` and then those stores, and at 6,705
+    // invocations on S26's pinned mini-block that zeroing pass alone was 0.5
+    // million guest cycles — 6% of what the delegation saves. So the layout is
+    // pinned here instead, and a renumbering fails the build.
+    const _: () = assert!(mod_mul::M_WORD == 0);
+    const _: () = assert!(mod_mul::A_WORD == 8);
+    const _: () = assert!(mod_mul::B_WORD == 16);
+    const _: () = assert!(mod_mul::OUT_WORD == 24);
+    const _: () = assert!(mod_mul::FRAME_WORDS == 32);
+
+    impl ModMulFrame {
+        /// A callable frame: the modulus, then the two operands, then the eight
+        /// result words, which the delegation overwrites and whose initial value
+        /// is therefore free.
+        ///
+        /// One pass over the words and no zeroing pass before it. There is no
+        /// empty-then-fill constructor, because a frame with no modulus is not a
+        /// frame this ABI has a meaning for.
+        pub fn of(m: &[u32; 8], a: &[u32; 8], b: &[u32; 8]) -> ModMulFrame {
+            ModMulFrame([
+                m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], a[0], a[1], a[2], a[3], a[4], a[5],
+                a[6], a[7], b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], 0, 0, 0, 0, 0, 0, 0, 0,
+            ])
+        }
+
+        /// The result's eight limbs, after a successful call.
+        pub fn result(&self) -> [u32; 8] {
+            let w = &self.0;
+            [
+                w[mod_mul::OUT_WORD],
+                w[mod_mul::OUT_WORD + 1],
+                w[mod_mul::OUT_WORD + 2],
+                w[mod_mul::OUT_WORD + 3],
+                w[mod_mul::OUT_WORD + 4],
+                w[mod_mul::OUT_WORD + 5],
+                w[mod_mul::OUT_WORD + 6],
+                w[mod_mul::OUT_WORD + 7],
+            ]
+        }
+    }
+
     // The frame rule of `docs/spec/delegation.md` §4 as a type-level
     // assertion: what the ecall hands over is word-aligned or this crate does
     // not build.
     const _: () = assert!(core::mem::align_of::<Poseidon2Frame>() >= 4);
     const _: () = assert!(core::mem::align_of::<FrArithFrame>() >= 4);
+    const _: () = assert!(core::mem::align_of::<ModMulFrame>() >= 4);
 
     /// Permute the frame in place. `false` on exactly `-ENOSYS`.
     pub fn poseidon2(frame: &mut Poseidon2Frame) -> bool {
@@ -502,6 +451,19 @@ pub mod recursion {
         let ret = unsafe {
             ecall1(
                 delegation_number(&DELEGATION_FR_ARITH),
+                frame.0.as_mut_ptr() as u32,
+            )
+        };
+        answered(ret)
+    }
+
+    /// Compute `out = a * b mod m` over the frame in place. `false` on exactly
+    /// `-ENOSYS`, which is the caller's signal to run its own multiply.
+    pub fn mod_mul(frame: &mut ModMulFrame) -> bool {
+        // SAFETY: as [`poseidon2`].
+        let ret = unsafe {
+            ecall1(
+                delegation_number(&DELEGATION_MOD_MUL),
                 frame.0.as_mut_ptr() as u32,
             )
         };
@@ -596,11 +558,9 @@ fn delegation_number(record: &'static [u8; delegation::MARKER_BYTES]) -> u32 {
 /// the code generator's to choose: LLVM places align-1 stack objects at odd
 /// offsets whenever the frame packs that way, at every optimisation level.
 /// `docs/spec/delegation.md` §4 rule 1 requires a word-aligned base, and a
-/// misaligned one is a fatal `EmuError::Misaligned` — while `qemu-riscv32`,
-/// which answers `-ENOSYS` and never dereferences the pointer, runs the
-/// software path and agrees with everybody. An unaligned buffer would
-/// therefore be a guest that gives the right digest under one executor and
-/// dies under the other, decided by codegen rather than by the program.
+/// misaligned one is a fatal `EmuError::Misaligned`. An unaligned buffer would
+/// therefore be a guest killed by where codegen happened to put a local, which
+/// is why the alignment is the type's and not a caller's promise.
 ///
 /// `align(4)` and not more: 4 is what the ABI states, what `keccak`'s
 /// `base_aligned` decomposes and what `emulator::keccak_frame` checks.
@@ -614,9 +574,9 @@ const _: () = assert!(core::mem::align_of::<Frame>() >= 4);
 
 /// keccak-f[1600] over the 200-byte state frame, as a delegation.
 ///
-/// Returns `false` when the executor answers exactly `-ENOSYS` — which
-/// `qemu-riscv32` does, having no circuit — and the caller runs the software
-/// path. Any other nonzero answer exits nonzero rather than falling back, for
+/// Returns `false` when the executor answers exactly `-ENOSYS` — an executor
+/// with no keccak circuit — and the caller runs the software path. Any other
+/// nonzero answer exits nonzero rather than falling back, for
 /// [`poseidon2_permute`]'s reason.
 fn keccak_f1600(state: &mut Frame) -> bool {
     // SAFETY: `state` is a live, writable 200-byte buffer, word-aligned by its
@@ -775,10 +735,10 @@ static mut BUMP: usize = 0;
 /// Until S12 the ceiling was `__stack_top` itself, and running out of heap was
 /// silent corruption rather than an exit: a block ending anywhere between the
 /// live `sp` and the top was handed out *over live stack frames*, so safe code
-/// writing into a `Vec` rewrote the caller's locals and return addresses. The
-/// consistency suite found it by running this guest's source on the host and
-/// comparing; `crates/emulator/tests/consistency.rs` holds the fix to both
-/// halves of the rule.
+/// writing into a `Vec` rewrote the caller's locals and return addresses. It
+/// was found by running a guest's own source on the host and comparing the two
+/// runs — the suite that did so is gone, and what holds the rule now is that
+/// each half exits 71 rather than corrupting anything.
 ///
 /// What no allocator can see is a stack that grows past its reserve *after* the
 /// heap has filled the space below it. Catching that needs a guard below every
@@ -860,24 +820,18 @@ static ALLOCATOR: BumpAllocator = BumpAllocator;
 // Panic
 // ---------------------------------------------------------------------------
 
-/// fd 2 as a `core::fmt` sink, so the panic handler can format without
-/// allocating.
-struct Diagnostics;
-
-impl core::fmt::Write for Diagnostics {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        log(s.as_bytes());
-        Ok(())
-    }
-}
-
 #[panic_handler]
-fn panic(info: &core::panic::PanicInfo) -> ! {
-    use core::fmt::Write;
-    // `PanicInfo`'s own `Display` is "panicked at FILE:LINE:COL:\nMESSAGE",
-    // which is the message and the location the stage asks for. The result is
-    // discarded because there is nothing to do about a failed write while
-    // panicking.
-    let _ = writeln!(Diagnostics, "guest {info}");
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    // **A panic is silent, and that is the design.** An Apogee guest has no
+    // diagnostic stream: the only bytes leaving an execution are the journal,
+    // which a proof binds, and the exit status. Writing the message anywhere a
+    // host could read it would need an unprovable ecall, and routing it into
+    // the journal would break `exit` publishing nothing -- a guest that panics
+    // has still published exactly what it committed
+    // (`docs/spec/public-values.md` section 7).
+    //
+    // What this buys is worth more than the message: with no write on the
+    // panic path, **a panicking guest is provable**. Until the POSIX layer was
+    // deleted it was not, because its handler reached fd 2.
     exit(EXIT_PANIC)
 }

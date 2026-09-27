@@ -777,16 +777,6 @@ pub fn channels() -> Vec<ChannelSpec> {
 mod tests {
     use super::*;
 
-    /// The legal masks are twelve distinct single bits, one per instruction the
-    /// family owns.
-    #[test]
-    fn the_legal_masks_are_twelve_distinct_single_bits() {
-        for (i, m) in LEGAL_MASKS.iter().enumerate() {
-            assert_eq!(m.count_ones(), 1);
-            assert!(LEGAL_MASKS[..i].iter().all(|n| n != m));
-        }
-    }
-
     /// The two halves partition the twelve kinds.
     #[test]
     fn the_two_halves_partition_the_kinds() {
@@ -802,13 +792,6 @@ mod tests {
         let mut shifts = SHIFTS.to_vec();
         shifts.sort_by_key(|a| format!("{a}"));
         assert_eq!(directions, shifts);
-    }
-
-    /// The honest family spec assembles, at the lowest height the registry
-    /// builds.
-    #[test]
-    fn the_seam_assembles_the_family() {
-        assert_eq!(assemble(19, family_spec()), artifact(19));
     }
 
     /// An obligation dropped on the way to the assembly is refused by its

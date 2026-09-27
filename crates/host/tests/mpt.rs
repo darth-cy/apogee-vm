@@ -2,7 +2,7 @@
 //! against itself.
 //!
 //! The module is guest code and compiles for the host too, so it can be tested
-//! here without a guest build — the `guests/consistency` pattern. What it is
+//! here without a guest build. What it is
 //! held to:
 //!
 //! - **Three canonical root vectors**, the ones every Ethereum client's test

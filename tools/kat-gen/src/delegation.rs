@@ -16,26 +16,40 @@
 //! The shape numbers are on the line for a reader: a digest that moves says
 //! only *that* something moved, and the counts beside it say what.
 //!
-//! Each height is the family's default and only sensible one
-//! (`docs/spec/delegation.md` §9): a delegation family's rows are invocations,
-//! not halfwords, and `2^16` rows of any of these is hundreds of gigabytes of
-//! forward pass.
+//! Each height is the family's own default, and **the four do not share one**
+//! (`docs/spec/delegation.md` §9.1). A delegation family's rows are
+//! invocations, not halfwords, so its ceiling is the width of one row's
+//! circuit — and those widths differ by three orders of magnitude. `KECCAK_F`
+//! is 354,762 inner columns a row, where `2^16` rows is 744 GB of forward
+//! pass; `MOD_MUL` is 270, where `2^16` is 7.9 GB and is what takes a measured
+//! block from 1,048 shards to 5.
 
 use constants::family;
-use constraints::{fr_arith, keccak, poseidon2, CircuitArtifact};
+use constraints::{fr_arith, keccak, mod_mul, poseidon2, CircuitArtifact};
 use test_support::{sha256, to_hex};
 
 use crate::write_vectors;
 
 /// A family's height, read off the frozen defaults rather than spelled.
+///
+/// **What is asserted here is what is true of every delegation height, never a
+/// literal.** Until S26 this read `assert_eq!(vars, 8)`, which was a fact about
+/// the three families that existed and not a rule; raising `MOD_MUL` to `2^16`
+/// is what showed it up. What the four do share is the menu and Mercury's even
+/// variable count, and a digest pinned over a circuit built at some height the
+/// prover will never use is the failure this guards.
 fn trace_vars(family: u32) -> u32 {
     let height = family::DEFAULT_HEIGHTS[family as usize];
     assert!(height.is_power_of_two(), "a height is a power of two");
     let vars = height.trailing_zeros();
-    assert_eq!(
-        vars,
-        8,
-        "{}'s default height is no longer 2^8",
+    assert!(
+        vars.is_multiple_of(2),
+        "{}'s height 2^{vars} is odd, and a Mercury opening needs b = sqrt(n)",
+        program::family_name(family)
+    );
+    assert!(
+        family::HEIGHT_MENU.contains(&height),
+        "{}'s height 2^{vars} is not on the height menu",
         program::family_name(family)
     );
     vars
@@ -66,7 +80,7 @@ fn line(name: &str, spec: &str, artifact: &CircuitArtifact) -> String {
 }
 
 /// Each fixture's relative path and its contents.
-fn fixtures() -> [(&'static str, String); 3] {
+fn fixtures() -> [(&'static str, String); 4] {
     [
         (
             "crates/constraints/tests/vectors/keccak.txt",
@@ -90,6 +104,14 @@ fn fixtures() -> [(&'static str, String); 3] {
                 "FR_ARITH",
                 "14",
                 &fr_arith::artifact(trace_vars(family::FR_ARITH)),
+            ),
+        ),
+        (
+            "crates/constraints/tests/vectors/mod_mul.txt",
+            line(
+                "MOD_MUL",
+                "18",
+                &mod_mul::artifact(trace_vars(family::MOD_MUL)),
             ),
         ),
     ]

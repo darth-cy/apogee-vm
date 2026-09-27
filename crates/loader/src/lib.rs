@@ -34,7 +34,7 @@
 //! segment desynchronises the sweep, and everything after it decodes as
 //! garbage. Compiler output stays synchronised because GCC and LLVM keep
 //! constants in `.rodata`, and a desync that reaches real code diverges loudly
-//! — under QEMU while testing, and as an [`LoaderError::RvcIllegal`] here the
+//! — at run time, and as an [`LoaderError::RvcIllegal`] here the
 //! moment it meets a halfword no valid encoding claims. Being loud is the
 //! design: a loader that guessed would be a loader that proves the wrong
 //! program.
@@ -50,6 +50,9 @@
 //! that check does not depend on any single encoding being fatal.
 
 mod rvc;
+mod symbols;
+
+pub use symbols::{function_symbols, symbol_names, FuncSymbol};
 
 use constants::guest_memory;
 

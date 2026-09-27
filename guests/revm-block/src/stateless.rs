@@ -280,7 +280,7 @@ fn execute(
 ) -> Result<(Vec<ExecutionResult>, EvmState, u64), StatelessError> {
     let mut cfg = CfgEnv::new_with_spec(spec);
     cfg.chain_id = witness.env.chain_id;
-    let block: BlockEnv = block_env(&witness.env, spec);
+    let block: BlockEnv = block_env(&witness.env);
     let mut evm = Context::mainnet()
         .with_db(WitnessDb::new(witness))
         .with_block(block)
