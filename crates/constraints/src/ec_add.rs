@@ -41,12 +41,23 @@
 //!
 //! # Why three invocations
 //!
-//! Peak memory is `2^n * (committed * 24 + inner * 32)` — the base layer twice
-//! over, plus the half-height `Fr` table transition 0's first bind builds — so
-//! it is **linear in the row's width**. Nine reductions on one row is 19,316
-//! committed columns and 28.9 GiB a shard at `2^16`; three rows of three is
-//! 10.5 GiB, which is below an execution shard's ~11 GiB and so raises a
-//! block's peak by nothing at all.
+//! Peak memory is the forward pass — every layer at its own height — plus the
+//! committed base and the half-height `Fr` table transition 0's first bind
+//! builds, so it is **linear in the row's width**. Nine reductions on one row
+//! would be some three times this one's and beyond any machine; three rows of
+//! three is 1,420 committed columns, 8,772 inner, and a computed **20.5 GB** a
+//! shard at `2^16`.
+//!
+//! **That is above an execution shard's ~11 GB, and it makes this family the
+//! peak-setting one in a block.** An earlier draft of this comment said 10.5
+//! GiB; the figure was wrong by a factor of two, and the arithmetic is
+//! `crates/constraints/tests/` — 18.3 GB of forward pass, 0.7 GB of committed
+//! base, 1.5 GB of first bind. `2^16` is nonetheless forced rather than chosen:
+//! the `RANGE16` channel needs sixteen variables, Mercury needs an even count,
+//! and `2^18` is four times worse. The lever that remains is the **group
+//! count** — five groups of two reductions would be about two-thirds the width
+//! at two more invocations an addition — and `docs/handoff/S26c-sha256-ec.md`
+//! records the measurement a deferred run produces against this estimate.
 //!
 //! The three rows are glued by the **frame**, not by a bus: group 0 leaves
 //! `xx`, `yy` and `zz` in frame words 49..73 and group 2 reads them there, as
@@ -502,6 +513,7 @@ fn group_terms(g: usize) -> Vec<(Coeff, PolyAddress)> {
 
 /// The family's circuit over `2^trace_vars` rows.
 pub fn artifact(trace_vars: u32) -> CircuitArtifact {
+    the_offset_covers_every_slot();
     the_carry_offset_covers_every_slot();
 
     let mut enforcing =
@@ -688,10 +700,33 @@ fn one_chain(
         }
         out.push((format!("{name}_canonical{i}"), d::linear(terms)));
     }
-    // `b_7 = enable`: below the modulus exactly on the rows that read it.
-    let mut terms = enable;
-    terms.push((d::neg(1), borrow_of(LIMBS - 1)));
-    out.push((format!("{name}_below_modulus"), d::linear(terms)));
+    // `enable * (1 - b_7) = 0`: below the modulus **on the rows that read it**,
+    // and unconstrained on the rest.
+    //
+    // **Not `enable - b_7 = 0`**, which is what S26c first wrote and which is a
+    // different statement: it forces `b_7 = 0` where `enable` is 0, so a value
+    // that *is* below the modulus on a row that does not read it becomes
+    // unprovable. Every lane is such a value — `EcAddFrame::of` zeroes the six
+    // intermediates, and a group-2 row's `X1..Z2` are ordinary coordinates — so
+    // that spelling made **every row of this family** unprovable while every
+    // shape test, the executor and the guests all passed. What catches it is an
+    // honest witness evaluated against the gates, which is
+    // `crates/checker/tests/ec_add.rs`.
+    //
+    // Degree 2: a selector column times a borrow column, both committed.
+    let products: Vec<(Coeff, PolyAddress, PolyAddress)> = enable
+        .iter()
+        .map(|(c, x)| {
+            let Coeff::Literal(v) = c else {
+                panic!("ec_add: a chain's enable coefficient is a literal")
+            };
+            (Coeff::Literal(-*v), *x, borrow_of(LIMBS - 1))
+        })
+        .collect();
+    out.push((
+        format!("{name}_below_modulus"),
+        d::quadratic(enable, products),
+    ));
     out
 }
 
@@ -1043,6 +1078,53 @@ fn witness_names() -> Vec<String> {
     out.push("range16_multiplicity".to_string());
     out
 }
+/// Each slot's four operand ceilings, as multiples of `m`, in
+/// `group * SLOTS + slot` order.
+///
+/// `|A| <= a*m`, and so on. **One table, two derivations**: the carry's width
+/// needs the largest `a*b + c*d` and [`OFFSET_MULTIPLE`] needs it too, because
+/// the same product bounds how far below zero a left-hand side can reach. They
+/// were two separate arguments until S26c derived only the first and shipped an
+/// offset the second refutes.
+const CEILINGS: [[u64; 4]; SLOTS * SLOTS] = [
+    [1, 1, 0, 0],
+    [1, 1, 0, 0],
+    [1, 1, 0, 0],
+    [2, 2, 0, 0],
+    [2, 2, 0, 0],
+    [2, 2, 0, 0],
+    [3, 22, 63, 3],
+    [22, 22, 63, 3],
+    [3, 22, 3, 3],
+];
+
+/// `OFFSET_MULTIPLE` is large enough that **no** slot's left-hand side is
+/// negative.
+///
+/// `A*B + C*D` is as low as `-(a*b + c*d) * m^2` — each product is minimised
+/// when one factor is at its positive ceiling and the other at its negative one
+/// — so the offset has to be at least that, or the honest quotient of such a row
+/// is negative, `q_limb` cannot hold it, and the row is **unprovable**.
+///
+/// It is a completeness bug and not a soundness one, which is exactly why
+/// nothing else catches it: the emulator computes the right answer, the guest
+/// agrees with its own software path, and the only thing that fails is an
+/// honest prover — intermittently, on about a quarter of group-2 rows, hours
+/// into a block proof.
+fn the_offset_covers_every_slot() {
+    let mut worst = 0u64;
+    for [a, b, c, d] in CEILINGS {
+        let low = a * b + c * d;
+        if low > worst {
+            worst = low;
+        }
+    }
+    assert!(
+        f::OFFSET_MULTIPLE >= worst,
+        "ec_add: a left-hand side reaches -{worst} m^2, which an offset of {} does not cover",
+        f::OFFSET_MULTIPLE
+    );
+}
 
 /// The carry offset covers every slot's position bound — computed, not
 /// asserted.
@@ -1057,17 +1139,6 @@ fn witness_names() -> Vec<String> {
 /// other slot needs.
 fn the_carry_offset_covers_every_slot() {
     // Operand ceilings, as multiples of 2^32, in the order `group` builds them.
-    const CEILINGS: [[u64; 4]; SLOTS * SLOTS] = [
-        [1, 1, 0, 0],
-        [1, 1, 0, 0],
-        [1, 1, 0, 0],
-        [2, 2, 0, 0],
-        [2, 2, 0, 0],
-        [2, 2, 0, 0],
-        [3, 22, 63, 3],
-        [22, 22, 63, 3],
-        [3, 22, 3, 3],
-    ];
     let base = 1u128 << 32;
     let mut worst = 0u128;
     for [a, b, c, dd] in CEILINGS {

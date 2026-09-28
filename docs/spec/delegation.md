@@ -105,6 +105,8 @@ One table ties a family, its number and its frame width together:
 | `POSEIDON2` | 10 | `PRECOMPILE_POSEIDON2` = `0x0500` | 24 | `DELEGATION_POSEIDON2` = 5 |
 | `FR_ARITH` | 11 | `PRECOMPILE_FR_ARITH` = `0x0502` | 25 | `DELEGATION_FR_ARITH` = 6 |
 | `MOD_MUL` | 15 | `PRECOMPILE_MOD_MUL` = `0x0504` | 25 | `DELEGATION_MOD_MUL` = 7 |
+| `SHA256_COMP` | 16 | `PRECOMPILE_SHA256_COMP` = `0x0505` | 24 | `DELEGATION_SHA256_COMP` = 8 |
+| `EC_ADD` | 17 | `PRECOMPILE_EC_ADD` = `0x0506` | 97 | `DELEGATION_EC_ADD` = 9 |
 
 `0x0500` was assigned at S10 with a calling convention and no circuit; S23 gave
 it one. The numbers are not in family-id order and need not be: a family id
@@ -546,13 +548,19 @@ shards sort last. `verify_block` needs no edit at all.
 
 ---
 
-## 9. The height, and why there is no lookup channel
+## 9. The height, and the one lookup channel a delegation family may carry
 
-**Each delegation family takes its own height, and the four do not share one.**
-`KECCAK_F`, `POSEIDON2` and `FR_ARITH` take `2^8`; `MOD_MUL` takes `2^16`
-(§9.1). What follows is `KECCAK_F`'s argument, which is what put `2^8` on the
-menu — it is a *ceiling* derived from one family's width, never a rule about
-delegation.
+**Each delegation family takes its own height, and the six do not share one.**
+`KECCAK_F`, `POSEIDON2`, `FR_ARITH` and `SHA256_COMP` take `2^8`; `MOD_MUL` and
+`EC_ADD` take `2^16` (§9.1, §9.2). What follows is `KECCAK_F`'s argument, which
+is what put `2^8` on the menu — it is a *ceiling* derived from one family's
+width, never a rule about delegation.
+
+**This section said "and why there is no lookup channel" until S26c, and §9.3 is
+the amendment.** A family at `2^16` may carry `RANGE16`, and two now do. What
+did not change is the reason the original rule existed: a family at `2^8` can
+carry no channel at all, and no family at any height the menu offers below
+`2^20` can carry `TIMESTAMP`.
 
 `KECCAK_F` takes **`2^8`**, added to `constants::family::HEIGHT_MENU` at S21.
 One row is a whole permutation, and a whole permutation is **354,762 inner
@@ -583,14 +591,25 @@ bits, in a circuit that is already 1,600 bits wide — and it removes the failur
 `constants::family::DEFAULT_HEIGHTS` warns about, a family reaching a channel
 assertion inside `VerifyingKey::check` on bytes a verifier was handed.
 
-**A delegation family must therefore be absent from `family_circuit`'s
-minimum-height arm, and must carry no lookup channel.** The two go together: a
-family with a channel needs that channel's height, and at that height its
-permutation may not fit. The rule survives `MOD_MUL`'s `2^16` unchanged, and for
-a second reason besides the first: a frame's timestamp gap is the `TIMESTAMP`
-channel's obligation, `BITS = 19`, so even at `2^16` no table for it exists —
-a delegation family owes a bit decomposition at every height the menu offers
-below `2^20`, and having paid for one it has no use for a channel above.
+**A delegation family at `2^8` must therefore carry no lookup channel**, and
+**no delegation family may carry `TIMESTAMP` at any height this menu offers**:
+that channel's `BITS` is 19, so its table needs `2^20` rows, which is an
+execution family's floor and not a delegation family's. A frame's timestamp gap
+is consequently never a `TIMESTAMP` obligation — it is a bit decomposition at
+`2^8` and, since S26c, three `RANGE16` chunks at `2^16` (§9.3).
+
+**`family_circuit`'s minimum-height guard is derived, not a list.** Until S26c it
+named the seven execution families explicitly and a delegation family's arm sat
+below it, because a family with no channel reaches no `BITS ≤ trace_vars`
+assertion and naming it in the guard would have refused the heights these
+families actually take. Since S26c the guard reads each family's **own**
+`channels()` and takes the widest range channel's `BITS`, so a family is held to
+exactly the floor its channels imply and no table of families has to be kept in
+step: `SHA256_COMP` with no channel has a floor of 0, `EC_ADD` and `MOD_MUL` a
+floor of 16, and the seven execution families 19 as before. The floor is tested
+before the artifact is built, so a family below it returns `None` for a clean
+`Err` rather than panicking inside `VerifyingKey::check` on bytes a verifier was
+handed.
 
 ### 9.1 `2^8` is not free, and S26 is where it shows
 
@@ -636,12 +655,14 @@ height bought nothing and cost the table above.
 So the heights are per family, which is what `DEFAULT_HEIGHTS` was always able
 to express:
 
-| family | inner at `2^8` | committed | height | why that one |
+| family | inner | committed | height | why that one |
 | --- | --- | --- | --- | --- |
 | `KECCAK_F` | 354,762 | 3,764 | `2^8` | `2^16` is 744 GB of forward pass a shard |
 | `POSEIDON2` | 2,020 | 4,192 | `2^8` | `2^16` is 13.0 GB, and the guests that reach it invoke it in the hundreds |
 | `FR_ARITH` | 142 | 2,680 | `2^8` | ditto, 5.9 GB |
-| `MOD_MUL` | 142 | 3,468 | **`2^16`** | 7.9 GB, and a measured block goes from 1,048 shards to 5 |
+| `MOD_MUL` | 2,244 at `2^16` | 325 | **`2^16`** | re-shaped at S26c; §9.3 |
+| `SHA256_COMP` | 16,688 | 8,216 | `2^8` | `2^16` is 35 GB of forward pass a shard |
+| `EC_ADD` | 8,772 at `2^16` | 1,420 | **`2^16`** | forced: `RANGE16` needs 16 variables and `2^18` is 4x worse |
 
 Two properties make the raise cheap. **A height changes no gate**: it adds one
 halving list per variable, each carrying one node per output, so `MOD_MUL` at
@@ -732,6 +753,46 @@ which costs one frame word and four boolean columns. And the witnessed modulus
 had a price the argument did not count — with `m` an operand the circuit cannot
 state `a < m`, so the quotient's fit was the honest prover's business and not
 the statement's. §14.3 is what that cost, and §14.2 is what removing it bought.
+
+### 10.3 What S26c amended: a delegation family may carry `RANGE16` at `2^16`
+
+§9 read "and why there is no lookup channel" and stated the rule twice, as a
+property of `2^8` and as a rule about delegation families generally. The first
+half stands; **the second is withdrawn**, and `EC_ADD` and `MOD_MUL` carry
+`RANGE16` at `2^16`.
+
+**What the channel is worth.** A 32-bit bound is one committed column and two
+obligations where a bit decomposition is 32 columns with 32 booleanity gates, and
+a frame's 38-bit timestamp gap is two columns where it is 38. `EC_ADD`'s frame is
+97 words, so the gap alone is 3,746 bit columns against 194 chunk columns — and
+the family has 24 more 32-bit values to bound besides. Re-shaping `MOD_MUL` the
+same way at the same time took its committed width from **3,468 to 325**, a
+factor of 10.7, and its proof from 360,884 bytes a shard to 135,220.
+
+**What the amendment does not touch.** A family at `2^8` still carries no
+channel, because no table fits there — `SHA256_COMP` is the worked example, and
+its row is 20,000 inner columns, so `2^16` is not open to it. And **no**
+delegation family may carry `TIMESTAMP` at any height on this menu: `BITS = 19`
+needs `2^20`, which is an execution family's floor. So a frame's timestamp gap is
+never that channel's obligation — it is a bit decomposition at `2^8` and three
+`RANGE16` chunks at `2^16`, the third carrying a scaled obligation that is exact
+at `2^38`.
+
+**What it costs.** Three things, each of which S26c paid.
+
+- **The minimum-height guard stops being a list.** It named the seven execution
+  families and a delegation family's arm sat below it; a family with a channel
+  now has a floor, so the guard reads each family's own `channels()` and derives
+  the floor from the widest range channel's `BITS`. A list would have had to be
+  kept in step with two families whose heights differ from every other's.
+- **A channel-carrying family has exactly one height.** Its circuit does not
+  exist below `2^16`, so a suite cannot build it at four rows for a whole-shard
+  forward pass. `crates/checker/tests/{mod_mul,ec_add}.rs` evaluate one row of
+  the real `2^16` circuit instead, which is both cheaper and a stronger
+  statement.
+- **One multiplicity column per channel per circuit**, last in the witness
+  subtree, filled by `crates/trace` and read by no gate. It has to exist because
+  `a.committed()` names it.
 
 ---
 

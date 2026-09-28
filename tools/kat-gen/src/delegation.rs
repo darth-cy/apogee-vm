@@ -25,7 +25,7 @@
 //! block from 1,048 shards to 5.
 
 use constants::family;
-use constraints::{fr_arith, keccak, mod_mul, poseidon2, CircuitArtifact};
+use constraints::{ec_add, fr_arith, keccak, mod_mul, poseidon2, sha256, CircuitArtifact};
 use test_support::{sha256, to_hex};
 
 use crate::write_vectors;
@@ -80,7 +80,7 @@ fn line(name: &str, spec: &str, artifact: &CircuitArtifact) -> String {
 }
 
 /// Each fixture's relative path and its contents.
-fn fixtures() -> [(&'static str, String); 4] {
+fn fixtures() -> [(&'static str, String); 6] {
     [
         (
             "crates/constraints/tests/vectors/keccak.txt",
@@ -112,6 +112,22 @@ fn fixtures() -> [(&'static str, String); 4] {
                 "MOD_MUL",
                 "18",
                 &mod_mul::artifact(trace_vars(family::MOD_MUL)),
+            ),
+        ),
+        (
+            "crates/constraints/tests/vectors/sha256.txt",
+            line(
+                "SHA256_COMP",
+                "19",
+                &sha256::artifact(trace_vars(family::SHA256_COMP)),
+            ),
+        ),
+        (
+            "crates/constraints/tests/vectors/ec_add.txt",
+            line(
+                "EC_ADD",
+                "20",
+                &ec_add::artifact(trace_vars(family::EC_ADD)),
             ),
         ),
     ]

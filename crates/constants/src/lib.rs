@@ -2336,25 +2336,40 @@ pub mod ec_add {
     ///
     /// **It is one literal for every group, and that is deliberate.** A
     /// group-dependent offset would be `sum_g offset_g * g_sel * m_i * m_j`,
-    /// which is degree 3; one literal keeps it degree 2 and costs group 0 and
-    /// group 1 nothing but a slightly larger honest quotient. What it buys is
-    /// an **unsigned** quotient: without it group 2's slot 0 is
-    /// `xy*ym - byz3*xz`, whose value is as low as `-189 m^2`, and a signed
-    /// quotient cannot take a `live`-gated offset of `256*m` without going
-    /// degree 3 — `m` being a column rather than a literal.
-    pub const OFFSET_MULTIPLE: u64 = 256;
+    /// which is degree 3; one literal keeps it degree 2 and costs the first two
+    /// groups nothing but a slightly larger honest quotient. What it buys is an
+    /// **unsigned** quotient: a signed one cannot take a `live`-gated offset of
+    /// `256*m` without going degree 3, `m` being a column rather than a
+    /// literal.
+    ///
+    /// **1024 and not 256, and the difference is a soundness-adjacent
+    /// completeness bug S26c shipped and caught.** The binding slot is group
+    /// 2's `Y3`, not its `X3`: `yp*ym + bxx9*xz` with `yp` up to `22m`, `ym`
+    /// down to `-21m`, `bxx9` up to `63m` and `xz` down to `-2m` reaches
+    /// **`-673 m^2`** — the operand ceilings' products, `22*22 + 63*3`. At an
+    /// offset of 256 the honest quotient of such a row is *negative* and the row
+    /// is unprovable, and the frames that do it are ordinary: `zz` above about
+    /// `0.76m` is enough on its own, which is roughly a quarter of random
+    /// invocations. Nothing in the executor or the emulator can see it — both
+    /// compute the right answer — so what found it is
+    /// `crates/checker/tests/ec_add.rs`' widest honest row, and what keeps it
+    /// found is `constraints::ec_add`'s `the_offset_covers_every_slot`, which
+    /// derives this floor from the same ceiling table the carry bound uses.
+    pub const OFFSET_MULTIPLE: u64 = 1024;
 
     /// A signed carry's offset, as a bit position: the carry spans
     /// `[-2^45, 2^45)`, so `u = c + 2^45` spans `[0, 2^46)`.
     ///
-    /// **Derived, and the derivation moved it.** The widest position is group
-    /// 2's `Y3`, whose left-hand side is `yp*ym + bxx9*xz` at `22*22 + 63*3`
-    /// multiples of `m^2` plus [`OFFSET_MULTIPLE`] more — 929 of them — so a
-    /// position reaches `2^77` and the carry's fixed point `2^45`. Every other
-    /// slot needs only `2^44`, which is what this constant first said.
-    /// `constraints::ec_add`'s `the_carry_offset_covers_every_slot` recomputes
-    /// it from the operand ceilings rather than trusting this paragraph.
-    pub const CARRY_OFFSET_BITS: u32 = 45;
+    /// **Derived, and the derivation moved it twice.** The widest position is
+    /// group 2's `Y3`, whose left-hand side is `yp*ym + bxx9*xz` at
+    /// `22*22 + 63*3` multiples of `m^2` plus [`OFFSET_MULTIPLE`] more — 1,697
+    /// of them since that constant rose to 1024 — so a position reaches `2^78`
+    /// and the carry's fixed point `2^46`. It read 44 when the offset was
+    /// guessed, 45 when the positions were derived, and 46 once the offset had
+    /// to cover `-673 m^2`. `constraints::ec_add`'s
+    /// `the_carry_offset_covers_every_slot` recomputes it from the operand
+    /// ceilings rather than trusting this paragraph.
+    pub const CARRY_OFFSET_BITS: u32 = 46;
 
     /// A carry's unsigned range, in bits: one more than
     /// [`CARRY_OFFSET_BITS`].

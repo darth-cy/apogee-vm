@@ -1145,26 +1145,18 @@ fn ec_add_row(frames: &FrameSlice, r: usize) -> EcAddRow {
         ea::M6_WORD,
     ];
     let values: [[u64; ea::LIMBS]; 12] = core::array::from_fn(|v| read(firsts[v]));
-    // A value's chain is live exactly on the groups that read it, because the
-    // `< m` gate holds its last borrow to that sum: the six intermediates hold
-    // whatever the guest's scratch held on a group-0 row.
-    let reads = |v: usize| -> bool {
-        if v < 6 {
-            g < 2
-        } else {
-            g == 2
-        }
-    };
+    // **Every value's chain is the honest one, on every row.** The chain's
+    // sixteen `canonical` gates are *ungated* — they hold for any `v` — and only
+    // the conclusion `below_modulus` is gated, to the groups that read the
+    // value. So a non-reading value still owes a real chain, and the zeros this
+    // wrote until the gated conclusion was corrected satisfy the canonical gates
+    // only where `v = m`. `crates/checker/tests/ec_add.rs` is what says so.
     let chains: [([u64; ea::LIMBS], [u64; ea::LIMBS]); 12] = core::array::from_fn(|v| {
-        if reads(v) {
-            let (d, b) = borrow_chain_against(&values[v], &m);
-            (
-                core::array::from_fn(|i| d[i]),
-                core::array::from_fn(|i| b[i]),
-            )
-        } else {
-            ([0u64; ea::LIMBS], [0u64; ea::LIMBS])
-        }
+        let (d, b) = borrow_chain_against(&values[v], &m);
+        (
+            core::array::from_fn(|i| d[i]),
+            core::array::from_fn(|i| b[i]),
+        )
     });
 
     let (xx, yy, zz) = (values[6], values[7], values[8]);

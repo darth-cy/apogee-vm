@@ -399,6 +399,23 @@ struct Reduction {
 }
 
 impl Invocation {
+    /// One invocation, with the selector written into **frame word 0**.
+    ///
+    /// `selector_rule` is `frame[0] - Σ code_i·selector_i = 0`, so the frame
+    /// word and the selector columns are one claim and a witness that sets only
+    /// the columns is refused — which is the gate working. A real guest writes
+    /// the word before each of the three calls, which is what
+    /// `guest_sdk::recursion::ec_add_complete` does.
+    fn new(cycle: u64, base: u32, code: u32, mut frame: Vec<u32>) -> Invocation {
+        frame[f::SELECTOR_WORD] = code;
+        Invocation {
+            cycle,
+            base,
+            code,
+            frame,
+        }
+    }
+
     fn group(&self) -> usize {
         f::reduction_group(self.code).expect("a selectable code")
     }
@@ -612,11 +629,49 @@ fn signed(x: i128) -> Fr {
     }
 }
 
+/// One invocation with everything the witness reads of it solved **once**.
+///
+/// Without this the builder calls [`Invocation::reduction`] per column per row
+/// — some `10^5` long divisions over 530-bit values, which is minutes rather
+/// than the second the evaluation itself takes.
+struct Row {
+    inv: Invocation,
+    write: Vec<u32>,
+    helpers: (Loose, Loose, Loose),
+    reductions: Vec<Reduction>,
+    /// Each frame value's `(differences, borrows)` against the row's modulus.
+    chains: Vec<([u64; L], [u64; L])>,
+    /// Each slot's `out`'s own chain.
+    out_chains: Vec<([u64; L], [u64; L])>,
+}
+
+impl Row {
+    fn of(inv: Invocation) -> Row {
+        let m = inv.m();
+        let reductions: Vec<Reduction> = (0..SLOTS).map(|r| inv.reduction(r)).collect();
+        let chains = (0..VALUE_WORD.len())
+            .map(|v| borrow_chain(&inv.value(v), &m))
+            .collect();
+        let out_chains = reductions
+            .iter()
+            .map(|red| borrow_chain(&red.out, &m))
+            .collect();
+        Row {
+            write: inv.write(),
+            helpers: inv.helpers(),
+            reductions,
+            chains,
+            out_chains,
+            inv,
+        }
+    }
+}
+
 /// The honest witness of `live`, padded to [`ROWS`] with zero rows.
-fn witness(live: &[Invocation]) -> Vec<(PolyAddress, MultilinearPoly)> {
+fn witness(live: &[Row]) -> Vec<(PolyAddress, MultilinearPoly)> {
     assert!(live.len() <= ROWS);
     let mut out: Vec<(PolyAddress, MultilinearPoly)> = Vec::new();
-    let mut push = |address: PolyAddress, of: &dyn Fn(&Invocation) -> Fr| {
+    let mut push = |address: PolyAddress, of: &dyn Fn(&Row) -> Fr| {
         let values = (0..ROWS)
             .map(|r| live.get(r).map_or(Fr::ZERO, of))
             .collect();
@@ -624,20 +679,20 @@ fn witness(live: &[Invocation]) -> Vec<(PolyAddress, MultilinearPoly)> {
     };
     let u = |x: u64| Fr::from_u64(x);
 
-    push(c::CYCLE, &|i| u(i.cycle));
+    push(c::CYCLE, &|i| u(i.inv.cycle));
     push(c::LIVE, &|_| Fr::ONE);
-    push(c::BASE, &|i| u(i.base as u64));
+    push(c::BASE, &|i| u(i.inv.base as u64));
     push(c::ANCHOR_VALUE, &|_| Fr::ZERO);
     for j in 0..f::FRAME_WORDS {
         push(c::word(j, dl::WORD_ADDR), &move |i| {
-            u(i.base as u64 + 4 * j as u64)
+            u(i.inv.base as u64 + 4 * j as u64)
         });
         push(c::word(j, dl::WORD_READ_TS), &|_| Fr::ZERO);
         push(c::word(j, dl::WORD_READ_VALUE), &move |i| {
-            u(i.frame[j] as u64)
+            u(i.inv.frame[j] as u64)
         });
         push(c::word(j, dl::WORD_WRITE_VALUE), &move |i| {
-            u(i.write()[j] as u64)
+            u(i.write[j] as u64)
         });
     }
     // The gap, as two RANGE16 chunks a word: chunk `c` holds bits
@@ -646,89 +701,83 @@ fn witness(live: &[Invocation]) -> Vec<(PolyAddress, MultilinearPoly)> {
     for j in 0..f::FRAME_WORDS {
         for ch in 0..dl::GAP_CHUNKS {
             push(c::gap_chunk(j, ch), &move |i| {
-                u((i.gap() >> (16 * (ch as u32 + 1))) & 0xffff)
+                u((i.inv.gap() >> (16 * (ch as u32 + 1))) & 0xffff)
             });
         }
     }
-    let low = |i: &Invocation| ((i.base - guest_memory::RAM_ORIGIN) / 4) as u64;
-    let room = |i: &Invocation| (1u64 << 31) - f::FRAME_BYTES as u64 - i.base as u64;
+    let low = |i: &Row| ((i.inv.base - guest_memory::RAM_ORIGIN) / 4) as u64;
+    let room = |i: &Row| (1u64 << 31) - f::FRAME_BYTES as u64 - i.inv.base as u64;
     for (address, pick, shift) in [
-        (c::base_low(), &low as &dyn Fn(&Invocation) -> u64, 0),
-        (c::base_low_hi(), &low as &dyn Fn(&Invocation) -> u64, 16),
-        (c::base_room(), &room as &dyn Fn(&Invocation) -> u64, 0),
-        (c::base_room_hi(), &room as &dyn Fn(&Invocation) -> u64, 16),
+        (c::base_low(), &low as &dyn Fn(&Row) -> u64, 0),
+        (c::base_low_hi(), &low as &dyn Fn(&Row) -> u64, 16),
+        (c::base_room(), &room as &dyn Fn(&Row) -> u64, 0),
+        (c::base_room_hi(), &room as &dyn Fn(&Row) -> u64, 16),
     ] {
         push(address, &move |i| u(pick(i) >> shift));
     }
     // Every frame word's read value carries a 32-bit bound as its high
     // halfword — including word 0, the selector, whose is 0.
     for j in 0..f::FRAME_WORDS {
-        push(c::word_high(j), &move |i| u((i.frame[j] >> 16) as u64));
+        push(c::word_high(j), &move |i| u((i.inv.frame[j] >> 16) as u64));
     }
     for (s, code) in f::CODES.into_iter().enumerate() {
-        push(c::selector(s), &move |i| match i.code == code {
+        push(c::selector(s), &move |i| match i.inv.code == code {
             true => Fr::ONE,
             false => Fr::ZERO,
         });
     }
     for k in 0..L {
-        push(c::m_limb(k), &move |i| u(i.m()[k]));
+        push(c::m_limb(k), &move |i| u(i.inv.m()[k]));
     }
-    push(c::b3(), &|i| u(i.b3() as u64));
+    push(c::b3(), &|i| u(i.inv.b3() as u64));
     for k in 0..L {
-        push(c::bzz3_limb(k), &move |i| signed(i.helpers().0[k]));
-    }
-    for k in 0..L {
-        push(c::byz3_limb(k), &move |i| signed(i.helpers().1[k]));
+        push(c::bzz3_limb(k), &move |i| signed(i.helpers.0[k]));
     }
     for k in 0..L {
-        push(c::bxx9_limb(k), &move |i| signed(i.helpers().2[k]));
+        push(c::byz3_limb(k), &move |i| signed(i.helpers.1[k]));
+    }
+    for k in 0..L {
+        push(c::bxx9_limb(k), &move |i| signed(i.helpers.2[k]));
     }
     // Every frame value's `< m` chain. Computed for all twelve on every row:
     // the identity `v_i − m_i − b_{i−1} + 2^32 b_i = d_i` holds for any `v`,
     // and what the group gates is only the conclusion `b_7 = 1`.
     for v in 0..VALUE_WORD.len() {
         for i in 0..L {
-            push(c::diff(v, i), &move |inv| {
-                u(borrow_chain(&inv.value(v), &inv.m()).0[i])
-            });
+            push(c::diff(v, i), &move |row| u(row.chains[v].0[i]));
         }
         for i in 0..L {
-            push(c::diff_hi(v, i), &move |inv| {
-                u(borrow_chain(&inv.value(v), &inv.m()).0[i] >> 16)
-            });
+            push(c::diff_hi(v, i), &move |row| u(row.chains[v].0[i] >> 16));
         }
         for i in 0..L {
-            push(c::borrow(v, i), &move |inv| {
-                u(borrow_chain(&inv.value(v), &inv.m()).1[i])
-            });
+            push(c::borrow(v, i), &move |row| u(row.chains[v].1[i]));
         }
     }
     for r in 0..SLOTS {
         for which in 0..4 {
             for k in 0..L {
                 push(c::operand(r, which, k), &move |i| {
-                    signed(i.reduction(r).ops[which][k])
+                    signed(i.reductions[r].ops[which][k])
                 });
             }
         }
         for k in 0..L {
-            push(c::out_limb(r, k), &move |i| u(i.reduction(r).out[k]));
+            push(c::out_limb(r, k), &move |i| u(i.reductions[r].out[k]));
         }
         for k in 0..L {
-            push(c::out_hi(r, k), &move |i| u(i.reduction(r).out[k] >> 16));
+            push(c::out_hi(r, k), &move |i| u(i.reductions[r].out[k] >> 16));
         }
         for k in 0..f::QUOTIENT_LIMBS {
-            push(c::q_limb(r, k), &move |i| u(i.reduction(r).q[k] as u64));
+            push(c::q_limb(r, k), &move |i| u(i.reductions[r].q[k] as u64));
         }
         for k in 0..f::QUOTIENT_LIMBS {
             push(c::q_hi(r, k), &move |i| {
-                u((i.reduction(r).q[k] >> 16) as u64)
+                u((i.reductions[r].q[k] >> 16) as u64)
             });
         }
         // Each carry as the unsigned `carry + 2^45`, then its two chunks.
-        let offset = move |i: &Invocation, k: usize| -> u64 {
-            (i.reduction(r).carries[k] + (1i128 << f::CARRY_OFFSET_BITS)) as u64
+        let offset = move |i: &Row, k: usize| -> u64 {
+            (i.reductions[r].carries[k] + (1i128 << f::CARRY_OFFSET_BITS)) as u64
         };
         for k in 0..f::CARRIES {
             push(c::carry(r, k), &move |i| u(offset(i, k)));
@@ -742,17 +791,17 @@ fn witness(live: &[Invocation]) -> Vec<(PolyAddress, MultilinearPoly)> {
         }
         for i_limb in 0..L {
             push(c::out_diff(r, i_limb), &move |i| {
-                u(borrow_chain(&i.reduction(r).out, &i.m()).0[i_limb])
+                u(i.out_chains[r].0[i_limb])
             });
         }
         for i_limb in 0..L {
             push(c::out_diff_hi(r, i_limb), &move |i| {
-                u(borrow_chain(&i.reduction(r).out, &i.m()).0[i_limb] >> 16)
+                u(i.out_chains[r].0[i_limb] >> 16)
             });
         }
         for i_limb in 0..L {
             push(c::out_borrow(r, i_limb), &move |i| {
-                u(borrow_chain(&i.reduction(r).out, &i.m()).1[i_limb])
+                u(i.out_chains[r].1[i_limb])
             });
         }
     }
@@ -904,7 +953,7 @@ fn frame_of(p: [V; 3], q: [V; 3]) -> Vec<u32> {
 /// [`expected`], so the three rows of a curve are one real addition and not
 /// three unrelated frames — which is what makes the write-back and the
 /// group-gated `< m` chains mean anything.
-fn honest() -> Vec<Invocation> {
+fn honest() -> Vec<Row> {
     let mut rng = test_support::Rng::new(0x5236_0526);
     let mut live: Vec<Invocation> = Vec::new();
     let mut cycle = 7u64;
@@ -926,23 +975,13 @@ fn honest() -> Vec<Invocation> {
         // the next row reads — which is exactly what the three invocations of
         // one addition do through memory.
         for g in 0..2 {
-            let invocation = Invocation {
-                cycle,
-                base: base_of(slot),
-                code: codes[g],
-                frame: frame.clone(),
-            };
+            let invocation = Invocation::new(cycle, base_of(slot), codes[g], frame.clone());
             frame = invocation.write();
             live.push(invocation);
             cycle += 2;
             slot += 1;
         }
-        live.push(Invocation {
-            cycle,
-            base: base_of(slot),
-            code: codes[2],
-            frame,
-        });
+        live.push(Invocation::new(cycle, base_of(slot), codes[2], frame));
         cycle += 2;
         slot += 1;
     }
@@ -965,13 +1004,8 @@ fn honest() -> Vec<Invocation> {
             frame[VALUE_WORD[v] + k] = top[k] as u32;
         }
     }
-    live.push(Invocation {
-        cycle,
-        base: base_of(slot),
-        code,
-        frame,
-    });
-    live
+    live.push(Invocation::new(cycle, base_of(slot), code, frame));
+    live.into_iter().map(Row::of).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -1021,14 +1055,14 @@ fn an_honest_witness_satisfies_every_gate() {
 /// identity, against the group law over plain modular arithmetic.
 #[test]
 fn the_reductions_are_the_group_law() {
-    for invocation in honest() {
-        let want = expected(&invocation);
+    for row in honest() {
+        let want = expected(&row.inv);
         for r in 0..SLOTS {
             assert_eq!(
-                invocation.reduction(r).out,
+                row.reductions[r].out,
                 want[r],
                 "group {} slot {r} is not the group law",
-                invocation.group()
+                row.inv.group()
             );
         }
     }
@@ -1039,20 +1073,19 @@ fn the_reductions_are_the_group_law() {
 /// invocation of the same addition still needs.
 #[test]
 fn the_written_frame_is_the_reduction_and_nothing_else() {
-    for invocation in honest() {
-        let write = invocation.write();
+    for row in honest() {
         let written: Vec<usize> = (0..SLOTS)
-            .map(|r| slots(invocation.group())[r].out_word)
+            .map(|r| slots(row.inv.group())[r].out_word)
             .collect();
         for j in 0..f::FRAME_WORDS {
             let owner = written.iter().position(|w| (*w..*w + L).contains(&j));
             match owner {
                 Some(r) => assert_eq!(
-                    write[j] as u64,
-                    invocation.reduction(r).out[j - written[r]],
+                    row.write[j] as u64,
+                    row.reductions[r].out[j - written[r]],
                     "word {j} is slot {r}'s result"
                 ),
-                None => assert_eq!(write[j], invocation.frame[j], "word {j} moved"),
+                None => assert_eq!(row.write[j], row.inv.frame[j], "word {j} moved"),
             }
         }
     }
@@ -1068,7 +1101,7 @@ fn the_written_frame_is_the_reduction_and_nothing_else() {
 fn the_three_invocations_are_one_addition() {
     let live = honest();
     for curve in 0..2 {
-        let first = &live[3 * curve];
+        let first = &live[3 * curve].inv;
         let last = &live[3 * curve + 2];
         let m = &first.m();
         let b3 = first.b3();
@@ -1104,7 +1137,7 @@ fn the_three_invocations_are_one_addition() {
             ),
         ];
         for r in 0..SLOTS {
-            assert_eq!(last.reduction(r).out, want[r], "curve {curve}, slot {r}");
+            assert_eq!(last.reductions[r].out, want[r], "curve {curve}, slot {r}");
         }
     }
 }
@@ -1116,10 +1149,14 @@ fn the_three_invocations_are_one_addition() {
 #[test]
 fn a_wrong_result_limb_is_refused() {
     let a = c::artifact(VARS);
-    // The low limb of group 0's first reduction. Its own equation is
-    // `slot0_limb0`, which is where the identity's position 0 closes.
+    // The low limb of group 0's first reduction. **Two** gates see it and both
+    // must: `out0_canonical0`, the first limb of the result's own `< m` borrow
+    // chain, and `slot0_limb0`, where the identity's position 0 closes. The
+    // chain comes first in relation order, so that is the name; that the
+    // identity also catches it is what `a_wrong_quotient_limb_is_refused` shows,
+    // the quotient being a value only the identity reads.
     let broken = corrupt(witness(&honest()), c::out_limb(0, 0), 0, Fr::from_u64(1));
-    assert_eq!(refusal(&a, broken), "slot0_limb0");
+    assert_eq!(refusal(&a, broken), "out0_canonical0");
 }
 
 #[test]
@@ -1234,7 +1271,7 @@ fn two_selectors_at_once_are_refused() {
     // Booleanity permits any subset, so what makes the six a partition is that
     // they sum to `live`. Setting a second one keeps every bit boolean.
     let other = (0..f::CODES.len())
-        .find(|s| f::CODES[*s] != honest()[0].code)
+        .find(|s| f::CODES[*s] != honest()[0].inv.code)
         .expect("six codes");
     let broken = corrupt(witness(&honest()), c::selector(other), 0, Fr::ONE);
     let name = refusal(&a, broken);
@@ -1363,16 +1400,32 @@ fn a_height_moves_only_the_halving_layers() {
     // A delegation family's height adds one halving list per variable and
     // changes no gate (`docs/spec/delegation.md` §9.2), which is what made
     // `MOD_MUL`'s raise a re-pin and not a redesign.
-    let low = c::artifact(VARS);
-    let high = c::artifact(VARS + 2);
-    assert_eq!(high.layers.len(), low.layers.len() + 2);
-    assert_eq!(high.relations.len(), low.relations.len());
-    assert_eq!(high.memory.len(), low.memory.len());
-    assert_eq!(high.witness.len(), low.witness.len());
-    for (a, b) in low.layers.iter().zip(high.layers.iter()) {
-        if a.halving || b.halving {
-            break;
-        }
-        assert_eq!(a.producing.len(), b.producing.len());
-    }
+    let lo = c::artifact(VARS);
+    let hi = c::artifact(VARS + 2);
+    let d = (hi.trace_vars - lo.trace_vars) as usize;
+
+    let committed = |a: &CircuitArtifact| (a.memory.len(), a.witness.len(), a.setup.len());
+    assert_eq!(committed(&lo), committed(&hi), "committed width");
+    // **Enforcing** gates and not every relation: a halving list *produces* one
+    // node per output, so the total relation count grows with the height by
+    // exactly `outputs * d` and only the enforcing half is height-invariant.
+    let enforcing = |a: &CircuitArtifact| a.relations.iter().filter(|r| r.output.is_none()).count();
+    assert_eq!(enforcing(&lo), enforcing(&hi), "enforcing gates");
+    assert_eq!(lo.lookups.len(), hi.lookups.len(), "lookups");
+    assert_eq!(lo.outputs.len(), hi.outputs.len(), "outputs");
+
+    let halving = |a: &CircuitArtifact| a.layers.iter().filter(|l| l.halving).count();
+    assert_eq!(
+        halving(&hi) - halving(&lo),
+        d,
+        "one halving list per variable"
+    );
+    assert_eq!(hi.layers.len() - lo.layers.len(), d, "and no other list");
+
+    let inner = |a: &CircuitArtifact| a.layers.iter().map(|l| l.width as usize).sum::<usize>();
+    assert_eq!(
+        inner(&hi) - inner(&lo),
+        hi.outputs.len() * d,
+        "each halving list carries one node per output"
+    );
 }

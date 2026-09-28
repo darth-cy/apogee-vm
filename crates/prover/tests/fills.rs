@@ -50,6 +50,13 @@ fn addresses(out: &[(PolyAddress, poly::MultilinearPoly)]) -> (Vec<u32>, Vec<u32
 
 /// `family`'s fill over `archive`, held to `m` memory and `w` witness columns:
 /// every address in `0..m` and `0..w` exactly once, and nothing else.
+///
+/// **`w` excludes the channel multiplicities**, which are the last columns of
+/// the witness subtree and are **not the fill's**: `prover`'s shard-column
+/// assembly appends them with `trace::build_multiplicities`, after the fill and
+/// over the tuples the fill wrote. A caller passes
+/// `WITNESS_COLUMNS - channels().len()` for a family that carries a channel,
+/// which since S26c is `MOD_MUL` and `EC_ADD`.
 fn covers(program: &Program, archive: &trace::TraceArchive, family: u32, m: usize, w: usize) {
     let name = program::family_name(family);
     let height = program
@@ -114,19 +121,29 @@ fn the_recursion_fills_cover_their_circuits_exactly() {
 /// recorded — the quotient — so "covers its circuit exactly" is also the check
 /// that `mod_mul_witness` wrote every carry it was supposed to.
 #[test]
-fn the_mod_mul_fill_covers_its_circuit_exactly() {
+fn the_mod_mul_and_ec_add_fills_cover_their_circuits_exactly() {
     let program = common::mod_mul_program();
     let archive = common::mod_mul_archive(&program);
+    // Less the one multiplicity column each: `trace::build_multiplicities`
+    // appends those after the fill, over the tuples the fill wrote.
     covers(
         &program,
         &archive,
         family::MOD_MUL,
         mm_circuit::MEMORY_COLUMNS,
-        mm_circuit::WITNESS_COLUMNS,
+        mm_circuit::WITNESS_COLUMNS - constraints::mod_mul::channels().len(),
+    );
+    covers(
+        &program,
+        &archive,
+        family::EC_ADD,
+        constraints::ec_add::MEMORY_COLUMNS,
+        constraints::ec_add::WITNESS_COLUMNS - constraints::ec_add::channels().len(),
     );
 }
 
-/// **Every gate of every `MOD_MUL` shard holds on the fill's own columns.**
+/// **Every gate holds on the fill's own columns**, for each of the three
+/// delegation families whose fill S26 and S26c wrote.
 ///
 /// `covers` above is set equality over addresses, and a permutation is
 /// invisible to it: swap two values in the fill's list and every column is
@@ -135,23 +152,59 @@ fn the_mod_mul_fill_covers_its_circuit_exactly() {
 /// `LayerInconsistency { layer }` from a deferred proof, naming nothing.
 ///
 /// This is the fast test that catches it, and the mutations it is here for are
-/// specific: the `A`/`B`/`OUT` value indices renumbered against
-/// `constraints::mod_mul::VALUES`, a `< m` chain computed against the wrong
-/// modulus — `fill::borrow_chain` subtracts `constants::FR_MODULUS` and would
-/// be right for one of the four selectors — a selector column set from the
-/// wrong code, and a padding row's chain computed against the shard's modulus
-/// rather than against its own zero one. None of those is visible to
-/// `covers`, to `checker`'s hand-built witness, or to anything else in
-/// ordinary CI.
+/// specific: a value index renumbered against the circuit's own `VALUES`, a
+/// `< m` chain computed against the wrong modulus — `fill::borrow_chain`
+/// subtracts `constants::FR_MODULUS` and would be right for one of the four
+/// selectors — a selector column set from the wrong code, and a padding row's
+/// chain computed against the shard's modulus rather than against its own zero
+/// one. None of those is visible to `covers`, to `checker`'s hand-built
+/// witness, or to anything else in ordinary CI.
 ///
-/// It runs **every** shard rather than the first, because the last is where
-/// the padding rows are and their chains are the case above.
+/// **`EC_ADD` is here because its fill was wrong and this is what says so.**
+/// S26c wrote it against a `below_modulus` gate that read `b_7 = enable`, so a
+/// non-reading value's chain was filled with zeros; the gate is
+/// `enable·(1 - b_7) = 0` and the chain's sixteen `canonical` gates are
+/// ungated, so the zeros satisfy them only where `v = m`. Nothing in the
+/// executor, the guests or the shape tests could see it.
 #[test]
-fn every_mod_mul_shard_the_fill_writes_satisfies_every_gate() {
+fn every_delegation_fill_satisfies_every_gate() {
     let program = common::mod_mul_program();
     let archive = common::mod_mul_archive(&program);
-    let circuit = constraints::family_circuit(family::MOD_MUL, common::MOD_MUL_FIXTURE_VARS)
-        .expect("MOD_MUL is registered at the fixture height");
+    // The first 32 rows cover every selector the fixture uses — `mod-mul-ops`
+    // calls the ABI three times per code before it reaches a library seam — and
+    // the last 4 are padding, which at `2^16` every shard has.
+    for family in [family::MOD_MUL, family::EC_ADD] {
+        sampled_rows_hold(
+            &program,
+            &archive,
+            family,
+            common::DELEGATION_CHANNEL_VARS,
+            32,
+            4,
+        );
+    }
+}
+
+/// `SHA256_COMP`'s fill, over the whole shard and every gate.
+///
+/// A **forward pass** here, where `MOD_MUL` and `EC_ADD` get sampled rows: this
+/// family carries no channel, so it is at `2^8`, where a pass is 166 MB. That is
+/// the stronger statement — every row, and the memory roots the halving phase
+/// closes — and it is affordable, so it is what this one does.
+#[test]
+fn the_sha256_fill_covers_its_circuit_and_satisfies_every_gate() {
+    let program = common::sha256_program();
+    let archive = common::sha256_archive(&program);
+    covers(
+        &program,
+        &archive,
+        family::SHA256_COMP,
+        constraints::sha256::MEMORY_COLUMNS,
+        constraints::sha256::WITNESS_COLUMNS,
+    );
+
+    let circuit = constraints::family_circuit(family::SHA256_COMP, common::DELEGATION_VARS)
+        .expect("SHA256_COMP is registered at 2^8");
     let mut challenges = gkr::ExternalChallenges::new();
     for (slot, value) in [
         (constants::challenge_slot::MEM_GAMMA, 3u64),
@@ -161,20 +214,16 @@ fn every_mod_mul_shard_the_fill_writes_satisfies_every_gate() {
     ] {
         challenges.insert(slot, field::Fr::from_u64(value));
     }
-    let height = 1u32 << common::MOD_MUL_FIXTURE_VARS;
-    let fill = family_fill(family::MOD_MUL).expect("MOD_MUL has a fill");
+    let height = 1u32 << common::DELEGATION_VARS;
+    let fill = family_fill(family::SHA256_COMP).expect("SHA256_COMP has a fill");
     let invocations = archive
         .family_traces()
-        .delegation(family::MOD_MUL)
-        .expect("MOD_MUL has a buffer")
+        .delegation(family::SHA256_COMP)
+        .expect("SHA256_COMP has a buffer")
         .len();
-    let shards = invocations.div_ceil(height as usize);
-    assert!(
-        shards >= 2,
-        "{shards} shards: the fixture is not multi-shard"
-    );
-    for shard in 0..shards as u32 {
-        let src = ShardSource::archived(&program, &archive, family::MOD_MUL, shard, height, 0)
+    assert_eq!(invocations, 33, "the guest's pinned compression count");
+    for shard in 0..invocations.div_ceil(height as usize) as u32 {
+        let src = ShardSource::archived(&program, &archive, family::SHA256_COMP, shard, height, 0)
             .expect("the shard's rows");
         let columns = fill(&src).expect("the shard fills");
         let values = gkr::forward(
@@ -187,6 +236,132 @@ fn every_mod_mul_shard_the_fill_writes_satisfies_every_gate() {
             Ok(()),
             "shard {shard}"
         );
+    }
+}
+
+/// Evaluate a sample of a filled shard's rows against the gates, row-locally.
+///
+/// **Why a sample and not a forward pass.** `MOD_MUL` and `EC_ADD` carry the
+/// `RANGE16` channel, so their circuits exist only at `2^16`
+/// (`docs/spec/delegation.md` §10.3) and `gkr::forward` over one is 4.7 GB and
+/// 10.5 GB respectively — deferred-suite figures, in a suite whose whole point
+/// is to be fast. A relation is **row-local**, so evaluating rows is the same
+/// statement per row at a few megabytes.
+///
+/// The rows chosen are the first `head` and the last `tail`, which is where the
+/// mutations this test exists for live: a renumbered value index, a chain
+/// against the wrong modulus and a selector from the wrong code all show on the
+/// first live rows, and a padding row's chain computed against the shard's
+/// modulus rather than its own zero one shows only at the end.
+fn sampled_rows_hold(
+    program: &Program,
+    archive: &trace::TraceArchive,
+    family: u32,
+    vars: u32,
+    head: usize,
+    tail: usize,
+) {
+    let name = program::family_name(family);
+    let circuit = constraints::family_circuit(family, vars)
+        .unwrap_or_else(|| panic!("{name} is registered at {vars} variables"));
+    let a = &circuit.artifact;
+    let mut challenges = gkr::ExternalChallenges::new();
+    for (slot, value) in [
+        (constants::challenge_slot::MEM_GAMMA, 3u64),
+        (constants::challenge_slot::MEM_ALPHA_ADDR, 5),
+        (constants::challenge_slot::MEM_ALPHA_TS, 7),
+        (constants::challenge_slot::MEM_ALPHA_VAL, 11),
+    ] {
+        challenges.insert(slot, field::Fr::from_u64(value));
+    }
+    gkr::insert_lookup_challenges(
+        &mut challenges,
+        field::Fr::from_u64(13),
+        field::Fr::from_u64(17),
+        a,
+    );
+
+    let height = 1u32 << vars;
+    let fill = family_fill(family).unwrap_or_else(|| panic!("{name} has a fill"));
+    let invocations = archive
+        .family_traces()
+        .delegation(family)
+        .unwrap_or_else(|| panic!("{name} has a buffer"))
+        .len();
+    assert!(invocations > 0, "{name}: the fixture invokes it not at all");
+    let shards = invocations.div_ceil(height as usize);
+    for shard in 0..shards as u32 {
+        let src = ShardSource::archived(program, archive, family, shard, height, 0)
+            .expect("the shard's rows");
+        let columns = fill(&src).expect("the shard fills");
+        // The multiplicities are not the fill's (see `covers`), and no gate
+        // reads them, so zero is what a row-local evaluation needs.
+        let mut columns = columns;
+        for address in a.committed() {
+            if !columns.iter().any(|(at, _)| *at == address) {
+                columns.push((
+                    address,
+                    poly::MultilinearPoly::new(poly::PolyBacking::Fr(vec![
+                        field::Fr::ZERO;
+                        height as usize
+                    ])),
+                ));
+            }
+        }
+        let rows = (0..head.min(height as usize))
+            .chain((height as usize).saturating_sub(tail)..height as usize);
+        for row in rows {
+            let committed: Vec<field::Fr> = a
+                .committed()
+                .into_iter()
+                .map(|address| {
+                    columns
+                        .iter()
+                        .find(|(at, _)| *at == address)
+                        .unwrap_or_else(|| panic!("{name}: no column for {address}"))
+                        .1
+                        .get(row)
+                })
+                .collect();
+            let virtuals: Vec<field::Fr> = a
+                .virtuals
+                .iter()
+                .map(|(k, _)| gkr::virtual_at_row(*k, row))
+                .collect();
+            let mut scratch = vec![field::Fr::ZERO; a.scratch.len()];
+            let mut lower = committed.clone();
+            for k in 0..a.depth() {
+                if a.layers[k].halving {
+                    break;
+                }
+                let v: &[field::Fr] = if k == 0 { &virtuals } else { &[] };
+                let values = gkr::gate_values(a, k, &lower, &[], v, &challenges);
+                let produced = values[..a.layers[k].producing.len()].to_vec();
+                for (j, value) in produced.iter().enumerate() {
+                    let address = PolyAddress::Inner {
+                        layer: k as u32 + 1,
+                        offset: j as u32,
+                    };
+                    let slot = a
+                        .scratch
+                        .iter()
+                        .position(|sc| sc.address == address)
+                        .expect("every inner column has a scratch slot");
+                    scratch[slot] = *value;
+                }
+                lower = produced;
+            }
+            let w = checker::WitnessRow {
+                committed,
+                row,
+                scratch,
+            };
+            let violated = checker::violated_relations(a, &w, &challenges);
+            assert!(
+                violated.is_empty(),
+                "{name} shard {shard} row {row} breaks {violated:?}"
+            );
+        }
     }
 }
 
