@@ -416,6 +416,12 @@ is worth.
 
 ## 7. `EC_ADD`'s peak, which is the stage's one unresolved cost
 
+**It is still unresolved, and it is computed rather than measured.** The owner's
+decision at the close of the stage was to open the PR without running the
+deferred batch, so the number below is the accounting model's and nothing in this
+repository has weighed a real `EC_ADD` shard. §7.1 lists what that leaves
+unmeasured. Read every figure in this section as a prediction.
+
 One `2^16` shard is a **computed 20.5 GB**: 18.3 GB of forward pass over 8,772
 inner columns, 0.7 GB of committed base, 1.5 GB of transition 0's first bind.
 Against ~11 GB for an execution shard and 5.1 GB for `MOD_MUL` at the same
@@ -426,11 +432,34 @@ variables, Mercury needs an even count, and `2^18` is four times worse. The only
 lever is the group count — five groups of two reductions would be about
 two-thirds the width at two more invocations an addition — and the owner's
 decision was to keep `k = 3` and measure it rather than redesign on an estimate.
-The model is calibrated: it predicts `MOD_MUL`'s 5.09 GB against a measured 4.86
-GiB.
+**The measurement has not happened**; what stands behind the number is that the
+model is calibrated on the one family that has been weighed, predicting
+`MOD_MUL`'s 5.09 GB against a measured 4.86 GiB.
 
 An earlier draft of `constraints::ec_add`'s module comment said 10.5 GiB, which
-was wrong by a factor of two and is corrected in place.
+was wrong by a factor of two and is corrected in place. That the same model was
+written down wrong once is the reason to treat 20.5 GB as a figure owing
+confirmation and not as a result.
+
+### 7.1 The deferred batch was not run, and what that leaves open
+
+The owner chose to open the PR without it. Everything above the line in the root
+`CLAUDE.md` is green — `cargo fmt` on all four manifests, `cargo clippy`, the
+`riscv32imac` build and `cargo test --workspace` — and the fourteen `# DEFERRED`
+suites were not invoked. Four things are therefore unverified rather than green,
+and a later stage should not read silence here as confirmation:
+
+| suite | what it would have settled |
+| --- | --- |
+| `prover::revm` | **§7's peak.** The only place a real `EC_ADD` shard is proved, and the one measurement this stage's headline cost claim rests on. Also whether thirteen shards plus an `EC_ADD` one still fits a 48 GB machine at `RAYON_NUM_THREADS=6` |
+| `checker::tamper` | the assertion this stage **changed** — `mm_shards >= 2` became `== 1` with `pad_shard = 0`, because at `2^16` `mod-mul-ops`' invocations are one shard. The reasoning is in §9 item 3 and it has not been executed |
+| `host::prove` | the mini-block gate: the real block proved and verified end to end with both new circuits in the config |
+| `prover::{block,keccak,recursion,streaming,alu,mem,control,public_io}`, `checker::logup`, `verifier::cli`, `prover::acceptance`, `prover::metrics` | that S26c's two families and the `MOD_MUL` re-shape moved no statement that does not contain them. Each is a re-confirmation, and the two new families are absent from most of them |
+
+The first two are the ones that matter. `checker::tamper`'s is the sharper risk
+of the two, being a **changed assertion in a suite CI cannot see**: if the
+re-derivation is wrong the test fails the next time anyone runs it, and this stage
+is where the reasoning would have been checked.
 
 ---
 
@@ -473,7 +502,10 @@ refuse.
 5. **`guests/revm-block` gained and then lost a `precompile` module.** Its
    mirrored BN254 parser is deleted in favour of upstream's own, reachable from
    inside the vendored crate.
-6. **`EC_ADD`'s peak is 20.5 GB a shard and is not measured yet**, §7.
+6. **`EC_ADD`'s peak is a computed 20.5 GB a shard and stays unmeasured**, §7.
+   The owner chose to open the PR without the deferred batch; §7.1 lists what that
+   leaves open, of which `checker::tamper`'s changed assertion is the one a later
+   stage is most likely to trip over.
 7. **The `k256` limb conversion costs 4.9% of the block** and is a named
    follow-up, §6.
 

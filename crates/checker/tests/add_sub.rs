@@ -31,7 +31,7 @@ const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../constraints/tests/vectors/add_sub.bin"
 );
-const FIXTURE_SHA256: &str = "74d2f686778331d6fe713a16a183dc036b828a3f5bb19c26a31473da23b30957";
+const FIXTURE_SHA256: &str = "af06f205f4ee83372c0bb134c2f134f6866d8e7ea7ac304574f4d89e1bd820e6";
 
 fn artifact() -> CircuitArtifact {
     add_sub::artifact(VARS)
