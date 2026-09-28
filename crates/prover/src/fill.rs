@@ -551,7 +551,22 @@ struct ModMulRow {
 /// nobody can verify.
 fn mod_mul(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     let inv = invocations(src, family::MOD_MUL)?;
-    let mut out = delegation_frame(&inv, mm::FRAME_WORDS, mm::FRAME_BYTES as u64, 0);
+    // Since S26c this family range-checks through `RANGE16`, so its frame is
+    // `delegation_frame_range16`'s and not `delegation_frame`'s: two gap chunks
+    // a word rather than 38 bits, and one value plus one halfword for each of
+    // the base's two decompositions.
+    let mut out = delegation_frame_range16(
+        &inv,
+        mm::FRAME_WORDS,
+        mm::FRAME_BYTES as u64,
+        mm_circuit::gap_chunk,
+        [
+            mm_circuit::base_low(),
+            mm_circuit::base_low_hi(),
+            mm_circuit::base_room(),
+            mm_circuit::base_room_hi(),
+        ],
+    );
     let (frames, h) = (inv.frames, inv.height);
     let rows = 0..frames.len();
 
@@ -616,25 +631,25 @@ fn mod_mul(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
         out.push((mm_circuit::m_limb(k), u32_column(values, h)));
     }
 
-    // Each value's 256 word bits, then its 264 chain columns.
+    // Each value's eight limb halfwords, then its 24 chain columns.
     for v in [mm_circuit::A, mm_circuit::B, mm_circuit::OUT] {
         for k in 0..mm::LIMBS {
-            for t in 0..32 {
-                let values: Vec<u32> = witness
-                    .iter()
-                    .map(|w| ((w.values[v][k] >> t) & 1) as u32)
-                    .collect();
-                out.push((mm_circuit::value_bit(v, k, t), u32_column(values, h)));
-            }
+            let values: Vec<u32> = witness
+                .iter()
+                .map(|w| (w.values[v][k] >> 16) as u32)
+                .collect();
+            out.push((mm_circuit::value_hi(v, k), u32_column(values, h)));
         }
         for i in 0..mm::LIMBS {
-            for t in 0..32 {
-                let values: Vec<u32> = witness
-                    .iter()
-                    .map(|w| ((w.chains[v].0[i] >> t) & 1) as u32)
-                    .collect();
-                out.push((mm_circuit::diff_bit(v, i, t), u32_column(values, h)));
-            }
+            let values: Vec<u32> = witness.iter().map(|w| w.chains[v].0[i] as u32).collect();
+            out.push((mm_circuit::diff(v, i), u32_column(values, h)));
+        }
+        for i in 0..mm::LIMBS {
+            let values: Vec<u32> = witness
+                .iter()
+                .map(|w| (w.chains[v].0[i] >> 16) as u32)
+                .collect();
+            out.push((mm_circuit::diff_hi(v, i), u32_column(values, h)));
         }
         for i in 0..mm::LIMBS {
             let values: Vec<u32> = witness.iter().map(|w| w.chains[v].1[i] as u32).collect();
@@ -642,30 +657,112 @@ fn mod_mul(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
         }
     }
 
-    // The quotient, its bits, and every position's signed carry.
+    // The quotient, its halfwords, and every position's signed carry as the
+    // unsigned `carry + 2^36` with its two chunks.
     for k in 0..mm::LIMBS {
         let values: Vec<u32> = witness.iter().map(|w| w.q[k] as u32).collect();
         out.push((mm_circuit::q_limb(k), u32_column(values, h)));
     }
     for k in 0..mm::LIMBS {
-        for t in 0..32 {
-            let values: Vec<u32> = witness.iter().map(|w| ((w.q[k] >> t) & 1) as u32).collect();
-            out.push((mm_circuit::q_bit(k, t), u32_column(values, h)));
-        }
+        let values: Vec<u32> = witness.iter().map(|w| (w.q[k] >> 16) as u32).collect();
+        out.push((mm_circuit::q_hi(k), u32_column(values, h)));
     }
     for k in 0..mm::CARRIES {
-        for t in 0..mm::CARRY_BITS {
-            let values: Vec<u32> = witness
+        let offsets: Vec<i128> = witness
+            .iter()
+            .map(|w| w.carries[k] + mm::CARRY_OFFSET as i128)
+            .collect();
+        out.push((
+            mm_circuit::carry(k),
+            fr_column(offsets.iter().map(|v| signed(*v)).collect(), h),
+        ));
+        for j in 0..2 {
+            let values: Vec<u32> = offsets
                 .iter()
-                .map(|w| {
-                    let offset = w.carries[k] + mm::CARRY_OFFSET as i128;
-                    ((offset >> t) & 1) as u32
-                })
+                .map(|v| ((v >> (16 * (j as u32 + 1))) & 0xffff) as u32)
                 .collect();
-            out.push((mm_circuit::carry_bit(k, t), u32_column(values, h)));
+            out.push((mm_circuit::carry_chunk(k, j), u32_column(values, h)));
         }
     }
     Ok(out)
+}
+
+/// The frame's columns for a family that range-checks through `RANGE16`.
+///
+/// The `M` side is `delegation_frame`'s exactly; the witness side is two gap
+/// chunks a word and one value plus one halfword for each of the base's two
+/// decompositions, where that one writes 38 bits a word and 29 plus 31.
+fn delegation_frame_range16(
+    inv: &Invocations,
+    words: usize,
+    frame_bytes: u64,
+    chunk: fn(usize, usize) -> PolyAddress,
+    base: [PolyAddress; 4],
+) -> Vec<(PolyAddress, MultilinearPoly)> {
+    let (frames, h) = (inv.frames, inv.height);
+    let rows = 0..frames.len();
+    let mut out: Vec<(PolyAddress, MultilinearPoly)> = Vec::new();
+    let cycles: Vec<Fr> = frames.cycles().iter().map(|c| Fr::from_u64(*c)).collect();
+    out.push((deleg::CYCLE, fr_column(cycles, h)));
+    out.push((
+        deleg::LIVE,
+        u32_column(rows.clone().map(|_| 1).collect(), h),
+    ));
+    out.push((deleg::BASE, u32_column(frames.bases().to_vec(), h)));
+    out.push((deleg::ANCHOR_VALUE, u32_column(Vec::new(), h)));
+    for j in 0..words {
+        let w = frames.word(j);
+        for (field, values) in [
+            (
+                deleg::WORD_ADDR,
+                rows.clone().map(|r| w.addr[r]).collect::<Vec<u32>>(),
+            ),
+            (
+                deleg::WORD_READ_VALUE,
+                rows.clone().map(|r| w.read_value[r]).collect(),
+            ),
+            (
+                deleg::WORD_WRITE_VALUE,
+                rows.clone().map(|r| w.write_value[r]).collect(),
+            ),
+        ] {
+            out.push((deleg::word(j, field), u32_column(values, h)));
+        }
+        let read_ts: Vec<Fr> = rows.clone().map(|r| Fr::from_u64(w.read_ts[r])).collect();
+        out.push((deleg::word(j, deleg::WORD_READ_TS), fr_column(read_ts, h)));
+    }
+    for j in 0..words {
+        for c in 0..2 {
+            let values: Vec<u32> = rows
+                .clone()
+                .map(|r| {
+                    let ts = memory::TS_STEP * frames.cycles()[r] + delegation::FRAME_DELTA;
+                    let gap = ts - frames.word(j).read_ts[r] - 1;
+                    ((gap >> (16 * (c as u32 + 1))) & 0xffff) as u32
+                })
+                .collect();
+            out.push((chunk(j, c), u32_column(values, h)));
+        }
+    }
+    let low: Vec<u32> = rows
+        .clone()
+        .map(|r| (frames.bases()[r] - guest_memory::RAM_ORIGIN) / 4)
+        .collect();
+    out.push((base[0], u32_column(low.clone(), h)));
+    out.push((
+        base[1],
+        u32_column(low.iter().map(|v| v >> 16).collect(), h),
+    ));
+    let room: Vec<u32> = rows
+        .clone()
+        .map(|r| ((1u64 << 31) - frame_bytes - frames.bases()[r] as u64) as u32)
+        .collect();
+    out.push((base[2], u32_column(room.clone(), h)));
+    out.push((
+        base[3],
+        u32_column(room.iter().map(|v| v >> 16).collect(), h),
+    ));
+    out
 }
 
 /// `SHA256_COMP`'s fill: one compression a row.
@@ -846,71 +943,22 @@ fn ec_add(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Stri
     let inv = invocations(src, family::EC_ADD)?;
     let (frames, h) = (inv.frames, inv.height);
     let rows = 0..frames.len();
-    let mut out: Vec<(PolyAddress, MultilinearPoly)> = Vec::new();
 
-    // --- the M side, as every delegation family has it ---------------------
-    let cycles: Vec<Fr> = frames.cycles().iter().map(|c| Fr::from_u64(*c)).collect();
-    out.push((deleg::CYCLE, fr_column(cycles, h)));
-    out.push((
-        deleg::LIVE,
-        u32_column(rows.clone().map(|_| 1).collect(), h),
-    ));
-    out.push((deleg::BASE, u32_column(frames.bases().to_vec(), h)));
-    out.push((deleg::ANCHOR_VALUE, u32_column(Vec::new(), h)));
-    for j in 0..ea::FRAME_WORDS {
-        let w = frames.word(j);
-        for (field, values) in [
-            (
-                deleg::WORD_ADDR,
-                rows.clone().map(|r| w.addr[r]).collect::<Vec<u32>>(),
-            ),
-            (
-                deleg::WORD_READ_VALUE,
-                rows.clone().map(|r| w.read_value[r]).collect(),
-            ),
-            (
-                deleg::WORD_WRITE_VALUE,
-                rows.clone().map(|r| w.write_value[r]).collect(),
-            ),
-        ] {
-            out.push((deleg::word(j, field), u32_column(values, h)));
-        }
-        let read_ts: Vec<Fr> = rows.clone().map(|r| Fr::from_u64(w.read_ts[r])).collect();
-        out.push((deleg::word(j, deleg::WORD_READ_TS), fr_column(read_ts, h)));
-    }
-
-    // --- the frame's RANGE16 decompositions --------------------------------
-    let gap_of = |j: usize, r: usize| -> u64 {
-        let ts = memory::TS_STEP * frames.cycles()[r] + delegation::FRAME_DELTA;
-        ts - frames.word(j).read_ts[r] - 1
-    };
-    for j in 0..ea::FRAME_WORDS {
-        for c in 0..2 {
-            let values: Vec<u32> = rows
-                .clone()
-                .map(|r| ((gap_of(j, r) >> (16 * (c as u32 + 1))) & 0xffff) as u32)
-                .collect();
-            out.push((ea_circuit::gap_chunk(j, c), u32_column(values, h)));
-        }
-    }
-    let low: Vec<u32> = rows
-        .clone()
-        .map(|r| (frames.bases()[r] - guest_memory::RAM_ORIGIN) / 4)
-        .collect();
-    out.push((ea_circuit::base_low(), u32_column(low.clone(), h)));
-    out.push((
-        ea_circuit::base_low_hi(),
-        u32_column(low.iter().map(|v| v >> 16).collect(), h),
-    ));
-    let room: Vec<u32> = rows
-        .clone()
-        .map(|r| ((1u64 << 31) - ea::FRAME_BYTES as u64 - frames.bases()[r] as u64) as u32)
-        .collect();
-    out.push((ea_circuit::base_room(), u32_column(room.clone(), h)));
-    out.push((
-        ea_circuit::base_room_hi(),
-        u32_column(room.iter().map(|v| v >> 16).collect(), h),
-    ));
+    let mut out = delegation_frame_range16(
+        &inv,
+        ea::FRAME_WORDS,
+        ea::FRAME_BYTES as u64,
+        ea_circuit::gap_chunk,
+        [
+            ea_circuit::base_low(),
+            ea_circuit::base_low_hi(),
+            ea_circuit::base_room(),
+            ea_circuit::base_room_hi(),
+        ],
+    );
+    // This family additionally bounds **every** frame word to 32 bits, because
+    // its operands are linear combinations of frame limbs and the limb
+    // identity's integer reasoning rests on each of them being below `2^32`.
     for j in 0..ea::FRAME_WORDS {
         let values: Vec<u32> = rows
             .clone()

@@ -479,43 +479,6 @@ pub(crate) fn value_terms(first: usize, field: u32) -> Vec<(Coeff, PolyAddress)>
         .collect()
 }
 
-/// The eight word decompositions of one frame value: its bits' booleanity, then
-/// `word_k = sum of 2^t * bit`.
-///
-/// The word gate is ungated and degree 1 — both sides are 0 on a padding row —
-/// and it is the word's **32-bit bound** and its decode at once. That bound is
-/// what makes every later equation over those words an equation over the
-/// integers rather than over `Fr`, which is the whole basis of a limb identity.
-///
-/// [`canonical_gates`] emits the same two families of gate and does **not** call
-/// this, because its order interleaves them with the canonicity bits' and
-/// changing that order would move `fr_arith.bin` and `poseidon2.bin`. The
-/// duplication is twenty lines and is the cheaper of the two.
-pub(crate) fn word_gates(
-    name: &str,
-    first: usize,
-    field: u32,
-    bits: usize,
-) -> Vec<(String, GateDef)> {
-    let mut out: Vec<(String, GateDef)> = Vec::new();
-    for k in 0..WORDS_PER_VALUE {
-        for t in 0..32 {
-            out.push((
-                format!("{name}_bit{k}_{t}_boolean"),
-                booleanity(w(bits + 32 * k + t)),
-            ));
-        }
-    }
-    for k in 0..WORDS_PER_VALUE {
-        let mut terms = vec![(lit(1), word(first + k, field))];
-        for t in 0..32 {
-            terms.push((neg(1u64 << t), w(bits + 32 * k + t)));
-        }
-        out.push((format!("{name}_word{k}"), linear(terms)));
-    }
-    out
-}
-
 /// `2^n` as a field element, for an `n` a `u64` literal cannot hold.
 ///
 /// A limb identity's coefficients reach `2^68` — `2^32` times a carry's `2^36`
@@ -725,7 +688,7 @@ pub(crate) fn bound_chunked(
 /// `TIMESTAMP` would be the natural channel and it does not fit — its table
 /// needs 19 variables and a delegation family that carries a channel at all is
 /// at `2^16` (`docs/spec/delegation.md` §10.3).
-pub(crate) const GAP_CHUNKS: usize = 2;
+pub const GAP_CHUNKS: usize = 2;
 
 /// The frame's own gates for a family that range-checks through `RANGE16`.
 ///

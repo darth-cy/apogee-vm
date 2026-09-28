@@ -1180,40 +1180,50 @@ fn s26_the_mod_mul_witness_and_anchor_are_pinned() {
         .find(|r| pad_at(mm_c::LIVE, *r) == Fr::ZERO)
         .expect("a padding row in the last shard");
 
-    // --- The result, moved with the bit it decomposes so the frame's own
-    // recomposition still holds: what refuses it is a limb equation, the gate
-    // that says the multiplication was performed.
-    let out0 = mm_c::word(mm::OUT_WORD, mm_c::WORD_WRITE_VALUE);
-    let out_bit = mm_c::value_bit(mm_c::OUT, 0, 0);
-    let word = at(out0, live);
-    let bit = at(out_bit, live);
+    // Since S26c this family range-checks through `RANGE16` rather than
+    // decomposing into bits, so a value and its bound travel together as the
+    // value and its **halfword**: shifting both by `2^16` and `1` leaves the
+    // derived low half exactly where it was, so both obligations still hold and
+    // what refuses the twin is a limb equation — the gate that says the
+    // multiplication was performed. The direction is chosen from the observed
+    // halfword so the twin cannot accidentally leave `[0, 2^16)` and be refused
+    // as a lookup instead.
+    let shift_with_halfword = |value: PolyAddress, hi: PolyAddress| -> Vec<Cell> {
+        let (v, high) = (at(value, live), at(hi, live));
+        let up = high == Fr::ZERO;
+        let step = Fr::from_u64(1 << 16);
+        vec![
+            cell(MM, value, live, if up { v + step } else { v - step }),
+            cell(
+                MM,
+                hi,
+                live,
+                if up { high + Fr::ONE } else { high - Fr::ONE },
+            ),
+        ]
+    };
+
+    // --- The result.
     h.assert_rejects(
-        &tamper(vec![
-            cell(MM, out0, live, word + Fr::ONE - bit - bit),
-            cell(MM, out_bit, live, Fr::ONE - bit),
-        ]),
+        &tamper(shift_with_halfword(
+            mm_c::word(mm::OUT_WORD, mm_c::WORD_WRITE_VALUE),
+            mm_c::value_hi(mm_c::OUT, 0),
+        )),
         (MM, 0),
         CONSTRAINT,
     );
 
-    // --- The quotient, the one column the execution never produced. Moved with
-    // its own bit, so `q_word0` still holds and the refusal is a limb equation.
-    let q_bit = mm_c::q_bit(0, 0);
-    let q = at(mm_c::q_limb(0), live);
-    let qb = at(q_bit, live);
+    // --- The quotient, the one column the execution never produced.
     h.assert_rejects(
-        &tamper(vec![
-            cell(MM, mm_c::q_limb(0), live, q + Fr::ONE - qb - qb),
-            cell(MM, q_bit, live, Fr::ONE - qb),
-        ]),
+        &tamper(shift_with_halfword(mm_c::q_limb(0), mm_c::q_hi(0))),
         (MM, 0),
         CONSTRAINT,
     );
 
-    // --- A carry bit alone: the chain that joins two limb equations.
-    let carry = at(mm_c::carry_bit(0, 0), live);
+    // --- A carry alone: the chain that joins two limb equations. Its low chunk
+    // is the companion, weight `2^16`, so the same shift applies.
     h.assert_rejects(
-        &tamper(vec![cell(MM, mm_c::carry_bit(0, 0), live, Fr::ONE - carry)]),
+        &tamper(shift_with_halfword(mm_c::carry(0), mm_c::carry_chunk(0, 0))),
         (MM, 0),
         CONSTRAINT,
     );
@@ -1236,13 +1246,14 @@ fn s26_the_mod_mul_witness_and_anchor_are_pinned() {
     );
 
     // --- The control, on the shard that has a padding row: a padding row's gap
-    // bit, whose gate carries the mask on every product, is genuinely free.
+    // chunk is genuinely free, because every obligation it feeds carries `live`
+    // as its selector and a lookup holds where its selector is 0.
     h.assert_verifies(
         &Tamper {
             cells: vec![Cell {
                 family: MM,
                 shard: pad_shard,
-                address: mm_c::gap_bit(5, 7),
+                address: mm_c::gap_chunk(5, 0),
                 row: pad,
                 value: Fr::ONE,
             }],

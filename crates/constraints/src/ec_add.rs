@@ -178,7 +178,6 @@ fn limb(v: usize, k: usize) -> PolyAddress {
 // The witness layout, in order
 // ---------------------------------------------------------------------------
 
-/// Chunks a 38-bit gap takes, from the shared builder.
 use crate::delegation::GAP_CHUNKS;
 
 /// Chunks a signed carry's unsigned value takes beside the value itself.

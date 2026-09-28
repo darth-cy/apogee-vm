@@ -21,7 +21,8 @@
 use constants::family;
 use constraints::PolyAddress;
 use constraints::{
-    fr_arith as fa_circuit, keccak as kec_circuit, mod_mul as mm_circuit, poseidon2 as p2_circuit,
+    ec_add as ea_circuit, fr_arith as fa_circuit, keccak as kec_circuit, mod_mul as mm_circuit,
+    poseidon2 as p2_circuit,
 };
 use prover::{family_fill, Program, ShardSource};
 
@@ -189,10 +190,14 @@ fn every_mod_mul_shard_the_fill_writes_satisfies_every_gate() {
     }
 }
 
-/// The four circuits do **not** agree on where a frame's witness columns
-/// start, which is the whole reason the builder takes a base. Stated here so
-/// that a later family copying one of them sees the choice rather than
+/// The bit-decomposing circuits do **not** agree on where a frame's witness
+/// columns start, which is the whole reason the builder takes a base. Stated
+/// here so that a later family copying one of them sees the choice rather than
 /// inheriting it.
+///
+/// Since S26c `MOD_MUL` and `EC_ADD` are not in this list at all: they
+/// range-check through `RANGE16`, so their frames carry two gap **chunks** a
+/// word rather than 38 bits, and `delegation_frame_range16` fills them.
 #[test]
 fn the_frame_witness_base_is_per_family() {
     assert_eq!(
@@ -200,15 +205,14 @@ fn the_frame_witness_base_is_per_family() {
         PolyAddress::Witness(constants::keccak::STATE_BITS as u32),
         "keccak's frame bits sit above the state's"
     );
-    for a in [
-        p2_circuit::gap_bit(0, 0),
-        fa_circuit::gap_bit(0, 0),
-        mm_circuit::gap_bit(0, 0),
-    ] {
+    for a in [p2_circuit::gap_bit(0, 0), fa_circuit::gap_bit(0, 0)] {
+        assert_eq!(a, PolyAddress::Witness(0), "S23's frames start at W[0]");
+    }
+    for a in [mm_circuit::gap_chunk(0, 0), ea_circuit::gap_chunk(0, 0)] {
         assert_eq!(
             a,
             PolyAddress::Witness(0),
-            "S23's and S26's frames start at W[0]"
+            "a RANGE16 frame's chunks start at W[0]"
         );
     }
 }
