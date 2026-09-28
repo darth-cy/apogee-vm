@@ -375,6 +375,36 @@ family, which is how the fixture guests found it.
 `crates/trace/tests/log.rs` now derives the round trip over `DELEGATION_SPACES`
 rather than listing it.
 
+### 5.5 Four stale pins, and why re-pinning them was the wrong fix
+
+The final workspace run failed four times, and all four were one mistake: **a
+number written down in a test that this stage moved.** None was a defect in
+shipped code, and each would have been invisible if the number had happened to
+stay valid.
+
+| where | what had been written down | what it did |
+| --- | --- | --- |
+| `checker::add_sub` | `FIXTURE_SHA256` | the regenerated `add_sub.bin`'s digest |
+| `loader::common::PINS` | 24 fixture digests | fifteen ELFs moved; **`sha256-ops.elf` and `ec-ops.elf` were never added at all**, so two committed fixtures had nothing checking them |
+| `trace::archive` | the literal tag `9` as "unknown" | S26c gave 9 to `EC_ADD`, so the case exercised a *known* tag |
+| `verifier_core::shell` | 33 witness commitments | add/sub commits one selector per delegation type, so an honest shell was the wrong shape — and every case in `a_proof_shaped_wrong_is_refused_as_malformed` then failed for the *witness* reason whatever it had perturbed |
+
+The last two are the instructive ones, because both were **tests that stopped
+testing what they name** rather than tests that merely disagreed with a file. The
+tag case would have gone on passing as an "unknown tag" test while exercising a
+known one, had the message happened to match. And `shell`'s doc comment *predicted
+the number would move* — "this number moves by one with every delegation family
+the repository registers" — and left it a literal anyway, which is the clearest
+case in the stage for deriving over documenting.
+
+So all four are now derived from the thing they describe: the two digests from the
+files, the tag from `address_space::DELEGATION` (append-only, plus an assertion
+that `from_tag` really refuses it, so the case cannot become vacuous), and both of
+`shell`'s widths from the key's own circuit. The two fixture digests cannot be
+derived — a pin whose value came from the file it pins would check nothing — so
+those stay literals, which is correct; what was wrong there was only that two
+committed fixtures were missing from the table.
+
 ---
 
 ## 6. The measurement

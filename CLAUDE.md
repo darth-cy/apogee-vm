@@ -194,7 +194,7 @@ cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
 cargo clippy -p prover --all-targets --features metrics -- -D warnings   # the ONE feature's configuration
-cargo test --workspace                      # 1,048 tests; 67 more are #[ignore]d (marker counts, not a run)
+cargo test --workspace                      # 1,093 tests; 65 more are #[ignore]d (the run's own tally, S26c)
 cargo test -p prover --features metrics --test metrics  # the metrics harness; 10 more, 2 #[ignore]d
 cargo test -p program --test delegation -- --ignored --test-threads=1  # static detachment at BOTH guest profiles; builds six guest images, 2.9 s
 APOGEE_GUEST_PROFILE=release cargo test -p emulator --test revm -- --ignored --test-threads=1  # S24's guest against native revm; builds the revm guest, 47 s
