@@ -33,6 +33,7 @@ members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "
 [patch.crates-io]
 k256 = { path = "vendor/k256" }
 ark-ff = { path = "vendor/ark-ff" }
+revm-precompile = { path = "vendor/revm-precompile" }
 
 [workspace.package]
 version = "0.1.0"

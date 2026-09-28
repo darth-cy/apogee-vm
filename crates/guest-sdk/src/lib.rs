@@ -31,7 +31,7 @@
 use core::alloc::{GlobalAlloc, Layout};
 use core::arch::global_asm;
 
-use constants::{delegation, ecall, guest_memory, keccak, poseidon2, sha256 as sha256c};
+use constants::{delegation, ec_add, ecall, guest_memory, keccak, poseidon2, sha256 as sha256c};
 
 // ---------------------------------------------------------------------------
 // crt0
@@ -1019,6 +1019,80 @@ pub fn sha256(input: &[u8]) -> [u8; 4 * sha256c::STATE_WORDS] {
         digest[4 * i..4 * i + 4].copy_from_slice(&word.to_be_bytes());
     }
     digest
+}
+
+// ---------------------------------------------------------------------------
+// Elliptic-curve point operations
+// ---------------------------------------------------------------------------
+
+/// A point in **homogeneous projective** coordinates: `x = X/Z`, `y = Y/Z`,
+/// each coordinate eight little-endian 32-bit limbs **below the curve's
+/// modulus**.
+///
+/// It is not Jacobian. arkworks' `Projective` is (`x = X/Z²`), so a caller
+/// holding one converts — `(X·Z, Y·Z², Z)` in and `(X·Z, Y, Z³)` out — and
+/// `guests/vendor/k256`'s `ProjectivePoint` is already homogeneous and converts
+/// not at all. The identity is `(0 : 1 : 0)`.
+pub type ProjectivePoint = [[u32; ec_add::LIMBS]; 3];
+
+/// `p + q` on the curve `codes` names, or `None` on exactly `-ENOSYS`.
+///
+/// **This is the whole of the `EC_ADD` ABI a caller needs**, and the reason it
+/// is a function here rather than three calls at a call site: a complete
+/// addition is the three codes of one curve **in group order**, and two
+/// transposed is not a refusal anywhere — it is a different point, computed from
+/// lanes whose previous contents were zero. `codes` is
+/// [`recursion::SECP256K1_GROUPS`] or [`recursion::BN254_GROUPS`].
+///
+/// Renes–Costello–Batina 2015 Algorithm 7, which is **complete**: `P + P`,
+/// `P + (−P)`, `P + O` and a non-normalized `Z` all come out right, so a caller
+/// branches on nothing.
+pub fn ec_add(
+    codes: &[u32; ec_add::GROUPS],
+    p: &ProjectivePoint,
+    q: &ProjectivePoint,
+) -> Option<ProjectivePoint> {
+    let mut frame = recursion::EcAddFrame::of(codes, p, q);
+    match recursion::ec_add_complete(&mut frame, codes) {
+        true => Some(frame.result()),
+        false => None,
+    }
+}
+
+/// `k · p`, by double-and-add from the top bit. `None` on exactly `-ENOSYS`,
+/// and then **nothing has been computed** — the first doubling is what asks.
+///
+/// `k` is eight little-endian limbs and is used as given: reducing it modulo the
+/// group order is the caller's business, and every caller already holds a
+/// reduced scalar.
+///
+/// Completeness is what makes this five lines, and it is worth saying what it
+/// replaces: a ladder over an incomplete formula needs a case for the first
+/// iteration, a case for a doubling and a case for the identity, and each is a
+/// place to be wrong only on inputs a test does not reach. Here the accumulator
+/// starts at the identity and every step is one addition.
+pub fn ec_mul(
+    codes: &[u32; ec_add::GROUPS],
+    p: &ProjectivePoint,
+    k: &[u32; ec_add::LIMBS],
+) -> Option<ProjectivePoint> {
+    let mut acc = ec_identity();
+    let mut bit = 32 * ec_add::LIMBS;
+    while bit > 0 {
+        bit -= 1;
+        acc = ec_add(codes, &acc, &acc)?;
+        if (k[bit / 32] >> (bit % 32)) & 1 == 1 {
+            acc = ec_add(codes, &acc, p)?;
+        }
+    }
+    Some(acc)
+}
+
+/// The projective identity, `(0 : 1 : 0)`.
+pub fn ec_identity() -> ProjectivePoint {
+    let mut one = [0u32; ec_add::LIMBS];
+    one[0] = 1;
+    [[0u32; ec_add::LIMBS], one, [0u32; ec_add::LIMBS]]
 }
 
 // ---------------------------------------------------------------------------

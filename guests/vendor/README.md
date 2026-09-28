@@ -138,6 +138,80 @@ normalizes first.
 
 ---
 
+## `revm-precompile` 42.0.1 — S26c
+
+Upstream as published, from the same `=42.0.1` `guests/revm-block` pins. Cargo's
+`.cargo-ok` marker and `Cargo.toml.orig` are not copied; every other file is
+byte-identical to the release but the two named below.
+
+**Why.** Ethereum's `0x02`, `0x06` and `0x07` precompiles — SHA-256, BN254
+point addition and BN254 scalar multiplication — are this crate's, and S26c has
+a circuit for each of the operations under them. revm offers a seam for exactly
+this, the `Crypto` trait and `install_crypto`, and **using it costs 870,828
+bytes of guest `.text`**, which is why the patch is here instead.
+
+**That number is measured, and it is the whole reason this crate is vendored.**
+Installing a second `Crypto` implementation makes `crypto()`'s `OnceLock` hold
+one of two types, which kills LLVM's devirtualization of every call through it —
+and with the devirtualization goes the dead-stripping of the arkworks BLS12-381
+pairing and the KZG point-evaluation verifier, neither of which this workload
+reaches. The release image went 2,224,940 → 3,101,112 bytes with a provider whose
+every method forwarded straight back to `DefaultCrypto`, so the cost is the
+*coercion* and not the code. That took the image's last pc past what a `2^20`
+decoded table reaches (a table's row `i` is pc `2i`, so `2^20` rows reach
+`2·2^20 − 4`), and `guests/revm-block` would have needed `2^22` — the menu's
+last entry, at four times the table and about 42 GB of forward pass a shard —
+for code it never runs. `blst` and `c-kzg` are already off, so no feature
+removes the BLS12-381 path; the arkworks one is not optional.
+
+**Patching the default bodies has none of that cost.** There is still exactly
+one `Crypto` implementation, `DefaultCrypto`, so `crypto()` devirtualizes as
+before and the image grows by **10,568 bytes** over the pre-S26c one.
+
+**The two changed files.**
+
+| file | change |
+| --- | --- |
+| `Cargo.toml` | one `[target.'cfg(target_arch = "riscv32")'.dependencies]` entry on `guest-sdk`, as `k256`'s and `ark-ff`'s |
+| `src/interface.rs` | the **default bodies** of `Crypto::sha256`, `::bn254_g1_add` and `::bn254_g1_mul` select a delegated path under `cfg(target_arch = "riscv32")` and are otherwise untouched. No new type, no new impl |
+| `src/bn254/arkworks.rs` | `g1_point_add_delegated` and `g1_point_mul_delegated`, plus a private `mod apogee` holding the representation conversion. Nothing existing is changed |
+
+**The parsing is upstream's own, and that is the point of putting the two new
+functions in `bn254/arkworks.rs`.** `read_g1_point` and `encode_g1_point` are
+`pub(super)` and unreachable from outside this crate; from inside it they are
+the same functions `g1_point_add` calls, so a malformed point, a coordinate at
+or above the modulus and the `(0, 0)` encoding of infinity are refused by
+exactly the code that refuses them on the host. A divergence there would be a
+**consensus** bug, and the only way to have none is to not write a second
+parser.
+
+**What the patch has to get right.** arkworks' `Projective` is **Jacobian** —
+`x = X/Z²`, `y = Y/Z³` — and the delegation's representation is **homogeneous**
+— `x = X/Z`. `mod apogee` is that conversion and nothing else: `(X·Z, Y·Z², Z)`
+to go in, and the lift of an affine point to `Z = 1`, with the affine infinity
+`(0, 0)` special-cased to `(0 : 1 : 0)` because `(0 : 0 : 1)` is neither the
+projective identity nor a curve point and no complete formula rescues it. **The
+ABI is `guest_sdk`'s**: `ec_add` walks one addition's three selectors in group
+order and `ec_mul` is the double-and-add ladder over it, so the selector
+sequence — the one thing about this ABI that is a wrong answer rather than a
+refusal — is written once, in the SDK, and not at each call site.
+
+**What it does not change.** The host build is byte-for-byte upstream: every
+`cfg(not(target_arch = "riscv32"))` arm is the original expression, the two new
+functions are `cfg`'d out entirely, and the root workspace has no
+`[patch.crates-io]`, so `crates/emulator/tests/revm.rs`' native-revm oracle
+resolves this crate from crates.io and runs upstream's software for all
+seventeen `Crypto` methods.
+
+**What the mini-block measures.** Its two transactions call **none** of `0x02`,
+`0x06` or `0x07` — the profiler's `bn254` and `sha256/ripemd160` candidates are
+both 0 calls — so this patch is worth nothing on that fixture and the S26c
+cycle win is `k256`'s projective patch entirely. It is here for the blocks that
+do call them, and `guests/ec-ops` and `guests/sha256-ops` are what exercise the
+circuits meanwhile.
+
+---
+
 ## `ark-ff` 0.6.0 — S26b
 
 Upstream `https://github.com/arkworks-rs/algebra`, commit
@@ -187,9 +261,10 @@ this path nothing. `a` is written only after **both** calls answer, so a
 
 ---
 
-## What tests all three
+## What tests all four
 
-`guests/mod-mul-ops`, and only that: on every executor but this VM's the ecall
+`guests/mod-mul-ops`, `guests/sha256-ops` and `guests/ec-ops`. For the three
+`MOD_MUL` seams it is the first of those and only that: on every executor but this VM's the ecall
 answers `-ENOSYS` and upstream's own multiply runs, so a host test cannot see a
 patched path at all. The guest calls the delegation by name once per selector
 against literal expectations *and* against a long division of its own, then
