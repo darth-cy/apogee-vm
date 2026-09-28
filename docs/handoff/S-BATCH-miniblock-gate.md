@@ -130,9 +130,20 @@ widening a circuit is ~13× cheaper on the opening side than on the proving side
 
 5 `KECCAK_F` shards are **59,400,060 of 61,382,738 proof bytes = 96.77%** [M]. Its height
 is therefore one lever on *both* proving cost (41× the per-cell median) and proof size.
-`docs/spec/delegation.md` §9.2 sets `2^8` because `2^16` is 744 GB of forward pass — but the
-menu has `2^10`, whose forward pass is 11.6 GB, inside the 10.0–15.8 GB an execution shard
-already costs at 2^20.
+`docs/spec/delegation.md` §9.2 sets `2^8` because `2^16` is 744 GB of forward pass. `2^10`
+would be 11.6 GB, inside the 10.0–15.8 GB an execution shard already costs at 2^20 — but
+**`2^10` is NOT on the height menu.** `constants::family::HEIGHT_MENU` is
+`[1<<8, 1<<16, 1<<18, 1<<20, 1<<22]` (`crates/constants/src/lib.rs:1215`), five entries, and
+it is *enforced on bytes a verifier is handed*: `VmConfig::from_bytes` refuses any height
+not in it (`crates/verifier-core/src/statement.rs:84`) and `decode_program` returns
+`HeightNotOnMenu` (`crates/program/src/lib.rs:717`). §9.2's "the menu below `2^16` had `2^8`,
+`2^10`, `2^12` and `2^14` to choose from" is what S21 *could* have picked, not what the menu
+holds today. **An earlier draft of this note read it the other way; this is the correction.**
+
+So the lever is **one constants amendment away**, not free: `HEIGHT_MENU` goes `[u32; 5]` to
+`[u32; 6]`, and `crates/program/tests/common/mod.rs:144-145` reads `HEIGHT_MENU[1]` and
+asserts it is `1 << 16` **by name**, which inserting `2^10` breaks. The circuit itself needs
+no change — `KECCAK_F`'s minimum height is 0 (`crates/constraints/src/lib.rs:169-180`).
 
 Raising `KECCAK_F` to `2^10` would cut its shard count 4× at full-block scale. **Proof size
 is not height-independent** — the controlled case is `ZERO_WINDOWS` and `PUBLIC_OUTPUT`,
@@ -223,6 +234,12 @@ block on this binary would *prove* — and gate assertions 2 (`exit_code == 0`) 
 key, and a **fixed 148-byte** journal that digests the per-transaction stream instead of
 carrying it (`revm-block.md` §5). `S25-block.md:12` says it in words: *"stateless full block
 last."*
+
+It is **not** entirely unmeasured, and §11 leans on the one datum there is:
+`S25-block.md:451-452` records the guest recomputing the post-state root in **665,154
+cycles** against **17 real accounts and 37 real slots** — the mini-block's own shape, 210
+trie nodes, so **~3,170 guest cycles per trie node** [M]. It has never been *proved*, never
+run on a real block, and no committed artifact carries a stateless `KECCAK_F` count.
 
 ### 4.2 And the cycles/gas base everyone has been scaling is the wrong one
 
@@ -354,7 +371,10 @@ that assertion already stated.
 The last row is a latent bug, not a stale pin. `revm_params()` named three of the six
 delegation families and left `MOD_MUL`, `SHA256_COMP` and `EC_ADD` at **2^20**, where
 `EC_ADD`'s 8,708 row-wise columns are a **292 GB** forward pass and `SHA256_COMP`'s 16,688
-are **560 GB**. Latent only while that block invokes neither. Both sibling suites already
+are **560 GB**. Latent only while that block invokes neither. (Related headroom, for a stage
+that grows this guest: a `2^20` decoded table reaches pc `2·2^20 − 4`, but `.text` starts at
+`RAM_ORIGIN = 0x10000`, so the code-available span is **2,031,612 B = 1.9375 MiB** and S24's
+release image uses **82.7%** of it, leaving ~342 kB — not 18% of the full pc reach.) Both sibling suites already
 derived the height; this one now does too — S26c §5's "derive over document".
 
 ---
@@ -420,3 +440,101 @@ derived the height; this one now does too — S26c §5's "derive over document".
 10. **Consider a shard-level `debug::Clock` that excludes stolen work**, or document §2.1 in
     `docs/spec/debug-info.md` — the log currently invites a two-order-of-magnitude
     misreading, and this stage nearly published one.
+
+---
+
+## 11. What one real full block would cost — an estimate, not a measurement
+
+**Every figure here is [D] on top of the [M] anchors above. Nothing in this section has been
+run.** It answers: *pin down `revm-block-stateless`, feed it recently-fetched mainnet blocks
+— what does one proof need?* The band is wide on purpose, and §11.4 names the one cheap
+experiment that collapses most of it.
+
+### 11.1 The anchors, and the correction they force
+
+| anchor | value | source |
+| --- | --- | --- |
+| base cycles, four real blocks, S26c-adjusted | **121M / 522M / 690M / 1,468M** | `S26-cycle.md` §4.1 [M] with the per-family baseline→mod-mul→S26c ratios [D] |
+| MPT cost | **~3,170 guest cycles per trie node** | `S25-block.md:451-452` — 665,154 cycles over 210 nodes [M] |
+| keccak per node | **2.786 permutations**, histogram {1:76, 2:6, 3:15, 4:113} | exact walk of `mini-block-nodes.bin` [M] |
+| base `KECCAK_F`, block 26,059,700 | **24,879** invocations | `S26-block-26059700-mod-mul.json` [M] |
+| of the mini-block's 1,080 `KECCAK_F` | **89.4% is `keccak256(code)`** in `WitnessDb::basic`, 10.6% EVM `SHA3`, **0% MPT** | Σ⌈(L+1)/136⌉ over the 12 recorded code blobs [M] |
+
+**The correction this forces: the stateless binary adds little to *cycles* and a great deal to
+`KECCAK_F`.** Every `keccak256` in the image is the S21 delegation, so MPT hashing becomes
+`KECCAK_F` **rows**, not guest cycles — the guest pays only ecall plumbing, which the measured
+3,170 cycles/node already includes. A model that prices MPT keccak at ~1,000 cycles per
+permutation *on top of* that anchor double-counts. Cycles go up **~1.1–1.3×**; `KECCAK_F`
+invocations go up **~7–13×**.
+
+### 11.2 A typical 60 Mgas block
+
+Node count is the dominant assumption: 16,000–37,000 trie nodes [A], from a trie-fill model
+calibrated on the fixture's measured 210 nodes at 17 accounts.
+
+| | typical (60 Mgas) | heavy |
+| --- | --- | --- |
+| guest cycles | 570M – 890M | ~1.5G – 1.6G |
+| execution shards, 2^20 | 620 – 770 | ~1,620 |
+| **`KECCAK_F` shards, 2^8** | **700 – 1,300** | 1,500 – 2,000 |
+| `MOD_MUL` 2^16 / `EC_ADD` 2^16 | 1–5 / 1–3 | up to 10 / up to 4 |
+| window + advice + fixed shards | ~40 – 60 | ~60 – 90 |
+| **total shards** | **≈ 1,400 – 2,200** | ≈ 3,200 – 3,700 |
+| serial shard work | **10 – 15 core-hours** | 20 – 28 |
+| **proof size** | **8.4 – 15.5 GB** (97–99% `KECCAK_F`) | 18 – 24 GB |
+| ↳ with `KECCAK_F` at 2^10 | **2.1 – 3.9 GB** | 4.5 – 6 GB |
+| verification | 8 – 29 min | 20 – 60 min |
+| stateless witness (advice) | 11 – 23 MB | 25 – 40 MB |
+
+`MOD_MUL` and `EC_ADD` stay small, and one reason is worth stating: **senders arrive
+pre-recovered**. `guests/revm-block/src/lib.rs:387-388` — *"`caller` is the sender, because
+this VM has no `ecrecover` delegation"* — so a 450-tx block needs no in-circuit signature
+recovery, and `EC_ADD` scales with contract-invoked `0x01`, not with tx count. That also
+bounds what a full-block proof *means*: it proves state transition, **not** that the
+transactions were validly signed. The 148-byte journal carries no signature commitment.
+
+### 11.3 The surprise: it is **commit-bound**, and more cores barely help
+
+`S25-mini-block.json` measures `phases.commit_ms = 131,661.7` over 37 shards =
+**3.56 s a shard** [M]. `crates/trace/src/memory.rs` contains **no rayon at all**, so
+building a shard's memory columns is strictly single-threaded, and `commit_chunks` runs one
+shard at a time by deliberate design (`crates/prover/src/streaming.rs:267-271`).
+
+At ~1,700 shards that is **~1.7 h of serial commit**, against 10–15 core-hours of shard work
+that *does* parallelise:
+
+| workers | shard region | + serial commit | **wall** | box | **$/proof** |
+| --- | --- | --- | --- | --- | --- |
+| 12 | 0.9 – 1.4 h | 1.7 h | **2.6 – 3.1 h** | r8i.8xlarge, `--in-flight 12` | **$6 – 7** |
+| 32 | 0.35 – 0.5 h | 1.7 h | **2.1 – 2.2 h** | r8i.8xlarge, `--in-flight 16` | **$5 – 6** |
+| 96 | 0.12 – 0.17 h | 1.7 h | **~1.9 h** | r8i.24xlarge (768 GiB) | **$13** |
+| 192 | 0.06 – 0.09 h | 1.7 h | **~1.8 h** | r8i.48xlarge | **$25** |
+
+**Amdahl, not capacity.** Going 12 → 192 workers buys ~40% of wall clock for 4× the money.
+So the `r8i.8xlarge` already provisioned is close to cost-optimal *today*, and the real win is
+a **code change: parallelise memory-column construction**. Until that lands, a bigger box is
+mostly wasted money.
+
+Memory is not the constraint once streaming is used: peak is `base + in-flight × marginal`
+= ~30 GiB + 16 × 6.26–10.16 GiB ≈ **130–193 GiB**, inside 247 GiB. Budget `EC_ADD` at a
+**planning ~31 GiB** a shard, not the computed 20.5 GB — `metrics.md:253` records this class
+of model running at 62% of measured. The **archived** path needs 60–180 GB resident for a
+typical block and 660–819 GB for a heavy one, so **streaming is mandatory, not preferred**.
+
+### 11.4 The band is 3–4× and one run collapses it
+
+The spread above is almost entirely the **`KECCAK_F` shard count under
+`revm-block-stateless`**, which sets proof size, verification time and a third of the cost.
+Every measured `KECCAK_F` number in this repository comes from `Mode::Mini`
+(`tools/profiler/src/main.rs:254` hardcodes it), **which performs no MPT work at all**.
+
+> **One `cargo run --release -p profiler -- record <block>` against the stateless binary
+> closes it.** Minutes of work, no proving, no AWS. Nothing else in this section is worth
+> refining first.
+
+Second weakest: `EC_ADD`'s per-shard peak, which decides the box (§6). Third: the 92.43 GiB
+`/proc` reading, sole anchor of both memory fits (§3).
+
+And two blockers remain upstream of all of it, from §4: `revm-block` is the wrong binary, and
+no real full-block witness can be recorded while `eth_getProof` cannot return a collapsing
+deletion's sibling.
