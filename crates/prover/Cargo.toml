@@ -18,6 +18,18 @@ publish.workspace = true
 [features]
 metrics = []
 
+# THE WORKSPACE'S SECOND AND LAST CARGO FEATURE, granted by the owner at this
+# stage for `src/debug`, the proving debug log, and for nothing else. It is off
+# by default, it enables no dependency and it changes no proof byte --
+# `tests/debug_info.rs` proves the last of those by proving one statement twice
+# in the one build, once with the log silent and once with it at `deep`, and
+# comparing the blocks on the wire. What it turns on is the log's invariant
+# scans, which are work proportional to a shard and must not sit in the path of
+# a real proving run; the level is then chosen at run time with `APOGEE_DEBUG`.
+# `tests/one_feature.rs` holds the repository to these TWO and no third.
+# `docs/spec/debug-info.md`.
+debug-info = []
+
 [dependencies]
 constants.workspace = true
 constraints.workspace = true

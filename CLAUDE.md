@@ -193,9 +193,13 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
-cargo clippy -p prover --all-targets --features metrics -- -D warnings   # the ONE feature's configuration
+cargo clippy -p prover --all-targets --features metrics -- -D warnings   # feature 1 of 2
+cargo clippy -p prover --all-targets --features debug-info -- -D warnings   # feature 2 of 2
+cargo clippy -p prover --all-targets --features metrics,debug-info -- -D warnings   # both at once
 cargo test --workspace                      # 1,090 tests; 68 more are #[ignore]d (the run's own tally, S26c)
 cargo test -p prover --features metrics --test metrics  # the metrics harness; 10 more, 2 #[ignore]d
+cargo test -p prover --features debug-info --test debug_info  # the debug log: the levels, and that it changes no proof byte
+cargo test -p prover --features debug-info --lib  # the log's own unit tests, which the default build does not compile
 cargo test -p program --test delegation -- --ignored --test-threads=1  # static detachment at BOTH guest profiles; builds six guest images, 2.9 s
 cargo test -p emulator --test guests -- --ignored --test-threads=1  # DEFERRED; S26c's invocation counts: four traced executions, two of them `ec-ops`, 23.9 GiB peak and 118 s -- a GitHub runner reclaims the job, so this one is a dev-server run
 cargo test -p prover --test fills -- --ignored --test-threads=1  # DEFERRED; S26c: the MOD_MUL and EC_ADD fills, which exist only at 2^16, so each is its full committed width over 65,536 rows -- 19.1 GiB peak against 1.72 for the four that stay in CI
@@ -221,6 +225,17 @@ cargo run --manifest-path tools/transcript-ref/Cargo.toml
 cd guests/fib && cargo build --target riscv32imac-unknown-none-elf
 git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constants/tests/vectors/ crates/constraints/tests/vectors/ crates/checker/tests/vectors/ crates/emulator/tests/vectors/
 -------------------------------------------------------------------------------
+APOGEE_DEBUG=detail cargo test --release -p prover --features debug-info \
+    --test <suite> -- --include-ignored --test-threads=1 2>&1 | tee /tmp/<suite>.log
+                                            # WHEN A DEFERRED SUITE FAILS: the same suite with
+                                            # the log on. `grep -c "begin h="` against
+                                            # `grep -c "gkr done"` and `open begin`/`open done`
+                                            # -- an unmatched begin is a shard that died, and
+                                            # `grep "begin h=" | tail -1` names it;
+                                            # `grep -E "FAIL|NOT CANONICAL|UNBALANCED|OVER the|
+                                            # NAMES NO|DISAGREES|ABORTED|LAYOUT-BREAK"` is every
+                                            # verdict the scans reached.
+                                            # `docs/spec/debug-info.md` §2, §5, §8
 cargo run -p kat-gen                        # refresh every fixture (manual, deliberate)
 cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader | isa | program | gkr | memory | lookup | family | delegation | moduli | tape | revm
 cargo run -p checker -- laws <artifact>     # Laws 1-4 and the lookup rules, the standalone validators
@@ -351,18 +366,39 @@ is derivable *from* them is regenerated and diffed in CI.
   by a test function carrying its number** (owner's decision), and deleting a test that
   yields nothing new is part of the work.
 - **Concrete types.** `Fr` is a struct. There is no `F: Field`, and there never will be.
-- **No cargo features. Zero — with exactly one exception, and it is closed.** One build
-  configuration for the whole workspace. The exception is `prover/metrics`, granted by the
-  owner at S20 for the proving harness and **for nothing else**: the rule stands unchanged
-  for every future progression, and `crates/prover/tests/one_feature.rs` enforces that by
-  reading every `Cargo.toml` in the repository and failing on any `[features]` table but
-  that one, or any key in it but `metrics`. The feature is off by default, enables no
-  dependency, and changes no proof byte; CI builds, clippies and tests the feature-on
-  configuration too, so the anti-goal's stated hazard — "a configuration nobody builds is
-  broken and undiscovered" — does not apply to it. `docs/spec/metrics.md` §0. A
-  `features = [...]` *key* inside a dependency entry is a different thing and always was
-  allowed: it selects an upstream crate's features, as the workspace manifest does for
-  `ark-ec` and `ark-ff`.
+- **No cargo features. Zero — with exactly TWO exceptions, each granted by name.** One
+  build configuration for the whole workspace. The exceptions are `prover/metrics`, granted
+  by the owner at S20 for the proving harness, and `prover/debug-info`, granted at S-DEBUG
+  for the proving debug log — and **for nothing else**: the rule stands unchanged for every
+  future progression, and `crates/prover/tests/one_feature.rs` enforces that by reading
+  every `Cargo.toml` in the repository and failing on any `[features]` table but that one,
+  or any key in it but those two, in that order. Each is off by default, enables no
+  dependency, and changes no proof byte; CI builds, clippies and tests both
+  configurations on, so the anti-goal's stated hazard — "a configuration nobody builds is
+  broken and undiscovered" — does not apply to either. **Both exist for the same reason**:
+  the module behind each is deliberately liberal — `metrics` sizes every committed column
+  and every forward-pass layer, `debug-info` scans every live row of a delegation shard —
+  and neither may sit in the path of a real proving run. `docs/spec/metrics.md` §0 and
+  `docs/spec/debug-info.md` §0. A `features = [...]` *key* inside a dependency entry is a
+  different thing and always was allowed: it selects an upstream crate's features, as the
+  workspace manifest does for `ark-ec` and `ark-ff`.
+- **The debug log is `docs/spec/debug-info.md`: `APOGEE_DEBUG` chooses the level, the
+  feature chooses whether there is one.** Build with `--features debug-info` and set
+  `APOGEE_DEBUG=phase|detail|deep` (unset in such a build is `phase`; `off` silences;
+  `deep:EC_ADD,MOD_MUL` raises those families and leaves the rest one level lower). It
+  writes to the **raw stderr handle**, not `eprintln!`, because libtest's capture prints a
+  test's output only when that test *fails* and the failures this exists for — an OOM kill
+  on a 38 GB block, a hang, a `SIGINT` — lose captured output entirely. So **a `begin` line
+  with no matching `done` names the shard that died**, and that pair is the whole design.
+  At `detail` it runs `gkr::self_check` before the backward pass, which turns a verifier's
+  `LayerInconsistency { layer }` into a gate list, a row, the relation's *name* and every
+  value that relation read (`gkr::explain_self_check`, compiled unconditionally and tested
+  in the default build). For the delegation families it scans the frame: the invocation
+  count against the height, the timestamp gap against the 38-bit clock, the modulus or
+  curve selector as a histogram, `EC_ADD`'s three thirds held equal, and the canonicity
+  borrow chains — restricted, for `EC_ADD`, to the values the row's group actually reads,
+  because a value's `< m` conclusion is gated and a scan that ignored that would call every
+  honest block broken.
 - **One encoding.** Field elements on the wire are canonical (non-Montgomery) 32-byte
   little-endian. Montgomery form exists only in memory. Source literals are the one
   exception and are their own single form: `Fr::from_hex`, `0x` plus 64 lowercase digits,
@@ -1245,6 +1281,7 @@ is derivable *from* them is regenerated and diffed in CI.
 | S-NATIVE-IO — The native I/O model: POSIX and QEMU deleted | done | `docs/handoff/S-NATIVE-IO.md` |
 | S26b — `MOD_MUL` specialized: four fixed Ethereum moduli | done | `docs/handoff/S26b-eth-field-mul.md` |
 | S26c — SHA-256 compression + secp256k1/BN254 `EC_ADD` | done | `docs/handoff/S26c-sha256-ec.md` |
+| S-DEBUG — The proving debug log | done | `docs/handoff/S-DEBUG-debug-log.md` |
 
 **S-IO takes no number, and that is deliberate** (owner's decision). It is not one of the
 original twenty-seven stages — it is the stage those twenty-seven forgot, inserted after

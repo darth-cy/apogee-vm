@@ -1,11 +1,20 @@
 //! **Master anti-goal 1, enforced.** The rule is "No cargo features. Zero.";
-//! the owner granted exactly one exception at S20, `prover/metrics`, and this
-//! test is what keeps it exactly one.
+//! the owner granted `prover/metrics` at S20 and `prover/debug-info` at
+//! S-DEBUG, and this test is what keeps it exactly those two.
 //!
 //! It reads every `Cargo.toml` under the repository — the workspace, and the
 //! three manifests deliberately outside it (`crates/guest-sdk`, `guests`,
 //! `tools/transcript-ref`) — and refuses any `[features]` table but this
-//! crate's, and any key in this crate's but `metrics`.
+//! crate's, and any key in this crate's but [`EXPECTED`]'s two.
+//!
+//! **Both exceptions are the same exception.** Each turns on a module that is
+//! deliberately liberal — `metrics` sizes every committed column and every
+//! forward-pass layer, `debug-info` scans every live row of a delegation shard
+//! — and neither may sit in the path of a real proving run. Both are off by
+//! default, neither enables a dependency, and neither changes a proof byte:
+//! `tests/metrics.rs` and `tests/debug_info.rs` each prove that of their own.
+//! A third feature is not a precedent these establish; it is a decision only
+//! the owner may take, and [`EXPECTED`] is where it would have to be written.
 //!
 //! A `features = [...]` **key** inside a dependency entry is a different
 //! thing: it selects an upstream crate's features, which anti-goal 1 permits
@@ -30,6 +39,15 @@ use std::path::{Path, PathBuf};
 /// ours. See the module doc; `the_vendored_crates_are_the_ones_a_guest_patches`
 /// holds each to being a crate the repository really patches in.
 const VENDORED: [&str; 1] = ["guests/vendor"];
+
+/// **The repository's cargo features, in `crates/prover/Cargo.toml`'s order.**
+///
+/// Adding a name here is the whole of adding a feature to this workspace, and it
+/// is the owner's decision and nobody else's (master anti-goal 1). Each entry
+/// owes four things: a `[features]` comment saying who granted it and for what,
+/// a spec document, a CI job that builds and clippies the configuration on, and
+/// a test that the feature changes no proof byte.
+const EXPECTED: [&str; 2] = ["metrics", "debug-info"];
 
 /// The repository root: this crate is `<root>/crates/prover`.
 fn root() -> PathBuf {
@@ -92,7 +110,7 @@ fn vendored(root: &Path, manifest: &Path) -> bool {
 }
 
 #[test]
-fn the_metrics_feature_is_the_only_cargo_feature_in_the_repository() {
+fn the_granted_features_are_the_only_cargo_features_in_the_repository() {
     let root = root();
     let mut found = Vec::new();
     manifests(&root, &mut found);
@@ -126,9 +144,9 @@ fn the_metrics_feature_is_the_only_cargo_feature_in_the_repository() {
     assert_eq!(
         names,
         vec!["crates/prover/Cargo.toml".to_string()],
-        "master anti-goal 1: `crates/prover`'s `metrics` is the repository's ONE cargo \
-         feature, granted by the owner at S20 for the proving harness and nothing else. \
-         A manifest listed here that is not it has declared a second one. Delete it: \
+        "master anti-goal 1: `crates/prover`'s {EXPECTED:?} are the repository's ONLY \
+         cargo features, each granted by the owner for one harness and nothing else. \
+         A manifest listed here that is not it has declared another. Delete it: \
          if code is optional, delete the code"
     );
     assert_eq!(
@@ -137,27 +155,33 @@ fn the_metrics_feature_is_the_only_cargo_feature_in_the_repository() {
     );
     assert_eq!(
         with_features[0].1,
-        vec!["metrics".to_string()],
-        "the one `[features]` table declares `metrics` and nothing else"
+        EXPECTED.map(String::from).to_vec(),
+        "the one `[features]` table declares exactly {EXPECTED:?}, in that order, and \
+         nothing else. A third feature is the owner's decision, not a stage's"
     );
 }
 
-/// The exception is documented where a future stage will read it, not only in
+/// Each exception is documented where a future stage will read it, not only in
 /// the manifest that takes it. Each of these says so in its own words; this
-/// holds them to saying it at all.
+/// holds them to saying it at all — including the anti-goal itself, which has to
+/// record that it has exceptions and name them.
 #[test]
 fn the_exception_is_written_down_where_the_rules_are() {
     let root = root();
     for (path, needle) in [
         ("CLAUDE.md", "metrics"),
+        ("CLAUDE.md", "debug-info"),
         ("docs/spec/metrics.md", "anti-goal 1"),
+        ("docs/spec/debug-info.md", "anti-goal 1"),
         ("crates/prover/CLAUDE.md", "metrics"),
+        ("crates/prover/CLAUDE.md", "debug-info"),
+        ("prompts/00-master.md", "debug-info"),
     ] {
         let text = fs::read_to_string(root.join(path))
             .unwrap_or_else(|_| panic!("{path} exists and is readable"));
         assert!(
             text.contains(needle),
-            "{path} does not mention {needle:?}: the one cargo feature in the repository \
+            "{path} does not mention {needle:?}: each cargo feature in the repository \
              must be documented where the next stage looks for the rules"
         );
     }

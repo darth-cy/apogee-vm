@@ -55,7 +55,22 @@ pub struct StreamingReport { pub cycles: u64, pub shards: usize, pub peak_in_fli
                              pub pass2_prove_ns: u64 }
 pub enum ProverError { Unregistered { family, height }, Key(String), Trace(String), Archive(String) }
 
-// feature = "metrics" only -- THE WORKSPACE'S ONE CARGO FEATURE. docs/spec/metrics.md
+// feature = "debug-info" only -- THE OTHER ONE. docs/spec/debug-info.md
+pub mod debug;                                   // the module does not exist without it
+pub enum Level { Off, Phase, Detail, Deep }      // APOGEE_DEBUG picks one, per call
+pub struct Config { pub level: Level, pub families: Vec<FamilyId> }
+impl Config { pub fn level_for(&self, family: FamilyId) -> Level; }
+pub fn parse(value: Option<&str>) -> (Config, Option<String>);   // pure; the complaint too
+pub fn config() -> Config;                       // reads the environment, silently
+pub fn enabled(want: Level) -> bool;             // a spine line
+pub fn enabled_for(want: Level, family: FamilyId) -> bool;        // a family's line
+pub fn banner(what: &str);                       // the header, and the ONE complaint site
+pub fn line(text: &str);                         // the raw stderr handle, not eprintln!
+// and the report builders: circuit, frame_scan, canonical, histogram, range, ec_add_groups,
+// ec_add_reads, counts, ts_window, all_zero, nonzero, family_name, shard, fr, fr_full,
+// frs, limbs, height, Clock
+
+// feature = "metrics" only -- ONE OF THE WORKSPACE'S TWO CARGO FEATURES. docs/spec/metrics.md
 pub mod metrics;                                 // Stage, ByteClass, ShardId in both builds
 pub fn prove_block_metered(setup, archive, plan) -> Result<(BlockProof, ProvingMetrics), ProverError>;
 pub fn advance_metered(setup, archive, until)   -> Result<ProvingMetrics, ProverError>;
@@ -297,11 +312,37 @@ pub fn advance_metered(setup, archive, until)   -> Result<ProvingMetrics, Prover
   the archive keeps `prove_shard_columns`' signature and makes the honest window a
   function of exactly what the shard commits; a tampered column is read as its low 64
   bits and multiplied saturatingly, because the prover checks nothing.
-- **`metrics` is the workspace's one cargo feature, and it stays the only one** (owner's
-  decision, S20; master anti-goal 1 otherwise bans them outright). It turns on
-  `src/metrics`: stage timing, byte accounting and the modelled memory peak. The rule it
-  excepts stands for every future progression, and `tests/one_feature.rs` enforces that by
-  reading every `Cargo.toml` in the repository. `docs/spec/metrics.md` §0.
+- **`metrics` and `debug-info` are the workspace's two cargo features, and they stay the
+  only two** (owner's decisions, S20 and S-DEBUG; master anti-goal 1 otherwise bans them
+  outright). `metrics` turns on `src/metrics`: stage timing, byte accounting and the modelled
+  memory peak. `debug-info` turns on `src/debug`: the proving debug log. The rule they except
+  stands for every future progression, and `tests/one_feature.rs` enforces that by reading
+  every `Cargo.toml` in the repository and holding this crate's `[features]` table to
+  `EXPECTED`'s two keys in that order. `docs/spec/metrics.md` §0 and
+  `docs/spec/debug-info.md` §0.
+- **The debug log threads nothing and gates at run time** (`docs/spec/debug-info.md`).
+  Every line is emitted where its subject is already in scope, so there is no `Recorder`
+  equivalent and no signature moves; `debug::config` reads `APOGEE_DEBUG` per call and
+  caches nothing, anti-goal 7 banning the `OnceLock` that would. `dlog!` is one line and
+  `debug_only!` is a block, both `metric!`'s shape, both nothing at all with the feature off
+  — so a scan written as an argument is never evaluated. It writes to the **raw stderr
+  handle**: libtest's capture prints a test's output only when that test fails, and an OOM
+  kill, a hang and a `SIGINT` all lose it, which is exactly when the log is the only
+  evidence. **A `begin` line with no `done` names the shard that died.**
+- **At `detail` the log runs `gkr::self_check`, which `prove_shard` never does.** That is
+  the largest thing the feature buys: a bad fill otherwise surfaces as a verifier-side
+  `LayerInconsistency { layer }`, and `gkr::explain_self_check` turns it into a gate list, a
+  row, the relation's name and every operand by the artifact's own column names — an inner
+  column named by the relation that wrote it. The explainer is compiled unconditionally,
+  because `gkr` may not have a feature of its own; `crates/gkr/tests/explain.rs` exercises it
+  in the default build.
+- **A delegation scan reports, it does not judge — except where the gate is ungated.** A
+  frame value's `< m` conclusion is gated to the rows that read it, so `FR_ARITH` and
+  `POSEIDON2` get a *tally* and `EC_ADD`'s verdict is restricted by `debug::ec_add_reads`,
+  a mirror of the private `constraints::ec_add::VALUES`. `MOD_MUL` gets a real verdict
+  because `a < m` and `b < m` are gates since S26b — and its scan runs **before** the
+  witness loop, whose panic would otherwise be the only thing printed and names neither
+  the invocation, the value nor the selected modulus.
 - **The seam costs nothing with the feature off, and that is structural, not a hope.**
   `Recorder` and `Span` are zero-sized there and every method is an empty
   `#[inline(always)]` body, so `rec.start`/`rec.end` **does not read the clock** and a ZST
@@ -328,7 +369,7 @@ pub fn advance_metered(setup, archive, until)   -> Result<ProvingMetrics, Prover
 | File | Covers |
 | --- | --- |
 | `tests/common/mod.rs` | the S16 statement: `guests/addsub`'s committed ELF decoded with its family at `2^20`, the two public value families at their pinned `PUBLIC_WINDOW_HEIGHT` and everything else at `2^16`, traced into an archive, over a toy SRS whose `tau` is written down and whose archive is cached under `target/tmp` (`CARGO_TARGET_TMPDIR`), shared by the suites that include this module — `tests/acceptance.rs`, `tests/control.rs`, `tests/public_io.rs`, `crates/verifier/tests/cli.rs` and `crates/checker/tests/tamper.rs`; S17's, `guests/control`'s, with both of its execution families at `2^20` (`control_setup`, `control_archive`, `CONTROL_RESULT = 16`); S-IO's, `guests/public-io`'s (`public_io_setup`, `public_io_archive(program, advice)`, and `public_io_input` / `public_io_journal`, which are what the guest's own source says its input and its journal are for a given advice); `toy_tau` |
-| `tests/one_feature.rs` | master anti-goal 1, enforced: every `Cargo.toml` in the repository read, and any `[features]` table but this crate's — or any key in this crate's but `metrics` — fails the test, naming the rule. A `features = [...]` key inside a dependency entry is an upstream crate's feature and always was allowed. Plus: the exception is written down in the root `CLAUDE.md`, `docs/spec/metrics.md` and this file |
+| `tests/one_feature.rs` | master anti-goal 1, enforced: every `Cargo.toml` in the repository read, and any `[features]` table but this crate's — or any key in this crate's but `EXPECTED`'s `metrics` and `debug-info`, in that order — fails the test, naming the rule. A `features = [...]` key inside a dependency entry is an upstream crate's feature and always was allowed. Plus: each exception is written down in the root `CLAUDE.md`, `prompts/00-master.md`, its own spec and this file |
 | `tests/metrics.rs` | **the whole file is `#![cfg(feature = "metrics")]`**; CI runs it a second time with the feature. The stage table indexes itself and every parent is a root; the peak model counts `base_layer` and `forward_layers` and nothing else; a recorder records what it is told and `absorb` merges a task's samples in statement order; the modelled block peak follows the thread count; the unattributed remainder is the parent-minus-children gap; both reports render from an empty recorder and from a full one, and the JSON's braces balance; the report names its build, because a `dev` timing table read as `release` is worse than none. **`#[ignore]`d** (S16's statement twice, 8.6 GB a time): the metered block equals `prove_block`'s **byte for byte**, `shard_columns_total` is twice the shard count, and the report prints |
 | `tests/key.rs` | S17, in ordinary CI, no proof: `ProverSetup::new` over `control` and the toy SRS gives a key whose `generic_table` is `generic_commitments` over that SRS, whose SRS digest is over its `SrsVerifier` and them, and which loads; each of the three commitments is `[Σ_i c_i·τ^i]_1` of its column, computed by Horner's rule from the toy `τ`, the three distinct, and the same over `2^18` powers as over `2^20` |
 | `tests/control.rs` | **`#[ignore]`d; run with `--include-ignored --test-threads=1`** (18.0 GB peak since S20 proves its two `2^20` shards at once; 10.1 GB at S17). S17 acceptance 1: `control`'s seven-family config since S-IO, its self-checking trace, five shards — `INIT_TEARDOWN`, `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT` and S-IO's `PUBLIC_INPUT` and `PUBLIC_OUTPUT` — each verifying, with round and claim counts and byte lengths from the circuit, the jump family's pinned at 61,612 bytes; the generic table's binding — the key's `generic_table` equal to `generic_commitments` over this SRS, its SRS digest the digest over the `SrsVerifier` and them, and the jump family's opening claim `M ++ W ++ S`, 21 + 44 + 10 commitments ending with the table's three, while add/sub's is 36 + 31 + 7 and ends with identity's; and `a_key_with_another_generic_table_is_another_statement`: a key whose table's value and result commitments are swapped does not load under the honest SRS digest, loads under its own recomputed one, which differs, and refuses every honest shard as `Statement("the proof was made for another statement")` |
