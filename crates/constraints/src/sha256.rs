@@ -285,7 +285,13 @@ const XORS: usize = 3 * f::ROUNDS + 2 * DERIVED_WORDS;
 /// the four carries, every schedule word as a value, and `Ch_i`.
 fn carried_scalars() -> usize {
     // A_{-3..=ROUNDS} and E likewise, ca, ce, cw, co, W_0..W_63, Ch_0..Ch_63,
-    // and the eight in/out state words as values.
+    // the eight in/out state words as values, and `live`.
+    //
+    // **Spelled twice, and checked.** This arithmetic is what every layer
+    // offset is built from and [`carried_scalar_list`] is what the columns are
+    // built from; `artifact` asserts them equal, because the failure when they
+    // disagree is a column silently aliased onto the next block rather than
+    // anything a reader would see here.
     2 * (f::ROUNDS + 4)
         + 2 * f::ROUNDS
         + DERIVED_WORDS
@@ -293,6 +299,7 @@ fn carried_scalars() -> usize {
         + f::ROUNDS
         + f::ROUNDS
         + 2 * f::STATE_WORDS
+        + 1
 }
 
 /// The first `A_i` whose **bits** are carried. `Maj(0)` reads `A_{-2}`, and
@@ -406,6 +413,15 @@ enum Scalar {
     StateIn(usize),
     /// State word `j`'s written value.
     StateOut(usize),
+    /// The row's `live` mask, carried so that the rounds' constants can ride
+    /// it.
+    ///
+    /// **A padding row is an all-zero row**, and `K_i` is a nonzero literal, so
+    /// a round gate stating `... - K_i = 0` outright cannot hold on one — which
+    /// is the padding contract, not a nicety (`docs/spec/gkr.md`). The mask is
+    /// a committed `M` column that only gate list 0 may read, so it has to be
+    /// carried like any other value; one column a layer is the whole cost.
+    Live,
 }
 
 /// `<stem><i>`, with a negative `i` spelled `m<|i|>`: an artifact name is
@@ -431,6 +447,7 @@ impl Scalar {
         let ch = ws + f::ROUNDS;
         let si = ch + f::ROUNDS;
         let so = si + f::STATE_WORDS;
+        let live = so + f::STATE_WORDS;
         match self {
             Scalar::A(i) => a + (i + 3) as usize,
             Scalar::E(i) => e + (i + 3) as usize,
@@ -442,6 +459,7 @@ impl Scalar {
             Scalar::Ch(i) => ch + i,
             Scalar::StateIn(j) => si + j,
             Scalar::StateOut(j) => so + j,
+            Scalar::Live => live,
         }
     }
 
@@ -462,6 +480,7 @@ impl Scalar {
             Scalar::Ch(i) => format!("ch{i}"),
             Scalar::StateIn(j) => format!("state_in{j}"),
             Scalar::StateOut(j) => format!("state_out{j}"),
+            Scalar::Live => "live".to_string(),
         }
     }
 
@@ -578,6 +597,7 @@ fn carried_scalar_list() -> Vec<(Scalar, Vec<(Coeff, PolyAddress)>)> {
             vec![(d::lit(1), word(j, d::WORD_WRITE_VALUE))],
         ));
     }
+    out.push((Scalar::Live, vec![(d::lit(1), LIVE)]));
     out
 }
 
@@ -732,6 +752,16 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     let mut a = d::Assembly::new();
     let scalars = carried_scalar_list();
     let bits = carried_bit_list();
+    assert_eq!(
+        scalars.len(),
+        carried_scalars(),
+        "the carried-scalar count and the carried-scalar list disagree"
+    );
+    assert_eq!(
+        bits.len(),
+        carried_bits(),
+        "the carried-bit count and the carried-bit list disagree"
+    );
 
     // --- gate list 0 -> layer 1 --------------------------------------------
     let [reads, writes] = d::leaves(address_space::DELEGATION_SHA256_COMP, WORDS);
@@ -1022,13 +1052,8 @@ fn round_gates() -> Vec<(String, GateDef)> {
             };
             a_terms.push((Coeff::Literal(-*v), *x));
         }
-        out.push((
-            format!("round_a{i}"),
-            GateDef::Linear {
-                terms: a_terms,
-                constant: Coeff::Literal(-k),
-            },
-        ));
+        a_terms.push((Coeff::Literal(-k), Scalar::Live.at(2)));
+        out.push((format!("round_a{i}"), d::linear(a_terms)));
 
         let mut e_terms = vec![
             (d::lit(1), Scalar::E(i as isize + 1).at(2)),
@@ -1041,13 +1066,8 @@ fn round_gates() -> Vec<(String, GateDef)> {
             };
             e_terms.push((Coeff::Literal(-*v), *x));
         }
-        out.push((
-            format!("round_e{i}"),
-            GateDef::Linear {
-                terms: e_terms,
-                constant: Coeff::Literal(-k),
-            },
-        ));
+        e_terms.push((Coeff::Literal(-k), Scalar::Live.at(2)));
+        out.push((format!("round_e{i}"), d::linear(e_terms)));
     }
 
     // out_j = H_j + V_j - 2^32 co_j, with V the eight working words after the

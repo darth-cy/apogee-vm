@@ -78,6 +78,8 @@ impl AddressSpace {
             address_space::DELEGATION_POSEIDON2 => Some(AddressSpace::Poseidon2),
             address_space::DELEGATION_FR_ARITH => Some(AddressSpace::FrArith),
             address_space::DELEGATION_MOD_MUL => Some(AddressSpace::ModMul),
+            address_space::DELEGATION_SHA256_COMP => Some(AddressSpace::Sha256Comp),
+            address_space::DELEGATION_EC_ADD => Some(AddressSpace::EcAdd),
             _ => None,
         }
     }

@@ -15,6 +15,11 @@ fn the_tags_are_the_frozen_constants() {
         (AddressSpace::Poseidon2, address_space::DELEGATION_POSEIDON2),
         (AddressSpace::FrArith, address_space::DELEGATION_FR_ARITH),
         (AddressSpace::ModMul, address_space::DELEGATION_MOD_MUL),
+        (
+            AddressSpace::Sha256Comp,
+            address_space::DELEGATION_SHA256_COMP,
+        ),
+        (AddressSpace::EcAdd, address_space::DELEGATION_EC_ADD),
     ] {
         assert_eq!(space.tag(), tag);
         assert_eq!(AddressSpace::from_tag(tag), Some(space));
@@ -28,14 +33,30 @@ fn the_tags_are_the_frozen_constants() {
             address_space::DELEGATION_POSEIDON2,
             address_space::DELEGATION_FR_ARITH,
             address_space::DELEGATION_MOD_MUL,
+            address_space::DELEGATION_SHA256_COMP,
+            address_space::DELEGATION_EC_ADD,
         ),
-        (1, 2, 3, 4, 5, 6, 7)
+        (1, 2, 3, 4, 5, 6, 7, 8, 9)
     );
-    // Every tag is nonzero, so no real tuple is all zeros, and 8 is the tag the
-    // next delegation family takes — it names no space yet
+    // Every tag is nonzero, so no real tuple is all zeros, and 10 is the tag
+    // the next delegation family takes — it names no space yet
     // (`docs/spec/delegation.md` §3).
-    for tag in [0u8, 8, 255] {
+    for tag in [0u8, 10, 255] {
         assert_eq!(AddressSpace::from_tag(tag), None, "tag {tag}");
+    }
+    // **Every delegation space round-trips, derived rather than listed.**
+    // `from_tag` is a match on a `u8` and so needs a catch-all, which is
+    // exactly what let S26c add two spaces to the enum, to `tag`, and to five
+    // other match sites while leaving `from_tag` answering `None` for both —
+    // a silent `trace::Row::delegation_space` panic reachable only from a
+    // guest that invokes the family. This is the half the compiler cannot
+    // check, so it is checked here.
+    for space in trace::DELEGATION_SPACES {
+        assert_eq!(
+            AddressSpace::from_tag(space.tag()),
+            Some(space),
+            "{space:?} does not round-trip through its tag"
+        );
     }
     // The delegation set is the four tags and nothing else: one `deleg` frame
     // query serves them all, and `frame_query_takes` reads this array.

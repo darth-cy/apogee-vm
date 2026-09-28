@@ -17,7 +17,7 @@ use program::{decode_program, ProgramParams};
 use test_support::{sha256, to_hex};
 
 /// Every guest with a committed ELF, in `guests/Cargo.toml`'s order.
-pub const GUESTS: [&str; 19] = [
+pub const GUESTS: [&str; 21] = [
     "fib",
     "echo",
     "rvc-dense",
@@ -37,23 +37,34 @@ pub const GUESTS: [&str; 19] = [
     "recursion-ops",
     "recursion-unused",
     "mod-mul-ops",
+    "sha256-ops",
+    "ec-ops",
 ];
 
 /// The guests whose image declares a delegation family, and which
 /// (`docs/spec/delegation.md` §7). Every other guest declares none, which is
 /// what `tests/delegation.rs` holds them to.
-pub const DECLARING_GUESTS: [(&str, &[u32]); 7] = [
+pub const DECLARING_GUESTS: [(&str, &[u32]); 9] = [
     ("echo", &[family::POSEIDON2, family::FR_ARITH]),
     ("vault", &[family::POSEIDON2, family::FR_ARITH]),
     ("keccak-test", &[family::KECCAK_F]),
     ("keccak-unused", &[family::KECCAK_F]),
     ("recursion-ops", &[family::POSEIDON2, family::FR_ARITH]),
     ("recursion-unused", &[family::POSEIDON2, family::FR_ARITH]),
-    // S26's fixture declares **one** family and it is not one of S23's: it does
-    // secp256k1 field arithmetic through `k256` and no `field::Fr` arithmetic at
-    // all, so the two S23 records are unreachable and the linker drops them.
-    // That is static detachment saying something (`docs/spec/delegation.md` §7).
-    ("mod-mul-ops", &[family::MOD_MUL]),
+    // S26's fixture declares **two** families since S26c and neither is one of
+    // S23's: it does secp256k1 arithmetic through `k256` and no `field::Fr`
+    // arithmetic at all, so the two S23 records are unreachable and the linker
+    // drops them. `EC_ADD` joined `MOD_MUL` when S26c patched `k256`'s
+    // `ProjectivePoint`, which this guest's group checks reach — the guest's
+    // own source names neither shim. That is static detachment saying
+    // something (`docs/spec/delegation.md` §7).
+    ("mod-mul-ops", &[family::MOD_MUL, family::EC_ADD]),
+    // S26c's two fixtures. `sha256-ops` names the SHA-256 shim and nothing
+    // else; `ec-ops` names the EC_ADD shim and reaches `MOD_MUL` besides,
+    // through the same `k256` and `ark-bn254` field arithmetic its oracles run
+    // on.
+    ("sha256-ops", &[family::SHA256_COMP]),
+    ("ec-ops", &[family::MOD_MUL, family::EC_ADD]),
 ];
 
 /// This crate's committed fixtures and their digests. Refresh with

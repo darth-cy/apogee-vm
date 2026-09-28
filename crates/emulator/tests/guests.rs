@@ -706,7 +706,11 @@ fn mod_mul_ops_routes_every_vendored_patch_through_the_ecall() {
     // The equality is the part that separates the three seams: each
     // contributes a different amount, so any one of them falling back moves
     // this number and nothing else in the suite would notice.
-    assert_eq!(trace.len(), 1_567, "the pinned invocation count");
+    // 1,567 until S26c, when `guests/vendor/k256`'s `ProjectivePoint` patch
+    // moved this guest's group arithmetic — twelve field multiplies an
+    // addition — out of `MOD_MUL` and into `EC_ADD`. The companion count is
+    // in `the_new_families_are_invoked_the_pinned_number_of_times`.
+    assert_eq!(trace.len(), 1_443, "the pinned invocation count");
 }
 
 /// The invocation counts the two delegation families actually see, which is
@@ -744,5 +748,95 @@ fn recursion_ops_invokes_both_families() {
             .len(),
         2,
         "the guest permutes twice"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// S26c's two fixtures
+// ---------------------------------------------------------------------------
+
+/// `sha256-ops` checks itself: the `SHA256_COMP` frame ABI against FIPS
+/// 180-4's own `"abc"` vector, and `guest_sdk::sha256` against published
+/// digests at every length that moves the Merkle-Damgård padding — each of
+/// those also against `sha2`, an unpatched crates.io implementation and the
+/// only one in that comparison which is not this repository's. Exit 12, one
+/// per check but the first.
+#[test]
+fn sha256_ops_checks_itself_under_the_delegation_ecall() {
+    let execution = run(&image("sha256-ops"), &io(&[])).unwrap();
+    assert_eq!(
+        execution.exit_code, 12,
+        "sha256-ops exited {}, and 200 + i would name the check that failed",
+        execution.exit_code
+    );
+    assert!(execution.io.output.is_empty(), "it commits nothing");
+}
+
+/// `ec-ops` checks itself: every delegated addition against its own Algorithm
+/// 7 over its own long division, limb for limb, and the resulting point
+/// against `k256` and `ark-bn254` by cross-multiplication. A disagreement
+/// between the two implementations exits 251. Exit 20.
+///
+/// **The completeness cases are the ones worth having.** `P + P`, `P + O`,
+/// `O + O` and `P + (-P)` are what an incomplete formula gets wrong, and they
+/// are why this delegation is one addition rather than an addition and a
+/// doubling.
+#[test]
+fn ec_ops_checks_itself_under_the_delegation_ecall() {
+    let execution = run(&image("ec-ops"), &io(&[])).unwrap();
+    assert_eq!(
+        execution.exit_code, 20,
+        "ec-ops exited {}, and 200 + i would name the check that failed",
+        execution.exit_code
+    );
+    assert!(execution.io.output.is_empty(), "it commits nothing");
+}
+
+/// The invocation counts of S26c's two families, and — for `EC_ADD` — the one
+/// thing that can see whether the `k256` projective patch still routes.
+///
+/// `ec-ops` names the `EC_ADD` shim itself, so its count cannot distinguish a
+/// live patch from a dead one; `mod-mul-ops` names neither shim and reaches
+/// both through `k256` alone, which is what makes its two counts the seam's
+/// test. Every number here is a pin over a build: when the guest or a vendored
+/// crate changes, re-derive it rather than accepting it.
+#[test]
+fn the_new_families_are_invoked_the_pinned_number_of_times() {
+    let counts: Vec<(&str, &str, usize)> = [
+        ("sha256-ops", constants::family::SHA256_COMP),
+        ("ec-ops", constants::family::EC_ADD),
+        ("ec-ops", constants::family::MOD_MUL),
+        ("mod-mul-ops", constants::family::EC_ADD),
+    ]
+    .into_iter()
+    .map(|(name, family)| {
+        let image = image(name);
+        let (tables, config) = preprocess(&image);
+        let (traces, ..) = trace_run(&image, &io(&[]), &tables, &config).expect("it traces");
+        let trace = traces.delegation(family).expect("the family has a buffer");
+        (name, program::family_name(family), trace.len())
+    })
+    .collect();
+    // Every one of these is derivable by hand from the guest's source, which
+    // is what makes it a pin and not a recording:
+    //
+    // - `sha256-ops` compresses 33 blocks: 2 by name through the frame ABI,
+    //   and 31 through `guest_sdk::sha256` — 11 for the seven padding-boundary
+    //   lengths, 2 for the two-block vector, 16 for the 1,000-byte message and
+    //   2 for the last one-byte-difference check.
+    // - `ec-ops` performs 27 point operations: 20 of its own additions and 7
+    //   inside its `k256` oracle, which since S26c is itself delegated. Three
+    //   invocations each.
+    // - `mod-mul-ops` performs 13, all of them inside `k256` — its own source
+    //   names no shim at all, which is what makes its count the projective
+    //   patch's only test.
+    assert_eq!(
+        counts,
+        vec![
+            ("sha256-ops", "SHA256_COMP", 33),
+            ("ec-ops", "EC_ADD", 81),
+            ("ec-ops", "MOD_MUL", 2_084),
+            ("mod-mul-ops", "EC_ADD", 39),
+        ]
     );
 }
