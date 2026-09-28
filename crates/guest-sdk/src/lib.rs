@@ -31,7 +31,7 @@
 use core::alloc::{GlobalAlloc, Layout};
 use core::arch::global_asm;
 
-use constants::{delegation, ecall, guest_memory, keccak, poseidon2};
+use constants::{delegation, ecall, guest_memory, keccak, poseidon2, sha256 as sha256c};
 
 // ---------------------------------------------------------------------------
 // crt0
@@ -335,7 +335,7 @@ pub fn poseidon2_permute(state: &mut [u8; 96]) -> bool {
 /// record with it and declares nothing (`docs/spec/delegation.md` §7).
 pub mod recursion {
     use super::{delegation_number, ecall1, exit, EXIT_PRECOMPILE_ERROR};
-    use constants::{delegation, ecall, fr_arith, mod_mul, poseidon2};
+    use constants::{delegation, ec_add as ec, ecall, fr_arith, mod_mul, poseidon2, sha256 as sha};
 
     /// The Poseidon2 delegation's declaration record.
     #[link_section = ".rodata.apogee.delegations.poseidon2"]
@@ -351,6 +351,16 @@ pub mod recursion {
     #[link_section = ".rodata.apogee.delegations.mod_mul"]
     static DELEGATION_MOD_MUL: [u8; delegation::MARKER_BYTES] =
         super::record(ecall::PRECOMPILE_MOD_MUL);
+
+    /// The SHA-256 compression delegation's declaration record.
+    #[link_section = ".rodata.apogee.delegations.sha256_comp"]
+    static DELEGATION_SHA256_COMP: [u8; delegation::MARKER_BYTES] =
+        super::record(ecall::PRECOMPILE_SHA256_COMP);
+
+    /// The elliptic-curve addition delegation's declaration record.
+    #[link_section = ".rodata.apogee.delegations.ec_add"]
+    static DELEGATION_EC_ADD: [u8; delegation::MARKER_BYTES] =
+        super::record(ecall::PRECOMPILE_EC_ADD);
 
     /// The Poseidon2 delegation's 96-byte frame: three canonical
     /// little-endian `Fr` lanes, permuted in place.
@@ -445,12 +455,125 @@ pub mod recursion {
         }
     }
 
+    /// The selector triples one complete [`EcAddFrame`] addition walks, and
+    /// SHA-256's initial hash value — re-exported so a caller, including a
+    /// vendored crate under `guests/vendor` whose only apogee dependency is
+    /// this one, names the constant rather than spelling it a second time.
+    pub use constants::ec_add::{BN254_GROUPS, SECP256K1_GROUPS};
+    pub use constants::sha256::IV as SHA256_IV;
+
+    /// The SHA-256 compression delegation's 96-byte frame: the eight chaining
+    /// words, then one block's sixteen big-endian-decoded schedule words
+    /// (`docs/spec/delegation.md` §15).
+    ///
+    /// **Words and not bytes**, for [`ModMulFrame`]'s reason: the caller has
+    /// already decoded the block into `u32`s to run its own compression, so a
+    /// byte frame would cost a pack and an unpack per block. The `u32` element
+    /// type is also what gives the type its alignment for free.
+    #[repr(C, align(4))]
+    pub struct Sha256Frame(pub [u32; sha::FRAME_WORDS]);
+
+    /// The elliptic-curve addition delegation's 388-byte frame: the selector,
+    /// the two input points in homogeneous projective coordinates, and the six
+    /// intermediates the three invocations pass between them
+    /// (`docs/spec/delegation.md` §16).
+    #[repr(C, align(4))]
+    pub struct EcAddFrame(pub [u32; ec::FRAME_WORDS]);
+
+    // The two frames' word layouts, which the constructors below index through
+    // these names and never by a literal. **Re-point these, never delete
+    // them**: they are what holds a guest's reads and writes equal to the
+    // executor's, and a frame whose `Z1` a guest reads at word 17 against an
+    // executor that writes it at 18 is a wrong answer with no error anywhere in
+    // the emulator, the trace, the prover or the verifier.
+    const _: () = assert!(sha::STATE_WORD == 0);
+    const _: () = assert!(sha::BLOCK_WORD == 8);
+    const _: () = assert!(sha::FRAME_WORDS == 24);
+    const _: () = assert!(ec::SELECTOR_WORD == 0);
+    const _: () = assert!(ec::X1_WORD == 1);
+    const _: () = assert!(ec::Y1_WORD == 9);
+    const _: () = assert!(ec::Z1_WORD == 17);
+    const _: () = assert!(ec::X2_WORD == 25);
+    const _: () = assert!(ec::Y2_WORD == 33);
+    const _: () = assert!(ec::Z2_WORD == 41);
+    const _: () = assert!(ec::FRAME_WORDS == 97);
+
+    impl Sha256Frame {
+        /// A callable frame: the chaining state, then the block's sixteen
+        /// schedule words. One pass over the words and no zeroing pass before
+        /// it, [`ModMulFrame::of`]'s reason applying here too — a SHA-256 of
+        /// any length is a block loop, so the framing cost is paid per block.
+        pub fn of(state: &[u32; sha::STATE_WORDS], block: &[u32; sha::BLOCK_WORDS]) -> Sha256Frame {
+            let (s, w) = (state, block);
+            Sha256Frame([
+                s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], w[0], w[1], w[2], w[3], w[4], w[5],
+                w[6], w[7], w[8], w[9], w[10], w[11], w[12], w[13], w[14], w[15],
+            ])
+        }
+
+        /// The chaining state after a successful call.
+        pub fn state(&self) -> [u32; sha::STATE_WORDS] {
+            let w = &self.0;
+            [
+                w[sha::STATE_WORD],
+                w[sha::STATE_WORD + 1],
+                w[sha::STATE_WORD + 2],
+                w[sha::STATE_WORD + 3],
+                w[sha::STATE_WORD + 4],
+                w[sha::STATE_WORD + 5],
+                w[sha::STATE_WORD + 6],
+                w[sha::STATE_WORD + 7],
+            ]
+        }
+    }
+
+    impl EcAddFrame {
+        /// A callable frame for the first group of `codes`: the two points, in
+        /// homogeneous projective coordinates, every limb already **below the
+        /// selected curve's modulus** — which the circuit enforces and the
+        /// executor refuses by name, so a caller holding a lazily reduced
+        /// representation reduces before it calls.
+        ///
+        /// The six intermediate lanes are zeroed rather than left as whatever
+        /// the stack held. Their value before the group that writes them is
+        /// free to the arithmetic, and zero is below every modulus, so a frame
+        /// built here is canonical in **every** lane at every group — which is
+        /// one fewer thing for a caller to get right, at 48 stores a call
+        /// against the three modular multiplications this replaces.
+        pub fn of(
+            codes: &[u32; ec::GROUPS],
+            p: &[[u32; ec::LIMBS]; 3],
+            q: &[[u32; ec::LIMBS]; 3],
+        ) -> EcAddFrame {
+            let mut frame = EcAddFrame([0u32; ec::FRAME_WORDS]);
+            frame.0[ec::SELECTOR_WORD] = codes[0];
+            let w = &mut frame.0;
+            w[ec::X1_WORD..ec::X1_WORD + ec::LIMBS].copy_from_slice(&p[0]);
+            w[ec::Y1_WORD..ec::Y1_WORD + ec::LIMBS].copy_from_slice(&p[1]);
+            w[ec::Z1_WORD..ec::Z1_WORD + ec::LIMBS].copy_from_slice(&p[2]);
+            w[ec::X2_WORD..ec::X2_WORD + ec::LIMBS].copy_from_slice(&q[0]);
+            w[ec::Y2_WORD..ec::Y2_WORD + ec::LIMBS].copy_from_slice(&q[1]);
+            w[ec::Z2_WORD..ec::Z2_WORD + ec::LIMBS].copy_from_slice(&q[2]);
+            frame
+        }
+
+        /// The sum, after a successful [`ec_add_complete`]: the third group
+        /// writes `X3`, `Y3` and `Z3` over the `X1`, `Y1` and `Z1` lanes the
+        /// first two groups have by then finished reading.
+        pub fn result(&self) -> [[u32; ec::LIMBS]; 3] {
+            let limbs = |first: usize| core::array::from_fn(|k| self.0[first + k]);
+            [limbs(ec::X1_WORD), limbs(ec::Y1_WORD), limbs(ec::Z1_WORD)]
+        }
+    }
+
     // The frame rule of `docs/spec/delegation.md` §4 as a type-level
     // assertion: what the ecall hands over is word-aligned or this crate does
     // not build.
     const _: () = assert!(core::mem::align_of::<Poseidon2Frame>() >= 4);
     const _: () = assert!(core::mem::align_of::<FrArithFrame>() >= 4);
     const _: () = assert!(core::mem::align_of::<ModMulFrame>() >= 4);
+    const _: () = assert!(core::mem::align_of::<Sha256Frame>() >= 4);
+    const _: () = assert!(core::mem::align_of::<EcAddFrame>() >= 4);
 
     /// Permute the frame in place. `false` on exactly `-ENOSYS`.
     pub fn poseidon2(frame: &mut Poseidon2Frame) -> bool {
@@ -493,6 +616,62 @@ pub mod recursion {
             )
         };
         answered(ret)
+    }
+
+    /// Compress one block into the frame's chaining state, in place. `false`
+    /// on exactly `-ENOSYS`, which is the caller's signal to run its own
+    /// compression.
+    ///
+    /// The schedule's sixteen words are read and written back unchanged; the
+    /// other forty-eight the message schedule derives are the circuit's own
+    /// advice and never cross the frame.
+    pub fn sha256_comp(frame: &mut Sha256Frame) -> bool {
+        // SAFETY: as [`poseidon2`].
+        let ret = unsafe {
+            ecall1(
+                delegation_number(&DELEGATION_SHA256_COMP),
+                frame.0.as_mut_ptr() as u32,
+            )
+        };
+        answered(ret)
+    }
+
+    /// Run **one group** of a point addition over the frame in place, the group
+    /// and the curve being what the frame's selector word names. `false` on
+    /// exactly `-ENOSYS`.
+    ///
+    /// A caller adding two points wants [`ec_add_complete`]; this is the raw
+    /// call, for a caller driving the selector itself.
+    pub fn ec_add(frame: &mut EcAddFrame) -> bool {
+        // SAFETY: as [`poseidon2`].
+        let ret = unsafe {
+            ecall1(
+                delegation_number(&DELEGATION_EC_ADD),
+                frame.0.as_mut_ptr() as u32,
+            )
+        };
+        answered(ret)
+    }
+
+    /// One complete addition: the three groups of `codes` in order, leaving the
+    /// sum in the frame's first three lanes for [`EcAddFrame::result`].
+    /// `false` on exactly `-ENOSYS` from the **first** group, and then the
+    /// frame's two input points are untouched, so the caller's own formulas
+    /// have their operands still.
+    ///
+    /// The order is the whole of this function's content and the reason it
+    /// exists: group 0 leaves `xx`, `yy` and `zz`, group 1 leaves `m4`, `m5`
+    /// and `m6`, and group 2 consumes all six. Two of them transposed is not a
+    /// refusal anywhere — it is a different point, computed from lanes whose
+    /// previous contents were zero.
+    pub fn ec_add_complete(frame: &mut EcAddFrame, codes: &[u32; ec::GROUPS]) -> bool {
+        for code in codes {
+            frame.0[ec::SELECTOR_WORD] = *code;
+            if !ec_add(frame) {
+                return false;
+            }
+        }
+        true
     }
 
     /// 0 is "the circuit ran it", `-ENOSYS` is "this executor has no circuit",
@@ -715,6 +894,130 @@ pub fn keccak256(input: &[u8]) -> [u8; keccak::DIGEST_BYTES] {
     permute(&mut state);
     let mut digest = [0u8; keccak::DIGEST_BYTES];
     digest.copy_from_slice(&state.0[..keccak::DIGEST_BYTES]);
+    digest
+}
+
+// ---------------------------------------------------------------------------
+// SHA-256
+// ---------------------------------------------------------------------------
+
+/// One SHA-256 compression in software: the fallback, and the definition the
+/// delegated path is held to.
+///
+/// FIPS 180-4 §6.2.2 over one block's sixteen schedule words, the remaining
+/// forty-eight derived here. `crates/emulator`'s `sha256_frame` carries the
+/// executor's own copy and `crates/constraints::sha256` the circuit's; all
+/// three are held equal to the published test vectors, and a crate whose only
+/// purpose was to be shared by them would be the abstraction the master's
+/// anti-goals refuse.
+fn sha256_compress_software(
+    state: &mut [u32; sha256c::STATE_WORDS],
+    block: &[u32; sha256c::BLOCK_WORDS],
+) {
+    let mut w = [0u32; sha256c::ROUNDS];
+    w[..sha256c::BLOCK_WORDS].copy_from_slice(block);
+    for i in sha256c::BLOCK_WORDS..sha256c::ROUNDS {
+        let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+        let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+        w[i] = w[i - 16]
+            .wrapping_add(s0)
+            .wrapping_add(w[i - 7])
+            .wrapping_add(s1);
+    }
+    let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = *state;
+    for (i, wi) in w.iter().enumerate() {
+        let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+        let ch = (e & f) ^ (!e & g);
+        let t1 = h
+            .wrapping_add(s1)
+            .wrapping_add(ch)
+            .wrapping_add(sha256c::ROUND_CONSTANTS[i])
+            .wrapping_add(*wi);
+        let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+        let maj = (a & b) ^ (a & c) ^ (b & c);
+        let t2 = s0.wrapping_add(maj);
+        h = g;
+        g = f;
+        f = e;
+        e = d.wrapping_add(t1);
+        d = c;
+        c = b;
+        b = a;
+        a = t1.wrapping_add(t2);
+    }
+    for (slot, v) in state.iter_mut().zip([a, b, c, d, e, f, g, h]) {
+        *slot = slot.wrapping_add(v);
+    }
+}
+
+/// One compression: the delegation, or the software path.
+///
+/// The frame satisfies `docs/spec/delegation.md` §4's two rules exactly as
+/// keccak's does — the window rule by construction, the stack lying below
+/// `__stack_top`, and the alignment rule by [`recursion::Sha256Frame`]'s type.
+fn sha256_compress(state: &mut [u32; sha256c::STATE_WORDS], block: &[u32; sha256c::BLOCK_WORDS]) {
+    let mut frame = recursion::Sha256Frame::of(state, block);
+    if recursion::sha256_comp(&mut frame) {
+        *state = frame.state();
+        return;
+    }
+    sha256_compress_software(state, block);
+}
+
+/// SHA-256 of `input`: Ethereum's `0x02` precompile, and FIPS 180-4.
+///
+/// **This signature is the patchable entry point**, as [`keccak256`]'s is: the
+/// delegated path and the software fallback are bit-identical behind it and a
+/// guest never chooses between them and cannot tell which ran.
+///
+/// The padding and the block loop run here, in guest code, and one delegation
+/// ecall covers each compression. Padding is Merkle-Damgård's — `0x80`, zeros,
+/// then the message's **bit** length as a 64-bit big-endian integer — and every
+/// word crossing the frame is big-endian decoded, SHA-256 being a big-endian
+/// design where keccak is a little-endian one.
+pub fn sha256(input: &[u8]) -> [u8; 4 * sha256c::STATE_WORDS] {
+    const BLOCK_BYTES: usize = 4 * sha256c::BLOCK_WORDS;
+
+    let mut state = sha256c::IV;
+    let decode = |bytes: &[u8]| -> [u32; sha256c::BLOCK_WORDS] {
+        core::array::from_fn(|i| {
+            u32::from_be_bytes([
+                bytes[4 * i],
+                bytes[4 * i + 1],
+                bytes[4 * i + 2],
+                bytes[4 * i + 3],
+            ])
+        })
+    };
+
+    let mut blocks = input.chunks_exact(BLOCK_BYTES);
+    for chunk in blocks.by_ref() {
+        sha256_compress(&mut state, &decode(chunk));
+    }
+
+    // The tail, padded. `chunks_exact`'s remainder is shorter than a block, so
+    // the padded tail is one block when the `0x80` and the eight length bytes
+    // fit in what is left and two when they do not — which is the case for a
+    // remainder of 56 bytes or more, the empty input included in the first.
+    let rest = blocks.remainder();
+    let mut tail = [0u8; 2 * BLOCK_BYTES];
+    tail[..rest.len()].copy_from_slice(rest);
+    tail[rest.len()] = 0x80;
+    let padded = if rest.len() + 9 > BLOCK_BYTES {
+        2 * BLOCK_BYTES
+    } else {
+        BLOCK_BYTES
+    };
+    let bits = (input.len() as u64) * 8;
+    tail[padded - 8..padded].copy_from_slice(&bits.to_be_bytes());
+    for chunk in tail[..padded].chunks_exact(BLOCK_BYTES) {
+        sha256_compress(&mut state, &decode(chunk));
+    }
+
+    let mut digest = [0u8; 4 * sha256c::STATE_WORDS];
+    for (i, word) in state.iter().enumerate() {
+        digest[4 * i..4 * i + 4].copy_from_slice(&word.to_be_bytes());
+    }
     digest
 }
 

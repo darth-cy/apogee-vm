@@ -2398,6 +2398,10 @@ name = "revm-block"
 version = "0.1.0"
 dependencies = [
  "alloy-primitives",
+ "ark-bn254",
+ "ark-ec",
+ "ark-ff 0.6.0",
+ "ark-serialize 0.6.0",
  "guest-sdk",
  "postcard",
  "revm",

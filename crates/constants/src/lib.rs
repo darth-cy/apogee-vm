@@ -2279,6 +2279,42 @@ pub mod ec_add {
         }
     }
 
+    /// The code naming `curve`'s `group`, or `None` for a pair no code names.
+    ///
+    /// The inverse of [`CODE_CURVE`] and [`CODE_GROUP`], by search over the
+    /// same tables, so they stay the one authority in both directions. A
+    /// caller performing a whole addition wants the three codes of one curve
+    /// in group order and should not derive them from [`CODES`]' happening to
+    /// be grouped that way.
+    pub const fn group_code(curve: usize, group: usize) -> Option<u32> {
+        let mut i = 0;
+        while i < CODES.len() {
+            if CODE_CURVE[i] == curve && CODE_GROUP[i] == group {
+                return Some(CODES[i]);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    /// secp256k1's three codes, in group order: the sequence one complete
+    /// addition's three invocations carry.
+    pub const SECP256K1_GROUPS: [u32; GROUPS] = [SECP256K1_G1, SECP256K1_G2, SECP256K1_G3];
+
+    /// BN254 G1's three codes, in group order.
+    pub const BN254_GROUPS: [u32; GROUPS] = [BN254_G1, BN254_G2, BN254_G3];
+
+    // The two triples are literals so a caller gets them without a search,
+    // and [`group_code`] is what says they are the right literals: a code
+    // renumbered in [`CODES`] without its triple following fails the build
+    // rather than sending group 1's operands through group 2's formula.
+    const _: () = assert!(matches!(group_code(0, 0), Some(c) if c == SECP256K1_GROUPS[0]));
+    const _: () = assert!(matches!(group_code(0, 1), Some(c) if c == SECP256K1_GROUPS[1]));
+    const _: () = assert!(matches!(group_code(0, 2), Some(c) if c == SECP256K1_GROUPS[2]));
+    const _: () = assert!(matches!(group_code(1, 0), Some(c) if c == BN254_GROUPS[0]));
+    const _: () = assert!(matches!(group_code(1, 1), Some(c) if c == BN254_GROUPS[1]));
+    const _: () = assert!(matches!(group_code(1, 2), Some(c) if c == BN254_GROUPS[2]));
+
     /// Limbs of a quotient. Group 2's operands are bounded linear combinations
     /// of canonical values rather than canonical values themselves — the worst
     /// is `byz3 <= 63m` against `xz <= 3m` — and every slot's identity carries

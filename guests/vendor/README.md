@@ -31,7 +31,7 @@ they are the price of being able to read the code that runs.
 
 ---
 
-## `k256` 0.13.4 — S26, extended at S26b
+## `k256` 0.13.4 — S26, extended at S26b and S26c
 
 Upstream `https://github.com/RustCrypto/elliptic-curves`, commit
 `5ac8f5d77f11399ff48d87b0554935f6eddda342` (`.cargo_vcs_info.json`), as published.
@@ -57,6 +57,37 @@ being already reduced and already eight 32-bit limbs.
 | `Cargo.toml` | one `[target.'cfg(target_arch = "riscv32")'.dependencies]` entry on `guest-sdk`. A target dependency and never a cargo feature, which is how `crates/field` and `crates/transcript` reach their own shims |
 | `src/arithmetic/field/field_10x26.rs` | `mul` and `square` select `apogee::mul_mod_p` under `cfg(target_arch = "riscv32")` and are otherwise untouched, plus a new private `mod apogee` at the end of the file holding `packable`, `pack`, `unpack`, `operand` and `mul_mod_p` |
 | `src/arithmetic/scalar.rs` | `Scalar::mul` selects `apogee::mul_mod_n` under the same `cfg` and is otherwise untouched, plus a new private `mod apogee` at the end of the file. `Scalar::square` is `self.mul(self)` upstream, so it follows |
+| `src/arithmetic/projective.rs` | **S26c.** `add`, `add_mixed` and `double` select `apogee::{add, add_mixed, double}` under the same `cfg`; each upstream body moves down one function to `add_inner`, `add_mixed_inner` and `double_inner`, unchanged, and is the fallback. A new private `mod apogee` at the end of the file holds `limbs`, `field`, `lanes`, `point` and the three entry points. **`ProjectivePoint`'s storage is untouched** |
+
+**Why the projective patch is a drop-in, and why that is not luck.** Upstream's
+`ProjectivePoint::add` *is* Renes–Costello–Batina 2015 Algorithm 7 in homogeneous
+projective coordinates, and `docs/spec/delegation.md` §16's `EC_ADD` circuit is
+the same algorithm over the same representation — because it was designed to be
+(the owner's rule: a delegation understands the representation its caller already
+uses). So the delegated path and `add_inner` agree **limb for limb** and not
+merely as points, which is the opposite of the field patch, where upstream
+returns a weakly normalized product and the delegation returns the canonical
+residue. Three consequences worth knowing:
+
+- **`double` routes too.** Algorithm 7 is complete, so `P + P` is a correct
+  doubling and the delegation needs no second frame. The *fallback* stays
+  Algorithm 9, upstream's dedicated doubling, because in software that is the
+  cheaper of the two and an executor taking the fallback is paying software
+  prices for everything.
+- **`add_mixed`'s identity correction is kept.** An affine identity is `(0, 0)`
+  here, which lifted to `(0 : 0 : 1)` is neither the projective identity nor a
+  curve point, so no complete formula rescues it — upstream's
+  `conditional_assign` is what does, and it is still there.
+- **The operand bound costs a normalization per coordinate.** `FieldElement::
+  to_bytes` fully normalizes before encoding, so the circuit's `a < m` holds by
+  construction. There is no fast path as there is in `field_10x26`'s `operand`:
+  this runs six times per addition against twelve multiplies removed, where that
+  runs twice per multiply.
+
+**And it changes what `guests/mod-mul-ops` declares.** That guest's `k256` group
+arithmetic now reaches the `EC_ADD` shim as well, so it declares two delegation
+families where it declared one, and its `MOD_MUL` invocation count falls. Both
+are re-pinned; `docs/handoff/S26c-sha256-ec.md` records the numbers.
 
 **Why `field_10x26.rs` and not `field_impl.rs`.** `field.rs` picks its
 `FieldElementImpl` by `cfg(debug_assertions)`: the magnitude-tracking wrapper in

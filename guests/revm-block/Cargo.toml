@@ -50,10 +50,22 @@ path = "src/stateless_main.rs"
 # dependency of `crates/emulator`, `crates/prover` and `tools/kat-gen` in the
 # main one -- and `=` is what stops a `cargo update` in either from moving it
 # without a decision.
+#
+# The four `ark-*` entries are S26c's. `src/precompile.rs` re-implements the
+# parsing, encoding and group arithmetic of the `0x06` and `0x07` precompiles so
+# that the group law can be the `EC_ADD` delegation; that needs the same
+# arkworks types `revm-precompile` itself uses, at the same `0.6` it pins, so
+# cargo unifies them and there is exactly one `Fq` in the image. They are
+# **not** guest-only: the parsing compiles for the host too, which is what lets
+# `crates/emulator/tests/revm.rs` hold it against the real `DefaultCrypto`.
 [dependencies]
 revm = { version = "=42.0.1", default-features = false }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 postcard = { version = "1", default-features = false, features = ["alloc"] }
+ark-bn254 = { version = "0.6", default-features = false, features = ["curve"] }
+ark-ec = { version = "0.6", default-features = false }
+ark-ff = { version = "0.6", default-features = false }
+ark-serialize = { version = "0.6", default-features = false }
 
 [target.'cfg(target_arch = "riscv32")'.dependencies]
 guest-sdk.workspace = true

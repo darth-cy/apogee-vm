@@ -50,6 +50,7 @@
 extern crate alloc;
 
 pub mod mpt;
+pub mod precompile;
 pub mod stateless;
 
 use alloc::string::String;
@@ -822,6 +823,13 @@ pub fn run(witness: &BlockWitness) -> Result<Vec<u8>, String> {
 /// introduced for it rather than in case of it.
 /// `docs/handoff/S25-block.md` records it.
 pub fn run_against<DB: revm::Database>(witness: &BlockWitness, db: DB) -> Result<Vec<u8>, String> {
+    // S26c: route `0x02`, `0x06` and `0x07` through this VM's delegation
+    // circuits, on the guest target alone. It must precede the EVM's
+    // construction — revm reads its provider through a `OnceLock`'s
+    // `get_or_init`, so the first read is what fixes it — and it is a no-op on
+    // the host, which keeps the native-revm oracle on upstream's software.
+    precompile::install();
+
     let spec = witness
         .env
         .spec()
