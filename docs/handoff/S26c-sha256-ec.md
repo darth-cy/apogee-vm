@@ -229,6 +229,15 @@ from the guest's source, which is what makes it a pin and not a recording.
 own source names no shim at all, so if the patch stopped routing, every check in
 it would still pass and only these two numbers would move.
 
+**Which is why those two, and only those two, stayed in ordinary CI.** The table's
+first three rows trace `ec-ops`, and that test measured at 23.9 GiB (§7.1), so it is
+`#[ignore]`d. Both `mod-mul-ops` rows live in
+`mod_mul_ops_routes_every_vendored_patch_through_the_ecall`, which was already
+tracing that guest in CI and had both buffers in hand — so the coverage that cannot
+be given up costs 2.04 s, and what went to the dev server is the coverage that could.
+`ec-ops` calls the `EC_ADD` shim **by name**, so its 81 would stay correct even if the
+vendored patch were bypassed entirely; it is not the count that watches the seam.
+
 ### 3.5 Why `install_crypto` was abandoned, with the number
 
 The owner chose revm's `Crypto` hook at the start of the stage and it was the
