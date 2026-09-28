@@ -1044,8 +1044,9 @@ fn the_shape_is_the_manifests() {
     // The degree-1 half is the 17 `writes_back_w`, `selector_rule`,
     // `one_modulus_a_live_row`, the 8 `m_limb{k}_rule`, the 24 `*_canonical`
     // and the 3 `*_below_modulus`; the degree-2 half is the 4
-    // `selector{c}_boolean`, the 24 `*_borrow{i}_boolean`, the 16 `limb{k}`,
-    // the frame's 25 `addr_w{j}` and its two base decompositions.
+    // `selector{c}_boolean`, the 24 `*_borrow{i}_boolean`, the 15 `limb{k}`,
+    // the frame's `live_boolean` and 25 `addr_w{j}`, and its two base
+    // decompositions.
     let enforcing: Vec<&constraints::Relation> =
         a.relations.iter().filter(|r| r.output.is_none()).collect();
     let degree1 = enforcing
@@ -1073,10 +1074,6 @@ fn the_shape_is_the_manifests() {
 /// **The two heights are now `2^16` and `2^18`**: `2^8` is not one this family
 /// can be built at since S26c, because `RANGE16`'s table needs sixteen
 /// variables and `family_circuit` returns `None` below that.
-///
-/// **The two heights are `2^16` and `2^18`**: since S26c `2^8` is not one this
-/// family can be built at, because `RANGE16`'s table needs sixteen variables
-/// and `family_circuit` returns `None` below that.
 ///
 /// S26 raised this family from `2^8` to `2^16`, and this is what says the raise
 /// was a height and not a circuit change wearing a height's clothes.

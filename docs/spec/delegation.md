@@ -779,7 +779,7 @@ a frame's 38-bit timestamp gap is two columns where it is 38. `EC_ADD`'s frame i
 97 words, so the gap alone is 3,746 bit columns against 194 chunk columns — and
 the family has 24 more 32-bit values to bound besides. Re-shaping `MOD_MUL` the
 same way at the same time took its committed width from **3,468 to 325**, a
-factor of 10.7, and its proof from 360,884 bytes a shard to 135,220.
+factor of 10.7, and its proof from 360,948 bytes a shard to 135,220.
 
 **What the amendment does not touch.** A family at `2^8` still carries no
 channel, because no table fits there — `SHA256_COMP` is the worked example, and

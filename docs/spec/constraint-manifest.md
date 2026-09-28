@@ -8227,7 +8227,7 @@ obligations**. So:
 | gate lists at `n = 16` | 22 (6 + 16) | **26** (10 + 16) | — |
 | inner columns at `n = 16` | 158 | **2,244** | 0.07 |
 | wire bytes | 1,404,716 | **550,391** | 2.6 |
-| proof bytes a shard at `n = 16` | 360,884 | **135,220** | 2.7 |
+| proof bytes a shard at `n = 16` | 360,948 | **135,220** | 2.7 |
 
 The `W` side is the whole of the committed fall: 950 gap bits became 50 chunks, 60 base bits
 became 4 columns, each value's 520 columns became 32, `q`'s 264 became 16, and the carries' 518
@@ -8238,7 +8238,7 @@ groups: the 3,320 booleanity gates of those bit decompositions, the 32 `<v>_word
 now do the work of (§18.5). Nothing else went.
 
 **The proof is where the win lands.** 3,364 witness commitments at 64 bytes were 215,296 of the
-old 360,884; 221 are 14,144 of the new 135,220, and the commit phase is 325 Mercury column
+old 360,948; 221 are 14,144 of the new 135,220, and the commit phase is 325 Mercury column
 commitments where it was 3,468. The numbers are `shard-proof.md` §9's layout over this circuit's
 own shape, the formula `crates/prover/tests/mem.rs`' `proof_bytes` computes (§1.2).
 

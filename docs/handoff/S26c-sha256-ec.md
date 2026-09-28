@@ -229,37 +229,6 @@ from the guest's source, which is what makes it a pin and not a recording.
 own source names no shim at all, so if the patch stopped routing, every check in
 it would still pass and only these two numbers would move.
 
----
-
-## 4. `MOD_MUL` re-shaped, in the same stage
-
-The owner folded it in, and it is the clearest measurement of what a channel is
-worth on a delegation family.
-
-| | pre-S26c | now | factor |
-| --- | --- | --- | --- |
-| committed columns | 3,468 | **325** | 10.7 |
-| enforcing gates | 3,502 | **125** | 28.0 |
-| obligations | 0 | **274** | — |
-| wire bytes | 1,404,716 | **550,391** | 2.6 |
-| proof bytes a shard | 360,884 | **135,220** | 2.7 |
-| computed peak a shard | ~4.9 GB | ~5.1 GB | 1.0 |
-
-**The peak does not fall**, and `constraints::mod_mul`'s header claimed it fell
-1.9×. The work moved out of the base layer and its first bind and into the inner
-layers: 158 inner columns became 2,244, so the forward pass grew 0.27 → 4.57 GB
-while the committed base fell 0.96 → 0.16 and the first bind 3.64 → 0.34. What
-the channel buys is the **proof and the commitments** — 325 Mercury column
-commitments where there were 3,468 — at constant peak.
-
-**One consequence reached further than expected.** The family can no longer be
-built below `2^16`, so `MOD_MUL_FIXTURE_VARS = 8` is gone and
-`DELEGATION_CHANNEL_VARS = 16` replaces it. That in turn retired the multi-shard
-fixture — at `2^16` the 1,443 invocations are one shard, 98% padding — and
-forced both the checker suite and the prover fill test onto **row-local**
-evaluation, a forward pass at that height being 4.6 GB. Both are cheaper than
-what they replaced and both are the same statement per row.
-
 ### 3.5 Why `install_crypto` was abandoned, with the number
 
 The owner chose revm's `Crypto` hook at the start of the stage and it was the
@@ -292,9 +261,58 @@ is what every `cfg(not(target_arch = "riscv32"))` arm does.
 
 ## 4. `MOD_MUL` re-shaped, in the same stage
 
-*(§4 is above; this section continues at §5.)*
+The owner folded it in, and it is the clearest measurement of what a channel is
+worth on a delegation family.
 
----
+| | pre-S26c | now | factor |
+| --- | --- | --- | --- |
+| committed columns | 3,468 | **325** | 10.7 |
+| enforcing gates | 3,502 | **125** | 28.0 |
+| obligations | 0 | **274** | — |
+| wire bytes | 1,404,716 | **550,391** | 2.6 |
+| proof bytes a shard | 360,948 | **135,220** | 2.7 |
+| computed peak a shard | ~4.9 GB | ~5.1 GB | 1.0 |
+
+**The peak does not fall**, and `constraints::mod_mul`'s header claimed it fell
+1.9×. The work moved out of the base layer and its first bind and into the inner
+layers: 158 inner columns became 2,244, so the forward pass grew 0.27 → 4.57 GB
+while the committed base fell 0.96 → 0.16 and the first bind 3.64 → 0.34. What
+the channel buys is the **proof and the commitments** — 325 Mercury column
+commitments where there were 3,468 — at constant peak.
+
+**Both proof figures are computed, not measured, and here is the derivation** —
+because the first value written for the old one was wrong by 64 bytes and nothing
+in the suite would have caught it. The formula is `crates/prover/tests/mem.rs`'
+`proof_bytes` over the artifact's shape, and every input to it is pinned: the new
+shape in `crates/constraints/tests/vectors/mod_mul.txt`, the old one in the same
+file on `main`. At `n = 16`:
+
+| | old | new |
+| --- | --- | --- |
+| committed, `layer_width(0)` | 104 + 3,364 = 3,468 | 104 + 221 = 325 |
+| row-wise lists, widths of layers 1.. | 6: 64, 32, 16, 8, 4, 2 | 10: 1,088, 544, 272, 136, 68, 34, 18, 10, 6, 4 |
+| halving lists | 16, each 2 wide | 16, each 4 wide |
+| `Σ layer_vars(k+1)` | 6·16 + (15+…+0) = 216 | 10·16 + (15+…+0) = 280 |
+| `Σ claims` (halving counts twice) | 3,656 | 2,629 |
+| transitions | 144,816 | 120,176 |
+| **total** | **360,948** | **135,220** |
+
+The row-wise widths are the only input not pinned by a fixture, and they are
+recoverable from two that are: `lists` gives the split (26 − 16 halving = 10
+row-wise) and `inner` is their sum plus `outputs · n` — 2,180 + 64 = 2,244 for the
+new shape, 126 + 32 = 158 for the old, both matching `mod_mul.txt` exactly. That
+the method reproduces the new total to the byte is what makes the old one
+trustworthy. **Neither figure has a test pin**, and adding one would mean a ninth
+column in a delegation fixture; the named alternative is that the eight columns
+that *are* pinned determine it, as the paragraph above shows.
+
+**One consequence reached further than expected.** The family can no longer be
+built below `2^16`, so `MOD_MUL_FIXTURE_VARS = 8` is gone and
+`DELEGATION_CHANNEL_VARS = 16` replaces it. That in turn retired the multi-shard
+fixture — at `2^16` the 1,443 invocations are one shard, 98% padding — and
+forced both the checker suite and the prover fill test onto **row-local**
+evaluation, a forward pass at that height being 4.6 GB. Both are cheaper than
+what they replaced and both are the same statement per row.
 
 ## 5. The three bugs, and what found each
 
@@ -463,6 +481,11 @@ refuse.
 
 ## 10. What a later stage would pick up
 
+- **The `k256` limb conversion**, §6: a measured 778,752 cycles, 4.9% of the
+  pinned block, for a change of base that `field_10x26` already implements. It is
+  the cheapest win left on this workload by some margin, and the only reason it is
+  not taken here is that it widens the vendored diff from two files to four. A
+  stage that touches `guests/vendor/k256` again should take it in passing.
 - **The pairing.** `0x08` is where the measured BN254 cycles in every profiled
   block actually are — `sum_of_products` call counts pin block 26,059,700's to
   one ~4-pair pairing plus some thirteen cheap G1 calls — and it was out of scope

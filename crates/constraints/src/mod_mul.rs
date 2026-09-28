@@ -29,7 +29,7 @@
 //! value bits, 768 chain bits, 256 quotient bits, 518 carry bits — and at
 //! `2^16`, where its table fits, `RANGE16` makes each of them one committed
 //! column and two obligations instead. **3,468 committed columns become 325**,
-//! a factor of 10.7, and the proof falls from 360,884 bytes a shard to 135,220,
+//! a factor of 10.7, and the proof falls from 360,948 bytes a shard to 135,220,
 //! a factor of 2.7.
 //!
 //! **The peak does not fall, and the earlier claim that it fell 1.9x was
