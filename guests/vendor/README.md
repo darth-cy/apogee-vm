@@ -142,7 +142,7 @@ normalizes first.
 
 Upstream as published, from the same `=42.0.1` `guests/revm-block` pins. Cargo's
 `.cargo-ok` marker and `Cargo.toml.orig` are not copied; every other file is
-byte-identical to the release but the two named below.
+byte-identical to the release but the three named below.
 
 **Why.** Ethereum's `0x02`, `0x06` and `0x07` precompiles — SHA-256, BN254
 point addition and BN254 scalar multiplication — are this crate's, and S26c has
@@ -168,7 +168,7 @@ removes the BLS12-381 path; the arkworks one is not optional.
 one `Crypto` implementation, `DefaultCrypto`, so `crypto()` devirtualizes as
 before and the image grows by **10,568 bytes** over the pre-S26c one.
 
-**The two changed files.**
+**The three changed files.**
 
 | file | change |
 | --- | --- |
