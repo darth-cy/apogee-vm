@@ -1290,6 +1290,7 @@ is derivable *from* them is regenerated and diffed in CI.
 | S26b — `MOD_MUL` specialized: four fixed Ethereum moduli | done | `docs/handoff/S26b-eth-field-mul.md` |
 | S26c — SHA-256 compression + secp256k1/BN254 `EC_ADD` | done | `docs/handoff/S26c-sha256-ec.md` |
 | S-DEBUG — The proving debug log | done | `docs/handoff/S-DEBUG-debug-log.md` |
+| S-BATCH — The mini-block gate, measured | done | `docs/handoff/S-BATCH-miniblock-gate.md` |
 
 **S-IO takes no number, and that is deliberate** (owner's decision). It is not one of the
 original twenty-seven stages — it is the stage those twenty-seven forgot, inserted after
@@ -1299,6 +1300,22 @@ means**: the recorder that produces a `BlockWitness` for real blocks. The forwar
 references to `S25` in that prompt and in `docs/handoff/S24-revm.md` are the owner's, are
 about that stage and are left alone; every `S25` in this repository that meant *this* stage
 now reads `S-IO`.
+
+**`S-BATCH` takes no number either**, and it is the deferred batch S26c skipped. S26c's
+handoff §7.1 records that the owner opened PR #32 without running the fourteen `# DEFERRED`
+suites; S-DEBUG was then built *for* that batch. S-BATCH ran **only the mini-block gate** —
+green, and the first end-to-end proof that S26b's `MOD_MUL` and S26c's `EC_ADD` are
+bit-exact — and the owner cancelled the rest. It changed no circuit; it fixed eight
+assertions two new delegation types had moved, and it produced this repository's first
+x86-64 measurements. **Three of its findings change how later stages should plan.** The
+mini-block gate peaks at **136.28 GiB**, 3.9× what S25 records and 3.3× the largest peak
+recorded anywhere, so no pre-S26c memory figure is usable for sizing. A per-shard `ms` in
+a parallel region is **not a cost** — one shard logged 1,244 ms and 154,168 ms for
+identical work — so per-family costs must be read off a serial pass. And **`guests/revm-block`
+cannot prove a full block at all**: its frozen §2 journal carries a per-transaction record
+against a 1,020-byte window, `guest_sdk::commit` exits 70 rather than truncating, and all
+four real blocks S26 profiled exit 70. Full-block work belongs to `revm-block-stateless`,
+a second identity that has never been proved.
 
 **`S-NATIVE-IO` takes no number for the same reason**, and it is S-IO's other half. S-IO
 built the mechanism that binds an execution's public values and left the POSIX surface
