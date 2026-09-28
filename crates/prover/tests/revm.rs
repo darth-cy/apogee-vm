@@ -280,15 +280,25 @@ fn a6_the_revm_block_proves_and_verifies() {
         .map(|(f, _)| *f)
         .collect();
     assert!(families.contains(&KECCAK), "keccak is declared");
+    // The declared set is read straight out of the linked image: four records,
+    // `APOGDEL1` then the number, at `.rodata` offsets 0x1b587c..0x1b58a0 —
+    // `0x0501` `KECCAK_F`, `0x0504` `MOD_MUL`, `0x0505` `SHA256_COMP` and
+    // `0x0506` `EC_ADD`. The last two arrived at S26c through the vendored
+    // `revm-precompile`'s *default* `Crypto` bodies and `k256`'s patched
+    // `ProjectivePoint`, and neither is invoked by this synthetic block — its
+    // senders are pre-recovered and it calls no `0x02`/`0x06`/`0x07` — so both
+    // are declared with zero shards, which is exactly the third presence rule.
     assert_eq!(
-        &families[families.len() - 4..],
+        &families[families.len() - 6..],
         &[
             family::PUBLIC_INPUT,
             family::PUBLIC_OUTPUT,
             family::ADVICE_WINDOWS,
-            family::MOD_MUL
+            family::MOD_MUL,
+            family::SHA256_COMP,
+            family::EC_ADD
         ],
-        "S-IO's three sort after KECCAK_F, and S26's MOD_MUL after all of them"
+        "S-IO's three sort after KECCAK_F, then S26's MOD_MUL and S26c's two"
     );
     assert!(!families.contains(&family::POSEIDON2));
     assert!(!families.contains(&family::FR_ARITH));
