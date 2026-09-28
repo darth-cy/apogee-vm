@@ -207,7 +207,15 @@ APOGEE_GUEST_PROFILE=release cargo test -p emulator --test revm -- --ignored --t
 cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 17.5 GB peak, 203 s, 30 min on a runner
 cargo test -p prover --test acceptance -- --include-ignored --test-threads=1  # DEFERRED; S16's statement, 10.7 GB peak, 374 s
 cargo test -p verifier --test cli -- --include-ignored --test-threads=1       # DEFERRED; ditto, 10.7 GB, 44 s
-cargo test --release -p checker --test tamper -- --include-ignored --test-threads=1  # DEFERRED; one re-proof a twin, SEVEN statements since S26, 17.9 GB peak, 4231 s -- the slowest by wall clock, and longer since S-IO gave every statement two more shards; --release since S21
+# `checker::tamper` is NOT RUN, anywhere -- owner's instruction, S-BATCH. The suite
+# (4,231 s at S23, 5,330 s and 20.2 GB at S26, SEVEN statements, one re-proof a twin)
+# is struck from EVERY run list: this block, and both of ci.yml's commented blocks.
+# `crates/checker/tests/tamper.rs` and `checker::TamperHarness` REMAIN in the tree --
+# the harness is not optional, `crates/host/tests/prove.rs`'s advice twin being built on
+# it -- so the file can still be run deliberately by name. What no routine run now
+# covers: the per-family tamper twins (control C8's three forgeries, S17-S19's, the
+# delegation anchors' four) and S26c's changed `mm_shards == 1`. What still covers the
+# harness itself: `host::prove`'s `a5_a_corrupted_advice_cell_is_refused`.
 cargo test -p prover --test control -- --include-ignored --test-threads=1     # DEFERRED; S17's statement, 19.6 GB peak, 59 s
 cargo test --release -p prover --test alu -- --include-ignored --test-threads=1  # DEFERRED; S18's statement, 31.7 GB peak, 53 s
 cargo test --release -p prover --test mem -- --include-ignored --test-threads=1  # DEFERRED; S19's statement, 33.5 GB peak, 61 s
