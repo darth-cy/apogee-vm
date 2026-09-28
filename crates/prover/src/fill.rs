@@ -45,6 +45,8 @@ use trace::{
     build_value_window_columns, FrameSlice, MemoryState, Role, RowSlice, TraceArchive,
 };
 
+#[cfg(feature = "debug-info")]
+use crate::debug;
 use crate::Program;
 
 /// What a fill reads: the program, the execution's two unbound inputs, **this
@@ -386,10 +388,70 @@ fn value_columns(
     out
 }
 
+// ---------------------------------------------------------------------------
+// The `debug-info` scans over a delegation frame
+// ---------------------------------------------------------------------------
+
+/// Every delegation family's shared frame facts, as log lines.
+///
+/// Called at the top of each of the six fills, so a run says what the shard
+/// actually holds before any family-specific gate can fail: the invocation
+/// count against the height, the cycle and base ranges, and the timestamp gap
+/// against the 38-bit clock (`debug::frame_scan` is what each means).
+#[cfg(feature = "debug-info")]
+fn deleg_frame_log(family: FamilyId, index: u32, inv: &Invocations) {
+    if !debug::enabled_for(debug::Level::Detail, family) {
+        return;
+    }
+    let who = debug::shard(family, index);
+    for text in debug::frame_scan(inv.frames, inv.height) {
+        debug::line(&format!("apogee deleg    {who:<22} {text}"));
+    }
+}
+
+/// A canonicity **tally** over frame values checked against `Fr`'s modulus:
+/// for each named value, how many live rows carry a last borrow of 1.
+///
+/// A tally and not a verdict, deliberately. A value's `< p` conclusion is gated
+/// to the rows that read it, so a row whose operation does not read a value may
+/// legitimately carry a value at or above `p`; calling that a failure would
+/// report the honest prover as broken. What the tally gives instead is
+/// unambiguous either way — `out: 0/256 below p` on a family whose every row
+/// writes `out` is a bug you can see, and `b: 137/256` on a family with three
+/// operations is the operation mix.
+#[cfg(feature = "debug-info")]
+fn canon_tally_log(family: FamilyId, index: u32, inv: &Invocations, values: &[(&str, usize, u32)]) {
+    if !debug::enabled_for(debug::Level::Detail, family) {
+        return;
+    }
+    let (frames, live) = (inv.frames, inv.frames.len());
+    if live == 0 {
+        return;
+    }
+    let names: Vec<&str> = values.iter().map(|(n, ..)| *n).collect();
+    let below: Vec<usize> = values
+        .iter()
+        .map(|(_, first, field)| {
+            (0..live)
+                .filter(|r| {
+                    let words = value_words(frames, *first, *field, *r);
+                    borrow_chain(&words).1[7] == 1
+                })
+                .count()
+        })
+        .collect();
+    let who = debug::shard(family, index);
+    debug::line(&format!(
+        "apogee deleg    {who:<22} {} of {live} live rows",
+        debug::histogram("below-p", &names, &below)
+    ));
+}
+
 /// A `KECCAK_F` shard, `docs/spec/delegation.md` §6.1: the delegation frame,
 /// plus the input state's 1600 bits.
 fn keccak_f(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     let inv = invocations(src, family::KECCAK_F)?;
+    debug_only!(deleg_frame_log(family::KECCAK_F, src.index, &inv));
     // S21's circuit puts the state's 1,600 bits at `W[0]`, so the frame's own
     // bits start above them (`constraints::keccak::gap_bit`).
     let mut out = delegation_frame(
@@ -416,6 +478,7 @@ fn keccak_f(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, St
 /// written.
 fn poseidon2(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     let inv = invocations(src, family::POSEIDON2)?;
+    debug_only!(deleg_frame_log(family::POSEIDON2, src.index, &inv));
     let mut out = delegation_frame(&inv, p2::FRAME_WORDS, p2::FRAME_BYTES as u64, 0);
     for v in 0..2 * p2::WIDTH {
         let lane = v % p2::WIDTH;
@@ -433,6 +496,32 @@ fn poseidon2(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, S
             &|k| p2_circuit::borrow_bit(v, k),
         ));
     }
+    // Every lane, in and out: this family's frame is canonical values by
+    // design, the circuit being `poseidon2_permute` itself
+    // (`docs/spec/delegation.md` §13.2), so a lane that is not below `p` is a
+    // guest that handed the shim something that is not a field element.
+    debug_only!(
+        if debug::enabled_for(debug::Level::Detail, family::POSEIDON2) {
+            let lanes: Vec<(String, usize, u32)> = (0..2 * p2::WIDTH)
+                .map(|v| {
+                    let field = if v < p2::WIDTH {
+                        deleg::WORD_READ_VALUE
+                    } else {
+                        deleg::WORD_WRITE_VALUE
+                    };
+                    let side = if v < p2::WIDTH { "in" } else { "out" };
+                    (
+                        format!("{side}{}", v % p2::WIDTH),
+                        p2::WORDS_PER_LANE * (v % p2::WIDTH),
+                        field,
+                    )
+                })
+                .collect();
+            let borrowed: Vec<(&str, usize, u32)> =
+                lanes.iter().map(|(n, f, k)| (n.as_str(), *f, *k)).collect();
+            canon_tally_log(family::POSEIDON2, src.index, &inv, &borrowed);
+        }
+    );
     Ok(out)
 }
 
@@ -441,6 +530,7 @@ fn poseidon2(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, S
 /// scalars — the product helper, the inverse and the is-zero flag.
 fn fr_arith(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     let inv = invocations(src, family::FR_ARITH)?;
+    debug_only!(deleg_frame_log(family::FR_ARITH, src.index, &inv));
     let mut out = delegation_frame(&inv, fa::FRAME_WORDS, fa::FRAME_BYTES as u64, 0);
     let (frames, h) = (inv.frames, inv.height);
     let rows = 0..frames.len();
@@ -461,6 +551,16 @@ fn fr_arith(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, St
             &|k| fa_circuit::borrow_bit(v, k),
         ));
     }
+    debug_only!(canon_tally_log(
+        family::FR_ARITH,
+        src.index,
+        &inv,
+        &[
+            ("a", fa::A_WORD, deleg::WORD_READ_VALUE),
+            ("b", fa::B_WORD, deleg::WORD_READ_VALUE),
+            ("out", fa::OUT_WORD, deleg::WORD_WRITE_VALUE),
+        ],
+    ));
     let opcodes = frames.word(fa::OPCODE_WORD).read_value;
     let opcode = |r: usize| opcodes[r];
     for (i, op) in fa::OPS.iter().enumerate() {
@@ -551,6 +651,7 @@ struct ModMulRow {
 /// nobody can verify.
 fn mod_mul(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     let inv = invocations(src, family::MOD_MUL)?;
+    debug_only!(deleg_frame_log(family::MOD_MUL, src.index, &inv));
     // Since S26c this family range-checks through `RANGE16`, so its frame is
     // `delegation_frame_range16`'s and not `delegation_frame`'s: two gap chunks
     // a word rather than 38 bits, and one value plus one halfword for each of
@@ -580,6 +681,55 @@ fn mod_mul(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
             column[r] as u64
         })
     };
+
+    // **A pre-flight scan, before the witness loop.** That loop panics on the
+    // first row whose selector names no modulus or whose operand is not below
+    // the selected one, and its message names neither the invocation, nor the
+    // value, nor which of the four moduli was selected. This reports all of
+    // them, with the numbers, and it has to run first to be read at all.
+    debug_only!(
+        if debug::enabled_for(debug::Level::Detail, family::MOD_MUL) {
+            let who = debug::shard(family::MOD_MUL, src.index);
+            let live = frames.len();
+            let mut tally = vec![0usize; mm::CODES.len()];
+            let mut unknown: Vec<(usize, u32)> = Vec::new();
+            let mut bad: Vec<(usize, String, String)> = Vec::new();
+            for r in 0..live {
+                let code = frames.word(mm::SELECTOR_WORD).read_value[r];
+                let Some(sel) = mm::CODES.iter().position(|c| *c == code) else {
+                    unknown.push((r, code));
+                    continue;
+                };
+                tally[sel] += 1;
+                let m: [u64; mm::LIMBS] = core::array::from_fn(|k| mm::MODULI[sel][k] as u64);
+                for (first, name) in [(mm::A_WORD, "a"), (mm::B_WORD, "b")] {
+                    let x = limbs(first, deleg::WORD_READ_VALUE, r);
+                    if !below(&x, &m) {
+                        bad.push((
+                            r,
+                            format!("{name}={}", debug::limbs(&x.map(|v| v as u32))),
+                            debug::limbs(&m.map(|v| v as u32)),
+                        ));
+                    }
+                }
+            }
+            debug::line(&format!(
+                "apogee deleg    {who:<22} {} of {live} live rows",
+                debug::histogram("modulus", &debug::MOD_MUL_SELECTORS, &tally)
+            ));
+            if let Some((r, code)) = unknown.first() {
+                debug::line(&format!(
+                    "apogee deleg    {who:<22} selector {code} on invocation {r} NAMES NO MODULUS \
+                 ({} such rows) -- the fill panics next",
+                    unknown.len()
+                ));
+            }
+            debug::line(&format!(
+                "apogee deleg    {who:<22} {}",
+                debug::canonical("operands a<m and b<m", 2 * live, &bad)
+            ));
+        }
+    );
 
     // One pass over the live rows. Padding rows are the zeros `u32_column`
     // pads with, which is what every gate wants of them: a zero modulus, zero
@@ -774,6 +924,7 @@ fn delegation_frame_range16(
 /// the circuit's gates read, which no log event carries.
 fn sha256_comp(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     let inv = invocations(src, family::SHA256_COMP)?;
+    debug_only!(deleg_frame_log(family::SHA256_COMP, src.index, &inv));
     let mut out = delegation_frame(&inv, sh::FRAME_WORDS, sh::FRAME_BYTES as u64, 0);
     let (frames, h) = (inv.frames, inv.height);
     let rows = 0..frames.len();
@@ -852,6 +1003,55 @@ fn sha256_comp(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>,
             }
         })
         .collect();
+
+    // **The one delegation family with no emulator refusal path, checked.**
+    // This fill re-runs the whole compression and then commits only its *bits*,
+    // so the comparison it is in a position to make — the state this row
+    // computed against the state the frame says the guest wrote — is never
+    // actually made. Every other delegation family has the executor refusing a
+    // frame it cannot answer; this one does not, so a disagreement between the
+    // recomputation and the frame reaches a reader as a broken `out_bit` gate at
+    // whatever layer it sits on. Eight `u32` compares a row on a `2^8` family.
+    //
+    // `v` mirrors the closure above, which builds it from `a` and `e` and then
+    // discards it into `co`.
+    debug_only!(
+        if debug::enabled_for(debug::Level::Detail, family::SHA256_COMP) {
+            let mut disagree: Vec<(usize, usize, u32, u32)> = Vec::new();
+            for (r, row) in witness.iter().enumerate() {
+                let v = [
+                    row.a[sh::ROUNDS + 3],
+                    row.a[sh::ROUNDS + 2],
+                    row.a[sh::ROUNDS + 1],
+                    row.a[sh::ROUNDS],
+                    row.e[sh::ROUNDS + 3],
+                    row.e[sh::ROUNDS + 2],
+                    row.e[sh::ROUNDS + 1],
+                    row.e[sh::ROUNDS],
+                ];
+                for (j, vj) in v.iter().enumerate() {
+                    let want = frames.word(j).read_value[r].wrapping_add(*vj);
+                    let got = frames.word(j).write_value[r];
+                    if want != got {
+                        disagree.push((r, j, want, got));
+                    }
+                }
+            }
+            let who = debug::shard(family::SHA256_COMP, src.index);
+            let checks = witness.len() * sh::STATE_WORDS;
+            match disagree.first() {
+            None => debug::line(&format!(
+                "apogee deleg    {who:<22} compression agrees with the frame on {checks} state words"
+            )),
+            Some((r, j, want, got)) => debug::line(&format!(
+                "apogee deleg    {who:<22} compression DISAGREES with the frame on {} of \
+                 {checks} state words, first invocation {r} word {j}: recomputed {want:#010x}, \
+                 the frame wrote {got:#010x}",
+                disagree.len()
+            )),
+        }
+        }
+    );
 
     // A bit column from a per-row extractor. Padding rows are the zeros
     // `u32_column` pads with, which is what every gate wants of them.
@@ -941,6 +1141,7 @@ fn sha256_comp(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>,
 /// only the witness side differs.
 fn ec_add(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     let inv = invocations(src, family::EC_ADD)?;
+    debug_only!(deleg_frame_log(family::EC_ADD, src.index, &inv));
     let (frames, h) = (inv.frames, inv.height);
     let rows = 0..frames.len();
 
@@ -969,6 +1170,60 @@ fn ec_add(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Stri
 
     // --- one pass over the live rows ---------------------------------------
     let witness: Vec<EcAddRow> = rows.clone().map(|r| ec_add_row(frames, r)).collect();
+
+    // The three scans this family's own failures need. `EC_ADD` is the newest
+    // circuit and the peak-setting family in a block, and its S26c bug — a
+    // gated conclusion written `b_7 = enable` instead of
+    // `enable · (1 − b_7) = 0`, which made every row unprovable while every
+    // shape test passed — is exactly what the canonicity line names.
+    debug_only!(
+        if debug::enabled_for(debug::Level::Detail, family::EC_ADD) {
+            let who = debug::shard(family::EC_ADD, src.index);
+            let live = witness.len();
+            let mut tally = vec![0usize; ea::CODES.len()];
+            for w in &witness {
+                tally[w.code] += 1;
+            }
+            debug::line(&format!(
+                "apogee deleg    {who:<22} {} of {live} live rows",
+                debug::histogram("curve/group", &debug::EC_ADD_SELECTORS, &tally)
+            ));
+            // Each curve's three groups are one third of a point addition each, so
+            // their counts must agree. Nothing else in the repository checks it.
+            debug::line(&format!(
+                "apogee deleg    {who:<22} {}",
+                debug::ec_add_groups(&tally)
+            ));
+            // Canonicity, over the (row, value) pairs the row's group actually
+            // reads — `debug::ec_add_reads` is why that restriction is not
+            // optional.
+            let mut bad: Vec<(usize, String, String)> = Vec::new();
+            let mut pairs = 0usize;
+            for (r, w) in witness.iter().enumerate() {
+                let group = ea::CODE_GROUP[w.code];
+                for (v, first) in EC_ADD_VALUE_WORDS.into_iter().enumerate() {
+                    if !debug::ec_add_reads(group, v) {
+                        continue;
+                    }
+                    pairs += 1;
+                    if w.chains[v].1[ea::LIMBS - 1] == 1 {
+                        continue;
+                    }
+                    let value: [u32; ea::LIMBS] =
+                        core::array::from_fn(|k| frames.word(first + k).read_value[r]);
+                    bad.push((
+                        r,
+                        format!("{}={}", debug::EC_ADD_VALUES[v], debug::limbs(&value)),
+                        debug::limbs(&w.m.map(|x| x as u32)),
+                    ));
+                }
+            }
+            debug::line(&format!(
+                "apogee deleg    {who:<22} {}",
+                debug::canonical("values the group reads", pairs, &bad)
+            ));
+        }
+    );
 
     for i in 0..ea::CODES.len() {
         let values: Vec<u32> = witness.iter().map(|w| u32::from(w.code == i)).collect();
@@ -1113,6 +1368,25 @@ struct EcAddSlot {
     chain: ([u64; ea::LIMBS], [u64; ea::LIMBS]),
 }
 
+/// The twelve frame values' first words, in `constraints::ec_add::VALUES`
+/// order. Hoisted out of [`ec_add_row`] so the `debug-info` canonicity scan
+/// reads the same twelve words the witness does, rather than a second copy of
+/// the list.
+const EC_ADD_VALUE_WORDS: [usize; 12] = [
+    ea::X1_WORD,
+    ea::Y1_WORD,
+    ea::Z1_WORD,
+    ea::X2_WORD,
+    ea::Y2_WORD,
+    ea::Z2_WORD,
+    ea::XX_WORD,
+    ea::YY_WORD,
+    ea::ZZ_WORD,
+    ea::M4_WORD,
+    ea::M5_WORD,
+    ea::M6_WORD,
+];
+
 /// One row's witness: the selector, the curve's constants, the twelve values'
 /// chains, and the three slots' operands, quotients and carries.
 fn ec_add_row(frames: &FrameSlice, r: usize) -> EcAddRow {
@@ -1129,22 +1403,7 @@ fn ec_add_row(frames: &FrameSlice, r: usize) -> EcAddRow {
     let b3 = ea::CURVE_B3[ea::CODE_CURVE[code]];
     let g = ea::CODE_GROUP[code];
 
-    // The twelve frame values, in `constraints::ec_add::VALUES` order.
-    let firsts = [
-        ea::X1_WORD,
-        ea::Y1_WORD,
-        ea::Z1_WORD,
-        ea::X2_WORD,
-        ea::Y2_WORD,
-        ea::Z2_WORD,
-        ea::XX_WORD,
-        ea::YY_WORD,
-        ea::ZZ_WORD,
-        ea::M4_WORD,
-        ea::M5_WORD,
-        ea::M6_WORD,
-    ];
-    let values: [[u64; ea::LIMBS]; 12] = core::array::from_fn(|v| read(firsts[v]));
+    let values: [[u64; ea::LIMBS]; 12] = core::array::from_fn(|v| read(EC_ADD_VALUE_WORDS[v]));
     // **Every value's chain is the honest one, on every row.** The chain's
     // sixteen `canonical` gates are *ungated* — they hold for any `v` — and only
     // the conclusion `below_modulus` is gated, to the groups that read the
@@ -1667,6 +1926,35 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
     for (address, values) in KINDS.iter().zip(kinds) {
         out.push((*address, u32_column(values, h)));
     }
+    // **The request side of the anchor pairing, counted.** An invocation's
+    // partner is a request row in *this* family, and nothing else in the
+    // repository counts them: a dropped invocation surfaces as
+    // `MemoryArgument("the statement's roots do not reconcile")` over a
+    // thirteen-shard product, naming no family and no row. Σ requests per type
+    // over this family's shards must equal that delegation family's invocation
+    // count (`apogee deleg … invocations=`), and Σ exit rows over the whole
+    // execution is exactly 1 — the one row that writes `HALT_PC`.
+    debug_only!(
+        if debug::enabled_for(debug::Level::Detail, family::ADD_SUB_LUI_AUIPC) {
+            let requests: Vec<usize> = is_deleg
+                .iter()
+                .map(|column| column.iter().filter(|v| **v == 1).count())
+                .collect();
+            let names: Vec<String> = program::DELEGATIONS
+                .iter()
+                .map(|(f, ..)| debug::family_name(*f))
+                .collect();
+            let labels: Vec<&str> = names.iter().map(String::as_str).collect();
+            let ecalls: usize = is_ecall.iter().filter(|v| **v == 1).count();
+            let total: usize = requests.iter().sum();
+            debug::line(&format!(
+                "apogee deleg    {:<22} {} exit-rows={}",
+                debug::shard(family::ADD_SUB_LUI_AUIPC, src.index),
+                debug::histogram("requests", &labels, &requests),
+                ecalls.saturating_sub(total)
+            ));
+        }
+    );
     out.push((IS_ECALL, u32_column(is_ecall, h)));
     out.push((IS_FENCE, u32_column(is_fence, h)));
     for (address, values) in constraints::add_sub::IS_DELEGATION.iter().zip(is_deleg) {

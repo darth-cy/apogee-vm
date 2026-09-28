@@ -36,18 +36,30 @@ jobs:
           cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
           (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
           (cd guests && cargo clippy --bins -- -D warnings)
-          # The workspace's ONE cargo feature (master anti-goal 1's one
-          # exception, owner's decision at S20): the anti-goal's stated hazard
-          # is "a configuration nobody builds is broken and undiscovered", so
-          # this configuration is built, linted and tested here like any other.
-          # `crates/prover/tests/one_feature.rs` is what keeps it at one.
+          # The workspace's TWO cargo features (master anti-goal 1's only two
+          # exceptions, owner's decisions at S20 and S-DEBUG): the anti-goal's
+          # stated hazard is "a configuration nobody builds is broken and
+          # undiscovered", so every one of these configurations is built, linted
+          # and tested here like any other -- including the two together, which
+          # is a configuration neither feature's own tests reach.
+          # `crates/prover/tests/one_feature.rs` is what keeps it at two.
           cargo clippy -p prover --all-targets --features metrics -- -D warnings
+          cargo clippy -p prover --all-targets --features debug-info -- -D warnings
+          cargo clippy -p prover --all-targets --features metrics,debug-info -- -D warnings
 
       - name: test
         run: cargo test --workspace
 
       - name: test the metrics configuration
         run: cargo test -p prover --features metrics --test metrics
+
+      # The debug log's own suite, plus its unit tests -- which live in
+      # `src/debug.rs` and so are compiled by no other job in this file.
+      # `docs/spec/debug-info.md` §0.
+      - name: test the debug-info configuration
+        run: |
+          cargo test -p prover --features debug-info --test debug_info
+          cargo test -p prover --features debug-info --lib
 
       # Static detachment's second half. `every_guest_declares_exactly_what_it
       # _links` runs in the `test` step above, over every committed guest at the
