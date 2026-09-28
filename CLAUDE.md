@@ -110,7 +110,9 @@ guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, op
                  guests/Cargo.toml's [patch.crates-io]; see guests/vendor/README.md.
                  S26 vendored k256 0.13.4 and S26b ark-ff 0.6.0, routing secp256k1's
                  two fields and BN254's two through MOD_MUL; S26c patched k256's
-                 ProjectivePoint through EC_ADD
+                 ProjectivePoint through EC_ADD and vendored revm-precompile
+                 42.0.1, whose Crypto DEFAULT BODIES route 0x02, 0x06 and 0x07 --
+                 installing a second impl costs 870 kB of dead BLS12-381
 assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 handoff
 tools/
   profiler/      the cycle profiler: where a guest's RV32 cycles go, by function and by
@@ -1118,6 +1120,19 @@ is derivable *from* them is regenerated and diffed in CI.
   selects an upstream crate's features and always was allowed, which is how
   `alloy-primitives`' `native-keccak` routes every keccak in a revm image through the S21
   shim.
+- **A hook that takes a trait object can cost more than the code it replaces** (S26c).
+  revm's `install_crypto` is the seam for its precompiles, and installing a second
+  `Crypto` implementation makes `crypto()`'s `OnceLock` hold one of two types — which kills
+  LLVM's devirtualization of every call through it, and with it the dead-stripping of the
+  arkworks BLS12-381 pairing and the KZG verifier this workload never reaches. **870,828
+  bytes of `.text`**, measured with a provider whose every method forwarded straight back to
+  `DefaultCrypto`, so the cost is the *coercion*. That took `guests/revm-block` past what a
+  `2^20` decoded table reaches — a table's row `i` is pc `2i`, so `2^20` reaches
+  `2·2^20 − 4`, and S24's image already used 82% of it — and would have forced `2^22`, the
+  menu's last entry, at about 42 GB of forward pass a shard. So the routing patches the
+  trait's **default bodies** in a vendored `revm-precompile` instead: one implementation
+  still, devirtualization intact, **10,568 bytes**. The lesson generalizes past revm — in a
+  zkVM image, `dyn` is not free and the bill arrives as a decoded table's height.
 - **A guest may also *vendor* one, and then the copy lives under `guests/vendor`**
   (S26). The same licence, one step further: when the hook a delegation needs does not
   exist upstream, the crate is copied in verbatim and patched, `guests/Cargo.toml`'s
