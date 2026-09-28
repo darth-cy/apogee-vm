@@ -69,9 +69,17 @@ const REVM_BIN: &str = "revm-block";
 /// `4 * 2^16` bytes a `2^16` window 0 covers.
 fn revm_params() -> ProgramParams {
     let mut heights = [revm_block::TRACE_HEIGHT_RELEASE; family::COUNT as usize];
-    heights[family::KECCAK_F as usize] = 1 << common::KECCAK_VARS;
-    heights[family::POSEIDON2 as usize] = 1 << common::DELEGATION_VARS;
-    heights[family::FR_ARITH as usize] = 1 << common::DELEGATION_VARS;
+    // **Derived, never listed.** Naming three of the six delegation families
+    // left `MOD_MUL`, `SHA256_COMP` and `EC_ADD` at `2^20`, where `EC_ADD`'s
+    // 8,708 row-wise columns are a 292 GB forward pass and `SHA256_COMP`'s
+    // 16,688 are 560 GB — latent only while this block invokes neither.
+    // `crates/host/tests/prove.rs` and `crates/emulator/tests/revm.rs` both
+    // already derive it; this is S26c §5's "derive over document" applied here.
+    for (f, h) in heights.iter_mut().enumerate() {
+        if program::delegation_ecall(f as u32).is_some() {
+            *h = family::DEFAULT_HEIGHTS[f];
+        }
+    }
     ProgramParams {
         heights,
         bytecode_size_words: revm_block::BYTECODE_SIZE_WORDS,

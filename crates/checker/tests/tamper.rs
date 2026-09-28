@@ -1122,7 +1122,7 @@ fn s23_a5_a6_the_recursion_witnesses_and_anchors_are_pinned() {
 #[test]
 #[ignore]
 fn s26_the_mod_mul_witness_and_anchor_are_pinned() {
-    use constants::family::MOD_MUL as MM;
+    use constants::family::{EC_ADD as EA, MOD_MUL as MM};
     use constants::{delegation, mod_mul as mm};
     use constraints::mod_mul as mm_c;
 
@@ -1131,12 +1131,14 @@ fn s26_the_mod_mul_witness_and_anchor_are_pinned() {
     let h = TamperHarness::new(&setup, &archive);
 
     // The structural counts. `MOD_MUL`'s id is 15, above S-IO's three window
-    // families, so its shards are **last** in statement order — which
-    // `KECCAK_F`'s were until S-IO and S23's two are not.
+    // families, so its shards sort after them — which `KECCAK_F`'s were until
+    // S-IO and S23's two are not. **`EC_ADD` sorts last, not `MOD_MUL`**: S26c
+    // gave `guests/mod-mul-ops` the projective `k256` patch too, so its image
+    // declares both, and id 17 is above 15.
     let (public, proofs) = h.honest();
     let shards: Vec<(u32, u32)> = proofs.iter().map(|p| (p.family, p.shard_index)).collect();
     let (last_family, _) = *shards.last().expect("a statement has shards");
-    assert_eq!(last_family, MM, "MOD_MUL sorts last: {shards:?}");
+    assert_eq!(last_family, EA, "EC_ADD sorts last: {shards:?}");
     let mm_shards = shards.iter().filter(|(f, _)| *f == MM).count();
     // **One shard since S26c, and that is better coverage than the six it was.**
     // The fixture kept `2^8` so this family would be multi-shard, because at
