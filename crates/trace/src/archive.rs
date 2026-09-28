@@ -1019,7 +1019,7 @@ mod tests {
             tiny()
         );
         let pc = (address_space::PC, 0, 4, 0, 0x1_0000, 0x1_0004);
-        let cases: [(&str, Vec<u8>); 16] = [
+        let cases: [(&str, Vec<u8>); 15] = [
             // The profile renames the family too, so only the id is wrong.
             (
                 "family 42 is not in constants::family",
@@ -1098,10 +1098,6 @@ mod tests {
                 post(|a| a.traces.families[0].cycle[0] = 2, None),
             ),
             (
-                "address-space tag 9",
-                post(|_| {}, Some(vec![(9, 0, 4, 0, 0x1_0000, 0x1_0004)])),
-            ),
-            (
                 "names Reg address 0x28",
                 post(|_| {}, Some(vec![pc, (address_space::REG, 40, 5, 0, 0, 0)])),
             ),
@@ -1128,6 +1124,28 @@ mod tests {
             let e = TraceArchive::import(&file(&content)[..]).unwrap_err();
             assert!(e.contains(want), "expected '{want}': {e}");
         }
+
+        // A tag no address space claims. **Derived, never written down.** This
+        // case was the literal 9 until S26c gave 9 to `EC_ADD`, at which point
+        // it stopped exercising an unknown tag and started exercising a known
+        // one — so the reader produced a different message and the case failed
+        // for the right reason. `address_space::DELEGATION` is append-only and
+        // is the one list of the claimed tags, so one past its maximum is
+        // unclaimed by construction and stays unclaimed as families are added.
+        let unclaimed = address_space::DELEGATION
+            .iter()
+            .copied()
+            .max()
+            .expect("at least one delegation tag")
+            + 1;
+        assert!(
+            AddressSpace::from_tag(unclaimed).is_none(),
+            "tag {unclaimed} is claimed, so this case proves nothing"
+        );
+        let content = post(|_| {}, Some(vec![(unclaimed, 0, 4, 0, 0x1_0000, 0x1_0004)]));
+        let e = TraceArchive::import(&file(&content)[..]).unwrap_err();
+        let want = format!("address-space tag {unclaimed}");
+        assert!(e.contains(&want), "expected '{want}': {e}");
 
         let mut content = post(|_| {}, None);
         content.push(0);
