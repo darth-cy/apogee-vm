@@ -484,6 +484,7 @@ and a later stage should not read silence here as confirmation:
 | `prover::revm` | **§7's peak.** The only place a real `EC_ADD` shard is proved, and the one measurement this stage's headline cost claim rests on. Also whether thirteen shards plus an `EC_ADD` one still fits a 48 GB machine at `RAYON_NUM_THREADS=6` |
 | `checker::tamper` | the assertion this stage **changed** — `mm_shards >= 2` became `== 1` with `pad_shard = 0`, because at `2^16` `mod-mul-ops`' invocations are one shard. The reasoning is in §9 item 3 and it has not been executed |
 | `host::prove` | the mini-block gate: the real block proved and verified end to end with both new circuits in the config |
+| `emulator::guests` | S26c's invocation counts for `ec-ops` and `sha256-ops`. Deferred on the owner's instruction after it was **measured at 23.9 GiB** and found to be what made CI reclaim its runner — the job was cancelled at 27m21s with no assertion failure, twice, which is the signature to recognise. A dev-server run, not a CI one |
 | `prover::{block,keccak,recursion,streaming,alu,mem,control,public_io}`, `checker::logup`, `verifier::cli`, `prover::acceptance`, `prover::metrics` | that S26c's two families and the `MOD_MUL` re-shape moved no statement that does not contain them. Each is a re-confirmation, and the two new families are absent from most of them |
 
 The first two are the ones that matter. `checker::tamper`'s is the sharper risk
@@ -503,7 +504,7 @@ is where the reasoning would have been checked.
 | the fills | the fill's own columns against the circuit's gates — a forward pass for `SHA256_COMP` at `2^8`, sampled rows for the two at `2^16` | `crates/prover/tests/fills.rs` |
 | the executor | the frame executors against independent oracles | `crates/emulator/src/lib.rs`' unit tests |
 | the guests | the ABI by name, against published digests and against a foreign implementation | `guests/sha256-ops`, `guests/ec-ops` |
-| the routing | the invocation counts, which are the only thing that can see a vendored patch still routing | `crates/emulator/tests/guests.rs` |
+| the routing | the invocation counts, which are the only thing that can see a vendored patch still routing. **The `ec-ops`/`sha256-ops` counts are `#[ignore]`d for memory** — four traced executions, two of them `ec-ops`, peak **23.9 GiB** — so the one count that cannot be given up moved into `mod_mul_ops_routes_every_vendored_patch_through_the_ecall`, which was already tracing that guest in ordinary CI: `mod-mul-ops` names neither shim, so its 39 `EC_ADD` invocations are the projective patch's only live witness | `crates/emulator/tests/guests.rs` |
 | detachment | which families each image declares, at both optimisation levels | `crates/program/tests/delegation.rs` |
 
 **No anchor twin was added**, and that is deliberate. The anchor is one

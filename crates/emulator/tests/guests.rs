@@ -708,9 +708,23 @@ fn mod_mul_ops_routes_every_vendored_patch_through_the_ecall() {
     // this number and nothing else in the suite would notice.
     // 1,567 until S26c, when `guests/vendor/k256`'s `ProjectivePoint` patch
     // moved this guest's group arithmetic — twelve field multiplies an
-    // addition — out of `MOD_MUL` and into `EC_ADD`. The companion count is
-    // in `the_new_families_are_invoked_the_pinned_number_of_times`.
+    // addition — out of `MOD_MUL` and into `EC_ADD`.
     assert_eq!(trace.len(), 1_443, "the pinned invocation count");
+
+    // And the other side of that same move, on the trace already in hand.
+    //
+    // **This assertion lives here because it is free here.** It belongs with
+    // the `EC_ADD` counts in `the_new_families_are_invoked_the_pinned_number_of_times`,
+    // which is `#[ignore]`d for memory — and it is the one of those counts that
+    // cannot be given up, because `mod-mul-ops` names **neither** shim and
+    // reaches `EC_ADD` through the patched `ProjectivePoint` alone. It is
+    // therefore the only thing in ordinary CI that can see that patch still
+    // routing: 13 point operations at three invocations each. Tracing this
+    // guest costs what it already cost; tracing `ec-ops` is what does not fit.
+    let ec = traces
+        .delegation(constants::family::EC_ADD)
+        .expect("EC_ADD has a buffer");
+    assert_eq!(ec.len(), 39, "the pinned projective-patch invocation count");
 }
 
 /// The invocation counts the two delegation families actually see, which is
@@ -801,6 +815,7 @@ fn ec_ops_checks_itself_under_the_delegation_ecall() {
 /// test. Every number here is a pin over a build: when the guest or a vendored
 /// crate changes, re-derive it rather than accepting it.
 #[test]
+#[ignore = "DEFERRED: four traced executions, two of them `ec-ops`, peak 23.9 GiB             and 118 s -- above what a GitHub runner has, so it reclaims the job"]
 fn the_new_families_are_invoked_the_pinned_number_of_times() {
     let counts: Vec<(&str, &str, usize)> = [
         ("sha256-ops", constants::family::SHA256_COMP),
