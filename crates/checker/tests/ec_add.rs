@@ -927,7 +927,7 @@ fn assert_every_row_holds(a: &CircuitArtifact, columns: &[(PolyAddress, Multilin
 
 /// A pseudo-random value below `m`.
 fn wide(rng: &mut test_support::Rng, m: &V) -> V {
-    let raw: V = core::array::from_fn(|_| (rng.next_u64() & 0xffff_ffff) as u64);
+    let raw: V = core::array::from_fn(|_| rng.next_u64() & 0xffff_ffff);
     divmod(&normalize(&loose(&raw)), m).1
 }
 
@@ -974,8 +974,8 @@ fn honest() -> Vec<Row> {
         // Group 0, then group 1, each writing its three lanes into the frame
         // the next row reads — which is exactly what the three invocations of
         // one addition do through memory.
-        for g in 0..2 {
-            let invocation = Invocation::new(cycle, base_of(slot), codes[g], frame.clone());
+        for code in codes.iter().take(2) {
+            let invocation = Invocation::new(cycle, base_of(slot), *code, frame.clone());
             frame = invocation.write();
             live.push(invocation);
             cycle += 2;
@@ -1057,10 +1057,10 @@ fn an_honest_witness_satisfies_every_gate() {
 fn the_reductions_are_the_group_law() {
     for row in honest() {
         let want = expected(&row.inv);
-        for r in 0..SLOTS {
+        for (r, expect) in want.iter().enumerate() {
             assert_eq!(
                 row.reductions[r].out,
-                want[r],
+                *expect,
                 "group {} slot {r} is not the group law",
                 row.inv.group()
             );
@@ -1136,8 +1136,8 @@ fn the_three_invocations_are_one_addition() {
                 m,
             ),
         ];
-        for r in 0..SLOTS {
-            assert_eq!(last.reductions[r].out, want[r], "curve {curve}, slot {r}");
+        for (r, expect) in want.iter().enumerate() {
+            assert_eq!(last.reductions[r].out, *expect, "curve {curve}, slot {r}");
         }
     }
 }

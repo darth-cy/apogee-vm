@@ -1138,10 +1138,14 @@ fn s26_the_mod_mul_witness_and_anchor_are_pinned() {
     let (last_family, _) = *shards.last().expect("a statement has shards");
     assert_eq!(last_family, MM, "MOD_MUL sorts last: {shards:?}");
     let mm_shards = shards.iter().filter(|(f, _)| *f == MM).count();
-    assert!(
-        mm_shards >= 2,
-        "the fixture keeps 2^8 so this stays multi-shard, and it makes {mm_shards}"
-    );
+    // **One shard since S26c, and that is better coverage than the six it was.**
+    // The fixture kept `2^8` so this family would be multi-shard, because at
+    // that height the *last* shard was the only place a padding row appeared.
+    // `RANGE16` closed that option — the circuit does not exist below `2^16` —
+    // and made it unnecessary in the same move: `guests/mod-mul-ops`' 1,443
+    // invocations in a 65,536-row shard leave it 98% padding, so the live row
+    // and the padding row this test needs are both in shard 0.
+    assert_eq!(mm_shards, 1, "one 2^16 shard holds the fixture: {shards:?}");
 
     let a = &setup.vk.circuit(MM).expect("a MOD_MUL circuit").artifact;
     assert_eq!(
@@ -1164,15 +1168,15 @@ fn s26_the_mod_mul_witness_and_anchor_are_pinned() {
     let live = (0..rows)
         .find(|r| at(mm_c::LIVE, *r) == Fr::ONE)
         .expect("a live invocation");
-    // The last shard is the one with room left, so that is where a padding row is.
-    let pad_shard = (mm_shards - 1) as u32;
+    // The one shard has the room, so its own padding rows are the ones to tamper.
+    let pad_shard = 0u32;
     let pad_columns = shard_columns(&setup, &archive, MM, pad_shard, &public.windows)
-        .expect("the last MOD_MUL shard's columns");
+        .expect("the MOD_MUL shard's columns");
     let pad_at = |address: PolyAddress, row: usize| {
         pad_columns
             .iter()
             .find(|(a, _)| *a == address)
-            .unwrap_or_else(|| panic!("the last MOD_MUL shard has no {address}"))
+            .unwrap_or_else(|| panic!("the MOD_MUL shard has no {address}"))
             .1
             .get(row)
     };

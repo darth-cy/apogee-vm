@@ -90,29 +90,33 @@ fn the_round_constants_are_the_cube_roots_of_the_first_sixty_four_primes() {
     assert_eq!(want[63], 0xc671_78f2, "cbrt(311)'s");
 }
 
-#[test]
-fn the_shapes_are_the_algorithms() {
-    // Not derivable from anything, but each is a number a reader can check
-    // against FIPS 180-4's own text, and each is what a frame or a circuit is
-    // sized by.
-    assert_eq!(sha256::STATE_WORDS, 8);
-    assert_eq!(sha256::BLOCK_WORDS, 16);
-    assert_eq!(sha256::ROUNDS, 64);
-    assert_eq!(sha256::FRAME_WORDS, 24);
-    assert_eq!(sha256::FRAME_BYTES, 96);
-    // The four carry widths are **derived** in `constants::sha256`'s own doc
-    // comments; this is the arithmetic those comments state, run.
-    //
-    // `T1 = h + Sigma1 + Ch + K + W` is five values below `2^32` and
-    // `T2 = Sigma0 + Maj` is two, so `A_{i+1}`'s carry is at most 6.
-    assert!(6 < (1 << sha256::CARRY_A_BITS));
-    // `E_{i+1} = A_{i-3} + T1` is one value plus five, so at most 5.
-    assert!(5 < (1 << sha256::CARRY_E_BITS));
-    // The schedule's four-term sum carries at most 3.
-    assert!(3 < (1 << sha256::CARRY_W_BITS));
-    // `H_j + V_j` is two values below `2^32`, so exactly one bit.
-    assert!(1 < (1 << sha256::CARRY_OUT_BITS));
-    // And each is tight: one bit narrower does not hold.
-    assert!(6 >= (1 << (sha256::CARRY_A_BITS - 1)));
-    assert!(3 >= (1 << (sha256::CARRY_W_BITS - 1)));
-}
+// The shapes, as **compile-time** assertions rather than a test: each is a
+// constant compared against a constant, which clippy rightly refuses as a
+// runtime `assert!` and which a `const` block states exactly.
+//
+// Each number is one a reader can check against FIPS 180-4's own text, and each
+// is what a frame or a circuit is sized by.
+const _: () = assert!(sha256::STATE_WORDS == 8);
+const _: () = assert!(sha256::BLOCK_WORDS == 16);
+const _: () = assert!(sha256::ROUNDS == 64);
+const _: () = assert!(sha256::FRAME_WORDS == 24);
+const _: () = assert!(sha256::FRAME_BYTES == 96);
+
+// The four carry widths are **derived** in `constants::sha256`'s own doc
+// comments; this is the arithmetic those comments state, run — and each bound is
+// asserted **tight**, so a width one bit too wide fails as loudly as one too
+// narrow.
+//
+// `T1 = h + Sigma1 + Ch + K + W` is five values below `2^32` and
+// `T2 = Sigma0 + Maj` is two, so `A_{i+1}`'s carry is at most 6.
+const _: () = assert!(6 < (1 << sha256::CARRY_A_BITS));
+const _: () = assert!(6 >= (1 << (sha256::CARRY_A_BITS - 1)));
+// `E_{i+1} = A_{i-3} + T1` is one value plus five, so at most 5 — which shares a
+// width with the 6 above, three bits holding both.
+const _: () = assert!(5 < (1 << sha256::CARRY_E_BITS));
+// The schedule's four-term sum carries at most 3.
+const _: () = assert!(3 < (1 << sha256::CARRY_W_BITS));
+const _: () = assert!(3 >= (1 << (sha256::CARRY_W_BITS - 1)));
+// `H_j + V_j` is two values below `2^32`, so exactly one bit.
+const _: () = assert!(1 < (1 << sha256::CARRY_OUT_BITS));
+const _: () = assert!(sha256::CARRY_OUT_BITS == 1);

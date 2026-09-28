@@ -664,14 +664,26 @@ to express:
 | `SHA256_COMP` | 16,688 | 8,216 | `2^8` | `2^16` is 35 GB of forward pass a shard |
 | `EC_ADD` | 8,772 at `2^16` | 1,420 | **`2^16`** | forced: `RANGE16` needs 16 variables and `2^18` is 4x worse |
 
-Two properties make the raise cheap. **A height changes no gate**: it adds one
-halving list per variable, each carrying one node per output, so `MOD_MUL` at
-`2^16` is 22 lists, 158 inner columns and 3,660 relations against `2^8`'s 14,
-142 and 3,644, with the committed width, the `3,502 (86/3,416)` gate split and
-the zero lookups identical
-(`crates/checker/tests/mod_mul.rs::a_height_moves_only_the_halving_layers`).
-And **a delegation family carries no channel**, so no minimum-height arm
-applies and `family_circuit` accepts `0 ≤ n ≤ 30` for it.
+Two properties made the raise cheap **at S26b**, and S26c changed the second of
+them. **A height changes no gate**: it adds one halving list per variable, each
+carrying one node per output, so at that stage `MOD_MUL` at `2^16` was 22 lists,
+158 inner columns and 3,660 relations against `2^8`'s 14, 142 and 3,644, with the
+committed width, the gate split and the zero lookups identical. The property
+itself still holds and
+`crates/checker/tests/mod_mul.rs::a_height_moves_only_the_halving_layers` is what
+says so — it compares `2^16` against `2^18` now, `2^8` no longer being a height
+this family has, and it compares **enforcing** gates rather than every relation,
+because a halving list produces one node per output and the total therefore grows
+with the height by exactly `outputs × Δn`.
+
+The second property was **"a delegation family carries no channel"**, and §10.3
+withdrew it: `MOD_MUL` carries `RANGE16` since S26c, so `family_circuit` accepts
+`16 ≤ n ≤ 30` for it and not `0 ≤ n ≤ 30`. The current shape is 26 lists, 325
+committed columns, 2,244 inner and 2,369 relations with 274 obligations and four
+outputs — the two memory roots and the channel's fraction pair
+(`docs/spec/constraint-manifest.md` §18.1). **The height was already `2^16`
+before the channel needed it**, for the reason this section gives, so the
+channel's floor cost this family nothing and the two constraints coincide.
 
 What the raise is *not* free of: the height is in `VM_CONFIG`, which program
 identity absorbs, so **every guest declaring `MOD_MUL` has a new identity** and
@@ -1114,10 +1126,7 @@ names, and the quotient `q`:
 | `selector_rule` | `word 0 = Σ code_i·s_i`: the field the circuit reduces in is the one the guest asked for |
 | `one_modulus_a_live_row` | `Σ s_i = live`: exactly one field a live row |
 | `m_limb{k}_rule` | `m_k = Σ MODULI[i][k]·s_i`: the modulus is the selector's literal, which is also its `2^32` bound |
-| `<v>_bit{k}_{t}_boolean` | every bit of every limb of `a`, `b` and `out` is a bit |
-| `<v>_word{k}` | limb `k` is `Σ 2^t·bit`: its 32-bit bound and its decode at once |
-| `q_bit{k}_{t}_boolean`, `q_word{k}` | the same for the quotient, whose limbs are witnesses |
-| `carry{k}_{t}_boolean` | every carry bit is a bit |
+| — | **Since S26c every one of these bounds is a `RANGE16` obligation and not a gate.** Each of `a`, `b` and `out`'s eight limbs carries a committed high halfword and a 16+16 pair; the quotient's eight the same; each of the fourteen carries a value and two chunks; and the frame's 25 timestamp gaps two chunks apiece with a scaled obligation on the top one. 274 obligations replace 3,320 booleanity gates and the 32 decodes that read them, which is what took the family from 3,468 committed columns to 325 (`docs/spec/constraint-manifest.md` §18.4, §18.5, and §10.3 for the amendment that allowed it) |
 | `limb{k}` | `P_k − S_k − out_k + c_{k−1} − 2^32·c_k = 0`, where `P_k = Σ_{i+j=k} a_i·b_j` and `S_k = Σ_{i+j=k} q_i·m_j` |
 | `<v>_diff{i}_{t}_boolean`, `<v>_borrow{i}_boolean` | the three `< m` chains' bits |
 | `<v>_canonical{i}` | `v_i − m_i − b_{i−1} + 2^32·b_i = d_i` |

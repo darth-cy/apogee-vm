@@ -28,9 +28,18 @@
 //! reason. Every bound it makes was a bit decomposition — 950 gap bits, 768
 //! value bits, 768 chain bits, 256 quotient bits, 518 carry bits — and at
 //! `2^16`, where its table fits, `RANGE16` makes each of them one committed
-//! column and two obligations instead. **3,468 committed columns become 325**:
-//! 9.9x the prover work, 3.4x the proof bytes and 1.9x the peak memory, for one
-//! channel on one existing family.
+//! column and two obligations instead. **3,468 committed columns become 325**,
+//! a factor of 10.7, and the proof falls from 360,884 bytes a shard to 135,220,
+//! a factor of 2.7.
+//!
+//! **The peak does not fall, and the earlier claim that it fell 1.9x was
+//! wrong.** The work moved out of the base layer and its first bind and into the
+//! inner layers: 158 inner columns became 2,244, so the forward pass grew from
+//! 0.27 GB to 4.57 GB while the committed base fell from 0.96 GB to 0.16 GB and
+//! the first bind from 3.64 GB to 0.34 GB. About 4.9 GB before and 5.1 GB after,
+//! both computed. What the channel buys is the **proof and the commitments** —
+//! 325 Mercury column commitments where there were 3,468 — and it buys them at
+//! constant peak rather than at a lower one.
 //!
 //! `TIMESTAMP` would be the natural channel for the frame's gap and it does not
 //! fit — its table needs 19 variables — so the gap takes `RANGE16` in two

@@ -255,16 +255,25 @@ gates pin the request's side (it writes no register; its mirror read is stamped 
 valued 0); the fourth field, the value the request writes back, is **free on both sides** and
 balances only when the two agree. `docs/spec/delegation.md` §5.
 
-**Witnessed parameter** — a value a circuit's own behaviour depends on that arrives as a
-**column of the row** rather than as a literal in the circuit. S26's `MOD_MUL` is the first
-and so far the only one: its modulus comes out of the frame, so one family proves
-`a·b mod m` for secp256k1's base field, its scalar field, BN254's, or any other 256-bit value
-a guest passes, where a constant modulus would have meant one family per field. It is a
-witness column like any other — nothing in the statement, the transcript or the opening
-notices — and what it costs is arithmetic: the `out < m` borrow chain subtracts *m*'s columns
-where `FR_ARITH`'s subtracts `p`'s literals, so that chain cannot also be gated by `live`
-without reaching degree 3 and is ungated instead. `docs/spec/delegation.md` §14.1 and
-`docs/spec/constraint-manifest.md` §18.4.
+**Selected parameter** — a value a circuit's own behaviour depends on that arrives as a
+**frame word naming one of a fixed set**, with the circuit supplying that choice's constants as
+literals. `MOD_MUL` is the pattern and `EC_ADD` follows it: one frame word selects secp256k1's
+base field, its scalar field, or BN254's base or scalar field, and a degree-1 gate pins eight
+`m_limb` columns to the selected literals; `EC_ADD`'s selects a **curve and a group** together,
+and pins the modulus and `b3 = 3b` the same way. The pin is also the bound — a column equal to a
+literal needs no range check — and `one_code_a_live_row` is what makes the selectors a
+*partition* rather than any subset, which is load-bearing twice: it refuses the two-selector
+forgery a sum cannot see, and it is the only thing bounding the pinned limbs at all.
+`docs/spec/delegation.md` §14 and §16, `docs/spec/constraint-manifest.md` §18.4 and §20.3.
+
+**Witnessed parameter** — the same thing done the other way: the value arrives as an ordinary
+**witness column** and the circuit holds it to nothing. S26's `MOD_MUL` carried its modulus that
+way and **S26b removed it**, so no registered circuit has one. It is worth a glossary entry for
+why it went: with `m` a column the circuit cannot state `a < m`, because there is no literal to
+compare against — so the quotient's fit was the honest prover's manners rather than a property of
+the statement, and a guest handing over an unreduced operand ran clean and failed at a gate
+hours later. `docs/spec/delegation.md` §10.2 is the amendment and §14.3 is what the generality
+cost.
 
 **Static detachment** — how a family no pc claims gets into a `VmConfig`: the SDK shim emits
 a twelve-byte **declaration record** into `.rodata`, referenced by the shim and by nothing
