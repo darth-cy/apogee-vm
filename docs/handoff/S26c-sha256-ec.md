@@ -485,12 +485,31 @@ and a later stage should not read silence here as confirmation:
 | `checker::tamper` | the assertion this stage **changed** — `mm_shards >= 2` became `== 1` with `pad_shard = 0`, because at `2^16` `mod-mul-ops`' invocations are one shard. The reasoning is in §9 item 3 and it has not been executed |
 | `host::prove` | the mini-block gate: the real block proved and verified end to end with both new circuits in the config |
 | `emulator::guests` | S26c's invocation counts for `ec-ops` and `sha256-ops`. Deferred on the owner's instruction after it was **measured at 23.9 GiB** and found to be what made CI reclaim its runner — the job was cancelled at 27m21s with no assertion failure, twice, which is the signature to recognise. A dev-server run, not a CI one |
+| `prover::fills` | the `MOD_MUL` and `EC_ADD` fills, **19.1 GiB**. Found by looking for a second offender rather than by a failure: `cargo test --workspace` stops at the first failing binary, `emulator` sorts before `prover`, so this file had never once executed in CI on this branch. Both families exist only at `2^16`, so a fill is the full committed width over 65,536 rows and `EC_ADD`'s is 1,420 columns wide. The four cheap tests in the same file stay in CI at 1.72 GiB and 1.73 s |
 | `prover::{block,keccak,recursion,streaming,alu,mem,control,public_io}`, `checker::logup`, `verifier::cli`, `prover::acceptance`, `prover::metrics` | that S26c's two families and the `MOD_MUL` re-shape moved no statement that does not contain them. Each is a re-confirmation, and the two new families are absent from most of them |
 
 The first two are the ones that matter. `checker::tamper`'s is the sharper risk
 of the two, being a **changed assertion in a suite CI cannot see**: if the
 re-derivation is wrong the test fails the next time anyone runs it, and this stage
 is where the reasoning would have been checked.
+
+**Two tests were moved into the deferred set during the stage's close, on the
+owner's instruction, and both for memory.** Each was measured rather than
+estimated, and each is above what a GitHub runner has:
+
+| test | peak | what CI keeps instead |
+| --- | --- | --- |
+| `emulator::guests::the_new_families_are_invoked_the_pinned_number_of_times` | 23.9 GiB, 118 s | the `mod-mul-ops` `EC_ADD` count, moved onto a trace `mod_mul_ops_routes_every_vendored_patch_through_the_ecall` already had — 2.04 s, and the only live witness in CI that the `ProjectivePoint` patch routes, `mod-mul-ops` naming neither shim |
+| `prover::fills`, two of six tests | 19.1 GiB, 6.18 s | the other four, 1.72 GiB; and `checker::tests::{mod_mul,ec_add}` still evaluate both circuits' gates row-locally at `2^16` from independently derived witnesses |
+
+The second row is where a real gap remains, and it should not be read as covered:
+what `checker` holds is the **circuit**, and what `prover::fills` holds is the
+**fill** — that each family's fill writes every committed address exactly once.
+A fill that wrote one address twice would now reach a deferred run rather than CI.
+The file's module comment states this in place. It cannot be made cheap by
+shrinking the height, `RANGE16` putting the floor at `2^16`; the honest options are
+a dev-server run, which is the owner's decision, or a fill-level property that does
+not materialize a shard, which nobody has designed.
 
 ---
 

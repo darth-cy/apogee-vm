@@ -194,10 +194,11 @@ cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
 cargo clippy -p prover --all-targets --features metrics -- -D warnings   # the ONE feature's configuration
-cargo test --workspace                      # 1,092 tests; 66 more are #[ignore]d (the run's own tally, S26c)
+cargo test --workspace                      # 1,090 tests; 68 more are #[ignore]d (the run's own tally, S26c)
 cargo test -p prover --features metrics --test metrics  # the metrics harness; 10 more, 2 #[ignore]d
 cargo test -p program --test delegation -- --ignored --test-threads=1  # static detachment at BOTH guest profiles; builds six guest images, 2.9 s
 cargo test -p emulator --test guests -- --ignored --test-threads=1  # DEFERRED; S26c's invocation counts: four traced executions, two of them `ec-ops`, 23.9 GiB peak and 118 s -- a GitHub runner reclaims the job, so this one is a dev-server run
+cargo test -p prover --test fills -- --ignored --test-threads=1  # DEFERRED; S26c: the MOD_MUL and EC_ADD fills, which exist only at 2^16, so each is its full committed width over 65,536 rows -- 19.1 GiB peak against 1.72 for the four that stay in CI
 APOGEE_GUEST_PROFILE=release cargo test -p emulator --test revm -- --ignored --test-threads=1  # S24's guest against native revm; builds the revm guest, 47 s
 cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 17.5 GB peak, 203 s, 30 min on a runner
 cargo test -p prover --test acceptance -- --include-ignored --test-threads=1  # DEFERRED; S16's statement, 10.7 GB peak, 374 s

@@ -2,7 +2,19 @@
 //! columns: each address once, and the whole range.
 //!
 //! This is the cheap half of what a delegation shard's proof would show, and
-//! it is here because the expensive half is `#[ignore]`d. `prove_shard` reads
+//! it is here because the expensive half is `#[ignore]`d.
+//!
+//! **Two of these are themselves `#[ignore]`d since S26c, and for memory rather
+//! than time.** `MOD_MUL` and `EC_ADD` exist only at `2^16` — `RANGE16`'s table
+//! needs sixteen variables — so a fill of either is its full committed width over
+//! 65,536 rows, and `EC_ADD`'s width is 1,420. Measured: the four remaining tests
+//! are 1.72 GiB and 1.73 s, and all six are **19.1 GiB** in 6.18 s. The two that
+//! cost that are a dev-server run (root `CLAUDE.md`'s deferred list). What still
+//! holds those two circuits in ordinary CI is `crates/checker/tests/{mod_mul,ec_add}.rs`,
+//! which evaluate the same gates row-locally at the same height from witnesses
+//! derived independently of any fill — so the *circuits* stay covered and it is
+//! the *fill* that does not, which is this file's own subject and worth being
+//! plain about. `prove_shard` reads
 //! the fill's columns back by address through `BaseLayer::get`, so a fill that
 //! writes one address twice silently drops a column and leaves another unset,
 //! and `gkr_part` panics on `"a witness column"` at the far end of a 113-second
@@ -121,6 +133,7 @@ fn the_recursion_fills_cover_their_circuits_exactly() {
 /// recorded — the quotient — so "covers its circuit exactly" is also the check
 /// that `mod_mul_witness` wrote every carry it was supposed to.
 #[test]
+#[ignore = "DEFERRED: fills two 2^16 delegation shards -- EC_ADD alone is 1,420 committed columns over 65,536 rows. With `every_delegation_fill_satisfies_every_gate` the file peaks at 19.1 GiB, above what a GitHub runner has"]
 fn the_mod_mul_and_ec_add_fills_cover_their_circuits_exactly() {
     let program = common::mod_mul_program();
     let archive = common::mod_mul_archive(&program);
@@ -167,6 +180,7 @@ fn the_mod_mul_and_ec_add_fills_cover_their_circuits_exactly() {
 /// ungated, so the zeros satisfy them only where `v = m`. Nothing in the
 /// executor, the guests or the shape tests could see it.
 #[test]
+#[ignore = "DEFERRED: same two 2^16 fills; the sampled row evaluation is cheap and the fills are not. See the sibling test's note"]
 fn every_delegation_fill_satisfies_every_gate() {
     let program = common::mod_mul_program();
     let archive = common::mod_mul_archive(&program);
