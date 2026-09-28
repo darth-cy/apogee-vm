@@ -1044,7 +1044,7 @@ fn ec_add(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Stri
                 .collect();
             out.push((ea_circuit::q_hi(r, i), u32_column(values, h)));
         }
-        // The carry is committed as the **unsigned** `c + 2^45`, which reaches
+        // The carry is committed as the **unsigned** `c + 2^46`, which reaches
         // 2^46 and so is an `Fr` column; its two chunks are halfwords.
         let offset = 1i128 << ea::CARRY_OFFSET_BITS;
         for c in 0..ea::CARRIES {
@@ -1234,11 +1234,11 @@ fn ec_add_row(frames: &FrameSlice, r: usize) -> EcAddRow {
 }
 
 /// One slot's quotient and carries, from the limb identity
-/// `A*B + C*D + 256*m^2 = q*m + out`.
+/// `A*B + C*D + 1024*m^2 = q*m + out`.
 ///
 /// The positions are computed first as unnormalized signed sums — every one
 /// below `2^80`, which an `i128` holds — then normalized into the non-negative
-/// big integer `N = A*B + C*D + 256*m^2 - out`, which is `q*m` exactly, and
+/// big integer `N = A*B + C*D + 1024*m^2 - out`, which is `q*m` exactly, and
 /// divided. The carries then fall out of the identity position by position,
 /// each an exact division by `2^32`.
 fn ec_add_witness(
@@ -1261,7 +1261,7 @@ fn ec_add_witness(
         pos[k] -= result[k] as i128;
     }
 
-    // `N`, normalized. It is non-negative because the `256 * m^2` offset
+    // `N`, normalized. It is non-negative because the `1024 * m^2` offset
     // dominates every negative term (`constraints::ec_add`'s
     // `the_carry_offset_covers_every_slot` is the same arithmetic).
     let mut limbs: Vec<u32> = Vec::with_capacity(ea::POSITIONS + 4);

@@ -1,4 +1,4 @@
-# Delegation: the ABI, the anchor, and the four delegation families
+# Delegation: the ABI, the anchor, and the six delegation families
 
 Frozen as of S21, **appended to at S23**, which added two families under §10's
 rule and amended §3 and §5.1 where more than one delegation type made a literal
@@ -643,7 +643,7 @@ five `2^8` `KECCAK_F` shards are 59.4 MB — **97% of the proof**, against 3% fo
 thirty-two execution and window shards. A delegation family's height has been the
 dominant term in proof size since S21.
 
-### 9.2 `DEFAULT_HEIGHTS[MOD_MUL]` is `2^16`, and the four families differ
+### 9.2 `DEFAULT_HEIGHTS` is per family, and the six differ by three orders of magnitude
 
 S26 first left it at `2^8` "consistent with the three families before it", and
 that reason was wrong: **consistency between delegation families has no
@@ -1292,3 +1292,250 @@ schoolbook 512-bit long division of its own — and **runs it on every call,
 comparing**, rather than reserving it for an executor that will never ask. That
 turns forty lines of dead code into a differential oracle against
 `emulator::mod_mul_frame`, which is the better of the two things to have.
+
+---
+
+## 15. The SHA-256 compression circuit
+
+`constants::family::SHA256_COMP`, **one compression a row**, new at S26c.
+`constraints::sha256` is the circuit; `docs/spec/constraint-manifest.md` §19 is
+its column-by-column account.
+
+### 15.0 Why it exists
+
+Ethereum's `0x02` precompile, and the cheapest regular circuit surface on the
+profiler's list after the two S26b took. SHA-256 is sixty-four rounds of fixed
+rotations, XORs and 32-bit additions — no modular reduction, no field, no
+table — which is the smallest possible arithmetization per unit of guest work:
+every bound is a bit that already exists for the XORs' sake.
+
+**It is the compression function and not the digest**, which is what makes the
+routing easy. The padding and the block loop are Merkle–Damgård's and belong to
+the caller; `guest_sdk::sha256` is where they live, and one ecall covers one
+64-byte block. A digest-shaped frame would have needed a length, a variable
+number of blocks and a decision about where padding happens, none of which a
+fixed-width frame expresses.
+
+### 15.1 The frame
+
+**24 words, 96 bytes**, word-aligned per §4.
+
+| words | holds | read | written |
+| --- | --- | --- | --- |
+| 0–7 | the chaining state `H0..H7`, little-endian `u32` each | yes | **yes** |
+| 8–23 | the block's sixteen schedule words `W0..W15`, **big-endian decoded** | yes | unchanged |
+
+The forty-eight schedule words `W16..W63` the message schedule derives are the
+circuit's own advice and **never cross the frame**: they are a function of the
+sixteen, so carrying them would be 192 bytes of frame a guest would have to
+compute to hand over.
+
+**The words are `u32`s and the block is big-endian decoded.** SHA-256 is a
+big-endian design where keccak is a little-endian one, and the decode has to
+happen somewhere; it happens in the caller, because the caller already holds
+the bytes and the circuit already holds the value. `constants::sha256`'s
+`STATE_WORD`, `BLOCK_WORD` and `FRAME_WORDS` are the layout and
+`guest_sdk::recursion::Sha256Frame`'s three `const` assertions pin it, so a
+renumbering fails the build rather than transposing the state and the block.
+
+**There is no frame this family can refuse**, and it is the only one of the six
+of which that is true: every `u32` is a legal chaining word and a legal schedule
+word, so `emulator::sha256_frame` takes no `pc` and has no error path. What a
+caller can still get wrong is the *padding*, which is why
+`guests/sha256-ops` checks seven message lengths chosen for the boundary the
+padding turns on.
+
+### 15.2 The circuit, in one paragraph
+
+Three gate lists. List 0 bit-decomposes every frame word, copies the carried
+bits and builds the `x·y` helper of each three-way XOR; list 1 assembles the
+carried scalars and the XOR values; list 2 is the sixty-four rounds, the
+forty-eight schedule equations and the eight output sums. Every bound is a bit
+with a booleanity gate — the family is at `2^8`, where no channel's table fits
+(§9) — and the carries are three bits for a round, two for a schedule word and
+one for an output sum, each derived rather than observed.
+
+**The recurrence is over two sequences, not eight working words.** `b`, `c` and
+`d` are `A_{i−1}`, `A_{i−2}` and `A_{i−3}`; `f`, `g` and `h` are `E_{i−1}`,
+`E_{i−2}` and `E_{i−3}`. So the round is
+`A_{i+1} = T1 + T2 − 2^32·ca_i` and `E_{i+1} = A_{i−3} + T1 − 2^32·ce_i`, the
+eight-variable shuffle costs nothing, and the four non-positive indices of each
+sequence *are* the frame's state words — which is the whole of `B`, `C`, `D` and
+`H`'s existence in this arithmetization.
+
+**A round's constant `K_i` rides the row's `live` mask and is not a bare
+literal.** A padding row is an all-zero row, and `… − K_i = 0` cannot hold on
+one; `checker::check_padding` refuses such a circuit, and S26c shipped it that
+way until the checker suite ran. The mask is an `M` column that only gate list 0
+may read, so it is carried like any other value — one column a layer, which is
+what the correct statement costs.
+
+---
+
+## 16. The elliptic-curve addition circuit
+
+`constants::family::EC_ADD`, **one third of one addition a row**, new at S26c.
+`constraints::ec_add` is the circuit; `docs/spec/constraint-manifest.md` §20 is
+its column-by-column account.
+
+### 16.0 Why it exists, and what it is not
+
+The point operations under Ethereum's `0x06` and `0x07` precompiles, and — far
+more valuable — the ones inside `k256`'s `ecrecover`, which S26's profile ranked
+first in every workload it measured. After S26b routed that crate's field
+multiply through `MOD_MUL`, a projective addition was twelve `MOD_MUL`
+invocations; it is now three `EC_ADD` ones.
+
+**It is not a scalar multiplication and not a pairing.** A ladder is the
+caller's — `guest_sdk::recursion::ec_add_complete` is one addition — and the
+pairing is out of scope by the stage's own terms. **It is not `ecrecover`
+either**: `prompts/00-master.md`'s stage register cancelled that family and the
+cancellation stands.
+
+### 16.1 The formula, and why it is the caller's
+
+Renes–Costello–Batina 2015 **Algorithm 7** for `a = 0`, in **homogeneous
+projective** coordinates — `x = X/Z`, `y = Y/Z`. It is **complete**: `P + P`,
+`P + (−P)`, `P + O` and a non-normalized `Z` all come out right, so the guest
+branches on nothing, the circuit has no degenerate row, and no inverse witness
+exists anywhere in it.
+
+That choice is not the circuit's convenience. `guests/vendor/k256`'s
+`ProjectivePoint::add` **is** this algorithm over this representation, so the
+delegation is a drop-in for a method whose storage does not move — which is the
+owner's rule: a delegation understands the representation its caller already
+uses. The two paths therefore agree **limb for limb** and not merely as points.
+BN254 arrives affine at revm's `Crypto::bn254_g1_add` boundary and the guest
+lifts it with `Z = 1`, which is free; arkworks' own `Projective` is *Jacobian*,
+so a caller converting between them does `(X·Z, Y·Z², Z)` one way and
+`(X·Z, Y, Z³)` the other.
+
+**Completeness is what makes a ladder five lines**, and it is worth saying why
+that matters more than the formula's cost. An incomplete formula needs a case
+for the first iteration, a case for a doubling and a case for the identity, and
+each is a place to be wrong only on inputs a test does not reach.
+
+### 16.2 Three invocations, and the frame that glues them
+
+Twelve multiplications, in **three groups of three reductions**:
+
+```text
+group 0    xx = X1*X2          yy = Y1*Y2          zz = Z1*Z2
+group 1    m4 = (X1+Y1)(X2+Y2) m5 = (Y1+Z1)(Y2+Z2) m6 = (X1+Z1)(X2+Z2)
+group 2    X3 = xy*ym - byz3*xz
+           Y3 = yp*ym + bxx9*xz
+           Z3 = yz*yp + xx3*xy
+```
+
+with `xy = m4 − xx − yy`, `yz = m5 − yy − zz`, `xz = m6 − xx − zz`,
+`bzz3 = b3·zz`, `ym = yy − bzz3`, `yp = yy + bzz3`, `byz3 = b3·yz`,
+`xx3 = 3·xx` and `bxx9 = 3·b3·xx`.
+
+**Nine reductions, not twelve**: each of the three outputs is two products under
+one quotient, which the limb identity's shape allows for free.
+
+**The three rows are glued by the frame, not by a bus.** Group 0 leaves `xx`,
+`yy` and `zz` in words 49..73 and group 2 reads them there, as ordinary RAM words
+on an ordinary RAM chain. Nothing new carries them — no new address space beyond
+the family's own, no new presence rule — and `checker::memory_columns_from_log`
+still covers every column. A send/receive bus keyed by `(invocation, stage, slot)`
+was the alternative and it is **unsound** as a cross-row mechanism here: the
+multiset that would pair a send with a receive has no way to say that the two
+belong to the same invocation without a column the anchor's provenance rules
+refuse.
+
+**97 words, 388 bytes**, word-aligned per §4.
+
+| words | holds | read by | written by |
+| --- | --- | --- | --- |
+| 0 | the selector: a curve **and** a group, one of `constants::ec_add::CODES` | every group | none |
+| 1–8 | `X1` | groups 0, 1 | group 2 (`X3`) |
+| 9–16 | `Y1` | groups 0, 1 | group 2 (`Y3`) |
+| 17–24 | `Z1` | groups 0, 1 | group 2 (`Z3`) |
+| 25–48 | `X2`, `Y2`, `Z2` | groups 0, 1 | none |
+| 49–72 | `xx`, `yy`, `zz` | group 2 | group 0 |
+| 73–96 | `m4`, `m5`, `m6` | group 2 | group 1 |
+
+Group 2 writes its results **over** `X1`, `Y1` and `Z1`, which the first two
+groups have by then finished reading. That is what keeps the frame at 97 words
+rather than 121.
+
+**The three codes of a curve must be invoked in group order.** Two transposed is
+not a refusal anywhere — it is a different point, computed from lanes whose
+previous contents were zero — so the order is not left to a caller:
+`guest_sdk::recursion::ec_add_complete` walks it, and
+`constants::ec_add::{SECP256K1_GROUPS, BN254_GROUPS}` are the two triples, held
+to the `CODE_CURVE`/`CODE_GROUP` tables by `const` assertion.
+
+### 16.3 What the circuit has to get right, and what it got wrong first
+
+The six selectors are boolean and sum to `live`, so a live row claims exactly one
+(curve, group) pair, and `selector_rule` ties that claim to **frame word 0** —
+the selector columns and the word the guest wrote are one claim. `m_limb{k}_rule`
+and `b3_rule` fix the curve's modulus limbs and its `b3 = 3b` to that claim's
+literals, which is also their `2^32` bound: `m` and `b3` need no range check at
+all. Every frame word carries a 32-bit bound as a `RANGE16` obligation on its
+high halfword, and the twelve frame values carry a `< m` borrow chain whose
+conclusion is gated to the groups that read them.
+
+Each slot's four operands are committed columns pinned by degree-2 gates to
+**bounded linear combinations** of those values, so the pin is also the bound and
+an operand needs no range check of its own. The identity is then one shape for
+all nine slots:
+
+```text
+A*B + C*D + 1024*m^2 = q*m + out
+```
+
+Three things about it are easy to get wrong, and two of them were.
+
+- **`D` carries the sign, not the identity.** Group 2's slot 0 is
+  `xy·ym − byz3·xz`, and a per-group sign on a product's coefficient is not
+  expressible — a coefficient is one literal or one challenge — so the minus
+  rides `D`, which is `xx + zz − m6` where the other slots' is `m6 − xx − zz`.
+- **The offset is 1024 and 256 was wrong.** It exists to keep the quotient
+  unsigned, and it must cover the most negative left-hand side any slot can
+  reach. The binding slot is group 2's `Y3`, not its `X3`: `yp·ym + bxx9·xz`
+  reaches `−(22·22 + 63·3)·m² = −673·m²`. At 256 the honest quotient of such a
+  row is negative and the row **unprovable**, and `zz` above about `0.76m` is
+  enough on its own — roughly a quarter of random invocations. It is a
+  completeness bug and not a soundness one, which is exactly why nothing but an
+  honest witness against the gates can find it: the executor computes the right
+  answer, the guest agrees with its own software path, and only the prover fails.
+- **A gated conclusion is `enable·(1 − b_7) = 0` and never `b_7 = enable`.** The
+  second forces the borrow to 0 where `enable` is 0, so a value that *is* below
+  the modulus on a row that does not read it becomes unprovable — and every lane
+  is such a value, the six intermediates being zeroed by the guest's frame
+  constructor and a group-2 row's `X1..Z2` being ordinary coordinates. That
+  spelling made **every row of this family unprovable** while every shape test,
+  the executor and both fixture guests passed. The chain's sixteen `canonical`
+  gates are *ungated* and hold for any value, so a non-reading value still owes a
+  real chain.
+
+Both are now derived rather than argued: `the_offset_covers_every_slot` and
+`the_carry_offset_covers_every_slot` read one operand-ceiling table, because the
+same products bound the carry's width and the offset's floor and only one of the
+two arguments had been made.
+
+The sixteen limb equations telescope to the identity exactly when the last carry
+is zero, which the last position forces by having no outgoing carry; `out`'s own
+chain puts it below `m`. Integer division being unique, `out` is the reduction
+and nothing else.
+
+### 16.4 The height, and what it costs
+
+`2^16`, and **forced rather than chosen**: the `RANGE16` channel needs sixteen
+variables (§10.3), Mercury needs an even count, and `2^18` is four times worse.
+
+One shard is a computed **20.5 GB** — 18.3 GB of forward pass, 0.7 GB of
+committed base, 1.5 GB of the first bind's half-height table — against 5.1 GB for
+`MOD_MUL` at the same height and ~11 GB for an execution shard. **So this is the
+peak-setting family in a block**, and that is a fact about the stage rather than a
+problem it solved: the lever that remains is the group count, five groups of two
+reductions being about two-thirds the width at two more invocations an addition.
+`docs/handoff/S26c-sha256-ec.md` records the measured figure against this
+estimate.
+
+The channel is what makes the row narrow enough to be worth it at all. Without
+it the 97-word frame's timestamp gaps alone are 3,686 bit columns against 194
+chunk columns, and 24 more 32-bit values want bounding besides.

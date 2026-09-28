@@ -156,11 +156,17 @@ the **journal** `Machine::finish` reads back out of the public output window at 
   touched, and both went with the POSIX layer. A number the ABI does not list reads `a7`
   and `a0` like any other and answers `-ENOSYS`. The emulator spells no ABI number itself;
   `crates/constants/tests/ecall_abi.rs` checks that.
-- **A delegation ecall's own answer can be a fatal error, and `MOD_MUL`'s is** (S26,
-  restated at S26b). The other three delegations are total on their frames: any 200, 96 or
-  100 bytes are a state, a triple of `Fr`s or an operand pair. `MOD_MUL`'s is not, and
-  since S26b it refuses **three** frames by name rather than one: a selector word no
-  `mod_mul::CODES` entry holds, and either operand at or above the modulus it selects.
+- **A delegation ecall's own answer can be a fatal error, and two of the six are** (S26,
+  restated at S26b and S26c). Four delegations are total on their frames: any 200, 96, 100
+  or 96 bytes are a state, a triple of `Fr`s, an operand pair or a chaining state and a
+  block — `SHA256_COMP` is the clearest case, every `u32` being a legal state word and a
+  legal schedule word, so `sha256_frame` takes no `pc` at all. `MOD_MUL`'s frame is not
+  total, and since S26b it refuses **three** frames by name rather than one: a selector word
+  no `mod_mul::CODES` entry holds, and either operand at or above the modulus it selects.
+  **`EC_ADD`'s is not either**, and it refuses **seven**: a selector naming no (curve,
+  group) pair, and each of the six values its group reads at or above the selected modulus —
+  which are `x1..z2` on a group-0 or group-1 row and the six intermediates on a group-2
+  one, so the refusal set is a function of the group and not a fixed list.
   (S26's zero-modulus refusal is gone with the operand it read — there is no zero modulus
   in a four-entry table of primes.) Each is a **guest** error like a misaligned load, not
   an answer, and each is a frame the circuit has no witness for.

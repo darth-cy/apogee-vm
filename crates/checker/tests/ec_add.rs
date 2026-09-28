@@ -2,7 +2,7 @@
 //!
 //! `docs/spec/delegation.md` §16 is what this suite restates: the 97-word
 //! frame, the six-way (curve, group) selector, the anchor's two tuples, and the
-//! nine reductions' shared identity `A·B + C·D + 256·m² = q·m + out` with every
+//! nine reductions' shared identity `A·B + C·D + 1024·m² = q·m + out` with every
 //! frame value and every `out` below `m`.
 //!
 //! The arithmetic is checked **row by row**: each row is built here and
@@ -169,7 +169,7 @@ fn loose_scale(k: i128, a: &Loose) -> Loose {
 /// A loose value as canonical base-`2^32` limbs, by carry propagation.
 ///
 /// Panics on a negative value, which is the point: every left-hand side this
-/// suite normalizes is one the `256·m²` offset is supposed to have made
+/// suite normalizes is one the `1024·m²` offset is supposed to have made
 /// non-negative, so a panic here is that claim failing rather than a test
 /// bug swallowed.
 fn normalize(x: &Loose) -> Vec<u32> {
@@ -470,7 +470,7 @@ impl Invocation {
         let m = self.m();
         let slot = &slots(self.group())[r];
         let ops: [Loose; 4] = core::array::from_fn(|which| self.operand(slot.ops[which]));
-        // `A·B + C·D + 256·m²`, which the offset makes non-negative.
+        // `A·B + C·D + 1024·m²`, which the offset makes non-negative.
         let lhs = loose_add(
             &loose_add(&loose_mul(&ops[0], &ops[1]), &loose_mul(&ops[2], &ops[3])),
             &loose_scale(
@@ -775,7 +775,7 @@ fn witness(live: &[Row]) -> Vec<(PolyAddress, MultilinearPoly)> {
                 u((i.reductions[r].q[k] >> 16) as u64)
             });
         }
-        // Each carry as the unsigned `carry + 2^45`, then its two chunks.
+        // Each carry as the unsigned `carry + 2^46`, then its two chunks.
         let offset = move |i: &Row, k: usize| -> u64 {
             (i.reductions[r].carries[k] + (1i128 << f::CARRY_OFFSET_BITS)) as u64
         };
@@ -1383,8 +1383,8 @@ fn a_frame_word_above_its_bound_is_refused_by_the_channel_alone() {
 fn a_padding_row_holds_and_a_live_one_next_to_it_does_too() {
     // The padding contract is checked structurally by `check_padding`; this is
     // the arithmetic half — that an all-zero row satisfies every gate of a
-    // circuit whose identity carries a `256·m²` offset and whose carries carry
-    // a `2^45` one. Both ride `live`, and a padding row is where that shows.
+    // circuit whose identity carries a `1024·m²` offset and whose carries carry
+    // a `2^46` one. Both ride `live`, and a padding row is where that shows.
     let a = c::artifact(VARS);
     let columns = witness(&honest());
     let violated = checker::violated_relations(

@@ -163,10 +163,17 @@ this page's.
 
 **`KECCAK_F` reads slots 1 to 4 and nothing else.** It carries no lookup channel at all
 (§12.1), so `g`, `β` and every derived power and neutral are absent from it — one of the
-**nine** registered circuits of which that is true, the others being the five window families
-and the three other delegation families, and for the opposite reason: a window family has no
-witness to bound, and a delegation row's every bound is a bit decomposition — or, for
-`MOD_MUL`'s modulus alone, a selector pinning it to a literal (§18.4). Its 26 pad leaves and
+**ten** registered circuits of which that is true, the others being the five window families
+and `POSEIDON2`, `FR_ARITH`, `SHA256_COMP` and — until S26c — `MOD_MUL`, and for the opposite
+reason: a window family has no witness to bound, and a delegation family at `2^8` has no table
+to bound one against, so its every bound is a bit decomposition.
+
+**Two delegation families now read `g` and `β⁰`, and `MOD_MUL` is one of them.** S26c gave
+`MOD_MUL` and `EC_ADD` the `RANGE16` channel at `2^16`, which `docs/spec/delegation.md` §10.3
+is the amendment for: a range channel's tuple is one expression wide, so each reads slot 5
+(`g`) and slot 6 (`β⁰`, the literal 1) and **no** derived power and no neutral — the decoder
+neutral being a table channel's and `β¹` upward belonging to tuples wider than one. So the
+count of circuits reading `g` is nine execution-and-delegation circuits, not seven. Its 26 pad leaves and
 its `write_anchor` leaf read no challenge past `γ_M`, and the two frame-pointer checks, the
 3,561 booleanity gates, the 50 `addr_w`, 50
 `gap_w`, 50 `input_w` and 50 `output_w` gates and all 145,920 permutation gates read none at
@@ -180,13 +187,13 @@ all.
 
 | tag | shape | `G` | list kind | used by |
 | --- | --- | --- | --- | --- |
-| 0 | `Linear { terms, constant }` | `Σ c_i·x_i + c_0` | row-wise | add/sub, 58: 43 leaves of list 0 (the **6** memory pads, the 15 leaf numerators, the 3 table numerators and 3 table denominators, the 16 pad-fraction columns), 5 degree-1 enforcing gates, 10 copies in lists 2–4; jump/branch/slt, 71: 54 leaves of list 0 (the 26 leaf numerators, 4 of tables and 22 of lookups, the 4 table denominators, the 24 pad-fraction columns), 3 degree-1 enforcing gates, 14 copies in lists 2–4; shift/bitwise, 108: 77 leaves of list 0 (the 43 leaf numerators, 4 of tables and 39 of lookups, the 4 table denominators, the 30 pad-fraction columns), 9 degree-1 enforcing gates, 22 copies in lists 2–5; mul/div, 108: 81 leaves of list 0 (the 31 leaf numerators, 4 of tables and 27 of lookups, the 4 table denominators, the 46 pad-fraction columns), 5 degree-1 enforcing gates, 22 copies in lists 2–5; mem_word, 54: 38 leaves of list 0 (the 4 memory pads, the 21 leaf numerators, 3 of tables and 18 of lookups, the 3 table denominators, the 10 pad-fraction columns), 6 degree-1 enforcing gates, 10 copies in lists 2–4; mem_subword, 100: 72 leaves of list 0 (the 4 memory pads, the 40 leaf numerators, the 4 table denominators, the 24 pad-fraction columns), 6 degree-1 enforcing gates, 22 copies in lists 2–5; atomics, 113: 86 leaves of list 0 (the **6** memory pads, the 40 leaf numerators, the 4 table denominators, the 36 pad-fraction columns), 9 degree-1 enforcing gates, 18 copies in lists 2–5; `ZERO_WINDOWS`, `PUBLIC_INPUT`, `PUBLIC_OUTPUT` and `ADVICE_WINDOWS`, 2 unmasked leaves each; **keccak, 170,248**: 1,727 in list 0 (26 pad leaves, the 51 columns carried to the top, round 0's 1,600 state copies, and the 50 degree-1 `input_w` gates), 8,517 more carried copies over lists 1–167, 324 copies of the two memory roots over lists 6–167, and 159,680 state copies inside the 24 round blocks |
-| 1 | `Product { coeff, left, right }` | `c·x·y` | row-wise | add/sub, 37: the 14 row-wise product-tree nodes (lists 1–3) and the 23 row-wise fraction-node denominators (lists 1–4); jump/branch/slt, 40: the 6 row-wise product-tree nodes (lists 1–2) and the 34 row-wise fraction-node denominators (lists 1–4); shift/bitwise, 59: the 6 product-tree nodes (lists 1–2) and the 53 fraction-node denominators (lists 1–5); mul/div, 56: the 6 product-tree nodes and the 50 fraction-node denominators; mem_word, 37: the 14 row-wise product-tree nodes (lists 1–3) and the 23 fraction-node denominators (lists 1–4); mem_subword, 62: the 14 product-tree nodes and the 48 fraction-node denominators (lists 1–5); atomics, 68: the 14 product-tree nodes and the 54 fraction-node denominators; **keccak, 38,526**: the 126 product-tree nodes that reduce 128 leaves to 2 over lists 1–6, and the 38,400 `v = B'·B'` gates of chi's first step, 1,600 a round. It has no fraction node at all |
+| 0 | `Linear { terms, constant }` | `Σ c_i·x_i + c_0` | row-wise | add/sub, 58: 43 leaves of list 0 (the **6** memory pads, the 15 leaf numerators, the 3 table numerators and 3 table denominators, the 16 pad-fraction columns), 5 degree-1 enforcing gates, 10 copies in lists 2–4; jump/branch/slt, 71: 54 leaves of list 0 (the 26 leaf numerators, 4 of tables and 22 of lookups, the 4 table denominators, the 24 pad-fraction columns), 3 degree-1 enforcing gates, 14 copies in lists 2–4; shift/bitwise, 108: 77 leaves of list 0 (the 43 leaf numerators, 4 of tables and 39 of lookups, the 4 table denominators, the 30 pad-fraction columns), 9 degree-1 enforcing gates, 22 copies in lists 2–5; mul/div, 108: 81 leaves of list 0 (the 31 leaf numerators, 4 of tables and 27 of lookups, the 4 table denominators, the 46 pad-fraction columns), 5 degree-1 enforcing gates, 22 copies in lists 2–5; mem_word, 54: 38 leaves of list 0 (the 4 memory pads, the 21 leaf numerators, 3 of tables and 18 of lookups, the 3 table denominators, the 10 pad-fraction columns), 6 degree-1 enforcing gates, 10 copies in lists 2–4; mem_subword, 100: 72 leaves of list 0 (the 4 memory pads, the 40 leaf numerators, the 4 table denominators, the 24 pad-fraction columns), 6 degree-1 enforcing gates, 22 copies in lists 2–5; atomics, 113: 86 leaves of list 0 (the **6** memory pads, the 40 leaf numerators, the 4 table denominators, the 36 pad-fraction columns), 9 degree-1 enforcing gates, 18 copies in lists 2–5; `ZERO_WINDOWS`, `PUBLIC_INPUT`, `PUBLIC_OUTPUT` and `ADVICE_WINDOWS`, 2 unmasked leaves each; **keccak, 170,248**: 1,727 in list 0 (26 pad leaves, the 51 columns carried to the top, round 0's 1,600 state copies, and the 50 degree-1 `input_w` gates), 8,517 more carried copies over lists 1–167, 324 copies of the two memory roots over lists 6–167, and 159,680 state copies inside the 24 round blocks; **`MOD_MUL`, 824**, **`SHA256_COMP`, 7,224** and **`EC_ADD`, 3,185**, each the sum of its leaves, its degree-1 enforcing gates and the copies its reduction lists carry (§18.1, §19.1, §20.1) |
+| 1 | `Product { coeff, left, right }` | `c·x·y` | row-wise | add/sub, 37: the 14 row-wise product-tree nodes (lists 1–3) and the 23 row-wise fraction-node denominators (lists 1–4); jump/branch/slt, 40: the 6 row-wise product-tree nodes (lists 1–2) and the 34 row-wise fraction-node denominators (lists 1–4); shift/bitwise, 59: the 6 product-tree nodes (lists 1–2) and the 53 fraction-node denominators (lists 1–5); mul/div, 56: the 6 product-tree nodes and the 50 fraction-node denominators; mem_word, 37: the 14 row-wise product-tree nodes (lists 1–3) and the 23 fraction-node denominators (lists 1–4); mem_subword, 62: the 14 product-tree nodes and the 48 fraction-node denominators (lists 1–5); atomics, 68: the 14 product-tree nodes and the 54 fraction-node denominators; **keccak, 38,526**: the 126 product-tree nodes that reduce 128 leaves to 2 over lists 1–6, and the 38,400 `v = B'·B'` gates of chi's first step, 1,600 a round. It has no fraction node at all; **`MOD_MUL`, 573**, **`SHA256_COMP`, 9,278** — 9,216 of them the `x·y` helper of each three-way XOR bit, which is what buys the degree — and **`EC_ADD`, 2,301** |
 | 2 | `MaskIntoIdentity { input, mask }` | `x·m + 1 − m` | row-wise | no registered circuit (`memory.md` §2.2 says why) |
 | 3 | `AffineProduct { .. }` | `(Σ a_i·x_i + a_0)·(Σ b_j·y_j + b_0)` | row-wise | no registered circuit |
-| 4 | `TreeProduct { input }` | `x(y,0)·x(y,1)` | halving | add/sub, 5 per halving list (100, `n = 20`); jump/branch/slt, 6 per halving list (120); shift/bitwise and mul/div, 6 per halving list (120 each); mem_word, 5 per halving list (100); mem_subword and atomics, 6 per halving list (120 each); **each of the five window circuits, 2 per halving list** — 40 at `n = 20`, 44 at `n = 22` and 16 at the two public families' pinned `n = 8`; **keccak, 2 per list (16 at `n = 8`)** — the two memory roots and nothing else |
-| 5 | `Quadratic { constant, linear, products }` | `c_0 + Σ a_i·x_i + Σ b_j·y_j·z_j` | row-wise | add/sub, 100: **10** memory leaves and 15 lookup row denominators (list 0), 52 degree-2 enforcing gates, and the 23 row-wise fraction-node numerators (lists 1–4); jump/branch/slt, 103: 8 memory leaves and 22 lookup row denominators (list 0), 39 degree-2 enforcing gates, and the 34 row-wise fraction-node numerators (lists 1–4); shift/bitwise, 139: 8 memory leaves and 39 lookup row denominators (list 0), 39 degree-2 enforcing gates, and the 53 fraction-node numerators (lists 1–5); mul/div, 134: 8 memory leaves and 27 lookup row denominators, 49 degree-2 enforcing gates, and the 50 fraction-node numerators; mem_word, 80: 12 memory leaves and 18 lookup row denominators (list 0), 27 degree-2 enforcing gates, and the 23 fraction-node numerators (lists 1–4); mem_subword, 143: 12 memory leaves and 36 lookup row denominators, 47 degree-2 enforcing gates, and the 48 fraction-node numerators (lists 1–5); atomics, 137: 10 memory leaves and 36 lookup row denominators, 37 degree-2 enforcing gates, and the 54 fraction-node numerators; `INIT_TEARDOWN`, 2 leaves — **the only window circuit with a `Quadratic` gate**, the other four being unmasked and degree 1 throughout; **keccak, 149,735**: 4,405 in list 0 (the 102 real memory leaves, round 0's 640 parity XORs, and 3,663 enforcing gates — 3,561 booleanity, 50 `addr_w`, 50 `gap_w` and the two frame-pointer checks), 145,280 XOR and chi gates over the other round layers, and the 50 `output_w` gates of the last list |
-| 6 | `TreeCross { left, right }` | `p(y,0)·q(y,1) + p(y,1)·q(y,0)` | halving | **keccak, none: a circuit with no lookup channel has no fraction tree, and this shape is a fraction tree's alone**; add/sub, 3 per halving list (60, `n = 20`); jump/branch/slt, 4 per halving list (80); shift/bitwise and mul/div, 4 per halving list (80 each); mem_word, 3 per halving list (60); mem_subword and atomics, 4 per halving list (80 each) |
+| 4 | `TreeProduct { input }` | `x(y,0)·x(y,1)` | halving | add/sub, 5 per halving list (100, `n = 20`); jump/branch/slt, 6 per halving list (120); shift/bitwise and mul/div, 6 per halving list (120 each); mem_word, 5 per halving list (100); mem_subword and atomics, 6 per halving list (120 each); **each of the five window circuits, 2 per halving list** — 40 at `n = 20`, 44 at `n = 22` and 16 at the two public families' pinned `n = 8`; **keccak, 2 per list (16 at `n = 8`)** — the two memory roots and nothing else; `SHA256_COMP`, 2 per list (16 at `n = 8`), for the same reason; **`MOD_MUL` and `EC_ADD`, 3 per list** (48 each at `n = 16`) — the two memory roots and the `RANGE16` tree's **denominator**, which is what a fourth output costs |
+| 5 | `Quadratic { constant, linear, products }` | `c_0 + Σ a_i·x_i + Σ b_j·y_j·z_j` | row-wise | add/sub, 100: **10** memory leaves and 15 lookup row denominators (list 0), 52 degree-2 enforcing gates, and the 23 row-wise fraction-node numerators (lists 1–4); jump/branch/slt, 103: 8 memory leaves and 22 lookup row denominators (list 0), 39 degree-2 enforcing gates, and the 34 row-wise fraction-node numerators (lists 1–4); shift/bitwise, 139: 8 memory leaves and 39 lookup row denominators (list 0), 39 degree-2 enforcing gates, and the 53 fraction-node numerators (lists 1–5); mul/div, 134: 8 memory leaves and 27 lookup row denominators, 49 degree-2 enforcing gates, and the 50 fraction-node numerators; mem_word, 80: 12 memory leaves and 18 lookup row denominators (list 0), 27 degree-2 enforcing gates, and the 23 fraction-node numerators (lists 1–4); mem_subword, 143: 12 memory leaves and 36 lookup row denominators, 47 degree-2 enforcing gates, and the 48 fraction-node numerators (lists 1–5); atomics, 137: 10 memory leaves and 36 lookup row denominators, 37 degree-2 enforcing gates, and the 54 fraction-node numerators; `INIT_TEARDOWN`, 2 leaves — **the only window circuit with a `Quadratic` gate**, the other four being unmasked and degree 1 throughout; **keccak, 149,735**: 4,405 in list 0 (the 102 real memory leaves, round 0's 640 parity XORs, and 3,663 enforcing gates — 3,561 booleanity, 50 `addr_w`, 50 `gap_w` and the two frame-pointer checks), 145,280 XOR and chi gates over the other round layers, and the 50 `output_w` gates of the last list; **`MOD_MUL`, 908**, **`SHA256_COMP`, 8,569** and **`EC_ADD`, 3,859**, each its real memory leaves, its lookup row denominators where it has any, its degree-2 enforcing gates and its fraction-node numerators |
+| 6 | `TreeCross { left, right }` | `p(y,0)·q(y,1) + p(y,1)·q(y,0)` | halving | **keccak and `SHA256_COMP`, none: a circuit with no lookup channel has no fraction tree, and this shape is a fraction tree's alone**; **`MOD_MUL` and `EC_ADD`, 1 per halving list** (16 each at `n = 16`) — their one `RANGE16` tree's numerator, and the shape that makes a delegation family with a channel visible in this table at all (S26c); add/sub, 3 per halving list (60, `n = 20`); jump/branch/slt, 4 per halving list (80); shift/bitwise and mul/div, 4 per halving list (80 each); mem_word, 3 per halving list (60); mem_subword and atomics, 4 per halving list (80 each) |
 
 ### 0.6 The compound expressions
 
@@ -291,7 +298,9 @@ product nodes means the one `Product`.
 | 12 | `PUBLIC_INPUT` | `memory::value_window_artifact(n)` | none | `0 ≤ n ≤ 30` | `2^8`, **pinned** | one shard at `2^8`, window 32 | one shard at `2^8`, window 32 | one shard at `2^8`, window 32 | one shard at `2^8`, window 32 | one shard at `2^8`, window 32 |
 | 13 | `PUBLIC_OUTPUT` | `memory::zero_window_artifact(n)` — `ZERO_WINDOWS`' artifact, byte for byte | none | `0 ≤ n ≤ 30` | `2^8`, **pinned** | one shard at `2^8`, window 33 | one shard at `2^8`, window 33 | one shard at `2^8`, window 33 | one shard at `2^8`, window 33 | one shard at `2^8`, window 33 |
 | 14 | `ADVICE_WINDOWS` | `memory::value_window_artifact(n)` — `PUBLIC_INPUT`'s artifact at another height | none | `0 ≤ n ≤ 30` | the window height, `2^22` | in the config, with no shard: the guest is handed no advice | ditto | ditto | ditto | ditto |
-| 15 | `MOD_MUL` | `mod_mul::artifact(n)` | `mod_mul::channels()`: **none** | `0 ≤ n ≤ 30` | `2^16` | — | — | — | — | — |
+| 15 | `MOD_MUL` | `mod_mul::artifact(n)` | `mod_mul::channels()`: **`RANGE16`** since S26c | `16 ≤ n ≤ 30`, the floor derived from the channel's `BITS` | `2^16` | — | — | — | — | — |
+| 16 | `SHA256_COMP` | `sha256::artifact(n)` | `sha256::channels()`: **none** | `0 ≤ n ≤ 30` | `2^8` | — | — | — | — | — |
+| 17 | `EC_ADD` | `ec_add::artifact(n)` | `ec_add::channels()`: **`RANGE16`** — the first a delegation family carried | `16 ≤ n ≤ 30`, ditto | `2^16` | — | — | — | — | — |
 
 A verifying key carries only menu heights (`constants::family::HEIGHT_MENU`, **`2^8` to `2^22`
 since S21**),
@@ -303,8 +312,19 @@ prover pairs each circuit with a fill,
 `fill::shift_bitwise` for 2, `fill::mul_div` for 3, `fill::mem_word` for 4, `fill::mem_subword`
 for 5, `fill::atomics` for 6, `fill::window` for 7, 8 **and 13**, `fill::keccak_f` for 9,
 `fill::poseidon2` for 10, `fill::fr_arith` for 11, `fill::public_input` for 12,
-`fill::advice` for 14 and, since S26, `fill::mod_mul` for 15.
-**Every family is provable at S26.**
+`fill::advice` for 14, since S26 `fill::mod_mul` for 15, and since S26c
+`fill::sha256_comp` for 16 and `fill::ec_add` for 17.
+**Every family is provable at S26c.**
+
+**Two families' `Some` range is no longer the whole menu, and that is S26c.**
+`MOD_MUL` and `EC_ADD` carry `RANGE16`, whose table needs sixteen variables, so
+`family_circuit` returns `None` for either below `2^16` — and the guard that says so is
+**derived** rather than listed: it reads each family's own `channels()` and takes the widest
+range channel's `BITS`, testing the floor before the artifact is built. Until S26c it named
+the seven execution families explicitly with a delegation family's arm below it, which worked
+only while no delegation family had a channel (`docs/spec/lookup.md` §3,
+`docs/spec/delegation.md` §10.3). The practical consequence is in `crates/prover/tests/common`:
+`MOD_MUL_FIXTURE_VARS = 8` is gone, because that height no longer exists for the family.
 
 **The last three rows are in every `VmConfig`, and two of them prove a shard in every
 statement.** `program::decode_program` lists families 12, 13 and 14 unconditionally, under the
@@ -402,7 +422,9 @@ PUBLIC_INPUT        8   9 (1 + 8)                  L9      3      0   0  1      
 PUBLIC_OUTPUT       8   9 (1 + 8)                  L9      2      0   0  1          2       18  0                  0                               2         18        1,910
 ADVICE_WINDOWS     16  17 (1 + 16)                 L17     3      0   0  1          3       34  0                  0                               2         34        2,887
 ADVICE_WINDOWS     22  23 (1 + 22)                 L23     3      0   0  1          3       46  0                  0                               2         46        3,535
-MOD_MUL            16   22 (6 + 16)                L22   104  3,364   0  0      3,468      158  3,502 (86/3,416)    0                               2      3,660    1,404,716
+MOD_MUL            16   26 (10 + 16)               L26   104    221   0  1        325    2,244  125 (54/71)        274 (0/274/0/0)                 4      2,369      550,391
+SHA256_COMP         8   14 (6 + 8)                 L14   100  8,116   0  0      8,216   16,688  8,399 (232/8,167)  0                               2     25,087   10,895,760
+EC_ADD             16   28 (12 + 16)               L28   392  1,028   0  1      1,420    8,772  637 (131/506)      1,110 (0/1,110/0/0)             4      9,409    2,350,670
 ```
 
 `committed` is layer 0's width, `M + W + S`. `inner` is the width of every layer above 0,
@@ -583,6 +605,30 @@ assembled by `keccak.rs` itself and its depth is not that formula; its bullet is
   (`0 ≤ s < n`) holds `358,509 + 2s` and `358,510 + 2s`. The roots are relations `358,507 + 2n`
   and `358,508 + 2n`: 358,523 and 358,524 at `n = 8`. Every one of those numbers is independent
   of `n` but the last two, because only the halving phase depends on it.
+
+- **sha256.** Two trees, `read` and `write`, of 32 leaves each — 24 frame words, the anchor and
+  **7 pads** a side — and no fraction tree, the family having no channel. `R = 5`, and the depth
+  **is** `1 + R + n = 6 + n`, but not because `build::assemble` built it: the circuit is
+  `delegation::Assembly`'s and has two lists of work above gate list 0, which ride **inside** the
+  tree's own five reduction lists and cost no depth at all (§19.8). `L1 … L6` are 15,857, 785,
+  16, 8, 4 and 2 wide, and `L7 … L{n+6}` 2 each: `inner = 16,672 + 2n`. Relations 0–15,856 are
+  list 0's producing gates (64 leaves, 465 carried scalars, 6,112 carried bits, 9,216 helpers),
+  15,857–24,071 its 8,215 enforcing gates, 24,072–24,856 list 1's 785 producing gates,
+  24,857–24,872 list 2's 16 tree gates, 24,873–25,056 its 184 enforcing gates, 25,057–25,064 list
+  3, 25,065–25,068 list 4, 25,069–25,070 list 5, and halving list `6 + s` (`0 ≤ s < n`) holds
+  `25,071 + 2s` and `25,072 + 2s`. The roots are relations `25,069 + 2n` and `25,070 + 2n`:
+  25,085 and 25,086 at `n = 8`. Every number but the last two is independent of `n`.
+
+- **ec_add.** Three trees: `read` and `write` with 128 leaves each — 97 frame words, the
+  anchor, and **30 pads a side** — and `range16` with **2,048** fractions, 1,110 obligations
+  and a table fraction padding to it; so `R = 11`, the `range16` tree setting it alone.
+  Layers `L1 … L12` are 4,352, 2,176, 1,088, 544, 272, 136, 68, 34, 18, 10, 6 and 4 wide, and
+  `L13 … L{n+12}` 4 each: `inner = 8,708 + 4n`. Relations 0–4,351 are list 0's leaves,
+  4,352–4,988 its enforcing gates, 4,989–7,164 list 1, 7,165–8,252 list 2, 8,253–8,796 list 3,
+  8,797–9,068 list 4, 9,069–9,204 list 5, 9,205–9,272 list 6, 9,273–9,306 list 7,
+  9,307–9,324 list 8, 9,325–9,334 list 9, 9,335–9,340 list 10, 9,341–9,344 list 11, and
+  halving list `k` (`12 ≤ k ≤ n + 11`) holds `9,345 + 4(k − 12)` to `9,348 + 4(k − 12)`. The
+  roots are relations `9,341 + 4n` to `9,344 + 4n`: 9,405–9,408 at `n = 16`.
 
 ---
 
@@ -7117,8 +7163,11 @@ range channel is refused at construction unless `BITS ≤ trace_vars` (`lookup.m
 `n = 8` no range table fits, so every bound here is a **bit decomposition with a booleanity
 gate** — which costs this circuit nothing it was not already paying, its state being 1,600
 committed bits, and which makes the 32-bit bound on a frame word the same gate that reads it
-(§12.5). The family is therefore the only registered circuit with no `g`, no `β`, no derived
-power and no multiplicity column (§0.4).
+(§12.5). The family is therefore one of **ten** registered circuits with no `g`, no `β`, no
+derived power and no multiplicity column — the five window families, `POSEIDON2`, `FR_ARITH`
+and, since S26c, `SHA256_COMP`, which is at `2^8` for the same reason this family is (§0.4,
+§19.1). It was **four** delegation families until S26c, when `MOD_MUL` took `RANGE16` and
+`EC_ADD` arrived with it (§18.1, §20.1, `docs/spec/delegation.md` §10.3).
 
 ### 12.2 Row kinds
 
@@ -8342,13 +8391,1065 @@ is a perfectly well-formed witness of a claim the circuit must refuse. Nothing i
 pattern is upstream `k256`'s second representation of zero, and the vendored patch handed it
 across the frame until S26b made it a refusal (`delegation.md` §14.4).
 
-## 19. Observations
+## 19. `SHA256_COMP` — family 16
+
+### 19.1 Header
+
+`family_circuit(16, n)` is `sha256::artifact(n)` with `sha256::channels()`, which is **empty**.
+Like `POSEIDON2`, `FR_ARITH` and `MOD_MUL` it is built by `delegation::Assembly`, not by
+`build::assemble` — but unlike all three it is the first delegation family whose work needs
+**inner layers of its own**, which is what `Assembly` exists for (`crates/constraints/src/
+delegation.rs`: `build::push_list` maps an inner address to its scratch slot by scanning every
+slot pushed so far, and this circuit's layer 1 is 15,857 columns wide). Normative spec:
+`delegation.md` §4, §5 and **§15**. Fill: `prover::family_fill(16)`, the private
+`fill::sha256_comp`.
+
+**8,216 committed columns (100 `M`, 8,116 `W`, no `S`) and no virtual table.** Gate list 0
+writes 15,857 columns — 64 memory leaves, 465 carried scalars, 6,112 carried bits and one `x·y`
+helper for each of 9,216 XOR bits — and holds **8,215 enforcing gates (48 degree-1, 8,167
+degree-2)**. Gate list 1 writes 785 and enforces nothing; gate list 2 writes 16 and holds the
+**184 degree-1 equations that are the compression function**. **No lookup**, 2 outputs. At its
+`n = 8` there are 14 gate lists (6 row-wise and 8 halving), the top is `L14`, and the circuit has
+16,688 inner columns and 25,087 relations, 10,895,760 bytes of wire form — every one of those
+numbers read from `crates/constraints/tests/vectors/sha256.txt`, the committed shape line, and
+re-derived here in §19.7 and §19.8. **Only the last two depend on `n`**: a height adds one
+halving list per variable carrying one node per output, so `inner = 16,672 + 2n` and
+`relations = 25,071 + 2n`, with the committed width, the gate split and the zero lookups
+unmoved. `artifact` panics on every refusal of `validate` and of `memory::check_memory`, and
+`check_shape` then asserts the two column counts, that there is no setup column, no lookup and
+no channel, and that **layer 1's width is `layer1_width()`** — counted on the emitted artifact,
+never on what was handed in (S21 must-be-exact 4).
+
+**One row is one SHA-256 compression: one 64-byte block against one chaining state.** It is
+**not the digest**. Padding, the length encoding and the Merkle–Damgård block loop stay in
+`guest_sdk::sha256`, exactly as the sponge stays in `guest_sdk::keccak256` (`delegation.md` §11,
+§15.0). A digest-shaped frame would have needed a length, a variable block count and a decision
+about where padding happens, none of which a fixed-width frame expresses.
+
+**The height is `2^8`**, the menu's opening entry, and it is a ceiling: one row is 16,688 inner
+columns, so `gkr::forward` materializes `16,688 × 256 × 32` bytes = **137 MB** a shard at `2^8`
+and `16,688 × 65,536 × 32` = **35.0 GB** at `2^16` (`delegation.md` §9.2's table). `artifact`
+accepts `0 ≤ n ≤ 30` and `family_circuit` returns `Some` over that whole range, because the
+minimum-height guard is derived from the family's own `channels()` and an empty channel list
+gives a floor of 0 (§19.6).
+
+**This family has no §0.5 row of its own**, like every delegation family but `KECCAK_F`: §0.5
+counts gate *shapes* over one circuit at `n = 20`, which is not a height this family is built
+at. §19.1's `8,399 (232/8,167)` is the enforcing split §0.5 would carry, and the row below
+gives the shape counts at `n = 8` for an integrator who wants them there.
+
+### 19.2 Row kinds
+
+Two, and neither is an instruction: **this family is invoked, not decoded**. It claims no pc,
+`program::lookup_tuple(16)` is empty, its decoded table has no column and no live row
+(`crates/program/tests/tables.rs` pins `(SHA256_COMP, 0)`), `program::claims_pcs(16)` is false
+and `constants::family::CYCLE_OWNING[16]` is false. It is in a `VmConfig` exactly when the
+linked binary declares it — the third presence rule (`delegation.md` §7).
+
+| row kind | `live` | what the row holds | what it adds to the multiset |
+| --- | --- | --- | --- |
+| an **invocation** | 1 | the requesting cycle, the frame base, the 24 words read and written, all 24 words' 32 read bits, the eight written words' 32 bits and one carry bit each, the 48 derived schedule words' bits and 2 carry bits each, `A_1..A_64` and `E_1..E_64` as bits, 64 `ca` and 64 `ce` of 3 bits, 24 × 38 gap bits and the frame pointer's 60 | 25 read tuples and 25 write tuples: the 24 frame words at `(RAM, base + 4j)` and the anchor pair at `(DELEGATION_SHA256_COMP, base)` |
+| **padding** | 0 | every committed cell 0, **as the honest fill writes it** | nothing: all 64 leaves are 1 |
+
+**There is no frame this family can refuse**, and it is the only one of the six of which that is
+true (`delegation.md` §15.1): every `u32` is a legal chaining word and a legal schedule word, so
+`emulator::sha256_frame` takes no `pc` and has no error path. The only frame errors left are the
+two every delegation family shares — a misaligned base and a frame past the top of RAM — and
+those are the emulator's `Misaligned` and `OutOfBounds`.
+
+**A padding row is far less free here than in any other family, and the ungated equations are
+why.** Of §19.5's and §19.7's gates only five carry `live` — `addr_w{j}`, `gap_w{j}`,
+`base_aligned`, `base_in_window` and, through `−K_i·live`, the 128 round gates. Everything else
+is ungated because every term is 0 on an all-zero row: so a padding row's `w{j}_read_value` is
+pinned to its own 32 bits by `in{j}_word`, its written words to theirs by `out{j}_word`, its
+sixteen block words to their read values by `writes_back_w{j}`, and its schedule and round bits
+to a **`K`-free compression** by `schedule_w{i}`, `round_a{i}`, `round_e{i}` and `output_h{j}`
+with the constants switched off. The all-zero row satisfies all of that, which is why
+`zero_row_valid` is `true`. What is genuinely free on a padding row is `cycle`, `base`,
+`anchor_value`, the 24 `w{j}_addr` and `w{j}_read_ts`, the 912 gap bits and the 60 base bits —
+and a fill could legally write a nonzero `K`-free compression into the rest. It would be
+harmless (the row's leaves are the multiset identity, it requests nothing and pairs with no
+anchor), but **a test asserting "a padding row's columns are zero" is asserting a property of
+the fill**, exactly as §18.2 records for `MOD_MUL`.
+
+### 19.3 The base layer
+
+**Memory-argument columns, `M[0..100]`** — filled by `fill::sha256_comp` through the shared
+`delegation_frame`; committed in `PublicInputs::memory_commitments`, absorbed at G8 before the
+memory challenges, exactly as a CPU family's are. Every address is reached through
+`sha256::CYCLE`, `LIVE`, `BASE`, `ANCHOR_VALUE` and `sha256::word(j, field)`, which are
+`delegation`'s re-exported, so a fill, a checker and a tamper twin name a column and never a
+number.
+
+| address | name | what it is | read by |
+| --- | --- | --- | --- |
+| `M[0]` | `cycle` | the requesting cycle | **25 leaves** — the 24 `write_w{j}` at `4·cycle + 0` and `read_anchor` at `4·cycle + 3` — and the 24 `gap_w{j}` gates. **Not** `write_anchor`, whose timestamp is the literal 0 |
+| `M[1]` | `live` | the row's one mask | **all 50 real leaves, as their mask** (the 14 pads read nothing); `live_boolean`; the 24 `addr_w{j}`, the 24 `gap_w{j}`, `base_aligned` and `base_in_window`; the carried scalar `live_l1`, and two layers up all **128** round gates (§19.7) |
+| `M[2]` | `base` | the `a0` the request passed: 4-aligned, at or above `RAM_ORIGIN`, with `base + 96 ≤ 2^31` | leaves `read_anchor` and `write_anchor`, as their address; all 24 `addr_w{j}`; `base_aligned`, `base_in_window` |
+| `M[3]` | `anchor_value` | **free**; 0 in an honest fill | leaf `read_anchor` **and nothing else** |
+| `M[4 + 4j]` | `w{j}_addr` | `base + 4j`, `j < 24` | leaves `read_w{j}`, `write_w{j}`; `addr_w{j}` |
+| `M[5 + 4j]` | `w{j}_read_ts` | the timestamp of the last write to that word | leaf `read_w{j}`; `gap_w{j}` |
+| `M[6 + 4j]` | `w{j}_read_value` | words 0–7 the chaining state `H0..H7`, words 8–23 the block's `W0..W15` big-endian decoded | leaf `read_w{j}`; `in{j}_word`; `writes_back_w{j}` for `j ≥ 8`; and the carried scalar `state_in{j}_l1` for `j < 8` |
+| `M[7 + 4j]` | `w{j}_write_value` | words 0–7 the compressed state, words 8–23 the block **unchanged** | leaf `write_w{j}`; for `j < 8` `out{j}_word` and the carried scalar `state_out{j}_l1`; for `j ≥ 8` `writes_back_w{j}` |
+
+The last group is `M[96..100]`. `constants::sha256::STATE_WORD` is 0, `BLOCK_WORD` is 8 and
+`FRAME_WORDS` is 24, and `guest_sdk::recursion::Sha256Frame`'s three `const` assertions pin all
+three, so a renumbering fails the build rather than transposing the state and the block.
+
+**Witness columns, `W[0..8116]`** — all filled by `fill::sha256_comp`; committed in
+`ShardProof::witness_commitments`, absorbed at S3. There is no `g` or `β` to follow them.
+
+| address | name | Rust | what it is |
+| --- | --- | --- | --- |
+| `W[38j + i]`, `j < 24` | `gap{j}_{i}` | `sha256::gap_bit(j, i)` | bit `i` of `4·cycle + 0 − w{j}_read_ts − 1`, **912** in all |
+| `W[912..941]` | `base_low{i}` | `base_low_bit(i)` | the 29 bits of `(base − RAM_ORIGIN)/4` |
+| `W[941..972]` | `base_room{i}` | `base_room_bit(i)` | the 31 bits of `2^31 − 96 − base` |
+| `W[972 + 32j + t]` | `in{j}_bit{t}` | `in_bit(j, t)` | bit `t` of frame word `j`'s **read** value, 768 |
+| `W[1740 + 32j + t]`, `j < 8` | `out{j}_bit{t}` | `out_bit(j, t)` | bit `t` of state word `j`'s **written** value, 256 |
+| `W[1996 + j]` | `co{j}` | `out_carry(j)` | the output sum's one carry bit, 8 |
+| `W[2004 + 32(i−16) + t]` | `w{i}_bit{t}` | `sched_bit(i, t)` | bit `t` of derived schedule word `W_i`, `16 ≤ i < 64`, 1,536 |
+| `W[3540 + 2(i−16) + t]` | `cw{i}_{t}` | `sched_carry_bit(i, t)` | the schedule sum's 2 carry bits, 96 |
+| `W[3636 + 32(i−1) + t]` | `a{i}_bit{t}` | `a_bit(i, t)`, `i ≥ 1` | bit `t` of `A_i`, `1 ≤ i ≤ 64`, 2,048 |
+| `W[5684 + 32(i−1) + t]` | `e{i}_bit{t}` | `e_bit(i, t)`, `i ≥ 1` | bit `t` of `E_i`, 2,048 |
+| `W[7732 + 3i + t]` | `ca{i}_{t}` | `ca_bit(i, t)` | the 3 bits of round carry `ca_i`, 192 |
+| `W[7924 + 3i + t]` | `ce{i}_{t}` | `ce_bit(i, t)` | the 3 bits of `ce_i`, 192 |
+
+**Every one of the 8,116 witness columns is a bit, and every one carries its own booleanity
+gate** (§19.5). That is what replaces the range channels a `2^8` shard cannot hold, and it is
+also every bound this circuit makes — there is no other kind.
+
+**`a_bit` and `e_bit` are total on `i ≤ 0`, and that is the whole of `B`, `C`, `D` and `H`.**
+FIPS 180-4 shuffles eight working words a round; six are copies, so with `A_i` and `E_i` the
+values of `a` and `e` at the start of round `i`, `B_i = A_{i−1}`, `C_i = A_{i−2}`,
+`D_i = A_{i−3}`, `F_i = E_{i−1}`, `G_i = E_{i−2}` and `H_i = E_{i−3}`. The four non-positive
+indices of each sequence therefore *are* the frame's state words, and the accessors say so
+without a column:
+
+```text
+a_bit(i, t) = in_bit(−i, t)         for i ≤ 0:  A_0 = H0, A_{−1} = H1, A_{−2} = H2, A_{−3} = H3
+e_bit(i, t) = in_bit(4 − i, t)      for i ≤ 0:  E_0 = H4, E_{−1} = H5, E_{−2} = H6, E_{−3} = H7
+w_bit(i, t) = in_bit(8 + i, t)      for i < 16: the block's sixteen words are schedule words 0–15
+```
+
+So `in{j}_bit{t}` does triple duty: it is frame word `j`'s decomposition, it is a working-word or
+schedule-word bit, and for `j < 8` it is a carried scalar's operand. One set of 768 bits, three
+consumers, no copies. The **carried carries** have no such trick: `ca` and `ce` are 3 bits
+because `T1 = E_{i−3} + Sigma1 + Ch + K + W < 5·2^32` and `T2 = Sigma0 + Maj < 2·2^32` give
+`ca ≤ 6`, and `A_{i−3} + T1 < 6·2^32` gives `ce ≤ 5`; `cw ≤ 3` from the schedule's four-term sum
+is 2 bits, and `co ≤ 1` from `H_j + V_j` is one. **All four widths are derived ceilings, not
+observations** (`constants::sha256::CARRY_{A,E,W,OUT}_BITS`), and
+`sha256.rs`' `the_two_word_recurrence_is_the_compression_function` then *observes* the maxima
+over 48 pseudo-random states and asserts each is inside its width — the confirmation, not the
+derivation. **`T1` is never reduced and is not a column**: both consumers take it modulo `2^32`,
+so reducing it would be two more carries a round for the same answer.
+
+### 19.4 Gate list 0: the 64 leaves, the 465 carried scalars, the 6,112 carried bits and the 9,216 helpers
+
+Gate list 0 writes `L1`'s 15,857 columns, relations 0–15,856, in four blocks whose offsets are
+**arithmetic** — `scalar_base(1) = 64`, `bit_base() = 529`, `work_base(1) = 6,641` — which is why
+`Assembly` exists and why `every_layer_is_as_wide_as_its_parts` is a test.
+
+**The memory product trees**, `L1[0..64]`, relations 0–63, each leaf per §0.6, built by the
+shared `delegation::leaf`. `leaves_a_side(24) = 32`, so **25 real leaves and 7 pads a side**.
+
+| `L1` | relation | node | mask | `AS` | addr | timestamp | value |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `j` (`j < 24`) | `j` | `read_w{j}` | `M[1]` | 2 (RAM) | `M[4 + 4j]` | `M[5 + 4j]` | `M[6 + 4j]` |
+| 24 | 24 | `read_anchor` | `M[1]` | **8** | `M[2]` | `4·M[0] + 3` | `M[3]` |
+| 25–31 | 25–31 | `read_pad0` … `read_pad6` | — | — | — | — | the constant 1 |
+| `32 + j` | `32 + j` | `write_w{j}` | `M[1]` | 2 | `M[4 + 4j]` | `4·M[0] + 0` | `M[7 + 4j]` |
+| 56 | 56 | `write_anchor` | `M[1]` | **8** | `M[2]` | the literal **0** | the literal **0** |
+| 57–63 | 57–63 | `write_pad0` … `write_pad6` | — | — | — | — | the constant 1 |
+
+The anchor pair is `delegation.md` §5's, unchanged and not restated: `write_anchor` is stamped
+0, the timestamp no ordinary cycle can produce; `read_anchor` is stamped `4·cycle + ANCHOR_DELTA`
+= `4·cycle + 3`, the slot the request's mirror query wrote at, which is what pins this row's
+`cycle` to the request's; `anchor_value` is free on both sides and the multiset is what pairs
+them. The frame's writes ride `FRAME_DELTA = 0`, a `(space, Δ)` pair no query of
+`constraints::memory`'s table holds, which is what lets `trace`'s frame builder tell an
+invocation's events from the requesting row's (`delegation.md` §4.1).
+
+**The carried scalars**, `L1[64..529]`, relations 64–528, **465 of them**. Each is
+`Σ_t 2^t · bit` over committed bits — which is that value's 32-bit bound wherever the bits carry
+booleanity, and they all do — or a one-term copy, or, for `Ch`, a `Quadratic`. Their order is
+`Scalar::index`, and it is the layout:
+
+| indices | scalars | how each is built | count |
+| --- | --- | --- | --- |
+| 0–67 | `A_{−3} … A_{64}` (`am3_l1` … `a64_l1`) | `Σ 2^t · a_bit(i, t)` | 68 |
+| 68–135 | `E_{−3} … E_{64}` | `Σ 2^t · e_bit(i, t)` | 68 |
+| 136–199 | `ca_0 … ca_63` | `Σ_{t<3} 2^t · ca_bit(i, t)` | 64 |
+| 200–263 | `ce_0 … ce_63` | likewise | 64 |
+| 264–311 | `cw_16 … cw_63` | `Σ_{t<2} 2^t · sched_carry_bit(i, t)` | 48 |
+| 312–319 | `co_0 … co_7` | the single column `out_carry(j)` | 8 |
+| 320–383 | `W_0 … W_63` | `Σ 2^t · w_bit(i, t)` | 64 |
+| 384–447 | `Ch_0 … Ch_63` | `ch_gate(i)`, below | 64 |
+| 448–455 | `state_in0 … state_in7` | the single column `M[6 + 4j]` | 8 |
+| 456–463 | `state_out0 … state_out7` | the single column `M[7 + 4j]` | 8 |
+| 464 | `live` | the single column `M[1]` | 1 |
+
+**`carried_scalars()` is that arithmetic and `carried_scalar_list()` is the list, the count is
+spelled twice, and `artifact` asserts them equal.** It has to: the arithmetic is what every
+layer offset is built from and the list is what the columns are built from, so when they
+disagree the failure is a column **silently aliased onto the next block** — a gate reading an
+existing neighbour, in range, with no other symptom — and not anything a reader of either
+spelling would see. The same assertion covers `carried_bits()` against `carried_bit_list()`.
+
+**`Scalar::Live` exists because a round's constant cannot be a bare literal, and S26c shipped
+it as one.** `K_i` is a nonzero element of `constants::sha256::ROUND_CONSTANTS`, and a gate
+stating `… − K_i = 0` outright cannot hold on an all-zero row; the padding contract requires it
+to (`docs/spec/gkr.md` §4.3, and `padding.zero_row_valid` is `true` here). So the term is
+`−K_i·live`, and since `live` is an `M` column that **only gate list 0 may read**, it is carried
+like any other value — one column a layer, two layers, one `Linear` copy, which is what the
+correct statement costs. The bug was invisible to `validate`, to `check_memory`, to
+`check_shape`, to the emulator and to every guest; what found it is
+`crates/checker/tests/sha256.rs`' `the_circuit_keeps_every_rule` calling
+`checker::check_padding`, the second enforcement point. `delegation.md` §15.2 records it.
+
+**`Ch` needs no helper and is written here**, beside them, because
+`Ch(e, f, g) = g + e·f − e·g` is already degree 2 in the bits. Each bit of the result is
+`g_t + e_t·f_t − e_t·g_t`, which is 0 or 1 over all eight inputs
+(`the_degree_two_spellings_are_the_boolean_functions`, exhaustive), so the weighted sum is the
+32-bit value:
+
+```text
+ch{i}_l1                                                     Quadratic, degree 2
+  positional  Σ_{t<32} [ 2^t·e_bit(i−2, t)
+                       + 2^t·e_bit(i, t)·e_bit(i−1, t)
+                       − 2^t·e_bit(i, t)·e_bit(i−2, t) ]
+  named       Ch_i = Ch(E_i, E_{i−1}, E_{i−2}),  f = E_{i−1}, g = E_{i−2}
+```
+
+It reads **committed** bits, which is why **no `E` below 0 is carried**: `Ch(0)`, `Ch(1)` and
+`Ch(2)` reach `E_{−1}` and `E_{−2}` here, at the one list that can.
+
+**The carried bits**, `L1[529..6641]`, relations 529–6,640, **6,112 of them**, each a
+`d::copy` of a committed bit. They exist because gate list 1 builds the three-way XORs' values
+and cannot read a committed column. Their ranges are **narrowed to exactly what list 1 reads**,
+because a carried column no gate reads is one `validate` refuses — a relation constructed and
+then dropped:
+
+| block | indices | range | why those bounds |
+| --- | --- | --- | --- |
+| `A_i` bits | 0–2,111 | `A_BIT_FIRST = −2` … `A_BIT_LAST = 63`, 66 words | `Maj(0)` reads `A_0`, `A_{−1}`, `A_{−2}` at list 1, so `−2` is needed; **nothing reads `A_{−3}`'s bits** — it is a value only, the `D` of round 0 — and `A_64` likewise, being `output_h0`'s `V_0` |
+| `E_i` bits | 2,112–4,159 | `E_BIT_FIRST = 0` … `E_BIT_LAST = 63`, 64 words | `Sigma1(i)` reads `E_i` for `i < 64` at list 1; `Ch` reads its three `E`s **committed** at list 0, so no negative index is carried, and `E_64` is a value only |
+| `W_i` bits | 4,160–6,111 | `W_BIT_FIRST = 1` … `W_BIT_LAST = 61`, 61 words | `sigma0(W_{i−15})` for `i ≥ 16` reads `W_1` first; `sigma1(W_{i−2})` for `i < 64` reads `W_61` last. `W_0`, `W_62` and `W_63` are read only as **values** |
+
+`every_carried_bit_is_read` walks every operand of every combination and holds each inside these
+ranges and inside the block, so the ranges are **checked and not asserted**: one too wide is a
+column `validate` refuses, one too narrow is an out-of-layer read it also refuses, and a changed
+rotation constant moves the bound rather than breaking the circuit silently.
+
+**The helpers**, `L1[6641..15857]`, relations 6,641–15,856, **9,216 = 288 × 32**. A three-way
+XOR is degree 3 in bits — `x ⊕ y ⊕ z = x + y + z − 2(xy + yz + zx) + 4xyz` — so one helper a bit
+is unavoidable, and this circuit **derives** it rather than committing it:
+
+```text
+helper{k}_{t}                                                Product, degree 2
+  positional  1 · x.committed() · y.committed()
+  named       p_t = x_t · y_t,  x and y operands 0 and 1 of combination k
+```
+
+There are 288 combinations, in the order `XORS` counts them: for each round `i < 64`,
+`k = 3i` is `Sigma0(A_i)`, `3i + 1` is `Sigma1(E_i)` and `3i + 2` is `Maj(A_i, A_{i−1}, A_{i−2})`;
+then for each derived word `i ∈ [16, 64)`, `k = 192 + 2(i − 16)` is `sigma0(W_{i−15})` and
+`k = 192 + 2(i − 16) + 1` is `sigma1(W_{i−2})`. The rotations are FIPS 180-4's:
+`Sigma0 = ROTR^{2,13,22}`, `Sigma1 = ROTR^{6,11,25}`, `sigma0 = ROTR^7 ⊕ ROTR^{18} ⊕ SHR^3`,
+`sigma1 = ROTR^{17} ⊕ ROTR^{19} ⊕ SHR^{10}`, with bit `t` of `ROTR^r(x)` being bit
+`(t + r) mod 32` of `x`. **All 9,216 helpers are `Product`**: `xor_operand` returns `None` only
+where a `SHR` has shifted a bit away, and a `SHR` occupies operand slot **2** in both shapes that
+have one, so the `_ => d::linear(Vec::new())` arm that would write the literal 0 is unreachable
+for the five kinds this family has. It is defensive code with no live case, and the case it
+guards is a sixth combination shape with a shift in slot 0 or 1.
+
+### 19.5 Gate list 0's 8,215 enforcing gates
+
+Relations 15,857–24,071, in list order. Every one carries constant 0, so the all-zero row
+satisfies all of them.
+
+| group | relations | count | shape, degree | what it says |
+| --- | --- | --- | --- | --- |
+| `live_boolean`, `gap{j}_{i}_boolean`, `base_low{i}_boolean`, `base_room{i}_boolean` | 15,857; 15,858–16,769; 16,770–16,798; 16,799–16,829 | 1 + 912 + 29 + 31 | `Quadratic`, 2 | the frame's own, `delegation::frame_gates`', byte-identical to §12.5's |
+| `addr_w{j}`, `gap_w{j}`, `base_aligned`, `base_in_window` | 16,830–16,853; 16,854–16,877; 16,878; 16,879 | 24 + 24 + 1 + 1 | `Quadratic`, 2 | ditto: word `j` is at `base + 4j`, its read precedes its write by a 38-bit gap, the base is 4-aligned and at or above `RAM_ORIGIN`, and `base + 96 ≤ 2^31`. Degree 2 because each carries `live` as a factor — on a padding row `addr` and `base` are 0 and `4j` is not |
+| `in{j}_bit{t}_boolean`, `in{j}_word` | 16,880–17,671 | 768 + 24 | 2, then 1 | every read word is its 32 bits |
+| `out{j}_bit{t}_boolean`, `out{j}_word`, `j < 8` | 17,672–17,935 | 256 + 8 | 2, then 1 | every written state word is its 32 bits |
+| `writes_back_w{j}`, `8 ≤ j < 24` | 17,936–17,951 | 16 | `Linear`, 1 | the block's sixteen words survive the call |
+| `w{i}_bit{t}_boolean`, `cw{i}_{t}_boolean` | 17,952–19,583 | 1,536 + 96 | `Quadratic`, 2 | the derived schedule and its carries |
+| `a{i}_bit{t}_boolean`, `e{i}_bit{t}_boolean` | 19,584–23,679 | 4,096 | `Quadratic`, 2 | the two sequences' 64 words each |
+| `ca{i}_{t}_boolean`, `ce{i}_{t}_boolean` | 23,680–24,063 | 384 | `Quadratic`, 2 | the round carries |
+| `co{j}_boolean` | 24,064–24,071 | 8 | `Quadratic`, 2 | the output carries |
+
+The frame's five shapes are `delegation::frame_gates`' and are not restated; §12.5 spells each
+one's positional and named form, and this family's differ only in the word count (24 for 50) and
+the frame-bytes literal (96 for 200). The three that are this family's own:
+
+```text
+────────────────────────────────────────────────────────────────────────────────────────────
+16880…  in{j}_bit{t}_boolean — every read bit is a bit              Quadratic, degree 2
+  positional  0 = W[972 + 32j + t] − W[972 + 32j + t]·W[972 + 32j + t]
+  named       0 = in{j}_bit{t} − in{j}_bit{t}²
+
+  reads as  8,117 booleanity gates with live_boolean and the rest above: EVERY witness column
+            of this circuit is a bit, and every bound it makes is a sum of them (§19.6).
+
+────────────────────────────────────────────────────────────────────────────────────────────
+        in{j}_word — the word read is its own 32 bits             Linear, degree 1
+  positional  0 = M[6 + 4j] − Σ_{t<32} 2^t·W[972 + 32j + t]
+  named       0 = w{j}_read_value − Σ_t 2^t·in{j}_bit{t}
+
+  reads as  the recomposition and the 32-bit bound are one gate, as §12.5's input_w{j} is. It
+            is the join between the memory columns and the witness: without it the circuit
+            would compress whatever the bits said while the multiset carried whatever the word
+            said. Ungated, and it needs no mask — every term is 0 on a padding row, which is
+            also what pins a padding row's 768 read bits (§19.2).
+
+────────────────────────────────────────────────────────────────────────────────────────────
+        out{j}_word — the word written is its own 32 bits         Linear, degree 1
+  positional  0 = M[7 + 4j] − Σ_{t<32} 2^t·W[1740 + 32j + t]
+  named       0 = w{j}_write_value − Σ_t 2^t·out{j}_bit{t}
+
+  reads as  every word this family writes into RAM is below 2^32, which is the delegation
+            form of "a computed value is locally bounded" (memory-ops.md §5.1). The other
+            sixteen written words are bounded through writes_back_w{j} against read values
+            that in{j}_word already bounds, so all 24 are.
+
+────────────────────────────────────────────────────────────────────────────────────────────
+17936…  writes_back_w{j}, 8 ≤ j < 24 — the block is not rewritten  Linear, degree 1
+  positional  0 = M[7 + 4j] − M[6 + 4j]
+  named       0 = w{j}_write_value − w{j}_read_value
+
+  reads as  the guest's schedule survives the call and the invocation computes the state
+            alone. A circuit that let these sixteen move would let a caller's block be
+            rewritten by an invocation, which the caller has no way to notice
+            (crates/checker/tests/sha256.rs' a_block_word_rewritten_on_the_way_out_is_refused).
+            The eight state words are deliberately NOT in this set: out{j}_word is theirs.
+```
+
+### 19.6 The lookups
+
+There are none. `sha256::channels()` is empty, `CircuitArtifact::lookups` is empty,
+`FamilyCircuit::reads_generic_table` is false, there is no multiplicity column, and
+`lookup::check_discharge` over an empty channel list discharges nothing — which
+`crates/checker/tests/sha256.rs` asserts rather than skips.
+
+**The reason is the height, and it is the original rule rather than S26c's amendment.**
+`constants::lookup_channel::BITS` bottoms out at 16 for `RANGE16` and is 19 for `TIMESTAMP`, and
+a range channel is refused at construction unless `BITS ≤ trace_vars` (`lookup.md` §3). This
+family lives at `2^8`, where **no channel's table fits at any price**, so every bound is a bit
+decomposition with a booleanity gate — 8,116 of them, one per witness column. S26c's §10.3
+amendment lets a delegation family at `2^16` carry `RANGE16`, and `MOD_MUL` and `EC_ADD` do; this
+family has no reason to join them, its row being 16,688 inner columns where `EC_ADD`'s is 8,772
+and `MOD_MUL`'s 2,244, so `2^16` is 35 GB of forward pass a shard (`delegation.md` §9.2).
+`family_circuit`'s minimum-height guard is derived from `channels()` and so gives this family a
+floor of **0**, which is what lets it take `2^8` without a special arm.
+
+The consequences are §12.6's, and one is worth repeating: the shard's transcript draws `g` and
+`β` like any other — they are shard-local and unconditional — and reads neither. Its proof
+carries `2 + 2·0` outputs, its opening claim lists no setup commitment, and no padding row of it
+pays a multiplicity.
+
+### 19.7 Inner layers `L2` and `L3`: the XOR values and the equations
+
+Above gate list 0 there are exactly two lists of work, and **neither costs the circuit any
+depth** (§19.8). A layer's columns are the memory tree's, then the carried scalars, then — at
+layer 1 only — the carried bits, then that layer's own work.
+
+**Layer bases are per-layer, and that is a Law 1 requirement rather than a convenience.**
+`scalar_base(layer) = tree_width(layer)`: the tree is **64** columns wide at layer 1 and **32**
+at layer 2, so the same logical scalar sits at offset `64 + index` in one layer and
+`32 + index` in the other. A `PolyAddress::Inner` is a `(layer, offset)` pair and the offset is a
+**slot in that layer**, so `Scalar::at(layer)` has to recompute the base; a constant base would
+put every layer-2 read 32 columns past where the scalar is — and `64 + index < 785` for every
+index, so the address is **in range**, the gate reads an existing neighbour's column, and nothing
+in `validate`, `check_shape` or `every_layer_is_as_wide_as_its_parts` refuses it. What refuses it
+is the forward pass, which is why this family's suite runs one.
+
+**The carried bits live at layer 1 only.** `bit_base() = scalar_base(1) + carried_scalars() =
+529`, and `work_base(layer)` adds `carried_bits()` for `layer == 1` and nothing above it. Gate
+list 1 reads the bits to build the XOR values; gate list 2 reads **values and nothing else**. So
+carrying a bit higher would be a column nothing reads, which `validate` refuses — and rightly:
+a relation constructed and then dropped constrains nothing.
+
+**Gate list 1 → `L2`, 785 columns, relations 24,072–24,856, no enforcing gate.**
+
+| `L2` | relations | node | shape | formula |
+| --- | --- | --- | --- | --- |
+| 0–31 | 24,072–24,103 | `tree_1_{i}`, `i < 32` | `Product` | `L1[2i] · L1[2i+1]` |
+| 32–496 | 24,104–24,568 | `{name}_l2`, 465 | `Linear` | a copy of `L1[64 + index]` |
+| 497–784 | 24,569–24,856 | `xor{k}_value`, 288 | `Quadratic` | below |
+
+```text
+xor{k}_value, k not a Maj                                     Quadratic, degree 2
+  positional  Σ_{t<32} [ 2^t·x.at() + 2^t·y.at() − 2^{t+1}·helper(k,t) + 2^t·z.at()
+                       − 2^{t+1}·z.at()·x.at() − 2^{t+1}·z.at()·y.at()
+                       + 2^{t+2}·z.at()·helper(k,t) ]
+  named       (x ⊕ y) ⊕ z  =  (x + y − 2p) + z − 2·z·(x + y − 2p),   p = x·y
+
+xor{k}_value, k = 3i + 2 (Maj)                                Quadratic, degree 2
+  positional  Σ_{t<32} [ 2^t·helper(k,t) + 2^t·c·a + 2^t·c·b − 2^{t+1}·c·helper(k,t) ]
+  named       Maj(a, b, c) = pab + c·(a + b − 2·pab),  a = A_i, b = A_{i−1}, c = A_{i−2}
+```
+
+Both are degree 2 in `p`, `x`, `y` and `z` — all four at layer 1, the helper because gate list 0
+wrote it and the bits because gate list 0 carried them. **`Maj` is not an XOR** but shares the
+path: the same three operands, the same one helper a bit, the same degree-2 shape.
+`the_degree_two_spellings_are_the_boolean_functions` checks both and `Ch` over all eight inputs,
+exhaustively rather than sampled. Where a `SHR` has shifted operand 2 away the `z` terms and
+both of its products are simply absent, so `sigma0`'s top 3 bits and `sigma1`'s top 10 are
+two-way XORs — `every_carried_bit_is_read` counts exactly
+`288·32·3 − 48·(3 + 10) = 27,024` operands for that reason.
+
+**Committing the helpers instead would make the circuit one list shallower and much wider**:
+17,560 committed columns against 8,216 — 1.69 MB of proof a shard against 1.33 MB, since a
+committed column costs 96 wire bytes where an inner one costs 32. Deriving them is the cheaper
+half and is why there are three gate lists at all.
+
+**Gate list 2 → `L3`, 16 columns, relations 24,857–24,872, and the 184 equations that are the
+compression**, relations 24,873–25,056. Every one is `Linear`, **degree 1 over layer 2**: all of
+this family's nonlinearity is below it, in the 9,216 helpers, the 288 value gates and the 64 `Ch`
+gates. Write `S(x)` for `L2[32 + x]`, `x` a scalar index from §19.4, and `X(k)` for
+`L2[497 + k]`.
+
+```text
+────────────────────────────────────────────────────────────────────────────────────────────
+24873–24920   schedule_w{i}, 16 ≤ i < 64 — the message schedule    Linear, degree 1
+
+  positional  0 = S(320+i) + 2^32·S(264+i−16) − X(192+2(i−16)+1) − S(320+i−7)
+                  − X(192+2(i−16)) − S(320+i−16)
+  named       0 = W_i + 2^32·cw_i − sigma1(W_{i−2}) − W_{i−7} − sigma0(W_{i−15}) − W_{i−16}
+
+  reads as  FIPS 180-4's schedule with the four-term sum's carry witnessed in 2 bits, which
+            is what makes the Fr equation the integer one. Ungated: every term is 0 on a
+            padding row, which is also what pins a padding row's 1,536 schedule bits.
+
+────────────────────────────────────────────────────────────────────────────────────────────
+24921–25048   round_a{i}, round_e{i}, i < 64 — the sixty-four rounds  Linear, degree 1
+
+  T1_i  =  S(68+i)  +  X(3i+1)  +  S(384+i)  +  S(320+i)          E_{i−3} + Sigma1 + Ch + W
+  T2_i  =  X(3i)    +  X(3i+2)                                    Sigma0 + Maj
+
+  round_a{i}  0 = S(i+4) + 2^32·S(136+i) − T2_i − T1_i − K_i·S(464)
+              0 = A_{i+1} + 2^32·ca_i − T1_i − T2_i − K_i·live
+  round_e{i}  0 = S(i) + 2^32·S(200+i) − S(i) … − T1_i − K_i·S(464)
+              0 = E_{i+1} + 2^32·ce_i − A_{i−3} − T1_i − K_i·live
+
+  reads as  the whole compression over TWO sequences: b, c, d are A_{i−1..i−3} and f, g, h
+            are E_{i−1..i−3}, so the eight-word shuffle costs nothing and the recurrence is
+            two equations a round. `T1` appears in both and is never reduced. K_i rides
+            `live` for §19.4's reason, and it is the only term of either gate that does.
+
+────────────────────────────────────────────────────────────────────────────────────────────
+25049–25056   output_h{j}, j < 8 — the eight output sums            Linear, degree 1
+
+  positional  0 = S(456+j) + 2^32·S(312+j) − S(448+j) − S(v)
+  named       0 = w{j}_write_value + 2^32·co_j − w{j}_read_value − V_j
+              V = (A_64, A_63, A_62, A_61, E_64, E_63, E_62, E_61)
+
+  reads as  H_j + V_j mod 2^32, the Davies-Meyer feed-forward. The V mapping is where the
+            eight-word shuffle reappears and is the easiest line to transpose: j < 4 takes
+            A_{64−j} and j ≥ 4 takes E_{64−(j−4)}. `the_written_state_is_the_compression`
+            is the test that reads it back off the frame's write columns.
+```
+
+**Every carried scalar is read at layer 2, which is why there are 465 and not more.** `A_{−3}`
+reaches `round_e0`, `A_0` reaches `round_e3`, `A_64` reaches `output_h0`; `E_0` reaches
+`round_a3`, `E_64` reaches `output_h4`; `W_0` reaches `round_a0` and `schedule_w16`; each `ca`,
+`ce`, `cw`, `co`, `Ch`, `state_in`, `state_out` and `live` reaches its own gate. A scalar that
+reached none would be a column `validate` refuses.
+
+### 19.8 The trees, the halving layers and the outputs
+
+Two product trees of 32 leaves a side — 24 frame words, the anchor and **7 pads**, the pads
+being leaves that are literally 1. `tree_width(layer)` halves once a layer and never below two:
+64 at `L1`, 32 at `L2`, 16 at `L3`, 8 at `L4`, 4 at `L5` and **2 at `L6`**. The reads occupy the
+first half of each tree at every level, so `L6[0]` is the read root and `L6[1]` the write root.
+
+```text
+L1   15,857  =  64 tree + 465 scalars + 6,112 bits + 9,216 helpers    (gate list 0)
+L2      785  =  32 tree + 465 scalars +   288 XOR values              (gate list 1)
+L3       16  =  16 tree                                               (gate list 2)
+L4        8      L5  4      L6  2                                     (gate lists 3, 4, 5)
+L7 … L{n+6}   2 each, the halving phase
+```
+
+Relations 25,057–25,064 are list 3's, 25,065–25,068 list 4's, 25,069–25,070 list 5's, and
+halving list `6 + s` (`0 ≤ s < n`) holds `25,071 + 2s` and `25,072 + 2s`, two `TreeProduct`
+gates. The roots are relations `25,069 + 2n` and `25,070 + 2n` — **25,085 and 25,086 at
+`n = 8`**, the last two of 25,087.
+
+**The tree needs five reduction lists and the work needs two, and six row-wise lists satisfy
+both — so this circuit's inner work is free of depth.** With 32 leaves a side the largest
+`log2` leaf count is `R = 5`, and `1 + R + n = 6 + n` is both the tree's requirement and this
+circuit's actual depth; the XOR values ride inside list 1's reduction and the equations inside
+list 2's. It is the first registered circuit with genuine inner work of which that is true:
+`FR_ARITH` and `MOD_MUL` are also six row-wise lists deep but put every constraint on gate list
+0, and `KECCAK_F` stacks 168 round layers above it, so its trees reach their roots at `L7` and
+copy themselves up for 162 lists (§12.7). Here there is **no `read_up`/`write_up` gate at all**:
+the deepest tree and the deepest work end on the same list.
+
+**The outputs**, in output-map order. Both are absorbed as one `GKR_OUTPUTS` message before any
+challenge of the backward pass and travel in `ShardProof::outputs`.
+
+| # | address, `n = 8` | node | value | what `verify_shard` does with it |
+| --- | --- | --- | --- | --- |
+| 0 | `L14[0]` | `read_root` | the product of every read leaf of the shard: 24 frame reads and one anchor teardown per invocation, and 1 per padding row | **step 10a**: must equal `PublicInputs::memory_roots[p][0]`, `p` the position of `(16, shard_index)` in `verifier_core::statement_shards`; a factor of `reconciles` |
+| 1 | `L14[1]` | `write_root` | the product of every write leaf | step 10a: `memory_roots[p][1]`, the same `p`; a factor of `reconciles` |
+
+`statement_shards` is ascending by `FamilyId`, so this family's shards follow `MOD_MUL`'s and
+precede `EC_ADD`'s. There is no channel root, so step 9 has nothing to check and the `Lookup`
+error class cannot arise for this family.
+
+**How the shard rides the block** is §12.8's paragraph unchanged: its ts window is
+`[4·c_first, 4·c_last + 4)` over the invocations it holds, read off its own `M[0]`, and it is
+excluded from the disjointness rule, `CYCLE_OWNING[16]` being false; its rows are invocations, so
+`CycleProfile::total()` leaves them out of the cycle count while `plan_shards` counts them into
+this family's shard count, and zero invocations are zero shards.
+
+### 19.9 Witness rows — the chain that stands in for a row table
+
+**There is no row table here, and there cannot usefully be one:** a live row is 8,216 committed
+cells, 8,116 of them bits, and 7,144 of those are intermediates no frame word carries. What
+stands in its place is a chain, and it is stronger than §12.9's in one respect — its reference is
+pinned to the **standard's own published vectors** rather than to a second implementation in this
+repository.
+
+1. `crates/checker/tests/sha256.rs`' `compress` is FIPS 180-4 written there, over the circuit's
+   two sequences, keeping every intermediate the witness commits. It shares no line with
+   `emulator::sha256_frame`, with `guest_sdk`'s `sha256_compress_software` or with
+   `prover::fill::sha256_comp`.
+2. `the_reference_is_the_published_one` holds *that* to FIPS 180-4 §A.1's `sha256("abc")` and
+   §A.2's two-block digest **before any negative control leans on it**. The two-block vector is
+   the one that exercises chaining, and between them the two exercise all 64 round constants and
+   the IV — which is what stands in for a re-derivation of `constants::sha256::ROUND_CONSTANTS`
+   from its generators. Without this step every test below would be holding the circuit to a
+   hand-written function with nothing holding *it* to anything.
+3. `the_written_state_is_the_compression` reads the answer off the frame's **write columns**,
+   not off a witness column the same gates set. This is the test that the *addressing* is right,
+   and no negative control can be: a circuit computing a correct SHA-256 of the wrong sixteen
+   words passes every one of them.
+4. `an_honest_witness_satisfies_every_gate` runs the circuit's **forward pass** at `n = 2` — four
+   rows, two live invocations and two padding rows, about 2.1 MB of inner cells — and
+   `gkr::self_check`. A pass is affordable here precisely because the family carries no channel
+   and so builds at four rows, where `MOD_MUL` and `EC_ADD` exist only at `2^16` and their suites
+   evaluate rows locally instead.
+5. `crates/prover/tests/fills.rs`' `the_sha256_fill_covers_its_circuit_and_satisfies_every_gate`
+   runs the same pass at the family's real `2^8` over `guests/sha256-ops`' **33** invocations,
+   from the prover's own fill — every row and the memory roots the halving phase closes.
+6. `crates/emulator/tests/guests.rs` closes it from the other end:
+   `sha256_ops_checks_itself_under_the_delegation_ecall` runs the guest, which checks the frame
+   ABI against the `"abc"` vector and `guest_sdk::sha256` against published digests at every
+   length that moves the padding — each of those also against `sha2`, an unpatched crates.io
+   implementation and the only party to the comparison that is not this repository's.
+   `the_new_families_are_invoked_the_pinned_number_of_times` pins the 33.
+
+An honest live row, in words:
+
+| column group | value |
+| --- | --- |
+| `cycle` | the requesting cycle, from the `DelegationTrace` |
+| `live` | 1 |
+| `base` | the frame pointer, 4-aligned, in `[RAM_ORIGIN, 2^31 − 96]` |
+| `anchor_value` | 0 |
+| `w{j}_addr` | `base + 4j` |
+| `w{j}_read_ts` | the last write to that word, from the log |
+| `w{j}_read_value` | words 0–7 the chaining state, words 8–23 the block's sixteen |
+| `w{j}_write_value` | words 0–7 the compressed state, words 8–23 the block unchanged |
+| `in{j}_bit{t}`, `out{j}_bit{t}` | the bits of those read and written words |
+| `w{i}_bit{t}`, `cw{i}_{t}` | the 48 derived schedule words and their 2-bit carries |
+| `a{i}_bit{t}`, `e{i}_bit{t}` | `A_1..A_64` and `E_1..E_64` |
+| `ca{i}_{t}`, `ce{i}_{t}`, `co{j}` | the rounds' two 3-bit carries and the eight output carry bits |
+| `gap{j}_{i}` | the 38 bits of `4·cycle − w{j}_read_ts − 1` |
+| `base_low{i}`, `base_room{i}` | the 29 bits of `(base − RAM_ORIGIN)/4` and the 31 of `2^31 − 96 − base` |
+
+and a padding row is 0 in every one of them — subject to §19.2's last paragraph, which is the
+part of this table that is a fact about the fill rather than about the circuit.
+
+### 19.10 What fixes each cell
+
+| cell | fixed, on a live row, by |
+| --- | --- |
+| `cycle` | the memory argument (every write leaf's timestamp) and the request's own row, through the anchor's `4·cycle + 3` |
+| `live` | `live_boolean`, every leaf's mask, and the 128 round gates through the carried `live` |
+| `base` | `base_aligned` and `base_in_window` locally, `addr_w{j}` against the words, and `deleg_addr_rule` on the request's side through the anchor |
+| `anchor_value` | **nothing local**: the request's `deleg_write_value` must equal it, and the memory argument is what says so (§19 observation 19) |
+| `w{j}_addr` | `addr_w{j}` |
+| `w{j}_read_ts` | the memory argument alone; `gap_w{j}` only holds it below this row's own write |
+| `w{j}_read_value` | `in{j}_word` against its bits, and the memory argument |
+| `w{j}_write_value`, `j < 8` | `out{j}_word` against the out bits, which `output_h{j}` ties to the compression, and the memory argument |
+| `w{j}_write_value`, `j ≥ 8` | `writes_back_w{j}` against its read value |
+| `in{j}_bit{t}` | `in{j}_bit{t}_boolean`, `in{j}_word`, and — through the carried scalars and bits — the round, schedule and output equations that read it as `A_{−j}`, `E_{4−j}` or `W_{j−8}` |
+| `out{j}_bit{t}`, `co{j}` | their booleanity gates, `out{j}_word` and `output_h{j}` |
+| `w{i}_bit{t}`, `cw{i}_{t}` | their booleanity gates and `schedule_w{i}`, which is the only thing that says `W_i` is the schedule's and not a number of the prover's choosing |
+| `a{i}_bit{t}`, `ca{i}_{t}` | their booleanity gates and `round_a{i−1}`; and every later round, `Sigma0`, `Maj` and `output_h` that reads `A_i` |
+| `e{i}_bit{t}`, `ce{i}_{t}` | their booleanity gates and `round_e{i−1}`; likewise `Sigma1`, `Ch` and `output_h` |
+| `gap{j}_{i}` | `gap{j}_{i}_boolean` and `gap_w{j}` |
+| `base_low{i}`, `base_room{i}` | their booleanity gates and `base_aligned` / `base_in_window` |
+| the padding row | `check_padding`'s all-zero row, the five `live`-gated gates that go vacuous there, and the ungated equations that pin the rest of it to a `K`-free compression (§19.2) |
+
+The nine negative controls in `crates/checker/tests/sha256.rs` are that table read backwards,
+each naming the gate that must catch it: a wrong output word (`out*`/`write*`), a wrong `A_1`
+(`round_a0`), a wrong `E_1` (`round_e0`), a wrong `W_16` (`schedule_w16`), **the last** round and
+**the last** schedule word (`round_a63`, `round_e63`, `schedule_w63` — where an off-by-one in a
+loop bound shows, and the first of a sequence never would), a wrong round carry (`round_a0`), a
+bit that is not a bit (a `*_boolean`), a frame word out of step with its bits (`in{j}_word`) and
+a block word rewritten on the way out (`writes_back_w{j}`).
+
+**There is deliberately no anchor twin for this family.** The anchor is one mechanism, built by
+`constraints::delegation` identically for all six families and already proved refused at block
+level over four of them in `crates/checker/tests/tamper.rs` — including `MOD_MUL`, which also
+carries a lookup channel, so even that combination is not new here. A fifth replay would be the
+same mutation set at another re-proof in the slowest deferred suite, which is the cost the root
+`CLAUDE.md`'s test rule exists to refuse.
+
+---
+
+---
+
+## 20. `EC_ADD` — family 17
+
+### 20.1 Header
+
+`family_circuit(17, n)` is `ec_add::artifact(n)` with `ec_add::channels()`, which is **one
+`RANGE16` channel** — the first a delegation family has ever carried
+(`delegation.md` §10.3). Like `MOD_MUL` and `FR_ARITH` it is built by `memory::assemble`:
+every constraint it makes fits as an enforcing gate on gate list 0, so above the leaves it is
+two product trees and one fraction tree and nothing else. Normative spec: `delegation.md`
+§4, §5 and **§16**. Fill: `prover::family_fill(17)`, the private `fill::ec_add`. Ecall
+`0x0506`, anchor space `address_space::DELEGATION_EC_ADD` = 9.
+
+**1,420 committed columns (392 `M`, 1,028 `W`, no `S`) and one virtual table, `V[range16]`.**
+Gate list 0 writes 4,352 columns — 128 leaves a side of the two memory trees plus the
+`RANGE16` tree's 2,048 fraction pairs — and holds **637 enforcing gates (131 degree-1, 506
+degree-2)**. **1,110 obligations**, all `RANGE16`, 4 outputs. At its `n = 16` there are 28
+gate lists (12 row-wise and 16 halving), the top is `L28`, and the circuit has 8,772 inner
+columns and 9,409 relations, 2,350,670 bytes of wire form —
+`crates/constraints/tests/vectors/ec_add.txt`, which is the SHA-256 and shape line CI diffs,
+the artifact itself being 2.4 MB. **None of the counts before that sentence depends on `n`**
+except the inner and relation totals, which are `8,708 + 4n` and `9,345 + 4n`: a height adds
+halving lists and nothing else, one node per output each
+(`crates/checker/tests/ec_add.rs`' `a_height_moves_only_the_halving_layers`).
+
+`artifact` panics unless the column counts are `MEMORY_COLUMNS` and `WITNESS_COLUMNS`, there
+is no setup column, `channels()` is exactly one, the obligation count is `lookups()`' own, no
+group writes the selector word, and each group's three output words are eight-word runs that
+do not overlap (`ec_add::check_shape`). It also panics on every refusal of `validate`, of
+`memory::check_memory`, of `lookup::check_discharge` and of `lookup::check_copowers`, and on
+either of the two derivations below failing.
+
+**Two derivations run before the artifact is built, and they read one table.** `CEILINGS`
+gives each of the nine slots' four operand ceilings as multiples of `m`;
+`the_offset_covers_every_slot` requires `OFFSET_MULTIPLE` to cover the largest `a·b + c·d`,
+and `the_carry_offset_covers_every_slot` recomputes the carry's fixed point from the same
+row. **They were two separate arguments until S26c derived only the second and shipped an
+offset the first refutes** (§20.4).
+
+**One row is one third of one complete point addition**, on one of two curves — secp256k1 or
+BN254 G1 — that frame word 0 selects together with the group. `GROUPS` is 3, so one addition
+is three invocations in ascending group order, glued by the frame and not by a bus
+(`delegation.md` §16.2).
+
+**The height is `2^16`, and it is forced rather than chosen.** `RANGE16`'s table needs sixteen
+variables, Mercury needs an even count, and `2^18` is four times worse; `family_circuit`'s
+derived minimum-height guard returns `None` below 16 (`it_is_the_one_delegation_family_with_a_channel`).
+One shard is a computed **20.5 GB** — **18.3 GB** of forward pass (the twelve row-wise
+layers' 8,708 columns at `2^16` rows and 32 bytes; the sixteen halving layers add 8.4 MB
+between them), **0.7 GB** of committed base (1,255 small-type columns at 4 bytes and 165 `Fr`
+ones at 32), and **1.5 GB** of transition 0's first bind, a half-height `Fr` table over 1,420
+columns. That is above an execution shard's ~11 GB and above `MOD_MUL`'s 5.1 GB at the same
+height, so **this is the peak-setting family in a block**; the lever that remains is the group
+count, five groups of two reductions being about two-thirds the width at two more invocations
+an addition. `docs/handoff/S26c-sha256-ec.md` records the deferred run's measured figure
+against that estimate.
+
+**This family has no §0.5 row at `n = 20`.** §0.5 counts gate shapes over one circuit at
+`n = 20`, which this family is never built at in practice; the rows below give its shape
+counts at its own `n = 16` instead, and they sum to 9,409.
+
+### 20.2 Row kinds
+
+Two, and neither is an instruction: **this family is invoked, not decoded**. It claims no pc,
+`program::lookup_tuple(17)` is empty, and it is in a `VmConfig` exactly when the linked binary
+declares it. It is not in `constants::family::CYCLE_OWNING`.
+
+| row kind | `live` | what the row holds | what it adds to the multiset |
+| --- | --- | --- | --- |
+| an **invocation** | 1 | the requesting cycle, the frame base, the 97 words read and written, the six selectors and the curve constants they name, the twelve frame values' `< m` chains, and three slots' operands, quotients, results, carries and result chains | 98 read tuples and 98 write tuples: the 97 frame words at `(RAM, base + 4j)`, and the anchor pair at `(DELEGATION_EC_ADD, base)` |
+| **padding** | 0 | every committed cell 0 **as the honest fill writes it** | nothing: all 196 real leaves collapse to 1, and 60 are pads that are literally 1 |
+
+Three things hold the all-zero row and are worth spelling out. `one_code_a_live_row` forces
+every selector to 0 there, so `m_limb{k}_rule` and `b3_rule` force the modulus limbs and `b3`
+to 0 — which is what lets the fifteen chains' `canonical` gates be **ungated** and still hold.
+Every operand pin then reads `operand = 0`, because every product in it carries a selector.
+And `carry_terms` puts `live` on the offset, so a padding row's carry is
+`Σ carry{r}_{c} − 2^46·0`, not `−2^46`.
+
+**The padding row is all-zero because the fill writes it so, not because the gates force it.**
+With `m = 0` and every selector 0 the limb identity reduces to a relation among `out`, the
+carries and nothing else, and every range obligation is switched off by its `live` selector,
+so a padding row could legally carry unbounded cells. It is harmless — the row requests
+nothing, pairs with no anchor, writes no register, and its leaves are the product's identity —
+but a test asserting "a padding row's columns are zero" is asserting a property of the fill.
+`a_padding_row_holds_and_a_live_one_next_to_it_does_too` asserts the direction that matters:
+the all-zero row satisfies every gate of a circuit whose identity carries a `1024·m²` offset
+and whose carries carry a `2^46` one.
+
+### 20.3 The base layer
+
+**Too wide to enumerate one column a row**, as §12's is: a live row is 1,420 committed cells.
+What follows is every address *group*, which is how the circuit itself names them — a fill, a
+checker and a tamper twin reach a column through `ec_add::word`, `gap_chunk`, `word_high`,
+`selector`, `m_limb`, `b3`, `bzz3_limb`, `byz3_limb`, `bxx9_limb`, `diff`, `diff_hi`,
+`borrow`, `operand`, `out_limb`, `out_hi`, `q_limb`, `q_hi`, `carry`, `carry_chunk`,
+`out_diff`, `out_diff_hi`, `out_borrow` and `multiplicity_column`, and never through a number.
+
+**Memory-argument columns, `M[0..392]`** — filled by `fill::ec_add` from the archive's
+delegation buffer; committed in `PublicInputs::memory_commitments`, absorbed at G8 before the
+memory challenges.
+
+| address | name | what it is |
+| --- | --- | --- |
+| `M[0..4]` | `cycle`, `live`, `base`, `anchor_value` | as §18.3 and §12.3: the requesting cycle, the row's one mask, the `a0` the request passed, and the teardown's value, which is **free on both sides** |
+| `M[4 + 4j + f]` | `w{j}_addr`, `w{j}_read_ts`, `w{j}_read_value`, `w{j}_write_value` | frame word `j`, `j < 97`. Word 0 is the selector, 1–8 `X1`, 9–16 `Y1`, 17–24 `Z1`, 25–48 `X2`/`Y2`/`Z2`, 49–72 `xx`/`yy`/`zz`, 73–96 `m4`/`m5`/`m6`, eight little-endian 32-bit limbs a value (`constants::ec_add`'s `*_WORD`) |
+
+**Group 2 writes its results over `X1`, `Y1` and `Z1`**, which groups 0 and 1 have by then
+finished reading. That is what keeps the frame at 97 words rather than 121, and it is why
+`EcAddFrame::result` reads the first three lanes.
+
+**Witness columns, `W[0..1028]`** — all filled by `fill::ec_add` except the last; committed in
+`ShardProof::witness_commitments`, absorbed at S3, with `g` drawn after them at S4.
+
+| address | name | what it is |
+| --- | --- | --- |
+| `W[2j + c]`, `j < 97` | `gap{j}_c{c}` | chunk `c` of frame word `j`'s timestamp gap, weight `2^{16(c+1)}`; the low sixteen bits are **derived**, not committed. 194 columns |
+| `W[194..198]` | `base_low`, `base_low_hi`, `base_room`, `base_room_hi` | `(base − RAM_ORIGIN)/4` and `2^31 − 388 − base`, each with its high halfword |
+| `W[198 + j]` | `word{j}_hi` | frame word `j`'s read value's high halfword — its 32-bit bound, and **every** word has one, the selector included |
+| `W[295..301]` | `selector{code}` | the six (curve, group) selectors, in `ec_add::CODES` order: codes 1, 2, 3 secp256k1's three groups, 4, 5, 6 BN254 G1's |
+| `W[301..309]` | `m_limb{k}` | limb `k` of the selected curve's modulus — a witness column, and the only place `m` exists |
+| `W[309]` | `b3` | the selected curve's `b3 = 3b`: 21 for secp256k1's `b = 7`, 9 for BN254's `b = 3`. The curve's `a` is 0 on both and never appears |
+| `W[310..334]` | `bzz3_{k}`, `byz3_{k}`, `bxx9_{k}` | the three curve-scaled helpers, eight limbs each |
+| `W[334 + 24v + …]` | `{name}_diff{i}`, `{name}_diff{i}_hi`, `{name}_borrow{i}` | frame value `v`'s `< m` chain, `v < 12` in `VALUES` order — `x1`, `y1`, `z1`, `x2`, `y2`, `z2`, `xx`, `yy`, `zz`, `m4`, `m5`, `m6`. 288 columns |
+| `W[622 + 135r + …]` | `slot{r}_{a,b,c,d}{k}` | slot `r`'s four operands, eight limbs each, `r < 3`: 32 columns |
+| … `+32`, `+40` | `out{r}_{k}`, `out{r}_{k}_hi` | the slot's reduced result and its halfwords |
+| … `+48`, `+57` | `q{r}_{i}`, `q{r}_{i}_hi` | the **nine**-limb quotient and its halfwords — the one value in the row the execution did not record |
+| … `+66`, `+81` | `carry{r}_{c}`, `carry{r}_{c}_c{j}` | the fifteen signed carries as unsigned `c + 2^46`, and two `RANGE16` chunks each |
+| … `+111` | `out{r}_diff{i}`, `out{r}_diff{i}_hi`, `out{r}_borrow{i}` | the result's own `< m` chain |
+| `W[1027]` | `range16_multiplicity` | the channel's one multiplicity column, **last in the witness subtree**, filled by `trace::build_multiplicities` after the fill and read by no gate |
+
+**The three helpers are pinned limb-wise, and this is easy to misread.** `bzz3_{k}` is
+`b3 · zz_k` — the product of a column and one limb, not a limb of a reduced value. So the
+three are **loose limb vectors**: `|bzz3_k| < 21·2^32`, `byz3` is signed, and none of them is
+below `m` or below `2^32`. They exist because `b3` is a column, so `b3` times a frame limb
+inside a product's operand would be degree 3. The fill commits them as `Fr` columns for that
+reason, and `fill::ec_add`'s comment says so.
+
+**Where each value reads from.** Every operand limb is a frame word's `read_value`; every
+result limb is the `write_value` of the word the group writes. That is the whole of what makes
+the call a function: the guest's frame is what it *passed*, and the results are what the
+invocation *wrote*.
+
+### 20.4 The gates
+
+| group | count | degree | what it says |
+| --- | --- | --- | --- |
+| `live_boolean` | 1 | 2 | §4's, shared with the other five delegation families |
+| `addr_w{j}` | 97 | 2 | word `j` is at `base + 4j`. Degree 2 because it carries `live` as a factor — on a padding row `addr` and `base` are 0 and `4j` is not |
+| `base_aligned`, `base_in_window` | 2 | 2 | `base = RAM_ORIGIN + 4·base_low`, and `base + 388 ≤ 2^31` through `base_room`. **There is no `gap_w{j}` gate**: the gap's obligations are the bound and the decomposition at once (§20.5) |
+| `selector{code}_boolean` | 6 | 2 | each of the six selectors is a bit |
+| `selector_rule` | 1 | 1 | `w0_read_value = Σ code_i·s_i` |
+| `one_code_a_live_row` | 1 | 1 | `Σ s_i = live` |
+| `m_limb{k}_rule` | 8 | 1 | `m_k = Σ CURVE_MODULI[CODE_CURVE[i]][k]·s_i`, the two curves' literals |
+| `b3_rule` | 1 | 1 | `b3 = Σ CURVE_B3[CODE_CURVE[i]]·s_i` |
+| `bzz3_{k}_rule`, `byz3_{k}_rule`, `bxx9_{k}_rule` | 24 | 2 | `bzz3_k = b3·zz_k`, `byz3_k = b3·(m5_k − yy_k − zz_k)`, `bxx9_k = 3·b3·xx_k` |
+| `{v}_borrow{i}_boolean`, `out{r}_borrow{i}_boolean` | 120 | 2 | the fifteen chains' borrow bits |
+| `{v}_canonical{i}`, `out{r}_canonical{i}` | 120 | 1 | `v_i − m_i − b_{i−1} + 2^32·b_i = d_i`, **ungated** |
+| `{v}_below_modulus`, `out{r}_below_modulus` | 15 | 2 | `enable·(1 − b_7) = 0`: `enable` is the sum of the selectors of the groups that read the value, and `live` for a result |
+| `operand{r}_{which}_{k}_rule` | 96 | 2 | the operand column equals `Σ_g g_sel·(group g's expression at limb k)` |
+| **`slot{r}_limb{k}`, `k < 16`** | 48 | 2 | the schoolbook identity, position by position |
+| `writes_back_w{j}` | 97 | 2 | `write_j − read_j − Σ g_sel·(out[r][k] − read_j) = 0` over the one `(group, slot, limb)` triple that writes word `j`, if any |
+
+**The forty-eight limb equations are the circuit.** With `P_k = Σ_{i+j=k} (A_i B_j + C_i D_j)`,
+`O_k = 1024·Σ_{i+j=k} m_i m_j` and `S_k = Σ_{i+j=k} q_i m_j`, gate `slot{r}_limb{k}` is
+
+```text
+P_k + O_k − S_k − out_k + c_{k−1} − 2^32·c_k = 0
+```
+
+where `out_k` is absent past limb 7, `c_{−1}` is absent, and `c_15` is absent — which is the
+closing condition. Weight the sixteen equations by `2^{32k}` and sum: the carries telescope
+and what is left is `A·B + C·D + 1024·m² − q·m − out = c_15·2^{480}`, so **the absence of a
+sixteenth carry column is the identity**. Each gate is one `Quadratic`: `A_i·B_j`, `C_i·D_j`,
+`m_i·m_j` and `q_i·m_j` are all pairs of committed columns, so the degree is 2 and never 3.
+
+**One shape for all nine slots, and `D` carries the sign.** Group 2's slot 0 is
+`xy·ym − byz3·xz`, and a per-group sign on a product's coefficient is **not expressible** — a
+coefficient is one literal or one challenge — so the minus rides `D`, which is `xx + zz − m6`
+where the other two slots' is `m6 − xx − zz`. Groups 0 and 1 leave `C` and `D` empty, so their
+second product is zero; the operand pin still exists for those 48 columns and forces them to 0.
+
+**The operands are committed columns pinned to bounded linear combinations, and the pin IS the
+bound.** Every term of an operand's sum is a frame limb below `2^32` or a helper limb below
+`21·2^32`, under a small literal coefficient, so `operand{r}_{which}_{k}_rule` establishes the
+magnitude at the same time as the value and **no operand needs a range check of its own**.
+That is what keeps the witness at 1,028 columns: 96 operand limbs bounded by bit decomposition
+would be 3,072 columns and 3,072 booleanity gates, and bounded by `RANGE16` would be 96 more
+committed halfwords and 192 more obligations in a fraction tree that is already the deepest of
+the three (§20.6). `a_wrong_operand_is_refused_by_its_own_pin` is the twin, and it names
+`operand0_0_0_rule` and not a product — which is the point.
+
+**Why the equation over `Fr` is the equation over ℤ.** The widest single term of any position
+is `2^32·c` with `c` below `2^47`, so under `2^79`; a position has at most 38 terms, so its
+sum is under `2^85`, against `p`'s `2^254`. No limb equation can wrap, and there is no
+modular-arithmetic loophole to argue about.
+
+**`OFFSET_MULTIPLE` was 256 and is 1024, and the difference is a completeness bug S26c
+shipped.** The offset keeps the quotient unsigned: `A·B + C·D` is as low as
+`−(a·b + c·d)·m²`, each product minimised with one factor at its positive ceiling and the
+other at its negative one. The binding slot is group 2's **`Y3`**, not its `X3`: `yp·ym`
+with `yp ≤ 22m` and `ym ≥ −22m` reaches `−484 m²`, and `bxx9·xz` with `bxx9 ≤ 63m` and
+`xz ≥ −3m` a further `−189 m²`, for **`−673 m²`**. `X3` reaches `−255 m²` — `66 + 189` —
+which is exactly why 256 looked derived and was not. At 256 the honest quotient of a `Y3` row
+below `−256 m²` is negative, `q_limb` cannot hold it, and the row is **unprovable**; `zz`
+above about `0.76m` is enough on its own, roughly a quarter of random invocations. **Nothing
+but an honest witness against the gates can find it**: `emulator::ec_add_frame` computes the
+right answer, `guests/ec-ops` agrees with its own software Algorithm 7, every shape test
+passes, and only the prover fails — intermittently, hours into a block proof.
+`CARRY_OFFSET_BITS` moved with it, 45 → 46, because the same products bound the carry's width:
+the widest position is `8·(673 + 1024)·2^64 ≈ 2^78` and the carry's fixed point `2^46`. It
+read 44 when the offset was guessed, 45 when the positions were derived, and 46 once the
+offset had to cover `−673 m²`. Both are now computed from `CEILINGS` at construction, and
+`the_carry_offset_covers_every_slot_is_computed` runs the second as a test besides.
+
+**`below_modulus` said `b_7 = enable` and means `enable·(1 − b_7) = 0`, and the first made
+every row of the family unprovable.** The chain telescopes to `v − m + 2^256·b_7 = D` with `D`
+below `2^256`, so `b_7 = 1` says the subtraction borrowed out and `v < m`. `b_7 = enable`
+also forces `b_7 = 0` where `enable` is 0 — which asserts that a value a row does *not* read
+is at or above the modulus. Every lane is such a value: `EcAddFrame::of` zeroes the six
+intermediates, and a group-2 row's `X1..Z2` are ordinary coordinates. **The chain's sixteen
+`canonical` gates are ungated**, so a non-reading value still owes a real chain, and the
+prover's fill — written to match the wrong gate — filled those chains with zeros, which
+satisfy the canonical gates only where `v = m`. Nothing in the executor, the guests or the
+shape tests could see either half. What found it is an honest witness evaluated against the
+gates: `crates/checker/tests/ec_add.rs` for the circuit and
+`crates/prover/tests/fills.rs`' `every_delegation_fill_satisfies_every_gate` for the fill,
+which exists for this reason and says so in its doc comment.
+
+**Which chain is soundness and which is totality.** A slot's `out < m` is the **reduction**:
+without it a prover answers `out + m` with the quotient one lower and every limb equation
+holds over the integers just as well. A frame value's `< m` is **totality** — it is what
+bounds the honest quotient below nine limbs, so every frame the circuit accepts is one an
+honest prover can fill. `emulator::ec_add_frame` refuses an unreduced operand earlier and by
+name, six messages keyed to the group's reads, and a selector naming no (curve, group) pair
+before that.
+
+**Why one modulus a live row is load-bearing twice.** It is the one-hotness that makes the six
+selectors a partition, and with codes 1–6 `selector_rule` cannot see a two-selector forgery:
+`1 + 3 = 4`, so a row claiming secp256k1's groups 0 and 2 spells BN254's group 0's word. It is
+also the **only** thing bounding `m`'s limbs and `b3` below `2^32`, neither having a bit
+decomposition: two selectors at once would give `m_0` above `2^32` and put the integer
+argument above out of reach. `two_selectors_at_once_are_refused` is the twin.
+
+### 20.5 The lookups and the channel
+
+One channel, `RANGE16` = channel 1, table `V[range16]`, multiplicity `W[1027]`. The tuple is
+**one** expression wide, so it weights its column by the literal 1 and reads `g` and no power
+of `β` at all. Every obligation's selector is `LIVE`.
+
+| obligation | count | selector | tuple | shape |
+| --- | --- | --- | --- | --- |
+| `gap{j}_c0_range`, `gap{j}_c1_range` | 194 | `live` | `gap{j}_c{c}` | direct: each chunk below `2^16` |
+| `gap{j}_top_scaled` | 97 | `live` | `2^10 · gap{j}_c1` | scaled: the top chunk below `2^6` |
+| `gap{j}_lo_range` | 97 | `live` | `4·cycle − w{j}_read_ts − 1 − 2^16·c0 − 2^32·c1` | the derived low sixteen bits |
+| `base_low_c0_range`, `base_low_top_scaled`, `base_low_lo_range` | 3 | `live` | `base_low_hi`, `2^3·base_low_hi`, `base_low − 2^16·base_low_hi` | `[0, 2^29)` |
+| `base_room_c0_range`, `base_room_top_scaled`, `base_room_lo_range` | 3 | `live` | as above at `2^31` | `[0, 2^31)` |
+| `word{j}_hi_range`, `word{j}_lo_range` | 194 | `live` | `word{j}_hi`, `w{j}_read_value − 2^16·word{j}_hi` | every frame word below `2^32` |
+| `{v}_diff{i}_hi_range`, `{v}_diff{i}_lo_range` | 192 | `live` | 16+16 over `diff(v, i)` | the twelve chains' difference limbs |
+| `out{r}_{k}_hi_range`, `out{r}_{k}_lo_range` | 48 | `live` | 16+16 over `out_limb(r, k)` | each result limb below `2^32` |
+| `out{r}_diff{k}_hi_range`, `out{r}_diff{k}_lo_range` | 48 | `live` | 16+16 over `out_diff(r, k)` | the three result chains |
+| `q{r}_{i}_hi_range`, `q{r}_{i}_lo_range` | 54 | `live` | 16+16 over `q_limb(r, i)` | nine quotient limbs a slot |
+| `carry{r}_{c}_c0_range`, `_c1_range`, `_top_scaled`, `_lo_range` | 180 | `live` | two chunks, `2·carry{r}_{c}_c1`, and the derived low half | each carry's unsigned value below `2^47` |
+
+**1,110 obligations.** The 38-bit timestamp gap is three chunks and not a `TIMESTAMP`
+obligation, because that channel's `BITS` is 19 and its table needs `2^20` rows, which no
+delegation height offers (`delegation.md` §9, §10.3). `TIMESTAMP` would be the natural
+channel and does not fit; `RANGE16` at three chunks a gap is exact at `2^38`, the maximum
+being `(2^16 − 1)(1 + 2^16) + 2^32(2^6 − 1) = 2^38 − 1`.
+
+**A 16+16 pair is one committed column and two obligations, and that is the whole reason the
+channel is worth carrying.** A 32-bit bound by bit decomposition is 32 columns and 32
+booleanity gates; a 38-bit gap is 38. Without the channel this family's frame alone is 3,686
+gap-bit columns against 194 chunk columns, and 24 more 32-bit values want bounding besides.
+
+**The scaled obligation alone bounds nothing**, and `lookup::check_copowers` is what says so:
+`2^{16−r}` is a unit in `Fr`, so an unbounded value sweeps a coset almost none of whose
+members is small. It is the top chunk's own **direct** obligation under the **same** selector
+that establishes the premise — S18's fix, and `ec_add::scaled_columns` lists all 144 scaled
+columns with `LIVE` beside each: the 97 gap tops, `base_low_hi`, `base_room_hi`, and the 45
+carry tops.
+
+**One multiplicity column, and no gate reads it.** `trace::build_multiplicities` counts each
+`RANGE16` table row's occurrences over the 1,110 gated tuples of every live row and appends
+the column after the fill; `prover::fill::ec_add` does not write it, which is why
+`crates/prover/tests/fills.rs` passes `WITNESS_COLUMNS − channels().len()` to `covers`. It has
+to exist because `artifact.committed()` names it.
+
+### 20.6 The trees, the inner layers and the outputs
+
+Three trees. The two memory product trees take `d::leaves(DELEGATION_EC_ADD, 97)`: 97 frame
+words plus one anchor leaf a side, **98 real leaves padded to 128**, so each side carries 30
+`read_pad{i}` / `write_pad{i}` leaves that are literally 1. The read side's leaves consume the
+write each frame word names, then the anchor **teardown**
+`T(space, base, 4·cycle + 3, anchor_value)`; the write side's write at `4·cycle + 0`, then the
+anchor **answer** `T(space, base, 0, 0)`, stamped 0 and valued 0. The `RANGE16` fraction tree
+takes 1,110 obligations plus its table fraction, **1,111 leaves padded to 2,048**, so 937 pad
+fractions. `R = 11`, the fraction tree setting it alone, and the depth is `N = 1 + 11 + n`.
+
+Layer `L1` is 4,352 wide: `read_1_*` 0–127, `write_1_*` 128–255, then the fraction tree's
+2,048 `(num, den)` pairs at 256–4,351, the table's first and the 937 pads last. Widths:
+
+```text
+L1     4,352      L5       272      L9       18      L13 … L{n+12}    4 each
+L2     2,176      L6       136      L10      10
+L3     1,088      L7        68      L11       6
+L4       544      L8        34      L12       4
+```
+
+so `inner = 8,708 + 4n` — 8,772 at `n = 16`. The two product trees reach one node at `L8` and
+are carried as `Linear` copies through `L9`–`L12`; the fraction tree reaches one pair at `L12`.
+
+Relations: **0–4,351** are list 0's leaves, **4,352–4,988** its 637 enforcing gates in
+`artifact`'s own order — 4,352 `live_boolean`, 4,353–4,449 `addr_w0`…`addr_w96`, 4,450
+`base_aligned`, 4,451 `base_in_window`, 4,452–4,468 the selector block, 4,469–4,492 the
+helpers interleaved by limb, 4,493–4,747 the fifteen chains at 17 relations each in `VALUES`
+order then `out0`, `out1`, `out2`, 4,748–4,843 the operand pins, 4,844–4,891 the forty-eight
+limb equations, 4,892–4,988 the write-backs. Then **4,989–7,164** list 1, **7,165–8,252** list
+2, **8,253–8,796** list 3, **8,797–9,068** list 4, **9,069–9,204** list 5, **9,205–9,272**
+list 6, **9,273–9,306** list 7, **9,307–9,324** list 8, **9,325–9,334** list 9,
+**9,335–9,340** list 10, **9,341–9,344** list 11, and halving list `k`
+(`12 ≤ k ≤ n + 11`) holds `9,345 + 4(k − 12)` to `9,348 + 4(k − 12)`. The roots are relations
+`9,341 + 4n` to `9,344 + 4n`: **9,405–9,408** at `n = 16`.
+
+Each halving list is four gates: `read_root`-side and `write_root`-side `TreeProduct`s, the
+channel's denominator `TreeProduct`, and its numerator `TreeCross`.
+
+**The outputs**, in output-map order: 0 `read_root` and 1 `write_root` at `memory::READ_ROOT`
+and `WRITE_ROOT`, read at `verify_shard` step 10a against `memory_roots[p]` for `p` the
+position of `(17, shard_index)` in `verifier_core::statement_shards` — **last** in every
+statement it appears in, family ids being the statement's order; 2 `range16_num_root` and 3
+`range16_den_root`, read at step 9, the failure `Lookup { channel: 1 }` and the check **both**
+`num == 0` and `den != 0`.
+
+### 20.7 Witness rows
+
+**There is no row table here and there cannot usefully be one**: a live row is 1,420 committed
+cells, 1,110 of which exist only to be range-checked. What stands in its place is a chain of
+four independent readings, and the chain is what §12.9's is for `KECCAK_F`.
+
+1. **`crates/checker/tests/ec_add.rs`** builds honest rows of the real `2^16` circuit and
+   evaluates each **row-locally** through `checker::violated_relations` over scratch that
+   `gkr::gate_values` computes — a whole-shard forward pass being impossible at a family whose
+   circuit exists only at `2^16`. Its **operand structure** is transcribed (a witness builder
+   has to know what the circuit expects in a committed operand column) but its **answer** is
+   not: `expected` computes each group's three results from Algorithm 7 over ordinary 256-bit
+   modular arithmetic — schoolbook multiplication, shift-and-subtract division — sharing no
+   line with the emulator or the fill, and `the_reductions_are_the_group_law` holds the `out`
+   that falls out of the limb identity's long division equal to it, slot for slot.
+   `the_three_invocations_are_one_addition` then runs Algorithm 7 end to end in one expression
+   and holds the third row's results to it, which is the check that **the split into three
+   invocations is the same function as the whole**.
+2. **`crates/prover/tests/fills.rs`** holds the real fill to the same gates:
+   `the_mod_mul_and_ec_add_fills_cover_their_circuits_exactly` is set equality over addresses,
+   and `every_delegation_fill_satisfies_every_gate` evaluates the first 32 and last 4 rows of a
+   filled shard — which is what caught the `below_modulus` fill bug (§20.4).
+3. **`crates/emulator/tests/guests.rs`**: `guests/ec-ops` checks every delegated addition
+   against its own Algorithm 7 over its own long division, limb for limb, and the resulting
+   point against `k256` and `ark-bn254` by cross-multiplication, including `P + P`, `P + O`,
+   `O + O` and `P + (−P)`; it exits 20, and a disagreement between its two implementations
+   exits 251. `the_new_families_are_invoked_the_pinned_number_of_times` pins **81**
+   invocations for `ec-ops` (27 point operations, three groups each) and **39** for
+   `mod-mul-ops`, which names no shim and reaches the family through the vendored `k256`
+   alone — which is what makes that second count the projective patch's only test.
+4. **`crates/checker/tests/ec_add.rs`' fifteen negative controls**, each corrupting one cell of
+   an otherwise honest witness or supplying an honest witness for a claim the circuit must
+   refuse, and naming the relation that catches it.
+
+An honest live row, in words:
+
+| column group | value |
+| --- | --- |
+| `cycle`, `live`, `base`, `anchor_value` | the requesting cycle; 1; the frame pointer, 4-aligned, in `[RAM_ORIGIN, 2^31 − 388]`; 0 |
+| `w{j}_addr`, `w{j}_read_ts` | `base + 4j`, and the last write to that word from the log |
+| `w{j}_read_value`, `w{j}_write_value` | the 97 words before and after the group |
+| `gap{j}_c{c}` | bits `[16(c+1), 16(c+2))` of `4·cycle − w{j}_read_ts − 1` |
+| `base_low`, `base_room`, and their halfwords | `(base − RAM_ORIGIN)/4` and `2^31 − 388 − base` |
+| `word{j}_hi` | `w{j}_read_value >> 16` |
+| `selector{code}` | 1 on the frame's code, 0 on the other five |
+| `m_limb{k}`, `b3` | the selected curve's modulus limbs and `3b` |
+| `bzz3_{k}`, `byz3_{k}`, `bxx9_{k}` | `b3·zz_k`, `b3·(m5_k − yy_k − zz_k)`, `3·b3·xx_k` — **signed and loose** |
+| `{v}_diff{i}`, `{v}_borrow{i}` | the honest chain of `v − m`, computed for **all twelve values on every row** |
+| `slot{r}_{a,b,c,d}{k}` | the group's expression at limb `k`, signed and loose |
+| `out{r}_{k}`, `q{r}_{i}`, `carry{r}_{c}` | the reduction, its nine-limb quotient, and `carry + 2^46` |
+| `out{r}_diff{i}`, `out{r}_borrow{i}` | the result's own chain |
+| `range16_multiplicity` | `trace`'s count; 0 on a row the table does not hold |
+
+and a padding row is 0 in every one of them. The suite's honest set is **seven live rows and
+one padding row**: both curves' three groups over one random point pair each — where each
+group's written frame is the next group's read frame, so the three rows of a curve are one
+real addition and not three unrelated frames — plus a seventh at the **widest** operands group
+2 admits, secp256k1's group 2 with every intermediate at `m − 1`, which is the row the carry
+bound is sized for and which a bound off by one bit refuses.
+
+### 20.8 What fixes each cell
+
+| cell | what fixes it |
+| --- | --- |
+| `cycle`, `base` | the multiset: the request's mirror write is `T(DELEGATION_EC_ADD, base, 4·cycle + 3, v)` and this row's teardown read is its only reader (§5's anchor); locally `base_aligned` and `base_in_window`, and `addr_w{j}` against the words |
+| `live` | `live_boolean`, and every leaf's mask |
+| `anchor_value` | **nothing local**: the request's `deleg_write_value` must equal it, and the memory argument is what says so |
+| `w{j}_read_ts` | the memory argument alone; `gap{j}_*` only holds it below this row's own write |
+| word 0's value | the frame's read tuple, `writes_back_w0`, and `selector_rule` against the six selectors |
+| `selector{code}` | its booleanity gate, `selector_rule` and `one_code_a_live_row` — the three together are exactly "one of the six codes, the one the frame names" |
+| `m_limb{k}`, `b3` | `m_limb{k}_rule` and `b3_rule`: a literal of `CURVE_MODULI` and of `CURVE_B3`, chosen by the selector, which is also their `2^32` bound |
+| the twelve values' words | the frame's read tuples, `writes_back_w{j}`, their own `word{j}` obligations, and their `< m` chains where the row's group reads them |
+| every `w{j}_write_value` | `writes_back_w{j}`: the result of the one slot that writes word `j`, bounded by that slot's `out{r}_{k}` obligations, or the read value, bounded by `word{j}` |
+| `bzz3_{k}`, `byz3_{k}`, `bxx9_{k}` | their degree-2 pins, which are also their bounds |
+| `slot{r}_{a,b,c,d}{k}` | `operand{r}_{which}_{k}_rule` alone — the pin is the bound, and no obligation reads an operand |
+| `out{r}_{k}` | `slot{r}_limb{k}` and `out{r}`'s chain: given `m`, the operands and the bounds, integer division has one answer |
+| `q{r}_{i}` | `slot{r}_limb{k}`: sixteen equations in nine unknowns over the integers, whose solution is unique once `out < m` |
+| `carry{r}_{c}` | `slot{r}_limb{k}` and `slot{r}_limb{k+1}`, which the carry joins, and its four obligations |
+| every `_diff`, `_borrow` | the chain's `canonical{i}` gates, the borrows' booleanity, and the `diff` obligations; the last borrow by `below_modulus` where a group reads the value |
+| `range16_multiplicity` | `trace::build_multiplicities`, and the channel's own root check — no gate reads it |
+| the padding row | `check_padding`'s all-zero row and §20.2's gates that hold there, subject to §20.2's last paragraph |
+
+The fifteen negative controls read that table backwards, and four are worth knowing about.
+`a_wrong_result_limb_is_refused` names `out0_canonical0` rather than `slot0_limb0` because
+**two** gates see a result limb and the chain comes first in relation order — that the identity
+also catches it is what `a_wrong_quotient_limb_is_refused` shows, the quotient being a value
+only the identity reads. `a_wrong_curve_constant_is_refused` swaps `b3 = 21` for `9`, which is
+a correct addition **on the wrong curve** and which nothing else in the row would notice.
+`an_unreduced_frame_value_is_refused_on_the_group_that_reads_it` clears `x1`'s last borrow on a
+group-0 row, and has to be a group-0 or group-1 row, the conclusion being gated.
+`a_frame_word_above_its_bound_is_refused_by_the_channel_alone` is the one place the two kinds
+of refusal are told apart: a 32-bit bound is an obligation and not a relation, so
+`violated_relations` must name no `*_range` and `violated_lookups` must name the word.
+
+**No anchor twin is called for this family, deliberately.** `checker::assert_anchor_twins_refused`
+is `constraints::delegation`'s one mechanism, built identically for all six families and
+already proved refused at block level over four of them in `crates/checker/tests/tamper.rs` —
+`MOD_MUL` included, which also carries a lookup channel, so even that combination is not new.
+A fifth replay would be the same mutation set at another re-proof in the slowest deferred
+suite, which the root `CLAUDE.md`'s test rule exists to refuse.
+
+---
+
+---
+
+## 21. Observations
 
 Facts this accounting turned up. None changes a circuit.
 
 1. **The registry and the height menu disagree both ways.** `family_circuit` builds
    all **seven** registered execution circuits at every `n` from 19 to 30, and the **five**
-   window circuits and the four delegation circuits at every `n` from 0 to 30. A key's heights
+   window circuits and the six delegation circuits at every `n` from 0 to 30. A key's heights
    come from `VmConfig`, which `VmConfig::from_bytes` holds to `HEIGHT_MENU` (`n` = **8**, 16,
    18, 20, 22 since S21).
    So the seven execution circuits are reachable only at 20 and 22, which is `shard-proof.md` §8's,
@@ -8595,7 +9696,7 @@ Facts this accounting turned up. None changes a circuit.
 
 ---
 
-## 20. Maintaining this page
+## 22. Maintaining this page
 
 A stage that adds a circuit family, or changes one, updates this page in the same pull request
 (`prompts/00-master.md`, implementation rule 12). **Changing one is the same obligation as
@@ -8667,10 +9768,17 @@ cargo run -p checker -- dump crates/constraints/tests/vectors/zero_window.bin   
 #     memory::value_window_artifact(22).to_bytes() -> value_window_22.bin  (3,535 bytes)
 #     memory::zero_window_artifact(8).to_bytes()   -> zero_window_8.bin    (1,910 bytes)
 #   then `checker dump`, `checker laws` and `checker padding` over each.
-# §12 has no dump: `keccak::artifact(8).to_bytes()` is 100,254,040 bytes, so what is
-# committed is its SHA-256 and the shape line beside it.
+# §12 has no dump, and neither do §13, §14, §18, §19 or §20: a delegation family's artifact is
+# megabytes -- `keccak::artifact(8).to_bytes()` is 100,254,040 of them and
+# `sha256::artifact(8)`'s is 10,895,760 -- so what is committed is a SHA-256 and the shape line
+# beside it, and what this page was read from is the constructor itself.
 cat crates/constraints/tests/vectors/keccak.txt
-cargo run -p kat-gen -- keccak                  # rewrites that line from the constructor
+cat crates/constraints/tests/vectors/poseidon2.txt
+cat crates/constraints/tests/vectors/fr_arith.txt
+cat crates/constraints/tests/vectors/mod_mul.txt      # 2^16 since S26c; §18
+cat crates/constraints/tests/vectors/sha256.txt       # §19
+cat crates/constraints/tests/vectors/ec_add.txt       # §20
+cargo run -p kat-gen -- delegation              # rewrites all six lines from the constructors
 for f in alu reg mem atomics; do
   cargo run -p checker -- dump crates/constraints/tests/vectors/memory_frame_$f.bin    # §2.2's four bare frames
 done
@@ -8695,6 +9803,19 @@ cargo test -p checker --test keccak             # §12.9's forward pass and §12
 cargo test -p emulator --test keccak            # emulator::keccak_f against tiny-keccak, which
                                                 # is what §12.9's chain rests on
 cargo test -p constants --test keccak           # ROTATIONS and ROUND_CONSTANTS re-derived
+cargo test -p checker --test mod_mul            # §18's rows and controls, 14 tests, in ordinary
+                                                # CI -- row-local at n = 16, this family having
+                                                # exactly one height since S26c
+cargo test -p checker --test sha256             # §19's forward pass at n = 2 and its controls,
+                                                # 14 tests, in ordinary CI
+cargo test -p constants --test sha256           # IV and ROUND_CONSTANTS re-derived from the
+                                                # square and cube roots of the first primes
+cargo test -p checker --test ec_add             # §20's rows and controls, 21 tests, in ordinary
+                                                # CI -- row-local at n = 16
+cargo test -p prover --test fills               # §18's, §19's and §20's fills held to their
+                                                # circuits' gates: a forward pass for SHA256_COMP
+                                                # at 2^8 and sampled rows for the two at 2^16,
+                                                # whose passes are 4.6 GB and 18.3 GB
 cargo test -p checker --test public_values      # §15's, §16's and §17's shapes, both public
                                                 # windows' and the advice region's layouts, and
                                                 # the window rules, in ordinary CI

@@ -221,16 +221,22 @@ set for a program is derived by the preprocessor and recorded in `VmConfig`.
 
 **Delegation family** — a family that is **invoked, not decoded**: a row is one call of a
 fixed function, not one cycle. It claims no pc, has no decoded table and no row kind, owns
-no cycle, carries no lookup channel, and is in a `VmConfig` exactly when the linked binary
-**declares** it. Four are registered: S21's `KECCAK_F`, one keccak-f[1600] permutation a
+no cycle, and is in a `VmConfig` exactly when the linked binary
+**declares** it. Six are registered: S21's `KECCAK_F`, one keccak-f[1600] permutation a
 row; S23's `POSEIDON2` and `FR_ARITH`, one width-3 Poseidon2 permutation and one `Fr`
-add, multiply or inverse a row; and S26's `MOD_MUL`, one `a·b mod m` over eight 32-bit
+add, multiply or inverse a row; S26's `MOD_MUL`, one `a·b mod m` over eight 32-bit
 limbs a row in one of **four fixed** Ethereum fields — secp256k1's two and BN254's two —
-which a selector word of the frame names and the circuit supplies as literals. The EVM's
-`MULMOD` takes an arbitrary modulus and is not served. **The four families do not share a
-height**: `KECCAK_F`, `POSEIDON2` and `FR_ARITH` are `2^8` rows and `MOD_MUL` is `2^16`,
-a row's circuit width differing between them by three orders of magnitude
-(`docs/spec/delegation.md` §9.2). `docs/spec/delegation.md`.
+which a selector word of the frame names and the circuit supplies as literals; and S26c's
+`SHA256_COMP`, one SHA-256 compression a row, and `EC_ADD`, one **third** of a complete
+elliptic-curve point addition a row on secp256k1 or BN254 G1. The EVM's `MULMOD` takes an
+arbitrary modulus and is not served. **The six do not share a height**: `KECCAK_F`,
+`POSEIDON2`, `FR_ARITH` and `SHA256_COMP` are `2^8` rows and `MOD_MUL` and `EC_ADD` are
+`2^16`, a row's circuit width differing between them by four orders of magnitude
+(`docs/spec/delegation.md` §9.2). **Two of the six carry a lookup channel** — `RANGE16`,
+which the family's height has to reach — and that is S26c's amendment to a rule that read
+"a delegation family carries no channel" (`docs/spec/delegation.md` §10.3); at `2^8` none
+can, and at no height on this menu may any carry `TIMESTAMP`.
+`docs/spec/delegation.md`.
 
 **Delegation request** — the CPU-side row of a delegation call: an ecall whose `a7` is the
 family's number and whose `a0` is the **frame base**, a pointer to the bytes the function

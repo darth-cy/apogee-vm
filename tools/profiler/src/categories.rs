@@ -277,17 +277,30 @@ pub const CANDIDATES: [Candidate; 5] = [
         category: Category::Bn254,
         entries: &["bn128", "run_pair", "run_add", "run_mul"],
         // Since S26b this category **is** delegated, through
-        // `guests/vendor/ark-ff`'s two calls a Montgomery multiply. What is
-        // left is the curve and tower arithmetic around those multiplies, so
-        // this figure is a ceiling on what a further family could remove and
-        // not a measurement of what one did.
+        // `guests/vendor/ark-ff`'s two calls a Montgomery multiply, and since
+        // S26c its `0x06` and `0x07` group operations are too, through
+        // `revm::install_crypto` over `EC_ADD`. What is left is the **pairing**,
+        // `0x08`, which is where the measured BN254 cycles in every profiled
+        // block actually are: `sum_of_products` call counts pin block
+        // 26,059,700's to one ~4-pair pairing plus some thirteen cheap G1 calls,
+        // so ECADD and ECMUL together were 0.7–2.7% of that block and not the
+        // 18% the category as a whole reads. This figure stays a ceiling on what
+        // a pairing family could remove and is not a measurement of what S26c
+        // did.
         frame_words: 8 * 8,
     },
     Candidate {
         category: Category::OtherHash,
         entries: &["sha256_run", "ripemd160_run", "compress256"],
-        // One 64-byte block in, eight words of state.
-        frame_words: 16 + 8,
+        // One 64-byte block in, eight words of state — which since S26c is
+        // `constants::sha256::FRAME_WORDS` exactly, this category's SHA-256 half
+        // being delegated (`docs/spec/delegation.md` §15). What is left is
+        // RIPEMD-160, which shares the category and nothing else: it is
+        // little-endian where SHA-256 is big-endian, five words of state where
+        // SHA-256 has eight, and a different round function, so one frame does
+        // not serve both and this figure is now a ceiling on the **ripemd**
+        // remainder rather than a prediction for the pair.
+        frame_words: constants::sha256::FRAME_WORDS as u32,
     },
     Candidate {
         category: Category::Keccak,

@@ -22,7 +22,7 @@ docs/
                  jump-branch-slt.md, shift-bitwise.md, mul-div.md, memory-ops.md;
                  block-proof.md, the block layer: BlockProof, verify_block, ts windows; and
                  delegation.md, THE delegation ABI: the ecall convention, the frame, the
-                 anchor, static detachment, the four delegation circuits, and the
+                 anchor, static detachment, the six delegation circuits, and the
                  guest-target backend; and
                  revm-block.md, S24's two wire formats: the output commitment, frozen,
                  and BlockWitness, deliberately NOT frozen -- §1.6 is S26's blob-price
@@ -67,7 +67,10 @@ crates/
                  delegation circuits share; `keccak`: S21's delegation circuit; `poseidon2`
                  and `fr_arith`: S23's; `mod_mul`: S26's, specialized at S26b to
                  `a·b mod m` over one of FOUR fixed Ethereum fields a frame word
-                 SELECTS; `gadgets`: the is-zero and
+                 SELECTS; `sha256` and `ec_add`: S26c's two, one SHA-256 compression
+                 a row and one THIRD of a complete elliptic-curve point addition a
+                 row, the second being the first delegation family to carry a lookup
+                 channel; `gadgets`: the is-zero and
                  comparison gadgets;
                  `family_circuit`: the registry, now every family; no_std
   gkr-verify/    the GKR verifier half: the gate kernel, the layer sumcheck verifier and
@@ -100,12 +103,14 @@ crates/
                  guest-only, and NOT a workspace member
 guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, opcodes/, heap/,
                  addsub/, control/, alu/, mem/, shards/, keccak-test/, keccak-unused/,
-                 recursion-ops/, recursion-unused/, revm-block/, public-io/, mod-mul-ops/
+                 recursion-ops/, recursion-unused/, revm-block/, public-io/, mod-mul-ops/,
+                 sha256-ops/, ec-ops/
                  -- their own workspace; see guests/Cargo.toml and docs/guest-program-manual.md
   vendor/        upstream crates vendored so a GUEST can patch them, through
                  guests/Cargo.toml's [patch.crates-io]; see guests/vendor/README.md.
                  S26 vendored k256 0.13.4 and S26b ark-ff 0.6.0, routing secp256k1's
-                 two fields and BN254's two through MOD_MUL
+                 two fields and BN254's two through MOD_MUL; S26c patched k256's
+                 ProjectivePoint through EC_ADD
 assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 handoff
 tools/
   profiler/      the cycle profiler: where a guest's RV32 cycles go, by function and by
@@ -116,7 +121,7 @@ tools/
                  toy circuit artifacts, defined there and compiled by `constraints`,
                  S14's memory artifacts, written from `constraints::memory`'s constructors,
                  S15's lookup toy, every registered execution family's circuit, written from
-                 `constraints`, the four delegation circuits **by digest** (the artifacts
+                 `constraints`, the six delegation circuits **by digest** (the artifacts
                  are megabytes),
                  the generic table's commitments over the ceremony, S20's global
                  transcript tape, and S24's synthetic block -- the witness, what native
@@ -925,22 +930,32 @@ is derivable *from* them is regenerated and diffed in CI.
   than not delegating. Poseidon2's frame is the other way — canonical values, so the circuit
   is `poseidon2_permute` itself — because there the conversion is six operations against 240
   the delegation removes (`docs/spec/delegation.md` §12.1, §13.2).
-- **A delegation family carries no lookup channel, and that is load-bearing.** Its rows are
-  invocations, not halfwords, so its ceiling is the width of one row's circuit — and **the
-  four families differ there by three orders of magnitude, so they do not share a height**:
-  `KECCAK_F`, `POSEIDON2` and `FR_ARITH` take `2^8` (keccak at `2^16` is 744 GB of forward
-  pass a shard), and `MOD_MUL` takes `2^16`, where it is 7.9 GB and a measured block falls
-  from 1,048 shards to 5 (`docs/spec/delegation.md` §9.2). Below `2^20` no timestamp table
-  fits at any of them, so every bound a delegation family makes is a bit decomposition with a
-  booleanity gate — including a frame value's **canonicity**, an eight-limb borrow chain
-  whose last borrow is 1 exactly when the value is below the modulus: against `p`'s
-  literals for `FR_ARITH` and `POSEIDON2`, and against `MOD_MUL`'s eight `m_limb` columns,
-  which its selector pins to one of four tables of literals. That is also why its registry arm sits *below* `family_circuit`'s
-  minimum-height guard: a family with no channel reaches no `BITS ≤ trace_vars` assertion,
-  and putting it in the guard would refuse the heights these families actually take. **A
-  height changes no gate** — it adds one halving list per variable carrying one node per
-  output, and nothing else — which is what made `MOD_MUL`'s raise a re-pin and not a redesign
-  (`crates/checker/tests/mod_mul.rs::a_height_moves_only_the_halving_layers`).
+- **A delegation family takes its own height, and since S26c two of the six carry
+  `RANGE16`.** Its rows are invocations, not halfwords, so its ceiling is the width of one
+  row's circuit — and **the six differ there by four orders of magnitude, so they do not
+  share a height**: `KECCAK_F`, `POSEIDON2`, `FR_ARITH` and `SHA256_COMP` take `2^8` (keccak
+  at `2^16` is 744 GB of forward pass a shard, SHA-256's compression 35 GB), and `MOD_MUL` and
+  `EC_ADD` take `2^16` — 5.1 GB and **20.5 GB** a shard, the second being above an execution
+  shard's own peak and therefore the peak-setting family in a block
+  (`docs/spec/delegation.md` §9.2). `2^16` is *forced* for those two rather than chosen: it is
+  the channel's floor, Mercury needs an even variable count, and `2^18` is four times worse.
+  **No delegation family may carry `TIMESTAMP` at any height on this menu** — `BITS = 19`
+  needs `2^20`, an execution family's floor — so a frame's timestamp gap is a bit
+  decomposition at `2^8` and three `RANGE16` chunks at `2^16`, never that channel's
+  obligation. A frame value's **canonicity** is an eight-limb borrow chain whose last borrow
+  is 1 exactly when the value is below the modulus: against `p`'s literals for `FR_ARITH` and
+  `POSEIDON2`, and against `MOD_MUL`'s and `EC_ADD`'s `m_limb` columns, which a selector pins
+  to one of four or two tables of literals. **A gated conclusion is
+  `enable·(1 − b_7) = 0` and never `b_7 = enable`**: the second forces the borrow to 0 where
+  `enable` is 0, so a value that *is* below the modulus on a row that does not read it becomes
+  unprovable — which at S26c made every row of `EC_ADD` unprovable while the executor, the
+  guests and every shape test passed. **`family_circuit`'s minimum-height guard is derived,
+  not a list**: it reads each family's own `channels()` and takes the widest range channel's
+  `BITS`, so a family is held to exactly the floor its channels imply and no table has to be
+  kept in step. **A height changes no gate** — it adds one halving list per variable carrying
+  one node per output, and nothing else — which is what made `MOD_MUL`'s raise a re-pin and
+  not a redesign
+  (`crates/checker/tests/{mod_mul,ec_add}.rs::a_height_moves_only_the_halving_layers`).
 - **`MOD_MUL` multiplies in one of FOUR fixed Ethereum fields, and the EVM's `MULMOD` is
   not one of them** (S26b, `docs/spec/delegation.md` §14 and §10.2). Frame word 0 selects
   secp256k1's `p` or `n` or BN254's `q` or `r`; the circuit supplies the limbs as literals
@@ -1212,6 +1227,7 @@ is derivable *from* them is regenerated and diffed in CI.
 | S26 — Cycle reduction: streaming prover, cycle profiler, `MOD_MUL` | done | `docs/handoff/S26-cycle.md` |
 | S-NATIVE-IO — The native I/O model: POSIX and QEMU deleted | done | `docs/handoff/S-NATIVE-IO.md` |
 | S26b — `MOD_MUL` specialized: four fixed Ethereum moduli | done | `docs/handoff/S26b-eth-field-mul.md` |
+| S26c — SHA-256 compression + secp256k1/BN254 `EC_ADD` | done | `docs/handoff/S26c-sha256-ec.md` |
 
 **S-IO takes no number, and that is deliberate** (owner's decision). It is not one of the
 original twenty-seven stages — it is the stage those twenty-seven forgot, inserted after

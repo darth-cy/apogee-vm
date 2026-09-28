@@ -496,7 +496,7 @@ fn the_delegation_space_column_is_the_requested_family() {
             constants::address_space::DELEGATION_FR_ARITH as u64,
             constants::address_space::DELEGATION_MOD_MUL as u64,
         ],
-        "the three guests request all four delegation families"
+        "the three guests request the four delegation families S26 had"
     );
 }
 

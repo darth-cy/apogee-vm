@@ -1252,7 +1252,7 @@ pub mod family {
         1 << 22, // ADVICE_WINDOWS, at the window height
         1 << 16, // MOD_MUL, and NOT 2^8 — see the paragraph above
         1 << 8,  // SHA256_COMP: ~20,000 inner columns a row, so 2^16 is 42 GB
-        1 << 16, // EC_ADD, where its RANGE16 table fits and its peak is 10.5 GiB
+        1 << 16, // EC_ADD: forced, its RANGE16 table needing 16 variables
     ];
 
     /// The default `bytecode_size_words`: `2^20` words, a 4 MiB ceiling on the
@@ -2007,7 +2007,9 @@ pub mod fr_arith {
 ///
 /// `docs/spec/delegation.md` §15 is the frame table. FIPS 180-4 is the
 /// algorithm, and `crates/constants/tests/sha256.rs` **re-derives** both tables
-/// from their generators rather than trusting the transcription.
+/// from their generators — the fractional parts of the square roots of the first
+/// eight primes and the cube roots of the first sixty-four — in exact integer
+/// arithmetic rather than trusting the transcription.
 pub mod sha256 {
     /// Words of chaining state, and words the invocation writes.
     pub const STATE_WORDS: usize = 8;
@@ -2319,9 +2321,13 @@ pub mod ec_add {
     /// of canonical values rather than canonical values themselves — the worst
     /// is `byz3 <= 63m` against `xz <= 3m` — and every slot's identity carries
     /// [`OFFSET_MULTIPLE`] copies of `m^2` to keep the quotient non-negative,
-    /// so the quotient reaches about `511m` and needs a ninth limb.
-    /// `constraints::ec_add`'s `the_quotient_bound_covers_every_group`
-    /// computes the bound rather than trusting this sentence.
+    /// so the quotient reaches about `1697m` at [`OFFSET_MULTIPLE`]'s 1024 and
+    /// needs a ninth limb — which nine limbs cover with room to spare, `1697m`
+    /// being under `2^267`. `constraints::ec_add`'s
+    /// `the_offset_covers_every_slot` and `the_carry_offset_covers_every_slot`
+    /// compute the two bounds rather than trusting this sentence, and
+    /// `crates/checker/tests/ec_add.rs` asserts the quotient fits nine limbs on
+    /// the widest row the family admits.
     pub const QUOTIENT_LIMBS: usize = LIMBS + 1;
 
     /// Positions in the limb identity: `q * m` is the widest product, at
@@ -2358,7 +2364,7 @@ pub mod ec_add {
     pub const OFFSET_MULTIPLE: u64 = 1024;
 
     /// A signed carry's offset, as a bit position: the carry spans
-    /// `[-2^45, 2^45)`, so `u = c + 2^45` spans `[0, 2^46)`.
+    /// `[-2^46, 2^46)`, so `u = c + 2^46` spans `[0, 2^46)`.
     ///
     /// **Derived, and the derivation moved it twice.** The widest position is
     /// group 2's `Y3`, whose left-hand side is `yp*ym + bxx9*xz` at

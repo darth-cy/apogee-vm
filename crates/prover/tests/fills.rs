@@ -188,7 +188,7 @@ fn every_delegation_fill_satisfies_every_gate() {
 /// `SHA256_COMP`'s fill, over the whole shard and every gate.
 ///
 /// A **forward pass** here, where `MOD_MUL` and `EC_ADD` get sampled rows: this
-/// family carries no channel, so it is at `2^8`, where a pass is 166 MB. That is
+/// family carries no channel, so it is at `2^8`, where a pass is 137 MB. That is
 /// the stronger statement — every row, and the memory roots the halving phase
 /// closes — and it is affordable, so it is what this one does.
 #[test]
@@ -243,8 +243,8 @@ fn the_sha256_fill_covers_its_circuit_and_satisfies_every_gate() {
 ///
 /// **Why a sample and not a forward pass.** `MOD_MUL` and `EC_ADD` carry the
 /// `RANGE16` channel, so their circuits exist only at `2^16`
-/// (`docs/spec/delegation.md` §10.3) and `gkr::forward` over one is 4.7 GB and
-/// 10.5 GB respectively — deferred-suite figures, in a suite whose whole point
+/// (`docs/spec/delegation.md` §10.3) and `gkr::forward` over one is 4.6 GB and
+/// 18.3 GB respectively — deferred-suite figures, in a suite whose whole point
 /// is to be fast. A relation is **row-local**, so evaluating rows is the same
 /// statement per row at a few megabytes.
 ///

@@ -176,14 +176,27 @@ pub fn advance_metered(setup, archive, until)   -> Result<ProvingMetrics, Prover
   divide, if a quotient word is not its adjusted value or if a product does not fit two
   words. Its decoded row is **five** values, not six: the family's tuple has no immediate,
   so its table is `S[0..6]` and the packed table `S[6..9]`.
-- **One delegation frame fill, four families.** `fill::delegation_frame` writes the four
+- **Two delegation frame fills, six families.** `fill::delegation_frame` writes the four
   head columns, the four per frame word, the 38 gap bits a read and the frame pointer's 60
-  for any delegation family, and each family's own fill adds what is its own:
-  `fill::keccak_f` the state's 1,600 bits, `fill::poseidon2` six values' 520 bits apiece,
-  `fill::fr_arith` three values' bits, the selectors and the three witnessed scalars, and
-  `fill::mod_mul` the four modulus selectors, the eight limbs they name, three values' 256
-  word bits and three `< m` chains, the quotient's eight limbs and their bits, and the
-  fourteen signed carries. The canonicity witness — the borrow chain of `X − p` — is
+  for a **bit-decomposing** family — `KECCAK_F`, `POSEIDON2`, `FR_ARITH` and `SHA256_COMP` —
+  and `fill::delegation_frame_range16` writes the same head and per-word columns with two
+  gap **chunks** a word and four halfword columns for the pointer, for the two families that
+  carry `RANGE16`. Each family's own fill adds what is its own: `fill::keccak_f` the state's
+  1,600 bits, `fill::poseidon2` six values' 520 bits apiece, `fill::fr_arith` three values'
+  bits, the selectors and the three witnessed scalars, `fill::sha256_comp` every frame word's
+  bits, the two carried sequences, the derived schedule and the four kinds of carry, and
+  `fill::mod_mul` the four modulus selectors, the eight limbs they name, three values'
+  halfwords and three `< m` chains, the quotient's limbs and halfwords, and the fourteen
+  signed carries. `fill::ec_add` is the widest: six selectors, the modulus limbs and `b3`,
+  three limb-wise helpers, **twelve** `< m` chains, and per slot four loose operands, a
+  nine-limb quotient, fifteen signed carries and the result's own chain.
+  **`fill::ec_add` computes every value's chain on every row, and filling only the
+  group's was the bug S26c shipped**: the chain's sixteen `canonical` gates are *ungated*
+  and hold for any value, and only the conclusion is gated to the groups that read it, so
+  zeros satisfy the canonical gates just where `v = m`
+  (`docs/spec/delegation.md` §16.3). `crates/prover/tests/fills.rs` is what says so, and it
+  is why that file evaluates a filled shard's rows against the gates rather than only
+  counting its addresses. The canonicity witness — the borrow chain of `X − p` — is
   computed here, because it is a function of the words the execution wrote and nothing
   records it. **`fill::mod_mul` is the one delegation fill that computes something the
   execution did not record**: the modulus, the quotient and the carries are not in the

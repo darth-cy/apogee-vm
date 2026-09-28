@@ -13,8 +13,11 @@
 //! 100 MB and its fixture is a digest; rewriting it to call this module would
 //! put a frozen artifact's bytes at risk for tidiness, which is a trade the
 //! master's "build conservatively" refuses. What is here was written from it,
-//! and `crates/checker/tests/delegation_frame.rs` holds the two spellings of
-//! every shared gate equal so they cannot drift.
+//! and what holds the two spellings from drifting is that each is exercised by
+//! its own family's row suite against the same rules — `crates/checker/tests/
+//! keccak.rs` for S21's copy and `tests/{poseidon2,fr_arith,sha256}.rs` for this
+//! module's, all four of them running `check_laws`, `check_padding` and
+//! `check_memory` over an artifact and an honest witness over its frame.
 //!
 //! # The committed layout every delegation family shares
 //!

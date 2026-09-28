@@ -88,9 +88,9 @@
 //! group reads carry a `< m` borrow chain gated on that group. Each of the
 //! three slots' operands is a committed column pinned by a degree-2 gate to a
 //! bounded linear combination of those values, so every term of the limb
-//! identity is a small integer far below `p` — the widest position is `2^77`
+//! identity is a small integer far below `p` — the widest position is `2^78`
 //! against `p`'s `2^254` — and the `Fr` equation **is** the integer equation.
-//! The sixteen limb equations telescope to `A*B + C*D + 256*m^2 = q*m + out`
+//! The sixteen limb equations telescope to `A*B + C*D + 1024*m^2 = q*m + out`
 //! exactly when the last carry is zero, which the last equation forces by
 //! having no outgoing carry; `out`'s own chain puts it below `m`. Integer
 //! division being unique, `out` is the reduction and nothing else.
@@ -336,7 +336,7 @@ pub fn q_hi(r: usize, i: usize) -> PolyAddress {
 fn carry_base(r: usize) -> usize {
     slot(r) + 6 * LIMBS + 2 * f::QUOTIENT_LIMBS
 }
-/// `W[…]`: slot `r`'s carry `c`, as the **unsigned** value `carry + 2^45`.
+/// `W[…]`: slot `r`'s carry `c`, as the **unsigned** value `carry + 2^46`.
 pub fn carry(r: usize, c: usize) -> PolyAddress {
     w(carry_base(r) + c)
 }
@@ -414,7 +414,7 @@ impl Term {
 
 /// The four operands and the output word of one slot of one group.
 struct Slot {
-    /// `A`, `B`, `C`, `D`: the identity is `A*B + C*D + 256*m^2 = q*m + out`.
+    /// `A`, `B`, `C`, `D`: the identity is `A*B + C*D + 1024*m^2 = q*m + out`.
     /// `C` and `D` are empty for groups 0 and 1, whose second product is zero.
     operands: [&'static [Term]; 4],
     /// The frame word the reduction's result is written to.
@@ -739,7 +739,7 @@ fn one_chain(
 /// Degree 2: a selector column times a frame limb or a helper column. The pin
 /// is also the operand's **bound** — every term of the sum is below `2^32` in
 /// magnitude with a small literal coefficient — so an operand needs no range
-/// check of its own, which is what keeps this family's witness under 1,400
+/// check of its own, which is what keeps this family's witness at 1,028
 /// columns.
 fn operand_gates() -> Vec<(String, GateDef)> {
     let mut out: Vec<(String, GateDef)> = Vec::new();
@@ -774,7 +774,7 @@ fn operand_gates() -> Vec<(String, GateDef)> {
     out
 }
 
-/// The sixteen limb equations of `A*B + C*D + 256*m^2 = q*m + out`, per slot.
+/// The sixteen limb equations of `A*B + C*D + 1024*m^2 = q*m + out`, per slot.
 ///
 /// At position `k`, writing `P_k` for `sum_{i+j=k} (A_i B_j + C_i D_j)`,
 /// `O_k` for `256 * sum_{i+j=k} m_i m_j` and `S_k` for `sum_{i+j=k} q_i m_j`:
@@ -788,11 +788,18 @@ fn operand_gates() -> Vec<(String, GateDef)> {
 /// equations weighted by `2^{32k}` gives the identity exactly when that last
 /// carry is zero.
 ///
-/// **The offset is what makes the quotient unsigned.** Group 2's slot 0 is
-/// `xy*ym - byz3*xz`, as low as `-189 m^2`, and a signed quotient would need a
-/// `live`-gated offset of `256*m` — degree 3, `m` being a column. `256*m^2` on
-/// the left is degree 2 and costs the other two groups nothing but a larger
-/// honest quotient.
+/// **The offset is what makes the quotient unsigned.** The binding slot is
+/// group 2's slot 1, `yp*ym + bxx9*xz`, as low as `-673 m^2` — the operand
+/// ceilings' products, `22*22 + 63*3` — and a signed quotient would need a
+/// `live`-gated offset of `1024*m`, which is degree 3, `m` being a column.
+/// `1024*m^2` on the left is degree 2 and costs the first two groups nothing but
+/// a larger honest quotient.
+///
+/// **It read `-189 m^2` and named slot 0 until S26c, and that was a shipped
+/// bug.** Slot 0's floor is the smaller of the two; sizing the offset against it
+/// left slot 1's honest quotient negative on about a quarter of rows, which no
+/// executor, guest or shape test could see. [`the_offset_covers_every_slot`]
+/// derives the floor now, from the same ceiling table the carry's width uses.
 fn product_gates() -> Vec<(String, GateDef)> {
     let offset = f::OFFSET_MULTIPLE;
     let mut out: Vec<(String, GateDef)> = Vec::new();
@@ -838,7 +845,7 @@ fn product_gates() -> Vec<(String, GateDef)> {
 /// literal offset times `live`, or the empty form past the last carry.
 ///
 /// The `live` factor is what makes a padding row's carry **0** rather than
-/// `-2^45`.
+/// `-2^46`.
 fn carry_terms(r: usize, c: usize) -> Vec<(Coeff, PolyAddress)> {
     if c >= f::CARRIES {
         return Vec::new();

@@ -326,9 +326,13 @@ const fn span(first: isize, last: isize) -> usize {
 /// Bits layer 1 carries: exactly the `A_i`, `E_i` and `W_i` bits a three-way
 /// XOR or a `Maj` reads, and no others.
 ///
-/// `every_carried_bit_is_read` walks the nine hundred and sixty combinations
-/// and holds every operand inside these ranges, so the ranges are checked
-/// rather than asserted.
+/// `every_carried_bit_is_read` walks every `(XOR, bit, operand)` slot — 288
+/// three-way XORs over 32 bits with up to three operands each — and holds every
+/// operand it finds inside these ranges and inside the block, so the ranges are
+/// checked rather than asserted. **The ranges are narrow because `validate`
+/// refuses a column no gate reads**: `A_{-3}`, `E_{-3}` and `A_64` exist as
+/// scalars and are never an XOR's operand, so carrying their bits would be
+/// 96 columns nothing reads.
 fn carried_bits() -> usize {
     (span(A_BIT_FIRST, A_BIT_LAST) + span(E_BIT_FIRST, E_BIT_LAST)) * BITS
         + span(W_BIT_FIRST as isize, W_BIT_LAST as isize) * BITS

@@ -91,24 +91,34 @@ circuit carrying a timestamp gap obligation at `2^20` rows or more** — which i
 execution family (`docs/spec/memory.md` §2.4). Six of the seven defaulted there already,
 and `constants::family::DEFAULT_HEIGHTS[ATOMICS]` was `2^16` until **S19 raised it to
 `2^20`** with the circuit that needs it (S16 answer 7, `docs/spec/memory-ops.md` §7.1). No
-family that runs cycles may default below the floor. Since S19 `family_circuit`'s
-minimum-height arm names **all seven** execution families, so a key naming any of them at
-`2^16` or `2^18` — both on the menu — gets `None` and a clean `Err` at load rather than
-reaching this channel's assertion and panicking inside `VerifyingKey::check`.
+family that runs cycles may default below the floor. **Since S26c `family_circuit`'s
+minimum-height guard is derived rather than listed**: it reads each family's own `channels()`
+and takes the widest range channel's `BITS` as that family's floor, testing it before the
+artifact is built. So a key naming any of the seven execution families at `2^16` or `2^18` —
+both on the menu — still gets `None` and a clean `Err` at load rather than reaching this
+channel's assertion and panicking inside `VerifyingKey::check`, and a delegation family is
+held to exactly the floor its own channels imply. It named the seven explicitly from S19 to
+S26c, which worked only while no delegation family had a channel.
 
 **The way out of that floor is to carry no channel at all, and S21 took it.** A delegation
-family's rows are invocations rather than cycles, so `2^8` rows is a sensible shard and `2^16`
-is not reachable at any price (`docs/spec/delegation.md` §9). At `2^8` no range channel's table
-fits, so all four delegation families carry **none** — no `TIMESTAMP`, no `RANGE16`, no
-`GENERIC`, no `DECODER`, no multiplicity column — and every bound they make is a bit
-decomposition with a booleanity gate of its own. S23's two pay the same price in a second
-place: a frame value's **canonicity** is an eight-limb borrow chain against `p` whose limbs are
-bounded by their own bits, where a `RANGE16` channel would have bounded them in sixteen
-lookups. That is also why their registry arms sit *below* the minimum-height
-guard rather than in it: a family with no channel reaches no assertion here, so there is
-nothing for the guard to pre-empt, and putting it in the guard would refuse the only height it
-has. **A delegation family must therefore carry no channel**, which is a rule about the
-guard's placement as much as about the circuit.
+family's rows are invocations rather than cycles, so `2^8` rows is a sensible shard
+(`docs/spec/delegation.md` §9). At `2^8` no range channel's table fits, so a family at that
+height carries **none** — no `TIMESTAMP`, no `RANGE16`, no `GENERIC`, no `DECODER`, no
+multiplicity column — and every bound it makes is a bit decomposition with a booleanity gate of
+its own. Four families are there: `KECCAK_F`, `POSEIDON2`, `FR_ARITH` and `SHA256_COMP`. S23's
+two pay the same price in a second place: a frame value's **canonicity** is an eight-limb
+borrow chain against `p` whose limbs are bounded by their own bits, where a `RANGE16` channel
+would have bounded them in sixteen lookups.
+
+**Since S26c a delegation family at `2^16` may carry `RANGE16`, and two do**
+(`docs/spec/delegation.md` §10.3). `MOD_MUL` and `EC_ADD` are wide enough that a bit
+decomposition of every bound is the dominant cost — `EC_ADD`'s 97-word frame is 3,686 gap bits
+against 194 chunk columns — and narrow enough per row that `2^16` is affordable. What stays
+true at every height this menu offers is that **no delegation family may carry `TIMESTAMP`**:
+`BITS = 19` needs `2^20` rows, which is an execution family's floor and not an invocation
+family's. So a frame's timestamp gap is never that channel's obligation; it is a bit
+decomposition at `2^8`, and at `2^16` three `RANGE16` chunks whose top one carries a scaled
+obligation that is exact at `2^38`.
 
 ## 4. Gated keys
 
