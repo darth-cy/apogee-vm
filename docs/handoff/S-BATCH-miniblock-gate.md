@@ -493,27 +493,59 @@ recovery, and `EC_ADD` scales with contract-invoked `0x01`, not with tx count. T
 bounds what a full-block proof *means*: it proves state transition, **not** that the
 transactions were validly signed. The 148-byte journal carries no signature commitment.
 
-### 11.3 The surprise: it is **commit-bound**, and more cores barely help
+### 11.3 Where the wall clock goes — and a correction to an earlier draft of this section
 
-`S25-mini-block.json` measures `phases.commit_ms = 131,661.7` over 37 shards =
-**3.56 s a shard** [M]. `crates/trace/src/memory.rs` contains **no rayon at all**, so
-building a shard's memory columns is strictly single-threaded, and `commit_chunks` runs one
-shard at a time by deliberate design (`crates/prover/src/streaming.rs:267-271`).
+**An earlier draft of this note claimed the commit phase is "strictly serial" and that going
+12 → 192 workers buys only ~40% of wall clock. That was wrong**, and the error is worth
+recording because it is easy to make from a grep alone.
 
-At ~1,700 shards that is **~1.7 h of serial commit**, against 10–15 core-hours of shard work
-that *does* parallelise:
+What is actually serial, and what is not:
 
-| workers | shard region | + serial commit | **wall** | box | **$/proof** |
+```
+pass 1  (streaming.rs:158-172)   execution and commitment INTERLEAVE in one loop:
+                                 a family's shard is flushed and committed the moment
+                                 its buffer fills. No pipelining between the two.
+  run.step()                     SERIAL — the emulator is single-threaded
+  commit_chunks  for chunk       serial ACROSS shards
+    memory_columns_of            SERIAL — crates/trace/src/memory.rs has no rayon at all
+    commit_all  columns.par_iter()   PARALLEL over 21-392 columns...
+      commit -> Mercury/KZG MSM      ...and each MSM parallelises again:
+                                     msm.rs:241, chunks = current_num_threads()/windows
+pass 2  (streaming.rs:358-386)   queue, then batches of max_in_flight proved with par_iter
+```
+
+So the **commit work is parallel**, inside the shard rather than across it, and
+`streaming.rs:265-268` is right that an outer `par_iter` over shards *"would buy nothing but
+a second shard's worth of peak"*: one add/sub shard is 27 columns of 2^20-point MSM, which
+saturates 32 cores by itself. The serial residue is only **memory-column construction** —
+O(height) writes, ~28M Fr per add/sub shard — plus the two single-threaded executions.
+
+**The honest position: the construction/MSM split inside the commit phase has never been
+measured**, so the commit term is a range, not a number. The one measurement is
+`S25-mini-block.json`'s `phases.commit_ms = 131,661.7` over 37 shards = **3.56 s a shard at
+rayon 6 on the M5 Pro** [M], which already contains whatever parallelism exists at 6 threads.
+At 1,700 shards that is 1.7 h **if nothing in it scales**, which is an upper bound and was
+mistakenly reported as the serial term.
+
+| workers | pass-2 proving | commit (range) | 2× execution | **wall** | **$/proof** |
 | --- | --- | --- | --- | --- | --- |
-| 12 | 0.9 – 1.4 h | 1.7 h | **2.6 – 3.1 h** | r8i.8xlarge, `--in-flight 12` | **$6 – 7** |
-| 32 | 0.35 – 0.5 h | 1.7 h | **2.1 – 2.2 h** | r8i.8xlarge, `--in-flight 16` | **$5 – 6** |
-| 96 | 0.12 – 0.17 h | 1.7 h | **~1.9 h** | r8i.24xlarge (768 GiB) | **$13** |
-| 192 | 0.06 – 0.09 h | 1.7 h | **~1.8 h** | r8i.48xlarge | **$25** |
+| 12 | 0.9 – 1.4 h | 0.4 – 1.7 h | 0.1 h | **1.4 – 3.2 h** | $3 – 7 |
+| 32 | 0.35 – 0.5 h | 0.2 – 1.1 h | 0.1 h | **0.7 – 1.7 h** | $2 – 4 |
+| 96 | 0.12 – 0.17 h | 0.1 – 0.7 h | 0.1 h | **0.3 – 1.0 h** | $2 – 7 |
+| 192 | 0.06 – 0.09 h | 0.05 – 0.5 h | 0.1 h | **0.2 – 0.7 h** | $3 – 10 |
 
-**Amdahl, not capacity.** Going 12 → 192 workers buys ~40% of wall clock for 4× the money.
-So the `r8i.8xlarge` already provisioned is close to cost-optimal *today*, and the real win is
-a **code change: parallelise memory-column construction**. Until that lands, a bigger box is
-mostly wasted money.
+**More cores do help.** How much depends entirely on the unmeasured split: at the optimistic
+end the commit phase is MSM-dominated and scales with the pool; at the pessimistic end it is
+construction-dominated and does not. Either way the earlier claim that hardware is nearly
+worthless here does not hold.
+
+Two consequences survive the correction, and one dies:
+- **Survives:** parallelising `crates/trace/src/memory.rs`'s column construction is still a
+  real win, because that part genuinely does not scale. It is just smaller than claimed.
+- **Survives:** an outer `par_iter` over shards in `commit_chunks` is still the *wrong* fix —
+  `streaming.rs:265-268`'s reasoning is sound.
+- **Dies:** "commit-bound, so the `r8i.8xlarge` is cost-optimal and a bigger box is wasted."
+  A bigger box plausibly halves wall clock from 32 to 96 workers.
 
 Memory is not the constraint once streaming is used: peak is `base + in-flight × marginal`
 = ~30 GiB + 16 × 6.26–10.16 GiB ≈ **130–193 GiB**, inside 247 GiB. Budget `EC_ADD` at a
@@ -532,8 +564,11 @@ Every measured `KECCAK_F` number in this repository comes from `Mode::Mini`
 > closes it.** Minutes of work, no proving, no AWS. Nothing else in this section is worth
 > refining first.
 
-Second weakest: `EC_ADD`'s per-shard peak, which decides the box (§6). Third: the 92.43 GiB
-`/proc` reading, sole anchor of both memory fits (§3).
+Second weakest: **the construction/MSM split inside the commit phase** (§11.3) — it decides
+whether a bigger box halves the wall clock or barely moves it, and
+`global_commit_phase_metered` already exists to time it. Third: `EC_ADD`'s per-shard peak,
+which decides the box (§6). Fourth: the 92.43 GiB `/proc` reading, sole anchor of both memory
+fits (§3).
 
 And two blockers remain upstream of all of it, from §4: `revm-block` is the wrong binary, and
 no real full-block witness can be recorded while `eth_getProof` cannot return a collapsing
