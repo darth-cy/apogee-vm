@@ -87,18 +87,25 @@ pub const MOD_MUL_RESULT: u32 = 28;
 /// (`constants::family::DEFAULT_HEIGHTS`, `docs/spec/delegation.md` §9.1).
 pub const DELEGATION_VARS: u32 = 8;
 
-/// The height the **fixture** statement proves `MOD_MUL` at, and it is
-/// deliberately not the family's default.
+/// The height the two **channel-carrying** delegation families are proved at
+/// here, and the only one they have: `RANGE16`'s table needs sixteen variables,
+/// so `constraints::family_circuit` returns `None` below `2^16`
+/// (`docs/spec/delegation.md` §10.3).
 ///
-/// `guests/mod-mul-ops` makes 1,567 invocations. At the real `2^16` that is a
-/// single shard, and the suites that read this statement — `prover`'s fill and
-/// `checker`'s tamper twins — are the only multi-shard coverage this family
-/// has of its anchor pairing and its last-shard padding rows. So the fixture
-/// keeps `2^8` to stay multi-shard, which is a test-design choice and says
-/// nothing about the default; `2^16` is proved end to end by the deferred
-/// `prover::revm` and `host::prove` suites, whose params read
-/// `DEFAULT_HEIGHTS` (`crates/host/src/fixture.rs`).
-pub const MOD_MUL_FIXTURE_VARS: u32 = 8;
+/// **This was `MOD_MUL_FIXTURE_VARS = 8` until S26c**, chosen so the fixture
+/// would be multi-shard: at `2^8` this family's 1,443 invocations are six
+/// shards, and a last shard is the only place padding rows appeared. The
+/// re-shape closed that option and made it unnecessary in the same move — at
+/// `2^16` a single shard is 98% padding, so padding rows are covered in shard 0
+/// and more richly than six `2^8` shards ever covered them.
+///
+/// What it did cost is the **forward pass**: 4.7 GB for `MOD_MUL` at `2^16` and
+/// 10.5 GB for `EC_ADD`, which is a deferred-suite figure. So the fill checks
+/// in `tests/fills.rs` evaluate sampled rows row-locally rather than running a
+/// pass, which is the same statement per row — and the end-to-end proof of both
+/// families at this height is the deferred `prover::revm` and `host::prove`
+/// suites, whose params read `DEFAULT_HEIGHTS`.
+pub const DELEGATION_CHANNEL_VARS: u32 = 16;
 
 /// The committed ELF of guest `name`.
 pub fn fixture(name: &str) -> Vec<u8> {
@@ -174,9 +181,9 @@ pub fn keccak_params() -> ProgramParams {
 }
 
 /// S26's heights: the six execution families `mod-mul-ops` runs at `2^20`,
-/// `MOD_MUL` at [`MOD_MUL_FIXTURE_VARS`] rather than its `2^16` default, and
-/// the window families at `2^18` — see [`mod_mul_program`] for why `2^16` does
-/// not fit them.
+/// `MOD_MUL` and `EC_ADD` at [`DELEGATION_CHANNEL_VARS`], which is the only
+/// height either has, and the window families at `2^18` — see
+/// [`mod_mul_program`] for why `2^16` does not fit them.
 pub fn mod_mul_params() -> ProgramParams {
     let mut heights = [1 << 18; family::COUNT as usize];
     for f in [
@@ -189,7 +196,9 @@ pub fn mod_mul_params() -> ProgramParams {
     ] {
         heights[f as usize] = 1 << ADD_VARS;
     }
-    heights[family::MOD_MUL as usize] = 1 << MOD_MUL_FIXTURE_VARS;
+    for f in [family::MOD_MUL, family::EC_ADD] {
+        heights[f as usize] = 1 << DELEGATION_CHANNEL_VARS;
+    }
     ProgramParams {
         heights,
         ..ProgramParams::defaults()
@@ -261,11 +270,13 @@ pub fn recursion_unused_program() -> Program {
 }
 
 /// S26's guest: `guests/mod-mul-ops`, which calls the `MOD_MUL` delegation by
-/// name over three moduli and reaches it a second time through
-/// `guests/vendor/k256`'s patched field multiply.
+/// name over all four moduli and reaches it a second time through
+/// `guests/vendor/k256`'s patched field and scalar multiplies — and, since
+/// S26c, reaches `EC_ADD` too through that crate's patched `ProjectivePoint`,
+/// which this guest's own source names not at all.
 ///
-/// Its six execution families run at `2^20` and `MOD_MUL` at
-/// [`MOD_MUL_FIXTURE_VARS`], but its **window** families need `2^18` rather
+/// Its six execution families run at `2^20` and its two delegation families at
+/// [`DELEGATION_CHANNEL_VARS`], but its **window** families need `2^18` rather
 /// than `2^16`: the guest's `.text`
 /// reaches pc `0x452c6` and `decode_program` refuses an image byte past RAM
 /// window 0, which at `2^16` ends at `0x40000` — that one fits, but the decoded
@@ -392,6 +403,41 @@ pub fn recursion_unused_archive(program: &Program) -> TraceArchive {
 /// The post-execution archive of `mod-mul-ops`' one run.
 pub fn mod_mul_archive(program: &Program) -> TraceArchive {
     trace(program, MOD_MUL_RESULT)
+}
+
+/// S26c's guest: `guests/sha256-ops`, which calls the `SHA256_COMP` delegation
+/// by name and through `guest_sdk::sha256`'s block loop, 33 compressions in all.
+///
+/// `SHA256_COMP` stays at its `2^8` default — it carries no channel, so no floor
+/// applies, and one row is 20,000 inner columns, which is why `2^16` is not open
+/// to it (`docs/spec/delegation.md` §9.2). Its window families need `2^18` for
+/// `mod_mul_program`'s reason.
+pub fn sha256_program() -> Program {
+    let mut heights = [1 << 18; family::COUNT as usize];
+    for f in [
+        family::ADD_SUB_LUI_AUIPC,
+        family::JUMP_BRANCH_SLT,
+        family::SHIFT_BITWISE,
+        family::MUL_DIV,
+        family::MEM_WORD,
+        family::MEM_SUBWORD,
+    ] {
+        heights[f as usize] = 1 << ADD_VARS;
+    }
+    heights[family::SHA256_COMP as usize] = 1 << DELEGATION_VARS;
+    program_of(
+        "sha256-ops",
+        &ProgramParams {
+            heights,
+            ..ProgramParams::defaults()
+        },
+    )
+}
+
+/// The post-execution archive of `sha256-ops`' one run: exit 12, one per check
+/// but the first.
+pub fn sha256_archive(program: &Program) -> TraceArchive {
+    trace(program, 12)
 }
 
 /// A run with no input and no hint, which must exit with `status`.

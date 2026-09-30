@@ -19,6 +19,12 @@ trace.workspace = true
 
 [dev-dependencies]
 test-support.workspace = true
+# S26c's `EC_ADD` executor is held to this crate's own BN254 G1 arithmetic,
+# which is an independent implementation in a different coordinate system: the
+# delegation is homogeneous projective and `curve::G1Projective` is Jacobian,
+# so agreeing on the affine result is a real comparison rather than two copies
+# of one formula.
+curve.workspace = true
 tiny-keccak.workspace = true
 # S24's workload guest, likewise: `tests/revm.rs` calls `revm_block::run` on
 # the host as the native-revm oracle the guest's committed output is held to.

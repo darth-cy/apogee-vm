@@ -8,8 +8,8 @@
 
 ## 0. The exception, and its limits
 
-The workspace has **one cargo feature**, `prover/metrics`, and it is the one and only
-exception to master **anti-goal 1**:
+The workspace has **two cargo features**, `prover/metrics` and `prover/debug-info`, and they
+are the only two exceptions to master **anti-goal 1**:
 
 > **No cargo features. Zero.** One build configuration for the whole workspace.
 > `[features]` tables, `#[cfg(feature = "...")]`, `optional = true` dependencies, and
@@ -17,18 +17,24 @@ exception to master **anti-goal 1**:
 > undiscovered; a configuration everybody builds should not be conditional. If code is
 > optional, delete it.
 
-The owner granted it at S20, for this harness and nothing else, with the rule left
-standing for every future progression. Two things hold that:
+The owner granted this one at S20, for this harness and nothing else, and `debug-info` at
+S-DEBUG for the proving debug log (`docs/spec/debug-info.md` §0), with the rule left standing
+for every future progression. Two things hold that:
 
 - **`crates/prover/tests/one_feature.rs`** reads every `Cargo.toml` in the repository —
   the workspace's, and the three manifests deliberately outside it — and fails if any
   `[features]` **table** exists but this crate's, or if this crate's declares any key but
-  `metrics`. (A `features = [...]` *key* inside a dependency entry selects an upstream
-  crate's features, which the anti-goal permits and the workspace manifest already does
-  for `ark-ec` and `ark-ff`. Only a table header declares a feature of ours.)
-- **CI builds, clippies and tests the feature-on configuration too.** The anti-goal's
-  stated hazard is "a configuration nobody builds is broken and undiscovered"; a
-  configuration CI builds is neither.
+  those two, in that order. (A `features = [...]` *key* inside a dependency entry selects an
+  upstream crate's features, which the anti-goal permits and the workspace manifest already
+  does for `ark-ec` and `ark-ff`. Only a table header declares a feature of ours.)
+- **CI builds, clippies and tests both feature-on configurations, and the two together.**
+  The anti-goal's stated hazard is "a configuration nobody builds is broken and
+  undiscovered"; a configuration CI builds is neither.
+
+**The two are the same exception, not a precedent.** Each turns on a module that is
+deliberately liberal and must not sit in the path of a real proving run — this one sizes
+every committed column and every forward-pass layer, the other scans every live row of a
+delegation shard. A third is the owner's decision and nobody else's.
 
 The feature enables **no dependency**, optional or otherwise, and changes **no proof
 byte** — `tests/metrics.rs` proves S16's statement through both entry points and compares

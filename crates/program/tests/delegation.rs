@@ -54,8 +54,8 @@ fn image_of(bytes: Vec<u8>) -> ProgramImage {
 fn the_registry_is_one_table() {
     assert_eq!(
         DELEGATIONS.len(),
-        4,
-        "S21 registers one delegation family, S23 two more and S26 a fourth"
+        6,
+        "S21 registers one delegation family, S23 two more, S26 a fourth and S26c two more"
     );
     for (fam, number, space, words) in DELEGATIONS {
         assert_eq!(delegation_family(number), Some(fam));
@@ -115,9 +115,21 @@ fn the_registry_is_one_table() {
                 constants::address_space::DELEGATION_MOD_MUL,
                 25
             ),
+            (
+                family::SHA256_COMP,
+                ecall::PRECOMPILE_SHA256_COMP,
+                constants::address_space::DELEGATION_SHA256_COMP,
+                24
+            ),
+            (
+                family::EC_ADD,
+                ecall::PRECOMPILE_EC_ADD,
+                constants::address_space::DELEGATION_EC_ADD,
+                97
+            ),
         ],
         DELEGATIONS,
-        "the four families, their numbers, their tags and their frames"
+        "the six families, their numbers, their tags and their frames"
     );
     // Every number and every tag is its own: the request-side gates partition
     // ecall rows on exactly that (`crates/constraints/src/add_sub.rs`).
@@ -168,14 +180,15 @@ fn a_number_no_family_answers_is_refused() {
     let base = constants::guest_memory::RAM_ORIGIN;
     // `PRECOMPILE_FIRST + 3` is `0x503`, which S26 gave to `MOD_MUL` and S26b
     // **retired and burned** when that family's frame changed shape; `+ 4` is
-    // the number the specialized call took. So the unanswered numbers are the
-    // retired one and 5 and up — and the retired one belongs in this sweep
-    // precisely because burning a number means nothing may answer it.
+    // the number the specialized call took, and S26c took `+ 5` and `+ 6` for
+    // `SHA256_COMP` and `EC_ADD`. So the unanswered numbers are the retired one
+    // and 7 and up — and the retired one belongs in this sweep precisely
+    // because burning a number means nothing may answer it.
     for number in [
         0u32,
         ecall::EXIT,
         ecall::RETIRED_MOD_MUL_WITNESSED_MODULUS,
-        ecall::PRECOMPILE_FIRST + 5,
+        ecall::PRECOMPILE_FIRST + 7,
         0x05ff,
     ] {
         assert_eq!(
@@ -251,7 +264,7 @@ fn every_guest_declares_exactly_what_it_links() {
     }
     // The two halves are both non-empty, so neither clause is vacuous, and
     // every registered family is declared by at least one guest.
-    assert_eq!(common::DECLARING_GUESTS.len(), 7);
+    assert_eq!(common::DECLARING_GUESTS.len(), 9);
     assert!(common::GUESTS.len() > common::DECLARING_GUESTS.len() + 4);
     for (fam, ..) in DELEGATIONS {
         assert!(
@@ -285,7 +298,7 @@ fn reachability_survives_the_optimiser() {
         for (name, want) in [
             ("keccak-test", vec![family::KECCAK_F]),
             ("recursion-ops", vec![family::POSEIDON2, family::FR_ARITH]),
-            ("mod-mul-ops", vec![family::MOD_MUL]),
+            ("mod-mul-ops", vec![family::MOD_MUL, family::EC_ADD]),
             ("fib", Vec::new()),
         ] {
             let bytes = common::build_profile(name, &format!("deleg-{profile}"), profile);

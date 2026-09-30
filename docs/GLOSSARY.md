@@ -221,16 +221,22 @@ set for a program is derived by the preprocessor and recorded in `VmConfig`.
 
 **Delegation family** — a family that is **invoked, not decoded**: a row is one call of a
 fixed function, not one cycle. It claims no pc, has no decoded table and no row kind, owns
-no cycle, carries no lookup channel, and is in a `VmConfig` exactly when the linked binary
-**declares** it. Four are registered: S21's `KECCAK_F`, one keccak-f[1600] permutation a
+no cycle, and is in a `VmConfig` exactly when the linked binary
+**declares** it. Six are registered: S21's `KECCAK_F`, one keccak-f[1600] permutation a
 row; S23's `POSEIDON2` and `FR_ARITH`, one width-3 Poseidon2 permutation and one `Fr`
-add, multiply or inverse a row; and S26's `MOD_MUL`, one `a·b mod m` over eight 32-bit
+add, multiply or inverse a row; S26's `MOD_MUL`, one `a·b mod m` over eight 32-bit
 limbs a row in one of **four fixed** Ethereum fields — secp256k1's two and BN254's two —
-which a selector word of the frame names and the circuit supplies as literals. The EVM's
-`MULMOD` takes an arbitrary modulus and is not served. **The four families do not share a
-height**: `KECCAK_F`, `POSEIDON2` and `FR_ARITH` are `2^8` rows and `MOD_MUL` is `2^16`,
-a row's circuit width differing between them by three orders of magnitude
-(`docs/spec/delegation.md` §9.2). `docs/spec/delegation.md`.
+which a selector word of the frame names and the circuit supplies as literals; and S26c's
+`SHA256_COMP`, one SHA-256 compression a row, and `EC_ADD`, one **third** of a complete
+elliptic-curve point addition a row on secp256k1 or BN254 G1. The EVM's `MULMOD` takes an
+arbitrary modulus and is not served. **The six do not share a height**: `KECCAK_F`,
+`POSEIDON2`, `FR_ARITH` and `SHA256_COMP` are `2^8` rows and `MOD_MUL` and `EC_ADD` are
+`2^16`, a row's circuit width differing between them by four orders of magnitude
+(`docs/spec/delegation.md` §9.2). **Two of the six carry a lookup channel** — `RANGE16`,
+which the family's height has to reach — and that is S26c's amendment to a rule that read
+"a delegation family carries no channel" (`docs/spec/delegation.md` §10.3); at `2^8` none
+can, and at no height on this menu may any carry `TIMESTAMP`.
+`docs/spec/delegation.md`.
 
 **Delegation request** — the CPU-side row of a delegation call: an ecall whose `a7` is the
 family's number and whose `a0` is the **frame base**, a pointer to the bytes the function
@@ -249,16 +255,25 @@ gates pin the request's side (it writes no register; its mirror read is stamped 
 valued 0); the fourth field, the value the request writes back, is **free on both sides** and
 balances only when the two agree. `docs/spec/delegation.md` §5.
 
-**Witnessed parameter** — a value a circuit's own behaviour depends on that arrives as a
-**column of the row** rather than as a literal in the circuit. S26's `MOD_MUL` is the first
-and so far the only one: its modulus comes out of the frame, so one family proves
-`a·b mod m` for secp256k1's base field, its scalar field, BN254's, or any other 256-bit value
-a guest passes, where a constant modulus would have meant one family per field. It is a
-witness column like any other — nothing in the statement, the transcript or the opening
-notices — and what it costs is arithmetic: the `out < m` borrow chain subtracts *m*'s columns
-where `FR_ARITH`'s subtracts `p`'s literals, so that chain cannot also be gated by `live`
-without reaching degree 3 and is ungated instead. `docs/spec/delegation.md` §14.1 and
-`docs/spec/constraint-manifest.md` §18.4.
+**Selected parameter** — a value a circuit's own behaviour depends on that arrives as a
+**frame word naming one of a fixed set**, with the circuit supplying that choice's constants as
+literals. `MOD_MUL` is the pattern and `EC_ADD` follows it: one frame word selects secp256k1's
+base field, its scalar field, or BN254's base or scalar field, and a degree-1 gate pins eight
+`m_limb` columns to the selected literals; `EC_ADD`'s selects a **curve and a group** together,
+and pins the modulus and `b3 = 3b` the same way. The pin is also the bound — a column equal to a
+literal needs no range check — and `one_code_a_live_row` is what makes the selectors a
+*partition* rather than any subset, which is load-bearing twice: it refuses the two-selector
+forgery a sum cannot see, and it is the only thing bounding the pinned limbs at all.
+`docs/spec/delegation.md` §14 and §16, `docs/spec/constraint-manifest.md` §18.4 and §20.3.
+
+**Witnessed parameter** — the same thing done the other way: the value arrives as an ordinary
+**witness column** and the circuit holds it to nothing. S26's `MOD_MUL` carried its modulus that
+way and **S26b removed it**, so no registered circuit has one. It is worth a glossary entry for
+why it went: with `m` a column the circuit cannot state `a < m`, because there is no literal to
+compare against — so the quotient's fit was the honest prover's manners rather than a property of
+the statement, and a guest handing over an unreduced operand ran clean and failed at a gate
+hours later. `docs/spec/delegation.md` §10.2 is the amendment and §14.3 is what the generality
+cost.
 
 **Static detachment** — how a family no pc claims gets into a `VmConfig`: the SDK shim emits
 a twelve-byte **declaration record** into `.rodata`, referenced by the shim and by nothing

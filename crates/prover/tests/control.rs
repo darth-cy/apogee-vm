@@ -159,9 +159,10 @@ fn a1_the_guest_proves_and_every_shard_verifies() {
     // per registered delegation type, and 42 + **36** since S26 registered a
     // fourth — so identity's seven setup commitments start at 78 rather than 77.
     // This pair moves by one for every delegation family
-    // (`docs/spec/delegation.md` §10).
-    assert_eq!(add.len(), 27 + 33 + 7);
-    assert_eq!(&add[60..], &setup.vk.setup_commitments[0][..]);
+    // (`docs/spec/delegation.md` §10) — hence 35 and 62 since S26c registered
+    // `SHA256_COMP` and `EC_ADD`, `constants::delegation::TYPES` now holding six.
+    assert_eq!(add.len(), 27 + 35 + 7);
+    assert_eq!(&add[62..], &setup.vk.setup_commitments[0][..]);
 }
 
 /// The generic table's binding from the other side. A key whose table

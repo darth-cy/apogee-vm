@@ -73,7 +73,7 @@ be published at all.
 So the fd model is gone rather than wrapped. An Apogee guest is an Apogee-SDK
 program, not a Linux one: `guest_sdk::public_input` and `guest_sdk::commit` issue
 no ecall, `guest_sdk::advice` issues no ecall, and the only ecalls left in the ABI
-are `EXIT` and the four delegation numbers, every one of which a circuit admits.
+are `EXIT` and the six delegation numbers, every one of which a circuit admits.
 `emulator::GuestIo` is `{ input, advice }` and nothing else — the two byte strings
 a run is given, one of which the statement carries and one of which nothing binds.
 

@@ -791,7 +791,7 @@ path and needed nothing of the generic machinery at all.
 
 **S21's `KECCAK_F` was one constructor, one registry arm and one fill too** — plus the
 `deleg` query, which is `docs/spec/memory.md` §2.1's table and not this crate's. Its arm sits
-**after** the minimum-height guard, because a delegation family carries no lookup channel and
+**after** the minimum-height guard, whose floor a delegation family's own channels set and
 so meets no `BITS ≤ trace_vars` assertion: it is built at every `n` the artifact accepts, and
 in practice at `2^8`. It reads no generic channel and lists no setup commitment at all, so its
 opening claim is `M ++ W` — the first of any family. `docs/spec/delegation.md` is the ABI and

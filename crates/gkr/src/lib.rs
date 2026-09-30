@@ -412,6 +412,234 @@ pub fn self_check(
     Ok(())
 }
 
+/// A [`self_check`] failure, explained: the gate that disagrees, and every
+/// value it read to get there.
+///
+/// [`SelfCheckError`] names the gate list, the row and the relation, which is
+/// enough to find the constraint in `checker dump` and not enough to see *why*
+/// it failed. This returns the rest: the gate's operands, each by address, by
+/// the name the artifact gives that column, and by its value at that row; and
+/// the two sides of the disagreement — what the gate computes against what the
+/// forward pass wrote, or against the zero an enforcing gate owes.
+///
+/// It is what closes the distance between cause and symptom. A wrong fill, a
+/// frame value at or above its modulus, a gated conclusion written
+/// `b = enable` where it had to be `enable · (1 − b) = 0`, all reach a reader
+/// today as one layer number; each of them reaches a reader through this as a
+/// named relation whose `live` column is 1 and whose borrow column is 0.
+///
+/// **Recomputes exactly one row**, so it costs nothing worth measuring and may
+/// be called on any failure. It finds the failing gate itself rather than
+/// taking one, because `SelfCheckError` does not carry the gate index and this
+/// way the two never disagree. Returns the lines to print, outermost first;
+/// an empty vector means the row no longer disagrees, which can only happen if
+/// `values` is not the `values` the failure came from.
+///
+/// Compiled unconditionally, and called from `prover`'s `debug-info` build.
+/// `crates/gkr/tests/explain.rs` is what keeps it honest in the default build,
+/// master anti-goal 1's hazard being a configuration nobody exercises.
+pub fn explain_self_check(
+    artifact: &CircuitArtifact,
+    values: &LayerValues,
+    challenges: &ExternalChallenges,
+    failure: &SelfCheckError,
+) -> Vec<String> {
+    let (k, y) = (failure.layer, failure.row);
+    if k >= artifact.depth() {
+        return vec![format!(
+            "explain: layer {k} is outside a circuit of depth {}",
+            artifact.depth()
+        )];
+    }
+    let list = &artifact.layers[k];
+    let reader = RowReader::new(artifact, &values.base, &values.layers, k);
+    if y >= reader.rows {
+        return vec![format!(
+            "explain: row {y} is outside gate list {k}'s {} rows",
+            reader.rows
+        )];
+    }
+    let resolved = ResolvedList::new(artifact, k, challenges);
+    let mut s = reader.scratch(&resolved);
+    reader.load(y, &resolved, &mut s);
+    let (producing, enforcing) = (resolved.producing(), resolved.enforcing());
+    let written = &values.layers[k];
+
+    // The first disagreement, in `self_check`'s own order: the producing gates
+    // of the row before its enforcing ones.
+    let mut failing = None;
+    for (j, column) in written.iter().enumerate().take(producing) {
+        let value = resolved.gate(j, &s.lower, &s.upper, &s.virtuals, &mut s.gates);
+        if value != column.get(y) {
+            failing = Some((j, value, Some(column.get(y))));
+            break;
+        }
+    }
+    if failing.is_none() {
+        for j in producing..producing + enforcing {
+            let value = resolved.gate(j, &s.lower, &s.upper, &s.virtuals, &mut s.gates);
+            if value != Fr::ZERO {
+                failing = Some((j, value, None));
+                break;
+            }
+        }
+    }
+    let (j, computed, expected) = match failing {
+        Some(f) => f,
+        None => return Vec::new(),
+    };
+
+    let (gate, relation) = if j < producing {
+        (&list.producing[j].gate, list.producing[j].relation)
+    } else {
+        let e = &list.enforcing[j - producing];
+        (&e.gate, e.relation)
+    };
+    let name = artifact
+        .relations
+        .get(relation as usize)
+        .map_or("<no such relation>", |r| r.name.as_str());
+    let kind = if j < producing {
+        "producing"
+    } else {
+        "enforcing"
+    };
+    let mut out = vec![format!(
+        "gate list {k} row {y}: {kind} gate {j}, relation {relation} {name}"
+    )];
+    out.push(match expected {
+        Some(w) => format!(
+            "  computed {} but the layer holds {}",
+            show(computed),
+            show(w)
+        ),
+        None => format!(
+            "  computed {}, and an enforcing gate owes 0",
+            show(computed)
+        ),
+    });
+
+    // Every operand, in the kernel's own value order, so the line numbers line
+    // up with the formula `checker dump` prints for the same relation.
+    let halving = list.halving;
+    for op in gate.operands() {
+        let label = operand_name(artifact, k, &op);
+        match op {
+            PolyAddress::Virtual(kind) => {
+                let i = artifact
+                    .virtuals
+                    .iter()
+                    .position(|(v, _)| *v == kind)
+                    .expect("a validated artifact lists every virtual table it reads");
+                out.push(format!("  {op} = {}   {label}", show(s.virtuals[i])));
+            }
+            PolyAddress::Cached { offset, .. } => {
+                out.push(format!(
+                    "  {op} = {}   {label}",
+                    show(s.gates[offset as usize])
+                ));
+            }
+            other => {
+                let i = explain_column_index(artifact, k, &other);
+                if halving {
+                    out.push(format!(
+                        "  {op} = ({}, {})   {label}, the two children",
+                        show(s.lower[i]),
+                        show(s.upper[i])
+                    ));
+                } else {
+                    out.push(format!("  {op} = {}   {label}", show(s.lower[i])));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// An `Fr` as a debugging line wants it: a small value in decimal, anything
+/// else as its 32 canonical bytes in hex, **in `to_bytes` order**.
+///
+/// Decimal for a small value because most of what a failing gate reads is a
+/// bit, a limb, a row index or a count, and `1` reads better than 56 zeros and
+/// a digit. `to_bytes` order for the rest because that is the one encoding this
+/// repository puts on a wire, and `prover`'s debug log prints field elements
+/// the same way, so a value here greps against a value there.
+fn show(x: Fr) -> String {
+    let le = x.to_bytes();
+    // Below 2^32: the canonical little-endian bytes above the low four are 0.
+    if le[4..].iter().all(|b| *b == 0) {
+        return format!("{}", u32::from_le_bytes([le[0], le[1], le[2], le[3]]));
+    }
+    le.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// What the artifact calls the column an operand names.
+///
+/// A committed column has a name of its own. An inner column does not — it is a
+/// gate's output — so it is named by **the relation that wrote it**, which is
+/// what makes a failure at layer 9 of a delegation circuit legible at all.
+fn operand_name(artifact: &CircuitArtifact, k: usize, op: &PolyAddress) -> String {
+    match *op {
+        PolyAddress::Memory(i) => artifact
+            .memory
+            .get(i as usize)
+            .cloned()
+            .unwrap_or_else(|| "<unnamed>".to_string()),
+        PolyAddress::Witness(i) => artifact
+            .witness
+            .get(i as usize)
+            .cloned()
+            .unwrap_or_else(|| "<unnamed>".to_string()),
+        PolyAddress::Setup(i) => artifact
+            .setup
+            .get(i as usize)
+            .cloned()
+            .unwrap_or_else(|| "<unnamed>".to_string()),
+        PolyAddress::Virtual(_) => "virtual table".to_string(),
+        PolyAddress::Cached { layer, offset } => artifact
+            .layers
+            .get(layer as usize)
+            .and_then(|l| l.cached.get(offset as usize))
+            .map_or_else(|| "<unnamed>".to_string(), |e| e.name.clone()),
+        PolyAddress::Inner { layer, offset } => {
+            // Layer `layer` is written by gate list `layer - 1`.
+            let written_by = (layer as usize)
+                .checked_sub(1)
+                .and_then(|list| artifact.layers.get(list))
+                .and_then(|l| l.producing.get(offset as usize))
+                .and_then(|e| artifact.relations.get(e.relation as usize));
+            match written_by {
+                Some(r) => format!("written by {}", r.name),
+                None => "<no producing gate>".to_string(),
+            }
+        }
+        PolyAddress::Scratch(i) => {
+            let _ = k;
+            artifact
+                .scratch
+                .get(i as usize)
+                .map_or_else(|| "<unnamed>".to_string(), |slot| slot.name.clone())
+        }
+    }
+}
+
+/// Where a column operand of gate list `k` sits in layer `k`'s value order.
+///
+/// A deliberate literal duplicate of `gkr_verify`'s own `column_index`, which
+/// is private to that crate and on its hottest path. Keeping this copy beside
+/// the one caller that needs it costs eight lines; making the original public
+/// would widen the verifier half's API for a debugging aid.
+fn explain_column_index(artifact: &CircuitArtifact, k: usize, op: &PolyAddress) -> usize {
+    let (m, w) = (artifact.memory.len(), artifact.witness.len());
+    match *op {
+        PolyAddress::Memory(i) => i as usize,
+        PolyAddress::Witness(i) => m + i as usize,
+        PolyAddress::Setup(i) => m + w + i as usize,
+        PolyAddress::Inner { offset, .. } => offset as usize,
+        other => panic!("gate list {k} of a validated artifact cannot read {other} as a column"),
+    }
+}
+
 /// `values` has the artifact's shape: the base as [`check_base`] holds it, one
 /// layer per gate list, each of the artifact's width and height. Without it, a
 /// missing layer or column panics where it is first read, an extra column below

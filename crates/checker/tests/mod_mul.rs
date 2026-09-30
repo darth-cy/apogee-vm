@@ -5,9 +5,18 @@
 //! schoolbook identity `a·b = q·m + out` with `a`, `b` and `out` all below
 //! `m`, and the 32-bit bound on every limb that crosses the frame.
 //!
-//! The arithmetic is checked the only way a circuit can be — by running its
-//! forward pass over a witness built from **`u128` host arithmetic**, and
-//! asserting the circuit accepts it. Nothing here shares a line with
+//! The arithmetic is checked row by row: each row is built from **`u128` host
+//! arithmetic** and evaluated alone through `checker::violated_relations`, its
+//! row-local scratch computed by `gkr::gate_values`, exactly as
+//! `crates/checker/tests/add_sub.rs` does.
+//!
+//! **There is no forward pass here, and since S26c there cannot be.** This
+//! family carries the `RANGE16` channel (`docs/spec/delegation.md` §10.3),
+//! whose table needs sixteen variables, so its circuit cannot be built at the
+//! reduced height a whole-shard forward pass would need — `family_circuit`
+//! returns `None` below `2^16`. Evaluating one row of the real `2^16` circuit
+//! is both cheaper and a stronger statement than a forward pass over a toy
+//! height ever was. Nothing here shares a line with
 //! `crates/prover`'s fill or with `crates/emulator`'s executor: the operands,
 //! the product, the quotient, the remainder and every carry are computed here
 //! from `u128` primitives, so a circuit that stated anything but `a·b mod m`
@@ -25,13 +34,18 @@ use constants::{challenge_slot, guest_memory, memory as mem};
 use constraints::mod_mul;
 use constraints::{CircuitArtifact, PolyAddress};
 use field::Fr;
-use gkr::{BaseLayer, ExternalChallenges, LayerValues};
+use gkr::{gate_values, insert_lookup_challenges, virtual_at_row, ExternalChallenges};
 use poly::{MultilinearPoly, PolyBacking};
 
-/// Eight rows: room for one invocation per selector, two corner rows and
-/// padding both.
-const VARS: u32 = 3;
-const ROWS: usize = 1 << VARS;
+/// The circuit's own height, because a channel-carrying family has only one:
+/// `RANGE16`'s table needs sixteen variables.
+const VARS: u32 = 16;
+
+/// The rows this suite builds and evaluates — room for one invocation per
+/// selector, two corner rows and padding both. The other 65,528 rows of the
+/// circuit are never materialized: a relation is row-local, so one row is all
+/// an evaluation needs.
+const ROWS: usize = 8;
 
 /// A 256-bit value as eight little-endian 32-bit limbs, held as `u128` halves so
 /// the test's own arithmetic needs no big-integer type.
@@ -266,41 +280,43 @@ fn witness(live: &[Invocation]) -> Vec<(PolyAddress, MultilinearPoly)> {
             i.frame().1[j] as u64
         });
     }
-    // The gap bits: `4·cycle + FRAME_DELTA − 0 − 1`, 38 bits a word.
+    // The gap, `4·cycle + FRAME_DELTA − 0 − 1`, as two RANGE16 chunks a word:
+    // since S26c this family range-checks rather than decomposing into bits.
     for j in 0..f::FRAME_WORDS {
-        for bit in 0..38 {
-            let address = constraints::delegation::gap_bit(j, bit);
+        for c in 0..constraints::delegation::GAP_CHUNKS {
             let values = (0..ROWS)
                 .map(|r| {
                     live.get(r).map_or(0, |i| {
                         let gap = mem::TS_STEP * i.cycle + constants::delegation::FRAME_DELTA - 1;
-                        (gap >> bit) & 1
+                        (gap >> (16 * (c as u32 + 1))) & 0xffff
                     })
                 })
                 .collect();
-            out.push((address, column(values)));
+            out.push((mod_mul::gap_chunk(j, c), column(values)));
         }
     }
-    for bit in 0..constraints::delegation::BASE_LOW_BITS {
-        let address = constraints::delegation::base_low_bit(f::FRAME_WORDS, bit);
+    let low = |i: &Invocation| ((i.base - guest_memory::RAM_ORIGIN) / 4) as u64;
+    let room = |i: &Invocation| (1u64 << 31) - f::FRAME_BYTES as u64 - i.base as u64;
+    for (address, pick, shift) in [
+        (mod_mul::base_low(), &low as &dyn Fn(&Invocation) -> u64, 0),
+        (
+            mod_mul::base_low_hi(),
+            &low as &dyn Fn(&Invocation) -> u64,
+            16,
+        ),
+        (
+            mod_mul::base_room(),
+            &room as &dyn Fn(&Invocation) -> u64,
+            0,
+        ),
+        (
+            mod_mul::base_room_hi(),
+            &room as &dyn Fn(&Invocation) -> u64,
+            16,
+        ),
+    ] {
         let values = (0..ROWS)
-            .map(|r| {
-                live.get(r).map_or(0, |i| {
-                    (((i.base - guest_memory::RAM_ORIGIN) / 4) >> bit) as u64 & 1
-                })
-            })
-            .collect();
-        out.push((address, column(values)));
-    }
-    for bit in 0..constraints::delegation::BASE_ROOM_BITS {
-        let address = constraints::delegation::base_room_bit(f::FRAME_WORDS, bit);
-        let values = (0..ROWS)
-            .map(|r| {
-                live.get(r).map_or(0, |i| {
-                    let room = (1u64 << 31) - f::FRAME_BYTES as u64 - i.base as u64;
-                    (room >> bit) & 1
-                })
-            })
+            .map(|r| live.get(r).map_or(0, |i| pick(i) >> shift))
             .collect();
         out.push((address, column(values)));
     }
@@ -319,31 +335,36 @@ fn witness(live: &[Invocation]) -> Vec<(PolyAddress, MultilinearPoly)> {
             .collect();
         out.push((mod_mul::m_limb(k), column(values)));
     }
-    // Each value's word bits, then its `< m` chain.
+    // Each value's eight limb halfwords, then its `< m` chain: eight
+    // differences, their halfwords and eight borrows.
     for v in [mod_mul::A, mod_mul::B, mod_mul::OUT] {
         for k in 0..f::LIMBS {
-            for t in 0..32 {
-                let values = (0..ROWS)
-                    .map(|r| {
-                        live.get(r)
-                            .map_or(0, |i| ((i.values()[v].limbs()[k] >> t) & 1) as u64)
-                    })
-                    .collect();
-                out.push((mod_mul::value_bit(v, k, t), column(values)));
-            }
+            let values = (0..ROWS)
+                .map(|r| {
+                    live.get(r)
+                        .map_or(0, |i| (i.values()[v].limbs()[k] >> 16) as u64)
+                })
+                .collect();
+            out.push((mod_mul::value_hi(v, k), column(values)));
         }
-        for i in 0..f::LIMBS {
-            for t in 0..32 {
+        for (address, shift) in [
+            (&mod_mul::diff as &dyn Fn(usize, usize) -> PolyAddress, 0u32),
+            (
+                &mod_mul::diff_hi as &dyn Fn(usize, usize) -> PolyAddress,
+                16,
+            ),
+        ] {
+            for i in 0..f::LIMBS {
                 let values = (0..ROWS)
                     .map(|r| {
                         live.get(r).map_or(0, |inv| {
                             let (diff, _) =
                                 borrow_chain(&inv.values()[v].limbs(), &inv.m().limbs());
-                            (diff[i] >> t) & 1
+                            diff[i] >> shift
                         })
                     })
                     .collect();
-                out.push((mod_mul::diff_bit(v, i, t), column(values)));
+                out.push((address(v, i), column(values)));
             }
         }
         for i in 0..f::LIMBS {
@@ -357,42 +378,46 @@ fn witness(live: &[Invocation]) -> Vec<(PolyAddress, MultilinearPoly)> {
             out.push((mod_mul::borrow_bit(v, i), column(values)));
         }
     }
-    // The quotient: its limbs, then its bits.
-    for k in 0..f::LIMBS {
-        let values = (0..ROWS)
-            .map(|r| live.get(r).map_or(0, |i| i.quotient().limbs()[k] as u64))
-            .collect();
-        out.push((mod_mul::q_limb(k), column(values)));
-    }
-    for k in 0..f::LIMBS {
-        for t in 0..32 {
+    // The quotient: its limbs, then their halfwords.
+    for (shift, address) in [
+        (0u32, &mod_mul::q_limb as &dyn Fn(usize) -> PolyAddress),
+        (16, &mod_mul::q_hi as &dyn Fn(usize) -> PolyAddress),
+    ] {
+        for k in 0..f::LIMBS {
             let values = (0..ROWS)
                 .map(|r| {
                     live.get(r)
-                        .map_or(0, |i| ((i.quotient().limbs()[k] >> t) & 1) as u64)
+                        .map_or(0, |i| (i.quotient().limbs()[k] >> shift) as u64)
                 })
                 .collect();
-            out.push((mod_mul::q_bit(k, t), column(values)));
+            out.push((address(k), column(values)));
         }
     }
-    // The carries, offset.
+    // The carries: the unsigned offset value, then its two RANGE16 chunks.
     for k in 0..f::CARRIES {
-        for t in 0..f::CARRY_BITS {
+        let offset = |i: &Invocation| (i.carries()[k] + f::CARRY_OFFSET as i128) as u64;
+        let values = (0..ROWS).map(|r| live.get(r).map_or(0, &offset)).collect();
+        out.push((mod_mul::carry(k), column(values)));
+        for c in 0..constraints::delegation::GAP_CHUNKS {
             let values = (0..ROWS)
                 .map(|r| {
-                    live.get(r).map_or(0, |i| {
-                        let offset = i.carries()[k] + f::CARRY_OFFSET as i128;
-                        ((offset >> t) & 1) as u64
-                    })
+                    live.get(r)
+                        .map_or(0, |i| (offset(i) >> (16 * (c as u32 + 1))) & 0xffff)
                 })
                 .collect();
-            out.push((mod_mul::carry_bit(k, t), column(values)));
+            out.push((mod_mul::carry_chunk(k, c), column(values)));
         }
     }
+    // The channel's multiplicity is `crates/trace`'s, not a fill's, and no gate
+    // reads it — but `a.committed()` names it, so the column has to exist.
+    // Zero is what a multiplicity is on a row the table does not hold.
+    out.push((mod_mul::multiplicity_column(), column(vec![0; ROWS])));
     out
 }
 
-fn challenges() -> ExternalChallenges {
+/// The memory challenges, and — since S26c — the channel's `g` and the `beta`
+/// powers its tuple positions read.
+fn challenges_for(a: &CircuitArtifact) -> ExternalChallenges {
     let mut ch = ExternalChallenges::new();
     for (slot, value) in [
         (challenge_slot::MEM_GAMMA, 3u64),
@@ -402,11 +427,8 @@ fn challenges() -> ExternalChallenges {
     ] {
         ch.insert(slot, Fr::from_u64(value));
     }
+    insert_lookup_challenges(&mut ch, Fr::from_u64(13), Fr::from_u64(17), a);
     ch
-}
-
-fn forward(a: &CircuitArtifact, columns: Vec<(PolyAddress, MultilinearPoly)>) -> LayerValues {
-    gkr::forward(a, &BaseLayer::new(columns), &challenges())
 }
 
 fn corrupt(
@@ -425,12 +447,84 @@ fn corrupt(
     columns
 }
 
-/// The relation `self_check` must name, or a panic saying it passed.
+/// One row of a column set as a witness row of `a`, its scratch computed
+/// row-locally by the engine's own gate kernel.
+fn witness_row(
+    a: &CircuitArtifact,
+    columns: &[(PolyAddress, MultilinearPoly)],
+    row: usize,
+) -> checker::WitnessRow {
+    let committed: Vec<Fr> = a
+        .committed()
+        .into_iter()
+        .map(|address| {
+            columns
+                .iter()
+                .find(|(at, _)| *at == address)
+                .unwrap_or_else(|| panic!("no column for {address}"))
+                .1
+                .get(row)
+        })
+        .collect();
+    let virtuals: Vec<Fr> = a
+        .virtuals
+        .iter()
+        .map(|(k, _)| virtual_at_row(*k, row))
+        .collect();
+    let ch = challenges_for(a);
+    let mut scratch = vec![Fr::ZERO; a.scratch.len()];
+    let mut lower = committed.clone();
+    for k in 0..a.depth() {
+        if a.layers[k].halving {
+            break;
+        }
+        let v: &[Fr] = if k == 0 { &virtuals } else { &[] };
+        let values = gate_values(a, k, &lower, &[], v, &ch);
+        let produced = values[..a.layers[k].producing.len()].to_vec();
+        for (j, value) in produced.iter().enumerate() {
+            let address = PolyAddress::Inner {
+                layer: k as u32 + 1,
+                offset: j as u32,
+            };
+            let slot = a
+                .scratch
+                .iter()
+                .position(|s| s.address == address)
+                .expect("every inner column has a scratch slot");
+            scratch[slot] = *value;
+        }
+        lower = produced;
+    }
+    checker::WitnessRow {
+        committed,
+        row,
+        scratch,
+    }
+}
+
+/// The relation the corrupted row must break, or a panic saying nothing did.
+///
+/// Every row this suite builds is evaluated, so a corruption on any of them is
+/// found; the first violation in relation order is returned, which is what the
+/// old whole-circuit `self_check` reported too.
 fn refusal(a: &CircuitArtifact, columns: Vec<(PolyAddress, MultilinearPoly)>) -> String {
-    let values = forward(a, columns);
-    match gkr::self_check(a, &values, &challenges()) {
-        Ok(()) => panic!("the corrupted witness satisfies every gate"),
-        Err(e) => e.relation,
+    for row in 0..ROWS {
+        let violated =
+            checker::violated_relations(a, &witness_row(a, &columns, row), &challenges_for(a));
+        if let Some(name) = violated.first() {
+            return name.clone();
+        }
+    }
+    panic!("the corrupted witness satisfies every gate")
+}
+
+/// Every relation every row satisfies, or a panic naming the first that does
+/// not.
+fn assert_every_row_holds(a: &CircuitArtifact, columns: &[(PolyAddress, MultilinearPoly)]) {
+    for row in 0..ROWS {
+        let violated =
+            checker::violated_relations(a, &witness_row(a, columns, row), &challenges_for(a));
+        assert!(violated.is_empty(), "row {row} breaks {violated:?}");
     }
 }
 
@@ -508,7 +602,15 @@ fn the_circuit_validates_and_keeps_the_memory_rule() {
     assert_eq!(a.memory.len(), mod_mul::MEMORY_COLUMNS);
     assert_eq!(a.witness.len(), mod_mul::WITNESS_COLUMNS);
     assert!(a.setup.is_empty());
-    assert!(a.lookups.is_empty(), "a delegation family has no lookup");
+    assert!(
+        !a.lookups.is_empty(),
+        "since S26c this family's bounds are obligations, not bit decompositions"
+    );
+    assert_eq!(
+        constraints::lookup::check_discharge(&a, &mod_mul::channels()),
+        Ok(()),
+        "every obligation has its denominator and the channel its table fraction"
+    );
     assert_eq!(
         checker::check_laws(&a),
         Ok(()),
@@ -529,8 +631,7 @@ fn an_honest_witness_satisfies_every_gate() {
     let a = mod_mul::artifact(VARS);
     let live = honest();
     assert_eq!(live.len(), f::CODES.len() + 2);
-    let values = forward(&a, witness(&live));
-    assert_eq!(gkr::self_check(&a, &values, &challenges()), Ok(()));
+    assert_every_row_holds(&a, &witness(&live));
 }
 
 // ---------------------------------------------------------------------------
@@ -640,21 +741,19 @@ fn a_result_not_below_the_modulus_is_refused() {
             row,
             Fr::from_u64(outl[k] as u64),
         );
+        columns = corrupt(
+            columns,
+            mod_mul::value_hi(mod_mul::OUT, k),
+            row,
+            Fr::from_u64((outl[k] >> 16) as u64),
+        );
         columns = corrupt(columns, mod_mul::q_limb(k), row, Fr::from_u64(ql[k] as u64));
-        for t in 0..32 {
-            columns = corrupt(
-                columns,
-                mod_mul::value_bit(mod_mul::OUT, k, t),
-                row,
-                Fr::from_u64(((outl[k] >> t) & 1) as u64),
-            );
-            columns = corrupt(
-                columns,
-                mod_mul::q_bit(k, t),
-                row,
-                Fr::from_u64(((ql[k] >> t) & 1) as u64),
-            );
-        }
+        columns = corrupt(
+            columns,
+            mod_mul::q_hi(k),
+            row,
+            Fr::from_u64((ql[k] >> 16) as u64),
+        );
     }
     let (diff, borrow) = borrow_chain(&outl, &ml);
     for i in 0..f::LIMBS {
@@ -664,23 +763,28 @@ fn a_result_not_below_the_modulus_is_refused() {
             row,
             Fr::from_u64(borrow[i]),
         );
-        for t in 0..32 {
-            columns = corrupt(
-                columns,
-                mod_mul::diff_bit(mod_mul::OUT, i, t),
-                row,
-                Fr::from_u64((diff[i] >> t) & 1),
-            );
-        }
+        columns = corrupt(
+            columns,
+            mod_mul::diff(mod_mul::OUT, i),
+            row,
+            Fr::from_u64(diff[i]),
+        );
+        columns = corrupt(
+            columns,
+            mod_mul::diff_hi(mod_mul::OUT, i),
+            row,
+            Fr::from_u64(diff[i] >> 16),
+        );
     }
     for (k, c) in carries.iter().enumerate().take(f::CARRIES) {
-        for t in 0..f::CARRY_BITS {
-            let offset = *c + f::CARRY_OFFSET as i128;
+        let offset = (*c + f::CARRY_OFFSET as i128) as u64;
+        columns = corrupt(columns, mod_mul::carry(k), row, Fr::from_u64(offset));
+        for j in 0..constraints::delegation::GAP_CHUNKS {
             columns = corrupt(
                 columns,
-                mod_mul::carry_bit(k, t),
+                mod_mul::carry_chunk(k, j),
                 row,
-                Fr::from_u64(((offset >> t) & 1) as u64),
+                Fr::from_u64((offset >> (16 * (j as u32 + 1))) & 0xffff),
             );
         }
     }
@@ -757,7 +861,7 @@ fn a_changed_quotient_is_refused() {
 fn a_changed_carry_is_refused() {
     let a = mod_mul::artifact(VARS);
     let columns = witness(&honest());
-    let bad = corrupt(columns, mod_mul::carry_bit(0, 0), 0, Fr::from_u64(1));
+    let bad = corrupt(columns, mod_mul::carry(0), 0, Fr::from_u64(1));
     let relation = refusal(&a, bad);
     assert!(
         relation.starts_with("limb"),
@@ -765,39 +869,42 @@ fn a_changed_carry_is_refused() {
     );
 }
 
-/// A limb above `2^32` — the bound without which the limb identity is an `Fr`
-/// equation rather than an integer one. The word's own decode refuses it.
+/// The 32-bit limb bound — without which the limb identity is an `Fr` equation
+/// rather than an integer one — **lives in the channel, not in a gate**.
+///
+/// Until S26c a limb's bound was its 32-bit decomposition and `a_word0` was the
+/// gate carrying it. Now it is the halfword pair of `docs/spec/memory.md` §7,
+/// and the halfword column is read by **nothing but its own two obligations**:
+/// no gate anywhere names it. So a wrong halfword breaks no relation at all and
+/// is refused by the `RANGE16` channel alone — which is precisely the statement
+/// that the bound moved rather than vanished.
+///
+/// `checker::violated_lookups` is the native reading of that obligation, the
+/// same statement LogUp proves.
 #[test]
-fn a_limb_above_its_bound_is_refused() {
+fn a_limb_above_its_bound_is_refused_by_the_channel_alone() {
     let a = mod_mul::artifact(VARS);
-    let mut columns = witness(&honest());
-    // Both sides of the word, so the write-back rule still holds and the
-    // relation named is the decomposition that carries the bound.
-    for field in [mod_mul::WORD_READ_VALUE, mod_mul::WORD_WRITE_VALUE] {
-        columns = corrupt(
-            columns,
-            mod_mul::word(f::A_WORD, field),
-            0,
-            Fr::from_u64(1 << 33),
-        );
-    }
-    assert_eq!(refusal(&a, columns), "a_word0");
-}
+    let columns = witness(&honest());
+    let hi = mod_mul::value_hi(mod_mul::A, 0);
+    // The honest halfword is nonzero on this row, so zeroing it leaves the
+    // derived low half equal to the whole limb — above `2^16`.
+    let honest_hi = columns
+        .iter()
+        .find(|(at, _)| *at == hi)
+        .expect("the halfword column")
+        .1
+        .get(0);
+    assert_ne!(honest_hi, Fr::ZERO, "the row exercises the high halfword");
+    let bad = corrupt(columns, hi, 0, Fr::ZERO);
 
-/// A non-boolean bit anywhere: the booleanity gate of that bit.
-#[test]
-fn a_non_boolean_bit_is_refused() {
-    let a = mod_mul::artifact(VARS);
-    for (address, name) in [
-        (mod_mul::value_bit(mod_mul::A, 0, 0), "a_bit0_0_boolean"),
-        (mod_mul::q_bit(3, 5), "q_bit3_5_boolean"),
-        (mod_mul::diff_bit(mod_mul::OUT, 2, 7), "out_diff2_7_boolean"),
-        (mod_mul::carry_bit(4, 9), "carry4_9_boolean"),
-        (mod_mul::selector(1), "selector2_boolean"),
-    ] {
-        let bad = corrupt(witness(&honest()), address, 0, Fr::from_u64(2));
-        assert_eq!(refusal(&a, bad), name, "{address}");
-    }
+    // Not one relation objects: the halfword is a lookup's operand and nothing
+    // else's.
+    assert_every_row_holds(&a, &bad);
+    let violated = checker::violated_lookups(&a, &witness_row(&a, &bad, 0));
+    assert!(
+        violated.iter().any(|name| name == "a0_lo_range"),
+        "the low half of `a`'s limb 0 is out of range: {violated:?}"
+    );
 }
 
 /// A selector word the invocation rewrote: the read-only rule.
@@ -906,29 +1013,40 @@ fn the_shape_is_the_manifests() {
     assert_eq!(a.memory.len(), mod_mul::MEMORY_COLUMNS, "M");
     assert_eq!(a.witness.len(), mod_mul::WITNESS_COLUMNS, "W");
     assert!(a.setup.is_empty(), "no setup column");
-    assert!(a.virtuals.is_empty(), "no virtual table");
-    assert!(a.lookups.is_empty(), "no lookup");
-    assert!(mod_mul::channels().is_empty(), "no channel");
-    assert_eq!(a.outputs.len(), 2, "the two memory roots");
+    // Since S26c: one virtual table, one channel, and the obligations that
+    // replaced 3,143 bit columns (`docs/spec/delegation.md` §10.3).
+    assert_eq!(a.virtuals.len(), 1, "V[range16]");
+    assert_eq!(mod_mul::channels().len(), 1, "one channel, RANGE16");
+    assert_eq!(a.lookups.len(), 274, "obligations");
+    assert_eq!(
+        a.outputs.len(),
+        4,
+        "the two memory roots and the channel's pair"
+    );
 
     // `lists (row-wise + halving)` and `top`, §1.2's columns.
-    assert_eq!(a.layers.len(), 22, "gate lists");
+    assert_eq!(a.layers.len(), 26, "gate lists");
     let halving = a.layers.iter().filter(|l| l.halving).count();
     assert_eq!(halving, 16, "one halving list per trace variable");
 
     // `inner` is the width of every layer above the base, summed.
     let inner: usize = a.layers.iter().map(|l| l.width as usize).sum();
-    assert_eq!(inner, 158, "inner columns");
-    assert_eq!(a.relations.len(), 3_660, "relations");
+    assert_eq!(inner, 2_244, "inner columns");
+    assert_eq!(a.relations.len(), 2_369, "relations");
 
     // The `enforcing (d1/d2)` split. An enforcing relation is one with no
     // output, and **its degree is 1 exactly when no term multiplies two
     // columns** — which in this family means exactly `GateDef::Linear`, every
-    // other gate here carrying either a `live` factor or a real product. The
-    // degree-1 gates are the 17 `writes_back_w`, `selector_rule`,
-    // `one_modulus_a_live_row`, the 8 `m_limb{k}_rule`, the 24 `*_word`, the 8
-    // `q_word`, the 24 `*_canonical` and the 3 `*_below_modulus`: 86, and
-    // nothing else.
+    // other gate here carrying either a `live` factor or a real product.
+    //
+    // Since S26c the 3,416 booleanity gates are gone with the bit
+    // decompositions they accompanied: 3,502 enforcing relations become 125.
+    // The degree-1 half is the 17 `writes_back_w`, `selector_rule`,
+    // `one_modulus_a_live_row`, the 8 `m_limb{k}_rule`, the 24 `*_canonical`
+    // and the 3 `*_below_modulus`; the degree-2 half is the 4
+    // `selector{c}_boolean`, the 24 `*_borrow{i}_boolean`, the 15 `limb{k}`,
+    // the frame's `live_boolean` and 25 `addr_w{j}`, and its two base
+    // decompositions.
     let enforcing: Vec<&constraints::Relation> =
         a.relations.iter().filter(|r| r.output.is_none()).collect();
     let degree1 = enforcing
@@ -937,10 +1055,10 @@ fn the_shape_is_the_manifests() {
         .count();
     assert_eq!(
         (enforcing.len(), degree1, enforcing.len() - degree1),
-        (3_502, 86, 3_416),
+        (125, 54, 71),
         "enforcing (d1/d2)"
     );
-    assert_eq!(a.to_bytes().len(), 1_404_716, "wire bytes");
+    assert_eq!(a.to_bytes().len(), 550_391, "wire bytes");
 }
 
 /// What a height does and does not move — the property the manifest's repeated
@@ -953,12 +1071,20 @@ fn the_shape_is_the_manifests() {
 /// ones: each carries one node per output, so `lists` grows by `Δn` and `inner`
 /// by `outputs · Δn`, and nothing else moves at all.
 ///
+/// **The two heights are now `2^16` and `2^18`**: `2^8` is not one this family
+/// can be built at since S26c, because `RANGE16`'s table needs sixteen
+/// variables and `family_circuit` returns `None` below that.
+///
 /// S26 raised this family from `2^8` to `2^16`, and this is what says the raise
 /// was a height and not a circuit change wearing a height's clothes.
 #[test]
 fn a_height_moves_only_the_halving_layers() {
-    let lo = mod_mul::artifact(8);
-    let hi = mod_mul::artifact(16);
+    let lo = mod_mul::artifact(16);
+    let hi = mod_mul::artifact(18);
+    assert!(
+        constraints::family_circuit(constants::family::MOD_MUL, 8).is_none(),
+        "2^8 is not a height this family can be built at since S26c"
+    );
     let d = (hi.trace_vars - lo.trace_vars) as usize;
 
     let committed = |a: &CircuitArtifact| (a.memory.len(), a.witness.len(), a.setup.len());

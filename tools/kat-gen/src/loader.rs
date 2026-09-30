@@ -16,7 +16,7 @@ use std::process::Command;
 use crate::write_vectors;
 
 /// The guest ELFs the loader tests read, and what each is for.
-pub const ELF_FIXTURES: [(&str, &str); 20] = [
+pub const ELF_FIXTURES: [(&str, &str); 22] = [
     (
         "fib",
         "real compiler output: the address and boundary oracle",
@@ -112,6 +112,20 @@ pub const ELF_FIXTURES: [(&str, &str); 20] = [
          all four selectors, each answer computed a second way in software and \
          compared, and the three vendored callers that name no shim at all -- \
          `k256`'s group arithmetic and its scalar, and ark-bn254's two fields",
+    ),
+    (
+        "sha256-ops",
+        "S26c's guest: the SHA256_COMP delegation by name against FIPS 180-4's \
+         own one-block vector, and the digest surface at every length that \
+         moves the Merkle-Damgard padding, each answer checked against a \
+         published digest and against `sha2`",
+    ),
+    (
+        "ec-ops",
+        "S26c's guest: the EC_ADD delegation by name on both curves, every \
+         addition computed a second way in software and compared limb for \
+         limb, the point checked against `k256` and `ark-bn254` by \
+         cross-multiplication, and all four completeness cases",
     ),
 ];
 

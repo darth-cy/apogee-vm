@@ -36,6 +36,59 @@ macro_rules! metric {
     };
 }
 
+/// Emit one debug-log line, in a build with the `debug-info` feature.
+///
+/// Crate-private and not exported, for `metric!`'s reason: a `macro_rules!` at
+/// the crate root is textually in scope for every module declared after it,
+/// which is all this needs.
+///
+/// Two arms. `dlog!(Level, "…", args)` is a line that belongs to no one family
+/// — the block's spine — and `dlog!(Level, family = f, "…", args)` is a line
+/// that belongs to family `f`, which `APOGEE_DEBUG=deep:FAMILY` filters on. The
+/// second arm spells `family =` rather than taking a bare expression because a
+/// string literal is itself an expression, so the two arms would otherwise be
+/// ambiguous and every spine line would be read as a family's.
+///
+/// **The whole expansion is inside the `cfg`**, so with the feature off the
+/// format arguments are never evaluated and a scan written as an argument costs
+/// nothing.
+macro_rules! dlog {
+    ($level:ident, family = $family:expr, $($t:tt)*) => {
+        #[cfg(feature = "debug-info")]
+        {
+            if $crate::debug::enabled_for($crate::debug::Level::$level, $family) {
+                $crate::debug::line(&format!($($t)*));
+            }
+        }
+    };
+    ($level:ident, $($t:tt)*) => {
+        #[cfg(feature = "debug-info")]
+        {
+            if $crate::debug::enabled($crate::debug::Level::$level) {
+                $crate::debug::line(&format!($($t)*));
+            }
+        }
+    };
+}
+
+/// Run the enclosed statements only in a build with the `debug-info` feature.
+///
+/// `metric!`'s counterpart, for the same reason: a scan that walks a shard's
+/// rows costs something, and a loop that emits one line per family should not
+/// run at all in a build that emits none. A single line goes through `dlog!`,
+/// which is itself inside the `cfg`; this is for the scans that compute what
+/// such a line says.
+macro_rules! debug_only {
+    ($($t:tt)*) => {
+        #[cfg(feature = "debug-info")]
+        {
+            $($t)*
+        }
+    };
+}
+
+#[cfg(feature = "debug-info")]
+pub mod debug;
 mod fill;
 pub mod metrics;
 mod phases;
@@ -195,6 +248,41 @@ impl ProverSetup {
         metric!(for f in &families {
             rec.note_family(metrics::family_shape(&f.circuit, f.height));
         });
+        debug_only!(for f in &families {
+            dlog!(
+                Detail,
+                family = f.family,
+                "apogee setup    {:<18} {}",
+                debug::family_name(f.family),
+                debug::circuit(&f.circuit, f.height)
+            );
+            // **The output layout, which two conventions read two ways.**
+            // `verifier_core::reduce_shard` step 9 takes channel `j`'s root pair
+            // at `outputs[2 + 2j]`, counting UP past the two memory roots;
+            // `constraints::lookup::channel_cones` takes it at
+            // `outputs[len - 2·channels + 2j]`, counting DOWN. They name the
+            // same pair exactly when `outputs.len() == 2 + 2·channels`, and
+            // nothing central asserts it — `reduce.rs` only checks the length
+            // against the artifact's and `check_discharge` only needs `>=`. Every
+            // registered circuit satisfies it today, and each family's own test
+            // is what pins it (`constraints::ec_add`'s `outputs.len() == 4`,
+            // `sha256`'s `== 2`). A family whose top layer grew one more output
+            // would have the discharge validating one pair and the verifier
+            // reading another, and it would surface as `Lookup { channel }` on a
+            // channel that is innocent. One integer, printed every run.
+            let want = 2 + 2 * f.circuit.channels.len();
+            if f.circuit.artifact.outputs.len() != want {
+                dlog!(
+                    Phase,
+                    "apogee setup    {} OUTPUT-LAYOUT-BREAK outputs={} want={want} \
+                     (2 memory roots + 2 per channel): reduce_shard step 9 and \
+                     constraints::lookup::channel_cones index from opposite ends and \
+                     no longer agree",
+                    debug::family_name(f.family),
+                    f.circuit.artifact.outputs.len()
+                );
+            }
+        });
         let span = rec.start(Stage::SetupCommit);
         let setup = setup_commitments(&program.image, &program.tables, &program.config, &srs);
         let setup: Vec<Vec<[u8; 64]>> = setup
@@ -223,6 +311,18 @@ impl ProverSetup {
         let span = rec.start(Stage::SetupKeyCheck);
         vk.check().map_err(ProverError::Key)?;
         rec.end(span);
+        // Identity and the SRS digest in full, not truncated: these are the two
+        // values a reader compares against a pinned constant rather than
+        // against another run, and a stale pin is this repository's most
+        // repeated failure (`docs/spec/debug-info.md` §4).
+        dlog!(
+            Phase,
+            "apogee setup    key ok families={} entry_pc={:#x} identity={} srs_digest={}",
+            families.len(),
+            program.image.entry,
+            debug::fr_full(&vk.identity.0),
+            debug::fr_full(&vk.srs_digest)
+        );
         metric!(rec.note_program(metrics::ProgramShape {
             code_version,
             entry_pc: program.image.entry,
@@ -359,6 +459,31 @@ fn statement_inputs_rec(
         h,
     );
     let boundary = build_boundary_finals(log.state());
+    dlog!(
+        Phase,
+        "apogee stmt     shards={} counts={} windows={:?} input={}B output={}B exit={} cycles={}",
+        statement_shards(config, &counts).len(),
+        debug::counts(&config.families, &counts),
+        windows,
+        archive.io_streams().input.len(),
+        archive.io_streams().output.len(),
+        boundary.reg_values[9],
+        archive.cycle_profile().total()
+    );
+    // **A nonzero exit status, on a line of its own.** It is one field among
+    // seven on the line above, and a guest that panicked exits 101 having
+    // published whatever it had committed so far — a journal that decodes, a
+    // proof that verifies, and an answer to a different question. A run whose
+    // guest aborted should not need a careful reading of a dense line to say so.
+    if boundary.reg_values[9] != 0 {
+        dlog!(
+            Phase,
+            "apogee ABORTED  the guest exited {} (x10), journal={}B: this proves an \
+             execution that failed, not one that succeeded",
+            boundary.reg_values[9],
+            archive.io_streams().output.len()
+        );
+    }
     let mut memory_columns = Vec::new();
     for (family, index) in statement_shards(config, &counts) {
         // `M` alone, moved out of the fill: the statement commits nothing else,
@@ -367,6 +492,13 @@ fn statement_inputs_rec(
         memory_columns.push(shard_memory_columns_rec(
             setup, archive, family, index, &windows, rec,
         )?);
+        dlog!(
+            Detail,
+            family = family,
+            "apogee stmt     {:<22} M-columns={}",
+            debug::shard(family, index),
+            memory_columns.last().map_or(0, Vec::len)
+        );
     }
     metric!({
         // The circuits are the setup's, whoever built it: a block metered here
@@ -451,6 +583,35 @@ fn global_commit_phase_rec(
 ) -> GlobalCommitState {
     let total = rec.start(Stage::GlobalCommitTotal);
     let msm = rec.start(Stage::GlobalCommitMsm);
+    // **The phase's bulk, and it is sequential.** One MSM per column of every
+    // shard, ~300 MB a shard, in the one `map` below — and until this line
+    // existed the phase's only output was the `done` line further down, which by
+    // definition never prints on a run that dies or hangs inside it. A block
+    // that looks stuck before any shard is proved is stuck here.
+    //
+    // It is **one line bracketing the phase**, not a tick per shard. A tick
+    // needs the shard's position, and the position is only wanted by the tick:
+    // the default build then has either an unused index or a counter, and
+    // clippy rejects whichever spelling the feature-on build does not. Naming
+    // every shard and its column count here says the same thing before the work
+    // starts, and the `begin`/`done` pair is what localizes a death to the
+    // phase. `docs/spec/debug-info.md` §2.
+    dlog!(
+        Phase,
+        "apogee commit   begin shards={} columns={} per-shard={}",
+        inputs.memory_columns.len(),
+        inputs.memory_columns.iter().map(Vec::len).sum::<usize>(),
+        statement_shards(&vk.config, &inputs.shard_counts)
+            .iter()
+            .zip(&inputs.memory_columns)
+            .map(|((family, index), columns)| format!(
+                "{}:{}",
+                debug::shard(*family, *index),
+                columns.len()
+            ))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
     let memory_commitments: Vec<Vec<[u8; 64]>> = inputs
         .memory_columns
         .iter()
@@ -492,6 +653,21 @@ pub(crate) fn global_commit_from_commitments(
     statement: PublicInputs,
 ) -> GlobalCommitState {
     let global = global_commit(vk, &statement);
+    // The five values every shard's transcript is forked from. Two runs that
+    // should have produced one block and did not diverge here or nowhere, which
+    // is the first question to ask of a streaming-against-archived mismatch and
+    // of any non-determinism: everything downstream is a function of these.
+    dlog!(
+        Phase,
+        "apogee commit   done commitments={} digest={} memory-challenges={}",
+        statement
+            .memory_commitments
+            .iter()
+            .map(Vec::len)
+            .sum::<usize>(),
+        debug::fr_full(&global.digest),
+        debug::frs(&global.memory, 4)
+    );
     GlobalCommitState {
         statement,
         transcript: global.transcript.snapshot(),
@@ -839,6 +1015,25 @@ impl ProvingContext<'_> {
         let total = rec.start(Stage::ShardGkrTotal);
         let reg = self.setup.registration(family);
         let artifact = &reg.circuit.artifact;
+        // The begin line, before any work, and **the one line the whole log is
+        // built around**: the shard region is a `par_iter`, so a run that is
+        // killed, OOMs or hangs leaves its last `begin` without a `done`, and
+        // that pair names the shard that died. `docs/spec/debug-info.md` §2.
+        dlog!(
+            Phase,
+            family = family,
+            "apogee shard    {:<22} [{}/{}] begin h={} witness-cols={}",
+            debug::shard(family, index),
+            self.position(family, index) + 1,
+            self.global.statement.memory_commitments.len(),
+            debug::height(reg.height),
+            artifact.witness.len()
+        );
+        // Declared under the `cfg` and read only inside one, so the default
+        // build has neither the binding nor the `Instant::now` behind it. The
+        // `metric!` seam does the same thing with a `Span`.
+        #[cfg(feature = "debug-info")]
+        let clock = debug::Clock::start();
         let witness: Vec<&MultilinearPoly> = (0..artifact.witness.len() as u32)
             .map(|i| base.get(PolyAddress::Witness(i)).expect("a witness column"))
             .collect();
@@ -867,10 +1062,101 @@ impl ProvingContext<'_> {
             beta,
         );
         rec.end(span);
+        dlog!(
+            Detail,
+            family = family,
+            "apogee shard    {:<22} ts={} g={} beta={}",
+            debug::shard(family, index),
+            debug::ts_window(ts_window),
+            debug::fr(&g),
+            debug::fr(&beta)
+        );
         let (outputs, gkr, replay_from) = {
             let span = rec.start(Stage::ShardForward);
             let values = forward(artifact, base, &challenges);
             rec.end(span);
+            // **`self_check` before the backward pass, and only here.** A
+            // fill or a circuit the forward pass cannot satisfy is otherwise a
+            // proof that fails `verify` with `LayerInconsistency { layer }` —
+            // one number, from a verifier that cannot say whose shard it was or
+            // what the gate meant. Running it here costs another pass over the
+            // shard, which is why it is behind the feature and behind `Detail`,
+            // and buys the gate list, the row, the relation's name and every
+            // value that relation read (`gkr::explain_self_check`).
+            debug_only!(if debug::enabled_for(debug::Level::Detail, family) {
+                let who = debug::shard(family, index);
+                let checked = debug::Clock::start();
+                match gkr::self_check(artifact, &values, &challenges) {
+                    Ok(()) => debug::line(&format!(
+                        "apogee gkr      {who:<22} self_check ok layers={} ms={}",
+                        artifact.depth(),
+                        checked.ms()
+                    )),
+                    Err(failure) => {
+                        // At `Phase`, not `Detail`: a reader who asked for the
+                        // skeleton and got a failed self-check wants the whole
+                        // explanation, not a hint that one exists.
+                        debug::line(&format!(
+                            "apogee gkr      {who:<22} self_check FAILED layer={} row={} relation={}",
+                            failure.layer, failure.row, failure.relation
+                        ));
+                        for text in
+                            gkr::explain_self_check(artifact, &values, &challenges, &failure)
+                        {
+                            debug::line(&format!("apogee gkr      {who:<22}   {text}"));
+                        }
+                    }
+                }
+            });
+            // Per layer: the width the forward pass wrote, and whether the
+            // layer is row-wise or halving. A layer whose columns are all zero
+            // is a fill that wrote nothing into the cone below it, and a
+            // reader who has the failing layer's number from `self_check`
+            // reads its shape off this.
+            debug_only!(if debug::enabled_for(debug::Level::Deep, family) {
+                let who = debug::shard(family, index);
+                // Per layer: the shape the forward pass wrote, and the bytes it
+                // is holding. **No per-cell scan here.** Sweeping every column
+                // of every layer for an all-zero test is ~90M `Fr::get` calls on
+                // one shard — it would make `deep` change what it is measuring,
+                // which is the one thing a debugging aid may not do. The top
+                // layer alone gets that test, below, where it is a handful of
+                // columns and where an all-zero column is a root of 0.
+                let mut cumulative = 0u64;
+                for (k, columns) in values.layers.iter().enumerate() {
+                    let list = &artifact.layers[k];
+                    let bytes = columns.len() as u64 * (1u64 << list.num_vars) * 32;
+                    cumulative += bytes;
+                    debug::line(&format!(
+                        "apogee gkr      {who:<22} layer {}/{} vars={} width={} {} {:.2} GiB \
+                         cumulative {:.2} GiB",
+                        k + 1,
+                        artifact.depth(),
+                        list.num_vars,
+                        columns.len(),
+                        if list.halving { "halving" } else { "row-wise" },
+                        bytes as f64 / (1u64 << 30) as f64,
+                        cumulative as f64 / (1u64 << 30) as f64,
+                    ));
+                }
+                // The top layer, cell by cell: its columns are the outputs, so
+                // an all-zero one is a root of 0 — a channel or a memory side
+                // that proved nothing — and there are a handful of them.
+                if let Some(top) = values.layers.last() {
+                    let zero: Vec<usize> = top
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, c)| debug::all_zero(c))
+                        .map(|(i, _)| i)
+                        .collect();
+                    if !zero.is_empty() {
+                        debug::line(&format!(
+                            "apogee gkr      {who:<22} top layer columns {zero:?} are ALL ZERO \
+                             -- a root of 0 proves nothing"
+                        ));
+                    }
+                }
+            });
             metric!(rec.bytes(
                 ByteClass::ForwardLayers,
                 metrics::layer_values_bytes(&values)
@@ -912,6 +1198,28 @@ impl ProvingContext<'_> {
             });
         });
         rec.end(total);
+        // The GKR output roots, which are what `verify_shard_local` step 10a
+        // holds against the statement and what the block's cross-shard product
+        // multiplies. A root of 0 or 1 where the circuit computes a fraction
+        // tree is the visible end of a channel that proved nothing.
+        dlog!(
+            Detail,
+            family = family,
+            "apogee shard    {:<22} outputs={} read_root={} write_root={}",
+            debug::shard(family, index),
+            outputs.len(),
+            debug::fr(&outputs[constants::memory::READ_ROOT]),
+            debug::fr(&outputs[constants::memory::WRITE_ROOT])
+        );
+        dlog!(
+            Phase,
+            family = family,
+            "apogee shard    {:<22} gkr done layers={} rounds={} ms={}",
+            debug::shard(family, index),
+            gkr.layers.len(),
+            gkr.layers.iter().map(|l| l.rounds.len()).sum::<usize>(),
+            clock.ms()
+        );
         ShardGkr {
             family,
             index,
@@ -934,6 +1242,12 @@ impl ProvingContext<'_> {
         rec: &mut Recorder,
     ) -> (ShardProof, Vec<TranscriptEvent>) {
         let total = rec.start(Stage::ShardOpeningTotal);
+        // **The block's second peak, and it was dark.** This clones every
+        // committed column at full height — 1,420 of them for `EC_ADD` — and
+        // then runs `batch_open`'s MSM, inside the opening region's `par_iter`.
+        // An OOM kill here named nothing at all before this pair existed.
+        #[cfg(feature = "debug-info")]
+        let clock = debug::Clock::start();
         let ShardGkr {
             family,
             index,
@@ -946,6 +1260,13 @@ impl ProvingContext<'_> {
         } = shard;
         let reg = self.setup.registration(family);
         let artifact = &reg.circuit.artifact;
+        dlog!(
+            Phase,
+            family = family,
+            "apogee shard    {:<22} open begin committed={}",
+            debug::shard(family, index),
+            artifact.committed().len()
+        );
         let span = rec.start(Stage::ShardOpeningColumns);
         let columns: Vec<MultilinearPoly> = artifact
             .committed()
@@ -976,6 +1297,27 @@ impl ProvingContext<'_> {
             .collect();
         rec.end(span);
         let span = rec.start(Stage::ShardBatchOpen);
+        // The commitment list's own split, which is the only prover-side view of
+        // what `VerifyError::Opening` — a *unit* variant — collapses: a batch is
+        // one instance, and column `i` carries `ρ^i`, so a list built in the
+        // wrong order is a different statement and the refusal says only
+        // "Opening".
+        dlog!(
+            Detail,
+            family = family,
+            "apogee shard    {:<22} open cms={} = M{}+W{}+S{}{} point={}",
+            debug::shard(family, index),
+            cms.len(),
+            self.global.statement.memory_commitments[self.position(family, index)].len(),
+            witness_commitments.len(),
+            self.setup.vk.setup_commitments[family_index].len(),
+            if reg.circuit.reads_generic_table() {
+                format!("+G{}", self.setup.vk.generic_table.len())
+            } else {
+                String::new()
+            },
+            point.len()
+        );
         let (values, mercury) =
             batch_open(&self.setup.srs, &columns, &cms, &point, &mut transcript)
                 .unwrap_or_else(|e| panic!("opening shard ({family}, {index}): {e:?}"));
@@ -1006,6 +1348,14 @@ impl ProvingContext<'_> {
             proof_bytes: proof.to_bytes().len(),
         }));
         rec.end(total);
+        dlog!(
+            Phase,
+            family = family,
+            "apogee shard    {:<22} open done bytes={} ms={}",
+            debug::shard(proof.family, proof.shard_index),
+            proof.to_bytes().len(),
+            clock.ms()
+        );
         (proof, transcript.event_log().to_vec())
     }
 }

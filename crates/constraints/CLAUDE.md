@@ -383,17 +383,19 @@ pub mod mod_mul {                            // docs/spec/delegation.md §14; S2
   timestamp 0 and then never store a word. Nothing checks that, because there is nothing to
   check; it is structural where a verifier-side check could be forgotten
   (`docs/spec/public-values.md` §5). `PUBLIC_INPUT` and `ADVICE_WINDOWS` share
-  `memory::value_window_artifact`. **The minimum-height guard must
-  name every execution family**: `HEIGHT_MENU` legally holds `2^16` and `2^18`,
-  `VerifyingKey::check` builds a circuit from a key's own `VmConfig`, and a family missing
-  from the guard would reach `lookup::channel_trees`' `BITS <= trace_vars` assertion — a
-  panic inside key validation, in a `no_std` crate the recursion guest links, on bytes a
-  verifier was handed. **`KECCAK_F`'s arm sits below the guard, deliberately**: a family with
-  no lookup channel reaches no such assertion, so there is nothing to pre-empt, and putting
-  it in the guard would refuse the heights these families take — `2^8` for `KECCAK_F`,
-  `POSEIDON2` and `FR_ARITH`, and `2^16` for `MOD_MUL`, which are per family and deliberately
-  not one number (`docs/spec/delegation.md` §9.2). That is why a delegation
-  family **must** carry no channel (`docs/spec/lookup.md` §3).
+  `memory::value_window_artifact`. **The minimum-height guard is derived from each family's own
+  channels, and since S26c it is not a list**: `HEIGHT_MENU` legally holds `2^16` and `2^18`,
+  `VerifyingKey::check` builds a circuit from a key's own `VmConfig`, and a family whose floor
+  the guard did not know would reach `lookup::channel_trees`' `BITS <= trace_vars` assertion —
+  a panic inside key validation, in a `no_std` crate the recursion guest links, on bytes a
+  verifier was handed. `family_circuit` therefore takes each family's `channels()`, takes the
+  widest range channel's `BITS` as its floor, and tests that **before** building the artifact:
+  the seven execution families get 19 as they always did, `MOD_MUL` and `EC_ADD` get 16, and
+  the four channel-free delegation families get 0, which is what lets them take `2^8`
+  (`docs/spec/delegation.md` §9.2, §10.3). It named the seven execution families explicitly
+  until S26c, with a delegation family's arm below it; that worked only while no delegation
+  family had a channel, and keeping a list in step with two families whose heights differ from
+  every other's is exactly the drift the derivation removes.
 - **A circuit that reads the `GENERIC` channel names the packed table as its last three
   setup columns** (S17). `FamilyCircuit::reads_generic_table` is whether any channel spec
   is `GENERIC`. At S17 only `JUMP_BRANCH_SLT` reads it: its `S[0..7]` are identity's

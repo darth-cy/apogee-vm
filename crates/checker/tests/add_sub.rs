@@ -31,7 +31,7 @@ const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../constraints/tests/vectors/add_sub.bin"
 );
-const FIXTURE_SHA256: &str = "74d2f686778331d6fe713a16a183dc036b828a3f5bb19c26a31473da23b30957";
+const FIXTURE_SHA256: &str = "af06f205f4ee83372c0bb134c2f134f6866d8e7ea7ac304574f4d89e1bd820e6";
 
 fn artifact() -> CircuitArtifact {
     add_sub::artifact(VARS)
@@ -447,6 +447,8 @@ fn the_layout_and_the_gates_are_the_specs() {
         "is_deleg_10",
         "is_deleg_11",
         "is_deleg_15",
+        "is_deleg_16",
+        "is_deleg_17",
         "wrap",
         "rd_hi",
         "pc_wrap",
@@ -516,6 +518,12 @@ fn the_layout_and_the_gates_are_the_specs() {
         "is_deleg_15_boolean",
         "deleg_15_is_an_ecall",
         "deleg_15_number",
+        "is_deleg_16_boolean",
+        "deleg_16_is_an_ecall",
+        "deleg_16_number",
+        "is_deleg_17_boolean",
+        "deleg_17_is_an_ecall",
+        "deleg_17_number",
         "ecall_is_exit",
         "rs1_mask_rule",
         "rs2_mask_rule",
@@ -578,10 +586,11 @@ fn the_layout_and_the_gates_are_the_specs() {
 
     // 30, three lower than S26's 33: the frame lost `arg1`, `arg2` and `ram`
     // with the `read`/`write` ecalls, so three `*_gap_hi` witness columns went
-    // with them and every later column moved down. `is_deleg_15` is still a
-    // witness column before these (`docs/spec/delegation.md` §10's append
-    // rule, paid once per delegation type).
-    let mult = |i: u32| PolyAddress::Witness(30 + i);
+    // with them and every later column moved down. The `is_deleg_*` selectors
+    // are witness columns before these — one per registered delegation type,
+    // which is `docs/spec/delegation.md` §10's append rule paid once each — so
+    // S26c's two moved the multiplicities from 30 to 32.
+    let mult = |i: u32| PolyAddress::Witness(32 + i);
     assert_eq!(
         add_sub::channels(),
         vec![

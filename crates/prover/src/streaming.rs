@@ -37,6 +37,8 @@ use verifier_core::{statement_shards, window_height, BlockProof, PublicInputs, S
 
 use program::FamilyId;
 
+#[cfg(feature = "debug-info")]
+use crate::debug;
 use crate::metrics::Recorder;
 use crate::{
     global_commit_from_commitments, public_inputs, shard_counts, window_of, GlobalCommitState,
@@ -86,12 +88,35 @@ pub fn prove_block_streaming(
     max_in_flight: usize,
 ) -> Result<(BlockProof, StreamingReport), ProverError> {
     assert!(max_in_flight >= 1, "max_in_flight must be at least 1");
+    debug_only!(debug::banner("prove_block_streaming"));
+    dlog!(
+        Phase,
+        "apogee stream   begin max_in_flight={} families={}",
+        max_in_flight,
+        setup.families.len()
+    );
     let mut report = StreamingReport {
         max_in_flight,
         ..StreamingReport::default()
     };
     let (global, done) = pass1(setup, io, &mut report)?;
+    dlog!(
+        Phase,
+        "apogee stream   pass 1 done shards={} execute_ms={:.1} commit_ms={:.1}",
+        global.statement.memory_commitments.len(),
+        report.pass1_execute_ns as f64 / 1e6,
+        report.pass1_commit_ns as f64 / 1e6
+    );
     let proofs = pass2(setup, io, &global, &done, max_in_flight, &mut report)?;
+    dlog!(
+        Phase,
+        "apogee stream   pass 2 done shards={} peak_in_flight={}/{} execute_ms={:.1} prove_ms={:.1}",
+        proofs.len(),
+        report.peak_in_flight,
+        max_in_flight,
+        report.pass2_execute_ns as f64 / 1e6,
+        report.pass2_prove_ns as f64 / 1e6
+    );
     let statement = public_inputs(&global, &proofs);
     let block = BlockProof {
         config: setup.program.config.clone(),
@@ -337,6 +362,13 @@ fn pass2(
         if ready.is_empty() {
             break;
         }
+        dlog!(
+            Phase,
+            "apogee stream   pass 2 flushed {} shard(s), queue={} of max {}",
+            ready.len(),
+            queue.len() + ready.len(),
+            max_in_flight
+        );
         queue.extend(ready);
         while queue.len() >= max_in_flight {
             let batch: Vec<ShardChunk> = queue.drain(..max_in_flight).collect();

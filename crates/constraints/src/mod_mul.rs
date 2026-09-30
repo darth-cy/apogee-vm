@@ -11,14 +11,44 @@
 //! word 0                      the modulus selector, one of `mod_mul::CODES`
 //! words 1..9, 9..17           the operands a and b, both below the modulus
 //! words 17..25                the result, the only words the invocation computes
-//! W[0..1010]      the frame's own: 38 gap bits a word, then the base's bounds
-//! W[1010..1014]   the four modulus selectors, one-hot on a live row
-//! W[1014..1022]   the eight limbs of the selected modulus
-//! W[1022..2582]   per value, 256 word bits then 264 `< m` chain bits: a, b, out
-//! W[2582..2590]   q's eight limbs, the quotient the prover supplies
-//! W[2590..2846]   q's 256 word bits
-//! W[2846..3364]   14 signed carries of 37 bits
+//! W[0..50]        two RANGE16 gap chunks a word
+//! W[50..54]       base_low and its halfword, base_room and its halfword
+//! W[54..58]       the four modulus selectors, one-hot on a live row
+//! W[58..66]       the eight limbs of the selected modulus
+//! W[66..162]      per value, eight halfwords then a 24-column `< m` chain
+//! W[162..178]     q's eight limbs and their halfwords
+//! W[178..220]     14 signed carries, each a value and two chunks
+//! W[220]          the RANGE16 channel's multiplicity
 //! ```
+//!
+//! # Why this family carries a lookup channel
+//!
+//! It did not until S26c. `docs/spec/delegation.md` §9 forbade a delegation
+//! family any channel; §10.3 amends that, and this family is the measured
+//! reason. Every bound it makes was a bit decomposition — 950 gap bits, 768
+//! value bits, 768 chain bits, 256 quotient bits, 518 carry bits — and at
+//! `2^16`, where its table fits, `RANGE16` makes each of them one committed
+//! column and two obligations instead. **3,468 committed columns become 325**,
+//! a factor of 10.7, and the proof falls from 360,948 bytes a shard to 135,220,
+//! a factor of 2.7.
+//!
+//! **The peak does not fall, and the earlier claim that it fell 1.9x was
+//! wrong.** The work moved out of the base layer and its first bind and into the
+//! inner layers: 158 inner columns became 2,244, so the forward pass grew from
+//! 0.27 GB to 4.57 GB while the committed base fell from 0.96 GB to 0.16 GB and
+//! the first bind from 3.64 GB to 0.34 GB. About 4.9 GB before and 5.1 GB after,
+//! both computed. What the channel buys is the **proof and the commitments** —
+//! 325 Mercury column commitments where there were 3,468 — and it buys them at
+//! constant peak rather than at a lower one.
+//!
+//! `TIMESTAMP` would be the natural channel for the frame's gap and it does not
+//! fit — its table needs 19 variables — so the gap takes `RANGE16` in two
+//! chunks with a scaled obligation on the top one, exact at `2^38`
+//! (`delegation::bound_chunked`).
+//!
+//! Nothing else about the family moved: the frame is the same 25 words, the
+//! ecall number is the same `0x0504`, the four moduli are the same, and every
+//! gate states the same thing. What changed is how a bound is spelled.
 //!
 //! # Why the modulus is a selector
 //!
@@ -77,7 +107,7 @@ use constants::address_space;
 use constants::mod_mul as f;
 
 use crate::delegation as d;
-use crate::{CircuitArtifact, Coeff, GateDef, PolyAddress};
+use crate::{CircuitArtifact, Coeff, GateDef, PolyAddress, VirtualKind};
 
 /// The frame's words: the selector, then two operands and a result.
 const WORDS: usize = f::FRAME_WORDS;
@@ -132,24 +162,36 @@ pub fn word(j: usize, field: u32) -> PolyAddress {
     d::word(j, field)
 }
 
-/// `W[38j + i]`: bit `i` of frame word `j`'s timestamp gap.
-pub fn gap_bit(j: usize, bit: usize) -> PolyAddress {
-    d::gap_bit(j, bit)
+/// `W[…]`: chunk `c` of frame word `j`'s timestamp gap, weight `2^{16(c+1)}`.
+pub fn gap_chunk(j: usize, c: usize) -> PolyAddress {
+    w(GAP_CHUNKS_AT + d::GAP_CHUNKS * j + c)
 }
 
-/// `W[…]`: bit `i` of the frame pointer's low decomposition.
-pub fn base_low_bit(bit: usize) -> PolyAddress {
-    d::base_low_bit(WORDS, bit)
+/// `W[…]`: `(base − RAM_ORIGIN) / 4`.
+pub fn base_low() -> PolyAddress {
+    w(BASE_AT)
+}
+/// `W[…]`: [`base_low`]'s high halfword.
+pub fn base_low_hi() -> PolyAddress {
+    w(BASE_AT + 1)
+}
+/// `W[…]`: `2^31 − frame bytes − base`.
+pub fn base_room() -> PolyAddress {
+    w(BASE_AT + 2)
+}
+/// `W[…]`: [`base_room`]'s high halfword.
+pub fn base_room_hi() -> PolyAddress {
+    w(BASE_AT + 3)
 }
 
-/// `W[…]`: bit `i` of the frame pointer's headroom decomposition.
-pub fn base_room_bit(bit: usize) -> PolyAddress {
-    d::base_room_bit(WORDS, bit)
-}
+/// The `W` index of the gap chunks, which open the witness.
+const GAP_CHUNKS_AT: usize = 0;
+/// The `W` index of the frame pointer's two decompositions.
+const BASE_AT: usize = GAP_CHUNKS_AT + d::GAP_CHUNKS * WORDS;
 
 /// The `W` index of the four modulus selectors.
 fn selectors() -> usize {
-    d::frame_witness(WORDS)
+    BASE_AT + 4
 }
 
 /// The `W` index of the selected modulus' eight limbs.
@@ -157,34 +199,31 @@ fn moduli_limbs() -> usize {
     selectors() + f::CODES.len()
 }
 
-/// The `W` index of value `v`'s block: 256 word bits then 264 chain bits.
+/// Columns one value takes: eight halfwords bounding its limbs, then the
+/// `< m` chain's eight differences, their halfwords and eight borrows.
+const VALUE_COLUMNS: usize = 4 * f::LIMBS;
+
+/// The `W` index of value `v`'s block.
 fn value_block(v: usize) -> usize {
-    moduli_limbs() + f::LIMBS + v * (d::VALUE_BITS + d::CANONICITY_BITS)
+    moduli_limbs() + f::LIMBS + v * VALUE_COLUMNS
 }
 
-/// The `W` index of value `v`'s 256 word bits.
-fn value_bits(v: usize) -> usize {
-    value_block(v)
-}
-
-/// The `W` index of value `v`'s 264 `< m` chain bits.
-fn value_chain(v: usize) -> usize {
-    value_block(v) + d::VALUE_BITS
-}
-
-/// The `W` index of `q`'s eight limb columns.
+/// The `W` index of `q`'s eight limbs.
 fn q_limbs() -> usize {
     value_block(VALUES.len())
 }
 
-/// The `W` index of `q`'s 256 word bits.
-fn q_bits() -> usize {
-    q_limbs() + f::LIMBS
+/// The `W` index of the fourteen carries.
+fn carries() -> usize {
+    q_limbs() + 2 * f::LIMBS
 }
 
-/// The `W` index of the fourteen signed carries' bits.
-fn carries() -> usize {
-    q_bits() + d::VALUE_BITS
+/// Columns one signed carry takes: its unsigned value and two chunks.
+const CARRY_COLUMNS: usize = 1 + d::GAP_CHUNKS;
+
+/// The `W` index of the channel's multiplicity, last in the subtree.
+fn multiplicity() -> usize {
+    carries() + CARRY_COLUMNS * f::CARRIES
 }
 
 /// `W[…]`: modulus selector `i`, indexing [`constants::mod_mul::CODES`].
@@ -198,47 +237,62 @@ pub fn m_limb(k: usize) -> PolyAddress {
     w(moduli_limbs() + k)
 }
 
+/// `W[…]`: the high halfword of limb `k` of value `v` — [`A`], [`B`] or
+/// [`OUT`]. With the derived low half it is that limb's `2^32` bound.
+pub fn value_hi(v: usize, k: usize) -> PolyAddress {
+    w(value_block(v) + k)
+}
+
+/// `W[…]`: difference limb `i` of value `v`'s `< m` chain.
+pub fn diff(v: usize, i: usize) -> PolyAddress {
+    w(value_block(v) + f::LIMBS + i)
+}
+
+/// `W[…]`: [`diff`]'s high halfword.
+pub fn diff_hi(v: usize, i: usize) -> PolyAddress {
+    w(value_block(v) + 2 * f::LIMBS + i)
+}
+
+/// `W[…]`: borrow `i` of value `v`'s `< m` chain. Borrow 7 is `live`.
+pub fn borrow_bit(v: usize, i: usize) -> PolyAddress {
+    w(value_block(v) + 3 * f::LIMBS + i)
+}
+
 /// `W[…]`: limb `i` of the quotient the prover supplies.
 pub fn q_limb(i: usize) -> PolyAddress {
     w(q_limbs() + i)
 }
 
-/// `W[…]`: bit `t` of limb `k` of value `v` — [`A`], [`B`] or [`OUT`].
-pub fn value_bit(v: usize, k: usize, t: usize) -> PolyAddress {
-    w(value_bits(v) + 32 * k + t)
+/// `W[…]`: [`q_limb`]'s high halfword.
+pub fn q_hi(i: usize) -> PolyAddress {
+    w(q_limbs() + f::LIMBS + i)
 }
 
-/// `W[…]`: bit `t` of limb `k` of `q`.
-pub fn q_bit(k: usize, t: usize) -> PolyAddress {
-    w(q_bits() + 32 * k + t)
+/// `W[…]`: carry `k`, as the **unsigned** value `carry + 2^36`.
+pub fn carry(k: usize) -> PolyAddress {
+    w(carries() + CARRY_COLUMNS * k)
 }
 
-/// `W[…]`: bit `t` of difference limb `i` of value `v`'s `< m` chain.
-pub fn diff_bit(v: usize, i: usize, t: usize) -> PolyAddress {
-    w(value_chain(v) + 32 * i + t)
+/// `W[…]`: chunk `j` of carry `k`'s range decomposition, weight
+/// `2^{16(j+1)}`.
+pub fn carry_chunk(k: usize, j: usize) -> PolyAddress {
+    w(carries() + CARRY_COLUMNS * k + 1 + j)
 }
 
-/// `W[…]`: borrow `i` of value `v`'s `< m` chain. Borrow 7 is `live`.
-pub fn borrow_bit(v: usize, i: usize) -> PolyAddress {
-    w(value_chain(v) + 32 * f::LIMBS + i)
+/// `W[…]`: the `RANGE16` channel's multiplicity.
+pub fn multiplicity_column() -> PolyAddress {
+    w(multiplicity())
 }
 
-/// `W[…]`: bit `t` of carry `k`. The carry is `Σ 2^t·bit − 2^36·live`.
-pub fn carry_bit(k: usize, t: usize) -> PolyAddress {
-    w(carries() + f::CARRY_BITS * k + t)
-}
-
-/// The family's `W` columns: the frame's, the selector and its modulus, three
-/// values' bits and chains, `q`'s limbs and bits, and the carries.
-pub const WITNESS_COLUMNS: usize = d::GAP_BITS * WORDS
-    + d::BASE_LOW_BITS
-    + d::BASE_ROOM_BITS
+/// The family's `W` columns.
+pub const WITNESS_COLUMNS: usize = d::GAP_CHUNKS * WORDS
+    + 4
     + f::CODES.len()
     + f::LIMBS
-    + 3 * (d::VALUE_BITS + d::CANONICITY_BITS)
-    + f::LIMBS
-    + d::VALUE_BITS
-    + f::CARRY_BITS * f::CARRIES;
+    + 3 * VALUE_COLUMNS
+    + 2 * f::LIMBS
+    + CARRY_COLUMNS * f::CARRIES
+    + 1;
 
 /// The family's circuit over `2^trace_vars` rows.
 ///
@@ -246,7 +300,8 @@ pub const WITNESS_COLUMNS: usize = d::GAP_BITS * WORDS
 /// panics if any of the three refuses it, so an artifact this returns is a
 /// circuit that obeys every rule the engine assumes.
 pub fn artifact(trace_vars: u32) -> CircuitArtifact {
-    let mut enforcing = d::frame_gates(WORDS, f::FRAME_BYTES as u64);
+    let mut enforcing =
+        d::frame_gates_range16(WORDS, f::FRAME_BYTES as u64, base_low(), base_room());
 
     // Every word but the result's eight is read-only: the invocation writes
     // back what it read, so the guest's selector and operands survive the
@@ -265,52 +320,104 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
 
     enforcing.extend(selector_gates());
 
-    // Each of the three frame values: 32-bit limbs, and below the modulus.
+    // Each of the three frame values is below the modulus. Their **limbs** are
+    // frame `M` columns, so there is nothing to decode: the 32-bit bound is two
+    // `RANGE16` obligations and no gate at all, which is where 768 of the
+    // family's old witness columns went.
     for (v, (name, first, field)) in VALUES.into_iter().enumerate() {
-        enforcing.extend(d::word_gates(name, first, field, value_bits(v)));
         enforcing.extend(below_modulus_gates(name, first, field, v));
     }
 
     // `q`'s limbs are witnesses rather than frame words — the guest does not
-    // compute the quotient — so each needs its own bits and its own decode.
-    // It needs no `q < m` chain: `a, b < m` already bounds it below `m`, and
-    // what the identity needs of it is the 32-bit limb bound these give.
-    for k in 0..f::LIMBS {
-        for t in 0..32 {
-            enforcing.push((format!("q_bit{k}_{t}_boolean"), d::booleanity(q_bit(k, t))));
-        }
-    }
-    for k in 0..f::LIMBS {
-        let mut terms = vec![(d::lit(1), q_limb(k))];
-        for t in 0..32 {
-            terms.push((d::neg(1u64 << t), q_bit(k, t)));
-        }
-        enforcing.push((format!("q_word{k}"), d::linear(terms)));
-    }
-
-    // The carries' bits.
-    for k in 0..f::CARRIES {
-        for t in 0..f::CARRY_BITS {
-            enforcing.push((
-                format!("carry{k}_{t}_boolean"),
-                d::booleanity(carry_bit(k, t)),
-            ));
-        }
-    }
+    // compute the quotient — but they need no decode either, only the same
+    // 32-bit bound. It needs no `q < m` chain: `a, b < m` already bounds it
+    // below `m`.
 
     enforcing.extend(product_gates());
 
     let artifact = crate::memory::assemble(
         trace_vars,
         [d::memory_names(WORDS), witness_names(), Vec::new()],
-        Vec::new(),
+        vec![(VirtualKind::Range16, "range16".to_string())],
         d::leaves(address_space::DELEGATION_MOD_MUL, WORDS),
         enforcing,
-        Vec::new(),
-        &[],
+        lookups(),
+        &channels(),
     );
+    if let Err(e) = crate::lookup::check_copowers(&artifact, &scaled_columns()) {
+        panic!("mod_mul: {e}");
+    }
     check_shape(&artifact);
     artifact
+}
+
+/// Every obligation the circuit carries: the frame's gaps and base, each
+/// value's eight limbs and its chain's eight differences, the quotient's eight
+/// limbs, and the fourteen carries.
+fn lookups() -> Vec<crate::LookupExpr> {
+    let mut out = d::gap_lookups_range16(WORDS, &|j, c| gap_chunk(j, c));
+    out.extend(d::bound_chunked(
+        "base_low",
+        vec![(d::lit(1), base_low())],
+        &[base_low_hi()],
+        d::BASE_LOW_BITS as u32,
+        LIVE,
+        d::lit(0),
+    ));
+    out.extend(d::bound_chunked(
+        "base_room",
+        vec![(d::lit(1), base_room())],
+        &[base_room_hi()],
+        d::BASE_ROOM_BITS as u32,
+        LIVE,
+        d::lit(0),
+    ));
+    for (v, (name, first, field)) in VALUES.into_iter().enumerate() {
+        for k in 0..f::LIMBS {
+            out.extend(d::bound32(
+                &format!("{name}{k}"),
+                word(first + k, field),
+                value_hi(v, k),
+                LIVE,
+            ));
+            out.extend(d::bound32(
+                &format!("{name}_diff{k}"),
+                diff(v, k),
+                diff_hi(v, k),
+                LIVE,
+            ));
+        }
+    }
+    for k in 0..f::LIMBS {
+        out.extend(d::bound32(&format!("q{k}"), q_limb(k), q_hi(k), LIVE));
+    }
+    for k in 0..f::CARRIES {
+        let chunks: Vec<PolyAddress> = (0..d::GAP_CHUNKS).map(|j| carry_chunk(k, j)).collect();
+        out.extend(d::bound_chunked(
+            &format!("carry{k}"),
+            vec![(d::lit(1), carry(k))],
+            &chunks,
+            f::CARRY_BITS as u32,
+            LIVE,
+            d::lit(0),
+        ));
+    }
+    out
+}
+
+/// Every scaled obligation's column with the selector it carries, for
+/// `lookup::check_copowers`.
+fn scaled_columns() -> Vec<(PolyAddress, PolyAddress)> {
+    let mut out: Vec<(PolyAddress, PolyAddress)> = Vec::new();
+    for j in 0..WORDS {
+        out.push((gap_chunk(j, d::GAP_CHUNKS - 1), LIVE));
+    }
+    out.push((base_low_hi(), LIVE));
+    out.push((base_room_hi(), LIVE));
+    for k in 0..f::CARRIES {
+        out.push((carry_chunk(k, d::GAP_CHUNKS - 1), LIVE));
+    }
+    out
 }
 
 /// The modulus selector: four booleans, one-hot on a live row, naming the
@@ -397,11 +504,10 @@ fn carry_terms(k: usize) -> Vec<(Coeff, PolyAddress)> {
     if k >= f::CARRIES {
         return Vec::new();
     }
-    let mut terms: Vec<(Coeff, PolyAddress)> = (0..f::CARRY_BITS)
-        .map(|t| (Coeff::Literal(d::pow2(t as u32)), carry_bit(k, t)))
-        .collect();
-    terms.push((Coeff::Literal(-d::pow2(f::CARRY_BITS as u32 - 1)), LIVE));
-    terms
+    vec![
+        (d::lit(1), carry(k)),
+        (Coeff::Literal(-d::pow2(f::CARRY_BITS as u32 - 1)), LIVE),
+    ]
 }
 
 /// The fifteen limb equations of `a·b = q·m + out`.
@@ -483,14 +589,6 @@ fn product_gates() -> Vec<(String, GateDef)> {
 fn below_modulus_gates(name: &str, first: usize, field: u32, v: usize) -> Vec<(String, GateDef)> {
     let mut out: Vec<(String, GateDef)> = Vec::new();
     for i in 0..f::LIMBS {
-        for t in 0..32 {
-            out.push((
-                format!("{name}_diff{i}_{t}_boolean"),
-                d::booleanity(diff_bit(v, i, t)),
-            ));
-        }
-    }
-    for i in 0..f::LIMBS {
         out.push((
             format!("{name}_borrow{i}_boolean"),
             d::booleanity(borrow_bit(v, i)),
@@ -505,9 +603,7 @@ fn below_modulus_gates(name: &str, first: usize, field: u32, v: usize) -> Vec<(S
         if let Some(prev) = i.checked_sub(1) {
             terms.push((d::neg(1), borrow_bit(v, prev)));
         }
-        for t in 0..32 {
-            terms.push((d::neg(1u64 << t), diff_bit(v, i, t)));
-        }
+        terms.push((d::neg(1), diff(v, i)));
         out.push((format!("{name}_canonical{i}"), d::linear(terms)));
     }
     out.push((
@@ -520,20 +616,32 @@ fn below_modulus_gates(name: &str, first: usize, field: u32, v: usize) -> Vec<(S
     out
 }
 
-/// The family's lookup channels: **none**.
+/// The family's lookup channels: `RANGE16`.
 ///
-/// A delegation family carries no channel and that is load-bearing: its rows
-/// are invocations rather than halfwords, so every bound it makes is a bit
-/// decomposition with a booleanity gate (`docs/spec/delegation.md` §9). That
-/// is also why its registry arm sits below `family_circuit`'s minimum-height
-/// guard — a family with no channel reaches no `BITS <= trace_vars` assertion.
+/// S26c's amendment to `docs/spec/delegation.md` §9. The channel's table needs
+/// sixteen variables, which makes `2^16` this family's floor — and `2^16` is
+/// already its `DEFAULT_HEIGHTS` entry, chosen at S26 for an unrelated reason.
+/// `family_circuit` derives the floor from this list, so the two cannot drift.
 pub fn channels() -> Vec<crate::lookup::ChannelSpec> {
-    Vec::new()
+    vec![crate::lookup::ChannelSpec {
+        channel: constants::lookup_channel::RANGE16,
+        table: vec![PolyAddress::Virtual(VirtualKind::Range16)],
+        multiplicity: multiplicity_column(),
+    }]
 }
 
 /// The `W` column names, in layout order.
 fn witness_names() -> Vec<String> {
-    let mut out = d::witness_names(WORDS);
+    let mut out: Vec<String> = Vec::new();
+    for j in 0..WORDS {
+        for c in 0..d::GAP_CHUNKS {
+            out.push(format!("gap{j}_c{c}"));
+        }
+    }
+    out.push("base_low".to_string());
+    out.push("base_low_hi".to_string());
+    out.push("base_room".to_string());
+    out.push("base_room_hi".to_string());
     for code in f::CODES {
         out.push(format!("selector{code}"));
     }
@@ -542,14 +650,13 @@ fn witness_names() -> Vec<String> {
     }
     for (name, ..) in VALUES {
         for k in 0..f::LIMBS {
-            for t in 0..32 {
-                out.push(format!("{name}_bit{k}_{t}"));
-            }
+            out.push(format!("{name}{k}_hi"));
         }
         for i in 0..f::LIMBS {
-            for t in 0..32 {
-                out.push(format!("{name}_diff{i}_{t}"));
-            }
+            out.push(format!("{name}_diff{i}"));
+        }
+        for i in 0..f::LIMBS {
+            out.push(format!("{name}_diff{i}_hi"));
         }
         for i in 0..f::LIMBS {
             out.push(format!("{name}_borrow{i}"));
@@ -559,24 +666,23 @@ fn witness_names() -> Vec<String> {
         out.push(format!("q_limb{k}"));
     }
     for k in 0..f::LIMBS {
-        for t in 0..32 {
-            out.push(format!("q_bit{k}_{t}"));
-        }
+        out.push(format!("q_limb{k}_hi"));
     }
     for k in 0..f::CARRIES {
-        for t in 0..f::CARRY_BITS {
-            out.push(format!("carry{k}_{t}"));
+        out.push(format!("carry{k}"));
+        for j in 0..d::GAP_CHUNKS {
+            out.push(format!("carry{k}_c{j}"));
         }
     }
+    out.push("range16_multiplicity".to_string());
     out
 }
 
 /// The shape this family's artifact must have, checked where it is built.
 ///
 /// The counts are what a fill writes and what `crates/checker` reads, so a
-/// layout change that moved one silently would be a fill writing into the
-/// wrong column. `docs/spec/constraint-manifest.md` §18 is the same account by
-/// name.
+/// layout change that moved one silently would be a fill writing into the wrong
+/// column. `docs/spec/constraint-manifest.md` §18 is the same account by name.
 fn check_shape(artifact: &CircuitArtifact) {
     assert_eq!(
         artifact.memory.len(),
@@ -593,19 +699,21 @@ fn check_shape(artifact: &CircuitArtifact) {
         WITNESS_COLUMNS,
         "mod_mul: one W name per W column"
     );
-    // The carries are last, so the family's own columns end exactly where the
-    // witness does: a fill that wrote past them would be writing into nothing.
+    // The multiplicity is last, which `lookup`'s own rule requires and which
+    // also means the family's columns end exactly where the witness does.
     assert_eq!(
-        carries() + f::CARRY_BITS * f::CARRIES,
-        d::frame_witness(WORDS) + WITNESS_COLUMNS
-            - d::GAP_BITS * WORDS
-            - d::BASE_LOW_BITS
-            - d::BASE_ROOM_BITS,
-        "mod_mul: the carries close the witness"
+        multiplicity() + 1,
+        WITNESS_COLUMNS,
+        "mod_mul: the multiplicity closes the witness"
+    );
+    assert_eq!(
+        artifact.lookups.len(),
+        lookups().len(),
+        "mod_mul: every obligation reached the artifact"
     );
     // The three value indices name the three values, in frame order. Every
     // caller outside this module indexes by these constants, so a reordering
-    // of `VALUES` that left them behind would silently route `a`'s bits into
+    // of `VALUES` that left them behind would silently route `a`'s bounds into
     // `b`'s columns.
     assert_eq!(
         [VALUES[A].1, VALUES[B].1, VALUES[OUT].1],
@@ -623,14 +731,14 @@ mod tests {
     /// so this is the test that it is *called*.
     #[test]
     fn the_circuit_validates() {
-        let a = artifact(8);
+        let a = artifact(16);
         assert_eq!(a.memory.len(), MEMORY_COLUMNS);
         assert_eq!(a.witness.len(), WITNESS_COLUMNS);
         assert!(
             a.setup.is_empty(),
             "a delegation family has no setup column"
         );
-        assert!(channels().is_empty(), "a delegation family has no channel");
+        assert_eq!(channels().len(), 1, "one channel, RANGE16, since S26c");
         assert_eq!(a.validate(), Ok(()));
         assert_eq!(crate::memory::check_memory(&a), Ok(()));
     }
@@ -641,7 +749,7 @@ mod tests {
     /// a multiple of `2^480`.
     #[test]
     fn the_limb_identity_closes() {
-        let a = artifact(8);
+        let a = artifact(16);
         let names: Vec<&str> = a.relations.iter().map(|r| r.name.as_str()).collect();
         for k in 0..f::POSITIONS {
             assert!(names.contains(&&*format!("limb{k}")), "limb{k}");
@@ -658,7 +766,7 @@ mod tests {
     /// weaker than the module's soundness paragraph claims.
     #[test]
     fn the_selector_and_the_three_chains_are_all_enforced() {
-        let a = artifact(8);
+        let a = artifact(16);
         let names: Vec<&str> = a.relations.iter().map(|r| r.name.as_str()).collect();
         for code in f::CODES {
             assert!(names.contains(&&*format!("selector{code}_boolean")));
@@ -724,32 +832,37 @@ mod tests {
         }
         for v in 0..VALUES.len() {
             for k in 0..f::LIMBS {
-                for t in 0..32 {
-                    mark(value_bit(v, k, t));
-                    mark(diff_bit(v, k, t));
-                }
-            }
-            for i in 0..f::LIMBS {
-                mark(borrow_bit(v, i));
+                mark(value_hi(v, k));
+                mark(diff(v, k));
+                mark(diff_hi(v, k));
+                mark(borrow_bit(v, k));
             }
         }
         for k in 0..f::LIMBS {
             mark(q_limb(k));
-            for t in 0..32 {
-                mark(q_bit(k, t));
-            }
+            mark(q_hi(k));
         }
         for k in 0..f::CARRIES {
-            for t in 0..f::CARRY_BITS {
-                mark(carry_bit(k, t));
+            mark(carry(k));
+            for j in 0..d::GAP_CHUNKS {
+                mark(carry_chunk(k, j));
             }
         }
+        mark(multiplicity_column());
+        for j in 0..WORDS {
+            for c in 0..d::GAP_CHUNKS {
+                mark(gap_chunk(j, c));
+            }
+        }
+        mark(base_low());
+        mark(base_low_hi());
+        mark(base_room());
+        mark(base_room_hi());
         assert!(seen.iter().all(|n| *n <= 1), "two names share a column");
         let claimed: usize = seen.iter().sum();
         assert_eq!(
-            claimed + d::frame_witness(WORDS),
-            WITNESS_COLUMNS,
-            "the family's own columns and the frame's fill the witness exactly"
+            claimed, WITNESS_COLUMNS,
+            "every name the layout gives is a column, and they fill the witness"
         );
     }
 

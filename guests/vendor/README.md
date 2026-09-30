@@ -31,7 +31,7 @@ they are the price of being able to read the code that runs.
 
 ---
 
-## `k256` 0.13.4 — S26, extended at S26b
+## `k256` 0.13.4 — S26, extended at S26b and S26c
 
 Upstream `https://github.com/RustCrypto/elliptic-curves`, commit
 `5ac8f5d77f11399ff48d87b0554935f6eddda342` (`.cargo_vcs_info.json`), as published.
@@ -57,6 +57,37 @@ being already reduced and already eight 32-bit limbs.
 | `Cargo.toml` | one `[target.'cfg(target_arch = "riscv32")'.dependencies]` entry on `guest-sdk`. A target dependency and never a cargo feature, which is how `crates/field` and `crates/transcript` reach their own shims |
 | `src/arithmetic/field/field_10x26.rs` | `mul` and `square` select `apogee::mul_mod_p` under `cfg(target_arch = "riscv32")` and are otherwise untouched, plus a new private `mod apogee` at the end of the file holding `packable`, `pack`, `unpack`, `operand` and `mul_mod_p` |
 | `src/arithmetic/scalar.rs` | `Scalar::mul` selects `apogee::mul_mod_n` under the same `cfg` and is otherwise untouched, plus a new private `mod apogee` at the end of the file. `Scalar::square` is `self.mul(self)` upstream, so it follows |
+| `src/arithmetic/projective.rs` | **S26c.** `add`, `add_mixed` and `double` select `apogee::{add, add_mixed, double}` under the same `cfg`; each upstream body moves down one function to `add_inner`, `add_mixed_inner` and `double_inner`, unchanged, and is the fallback. A new private `mod apogee` at the end of the file holds `limbs`, `field`, `lanes`, `point` and the three entry points. **`ProjectivePoint`'s storage is untouched** |
+
+**Why the projective patch is a drop-in, and why that is not luck.** Upstream's
+`ProjectivePoint::add` *is* Renes–Costello–Batina 2015 Algorithm 7 in homogeneous
+projective coordinates, and `docs/spec/delegation.md` §16's `EC_ADD` circuit is
+the same algorithm over the same representation — because it was designed to be
+(the owner's rule: a delegation understands the representation its caller already
+uses). So the delegated path and `add_inner` agree **limb for limb** and not
+merely as points, which is the opposite of the field patch, where upstream
+returns a weakly normalized product and the delegation returns the canonical
+residue. Three consequences worth knowing:
+
+- **`double` routes too.** Algorithm 7 is complete, so `P + P` is a correct
+  doubling and the delegation needs no second frame. The *fallback* stays
+  Algorithm 9, upstream's dedicated doubling, because in software that is the
+  cheaper of the two and an executor taking the fallback is paying software
+  prices for everything.
+- **`add_mixed`'s identity correction is kept.** An affine identity is `(0, 0)`
+  here, which lifted to `(0 : 0 : 1)` is neither the projective identity nor a
+  curve point, so no complete formula rescues it — upstream's
+  `conditional_assign` is what does, and it is still there.
+- **The operand bound costs a normalization per coordinate.** `FieldElement::
+  to_bytes` fully normalizes before encoding, so the circuit's `a < m` holds by
+  construction. There is no fast path as there is in `field_10x26`'s `operand`:
+  this runs six times per addition against twelve multiplies removed, where that
+  runs twice per multiply.
+
+**And it changes what `guests/mod-mul-ops` declares.** That guest's `k256` group
+arithmetic now reaches the `EC_ADD` shim as well, so it declares two delegation
+families where it declared one, and its `MOD_MUL` invocation count falls. Both
+are re-pinned; `docs/handoff/S26c-sha256-ec.md` records the numbers.
 
 **Why `field_10x26.rs` and not `field_impl.rs`.** `field.rs` picks its
 `FieldElementImpl` by `cfg(debug_assertions)`: the magnitude-tracking wrapper in
@@ -104,6 +135,80 @@ agree as field elements and not as limb patterns. Nothing in `k256` compares
 field elements by representation — every comparison is `normalizes_to_zero` over a
 difference (`AffinePoint::ct_eq`, `ProjectivePoint::ct_eq`) — and `to_bytes`
 normalizes first.
+
+---
+
+## `revm-precompile` 42.0.1 — S26c
+
+Upstream as published, from the same `=42.0.1` `guests/revm-block` pins. Cargo's
+`.cargo-ok` marker and `Cargo.toml.orig` are not copied; every other file is
+byte-identical to the release but the three named below.
+
+**Why.** Ethereum's `0x02`, `0x06` and `0x07` precompiles — SHA-256, BN254
+point addition and BN254 scalar multiplication — are this crate's, and S26c has
+a circuit for each of the operations under them. revm offers a seam for exactly
+this, the `Crypto` trait and `install_crypto`, and **using it costs 870,828
+bytes of guest `.text`**, which is why the patch is here instead.
+
+**That number is measured, and it is the whole reason this crate is vendored.**
+Installing a second `Crypto` implementation makes `crypto()`'s `OnceLock` hold
+one of two types, which kills LLVM's devirtualization of every call through it —
+and with the devirtualization goes the dead-stripping of the arkworks BLS12-381
+pairing and the KZG point-evaluation verifier, neither of which this workload
+reaches. The release image went 2,224,940 → 3,101,112 bytes with a provider whose
+every method forwarded straight back to `DefaultCrypto`, so the cost is the
+*coercion* and not the code. That took the image's last pc past what a `2^20`
+decoded table reaches (a table's row `i` is pc `2i`, so `2^20` rows reach
+`2·2^20 − 4`), and `guests/revm-block` would have needed `2^22` — the menu's
+last entry, at four times the table and about 42 GB of forward pass a shard —
+for code it never runs. `blst` and `c-kzg` are already off, so no feature
+removes the BLS12-381 path; the arkworks one is not optional.
+
+**Patching the default bodies has none of that cost.** There is still exactly
+one `Crypto` implementation, `DefaultCrypto`, so `crypto()` devirtualizes as
+before and the image grows by **10,568 bytes** over the pre-S26c one.
+
+**The three changed files.**
+
+| file | change |
+| --- | --- |
+| `Cargo.toml` | one `[target.'cfg(target_arch = "riscv32")'.dependencies]` entry on `guest-sdk`, as `k256`'s and `ark-ff`'s |
+| `src/interface.rs` | the **default bodies** of `Crypto::sha256`, `::bn254_g1_add` and `::bn254_g1_mul` select a delegated path under `cfg(target_arch = "riscv32")` and are otherwise untouched. No new type, no new impl |
+| `src/bn254/arkworks.rs` | `g1_point_add_delegated` and `g1_point_mul_delegated`, plus a private `mod apogee` holding the representation conversion. Nothing existing is changed |
+
+**The parsing is upstream's own, and that is the point of putting the two new
+functions in `bn254/arkworks.rs`.** `read_g1_point` and `encode_g1_point` are
+`pub(super)` and unreachable from outside this crate; from inside it they are
+the same functions `g1_point_add` calls, so a malformed point, a coordinate at
+or above the modulus and the `(0, 0)` encoding of infinity are refused by
+exactly the code that refuses them on the host. A divergence there would be a
+**consensus** bug, and the only way to have none is to not write a second
+parser.
+
+**What the patch has to get right.** arkworks' `Projective` is **Jacobian** —
+`x = X/Z²`, `y = Y/Z³` — and the delegation's representation is **homogeneous**
+— `x = X/Z`. `mod apogee` is that conversion and nothing else: `(X·Z, Y·Z², Z)`
+to go in, and the lift of an affine point to `Z = 1`, with the affine infinity
+`(0, 0)` special-cased to `(0 : 1 : 0)` because `(0 : 0 : 1)` is neither the
+projective identity nor a curve point and no complete formula rescues it. **The
+ABI is `guest_sdk`'s**: `ec_add` walks one addition's three selectors in group
+order and `ec_mul` is the double-and-add ladder over it, so the selector
+sequence — the one thing about this ABI that is a wrong answer rather than a
+refusal — is written once, in the SDK, and not at each call site.
+
+**What it does not change.** The host build is byte-for-byte upstream: every
+`cfg(not(target_arch = "riscv32"))` arm is the original expression, the two new
+functions are `cfg`'d out entirely, and the root workspace has no
+`[patch.crates-io]`, so `crates/emulator/tests/revm.rs`' native-revm oracle
+resolves this crate from crates.io and runs upstream's software for all
+seventeen `Crypto` methods.
+
+**What the mini-block measures.** Its two transactions call **none** of `0x02`,
+`0x06` or `0x07` — the profiler's `bn254` and `sha256/ripemd160` candidates are
+both 0 calls — so this patch is worth nothing on that fixture and the S26c
+cycle win is `k256`'s projective patch entirely. It is here for the blocks that
+do call them, and `guests/ec-ops` and `guests/sha256-ops` are what exercise the
+circuits meanwhile.
 
 ---
 
@@ -156,9 +261,10 @@ this path nothing. `a` is written only after **both** calls answer, so a
 
 ---
 
-## What tests all three
+## What tests all four
 
-`guests/mod-mul-ops`, and only that: on every executor but this VM's the ecall
+`guests/mod-mul-ops`, `guests/sha256-ops` and `guests/ec-ops`. For the three
+`MOD_MUL` seams it is the first of those and only that: on every executor but this VM's the ecall
 answers `-ENOSYS` and upstream's own multiply runs, so a host test cannot see a
 patched path at all. The guest calls the delegation by name once per selector
 against literal expectations *and* against a long division of its own, then

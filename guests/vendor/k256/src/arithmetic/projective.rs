@@ -93,7 +93,22 @@ impl ProjectivePoint {
     }
 
     /// Returns `self + other`.
+    ///
+    /// apogee-vm: on the guest target this is the `EC_ADD` delegation, whose
+    /// circuit implements this very algorithm over this very representation,
+    /// so the delegated path and [`Self::add_inner`] agree limb for limb and
+    /// not merely as points. The result is fully normalized, which upstream's
+    /// weakly normalized one also is a representative of.
     fn add(&self, other: &ProjectivePoint) -> ProjectivePoint {
+        #[cfg(target_arch = "riscv32")]
+        let out = apogee::add(self, other);
+        #[cfg(not(target_arch = "riscv32"))]
+        let out = self.add_inner(other);
+        out
+    }
+
+    /// Returns `self + other`, in software.
+    fn add_inner(&self, other: &ProjectivePoint) -> ProjectivePoint {
         // We implement the complete addition formula from Renes-Costello-Batina 2015
         // (https://eprint.iacr.org/2015/1060 Algorithm 7).
 
@@ -137,7 +152,23 @@ impl ProjectivePoint {
     }
 
     /// Returns `self + other`.
+    /// apogee-vm: on the guest target the affine operand is lifted to `Z = 1`
+    /// and the addition is the `EC_ADD` delegation — Algorithm 7 rather than
+    /// Algorithm 8, which is the same function of the same point and three
+    /// invocations either way. **The identity correction below is kept**: an
+    /// affine identity is `(0, 0)` here, which as `(0 : 0 : 1)` is not the
+    /// projective identity and not on the curve, so no complete formula
+    /// rescues it and the conditional assignment is what does.
     fn add_mixed(&self, other: &AffinePoint) -> ProjectivePoint {
+        #[cfg(target_arch = "riscv32")]
+        let out = apogee::add_mixed(self, other);
+        #[cfg(not(target_arch = "riscv32"))]
+        let out = self.add_mixed_inner(other);
+        out
+    }
+
+    /// Returns `self + other`, in software.
+    fn add_mixed_inner(&self, other: &AffinePoint) -> ProjectivePoint {
         // We implement the complete addition formula from Renes-Costello-Batina 2015
         // (https://eprint.iacr.org/2015/1060 Algorithm 8).
 
@@ -175,7 +206,20 @@ impl ProjectivePoint {
 
     /// Doubles this point.
     #[inline]
+    /// apogee-vm: on the guest target this is `self + self` through the
+    /// `EC_ADD` delegation. Algorithm 7 is **complete**, so it doubles
+    /// correctly and needs no separate formula; Algorithm 9 below is the
+    /// cheaper one to run in software and is what the fallback keeps.
     pub fn double(&self) -> ProjectivePoint {
+        #[cfg(target_arch = "riscv32")]
+        let out = apogee::double(self);
+        #[cfg(not(target_arch = "riscv32"))]
+        let out = self.double_inner();
+        out
+    }
+
+    /// Returns `self + self`, in software.
+    fn double_inner(&self) -> ProjectivePoint {
         // We implement the complete addition formula from Renes-Costello-Batina 2015
         // (https://eprint.iacr.org/2015/1060 Algorithm 9).
 
@@ -920,5 +964,108 @@ mod tests {
             ProjectivePoint::GENERATOR.neg(),
             AffinePoint::GENERATOR.neg()
         );
+    }
+}
+
+#[cfg(target_arch = "riscv32")]
+mod apogee {
+    use super::{AffinePoint, ConditionallySelectable, FieldElement, ProjectivePoint};
+    use super::{PrimeCurveAffine, CURVE_EQUATION_B_SINGLE};
+    use guest_sdk::recursion::{ec_add_complete, EcAddFrame, SECP256K1_GROUPS};
+
+    /// The curve constant the delegation's circuit holds as a literal is
+    /// `b3 = 3b`, and `constants::ec_add::CURVE_B3[0]` is 21. This is the other
+    /// half of that equality, asserted here because it is the one thing in this
+    /// patch that a curve parameter changing upstream would make silently
+    /// wrong: the frame carries no `b`, so a disagreement is a wrong point and
+    /// not a refusal.
+    const _: () = assert!(CURVE_EQUATION_B_SINGLE == 7);
+
+    /// A field element's eight little-endian 32-bit limbs, **below `p`**.
+    ///
+    /// `to_bytes` fully normalizes before encoding, so the operand bound the
+    /// circuit enforces — and the executor refuses by name — holds by this
+    /// function's construction rather than by a caller's promise. That is the
+    /// difference from `field_10x26`'s `operand`, which has a fast path worth
+    /// taking because it runs once per multiply; this runs six times per
+    /// addition against twelve multiplies removed.
+    fn limbs(x: FieldElement) -> [u32; 8] {
+        let b = x.to_bytes();
+        core::array::from_fn(|k| {
+            let at = 32 - 4 * (k + 1);
+            u32::from_be_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]])
+        })
+    }
+
+    /// [`limbs`]' inverse on a value below `p`, which every lane the delegation
+    /// writes is. `from_bytes_unchecked` records it as normalized, and it is.
+    fn field(v: &[u32; 8]) -> FieldElement {
+        let mut b = [0u8; 32];
+        for (k, limb) in v.iter().enumerate() {
+            let at = 32 - 4 * (k + 1);
+            b[at..at + 4].copy_from_slice(&limb.to_be_bytes());
+        }
+        FieldElement::from_bytes_unchecked(&b)
+    }
+
+    /// A projective point's three coordinates as frame lanes.
+    fn lanes(p: &ProjectivePoint) -> [[u32; 8]; 3] {
+        [limbs(p.x), limbs(p.y), limbs(p.z)]
+    }
+
+    /// `a + b` through the delegation, or through this file's own Algorithm 7.
+    ///
+    /// `false` from the shim is exactly `-ENOSYS` — an executor with no
+    /// `EC_ADD` circuit, which is every executor but this VM's — and then the
+    /// answer comes from `add_inner`. The two are the same algorithm over the
+    /// same representation, so unlike the field patch they agree on the
+    /// representative and not only on the value.
+    pub(super) fn add(a: &ProjectivePoint, b: &ProjectivePoint) -> ProjectivePoint {
+        let mut frame = EcAddFrame::of(&SECP256K1_GROUPS, &lanes(a), &lanes(b));
+        match ec_add_complete(&mut frame, &SECP256K1_GROUPS) {
+            true => point(&frame.result()),
+            false => a.add_inner(b),
+        }
+    }
+
+    /// `a + b` for an affine `b`, lifted to `Z = 1`.
+    ///
+    /// The identity correction is the caller's, not this function's: an affine
+    /// identity lifts to a point that is neither the projective identity nor on
+    /// the curve, and no complete formula fixes that.
+    pub(super) fn add_mixed(a: &ProjectivePoint, b: &AffinePoint) -> ProjectivePoint {
+        let q = [limbs(b.x), limbs(b.y), limbs(FieldElement::ONE)];
+        let mut frame = EcAddFrame::of(&SECP256K1_GROUPS, &lanes(a), &q);
+        if !ec_add_complete(&mut frame, &SECP256K1_GROUPS) {
+            return a.add_mixed_inner(b);
+        }
+        let mut ret = point(&frame.result());
+        ret.conditional_assign(a, b.is_identity());
+        ret
+    }
+
+    /// `a + a` through the delegation, or through this file's Algorithm 9.
+    ///
+    /// Algorithm 7 is complete and doubles correctly, so the delegated path is
+    /// the same call [`add`] makes. The **fallback** is Algorithm 9 and not
+    /// `add_inner(a, a)`, because in software the dedicated doubling is the
+    /// cheaper of the two and an executor taking the fallback is one paying
+    /// software prices for everything.
+    pub(super) fn double(a: &ProjectivePoint) -> ProjectivePoint {
+        let p = lanes(a);
+        let mut frame = EcAddFrame::of(&SECP256K1_GROUPS, &p, &p);
+        match ec_add_complete(&mut frame, &SECP256K1_GROUPS) {
+            true => point(&frame.result()),
+            false => a.double_inner(),
+        }
+    }
+
+    /// The frame's three result lanes as a projective point.
+    fn point(v: &[[u32; 8]; 3]) -> ProjectivePoint {
+        ProjectivePoint {
+            x: field(&v[0]),
+            y: field(&v[1]),
+            z: field(&v[2]),
+        }
     }
 }

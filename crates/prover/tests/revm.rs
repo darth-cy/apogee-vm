@@ -69,9 +69,17 @@ const REVM_BIN: &str = "revm-block";
 /// `4 * 2^16` bytes a `2^16` window 0 covers.
 fn revm_params() -> ProgramParams {
     let mut heights = [revm_block::TRACE_HEIGHT_RELEASE; family::COUNT as usize];
-    heights[family::KECCAK_F as usize] = 1 << common::KECCAK_VARS;
-    heights[family::POSEIDON2 as usize] = 1 << common::DELEGATION_VARS;
-    heights[family::FR_ARITH as usize] = 1 << common::DELEGATION_VARS;
+    // **Derived, never listed.** Naming three of the six delegation families
+    // left `MOD_MUL`, `SHA256_COMP` and `EC_ADD` at `2^20`, where `EC_ADD`'s
+    // 8,708 row-wise columns are a 292 GB forward pass and `SHA256_COMP`'s
+    // 16,688 are 560 GB — latent only while this block invokes neither.
+    // `crates/host/tests/prove.rs` and `crates/emulator/tests/revm.rs` both
+    // already derive it; this is S26c §5's "derive over document" applied here.
+    for (f, h) in heights.iter_mut().enumerate() {
+        if program::delegation_ecall(f as u32).is_some() {
+            *h = family::DEFAULT_HEIGHTS[f];
+        }
+    }
     ProgramParams {
         heights,
         bytecode_size_words: revm_block::BYTECODE_SIZE_WORDS,
@@ -272,15 +280,25 @@ fn a6_the_revm_block_proves_and_verifies() {
         .map(|(f, _)| *f)
         .collect();
     assert!(families.contains(&KECCAK), "keccak is declared");
+    // The declared set is read straight out of the linked image: four records,
+    // `APOGDEL1` then the number, at `.rodata` offsets 0x1b587c..0x1b58a0 —
+    // `0x0501` `KECCAK_F`, `0x0504` `MOD_MUL`, `0x0505` `SHA256_COMP` and
+    // `0x0506` `EC_ADD`. The last two arrived at S26c through the vendored
+    // `revm-precompile`'s *default* `Crypto` bodies and `k256`'s patched
+    // `ProjectivePoint`, and neither is invoked by this synthetic block — its
+    // senders are pre-recovered and it calls no `0x02`/`0x06`/`0x07` — so both
+    // are declared with zero shards, which is exactly the third presence rule.
     assert_eq!(
-        &families[families.len() - 4..],
+        &families[families.len() - 6..],
         &[
             family::PUBLIC_INPUT,
             family::PUBLIC_OUTPUT,
             family::ADVICE_WINDOWS,
-            family::MOD_MUL
+            family::MOD_MUL,
+            family::SHA256_COMP,
+            family::EC_ADD
         ],
-        "S-IO's three sort after KECCAK_F, and S26's MOD_MUL after all of them"
+        "S-IO's three sort after KECCAK_F, then S26's MOD_MUL and S26c's two"
     );
     assert!(!families.contains(&family::POSEIDON2));
     assert!(!families.contains(&family::FR_ARITH));

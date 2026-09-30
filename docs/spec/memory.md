@@ -87,7 +87,7 @@ list.
 
 `deleg` is a **delegation request's mirror query** (`docs/spec/delegation.md` §5.1), in the
 address space of the family it calls — `DELEGATION_KECCAK_F = 4` for S21's one family, and tags
-5, 6 and 7 for the three appended since — at the frame base the request read from `a0`.
+5 through 9 for the five appended since — at the frame base the request read from `a0`.
 **Its space is not a literal in the circuit but the frame's own `deleg_space` `M` column**,
 because one query serves every registered type and which one a row names is the row's
 business (`delegation.md` §5.1, §10.1).

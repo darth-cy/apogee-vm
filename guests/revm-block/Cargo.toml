@@ -50,6 +50,14 @@ path = "src/stateless_main.rs"
 # dependency of `crates/emulator`, `crates/prover` and `tools/kat-gen` in the
 # main one -- and `=` is what stops a `cargo update` in either from moving it
 # without a decision.
+#
+# **This crate takes no `ark-*` dependency and defines no `Crypto` impl**, and
+# both are S26c decisions. The `0x02`, `0x06` and `0x07` routing is in
+# `guests/vendor/revm-precompile`, patched into the *default* bodies of the
+# `Crypto` trait: installing a second impl through `install_crypto` kills LLVM's
+# devirtualization of `crypto()` and retains 870,828 bytes of otherwise-dead
+# BLS12-381 and KZG code, which took this image past what a `2^20` decoded table
+# reaches. `guests/vendor/README.md` is the measurement.
 [dependencies]
 revm = { version = "=42.0.1", default-features = false }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }

@@ -1,0 +1,5 @@
+# the EC_ADD delegation family's circuit, by SHA-256 of `artifact(n).to_bytes()`
+# docs/spec/delegation.md is normative; docs/spec/constraint-manifest.md §20 is the accounting
+# the artifact itself is megabytes, so what is committed is its digest
+# n memory witness layers inner relations outputs bytes sha256
+16 392 1028 28 8772 9409 4 2350670 16139dbfe72197e706dcfd68f46784248190171e756975369f3fc5f3330fadcd

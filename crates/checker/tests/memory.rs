@@ -495,8 +495,11 @@ fn the_delegation_space_column_is_the_requested_family() {
             constants::address_space::DELEGATION_POSEIDON2 as u64,
             constants::address_space::DELEGATION_FR_ARITH as u64,
             constants::address_space::DELEGATION_MOD_MUL as u64,
+            constants::address_space::DELEGATION_EC_ADD as u64,
         ],
-        "the three guests request all four delegation families"
+        "the three guests request five delegation spaces: S26's four, and EC_ADD \
+         since S26c patched `guests/vendor/k256`'s `ProjectivePoint`, which \
+         `mod-mul-ops`' group arithmetic reaches without naming a shim"
     );
 }
 

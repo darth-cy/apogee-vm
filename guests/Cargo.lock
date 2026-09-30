@@ -497,6 +497,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ec-ops"
+version = "0.1.0"
+dependencies = [
+ "ark-bn254",
+ "ark-ec",
+ "ark-ff",
+ "guest-sdk",
+ "k256",
+]
+
+[[package]]
 name = "ecdsa"
 version = "0.16.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1212,8 +1223,6 @@ dependencies = [
 [[package]]
 name = "revm-precompile"
 version = "42.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2431091420999795df6a200b9f7933defe3d654710560a895e6bcabbd9954a5"
 dependencies = [
  "ark-bls12-381",
  "ark-bn254",
@@ -1223,6 +1232,7 @@ dependencies = [
  "arrayref",
  "aurora-engine-modexp",
  "cfg-if",
+ "guest-sdk",
  "k256",
  "p256",
  "revm-context-interface",
@@ -1380,6 +1390,14 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.3.1",
  "digest 0.11.3",
+]
+
+[[package]]
+name = "sha256-ops"
+version = "0.1.0"
+dependencies = [
+ "guest-sdk",
+ "sha2 0.10.9",
 ]
 
 [[package]]

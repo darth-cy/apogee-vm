@@ -1,0 +1,22 @@
+[package]
+name = "sha256-ops"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The fixture for the `SHA256_COMP` delegation (`docs/spec/delegation.md` §15).
+#
+# Two dependencies and three kinds of check. `guest-sdk` is both the shim,
+# called by name over frames this guest writes itself, and the digest surface
+# `guest_sdk::sha256` that the padding and the block loop live behind. `sha2`
+# is the oracle: an independent SHA-256 from crates.io, **not** vendored and
+# **not** patched, so it runs its own software compression on every executor
+# and the comparison is against a foreign implementation rather than against a
+# second copy of this repository's.
+#
+# `default-features = false` drops `std` and the assembly backends, leaving the
+# portable software core. Selecting an upstream crate's features in a dependency
+# entry is not a cargo feature of ours (`crates/prover/tests/one_feature.rs`).
+[dependencies]
+guest-sdk.workspace = true
+sha2 = { version = "0.10", default-features = false }

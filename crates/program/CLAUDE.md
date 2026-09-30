@@ -198,7 +198,7 @@ cover is therefore not expressible.
 | --- | --- | --- |
 | `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MEM_WORD`, `MEM_SUBWORD` | `pc next_pc rs1 rs2 rd imm extra_mask` | `0b1011_1111` |
 | `MUL_DIV`, `ATOMICS` | `pc next_pc rs1 rs2 rd extra_mask` | `0b1001_1111` |
-| `INIT_TEARDOWN`, `ZERO_WINDOWS`, the four delegation families, `PUBLIC_INPUT`, `PUBLIC_OUTPUT`, `ADVICE_WINDOWS` | — | `0` |
+| `INIT_TEARDOWN`, `ZERO_WINDOWS`, the six delegation families, `PUBLIC_INPUT`, `PUBLIC_OUTPUT`, `ADVICE_WINDOWS` | — | `0` |
 
 **`funct3` is in no tuple.** The extra mask is one-hot per mnemonic, which leaves it
 nothing to say; it remains a row field so a later family that wants it can take it.

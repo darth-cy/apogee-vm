@@ -1122,7 +1122,7 @@ fn s23_a5_a6_the_recursion_witnesses_and_anchors_are_pinned() {
 #[test]
 #[ignore]
 fn s26_the_mod_mul_witness_and_anchor_are_pinned() {
-    use constants::family::MOD_MUL as MM;
+    use constants::family::{EC_ADD as EA, MOD_MUL as MM};
     use constants::{delegation, mod_mul as mm};
     use constraints::mod_mul as mm_c;
 
@@ -1131,26 +1131,32 @@ fn s26_the_mod_mul_witness_and_anchor_are_pinned() {
     let h = TamperHarness::new(&setup, &archive);
 
     // The structural counts. `MOD_MUL`'s id is 15, above S-IO's three window
-    // families, so its shards are **last** in statement order — which
-    // `KECCAK_F`'s were until S-IO and S23's two are not.
+    // families, so its shards sort after them — which `KECCAK_F`'s were until
+    // S-IO and S23's two are not. **`EC_ADD` sorts last, not `MOD_MUL`**: S26c
+    // gave `guests/mod-mul-ops` the projective `k256` patch too, so its image
+    // declares both, and id 17 is above 15.
     let (public, proofs) = h.honest();
     let shards: Vec<(u32, u32)> = proofs.iter().map(|p| (p.family, p.shard_index)).collect();
     let (last_family, _) = *shards.last().expect("a statement has shards");
-    assert_eq!(last_family, MM, "MOD_MUL sorts last: {shards:?}");
+    assert_eq!(last_family, EA, "EC_ADD sorts last: {shards:?}");
     let mm_shards = shards.iter().filter(|(f, _)| *f == MM).count();
-    assert!(
-        mm_shards >= 2,
-        "the fixture keeps 2^8 so this stays multi-shard, and it makes {mm_shards}"
-    );
+    // **One shard since S26c, and that is better coverage than the six it was.**
+    // The fixture kept `2^8` so this family would be multi-shard, because at
+    // that height the *last* shard was the only place a padding row appeared.
+    // `RANGE16` closed that option — the circuit does not exist below `2^16` —
+    // and made it unnecessary in the same move: `guests/mod-mul-ops`' 1,443
+    // invocations in a 65,536-row shard leave it 98% padding, so the live row
+    // and the padding row this test needs are both in shard 0.
+    assert_eq!(mm_shards, 1, "one 2^16 shard holds the fixture: {shards:?}");
 
     let a = &setup.vk.circuit(MM).expect("a MOD_MUL circuit").artifact;
     assert_eq!(
         (a.memory.len(), a.witness.len(), a.setup.len()),
         (4 + 4 * mm::FRAME_WORDS, mm_c::WITNESS_COLUMNS, 0)
     );
-    assert_eq!(a.trace_vars, common::MOD_MUL_FIXTURE_VARS);
+    assert_eq!(a.trace_vars, common::DELEGATION_CHANNEL_VARS);
 
-    let rows = 1usize << common::MOD_MUL_FIXTURE_VARS;
+    let rows = 1usize << common::DELEGATION_CHANNEL_VARS;
     let columns = shard_columns(&setup, &archive, MM, 0, &public.windows)
         .expect("the MOD_MUL shard's columns");
     let at = |address: PolyAddress, row: usize| {
@@ -1164,15 +1170,15 @@ fn s26_the_mod_mul_witness_and_anchor_are_pinned() {
     let live = (0..rows)
         .find(|r| at(mm_c::LIVE, *r) == Fr::ONE)
         .expect("a live invocation");
-    // The last shard is the one with room left, so that is where a padding row is.
-    let pad_shard = (mm_shards - 1) as u32;
+    // The one shard has the room, so its own padding rows are the ones to tamper.
+    let pad_shard = 0u32;
     let pad_columns = shard_columns(&setup, &archive, MM, pad_shard, &public.windows)
-        .expect("the last MOD_MUL shard's columns");
+        .expect("the MOD_MUL shard's columns");
     let pad_at = |address: PolyAddress, row: usize| {
         pad_columns
             .iter()
             .find(|(a, _)| *a == address)
-            .unwrap_or_else(|| panic!("the last MOD_MUL shard has no {address}"))
+            .unwrap_or_else(|| panic!("the MOD_MUL shard has no {address}"))
             .1
             .get(row)
     };
@@ -1180,40 +1186,50 @@ fn s26_the_mod_mul_witness_and_anchor_are_pinned() {
         .find(|r| pad_at(mm_c::LIVE, *r) == Fr::ZERO)
         .expect("a padding row in the last shard");
 
-    // --- The result, moved with the bit it decomposes so the frame's own
-    // recomposition still holds: what refuses it is a limb equation, the gate
-    // that says the multiplication was performed.
-    let out0 = mm_c::word(mm::OUT_WORD, mm_c::WORD_WRITE_VALUE);
-    let out_bit = mm_c::value_bit(mm_c::OUT, 0, 0);
-    let word = at(out0, live);
-    let bit = at(out_bit, live);
+    // Since S26c this family range-checks through `RANGE16` rather than
+    // decomposing into bits, so a value and its bound travel together as the
+    // value and its **halfword**: shifting both by `2^16` and `1` leaves the
+    // derived low half exactly where it was, so both obligations still hold and
+    // what refuses the twin is a limb equation — the gate that says the
+    // multiplication was performed. The direction is chosen from the observed
+    // halfword so the twin cannot accidentally leave `[0, 2^16)` and be refused
+    // as a lookup instead.
+    let shift_with_halfword = |value: PolyAddress, hi: PolyAddress| -> Vec<Cell> {
+        let (v, high) = (at(value, live), at(hi, live));
+        let up = high == Fr::ZERO;
+        let step = Fr::from_u64(1 << 16);
+        vec![
+            cell(MM, value, live, if up { v + step } else { v - step }),
+            cell(
+                MM,
+                hi,
+                live,
+                if up { high + Fr::ONE } else { high - Fr::ONE },
+            ),
+        ]
+    };
+
+    // --- The result.
     h.assert_rejects(
-        &tamper(vec![
-            cell(MM, out0, live, word + Fr::ONE - bit - bit),
-            cell(MM, out_bit, live, Fr::ONE - bit),
-        ]),
+        &tamper(shift_with_halfword(
+            mm_c::word(mm::OUT_WORD, mm_c::WORD_WRITE_VALUE),
+            mm_c::value_hi(mm_c::OUT, 0),
+        )),
         (MM, 0),
         CONSTRAINT,
     );
 
-    // --- The quotient, the one column the execution never produced. Moved with
-    // its own bit, so `q_word0` still holds and the refusal is a limb equation.
-    let q_bit = mm_c::q_bit(0, 0);
-    let q = at(mm_c::q_limb(0), live);
-    let qb = at(q_bit, live);
+    // --- The quotient, the one column the execution never produced.
     h.assert_rejects(
-        &tamper(vec![
-            cell(MM, mm_c::q_limb(0), live, q + Fr::ONE - qb - qb),
-            cell(MM, q_bit, live, Fr::ONE - qb),
-        ]),
+        &tamper(shift_with_halfword(mm_c::q_limb(0), mm_c::q_hi(0))),
         (MM, 0),
         CONSTRAINT,
     );
 
-    // --- A carry bit alone: the chain that joins two limb equations.
-    let carry = at(mm_c::carry_bit(0, 0), live);
+    // --- A carry alone: the chain that joins two limb equations. Its low chunk
+    // is the companion, weight `2^16`, so the same shift applies.
     h.assert_rejects(
-        &tamper(vec![cell(MM, mm_c::carry_bit(0, 0), live, Fr::ONE - carry)]),
+        &tamper(shift_with_halfword(mm_c::carry(0), mm_c::carry_chunk(0, 0))),
         (MM, 0),
         CONSTRAINT,
     );
@@ -1236,13 +1252,14 @@ fn s26_the_mod_mul_witness_and_anchor_are_pinned() {
     );
 
     // --- The control, on the shard that has a padding row: a padding row's gap
-    // bit, whose gate carries the mask on every product, is genuinely free.
+    // chunk is genuinely free, because every obligation it feeds carries `live`
+    // as its selector and a lookup holds where its selector is 0.
     h.assert_verifies(
         &Tamper {
             cells: vec![Cell {
                 family: MM,
                 shard: pad_shard,
-                address: mm_c::gap_bit(5, 7),
+                address: mm_c::gap_chunk(5, 0),
                 row: pad,
                 value: Fr::ONE,
             }],

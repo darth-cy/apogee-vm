@@ -1,4 +1,4 @@
-# Delegation: the ABI, the anchor, and the four delegation families
+# Delegation: the ABI, the anchor, and the six delegation families
 
 Frozen as of S21, **appended to at S23**, which added two families under §10's
 rule and amended §3 and §5.1 where more than one delegation type made a literal
@@ -105,6 +105,8 @@ One table ties a family, its number and its frame width together:
 | `POSEIDON2` | 10 | `PRECOMPILE_POSEIDON2` = `0x0500` | 24 | `DELEGATION_POSEIDON2` = 5 |
 | `FR_ARITH` | 11 | `PRECOMPILE_FR_ARITH` = `0x0502` | 25 | `DELEGATION_FR_ARITH` = 6 |
 | `MOD_MUL` | 15 | `PRECOMPILE_MOD_MUL` = `0x0504` | 25 | `DELEGATION_MOD_MUL` = 7 |
+| `SHA256_COMP` | 16 | `PRECOMPILE_SHA256_COMP` = `0x0505` | 24 | `DELEGATION_SHA256_COMP` = 8 |
+| `EC_ADD` | 17 | `PRECOMPILE_EC_ADD` = `0x0506` | 97 | `DELEGATION_EC_ADD` = 9 |
 
 `0x0500` was assigned at S10 with a calling convention and no circuit; S23 gave
 it one. The numbers are not in family-id order and need not be: a family id
@@ -546,13 +548,19 @@ shards sort last. `verify_block` needs no edit at all.
 
 ---
 
-## 9. The height, and why there is no lookup channel
+## 9. The height, and the one lookup channel a delegation family may carry
 
-**Each delegation family takes its own height, and the four do not share one.**
-`KECCAK_F`, `POSEIDON2` and `FR_ARITH` take `2^8`; `MOD_MUL` takes `2^16`
-(§9.1). What follows is `KECCAK_F`'s argument, which is what put `2^8` on the
-menu — it is a *ceiling* derived from one family's width, never a rule about
-delegation.
+**Each delegation family takes its own height, and the six do not share one.**
+`KECCAK_F`, `POSEIDON2`, `FR_ARITH` and `SHA256_COMP` take `2^8`; `MOD_MUL` and
+`EC_ADD` take `2^16` (§9.1, §9.2). What follows is `KECCAK_F`'s argument, which
+is what put `2^8` on the menu — it is a *ceiling* derived from one family's
+width, never a rule about delegation.
+
+**This section said "and why there is no lookup channel" until S26c, and §9.3 is
+the amendment.** A family at `2^16` may carry `RANGE16`, and two now do. What
+did not change is the reason the original rule existed: a family at `2^8` can
+carry no channel at all, and no family at any height the menu offers below
+`2^20` can carry `TIMESTAMP`.
 
 `KECCAK_F` takes **`2^8`**, added to `constants::family::HEIGHT_MENU` at S21.
 One row is a whole permutation, and a whole permutation is **354,762 inner
@@ -583,14 +591,25 @@ bits, in a circuit that is already 1,600 bits wide — and it removes the failur
 `constants::family::DEFAULT_HEIGHTS` warns about, a family reaching a channel
 assertion inside `VerifyingKey::check` on bytes a verifier was handed.
 
-**A delegation family must therefore be absent from `family_circuit`'s
-minimum-height arm, and must carry no lookup channel.** The two go together: a
-family with a channel needs that channel's height, and at that height its
-permutation may not fit. The rule survives `MOD_MUL`'s `2^16` unchanged, and for
-a second reason besides the first: a frame's timestamp gap is the `TIMESTAMP`
-channel's obligation, `BITS = 19`, so even at `2^16` no table for it exists —
-a delegation family owes a bit decomposition at every height the menu offers
-below `2^20`, and having paid for one it has no use for a channel above.
+**A delegation family at `2^8` must therefore carry no lookup channel**, and
+**no delegation family may carry `TIMESTAMP` at any height this menu offers**:
+that channel's `BITS` is 19, so its table needs `2^20` rows, which is an
+execution family's floor and not a delegation family's. A frame's timestamp gap
+is consequently never a `TIMESTAMP` obligation — it is a bit decomposition at
+`2^8` and, since S26c, three `RANGE16` chunks at `2^16` (§9.3).
+
+**`family_circuit`'s minimum-height guard is derived, not a list.** Until S26c it
+named the seven execution families explicitly and a delegation family's arm sat
+below it, because a family with no channel reaches no `BITS ≤ trace_vars`
+assertion and naming it in the guard would have refused the heights these
+families actually take. Since S26c the guard reads each family's **own**
+`channels()` and takes the widest range channel's `BITS`, so a family is held to
+exactly the floor its channels imply and no table of families has to be kept in
+step: `SHA256_COMP` with no channel has a floor of 0, `EC_ADD` and `MOD_MUL` a
+floor of 16, and the seven execution families 19 as before. The floor is tested
+before the artifact is built, so a family below it returns `None` for a clean
+`Err` rather than panicking inside `VerifyingKey::check` on bytes a verifier was
+handed.
 
 ### 9.1 `2^8` is not free, and S26 is where it shows
 
@@ -624,7 +643,7 @@ five `2^8` `KECCAK_F` shards are 59.4 MB — **97% of the proof**, against 3% fo
 thirty-two execution and window shards. A delegation family's height has been the
 dominant term in proof size since S21.
 
-### 9.2 `DEFAULT_HEIGHTS[MOD_MUL]` is `2^16`, and the four families differ
+### 9.2 `DEFAULT_HEIGHTS` is per family, and the six differ by three orders of magnitude
 
 S26 first left it at `2^8` "consistent with the three families before it", and
 that reason was wrong: **consistency between delegation families has no
@@ -636,21 +655,35 @@ height bought nothing and cost the table above.
 So the heights are per family, which is what `DEFAULT_HEIGHTS` was always able
 to express:
 
-| family | inner at `2^8` | committed | height | why that one |
+| family | inner | committed | height | why that one |
 | --- | --- | --- | --- | --- |
 | `KECCAK_F` | 354,762 | 3,764 | `2^8` | `2^16` is 744 GB of forward pass a shard |
 | `POSEIDON2` | 2,020 | 4,192 | `2^8` | `2^16` is 13.0 GB, and the guests that reach it invoke it in the hundreds |
 | `FR_ARITH` | 142 | 2,680 | `2^8` | ditto, 5.9 GB |
-| `MOD_MUL` | 142 | 3,468 | **`2^16`** | 7.9 GB, and a measured block goes from 1,048 shards to 5 |
+| `MOD_MUL` | 2,244 at `2^16` | 325 | **`2^16`** | re-shaped at S26c; §9.3 |
+| `SHA256_COMP` | 16,688 | 8,216 | `2^8` | `2^16` is 35 GB of forward pass a shard |
+| `EC_ADD` | 8,772 at `2^16` | 1,420 | **`2^16`** | forced: `RANGE16` needs 16 variables and `2^18` is 4x worse |
 
-Two properties make the raise cheap. **A height changes no gate**: it adds one
-halving list per variable, each carrying one node per output, so `MOD_MUL` at
-`2^16` is 22 lists, 158 inner columns and 3,660 relations against `2^8`'s 14,
-142 and 3,644, with the committed width, the `3,502 (86/3,416)` gate split and
-the zero lookups identical
-(`crates/checker/tests/mod_mul.rs::a_height_moves_only_the_halving_layers`).
-And **a delegation family carries no channel**, so no minimum-height arm
-applies and `family_circuit` accepts `0 ≤ n ≤ 30` for it.
+Two properties made the raise cheap **at S26b**, and S26c changed the second of
+them. **A height changes no gate**: it adds one halving list per variable, each
+carrying one node per output, so at that stage `MOD_MUL` at `2^16` was 22 lists,
+158 inner columns and 3,660 relations against `2^8`'s 14, 142 and 3,644, with the
+committed width, the gate split and the zero lookups identical. The property
+itself still holds and
+`crates/checker/tests/mod_mul.rs::a_height_moves_only_the_halving_layers` is what
+says so — it compares `2^16` against `2^18` now, `2^8` no longer being a height
+this family has, and it compares **enforcing** gates rather than every relation,
+because a halving list produces one node per output and the total therefore grows
+with the height by exactly `outputs × Δn`.
+
+The second property was **"a delegation family carries no channel"**, and §10.3
+withdrew it: `MOD_MUL` carries `RANGE16` since S26c, so `family_circuit` accepts
+`16 ≤ n ≤ 30` for it and not `0 ≤ n ≤ 30`. The current shape is 26 lists, 325
+committed columns, 2,244 inner and 2,369 relations with 274 obligations and four
+outputs — the two memory roots and the channel's fraction pair
+(`docs/spec/constraint-manifest.md` §18.1). **The height was already `2^16`
+before the channel needed it**, for the reason this section gives, so the
+channel's floor cost this family nothing and the two constraints coincide.
 
 What the raise is *not* free of: the height is in `VM_CONFIG`, which program
 identity absorbs, so **every guest declaring `MOD_MUL` has a new identity** and
@@ -732,6 +765,46 @@ which costs one frame word and four boolean columns. And the witnessed modulus
 had a price the argument did not count — with `m` an operand the circuit cannot
 state `a < m`, so the quotient's fit was the honest prover's business and not
 the statement's. §14.3 is what that cost, and §14.2 is what removing it bought.
+
+### 10.3 What S26c amended: a delegation family may carry `RANGE16` at `2^16`
+
+§9 read "and why there is no lookup channel" and stated the rule twice, as a
+property of `2^8` and as a rule about delegation families generally. The first
+half stands; **the second is withdrawn**, and `EC_ADD` and `MOD_MUL` carry
+`RANGE16` at `2^16`.
+
+**What the channel is worth.** A 32-bit bound is one committed column and two
+obligations where a bit decomposition is 32 columns with 32 booleanity gates, and
+a frame's 38-bit timestamp gap is two columns where it is 38. `EC_ADD`'s frame is
+97 words, so the gap alone is 3,746 bit columns against 194 chunk columns — and
+the family has 24 more 32-bit values to bound besides. Re-shaping `MOD_MUL` the
+same way at the same time took its committed width from **3,468 to 325**, a
+factor of 10.7, and its proof from 360,948 bytes a shard to 135,220.
+
+**What the amendment does not touch.** A family at `2^8` still carries no
+channel, because no table fits there — `SHA256_COMP` is the worked example, and
+its row is 20,000 inner columns, so `2^16` is not open to it. And **no**
+delegation family may carry `TIMESTAMP` at any height on this menu: `BITS = 19`
+needs `2^20`, which is an execution family's floor. So a frame's timestamp gap is
+never that channel's obligation — it is a bit decomposition at `2^8` and three
+`RANGE16` chunks at `2^16`, the third carrying a scaled obligation that is exact
+at `2^38`.
+
+**What it costs.** Three things, each of which S26c paid.
+
+- **The minimum-height guard stops being a list.** It named the seven execution
+  families and a delegation family's arm sat below it; a family with a channel
+  now has a floor, so the guard reads each family's own `channels()` and derives
+  the floor from the widest range channel's `BITS`. A list would have had to be
+  kept in step with two families whose heights differ from every other's.
+- **A channel-carrying family has exactly one height.** Its circuit does not
+  exist below `2^16`, so a suite cannot build it at four rows for a whole-shard
+  forward pass. `crates/checker/tests/{mod_mul,ec_add}.rs` evaluate one row of
+  the real `2^16` circuit instead, which is both cheaper and a stronger
+  statement.
+- **One multiplicity column per channel per circuit**, last in the witness
+  subtree, filled by `crates/trace` and read by no gate. It has to exist because
+  `a.committed()` names it.
 
 ---
 
@@ -1053,10 +1126,7 @@ names, and the quotient `q`:
 | `selector_rule` | `word 0 = Σ code_i·s_i`: the field the circuit reduces in is the one the guest asked for |
 | `one_modulus_a_live_row` | `Σ s_i = live`: exactly one field a live row |
 | `m_limb{k}_rule` | `m_k = Σ MODULI[i][k]·s_i`: the modulus is the selector's literal, which is also its `2^32` bound |
-| `<v>_bit{k}_{t}_boolean` | every bit of every limb of `a`, `b` and `out` is a bit |
-| `<v>_word{k}` | limb `k` is `Σ 2^t·bit`: its 32-bit bound and its decode at once |
-| `q_bit{k}_{t}_boolean`, `q_word{k}` | the same for the quotient, whose limbs are witnesses |
-| `carry{k}_{t}_boolean` | every carry bit is a bit |
+| — | **Since S26c every one of these bounds is a `RANGE16` obligation and not a gate.** Each of `a`, `b` and `out`'s eight limbs carries a committed high halfword and a 16+16 pair; the quotient's eight the same; each of the fourteen carries a value and two chunks; and the frame's 25 timestamp gaps two chunks apiece with a scaled obligation on the top one. 274 obligations replace 3,320 booleanity gates and the 32 decodes that read them, which is what took the family from 3,468 committed columns to 325 (`docs/spec/constraint-manifest.md` §18.4, §18.5, and §10.3 for the amendment that allowed it) |
 | `limb{k}` | `P_k − S_k − out_k + c_{k−1} − 2^32·c_k = 0`, where `P_k = Σ_{i+j=k} a_i·b_j` and `S_k = Σ_{i+j=k} q_i·m_j` |
 | `<v>_diff{i}_{t}_boolean`, `<v>_borrow{i}_boolean` | the three `< m` chains' bits |
 | `<v>_canonical{i}` | `v_i − m_i − b_{i−1} + 2^32·b_i = d_i` |
@@ -1231,3 +1301,250 @@ schoolbook 512-bit long division of its own — and **runs it on every call,
 comparing**, rather than reserving it for an executor that will never ask. That
 turns forty lines of dead code into a differential oracle against
 `emulator::mod_mul_frame`, which is the better of the two things to have.
+
+---
+
+## 15. The SHA-256 compression circuit
+
+`constants::family::SHA256_COMP`, **one compression a row**, new at S26c.
+`constraints::sha256` is the circuit; `docs/spec/constraint-manifest.md` §19 is
+its column-by-column account.
+
+### 15.0 Why it exists
+
+Ethereum's `0x02` precompile, and the cheapest regular circuit surface on the
+profiler's list after the two S26b took. SHA-256 is sixty-four rounds of fixed
+rotations, XORs and 32-bit additions — no modular reduction, no field, no
+table — which is the smallest possible arithmetization per unit of guest work:
+every bound is a bit that already exists for the XORs' sake.
+
+**It is the compression function and not the digest**, which is what makes the
+routing easy. The padding and the block loop are Merkle–Damgård's and belong to
+the caller; `guest_sdk::sha256` is where they live, and one ecall covers one
+64-byte block. A digest-shaped frame would have needed a length, a variable
+number of blocks and a decision about where padding happens, none of which a
+fixed-width frame expresses.
+
+### 15.1 The frame
+
+**24 words, 96 bytes**, word-aligned per §4.
+
+| words | holds | read | written |
+| --- | --- | --- | --- |
+| 0–7 | the chaining state `H0..H7`, little-endian `u32` each | yes | **yes** |
+| 8–23 | the block's sixteen schedule words `W0..W15`, **big-endian decoded** | yes | unchanged |
+
+The forty-eight schedule words `W16..W63` the message schedule derives are the
+circuit's own advice and **never cross the frame**: they are a function of the
+sixteen, so carrying them would be 192 bytes of frame a guest would have to
+compute to hand over.
+
+**The words are `u32`s and the block is big-endian decoded.** SHA-256 is a
+big-endian design where keccak is a little-endian one, and the decode has to
+happen somewhere; it happens in the caller, because the caller already holds
+the bytes and the circuit already holds the value. `constants::sha256`'s
+`STATE_WORD`, `BLOCK_WORD` and `FRAME_WORDS` are the layout and
+`guest_sdk::recursion::Sha256Frame`'s three `const` assertions pin it, so a
+renumbering fails the build rather than transposing the state and the block.
+
+**There is no frame this family can refuse**, and it is the only one of the six
+of which that is true: every `u32` is a legal chaining word and a legal schedule
+word, so `emulator::sha256_frame` takes no `pc` and has no error path. What a
+caller can still get wrong is the *padding*, which is why
+`guests/sha256-ops` checks seven message lengths chosen for the boundary the
+padding turns on.
+
+### 15.2 The circuit, in one paragraph
+
+Three gate lists. List 0 bit-decomposes every frame word, copies the carried
+bits and builds the `x·y` helper of each three-way XOR; list 1 assembles the
+carried scalars and the XOR values; list 2 is the sixty-four rounds, the
+forty-eight schedule equations and the eight output sums. Every bound is a bit
+with a booleanity gate — the family is at `2^8`, where no channel's table fits
+(§9) — and the carries are three bits for a round, two for a schedule word and
+one for an output sum, each derived rather than observed.
+
+**The recurrence is over two sequences, not eight working words.** `b`, `c` and
+`d` are `A_{i−1}`, `A_{i−2}` and `A_{i−3}`; `f`, `g` and `h` are `E_{i−1}`,
+`E_{i−2}` and `E_{i−3}`. So the round is
+`A_{i+1} = T1 + T2 − 2^32·ca_i` and `E_{i+1} = A_{i−3} + T1 − 2^32·ce_i`, the
+eight-variable shuffle costs nothing, and the four non-positive indices of each
+sequence *are* the frame's state words — which is the whole of `B`, `C`, `D` and
+`H`'s existence in this arithmetization.
+
+**A round's constant `K_i` rides the row's `live` mask and is not a bare
+literal.** A padding row is an all-zero row, and `… − K_i = 0` cannot hold on
+one; `checker::check_padding` refuses such a circuit, and S26c shipped it that
+way until the checker suite ran. The mask is an `M` column that only gate list 0
+may read, so it is carried like any other value — one column a layer, which is
+what the correct statement costs.
+
+---
+
+## 16. The elliptic-curve addition circuit
+
+`constants::family::EC_ADD`, **one third of one addition a row**, new at S26c.
+`constraints::ec_add` is the circuit; `docs/spec/constraint-manifest.md` §20 is
+its column-by-column account.
+
+### 16.0 Why it exists, and what it is not
+
+The point operations under Ethereum's `0x06` and `0x07` precompiles, and — far
+more valuable — the ones inside `k256`'s `ecrecover`, which S26's profile ranked
+first in every workload it measured. After S26b routed that crate's field
+multiply through `MOD_MUL`, a projective addition was twelve `MOD_MUL`
+invocations; it is now three `EC_ADD` ones.
+
+**It is not a scalar multiplication and not a pairing.** A ladder is the
+caller's — `guest_sdk::recursion::ec_add_complete` is one addition — and the
+pairing is out of scope by the stage's own terms. **It is not `ecrecover`
+either**: `prompts/00-master.md`'s stage register cancelled that family and the
+cancellation stands.
+
+### 16.1 The formula, and why it is the caller's
+
+Renes–Costello–Batina 2015 **Algorithm 7** for `a = 0`, in **homogeneous
+projective** coordinates — `x = X/Z`, `y = Y/Z`. It is **complete**: `P + P`,
+`P + (−P)`, `P + O` and a non-normalized `Z` all come out right, so the guest
+branches on nothing, the circuit has no degenerate row, and no inverse witness
+exists anywhere in it.
+
+That choice is not the circuit's convenience. `guests/vendor/k256`'s
+`ProjectivePoint::add` **is** this algorithm over this representation, so the
+delegation is a drop-in for a method whose storage does not move — which is the
+owner's rule: a delegation understands the representation its caller already
+uses. The two paths therefore agree **limb for limb** and not merely as points.
+BN254 arrives affine at revm's `Crypto::bn254_g1_add` boundary and the guest
+lifts it with `Z = 1`, which is free; arkworks' own `Projective` is *Jacobian*,
+so a caller converting between them does `(X·Z, Y·Z², Z)` one way and
+`(X·Z, Y, Z³)` the other.
+
+**Completeness is what makes a ladder five lines**, and it is worth saying why
+that matters more than the formula's cost. An incomplete formula needs a case
+for the first iteration, a case for a doubling and a case for the identity, and
+each is a place to be wrong only on inputs a test does not reach.
+
+### 16.2 Three invocations, and the frame that glues them
+
+Twelve multiplications, in **three groups of three reductions**:
+
+```text
+group 0    xx = X1*X2          yy = Y1*Y2          zz = Z1*Z2
+group 1    m4 = (X1+Y1)(X2+Y2) m5 = (Y1+Z1)(Y2+Z2) m6 = (X1+Z1)(X2+Z2)
+group 2    X3 = xy*ym - byz3*xz
+           Y3 = yp*ym + bxx9*xz
+           Z3 = yz*yp + xx3*xy
+```
+
+with `xy = m4 − xx − yy`, `yz = m5 − yy − zz`, `xz = m6 − xx − zz`,
+`bzz3 = b3·zz`, `ym = yy − bzz3`, `yp = yy + bzz3`, `byz3 = b3·yz`,
+`xx3 = 3·xx` and `bxx9 = 3·b3·xx`.
+
+**Nine reductions, not twelve**: each of the three outputs is two products under
+one quotient, which the limb identity's shape allows for free.
+
+**The three rows are glued by the frame, not by a bus.** Group 0 leaves `xx`,
+`yy` and `zz` in words 49..73 and group 2 reads them there, as ordinary RAM words
+on an ordinary RAM chain. Nothing new carries them — no new address space beyond
+the family's own, no new presence rule — and `checker::memory_columns_from_log`
+still covers every column. A send/receive bus keyed by `(invocation, stage, slot)`
+was the alternative and it is **unsound** as a cross-row mechanism here: the
+multiset that would pair a send with a receive has no way to say that the two
+belong to the same invocation without a column the anchor's provenance rules
+refuse.
+
+**97 words, 388 bytes**, word-aligned per §4.
+
+| words | holds | read by | written by |
+| --- | --- | --- | --- |
+| 0 | the selector: a curve **and** a group, one of `constants::ec_add::CODES` | every group | none |
+| 1–8 | `X1` | groups 0, 1 | group 2 (`X3`) |
+| 9–16 | `Y1` | groups 0, 1 | group 2 (`Y3`) |
+| 17–24 | `Z1` | groups 0, 1 | group 2 (`Z3`) |
+| 25–48 | `X2`, `Y2`, `Z2` | groups 0, 1 | none |
+| 49–72 | `xx`, `yy`, `zz` | group 2 | group 0 |
+| 73–96 | `m4`, `m5`, `m6` | group 2 | group 1 |
+
+Group 2 writes its results **over** `X1`, `Y1` and `Z1`, which the first two
+groups have by then finished reading. That is what keeps the frame at 97 words
+rather than 121.
+
+**The three codes of a curve must be invoked in group order.** Two transposed is
+not a refusal anywhere — it is a different point, computed from lanes whose
+previous contents were zero — so the order is not left to a caller:
+`guest_sdk::recursion::ec_add_complete` walks it, and
+`constants::ec_add::{SECP256K1_GROUPS, BN254_GROUPS}` are the two triples, held
+to the `CODE_CURVE`/`CODE_GROUP` tables by `const` assertion.
+
+### 16.3 What the circuit has to get right, and what it got wrong first
+
+The six selectors are boolean and sum to `live`, so a live row claims exactly one
+(curve, group) pair, and `selector_rule` ties that claim to **frame word 0** —
+the selector columns and the word the guest wrote are one claim. `m_limb{k}_rule`
+and `b3_rule` fix the curve's modulus limbs and its `b3 = 3b` to that claim's
+literals, which is also their `2^32` bound: `m` and `b3` need no range check at
+all. Every frame word carries a 32-bit bound as a `RANGE16` obligation on its
+high halfword, and the twelve frame values carry a `< m` borrow chain whose
+conclusion is gated to the groups that read them.
+
+Each slot's four operands are committed columns pinned by degree-2 gates to
+**bounded linear combinations** of those values, so the pin is also the bound and
+an operand needs no range check of its own. The identity is then one shape for
+all nine slots:
+
+```text
+A*B + C*D + 1024*m^2 = q*m + out
+```
+
+Three things about it are easy to get wrong, and two of them were.
+
+- **`D` carries the sign, not the identity.** Group 2's slot 0 is
+  `xy·ym − byz3·xz`, and a per-group sign on a product's coefficient is not
+  expressible — a coefficient is one literal or one challenge — so the minus
+  rides `D`, which is `xx + zz − m6` where the other slots' is `m6 − xx − zz`.
+- **The offset is 1024 and 256 was wrong.** It exists to keep the quotient
+  unsigned, and it must cover the most negative left-hand side any slot can
+  reach. The binding slot is group 2's `Y3`, not its `X3`: `yp·ym + bxx9·xz`
+  reaches `−(22·22 + 63·3)·m² = −673·m²`. At 256 the honest quotient of such a
+  row is negative and the row **unprovable**, and `zz` above about `0.76m` is
+  enough on its own — roughly a quarter of random invocations. It is a
+  completeness bug and not a soundness one, which is exactly why nothing but an
+  honest witness against the gates can find it: the executor computes the right
+  answer, the guest agrees with its own software path, and only the prover fails.
+- **A gated conclusion is `enable·(1 − b_7) = 0` and never `b_7 = enable`.** The
+  second forces the borrow to 0 where `enable` is 0, so a value that *is* below
+  the modulus on a row that does not read it becomes unprovable — and every lane
+  is such a value, the six intermediates being zeroed by the guest's frame
+  constructor and a group-2 row's `X1..Z2` being ordinary coordinates. That
+  spelling made **every row of this family unprovable** while every shape test,
+  the executor and both fixture guests passed. The chain's sixteen `canonical`
+  gates are *ungated* and hold for any value, so a non-reading value still owes a
+  real chain.
+
+Both are now derived rather than argued: `the_offset_covers_every_slot` and
+`the_carry_offset_covers_every_slot` read one operand-ceiling table, because the
+same products bound the carry's width and the offset's floor and only one of the
+two arguments had been made.
+
+The sixteen limb equations telescope to the identity exactly when the last carry
+is zero, which the last position forces by having no outgoing carry; `out`'s own
+chain puts it below `m`. Integer division being unique, `out` is the reduction
+and nothing else.
+
+### 16.4 The height, and what it costs
+
+`2^16`, and **forced rather than chosen**: the `RANGE16` channel needs sixteen
+variables (§10.3), Mercury needs an even count, and `2^18` is four times worse.
+
+One shard is a computed **20.5 GB** — 18.3 GB of forward pass, 0.7 GB of
+committed base, 1.5 GB of the first bind's half-height table — against 5.1 GB for
+`MOD_MUL` at the same height and ~11 GB for an execution shard. **So this is the
+peak-setting family in a block**, and that is a fact about the stage rather than a
+problem it solved: the lever that remains is the group count, five groups of two
+reductions being about two-thirds the width at two more invocations an addition.
+`docs/handoff/S26c-sha256-ec.md` records the measured figure against this
+estimate.
+
+The channel is what makes the row narrow enough to be worth it at all. Without
+it the 97-word frame's timestamp gaps alone are 3,686 bit columns against 194
+chunk columns, and 24 more 32-bit values want bounding besides.

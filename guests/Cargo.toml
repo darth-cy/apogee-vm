@@ -11,7 +11,7 @@
 # toolchain, because rustup walks up from the working directory.
 [workspace]
 resolver = "2"
-members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "addsub", "control", "alu", "mem", "shards", "keccak-test", "keccak-unused", "recursion-ops", "recursion-unused", "revm-block", "public-io", "mod-mul-ops"]
+members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "opcodes", "heap", "addsub", "control", "alu", "mem", "shards", "keccak-test", "keccak-unused", "recursion-ops", "recursion-unused", "revm-block", "public-io", "mod-mul-ops", "sha256-ops", "ec-ops"]
 
 # Two crates are vendored and patched so that a guest's field arithmetic
 # reaches the `MOD_MUL` delegation on the guest target; `guests/vendor/README.md`
@@ -33,6 +33,7 @@ members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "
 [patch.crates-io]
 k256 = { path = "vendor/k256" }
 ark-ff = { path = "vendor/ark-ff" }
+revm-precompile = { path = "vendor/revm-precompile" }
 
 [workspace.package]
 version = "0.1.0"

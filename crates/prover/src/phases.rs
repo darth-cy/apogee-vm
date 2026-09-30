@@ -12,6 +12,8 @@ use transcript::{Transcript, TranscriptSnapshot};
 use verifier_core::wire::{Read, Reader, Writer};
 use verifier_core::{read_gkr, statement_shards, write_gkr, BlockProof, PublicInputs, ShardProof};
 
+#[cfg(feature = "debug-info")]
+use crate::debug;
 use crate::metrics::{Recorder, ShardId, Stage};
 // Used only inside `metric!`, which is nothing at all in the default build.
 #[cfg(feature = "metrics")]
@@ -301,6 +303,17 @@ pub(crate) fn advance_rec(
             // Each task carries its own recorder and hands it back beside its
             // result; `map` over an indexed parallel iterator collects in
             // order, so absorbing them below is statement order.
+            // **The peak-setting moment of a whole block.** One shard's
+            // forward pass per rayon worker lives at once here
+            // (`crates/prover/CLAUDE.md`), so a run that is about to be OOM
+            // killed is killed between this line and the one after it, and the
+            // `begin` lines with no `done` name the shards that were in flight.
+            dlog!(
+                Phase,
+                "apogee block    gkr region begin shards={} rayon-threads={}",
+                shards.len(),
+                rayon::current_num_threads()
+            );
             let region = rec.start(Stage::BlockGkrRegion);
             let proved = first_error(
                 shards
@@ -316,6 +329,11 @@ pub(crate) fn advance_rec(
                     .collect(),
             )?;
             rec.end(region);
+            dlog!(
+                Phase,
+                "apogee block    gkr region done shards={}",
+                proved.len()
+            );
             let gkrs: Vec<ShardGkr> = proved
                 .into_iter()
                 .map(|(g, r)| {
@@ -348,6 +366,12 @@ pub(crate) fn advance_rec(
         None => {
             let since = Instant::now();
             let read_only: &TraceArchive = archive;
+            dlog!(
+                Phase,
+                "apogee block    opening region begin shards={} rayon-threads={}",
+                gkrs.len(),
+                rayon::current_num_threads()
+            );
             let region = rec.start(Stage::BlockOpeningRegion);
             let opened = first_error(
                 gkrs.into_par_iter()
@@ -363,6 +387,11 @@ pub(crate) fn advance_rec(
                     .collect(),
             )?;
             rec.end(region);
+            dlog!(
+                Phase,
+                "apogee block    opening region done shards={}",
+                opened.len()
+            );
             let proofs: Vec<ShardProof> = opened
                 .into_iter()
                 .map(|(proof, r)| {
@@ -460,6 +489,15 @@ pub(crate) fn prove_block_rec(
     rec: &mut Recorder,
 ) -> Result<BlockProof, ProverError> {
     let total = rec.start(Stage::BlockTotal);
+    debug_only!(debug::banner("prove_block"));
+    dlog!(
+        Phase,
+        "apogee block    begin families={} plan={:?}",
+        setup.families.len(),
+        plan.shards
+    );
+    #[cfg(feature = "debug-info")]
+    let block_clock = debug::Clock::start();
     let span = rec.start(Stage::BlockPlanCheck);
     let derived = plan_shards(archive.cycle_profile(), &setup.program.config);
     if *plan != derived {
@@ -484,6 +522,13 @@ pub(crate) fn prove_block_rec(
         .expect("prove_block assembles the statement's shards in statement order");
     rec.end(span);
     rec.end(total);
+    dlog!(
+        Phase,
+        "apogee block    done shards={} bytes={} ms={}",
+        block.shards.len(),
+        block.to_bytes().len(),
+        block_clock.ms()
+    );
     Ok(block)
 }
 

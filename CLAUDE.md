@@ -22,7 +22,7 @@ docs/
                  jump-branch-slt.md, shift-bitwise.md, mul-div.md, memory-ops.md;
                  block-proof.md, the block layer: BlockProof, verify_block, ts windows; and
                  delegation.md, THE delegation ABI: the ecall convention, the frame, the
-                 anchor, static detachment, the four delegation circuits, and the
+                 anchor, static detachment, the six delegation circuits, and the
                  guest-target backend; and
                  revm-block.md, S24's two wire formats: the output commitment, frozen,
                  and BlockWitness, deliberately NOT frozen -- §1.6 is S26's blob-price
@@ -67,7 +67,10 @@ crates/
                  delegation circuits share; `keccak`: S21's delegation circuit; `poseidon2`
                  and `fr_arith`: S23's; `mod_mul`: S26's, specialized at S26b to
                  `a·b mod m` over one of FOUR fixed Ethereum fields a frame word
-                 SELECTS; `gadgets`: the is-zero and
+                 SELECTS; `sha256` and `ec_add`: S26c's two, one SHA-256 compression
+                 a row and one THIRD of a complete elliptic-curve point addition a
+                 row, the second being the first delegation family to carry a lookup
+                 channel; `gadgets`: the is-zero and
                  comparison gadgets;
                  `family_circuit`: the registry, now every family; no_std
   gkr-verify/    the GKR verifier half: the gate kernel, the layer sumcheck verifier and
@@ -100,12 +103,16 @@ crates/
                  guest-only, and NOT a workspace member
 guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, opcodes/, heap/,
                  addsub/, control/, alu/, mem/, shards/, keccak-test/, keccak-unused/,
-                 recursion-ops/, recursion-unused/, revm-block/, public-io/, mod-mul-ops/
+                 recursion-ops/, recursion-unused/, revm-block/, public-io/, mod-mul-ops/,
+                 sha256-ops/, ec-ops/
                  -- their own workspace; see guests/Cargo.toml and docs/guest-program-manual.md
   vendor/        upstream crates vendored so a GUEST can patch them, through
                  guests/Cargo.toml's [patch.crates-io]; see guests/vendor/README.md.
                  S26 vendored k256 0.13.4 and S26b ark-ff 0.6.0, routing secp256k1's
-                 two fields and BN254's two through MOD_MUL
+                 two fields and BN254's two through MOD_MUL; S26c patched k256's
+                 ProjectivePoint through EC_ADD and vendored revm-precompile
+                 42.0.1, whose Crypto DEFAULT BODIES route 0x02, 0x06 and 0x07 --
+                 installing a second impl costs 870 kB of dead BLS12-381
 assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 handoff
 tools/
   profiler/      the cycle profiler: where a guest's RV32 cycles go, by function and by
@@ -116,7 +123,7 @@ tools/
                  toy circuit artifacts, defined there and compiled by `constraints`,
                  S14's memory artifacts, written from `constraints::memory`'s constructors,
                  S15's lookup toy, every registered execution family's circuit, written from
-                 `constraints`, the four delegation circuits **by digest** (the artifacts
+                 `constraints`, the six delegation circuits **by digest** (the artifacts
                  are megabytes),
                  the generic table's commitments over the ceremony, S20's global
                  transcript tape, and S24's synthetic block -- the witness, what native
@@ -186,15 +193,29 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
-cargo clippy -p prover --all-targets --features metrics -- -D warnings   # the ONE feature's configuration
-cargo test --workspace                      # 1,048 tests; 67 more are #[ignore]d (marker counts, not a run)
+cargo clippy -p prover --all-targets --features metrics -- -D warnings   # feature 1 of 2
+cargo clippy -p prover --all-targets --features debug-info -- -D warnings   # feature 2 of 2
+cargo clippy -p prover --all-targets --features metrics,debug-info -- -D warnings   # both at once
+cargo test --workspace                      # 1,090 tests; 68 more are #[ignore]d (the run's own tally, S26c)
 cargo test -p prover --features metrics --test metrics  # the metrics harness; 10 more, 2 #[ignore]d
+cargo test -p prover --features debug-info --test debug_info  # the debug log: the levels, and that it changes no proof byte
+cargo test -p prover --features debug-info --lib  # the log's own unit tests, which the default build does not compile
 cargo test -p program --test delegation -- --ignored --test-threads=1  # static detachment at BOTH guest profiles; builds six guest images, 2.9 s
+cargo test -p emulator --test guests -- --ignored --test-threads=1  # DEFERRED; S26c's invocation counts: four traced executions, two of them `ec-ops`, 23.9 GiB peak and 118 s -- a GitHub runner reclaims the job, so this one is a dev-server run
+cargo test -p prover --test fills -- --ignored --test-threads=1  # DEFERRED; S26c: the MOD_MUL and EC_ADD fills, which exist only at 2^16, so each is its full committed width over 65,536 rows -- 19.1 GiB peak against 1.72 for the four that stay in CI
 APOGEE_GUEST_PROFILE=release cargo test -p emulator --test revm -- --ignored --test-threads=1  # S24's guest against native revm; builds the revm guest, 47 s
 cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 17.5 GB peak, 203 s, 30 min on a runner
 cargo test -p prover --test acceptance -- --include-ignored --test-threads=1  # DEFERRED; S16's statement, 10.7 GB peak, 374 s
 cargo test -p verifier --test cli -- --include-ignored --test-threads=1       # DEFERRED; ditto, 10.7 GB, 44 s
-cargo test --release -p checker --test tamper -- --include-ignored --test-threads=1  # DEFERRED; one re-proof a twin, SEVEN statements since S26, 17.9 GB peak, 4231 s -- the slowest by wall clock, and longer since S-IO gave every statement two more shards; --release since S21
+# `checker::tamper` is NOT RUN, anywhere -- owner's instruction, S-BATCH. The suite
+# (4,231 s at S23, 5,330 s and 20.2 GB at S26, SEVEN statements, one re-proof a twin)
+# is struck from EVERY run list: this block, and both of ci.yml's commented blocks.
+# `crates/checker/tests/tamper.rs` and `checker::TamperHarness` REMAIN in the tree --
+# the harness is not optional, `crates/host/tests/prove.rs`'s advice twin being built on
+# it -- so the file can still be run deliberately by name. What no routine run now
+# covers: the per-family tamper twins (control C8's three forgeries, S17-S19's, the
+# delegation anchors' four) and S26c's changed `mm_shards == 1`. What still covers the
+# harness itself: `host::prove`'s `a5_a_corrupted_advice_cell_is_refused`.
 cargo test -p prover --test control -- --include-ignored --test-threads=1     # DEFERRED; S17's statement, 19.6 GB peak, 59 s
 cargo test --release -p prover --test alu -- --include-ignored --test-threads=1  # DEFERRED; S18's statement, 31.7 GB peak, 53 s
 cargo test --release -p prover --test mem -- --include-ignored --test-threads=1  # DEFERRED; S19's statement, 33.5 GB peak, 61 s
@@ -212,6 +233,17 @@ cargo run --manifest-path tools/transcript-ref/Cargo.toml
 cd guests/fib && cargo build --target riscv32imac-unknown-none-elf
 git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constants/tests/vectors/ crates/constraints/tests/vectors/ crates/checker/tests/vectors/ crates/emulator/tests/vectors/
 -------------------------------------------------------------------------------
+APOGEE_DEBUG=detail cargo test --release -p prover --features debug-info \
+    --test <suite> -- --include-ignored --test-threads=1 2>&1 | tee /tmp/<suite>.log
+                                            # WHEN A DEFERRED SUITE FAILS: the same suite with
+                                            # the log on. `grep -c "begin h="` against
+                                            # `grep -c "gkr done"` and `open begin`/`open done`
+                                            # -- an unmatched begin is a shard that died, and
+                                            # `grep "begin h=" | tail -1` names it;
+                                            # `grep -E "FAIL|NOT CANONICAL|UNBALANCED|OVER the|
+                                            # NAMES NO|DISAGREES|ABORTED|LAYOUT-BREAK"` is every
+                                            # verdict the scans reached.
+                                            # `docs/spec/debug-info.md` §2, §5, §8
 cargo run -p kat-gen                        # refresh every fixture (manual, deliberate)
 cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader | isa | program | gkr | memory | lookup | family | delegation | moduli | tape | revm
 cargo run -p checker -- laws <artifact>     # Laws 1-4 and the lookup rules, the standalone validators
@@ -342,18 +374,39 @@ is derivable *from* them is regenerated and diffed in CI.
   by a test function carrying its number** (owner's decision), and deleting a test that
   yields nothing new is part of the work.
 - **Concrete types.** `Fr` is a struct. There is no `F: Field`, and there never will be.
-- **No cargo features. Zero — with exactly one exception, and it is closed.** One build
-  configuration for the whole workspace. The exception is `prover/metrics`, granted by the
-  owner at S20 for the proving harness and **for nothing else**: the rule stands unchanged
-  for every future progression, and `crates/prover/tests/one_feature.rs` enforces that by
-  reading every `Cargo.toml` in the repository and failing on any `[features]` table but
-  that one, or any key in it but `metrics`. The feature is off by default, enables no
-  dependency, and changes no proof byte; CI builds, clippies and tests the feature-on
-  configuration too, so the anti-goal's stated hazard — "a configuration nobody builds is
-  broken and undiscovered" — does not apply to it. `docs/spec/metrics.md` §0. A
-  `features = [...]` *key* inside a dependency entry is a different thing and always was
-  allowed: it selects an upstream crate's features, as the workspace manifest does for
-  `ark-ec` and `ark-ff`.
+- **No cargo features. Zero — with exactly TWO exceptions, each granted by name.** One
+  build configuration for the whole workspace. The exceptions are `prover/metrics`, granted
+  by the owner at S20 for the proving harness, and `prover/debug-info`, granted at S-DEBUG
+  for the proving debug log — and **for nothing else**: the rule stands unchanged for every
+  future progression, and `crates/prover/tests/one_feature.rs` enforces that by reading
+  every `Cargo.toml` in the repository and failing on any `[features]` table but that one,
+  or any key in it but those two, in that order. Each is off by default, enables no
+  dependency, and changes no proof byte; CI builds, clippies and tests both
+  configurations on, so the anti-goal's stated hazard — "a configuration nobody builds is
+  broken and undiscovered" — does not apply to either. **Both exist for the same reason**:
+  the module behind each is deliberately liberal — `metrics` sizes every committed column
+  and every forward-pass layer, `debug-info` scans every live row of a delegation shard —
+  and neither may sit in the path of a real proving run. `docs/spec/metrics.md` §0 and
+  `docs/spec/debug-info.md` §0. A `features = [...]` *key* inside a dependency entry is a
+  different thing and always was allowed: it selects an upstream crate's features, as the
+  workspace manifest does for `ark-ec` and `ark-ff`.
+- **The debug log is `docs/spec/debug-info.md`: `APOGEE_DEBUG` chooses the level, the
+  feature chooses whether there is one.** Build with `--features debug-info` and set
+  `APOGEE_DEBUG=phase|detail|deep` (unset in such a build is `phase`; `off` silences;
+  `deep:EC_ADD,MOD_MUL` raises those families and leaves the rest one level lower). It
+  writes to the **raw stderr handle**, not `eprintln!`, because libtest's capture prints a
+  test's output only when that test *fails* and the failures this exists for — an OOM kill
+  on a 38 GB block, a hang, a `SIGINT` — lose captured output entirely. So **a `begin` line
+  with no matching `done` names the shard that died**, and that pair is the whole design.
+  At `detail` it runs `gkr::self_check` before the backward pass, which turns a verifier's
+  `LayerInconsistency { layer }` into a gate list, a row, the relation's *name* and every
+  value that relation read (`gkr::explain_self_check`, compiled unconditionally and tested
+  in the default build). For the delegation families it scans the frame: the invocation
+  count against the height, the timestamp gap against the 38-bit clock, the modulus or
+  curve selector as a histogram, `EC_ADD`'s three thirds held equal, and the canonicity
+  borrow chains — restricted, for `EC_ADD`, to the values the row's group actually reads,
+  because a value's `< m` conclusion is gated and a scan that ignored that would call every
+  honest block broken.
 - **One encoding.** Field elements on the wire are canonical (non-Montgomery) 32-byte
   little-endian. Montgomery form exists only in memory. Source literals are the one
   exception and are their own single form: `Fr::from_hex`, `0x` plus 64 lowercase digits,
@@ -925,22 +978,32 @@ is derivable *from* them is regenerated and diffed in CI.
   than not delegating. Poseidon2's frame is the other way — canonical values, so the circuit
   is `poseidon2_permute` itself — because there the conversion is six operations against 240
   the delegation removes (`docs/spec/delegation.md` §12.1, §13.2).
-- **A delegation family carries no lookup channel, and that is load-bearing.** Its rows are
-  invocations, not halfwords, so its ceiling is the width of one row's circuit — and **the
-  four families differ there by three orders of magnitude, so they do not share a height**:
-  `KECCAK_F`, `POSEIDON2` and `FR_ARITH` take `2^8` (keccak at `2^16` is 744 GB of forward
-  pass a shard), and `MOD_MUL` takes `2^16`, where it is 7.9 GB and a measured block falls
-  from 1,048 shards to 5 (`docs/spec/delegation.md` §9.2). Below `2^20` no timestamp table
-  fits at any of them, so every bound a delegation family makes is a bit decomposition with a
-  booleanity gate — including a frame value's **canonicity**, an eight-limb borrow chain
-  whose last borrow is 1 exactly when the value is below the modulus: against `p`'s
-  literals for `FR_ARITH` and `POSEIDON2`, and against `MOD_MUL`'s eight `m_limb` columns,
-  which its selector pins to one of four tables of literals. That is also why its registry arm sits *below* `family_circuit`'s
-  minimum-height guard: a family with no channel reaches no `BITS ≤ trace_vars` assertion,
-  and putting it in the guard would refuse the heights these families actually take. **A
-  height changes no gate** — it adds one halving list per variable carrying one node per
-  output, and nothing else — which is what made `MOD_MUL`'s raise a re-pin and not a redesign
-  (`crates/checker/tests/mod_mul.rs::a_height_moves_only_the_halving_layers`).
+- **A delegation family takes its own height, and since S26c two of the six carry
+  `RANGE16`.** Its rows are invocations, not halfwords, so its ceiling is the width of one
+  row's circuit — and **the six differ there by four orders of magnitude, so they do not
+  share a height**: `KECCAK_F`, `POSEIDON2`, `FR_ARITH` and `SHA256_COMP` take `2^8` (keccak
+  at `2^16` is 744 GB of forward pass a shard, SHA-256's compression 35 GB), and `MOD_MUL` and
+  `EC_ADD` take `2^16` — 5.1 GB and **20.5 GB** a shard, the second being above an execution
+  shard's own peak and therefore the peak-setting family in a block
+  (`docs/spec/delegation.md` §9.2). `2^16` is *forced* for those two rather than chosen: it is
+  the channel's floor, Mercury needs an even variable count, and `2^18` is four times worse.
+  **No delegation family may carry `TIMESTAMP` at any height on this menu** — `BITS = 19`
+  needs `2^20`, an execution family's floor — so a frame's timestamp gap is a bit
+  decomposition at `2^8` and three `RANGE16` chunks at `2^16`, never that channel's
+  obligation. A frame value's **canonicity** is an eight-limb borrow chain whose last borrow
+  is 1 exactly when the value is below the modulus: against `p`'s literals for `FR_ARITH` and
+  `POSEIDON2`, and against `MOD_MUL`'s and `EC_ADD`'s `m_limb` columns, which a selector pins
+  to one of four or two tables of literals. **A gated conclusion is
+  `enable·(1 − b_7) = 0` and never `b_7 = enable`**: the second forces the borrow to 0 where
+  `enable` is 0, so a value that *is* below the modulus on a row that does not read it becomes
+  unprovable — which at S26c made every row of `EC_ADD` unprovable while the executor, the
+  guests and every shape test passed. **`family_circuit`'s minimum-height guard is derived,
+  not a list**: it reads each family's own `channels()` and takes the widest range channel's
+  `BITS`, so a family is held to exactly the floor its channels imply and no table has to be
+  kept in step. **A height changes no gate** — it adds one halving list per variable carrying
+  one node per output, and nothing else — which is what made `MOD_MUL`'s raise a re-pin and
+  not a redesign
+  (`crates/checker/tests/{mod_mul,ec_add}.rs::a_height_moves_only_the_halving_layers`).
 - **`MOD_MUL` multiplies in one of FOUR fixed Ethereum fields, and the EVM's `MULMOD` is
   not one of them** (S26b, `docs/spec/delegation.md` §14 and §10.2). Frame word 0 selects
   secp256k1's `p` or `n` or BN254's `q` or `r`; the circuit supplies the limbs as literals
@@ -1103,6 +1166,19 @@ is derivable *from* them is regenerated and diffed in CI.
   selects an upstream crate's features and always was allowed, which is how
   `alloy-primitives`' `native-keccak` routes every keccak in a revm image through the S21
   shim.
+- **A hook that takes a trait object can cost more than the code it replaces** (S26c).
+  revm's `install_crypto` is the seam for its precompiles, and installing a second
+  `Crypto` implementation makes `crypto()`'s `OnceLock` hold one of two types — which kills
+  LLVM's devirtualization of every call through it, and with it the dead-stripping of the
+  arkworks BLS12-381 pairing and the KZG verifier this workload never reaches. **870,828
+  bytes of `.text`**, measured with a provider whose every method forwarded straight back to
+  `DefaultCrypto`, so the cost is the *coercion*. That took `guests/revm-block` past what a
+  `2^20` decoded table reaches — a table's row `i` is pc `2i`, so `2^20` reaches
+  `2·2^20 − 4`, and S24's image already used 82% of it — and would have forced `2^22`, the
+  menu's last entry, at about 42 GB of forward pass a shard. So the routing patches the
+  trait's **default bodies** in a vendored `revm-precompile` instead: one implementation
+  still, devirtualization intact, **10,568 bytes**. The lesson generalizes past revm — in a
+  zkVM image, `dyn` is not free and the bill arrives as a decoded table's height.
 - **A guest may also *vendor* one, and then the copy lives under `guests/vendor`**
   (S26). The same licence, one step further: when the hook a delegation needs does not
   exist upstream, the crate is copied in verbatim and patched, `guests/Cargo.toml`'s
@@ -1212,6 +1288,9 @@ is derivable *from* them is regenerated and diffed in CI.
 | S26 — Cycle reduction: streaming prover, cycle profiler, `MOD_MUL` | done | `docs/handoff/S26-cycle.md` |
 | S-NATIVE-IO — The native I/O model: POSIX and QEMU deleted | done | `docs/handoff/S-NATIVE-IO.md` |
 | S26b — `MOD_MUL` specialized: four fixed Ethereum moduli | done | `docs/handoff/S26b-eth-field-mul.md` |
+| S26c — SHA-256 compression + secp256k1/BN254 `EC_ADD` | done | `docs/handoff/S26c-sha256-ec.md` |
+| S-DEBUG — The proving debug log | done | `docs/handoff/S-DEBUG-debug-log.md` |
+| S-BATCH — The mini-block gate, measured | done | `docs/handoff/S-BATCH-miniblock-gate.md` |
 
 **S-IO takes no number, and that is deliberate** (owner's decision). It is not one of the
 original twenty-seven stages — it is the stage those twenty-seven forgot, inserted after
@@ -1221,6 +1300,22 @@ means**: the recorder that produces a `BlockWitness` for real blocks. The forwar
 references to `S25` in that prompt and in `docs/handoff/S24-revm.md` are the owner's, are
 about that stage and are left alone; every `S25` in this repository that meant *this* stage
 now reads `S-IO`.
+
+**`S-BATCH` takes no number either**, and it is the deferred batch S26c skipped. S26c's
+handoff §7.1 records that the owner opened PR #32 without running the fourteen `# DEFERRED`
+suites; S-DEBUG was then built *for* that batch. S-BATCH ran **only the mini-block gate** —
+green, and the first end-to-end proof that S26b's `MOD_MUL` and S26c's `EC_ADD` are
+bit-exact — and the owner cancelled the rest. It changed no circuit; it fixed eight
+assertions two new delegation types had moved, and it produced this repository's first
+x86-64 measurements. **Three of its findings change how later stages should plan.** The
+mini-block gate peaks at **136.28 GiB**, 3.9× what S25 records and 3.3× the largest peak
+recorded anywhere, so no pre-S26c memory figure is usable for sizing. A per-shard `ms` in
+a parallel region is **not a cost** — one shard logged 1,244 ms and 154,168 ms for
+identical work — so per-family costs must be read off a serial pass. And **`guests/revm-block`
+cannot prove a full block at all**: its frozen §2 journal carries a per-transaction record
+against a 1,020-byte window, `guest_sdk::commit` exits 70 rather than truncating, and all
+four real blocks S26 profiled exit 70. Full-block work belongs to `revm-block-stateless`,
+a second identity that has never been proved.
 
 **`S-NATIVE-IO` takes no number for the same reason**, and it is S-IO's other half. S-IO
 built the mechanism that binds an execution's public values and left the POSIX surface

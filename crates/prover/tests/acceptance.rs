@@ -170,12 +170,13 @@ fn a1_the_tiny_guest_proves_and_both_shards_verify() {
     // (32 bytes) and one more witness commitment (64), so **+96**, and again no
     // inner column — its three gates are enforcing. This number moves by 96
     // bytes for every delegation family the repository registers, which is the
-    // standing price `docs/spec/delegation.md` §10 names.
-    assert_eq!(add.to_bytes().len(), 57_004);
+    // standing price `docs/spec/delegation.md` §10 names. S26c registered a
+    // fifth and a sixth, `SHA256_COMP` and `EC_ADD`, so **+192** by that rule.
+    assert_eq!(add.to_bytes().len(), 57_196);
     assert_eq!(init.to_bytes().len(), 20_524);
     assert_eq!(add.gkr.layers.len(), 25);
     assert_eq!(add.gkr.layers[0].rounds.len(), 20);
-    assert_eq!(add.gkr.layers[0].final_evals.len(), 27 + 33 + 7);
+    assert_eq!(add.gkr.layers[0].final_evals.len(), 27 + 35 + 7);
 }
 
 // ---------------------------------------------------------------------------
