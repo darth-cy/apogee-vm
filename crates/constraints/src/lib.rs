@@ -101,15 +101,18 @@ impl FamilyCircuit {
 /// guard was a hand-written arm naming the seven execution families and one
 /// threshold, `BITS[TIMESTAMP]`; a family missing from it, or a family whose
 /// widest channel was not TIMESTAMP, reached the assertion anyway. It is now
-/// the max of `BITS` over the range channels the family declares, taken from
+/// the most any one of the family's channels' tables needs, taken from
 /// `channels()` before the artifact is built, which closes the class rather
-/// than one instance of it. A family with no range channel keeps a floor of 0,
-/// which is what the RAM window families and `KECCAK_F`, `POSEIDON2`,
-/// `FR_ARITH` and `SHA256_COMP` take.
+/// than one instance of it. A family with no channel at all keeps a floor of 0,
+/// which is what the RAM window families and `POSEIDON2`, `FR_ARITH` and
+/// `SHA256_COMP` take.
 ///
 /// `EC_ADD` is the first delegation family to carry a channel at all
 /// (`docs/spec/delegation.md` §10.3, which amends §9): RANGE16 at 16 bits, so
-/// its floor is `2^16`, which is also its `DEFAULT_HEIGHTS` entry.
+/// its floor is `2^16`, which is also its `DEFAULT_HEIGHTS` entry. `KECCAK_F`
+/// has carried `RANGE16` and `XOR8` since S26d, so its floor is `2^16` too —
+/// and a floor is not a height: its `DEFAULT_HEIGHTS` entry is `2^18`, chosen
+/// above it.
 pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
     use constants::family as f;
     if trace_vars > MAX_TRACE_VARS {
@@ -143,8 +146,8 @@ pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
             f::PUBLIC_INPUT | f::ADVICE_WINDOWS => (memory::value_window_artifact, Vec::new()),
             // The delegation families. Their heights differ by three orders of
             // magnitude because their rows do (`docs/spec/delegation.md` §9.2);
-            // what each one may take is the floor below, and for the four that
-            // carry no channel that floor is 0.
+            // what each one may take is the floor below, and for the three
+            // that carry no channel that floor is 0.
             f::KECCAK_F => (keccak::artifact, keccak::channels()),
             f::POSEIDON2 => (poseidon2::artifact, poseidon2::channels()),
             f::FR_ARITH => (fr_arith::artifact, fr_arith::channels()),

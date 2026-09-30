@@ -131,9 +131,11 @@ pub fn instructions(image: &ProgramImage) -> Vec<(u32, u32, bool)> {
 
 /// Every family at the smallest menu height a *decoded* table can take.
 ///
-/// Since S21 the menu opens with `2^8`, `KECCAK_F`'s height: a delegation
-/// family's rows are invocations, not halfwords, so 256 rows is a sensible
-/// table there and no guest's code fits in 256 halfwords anywhere else
+/// Since S21 the menu opens with `2^8` — among the delegation families now
+/// `POSEIDON2`'s, `FR_ARITH`'s and `SHA256_COMP`'s rather than `KECCAK_F`'s,
+/// which takes `2^18`, and S-IO's two public families pin the entry anyway: a
+/// delegation family's rows are invocations, not halfwords, so 256 rows is a
+/// sensible table there and no guest's code fits in 256 halfwords anywhere else
 /// (`docs/spec/delegation.md` §9). The floor for an instruction table is
 /// therefore the menu's *second* entry, and the tests below spell that height
 /// out in their own arithmetic — pc `0x1fffe` is row 65535 — so it is

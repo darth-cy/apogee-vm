@@ -159,7 +159,11 @@ pub fn jbs_vk() -> VerifyingKey {
 /// name none at all. This one is the only fast-gate reading of the new arms.
 ///
 /// The family has **no setup column**, so its slot in `setup_commitments` is
-/// empty, and it is at `2^16`, the only height `family_circuit` gives it.
+/// empty, and it is at `2^16` — the **floor** `family_circuit` gives it, and
+/// deliberately not its default, which is `2^18` since S26d. This key is
+/// synthetic: it spells its own heights, computes its own identity and SRS
+/// digests from them, and reads `DEFAULT_HEIGHTS` nowhere, so the cheapest legal
+/// height is the right one here and `2^16` is not a stale literal.
 pub fn keccak_vk() -> VerifyingKey {
     let config = VmConfig {
         families: {

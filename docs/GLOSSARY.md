@@ -234,8 +234,10 @@ arbitrary modulus and is not served. **Three of the six decompose one operation 
 several rows** — `KECCAK_F` over 24, `EC_ADD` over 3 — and what glues them is the frame
 being ordinary RAM, the global multiset proving one row's written words are the next's read
 words. **The six do not share a height**: `POSEIDON2`, `FR_ARITH` and `SHA256_COMP` are
-`2^8` rows and `KECCAK_F`, `MOD_MUL` and `EC_ADD` are `2^16`, a row's circuit width
-differing between them by three orders of magnitude
+`2^8` rows, `MOD_MUL` and `EC_ADD` are `2^16` and `KECCAK_F` is `2^18`, a row's circuit width
+differing between them by three orders of magnitude — and `KECCAK_F`'s last two variables a
+*choice* above its `2^16` floor, fewer and fatter shards costing a keccak-heavy workload
+fewer proof bytes in total
 (`docs/spec/delegation.md` §9.2). **Three of the six carry a lookup channel** — `RANGE16`,
 which the family's height has to reach, and for `KECCAK_F` also S26d's `XOR8` — and that is
 S26c's amendment to a rule that read

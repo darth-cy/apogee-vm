@@ -179,15 +179,21 @@ fn a4_the_block_with_a_delegation_shard_proves_and_verifies() {
     );
 
     // The delegation shard's proof has its circuit's shape:
-    // `docs/spec/shard-proof.md` §9's layout over `keccak::artifact(16)`, which
-    // is `docs/spec/constraint-manifest.md` §1.2's 373,276 bytes.
+    // `docs/spec/shard-proof.md` §9's layout over `keccak::artifact(18)`, which
+    // is `docs/spec/constraint-manifest.md` §1.2's 381,100 bytes.
     //
     // **This is the number S26d was for.** S21's shard was 11,880,012 bytes for
     // 256 permutations — 46,406 a permutation, and five such shards were 97% of
     // a measured mini-block's proof (`docs/spec/delegation.md` §9.1). One round
-    // a row is 373,276 bytes for 2,730 permutations, which is 137 a permutation:
-    // **339 times fewer proof bytes** for the same work, from 31.8× the shard
-    // and 10.7× the permutations in it.
+    // a row at `2^18` is 381,100 bytes for 10,922 permutations, which is 34.9 a
+    // permutation: **1,330 times fewer proof bytes** for the same work, from
+    // 31.2× the shard and 42.7× the permutations in it.
+    //
+    // 381,100 is **derived, not measured**: `proof_bytes` above is a closed form
+    // over the artifact and it reproduces S26d's measured 373,276 at `2^16`
+    // exactly, which is what licenses reading it forwards to `2^18`. The
+    // assertion against `proof_bytes` is the one that matters; the literal is
+    // there so a shape change has to be acknowledged.
     let circuit = constraints::family_circuit(KECCAK, common::KECCAK_VARS)
         .expect("the registry has the keccak circuit");
     assert_eq!(
@@ -195,7 +201,7 @@ fn a4_the_block_with_a_delegation_shard_proves_and_verifies() {
         proof_bytes(&circuit.artifact),
         "the keccak shard's proof is its circuit's shape"
     );
-    assert_eq!(keccak.to_bytes().len(), 373_276);
+    assert_eq!(keccak.to_bytes().len(), 381_100);
 
     // Every shard verifies on its own too, through the one entry point.
     for shard in &block.shards {

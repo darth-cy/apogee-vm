@@ -96,7 +96,7 @@ is claimed by exactly one family by construction.
 | 6 | `ATOMICS` | `lr.w sc.w` and the nine AMOs | 2^20 |
 | 7 | `INIT_TEARDOWN` | no pc; RAM window 0, the image window, exactly one shard; present in every `VmConfig`; an **empty** table: no columns, no live rows | 2^22 |
 | 8 | `ZERO_WINDOWS` | no pc; the zero-initialized RAM windows above window 0, one shard per touched window; present in every `VmConfig`; an **empty** table | 2^22 |
-| 9 | `KECCAK_F` | no pc; **invoked, not decoded**: ecall `0x507`, one keccak-f[1600] **round** a row since S26d — a permutation is 24 consecutive invocations — present exactly when the image declares it; an **empty** table. `0x501` was S21's whole-permutation call and is retired and burned | 2^16 |
+| 9 | `KECCAK_F` | no pc; **invoked, not decoded**: ecall `0x507`, one keccak-f[1600] **round** a row since S26d — a permutation is 24 consecutive invocations — present exactly when the image declares it; an **empty** table. `0x501` was S21's whole-permutation call and is retired and burned | 2^18 |
 | 10 | `POSEIDON2` | no pc; the same, ecall `0x500`, one width-3 permutation a row | 2^8 |
 | 11 | `FR_ARITH` | no pc; the same, ecall `0x502`, one `Fr` add, multiply or inverse a row | 2^8 |
 | 12 | `PUBLIC_INPUT` | no pc; the public input window at `0x8000`, **exactly one shard**, present in every `VmConfig` at the **pinned** `family::PUBLIC_WINDOW_HEIGHT`; an **empty** table | 2^8 |

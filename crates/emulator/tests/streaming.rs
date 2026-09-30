@@ -20,9 +20,11 @@
 //!    descriptor and its public values are the same.
 //!
 //! The delegation guests are here for arm 2 of `ChunkRows`: `keccak-test` and
-//! `recursion-ops` flush `DelegationTrace` chunks at `2^8`, which is small
-//! enough that they flush **more than once** and the shard index arithmetic is
-//! exercised rather than assumed.
+//! `recursion-ops` put a `DelegationTrace` in front of it, so the chunker is
+//! exercised on an invocation buffer and not only on `guests/shards`' cycle
+//! ones. What they contribute is the **partial tail chunk** — `keccak-test`'s 240
+//! rounds are one chunk at any height on the menu, and it arrives through
+//! `finish()`'s tail rather than the flush path.
 
 mod common;
 
@@ -37,9 +39,11 @@ use trace::{plan_shards, FamilyTraces, MemoryEventLog};
 ///
 /// `smallest` for the plain ones, which puts every family at `2^16` and so cuts
 /// no shard at all for most of them; the two delegation guests take `2^8` for
-/// their delegation families, which is the menu's smallest and what a real
-/// statement gives them (`docs/spec/delegation.md` §9), so their invocation
-/// buffers flush.
+/// their delegation families, which is the menu's smallest, so their invocation
+/// buffers flush. For `recursion-ops` that is still what a real statement gives
+/// it — `POSEIDON2` and `FR_ARITH` default to `2^8` — but for `keccak-test` it is
+/// a choice made **here**: `KECCAK_F` defaults to `2^18` since S26d
+/// (`docs/spec/delegation.md` §9.2), where its 240 rounds are one shard.
 const GUESTS: [(&str, u32); 13] = [
     ("fib", 16),
     ("heap", 16),

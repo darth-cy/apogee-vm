@@ -563,7 +563,7 @@ each to its constructor's bytes. The leaves' independent description is the plai
 arithmetic of `crates/gkr/tests/memory.rs`.
 
 `tests/vectors/{keccak,poseidon2,fr_arith,mod_mul,sha256,ec_add}.txt`: **digests, not
-artifacts.** A delegation row is a whole permutation or a whole field operation, so the
+artifacts.** A delegation row is a whole field operation, a whole permutation or — since S26d — one keccak round, so the
 artifacts run to megabytes — `poseidon2::artifact(8).to_bytes()` is 2,056,361 bytes and
 `sha256::artifact(8)`'s 10,895,760 — and what is committed is one line apiece: the shape
 counts and the artifact's SHA-256. `cargo run -p kat-gen -- delegation` writes them,
@@ -572,8 +572,9 @@ every other fixture. The owner chose the digest at S21 over committing the bytes
 nothing. Their readable accounts are `docs/spec/constraint-manifest.md` §12, §13, §14, §18,
 §19 and §20. **Keccak's was 100,254,040 bytes until S26d** — 974 times the largest committed
 circuit, and the reason the digest convention exists — and one round a row took it to
-1,899,700, small enough that `checker dump` of it is 20,333 readable lines where a
-358,525-relation listing was not a readable account of anything.
+1,900,468 at the `2^18` the family now takes, small enough that `checker dump` of it is
+20,373 readable lines where a 358,525-relation listing was not a readable account of
+anything.
 
 `tests/vectors/{add_sub,jump_branch_slt,shift_bitwise,mul_div}.bin`: one per registered
 execution family — S16's `add_sub::artifact`, S17's `jump_branch_slt::artifact` and S18's

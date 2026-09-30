@@ -573,12 +573,13 @@ pub(crate) fn canonical_gates(
 // ---------------------------------------------------------------------------
 //
 // `docs/spec/delegation.md` §9 forbade a delegation family a lookup channel
-// until §10.3 amended it. Two families take the channel now — `EC_ADD`, whose
-// row is otherwise 3,746 columns of gap bits, and `MOD_MUL`, whose row falls
-// from 3,468 committed columns to about 325 — and the three helpers below are
-// what they share. `KECCAK_F`, `POSEIDON2`, `FR_ARITH` and `SHA256_COMP` stay
-// on bit decompositions: they live at `2^8`, where no channel's table fits at
-// any price (`docs/spec/lookup.md` §3).
+// until §10.3 amended it. Three families take the channel now — `EC_ADD`, whose
+// row is otherwise 3,746 columns of gap bits, `MOD_MUL`, whose row falls
+// from 3,468 committed columns to about 325, and `KECCAK_F`, whose frame gaps
+// take it in chunks since S26d — and the three helpers below are what they
+// share. `POSEIDON2`, `FR_ARITH` and `SHA256_COMP` stay on bit decompositions:
+// they live at `2^8`, where no channel's table fits at any price
+// (`docs/spec/lookup.md` §3).
 
 /// Bits a `RANGE16` chunk holds.
 pub(crate) const CHUNK_BITS: u32 = 16;
@@ -690,7 +691,8 @@ pub(crate) fn bound_chunked(
 ///
 /// `TIMESTAMP` would be the natural channel and it does not fit — its table
 /// needs 19 variables and a delegation family that carries a channel at all is
-/// at `2^16` (`docs/spec/delegation.md` §10.3).
+/// at `2^16` or `2^18`, where 19 variables need `2^20`, an execution family's
+/// floor (`docs/spec/delegation.md` §10.3).
 pub const GAP_CHUNKS: usize = 2;
 
 /// The frame's own gates for a family that range-checks through `RANGE16`.

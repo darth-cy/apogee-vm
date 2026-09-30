@@ -5,10 +5,18 @@
 //! it is here because the expensive half is `#[ignore]`d.
 //!
 //! **Two of these are themselves `#[ignore]`d since S26c, and for memory rather
-//! than time.** `MOD_MUL` and `EC_ADD` exist only at `2^16` — `RANGE16`'s table
+//! than time.** `MOD_MUL` and `EC_ADD` are at `2^16` — `RANGE16`'s table
 //! needs sixteen variables — so a fill of either is its full committed width over
-//! 65,536 rows, and `EC_ADD`'s width is 1,420. Measured: the four remaining tests
-//! are 1.72 GiB and 1.73 s, and all six are **19.1 GiB** in 6.18 s. The two that
+//! 65,536 rows, and `EC_ADD`'s width is 1,420. **Measured at S26c**, when
+//! `KECCAK_F` was one permutation a row at `2^8` — 3,764 committed columns over
+//! 256 rows, so a couple of megabytes and no contribution to either figure: the
+//! four remaining tests were 1.72 GiB and 1.73 s, and all six **19.1 GiB** in
+//! 6.18 s. Neither figure has been re-measured since, and the keccak fill is
+//! what moved under both — 0.52 GiB at S26d's `2^16` and **2.08 GiB** at the
+//! `2^18` this file's `common::KECCAK_VARS` takes now, which is 2.08 GiB the
+//! four did not carry before. Do not add that to the 19.1: a peak is a maximum,
+//! the deferred run is `--test-threads=1`, and under `--ignored` the keccak fill
+//! is not in it at all. The two that
 //! cost that are a dev-server run (root `CLAUDE.md`'s deferred list). What still
 //! holds those two circuits in ordinary CI is `crates/checker/tests/{mod_mul,ec_add}.rs`,
 //! which evaluate the same gates row-locally at the same height from witnesses
@@ -143,7 +151,7 @@ fn the_recursion_fills_cover_their_circuits_exactly() {
 /// recorded — the quotient — so "covers its circuit exactly" is also the check
 /// that `mod_mul_witness` wrote every carry it was supposed to.
 #[test]
-#[ignore = "DEFERRED: fills two 2^16 delegation shards -- EC_ADD alone is 1,420 committed columns over 65,536 rows. With `every_delegation_fill_satisfies_every_gate` the file peaks at 19.1 GiB, above what a GitHub runner has"]
+#[ignore = "DEFERRED: fills two 2^16 delegation shards -- EC_ADD alone is 1,420 committed columns over 65,536 rows. With `every_delegation_fill_satisfies_every_gate` the file peaked at 19.1 GiB when that was measured at S26c, above what a GitHub runner has"]
 fn the_mod_mul_and_ec_add_fills_cover_their_circuits_exactly() {
     let program = common::mod_mul_program();
     let archive = common::mod_mul_archive(&program);
@@ -266,8 +274,8 @@ fn the_sha256_fill_covers_its_circuit_and_satisfies_every_gate() {
 /// Evaluate a sample of a filled shard's rows against the gates, row-locally.
 ///
 /// **Why a sample and not a forward pass.** `MOD_MUL` and `EC_ADD` carry the
-/// `RANGE16` channel, so their circuits exist only at `2^16`
-/// (`docs/spec/delegation.md` §10.3) and `gkr::forward` over one is 4.6 GB and
+/// `RANGE16` channel and both take that channel's `2^16` floor as their height
+/// (`docs/spec/delegation.md` §10.3), and `gkr::forward` over one is 4.6 GB and
 /// 18.3 GB respectively — deferred-suite figures, in a suite whose whole point
 /// is to be fast. A relation is **row-local**, so evaluating rows is the same
 /// statement per row at a few megabytes.

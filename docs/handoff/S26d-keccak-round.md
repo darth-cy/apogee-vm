@@ -424,3 +424,94 @@ operation per (row, obligation), 80.6M a shard, which is in line with `EC_ADD`'s
 - **`docs/spec/revm-block.md` §2's journal ceiling is untouched by this stage**, so
   `guests/revm-block` still cannot prove a full block and full-block work still belongs to
   `revm-block-stateless` (`docs/handoff/S-BATCH-miniblock-gate.md`).
+
+---
+
+## 9. Amendment: the height raised to `2^18`
+
+**Owner's instruction, after the stage closed**, and it reverses this stage's own brief —
+*"Do not increase above `2^16` unless measurements justify it. The purpose of this redesign is
+to trade circuit width for rows, not to blindly maximize height."* The raise is recorded here
+rather than argued: the owner asked for it after being shown the trade below, which is what
+"unless measurements justify it" delegates to them.
+
+`constants::family::DEFAULT_HEIGHTS[KECCAK_F]` is `1 << 18`. **`2^16` is still legal** —
+`family_circuit(KECCAK_F, n)` is `Some` for `16 ≤ n ≤ 30` — so 16 is the family's *floor*,
+forced by `RANGE16`'s and `XOR8`'s tables each needing sixteen variables and by Mercury's even
+variable count, and 18 is a **choice** above it. Every sentence in this repository that called
+`2^16` "forced" or "its only height" was corrected with this change.
+
+| | `2^16` (this stage) | `2^18` (now) | |
+| --- | --- | --- | --- |
+| rows a shard | 65,536 | 262,144 | 4× |
+| gate lists | 27 (11 + 16) | 29 (11 + 18) | |
+| inner columns | 5,478 | 5,490 | `5,382 + 6n` |
+| relations | 5,863 | 5,875 | `5,767 + 6n` |
+| artifact wire bytes | 1,899,700 | **1,900,468** | |
+| sumcheck rounds a shard | 312 | 369 | `11n + n(n+1)/2` |
+| permutations a shard | 2,730 | **10,922** | 4× |
+| proof bytes a shard | 373,276 | **381,100** | 1.02× |
+| **proof bytes a permutation** | 137 | **34.9** | **3.9×** |
+| forward pass a shard | ~15 GB | **~60 GB** | 4× |
+
+**The whole argument is the last two rows.** A shard's proof barely notices its height —
+rounds grow logarithmically while rows grow 4× — so consolidating four shards into one cuts
+proof bytes per unit of work by very nearly 4×. A shard's *cost*, on the other hand, is its
+height and not its occupancy: padding rows pay full price.
+
+**So it buys nothing for the mini-block and is aimed at the stateless full block.** The
+mini-block's 1,080 permutations already fitted one `2^16` shard at 39.6%; they now fit one
+`2^18` shard at 9.9%, which is the same single proof for 4× the forward pass. On
+`S-BATCH-miniblock-gate.md` §11.2's projection of 45,000–103,000 permutations for a stateless
+block, `2^16` is 17–38 shards and 6.3–14.2 MB of keccak proof against `2^18`'s **5–10 shards
+and 1.9–3.8 MB**.
+
+**`KECCAK_F` is now the peak-setting delegation family of a block**, at ~60 GB a shard against
+`EC_ADD`'s 20.5 GB, which reverses §8's first bullet above. The ~60 GB is this repository's own
+accounting — inner + committed base + first bind, as `crates/constraints/src/ec_add.rs`
+decomposes its 20.5 GB — being 46.05 + 2.23 + 11.27; the model reproduces the `2^16` figure of
+~15 GB, which is what licenses it. A block proved with the streaming prover must drop
+`--in-flight` accordingly: ~4 concurrent keccak shards on a 247 GiB box where `2^16` allowed 16.
+
+### What did not change
+
+The frame, so **no ecall number is retired or burned**: `PRECOMPILE_KECCAK_F` stays `0x0507`
+and the address-space tag stays 4. No enforcing gate, no obligation, no relation formula. The
+`XOR8` channel's 1,020 obligations and its 1,024-leaf fraction tree are **per row** and did not
+move, so §8's cliff warning stands unchanged at four more obligations — though the cliff is now
+34.4 GB a shard rather than 8.6.
+
+**The `XOR8` table tiles, and it is sound.** Its 65,536 entries repeat four times over 262,144
+rows. `Xor8A`, `Xor8B` and `Xor8Out`'s closed forms are multilinear and agree with
+`virtual_at_row` on the whole cube, so by uniqueness of the multilinear extension they *are* the
+MLE of the tiled table, not of the untiled one; and a duplicate table row carries multiplicity
+0, contributing `(0, T + g)`, which leaves the channel's value exactly unchanged under fraction
+addition. This is the pattern `V[range16]` has used at `2^20` in every execution family since
+S19, and `crates/gkr/tests/lookup.rs::the_xor8_closed_forms_are_their_multilinear_extensions`
+already covers `n = 17` — a tiled case — in the fast gate.
+
+### Two numbers that were wrong before this amendment
+
+- **`constraint-manifest.md` §1.2's `n = 18` row said 1,900,468 artifact bytes were 1,900,318.**
+  It was derived at S26d rather than measured. Regenerating the fixture settled it.
+- **`proof bytes a shard` is derived, not measured, at both heights now.**
+  `crates/prover/tests/keccak.rs`'s own `proof_bytes` is a closed form over the artifact, and it
+  reproduces S26d's *measured* 373,276 at `2^16` exactly — which is what licenses reading it
+  forward to 381,100 at `2^18` without proving a ~60 GB shard. The assertion against
+  `proof_bytes` is the load-bearing one; the literal beside it only forces a shape change to be
+  acknowledged.
+
+### The test heights moved with it, and one deliberately did not
+
+`prover::tests::common::KECCAK_VARS` and `checker::tests::keccak::VARS` are both 18 now. The
+first is **forced**: `crates/prover/tests/revm.rs` derives its delegation heights from
+`DEFAULT_HEIGHTS` and then asserts the config's keccak height is `1 << KECCAK_VARS`, so the two
+disagreeing is a red suite. The second follows because
+`the_fill_satisfies_every_gate_and_every_obligation` builds its program config from
+`common::keccak_params` and fills `1 << VARS` rows of it — a fill matching no config otherwise.
+That test's CI cost goes from 0.52 GiB to 2.08 GiB, and `prover::fills`' keccak fill with it,
+which a 16 GB runner survives.
+
+`crates/verifier-core/tests/common/mod.rs::keccak_vk` stays at an explicit `2^16`: it builds a
+synthetic verifying key to round-trip the `XOR8` channel through the wire form, `2^16` is still
+legal, and the height is not what that test is about.

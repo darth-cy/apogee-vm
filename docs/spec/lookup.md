@@ -114,16 +114,17 @@ S23's two pay the same price in a second place: a frame value's **canonicity** i
 borrow chain against `p` whose limbs are bounded by their own bits, where a `RANGE16` channel
 would have bounded them in sixteen lookups.
 
-**Since S26c a delegation family at `2^16` may carry `RANGE16`, and three do**
+**Since S26c a delegation family at `2^16` or above may carry `RANGE16`, and three do**
 (`docs/spec/delegation.md` §10.3 and §10.4). `MOD_MUL`, `EC_ADD` and — since S26d —
 `KECCAK_F` are wide enough that a bit
 decomposition of every bound is the dominant cost — `EC_ADD`'s 97-word frame is 3,686 gap bits
-against 194 chunk columns — and narrow enough per row that `2^16` is affordable. What stays
+against 194 chunk columns — and narrow enough per row that `2^16` — `2^18` for `KECCAK_F`,
+which takes two variables above the floor by choice — is affordable. What stays
 true at every height this menu offers is that **no delegation family may carry `TIMESTAMP`**:
 `BITS = 19` needs `2^20` rows, which is an execution family's floor and not an invocation
 family's. So a frame's timestamp gap is never that channel's obligation; it is a bit
-decomposition at `2^8`, and at `2^16` three `RANGE16` chunks whose top one carries a scaled
-obligation that is exact at `2^38`.
+decomposition at `2^8`, and at `2^16` and above three `RANGE16` chunks whose top one carries a
+scaled obligation that is exact at `2^38`.
 
 ## 4. Gated keys
 
@@ -565,8 +566,9 @@ height of `2^16` rows or more the table is exactly the 65,536 triples
 **What it buys.** No commitment, no setup column, no movement of the SRS digest,
 and none of `docs/spec/shard-proof.md` §7.2's opening machinery. A committed byte
 table would have been three more setup columns to bind, and folding one into the
-`GENERIC` channel would have meant taking that channel's minimum height of `2^18`
-and re-pinning every verifying key's SRS digest and bytes for the third time.
+`GENERIC` channel would have meant re-pinning every verifying key's SRS digest and
+bytes for the third time — that channel's own minimum height of `2^18` is no longer
+part of the bill, `KECCAK_F` having taken `2^18` by choice since S26d.
 
 **Why the tuple is three wide.** Membership of `(x, y, z)` in a three-wide table
 bounds each of the three to `[0, 256)` **individually**, which is what makes every

@@ -395,7 +395,7 @@ them it is a **tally with one derived verdict** rather than a pass/fail: a
 `round=[0:1 1:0 2:0 ...]` on a shard with one live row is a guest that called the
 shim once, which is a real bug and an unambiguous line.
 
-24 increments a row on a `2^16` family.
+24 increments a row on a `2^18` family.
 
 ---
 

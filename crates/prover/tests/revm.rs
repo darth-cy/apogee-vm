@@ -1,7 +1,7 @@
 //! S24's acceptance 6, 7 and 8: the revm block proved, verified and tampered.
 //!
 //! `#[ignore]`d and deferred out of CI under master rule 7: the statement is
-//! seven `2^20` execution shards, two `2^20` RAM window shards, one `2^8`
+//! seven `2^20` execution shards, two `2^20` RAM window shards, one `2^18`
 //! keccak shard and S-IO's three — two `2^8` public value shards and one
 //! `2^20` advice window — over a `--release` guest this suite builds from
 //! source. Run it with
@@ -280,9 +280,9 @@ fn a6_the_revm_block_proves_and_verifies() {
         .map(|(f, _)| *f)
         .collect();
     assert!(families.contains(&KECCAK), "keccak is declared");
-    // The declared set is read straight out of the linked image: four records,
-    // `APOGDEL1` then the number, at `.rodata` offsets 0x1b587c..0x1b58a0 —
-    // `0x0501` `KECCAK_F`, `0x0504` `MOD_MUL`, `0x0505` `SHA256_COMP` and
+    // The declared set is read straight out of the linked image: four
+    // consecutive `.rodata` records, `APOGDEL1` then the number —
+    // `0x0507` `KECCAK_F`, `0x0504` `MOD_MUL`, `0x0505` `SHA256_COMP` and
     // `0x0506` `EC_ADD`. The last two arrived at S26c through the vendored
     // `revm-precompile`'s *default* `Crypto` bodies and `k256`'s patched
     // `ProjectivePoint`, and neither is invoked by this synthetic block — its

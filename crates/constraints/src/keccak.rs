@@ -34,8 +34,8 @@
 //! relation is a lookup or a degree-≤2 enforcing gate over base columns, no
 //! relation produces an inner column, and the only inner columns in the whole
 //! artifact are the two memory product trees, the two channels' fraction trees
-//! and the halving phase. ~5,478 of them against 354,762, at 1,764 committed
-//! columns against 3,764.
+//! and the halving phase. ~5,490 of them at `2^18` against 354,762, at 1,764
+//! committed columns against 3,764.
 //!
 //! ```text
 //! M[0]            cycle          the requesting cycle: the 51 frame writes ride
@@ -1067,12 +1067,15 @@ mod tests {
         assert_eq!(sorted.len(), names.len(), "a name is used twice");
     }
 
-    /// The circuit builds at its one height, and at no lower one.
+    /// The circuit builds at its channel floor, and at no lower height.
     ///
-    /// `2^16` is forced twice over: `RANGE16`'s table needs 16 variables and so
-    /// does `XOR8`'s, and Mercury needs an even count.
+    /// `2^16` is the **floor** twice over — `RANGE16`'s table needs 16
+    /// variables and so does `XOR8`'s, and Mercury needs an even count — and it
+    /// is not the family's height: `DEFAULT_HEIGHTS` chooses `2^18` above it,
+    /// and `crates/checker/tests/keccak.rs`'s
+    /// `a_height_moves_only_the_halving_layers` builds that one.
     #[test]
-    fn the_circuit_builds_at_its_one_height() {
+    fn the_circuit_builds_at_its_channel_floor_and_no_lower() {
         let a = artifact(16);
         assert_eq!(a.trace_vars, 16);
         assert_eq!(a.outputs.len(), 6);

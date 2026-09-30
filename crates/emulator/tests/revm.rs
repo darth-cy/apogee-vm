@@ -663,8 +663,8 @@ fn a2_the_family_set_is_the_program_s() {
     }
     assert_eq!(
         config.height(family::KECCAK_F),
-        Some(1 << 16),
-        "a delegation family keeps its own height, and since S26d keccak's is 2^16"
+        Some(1 << 18),
+        "a delegation family keeps its own height, and keccak's is 2^18"
     );
 
     let instructions = image

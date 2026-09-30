@@ -48,8 +48,9 @@
 //! three is 1,420 committed columns, 8,772 inner, and a computed **20.5 GB** a
 //! shard at `2^16`.
 //!
-//! **That is above an execution shard's ~11 GB, and it makes this family the
-//! peak-setting one in a block.** An earlier draft of this comment said 10.5
+//! **That is above an execution shard's ~11 GB, and it made this family the
+//! peak-setting one in a block until `KECCAK_F` took `2^18`** — ~60 GB a shard
+//! against this family's 20.5. An earlier draft of this comment said 10.5
 //! GiB; the figure was wrong by a factor of two, and the arithmetic is
 //! `crates/constraints/tests/` — 18.3 GB of forward pass, 0.7 GB of committed
 //! base, 1.5 GB of first bind. `2^16` is nonetheless forced rather than chosen:
@@ -65,7 +66,7 @@
 //! new address space, no new presence rule, and `checker::memory_columns_from_log`
 //! still covers every column.
 //!
-//! # The one lookup channel a delegation family carries
+//! # The lookup channel this family carries
 //!
 //! `RANGE16`, which `docs/spec/delegation.md` §9 forbade until §10.3 amended
 //! it. It is worth 32 MSMs and ~5 wire bytes per bound: a 32-bit bound is one

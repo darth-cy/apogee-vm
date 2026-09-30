@@ -71,11 +71,17 @@ pub const KECCAK_PERMUTATIONS: u64 = 10;
 /// round, so a permutation is 24 of them (`docs/spec/delegation.md` §6).
 pub const KECCAK_INVOCATIONS: u64 = KECCAK_PERMUTATIONS * constants::keccak::ROUNDS as u64;
 
-/// The delegation family's height, and its **only** one: `RANGE16`'s table and
-/// `XOR8`'s each need 16 variables, so `constraints::family_circuit` returns
-/// `None` below it and the menu's next entry is four times the cost
-/// (`docs/spec/delegation.md` §6.5).
-pub const KECCAK_VARS: u32 = 16;
+/// The delegation family's height. `RANGE16`'s table and `XOR8`'s each need 16
+/// variables, so `constraints::family_circuit` returns `None` below `2^16` — but
+/// 16 is the **floor and not the choice**: the family is at `2^18`, one menu
+/// entry up and four times the cost a shard, so that a stateless block's keccak
+/// load is fewer, fatter shards (`docs/spec/delegation.md` §6.5, §9.2).
+///
+/// This must equal `constants::family::DEFAULT_HEIGHTS[KECCAK_F]`'s exponent:
+/// `crates/prover/tests/revm.rs` derives its delegation heights from that array
+/// and then asserts the config's keccak height is `1 << KECCAK_VARS`, so the two
+/// disagreeing is a red suite rather than a slow one.
+pub const KECCAK_VARS: u32 = 18;
 
 /// `guests/keccak-unused`'s exit status.
 pub const KECCAK_UNUSED_RESULT: u32 = 7;

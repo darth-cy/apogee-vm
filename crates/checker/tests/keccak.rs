@@ -49,12 +49,16 @@ use poly::{MultilinearPoly, PolyBacking};
 #[path = "../../prover/tests/common/mod.rs"]
 mod common;
 
-/// The circuit's own height, because a channel-carrying family has only one:
-/// `RANGE16`'s table and `XOR8`'s each need sixteen variables.
-const VARS: u32 = 16;
+/// The circuit's own height. `RANGE16`'s table and `XOR8`'s each need sixteen
+/// variables, which is the floor; the family is at `2^18`, and this tracks it
+/// rather than the floor because `the_fill_satisfies_every_gate_and_every_obligation`
+/// builds a program config from `common::keccak_params` and fills `1 << VARS`
+/// rows of it — the two reading different heights would be a fill that matches
+/// no config.
+const VARS: u32 = 18;
 
 /// The rows this suite builds and evaluates: one complete permutation's 24
-/// rounds, two corner rows, and padding to a power of two. The other 65,504
+/// rounds, two corner rows, and padding to a power of two. The other 262,112
 /// rows of the circuit are never materialized — a relation is row-local, so one
 /// row is all an evaluation needs.
 const ROWS: usize = 32;

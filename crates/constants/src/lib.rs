@@ -1086,7 +1086,8 @@ pub mod family {
     /// pc; present in every `VmConfig`, at the height of [`INIT_TEARDOWN`].
     /// `docs/spec/memory.md` §3.
     pub const ZERO_WINDOWS: u32 = 8;
-    /// The keccak-f[1600] **delegation** family (S21): one permutation a row,
+    /// The keccak-f[1600] **delegation** family (S21, re-shaped at S26d): one
+    /// Keccak *round* a row, so a permutation is 24 consecutive invocations,
     /// invoked by the [`ecall::PRECOMPILE_KECCAK_F`] ecall and never decoded.
     /// Claims no pc, owns no cycle, and is in a `VmConfig` only when the
     /// linked binary declares it (`docs/spec/delegation.md` §7).
@@ -1237,12 +1238,13 @@ pub mod family {
     /// opened the menu with it because one keccak row was a whole
     /// keccak-f[1600] permutation at ~345,600 inner columns, and a shard's
     /// forward pass is columns times height. S26d made one keccak row one
-    /// *round* and moved that family to `2^16`; what keeps `2^8` on the menu is
-    /// `POSEIDON2`, `FR_ARITH` and `SHA256_COMP`
-    /// (`docs/spec/delegation.md` §9). No family carrying a range-channel
-    /// obligation may take it — `lookup_channel::BITS` bottoms out at 16 — and
+    /// *round*, and that family sits at `2^18` today; what keeps `2^8` on the
+    /// menu is `POSEIDON2`, `FR_ARITH` and `SHA256_COMP`
+    /// (`docs/spec/delegation.md` §9). No family carrying a lookup channel at
+    /// all may take it — the narrowest table on the menu is 16 variables
+    /// (`constraints::lookup::table_vars`) — and
     /// `constraints::family_circuit` returns `None` for every such family
-    /// below its channel's width.
+    /// below the widest table its channels declare.
     pub const HEIGHT_MENU: [u32; 5] = [1 << 8, 1 << 16, 1 << 18, 1 << 20, 1 << 22];
 
     /// The default trace height of every family, indexed by `FamilyId`.
@@ -1260,7 +1262,12 @@ pub mod family {
     /// orders of magnitude**, so the six do not share a height and there is no
     /// reason they should: [`SHA256_COMP`] is 16,688 inner columns a row and
     /// `2^16` of them is 35 GB of forward pass, where [`MOD_MUL`] is 2,244 and
-    /// `2^16` is 5.1 GB. Below that ceiling the height is a **proof-size**
+    /// `2^16` is 5.1 GB. **That ceiling is a judgement and not a wall**, and
+    /// [`KECCAK_F`]'s `2^18` is what shows it: ~60 GB a shard is payable there
+    /// because a keccak-heavy block has tens of thousands of invocations to
+    /// amortise it over, where no guest in this repository invokes
+    /// [`SHA256_COMP`] often enough to buy 35 GB of rows back. Below that
+    /// ceiling the height is a **proof-size**
     /// decision — a `2^8` shard's proof does not shrink with its height, so a
     /// family's height is what decides how many shards a block's invocations
     /// take, and `MOD_MUL` at `2^8` cost a measured block 1,048 shards against
@@ -1270,10 +1277,13 @@ pub mod family {
     /// rows. At S21 one row was a whole permutation — 354,762 inner columns,
     /// `2^16` of them 744 GB — so it sat at `2^8` and 256 permutations a shard,
     /// which made five keccak shards 97% of a measured mini-block's proof
-    /// bytes. S26d made one row one *round*: 24 rows a permutation, ~5,478
-    /// inner columns each, and `2^16` is ~15 GB — 2,730 permutations a shard
-    /// and, per permutation, half the columns of the old shape
-    /// (`docs/spec/delegation.md` §6.5).
+    /// bytes. S26d made one row one *round*: 24 rows a permutation, ~5,490
+    /// inner columns each, and `2^18` is ~60 GB — 10,922 permutations a shard
+    /// and, per permutation, half the columns of the old shape. `2^16` is only
+    /// the **floor** its two channels imply; `2^18` is the choice above it,
+    /// because a shard's proof barely grows with its height — 381,100 bytes
+    /// against 373,276 — so the fatter shard is the cheaper one for a
+    /// keccak-heavy block (`docs/spec/delegation.md` §6.0, §9.2).
     pub const DEFAULT_HEIGHTS: [u32; COUNT as usize] = [
         1 << 22, // ADD_SUB_LUI_AUIPC
         1 << 22, // JUMP_BRANCH_SLT
@@ -1284,7 +1294,7 @@ pub mod family {
         1 << 20, // ATOMICS
         1 << 22, // INIT_TEARDOWN
         1 << 22, // ZERO_WINDOWS
-        1 << 16, // KECCAK_F: forced, its RANGE16 and XOR8 tables needing 16
+        1 << 18, // KECCAK_F: CHOSEN above its floor of 16 (RANGE16 and XOR8)
         1 << 8,  // POSEIDON2
         1 << 8,  // FR_ARITH
         1 << 8,  // PUBLIC_INPUT, and it is the only admissible one
@@ -1937,9 +1947,9 @@ pub mod keccak {
     /// **It is not a micro-optimisation.** The `KECCAK_F` circuit's `XOR8`
     /// channel carries 1,020 obligations a row with these four and 1,024 with
     /// eight, and a LogUp fraction tree is padded to a power of two: the four
-    /// extra obligations would double the tree, cost 4,096 more inner columns
-    /// and make this the peak-setting family of a block instead of `EC_ADD`
-    /// (`docs/spec/delegation.md` §6.5).
+    /// extra obligations would double the tree and cost 4,096 more inner
+    /// columns — another **34.4 GB** a shard at `2^18`, on the family that
+    /// already sets a block's peak (`docs/spec/delegation.md` §6.5).
     pub const IOTA_BYTES: [usize; 4] = [0, 1, 3, 7];
 
     /// Every byte position [`IOTA_BYTES`] omits is zero in every round
@@ -2267,8 +2277,9 @@ pub mod sha256 {
 /// **Three invocations make one addition**, and the frame is the scratch they
 /// pass intermediates through (`docs/spec/delegation.md` §16). The alternative
 /// — nine reductions on one row — is 19,316 committed columns and 28.9 GiB of
-/// peak a shard; three rows of three reductions is 10.5 GiB, which is below an
-/// execution shard's and so raises a block's peak by nothing.
+/// peak a shard; three rows of three reductions is a computed 20.5 GB a shard at
+/// `2^16` — above an execution shard's ~11 GB, and second now only to
+/// `KECCAK_F`'s ~60 GB at the `2^18` S26d's reshape let it take.
 pub mod ec_add {
     /// Limbs in a coordinate: eight 32-bit little-endian words.
     pub const LIMBS: usize = 8;
