@@ -23,7 +23,7 @@
 
 mod common;
 
-use constants::{delegation, family, memory as mem};
+use constants::{delegation, family, keccak as k, memory as mem};
 use prover::prove_block;
 use trace::plan_shards;
 use verifier::{verify_block, verify_shard};
@@ -103,7 +103,13 @@ fn a4_the_block_with_a_delegation_shard_proves_and_verifies() {
         .find(|(f, _)| *f == KECCAK)
         .expect("the profile counts every config family")
         .1;
+    // The profile counts **invocations**, which since S26d are rounds: 24 a
+    // permutation, so ten permutations are 240 rows.
     assert_eq!(invocations, common::KECCAK_INVOCATIONS);
+    assert_eq!(
+        common::KECCAK_INVOCATIONS,
+        common::KECCAK_PERMUTATIONS * k::ROUNDS as u64
+    );
     assert_eq!(shards(KECCAK), 1);
     // An invocation is not a cycle: the profile's total is the execution's
     // cycle count and the invocations are outside it
@@ -173,10 +179,15 @@ fn a4_the_block_with_a_delegation_shard_proves_and_verifies() {
     );
 
     // The delegation shard's proof has its circuit's shape:
-    // `docs/spec/shard-proof.md` §9's layout over `keccak::artifact(8)`, which
-    // is `docs/spec/constraint-manifest.md` §1.2's 11,880,012 bytes. Almost
-    // all of it is final claims — 358,540 of them — which is what a circuit
-    // whose row is a whole permutation costs on the wire.
+    // `docs/spec/shard-proof.md` §9's layout over `keccak::artifact(16)`, which
+    // is `docs/spec/constraint-manifest.md` §1.2's 373,276 bytes.
+    //
+    // **This is the number S26d was for.** S21's shard was 11,880,012 bytes for
+    // 256 permutations — 46,406 a permutation, and five such shards were 97% of
+    // a measured mini-block's proof (`docs/spec/delegation.md` §9.1). One round
+    // a row is 373,276 bytes for 2,730 permutations, which is 137 a permutation:
+    // **339 times fewer proof bytes** for the same work, from 31.8× the shard
+    // and 10.7× the permutations in it.
     let circuit = constraints::family_circuit(KECCAK, common::KECCAK_VARS)
         .expect("the registry has the keccak circuit");
     assert_eq!(
@@ -184,7 +195,7 @@ fn a4_the_block_with_a_delegation_shard_proves_and_verifies() {
         proof_bytes(&circuit.artifact),
         "the keccak shard's proof is its circuit's shape"
     );
-    assert_eq!(keccak.to_bytes().len(), 11_880_012);
+    assert_eq!(keccak.to_bytes().len(), 373_276);
 
     // Every shard verifies on its own too, through the one entry point.
     for shard in &block.shards {

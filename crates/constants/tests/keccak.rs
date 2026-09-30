@@ -69,13 +69,44 @@ fn the_round_constants_are_the_lfsrs() {
     assert_eq!(keccak::ROUND_CONSTANTS, round_constants());
 }
 
+/// Iota touches four byte positions of a lane and no others, which is what makes
+/// the circuit's iota four `XOR8` obligations instead of eight — and, with the
+/// fraction tree's power-of-two padding, what keeps that channel at 1,024 leaves
+/// instead of 2,048 (`docs/spec/delegation.md` §6.5).
+///
+/// `constants::keccak::IOTA_BYTES_ARE_THE_ONLY_ONES` asserts the same thing at
+/// compile time. This is the reading that says *why*: the LFSR sets only the bits
+/// `2^j - 1`, so the bytes it can reach are 0, 1, 3 and 7.
+#[test]
+fn iota_touches_four_bytes_of_a_lane() {
+    let bits: Vec<u32> = (0..7).map(|j| (1u32 << j) - 1).collect();
+    let mut want: Vec<usize> = bits.iter().map(|b| (*b / 8) as usize).collect();
+    want.sort_unstable();
+    want.dedup();
+    assert_eq!(want, keccak::IOTA_BYTES.to_vec());
+    let mask = keccak::IOTA_BYTES
+        .iter()
+        .fold(0u64, |m, b| m | 0xffu64 << (8 * b));
+    for (r, constant) in keccak::ROUND_CONSTANTS.iter().enumerate() {
+        assert_eq!(constant & !mask, 0, "round constant {r}");
+    }
+    // And the mask is not vacuous: every byte position outside it exists.
+    assert_eq!(keccak::IOTA_BYTES.len(), 4);
+}
+
 #[test]
 fn the_shapes_agree() {
     assert_eq!(keccak::STATE_BITS, 1600);
     assert_eq!(keccak::STATE_BYTES, 200);
-    assert_eq!(keccak::FRAME_WORDS, 50);
+    assert_eq!(keccak::STATE_WORDS, 50);
     assert_eq!(keccak::LANES * keccak::LANE_BITS, keccak::STATE_BITS);
-    assert_eq!(keccak::FRAME_WORDS * 4, keccak::STATE_BYTES);
+    assert_eq!(keccak::STATE_WORDS * 4, keccak::STATE_BYTES);
+    // The frame is the round selector and the state, and nothing else: one
+    // invocation is one round since S26d (`docs/spec/delegation.md` §6).
+    assert_eq!(keccak::ROUND_WORD, 0);
+    assert_eq!(keccak::STATE_WORD, 1);
+    assert_eq!(keccak::FRAME_WORDS, 51);
+    assert_eq!(keccak::FRAME_BYTES, 204);
     // keccak256's capacity is twice its digest, and rate + capacity is the
     // state: 136 + 64 = 200.
     assert_eq!(

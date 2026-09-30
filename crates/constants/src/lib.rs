@@ -956,21 +956,49 @@ pub mod lookup_channel {
     /// `lookup_tuple(family)` columns in their frozen order.
     pub const DECODER: u32 = 3;
 
+    /// Table. The byte table `(a, b, a ^ b)`, all 65,536 triples, and the
+    /// first table channel whose table is **virtual** rather than committed
+    /// (S26d, `docs/spec/lookup.md` §14).
+    ///
+    /// Its three columns are closed forms of the row index — `a` the low
+    /// eight bits, `b` the next eight, `a ^ b` their bitwise XOR, which is
+    /// multilinear in the row's bits because `y ^ z = y + z - 2yz` is — so it
+    /// costs no commitment, no setup column and no movement of the SRS digest.
+    ///
+    /// **The tuple is three wide and that is the point.** Membership of
+    /// `(x, y, z)` forces each of the three into `[0, 256)` individually, so
+    /// every byte a circuit feeds it is bounded by the lookup that uses it and
+    /// `AND`, `ANDN` and `OR` are linear forms over the result:
+    /// `x & y = (x + y - (x ^ y)) / 2`. A packed key `x + 256*y` would be one
+    /// column cheaper and would bound neither operand on its own.
+    ///
+    /// `constants::family::KECCAK_F` is its one consumer: a Keccak round is
+    /// 1,020 obligations on it and no bit anywhere
+    /// (`docs/spec/delegation.md` §6).
+    pub const XOR8: u32 = 4;
+
     /// How many channels this table defines.
-    pub const COUNT: u32 = 4;
+    pub const COUNT: u32 = 5;
 
     /// Whether channel `i` is a range channel, indexed by channel. A range
     /// channel's table is the closed form of `docs/spec/lookup.md` §3; a table
-    /// channel's is committed.
-    pub const IS_RANGE: [bool; COUNT as usize] = [true, true, false, false];
+    /// channel's is committed, or — since S26d's [`XOR8`] — a closed form of
+    /// its own.
+    pub const IS_RANGE: [bool; COUNT as usize] = [true, true, false, false, false];
 
     /// A range channel's bound, as a bit width, indexed by channel; 0 where
     /// [`IS_RANGE`] is false, which is not a bound of `[0, 1)` but the absence
     /// of one.
-    pub const BITS: [u32; COUNT as usize] = [19, 16, 0, 0];
+    ///
+    /// This is a **bound**, not a table size: what decides the fewest
+    /// variables a circuit declaring a channel may be built at is
+    /// `constraints::lookup::table_vars`, which reads this for a range channel
+    /// and a virtual table channel's key width for one of those.
+    pub const BITS: [u32; COUNT as usize] = [19, 16, 0, 0, 0];
 
     /// Every channel's display name, indexed by channel.
-    pub const NAMES: [&str; COUNT as usize] = ["timestamp", "range16", "generic", "decoder"];
+    pub const NAMES: [&str; COUNT as usize] =
+        ["timestamp", "range16", "generic", "decoder", "xor8"];
 
     /// The widest lookup tuple any channel carries: `beta` powers exist for
     /// positions `0 .. MAX_TUPLE`, and `challenge_slot::LOOKUP_BETA_POWERS`
@@ -1204,10 +1232,13 @@ pub mod family {
     /// The trace-height menu, ascending. Even powers of two only, so that a
     /// Mercury opening's `b = sqrt(n)` exists.
     ///
-    /// `2^8` is S21's, and it is a **delegation** height: one row is a whole
-    /// keccak-f[1600] permutation, so a row costs ~345,600 inner columns and a
-    /// shard's forward pass is that times its height. At `2^16` a keccak shard
-    /// would materialize 734 GB of layer values; at `2^8` it is 2.9 GB
+    /// `2^8` is S21's, and it is a **delegation** height: a row too wide to
+    /// afford at any ordinary height can still be afforded 256 of them. S21
+    /// opened the menu with it because one keccak row was a whole
+    /// keccak-f[1600] permutation at ~345,600 inner columns, and a shard's
+    /// forward pass is columns times height. S26d made one keccak row one
+    /// *round* and moved that family to `2^16`; what keeps `2^8` on the menu is
+    /// `POSEIDON2`, `FR_ARITH` and `SHA256_COMP`
     /// (`docs/spec/delegation.md` §9). No family carrying a range-channel
     /// obligation may take it — `lookup_channel::BITS` bottoms out at 16 — and
     /// `constraints::family_circuit` returns `None` for every such family
@@ -1223,17 +1254,26 @@ pub mod family {
     /// `ATOMICS` sat at `2^16` from S11 until S19 raised it with the circuit
     /// that needs it (`docs/handoff/S16-add-sub.md` answer 7).
     ///
-    /// A **delegation** family is the other way round: it carries no range
-    /// channel at all, so no floor applies, and its ceiling is its own
-    /// circuit's width. That width differs between the four by **three orders
-    /// of magnitude**, so they do not share a height and there is no reason
-    /// they should: [`KECCAK_F`] is 354,762 inner columns a row and `2^16` of
-    /// them is 744 GB of forward pass, where [`MOD_MUL`] is 270 and `2^16` is
-    /// 7.9 GB. Below that ceiling the height is a **proof-size** decision —
-    /// a `2^8` shard's proof does not shrink with its height, so a family's
-    /// height is what decides how many shards a block's invocations take, and
-    /// `MOD_MUL` at `2^8` cost a measured block 1,048 shards against 5 at
-    /// `2^16` (`docs/spec/delegation.md` §9 and §9.1).
+    /// A **delegation** family is the other way round: its floor is whatever
+    /// its own channels imply — 0 for the three that carry none — and its
+    /// ceiling is its own circuit's width. Those widths differ by **three
+    /// orders of magnitude**, so the six do not share a height and there is no
+    /// reason they should: [`SHA256_COMP`] is 16,688 inner columns a row and
+    /// `2^16` of them is 35 GB of forward pass, where [`MOD_MUL`] is 2,244 and
+    /// `2^16` is 5.1 GB. Below that ceiling the height is a **proof-size**
+    /// decision — a `2^8` shard's proof does not shrink with its height, so a
+    /// family's height is what decides how many shards a block's invocations
+    /// take, and `MOD_MUL` at `2^8` cost a measured block 1,048 shards against
+    /// 5 at `2^16` (`docs/spec/delegation.md` §9 and §9.1).
+    ///
+    /// [`KECCAK_F`] is the case that shows the trade is about **width**, not
+    /// rows. At S21 one row was a whole permutation — 354,762 inner columns,
+    /// `2^16` of them 744 GB — so it sat at `2^8` and 256 permutations a shard,
+    /// which made five keccak shards 97% of a measured mini-block's proof
+    /// bytes. S26d made one row one *round*: 24 rows a permutation, ~5,478
+    /// inner columns each, and `2^16` is ~15 GB — 2,730 permutations a shard
+    /// and, per permutation, half the columns of the old shape
+    /// (`docs/spec/delegation.md` §6.5).
     pub const DEFAULT_HEIGHTS: [u32; COUNT as usize] = [
         1 << 22, // ADD_SUB_LUI_AUIPC
         1 << 22, // JUMP_BRANCH_SLT
@@ -1244,7 +1284,7 @@ pub mod family {
         1 << 20, // ATOMICS
         1 << 22, // INIT_TEARDOWN
         1 << 22, // ZERO_WINDOWS
-        1 << 8,  // KECCAK_F
+        1 << 16, // KECCAK_F: forced, its RANGE16 and XOR8 tables needing 16
         1 << 8,  // POSEIDON2
         1 << 8,  // FR_ARITH
         1 << 8,  // PUBLIC_INPUT, and it is the only admissible one
@@ -1520,11 +1560,20 @@ pub mod ecall {
     /// little-endian `Fr`, 8 words each, lane `i` at words `8i..8i + 8`.
     pub const PRECOMPILE_POSEIDON2: u32 = 0x0500;
 
-    /// keccak-f[1600] over a 200-byte state frame, `a0` = the frame base
-    /// pointer, read and written in place. The first **delegation** call:
-    /// `docs/spec/delegation.md` is its ABI, and the circuit that proves it is
-    /// `constants::family::KECCAK_F`.
-    pub const PRECOMPILE_KECCAK_F: u32 = 0x0501;
+    /// **Retired and burned at S26d.** `0x0501` was S21's keccak-f[1600] over
+    /// a 200-byte frame holding the state and nothing else: **one call, one
+    /// whole permutation**. S26d made one round one invocation, which needs a
+    /// 204-byte frame whose word 0 is the round — a different call with
+    /// different semantics, and append-only forbids giving a number a second
+    /// meaning. An old binary issuing `0x0501` under the new executor would
+    /// have its first state word read as a round selector and get one round of
+    /// a permuted state back, with nothing failing loudly.
+    ///
+    /// It is a constant rather than a comment for the reason
+    /// [`RETIRED_MOD_MUL_WITNESSED_MODULUS`] is:
+    /// `crates/constants/tests/ecall_abi.rs` reads it, and a number in the
+    /// source is a number a test can hold to being unanswered.
+    pub const RETIRED_KECCAK_F_WHOLE_PERMUTATION: u32 = 0x0501;
 
     /// One `Fr` add, multiply or inverse over a 25-word frame, `a0` = the
     /// frame base pointer, read and written in place. A **delegation** call
@@ -1597,6 +1646,20 @@ pub mod ecall {
     ///
     /// **It is not a scalar multiplication.** The ladder stays in guest code.
     pub const PRECOMPILE_EC_ADD: u32 = 0x0506;
+
+    /// **One round** of keccak-f[1600] over a 51-word frame whose word 0 is
+    /// the round and whose remaining 50 words are the 1,600-bit state, `a0` =
+    /// the frame base pointer, read and written in place. A **delegation** call (S21, re-shaped at S26d);
+    /// `constants::family::KECCAK_F` is the family that proves it and
+    /// `docs/spec/delegation.md` §6 the frame table.
+    ///
+    /// **A whole permutation is 24 of these calls**, exactly as a complete
+    /// point addition is three `EC_ADD` calls: the frame is ordinary RAM, so
+    /// the global memory multiset is what proves round `r`'s output is round
+    /// `r + 1`'s input, and the guest's own proven loop is what supplies the
+    /// 24 round numbers. S21's whole-permutation call was
+    /// [`RETIRED_KECCAK_F_WHOLE_PERMUTATION`].
+    pub const PRECOMPILE_KECCAK_F: u32 = 0x0507;
 
     /// Linux `ENOSYS`. An unimplemented number returns `-ENOSYS` in `a0`.
     ///
@@ -1839,12 +1902,65 @@ pub mod keccak {
     pub const STATE_BITS: usize = LANES * LANE_BITS;
     /// Bytes in the state: 200.
     pub const STATE_BYTES: usize = STATE_BITS / 8;
-    /// 32-bit words in the state frame: 50. Frame word `j` is at byte offset
-    /// `4 * j`; lane `i = 5y + x` occupies words `2i` and `2i + 1`, low half
-    /// first (`docs/spec/delegation.md` §4).
-    pub const FRAME_WORDS: usize = STATE_BYTES / 4;
+    /// 32-bit words the state occupies in the frame: 50. Lane `i = 5y + x`
+    /// occupies state words `2i` and `2i + 1`, low half first
+    /// (`docs/spec/delegation.md` §4).
+    pub const STATE_WORDS: usize = STATE_BYTES / 4;
     /// Rounds of the permutation.
     pub const ROUNDS: usize = 24;
+
+    /// The frame's word 0: the round this invocation performs, in `0..ROUNDS`.
+    ///
+    /// **A whole permutation is 24 invocations, not one** (S26d). One round is
+    /// one delegation row, the 24 rows of a permutation are glued by the frame
+    /// being ordinary RAM, and the guest's own proven loop supplies the round.
+    /// `docs/spec/delegation.md` §6.
+    pub const ROUND_WORD: usize = 0;
+
+    /// The frame's first state word, one past [`ROUND_WORD`].
+    pub const STATE_WORD: usize = ROUND_WORD + 1;
+
+    /// 32-bit words in the frame: the round selector and the state.
+    pub const FRAME_WORDS: usize = STATE_WORD + STATE_WORDS;
+
+    /// The frame in bytes, which is what a shim hands over.
+    pub const FRAME_BYTES: usize = 4 * FRAME_WORDS;
+
+    /// The byte positions of a lane that iota can change.
+    ///
+    /// Keccak's round constants set only the bits `2^j - 1` for `j` in `0..7`
+    /// — bits 0, 1, 3, 7, 15, 31 and 63 — so a round constant's little-endian
+    /// bytes are zero everywhere but here, and iota is four byte XORs rather
+    /// than eight. [`IOTA_BYTES_ARE_THE_ONLY_ONES`] holds
+    /// [`ROUND_CONSTANTS`] to it.
+    ///
+    /// **It is not a micro-optimisation.** The `KECCAK_F` circuit's `XOR8`
+    /// channel carries 1,020 obligations a row with these four and 1,024 with
+    /// eight, and a LogUp fraction tree is padded to a power of two: the four
+    /// extra obligations would double the tree, cost 4,096 more inner columns
+    /// and make this the peak-setting family of a block instead of `EC_ADD`
+    /// (`docs/spec/delegation.md` §6.5).
+    pub const IOTA_BYTES: [usize; 4] = [0, 1, 3, 7];
+
+    /// Every byte position [`IOTA_BYTES`] omits is zero in every round
+    /// constant, checked at compile time because the circuit's shape rests on
+    /// it and a wrong answer here is a wrong permutation.
+    pub const IOTA_BYTES_ARE_THE_ONLY_ONES: () = {
+        let mut mask = 0u64;
+        let mut i = 0;
+        while i < IOTA_BYTES.len() {
+            mask |= 0xffu64 << (8 * IOTA_BYTES[i]);
+            i += 1;
+        }
+        let mut r = 0;
+        while r < ROUNDS {
+            assert!(
+                ROUND_CONSTANTS[r] & !mask == 0,
+                "a round constant sets a bit outside IOTA_BYTES"
+            );
+            r += 1;
+        }
+    };
 
     /// keccak256's rate, in bytes: `200 - 2 * 32`.
     pub const RATE_BYTES: usize = 136;

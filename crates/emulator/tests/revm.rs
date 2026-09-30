@@ -63,7 +63,12 @@ fn output_bytes() -> Vec<u8> {
     vector("revm_block_output.bin")
 }
 
-/// Every keccak-f frame the committed run delegated, as 50-word states.
+/// Every keccak-f permutation the committed run delegated, as 50-word input
+/// states — the frames of its **round-0** invocations, whose state word is the
+/// permutation's input. Since S26d one invocation is one round, so harvesting
+/// every frame would give 24 records per permutation and 23 of them would be
+/// mid-permutation states; `tools/kat-gen/src/revm.rs` filters on the round
+/// word, which is what keeps this fixture 200 bytes a permutation.
 /// The output commitment's `count` per-transaction records, and the offset the
 /// two 32-byte commitments begin at. `docs/spec/revm-block.md` §2.
 fn tx_records(bytes: &[u8], count: usize) -> (Vec<(u8, u64, Vec<u8>)>, usize) {
@@ -80,9 +85,9 @@ fn tx_records(bytes: &[u8], count: usize) -> (Vec<(u8, u64, Vec<u8>)>, usize) {
     (records, at)
 }
 
-fn committed_frames() -> Vec<[u32; keccak::FRAME_WORDS]> {
+fn committed_frames() -> Vec<[u32; keccak::STATE_WORDS]> {
     let bytes = vector("revm_block_keccak.bin");
-    let width = 4 * keccak::FRAME_WORDS;
+    let width = 4 * keccak::STATE_WORDS;
     assert_eq!(
         bytes.len() % width,
         0,
@@ -658,8 +663,8 @@ fn a2_the_family_set_is_the_program_s() {
     }
     assert_eq!(
         config.height(family::KECCAK_F),
-        Some(1 << 8),
-        "a delegation family keeps the delegation height"
+        Some(1 << 16),
+        "a delegation family keeps its own height, and since S26d keccak's is 2^16"
     );
 
     let instructions = image

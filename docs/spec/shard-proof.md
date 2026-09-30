@@ -680,9 +680,13 @@ event, and every lookup is switched off by its selector.
   There is no ecall left for a fill to refuse. **A delegation call is
   no longer among them**: S21 made `PRECOMPILE_KECCAK_F` the second provable ecall, with
   four gates of its own and three S16 gates amended (§8.2), and S23 added
-  `PRECOMPILE_POSEIDON2` and `PRECOMPILE_FR_ARITH` beside it, S26 `PRECOMPILE_MOD_MUL` —
+  `PRECOMPILE_POSEIDON2` and `PRECOMPILE_FR_ARITH` beside it, S26 `PRECOMPILE_MOD_MUL` and
+  S26c `PRECOMPILE_SHA256_COMP` and `PRECOMPILE_EC_ADD` —
   one selector and three gates per type, with the shared gates gaining a term apiece and
-  every one of them still degree 2 (`delegation.md` §10). What makes it *correct* is not here but in the delegation
+  every one of them still degree 2 (`delegation.md` §10). **A type's number can move
+  without a gate moving**: `deleg_{family}_number`'s literal is read from
+  `constants::ecall`, so when S26b renumbered `MOD_MUL` and S26d renumbered `KECCAK_F` the
+  only consequence here was that `add_sub.bin` regenerated. What makes it *correct* is not here but in the delegation
   family's circuit; this family only witnesses that the request was made
   (`docs/spec/delegation.md` §5).
 - Binding the public values to the execution (S14's D3, D5): **done at S-IO**, and not by

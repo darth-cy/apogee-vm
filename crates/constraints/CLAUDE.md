@@ -14,7 +14,7 @@ when a circuit is built. **`docs/spec/gkr.md` §1–§4 is normative.**
 formula — and a change to a family's circuit updates its entry there.
 
 ```rust
-pub enum VirtualKind { RowIndex, RamLive, Range19, Range16 }
+pub enum VirtualKind { RowIndex, RamLive, Range19, Range16, Xor8A, Xor8B, Xor8Out }
 pub enum PolyAddress { Memory(u32), Witness(u32), Setup(u32), Virtual(VirtualKind),
                        Inner { layer, offset }, Scratch(u32), Cached { layer, offset } }  // + Display
 pub enum Coeff { Literal(Fr), Challenge(u32) }
@@ -49,6 +49,8 @@ pub mod lookup {                                   // docs/spec/lookup.md
     pub struct ChannelSpec { pub channel: u32, pub table: Vec<PolyAddress>, pub multiplicity: PolyAddress }
     pub fn beta_power(j: usize) -> Coeff;           // the literal 1 at j = 0, a derived slot above
     pub fn range_table(channel: u32) -> Option<VirtualKind>;
+    pub fn table_vars(channel: u32) -> u32;         // the variables a channel's table needs
+    pub fn xor8_table() -> Vec<PolyAddress>;        // S26d: (a, b, a^b) as three closed forms
     pub fn row_denominator(l: &LookupExpr) -> GateDef;      // E_l + g, one Quadratic
     pub fn table_denominator(spec: &ChannelSpec) -> GateDef; // T + g, one Linear
     pub fn check_discharge(a: &CircuitArtifact, specs: &[ChannelSpec]) -> Result<(), String>;
@@ -211,17 +213,23 @@ pub mod add_sub {                                  // docs/spec/shard-proof.md �
     pub fn channels() -> Vec<lookup::ChannelSpec>;
 }
 
-pub mod keccak {                                   // docs/spec/delegation.md §6; S21
+pub mod keccak {              // docs/spec/delegation.md §6; S21, re-shaped at S26d
     pub const CYCLE: PolyAddress;  LIVE;  BASE;  ANCHOR_VALUE;                 // M[0..4]
-    pub fn word(j: usize, field: u32) -> PolyAddress;        // M[4 + 4j + f], j < 50
+    pub fn word(j: usize, field: u32) -> PolyAddress;        // M[4 + 4j + f], j < 51
     pub const WORD_ADDR: u32 = 0;  WORD_READ_TS;  WORD_READ_VALUE;  WORD_WRITE_VALUE;
-    pub fn in_bit(b: usize) -> PolyAddress;                  // W[0..1600]
-    pub fn gap_bit(j: usize, bit: usize) -> PolyAddress;     // W[1600..3500], 38 a word
-    pub fn base_low_bit(bit: usize) -> PolyAddress;          // W[3500..3529]
-    pub fn base_room_bit(bit: usize) -> PolyAddress;         // W[3529..3560]
-    pub const MEMORY_COLUMNS: usize = 204;  WITNESS_COLUMNS: usize = 3560;
-    pub fn artifact(trace_vars: u32) -> CircuitArtifact;
-    pub fn channels() -> Vec<lookup::ChannelSpec>;           // EMPTY
+    pub fn gap_chunk(j: usize, c: usize) -> PolyAddress;     // W[0..102], two a word
+    pub fn base_low();  base_low_hi();  base_room();  base_room_hi();          // W[102..106]
+    pub fn round_sel(r: usize) -> PolyAddress;               // W[106..130], one-hot over 24
+    pub fn rc(t: usize) -> PolyAddress;                      // W[130..134], IOTA_BYTES order
+    pub fn state_in(i: usize, b: usize) -> PolyAddress;      // W[134..334], 25 lanes x 8 BYTES
+    pub fn parity(x, b, s);  theta_c(x, b);  c_mask(x, b);  theta_d(x, b);     // W[334..574]
+    pub fn theta_a(i, b);  rho_mask(i, b);  rho_out(i, b);                     // W[574..1150]
+    pub fn chi_and(i, b);  chi_out(i, b);  iota_out(t);                        // W[1150..1554]
+    pub fn range16_multiplicity();  xor8_multiplicity();                       // W[1554..1556]
+    pub const MEMORY_COLUMNS: usize = 208;  WITNESS_COLUMNS: usize = 1556;
+    pub fn artifact(trace_vars: u32) -> CircuitArtifact;     // 16 <= n; flat, no layered work
+    pub fn channels() -> Vec<lookup::ChannelSpec>;           // RANGE16, then XOR8
+    pub fn check_shape(a: &CircuitArtifact);
 }
 
 pub mod delegation {          // docs/spec/delegation.md §4 and §5; S23, shared by the two below
@@ -293,10 +301,14 @@ pub mod mod_mul {                            // docs/spec/delegation.md §14; S2
   reads, and every entry is a halving shape — `TreeProduct`, one level of a product tree,
   or `TreeCross`, the numerator of one level of a fraction tree. Since S15 an entry may
   read a column other than its own, which is what lets a numerator read its denominator.
-- **Four virtual kinds, append-only**: `RowIndex` (`V[row]`, tag 0), `RamLive`
-  (`V[ram_live]`, tag 1, `docs/spec/gkr.md` §2.1) and S15's range tables `Range19` (tag 2)
+- **Seven virtual kinds, append-only**: `RowIndex` (`V[row]`, tag 0), `RamLive`
+  (`V[ram_live]`, tag 1, `docs/spec/gkr.md` §2.1), S15's range tables `Range19` (tag 2)
   and `Range16` (tag 3), each the low `BITS` bits of the row index
-  (`docs/spec/lookup.md` §3). Their closed forms are `gkr-verify`'s.
+  (`docs/spec/lookup.md` §3), and S26d's `Xor8A` (tag 4), `Xor8B` (5) and `Xor8Out` (6) —
+  the `XOR8` channel's three table columns, the row index's low byte, its next byte, and
+  their XOR (`docs/spec/lookup.md` §14). `Xor8Out` is the first closed form that is not a
+  weighted sum of the row's bits: `Σ_{j<8} 2^j·(y_j + y_{j+8} − 2·y_j·y_{j+8})`, which is
+  multilinear because `y ^ z = y + z − 2yz` is. Their closed forms are `gkr-verify`'s.
 - **A lookup is a channel, a selector and a tuple** (`docs/spec/memory.md` §7,
   `docs/spec/lookup.md`): a channel of `constants::lookup_channel`; one `Linear`
   expression on a range channel and 1 to `MAX_TUPLE` on a table one, every lookup of a
@@ -390,8 +402,12 @@ pub mod mod_mul {                            // docs/spec/delegation.md §14; S2
   a panic inside key validation, in a `no_std` crate the recursion guest links, on bytes a
   verifier was handed. `family_circuit` therefore takes each family's `channels()`, takes the
   widest range channel's `BITS` as its floor, and tests that **before** building the artifact:
-  the seven execution families get 19 as they always did, `MOD_MUL` and `EC_ADD` get 16, and
-  the four channel-free delegation families get 0, which is what lets them take `2^8`
+  the seven execution families get 19 as they always did, `MOD_MUL`, `EC_ADD` and — since S26d —
+  `KECCAK_F` get 16, and the three channel-free delegation families get 0, which is what lets
+  them take `2^8`. **Since S26d the per-channel number is `lookup::table_vars` and not `BITS`
+  with an `IS_RANGE` filter**: `XOR8`'s table is 65,536 rows without being a range channel, so
+  the filter would have given a family carrying it alone a floor of 0 and an incomplete table
+  at every height below `2^16`
   (`docs/spec/delegation.md` §9.2, §10.3). It named the seven execution families explicitly
   until S26c, with a delegation family's arm below it; that worked only while no delegation
   family had a channel, and keeping a list in step with two families whose heights differ from
@@ -546,16 +562,18 @@ them, CI regenerates and diffs them, and `tests/memory.rs` pins their SHA-256 an
 each to its constructor's bytes. The leaves' independent description is the plain
 arithmetic of `crates/gkr/tests/memory.rs`.
 
-`tests/vectors/{keccak,poseidon2,fr_arith,mod_mul}.txt`: **digests, not artifacts.**
-`keccak::artifact(8).to_bytes()` is 100,254,040 bytes — 974 times the largest committed
-circuit — and the two S23 circuits are 2.1 MB and 1.1 MB, so what is committed is one line
-apiece: the shape counts and the artifact's SHA-256. `cargo run -p kat-gen -- delegation`
-writes them, kat-gen's own unit test holds each to its constructor, and CI regenerates and
-diffs them like every other fixture. The owner chose the digest at S21 over committing the
-bytes or committing nothing. Their readable accounts are
-`docs/spec/constraint-manifest.md` §12, §13 and §14; there is
-no `checker dump` of keccak's, because a 358,525-relation listing is not a readable account of
-anything.
+`tests/vectors/{keccak,poseidon2,fr_arith,mod_mul,sha256,ec_add}.txt`: **digests, not
+artifacts.** A delegation row is a whole permutation or a whole field operation, so the
+artifacts run to megabytes — `poseidon2::artifact(8).to_bytes()` is 2,056,361 bytes and
+`sha256::artifact(8)`'s 10,895,760 — and what is committed is one line apiece: the shape
+counts and the artifact's SHA-256. `cargo run -p kat-gen -- delegation` writes them,
+kat-gen's own unit test holds each to its constructor, and CI regenerates and diffs them like
+every other fixture. The owner chose the digest at S21 over committing the bytes or committing
+nothing. Their readable accounts are `docs/spec/constraint-manifest.md` §12, §13, §14, §18,
+§19 and §20. **Keccak's was 100,254,040 bytes until S26d** — 974 times the largest committed
+circuit, and the reason the digest convention exists — and one round a row took it to
+1,899,700, small enough that `checker dump` of it is 20,333 readable lines where a
+358,525-relation listing was not a readable account of anything.
 
 `tests/vectors/{add_sub,jump_branch_slt,shift_bitwise,mul_div}.bin`: one per registered
 execution family — S16's `add_sub::artifact`, S17's `jump_branch_slt::artifact` and S18's
@@ -569,7 +587,7 @@ suite in `crates/checker/tests` pins each SHA-256 and holds its gates to
 ## Tests
 | File | Covers |
 | --- | --- |
-| `tests/wire.rs` | both fixtures round-trip byte for byte; a format version other than 1 refused before decoding; `VirtualKind`'s tags and `V[ram_live]`'s address and name; a lookup against its hand-written bytes; `Quadratic` against its hand-written bytes for no terms, linear only, products only and both, and each malformed `Quadratic` refused; every refusal of the reader; every single-bit flip of a fixture decodes or errors, never panics |
+| `tests/wire.rs` | both fixtures round-trip byte for byte; a format version other than 1 refused before decoding; **all seven** `VirtualKind` tags and their names, with the first index no kind has refused — the line that has to move when a kind is appended, and it moved from 4 to 7 at S26d — and `V[ram_live]`'s address and name; a lookup against its hand-written bytes; `Quadratic` against its hand-written bytes for no terms, linear only, products only and both, and each malformed `Quadratic` refused; every refusal of the reader; every single-bit flip of a fixture decodes or errors, never panics |
 | `tests/laws.rs` | one mutation of the toy per rule, each refused with its error — structured variants matched whole, prose details by the rule and the address or name they carry — beside the toy validating; each lookup rule broken alone, refused naming the lookup, beside one and two lawful lookups and an `M` selector; the degree-3 gate; `Quadratic`'s degree, its identically zero and unread-column cases, Law 4 against an `AffineProduct` relation, and its refusal to inline; cache-free inlining and its refusals |
 | `tests/memory.rs` | the three fixtures pinned and equal to their constructors; every constructor validating and passing `check_memory` at 12 and 22; two roots named `read_root`, `write_root`, an all-zero padding row, `trace_vars` halving lists; every read tuple's parts at their `PART_*` positions; the frame's layout, leaf order, widths and enforcing gates by name; each family's `2w` obligations whole, `gap_lo_pc`'s constant `−1`; acceptance 11 exhaustively at reduced width, 5-bit chunks over a 10-bit clock, each query's own `gap_lo` expression read from the frame with its high chunk at 0, every `(cycle, read_ts)` pair admitted exactly when `read_ts < 4·cycle + Δ`; §8's pinned read sets; `check_memory` refusing a leaf fed from `W` (acceptance 9); the forward-provenance counterexample as a producing and as an enforcing gate of list 1, each beside its lawful control; a slot and a `W` column meeting through two cached entries, a cached entry itself carrying both, and a slot over a cached entry; a frame without `pc_mask_boolean` and one without `rd_mask_boolean`, whose mask another gate still reads; a window leaf masked by `S[0]` and by `V[row]`; a global slot over an inner column; and a write root read from a `W` column alone, which provenance does not see — each mutant still passing `validate`, each test run against the mutant it names |
 | `src/gadgets.rs` (unit) | two range halfwords are the comparison's 32-bit word; the comparison returns two gates and eight lookups, each sign lookup the generic table's width; the equation built at 1 and 32 bits and refused at 0 and 33; a `const` assertion holds `U16GetSign`'s keys above AND's |
@@ -578,6 +596,7 @@ suite in `crates/checker/tests` pins each SHA-256 and holds its gates to
 | `src/jump_branch_slt.rs` (unit) | the legal masks are twelve distinct single bits; through the private `assemble` seam, the honest family spec gives `artifact`, and the build is refused for an obligation dropped (the channel count), for `next_pc`'s direct bound replaced (the copower check) and for a gate nonzero on the all-zero row |
 | `src/add_sub.rs` (unit, and four `const` assertions) | the three system codes pairwise distinct, which is what lets `system_split`, `ecall_code` and `fence_code` refuse every `ebreak` row; and, since S21, `const _: () = assert!(..)` items holding the provable ecall numbers **pairwise** distinct and each in its ABI range, and every delegation type's address-space tag distinct too — what makes `ecall_is_exit` and the per-type number gates a partition rather than gates that can all hold. S23 made that loop over `constants::delegation::TYPES` rather than naming one number. A `const` assertion rather than a test, because a violation there is a mis-numbered ABI and should not compile. Neither gate spells a number: both read `constants::ecall`. The gates themselves are `crates/checker/tests/add_sub.rs`' |
 | `src/poseidon2.rs`, `src/fr_arith.rs` (`check_shape`, run on every build) | the same discipline as `keccak`'s, over each circuit's own shape: the column counts, no setup column and **no channel**, every row-wise layer's width equal to its three regions' (poseidon2), the depth, the named relations present **by name**, and every counted family of gates counted on the emitted artifact. `fr_arith` additionally asserts that no relation's name contains `assume` |
-| `src/keccak.rs` (`check_shape`, run on every build) | every row-wise layer's width equal to its three parts' — the offset helpers all index off that split, and a layer one column out would read a neighbour's with no other symptom; the column counts; no setup column and **no channel**; the depth; gate list 0's enforcing count; `base_aligned` and `base_in_window` present **by name**; and 50 each of `addr_w`, `gap_w`, `input_w` and `output_w`, counted on the emitted artifact. S21's must-be-exact 4: a bound that exists only in a comment is not a bound, and a name check is what an `assume_*` hypothesis cannot stand in for |
+| `src/keccak.rs` (`check_shape`, run on every build) | the column counts, no setup column, four virtual tables, six outputs and the obligation count; **the two channels' obligation counts separately** — 210 on `RANGE16` and exactly 1,020 on `XOR8` — and that `(1,020 + 1).next_power_of_two()` is 1,024, which is the cost cliff `docs/spec/delegation.md` §6.5 records and the reason iota is four obligations and not eight; the depth; `live_boolean`, `base_aligned`, `base_in_window`, `round_rule`, `one_round_a_live_row` and `writes_back_w0` present **by name** and one `round{r}_boolean` per round; 51 `addr_w`, 50 each of `input_w` and `output_w`, and 200 `rho_pi_l`; and that the all-zero row is a valid padding row. S21's must-be-exact 4: a bound that exists only in a comment is not a bound, and a name check is what an `assume_*` hypothesis cannot stand in for |
+| `src/keccak.rs` (unit) | the rho/pi index map is a permutation of the 25 lanes and its three whole-byte rotations are the ones `mask_slot` exempts; **the rotation's literal weights reproduce `u64::rotate_left`** on every lane's own offset over four pseudo-random states each, evaluated over `Fr` exactly as a gate would — the one place the circuit's arithmetic is checked at the level of the weights themselves; the witness names are the layout, each once; and the circuit builds at 16 and `family_circuit` refuses 8 |
 | `src/memory.rs` (unit) | acceptance 12: the frame with one obligation dropped before the artifact is written panics at the count assertion |
 | `tests/audit.rs` | every `GateDef` variant, all six, emitted across both compilations, counts written by hand; the catalogue; the two compilations' identical shape |

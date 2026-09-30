@@ -15,7 +15,8 @@ since S-IO, **`docs/spec/public-values.md`** for the two public windows, the adv
 the value window's committed init column.
 
 ```rust
-pub enum AddressSpace { Reg, Ram, Pc, KeccakF, Poseidon2, FrArith, ModMul }   // tags 1..=7
+pub enum AddressSpace { Reg, Ram, Pc, KeccakF, Poseidon2, FrArith, ModMul,
+                        Sha256Comp, EcAdd }                                  // tags 1..=9
 pub struct MemoryEvent { pub space: AddressSpace, pub addr: u32, pub ts: u64,
                          pub read_ts: u64, pub read_value: u32, pub write_value: u32 }
 pub struct FinalValue { pub space: AddressSpace, pub addr: u32, pub ts: u64, pub value: u32 }

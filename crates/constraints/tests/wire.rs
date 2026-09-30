@@ -305,12 +305,14 @@ fn a_nonzero_unused_address_field_is_refused() {
         Ok(PolyAddress::Memory(3))
     );
 
-    let legal: [(RawAddress, PolyAddress); 8] = [
+    let legal: [(RawAddress, PolyAddress); 10] = [
         ((0, 3, 0), PolyAddress::Memory(3)),
         ((1, 3, 0), PolyAddress::Witness(3)),
         ((2, 3, 0), PolyAddress::Setup(3)),
         ((3, 0, 0), PolyAddress::Virtual(VirtualKind::RowIndex)),
         ((3, 1, 0), PolyAddress::Virtual(VirtualKind::RamLive)),
+        ((3, 4, 0), PolyAddress::Virtual(VirtualKind::Xor8A)),
+        ((3, 6, 0), PolyAddress::Virtual(VirtualKind::Xor8Out)),
         ((4, 3, 1), common::inner(3, 1)),
         ((5, 3, 0), PolyAddress::Scratch(3)),
         ((6, 3, 1), common::cached(3, 1)),
@@ -322,14 +324,18 @@ fn a_nonzero_unused_address_field_is_refused() {
         );
         assert_eq!(encode(&address), encode(&raw), "{address} writes {raw:?}");
     }
-    let stray: [RawAddress; 8] = [
+    // `(3, 7, 0)` is the first virtual index no kind has, and it moved from 4 to
+    // 7 when S26d appended the `XOR8` table's three columns. That this line has
+    // to move when a kind is added is the point of it.
+    let stray: [RawAddress; 9] = [
         (0, 3, 1),
         (1, 3, 1),
         (2, 3, 1),
-        (3, 4, 0),
+        (3, 7, 0),
         (3, 0, 1),
         (3, 1, 1),
         (3, 3, 1),
+        (3, 6, 1),
         (5, 3, 1),
     ];
     for raw in stray {
@@ -356,8 +362,15 @@ fn a_nonzero_unused_address_field_is_refused() {
     );
 }
 
-/// Virtual kinds are 0 (`V[row]`), 1 (`V[ram_live]`), 2 (`V[range19]`) and
-/// 3 (`V[range16]`), append-only, and a kind is printed by its short name.
+/// Virtual kinds are 0 (`V[row]`), 1 (`V[ram_live]`), 2 (`V[range19]`),
+/// 3 (`V[range16]`) and — since S26d — 4, 5 and 6, the `XOR8` table's three
+/// columns; append-only, and a kind is printed by its short name.
+///
+/// The `kinds.len()` refusal at the end is what makes this append-only and not
+/// merely a list: adding a kind without a tag, or a tag without a decoder arm,
+/// fails here. `crates/verifier-core/src/types.rs` carries the **same** seven
+/// tags for a `ChannelSpec`'s table addresses, and
+/// `the_two_virtual_tag_tables_agree` below holds the two equal.
 #[test]
 fn virtual_kind_tags_are_append_only() {
     let kinds = [
@@ -365,6 +378,9 @@ fn virtual_kind_tags_are_append_only() {
         (VirtualKind::RamLive, 1, "V[ram_live]"),
         (VirtualKind::Range19, 2, "V[range19]"),
         (VirtualKind::Range16, 3, "V[range16]"),
+        (VirtualKind::Xor8A, 4, "V[xor8_a]"),
+        (VirtualKind::Xor8B, 5, "V[xor8_b]"),
+        (VirtualKind::Xor8Out, 6, "V[xor8_out]"),
     ];
     for (kind, tag, name) in kinds {
         assert_eq!(encode(&kind), [tag], "{kind:?}");

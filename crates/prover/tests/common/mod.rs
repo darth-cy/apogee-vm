@@ -63,13 +63,19 @@ pub const SHARDS_ADD_CYCLES: u64 = 1_064_970;
 /// `guests/keccak-test`'s exit status: the number of its checks.
 pub const KECCAK_RESULT: u32 = 6;
 
-/// How many keccak-f permutations `guests/keccak-test` invokes: one per block
-/// of its six inputs, `docs/spec/delegation.md`'s corpus.
-pub const KECCAK_INVOCATIONS: u64 = 10;
+/// How many keccak-f **permutations** `guests/keccak-test` computes: one per
+/// block of its six inputs, `docs/spec/delegation.md`'s corpus.
+pub const KECCAK_PERMUTATIONS: u64 = 10;
 
-/// The delegation family's height: `2^8`, the menu's smallest, and the only
-/// one whose forward pass a machine holds (`docs/spec/delegation.md` §9).
-pub const KECCAK_VARS: u32 = 8;
+/// How many `KECCAK_F` **invocations** that is. Since S26d one invocation is one
+/// round, so a permutation is 24 of them (`docs/spec/delegation.md` §6).
+pub const KECCAK_INVOCATIONS: u64 = KECCAK_PERMUTATIONS * constants::keccak::ROUNDS as u64;
+
+/// The delegation family's height, and its **only** one: `RANGE16`'s table and
+/// `XOR8`'s each need 16 variables, so `constraints::family_circuit` returns
+/// `None` below it and the menu's next entry is four times the cost
+/// (`docs/spec/delegation.md` §6.5).
+pub const KECCAK_VARS: u32 = 16;
 
 /// `guests/keccak-unused`'s exit status.
 pub const KECCAK_UNUSED_RESULT: u32 = 7;
@@ -166,7 +172,7 @@ pub fn shards_params() -> ProgramParams {
 }
 
 /// S21's heights: the five execution families `keccak-test` runs at `2^20`,
-/// and the delegation family at `2^8`.
+/// and the delegation family at `2^16`, which since S26d is its only one.
 pub fn keccak_params() -> ProgramParams {
     let mut params = heights(&[
         family::ADD_SUB_LUI_AUIPC,

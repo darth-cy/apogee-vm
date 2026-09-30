@@ -84,8 +84,17 @@ pub fn channel_holds(root: (Fr, Fr)) -> bool;    // num == 0 AND den != 0, and n
   `VerifyingKey` must call `validate` there. On an artifact that breaks a law `verify`'s
   answer means nothing: it may panic, and it may accept.
 - **Virtual tables are evaluated from their closed form**, never materialized:
-  `virtual_at_row` and `virtual_at_point` for `V[row]` and `V[ram_live]`,
-  `docs/spec/gkr.md` §2.1.
+  `virtual_at_row` and `virtual_at_point` for all seven kinds, `docs/spec/gkr.md` §2.1.
+  Six are weighted sums of the row's bits — `V[row]`, the two range tables, `V[xor8_a]` and
+  `V[xor8_b]` — or a product over the high ones, `V[ram_live]`. **`V[xor8_out]` is the one
+  that is not**: `Σ_{j<8} 2^j·(y_j + y_{j+8} − 2·y_j·y_{j+8})`, which is the multilinear
+  extension of `(row & 0xff) ^ (row >> 8 & 0xff)` only because `y ^ z = y + z − 2yz` is
+  multilinear in each of `y` and `z` (S26d, `docs/spec/lookup.md` §14). A closed form that is
+  not its table's extension is a verifier evaluating a different polynomial than the prover
+  committed, which no other check would see, so
+  `crates/gkr/tests/lookup.rs::the_xor8_closed_forms_are_their_multilinear_extensions` holds
+  all three against `MultilinearPoly::evaluate` over the materialized table at 8, 15, 16 and
+  17 variables.
 - **The memory argument's verifier share is `src/memory.rs`.** `window_challenges` copies
   slots 1–4 and derives slot 5, `γ_M + RAM + α_addr·4·2^trace_vars·window`, never read from a
   proof. `boundary_factors` evaluates every register and PC tuple through `eval_gate` on

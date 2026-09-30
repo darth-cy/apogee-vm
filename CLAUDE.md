@@ -196,7 +196,7 @@ cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D
 cargo clippy -p prover --all-targets --features metrics -- -D warnings   # feature 1 of 2
 cargo clippy -p prover --all-targets --features debug-info -- -D warnings   # feature 2 of 2
 cargo clippy -p prover --all-targets --features metrics,debug-info -- -D warnings   # both at once
-cargo test --workspace                      # 1,090 tests; 68 more are #[ignore]d (the run's own tally, S26c)
+cargo test --workspace                      # 1,109 tests; 68 more are #[ignore]d (S26c's tally plus S26d's nineteen, counted from the diff; the run's own tally is authoritative)
 cargo test -p prover --features metrics --test metrics  # the metrics harness; 10 more, 2 #[ignore]d
 cargo test -p prover --features debug-info --test debug_info  # the debug log: the levels, and that it changes no proof byte
 cargo test -p prover --features debug-info --lib  # the log's own unit tests, which the default build does not compile
@@ -712,7 +712,11 @@ is derivable *from* them is regenerated and diffed in CI.
   one channel has one table. `checker::violated_lookups` is the range channels' native
   evaluator; `checker::channel_sums` is every channel's. `from_bytes` refuses any other
   format version.
-- **The LogUp spec is `docs/spec/lookup.md`, and it is frozen**: the four channels, the two
+- **The LogUp spec is `docs/spec/lookup.md`, and it is frozen**: the FIVE channels since
+  S26d — `XOR8`, the byte table `(a, b, a ^ b)`, is the first **table** channel whose table is
+  a **closed form** and not committed setup, which costs no commitment and no movement of the
+  SRS digest (`docs/spec/lookup.md` §14; it amends the master prompt's Lookups invariant, on
+  the owner's decision) — the two
   shard-local challenges and their derived powers, the gated-key conventions, the fraction
   tree, the multiplicity convention, the packed generic table and the decoder binding.
 - **`g` and `β` are shard-local and follow every commitment.** Drawn in that order under
@@ -998,12 +1002,35 @@ is derivable *from* them is regenerated and diffed in CI.
   `enable` is 0, so a value that *is* below the modulus on a row that does not read it becomes
   unprovable — which at S26c made every row of `EC_ADD` unprovable while the executor, the
   guests and every shape test passed. **`family_circuit`'s minimum-height guard is derived,
-  not a list**: it reads each family's own `channels()` and takes the widest range channel's
-  `BITS`, so a family is held to exactly the floor its channels imply and no table has to be
-  kept in step. **A height changes no gate** — it adds one halving list per variable carrying
+  not a list**: it reads each family's own `channels()` and takes the most any one of their
+  tables needs — `constraints::lookup::table_vars`, which since S26d is not `BITS` with an
+  `IS_RANGE` filter, `XOR8`'s table being 65,536 rows without being a range channel — so a
+  family is held to exactly the floor its channels imply and no table has to be kept in step. **A height changes no gate** — it adds one halving list per variable carrying
   one node per output, and nothing else — which is what made `MOD_MUL`'s raise a re-pin and
   not a redesign
   (`crates/checker/tests/{mod_mul,ec_add}.rs::a_height_moves_only_the_halving_layers`).
+- **`KECCAK_F` is ONE ROUND A ROW, a permutation is 24 calls, and there is no bit in it**
+  (S26d, `docs/spec/delegation.md` §6). S21 made one row a whole keccak-f[1600]: 1,600 boolean
+  state columns, 24 seven-layer round blocks, **354,762 inner columns** over 177 layers, which
+  forced `2^8`, 256 permutations a shard and **46,406 proof bytes a permutation** — five such
+  shards were 97% of a measured mini-block's proof. One round a row is the other trade, and it
+  is `EC_ADD`'s: computation too wide for one row is decomposed into rows and **RAM is the
+  glue**, the frame's own read/write chain being what proves round `r`'s output is round
+  `r + 1`'s input, with the guest's proven `for round in 0..24` loop supplying the indices.
+  Nothing else is needed and nothing else was added. The committed unit is a **byte**, and
+  every Boolean operation of the round is one obligation on the new `XOR8` channel; `AND`,
+  `ANDN` and a top-bit mask are then *linear forms* over the result, so a rotation is a
+  literal-weighted combination of a byte and its masked copy and there is no bit-level
+  booleanity anywhere. The circuit is **flat** — 385 enforcing gates, no layer of its own — so
+  it goes through `memory::assemble` like every other family and `keccak.rs`'s private
+  `Assembly` is deleted. **5,478 inner columns, 1,764 committed, 373,276 proof bytes a shard
+  and 2,730 permutations in it: 137 proof bytes a permutation, a factor of 339.** The frame
+  changed shape, so ecall `0x0501` is **retired and burned** and the call took `0x0507`; the
+  family id 9 and the address-space tag 4 did not move. Three things a later change must
+  respect: the `XOR8` channel carries **1,020** obligations against a 1,024-leaf fraction tree,
+  so four more double it and cost 8.6 GB a shard; `input_w{j}` and `output_w{j}` are **ungated**,
+  which is what makes a padding row's state byte *not* free; and `one_round_a_live_row` is
+  load-bearing because the codes are `0..24` and every pair sums to another round's word.
 - **`MOD_MUL` multiplies in one of FOUR fixed Ethereum fields, and the EVM's `MULMOD` is
   not one of them** (S26b, `docs/spec/delegation.md` §14 and §10.2). Frame word 0 selects
   secp256k1's `p` or `n` or BN254's `q` or `r`; the circuit supplies the limbs as literals
@@ -1291,6 +1318,7 @@ is derivable *from* them is regenerated and diffed in CI.
 | S26c — SHA-256 compression + secp256k1/BN254 `EC_ADD` | done | `docs/handoff/S26c-sha256-ec.md` |
 | S-DEBUG — The proving debug log | done | `docs/handoff/S-DEBUG-debug-log.md` |
 | S-BATCH — The mini-block gate, measured | done | `docs/handoff/S-BATCH-miniblock-gate.md` |
+| S26d — `KECCAK_F` re-shaped: one round a row | done | `docs/handoff/S26d-keccak-round.md` |
 
 **S-IO takes no number, and that is deliberate** (owner's decision). It is not one of the
 original twenty-seven stages — it is the stage those twenty-seven forgot, inserted after

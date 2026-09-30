@@ -298,7 +298,7 @@ pub fn generate() {
     );
 
     let frames = guest_frames(&encoded, &output);
-    let mut bytes = Vec::with_capacity(frames.len() * 4 * constants::keccak::FRAME_WORDS);
+    let mut bytes = Vec::with_capacity(frames.len() * 4 * constants::keccak::STATE_WORDS);
     for frame in &frames {
         for word in frame {
             bytes.extend_from_slice(&word.to_le_bytes());
@@ -308,7 +308,7 @@ pub fn generate() {
         "crates/emulator/tests/vectors/revm_block_keccak.bin",
         &bytes,
     );
-    println!("  keccak-f invocations: {}", frames.len());
+    println!("  keccak-f permutations: {}", frames.len());
 
     // S25's stateless mode, over a block built here rather than recorded: a
     // recorded one cannot have a complete node set, `eth_getProof` returning no
@@ -317,7 +317,14 @@ pub fn generate() {
 }
 
 /// Build and trace the guest on this witness, hold its **journal** to native
-/// revm's answer, and return every keccak-f frame its delegation handed over.
+/// revm's answer, and return the input state of every keccak-f **permutation**
+/// its delegation handed over.
+///
+/// Since S26d one invocation is one round, so the frames are 24 to a permutation
+/// and 23 of them carry mid-permutation states. What the fixture wants is the
+/// permutation's input, so the harvest keeps the invocations whose round word is
+/// **0** and drops the round word from each — which is what keeps the file 200
+/// bytes a permutation, unchanged in size and in meaning from S21.
 ///
 /// The build is the manual's, with everything that could reach rustc from the
 /// ambient environment cleared, because this is the same command every other
@@ -345,11 +352,26 @@ fn guest_frames(input: &[u8], want_output: &[u8]) -> Vec<Vec<u32>> {
         .expect("the guest declares the keccak family");
     assert!(
         !trace.is_empty(),
-        "the workload delegated no keccak-f permutation, so the shim was not reached"
+        "the workload delegated no keccak-f round, so the shim was not reached"
     );
-    (0..trace.len())
-        .map(|i| trace.frame(i).iter().map(|q| q.read_value).collect())
-        .collect()
+    let rounds =
+        (0..trace.len()).filter(|i| trace.frame(*i)[constants::keccak::ROUND_WORD].read_value == 0);
+    let frames: Vec<Vec<u32>> = rounds
+        .map(|i| {
+            trace.frame(i)[constants::keccak::STATE_WORD..]
+                .iter()
+                .map(|q| q.read_value)
+                .collect()
+        })
+        .collect();
+    // Every permutation is 24 invocations, so exactly one in 24 starts one.
+    assert_eq!(
+        trace.len(),
+        frames.len() * constants::keccak::ROUNDS,
+        "the invocations are not a whole number of permutations"
+    );
+    println!("  keccak-f rounds: {}", trace.len());
+    frames
 }
 
 /// The guest, preprocessed at the smallest menu height its code fits.
@@ -364,10 +386,10 @@ fn preprocess(image: &ProgramImage) -> (DecodedTables, VmConfig) {
         revm_block::TRACE_HEIGHT_RELEASE,
         revm_block::TRACE_HEIGHT_DEBUG,
     ] {
-        // Every family but a delegation family at `height`; a delegation
-        // family keeps its default `2^8`, because its rows are invocations and
-        // not halfwords and that is the only height whose forward pass a
-        // machine holds (`docs/spec/delegation.md` §9).
+        // Every family but a delegation family at `height`; a delegation family
+        // keeps its own default, because its rows are invocations and not
+        // halfwords and its ceiling is its own circuit's width
+        // (`docs/spec/delegation.md` §9).
         let mut heights = ProgramParams::defaults().heights;
         for (f, h) in heights.iter_mut().enumerate() {
             if program::delegation_ecall(f as u32).is_none() {

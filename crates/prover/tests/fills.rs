@@ -21,14 +21,16 @@
 //! proof with nothing said about which one.
 //!
 //! The way that happens is a shared builder and a family that lays its columns
-//! out differently. `prover::fill::delegation_frame` serves all three families,
-//! but `constraints::keccak` — frozen at S21, before the shared module existed
-//! — puts the input state's 1,600 bits at `W[0]` and the frame's gap and base
-//! bits above them, while S23's two circuits put the frame's bits first. The
-//! builder takes that offset as `witness_base`; pass 0 for keccak and its gap
-//! bits land on top of the state's, which is exactly the shape this file
-//! refuses. Nothing about the addresses depends on what the guest computed, so
-//! one invocation of each is as decisive as a full shard.
+//! out differently. Two builders serve the six delegation families —
+//! `prover::fill::delegation_frame` for the three that decompose into bits and
+//! `delegation_frame_range16` for the three that range-check through `RANGE16` —
+//! and both write the frame's own witness columns at `W[0]`. S21's `keccak` was
+//! the one exception, putting its 1,600 state bits first and its frame's bits at
+//! `W[1600]`, which is why the bit builder carried a `witness_base` offset until
+//! S26d re-shaped that family. What replaces the offset is the invariant below:
+//! **every** delegation frame's witness columns start at `W[0]`. Nothing about
+//! the addresses depends on what the guest computed, so one invocation of each is
+//! as decisive as a full shard.
 
 use constants::family;
 use constraints::PolyAddress;
@@ -68,7 +70,8 @@ fn addresses(out: &[(PolyAddress, poly::MultilinearPoly)]) -> (Vec<u32>, Vec<u32
 /// assembly appends them with `trace::build_multiplicities`, after the fill and
 /// over the tuples the fill wrote. A caller passes
 /// `WITNESS_COLUMNS - channels().len()` for a family that carries a channel,
-/// which since S26c is `MOD_MUL` and `EC_ADD`.
+/// which since S26c is `MOD_MUL` and `EC_ADD` and since S26d `KECCAK_F` too —
+/// and that family carries **two**, so the subtraction is not always one.
 fn covers(program: &Program, archive: &trace::TraceArchive, family: u32, m: usize, w: usize) {
     let name = program::family_name(family);
     let height = program
@@ -88,10 +91,17 @@ fn covers(program: &Program, archive: &trace::TraceArchive, family: u32, m: usiz
     assert_eq!(witness, (0..w as u32).collect::<Vec<_>>(), "{name}'s W");
 }
 
-/// S21's family, whose frame's witness columns start at `W[1600]`. This is the
-/// regression: with the shared builder's default base its 1,900 gap bits and
-/// 60 base bits land on the state's 1,600, `W[1600..3560]` is never written,
-/// and the shard does not prove.
+/// S21's family, re-shaped at S26d: one round a row, 1,556 witness columns and
+/// not a bit among them. The regression this guards is the same as the other
+/// five's — a column the circuit declares and the fill never writes is a
+/// `gkr_part` panic at the far end of a proof — and this family has the most
+/// blocks to get wrong: nine byte-wide stages, a 24-column one-hot selector and
+/// a four-column round constant, one of which (`rho_mask`) is 22 lanes and not
+/// 25.
+///
+/// **It subtracts `channels().len()` since S26d**, like `MOD_MUL`'s and
+/// `EC_ADD`'s below: this family carried no channel until then, so the
+/// unsubtracted constant was right and is not any more.
 #[test]
 fn the_keccak_fill_covers_its_circuit_exactly() {
     let program = common::keccak_program();
@@ -101,7 +111,7 @@ fn the_keccak_fill_covers_its_circuit_exactly() {
         &archive,
         family::KECCAK_F,
         kec_circuit::MEMORY_COLUMNS,
-        kec_circuit::WITNESS_COLUMNS,
+        kec_circuit::WITNESS_COLUMNS - kec_circuit::channels().len(),
     );
 }
 
@@ -379,25 +389,28 @@ fn sampled_rows_hold(
     }
 }
 
-/// The bit-decomposing circuits do **not** agree on where a frame's witness
-/// columns start, which is the whole reason the builder takes a base. Stated
-/// here so that a later family copying one of them sees the choice rather than
-/// inheriting it.
+/// **Every** delegation frame's witness columns start at `W[0]`, which is what
+/// lets one builder per range convention serve every family without an offset.
 ///
-/// Since S26c `MOD_MUL` and `EC_ADD` are not in this list at all: they
-/// range-check through `RANGE16`, so their frames carry two gap **chunks** a
-/// word rather than 38 bits, and `delegation_frame_range16` fills them.
+/// This is the S26d replacement for `the_frame_witness_base_is_per_family`: that
+/// test pinned `keccak`'s frame bits sitting at `W[1600]`, the one exception, and
+/// the offset parameter that existed for it alone is deleted. The mutation this
+/// catches is the one that matters now — a later delegation family putting its
+/// own columns before the frame's, which the shared builder would silently
+/// overwrite.
+///
+/// The three bit-decomposing families' frames start with a gap **bit**; the three
+/// that range-check through `RANGE16` start with a gap **chunk**.
 #[test]
-fn the_frame_witness_base_is_per_family() {
-    assert_eq!(
-        kec_circuit::gap_bit(0, 0),
-        PolyAddress::Witness(constants::keccak::STATE_BITS as u32),
-        "keccak's frame bits sit above the state's"
-    );
+fn every_frame_witness_block_starts_at_zero() {
     for a in [p2_circuit::gap_bit(0, 0), fa_circuit::gap_bit(0, 0)] {
         assert_eq!(a, PolyAddress::Witness(0), "S23's frames start at W[0]");
     }
-    for a in [mm_circuit::gap_chunk(0, 0), ea_circuit::gap_chunk(0, 0)] {
+    for a in [
+        mm_circuit::gap_chunk(0, 0),
+        ea_circuit::gap_chunk(0, 0),
+        kec_circuit::gap_chunk(0, 0),
+    ] {
         assert_eq!(
             a,
             PolyAddress::Witness(0),

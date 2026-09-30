@@ -101,11 +101,11 @@ pub const PINS: [(&str, &str); 26] = [
     ),
     (
         "keccak-test.elf",
-        "09797eda61d19bba3b0786cfaa8f0d3433439226174fd643f1966f8b7107ef8e",
+        "679c8e181839d01530b80789f4aa3598749f5124395547b69591700500af53b9",
     ),
     (
         "keccak-unused.elf",
-        "af73b4f8140bf8c01f33de18553d048ea7c31d6cf6d0c715f7609da82d226810",
+        "cb501400c4bae14cf692c758b77d59f8fcb9a4cbb31b1dc5ee56419dd905de5b",
     ),
     (
         "recursion-ops.elf",

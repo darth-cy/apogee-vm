@@ -4,25 +4,25 @@
 //! Every execution-family circuit fixture in the repository is the artifact
 //! itself (`family`, `memory`, `lookup`, `gkr`). These cannot be: a delegation
 //! row is a whole permutation or a whole field operation over a frame the
-//! circuit decomposes to the bit, so the artifacts are 1 MB, 2 MB and — for
-//! keccak — about 100 MB of wire form, three orders of magnitude past the
-//! largest committed circuit, `atomics.bin`'s 102,965 bytes. What a fixture
-//! buys is a regeneration CI can diff, and a digest buys exactly that at a
-//! fraction of the size. The owner chose it at S21: commit the SHA-256, diff
-//! that.
+//! circuit decomposes to the bit, so the artifacts run to megabytes of wire
+//! form — keccak's was about 100 MB until S26d re-shaped it — orders of
+//! magnitude past the largest committed circuit, `atomics.bin`'s 102,965 bytes.
+//! What a fixture buys is a regeneration CI can diff, and a digest buys exactly
+//! that at a fraction of the size. The owner chose it at S21: commit the
+//! SHA-256, diff that.
 //!
 //! So each file below is one line of shape plus one digest, and the matching
 //! suite in `crates/checker/tests` holds the constructor to its document.
 //! The shape numbers are on the line for a reader: a digest that moves says
 //! only *that* something moved, and the counts beside it say what.
 //!
-//! Each height is the family's own default, and **the four do not share one**
+//! Each height is the family's own default, and **the six do not share one**
 //! (`docs/spec/delegation.md` §9.1). A delegation family's rows are
 //! invocations, not halfwords, so its ceiling is the width of one row's
-//! circuit — and those widths differ by three orders of magnitude. `KECCAK_F`
-//! is 354,762 inner columns a row, where `2^16` rows is 744 GB of forward
-//! pass; `MOD_MUL` is 270, where `2^16` is 7.9 GB and is what takes a measured
-//! block from 1,048 shards to 5.
+//! circuit — and those widths differ by three orders of magnitude.
+//! `SHA256_COMP` is 16,688 inner columns a row, where `2^16` rows is 35 GB of
+//! forward pass; `MOD_MUL` is 2,244, where `2^16` is 5.1 GB and is what takes a
+//! measured block from 1,048 shards to 5.
 
 use constants::family;
 use constraints::{ec_add, fr_arith, keccak, mod_mul, poseidon2, sha256, CircuitArtifact};

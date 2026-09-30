@@ -164,18 +164,23 @@ pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
 }
 
 /// The fewest variables a circuit declaring `channels` may be built at: the
-/// widest range channel's bound, or 0 where there is none.
+/// most any one of its channels' tables needs, or 0 where none needs any.
 ///
 /// This is `lookup::channel_trees`' assertion read forwards. Keeping the two
 /// in step is what makes a bad height a clean `None` from
 /// [`family_circuit`] — and so a clean `Err` from `VerifyingKey::check` —
 /// rather than a panic on bytes a verifier was handed.
+///
+/// The per-channel number is `lookup::table_vars` and **not** `BITS` with a
+/// range filter, which is what it was until S26d. `XOR8`'s table is virtual
+/// and 65,536 rows wide without being a range channel at all, so a filter on
+/// `IS_RANGE` would have given a family carrying it alone a floor of 0 and an
+/// incomplete table at every height below `2^16` — true of `KECCAK_F` only by
+/// the accident of its also carrying `RANGE16`.
 fn minimum_trace_vars(channels: &[crate::lookup::ChannelSpec]) -> u32 {
-    use constants::lookup_channel::{BITS, IS_RANGE};
     channels
         .iter()
-        .filter(|spec| IS_RANGE[spec.channel as usize])
-        .map(|spec| BITS[spec.channel as usize])
+        .map(|spec| crate::lookup::table_vars(spec.channel))
         .max()
         .unwrap_or(0)
 }
@@ -203,6 +208,21 @@ pub enum VirtualKind {
     /// `V[range16]`: the 16-bit range channel's table, the low 16 bits of the
     /// row index. `docs/spec/lookup.md` §3.
     Range16,
+    /// `V[xor8_a]`: column 0 of the `XOR8` channel's table, the low eight bits
+    /// of the row index. `docs/spec/lookup.md` §14.
+    Xor8A,
+    /// `V[xor8_b]`: column 1 of the `XOR8` table, bits 8 through 15 of the row
+    /// index.
+    Xor8B,
+    /// `V[xor8_out]`: column 2 of the `XOR8` table, the bitwise XOR of the
+    /// other two.
+    ///
+    /// Its multilinear extension is `Σ_{j < 8} 2^j·(y_j + y_{j+8} − 2·y_j·y_{j+8})`,
+    /// because `y ^ z = y + z − 2yz` is already multilinear in each of `y` and
+    /// `z`. That is what makes a byte XOR table a **closed form** rather than a
+    /// committed setup column, and so free of a commitment and of the SRS
+    /// digest.
+    Xor8Out,
 }
 
 /// The one way any polynomial is named. `docs/spec/gkr.md` §2 says which
@@ -237,6 +257,9 @@ impl fmt::Display for PolyAddress {
             PolyAddress::Virtual(VirtualKind::RamLive) => write!(f, "V[ram_live]"),
             PolyAddress::Virtual(VirtualKind::Range19) => write!(f, "V[range19]"),
             PolyAddress::Virtual(VirtualKind::Range16) => write!(f, "V[range16]"),
+            PolyAddress::Virtual(VirtualKind::Xor8A) => write!(f, "V[xor8_a]"),
+            PolyAddress::Virtual(VirtualKind::Xor8B) => write!(f, "V[xor8_b]"),
+            PolyAddress::Virtual(VirtualKind::Xor8Out) => write!(f, "V[xor8_out]"),
             PolyAddress::Inner { layer, offset } => write!(f, "L{{{layer}}}[{offset}]"),
             PolyAddress::Scratch(i) => write!(f, "scratch[{i}]"),
             PolyAddress::Cached { layer, offset } => write!(f, "C{{{layer}}}[{offset}]"),
