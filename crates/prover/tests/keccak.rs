@@ -2,11 +2,16 @@
 //! block.
 //!
 //! `#[ignore]`d and deferred out of CI under master rule 7: the statement is
-//! six `2^20` execution shards, two `2^16` window shards, one `2^8` keccak
-//! shard and S-IO's two `2^8` public-value shards, and the circuit is what
-//! makes it big — a keccak row is a whole
-//! keccak-f[1600] permutation, 354,762 inner columns
-//! (`docs/spec/delegation.md` §9). Run it with
+//! six `2^20` execution shards, two `2^16` window shards, one **`2^18`** keccak
+//! shard and S-IO's two `2^8` public-value shards, and the keccak shard is what
+//! makes it big — 5,490 inner columns over 262,144 rows, about **60 GB** of
+//! forward pass, which is the largest single shard in this statement
+//! (`docs/spec/delegation.md` §9.2).
+//!
+//! **Neither number is S21's.** A keccak row was a whole keccak-f[1600]
+//! permutation then — 354,762 inner columns over 256 rows — until S26d made it
+//! one Keccak *round*, so a permutation is 24 consecutive invocations; the
+//! height followed at `2^18`. Run it with
 //!
 //! ```text
 //! cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1

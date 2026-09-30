@@ -1240,11 +1240,16 @@ pub mod family {
     /// forward pass is columns times height. S26d made one keccak row one
     /// *round*, and that family sits at `2^18` today; what keeps `2^8` on the
     /// menu is `POSEIDON2`, `FR_ARITH` and `SHA256_COMP`
-    /// (`docs/spec/delegation.md` §9). No family carrying a lookup channel at
-    /// all may take it — the narrowest table on the menu is 16 variables
-    /// (`constraints::lookup::table_vars`) — and
-    /// `constraints::family_circuit` returns `None` for every such family
-    /// below the widest table its channels declare.
+    /// (`docs/spec/delegation.md` §9). What closes `2^8` to a family is a
+    /// channel whose **table needs more than eight variables**, not carrying a
+    /// channel at all: `constraints::lookup::table_vars` is 19 for `TIMESTAMP`
+    /// and 16 for `RANGE16` and `XOR8`, so any of those three forces `2^16` or
+    /// above, while `GENERIC` and `DECODER` report **0** — their tables are
+    /// committed setup rather than closed forms, so they raise the floor by
+    /// nothing. `constraints::family_circuit` returns `None` below the widest
+    /// table its channels declare, and nothing today rests on the two zeros:
+    /// all five families reading `GENERIC` also carry `TIMESTAMP`, whose 19
+    /// puts them at `2^20` regardless.
     pub const HEIGHT_MENU: [u32; 5] = [1 << 8, 1 << 16, 1 << 18, 1 << 20, 1 << 22];
 
     /// The default trace height of every family, indexed by `FamilyId`.
