@@ -368,6 +368,35 @@ the state this row computed against the state the frame says the guest wrote —
 actually made. A disagreement otherwise reaches a reader as a broken `out_bit` gate at whatever
 layer it sits on. Eight `u32` compares a row on a `2^8` family.
 
+### 6.6 `KECCAK_F`: the round histogram, and the one failure the glue cannot see
+
+```text
+apogee deleg    KECCAK_F#0   round=[0:114 1:114 2:114 ... 22:113 23:113] of 2730 live rows
+```
+
+and, when the counts are not near-uniform:
+
+```text
+apogee deleg    KECCAK_F#0   round counts spread 0..114 -- a permutation is 24 consecutive
+                             rounds, so a spread above 1 is a guest that is NOT LOOPING 24 TIMES
+```
+
+S26d made one invocation one **round**, so a permutation is 24 consecutive
+invocations glued by the frame (`docs/spec/delegation.md` §6.4). The circuit proves
+each row honestly whatever the sequence, and the memory multiset proves each row
+read what the row before it wrote — **neither says there were 24 of them**. That is
+the guest's own proven loop's job, and this histogram is where a reader can see it:
+24 near-equal counts are a guest looping correctly, and any other shape is not.
+
+The verdict line fires at a spread above 1 and not above 0, because a shard cut
+mid-permutation legitimately leaves the low rounds one ahead of the high ones. It
+is the analogue of §6.2's modulus histogram and §6.3's curve/group one, and like
+them it is a **tally with one derived verdict** rather than a pass/fail: a
+`round=[0:1 1:0 2:0 ...]` on a shard with one live row is a guest that called the
+shim once, which is a real bug and an unambiguous line.
+
+24 increments a row on a `2^18` family.
+
 ---
 
 ## 6a. One invariant the log checks that no test does

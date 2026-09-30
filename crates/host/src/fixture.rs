@@ -171,8 +171,9 @@ pub fn journal_file(stem: &str) -> String {
 /// TRACE_HEIGHT_RELEASE` is that height, pinned beside the guest. A delegation
 /// family claims no pc and is not bound by it (`docs/spec/delegation.md` §1), so
 /// each keeps its own entry in `constants::family::DEFAULT_HEIGHTS` — `2^8` for
-/// the three S21/S23 families and `2^16` for `MOD_MUL`, which is read here and
-/// never spelled (`docs/spec/delegation.md` §9.1).
+/// `POSEIDON2`, `FR_ARITH` and `SHA256_COMP`, `2^16` for `MOD_MUL` and `EC_ADD`
+/// and `2^18` for `KECCAK_F`, all read here and never spelled
+/// (`docs/spec/delegation.md` §9.2).
 pub fn revm_params() -> program::ProgramParams {
     let mut heights = [revm_block::TRACE_HEIGHT_RELEASE; constants::family::COUNT as usize];
     for (f, h) in heights.iter_mut().enumerate() {

@@ -101,7 +101,7 @@ One table ties a family, its number and its frame width together:
 
 | family | id | ecall | frame words | address space |
 | --- | --- | --- | --- | --- |
-| `KECCAK_F` | 9 | `PRECOMPILE_KECCAK_F` = `0x0501` | 50 | `DELEGATION_KECCAK_F` = 4 |
+| `KECCAK_F` | 9 | `PRECOMPILE_KECCAK_F` = `0x0507` | 51 | `DELEGATION_KECCAK_F` = 4 |
 | `POSEIDON2` | 10 | `PRECOMPILE_POSEIDON2` = `0x0500` | 24 | `DELEGATION_POSEIDON2` = 5 |
 | `FR_ARITH` | 11 | `PRECOMPILE_FR_ARITH` = `0x0502` | 25 | `DELEGATION_FR_ARITH` = 6 |
 | `MOD_MUL` | 15 | `PRECOMPILE_MOD_MUL` = `0x0504` | 25 | `DELEGATION_MOD_MUL` = 7 |
@@ -124,6 +124,17 @@ failing loudly, which is exactly what append-only exists to prevent.
 test can hold it to being unanswered, and `docs/spec/ecall-abi.md` §4 is the
 retired table. **The family id and the address-space tag did not move**: the
 family is the same family, refactored.
+
+`KECCAK_F`'s number is `0x0507` and not `0x0501` for the third reading of the
+same rule. S21 gave it `0x0501` over a 50-word frame holding the state and
+nothing else, and one call performed a **whole permutation**; S26d made one call
+one **round**, which is a 51-word frame whose word 0 is the round (§6.1). An old
+binary issuing `0x0501` under the new executor would have its first state word
+read as a round selector and get one round of a permuted state back, with nothing
+failing loudly — so `0x0501` is **retired and burned**,
+`constants::ecall::RETIRED_KECCAK_F_WHOLE_PERMUTATION` keeps it, and the
+re-shaped call took the next free number. The family id, the address-space tag
+and the byte order of the state did not move.
 
 The table itself is `constants::delegation::TYPES`, which `program::DELEGATIONS`
 *is* — one array, read by the emulator's dispatch, by the request-side gates and
@@ -362,84 +373,235 @@ three zeroings enforce, and `AddressSpace::chains()` is where the log says so.
 
 ## 6. The keccak-f circuit
 
-`constants::family::KECCAK_F`, one keccak-f[1600] permutation a row.
-`constraints::keccak` is the circuit; `docs/spec/constraint-manifest.md` §12 is
-its column-by-column account.
+`constants::family::KECCAK_F`, **one Keccak round a row**. `constraints::keccak`
+is the circuit; `docs/spec/constraint-manifest.md` §12 is its column-by-column
+account.
 
-### 6.1 The columns
+**This section was re-shaped at S26d** and §10.4 records what moved and why. S21
+made one row a whole keccak-f[1600] permutation: 1,600 boolean state columns, 24
+seven-layer round blocks, 354,762 inner columns over 177 layers. All 24 rounds
+and all 1,600 bits coexisted horizontally, which fixed the family at `2^8` — 256
+permutations a shard — and made five keccak shards **97% of a measured
+mini-block's proof bytes** (§9.1).
+
+One round a row is the other trade, and it is the same one `EC_ADD` makes: a
+computation too wide for one row is decomposed into several rows and **RAM is the
+glue**. A permutation is 24 consecutive invocations, the frame is ordinary RAM,
+and the global memory multiset is what proves round `r`'s written state is round
+`r + 1`'s read state (§6.4). There is no second cross-row mechanism.
+
+### 6.0 What one round costs, and what it buys
+
+| | S21, a permutation a row | S26d, a round a row |
+| --- | --- | --- |
+| height | `2^8` | `2^18` |
+| committed columns | 3,764 | 1,764 |
+| inner columns | 354,762 | 5,490 |
+| layers | 177 | 29 |
+| artifact wire bytes | 100,254,040 | 1,900,468 |
+| permutations a shard | 256 | 10,922 |
+| forward pass a shard | 2.9 GB | ~60 GB |
+| **proof bytes a shard** | **11,880,012** | **381,100** |
+| **proof bytes a permutation** | **46,406** | **34.9** |
+
+The last row is the point: **1,330 times fewer proof bytes for the same work**,
+from 31.2× the shard and 42.7× the permutations in it.
+
+The right column is `2^18`, one menu entry above the floor this family's two
+channels imply and not the `2^16` the re-shape first made reachable, and §9.2 is
+why: a shard's proof is a function of its circuit's width and depth and barely of
+its rows — 381,100 bytes against 373,276 at `2^16` — so the fatter shard is the
+cheaper proof. That column's two proof-byte rows are **derived**, not measured:
+`crates/prover/tests/keccak.rs`' `proof_bytes` is a closed form over the artifact
+and it reproduces the measured 373,276 at `2^16` exactly, which is what licenses
+reading it forward.
+
+**What the guest pays, measured.** 24 ecalls and 24 stores of the round word a
+permutation instead of one ecall. At `--release`, `guest_sdk::keccak256` over
+`guests/keccak-test`'s corpus is **1,681.5 cycles a call** — six calls, ten
+permutations, so about 1,009 cycles a permutation for the whole sponge — and the
+loop's own share of that is roughly 145 cycles more than S21's single call. At
+`opt-level = 0` it is four times worse: the committed debug ELF is **193,156
+cycles against S21's 154,708** for the same program, so +38,448 for ten
+permutations, because the shim is a real call with a stack frame per round rather
+than five inlined instructions. The workload that matters — `guests/revm-block` —
+is proven at `--release` for the reason `docs/spec/revm-block.md` gives, and there
+the trade is ~145 cycles against thousands of proof bytes a permutation.
+
+**There is no bit anywhere in this circuit** but the structural selectors. The
+committed unit is a **byte**, and every Boolean operation of the round is one
+obligation on the `XOR8` channel — a virtual table of the 65,536 triples
+`(a, b, a ^ b)` (`docs/spec/lookup.md` §14). Everything else follows from the two
+identities
+
+```text
+a & b   = (a + b − (a ^ b)) / 2          (¬a) & b = (b − a + (a ^ b)) / 2
+```
+
+which are *linear forms* over the obligation's result, so `AND` and `ANDN` cost
+no obligation of their own; and from the observation that masking a byte's top
+`s` bits is one XOR against a **literal**, which makes a rotation a
+literal-weighted combination of a byte and its masked copy (§6.3).
+
+So the circuit is **flat**, like `MOD_MUL`'s and `EC_ADD`'s: every relation is an
+obligation or a degree-≤2 enforcing gate over base columns, no relation produces
+an inner column, and the only inner columns in the artifact are the two memory
+product trees, the two channels' fraction trees and the halving phase.
+
+### 6.1 The frame and the columns
+
+The frame is **51 words, 204 bytes**. Word 0 is the round; the state follows in
+SHA-3 byte order, lane `A[x][y]` at `i = 5y + x` occupying state words `2i` and
+`2i + 1`, low half first.
+
+| word | holds | read | written |
+| --- | --- | --- | --- |
+| 0 | the round, in `0..24` | yes | unchanged |
+| `1 + 2i` | lane `i`'s low half | yes | the round's output |
+| `1 + 2i + 1` | lane `i`'s high half | yes | the round's output |
+
+The round word is written back **unchanged**, and the guest's own proven loop is
+what advances it. The alternative — the circuit writing `round + 1` — would save
+the guest one store a round and would have it write 24, a value no round claims,
+into a frame the next permutation must reset anyway.
 
 | subtree | columns |
 | --- | --- |
 | `M[0..4]` | `cycle`, `live`, `base`, `anchor_value` |
 | `M[4 + 4j ..]` | frame word `j`: `addr`, `read_ts`, `read_value`, `write_value` |
-| `W[0..1600]` | the input state's bits: bit `z` of lane `i` at `64i + z` |
-| `W[1600..3500]` | 38 gap bits a frame read, in frame order |
-| `W[3500..3529]` | `(base − RAM_ORIGIN) / 4`, 29 bits |
-| `W[3529..3560]` | `2^31 − 200 − base`, 31 bits |
+| `W[0..102]` | two `RANGE16` gap chunks a frame read, in frame order |
+| `W[102..106]` | `base_low`, `base_low_hi`, `base_room`, `base_room_hi` |
+| `W[106..130]` | `round_sel`, 24 one-hot round selectors |
+| `W[130..134]` | `rc`, the round constant's four nonzero bytes |
+| `W[134..334]` | `state_in`, the input state: 25 lanes of 8 bytes |
+| `W[334..494]` | `parity`, theta's five-fold XOR, four steps a byte |
+| `W[494..534]` | `c_mask`, `C ^ 0x80` |
+| `W[534..574]` | `theta_d`, `D[x]` |
+| `W[574..774]` | `theta_a`, `A' = A ^ D` |
+| `W[774..950]` | `rho_mask`, `A' ^ mask(s)` for the 22 lanes rho splits |
+| `W[950..1150]` | `rho_out`, `B`, the state after rho and pi |
+| `W[1150..1350]` | `chi_and`, `B1 ^ B2` |
+| `W[1350..1550]` | `chi_out`, chi's output |
+| `W[1550..1554]` | `iota_out`, lane `(0,0)`'s four bytes after iota |
+| `W[1554..1556]` | the `RANGE16` and `XOR8` multiplicity columns |
 
-**One mask for the whole row.** The 50 frame words and the anchor are one
+**One mask for the whole row.** The 51 frame words and the anchor are one
 invocation: live together or not at all. `live` is the mask every leaf carries,
 and the only one `check_memory` has to hold to booleanity.
 
-There is **no setup column, no virtual table and no lookup channel** (§9).
+There is **no setup column**, so nothing here needs binding: both channels' tables
+are closed forms of the row index and cost no commitment and no movement of the
+SRS digest.
 
-### 6.2 The bounds
+### 6.2 The gates
 
-Every bound is a bit decomposition with a booleanity gate, and each is counted
-on the emitted artifact rather than on the vector handed in.
+Three hundred and eighty-five enforcing gates, all on gate list 0, all degree ≤ 2.
 
 | what | how |
 | --- | --- |
-| a frame word's value `< 2^32` | `input_w{j}` recomposes it from its own 32 input bits, so the bound and the read are one gate |
-| a written word | `output_w{j}`, gated on `live`, recomposes it from the permutation's output bits |
-| a read's timestamp gap `∈ [0, 2^38)` | `gap_w{j}`: `4·cycle − read_ts − 1` is a sum of 38 booleans — `FRAME_DELTA` is 0, so the constant is `−live` |
+| a state word's value `< 2^32`, and its bytes | `input_w{j}`: `read_value = Σ 2^{8m}·byte`, one gate a word. **Ungated and degree 1** — both sides are 0 on the all-zero padding row — and it is the word's decode *and* its 32-bit bound at once, the bytes being bounded by the obligations that read them. No frame word of this family carries a `bound32` pair, where every one of `EC_ADD`'s does |
+| a written state word | `output_w{j}`: the same, over the round's output bytes. Ungated for the same reason, which S21's could not be: there the output was computed through 168 layers from committed bits, so a padding row's gate would have asked the written word to be keccak-f of the zero state |
+| the round word surviving the call | `writes_back_w0` |
+| the round | `round_rule`: `read_value(0) = Σ r·round_sel[r]` |
+| one round a live row | `one_round_a_live_row`: `Σ round_sel[r] = live`, plus a booleanity gate each |
+| the round constant | `rc{t}_rule`: `rc[t] = Σ ROUND_CONSTANTS[r]'s byte · round_sel[r]` |
+| rho and pi | `rho_pi_l{i}_b{j}`, one gate a byte: `B = 2^{s−1}·(A' + m) + 2^{s−9}·(A' − m)` over the two bytes the rotation reads, with the constant riding `live` |
+| a read's timestamp gap `∈ [0, 2^38)` | four `RANGE16` obligations, §10.3's shape. **There is no `gap_w{j}` gate** |
 | the frame base's alignment and floor | `base_aligned` |
 | the frame's ceiling | `base_in_window` |
 | word `j`'s address | `addr_w{j}`: `live·(addr_j − base − 4j) = 0` |
 
-`output_w{j}` is gated on `live` and must be: a padding row's committed cells
-are zero, the circuit computes keccak-f of the zero state there, and an ungated
-gate would ask the written word to be it. `live` is therefore carried to the top
-beside the 50 written words — 51 columns through 168 layers, which is what a
-layered circuit pays to let its last gate read a committed column.
+**`one_round_a_live_row` is load-bearing and not decorative**, for
+`mod_mul::one_modulus_a_live_row`'s reason at its sharpest: the codes here are
+`0..24`, so **every** pair sums to another round's word — `1 + 2 = 3` — and
+without it a row could claim two rounds, satisfy `round_rule`, and XOR two round
+constants into lane `(0,0)`.
 
-### 6.3 The round block
+Every value in the round is therefore bounded, and the argument is one sentence:
+**membership of a three-wide `XOR8` tuple bounds each of its three positions to
+`[0, 256)` individually**. Input bytes are bounded because the `theta_a`
+obligation reads each at position 1; every stage's output because the obligation
+that writes it reads it at position 2; and the derived forms — `rotC`, `B`,
+`ANDN` — because they are integer combinations of bounded values whose maximum is
+255. A packed key `a + 256·b` would be one column cheaper a lookup and would
+bound neither operand on its own.
 
-Twenty-four identical blocks of seven sub-layers. Every gate is degree ≤ 2 in
-the layer below; the ceiling is not negotiable and nothing here moves it.
+### 6.3 The round, as obligations
 
-| sub-layer | writes | gate |
+`θ → ρ → π → χ → ι` directly, 1,020 obligations, not one of them a bit.
+
+| step | obligations | shape |
 | --- | --- | --- |
-| 1 | `p0`, `p1` (320 each), `A` | `A[x][0] ⊕ A[x][1]`, `A[x][2] ⊕ A[x][3]` |
-| 2 | `q` (320), `A` | `p0 ⊕ p1` |
-| 3 | `c` (320), `A` | `q ⊕ A[x][4]` — the column parity `C[x]` |
-| 4 | `u` (1600), `c` | `A[x][y] ⊕ C[x−1]` |
-| 5 | `b` (1600) | `u ⊕ rot(C[x+1], 1)` — the state after theta |
-| 6 | `v` (1600), `B'` (1600) | `B'[x+1][y] · B'[x+2][y]`, and `B'` itself |
-| 7 | the round's output (1600) | `B' ⊕ (B'[x+2][y] − v)`, with iota folded |
+| θ, `C[x]` | 160 | four XORs a byte fold five lanes: `parity[x][b][s]` |
+| θ, `C ^ 0x80` | 40 | one XOR against the literal `0x80`, which gives `C & 0x80` and so `ROTL(C, 1)` |
+| θ, `D[x]` | 40 | `C[x−1] ^ ROTL(C[x+1], 1)`, the rotation a linear form at position 0 |
+| θ, `A'` | 200 | `A[i] ^ D[i mod 5]` |
+| ρ | 176 | one XOR against the literal `mask(s)` per byte of each of the 22 lanes whose rotation is not a whole number of bytes |
+| χ, `B1 ^ B2` | 200 | the helper from which `(¬B1) & B2` is linear |
+| χ, the output | 200 | `B0 ^ ((¬B1) & B2)`, the `ANDN` a linear form at position 0 |
+| ι | 4 | `chi_out[0] ^ rc`, on the four byte positions a round constant can reach |
 
-- **XOR is `x + y − 2xy`**, pairwise, which is why a five-way parity takes three
-  levels and why the state passes through them.
-- **rho and pi are pure rewiring.** They are applied in sub-layer 6's addressing
-  and cost nothing: `B'[X][Y][Z]` reads the bit at `x = 3Y + X mod 5`, `y = X`,
-  `z = Z − r[x][y]`, the inverse of `B[y][2x + 3y] = rot(A[x][y], r[x][y])`.
-- **chi is split in two**, which is the only way `a ⊕ (¬b & c)` fits degree 2:
-  `v = b·c` at one layer, then `a + c − v − 2ac + 2av` at the next.
-- **iota folds into sub-layer 7's gate.** An XOR with a constant bit is affine —
-  `g ⊕ 1 = 1 − g` — so a round constant's set bits negate that lane's gate and
-  give it the constant 1. No layer, no column, no gate of its own.
+**The rotation, written out.** For `r = 8q + s` with `0 < s < 8`, byte `j` of
+`ROTL64(v, r)` is `2^s·lo(v[u]) + hi(v[w])` with `u = (j − q) mod 8`,
+`w = (j − q − 1) mod 8`, `hi(x) = x >> (8 − s)` and `lo(x) = x − 2^{8−s}·hi(x)`.
+With `m = v ^ mask(s)` the obligation pins, `v & mask(s) = (v + mask − m)/2`, so
 
-The permutation's two tables are `constants::keccak::{ROTATIONS,
-ROUND_CONSTANTS}`, re-derived from the Keccak reference's generators by
-`crates/constants/tests/keccak.rs` rather than copied.
+```text
+hi(v) = (v + mask − m) / 2^{9−s}        lo(v) = (v − mask + m) / 2
+byte  = 2^{s−1}·(v[u] + m[u]) + 2^{s−9}·(v[w] − m[w]) + mask·(2^{s−9} − 2^{s−1})
+```
 
-### 6.4 The memory subtree
+Every weight is a literal `Fr`; `2^{s−9}` is the inverse of `2^{9−s}`, and it is
+**exact** rather than an approximation because `m` is the true XOR, so
+`v & mask(s)` is a genuine multiple of `2^{8−s}`. At `s = 0` the rotation is a
+byte permutation and `m` is never read — which is why 3 of the 25 lanes need no
+mask columns and the `rho_mask` block is 22 lanes wide, the one place this
+circuit's blocks are not 25.
 
-The frame's 50 words and the anchor give 51 leaves a side, padded to 64 with
+**`ι` touches four byte positions and no more.** Keccak's round constants set
+only the bits `2^j − 1` for `j` in `0..7` — bits 0, 1, 3, 7, 15, 31 and 63 — so a
+constant's little-endian bytes are zero everywhere but at positions 0, 1, 3 and 7.
+`constants::keccak::IOTA_BYTES` is that list and
+`IOTA_BYTES_ARE_THE_ONLY_ONES` asserts it at compile time.
+
+### 6.4 The cross-row glue
+
+**The frame is ordinary RAM, and that is the whole mechanism.** Round `r` writes
+the 50 state words at `4·cycle_r + FRAME_DELTA`; round `r + 1` reads them at the
+same 50 addresses and its `read_ts` names that write. Both tuples are in the one
+global multiset, so they cancel only if the values agree — which is the same
+argument `EC_ADD`'s group 0 and group 2 rely on for the six words they pass
+(§16.2), and it needs no column, no tag and no bus.
+
+What makes 24 such rows a keccak-f rather than 24 unrelated rounds is the
+**guest's own proven code**: `guest_sdk::keccak256` runs `for round in 0..24 {
+frame.round = round; ecall }`, and every instruction of that loop is proven by
+the execution families like any other guest computation. The delegation's job is
+one round; the loop's job is that there are 24 of them with the right indices,
+and `round_rule` is what ties each row's arithmetic to the number the loop
+stored.
+
+A **send/receive bus** keyed by `(invocation, round)` would be unsound here for
+§16.2's reason: the multiset has no way to say two tuples belong to one
+invocation without a column the anchor's provenance rules refuse.
+
+### 6.5 The memory subtree, and the number to watch
+
+The frame's 51 words and the anchor give 52 leaves a side, padded to 64 with
 leaves that are literally 1 — 128 columns at layer 1, reduced pairwise over six
-row-wise lists to the two roots, then carried to the halving phase. The output
-map is `[read_root, write_root]` and nothing else, `constants::memory::READ_ROOT`
-and `WRITE_ROOT` (`docs/spec/memory.md` §1).
+row-wise lists to the two roots. The output map is
+`[read_root, write_root, range16_num, range16_den, xor8_num, xor8_den]`: the two
+memory roots, then a `(num, den)` pair per channel in `channels()` order, which
+is ascending by channel id — so `RANGE16` (1) before `XOR8` (4).
+
+**1,020 is three short of a cliff, and it is the number to watch.** A LogUp
+fraction tree has `(lookups + 1).next_power_of_two()` leaves, so 1,020
+obligations give 1,024 and 1,024 would give 2,048 — 4,096 more inner columns and
+another **34.4 GB** a shard at `2^18` — more than half again on the family that
+already sets a block's peak, 59.6 GB to 93.9 (§9.2). That is why `ι` is four obligations and not
+eight, and it is recorded here because a later change that adds four obligations
+to this circuit doubles its tree. `constraints::keccak::check_shape` asserts both
+the count and the cliff.
 
 ---
 
@@ -551,24 +713,26 @@ shards sort last. `verify_block` needs no edit at all.
 ## 9. The height, and the one lookup channel a delegation family may carry
 
 **Each delegation family takes its own height, and the six do not share one.**
-`KECCAK_F`, `POSEIDON2`, `FR_ARITH` and `SHA256_COMP` take `2^8`; `MOD_MUL` and
-`EC_ADD` take `2^16` (§9.1, §9.2). What follows is `KECCAK_F`'s argument, which
-is what put `2^8` on the menu — it is a *ceiling* derived from one family's
-width, never a rule about delegation.
+`POSEIDON2`, `FR_ARITH` and `SHA256_COMP` take `2^8`; `MOD_MUL` and `EC_ADD` take
+`2^16`; `KECCAK_F` takes `2^18` (§9.1, §9.2). A height is a *ceiling* derived from
+one family's width and a *floor* derived from its channels, never a rule about
+delegation — and, since S26d, it may also be a deliberate step *above* that floor,
+four times the rows for a quarter the proof bytes a permutation (§9.2).
 
-**This section said "and why there is no lookup channel" until S26c, and §9.3 is
-the amendment.** A family at `2^16` may carry `RANGE16`, and two now do. What
-did not change is the reason the original rule existed: a family at `2^8` can
-carry no channel at all, and no family at any height the menu offers below
-`2^20` can carry `TIMESTAMP`.
+**This section said "and why there is no lookup channel" until S26c, and §10.3 is
+the amendment.** A family at `2^16` **or above** may carry `RANGE16`, and since
+S26d one also carries `XOR8`. What did not change is the reason the original rule
+existed: a family at `2^8` can carry no channel at all, and no family at any
+height the menu offers below `2^20` can carry `TIMESTAMP`.
 
-`KECCAK_F` takes **`2^8`**, added to `constants::family::HEIGHT_MENU` at S21.
-One row is a whole permutation, and a whole permutation is **354,762 inner
-columns** over 177 layers (`docs/spec/constraint-manifest.md` §12.7);
-`gkr::forward` materializes every layer at the full height, so a shard's forward
-pass is that count times its height times 32 bytes:
+What follows is `KECCAK_F`'s original argument, which is what put `2^8` on the
+menu. **It no longer applies to that family and is kept because it is the
+clearest statement of what a delegation height is a ceiling on.** At S21 one
+keccak row was a whole permutation, and a whole permutation was **354,762 inner
+columns** over 177 layers; `gkr::forward` materializes every layer at the full
+height, so a shard's forward pass is that count times its height times 32 bytes:
 
-| height | forward pass | permutations a shard |
+| height | forward pass, S21's shape | permutations a shard |
 | --- | --- | --- |
 | `2^8` | 2.9 GB | 256 |
 | `2^10` | 11.6 GB | 1,024 |
@@ -576,18 +740,25 @@ pass is that count times its height times 32 bytes:
 | `2^16` | 744 GB | 65,536 |
 
 `2^8` is also **even**, which Mercury needs for `b = sqrt(2^n)` to exist, so the
-menu below `2^16` had `2^8`, `2^10`, `2^12` and `2^14` to choose from.
+menu below `2^16` had `2^8`, `2^10`, `2^12` and `2^14` to choose from. S26d
+re-shaped the row first — 5,478 inner columns, so `2^16`, the floor its two
+channels imply, is about 15 GB and 2,730 permutations a shard — and then, the row
+being narrow, took the height one entry past that floor as well: **5,490** inner
+columns at `2^18`, about **60 GB** and **10,922** permutations a shard (§6.0).
+The 60 GB is `EC_ADD`'s three terms (§16.4) at this width — 46.05 GB of inner
+layers, 2.23 GB of committed base and 11.27 GB of transition 0's half-height `Fr`
+bind. What keeps `2^8` on the menu is the three families still at it.
 
 At `2^8` **no range channel's table fits**: `V[range16]` over 8 variables holds
 `[0, 2^8)`, not `[0, 2^16)`, and `lookup::channel_trees` refuses a channel whose
-bound exceeds the circuit's variables (`docs/spec/lookup.md` §3). So the family
-carries **no channel at all**, and every bound of §6.2 is a bit decomposition
-with a booleanity gate.
+bound exceeds the circuit's variables (`docs/spec/lookup.md` §3). So a family
+there carries **no channel at all**, and every bound of such a family is a bit
+decomposition with a booleanity gate.
 
 That is a deviation from `docs/spec/memory.md` §7's 19+19 timestamp-gap gadget,
 and it is deliberate: the gadget's statement is `gap ∈ [0, 2^38)`, and 38
-booleans say the same thing without a table. It costs 1,900 committed columns —
-bits, in a circuit that is already 1,600 bits wide — and it removes the failure
+booleans say the same thing without a table. It costs 38 committed columns a
+frame word, and it removes the failure
 `constants::family::DEFAULT_HEIGHTS` warns about, a family reaching a channel
 assertion inside `VerifyingKey::check` on bytes a verifier was handed.
 
@@ -596,7 +767,7 @@ assertion inside `VerifyingKey::check` on bytes a verifier was handed.
 that channel's `BITS` is 19, so its table needs `2^20` rows, which is an
 execution family's floor and not a delegation family's. A frame's timestamp gap
 is consequently never a `TIMESTAMP` obligation — it is a bit decomposition at
-`2^8` and, since S26c, three `RANGE16` chunks at `2^16` (§9.3).
+`2^8` and, since S26c, four `RANGE16` obligations at `2^16` or above (§10.3).
 
 **`family_circuit`'s minimum-height guard is derived, not a list.** Until S26c it
 named the seven execution families explicitly and a delegation family's arm sat
@@ -605,18 +776,24 @@ assertion and naming it in the guard would have refused the heights these
 families actually take. Since S26c the guard reads each family's **own**
 `channels()` and takes the widest range channel's `BITS`, so a family is held to
 exactly the floor its channels imply and no table of families has to be kept in
-step: `SHA256_COMP` with no channel has a floor of 0, `EC_ADD` and `MOD_MUL` a
-floor of 16, and the seven execution families 19 as before. The floor is tested
+step: `SHA256_COMP` with no channel has a floor of 0, `KECCAK_F`, `EC_ADD` and
+`MOD_MUL` a floor of 16, and the seven execution families 19 as before. **Since
+S26d the per-channel number is `lookup::table_vars` and not `BITS` with a range
+filter**: `XOR8`'s table is 65,536 rows without being a range channel at all, so
+a filter on `IS_RANGE` would have given a family carrying it alone a floor of 0
+and an incomplete table at every height below `2^16` — true of `KECCAK_F` only by
+the accident of its also carrying `RANGE16`. The floor is tested
 before the artifact is built, so a family below it returns `None` for a clean
 `Err` rather than panicking inside `VerifyingKey::check` on bytes a verifier was
 handed.
 
 ### 9.1 `2^8` is not free, and S26 is where it shows
 
-The argument above is about the **forward pass**, and it is `KECCAK_F`'s: 354,762
-inner columns at `2^16` is 744 GB, so the height had to come down. S26's `MOD_MUL`
-is two orders of magnitude smaller — **270** inner columns — and for that family
-`2^8` is a different trade, which the stage measured rather than assumed:
+The argument above is about the **forward pass**, and at S21 it was `KECCAK_F`'s:
+354,762 inner columns at `2^16` is 744 GB, so the height had to come down. S26's
+`MOD_MUL` is two orders of magnitude smaller — **270** inner columns at the time —
+and for that family `2^8` is a different trade, which the stage measured rather
+than assumed:
 
 | | at `2^8` | at `2^16` |
 | --- | --- | --- |
@@ -628,8 +805,8 @@ is two orders of magnitude smaller — **270** inner columns — and for that fa
 
 **A `2^8` shard's *proof* does not shrink with its height.** It is dominated by
 per-layer sumcheck messages and base claims, which are a function of the circuit's
-width and depth and not of the row count: `KECCAK_F`'s is a measured 11,880,012
-bytes for 256 invocations, and `MOD_MUL`'s committed width is 92% of that. So
+width and depth and not of the row count: `KECCAK_F`'s was a measured 11,880,012
+bytes for 256 invocations, and `MOD_MUL`'s committed width was 92% of that. So
 `2^8` costs about 11 MB of proof per 256 invocations — ~290 MB for S26's pinned
 mini-block, ~11 GB for a measured whole block and ~25 GB for the busiest of the
 four S26 profiled — where the `2^20` execution shards the delegation *removes*
@@ -637,11 +814,23 @@ were about 60 KB each. Prover work and
 peak memory move the other way by a wide margin; it is only the artefact that
 grows.
 
-**The same cost is already in the repository and predates `MOD_MUL`.** S25's bench
-report on that mini-block is 37 shards and 61,323,886 proof bytes, of which the
-five `2^8` `KECCAK_F` shards are 59.4 MB — **97% of the proof**, against 3% for the
-thirty-two execution and window shards. A delegation family's height has been the
-dominant term in proof size since S21.
+**The same cost was already in the repository and predated `MOD_MUL`.** S25's
+bench report on that mini-block is 37 shards and 61,323,886 proof bytes, of which
+the five `2^8` `KECCAK_F` shards were 59.4 MB — **97% of the proof**, against 3%
+for the thirty-two execution and window shards. A delegation family's height has
+been the dominant term in proof size since S21.
+
+**S26d is that finding acted on, and it is the reason the section reads in the
+past tense.** Raising `KECCAK_F`'s height could not come first — at 354,762 inner
+columns a row the forward pass forbade it — so the row was re-shaped (§6.0). The
+same 1,080 permutations that were five `2^8` shards and 59.4 MB are now **one
+`2^18` shard and 0.38 MB**, a tenth of it occupied — 353 proof bytes a permutation
+on this workload, and **34.9** at full occupancy (§6.0), against 46,406. On
+that mini-block the whole proof falls from 61.3 MB to about 2.3 MB, and keccak
+stops being the dominant term in it. The width the
+family could not afford at `2^16` is what one round a row removed, and the height
+then followed it — one entry past the floor, to `2^18`, because a shard's proof
+barely grows with its rows (§9.2).
 
 ### 9.2 `DEFAULT_HEIGHTS` is per family, and the six differ by three orders of magnitude
 
@@ -649,20 +838,37 @@ S26 first left it at `2^8` "consistent with the three families before it", and
 that reason was wrong: **consistency between delegation families has no
 technical content.** A family's ceiling is the width of one row's circuit, and
 those widths differ by three orders of magnitude — 354,762 inner columns for
-`KECCAK_F` against 270 for `MOD_MUL`. Holding the second down to the first's
-height bought nothing and cost the table above.
+S21's `KECCAK_F` against 270 for S26's `MOD_MUL`. Holding the second down to the
+first's height bought nothing and cost the table above.
 
 So the heights are per family, which is what `DEFAULT_HEIGHTS` was always able
 to express:
 
 | family | inner | committed | height | why that one |
 | --- | --- | --- | --- | --- |
-| `KECCAK_F` | 354,762 | 3,764 | `2^8` | `2^16` is 744 GB of forward pass a shard |
+| `KECCAK_F` | 5,490 at `2^18` | 1,764 | **`2^18`** | re-shaped at S26d and then raised past its floor; 16 is the floor `RANGE16`'s table and `XOR8`'s each imply, 18 is the choice above it, and the paragraph below is why. It was 354,762 and 3,764 at `2^8` |
 | `POSEIDON2` | 2,020 | 4,192 | `2^8` | `2^16` is 13.0 GB, and the guests that reach it invoke it in the hundreds |
 | `FR_ARITH` | 142 | 2,680 | `2^8` | ditto, 5.9 GB |
-| `MOD_MUL` | 2,244 at `2^16` | 325 | **`2^16`** | re-shaped at S26c; §9.3 |
-| `SHA256_COMP` | 16,688 | 8,216 | `2^8` | `2^16` is 35 GB of forward pass a shard |
+| `MOD_MUL` | 2,244 at `2^16` | 325 | **`2^16`** | re-shaped at S26c; §10.3 |
+| `SHA256_COMP` | 16,688 | 8,216 | `2^8` | `2^16` is 35 GB of forward pass a shard, and no guest here invokes it often enough to buy the rows back — contrast `KECCAK_F` below |
 | `EC_ADD` | 8,772 at `2^16` | 1,420 | **`2^16`** | forced: `RANGE16` needs 16 variables and `2^18` is 4x worse |
+
+**`KECCAK_F`'s `2^18` is the first height here that is a choice above a floor
+rather than the floor itself.** Its two channels' tables put the floor at 16
+(§9's derived guard) and `family_circuit` accepts `16 ≤ n ≤ 30` for it, `2^16`
+included. What buys the extra entry is that **a delegation shard costs its height
+and not its occupancy, while its proof costs neither**: a proof is a function of
+the circuit's width and depth, and the sumcheck rounds grow as `11n + n(n+1)/2` —
+369 at `2^18` against 312 — while the rows grow fourfold. So a shard's proof goes
+from 373,276 bytes to 381,100 while the permutations in it go from 2,730 to
+10,922: a quarter the proof bytes a permutation, for four times the shard,
+~60 GB against ~15. **At ~60 GB it is now the peak-setting family of a block**,
+ahead of `EC_ADD`'s 20.5 GB (§16.4). It buys the pinned mini-block nothing, whose
+permutations fit one shard at either height and occupy a tenth of this one; it is
+aimed at the **stateless full block**, where the 45,000–103,000 permutations
+`docs/handoff/S-BATCH-miniblock-gate.md` §11.2's node count implies are **5 to
+10** shards and 1.9–3.8 MB of keccak proof, against 17 to 38 shards and
+6.3–14.2 MB at `2^16`.
 
 Two properties made the raise cheap **at S26b**, and S26c changed the second of
 them. **A height changes no gate**: it adds one halving list per variable, each
@@ -687,7 +893,9 @@ channel's floor cost this family nothing and the two constraints coincide.
 
 What the raise is *not* free of: the height is in `VM_CONFIG`, which program
 identity absorbs, so **every guest declaring `MOD_MUL` has a new identity** and
-every verifying key over one has new bytes. That also means the height is a
+every verifying key over one has new bytes. The same is true of `KECCAK_F` at
+S26d, and there the ecall number moved too, so **every guest that hashes has a
+new identity**. That also means the height is a
 property of the **program**, not of the execution — it cannot be chosen per
 block, and `2^16` is the choice for the busiest block `guests/revm-block` is
 meant to prove. At 268,200 invocations that block is 5 shards with 18% padding;
@@ -766,7 +974,7 @@ had a price the argument did not count — with `m` an operand the circuit canno
 state `a < m`, so the quotient's fit was the honest prover's business and not
 the statement's. §14.3 is what that cost, and §14.2 is what removing it bought.
 
-### 10.3 What S26c amended: a delegation family may carry `RANGE16` at `2^16`
+### 10.3 What S26c amended: a delegation family may carry `RANGE16` at `2^16` or above
 
 §9 read "and why there is no lookup channel" and stated the rule twice, as a
 property of `2^8` and as a rule about delegation families generally. The first
@@ -797,14 +1005,61 @@ at `2^38`.
   now has a floor, so the guard reads each family's own `channels()` and derives
   the floor from the widest range channel's `BITS`. A list would have had to be
   kept in step with two families whose heights differ from every other's.
-- **A channel-carrying family has exactly one height.** Its circuit does not
-  exist below `2^16`, so a suite cannot build it at four rows for a whole-shard
-  forward pass. `crates/checker/tests/{mod_mul,ec_add}.rs` evaluate one row of
-  the real `2^16` circuit instead, which is both cheaper and a stronger
-  statement.
+- **A channel-carrying family has a floor, and its circuit does not exist below
+  it.** It is `2^16` for both of these, so a suite cannot build either at four
+  rows for a whole-shard forward pass. `crates/checker/tests/{mod_mul,ec_add}.rs`
+  evaluate one row of the real `2^16` circuit instead, which is both cheaper and
+  a stronger statement. A family may sit *above* its floor — `KECCAK_F` does
+  since S26d (§9.2) — but never below it.
 - **One multiplicity column per channel per circuit**, last in the witness
   subtree, filled by `crates/trace` and read by no gate. It has to exist because
   `a.committed()` names it.
+
+### 10.4 What S26d amended: one keccak round a row, and a fifth channel
+
+§10 has no clause for a family that *changes*; S26b was the first and this is the
+second. `KECCAK_F`'s row went from **a whole keccak-f[1600] permutation to one
+round**, its frame from 50 words to 51, its height from `2^8` to `2^18` and its
+ecall number from `0x0501` to `0x0507`. Everything is confined to the three things
+§10 lets a family own — its registry row, its frame table and its circuit, fill,
+shim and declaration record — plus the ecall number, and plus one thing §10 did
+not anticipate at all (below). The one gate outside the family that moved is
+`ADD_SUB_LUI_AUIPC`'s `deleg_9_number`, whose literal *is* the ecall number, so
+`add_sub.bin` regenerated exactly as it did at S26b.
+
+**Why the row was re-shaped before the height.** §9.1 measured the cost of `2^8`
+and could not act on it for this family: at 354,762 inner columns a row, `2^16` is
+744 GB of forward pass. The width was the problem, and all of it came from one
+decision — representing the state as 1,600 booleans, which makes every XOR a
+degree-2 gate and forces all 24 rounds to coexist horizontally. A byte-oriented
+state with a byte XOR table is 5,478 inner columns at `2^16`, which fits there at
+about 15 GB — and `2^18`, the height this stage went on to take, at about 60 GB —
+and 24 rows a permutation is then **half** the column-rows one row used to be
+(§6.0). The proof shrinks 1,330× a permutation. The guest pays ~150 cycles a
+permutation against ~4, which on any real workload is worth about a tenth of one
+execution shard against gigabytes of proof.
+
+**The thing §10 did not anticipate: a fifth LogUp channel.** `XOR8`
+(`docs/spec/lookup.md` §14) is a **table** channel whose table is a *closed form*
+— the first of either kind. That is a change to `docs/spec/lookup.md`'s frozen
+channel list and to `prompts/00-master.md`'s Lookups invariant, authorized by the
+owner and recorded in both. It costs no commitment, no setup column and no
+movement of the SRS digest, which is why it is cheaper than folding a byte table
+into the `GENERIC` channel would have been — three setup columns to commit and
+open against, and every verifying key's SRS digest and bytes moved again with
+them. **The height half of that argument is void**: the `GENERIC` table does not
+exist below `2^18`, which is the height this family now takes anyway, so what
+`XOR8` still buys over it is the binding and not the rows.
+
+**What did not change.** The anchor, its two leaves, the three request-side
+zeroings and the addressing rule (§5); the frame's two rules and its trace rules
+(§4, §4.1); static detachment (§7); the ts-window convention (§8); the state's
+SHA-3 byte order; the family id; the address-space tag; `guest_sdk::keccak256`'s
+signature and the sponge and padding behind it; and the proof's shape.
+
+**One number a later change has to respect**, and it is in §6.5: the `XOR8`
+channel carries 1,020 obligations against a 1,024-leaf fraction tree, so four more
+double the tree.
 
 ---
 
@@ -1538,12 +1793,13 @@ variables (§10.3), Mercury needs an even count, and `2^18` is four times worse.
 
 One shard is a computed **20.5 GB** — 18.3 GB of forward pass, 0.7 GB of
 committed base, 1.5 GB of the first bind's half-height table — against 5.1 GB for
-`MOD_MUL` at the same height and ~11 GB for an execution shard. **So this is the
-peak-setting family in a block**, and that is a fact about the stage rather than a
-problem it solved: the lever that remains is the group count, five groups of two
-reductions being about two-thirds the width at two more invocations an addition.
-`docs/handoff/S26c-sha256-ec.md` records the measured figure against this
-estimate.
+`MOD_MUL` at the same height and ~11 GB for an execution shard. **So this was the
+peak-setting family in a block until S26d**, which put `KECCAK_F` at `2^18` and
+~60 GB a shard (§9.2); this one is second. That is a fact about the stage rather
+than a problem it solved: the lever that remains is the group count, five groups
+of two reductions being about two-thirds the width at two more invocations an
+addition. `docs/handoff/S26c-sha256-ec.md` records the measured figure against
+this estimate.
 
 The channel is what makes the row narrow enough to be worth it at all. Without
 it the 97-word frame's timestamp gaps alone are 3,686 bit columns against 194

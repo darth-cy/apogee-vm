@@ -9,8 +9,13 @@
 //! rather than the whole permutation.
 //!
 //! The frame/lane packing is checked here too: `lanes_of` and `words_of` are
-//! how a 200-byte frame becomes 25 lanes and back, and a swapped half would
+//! how a 200-byte state becomes 25 lanes and back, and a swapped half would
 //! give a permutation that is self-consistent and wrong.
+//!
+//! Since S26d the unit one invocation performs is `emulator::keccak_round`, so
+//! that is what the last two tests hold: 24 of them are the permutation, and a
+//! round differs from another exactly when its round constant does — which is
+//! **not** the same as "pairwise distinct", the LFSR repeating twice.
 
 use constants::keccak;
 use emulator::{keccak_f, lanes_of, words_of};
@@ -71,7 +76,7 @@ fn iterating_the_permutation_matches() {
 fn the_frame_packing_round_trips() {
     let mut rng = Rng::new(11);
     for _ in 0..64 {
-        let words: [u32; keccak::FRAME_WORDS] = core::array::from_fn(|_| rng.next_u64() as u32);
+        let words: [u32; keccak::STATE_WORDS] = core::array::from_fn(|_| rng.next_u64() as u32);
         assert_eq!(words_of(&lanes_of(&words)), words);
     }
     let lanes = state(13);
@@ -95,4 +100,72 @@ fn the_frame_is_the_states_little_endian_bytes() {
     }
     assert_eq!(bytes, want);
     assert_eq!(bytes.len(), keccak::STATE_BYTES);
+}
+
+/// The 24 rounds a guest now delegates compose to the permutation an oracle
+/// computes, and each is the round the executor's own `keccak_round` performs.
+///
+/// This is the S26d invariant no other test reaches: `keccak_round` is what one
+/// invocation does and what the circuit is checked against, and the only thing
+/// that makes 24 of them a keccak-f is that they are the right 24 in the right
+/// order. Comparing the composition against `tiny-keccak` is what says so.
+#[test]
+fn twenty_four_rounds_are_the_permutation() {
+    let mut rng = Rng::new(29);
+    for _ in 0..16 {
+        let start: [u64; keccak::LANES] = core::array::from_fn(|_| rng.next_u64());
+        let mut ours = start;
+        for round in 0..keccak::ROUNDS {
+            emulator::keccak_round(&mut ours, round);
+        }
+        let mut theirs = start;
+        tiny_keccak::keccakf(&mut theirs);
+        assert_eq!(ours, theirs, "24 rounds are not the permutation");
+        // And a round is not the permutation: one application differs, so the
+        // test above is not passing on a function that ignores its round.
+        let mut one = start;
+        emulator::keccak_round(&mut one, 0);
+        assert_ne!(one, theirs);
+    }
+}
+
+/// A round's index is load-bearing, and **exactly** as load-bearing as its round
+/// constant: two rounds of one state agree if and only if their constants do.
+///
+/// That is the honest statement, and the interesting half is that it is not
+/// "pairwise distinct". `theta`, `rho`, `pi` and `chi` do not read the round at
+/// all — `keccak_round`'s last line is the only place it appears — so two rounds
+/// differ only in lane `(0,0)`, by `RC[r1] ^ RC[r2]`. And the LFSR **repeats**:
+/// `ROUND_CONSTANTS[5] == ROUND_CONSTANTS[22]` and `[6] == [20]`, so 24 rounds of
+/// one state take **22** distinct values. A test asserting distinctness would
+/// fail on Keccak itself, which is what this one exists to record.
+///
+/// What it pins for the circuit: the one-hot `round_sel` has to select the right
+/// constant, and nothing else about the round depends on the index.
+#[test]
+fn a_round_is_its_round_constant() {
+    let mut rng = Rng::new(31);
+    let start: [u64; keccak::LANES] = core::array::from_fn(|_| rng.next_u64());
+    let after: Vec<[u64; keccak::LANES]> = (0..keccak::ROUNDS)
+        .map(|round| {
+            let mut lanes = start;
+            emulator::keccak_round(&mut lanes, round);
+            lanes
+        })
+        .collect();
+    for a in 0..keccak::ROUNDS {
+        for b in 0..keccak::ROUNDS {
+            assert_eq!(
+                after[a] == after[b],
+                keccak::ROUND_CONSTANTS[a] == keccak::ROUND_CONSTANTS[b],
+                "rounds {a} and {b}"
+            );
+            // And the difference is lane (0,0) alone.
+            for (i, (x, y)) in after[a].iter().zip(after[b].iter()).enumerate() {
+                assert!(i == 0 || x == y, "rounds {a} and {b} differ at lane {i}");
+            }
+        }
+    }
+    let distinct: std::collections::BTreeSet<_> = after.iter().collect();
+    assert_eq!(distinct.len(), 22, "the LFSR repeats twice over 24 rounds");
 }

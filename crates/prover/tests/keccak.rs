@@ -2,11 +2,16 @@
 //! block.
 //!
 //! `#[ignore]`d and deferred out of CI under master rule 7: the statement is
-//! six `2^20` execution shards, two `2^16` window shards, one `2^8` keccak
-//! shard and S-IO's two `2^8` public-value shards, and the circuit is what
-//! makes it big — a keccak row is a whole
-//! keccak-f[1600] permutation, 354,762 inner columns
-//! (`docs/spec/delegation.md` §9). Run it with
+//! six `2^20` execution shards, two `2^16` window shards, one **`2^18`** keccak
+//! shard and S-IO's two `2^8` public-value shards, and the keccak shard is what
+//! makes it big — 5,490 inner columns over 262,144 rows, about **60 GB** of
+//! forward pass, which is the largest single shard in this statement
+//! (`docs/spec/delegation.md` §9.2).
+//!
+//! **Neither number is S21's.** A keccak row was a whole keccak-f[1600]
+//! permutation then — 354,762 inner columns over 256 rows — until S26d made it
+//! one Keccak *round*, so a permutation is 24 consecutive invocations; the
+//! height followed at `2^18`. Run it with
 //!
 //! ```text
 //! cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1
@@ -23,7 +28,7 @@
 
 mod common;
 
-use constants::{delegation, family, memory as mem};
+use constants::{delegation, family, keccak as k, memory as mem};
 use prover::prove_block;
 use trace::plan_shards;
 use verifier::{verify_block, verify_shard};
@@ -103,7 +108,13 @@ fn a4_the_block_with_a_delegation_shard_proves_and_verifies() {
         .find(|(f, _)| *f == KECCAK)
         .expect("the profile counts every config family")
         .1;
+    // The profile counts **invocations**, which since S26d are rounds: 24 a
+    // permutation, so ten permutations are 240 rows.
     assert_eq!(invocations, common::KECCAK_INVOCATIONS);
+    assert_eq!(
+        common::KECCAK_INVOCATIONS,
+        common::KECCAK_PERMUTATIONS * k::ROUNDS as u64
+    );
     assert_eq!(shards(KECCAK), 1);
     // An invocation is not a cycle: the profile's total is the execution's
     // cycle count and the invocations are outside it
@@ -173,10 +184,21 @@ fn a4_the_block_with_a_delegation_shard_proves_and_verifies() {
     );
 
     // The delegation shard's proof has its circuit's shape:
-    // `docs/spec/shard-proof.md` §9's layout over `keccak::artifact(8)`, which
-    // is `docs/spec/constraint-manifest.md` §1.2's 11,880,012 bytes. Almost
-    // all of it is final claims — 358,540 of them — which is what a circuit
-    // whose row is a whole permutation costs on the wire.
+    // `docs/spec/shard-proof.md` §9's layout over `keccak::artifact(18)`, which
+    // is `docs/spec/constraint-manifest.md` §1.2's 381,100 bytes.
+    //
+    // **This is the number S26d was for.** S21's shard was 11,880,012 bytes for
+    // 256 permutations — 46,406 a permutation, and five such shards were 97% of
+    // a measured mini-block's proof (`docs/spec/delegation.md` §9.1). One round
+    // a row at `2^18` is 381,100 bytes for 10,922 permutations, which is 34.9 a
+    // permutation: **1,330 times fewer proof bytes** for the same work, from
+    // 31.2× the shard and 42.7× the permutations in it.
+    //
+    // 381,100 is **derived, not measured**: `proof_bytes` above is a closed form
+    // over the artifact and it reproduces S26d's measured 373,276 at `2^16`
+    // exactly, which is what licenses reading it forwards to `2^18`. The
+    // assertion against `proof_bytes` is the one that matters; the literal is
+    // there so a shape change has to be acknowledged.
     let circuit = constraints::family_circuit(KECCAK, common::KECCAK_VARS)
         .expect("the registry has the keccak circuit");
     assert_eq!(
@@ -184,7 +206,7 @@ fn a4_the_block_with_a_delegation_shard_proves_and_verifies() {
         proof_bytes(&circuit.artifact),
         "the keccak shard's proof is its circuit's shape"
     );
-    assert_eq!(keccak.to_bytes().len(), 11_880_012);
+    assert_eq!(keccak.to_bytes().len(), 381_100);
 
     // Every shard verifies on its own too, through the one entry point.
     for shard in &block.shards {

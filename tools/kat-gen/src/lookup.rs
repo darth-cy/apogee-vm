@@ -66,6 +66,17 @@ pub const DECODER_WIDTH: usize = 7;
 /// `constants::extra_mask`'s count for [`FAMILY`].
 pub const MASK_BITS: usize = 12;
 
+/// The channels this toy declares, in the order its multiplicity columns and its
+/// `ChannelSpec`s take. **Not every channel that exists**: S15's toy is one
+/// family's shape, and a channel it does not carry has no multiplicity column
+/// here.
+const TOY_CHANNELS: [u32; 4] = [
+    lookup_channel::TIMESTAMP,
+    lookup_channel::RANGE16,
+    lookup_channel::GENERIC,
+    lookup_channel::DECODER,
+];
+
 pub fn generate() {
     write_bytes(FIXTURE, &toy().to_bytes());
 }
@@ -147,10 +158,15 @@ pub fn toy() -> CircuitArtifact {
         "decoded_mask",
     ]));
     witness.extend((0..MASK_BITS).map(|k| format!("kind_{k}")));
+    // One multiplicity per channel **this toy declares**, in the order
+    // `channels()` below lists them — and not one per channel that exists.
+    // Until S26d those were the same four; adding `XOR8` to
+    // `constants::lookup_channel` made them differ, and iterating `NAMES` here
+    // gave the toy a committed column for a channel it does not carry.
     witness.extend(
-        lookup_channel::NAMES
+        TOY_CHANNELS
             .iter()
-            .map(|name| format!("mult_{name}")),
+            .map(|channel| format!("mult_{}", lookup_channel::NAMES[*channel as usize])),
     );
 
     let mut setup = names(&["generic_key", "generic_v1", "generic_v2"]);
@@ -246,12 +262,11 @@ pub fn toy() -> CircuitArtifact {
     terms.push((Coeff::Literal(Fr::MINUS_ONE), w(DECODED + 5)));
     enforcing.push(("decoded_mask_bits".to_string(), linear(&terms, lit(0))));
 
-    let channels = vec![
-        channel(lookup_channel::TIMESTAMP, 0),
-        channel(lookup_channel::RANGE16, 1),
-        channel(lookup_channel::GENERIC, 2),
-        channel(lookup_channel::DECODER, 3),
-    ];
+    let channels: Vec<_> = TOY_CHANNELS
+        .iter()
+        .enumerate()
+        .map(|(i, c)| channel(*c, i as u32))
+        .collect();
 
     frame_with_channels_artifact(
         frame_queries(FAMILY),

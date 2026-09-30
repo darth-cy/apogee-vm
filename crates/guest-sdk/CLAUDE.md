@@ -63,6 +63,15 @@ the crate layout, the I/O rules, the build, and exporting the result as a
   `crates/emulator/tests/keccak.rs`, which checks the emulator's permutation against
   `tiny-keccak` on all 1,600 single-bit states, and `guests/keccak-test`, which checks its
   own six digests in-guest.
+- **A permutation is 24 delegated calls since S26d** (`docs/spec/delegation.md` §6), and the
+  frame is a `#[repr(C, align(4))]` struct whose first field is a `u32` **round**, so the
+  round is frame word 0 and the 200-byte state follows. `permute` writes the round, calls,
+  and repeats — the frame is transformed in place, so nothing is copied between calls and the
+  chain a proof reads is the frame's own RAM history. **Only the first call may answer
+  `-ENOSYS`**: one answering it halfway through a permutation is a broken executor and
+  `exit(EXIT_PRECOMPILE_ERROR)` is the answer, because skipping a round silently would be
+  worse. The **software** fallback is still a whole permutation, and it runs from the
+  untouched state, `-ENOSYS` meaning the executor did nothing.
 - **The declaration record is kept by reachability, not by `#[used]`** (S21). The static in
   `.rodata.apogee.delegations` is referenced by `delegation_number()` and by nothing else,
   so the linker keeps it exactly when the shim is linked and the preprocessor can see a

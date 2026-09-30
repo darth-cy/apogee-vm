@@ -101,15 +101,18 @@ impl FamilyCircuit {
 /// guard was a hand-written arm naming the seven execution families and one
 /// threshold, `BITS[TIMESTAMP]`; a family missing from it, or a family whose
 /// widest channel was not TIMESTAMP, reached the assertion anyway. It is now
-/// the max of `BITS` over the range channels the family declares, taken from
+/// the most any one of the family's channels' tables needs, taken from
 /// `channels()` before the artifact is built, which closes the class rather
-/// than one instance of it. A family with no range channel keeps a floor of 0,
-/// which is what the RAM window families and `KECCAK_F`, `POSEIDON2`,
-/// `FR_ARITH` and `SHA256_COMP` take.
+/// than one instance of it. A family with no channel at all keeps a floor of 0,
+/// which is what the RAM window families and `POSEIDON2`, `FR_ARITH` and
+/// `SHA256_COMP` take.
 ///
 /// `EC_ADD` is the first delegation family to carry a channel at all
 /// (`docs/spec/delegation.md` §10.3, which amends §9): RANGE16 at 16 bits, so
-/// its floor is `2^16`, which is also its `DEFAULT_HEIGHTS` entry.
+/// its floor is `2^16`, which is also its `DEFAULT_HEIGHTS` entry. `KECCAK_F`
+/// has carried `RANGE16` and `XOR8` since S26d, so its floor is `2^16` too —
+/// and a floor is not a height: its `DEFAULT_HEIGHTS` entry is `2^18`, chosen
+/// above it.
 pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
     use constants::family as f;
     if trace_vars > MAX_TRACE_VARS {
@@ -143,8 +146,8 @@ pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
             f::PUBLIC_INPUT | f::ADVICE_WINDOWS => (memory::value_window_artifact, Vec::new()),
             // The delegation families. Their heights differ by three orders of
             // magnitude because their rows do (`docs/spec/delegation.md` §9.2);
-            // what each one may take is the floor below, and for the four that
-            // carry no channel that floor is 0.
+            // what each one may take is the floor below, and for the three
+            // that carry no channel that floor is 0.
             f::KECCAK_F => (keccak::artifact, keccak::channels()),
             f::POSEIDON2 => (poseidon2::artifact, poseidon2::channels()),
             f::FR_ARITH => (fr_arith::artifact, fr_arith::channels()),
@@ -164,18 +167,23 @@ pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
 }
 
 /// The fewest variables a circuit declaring `channels` may be built at: the
-/// widest range channel's bound, or 0 where there is none.
+/// most any one of its channels' tables needs, or 0 where none needs any.
 ///
 /// This is `lookup::channel_trees`' assertion read forwards. Keeping the two
 /// in step is what makes a bad height a clean `None` from
 /// [`family_circuit`] — and so a clean `Err` from `VerifyingKey::check` —
 /// rather than a panic on bytes a verifier was handed.
+///
+/// The per-channel number is `lookup::table_vars` and **not** `BITS` with a
+/// range filter, which is what it was until S26d. `XOR8`'s table is virtual
+/// and 65,536 rows wide without being a range channel at all, so a filter on
+/// `IS_RANGE` would have given a family carrying it alone a floor of 0 and an
+/// incomplete table at every height below `2^16` — true of `KECCAK_F` only by
+/// the accident of its also carrying `RANGE16`.
 fn minimum_trace_vars(channels: &[crate::lookup::ChannelSpec]) -> u32 {
-    use constants::lookup_channel::{BITS, IS_RANGE};
     channels
         .iter()
-        .filter(|spec| IS_RANGE[spec.channel as usize])
-        .map(|spec| BITS[spec.channel as usize])
+        .map(|spec| crate::lookup::table_vars(spec.channel))
         .max()
         .unwrap_or(0)
 }
@@ -203,6 +211,21 @@ pub enum VirtualKind {
     /// `V[range16]`: the 16-bit range channel's table, the low 16 bits of the
     /// row index. `docs/spec/lookup.md` §3.
     Range16,
+    /// `V[xor8_a]`: column 0 of the `XOR8` channel's table, the low eight bits
+    /// of the row index. `docs/spec/lookup.md` §14.
+    Xor8A,
+    /// `V[xor8_b]`: column 1 of the `XOR8` table, bits 8 through 15 of the row
+    /// index.
+    Xor8B,
+    /// `V[xor8_out]`: column 2 of the `XOR8` table, the bitwise XOR of the
+    /// other two.
+    ///
+    /// Its multilinear extension is `Σ_{j < 8} 2^j·(y_j + y_{j+8} − 2·y_j·y_{j+8})`,
+    /// because `y ^ z = y + z − 2yz` is already multilinear in each of `y` and
+    /// `z`. That is what makes a byte XOR table a **closed form** rather than a
+    /// committed setup column, and so free of a commitment and of the SRS
+    /// digest.
+    Xor8Out,
 }
 
 /// The one way any polynomial is named. `docs/spec/gkr.md` §2 says which
@@ -237,6 +260,9 @@ impl fmt::Display for PolyAddress {
             PolyAddress::Virtual(VirtualKind::RamLive) => write!(f, "V[ram_live]"),
             PolyAddress::Virtual(VirtualKind::Range19) => write!(f, "V[range19]"),
             PolyAddress::Virtual(VirtualKind::Range16) => write!(f, "V[range16]"),
+            PolyAddress::Virtual(VirtualKind::Xor8A) => write!(f, "V[xor8_a]"),
+            PolyAddress::Virtual(VirtualKind::Xor8B) => write!(f, "V[xor8_b]"),
+            PolyAddress::Virtual(VirtualKind::Xor8Out) => write!(f, "V[xor8_out]"),
             PolyAddress::Inner { layer, offset } => write!(f, "L{{{layer}}}[{offset}]"),
             PolyAddress::Scratch(i) => write!(f, "scratch[{i}]"),
             PolyAddress::Cached { layer, offset } => write!(f, "C{{{layer}}}[{offset}]"),

@@ -66,10 +66,15 @@ pub struct ChannelSpec {
 /// Where a channel's gated tuple sends a row its selector switches off, and
 /// what it adds to a participating row's key. `docs/spec/lookup.md` §4.
 enum Gating {
-    /// `flag·expr`, the neutral tuple being the all-zero one. A range table's
-    /// row 0 is the value 0, a real and in-range entry, so no offset reserves
-    /// it: "0 is in range" is what a switched-off row claims, and it is true.
-    Range,
+    /// `flag·expr`, the neutral tuple being the all-zero one, because that
+    /// tuple is a **real entry** of the channel's table and so needs no offset
+    /// reserving it. A range table's row 0 is the value 0: "0 is in range" is
+    /// what a switched-off row claims, and it is true. `XOR8`'s row 0 is
+    /// `(0, 0, 0)`, and `0 ^ 0 = 0` is true in the same way.
+    ///
+    /// Named for the discipline and not for a channel kind: `XOR8` is a table
+    /// channel that takes it (S26d, `docs/spec/lookup.md` §14).
+    NoOffset,
     /// `flag·(key + 1)` on column 0 and `flag·v_j` on the rest, the neutral
     /// tuple being the all-zero `ZeroEntry` row. The `+ 1` is what keeps a real
     /// entry off the all-zero tuple, so the neutral row answers only the rows
@@ -85,7 +90,9 @@ enum Gating {
 
 fn gating(channel: u32) -> Gating {
     match channel {
-        lookup_channel::TIMESTAMP | lookup_channel::RANGE16 => Gating::Range,
+        lookup_channel::TIMESTAMP | lookup_channel::RANGE16 | lookup_channel::XOR8 => {
+            Gating::NoOffset
+        }
         lookup_channel::GENERIC => Gating::ZeroEntry,
         lookup_channel::DECODER => Gating::MinusOne,
         other => panic!("channel {other} is not in constants::lookup_channel"),
@@ -96,7 +103,7 @@ fn gating(channel: u32) -> Gating {
 /// the neutral tuple is `MINUS_ONE` in every column.
 fn neutral(channel: u32) -> Coeff {
     match gating(channel) {
-        Gating::Range | Gating::ZeroEntry => Coeff::Challenge(challenge_slot::LOOKUP_G),
+        Gating::NoOffset | Gating::ZeroEntry => Coeff::Challenge(challenge_slot::LOOKUP_G),
         Gating::MinusOne => Coeff::Challenge(challenge_slot::LOOKUP_DECODER_NEUTRAL),
     }
 }
@@ -135,7 +142,7 @@ pub fn row_denominator(l: &LookupExpr) -> GateDef {
             );
         };
         let offset = match gating(l.channel) {
-            Gating::Range => Fr::ZERO,
+            Gating::NoOffset => Fr::ZERO,
             Gating::ZeroEntry if j == 0 => Fr::ONE,
             Gating::ZeroEntry => Fr::ZERO,
             Gating::MinusOne => Fr::ONE,
@@ -337,6 +344,42 @@ pub fn range_table(channel: u32) -> Option<VirtualKind> {
         lookup_channel::RANGE16 => Some(VirtualKind::Range16),
         _ => None,
     }
+}
+
+/// The variables a channel's table needs to be **complete**, which is the
+/// fewest a circuit declaring it may be built at.
+///
+/// A range channel's is its bound: `docs/spec/lookup.md` §3's closed form over
+/// `n` variables holds `[0, 2^min(bits, n))`, so below `bits` variables it is a
+/// narrower range than the channel declares, and `channel_trees` refuses it.
+///
+/// A **virtual** table channel's is its key width. `XOR8`'s table is the 65,536
+/// triples `(a, b, a ^ b)` read off the row index, so a circuit with fewer than
+/// 16 variables holds only the part of it with `b` in `[0, 2^{n-8})` and an
+/// honest lookup outside that has nothing to match — a completeness failure, not
+/// a soundness one, and a silent one.
+///
+/// A **committed** table channel's is 0: its table is a setup column of the
+/// circuit's own height, whatever that height is.
+pub fn table_vars(channel: u32) -> u32 {
+    match channel {
+        lookup_channel::XOR8 => 2 * XOR8_BYTE_BITS,
+        _ if lookup_channel::IS_RANGE[channel as usize] => lookup_channel::BITS[channel as usize],
+        _ => 0,
+    }
+}
+
+/// Bits in one operand of the `XOR8` table: a byte.
+const XOR8_BYTE_BITS: u32 = 8;
+
+/// The `XOR8` channel's table, in tuple order: `(a, b, a ^ b)` as closed forms
+/// of the row index. `docs/spec/lookup.md` §14.
+pub fn xor8_table() -> alloc::vec::Vec<PolyAddress> {
+    vec![
+        PolyAddress::Virtual(VirtualKind::Xor8A),
+        PolyAddress::Virtual(VirtualKind::Xor8B),
+        PolyAddress::Virtual(VirtualKind::Xor8Out),
+    ]
 }
 
 /// Every lookup of `artifact` is discharged by exactly one gate-list-0 column,

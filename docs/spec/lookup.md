@@ -1,6 +1,7 @@
 # The LogUp channels: tables, gated keys, fraction trees and the root check
 
-Frozen as of S15. Changing anything here is a protocol-version change.
+Frozen as of S15, appended at S26d (§14). Changing anything here is a
+protocol-version change.
 
 This page is the master prompt's *Lookups (shard-local)* bullet, as the repository
 owner decided it at S15. It cites `docs/spec/gkr.md` for the circuit model and
@@ -39,7 +40,8 @@ proved as a tree of fractions whose root pair `(num, den)` the verifier holds to
 
 **A range channel** is the special case of a one-column table: its table is the closed
 form `[0, 2^BITS)` and its claim is that every expression's canonical integer is below
-that bound. **A table channel**'s table is committed.
+that bound. **A table channel**'s table is committed — or, since S26d, a closed form of
+its own (§14).
 
 ## 2. The two challenges
 
@@ -72,7 +74,9 @@ statements.
 ## 3. The range channels' tables
 
 A range channel's table is a **virtual** setup column: a closed form, evaluated but
-never materialized and never committed (`docs/spec/gkr.md` §2.1).
+never materialized and never committed (`docs/spec/gkr.md` §2.1). Since S26d a *table*
+channel's may be one too — §14's `XOR8`, three columns wide — so "virtual" is a property
+of the table and not of the channel's kind.
 
 | channel | bound | kind | value at row `y` | closed form |
 | --- | --- | --- | --- | --- |
@@ -103,22 +107,24 @@ S26c, which worked only while no delegation family had a channel.
 **The way out of that floor is to carry no channel at all, and S21 took it.** A delegation
 family's rows are invocations rather than cycles, so `2^8` rows is a sensible shard
 (`docs/spec/delegation.md` §9). At `2^8` no range channel's table fits, so a family at that
-height carries **none** — no `TIMESTAMP`, no `RANGE16`, no `GENERIC`, no `DECODER`, no
-multiplicity column — and every bound it makes is a bit decomposition with a booleanity gate of
-its own. Four families are there: `KECCAK_F`, `POSEIDON2`, `FR_ARITH` and `SHA256_COMP`. S23's
-two pay the same price in a second place: a frame value's **canonicity** is an eight-limb
+height carries **none** — no `TIMESTAMP`, no `RANGE16`, no `GENERIC`, no `DECODER`, no `XOR8`,
+no multiplicity column — and every bound it makes is a bit decomposition with a booleanity gate
+of its own. Three families are there since S26d: `POSEIDON2`, `FR_ARITH` and `SHA256_COMP`.
+S23's two pay the same price in a second place: a frame value's **canonicity** is an eight-limb
 borrow chain against `p` whose limbs are bounded by their own bits, where a `RANGE16` channel
 would have bounded them in sixteen lookups.
 
-**Since S26c a delegation family at `2^16` may carry `RANGE16`, and two do**
-(`docs/spec/delegation.md` §10.3). `MOD_MUL` and `EC_ADD` are wide enough that a bit
+**Since S26c a delegation family at `2^16` or above may carry `RANGE16`, and three do**
+(`docs/spec/delegation.md` §10.3 and §10.4). `MOD_MUL`, `EC_ADD` and — since S26d —
+`KECCAK_F` are wide enough that a bit
 decomposition of every bound is the dominant cost — `EC_ADD`'s 97-word frame is 3,686 gap bits
-against 194 chunk columns — and narrow enough per row that `2^16` is affordable. What stays
+against 194 chunk columns — and narrow enough per row that `2^16` — `2^18` for `KECCAK_F`,
+which takes two variables above the floor by choice — is affordable. What stays
 true at every height this menu offers is that **no delegation family may carry `TIMESTAMP`**:
 `BITS = 19` needs `2^20` rows, which is an execution family's floor and not an invocation
 family's. So a frame's timestamp gap is never that channel's obligation; it is a bit
-decomposition at `2^8`, and at `2^16` three `RANGE16` chunks whose top one carries a scaled
-obligation that is exact at `2^38`.
+decomposition at `2^8`, and at `2^16` and above three `RANGE16` chunks whose top one carries a
+scaled obligation that is exact at `2^38`.
 
 ## 4. Gated keys
 
@@ -529,3 +535,75 @@ two `U16GetSign` lookups, `docs/spec/jump-branch-slt.md` §3.2 — and with it:
 - **The generic table's constants moved** to `constants::generic_table` (`WIDTH`,
   `AND_BASE`, `SIGN_BASE`), because a circuit, which cannot depend on `program`, now builds
   a key into it; `program::lookup_tables` keeps every name as an alias.
+
+---
+
+## 14. `XOR8`: a byte table that is a closed form (S26d)
+
+**This section amends §1's "a table channel's table is committed", §3's "range
+tables and timestamp tables are virtual; decoder/program tables are committed
+setup", and the four-channel list this page and
+`prompts/00-master.md`'s *Lookups (shard-local)* invariant both carry.** The
+amendment is the owner's, taken at S26d, and it is recorded in both places.
+
+`lookup_channel::XOR8` is channel **4**, and `COUNT` is **5**. It is a **table**
+channel — `IS_RANGE` is false, its tuple is three wide — whose table is a
+**virtual** closed form:
+
+| tuple position | table column | closed form over the row's bits |
+| --- | --- | --- |
+| 0 | `V[xor8_a]` | `Σ_{j < 8} 2^j·y_j`, the row index's low byte |
+| 1 | `V[xor8_b]` | `Σ_{j < 8} 2^j·y_{j+8}`, its next byte |
+| 2 | `V[xor8_out]` | `Σ_{j < 8} 2^j·(y_j + y_{j+8} − 2·y_j·y_{j+8})` |
+
+The third is a genuine multilinear extension and not an approximation of one,
+because `y ^ z = y + z − 2yz` is already multilinear in each of `y` and `z`. At a
+height of `2^16` rows or more the table is exactly the 65,536 triples
+`(a, b, a ^ b)`, each once per `2^16` rows, and below that it is a strict subset
+— which is what `constraints::lookup::table_vars` reports and what
+`family_circuit`'s derived floor refuses.
+
+**What it buys.** No commitment, no setup column, no movement of the SRS digest,
+and none of `docs/spec/shard-proof.md` §7.2's opening machinery. A committed byte
+table would have been three more setup columns to bind, and folding one into the
+`GENERIC` channel would have meant re-pinning every verifying key's SRS digest and
+bytes for the third time — that channel's own minimum height of `2^18` is no longer
+part of the bill, `KECCAK_F` having taken `2^18` by choice since S26d.
+
+**Why the tuple is three wide.** Membership of `(x, y, z)` in a three-wide table
+bounds each of the three to `[0, 256)` **individually**, which is what makes every
+byte a circuit feeds the channel bounded by the lookup that uses it. A packed key
+`x + 256·y` against a two-wide table would be one column cheaper a lookup and
+would bound neither operand alone: `(x, y)` and `(x + 256, y − 1)` compress to the
+same key.
+
+**What it makes cheap.** `AND`, `ANDN` and `OR` are *linear forms* over the
+obligation's result and cost no obligation of their own:
+
+```text
+x & y = (x + y − (x ^ y)) / 2      (¬x) & y = (y − x + (x ^ y)) / 2
+x | y = (x + y + (x ^ y)) / 2
+```
+
+and a byte's top-`s`-bit mask is one XOR against a **literal**, so
+`x & mask = (x + mask − (x ^ mask)) / 2` and a rotation is a literal-weighted
+combination of a byte and its masked copy.
+
+**Gating.** `XOR8` takes the **no-offset** discipline, `Gating::NoOffset` — the
+same one the two range channels take, and the variant is named for the discipline
+rather than for a channel kind since S26d. The reason is §4's: the all-zero tuple
+`(0, 0, 0)` is a *real* entry of the table, `0 ^ 0 = 0`, so nothing has to reserve
+it and a row whose selector is 0 claims something true. The `+ 1` of §4's
+`ZeroEntry` rule is therefore **not** wanted here, and this is the third
+documented case beside the two range channels and the decoder's `MinusOne`.
+
+**Its one consumer** is `constants::family::KECCAK_F`, whose row is one Keccak
+round and 1,020 obligations on this channel with no bit anywhere
+(`docs/spec/delegation.md` §6).
+
+**What it does not change.** The two challenges and their derived powers; the
+gated-key conventions of §4 for every other channel; the denominator gate of §5;
+the fraction tree of §6; the multiplicity convention of §7 — one column per
+channel per circuit, counted over raw gated tuples before `g` and `β` exist; the
+root check of §8; and the construction rules of §11. `MAX_TUPLE` is unchanged at
+7, three being well inside it.

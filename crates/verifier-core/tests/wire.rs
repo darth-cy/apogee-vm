@@ -304,6 +304,42 @@ fn the_readers_refuse_rather_than_panic() {
     }
 }
 
+/// A key whose circuits carry the **`XOR8`** channel round-trips, which is the
+/// one fast-gate reading of `types.rs`' three new `VirtualKind` wire tags.
+///
+/// `write_address`/`read_address` keep their own copy of the tag table, beside
+/// `constraints::wire`'s. Every other key fixture here names only `V[range19]`,
+/// `V[range16]` and setup columns, so a wrong arm for tags 4, 5 or 6 would pass
+/// every one of them and make a verifying key for any program that hashes
+/// unloadable (`docs/spec/lookup.md` §14, `docs/spec/delegation.md` §6).
+#[test]
+fn a_key_carrying_the_xor8_channel_round_trips() {
+    let key = common::keccak_vk();
+    let bytes = key.to_bytes();
+    assert_eq!(VerifyingKey::from_bytes(&bytes), Ok(key.clone()));
+    assert_eq!(VerifyingKey::from_bytes(&bytes).unwrap().to_bytes(), bytes);
+
+    // And the tags really are in there: the family's two channels name four
+    // distinct virtual tables between them, three of which no other key does.
+    let circuit = key
+        .circuit(common::KEC)
+        .expect("the key carries the keccak circuit");
+    let tables: Vec<constraints::PolyAddress> = circuit
+        .channels
+        .iter()
+        .flat_map(|c| c.table.iter().copied())
+        .collect();
+    assert_eq!(
+        tables,
+        vec![
+            constraints::PolyAddress::Virtual(constraints::VirtualKind::Range16),
+            constraints::PolyAddress::Virtual(constraints::VirtualKind::Xor8A),
+            constraints::PolyAddress::Virtual(constraints::VirtualKind::Xor8B),
+            constraints::PolyAddress::Virtual(constraints::VirtualKind::Xor8Out),
+        ]
+    );
+}
+
 /// A key's load rules, §7.2: each edit to an honest key refused, naming it.
 #[test]
 fn a_key_that_breaks_a_load_rule_is_refused() {

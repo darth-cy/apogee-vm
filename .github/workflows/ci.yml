@@ -175,7 +175,7 @@ jobs:
       # `test` step on every push.
       #
       # Since S21 the file also carries the delegation anchor's twins over
-      # `guests/keccak-test`'s nine-shard block
+      # `guests/keccak-test`'s eleven-shard block
       # (`checker::assert_anchor_twins_refused`), and it runs at `--release`:
       # a debug build of that block is not a reasonable gate. Those twins run
       # at two levels on purpose. `verify_block` checks the memory argument
@@ -311,19 +311,29 @@ jobs:
       # DEFERRED: cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1
       # Master rule 7, for S21's acceptances 4 and 8. 33.7 GB peak, 131 s
       # locally on 18 cores, so it runs single-threaded. It was the heaviest
-      # suite in the repository until S23's `recursion` passed it. `guests/keccak-test` is nine shards -- six `2^20`
-      # execution shards, two `2^16` window shards and one `2^8` KECCAK_F shard
-      # -- and it is the delegation shard that costs, not the count: one keccak
-      # row is a whole keccak-f[1600] permutation, so the circuit is 354,762
-      # inner columns and its forward pass at 256 rows is about 2.9 GB before
-      # anything is committed (`docs/spec/delegation.md` §9). The second test in
-      # the file, `guests/keccak-unused`, proves eight shards: the same nine
-      # families, zero invocations, zero delegation shards.
+      # suite in the repository until S23's `recursion` passed it.
+      # `guests/keccak-test` is eleven shards since S-IO -- six `2^20` execution
+      # shards, two `2^16` window shards, two `2^8` public-value shards and one
+      # KECCAK_F shard, at `2^16` since S26d. The second test in the file,
+      # `guests/keccak-unused`, proves ten: the same families, zero invocations,
+      # zero delegation shards.
       #
-      # Its CI-sized halves are `crates/checker/tests/keccak.rs` (the circuit's
-      # forward pass against `emulator::keccak_f` at four rows, and ten negative
-      # controls each naming its gate), `crates/emulator/tests/keccak.rs`
-      # (`keccak_f` against `tiny-keccak` on all 1,600 single-bit states),
+      # S26d re-shaped the delegation row from a whole keccak-f[1600] permutation
+      # to ONE ROUND, which moved the height from `2^8` to `2^16`
+      # (`docs/spec/delegation.md` §6). The shard's proof falls from 11,880,012
+      # bytes to 373,276 and holds 2,730 permutations instead of 256 -- 339 times
+      # fewer proof bytes a permutation -- but its forward pass goes the other
+      # way, from 5,478 x 256 to 5,478 x 65,536, about 15 GB. So the peak below
+      # is NOT S26d's: it is S-BATCH's measurement of S21's shape, and the
+      # delegation shard's own contribution grew. Plan for the same 39 GB and
+      # re-measure.
+      #
+      # Its CI-sized halves are `crates/checker/tests/keccak.rs` (the circuit
+      # row-locally at its real `2^16`, its own `u64` round held to
+      # `emulator::keccak_round`, and fifteen negative controls each naming the
+      # gate or the obligation that catches it), `crates/emulator/tests/keccak.rs`
+      # (`keccak_f` against `tiny-keccak` on all 1,600 single-bit states, and 24
+      # `keccak_round`s against `tiny_keccak::keccakf`),
       # `crates/emulator/tests/guests.rs` (the corpus digests re-derived from
       # `tiny-keccak`, and both guests run) and
       # `crates/program/tests/delegation.rs` (static detachment over every
@@ -331,8 +341,8 @@ jobs:
       # the step of its own above). The anchor's four tamper twins
       # are in `crates/checker/tests/tamper.rs`, deferred with it.
       #
-      # Measured: 2 passed, 131 s, 33.7 GB peak in a batch (38.9 GB on its own
-      # at S21 -- the same spread `block` above has, so plan for 39).
+      # Measured at S21: 2 passed, 131 s, 33.7 GB peak in a batch (38.9 GB on
+      # its own -- the same spread `block` above has, so plan for 39).
       #
       # - name: S21's block with a delegation shard, proved and verified
       #   run: cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1
@@ -395,9 +405,10 @@ jobs:
       # 221,239, the difference being the `read` this binary no longer makes --
       # and every one of the seven execution families runs: THIRTEEN shards
       # since S-IO -- seven `2^20` execution shards, two `2^20` RAM window
-      # shards, one `2^20` ADVICE_WINDOWS shard for the witness, one `2^8`
-      # KECCAK_F shard and one `2^8` shard each for PUBLIC_INPUT and
-      # PUBLIC_OUTPUT. The window families are at `2^20` here and not `2^16`, which is
+      # shards, one `2^20` ADVICE_WINDOWS shard for the witness, one KECCAK_F
+      # shard -- at `2^16` since S26d, and one rather than several because a
+      # `2^16` shard holds 2,730 permutations -- and one `2^8` shard each for
+      # PUBLIC_INPUT and PUBLIC_OUTPUT. The window families are at `2^20` here and not `2^16`, which is
       # new: the guest's image is about 1.7 MB and ends well past the 256 KiB a
       # `2^16` window 0 covers, and a decoded table is pc/2-indexed and absolute
       # so every family is pinned by the top of `.text`. The exact figures are
@@ -431,7 +442,10 @@ jobs:
       # Its CI-sized halves are `crates/emulator/tests/revm.rs` -- the witness's
       # canonicity, the output commitment's shape, native revm against the
       # committed output and every delegated permutation against tiny-keccak,
-      # all in the `test` step -- and the two named steps above.
+      # all in the `test` step -- and the two named steps above. Since S26d one
+      # invocation is one round, so `revm_block_keccak.bin` holds the frames of
+      # the **round-0** invocations and stays 200 bytes a permutation; the
+      # harvest asserts the invocation count is a whole number of permutations.
       #
       # - name: S24's revm block, proved and verified
       #   run: cargo test --release -p prover --test revm -- --include-ignored --test-threads=1

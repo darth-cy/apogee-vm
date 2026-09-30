@@ -154,7 +154,9 @@ record the result in the stage's handoff note. For the rest, a green local run i
 CI run.
 
 **The `# DEFERRED` suites run once, at the end of a progression, not per commit**
-(owner's instruction, S20). Each is tens of minutes and 8–33 GB of peak memory, so
+(owner's instruction, S20). Each is tens of minutes and, until S26d, 8–38 GB of peak memory — the keccak and revm
+suites now carry a `2^18` `KECCAK_F` shard whose forward pass alone is ~60 GB and both owe
+re-measurement — so
 re-running them after every change spends hours re-confirming what the previous run
 established. While a progression is in flight, the gate is `cargo fmt`, `cargo clippy`,
 the `riscv32imac` build and `cargo test --workspace`; a change whose only coverage would
@@ -196,13 +198,13 @@ cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D
 cargo clippy -p prover --all-targets --features metrics -- -D warnings   # feature 1 of 2
 cargo clippy -p prover --all-targets --features debug-info -- -D warnings   # feature 2 of 2
 cargo clippy -p prover --all-targets --features metrics,debug-info -- -D warnings   # both at once
-cargo test --workspace                      # 1,090 tests; 68 more are #[ignore]d (the run's own tally, S26c)
+cargo test --workspace                      # 1,109 tests; 68 more are #[ignore]d (S26c's tally plus S26d's nineteen, counted from the diff; the run's own tally is authoritative)
 cargo test -p prover --features metrics --test metrics  # the metrics harness; 10 more, 2 #[ignore]d
 cargo test -p prover --features debug-info --test debug_info  # the debug log: the levels, and that it changes no proof byte
 cargo test -p prover --features debug-info --lib  # the log's own unit tests, which the default build does not compile
 cargo test -p program --test delegation -- --ignored --test-threads=1  # static detachment at BOTH guest profiles; builds six guest images, 2.9 s
 cargo test -p emulator --test guests -- --ignored --test-threads=1  # DEFERRED; S26c's invocation counts: four traced executions, two of them `ec-ops`, 23.9 GiB peak and 118 s -- a GitHub runner reclaims the job, so this one is a dev-server run
-cargo test -p prover --test fills -- --ignored --test-threads=1  # DEFERRED; S26c: the MOD_MUL and EC_ADD fills, which exist only at 2^16, so each is its full committed width over 65,536 rows -- 19.1 GiB peak against 1.72 for the four that stay in CI
+cargo test -p prover --test fills -- --ignored --test-threads=1  # DEFERRED; S26c: the MOD_MUL and EC_ADD fills, which exist only at 2^16, so each is its full committed width over 65,536 rows -- 19.1 GiB peak against 1.72 for the four that stay in CI, both measured at S26c when the keccak fill was 2.18 MB at 2^8; at S26d's 2^18 that fill alone is 2.08 GiB, so both owe re-measurement (`crates/prover/tests/fills.rs`'s header does the arithmetic)
 APOGEE_GUEST_PROFILE=release cargo test -p emulator --test revm -- --ignored --test-threads=1  # S24's guest against native revm; builds the revm guest, 47 s
 cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 17.5 GB peak, 203 s, 30 min on a runner
 cargo test -p prover --test acceptance -- --include-ignored --test-threads=1  # DEFERRED; S16's statement, 10.7 GB peak, 374 s
@@ -221,11 +223,11 @@ cargo test --release -p prover --test alu -- --include-ignored --test-threads=1 
 cargo test --release -p prover --test mem -- --include-ignored --test-threads=1  # DEFERRED; S19's statement, 33.5 GB peak, 61 s
 cargo test --release -p prover --test block -- --include-ignored --test-threads=1  # DEFERRED; S20's block, 34.9 GB peak, 840 s
 cargo test --release -p prover --test streaming -- --include-ignored --test-threads=1  # DEFERRED; S26: the streamed block IS the archived one, byte for byte, over three statements
-cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1  # DEFERRED; S21's block, ELEVEN shards since S-IO, 33.7 GB peak and 131 s at S21, 254 s here at RAYON_NUM_THREADS=6
-cargo test --release -p prover --test recursion -- --include-ignored --test-threads=1  # DEFERRED; S23's block, TWELVE shards since S-IO, 35.2 GB peak and 120 s at S23, 238 s here at RAYON_NUM_THREADS=6 -- the heaviest by memory
+cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1  # DEFERRED; S21's block, ELEVEN shards since S-IO, 131 s at S21 and 254 s here at RAYON_NUM_THREADS=6; its 33.7 GB peak is S21's one-permutation-a-row shape and owes re-measurement -- at S26d's 2^18 the KECCAK_F shard's forward pass alone is ~60 GB, so a delegation shard sets this suite's peak for the first time
+cargo test --release -p prover --test recursion -- --include-ignored --test-threads=1  # DEFERRED; S23's block, TWELVE shards since S-IO, 35.2 GB peak and 120 s at S23, 238 s here at RAYON_NUM_THREADS=6 -- the heaviest by memory until S26d raised `KECCAK_F` to `2^18`; it carries no delegation shard above `2^8`, so its own peak is unmoved
 cargo test --release -p prover --test public_io -- --include-ignored --test-threads=1  # DEFERRED; S-IO's statement: public input in, advice checked against it, journal out
 cargo test --release -p host --test prove -- --include-ignored --test-threads=1  # DEFERRED; S25's MINI-BLOCK GATE: a real mainnet block's first two transactions proved and verified, and the advice tamper twin
-RAYON_NUM_THREADS=6 cargo test --release -p prover --test revm -- --include-ignored --test-threads=1  # DEFERRED; the revm block, thirteen shards since S-IO, and it builds the guest; 38.4 GB peak and 536 s at S24, 523 s here at RAYON_NUM_THREADS=6 over S-IO's thirteen shards; ELEVEN 2^20 shards, so the thread bound is not optional on a 48 GB machine
+RAYON_NUM_THREADS=6 cargo test --release -p prover --test revm -- --include-ignored --test-threads=1  # DEFERRED; the revm block, thirteen shards since S-IO, and it builds the guest; 38.4 GB peak and 536 s at S24, 523 s here at RAYON_NUM_THREADS=6 over S-IO's thirteen shards; ELEVEN 2^20 shards, so the thread bound is not optional on a 48 GB machine -- and since S26d one of the thirteen is a 2^18 KECCAK_F shard whose forward pass alone is ~60 GB, so the 38.4 GB peak is the pre-S26d figure, owes re-measurement, and may no longer fit a 48 GB machine at any thread count
 cargo test -p prover --features metrics --test metrics -- --include-ignored --nocapture  # DEFERRED; S16's statement twice, 21.0 GB peak, 60 s, and prints both reports
 cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify -p verifier-core --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
@@ -712,7 +714,11 @@ is derivable *from* them is regenerated and diffed in CI.
   one channel has one table. `checker::violated_lookups` is the range channels' native
   evaluator; `checker::channel_sums` is every channel's. `from_bytes` refuses any other
   format version.
-- **The LogUp spec is `docs/spec/lookup.md`, and it is frozen**: the four channels, the two
+- **The LogUp spec is `docs/spec/lookup.md`, and it is frozen**: the FIVE channels since
+  S26d — `XOR8`, the byte table `(a, b, a ^ b)`, is the first **table** channel whose table is
+  a **closed form** and not committed setup, which costs no commitment and no movement of the
+  SRS digest (`docs/spec/lookup.md` §14; it amends the master prompt's Lookups invariant, on
+  the owner's decision) — the two
   shard-local challenges and their derived powers, the gated-key conventions, the fraction
   tree, the multiplicity convention, the packed generic table and the decoder binding.
 - **`g` and `β` are shard-local and follow every commitment.** Drawn in that order under
@@ -978,18 +984,23 @@ is derivable *from* them is regenerated and diffed in CI.
   than not delegating. Poseidon2's frame is the other way — canonical values, so the circuit
   is `poseidon2_permute` itself — because there the conversion is six operations against 240
   the delegation removes (`docs/spec/delegation.md` §12.1, §13.2).
-- **A delegation family takes its own height, and since S26c two of the six carry
+- **A delegation family takes its own height, and since S26d three of the six carry
   `RANGE16`.** Its rows are invocations, not halfwords, so its ceiling is the width of one
   row's circuit — and **the six differ there by four orders of magnitude, so they do not
-  share a height**: `KECCAK_F`, `POSEIDON2`, `FR_ARITH` and `SHA256_COMP` take `2^8` (keccak
-  at `2^16` is 744 GB of forward pass a shard, SHA-256's compression 35 GB), and `MOD_MUL` and
-  `EC_ADD` take `2^16` — 5.1 GB and **20.5 GB** a shard, the second being above an execution
-  shard's own peak and therefore the peak-setting family in a block
-  (`docs/spec/delegation.md` §9.2). `2^16` is *forced* for those two rather than chosen: it is
-  the channel's floor, Mercury needs an even variable count, and `2^18` is four times worse.
+  share a height**: `POSEIDON2`, `FR_ARITH` and `SHA256_COMP` take `2^8` (SHA-256's
+  compression at `2^16` is 35 GB, and S21's whole-permutation keccak row at `2^16` would have
+  been 744 GB, which is what forced *that* shape to `2^8`), `MOD_MUL` and `EC_ADD` take `2^16` —
+  5.1 GB and **20.5 GB** a shard — and since S26d `KECCAK_F` takes `2^18`, **~60 GB** a
+  shard, which makes *it* the peak-setting family in a block, above every execution shard's
+  own peak, with `EC_ADD`'s 20.5 GB second (`docs/spec/delegation.md` §9.2). `2^16` is
+  *forced* for `MOD_MUL` and `EC_ADD` rather than chosen: it is the channel's floor, Mercury
+  needs an even variable count, and `2^18` is four times worse. `KECCAK_F`'s `2^18` is the
+  other way round — a *choice* two variables above that same floor, because a delegation
+  shard's cost is its height while its proof bytes barely move with it, so fewer, fatter
+  shards cut a keccak-heavy workload's total **proof bytes**.
   **No delegation family may carry `TIMESTAMP` at any height on this menu** — `BITS = 19`
   needs `2^20`, an execution family's floor — so a frame's timestamp gap is a bit
-  decomposition at `2^8` and three `RANGE16` chunks at `2^16`, never that channel's
+  decomposition at `2^8` and three `RANGE16` chunks at `2^16` and above, never that channel's
   obligation. A frame value's **canonicity** is an eight-limb borrow chain whose last borrow
   is 1 exactly when the value is below the modulus: against `p`'s literals for `FR_ARITH` and
   `POSEIDON2`, and against `MOD_MUL`'s and `EC_ADD`'s `m_limb` columns, which a selector pins
@@ -998,12 +1009,35 @@ is derivable *from* them is regenerated and diffed in CI.
   `enable` is 0, so a value that *is* below the modulus on a row that does not read it becomes
   unprovable — which at S26c made every row of `EC_ADD` unprovable while the executor, the
   guests and every shape test passed. **`family_circuit`'s minimum-height guard is derived,
-  not a list**: it reads each family's own `channels()` and takes the widest range channel's
-  `BITS`, so a family is held to exactly the floor its channels imply and no table has to be
-  kept in step. **A height changes no gate** — it adds one halving list per variable carrying
+  not a list**: it reads each family's own `channels()` and takes the most any one of their
+  tables needs — `constraints::lookup::table_vars`, which since S26d is not `BITS` with an
+  `IS_RANGE` filter, `XOR8`'s table being 65,536 rows without being a range channel — so a
+  family is held to exactly the floor its channels imply and no table has to be kept in step. **A height changes no gate** — it adds one halving list per variable carrying
   one node per output, and nothing else — which is what made `MOD_MUL`'s raise a re-pin and
   not a redesign
   (`crates/checker/tests/{mod_mul,ec_add}.rs::a_height_moves_only_the_halving_layers`).
+- **`KECCAK_F` is ONE ROUND A ROW, a permutation is 24 calls, and there is no bit in it**
+  (S26d, `docs/spec/delegation.md` §6). S21 made one row a whole keccak-f[1600]: 1,600 boolean
+  state columns, 24 seven-layer round blocks, **354,762 inner columns** over 177 layers, which
+  forced `2^8`, 256 permutations a shard and **46,406 proof bytes a permutation** — five such
+  shards were 97% of a measured mini-block's proof. One round a row is the other trade, and it
+  is `EC_ADD`'s: computation too wide for one row is decomposed into rows and **RAM is the
+  glue**, the frame's own read/write chain being what proves round `r`'s output is round
+  `r + 1`'s input, with the guest's proven `for round in 0..24` loop supplying the indices.
+  Nothing else is needed and nothing else was added. The committed unit is a **byte**, and
+  every Boolean operation of the round is one obligation on the new `XOR8` channel; `AND`,
+  `ANDN` and a top-bit mask are then *linear forms* over the result, so a rotation is a
+  literal-weighted combination of a byte and its masked copy and there is no bit-level
+  booleanity anywhere. The circuit is **flat** — 385 enforcing gates, no layer of its own — so
+  it goes through `memory::assemble` like every other family and `keccak.rs`'s private
+  `Assembly` is deleted. **5,490 inner columns, 1,764 committed, 381,100 proof bytes a `2^18`
+  shard and 10,922 permutations in it: 34.9 proof bytes a permutation, a factor of 1,330.** The frame
+  changed shape, so ecall `0x0501` is **retired and burned** and the call took `0x0507`; the
+  family id 9 and the address-space tag 4 did not move. Three things a later change must
+  respect: the `XOR8` channel carries **1,020** obligations against a 1,024-leaf fraction tree,
+  so four more double it and cost 34.4 GB a shard; `input_w{j}` and `output_w{j}` are **ungated**,
+  which is what makes a padding row's state byte *not* free; and `one_round_a_live_row` is
+  load-bearing because the codes are `0..24` and every pair sums to another round's word.
 - **`MOD_MUL` multiplies in one of FOUR fixed Ethereum fields, and the EVM's `MULMOD` is
   not one of them** (S26b, `docs/spec/delegation.md` §14 and §10.2). Frame word 0 selects
   secp256k1's `p` or `n` or BN254's `q` or `r`; the circuit supplies the limbs as literals
@@ -1291,6 +1325,7 @@ is derivable *from* them is regenerated and diffed in CI.
 | S26c — SHA-256 compression + secp256k1/BN254 `EC_ADD` | done | `docs/handoff/S26c-sha256-ec.md` |
 | S-DEBUG — The proving debug log | done | `docs/handoff/S-DEBUG-debug-log.md` |
 | S-BATCH — The mini-block gate, measured | done | `docs/handoff/S-BATCH-miniblock-gate.md` |
+| S26d — `KECCAK_F` re-shaped: one round a row | done | `docs/handoff/S26d-keccak-round.md` |
 
 **S-IO takes no number, and that is deliberate** (owner's decision). It is not one of the
 original twenty-seven stages — it is the stage those twenty-seven forgot, inserted after

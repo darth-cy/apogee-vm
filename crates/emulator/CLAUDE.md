@@ -40,8 +40,9 @@ impl<'a> StreamingRun<'a> {
 }
 
 // S21: the reference permutation, and the frame's two readings of it.
-pub fn keccak_f(state: &mut [u64; 25]);
-pub fn lanes_of(words: &[u32; 50]) -> [u64; 25];
+pub fn keccak_round(state: &mut [u64; 25], round: usize);   // S26d: what ONE invocation does
+pub fn keccak_f(state: &mut [u64; 25]);                     // 24 of them
+pub fn lanes_of(words: &[u32; 50]) -> [u64; 25];            // the STATE words, not the frame's
 pub fn words_of(lanes: &[u64; 25]) -> [u32; 50];
 ```
 
@@ -190,11 +191,18 @@ the **journal** `Machine::finish` reads back out of the public output window at 
   fallback runs; this VM has all four circuits, so it never takes that branch, and the
   fallback is the ABI's contract (`docs/spec/delegation.md` §2) rather than a path anything
   in this repository exercises.
-- **`keccak_f` is the one keccak permutation in the repository** and the emulator owns it, because
-  the emulator is what executes it; the circuit's forward pass is checked against it and
-  `tests/keccak.rs` checks it against `tiny-keccak` on all 1,600 single-bit states. The
-  guest SDK's software fallback is a second implementation by necessity — it is `no_std`
-  guest code — and `guests/keccak-test` is what holds the two to the same digests.
+- **`keccak_round` is what one invocation does, and `keccak_f` is 24 of them.** S26d made one
+  `KECCAK_F` delegation row one *round* (`docs/spec/delegation.md` §6), so the round is the
+  function the circuit is checked against and the permutation is the function every oracle
+  compares: `tests/keccak.rs` holds `keccak_f` to `tiny-keccak` on all 1,600 single-bit states
+  and holds 24 `keccak_round`s to `tiny_keccak::keccakf` besides, with the round's **index**
+  shown to be load-bearing — the 24 rounds of one state are pairwise distinct. The guest SDK's
+  software fallback is a second implementation by necessity — it is `no_std` guest code — and
+  `guests/keccak-test` is what holds the two to the same digests.
+- **`keccak_frame` can refuse a frame**, which `sha256_frame` cannot: a round word at or above
+  24 has no one-hot selector in the circuit, so answering it would produce a trace no honest
+  prover could prove. It is `EmuError::DelegationFrame`, as `mod_mul_frame`'s and
+  `ec_add_frame`'s refusals are.
 
 ## There is no second executor
 `qemu-riscv32` is gone from the repository: not an oracle, not a runner, not a dependency,
@@ -216,7 +224,7 @@ ecall running natively here and taking the `-ENOSYS` software fallback there.
 | File | What |
 | --- | --- |
 | `src/lib.rs` (unit) | the last cycle on the 38-bit clock runs and the next is `ClockOverflow` |
-| `tests/keccak.rs` | `keccak_f` against `tiny-keccak`: the all-zero state, the all-ones state, **all 1,600 single-bit states**, a random walk, and `lanes_of`/`words_of` round-tripping. 7 tests |
+| `tests/keccak.rs` | `keccak_f` against `tiny-keccak`: the all-zero state, the all-ones state, **all 1,600 single-bit states**, a random walk, and `lanes_of`/`words_of` round-tripping over the 50 **state** words. Since S26d also `keccak_round`, which is what one invocation does: 24 of them are `tiny_keccak::keccakf` and one of them is not, and the 24 rounds of one state are pairwise distinct — the index is load-bearing, and it is what the circuit's one-hot selector has to get right. 9 tests |
 | `tests/guests.rs` | the guests' host-computed answers (fib, heap, atomics, rvc-dense), `echo` copying its advice into the journal through the heap, orderbook committing the same journal under advice it cannot verify, `opcodes` executes all 58 non-trapping mnemonics and every instruction of its compressed block, acceptance 11 (seven misaligned kinds, both paths), `run` == `trace_run`, **the recorded public input is what the host supplied and not the prefix the guest consumed** — a cursor is guest state and a statement is not; **S-IO's mechanism executed**, over `guests/public-io` — the guest reads its public input with ordinary loads, checks its advice against it and leaves its result in the journal, which the executor reads back out of the window at exit; advice the public input does not commit to publishes nothing; asking for advice that was not supplied is the fatal `OutOfBounds`, because no advice means no region; and a public input longer than its window is refused by name before the first cycle; and **S21's acceptance 3**: the six digests `guests/keccak-test` checks itself against, re-derived from `tiny-keccak` and read out of the guest's own source so a stale literal cannot pass, and both keccak guests run to their exit statuses under the delegation ecall |
 | `tests/trace.rs` | acceptance 3 (balance, heap traffic included), 4 (a corrupted RAM read, register write mid-chain, pc write and gap, a forged initial value, and a stale read, each named), 5 (the four-slot clock over every event; `amoadd.w` fills all four slots), 6 (routing), the frame table — roles and slots — restated from the spec and checked on every row, the halting sentinel (the exit row alone writes `HALT_PC`, as the last pc write; every other pc write even), every ecall answering as the ABI says — an exit, a delegation answered 0, or `-ENOSYS`, and one cycle each — the rows rebuilding the log exactly, `final_state`, and `trace::init_windows` (fib's stack window at 2^22, 2^20 and 2^16; every traced guest's list exactly its touched windows above 0 at every height, and passing `program::check_memory_windows`) |
 | `tests/streaming.rs` | **S26**: `StreamingRun` against `trace_run` over twelve guests — every chunk equal to that family's own slice of the whole buffer row for row, the chunk set equal to `trace::plan_shards`' counts, no chunk longer than its height, the final `MemoryState` equal to the log's (and the window list at three heights and the boundary read off it), and the profile and `Execution` equal. `keccak-test` and `recursion-ops` are in the list for the `Invocations` arm and `guests/shards` for the flush path: its add/sub family runs 1,064,970 cycles, so at `2^16` it fills **sixteen** buffers before its last short one, and without it every chunk would come from the tail |

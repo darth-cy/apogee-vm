@@ -95,7 +95,7 @@ fn the_registry_is_one_table() {
                 family::KECCAK_F,
                 ecall::PRECOMPILE_KECCAK_F,
                 constants::address_space::DELEGATION_KECCAK_F,
-                50
+                51
             ),
             (
                 family::POSEIDON2,
@@ -181,14 +181,17 @@ fn a_number_no_family_answers_is_refused() {
     // `PRECOMPILE_FIRST + 3` is `0x503`, which S26 gave to `MOD_MUL` and S26b
     // **retired and burned** when that family's frame changed shape; `+ 4` is
     // the number the specialized call took, and S26c took `+ 5` and `+ 6` for
-    // `SHA256_COMP` and `EC_ADD`. So the unanswered numbers are the retired one
-    // and 7 and up — and the retired one belongs in this sweep precisely
-    // because burning a number means nothing may answer it.
+    // `SHA256_COMP` and `EC_ADD`. S26d did it a second time: `KECCAK_F`'s frame
+    // gained the round word, so `+ 1` was retired and burned and the call took
+    // `+ 7`. So the unanswered numbers are the **two** retired ones and 8 and
+    // up — and both retired ones belong in this sweep precisely because burning
+    // a number means nothing may answer it, ever.
     for number in [
         0u32,
         ecall::EXIT,
+        ecall::RETIRED_KECCAK_F_WHOLE_PERMUTATION,
         ecall::RETIRED_MOD_MUL_WITNESSED_MODULUS,
-        ecall::PRECOMPILE_FIRST + 7,
+        ecall::PRECOMPILE_FIRST + 8,
         0x05ff,
     ] {
         assert_eq!(

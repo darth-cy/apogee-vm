@@ -332,6 +332,65 @@ fn each_range_tables_closed_form_is_its_multilinear_extension() {
     }
 }
 
+/// The `XOR8` table's three closed forms are the multilinear extensions of their
+/// own columns (S26d, `docs/spec/lookup.md` §14).
+///
+/// **This is the one that could have been wrong silently.** `Xor8A` and `Xor8B`
+/// are weighted sums of the row's bits, like the two range tables; `Xor8Out` is
+/// not — it is `Σ_{j<8} 2^j·(y_j + y_{j+8} − 2·y_j·y_{j+8})`, the first closed
+/// form in the repository that reads two variables in one term, and it is
+/// multilinear only because `y ^ z = y + z − 2yz` is. A verifier that evaluated a
+/// *different* polynomial than the prover's table would accept proofs of the
+/// wrong statement, and nothing else in the fast gate compares the two.
+///
+/// Held at 8, 15, 16 and 17 variables: below 16 the table is a strict subset
+/// (`constraints::lookup::table_vars` is what refuses a circuit there), at 16 it
+/// is exactly the 65,536 triples, and above it each appears `2^{n−16}` times.
+#[test]
+fn the_xor8_closed_forms_are_their_multilinear_extensions() {
+    let mut rng = Rng::new(0x5236_0009);
+    for kind in [VirtualKind::Xor8A, VirtualKind::Xor8B, VirtualKind::Xor8Out] {
+        for n in [8u32, 15, 16, 17] {
+            let rows = 1usize << n;
+            let table: Vec<Fr> = (0..rows).map(|y| virtual_at_row(kind, y)).collect();
+            let poly = MultilinearPoly::new(PolyBacking::Fr(table.clone()));
+            for _ in 0..4 {
+                let point: Vec<Fr> = (0..n).map(|_| fr(&mut rng)).collect();
+                assert_eq!(
+                    virtual_at_point(kind, &point),
+                    poly.evaluate(&point),
+                    "{kind:?} at {n} variables"
+                );
+            }
+            // And on the cube each column is the byte it claims to be.
+            for y in [0usize, 1, 255, rows / 3, rows - 1] {
+                if y >= rows {
+                    continue;
+                }
+                let (a, b) = ((y as u64) & 0xff, ((y as u64) >> 8) & 0xff);
+                let want = match kind {
+                    VirtualKind::Xor8A => a,
+                    VirtualKind::Xor8B => b,
+                    _ => a ^ b,
+                };
+                assert_eq!(table[y], Fr::from_u64(want), "{kind:?} row {y}");
+            }
+        }
+    }
+    // The table at 16 variables is exactly the 65,536 triples, each once: the
+    // completeness property `table_vars` exists to protect.
+    let rows = 1usize << 16;
+    let mut seen = std::collections::BTreeSet::new();
+    for y in 0..rows {
+        let a = virtual_at_row(VirtualKind::Xor8A, y).to_bytes()[0];
+        let b = virtual_at_row(VirtualKind::Xor8B, y).to_bytes()[0];
+        let out = virtual_at_row(VirtualKind::Xor8Out, y).to_bytes()[0];
+        assert_eq!(out, a ^ b, "row {y}");
+        assert!(seen.insert((a, b)), "row {y} repeats a pair");
+    }
+    assert_eq!(seen.len(), 1 << 16);
+}
+
 /// Acceptance 9's negative control: a closed form perturbed in one bit's weight
 /// is no longer the table's extension, and the comparison above catches it.
 #[test]

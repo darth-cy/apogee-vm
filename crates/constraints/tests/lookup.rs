@@ -50,6 +50,22 @@ fn toy() -> CircuitArtifact {
     CircuitArtifact::from_bytes(&bytes).expect("the toy decodes")
 }
 
+/// The channels the toy actually carries, ascending: the order its multiplicity
+/// columns, its `ChannelSpec`s and its output root pairs all take.
+///
+/// **Not `lookup_channel::COUNT`.** S15's toy is one family's shape, and
+/// `tools/kat-gen/src/lookup.rs`'s `TOY_CHANNELS` declares the four
+/// `JUMP_BRANCH_SLT` carries; `XOR8` is `KECCAK_F`'s alone (S26d). Sizing this
+/// fixture off the global count would ask it for a root pair and a `TreeCross`
+/// per halving list on a channel it has no lookup, no table and no multiplicity
+/// column for.
+fn toy_channels(a: &CircuitArtifact) -> Vec<u32> {
+    let mut channels: Vec<u32> = a.lookups.iter().map(|l| l.channel).collect();
+    channels.sort_unstable();
+    channels.dedup();
+    channels
+}
+
 /// The committed toy is a circuit: it validates, keeps the memory rules, and
 /// every one of its lookups is discharged by exactly one gate-list-0 column.
 /// Its shape is the one `tools/kat-gen/src/lookup.rs` describes: four channels,
@@ -63,8 +79,11 @@ fn the_committed_toy_is_a_circuit_that_discharges_every_lookup() {
     assert_eq!(constraints::memory::check_memory(&a), Ok(()));
     assert_eq!(check_discharge(&a, &[]), Ok(()));
 
-    // Two memory roots, then one pair per channel in channel order.
-    assert_eq!(a.outputs.len(), 2 + 2 * lookup_channel::COUNT as usize);
+    // Two memory roots, then one pair per channel **the toy carries**, in
+    // channel order. Which four those are is pinned by the per-lookup channel
+    // sequence below, not here.
+    let declared = toy_channels(&a);
+    assert_eq!(a.outputs.len(), 2 + 2 * declared.len());
     let name = |address: PolyAddress| {
         a.scratch
             .iter()
@@ -73,7 +92,8 @@ fn the_committed_toy_is_a_circuit_that_discharges_every_lookup() {
             .expect("an output is a scratch slot")
     };
     let mut expected = vec!["read_root".to_string(), "write_root".to_string()];
-    for channel in lookup_channel::NAMES {
+    for channel in &declared {
+        let channel = lookup_channel::NAMES[*channel as usize];
         expected.push(format!("{channel}_num_root"));
         expected.push(format!("{channel}_den_root"));
     }
@@ -804,8 +824,8 @@ fn the_toy_round_trips_with_the_new_shapes() {
         .count();
     assert_eq!(
         crosses,
-        VARS as usize * lookup_channel::COUNT as usize,
-        "one TreeCross per channel per halving list"
+        VARS as usize * toy_channels(&a).len(),
+        "one TreeCross per channel the toy carries, per halving list"
     );
     let kinds: Vec<VirtualKind> = a.virtuals.iter().map(|(k, _)| *k).collect();
     assert_eq!(kinds, vec![VirtualKind::Range19, VirtualKind::Range16]);

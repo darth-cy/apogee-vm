@@ -22,6 +22,7 @@ pub const ZERO: u32 = family::ZERO_WINDOWS;
 pub const PIN: u32 = family::PUBLIC_INPUT;
 pub const POUT: u32 = family::PUBLIC_OUTPUT;
 pub const ADV: u32 = family::ADVICE_WINDOWS;
+pub const KEC: u32 = family::KECCAK_F;
 /// The two public value families' pinned height, and the vars of their
 /// circuits (`docs/spec/public-values.md` §2).
 pub const PUB_VARS: u32 = family::PUBLIC_WINDOW_HEIGHT.trailing_zeros();
@@ -138,6 +139,64 @@ pub fn jbs_vk() -> VerifyingKey {
                 family_circuit(JBS, 20).unwrap(),
                 family_circuit(INIT, 16).unwrap(),
                 family_circuit(ZERO, 16).unwrap(),
+            ];
+            c.extend(window_circuits(1 << 16));
+            c
+        },
+    }
+}
+
+/// `vk`'s shape with the `KECCAK_F` delegation family beside add/sub, and the one
+/// key fixture whose circuits carry the `XOR8` channel.
+///
+/// **It exists for the channel's three virtual table addresses.** Since S26d a
+/// `ChannelSpec`'s table may name `V[xor8_a]`, `V[xor8_b]` or `V[xor8_out]`, and
+/// `types.rs`' private `write_address`/`read_address` carry their own copy of the
+/// `VirtualKind` wire tags — a second table beside `constraints::wire`'s. If the
+/// two ever disagreed, **no verifying key for a program that hashes could load**,
+/// and every other key fixture here would still round-trip: add/sub's channels
+/// name `V[range19]`, `V[range16]` and setup columns, and the window families
+/// name none at all. This one is the only fast-gate reading of the new arms.
+///
+/// The family has **no setup column**, so its slot in `setup_commitments` is
+/// empty, and it is at `2^16` — the **floor** `family_circuit` gives it, and
+/// deliberately not its default, which is `2^18` since S26d. This key is
+/// synthetic: it spells its own heights, computes its own identity and SRS
+/// digests from them, and reads `DEFAULT_HEIGHTS` nowhere, so the cheapest legal
+/// height is the right one here and `2^16` is not a stale literal.
+pub fn keccak_vk() -> VerifyingKey {
+    let config = VmConfig {
+        families: {
+            let mut f = vec![
+                (ADD, 1 << 20),
+                (INIT, 1 << 16),
+                (ZERO, 1 << 16),
+                (KEC, 1 << 16),
+            ];
+            f.extend(window_families(1 << 16));
+            f
+        },
+        bytecode_size_words: 1 << 20,
+    };
+    let mut setup: Vec<Vec<[u8; 64]>> =
+        vec![(0..7).map(blob).collect(), vec![blob(100)], vec![], vec![]];
+    setup.extend(window_setup());
+    let srs_verifier = [9u8; SRS_VERIFIER_BYTES];
+    VerifyingKey {
+        code_version: family::CODE_VERSION,
+        entry_pc: 0x1_0000,
+        identity: identity_digest(family::CODE_VERSION, &config, 0x1_0000, &setup),
+        config,
+        setup_commitments: setup,
+        srs_verifier,
+        generic_table: generic_table(),
+        srs_digest: srs_digest(&srs_verifier, &generic_table()),
+        circuits: {
+            let mut c = vec![
+                family_circuit(ADD, 20).unwrap(),
+                family_circuit(INIT, 16).unwrap(),
+                family_circuit(ZERO, 16).unwrap(),
+                family_circuit(KEC, 16).unwrap(),
             ];
             c.extend(window_circuits(1 << 16));
             c

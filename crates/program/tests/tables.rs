@@ -190,15 +190,20 @@ fn every_table_is_exactly_its_config_height() {
                 assert_eq!(len, *height as usize);
             }
         }
-        // The two ends of the menu, named so neither guest's pass is vacuous:
-        // the widest execution table at 2^22, and — for the guest that
-        // declares one — the delegation table at 2^8.
+        // Two ends of the menu, named so neither guest's pass is vacuous: the
+        // widest execution table at 2^22, and — for the guest that declares one
+        // — the delegation table at its own height, which since S26d is `2^16`
+        // and not `2^8`: one keccak row is one round, so `RANGE16`'s table and
+        // `XOR8`'s each need sixteen variables — that is the **floor**, and the
+        // family is at `2^18`, two rungs above it, so that a stateless block's
+        // keccak load is fewer, fatter shards (`docs/spec/delegation.md` §6.5,
+        // §9.2).
         let alu = tables.family(family::ADD_SUB_LUI_AUIPC).unwrap();
         assert_eq!(alu.height, 1 << 22, "{name}");
         match tables.family(family::KECCAK_F) {
             Some(keccak) => {
                 assert_eq!(name, "keccak-test");
-                assert_eq!(keccak.height, 1 << 8);
+                assert_eq!(keccak.height, 1 << 18);
                 assert!(keccak.columns.is_empty(), "invoked, never decoded");
             }
             None => assert_eq!(name, "fib", "fib declares no delegation family"),

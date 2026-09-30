@@ -31,7 +31,12 @@ const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../constraints/tests/vectors/add_sub.bin"
 );
-const FIXTURE_SHA256: &str = "af06f205f4ee83372c0bb134c2f134f6866d8e7ea7ac304574f4d89e1bd820e6";
+/// The fixture's digest, which moves whenever a **delegation ecall number** does:
+/// `deleg_{family}_number`'s literal is that number, read from `constants::ecall`,
+/// so this family's bytes are a function of the delegation registry. S26b's
+/// renumbering of `MOD_MUL` moved it and S26d's of `KECCAK_F` moved it again
+/// (`docs/spec/delegation.md` §10.2, §10.4).
+const FIXTURE_SHA256: &str = "6b80af867e5118314284f466a98ac110af2148b63d370269006634b2becdb455";
 
 fn artifact() -> CircuitArtifact {
     add_sub::artifact(VARS)
@@ -918,8 +923,10 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         ],
     ));
     // A delegation whose a7 is another number: 130 and 131 partition the
-    // ecalls this family proves, so a7 = 93 with the flag set breaks 131 and
-    // a7 = 0x502 breaks both.
+    // ecalls this family proves, so a7 = 93 with the flag set breaks 131, and
+    // so does any number no delegation type declares. The number is read from
+    // `constants::ecall` and never spelled: S26b renumbered `MOD_MUL` and S26d
+    // renumbered `KECCAK_F`, and this row followed both without an edit.
     let mut r = deleg();
     r.set("rs1_read_value", f(93)).set("rs1_write_value", f(93));
     cases.push((
@@ -936,7 +943,8 @@ fn each_gate_is_the_one_that_refuses_its_row() {
         vec!["deleg_9_number"],
     ));
     // An exit row that claims the delegation flag is no longer held to 93 by
-    // 130 — but 131 asks a7 for 0x501, and 138 for the mirror query.
+    // 130 — but 131 asks a7 for `PRECOMPILE_KECCAK_F`, and 138 for the mirror
+    // query.
     let mut r = row("exit 42");
     r.set("is_deleg_9", Fr::ONE);
     cases.push((

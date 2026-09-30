@@ -222,27 +222,19 @@ fn invocations<'a>(src: &'a ShardSource<'a>, family: FamilyId) -> Result<Invocat
 /// execution did, and the circuit is what says that was the function. Padding
 /// rows are zero in every column, which is the artifact's padding row.
 ///
-/// `witness_base` is where the family's circuit starts the frame's **witness**
-/// columns, and it is not always 0. `constraints::delegation` puts the gap and
-/// base bits at `W[0]` and a family's own bits above them, which is what S23's
-/// two circuits do; S21's `keccak` predates that module and puts its 1,600
-/// state bits first, so its frame's bits begin at `W[1600]`. The `M` layout is
-/// the same in both — four head columns then four a word — so only the witness
-/// side needs shifting, and getting this wrong writes the frame's bits over
-/// the state's and leaves the top of `W` unfilled, which is a `gkr_part` panic
-/// on "a witness column" and not a wrong proof.
+/// Every family that takes this puts the frame's own witness columns first, at
+/// `W[0]`, which is where `constraints::delegation::gap_bit` and its two base
+/// decompositions are. S21's `keccak` was the one exception — its 1,600 state
+/// bits came first and its frame's bits began at `W[1600]`, so this function
+/// carried a `witness_base` offset for it alone — and S26d's re-shaping moved
+/// that family to `delegation_frame_range16`, so the offset is gone.
 fn delegation_frame(
     inv: &Invocations,
     words: usize,
     frame_bytes: u64,
-    witness_base: usize,
 ) -> Vec<(PolyAddress, MultilinearPoly)> {
     let (frames, h) = (inv.frames, inv.height);
     let rows = 0..frames.len();
-    let wit = |a: PolyAddress| match a {
-        PolyAddress::Witness(i) => PolyAddress::Witness(i + witness_base as u32),
-        other => other,
-    };
     let mut out: Vec<(PolyAddress, MultilinearPoly)> = Vec::new();
     let cycles: Vec<Fr> = frames.cycles().iter().map(|c| Fr::from_u64(*c)).collect();
     out.push((deleg::CYCLE, fr_column(cycles, h)));
@@ -285,7 +277,7 @@ fn delegation_frame(
                     ((gap >> bit) & 1) as u32
                 })
                 .collect();
-            out.push((wit(deleg::gap_bit(j, bit)), u32_column(values, h)));
+            out.push((deleg::gap_bit(j, bit), u32_column(values, h)));
         }
     }
     for bit in 0..deleg::BASE_LOW_BITS {
@@ -293,7 +285,7 @@ fn delegation_frame(
             .clone()
             .map(|r| (((frames.bases()[r] - guest_memory::RAM_ORIGIN) / 4) >> bit) & 1)
             .collect();
-        out.push((wit(deleg::base_low_bit(words, bit)), u32_column(values, h)));
+        out.push((deleg::base_low_bit(words, bit), u32_column(values, h)));
     }
     for bit in 0..deleg::BASE_ROOM_BITS {
         let values: Vec<u32> = rows
@@ -303,7 +295,7 @@ fn delegation_frame(
                 ((room >> bit) & 1) as u32
             })
             .collect();
-        out.push((wit(deleg::base_room_bit(words, bit)), u32_column(values, h)));
+        out.push((deleg::base_room_bit(words, bit), u32_column(values, h)));
     }
     out
 }
@@ -447,28 +439,242 @@ fn canon_tally_log(family: FamilyId, index: u32, inv: &Invocations, values: &[(&
     ));
 }
 
-/// A `KECCAK_F` shard, `docs/spec/delegation.md` §6.1: the delegation frame,
-/// plus the input state's 1600 bits.
+/// One `KECCAK_F` row's intermediates, as 64-bit lanes.
+///
+/// Every field is a stage of `emulator::keccak_round` over the frame's read
+/// values, and the circuit's byte columns are this struct's bytes: byte `b` of
+/// lane `i` is `(lane >> (8·b)) as u8`. Recomputing the round here is not
+/// re-deciding what the row says — the frame words come from the buffer, which
+/// the tracer filled from the log — it is producing the intermediates the
+/// circuit's obligations read, which no log event carries.
+struct KeccakRow {
+    round: usize,
+    state_in: [u64; keccak::LANES],
+    /// `parity[x][s]`: `s + 2` lanes of column `x` folded, so `parity[x][3]` is
+    /// `C[x]`.
+    parity: [[u64; 4]; 5],
+    c_mask: [u64; 5],
+    theta_d: [u64; 5],
+    theta_a: [u64; keccak::LANES],
+    rho_mask: [u64; keccak::LANES],
+    rho_out: [u64; keccak::LANES],
+    chi_and: [u64; keccak::LANES],
+    chi_out: [u64; keccak::LANES],
+}
+
+/// Each byte of a `u64` masked to its top `s` bits, which is what one `XOR8`
+/// obligation against the literal mask gives the circuit.
+fn keccak_byte_mask(s: u32) -> u64 {
+    let byte = (256u64 - (1u64 << (8 - s))) as u8;
+    u64::from_le_bytes([byte; 8])
+}
+
+fn keccak_row(frames: &FrameSlice, r: usize) -> Result<KeccakRow, String> {
+    let round = frames.word(keccak::ROUND_WORD).read_value[r] as usize;
+    if round >= keccak::ROUNDS {
+        return Err(format!(
+            "keccak fill: invocation {r} claims round {round}, and a keccak-f round is below {}",
+            keccak::ROUNDS
+        ));
+    }
+    let words: [u32; keccak::STATE_WORDS] =
+        core::array::from_fn(|j| frames.word(keccak::STATE_WORD + j).read_value[r]);
+    let state_in = emulator::lanes_of(&words);
+
+    let mut parity = [[0u64; 4]; 5];
+    for (x, chain) in parity.iter_mut().enumerate() {
+        let mut acc = state_in[x];
+        for (s, slot) in chain.iter_mut().enumerate() {
+            acc ^= state_in[x + 5 * (s + 1)];
+            *slot = acc;
+        }
+    }
+    let c: [u64; 5] = core::array::from_fn(|x| parity[x][3]);
+    let c_mask: [u64; 5] = core::array::from_fn(|x| c[x] ^ keccak_byte_mask(1));
+    let theta_d: [u64; 5] =
+        core::array::from_fn(|x| c[(x + 4) % 5] ^ c[(x + 1) % 5].rotate_left(1));
+    let theta_a: [u64; keccak::LANES] = core::array::from_fn(|i| state_in[i] ^ theta_d[i % 5]);
+    let rho_mask: [u64; keccak::LANES] = core::array::from_fn(|i| {
+        let s = keccak::ROTATIONS[i / 5][i % 5] % 8;
+        match s {
+            0 => 0,
+            _ => theta_a[i] ^ keccak_byte_mask(s),
+        }
+    });
+    let mut rho_out = [0u64; keccak::LANES];
+    for x in 0..5 {
+        for y in 0..5 {
+            rho_out[y + 5 * ((2 * x + 3 * y) % 5)] =
+                theta_a[x + 5 * y].rotate_left(keccak::ROTATIONS[y][x]);
+        }
+    }
+    let chi_and: [u64; keccak::LANES] = core::array::from_fn(|i| {
+        let (x, y) = (i % 5, i / 5);
+        rho_out[(x + 1) % 5 + 5 * y] ^ rho_out[(x + 2) % 5 + 5 * y]
+    });
+    let chi_out: [u64; keccak::LANES] = core::array::from_fn(|i| {
+        let (x, y) = (i % 5, i / 5);
+        rho_out[i] ^ (!rho_out[(x + 1) % 5 + 5 * y] & rho_out[(x + 2) % 5 + 5 * y])
+    });
+    Ok(KeccakRow {
+        round,
+        state_in,
+        parity,
+        c_mask,
+        theta_d,
+        theta_a,
+        rho_mask,
+        rho_out,
+        chi_and,
+        chi_out,
+    })
+}
+
+/// The round histogram: how many of this shard's invocations claim each round.
+///
+/// **What it is for is that the 24 counts should be equal.** A permutation is 24
+/// consecutive invocations and a shard holds whole permutations up to its cut, so
+/// a shard whose rounds are not near-uniform has a guest that is not looping 24
+/// times — which is the one failure `docs/spec/delegation.md` §6.4's glue cannot
+/// see, the circuit proving each row honestly whatever the sequence. It is the
+/// analogue of `MOD_MUL`'s modulus histogram and `EC_ADD`'s curve/group one
+/// (`docs/spec/debug-info.md` §5).
+///
+/// A tally and not a verdict: a shard cut mid-permutation leaves the low rounds
+/// one ahead of the high ones, which is legitimate and expected.
+#[cfg(feature = "debug-info")]
+fn keccak_round_log(index: u32, witness: &[KeccakRow]) {
+    if !debug::enabled_for(debug::Level::Detail, family::KECCAK_F) {
+        return;
+    }
+    let live = witness.len();
+    if live == 0 {
+        return;
+    }
+    let mut tally = vec![0usize; keccak::ROUNDS];
+    for w in witness {
+        tally[w.round] += 1;
+    }
+    let labels: Vec<String> = (0..keccak::ROUNDS).map(|r| r.to_string()).collect();
+    let names: Vec<&str> = labels.iter().map(String::as_str).collect();
+    let who = debug::shard(family::KECCAK_F, index);
+    debug::line(&format!(
+        "apogee deleg    {who:<22} {} of {live} live rows",
+        debug::histogram("round", &names, &tally)
+    ));
+    let (lo, hi) = (
+        tally.iter().min().copied().unwrap_or(0),
+        tally.iter().max().copied().unwrap_or(0),
+    );
+    if hi > lo + 1 {
+        debug::line(&format!(
+            "apogee deleg    {who:<22} round counts spread {lo}..{hi} -- a permutation is 24 \
+             consecutive rounds, so a spread above 1 is a guest that is NOT LOOPING 24 TIMES"
+        ));
+    }
+}
+
+/// A `KECCAK_F` shard, `docs/spec/delegation.md` §6.1: the delegation frame over
+/// `RANGE16`, the 24 round selectors, the round constant's four bytes, and the
+/// round's nine byte-wide stages.
+///
+/// Every column here is a **byte**. There is no bit in this fill, which is the
+/// whole of S26d's re-shaping seen from the prover's side: S21's wrote 1,600
+/// boolean columns and 1,900 gap bits, this one writes 1,556 bytes and chunks.
 fn keccak_f(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     let inv = invocations(src, family::KECCAK_F)?;
     debug_only!(deleg_frame_log(family::KECCAK_F, src.index, &inv));
-    // S21's circuit puts the state's 1,600 bits at `W[0]`, so the frame's own
-    // bits start above them (`constraints::keccak::gap_bit`).
-    let mut out = delegation_frame(
+    let mut out = delegation_frame_range16(
         &inv,
         keccak::FRAME_WORDS,
-        keccak::STATE_BYTES as u64,
-        keccak::STATE_BITS,
+        keccak::FRAME_BYTES as u64,
+        kec_circuit::gap_chunk,
+        [
+            kec_circuit::base_low(),
+            kec_circuit::base_low_hi(),
+            kec_circuit::base_room(),
+            kec_circuit::base_room_hi(),
+        ],
     );
     let (frames, h) = (inv.frames, inv.height);
     let rows = 0..frames.len();
-    // The state's bits: frame word `2i + half` is lane `i`'s half, so bit `t`
-    // of word `j` is state bit `64·(j/2) + 32·(j%2) + t`.
-    for b in 0..keccak::STATE_BITS {
-        let (j, t) = (2 * (b / 64) + (b % 64) / 32, b % 32);
-        let read = frames.word(j).read_value;
-        let values: Vec<u32> = rows.clone().map(|r| (read[r] >> t) & 1).collect();
-        out.push((kec_circuit::in_bit(b), u32_column(values, h)));
+    let witness: Vec<KeccakRow> = rows
+        .clone()
+        .map(|r| keccak_row(frames, r))
+        .collect::<Result<Vec<_>, String>>()?;
+    debug_only!(keccak_round_log(src.index, &witness));
+
+    // The round selector, one-hot, and the round constant it names.
+    for round in 0..keccak::ROUNDS {
+        let values: Vec<u32> = witness
+            .iter()
+            .map(|w| u32::from(w.round == round))
+            .collect();
+        out.push((kec_circuit::round_sel(round), u32_column(values, h)));
+    }
+    for (t, b) in keccak::IOTA_BYTES.iter().enumerate() {
+        let values: Vec<u32> = witness
+            .iter()
+            .map(|w| ((keccak::ROUND_CONSTANTS[w.round] >> (8 * b)) & 0xff) as u32)
+            .collect();
+        out.push((kec_circuit::rc(t), u32_column(values, h)));
+    }
+
+    // The round's stages, byte by byte, in the circuit's layout order.
+    let byte = |lane: u64, b: usize| ((lane >> (8 * b)) & 0xff) as u32;
+    let push_state = |out: &mut Vec<(PolyAddress, MultilinearPoly)>,
+                      address: &dyn Fn(usize, usize) -> PolyAddress,
+                      lane: &dyn Fn(&KeccakRow) -> [u64; keccak::LANES]| {
+        for i in 0..keccak::LANES {
+            for b in 0..8 {
+                let values: Vec<u32> = witness.iter().map(|w| byte(lane(w)[i], b)).collect();
+                out.push((address(i, b), u32_column(values, h)));
+            }
+        }
+    };
+    push_state(&mut out, &kec_circuit::state_in, &|w| w.state_in);
+    for x in 0..5 {
+        for b in 0..8 {
+            for s in 0..4 {
+                let values: Vec<u32> = witness.iter().map(|w| byte(w.parity[x][s], b)).collect();
+                out.push((kec_circuit::parity(x, b, s), u32_column(values, h)));
+            }
+        }
+    }
+    for x in 0..5 {
+        for b in 0..8 {
+            let values: Vec<u32> = witness.iter().map(|w| byte(w.c_mask[x], b)).collect();
+            out.push((kec_circuit::c_mask(x, b), u32_column(values, h)));
+        }
+    }
+    for x in 0..5 {
+        for b in 0..8 {
+            let values: Vec<u32> = witness.iter().map(|w| byte(w.theta_d[x], b)).collect();
+            out.push((kec_circuit::theta_d(x, b), u32_column(values, h)));
+        }
+    }
+    push_state(&mut out, &kec_circuit::theta_a, &|w| w.theta_a);
+    for i in 0..keccak::LANES {
+        if keccak::ROTATIONS[i / 5][i % 5].is_multiple_of(8) {
+            continue;
+        }
+        for b in 0..8 {
+            let values: Vec<u32> = witness.iter().map(|w| byte(w.rho_mask[i], b)).collect();
+            out.push((kec_circuit::rho_mask(i, b), u32_column(values, h)));
+        }
+    }
+    push_state(&mut out, &kec_circuit::rho_out, &|w| w.rho_out);
+    push_state(&mut out, &kec_circuit::chi_and, &|w| w.chi_and);
+    push_state(&mut out, &kec_circuit::chi_out, &|w| w.chi_out);
+    for (t, b) in keccak::IOTA_BYTES.iter().enumerate() {
+        let values: Vec<u32> = witness
+            .iter()
+            .map(|w| {
+                byte(w.chi_out[0], *b)
+                    ^ ((keccak::ROUND_CONSTANTS[w.round] >> (8 * b)) & 0xff) as u32
+            })
+            .collect();
+        out.push((kec_circuit::iota_out(t), u32_column(values, h)));
     }
     Ok(out)
 }
@@ -479,7 +685,7 @@ fn keccak_f(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, St
 fn poseidon2(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     let inv = invocations(src, family::POSEIDON2)?;
     debug_only!(deleg_frame_log(family::POSEIDON2, src.index, &inv));
-    let mut out = delegation_frame(&inv, p2::FRAME_WORDS, p2::FRAME_BYTES as u64, 0);
+    let mut out = delegation_frame(&inv, p2::FRAME_WORDS, p2::FRAME_BYTES as u64);
     for v in 0..2 * p2::WIDTH {
         let lane = v % p2::WIDTH;
         let field = if v < p2::WIDTH {
@@ -531,7 +737,7 @@ fn poseidon2(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, S
 fn fr_arith(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     let inv = invocations(src, family::FR_ARITH)?;
     debug_only!(deleg_frame_log(family::FR_ARITH, src.index, &inv));
-    let mut out = delegation_frame(&inv, fa::FRAME_WORDS, fa::FRAME_BYTES as u64, 0);
+    let mut out = delegation_frame(&inv, fa::FRAME_WORDS, fa::FRAME_BYTES as u64);
     let (frames, h) = (inv.frames, inv.height);
     let rows = 0..frames.len();
     for (v, (first, field)) in [
@@ -925,7 +1131,7 @@ fn delegation_frame_range16(
 fn sha256_comp(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
     let inv = invocations(src, family::SHA256_COMP)?;
     debug_only!(deleg_frame_log(family::SHA256_COMP, src.index, &inv));
-    let mut out = delegation_frame(&inv, sh::FRAME_WORDS, sh::FRAME_BYTES as u64, 0);
+    let mut out = delegation_frame(&inv, sh::FRAME_WORDS, sh::FRAME_BYTES as u64);
     let (frames, h) = (inv.frames, inv.height);
     let rows = 0..frames.len();
 

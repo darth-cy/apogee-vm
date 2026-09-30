@@ -1189,13 +1189,7 @@ impl<'a> Machine<'a> {
             program::delegation_frame_words(family).expect("the caller matched a delegation");
         let old = self.delegation_frame(pc, base, words)?;
         let new = match family {
-            family::KECCAK_F => {
-                let mut state: [u32; keccak::FRAME_WORDS] = core::array::from_fn(|j| old[j]);
-                let mut lanes = lanes_of(&state);
-                keccak_f(&mut lanes);
-                state = words_of(&lanes);
-                state.to_vec()
-            }
+            family::KECCAK_F => keccak_frame(pc, &old)?,
             family::POSEIDON2 => poseidon2_frame(&old),
             family::FR_ARITH => fr_arith_frame(pc, &old)?,
             family::MOD_MUL => mod_mul_frame(pc, &old)?,
@@ -1512,56 +1506,94 @@ impl<'a> Machine<'a> {
     }
 }
 
-/// keccak-f[1600] over the state as 25 little-endian lanes, lane `5y + x` at
-/// index `x + 5y`.
+/// **One round** of keccak-f[1600] over the state as 25 little-endian lanes,
+/// lane `5y + x` at index `x + 5y`.
 ///
-/// The reference permutation, written from `docs/spec/delegation.md` §6 and
-/// the two tables of `constants::keccak`. `crates/guest-sdk` carries its own
+/// The reference round, written from `docs/spec/delegation.md` §6 and the two
+/// tables of `constants::keccak`. Since S26d this — not the whole permutation —
+/// is what one delegation invocation performs, so it is the function the
+/// `KECCAK_F` circuit is checked against. `crates/guest-sdk` carries its own
 /// copy for the software fallback — the two are held bit-identical by
 /// `crates/emulator/tests/keccak.rs` and both to `tiny-keccak` — because the
 /// SDK builds only for the guest target and is not a workspace member, and a
 /// crate whose only purpose was to be shared by two callers would be the
 /// abstraction the master's anti-goals refuse.
+///
+/// Panics on a `round` at or above `constants::keccak::ROUNDS`: there is no
+/// round constant for it, and the circuit has no selector for it either.
+pub fn keccak_round(lanes: &mut [u64; keccak::LANES], round: usize) {
+    // theta
+    let mut c = [0u64; 5];
+    for (x, c) in c.iter_mut().enumerate() {
+        *c = lanes[x] ^ lanes[x + 5] ^ lanes[x + 10] ^ lanes[x + 15] ^ lanes[x + 20];
+    }
+    for x in 0..5 {
+        let d = c[(x + 4) % 5] ^ c[(x + 1) % 5].rotate_left(1);
+        for y in 0..5 {
+            lanes[x + 5 * y] ^= d;
+        }
+    }
+    // rho and pi
+    let mut b = [0u64; keccak::LANES];
+    for x in 0..5 {
+        for y in 0..5 {
+            b[y + 5 * ((2 * x + 3 * y) % 5)] =
+                lanes[x + 5 * y].rotate_left(keccak::ROTATIONS[y][x]);
+        }
+    }
+    // chi
+    for x in 0..5 {
+        for y in 0..5 {
+            lanes[x + 5 * y] = b[x + 5 * y] ^ (!b[(x + 1) % 5 + 5 * y] & b[(x + 2) % 5 + 5 * y]);
+        }
+    }
+    // iota
+    lanes[0] ^= keccak::ROUND_CONSTANTS[round];
+}
+
+/// keccak-f[1600]: [`keccak_round`] twenty-four times.
+///
+/// No longer what one invocation does — a guest issues 24 of them and the frame
+/// chains them — but still the function every oracle compares against, and the
+/// one `guest_sdk`'s software fallback computes.
 pub fn keccak_f(lanes: &mut [u64; keccak::LANES]) {
     for round in 0..keccak::ROUNDS {
-        // theta
-        let mut c = [0u64; 5];
-        for (x, c) in c.iter_mut().enumerate() {
-            *c = lanes[x] ^ lanes[x + 5] ^ lanes[x + 10] ^ lanes[x + 15] ^ lanes[x + 20];
-        }
-        for x in 0..5 {
-            let d = c[(x + 4) % 5] ^ c[(x + 1) % 5].rotate_left(1);
-            for y in 0..5 {
-                lanes[x + 5 * y] ^= d;
-            }
-        }
-        // rho and pi
-        let mut b = [0u64; keccak::LANES];
-        for x in 0..5 {
-            for y in 0..5 {
-                b[y + 5 * ((2 * x + 3 * y) % 5)] =
-                    lanes[x + 5 * y].rotate_left(keccak::ROTATIONS[y][x]);
-            }
-        }
-        // chi
-        for x in 0..5 {
-            for y in 0..5 {
-                lanes[x + 5 * y] =
-                    b[x + 5 * y] ^ (!b[(x + 1) % 5 + 5 * y] & b[(x + 2) % 5 + 5 * y]);
-            }
-        }
-        // iota
-        lanes[0] ^= keccak::ROUND_CONSTANTS[round];
+        keccak_round(lanes, round);
     }
 }
 
-/// The 50 frame words as 25 lanes: word `2i` is lane `i`'s low half.
-pub fn lanes_of(words: &[u32; keccak::FRAME_WORDS]) -> [u64; keccak::LANES] {
+/// One `KECCAK_F` invocation: the round the frame's word 0 names, applied to the
+/// state in words `STATE_WORD..`, written back in place.
+///
+/// **This family can refuse a frame**, as `MOD_MUL` and `EC_ADD` can and as
+/// `SHA256_COMP` cannot: a round at or above 24 has no one-hot selector in the
+/// circuit, so an executor that answered it would produce a trace no honest
+/// prover could prove. The round word is written back unchanged; the guest's own
+/// loop is what advances it.
+fn keccak_frame(pc: u32, old: &[u32]) -> Result<Vec<u32>, EmuError> {
+    let round = old[keccak::ROUND_WORD];
+    if round as usize >= keccak::ROUNDS {
+        return Err(EmuError::DelegationFrame {
+            pc,
+            detail: "the round word is not a keccak-f round",
+        });
+    }
+    let state: [u32; keccak::STATE_WORDS] = core::array::from_fn(|j| old[keccak::STATE_WORD + j]);
+    let mut lanes = lanes_of(&state);
+    keccak_round(&mut lanes, round as usize);
+    let mut new = Vec::with_capacity(keccak::FRAME_WORDS);
+    new.push(round);
+    new.extend_from_slice(&words_of(&lanes));
+    Ok(new)
+}
+
+/// The 50 state words as 25 lanes: state word `2i` is lane `i`'s low half.
+pub fn lanes_of(words: &[u32; keccak::STATE_WORDS]) -> [u64; keccak::LANES] {
     core::array::from_fn(|i| words[2 * i] as u64 | (words[2 * i + 1] as u64) << 32)
 }
 
-/// The 25 lanes as 50 frame words: the inverse of [`lanes_of`].
-pub fn words_of(lanes: &[u64; keccak::LANES]) -> [u32; keccak::FRAME_WORDS] {
+/// The 25 lanes as 50 state words: the inverse of [`lanes_of`].
+pub fn words_of(lanes: &[u64; keccak::LANES]) -> [u32; keccak::STATE_WORDS] {
     core::array::from_fn(|j| (lanes[j / 2] >> (32 * (j % 2))) as u32)
 }
 

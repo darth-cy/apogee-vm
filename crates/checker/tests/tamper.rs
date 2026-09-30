@@ -650,14 +650,19 @@ fn jalr_moved(r: usize, v: u64, next: u64) -> Vec<Cell> {
 // S21: the delegation circuit's cells, and the anchor's linkage
 // ---------------------------------------------------------------------------
 
-/// S21 acceptance 5 and 6, over `guests/keccak-test`: nine shards — six
-/// execution families at `2^20`, the two windows, and the `KECCAK_F`
-/// delegation shard at `2^8`, which is what the count below asserts.
+/// S21 acceptance 5 and 6, over `guests/keccak-test`: eleven shards — six
+/// execution families at `2^20`, the two windows, S-IO's two public-value ones,
+/// and the `KECCAK_F` delegation shard, at `2^16` since S26d.
 ///
-/// **5**, the circuit cell: one state bit and one written word of the
-/// delegation witness, each corrupted alone, each refused by the gate that
-/// reads it — `Constraint` — with the honest twin passing and the structural
-/// counts on screen beside them.
+/// **5**, the circuit cell: four cells of the delegation witness, each corrupted
+/// alone, each refused by the gate that reads it — `Constraint` — with the
+/// honest twin passing and the structural counts on screen beside them. The
+/// cells are S26d's: a state **byte**, a written word, a **round selector** and
+/// a **rotated byte**, the last two being the relations one round a row
+/// introduced. There is no state-bit twin because there is no state bit; and
+/// there is no gap twin because there is no `gap_w{j}` gate — the frame's gap is
+/// four `RANGE16` obligations now, refused in the `Lookup` class, which
+/// `MOD_MUL`'s and `EC_ADD`'s one-row suites already read natively.
 ///
 /// **6**, the linkage: the three anchor twins of `docs/spec/delegation.md`
 /// §5.2, run through the family-parameterized helper every later family invokes by
@@ -677,12 +682,12 @@ fn s21_a5_a6_the_delegation_witness_and_the_anchor_are_pinned() {
     let h = TamperHarness::new(&setup, &archive);
 
     // The structural counts. Eleven shards — six `2^20` execution ones, the two
-    // `2^16` windows, one `2^8` delegation shard and S-IO's two `2^8` public
-    // value ones — and the delegation circuit's width: 204 memory columns
-    // (`cycle`, `live`, `base`, `anchor_value` and four a frame word) and 3,560
-    // witness ones (the state's 1,600 bits, 38 gap bits a read, and the frame
-    // pointer's 60). The delegation shard is no longer the last: S-IO's
-    // families take the highest ids, and the statement's tail is ascending.
+    // `2^16` windows, one `2^16` delegation shard and S-IO's two `2^8` public
+    // value ones — and the delegation circuit's width: 208 memory columns
+    // (`cycle`, `live`, `base`, `anchor_value` and four a frame word, the frame
+    // being 51 words since S26d) and 1,556 witness ones, not one of them a bit.
+    // The delegation shard is no longer the last: S-IO's families take the
+    // highest ids, and the statement's tail is ascending.
     let (public, proofs) = h.honest();
     let shards: Vec<(u32, u32)> = proofs.iter().map(|p| (p.family, p.shard_index)).collect();
     assert_eq!(shards.len(), 11, "eleven shards: {shards:?}");
@@ -698,12 +703,13 @@ fn s21_a5_a6_the_delegation_witness_and_the_anchor_are_pinned() {
     let a = &setup.vk.circuit(KEC).expect("a keccak circuit").artifact;
     assert_eq!(
         (a.memory.len(), a.witness.len(), a.setup.len()),
-        (4 + 4 * k::FRAME_WORDS, 3560, 0)
+        (4 + 4 * k::FRAME_WORDS, 1556, 0)
     );
     assert_eq!(a.trace_vars, common::KECCAK_VARS);
 
-    // Acceptance 5. The invocation rows are the guest's ten, in order; the
-    // twins take the first, found by its mask rather than by its number.
+    // Acceptance 5. The invocation rows are the guest's 240 — ten permutations
+    // of 24 rounds — in order; the twins take the first, found by its mask
+    // rather than by its number.
     let columns = shard_columns(&setup, &archive, KEC, 0, &public.windows)
         .expect("the delegation shard's columns");
     let at = |address: PolyAddress, row: usize| {
@@ -728,68 +734,84 @@ fn s21_a5_a6_the_delegation_witness_and_the_anchor_are_pinned() {
         value,
     };
 
-    // A flipped input state bit: the word it recomposes no longer matches, and
-    // `input_w{j}` is the gate that says so. Flipping the word with it moves
-    // the refusal to the permutation's own output, which is the other half of
-    // the same statement — the circuit is what ties the two together.
-    let bit = at(kec::in_bit(0), live_row);
-    h.assert_rejects(
-        &tamper(vec![keccak_cell(kec::in_bit(0), live_row, Fr::ONE - bit)]),
-        (KEC, 0),
-        CONSTRAINT,
-    );
-    let word = at(kec::word(0, kec::WORD_READ_VALUE), live_row);
-    h.assert_rejects(
-        &tamper(vec![
-            keccak_cell(kec::in_bit(0), live_row, Fr::ONE - bit),
-            keccak_cell(
-                kec::word(0, kec::WORD_READ_VALUE),
-                live_row,
-                word + Fr::ONE - bit - bit,
-            ),
-        ]),
-        (KEC, 0),
-        CONSTRAINT,
-    );
-    // A corrupted written word: the permutation says what it must be.
-    let out = at(kec::word(7, kec::WORD_WRITE_VALUE), live_row);
+    // A corrupted input state byte: the word it recomposes no longer matches,
+    // and `input_w{j}` is the gate that says so.
+    let byte = at(kec::state_in(0, 0), live_row);
     h.assert_rejects(
         &tamper(vec![keccak_cell(
-            kec::word(7, kec::WORD_WRITE_VALUE),
+            kec::state_in(0, 0),
+            live_row,
+            byte + Fr::ONE,
+        )]),
+        (KEC, 0),
+        CONSTRAINT,
+    );
+    // A corrupted written word: the round's output says what it must be.
+    let out_word = 1 + 2 * 3;
+    let out = at(kec::word(out_word, kec::WORD_WRITE_VALUE), live_row);
+    h.assert_rejects(
+        &tamper(vec![keccak_cell(
+            kec::word(out_word, kec::WORD_WRITE_VALUE),
             live_row,
             out + Fr::ONE,
         )]),
         (KEC, 0),
         CONSTRAINT,
     );
-    // And a gap bit, which is the frame read's only bound.
+    // A round selector moved: this is the cell S26d introduced, and the one a
+    // prover would reach for. A row claiming a round other than the frame's
+    // would XOR the wrong constant into lane (0,0) — and `round_rule` refuses
+    // it, because the frame's word 0 is pinned to the selector's own weighted
+    // sum. Clearing the claimed round leaves the sum at 0 and the word at its
+    // value.
+    let claimed = (0..k::ROUNDS)
+        .find(|r| at(kec::round_sel(*r), live_row) == Fr::ONE)
+        .expect("a live row claims a round");
     h.assert_rejects(
-        &tamper(vec![keccak_cell(kec::gap_bit(3, 0), live_row, f(2))]),
+        &tamper(vec![keccak_cell(
+            kec::round_sel(claimed),
+            live_row,
+            Fr::ZERO,
+        )]),
+        (KEC, 0),
+        CONSTRAINT,
+    );
+    // A rotated byte moved: `rho_pi_l{i}_b{j}` is the rotation, written as a
+    // literal-weighted combination of a byte and its mask, and it is the most
+    // intricate relation in the family.
+    let rotated = at(kec::rho_out(7, 3), live_row);
+    h.assert_rejects(
+        &tamper(vec![keccak_cell(
+            kec::rho_out(7, 3),
+            live_row,
+            rotated + Fr::ONE,
+        )]),
         (KEC, 0),
         CONSTRAINT,
     );
 
-    // The negative control: a padding row's cells that every gate of the family
-    // really does gate off `live` — a gap bit, whose `gap_w{j}` carries the
-    // mask on every product, and a frame-pointer headroom bit, whose
-    // `base_in_window` does too.
+    // The negative control: a padding row's cells that every gate and every
+    // obligation of the family really does gate off `live` — a gap chunk, whose
+    // four `RANGE16` obligations all carry `live` as their selector, and a
+    // frame-pointer headroom halfword, whose `base_in_window` carries the mask
+    // on every product.
     h.assert_verifies(
         &tamper(vec![
-            keccak_cell(kec::gap_bit(5, 7), padding_row, Fr::ONE),
-            keccak_cell(kec::base_room_bit(3), padding_row, Fr::ONE),
+            keccak_cell(kec::gap_chunk(5, 1), padding_row, Fr::ONE),
+            keccak_cell(kec::base_room_hi(), padding_row, Fr::ONE),
         ]),
         (KEC, 0),
     );
-    // And its other half, which is the sharper statement: **`in_bit` is not
+    // And its other half, which is the sharper statement: **a state byte is not
     // free on a padding row**, because `input_w{j}` is ungated. It does not
     // need the mask on an honest row — every term is 0 there — but that also
-    // means a padding row's state bits are pinned to the words they recompose,
-    // which are 0. Setting bit 11 asks word 0 to be 2^11 and `input_w0`
-    // refuses it. The distinction matters: a reviewer reading "every gate is
-    // gated on live" would expect this cell to be free, and it is not
+    // means a padding row's state bytes are pinned to the words they recompose,
+    // which are 0. Setting lane 1's byte 3 asks word 3 to be 2^24 and
+    // `input_w3` refuses it. The distinction matters: a reviewer reading "every
+    // gate is gated on live" would expect this cell to be free, and it is not
     // (`docs/spec/constraint-manifest.md` §12.5, §12.10).
     h.assert_rejects(
-        &tamper(vec![keccak_cell(kec::in_bit(11), padding_row, Fr::ONE)]),
+        &tamper(vec![keccak_cell(kec::state_in(1, 3), padding_row, Fr::ONE)]),
         (KEC, 0),
         CONSTRAINT,
     );
@@ -810,7 +832,7 @@ fn s21_a5_a6_the_delegation_witness_and_the_anchor_are_pinned() {
     assert_eq!(
         requests.len() as u64,
         common::KECCAK_INVOCATIONS,
-        "one request a permutation"
+        "one request an invocation, and 24 invocations a permutation"
     );
     // The invocation that pairs with request 0 is the one at its cycle: the
     // anchor binds them there and nowhere else.
