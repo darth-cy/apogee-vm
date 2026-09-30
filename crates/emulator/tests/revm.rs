@@ -712,6 +712,17 @@ fn a4_the_guest_agrees_with_native_revm() {
 /// and they are the committed fixture the fast test above checks. Harvesting
 /// them here is also what keeps that fixture honest: a changed workload that
 /// hashed different bytes would fail here, not silently pass there.
+///
+/// **Since S26d one invocation is one round**, so the fixture holds a
+/// permutation's *input state*: the frame of each round-0 invocation with the
+/// round word itself dropped. `tools/kat-gen/src/revm.rs`'s `guest_frames`
+/// harvests exactly that, and this is the same reading over the same run.
+///
+/// The round count is the other half, and it is the only end-to-end evidence
+/// that the guest shim really issues all 24 calls on a real workload: every
+/// other check of the loop is row-local or in the fill. An invocation count that
+/// is not `24 x` the permutation count means the shim stopped early, and the
+/// frame comparison below would still pass on the prefix it did write.
 #[test]
 #[ignore = "builds the revm guest from source"]
 fn a5_the_harvested_frames_are_the_committed_ones() {
@@ -721,7 +732,13 @@ fn a5_the_harvested_frames_are_the_committed_ones() {
         .delegation(family::KECCAK_F)
         .expect("the guest declares the keccak family");
     let harvested: Vec<Vec<u32>> = (0..buffer.len())
-        .map(|i| buffer.frame(i).iter().map(|q| q.read_value).collect())
+        .filter(|i| buffer.frame(*i)[keccak::ROUND_WORD].read_value == 0)
+        .map(|i| {
+            buffer.frame(i)[keccak::STATE_WORD..]
+                .iter()
+                .map(|q| q.read_value)
+                .collect()
+        })
         .collect();
     let committed = committed_frames();
     assert_eq!(
@@ -729,6 +746,14 @@ fn a5_the_harvested_frames_are_the_committed_ones() {
         committed.len(),
         "the run delegated {} permutations, the fixture holds {}",
         harvested.len(),
+        committed.len()
+    );
+    assert_eq!(
+        buffer.len(),
+        committed.len() * keccak::ROUNDS,
+        "one permutation is {} invocations: {} rounds delegated over {} permutations",
+        keccak::ROUNDS,
+        buffer.len(),
         committed.len()
     );
     for (i, (ours, theirs)) in harvested.iter().zip(&committed).enumerate() {
