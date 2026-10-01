@@ -196,7 +196,7 @@ mod tests {
         assert_eq!(parse_identity(format!("  {hex} \n").as_bytes()), Ok(bytes));
         // And what is refused, by name rather than by a half-decoded value.
         assert!(parse_identity(b"").is_err());
-        assert!(parse_identity(hex[..62].as_bytes()).is_err());
+        assert!(parse_identity(&hex.as_bytes()[..62]).is_err());
         assert!(parse_identity(format!("{hex}00").as_bytes()).is_err());
         assert!(parse_identity(&[b'z'; 64]).is_err());
     }
