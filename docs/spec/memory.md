@@ -316,15 +316,17 @@ Let `h = 2^n` be the height of the window families. **Window `w` covers byte add
 `h = 2^22`, 16,384 at `2^16` — and `N = 2^29 / h` is where ordinary RAM ends and the advice
 region begins.
 
-- RAM is `[RAM_ORIGIN, ADVICE_ORIGIN) = [2^16, 2^31)`, `2^29 − 2^14` words, a count no menu
-  height divides. A `ZERO_WINDOWS` id is in **`[1, N − 1]`**, exactly as at S14: that bound
-  did not move.
+- RAM is `[RAM_ORIGIN, ADVICE_ORIGIN) = [2^16, 2^31)`, `2^29 − 2^14` words, a count no
+  admissible window height divides. A `ZERO_WINDOWS` id is in **`[1, N − 1]`**, exactly as at
+  S14: that bound did not move.
 - The only rows below `ADVICE_ORIGIN` outside RAM are **window 0's rows `y < 2^14`**
   (addresses `0x0..0xFFFC`), at every height, and `INIT_TEARDOWN` masks every one of them
-  with `V[ram_live]`. Two sub-ranges of that masked span are the **public value windows**,
-  claimed by two families of their own at their own pinned height
-  (`docs/spec/public-values.md` §2); the rest of it stays a hole no family initializes, so a
-  null dereference reads a tuple nothing wrote and cannot balance.
+  with `V[ram_live]`. The **upper half** of that masked span is the two **public value
+  windows**, claimed by two families of their own at their own pinned height
+  (`docs/spec/public-values.md` §2); since S-STREAM the pair is `[0x8000, RAM_ORIGIN)`
+  exactly, where at `2^8` it was `[0x8000, 0x8800)` and left a second gap below
+  `RAM_ORIGIN`. What stays a hole no family initializes is `[0, 0x8000)`, so a null
+  dereference reads a tuple nothing wrote and cannot balance.
 - Window 0 holds the image, which starts at `RAM_ORIGIN`. Window `N − 1` holds the initial
   `sp`, `0x8000_0000 − 4` and below; every traced guest touches it.
 - The windows from `N` up are the **advice region**, `[ADVICE_ORIGIN, 2^32)`: `ADVICE_WINDOWS`
@@ -341,8 +343,8 @@ region begins.
 | `INIT_TEARDOWN` | 7 | exactly 1 | 0, the image window | `S[0]`, the image column, committed in program identity |
 | `ZERO_WINDOWS` | 8 | `k ≥ 0` | `w_1 < … < w_k`, each in `[1, N − 1]` | literal 0 |
 | `ADVICE_WINDOWS` | 14 | `k_a ≥ 0` | `N … N + k_a − 1`, consecutive | `M[2]`, committed and bound to nothing |
-| `PUBLIC_INPUT` | 12 | exactly 1 | `PUBLIC_INPUT_WINDOW` = 32, at `2^8` | `M[2]`, held to the statement's `input` |
-| `PUBLIC_OUTPUT` | 13 | exactly 1 | `PUBLIC_OUTPUT_WINDOW` = 33, at `2^8` | literal 0 |
+| `PUBLIC_INPUT` | 12 | exactly 1 | `PUBLIC_INPUT_WINDOW` = 2, at `2^12` | `M[2]`, held to the statement's `input` |
+| `PUBLIC_OUTPUT` | 13 | exactly 1 | `PUBLIC_OUTPUT_WINDOW` = 3, at `2^12` | literal 0 |
 
 All five are present in every `VmConfig` and never detached. The first three have **one
 height** `h`: `decode_program` and `VmConfig::from_bytes` refuse a config where any of them
@@ -352,9 +354,15 @@ with id ≥ 1 inside the image window, giving image words a second init row; an
 one `advice_first_window(h)` computes, and the statement, carrying a count and no list, would
 have no way to say which. The default height of all three is `2^22`.
 
-The last two are at **`family::PUBLIC_WINDOW_HEIGHT` = `2^8`, and only that**, because a
-window's first address is `4h·w` and the height is therefore what *places* the windows: `2^8`
-is the one menu entry putting the two public origins in two distinct windows.
+The last two are at **`family::PUBLIC_WINDOW_HEIGHT` = `2^12`, and only that**, because a
+window's first address is `4h·w` and the height is therefore what *places* the windows:
+`4·2^12·2 = 0x8000` and `4·2^12·3 = 0xC000` are `PUBLIC_INPUT_ORIGIN` and
+`PUBLIC_OUTPUT_ORIGIN`, two distinct windows ending flush against `RAM_ORIGIN`. **It was
+`2^8`, windows 32 and 33, until S-STREAM**, which raised it to fit a real block's journal
+and could go no further: two `2^14` windows want 128 KiB where the hole below `RAM_ORIGIN`
+has 64, and the only `2^14` window inside 64 KiB is window 0, which initializes address 0
+and would make a null dereference balance (§3.1). `family::HEIGHT_MENU` gained `2^12` to
+carry it, and these two families are the only ones that may take it.
 `decode_program` writes the constant and ignores what a caller asked for, so “every family at
 `h`” keeps meaning every family whose height is a choice, and `verifier_core::window_height`
 refuses any other — the check that matters, because it is the one on bytes a verifier was
@@ -362,7 +370,7 @@ handed. `docs/spec/public-values.md` §2 is normative for both families.
 
 ### 3.3 The artifacts
 
-All three artifacts: `trace_vars = n`, which is `8` for the two public families, whose
+All three artifacts: `trace_vars = n`, which is `12` for the two public families, whose
 height is pinned; memory columns `M[0] = teardown_ts`, `M[1] = teardown_value`; no witness
 columns; no enforcing gates; no lookups and no channel; virtual `V[row]`. `INIT_TEARDOWN` adds `S[0] = init_value`
 and `V[ram_live]`; `value_window_artifact` adds `M[2] = init_value` instead. `WC` is slot 5.
@@ -480,8 +488,11 @@ families 7, 8 and 14; `SHARD_COUNTS[INIT_TEARDOWN] = 1`; the window list's lengt
   stop (§3.1) — so this is the whole of what is asked of them;
 - `4h ≥ PUBLIC_OUTPUT_ORIGIN + PUBLIC_WINDOW_BYTES`, so both public windows lie inside RAM
   window 0, whose rows below `RAM_ORIGIN` are masked at every height. Every menu height but
-  `2^8` satisfies it. Without it a `ZERO_WINDOWS` id could claim a public window and give a
-  public word a second init row.
+  `2^8` and `2^12` satisfies it. Without it a `ZERO_WINDOWS` id could claim a public window
+  and give a public word a second init row. **S-STREAM did not move this floor**, which is
+  the one thing growing the public windows could have moved: the right-hand side went from
+  `0x8800` to `0x10000`, so `h ≥ 8,704` became `h ≥ 2^14`, and `2^16` is the smallest menu
+  entry above either.
 
 `program::check_memory_windows` is these rules; the height and presence half of them is
 `verifier_core::window_height`, which `VmConfig::from_bytes` also calls, so a config that
@@ -642,8 +653,10 @@ execution chooses: no shard count, no window list. Step 4's list is empty for ev
 that has no setup column, which since S21 is every delegation family and since S-IO the three
 new window families too — an `S` column is bound by identity, and one execution's public
 values or advice have no business in every execution's identity
-(`docs/spec/public-values.md` §4). Step 2 still lists the whole family set, so **adding a
-family moves every program's identity**, and S-IO did. `program::setup_commitments` is step 4's
+(`docs/spec/public-values.md` §4). Step 2 still lists the whole family set **and every
+family's height**, so **adding a family moves every program's identity** — S-IO did — and so
+does changing a pinned height: S-STREAM's `PUBLIC_WINDOW_HEIGHT` of `2^8 → 2^12` moved every
+one of them again, though the recipe itself is unchanged. `program::setup_commitments` is step 4's
 commitments (it needs the SRS); `program::identity_from_commitments` is the digest over them
 (it does not), which is what a verifying-key loader recomputes.
 
@@ -755,9 +768,10 @@ read. This, too, needs the gap obligation.
 
 **The RAM-window bound** is that an address **no family initializes** has no init row, and
 since S-IO the initialized regions are not one contiguous span. Below `RAM_ORIGIN` the masked
-span holds the two public windows, each claimed by a family of its own at `2^8`, and the rest
-of it — `[0, 0x8000)` and `[0x8800, RAM_ORIGIN)` — is a hole. At `2^31` and above is the
-advice region, claimed by the `k_a` consecutive `ADVICE_WINDOWS` shards the statement counts
+span holds the two public windows, each claimed by a family of its own at `2^12`, and the
+rest of it — `[0, 0x8000)`, and until S-STREAM `[0x8800, RAM_ORIGIN)` as well — is a hole.
+At `2^31` and above is the advice region, claimed by the `k_a` consecutive
+`ADVICE_WINDOWS` shards the statement counts
 and by nothing past them. The bound rests on the `V[ram_live]` mask, `1 ≤ id ≤ N − 1` for
 `ZERO_WINDOWS`, `N + k_a ≤ 2^30 / h` for the advice windows, the pinned public window height
 with §3.5's `4h` rule under it, and the gap obligation. A zero window at id 0 has no mask, so
@@ -848,9 +862,11 @@ families were added; the tuple, the frame, the boundary and the reconciliation a
 **Cost** at `h = 2^22`: at least two `h`-sized window shards per proof (window 0 and the
 stack window), `2^23` leaf pairs and four committed `2^22`-entry columns, even for fib's
 2,117 cycles; each further touched 16 MiB window adds `2^22` rows; at most `2^29`. S14's
-tests run at `h = 2^16`. Since S-IO, two `2^8` shards more in every proof — the two public
-families, 5 committed columns of 256 rows between them — and one `h`-sized shard per advice
-window the prover supplies.
+tests run at `h = 2^16`. Since S-IO, two more shards in every proof — the two public
+families — and one `h`-sized shard per advice window the prover supplies. Those two were
+`2^8` and 5 committed columns of 256 rows between them until S-STREAM, and are `2^12` and
+5 columns of 4,096 rows now: sixteen times the rows, on the cheapest rows the VM has — two
+leaves and a product tree, no enforcing gate, no lookup, no channel.
 
 ---
 

@@ -377,8 +377,10 @@ program has an instruction it claims, and the two init/teardown families always;
 preprocessor derives the set, nothing selects it. An instruction whose family is absent fails preprocessing loudly.
 
 **VmConfig** — a program's static VM shape: the family set, each family's trace height
-from the menu `{2^16, 2^18, 2^20, 2^22}`, and `bytecode_size_words`. Per-proof shard
-counts are not part of it.
+from the menu `{2^8, 2^12, 2^16, 2^18, 2^20, 2^22}`, and `bytecode_size_words`. Per-proof
+shard counts are not part of it. The low two entries are not an execution family's:
+`2^8` is S21's delegation height and `2^12` is S-STREAM's, the pinned height of the two
+public-value families and of nothing else.
 
 **Statement descriptor** — the static `VmConfig`, the per-proof shard count of each of
 its families, and the RAM window list, absorbed as **three adjacent typed messages**,
@@ -461,9 +463,14 @@ alone, the public windows and the advice region each having a family of their ow
 
 **Public values** — what a proof says an execution's input and output *were*: two fixed
 RAM windows in the hole below `RAM_ORIGIN`, the **public input** at `0x8000` and the
-**journal** at `0x8400`, a kilobyte each, word 0 the payload's byte length. `PUBLIC_INPUT`
-(12) and `PUBLIC_OUTPUT` (13) are their families, in every `VmConfig` at a pinned `2^8` and
-proving exactly one shard each. Bound by the memory argument plus one comparison per shard
+**journal** at `0xC000`, sixteen kilobytes each, word 0 the payload's byte length — so a
+payload is at most 16,380 bytes. `PUBLIC_INPUT` (12) and `PUBLIC_OUTPUT` (13) are their
+families, in every `VmConfig` at a pinned `2^12` and proving exactly one shard each. The
+height is what *places* the windows, and `2^12` is the **ceiling**: two `2^14` windows
+want 128 KiB where the hole has 64, and the only `2^14` window that fits is window 0,
+which initializes address 0 and would let a null dereference balance. They were `0x8400`
+and a kilobyte each at `2^8` until S-STREAM. Bound by the memory argument plus one
+comparison per shard
 (`verify_shard_local` step 10c), and **not** by anything the guest does: no hash, no
 register convention, no syscall. A guest reads its input with ordinary loads and writes its
 journal with ordinary stores. Not a stream, and not a syscall: there is no descriptor and
@@ -473,7 +480,9 @@ no I/O call to be one. `docs/spec/public-values.md`.
 the order it appended it, and what the statement's `output` is held to. Bound as the
 window's **final** value, so nothing orders its writes and a guest that panics has still
 published what it committed. Its family's init leaf is a literal 0, which is what stops a
-prover supplying the journal at timestamp 0 instead of storing it.
+prover supplying the journal at timestamp 0 instead of storing it. At most 16,380 bytes,
+and `guest_sdk::commit` exits 70 rather than truncating — so an output whose length grows
+with the work is digested, not carried (`docs/spec/public-values.md` §9).
 
 **Advice** — memory whose initial values the prover chose: `[ADVICE_ORIGIN, 2^32)`,
 initialized by the `ADVICE_WINDOWS` family (14) from a committed column **nothing binds**,

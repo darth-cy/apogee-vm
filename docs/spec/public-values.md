@@ -25,7 +25,7 @@ A zkVM has three kinds of memory and they are not interchangeable:
 | --- | --- | --- | --- |
 | **RAM** | the program | nobody | `[RAM_ORIGIN, ADVICE_ORIGIN)`, `docs/spec/memory.md` §3 |
 | **private advice** | the prover | nobody | `[ADVICE_ORIGIN, 2^32)`, §6 |
-| **public values** | the statement | the verifier | `[0x8000, 0x8800)`, §2 |
+| **public values** | the statement | the verifier | `[0x8000, 0x10000)`, §2 |
 
 The third is the one a proof is *about*. A verifier that cannot say what went in and what
 came out has verified that some execution of some program happened, which is not a claim
@@ -85,9 +85,8 @@ a run is given, one of which the statement carries and one of which nothing bind
 0x0000_0000  ┐
              │  a hole: no family initializes it, so a null dereference is a read of a
              │  tuple nothing wrote and the shard cannot balance
-0x0000_8000  ┤  PUBLIC_INPUT_ORIGIN    256 words   the public input
-0x0000_8400  ┤  PUBLIC_OUTPUT_ORIGIN   256 words   the journal
-0x0000_8800  ┤  the hole again
+0x0000_8000  ┤  PUBLIC_INPUT_ORIGIN    4,096 words   the public input
+0x0000_C000  ┤  PUBLIC_OUTPUT_ORIGIN   4,096 words   the journal
 0x0001_0000  ┤  RAM_ORIGIN
              │  ordinary RAM: the image, the heap, the stack
 0x8000_0000  ┤  ADVICE_ORIGIN
@@ -100,7 +99,13 @@ hole: `INIT_TEARDOWN` masks RAM window 0's rows below `2^14` with `V[ram_live]` 
 `ZERO_WINDOWS` never claims window 0 (`docs/spec/memory.md` §3.3), so no RAM window family
 initializes an address there. The mask's bound is a **constant**, `[0, 2^16)`, whatever the
 window height, so two windows of that hole are free to claim at every admissible height
-without moving a single existing row — and the rest of it stays a hole.
+without moving a single existing row.
+
+Since S-STREAM the two claim the **whole** of the hole's upper half — `2^12` each,
+`[0x8000, 0x10000)`, ending flush against `RAM_ORIGIN` — where until then they were `2^8`
+each and `[0x8800, RAM_ORIGIN)` was a second, unclaimed stretch of it. What survives is
+`[0, 0x8000)`, and that is the half the null-dereference argument has always rested on: a
+read at 0 is a read of a tuple nothing wrote, and a shard carrying one cannot balance.
 
 **The address-space tag is `RAM` for all three regions**, and that is what makes them cost
 the rest of the machine nothing. A load's memory leaf names its space with a literal
@@ -123,19 +128,37 @@ requires `N + k <= 2^30 / h`, which is the top of the address space.
 window 0 — `[0, 4h)` — or a `ZERO_WINDOWS` id could claim one and give a public word a
 second init row and a prover a second value to choose. `verifier_core::window_height`
 requires `4h >= PUBLIC_OUTPUT_ORIGIN + PUBLIC_WINDOW_BYTES`, which every menu height but
-`2^8` satisfies. It is a rule about statements, not about programs: derivation already
-refuses a smaller window height for other reasons.
+`2^8` and `2^12` satisfies. It is a rule about statements, not about programs: derivation
+already refuses a smaller window height for other reasons.
 
-**The public windows' height is pinned.** A window's first address is `4·height·window`, so
-the height is what places the windows, and only `family::PUBLIC_WINDOW_HEIGHT = 2^8` puts
-the two origins in two distinct windows — `family::PUBLIC_INPUT_WINDOW` = 32 and
-`family::PUBLIC_OUTPUT_WINDOW` = 33. `program::decode_program` therefore writes the
-constant and ignores what a caller asked for, so "every family at `h`" keeps meaning every
-family whose height is a choice; `verifier_core::window_height`, which runs inside
-`VmConfig::from_bytes`, **refuses** any other, and that is the check that matters, because
-it is the one on bytes a verifier was handed. The height also caps the verifier's work over
-the public values at two 256-point multilinear evaluations, which is what keeps this cheap
-inside the recursion guest.
+**That floor did not move when the windows grew**, which is worth saying because growing
+them is exactly the change that could have moved it. The right-hand side went from `0x8800`
+to `0x10000`, so the rule went from `h >= 8,704` to `h >= 2^14` — and the smallest menu
+entry above either is the same `2^16`.
+
+**The public windows' height is pinned, and `2^12` is the ceiling.** A window's first
+address is `4·height·window`, so the height is what places the windows:
+`family::PUBLIC_WINDOW_HEIGHT = 2^12` puts the two origins in windows
+`family::PUBLIC_INPUT_WINDOW` = 2 and `family::PUBLIC_OUTPUT_WINDOW` = 3, distinct and
+ending flush against `RAM_ORIGIN`. **There is no step above it.** The hole is 64 KiB; two
+`2^14` windows need 128 KiB, and the only `2^14` window that fits inside 64 KiB is window
+0 — which initializes address 0, so a null dereference would balance and the hole's whole
+purpose would be gone. Anything further means moving `RAM_ORIGIN`, which moves every
+program's load address and eats into every decoded table's pc reach.
+
+**It was `2^8` until S-STREAM**, where the pair was windows 32 and 33 at `0x8000` and
+`0x8400`; §9 is why it grew and what the growth is and is not worth.
+`family::HEIGHT_MENU` gained `2^12` at index 1 to carry it — an entry no execution family
+can take (the `TIMESTAMP` channel needs 19 variables) and no window family can take (the
+`4h` rule above), which leaves it widening only what a key may declare for the three
+channel-free delegation families, and that is benign.
+
+`program::decode_program` writes the constant and ignores what a caller asked for, so
+"every family at `h`" keeps meaning every family whose height is a choice;
+`verifier_core::window_height`, which runs inside `VmConfig::from_bytes`, **refuses** any
+other, and that is the check that matters, because it is the one on bytes a verifier was
+handed. The height is also what fixes the verifier's work over the public values, now two
+4,096-point multilinear evaluations (§8).
 
 ---
 
@@ -148,7 +171,8 @@ word 0        the payload's byte length
 words 1..     the payload, little-endian, zero-padded to the end of the window
 ```
 
-so a payload is at most `guest_memory::PUBLIC_PAYLOAD_BYTES` = 1020 bytes.
+so a payload is at most `guest_memory::PUBLIC_PAYLOAD_BYTES` = 16,380 bytes — the window's
+`4 · 2^12` less the length word, and 1,020 before S-STREAM raised the height (§2).
 `verifier_core::public_io_words` is the one spelling of the conversion, and three readers
 call it: the executor seeding the input window, `trace`'s column builder filling the init
 column, and the verifier evaluating what it was handed. `derive_global_phase` refuses a
@@ -169,8 +193,8 @@ where the ambiguity is.
 
 | family | id | height | shards | init leaf | teardown leaf |
 | --- | --- | --- | --- | --- | --- |
-| `PUBLIC_INPUT` | 12 | `2^8`, pinned | exactly 1, window 32 | `M[2] init_value` | `M[0]`, `M[1]` |
-| `PUBLIC_OUTPUT` | 13 | `2^8`, pinned | exactly 1, window 33 | literal 0 | `M[0]`, `M[1]` |
+| `PUBLIC_INPUT` | 12 | `2^12`, pinned | exactly 1, window 2 | `M[2] init_value` | `M[0]`, `M[1]` |
+| `PUBLIC_OUTPUT` | 13 | `2^12`, pinned | exactly 1, window 3 | literal 0 | `M[0]`, `M[1]` |
 | `ADVICE_WINDOWS` | 14 | the window height | `k >= 0`, windows `N … N+k−1` | `M[2] init_value` | `M[0]`, `M[1]` |
 
 All three are `CYCLE_OWNING` false and in **every** `VmConfig`. The two public families
@@ -361,22 +385,67 @@ address a run was given nothing for.
 | changes to any execution family's circuit | 0 |
 | enforcing gates added anywhere | 0 |
 | new artifact constructors | 1, shared by two families |
-| committed columns | 3 at `2^8` rows, 2 at `2^8` rows, and 3 per advice window |
+| committed columns | 3 at `2^12` rows, 2 at `2^12` rows, and 3 per advice window |
 | shards per proof | +2 always, +`k` where there is advice |
-| verifier work per proof | two 256-point multilinear evaluations |
+| verifier work per proof | two 4,096-point multilinear evaluations |
 | guest work | none at exit; a load per public input word read, a store per journal byte |
+
+**S-STREAM moved two of those rows and nothing else.** The two public shards are `2^12`
+rows where they were `2^8` — sixteen times the rows on five committed columns of families
+with no enforcing gate, no lookup, no channel and degree 1 throughout, which is the
+cheapest kind of row this VM has. And step 10c evaluates over 4,096 points rather than
+256: `MultilinearPoly::evaluate` folds, so a window costs `2^12 − 1` multiplies where it
+cost `2^8 − 1`, **8,190 `Fr` multiplies for the pair against 510**, over a 2,048-entry
+`Fr` fold buffer and the 4,096-word `u32` vector `public_io_words` lays out — 80 KiB live
+per shard, 163,840 bytes across the two. Noise on a native verifier; a budget a future
+recursion guest will carry, which is why it is written down here rather than left to be
+rediscovered.
 
 ---
 
 ## 9. Limits
 
-**1020 bytes each, and that is deliberate.** Public values are what the verifier reads, so
-they should be a commitment, a header or a result — not a blob. A large input belongs in the
-advice region, where it costs the verifier nothing and the guest checks it against something
-public, which is the pattern §6 states and `guests/revm-block` follows. The windows can grow
-inside the hole below `RAM_ORIGIN` — 64 KiB is free and `2^10` and `2^12` are even powers of
-two — at the price of a longer multilinear evaluation for the verifier and one more entry on
-`family::HEIGHT_MENU`.
+**16,380 bytes each, and the room to grow is now spent.** This paragraph used to read
+"1020 bytes each, and that is deliberate", and it offered the way out in the same breath:
+*the windows can grow inside the hole below `RAM_ORIGIN` — 64 KiB is free and `2^10` and
+`2^12` are even powers of two — at the price of a longer multilinear evaluation for the
+verifier and one more entry on `family::HEIGHT_MENU`.* **S-STREAM took that offer and paid
+exactly that price**: `2^12`, the journal at `0xC000`, two 4,096-point evaluations (§8),
+and `2^12` at index 1 of the menu. Nothing else in this page's mechanism changed — no new
+family, no new message, no new challenge, no gate.
+
+**There is no second growth**, and §2 is the arithmetic: `2^12` is the geometric ceiling.
+Two `2^14` windows want 128 KiB where the hole has 64, and the one `2^14` window that fits
+is window 0, which initializes address 0 and would make a null dereference balance.
+Growing past this means moving `RAM_ORIGIN` — every program's load address, and pc reach
+taken off every decoded table.
+
+**What it bought.** `docs/spec/revm-block.md` §2's output commitment is a per-transaction
+record — 13 fixed bytes plus the transaction's return data verbatim — under two 32-byte
+digests. At zero return data the journal held `(1020 − 64) / 13` = 73 transactions and now
+holds `(16380 − 64) / 13` = 1,255; at the 45 bytes a transaction the pinned mini-block
+measures, 21 and ~360. The real mainnet blocks measured in this repository carry 67, 132,
+240, 376 and 450 transactions (`docs/handoff/S26-cycle.md`, and S25's pinned block): at
+1,020 bytes not one of the five fit, and at 16,380 the first three do. The crossover moved
+from below the smallest real block to above the median one.
+
+**It is headroom, and it is not a bound.** That distinction is the whole of this
+paragraph. A record's `output` is the transaction's return data taken *verbatim* behind a
+`u32` length, so a single maximum-size top-level `CREATE` is 24,576 bytes of deployed code
+in one record — 24,589 bytes, which overflows `2^12` on its own and would overflow any
+window this hole could ever hold. A journal whose length is a function of what the
+execution did cannot be made to fit by growing a fixed window. It can only be digested.
+
+**So the digest is still the right answer for an unbounded journal, and it is already
+built.** Public values are what the verifier reads: a commitment, a header or a result,
+not a blob. A large *input* belongs in the advice region, where it costs the verifier
+nothing and the guest checks it against something public — the pattern §6 states and
+`guests/revm-block` follows. A large *output* belongs behind a digest, which is what
+`guests/revm-block`'s **stateless** binary does: a fixed 148-byte journal naming the two
+state roots and carrying `keccak256` of §2's record stream (`docs/spec/revm-block.md` §5).
+That binary, and not the mini one, is the owner's chosen full-block target.
+`docs/spec/revm-block.md` §2 stays **frozen** — the mini guest's format did not change
+here, it only has room now.
 
 **Nothing orders the journal's writes.** The proof binds the window's final contents, so a
 guest that writes word 7 before word 3 publishes the same journal. `commit`'s length word is

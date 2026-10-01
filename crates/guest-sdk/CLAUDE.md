@@ -138,7 +138,13 @@ the crate layout, the I/O rules, the build, and exporting the result as a
   back and must not see one it did not write. The length word is a plain store like the
   payload, so a partial `commit` is not a thing that can happen; and nothing orders the
   journal's writes — the proof binds the window's final contents, and the length word is
-  what gives the bytes an order.
+  what gives the bytes an order. **The ceiling it exits on is
+  `guest_memory::PUBLIC_PAYLOAD_BYTES`, which is 16,380 since S-STREAM and was 1,020
+  before it** — `family::PUBLIC_WINDOW_HEIGHT` went `2^8` → `2^12` and the journal window
+  moved to `0xC000` with it, the two windows now filling `[0x8000, RAM_ORIGIN)` exactly.
+  The input window grew by the same factor. This module names neither number: both
+  lengths are read from `constants::guest_memory`, which is why the raise needed no change
+  here at all.
 - **`advice()` on a run given no advice is a fatal `OutOfBounds`, not an empty slice.**
   No advice means no advice **region**: `trace::advice_region_words(&[])` is 0, so the
   executor makes nothing above `ADVICE_ORIGIN` addressable and a program that uses no

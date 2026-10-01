@@ -261,11 +261,13 @@ wants to be elsewhere is not one this VM can run — and enforcing it is also wh
 hostile `p_memsz` from sizing the loader's slot vector.
 
 **The RAM window is not the whole addressable space, and has not been since S-IO.** Two
-1 KiB **public value** windows sit below it at `PUBLIC_INPUT_ORIGIN` = `0x8000` and
-`PUBLIC_OUTPUT_ORIGIN` = `0x8400`, and the **advice** region sits above it at
+**16 KiB** public value windows sit below it at `PUBLIC_INPUT_ORIGIN` = `0x8000` and
+`PUBLIC_OUTPUT_ORIGIN` = `0xC000`, and the **advice** region sits above it at
 `ADVICE_ORIGIN` = `0x8000_0000`; `trace::addressable` is the executor's rule and everything
-else — `[0, 0x8000)` and `[0x8800, RAM_ORIGIN)` — is a hole, so a null dereference is still
-a loud error. None of the three is in the ELF, so no linker symbol names them; a guest
+else — `[0, 0x8000)`, and nothing above the windows, which end flush against `RAM_ORIGIN`
+since S-STREAM raised their height to `2^12` — is a hole, so a null dereference is still
+a loud error. They were 1 KiB each at `0x8000` and `0x8400` until then, with a second hole
+`[0x8800, RAM_ORIGIN)` above them. None of the three is in the ELF, so no linker symbol names them; a guest
 reaches them with ordinary loads and stores at the constants.
 `docs/spec/public-values.md` §2 is normative, and this section's `MEMORY` line
 stays exactly what `link.ld` says.

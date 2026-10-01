@@ -10,17 +10,28 @@ cargo run --release -p bench -- zerocheck-verify # just that one
 cargo run --release -p bench -- --list           # the registry, and the verb
 
 cargo run --release -p bench -- prove mini-block --hourly-usd 2.36 --json report.json
-cargo run --release -p bench -- prove mini-block --in-flight 4   # S26: the STREAMING prover
+cargo run --release -p bench -- prove mini-block --in-flight 4   # the backpressure bound
+cargo run --release -p bench -- prove mini-block --out proofs/   # write the proof out
 ```
 
-`--in-flight <n>` proves with `prover::prove_block_streaming` instead of `prove_block`:
-the same block byte for byte, at a peak that does not grow with the shard count
-(`docs/spec/streaming.md`). There is no archive on that path and so no five phase
-timings, so the report's four clocks read differently and the printed table says how —
-`execution` is **both** passes' executor, `commit` is pass 1's, `gkr` is pass 2's whole
-proving region (the GKR proof and the opening, fused over one base layer), and `opening`
-and `final` are 0 because there is no phase boundary there to measure. `BenchReport`
-gained one field, `in_flight`, and it is `None` on the archived path.
+**`prove` is `prover::prove_block_streaming`, and since S-STREAM there is no other
+path** (`docs/spec/streaming.md`). `--in-flight <n>` no longer *selects* a path: it is
+how many filled shards may be held at once, which is what bounds the peak, and it
+defaults to `block::DEFAULT_IN_FLIGHT` = **8** — measured on a 51-shard mini-block at
+77.10 GiB for four against 83.91 for eight, the extra four worth 14% of the wall clock.
+The block does not depend on it.
+
+There is no archive and so no five phase timings, so the report's four clocks read
+differently from a pre-S-STREAM one and the printed table says how — `execution` is
+**both** passes' executor, `commit` is pass 1's, `gkr` is pass 2's whole proving region
+(the GKR proof and the opening, fused over one base layer), and `opening` and `final`
+are 0 because there is no phase boundary there to measure. `BenchReport`'s `in_flight`
+field is now always `Some`.
+
+`--out <dir>` writes the verified block's four files through
+`verifier::proof_archive::write_proof` — `<fixture>.vk`, `.identity`, `.public` and
+`.block`, which is exactly what `verifier block` reads back. **It is the only thing a
+proving run archives**, and it is written only after `host::verify` succeeds.
 
 **The charter moved by one line at S25, and only one.** It used to read "no assertions, no
 thresholds, no committed output"; the stage requires the report to be committed to its
@@ -59,20 +70,25 @@ commit as any optimization; this is where that benchmark goes.
   arguments, no output but stdout — and a proving job has to be told which block and what
   the hardware costs. Adding a parameter to the registry would have meant changing eight
   signatures for one caller; `main` matches the verb before the table instead.
-- **The `prove` verb's per-stage timings are the `TraceArchive`'s own phase sections**,
-  which S12 froze and S16 filled in — must-be-exact 5, *"not from ad-hoc stopwatches
-  sprinkled in the prover"*. It does **not** enable `prover/metrics`: turning that on from
-  a dependency entry would turn it on for every `cargo build --workspace`, and
-  `docs/spec/metrics.md` §1's claim that the feature-off build is the code that was there
-  before would stop holding. The archive's phase timings need no feature.
-- **The five phases do not sum to wall-clock, and the remainder is named.**
+- **The `prove` verb's per-stage timings come from the prover and not from this crate**,
+  which is must-be-exact 5, *"not from ad-hoc stopwatches sprinkled in the prover"*. They
+  were the `TraceArchive`'s five phase sections until S-STREAM; they are now
+  `prover::StreamingReport`'s four clocks, measured inside `prove_block_streaming` around
+  the executor and around each pass. It enables **no cargo feature** to get them — they
+  are in the default build, and a feature turned on from a dependency entry would be on
+  for every `cargo build --workspace`. (There was a `prover/metrics` harness that measured
+  the same job a second way; it was retired at S-STREAM with the archived path it
+  instrumented, and nothing here depended on it.)
+- **The phases do not sum to wall-clock, and the remainder is named.**
   `ProverSetup::new`, the plan check, `finish` and the block assembly sit outside every
-  phase's span; the report carries `setup_ms` separately and `unattributed_ms` for the rest,
-  which is the discipline `docs/spec/metrics.md` §2 applies to its own stage tree.
-- **Peak memory is reported where the platform gives one and refused where it does not.**
-  Linux's `/proc/self/status` carries `VmHWM` in plain text; macOS has no equivalent short
-  of `unsafe`, which master anti-goal 4 bans, so the field is `None` and its `source` says
-  why and names `/usr/bin/time -l` as the thing to wrap the run in.
+  phase's span; the report carries `setup_ms` separately and `unattributed_ms` for the
+  rest, rather than absorbing it into a total nobody could check against a clock.
+- **Peak memory is reported where the platform gives one and refused where it does not,
+  and `src/report.rs`'s `peak_rss` is where that rule is written down.** Linux's
+  `/proc/self/status` carries `VmHWM` in plain text; macOS has no equivalent short of
+  `unsafe`, which master anti-goal 4 bans, so the field is `None` and its `source` says why
+  and names `/usr/bin/time -l` — this repository's ground truth for peak RSS, and what
+  every handoff note's memory figure was taken with — as the thing to wrap the run in.
 - **Adding a routine is a module plus a row in `ROUTINES`.** The registry in `main.rs` is
   `(selector, one line of what it measures, entry point)`. No trait, no registration
   macro, no dynamic dispatch beyond a function pointer.

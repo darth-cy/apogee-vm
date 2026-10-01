@@ -9,13 +9,22 @@ S25 filled it in. The normative pages are `docs/spec/revm-block.md` for the witn
 `docs/spec/public-values.md` for what a proof binds.
 
 ```rust
-// the wrappers. `prover::prove_block` and `verifier::verify_block` remain the
-// protocol entry points; these save a caller the eight-step preamble and nothing else.
+// the wrappers. `prover::prove_block_streaming` and `verifier::verify_block` remain the
+// protocol entry points; these save a caller the preamble and nothing else.
 pub fn setup(elf: &[u8], params: &ProgramParams, srs: Srs) -> Result<ProverSetup, String>;
-pub fn prove(setup: &ProverSetup, io: &GuestIo) -> Result<Proven, String>;
+// S-STREAM: `max_in_flight` is the THIRD argument, the backpressure that bounds the peak.
+pub fn prove(setup: &ProverSetup, io: &GuestIo, max_in_flight: usize) -> Result<Proven, String>;
 pub fn verify(vk: &VerifyingKey, block: &BlockProof) -> Result<(), VerifyError>;
-pub struct Proven { pub block: BlockProof, pub archive: TraceArchive, pub exit_code: i32,
+// S-STREAM: a `StreamingReport` where a `TraceArchive` was, and no per-phase section clocks.
+pub struct Proven { pub block: BlockProof, pub report: StreamingReport, pub exit_code: i32,
                     pub cycles: u64, pub journal: Vec<u8>, pub wall_nanos: u64 }
+
+// S-STREAM: `verifier::proof_archive`, re-exported whole. The four files a proved block
+// leaves on disk -- <stem>.{vk,identity,public,block}, exactly what `verifier block`
+// reads back. **The proof is the only thing a proving run archives.** It lives in
+// `crates/verifier` because the format's reader is the CLI, so there is one definition
+// of it; `crates/verifier/CLAUDE.md` is the account.
+pub use verifier::proof_archive;   // ProofPaths, identity_hex, write_proof, read_proof
 
 // the recorder
 pub mod recorder {
@@ -82,15 +91,33 @@ pub fn build_revm_guest(mode: Mode) -> Result<Vec<u8>, String>;   // always --re
   makes a proof a proof *of a particular program* is `vk.identity.to_bytes()` against a
   value from a channel the prover does not control; that is one comparison and the caller
   writes it, exactly as the `verifier` CLI makes it a separate argument.
-- **`prove` times the executor, and that is the one thing it adds.** S12 froze a per-phase
-  wall-clock field on the trace archive's post-execution section and **every caller in the
-  repository passed zero**, because nothing timed `trace_run`. S25's must-be-exact 5 wants
-  the bench report's per-stage timings to come from those sections rather than from
-  stopwatches inside the prover, so the execution phase's number has to be real, and this
-  is the one place on the proving path that runs the executor.
+- **`prove` is `prove_block_streaming` and nothing else** (S-STREAM). The archived path —
+  `prover::prove_block` over a `TraceArchive` — still compiles, because
+  `checker::TamperHarness` and the checker's column-fill suites are built on the archive
+  it reads, but **nothing proves through it**, here or anywhere
+  (`crates/prover/tests/one_proving_path.rs` greps the repository for it). Two consequences
+  a caller sees. `max_in_flight` is an **argument**, at least 1: it is the backpressure
+  that bounds the peak, and the caller is the only one that knows the machine. And there is
+  **no archive to return**, so `Proven` carries a `StreamingReport` and there are no
+  per-phase section clocks — the report's four are *sums of disjoint intervals*, execution
+  and proving interleaving and the guest being executed **twice**, so one of them is not
+  the same quantity as a pre-S-STREAM archived phase number and must not be compared with
+  one.
+- **`prove` no longer times the executor, and does not need to.** S12 froze a per-phase
+  wall-clock field on the trace archive's post-execution section and every caller passed
+  zero, because nothing timed `trace_run`; S25's must-be-exact 5 wanted the bench report's
+  per-stage timings to come from those sections, so this function measured it, being the
+  one place on the proving path that ran the executor. Since S-STREAM the measurement is
+  inside the prover, around the executor itself — `StreamingReport`'s `pass1_execute_ns`
+  and `pass2_execute_ns` — which is a tighter interval than this function could take, and
+  the archive those sections lived on is gone.
 - **`prove` does not check the exit status.** A failing guest is still a provable execution
   and its journal is still bound; whether exit 0 was required is the caller's statement to
-  make, and `Proven::exit_code` is how it makes it.
+  make, and `Proven::exit_code` is how it makes it. Since S-STREAM that field and
+  `Proven::journal` are read off `block.statement()` — `exit_status` as an `i32` of the
+  same 32 bits, so `exit(-1)` still reads back as `-1`, and `output` — rather than off an
+  `Execution`, there being none to read. They are the values the **proof binds**, which is
+  strictly better than a second reading of them beside it.
 - **The recorder's touch set comes from running the block, never from a list.** Nothing
   short of executing knows which accounts and slots an EVM execution reads: a recorder that
   took the access lists plus every `to` would miss every `SLOAD` of a dynamic key and every
@@ -194,7 +221,7 @@ re-records the pinned one from the cache alone to prove the recording determinis
 | --- | --- |
 | `tests/mpt.rs` | the trie: Ethereum's three published root vectors (empty, `dogglesworth`, `horse`), order- and delete-invariance over every permutation, a sparse rebuild from every prefix of its own nodes, and each refusal separately — a missing node is not an absence, a blinded collapse names its hash, every canonical-form rule refuses. 16 tests |
 | `tests/stateless.rs` | acceptance 7: 17 real mainnet accounts and 37 real slots authenticated against the real parent state root, every one of 210 real nodes corrupted in turn and refused, every one dropped in turn and refused **as missing rather than as absent**; then the synthetic transition — the pinned root recomputed, every node corrupted, every balance corrupted, and the two system-contract addresses against their EIPs. 9 fast, 2 `#[ignore]`d for the guest |
-| `tests/prove.rs` | **`#[ignore]`d** — the mini-block gate (acceptance 4) and the advice tamper twin (acceptance 5) |
+| `tests/prove.rs` | **`#[ignore]`d** — the mini-block gate (acceptance 4) and the advice tamper twin (acceptance 5). Since S-STREAM it proves through `host::prove(.., IN_FLIGHT)` with `IN_FLIGHT = 4`: the suite is run for its verdict and not its wall clock, and four shards held at once was 77.10 GiB against eight at 83.91 on a 51-shard statement |
 | `tests/witness.rs` | acceptance 1 (two cache-only recordings, byte-identical, zero network calls, equal to the committed fixture), acceptance 2's native half (the witness alone reproduces the pinned journal), acceptance 3 twice (every recorded slot deleted in turn, and every recorded account, each refused), the fixture against its pin, the fork table both ways, the journal against the public window's ceiling, and a one-wei balance change moving the journal |
 
 **The journal does not distinguish every witness, and that is a fact about the workload

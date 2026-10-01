@@ -109,7 +109,11 @@ pub const OPENING_BYTES: usize = 704;  pub const SRS_VERIFIER_BYTES: usize = 320
   `M[2] init_value`; the verifier evaluates the multilinear extension of
   `public_io_words(...)` at that shard's own opening point and compares. `PUBLIC_INPUT`'s
   `M[2]` is held to `public.input`, `PUBLIC_OUTPUT`'s `M[1]` to `public.output`, each with
-  a message naming which window disagreed. **What each is worth rests on the memory
+  a message naming which window disagreed. **Its cost is two multilinear evaluations over
+  `family::PUBLIC_WINDOW_HEIGHT` points, and that is 4,096 since S-STREAM where it was
+  256**: the step did not change, the window it reads got sixteen times larger, and the
+  bill is ~8,190 `Fr` multiplies and ~163 KiB of scratch per statement — noise natively,
+  and a budget a recursion guest carries. **What each is worth rests on the memory
   argument and not on the comparison**: the multiset already forces a window's init column
   to be each address's first value and its teardown column to be its last. `PUBLIC_OUTPUT`
   has no `M[2]` at all — its circuit is `ZERO_WINDOWS`', whose init leaf is a literal 0 —
@@ -150,9 +154,13 @@ pub const OPENING_BYTES: usize = 704;  pub const SRS_VERIFIER_BYTES: usize = 320
   region on a different grid from the one `advice_first_window` computes — `PUBLIC_INPUT`
   and `PUBLIC_OUTPUT` present at exactly `family::PUBLIC_WINDOW_HEIGHT`, and
   `4h >= PUBLIC_OUTPUT_ORIGIN + PUBLIC_WINDOW_BYTES`, so both public windows lie inside RAM
-  window 0, whose rows below `RAM_ORIGIN` are masked by `V[ram_live]` at every height. Every
-  menu height but `2^8` satisfies the last. Without it a `ZERO_WINDOWS` id could claim a
-  public window and give a public word a second init row.
+  window 0, whose rows below `RAM_ORIGIN` are masked by `V[ram_live]` at every height.
+  **The last rule's floor is `2^16` and S-STREAM did not move it**, though both of its
+  operands moved: the public windows now end at `RAM_ORIGIN` exactly, so the rule reads
+  `4h >= 2^16`, and `2^14` is not on the menu. What changed is how many menu entries fail
+  it — `2^8` and now `2^12`, S-STREAM's own entry, which a *window* family may therefore
+  never take even though the two public families are pinned to it. Without the rule a
+  `ZERO_WINDOWS` id could claim a public window and give a public word a second init row.
   `check_memory_windows` adds three: exactly one `PUBLIC_INPUT` shard, exactly one
   `PUBLIC_OUTPUT` shard — a count a prover could drop is a way to publish nothing while
   having published something — and `advice_first_window(h) + k <= 2^30 / h`, the top of the

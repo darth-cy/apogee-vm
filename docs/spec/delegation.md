@@ -740,14 +740,20 @@ height, so a shard's forward pass is that count times its height times 32 bytes:
 | `2^16` | 744 GB | 65,536 |
 
 `2^8` is also **even**, which Mercury needs for `b = sqrt(2^n)` to exist, so the
-menu below `2^16` had `2^8`, `2^10`, `2^12` and `2^14` to choose from. S26d
-re-shaped the row first — 5,478 inner columns, so `2^16`, the floor its two
+even powers below `2^16` that S21 could have taken were `2^8`, `2^10`, `2^12`
+and `2^14`. S26d re-shaped the row first — 5,478 inner columns, so `2^16`, the
+floor its two
 channels imply, is about 15 GB and 2,730 permutations a shard — and then, the row
 being narrow, took the height one entry past that floor as well: **5,490** inner
 columns at `2^18`, about **60 GB** and **10,922** permutations a shard (§6.0).
 The 60 GB is `EC_ADD`'s three terms (§16.4) at this width — 46.05 GB of inner
 layers, 2.23 GB of committed base and 11.27 GB of transition 0's half-height `Fr`
-bind. What keeps `2^8` on the menu is the three families still at it.
+bind. What keeps `2^8` on the menu is the three families still at it. The menu
+has a second sub-`2^16` entry since S-STREAM, `2^12`, and it is **not** a
+delegation height: it is the pinned height of the two public-value families,
+which is what places their windows (`docs/spec/public-values.md` §2). A
+channel-free delegation family may be declared at it — `POSEIDON2`, `FR_ARITH`
+and `SHA256_COMP` reach no table that would refuse it — and none is.
 
 At `2^8` **no range channel's table fits**: `V[range16]` over 8 variables holds
 `[0, 2^8)`, not `[0, 2^16)`, and `lookup::channel_trees` refuses a channel whose
