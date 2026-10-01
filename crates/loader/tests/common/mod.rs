@@ -29,39 +29,39 @@ use test_support::{sha256, to_hex};
 pub const PINS: [(&str, &str); 26] = [
     (
         "fib.elf",
-        "0bef35995d9c3cc2c70147c0902ae0aad892c77c2f35efe0c1d11271c06a9f9c",
+        "45a9eb440beb9abb1968163e448adafae310bd5f1084717332c4527b4656e805",
     ),
     (
         "echo.elf",
-        "866ea122cc7b41d5ba6c0a6f0229bfa82736e90e230c90da81a476f5e8177142",
+        "2448145622c3b20a6fc635fb5fc0f6021169ff7392c60d68e0591c5823ded463",
     ),
     (
         "rvc-dense.elf",
-        "13e94505c1dfcff523a1bbfdb0283518024f83fc58008ca986989a6ae32672f1",
+        "5b71143898aa701e60ac68156f7988b785aff1556124ac5cf543f8fd1afbf8cc",
     ),
     (
         "amm.elf",
-        "c415fec91abf144e3adee92cd20a0ccb44cb283554c3e8fc91c7af4da90916c3",
+        "f7395028de3d2fb3c907834b0c2e6eb804605847ccf5aa2870ad4a27ec50206a",
     ),
     (
         "orderbook.elf",
-        "4d2e59f5125e100f5e4ec0f46eae8d40e6bbff3c2c480f189b9658b3443276c6",
+        "b4dab7727d4f2e982680f47ee2a0fc64919c07dd3d1a6f0f85ed6189dd4c7fb3",
     ),
     (
         "vault.elf",
-        "d54b9f423284e49bb1bc1211feae91fb5f4f1bbdbf8f768fdbc7f908e5547398",
+        "a80f1c630ddba4139c4f191fbc4e8f765d645e69fe1abf1fb6834e3dffa9c6c9",
     ),
     (
         "atomics.elf",
-        "77abdff4cd470fcf9710f7ed5c9427f373b0ac0976832e8ec72f8851f539f06f",
+        "78e0d0566adf0d1762a028c6447fb5205b6d4458c317601e9dc26129fdbb3a47",
     ),
     (
         "opcodes.elf",
-        "36ce5e9899fc58bf5d2ad22b446123fefa3c6a8f7557297c7372067ab79b3c32",
+        "c3bb95ec0751857b35308838820263d874f00256c2ba980a16494a44f1a462cf",
     ),
     (
         "heap.elf",
-        "f04fe50b8ed35884c31660666e6aa8c9dd3c4803d001a8ddb1d591b61e5e39ad",
+        "6aa102532afabeb741a44967869695611d7072471fd24122d9cfde35c4436145",
     ),
     (
         "addsub.elf",
@@ -81,19 +81,19 @@ pub const PINS: [(&str, &str); 26] = [
     ),
     (
         "fib.objdump.txt",
-        "30be346529d47abb3739bb8140cbaee539f98091eec257e88297dedb90eaae7f",
+        "bbe33679342f59e896157dd29bcfcd3d5ebe46e39f24f048a61a00bfad3e54a9",
     ),
     (
         "rvc-dense.objdump.txt",
-        "fcb4f055fd0ce17e544d9b6d7ada4965fb4a0146efa3d1ac90daeb0a4c7020f3",
+        "d23941e188e4eac494d4c5b2d3602895542d5c25a390e9ab7bf66142c2935f70",
     ),
     (
         "amm.objdump.txt",
-        "ef8d923229aa9a9578d7d153ef640d254eae06985dbe8da632f9fab39dc0602b",
+        "2c92da7c40f793da337d99a818d9f805342d35accf601addc903670385026e3a",
     ),
     (
         "rvc-dense.nm.txt",
-        "6ac86268873ee7b8040377edc34673a54608faf08c62c59c9351896ccf6da3e0",
+        "c341f4616913cef515a793ff5a730567ba46a963694fb35d49cb51faca0187aa",
     ),
     (
         "shards.elf",
@@ -109,27 +109,27 @@ pub const PINS: [(&str, &str); 26] = [
     ),
     (
         "recursion-ops.elf",
-        "515a36c8b900594b53773eb7d6953bbea135aa99df3300fac22413e4c12d405f",
+        "41e6adb2440e53aaf779b19852f294879884f7a4cedafc63ed987907c1ae8444",
     ),
     (
         "recursion-unused.elf",
-        "836899ffbaff8a0f7beacb576e495dc353d03ab8198bbf9169ea7d1be11a0f20",
+        "0e61f1b139a0da3c5e7bbd02ce236c6a74f05f465e52a099682f64545ca58a78",
     ),
     (
         "public-io.elf",
-        "7898beaa4bfdef2d9ac4b103f48eabd85aa9c4ea513d603fa9ba33170f340ece",
+        "2c9a2b7608505c0825e1cf9da997133ed20217e177a998ca7e18ebc01dbc148d",
     ),
     (
         "mod-mul-ops.elf",
-        "bb56510854af31e711f437e7480377a1a5397aa83a3504878f757e617600d34e",
+        "b2dd3c624eb8f6bb1185f2ec3f34ca59dace7b77498542047ef297a123079b8c",
     ),
     (
         "sha256-ops.elf",
-        "498f061ccda3a3eae9273425ae56e3eaf7833e5518779fe0f81ecd6f810c26c5",
+        "b972abf1f31d65421374a4486d12709a67dc1af2d6d4a08bbcd8fac6c2f131d5",
     ),
     (
         "ec-ops.elf",
-        "40ed1d28933b37c55bf5bf7a71a9993f3902f1c8d82f67a07de49ab4909430bc",
+        "9cf40fb34e30b3c65bf2655a1175fc39fd7cd3461265450306229af45100ea2f",
     ),
 ];
 
