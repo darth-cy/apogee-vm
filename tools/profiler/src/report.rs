@@ -213,7 +213,7 @@ impl ProfileReport {
                 61 => "61  the advice is not a canonical BlockWitness".to_string(),
                 62 => "62  a transaction is not executable".to_string(),
                 70 => "70  the execution finished and its output commitment does \
-                       NOT fit the 1,020-byte journal; every cycle below was run"
+                       NOT fit the 16,380-byte journal; every cycle below was run"
                     .to_string(),
                 71 => "71  the guest's heap is exhausted".to_string(),
                 101 => "101 the guest panicked".to_string(),

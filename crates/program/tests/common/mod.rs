@@ -137,14 +137,14 @@ pub fn instructions(image: &ProgramImage) -> Vec<(u32, u32, bool)> {
 /// delegation family's rows are invocations, not halfwords, so 256 rows is a
 /// sensible table there and no guest's code fits in 256 halfwords anywhere else
 /// (`docs/spec/delegation.md` §9). The floor for an instruction table is
-/// therefore the menu's *second* entry, and the tests below spell that height
-/// out in their own arithmetic — pc `0x1fffe` is row 65535 — so it is
-/// asserted here rather than left to an index. A 2^16 table is cheap enough
-/// to export in full, and every committed guest but `mod-mul-ops` fits in
-/// one.
+/// therefore the menu's *third* entry since S-STREAM put `2^12` at index 1 for
+/// the two public-value families, and the tests below spell that height out in
+/// their own arithmetic — pc `0x1fffe` is row 65535 — so it is asserted here
+/// rather than left to an index. A 2^16 table is cheap enough to export in
+/// full, and every committed guest but `mod-mul-ops` fits in one.
 pub fn smallest() -> ProgramParams {
-    let height = family::HEIGHT_MENU[1];
-    assert_eq!(height, 1 << 16, "the menu's second entry is no longer 2^16");
+    let height = family::HEIGHT_MENU[2];
+    assert_eq!(height, 1 << 16, "the menu's third entry is no longer 2^16");
     ProgramParams {
         heights: [height; family::COUNT as usize],
         ..ProgramParams::defaults()

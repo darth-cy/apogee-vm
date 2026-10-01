@@ -639,9 +639,10 @@ pub fn in_ram(addr: u32) -> bool {
 /// Whether `addr` is in a region some family initializes: ordinary RAM, one of
 /// the two public windows, or the advice region.
 ///
-/// Everything else — `[0, PUBLIC_INPUT_ORIGIN)` and the gap between the public
-/// windows and `RAM_ORIGIN` — is a **hole** no family initializes, so an
-/// access there could not balance whatever an executor did with it. Making it
+/// Everything else — `[0, PUBLIC_INPUT_ORIGIN)`, the whole of it since
+/// S-STREAM put the two windows at `2^12` and they now end flush against
+/// `RAM_ORIGIN` — is a **hole** no family initializes, so an access there
+/// could not balance whatever an executor did with it. Making it
 /// unaddressable is what turns a null dereference into a loud executor error
 /// rather than a trace nothing can prove.
 pub fn addressable(addr: u32) -> bool {

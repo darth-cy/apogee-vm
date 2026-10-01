@@ -971,9 +971,14 @@ impl<'a> Machine<'a> {
         // The public input window: word 0 the payload's byte length, then the
         // payload. `program::public_io_words` is the one spelling of the
         // layout, shared with the prover's column builder and the verifier's
-        // check, so the three cannot drift.
+        // check, so the three cannot drift. A zero word is skipped, as advice
+        // is below: a page that was never written reads 0 anyway, and the
+        // window is 4,096 words since S-STREAM where it was 256, nearly all
+        // of them padding on a real input.
         for (y, word) in program::public_io_words(&io.input).iter().enumerate() {
-            machine.set_word(guest_memory::PUBLIC_INPUT_ORIGIN + 4 * y as u32, *word);
+            if *word != 0 {
+                machine.set_word(guest_memory::PUBLIC_INPUT_ORIGIN + 4 * y as u32, *word);
+            }
         }
         // The advice region: its length word, then the payload. Laid out by
         // `trace::advice_word`, the one spelling `guest_sdk::advice` reads
