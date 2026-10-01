@@ -90,12 +90,13 @@ fn each_space_has_exactly_its_addresses() {
                 "{space:?}: {addr:#x} is not a word address"
             );
         }
-        for addr in [0, origin - 4] {
-            assert!(
-                !space.holds(addr),
-                "{space:?}: {addr:#x} is below RAM and in no public window"
-            );
-        }
+        // Not `origin - 4` any more: since S-STREAM that is the journal's last
+        // word, which `Ram` holds and a delegation space does not, so it is
+        // asserted with the other public addresses below.
+        assert!(
+            !space.holds(0),
+            "{space:?}: 0 is below RAM and in no public window"
+        );
     }
 
     // **`Ram` is wider than ordinary RAM since S-IO** and a delegation space is
@@ -106,6 +107,7 @@ fn each_space_has_exactly_its_addresses() {
     for addr in [
         guest_memory::PUBLIC_INPUT_ORIGIN,
         guest_memory::PUBLIC_OUTPUT_ORIGIN,
+        origin - 4,
         guest_memory::ADVICE_ORIGIN,
         0xffff_fffc,
     ] {
