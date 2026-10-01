@@ -17,11 +17,11 @@ gkr.workspace = true
 srs.workspace = true
 pcs.workspace = true
 # S25: the `prove` verb runs a real proving job and reads its per-stage timings
-# out of the `TraceArchive`'s own phase sections. The metrics feature is
-# deliberately NOT enabled — turning it on from a dependency entry would turn it
-# on for every `cargo build --workspace`, and `docs/spec/metrics.md` §1's claim
-# that the feature-off build is the code that was there before would stop
-# holding. The archive's phase timings need no feature.
+# out of the prover itself -- since S-STREAM `prover::StreamingReport`'s four
+# clocks, where they were the `TraceArchive`'s five phase sections. Both are in
+# the default build. No cargo feature is enabled from here, and none may be: a
+# feature turned on from a dependency entry is on for every
+# `cargo build --workspace`, which is the whole hazard master anti-goal 1 names.
 host.workspace = true
 prover.workspace = true
 verifier-core.workspace = true

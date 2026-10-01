@@ -33,6 +33,7 @@ use loader::load_elf;
 use program::{decode_program, ProgramParams};
 use prover::{Program, ProverSetup};
 use trace::{IoStreams, PhaseTiming, TraceArchive};
+use verifier_core::{BlockProof, PublicInputs, ShardProof};
 
 /// The execution family's height: `2^20`, the smallest a family carrying a
 /// timestamp obligation can have (`docs/spec/lookup.md` §3).
@@ -472,6 +473,65 @@ pub fn trace(program: &Program, status: u32) -> TraceArchive {
         Vec::new(),
         PhaseTiming { wall_nanos: 0 },
     )
+}
+
+/// **The one proving path's backpressure, for the suites.**
+///
+/// `prover::prove_block_streaming` holds at most this many filled shards
+/// between the executor and the proving workers, so it is what bounds a
+/// suite's peak (`docs/spec/streaming.md` §5). Four rather than eight: a
+/// deferred suite is run for its verdict and not for its wall clock, and the
+/// measured difference between the two is 14% of the time against 6.8 GiB of
+/// peak. The block does not depend on it — `shards_are_placed_by_position`
+/// proves the bytes equal at 1 and 8 — so no test's assertion rests on the
+/// number.
+pub const IN_FLIGHT: usize = 4;
+
+/// A run with nothing on any stream: what every committed guest but
+/// `public-io` takes.
+pub fn empty_io() -> GuestIo {
+    GuestIo {
+        input: Vec::new(),
+        advice: Vec::new(),
+    }
+}
+
+/// `guests/public-io`'s run over `advice`, with the public input that advice
+/// checks against.
+pub fn public_io_io(advice: &[u8]) -> GuestIo {
+    GuestIo {
+        input: public_io_input(advice),
+        advice: advice.to_vec(),
+    }
+}
+
+/// **Prove one execution as a block, the only way this repository proves.**
+///
+/// `prover::prove_block_streaming` at [`IN_FLIGHT`]. Since S-STREAM nothing in
+/// any suite reaches `prover::prove_block`: the archived path still compiles,
+/// because `checker`'s column-fill suites and `checker::TamperHarness` build
+/// their columns from a `TraceArchive`, but it proves nothing anywhere
+/// (`docs/spec/streaming.md` §1).
+pub fn streamed(setup: &ProverSetup, io: &GuestIo) -> BlockProof {
+    let (block, report) =
+        prover::prove_block_streaming(setup, io, IN_FLIGHT).expect("the block proves");
+    assert!(
+        report.peak_in_flight <= IN_FLIGHT,
+        "{} shards in flight above the bound {IN_FLIGHT}",
+        report.peak_in_flight
+    );
+    block
+}
+
+/// The statement and its shard proofs, which is what `prover::finish` handed
+/// back on the archived path.
+///
+/// A `BlockProof` carries both, in statement order, so a suite that verifies
+/// loose shards takes them from the block rather than from a second proving
+/// run (`docs/spec/block-proof.md` §2).
+pub fn streamed_shards(setup: &ProverSetup, io: &GuestIo) -> (PublicInputs, Vec<ShardProof>) {
+    let block = streamed(setup, io);
+    (block.statement, block.shards)
 }
 
 pub fn setup() -> ProverSetup {

@@ -39,7 +39,6 @@ use program::FamilyId;
 
 #[cfg(feature = "debug-info")]
 use crate::debug;
-use crate::metrics::Recorder;
 use crate::{
     global_commit_from_commitments, public_inputs, shard_counts, window_of, GlobalCommitState,
     ProverError, ProverSetup, ProvingContext, ShardRows, ShardSource,
@@ -246,6 +245,22 @@ fn pass1(
         committed.len(),
         order.len()
     );
+
+    // **A nonzero exit status, on a line of its own**, as the archived path's
+    // statement phase prints one. A guest that panicked exits 101 having
+    // published whatever it had committed so far — a journal that decodes, a
+    // proof that verifies, and an answer to a different question. A run whose
+    // guest aborted should not need a careful reading to say so, and on this
+    // path there is no statement phase to say it anywhere else.
+    if boundary.reg_values[9] != 0 {
+        dlog!(
+            Phase,
+            "apogee ABORTED  the guest exited {} (x10), journal={}B: this proves an \
+             execution that failed, not one that succeeded",
+            boundary.reg_values[9],
+            done.execution.io.output.len()
+        );
+    }
 
     let statement = PublicInputs {
         input: done.execution.io.input.clone(),
@@ -518,8 +533,7 @@ fn prove_source(
     source: &ShardSource,
 ) -> Result<ShardProof, ProverError> {
     let columns = crate::shard_columns_of(ctx.setup, family, source)?;
-    let (proof, _events) =
-        crate::prove_shard_columns_rec(ctx, family, index, columns, &mut Recorder::new());
+    let (proof, _events) = crate::prove_shard_columns(ctx, family, index, columns);
     Ok(proof)
 }
 

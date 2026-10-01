@@ -172,8 +172,11 @@ fn every_documented_grep_marker_is_in_the_sources() {
 /// one build, once with `APOGEE_DEBUG=off` and once at `deep` — which runs
 /// `gkr::self_check` over every shard and scans every frame — and the two blocks
 /// compared on the wire. This is the property that makes it safe to build the
-/// prover with the feature on and believe the result, and it is the direct
-/// analogue of `tests/metrics.rs`'s `a_metered_block_is_the_block_prove_block_makes`.
+/// prover with the feature on and believe the result. It was the direct
+/// analogue of `tests/metrics.rs`'s `a_metered_block_is_the_block_prove_block_makes`;
+/// that suite went with the `metrics` feature at S-STREAM, so this is now the
+/// only test in the repository making the claim, which is one more reason it
+/// stays.
 ///
 /// `set_var` is sound here on edition 2021 and this is the only test in the
 /// binary that touches the environment, so the two runs cannot race a reader.
@@ -182,22 +185,19 @@ fn every_documented_grep_marker_is_in_the_sources() {
 /// `deep` run adds a self-check pass per shard.
 #[test]
 #[ignore]
-fn a_logged_block_is_the_block_prove_block_makes() {
-    use trace::plan_shards;
-
+fn a_logged_block_is_the_block_the_prover_makes() {
     let setup = common::setup();
-    let plan = plan_shards(
-        common::archive(&setup.program).cycle_profile(),
-        &setup.vk.config,
-    );
+    let io = common::empty_io();
 
     std::env::set_var(prover::debug::VAR, "off");
-    let mut silent_archive = common::archive(&setup.program);
-    let silent = prover::prove_block(&setup, &mut silent_archive, &plan).expect("the block");
+    let silent = prover::prove_block_streaming(&setup, &io, common::IN_FLIGHT)
+        .expect("the block")
+        .0;
 
     std::env::set_var(prover::debug::VAR, "deep");
-    let mut logged_archive = common::archive(&setup.program);
-    let logged = prover::prove_block(&setup, &mut logged_archive, &plan).expect("the block");
+    let logged = prover::prove_block_streaming(&setup, &io, common::IN_FLIGHT)
+        .expect("the block")
+        .0;
     std::env::remove_var(prover::debug::VAR);
 
     assert_eq!(

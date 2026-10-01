@@ -13,8 +13,8 @@ mod common;
 
 use constants::family;
 use program::lookup_tables::generic_commitments;
-use prover::{advance, finish, ProverSetup};
-use trace::{Phase, TraceArchive};
+use prover::ProverSetup;
+use trace::TraceArchive;
 use verifier::{verify_shard, PublicInputs, ShardProof, VerifyError};
 use verifier_core::{reduce_shard, srs_digest};
 
@@ -23,12 +23,14 @@ const JBS: u32 = family::JUMP_BRANCH_SLT;
 const INIT: u32 = family::INIT_TEARDOWN;
 const ZERO: u32 = family::ZERO_WINDOWS;
 
-/// The whole statement, proved through `advance`.
+/// The whole statement, proved by the one proving path.
 fn proved() -> (ProverSetup, TraceArchive, PublicInputs, Vec<ShardProof>) {
     let setup = common::control_setup();
-    let mut archive = common::control_archive(&setup.program);
-    advance(&setup, &mut archive, Phase::Final).expect("the statement proves");
-    let (public, proofs) = finish(&archive).expect("the final phase decodes");
+    // The archive is still built, and it is **not** proved from: the log's
+    // self-check below reads it, which is a reading of the execution and not
+    // a proving path (`docs/spec/streaming.md` §1).
+    let archive = common::control_archive(&setup.program);
+    let (public, proofs) = common::streamed_shards(&setup, &common::empty_io());
     (setup, archive, public, proofs)
 }
 

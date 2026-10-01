@@ -16,31 +16,12 @@
 //! own program: a trace S16 cannot prove, a family no circuit proves, is
 //! refused by name before any work.
 
-/// Run the enclosed statements only in a build with the `metrics` feature.
+/// Emit one debug-log line, in a build with the `debug-info` feature.
 ///
 /// Crate-private and deliberately not `#[macro_export]`ed: a `macro_rules!` at
 /// the crate root is textually in scope for every module declared after it,
 /// which is all this needs, and exporting it would put it in the public API
 /// for nothing.
-///
-/// Use it wherever the *arguments* of a measurement cost something to compute:
-/// every `rec.bytes(..)` whose value walks a column, every `rec.note_*(..)`
-/// that walks a circuit. Plain `rec.start`/`rec.end` timing does not need it,
-/// because `Recorder::start` does not read the clock with the feature off.
-macro_rules! metric {
-    ($($t:tt)*) => {
-        #[cfg(feature = "metrics")]
-        {
-            $($t)*
-        }
-    };
-}
-
-/// Emit one debug-log line, in a build with the `debug-info` feature.
-///
-/// Crate-private and not exported, for `metric!`'s reason: a `macro_rules!` at
-/// the crate root is textually in scope for every module declared after it,
-/// which is all this needs.
 ///
 /// Two arms. `dlog!(Level, "…", args)` is a line that belongs to no one family
 /// — the block's spine — and `dlog!(Level, family = f, "…", args)` is a line
@@ -73,7 +54,7 @@ macro_rules! dlog {
 
 /// Run the enclosed statements only in a build with the `debug-info` feature.
 ///
-/// `metric!`'s counterpart, for the same reason: a scan that walks a shard's
+/// [`dlog!`]'s counterpart, for the same reason: a scan that walks a shard's
 /// rows costs something, and a loop that emits one line per family should not
 /// run at all in a build that emits none. A single line goes through `dlog!`,
 /// which is itself inside the `cfg`; this is for the scans that compute what
@@ -90,7 +71,6 @@ macro_rules! debug_only {
 #[cfg(feature = "debug-info")]
 pub mod debug;
 mod fill;
-pub mod metrics;
 mod phases;
 mod streaming;
 
@@ -121,14 +101,6 @@ use verifier_core::{
 pub use fill::{family_fill, Fill, ShardRows, ShardSource};
 pub use phases::{advance, finish, prove_block};
 pub use streaming::{prove_block_streaming, StreamingReport};
-
-#[cfg(feature = "metrics")]
-pub use phases::{advance_metered, prove_block_metered};
-
-use metrics::{Recorder, Stage};
-// Used only inside `metric!`, which is nothing at all in the default build.
-#[cfg(feature = "metrics")]
-use metrics::{ByteClass, ShardId};
 
 /// Every way the prover refuses. One flat enum.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -225,29 +197,7 @@ impl ProverSetup {
     /// `srs` holds at least as many powers as the tallest family has rows, and
     /// at least the generic table's `2^18`.
     pub fn new(program: Program, srs: Srs) -> Result<ProverSetup, ProverError> {
-        ProverSetup::build(program, srs, &mut Recorder::new())
-    }
-
-    /// [`ProverSetup::new`] recording into `rec`: the registry's compilation,
-    /// the setup MSMs and the key's own load rules, each timed, and every
-    /// registered family's circuit shape noted.
-    #[cfg(feature = "metrics")]
-    pub fn new_metered(
-        program: Program,
-        srs: Srs,
-        rec: &mut Recorder,
-    ) -> Result<ProverSetup, ProverError> {
-        ProverSetup::build(program, srs, rec)
-    }
-
-    fn build(program: Program, srs: Srs, rec: &mut Recorder) -> Result<ProverSetup, ProverError> {
-        let total = rec.start(Stage::SetupTotal);
-        let span = rec.start(Stage::SetupRegister);
         let families = register(&program.config)?;
-        rec.end(span);
-        metric!(for f in &families {
-            rec.note_family(metrics::family_shape(&f.circuit, f.height));
-        });
         debug_only!(for f in &families {
             dlog!(
                 Detail,
@@ -283,18 +233,12 @@ impl ProverSetup {
                 );
             }
         });
-        let span = rec.start(Stage::SetupCommit);
         let setup = setup_commitments(&program.image, &program.tables, &program.config, &srs);
         let setup: Vec<Vec<[u8; 64]>> = setup
             .iter()
             .map(|points| points.iter().map(G1Affine::to_bytes).collect())
             .collect();
         let generic_table = generic_commitments(&srs).map(|p| p.to_bytes());
-        rec.end(span);
-        metric!(rec.bytes(
-            ByteClass::Commitments,
-            64 * (setup.iter().map(Vec::len).sum::<usize>() + generic_table.len()) as u64
-        ));
         let code_version = program.tables.code_version;
         let srs_verifier = verifier::encode_srs_verifier(&srs.verifier());
         let vk = VerifyingKey {
@@ -308,9 +252,7 @@ impl ProverSetup {
             srs_digest: srs_digest(&srs_verifier, &generic_table),
             circuits: families.iter().map(|f| f.circuit.clone()).collect(),
         };
-        let span = rec.start(Stage::SetupKeyCheck);
         vk.check().map_err(ProverError::Key)?;
-        rec.end(span);
         // Identity and the SRS digest in full, not truncated: these are the two
         // values a reader compares against a pinned constant rather than
         // against another run, and a stale pin is this repository's most
@@ -323,16 +265,6 @@ impl ProverSetup {
             debug::fr_full(&vk.identity.0),
             debug::fr_full(&vk.srs_digest)
         );
-        metric!(rec.note_program(metrics::ProgramShape {
-            code_version,
-            entry_pc: program.image.entry,
-            bytecode_size_words: program.config.bytecode_size_words,
-            identity: metrics::digest_hex(vk.identity.to_bytes()),
-            srs_digest: metrics::digest_hex(vk.srs_digest.to_bytes()),
-            families: program.config.families.clone(),
-            ..Default::default()
-        }));
-        rec.end(total);
         Ok(ProverSetup {
             program,
             families,
@@ -428,25 +360,6 @@ pub fn statement_inputs(
     setup: &ProverSetup,
     archive: &TraceArchive,
 ) -> Result<StatementInputs, ProverError> {
-    statement_inputs_rec(setup, archive, &mut Recorder::new())
-}
-
-/// [`statement_inputs`] recording into `rec`.
-#[cfg(feature = "metrics")]
-pub fn statement_inputs_metered(
-    setup: &ProverSetup,
-    archive: &TraceArchive,
-    rec: &mut Recorder,
-) -> Result<StatementInputs, ProverError> {
-    statement_inputs_rec(setup, archive, rec)
-}
-
-fn statement_inputs_rec(
-    setup: &ProverSetup,
-    archive: &TraceArchive,
-    rec: &mut Recorder,
-) -> Result<StatementInputs, ProverError> {
-    let total = rec.start(Stage::StatementColumns);
     let config = &setup.program.config;
     let log = archive.memory_log();
     let h = window_height(config).map_err(|e| ProverError::Trace(e.to_string()))?;
@@ -489,8 +402,8 @@ fn statement_inputs_rec(
         // `M` alone, moved out of the fill: the statement commits nothing else,
         // and asking `shard_columns` for the whole set here counted every
         // channel's multiplicities only to drop them.
-        memory_columns.push(shard_memory_columns_rec(
-            setup, archive, family, index, &windows, rec,
+        memory_columns.push(shard_memory_columns(
+            setup, archive, family, index, &windows,
         )?);
         dlog!(
             Detail,
@@ -500,27 +413,6 @@ fn statement_inputs_rec(
             memory_columns.last().map_or(0, Vec::len)
         );
     }
-    metric!({
-        // The circuits are the setup's, whoever built it: a block metered here
-        // did not build its own, and its report would otherwise name no family.
-        for f in &setup.families {
-            rec.note_family(metrics::family_shape(&f.circuit, f.height));
-        }
-        let profile = archive.cycle_profile();
-        rec.note_program(metrics::ProgramShape {
-            code_version: setup.vk.code_version,
-            entry_pc: setup.vk.entry_pc,
-            bytecode_size_words: config.bytecode_size_words,
-            identity: metrics::digest_hex(setup.vk.identity.to_bytes()),
-            srs_digest: metrics::digest_hex(setup.vk.srs_digest.to_bytes()),
-            families: config.families.clone(),
-            cycles: profile.counts.clone(),
-            total_cycles: profile.total(),
-            shard_counts: counts.clone(),
-            windows: windows.clone(),
-        });
-    });
-    rec.end(total);
     let io = archive.io_streams();
     Ok(StatementInputs {
         input: io.input.clone(),
@@ -560,29 +452,6 @@ pub fn global_commit_phase(
     srs: &Srs,
     inputs: &StatementInputs,
 ) -> GlobalCommitState {
-    global_commit_phase_rec(vk, srs, inputs, &mut Recorder::new())
-}
-
-/// [`global_commit_phase`] recording into `rec`: the memory columns' MSMs and
-/// the global transcript timed apart, which is the phase's one real split.
-#[cfg(feature = "metrics")]
-pub fn global_commit_phase_metered(
-    vk: &VerifyingKey,
-    srs: &Srs,
-    inputs: &StatementInputs,
-    rec: &mut Recorder,
-) -> GlobalCommitState {
-    global_commit_phase_rec(vk, srs, inputs, rec)
-}
-
-fn global_commit_phase_rec(
-    vk: &VerifyingKey,
-    srs: &Srs,
-    inputs: &StatementInputs,
-    rec: &mut Recorder,
-) -> GlobalCommitState {
-    let total = rec.start(Stage::GlobalCommitTotal);
-    let msm = rec.start(Stage::GlobalCommitMsm);
     // **The phase's bulk, and it is sequential.** One MSM per column of every
     // shard, ~300 MB a shard, in the one `map` below — and until this line
     // existed the phase's only output was the `done` line further down, which by
@@ -617,11 +486,6 @@ fn global_commit_phase_rec(
         .iter()
         .map(|columns| commit_all(srs, &columns.iter().collect::<Vec<_>>()))
         .collect();
-    rec.end(msm);
-    metric!(rec.bytes(
-        ByteClass::Commitments,
-        64 * memory_commitments.iter().map(Vec::len).sum::<usize>() as u64
-    ));
     let statement = PublicInputs {
         input: inputs.input.clone(),
         output: inputs.output.clone(),
@@ -632,11 +496,7 @@ fn global_commit_phase_rec(
         memory_commitments,
         memory_roots: Vec::new(),
     };
-    let span = rec.start(Stage::GlobalTranscript);
-    let global = global_commit_from_commitments(vk, statement);
-    rec.end(span);
-    rec.end(total);
-    global
+    global_commit_from_commitments(vk, statement)
 }
 
 /// The global commit phase's **second half**, `docs/spec/shard-proof.md` §2's
@@ -655,8 +515,8 @@ pub(crate) fn global_commit_from_commitments(
     let global = global_commit(vk, &statement);
     // The five values every shard's transcript is forked from. Two runs that
     // should have produced one block and did not diverge here or nowhere, which
-    // is the first question to ask of a streaming-against-archived mismatch and
-    // of any non-determinism: everything downstream is a function of these.
+    // is the first question to ask of any non-determinism: everything
+    // downstream is a function of these.
     dlog!(
         Phase,
         "apogee commit   done commitments={} digest={} memory-challenges={}",
@@ -716,22 +576,8 @@ pub fn shard_columns(
     index: u32,
     windows: &[u32],
 ) -> Result<Vec<(PolyAddress, MultilinearPoly)>, ProverError> {
-    shard_columns_rec(setup, archive, family, index, windows, &mut Recorder::new())
-}
-
-/// [`shard_columns`] recording into `rec`. Its sample count against the shard
-/// count is how you see that `advance` builds every shard's columns **twice**,
-/// once for the GKR phase and once for the opening phase.
-#[cfg(feature = "metrics")]
-pub fn shard_columns_metered(
-    setup: &ProverSetup,
-    archive: &TraceArchive,
-    family: FamilyId,
-    index: u32,
-    windows: &[u32],
-    rec: &mut Recorder,
-) -> Result<Vec<(PolyAddress, MultilinearPoly)>, ProverError> {
-    shard_columns_rec(setup, archive, family, index, windows, rec)
+    let source = shard_source(setup, archive, family, index, windows)?;
+    shard_columns_of(setup, family, &source)
 }
 
 /// What a family's fill reads for shard `(family, index)`: the program, the
@@ -783,32 +629,8 @@ pub fn shard_memory_columns(
     index: u32,
     windows: &[u32],
 ) -> Result<Vec<MultilinearPoly>, ProverError> {
-    shard_memory_columns_rec(setup, archive, family, index, windows, &mut Recorder::new())
-}
-
-/// [`shard_memory_columns`] recording into `rec`.
-#[cfg(feature = "metrics")]
-pub fn shard_memory_columns_metered(
-    setup: &ProverSetup,
-    archive: &TraceArchive,
-    family: FamilyId,
-    index: u32,
-    windows: &[u32],
-    rec: &mut Recorder,
-) -> Result<Vec<MultilinearPoly>, ProverError> {
-    shard_memory_columns_rec(setup, archive, family, index, windows, rec)
-}
-
-fn shard_memory_columns_rec(
-    setup: &ProverSetup,
-    archive: &TraceArchive,
-    family: FamilyId,
-    index: u32,
-    windows: &[u32],
-    rec: &mut Recorder,
-) -> Result<Vec<MultilinearPoly>, ProverError> {
     let source = shard_source(setup, archive, family, index, windows)?;
-    memory_columns_of_rec(setup, family, index, &source, rec)
+    memory_columns_of(setup, family, index, &source)
 }
 
 /// [`shard_memory_columns`] over a source the caller built: the streaming
@@ -820,17 +642,6 @@ pub(crate) fn memory_columns_of(
     index: u32,
     source: &ShardSource,
 ) -> Result<Vec<MultilinearPoly>, ProverError> {
-    memory_columns_of_rec(setup, family, index, source, &mut Recorder::new())
-}
-
-fn memory_columns_of_rec(
-    setup: &ProverSetup,
-    family: FamilyId,
-    index: u32,
-    source: &ShardSource,
-    rec: &mut Recorder,
-) -> Result<Vec<MultilinearPoly>, ProverError> {
-    let span = rec.start(Stage::StatementShardFill);
     let columns = (setup.registration(family).fill)(source).map_err(ProverError::Trace)?;
     let width = setup.registration(family).circuit.artifact.memory.len();
     let mut memory: Vec<Option<MultilinearPoly>> = (0..width).map(|_| None).collect();
@@ -851,25 +662,7 @@ fn memory_columns_of_rec(
             column.unwrap_or_else(|| panic!("shard ({family}, {index}): the fill wrote no M[{i}]"))
         })
         .collect();
-    rec.end(span);
-    metric!(rec.shard_bytes(
-        ShardId::new(family, index),
-        ByteClass::MemoryColumns,
-        metrics::polys_bytes(&memory)
-    ));
     Ok(memory)
-}
-
-fn shard_columns_rec(
-    setup: &ProverSetup,
-    archive: &TraceArchive,
-    family: FamilyId,
-    index: u32,
-    windows: &[u32],
-    rec: &mut Recorder,
-) -> Result<Vec<(PolyAddress, MultilinearPoly)>, ProverError> {
-    let source = shard_source(setup, archive, family, index, windows)?;
-    shard_columns_of_rec(setup, family, &source, rec)
 }
 
 /// [`shard_columns`] over a source the caller built: the streaming prover's.
@@ -878,53 +671,11 @@ pub(crate) fn shard_columns_of(
     family: FamilyId,
     source: &ShardSource,
 ) -> Result<Vec<(PolyAddress, MultilinearPoly)>, ProverError> {
-    shard_columns_of_rec(setup, family, source, &mut Recorder::new())
-}
-
-fn shard_columns_of_rec(
-    setup: &ProverSetup,
-    family: FamilyId,
-    source: &ShardSource,
-    rec: &mut Recorder,
-) -> Result<Vec<(PolyAddress, MultilinearPoly)>, ProverError> {
-    let total = rec.start(Stage::ShardColumnsTotal);
     let reg = setup.registration(family);
-    let span = rec.start(Stage::ShardFill);
     let mut columns = (reg.fill)(source).map_err(ProverError::Trace)?;
-    rec.end(span);
-    metric!({
-        // By address, and without materializing anything: sizing the columns
-        // must not itself allocate a copy of them.
-        let id = ShardId::new(family, source.index);
-        let of = |want: fn(&PolyAddress) -> bool| -> u64 {
-            columns
-                .iter()
-                .filter(|(a, _)| want(a))
-                .map(|(_, c)| metrics::poly_bytes(c))
-                .sum()
-        };
-        rec.shard_bytes(
-            id,
-            ByteClass::WitnessColumns,
-            of(|a| matches!(a, PolyAddress::Witness(_))),
-        );
-        rec.shard_bytes(
-            id,
-            ByteClass::SetupColumns,
-            of(|a| matches!(a, PolyAddress::Setup(_))),
-        );
-    });
-    let span = rec.start(Stage::ShardMultiplicities);
     let counted = build_multiplicities(&reg.circuit.artifact, &columns, &reg.circuit.channels)
         .map_err(ProverError::Trace)?;
-    rec.end(span);
-    metric!(rec.shard_bytes(
-        ShardId::new(family, source.index),
-        ByteClass::Multiplicities,
-        metrics::columns_bytes(&counted)
-    ));
     columns.extend(counted);
-    rec.end(total);
     Ok(columns)
 }
 
@@ -1005,14 +756,7 @@ impl ProvingContext<'_> {
     /// challenges, run the forward pass and the GKR proof. The base claims'
     /// one point is read back by replaying the schedule over the proof, which
     /// checks nothing: a tampered witness still gets its proof.
-    pub(crate) fn gkr_part(
-        &self,
-        family: FamilyId,
-        index: u32,
-        base: &BaseLayer,
-        rec: &mut Recorder,
-    ) -> ShardGkr {
-        let total = rec.start(Stage::ShardGkrTotal);
+    pub(crate) fn gkr_part(&self, family: FamilyId, index: u32, base: &BaseLayer) -> ShardGkr {
         let reg = self.setup.registration(family);
         let artifact = &reg.circuit.artifact;
         // The begin line, before any work, and **the one line the whole log is
@@ -1030,21 +774,13 @@ impl ProvingContext<'_> {
             artifact.witness.len()
         );
         // Declared under the `cfg` and read only inside one, so the default
-        // build has neither the binding nor the `Instant::now` behind it. The
-        // `metric!` seam does the same thing with a `Span`.
+        // build has neither the binding nor the `Instant::now` behind it.
         #[cfg(feature = "debug-info")]
         let clock = debug::Clock::start();
         let witness: Vec<&MultilinearPoly> = (0..artifact.witness.len() as u32)
             .map(|i| base.get(PolyAddress::Witness(i)).expect("a witness column"))
             .collect();
-        let span = rec.start(Stage::ShardWitnessCommit);
         let witness_commitments = commit_all(&self.setup.srs, &witness);
-        rec.end(span);
-        metric!(rec.bytes(
-            ByteClass::Commitments,
-            64 * witness_commitments.len() as u64
-        ));
-        let span = rec.start(Stage::ShardSeed);
         let ts_window = ts_window(family, base);
         let (mut t, g, beta) = shard_transcript(
             self.global.digest,
@@ -1061,7 +797,6 @@ impl ProvingContext<'_> {
             g,
             beta,
         );
-        rec.end(span);
         dlog!(
             Detail,
             family = family,
@@ -1072,9 +807,7 @@ impl ProvingContext<'_> {
             debug::fr(&beta)
         );
         let (outputs, gkr, replay_from) = {
-            let span = rec.start(Stage::ShardForward);
             let values = forward(artifact, base, &challenges);
-            rec.end(span);
             // **`self_check` before the backward pass, and only here.** A
             // fill or a circuit the forward pass cannot satisfy is otherwise a
             // proof that fails `verify` with `LayerInconsistency { layer }` —
@@ -1157,10 +890,6 @@ impl ProvingContext<'_> {
                     }
                 }
             });
-            metric!(rec.bytes(
-                ByteClass::ForwardLayers,
-                metrics::layer_values_bytes(&values)
-            ));
             let top = &values.layers[artifact.depth() - 1];
             let outputs: Vec<Fr> = artifact
                 .outputs
@@ -1171,33 +900,15 @@ impl ProvingContext<'_> {
                 })
                 .collect();
             let replay_from = t.snapshot();
-            let span = rec.start(Stage::ShardSumcheck);
             let gkr = prove(artifact, &values, &challenges, &mut t);
-            rec.end(span);
             (outputs, gkr, replay_from)
         };
-        let span = rec.start(Stage::ShardReplay);
         let (point, replayed) = replay_point(artifact, &gkr, &outputs, &replay_from);
-        rec.end(span);
         assert_eq!(
             replayed,
             t.snapshot(),
             "the replayed schedule ends where the prover's transcript does"
         );
-        metric!({
-            rec.bytes(ByteClass::GkrProof, metrics::gkr_proof_bytes(&gkr));
-            rec.note_shard(metrics::ShardShape {
-                shard: ShardId::new(family, index),
-                height: reg.height,
-                ts_window,
-                gkr_layers: gkr.layers.len(),
-                sumcheck_rounds: gkr.layers.iter().map(|l| l.rounds.len()).sum(),
-                final_evals: gkr.layers.iter().map(|l| l.final_evals.len()).sum(),
-                witness_commitments: witness_commitments.len(),
-                proof_bytes: 0,
-            });
-        });
-        rec.end(total);
         // The GKR output roots, which are what `verify_shard_local` step 10a
         // holds against the statement and what the block's cross-shard product
         // multiplies. A root of 0 or 1 where the circuit computes a fraction
@@ -1239,9 +950,7 @@ impl ProvingContext<'_> {
         &self,
         shard: ShardGkr,
         base: &BaseLayer,
-        rec: &mut Recorder,
     ) -> (ShardProof, Vec<TranscriptEvent>) {
-        let total = rec.start(Stage::ShardOpeningTotal);
         // **The block's second peak, and it was dark.** This clones every
         // committed column at full height — 1,420 of them for `EC_ADD` — and
         // then runs `batch_open`'s MSM, inside the opening region's `par_iter`.
@@ -1267,14 +976,11 @@ impl ProvingContext<'_> {
             debug::shard(family, index),
             artifact.committed().len()
         );
-        let span = rec.start(Stage::ShardOpeningColumns);
         let columns: Vec<MultilinearPoly> = artifact
             .committed()
             .into_iter()
             .map(|a| base.get(a).expect("a committed column").clone())
             .collect();
-        rec.end(span);
-        metric!(rec.bytes(ByteClass::OpeningColumns, metrics::polys_bytes(&columns)));
         let family_index = self
             .setup
             .vk
@@ -1290,13 +996,10 @@ impl ProvingContext<'_> {
         if reg.circuit.reads_generic_table() {
             encoded.extend_from_slice(&self.setup.vk.generic_table);
         }
-        let span = rec.start(Stage::ShardOpeningDecode);
         let cms: Vec<MercuryCommitment> = encoded
             .iter()
             .map(|b| MercuryCommitment(G1Affine::from_bytes(b).expect("the prover's own point")))
             .collect();
-        rec.end(span);
-        let span = rec.start(Stage::ShardBatchOpen);
         // The commitment list's own split, which is the only prover-side view of
         // what `VerifyError::Opening` — a *unit* variant — collapses: a batch is
         // one instance, and column `i` carries `ρ^i`, so a list built in the
@@ -1321,8 +1024,6 @@ impl ProvingContext<'_> {
         let (values, mercury) =
             batch_open(&self.setup.srs, &columns, &cms, &point, &mut transcript)
                 .unwrap_or_else(|e| panic!("opening shard ({family}, {index}): {e:?}"));
-        rec.end(span);
-        metric!(rec.bytes(ByteClass::Opening, mercury.to_bytes().len() as u64));
         assert_eq!(
             values, gkr.layers[0].final_evals,
             "the opened values are the base claims"
@@ -1337,17 +1038,6 @@ impl ProvingContext<'_> {
             gkr,
             opening: mercury.to_bytes(),
         };
-        metric!(rec.note_shard(metrics::ShardShape {
-            shard: ShardId::new(family, index),
-            height: reg.height,
-            ts_window,
-            gkr_layers: proof.gkr.layers.len(),
-            sumcheck_rounds: proof.gkr.layers.iter().map(|l| l.rounds.len()).sum(),
-            final_evals: proof.gkr.layers.iter().map(|l| l.final_evals.len()).sum(),
-            witness_commitments: proof.witness_commitments.len(),
-            proof_bytes: proof.to_bytes().len(),
-        }));
-        rec.end(total);
         dlog!(
             Phase,
             family = family,
@@ -1406,32 +1096,10 @@ pub fn prove_shard(
     family: FamilyId,
     shard_idx: u32,
 ) -> ShardProof {
-    prove_shard_rec(ctx, archive, family, shard_idx, &mut Recorder::new())
-}
-
-/// [`prove_shard`] recording into `rec`.
-#[cfg(feature = "metrics")]
-pub fn prove_shard_metered(
-    ctx: &ProvingContext,
-    archive: &TraceArchive,
-    family: FamilyId,
-    shard_idx: u32,
-    rec: &mut Recorder,
-) -> ShardProof {
-    prove_shard_rec(ctx, archive, family, shard_idx, rec)
-}
-
-fn prove_shard_rec(
-    ctx: &ProvingContext,
-    archive: &TraceArchive,
-    family: FamilyId,
-    shard_idx: u32,
-    rec: &mut Recorder,
-) -> ShardProof {
     let windows = &ctx.global.statement.windows;
-    let columns = shard_columns_rec(ctx.setup, archive, family, shard_idx, windows, rec)
+    let columns = shard_columns(ctx.setup, archive, family, shard_idx, windows)
         .unwrap_or_else(|e| panic!("shard ({family}, {shard_idx}): {e}"));
-    prove_shard_columns_rec(ctx, family, shard_idx, columns, rec).0
+    prove_shard_columns(ctx, family, shard_idx, columns).0
 }
 
 /// [`prove_shard`] over columns the caller supplies — the honest ones from
@@ -1444,36 +1112,7 @@ pub fn prove_shard_columns(
     shard_idx: u32,
     columns: Vec<(PolyAddress, MultilinearPoly)>,
 ) -> (ShardProof, Vec<TranscriptEvent>) {
-    prove_shard_columns_rec(ctx, family, shard_idx, columns, &mut Recorder::new())
-}
-
-/// [`prove_shard_columns`] recording into `rec`.
-#[cfg(feature = "metrics")]
-pub fn prove_shard_columns_metered(
-    ctx: &ProvingContext,
-    family: FamilyId,
-    shard_idx: u32,
-    columns: Vec<(PolyAddress, MultilinearPoly)>,
-    rec: &mut Recorder,
-) -> (ShardProof, Vec<TranscriptEvent>) {
-    prove_shard_columns_rec(ctx, family, shard_idx, columns, rec)
-}
-
-fn prove_shard_columns_rec(
-    ctx: &ProvingContext,
-    family: FamilyId,
-    shard_idx: u32,
-    columns: Vec<(PolyAddress, MultilinearPoly)>,
-    rec: &mut Recorder,
-) -> (ShardProof, Vec<TranscriptEvent>) {
-    let span = rec.start(Stage::ShardBaseLayer);
-    metric!(rec.shard_bytes(
-        ShardId::new(family, shard_idx),
-        ByteClass::BaseLayer,
-        metrics::columns_bytes(&columns)
-    ));
     let base = BaseLayer::new(columns);
-    rec.end(span);
-    let gkr = ctx.gkr_part(family, shard_idx, &base, rec);
-    ctx.opening_part(gkr, &base, rec)
+    let gkr = ctx.gkr_part(family, shard_idx, &base);
+    ctx.opening_part(gkr, &base)
 }

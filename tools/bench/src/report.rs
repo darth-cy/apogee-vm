@@ -32,8 +32,8 @@
 //! - The five phases do **not** sum to the proving wall-clock.
 //!   `ProverSetup::new`, the plan check, `finish` and the block assembly sit
 //!   outside every phase's span. The remainder is `unattributed_ms` and it is
-//!   named rather than absorbed, which is the same discipline
-//!   `docs/spec/metrics.md` §2 applies to its stage tree.
+//!   **named rather than absorbed**: a total that silently swallows the work
+//!   no section claims is a total nobody can check against a clock.
 //! - The execution phase's number exists only because `host::prove` measures
 //!   it. S12 froze the field and every caller in the repository passed zero.
 //!
@@ -150,7 +150,11 @@ pub struct BenchReport {
     /// `ProverSetup::new`: registry compilation, the setup MSMs, the key check.
     /// Outside every archive phase, and outside `proving_ms`.
     pub setup_ms: f64,
-    /// The five archive phases.
+    /// The four clocks the streaming prover carries, under the five names
+    /// this report has always had. `opening_ms` and `final_ms` are `0.0`:
+    /// one shard's GKR and its opening are a single interval on that path,
+    /// and `execution_ms` is **both passes** summed. A figure here is not
+    /// comparable with a pre-S-STREAM one.
     pub phases: Phases,
     /// The whole of `host::prove`: the executor, every phase, and the work
     /// between them.
@@ -430,13 +434,18 @@ fn sysctl(name: &str) -> Option<String> {
 
 /// Peak resident set, where the platform reports one without `unsafe`.
 ///
-/// Linux's `/proc/self/status` carries `VmHWM`, the high-water mark, in plain
-/// text. macOS has no equivalent short of a `libc` call or re-running the whole
-/// job under `/usr/bin/time -l`, and master anti-goal 4 bans the `unsafe` the
-/// first would need — so on macOS this is `None` and says so.
-/// `docs/spec/metrics.md` §4.1 is the standing note that `/usr/bin/time` is
-/// this repository's ground truth for RSS, and it remains the thing to wrap a
-/// macOS run in.
+/// **This is the repository's standing note on measuring RSS**, and the one
+/// place it is written down. Linux's `/proc/self/status` carries `VmHWM`, the
+/// high-water mark, in plain text, so on Linux this function is the whole
+/// measurement. macOS has no equivalent short of a `libc` call or re-running
+/// the whole job under `/usr/bin/time -l`, and master anti-goal 4 bans the
+/// `unsafe` the first would need — so on macOS this is `None` and says so.
+///
+/// `/usr/bin/time -l` (`-v` on Linux) is this repository's **ground truth** for
+/// peak RSS, and it is what every handoff note's memory figure was taken with.
+/// Nothing in the prover models or estimates the number: reading it in-process
+/// is either this file's `VmHWM` or it is `unsafe`, and an estimate that is not
+/// the measurement is worse than wrapping the run.
 pub fn peak_rss() -> (Option<u64>, String) {
     match field_of("/proc/self/status", "VmHWM") {
         // `VmHWM:  41234 kB`
@@ -456,8 +465,8 @@ pub fn peak_rss() -> (Option<u64>, String) {
             format!(
                 "not measured: {} has no /proc/self/status, and reading peak RSS in-process \
                  otherwise needs unsafe, which master anti-goal 4 bans. Wrap the run in \
-                 /usr/bin/time -l, which docs/spec/metrics.md §4.1 names as this \
-                 repository's ground truth",
+                 /usr/bin/time -l, this repository's ground truth for peak RSS \
+                 (`tools/bench/src/report.rs`'s `peak_rss`)",
                 std::env::consts::OS
             ),
         ),

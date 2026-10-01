@@ -39,10 +39,7 @@ use std::path::PathBuf;
 use constants::family;
 use loader::load_elf;
 use program::{decode_program, ProgramParams};
-use prover::prove_block;
 use prover::{Program, ProverSetup};
-use trace::plan_shards;
-use trace::TraceArchive;
 use verifier::{verify_block, verify_shard};
 use verifier_core::{statement_shards, BlockProof, VerifyError};
 
@@ -106,28 +103,32 @@ fn revm_program() -> Program {
     }
 }
 
-/// One traced run of the guest over the committed witness, which reaches it
-/// as **advice**.
-fn revm_archive(program: &Program) -> TraceArchive {
-    let io = emulator::GuestIo {
+/// The guest's run: no public input, and the committed witness as **advice**.
+///
+/// **No archive.** This is the heaviest statement in the repository — a
+/// 30M-cycle execution, whose trace alone is hundreds of megabytes — and
+/// since S-STREAM nothing proves from one. `prove_block_streaming` executes
+/// the guest itself, twice, holding one partial buffer per family and at most
+/// `common::IN_FLIGHT` filled shards (`docs/spec/streaming.md`). What the
+/// archive used to be read for here was the shard plan, and the block's own
+/// `shard_counts` is that same plan after the fact.
+fn revm_io() -> emulator::GuestIo {
+    emulator::GuestIo {
         input: Vec::new(),
         advice: witness_bytes(),
-    };
-    let (traces, log, profile, execution) =
-        emulator::trace_run(&program.image, &io, &program.tables, &program.config)
-            .expect("the guest traces");
-    assert_eq!(execution.exit_code, REVM_RESULT as i32);
-    TraceArchive::from_execution(
-        traces,
-        log,
-        profile,
-        trace::IoStreams {
-            input: execution.io.input,
-            output: execution.io.output,
-        },
-        io.advice,
-        trace::PhaseTiming { wall_nanos: 0 },
-    )
+    }
+}
+
+/// The per-family shard count the statement carries, by family id.
+fn shard_count(setup: &ProverSetup, block: &BlockProof, f: u32) -> u32 {
+    let at = setup
+        .program
+        .config
+        .families
+        .iter()
+        .position(|(g, _)| *g == f)
+        .expect("a config family");
+    block.statement().shard_counts[at]
 }
 
 fn revm_setup() -> ProverSetup {
@@ -260,7 +261,10 @@ fn a1_two_clean_builds_give_one_identity() {
 #[ignore]
 fn a6_the_revm_block_proves_and_verifies() {
     let setup = revm_setup();
-    let mut archive = revm_archive(&setup.program);
+    let block = common::streamed(&setup, &revm_io());
+    // The exit status the archive used to assert, now read off the statement
+    // the proof binds.
+    assert_eq!(block.statement().exit_status, REVM_RESULT);
 
     // Acceptance 2, restated on the statement the proof is about: the family set
     // is derived, and this image declares **two** delegation families — S21's
@@ -307,14 +311,7 @@ fn a6_the_revm_block_proves_and_verifies() {
         Some(1 << common::KECCAK_VARS)
     );
 
-    let plan = plan_shards(archive.cycle_profile(), &setup.program.config);
-    let shards = |f: u32| {
-        plan.shards
-            .iter()
-            .find(|(g, _)| *g == f)
-            .expect("a config family is planned")
-            .1
-    };
+    let shards = |f: u32| shard_count(&setup, &block, f);
     // Acceptance 8: the delegation family has at least one shard on the honest
     // run. A revm block hashes — contract code, the log list, the post-state
     // summary — so a zero here would mean the shim was never reached and the
@@ -331,7 +328,6 @@ fn a6_the_revm_block_proves_and_verifies() {
         );
     }
 
-    let block = prove_block(&setup, &mut archive, &plan).expect("the block proves");
     assert_eq!(
         verify_block(&setup.vk, &block, block.statement()),
         Ok(()),
@@ -424,9 +420,7 @@ fn a6_the_revm_block_proves_and_verifies() {
 #[ignore]
 fn a7_a_changed_statement_is_refused() {
     let setup = revm_setup();
-    let mut archive = revm_archive(&setup.program);
-    let plan = plan_shards(archive.cycle_profile(), &setup.program.config);
-    let block = prove_block(&setup, &mut archive, &plan).expect("the block proves");
+    let block = common::streamed(&setup, &revm_io());
     let honest = block.statement().clone();
     assert_eq!(verify_block(&setup.vk, &block, &honest), Ok(()));
 
