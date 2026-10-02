@@ -1,0 +1,26 @@
+# Deliberately NOT a member of the root workspace, and its own workspace root,
+# for transcript-ref's reason: the oracle's dependency graph is not the
+# workspace's, and feature unification must not carry one into the other.
+[workspace]
+
+[package]
+name = "stateless-ref"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# The reference implementation, pinned by revision: eth-act/ere-guests at
+# v0.17.1, whose stateless-validator-common holds the stateless input types
+# every zkVM's guest in the zkEVM benchmark decodes with. Fixture generator
+# only: nothing here is reachable from a prover, a verifier or a guest.
+[dependencies]
+stateless-validator-common = { git = "https://github.com/eth-act/ere-guests", rev = "daec35a51ec066cae50636a28311d67cb07bb150" }
+# The SSZ crates it is written over, at the versions and with the features its
+# workspace pins, for the one container declared here.
+libssz = { version = "0.3.0", default-features = false, features = ["alloc"] }
+libssz-derive = "0.3.0"
+libssz-merkle = { version = "0.3.0", default-features = false, features = ["alloc", "sha2-backend"] }
+libssz-types = { version = "0.3.0", default-features = false, features = ["alloc"] }
+
+# A seeded RNG and hex, and nothing that could reach the code under test.
+test-support = { path = "../test-support" }

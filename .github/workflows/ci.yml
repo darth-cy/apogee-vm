@@ -27,6 +27,7 @@ jobs:
         run: |
           cargo fmt --all -- --check
           cargo fmt --manifest-path tools/transcript-ref/Cargo.toml --all -- --check
+          cargo fmt --manifest-path tools/stateless-ref/Cargo.toml --all -- --check
           cargo fmt --manifest-path crates/guest-sdk/Cargo.toml --all -- --check
           cargo fmt --manifest-path guests/Cargo.toml --all -- --check
 
@@ -34,6 +35,7 @@ jobs:
         run: |
           cargo clippy --workspace --all-targets -- -D warnings
           cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path tools/stateless-ref/Cargo.toml --all-targets -- -D warnings
           (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
           (cd guests && cargo clippy --bins -- -D warnings)
           # The workspace's ONE cargo feature (master anti-goal 1's only
@@ -452,8 +454,14 @@ jobs:
         run: cd guests/fib && cargo build --target riscv32imac-unknown-none-elf
 
       # Master rule 8: committed fixtures are regenerated and diffed, so a
-      # silently edited vector file fails the build. `transcript-ref` is its own
-      # workspace on purpose; see the comment in its manifest.
+      # silently edited vector file fails the build. `transcript-ref` and
+      # `stateless-ref` are their own workspaces on purpose; see the comments
+      # in their manifests.
+      #
+      # kat-gen's `zkevm` group is opt-in like `guests`: it cuts
+      # crates/host/tests/vectors/zkevm-subset.json from a tests-zkevm release,
+      # 620 MB packed, which CI does not fetch. What CI does run is the subset
+      # itself, in crates/host/tests/conformance.rs.
       #
       # kat-gen's `srs` group needs the 19 GB ceremony file, which is gitignored
       # and absent here: that group prints why and writes nothing, so the diff
@@ -493,4 +501,5 @@ jobs:
         run: |
           cargo run -p kat-gen
           cargo run --manifest-path tools/transcript-ref/Cargo.toml
-          git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constants/tests/vectors/ crates/constraints/tests/vectors/ crates/checker/tests/vectors/ crates/emulator/tests/vectors/
+          cargo run --manifest-path tools/stateless-ref/Cargo.toml
+          git diff --exit-code -- crates/host/tests/vectors/stateless_ref.txt crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constants/tests/vectors/ crates/constraints/tests/vectors/ crates/checker/tests/vectors/ crates/emulator/tests/vectors/

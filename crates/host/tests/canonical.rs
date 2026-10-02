@@ -145,28 +145,33 @@ fn upstream(prehash: &[u8; 32], r: &[u8; 32], s: &[u8; 32], y_odd: bool) -> Opti
         .map(|word| word.0[12..].try_into().expect("twenty bytes"))
 }
 
+/// A block's header, its transactions as EIP-2718 bytes and its withdrawals'
+/// RLP, from its full JSON.
+fn body(json: &Value) -> (Header, Vec<Vec<u8>>, Vec<Vec<u8>>) {
+    let txs = json["transactions"]
+        .as_array()
+        .expect("full")
+        .iter()
+        .map(|t| canonical::transaction(t).expect("a transaction"))
+        .collect();
+    let withdrawals = json["withdrawals"]
+        .as_array()
+        .expect("withdrawals")
+        .iter()
+        .map(|w| block::encode_withdrawal(&canonical::withdrawal(w).expect("a withdrawal")))
+        .collect();
+    (canonical::header(json).expect("a header"), txs, withdrawals)
+}
+
 #[test]
 fn the_roots_the_bloom_and_the_gas_are_the_headers() {
     for number in [MINI, RECEIPTS] {
-        let json = block(number, true);
-        let header = canonical::header(&json).expect("a header");
-        let txs: Vec<Vec<u8>> = json["transactions"]
-            .as_array()
-            .expect("full")
-            .iter()
-            .map(|t| canonical::transaction(t).expect("a transaction"))
-            .collect();
+        let (header, txs, withdrawals) = body(&block(number, true));
         assert_eq!(
             block::ordered_root(&txs),
             header.transactions_root,
             "block {number}"
         );
-        let withdrawals: Vec<Vec<u8>> = json["withdrawals"]
-            .as_array()
-            .expect("withdrawals")
-            .iter()
-            .map(|w| block::encode_withdrawal(&canonical::withdrawal(w).expect("a withdrawal")))
-            .collect();
         assert_eq!(
             block::ordered_root(&withdrawals),
             header.withdrawals_root,
@@ -205,6 +210,24 @@ fn the_roots_the_bloom_and_the_gas_are_the_headers() {
     // No deposit event in this block: its non-empty requests come from the
     // EIP-7002 and EIP-7251 queues, which need execution.
     assert_eq!(block::deposit_requests(&logs), Some(Vec::new()));
+}
+
+/// EIP-7934 bounds `rlp(block)`, whose length the node reports as the block's
+/// `size`, and `block_rlp_len` computes it without building the encoding. The
+/// release's own block-size refusals are 8 MiB by construction, too large for
+/// the committed subset, so this is that rule's coverage in CI.
+#[test]
+fn the_block_size_is_the_node_s() {
+    for number in [MINI, RECEIPTS] {
+        let json = block(number, true);
+        let (header, txs, withdrawals) = body(&json);
+        let txs: Vec<&[u8]> = txs.iter().map(Vec::as_slice).collect();
+        assert_eq!(
+            block::block_rlp_len(&header.encode(), &txs, &withdrawals) as u64,
+            rpc::u64_of(&json["size"], "a size").expect("a quantity"),
+            "block {number}"
+        );
+    }
 }
 
 #[test]

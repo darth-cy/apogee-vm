@@ -31,6 +31,7 @@
 //! | `block`   | `crates/host/tests/vectors/*` (S25's recorded mini-block). **Needs `ETH_RPC_URL`; opt-in only, see `DEFAULT_GROUPS`** |
 //! | `revm`    | `crates/emulator/tests/vectors/revm_block_*` (S24's synthetic block, what native revm makes of it, and the keccak-f frames the guest delegates) |
 //! | `guests`  | the guest ELFs themselves -- opt-in only, see `DEFAULT_GROUPS` |
+//! | `zkevm`   | `crates/host/tests/vectors/zkevm-subset.json` (a `tests-zkevm` release's stateless pairs, one per rule the validator applies). **Needs `APOGEE_ZKEVM_FIXTURES`; opt-in only** |
 
 use std::fs;
 use std::path::PathBuf;
@@ -59,9 +60,10 @@ mod shared;
 mod srs;
 mod tape;
 mod tower;
+mod zkevm;
 
 /// Every group, in the order a reader of the tower would meet them.
-const GROUPS: [(&str, fn()); 21] = [
+const GROUPS: [(&str, fn()); 22] = [
     ("field", field::generate),
     ("poly", poly::generate),
     ("curve", curve::generate),
@@ -83,6 +85,7 @@ const GROUPS: [(&str, fn()); 21] = [
     ("revm", revm::generate),
     ("block", block::generate),
     ("guests", guests::generate),
+    ("zkevm", zkevm::generate),
 ];
 
 /// The groups a bare `cargo run -p kat-gen` runs, which is what CI runs.

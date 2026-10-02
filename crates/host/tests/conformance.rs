@@ -10,84 +10,46 @@
 //! not the expected bytes — and, because the first 32 bytes are the request
 //! root and the 33rd the verdict, it says which half disagreed.
 //!
-//! **Not in CI**: `tests-zkevm@v21.0.1` is a 620 MB tarball, 5.9 GB of JSON
-//! extracted. Run by hand with the extracted `fixtures/` directory named:
+//! **The whole release is not in CI**: `tests-zkevm@v21.0.1` is a 620 MB
+//! tarball, 5.9 GB of JSON extracted. Run by hand with the extracted
+//! `fixtures/` directory named:
 //!
 //! ```text
 //! APOGEE_ZKEVM_FIXTURES=/path/to/fixtures \
 //!   cargo test --release -p host --test conformance -- --ignored --nocapture
 //! ```
+//!
+//! **What CI runs is a subset of it**, `tests/vectors/zkevm-subset.json`, cut
+//! by `cargo run --release -p kat-gen -- zkevm` from the same release: one
+//! case for every rule the validator refuses by, the smallest valid one, every
+//! undecodable one and the cases this stage's fixes were found by. Each is
+//! held to its output bytes and to the rule it names.
 
+use host::zkevm::{self, FIXTURES_VAR, RELEASE_COMMIT};
 use rayon::prelude::*;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-const FIXTURES_VAR: &str = "APOGEE_ZKEVM_FIXTURES";
-
-fn json_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())) {
-        let path = entry.expect("a directory entry").path();
-        if path.is_dir() {
-            json_files(&path, out);
-        } else if path.extension().is_some_and(|e| e == "json") {
-            out.push(path);
-        }
-    }
-}
-
-/// Every `(input, output)` pair in one fixture file, named by where it sits.
-fn pairs(path: &Path) -> Vec<(String, Vec<u8>, Vec<u8>)> {
-    let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    let value: Value =
-        serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    let mut out = Vec::new();
-    collect(&value, &mut String::new(), &mut out);
-    out
-}
-
-fn collect(value: &Value, name: &mut String, out: &mut Vec<(String, Vec<u8>, Vec<u8>)>) {
-    match value {
-        Value::Object(map) => {
-            if let (Some(Value::String(input)), Some(Value::String(output))) = (
-                map.get("statelessInputBytes"),
-                map.get("statelessOutputBytes"),
-            ) {
-                out.push((name.clone(), hex(input), hex(output)));
-                return;
-            }
-            for (key, child) in map {
-                let len = name.len();
-                name.push('/');
-                name.push_str(key);
-                collect(child, name, out);
-                name.truncate(len);
-            }
-        }
-        Value::Array(items) => {
-            for (i, child) in items.iter().enumerate() {
-                let len = name.len();
-                name.push_str(&format!("[{i}]"));
-                collect(child, name, out);
-                name.truncate(len);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn hex(text: &str) -> Vec<u8> {
-    test_support::hex_to_bytes(text.strip_prefix("0x").unwrap_or(text)).expect("hex")
-}
-
-/// What the validator made of an input, for a failure line: the rule it
-/// broke, `valid`, or `undecodable`.
-fn verdict_of(input: &[u8]) -> String {
-    match revm_block::ssz::decode(input) {
-        None => "undecodable".into(),
-        Some(decoded) => match revm_block::stateless::verify(&decoded) {
-            Ok(()) => "valid".into(),
-            Err(invalid) => format!("{invalid:?}"),
-        },
+#[test]
+fn the_committed_subset_is_the_release_s() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/vectors/zkevm-subset.json");
+    let text = std::fs::read_to_string(&path).expect("the committed subset");
+    let subset: Value = serde_json::from_str(&text).expect("JSON");
+    assert_eq!(subset["commit"], RELEASE_COMMIT, "cut from another release");
+    let cases = subset["cases"].as_array().expect("a case list");
+    assert!(!cases.is_empty(), "an empty subset holds nothing");
+    for case in cases {
+        let field = |key: &str| case[key].as_str().unwrap_or_else(|| panic!("no {key}"));
+        let hex = |key: &str| {
+            test_support::hex_to_bytes(field(key).strip_prefix("0x").expect("0x")).expect("hex")
+        };
+        let (name, input) = (field("name"), hex("statelessInputBytes"));
+        assert_eq!(
+            revm_block::stateless::run(&input)[..],
+            hex("statelessOutputBytes")[..],
+            "{name}"
+        );
+        assert_eq!(zkevm::verdict(&input), field("rule"), "{name}");
     }
 }
 
@@ -95,9 +57,7 @@ fn verdict_of(input: &[u8]) -> String {
 #[ignore = "needs an extracted tests-zkevm release, named by APOGEE_ZKEVM_FIXTURES"]
 fn every_stateless_output_is_the_release_s() {
     let dir = PathBuf::from(std::env::var(FIXTURES_VAR).expect(FIXTURES_VAR));
-    let mut files = Vec::new();
-    json_files(&dir, &mut files);
-    files.sort();
+    let files = zkevm::files(&dir);
 
     // Per file: (pairs, root mismatches, failure lines).
     let results: Vec<(usize, usize, Vec<String>)> = files
@@ -105,19 +65,20 @@ fn every_stateless_output_is_the_release_s() {
         .map(|path| {
             let mut root_wrong = 0;
             let mut failures = Vec::new();
-            let pairs = pairs(path);
+            let pairs = zkevm::pairs(path);
             let count = pairs.len();
-            for (name, input, expected) in pairs {
-                let output = revm_block::stateless::run(&input);
-                if output[..] != expected[..] {
-                    let root = output[..32] != expected[..32];
+            for pair in pairs {
+                let output = revm_block::stateless::run(&pair.input);
+                if output[..] != pair.output[..] {
+                    let root = output[..32] != pair.output[..32];
                     root_wrong += root as usize;
                     failures.push(format!(
-                        "{}{name}: expected {} got {} ({}){}",
+                        "{}{}: expected {} got {} ({}){}",
                         path.strip_prefix(&dir).unwrap_or(path).display(),
-                        expected.get(32).copied().unwrap_or(0xff),
+                        pair.name,
+                        pair.output.get(32).copied().unwrap_or(0xff),
                         output[32],
-                        verdict_of(&input),
+                        zkevm::verdict(&pair.input),
                         if root { ", ROOT WRONG" } else { "" },
                     ));
                 }
