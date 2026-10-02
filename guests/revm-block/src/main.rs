@@ -14,11 +14,11 @@
 //!
 //! The witness is megabytes and the verifier has no business reading it, so it
 //! is advice: ordinary loads from `guest_memory::ADVICE_ORIGIN`, costing the
-//! statement nothing. **Nothing binds it**, which is exactly why the guest
-//! checks it: [`revm_block::BlockWitness::decode`] refuses a non-canonical
-//! encoding, and the commitment this guest publishes names the state roots the
-//! block began and ended on, so a witness describing a different block
-//! publishes a different commitment rather than the same one.
+//! statement nothing. **Nothing binds it.** [`revm_block::BlockWitness::decode`]
+//! refuses a non-canonical encoding, and the journal is what the execution did
+//! (`docs/spec/revm-block.md` §2) — but no state root is checked or published,
+//! so a proof covers these transactions over the witness's state, not that this
+//! is Ethereum's state. `src/stateless_main.rs` is the binary that checks it.
 //!
 //! Until S-IO this program could not be proven at all. There was no provable
 //! way to get a witness in, so S24 proved a second binary with the witness
