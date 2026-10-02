@@ -25,31 +25,88 @@
 //! undecodable one and the cases this stage's fixes were found by. Each is
 //! held to its output bytes and to the rule it names.
 
+use host::fixture::{build_revm_guest, Mode};
 use host::zkevm::{self, FIXTURES_VAR, RELEASE_COMMIT};
 use rayon::prelude::*;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-#[test]
-fn the_committed_subset_is_the_release_s() {
+/// One committed case: its name, the rule it names, its input and its output.
+struct Case {
+    name: String,
+    rule: String,
+    input: Vec<u8>,
+    output: Vec<u8>,
+}
+
+/// The committed subset, held to the release the guest implements.
+fn subset() -> Vec<Case> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/vectors/zkevm-subset.json");
     let text = std::fs::read_to_string(&path).expect("the committed subset");
     let subset: Value = serde_json::from_str(&text).expect("JSON");
     assert_eq!(subset["commit"], RELEASE_COMMIT, "cut from another release");
-    let cases = subset["cases"].as_array().expect("a case list");
+    let cases: Vec<Case> = subset["cases"]
+        .as_array()
+        .expect("a case list")
+        .iter()
+        .map(|case| {
+            let field = |key: &str| case[key].as_str().unwrap_or_else(|| panic!("no {key}"));
+            let hex = |key: &str| {
+                test_support::hex_to_bytes(field(key).strip_prefix("0x").expect("0x")).expect("hex")
+            };
+            Case {
+                name: field("name").into(),
+                rule: field("rule").into(),
+                input: hex("statelessInputBytes"),
+                output: hex("statelessOutputBytes"),
+            }
+        })
+        .collect();
     assert!(!cases.is_empty(), "an empty subset holds nothing");
-    for case in cases {
-        let field = |key: &str| case[key].as_str().unwrap_or_else(|| panic!("no {key}"));
-        let hex = |key: &str| {
-            test_support::hex_to_bytes(field(key).strip_prefix("0x").expect("0x")).expect("hex")
-        };
-        let (name, input) = (field("name"), hex("statelessInputBytes"));
+    cases
+}
+
+#[test]
+fn the_committed_subset_is_the_release_s() {
+    for case in subset() {
+        let name = &case.name;
         assert_eq!(
-            revm_block::stateless::run(&input)[..],
-            hex("statelessOutputBytes")[..],
+            revm_block::stateless::run(&case.input)[..],
+            case.output[..],
             "{name}"
         );
-        assert_eq!(zkevm::verdict(&input), field("rule"), "{name}");
+        assert_eq!(zkevm::verdict(&case.input), case.rule, "{name}");
+    }
+}
+
+/// The **guest** publishes the subset's outputs: every case through the
+/// `revm-block-stateless` image in the emulator, its journal held to the
+/// release's 43 bytes. The library's answer is the program's only if the
+/// binary a proof would be about agrees with it.
+///
+/// One case is not run: the empty input, which a run cannot be given, a run
+/// with no advice having no advice region (`src/stateless_main.rs`).
+/// `#[ignore]`d because it builds the 2 MB image from source. It prints each
+/// case's cycles, which are what proving it costs.
+#[test]
+#[ignore = "builds the revm stateless guest from source"]
+fn the_guest_publishes_the_subset_s_outputs() {
+    let elf = build_revm_guest(Mode::Stateless).expect("the stateless guest builds");
+    let image = loader::load_elf(&elf).expect("the stateless guest loads");
+    for case in subset().into_iter().filter(|case| !case.input.is_empty()) {
+        let io = emulator::GuestIo {
+            input: Vec::new(),
+            advice: case.input,
+        };
+        let execution = emulator::run(&image, &io).expect("the guest runs");
+        assert_eq!(execution.exit_code, 0, "{}", case.name);
+        assert_eq!(execution.io.output, case.output, "{}", case.name);
+        println!(
+            "{:>12} cycles  {:<24} {}",
+            execution.cycle_count,
+            case.rule.split(' ').next().unwrap_or(""),
+            case.name
+        );
     }
 }
 
