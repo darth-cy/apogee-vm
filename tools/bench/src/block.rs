@@ -123,9 +123,8 @@ pub fn run(options: &Options) -> Result<(), String> {
     let witness =
         std::fs::read(dir.join(fixture::witness_file(&options.fixture))).map_err(|e| {
             format!(
-                "the `{}` pin is committed but its witness is not ({e}). \
-                 The full block's witness is megabytes and is regenerated rather than \
-                 carried; `cargo run -p kat-gen -- block` writes it.",
+                "the `{}` pin is committed but its witness is not ({e}); \
+                 `cargo run -p kat-gen -- block` re-records it.",
                 options.fixture
             )
         })?;

@@ -39,10 +39,26 @@ pub mod recorder {
                            pub rpc_hits: u64, pub rpc_misses: u64 }
     pub fn record(rpc: Rpc, block_number: u64, range: TxRange) -> Result<Recording, String>;
     pub fn mainnet_spec(block_number: u64) -> Result<SpecId, String>;
-    // the stateless pass: the trie nodes that AUTHENTICATE a touch set. Not a
-    // complete stateless witness -- see below.
-    pub fn collect_nodes(rpc: Rpc, at: u64, witness: &BlockWitness)
-        -> Result<(Vec<Vec<u8>>, u64, u64), String>;
+}
+
+// S-STATELESS: JSON-RPC objects back to the bytes the chain hashes, for
+// tests/canonical.rs to hold the stateless guest's encodings to real blocks
+pub mod canonical {
+    pub fn header(json: &Value) -> Result<Header, String>;
+    pub fn transaction(json: &Value) -> Result<Vec<u8>, String>;   // EIP-2718
+    pub fn withdrawal(json: &Value) -> Result<Withdrawal, String>;
+    pub fn receipt(json: &Value) -> Result<(u8, bool, u64, Vec<Log>), String>;
+}
+
+// S-STATELESS: a tests-zkevm release on disk -- the one reader of it
+pub mod zkevm {
+    pub const FIXTURES_VAR: &str = "APOGEE_ZKEVM_FIXTURES";
+    pub const RELEASE_COMMIT: &str;          // the release the stateless guest implements
+    pub struct Pair { pub name: String, pub input: Vec<u8>, pub output: Vec<u8> }
+    pub fn files(dir: &Path) -> Vec<PathBuf>;           // sorted
+    pub fn pairs(path: &Path) -> Vec<Pair>;
+    pub fn release_commit(dir: &Path) -> Option<String>;
+    pub fn verdict(input: &[u8]) -> String;  // the rule `verify` refuses by, `valid`, `undecodable`
 }
 
 // the minimal JSON-RPC client
@@ -61,7 +77,7 @@ pub mod rpc {
 
 // what a recorded block is on disk
 pub mod fixture {
-    pub enum Mode { Mini, Stateless }              // Mode::binary() names the guest binary
+    pub enum Mode { Mini, Stateless }   // binary() names the guest; only Mini is ever recorded
     pub struct Pin { /* the block, its roots, and the SHA-256 of the other two files */ }
     impl Pin { pub fn to_bytes(&self) -> Vec<u8>; pub fn from_bytes(&[u8]) -> Result<Pin, String>;
                pub fn check(&self, witness: &[u8], journal: &[u8]) -> Result<(), String>; }
@@ -179,27 +195,6 @@ Master rule 2's runtime list is exhaustive, so both additions are recorded here 
   pins. It declares no dependencies of its own, on purpose, so taking it cannot unify a
   feature into anything.
 
-## `collect_nodes` authenticates; it does not complete
-`docs/spec/revm-block.md` §1.5 requires a stateless witness's `nodes` to carry every node
-needed to apply the block's updates **deterministically**, siblings and boundary nodes
-included, and the guest to authenticate each against the trie hash that names it before
-using it. `collect_nodes` returns what `eth_getProof` can give, which is the nodes on each
-touched key's own path — enough to *authenticate* every recorded value, and **not** enough
-to *update*.
-
-The gap is a deletion. Removing a key whose branch is left with one child needs that
-child's type and path to merge into, and the child is a *sibling* of the deleted key, so it
-lies on no touched key's path. Measured at 29 % of randomised trials, and common in
-practice because writing zero to a storage slot is a deletion. This endpoint cannot close
-it: `debug_executionWitness` is not served, `debug_dbGet` answers `pebble: not found` for a
-node hash under Geth's path-based state scheme, and `eth_getProof` takes a preimage.
-
-So the two halves of the stateless mode are tested against two different things, and
-`tests/stateless.rs` says which is which: **authentication** runs on the pinned
-mini-block's real nodes against block 26,057,508's **real** state root, and the **whole
-transition** runs on a synthetic block whose node set is complete by construction. Neither
-is a substitute for the other.
-
 ## The fixtures
 `tests/vectors/`, and `docs/spec/revm-block.md` §1.3 is the normative account.
 
@@ -208,8 +203,10 @@ is a substitute for the other.
 | `mini-block.json` | yes | the `Pin`: the block, its roots, and the SHA-256 of the other two |
 | `mini-block-witness.bin` | yes | the `BlockWitness`, `postcard`, the guest's advice |
 | `mini-block-journal.bin` | yes | what native revm makes of it |
-| `mini-block-nodes.bin` | yes | a `StatelessWitness` whose `nodes` authenticate the touch set against the **real** parent state root |
 | `rpc-cache/` | yes | the content-addressed snapshot that re-records the pinned block |
+| `canonical/` | yes | S-STATELESS: block 26,059,929 in full, its parent and its receipts, as the node served them |
+| `zkevm-subset.json` | yes | S-STATELESS: 34 stateless pairs of `tests-zkevm@v21.0.1`, cut by `kat-gen -- zkevm` |
+| `stateless_ref.txt` | yes | S-STATELESS: 29 stateless inputs and their request roots, by `tools/stateless-ref` |
 
 The refresh is `cargo run -p kat-gen -- block`, which needs `ETH_RPC_URL` and is **not** in
 `DEFAULT_GROUPS` — the same opt-in the `guests` group has, and what keeps CI off the
@@ -220,8 +217,11 @@ re-records the pinned one from the cache alone to prove the recording determinis
 ## Tests
 | File | What |
 | --- | --- |
-| `tests/mpt.rs` | the trie: Ethereum's three published root vectors (empty, `dogglesworth`, `horse`), order- and delete-invariance over every permutation, a sparse rebuild from every prefix of its own nodes, and each refusal separately — a missing node is not an absence, a blinded collapse names its hash, every canonical-form rule refuses. 16 tests |
-| `tests/stateless.rs` | acceptance 7: 17 real mainnet accounts and 37 real slots authenticated against the real parent state root, every one of 210 real nodes corrupted in turn and refused, every one dropped in turn and refused **as missing rather than as absent**; then the synthetic transition — the pinned root recomputed, every node corrupted, every balance corrupted, and the two system-contract addresses against their EIPs. 9 fast, 2 `#[ignore]`d for the guest |
+| `tests/mpt.rs` | the trie: Ethereum's three published root vectors (empty, `dogglesworth`, `horse`), order- and delete-invariance over every permutation, a sparse rebuild from every prefix of its own nodes, and each refusal separately — a missing node is not an absence, a blinded collapse names its hash, every canonical-form rule refuses. 18 tests |
+| `tests/canonical.rs` | S-STATELESS: the stateless guest's encodings against two real blocks — every header to its hash, 313 transactions to their hashes and senders, the roots, receipts, bloom, gas and block size, each header rule by its own mutation, EIP-2's signature rules, the strict decoder, the deposit parser and the blob price. 10 tests |
+| `tests/conformance.rs` | S-STATELESS: the committed subset, each case held to its 43 bytes and its rule; **`#[ignore]`d**, the whole release by hand (`APOGEE_ZKEVM_FIXTURES`) and the subset through the guest binary in the emulator, printing cycles. `docs/spec/stateless.md` §4 |
+| `tests/ssz.rs` | S-STATELESS: the stateless decoder and request root against `eth-act/ere-guests` v0.17.1 on all 29 of `stateless_ref.txt`'s inputs — the Electra/Fulu layout no release fills |
+| `tests/revm_lock.rs` | S-STATELESS: both lockfiles hold the reference stateless guest's revm set, crate for crate |
 | `tests/prove.rs` | **`#[ignore]`d** — the mini-block gate (acceptance 4) and the advice tamper twin (acceptance 5). Since S-STREAM it proves through `host::prove(.., IN_FLIGHT)` with `IN_FLIGHT = 4`: the suite is run for its verdict and not its wall clock, and four shards proved at once was 77.10 GiB against eight at 83.91 on a 51-shard statement |
 | `tests/witness.rs` | acceptance 1 (two cache-only recordings, byte-identical, zero network calls, equal to the committed fixture), acceptance 2's native half (the witness alone reproduces the pinned journal), acceptance 3 twice (every recorded slot deleted in turn, and every recorded account, each refused), the fixture against its pin, the fork table both ways, the journal against the public window's ceiling, and a one-wei balance change moving the journal |
 

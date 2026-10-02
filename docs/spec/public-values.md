@@ -441,9 +441,11 @@ built.** Public values are what the verifier reads: a commitment, a header or a 
 not a blob. A large *input* belongs in the advice region, where it costs the verifier
 nothing and the guest checks it against something public — the pattern §6 states and
 `guests/revm-block` follows. A large *output* belongs behind a digest, which is what
-`guests/revm-block`'s **stateless** binary does: a fixed 148-byte journal naming the two
-state roots and carrying `keccak256` of §2's record stream (`docs/spec/revm-block.md` §5).
-That binary, and not the mini one, is the owner's chosen full-block target.
+`guests/revm-block`'s **stateless** binary does: a fixed 43-byte journal, the spec's
+stateless validation result, whose first field is the SSZ root of the payload request it
+validated (`docs/spec/stateless.md`; S-STREAM's 148-byte journal of two roots and two
+digests preceded it). That binary, and not the mini one, is the owner's chosen full-block
+target.
 `docs/spec/revm-block.md` §2 stays **frozen** — the mini guest's format did not change
 here, it only has room now.
 

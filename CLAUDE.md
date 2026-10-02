@@ -24,7 +24,10 @@ docs/
                  guest-target backend; and
                  revm-block.md, S24's two wire formats: the output commitment, frozen,
                  and BlockWitness, deliberately NOT frozen -- §1.6 is S26's blob-price
-                 field, recorded rather than derived; and
+                 field, recorded rather than derived -- the MINI mode's alone; and
+                 stateless.md, S-STATELESS's canonical stateless validator: which
+                 tests-zkevm inputs it validates, the sentinel, how a block runs on
+                 revm so the 43-byte result is the spec's, and what no oracle reaches; and
                  streaming.md, S26's two-pass prover: what survives an execution, the
                  shard cut a flush makes, and the backpressure; and
                  profiling.md, S26's cycle profiler: the pc histogram, the ordered
@@ -85,8 +88,9 @@ crates/
                  `verifier` CLI; std
   host/          the host SDK: setup/prove/verify around S20's entry points, the
                  WitnessRecorder that records a real mainnet block, the minimal JSON-RPC
-                 client and its content-addressed cache, and what a recorded block is on
-                 disk; std
+                 client and its content-addressed cache, what a recorded block is on
+                 disk, JSON-RPC objects back to the bytes the chain hashes, and the one
+                 reader of a tests-zkevm release; std
   prover/        the verifying key's construction, family registration and fills, the
                  global commit phase, prove_shard, and `streaming`, the two-pass prover
                  whose peak does not grow with the shard count -- THE ONE PROVING PATH.
@@ -108,9 +112,10 @@ guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, op
                  guests/Cargo.toml's [patch.crates-io]; see guests/vendor/README.md.
                  S26 vendored k256 0.13.4 and S26b ark-ff 0.6.0, routing secp256k1's
                  two fields and BN254's two through MOD_MUL; S26c patched k256's
-                 ProjectivePoint through EC_ADD and vendored revm-precompile
-                 42.0.1, whose Crypto DEFAULT BODIES route 0x02, 0x06 and 0x07 --
-                 installing a second impl costs 870 kB of dead BLS12-381
+                 ProjectivePoint through EC_ADD and vendored revm-precompile,
+                 whose Crypto DEFAULT BODIES route 0x02, 0x06 and 0x07 --
+                 installing a second impl costs 870 kB of dead BLS12-381; it is
+                 43.0.2 since S-STATELESS, the reference stateless guest's
 assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 handoff
 tools/
   profiler/      the cycle profiler: where a guest's RV32 cycles go, by function and by
@@ -125,11 +130,14 @@ tools/
                  are megabytes),
                  the generic table's commitments over the ceremony, S20's global
                  transcript tape, and S24's synthetic block -- the witness, what native
-                 revm makes of it, and the keccak-f frames the guest delegates
+                 revm makes of it, and the keccak-f frames the guest delegates -- and,
+                 opt-in, a tests-zkevm release's stateless subset (`zkevm`)
   bench/         one routine per measurement, individually selectable
   artifact-dump/ a guest ELF out as the frozen ProgramImage artifact, plus a
                  readable report of it; `tables` prints the decoded tables and identity
   transcript-ref/ the transcript oracle: Plonky3 + zkhash, NOT a workspace member
+  stateless-ref/ the Electra/Fulu stateless-input oracle: eth-act/ere-guests v0.17.1
+                 over libssz, NOT a workspace member
   test-support/  seeded RNG, SHA-256, hex; shared by every suite and generator
 ```
 Later stages add the crates listed in the master prompt's workspace layout. Crate names
@@ -187,10 +195,12 @@ discipline" rules 3 and 6-8 are the authority.
 ```
 cargo fmt --all -- --check
 cargo fmt --manifest-path tools/transcript-ref/Cargo.toml --all -- --check
+cargo fmt --manifest-path tools/stateless-ref/Cargo.toml --all -- --check
 cargo fmt --manifest-path crates/guest-sdk/Cargo.toml --all -- --check
 cargo fmt --manifest-path guests/Cargo.toml --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
+cargo clippy --manifest-path tools/stateless-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
 cargo clippy -p prover --all-targets --features debug-info -- -D warnings   # the ONE feature
@@ -201,6 +211,7 @@ cargo test -p program --test delegation -- --ignored --test-threads=1  # static 
 cargo test -p emulator --test guests -- --ignored --test-threads=1  # DEFERRED; S26c's invocation counts: four traced executions, two of them `ec-ops`, 23.9 GiB peak and 118 s -- a GitHub runner reclaims the job, so this one is a dev-server run
 cargo test -p prover --test fills -- --ignored --test-threads=1  # DEFERRED; S26c: the MOD_MUL and EC_ADD fills, which exist only at 2^16, so each is its full committed width over 65,536 rows -- 19.1 GiB peak against 1.72 for the four that stay in CI, both measured at S26c when the keccak fill was 2.18 MB at 2^8; at S26d's 2^18 that fill alone is 2.08 GiB, so both owe re-measurement (`crates/prover/tests/fills.rs`'s header does the arithmetic)
 APOGEE_GUEST_PROFILE=release cargo test -p emulator --test revm -- --ignored --test-threads=1  # S24's guest against native revm; builds the revm guest, 47 s
+cargo test --release -p host --test conformance the_guest -- --ignored  # S-STATELESS: the committed tests-zkevm subset through the stateless guest's BINARY, 33 cases, cycles printed; builds the guest, 17 s
 cargo test -p checker --test logup -- --include-ignored --test-threads=1  # DEFERRED; 2^20 rows, 17.5 GB peak, 203 s, 30 min on a runner
 cargo test -p prover --test acceptance -- --include-ignored --test-threads=1  # DEFERRED; S16's statement, 10.7 GB peak, 374 s
 cargo test -p verifier --test cli -- --include-ignored --test-threads=1       # DEFERRED; ditto, 10.7 GB, 44 s
@@ -226,8 +237,9 @@ RAYON_NUM_THREADS=6 cargo test --release -p prover --test revm -- --include-igno
 cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify -p verifier-core --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
+cargo run --manifest-path tools/stateless-ref/Cargo.toml
 cd guests/fib && cargo build --target riscv32imac-unknown-none-elf
-git diff --exit-code -- crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constants/tests/vectors/ crates/constraints/tests/vectors/ crates/checker/tests/vectors/ crates/emulator/tests/vectors/
+git diff --exit-code -- crates/host/tests/vectors/stateless_ref.txt crates/field/tests/vectors/ crates/transcript/tests/vectors/ crates/poly/tests/vectors/ crates/curve/tests/vectors/ crates/srs/tests/vectors/ crates/pcs/tests/vectors/ crates/loader/tests/vectors/ crates/isa/tests/vectors/ crates/program/tests/vectors/ crates/constants/tests/vectors/ crates/constraints/tests/vectors/ crates/checker/tests/vectors/ crates/emulator/tests/vectors/
 -------------------------------------------------------------------------------
 APOGEE_DEBUG=detail cargo test --release -p prover --features debug-info \
     --test <suite> -- --include-ignored --test-threads=1 2>&1 | tee /tmp/<suite>.log
@@ -258,6 +270,14 @@ ETH_RPC_URL=... cargo run -p kat-gen -- block   # S25's manual fixture refresh: 
                                             # recent ones, re-record from the cache. Opt-in,
                                             # NOT in DEFAULT_GROUPS: CI never touches RPC
 cargo run --manifest-path tools/transcript-ref/Cargo.toml   # ditto, transcript vectors
+APOGEE_ZKEVM_FIXTURES=<release>/fixtures cargo test --release -p host --test conformance every_stateless -- --ignored --nocapture
+                                            # S-STATELESS: the WHOLE tests-zkevm@v21.0.1 release,
+                                            # 67,251 pairs, natively, about 2 s; each failure names
+                                            # the rule the validator applied. The release is 620 MB
+                                            # packed, so CI runs the committed subset instead
+APOGEE_ZKEVM_FIXTURES=<release>/fixtures cargo run --release -p kat-gen -- zkevm
+                                            # re-cut that subset; refuses unless every pair matches.
+                                            # Opt-in, NOT in DEFAULT_GROUPS
 cargo run --release -p bench                # every routine; internal numbers only
 cargo run --release -p bench -- prove mini-block --hourly-usd <p> --json <path>
                                             # prove a recorded block and emit a BenchReport,
@@ -1239,9 +1259,25 @@ is derivable *from* them is regenerated and diffed in CI.
   blockhash_reads_a_placeholder_today` pins today's answer so it cannot close by accident.
   The **output commitment stays frozen**, and so does §1.1: whatever fields the witness
   gains, the field order is the canonical order and `decode` re-encodes and compares, so
-  one logical state has exactly one encoding. `revm` is pinned `=42.0.1` for the opposite
+  one logical state has exactly one encoding. `revm` is pinned exactly for the opposite
   reason — a guest's identity is a digest of its compiled image, so a patch bump moves it
-  and every number pinned against it, in both lockfiles.
+  and every number pinned against it, in both lockfiles. **Since S-STATELESS the pin is
+  `=43.0.1` and it is the reference stateless guest's revm set, crate for crate** (owner's
+  decision): `paradigmxyz/stateless`'s lock, the one revm whose system calls carry
+  EIP-8037's state-gas reservoir. 43.0.1 is yanked, so `=` holds only because both
+  lockfiles already contain it, and `crates/host/tests/revm_lock.rs` is what refuses a
+  `cargo update` that moves any of the twelve crates.
+- **The stateless guest is the canonical stateless validator, and three of its rules are
+  the release's, not reth's** (S-STATELESS, `docs/spec/stateless.md`). `revm-block-
+  stateless` takes `tests-zkevm@v21.0.1`'s `statelessInputBytes` as advice and publishes
+  its 43-byte `statelessOutputBytes`; all 67,251 pairs of the release match natively, and
+  the binary matches the committed subset. What made them match, each found by the release
+  and each a regression the subset in CI now catches: **code loads when revm asks** —
+  `WitnessDb::basic` returns no code, the witness carrying only what the spec read;
+  **writes precede deletions** in the post-state replay, or a collapse needs a sibling the
+  witness lacks; and **one commit per block access index, every baseline the index's** —
+  revm 43's access-list builder nets against each call's baseline, and `commit_index`
+  sets them back to the committed state. Following reth would have kept all three bugs.
 - **The block's gas limit is a running bound, and `run` is what enforces it.** revm checks
   `tx.gas_limit <= block.gas_limit` per transaction and can check no more: `transact_one`
   is one transaction and revm keeps no cumulative gas anywhere. In a real client that is
@@ -1310,7 +1346,10 @@ is derivable *from* them is regenerated and diffed in CI.
   `2^22`.** Row `i` is pc `2i`, absolute, so a family's height must satisfy
   `last_pc <= 2*height - 4` — and `.text` starts at `RAM_ORIGIN` exactly. S24's release
   image uses 82% of the `2^20` reach and its debug image does not fit at all, which is why
-  that guest is proven at `--release`. `2^22` is the menu's last entry; there is no step
+  that guest is proven at `--release`. **The stateless binary is the tight one since
+  S-STATELESS**: 1,959,096 bytes of `.text`, 96.5% of the reach, about 72 kB of headroom —
+  the largest share is the precompiles' BN254 and BLS12-381 arithmetic, which Prague's
+  EIP-2537 made live code. `2^22` is the menu's last entry; there is no step
   above it.
 - **The witness is read strictly, and an absent entry is an error** (S25). S24 read an
   address absent from `BlockWitness::accounts` as an empty account and a slot absent from
@@ -1390,6 +1429,7 @@ is derivable *from* them is regenerated and diffed in CI.
 | S-BATCH — The mini-block gate, measured | done | `docs/handoff/S-BATCH-miniblock-gate.md` |
 | S26d — `KECCAK_F` re-shaped: one round a row | done | `docs/handoff/S26d-keccak-round.md` |
 | S-STREAM — The sixteen-kilobyte journal; streaming is the only path | done | `docs/handoff/S-STREAM.md` |
+| S-STATELESS — The canonical stateless validator, held to `tests-zkevm@v21.0.1` | done | `docs/handoff/S-STATELESS.md` |
 
 **S-IO takes no number, and that is deliberate** (owner's decision). It is not one of the
 original twenty-seven stages — it is the stage those twenty-seven forgot, inserted after
@@ -1433,6 +1473,21 @@ not optional. **The only thing a proving run archives is the proof**, through
 handoff note. It also **retires `prover/metrics`**, the workspace's second cargo feature:
 it measured the archived path, and a harness measuring a path nothing runs is the hazard
 anti-goal 1 exists to forbid.
+
+**`S-STATELESS` takes no number either**, and it is the stage that makes the full-block
+guest a target other zkVM teams' numbers can be compared against. The owner asked for
+signature-authenticated transactions and canonical block validation, and then pulled the
+next stage's canonical interface forward: `revm-block-stateless` now reads
+`tests-zkevm@v21.0.1`'s `statelessInputBytes` and publishes its 43-byte
+`statelessOutputBytes`, for Osaka, BPO1, BPO2 and Amsterdam, recovering every sender and
+EIP-7702 authority itself over the vendored k256's delegated arithmetic. **The whole release
+matches, 67,251 pairs of 67,251**, natively and by hand; CI holds a 34-case subset of it,
+each case to its bytes and its rule, and the Electra/Fulu layout the release does not fill
+to `eth-act/ere-guests` through `tools/stateless-ref`. S25's stateless witness, S-STREAM's
+148-byte journal and everything that wrote or read them are deleted (owner's decision).
+What it owes, in `docs/handoff/S-STATELESS.md`: an Osaka-family block validated end to end
+against a canonical output, which needs the witness producer that is the next stage's; and
+the deferred suites, which run in one batch at the end of the progression.
 
 **`S-NATIVE-IO` takes no number for the same reason**, and it is S-IO's other half. S-IO
 built the mechanism that binds an execution's public values and left the POSIX surface
