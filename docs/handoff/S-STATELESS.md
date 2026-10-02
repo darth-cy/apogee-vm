@@ -196,13 +196,12 @@ run in one batch at the end of the progression, per the root `CLAUDE.md`.
 **4. 70 kB of image headroom.** The next feature added to the stateless binary should be
 priced against it; past `2^20`'s reach the decoded tables go to `2^22`.
 
-**5. The first stateless proof.** `bench prove --stateless <file>` exists: an EEST fixture
-JSON or a raw input file, its `statelessInputBytes` handed to the guest unchanged and the
-proved journal held to the fixture's `statelessOutputBytes`. **It has not been run**: every
-stateless proof carries a `2^18` `KECCAK_F` shard, ~60 GB of forward pass, past this
-machine's 48 GB, so it is a dev-server run over a §7 block, after the deferred batch. The
-benchmark workload's positive and rejection fixtures stay the next stage's; the subset
-already shows the guest passing them for this release.
+**5. The first stateless proofs are §8's.** `bench prove --stateless <file>` hands an EEST
+fixture's or a raw file's `statelessInputBytes` to the guest unchanged and holds the proved
+journal to the fixture's `statelessOutputBytes`; it proved two §7 blocks on the dev server,
+one of them a full 101 Mgas block. The benchmark workload's positive and rejection
+fixtures stay the next stage's; the subset already shows the guest passing them for this
+release.
 
 ---
 
@@ -229,3 +228,46 @@ a real block's last key is refused, with the real root, after its 59 other trans
 | the binary, `every_output` | the newest ten | exit 0 and the expected bytes, 244M–582M cycles, 59 s in all |
 
 The whole dataset, 22.67 GiB packed, has not been run.
+
+---
+
+## 8. The first proofs
+
+Two `glamsterdam-devnet-8` blocks through `bench prove --stateless` on the dev server (an
+`r8i.8xlarge`: 32 vCPU, 247.7 GiB), tree `6ff3666`, over the ceremony SRS, with the
+streaming prover and `APOGEE_DEBUG=phase`. Each proof **verified** and its journal is **the
+expected 43 bytes**; the larger one re-verifies from its archived files on a laptop in 32 s.
+Program identity `8905ead4494d897e90c1d24cdea9faecb39d35fae0b0eb2cc63484a4e9e2900b`.
+
+| | block 215,017 | block 257,510 |
+| --- | --- | --- |
+| transactions, gas | 1, 15,000 | 60, 101,517,030 |
+| guest cycles | 6,291,677 | 349,437,360 |
+| shards | 20 | **382**: 337 execution, 32 `SHA256_COMP`, 2 each of `KECCAK_F`, `MOD_MUL` and `EC_ADD`, 3 `ZERO_WINDOWS`, 4 other windows |
+| shards in flight | 8 | 12 |
+| pass 1, execute and commit | 41.5 s committing | 55 s, then **2,232 s** committing |
+| pass 2, prove | 377 s | 4,291 s |
+| proving, wall clock | 421 s | **6,635 s**, 1 h 51 min |
+| verify | 2.3 s | 34.9 s |
+| proof, statement | 4.4 MB, 79 kB | 65.9 MB, 890 kB |
+| peak RSS | 78.9 GiB | **193.0 GiB** |
+
+What the two runs establish, and what they found:
+
+- **The stateless program proves, and so does `SHA256_COMP` in a block** — S-BATCH's mini-block
+  proved zero shards of it; here the request root's SSZ hashing is 32.
+- **Pass 1 is a third of the wall clock, and it is serial.** It commits each shard as the
+  shard fills, one after another, building the memory columns on one thread
+  (`crates/trace/src/memory.rs` has no rayon): 2,232 s for 382 shards at ~3.5 of 32 cores on
+  average, where pass 2 held 70–100% of the box at 12 in flight. Committing shards
+  concurrently, bounded as pass 2's proving is, is the next cut in the wall clock.
+- **The guest's RAM is four windows**, 16 MiB — window 0 and three `ZERO_WINDOWS` — not the
+  hundreds an estimate from the emulator's resident memory suggested: most of that was the
+  emulator's own.
+- **The peak comes at exit**, when every family's partial buffer queues at once — 193 GiB
+  against 125–150 for the run's steady state — so 12 in flight is near this box's ceiling
+  for a block this size.
+
+The run's report, log, memory samples and the four proof files of each block are archived
+with the dev box's results; the driver was `prove.sh <name> <fixture.json> <in-flight>`
+around `cargo run --release -p bench --features prover/debug-info -- prove --stateless`.
