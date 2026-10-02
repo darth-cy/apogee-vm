@@ -245,8 +245,14 @@ fn the_journals_family_has_no_init_column() {
 #[test]
 fn the_three_families_are_two_leaves_and_a_product_tree() {
     for (id, vars) in [
-        (family::PUBLIC_INPUT, 8),
-        (family::PUBLIC_OUTPUT, 8),
+        (
+            family::PUBLIC_INPUT,
+            family::PUBLIC_WINDOW_HEIGHT.trailing_zeros(),
+        ),
+        (
+            family::PUBLIC_OUTPUT,
+            family::PUBLIC_WINDOW_HEIGHT.trailing_zeros(),
+        ),
         (family::ADVICE_WINDOWS, HEIGHT.trailing_zeros()),
     ] {
         let c = constraints::family_circuit(id, vars).expect("registered");
@@ -381,11 +387,22 @@ fn a_config_without_the_new_families_is_refused() {
         verifier_core::window_height(&c),
         Err("the window height puts a public window outside RAM window 0")
     );
+    let public_end =
+        guest_memory::PUBLIC_OUTPUT_ORIGIN as u64 + guest_memory::PUBLIC_WINDOW_BYTES as u64;
     assert!(
-        4 * (1u64 << 16)
-            >= guest_memory::PUBLIC_OUTPUT_ORIGIN as u64 + guest_memory::PUBLIC_WINDOW_BYTES as u64,
+        4 * (1u64 << 16) >= public_end,
         "2^16 is the smallest window height that does hold them"
     );
+    // And it really is the smallest on the menu: `2^12` joined at S-STREAM
+    // for the public windows themselves, and a window family there would
+    // reach `0x4000`, short of where the public windows end.
+    for &h in &family::HEIGHT_MENU {
+        assert_eq!(
+            4 * (h as u64) >= public_end,
+            h >= 1 << 16,
+            "{h:#x}: the window-family floor is the menu's 2^16"
+        );
+    }
 }
 
 /// The two public windows are where the constants say, and inside the hole the
@@ -408,17 +425,25 @@ fn the_public_windows_are_inside_the_hole() {
         "the two windows are adjacent and do not overlap"
     );
     let end = guest_memory::PUBLIC_OUTPUT_ORIGIN + guest_memory::PUBLIC_WINDOW_BYTES;
-    assert!(end <= guest_memory::RAM_ORIGIN, "both are below RAM");
+    // **The two windows fill the hole exactly**, and that equality is why
+    // `2^12` is the ceiling: the hole is 64 KiB, two windows of `2^14` would
+    // need 128, and the only `2^14` window inside 64 KiB is window 0, which
+    // initializes address 0. There is no step above this one, and a later
+    // constant change that broke the equality would be refused here.
+    assert_eq!(
+        end,
+        guest_memory::RAM_ORIGIN,
+        "the two fill the hole exactly"
+    );
     // And neither claims address 0, so a null dereference still cannot
-    // balance: `addressable` refuses it below.
+    // balance: `addressable` refuses it below. The hole that survives is
+    // `[0, PUBLIC_INPUT_ORIGIN)`, which is the half the argument rests on.
 
     // What the executor will and will not let a guest reach.
     assert!(!trace::addressable(0));
     assert!(!trace::addressable(guest_memory::PUBLIC_INPUT_ORIGIN - 4));
     assert!(trace::addressable(guest_memory::PUBLIC_INPUT_ORIGIN));
     assert!(trace::addressable(end - 4));
-    assert!(!trace::addressable(end));
-    assert!(!trace::addressable(guest_memory::RAM_ORIGIN - 4));
     assert!(trace::addressable(guest_memory::RAM_ORIGIN));
     assert!(trace::addressable(guest_memory::ADVICE_ORIGIN));
     assert!(trace::addressable(0xffff_fffc));

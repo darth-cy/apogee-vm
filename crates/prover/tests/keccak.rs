@@ -29,7 +29,6 @@
 mod common;
 
 use constants::{delegation, family, keccak as k, memory as mem};
-use prover::prove_block;
 use trace::plan_shards;
 use verifier::{verify_block, verify_shard};
 use verifier_core::{statement_shards, BlockProof};
@@ -65,7 +64,7 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
 #[ignore]
 fn a4_the_block_with_a_delegation_shard_proves_and_verifies() {
     let setup = common::keccak_setup();
-    let mut archive = common::keccak_archive(&setup.program);
+    let archive = common::keccak_archive(&setup.program);
 
     // The family set: `KECCAK_F` is in it at the delegation height, after every
     // family that claims a pc and after the two RAM window families. It is
@@ -130,7 +129,7 @@ fn a4_the_block_with_a_delegation_shard_proves_and_verifies() {
             .sum::<u64>()
     );
 
-    let block = prove_block(&setup, &mut archive, &plan).expect("the block proves");
+    let block = common::streamed(&setup, &common::empty_io());
     assert_eq!(
         verify_block(&setup.vk, &block, block.statement()),
         Ok(()),
@@ -237,7 +236,7 @@ fn a4_the_block_with_a_delegation_shard_proves_and_verifies() {
 #[ignore]
 fn a8_a_declared_family_with_no_invocation_proves_zero_shards() {
     let setup = common::keccak_unused_setup();
-    let mut archive = common::keccak_unused_archive(&setup.program);
+    let archive = common::keccak_unused_archive(&setup.program);
     assert!(
         setup.program.config.height(KECCAK).is_some(),
         "the image declares the family"
@@ -248,7 +247,7 @@ fn a8_a_declared_family_with_no_invocation_proves_zero_shards() {
         Some(&(KECCAK, 0)),
         "no invocation, no shard"
     );
-    let block = prove_block(&setup, &mut archive, &plan).expect("the block proves");
+    let block = common::streamed(&setup, &common::empty_io());
     assert!(
         !block.shards.iter().any(|s| s.family == KECCAK),
         "a family with zero shards proves none"

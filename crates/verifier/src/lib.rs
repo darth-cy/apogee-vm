@@ -5,6 +5,15 @@
 //! protocol: it decodes the curve points the core carries as bytes, through
 //! the curve's validating readers, and runs `pcs::batch_verify`, which is where
 //! the base verifier's pairings happen. The `verifier` binary is the CLI.
+//!
+//! [`proof_archive`] is the one other thing here, and it is the CLI's: the
+//! four files a proved block leaves on disk, which are exactly what
+//! `verifier block <vk> <identity> <public> <block>` reads back. It sits in
+//! this crate rather than in the host SDK because the **reader** is here —
+//! one definition of the format, beside the thing that consumes it —
+//! and `host::proof_archive` is a re-export of it.
+
+pub mod proof_archive;
 
 use curve::{G1Affine, G2Affine};
 use pcs::{batch_verify, MercuryCommitment, MercuryProof};
@@ -166,7 +175,7 @@ mod tests {
 
     /// A key over the registry's circuits: `JUMP_BRANCH_SLT` at `2^20` and the
     /// two RAM window families at `2^16`, every point the generator.
-    fn key() -> VerifyingKey {
+    pub(crate) fn key() -> VerifyingKey {
         use constants::family;
         use curve::{G1Affine, G2Affine};
         use verifier_core::{identity_digest, srs_digest, VmConfig};

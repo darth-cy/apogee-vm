@@ -36,22 +36,17 @@ jobs:
           cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
           (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
           (cd guests && cargo clippy --bins -- -D warnings)
-          # The workspace's TWO cargo features (master anti-goal 1's only two
-          # exceptions, owner's decisions at S20 and S-DEBUG): the anti-goal's
-          # stated hazard is "a configuration nobody builds is broken and
-          # undiscovered", so every one of these configurations is built, linted
-          # and tested here like any other -- including the two together, which
-          # is a configuration neither feature's own tests reach.
-          # `crates/prover/tests/one_feature.rs` is what keeps it at two.
-          cargo clippy -p prover --all-targets --features metrics -- -D warnings
+          # The workspace's ONE cargo feature (master anti-goal 1's only
+          # exception, owner's decision at S-DEBUG): the anti-goal's stated
+          # hazard is "a configuration nobody builds is broken and
+          # undiscovered", so this configuration is built, linted and tested
+          # here like any other. `crates/prover/tests/one_feature.rs` is what
+          # keeps it at one. (`prover/metrics` was the second, granted at S20
+          # and retired at S-STREAM with the archived path it measured.)
           cargo clippy -p prover --all-targets --features debug-info -- -D warnings
-          cargo clippy -p prover --all-targets --features metrics,debug-info -- -D warnings
 
       - name: test
         run: cargo test --workspace
-
-      - name: test the metrics configuration
-        run: cargo test -p prover --features metrics --test metrics
 
       # The debug log's own suite, plus its unit tests -- which live in
       # `src/debug.rs` and so are compiled by no other job in this file.
@@ -137,18 +132,6 @@ jobs:
       #
       # - name: the LogUp channels over the combined toy
       #   run: cargo test -p checker --test logup -- --include-ignored --test-threads=1
-
-      # DEFERRED: cargo test -p prover --features metrics --test metrics -- --include-ignored
-      # Master rule 7. The two ignored cases in that file prove S16's statement
-      # twice over -- once through `prove_block` and once through
-      # `prove_block_metered`, to hold the two blocks equal byte for byte --
-      # and peak at about 8.6 GB each. The file's other eight cases run above,
-      # in the `test the metrics configuration` step, and they are what hold
-      # the data model and both reports; only the end-to-end property is
-      # deferred. `docs/spec/metrics.md` §7.
-      #
-      # - name: the metrics harness end to end
-      #   run: cargo test -p prover --features metrics --test metrics -- --include-ignored --nocapture
 
       # DEFERRED: cargo test -p prover --test acceptance -- --include-ignored --test-threads=1
       # DEFERRED: cargo test -p verifier --test cli -- --include-ignored --test-threads=1
@@ -286,26 +269,35 @@ jobs:
       #   run: cargo test --release -p prover --test block -- --include-ignored --test-threads=1
 
       # DEFERRED: cargo test --release -p prover --test streaming -- --include-ignored --test-threads=1
-      # Master rule 7, for S26's acceptance 5: **the streamed block is the block
-      # `prove_block` makes, byte for byte** (`docs/spec/streaming.md` §7). It
-      # proves three statements twice each -- S16's, a delegation one and
-      # S-IO's -- plus S16's twice more at two backpressure bounds, so it is
-      # eight real blocks and it is deferred for the reason every proving suite
-      # is: a cycle-owning family's shard cannot be smaller than `2^20` rows.
+      # Master rule 7. **Since S-STREAM this suite no longer compares the
+      # streamed block with an archived one**: streaming is the only proving
+      # path, so a test that proved the same statement twice over two paths
+      # would be running the path the rule forbids. What is left is the claim
+      # only a proof can make about the one path -- that `max_in_flight` is a
+      # resource setting and reaches no challenge -- over S16's statement and
+      # a delegation one, each proved at one shard in flight and at eight.
+      # Four real blocks, deferred for the reason every proving suite is: a
+      # cycle-owning family's shard cannot be smaller than `2^20` rows.
+      #
+      # The property genuinely lost with the comparison is "two independent
+      # constructions agree"; `crates/prover/tests/streaming.rs`'s header says
+      # so in full, and the owner took that decision with the loss stated.
       #
       # What runs in ordinary CI instead is everything the streaming path does
       # differently, and it is deliberately where the risk is:
       # `crates/emulator/tests/streaming.rs` holds the executor's chunks to
       # `trace_run`'s buffers row for row and its final memory state to the
-      # log's, over twelve guests including the two that make delegation calls
-      # and the one whose buffers fill sixteen times; and
+      # log's, over thirteen guests including the two that make delegation calls
+      # and the one whose buffers fill sixteen times;
       # `crates/checker/tests/memory.rs`'
       # `the_row_reading_and_the_log_reading_of_a_frame_agree` holds the
       # row-reading column builders to `crates/checker`'s independent
-      # log-reading ones, column for column and row for row, over seven guests.
-      # Both are in the `test` step.
+      # log-reading ones, column for column and row for row, over seven guests;
+      # and `crates/prover/tests/one_proving_path.rs` holds the repository to
+      # reaching the archived path from nowhere. All three are in the `test`
+      # step.
       #
-      # - name: S26's streamed block, byte for byte the archived one
+      # - name: S-STREAM's streamed block, at two backpressure bounds
       #   run: cargo test --release -p prover --test streaming -- --include-ignored --test-threads=1
 
       # DEFERRED: cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1
@@ -313,13 +305,13 @@ jobs:
       # locally on 18 cores, so it runs single-threaded. It was the heaviest
       # suite in the repository until S23's `recursion` passed it.
       # `guests/keccak-test` is eleven shards since S-IO -- six `2^20` execution
-      # shards, two `2^16` window shards, two `2^8` public-value shards and one
-      # KECCAK_F shard, at `2^16` since S26d. The second test in the file,
+      # shards, two `2^16` window shards, two `2^12` public-value shards and one
+      # KECCAK_F shard, at `2^18` since S26d. The second test in the file,
       # `guests/keccak-unused`, proves ten: the same families, zero invocations,
       # zero delegation shards.
       #
       # S26d re-shaped the delegation row from a whole keccak-f[1600] permutation
-      # to ONE ROUND, which moved the height from `2^8` to `2^16`
+      # to ONE ROUND, which moved the height from `2^8` to `2^18`
       # (`docs/spec/delegation.md` §6). The shard's proof falls from 11,880,012
       # bytes to 373,276 and holds 2,730 permutations instead of 256 -- 339 times
       # fewer proof bytes a permutation -- but its forward pass goes the other

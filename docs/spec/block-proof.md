@@ -5,6 +5,14 @@ first family that owns no cycles and is not a RAM window — the keccak delegati
 **changed no line of `verify_block`**: the rule §4 already scoped to `CYCLE_OWNING` is what
 admitted it (`docs/spec/delegation.md` §8).
 
+S-STREAM changed **how a block is made and nothing about what one is**. The proving path
+is `prover::prove_block_streaming` and only that (`docs/spec/streaming.md` §1.2), so §5 is
+rewritten around it; §1 to §4 and §6 to §8 — the object, the record set, `verify_block`,
+the ts-window rule and the wire forms — are untouched, because a block is a function of
+the execution and the key and not of the order the prover did its work in. §5.1's shard
+cut, §5.2's determinism argument and §5.3's claimed window are the same statements about
+a different loop.
+
 A statement is one execution of one program, proven by one `ShardProof` per shard of
 every family, every one of them against one `PublicInputs`
 (`docs/spec/shard-proof.md` §1). This page is that set closed into one object: what a
@@ -19,7 +27,7 @@ and `docs/spec/memory.md` for the multiset, and restates neither.
 | `crates/constants` | `family::CYCLE_OWNING`, which families own cycles |
 | `crates/verifier-core` | `#![no_std]`: `BlockProof`, `ShardRecord`, `BlockReconciliation`, `check_ts_windows`, and the `derive_global_phase` / `verify_global_memory` / `verify_shard_local` split |
 | `crates/verifier` | `std`: `verify_block`, and the CLI's `block` verb |
-| `crates/prover` | `prove_block`, the shard cut, the per-shard time window, and the block's parallel step |
+| `crates/prover` | `prove_block_streaming`, the shard cut, the per-shard time window, and the block's parallel step |
 | `crates/trace` | `ShardPlan` and `plan_shards`, S12's |
 | `crates/checker` | the transcript-tape validator |
 
@@ -296,31 +304,50 @@ them that way.
 ## 5. Proving a block
 
 ```rust
-pub fn prove_block(setup: &ProverSetup, archive: &mut TraceArchive, plan: &ShardPlan)
-    -> Result<BlockProof, ProverError>;
+pub fn prove_block_streaming(setup: &ProverSetup, io: &GuestIo, max_in_flight: usize)
+    -> Result<(BlockProof, StreamingReport), ProverError>;
 ```
 
-`plan` is the execution's own shard plan, `trace::plan_shards(archive.cycle_profile(),
-config)`, and `prove_block` refuses any other as `ProverError::Trace` rather than
-silently proving a different shard set. The rest is `advance(setup, archive,
-Phase::Final)` and `finish`, so a block is assembled from the archive's own final
-section and every phase snapshot is left in `archive`.
+**One path, and it takes the guest's inputs rather than an execution** (S-STREAM,
+owner's decision). It executes the program twice: pass 1 commits each shard's memory
+columns as the shard fills and closes with the statement and G1–G11, pass 2 re-executes
+and proves each shard as it fills, at most `max_in_flight` at a time. `docs/spec/streaming.md` is normative for all of it, and the reason is §1.1
+there — the archived path's commit phase was `O(total shards)` and its trace
+`O(cycles)`, which is 500–600 GB and 520 GB for a real Ethereum block.
 
-`archive` is `&mut` because the phase sections are written into it: that is the stage
-prompt's `&TraceArchive` widened by must-be-exact 7, which requires the block-level
-snapshots to *be* the archive's phase sections.
+Nothing on this page depends on that choice. The shard set, the records, the claimed
+windows and the bytes of a `BlockProof` are functions of the execution and the key, so
+§5.1 to §5.3 below say what they said at S20.
+
+**The shard plan is a check, not an input.** The executor cuts a shard the moment a
+family's buffer reaches its height (`docs/spec/streaming.md` §3.1), and pass 1 holds the
+cut it made to `trace::plan_shards` family by family at the end. The two cannot differ —
+both are `ceil(rows / height)` over the same rows — and pass 2's own cycle profile and
+`Execution` are asserted equal to pass 1's, which is what makes "the same guest twice"
+a checked claim rather than a reasoned one.
+
+`prover::prove_block(setup, &mut archive, plan)` still exists and still refuses a plan
+that is not `trace::plan_shards` over that archive's cycle profile. **Nothing proves
+through it**: it is retained for `checker::TamperHarness`, which needs an execution it
+can hold still and read twice, and `crates/prover/tests/one_proving_path.rs` is what
+holds the repository to reaching it from nowhere (`docs/spec/streaming.md` §6).
 
 **The two RAM window families run no cycles**, so `plan_shards` counts 0 for both. Their
 shards are the statement's, not the plan's: exactly one `INIT_TEARDOWN` shard for window
 0, and one `ZERO_WINDOWS` shard per window the execution touches
-(`docs/spec/memory.md` §3).
+(`docs/spec/memory.md` §3). The same holds for S-IO's three window families, and a
+window family's shard is built at exit from the final `trace::MemoryState`, because a
+teardown column is every address's *last* write and is not a fact until then.
 
 ### 5.1 The shard cut
 
 Each family's rows are cut in increasing timestamp order into contiguous chunks of
 exactly its `VmConfig` height, with shard indices ascending from 0: shard `i` is rows
 `[i·h, min((i+1)·h, len))` of the family's trace buffer, which every family fill has
-done since S16. The last chunk is padded to full height by the column builders, whose
+done since S16. The streaming executor produces that cut directly, by flushing a buffer
+the moment it reaches the height rather than by indexing a finished one, and
+`crates/emulator/tests/streaming.rs` is what holds the two readings equal row for row.
+The last chunk is padded to full height by the column builders, whose
 padding row is 0 in every memory column, `cycle` included — the artifact's canonical
 padding row, which contributes the identity to both product trees and switches every
 lookup off by its selector.
@@ -328,13 +355,20 @@ lookup off by its selector.
 ### 5.2 Parallelism
 
 After the global commit phase closes, the shards are proved with a `rayon` parallel
-iterator over the shard list. Each task forks its transcript from the same global state
-(`SHARD_SEED [digest, family, index]`), reads its own slice of the archive, builds its
+iterator — on the streaming path, one per batch of at most `max_in_flight` filled
+shards. Each task forks its transcript from the same global state
+(`SHARD_SEED [digest, family, index]`), reads its own shard's rows, builds its
 base layer, proves it and drops it — so the shards share no prover state, **the schedule
-cannot influence a challenge**, and the peak is one shard trace per worker on top of the
-statement's committed memory columns. An indexed parallel `map` collects in order, so
-the records are reassembled in statement order whatever the thread count, and the
-assembled block is byte-identical for any thread count and any schedule.
+cannot influence a challenge**, and the peak is one shard's base layer and forward pass
+per concurrent shard. An indexed parallel `map` collects in order and every shard is
+placed by its **statement position**, so the records are reassembled in statement order
+whatever the thread count, and the assembled block is byte-identical for any thread
+count, any schedule and any `max_in_flight`.
+
+Two tests make that one claim from two sides:
+`crates/prover/tests/block.rs`' `the_block_does_not_depend_on_the_thread_count` varies
+the rayon pool, and `crates/prover/tests/streaming.rs` varies the batch bound
+(`docs/spec/streaming.md` §5).
 
 This is the block's **only** parallel step above the ones S07 and S13 already have
 inside a shard.
@@ -345,7 +379,7 @@ For a cycle-owning family, `[4·cycle(row 0), 4·max cycle + 4)`, read off the s
 `M[0]` column — the timestamps of the row-0 pc write and one past the last row's last
 slot (`docs/spec/execution-trace.md` §1, the clock's four slots, and §3, a query's write
 at `4·cycle + Δ`). Reading it from the committed column rather
-than from the archive keeps the S16 `prove_shard_columns` signature, and makes the
+than from the shard's rows keeps the S16 `prove_shard_columns` signature, and makes the
 honest window a function of exactly what the shard commits. For a **delegation** family,
 since S21, the same formula over the same `M[0]`, which there is the requesting cycle of each
 invocation: `prover`'s `ts_window` is three-way, and a delegation family reads its cycle

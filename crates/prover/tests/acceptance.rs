@@ -16,10 +16,10 @@ mod common;
 use constants::{family, transcript_tags as tags};
 use program::ProgramIdentity;
 use prover::{
-    advance, finish, global_commit_phase, prove_shard, prove_shard_columns, public_inputs,
-    shard_columns, statement_inputs, ProverSetup, ProvingContext,
+    global_commit_phase, prove_shard, prove_shard_columns, public_inputs, shard_columns,
+    statement_inputs, ProverSetup, ProvingContext,
 };
-use trace::{Phase, TraceArchive};
+use trace::TraceArchive;
 use transcript::TranscriptEvent::{self, Absorb, Challenge};
 use verifier::{verify_shard, PublicInputs, ShardProof, VerifyError};
 use verifier_core::{global_commit, reduce_shard, statement_shards};
@@ -27,13 +27,15 @@ use verifier_core::{global_commit, reduce_shard, statement_shards};
 const ADD: u32 = family::ADD_SUB_LUI_AUIPC;
 const INIT: u32 = family::INIT_TEARDOWN;
 
-/// The whole statement, proved through `advance`: the setup, the filled
-/// archive, and what its final phase holds.
+/// The whole statement, streamed: the setup, the execution's archive — read
+/// for its log, never proved from — and the statement with its shard proofs.
 fn proved() -> (ProverSetup, TraceArchive, PublicInputs, Vec<ShardProof>) {
     let setup = common::setup();
-    let mut archive = common::archive(&setup.program);
-    advance(&setup, &mut archive, Phase::Final).expect("the statement proves");
-    let (public, proofs) = finish(&archive).expect("the final phase decodes");
+    // The archive is still built, and it is **not** proved from: the log's
+    // self-check below reads it, which is a reading of the execution and not
+    // a proving path (`docs/spec/streaming.md` §1).
+    let archive = common::archive(&setup.program);
+    let (public, proofs) = common::streamed_shards(&setup, &common::empty_io());
     (setup, archive, public, proofs)
 }
 
@@ -62,13 +64,13 @@ fn proof_bytes(a: &constraints::CircuitArtifact) -> usize {
 
 /// Acceptance 1. The tiny guest decodes into exactly the add/sub family and the
 /// two RAM window families, every pc claimed by the first; its trace
-/// self-checks; `advance` proves one `INIT_TEARDOWN` shard and one
+/// self-checks; the streaming prover proves one `INIT_TEARDOWN` shard and one
 /// `ADD_SUB_LUI_AUIPC` shard; `verify_shard` accepts both against one
 /// statement; and every proof has its circuit's shape — its round counts, its
 /// claim counts, and a byte length that is a function of the key and the family
 /// alone. (The emulator's reading of the same guest is
-/// `crates/emulator/tests/guests.rs`':
-/// the exit status and fd 1, and nothing below that.)
+/// `crates/emulator/tests/guests.rs`': the exit status and the journal, and
+/// nothing below that.)
 #[test]
 #[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
 fn a1_the_tiny_guest_proves_and_both_shards_verify() {
@@ -558,70 +560,6 @@ fn a6_a8_one_opening_at_one_point_and_every_challenge_after_what_it_protects() {
     // And `prove_shard`, the frozen entry point, is these same steps.
     let again = prove_shard(&ctx, &archive, ADD, 0);
     assert_eq!(again, proofs[1]);
-}
-
-// ---------------------------------------------------------------------------
-// Acceptance 9
-// ---------------------------------------------------------------------------
-
-fn exported(archive: &TraceArchive) -> TraceArchive {
-    let mut bytes = Vec::new();
-    archive.export(&mut bytes).expect("exporting");
-    TraceArchive::import(&bytes[..]).expect("importing")
-}
-
-/// Acceptance 9. Interrupted after post-execution, after post-commit, after
-/// post-GKR and after post-opening, exported, imported and resumed, the statement finishes to the
-/// same bytes as the uninterrupted run: every phase's content, and so every
-/// proof. Each phase is timed, and the timing is outside the deterministic
-/// payload.
-#[test]
-#[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
-fn a9_a_resumed_statement_is_byte_identical() {
-    let (setup, whole, _, _) = proved();
-    // Stopping at post-execution fills nothing: the archive is as the
-    // emulator left it.
-    for stop in [
-        Phase::PostExecution,
-        Phase::PostCommit,
-        Phase::PostGkr,
-        Phase::PostOpening,
-    ] {
-        let mut part = common::archive(&setup.program);
-        advance(&setup, &mut part, stop).expect("the first half");
-        for later in [
-            Phase::PostCommit,
-            Phase::PostGkr,
-            Phase::PostOpening,
-            Phase::Final,
-        ] {
-            assert_eq!(part.is_filled(later), later <= stop, "{stop:?}: {later:?}");
-            assert_eq!(part.timing(later).is_some(), later <= stop);
-        }
-        let mut resumed = exported(&part);
-        advance(&setup, &mut resumed, Phase::Final).expect("the second half");
-        for phase in [
-            Phase::PostCommit,
-            Phase::PostGkr,
-            Phase::PostOpening,
-            Phase::Final,
-        ] {
-            assert_eq!(
-                resumed.content(phase),
-                whole.content(phase),
-                "{stop:?}: {phase:?}"
-            );
-        }
-        assert_eq!(
-            resumed.deterministic_payload(),
-            whole.deterministic_payload()
-        );
-        assert_eq!(finish(&resumed).unwrap(), finish(&whole).unwrap());
-    }
-    // A finished archive advanced again changes nothing.
-    let mut again = exported(&whole);
-    advance(&setup, &mut again, Phase::Final).unwrap();
-    assert_eq!(again.deterministic_payload(), whole.deterministic_payload());
 }
 
 // ---------------------------------------------------------------------------

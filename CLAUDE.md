@@ -15,8 +15,6 @@ docs/
   GLOSSARY.md    the vocabulary (column = multilinear = poly; layer; shard; family)
   guest-program-manual.md  writing a guest and exporting its ProgramImage artifact
   spec/          the frozen protocol specs; read before touching what they cover; and
-                 metrics.md, the proving harness: the stage tree, the byte classes and
-                 what the memory model does and does not count; and
                  constraint-manifest.md, every registered circuit's columns and gates by
                  position, name and formula. One page per circuit family:
                  jump-branch-slt.md, shift-bitwise.md, mul-div.md, memory-ops.md;
@@ -90,10 +88,10 @@ crates/
                  client and its content-addressed cache, and what a recorded block is on
                  disk; std
   prover/        the verifying key's construction, family registration and fills, the
-                 global commit phase, prove_shard, prove_block, the phase snapshots and
-                 resume, `streaming`, the two-pass prover whose peak does not grow with
-                 the shard count, and `metrics`, the proving harness behind the
-                 workspace's one cargo feature; std
+                 global commit phase, prove_shard, and `streaming`, the two-pass prover
+                 whose peak does not grow with the shard count -- THE ONE PROVING PATH.
+                 prove_block, the phase snapshots and resume are still here and nothing
+                 proves through them; std
   checker/       the standalone law validators and lookup rules, the padding, padding-identity
                  and witness-row checks, the native lookup evaluator, the memory_roots hook,
                  the artifact cross-check, the circuit dump, the transcript-tape validator,
@@ -195,11 +193,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --manifest-path tools/transcript-ref/Cargo.toml --all-targets -- -D warnings
 (cd crates/guest-sdk && cargo clippy --target riscv32imac-unknown-none-elf -- -D warnings)
 (cd guests && cargo clippy --bins -- -D warnings)
-cargo clippy -p prover --all-targets --features metrics -- -D warnings   # feature 1 of 2
-cargo clippy -p prover --all-targets --features debug-info -- -D warnings   # feature 2 of 2
-cargo clippy -p prover --all-targets --features metrics,debug-info -- -D warnings   # both at once
-cargo test --workspace                      # 1,109 tests; 68 more are #[ignore]d (S26c's tally plus S26d's nineteen, counted from the diff; the run's own tally is authoritative)
-cargo test -p prover --features metrics --test metrics  # the metrics harness; 10 more, 2 #[ignore]d
+cargo clippy -p prover --all-targets --features debug-info -- -D warnings   # the ONE feature
+cargo test --workspace                      # the run's own tally is authoritative; S-STREAM took away `tests/metrics.rs`'s ten and two resume tests, and added `tests/one_proving_path.rs`'s two
 cargo test -p prover --features debug-info --test debug_info  # the debug log: the levels, and that it changes no proof byte
 cargo test -p prover --features debug-info --lib  # the log's own unit tests, which the default build does not compile
 cargo test -p program --test delegation -- --ignored --test-threads=1  # static detachment at BOTH guest profiles; builds six guest images, 2.9 s
@@ -222,13 +217,12 @@ cargo test -p prover --test control -- --include-ignored --test-threads=1     # 
 cargo test --release -p prover --test alu -- --include-ignored --test-threads=1  # DEFERRED; S18's statement, 31.7 GB peak, 53 s
 cargo test --release -p prover --test mem -- --include-ignored --test-threads=1  # DEFERRED; S19's statement, 33.5 GB peak, 61 s
 cargo test --release -p prover --test block -- --include-ignored --test-threads=1  # DEFERRED; S20's block, 34.9 GB peak, 840 s
-cargo test --release -p prover --test streaming -- --include-ignored --test-threads=1  # DEFERRED; S26: the streamed block IS the archived one, byte for byte, over three statements
+cargo test --release -p prover --test streaming -- --include-ignored --test-threads=1  # DEFERRED; since S-STREAM, the same block at max_in_flight 1 and 8 over two statements -- S26's streamed-equals-archived comparison went with the archived path
 cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1  # DEFERRED; S21's block, ELEVEN shards since S-IO, 131 s at S21 and 254 s here at RAYON_NUM_THREADS=6; its 33.7 GB peak is S21's one-permutation-a-row shape and owes re-measurement -- at S26d's 2^18 the KECCAK_F shard's forward pass alone is ~60 GB, so a delegation shard sets this suite's peak for the first time
 cargo test --release -p prover --test recursion -- --include-ignored --test-threads=1  # DEFERRED; S23's block, TWELVE shards since S-IO, 35.2 GB peak and 120 s at S23, 238 s here at RAYON_NUM_THREADS=6 -- the heaviest by memory until S26d raised `KECCAK_F` to `2^18`; it carries no delegation shard above `2^8`, so its own peak is unmoved
 cargo test --release -p prover --test public_io -- --include-ignored --test-threads=1  # DEFERRED; S-IO's statement: public input in, advice checked against it, journal out
 cargo test --release -p host --test prove -- --include-ignored --test-threads=1  # DEFERRED; S25's MINI-BLOCK GATE: a real mainnet block's first two transactions proved and verified, and the advice tamper twin
 RAYON_NUM_THREADS=6 cargo test --release -p prover --test revm -- --include-ignored --test-threads=1  # DEFERRED; the revm block, thirteen shards since S-IO, and it builds the guest; 38.4 GB peak and 536 s at S24, 523 s here at RAYON_NUM_THREADS=6 over S-IO's thirteen shards; ELEVEN 2^20 shards, so the thread bound is not optional on a 48 GB machine -- and since S26d one of the thirteen is a 2^18 KECCAK_F shard whose forward pass alone is ~60 GB, so the 38.4 GB peak is the pre-S26d figure, owes re-measurement, and may no longer fit a 48 GB machine at any thread count
-cargo test -p prover --features metrics --test metrics -- --include-ignored --nocapture  # DEFERRED; S16's statement twice, 21.0 GB peak, 60 s, and prints both reports
 cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify -p verifier-core --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
@@ -266,14 +260,24 @@ ETH_RPC_URL=... cargo run -p kat-gen -- block   # S25's manual fixture refresh: 
 cargo run --manifest-path tools/transcript-ref/Cargo.toml   # ditto, transcript vectors
 cargo run --release -p bench                # every routine; internal numbers only
 cargo run --release -p bench -- prove mini-block --hourly-usd <p> --json <path>
-                                            # S25: prove a recorded block and emit a
-                                            # BenchReport, table and JSON. Per-stage timings
-                                            # are the TraceArchive's own phase sections
+                                            # prove a recorded block and emit a BenchReport,
+                                            # table and JSON. STREAMING, the one path: there is
+                                            # no archive and so no phase sections, and the four
+                                            # clocks are the StreamingReport's -- execution is
+                                            # BOTH passes summed and `opening`/`final` read 0,
+                                            # so a figure here is not comparable with a
+                                            # pre-S-STREAM one. The table says how
 cargo run --release -p bench -- prove mini-block --in-flight <n>
-                                            # S26: the same block through the STREAMING
-                                            # prover, byte for byte, at a peak that does not
-                                            # grow with the shard count. No archive, so the
-                                            # four clocks read differently -- the table says how
+                                            # how many shards are proved at once, which is
+                                            # what bounds the peak. Default 8; it selects no
+                                            # path and the block does not depend on it
+cargo run --release -p bench -- prove mini-block --out <dir>
+                                            # S-STREAM: write the verified block's four files --
+                                            # <fixture>.vk, .identity, .public, .block -- the
+                                            # ONLY thing a proving run archives. `verifier block`
+                                            # reads the .vk, .public and .block; its identity is
+                                            # 64 hex digits from YOUR channel, and .identity is
+                                            # only the run's claim. Exits 1 if anything fails
 
 cargo run --release -p profiler -- block mini-block [--top <n>] [--json <p>]
                                             # S26: where a guest's cycles go, by function and
@@ -376,20 +380,29 @@ is derivable *from* them is regenerated and diffed in CI.
   by a test function carrying its number** (owner's decision), and deleting a test that
   yields nothing new is part of the work.
 - **Concrete types.** `Fr` is a struct. There is no `F: Field`, and there never will be.
-- **No cargo features. Zero — with exactly TWO exceptions, each granted by name.** One
-  build configuration for the whole workspace. The exceptions are `prover/metrics`, granted
-  by the owner at S20 for the proving harness, and `prover/debug-info`, granted at S-DEBUG
-  for the proving debug log — and **for nothing else**: the rule stands unchanged for every
-  future progression, and `crates/prover/tests/one_feature.rs` enforces that by reading
-  every `Cargo.toml` in the repository and failing on any `[features]` table but that one,
-  or any key in it but those two, in that order. Each is off by default, enables no
-  dependency, and changes no proof byte; CI builds, clippies and tests both
-  configurations on, so the anti-goal's stated hazard — "a configuration nobody builds is
-  broken and undiscovered" — does not apply to either. **Both exist for the same reason**:
-  the module behind each is deliberately liberal — `metrics` sizes every committed column
-  and every forward-pass layer, `debug-info` scans every live row of a delegation shard —
-  and neither may sit in the path of a real proving run. `docs/spec/metrics.md` §0 and
-  `docs/spec/debug-info.md` §0. A `features = [...]` *key* inside a dependency entry is a
+- **No cargo features. Zero — with exactly ONE exception, granted by name.** One
+  build configuration for the whole workspace. The exception is `prover/debug-info`,
+  granted by the owner at S-DEBUG for the proving debug log — and **for nothing else**:
+  the rule stands unchanged for every future progression, and
+  `crates/prover/tests/one_feature.rs` enforces that by reading every `Cargo.toml` in the
+  repository and failing on any `[features]` table but that one, or any key in it but that
+  one. It is off by default, enables no dependency, and changes no proof byte; CI builds,
+  clippies and tests the configuration on, so the anti-goal's stated hazard — "a
+  configuration nobody builds is broken and undiscovered" — does not apply to it. It
+  exists because the module behind it is deliberately liberal — it scans every live row of
+  a delegation shard — and may not sit in the path of a real proving run.
+  `docs/spec/debug-info.md` §0.
+  **There was a second, `prover/metrics`, and it is RETIRED** (owner's decision,
+  S-STREAM). Granted at S20, it sized every committed column and every forward-pass layer
+  and threaded a `&mut Recorder` through every entry point. It instrumented the
+  **archived** proving path — five of its seven metered entry points took a
+  `&TraceArchive` — and streaming is now the only path a block is proved down, so the
+  harness measured a path nothing runs, which is the hazard itself and not an exception to
+  it. It was deleted rather than ported: the module, its suite, `docs/spec/metrics.md` and
+  every `*_metered` entry point are gone, and with them the `_rec` indirection. What
+  survives it is `tools/bench`'s `prove` verb, which needs no feature, and
+  `tools/bench/src/report.rs`'s `peak_rss`, which is where the RSS ground-truth rule now
+  lives. A `features = [...]` *key* inside a dependency entry is a
   different thing and always was allowed: it selects an upstream crate's features, as the
   workspace manifest does for `ark-ec` and `ark-ff`.
 - **The debug log is `docs/spec/debug-info.md`: `APOGEE_DEBUG` chooses the level, the
@@ -912,8 +925,8 @@ is derivable *from* them is regenerated and diffed in CI.
 - **Public values are a proof-system concept, not a stream**
   (`docs/spec/public-values.md`, and it is normative). Two families hold two fixed windows
   of memory in the hole below `RAM_ORIGIN` that no RAM window initializes: `PUBLIC_INPUT`
-  at `0x8000` and `PUBLIC_OUTPUT` — the journal — at `0x8400`, a kilobyte each, both at a
-  **pinned** `2^8`, because the height is what places the windows. Both are in every
+  at `0x8000` and `PUBLIC_OUTPUT` — the journal — at `0xC000`, **sixteen kilobytes each**,
+  both at a **pinned** `2^12`, because the height is what places the windows. Both are in every
   `VmConfig` and both prove exactly one shard in every statement, because a count a prover
   could drop is a way to publish nothing while having published something.
   The guest reads its input with ordinary loads (`guest_sdk::public_input`) and writes its
@@ -929,9 +942,23 @@ is derivable *from* them is regenerated and diffed in CI.
   byte**, so its init leaf is a literal 0 and there is no column a prover could pre-load the
   answer into at timestamp 0 — a structural guarantee where the alternative was a check that
   could be forgotten. Nothing new is absorbed, no challenge is drawn, no wire form moves,
-  and the verifier's whole cost is two 256-point multilinear evaluations.
-  **What it is not for**: a megabyte of private witness, which belongs in advice. 1,020
+  and the verifier's whole cost is two 4,096-point multilinear evaluations.
+  **What it is not for**: a megabyte of private witness, which belongs in advice. 16,380
   bytes each is the ceiling, and it is deliberate.
+  **The height was `2^8` until S-STREAM and `2^12` is the geometric ceiling.** 1,020 bytes
+  overflowed `docs/spec/revm-block.md` §2's per-transaction journal above **73**
+  transactions, and real mainnet blocks run 97-515. The hole below `RAM_ORIGIN` is 64 KiB;
+  two windows of `2^14` would need 128; the one `2^14` window that fits is window 0, which
+  initializes address 0, so a null dereference would balance. So the two windows are now
+  ids **2** and **3** and they end **flush against `RAM_ORIGIN`** — the gap above them is
+  gone, the surviving hole is `[0, 0x8000)`, and that is the half the argument rests on.
+  There is no step above this one without moving `RAM_ORIGIN`, which would move every
+  program's load address and eat into every decoded table's pc reach. **It is headroom and
+  not a bound**: a journal record carries its transaction's return data verbatim under a
+  `u32` length, so one maximum-size top-level `CREATE` is 24,589 bytes on its own. The
+  full-block target is `revm-block-stateless`, whose journal is a fixed 148 bytes because
+  it digests the per-transaction stream (owner's decision, S-STREAM), and
+  `docs/spec/revm-block.md` §2 stays frozen.
 - **Advice is memory whose initial values the prover chose, and nothing binds it.**
   `ADVICE_WINDOWS` initializes `[ADVICE_ORIGIN, …)` — `0x8000_0000`, above RAM — from a
   committed `M[2]` that identity does not bind, the statement does not carry and no gate
@@ -1109,19 +1136,50 @@ is derivable *from* them is regenerated and diffed in CI.
   (`docs/spec/memory.md` §4.2). Cross-shard ordering, cycle uniqueness and pc continuity
   are carried by that and nothing else; there is no pc chaining and no tag that could
   carry one.
-- **The prover has two paths and they produce one block.** `prove_block` proves an archived
-  execution; `prove_block_streaming` (S26, `docs/spec/streaming.md`) proves the guest
-  directly in **two passes** — pass 1 executes and commits each shard's `M` columns as the
-  shard fills, then runs G1-G11 over the ordered list; pass 2 re-executes and proves each
-  shard as it fills, at most `max_in_flight` at a time. It changes **when** a column exists
-  and nothing else, and `crates/prover/tests/streaming.rs` holds the two blocks equal byte
-  for byte. What it buys is a peak that does not grow with the shard count: the archived path
-  is `O(total shards)` in the commit phase (~300 MB a shard, which put the pinned full block
-  at 500-600 GB) *and* `O(cycles)` before it (~305 B a cycle between the log and the buffers,
-  ~520 GB for the same block), and the streaming path is one partial buffer per family plus
-  the last-access tables plus `max_in_flight` shards. **The archived path keeps resume, the
-  tamper harness and every committed fixture**, and the streaming path has no archive and so
-  no resume: a killed run re-executes, and execution is under 1% of a block's wall clock.
+- **STREAMING IS THE ONLY PROVING PATH** (owner's instruction, S-STREAM).
+  `prove_block_streaming` (`docs/spec/streaming.md`) proves the guest directly in **two
+  passes** — pass 1 executes and commits each shard's `M` columns as the shard fills, then
+  runs G1-G11 over the ordered list; pass 2 re-executes and proves each shard as it fills,
+  at most `max_in_flight` at a time. What it buys is a peak that does not grow with the
+  shard count: the archived path was `O(total shards)` in the commit phase (~300 MB a
+  shard, which put the pinned full block at 500-600 GB) *and* `O(cycles)` before it
+  (~305 B a cycle between the log and the buffers, ~520 GB for the same block), and the
+  streaming path is one partial buffer per family plus the last-access tables plus
+  `max_in_flight` shards. `host::prove` and `bench prove` call it and nothing else, and
+  every suite in the repository proves through it.
+  **`prove_block`, `advance`, `finish` and the phase snapshots are RETAINED and are run by
+  nothing.** They were not deleted because `checker::TamperHarness` writes a cell into a
+  shard's columns and re-proves that one shard, which has no streaming seam — pass 1
+  commits the memory columns and pass 2 re-executes, so a tamper applied in one pass
+  contradicts the other — and the harness is not optional. What enforces the rule is
+  `crates/prover/tests/one_proving_path.rs`, which greps the repository: calling
+  `prove_block` or importing `prover::{advance, finish}` outside `crates/prover/src` fails
+  it. The per-shard component the harness is built on — `statement_inputs`,
+  `global_commit_phase`, `shard_columns`, `prove_shard`, `prove_shard_columns` — is **not**
+  forbidden, and neither is holding a `TraceArchive`: it is a post-execution container that
+  `crates/checker`'s column-fill suites read and several proving suites keep for the memory
+  log's self-check. Holding an execution is not proving from one.
+  **Two things went with the archived path.** Resume: a killed run re-executes, and
+  execution is under 1% of a block's wall clock. And the streamed-equals-archived oracle —
+  `crates/prover/tests/streaming.rs`'s former a1-a3 — which was itself an archived-path
+  run; the owner dropped it with the loss stated, and the property genuinely lost is "two
+  independent constructions agree". What is left is `verify_block` everywhere, the
+  executor's chunks against `trace_run`'s buffers, the two column readings over seven
+  guests, and `tests/block.rs`'s `a7`, which rebuilds the global commit phase from an
+  archive and asserts its digest is the **streamed** block's.
+- **The only thing a proving run archives is the PROOF** (owner's instruction, S-STREAM).
+  `verifier::proof_archive::write_proof(dir, stem, vk, block)` writes `<stem>.vk`,
+  `<stem>.identity`, `<stem>.public` and `<stem>.block`, and `read_proof` is its
+  inverse, through each type's own decoder. `verifier block <vk> <identity-hex> <public>
+  <block>` reads three of them as they are; **its identity is never `.identity`**, which
+  records only what the run *claimed* — a verifier takes identity from a channel the
+  prover does not control, so `"$(cat <stem>.identity)"` checks a proof against its
+  prover's own claim and is fine for re-reading your own proof and nothing more. It lives
+  in `crates/verifier` because the format's **reader** is the CLI, so there is one
+  definition of it beside the thing that consumes it; `host::proof_archive` is a
+  re-export, and `bench prove --out <dir>` calls it after the block verifies. It exists so
+  a base proof is produced once and re-read by recursion development. No `TraceArchive` is
+  written to disk by anything, and never was.
 - **A shard's columns are built from that shard's ROWS and from the last-access tables**
   (S26). `trace::build_memory_columns` and `build_frame_witness` take a `RowSlice` — one
   family's cut of its buffer — and derive each row's events from the row; the window
@@ -1142,11 +1200,16 @@ is derivable *from* them is regenerated and diffed in CI.
   cores and 319 s at a 10.6 GB peak on one, and `guests/mem`'s statement, seven shards
   then and nine now, went
   from 14.7 GB / 119 s to **32.3 GB / 87 s** — about 2.2× the peak for about 1.4× the
-  speed, growing with the family count. There is no knob; a caller that must bound the
-  peak runs `prove_block` inside a `rayon::ThreadPoolBuilder` pool of its own, which is
-  what the determinism test does. Every deferred suite's peak was re-measured and the
-  numbers above the line, in `.github/workflows/ci.yml` and in
-  `docs/handoff/S20-orchestration.md` are that measurement.
+  speed, growing with the family count. **Those are archived-path figures and the knob is
+  different now**: on the streaming path the number of shards proved at once is
+  `max_in_flight`, a hard bound and an argument, not something a thread pool shapes. A caller that must bound
+  the peak lowers it. **Every deferred-suite peak recorded above the line, in
+  `.github/workflows/ci.yml` and in `docs/handoff/S20-orchestration.md` is a pre-S-STREAM
+  archived-path measurement and is therefore STALE** — the suites now stream, and a
+  streamed run proves at most `max_in_flight` shards at once where the archived one held every
+  shard the schedule happened to co-resident. The direction is down and the numbers are
+  unmeasured; they are re-measured in one batch at the end of a progression, per the
+  deferred-suite protocol, and not guessed here.
 - **A cycle-owning family's shard cannot be smaller than `2^20` rows**, so a two-shard
   family is two `2^20` shards whatever the guest. That is why the S20 demo is a new guest
   — `guests/shards`, a counted loop running 1,064,970 add/sub cycles — and not an
@@ -1326,6 +1389,7 @@ is derivable *from* them is regenerated and diffed in CI.
 | S-DEBUG — The proving debug log | done | `docs/handoff/S-DEBUG-debug-log.md` |
 | S-BATCH — The mini-block gate, measured | done | `docs/handoff/S-BATCH-miniblock-gate.md` |
 | S26d — `KECCAK_F` re-shaped: one round a row | done | `docs/handoff/S26d-keccak-round.md` |
+| S-STREAM — The sixteen-kilobyte journal; streaming is the only path | done | `docs/handoff/S-STREAM.md` |
 
 **S-IO takes no number, and that is deliberate** (owner's decision). It is not one of the
 original twenty-seven stages — it is the stage those twenty-seven forgot, inserted after
@@ -1351,6 +1415,24 @@ cannot prove a full block at all**: its frozen §2 journal carries a per-transac
 against a 1,020-byte window, `guest_sdk::commit` exits 70 rather than truncating, and all
 four real blocks S26 profiled exit 70. Full-block work belongs to `revm-block-stateless`,
 a second identity that has never been proved.
+
+**`S-STREAM` takes no number either**, and it is the stage that prepares a full block. Two
+owner instructions, taken together because each is a precondition of the other. The guest
+journal was 1,020 bytes and `docs/spec/revm-block.md` §2's per-transaction record overflows
+it above **73** transactions, so it is **16,380** now, at the geometric ceiling `2^12` — and
+the full-block target is `revm-block-stateless`, whose journal is a fixed 148 bytes, so the
+new window is headroom rather than a bound. And **streaming is the only proving path**: the
+archived path is `O(cycles)` before its commit phase and `O(total shards)` within it, which
+is 500-600 GB for a real block, so nothing proves through it any more and
+`crates/prover/tests/one_proving_path.rs` is what says so. `prove_block` itself stays,
+because `checker::TamperHarness` is built on the `TraceArchive` it reads and the harness is
+not optional. **The only thing a proving run archives is the proof**, through
+`verifier::proof_archive`, for recursion development to read back. It amends
+`prompts/00-master.md` in four places — the public-values bullet, the height menu, rule 9
+"Archivable stages" (**withdrawn**) and anti-goal 1 — each authorized and recorded in the
+handoff note. It also **retires `prover/metrics`**, the workspace's second cargo feature:
+it measured the archived path, and a harness measuring a path nothing runs is the hazard
+anti-goal 1 exists to forbid.
 
 **`S-NATIVE-IO` takes no number for the same reason**, and it is S-IO's other half. S-IO
 built the mechanism that binds an execution's public values and left the POSIX surface

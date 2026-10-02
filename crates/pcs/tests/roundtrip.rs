@@ -53,7 +53,10 @@ fn the_round_trip_holds_at_two_to_the_sixteen() {
 }
 
 /// Acceptance 2 in CI: every even height the toy SRS can reach cheaply,
-/// including the two smallest menu heights.
+/// including the smallest menu height and the smallest even one above it.
+/// (`2^12` joined the menu at S-STREAM for the public-value families; the
+/// list below predates it and is a list of variable counts, not of menu
+/// entries, so it is unaffected.)
 #[test]
 fn every_small_even_height_round_trips() {
     let srs = common::toy_srs(18);

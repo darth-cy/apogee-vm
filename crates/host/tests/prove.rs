@@ -34,6 +34,14 @@ use prover::ProverSetup;
 use verifier_core::VerifyError;
 
 /// The fixture this suite proves.
+/// How many shards the streaming prover proves at once here.
+///
+/// The mini-block is a dozen-odd shards and this suite is run for its verdict,
+/// not its wall clock, so the bound is low: four at once was measured at
+/// 77.10 GiB against eight at 83.91 on a 51-shard statement. The block does
+/// not depend on it (`crates/prover/tests/streaming.rs`).
+const IN_FLIGHT: usize = 4;
+
 const STEM: &str = "mini-block";
 
 fn vectors() -> PathBuf {
@@ -101,7 +109,7 @@ fn io() -> emulator::GuestIo {
 fn a4_the_mini_block_proves_and_verifies() {
     let pin = pin();
     let setup = setup();
-    let proven = host::prove(&setup, &io()).expect("the block proves");
+    let proven = host::prove(&setup, &io(), IN_FLIGHT).expect("the block proves");
 
     assert_eq!(proven.exit_code, 0, "the guest did not run to completion");
     assert_eq!(
@@ -161,7 +169,7 @@ fn a4_the_mini_block_proves_and_verifies() {
 #[ignore = "builds the revm guest from source and proves a 2^20 statement"]
 fn a4_a_claimed_journal_that_is_not_the_proved_one_is_refused() {
     let setup = setup();
-    let proven = host::prove(&setup, &io()).expect("the block proves");
+    let proven = host::prove(&setup, &io(), IN_FLIGHT).expect("the block proves");
     host::verify(&setup.vk, &proven.block).expect("the honest block verifies");
 
     let mut block = proven.block.clone();

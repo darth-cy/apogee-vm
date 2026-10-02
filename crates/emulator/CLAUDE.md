@@ -112,10 +112,15 @@ the **journal** `Machine::finish` reads back out of the public output window at 
   S-IO, a journal whose length word is above `guest_memory::PUBLIC_PAYLOAD_BYTES` at exit
   (`JournalTooLong`).
 - **The addressable set is `trace::addressable`, not the RAM window** (S-IO). A load or a
-  store reaches ordinary RAM, either public window, or the advice region; the two holes —
-  `[0, PUBLIC_INPUT_ORIGIN)` and the gap between the windows and `RAM_ORIGIN` — are
-  `OutOfBounds`, so a null dereference is still a loud error and not a trace nothing can
-  prove. **Advice is bounded at what the host supplied**: `Machine::advice_end` is
+  store reaches ordinary RAM, either public window, or the advice region; the hole below
+  them is `OutOfBounds`, so a null dereference is still a loud error and not a trace
+  nothing can prove. **There is one hole below `RAM_ORIGIN` since S-STREAM and there were
+  two before it**: at `family::PUBLIC_WINDOW_HEIGHT = 2^12` the two windows are 16 KiB
+  each, at `0x8000` and `0xC000`, and end flush against `RAM_ORIGIN`, so the gap that sat
+  between them and the image — they were a kilobyte each, at `0x8000` and `0x8400` — is
+  gone. What survives is `[0, PUBLIC_INPUT_ORIGIN)`, which is the half the null-dereference
+  argument rests on. **Advice is bounded at what the host supplied**:
+  `Machine::advice_end` is
   `ADVICE_ORIGIN + 4 · trace::advice_region_words(io.advice)`, and a read above it is the
   same fatal error, because nothing in *this* execution initializes that address. So
   `guest_sdk::advice()` on a run given no advice is fatal, which is the right answer to
@@ -141,7 +146,11 @@ the **journal** `Machine::finish` reads back out of the public output window at 
 - **`Machine::new` seeds the two prover-chosen regions and nothing else.** The public input
   window is `program::public_io_words(io.input)`, word for word — the one spelling of the
   layout, shared with `trace`'s column builder and the verifier's own extension, so the
-  three cannot drift — and the advice region is `trace::advice_word` over `io.advice`. The
+  three cannot drift — and the advice region is `trace::advice_word` over `io.advice`.
+  **A zero word is skipped**, as the advice seeding already skipped one: since S-STREAM
+  the window is 4,096 words where it was 256, nearly all of them padding on a real input,
+  and a page that was never written reads 0 anyway — so the skip changes no value a guest
+  or a column builder can observe and saves seeding 16 KiB of zeros per run. The
   journal window starts at 0 and stays there until the guest stores into it, which is
   `PUBLIC_OUTPUT`'s literal-0 init leaf. There is no third thing to seed: a guest reads its
   input out of the window or takes it as advice, and those are the two fields `GuestIo` has.

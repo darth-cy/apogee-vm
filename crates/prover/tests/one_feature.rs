@@ -1,20 +1,28 @@
 //! **Master anti-goal 1, enforced.** The rule is "No cargo features. Zero.";
-//! the owner granted `prover/metrics` at S20 and `prover/debug-info` at
-//! S-DEBUG, and this test is what keeps it exactly those two.
+//! the owner granted `prover/debug-info` at S-DEBUG, and this test is what
+//! keeps it exactly that one.
 //!
 //! It reads every `Cargo.toml` under the repository — the workspace, and the
 //! three manifests deliberately outside it (`crates/guest-sdk`, `guests`,
 //! `tools/transcript-ref`) — and refuses any `[features]` table but this
-//! crate's, and any key in this crate's but [`EXPECTED`]'s two.
+//! crate's, and any key in this crate's but [`EXPECTED`]'s one.
 //!
-//! **Both exceptions are the same exception.** Each turns on a module that is
-//! deliberately liberal — `metrics` sizes every committed column and every
-//! forward-pass layer, `debug-info` scans every live row of a delegation shard
-//! — and neither may sit in the path of a real proving run. Both are off by
-//! default, neither enables a dependency, and neither changes a proof byte:
-//! `tests/metrics.rs` and `tests/debug_info.rs` each prove that of their own.
-//! A third feature is not a precedent these establish; it is a decision only
-//! the owner may take, and [`EXPECTED`] is where it would have to be written.
+//! **The exception turns on a module that is deliberately liberal** —
+//! `debug-info` scans every live row of a delegation shard — and that may not
+//! sit in the path of a real proving run. It is off by default, it enables no
+//! dependency, and it changes no proof byte: `tests/debug_info.rs` proves the
+//! last of those. A second feature is not a precedent it establishes; it is a
+//! decision only the owner may take, and [`EXPECTED`] is where it would have
+//! to be written.
+//!
+//! **There was a second, and it was retired rather than kept.**
+//! `prover/metrics` was granted at S20 for the proving harness: stage timing,
+//! byte accounting and a modelled memory peak over the *archived* proving
+//! path. At S-STREAM the streaming prover became the only path a block is
+//! proved down, which left the harness measuring a path nothing runs — and a
+//! configuration nobody builds is precisely the hazard anti-goal 1 exists to
+//! forbid. So the feature, its module, its suite and its spec were deleted
+//! rather than ported, and the count here went from two back to one.
 //!
 //! A `features = [...]` **key** inside a dependency entry is a different
 //! thing: it selects an upstream crate's features, which anti-goal 1 permits
@@ -42,12 +50,16 @@ const VENDORED: [&str; 1] = ["guests/vendor"];
 
 /// **The repository's cargo features, in `crates/prover/Cargo.toml`'s order.**
 ///
+/// One entry, `debug-info`, granted by the owner at S-DEBUG. `metrics` was the
+/// other, granted at S20 and **retired at S-STREAM** when the archived path it
+/// measured stopped being run.
+///
 /// Adding a name here is the whole of adding a feature to this workspace, and it
 /// is the owner's decision and nobody else's (master anti-goal 1). Each entry
 /// owes four things: a `[features]` comment saying who granted it and for what,
 /// a spec document, a CI job that builds and clippies the configuration on, and
 /// a test that the feature changes no proof byte.
-const EXPECTED: [&str; 2] = ["metrics", "debug-info"];
+const EXPECTED: [&str; 1] = ["debug-info"];
 
 /// The repository root: this crate is `<root>/crates/prover`.
 fn root() -> PathBuf {
@@ -144,8 +156,8 @@ fn the_granted_features_are_the_only_cargo_features_in_the_repository() {
     assert_eq!(
         names,
         vec!["crates/prover/Cargo.toml".to_string()],
-        "master anti-goal 1: `crates/prover`'s {EXPECTED:?} are the repository's ONLY \
-         cargo features, each granted by the owner for one harness and nothing else. \
+        "master anti-goal 1: `crates/prover`'s {EXPECTED:?} is the repository's ONLY \
+         cargo feature, granted by the owner for one harness and nothing else. \
          A manifest listed here that is not it has declared another. Delete it: \
          if code is optional, delete the code"
     );
@@ -157,23 +169,20 @@ fn the_granted_features_are_the_only_cargo_features_in_the_repository() {
         with_features[0].1,
         EXPECTED.map(String::from).to_vec(),
         "the one `[features]` table declares exactly {EXPECTED:?}, in that order, and \
-         nothing else. A third feature is the owner's decision, not a stage's"
+         nothing else. A second feature is the owner's decision, not a stage's"
     );
 }
 
-/// Each exception is documented where a future stage will read it, not only in
+/// The exception is documented where a future stage will read it, not only in
 /// the manifest that takes it. Each of these says so in its own words; this
 /// holds them to saying it at all — including the anti-goal itself, which has to
-/// record that it has exceptions and name them.
+/// record that it has an exception and name it.
 #[test]
 fn the_exception_is_written_down_where_the_rules_are() {
     let root = root();
     for (path, needle) in [
-        ("CLAUDE.md", "metrics"),
         ("CLAUDE.md", "debug-info"),
-        ("docs/spec/metrics.md", "anti-goal 1"),
         ("docs/spec/debug-info.md", "anti-goal 1"),
-        ("crates/prover/CLAUDE.md", "metrics"),
         ("crates/prover/CLAUDE.md", "debug-info"),
         ("prompts/00-master.md", "debug-info"),
     ] {

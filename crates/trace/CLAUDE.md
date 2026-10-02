@@ -6,6 +6,8 @@ with its last-access bookkeeping and self-check, the per-family trace buffers, t
 profile and the shard plan, the `TraceArchive` that snapshots them, and the memory
 argument's columns — filled from a **shard's rows** and from the **last-access tables**
 since S26, never from the event log (`docs/spec/streaming.md`). `crates/emulator` is the only producer.
+**Since S-STREAM nothing proves from a `TraceArchive`**: it is a post-execution container
+that tests read, and the invariant below says what is left of it.
 **`docs/spec/execution-trace.md` is normative** for every value here — the clock, the
 address spaces, the frame of each instruction class, the x0 rule, the ecall frame and the
 order of the log — **`docs/spec/memory.md`** for the memory columns,
@@ -181,10 +183,15 @@ impl TraceArchive {
   its region reads 0 past its end, and that is what the prover commits there too. It is what
   `self_check` takes, in place of S12's bare `&ProgramImage`.
   **`in_ram` is `[RAM_ORIGIN, ADVICE_ORIGIN)` and `addressable` is the union of the three
-  regions.** Everything else — `[0, PUBLIC_INPUT_ORIGIN)` and the gap between the public
-  windows and `RAM_ORIGIN` — is a hole no family initializes, so an access there could not
+  regions.** Everything else is a hole no family initializes, so an access there could not
   balance whatever an executor did with it; the emulator refuses one loudly rather than
-  producing a trace nothing can prove (`docs/spec/public-values.md` §2).
+  producing a trace nothing can prove (`docs/spec/public-values.md` §2). **That hole is
+  `[0, PUBLIC_INPUT_ORIGIN)` and nothing else since S-STREAM**: at `2^12` the two public
+  windows are 16 KiB each, at `0x8000` and `0xC000`, and end flush against `RAM_ORIGIN`,
+  so the gap that used to sit above them — the windows were a kilobyte each at `0x8000`
+  and `0x8400` — is gone. `tests/log.rs` asserts the flushness rather than probing a gap
+  that no longer exists, because that equality is what makes `2^12` the geometric ceiling
+  and is the thing a later constant change would silently break.
 - **The advice region's layout lives here and nowhere else.** `advice_word(advice, i)` is
   word `i` from `ADVICE_ORIGIN` up — the payload's byte length, then the payload
   little-endian, 0 past the end — the same framing a public window has. The executor writes
@@ -319,8 +326,10 @@ impl TraceArchive {
   window is `ram_window`, never `window`.
 - **`build_value_window_columns` is the same table with the init column committed**
   (S-IO, `docs/spec/public-values.md` §4). `initial[y]` is the word the window starts on —
-  `verifier_core::public_io_words(input)` for `PUBLIC_INPUT`, `advice_word` for
-  `ADVICE_WINDOWS` — and 0 past the end of the slice. `M[2]` is exactly that vector; `M[0]`
+  `verifier_core::public_io_words(input)` for `PUBLIC_INPUT`, which is
+  `family::PUBLIC_WINDOW_HEIGHT` words and so **4,096 since S-STREAM where it was 256**,
+  and `advice_word` for `ADVICE_WINDOWS` — and 0 past the end of the slice. `M[2]` is
+  exactly that vector; `M[0]`
   and `M[1]` are the teardown, an untouched row keeping `(0, initial[y])` so its init and
   teardown tuples cancel. There is no `V[ram_live]` mask and no `S` column. It panics on a
   window outside `[0, 2^32)` or a height that is not a power of two.
@@ -330,6 +339,23 @@ impl TraceArchive {
 - **Why the dependencies**: `constraints` for the layout that keys every column,
   `gkr-verify` for `BoundaryFinals`, `poly` and `field` for a column's form. None of them
   depends on `trace`.
+- **The `TraceArchive` is a post-execution container, and nothing proves from one**
+  (S-STREAM). Streaming is the only proving path, so an archive is no longer an input to
+  anything: what still builds one does it to **hold an execution** — the memory log's
+  self-check, the cycle profile, one family's rows for a tamper twin's columns — and
+  holding an execution is not proving from one
+  (`crates/prover/tests/one_proving_path.rs` draws exactly that line). The container is
+  retained rather than deleted because `checker::TamperHarness` is built on it, and the
+  harness is not optional.
+  **`Phase`, `PhaseTiming`, `fill`, `content`, `timing` and `is_filled` still exist, and
+  what they are for is the format**: a snapshot's five sections, the prefix rule, and the
+  deterministic payload being a byte prefix of the file. What they are **not** for any
+  more is resume — the prover's phase snapshots went with the archived path, and no
+  caller fills a phase above post-execution on any path a proof takes. So in practice an
+  archive carries its post-execution section and nothing else, and the four later tags
+  are the schema the reader still enforces rather than a thing a run writes:
+  `crates/emulator/tests/archive.rs` reaches them by patching the file's bytes, which is
+  now the only way they are reached at all.
 - **The archive container.** Two `postcard` values back to back: the payload section —
   five `(phase tag, Option<bytes>)` entries, phases in order — then the timing section,
   five `(phase tag, Option<wall_nanos>)`. The deterministic payload is exactly the first

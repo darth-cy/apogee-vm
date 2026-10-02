@@ -8,26 +8,23 @@ publish.workspace = true
 # normative. std + rayon: commitments and the forward pass are data-parallel.
 
 # THE WORKSPACE'S ONE AND ONLY CARGO FEATURE, and the one exception to master
-# anti-goal 1, granted by the owner at S20 for this and nothing else. It turns
-# on `src/metrics`, the proving harness: stage timing, byte accounting and the
-# modelled memory peak. It is off by default, it enables no dependency and it
-# changes no proof byte -- `tests/metrics.rs` proves the last of those. The
-# rule stands for every future progression: `tests/one_feature.rs` fails if a
-# second `[features]` table appears anywhere in the workspace, or if this one
-# grows a second key. `docs/spec/metrics.md`.
-[features]
-metrics = []
-
-# THE WORKSPACE'S SECOND AND LAST CARGO FEATURE, granted by the owner at this
-# stage for `src/debug`, the proving debug log, and for nothing else. It is off
-# by default, it enables no dependency and it changes no proof byte --
-# `tests/debug_info.rs` proves the last of those by proving one statement twice
-# in the one build, once with the log silent and once with it at `deep`, and
-# comparing the blocks on the wire. What it turns on is the log's invariant
-# scans, which are work proportional to a shard and must not sit in the path of
-# a real proving run; the level is then chosen at run time with `APOGEE_DEBUG`.
-# `tests/one_feature.rs` holds the repository to these TWO and no third.
+# anti-goal 1, granted by the owner at S-DEBUG for `src/debug`, the proving
+# debug log, and for nothing else. It is off by default, it enables no
+# dependency and it changes no proof byte -- `tests/debug_info.rs` proves the
+# last of those by proving one statement twice in the one build, once with the
+# log silent and once with it at `deep`, and comparing the blocks on the wire.
+# What it turns on is the log's invariant scans, which are work proportional to
+# a shard and must not sit in the path of a real proving run; the level is then
+# chosen at run time with `APOGEE_DEBUG`.
+#
+# There was a second, `metrics`, granted at S20 for the proving harness and
+# RETIRED at S-STREAM: it measured the archived path, the streaming prover is
+# the only path a block is proved down now, and a harness nobody runs is the
+# configuration anti-goal 1 exists to forbid. The rule stands for every future
+# progression: `tests/one_feature.rs` fails if a second `[features]` table
+# appears anywhere in the workspace, or if this one grows a second key.
 # `docs/spec/debug-info.md`.
+[features]
 debug-info = []
 
 [dependencies]

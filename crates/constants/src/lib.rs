@@ -1181,15 +1181,31 @@ pub mod family {
 
     /// The pinned height of [`PUBLIC_INPUT`] and [`PUBLIC_OUTPUT`].
     ///
-    /// **Pinned by arithmetic, not by taste.** A window's first address is
-    /// `4 * height * window`, so the height is what places the windows, and
-    /// only a height dividing [`guest_memory::PUBLIC_INPUT_ORIGIN`] and
-    /// [`guest_memory::PUBLIC_OUTPUT_ORIGIN`] into distinct windows will do.
-    /// `2^8` is the only entry of [`HEIGHT_MENU`] that does. It also caps the
-    /// verifier's work over the public values at two 256-point multilinear
-    /// evaluations, which is what keeps the check cheap inside the recursion
-    /// guest.
-    pub const PUBLIC_WINDOW_HEIGHT: u32 = 1 << 8;
+    /// **Pinned by arithmetic, not by taste, and `2^12` is the ceiling.** A
+    /// window's first address is `4 * height * window`, so the height is what
+    /// places the windows, and both must sit in the hole
+    /// `[0, guest_memory::RAM_ORIGIN)` that no RAM window family initializes —
+    /// 64 KiB, and not a byte more without moving every program's load address.
+    /// Two windows of `2^12` are `2 * 16 KiB` and land on
+    /// [`guest_memory::PUBLIC_INPUT_ORIGIN`] = `0x8000` and
+    /// [`guest_memory::PUBLIC_OUTPUT_ORIGIN`] = `0xC000`, ending flush against
+    /// `RAM_ORIGIN`; `[0, 0x8000)` stays a hole, which is where the null
+    /// dereference argument lives. `2^14` would need 128 KiB for two windows
+    /// and leaves only window 0 in the hole — and window 0 initializes address
+    /// 0, so a null dereference would balance. There is no step above this one.
+    ///
+    /// **It was `2^8` until S-STREAM**, which bought 1,020 journal bytes and
+    /// a revm mini journal that overflowed above 73 transactions
+    /// (`docs/spec/revm-block.md` §2). 16,380 is what the geometry allows; it
+    /// is headroom and not a bound, a journal carrying verbatim return data
+    /// being unbounded in any window.
+    ///
+    /// The price is the verifier's step 10c, two 4,096-point multilinear
+    /// evaluations rather than two 256-point ones — 8,190 `Fr` multiplies and
+    /// 81,920 live bytes a shard (`2^11` `Fr` of fold scratch plus the 4,096
+    /// `u32` words of the window itself), 163,840 across the two. Noise on a
+    /// native verifier, and a budget a recursion guest will have to carry.
+    pub const PUBLIC_WINDOW_HEIGHT: u32 = 1 << 12;
 
     /// [`PUBLIC_INPUT`]'s window id at [`PUBLIC_WINDOW_HEIGHT`].
     pub const PUBLIC_INPUT_WINDOW: u32 =
@@ -1250,7 +1266,13 @@ pub mod family {
     /// table its channels declare, and nothing today rests on the two zeros:
     /// all five families reading `GENERIC` also carry `TIMESTAMP`, whose 19
     /// puts them at `2^20` regardless.
-    pub const HEIGHT_MENU: [u32; 5] = [1 << 8, 1 << 16, 1 << 18, 1 << 20, 1 << 22];
+    /// `2^12` is S-STREAM's, and it is the two **public-value** families' and
+    /// nothing else's: it is below every channel floor an execution family
+    /// reaches, and a window family at `2^12` reaches `0x4000`, short of the
+    /// public windows' end, so `verifier_core::window_height` refuses it. What
+    /// it does widen is what a key may declare for the three channel-free
+    /// delegation families, which is benign and bought nothing.
+    pub const HEIGHT_MENU: [u32; 6] = [1 << 8, 1 << 12, 1 << 16, 1 << 18, 1 << 20, 1 << 22];
 
     /// The default trace height of every family, indexed by `FamilyId`.
     ///
@@ -1302,8 +1324,8 @@ pub mod family {
         1 << 18, // KECCAK_F: CHOSEN above its floor of 16 (RANGE16 and XOR8)
         1 << 8,  // POSEIDON2
         1 << 8,  // FR_ARITH
-        1 << 8,  // PUBLIC_INPUT, and it is the only admissible one
-        1 << 8,  // PUBLIC_OUTPUT, likewise
+        1 << 12, // PUBLIC_INPUT, and it is the only admissible one
+        1 << 12, // PUBLIC_OUTPUT, likewise
         1 << 22, // ADVICE_WINDOWS, at the window height
         1 << 16, // MOD_MUL, and NOT 2^8 — see the paragraph above
         1 << 8,  // SHA256_COMP: ~20,000 inner columns a row, so 2^16 is 42 GB
@@ -1467,9 +1489,11 @@ pub mod guest_memory {
     /// 0's rows below `2^14` with `V[ram_live]` and `ZERO_WINDOWS` never
     /// claims window 0, so no RAM window family initializes an address there
     /// (`docs/spec/memory.md` §3.3). Two windows of that hole are therefore
-    /// free to claim without moving a single existing row, and the rest of it
+    /// free to claim without moving a single existing row, and `[0, 0x8000)`
     /// stays a hole: a null dereference is still a read of a tuple nothing
-    /// wrote, and cannot balance.
+    /// wrote, and cannot balance. Since S-STREAM the two windows take the
+    /// **whole** of the hole above `0x8000` — `2^12` each, ending flush
+    /// against `RAM_ORIGIN` — which is what makes that height the ceiling.
     ///
     /// The address is not a free choice either. A window's first address is
     /// `4 * height * window`, so at [`family::PUBLIC_WINDOW_HEIGHT`] this is
@@ -1482,7 +1506,12 @@ pub mod guest_memory {
 
     /// First byte of the **public output** window — the journal — the next
     /// window up from [`PUBLIC_INPUT_ORIGIN`].
-    pub const PUBLIC_OUTPUT_ORIGIN: u32 = 0x0000_8400;
+    ///
+    /// At [`family::PUBLIC_WINDOW_HEIGHT`] = `2^12` the pair is windows 2 and
+    /// 3 and ends flush against [`RAM_ORIGIN`]: the hole holds exactly two
+    /// public windows and no more. It was `0x8400` until S-STREAM, when the
+    /// height left `2^8`.
+    pub const PUBLIC_OUTPUT_ORIGIN: u32 = 0x0000_C000;
 
     /// Bytes in each public window: `4 * family::PUBLIC_WINDOW_HEIGHT`.
     pub const PUBLIC_WINDOW_BYTES: u32 = 4 * crate::family::PUBLIC_WINDOW_HEIGHT;

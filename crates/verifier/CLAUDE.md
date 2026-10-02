@@ -2,7 +2,8 @@
 
 ## What this crate owns
 The two verification entry points — `verify_shard` for one shard and `verify_block` for a
-whole block — and the `verifier` CLI. Both are the no_std core's steps plus the shard's
+whole block — the `verifier` CLI, and, since S-STREAM, `proof_archive`: the four files a
+proved block leaves on disk. Both entry points are the no_std core's steps plus the shard's
 one batched Mercury opening through `pcs::batch_verify`, which is where a base
 verification's pairings happen. `docs/spec/shard-proof.md` §6 and §7.2 and
 `docs/spec/block-proof.md` §3 are normative. Nothing of the protocol lives here but step
@@ -18,6 +19,27 @@ pub fn decode_srs_verifier(bytes: &[u8; 320]) -> Option<SrsVerifier>;
 pub fn encode_srs_verifier(vsrs: &SrsVerifier) -> [u8; 320];
 pub use verifier_core::{BlockProof, BlockReconciliation, PublicInputs, ShardProof, ShardRecord,
                         VerifyError, VerifyingKey, OPENING_BYTES, SRS_VERIFIER_BYTES};
+
+// S-STREAM: the on-disk form of a proved block. Three of its four files are the CLI's
+// own arguments; `.identity` is only what the run claimed, never the CLI's identity.
+// `host::proof_archive` is a re-export of this module.
+pub mod proof_archive {
+    pub struct ProofPaths { pub vk: PathBuf, pub identity: PathBuf,
+                            pub public: PathBuf, pub block: PathBuf }
+    impl ProofPaths { pub fn new(dir: &Path, stem: &str) -> ProofPaths; }   // writes nothing
+    pub fn identity_hex(vk: &VerifyingKey) -> String;        // 64 lowercase digits
+    pub fn write_proof(dir: &Path, stem: &str, vk: &VerifyingKey, block: &BlockProof)
+        -> Result<ProofPaths, String>;
+    pub fn read_proof(dir: &Path, stem: &str)
+        -> Result<(VerifyingKey, [u8; 32], PublicInputs, BlockProof), String>;
+}
+```
+
+```text
+<stem>.vk         VerifyingKey::to_bytes
+<stem>.identity   64 lowercase hex digits and a newline
+<stem>.public     PublicInputs::to_bytes   -- the block's OWN statement
+<stem>.block      BlockProof::to_bytes
 ```
 
 ```
@@ -77,6 +99,33 @@ to.
   be `statement_shards(config, shard_counts)` exactly, after each proof verifies — so
   step 1 has already held the counts to the config — and a later statement-level caller
   must do the same (`docs/spec/shard-proof.md` §6).
+- **`proof_archive` lives here because the format's READER is here** (S-STREAM).
+  `verifier block <vk> <identity-hex> <public> <block>` reads three of the four files as
+  they are — `.vk`, `.public`, `.block` — and a writer in `crates/host` would be a second
+  spelling of the CLI's own format, free to drift from it. One definition, beside the
+  thing that consumes it; `host::proof_archive` is a re-export and `tools/bench prove
+  --out <dir>` writes through it. `tests/cli.rs` writes the `block` verb's own fixture
+  files with `write_proof` rather than a local closure, which is what holds the two ends
+  together, and reads them back with `read_proof`. **The fourth, `.identity`, is not the
+  CLI's identity argument and must not become it**: see the identity bullet below.
+- **The proof is the only thing a proving run archives** (S-STREAM). Streaming has no
+  `TraceArchive` — no shard's columns outlive the batch that proves them — so what a run
+  leaves behind is the proof, and this exists because **recursion development reads a base
+  proof back**: producing one is a quarter of an hour nobody should pay twice.
+  `read_proof` is `write_proof`'s inverse and each file goes through its own type's
+  decoder, the key through `load_verifying_key` — the loader with the load rules, not
+  `VerifyingKey::from_bytes`, which checks encoding only.
+- **`.identity` is the prover's claim; the CLI's identity is the verifier's.** A key
+  recomputes its own identity when it loads, so the key is not its own authority for it;
+  writing it beside the proof records what the run *claimed*, and `read_proof` hands the
+  bytes back **without** comparing them to anything. The comparison a verifier owes is
+  against a channel the prover does not control, which is why the CLI takes the 64 hex
+  digits as an argument and never reads them from a file beside the proof.
+  `"$(cat <stem>.identity)"` in that slot checks a proof against its prover's own claim:
+  fine for re-reading your own proof, evidence of nothing to anyone else. `<stem>.public`
+  is redundant — `BlockProof::to_bytes` already carries the statement, and `write_proof`
+  writes `block.statement()` and never a caller's second copy — and is written anyway,
+  because the CLI takes the statement as a file of its own.
 - **No accumulator entries.** A base verification pairs inside `pcs`; the deferred path is
   the recursion stage's.
 
@@ -85,4 +134,4 @@ to.
 | --- | --- |
 | `src/lib.rs` (unit) | the core's opening width is `pcs::PROOF_BYTES`; `every_generic_table_commitment_is_decoded_at_load` (S17): a key with the jump family over real points loads back to itself, and each of the three generic-table commitments off the curve, the SRS digest recomputed over it, or a setup commitment off the curve, identity recomputed, is refused by name; `the_block_checks_the_statement_s_memory_argument_before_any_shard` (S20): a block of one shell shard over a statement whose boundary is out of the clock answers `MemoryArgument`, which only check 5 can give — the per-shard loop would have answered `Statement`, and the test asserts that too. It fails if check 5 is deleted or folded back into the loop |
 | `tests/signature.rs` | acceptance 12: `verify_shard` and `reduce_shard` pinned to `(&VerifyingKey, &ShardProof, &PublicInputs)` at compile time, and the core's three parts to theirs — the two that take no `ShardProof` are the two a block runs once; the `SrsVerifier` layout, over three distinct points, round-trips field by field, and each of the three with one bit flipped is refused |
-| `tests/cli.rs` | **`#[ignore]`d** (it proves the S16 statement first): S20's `the_cli_verifies_a_block_file` — the same statement proved as a block, the `block` verb exiting 0, and another identity, a statement that is not the block's, a flipped bit anywhere in the block, a shard file given to the block form and a block file given to the shard form each refused, with a usage error on a short `block` invocation; and acceptance 10's CLI half — the dumped key, statement and proofs verify; another identity is refused; a flipped bit in each proof, the statement and the key is refused; each proof alone, and each given twice, refused as not the statement's shards, and the two in reverse order accepted; a usage error exits 2 |
+| `tests/cli.rs` | **`#[ignore]`d** (it proves the S16 statement first, and since S-STREAM it proves it by streaming, `common::streamed` / `common::streamed_shards` having replaced `advance`/`finish` and `prove_block`): S20's `the_cli_verifies_a_block_file` — which also writes its four files through `proof_archive::write_proof`, asserts the `.identity` file is the hex the CLI takes as an argument, and reads the bundle back with `read_proof`, every field equal: the same statement proved as a block, the `block` verb exiting 0, and another identity, a statement that is not the block's, a flipped bit anywhere in the block, a shard file given to the block form and a block file given to the shard form each refused, with a usage error on a short `block` invocation; and acceptance 10's CLI half — the dumped key, statement and proofs verify; another identity is refused; a flipped bit in each proof, the statement and the key is refused; each proof alone, and each given twice, refused as not the statement's shards, and the two in reverse order accepted; a usage error exits 2 |

@@ -22,11 +22,16 @@ section (§1.5) is defined by the stage that needs it and the type is still the 
 recorder produces for a chain that keeps forking. What a change must keep is §1.1: one
 logical state, exactly one encoding.
 
-**§2 is frozen and S25 did not touch it.** The stateless mode publishes a *different*
-journal (§5), on a different binary with a different program identity, rather than
-amending this one — which is what must-be-exact 2's "two identities for two modes" makes
-possible and what keeps a real block's per-transaction records from having to fit a
-1,020-byte window they cannot.
+**§2 is frozen, and neither S25 nor S-STREAM touched it.** The stateless mode publishes a
+*different* journal (§5), on a different binary with a different program identity, rather
+than amending this one — which is what must-be-exact 2's "two identities for two modes"
+makes possible and what keeps a block's per-transaction records from having to fit a
+window they cannot. S-STREAM grew the window instead, from 1,020 bytes to 16,380
+(`docs/spec/public-values.md` §2), which is why the **mini** mode reaches a few hundred
+transactions now where it reached 73 — about 360 at this workload's 45 bytes a record. It
+did not change the conclusion: a record carries return data verbatim, so §2's length is a
+function of the execution and no fixed window bounds it. **`revm-block-stateless` is the full-block target** (owner's decision,
+S-STREAM), and its journal is 148 bytes whatever the block.
 
 The guest that reads and writes them is `guests/revm-block`; what it *is* — its two
 binaries, why one exists, and what it costs — is `docs/handoff/S24-revm.md`.
@@ -359,12 +364,29 @@ The **section list** is fixed; a record's `output` is the transaction's own retu
 and is as long as the transaction made it. There is no record count: the count is the
 witness's transaction count, and a reader who has the witness has the count.
 
-**The journal is 1,020 bytes** (`docs/spec/public-values.md` §3), and this commitment
-carries per-transaction fields, so a **real** block's will outgrow it. The synthetic
-block's is 122 bytes and fits; the stage that records a real block either commits a digest
-of this structure instead of the structure, or grows the window. That is a guest-side
-choice, and §9 of the public-values page is why it should be the first one: public values
-are what a verifier reads, and a per-transaction record is not.
+**The journal is 16,380 bytes** (`docs/spec/public-values.md` §3), and this commitment
+carries per-transaction fields, so how many transactions fit is arithmetic: a record is 13
+bytes plus its return data, under 64 bytes of digests, so `(16380 − 64) / 13` = **1,255**
+transactions at zero return data and about **360** at the 45 bytes a transaction this
+workload measures. The synthetic block's commitment is 122 bytes.
+
+**This paragraph used to offer two ways out; both have now been taken, and only one of
+them closes the problem.** It read *"the journal is 1,020 bytes … so a real block's will
+outgrow it; the stage that records a real block either commits a digest of this structure
+instead of the structure, or grows the window"*, and at 1,020 the limit was **73**
+transactions — against the 67, 132, 376 and 450 of the four mainnet blocks S26 profiled
+(`docs/handoff/S26-cycle.md`) and the 240 of the pinned one. S-STREAM **grew the window**,
+to the geometric ceiling of the hole below `RAM_ORIGIN` (`docs/spec/public-values.md` §2),
+and that is what makes the mini mode usable on most real blocks. It is **headroom and not
+a bound**: `output` is return data taken verbatim behind a `u32` length, so one
+maximum-size top-level `CREATE` is 24,589 bytes in a single record and overflows the grown
+window on its own.
+
+**So the digest is still the answer, and it is the other binary.** §9 of the public-values
+page says why — public values are what a verifier reads, and a per-transaction record is
+not — and `revm-block-stateless` (§5) is that reading built: a fixed 148-byte journal
+carrying `keccak256` of this record stream. It is the chosen target for proving a whole
+block (owner's decision, S-STREAM). **This section does not move for either of them.**
 
 ### 2.1 The logs commitment
 
@@ -442,12 +464,23 @@ revm uses only the one-shot form; `alloy-primitives`' streaming `Keccak256` — 
 ## 5. The stateless journal
 
 **Not §2, and that is the point.** §2 is frozen and carries a record per transaction — 45
-bytes each on this workload, so a 246-transaction block's commitment is about 11 KB against
-a public window's 1,020 (`docs/spec/public-values.md` §3). The stateless mode publishes a
-journal of its own instead, on its own binary with its own program identity, which is what
-must-be-exact 2's *"two identities for two modes"* makes possible. §2 does not move, no
-fixture is regenerated, and `docs/spec/public-values.md` §9's recommendation is followed:
-*"public values are what a verifier reads, and a per-transaction record is not."*
+bytes each on this workload, so a 246-transaction block's commitment is about 11 KB and a
+450-transaction one about 20 KB, against a public window's 16,380
+(`docs/spec/public-values.md` §3). The stateless mode publishes a journal of its own
+instead, on its own binary with its own program identity, which is what must-be-exact 2's
+*"two identities for two modes"* makes possible. §2 does not move, no fixture is
+regenerated, and `docs/spec/public-values.md` §9's recommendation is followed: *"public
+values are what a verifier reads, and a per-transaction record is not."*
+
+**S-STREAM's window raise narrowed that gap and did not close it**, which is the whole
+case for this section. At 1,020 bytes the §2 commitment outgrew the window above 73
+transactions and no real block was in reach; at 16,380 the crossover is about 360, so of
+the five blocks measured here — 67, 132, 240, 376 and 450 transactions — three fit and two
+still do not. A format whose length is a function of the
+execution cannot be bounded by a fixed window at all — one maximum-size top-level `CREATE`
+is 24,589 bytes in a single record — so **148 bytes whatever the block** is not an
+optimization of §2 but the only shape that is bounded. That is why the owner's full-block
+target is this binary and not the mini one.
 
 **148 bytes, whatever the block:**
 

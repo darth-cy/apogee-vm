@@ -99,7 +99,7 @@ fn fib() -> Fib {
             "frame of mem_subword",
             "window 0",
             "window 8191",
-            "public input window 32",
+            "public input window 2",
             "public output",
         ]
     );

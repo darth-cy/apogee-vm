@@ -21,7 +21,6 @@
 mod common;
 
 use constants::family;
-use prover::prove_block;
 use trace::plan_shards;
 use verifier::{verify_block, verify_shard};
 use verifier_core::{statement_shards, BlockProof};
@@ -37,7 +36,7 @@ const ADD: u32 = family::ADD_SUB_LUI_AUIPC;
 #[ignore]
 fn a4_the_block_with_both_delegation_shards_proves_and_verifies() {
     let setup = common::recursion_setup();
-    let mut archive = common::recursion_archive(&setup.program);
+    let archive = common::recursion_archive(&setup.program);
 
     // The family set: both delegation families are in it in id order, each at
     // the delegation height, after every family that claims a pc and after the
@@ -102,7 +101,7 @@ fn a4_the_block_with_both_delegation_shards_proves_and_verifies() {
             .sum::<u64>()
     );
 
-    let block = prove_block(&setup, &mut archive, &plan).expect("the block proves");
+    let block = common::streamed(&setup, &common::empty_io());
     assert_eq!(
         verify_block(&setup.vk, &block, block.statement()),
         Ok(()),

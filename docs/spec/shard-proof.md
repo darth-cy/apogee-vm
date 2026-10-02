@@ -33,6 +33,15 @@ are S18's. §5.1 and §11 gain the three new families, two of which read the gen
 and one of which does not. `docs/spec/memory-ops.md` is their page. With them
 `family_circuit` holds every family the master prompt names.
 
+S-STREAM **changed nothing in this page's protocol either**, and two things around it.
+The two public windows left `2^8` for `2^12`, so `guest_memory::PUBLIC_PAYLOAD_BYTES` is
+16,380 rather than 1,020 and step 10c's two multilinear evaluations are over 4,096 points
+rather than 256 — a height is not a protocol change, it is a `VmConfig` entry, and §2's
+schedule, §3's recipe, §9's layout and §6's order are untouched. And **§10 is no longer
+on a proving path**: the archived phase sequence is retained for
+`checker::TamperHarness`, nothing proves through it, and the section says so.
+`docs/spec/streaming.md` is the proving path's page.
+
 S-IO added three window families and **changed nothing in this page's protocol**: no
 message, no tag, no challenge, no wire form and no field of `PublicInputs`. §2 says so
 explicitly. What moved is §1.1's reading of `input` and `output` — they are the two public
@@ -44,7 +53,8 @@ family” part. `docs/spec/public-values.md` is their page.
 This page is S16's vertical slice as the repository owner decided it: the statement a
 proof is about, the global and per-shard transcripts, the three proof-side types and
 their wire forms, the order `verify_shard` checks things in, the `ADD_SUB_LUI_AUIPC`
-family's circuit, and the prover's phase snapshots. It cites
+family's circuit, and the prover's phase snapshots — which §10 still specifies and
+nothing still proves through. It cites
 `docs/spec/memory.md`, `docs/spec/lookup.md`, `docs/spec/gkr.md` and
 `docs/spec/mercury.md` for everything they already fix, and restates none of it.
 
@@ -54,8 +64,8 @@ family's circuit, and the prover's phase snapshots. It cites
 | `crates/verifier-core` | `#![no_std]`: `VmConfig`, the statement descriptor, the window rules, the identity digest, the SRS digest, `PublicInputs`, `ShardProof`, `VerifyingKey`, `VerifyError`, the global transcript and `reduce_shard` |
 | `crates/verifier` | `std`: `verify_shard`, the one entry point, which ends in `pcs::batch_verify`; the `verifier` CLI |
 | `crates/constraints` | `add_sub`: the family's circuit; `family_circuit`: the registry of every family's circuit |
-| `crates/prover` | the verifying key's construction, the statement inputs, `global_commit_phase`, `prove_shard`, the family fills, the phase snapshots and resume |
-| `crates/trace` | `TraceArchive::fill` and `content`, through which the prover writes its phases |
+| `crates/prover` | the verifying key's construction, the statement inputs, `global_commit_phase`, `prove_shard`, the family fills, and §10's phase snapshots, which nothing proves through |
+| `crates/trace` | `TraceArchive::fill` and `content`, through which §10's sections are written |
 | `crates/checker` | `TamperHarness` |
 
 The owner's decisions this page records, each put before any code:
@@ -410,7 +420,12 @@ says the guest's first read of every input word read the statement's input, and 
 `PUBLIC_OUTPUT`'s teardown column to `public.output` says the statement's output is what
 the guest's stores left behind. `PUBLIC_OUTPUT` has no init column to check because it
 has none to choose — its artifact's init leaf is a literal 0. `docs/spec/public-values.md`
-§5 is normative; the verifier's whole cost is two 256-point multilinear evaluations.
+§5 is normative; the verifier's whole cost is two **4,096-point** multilinear
+evaluations, one per public window, at `family::PUBLIC_WINDOW_HEIGHT = 2^12`. **It was
+two 256-point ones until S-STREAM**, which raised the height so that the journal could
+hold more than 1,020 bytes; `2^12` is the geometric ceiling, the hole below `RAM_ORIGIN`
+being 64 KiB and two windows of `2^14` needing 128. That cost is this page's only
+S-STREAM entry, and it is the one a recursion guest will have to carry.
 
 `reduce_shard` is `derive_global_phase`, then `verify_shard_local`, then
 `verify_global_memory`, and `verifier::verify_shard` is that plus step 12. **The order
@@ -745,13 +760,31 @@ so every S16 key's bytes changed, and its digest with them (§3).
 
 ---
 
-## 10. The prover's phases
+## 10. The prover's phases — a real format, on no proving path
+
+> **Nothing proves through this section** (owner's decision, S-STREAM).
+> `prover::prove_block_streaming` is the one proving path
+> (`docs/spec/streaming.md` §1.2), it has no `TraceArchive` and therefore no phase
+> boundary to snapshot, and `prompts/00-master.md` rule 9, *Archivable stages*, is
+> withdrawn. The schemas below are **still real and still tested**:
+> `prover::advance`, `finish` and the four section codecs compile, and
+> `crates/prover/src/phases.rs`' unit tests hold each section to round-tripping and to
+> refusing a trailing byte and a missing one. They were retained rather than deleted
+> because `checker::TamperHarness` is built on the `TraceArchive` they read and the root
+> `CLAUDE.md` says the harness is not optional;
+> `crates/prover/tests/one_proving_path.rs` is what holds the repository to reaching
+> them from nowhere. Read this section as a format specification, not as a description
+> of what a run does.
 
 `prover::advance(setup, archive, until)` fills the S12 `TraceArchive`'s later phases
 in order, each timed into S12's timing section, stopping after `until`; a phase already
-filled is read back instead of recomputed. **Resume** is `TraceArchive::import` and
+filled is read back instead of recomputed. **Resume** was `TraceArchive::import` and
 `advance`: an archive exported after any phase finishes to the same bytes as an
-uninterrupted run.
+uninterrupted run. The two tests that proved that — `crates/prover/tests/block.rs`'
+`a10_a_resumed_block_is_byte_identical` and `crates/prover/tests/acceptance.rs`'
+`a9_a_resumed_statement_is_byte_identical` — are deleted, so resume is a property the
+code still has and nothing still checks. A killed streaming run re-executes instead, and
+execution is under 1% of a block's wall clock.
 
 | phase | content |
 | --- | --- |
@@ -796,8 +829,9 @@ path and needed nothing of the generic machinery at all.
 **S21's `KECCAK_F` was one constructor, one registry arm and one fill too** — plus the
 `deleg` query, which is `docs/spec/memory.md` §2.1's table and not this crate's. Its arm sits
 **after** the minimum-height guard, whose floor a delegation family's own channels set and
-so meets no `BITS ≤ trace_vars` assertion: it is built at every `n` the artifact accepts, and
-in practice at `2^8`. It reads no generic channel and lists no setup commitment at all, so its
+so meets no `BITS ≤ trace_vars` assertion: it is built at every `n` the artifact accepts —
+`2^8` at S21, and `2^18` since S26d made one row one keccak round and gave the family two
+channels with a `2^16` floor (`docs/spec/delegation.md` §9.2). It reads no generic channel and lists no setup commitment at all, so its
 opening claim is `M ++ W` — the first of any family. `docs/spec/delegation.md` is the ABI and
 `docs/spec/constraint-manifest.md` §12 the accounting.
 

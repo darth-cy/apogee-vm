@@ -7,8 +7,8 @@
 //!
 //! # Why a feature and not an unconditional runtime switch
 //!
-//! The same reason `metrics` is one. The log's interesting lines are the
-//! **invariant scans**: every live row of a delegation shard checked against
+//! Because the cost is real and unconditional. The log's interesting lines are
+//! the **invariant scans**: every live row of a delegation shard checked against
 //! its modulus, every anchor's three zeroings, every multiplicity total. That
 //! is work proportional to the shard, and a switch would leave it compiled
 //! into every proving run behind a branch. The feature deletes it instead.
@@ -258,8 +258,10 @@ pub fn line(text: &str) {
     let _ = err.flush();
 }
 
-/// A wall clock for the `ms=` fields. `metrics` has its own; this one is four
-/// lines and does not need the harness compiled in beside it.
+/// A wall clock for the `ms=` fields: four lines, and the only clock the prover
+/// reads. It is not a timing harness — `tools/bench`'s `prove` verb is that,
+/// off the `TraceArchive`'s own phase sections — and these fields say which
+/// shard is slow while it is still running, not what a block cost.
 #[derive(Clone, Copy, Debug)]
 pub struct Clock(Instant);
 
@@ -280,7 +282,7 @@ impl Clock {
 
 /// A family's name, as `constants::family` spells it.
 ///
-/// The metrics report prints the number; a log a human reads under time
+/// A statement's wire forms carry the number; a log a human reads under time
 /// pressure prints the name. Appending a family to `constants::family` without
 /// appending it here gives `family(<n>)`, which is wrong but not misleading.
 pub fn family_name(f: FamilyId) -> String {
@@ -431,11 +433,10 @@ pub fn circuit(c: &FamilyCircuit, h: u32) -> String {
 /// # Which order, and why it matters
 ///
 /// Bare hex in this log is always a field element's canonical little-endian
-/// bytes, which is what `metrics::digest_hex` prints, what the `verifier` CLI
-/// takes as its `<identity-hex>` argument, and what every wire form in this
-/// repository carries (the root `CLAUDE.md`'s "One encoding"). So a value this
-/// log prints can be pasted into the CLI and grepped against a metrics report
-/// without reversing anything. The one exception is [`limbs`], which prints an
+/// bytes, which is what the `verifier` CLI takes as its `<identity-hex>`
+/// argument and what every wire form in this repository carries (the root
+/// `CLAUDE.md`'s "One encoding"). So a value this log prints can be pasted into
+/// the CLI, or grepped against a pinned fixture, without reversing anything. The one exception is [`limbs`], which prints an
 /// integer a reader compares against the literature — a modulus, a coordinate —
 /// and marks it `0x` and big-endian for that reason.
 ///
@@ -909,8 +910,9 @@ mod tests {
     }
 
     /// The order is `to_bytes`', so a printed value pastes into the `verifier`
-    /// CLI and greps against a metrics report. `fr_full` is `digest_hex` on the
-    /// same bytes, and this holds the two equal by construction.
+    /// CLI and greps against a pinned fixture. `fr_full` is the full canonical
+    /// encoding of the same bytes, and this holds the two equal by
+    /// construction.
     #[test]
     fn a_field_element_prints_in_to_bytes_order() {
         for x in [Fr::ZERO, Fr::ONE, Fr::MINUS_ONE, Fr::from_u64(1 << 40)] {

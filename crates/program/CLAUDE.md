@@ -99,8 +99,8 @@ is claimed by exactly one family by construction.
 | 9 | `KECCAK_F` | no pc; **invoked, not decoded**: ecall `0x507`, one keccak-f[1600] **round** a row since S26d — a permutation is 24 consecutive invocations — present exactly when the image declares it; an **empty** table. `0x501` was S21's whole-permutation call and is retired and burned | 2^18 |
 | 10 | `POSEIDON2` | no pc; the same, ecall `0x500`, one width-3 permutation a row | 2^8 |
 | 11 | `FR_ARITH` | no pc; the same, ecall `0x502`, one `Fr` add, multiply or inverse a row | 2^8 |
-| 12 | `PUBLIC_INPUT` | no pc; the public input window at `0x8000`, **exactly one shard**, present in every `VmConfig` at the **pinned** `family::PUBLIC_WINDOW_HEIGHT`; an **empty** table | 2^8 |
-| 13 | `PUBLIC_OUTPUT` | no pc; the journal at `0x8400`, exactly one shard, present in every `VmConfig` at the same pinned height; an **empty** table | 2^8 |
+| 12 | `PUBLIC_INPUT` | no pc; the public input window at `0x8000`, **exactly one shard**, present in every `VmConfig` at the **pinned** `family::PUBLIC_WINDOW_HEIGHT`; an **empty** table | 2^12 |
+| 13 | `PUBLIC_OUTPUT` | no pc; the journal at `0xC000` — `0x8400` until S-STREAM raised the height that places it — exactly one shard, present in every `VmConfig` at the same pinned height; an **empty** table | 2^12 |
 | 14 | `ADVICE_WINDOWS` | no pc; the prover's advice from `0x8000_0000` up, `k >= 0` consecutive windows, present in every `VmConfig` at the window height; an **empty** table | 2^22 |
 | 15 | `MOD_MUL` | no pc; **invoked, not decoded**: ecall `0x504`, one `a·b mod m` over eight 32-bit limbs a row in one of four fixed Ethereum fields a frame word **selects**; an **empty** table | 2^16 |
 
@@ -128,9 +128,14 @@ family leaves it out of the set, which is refused.
 **The two public families' height is pinned in derivation, not read from `ProgramParams`.**
 `height_of` writes `family::PUBLIC_WINDOW_HEIGHT` for both whatever a caller asked for,
 because a window's first address is `4·height·window` — the height is what *places* the
-windows, and `2^8` is the only menu entry putting `PUBLIC_INPUT_ORIGIN` and
-`PUBLIC_OUTPUT_ORIGIN` in two distinct windows. So there is nothing a caller could usefully
-say, and "every family at `h`" keeps meaning every family whose height is a choice.
+windows, and only one menu entry puts `PUBLIC_INPUT_ORIGIN` and `PUBLIC_OUTPUT_ORIGIN` in
+two distinct windows inside the hole below `RAM_ORIGIN`. So there is nothing a caller could
+usefully say, and "every family at `h`" keeps meaning every family whose height is a choice.
+**That entry is `2^12` since S-STREAM, where it was `2^8`**: the two windows are 16 KiB
+each, windows 2 and 3, and they fill `[0x8000, RAM_ORIGIN)` exactly — the payload went
+from 1,020 bytes to 16,380 and the gap above the pair is gone, which is also why `2^12`
+is the ceiling (`crates/constants/src/lib.rs`'s `PUBLIC_WINDOW_HEIGHT` carries the whole
+argument).
 **Derivation pins it; decoding refuses a wrong one**, and that is the check that matters:
 `verifier_core::window_height` runs inside `VmConfig::from_bytes`, on bytes a verifier was
 handed, where the input is not the caller's own (`docs/spec/public-values.md` §2).
@@ -176,6 +181,13 @@ something to ignore.
   Whether heights should be per family at all is an open question in
   `docs/handoff/S12-emulator.md`; the suites here that are not *about* the heights take
   `common::fitting`, the smallest menu height the code fits.
+  **The menu's smallest *instruction-table* height is its THIRD entry since S-STREAM**,
+  where it was the second. `HEIGHT_MENU` is `[2^8, 2^12, 2^16, 2^18, 2^20, 2^22]`: `2^8` is
+  S21's delegation entry and `2^12` is S-STREAM's, the two public value families' alone, and
+  neither is a height any program's code fits in — `2^12` halfwords reach pc `0x1ffe`.
+  `tests/common/mod.rs`'s `smallest` reads `HEIGHT_MENU[2]` and asserts it is `2^16`, so a
+  seventh entry below that one fails loudly rather than silently re-indexing every suite
+  that takes it.
 - **Fields**, in frozen column order `pc, next_pc, rs1, rs2, rd, imm, funct3,
   extra_mask`. A form's absent register is `x0` and absent immediate 0. `imm` is the
   two's-complement `u32` of the value the instruction uses (`crates/isa` defines it),

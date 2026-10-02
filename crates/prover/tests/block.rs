@@ -19,15 +19,13 @@
 
 mod common;
 
-use std::io::Cursor;
-
 use constants::family;
 use field::Fr;
 use prover::{
-    advance, finish, global_commit_phase, prove_block, prove_shard_columns, public_inputs,
-    shard_columns, statement_inputs, ProverSetup, ProvingContext,
+    global_commit_phase, prove_shard_columns, public_inputs, shard_columns, statement_inputs,
+    ProverSetup, ProvingContext,
 };
-use trace::{plan_shards, Phase, TraceArchive};
+use trace::TraceArchive;
 use verifier::{verify_block, verify_shard};
 use verifier_core::{statement_shards, BlockProof, ShardProof, VerifyError, TRIVIAL_TS_WINDOW};
 
@@ -36,12 +34,18 @@ const JBS: u32 = family::JUMP_BRANCH_SLT;
 const INIT: u32 = family::INIT_TEARDOWN;
 const ZERO: u32 = family::ZERO_WINDOWS;
 
-/// The honest block, and everything it was proved from.
+/// The honest block, and the execution it was proved from.
+///
+/// The block comes from the one proving path, `prove_block_streaming`. The
+/// archive beside it is **not** proved from and could not be: it is the
+/// execution, held so that the tests below can read its cycle profile and
+/// build one shard's columns for the tamper twin — `statement_inputs` and
+/// `shard_columns` are the per-shard component `checker::TamperHarness` is
+/// built on, and they are path-neutral (`docs/spec/streaming.md` §1).
 fn proved() -> (ProverSetup, TraceArchive, BlockProof) {
     let setup = common::shards_setup();
-    let mut archive = common::shards_archive(&setup.program);
-    let plan = plan_shards(archive.cycle_profile(), &setup.program.config);
-    let block = prove_block(&setup, &mut archive, &plan).expect("the block proves");
+    let archive = common::shards_archive(&setup.program);
+    let block = common::streamed(&setup, &common::empty_io());
     (setup, archive, block)
 }
 
@@ -465,47 +469,16 @@ fn a7_a_corrupted_cell_in_the_second_shard_refuses_the_block() {
     assert_eq!(verify_block(&setup.vk, &honest, honest.statement()), Ok(()));
 }
 
-/// Acceptance 10: killed and resumed at the post-commit and post-GKR
-/// boundaries, the block prover produces a byte-identical `BlockProof`.
-#[test]
-#[ignore]
-fn a10_a_resumed_block_is_byte_identical() {
-    let (setup, whole, reference) = proved();
-
-    let setup2 = common::shards_setup();
-    let mut archive = common::shards_archive(&setup2.program);
-    let plan = plan_shards(archive.cycle_profile(), &setup2.program.config);
-    for stop in [Phase::PostCommit, Phase::PostGkr] {
-        advance(&setup2, &mut archive, stop).expect("the phase runs");
-        assert!(archive.is_filled(stop), "{stop:?} is filled");
-        let mut bytes = Vec::new();
-        archive.export(&mut bytes).expect("the archive exports");
-        archive = TraceArchive::import(Cursor::new(bytes)).expect("it imports");
-    }
-    let resumed = prove_block(&setup2, &mut archive, &plan).expect("the resumed block proves");
-    assert_eq!(
-        resumed.to_bytes(),
-        reference.to_bytes(),
-        "a resumed block is the uninterrupted one, byte for byte"
-    );
-    assert_eq!(
-        archive.deterministic_payload(),
-        whole.deterministic_payload(),
-        "and so is every phase section"
-    );
-    assert_eq!(
-        finish(&archive).expect("the final phase").0,
-        *reference.statement()
-    );
-    assert_eq!(
-        verify_block(&setup.vk, &resumed, resumed.statement()),
-        Ok(())
-    );
-}
-
 /// Must-be-exact 8: the assembled block is byte-identical for any thread
 /// count. Shard proving is the only parallel step and each shard forks its own
 /// transcript from the global state, so the schedule cannot reach a challenge.
+///
+/// On the streaming path the parallel step is pass 2's batch — a rayon
+/// parallel iterator over at most `max_in_flight` shards — and the claim is
+/// the same one: a shard is placed by its statement position and its proof is
+/// a function of the global state and its own columns alone.
+/// `tests/streaming.rs` makes the companion claim over `max_in_flight` itself,
+/// which is the other half of the schedule.
 #[test]
 #[ignore]
 fn the_block_does_not_depend_on_the_thread_count() {
@@ -516,9 +489,7 @@ fn the_block_does_not_depend_on_the_thread_count() {
         .expect("a one-thread pool");
     let serial = pool.install(|| {
         let setup = common::shards_setup();
-        let mut archive = common::shards_archive(&setup.program);
-        let plan = plan_shards(archive.cycle_profile(), &setup.program.config);
-        prove_block(&setup, &mut archive, &plan).expect("the block proves on one thread")
+        common::streamed(&setup, &common::empty_io())
     });
     assert_eq!(serial.to_bytes(), reference.to_bytes());
 }
@@ -530,9 +501,7 @@ fn the_block_does_not_depend_on_the_thread_count() {
 #[ignore]
 fn a2_a_multi_family_block_proves_and_verifies() {
     let setup = common::mem_setup();
-    let mut archive = common::mem_archive(&setup.program);
-    let plan = plan_shards(archive.cycle_profile(), &setup.program.config);
-    let block = prove_block(&setup, &mut archive, &plan).expect("the block proves");
+    let block = common::streamed(&setup, &common::empty_io());
 
     let execution: Vec<u32> = setup
         .program

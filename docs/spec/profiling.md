@@ -188,7 +188,7 @@ report.
   *prove*, and proving cost per cycle differs by family: a `MUL_DIV` row and an
   `ADD_SUB_LUI_AUIPC` row are one cycle each and not one cost each. The
   per-family cycle counts in the report are where that difference becomes
-  visible, and `docs/spec/metrics.md` is the harness that prices it.
+  visible, and `tools/bench`'s `prove` verb is what prices it.
 - **Not a call-graph profiler.** It reports self cycles per function, not
   inclusive ones. A helper called from many places is credited to itself, which
   is what a candidate ranking wants; "cycles under `ecrecover` including

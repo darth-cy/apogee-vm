@@ -18,8 +18,6 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use trace::Phase;
-
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -48,9 +46,7 @@ fn invoke(verb: &[&str], args: &[&Path], identity: &str) -> (i32, String) {
 #[ignore = "2^20 rows: one statement's proof peaks at 8.6 GB"]
 fn the_cli_verifies_the_dumped_files_and_refuses_a_flipped_bit() {
     let setup = common::setup();
-    let mut archive = common::archive(&setup.program);
-    prover::advance(&setup, &mut archive, Phase::Final).unwrap();
-    let (public, proofs) = prover::finish(&archive).unwrap();
+    let (public, proofs) = common::streamed_shards(&setup, &common::empty_io());
 
     let dir =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("s16-cli-{}", std::process::id()));
@@ -151,22 +147,39 @@ fn the_cli_verifies_a_block_file() {
     use verifier_core::BlockProof;
 
     let setup = common::setup();
-    let mut archive = common::archive(&setup.program);
-    let plan = trace::plan_shards(archive.cycle_profile(), &setup.program.config);
-    let block = prover::prove_block(&setup, &mut archive, &plan).expect("the block proves");
+    let block = common::streamed(&setup, &common::empty_io());
 
     let dir =
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("s20-cli-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    // **The four files come from `verifier::proof_archive::write_proof`**, which is
+    // the one writer of a proved block's on-disk form (S-STREAM). Writing them
+    // here with a local closure instead would be a second spelling of the
+    // format the CLI reads, free to drift from the one every real proving run
+    // uses.
+    let paths = verifier::proof_archive::write_proof(&dir, "addsub", &setup.vk, &block)
+        .expect("the proof writes");
     let write = |name: &str, bytes: &[u8]| {
         let path = dir.join(name);
         std::fs::write(&path, bytes).unwrap();
         path
     };
-    let key = write("addsub.vk", &setup.vk.to_bytes());
-    let statement = write("addsub.public", &block.statement().to_bytes());
-    let file = write("addsub.block", &block.to_bytes());
+    let key = paths.vk.clone();
+    let statement = paths.public.clone();
+    let file = paths.block.clone();
     let identity = hex(&setup.vk.identity.to_bytes());
+    // And the identity file carries the same hex the CLI takes as an argument.
+    assert_eq!(
+        std::fs::read_to_string(&paths.identity).unwrap().trim(),
+        identity
+    );
+    // The bundle reads back through its own inverse, which is what recursion
+    // development does with it.
+    let (vk2, id2, public2, block2) =
+        verifier::proof_archive::read_proof(&dir, "addsub").expect("the proof reads back");
+    assert_eq!(vk2.to_bytes(), setup.vk.to_bytes());
+    assert_eq!(id2, setup.vk.identity.to_bytes());
+    assert_eq!(&public2, block.statement());
+    assert_eq!(block2.to_bytes(), block.to_bytes());
 
     let (code, text) = invoke(&["block"], &[&key, &statement, &file], &identity);
     assert_eq!(code, 0, "{text}");

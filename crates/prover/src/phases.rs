@@ -14,17 +14,10 @@ use verifier_core::{read_gkr, statement_shards, write_gkr, BlockProof, PublicInp
 
 #[cfg(feature = "debug-info")]
 use crate::debug;
-use crate::metrics::{Recorder, ShardId, Stage};
-// Used only inside `metric!`, which is nothing at all in the default build.
-#[cfg(feature = "metrics")]
-use crate::metrics::ByteClass;
 use crate::{
-    global_commit_phase_rec, public_inputs, shard_columns_rec, statement_inputs_rec,
-    GlobalCommitState, ProverError, ProverSetup, ProvingContext, ShardGkr,
+    global_commit_phase, public_inputs, shard_columns, statement_inputs, GlobalCommitState,
+    ProverError, ProverSetup, ProvingContext, ShardGkr,
 };
-
-#[cfg(feature = "metrics")]
-use crate::metrics::ProvingMetrics;
 
 /// A transcript snapshot's fixed size under `postcard`, S02's wire form.
 const SNAPSHOT_BYTES: usize = 226;
@@ -201,58 +194,17 @@ pub fn advance(
     archive: &mut TraceArchive,
     until: Phase,
 ) -> Result<(), ProverError> {
-    advance_rec(setup, archive, until, &mut Recorder::new())
-}
-
-/// [`advance`], with every stage of every phase recorded, and the metrics
-/// returned. `docs/spec/metrics.md` is the schema; `Display` is the human
-/// report and `ProvingMetrics::to_json` the machine one.
-///
-/// It proves exactly what [`advance`] proves, byte for byte: the harness
-/// reads the clock and sizes structures the prover built anyway, and writes
-/// nothing a proof depends on. `tests/metrics.rs` holds the two to the same
-/// block bytes.
-#[cfg(feature = "metrics")]
-pub fn advance_metered(
-    setup: &ProverSetup,
-    archive: &mut TraceArchive,
-    until: Phase,
-) -> Result<ProvingMetrics, ProverError> {
-    let mut rec = Recorder::new();
-    advance_rec(setup, archive, until, &mut rec)?;
-    metric!(for (i, phase) in trace::PHASES.iter().enumerate() {
-        if let Some(t) = archive.timing(*phase) {
-            rec.note_archive_phase(i as u8, t.wall_nanos);
-        }
-    });
-    Ok(rec.finish())
-}
-
-pub(crate) fn advance_rec(
-    setup: &ProverSetup,
-    archive: &mut TraceArchive,
-    until: Phase,
-    rec: &mut Recorder,
-) -> Result<(), ProverError> {
     if until == Phase::PostExecution {
         return Ok(());
     }
     // PostCommit.
     let global = match archive.content(Phase::PostCommit) {
-        Some(bytes) => {
-            let span = rec.start(Stage::ArchiveDecode);
-            let g = decode_global(bytes).map_err(archive_error(Phase::PostCommit))?;
-            rec.end(span);
-            g
-        }
+        Some(bytes) => decode_global(bytes).map_err(archive_error(Phase::PostCommit))?,
         None => {
             let since = Instant::now();
-            let inputs = statement_inputs_rec(setup, archive, rec)?;
-            let global = global_commit_phase_rec(&setup.vk, &setup.srs, &inputs, rec);
-            let span = rec.start(Stage::ArchiveEncode);
+            let inputs = statement_inputs(setup, archive)?;
+            let global = global_commit_phase(&setup.vk, &setup.srs, &inputs);
             let content = encode_global(&global);
-            rec.end(span);
-            metric!(rec.bytes(ByteClass::ArchiveSection, content.len() as u64));
             fill(archive, Phase::PostCommit, content, since)?;
             global
         }
@@ -263,24 +215,14 @@ pub(crate) fn advance_rec(
     let ctx = ProvingContext { setup, global };
     let shards = statement_shards(&setup.vk.config, &ctx.global.statement.shard_counts);
     let windows = ctx.global.statement.windows.clone();
-    // The base layer of one shard, built inside that shard's own rayon task
-    // and recorded into that task's own recorder: no shared state, and the
-    // bytes are attributed to the shard that owns them.
-    let base = |archive: &TraceArchive,
-                (family, index): (u32, u32),
-                r: &mut Recorder|
-     -> Result<BaseLayer, ProverError> {
-        let columns = shard_columns_rec(setup, archive, family, index, &windows, r)?;
-        let span = r.start(Stage::ShardBaseLayer);
-        metric!(r.shard_bytes(
-            ShardId::new(family, index),
-            ByteClass::BaseLayer,
-            crate::metrics::columns_bytes(&columns)
-        ));
-        let base = BaseLayer::new(columns);
-        r.end(span);
-        Ok(base)
-    };
+    // The base layer of one shard, built inside that shard's own rayon task:
+    // no shared state, and the columns are dropped with the task that made
+    // them.
+    let base =
+        |archive: &TraceArchive, (family, index): (u32, u32)| -> Result<BaseLayer, ProverError> {
+            let columns = shard_columns(setup, archive, family, index, &windows)?;
+            Ok(BaseLayer::new(columns))
+        };
 
     // PostGkr. Shard proving is the block's one parallel step, and it starts
     // only after the global phase has closed: each task forks its transcript
@@ -291,18 +233,10 @@ pub(crate) fn advance_rec(
     // is statement order whatever the thread count
     // (`docs/spec/block-proof.md` §5).
     let gkrs = match archive.content(Phase::PostGkr) {
-        Some(bytes) => {
-            let span = rec.start(Stage::ArchiveDecode);
-            let g = decode_gkrs(bytes).map_err(archive_error(Phase::PostGkr))?;
-            rec.end(span);
-            g
-        }
+        Some(bytes) => decode_gkrs(bytes).map_err(archive_error(Phase::PostGkr))?,
         None => {
             let since = Instant::now();
             let read_only: &TraceArchive = archive;
-            // Each task carries its own recorder and hands it back beside its
-            // result; `map` over an indexed parallel iterator collects in
-            // order, so absorbing them below is statement order.
             // **The peak-setting moment of a whole block.** One shard's
             // forward pass per rayon worker lives at once here
             // (`crates/prover/CLAUDE.md`), so a run that is about to be OOM
@@ -314,37 +248,22 @@ pub(crate) fn advance_rec(
                 shards.len(),
                 rayon::current_num_threads()
             );
-            let region = rec.start(Stage::BlockGkrRegion);
             let proved = first_error(
                 shards
                     .par_iter()
                     .map(|&(family, index)| {
-                        let mut r = Recorder::for_shard(ShardId::new(family, index));
-                        let task = r.start(Stage::ShardGkrTask);
-                        let out = base(read_only, (family, index), &mut r)
-                            .map(|base| ctx.gkr_part(family, index, &base, &mut r));
-                        r.end(task);
-                        out.map(|g| (g, r))
+                        base(read_only, (family, index))
+                            .map(|base| ctx.gkr_part(family, index, &base))
                     })
                     .collect(),
             )?;
-            rec.end(region);
             dlog!(
                 Phase,
                 "apogee block    gkr region done shards={}",
                 proved.len()
             );
-            let gkrs: Vec<ShardGkr> = proved
-                .into_iter()
-                .map(|(g, r)| {
-                    rec.absorb(r);
-                    g
-                })
-                .collect();
-            let span = rec.start(Stage::ArchiveEncode);
+            let gkrs = proved;
             let content = encode_gkrs(&gkrs);
-            rec.end(span);
-            metric!(rec.bytes(ByteClass::ArchiveSection, content.len() as u64));
             fill(archive, Phase::PostGkr, content, since)?;
             gkrs
         }
@@ -356,12 +275,10 @@ pub(crate) fn advance_rec(
     // PostOpening.
     let proofs = match archive.content(Phase::PostOpening) {
         Some(bytes) => {
-            let span = rec.start(Stage::ArchiveDecode);
             let mut r = Reader::new(bytes);
-            let proofs = decode_proofs(&mut r).and_then(|p| r.finish().map(|()| p));
-            let proofs = proofs.map_err(archive_error(Phase::PostOpening))?;
-            rec.end(span);
-            proofs
+            decode_proofs(&mut r)
+                .and_then(|p| r.finish().map(|()| p))
+                .map_err(archive_error(Phase::PostOpening))?
         }
         None => {
             let since = Instant::now();
@@ -372,38 +289,22 @@ pub(crate) fn advance_rec(
                 gkrs.len(),
                 rayon::current_num_threads()
             );
-            let region = rec.start(Stage::BlockOpeningRegion);
             let opened = first_error(
                 gkrs.into_par_iter()
                     .map(|gkr| {
                         let shard = (gkr.family, gkr.index);
-                        let mut r = Recorder::for_shard(ShardId::new(shard.0, shard.1));
-                        let task = r.start(Stage::ShardOpeningTask);
-                        let out = base(read_only, shard, &mut r)
-                            .map(|base| ctx.opening_part(gkr, &base, &mut r).0);
-                        r.end(task);
-                        out.map(|p| (p, r))
+                        base(read_only, shard).map(|base| ctx.opening_part(gkr, &base).0)
                     })
                     .collect(),
             )?;
-            rec.end(region);
             dlog!(
                 Phase,
                 "apogee block    opening region done shards={}",
                 opened.len()
             );
-            let proofs: Vec<ShardProof> = opened
-                .into_iter()
-                .map(|(proof, r)| {
-                    rec.absorb(r);
-                    proof
-                })
-                .collect();
-            let span = rec.start(Stage::ArchiveEncode);
+            let proofs = opened;
             let mut w = Writer::new();
             encode_proofs(&mut w, &proofs);
-            rec.end(span);
-            metric!(rec.bytes(ByteClass::ArchiveSection, w.bytes.len() as u64));
             fill(archive, Phase::PostOpening, w.bytes, since)?;
             proofs
         }
@@ -415,14 +316,8 @@ pub(crate) fn advance_rec(
     // Final.
     if archive.content(Phase::Final).is_none() {
         let since = Instant::now();
-        let span = rec.start(Stage::BlockFinalSection);
         let public = public_inputs(&ctx.global, &proofs);
         let content = encode_final(&public, &proofs);
-        rec.end(span);
-        metric!({
-            rec.bytes(ByteClass::ArchiveSection, content.len() as u64);
-            rec.bytes(ByteClass::Statement, public.to_bytes().len() as u64);
-        });
         fill(archive, Phase::Final, content, since)?;
     }
     Ok(())
@@ -445,50 +340,6 @@ pub fn prove_block(
     archive: &mut TraceArchive,
     plan: &ShardPlan,
 ) -> Result<BlockProof, ProverError> {
-    prove_block_rec(setup, archive, plan, &mut Recorder::new())
-}
-
-/// [`prove_block`], with every stage recorded, and the metrics beside the
-/// block. `docs/spec/metrics.md` is the schema; `Display` is the human report
-/// and `ProvingMetrics::to_json` the machine one.
-///
-/// The block is the one [`prove_block`] makes, byte for byte
-/// (`tests/metrics.rs`).
-#[cfg(feature = "metrics")]
-pub fn prove_block_metered(
-    setup: &ProverSetup,
-    archive: &mut TraceArchive,
-    plan: &ShardPlan,
-) -> Result<(BlockProof, ProvingMetrics), ProverError> {
-    let mut rec = Recorder::new();
-    let block = prove_block_rec(setup, archive, plan, &mut rec)?;
-    metric!({
-        for (i, phase) in trace::PHASES.iter().enumerate() {
-            if let Some(t) = archive.timing(*phase) {
-                rec.note_archive_phase(i as u8, t.wall_nanos);
-            }
-        }
-        let bytes = block.to_bytes();
-        rec.note_proof(crate::metrics::ProofShape {
-            block_bytes: bytes.len(),
-            statement_bytes: block.statement.to_bytes().len(),
-            shard_bytes: block
-                .shards
-                .iter()
-                .map(|p| (ShardId::new(p.family, p.shard_index), p.to_bytes().len()))
-                .collect(),
-        });
-    });
-    Ok((block, rec.finish()))
-}
-
-pub(crate) fn prove_block_rec(
-    setup: &ProverSetup,
-    archive: &mut TraceArchive,
-    plan: &ShardPlan,
-    rec: &mut Recorder,
-) -> Result<BlockProof, ProverError> {
-    let total = rec.start(Stage::BlockTotal);
     debug_only!(debug::banner("prove_block"));
     dlog!(
         Phase,
@@ -498,7 +349,6 @@ pub(crate) fn prove_block_rec(
     );
     #[cfg(feature = "debug-info")]
     let block_clock = debug::Clock::start();
-    let span = rec.start(Stage::BlockPlanCheck);
     let derived = plan_shards(archive.cycle_profile(), &setup.program.config);
     if *plan != derived {
         return Err(ProverError::Trace(format!(
@@ -506,12 +356,8 @@ pub(crate) fn prove_block_rec(
             plan.shards, derived.shards
         )));
     }
-    rec.end(span);
-    advance_rec(setup, archive, Phase::Final, rec)?;
-    let span = rec.start(Stage::BlockFinish);
+    advance(setup, archive, Phase::Final)?;
     let (statement, shards) = finish(archive)?;
-    rec.end(span);
-    let span = rec.start(Stage::BlockAssemble);
     let block = BlockProof {
         config: setup.vk.config.clone(),
         statement,
@@ -520,8 +366,6 @@ pub(crate) fn prove_block_rec(
     block
         .shape()
         .expect("prove_block assembles the statement's shards in statement order");
-    rec.end(span);
-    rec.end(total);
     dlog!(
         Phase,
         "apogee block    done shards={} bytes={} ms={}",

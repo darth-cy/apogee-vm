@@ -69,15 +69,18 @@ and stores:
 
 | | who chooses it | what it is for |
 | --- | --- | --- |
-| **public input** | the statement | the verifier-known bytes this run is about — at most 1,020 |
+| **public input** | the statement | the verifier-known bytes this run is about — at most 16,380 |
 | **advice** | the prover | the bulk, bound by nothing, which your guest must check |
-| **journal** (public output) | your guest | what the proof publishes — at most 1,020 |
+| **journal** (public output) | your guest | what the proof publishes — at most 16,380 |
 
 A proof binds the first and the third and says nothing whatever about the
 second. That is the whole model; §3 is the API and `docs/spec/public-values.md`
-is normative. If you have written for another zkVM, the thing to unlearn is the
-stream: there is no cursor to advance and no descriptor to write to, and nothing
-your guest does makes a value public except storing it in the journal window.
+is normative. The two limits were 1,020 bytes until S-STREAM and will not grow
+again: 16 KiB a window is the most that fits in the hole below `RAM_ORIGIN`
+while leaving a hole, and the hole is what makes a null dereference unprovable.
+If you have written for another zkVM, the thing to unlearn is the stream: there
+is no cursor to advance and no descriptor to write to, and nothing your guest
+does makes a value public except storing it in the journal window.
 
 ---
 
@@ -292,12 +295,19 @@ Six rules worth having in front of you while you write:
    picked the output. Advice is a shortcut to a value you then verify, never an
    input in its own right, and the obligation is yours: the VM cannot discharge
    it. Advice is also the *only* place a large input can go, the two public
-   windows being 1,020 bytes each, so any real workload meets this rule.
+   windows being 16,380 bytes each, so any real workload meets this rule.
 3. **`commit` refuses rather than truncates.** A journal that would not fit its
-   1,020-byte window exits `EXIT_IO_ERROR` instead of being cut short, because
+   16,380-byte window exits `EXIT_IO_ERROR` instead of being cut short, because
    you can read `journal()` back and must not see one you did not write. Nothing
    orders the writes, either: the proof binds the window's final contents, and
-   `commit`'s length word is what gives the bytes an order.
+   `commit`'s length word is what gives the bytes an order. **If your output's
+   length grows with the work, commit a digest of it and not the thing itself.**
+   S-STREAM raised the window from 1,020 bytes because the revm guest's journal
+   overflowed above 73 transactions; it cannot be raised again, and a journal
+   carrying one `CREATE`'s return data verbatim is 24 KB and overflows the new
+   one too. `guests/revm-block`'s stateless binary is the pattern: a fixed
+   148 bytes, digesting the stream the other binary carries
+   (`docs/spec/public-values.md` §9).
 4. **Anything that would return host data is refused.** `getrandom`,
    `clock_gettime`, `gettimeofday`, and whatever `HashMap` reaches for to seed
    its `RandomState` all answer `-ENOSYS`. That is deliberate: each is
@@ -957,9 +967,13 @@ Changing any of these is a protocol-version change, not a refactor:
   `__heap_start`, `__stack_top` — and the segment-layout rules in
   `docs/spec/ecall-abi.md` §7.1.
 - **`--no-relax`**, and the pinned toolchain in `rust-toolchain.toml`.
-- **The public value windows** — their addresses, their 1 KiB size and the
-  length word at word 0 — and the advice region above RAM
-  (`docs/spec/public-values.md`). `io_digest`, the digest the statement absorbs
+- **The public value windows** — the input at `0x8000`, the journal at `0xC000`,
+  16 KiB each and the length word at word 0 — and the advice region above RAM
+  (`docs/spec/public-values.md`). The journal was `0x8400` and both were 1 KiB
+  until S-STREAM, and moving them moved **every program's identity**, the
+  `VM_CONFIG` message listing each family's height. `0xC000` and 16 KiB is where
+  the hole below `RAM_ORIGIN` runs out, so there is no next one.
+  `io_digest`, the digest the statement absorbs
   over those two byte strings, is frozen too.
 
 Not frozen, and yours to change: the report's text and layout. It is a

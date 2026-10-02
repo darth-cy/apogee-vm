@@ -16,8 +16,8 @@
 mod common;
 
 use constants::family;
-use prover::{prove_block, ProverSetup};
-use trace::{plan_shards, TraceArchive};
+use prover::ProverSetup;
+use trace::TraceArchive;
 use verifier::{load_verifying_key, verify_block, VerifyError};
 use verifier_core::{BlockProof, PublicInputs};
 
@@ -30,16 +30,14 @@ fn advice() -> Vec<u8> {
 }
 
 /// One proved block of `guests/public-io` over [`advice`].
+///
+/// The archive is the execution, read for its log and never proved from; the
+/// block comes from the one proving path (`docs/spec/streaming.md` §1).
 fn proved() -> (ProverSetup, TraceArchive, BlockProof) {
     let setup = common::public_io_setup();
-    let mut archive = common::public_io_archive(&setup.program, &advice());
-    let block = prove(&setup, &mut archive);
+    let archive = common::public_io_archive(&setup.program, &advice());
+    let block = common::streamed(&setup, &common::public_io_io(&advice()));
     (setup, archive, block)
-}
-
-fn prove(setup: &ProverSetup, archive: &mut TraceArchive) -> BlockProof {
-    let plan = plan_shards(archive.cycle_profile(), &setup.program.config);
-    prove_block(setup, archive, &plan).expect("the statement proves")
 }
 
 fn verify(setup: &ProverSetup, block: &BlockProof) -> Result<(), VerifyError> {

@@ -9,14 +9,19 @@
 
 ## 0. The exception, and its limits
 
-The workspace has **two cargo features**, `prover/metrics` and `prover/debug-info`, and they
-are the only two exceptions to master **anti-goal 1**:
+The workspace has **one cargo feature**, `prover/debug-info`, and it is the only exception
+to master **anti-goal 1**:
 
-> **No cargo features. Zero, but for two the owner granted by name.** One build
+> **No cargo features. Zero, but for one the owner granted by name.** One build
 > configuration for the whole workspace. `[features]` tables, `#[cfg(feature = "...")]`,
 > `optional = true` dependencies, and `--no-default-features` are all banned. A
 > configuration nobody builds is broken and undiscovered; a configuration everybody builds
 > should not be conditional. If code is optional, delete it.
+
+There was a second, `prover/metrics`, granted at S20 for the proving harness and **retired
+at S-STREAM**: it instrumented the *archived* proving path, the streaming prover became the
+only path a block is proved down, and a harness measuring a path nothing runs is exactly the
+configuration the anti-goal forbids. It was deleted rather than ported.
 
 The owner granted this one at S-DEBUG, for this log and nothing else, with the rule left
 standing for every future progression. Three things hold that:
@@ -35,7 +40,8 @@ The feature enables **no dependency**, optional or otherwise.
 
 ### Why a feature and not a runtime switch alone
 
-The same reason `metrics` is one. The log's interesting lines are the **invariant scans**:
+Because the cost is real and unconditional. The log's interesting lines are the
+**invariant scans**:
 every live row of a delegation shard checked against its modulus, every selector tallied,
 `gkr::self_check` run over a whole shard. That is work proportional to the shard, and a
 runtime switch alone would leave it compiled into every proving run and reachable by a
@@ -141,8 +147,8 @@ Lines interleave across shards and that is fine; they never lose their subject.
 ## 3. What is logged, and the rule for adding a line
 
 **A line must carry information a reader cannot already get.** The panic messages, the
-`ProverError` variants, the metrics report and `crates/checker`'s validators are all already
-there; a line that restates one of them is cost, not information. And a log site may **never
+`ProverError` variants, `tools/bench`'s `BenchReport` and `crates/checker`'s validators are
+all already there; a line that restates one of them is cost, not information. And a log site may **never
 sit inside a trace-sized loop**: a per-row fact is reported as a scan's summary — a count, an
 extreme, the first offender — and never a row at a time.
 
@@ -172,8 +178,16 @@ pair is what localizes a death to the phase, and the per-shard column counts are
 - **the circuit, readably** — `cargo run -p checker -- dump <artifact>` already prints every
   layer, gate and relation, offline and better. `detail` prints the one-line inventory
   instead, because a `layer=9` in a failure means nothing until you know there are 41.
-- **stage timings as a report** — that is `metrics`, and it is a better instrument for it.
-  The log's `ms=` fields are there to say which shard is slow while it is still running.
+- **stage timings as a report** — that is `tools/bench`'s `prove` verb, whose
+  `BenchReport` carries the `StreamingReport`'s four clocks beside the setup, verify and
+  unattributed time and is a better instrument for it. The log's `ms=` fields are there to
+  say which shard is slow while it is still running, not to be added up. **A per-shard
+  `ms` inside a parallel region is not a cost**: the GKR prover is itself rayon-parallel,
+  so a worker parked in a nested `par_iter` work-steals another shard's task while that
+  shard's `debug::Clock` keeps running. S-BATCH measured `INIT_TEARDOWN#0` at 6,958.8 ms
+  in one pass and 154,167.8 ms in an otherwise identical one — a 139× spread on unchanged
+  work (`docs/handoff/S-BATCH-miniblock-gate.md` §2.1). Per-family costs are read off a
+  serial pass or not at all.
 - **anything the multiset already catches globally**, such as a dropped delegation
   invocation, *except* where a local check names it better — which is what `EC_ADD`'s
   equal-thirds line and `ADD_SUB_LUI_AUIPC`'s request counts are.
@@ -207,9 +221,8 @@ does not have to rediscover them, and none should be added without deciding it i
 apogee setup    key ok families=12 entry_pc=0x10000 identity=<64 hex> srs_digest=<64 hex>
 ```
 
-In full, not truncated, and in **`to_bytes` order** — the same bytes `metrics::digest_hex`
-prints and the `verifier` CLI takes as its `<identity-hex>` argument, so the value pastes
-straight into either.
+In full, not truncated, and in **`to_bytes` order** — the same bytes the `verifier` CLI
+takes as its `<identity-hex>` argument, so the value pastes straight into it.
 
 Five pins went stale in S26c and every one was found by a test failing somewhere else. A run
 that prints both, every time, is how the sixth gets found by reading one line.
@@ -463,6 +476,42 @@ $ grep '^apogee commit   done' /tmp/revm.log  # the five values every shard fork
 Then narrow: `APOGEE_DEBUG=deep:EC_ADD` re-runs with that one family at full depth and
 everything else at `detail`.
 
-For a **streaming-against-archived divergence**, the first question is whether the two runs
-agree at `apogee commit   done` — everything downstream is a function of the digest and the
-four memory challenges on that line.
+### Which pass died
+
+Since S-STREAM there is one proving path and it runs the guest twice
+(`docs/spec/streaming.md` §2), so a run that never reaches a shard has two places to have
+stopped and three `phase` lines that say which:
+
+```console
+$ grep '^apogee stream' /tmp/revm.log
+apogee stream   begin max_in_flight=8 families=13
+apogee stream   pass 1 done shards=51 execute_ms=4312.7 commit_ms=81204.3
+apogee stream   pass 2 flushed 8 shard(s), queue=8 of max 8
+...
+apogee stream   pass 2 done shards=51 peak_in_flight=8/8 execute_ms=4288.1 prove_ms=431902.6
+```
+
+`begin` with no `pass 1 done` is a death in the executor or in the commit phase, and
+`apogee commit   begin`/`done` is which of the two. `pass 1 done` with no `pass 2 done`
+is a death in a shard, and §2's `begin`/`gkr done` counting is what names it — the
+unmatched `begin`s are the batch that was in flight, which is at most `max_in_flight`
+and is what the peak is made of. A high `commit_ms` against a low `prove_ms` is pass 1's
+sequential MSM bulk and not a bug.
+
+`apogee ABORTED` is the other line worth a `grep`: a nonzero `x10`. A guest that panicked
+exits 101 having published whatever it had committed, so its block proves and verifies
+and answers a different question.
+
+### Two runs that should have agreed
+
+A `max_in_flight` difference, a rebuilt key, a thread count — none of these may move a
+byte of the block, and when one does, the first question is whether the two runs agree at
+`apogee commit   done`. Everything downstream is a function of the digest and the four
+memory challenges on that line: if they agree, the divergence is inside a shard and §2's
+per-shard lines bracket it; if they do not, it is in the statement or the key, and
+`apogee setup    key` (§4) is where identity and the SRS digest are printed in full.
+
+**There is no second construction to diff against.** Until S-STREAM a streamed block could
+be held against `prove_block`'s, and that comparison is gone with the archived path
+(`docs/spec/streaming.md` §6.3) — a test may not run it, and neither may a debugging
+session. What is left is this log, two runs of the one path, and `verify_block`.

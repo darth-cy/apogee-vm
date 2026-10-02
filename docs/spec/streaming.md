@@ -1,9 +1,11 @@
-# The streaming prover: two passes, one partial shard per family
+# The proving path: two passes, one partial shard per family
 
-New at S26. It adds **no protocol**: no transcript message, no challenge, no
-wire form, no circuit, no constant. It changes exactly one thing — *when* a
-column exists — and the acceptance is that the block comes out byte for byte the
-same (§7).
+Built at S26 as a second path beside the archived one. **Made the only one at S-STREAM**
+(owner's decision): `prover::prove_block_streaming` proves every block and every statement
+in this repository, and nothing proves through `prover::prove_block` any more (§1.2, §6).
+
+It adds **no protocol**: no transcript message, no challenge, no wire form, no circuit, no
+constant. It changes exactly one thing — *when* a column exists.
 
 It cites `docs/spec/block-proof.md` for the block and the shard cut,
 `docs/spec/shard-proof.md` §2 for the global commit phase, `docs/spec/memory.md`
@@ -15,11 +17,14 @@ three regions; it restates none of them.
 | `crates/trace` | `MemoryState`, the last-access tables apart from the log; `RowSlice` and `FrameSlice`, a shard's rows; the row-reading column builders |
 | `crates/emulator` | `StreamingRun`, the pull-based tracer, and `ShardChunk` |
 | `crates/prover` | `prove_block_streaming`, the two passes and the backpressure |
+| `crates/verifier` | `proof_archive`, the four files a proved block leaves on disk (§6.4) |
 | `crates/checker` | `memory_columns_from_log`, the log reading the row reading is held to |
 
 ---
 
-## 1. What it is for, in numbers
+## 1. Why this is the only path
+
+### 1.1 The numbers
 
 Before S26 a block's prover was `O(total shards)` in memory during its commit
 phase and `O(cycles)` before that, and both are measurements rather than
@@ -37,16 +42,41 @@ integers a row, `trace::MemoryEvent` is 32 bytes and a cycle has four or five �
 and together they are why streaming the commit phase alone would not have been
 enough: an `r8i.8xlarge` has 256 GB and the *trace* of that block is 520 GB.
 
+**The archived path's last measurement is the argument's other half.** S-BATCH's
+mini-block gate ran `host::prove` down `prove_block` and recorded **136.28 GiB** at
+`RAYON_NUM_THREADS=12` over 31 shards — 3.9× what `docs/handoff/S25-block.md` records
+for the same gate, because `MOD_MUL` and `EC_ADD` joined the statement after that note
+was written. That note's own reading of the archived path is 60–180 GB resident for a
+typical block and 660–819 GB for a heavy one, and its conclusion is the sentence this
+section exists to carry: **streaming is mandatory, not preferred**
+(`docs/handoff/S-BATCH-miniblock-gate.md` §3 and §11.3). **No pre-S26c memory figure in
+this repository is usable for sizing**, including the ones above.
+
 **What the streaming prover holds instead**, and nothing else:
 
-- one **partial** buffer per family, at most `height − 1` rows (§3.1);
+- one **partial** buffer per family, at most `height − 1` rows (§3.1) — and at exit
+  these become the execution's last shards, the same memory under a new owner;
 - the **last-access tables**, `O(touched addresses)` (§3.2);
-- at most `max_in_flight` **filled** shards, each being proved (§5);
+- at most `max_in_flight` **filled** shards, waiting for a batch or being proved —
+  one more, for a moment, when a delegating ecall fills two buffers in one step (§5);
 - the statement's commitment metadata: `64 · columns` bytes a shard, and the
   `ShardProof`s, which are the output.
 
 Nothing accumulates between the executor and the proving workers. A shard that
 has been proved is gone.
+
+### 1.2 The rule
+
+**Streaming is the only proving path.** Every block and every statement in this
+repository — every deferred suite, `host::prove`, `tools/bench`'s `prove` verb — goes
+through `prover::prove_block_streaming`.
+
+`prover::prove_block`, `advance`, `finish`, the phase snapshots and their section
+codecs still compile and were **deliberately retained**, because
+`checker::TamperHarness` is built on the `TraceArchive` they read and the root
+`CLAUDE.md` says the harness is not optional. What they are not is a path anything
+runs. §6 is what was kept, what is forbidden, what enforces it, and what the decision
+cost.
 
 ---
 
@@ -87,9 +117,13 @@ turns that reasoning into a check.
 recommitting them.** A shard's opening builds `cm*` from the *statement's*
 memory commitments — pass 1's — while its polynomial side is pass 2's columns.
 A pass that built different columns therefore produces an opening that **fails
-verification**. The prompt's "optional but valuable" recommit-and-assert would
-cost a second full commit phase (15% of the mini-block's wall clock) to catch,
-as a prover-side panic, exactly what the verifier already catches.
+verification**. The recommit-and-assert S26's stage prompt called "optional but
+valuable" would cost a second full commit phase (15% of the mini-block's wall clock)
+to catch, as a prover-side panic, exactly what the verifier already catches.
+
+**The price of the second execution is the clock, not the peak.** Execution is under
+1% of a block's wall clock — S25 measured 4.3 s of 850 s — so running the guest twice
+buys the whole of §1.1 for about 0.5% more time.
 
 ---
 
@@ -112,10 +146,11 @@ The tail is the partial buffers at exit, each the family's last short shard.
 
 A fill therefore reads its shard through `trace::RowSlice` (a cycle-owning
 family) or `trace::FrameSlice` (a delegation family), which are borrowed windows
-into a buffer. The archived path makes one by slicing the archive; the streaming
-path makes one over the chunk it has just been handed. **That is the whole of
-what the two paths do differently**: one `prover::ShardSource`, one fill, one
-`prove_shard_columns`.
+into a buffer. `ShardSource::archived` makes one by slicing a `TraceArchive`; the
+streaming path makes one over the chunk it has just been handed. **That is the whole
+of what the two constructions do differently**: one `prover::ShardSource`, one fill,
+one `prove_shard_columns`. It is also why `shard_columns` is path-neutral and why the
+tamper harness, which uses it, needed nothing from this stage (§6.1).
 
 ### 3.2 The memory
 
@@ -136,8 +171,9 @@ that state:
 
 So a streaming run keeps the tables and **never collects an event at all**.
 `emulator::trace_run` still keeps the whole log, because a `TraceArchive` is
-every event (`docs/spec/shard-proof.md` §10) and the archived path is what
-resume, the tamper harness and every committed fixture use.
+every event (`docs/spec/shard-proof.md` §10) and the archive is what
+`crates/checker`'s column-fill suites, `checker::TamperHarness` and every committed
+fixture read. Holding an execution is not proving from one (§6.2).
 
 Two consequences worth stating rather than discovering:
 
@@ -181,48 +217,223 @@ is checked against `trace::plan_shards` family by family. The two cannot differ
 — both are `ceil(rows / height)` over the same rows — and the assertion is what
 says so out loud.
 
+A nonzero exit status gets a line of its own at `phase`, because there is no
+statement phase left to carry one: a guest that panicked exits 101 having published
+whatever it had committed, which is a journal that decodes and a proof that verifies
+and an answer to a different question (`docs/spec/debug-info.md` §3).
+
 ---
 
 ## 5. Backpressure
 
 `prove_block_streaming(setup, io, max_in_flight)`. `max_in_flight` is the number
-of **filled** shards that may be held between the executor and the proving
-workers, and therefore what bounds the peak: a batch of that many is proved with
-one `rayon` parallel iterator, each task building its shard's columns, its base
-layer, its GKR proof and its opening and then dropping all of it.
+of shards **proved at once**, and therefore what bounds the peak: a batch of at most
+that many is proved with one `rayon` parallel iterator, each task building its
+shard's columns, its base layer, its GKR proof and its opening and then dropping all
+of it. The window families are proved last, in batches under the same bound.
+
+A filled shard waits for its batch as rows, and ordinarily no more than
+`max_in_flight` are held at all, waiting or proving. **Two exceptions, both rows and
+neither a forward pass.** A delegating ecall fills two buffers in one step — the requesting
+family's and the delegation family's — so one shard can wait while a full batch
+proves. And at exit every family's partial buffer becomes a shard at once, all of
+them queued and proved in batches; those are the buffers §1.1 already counts, one per
+family and resident since execution began, so the tail holds nothing the executor
+was not holding.
 
 It is an argument and not a constant because the caller is the only one that
 knows the machine — a shard's base layer plus its forward pass is about 1.5 GB at
-`2^20` — and it is the knob `RAYON_NUM_THREADS` used to be. It must be at least
-1.
+`2^20` and rather more for a delegation family — and it is the knob
+`RAYON_NUM_THREADS` used to be. It must be at least 1.
+
+**It is the one knob there is, and what it buys is a bracket rather than a formula.**
+On a 51-shard mini-block on a 247 GiB box, four in flight peaked at 77.10 GiB and eight
+at 83.91, and the extra four were worth 14% of the wall clock — 6.8 GiB for 214 s, which
+is why `tools/bench/src/block.rs`' `DEFAULT_IN_FLIGHT` is 8. The deferred suites take 4
+(`crates/prover/tests/common/mod.rs`' `IN_FLIGHT`): a suite is run for its verdict and
+not for its wall clock. `StreamingReport::peak_in_flight` is the largest batch actually
+proved, the window families' included; it does not count shards waiting for one.
+
+**A queue and not a pool size, because the pool size never bounded anything.** On the
+archived path the parallel step was one `par_iter` over the whole shard list, and rayon
+steals into a new shard task while a thread is parked in a nested `par_iter` — S-BATCH
+walked the log and found **17 shards simultaneously live at 12 threads, and 10 at 6**
+(`docs/handoff/S-BATCH-miniblock-gate.md` §3). `RAYON_NUM_THREADS` was therefore a knob
+that did not hold. A batch of at most `max_in_flight` chunks does.
 
 **The block does not depend on it.** Shards are placed by their statement
 position, and each proof is a function of the global state and its own columns
 alone, so the schedule cannot reach a challenge — the same argument
 `docs/spec/block-proof.md` §5.2 makes about the thread count.
-`crates/prover/tests/streaming.rs`' `a4` proves the bytes equal at 1 and at 8.
+`crates/prover/tests/streaming.rs` proves the bytes equal at 1 and at 8 over two
+statements, and `crates/prover/tests/block.rs`'
+`the_block_does_not_depend_on_the_thread_count` is the other half.
 
 **There are no threads and no channels.** Master anti-goal 7 bans both, and the
 batch-then-prove shape needs neither: the executor runs until the queue is full,
 the queue is proved, the executor resumes. Execution is under 1% of a block's
-wall clock (S25 measured 4.3 s of 850 s), so the overlap a producer/consumer
-queue would buy is not worth a thread.
+wall clock, so the overlap a producer/consumer queue would buy is not worth a
+thread.
 
 ---
 
-## 6. What the streaming path does not have
+## 6. The archived path: retained, forbidden, and what it cost
 
-**No phase snapshots and no resume.** The archive's five sections are built on a
-post-execution section holding the whole trace (`docs/spec/shard-proof.md` §10),
-which is the thing this path exists not to have. `prove_block` and
-`TraceArchive` are unchanged and keep resume, `checker::TamperHarness` and every
-committed fixture; `prove_block_streaming` is what a block too large to archive
-uses. A streaming run that is killed re-executes, and execution is cheap.
+S26 left two proving paths standing. S-STREAM closed that on the owner's decision,
+and the shape of the close is unusual enough to be worth stating in full: the code
+stayed and the *use* of it went.
 
-**No `TraceArchive` at all**, so no `tools/bench` phase timings from one. The
-streaming path returns a `StreamingReport` instead: the cycle count, the shard
-count, the peak in flight, and the two passes' execute and prove clocks. It is a
-measurement and never an input — the block is byte-identical whatever it says.
+### 6.1 What was retained, and why
+
+`prover::prove_block`, `advance`, `finish` and the codecs for
+`docs/spec/shard-proof.md` §10's four later sections — the fifth, post-execution, is
+`crates/trace`'s own — are all still in `crates/prover/src/phases.rs`, with the §10
+schemas still exercised by that file's own unit tests, and `trace::TraceArchive` is
+untouched. They were kept for one reason: **`checker::TamperHarness` writes a cell into
+a shard's columns and re-proves that one shard, and there is no streaming seam for it to
+do that through.**
+Pass 1 commits the memory columns and pass 2 re-executes, so a tamper applied in one
+pass contradicts the other; the harness needs an execution it can hold still and read
+twice, which is what an archive is. The root `CLAUDE.md` records that the harness is
+not optional — `crates/host/tests/prove.rs`' advice twin is built on it.
+
+Two more things read a `TraceArchive` and are not proving from one:
+`crates/checker`'s column-fill suites, which compare the row reading against the log
+reading (§7, claim 1), and `crates/emulator/tests/archive.rs`, which round-trips the
+container.
+
+The per-shard component is **path-neutral and not forbidden**: `statement_inputs`,
+`global_commit_phase`, `shard_columns`, `prove_shard` and `prove_shard_columns` take a
+`ShardSource` (§3.1) and do not care which construction made it. That is what the
+tamper harness, `crates/prover/tests/block.rs` and `crates/checker/tests/tamper.rs`
+use, and it is the same code the streaming path runs.
+
+### 6.2 What is forbidden, and what enforces it
+
+Forbidden outside `crates/prover/src`: calling `prove_block`, and naming `advance`,
+`finish` or `prove_block` in a `use prover::…` list.
+
+`crates/prover/tests/one_proving_path.rs` is what says so. It reads every `.rs` file
+in the repository — skipping `target`, `.git`, `assets`, `guests/vendor` and `docs` —
+ignores comment-only lines, and fails naming every offending file and line. Its second
+test reads `crates/prover/src/phases.rs` and fails if `prove_block` has been *deleted*,
+which is the other half of the decision: a stage that removes the archived path must
+remove that test and say what became of the tamper harness.
+
+**The rule is a grep because the alternative is deletion**, and deletion would take the
+harness with it. It is the same instrument `crates/prover/tests/one_feature.rs` uses
+for master anti-goal 1, for the same reason: the property is about the whole repository,
+so the test has to read the whole repository.
+
+### 6.3 What was lost, and it was not nothing
+
+**Resume is gone as a capability anything uses.** `prompts/00-master.md` rule 9,
+*Archivable stages*, is **withdrawn** (owner's decision, S-STREAM, recorded inline in
+the rule itself). Snapshot-and-resume rested on a post-execution section holding the
+whole trace and a commit phase holding every shard's columns at once — §1.1's two
+`O()`s, and the thing this path exists not to do. The two tests that proved it are
+deleted: `crates/prover/tests/block.rs`' `a10_a_resumed_block_is_byte_identical` and
+`crates/prover/tests/acceptance.rs`' `a9_a_resumed_statement_is_byte_identical`. A
+killed run re-executes, and execution is under 1% of the clock.
+
+**The streamed-equals-archived oracle is gone and nothing replaces it.** Until
+S-STREAM, `crates/prover/tests/streaming.rs` held the streamed block equal to
+`prove_block`'s byte for byte over the three arms of `prover::ShardRows`. A test may
+not run the archived path now, so that comparison went. What is genuinely lost is
+**"two independent constructions agree"**: a change that moved the prover and the
+verifier together would now pass. The owner took the decision with the loss stated.
+
+What survives it, and it is not weak:
+
+- `verify_block` on every statement every proving suite proves, which is a
+  self-consistency check over the whole of `docs/spec/shard-proof.md`;
+- `crates/emulator/tests/streaming.rs`, the executor's chunks against `trace_run`'s
+  buffers row for row and its final state against the log's (§7, claims 3 and 4);
+- `crates/checker/tests/memory.rs`'
+  `the_row_reading_and_the_log_reading_of_a_frame_agree`, the two column readings
+  compared over eight guests (§7, claim 1);
+- `crates/prover/tests/block.rs`' `a7`, which rebuilds the global commit phase from a
+  `TraceArchive` through `statement_inputs` and `global_commit_phase` and asserts its
+  digest is the **streamed** block's first shard's `global_digest`. That is the one
+  surviving place where an archived construction and a streamed one are held to the
+  same bytes, and it costs no extra proof.
+
+**The `prover/metrics` cargo feature is retired** and `docs/spec/metrics.md` is
+deleted. It instrumented the archived path — five of its seven metered entry points
+took a `&TraceArchive` — so it measured a path nothing runs, which is master
+anti-goal 1's stated hazard rather than an exception to it. The workspace has exactly
+one feature now, `prover/debug-info` (`docs/spec/debug-info.md` §0). What survives it
+is `tools/bench`'s `prove` verb, which needs no feature, and
+`tools/bench/src/report.rs`'s `peak_rss`, which is where the RSS ground-truth rule
+now lives.
+
+### 6.4 The one thing a proving run archives: the proof
+
+There is no `TraceArchive` on this path and so no phase sections to time. What a run
+still has to leave behind is the **proof**, because recursion development reads one
+back: a recursion guest's input is a base proof, and producing one is a quarter of an
+hour nobody should pay twice.
+
+`verifier::proof_archive` — re-exported as `host::proof_archive`, and reached from
+`bench prove --out <dir>` — writes four files under one directory, each the bare
+`to_bytes()` payload with no header and no framing of its own:
+
+```text
+  <stem>.vk         VerifyingKey::to_bytes
+  <stem>.identity   the identity this run claims, 64 lowercase hex digits + newline
+  <stem>.public     PublicInputs::to_bytes
+  <stem>.block      BlockProof::to_bytes
+```
+
+```rust
+pub fn write_proof(dir: &Path, stem: &str, vk: &VerifyingKey, block: &BlockProof)
+    -> Result<ProofPaths, String>;
+pub fn read_proof(dir: &Path, stem: &str)
+    -> Result<(VerifyingKey, [u8; 32], PublicInputs, BlockProof), String>;
+```
+
+**Three of the four are the CLI's files, and the fourth is deliberately not its
+argument.** `verifier block <vk> <identity-hex> <public> <block>` reads `<stem>.vk`,
+`<stem>.public` and `<stem>.block` as they are. Its identity is the 64 hex digits
+themselves, from a channel the prover does not control, and never `<stem>.identity`:
+
+```text
+  verifier block <stem>.vk <identity from your own channel> <stem>.public <stem>.block
+```
+
+`"$(cat <stem>.identity)"` in that slot checks the proof against its prover's own
+claim: fine for re-reading a proof you produced, and evidence of nothing to anyone
+else. It lives in `crates/verifier` rather than in the host SDK because the *reader* is
+there, and `crates/verifier/tests/cli.rs` writes its files through this module rather
+than through a local closure, which is what keeps the two from drifting.
+
+Four things about it that are decisions and not accidents:
+
+- **`<stem>.public` is redundant and is written anyway.** `BlockProof::to_bytes`
+  already carries the statement, so `read_proof` could reconstruct it — but the CLI
+  takes it as a file of its own, and a reader should not have to write a script to
+  produce one. `write_proof` writes
+  `block.statement()` and never a second copy a caller supplies, so the two cannot
+  disagree.
+- **The `.vk` is the large file**, and it is written unconditionally. It carries every
+  registered family's `CircuitArtifact`, and the delegation artifacts are megabytes —
+  which is why `tools/kat-gen` pins them by digest. A key cache nobody validates is
+  worse than tens of MB, and a proof whose key is missing is not a proof anyone can
+  check.
+- **`<stem>.identity` is a record, not an input.**
+  A key recomputes its own identity when it loads, so the key is not its own authority
+  for it: what makes a proof a proof *of a particular program* is a comparison against
+  a value from a channel the prover does not control. Writing it beside the proof
+  records what the run claimed; `read_proof` hands the bytes back without comparing
+  them to anything.
+- **`read_proof` goes through `load_verifying_key`**, the loader with the load rules —
+  it recomputes the SRS digest from the key's own points and revalidates every circuit
+  against the registry (`docs/spec/shard-proof.md` §7) — and not through
+  `VerifyingKey::from_bytes`, which checks encoding only.
+
+`tools/bench`'s verb writes the bundle only **after** the block verifies: a proof that
+does not verify is not worth a reader's disk. A bundle that does not write fails the
+run, once the report is printed (`tools/bench/CLAUDE.md`).
 
 ---
 
@@ -230,18 +441,28 @@ measurement and never an input — the block is byte-identical whatever it says.
 
 | # | claim | where | runs in |
 | --- | --- | --- | --- |
-| 1 | the two column readings — a shard's rows, and the whole event log — agree column for column and row for row, over eight guests including three that make delegation calls | `crates/checker/tests/memory.rs::the_row_reading_and_the_log_reading_of_a_frame_agree` | CI |
-| 2 | the `deleg_space` column is the requested family's tag on every live mirror query and zero elsewhere, over the delegation fixtures — three guests, because no single one requests all four families | `…::the_delegation_space_column_is_the_requested_family` | CI |
-| 3 | the streaming executor's chunks are the planned shards, row for row, and no chunk exceeds its height | `crates/emulator/tests/streaming.rs::the_chunks_are_the_planned_shards_row_for_row` | CI |
+| 1 | the two column readings — a shard's rows, and the whole event log — agree column for column and row for row, over eight guests including three that make delegation calls, and over every shard a family's rows are cut into | `crates/checker/tests/memory.rs::the_row_reading_and_the_log_reading_of_a_frame_agree` | CI |
+| 2 | the `deleg_space` column is the requested family's tag on every live mirror query and zero elsewhere, over three guests, which between them request five of the six delegation spaces | `…::the_delegation_space_column_is_the_requested_family` | CI |
+| 3 | the streaming executor's chunks are the planned shards, row for row, and no chunk exceeds its height, over thirteen guests | `crates/emulator/tests/streaming.rs::the_chunks_are_the_planned_shards_row_for_row` | CI |
 | 4 | its final state is the log's, and so are the window list and the boundary read off it | `…::the_streamed_state_is_the_logs` | CI |
-| 5 | **the streamed block is the archived block, byte for byte**, over S16's statement, a delegation statement and S-IO's | `crates/prover/tests/streaming.rs::a1`, `a2`, `a3` | deferred |
-| 6 | it does not depend on `max_in_flight` | `…::a4` | deferred |
+| 5 | the block does not depend on `max_in_flight`, over S16's statement (the `Rows` arm) and a delegation statement (the `Invocations` arm), and each is a block `verify_block` accepts | `crates/prover/tests/streaming.rs::a1`, `a2` | deferred |
+| 6 | nothing in the repository proves through the archived path, and the archived path is still there | `crates/prover/tests/one_proving_path.rs` | CI |
 
-Claims 1 to 4 are what hold the design in ordinary CI, and they are deliberately
-where the risk is: everything the streaming path does differently is a column
-built from rows instead of from events, and a shard cut by a flush instead of by
-arithmetic. Claim 5 is the one that needs real proofs, and it is the one that
-cannot be fast — the cheapest real statement is a `2^20` shard.
+Claims 1 to 4 and 6 are what hold the design in ordinary CI, and they are deliberately
+where the risk is: everything this path does differently is a column built from rows
+instead of from events, and a shard cut by a flush instead of by arithmetic.
+
+**Claim 5 is two statements and not three, and that is the shape of the loss in §6.3.**
+It was eight real blocks — three statements proved twice each against an archived
+reference, plus S16's twice more at two bounds — and it is four, two statements at two
+bounds each, held against each other. The `Window` arm needs no run of its own: a window
+family's shard is filled at exit, after every execution shard, so its position in the
+queue is the same at any bound. The delegation statement earns its place because pass 2
+drains the queue in *fill* order while the statement is in ascending-`FamilyId` order, so
+a block whose two orders disagree is the case a batch size could plausibly reach. The
+three arms are each still proved and verified by the suites that are about them:
+`tests/block.rs` and `tests/acceptance.rs` the `Rows` arm, `tests/keccak.rs` the
+`Invocations` arm, `tests/public_io.rs` the `Window` arm.
 
 ---
 
@@ -256,4 +477,9 @@ touch this page:
 - a new **address space** whose last write something reads, which `MemoryState`
   has to keep;
 - anything that makes a shard's columns depend on rows outside that shard, which
-  would break §3.1 and is what the frame's design deliberately avoids.
+  would break §3.1 and is what the frame's design deliberately avoids;
+- a second proving path of any kind, which is §6.2's rule and therefore the owner's
+  decision and nobody else's — `crates/prover/tests/one_proving_path.rs` is where the
+  argument would have to be made, not routed around;
+- **deleting** `prove_block`, which takes `checker::TamperHarness` with it (§6.1) and
+  fails `the_archived_path_is_retained` until the note says what replaced the harness.

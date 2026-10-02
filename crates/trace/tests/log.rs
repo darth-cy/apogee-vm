@@ -90,12 +90,13 @@ fn each_space_has_exactly_its_addresses() {
                 "{space:?}: {addr:#x} is not a word address"
             );
         }
-        for addr in [0, origin - 4] {
-            assert!(
-                !space.holds(addr),
-                "{space:?}: {addr:#x} is below RAM and in no public window"
-            );
-        }
+        // Not `origin - 4` any more: since S-STREAM that is the journal's last
+        // word, which `Ram` holds and a delegation space does not, so it is
+        // asserted with the other public addresses below.
+        assert!(
+            !space.holds(0),
+            "{space:?}: 0 is below RAM and in no public window"
+        );
     }
 
     // **`Ram` is wider than ordinary RAM since S-IO** and a delegation space is
@@ -106,19 +107,24 @@ fn each_space_has_exactly_its_addresses() {
     for addr in [
         guest_memory::PUBLIC_INPUT_ORIGIN,
         guest_memory::PUBLIC_OUTPUT_ORIGIN,
+        origin - 4,
         guest_memory::ADVICE_ORIGIN,
         0xffff_fffc,
     ] {
         assert!(AddressSpace::Ram.holds(addr), "Ram: {addr:#x}");
         assert!(!AddressSpace::KeccakF.holds(addr), "KeccakF: {addr:#x}");
     }
-    // And the hole stays a hole, at both ends of it.
-    for addr in [
-        0,
-        guest_memory::PUBLIC_INPUT_ORIGIN - 4,
+    // And the hole stays a hole. **Since S-STREAM the hole is only below the
+    // windows**: at `2^12` the two of them fill `[0x8000, RAM_ORIGIN)`
+    // exactly, so there is no gap above them any more and the geometry is
+    // asserted instead — that equality is what makes `2^12` the ceiling, and
+    // it is the thing a later constant change would silently break.
+    assert_eq!(
         guest_memory::PUBLIC_OUTPUT_ORIGIN + guest_memory::PUBLIC_WINDOW_BYTES,
-        origin - 4,
-    ] {
+        origin,
+        "the two public windows end flush against RAM_ORIGIN"
+    );
+    for addr in [0, guest_memory::PUBLIC_INPUT_ORIGIN - 4] {
         assert!(!AddressSpace::Ram.holds(addr), "Ram: {addr:#x} is the hole");
     }
 }
