@@ -264,7 +264,7 @@ impl BenchReport {
             row(
                 &mut out,
                 "prover",
-                format!("streaming, {n} shards in flight"),
+                format!("streaming, at most {n} shards proved at once"),
             );
             let _ = writeln!(
                 out,

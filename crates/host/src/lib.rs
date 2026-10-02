@@ -77,7 +77,7 @@ pub struct Proven {
     /// The block proof, which carries its own statement and `VmConfig`.
     pub block: BlockProof,
     /// What the streaming run measured about itself: the four clocks, the
-    /// shard count, and the peak number of shards held at once.
+    /// shard count, and the largest batch it proved at once.
     pub report: StreamingReport,
     /// The guest's exit status, which is `x10`'s final value.
     pub exit_code: i32,
@@ -112,7 +112,7 @@ pub fn setup(elf: &[u8], params: &ProgramParams, srs: Srs) -> Result<ProverSetup
 ///
 /// One call into `prover::prove_block_streaming`, which executes the guest
 /// twice — once to commit each shard's memory columns as it fills, once to
-/// prove them — and never holds more than `max_in_flight` filled shards.
+/// prove them — and never proves more than `max_in_flight` shards at once.
 /// `max_in_flight` must be at least 1; `docs/spec/streaming.md` §5 is what it
 /// bounds and why the caller chooses it.
 ///

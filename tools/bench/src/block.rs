@@ -12,20 +12,35 @@
 //!
 //! It proves the pinned fixture end to end and verifies the result, filling
 //! every field of the report from the run. The per-stage timings are the
-//! `TraceArchive`'s own phase sections — must-be-exact 5 — and the crate's
-//! standing rule still holds: **no assertions, no thresholds**. The one thing
-//! it does assert is that the proof verifies, because a timing for a proof that
-//! does not verify is not a measurement of anything.
+//! streaming run's own four clocks (`prover::StreamingReport`) — since
+//! S-STREAM there is no `TraceArchive` and so no phase sections — and the
+//! crate's standing rule still holds: **no assertions, no thresholds**. The one
+//! thing it does assert is that the proof verifies, because a timing for a
+//! proof that does not verify is not a measurement of anything.
+//!
+//! # Failure
+//!
+//! **Every way the verb fails is a non-zero exit.** The ordinary failures come
+//! back from [`run`] as an error that `main` prints to stderr before exiting 1:
+//! a fixture or witness that is not there, no ceremony without `--toy-srs`, a
+//! guest that does not build or register, a block that does not prove, and an
+//! `--out` directory the proof does not write to. That last one fails only
+//! after the report is printed, because the measurement is still good and it
+//! cost the whole run. What the verb asserts still panics, and a usage error
+//! still exits 2. Until S-STREAM's review the ordinary failures each printed a
+//! line and exited 0, so a script waiting on a proof could not tell that none
+//! had been made.
 //!
 //! # The SRS
 //!
 //! A proving key needs powers of tau. The ceremony file is 19 GB and gitignored
-//! (`docs/spec/srs.md`), and the `msm` and `mercury` routines here already
-//! print a line and return when it is absent — the established pattern for a
-//! routine whose input may be missing. This one does the same, except that it
-//! can also run over a **toy** SRS when asked: the timings are identical, the
-//! identity is not, and the report says which was used so that nobody reads a
-//! toy-SRS identity as a published one.
+//! (`docs/spec/srs.md`), and the `msm` and `mercury` routines here print a line
+//! and return when it is absent — the established pattern for a *routine* whose
+//! input may be missing. This verb is a job someone asked for by name, so it
+//! fails instead; what it can do that they cannot is run over a **toy** SRS
+//! when asked: the timings are identical, the identity is not, and the report
+//! says which was used so that nobody reads a toy-SRS identity as a published
+//! one.
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -67,7 +82,7 @@ pub struct Options {
     /// Use a toy SRS rather than the ceremony. Same timings, different
     /// identity.
     pub toy_srs: bool,
-    /// How many filled shards the **streaming** prover may hold at once
+    /// How many shards the **streaming** prover proves at once
     /// (`docs/spec/streaming.md` §5), which is what bounds the peak.
     ///
     /// Not an `Option` since S-STREAM: streaming is the only proving path, so
@@ -79,7 +94,7 @@ pub struct Options {
     pub out: Option<PathBuf>,
 }
 
-/// `--in-flight`'s default: eight filled shards.
+/// `--in-flight`'s default: eight shards at once.
 ///
 /// Measured on a 51-shard mini-block at 247 GiB: four in flight peaked at
 /// 77.10 GiB and eight at 83.91, and the extra four were worth 14% of the
@@ -89,64 +104,47 @@ pub struct Options {
 /// (`crates/prover/tests/streaming.rs`).
 pub const DEFAULT_IN_FLIGHT: usize = 8;
 
-pub fn run(options: &Options) {
+/// Prove the fixture, verify it and print the report.
+///
+/// Every ordinary failure comes back as an error naming what failed, which
+/// `main` prints and exits 1 on (`# Failure` above); what the verb asserts
+/// still panics.
+pub fn run(options: &Options) -> Result<(), String> {
     let dir = vectors();
-    let pin_bytes = match std::fs::read(dir.join(fixture::pin_file(&options.fixture))) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            println!(
-                "prove: no fixture `{}` under {} ({e}). \
-                 `cargo run -p kat-gen -- block` records one; it needs ETH_RPC_URL.",
-                options.fixture,
-                dir.display()
-            );
-            return;
-        }
-    };
+    let pin_bytes = std::fs::read(dir.join(fixture::pin_file(&options.fixture))).map_err(|e| {
+        format!(
+            "no fixture `{}` under {} ({e}). \
+             `cargo run -p kat-gen -- block` records one; it needs ETH_RPC_URL.",
+            options.fixture,
+            dir.display()
+        )
+    })?;
     let pin = Pin::from_bytes(&pin_bytes).expect("the pin decodes");
-    let witness = match std::fs::read(dir.join(fixture::witness_file(&options.fixture))) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            println!(
-                "prove: the `{}` pin is committed but its witness is not ({e}). \
+    let witness =
+        std::fs::read(dir.join(fixture::witness_file(&options.fixture))).map_err(|e| {
+            format!(
+                "the `{}` pin is committed but its witness is not ({e}). \
                  The full block's witness is megabytes and is regenerated rather than \
                  carried; `cargo run -p kat-gen -- block` writes it.",
                 options.fixture
-            );
-            return;
-        }
-    };
+            )
+        })?;
     if let Err(e) = pin.check(&witness, &[]) {
         // The journal is checked below against what the run produces, so only
         // the witness half is checked here.
         if !e.contains("journal") {
-            println!("prove: {e}");
-            return;
+            return Err(e);
         }
     }
 
-    let srs = match load_srs(options.toy_srs) {
-        Some(srs) => srs,
-        None => return,
-    };
+    let srs = load_srs(options.toy_srs)?;
 
-    let elf = match fixture::build_revm_guest(pin.mode) {
-        Ok(elf) => elf,
-        Err(e) => {
-            println!("prove: {e}");
-            return;
-        }
-    };
+    let elf = fixture::build_revm_guest(pin.mode)?;
     let params = fixture::revm_params();
 
     let setup_started = Instant::now();
-    let setup = match host::setup(&elf, &params, srs.0) {
-        Ok(setup) => setup,
-        Err(e) => {
-            println!("prove: the guest does not register: {e}");
-            return;
-        }
-    };
+    let setup = host::setup(&elf, &params, srs.0)
+        .map_err(|e| format!("the guest does not register: {e}"))?;
     let setup_ms = millis(setup_started.elapsed().as_nanos() as u64);
 
     let io = emulator::GuestIo {
@@ -160,13 +158,7 @@ pub fn run(options: &Options) {
     // `final_ms` are 0.0 because the streaming prover does not separate them
     // from `gkr_ms` — one shard's GKR and its opening are one interval there.
     let proving_started = Instant::now();
-    let proven = match host::prove(&setup, &io, options.in_flight) {
-        Ok(proven) => proven,
-        Err(e) => {
-            println!("prove: {e}");
-            return;
-        }
-    };
+    let proven = host::prove(&setup, &io, options.in_flight)?;
     let report = proven.report;
     let phases = Phases {
         execution_ms: millis(report.pass1_execute_ns + report.pass2_execute_ns),
@@ -190,13 +182,21 @@ pub fn run(options: &Options) {
     // **The one thing a proving run archives**, and only after it verified:
     // a proof that does not verify is not worth a reader's disk, and a reader
     // is the point — recursion development loads these four back through
-    // `verifier::proof_archive::read_proof` (S-STREAM).
-    if let Some(dir) = &options.out {
-        match host::proof_archive::write_proof(dir, &options.fixture, &setup.vk, &block) {
-            Ok(paths) => println!("wrote {}", paths.block.display()),
-            Err(e) => println!("prove: the proof does not write: {e}"),
+    // `verifier::proof_archive::read_proof` (S-STREAM). A write that fails
+    // fails the run, but only once the report is out: the measurement below is
+    // still good, and it cost the whole run.
+    let archived = match &options.out {
+        Some(dir) => {
+            match host::proof_archive::write_proof(dir, &options.fixture, &setup.vk, &block) {
+                Ok(paths) => {
+                    println!("wrote {}", paths.block.display());
+                    Ok(())
+                }
+                Err(e) => Err(format!("the proof does not write: {e}")),
+            }
         }
-    }
+        None => Ok(()),
+    };
     let (peak_rss_bytes, peak_rss_source) = report::peak_rss();
     let statement = block.statement();
 
@@ -260,32 +260,32 @@ pub fn run(options: &Options) {
         });
         println!("\n  json written to {}", path.display());
     }
+    archived
 }
 
 /// The SRS, and what to call it in the report.
-fn load_srs(toy: bool) -> Option<(Srs, String)> {
+fn load_srs(toy: bool) -> Result<(Srs, String), String> {
     if !toy {
         match ceremony() {
             Some(path) => {
                 let srs = Srs::from_ptau(&path, POWER).unwrap_or_else(|e| {
                     panic!("reading {}: {e:?}", path.display());
                 });
-                return Some((
+                return Ok((
                     srs,
                     format!("PSE perpetual powers of tau, contribution 80, 2^{POWER} of {PTAU}"),
                 ));
             }
             None => {
-                println!(
-                    "prove: {PTAU} is absent, so no key can be built over the ceremony. \
+                return Err(format!(
+                    "{PTAU} is absent, so no key can be built over the ceremony. \
                      Pass --toy-srs for a run whose timings are the same and whose identity \
                      is not a published one."
-                );
-                return None;
+                ));
             }
         }
     }
-    Some((
+    Ok((
         toy_srs(),
         "a toy SRS with a written-down tau, NOT the ceremony".into(),
     ))
@@ -371,11 +371,13 @@ pub fn usage() -> &'static str {
      \x20     --json, as JSON. <fixture> is a stem under crates/host/tests/vectors,\n\
      \x20     e.g. mini-block. --hourly-usd is the machine's on-demand price, which\n\
      \x20     is what the cost estimate is computed from. Proving is always the\n\
-     \x20     STREAMING prover; --in-flight <n> is how many filled shards it may\n\
-     \x20     hold at once, which is what bounds the peak (default 8,\n\
+     \x20     STREAMING prover; --in-flight <n> is how many shards it proves at\n\
+     \x20     once, which is what bounds the peak (default 8,\n\
      \x20     docs/spec/streaming.md). --out <dir> writes the verified block's\n\
-     \x20     four files there -- <fixture>.vk, .identity, .public and .block,\n\
-     \x20     exactly what `verifier block` reads back."
+     \x20     four files there -- <fixture>.vk, .identity, .public and .block.\n\
+     \x20     `verifier block` reads the .vk, .public and .block; its identity\n\
+     \x20     is 64 hex digits from your own channel, and .identity is only what\n\
+     \x20     the run claimed. Exits 1 if anything fails, --out included."
 }
 
 /// Parse the verb's arguments.

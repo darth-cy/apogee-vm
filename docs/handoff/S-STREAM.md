@@ -204,6 +204,15 @@ run for its verdict and not its wall clock, and the prior report measured four i
 77.10 GiB against eight at 83.91 on a 51-shard statement — 6.8 GiB for 214 s. A benchmark
 wants the time; a suite wants the headroom.
 
+**What it bounds is the shards proved at once**, which is what the peak is a function of
+(`docs/spec/streaming.md` §5). Waiting shards are rows, and ordinarily no more than
+`max_in_flight` are held at all, with two exceptions that add no forward pass: a
+delegating ecall can fill two buffers in one step, and at exit every family's partial
+buffer is queued at once — buffers the executor held all along. `StreamingReport::
+peak_in_flight` is the largest batch proved. Until review it skipped the window families'
+batches, so S16's statement at eight in flight reported 1 where its three window shards
+had been proved together; `tests/streaming.rs`'s `a1` now pins 3.
+
 ---
 
 ## 3. The proof is the only thing a proving run archives
@@ -222,9 +231,14 @@ pub fn read_proof(dir: &Path, stem: &str)
 
 Four files, each the bare `to_bytes()` payload with no header and no framing of its own:
 `<stem>.vk`, `<stem>.identity` (64 lowercase hex digits and a newline), `<stem>.public`,
-`<stem>.block`. That is **exactly** what `verifier block <vk> <identity> <public> <block>`
-reads, in that argument order, so a written directory is verifiable from a shell with no
-glue.
+`<stem>.block`. `verifier block <vk> <identity-hex> <public> <block>` reads three of them
+as they are. **Its identity is never `<stem>.identity`**: the CLI takes the 64 hex digits
+themselves, from a channel the prover does not control, and the file records only what
+the run claimed. `"$(cat <stem>.identity)"` in that slot checks a proof against its
+prover's own claim — fine for re-reading your own proof, evidence of nothing to anyone
+else. (An earlier draft of this note said the four files were exactly the CLI's four
+arguments, "verifiable from a shell with no glue"; review caught that the CLI's identity
+is not a file, and should not become one.)
 
 Three choices worth recording:
 
@@ -236,8 +250,8 @@ Three choices worth recording:
   have needed a `host` dev-dependency on `verifier`, pulling revm and arkworks into
   `cargo test -p verifier`'s dev graph for a file-writing helper.
 - **`<stem>.public` is redundant and is written anyway.** `BlockProof::to_bytes` already
-  carries the statement, but the CLI takes it as a separate argument, and a directory that
-  is not CLI-ready is a directory someone has to write a script for.
+  carries the statement, but the CLI takes it as a file of its own, and a reader should
+  not have to write a script to produce one.
 - **`read_proof` goes through `load_verifying_key`**, the loader with the load rules, not
   `VerifyingKey::from_bytes`, which checks encoding only. It does **not** compare the
   identity file against the key's: a key recomputes its own identity, so it is not its own
@@ -245,7 +259,9 @@ Three choices worth recording:
   the prover does not control.
 
 `bench prove --out <dir>` calls it **after** `host::verify` succeeds. A proof that does not
-verify is not worth a reader's disk, and a reader is the point.
+verify is not worth a reader's disk, and a reader is the point. A write that fails fails
+the run, after the report is printed — and since review **every** failure of `bench prove`
+exits 1 rather than printing a line and exiting 0, a proof that does not prove included.
 
 **Nothing writes a `TraceArchive` to disk, and nothing ever did** — the export/import pair
 exists for `crates/emulator/tests/archive.rs`'s wire-form round-trip and for the deleted

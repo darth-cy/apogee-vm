@@ -92,7 +92,12 @@ fn main() {
     // so the eight existing routines keep their signature.
     if args.first().map(String::as_str) == Some("prove") {
         match block::parse(&args[1..]) {
-            Ok(options) => block::run(&options),
+            Ok(options) => {
+                if let Err(why) = block::run(&options) {
+                    eprintln!("prove: {why}");
+                    std::process::exit(1);
+                }
+            }
             Err(why) => {
                 eprintln!("bench: {why}\n");
                 usage();

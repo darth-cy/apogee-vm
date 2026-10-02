@@ -108,8 +108,8 @@ fn revm_program() -> Program {
 /// **No archive.** This is the heaviest statement in the repository — a
 /// 30M-cycle execution, whose trace alone is hundreds of megabytes — and
 /// since S-STREAM nothing proves from one. `prove_block_streaming` executes
-/// the guest itself, twice, holding one partial buffer per family and at most
-/// `common::IN_FLIGHT` filled shards (`docs/spec/streaming.md`). What the
+/// the guest itself, twice, holding one partial buffer per family and proving
+/// at most `common::IN_FLIGHT` shards at once (`docs/spec/streaming.md`). What the
 /// archive used to be read for here was the shard plan, and the block's own
 /// `shard_counts` is that same plan after the fact.
 fn revm_io() -> emulator::GuestIo {

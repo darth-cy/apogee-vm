@@ -54,9 +54,11 @@ this repository is usable for sizing**, including the ones above.
 
 **What the streaming prover holds instead**, and nothing else:
 
-- one **partial** buffer per family, at most `height − 1` rows (§3.1);
+- one **partial** buffer per family, at most `height − 1` rows (§3.1) — and at exit
+  these become the execution's last shards, the same memory under a new owner;
 - the **last-access tables**, `O(touched addresses)` (§3.2);
-- at most `max_in_flight` **filled** shards, each being proved (§5);
+- at most `max_in_flight` **filled** shards, waiting for a batch or being proved —
+  one more, for a moment, when a delegating ecall fills two buffers in one step (§5);
 - the statement's commitment metadata: `64 · columns` bytes a shard, and the
   `ShardProof`s, which are the output.
 
@@ -225,10 +227,19 @@ and an answer to a different question (`docs/spec/debug-info.md` §3).
 ## 5. Backpressure
 
 `prove_block_streaming(setup, io, max_in_flight)`. `max_in_flight` is the number
-of **filled** shards that may be held between the executor and the proving
-workers, and therefore what bounds the peak: a batch of that many is proved with
-one `rayon` parallel iterator, each task building its shard's columns, its base
-layer, its GKR proof and its opening and then dropping all of it.
+of shards **proved at once**, and therefore what bounds the peak: a batch of at most
+that many is proved with one `rayon` parallel iterator, each task building its
+shard's columns, its base layer, its GKR proof and its opening and then dropping all
+of it. The window families are proved last, in batches under the same bound.
+
+A filled shard waits for its batch as rows, and ordinarily no more than
+`max_in_flight` are held at all, waiting or proving. **Two exceptions, both rows and
+neither a forward pass.** A delegating ecall fills two buffers in one step — the requesting
+family's and the delegation family's — so one shard can wait while a full batch
+proves. And at exit every family's partial buffer becomes a shard at once, all of
+them queued and proved in batches; those are the buffers §1.1 already counts, one per
+family and resident since execution began, so the tail holds nothing the executor
+was not holding.
 
 It is an argument and not a constant because the caller is the only one that
 knows the machine — a shard's base layer plus its forward pass is about 1.5 GB at
@@ -240,14 +251,15 @@ On a 51-shard mini-block on a 247 GiB box, four in flight peaked at 77.10 GiB an
 at 83.91, and the extra four were worth 14% of the wall clock — 6.8 GiB for 214 s, which
 is why `tools/bench/src/block.rs`' `DEFAULT_IN_FLIGHT` is 8. The deferred suites take 4
 (`crates/prover/tests/common/mod.rs`' `IN_FLIGHT`): a suite is run for its verdict and
-not for its wall clock. `StreamingReport::peak_in_flight` is the number actually reached.
+not for its wall clock. `StreamingReport::peak_in_flight` is the largest batch actually
+proved, the window families' included; it does not count shards waiting for one.
 
 **A queue and not a pool size, because the pool size never bounded anything.** On the
 archived path the parallel step was one `par_iter` over the whole shard list, and rayon
 steals into a new shard task while a thread is parked in a nested `par_iter` — S-BATCH
 walked the log and found **17 shards simultaneously live at 12 threads, and 10 at 6**
 (`docs/handoff/S-BATCH-miniblock-gate.md` §3). `RAYON_NUM_THREADS` was therefore a knob
-that did not hold. A batch of exactly `max_in_flight` chunks does.
+that did not hold. A batch of at most `max_in_flight` chunks does.
 
 **The block does not depend on it.** Shards are placed by their statement
 position, and each proof is a function of the global state and its own columns
@@ -368,7 +380,7 @@ hour nobody should pay twice.
 
 ```text
   <stem>.vk         VerifyingKey::to_bytes
-  <stem>.identity   the program identity, 64 lowercase hex digits + newline
+  <stem>.identity   the identity this run claims, 64 lowercase hex digits + newline
   <stem>.public     PublicInputs::to_bytes
   <stem>.block      BlockProof::to_bytes
 ```
@@ -380,19 +392,27 @@ pub fn read_proof(dir: &Path, stem: &str)
     -> Result<(VerifyingKey, [u8; 32], PublicInputs, BlockProof), String>;
 ```
 
-**The format is the CLI's, deliberately.** Those four are exactly what
-`verifier block <vk> <identity> <public> <block>` reads, in that argument order, so a
-written directory is verifiable from a shell with no glue. It lives in
-`crates/verifier` rather than in the host SDK because the *reader* is there, and
-`crates/verifier/tests/cli.rs` writes its four files through this module rather than
-through a local closure, which is what keeps the two from drifting.
+**Three of the four are the CLI's files, and the fourth is deliberately not its
+argument.** `verifier block <vk> <identity-hex> <public> <block>` reads `<stem>.vk`,
+`<stem>.public` and `<stem>.block` as they are. Its identity is the 64 hex digits
+themselves, from a channel the prover does not control, and never `<stem>.identity`:
+
+```text
+  verifier block <stem>.vk <identity from your own channel> <stem>.public <stem>.block
+```
+
+`"$(cat <stem>.identity)"` in that slot checks the proof against its prover's own
+claim: fine for re-reading a proof you produced, and evidence of nothing to anyone
+else. It lives in `crates/verifier` rather than in the host SDK because the *reader* is
+there, and `crates/verifier/tests/cli.rs` writes its files through this module rather
+than through a local closure, which is what keeps the two from drifting.
 
 Four things about it that are decisions and not accidents:
 
 - **`<stem>.public` is redundant and is written anyway.** `BlockProof::to_bytes`
   already carries the statement, so `read_proof` could reconstruct it — but the CLI
-  takes it as a separate argument, and a directory that is not CLI-ready is a
-  directory someone has to write a script for. `write_proof` writes
+  takes it as a file of its own, and a reader should not have to write a script to
+  produce one. `write_proof` writes
   `block.statement()` and never a second copy a caller supplies, so the two cannot
   disagree.
 - **The `.vk` is the large file**, and it is written unconditionally. It carries every
@@ -400,7 +420,7 @@ Four things about it that are decisions and not accidents:
   which is why `tools/kat-gen` pins them by digest. A key cache nobody validates is
   worse than tens of MB, and a proof whose key is missing is not a proof anyone can
   check.
-- **Identity is a file here and an argument there, and that is not a contradiction.**
+- **`<stem>.identity` is a record, not an input.**
   A key recomputes its own identity when it loads, so the key is not its own authority
   for it: what makes a proof a proof *of a particular program* is a comparison against
   a value from a channel the prover does not control. Writing it beside the proof
@@ -412,7 +432,8 @@ Four things about it that are decisions and not accidents:
   `VerifyingKey::from_bytes`, which checks encoding only.
 
 `tools/bench`'s verb writes the bundle only **after** the block verifies: a proof that
-does not verify is not worth a reader's disk.
+does not verify is not worth a reader's disk. A bundle that does not write fails the
+run, once the report is printed (`tools/bench/CLAUDE.md`).
 
 ---
 

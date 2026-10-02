@@ -48,7 +48,7 @@ mod common;
 
 use common::{empty_io, keccak_setup, setup};
 use emulator::GuestIo;
-use prover::{prove_block_streaming, ProverSetup};
+use prover::{prove_block_streaming, ProverSetup, StreamingReport};
 
 /// The same statement at one shard in flight and at eight is the same block.
 ///
@@ -58,7 +58,7 @@ use prover::{prove_block_streaming, ProverSetup};
 /// the thread count, and the same one that makes `max_in_flight` safe to tune.
 /// `tests/block.rs`'s `the_block_does_not_depend_on_the_thread_count` is the
 /// other half: this one varies the batch size, that one the pool.
-fn same_at_one_and_eight(label: &str, setup: &ProverSetup, io: &GuestIo) {
+fn same_at_one_and_eight(label: &str, setup: &ProverSetup, io: &GuestIo) -> StreamingReport {
     let (one, r1) = prove_block_streaming(setup, io, 1).expect("one at a time");
     let (eight, r8) = prove_block_streaming(setup, io, 8).expect("eight at a time");
     assert_eq!(
@@ -82,6 +82,7 @@ fn same_at_one_and_eight(label: &str, setup: &ProverSetup, io: &GuestIo) {
         one.shard_proofs().len(),
         "{label}: the report's shard count is the block's"
     );
+    r8
 }
 
 /// S16's statement: `INIT_TEARDOWN`, one add/sub shard and the two public
@@ -89,7 +90,14 @@ fn same_at_one_and_eight(label: &str, setup: &ProverSetup, io: &GuestIo) {
 #[test]
 #[ignore = "proves S16's statement twice"]
 fn a1_the_streamed_block_does_not_depend_on_max_in_flight() {
-    same_at_one_and_eight("addsub", &setup(), &empty_io());
+    let r8 = same_at_one_and_eight("addsub", &setup(), &empty_io());
+    // Its one add/sub shard is a partial buffer, proved alone at exit, and its
+    // three window shards are one batch after it — so the peak is the window
+    // batch, which `peak_in_flight` did not count until S-STREAM's review.
+    assert_eq!(
+        r8.peak_in_flight, 3,
+        "addsub: the window families' batch is the largest"
+    );
 }
 
 /// `guests/keccak-test`: a **delegation** shard, so the `Invocations` arm — and

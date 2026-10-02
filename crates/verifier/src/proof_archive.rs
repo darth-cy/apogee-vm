@@ -7,38 +7,44 @@
 //! input is a base proof, and producing one is a quarter of an hour that
 //! nobody should pay twice.
 //!
-//! # The format is the `verifier` CLI's, and deliberately so
+//! # Three of the four are the `verifier` CLI's files
 //!
 //! Four files under one directory, each the bare `to_bytes()` payload with no
 //! header and no framing of this module's own:
 //!
 //! ```text
 //!   <stem>.vk         VerifyingKey::to_bytes
-//!   <stem>.identity   the program identity, 64 lowercase hex digits + newline
+//!   <stem>.identity   the identity this run claims, 64 lowercase hex digits + newline
 //!   <stem>.public     PublicInputs::to_bytes   (the block's own statement)
 //!   <stem>.block      BlockProof::to_bytes
 //! ```
 //!
-//! That is exactly what `verifier block <vk> <identity> <public> <block>`
-//! reads, in that argument order, so a written directory is verifiable from a
-//! shell with no glue — and `crates/verifier/tests/cli.rs` writes the same four
+//! `verifier block <vk> <identity-hex> <public> <block>` reads `.vk`, `.public`
+//! and `.block` as they are, and `crates/verifier/tests/cli.rs` writes them
 //! through this module rather than through a local closure, which is what keeps
-//! the two from drifting.
+//! the two from drifting. **Its identity is not `.identity`.** The CLI takes
+//! the 64 hex digits themselves, and a verifier supplies its own:
 //!
-//! **Identity is a file here and an argument there, and that is not a
-//! contradiction.** A key recomputes its own identity when it loads, so the
-//! key is not its own authority for it: what makes a proof a proof *of a
-//! particular program* is a comparison against a value from a channel the
-//! prover does not control (`host::verify`'s doc comment). Writing it beside
-//! the proof records what this run claimed; it does not make the claim
-//! trustworthy, and [`read_proof`] hands the bytes back without checking them
-//! against anything.
+//! ```text
+//!   verifier block <stem>.vk <identity from your own channel> <stem>.public <stem>.block
+//! ```
+//!
+//! **`.identity` is the prover's claim, and nothing reads it as more.** A key
+//! recomputes its own identity when it loads, so the key is not its own
+//! authority for it: what makes a proof a proof *of a particular program* is a
+//! comparison against a value from a channel the prover does not control
+//! (`host::verify`'s doc comment). Writing it beside the proof records what
+//! this run claimed; it does not make the claim trustworthy, and [`read_proof`]
+//! hands the bytes back without checking them against anything. So
+//! `"$(cat <stem>.identity)"` in the CLI's identity slot checks a proof against
+//! its prover's own claim — fine for re-reading a proof you produced, and
+//! evidence of nothing to anyone else.
 //!
 //! **`<stem>.public` is redundant and is written anyway.** `BlockProof::
 //! to_bytes` already carries the statement (`crates/verifier-core/src/
 //! block.rs`), so [`read_proof`] could reconstruct it — but the CLI takes it as
-//! a separate argument, and a directory that is not CLI-ready is a directory
-//! someone has to write a script for.
+//! a file of its own, and a reader should not have to write a script to
+//! produce one.
 //!
 //! The `.vk` is the large file: it carries every registered family's
 //! `CircuitArtifact`, and the delegation artifacts are megabytes. It is written
@@ -164,9 +170,9 @@ mod tests {
     use super::*;
     use verifier_core::{BoundaryFinals, GkrProof, ShardProof};
 
-    /// The four names, and that they are the CLI's four arguments.
+    /// The four names: the stem, and one extension each.
     #[test]
-    fn the_four_paths_are_the_cli_s_four_files() {
+    fn the_four_paths_are_the_stem_and_its_four_extensions() {
         let p = ProofPaths::new(Path::new("/tmp/out"), "mini-block");
         assert_eq!(p.vk, Path::new("/tmp/out/mini-block.vk"));
         assert_eq!(p.identity, Path::new("/tmp/out/mini-block.identity"));
@@ -177,8 +183,8 @@ mod tests {
     /// The hex the CLI parses back, and nothing else.
     ///
     /// `crates/verifier/src/main.rs` takes identity as 64 lowercase hex digits
-    /// in `to_bytes()` order, so the file's contents and that argument are the
-    /// same string — which is the whole reason the file exists.
+    /// in `to_bytes()` order, and the file spells the run's claim the same way,
+    /// so a reader compares it with its own trusted value as one string.
     #[test]
     fn the_identity_file_round_trips_through_the_cli_s_own_spelling() {
         let mut bytes = [0u8; 32];

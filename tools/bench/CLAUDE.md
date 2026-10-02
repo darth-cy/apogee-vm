@@ -16,7 +16,7 @@ cargo run --release -p bench -- prove mini-block --out proofs/   # write the pro
 
 **`prove` is `prover::prove_block_streaming`, and since S-STREAM there is no other
 path** (`docs/spec/streaming.md`). `--in-flight <n>` no longer *selects* a path: it is
-how many filled shards may be held at once, which is what bounds the peak, and it
+how many shards are proved at once, which is what bounds the peak, and it
 defaults to `block::DEFAULT_IN_FLIGHT` = **8** — measured on a 51-shard mini-block at
 77.10 GiB for four against 83.91 for eight, the extra four worth 14% of the wall clock.
 The block does not depend on it.
@@ -30,8 +30,17 @@ field is now always `Some`.
 
 `--out <dir>` writes the verified block's four files through
 `verifier::proof_archive::write_proof` — `<fixture>.vk`, `.identity`, `.public` and
-`.block`, which is exactly what `verifier block` reads back. **It is the only thing a
-proving run archives**, and it is written only after `host::verify` succeeds.
+`.block`. **It is the only thing a proving run archives**, and it is written only after
+`host::verify` succeeds. `verifier block` reads the `.vk`, `.public` and `.block`; its
+identity is 64 hex digits from a channel the prover does not control, and `.identity` is
+only what the run claimed (`crates/verifier/CLAUDE.md`).
+
+**`prove` exits 1 when it fails, whatever failed** — a fixture or witness missing, no
+ceremony without `--toy-srs`, a guest that does not build or register, a block that does
+not prove, an `--out` that does not write — with the reason on stderr; a usage error
+exits 2, and what it asserts still panics. An `--out` that does not write fails only
+after the report is printed, because the measurement is still good and cost the whole
+run. Until S-STREAM's review each of these printed a line and exited 0.
 
 **The charter moved by one line at S25, and only one.** It used to read "no assertions, no
 thresholds, no committed output"; the stage requires the report to be committed to its

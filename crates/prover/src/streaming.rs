@@ -13,8 +13,11 @@
 //!
 //! The one thing this changes is **when** a column exists. Every commitment,
 //! every absorption, every challenge and every proof byte is what
-//! [`crate::prove_block`] would have produced over the same execution, and
-//! `crates/prover/tests/streaming.rs` holds the two blocks byte for byte.
+//! [`crate::prove_block`] would have produced over the same execution — by
+//! construction, and no longer by test: the comparison that held the two
+//! blocks byte for byte ran the archived path, and went with it at S-STREAM
+//! (`docs/spec/streaming.md` §6.3). `crates/prover/tests/block.rs`'s `a7` is
+//! the one place an archived construction and a streamed one still meet.
 //!
 //! What it buys is a peak that does not grow with the shard count.
 //! `prover::statement_inputs` builds every shard's memory columns and
@@ -25,7 +28,7 @@
 //! output is `O(cycles)`: about 300 bytes a cycle between the memory event log
 //! and the family buffers, so the same block's trace alone is ~520 GB. Neither
 //! survives here: the executor is [`emulator::StreamingRun`], which holds one
-//! partial buffer per family and the last-access tables, and this module holds
+//! partial buffer per family and the last-access tables, and this module proves
 //! at most `max_in_flight` shards at a time.
 
 use std::time::Instant;
@@ -57,8 +60,12 @@ pub struct StreamingReport {
     pub cycles: u64,
     /// How many shards the statement holds.
     pub shards: usize,
-    /// The largest number of filled shards held at once, which is what the peak
-    /// is a function of. At most `max_in_flight`.
+    /// The largest batch proved, window families' batches included: at most
+    /// this many shards' columns, base layers and forward passes were alive at
+    /// once, which is what the peak is a function of. At most `max_in_flight`.
+    ///
+    /// It does not count the shards **waiting** for a batch, which are rows;
+    /// [`prove_block_streaming`] says when there are more of those.
     pub peak_in_flight: usize,
     pub max_in_flight: usize,
     pub pass1_execute_ns: u64,
@@ -69,13 +76,21 @@ pub struct StreamingReport {
 
 /// Prove one execution of `setup`'s program over `io` as a block, streaming.
 ///
-/// `max_in_flight` is the backpressure: the number of filled shards that may be
-/// held between the executor and the proving workers, and therefore what bounds
-/// the peak. It is an argument and not a constant because the caller is the only
-/// one that knows the machine — a shard's base layer plus its forward pass is
-/// about 1.5 GB at `2^20` and rather more for a delegation family — and it is
-/// the knob `RAYON_NUM_THREADS` used to be: the batch is proved with a rayon
-/// parallel iterator over at most that many shards. It must be at least 1.
+/// `max_in_flight` is the backpressure: the number of shards proved at once,
+/// and therefore what bounds the peak. It is an argument and not a constant
+/// because the caller is the only one that knows the machine — a shard's base
+/// layer plus its forward pass is about 1.5 GB at `2^20` and rather more for a
+/// delegation family — and it is the knob `RAYON_NUM_THREADS` used to be: the
+/// batch is proved with a rayon parallel iterator over at most that many
+/// shards. It must be at least 1.
+///
+/// A filled shard waits for its batch as rows, and ordinarily no more than
+/// `max_in_flight` are held at all, waiting or proving. There are two
+/// exceptions. A delegating ecall fills two buffers in one step, so one shard
+/// can wait while a full batch proves. And at exit every family's partial
+/// buffer becomes a shard at once, all of them queued and proved in batches —
+/// but those are the buffers the executor has held since execution began, one
+/// per family, so the tail adds no memory that was not already resident.
 ///
 /// The block does not depend on it. Shards are placed by their statement
 /// position, each proof is a function of the global state and its own columns
@@ -442,6 +457,7 @@ fn pass2(
         }
     }
     for batch in pending.chunks(max_in_flight) {
+        report.peak_in_flight = report.peak_in_flight.max(batch.len());
         let since = Instant::now();
         let proved = first_error(
             batch

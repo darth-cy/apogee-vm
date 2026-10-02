@@ -20,7 +20,8 @@ pub fn encode_srs_verifier(vsrs: &SrsVerifier) -> [u8; 320];
 pub use verifier_core::{BlockProof, BlockReconciliation, PublicInputs, ShardProof, ShardRecord,
                         VerifyError, VerifyingKey, OPENING_BYTES, SRS_VERIFIER_BYTES};
 
-// S-STREAM: the on-disk form of a proved block, and the CLI's own four arguments.
+// S-STREAM: the on-disk form of a proved block. Three of its four files are the CLI's
+// own arguments; `.identity` is only what the run claimed, never the CLI's identity.
 // `host::proof_archive` is a re-export of this module.
 pub mod proof_archive {
     pub struct ProofPaths { pub vk: PathBuf, pub identity: PathBuf,
@@ -98,14 +99,15 @@ to.
   be `statement_shards(config, shard_counts)` exactly, after each proof verifies — so
   step 1 has already held the counts to the config — and a later statement-level caller
   must do the same (`docs/spec/shard-proof.md` §6).
-- **`proof_archive` lives here because the format's READER is here** (S-STREAM). The four
-  files are exactly `verifier block <vk> <identity> <public> <block>`'s four arguments, in
-  that order, so a written directory is verifiable from a shell with no glue — and a writer
-  in `crates/host` would be a second spelling of the CLI's own format, free to drift from
-  it. One definition, beside the thing that consumes it; `host::proof_archive` is a
-  re-export and `tools/bench prove --out <dir>` writes through it. `tests/cli.rs` writes
-  the `block` verb's own fixture files with `write_proof` rather than a local closure,
-  which is what holds the two ends together, and reads them back with `read_proof`.
+- **`proof_archive` lives here because the format's READER is here** (S-STREAM).
+  `verifier block <vk> <identity-hex> <public> <block>` reads three of the four files as
+  they are — `.vk`, `.public`, `.block` — and a writer in `crates/host` would be a second
+  spelling of the CLI's own format, free to drift from it. One definition, beside the
+  thing that consumes it; `host::proof_archive` is a re-export and `tools/bench prove
+  --out <dir>` writes through it. `tests/cli.rs` writes the `block` verb's own fixture
+  files with `write_proof` rather than a local closure, which is what holds the two ends
+  together, and reads them back with `read_proof`. **The fourth, `.identity`, is not the
+  CLI's identity argument and must not become it**: see the identity bullet below.
 - **The proof is the only thing a proving run archives** (S-STREAM). Streaming has no
   `TraceArchive` — no shard's columns outlive the batch that proves them — so what a run
   leaves behind is the proof, and this exists because **recursion development reads a base
@@ -113,15 +115,17 @@ to.
   `read_proof` is `write_proof`'s inverse and each file goes through its own type's
   decoder, the key through `load_verifying_key` — the loader with the load rules, not
   `VerifyingKey::from_bytes`, which checks encoding only.
-- **Identity is a file here and an argument there, and that is not a contradiction.** A key
+- **`.identity` is the prover's claim; the CLI's identity is the verifier's.** A key
   recomputes its own identity when it loads, so the key is not its own authority for it;
   writing it beside the proof records what the run *claimed*, and `read_proof` hands the
   bytes back **without** comparing them to anything. The comparison a verifier owes is
-  against a channel the prover does not control, which is why the CLI takes it as a
-  separate argument. `<stem>.public` is redundant for the same shape of reason —
-  `BlockProof::to_bytes` already carries the statement, and `write_proof` writes
-  `block.statement()` and never a caller's second copy — and is written anyway, because a
-  directory that is not CLI-ready is a directory someone has to script around.
+  against a channel the prover does not control, which is why the CLI takes the 64 hex
+  digits as an argument and never reads them from a file beside the proof.
+  `"$(cat <stem>.identity)"` in that slot checks a proof against its prover's own claim:
+  fine for re-reading your own proof, evidence of nothing to anyone else. `<stem>.public`
+  is redundant — `BlockProof::to_bytes` already carries the statement, and `write_proof`
+  writes `block.statement()` and never a caller's second copy — and is written anyway,
+  because the CLI takes the statement as a file of its own.
 - **No accumulator entries.** A base verification pairs inside `pcs`; the deferred path is
   the recursion stage's.
 

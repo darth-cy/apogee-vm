@@ -477,14 +477,13 @@ pub fn trace(program: &Program, status: u32) -> TraceArchive {
 
 /// **The one proving path's backpressure, for the suites.**
 ///
-/// `prover::prove_block_streaming` holds at most this many filled shards
-/// between the executor and the proving workers, so it is what bounds a
-/// suite's peak (`docs/spec/streaming.md` §5). Four rather than eight: a
-/// deferred suite is run for its verdict and not for its wall clock, and the
-/// measured difference between the two is 14% of the time against 6.8 GiB of
-/// peak. The block does not depend on it — `shards_are_placed_by_position`
-/// proves the bytes equal at 1 and 8 — so no test's assertion rests on the
-/// number.
+/// `prover::prove_block_streaming` proves at most this many shards at once,
+/// so it is what bounds a suite's peak (`docs/spec/streaming.md` §5). Four
+/// rather than eight: a deferred suite is run for its verdict and not for its
+/// wall clock, and the measured difference between the two is 14% of the time
+/// against 6.8 GiB of peak. The block does not depend on it —
+/// `tests/streaming.rs` proves the bytes equal at 1 and 8 — so no test's
+/// assertion rests on the number.
 pub const IN_FLIGHT: usize = 4;
 
 /// A run with nothing on any stream: what every committed guest but

@@ -217,7 +217,7 @@ cargo test -p prover --test control -- --include-ignored --test-threads=1     # 
 cargo test --release -p prover --test alu -- --include-ignored --test-threads=1  # DEFERRED; S18's statement, 31.7 GB peak, 53 s
 cargo test --release -p prover --test mem -- --include-ignored --test-threads=1  # DEFERRED; S19's statement, 33.5 GB peak, 61 s
 cargo test --release -p prover --test block -- --include-ignored --test-threads=1  # DEFERRED; S20's block, 34.9 GB peak, 840 s
-cargo test --release -p prover --test streaming -- --include-ignored --test-threads=1  # DEFERRED; S26: the streamed block IS the archived one, byte for byte, over three statements
+cargo test --release -p prover --test streaming -- --include-ignored --test-threads=1  # DEFERRED; since S-STREAM, the same block at max_in_flight 1 and 8 over two statements -- S26's streamed-equals-archived comparison went with the archived path
 cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1  # DEFERRED; S21's block, ELEVEN shards since S-IO, 131 s at S21 and 254 s here at RAYON_NUM_THREADS=6; its 33.7 GB peak is S21's one-permutation-a-row shape and owes re-measurement -- at S26d's 2^18 the KECCAK_F shard's forward pass alone is ~60 GB, so a delegation shard sets this suite's peak for the first time
 cargo test --release -p prover --test recursion -- --include-ignored --test-threads=1  # DEFERRED; S23's block, TWELVE shards since S-IO, 35.2 GB peak and 120 s at S23, 238 s here at RAYON_NUM_THREADS=6 -- the heaviest by memory until S26d raised `KECCAK_F` to `2^18`; it carries no delegation shard above `2^8`, so its own peak is unmoved
 cargo test --release -p prover --test public_io -- --include-ignored --test-threads=1  # DEFERRED; S-IO's statement: public input in, advice checked against it, journal out
@@ -268,14 +268,16 @@ cargo run --release -p bench -- prove mini-block --hourly-usd <p> --json <path>
                                             # so a figure here is not comparable with a
                                             # pre-S-STREAM one. The table says how
 cargo run --release -p bench -- prove mini-block --in-flight <n>
-                                            # how many filled shards may be held at once, which
-                                            # is what bounds the peak. Default 8; it selects no
+                                            # how many shards are proved at once, which is
+                                            # what bounds the peak. Default 8; it selects no
                                             # path and the block does not depend on it
 cargo run --release -p bench -- prove mini-block --out <dir>
                                             # S-STREAM: write the verified block's four files --
-                                            # <fixture>.vk, .identity, .public, .block -- which
-                                            # is exactly what `verifier block` reads back, and
-                                            # the ONLY thing a proving run archives
+                                            # <fixture>.vk, .identity, .public, .block -- the
+                                            # ONLY thing a proving run archives. `verifier block`
+                                            # reads the .vk, .public and .block; its identity is
+                                            # 64 hex digits from YOUR channel, and .identity is
+                                            # only the run's claim. Exits 1 if anything fails
 
 cargo run --release -p profiler -- block mini-block [--top <n>] [--json <p>]
                                             # S26: where a guest's cycles go, by function and
@@ -1167,13 +1169,17 @@ is derivable *from* them is regenerated and diffed in CI.
   archive and asserts its digest is the **streamed** block's.
 - **The only thing a proving run archives is the PROOF** (owner's instruction, S-STREAM).
   `verifier::proof_archive::write_proof(dir, stem, vk, block)` writes `<stem>.vk`,
-  `<stem>.identity`, `<stem>.public` and `<stem>.block` — exactly the four files
-  `verifier block <vk> <identity> <public> <block>` reads — and `read_proof` is its
-  inverse, through each type's own decoder. It lives in `crates/verifier` because the
-  format's **reader** is the CLI, so there is one definition of it beside the thing that
-  consumes it; `host::proof_archive` is a re-export, and `bench prove --out <dir>` calls it
-  after the block verifies. It exists so a base proof is produced once and re-read by
-  recursion development. No `TraceArchive` is written to disk by anything, and never was.
+  `<stem>.identity`, `<stem>.public` and `<stem>.block`, and `read_proof` is its
+  inverse, through each type's own decoder. `verifier block <vk> <identity-hex> <public>
+  <block>` reads three of them as they are; **its identity is never `.identity`**, which
+  records only what the run *claimed* — a verifier takes identity from a channel the
+  prover does not control, so `"$(cat <stem>.identity)"` checks a proof against its
+  prover's own claim and is fine for re-reading your own proof and nothing more. It lives
+  in `crates/verifier` because the format's **reader** is the CLI, so there is one
+  definition of it beside the thing that consumes it; `host::proof_archive` is a
+  re-export, and `bench prove --out <dir>` calls it after the block verifies. It exists so
+  a base proof is produced once and re-read by recursion development. No `TraceArchive` is
+  written to disk by anything, and never was.
 - **A shard's columns are built from that shard's ROWS and from the last-access tables**
   (S26). `trace::build_memory_columns` and `build_frame_witness` take a `RowSlice` — one
   family's cut of its buffer — and derive each row's events from the row; the window
@@ -1195,12 +1201,12 @@ is derivable *from* them is regenerated and diffed in CI.
   then and nine now, went
   from 14.7 GB / 119 s to **32.3 GB / 87 s** — about 2.2× the peak for about 1.4× the
   speed, growing with the family count. **Those are archived-path figures and the knob is
-  different now**: on the streaming path the resident-shard count is `max_in_flight`, a
-  hard bound and an argument, not something a thread pool shapes. A caller that must bound
+  different now**: on the streaming path the number of shards proved at once is
+  `max_in_flight`, a hard bound and an argument, not something a thread pool shapes. A caller that must bound
   the peak lowers it. **Every deferred-suite peak recorded above the line, in
   `.github/workflows/ci.yml` and in `docs/handoff/S20-orchestration.md` is a pre-S-STREAM
   archived-path measurement and is therefore STALE** — the suites now stream, and a
-  streamed run holds at most `max_in_flight` shards where the archived one held every
+  streamed run proves at most `max_in_flight` shards at once where the archived one held every
   shard the schedule happened to co-resident. The direction is down and the numbers are
   unmeasured; they are re-measured in one batch at the end of a progression, per the
   deferred-suite protocol, and not guessed here.

@@ -20,10 +20,11 @@ pub struct Proven { pub block: BlockProof, pub report: StreamingReport, pub exit
                     pub cycles: u64, pub journal: Vec<u8>, pub wall_nanos: u64 }
 
 // S-STREAM: `verifier::proof_archive`, re-exported whole. The four files a proved block
-// leaves on disk -- <stem>.{vk,identity,public,block}, exactly what `verifier block`
-// reads back. **The proof is the only thing a proving run archives.** It lives in
-// `crates/verifier` because the format's reader is the CLI, so there is one definition
-// of it; `crates/verifier/CLAUDE.md` is the account.
+// leaves on disk -- <stem>.{vk,identity,public,block}; `verifier block` reads the .vk,
+// .public and .block, and takes its identity from the verifier, never from .identity,
+// which is only the run's claim. **The proof is the only thing a proving run
+// archives.** It lives in `crates/verifier` because the format's reader is the CLI, so
+// there is one definition of it; `crates/verifier/CLAUDE.md` is the account.
 pub use verifier::proof_archive;   // ProofPaths, identity_hex, write_proof, read_proof
 
 // the recorder
@@ -221,7 +222,7 @@ re-records the pinned one from the cache alone to prove the recording determinis
 | --- | --- |
 | `tests/mpt.rs` | the trie: Ethereum's three published root vectors (empty, `dogglesworth`, `horse`), order- and delete-invariance over every permutation, a sparse rebuild from every prefix of its own nodes, and each refusal separately — a missing node is not an absence, a blinded collapse names its hash, every canonical-form rule refuses. 16 tests |
 | `tests/stateless.rs` | acceptance 7: 17 real mainnet accounts and 37 real slots authenticated against the real parent state root, every one of 210 real nodes corrupted in turn and refused, every one dropped in turn and refused **as missing rather than as absent**; then the synthetic transition — the pinned root recomputed, every node corrupted, every balance corrupted, and the two system-contract addresses against their EIPs. 9 fast, 2 `#[ignore]`d for the guest |
-| `tests/prove.rs` | **`#[ignore]`d** — the mini-block gate (acceptance 4) and the advice tamper twin (acceptance 5). Since S-STREAM it proves through `host::prove(.., IN_FLIGHT)` with `IN_FLIGHT = 4`: the suite is run for its verdict and not its wall clock, and four shards held at once was 77.10 GiB against eight at 83.91 on a 51-shard statement |
+| `tests/prove.rs` | **`#[ignore]`d** — the mini-block gate (acceptance 4) and the advice tamper twin (acceptance 5). Since S-STREAM it proves through `host::prove(.., IN_FLIGHT)` with `IN_FLIGHT = 4`: the suite is run for its verdict and not its wall clock, and four shards proved at once was 77.10 GiB against eight at 83.91 on a 51-shard statement |
 | `tests/witness.rs` | acceptance 1 (two cache-only recordings, byte-identical, zero network calls, equal to the committed fixture), acceptance 2's native half (the witness alone reproduces the pinned journal), acceptance 3 twice (every recorded slot deleted in turn, and every recorded account, each refused), the fixture against its pin, the fork table both ways, the journal against the public window's ceiling, and a one-wei balance change moving the journal |
 
 **The journal does not distinguish every witness, and that is a fact about the workload

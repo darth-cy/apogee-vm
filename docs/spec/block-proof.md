@@ -311,8 +311,7 @@ pub fn prove_block_streaming(setup: &ProverSetup, io: &GuestIo, max_in_flight: u
 **One path, and it takes the guest's inputs rather than an execution** (S-STREAM,
 owner's decision). It executes the program twice: pass 1 commits each shard's memory
 columns as the shard fills and closes with the statement and G1–G11, pass 2 re-executes
-and proves each shard as it fills, holding at most `max_in_flight` filled shards at a
-time. `docs/spec/streaming.md` is normative for all of it, and the reason is §1.1
+and proves each shard as it fills, at most `max_in_flight` at a time. `docs/spec/streaming.md` is normative for all of it, and the reason is §1.1
 there — the archived path's commit phase was `O(total shards)` and its trace
 `O(cycles)`, which is 500–600 GB and 520 GB for a real Ethereum block.
 

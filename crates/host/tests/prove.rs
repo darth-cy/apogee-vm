@@ -34,10 +34,10 @@ use prover::ProverSetup;
 use verifier_core::VerifyError;
 
 /// The fixture this suite proves.
-/// How many filled shards the streaming prover may hold at once here.
+/// How many shards the streaming prover proves at once here.
 ///
 /// The mini-block is a dozen-odd shards and this suite is run for its verdict,
-/// not its wall clock, so the bound is low: four held at once was measured at
+/// not its wall clock, so the bound is low: four at once was measured at
 /// 77.10 GiB against eight at 83.91 on a 51-shard statement. The block does
 /// not depend on it (`crates/prover/tests/streaming.rs`).
 const IN_FLIGHT: usize = 4;
