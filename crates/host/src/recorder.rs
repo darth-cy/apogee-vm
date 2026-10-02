@@ -56,7 +56,7 @@ pub enum TxRange {
     /// The first `n` transactions. S25's mini-block mode, where `n` is two so
     /// that inter-transaction state carry is exercised.
     First(usize),
-    /// Every transaction in the block. The stateless mode's range.
+    /// Every transaction in the block.
     All,
 }
 
@@ -68,8 +68,7 @@ pub struct Recording {
     pub block_hash: Word32,
     /// Its parent's header hash.
     pub parent_hash: Word32,
-    /// The parent's state root: what these values were read at, and what a
-    /// stateless witness authenticates against.
+    /// The parent's state root: what these values were read at.
     pub parent_state_root: Word32,
     /// This block's state root, from the header.
     pub state_root: Word32,
@@ -148,9 +147,7 @@ impl WitnessRecorder {
     /// Fetch and remember one account.
     ///
     /// `eth_getProof` with no storage keys is the one call that answers nonce,
-    /// balance and code hash together, and it is the call a stateless
-    /// recording needs anyway — so the mini and stateless paths ask the chain
-    /// the same question and a cache serves both.
+    /// balance and code hash together.
     fn load(&mut self, address: Address20) -> Result<(), String> {
         if self.accounts.contains_key(&address) {
             return Ok(());
@@ -168,9 +165,8 @@ impl WitnessRecorder {
         let code_hash = rpc::word_of(&proof["codeHash"], "the account code hash")?;
         // An account that does not exist answers with zeros and the empty code
         // hash; `eth_getProof` gives no explicit flag, and the inclusion proof
-        // it returns is an exclusion proof. The stateless mode checks that
-        // proof; the mini mode takes the values, which is the whole of what it
-        // claims to.
+        // it returns is an exclusion proof. The mini mode takes the values,
+        // which is the whole of what it claims to.
         let empty_code_hash = revm::primitives::KECCAK_EMPTY.0;
         // An account exists when any of the four things the state trie holds
         // for it is not its empty value. `storageHash` is in the test because
@@ -409,7 +405,6 @@ pub fn record(rpc: Rpc, block_number: u64, range: TxRange) -> Result<Recording, 
         env,
         accounts: harvested,
         txs,
-        stateless: None,
     };
     // The recorder's own output must be what the guest will accept, and the
     // cheapest way to know is to put it through the guest's own decoder.
@@ -448,7 +443,6 @@ fn execute_recording(
         env: env.clone(),
         accounts: Vec::new(),
         txs: txs.to_vec(),
-        stateless: None,
     };
     revm_block::run_against(&witness, &mut *recorder)
         .map_err(|e| format!("the block does not execute against the chain: {e}"))?;
@@ -742,71 +736,6 @@ fn recover_authority(
         U256::from_be_bytes(s),
     );
     signed.recover_authority().ok().map(|a| a.0 .0)
-}
-
-/// The **stateless pass**: the trie nodes that authenticate a recording's touch
-/// set against the state root it was read at.
-///
-/// One `eth_getProof(address, slots, at)` per recorded account, and the union
-/// of every `accountProof` and every `storageProof[].proof`, sorted by
-/// `keccak256` and deduplicated — which is the canonical order
-/// `StatelessWitness::nodes` requires, a node being named by its hash and
-/// nothing else.
-///
-/// # What this does NOT give you, and it matters
-///
-/// **It is not a complete stateless witness.** `docs/spec/revm-block.md` §1.5
-/// requires `nodes` to carry every node needed to apply the block's updates
-/// *deterministically*, siblings and boundary nodes included. A proof carries
-/// the nodes on its own key's path and no others, so a block that **deletes** a
-/// key — which writing zero to a storage slot is — collapses a branch into a
-/// sibling that appears in no proof. Measured over 300 randomised trials, 29 %
-/// needed at least one such node.
-///
-/// This function returns what `eth_getProof` can give. Where that is not
-/// enough, the guest says so by name (`mpt::MptError::BlindedCollapse`) rather
-/// than guessing a shape nobody authenticated, and the producer has to complete
-/// the set from a source that can supply it — an execution-layer client serving
-/// `debug_executionWitness`, which this endpoint does not.
-/// `docs/handoff/S25-block.md` §4 is the account.
-pub fn collect_nodes(
-    rpc: Rpc,
-    at: u64,
-    witness: &BlockWitness,
-) -> Result<(Vec<Vec<u8>>, u64, u64), String> {
-    let mut rpc = rpc;
-    let mut nodes: Vec<Vec<u8>> = Vec::new();
-    for account in &witness.accounts {
-        let keys: Vec<String> = account
-            .slots
-            .iter()
-            .map(|(k, _)| rpc::hex_data(k))
-            .collect();
-        let proof = rpc.call(
-            "eth_getProof",
-            json!([rpc::hex_data(&account.address), keys, rpc::hex_quantity(at)]),
-        )?;
-        push_proof(&mut nodes, &proof["accountProof"], "an account proof node")?;
-        if let Some(Value::Array(slots)) = proof.get("storageProof") {
-            for slot in slots {
-                push_proof(&mut nodes, &slot["proof"], "a storage proof node")?;
-            }
-        }
-    }
-    // Sorted by hash and deduplicated: one node set, one encoding.
-    nodes.sort_unstable_by_key(|n| revm::primitives::keccak256(n).0);
-    nodes.dedup();
-    Ok((nodes, rpc.hits, rpc.misses))
-}
-
-fn push_proof(nodes: &mut Vec<Vec<u8>>, value: &Value, what: &str) -> Result<(), String> {
-    let Value::Array(items) = value else {
-        return Err(format!("{what} list is not an array"));
-    };
-    for item in items {
-        nodes.push(rpc::bytes_of(item, what)?);
-    }
-    Ok(())
 }
 
 #[cfg(test)]

@@ -12,7 +12,19 @@ cargo run --release -p bench -- --list           # the registry, and the verb
 cargo run --release -p bench -- prove mini-block --hourly-usd 2.36 --json report.json
 cargo run --release -p bench -- prove mini-block --in-flight 4   # the backpressure bound
 cargo run --release -p bench -- prove mini-block --out proofs/   # write the proof out
+cargo run --release -p bench -- prove --stateless <fixture.json | input.bin> [--case <name>]
 ```
+
+**`prove --stateless <file>` proves one canonical stateless input with
+`revm-block-stateless`**: an EEST fixture JSON's `statelessInputBytes` — a `tests-zkevm`
+release, or a batch of the zkEVM benchmark's devnet datasets — or a file of nothing but
+those bytes. The bytes reach the guest's advice **unchanged**; the guest is never told it
+was a file. A fixture's `statelessOutputBytes` is the journal the proof must bind, held
+natively before proving — the library is the guest's own code, so a mismatch it shows
+would cost a whole proof to learn — and on the proof after it. A raw file has nothing to
+hold the journal to, so it is printed. `--case` picks one input, by part of its JSON
+path, out of a fixture holding several. A stateless proof carries a `2^18` `KECCAK_F`
+shard, ~60 GB of forward pass, so it is a dev-server job.
 
 **`prove` is `prover::prove_block_streaming`, and since S-STREAM there is no other
 path** (`docs/spec/streaming.md`). `--in-flight <n>` no longer *selects* a path: it is
@@ -35,12 +47,14 @@ field is now always `Some`.
 identity is 64 hex digits from a channel the prover does not control, and `.identity` is
 only what the run claimed (`crates/verifier/CLAUDE.md`).
 
-**`prove` exits 1 when it fails, whatever failed** — a fixture or witness missing, no
-ceremony without `--toy-srs`, a guest that does not build or register, a block that does
-not prove, an `--out` that does not write — with the reason on stderr; a usage error
-exits 2, and what it asserts still panics. An `--out` that does not write fails only
-after the report is printed, because the measurement is still good and cost the whole
-run. Until S-STREAM's review each of these printed a line and exited 0.
+**`prove` exits 1 when it fails, whatever failed** — a fixture, witness, journal or
+stateless input missing, an input empty or not picked out of its file, no ceremony
+without `--toy-srs`, a guest that does not build or register, a block that does not
+prove, a proved journal that is not the expected one, an `--out` that does not write —
+with the reason on stderr; a usage error exits 2, and what it asserts still panics. The
+journal and `--out` fail only after the report is printed, because the measurement is
+still good and cost the whole run. Until S-STREAM's review each of these printed a line
+and exited 0.
 
 **The charter moved by one line at S25, and only one.** It used to read "no assertions, no
 thresholds, no committed output"; the stage requires the report to be committed to its
@@ -64,7 +78,7 @@ commit as any optimization; this is where that benchmark goes.
 | `src/gkr_prove.rs` | `gkr-prove` | S13: the GKR engine's `forward`, `self_check`, `prove` and `verify`, separately, over a circuit built as data (32 narrow committed columns, 339 gates over 20 lists: cached, virtual, enforcing and `Quadratic` gates, then halving lists down to 16 product-tree roots) at 2^18; the forward pass's computed table memory |
 | `src/square.rs` | — | the `A * A - B = 0` instance the two zerocheck routines share |
 | `src/timing.rs` | — | the seed, `REPS`, `Best`, and the formatting helpers |
-| `src/block.rs` | `prove` (a verb) | S25: one recorded block proved end to end and verified, filling a `BenchReport` |
+| `src/block.rs` | `prove` (a verb) | S25: one recorded block — or, since S-STATELESS, one stateless input — proved end to end and verified, filling a `BenchReport` |
 | `src/report.rs` | — | the `BenchReport` schema, frozen at S25, and the machine facts it carries |
 | `src/main.rs` | — | the registry, the one verb, and the argument parsing |
 

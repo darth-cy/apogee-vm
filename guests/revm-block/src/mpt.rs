@@ -54,6 +54,7 @@ use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use crate::rlp::{self, encode_bytes, encode_list, encode_uint, Item, Malformed};
 use crate::{keccak, Word32};
 
 /// `keccak256(rlp(""))` — the root of an empty trie, and what an account with
@@ -87,165 +88,10 @@ pub enum MptError {
     RootMismatch,
 }
 
-// ---------------------------------------------------------------------------
-// RLP
-// ---------------------------------------------------------------------------
-
-/// Append the RLP of a byte string.
-pub fn encode_bytes(out: &mut Vec<u8>, payload: &[u8]) {
-    if payload.len() == 1 && payload[0] < 0x80 {
-        out.push(payload[0]);
-        return;
+impl From<Malformed> for MptError {
+    fn from(_: Malformed) -> MptError {
+        MptError::Malformed
     }
-    encode_header(out, payload.len(), 0x80);
-    out.extend_from_slice(payload);
-}
-
-/// Append the RLP of a list whose payload — the concatenation of its items'
-/// complete encodings — is already built.
-fn encode_list(out: &mut Vec<u8>, payload: &[u8]) {
-    encode_header(out, payload.len(), 0xc0);
-    out.extend_from_slice(payload);
-}
-
-/// Append the RLP of a non-negative integer given big-endian: **minimal**, with
-/// zero as the empty string.
-fn encode_uint(out: &mut Vec<u8>, be: &[u8]) {
-    let start = be.iter().position(|b| *b != 0).unwrap_or(be.len());
-    encode_bytes(out, &be[start..]);
-}
-
-fn encode_header(out: &mut Vec<u8>, len: usize, short: u8) {
-    if len <= 55 {
-        out.push(short + len as u8);
-        return;
-    }
-    let be = (len as u64).to_be_bytes();
-    let start = be
-        .iter()
-        .position(|b| *b != 0)
-        .expect("len > 55 is nonzero");
-    out.push(short + 55 + (8 - start) as u8);
-    out.extend_from_slice(&be[start..]);
-}
-
-/// One RLP item: where its payload is, and whether it is a list.
-struct Item<'a> {
-    list: bool,
-    payload: &'a [u8],
-    /// The item's complete encoding, header included — which is what an
-    /// inlined child needs.
-    whole: &'a [u8],
-}
-
-/// Split one item off the front of `bytes`, strictly.
-///
-/// Every canonical-form rule is enforced, because each one is a second encoding
-/// of one value. They cannot change a *node* — a node is bound by its keccak —
-/// but they are the same rules this module's own encoder must follow, and
-/// checking them on the way in turns a malformed witness into an error instead
-/// of a wrong answer.
-fn split(bytes: &[u8]) -> Result<(Item<'_>, &[u8]), MptError> {
-    let first = *bytes.first().ok_or(MptError::Malformed)?;
-    match first {
-        // A single byte below 0x80 is itself, with no header.
-        0x00..=0x7f => Ok((
-            Item {
-                list: false,
-                payload: &bytes[..1],
-                whole: &bytes[..1],
-            },
-            &bytes[1..],
-        )),
-        0x80..=0xb7 => {
-            let len = (first - 0x80) as usize;
-            let body = bytes.get(1..1 + len).ok_or(MptError::Malformed)?;
-            // A one-byte string below 0x80 is never wrapped.
-            if len == 1 && body[0] < 0x80 {
-                return Err(MptError::Malformed);
-            }
-            Ok((
-                Item {
-                    list: false,
-                    payload: body,
-                    whole: &bytes[..1 + len],
-                },
-                &bytes[1 + len..],
-            ))
-        }
-        0xb8..=0xbf => long(bytes, (first - 0xb7) as usize, false),
-        0xc0..=0xf7 => {
-            let len = (first - 0xc0) as usize;
-            let body = bytes.get(1..1 + len).ok_or(MptError::Malformed)?;
-            Ok((
-                Item {
-                    list: true,
-                    payload: body,
-                    whole: &bytes[..1 + len],
-                },
-                &bytes[1 + len..],
-            ))
-        }
-        0xf8..=0xff => long(bytes, (first - 0xf7) as usize, true),
-    }
-}
-
-fn long(bytes: &[u8], width: usize, list: bool) -> Result<(Item<'_>, &[u8]), MptError> {
-    let size = bytes.get(1..1 + width).ok_or(MptError::Malformed)?;
-    // No leading zero in a length, and the length must not have fitted the
-    // short form.
-    if size[0] == 0 {
-        return Err(MptError::Malformed);
-    }
-    // `usize` is four bytes on the guest, so a wide length is an overflow and
-    // never a silent truncation.
-    if width > core::mem::size_of::<usize>() {
-        return Err(MptError::Malformed);
-    }
-    let mut len = 0usize;
-    for byte in size {
-        len = len.checked_mul(256).ok_or(MptError::Malformed)?;
-        len = len.checked_add(*byte as usize).ok_or(MptError::Malformed)?;
-    }
-    if len <= 55 {
-        return Err(MptError::Malformed);
-    }
-    let at = 1 + width;
-    // `at + len` is arithmetic on a length the node's own bytes declare, so it
-    // is checked. `bytes.get` would refuse an out-of-range slice safely, but
-    // the range has to be *computed* before `get` ever sees it, and on the
-    // guest `usize` is four bytes with `overflow-checks` pinned on in both
-    // profiles -- so `bb ff ff ff ff` panicked here rather than returning
-    // `Malformed`. A panicking guest exits 101 and publishes no journal, so that
-    // run says nothing about the block; it is the rule `Bytecode::new_raw` is
-    // already held to. The node is advice and reaches this line *before*
-    // `check_root`, so the bytes are the prover's to choose.
-    let end = at.checked_add(len).ok_or(MptError::Malformed)?;
-    let body = bytes.get(at..end).ok_or(MptError::Malformed)?;
-    Ok((
-        Item {
-            list,
-            payload: body,
-            whole: &bytes[..end],
-        },
-        &bytes[end..],
-    ))
-}
-
-/// Every item of a list, with nothing left over.
-fn list_items(bytes: &[u8]) -> Result<Vec<Item<'_>>, MptError> {
-    let (head, rest) = split(bytes)?;
-    if !head.list || !rest.is_empty() {
-        return Err(MptError::Malformed);
-    }
-    let mut items = Vec::new();
-    let mut at = head.payload;
-    while !at.is_empty() {
-        let (item, next) = split(at)?;
-        items.push(item);
-        at = next;
-    }
-    Ok(items)
 }
 
 // ---------------------------------------------------------------------------
@@ -255,6 +101,17 @@ fn list_items(bytes: &[u8]) -> Result<Vec<Item<'_>>, MptError> {
 /// A 32-byte trie key as its 64 nibbles, high nibble first.
 pub fn nibbles(key: &Word32) -> Vec<u8> {
     let mut out = Vec::with_capacity(64);
+    for byte in key {
+        out.push(byte >> 4);
+        out.push(byte & 0xf);
+    }
+    out
+}
+
+/// Any byte string as nibbles, high nibble first: the key path of an ordered
+/// trie, whose keys are `rlp(index)` rather than a 32-byte hash.
+pub fn nibbles_of(key: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(2 * key.len());
     for byte in key {
         out.push(byte >> 4);
         out.push(byte & 0xf);
@@ -416,32 +273,32 @@ impl Node {
     }
 }
 
-/// The witness's nodes, keyed by their keccak.
+/// The witness's nodes, keyed by their keccak, borrowed from wherever the
+/// witness lies — on the guest, the advice region, so no node is copied.
 ///
 /// A plain sorted list rather than a map: the guest builds it once, looks up
 /// each node while parsing, and a binary search over a few thousand entries is
 /// cheaper than a hash map it would have to allocate. The keys are already
 /// keccaks, so they are as well distributed as a hash could make them.
-pub struct NodeMap {
-    entries: Vec<(Word32, Vec<u8>)>,
+pub struct NodeMap<'a> {
+    entries: Vec<(Word32, &'a [u8])>,
 }
 
-impl NodeMap {
+impl<'a> NodeMap<'a> {
     /// Hash every node once and sort. A repeated node is kept once; two
     /// different nodes cannot share a hash.
-    pub fn new(nodes: &[Vec<u8>]) -> NodeMap {
-        let mut entries: Vec<(Word32, Vec<u8>)> =
-            nodes.iter().map(|n| (keccak(n), n.clone())).collect();
+    pub fn new(nodes: &[&'a [u8]]) -> NodeMap<'a> {
+        let mut entries: Vec<(Word32, &'a [u8])> = nodes.iter().map(|n| (keccak(n), *n)).collect();
         entries.sort_unstable_by_key(|e| e.0);
         entries.dedup_by(|a, b| a.0 == b.0);
         NodeMap { entries }
     }
 
-    fn get(&self, hash: &Word32) -> Option<&[u8]> {
+    fn get(&self, hash: &Word32) -> Option<&'a [u8]> {
         self.entries
             .binary_search_by(|e| e.0.cmp(hash))
             .ok()
-            .map(|at| self.entries[at].1.as_slice())
+            .map(|at| self.entries[at].1)
     }
 }
 
@@ -455,7 +312,7 @@ impl NodeMap {
 /// The root itself must be present, and the caller should follow this with
 /// [`check_root`], which is the one assertion that catches every parse and
 /// encode bug at the moment it appears rather than as a wrong root at the end.
-pub fn build(db: &NodeMap, root: &Word32) -> Result<Node, MptError> {
+pub fn build(db: &NodeMap<'_>, root: &Word32) -> Result<Node, MptError> {
     if *root == EMPTY_TRIE_ROOT {
         return Ok(Node::Empty);
     }
@@ -480,11 +337,11 @@ pub fn build(db: &NodeMap, root: &Word32) -> Result<Node, MptError> {
 /// `MptError` at all.
 const MAX_DEPTH: usize = 68;
 
-fn parse_at(db: &NodeMap, bytes: &[u8], depth: usize) -> Result<Node, MptError> {
+fn parse_at(db: &NodeMap<'_>, bytes: &[u8], depth: usize) -> Result<Node, MptError> {
     if depth > MAX_DEPTH {
         return Err(MptError::Malformed);
     }
-    let items = list_items(bytes)?;
+    let items = rlp::list_items(bytes)?;
     match items.len() {
         2 => {
             let (path, leaf) = hp_decode(items[0].payload)?;
@@ -523,7 +380,7 @@ fn parse_at(db: &NodeMap, bytes: &[u8], depth: usize) -> Result<Node, MptError> 
 /// The test is the RLP **type**, not the length. A list item is an inlined
 /// node and its whole encoding is the node; a 32-byte string is a hash; the
 /// empty string is an absent child. Any other string width is malformed.
-fn child_of(db: &NodeMap, item: &Item<'_>, depth: usize) -> Result<Node, MptError> {
+fn child_of(db: &NodeMap<'_>, item: &Item<'_>, depth: usize) -> Result<Node, MptError> {
     if item.list {
         return parse_at(db, item.whole, depth + 1);
     }
@@ -856,58 +713,23 @@ pub fn encode_slot(value: &Word32) -> Vec<u8> {
 
 /// The four fields of an account leaf's value.
 pub fn decode_account(bytes: &[u8]) -> Result<(u64, Word32, Word32, Word32), MptError> {
-    let items = list_items(bytes)?;
+    let items = rlp::list_items(bytes)?;
     if items.len() != 4 {
         return Err(MptError::Malformed);
     }
     Ok((
-        uint_of(&items[0])?,
-        word_of(&items[1])?,
-        fixed_of(&items[2])?,
-        fixed_of(&items[3])?,
+        rlp::u64_of(&items[0])?,
+        rlp::word_of(&items[1])?,
+        rlp::fixed::<32>(&items[2])?,
+        rlp::fixed::<32>(&items[3])?,
     ))
-}
-
-fn uint_of(item: &Item<'_>) -> Result<u64, MptError> {
-    if item.list || item.payload.len() > 8 {
-        return Err(MptError::Malformed);
-    }
-    if item.payload.first() == Some(&0) {
-        return Err(MptError::Malformed);
-    }
-    let mut value = 0u64;
-    for byte in item.payload {
-        value = (value << 8) | *byte as u64;
-    }
-    Ok(value)
-}
-
-/// A minimal big-endian integer, left-padded to 32 bytes.
-fn word_of(item: &Item<'_>) -> Result<Word32, MptError> {
-    if item.list || item.payload.len() > 32 {
-        return Err(MptError::Malformed);
-    }
-    if item.payload.first() == Some(&0) {
-        return Err(MptError::Malformed);
-    }
-    let mut out = [0u8; 32];
-    out[32 - item.payload.len()..].copy_from_slice(item.payload);
-    Ok(out)
-}
-
-/// An exactly-32-byte field.
-fn fixed_of(item: &Item<'_>) -> Result<Word32, MptError> {
-    if item.list || item.payload.len() != 32 {
-        return Err(MptError::Malformed);
-    }
-    Ok(item.payload.try_into().expect("thirty-two bytes"))
 }
 
 /// The value a storage leaf holds, as a 32-byte word.
 pub fn decode_slot(bytes: &[u8]) -> Result<Word32, MptError> {
-    let (item, rest) = split(bytes)?;
+    let (item, rest) = rlp::split(bytes)?;
     if !rest.is_empty() {
         return Err(MptError::Malformed);
     }
-    word_of(&item)
+    Ok(rlp::word_of(&item)?)
 }

@@ -44,12 +44,18 @@ path = "src/stateless_main.rs"
 # `ProgramIdentity` is a digest of its compiled image, so a patch bump to any
 # crate in this tree silently moves it -- and with it every identity, output
 # digest and gas number pinned in `crates/emulator/tests/revm.rs`,
-# `crates/prover/tests/revm.rs` and this stage's handoff. `42.0.1` is also the
-# version whose gas schedule those numbers were measured under. Both lockfiles
-# resolve it already -- this crate is in `guests/`' workspace and is a path
-# dependency of `crates/emulator`, `crates/prover` and `tools/kat-gen` in the
-# main one -- and `=` is what stops a `cargo update` in either from moving it
-# without a decision.
+# `crates/prover/tests/revm.rs` and the handoffs. Both lockfiles resolve it --
+# this crate is in `guests/`' workspace and is a path dependency of
+# `crates/emulator`, `crates/prover` and `tools/kat-gen` in the main one.
+#
+# **The pin is the reference stateless guest's revm set, crate for crate**
+# (owner's decision): `paradigmxyz/stateless`'s lock, revm 43.0.1, whose
+# `revm-handler` carries the EIP-8037 system-call state-gas reservoir
+# `tests-zkevm@v21.0.1`'s Amsterdam expects and 43.0.2 reverted. 43.0.1 is
+# yanked, so `=` holds only this facade and only because the lockfiles already
+# contain it; the sub-crates exist in the lockfiles alone, and
+# `crates/host/tests/revm_lock.rs` is what refuses a `cargo update` that moves
+# any of them. It also says how to rebuild the lock from scratch.
 #
 # **This crate takes no `ark-*` dependency and defines no `Crypto` impl**, and
 # both are S26c decisions. The `0x02`, `0x06` and `0x07` routing is in
@@ -59,7 +65,20 @@ path = "src/stateless_main.rs"
 # BLS12-381 and KZG code, which took this image past what a `2^20` decoded table
 # reaches. `guests/vendor/README.md` is the measurement.
 [dependencies]
-revm = { version = "=42.0.1", default-features = false }
+revm = { version = "=43.0.1", default-features = false }
+# The stateless guest recovers every sender and EIP-7702 authority itself
+# (`src/tx.rs`), over k256's own arithmetic -- the crate `revm-precompile`
+# already brings, with the features it already enables, so nothing unifies
+# differently. In the guest workspace `[patch.crates-io]` makes this
+# `guests/vendor/k256`, whose field, scalar and point operations reach the
+# `MOD_MUL` and `EC_ADD` delegations; in the root workspace it is upstream's.
+k256 = { version = "0.13.4", default-features = false, features = ["ecdsa"] }
+# EIP-7928's block access list types, which revm 43's BAL builder produces, and
+# their RLP hash -- `compute_block_access_list_hash` sits behind this crate's
+# `rlp` feature. In the graph already through `revm-state`; the lockfiles
+# resolve 0.4.11 where the reference guest's resolves 0.4.9, and the two differ
+# only by helper methods this crate does not call.
+alloy-eip7928 = { version = "0.4.9", default-features = false, features = ["rlp"] }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 postcard = { version = "1", default-features = false, features = ["alloc"] }
 

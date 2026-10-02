@@ -138,11 +138,18 @@ normalizes first.
 
 ---
 
-## `revm-precompile` 42.0.1 — S26c
+## `revm-precompile` 43.0.2 — S26c, re-vendored at S-STATELESS
 
-Upstream as published, from the same `=42.0.1` `guests/revm-block` pins. Cargo's
+Upstream as published, at the version the reference stateless guest's lock
+resolves beside `revm` 43.0.1 (`crates/host/tests/revm_lock.rs`). Cargo's
 `.cargo-ok` marker and `Cargo.toml.orig` are not copied; every other file is
 byte-identical to the release but the three named below.
+
+**Re-vendored, not re-patched.** S26c vendored 42.0.1. Upstream left
+`src/interface.rs` and `src/bn254/arkworks.rs` byte-identical between 42.0.1 and
+43.0.2, so both patched files carried over verbatim, and `Cargo.toml` takes the
+same one target-dependency block appended to 43.0.2's own. `diff -r` of this
+directory against the 43.0.2 release lists exactly those three files.
 
 **Why.** Ethereum's `0x02`, `0x06` and `0x07` precompiles — SHA-256, BN254
 point addition and BN254 scalar multiplication — are this crate's, and S26c has

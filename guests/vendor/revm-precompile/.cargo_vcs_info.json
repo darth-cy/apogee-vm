@@ -1,6 +1,6 @@
 {
   "git": {
-    "sha1": "129d91cc1032acdf3edc32d4924e9d8a7a49e745"
+    "sha1": "30e94e471766ace1ed1c7457bf243e282aa51104"
   },
   "path_in_vcs": "crates/precompile"
 }

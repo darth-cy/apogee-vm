@@ -26,6 +26,13 @@
 //! the vector that exercises inlining.
 
 use revm_block::mpt::{self, MptError, Node, NodeMap, EMPTY_TRIE_ROOT};
+use revm_block::rlp;
+
+/// A node map over owned nodes: `NodeMap` borrows its nodes, as the guest's
+/// do from the advice region.
+fn map(nodes: &[Vec<u8>]) -> NodeMap<'_> {
+    NodeMap::new(&nodes.iter().map(Vec::as_slice).collect::<Vec<&[u8]>>())
+}
 use revm_block::Word32;
 
 /// A key's nibbles, for the short ASCII keys the published vectors use.
@@ -263,7 +270,7 @@ fn a_sparse_rebuild_round_trips() {
     let root = node.root();
     let mut nodes = Vec::new();
     all_nodes(&node, &mut nodes);
-    let db = NodeMap::new(&nodes);
+    let db = map(&nodes);
     let rebuilt = mpt::build(&db, &root).expect("the root is present");
     mpt::check_root(&rebuilt, &root).expect("the rebuild re-hashes to its root");
     assert_eq!(rebuilt, node, "the rebuilt trie is not the original");
@@ -292,7 +299,7 @@ fn a_partial_rebuild_still_hashes_to_the_root() {
     // Every prefix of the node list: the root alone, the root plus one, and so
     // on. Each must re-hash to the same root.
     for keep in 1..=nodes.len() {
-        let db = NodeMap::new(&nodes[..keep]);
+        let db = map(&nodes[..keep]);
         let rebuilt = mpt::build(&db, &root).expect("the root is present");
         mpt::check_root(&rebuilt, &root).unwrap_or_else(|e| {
             panic!(
@@ -323,7 +330,7 @@ fn a_missing_node_is_not_an_absence() {
     let mut nodes = Vec::new();
     all_nodes(&node, &mut nodes);
     // The root alone: every subtree below it is blinded.
-    let db = NodeMap::new(&nodes[..1]);
+    let db = map(&nodes[..1]);
     let sparse = mpt::build(&db, &root).expect("the root is present");
     let mut blinded = 0;
     for (key, _) in [
@@ -348,7 +355,7 @@ fn a_missing_node_is_not_an_absence() {
 /// A root the witness does not carry is named, not guessed.
 #[test]
 fn a_missing_root_is_named() {
-    let db = NodeMap::new(&[]);
+    let db = map(&[]);
     let mut root = [0u8; 32];
     root[0] = 1;
     assert_eq!(
@@ -405,7 +412,7 @@ fn a_blinded_collapse_is_refused_by_name() {
     );
 
     // With every node, the delete succeeds and collapses.
-    let whole = NodeMap::new(&nodes);
+    let whole = map(&nodes);
     let full = mpt::build(&whole, &root).expect("the root is present");
     let deleted = mpt::remove(full, &mpt::nibbles(&one)).expect("an unblinded delete");
     let rebuilt = mpt::insert(Node::Empty, &mpt::nibbles(&two), value_two.to_vec())
@@ -420,7 +427,7 @@ fn a_blinded_collapse_is_refused_by_name() {
         nodes.len() - 1,
         "exactly the sibling was dropped"
     );
-    let sparse = mpt::build(&NodeMap::new(&without), &root).expect("the root is present");
+    let sparse = mpt::build(&map(&without), &root).expect("the root is present");
     mpt::check_root(&sparse, &root).expect("a blinded sibling still re-hashes");
     match mpt::remove(sparse, &mpt::nibbles(&one)) {
         Err(MptError::BlindedCollapse { hash }) => {
@@ -443,7 +450,7 @@ fn non_canonical_rlp_is_refused() {
         .encode();
     let root = revm_block::keccak(&leaf);
     // The honest node parses.
-    assert!(mpt::build(&NodeMap::new(std::slice::from_ref(&leaf)), &root).is_ok());
+    assert!(mpt::build(&map(std::slice::from_ref(&leaf)), &root).is_ok());
 
     // A node whose bytes are anything else does not hash to `root`, so a
     // malformed node cannot be *substituted* — what these check is that the
@@ -464,7 +471,7 @@ fn non_canonical_rlp_is_refused() {
     for (what, bytes) in cases {
         let hash = revm_block::keccak(&bytes);
         assert!(
-            mpt::build(&NodeMap::new(std::slice::from_ref(&bytes)), &hash).is_err(),
+            mpt::build(&map(std::slice::from_ref(&bytes)), &hash).is_err(),
             "{what} was accepted as a node"
         );
     }
@@ -528,7 +535,7 @@ fn a_storage_value_is_minimal_and_doubly_wrapped() {
         let encoded = mpt::encode_slot(&value);
         assert_eq!(encoded, trie_value, "the trie value for {}", hex(&value));
         let mut leaf_item = Vec::new();
-        mpt::encode_bytes(&mut leaf_item, &encoded);
+        rlp::encode_bytes(&mut leaf_item, &encoded);
         assert_eq!(
             leaf_item,
             wrapped,
@@ -596,7 +603,8 @@ fn an_rlp_length_that_overflows_the_address_space_is_malformed() {
     // is advice, and its keccak is what the prover names as the parent root.
     let node = vec![0xfb, 0xff, 0xff, 0xff, 0xff];
     let root = revm_block::keccak(&node);
-    let db = NodeMap::new(&[node]);
+    let nodes = [node];
+    let db = map(&nodes);
     assert_eq!(mpt::build(&db, &root), Err(MptError::Malformed));
 }
 
@@ -630,14 +638,14 @@ fn a_node_nested_past_the_depth_limit_is_malformed() {
 
         // The innermost node: a terminating leaf, `[0x20, 0x01]`.
         let mut leaf = Vec::new();
-        mpt::encode_bytes(&mut leaf, &[0x20]);
-        mpt::encode_bytes(&mut leaf, &[0x01]);
+        rlp::encode_bytes(&mut leaf, &[0x20]);
+        rlp::encode_bytes(&mut leaf, &[0x01]);
         let mut inner = list(&leaf);
 
         // Each level is an extension whose child is the level below, inlined.
         for _ in 0..depth {
             let mut body = Vec::new();
-            mpt::encode_bytes(&mut body, &[0x11]);
+            rlp::encode_bytes(&mut body, &[0x11]);
             body.extend_from_slice(&inner);
             inner = list(&body);
         }
@@ -647,13 +655,13 @@ fn a_node_nested_past_the_depth_limit_is_malformed() {
     // Shallow nesting parses. This is the control: the limit must not refuse a
     // node a real trie could contain.
     let shallow = nest(2);
-    let db = NodeMap::new(std::slice::from_ref(&shallow));
+    let db = map(std::slice::from_ref(&shallow));
     assert!(mpt::build(&db, &revm_block::keccak(&shallow)).is_ok());
 
     // Deep nesting is refused, and refused as an error rather than an abort.
     // 4,000 levels overflowed an 8 MiB stack before the limit existed.
     let deep = nest(4_000);
-    let db = NodeMap::new(std::slice::from_ref(&deep));
+    let db = map(std::slice::from_ref(&deep));
     assert_eq!(
         mpt::build(&db, &revm_block::keccak(&deep)),
         Err(MptError::Malformed)

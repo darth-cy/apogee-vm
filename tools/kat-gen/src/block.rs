@@ -183,35 +183,6 @@ fn record_mini(image: &loader::ProgramImage, cache: &Path, number: u64) -> Pin {
         "block {number}: the guest's journal is not what native revm computed"
     );
 
-    // The stateless pass over the same touch set: the trie nodes that
-    // authenticate every recorded account and slot against the **real** parent
-    // state root. Committed beside the witness as `mini-block-nodes.bin`, and
-    // what makes `crates/host/tests/stateless.rs` an external check of the
-    // guest's Merkle-Patricia code rather than a check of it against itself.
-    //
-    // It is deliberately NOT a complete stateless witness: `eth_getProof`
-    // carries the nodes on each key's own path and no siblings, so a block that
-    // deletes a key cannot be applied from it. Authentication needs only the
-    // paths, which is why this half is real data and the recomputation half is
-    // synthetic (`docs/handoff/S25-block.md` §4).
-    let parent = number - 1;
-    let (nodes, _, misses) =
-        recorder::collect_nodes(Rpc::new(cache.to_path_buf()), parent, &recording.witness)
-            .unwrap_or_else(|e| panic!("block {number}'s proofs do not collect: {e}"));
-    let stateless = revm_block::StatelessWitness {
-        parent_state_root: recording.parent_state_root,
-        parent_hash: recording.parent_hash,
-        parent_beacon_block_root: None,
-        withdrawals: Vec::new(),
-        nodes,
-    };
-    let stateless_bytes = postcard::to_allocvec(&stateless).expect("a StatelessWitness encodes");
-    println!(
-        "block: {} authenticating trie nodes, {} bytes, {misses} more network calls",
-        stateless.nodes.len(),
-        stateless_bytes.len()
-    );
-
     let gas_used = tx_gas(&journal, recording.witness.txs.len());
     let pin = Pin {
         mode: Mode::Mini,
@@ -239,10 +210,6 @@ fn record_mini(image: &loader::ProgramImage, cache: &Path, number: u64) -> Pin {
     let dir = vectors();
     crate::write_bytes_at(&dir.join(fixture::witness_file(MINI_STEM)), &witness_bytes);
     crate::write_bytes_at(&dir.join(fixture::journal_file(MINI_STEM)), &journal);
-    crate::write_bytes_at(
-        &dir.join(format!("{MINI_STEM}-nodes.bin")),
-        &stateless_bytes,
-    );
     crate::write_bytes_at(&dir.join(fixture::pin_file(MINI_STEM)), &pin.to_bytes());
     println!(
         "block: pinned {number}, {} accounts, {} slots, {} witness bytes, {} journal bytes, \

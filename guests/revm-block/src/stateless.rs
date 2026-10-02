@@ -1,530 +1,664 @@
-//! The **stateless** block transition: the pre-state authenticated against the
-//! parent's state root, the whole block run — system calls, transactions,
-//! withdrawals — and the post-state root recomputed and checked.
+//! The canonical stateless validator: `statelessInputBytes` in, the 43-byte
+//! `statelessOutputBytes` out, exactly as `ethereum/execution-specs`'
+//! `verify_stateless_new_payload` computes them at `tests-zkevm@v21.0.1`.
 //!
-//! This is the second of S25's two modes, and must-be-exact 2 says why they are
-//! two: *"The two modes are SEPARATE guest binary paths. Use two identities for
-//! two modes."* The mini mode ([`crate::run`]) executes a prefix of a block
-//! against its real pre-state and **claims no state root**; this one drives the
-//! complete transition and claims one. They are separate binaries because they
-//! publish different things and because a verifier reading a journal should not
-//! have to ask which of two meanings it has.
+//! **What a result says.** `(new_payload_request_root, successful_validation,
+//! chain_id, schema_id)`: that the payload request whose SSZ root is the first
+//! field is, or is not, valid on the chain `chain_id` under the fork
+//! `schema_id` names, against the state its witness proves. Every input this
+//! guest can decode produces a result, a failed validation included; an input
+//! it cannot decode, or whose fork it does not validate, produces the all-zero
+//! sentinel. The guest itself always exits 0.
 //!
-//! # What the journal says, and why it is not §2's
+//! **What validation is**, in the spec's order (`stateless.py`,
+//! `execution_engine/new_payload.py`, `fork.py`):
 //!
-//! `docs/spec/revm-block.md` §2's output commitment carries a record per
-//! transaction. That is 45 bytes each on this workload, so a 246-transaction
-//! block's would be about 11 KB against a public window's 1,020
-//! (`docs/spec/public-values.md` §3). §2 is **frozen** and this mode does not
-//! amend it: it publishes a journal of its own instead, [`STATELESS_JOURNAL_BYTES`] long
-//! whatever the block, which digests §2's record stream rather than carrying
-//! it. `docs/spec/public-values.md` §9 recommends exactly that —
-//! *"public values are what a verifier reads, and a per-transaction record is
-//! not"*.
+//! 1. The ancestor headers decode and chain by `parent_hash`; the last is the
+//!    parent, its state root the pre-state's, their hashes `BLOCKHASH`'s.
+//! 2. No empty transaction; the header the payload implies hashes to the
+//!    payload's `block_hash`; the blob transactions' versioned hashes are the
+//!    request's; in ere-guests' layout, there is a public key per transaction.
+//! 3. The block is under EIP-7934's size and its header obeys its parent.
+//! 4. The block runs: EIP-4788 and EIP-2935's system calls, every transaction
+//!    — signer recovered and any key held to it, chain id checked, admitted
+//!    against the block's remaining gas and blob gas — then the withdrawals,
+//!    then the requests: deposit logs and the checked system calls of
+//!    EIP-7002, EIP-7251 and, from Amsterdam, EIP-8282.
+//! 5. Gas used, receipts root, logs bloom, blob gas used, requests hash, the
+//!    block access list's size and hash (Amsterdam) and the post-state root are
+//!    the header's.
 //!
-//! The two roots are what make it worth reading. Nothing binds advice, so a
-//! witness is a byte string the prover chose; what a stateless proof says is
-//! **"from the state whose root is P, this block produced the state whose root
-//! is Q"**, and a verifier who knows the real P for this height — from a header
-//! they trust, which is outside the proof, exactly as program identity is —
-//! learns that Q is this block's post-state.
-//!
-//! # The order, which is consensus and not a choice
-//!
-//! 1. EIP-4788's beacon-roots system call, from Cancun.
-//! 2. EIP-2935's block-hash history system call, from Prague.
-//! 3. Every transaction, in order, under the block's running gas bound.
-//! 4. EIP-4895's withdrawals.
-//!
-//! System calls are gas-free and are **not** added to the block's `gasUsed`;
-//! `run_stateless` keeps the running bound over transactions alone, which is
-//! what the Yellow Paper's `gasUsed <= gasLimit` is about.
+//! **How it runs is reth's** (`paradigmxyz/stateless` over `alloy-evm`, the
+//! reference stateless guest): the pre-state behind revm's `State`, and the
+//! block access list index bumped between the system calls before the
+//! transactions, each transaction, and the withdrawals and requests after
+//! them. Each index is one commit, its baselines the committed state's
+//! (`commit_index`), where the reference commits per call. **Where reth and
+//! the spec differ, this is the spec's**, because the canonical result is the
+//! spec's: system contracts must have code, deposit events are parsed to the
+//! byte, withdrawals precede requests, and an Amsterdam transaction's gas
+//! limit is bounded by `TX_MAX_TOTAL_GAS_LIMIT`.
 
-use alloc::format;
-use alloc::string::String;
 use alloc::vec::Vec;
 
-use revm::context::{BlockEnv, CfgEnv};
-use revm::context_interface::result::ExecutionResult;
-use revm::context_interface::{ContextTr, JournalTr};
-use revm::primitives::{address, keccak256, Address, Bytes, Log, U256};
-use revm::state::EvmState;
-use revm::{Context, ExecuteEvm, MainBuilder, MainContext, SystemCallEvm};
-
-use crate::mpt::{self, MptError, Node, NodeMap, EMPTY_TRIE_ROOT};
-use crate::{
-    block_env, encode_logs, tx_env, AccountWitness, Address20, BlockWitness, SpecId,
-    StatelessWitness, WitnessDb, Word32,
+use revm::context::{BlockEnv, CfgEnv, TxEnv};
+use revm::context_interface::block::BlobExcessGasAndPrice;
+use revm::context_interface::either::Either;
+use revm::context_interface::result::{ExecutionResult, Output};
+use revm::context_interface::transaction::{
+    AccessList, AccessListItem, Authorization, RecoveredAuthority, RecoveredAuthorization,
+};
+use revm::context_interface::JournalTr;
+use revm::database::states::bundle_state::BundleRetention;
+use revm::database::{BundleState, State};
+use revm::handler::system_call::SYSTEM_ADDRESS;
+use revm::handler::MainnetContext;
+use revm::primitives::{address, Address, Bytes, TxKind, B256, KECCAK_EMPTY, U256};
+use revm::{
+    Context, Database, ExecuteCommitEvm, ExecuteEvm, MainBuilder, MainContext, MainnetEvm,
+    SystemCallEvm,
 };
 
-/// EIP-4788's beacon-roots contract.
-///
-/// The four system-contract addresses are not public constants anywhere in the
-/// revm 42 tree — they live in `alloy-eips`, which is in neither of this
-/// repository's lockfiles — so they are written here. Each is checked against
-/// its EIP in `crates/host/tests/stateless.rs`.
-const BEACON_ROOTS: Address = address!("0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02");
+use crate::block::{self, Header, HeaderError, Log};
+use crate::mpt::{self, MptError, Node, EMPTY_TRIE_ROOT};
+use crate::ssz::{self, ExecutionWitness, NewPayloadRequest, StatelessInput};
+use crate::tx::{self, Tx};
+use crate::witness::{WitnessDb, WitnessError};
+use crate::{keccak, Address20, Word32};
 
+/// EIP-4788's beacon-roots contract.
+const BEACON_ROOTS: Address = address!("0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02");
 /// EIP-2935's block-hash history contract.
 const HISTORY_STORAGE: Address = address!("0x0000F90827F1C53a10cb7A02335B175320002935");
+/// The checked system calls, in the spec's order, each with the request type
+/// its output becomes. The last two are Amsterdam's (EIP-8282).
+const REQUEST_CONTRACTS: [(Address, u8); 4] = [
+    (address!("0x00000961Ef480Eb55e80D19ad83579A64c007002"), 1),
+    (address!("0x0000BBdDc7CE488642fb579F8B00f3a590007251"), 2),
+    (address!("0x0000BFF46984E3725691FA540A8C7589300D8282"), 3),
+    (address!("0x000064D678505AD48F8CCB093BC65613800E8282"), 4),
+];
 
-/// EIP-7002's withdrawal-request predeploy.
-const WITHDRAWAL_REQUESTS: Address = address!("0x00000961Ef480Eb55e80D19ad83579A64c007002");
+/// Gwei to wei.
+const GWEI: u128 = 1_000_000_000;
 
-/// EIP-7251's consolidation-request predeploy.
-const CONSOLIDATION_REQUESTS: Address = address!("0x0000BBdDc7CE488642fb579F8B00f3a590007251");
+/// EIP-7825's per-transaction execution-gas cap.
+const TX_MAX_GAS_LIMIT: u64 = 1 << 24;
+/// EIP-8037's per-transaction gas-limit cap, from Amsterdam.
+const TX_MAX_TOTAL_GAS_LIMIT: u64 = u32::MAX as u64;
+/// EIP-7928's gas per block-access-list item.
+const BAL_ITEM_COST: u64 = 2000;
 
-/// Gwei to wei. A withdrawal's amount is the consensus layer's unit.
-const GWEI: u64 = 1_000_000_000;
-
-/// The stateless mode's journal: 148 bytes, whatever the block.
-///
-/// ```text
-///   parent_state_root     32 bytes   what the pre-state was authenticated against
-///   post_state_root       32 bytes   what this execution recomputed
-///   block_number           8 bytes LE
-///   gas_used               8 bytes LE  transactions only; system calls are gas-free
-///   tx_count               4 bytes LE
-///   receipts_commitment   32 bytes   keccak256 of `docs/spec/revm-block.md` §2's
-///                                    per-transaction record stream
-///   logs_commitment       32 bytes   keccak256 of §2.1
-/// ```
-///
-/// The two commitments are §2's own encodings, digested rather than carried, so
-/// a reader who wants the records can recompute them from the witness and check
-/// the digest. There is no post-state *summary* (§2.2): the post-state **root**
-/// supersedes it, being a commitment to the whole state rather than to the part
-/// this execution touched.
-pub const STATELESS_JOURNAL_BYTES: usize = 148;
-
-/// Everything [`run_stateless`] refuses.
-///
-/// One variant per thing that can be wrong with a witness, because the guest's
-/// exit status is all a failing run leaves behind and "the block did not run"
-/// is not a useful thing to publish.
+/// The one thing that made a payload invalid — for a test to name; the guest
+/// publishes only that it was.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum StatelessError {
-    /// The witness carries no stateless section, so it is a mini-block witness
-    /// and this is the wrong binary for it.
-    NotStateless,
-    /// A trie node is malformed, missing, or the sparse trie does not re-hash
-    /// to the root the witness claims.
-    Trie(MptError),
-    /// A recorded account is not what the state trie says it is at
-    /// `parent_state_root`. **The witness is unauthenticated and the run
-    /// stops** — must-be-exact 3.
-    Unauthenticated { address: Address20 },
-    /// A recorded storage slot is not what the account's storage trie says.
-    UnauthenticatedSlot { address: Address20, key: Word32 },
-    /// The recomputed post-state root is not the one the block claims.
-    RootMismatch { computed: Word32, claimed: Word32 },
-    /// revm refused something, or the block's gas bound did.
-    NotExecutable(String),
+pub enum Invalid {
+    /// No parent, or an ancestor that does not decode or does not chain.
+    Ancestors,
+    EmptyTransaction,
+    /// A base fee past `u64`, or a blob gas price past `u128`, which revm
+    /// cannot represent and no real block holds.
+    Unrepresentable,
+    BlockHash,
+    /// Transaction `i` does not decode.
+    Transaction(usize),
+    VersionedHashes,
+    BlockSize,
+    Header(HeaderError),
+    Witness(WitnessError),
+    /// Transaction `i`'s signature does not recover.
+    Signature(usize),
+    /// The input carries public keys, and they are not one per transaction,
+    /// each `0x04 ‖ x ‖ y` naming the sender its signature recovers.
+    PublicKeys,
+    ChainId(usize),
+    /// Transaction `i` does not fit the block's remaining gas, state gas or
+    /// blob gas, or exceeds Amsterdam's total cap.
+    Capacity(usize),
+    /// revm refused transaction `i`, or read a witness that failed it.
+    Execution(usize),
+    /// A system call errored, or a checked one had no code or did not succeed.
+    SystemCall,
+    Deposits,
+    GasUsed,
+    ReceiptsRoot,
+    Bloom,
+    BlobGasUsed,
+    RequestsHash,
+    /// The block access list exceeds its gas limit or is not the header's.
+    AccessList,
+    StateRoot,
 }
 
-impl From<MptError> for StatelessError {
-    fn from(e: MptError) -> StatelessError {
-        StatelessError::Trie(e)
+impl From<WitnessError> for Invalid {
+    fn from(e: WitnessError) -> Invalid {
+        Invalid::Witness(e)
     }
 }
 
-/// Run the whole block statelessly and return the journal's bytes.
-///
-/// `claimed_state_root` is the header's, and the run fails if the
-/// recomputation does not equal it. It is an argument rather than a witness
-/// field on purpose: a value the witness carried would be a value the prover
-/// chose to be compared against itself. The caller — `src/stateless_main.rs` —
-/// takes it from the **public input**, which the statement binds
-/// (`docs/spec/public-values.md` §5.1), so the comparison is against something
-/// outside the advice.
-pub fn run_stateless(
-    witness: &BlockWitness,
-    claimed_state_root: &Word32,
-) -> Result<Vec<u8>, StatelessError> {
-    let stateless = witness
-        .stateless
+impl From<MptError> for Invalid {
+    fn from(e: MptError) -> Invalid {
+        Invalid::Witness(WitnessError::Trie(e))
+    }
+}
+
+/// The guest's whole computation: `statelessInputBytes` to
+/// `statelessOutputBytes`.
+pub fn run(input: &[u8]) -> [u8; 43] {
+    let Some(input) = ssz::decode(input) else {
+        return ssz::SENTINEL;
+    };
+    let root = ssz::request_root(&input.request, input.fork.amsterdam);
+    let valid = verify(&input).is_ok();
+    ssz::result(&root, valid, input.chain_id, input.fork.schema_id)
+}
+
+/// Validate a decoded input; `Err` names the first rule it breaks.
+pub fn verify(input: &StatelessInput<'_>) -> Result<(), Invalid> {
+    let fork = &input.fork;
+    let request = &input.request;
+    let payload = &request.payload;
+
+    // 1. The ancestor chain.
+    let (parent, parent_hash, block_hashes) =
+        ancestors(&input.witness, fork.amsterdam, payload.block_number)?;
+
+    // 2. The header the payload implies, its hash, and the versioned hashes.
+    if payload.transactions.iter().any(|t| t.is_empty()) {
+        return Err(Invalid::EmptyTransaction);
+    }
+    let header = payload_header(request)?;
+    let header_rlp = header.encode();
+    if keccak(&header_rlp) != payload.block_hash {
+        return Err(Invalid::BlockHash);
+    }
+    let txs = payload
+        .transactions
+        .iter()
+        .enumerate()
+        .map(|(i, bytes)| tx::decode(bytes).map_err(|_| Invalid::Transaction(i)))
+        .collect::<Result<Vec<Tx<'_>>, Invalid>>()?;
+    if input
+        .public_keys
         .as_ref()
-        .ok_or(StatelessError::NotStateless)?;
-    let spec = witness
-        .env
-        .spec()
-        .ok_or_else(|| StatelessError::NotExecutable(format!("spec id {}", witness.env.spec_id)))?;
-
-    // 1. Build the sparse state trie and authenticate it against the parent's
-    //    root. One assertion, and it is the one that catches every parse or
-    //    encode bug at the moment it appears: a blinded subtree re-encodes to
-    //    its own hash verbatim, so an untouched trie round-trips exactly.
-    let db = NodeMap::new(&stateless.nodes);
-    let mut state = mpt::build(&db, &stateless.parent_state_root)?;
-    mpt::check_root(&state, &stateless.parent_state_root)?;
-
-    // 2. Every recorded value is what the authenticated trie says it is.
-    //    Resolving a reference through the node map *is* the authentication, so
-    //    what is left is to check that the witness agrees with what the walk
-    //    finds — and an unauthenticated entry is a hard stop, never a default.
-    let mut storage: Vec<Node> = Vec::with_capacity(witness.accounts.len());
-    for account in &witness.accounts {
-        storage.push(authenticate(&db, &state, account)?);
+        .is_some_and(|keys| keys.len() != txs.len())
+    {
+        return Err(Invalid::PublicKeys);
+    }
+    let blob_hashes: Vec<Word32> = txs
+        .iter()
+        .filter(|t| t.tx_type == 3)
+        .flat_map(|t| t.blob_hashes.iter().copied())
+        .collect();
+    if blob_hashes != request.versioned_hashes {
+        return Err(Invalid::VersionedHashes);
     }
 
-    // 3. The execution, against the witness's own values — which step 2 has now
-    //    tied to the parent state root.
-    let (results, evm_state, gas_used) = execute(witness, spec, stateless)?;
-
-    // 4. The post-state, applied to the tries.
-    let post = apply(&mut state, &mut storage, witness, &evm_state, spec)?;
-    if post != *claimed_state_root {
-        return Err(StatelessError::RootMismatch {
-            computed: post,
-            claimed: *claimed_state_root,
-        });
+    // 3. Size, and the header against its parent.
+    let withdrawals: Vec<Vec<u8>> = payload
+        .withdrawals
+        .iter()
+        .map(block::encode_withdrawal)
+        .collect();
+    if block::block_rlp_len(&header_rlp, &payload.transactions, &withdrawals)
+        > block::MAX_RLP_BLOCK_SIZE
+    {
+        return Err(Invalid::BlockSize);
     }
+    block::validate_header(fork, &parent, &parent_hash, &header).map_err(Invalid::Header)?;
+    let blob_price =
+        block::blob_gas_price(fork, header.excess_blob_gas).ok_or(Invalid::Unrepresentable)?;
 
-    Ok(journal(
-        &stateless.parent_state_root,
-        &post,
-        &witness.env.number,
-        gas_used,
-        &results,
-    ))
+    // 4. The block.
+    let db = WitnessDb::new(
+        &parent.state_root,
+        &input.witness.state,
+        &input.witness.codes,
+        block_hashes,
+    )?;
+    let mut state = State::builder()
+        .with_database(db)
+        .with_bundle_update()
+        .with_bal_builder_if(fork.amsterdam)
+        .build();
+    let out = execute(input, &header, &txs, &mut state, blob_price)?;
+
+    // 5. What the header claims.
+    if out.gas_used != header.gas_used {
+        return Err(Invalid::GasUsed);
+    }
+    if block::ordered_root(&out.receipts) != header.receipts_root {
+        return Err(Invalid::ReceiptsRoot);
+    }
+    if block::logs_bloom(&out.logs) != header.bloom {
+        return Err(Invalid::Bloom);
+    }
+    if out.blob_gas_used != header.blob_gas_used {
+        return Err(Invalid::BlobGasUsed);
+    }
+    if block::requests_hash(&out.requests) != header.requests_hash {
+        return Err(Invalid::RequestsHash);
+    }
+    if fork.amsterdam {
+        let bal = state.take_built_alloy_bal().ok_or(Invalid::AccessList)?;
+        if alloy_eip7928::total_bal_items(&bal) > header.gas_limit / BAL_ITEM_COST {
+            return Err(Invalid::AccessList);
+        }
+        if Some(alloy_eip7928::compute_block_access_list_hash(&bal).0)
+            != header.block_access_list_hash
+        {
+            return Err(Invalid::AccessList);
+        }
+    }
+    state.merge_transitions(BundleRetention::PlainState);
+    let bundle = state.take_bundle();
+    if post_state_root(&mut state.database, &bundle)? != header.state_root {
+        return Err(Invalid::StateRoot);
+    }
+    Ok(())
 }
 
-/// One account's recorded values against the state trie, and its storage trie
-/// built and authenticated.
-fn authenticate(
-    db: &NodeMap,
-    state: &Node,
-    account: &AccountWitness,
-) -> Result<Node, StatelessError> {
-    let key = keccak256(account.address).0;
-    let leaf = mpt::get(state, &mpt::nibbles(&key))?;
-    let empty_code_hash = keccak256([]).0;
-    let code_hash = if account.code.is_empty() {
-        empty_code_hash
-    } else {
-        keccak256(&account.code).0
-    };
+/// `(number, hash)` for every ancestor, ascending: what `BLOCKHASH` reads.
+type BlockHashes = Vec<(u64, Word32)>;
 
-    let storage_root = match leaf {
-        None => {
-            // The trie proves the account absent, so the witness must say so
-            // too — with every field zero, which is the one shape `WitnessDb`
-            // reports to revm as `None`.
-            // Every field zero, `slots` included: an account the trie does not
-            // have has no storage either, and a recorded slot on one would be
-            // a value `WitnessDb` served that nothing authenticated.
-            if account.nonce != 0
-                || account.balance != [0u8; 32]
-                || !account.code.is_empty()
-                || !account.slots.is_empty()
-            {
-                return Err(StatelessError::Unauthenticated {
-                    address: account.address,
-                });
+/// The ancestor headers, decoded and chained: the parent, its hash, and the
+/// `(number, hash)` every ancestor answers `BLOCKHASH` with.
+///
+/// A header's number for `BLOCKHASH` is its **position**, counted back from
+/// the block's own, as the spec indexes `block_hashes`; on a chain that
+/// validates, that is also the number each header carries.
+fn ancestors(
+    witness: &ExecutionWitness<'_>,
+    amsterdam: bool,
+    number: u64,
+) -> Result<(Header, Word32, BlockHashes), Invalid> {
+    let mut hashes: Vec<Word32> = Vec::with_capacity(witness.headers.len());
+    let mut parent = None;
+    for bytes in &witness.headers {
+        let header = Header::decode(bytes, amsterdam).map_err(|_| Invalid::Ancestors)?;
+        if let Some(previous) = hashes.last() {
+            if header.parent_hash != *previous {
+                return Err(Invalid::Ancestors);
             }
-            EMPTY_TRIE_ROOT
         }
-        Some(bytes) => {
-            let (nonce, balance, storage_root, trie_code_hash) = mpt::decode_account(&bytes)?;
-            if nonce != account.nonce || balance != account.balance || trie_code_hash != code_hash {
-                return Err(StatelessError::Unauthenticated {
-                    address: account.address,
-                });
-            }
-            storage_root
-        }
-    };
-
-    // **Only materialise a storage trie when there is something in it to
-    // authenticate.** An account whose slots the execution never reads needs no
-    // storage node, and a witness that carried them would be carrying weight
-    // nobody checks — `eth_getProof` does not return them either, which is how
-    // this was found. `Blinded` is the representation for exactly that: it
-    // re-encodes to its own hash, so the account's leaf keeps the storage root
-    // it had, and any attempt to *update* it is `MissingNode` rather than a
-    // silently empty trie. A slot written is a slot read first, so an account
-    // with no recorded slots has no storage change either.
-    if account.slots.is_empty() {
-        return Ok(if storage_root == EMPTY_TRIE_ROOT {
-            Node::Empty
-        } else {
-            Node::Blinded(storage_root)
-        });
+        hashes.push(keccak(bytes));
+        parent = Some(header);
     }
-    let trie = mpt::build(db, &storage_root)?;
-    mpt::check_root(&trie, &storage_root)?;
-    for (slot, value) in &account.slots {
-        let key = keccak256(slot).0;
-        let found = match mpt::get(&trie, &mpt::nibbles(&key))? {
-            // A slot absent from the trie is zero, which is not a default: the
-            // walk *proved* it absent, and a missing node would have been
-            // `MptError::MissingNode` rather than `None`.
-            None => [0u8; 32],
-            Some(bytes) => mpt::decode_slot(&bytes)?,
-        };
-        if found != *value {
-            return Err(StatelessError::UnauthenticatedSlot {
-                address: account.address,
-                key: *slot,
-            });
-        }
-    }
-    Ok(trie)
+    let parent = parent.ok_or(Invalid::Ancestors)?;
+    let n = hashes.len() as u64;
+    let block_hashes = hashes
+        .iter()
+        .enumerate()
+        .filter_map(|(i, hash)| Some((number.checked_sub(n - i as u64)?, *hash)))
+        .collect();
+    Ok((parent, *hashes.last().expect("a parent"), block_hashes))
 }
 
-/// The system calls, the transactions and the withdrawals, in consensus order.
+/// `validation_helpers.py::_payload_header`: the header a payload request
+/// implies, its three derived roots computed from the request.
+fn payload_header(request: &NewPayloadRequest<'_>) -> Result<Header, Invalid> {
+    let p = &request.payload;
+    // A `uint256`, little-endian; revm's base fee is a `u64`.
+    if p.base_fee_per_gas[8..].iter().any(|b| *b != 0) {
+        return Err(Invalid::Unrepresentable);
+    }
+    let base_fee = u64::from_le_bytes(p.base_fee_per_gas[..8].try_into().expect("eight bytes"));
+    let withdrawals: Vec<Vec<u8>> = p.withdrawals.iter().map(block::encode_withdrawal).collect();
+    // `encode_execution_requests`: each non-empty list as `type ‖ items`, in
+    // type order.
+    let mut requests = Vec::new();
+    for (kind, items) in request.requests.iter().enumerate() {
+        if !items.is_empty() {
+            let mut typed = Vec::with_capacity(1 + items.len());
+            typed.push(kind as u8);
+            typed.extend_from_slice(items);
+            requests.push(typed);
+        }
+    }
+    let transactions: Vec<Vec<u8>> = p.transactions.iter().map(|t| t.to_vec()).collect();
+    Ok(Header {
+        parent_hash: p.parent_hash,
+        ommers_hash: block::EMPTY_OMMER_HASH,
+        coinbase: p.fee_recipient,
+        state_root: p.state_root,
+        transactions_root: block::ordered_root(&transactions),
+        receipts_root: p.receipts_root,
+        bloom: p.logs_bloom,
+        difficulty: [0u8; 32],
+        number: p.block_number,
+        gas_limit: p.gas_limit,
+        gas_used: p.gas_used,
+        timestamp: p.timestamp,
+        extra_data: p.extra_data.to_vec(),
+        prev_randao: p.prev_randao,
+        nonce: [0u8; 8],
+        base_fee_per_gas: base_fee,
+        withdrawals_root: block::ordered_root(&withdrawals),
+        blob_gas_used: p.blob_gas_used,
+        excess_blob_gas: p.excess_blob_gas,
+        parent_beacon_block_root: request.parent_beacon_block_root,
+        requests_hash: block::requests_hash(&requests),
+        block_access_list_hash: p.block_access_list.map(keccak),
+        slot_number: p.slot_number,
+    })
+}
+
+/// What a block's execution produced, for step 5.
+struct Executed {
+    gas_used: u64,
+    receipts: Vec<Vec<u8>>,
+    logs: Vec<Log>,
+    blob_gas_used: u64,
+    requests: Vec<Vec<u8>>,
+}
+
+/// `fork.py::apply_body`, on revm, at reth's commit granularity.
 fn execute(
-    witness: &BlockWitness,
-    spec: SpecId,
-    stateless: &StatelessWitness,
-) -> Result<(Vec<ExecutionResult>, EvmState, u64), StatelessError> {
-    let mut cfg = CfgEnv::new_with_spec(spec);
-    cfg.chain_id = witness.env.chain_id;
-    let block: BlockEnv = block_env(&witness.env);
+    input: &StatelessInput<'_>,
+    header: &Header,
+    txs: &[Tx<'_>],
+    state: &mut State<WitnessDb<'_>>,
+    blob_price: u128,
+) -> Result<Executed, Invalid> {
+    let (fork, chain_id, payload) = (&input.fork, input.chain_id, &input.request.payload);
+    let mut cfg = CfgEnv::new_with_spec(fork.spec);
+    cfg.chain_id = chain_id;
+    cfg.set_max_blobs_per_tx(block::MAX_BLOBS_PER_TX);
+    let block_env = BlockEnv {
+        number: U256::from(header.number),
+        beneficiary: Address::from(header.coinbase),
+        timestamp: U256::from(header.timestamp),
+        gas_limit: header.gas_limit,
+        basefee: header.base_fee_per_gas,
+        difficulty: U256::ZERO,
+        prevrandao: Some(B256::new(header.prev_randao)),
+        blob_excess_gas_and_price: Some(BlobExcessGasAndPrice {
+            excess_blob_gas: header.excess_blob_gas,
+            blob_gasprice: blob_price,
+        }),
+        slot_num: header.slot_number.unwrap_or(0),
+    };
     let mut evm = Context::mainnet()
-        .with_db(WitnessDb::new(witness))
-        .with_block(block)
+        .with_db(&mut *state)
+        .with_block(block_env)
         .with_cfg(cfg)
         .build_mainnet();
 
-    // 1. EIP-4788, from Cancun: the parent beacon block root into the
-    //    beacon-roots contract. `system_call_one` and not `system_call`,
-    //    because the latter finalizes and this block keeps one journal across
-    //    every call and transaction and finalizes exactly once.
-    if spec.is_enabled_in(SpecId::CANCUN) {
-        if let Some(root) = stateless.parent_beacon_block_root {
-            evm.system_call_one(BEACON_ROOTS, Bytes::copy_from_slice(&root))
-                .map_err(|e| StatelessError::NotExecutable(format!("the 4788 system call: {e}")))?;
+    // Before the transactions, at block access index 0: unchecked, so a
+    // reverting call is committed like any other and only an error fails.
+    for (contract, data) in [
+        (BEACON_ROOTS, header.parent_beacon_block_root),
+        (HISTORY_STORAGE, header.parent_hash),
+    ] {
+        evm.system_call_one_with_caller(SYSTEM_ADDRESS, contract, Bytes::copy_from_slice(&data))
+            .map_err(|_| Invalid::SystemCall)?;
+    }
+    commit_index(&mut evm)?;
+
+    let mut cumulative: u64 = 0;
+    let mut regular: u64 = 0;
+    let mut state_gas: u64 = 0;
+    let mut blob_gas_used: u64 = 0;
+    let mut receipts = Vec::with_capacity(txs.len());
+    let mut logs: Vec<Log> = Vec::new();
+    let max_blob_gas = fork.blob_max * block::GAS_PER_BLOB;
+    for (i, tx) in txs.iter().enumerate() {
+        evm.ctx.journaled_state.database.bump_bal_index();
+        if tx.chain_id.is_some_and(|c| c != chain_id) {
+            return Err(Invalid::ChainId(i));
         }
-    }
-    // 2. EIP-2935, from Prague: the parent hash into the history contract.
-    if spec.is_enabled_in(SpecId::PRAGUE) {
-        evm.system_call_one(
-            HISTORY_STORAGE,
-            Bytes::copy_from_slice(&stateless.parent_hash),
-        )
-        .map_err(|e| StatelessError::NotExecutable(format!("the 2935 system call: {e}")))?;
-    }
-
-    // 3. The transactions, under the block's running gas bound — the same rule
-    //    `crate::run` applies and for the same reason (`docs/spec/revm-block.md`
-    //    §1.4): revm checks one transaction against the header and has no
-    //    cumulative gas of its own, and this function is the block executor.
-    let mut results = Vec::with_capacity(witness.txs.len());
-    let mut gas_used: u64 = 0;
-    for (i, tx) in witness.txs.iter().enumerate() {
-        let remaining = witness.env.gas_limit - gas_used;
-        if tx.gas_limit > remaining {
-            return Err(StatelessError::NotExecutable(format!(
-                "transaction {i}'s gas limit {} does not fit in the block's remaining {remaining}",
-                tx.gas_limit
-            )));
+        let sender = tx::sender(tx).ok_or(Invalid::Signature(i))?;
+        // A key is checked, never trusted: the sender is the one recovered,
+        // and the key must name it, as ere-guests' reth guest holds it.
+        if let Some(keys) = &input.public_keys {
+            let key = keys.get(i).ok_or(Invalid::PublicKeys)?;
+            if key[0] != 0x04 || tx::address_of(key) != sender {
+                return Err(Invalid::PublicKeys);
+            }
         }
-        let result: ExecutionResult = evm
-            .transact_one(tx_env(tx))
-            .map_err(|e| StatelessError::NotExecutable(format!("transaction {i}: {e}")))?;
-        gas_used = gas_used
-            .checked_add(result.tx_gas_used())
-            .filter(|total| *total <= witness.env.gas_limit)
-            .ok_or_else(|| {
-                StatelessError::NotExecutable(format!(
-                    "transaction {i} took the block past its gas limit"
-                ))
-            })?;
-        results.push(result);
+        let blob_gas = tx.blob_hashes.len() as u64 * block::GAS_PER_BLOB;
+        let fits = if fork.amsterdam {
+            tx.gas_limit <= TX_MAX_TOTAL_GAS_LIMIT
+                && tx.gas_limit.min(TX_MAX_GAS_LIMIT) <= header.gas_limit.saturating_sub(regular)
+                && tx.gas_limit <= header.gas_limit.saturating_sub(state_gas)
+        } else {
+            tx.gas_limit <= header.gas_limit.saturating_sub(cumulative)
+        };
+        if !fits || blob_gas > max_blob_gas.saturating_sub(blob_gas_used) {
+            return Err(Invalid::Capacity(i));
+        }
+        let result = evm
+            .transact_commit(tx_env(tx, sender))
+            .map_err(|_| Invalid::Execution(i))?;
+        let gas = result.gas();
+        cumulative = cumulative.saturating_add(gas.tx_gas_used());
+        regular = regular.saturating_add(gas.block_regular_gas_used());
+        state_gas = state_gas.saturating_add(gas.block_state_gas_used());
+        blob_gas_used += blob_gas;
+        let tx_logs: Vec<Log> = result
+            .logs()
+            .iter()
+            .map(|log| Log {
+                address: log.address.0 .0,
+                topics: log.topics().iter().map(|t| t.0).collect(),
+                data: log.data.data.to_vec(),
+            })
+            .collect();
+        receipts.push(block::encode_receipt(
+            tx.tx_type,
+            result.is_success(),
+            cumulative,
+            &tx_logs,
+        ));
+        logs.extend(tx_logs);
     }
 
-    // 4. EIP-7002 and 5. EIP-7251, both from Prague and both **post**-block:
-    //    the withdrawal-request and consolidation-request predeploys. revm
-    //    makes neither for you -- `revm-handler`'s `SystemCallEvm` says in as
-    //    many words that the client should make the calls an EIP requires
-    //    before or after block execution -- and each dequeues its request queue
-    //    and rewrites the queue head and tail, the excess counter and the
-    //    per-block count. A block with either queue non-empty reaches a root
-    //    the header does not carry without them.
-    //
-    //    They are called with **empty** input: an empty calldata is the system
-    //    call, where a non-empty one is a user's request submission, and the
-    //    two are different code paths in the same predeploy.
-    //
-    //    Here rather than after the withdrawals because that is the order
-    //    go-ethereum's `Process` uses. Nothing rests on it: the two predeploys
-    //    and the withdrawal recipients are disjoint accounts, so the two
-    //    orderings give the same root.
-    if spec.is_enabled_in(SpecId::PRAGUE) {
-        evm.system_call_one(WITHDRAWAL_REQUESTS, Bytes::new())
-            .map_err(|e| StatelessError::NotExecutable(format!("the 7002 system call: {e}")))?;
-        evm.system_call_one(CONSOLIDATION_REQUESTS, Bytes::new())
-            .map_err(|e| StatelessError::NotExecutable(format!("the 7251 system call: {e}")))?;
-    }
-
-    // 6. EIP-4895's withdrawals. revm models none of this — a grep for
-    //    `withdrawal` across all twelve revm 42 crates finds nothing — so the
-    //    block executor credits them itself. Through the **journal**, not the
-    //    database: `finalize` returns the journal's own state map, so a credit
-    //    made straight to the database would change every later read and be
-    //    invisible in the post-state.
-    for withdrawal in &stateless.withdrawals {
-        let wei = U256::from(withdrawal.amount_gwei) * U256::from(GWEI);
+    // After the transactions, at block access index N + 1: the withdrawals,
+    // then the requests. A zero-amount withdrawal still touches its recipient,
+    // which puts it in the access list and, empty, keeps it out of the state.
+    evm.ctx.journaled_state.database.bump_bal_index();
+    for w in &payload.withdrawals {
         evm.ctx
-            .journal_mut()
-            .balance_incr(Address::from(withdrawal.address), wei)
-            .map_err(|e| {
-                StatelessError::NotExecutable(format!("withdrawal {}: {e}", withdrawal.index))
-            })?;
+            .journaled_state
+            .balance_incr(
+                Address::from(w.address),
+                U256::from(u128::from(w.amount) * GWEI),
+            )
+            .map_err(|_| Invalid::SystemCall)?;
     }
-    // Seal them: a later failure would otherwise run `discard_tx` and silently
-    // revert the credits.
-    evm.ctx.journal_mut().commit_tx();
 
-    let state = evm.finalize();
-    Ok((results, state, gas_used))
+    let mut requests = Vec::new();
+    let deposits = block::deposit_requests(&logs).ok_or(Invalid::Deposits)?;
+    if !deposits.is_empty() {
+        requests.push([&[0u8][..], &deposits].concat());
+    }
+    let checked = if fork.amsterdam { 4 } else { 2 };
+    for (contract, kind) in &REQUEST_CONTRACTS[..checked] {
+        // The spec refuses a block whose system contract has no code, read at
+        // the current state; revm alone would call it and succeed.
+        let code_hash = Database::basic(&mut *evm.ctx.journaled_state.database, *contract)
+            .map_err(|_| Invalid::SystemCall)?
+            .map_or(KECCAK_EMPTY, |info| info.code_hash);
+        if code_hash == KECCAK_EMPTY {
+            return Err(Invalid::SystemCall);
+        }
+        let output = match evm.system_call_one_with_caller(SYSTEM_ADDRESS, *contract, Bytes::new())
+        {
+            Ok(ExecutionResult::Success { output, .. }) => match output {
+                Output::Call(data) => data,
+                Output::Create(data, _) => data,
+            },
+            _ => return Err(Invalid::SystemCall),
+        };
+        if !output.is_empty() {
+            requests.push([&[*kind][..], &output].concat());
+        }
+    }
+    commit_index(&mut evm)?;
+
+    let gas_used = if fork.amsterdam {
+        regular.max(state_gas)
+    } else {
+        cumulative
+    };
+    Ok(Executed {
+        gas_used,
+        receipts,
+        logs,
+        blob_gas_used,
+        requests,
+    })
 }
 
-/// Apply the finalized state to the tries and return the new state root.
-fn apply(
-    state: &mut Node,
-    storage: &mut [Node],
-    witness: &BlockWitness,
-    evm_state: &EvmState,
-    spec: SpecId,
-) -> Result<Word32, StatelessError> {
-    // revm's state is a hash map, whose order is neither stable across runs nor
-    // the same on a 32-bit guest as on a 64-bit host. Sorting is what makes the
-    // recomputation deterministic — the same reason
-    // `docs/spec/revm-block.md` §2.2 sorts.
-    let mut touched: Vec<(&Address, &revm::state::Account)> = evm_state.iter().collect();
-    touched.sort_unstable_by_key(|(address, _)| **address);
+/// The EVM a block runs on.
+type BlockEvm<'s, 'w> = MainnetEvm<MainnetContext<&'s mut State<WitnessDb<'w>>>>;
 
-    for (address, account) in touched {
-        if !account.is_touched() {
-            // Loaded and read, never written: the trie does not move.
-            continue;
+/// Commit the journal as one block access index: the system calls before the
+/// transactions, or the withdrawals and the system calls after them.
+///
+/// **One commit per index, and every baseline the index's.** revm's
+/// access-list builder records a value written at an index when it differs
+/// from the baseline the commit carries, and revm moves each value's baseline
+/// to the start of every call that touches it — EIP-2200 meters a slot against
+/// it. An index of several calls committed as revm finalizes it would net each
+/// value against the call that last touched it, so a slot one call toggles and
+/// the next restores, or a withdrawal a dequeue forwards on, would be a write
+/// where the spec's list has none. Each baseline is set back to the committed
+/// state — what the index began with — which is also what `State`'s own commit
+/// assumes a baseline to be.
+fn commit_index(evm: &mut BlockEvm<'_, '_>) -> Result<(), Invalid> {
+    let mut changes = evm.finalize();
+    let db = &mut *evm.ctx.journaled_state.database;
+    for (address, account) in changes.iter_mut() {
+        *account.original_info_mut() = Database::basic(db, *address)
+            .map_err(|_| Invalid::SystemCall)?
+            .unwrap_or_default();
+        for (key, slot) in account.storage.iter_mut() {
+            slot.original_value =
+                Database::storage(db, *address, *key).map_err(|_| Invalid::SystemCall)?;
         }
-        let key = keccak256(address).0;
-        let path = mpt::nibbles(&key);
+    }
+    evm.commit(changes);
+    Ok(())
+}
 
-        // EIP-161: an account that is touched and **empty at the end of the
-        // block** is removed. Emptiness is the whole test, and
-        // `is_selfdestructed()` is deliberately not part of it: revm's
-        // `SelfDestructed` bit is block-global and `commit_tx` leaves it set,
-        // so once any transaction destroys an address, every later
-        // transaction's view of that address still reads as destroyed. Reading
-        // it here deleted an account a later transaction had refunded or
-        // recreated -- one real Ethereum keeps, a non-zero balance not being
-        // empty -- and deleted it before the `is_created()` branch below could
-        // rebuild its storage.
-        //
-        // Emptiness reaches the same answer without the flag. An account
-        // destroyed and not refunded finalizes with a zero balance, a zero
-        // nonce and no code, so it is empty and goes; one refunded or recreated
-        // is not empty and stays; and post-Cancun EIP-6780 leaves a
-        // pre-existing contract's code in place, so sweeping its balance never
-        // made it empty to begin with.
-        if account.state_clear_aware_is_empty(spec) {
-            *state = mpt::remove(core::mem::replace(state, Node::Empty), &path)?;
-            continue;
-        }
+/// One decoded transaction as revm's `TxEnv`, field by field.
+///
+/// Built directly rather than through `TxEnvBuilder::build_fill`, which
+/// *fills* a missing field: given type 4 and no authorization, it inserts a
+/// dummy one, and an invalid empty-list transaction would pass revm's
+/// `EmptyAuthorizationList` check.
+fn tx_env(tx: &Tx<'_>, sender: Address20) -> TxEnv {
+    TxEnv {
+        tx_type: tx.tx_type,
+        caller: Address::from(sender),
+        gas_limit: tx.gas_limit,
+        gas_price: tx.gas_price,
+        kind: match tx.to {
+            Some(to) => TxKind::Call(Address::from(to)),
+            None => TxKind::Create,
+        },
+        value: U256::from_be_bytes(tx.value),
+        data: Bytes::copy_from_slice(tx.data),
+        nonce: tx.nonce,
+        chain_id: tx.chain_id,
+        access_list: AccessList(
+            tx.access_list
+                .iter()
+                .map(|(address, keys)| AccessListItem {
+                    address: Address::from(*address),
+                    storage_keys: keys.iter().map(|k| B256::new(*k)).collect(),
+                })
+                .collect(),
+        ),
+        gas_priority_fee: tx.priority_fee,
+        blob_hashes: tx.blob_hashes.iter().map(|h| B256::new(*h)).collect(),
+        max_fee_per_blob_gas: tx.max_fee_per_blob_gas.unwrap_or(0),
+        authorization_list: tx
+            .authorizations
+            .iter()
+            .map(|auth| {
+                Either::Right(RecoveredAuthorization::new_unchecked(
+                    Authorization {
+                        chain_id: U256::from_be_bytes(auth.chain_id),
+                        address: Address::from(auth.address),
+                        nonce: auth.nonce,
+                    },
+                    match tx::authority(auth) {
+                        Some(authority) => RecoveredAuthority::Valid(Address::from(authority)),
+                        None => RecoveredAuthority::Invalid,
+                    },
+                ))
+            })
+            .collect(),
+    }
+}
 
-        // The account's storage trie, updated. A slot set to **zero is a
-        // deletion**: there is no stored zero in a storage trie, and writing
-        // one would give a wrong root that looks almost right.
-        let at = witness
-            .accounts
-            .binary_search_by(|a| a.address.cmp(&address.0 .0))
-            .map_err(|_| StatelessError::Unauthenticated {
-                address: address.0 .0,
-            })?;
-        // A **created** account starts with an empty storage trie, whatever
-        // the address held before. That can only differ from the authenticated
-        // trie on the selfdestruct-then-recreate path, which EIP-6780 made rare
-        // — but reading the old trie there would carry slots the account does
-        // not have and give a wrong root, so the case is handled rather than
-        // assumed away.
-        // Before Cancun a selfdestruct wiped the account's storage outright, so
-        // an address destroyed and then refunded -- but not recreated, which
-        // would set `is_created()` -- must start from an empty trie too, or the
-        // authenticated pre-state's slots survive a destruction that removed
-        // them. EIP-6780 closed that path from Cancun on, where only a
-        // same-transaction creation is destroyed and `is_created()` covers the
-        // recreate.
-        let wiped = account.is_created()
-            || (!spec.is_enabled_in(SpecId::CANCUN) && account.is_selfdestructed());
-        let mut trie = if wiped {
+/// The bundle's changes applied to the witness's tries: the post-state root.
+///
+/// What reth's stateless validator does with the same bundle: an account with
+/// no info, or an empty one (EIP-161), leaves the state trie; a destroyed one
+/// starts from an empty storage trie; every changed slot is set, zero being a
+/// deletion. An account whose storage was never read and is not destroyed
+/// keeps its storage root, as a blinded node that re-hashes to itself.
+///
+/// **Every write precedes every deletion**, in each storage trie and in the
+/// state trie, as the spec replays a block (`mpt_set_storage_slots`). A
+/// deletion that leaves a branch one child needs that child's node, which is
+/// on no changed key's path; the witness carries the ones the spec's order
+/// needs, and writing first needs a subset of them — a branch collapses only
+/// if it ends collapsed, and then every order needs its survivor.
+fn post_state_root(db: &mut WitnessDb<'_>, bundle: &BundleState) -> Result<Word32, Invalid> {
+    let mut accounts: Vec<_> = bundle.state.iter().collect();
+    accounts.sort_unstable_by_key(|(address, _)| **address);
+    let mut removed = Vec::new();
+    for (address, account) in accounts {
+        let address = address.0 .0;
+        let path = mpt::nibbles(&keccak(&address));
+        let info = match &account.info {
+            Some(info) if !info.is_empty() => info,
+            _ => {
+                removed.push(path);
+                continue;
+            }
+        };
+        let mut trie = if account.status.was_destroyed() {
             Node::Empty
         } else {
-            core::mem::replace(&mut storage[at], Node::Empty)
+            match db.storage.binary_search_by(|(a, _)| a.cmp(&address)) {
+                Ok(at) => core::mem::replace(&mut db.storage[at].1, Node::Empty),
+                Err(_) => match db.account(&address)? {
+                    Some((_, _, root, _)) if root != EMPTY_TRIE_ROOT => Node::Blinded(root),
+                    _ => Node::Empty,
+                },
+            }
         };
-        let mut slots: Vec<(&revm::primitives::StorageKey, &revm::state::EvmStorageSlot)> =
-            account.storage.iter().collect();
-        slots.sort_unstable_by_key(|(key, _)| **key);
-        for (slot, cell) in slots {
-            let value = cell.present_value;
-            let key = keccak256(slot.to_be_bytes::<32>()).0;
-            let path = mpt::nibbles(&key);
+        let mut slots: Vec<_> = account
+            .storage
+            .iter()
+            .map(|(key, slot)| (slot.present_value, *key))
+            .collect();
+        slots.sort_unstable_by_key(|(value, key)| (value.is_zero(), *key));
+        for (value, key) in slots {
+            let path = mpt::nibbles(&keccak(&key.to_be_bytes::<32>()));
             trie = if value.is_zero() {
                 mpt::remove(trie, &path)?
             } else {
                 mpt::insert(trie, &path, mpt::encode_slot(&value.to_be_bytes::<32>()))?
             };
         }
-        let storage_root = trie.root();
-        storage[at] = trie;
-
-        let value = mpt::encode_account(
-            account.info.nonce,
-            &account.info.balance.to_be_bytes::<32>(),
-            &storage_root,
-            &account.info.code_hash.0,
+        let leaf = mpt::encode_account(
+            info.nonce,
+            &info.balance.to_be_bytes::<32>(),
+            &trie.root(),
+            &info.code_hash.0,
         );
-        *state = mpt::insert(core::mem::replace(state, Node::Empty), &path, value)?;
+        let state = core::mem::replace(&mut db.state, Node::Empty);
+        db.state = mpt::insert(state, &path, leaf)?;
     }
-    Ok(state.root())
-}
-
-/// The journal's 148 bytes.
-fn journal(
-    parent_state_root: &Word32,
-    post_state_root: &Word32,
-    number: &Word32,
-    gas_used: u64,
-    results: &[ExecutionResult],
-) -> Vec<u8> {
-    // The per-transaction records, exactly as `docs/spec/revm-block.md` §2
-    // writes them — digested rather than carried, because a real block's would
-    // not fit a public window.
-    let mut records = Vec::new();
-    let mut logs: Vec<&Log> = Vec::new();
-    for result in results {
-        crate::push_record(&mut records, result);
-        logs.extend(result.logs());
+    for path in removed {
+        let state = core::mem::replace(&mut db.state, Node::Empty);
+        db.state = mpt::remove(state, &path)?;
     }
-
-    let mut out = Vec::with_capacity(STATELESS_JOURNAL_BYTES);
-    out.extend_from_slice(parent_state_root);
-    out.extend_from_slice(post_state_root);
-    // The block number is a `u256` in the header and a `u64` everywhere a block
-    // number is used; the low eight bytes are the number, and a chain that
-    // outgrows them has other problems.
-    out.extend_from_slice(&number[24..]);
-    out.extend_from_slice(&gas_used.to_le_bytes());
-    out.extend_from_slice(&(results.len() as u32).to_le_bytes());
-    out.extend_from_slice(keccak256(&records).as_slice());
-    out.extend_from_slice(keccak256(encode_logs(&logs)).as_slice());
-    debug_assert_eq!(out.len(), STATELESS_JOURNAL_BYTES);
-    out
-}
-
-/// A contract address named by an EIP, for a test that checks this file's
-/// literals against the EIPs.
-pub fn system_contracts() -> [(&'static str, Address20); 4] {
-    [
-        ("EIP-4788 beacon roots", BEACON_ROOTS.0 .0),
-        ("EIP-2935 history storage", HISTORY_STORAGE.0 .0),
-        ("EIP-7002 withdrawal requests", WITHDRAWAL_REQUESTS.0 .0),
-        (
-            "EIP-7251 consolidation requests",
-            CONSOLIDATION_REQUESTS.0 .0,
-        ),
-    ]
+    Ok(db.state.root())
 }

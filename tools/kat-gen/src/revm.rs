@@ -265,7 +265,6 @@ pub fn synthetic_block() -> BlockWitness {
                 authorizations: Vec::new(),
             },
         ],
-        stateless: None,
     }
 }
 
@@ -309,11 +308,6 @@ pub fn generate() {
         &bytes,
     );
     println!("  keccak-f permutations: {}", frames.len());
-
-    // S25's stateless mode, over a block built here rather than recorded: a
-    // recorded one cannot have a complete node set, `eth_getProof` returning no
-    // siblings (`src/stateless.rs`).
-    crate::stateless::generate();
 }
 
 /// Build and trace the guest on this witness, hold its **journal** to native

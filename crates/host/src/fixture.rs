@@ -21,17 +21,12 @@
 //! The mini-block fixture is committed whole — witness, journal, pin and cache.
 //! It is a few kilobytes.
 //!
-//! The **full block's witness is not committed**, and its cache is not either.
-//! A stateless mainnet block carries every touched account, every touched slot,
-//! every contract's code and the Merkle-Patricia nodes authenticating all of
-//! it; that is megabytes, and the RPC snapshot behind it is larger still. What
-//! is committed is this `Pin` — the block, the roots, and the SHA-256 the
-//! witness must have. That is the repository's existing answer for an artifact
-//! too large to carry: `tools/kat-gen/src/delegation.rs` commits the three
-//! delegation circuits *by digest* for the same reason, the artifacts being
-//! megabytes. A digest file is still "pinned by hash and committed"; what it
-//! costs is that regenerating the full block needs the network, which is why
-//! that fixture's tests are `#[ignore]`d and skip when the witness is absent.
+//! **Only the mini mode is recorded.** The stateless binary reads the spec's
+//! `statelessInputBytes` (`docs/spec/stateless.md`), which this recorder does
+//! not produce: the inputs it is held to are a `tests-zkevm` release's
+//! ([`crate::zkevm`]), and a producer of them for mainnet blocks is the next
+//! stage's. Until then no pin is in [`Mode::Stateless`], and `bench prove
+//! --stateless` proves a stateless input straight from its file instead.
 
 use serde::{Deserialize, Serialize};
 
@@ -42,10 +37,8 @@ pub enum Mode {
     /// with **no state-root claim**: the state the execution leaves is not the
     /// block's post-state, because the rest of the block did not run.
     Mini,
-    /// The whole block transition — pre-block system calls, every transaction,
-    /// withdrawals — with the pre-state authenticated against the parent's
-    /// state root and the post-state root recomputed and checked against the
-    /// header's.
+    /// The canonical stateless validator: the spec's `statelessInputBytes` in,
+    /// its 43-byte `statelessOutputBytes` out (`docs/spec/stateless.md`).
     Stateless,
 }
 
@@ -75,17 +68,13 @@ pub struct Pin {
     pub block_hash: String,
     /// Its parent's header hash.
     pub parent_hash: String,
-    /// The parent's state root: what a stateless pre-state authenticates
-    /// against, and what the recorded values were read at.
+    /// The parent's state root: what the recorded values were read at.
     pub parent_state_root: String,
-    /// This block's state root, from the header: what the stateless mode's
-    /// recomputation must equal.
+    /// This block's state root, from the header.
     pub state_root: String,
     /// The hardfork, as `revm`'s `SpecId` discriminant.
     pub spec_id: u8,
-    /// How many of the block's transactions were recorded. Equal to the
-    /// header's transaction count in [`Mode::Stateless`], and 1 or 2 in
-    /// [`Mode::Mini`].
+    /// How many of the block's transactions were recorded: 1 or 2.
     pub txs_recorded: usize,
     /// How many transactions the block has.
     pub txs_in_block: usize,

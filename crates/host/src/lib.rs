@@ -53,10 +53,16 @@
 //!   transactions with native revm against an RPC-backed database, harvests the
 //!   touch set, and emits the `BlockWitness` the guest reads as advice.
 //! - [`fixture`] — what a recorded block is on disk, and how it is pinned.
+//! - [`canonical`] — JSON-RPC objects back to the bytes the chain hashes:
+//!   headers, transactions, withdrawals and receipts.
+//! - [`zkevm`] — a `tests-zkevm` release on disk: its stateless input/output
+//!   pairs, and the verdict the stateless guest gives each.
 
+pub mod canonical;
 pub mod fixture;
 pub mod recorder;
 pub mod rpc;
+pub mod zkevm;
 
 pub use verifier::proof_archive;
 

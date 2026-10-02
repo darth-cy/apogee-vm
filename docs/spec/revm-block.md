@@ -17,21 +17,24 @@ of this guest's binaries read the advice region and write the journal.*
 **The output commitment (§2) is frozen at S24. `BlockWitness` (§1) is not**, by the
 owner's decision at the close of that stage, and **S25 moved it** — `block_hashes`,
 EIP-4844's two transaction fields and EIP-7702's authorization list are all new, and the
-`BLOCKHASH` gap that kept the type open is closed (§1.2). It stays unfrozen: the stateless
-section (§1.5) is defined by the stage that needs it and the type is still the one a
-recorder produces for a chain that keeps forking. What a change must keep is §1.1: one
-logical state, exactly one encoding.
+`BLOCKHASH` gap that kept the type open is closed (§1.2). It stays unfrozen: the type is
+still the one a recorder produces for a chain that keeps forking. What a change must keep
+is §1.1: one logical state, exactly one encoding.
 
-**§2 is frozen, and neither S25 nor S-STREAM touched it.** The stateless mode publishes a
-*different* journal (§5), on a different binary with a different program identity, rather
-than amending this one — which is what must-be-exact 2's "two identities for two modes"
-makes possible and what keeps a block's per-transaction records from having to fit a
-window they cannot. S-STREAM grew the window instead, from 1,020 bytes to 16,380
-(`docs/spec/public-values.md` §2), which is why the **mini** mode reaches a few hundred
-transactions now where it reached 73 — about 360 at this workload's 45 bytes a record. It
-did not change the conclusion: a record carries return data verbatim, so §2's length is a
-function of the execution and no fixed window bounds it. **`revm-block-stateless` is the full-block target** (owner's decision,
-S-STREAM), and its journal is 148 bytes whatever the block.
+**§2 is frozen, and neither S25 nor S-STREAM touched it.** S-STREAM grew the window
+instead, from 1,020 bytes to 16,380 (`docs/spec/public-values.md` §2), which is why the
+**mini** mode reaches a few hundred transactions now where it reached 73 — about 360 at
+this workload's 45 bytes a record. It did not change the conclusion: a record carries
+return data verbatim, so §2's length is a function of the execution and no fixed window
+bounds it.
+
+**This page is the mini mode's, and only the mini mode's, since S-STATELESS.** The guest's
+other binary, `revm-block-stateless`, is the full-block target (owner's decision,
+S-STREAM), and it is now the **canonical stateless validator**: the spec's
+`statelessInputBytes` in, its 43-byte `statelessOutputBytes` out, whatever the block.
+`docs/spec/stateless.md` is normative for it. It reads no `BlockWitness` and writes no §2,
+and S25's stateless witness and S-STREAM's 148-byte journal, which §1.5 and §5 used to
+define, are deleted.
 
 The guest that reads and writes them is `guests/revm-block`; what it *is* — its two
 binaries, why one exists, and what it costs — is `docs/handoff/S24-revm.md`.
@@ -57,7 +60,6 @@ BlockWitness
     env         BlockEnvWitness
     accounts    Vec<AccountWitness>   ascending by address
     txs         Vec<TxWitness>        execution order
-    stateless   Option<StatelessWitness>   absent in the synthetic and mini modes
 
 BlockEnvWitness
     chain_id          u64          EIP-155
@@ -195,8 +197,9 @@ answers it and the chain itself is the source. The guest constructs
 (`docs/spec/profiling.md`).
 
 It is **advice like every other field here** and it is bound the same way: by the journal
-the execution publishes, and in the stateless mode by the post-state root a wrong fee
-accounting would move. `BlockWitness::canonical` refuses a witness whose
+the execution publishes. (The stateless binary reads no `BlockWitness`: it derives the
+price from the fork its schema id names, whose update fraction it carries —
+`docs/spec/stateless.md` §1.) `BlockWitness::canonical` refuses a witness whose
 `excess_blob_gas` and `blob_gasprice` are not both present or both absent
 (`WitnessError::BlobPairing`), because a witness carrying one without the other is one the
 guest would have to derive the other for — which is the derivation this removes. A
@@ -232,16 +235,12 @@ that goes stale.
   `gas_limit` against the parent's, and the `≥ 5000` floor, are checks against a block
   this witness does not carry. What *is* enforced is §1.4.
 - **Signatures.** `caller` is the recovered sender. There is no `ecrecover` delegation in
-  this repository (`prompts/00-master.md`, "Stage register"), and recovery is the
-  witness producer's job, not the block executor's — revm's own `TxEnv` takes a `caller`
-  for the same reason.
+  this repository (`prompts/00-master.md`, "Stage register"), and in this mode recovery
+  is the witness producer's job, not the block executor's — revm's own `TxEnv` takes a
+  `caller` for the same reason. The stateless binary recovers every sender itself
+  (`docs/spec/stateless.md` §3).
 - **A post-state root.** S24 runs over a synthetic pre-state; what the execution produces
   is summarized in §2, not proved against a root.
-- **The stateless section's meaning.** `stateless` is `Option<StatelessWitness>`, last,
-  and its absence changes the encoding of nothing before it. It is `None` in the synthetic
-  mode and in the **mini** mode, which is what "claims no state-root recomputation" means
-  concretely: §1.5 is the shape, and a witness without it cannot be read by the stateless
-  binary at all.
 - **Transaction types 3 and 4 were absent at S24 and S25 appended them**, because a real
   mainnet block has both: the block this stage pinned carries 200 type-2 transactions, 38
   type-0, **two type-3 and six type-4**. `blob_hashes` and `max_fee_per_blob_gas` are
@@ -296,55 +295,14 @@ would nonetheless commit an output.
 The block total is **not** added to §2: every transaction's `gas_used` is already a field
 there, so the sum is derivable from bytes `io_digest` already binds.
 
-### 1.5 `StatelessWitness`
+### 1.5 `StatelessWitness` — deleted at S-STATELESS
 
-The section the **stateless** mode requires and the other two modes leave `None`.
-`guests/revm-block/src/stateless.rs` is the code; this is the normative shape.
-
-```
-StatelessWitness
-    parent_state_root         [u8; 32]   what the pre-state is authenticated against
-    parent_hash               [u8; 32]   EIP-2935's system-call input
-    parent_beacon_block_root  Option<[u8; 32]>   EIP-4788's; None before Cancun
-    withdrawals               Vec<WithdrawalWitness>   EIP-4895, ascending by index
-    nodes                     Vec<Vec<u8>>   ascending by keccak256, no repeats
-
-WithdrawalWitness
-    index             u64      the header orders by this
-    validator_index   u64
-    address           [u8; 20]
-    amount_gwei       u64      GWEI, not wei; the execution layer multiplies by 10^9
-```
-
-#### The completeness requirement
-
-**`nodes` carries every trie node needed to apply the block's state updates
-deterministically — siblings and boundary nodes included, not merely the nodes on each
-touched key's own path** (owner's decision, S25). **The guest authenticates every node it
-uses against the trie hash that names it, before using it**, and refuses by name when one
-is missing. It never reconstructs, infers or guesses a node it was not given.
-
-The rule is not bureaucratic, and the case that forces it was measured rather than
-imagined. Deleting a key whose branch is left with exactly one child requires merging that
-child upward, which needs the child's **type and path** and not just its hash — and the
-child is a *sibling* of the deleted key, so it lies on no touched key's path and appears in
-no `eth_getProof` response. Over 300 randomised build-update-recompute trials, **29 %**
-needed at least one such node; the missing ones were 104 leaves, 1 extension and 3
-branches, so all three merge arms are live. Writing zero to a storage slot **is** a
-deletion, and the gas refund makes it common, so this is the ordinary case and not a corner
-of it.
-
-A witness that omits one is **incomplete, and the guest says so**:
-`mpt::MptError::BlindedCollapse` names the hash and stops. Producing a complete set is the
-witness producer's job and needs a source that can supply siblings — an execution-layer
-client serving `debug_executionWitness`, say. `host::recorder::collect_nodes` returns what
-`eth_getProof` can give and is explicitly **not** a complete-witness builder;
-`docs/handoff/S25-block.md` §4 is the account.
-
-Authentication needs only each key's own path, so it *is* satisfiable from `eth_getProof`
-— which is why `crates/host/tests/stateless.rs` authenticates the pinned mini-block's
-seventeen real accounts and thirty-seven real slots against block 26,057,508's **real**
-state root, and the whole-transition tests run on a block built rather than recorded.
+S25 appended an `Option<StatelessWitness>` here — the parent's state root, its hash, the
+beacon root, the withdrawals and a node set — for the stateless binary to read. That binary
+reads the spec's `statelessInputBytes` now (`docs/spec/stateless.md`), whose witness is
+trie-node preimages, codes and ancestor headers, so the field is deleted with everything
+that wrote or read it (owner's decision). Its `None` tag was the last byte of every mini
+and synthetic witness; each committed one is a byte shorter, and neither journal moved.
 
 ## 2. The output commitment
 
@@ -382,11 +340,12 @@ a bound**: `output` is return data taken verbatim behind a `u32` length, so one
 maximum-size top-level `CREATE` is 24,589 bytes in a single record and overflows the grown
 window on its own.
 
-**So the digest is still the answer, and it is the other binary.** §9 of the public-values
-page says why — public values are what a verifier reads, and a per-transaction record is
-not — and `revm-block-stateless` (§5) is that reading built: a fixed 148-byte journal
-carrying `keccak256` of this record stream. It is the chosen target for proving a whole
-block (owner's decision, S-STREAM). **This section does not move for either of them.**
+**So a fixed-size journal is still the answer, and it is the other binary.** §9 of the
+public-values page says why — public values are what a verifier reads, and a
+per-transaction record is not. `revm-block-stateless` publishes 43 bytes whatever the
+block, the spec's validation result (`docs/spec/stateless.md`), and it is the chosen target
+for proving a whole block (owner's decision, S-STREAM). **This section does not move for
+it.**
 
 ### 2.1 The logs commitment
 
@@ -453,115 +412,12 @@ revm uses only the one-shot form; `alloy-primitives`' streaming `Keccak256` — 
 | the fixture is what the builder still writes | `cargo run -p kat-gen`, regenerated and diffed in CI |
 | **§1.0** an absent account or slot is refused, swept over every one | `crates/host/tests/witness.rs::a3_a_deleted_{slot,account}_is_refused` |
 | **§1.2** `BLOCKHASH` answers a recorded ancestor and refuses any other | `crates/emulator/tests/revm.rs::blockhash_reads_the_recorded_ancestor_and_refuses_the_rest` |
-| **§1.5** every recorded value authenticates against the **real** mainnet state root | `crates/host/tests/stateless.rs::a7_every_recorded_value_authenticates_against_the_real_state_root` |
-| **§1.5** a corrupted node is refused, and a dropped one as *missing* rather than *absent* | `…::a7_a_corrupted_node_is_refused`, `…::a7_a_deleted_node_is_a_missing_node_and_not_an_absence` |
-| the trie itself, against Ethereum's three published root vectors | `crates/host/tests/mpt.rs` |
-| **§5** the transition recomputes its pinned root, on the host and on the guest | `…::a7_the_transition_recomputes_the_pinned_root`, `…::a7_the_guest_recomputes_the_pinned_root` |
-| **§5** a corrupted node and a corrupted balance are both refused | `…::a7_a_corrupted_stateless_node_is_refused`, `…::a7_a_corrupted_balance_is_refused` |
-| **§5.2** the two system-contract addresses are their EIPs' | `…::the_system_contracts_are_the_addresses_their_eips_name` |
+| the stateless binary, every rule | `docs/spec/stateless.md` §4 |
 | the recorder is deterministic, and the pinned block proves and verifies | `crates/host/tests/witness.rs::a1_…`, `crates/host/tests/prove.rs::a4_…` |
 
-## 5. The stateless journal
+## 5. The stateless journal — replaced at S-STATELESS
 
-**Not §2, and that is the point.** §2 is frozen and carries a record per transaction — 45
-bytes each on this workload, so a 246-transaction block's commitment is about 11 KB and a
-450-transaction one about 20 KB, against a public window's 16,380
-(`docs/spec/public-values.md` §3). The stateless mode publishes a journal of its own
-instead, on its own binary with its own program identity, which is what must-be-exact 2's
-*"two identities for two modes"* makes possible. §2 does not move, no fixture is
-regenerated, and `docs/spec/public-values.md` §9's recommendation is followed: *"public
-values are what a verifier reads, and a per-transaction record is not."*
-
-**S-STREAM's window raise narrowed that gap and did not close it**, which is the whole
-case for this section. At 1,020 bytes the §2 commitment outgrew the window above 73
-transactions and no real block was in reach; at 16,380 the crossover is about 360, so of
-the five blocks measured here — 67, 132, 240, 376 and 450 transactions — three fit and two
-still do not. A format whose length is a function of the
-execution cannot be bounded by a fixed window at all — one maximum-size top-level `CREATE`
-is 24,589 bytes in a single record — so **148 bytes whatever the block** is not an
-optimization of §2 but the only shape that is bounded. That is why the owner's full-block
-target is this binary and not the mini one.
-
-**148 bytes, whatever the block:**
-
-```
-   parent_state_root     32 bytes   what the pre-state was authenticated against
-   post_state_root       32 bytes   what this execution recomputed
-   block_number           8 bytes LE
-   gas_used               8 bytes LE   transactions only; system calls are gas-free
-   tx_count               4 bytes LE
-   receipts_commitment   32 bytes   keccak256 of §2's per-transaction record stream
-   logs_commitment       32 bytes   keccak256 of §2.1
-```
-
-The two commitments are §2's own encodings, digested rather than carried, so a reader who
-wants the records recomputes them from the witness and checks the digest. There is no
-post-state **summary** (§2.2): the post-state *root* supersedes it, being a commitment to
-the whole state rather than to the part this execution touched.
-
-### 5.1 What the journal claims, and what binds it
-
-**"From the state whose root is `parent_state_root`, this block produced the state whose
-root is `post_state_root`."** Nothing binds advice, so the witness is a byte string the
-prover chose — and that is exactly why the claim is stated as a transition between two
-roots rather than as a fact about a block. A verifier who knows the real parent state root
-for this height, from a header they trust, learns that `post_state_root` is this block's
-post-state. The parent root arrives from outside the proof in the same way program identity
-does.
-
-**The header's state root is the guest's public input**, not a witness field. A root the
-witness carried would be a value compared against itself — the guest would assert that the
-prover agreed with the prover. The public input window is the statement's own bytes
-(`docs/spec/public-values.md` §5.1), so a verifier puts the header's `stateRoot` there and
-the proof says the block reaches it.
-
-### 5.2 The order of the transition
-
-Consensus, not a choice:
-
-1. **EIP-4788**, from Cancun: the parent beacon block root into `0x000F…ac02`.
-2. **EIP-2935**, from Prague: the parent hash into `0x0000…2935`.
-3. Every transaction, in order, under §1.4's running gas bound.
-4. **EIP-7002**, from Prague: the withdrawal-request predeploy `0x0000…7002`.
-5. **EIP-7251**, from Prague: the consolidation-request predeploy `0x0000…7251`.
-6. **EIP-4895** withdrawals, credited in header order.
-
-Steps 4 and 5 are **post**-block system calls, and revm makes neither for you —
-`revm-handler`'s `SystemCallEvm` says in as many words that the client should make the
-calls an EIP requires before or after block execution. Each dequeues its request queue and
-rewrites the queue head and tail, the excess counter and the per-block count, so a
-Prague-or-later block reaches a root the header does not carry without them. Both are
-called with **empty** calldata: an empty input is the system call and a non-empty one is a
-user's request submission, and they are different paths in the same predeploy.
-
-They sit before the withdrawals because that is go-ethereum's order in `Process`. Nothing
-rests on it — the two predeploys and the withdrawal recipients are disjoint accounts, so
-either order gives the same root.
-
-All four system contracts must be in the witness **with their real deployed bytecode**.
-§1.0's strict database refuses a call to an account the witness does not carry, which is
-what makes a missing one a loud refusal rather than a call that hits an empty account,
-succeeds, changes nothing and yields a wrong root.
-
-System calls are gas-free and are **not** added to the block's `gasUsed`. revm models
-withdrawals not at all — a search across all twelve revm 42 crates finds nothing — so the
-block executor credits them itself, through the **journal** rather than the database:
-`finalize` returns the journal's own state map, so a credit made straight to the database
-would change every later read and be invisible in the post-state.
-
-At the end, EIP-161 applies: an account that is **touched and empty** is removed from the
-trie.
-
-**Emptiness is the whole test, and revm's selfdestruct flag is not part of it** (S25).
-One journal serves the whole block and finalizes once, and under that arrangement revm's
-`SelfDestructed` bit is block-global: `commit_tx` clears the journal, the logs, the
-transient storage and `selfdestructed_addresses`, and leaves an account's status alone.
-So once any transaction destroys an address, every later transaction's finalized view of
-it still reads as destroyed — and removing on that flag deleted an address a later
-transaction had refunded or recreated, which Ethereum keeps, a non-zero balance not being
-empty. Emptiness reaches the right answer without it: destroyed and not refunded
-finalizes empty and goes, refunded or recreated is not empty and stays, and from Cancun
-EIP-6780 leaves a pre-existing contract's code in place so sweeping its balance never
-made it empty. Before Cancun a selfdestruct did wipe storage, so an address destroyed and
-then refunded without being recreated starts from an empty storage trie as a created one
-does.
+S-STREAM's 148-byte journal — the parent and post-state roots, the block number, gas, a
+transaction count and two digests of §2's encodings — is gone with the witness section that
+fed it. `revm-block-stateless` publishes the spec's 43-byte `statelessOutputBytes`, and
+`docs/spec/stateless.md` is normative for it, including the order a block runs in.

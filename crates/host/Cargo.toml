@@ -44,7 +44,7 @@ revm-block = { path = "../../guests/revm-block" }
 # The recorder's database wrapper implements revm's `Database` trait and its
 # harvest reads revm's own state types, so it names revm directly rather than
 # through the guest library.
-revm = { version = "=42.0.1", default-features = false, features = ["std"] }
+revm = { version = "=43.0.1", default-features = false, features = ["std"] }
 
 # JSON is the RPC wire format, and parsing `eth_getProof`'s nested response is
 # not "write the eight lines yourself". Master rule 2 lists serialization among
@@ -62,6 +62,10 @@ serde = { workspace = true, features = ["derive", "alloc"] }
 serde_json.workspace = true
 
 [dev-dependencies]
+# `tests/canonical.rs`: random keys signed with upstream k256, to hold the
+# stateless guest's own recovery to it. The crate is already in this graph
+# through `revm-precompile`, with these features.
+k256 = { version = "0.13.4", default-features = false, features = ["ecdsa"] }
 constants.workspace = true
 emulator.workspace = true
 loader.workspace = true
@@ -75,6 +79,3 @@ field.workspace = true
 curve.workspace = true
 rayon.workspace = true
 trace.workspace = true
-# `tests/stateless.rs` reads the recorded node set, which the refresh writes as
-# a `postcard` `StatelessWitness`.
-postcard.workspace = true
