@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.91.0"
 name = "revm-precompile"
-version = "42.0.1"
+version = "43.0.2"
 authors = ["Dragan Rakita <dragan0rakita@gmail.com>"]
 build = false
 autolib = false
@@ -143,7 +143,7 @@ version = "1.0"
 default-features = false
 
 [dependencies.context-interface]
-version = "42.0.0"
+version = "43.0.1"
 default-features = false
 package = "revm-context-interface"
 
@@ -163,7 +163,7 @@ features = ["ecdsa"]
 default-features = false
 
 [dependencies.primitives]
-version = "42.0.0"
+version = "43.0.0"
 default-features = false
 package = "revm-primitives"
 

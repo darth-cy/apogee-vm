@@ -44,7 +44,7 @@ revm-block = { path = "../../guests/revm-block" }
 # The recorder's database wrapper implements revm's `Database` trait and its
 # harvest reads revm's own state types, so it names revm directly rather than
 # through the guest library.
-revm = { version = "=42.0.1", default-features = false, features = ["std"] }
+revm = { version = "=43.0.1", default-features = false, features = ["std"] }
 
 # JSON is the RPC wire format, and parsing `eth_getProof`'s nested response is
 # not "write the eight lines yourself". Master rule 2 lists serialization among
