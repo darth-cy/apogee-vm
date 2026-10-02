@@ -196,11 +196,13 @@ run in one batch at the end of the progression, per the root `CLAUDE.md`.
 **4. 70 kB of image headroom.** The next feature added to the stateless binary should be
 priced against it; past `2^20`'s reach the decoded tables go to `2^22`.
 
-**5. The next stage**, as the owner framed it: `bench prove` over a `statelessInputBytes`
-rather than a mini-mode pin — no stateless pin exists, and `fixture::Mode::Stateless` today
-only names the binary — and the benchmark workload's positive and rejection fixtures, which
-the subset already shows the guest passing for this release. §7's dataset is the input a
-first full-block proof can take: real, canonical, its output known, no producer needed.
+**5. The first stateless proof.** `bench prove --stateless <file>` exists: an EEST fixture
+JSON or a raw input file, its `statelessInputBytes` handed to the guest unchanged and the
+proved journal held to the fixture's `statelessOutputBytes`. **It has not been run**: every
+stateless proof carries a `2^18` `KECCAK_F` shard, ~60 GB of forward pass, past this
+machine's 48 GB, so it is a dev-server run over a §7 block, after the deferred batch. The
+benchmark workload's positive and rejection fixtures stay the next stage's; the subset
+already shows the guest passing them for this release.
 
 ---
 

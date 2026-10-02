@@ -57,6 +57,7 @@ pub mod zkevm {
     pub struct Pair { pub name: String, pub input: Vec<u8>, pub output: Vec<u8> }
     pub fn files(dir: &Path) -> Vec<PathBuf>;           // sorted
     pub fn pairs(path: &Path) -> Vec<Pair>;
+    pub fn pairs_in(fixture: &Value) -> Vec<Pair>;   // the same, over parsed JSON
     pub fn release_commit(dir: &Path) -> Option<String>;
     pub fn verdict(input: &[u8]) -> String;  // the rule `verify` refuses by, `valid`, `undecodable`
 }

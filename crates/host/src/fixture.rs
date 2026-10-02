@@ -25,7 +25,8 @@
 //! `statelessInputBytes` (`docs/spec/stateless.md`), which this recorder does
 //! not produce: the inputs it is held to are a `tests-zkevm` release's
 //! ([`crate::zkevm`]), and a producer of them for mainnet blocks is the next
-//! stage's. Until then no pin is in [`Mode::Stateless`].
+//! stage's. Until then no pin is in [`Mode::Stateless`], and `bench prove
+//! --stateless` proves a stateless input straight from its file instead.
 
 use serde::{Deserialize, Serialize};
 

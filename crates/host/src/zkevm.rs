@@ -4,8 +4,9 @@
 //! `statelessOutputBytes` into their blockchain and engine fixtures, and the
 //! zkEVM benchmark compares a guest's 43 output bytes to the latter exactly.
 //! This is the one reader of that format here: `tests/conformance.rs` walks a
-//! whole extracted release with it, and `tools/kat-gen`'s `zkevm` group cuts
-//! the subset CI runs with it.
+//! whole extracted release with it, `tools/kat-gen`'s `zkevm` group cuts the
+//! subset CI runs with it, and `bench prove --stateless` takes the input it
+//! proves out of a fixture with it.
 
 use std::path::{Path, PathBuf};
 
@@ -51,8 +52,14 @@ pub fn pairs(path: &Path) -> Vec<Pair> {
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let value: Value =
         serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    pairs_in(&value)
+}
+
+/// The same over a fixture already parsed, for a caller that reports a file
+/// it cannot read rather than panicking on it.
+pub fn pairs_in(fixture: &Value) -> Vec<Pair> {
     let mut out = Vec::new();
-    collect(&value, &mut String::new(), &mut out);
+    collect(fixture, &mut String::new(), &mut out);
     out
 }
 

@@ -1,5 +1,6 @@
 //! `cargo run --release -p bench -- prove <fixture> [options]` — the proving
-//! job behind [`crate::report::BenchReport`].
+//! job behind [`crate::report::BenchReport`] — and `prove --stateless <file>`,
+//! the same job over one canonical stateless input.
 //!
 //! This is a **verb**, not a routine: every other entry in `ROUTINES` is a
 //! micro-measurement over a synthetic input that takes no arguments, and a
@@ -18,18 +19,33 @@
 //! thing it does assert is that the proof verifies, because a timing for a
 //! proof that does not verify is not a measurement of anything.
 //!
+//! # A stateless input
+//!
+//! `--stateless <file>` proves `revm-block-stateless` over one
+//! `statelessInputBytes`: an EEST fixture JSON's — a `tests-zkevm` release, or
+//! the zkEVM benchmark's devnet datasets — or a file holding nothing but those
+//! bytes. **The bytes reach the guest's advice exactly as the file holds
+//! them**: the guest is given a canonical stateless input and nothing about
+//! where it came from. A fixture's `statelessOutputBytes` is the journal the
+//! proof must bind — checked natively first, because the library is the guest's
+//! own code and a mismatch it already shows would cost a whole proof to learn,
+//! and then on the proof. A raw file has nothing to check against, so the
+//! journal is printed for the reader.
+//!
 //! # Failure
 //!
 //! **Every way the verb fails is a non-zero exit.** The ordinary failures come
 //! back from [`run`] as an error that `main` prints to stderr before exiting 1:
-//! a fixture or witness that is not there, no ceremony without `--toy-srs`, a
-//! guest that does not build or register, a block that does not prove, and an
-//! `--out` directory the proof does not write to. That last one fails only
-//! after the report is printed, because the measurement is still good and it
-//! cost the whole run. What the verb asserts still panics, and a usage error
-//! still exits 2. Until S-STREAM's review the ordinary failures each printed a
-//! line and exited 0, so a script waiting on a proof could not tell that none
-//! had been made.
+//! a fixture, witness, journal or stateless input that is not there, an input
+//! that is empty or that `--case` does not pick out of its file, no ceremony
+//! without `--toy-srs`, a guest that does not build or register, a block that
+//! does not prove, a proved journal that is not the expected one, and an
+//! `--out` directory the proof does not write to. The last two fail only after
+//! the report is printed, because the measurement is still good and it cost
+//! the whole run. What the verb asserts still panics, and a usage error still
+//! exits 2. Until S-STREAM's review the ordinary failures each printed a line
+//! and exited 0, so a script waiting on a proof could not tell that none had
+//! been made.
 //!
 //! # The SRS
 //!
@@ -42,10 +58,11 @@
 //! says which was used so that nobody reads a toy-SRS identity as a published
 //! one.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use host::fixture::{self, Mode, Pin};
+use host::zkevm;
 use srs::Srs;
 
 use crate::report::{self, BenchReport, Phases};
@@ -71,10 +88,21 @@ fn ceremony() -> Option<PathBuf> {
     path.exists().then_some(path)
 }
 
+/// Which block the verb proves.
+pub enum Source {
+    /// A recorded block's stem under `crates/host/tests/vectors`, e.g.
+    /// `mini-block`: its pinned witness, proved by the guest its pin names.
+    Fixture(String),
+    /// One stateless input, proved by `revm-block-stateless`: an EEST fixture
+    /// JSON's `statelessInputBytes`, or a file of nothing else. `case` picks
+    /// one input out of a JSON holding several.
+    Stateless { path: PathBuf, case: Option<String> },
+}
+
 /// What the verb was asked for.
 pub struct Options {
-    /// The fixture stem, e.g. `mini-block`.
-    pub fixture: String,
+    /// The block.
+    pub source: Source,
     /// Where to write the JSON, if anywhere.
     pub json: Option<PathBuf>,
     /// The hardware's on-demand price per hour.
@@ -104,41 +132,148 @@ pub struct Options {
 /// (`crates/prover/tests/streaming.rs`).
 pub const DEFAULT_IN_FLIGHT: usize = 8;
 
-/// Prove the fixture, verify it and print the report.
+/// One proving job, wherever its block came from.
+struct Job {
+    /// What the report and `--out`'s files call it: the fixture's stem, or the
+    /// stateless input file's.
+    name: String,
+    mode: Mode,
+    /// The guest's advice, exactly as the source holds it.
+    advice: Vec<u8>,
+    /// The journal the proof must bind, when the source says what it is.
+    journal: Option<Vec<u8>>,
+    block_number: u64,
+    block_hash: String,
+    txs: usize,
+    gas_used: u64,
+}
+
+/// A recorded block: its pinned witness, and the journal its pin names.
+fn fixture_job(stem: &str) -> Result<Job, String> {
+    let dir = vectors();
+    let pin_bytes = std::fs::read(dir.join(fixture::pin_file(stem))).map_err(|e| {
+        format!(
+            "no fixture `{stem}` under {} ({e}). \
+             `cargo run -p kat-gen -- block` records one; it needs ETH_RPC_URL.",
+            dir.display()
+        )
+    })?;
+    let pin = Pin::from_bytes(&pin_bytes).expect("the pin decodes");
+    let committed = |file: String, what: &str| {
+        std::fs::read(dir.join(file)).map_err(|e| {
+            format!(
+                "the `{stem}` pin is committed but its {what} is not ({e}); \
+                 `cargo run -p kat-gen -- block` re-records it."
+            )
+        })
+    };
+    let witness = committed(fixture::witness_file(stem), "witness")?;
+    let journal = committed(fixture::journal_file(stem), "journal")?;
+    pin.check(&witness, &journal)?;
+    Ok(Job {
+        name: stem.to_string(),
+        mode: pin.mode,
+        advice: witness,
+        journal: Some(journal),
+        block_number: pin.block_number,
+        block_hash: pin.block_hash,
+        txs: pin.txs_recorded,
+        gas_used: pin.gas_used,
+    })
+}
+
+/// One stateless input, handed on exactly as the file holds it. A `.json`
+/// file is an EEST fixture, read with `host::zkevm`'s reader, and its
+/// `statelessOutputBytes` is the journal the proof must bind; any other file
+/// is the raw `statelessInputBytes`, with nothing to hold the journal to.
+fn stateless_job(path: &Path, case: Option<&str>) -> Result<Job, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+    let (advice, journal) = if path.extension().is_some_and(|e| e == "json") {
+        let fixture: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|e| format!("{} is not JSON: {e}", path.display()))?;
+        let mut pairs = zkevm::pairs_in(&fixture);
+        pairs.retain(|pair| case.is_none_or(|case| pair.name.contains(case)));
+        if pairs.len() != 1 {
+            let names: Vec<&str> = pairs.iter().take(4).map(|p| p.name.as_str()).collect();
+            return Err(format!(
+                "{} holds {} stateless inputs{}; --case picks one by part of its name{}",
+                path.display(),
+                pairs.len(),
+                case.map_or(String::new(), |case| format!(" matching `{case}`")),
+                if names.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {} ...", names.join(", "))
+                },
+            ));
+        }
+        let pair = pairs.remove(0);
+        (pair.input, Some(pair.output))
+    } else if case.is_some() {
+        return Err(format!(
+            "--case picks an input out of a fixture JSON, and {} is a raw input",
+            path.display()
+        ));
+    } else {
+        (bytes, None)
+    };
+    if advice.is_empty() {
+        return Err(
+            "an empty input cannot be given to the guest: a run with no advice has \
+                    no advice region (docs/spec/public-values.md §6), and the library \
+                    answers it with the sentinel natively"
+                .into(),
+        );
+    }
+    if let Some(expected) = &journal {
+        let native = revm_block::stateless::run(&advice);
+        if native[..] != expected[..] {
+            return Err(format!(
+                "the library publishes {} ({}) where {} expects {}, and proving it would not \
+                 change that",
+                hex(&native),
+                zkevm::verdict(&advice),
+                path.display(),
+                hex(expected)
+            ));
+        }
+    }
+    let (block_number, block_hash, txs, gas_used) = match revm_block::ssz::decode(&advice) {
+        Some(input) => {
+            let p = &input.request.payload;
+            let hash = format!("0x{}", hex(&p.block_hash));
+            (p.block_number, hash, p.transactions.len(), p.gas_used)
+        }
+        None => (0, String::new(), 0, 0),
+    };
+    Ok(Job {
+        name: path.file_stem().map_or("stateless".into(), |stem| {
+            stem.to_string_lossy().into_owned()
+        }),
+        mode: Mode::Stateless,
+        advice,
+        journal,
+        block_number,
+        block_hash,
+        txs,
+        gas_used,
+    })
+}
+
+/// Prove the block, verify it and print the report.
 ///
 /// Every ordinary failure comes back as an error naming what failed, which
 /// `main` prints and exits 1 on (`# Failure` above); what the verb asserts
 /// still panics.
 pub fn run(options: &Options) -> Result<(), String> {
-    let dir = vectors();
-    let pin_bytes = std::fs::read(dir.join(fixture::pin_file(&options.fixture))).map_err(|e| {
-        format!(
-            "no fixture `{}` under {} ({e}). \
-             `cargo run -p kat-gen -- block` records one; it needs ETH_RPC_URL.",
-            options.fixture,
-            dir.display()
-        )
-    })?;
-    let pin = Pin::from_bytes(&pin_bytes).expect("the pin decodes");
-    let witness =
-        std::fs::read(dir.join(fixture::witness_file(&options.fixture))).map_err(|e| {
-            format!(
-                "the `{}` pin is committed but its witness is not ({e}); \
-                 `cargo run -p kat-gen -- block` re-records it.",
-                options.fixture
-            )
-        })?;
-    if let Err(e) = pin.check(&witness, &[]) {
-        // The journal is checked below against what the run produces, so only
-        // the witness half is checked here.
-        if !e.contains("journal") {
-            return Err(e);
-        }
-    }
+    let job = match &options.source {
+        Source::Fixture(stem) => fixture_job(stem)?,
+        Source::Stateless { path, case } => stateless_job(path, case.as_deref())?,
+    };
 
     let srs = load_srs(options.toy_srs)?;
 
-    let elf = fixture::build_revm_guest(pin.mode)?;
+    let elf = fixture::build_revm_guest(job.mode)?;
     let params = fixture::revm_params();
 
     let setup_started = Instant::now();
@@ -148,7 +283,7 @@ pub fn run(options: &Options) -> Result<(), String> {
 
     let io = emulator::GuestIo {
         input: Vec::new(),
-        advice: witness,
+        advice: job.advice,
     };
     // **One proving path** (S-STREAM). There is no archive and so no five
     // phase sections: the four clocks the `StreamingReport` carries are mapped
@@ -185,38 +320,36 @@ pub fn run(options: &Options) -> Result<(), String> {
     // fails the run, but only once the report is out: the measurement below is
     // still good, and it cost the whole run.
     let archived = match &options.out {
-        Some(dir) => {
-            match host::proof_archive::write_proof(dir, &options.fixture, &setup.vk, &block) {
-                Ok(paths) => {
-                    println!("wrote {}", paths.block.display());
-                    Ok(())
-                }
-                Err(e) => Err(format!("the proof does not write: {e}")),
+        Some(dir) => match host::proof_archive::write_proof(dir, &job.name, &setup.vk, &block) {
+            Ok(paths) => {
+                println!("wrote {}", paths.block.display());
+                Ok(())
             }
-        }
+            Err(e) => Err(format!("the proof does not write: {e}")),
+        },
         None => Ok(()),
     };
     let (peak_rss_bytes, peak_rss_source) = report::peak_rss();
     let statement = block.statement();
 
     let mut out = BenchReport {
-        fixture: options.fixture.clone(),
-        mode: match pin.mode {
+        fixture: job.name.clone(),
+        mode: match job.mode {
             Mode::Mini => "mini".to_string(),
             Mode::Stateless => "stateless".to_string(),
         },
-        block_number: pin.block_number,
-        block_hash: pin.block_hash.clone(),
-        txs: pin.txs_recorded,
-        gas_used: pin.gas_used,
+        block_number: job.block_number,
+        block_hash: job.block_hash.clone(),
+        txs: job.txs,
+        gas_used: job.gas_used,
         program_identity: hex(&setup.vk.identity.to_bytes()),
         srs: srs.1,
         in_flight: Some(options.in_flight),
         guest_cycles: cycles,
-        cycles_per_gas: if pin.gas_used == 0 {
+        cycles_per_gas: if job.gas_used == 0 {
             0.0
         } else {
-            cycles as f64 / pin.gas_used as f64
+            cycles as f64 / job.gas_used as f64
         },
         shards: setup
             .program
@@ -244,14 +377,6 @@ pub fn run(options: &Options) -> Result<(), String> {
     };
     out.price(options.hourly_usd);
 
-    // The journal the proof binds is the one the fixture pins.
-    let journal = std::fs::read(dir.join(fixture::journal_file(&options.fixture)))
-        .expect("the pinned journal");
-    assert_eq!(
-        statement.output, journal,
-        "the proved journal is not the pinned one, so the fixture is stale"
-    );
-
     print!("{}", out.to_table());
     if let Some(path) = &options.json {
         std::fs::write(path, out.to_json()).unwrap_or_else(|e| {
@@ -259,7 +384,34 @@ pub fn run(options: &Options) -> Result<(), String> {
         });
         println!("\n  json written to {}", path.display());
     }
-    archived
+
+    // The journal the proof binds, against the one the source expects. Like a
+    // failed `--out`, a mismatch fails after the report: the proof is good, but
+    // it is a proof of something other than what was asked.
+    let bound = match &job.journal {
+        Some(expected) if statement.output == *expected => {
+            println!(
+                "\n  journal: the {} bytes {} expects",
+                expected.len(),
+                job.name
+            );
+            Ok(())
+        }
+        Some(expected) => Err(format!(
+            "the proved journal {} is not the {} that {} expects",
+            hex(&statement.output),
+            hex(expected),
+            job.name
+        )),
+        None => {
+            println!(
+                "\n  journal: {}, with nothing to hold it to",
+                hex(&statement.output)
+            );
+            Ok(())
+        }
+    };
+    bound.and(archived)
 }
 
 /// The SRS, and what to call it in the report.
@@ -376,12 +528,21 @@ pub fn usage() -> &'static str {
      \x20     four files there -- <fixture>.vk, .identity, .public and .block.\n\
      \x20     `verifier block` reads the .vk, .public and .block; its identity\n\
      \x20     is 64 hex digits from your own channel, and .identity is only what\n\
-     \x20     the run claimed. Exits 1 if anything fails, --out included."
+     \x20     the run claimed. Exits 1 if anything fails, --out included.\n\
+     \x20 prove --stateless <file> [--case <name>] [the options above]\n\
+     \x20     the same job over one stateless input, proved by revm-block-stateless.\n\
+     \x20     <file> is an EEST fixture JSON, whose statelessInputBytes reach the\n\
+     \x20     guest unchanged and whose statelessOutputBytes the proved journal must\n\
+     \x20     equal, or a file of raw statelessInputBytes, with nothing to compare.\n\
+     \x20     --case picks one input, by part of its name, out of a JSON holding\n\
+     \x20     several."
 }
 
 /// Parse the verb's arguments.
 pub fn parse(args: &[String]) -> Result<Options, String> {
     let mut fixture = None;
+    let mut stateless = None;
+    let mut case = None;
     let mut json = None;
     let mut hourly_usd = None;
     let mut toy_srs = false;
@@ -423,6 +584,16 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
                     args.get(at).ok_or("--out needs a directory")?.clone(),
                 ));
             }
+            "--stateless" => {
+                at += 1;
+                stateless = Some(PathBuf::from(
+                    args.get(at).ok_or("--stateless needs a file")?.clone(),
+                ));
+            }
+            "--case" => {
+                at += 1;
+                case = Some(args.get(at).ok_or("--case needs a name")?.clone());
+            }
             "--toy-srs" => toy_srs = true,
             other if other.starts_with("--") => return Err(format!("unknown option `{other}`")),
             other if fixture.is_none() => fixture = Some(other.to_string()),
@@ -430,12 +601,134 @@ pub fn parse(args: &[String]) -> Result<Options, String> {
         }
         at += 1;
     }
+    let source = match (fixture, stateless) {
+        (Some(_), Some(_)) => return Err("a fixture and --stateless name two blocks".into()),
+        (Some(_), None) if case.is_some() => {
+            return Err("--case picks an input out of --stateless's file".into())
+        }
+        (Some(stem), None) => Source::Fixture(stem),
+        (None, Some(path)) => Source::Stateless { path, case },
+        (None, None) => {
+            return Err(
+                "prove needs a fixture stem, e.g. `mini-block`, or --stateless <file>".into(),
+            )
+        }
+    };
     Ok(Options {
-        fixture: fixture.ok_or("prove needs a fixture stem, e.g. `mini-block`")?,
+        source,
         json,
         hourly_usd,
         toy_srs,
         in_flight,
         out,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `bytes` in a file of this test run's own, removed when dropped.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(name: &str, bytes: &[u8]) -> Scratch {
+            let path =
+                std::env::temp_dir().join(format!("apogee-bench-{}-{name}", std::process::id()));
+            std::fs::write(&path, bytes).expect("a scratch file");
+            Scratch(path)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    /// The committed subset's non-empty inputs and their outputs.
+    fn pairs() -> Vec<zkevm::Pair> {
+        zkevm::pairs(&vectors().join("zkevm-subset.json"))
+            .into_iter()
+            .filter(|pair| !pair.input.is_empty())
+            .collect()
+    }
+
+    fn block(input: &[u8], output: &[u8]) -> serde_json::Value {
+        serde_json::json!({
+            "statelessInputBytes": format!("0x{}", hex(input)),
+            "statelessOutputBytes": format!("0x{}", hex(output)),
+        })
+    }
+
+    #[test]
+    fn a_fixture_s_input_reaches_the_guest_byte_for_byte() {
+        let pairs = pairs();
+        let (a, b, c) = (&pairs[0], &pairs[1], &pairs[2]);
+        let mut wrong = a.output.clone();
+        wrong[32] ^= 1;
+        let fixture = serde_json::json!({
+            "test_a": { "blocks": [block(&a.input, &a.output)] },
+            "test_b": { "blocks": [block(&b.input, &b.output), block(&c.input, &c.output)] },
+            "test_wrong": { "blocks": [block(&a.input, &wrong)] },
+        });
+        let file = Scratch::new("fixture.json", fixture.to_string().as_bytes());
+
+        let job = stateless_job(&file.0, Some("test_a")).expect("one input");
+        assert_eq!(job.mode, Mode::Stateless);
+        assert_eq!(
+            (job.advice, job.journal),
+            (a.input.clone(), Some(a.output.clone()))
+        );
+        let job = stateless_job(&file.0, Some("test_b/blocks[1]")).expect("one input");
+        assert_eq!(
+            (job.advice, job.journal),
+            (c.input.clone(), Some(c.output.clone()))
+        );
+        for case in [None, Some("test_b"), Some("test_c")] {
+            assert!(
+                stateless_job(&file.0, case).is_err(),
+                "{case:?} picks no one input"
+            );
+        }
+        // The library already publishes something else, before any proving.
+        assert!(stateless_job(&file.0, Some("test_wrong")).is_err());
+    }
+
+    #[test]
+    fn a_raw_file_is_the_input_itself() {
+        let pair = &pairs()[0];
+        let file = Scratch::new("input.bin", &pair.input);
+        let job = stateless_job(&file.0, None).expect("a raw input");
+        assert_eq!((job.advice, job.journal), (pair.input.clone(), None));
+        assert!(
+            stateless_job(&file.0, Some("x")).is_err(),
+            "a raw file is one input"
+        );
+        let empty = Scratch::new("empty.bin", &[]);
+        assert!(
+            stateless_job(&empty.0, None).is_err(),
+            "no advice, no advice region"
+        );
+    }
+
+    #[test]
+    fn a_stateless_file_and_a_fixture_are_exclusive() {
+        let args = |list: &[&str]| list.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+        assert!(matches!(
+            parse(&args(&["--stateless", "x.json", "--case", "a"])).map(|o| o.source),
+            Ok(Source::Stateless { case: Some(_), .. })
+        ));
+        assert!(matches!(
+            parse(&args(&["mini-block"])).map(|o| o.source),
+            Ok(Source::Fixture(_))
+        ));
+        for wrong in [
+            &["mini-block", "--stateless", "x.json"][..],
+            &["mini-block", "--case", "a"],
+            &[],
+        ] {
+            assert!(parse(&args(wrong)).is_err(), "{wrong:?}");
+        }
+    }
 }

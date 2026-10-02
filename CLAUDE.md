@@ -306,6 +306,13 @@ cargo run --release -p bench -- prove mini-block --out <dir>
                                             # reads the .vk, .public and .block; its identity is
                                             # 64 hex digits from YOUR channel, and .identity is
                                             # only the run's claim. Exits 1 if anything fails
+cargo run --release -p bench -- prove --stateless <fixture.json | input.bin> [--case <name>]
+                                            # S-STATELESS: prove ONE canonical stateless input with
+                                            # revm-block-stateless -- an EEST fixture's
+                                            # statelessInputBytes, unchanged, its
+                                            # statelessOutputBytes the journal the proof must bind,
+                                            # or a raw input file. Same options as above. A 2^18
+                                            # KECCAK_F shard is ~60 GB: a dev-server job
 
 cargo run --release -p profiler -- block mini-block [--top <n>] [--json <p>]
                                             # S26: where a guest's cycles go, by function and
