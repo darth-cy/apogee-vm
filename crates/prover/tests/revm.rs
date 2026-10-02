@@ -68,8 +68,8 @@ fn revm_params() -> ProgramParams {
     let mut heights = [revm_block::TRACE_HEIGHT_RELEASE; family::COUNT as usize];
     // **Derived, never listed.** Naming three of the six delegation families
     // left `MOD_MUL`, `SHA256_COMP` and `EC_ADD` at `2^20`, where `EC_ADD`'s
-    // 8,708 row-wise columns are a 292 GB forward pass and `SHA256_COMP`'s
-    // 16,688 are 560 GB — latent only while this block invokes neither.
+    // 8,708 row-wise columns are a 292 GB forward pass — latent only while this
+    // block invokes neither.
     // `crates/host/tests/prove.rs` and `crates/emulator/tests/revm.rs` both
     // already derive it; this is S26c §5's "derive over document" applied here.
     for (f, h) in heights.iter_mut().enumerate() {
@@ -286,7 +286,7 @@ fn a6_the_revm_block_proves_and_verifies() {
     assert!(families.contains(&KECCAK), "keccak is declared");
     // The declared set is read straight out of the linked image: four
     // consecutive `.rodata` records, `APOGDEL1` then the number —
-    // `0x0507` `KECCAK_F`, `0x0504` `MOD_MUL`, `0x0505` `SHA256_COMP` and
+    // `0x0507` `KECCAK_F`, `0x0504` `MOD_MUL`, `0x0508` `SHA256_COMP` and
     // `0x0506` `EC_ADD`. The last two arrived at S26c through the vendored
     // `revm-precompile`'s *default* `Crypto` bodies and `k256`'s patched
     // `ProjectivePoint`, and neither is invoked by this synthetic block — its

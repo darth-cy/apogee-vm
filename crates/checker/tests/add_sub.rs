@@ -36,7 +36,7 @@ const FIXTURE: &str = concat!(
 /// so this family's bytes are a function of the delegation registry. S26b's
 /// renumbering of `MOD_MUL` moved it and S26d's of `KECCAK_F` moved it again
 /// (`docs/spec/delegation.md` §10.2, §10.4).
-const FIXTURE_SHA256: &str = "6b80af867e5118314284f466a98ac110af2148b63d370269006634b2becdb455";
+const FIXTURE_SHA256: &str = "a6113128738235d972ff4c074f875ea43c2bd0290e516957e9f891496cae38c7";
 
 fn artifact() -> CircuitArtifact {
     add_sub::artifact(VARS)

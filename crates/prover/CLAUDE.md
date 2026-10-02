@@ -204,16 +204,18 @@ pub fn line(text: &str);                         // the raw stderr handle, not e
   so its table is `S[0..6]` and the packed table `S[6..9]`.
 - **Two delegation frame fills, six families.** `fill::delegation_frame` writes the four
   head columns, the four per frame word, the 38 gap bits a read and the frame pointer's 60
-  for a **bit-decomposing** family — `POSEIDON2`, `FR_ARITH` and `SHA256_COMP` — and
+  for a **bit-decomposing** family — `POSEIDON2` and `FR_ARITH` — and
   `fill::delegation_frame_range16` writes the same head and per-word columns with two
-  gap **chunks** a word and four halfword columns for the pointer, for the three families
+  gap **chunks** a word and four halfword columns for the pointer, for the four families
   that carry `RANGE16`. **Neither takes a `witness_base` offset any more**: every family
   puts the frame's own witness columns at `W[0]`, and the offset existed for S21's keccak
   alone, whose 1,600 state bits came first. Each family's own fill adds what is its own:
   `fill::keccak_f` the round selector, the round constant's four bytes and the round's nine
   byte-wide stages, `fill::poseidon2` six values' 520 bits apiece, `fill::fr_arith` three values'
-  bits, the selectors and the three witnessed scalars, `fill::sha256_comp` every frame word's
-  bits, the two carried sequences, the derived schedule and the four kinds of carry, and
+  bits, the selectors and the three witnessed scalars, `fill::sha256_comp` — since S26e —
+  the sixteen group selectors, the bytes of `A_{−2..3}`, `E_{−2..3}` and the six window
+  words and two derived words the sigmas read, each round's 52 stage bytes, masks and
+  carries, each schedule word's 39, and the four written words' high halfwords, and
   `fill::mod_mul` the four modulus selectors, the eight limbs they name, three values'
   halfwords and three `< m` chains, the quotient's limbs and halfwords, and the fourteen
   signed carries. `fill::ec_add` is the widest: six selectors, the modulus limbs and `b3`,
@@ -248,7 +250,8 @@ pub fn line(text: &str);                         // the raw stderr handle, not e
   computed nothing, taking the state's bits straight off the words the invocation read —
   because `parity`, `c_mask`, `theta_d`, `theta_a`, `rho_mask`, `rho_out`, `chi_and`,
   `chi_out` and `iota_out` are intermediates no log event carries, exactly as
-  `fill::sha256_comp` re-runs its compression. That is not re-deciding what the row says: the
+  `fill::sha256_comp` re-runs its four rounds (`sha256_row`, which also refuses a group
+  word at or above 16 by name and checks the frame's writes against its own answer). That is not re-deciding what the row says: the
   frame words come from the buffer, which the tracer filled from the log. `keccak_row` is
   written over `u64` lanes and reads the state's bytes off them, and it **refuses a round word
   at or above 24 by name** rather than indexing `ROUND_CONSTANTS` out of bounds. Every column

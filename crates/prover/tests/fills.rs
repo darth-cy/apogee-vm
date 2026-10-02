@@ -217,14 +217,17 @@ fn every_delegation_fill_satisfies_every_gate() {
     }
 }
 
-/// `SHA256_COMP`'s fill, over the whole shard and every gate.
+/// `SHA256_COMP`'s fill: every address of its `2^18` circuit exactly once.
 ///
-/// A **forward pass** here, where `MOD_MUL` and `EC_ADD` get sampled rows: this
-/// family carries no channel, so it is at `2^8`, where a pass is 137 MB. That is
-/// the stronger statement — every row, and the memory roots the halving phase
-/// closes — and it is affordable, so it is what this one does.
+/// S26c's whole-compression row was at `2^8`, where a forward pass over the
+/// filled shard was 137 MB and this test ran one. S26e's four-round row is at
+/// `2^18`, where a pass is the ~23 GB a deferred suite pays, so this is the
+/// address check the other channel-carrying families get, and the values are
+/// `crates/checker/tests/sha256.rs`' — which evaluates the fill's own columns,
+/// multiplicities included, against every gate and every obligation, row by
+/// row, over this same guest's trace.
 #[test]
-fn the_sha256_fill_covers_its_circuit_and_satisfies_every_gate() {
+fn the_sha256_fill_covers_its_circuit_exactly() {
     let program = common::sha256_program();
     let archive = common::sha256_archive(&program);
     covers(
@@ -232,43 +235,8 @@ fn the_sha256_fill_covers_its_circuit_and_satisfies_every_gate() {
         &archive,
         family::SHA256_COMP,
         constraints::sha256::MEMORY_COLUMNS,
-        constraints::sha256::WITNESS_COLUMNS,
+        constraints::sha256::WITNESS_COLUMNS - constraints::sha256::channels().len(),
     );
-
-    let circuit = constraints::family_circuit(family::SHA256_COMP, common::DELEGATION_VARS)
-        .expect("SHA256_COMP is registered at 2^8");
-    let mut challenges = gkr::ExternalChallenges::new();
-    for (slot, value) in [
-        (constants::challenge_slot::MEM_GAMMA, 3u64),
-        (constants::challenge_slot::MEM_ALPHA_ADDR, 5),
-        (constants::challenge_slot::MEM_ALPHA_TS, 7),
-        (constants::challenge_slot::MEM_ALPHA_VAL, 11),
-    ] {
-        challenges.insert(slot, field::Fr::from_u64(value));
-    }
-    let height = 1u32 << common::DELEGATION_VARS;
-    let fill = family_fill(family::SHA256_COMP).expect("SHA256_COMP has a fill");
-    let invocations = archive
-        .family_traces()
-        .delegation(family::SHA256_COMP)
-        .expect("SHA256_COMP has a buffer")
-        .len();
-    assert_eq!(invocations, 33, "the guest's pinned compression count");
-    for shard in 0..invocations.div_ceil(height as usize) as u32 {
-        let src = ShardSource::archived(&program, &archive, family::SHA256_COMP, shard, height, 0)
-            .expect("the shard's rows");
-        let columns = fill(&src).expect("the shard fills");
-        let values = gkr::forward(
-            &circuit.artifact,
-            &gkr::BaseLayer::new(columns),
-            &challenges,
-        );
-        assert_eq!(
-            gkr::self_check(&circuit.artifact, &values, &challenges),
-            Ok(()),
-            "shard {shard}"
-        );
-    }
 }
 
 /// Evaluate a sample of a filled shard's rows against the gates, row-locally.

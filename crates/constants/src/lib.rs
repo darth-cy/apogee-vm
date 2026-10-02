@@ -1153,13 +1153,16 @@ pub mod family {
     /// a call (`docs/handoff/S26-cycle.md`).
     pub const MOD_MUL: u32 = 15;
 
-    /// Invoked. One SHA-256 compression a row, over a 24-word frame: eight
-    /// state words and the sixteen schedule words of one 64-byte block.
+    /// Invoked. **Four SHA-256 rounds a row** since S26e, over a 25-word frame:
+    /// the round group, the eight working variables and a sixteen-word schedule
+    /// window; a compression is 16 rows glued by the frame's RAM. S26c's row
+    /// was a whole compression.
     ///
-    /// **Why it exists**: Ethereum's `0x02` precompile. The guest keeps the
-    /// padding and the block loop, exactly as `guest_sdk::keccak256` keeps the
-    /// sponge (`docs/spec/delegation.md` §11), and delegates one compression a
-    /// block.
+    /// **Why it exists**: Ethereum's `0x02` precompile, and since S-STATELESS
+    /// the stateless guest's SSZ merkleization, which is 8,011 compressions on
+    /// a 100 Mgas devnet block. The guest keeps the padding and the block
+    /// loop, exactly as `guest_sdk::keccak256` keeps the sponge
+    /// (`docs/spec/delegation.md` §11).
     pub const SHA256_COMP: u32 = 16;
 
     /// Invoked. One third of a complete elliptic-curve point addition a row,
@@ -1254,9 +1257,9 @@ pub mod family {
     /// opened the menu with it because one keccak row was a whole
     /// keccak-f[1600] permutation at ~345,600 inner columns, and a shard's
     /// forward pass is columns times height. S26d made one keccak row one
-    /// *round*, and that family sits at `2^18` today; what keeps `2^8` on the
-    /// menu is `POSEIDON2`, `FR_ARITH` and `SHA256_COMP`
-    /// (`docs/spec/delegation.md` §9). What closes `2^8` to a family is a
+    /// *round*, and that family sits at `2^18` today, as does `SHA256_COMP`
+    /// since S26e made one of its rows four rounds; what keeps `2^8` on the
+    /// menu is `POSEIDON2` and `FR_ARITH` (`docs/spec/delegation.md` §9). What closes `2^8` to a family is a
     /// channel whose **table needs more than eight variables**, not carrying a
     /// channel at all: `constraints::lookup::table_vars` is 19 for `TIMESTAMP`
     /// and 16 for `RANGE16` and `XOR8`, so any of those three forces `2^16` or
@@ -1284,17 +1287,18 @@ pub mod family {
     /// that needs it (`docs/handoff/S16-add-sub.md` answer 7).
     ///
     /// A **delegation** family is the other way round: its floor is whatever
-    /// its own channels imply — 0 for the three that carry none — and its
-    /// ceiling is its own circuit's width. Those widths differ by **three
-    /// orders of magnitude**, so the six do not share a height and there is no
-    /// reason they should: [`SHA256_COMP`] is 16,688 inner columns a row and
-    /// `2^16` of them is 35 GB of forward pass, where [`MOD_MUL`] is 2,244 and
-    /// `2^16` is 5.1 GB. **That ceiling is a judgement and not a wall**, and
-    /// [`KECCAK_F`]'s `2^18` is what shows it: ~60 GB a shard is payable there
-    /// because a keccak-heavy block has tens of thousands of invocations to
-    /// amortise it over, where no guest in this repository invokes
-    /// [`SHA256_COMP`] often enough to buy 35 GB of rows back. Below that
-    /// ceiling the height is a **proof-size**
+    /// its own channels imply — 0 for the two that carry none — and its
+    /// ceiling is its own circuit's width. Those widths differ by **orders of
+    /// magnitude**, so the six do not share a height and there is no reason
+    /// they should: [`FR_ARITH`] is 142 inner columns a row where [`KECCAK_F`]
+    /// is 5,490 at `2^18`. **That ceiling is a judgement and not a
+    /// wall**, and [`KECCAK_F`]'s `2^18` is what shows it: ~60 GB a shard is
+    /// payable there because a keccak-heavy block has tens of thousands of
+    /// invocations to amortise it over. [`SHA256_COMP`] took the same height
+    /// for the same reason at S26e — S26c's whole-compression row was 16,688
+    /// inner columns and pinned it to `2^8`, and four rounds a row is 2,802 —
+    /// once the stateless guest's SSZ hashing made it 32 shards and two thirds
+    /// of a real block's proof. Below that ceiling the height is a **proof-size**
     /// decision — a `2^8` shard's proof does not shrink with its height, so a
     /// family's height is what decides how many shards a block's invocations
     /// take, and `MOD_MUL` at `2^8` cost a measured block 1,048 shards against
@@ -1328,7 +1332,7 @@ pub mod family {
         1 << 12, // PUBLIC_OUTPUT, likewise
         1 << 22, // ADVICE_WINDOWS, at the window height
         1 << 16, // MOD_MUL, and NOT 2^8 — see the paragraph above
-        1 << 8,  // SHA256_COMP: ~20,000 inner columns a row, so 2^16 is 42 GB
+        1 << 18, // SHA256_COMP: CHOSEN above its floor of 16 (RANGE16 and XOR8)
         1 << 16, // EC_ADD: forced, its RANGE16 table needing 16 variables
     ];
 
@@ -1663,18 +1667,32 @@ pub mod ecall {
     /// here and the EVM's opcode runs through the ordinary RV32 path.
     pub const PRECOMPILE_MOD_MUL: u32 = 0x0504;
 
-    /// One **SHA-256 compression** over a 24-word frame, `a0` = the frame base
-    /// pointer, read and written in place. A **delegation** call (S26c);
-    /// `constants::family::SHA256_COMP` is the family that proves it and
-    /// `docs/spec/delegation.md` §15 the frame table.
+    /// **Retired and burned at S26e.** `0x0505` was S26c's SHA-256 over a
+    /// 96-byte frame holding the chaining state and one block: **one call, one
+    /// whole compression**. S26e made one call four rounds, which needs a
+    /// 100-byte frame whose word 0 is the round group — a different call with
+    /// different semantics, and an old binary issuing `0x0505` under the new
+    /// executor would have its first state word read as a group and get four
+    /// rounds of a shuffled state back, with nothing failing loudly. The
+    /// re-shaped call took [`PRECOMPILE_SHA256_COMP`] = `0x0508`.
+    pub const RETIRED_SHA256_COMP_WHOLE_COMPRESSION: u32 = 0x0505;
+
+    /// **Four rounds** of SHA-256's compression over a 25-word frame, `a0` =
+    /// the frame base pointer, read and written in place. A **delegation**
+    /// call (S26c, re-shaped at S26e); `constants::family::SHA256_COMP` is the
+    /// family that proves it and `docs/spec/delegation.md` §15 the frame table.
     ///
-    /// Frame words 0..8 are the chaining state `H0..H7` and words 8..24 the
-    /// sixteen big-endian-decoded schedule words `W0..W15` of one 64-byte
-    /// block. The invocation writes the eight state words and nothing else.
+    /// Frame word 0 is the round group `r` in `0..16`, words 1..9 the working
+    /// variables and words 9..25 the schedule window `W_{4r}..W_{4r+15}`. The
+    /// call runs rounds `4r..4r + 4`, writes the working variables after them,
+    /// and writes the window back shifted by four with the four schedule words
+    /// it derived last. **A whole compression is 16 of these calls** on one
+    /// frame, as a permutation is 24 `KECCAK_F` calls.
     ///
-    /// **It is not the hash.** Padding, the length encoding and the block loop
-    /// stay in guest code, exactly as they do for keccak.
-    pub const PRECOMPILE_SHA256_COMP: u32 = 0x0505;
+    /// **It is not the hash.** Padding, the length encoding, the block loop
+    /// and the final `H + V` stay in guest code, exactly as the sponge does
+    /// for keccak.
+    pub const PRECOMPILE_SHA256_COMP: u32 = 0x0508;
 
     /// One **third of an elliptic-curve point addition** over a 97-word frame,
     /// `a0` = the frame base pointer, read and written in place. A
@@ -2158,12 +2176,21 @@ pub mod fr_arith {
 ///
 /// **This is not `MULMOD`.** The EVM's opcode takes an arbitrary modulus and
 /// runs through the ordinary RV32 path; nothing here serves it.
-/// SHA-256's compression function, frozen at S26c.
+/// SHA-256's compression function, frozen at S26c and re-shaped at S26e.
 ///
 /// The frame's shape and the algorithm's two constant tables. Three consumers
 /// read them and none restates them: `constraints::sha256` builds the circuit,
-/// `emulator` executes the frame, and `guest_sdk` runs the padding and the
-/// block loop around the shim.
+/// `emulator` executes the frame, and `guest_sdk` runs the padding, the block
+/// loop and the sixteen calls a compression takes.
+///
+/// **One call is four rounds**, and a compression is [`GROUPS`] calls on one
+/// frame: call `r` runs rounds `4r..4r + 4` with the window's first four words
+/// as their schedule words, derives the next four schedule words from the
+/// window, shifts the window by four and rewrites the eight working variables.
+/// The frame is ordinary RAM, so the global memory multiset is what proves call
+/// `r`'s output is call `r + 1`'s input, and the guest's own loop supplies `r`.
+/// After the last call the frame's state words are the working variables after
+/// round 63, which the caller adds to the chaining state it kept.
 ///
 /// `docs/spec/delegation.md` §15 is the frame table. FIPS 180-4 is the
 /// algorithm, and `crates/constants/tests/sha256.rs` **re-derives** both tables
@@ -2171,48 +2198,40 @@ pub mod fr_arith {
 /// eight primes and the cube roots of the first sixty-four — in exact integer
 /// arithmetic rather than trusting the transcription.
 pub mod sha256 {
-    /// Words of chaining state, and words the invocation writes.
+    /// Words of chaining state, and of working variables `a..h`.
     pub const STATE_WORDS: usize = 8;
 
-    /// Schedule words the frame carries: one 64-byte block, big-endian
-    /// decoded. The remaining 48 are the circuit's, derived by the message
-    /// schedule and committed as its advice.
+    /// Words of one 64-byte block, big-endian decoded: the schedule's first
+    /// sixteen, and the width of the frame's window.
     pub const BLOCK_WORDS: usize = 16;
 
     /// Rounds of the compression function.
     pub const ROUNDS: usize = 64;
 
-    /// Frame word 0: the chaining state `H0..H7`, read and written.
-    pub const STATE_WORD: usize = 0;
+    /// Rounds one call runs.
+    pub const ROUNDS_PER_CALL: usize = 4;
 
-    /// Frame word 8: the block's schedule words `W0..W15`, read and written
-    /// back unchanged.
-    pub const BLOCK_WORD: usize = STATE_WORD + STATE_WORDS;
+    /// Calls one compression takes, and the values the group word may hold.
+    pub const GROUPS: usize = ROUNDS / ROUNDS_PER_CALL;
+
+    /// Frame word 0: the round group `r` in `0..GROUPS`, read and written back
+    /// unchanged. The guest's loop advances it.
+    pub const GROUP_WORD: usize = 0;
+
+    /// Frame words 1..9: the working variables `a, b, c, d, e, f, g, h`, read
+    /// before the call's four rounds and written after them.
+    pub const STATE_WORD: usize = 1;
+
+    /// Frame words 9..25: the schedule window `W_{4r}..W_{4r+15}`. A call reads
+    /// all sixteen and writes them back shifted by four, the last four being
+    /// the schedule words it derived. Call 0's window is the block.
+    pub const WINDOW_WORD: usize = STATE_WORD + STATE_WORDS;
 
     /// The frame, in 32-bit words.
-    pub const FRAME_WORDS: usize = BLOCK_WORD + BLOCK_WORDS;
+    pub const FRAME_WORDS: usize = WINDOW_WORD + BLOCK_WORDS;
 
     /// The frame, in bytes.
     pub const FRAME_BYTES: usize = 4 * FRAME_WORDS;
-
-    /// The carry out of `a_{i+1} = T1 + T2 - 2^32 * ca`, in bits.
-    ///
-    /// **Derived, not observed.** `T1 = h + Sigma1 + Ch + K + W` is five
-    /// values below `2^32`, so `T1 < 5 * 2^32`, and `T2 = Sigma0 + Maj < 2 *
-    /// 2^32`, so the carry is at most 6. Three bits.
-    pub const CARRY_A_BITS: usize = 3;
-
-    /// The carry out of `e_{i+1} = a_{i-3} + T1 - 2^32 * ce`, in bits: at most
-    /// 5, by the same arithmetic.
-    pub const CARRY_E_BITS: usize = 3;
-
-    /// The carry out of the message schedule's four-term sum, in bits: at most
-    /// 3.
-    pub const CARRY_W_BITS: usize = 2;
-
-    /// The carry out of the final `H_j + V_j`, in bits: two values below
-    /// `2^32`, so exactly one.
-    pub const CARRY_OUT_BITS: usize = 1;
 
     /// The initial hash value `H0..H7`: the first 32 bits of the fractional
     /// parts of the square roots of the first eight primes. **The guest's**,

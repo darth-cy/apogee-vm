@@ -125,7 +125,7 @@ pub const PINS: [(&str, &str); 26] = [
     ),
     (
         "sha256-ops.elf",
-        "b972abf1f31d65421374a4486d12709a67dc1af2d6d4a08bbcd8fac6c2f131d5",
+        "cf27eb2d421a75d955eb83b14222dab5e63a25b8324a22c1144569a5c8f06121",
     ),
     (
         "ec-ops.elf",

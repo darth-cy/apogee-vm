@@ -84,6 +84,12 @@ pub const KECCAK_INVOCATIONS: u64 = KECCAK_PERMUTATIONS * constants::keccak::ROU
 /// disagreeing is a red suite rather than a slow one.
 pub const KECCAK_VARS: u32 = 18;
 
+/// `SHA256_COMP`'s height since S26e, for [`KECCAK_VARS`]' reason: its two
+/// channels put its floor at 16 and `2^18` is the choice above it, a
+/// compression being 16 rows (`docs/spec/delegation.md` §15). This must equal
+/// `constants::family::DEFAULT_HEIGHTS[SHA256_COMP]`'s exponent.
+pub const SHA256_VARS: u32 = 18;
+
 /// `guests/keccak-unused`'s exit status.
 pub const KECCAK_UNUSED_RESULT: u32 = 7;
 
@@ -419,11 +425,10 @@ pub fn mod_mul_archive(program: &Program) -> TraceArchive {
 }
 
 /// S26c's guest: `guests/sha256-ops`, which calls the `SHA256_COMP` delegation
-/// by name and through `guest_sdk::sha256`'s block loop, 33 compressions in all.
+/// by name and through `guest_sdk::sha256`'s block loop.
 ///
-/// `SHA256_COMP` stays at its `2^8` default — it carries no channel, so no floor
-/// applies, and one row is 20,000 inner columns, which is why `2^16` is not open
-/// to it (`docs/spec/delegation.md` §9.2). Its window families need `2^18` for
+/// `SHA256_COMP` is at [`SHA256_VARS`], its default since S26e made one row four
+/// rounds (`docs/spec/delegation.md` §15). Its window families need `2^18` for
 /// `mod_mul_program`'s reason.
 pub fn sha256_program() -> Program {
     let mut heights = [1 << 18; family::COUNT as usize];
@@ -437,7 +442,7 @@ pub fn sha256_program() -> Program {
     ] {
         heights[f as usize] = 1 << ADD_VARS;
     }
-    heights[family::SHA256_COMP as usize] = 1 << DELEGATION_VARS;
+    heights[family::SHA256_COMP as usize] = 1 << SHA256_VARS;
     program_of(
         "sha256-ops",
         &ProgramParams {
@@ -447,10 +452,10 @@ pub fn sha256_program() -> Program {
     )
 }
 
-/// The post-execution archive of `sha256-ops`' one run: exit 12, one per check
+/// The post-execution archive of `sha256-ops`' one run: exit 13, one per check
 /// but the first.
 pub fn sha256_archive(program: &Program) -> TraceArchive {
-    trace(program, 12)
+    trace(program, 13)
 }
 
 /// A run with no input and no hint, which must exit with `status`.

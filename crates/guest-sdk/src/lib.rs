@@ -462,14 +462,14 @@ pub mod recursion {
     pub use constants::ec_add::{BN254_GROUPS, SECP256K1_GROUPS};
     pub use constants::sha256::IV as SHA256_IV;
 
-    /// The SHA-256 compression delegation's 96-byte frame: the eight chaining
-    /// words, then one block's sixteen big-endian-decoded schedule words
+    /// The SHA-256 delegation's 100-byte frame: the round group, the eight
+    /// working variables, then the sixteen-word schedule window
     /// (`docs/spec/delegation.md` §15).
     ///
     /// **Words and not bytes**, for [`ModMulFrame`]'s reason: the caller has
-    /// already decoded the block into `u32`s to run its own compression, so a
-    /// byte frame would cost a pack and an unpack per block. The `u32` element
-    /// type is also what gives the type its alignment for free.
+    /// already decoded the block into `u32`s, so a byte frame would cost a pack
+    /// and an unpack per block. The `u32` element type is also what gives the
+    /// type its alignment for free.
     #[repr(C, align(4))]
     pub struct Sha256Frame(pub [u32; sha::FRAME_WORDS]);
 
@@ -486,9 +486,10 @@ pub mod recursion {
     // executor's, and a frame whose `Z1` a guest reads at word 17 against an
     // executor that writes it at 18 is a wrong answer with no error anywhere in
     // the emulator, the trace, the prover or the verifier.
-    const _: () = assert!(sha::STATE_WORD == 0);
-    const _: () = assert!(sha::BLOCK_WORD == 8);
-    const _: () = assert!(sha::FRAME_WORDS == 24);
+    const _: () = assert!(sha::GROUP_WORD == 0);
+    const _: () = assert!(sha::STATE_WORD == 1);
+    const _: () = assert!(sha::WINDOW_WORD == 9);
+    const _: () = assert!(sha::FRAME_WORDS == 25);
     const _: () = assert!(ec::SELECTOR_WORD == 0);
     const _: () = assert!(ec::X1_WORD == 1);
     const _: () = assert!(ec::Y1_WORD == 9);
@@ -499,20 +500,23 @@ pub mod recursion {
     const _: () = assert!(ec::FRAME_WORDS == 97);
 
     impl Sha256Frame {
-        /// A callable frame: the chaining state, then the block's sixteen
-        /// schedule words. One pass over the words and no zeroing pass before
-        /// it, [`ModMulFrame::of`]'s reason applying here too — a SHA-256 of
-        /// any length is a block loop, so the framing cost is paid per block.
+        /// A frame ready for call 0: group 0, the chaining state as the
+        /// working variables `a..h`, and the block's sixteen words as the
+        /// window. One pass over the words and no zeroing pass before it,
+        /// [`ModMulFrame::of`]'s reason applying here too.
         pub fn of(state: &[u32; sha::STATE_WORDS], block: &[u32; sha::BLOCK_WORDS]) -> Sha256Frame {
             let (s, w) = (state, block);
             Sha256Frame([
-                s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], w[0], w[1], w[2], w[3], w[4], w[5],
-                w[6], w[7], w[8], w[9], w[10], w[11], w[12], w[13], w[14], w[15],
+                0, s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7], w[0], w[1], w[2], w[3], w[4],
+                w[5], w[6], w[7], w[8], w[9], w[10], w[11], w[12], w[13], w[14], w[15],
             ])
         }
 
-        /// The chaining state after a successful call.
-        pub fn state(&self) -> [u32; sha::STATE_WORDS] {
+        /// The eight working variables the frame holds. After [`sha256_comp`]
+        /// they are the compression's `a..h` after round 63, which the caller
+        /// adds to the chaining state it kept: the frame never held that state
+        /// past call 0.
+        pub fn working(&self) -> [u32; sha::STATE_WORDS] {
             let w = &self.0;
             [
                 w[sha::STATE_WORD],
@@ -618,14 +622,14 @@ pub mod recursion {
         answered(ret)
     }
 
-    /// Compress one block into the frame's chaining state, in place. `false`
-    /// on exactly `-ENOSYS`, which is the caller's signal to run its own
-    /// compression.
+    /// **Four rounds** over the frame, in place: rounds `4r..4r + 4` for the
+    /// group `r` in frame word 0, and the window shifted by four with the four
+    /// schedule words those rounds unlock appended. `false` on exactly
+    /// `-ENOSYS`.
     ///
-    /// The schedule's sixteen words are read and written back unchanged; the
-    /// other forty-eight the message schedule derives are the circuit's own
-    /// advice and never cross the frame.
-    pub fn sha256_comp(frame: &mut Sha256Frame) -> bool {
+    /// A caller compressing a block wants [`sha256_comp`]; this is the raw
+    /// call, for a caller driving the group itself.
+    pub fn sha256_rounds(frame: &mut Sha256Frame) -> bool {
         // SAFETY: as [`poseidon2`].
         let ret = unsafe {
             ecall1(
@@ -634,6 +638,31 @@ pub mod recursion {
             )
         };
         answered(ret)
+    }
+
+    /// One compression's 64 rounds: the sixteen calls in group order, leaving
+    /// the working variables after round 63 in the frame for
+    /// [`Sha256Frame::working`]. `false` on exactly `-ENOSYS` from the
+    /// **first** call, and then the frame is untouched, so the caller's own
+    /// compression can run from the same inputs. A later call answering
+    /// `-ENOSYS` is a broken executor, and skipping rounds silently would be
+    /// worse than exiting, as it is for `keccak256`.
+    ///
+    /// The frame is transformed in place, so nothing is copied between calls
+    /// and the chain a proof reads is the frame's own RAM history
+    /// (`docs/spec/delegation.md` §15).
+    pub fn sha256_comp(frame: &mut Sha256Frame) -> bool {
+        frame.0[sha::GROUP_WORD] = 0;
+        if !sha256_rounds(frame) {
+            return false;
+        }
+        for group in 1..sha::GROUPS as u32 {
+            frame.0[sha::GROUP_WORD] = group;
+            if !sha256_rounds(frame) {
+                exit(EXIT_PRECOMPILE_ERROR);
+            }
+        }
+        true
     }
 
     /// Run **one group** of a point addition over the frame in place, the group
@@ -974,7 +1003,8 @@ fn sha256_compress_software(
     }
 }
 
-/// One compression: the delegation, or the software path.
+/// One compression: the delegation's sixteen calls and the final `H + V`, or
+/// the software path.
 ///
 /// The frame satisfies `docs/spec/delegation.md` §4's two rules exactly as
 /// keccak's does — the window rule by construction, the stack lying below
@@ -982,7 +1012,9 @@ fn sha256_compress_software(
 fn sha256_compress(state: &mut [u32; sha256c::STATE_WORDS], block: &[u32; sha256c::BLOCK_WORDS]) {
     let mut frame = recursion::Sha256Frame::of(state, block);
     if recursion::sha256_comp(&mut frame) {
-        *state = frame.state();
+        for (h, v) in state.iter_mut().zip(frame.working()) {
+            *h = h.wrapping_add(v);
+        }
         return;
     }
     sha256_compress_software(state, block);

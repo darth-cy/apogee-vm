@@ -42,6 +42,8 @@ impl<'a> StreamingRun<'a> {
 // S21: the reference permutation, and the frame's two readings of it.
 pub fn keccak_round(state: &mut [u64; 25], round: usize);   // S26d: what ONE invocation does
 pub fn keccak_f(state: &mut [u64; 25]);                     // 24 of them
+// S26e: what ONE SHA256_COMP invocation does -- four rounds and four schedule words.
+pub fn sha256_call(group: usize, state: &mut [u32; 8], window: &mut [u32; 16]);
 pub fn lanes_of(words: &[u32; 50]) -> [u64; 25];            // the STATE words, not the frame's
 pub fn words_of(lanes: &[u64; 25]) -> [u32; 50];
 ```
@@ -166,11 +168,12 @@ the **journal** `Machine::finish` reads back out of the public output window at 
   touched, and both went with the POSIX layer. A number the ABI does not list reads `a7`
   and `a0` like any other and answers `-ENOSYS`. The emulator spells no ABI number itself;
   `crates/constants/tests/ecall_abi.rs` checks that.
-- **A delegation ecall's own answer can be a fatal error, and two of the six are** (S26,
-  restated at S26b and S26c). Four delegations are total on their frames: any 200, 96, 100
-  or 96 bytes are a state, a triple of `Fr`s, an operand pair or a chaining state and a
-  block — `SHA256_COMP` is the clearest case, every `u32` being a legal state word and a
-  legal schedule word, so `sha256_frame` takes no `pc` at all. `MOD_MUL`'s frame is not
+- **A delegation ecall's own answer can be a fatal error, and only `POSEIDON2`'s never
+  is** (S26, restated at S26b–S26e). Any 96 bytes are a Poseidon2 state, so
+  `poseidon2_frame` takes no `pc`; `FR_ARITH` refuses an opcode that is not add, multiply
+  or inverse and an operand that is not a canonical `Fr`; `KECCAK_F` and, since S26e,
+  `SHA256_COMP` refuse the one word that indexes the call — a round at or above 24, a
+  group at or above 16 — which has no one-hot selector in the circuit. `MOD_MUL`'s frame is not
   total, and since S26b it refuses **three** frames by name rather than one: a selector word
   no `mod_mul::CODES` entry holds, and either operand at or above the modulus it selects.
   **`EC_ADD`'s is not either**, and it refuses **seven**: a selector naming no (curve,
@@ -208,10 +211,15 @@ the **journal** `Machine::finish` reads back out of the public output window at 
   shown to be load-bearing — the 24 rounds of one state are pairwise distinct. The guest SDK's
   software fallback is a second implementation by necessity — it is `no_std` guest code — and
   `guests/keccak-test` is what holds the two to the same digests.
-- **`keccak_frame` can refuse a frame**, which `sha256_frame` cannot: a round word at or above
-  24 has no one-hot selector in the circuit, so answering it would produce a trace no honest
-  prover could prove. It is `EmuError::DelegationFrame`, as `mod_mul_frame`'s and
-  `ec_add_frame`'s refusals are.
+- **`keccak_frame` and `sha256_frame` can refuse a frame**: a round word at or above 24, or
+  a group word at or above 16, has no one-hot selector in the circuit, so answering it would
+  produce a trace no honest prover could prove. It is `EmuError::DelegationFrame`, as
+  `mod_mul_frame`'s and `ec_add_frame`'s refusals are.
+- **`sha256_call` is what one `SHA256_COMP` invocation does** (S26e): four rounds with
+  `K_{4r+k}` and window word `k`, then the four schedule words those rounds unlock, the
+  window shifted down four and refilled with them. Sixteen calls are one compression, the
+  feed-forward being the caller's; its unit test holds the first call to FIPS 180-4's
+  `t = 3` working variables and `W_16..W_19`, and sixteen to `sha256("abc")`.
 
 ## There is no second executor
 `qemu-riscv32` is gone from the repository: not an oracle, not a runner, not a dependency,

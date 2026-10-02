@@ -105,7 +105,7 @@ One table ties a family, its number and its frame width together:
 | `POSEIDON2` | 10 | `PRECOMPILE_POSEIDON2` = `0x0500` | 24 | `DELEGATION_POSEIDON2` = 5 |
 | `FR_ARITH` | 11 | `PRECOMPILE_FR_ARITH` = `0x0502` | 25 | `DELEGATION_FR_ARITH` = 6 |
 | `MOD_MUL` | 15 | `PRECOMPILE_MOD_MUL` = `0x0504` | 25 | `DELEGATION_MOD_MUL` = 7 |
-| `SHA256_COMP` | 16 | `PRECOMPILE_SHA256_COMP` = `0x0505` | 24 | `DELEGATION_SHA256_COMP` = 8 |
+| `SHA256_COMP` | 16 | `PRECOMPILE_SHA256_COMP` = `0x0508` | 25 | `DELEGATION_SHA256_COMP` = 8 |
 | `EC_ADD` | 17 | `PRECOMPILE_EC_ADD` = `0x0506` | 97 | `DELEGATION_EC_ADD` = 9 |
 
 `0x0500` was assigned at S10 with a calling convention and no circuit; S23 gave
@@ -135,6 +135,14 @@ failing loudly — so `0x0501` is **retired and burned**,
 `constants::ecall::RETIRED_KECCAK_F_WHOLE_PERMUTATION` keeps it, and the
 re-shaped call took the next free number. The family id, the address-space tag
 and the byte order of the state did not move.
+
+`SHA256_COMP`'s number is `0x0508` and not `0x0505` for the fourth. S26c gave it
+`0x0505` over a 24-word frame, the chaining state and one block, and one call
+performed a **whole compression**; S26e made one call **four rounds**, a 25-word
+frame whose word 0 is the round group and whose last sixteen are the schedule
+window (§15.1). An old binary's state word would be read as a group, so `0x0505`
+is **retired and burned**, `constants::ecall::RETIRED_SHA256_COMP_WHOLE_COMPRESSION`
+keeps it, and the family id and the address-space tag did not move.
 
 The table itself is `constants::delegation::TYPES`, which `program::DELEGATIONS`
 *is* — one array, read by the emulator's dispatch, by the request-side gates and
@@ -713,8 +721,8 @@ shards sort last. `verify_block` needs no edit at all.
 ## 9. The height, and the one lookup channel a delegation family may carry
 
 **Each delegation family takes its own height, and the six do not share one.**
-`POSEIDON2`, `FR_ARITH` and `SHA256_COMP` take `2^8`; `MOD_MUL` and `EC_ADD` take
-`2^16`; `KECCAK_F` takes `2^18` (§9.1, §9.2). A height is a *ceiling* derived from
+`POSEIDON2` and `FR_ARITH` take `2^8`; `MOD_MUL` and `EC_ADD` take `2^16`;
+`KECCAK_F` and, since S26e, `SHA256_COMP` take `2^18` (§9.1, §9.2). A height is a *ceiling* derived from
 one family's width and a *floor* derived from its channels, never a rule about
 delegation — and, since S26d, it may also be a deliberate step *above* that floor,
 four times the rows for a quarter the proof bytes a permutation (§9.2).
@@ -748,12 +756,12 @@ being narrow, took the height one entry past that floor as well: **5,490** inner
 columns at `2^18`, about **60 GB** and **10,922** permutations a shard (§6.0).
 The 60 GB is `EC_ADD`'s three terms (§16.4) at this width — 46.05 GB of inner
 layers, 2.23 GB of committed base and 11.27 GB of transition 0's half-height `Fr`
-bind. What keeps `2^8` on the menu is the three families still at it. The menu
+bind. What keeps `2^8` on the menu is the two families still at it. The menu
 has a second sub-`2^16` entry since S-STREAM, `2^12`, and it is **not** a
 delegation height: it is the pinned height of the two public-value families,
 which is what places their windows (`docs/spec/public-values.md` §2). A
-channel-free delegation family may be declared at it — `POSEIDON2`, `FR_ARITH`
-and `SHA256_COMP` reach no table that would refuse it — and none is.
+channel-free delegation family may be declared at it — `POSEIDON2` and
+`FR_ARITH` reach no table that would refuse it — and neither is.
 
 At `2^8` **no range channel's table fits**: `V[range16]` over 8 variables holds
 `[0, 2^8)`, not `[0, 2^16)`, and `lookup::channel_trees` refuses a channel whose
@@ -782,8 +790,9 @@ assertion and naming it in the guard would have refused the heights these
 families actually take. Since S26c the guard reads each family's **own**
 `channels()` and takes the widest range channel's `BITS`, so a family is held to
 exactly the floor its channels imply and no table of families has to be kept in
-step: `SHA256_COMP` with no channel has a floor of 0, `KECCAK_F`, `EC_ADD` and
-`MOD_MUL` a floor of 16, and the seven execution families 19 as before. **Since
+step: `POSEIDON2` and `FR_ARITH` with no channel have a floor of 0, `KECCAK_F`,
+`SHA256_COMP`, `EC_ADD` and `MOD_MUL` a floor of 16, and the seven execution
+families 19 as before. **Since
 S26d the per-channel number is `lookup::table_vars` and not `BITS` with a range
 filter**: `XOR8`'s table is 65,536 rows without being a range channel at all, so
 a filter on `IS_RANGE` would have given a family carrying it alone a floor of 0
@@ -856,7 +865,7 @@ to express:
 | `POSEIDON2` | 2,020 | 4,192 | `2^8` | `2^16` is 13.0 GB, and the guests that reach it invoke it in the hundreds |
 | `FR_ARITH` | 142 | 2,680 | `2^8` | ditto, 5.9 GB |
 | `MOD_MUL` | 2,244 at `2^16` | 325 | **`2^16`** | re-shaped at S26c; §10.3 |
-| `SHA256_COMP` | 16,688 | 8,216 | `2^8` | `2^16` is 35 GB of forward pass a shard, and no guest here invokes it often enough to buy the rows back — contrast `KECCAK_F` below |
+| `SHA256_COMP` | 2,802 at `2^18` | 624 | **`2^18`** | re-shaped at S26e and raised past its floor for `KECCAK_F`'s reason (§15). It was 16,688 and 8,216 at `2^8`, where `2^16` would have been 35 GB of forward pass a shard |
 | `EC_ADD` | 8,772 at `2^16` | 1,420 | **`2^16`** | forced: `RANGE16` needs 16 variables and `2^18` is 4x worse |
 
 **`KECCAK_F`'s `2^18` is the first height here that is a choice above a floor
@@ -869,7 +878,8 @@ the circuit's width and depth, and the sumcheck rounds grow as `11n + n(n+1)/2` 
 from 373,276 bytes to 381,100 while the permutations in it go from 2,730 to
 10,922: a quarter the proof bytes a permutation, for four times the shard,
 ~60 GB against ~15. **At ~60 GB it is now the peak-setting family of a block**,
-ahead of `EC_ADD`'s 20.5 GB (§16.4). It buys the pinned mini-block nothing, whose
+ahead of `SHA256_COMP`'s derived ~30 GB at the same height (§15.3) and `EC_ADD`'s
+20.5 GB (§16.4). It buys the pinned mini-block nothing, whose
 permutations fit one shard at either height and occupy a tenth of this one; it is
 aimed at the **stateless full block**, where the 45,000–103,000 permutations
 `docs/handoff/S-BATCH-miniblock-gate.md` §11.2's node count implies are **5 to
@@ -996,8 +1006,9 @@ same way at the same time took its committed width from **3,468 to 325**, a
 factor of 10.7, and its proof from 360,948 bytes a shard to 135,220.
 
 **What the amendment does not touch.** A family at `2^8` still carries no
-channel, because no table fits there — `SHA256_COMP` is the worked example, and
-its row is 20,000 inner columns, so `2^16` is not open to it. And **no**
+channel, because no table fits there — `POSEIDON2` and `FR_ARITH` are the two
+left; `SHA256_COMP` was the worked example at S26c, its row 16,688 inner columns,
+until S26e re-shaped it onto both channels at `2^18` (§10.5). And **no**
 delegation family may carry `TIMESTAMP` at any height on this menu: `BITS = 19`
 needs `2^20`, which is an execution family's floor. So a frame's timestamp gap is
 never that channel's obligation — it is a bit decomposition at `2^8` and three
@@ -1066,6 +1077,31 @@ signature and the sponge and padding behind it; and the proof's shape.
 **One number a later change has to respect**, and it is in §6.5: the `XOR8`
 channel carries 1,020 obligations against a 1,024-leaf fraction tree, so four more
 double the tree.
+
+### 10.5 What S26e amended: four SHA-256 rounds a row
+
+The same change made a second time, to `SHA256_COMP`, and confined the same way:
+its registry row, its frame table, its circuit, fill, shim and executor, and its
+ecall number. The row went from **a whole compression to four rounds and four
+schedule words**, the frame from 24 words to 25, the height from `2^8` to `2^18`
+and the number from `0x0505` to `0x0508`; `0x0505` is retired and burned (§3).
+The one gate outside the family that moved is again `ADD_SUB_LUI_AUIPC`'s
+request-number gate for this type, so `add_sub.bin` regenerated and nothing else
+did. **Nothing §10.4 added was needed**: `XOR8` and `RANGE16` were already there,
+and this family takes both.
+
+**Why.** S26c's row was 1,600-boolean thinking applied to SHA-256 — every word a
+bit decomposition, every XOR a degree-2 gate, 16,688 inner columns — so `2^8` was
+forced, and 256 compressions a shard at about 1.33 MB of proof is 5,186 proof
+bytes a compression. The stateless guest's SSZ hashing calls it 8,011 times on
+block 257510: 32 shards and 42.5 MB, two thirds of that block's proof. At four
+rounds a row it is one `2^18` shard holding 16,384 compressions, about 190 KB.
+
+**What did not change.** Everything §10.4 lists for `KECCAK_F`, read for this
+family: the anchor and its zeroings, the frame and trace rules, static
+detachment, the ts-window convention, the family id, the address-space tag,
+and `guest_sdk::sha256`'s signature with the padding behind it. The chaining
+state's word order is FIPS 180-4's, as it was.
 
 ---
 
@@ -1567,78 +1603,115 @@ turns forty lines of dead code into a differential oracle against
 
 ## 15. The SHA-256 compression circuit
 
-`constants::family::SHA256_COMP`, **one compression a row**, new at S26c.
-`constraints::sha256` is the circuit; `docs/spec/constraint-manifest.md` §19 is
-its column-by-column account.
+`constants::family::SHA256_COMP`, new at S26c and re-shaped at S26e: **four
+rounds and four message-schedule words a row**, a compression sixteen
+invocations. `constraints::sha256` is the circuit;
+`docs/spec/constraint-manifest.md` §19 is its column-by-column account, and
+§10.5 records what the re-shape changed.
 
 ### 15.0 Why it exists
 
-Ethereum's `0x02` precompile, and the cheapest regular circuit surface on the
-profiler's list after the two S26b took. SHA-256 is sixty-four rounds of fixed
-rotations, XORs and 32-bit additions — no modular reduction, no field, no
-table — which is the smallest possible arithmetization per unit of guest work:
-every bound is a bit that already exists for the XORs' sake.
+Ethereum's `0x02` precompile, and — since the stateless guest — the SSZ
+hashing a block's validation does, which on block 257510 is 8,011 compressions.
+SHA-256 is sixty-four rounds of fixed rotations, XORs and 32-bit additions: no
+modular reduction and no field, so every Boolean operation is a byte-table
+lookup and every addition a linear equation with a byte carry.
 
 **It is the compression function and not the digest**, which is what makes the
 routing easy. The padding and the block loop are Merkle–Damgård's and belong to
-the caller; `guest_sdk::sha256` is where they live, and one ecall covers one
-64-byte block. A digest-shaped frame would have needed a length, a variable
-number of blocks and a decision about where padding happens, none of which a
-fixed-width frame expresses.
+the caller; `guest_sdk::sha256` is where they live. A digest-shaped frame would
+have needed a length, a variable number of blocks and a decision about where
+padding happens, none of which a fixed-width frame expresses.
 
-### 15.1 The frame
+### 15.1 The frame, and sixteen calls
 
-**24 words, 96 bytes**, word-aligned per §4.
+**25 words, 100 bytes**, word-aligned per §4.
 
 | words | holds | read | written |
 | --- | --- | --- | --- |
-| 0–7 | the chaining state `H0..H7`, little-endian `u32` each | yes | **yes** |
-| 8–23 | the block's sixteen schedule words `W0..W15`, **big-endian decoded** | yes | unchanged |
+| 0 | `r`, the round group, `0 ≤ r < 16` | yes | unchanged |
+| 1–8 | the working variables `a … h`, `u32` each | yes | four rounds on |
+| 9–24 | the schedule window `W_{4r} … W_{4r+15}`, **big-endian decoded** | yes | shifted down four, the last four derived |
 
-The forty-eight schedule words `W16..W63` the message schedule derives are the
-circuit's own advice and **never cross the frame**: they are a function of the
-sixteen, so carrying them would be 192 bytes of frame a guest would have to
-compute to hand over.
+Call `r` runs rounds `4r … 4r+3` and appends `W_{4r+16} … W_{4r+19}`, which are
+exactly the schedule the next call's rounds read — so **the forty-eight derived
+schedule words cross the frame sixteen at a time** and the guest never computes
+one. Calls 12–15 derive `W_64 … W_79`, which nothing reads: a uniform row is
+cheaper than a row with a mode.
 
-**The words are `u32`s and the block is big-endian decoded.** SHA-256 is a
-big-endian design where keccak is a little-endian one, and the decode has to
-happen somewhere; it happens in the caller, because the caller already holds
-the bytes and the circuit already holds the value. `constants::sha256`'s
-`STATE_WORD`, `BLOCK_WORD` and `FRAME_WORDS` are the layout and
-`guest_sdk::recursion::Sha256Frame`'s three `const` assertions pin it, so a
-renumbering fails the build rather than transposing the state and the block.
+**A compression is the guest's loop**: `guest_sdk::recursion::sha256_comp` takes
+the frame `Sha256Frame::of(H, block)` builds — group 0, `H` as `a … h`, the
+block as the window — issues sixteen calls with word 0 set to `r = 0 … 15`, and
+leaves the working variables after round 63; `guest_sdk::sha256_compress` adds
+them to the `H` it kept, the feed-forward being the caller's as the padding is. The
+global memory multiset is what proves call `r`'s written frame is call
+`r + 1`'s read one, exactly as `KECCAK_F`'s 24 rounds are glued (§6.4), and the
+guest's proven loop is what supplies `r` in order. **A call answered `-ENOSYS`
+is accepted only on the first of the sixteen**: an executor without the
+circuit refuses every call, and a refusal mid-compression would leave a frame
+half-advanced, which the shim treats as the fatal `EXIT_PRECOMPILE_ERROR`.
 
-**There is no frame this family can refuse**, and it is the only one of the six
-of which that is true: every `u32` is a legal chaining word and a legal schedule
-word, so `emulator::sha256_frame` takes no `pc` and has no error path. What a
-caller can still get wrong is the *padding*, which is why
-`guests/sha256-ops` checks seven message lengths chosen for the boundary the
-padding turns on.
+**The words are `u32`s and the block is big-endian decoded**, for S26c's
+reason: SHA-256 is a big-endian design, the decode has to happen somewhere, and
+the caller holds the bytes. `constants::sha256`'s `GROUP_WORD`, `STATE_WORD`,
+`WINDOW_WORD` and `FRAME_WORDS` are the layout, and
+`guest_sdk::recursion::Sha256Frame`'s `const` assertions pin it.
 
-### 15.2 The circuit, in one paragraph
+**The family refuses one frame**: a group word at or above 16, which has no
+selector in the circuit, so an executor that answered it would hand the prover
+a row no witness satisfies. `emulator::sha256_frame` returns
+`EmuError::DelegationFrame` for it, as `keccak_frame` does for a round past 23.
 
-Three gate lists. List 0 bit-decomposes every frame word, copies the carried
-bits and builds the `x·y` helper of each three-way XOR; list 1 assembles the
-carried scalars and the XOR values; list 2 is the sixty-four rounds, the
-forty-eight schedule equations and the eight output sums. Every bound is a bit
-with a booleanity gate — the family is at `2^8`, where no channel's table fits
-(§9) — and the carries are three bits for a round, two for a schedule word and
-one for an output sum, each derived rather than observed.
+### 15.2 The circuit
 
-**The recurrence is over two sequences, not eight working words.** `b`, `c` and
-`d` are `A_{i−1}`, `A_{i−2}` and `A_{i−3}`; `f`, `g` and `h` are `E_{i−1}`,
-`E_{i−2}` and `E_{i−3}`. So the round is
-`A_{i+1} = T1 + T2 − 2^32·ca_i` and `E_{i+1} = A_{i−3} + T1 − 2^32·ce_i`, the
-eight-variable shuffle costs nothing, and the four non-positive indices of each
-sequence *are* the frame's state words — which is the whole of `B`, `C`, `D` and
-`H`'s existence in this arithmetization.
+**Flat, byte-level, no bit.** Every relation is one of 450 lookup obligations or
+one of 119 degree-≤2 enforcing gates over the base columns, built through
+`memory::assemble` like `KECCAK_F`'s. The state over four rounds is two
+sequences, `A_{−3} … A_4` and `E_{−3} … E_4`, where `A_0 … A_{−3}` are `a … d`
+read and `A_4 … A_1` are `a … d` written — so every one of the sixteen values is
+one `M` column and the eight-variable shuffle costs nothing.
 
-**A round's constant `K_i` rides the row's `live` mask and is not a bare
-literal.** A padding row is an all-zero row, and `… − K_i = 0` cannot hold on
-one; `checker::check_padding` refuses such a circuit, and S26c shipped it that
-way until the checker suite ran. The mask is an `M` column that only gate list 0
-may read, so it is carried like any other value — one column a layer, which is
-what the correct statement costs.
+- **Every Boolean operation is one `XOR8` obligation** (`docs/spec/lookup.md`
+  §14), whose membership bounds each operand to a byte. A rotation is a
+  literal-weighted form over a word's bytes and one mask column a byte, the mask
+  being the byte XORed with `2^s − 1`, which pins `v & (2^s − 1)` linearly — the
+  same device as `KECCAK_F`'s rho.
+- **The big sigmas nest**, `Σ0(a) = ROTR2(a ^ ROTR11(a ^ ROTR9(a)))` and
+  `Σ1(e) = ROTR6(e ^ ROTR5(e ^ ROTR14(e)))`, so every XOR has a plain byte column
+  at one position and the outer rotation is taken on the word: 17 obligations a
+  sigma. The small sigmas carry a shift, which does not nest, so each commits
+  its shifted bytes and XORs once against them: 16 and 15.
+- **`Ch` and `Maj` are sums**, `(f + g − (e^f) + (e^g))/2` and
+  `(a + b + c − (c^a^b))/2`, exact bit by bit: two obligations a byte each.
+- **Every addition is one degree-1 gate with a carry**, and the carry is the
+  byte-range tuple `(0, c, c)` on the same channel, which bounds it below 256
+  and makes the gate an integer equation. `K_{4r+k}` is a linear form over the
+  sixteen one-hot group selectors, so no gate carries a bare constant and the
+  all-zero padding row is valid — S26c's bare `K_i` was refused by
+  `checker::check_padding`, and the fix then was a carried mask column.
+- **`one_group_a_live_row` is load-bearing**, for `one_round_a_live_row`'s
+  reason (§6.2): two selectors can sum to a third group's code.
+
+The frame's own bounds are `RANGE16`'s, as for every family at `2^16` or above:
+the gaps and the base (§10.3), plus a 16+16 pair on each of the four written
+words nothing decomposes into bytes — `a`, `e` and the last two derived
+schedule words. Every other written word is a copy or has byte columns.
+
+### 15.3 The height, and what it costs
+
+`DEFAULT_HEIGHTS[SHA256_COMP]` is **`2^18`**: 16 is the floor both channels'
+tables imply and 18 the choice above it, for §9.2's reason — a shard's proof
+bytes barely move with its rows. A shard is **16,384 compressions** and
+**189,988 proof bytes**, 11.6 a compression against S26c's 5,186; its forward
+pass is 2,802 inner columns × `2^18` × 32 bytes = 23.5 GB and its derived peak
+about 30 GB, below `KECCAK_F`'s ~60 GB at the same height. That peak is a model
+figure (`docs/spec/constraint-manifest.md` §19.1) and owes a measurement.
+
+**The price is prover work per compression**: sixteen rows of 2,802 inner
+columns are 44,832 forward-pass cells a compression where S26c's one row was
+16,688, **2.7×**. The guest pays too — sixteen ecalls and their loop where one
+call was — and on block 257510 that is +2.33M cycles, 0.67% of the block, for
+32 shards and 42.5 MB of proof becoming one shard and 0.19 MB.
 
 ---
 
