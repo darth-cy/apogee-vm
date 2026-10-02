@@ -1101,6 +1101,7 @@ version = "0.1.0"
 dependencies = [
  "alloy-primitives",
  "guest-sdk",
+ "k256",
  "postcard",
  "revm",
  "serde",

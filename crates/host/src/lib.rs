@@ -54,6 +54,7 @@
 //!   touch set, and emits the `BlockWitness` the guest reads as advice.
 //! - [`fixture`] — what a recorded block is on disk, and how it is pinned.
 
+pub mod canonical;
 pub mod fixture;
 pub mod recorder;
 pub mod rpc;

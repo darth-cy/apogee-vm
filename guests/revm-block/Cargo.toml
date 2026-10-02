@@ -66,6 +66,13 @@ path = "src/stateless_main.rs"
 # reaches. `guests/vendor/README.md` is the measurement.
 [dependencies]
 revm = { version = "=43.0.1", default-features = false }
+# The stateless guest recovers every sender and EIP-7702 authority itself
+# (`src/tx.rs`), over k256's own arithmetic -- the crate `revm-precompile`
+# already brings, with the features it already enables, so nothing unifies
+# differently. In the guest workspace `[patch.crates-io]` makes this
+# `guests/vendor/k256`, whose field, scalar and point operations reach the
+# `MOD_MUL` and `EC_ADD` delegations; in the root workspace it is upstream's.
+k256 = { version = "0.13.4", default-features = false, features = ["ecdsa"] }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 postcard = { version = "1", default-features = false, features = ["alloc"] }
 

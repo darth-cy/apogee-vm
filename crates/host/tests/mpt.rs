@@ -26,6 +26,7 @@
 //! the vector that exercises inlining.
 
 use revm_block::mpt::{self, MptError, Node, NodeMap, EMPTY_TRIE_ROOT};
+use revm_block::rlp;
 use revm_block::Word32;
 
 /// A key's nibbles, for the short ASCII keys the published vectors use.
@@ -528,7 +529,7 @@ fn a_storage_value_is_minimal_and_doubly_wrapped() {
         let encoded = mpt::encode_slot(&value);
         assert_eq!(encoded, trie_value, "the trie value for {}", hex(&value));
         let mut leaf_item = Vec::new();
-        mpt::encode_bytes(&mut leaf_item, &encoded);
+        rlp::encode_bytes(&mut leaf_item, &encoded);
         assert_eq!(
             leaf_item,
             wrapped,
@@ -630,14 +631,14 @@ fn a_node_nested_past_the_depth_limit_is_malformed() {
 
         // The innermost node: a terminating leaf, `[0x20, 0x01]`.
         let mut leaf = Vec::new();
-        mpt::encode_bytes(&mut leaf, &[0x20]);
-        mpt::encode_bytes(&mut leaf, &[0x01]);
+        rlp::encode_bytes(&mut leaf, &[0x20]);
+        rlp::encode_bytes(&mut leaf, &[0x01]);
         let mut inner = list(&leaf);
 
         // Each level is an extension whose child is the level below, inlined.
         for _ in 0..depth {
             let mut body = Vec::new();
-            mpt::encode_bytes(&mut body, &[0x11]);
+            rlp::encode_bytes(&mut body, &[0x11]);
             body.extend_from_slice(&inner);
             inner = list(&body);
         }

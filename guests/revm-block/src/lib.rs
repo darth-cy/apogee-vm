@@ -49,8 +49,11 @@
 
 extern crate alloc;
 
+pub mod block;
 pub mod mpt;
+pub mod rlp;
 pub mod stateless;
+pub mod tx;
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -130,6 +133,15 @@ pub use revm::primitives::hardfork::SpecId;
 /// this repository would be a second definition to keep equal.
 pub fn keccak(bytes: &[u8]) -> Word32 {
     keccak256(bytes).0
+}
+
+/// SHA-256, as this image computes it: `revm-precompile`'s own `Crypto::sha256`
+/// default body, which `guests/vendor/revm-precompile` routes through the
+/// `SHA256_COMP` delegation on the guest and which is the `sha2` crate on the
+/// host. The `0x02` precompile and the stateless guest's SSZ roots and EIP-7685
+/// requests hash therefore share one definition.
+pub fn sha256(bytes: &[u8]) -> Word32 {
+    revm::precompile::crypto().sha256(bytes)
 }
 
 /// The `bytecode_size_words` this program is preprocessed under.
