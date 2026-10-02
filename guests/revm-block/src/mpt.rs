@@ -273,32 +273,32 @@ impl Node {
     }
 }
 
-/// The witness's nodes, keyed by their keccak.
+/// The witness's nodes, keyed by their keccak, borrowed from wherever the
+/// witness lies — on the guest, the advice region, so no node is copied.
 ///
 /// A plain sorted list rather than a map: the guest builds it once, looks up
 /// each node while parsing, and a binary search over a few thousand entries is
 /// cheaper than a hash map it would have to allocate. The keys are already
 /// keccaks, so they are as well distributed as a hash could make them.
-pub struct NodeMap {
-    entries: Vec<(Word32, Vec<u8>)>,
+pub struct NodeMap<'a> {
+    entries: Vec<(Word32, &'a [u8])>,
 }
 
-impl NodeMap {
+impl<'a> NodeMap<'a> {
     /// Hash every node once and sort. A repeated node is kept once; two
     /// different nodes cannot share a hash.
-    pub fn new(nodes: &[Vec<u8>]) -> NodeMap {
-        let mut entries: Vec<(Word32, Vec<u8>)> =
-            nodes.iter().map(|n| (keccak(n), n.clone())).collect();
+    pub fn new(nodes: &[&'a [u8]]) -> NodeMap<'a> {
+        let mut entries: Vec<(Word32, &'a [u8])> = nodes.iter().map(|n| (keccak(n), *n)).collect();
         entries.sort_unstable_by_key(|e| e.0);
         entries.dedup_by(|a, b| a.0 == b.0);
         NodeMap { entries }
     }
 
-    fn get(&self, hash: &Word32) -> Option<&[u8]> {
+    fn get(&self, hash: &Word32) -> Option<&'a [u8]> {
         self.entries
             .binary_search_by(|e| e.0.cmp(hash))
             .ok()
-            .map(|at| self.entries[at].1.as_slice())
+            .map(|at| self.entries[at].1)
     }
 }
 
@@ -312,7 +312,7 @@ impl NodeMap {
 /// The root itself must be present, and the caller should follow this with
 /// [`check_root`], which is the one assertion that catches every parse and
 /// encode bug at the moment it appears rather than as a wrong root at the end.
-pub fn build(db: &NodeMap, root: &Word32) -> Result<Node, MptError> {
+pub fn build(db: &NodeMap<'_>, root: &Word32) -> Result<Node, MptError> {
     if *root == EMPTY_TRIE_ROOT {
         return Ok(Node::Empty);
     }
@@ -337,7 +337,7 @@ pub fn build(db: &NodeMap, root: &Word32) -> Result<Node, MptError> {
 /// `MptError` at all.
 const MAX_DEPTH: usize = 68;
 
-fn parse_at(db: &NodeMap, bytes: &[u8], depth: usize) -> Result<Node, MptError> {
+fn parse_at(db: &NodeMap<'_>, bytes: &[u8], depth: usize) -> Result<Node, MptError> {
     if depth > MAX_DEPTH {
         return Err(MptError::Malformed);
     }
@@ -380,7 +380,7 @@ fn parse_at(db: &NodeMap, bytes: &[u8], depth: usize) -> Result<Node, MptError> 
 /// The test is the RLP **type**, not the length. A list item is an inlined
 /// node and its whole encoding is the node; a 32-byte string is a hash; the
 /// empty string is an absent child. Any other string width is malformed.
-fn child_of(db: &NodeMap, item: &Item<'_>, depth: usize) -> Result<Node, MptError> {
+fn child_of(db: &NodeMap<'_>, item: &Item<'_>, depth: usize) -> Result<Node, MptError> {
     if item.list {
         return parse_at(db, item.whole, depth + 1);
     }

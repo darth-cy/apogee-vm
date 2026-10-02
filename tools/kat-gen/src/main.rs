@@ -57,7 +57,6 @@ mod program;
 mod revm;
 mod shared;
 mod srs;
-mod stateless;
 mod tape;
 mod tower;
 

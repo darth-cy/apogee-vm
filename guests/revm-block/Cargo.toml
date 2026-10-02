@@ -73,6 +73,12 @@ revm = { version = "=43.0.1", default-features = false }
 # `guests/vendor/k256`, whose field, scalar and point operations reach the
 # `MOD_MUL` and `EC_ADD` delegations; in the root workspace it is upstream's.
 k256 = { version = "0.13.4", default-features = false, features = ["ecdsa"] }
+# EIP-7928's block access list types, which revm 43's BAL builder produces, and
+# their RLP hash -- `compute_block_access_list_hash` sits behind this crate's
+# `rlp` feature. In the graph already through `revm-state`; the lockfiles
+# resolve 0.4.11 where the reference guest's resolves 0.4.9, and the two differ
+# only by helper methods this crate does not call.
+alloy-eip7928 = { version = "0.4.9", default-features = false, features = ["rlp"] }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 postcard = { version = "1", default-features = false, features = ["alloc"] }
 

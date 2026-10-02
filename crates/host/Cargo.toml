@@ -79,6 +79,3 @@ field.workspace = true
 curve.workspace = true
 rayon.workspace = true
 trace.workspace = true
-# `tests/stateless.rs` reads the recorded node set, which the refresh writes as
-# a `postcard` `StatelessWitness`.
-postcard.workspace = true

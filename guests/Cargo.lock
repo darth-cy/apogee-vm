@@ -1099,6 +1099,7 @@ dependencies = [
 name = "revm-block"
 version = "0.1.0"
 dependencies = [
+ "alloy-eip7928",
  "alloy-primitives",
  "guest-sdk",
  "k256",

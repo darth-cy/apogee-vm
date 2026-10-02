@@ -40,8 +40,7 @@
 //! commitment is the **journal**, whose bytes the statement carries
 //! (`docs/spec/public-values.md`); what stands in for binding the witness is
 //! this file's own checks — [`BlockWitness::decode`]'s canonicity rules and
-//! [`WitnessDb`]'s refusal to default — plus, in the **stateless** mode, the
-//! two state roots its journal publishes (`src/stateless.rs`). Neither carries an `Fr`, so the
+//! [`WitnessDb`]'s refusal to default. Neither carries an `Fr`, so the
 //! workspace's little-endian rule for field elements does not reach them: an
 //! EVM word is Ethereum's **big-endian** 32 bytes here, as it is everywhere
 //! else in Ethereum, and the small integers around them are little-endian, as
@@ -52,8 +51,10 @@ extern crate alloc;
 pub mod block;
 pub mod mpt;
 pub mod rlp;
+pub mod ssz;
 pub mod stateless;
 pub mod tx;
+pub mod witness;
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -115,11 +116,13 @@ pub type Word32 = [u8; 32];
 /// asserted against `crates/emulator/tests/vectors/revm_block_witness.bin` by
 /// `crates/emulator/tests/revm.rs`.
 ///
-/// 725 since S26, which appended `BlockEnvWitness::blob_gasprice`: the synthetic
+/// 725 at S26, which appended `BlockEnvWitness::blob_gasprice`: the synthetic
 /// block sets it to `Some(1)`, which is the `Option` tag plus a one-byte varint
-/// (`docs/spec/revm-block.md` §1.6). `cargo run -p kat-gen -- revm` prints the
-/// number it should be.
-pub const COMMITTED_WITNESS_BYTES: usize = 725;
+/// (`docs/spec/revm-block.md` §1.6). 724 since S-STATELESS, which dropped the
+/// trailing `stateless: None` tag when the stateless guest took the canonical
+/// SSZ input instead. `cargo run -p kat-gen -- revm` prints the number it
+/// should be.
+pub const COMMITTED_WITNESS_BYTES: usize = 724;
 
 /// The hardfork enum a witness's `spec_id` names, re-exported so that a
 /// fixture builder can write `SpecId::PRAGUE as u8` rather than a number.
@@ -218,82 +221,12 @@ pub struct BlockWitness {
     /// chain — and since S-IO nothing binds the witness at all, so a silent
     /// default is a value the prover chose. An account that genuinely does not
     /// exist is *recorded*, with nonce 0, balance 0, no code and no slots, and
-    /// [`WitnessDb`] reports exactly that shape to revm as `None`. S25's
-    /// must-be-exact 3 asks for this in the stateless mode and there is no
-    /// reason for the mini mode to be laxer: `crates/host/tests/witness.rs`'s
-    /// completeness control deletes one recorded slot and requires the run to
-    /// fail loudly.
+    /// [`WitnessDb`] reports exactly that shape to revm as `None`.
+    /// `crates/host/tests/witness.rs`'s completeness control deletes one
+    /// recorded slot and requires the run to fail loudly.
     pub accounts: Vec<AccountWitness>,
     /// The transactions, in execution order.
     pub txs: Vec<TxWitness>,
-    /// The stateless section, absent in the synthetic and mini modes.
-    ///
-    /// Its presence is what tells the two modes apart in the data, and
-    /// `src/stateless.rs` is the binary that requires it. S24 left the shape to
-    /// the stage that needed it; S25 is that stage and [`StatelessWitness`] is
-    /// the shape.
-    pub stateless: Option<StatelessWitness>,
-}
-
-/// What a **stateless** execution needs beyond the values: the trie nodes that
-/// authenticate them, and the block-level work that is not a transaction.
-///
-/// # The completeness requirement, which is normative
-///
-/// **`nodes` carries every trie node needed to apply the block's state updates
-/// deterministically — siblings and boundary nodes included, not merely the
-/// nodes on each touched key's own path** (owner's decision, S25). The guest
-/// authenticates every node it uses against the trie hash that names it, and
-/// refuses by name when one is missing; it never reconstructs, infers or
-/// guesses a node it was not given.
-///
-/// The rule is not bureaucratic. Deleting a key whose branch is left with
-/// exactly one child requires merging that child upward, which needs the
-/// child's **type and path** and not just its hash — and the child is a
-/// *sibling* of the deleted key, so it is on no touched key's path and appears
-/// in no `eth_getProof` response. Measured over 300 randomised
-/// build-prove-update-recompute trials, 29 % needed at least one such node.
-/// Writing zero to a storage slot is a deletion, and the gas refund makes it
-/// common, so this is the ordinary case rather than a corner of it.
-///
-/// A witness that omits one is **incomplete, and the guest says so**
-/// ([`mpt::MptError::BlindedCollapse`], which names the hash). The producer's
-/// job is to supply them; nothing here infers them, because an inference in the
-/// guest would be a shape nobody authenticated.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StatelessWitness {
-    /// The parent block's state root. Every recorded account and slot is
-    /// authenticated against this before it is used, and the journal publishes
-    /// it, so a witness describing a different pre-state publishes a different
-    /// result rather than the same one.
-    pub parent_state_root: Word32,
-    /// The parent block's hash, which EIP-2935's system call writes into the
-    /// history contract.
-    pub parent_hash: Word32,
-    /// EIP-4788's parent beacon block root, from the header. `None` before
-    /// Cancun.
-    pub parent_beacon_block_root: Option<Word32>,
-    /// EIP-4895 withdrawals, in the header's order.
-    pub withdrawals: Vec<WithdrawalWitness>,
-    /// The trie nodes, **sorted by their `keccak256`, without repeats** — one
-    /// pool for the state trie and every storage trie, because a node is named
-    /// by its hash and nothing else. See the completeness requirement above.
-    pub nodes: Vec<Vec<u8>>,
-}
-
-/// One EIP-4895 withdrawal: a credit the block executor applies after the last
-/// transaction, which is not a transaction and which revm does not model.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WithdrawalWitness {
-    /// The withdrawal's index, which the header orders by.
-    pub index: u64,
-    /// The validator it belongs to.
-    pub validator_index: u64,
-    /// Where the ether goes.
-    pub address: Address20,
-    /// How much, **in gwei** — the consensus layer's unit, which the execution
-    /// layer multiplies by `10^9`.
-    pub amount_gwei: u64,
 }
 
 /// The header fields revm reads, one per `revm::context::BlockEnv` field plus
@@ -343,9 +276,10 @@ pub struct BlockEnvWitness {
     /// post-Cancun block, which makes the chain itself the source, and the
     /// guest does no `fake_exponential` at all — worth 2.0% of a mini-block's
     /// cycles on its own (`docs/spec/profiling.md`). It is **advice like every
-    /// other field here**, bound by the journal the execution publishes and, in
-    /// the stateless mode, by the post-state root
-    /// (`docs/spec/revm-block.md` §1.3).
+    /// other field here**, bound by the journal the execution publishes
+    /// (`docs/spec/revm-block.md` §1.6). The stateless guest takes no such
+    /// field: it derives the price from the header's excess under the fork its
+    /// schema id names (`src/block.rs`).
     ///
     /// `Some` exactly when `excess_blob_gas` is; [`BlockWitness::canonical`]
     /// refuses any other pairing, because a witness that carried an excess and
@@ -485,12 +419,6 @@ pub enum WitnessError {
     /// Two ancestor hashes share a number, or they are not ascending by
     /// number. `at` is the offending index.
     BlockHashesNotSorted { at: usize },
-    /// Two stateless trie nodes are equal, or they are not ascending by
-    /// `keccak256`. Sorting by hash is what gives one node set exactly one
-    /// encoding, a node being named by its hash and nothing else.
-    NodesNotSorted { at: usize },
-    /// Two withdrawals share an index, or they are not ascending by index.
-    WithdrawalsNotSorted { at: usize },
     /// `excess_blob_gas` and `blob_gasprice` are not both present or both
     /// absent. They are one fact about the block — EIP-4844 is on or it is not
     /// — and a witness carrying one without the other would be one the guest had
@@ -521,12 +449,10 @@ impl BlockWitness {
     /// nothing in the proof system binds, so this is not a tidiness check — it
     /// is one of the two things standing between a prover-supplied byte string
     /// and the block the journal claims was executed
-    /// (`docs/spec/public-values.md` §6). The other depends on the mode: the
-    /// **stateless** one publishes the state roots the block began and ended on
-    /// (`src/stateless.rs`), so a witness describing a different pre-state
-    /// publishes a different result; the **mini** one publishes no root, which
-    /// is what "claims no state-root recomputation" means, and what it binds is
-    /// the journal to the witness and nothing further.
+    /// (`docs/spec/public-values.md` §6). The other is the journal itself: the
+    /// mini mode publishes no state root, which is what "claims no state-root
+    /// recomputation" means, and what it binds is the journal to the witness
+    /// and nothing further.
     ///
     /// **The bytes must be exactly what [`BlockWitness::encode`] would write**,
     /// which is checked by re-encoding and comparing, because nothing cheaper
@@ -590,18 +516,6 @@ impl BlockWitness {
         for (i, pair) in self.env.block_hashes.windows(2).enumerate() {
             if pair[0].0 >= pair[1].0 {
                 return Err(WitnessError::BlockHashesNotSorted { at: i + 1 });
-            }
-        }
-        if let Some(stateless) = &self.stateless {
-            for (i, pair) in stateless.nodes.windows(2).enumerate() {
-                if keccak(&pair[0]) >= keccak(&pair[1]) {
-                    return Err(WitnessError::NodesNotSorted { at: i + 1 });
-                }
-            }
-            for (i, pair) in stateless.withdrawals.windows(2).enumerate() {
-                if pair[0].index >= pair[1].index {
-                    return Err(WitnessError::WithdrawalsNotSorted { at: i + 1 });
-                }
             }
         }
         Ok(())
@@ -891,7 +805,7 @@ pub fn run_against<DB: revm::Database>(witness: &BlockWitness, db: DB) -> Result
 /// priced with the wrong one charges the wrong blob gas. It is picked here
 /// rather than in the witness because it is a property of the hardfork the
 /// witness already names.
-pub(crate) fn block_env(env: &BlockEnvWitness) -> BlockEnv {
+fn block_env(env: &BlockEnvWitness) -> BlockEnv {
     BlockEnv {
         number: U256::from_be_bytes(env.number),
         beneficiary: Address::from(env.beneficiary),
@@ -917,7 +831,7 @@ pub(crate) fn block_env(env: &BlockEnvWitness) -> BlockEnv {
 ///
 /// `tx_type` is derived from the envelope rather than carried, so a witness
 /// cannot claim a type its fields do not support.
-pub(crate) fn tx_env(tx: &TxWitness) -> TxEnv {
+fn tx_env(tx: &TxWitness) -> TxEnv {
     let mut env = TxEnv::builder()
         .caller(Address::from(tx.caller))
         .kind(match tx.to {
@@ -1020,11 +934,7 @@ fn encode_output(results: &[ExecutionResult], state: &revm::state::EvmState) -> 
 
 /// One transaction's record, as the output commitment's first section writes
 /// it: `status ‖ gas_used ‖ output_len ‖ output`.
-///
-/// Factored out because the **stateless** mode digests this stream rather than
-/// carrying it (`src/stateless.rs`), and two encodings of one record would be
-/// two things to keep equal.
-pub(crate) fn push_record(out: &mut Vec<u8>, result: &ExecutionResult) {
+fn push_record(out: &mut Vec<u8>, result: &ExecutionResult) {
     let (status, output) = match result {
         ExecutionResult::Success { output, .. } => (
             STATUS_SUCCESS,
@@ -1054,7 +964,7 @@ pub(crate) fn push_record(out: &mut Vec<u8>, result: &ExecutionResult) {
 ///       data_len     u32 LE
 ///       data         data_len bytes
 /// ```
-pub(crate) fn encode_logs(logs: &[&Log]) -> Vec<u8> {
+fn encode_logs(logs: &[&Log]) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&(logs.len() as u32).to_le_bytes());
     for log in logs {

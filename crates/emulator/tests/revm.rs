@@ -229,10 +229,6 @@ fn the_committed_witness_is_canonical() {
     // would be checking it against itself. The negative controls below are
     // where those rules are proved. These are the fixture's own properties.
     assert_eq!(witness.txs.len(), 2, "one transfer and one call");
-    assert!(
-        witness.stateless.is_none(),
-        "the synthetic mode carries no stateless section"
-    );
     assert!(witness.env.spec().is_some(), "the spec id names a hardfork");
 }
 
@@ -490,7 +486,6 @@ fn synthetic_witness(block_gas_limit: u64, code: Vec<u8>, gas_limits: &[u64]) ->
                 authorizations: Vec::new(),
             })
             .collect(),
-        stateless: None,
     }
 }
 
