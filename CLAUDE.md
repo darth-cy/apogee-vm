@@ -26,7 +26,8 @@ docs/
                  and BlockWitness, deliberately NOT frozen -- §1.6 is S26's blob-price
                  field, recorded rather than derived -- the MINI mode's alone; and
                  stateless.md, S-STATELESS's canonical stateless validator: which
-                 tests-zkevm inputs it validates, the sentinel, how a block runs on
+                 inputs it validates, in v21's layout and ere-guests' keyed one, the
+                 sentinel, how a block runs on
                  revm so the 43-byte result is the spec's, and what no oracle reaches; and
                  streaming.md, S26's two-pass prover: what survives an execution, the
                  shard cut a flush makes, and the backpressure; and
@@ -136,8 +137,8 @@ tools/
   artifact-dump/ a guest ELF out as the frozen ProgramImage artifact, plus a
                  readable report of it; `tables` prints the decoded tables and identity
   transcript-ref/ the transcript oracle: Plonky3 + zkhash, NOT a workspace member
-  stateless-ref/ the Electra/Fulu stateless-input oracle: eth-act/ere-guests v0.17.1
-                 over libssz, NOT a workspace member
+  stateless-ref/ the stateless-input oracle for the Electra/Fulu layout and both
+                 containers: eth-act/ere-guests v0.17.1 over libssz, NOT a workspace member
   test-support/  seeded RNG, SHA-256, hex; shared by every suite and generator
 ```
 Later stages add the crates listed in the master prompt's workspace layout. Crate names
@@ -274,7 +275,14 @@ APOGEE_ZKEVM_FIXTURES=<release>/fixtures cargo test --release -p host --test con
                                             # S-STATELESS: the WHOLE tests-zkevm@v21.0.1 release,
                                             # 67,251 pairs, natively, about 2 s; each failure names
                                             # the rule the validator applied. The release is 620 MB
-                                            # packed, so CI runs the committed subset instead
+                                            # packed, so CI runs the committed subset instead. The
+                                            # same command takes an extracted batch of the zkEVM
+                                            # benchmark's glamsterdam-devnet-8 dataset: real blocks
+                                            # to 105 Mgas, in ere-guests' keyed layout
+APOGEE_ZKEVM_FIXTURES=<dir> cargo test --release -p host --test conformance every_output -- --ignored --nocapture
+                                            # ditto, through the stateless guest's BINARY in the
+                                            # emulator: a devnet block is 244M-582M cycles, a few
+                                            # seconds each
 APOGEE_ZKEVM_FIXTURES=<release>/fixtures cargo run --release -p kat-gen -- zkevm
                                             # re-cut that subset; refuses unless every pair matches.
                                             # Opt-in, NOT in DEFAULT_GROUPS
@@ -1278,6 +1286,10 @@ is derivable *from* them is regenerated and diffed in CI.
   witness lacks; and **one commit per block access index, every baseline the index's** —
   revm 43's access-list builder nets against each call's baseline, and `commit_index`
   sets them back to the committed state. Following reth would have kept all three bugs.
+  **It reads two input layouts under one schema id** (owner's decision): v21's, and
+  `eth-act/ere-guests` v0.17.1's, which adds a public key per transaction and is what the
+  zkEVM benchmark's own datasets carry — v21 alone refused every block of them. A key is
+  checked, never trusted: the sender is recovered regardless, and must be the key's.
 - **The block's gas limit is a running bound, and `run` is what enforces it.** revm checks
   `tx.gas_limit <= block.gas_limit` per transaction and can check no more: `transact_one`
   is one transaction and revm keeps no cumulative gas anywhere. In a real client that is
@@ -1347,7 +1359,7 @@ is derivable *from* them is regenerated and diffed in CI.
   `last_pc <= 2*height - 4` — and `.text` starts at `RAM_ORIGIN` exactly. S24's release
   image uses 82% of the `2^20` reach and its debug image does not fit at all, which is why
   that guest is proven at `--release`. **The stateless binary is the tight one since
-  S-STATELESS**: 1,959,096 bytes of `.text`, 96.5% of the reach, about 72 kB of headroom —
+  S-STATELESS**: 1,961,758 bytes of `.text`, 96.6% of the reach, about 70 kB of headroom —
   the largest share is the precompiles' BN254 and BLS12-381 arithmetic, which Prague's
   EIP-2537 made live code. `2^22` is the menu's last entry; there is no step
   above it.
@@ -1483,11 +1495,13 @@ next stage's canonical interface forward: `revm-block-stateless` now reads
 EIP-7702 authority itself over the vendored k256's delegated arithmetic. **The whole release
 matches, 67,251 pairs of 67,251**, natively and by hand; CI holds a 34-case subset of it,
 each case to its bytes and its rule, and the Electra/Fulu layout the release does not fill
-to `eth-act/ere-guests` through `tools/stateless-ref`. S25's stateless witness, S-STREAM's
+to `eth-act/ere-guests` through `tools/stateless-ref`. It also reads ere-guests' keyed
+layout, the zkEVM benchmark's own, and the benchmark's `glamsterdam-devnet-8` dataset — real
+blocks to 105 Mgas — matches on every block sampled. S25's stateless witness, S-STREAM's
 148-byte journal and everything that wrote or read them are deleted (owner's decision).
 What it owes, in `docs/handoff/S-STATELESS.md`: an Osaka-family block validated end to end
-against a canonical output, which needs the witness producer that is the next stage's; and
-the deferred suites, which run in one batch at the end of the progression.
+against a canonical output, which needs a witness producer — the devnet dataset is
+Amsterdam's; and the deferred suites, which run in one batch at the end of the progression.
 
 **`S-NATIVE-IO` takes no number for the same reason**, and it is S-IO's other half. S-IO
 built the mechanism that binds an execution's public values and left the POSIX surface

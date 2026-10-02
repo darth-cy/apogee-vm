@@ -52,6 +52,9 @@ pub struct StatelessInput<'a> {
     pub request: NewPayloadRequest<'a>,
     pub witness: ExecutionWitness<'a>,
     pub chain_id: u64,
+    /// One uncompressed public key per transaction, in ere-guests' layout
+    /// only: `tests-zkevm@v21.0.1` dropped the field.
+    pub public_keys: Option<Vec<&'a [u8; 65]>>,
 }
 
 /// The consensus layer's `NewPayloadRequest`.
@@ -220,20 +223,32 @@ fn bounded(items: Vec<&[u8]>, max: usize) -> Result<Vec<&[u8]>, Malformed> {
     Ok(items)
 }
 
-/// `schema_id ‖ SSZ(StatelessInput)`, strictly. `None` is the spec's "could
-/// not decode", which publishes the all-zero sentinel: bytes too short for a
-/// schema id, a schema id this guest does not validate, or an SSZ body that is
-/// not exactly a `StatelessInput` of that fork's layout.
+/// `schema_id ‖ SSZ(StatelessInput)`, strictly, in either of its two layouts:
+/// `tests-zkevm@v21.0.1`'s request, witness and chain id, or ere-guests'
+/// v0.17.1 — what the zkEVM benchmark's datasets carry — with `public_keys`
+/// after them. A container's first offset is its fixed size, 16 or 20, so no
+/// input is both. `None` is the spec's "could not decode", which publishes the
+/// all-zero sentinel: bytes too short for a schema id, a schema id this guest
+/// does not validate, or an SSZ body that is exactly neither layout of that
+/// fork.
 pub fn decode(bytes: &[u8]) -> Option<StatelessInput<'_>> {
+    use Field::{Fixed, Variable};
     let (schema, body) = bytes.split_first_chunk::<2>()?;
     let fork = block::fork(u16::from_be_bytes(*schema))?;
     let input = (|| -> Result<StatelessInput<'_>, Malformed> {
-        let top = container(body, &[Field::Variable, Field::Variable, Field::Fixed(8)])?;
+        let top = container(body, &[Variable, Variable, Fixed(8)])
+            .or_else(|_| container(body, &[Variable, Variable, Fixed(8), Variable]))?;
+        let public_keys = top.get(3).map(|keys| fixed_list(keys, 65)).transpose()?;
         Ok(StatelessInput {
             fork,
             request: request(top[0], fork.amsterdam)?,
             witness: witness(top[1])?,
             chain_id: u64_of(top[2]),
+            public_keys: public_keys.map(|keys| {
+                keys.into_iter()
+                    .map(|key| key.try_into().expect("sixty-five bytes"))
+                    .collect()
+            }),
         })
     })();
     input.ok()

@@ -17,26 +17,27 @@
 //!    parent, its state root the pre-state's, their hashes `BLOCKHASH`'s.
 //! 2. No empty transaction; the header the payload implies hashes to the
 //!    payload's `block_hash`; the blob transactions' versioned hashes are the
-//!    request's.
+//!    request's; in ere-guests' layout, there is a public key per transaction.
 //! 3. The block is under EIP-7934's size and its header obeys its parent.
 //! 4. The block runs: EIP-4788 and EIP-2935's system calls, every transaction
-//!    — signer recovered, chain id checked, admitted against the block's
-//!    remaining gas and blob gas — then the withdrawals, then the requests:
-//!    deposit logs and the checked system calls of EIP-7002, EIP-7251 and, from
-//!    Amsterdam, EIP-8282.
+//!    — signer recovered and any key held to it, chain id checked, admitted
+//!    against the block's remaining gas and blob gas — then the withdrawals,
+//!    then the requests: deposit logs and the checked system calls of
+//!    EIP-7002, EIP-7251 and, from Amsterdam, EIP-8282.
 //! 5. Gas used, receipts root, logs bloom, blob gas used, requests hash, the
 //!    block access list's size and hash (Amsterdam) and the post-state root are
 //!    the header's.
 //!
 //! **How it runs is reth's** (`paradigmxyz/stateless` over `alloy-evm`, the
-//! reference stateless guest): the pre-state behind revm's `State`, one commit
-//! per system call and per transaction, one for all the withdrawals, and the
-//! block access list index bumped between them — the granularity revm's BAL
-//! builder needs and the reference uses. **Where reth and the spec differ,
-//! this is the spec's**, because the canonical result is the spec's: system
-//! contracts must have code, deposit events are parsed to the byte,
-//! withdrawals precede requests, and an Amsterdam transaction's gas limit is
-//! bounded by `TX_MAX_TOTAL_GAS_LIMIT`.
+//! reference stateless guest): the pre-state behind revm's `State`, and the
+//! block access list index bumped between the system calls before the
+//! transactions, each transaction, and the withdrawals and requests after
+//! them. Each index is one commit, its baselines the committed state's
+//! (`commit_index`), where the reference commits per call. **Where reth and
+//! the spec differ, this is the spec's**, because the canonical result is the
+//! spec's: system contracts must have code, deposit events are parsed to the
+//! byte, withdrawals precede requests, and an Amsterdam transaction's gas
+//! limit is bounded by `TX_MAX_TOTAL_GAS_LIMIT`.
 
 use alloc::vec::Vec;
 
@@ -58,7 +59,7 @@ use revm::{
     SystemCallEvm,
 };
 
-use crate::block::{self, Fork, Header, HeaderError, Log};
+use crate::block::{self, Header, HeaderError, Log};
 use crate::mpt::{self, MptError, Node, EMPTY_TRIE_ROOT};
 use crate::ssz::{self, ExecutionWitness, NewPayloadRequest, StatelessInput};
 use crate::tx::{self, Tx};
@@ -107,6 +108,9 @@ pub enum Invalid {
     Witness(WitnessError),
     /// Transaction `i`'s signature does not recover.
     Signature(usize),
+    /// The input carries public keys, and they are not one per transaction,
+    /// each `0x04 ‖ x ‖ y` naming the sender its signature recovers.
+    PublicKeys,
     ChainId(usize),
     /// Transaction `i` does not fit the block's remaining gas, state gas or
     /// blob gas, or exceeds Amsterdam's total cap.
@@ -174,6 +178,13 @@ pub fn verify(input: &StatelessInput<'_>) -> Result<(), Invalid> {
         .enumerate()
         .map(|(i, bytes)| tx::decode(bytes).map_err(|_| Invalid::Transaction(i)))
         .collect::<Result<Vec<Tx<'_>>, Invalid>>()?;
+    if input
+        .public_keys
+        .as_ref()
+        .is_some_and(|keys| keys.len() != txs.len())
+    {
+        return Err(Invalid::PublicKeys);
+    }
     let blob_hashes: Vec<Word32> = txs
         .iter()
         .filter(|t| t.tx_type == 3)
@@ -210,15 +221,7 @@ pub fn verify(input: &StatelessInput<'_>) -> Result<(), Invalid> {
         .with_bundle_update()
         .with_bal_builder_if(fork.amsterdam)
         .build();
-    let out = execute(
-        fork,
-        input.chain_id,
-        &header,
-        &txs,
-        payload,
-        &mut state,
-        blob_price,
-    )?;
+    let out = execute(input, &header, &txs, &mut state, blob_price)?;
 
     // 5. What the header claims.
     if out.gas_used != header.gas_used {
@@ -351,14 +354,13 @@ struct Executed {
 
 /// `fork.py::apply_body`, on revm, at reth's commit granularity.
 fn execute(
-    fork: &Fork,
-    chain_id: u64,
+    input: &StatelessInput<'_>,
     header: &Header,
     txs: &[Tx<'_>],
-    payload: &ssz::ExecutionPayload<'_>,
     state: &mut State<WitnessDb<'_>>,
     blob_price: u128,
 ) -> Result<Executed, Invalid> {
+    let (fork, chain_id, payload) = (&input.fork, input.chain_id, &input.request.payload);
     let mut cfg = CfgEnv::new_with_spec(fork.spec);
     cfg.chain_id = chain_id;
     cfg.set_max_blobs_per_tx(block::MAX_BLOBS_PER_TX);
@@ -406,6 +408,14 @@ fn execute(
             return Err(Invalid::ChainId(i));
         }
         let sender = tx::sender(tx).ok_or(Invalid::Signature(i))?;
+        // A key is checked, never trusted: the sender is the one recovered,
+        // and the key must name it, as ere-guests' reth guest holds it.
+        if let Some(keys) = &input.public_keys {
+            let key = keys.get(i).ok_or(Invalid::PublicKeys)?;
+            if key[0] != 0x04 || tx::address_of(key) != sender {
+                return Err(Invalid::PublicKeys);
+            }
+        }
         let blob_gas = tx.blob_hashes.len() as u64 * block::GAS_PER_BLOB;
         let fits = if fork.amsterdam {
             tx.gas_limit <= TX_MAX_TOTAL_GAS_LIMIT

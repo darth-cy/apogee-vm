@@ -313,14 +313,25 @@ pub fn authority(auth: &Authorization) -> Option<Address20> {
     recover(&keccak(&preimage), &auth.r, &auth.s, auth.y_parity == 1)
 }
 
-/// secp256k1 public-key recovery to an address, under the rules a
-/// transaction's and an authorization's signature share: `0 < r < n`,
-/// `0 < s ≤ n/2`, and `R` — the point whose `x` is `r` and whose `y` has the
-/// given parity — on the curve.
+/// [`recover_key`], to the address the key names.
+pub fn recover(prehash: &Word32, r: &Word32, s: &Word32, y_odd: bool) -> Option<Address20> {
+    recover_key(prehash, r, s, y_odd).map(|key| address_of(&key))
+}
+
+/// The address an uncompressed public key names: the last twenty bytes of
+/// `keccak256(x ‖ y)`.
+pub fn address_of(key: &[u8; 65]) -> Address20 {
+    keccak(&key[1..])[12..].try_into().expect("twenty bytes")
+}
+
+/// secp256k1 public-key recovery, under the rules a transaction's and an
+/// authorization's signature share: `0 < r < n`, `0 < s ≤ n/2`, and `R` — the
+/// point whose `x` is `r` and whose `y` has the given parity — on the curve.
+/// The key is uncompressed, `0x04 ‖ x ‖ y`.
 ///
 /// `ecdsa`'s `recover_from_prehash` without the verification it ends on; the
 /// module doc says why that is sound and what it saves.
-pub fn recover(prehash: &Word32, r: &Word32, s: &Word32, y_odd: bool) -> Option<Address20> {
+pub fn recover_key(prehash: &Word32, r: &Word32, s: &Word32, y_odd: bool) -> Option<[u8; 65]> {
     // `from_repr` refuses a value at or above `n`.
     let r_scalar = Option::<Scalar>::from(Scalar::from_repr((*r).into()))?;
     let s_scalar = Option::<Scalar>::from(Scalar::from_repr((*s).into()))?;
@@ -351,6 +362,5 @@ pub fn recover(prehash: &Word32, r: &Word32, s: &Word32, y_odd: bool) -> Option<
         return None;
     }
     let point = q.to_affine().to_encoded_point(false);
-    let hash = keccak(&point.as_bytes()[1..]);
-    Some(hash[12..].try_into().expect("twenty bytes"))
+    Some(point.as_bytes().try_into().expect("an uncompressed point"))
 }

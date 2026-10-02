@@ -206,7 +206,7 @@ Master rule 2's runtime list is exhaustive, so both additions are recorded here 
 | `rpc-cache/` | yes | the content-addressed snapshot that re-records the pinned block |
 | `canonical/` | yes | S-STATELESS: block 26,059,929 in full, its parent and its receipts, as the node served them |
 | `zkevm-subset.json` | yes | S-STATELESS: 34 stateless pairs of `tests-zkevm@v21.0.1`, cut by `kat-gen -- zkevm` |
-| `stateless_ref.txt` | yes | S-STATELESS: 29 stateless inputs and their request roots, by `tools/stateless-ref` |
+| `stateless_ref.txt` | yes | S-STATELESS: 33 stateless inputs and their request roots, by `tools/stateless-ref`, in both containers |
 
 The refresh is `cargo run -p kat-gen -- block`, which needs `ETH_RPC_URL` and is **not** in
 `DEFAULT_GROUPS` — the same opt-in the `guests` group has, and what keeps CI off the
@@ -219,8 +219,8 @@ re-records the pinned one from the cache alone to prove the recording determinis
 | --- | --- |
 | `tests/mpt.rs` | the trie: Ethereum's three published root vectors (empty, `dogglesworth`, `horse`), order- and delete-invariance over every permutation, a sparse rebuild from every prefix of its own nodes, and each refusal separately — a missing node is not an absence, a blinded collapse names its hash, every canonical-form rule refuses. 18 tests |
 | `tests/canonical.rs` | S-STATELESS: the stateless guest's encodings against two real blocks — every header to its hash, 313 transactions to their hashes and senders, the roots, receipts, bloom, gas and block size, each header rule by its own mutation, EIP-2's signature rules, the strict decoder, the deposit parser and the blob price. 10 tests |
-| `tests/conformance.rs` | S-STATELESS: the committed subset, each case held to its 43 bytes and its rule; **`#[ignore]`d**, the whole release by hand (`APOGEE_ZKEVM_FIXTURES`) and the subset through the guest binary in the emulator, printing cycles. `docs/spec/stateless.md` §4 |
-| `tests/ssz.rs` | S-STATELESS: the stateless decoder and request root against `eth-act/ere-guests` v0.17.1 on all 29 of `stateless_ref.txt`'s inputs — the Electra/Fulu layout no release fills |
+| `tests/conformance.rs` | S-STATELESS: the committed subset, each case held to its 43 bytes and its rule, and again in ere-guests' keyed layout with its signers' keys, plus four refused key lists; **`#[ignore]`d**, the whole release by hand (`APOGEE_ZKEVM_FIXTURES`), the subset through the guest binary in the emulator, printing cycles, and any fixtures directory — a benchmark devnet batch — through the binary. `docs/spec/stateless.md` §4 |
+| `tests/ssz.rs` | S-STATELESS: the stateless decoder and request root against `eth-act/ere-guests` v0.17.1 on all 33 of `stateless_ref.txt`'s inputs — the Electra/Fulu layout no release fills, and both containers |
 | `tests/revm_lock.rs` | S-STATELESS: both lockfiles hold the reference stateless guest's revm set, crate for crate |
 | `tests/prove.rs` | **`#[ignore]`d** — the mini-block gate (acceptance 4) and the advice tamper twin (acceptance 5). Since S-STREAM it proves through `host::prove(.., IN_FLIGHT)` with `IN_FLIGHT = 4`: the suite is run for its verdict and not its wall clock, and four shards proved at once was 77.10 GiB against eight at 83.91 on a 51-shard statement |
 | `tests/witness.rs` | acceptance 1 (two cache-only recordings, byte-identical, zero network calls, equal to the committed fixture), acceptance 2's native half (the witness alone reproduces the pinned journal), acceptance 3 twice (every recorded slot deleted in turn, and every recorded account, each refused), the fixture against its pin, the fork table both ways, the journal against the public window's ceiling, and a one-wei balance change moving the journal |

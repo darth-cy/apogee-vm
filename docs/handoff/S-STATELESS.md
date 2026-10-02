@@ -35,6 +35,7 @@ Every one is the owner's, asked as it arose.
 | 7 | revm **`=43.0.1`, mirroring the reference stateless guest's lock crate for crate** | 42.0.1, whose Amsterdam schedule predates the spec; 43.0.2, which reverted the system-call reservoir |
 | 8 | A **reference tool** for the SSZ the release does not fill, out of the workspace like `transcript-ref` | the release alone |
 | 9 | **Delete the old stateless format whole**: the generator, its fixtures and tests, `mini-block-nodes.bin`, `BlockWitness.stateless` | keeping it beside the new one |
+| 10 | **Read both input layouts**: v21's, and ere-guests v0.17.1's with a public key per transaction, which the benchmark's own datasets carry (§7); a key is checked against the recovered sender, as ere-guests' reth guest checks it | v21's alone, which refused every dataset block; the keyed one alone; stripping the keys on the host, so our input bytes would not be the files other teams prove |
 
 Stated as defaults and not objected to: the fork comes from the schema id and no mainnet
 timestamp schedule is compiled in; any failure after decoding publishes `false` with the
@@ -62,6 +63,8 @@ Five commits before this note's, on top of S-STREAM:
 4. **`1676b4c`** — the CI oracles: the release subset, `tools/stateless-ref`, the block-size
    test.
 5. **`32b650d`** — the binary through the emulator.
+
+After this note: the keyed layout, decision 10 and §7.
 
 ---
 
@@ -99,6 +102,8 @@ or unsupported — over 28,978 distinct inputs, in about 2 s natively.
 | the binary | the subset's 33 runnable cases, through the emulator | `#[ignore]`d, 17 s, above the line |
 | `tools/stateless-ref` | the Electra/Fulu layout against `eth-act/ere-guests` v0.17.1 — 23 inputs and 6 broken ones, including each layout under the other's schema id | CI, regenerated and diffed |
 | two real mainnet blocks | headers, 313 transactions and their senders, roots, receipts, bloom, gas, block size, deposits, blob price; each header rule by its own mutation | CI |
+| the keyed layout | every decodable subset case re-encoded with its signers' keys is the same 43 bytes; keys too few, too many, another signer's or not uncompressed are refused; a list of part-keys does not decode | CI |
+| the benchmark's `glamsterdam-devnet-8` dataset | real devnet blocks in the keyed layout, to their bytes, natively and through the binary (§7) | by hand: `APOGEE_ZKEVM_FIXTURES=<batch> … every_stateless` and `… every_output` |
 
 ere-guests v0.17.1 still carries the `public_keys` field v21 dropped, so `stateless-ref`
 declares the v21 container itself with libssz's derive and uses ere for the request types
@@ -132,7 +137,13 @@ and commit `6177fa9`'s measurement puts the verify-free recovery at about 1.4M o
 
 The release image's `.text` is **1,959,096 bytes, 96.5% of what a `2^20` decoded table
 reaches**, about 72 kB of headroom; the largest share is the precompiles' BN254 and
-BLS12-381 arithmetic, live code since Prague's EIP-2537.
+BLS12-381 arithmetic, live code since Prague's EIP-2537. Decision 10's keyed layout added
+2,662 bytes — **1,961,758, 96.6%, about 70 kB** — and moved the cycles above by under 0.1%
+(`fill_stack` is 3,548,995).
+
+**A real block is §7's**: the ten newest blocks of the benchmark's devnet dataset, 46–106
+transactions and about 101 Mgas each, are **244M–582M cycles** through the binary. Block
+257,510's 349M are 37% secp256k1, its 60 recoveries, and 32% `memcpy`.
 
 ---
 
@@ -141,7 +152,7 @@ BLS12-381 arithmetic, live code since Prague's EIP-2537.
 | File | What |
 | --- | --- |
 | `crates/host/tests/vectors/zkevm-subset.json` | new; `kat-gen -- zkevm`, opt-in |
-| `crates/host/tests/vectors/stateless_ref.txt` | new; `tools/stateless-ref`, in CI |
+| `crates/host/tests/vectors/stateless_ref.txt` | new; `tools/stateless-ref`, in CI; 33 inputs since decision 10, four of them in the keyed container |
 | `crates/host/tests/vectors/canonical/` | new; block 26,059,929, its parent, its receipts |
 | `crates/emulator/tests/vectors/revm_block_witness.bin` | 725 → 724 bytes: the dropped `None` tag. Output and keccak frames byte-identical |
 | `crates/host/tests/vectors/mini-block-witness.bin`, `mini-block.json` | one byte shorter, re-pinned; the journal unchanged |
@@ -168,7 +179,8 @@ release fills only Amsterdam. The Electra/Fulu layout is held by `stateless-ref`
 component by real blocks, but no Electra/Fulu input with a witness has been through
 `verify`. It needs a witness producer, which is the next stage's — and this endpoint cannot
 be it: S25 found `debug_executionWitness` unserved and `eth_getProof` unable to return a
-collapse's sibling.
+collapse's sibling. The benchmark's devnet dataset (§7) is Amsterdam's, so it closes this
+for that fork alone — with real blocks where the release has test fills.
 
 **2. Rules no release case decides.** `ReceiptsRoot`, `Bloom` and `StateRoot` are computed
 in every valid case but refuse in none; `EmptyTransaction`, `Unrepresentable` and four of
@@ -181,10 +193,37 @@ mini guest's image, identity and cycle counts moved with them: `prover --test re
 `host --test prove`, the mini-block gate, pin numbers this stage did not re-measure. They
 run in one batch at the end of the progression, per the root `CLAUDE.md`.
 
-**4. 72 kB of image headroom.** The next feature added to the stateless binary should be
+**4. 70 kB of image headroom.** The next feature added to the stateless binary should be
 priced against it; past `2^20`'s reach the decoded tables go to `2^22`.
 
 **5. The next stage**, as the owner framed it: `bench prove` over a `statelessInputBytes`
 rather than a mini-mode pin — no stateless pin exists, and `fixture::Mode::Stateless` today
 only names the binary — and the benchmark workload's positive and rejection fixtures, which
-the subset already shows the guest passing for this release.
+the subset already shows the guest passing for this release. §7's dataset is the input a
+first full-block proof can take: real, canonical, its output known, no producer needed.
+
+---
+
+## 7. The benchmark's own datasets
+
+The zkEVM benchmark publishes `glamsterdam-devnet-8`'s blocks as stateless inputs: 72,732
+of them in 7,247 batches, each a `blockchain_tests/` fixture carrying
+`statelessInputBytes` and `statelessOutputBytes`, written by `witness-generator-spec-cli`
+for `ere-hosts --input-folder`. Schema `0x1501`, and real devnet traffic: the newest batch's
+blocks are 46–106 transactions and about 101 Mgas each, their inputs 0.85–1.15 MB.
+
+**v21's decoder refused every one.** Their container is ere-guests v0.17.1's: a fourth
+field after the chain id holding one 65-byte uncompressed public key per transaction.
+Everything else — request, payload, witness — is v21's byte for byte: with the keys cut
+out, the validator published the expected 43 bytes for all ten. So the guest reads both
+(decision 10), and with keys present does what ere-guests' reth guest does: it recovers the
+sender regardless, and refuses unless there is one key per transaction and each,
+`0x04 ‖ x ‖ y`, names its sender. The keys are checked and never used. Flipping one byte of
+a real block's last key is refused, with the real root, after its 59 other transactions ran.
+
+| By hand | Blocks | Result |
+| --- | --- | --- |
+| natively, `every_stateless` | 90: the newest batch, and eight from block 93,300 to 255,019 — empty blocks to 105 Mgas, inputs 27 kB to 1.34 MB | every one the expected bytes |
+| the binary, `every_output` | the newest ten | exit 0 and the expected bytes, 244M–582M cycles, 59 s in all |
+
+The whole dataset, 22.67 GiB packed, has not been run.

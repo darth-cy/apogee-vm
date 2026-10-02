@@ -19,10 +19,11 @@ identity.
 statelessInputBytes   -> ADVICE          schema_id (u16 BE) ‖ SSZ(StatelessInput)
 statelessOutputBytes  -> PUBLIC OUTPUT   SSZ(StatelessValidationResult), 43 bytes
 
-StatelessInput            v21: no public keys
+StatelessInput            two layouts, told apart by the fixed part: 16 bytes or 20
     new_payload_request   the schema id's fork's NewPayloadRequest
     witness               state (trie-node preimages), codes, headers (oldest first)
     chain_id              u64
+    public_keys           ere-guests' layout only: one 65-byte key per transaction
 
 StatelessValidationResult
     new_payload_request_root   32   hash_tree_root, EIP-7916 as of 2026-01-15
@@ -45,13 +46,23 @@ state and the spec's to check. Each fork's blob parameters are `block::fork`'s t
 | `0x1401` | BPO2 | 14 | 21 | 11,684,671 |
 | `0x1501` | Amsterdam | 14 | 21 | 11,684,671 |
 
+**Two layouts share each schema id** (owner's decision). `tests-zkevm@v21.0.1`'s has
+three fields. `eth-act/ere-guests` v0.17.1's — the zkEVM benchmark's guests, and the
+layout of its published devnet datasets — has a fourth after the chain id: one
+uncompressed public key, `0x04 ‖ x ‖ y`, per transaction. A container's first offset
+is its fixed size, 16 or 20, so no input is both. **A key is checked, never trusted**:
+the sender is still recovered from the signature, and the input is invalid unless there
+is exactly one key per transaction and each names its transaction's recovered sender —
+ere-guests' reth guest's rule. The request root, and so the result, does not depend on
+the layout.
+
 **Three outcomes, and the guest exits 0 in all of them:**
 
 - an input that does not decode — too short for a schema id, a schema id not in the table,
   or an SSZ body that is not exactly that fork's `StatelessInput` — publishes the
   **sentinel**, 43 zero bytes. The decoder is exactly as strict as the spec's: every offset
-  against the bytes it bounds, every bounded list against its limit, nothing after the last
-  field;
+  against the bytes it bounds, every bounded list against its limit, a key list of whole
+  keys, nothing after the last field;
 - an input that decodes and breaks any rule after that publishes `false` with the
   **request's real root**, the chain id and the schema id;
 - a valid one publishes `true` with them.
@@ -75,11 +86,12 @@ The spec's order, `stateless.rs::verify`, first failure wins:
 1. the ancestor headers decode and chain by `parent_hash`; the last is the parent, and a
    header's `BLOCKHASH` number is its **position** counted back from the block's own;
 2. no empty transaction; the header the payload implies hashes to its `block_hash`; every
-   transaction decodes strictly (EIP-2718, types 0–4); the blob transactions' versioned
-   hashes are the request's;
+   transaction decodes strictly (EIP-2718, types 0–4); in ere-guests' layout, one public
+   key per transaction; the blob transactions' versioned hashes are the request's;
 3. EIP-7934's block size, and the header against its parent;
-4. the block runs — EIP-4788 and EIP-2935, every transaction (sender recovered, chain id
-   checked, admitted against the block's remaining gas, state gas and blob gas), the
+4. the block runs — EIP-4788 and EIP-2935, every transaction (sender recovered and any key
+   held to it, chain id checked, admitted against the block's remaining gas, state gas and
+   blob gas), the
    withdrawals, the deposit logs and the checked system calls of EIP-7002, EIP-7251 and,
    from Amsterdam, EIP-8282's two;
 5. gas used, receipts root, logs bloom, blob gas used, requests hash, and for Amsterdam
@@ -135,7 +147,9 @@ withdrawals precede requests; an Amsterdam transaction's gas limit is bounded by
 | every pair of the release, natively: 67,251 pairs, 28,978 distinct inputs | `crates/host/tests/conformance.rs::every_stateless_output_is_the_release_s`, **by hand** over an extracted release |
 | one case per rule the release reaches, the smallest valid one, every undecodable one and the five the fixes were found by — 34, held to their bytes **and** their rule | `…::the_committed_subset_is_the_release_s`, in CI; cut by `kat-gen -- zkevm` |
 | the guest binary publishes those 43 bytes | `…::the_guest_publishes_the_subset_s_outputs`, `#[ignore]`d: it builds the image |
-| the Electra/Fulu layout, which no release fills, against `eth-act/ere-guests` v0.17.1 | `crates/host/tests/ssz.rs`, over `tools/stateless-ref`'s vectors |
+| ere-guests' layout: every decodable subset case is the same validation with its signers' keys, and keys too few, too many, another signer's or not uncompressed are refused | `…::the_keyed_layout_is_the_same_validation`, in CI |
+| the zkEVM benchmark's `glamsterdam-devnet-8` dataset — real devnet blocks to 105 Mgas, in ere-guests' layout; 90 blocks across the devnet's history matched natively, the newest ten through the binary | `…::every_stateless_output_is_the_release_s` and `…::every_output_of_a_directory_is_the_binary_s` over an extracted batch, **by hand** |
+| the Electra/Fulu layout, which no release fills, and both containers, against `eth-act/ere-guests` v0.17.1 | `crates/host/tests/ssz.rs`, over `tools/stateless-ref`'s vectors |
 | headers, transactions, recovery, roots, receipts, the bloom, the block size, deposits and the blob price, against real mainnet blocks; each header rule by its own mutation | `crates/host/tests/canonical.rs` |
 | the trie | `crates/host/tests/mpt.rs` |
 | the revm set | `crates/host/tests/revm_lock.rs` |

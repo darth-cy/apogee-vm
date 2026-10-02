@@ -8,11 +8,13 @@
 //! `NewPayloadRequest` — has no release to be held to. This is its oracle:
 //! `eth-act/ere-guests`' `stateless-validator-common` at v0.17.1, the input
 //! types the zkEVM benchmark's guests decode with, over `libssz` 0.3.0. Its
-//! request types and their `hash_tree_root` are used as they are. Its
-//! `StatelessInput` is not: v0.17.1 still carries the `public_keys` field
-//! `tests-zkevm@v21.0.1` dropped, so the v21 container — request, witness,
-//! chain id — is declared here with the same derive, and that derive's decoder
-//! is the reference every mutated input is held to.
+//! request types and their `hash_tree_root` are used as they are. The guest
+//! decodes two containers: v21's — request, witness, chain id — declared here
+//! with the same derive, `tests-zkevm@v21.0.1` having dropped the
+//! `public_keys` field v0.17.1 still carries; and v0.17.1's own
+//! `StatelessInput`, with it, which is what the benchmark's datasets carry.
+//! An input's reference verdict is whichever of the two decoders accepts it,
+//! and no input is both.
 //!
 //! One file, `crates/host/tests/vectors/stateless_ref.txt`, a line per input:
 //!
@@ -24,8 +26,10 @@
 //! transaction, withdrawal and request lists either side of EIP-7916's
 //! progressive boundaries (1, 5, 21 and 85 elements); one transaction deep
 //! enough that its tree needs a zero subtree of depth 12; Gloas beside them,
-//! the layout the release already holds the guest to; and the encoding broken
-//! six ways, two of them each layout under the other's schema id.
+//! the layout the release already holds the guest to; three of them again in
+//! v0.17.1's keyed container, one with no keys; and the encoding broken seven
+//! ways, two of them each layout under the other's schema id and one a key
+//! list that is not whole keys.
 //! Deterministic: same revision in, byte-identical file out.
 
 use std::fmt::Write as _;
@@ -36,7 +40,7 @@ use libssz::{SszDecode, SszEncode};
 use libssz_derive::{SszDecode, SszEncode};
 use libssz_merkle::{HashTreeRoot, Sha2Hasher};
 use stateless_validator_common::guest::input::new_payload_request::*;
-use stateless_validator_common::guest::input::ExecutionWitness;
+use stateless_validator_common::guest::input::{ExecutionWitness, ProtocolFork, StatelessInput};
 use test_support::{to_hex, Rng};
 
 const ERE_GUESTS_REV: &str = "daec35a51ec066cae50636a28311d67cb07bb150";
@@ -266,17 +270,59 @@ fn prefixed(schema: u16, body: &[u8]) -> Vec<u8> {
     [&schema.to_be_bytes()[..], body].concat()
 }
 
-/// What the reference decoder makes of an input: its request's root, or
+/// The same input in v0.17.1's container, encoded by its `StatelessInput`,
+/// with `keys` public keys after the chain id. Decoding does not tie them to
+/// the transactions; validation does.
+fn keyed(input: &[u8], keys: usize, rng: &mut Rng) -> Vec<u8> {
+    let (schema, body) = input.split_at(2);
+    let schema = u16::from_be_bytes([schema[0], schema[1]]);
+    let fork = ProtocolFork::from_u64(u64::from(schema >> 8)).expect("a fork");
+    let (new_payload_request, witness, chain_id) = if schema == AMSTERDAM {
+        let i = InputGloas::from_ssz_bytes(body).expect("a v21 input");
+        (
+            NewPayloadRequest::Gloas(i.new_payload_request),
+            i.witness,
+            i.chain_id,
+        )
+    } else {
+        let i = InputElectraFulu::from_ssz_bytes(body).expect("a v21 input");
+        (
+            NewPayloadRequest::ElectraFulu(i.new_payload_request),
+            i.witness,
+            i.chain_id,
+        )
+    };
+    let public_keys: Vec<[u8; 65]> = (0..keys)
+        .map(|_| {
+            let mut key = array(rng);
+            key[0] = 0x04;
+            key
+        })
+        .collect();
+    StatelessInput {
+        new_payload_request,
+        witness,
+        chain_id,
+        public_keys: public_keys.into(),
+    }
+    .to_schema_prefixed_ssz(fork)
+}
+
+/// What the reference decoders make of an input: its request's root, or
 /// `reject`.
 fn verdict(input: &[u8]) -> String {
     let (schema, body) = input.split_at(2);
-    let root = match u16::from_be_bytes([schema[0], schema[1]]) {
+    let v21 = match u16::from_be_bytes([schema[0], schema[1]]) {
         AMSTERDAM => InputGloas::from_ssz_bytes(body)
             .map(|i| i.new_payload_request.hash_tree_root(&Sha2Hasher)),
         _ => InputElectraFulu::from_ssz_bytes(body)
             .map(|i| i.new_payload_request.hash_tree_root(&Sha2Hasher)),
     };
-    root.map_or_else(|_| "reject".into(), |root| to_hex(&root))
+    let root = v21.ok().or_else(|| {
+        let (_, i) = StatelessInput::from_schema_prefixed_ssz(input).ok()?;
+        Some(i.new_payload_request.hash_tree_root(&Sha2Hasher))
+    });
+    root.map_or_else(|| "reject".into(), |root| to_hex(&root))
 }
 
 fn u32_at(bytes: &[u8], at: usize) -> u32 {
@@ -371,6 +417,24 @@ fn main() {
     decreasing[body + 4..body + 8].copy_from_slice(&(u32_at(&typical, body) - 1).to_le_bytes());
     let mut past_end = typical.clone();
     past_end[body + 4..body + 8].copy_from_slice(&(typical.len() as u32).to_le_bytes());
+
+    // v0.17.1's own container: three inputs again, each with a key list.
+    for (name, at, keys) in [
+        ("bpo2-typical-keyed", 2, 3),
+        ("bpo2-empty-keyed", 3, 0),
+        ("amsterdam-typical-keyed", cases.len() - 2, 2),
+    ] {
+        let input = keyed(&cases[at].1, keys, &mut rng);
+        cases.push((name.into(), input, cases[at].2));
+    }
+    let mut ragged = cases
+        .iter()
+        .find(|case| case.0 == "bpo2-typical-keyed")
+        .expect("a keyed input")
+        .1
+        .clone();
+    ragged.pop();
+
     let broken = [
         ("bpo2-schema-on-an-amsterdam-body", schema(BPO2, &amsterdam)),
         (
@@ -384,12 +448,13 @@ fn main() {
             "bpo2-body-shorter-than-the-fixed-part",
             typical[..body + 15].to_vec(),
         ),
+        ("bpo2-keys-not-whole", ragged),
     ];
 
     let mut out = String::new();
     writeln!(
         out,
-        "# hash_tree_root(NewPayloadRequest) of schema-prefixed tests-zkevm@v21.0.1 stateless inputs,"
+        "# hash_tree_root(NewPayloadRequest) of schema-prefixed stateless inputs, in tests-zkevm@v21.0.1's container and v0.17.1's keyed one,"
     )
     .unwrap();
     writeln!(
