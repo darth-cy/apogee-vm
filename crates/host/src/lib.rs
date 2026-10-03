@@ -27,13 +27,16 @@
 //! anywhere (`docs/spec/streaming.md` §1). Two consequences a caller sees:
 //!
 //! - `max_in_flight` is an argument. It is the backpressure that bounds the
-//!   peak, and the caller is the only one that knows the machine.
+//!   peak — the prover's worker count, each worker holding one shard at a
+//!   time — and the caller is the only one that knows the machine.
 //! - **There is no archive to return**, so there are no per-phase section
-//!   clocks either. [`Proven::report`] carries the streaming run's own four
-//!   clocks instead, and they are *sums of disjoint intervals* — execution and
-//!   proving interleave, and the guest is executed twice. A reader comparing
-//!   one against a pre-S-STREAM archived number is comparing two different
-//!   quantities.
+//!   clocks either. [`Proven::report`] carries the streaming run's own clocks
+//!   instead: one wall clock per pass, and the executor's time inside each.
+//!   Since S-PIPELINE the guest is stepped by whichever worker needs the next
+//!   shard while the others commit or prove theirs, so the executor's time
+//!   overlaps the rest and is not a slice of the wall. A reader comparing one
+//!   against a pre-S-STREAM archived number, or a pre-S-PIPELINE streamed one,
+//!   is comparing two different quantities.
 //!
 //! The guest's execution is no longer timed separately here. It does not need
 //! to be: `StreamingReport`'s `pass1_execute_ns` and `pass2_execute_ns` are
@@ -82,8 +85,9 @@ use verifier_core::{BlockProof, VerifyError, VerifyingKey};
 pub struct Proven {
     /// The block proof, which carries its own statement and `VmConfig`.
     pub block: BlockProof,
-    /// What the streaming run measured about itself: the four clocks, the
-    /// shard count, and the largest batch it proved at once.
+    /// What the streaming run measured about itself: the two passes' wall
+    /// clocks and the executor's time in each, the shard count, and the most
+    /// shards it held at once.
     pub report: StreamingReport,
     /// The guest's exit status, which is `x10`'s final value.
     pub exit_code: i32,
@@ -118,7 +122,8 @@ pub fn setup(elf: &[u8], params: &ProgramParams, srs: Srs) -> Result<ProverSetup
 ///
 /// One call into `prover::prove_block_streaming`, which executes the guest
 /// twice — once to commit each shard's memory columns as it fills, once to
-/// prove them — and never proves more than `max_in_flight` shards at once.
+/// prove them — and never holds more than `max_in_flight` shards at once, one
+/// per worker.
 /// `max_in_flight` must be at least 1; `docs/spec/streaming.md` §5 is what it
 /// bounds and why the caller chooses it.
 ///

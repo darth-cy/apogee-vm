@@ -13,8 +13,8 @@
 //!
 //! It proves the pinned fixture end to end and verifies the result, filling
 //! every field of the report from the run. The per-stage timings are the
-//! streaming run's own four clocks (`prover::StreamingReport`) — since
-//! S-STREAM there is no `TraceArchive` and so no phase sections — and the
+//! streaming run's own clocks (`prover::StreamingReport`) — since S-STREAM
+//! there is no `TraceArchive` and so no phase sections — and the
 //! crate's standing rule still holds: **no assertions, no thresholds**. The one
 //! thing it does assert is that the proof verifies, because a timing for a
 //! proof that does not verify is not a measurement of anything.
@@ -110,8 +110,8 @@ pub struct Options {
     /// Use a toy SRS rather than the ceremony. Same timings, different
     /// identity.
     pub toy_srs: bool,
-    /// How many shards the **streaming** prover proves at once
-    /// (`docs/spec/streaming.md` §5), which is what bounds the peak.
+    /// How many workers the **streaming** prover runs, each holding one shard
+    /// at a time (`docs/spec/streaming.md` §5), which is what bounds the peak.
     ///
     /// Not an `Option` since S-STREAM: streaming is the only proving path, so
     /// there is no second arm for this to select and the flag only tunes the
@@ -285,19 +285,22 @@ pub fn run(options: &Options) -> Result<(), String> {
         input: Vec::new(),
         advice: job.advice,
     };
-    // **One proving path** (S-STREAM). There is no archive and so no five
-    // phase sections: the four clocks the `StreamingReport` carries are mapped
-    // onto the four names the report already has, and the printed table says
-    // how (`crate::report::BenchReport::in_flight`). `opening_ms` and
-    // `final_ms` are 0.0 because the streaming prover does not separate them
-    // from `gkr_ms` — one shard's GKR and its opening are one interval there.
+    // **One proving path** (S-STREAM), and since S-PIPELINE a pipelined one.
+    // There is no archive and so no five phase sections: the `StreamingReport`'s
+    // clocks are mapped onto the names the report already has, and the printed
+    // table says how (`crate::report::Phases`). `commit_ms` and `gkr_ms` are
+    // the two passes' wall clocks; `execution_ms` is the executor's time in
+    // both, which runs inside them while the workers commit and prove, so it is
+    // not a third slice of the wall. `opening_ms` and `final_ms` are 0.0
+    // because the streaming prover does not separate them from `gkr_ms` — one
+    // shard's GKR and its opening are one interval there.
     let proving_started = Instant::now();
     let proven = host::prove(&setup, &io, options.in_flight)?;
     let report = proven.report;
     let phases = Phases {
         execution_ms: millis(report.pass1_execute_ns + report.pass2_execute_ns),
-        commit_ms: millis(report.pass1_commit_ns),
-        gkr_ms: millis(report.pass2_prove_ns),
+        commit_ms: millis(report.pass1_ns),
+        gkr_ms: millis(report.pass2_ns),
         opening_ms: 0.0,
         final_ms: 0.0,
     };
@@ -522,7 +525,7 @@ pub fn usage() -> &'static str {
      \x20     --json, as JSON. <fixture> is a stem under crates/host/tests/vectors,\n\
      \x20     e.g. mini-block. --hourly-usd is the machine's on-demand price, which\n\
      \x20     is what the cost estimate is computed from. Proving is always the\n\
-     \x20     STREAMING prover; --in-flight <n> is how many shards it proves at\n\
+     \x20     STREAMING prover; --in-flight <n> is how many shards it holds at\n\
      \x20     once, which is what bounds the peak (default 8,\n\
      \x20     docs/spec/streaming.md). --out <dir> writes the verified block's\n\
      \x20     four files there -- <fixture>.vk, .identity, .public and .block.\n\

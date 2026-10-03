@@ -28,17 +28,21 @@ shard, ~60 GB of forward pass, so it is a dev-server job.
 
 **`prove` is `prover::prove_block_streaming`, and since S-STREAM there is no other
 path** (`docs/spec/streaming.md`). `--in-flight <n>` no longer *selects* a path: it is
-how many shards are proved at once, which is what bounds the peak, and it
-defaults to `block::DEFAULT_IN_FLIGHT` = **8** — measured on a 51-shard mini-block at
-77.10 GiB for four against 83.91 for eight, the extra four worth 14% of the wall clock.
-The block does not depend on it.
+the prover's worker count — each worker holds one shard at a time, which is what bounds
+the peak (`docs/spec/streaming.md` §5, S-PIPELINE) — and it defaults to
+`block::DEFAULT_IN_FLIGHT` = **8**, measured under the batch shape on a 51-shard
+mini-block at 77.10 GiB for four against 83.91 for eight, the extra four worth 14% of the
+wall clock. The block does not depend on it.
 
-There is no archive and so no five phase timings, so the report's four clocks read
-differently from a pre-S-STREAM one and the printed table says how — `execution` is
-**both** passes' executor, `commit` is pass 1's, `gkr` is pass 2's whole proving region
-(the GKR proof and the opening, fused over one base layer), and `opening` and `final`
-are 0 because there is no phase boundary there to measure. `BenchReport`'s `in_flight`
-field is now always `Some`.
+There is no archive and so no five phase timings, so the report's clocks read differently
+from a pre-S-STREAM one and the printed table says how. **Since S-PIPELINE** `commit` and
+`gkr` are the two passes' **wall clocks** — pass 1's execution and commitments, and pass
+2's execution and proofs, the GKR proof and the opening fused over one base layer — and
+`execution` is the executor's time across both, which runs *inside* them while the
+workers commit and prove, so `Phases::total_ms` leaves it out. `opening` and `final` are
+0 because there is no phase boundary there to measure. A figure here is comparable with
+neither a pre-S-STREAM report nor a pre-S-PIPELINE one. `BenchReport`'s `in_flight` field
+is now always `Some`.
 
 `--out <dir>` writes the verified block's four files through
 `verifier::proof_archive::write_proof` — `<fixture>.vk`, `.identity`, `.public` and
@@ -96,8 +100,8 @@ commit as any optimization; this is where that benchmark goes.
 - **The `prove` verb's per-stage timings come from the prover and not from this crate**,
   which is must-be-exact 5, *"not from ad-hoc stopwatches sprinkled in the prover"*. They
   were the `TraceArchive`'s five phase sections until S-STREAM; they are now
-  `prover::StreamingReport`'s four clocks, measured inside `prove_block_streaming` around
-  the executor and around each pass. It enables **no cargo feature** to get them — they
+  `prover::StreamingReport`'s clocks, measured inside `prove_block_streaming` around each
+  pass and around every step any worker takes of the executor. It enables **no cargo feature** to get them — they
   are in the default build, and a feature turned on from a dependency entry would be on
   for every `cargo build --workspace`. (There was a `prover/metrics` harness that measured
   the same job a second way; it was retired at S-STREAM with the archived path it

@@ -179,8 +179,9 @@ pair is what localizes a death to the phase, and the per-shard column counts are
   layer, gate and relation, offline and better. `detail` prints the one-line inventory
   instead, because a `layer=9` in a failure means nothing until you know there are 41.
 - **stage timings as a report** — that is `tools/bench`'s `prove` verb, whose
-  `BenchReport` carries the `StreamingReport`'s four clocks beside the setup, verify and
-  unattributed time and is a better instrument for it. The log's `ms=` fields are there to
+  `BenchReport` carries the `StreamingReport`'s clocks — each pass's wall clock and the
+  executor's time inside it — beside the setup, verify and unattributed time, and is a
+  better instrument for it. The log's `ms=` fields are there to
   say which shard is slow while it is still running, not to be added up. **A per-shard
   `ms` inside a parallel region is not a cost**: the GKR prover is itself rayon-parallel,
   so a worker parked in a nested `par_iter` work-steals another shard's task while that
@@ -478,24 +479,34 @@ everything else at `detail`.
 ### Which pass died
 
 Since S-STREAM there is one proving path and it runs the guest twice
-(`docs/spec/streaming.md` §2), so a run that never reaches a shard has two places to have
-stopped and three `phase` lines that say which:
+(`docs/spec/streaming.md` §2), and since S-PIPELINE each pass is a pipeline of
+`max_in_flight` workers (`docs/spec/streaming.md` §5), so every shard of every pass has a
+`take` line when a worker claims it and a `committed` or `proved` line when that worker
+is done with it:
 
 ```console
-$ grep '^apogee stream' /tmp/revm.log
+$ grep '^apogee stream' /tmp/run.log
 apogee stream   begin max_in_flight=8 families=13
-apogee stream   pass 1 done shards=51 execute_ms=4312.7 commit_ms=81204.3
-apogee stream   pass 2 flushed 8 shard(s), queue=8 of max 8
+apogee stream   pass 1 take ADD_SUB_LUI_AUIPC#0    fill#0 in_flight=1/8 waiting=0
+apogee stream   pass 1 committed ADD_SUB_LUI_AUIPC#0    M=<n> fill_ms=<ms> ms=<ms>
 ...
-apogee stream   pass 2 done shards=51 peak_in_flight=8/8 execute_ms=4288.1 prove_ms=431902.6
+apogee stream   pass 1 done shards=51 ms=<ms> execute_ms=<ms> peak_in_flight=8/8
+apogee stream   pass 2 take ADD_SUB_LUI_AUIPC#0    fill#0 in_flight=1/8 waiting=0
+apogee stream   pass 2 proved ADD_SUB_LUI_AUIPC#0    fill_ms=<ms> ms=<ms>
+...
+apogee stream   pass 2 done shards=51 ms=<ms> execute_ms=<ms> peak_in_flight=8/8
 ```
 
-`begin` with no `pass 1 done` is a death in the executor or in the commit phase, and
-`apogee commit   begin`/`done` is which of the two. `pass 1 done` with no `pass 2 done`
-is a death in a shard, and §2's `begin`/`gkr done` counting is what names it — the
-unmatched `begin`s are the batch that was in flight, which is at most `max_in_flight`
-and is what the peak is made of. A high `commit_ms` against a low `prove_ms` is pass 1's
-sequential MSM bulk and not a bug.
+`begin` with no `pass 1 done` is a death in pass 1 — in the executor, or in a shard's
+commitments — and a `pass 1 take` with no `pass 1 committed` names the shards that were in
+flight, at most `max_in_flight` of them. `pass 1 done` with no `pass 2 done` is a death in
+pass 2, and the `take`/`proved` pairs, with §2's `begin`/`gkr done` counting inside them,
+name the shard. `fill#` is the shard's place in fill order, which is the order a failure
+is chosen by (the earliest wins). A `take` line's `in_flight=` is the shards claimed and
+its `waiting=` the shards filled and not yet claimed — rows, at most one per family — so
+`in_flight` held below the bound in mid-pass is a pass whose executor is the bottleneck,
+the first thing to check when a pass is slower than its shards. `fill_ms` is a shard's
+fill, which is one thread; the rest of its `ms` is its MSMs or its proof, on the pool.
 
 `apogee ABORTED` is the other line worth a `grep`: a nonzero `x10`. A guest that panicked
 exits 101 having published whatever it had committed, so its block proves and verifies
