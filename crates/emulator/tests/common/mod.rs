@@ -133,7 +133,7 @@ pub fn exit_code_of(name: &str) -> i32 {
         "recursion-ops" => 9,
         "shards" => 2,
         "mod-mul-ops" => 28,
-        "sha256-ops" => 12,
+        "sha256-ops" => 13,
         "ec-ops" => 20,
         _ => 0,
     }

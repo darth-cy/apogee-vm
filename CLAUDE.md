@@ -69,9 +69,10 @@ crates/
                  delegation circuits share; `keccak`: S21's delegation circuit; `poseidon2`
                  and `fr_arith`: S23's; `mod_mul`: S26's, specialized at S26b to
                  `a·b mod m` over one of FOUR fixed Ethereum fields a frame word
-                 SELECTS; `sha256` and `ec_add`: S26c's two, one SHA-256 compression
-                 a row and one THIRD of a complete elliptic-curve point addition a
-                 row, the second being the first delegation family to carry a lookup
+                 SELECTS; `sha256` and `ec_add`: S26c's two, FOUR SHA-256 rounds
+                 a row since S26e -- a compression is sixteen invocations -- and
+                 one THIRD of a complete elliptic-curve point addition a row, the
+                 second being the first delegation family to carry a lookup
                  channel; `gadgets`: the is-zero and
                  comparison gadgets;
                  `family_circuit`: the registry, now every family; no_std
@@ -377,7 +378,12 @@ guests. Cargo's default release profile would also turn `overflow-checks` off, w
 a performance setting here: `u32::MAX + 1` then commits `00000000` to the journal where the
 dev build panics and exits 101, and the journal is the *committed public output*. So
 `guests/Cargo.toml` pins both profiles to the same semantics — they differ only in
-`opt-level`.
+`opt-level` and, since S26e, in **one** release-only package override: a dependency's
+`debug-assertions` are off at `--release` (`[profile.release.package."*"]`), every guest
+keeping its own and `overflow-checks` staying on everywhere. A dependency's debug assertion
+is its own invariant check, so it changes no journal an honest dependency computes, and it
+is worth 6.8% of a stateless block's cycles; `crates/prover/tests/one_feature.rs` pins the
+override's exact shape. The dev profile, which builds every committed fixture, keeps them.
 
 A guest ELF is not byte-reproducible across machines: rustc embeds absolute paths in
 panic-location strings. Two clean builds on one machine do agree, so the committed `.elf`
@@ -1046,20 +1052,21 @@ is derivable *from* them is regenerated and diffed in CI.
   than not delegating. Poseidon2's frame is the other way — canonical values, so the circuit
   is `poseidon2_permute` itself — because there the conversion is six operations against 240
   the delegation removes (`docs/spec/delegation.md` §12.1, §13.2).
-- **A delegation family takes its own height, and since S26d three of the six carry
+- **A delegation family takes its own height, and since S26e four of the six carry
   `RANGE16`.** Its rows are invocations, not halfwords, so its ceiling is the width of one
   row's circuit — and **the six differ there by four orders of magnitude, so they do not
-  share a height**: `POSEIDON2`, `FR_ARITH` and `SHA256_COMP` take `2^8` (SHA-256's
-  compression at `2^16` is 35 GB, and S21's whole-permutation keccak row at `2^16` would have
-  been 744 GB, which is what forced *that* shape to `2^8`), `MOD_MUL` and `EC_ADD` take `2^16` —
-  5.1 GB and **20.5 GB** a shard — and since S26d `KECCAK_F` takes `2^18`, **~60 GB** a
-  shard, which makes *it* the peak-setting family in a block, above every execution shard's
-  own peak, with `EC_ADD`'s 20.5 GB second (`docs/spec/delegation.md` §9.2). `2^16` is
+  share a height**: `POSEIDON2` and `FR_ARITH` take `2^8` (S21's whole-permutation keccak row
+  at `2^16` would have been 744 GB and S26c's whole-compression SHA-256 row 35 GB, which is
+  what forced *those* shapes to `2^8` until each was re-shaped), `MOD_MUL` and `EC_ADD` take
+  `2^16` — 5.1 GB and **20.5 GB** a shard — and `KECCAK_F` (since S26d) and `SHA256_COMP`
+  (since S26e) take `2^18`, **~60 GB** and a derived **~30 GB** a shard, which makes
+  `KECCAK_F` the peak-setting family in a block, above every execution shard's own peak
+  (`docs/spec/delegation.md` §9.2). `2^16` is
   *forced* for `MOD_MUL` and `EC_ADD` rather than chosen: it is the channel's floor, Mercury
-  needs an even variable count, and `2^18` is four times worse. `KECCAK_F`'s `2^18` is the
-  other way round — a *choice* two variables above that same floor, because a delegation
-  shard's cost is its height while its proof bytes barely move with it, so fewer, fatter
-  shards cut a keccak-heavy workload's total **proof bytes**.
+  needs an even variable count, and `2^18` is four times worse. `KECCAK_F`'s and
+  `SHA256_COMP`'s `2^18` are the other way round — a *choice* two variables above that same
+  floor, because a delegation shard's cost is its height while its proof bytes barely move
+  with it, so fewer, fatter shards cut a hash-heavy workload's total **proof bytes**.
   **No delegation family may carry `TIMESTAMP` at any height on this menu** — `BITS = 19`
   needs `2^20`, an execution family's floor — so a frame's timestamp gap is a bit
   decomposition at `2^8` and three `RANGE16` chunks at `2^16` and above, never that channel's
@@ -1100,6 +1107,19 @@ is derivable *from* them is regenerated and diffed in CI.
   so four more double it and cost 34.4 GB a shard; `input_w{j}` and `output_w{j}` are **ungated**,
   which is what makes a padding row's state byte *not* free; and `one_round_a_live_row` is
   load-bearing because the codes are `0..24` and every pair sums to another round's word.
+- **`SHA256_COMP` is FOUR ROUNDS A ROW since S26e, and a compression is sixteen calls**
+  (`docs/spec/delegation.md` §15, §10.5). The same trade a second time: S26c's row was a
+  whole compression in bits, 16,688 inner columns at `2^8`, 5,186 proof bytes a compression,
+  and on the stateless guest's block 257510 32 shards and two thirds of the proof. Now the
+  frame is 25 words — the round group, `a..h`, and a sixteen-word **schedule window** each
+  call shifts down four and refills with the four words it derives, so the message schedule
+  crosses the frame and costs the guest nothing — every Boolean operation is an `XOR8`
+  obligation, the big sigmas **nest** (`Σ0(a) = ROTR2(a ^ ROTR11(a ^ ROTR9(a)))`), `Ch` and
+  `Maj` are linear forms over XORs, and every addition is a degree-1 gate whose carry is the
+  byte-range tuple `(0, c, c)`. **624 committed, 2,802 inner, 189,988 proof bytes a `2^18`
+  shard of 16,384 compressions: 11.6 a compression.** The price is 2.7× the forward-pass
+  cells a compression. Ecall `0x0505` is **retired and burned**, the call took `0x0508`, and
+  `one_group_a_live_row` is load-bearing for `one_round_a_live_row`'s reason.
 - **`MOD_MUL` multiplies in one of FOUR fixed Ethereum fields, and the EVM's `MULMOD` is
   not one of them** (S26b, `docs/spec/delegation.md` §14 and §10.2). Frame word 0 selects
   secp256k1's `p` or `n` or BN254's `q` or `r`; the circuit supplies the limbs as literals
@@ -1449,6 +1469,7 @@ is derivable *from* them is regenerated and diffed in CI.
 | S26d — `KECCAK_F` re-shaped: one round a row | done | `docs/handoff/S26d-keccak-round.md` |
 | S-STREAM — The sixteen-kilobyte journal; streaming is the only path | done | `docs/handoff/S-STREAM.md` |
 | S-STATELESS — The canonical stateless validator, held to `tests-zkevm@v21.0.1` | done | `docs/handoff/S-STATELESS.md` |
+| S26e — `SHA256_COMP` four rounds a row; guest cycle reductions | done | `docs/handoff/S26e-sha256-round-and-cycles.md` |
 
 **S-IO takes no number, and that is deliberate** (owner's decision). It is not one of the
 original twenty-seven stages — it is the stage those twenty-seven forgot, inserted after
@@ -1509,6 +1530,18 @@ blocks to 105 Mgas — matches on every block sampled. S25's stateless witness, 
 What it owes, in `docs/handoff/S-STATELESS.md`: an Osaka-family block validated end to end
 against a canonical output, which needs a witness producer — the devnet dataset is
 Amsterdam's; and the deferred suites, which run in one batch at the end of the progression.
+
+**`S26e` is the stateless guest's first cycle stage**, two owner-chosen halves on one PR.
+`SHA256_COMP` became `KECCAK_F`'s S26d shape — four rounds a row, a compression sixteen
+invocations glued by RAM, every Boolean operation an `XOR8` obligation, at `2^18` — so
+block 257510's 8,011 compressions are one shard and ~0.19 MB of proof where they were 32
+shards and 42.5 MB — proved end to end, 189,988 proof bytes for the shard, the
+model's figure. And the guest itself went from 351.6M cycles to **197.9M** on that
+block: dependencies' debug assertions off at `--release` (−6.8%), and k256's `EC_ADD` glue —
+coordinates as words rather than bytes, the frame built once, an indexed `select`, no
+table copies in `lincomb`. Measured, journal unchanged at every step; the `2^18` SHA
+shard's ~30 GB peak is the model's — a whole `sha256-ops` statement peaked at 33.1 GB,
+unattributed.
 
 **`S-NATIVE-IO` takes no number for the same reason**, and it is S-IO's other half. S-IO
 built the mechanism that binds an execution's public values and left the POSIX surface

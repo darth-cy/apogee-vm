@@ -5,12 +5,15 @@
 //!
 //! # The three halves, and why each
 //!
-//! **The ABI, called by name.** [`guest_sdk::recursion::sha256_comp`] over a
-//! frame this guest writes itself, so the circuit is exercised at the frame
-//! level and not only through a digest function. The expectation is a
-//! **literal**: FIPS 180-4's own `"abc"` vector is one padded block, so the
-//! state the compression leaves *is* the published digest, and the check is a
-//! comparison against eight constants a reader can look up.
+//! **The ABI, called by name.** One raw [`guest_sdk::recursion::sha256_rounds`]
+//! call — four rounds and four schedule words since S26e — and a whole
+//! [`guest_sdk::recursion::sha256_comp`], its sixteen calls, over a frame this
+//! guest writes itself, so the circuit is exercised at the frame level and not
+//! only through a digest function. Every expectation is a **literal**: FIPS
+//! 180-4's appendix prints the working variables after every round of the
+//! `"abc"` block, so the first call's are a row of that table, and `"abc"` is
+//! one padded block, so the initial state plus the sixteenth call's working
+//! variables *is* the published digest.
 //!
 //! **The padding and the block loop, against published digests.**
 //! [`guest_sdk::sha256`] is the patchable surface (`docs/spec/delegation.md`
@@ -45,7 +48,7 @@
 //! guest here reports it, or `200 + i` on the first that fails — which names
 //! the check rather than leaving a count one short.
 
-use guest_sdk::recursion::{sha256_comp, Sha256Frame, SHA256_IV};
+use guest_sdk::recursion::{sha256_comp, sha256_rounds, Sha256Frame, SHA256_IV};
 use guest_sdk::{entry, exit, sha256};
 use sha2::{Digest, Sha256};
 
@@ -74,6 +77,23 @@ const ABC_BLOCK: [u32; 16] = [
     0,
     0x0000_0018,
 ];
+
+/// The working variables after round 3 of [`ABC_BLOCK`] from the IV: FIPS
+/// 180-4's appendix, the row for `t = 3`. One raw call runs rounds 0 to 3.
+const ABC_ROUND3: [u32; 8] = [
+    0xd550_f666,
+    0xc8c3_47a7,
+    0x5a6a_d9ad,
+    0x5d6a_ebcd,
+    0x24e0_0850,
+    0xf929_39eb,
+    0x78ce_7989,
+    0xfa2a_4622,
+];
+
+/// `W_16..W_19` of [`ABC_BLOCK`]'s message schedule: the four words the first
+/// call appends to the window as it moves it down four.
+const ABC_W16: [u32; 4] = [0x6162_6380, 0x000f_0000, 0x7da8_6405, 0x6000_03c6];
 
 /// `sha256("abc")` as its eight big-endian state words. Because `"abc"` is one
 /// padded block, this is also the chaining state one compression of
@@ -159,20 +179,33 @@ fn main() {
         passed += 1;
     };
 
-    // --- The ABI, called by name, against a literal state.
+    // --- The ABI, called by name, against literals.
 
-    // One compression of `"abc"`'s padded block from the IV is the published
-    // digest. `false` from the shim is exactly `-ENOSYS` — an executor with no
-    // `SHA256_COMP` circuit, which is every executor but this VM's — and then
-    // there is nothing for this check to compare, so it passes on the
-    // software path having already been checked below.
+    // One raw call is rounds 0 to 3. `false` from the shim is exactly
+    // `-ENOSYS` — an executor with no `SHA256_COMP` circuit, which is every
+    // executor but this VM's — and then there is nothing for this check to
+    // compare, so it passes on the software path having already been checked
+    // below.
     let mut frame = Sha256Frame::of(&SHA256_IV, &ABC_BLOCK);
-    check(!sha256_comp(&mut frame) || frame.state() == ABC_STATE);
+    let answered = sha256_rounds(&mut frame);
+    check(!answered || frame.working() == ABC_ROUND3);
 
-    // The schedule words come back unchanged: the sixteen the frame carries are
-    // read and written, and the forty-eight the message schedule derives are the
-    // circuit's own advice and never cross the frame.
-    check(frame.0[8..24] == ABC_BLOCK);
+    // The window moved down four words and took on the four schedule words
+    // those rounds unlock: the schedule crosses the frame, sixteen at a time.
+    let mut window = [0u32; 16];
+    window[..12].copy_from_slice(&ABC_BLOCK[4..]);
+    window[12..].copy_from_slice(&ABC_W16);
+    check(!answered || frame.0[9..25] == window);
+
+    // A whole compression is sixteen calls, and the initial state plus the
+    // working variables they leave is the published digest.
+    let mut frame = Sha256Frame::of(&SHA256_IV, &ABC_BLOCK);
+    let answered = sha256_comp(&mut frame);
+    let mut state = SHA256_IV;
+    for (h, v) in state.iter_mut().zip(frame.working()) {
+        *h = h.wrapping_add(v);
+    }
+    check(!answered || state == ABC_STATE);
 
     // A second compression, chaining from the first, so the frame's state lane
     // is shown to be read and not only written. The block is all zeros, which
@@ -181,7 +214,11 @@ fn main() {
     let chained = {
         let mut f = Sha256Frame::of(&ABC_STATE, &[0u32; 16]);
         let answered = sha256_comp(&mut f);
-        (answered, f.state())
+        let mut next = ABC_STATE;
+        for (h, v) in next.iter_mut().zip(f.working()) {
+            *h = h.wrapping_add(v);
+        }
+        (answered, next)
     };
     check(!chained.0 || chained.1 != ABC_STATE);
 

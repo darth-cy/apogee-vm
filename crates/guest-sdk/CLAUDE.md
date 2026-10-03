@@ -201,6 +201,16 @@ impl ModMulFrame {
 // `constants::mod_mul` so a vendored crate names a constant and not a number.
 pub use constants::mod_mul::{BN254_P, BN254_P_R_INV, BN254_R, BN254_R_R_INV,
                              MODULI, SECP256K1_N, SECP256K1_P};
+
+// S26c; SHA256_COMP is four rounds a call since S26e (docs/spec/delegation.md §15).
+#[repr(C, align(4))] pub struct Sha256Frame(pub [u32; 25]);   // group, a..h, W window
+#[repr(C, align(4))] pub struct EcAddFrame(pub [u32; 97]);    // selector, six lanes, six more
+pub fn sha256_rounds(frame: &mut Sha256Frame) -> bool;        // one call: four rounds
+pub fn sha256_comp(frame: &mut Sha256Frame) -> bool;          // sixteen: one compression
+pub fn ec_add(frame: &mut EcAddFrame) -> bool;                // one group
+pub fn ec_add_complete(frame: &mut EcAddFrame, codes: &[u32; 3]) -> bool;
+impl Sha256Frame { pub fn of(state, block) -> Sha256Frame; pub fn working(&self) -> [u32; 8]; }
+impl EcAddFrame { pub fn of(codes, p, q) -> EcAddFrame; pub fn result(&self) -> [[u32; 8]; 3]; }
 ```
 
 - **There is no software path in this module, and there must not be.** The callers are
@@ -220,6 +230,15 @@ pub use constants::mod_mul::{BN254_P, BN254_P_R_INV, BN254_R, BN254_R_R_INV,
   spells out, so a renumbering fails the build rather than transposing the operands; **they
   are re-pointed and never deleted**, being the only thing holding this literal equal to
   the executor's indexed reads.
+- **`EcAddFrame::of` is one pass too, since S26e**: one 97-word array literal, the six
+  intermediate lanes zero, where S26c zeroed 388 bytes and copied six lanes over them. The
+  zeros go through one `core::hint::black_box`, for the code and not the value: as literal
+  zeros LLVM merges them into a 192-byte `memset` call, 163 cycles a frame against 48
+  stores. `k256`'s additions build about 27,000 frames on a stateless block.
+- **A compression is sixteen `SHA256_COMP` calls and only the first may answer
+  `-ENOSYS`** (S26e), `permute`'s rule: `sha256_comp` writes the group word and calls,
+  sixteen times, and a refusal past the first is `exit(EXIT_PRECOMPILE_ERROR)`, a
+  half-advanced frame having no software continuation.
 - **The caller must reduce, and the shim cannot check it** (S26b). The circuit enforces
   `a < m` and `b < m` for the selected modulus, so a frame carrying anything else is a
   fatal guest error. That is a real obligation on a caller holding a lazily reduced

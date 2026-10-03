@@ -773,13 +773,15 @@ fn recursion_ops_invokes_both_families() {
 /// 180-4's own `"abc"` vector, and `guest_sdk::sha256` against published
 /// digests at every length that moves the Merkle-Damgård padding — each of
 /// those also against `sha2`, an unpatched crates.io implementation and the
-/// only one in that comparison which is not this repository's. Exit 12, one
-/// per check but the first.
+/// only one in that comparison which is not this repository's. Exit 13, one
+/// per check but the first: since S26e the ABI is checked by one raw
+/// four-round call against FIPS 180-4's appendix, its window, and a whole
+/// sixteen-call compression.
 #[test]
 fn sha256_ops_checks_itself_under_the_delegation_ecall() {
     let execution = run(&image("sha256-ops"), &io(&[])).unwrap();
     assert_eq!(
-        execution.exit_code, 12,
+        execution.exit_code, 13,
         "sha256-ops exited {}, and 200 + i would name the check that failed",
         execution.exit_code
     );
@@ -835,10 +837,11 @@ fn the_new_families_are_invoked_the_pinned_number_of_times() {
     // Every one of these is derivable by hand from the guest's source, which
     // is what makes it a pin and not a recording:
     //
-    // - `sha256-ops` compresses 33 blocks: 2 by name through the frame ABI,
-    //   and 31 through `guest_sdk::sha256` — 11 for the seven padding-boundary
-    //   lengths, 2 for the two-block vector, 16 for the 1,000-byte message and
-    //   2 for the last one-byte-difference check.
+    // - `sha256-ops` makes 529 calls since S26e, a compression being sixteen:
+    //   one raw call and two whole compressions by name through the frame ABI,
+    //   33, and 31 blocks through `guest_sdk::sha256`, 496 — 11 for the seven
+    //   padding-boundary lengths, 2 for the two-block vector, 16 for the
+    //   1,000-byte message and 2 for the last one-byte-difference check.
     // - `ec-ops` performs 27 point operations: 20 of its own additions and 7
     //   inside its `k256` oracle, which since S26c is itself delegated. Three
     //   invocations each.
@@ -848,7 +851,7 @@ fn the_new_families_are_invoked_the_pinned_number_of_times() {
     assert_eq!(
         counts,
         vec![
-            ("sha256-ops", "SHA256_COMP", 33),
+            ("sha256-ops", "SHA256_COMP", 529),
             ("ec-ops", "EC_ADD", 81),
             ("ec-ops", "MOD_MUL", 2_084),
             ("mod-mul-ops", "EC_ADD", 39),

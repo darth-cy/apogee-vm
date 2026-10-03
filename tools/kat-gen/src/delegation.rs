@@ -19,10 +19,11 @@
 //! Each height is the family's own default, and **the six do not share one**
 //! (`docs/spec/delegation.md` §9.1). A delegation family's rows are
 //! invocations, not halfwords, so its ceiling is the width of one row's
-//! circuit — and those widths differ by three orders of magnitude.
-//! `SHA256_COMP` is 16,688 inner columns a row, where `2^16` rows is 35 GB of
-//! forward pass; `MOD_MUL` is 2,244, where `2^16` is 5.1 GB and is what takes a
-//! measured block from 1,048 shards to 5.
+//! circuit — and those widths differ by orders of magnitude. `FR_ARITH` is 142
+//! inner columns a row at `2^8`; `KECCAK_F` is 5,490 at `2^18`; `MOD_MUL` is
+//! 2,244, where `2^16` is 5.1 GB and is what takes a measured block from 1,048
+//! shards to 5. `SHA256_COMP` was 16,688 at `2^8` until S26e made a row four
+//! rounds, 2,802 at `2^18`.
 
 use constants::family;
 use constraints::{ec_add, fr_arith, keccak, mod_mul, poseidon2, sha256, CircuitArtifact};

@@ -119,7 +119,7 @@ fn the_registry_is_one_table() {
                 family::SHA256_COMP,
                 ecall::PRECOMPILE_SHA256_COMP,
                 constants::address_space::DELEGATION_SHA256_COMP,
-                24
+                25
             ),
             (
                 family::EC_ADD,
@@ -183,15 +183,18 @@ fn a_number_no_family_answers_is_refused() {
     // the number the specialized call took, and S26c took `+ 5` and `+ 6` for
     // `SHA256_COMP` and `EC_ADD`. S26d did it a second time: `KECCAK_F`'s frame
     // gained the round word, so `+ 1` was retired and burned and the call took
-    // `+ 7`. So the unanswered numbers are the **two** retired ones and 8 and
-    // up — and both retired ones belong in this sweep precisely because burning
-    // a number means nothing may answer it, ever.
+    // `+ 7`. S26e did it a third: `SHA256_COMP`'s frame became four rounds and a
+    // window, so `+ 5` was burned and the call took `+ 8`. So the unanswered
+    // numbers are the **three** retired ones and 9 and up — and every retired
+    // one belongs in this sweep precisely because burning a number means nothing
+    // may answer it, ever.
     for number in [
         0u32,
         ecall::EXIT,
         ecall::RETIRED_KECCAK_F_WHOLE_PERMUTATION,
         ecall::RETIRED_MOD_MUL_WITNESSED_MODULUS,
-        ecall::PRECOMPILE_FIRST + 8,
+        ecall::RETIRED_SHA256_COMP_WHOLE_COMPRESSION,
+        ecall::PRECOMPILE_FIRST + 9,
         0x05ff,
     ] {
         assert_eq!(

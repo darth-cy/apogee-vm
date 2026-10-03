@@ -109,6 +109,20 @@ impl FieldElement {
         self.0.normalize().to_bytes()
     }
 
+    /// apogee-vm: the value as the `MOD_MUL` and `EC_ADD` frames carry it,
+    /// eight little-endian 32-bit words below `p`, normalizing only when it is
+    /// not already canonical.
+    #[cfg(target_arch = "riscv32")]
+    pub(crate) fn to_words(&self) -> [u32; 8] {
+        self.0.to_words()
+    }
+
+    /// apogee-vm: [`Self::to_words`]' inverse, for a frame lane below `p`.
+    #[cfg(target_arch = "riscv32")]
+    pub(crate) fn from_words(w: &[u32; 8]) -> Self {
+        Self(FieldElementImpl::from_words(w))
+    }
+
     /// Returns -self, treating it as a value of given magnitude.
     /// The provided magnitude must be equal or greater than the actual magnitude of `self`.
     pub fn negate(&self, magnitude: u32) -> Self {

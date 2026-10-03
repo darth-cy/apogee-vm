@@ -775,6 +775,30 @@ mod tests {
 // `docs/spec/delegation.md` §14 is the circuit and the ABI.
 // ---------------------------------------------------------------------------
 
+/// apogee-vm, S26e: a field element as the delegation frames carry it, and
+/// back.
+///
+/// `MOD_MUL` and `EC_ADD` both take a value as eight little-endian 32-bit
+/// words **below `p`**, which is what [`apogee::operand`] produces. Exposed so
+/// `projective.rs`' `EC_ADD` routing converts a coordinate in about 30 cycles
+/// where `to_bytes` and `from_bytes_unchecked` took 478 and 408: those
+/// normalize unconditionally and go through a big-endian byte array the frame
+/// does not want.
+#[cfg(target_arch = "riscv32")]
+impl FieldElement10x26 {
+    /// The value's eight frame words, below `p`, normalizing only when the
+    /// element is not already canonical — and every delegated result is.
+    pub(crate) fn to_words(&self) -> [u32; 8] {
+        apogee::operand(self)
+    }
+
+    /// [`Self::to_words`]' inverse, for a frame lane below `p`, which every
+    /// lane a delegation writes is. The result is normalized.
+    pub(crate) fn from_words(w: &[u32; 8]) -> Self {
+        apogee::unpack(w)
+    }
+}
+
 /// secp256k1's `F_p` multiply, routed through the `MOD_MUL` delegation.
 ///
 /// The delegation is `out = a * b mod m` over eight little-endian 32-bit limbs
@@ -829,7 +853,7 @@ mod apogee {
     }
 
     /// [`pack`]'s inverse on a value below `2^256`. The result's magnitude is 1.
-    fn unpack(w: &[u32; 8]) -> FieldElement10x26 {
+    pub(super) fn unpack(w: &[u32; 8]) -> FieldElement10x26 {
         FieldElement10x26([
             w[0] & MASK,
             ((w[0] >> 26) | (w[1] << 6)) & MASK,
@@ -870,7 +894,7 @@ mod apogee {
     /// what the operand bound now forbids: the cost is the `normalize` that
     /// S26 measured at 0.6 million guest cycles on the pinned mini-block, and
     /// it buys a frame whose meaning is a canonical field element.
-    fn operand(x: &FieldElement10x26) -> [u32; 8] {
+    pub(super) fn operand(x: &FieldElement10x26) -> [u32; 8] {
         if packable(x) && !bool::from(x.get_overflow()) {
             return pack(x);
         }

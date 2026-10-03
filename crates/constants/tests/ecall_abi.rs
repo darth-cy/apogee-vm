@@ -40,6 +40,10 @@ fn constants_table() -> BTreeMap<&'static str, u32> {
             "RETIRED_KECCAK_F_WHOLE_PERMUTATION",
             ecall::RETIRED_KECCAK_F_WHOLE_PERMUTATION,
         ),
+        (
+            "RETIRED_SHA256_COMP_WHOLE_COMPRESSION",
+            ecall::RETIRED_SHA256_COMP_WHOLE_COMPRESSION,
+        ),
         ("ZKVM_IO_FIRST", ecall::ZKVM_IO_FIRST),
         ("ZKVM_IO_LAST", ecall::ZKVM_IO_LAST),
         ("PRECOMPILE_FIRST", ecall::PRECOMPILE_FIRST),

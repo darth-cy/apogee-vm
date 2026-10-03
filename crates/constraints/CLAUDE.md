@@ -277,6 +277,24 @@ pub mod mod_mul {                            // docs/spec/delegation.md §14; S2
     pub fn artifact(trace_vars: u32) -> CircuitArtifact;
     pub fn channels() -> Vec<lookup::ChannelSpec>;           // EMPTY
 }
+
+pub mod sha256 {             // docs/spec/delegation.md §15; S26c, re-shaped at S26e
+    pub const CYCLE; LIVE; BASE; ANCHOR_VALUE; WORD_*;  pub fn word(j, field);   // M[0..104]
+    pub fn gap_chunk(j, c);  base_low();  base_low_hi();  base_room();  base_room_hi();
+    pub fn group_sel(r: usize) -> PolyAddress;      // r < 16, one-hot
+    pub fn a_byte(j: isize, b);  e_byte(j, b);      // A_{-2..3}, E_{-2..3}
+    pub fn w_byte(i, b);  n_byte(m, b);             // the window and derived words the sigmas read
+    pub enum Round { Bs0M1, Bs0Y, Bs0M3, Bs0X, Bs0Mx, Bs1M6, Bs1Y, Bs1M5, Bs1X, Bs1Mx,
+                     ChEf, ChEg, MajAb, MajCab, CarryA, CarryE }
+    pub enum Sched { Ss0M3, Ss0Y, Ss0M7, Ss0Shr, Ss0Z, Ss1M2, Ss1Y, Ss1M1, Ss1Shr, Ss1Z, CarryW }
+    pub fn round_col(k, Round, b);  sched_col(m, Sched, b);   // 52 a round, 39 a schedule word
+    pub fn written_hi(slot);  pub const PAIRED_WORDS: [usize; 4];   // a, e, derived 2 and 3
+    pub fn range16_multiplicity();  xor8_multiplicity();
+    pub const MEMORY_COLUMNS: usize = 104;  WITNESS_COLUMNS: usize = 520;
+    pub fn artifact(trace_vars: u32) -> CircuitArtifact;     // 16 <= n; flat
+    pub fn channels() -> Vec<lookup::ChannelSpec>;           // RANGE16, then XOR8
+    pub fn check_shape(a: &CircuitArtifact);
+}
 ```
 
 ## Frozen invariants
@@ -564,8 +582,8 @@ arithmetic of `crates/gkr/tests/memory.rs`.
 
 `tests/vectors/{keccak,poseidon2,fr_arith,mod_mul,sha256,ec_add}.txt`: **digests, not
 artifacts.** A delegation row is a whole field operation, a whole permutation or — since S26d — one keccak round, so the
-artifacts run to megabytes — `poseidon2::artifact(8).to_bytes()` is 2,056,361 bytes and
-`sha256::artifact(8)`'s 10,895,760 — and what is committed is one line apiece: the shape
+artifacts run to megabytes — `poseidon2::artifact(8).to_bytes()` is 2,056,361 bytes, and
+`sha256::artifact(8)`'s was 10,895,760 until S26e made it 845,456 at `2^18` — and what is committed is one line apiece: the shape
 counts and the artifact's SHA-256. `cargo run -p kat-gen -- delegation` writes them,
 kat-gen's own unit test holds each to its constructor, and CI regenerates and diffs them like
 every other fixture. The owner chose the digest at S21 over committing the bytes or committing
@@ -598,6 +616,7 @@ suite in `crates/checker/tests` pins each SHA-256 and holds its gates to
 | `src/add_sub.rs` (unit, and four `const` assertions) | the three system codes pairwise distinct, which is what lets `system_split`, `ecall_code` and `fence_code` refuse every `ebreak` row; and, since S21, `const _: () = assert!(..)` items holding the provable ecall numbers **pairwise** distinct and each in its ABI range, and every delegation type's address-space tag distinct too — what makes `ecall_is_exit` and the per-type number gates a partition rather than gates that can all hold. S23 made that loop over `constants::delegation::TYPES` rather than naming one number. A `const` assertion rather than a test, because a violation there is a mis-numbered ABI and should not compile. Neither gate spells a number: both read `constants::ecall`. The gates themselves are `crates/checker/tests/add_sub.rs`' |
 | `src/poseidon2.rs`, `src/fr_arith.rs` (`check_shape`, run on every build) | the same discipline as `keccak`'s, over each circuit's own shape: the column counts, no setup column and **no channel**, every row-wise layer's width equal to its three regions' (poseidon2), the depth, the named relations present **by name**, and every counted family of gates counted on the emitted artifact. `fr_arith` additionally asserts that no relation's name contains `assume` |
 | `src/keccak.rs` (`check_shape`, run on every build) | the column counts, no setup column, four virtual tables, six outputs and the obligation count; **the two channels' obligation counts separately** — 210 on `RANGE16` and exactly 1,020 on `XOR8` — and that `(1,020 + 1).next_power_of_two()` is 1,024, which is the cost cliff `docs/spec/delegation.md` §6.5 records and the reason iota is four obligations and not eight; the depth; `live_boolean`, `base_aligned`, `base_in_window`, `round_rule`, `one_round_a_live_row` and `writes_back_w0` present **by name** and one `round{r}_boolean` per round; 51 `addr_w`, 50 each of `input_w` and `output_w`, and 200 `rho_pi_l`; and that the all-zero row is a valid padding row. S21's must-be-exact 4: a bound that exists only in a comment is not a bound, and a name check is what an `assume_*` hypothesis cannot stand in for |
+| `src/sha256.rs` (`check_shape`, run on every build, and unit) | S26e: the column counts, a round's 52 and a schedule word's 39, no setup column, four virtual tables, six outputs; **114 obligations on `RANGE16` and 336 on `XOR8`**, under 128- and 512-leaf trees; `live_boolean`, `base_aligned`, `base_in_window`, `group_rule`, `one_group_a_live_row` and `writes_back_w0` by name, 25 `addr_w`, the four rounds' `r{k}_a`/`r{k}_e` and the four `s{m}_sum`, 19 window gates; flatness and a valid all-zero row. The unit tests hold the witness names to the layout and the circuit to building at 16 and not at 14 |
 | `src/keccak.rs` (unit) | the rho/pi index map is a permutation of the 25 lanes and its three whole-byte rotations are the ones `mask_slot` exempts; **the rotation's literal weights reproduce `u64::rotate_left`** on every lane's own offset over four pseudo-random states each, evaluated over `Fr` exactly as a gate would — the one place the circuit's arithmetic is checked at the level of the weights themselves; the witness names are the layout, each once; and the circuit builds at 16 and `family_circuit` refuses 8 |
 | `src/memory.rs` (unit) | acceptance 12: the frame with one obligation dropped before the artifact is written panics at the count assertion |
 | `tests/audit.rs` | every `GateDef` variant, all six, emitted across both compilations, counts written by hand; the catalogue; the two compilations' identical shape |

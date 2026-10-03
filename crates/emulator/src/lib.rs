@@ -304,36 +304,29 @@ fn mod_mul_frame(pc: u32, old: &[u32]) -> Result<Vec<u32>, EmuError> {
     Ok(frame)
 }
 
-/// One SHA-256 compression, in place over the 24-word frame.
+/// What one `SHA256_COMP` invocation does: rounds `4·group..4·group + 4` of
+/// FIPS 180-4's compression over the eight working variables, with the
+/// window's first four words as their schedule words, then the window shifted
+/// by four with the four schedule words it unlocks appended.
 ///
-/// Words 0..8 are the chaining state and 8..24 the block's sixteen
-/// big-endian-decoded schedule words; the invocation writes the eight state
-/// words and leaves the schedule alone. FIPS 180-4, and it takes no `pc`
-/// because there is no frame it can refuse: every `u32` is a legal state word
-/// and a legal schedule word.
-fn sha256_frame(old: &[u32]) -> Vec<u32> {
-    let mut w = [0u32; sha256::ROUNDS];
-    for (i, slot) in w.iter_mut().take(sha256::BLOCK_WORDS).enumerate() {
-        *slot = old[sha256::BLOCK_WORD + i];
-    }
-    for i in sha256::BLOCK_WORDS..sha256::ROUNDS {
-        let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
-        let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-        w[i] = w[i - 16]
-            .wrapping_add(s0)
-            .wrapping_add(w[i - 7])
-            .wrapping_add(s1);
-    }
-    let state: [u32; sha256::STATE_WORDS] = core::array::from_fn(|j| old[sha256::STATE_WORD + j]);
-    let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = state;
-    for (i, wi) in w.iter().enumerate() {
+/// Sixteen of these, groups 0 to 15 on one frame whose window starts as the
+/// block, are the compression's 64 rounds; the caller adds the working
+/// variables to the chaining state it kept. Calls 12 to 15 append `W_64` and
+/// up, which no round reads — the circuit's row is uniform, and so is this.
+pub fn sha256_call(
+    group: usize,
+    state: &mut [u32; sha256::STATE_WORDS],
+    window: &mut [u32; sha256::BLOCK_WORDS],
+) {
+    let [mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h] = *state;
+    for (k, w) in window.iter().take(sha256::ROUNDS_PER_CALL).enumerate() {
         let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
         let ch = (e & f) ^ (!e & g);
         let t1 = h
             .wrapping_add(s1)
             .wrapping_add(ch)
-            .wrapping_add(sha256::ROUND_CONSTANTS[i])
-            .wrapping_add(*wi);
+            .wrapping_add(sha256::ROUND_CONSTANTS[sha256::ROUNDS_PER_CALL * group + k])
+            .wrapping_add(*w);
         let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
         let maj = (a & b) ^ (a & c) ^ (b & c);
         let t2 = s0.wrapping_add(maj);
@@ -346,12 +339,46 @@ fn sha256_frame(old: &[u32]) -> Vec<u32> {
         b = a;
         a = t1.wrapping_add(t2);
     }
-    let v = [a, b, c, d, e, f, g, h];
-    let mut frame = old.to_vec();
-    for j in 0..sha256::STATE_WORDS {
-        frame[sha256::STATE_WORD + j] = state[j].wrapping_add(v[j]);
+    *state = [a, b, c, d, e, f, g, h];
+    let mut x = [0u32; sha256::BLOCK_WORDS + sha256::ROUNDS_PER_CALL];
+    x[..sha256::BLOCK_WORDS].copy_from_slice(window);
+    for m in 0..sha256::ROUNDS_PER_CALL {
+        let t = sha256::BLOCK_WORDS + m;
+        let s0 = x[t - 15].rotate_right(7) ^ x[t - 15].rotate_right(18) ^ (x[t - 15] >> 3);
+        let s1 = x[t - 2].rotate_right(17) ^ x[t - 2].rotate_right(19) ^ (x[t - 2] >> 10);
+        x[t] = x[t - 16]
+            .wrapping_add(s0)
+            .wrapping_add(x[t - 7])
+            .wrapping_add(s1);
     }
-    frame
+    window.copy_from_slice(&x[sha256::ROUNDS_PER_CALL..]);
+}
+
+/// One `SHA256_COMP` invocation over the 25-word frame, in place.
+///
+/// **This family can refuse a frame since S26e**, as `KECCAK_F` can: a group
+/// word at or above 16 has no one-hot selector in the circuit, so an executor
+/// that answered it would produce a trace no honest prover could prove. Every
+/// other word is a legal working variable or schedule word. The group word is
+/// written back unchanged; the guest's own loop is what advances it.
+fn sha256_frame(pc: u32, old: &[u32]) -> Result<Vec<u32>, EmuError> {
+    let group = old[sha256::GROUP_WORD];
+    if group as usize >= sha256::GROUPS {
+        return Err(EmuError::DelegationFrame {
+            pc,
+            detail: "the group word is not a SHA-256 round group",
+        });
+    }
+    let mut state: [u32; sha256::STATE_WORDS] =
+        core::array::from_fn(|j| old[sha256::STATE_WORD + j]);
+    let mut window: [u32; sha256::BLOCK_WORDS] =
+        core::array::from_fn(|i| old[sha256::WINDOW_WORD + i]);
+    sha256_call(group as usize, &mut state, &mut window);
+    let mut new = Vec::with_capacity(sha256::FRAME_WORDS);
+    new.push(group);
+    new.extend_from_slice(&state);
+    new.extend_from_slice(&window);
+    Ok(new)
 }
 
 /// One eight-limb value of the `EC_ADD` frame.
@@ -1198,7 +1225,7 @@ impl<'a> Machine<'a> {
             family::POSEIDON2 => poseidon2_frame(&old),
             family::FR_ARITH => fr_arith_frame(pc, &old)?,
             family::MOD_MUL => mod_mul_frame(pc, &old)?,
-            family::SHA256_COMP => sha256_frame(&old),
+            family::SHA256_COMP => sha256_frame(pc, &old)?,
             family::EC_ADD => ec_add_frame(pc, &old)?,
             other => panic!("emulator: delegation family {other} has no implementation"),
         };
@@ -1570,8 +1597,8 @@ pub fn keccak_f(lanes: &mut [u64; keccak::LANES]) {
 /// One `KECCAK_F` invocation: the round the frame's word 0 names, applied to the
 /// state in words `STATE_WORD..`, written back in place.
 ///
-/// **This family can refuse a frame**, as `MOD_MUL` and `EC_ADD` can and as
-/// `SHA256_COMP` cannot: a round at or above 24 has no one-hot selector in the
+/// **This family can refuse a frame**, as `MOD_MUL`, `EC_ADD` and, since S26e,
+/// `SHA256_COMP` can: a round at or above 24 has no one-hot selector in the
 /// circuit, so an executor that answered it would produce a trace no honest
 /// prover could prove. The round word is written back unchanged; the guest's own
 /// loop is what advances it.
@@ -1936,36 +1963,66 @@ mod tests {
         }
     }
 
-    /// `mod_mul_frame` over **every** selectable modulus, held to the identity
-    /// `a·b = q·m + out` with `out < m` over the full 256-bit width.
+    /// One SHA-256 compression as sixteen invocations, against FIPS 180-4.
     ///
-    /// The small-operand oracle above cannot reach here — these moduli are 254
-    /// and 256 bits — so what stands in for it is the identity itself,
-    /// recomputed from the frame the executor wrote by this file's own
-    /// `wide_mul16`, `sub16` and `divides16`, which share no line with the
-    /// reduction. Two operand shapes per modulus: pseudo-random values below
-    /// `2^253`, which every modulus exceeds, and `m − 1` squared — the largest
-    /// operand the frame admits, and the one a bound off by one would break.
-    /// One SHA-256 compression, against the standard one-block test vector.
-    ///
-    /// `abc` padded to 64 bytes, compressed from the FIPS initial state, is the
-    /// published digest `ba7816bf…` — so this checks the frame convention (the
-    /// schedule words big-endian decoded, the state written back) as well as
-    /// the arithmetic.
+    /// `abc` padded to 64 bytes, from the FIPS initial state: the working
+    /// variables after the first call are the appendix's after round 3, the
+    /// window moves down four words with `W_16..W_19` appended, and the sum of
+    /// the sixteenth call's working variables and the initial state is the
+    /// published digest `ba7816bf…`. A group word of 16 is refused.
     #[test]
     fn sha256_frame_compresses_the_published_test_vector() {
         let mut block = [0u8; 64];
         block[..3].copy_from_slice(b"abc");
         block[3] = 0x80;
-        block[62] = 0;
         block[63] = 24; // the bit length, big-endian
-        let mut old = vec![0u32; sha256::FRAME_WORDS];
-        old[..sha256::STATE_WORDS].copy_from_slice(&sha256::IV);
+        let mut frame = vec![0u32; sha256::FRAME_WORDS];
+        frame[sha256::STATE_WORD..sha256::WINDOW_WORD].copy_from_slice(&sha256::IV);
         for i in 0..sha256::BLOCK_WORDS {
-            old[sha256::BLOCK_WORD + i] =
+            frame[sha256::WINDOW_WORD + i] =
                 u32::from_be_bytes(block[4 * i..4 * i + 4].try_into().unwrap());
         }
-        let new = sha256_frame(&old);
+        let window_in = frame[sha256::WINDOW_WORD..].to_vec();
+        for group in 0..sha256::GROUPS as u32 {
+            frame[sha256::GROUP_WORD] = group;
+            frame = sha256_frame(0, &frame).expect("a group below 16");
+            if group == 0 {
+                // FIPS 180-4's own appendix prints the working variables after
+                // every round of this block; after round 3 they are these.
+                assert_eq!(
+                    &frame[sha256::STATE_WORD..sha256::WINDOW_WORD],
+                    &[
+                        0xd550_f666,
+                        0xc8c3_47a7,
+                        0x5a6a_d9ad,
+                        0x5d6a_ebcd,
+                        0x24e0_0850,
+                        0xf929_39eb,
+                        0x78ce_7989,
+                        0xfa2a_4622,
+                    ],
+                    "the working variables after the first call's four rounds"
+                );
+                assert_eq!(
+                    &frame[sha256::WINDOW_WORD..sha256::WINDOW_WORD + 12],
+                    &window_in[4..],
+                    "the window moves down four words"
+                );
+                assert_eq!(
+                    &frame[sha256::WINDOW_WORD + 12..],
+                    &[0x6162_6380, 0x000f_0000, 0x7da8_6405, 0x6000_03c6],
+                    "W_16..W_19 for this block"
+                );
+            }
+            assert_eq!(
+                frame[sha256::GROUP_WORD],
+                group,
+                "the group is written back"
+            );
+        }
+        let digest: Vec<u32> = (0..sha256::STATE_WORDS)
+            .map(|j| sha256::IV[j].wrapping_add(frame[sha256::STATE_WORD + j]))
+            .collect();
         let want = [
             0xba78_16bf_u32,
             0x8f01_cfea,
@@ -1976,11 +2033,11 @@ mod tests {
             0xb410_ff61,
             0xf200_15ad,
         ];
-        assert_eq!(&new[..sha256::STATE_WORDS], &want, "the `abc` digest");
-        assert_eq!(
-            &new[sha256::BLOCK_WORD..],
-            &old[sha256::BLOCK_WORD..],
-            "the schedule is written back unchanged"
+        assert_eq!(digest, want, "the `abc` digest");
+        frame[sha256::GROUP_WORD] = sha256::GROUPS as u32;
+        assert!(
+            sha256_frame(0, &frame).is_err(),
+            "a group at 16 has no selector, so no answer"
         );
     }
 
@@ -2122,6 +2179,16 @@ mod tests {
         }
     }
 
+    /// `mod_mul_frame` over **every** selectable modulus, held to the identity
+    /// `a·b = q·m + out` with `out < m` over the full 256-bit width.
+    ///
+    /// The small-operand oracle above cannot reach here — these moduli are 254
+    /// and 256 bits — so what stands in for it is the identity itself,
+    /// recomputed from the frame the executor wrote by this file's own
+    /// `wide_mul16`, `sub16` and `divides16`, which share no line with the
+    /// reduction. Two operand shapes per modulus: pseudo-random values below
+    /// `2^253`, which every modulus exceeds, and `m − 1` squared — the largest
+    /// operand the frame admits, and the one a bound off by one would break.
     #[test]
     fn mod_mul_frame_computes_a_times_b_mod_the_selected_modulus() {
         let frame_of = |code: u32, a: [u32; 8], b: [u32; 8]| -> Vec<u32> {

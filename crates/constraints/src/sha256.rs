@@ -1,1178 +1,1435 @@
-//! The `SHA256_COMP` family's circuit: one SHA-256 compression a row, invoked
-//! by the `ecall::PRECOMPILE_SHA256_COMP` ecall and never decoded.
+//! The `SHA256_COMP` family's circuit: **four SHA-256 rounds a row**, over the
+//! 25-word frame a delegation request handed over.
 //!
-//! `docs/spec/delegation.md` §15 is normative. One invocation is one row and
-//! one row is one 64-byte block — the guest keeps the padding, the length
-//! encoding and the block loop, exactly as `guest_sdk::keccak256` keeps the
-//! sponge (§11).
+//! `docs/spec/delegation.md` §15 is normative. S26c's row was a whole
+//! compression — every frame word and all 64 rounds' working variables as bits,
+//! 16,688 inner columns — which pinned the family at `2^8`, 256 compressions a
+//! shard, and made 32 shards two thirds of a real block's proof once the
+//! stateless guest's SSZ hashing started calling it 8,011 times. This is
+//! `KECCAK_F`'s trade made a second time (§6): a compression is **16 rows**,
+//! the frame is ordinary RAM, and the global memory multiset is what proves
+//! call `r`'s written frame is call `r + 1`'s read one. The guest's own proven
+//! loop supplies `r`.
 //!
-//! ```text
-//! frame     M[0..100]: cycle live base anchor_value, then 4 per word
-//! words 0..8                  the chaining state H0..H7, read and written
-//! words 8..24                 the block's schedule words W0..W15, read only
-//! W[0..972]       the frame's own: 38 gap bits a word, then the base's bounds
-//! W[972..1740]    32 bits of every frame word's read value
-//! W[1740..1996]   32 bits of the eight state words' written value
-//! W[1996..2004]   the eight output carries, one bit each
-//! W[2004..3540]   32 bits of the derived schedule words W16..W63
-//! W[3540..3636]   48 schedule carries, two bits each
-//! W[3636..5684]   32 bits of A1..A64, the round outputs' first working word
-//! W[5684..7732]   32 bits of E1..E64
-//! W[7732..7924]   64 round carries `ca`, three bits each
-//! W[7924..8116]   64 round carries `ce`, three bits each
-//! ```
-//!
-//! # The recurrence, rewritten over two words
-//!
-//! FIPS 180-4 shifts eight working words a round. Six of the eight are copies:
-//! with `A_i` and `E_i` the values of `a` and `e` at the start of round `i`,
+//! # The frame, and what one call does
 //!
 //! ```text
-//! B_i = A_{i-1}   C_i = A_{i-2}   D_i = A_{i-3}
-//! F_i = E_{i-1}   G_i = E_{i-2}   H_i = E_{i-3}
+//! word 0        r                   the round group, 0..16, written back unchanged
+//! words 1..9    a b c d e f g h     the working variables, rewritten
+//! words 9..25   W_{4r} .. W_{4r+15} the schedule window, written back shifted by
+//!                                   four, its last four the words this call derives
 //! ```
 //!
-//! so the whole compression is two sequences and nothing else:
+//! Call `r` runs rounds `4r..4r + 4` with `W_{4r+k}` = window word `k`, and
+//! derives `W_{4r+16+m}` for `m < 4` from the window — which is exactly the
+//! schedule those rounds' successors need, so the message schedule costs the
+//! guest nothing and crosses the frame sixteen words at a time. Calls 12 to 15
+//! derive `W_64..W_79`, which nothing reads: a uniform row is cheaper than a
+//! row with a mode.
+//!
+//! Over the four rounds the state is two sequences, `A_j` and `E_j`, with
+//! `A_0 = a`, `A_{-1} = b`, `A_{-2} = c`, `A_{-3} = d` and `E` likewise, so
+//! round `k` reads `A_k, A_{k-1}, A_{k-2}, A_{k-3}` and writes `A_{k+1}`; after
+//! four the frame holds `A_4..A_1` and `E_4..E_1`. **Every one of the sixteen
+//! values has an `M` column**: `j <= 0` a read value and `j >= 1` a written
+//! one, so every word a gate needs is one column.
+//!
+//! # No bit
+//!
+//! The committed unit is a **byte**, and every Boolean operation is one
+//! obligation on the `XOR8` channel (`docs/spec/lookup.md` §14). Membership of
+//! a three-wide tuple bounds each of its positions to `[0, 256)`
+//! individually, which is the whole bound argument for the bytes. Three
+//! identities make the round cheap:
+//!
+//! - **The big sigmas nest.** `Σ0(a) = ROTR2(a ^ ROTR11(a ^ ROTR9(a)))` and
+//!   `Σ1(e) = ROTR6(e ^ ROTR5(e ^ ROTR14(e)))`, rotation distributing over
+//!   XOR, so every XOR has a plain byte column at tuple position 1 and the
+//!   outer rotation is taken on the **word**, where it splits one byte only:
+//!   17 obligations a sigma, where three rotations XORed directly are 20.
+//! - **A rotation is a literal-weighted combination of bytes and masks.**
+//!   Splitting a byte at bit `s` is one XOR against the literal `2^s − 1`,
+//!   which pins `v & (2^s − 1) = (v + 2^s − 1 − m)/2` as a linear form —
+//!   `KECCAK_F`'s rho, with right rotations.
+//! - **`Ch` and `Maj` are sums.** `Ch = (e & f) + (¬e & g)` and
+//!   `Maj = (a + b + c − (a ^ b ^ c))/2`, bit-disjoint and per-bit exact, so
+//!   each is two obligations a byte and a linear form over the words.
+//!
+//! The small sigmas carry a shift, which does not nest; each commits the
+//! shifted bytes and XORs once against them (16 and 15 obligations).
+//!
+//! A sum's carry is one obligation `(0, c, c)` on the same channel, which bounds
+//! it below 256 and so makes every round and schedule equation an integer
+//! equation. The two working variables and the two schedule words a call writes
+//! without reading them in-row carry a `RANGE16` pair, as every word of
+//! `EC_ADD`'s frame does; every other value it writes is a byte sum.
 //!
 //! ```text
-//! T1_i    = E_{i-3} + Sigma1(E_i) + Ch(E_i, E_{i-1}, E_{i-2}) + K_i + W_i
-//! T2_i    = Sigma0(A_i) + Maj(A_i, A_{i-1}, A_{i-2})
-//! A_{i+1} = T1_i + T2_i    - 2^32 * ca_i
-//! E_{i+1} = A_{i-3} + T1_i - 2^32 * ce_i
+//! M[0..104]       cycle live base anchor_value, then 25 words x 4 fields
+//! W[0..50]        gap chunks, two a frame read
+//! W[50..54]       base_low, base_low_hi, base_room, base_room_hi
+//! W[54..70]       group_sel, 16 one-hot round-group selectors
+//! W[70..118]      the bytes of A_{-2..3} and E_{-2..3}
+//! W[118..150]     the bytes of the six window words and two derived words
+//!                 the schedule's sigmas read
+//! W[150..358]     the four rounds, 52 a round
+//! W[358..514]     the four schedule words, 39 a word
+//! W[514..518]     the high halfwords of the four written words that carry a pair
+//! W[518..520]     the RANGE16 and XOR8 multiplicity columns
 //! ```
-//!
-//! with `A_0..A_{-3}` the state words `H0..H3` and `E_0..E_{-3}` the words
-//! `H4..H7`. That is what the circuit enforces, one gate a round, and
-//! `crates/constraints/src/sha256.rs`'s own test holds it against the
-//! reference compression over the whole `guests/sha256-ops` corpus.
-//!
-//! **`T1` is never reduced**, which is why it is not a column: it is a sum of
-//! five values below `2^32`, so below `5 * 2^32`, and only `A_{i+1}` and
-//! `E_{i+1}` are brought back under `2^32`. Reducing `T1` as well would be two
-//! more carries a round and the same answer, since both consumers take it
-//! modulo `2^32`.
-//!
-//! **The carry widths are derived, not observed.** `T1 < 5 * 2^32` and
-//! `T2 < 2 * 2^32` give `ca <= 6`, and `A_{i-3} + T1 < 6 * 2^32` gives
-//! `ce <= 5`: three bits each, which is
-//! [`constants::sha256::CARRY_A_BITS`]. The schedule's four-term sum gives
-//! `cw <= 3` and the final `H_j + V_j` gives `co <= 1`.
-//!
-//! # Why three gate lists
-//!
-//! A three-way XOR is degree 3 in bits — `x^y^z = x+y+z-2(xy+yz+zx)+4xyz` —
-//! so one helper a bit is unavoidable. This circuit **derives** the helper
-//! rather than committing it: gate list 0 writes `p_t = x_t * y_t` into layer
-//! 1, gate list 1 reads it and writes the XOR's 32-bit *value* into layer 2,
-//! and gate list 2 holds the round, schedule and output equations, which are
-//! degree 1 over layer 2. Committing the 9,216 helpers instead would make the
-//! circuit flat and one gate list shorter, at 17,560 committed columns against
-//! 8,216 — 1.69 MB of proof a shard against 1.33 MB, since a committed column
-//! costs 96 wire bytes where an inner one costs 32.
-//!
-//! **`Ch` needs no helper at all.** `Ch(e,f,g) = g + e*f - e*g` is already
-//! degree 2 in the bits, so its value is written at gate list 0 beside the
-//! helpers. `Maj` needs one: `Maj(a,b,c) = pab + c*(a + b - 2*pab)`.
 
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
-use constants::address_space;
-use constants::memory as mem;
-use constants::sha256 as f;
+use constants::{address_space, lookup_channel, sha256 as f};
 use field::Fr;
 
 use crate::delegation as d;
-use crate::{
-    CircuitArtifact, Coeff, GateDef, Padding, PolyAddress, COEFFICIENT_ENCODING_CANONICAL_LE,
-    FORMAT_VERSION,
-};
+use crate::lookup::ChannelSpec;
+use crate::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
 
-/// The frame's words: the chaining state, then the block.
+// ---------------------------------------------------------------------------
+// The shape
+// ---------------------------------------------------------------------------
+
+/// Frame words: the group, the eight working variables and the window.
 const WORDS: usize = f::FRAME_WORDS;
 
-/// `M` columns: the frame's four head columns and four per word.
+/// Rounds a call runs, and schedule words it derives.
+const R: usize = f::ROUNDS_PER_CALL;
+
+/// Bytes in a word.
+const BYTES: usize = 4;
+
+/// The window words whose **bytes** the schedule's sigmas read: `sigma0` reads
+/// `W_{t-15}`, window words 1 to 4, and `sigma1` reads `W_{t-2}`, window words
+/// 14 and 15 for the first two derived words. The last two read the first two
+/// derived words themselves, which [`n_byte`] holds.
+const WINDOW_DECODED: [usize; 6] = [1, 2, 3, 4, 14, 15];
+
+/// `M[0]`: the requesting cycle, which stamps every write the invocation makes.
+pub const CYCLE: PolyAddress = d::CYCLE;
+/// `M[1]`: the row mask, and the one mask every leaf and every obligation carries.
+pub const LIVE: PolyAddress = d::LIVE;
+/// `M[2]`: the frame base pointer, and the anchor tuple's address.
+pub const BASE: PolyAddress = d::BASE;
+/// `M[3]`: the value the request wrote back on its mirror query.
+pub const ANCHOR_VALUE: PolyAddress = d::ANCHOR_VALUE;
+
+/// A frame word's field: the address it reads and writes.
+pub const WORD_ADDR: u32 = d::WORD_ADDR;
+/// A frame word's field: the timestamp of the write it reads.
+pub const WORD_READ_TS: u32 = d::WORD_READ_TS;
+/// A frame word's field: the word before the call.
+pub const WORD_READ_VALUE: u32 = d::WORD_READ_VALUE;
+/// A frame word's field: the word after it.
+pub const WORD_WRITE_VALUE: u32 = d::WORD_WRITE_VALUE;
+
+/// `M[4 + 4j + field]`: one field of frame word `j`.
+pub fn word(j: usize, field: u32) -> PolyAddress {
+    d::word(j, field)
+}
+
+/// `M` columns: the four head columns and four a frame word.
 pub const MEMORY_COLUMNS: usize = d::HEAD_COLUMNS + 4 * WORDS;
 
-/// Bits in a word.
-const BITS: usize = 32;
+// ---------------------------------------------------------------------------
+// The per-round and per-schedule-word blocks
+// ---------------------------------------------------------------------------
 
-/// Schedule words the circuit derives: `W16..W63`.
-const DERIVED_WORDS: usize = f::ROUNDS - f::BLOCK_WORDS;
+/// One round's columns, in layout order. A variant is four bytes wide but the
+/// two single mask cells and the two carries.
+///
+/// `Bs0*` is `Σ0(a) = ROTR2(x)` with `y = a ^ ROTR9(a)` and
+/// `x = a ^ ROTR11(y)`; `Bs1*` is `Σ1(e) = ROTR6(x)` with `y = e ^ ROTR14(e)`
+/// and `x = e ^ ROTR5(y)`. Each `M*` is the byte XORed with the low mask its
+/// rotation splits at, which is what makes the rotation linear.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Round {
+    /// `a ^ 0x01`, a byte each: ROTR9 splits at bit 1.
+    Bs0M1,
+    /// `a ^ ROTR9(a)`.
+    Bs0Y,
+    /// `y ^ 0x07`: ROTR11 splits at bit 3.
+    Bs0M3,
+    /// `a ^ ROTR11(y)`, whose word rotated right by two is `Σ0(a)`.
+    Bs0X,
+    /// `x_0 ^ 0x03`, the one byte the word rotation splits.
+    Bs0Mx,
+    /// `e ^ 0x3f`: ROTR14 splits at bit 6.
+    Bs1M6,
+    /// `e ^ ROTR14(e)`.
+    Bs1Y,
+    /// `y ^ 0x1f`: ROTR5 splits at bit 5.
+    Bs1M5,
+    /// `e ^ ROTR5(y)`, whose word rotated right by six is `Σ1(e)`.
+    Bs1X,
+    /// `x_0 ^ 0x3f`.
+    Bs1Mx,
+    /// `e ^ f`, from which `e & f` is linear.
+    ChEf,
+    /// `e ^ g`, from which `(¬e) & g` is linear.
+    ChEg,
+    /// `a ^ b`.
+    MajAb,
+    /// `c ^ a ^ b`, from which `Maj(a, b, c)` is linear.
+    MajCab,
+    /// `A_{k+1}`'s carry.
+    CarryA,
+    /// `E_{k+1}`'s carry.
+    CarryE,
+}
+
+/// The round blocks in layout order.
+const ROUND_BLOCKS: [Round; 16] = [
+    Round::Bs0M1,
+    Round::Bs0Y,
+    Round::Bs0M3,
+    Round::Bs0X,
+    Round::Bs0Mx,
+    Round::Bs1M6,
+    Round::Bs1Y,
+    Round::Bs1M5,
+    Round::Bs1X,
+    Round::Bs1Mx,
+    Round::ChEf,
+    Round::ChEg,
+    Round::MajAb,
+    Round::MajCab,
+    Round::CarryA,
+    Round::CarryE,
+];
+
+impl Round {
+    fn width(self) -> usize {
+        match self {
+            Round::Bs0Mx | Round::Bs1Mx | Round::CarryA | Round::CarryE => 1,
+            _ => BYTES,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Round::Bs0M1 => "bs0_m1",
+            Round::Bs0Y => "bs0_y",
+            Round::Bs0M3 => "bs0_m3",
+            Round::Bs0X => "bs0_x",
+            Round::Bs0Mx => "bs0_mx",
+            Round::Bs1M6 => "bs1_m6",
+            Round::Bs1Y => "bs1_y",
+            Round::Bs1M5 => "bs1_m5",
+            Round::Bs1X => "bs1_x",
+            Round::Bs1Mx => "bs1_mx",
+            Round::ChEf => "ch_ef",
+            Round::ChEg => "ch_eg",
+            Round::MajAb => "maj_ab",
+            Round::MajCab => "maj_cab",
+            Round::CarryA => "carry_a",
+            Round::CarryE => "carry_e",
+        }
+    }
+}
+
+/// One derived schedule word's columns, in layout order.
+///
+/// `Ss0*` is `sigma0(x) = ROTR7(y) ^ SHR3(x)` with `y = x ^ ROTR11(x)`;
+/// `Ss1*` is `sigma1(x) = ROTR17(y) ^ SHR10(x)` with `y = x ^ ROTR2(x)`. The
+/// shift is committed byte by byte, because two derived forms cannot both sit
+/// in one tuple; `SHR10`'s top byte is zero, so `sigma1` commits and XORs
+/// three bytes and reads its fourth straight off `ROTR17(y)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sched {
+    /// `x ^ 0x07`: ROTR11 and SHR3 both split at bit 3.
+    Ss0M3,
+    /// `x ^ ROTR11(x)`.
+    Ss0Y,
+    /// `y ^ 0x7f`: ROTR7 splits at bit 7.
+    Ss0M7,
+    /// `SHR3(x)`, a byte each.
+    Ss0Shr,
+    /// `ROTR7(y) ^ SHR3(x)`: `sigma0(x)`'s bytes.
+    Ss0Z,
+    /// `x ^ 0x03`: ROTR2 and SHR10 both split at bit 2.
+    Ss1M2,
+    /// `x ^ ROTR2(x)`.
+    Ss1Y,
+    /// `y ^ 0x01`: ROTR17 splits at bit 1.
+    Ss1M1,
+    /// `SHR10(x)`'s three nonzero bytes.
+    Ss1Shr,
+    /// `ROTR17(y) ^ SHR10(x)`'s low three bytes.
+    Ss1Z,
+    /// The derived word's carry.
+    CarryW,
+}
+
+/// The schedule blocks in layout order.
+const SCHED_BLOCKS: [Sched; 11] = [
+    Sched::Ss0M3,
+    Sched::Ss0Y,
+    Sched::Ss0M7,
+    Sched::Ss0Shr,
+    Sched::Ss0Z,
+    Sched::Ss1M2,
+    Sched::Ss1Y,
+    Sched::Ss1M1,
+    Sched::Ss1Shr,
+    Sched::Ss1Z,
+    Sched::CarryW,
+];
+
+impl Sched {
+    fn width(self) -> usize {
+        match self {
+            Sched::Ss1Shr | Sched::Ss1Z => BYTES - 1,
+            Sched::CarryW => 1,
+            _ => BYTES,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Sched::Ss0M3 => "ss0_m3",
+            Sched::Ss0Y => "ss0_y",
+            Sched::Ss0M7 => "ss0_m7",
+            Sched::Ss0Shr => "ss0_shr",
+            Sched::Ss0Z => "ss0_z",
+            Sched::Ss1M2 => "ss1_m2",
+            Sched::Ss1Y => "ss1_y",
+            Sched::Ss1M1 => "ss1_m1",
+            Sched::Ss1Shr => "ss1_shr",
+            Sched::Ss1Z => "ss1_z",
+            Sched::CarryW => "carry_w",
+        }
+    }
+}
+
+/// Columns one round takes.
+const ROUND_COLUMNS: usize = round_columns();
+/// Columns one derived schedule word takes.
+const SCHED_COLUMNS: usize = sched_columns();
+
+const fn round_columns() -> usize {
+    let mut n = 0;
+    let mut i = 0;
+    while i < ROUND_BLOCKS.len() {
+        n += match ROUND_BLOCKS[i] {
+            Round::Bs0Mx | Round::Bs1Mx | Round::CarryA | Round::CarryE => 1,
+            _ => BYTES,
+        };
+        i += 1;
+    }
+    n
+}
+
+const fn sched_columns() -> usize {
+    let mut n = 0;
+    let mut i = 0;
+    while i < SCHED_BLOCKS.len() {
+        n += match SCHED_BLOCKS[i] {
+            Sched::Ss1Shr | Sched::Ss1Z => BYTES - 1,
+            Sched::CarryW => 1,
+            _ => BYTES,
+        };
+        i += 1;
+    }
+    n
+}
+
+// ---------------------------------------------------------------------------
+// The witness layout, in order
+// ---------------------------------------------------------------------------
 
 const fn w(i: usize) -> PolyAddress {
     PolyAddress::Witness(i as u32)
 }
 
-// The frame's committed addresses, re-exported so a fill, a checker or a
-// tamper twin names a column rather than a number.
-
-/// `M[0]`: the requesting cycle.
-pub const CYCLE: PolyAddress = d::CYCLE;
-/// `M[1]`: the row's one mask.
-pub const LIVE: PolyAddress = d::LIVE;
-/// `M[2]`: the frame base pointer.
-pub const BASE: PolyAddress = d::BASE;
-/// `M[3]`: the anchor teardown's value, free on both sides.
-pub const ANCHOR_VALUE: PolyAddress = d::ANCHOR_VALUE;
-
-/// `M` column `4 + 4j + field` of frame word `j`.
-pub fn word(j: usize, field: u32) -> PolyAddress {
-    d::word(j, field)
+const fn gap_block() -> usize {
+    0
+}
+const fn base_block() -> usize {
+    gap_block() + d::GAP_CHUNKS * WORDS
+}
+const fn group_block() -> usize {
+    base_block() + 4
+}
+const fn a_block() -> usize {
+    group_block() + f::GROUPS
+}
+const fn e_block() -> usize {
+    a_block() + 6 * BYTES
+}
+const fn window_block() -> usize {
+    e_block() + 6 * BYTES
+}
+const fn new_block() -> usize {
+    window_block() + WINDOW_DECODED.len() * BYTES
+}
+const fn round_block() -> usize {
+    new_block() + 2 * BYTES
+}
+const fn sched_block() -> usize {
+    round_block() + R * ROUND_COLUMNS
+}
+const fn hi_block() -> usize {
+    sched_block() + R * SCHED_COLUMNS
+}
+const fn multiplicity_block() -> usize {
+    hi_block() + 4
 }
 
-/// `W[38j + i]`: bit `i` of frame word `j`'s timestamp gap.
-pub fn gap_bit(j: usize, bit: usize) -> PolyAddress {
-    d::gap_bit(j, bit)
+/// `W` columns: the layout above, and the two multiplicity columns last.
+pub const WITNESS_COLUMNS: usize = multiplicity_block() + 2;
+
+/// Chunk `c` of frame word `j`'s timestamp gap, `c < 2`, the low part derived.
+pub fn gap_chunk(j: usize, c: usize) -> PolyAddress {
+    w(gap_block() + d::GAP_CHUNKS * j + c)
 }
 
-/// `W[…]`: bit `i` of the frame pointer's low decomposition.
-pub fn base_low_bit(bit: usize) -> PolyAddress {
-    d::base_low_bit(WORDS, bit)
+/// `(base − RAM_ORIGIN) / 4`.
+pub fn base_low() -> PolyAddress {
+    w(base_block())
 }
 
-/// `W[…]`: bit `i` of the frame pointer's headroom decomposition.
-pub fn base_room_bit(bit: usize) -> PolyAddress {
-    d::base_room_bit(WORDS, bit)
+/// [`base_low`]'s high halfword.
+pub fn base_low_hi() -> PolyAddress {
+    w(base_block() + 1)
 }
 
-// --- the witness layout, in order ------------------------------------------
-
-fn in_bits() -> usize {
-    d::frame_witness(WORDS)
-}
-fn out_bits() -> usize {
-    in_bits() + WORDS * BITS
-}
-fn out_carries() -> usize {
-    out_bits() + f::STATE_WORDS * BITS
-}
-fn sched_bits() -> usize {
-    out_carries() + f::STATE_WORDS
-}
-fn sched_carries() -> usize {
-    sched_bits() + DERIVED_WORDS * BITS
-}
-fn a_bits() -> usize {
-    sched_carries() + DERIVED_WORDS * f::CARRY_W_BITS
-}
-fn e_bits() -> usize {
-    a_bits() + f::ROUNDS * BITS
-}
-fn ca_bits() -> usize {
-    e_bits() + f::ROUNDS * BITS
-}
-fn ce_bits() -> usize {
-    ca_bits() + f::ROUNDS * f::CARRY_A_BITS
+/// `2^31 − frame bytes − base`.
+pub fn base_room() -> PolyAddress {
+    w(base_block() + 2)
 }
 
-/// `W[…]`: bit `t` of frame word `j`'s **read** value.
-pub fn in_bit(j: usize, t: usize) -> PolyAddress {
-    w(in_bits() + BITS * j + t)
+/// [`base_room`]'s high halfword.
+pub fn base_room_hi() -> PolyAddress {
+    w(base_block() + 3)
 }
 
-/// `W[…]`: bit `t` of state word `j`'s **written** value.
-pub fn out_bit(j: usize, t: usize) -> PolyAddress {
-    w(out_bits() + BITS * j + t)
+/// The one-hot selector of round group `r`: one degree-1 gate pins the frame's
+/// group word to them and one holds their sum to `live`, which makes the group
+/// `[0, 16)` **structurally** and supplies the round constants as literals.
+pub fn group_sel(r: usize) -> PolyAddress {
+    w(group_block() + r)
 }
 
-/// `W[…]`: state word `j`'s output carry, `H_j + V_j - 2^32 * co_j`.
-pub fn out_carry(j: usize) -> PolyAddress {
-    w(out_carries() + j)
+/// Byte `b` of `A_j`, `-2 <= j <= 3`: `j <= 0` decodes a read value, `j >= 1`
+/// encodes a written one.
+pub fn a_byte(j: isize, b: usize) -> PolyAddress {
+    assert!((-2..=3).contains(&j), "sha256: A_{j} has no byte columns");
+    w(a_block() + BYTES * (j + 2) as usize + b)
 }
 
-/// `W[…]`: bit `t` of derived schedule word `W_i`, `16 <= i < 64`.
-pub fn sched_bit(i: usize, t: usize) -> PolyAddress {
-    w(sched_bits() + BITS * (i - f::BLOCK_WORDS) + t)
+/// Byte `b` of `E_j`, `-2 <= j <= 3`.
+pub fn e_byte(j: isize, b: usize) -> PolyAddress {
+    assert!((-2..=3).contains(&j), "sha256: E_{j} has no byte columns");
+    w(e_block() + BYTES * (j + 2) as usize + b)
 }
 
-/// `W[…]`: bit `t` of derived schedule word `W_i`'s carry.
-pub fn sched_carry_bit(i: usize, t: usize) -> PolyAddress {
-    w(sched_carries() + f::CARRY_W_BITS * (i - f::BLOCK_WORDS) + t)
+/// Byte `b` of window word `i`, for an `i` the schedule's sigmas read.
+pub fn w_byte(i: usize, b: usize) -> PolyAddress {
+    let slot = WINDOW_DECODED
+        .iter()
+        .position(|x| *x == i)
+        .unwrap_or_else(|| panic!("sha256: window word {i} has no byte columns"));
+    w(window_block() + BYTES * slot + b)
 }
 
-/// `W[…]`: bit `t` of round carry `ca_i`.
-pub fn ca_bit(i: usize, t: usize) -> PolyAddress {
-    w(ca_bits() + f::CARRY_A_BITS * i + t)
+/// Byte `b` of the derived schedule word `m`, `m < 2`: the two the call itself
+/// reads back through `sigma1`.
+pub fn n_byte(m: usize, b: usize) -> PolyAddress {
+    assert!(m < 2, "sha256: derived word {m} has no byte columns");
+    w(new_block() + BYTES * m + b)
 }
 
-/// `W[…]`: bit `t` of round carry `ce_i`.
-pub fn ce_bit(i: usize, t: usize) -> PolyAddress {
-    w(ce_bits() + f::CARRY_E_BITS * i + t)
+/// Column `b` of round `k`'s block `block`.
+pub fn round_col(k: usize, block: Round, b: usize) -> PolyAddress {
+    assert!(
+        k < R && b < block.width(),
+        "sha256: round {k} {block:?} {b}"
+    );
+    let mut offset = 0;
+    for x in ROUND_BLOCKS {
+        if x == block {
+            break;
+        }
+        offset += x.width();
+    }
+    w(round_block() + ROUND_COLUMNS * k + offset + b)
 }
 
-/// `W[…]`: bit `t` of `A_i`, the first working word at the start of round `i`.
-///
-/// `i` runs from `-3` to `ROUNDS`. The four non-positive indices are the frame
-/// state words `H0..H3` — `A_0 = H0`, `A_{-1} = H1`, and so on — which is the
-/// whole of `B`, `C` and `D`'s existence in this arithmetization.
-pub fn a_bit(i: isize, t: usize) -> PolyAddress {
-    if i <= 0 {
-        in_bit((-i) as usize, t)
-    } else {
-        w(a_bits() + BITS * (i as usize - 1) + t)
+/// Column `b` of derived schedule word `m`'s block `block`.
+pub fn sched_col(m: usize, block: Sched, b: usize) -> PolyAddress {
+    assert!(m < R && b < block.width(), "sha256: word {m} {block:?} {b}");
+    let mut offset = 0;
+    for x in SCHED_BLOCKS {
+        if x == block {
+            break;
+        }
+        offset += x.width();
+    }
+    w(sched_block() + SCHED_COLUMNS * m + offset + b)
+}
+
+/// The high halfword of the written word that carries a `RANGE16` pair:
+/// slot 0 is `A_4` (word `a`), 1 is `E_4` (word `e`), 2 and 3 the derived
+/// schedule words 2 and 3 (window words 14 and 15).
+pub fn written_hi(slot: usize) -> PolyAddress {
+    assert!(slot < 4, "sha256: written word {slot} has no pair");
+    w(hi_block() + slot)
+}
+
+/// The frame words [`written_hi`] bounds, in its slot order.
+pub const PAIRED_WORDS: [usize; 4] = [
+    f::STATE_WORD,
+    f::STATE_WORD + 4,
+    f::WINDOW_WORD + 14,
+    f::WINDOW_WORD + 15,
+];
+
+/// The `RANGE16` channel's multiplicity column.
+pub fn range16_multiplicity() -> PolyAddress {
+    w(multiplicity_block())
+}
+
+/// The `XOR8` channel's multiplicity column.
+pub fn xor8_multiplicity() -> PolyAddress {
+    w(multiplicity_block() + 1)
+}
+
+// ---------------------------------------------------------------------------
+// The words, as columns
+// ---------------------------------------------------------------------------
+
+fn read(j: usize) -> PolyAddress {
+    word(j, WORD_READ_VALUE)
+}
+
+fn write(j: usize) -> PolyAddress {
+    word(j, WORD_WRITE_VALUE)
+}
+
+/// `A_j`'s one column, `-3 <= j <= 4`: the state word it is read from or
+/// written to. Word `a` is `A_0` going in and `A_4` coming out, `b` is `A_{-1}`
+/// and `A_3`, and so on down to `d`.
+fn a_word(j: isize) -> PolyAddress {
+    assert!((-3..=4).contains(&j), "sha256: A_{j} is not in this call");
+    match j <= 0 {
+        true => read(f::STATE_WORD + (-j) as usize),
+        false => write(f::STATE_WORD + 4 - j as usize),
     }
 }
 
-/// `W[…]`: bit `t` of `E_i`. The four non-positive indices are `H4..H7`.
-pub fn e_bit(i: isize, t: usize) -> PolyAddress {
-    if i <= 0 {
-        in_bit(f::STATE_WORDS / 2 + (-i) as usize, t)
-    } else {
-        w(e_bits() + BITS * (i as usize - 1) + t)
+/// `E_j`'s one column, `-3 <= j <= 4`.
+fn e_word(j: isize) -> PolyAddress {
+    assert!((-3..=4).contains(&j), "sha256: E_{j} is not in this call");
+    match j <= 0 {
+        true => read(f::STATE_WORD + 4 + (-j) as usize),
+        false => write(f::STATE_WORD + 8 - j as usize),
     }
 }
 
-/// `W[…]`: bit `t` of schedule word `W_i`, `0 <= i < 64`. The first sixteen
-/// are frame words; the rest the circuit derives.
-pub fn w_bit(i: usize, t: usize) -> PolyAddress {
-    if i < f::BLOCK_WORDS {
-        in_bit(f::BLOCK_WORD + i, t)
-    } else {
-        sched_bit(i, t)
+/// Window word `i`'s read value: `W_{4r+i}`.
+fn window(i: usize) -> PolyAddress {
+    read(f::WINDOW_WORD + i)
+}
+
+/// The column derived word `m` is written to: window word `12 + m`.
+fn derived(m: usize) -> PolyAddress {
+    write(f::WINDOW_WORD + 12 + m)
+}
+
+/// The four byte columns of `A_j`.
+fn a_bytes(j: isize) -> [PolyAddress; BYTES] {
+    core::array::from_fn(|b| a_byte(j, b))
+}
+
+/// The four byte columns of `E_j`.
+fn e_bytes(j: isize) -> [PolyAddress; BYTES] {
+    core::array::from_fn(|b| e_byte(j, b))
+}
+
+/// The four columns of round `k`'s byte block `block`.
+fn round_bytes(k: usize, block: Round) -> [PolyAddress; BYTES] {
+    core::array::from_fn(|b| round_col(k, block, b))
+}
+
+/// The four columns of schedule word `m`'s byte block `block`.
+fn sched_bytes(m: usize, block: Sched) -> [PolyAddress; BYTES] {
+    core::array::from_fn(|b| sched_col(m, block, b))
+}
+
+/// The bytes `sigma0` reads for derived word `m`: window word `1 + m`.
+fn sigma0_input(m: usize) -> [PolyAddress; BYTES] {
+    core::array::from_fn(|b| w_byte(1 + m, b))
+}
+
+/// The bytes `sigma1` reads for derived word `m`: window word `14 + m`, or the
+/// derived word `m − 2` once the window has run out.
+fn sigma1_input(m: usize) -> [PolyAddress; BYTES] {
+    core::array::from_fn(|b| match m < 2 {
+        true => w_byte(14 + m, b),
+        false => n_byte(m - 2, b),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Linear forms
+// ---------------------------------------------------------------------------
+
+/// A linear form over committed columns plus a constant: what a byte, a word
+/// or a sum of this circuit is before it becomes a gate or a tuple position.
+#[derive(Clone, Debug)]
+struct Form {
+    terms: Vec<(Fr, PolyAddress)>,
+    constant: Fr,
+}
+
+impl Form {
+    /// The zero form.
+    fn zero() -> Form {
+        Form::constant(Fr::ZERO)
     }
-}
 
-/// The family's `W` columns.
-pub const WITNESS_COLUMNS: usize = d::GAP_BITS * WORDS
-    + d::BASE_LOW_BITS
-    + d::BASE_ROOM_BITS
-    + WORDS * BITS
-    + f::STATE_WORDS * BITS
-    + f::STATE_WORDS
-    + DERIVED_WORDS * BITS
-    + DERIVED_WORDS * f::CARRY_W_BITS
-    + 2 * f::ROUNDS * BITS
-    + f::ROUNDS * (f::CARRY_A_BITS + f::CARRY_E_BITS);
+    fn constant(c: Fr) -> Form {
+        Form {
+            terms: Vec::new(),
+            constant: c,
+        }
+    }
 
-// --- the rotations FIPS 180-4 names ----------------------------------------
+    fn col(x: PolyAddress) -> Form {
+        Form {
+            terms: vec![(Fr::ONE, x)],
+            constant: Fr::ZERO,
+        }
+    }
 
-/// `Sigma0(a) = ROTR^2 ^ ROTR^13 ^ ROTR^22`.
-const BIG_SIGMA0: [usize; 3] = [2, 13, 22];
-/// `Sigma1(e) = ROTR^6 ^ ROTR^11 ^ ROTR^25`.
-const BIG_SIGMA1: [usize; 3] = [6, 11, 25];
-/// `sigma0(x) = ROTR^7 ^ ROTR^18 ^ SHR^3`.
-const SMALL_SIGMA0: ([usize; 2], usize) = ([7, 18], 3);
-/// `sigma1(x) = ROTR^17 ^ ROTR^19 ^ SHR^10`.
-const SMALL_SIGMA1: ([usize; 2], usize) = ([17, 19], 10);
+    /// `self + c·x`, merging a column already present.
+    fn plus_col(mut self, c: Fr, x: PolyAddress) -> Form {
+        match self.terms.iter_mut().find(|(_, y)| *y == x) {
+            Some(t) => t.0 += c,
+            None => self.terms.push((c, x)),
+        }
+        self
+    }
 
-/// Bit `t` of `ROTR^r(x)` is bit `(t + r) mod 32` of `x`.
-fn rotr(t: usize, r: usize) -> usize {
-    (t + r) % BITS
-}
+    /// `c·self`.
+    fn times(mut self, c: Fr) -> Form {
+        for t in self.terms.iter_mut() {
+            t.0 *= c;
+        }
+        self.constant *= c;
+        self
+    }
 
-/// Bit `t` of `SHR^s(x)` is bit `t + s` of `x`, or nothing past the top.
-fn shr(t: usize, s: usize) -> Option<usize> {
-    let k = t + s;
-    (k < BITS).then_some(k)
-}
+    /// `self + c·other`.
+    fn plus(mut self, c: Fr, other: &Form) -> Form {
+        for (k, x) in &other.terms {
+            self = self.plus_col(c * *k, *x);
+        }
+        self.constant += c * other.constant;
+        self
+    }
 
-// --- layer 1's helper columns ----------------------------------------------
-//
-// Layer 1 holds, in this order: the memory leaves, the carried scalars, the
-// carried bits, and one `x*y` helper a bit for each three-way XOR. The offsets
-// are arithmetic rather than searched, which is the whole reason
-// `delegation::Assembly` exists.
+    /// The form as one tuple position of a lookup: literal coefficients and a
+    /// literal constant, which the gating multiplies by the selector.
+    fn tuple(&self) -> GateDef {
+        GateDef::Linear {
+            terms: self
+                .terms
+                .iter()
+                .filter(|(c, _)| *c != Fr::ZERO)
+                .map(|(c, x)| (Coeff::Literal(*c), *x))
+                .collect(),
+            constant: Coeff::Literal(self.constant),
+        }
+    }
 
-/// Three-way XORs, in the order layer 1 writes their helpers: one per round
-/// for `Sigma0`, `Sigma1` and `Maj`, then one per derived word for `sigma0`
-/// and `sigma1`.
-const XORS: usize = 3 * f::ROUNDS + 2 * DERIVED_WORDS;
-
-/// Scalars layer 1 carries to layer 2, in order: `A_i` and `E_i` as values,
-/// the four carries, every schedule word as a value, and `Ch_i`.
-fn carried_scalars() -> usize {
-    // A_{-3..=ROUNDS} and E likewise, ca, ce, cw, co, W_0..W_63, Ch_0..Ch_63,
-    // the eight in/out state words as values, and `live`.
-    //
-    // **Spelled twice, and checked.** This arithmetic is what every layer
-    // offset is built from and [`carried_scalar_list`] is what the columns are
-    // built from; `artifact` asserts them equal, because the failure when they
-    // disagree is a column silently aliased onto the next block rather than
-    // anything a reader would see here.
-    2 * (f::ROUNDS + 4)
-        + 2 * f::ROUNDS
-        + DERIVED_WORDS
-        + f::STATE_WORDS
-        + f::ROUNDS
-        + f::ROUNDS
-        + 2 * f::STATE_WORDS
-        + 1
-}
-
-/// The first `A_i` whose **bits** are carried. `Maj(0)` reads `A_{-2}`, and
-/// nothing reads `A_{-3}`'s bits — `A_{-3}` is a value only, the `D` of round
-/// 0. A carried column no gate reads is one `validate` refuses.
-const A_BIT_FIRST: isize = -2;
-/// The last: `Sigma0(63)` and `Maj(63)` both read `A_63`; `A_64` is a value
-/// only, the round-64 output.
-const A_BIT_LAST: isize = f::ROUNDS as isize - 1;
-/// `Sigma1(i)` reads `E_i` for `i < 64`, and `Ch` reads its three `E`s from the
-/// **committed** bits at gate list 0, so no `E` below 0 is carried.
-const E_BIT_FIRST: isize = 0;
-/// The last `E_i` whose bits are carried.
-const E_BIT_LAST: isize = f::ROUNDS as isize - 1;
-/// `sigma0(W_{i-15})` for `i >= 16` reads `W_1` first.
-const W_BIT_FIRST: usize = 1;
-/// `sigma1(W_{i-2})` for `i < 64` reads `W_61` last.
-const W_BIT_LAST: usize = f::ROUNDS - 3;
-
-const fn span(first: isize, last: isize) -> usize {
-    (last - first + 1) as usize
-}
-
-/// Bits layer 1 carries: exactly the `A_i`, `E_i` and `W_i` bits a three-way
-/// XOR or a `Maj` reads, and no others.
-///
-/// `every_carried_bit_is_read` walks every `(XOR, bit, operand)` slot — 288
-/// three-way XORs over 32 bits with up to three operands each — and holds every
-/// operand it finds inside these ranges and inside the block, so the ranges are
-/// checked rather than asserted. **The ranges are narrow because `validate`
-/// refuses a column no gate reads**: `A_{-3}`, `E_{-3}` and `A_64` exist as
-/// scalars and are never an XOR's operand, so carrying their bits would be
-/// 96 columns nothing reads.
-fn carried_bits() -> usize {
-    (span(A_BIT_FIRST, A_BIT_LAST) + span(E_BIT_FIRST, E_BIT_LAST)) * BITS
-        + span(W_BIT_FIRST as isize, W_BIT_LAST as isize) * BITS
-}
-
-/// A layer's columns are the memory tree's, then the carried scalars, then the
-/// carried bits, then the layer's own work. The tree **halves** at each layer,
-/// so every base below is a function of the layer and not a constant: layer 1
-/// opens with 64 leaf columns and layer 2 with 32, which is a 32-column shift
-/// in everything after them.
-fn scalar_base(layer: usize) -> usize {
-    tree_width(layer)
-}
-
-/// The carried bits live at **layer 1 only**: gate list 1 reads them to build
-/// the three-way XORs' values, and gate list 2 reads values and nothing else,
-/// so carrying a bit higher would be a column nothing reads — which `validate`
-/// refuses, and rightly: a relation constructed and then dropped constrains
-/// nothing.
-fn bit_base() -> usize {
-    scalar_base(1) + carried_scalars()
-}
-
-fn work_base(layer: usize) -> usize {
-    let bits = if layer == 1 { carried_bits() } else { 0 };
-    scalar_base(layer) + carried_scalars() + bits
-}
-
-/// Layer 1's width: the leaves, the carried columns, and one helper a bit.
-fn layer1_width() -> usize {
-    work_base(1) + XORS * BITS
-}
-
-/// `L1[…]`: the `x*y` helper of bit `t` of three-way XOR `k`.
-fn helper(k: usize, t: usize) -> PolyAddress {
-    d::inner(1, work_base(1) + k * BITS + t)
-}
-
-/// The three-way XOR index of round `i`'s `Sigma0`.
-fn xor_sigma0(i: usize) -> usize {
-    3 * i
-}
-/// … `Sigma1`.
-fn xor_sigma1(i: usize) -> usize {
-    3 * i + 1
-}
-/// … and `Maj`.
-fn xor_maj(i: usize) -> usize {
-    3 * i + 2
-}
-/// The index of derived word `i`'s `sigma0`.
-fn xor_small0(i: usize) -> usize {
-    3 * f::ROUNDS + 2 * (i - f::BLOCK_WORDS)
-}
-/// … and `sigma1`.
-fn xor_small1(i: usize) -> usize {
-    3 * f::ROUNDS + 2 * (i - f::BLOCK_WORDS) + 1
-}
-
-/// The carried scalars, in layer order. A scalar is carried by index, and this
-/// enum is the index: the list is written once here and read by both the layer
-/// that writes it and the layer that reads it.
-#[derive(Clone, Copy)]
-enum Scalar {
-    /// `A_i`, `-3 <= i <= ROUNDS`.
-    A(isize),
-    /// `E_i`, likewise.
-    E(isize),
-    /// `ca_i`.
-    Ca(usize),
-    /// `ce_i`.
-    Ce(usize),
-    /// `cw_i`, `16 <= i < 64`.
-    Cw(usize),
-    /// `co_j`.
-    Co(usize),
-    /// `W_i`, `0 <= i < 64`.
-    W(usize),
-    /// `Ch_i`.
-    Ch(usize),
-    /// State word `j`'s read value.
-    StateIn(usize),
-    /// State word `j`'s written value.
-    StateOut(usize),
-    /// The row's `live` mask, carried so that the rounds' constants can ride
-    /// it.
+    /// The form as an enforcing gate `form = 0`, its constant riding `live`.
     ///
-    /// **A padding row is an all-zero row**, and `K_i` is a nonzero literal, so
-    /// a round gate stating `... - K_i = 0` outright cannot hold on one — which
-    /// is the padding contract, not a nicety (`docs/spec/gkr.md`). The mask is
-    /// a committed `M` column that only gate list 0 may read, so it has to be
-    /// carried like any other value; one column a layer is the whole cost.
-    Live,
-}
-
-/// `<stem><i>`, with a negative `i` spelled `m<|i|>`: an artifact name is
-/// `[a-z0-9_]` and a minus sign is not in it.
-fn index_name(stem: &str, i: isize) -> String {
-    if i < 0 {
-        format!("{stem}m{}", -i)
-    } else {
-        format!("{stem}{i}")
-    }
-}
-
-impl Scalar {
-    /// This scalar's offset within the carried block.
-    fn index(self) -> usize {
-        let a = 0;
-        let e = a + f::ROUNDS + 4;
-        let ca = e + f::ROUNDS + 4;
-        let ce = ca + f::ROUNDS;
-        let cw = ce + f::ROUNDS;
-        let co = cw + DERIVED_WORDS;
-        let ws = co + f::STATE_WORDS;
-        let ch = ws + f::ROUNDS;
-        let si = ch + f::ROUNDS;
-        let so = si + f::STATE_WORDS;
-        let live = so + f::STATE_WORDS;
-        match self {
-            Scalar::A(i) => a + (i + 3) as usize,
-            Scalar::E(i) => e + (i + 3) as usize,
-            Scalar::Ca(i) => ca + i,
-            Scalar::Ce(i) => ce + i,
-            Scalar::Cw(i) => cw + i - f::BLOCK_WORDS,
-            Scalar::Co(j) => co + j,
-            Scalar::W(i) => ws + i,
-            Scalar::Ch(i) => ch + i,
-            Scalar::StateIn(j) => si + j,
-            Scalar::StateOut(j) => so + j,
-            Scalar::Live => live,
+    /// A padding row is an all-zero row, so a bare nonzero constant could not
+    /// hold on one and `build::zero_on_zero_row` would refuse the circuit; on a
+    /// live row `live` is 1 and the gate is the form. `KECCAK_F`'s rotation
+    /// constants ride `live` for the same reason.
+    fn gate(&self) -> GateDef {
+        let lifted = Form {
+            terms: self.terms.clone(),
+            constant: Fr::ZERO,
         }
-    }
-
-    /// Its name, for the artifact's scratch listing.
-    ///
-    /// A name is `[a-z0-9_]` and nothing else, so the four non-positive
-    /// indices — the state words standing in for `B`, `C`, `D` and `H` — spell
-    /// `am3` rather than `a-3`.
-    fn name(self) -> String {
-        match self {
-            Scalar::A(i) => index_name("a", i),
-            Scalar::E(i) => index_name("e", i),
-            Scalar::Ca(i) => format!("ca{i}"),
-            Scalar::Ce(i) => format!("ce{i}"),
-            Scalar::Cw(i) => format!("cw{i}"),
-            Scalar::Co(j) => format!("co{j}"),
-            Scalar::W(i) => format!("w{i}"),
-            Scalar::Ch(i) => format!("ch{i}"),
-            Scalar::StateIn(j) => format!("state_in{j}"),
-            Scalar::StateOut(j) => format!("state_out{j}"),
-            Scalar::Live => "live".to_string(),
-        }
-    }
-
-    /// Its address at `layer`.
-    fn at(self, layer: usize) -> PolyAddress {
-        d::inner(layer, scalar_base(layer) + self.index())
+        .plus_col(self.constant, LIVE);
+        d::linear(
+            lifted
+                .terms
+                .iter()
+                .filter(|(c, _)| *c != Fr::ZERO)
+                .map(|(c, x)| (Coeff::Literal(*c), *x))
+                .collect(),
+        )
     }
 }
 
-/// A carried bit's offset within the carried-bit block.
-#[derive(Clone, Copy)]
-enum CarriedBit {
-    A(isize, usize),
-    E(isize, usize),
-    W(usize, usize),
+fn fr(v: u64) -> Fr {
+    Fr::from_u64(v)
 }
 
-impl CarriedBit {
-    fn index(self) -> usize {
-        let a = 0;
-        let e = a + span(A_BIT_FIRST, A_BIT_LAST) * BITS;
-        let ws = e + span(E_BIT_FIRST, E_BIT_LAST) * BITS;
-        match self {
-            CarriedBit::A(i, t) => a + (i - A_BIT_FIRST) as usize * BITS + t,
-            CarriedBit::E(i, t) => e + (i - E_BIT_FIRST) as usize * BITS + t,
-            CarriedBit::W(i, t) => ws + (i - W_BIT_FIRST) * BITS + t,
-        }
-    }
-    fn name(self) -> String {
-        match self {
-            CarriedBit::A(i, t) => format!("{}_bit{t}", index_name("a", i)),
-            CarriedBit::E(i, t) => format!("{}_bit{t}", index_name("e", i)),
-            CarriedBit::W(i, t) => format!("w{i}_bit{t}"),
-        }
-    }
-    fn committed(self) -> PolyAddress {
-        match self {
-            CarriedBit::A(i, t) => a_bit(i, t),
-            CarriedBit::E(i, t) => e_bit(i, t),
-            CarriedBit::W(i, t) => w_bit(i, t),
-        }
-    }
-    /// Its address at layer 1, the only layer it exists at.
-    fn at(self) -> PolyAddress {
-        d::inner(1, bit_base() + self.index())
-    }
+/// `2^-n`.
+fn inv_pow2(n: u32) -> Fr {
+    d::pow2(n).inverse().expect("a power of two is invertible")
 }
 
-/// Every carried bit, in layer order.
-fn carried_bit_list() -> Vec<CarriedBit> {
-    let mut out = Vec::with_capacity(carried_bits());
-    for i in A_BIT_FIRST..=A_BIT_LAST {
-        for t in 0..BITS {
-            out.push(CarriedBit::A(i, t));
-        }
-    }
-    for i in E_BIT_FIRST..=E_BIT_LAST {
-        for t in 0..BITS {
-            out.push(CarriedBit::E(i, t));
-        }
-    }
-    for i in W_BIT_FIRST..=W_BIT_LAST {
-        for t in 0..BITS {
-            out.push(CarriedBit::W(i, t));
-        }
+/// `Σ 2^{8b}·x_b`: a word from its four bytes.
+fn word_of(x: &[PolyAddress; BYTES]) -> Form {
+    let mut out = Form::zero();
+    for (b, xb) in x.iter().enumerate() {
+        out = out.plus_col(d::pow2(8 * b as u32), *xb);
     }
     out
 }
 
-/// Every carried scalar, in layer order, with the linear form layer 1 builds
-/// it from. A value is `Σ 2^t · bit`, which is also that value's 32-bit bound
-/// wherever its bits carry booleanity.
-fn carried_scalar_list() -> Vec<(Scalar, Vec<(Coeff, PolyAddress)>)> {
-    let bits_of = |f: &dyn Fn(usize) -> PolyAddress, n: usize| -> Vec<(Coeff, PolyAddress)> {
-        (0..n).map(|t| (d::lit(1u64 << t), f(t))).collect()
+/// `v & (2^s − 1)` for a byte `v` whose mask column is `m = v ^ (2^s − 1)`:
+/// `(v + 2^s − 1 − m) / 2`, exact because the obligation pins `m` to the true
+/// XOR.
+fn lo(v: PolyAddress, m: PolyAddress, s: u32) -> Form {
+    let half = inv_pow2(1);
+    Form::constant(fr((1 << s) - 1) * half)
+        .plus_col(half, v)
+        .plus_col(-half, m)
+}
+
+/// `v >> s` for the same byte: `(v − lo) / 2^s`.
+fn hi(v: PolyAddress, m: PolyAddress, s: u32) -> Form {
+    Form::col(v).plus(-Fr::ONE, &lo(v, m, s)).times(inv_pow2(s))
+}
+
+/// Byte `j` of `ROTR_r(V)`, over `V`'s bytes and their masks at `r mod 8`.
+///
+/// With `r = 8q + s` and `0 < s < 8`, byte `j` is bits `[8j + r, 8j + r + 8)`
+/// of `V`, which straddle bytes `u = (j + q) mod 4` and `u + 1`:
+/// `hi(v_u) + 2^{8−s}·lo(v_{u+1})`.
+fn rotr_byte(v: &[PolyAddress; BYTES], m: &[PolyAddress; BYTES], r: u32, j: usize) -> Form {
+    let (q, s) = ((r / 8) as usize, r % 8);
+    assert!(s != 0, "sha256: a whole-byte rotation needs no mask");
+    let u = (j + q) % BYTES;
+    let next = (u + 1) % BYTES;
+    hi(v[u], m[u], s).plus(d::pow2(8 - s), &lo(v[next], m[next], s))
+}
+
+/// Byte `j` of `SHR_r(V)`: [`rotr_byte`] with the bytes past the top zero.
+fn shr_byte(v: &[PolyAddress; BYTES], m: &[PolyAddress; BYTES], r: u32, j: usize) -> Form {
+    let (q, s) = ((r / 8) as usize, r % 8);
+    assert!(s != 0, "sha256: a whole-byte shift needs no mask");
+    let u = j + q;
+    let mut out = Form::zero();
+    if u < BYTES {
+        out = out.plus(Fr::ONE, &hi(v[u], m[u], s));
+    }
+    if u + 1 < BYTES {
+        out = out.plus(d::pow2(8 - s), &lo(v[u + 1], m[u + 1], s));
+    }
+    out
+}
+
+/// The word `ROTR_s(V)` for `s < 8`, over `V`'s bytes and byte 0's mask:
+/// `(V − lo) / 2^s + 2^{32−s}·lo`, which splits byte 0 and nothing else.
+fn rotr_word(v: &[PolyAddress; BYTES], m0: PolyAddress, s: u32) -> Form {
+    let low = lo(v[0], m0, s);
+    word_of(v)
+        .plus(-Fr::ONE, &low)
+        .times(inv_pow2(s))
+        .plus(d::pow2(32 - s), &low)
+}
+
+/// `Σ0(A_k)` as a word: `ROTR2(x)`.
+fn big_sigma0(k: usize) -> Form {
+    rotr_word(
+        &round_bytes(k, Round::Bs0X),
+        round_col(k, Round::Bs0Mx, 0),
+        2,
+    )
+}
+
+/// `Σ1(E_k)` as a word: `ROTR6(x)`.
+fn big_sigma1(k: usize) -> Form {
+    rotr_word(
+        &round_bytes(k, Round::Bs1X),
+        round_col(k, Round::Bs1Mx, 0),
+        6,
+    )
+}
+
+/// `Ch(e, f, g) = (e & f) + (¬e & g) = (f + g − (e ^ f) + (e ^ g)) / 2`.
+fn ch(k: usize) -> Form {
+    let half = inv_pow2(1);
+    Form::zero()
+        .plus_col(half, e_word(k as isize - 1))
+        .plus_col(half, e_word(k as isize - 2))
+        .plus(-half, &word_of(&round_bytes(k, Round::ChEf)))
+        .plus(half, &word_of(&round_bytes(k, Round::ChEg)))
+}
+
+/// `Maj(a, b, c) = (a + b + c − (a ^ b ^ c)) / 2`.
+fn maj(k: usize) -> Form {
+    let half = inv_pow2(1);
+    let k = k as isize;
+    Form::zero()
+        .plus_col(half, a_word(k))
+        .plus_col(half, a_word(k - 1))
+        .plus_col(half, a_word(k - 2))
+        .plus(-half, &word_of(&round_bytes(k as usize, Round::MajCab)))
+}
+
+/// `K_{4r+k}` as a linear form over the group selectors.
+fn round_constant(k: usize) -> Form {
+    let mut out = Form::zero();
+    for r in 0..f::GROUPS {
+        out = out.plus_col(fr(f::ROUND_CONSTANTS[R * r + k] as u64), group_sel(r));
+    }
+    out
+}
+
+/// `T1 = h + Σ1(e) + Ch(e, f, g) + K + W` for round `k`.
+fn t1(k: usize) -> Form {
+    Form::col(e_word(k as isize - 3))
+        .plus(Fr::ONE, &big_sigma1(k))
+        .plus(Fr::ONE, &ch(k))
+        .plus(Fr::ONE, &round_constant(k))
+        .plus_col(Fr::ONE, window(k))
+}
+
+/// `sigma0` of derived word `m`'s input, as a word: `z`'s four bytes.
+fn small_sigma0(m: usize) -> Form {
+    word_of(&sched_bytes(m, Sched::Ss0Z))
+}
+
+/// `sigma1` of derived word `m`'s input, as a word: `z`'s three committed
+/// bytes and the fourth read off `ROTR17(y)`, `SHR10`'s top byte being zero.
+fn small_sigma1(m: usize) -> Form {
+    let mut out = Form::zero();
+    for b in 0..BYTES - 1 {
+        out = out.plus_col(d::pow2(8 * b as u32), sched_col(m, Sched::Ss1Z, b));
+    }
+    let top = rotr_byte(
+        &sched_bytes(m, Sched::Ss1Y),
+        &sched_bytes(m, Sched::Ss1M1),
+        17,
+        BYTES - 1,
+    );
+    out.plus(d::pow2(24), &top)
+}
+
+// ---------------------------------------------------------------------------
+// The enforcing gates
+// ---------------------------------------------------------------------------
+
+/// The group selector, and the frame word it is pinned to.
+///
+/// `one_group_a_live_row` is load-bearing for `keccak::one_round_a_live_row`'s
+/// reason: the codes are `0..16`, so a pair of selectors sums to another
+/// group's code — `1 + 2 = 3` — and without it a row could claim two groups,
+/// satisfy `group_rule`, and add two round constants into one round.
+fn selector_gates() -> Vec<(String, GateDef)> {
+    let mut out: Vec<(String, GateDef)> = Vec::new();
+    for r in 0..f::GROUPS {
+        out.push((format!("group{r}_boolean"), d::booleanity(group_sel(r))));
+    }
+    let mut rule = Form::col(read(f::GROUP_WORD));
+    let mut live = Form::col(LIVE).times(-Fr::ONE);
+    for r in 0..f::GROUPS {
+        rule = rule.plus_col(-fr(r as u64), group_sel(r));
+        live = live.plus_col(Fr::ONE, group_sel(r));
+    }
+    out.push(("group_rule".to_string(), rule.gate()));
+    out.push(("one_group_a_live_row".to_string(), live.gate()));
+    out
+}
+
+/// The frame's words and their bytes, in both directions.
+///
+/// Every gate here is **ungated and degree 1**: both sides are zero on the
+/// all-zero padding row, and each is a word's byte decomposition and its
+/// 32-bit bound at once, the bytes being bounded by the `XOR8` obligations
+/// that read them.
+fn frame_value_gates() -> Vec<(String, GateDef)> {
+    let equal = |name: String, x: PolyAddress, y: &Form| -> (String, GateDef) {
+        (name, Form::col(x).plus(-Fr::ONE, y).gate())
     };
-    let mut out: Vec<(Scalar, Vec<(Coeff, PolyAddress)>)> = Vec::new();
-    for i in -3..=(f::ROUNDS as isize) {
-        out.push((Scalar::A(i), bits_of(&|t| a_bit(i, t), BITS)));
-    }
-    for i in -3..=(f::ROUNDS as isize) {
-        out.push((Scalar::E(i), bits_of(&|t| e_bit(i, t), BITS)));
-    }
-    for i in 0..f::ROUNDS {
-        out.push((Scalar::Ca(i), bits_of(&|t| ca_bit(i, t), f::CARRY_A_BITS)));
-    }
-    for i in 0..f::ROUNDS {
-        out.push((Scalar::Ce(i), bits_of(&|t| ce_bit(i, t), f::CARRY_E_BITS)));
-    }
-    for i in f::BLOCK_WORDS..f::ROUNDS {
-        out.push((
-            Scalar::Cw(i),
-            bits_of(&|t| sched_carry_bit(i, t), f::CARRY_W_BITS),
+    let mut out: Vec<(String, GateDef)> = vec![equal(
+        format!("writes_back_w{}", f::GROUP_WORD),
+        write(f::GROUP_WORD),
+        &Form::col(read(f::GROUP_WORD)),
+    )];
+    for j in -2..=3isize {
+        let tag = index_name(j);
+        let verb = if j <= 0 { "decode" } else { "encode" };
+        out.push(equal(
+            format!("a{tag}_{verb}"),
+            a_word(j),
+            &word_of(&a_bytes(j)),
+        ));
+        out.push(equal(
+            format!("e{tag}_{verb}"),
+            e_word(j),
+            &word_of(&e_bytes(j)),
         ));
     }
-    for j in 0..f::STATE_WORDS {
-        out.push((Scalar::Co(j), vec![(d::lit(1), out_carry(j))]));
-    }
-    for i in 0..f::ROUNDS {
-        out.push((Scalar::W(i), bits_of(&|t| w_bit(i, t), BITS)));
-    }
-    for i in 0..f::ROUNDS {
-        out.push((Scalar::Ch(i), Vec::new()));
-    }
-    for j in 0..f::STATE_WORDS {
-        out.push((
-            Scalar::StateIn(j),
-            vec![(d::lit(1), word(j, d::WORD_READ_VALUE))],
+    for i in WINDOW_DECODED {
+        out.push(equal(
+            format!("w{i}_decode"),
+            window(i),
+            &word_of(&core::array::from_fn(|b| w_byte(i, b))),
         ));
     }
-    for j in 0..f::STATE_WORDS {
-        out.push((
-            Scalar::StateOut(j),
-            vec![(d::lit(1), word(j, d::WORD_WRITE_VALUE))],
+    for m in 0..2 {
+        out.push(equal(
+            format!("n{m}_encode"),
+            derived(m),
+            &word_of(&core::array::from_fn(|b| n_byte(m, b))),
         ));
     }
-    out.push((Scalar::Live, vec![(d::lit(1), LIVE)]));
+    // The window moves down four words: word `i` after the call is word
+    // `i + 4` before it.
+    for i in 0..f::BLOCK_WORDS - R {
+        out.push(equal(
+            format!("w{i}_shift"),
+            write(f::WINDOW_WORD + i),
+            &Form::col(window(i + R)),
+        ));
+    }
     out
 }
 
-/// `Ch(e, f, g) = g + e*f - e*g`, as a 32-bit value over committed bits.
+/// The four rounds' two sums each, and the four derived words', every one an
+/// integer equation because its carry is a byte.
+fn sum_gates() -> Vec<(String, GateDef)> {
+    let two32 = d::pow2(32);
+    let mut out: Vec<(String, GateDef)> = Vec::new();
+    for k in 0..R {
+        let t1 = t1(k);
+        // A_{k+1} = T1 + T2 − 2^32·carry_a, T2 = Σ0(a) + Maj(a, b, c).
+        let a = Form::col(a_word(k as isize + 1))
+            .plus_col(two32, round_col(k, Round::CarryA, 0))
+            .plus(-Fr::ONE, &t1)
+            .plus(-Fr::ONE, &big_sigma0(k))
+            .plus(-Fr::ONE, &maj(k));
+        out.push((format!("r{k}_a"), a.gate()));
+        // E_{k+1} = d + T1 − 2^32·carry_e.
+        let e = Form::col(e_word(k as isize + 1))
+            .plus_col(two32, round_col(k, Round::CarryE, 0))
+            .plus_col(-Fr::ONE, a_word(k as isize - 3))
+            .plus(-Fr::ONE, &t1);
+        out.push((format!("r{k}_e"), e.gate()));
+    }
+    for m in 0..R {
+        // W_t = sigma1(W_{t-2}) + W_{t-7} + sigma0(W_{t-15}) + W_{t-16}.
+        let sum = Form::col(derived(m))
+            .plus_col(two32, sched_col(m, Sched::CarryW, 0))
+            .plus(-Fr::ONE, &small_sigma1(m))
+            .plus_col(-Fr::ONE, window(9 + m))
+            .plus(-Fr::ONE, &small_sigma0(m))
+            .plus_col(-Fr::ONE, window(m));
+        out.push((format!("s{m}_sum"), sum.gate()));
+    }
+    out
+}
+
+/// The small sigmas' shifted bytes, pinned to the forms they stand for.
 ///
-/// Degree 2 already, so it needs no helper and is written at gate list 0
-/// beside them. Each bit of the result is `g_t + e_t*f_t - e_t*g_t`, which is
-/// 0 or 1 by inspection over the eight inputs, so the weighted sum is the
-/// 32-bit value.
-fn ch_gate(i: usize) -> GateDef {
-    let mut linear: Vec<(Coeff, PolyAddress)> = Vec::new();
-    let mut products: Vec<(Coeff, PolyAddress, PolyAddress)> = Vec::new();
-    for t in 0..BITS {
-        let e = e_bit(i as isize, t);
-        let ff = e_bit(i as isize - 1, t);
-        let g = e_bit(i as isize - 2, t);
-        let two = d::lit(1u64 << t);
-        linear.push((two, g));
-        products.push((two, e, ff));
-        products.push((d::neg(1u64 << t), e, g));
+/// Committed rather than derived because the XOR that reads them already has
+/// a derived form at position 0, and a tuple holds one.
+fn shift_gates() -> Vec<(String, GateDef)> {
+    let mut out: Vec<(String, GateDef)> = Vec::new();
+    for m in 0..R {
+        let x = sigma0_input(m);
+        let masks = sched_bytes(m, Sched::Ss0M3);
+        for b in 0..BYTES {
+            let form = Form::col(sched_col(m, Sched::Ss0Shr, b))
+                .plus(-Fr::ONE, &shr_byte(&x, &masks, 3, b));
+            out.push((format!("s{m}_shr3_b{b}"), form.gate()));
+        }
+        let x = sigma1_input(m);
+        let masks = sched_bytes(m, Sched::Ss1M2);
+        for b in 0..BYTES - 1 {
+            let form = Form::col(sched_col(m, Sched::Ss1Shr, b))
+                .plus(-Fr::ONE, &shr_byte(&x, &masks, 10, b));
+            out.push((format!("s{m}_shr10_b{b}"), form.gate()));
+        }
     }
-    d::quadratic(linear, products)
+    out
 }
 
-/// The three-way XOR's value at layer 2, given its helpers at layer 1.
+// ---------------------------------------------------------------------------
+// The rounds and the schedule, as obligations
+// ---------------------------------------------------------------------------
+
+/// One `XOR8` obligation: `(e0, x, out)` is a row of `(a, b, a ^ b)`.
 ///
-/// `x^y = x + y - 2p` with `p = x*y`, and `(x^y)^z = (x+y-2p) + z -
-/// 2*z*(x+y-2p)`, which is degree 2 in `p`, `x`, `y` and `z` — all four at
-/// layer 1, the helper because gate list 0 wrote it and the bits because gate
-/// list 0 carried them.
-fn xor3_value(k: usize) -> GateDef {
-    let kind = xor_kind(k);
-    let mut linear: Vec<(Coeff, PolyAddress)> = Vec::new();
-    let mut products: Vec<(Coeff, PolyAddress, PolyAddress)> = Vec::new();
-    for t in 0..BITS {
-        let two = 1u64 << t;
-        let p = helper(k, t);
-        let x = xor_operand(kind, t, 0);
-        let y = xor_operand(kind, t, 1);
-        let z = xor_operand(kind, t, 2);
-        // `x + y - 2p`, each term present only where the operand exists: a
-        // `SHR` past the top contributes nothing, and the helper of a missing
-        // operand is the literal 0 that gate list 0 wrote there.
-        if let Some(x) = x {
-            linear.push((d::lit(two), x.at()));
-        }
-        if let Some(y) = y {
-            linear.push((d::lit(two), y.at()));
-        }
-        linear.push((d::neg(2 * two), p));
-        if let Some(z) = z {
-            linear.push((d::lit(two), z.at()));
-            if let Some(x) = x {
-                products.push((d::neg(2 * two), z.at(), x.at()));
-            }
-            if let Some(y) = y {
-                products.push((d::neg(2 * two), z.at(), y.at()));
-            }
-            products.push((d::lit(4 * two), z.at(), p));
-        }
-    }
-    d::quadratic(linear, products)
-}
-
-/// What a three-way combination reads, as **data**: a closure would be a
-/// `dyn Fn`, which `prompts/00-master.md`'s anti-goal 2 bans, and the five
-/// shapes are a five-arm enum either way.
-#[derive(Clone, Copy)]
-enum XorKind {
-    /// `Sigma0(A_i)`: three rotations of one word.
-    BigSigma0(isize),
-    /// `Sigma1(E_i)`: likewise.
-    BigSigma1(isize),
-    /// `Maj(A_i, A_{i-1}, A_{i-2})`: three different words, no rotation. Not
-    /// an XOR, but the same three operands and the same one helper a bit,
-    /// which is why it shares this path.
-    Maj(isize),
-    /// `sigma0(W_src)`: two rotations and a shift.
-    SmallSigma0(usize),
-    /// `sigma1(W_src)`: likewise.
-    SmallSigma1(usize),
-}
-
-/// Three-way combination `k`'s kind, by the order [`XORS`] counts them.
-fn xor_kind(k: usize) -> XorKind {
-    if k < 3 * f::ROUNDS {
-        let i = (k / 3) as isize;
-        match k % 3 {
-            0 => XorKind::BigSigma0(i),
-            1 => XorKind::BigSigma1(i),
-            _ => XorKind::Maj(i),
-        }
-    } else {
-        let j = (k - 3 * f::ROUNDS) / 2;
-        let i = f::BLOCK_WORDS + j;
-        if (k - 3 * f::ROUNDS).is_multiple_of(2) {
-            XorKind::SmallSigma0(i - 15)
-        } else {
-            XorKind::SmallSigma1(i - 2)
-        }
+/// Position 0 may be any literal-weighted form, which is what lets a rotated
+/// byte be an operand without a column of its own; positions 1 and 2 are
+/// single columns, `β^j·c` not being one `Coeff`.
+fn xor8(name: String, e0: &Form, x: PolyAddress, out: PolyAddress) -> LookupExpr {
+    LookupExpr {
+        name,
+        channel: lookup_channel::XOR8,
+        selector: LIVE,
+        tuple: vec![e0.tuple(), Form::col(x).tuple(), Form::col(out).tuple()],
     }
 }
 
-/// Operand `which` of bit `t`, or `None` where a `SHR` has shifted it away.
-fn xor_operand(kind: XorKind, t: usize, which: usize) -> Option<CarriedBit> {
-    match kind {
-        XorKind::BigSigma0(i) => Some(CarriedBit::A(i, rotr(t, BIG_SIGMA0[which]))),
-        XorKind::BigSigma1(i) => Some(CarriedBit::E(i, rotr(t, BIG_SIGMA1[which]))),
-        XorKind::Maj(i) => Some(CarriedBit::A(i - which as isize, t)),
-        XorKind::SmallSigma0(src) => match which {
-            0 | 1 => Some(CarriedBit::W(src, rotr(t, SMALL_SIGMA0.0[which]))),
-            _ => shr(t, SMALL_SIGMA0.1).map(|u| CarriedBit::W(src, u)),
+/// `x ^ (2^s − 1) = m` for each of four bytes: the split a rotation at `s`
+/// needs.
+fn masks(
+    out: &mut Vec<LookupExpr>,
+    stem: &str,
+    x: &[PolyAddress; BYTES],
+    m: &[PolyAddress; BYTES],
+    s: u32,
+) {
+    for b in 0..BYTES {
+        out.push(xor8(
+            format!("{stem}_b{b}_xor"),
+            &Form::constant(fr((1 << s) - 1)),
+            x[b],
+            m[b],
+        ));
+    }
+}
+
+/// A byte bounded below 256: `(0, c, c)` is a row of the table exactly when `c`
+/// is a byte.
+fn byte_range(name: String, c: PolyAddress) -> LookupExpr {
+    xor8(name, &Form::zero(), c, c)
+}
+
+/// Round `k`'s 52 obligations: `Σ0`, `Σ1`, `Ch`, `Maj` and the two carries.
+fn round_lookups(k: usize, out: &mut Vec<LookupExpr>) {
+    let a = a_bytes(k as isize);
+    let e = e_bytes(k as isize);
+    let p = |stem: &str| format!("r{k}_{stem}");
+
+    // Σ0: y = a ^ ROTR9(a), x = a ^ ROTR11(y), Σ0 = ROTR2(x).
+    let (m1, y, m3, x) = (
+        round_bytes(k, Round::Bs0M1),
+        round_bytes(k, Round::Bs0Y),
+        round_bytes(k, Round::Bs0M3),
+        round_bytes(k, Round::Bs0X),
+    );
+    masks(out, &p("bs0_m1"), &a, &m1, 1);
+    for b in 0..BYTES {
+        out.push(xor8(
+            p(&format!("bs0_y_b{b}_xor")),
+            &rotr_byte(&a, &m1, 9, b),
+            a[b],
+            y[b],
+        ));
+    }
+    masks(out, &p("bs0_m3"), &y, &m3, 3);
+    for b in 0..BYTES {
+        out.push(xor8(
+            p(&format!("bs0_x_b{b}_xor")),
+            &rotr_byte(&y, &m3, 11, b),
+            a[b],
+            x[b],
+        ));
+    }
+    out.push(xor8(
+        p("bs0_mx_xor"),
+        &Form::constant(fr(3)),
+        x[0],
+        round_col(k, Round::Bs0Mx, 0),
+    ));
+
+    // Σ1: y = e ^ ROTR14(e), x = e ^ ROTR5(y), Σ1 = ROTR6(x).
+    let (m6, y, m5, x) = (
+        round_bytes(k, Round::Bs1M6),
+        round_bytes(k, Round::Bs1Y),
+        round_bytes(k, Round::Bs1M5),
+        round_bytes(k, Round::Bs1X),
+    );
+    masks(out, &p("bs1_m6"), &e, &m6, 6);
+    for b in 0..BYTES {
+        out.push(xor8(
+            p(&format!("bs1_y_b{b}_xor")),
+            &rotr_byte(&e, &m6, 14, b),
+            e[b],
+            y[b],
+        ));
+    }
+    masks(out, &p("bs1_m5"), &y, &m5, 5);
+    for b in 0..BYTES {
+        out.push(xor8(
+            p(&format!("bs1_x_b{b}_xor")),
+            &rotr_byte(&y, &m5, 5, b),
+            e[b],
+            x[b],
+        ));
+    }
+    out.push(xor8(
+        p("bs1_mx_xor"),
+        &Form::constant(fr(63)),
+        x[0],
+        round_col(k, Round::Bs1Mx, 0),
+    ));
+
+    // Ch: e ^ f and e ^ g.
+    let f_ = e_bytes(k as isize - 1);
+    let g = e_bytes(k as isize - 2);
+    let (ef, eg) = (round_bytes(k, Round::ChEf), round_bytes(k, Round::ChEg));
+    for b in 0..BYTES {
+        out.push(xor8(
+            p(&format!("ch_ef_b{b}_xor")),
+            &Form::col(e[b]),
+            f_[b],
+            ef[b],
+        ));
+        out.push(xor8(
+            p(&format!("ch_eg_b{b}_xor")),
+            &Form::col(e[b]),
+            g[b],
+            eg[b],
+        ));
+    }
+
+    // Maj: a ^ b, then c ^ (a ^ b).
+    let bb = a_bytes(k as isize - 1);
+    let c = a_bytes(k as isize - 2);
+    let (ab, cab) = (round_bytes(k, Round::MajAb), round_bytes(k, Round::MajCab));
+    for b in 0..BYTES {
+        out.push(xor8(
+            p(&format!("maj_ab_b{b}_xor")),
+            &Form::col(a[b]),
+            bb[b],
+            ab[b],
+        ));
+        out.push(xor8(
+            p(&format!("maj_cab_b{b}_xor")),
+            &Form::col(c[b]),
+            ab[b],
+            cab[b],
+        ));
+    }
+
+    out.push(byte_range(p("carry_a_xor"), round_col(k, Round::CarryA, 0)));
+    out.push(byte_range(p("carry_e_xor"), round_col(k, Round::CarryE, 0)));
+}
+
+/// Derived word `m`'s 32 obligations: `sigma0`, `sigma1` and the carry.
+fn sched_lookups(m: usize, out: &mut Vec<LookupExpr>) {
+    let p = |stem: &str| format!("s{m}_{stem}");
+
+    // sigma0(x) = ROTR7(y) ^ SHR3(x), y = x ^ ROTR11(x).
+    let x = sigma0_input(m);
+    let (m3, y, m7, shr, z) = (
+        sched_bytes(m, Sched::Ss0M3),
+        sched_bytes(m, Sched::Ss0Y),
+        sched_bytes(m, Sched::Ss0M7),
+        sched_bytes(m, Sched::Ss0Shr),
+        sched_bytes(m, Sched::Ss0Z),
+    );
+    masks(out, &p("ss0_m3"), &x, &m3, 3);
+    for b in 0..BYTES {
+        out.push(xor8(
+            p(&format!("ss0_y_b{b}_xor")),
+            &rotr_byte(&x, &m3, 11, b),
+            x[b],
+            y[b],
+        ));
+    }
+    masks(out, &p("ss0_m7"), &y, &m7, 7);
+    for b in 0..BYTES {
+        out.push(xor8(
+            p(&format!("ss0_z_b{b}_xor")),
+            &rotr_byte(&y, &m7, 7, b),
+            shr[b],
+            z[b],
+        ));
+    }
+
+    // sigma1(x) = ROTR17(y) ^ SHR10(x), y = x ^ ROTR2(x).
+    let x = sigma1_input(m);
+    let (m2, y, m1) = (
+        sched_bytes(m, Sched::Ss1M2),
+        sched_bytes(m, Sched::Ss1Y),
+        sched_bytes(m, Sched::Ss1M1),
+    );
+    masks(out, &p("ss1_m2"), &x, &m2, 2);
+    for b in 0..BYTES {
+        out.push(xor8(
+            p(&format!("ss1_y_b{b}_xor")),
+            &rotr_byte(&x, &m2, 2, b),
+            x[b],
+            y[b],
+        ));
+    }
+    masks(out, &p("ss1_m1"), &y, &m1, 1);
+    for b in 0..BYTES - 1 {
+        out.push(xor8(
+            p(&format!("ss1_z_b{b}_xor")),
+            &rotr_byte(&y, &m1, 17, b),
+            sched_col(m, Sched::Ss1Shr, b),
+            sched_col(m, Sched::Ss1Z, b),
+        ));
+    }
+
+    out.push(byte_range(p("carry_w_xor"), sched_col(m, Sched::CarryW, 0)));
+}
+
+/// Every obligation of the circuit: the frame's over `RANGE16` — the gaps, the
+/// base's two decompositions and the four written words' pairs — then the
+/// rounds' and the schedule's over `XOR8`.
+fn lookups() -> Vec<LookupExpr> {
+    let mut out = d::gap_lookups_range16(WORDS, &gap_chunk);
+    out.extend(d::bound_chunked(
+        "base_low",
+        vec![(d::lit(1), base_low())],
+        &[base_low_hi()],
+        d::BASE_LOW_BITS as u32,
+        LIVE,
+        d::lit(0),
+    ));
+    out.extend(d::bound_chunked(
+        "base_room",
+        vec![(d::lit(1), base_room())],
+        &[base_room_hi()],
+        d::BASE_ROOM_BITS as u32,
+        LIVE,
+        d::lit(0),
+    ));
+    for (slot, j) in PAIRED_WORDS.iter().enumerate() {
+        out.extend(d::bound32(
+            &format!("w{j}_written"),
+            write(*j),
+            written_hi(slot),
+            LIVE,
+        ));
+    }
+    for k in 0..R {
+        round_lookups(k, &mut out);
+    }
+    for m in 0..R {
+        sched_lookups(m, &mut out);
+    }
+    out
+}
+
+/// Every copower-scaled column, with the selector its scaled obligation
+/// carries: each gap's top chunk and the two base decompositions' high
+/// halfwords, all under `live`.
+fn scaled_columns() -> Vec<(PolyAddress, PolyAddress)> {
+    let mut out: Vec<(PolyAddress, PolyAddress)> = (0..WORDS)
+        .map(|j| (gap_chunk(j, d::GAP_CHUNKS - 1), LIVE))
+        .collect();
+    out.push((base_low_hi(), LIVE));
+    out.push((base_room_hi(), LIVE));
+    out
+}
+
+// ---------------------------------------------------------------------------
+// The artifact
+// ---------------------------------------------------------------------------
+
+/// The family's lookup channels: `RANGE16` for the frame, and `XOR8` for the
+/// rounds and the schedule.
+///
+/// Both tables are **virtual**, so neither costs a commitment, a setup column
+/// or a movement of the SRS digest. Each is complete only at 16 variables or
+/// more, which `crate::lookup::table_vars` reports and `family_circuit`'s
+/// derived floor enforces before this function is ever called.
+pub fn channels() -> Vec<ChannelSpec> {
+    vec![
+        ChannelSpec {
+            channel: lookup_channel::RANGE16,
+            table: vec![PolyAddress::Virtual(VirtualKind::Range16)],
+            multiplicity: range16_multiplicity(),
         },
-        XorKind::SmallSigma1(src) => match which {
-            0 | 1 => Some(CarriedBit::W(src, rotr(t, SMALL_SIGMA1.0[which]))),
-            _ => shr(t, SMALL_SIGMA1.1).map(|u| CarriedBit::W(src, u)),
+        ChannelSpec {
+            channel: lookup_channel::XOR8,
+            table: crate::lookup::xor8_table(),
+            multiplicity: xor8_multiplicity(),
         },
-    }
+    ]
 }
 
-/// `Maj(a, b, c) = pab + c*(a + b - 2*pab)`, as a 32-bit value.
-///
-/// Not an XOR, but the same shape: one helper a bit, `pab = a_t * b_t`, and a
-/// degree-2 combination of it with the third operand. Checked over all eight
-/// inputs by this module's own test.
-fn maj_value(i: usize) -> GateDef {
-    let k = xor_maj(i);
-    let mut linear: Vec<(Coeff, PolyAddress)> = Vec::new();
-    let mut products: Vec<(Coeff, PolyAddress, PolyAddress)> = Vec::new();
-    for t in 0..BITS {
-        let two = 1u64 << t;
-        let p = helper(k, t);
-        let a = CarriedBit::A(i as isize, t).at();
-        let b = CarriedBit::A(i as isize - 1, t).at();
-        let c = CarriedBit::A(i as isize - 2, t).at();
-        linear.push((d::lit(two), p));
-        products.push((d::lit(two), c, a));
-        products.push((d::lit(two), c, b));
-        products.push((d::neg(2 * two), c, p));
-    }
-    d::quadratic(linear, products)
-}
-
-/// `L2[…]`: the value of three-way XOR `k` — `Sigma0`, `Sigma1`, `Maj`,
-/// `sigma0` or `sigma1`.
-fn xor_value(k: usize) -> PolyAddress {
-    d::inner(2, work_base(2) + k)
-}
-
-/// The family's circuit over `2^trace_vars` rows.
+/// The circuit: four rounds and four schedule words a row, flat.
 pub fn artifact(trace_vars: u32) -> CircuitArtifact {
-    let mut a = d::Assembly::new();
-    let scalars = carried_scalar_list();
-    let bits = carried_bit_list();
-    assert_eq!(
-        scalars.len(),
-        carried_scalars(),
-        "the carried-scalar count and the carried-scalar list disagree"
-    );
-    assert_eq!(
-        bits.len(),
-        carried_bits(),
-        "the carried-bit count and the carried-bit list disagree"
-    );
+    let mut enforcing =
+        d::frame_gates_range16(WORDS, f::FRAME_BYTES as u64, base_low(), base_room());
+    enforcing.extend(selector_gates());
+    enforcing.extend(frame_value_gates());
+    enforcing.extend(sum_gates());
+    enforcing.extend(shift_gates());
 
-    // --- gate list 0 -> layer 1 --------------------------------------------
-    let [reads, writes] = d::leaves(address_space::DELEGATION_SHA256_COMP, WORDS);
-    let mut producing: Vec<(String, GateDef)> = reads.into_iter().chain(writes).collect();
-    for (s, terms) in &scalars {
-        let gate = match s {
-            Scalar::Ch(i) => ch_gate(*i),
-            _ => d::linear(terms.clone()),
-        };
-        producing.push((format!("{}_l1", s.name()), gate));
-    }
-    for b in &bits {
-        producing.push((format!("{}_l1", b.name()), d::copy(b.committed())));
-    }
-    for k in 0..XORS {
-        let kind = xor_kind(k);
-        for t in 0..BITS {
-            let gate = match (xor_operand(kind, t, 0), xor_operand(kind, t, 1)) {
-                (Some(x), Some(y)) => GateDef::Product {
-                    coeff: d::lit(1),
-                    left: x.committed(),
-                    right: y.committed(),
-                },
-                // A helper whose operands do not both exist is the literal 0,
-                // which `xor3_value` then reads as the absent product.
-                _ => d::linear(Vec::new()),
-            };
-            producing.push((format!("helper{k}_{t}"), gate));
-        }
-    }
-    a.push(1, false, trace_vars, producing, list0_enforcing());
-
-    // --- gate list 1 -> layer 2 --------------------------------------------
-    let mut producing: Vec<(String, GateDef)> = tree_layer(1);
-    for (s, _) in &scalars {
-        producing.push((format!("{}_l2", s.name()), d::copy(s.at(1))));
-    }
-    for k in 0..XORS {
-        let gate = if k < 3 * f::ROUNDS && k % 3 == 2 {
-            maj_value(k / 3)
-        } else {
-            xor3_value(k)
-        };
-        producing.push((format!("xor{k}_value"), gate));
-    }
-    a.push(2, false, trace_vars, producing, Vec::new());
-
-    // --- gate list 2 -> layer 3: the equations -----------------------------
-    a.push(3, false, trace_vars, tree_layer(2), round_gates());
-
-    // --- the memory tree's remaining reductions ----------------------------
-    let mut layer = 4;
-    while tree_width(layer - 1) > 2 {
-        a.push(layer, false, trace_vars, tree_layer(layer - 1), Vec::new());
-        layer += 1;
-    }
-
-    // --- the halving phase --------------------------------------------------
-    let last = layer - 1;
-    for step in 0..trace_vars as usize {
-        let at = last + 1 + step;
-        let producing = (0..2)
-            .map(|i| {
-                let name = if step + 1 == trace_vars as usize {
-                    ["read_root", "write_root"][i].to_string()
-                } else {
-                    format!("halve_{at}_{i}")
-                };
-                (
-                    name,
-                    GateDef::TreeProduct {
-                        input: d::inner(at - 1, tree_offset(at - 1) + i),
-                    },
-                )
-            })
-            .collect();
-        a.push(
-            at,
-            true,
-            trace_vars - step as u32 - 1,
-            producing,
-            Vec::new(),
-        );
-    }
-
-    let top = last + trace_vars as usize;
-    let committed = MEMORY_COLUMNS + WITNESS_COLUMNS;
-    let artifact = CircuitArtifact {
-        format_version: FORMAT_VERSION,
-        coefficient_encoding: COEFFICIENT_ENCODING_CANONICAL_LE,
+    let artifact = crate::memory::assemble(
         trace_vars,
-        memory: d::memory_names(WORDS),
-        witness: witness_names(),
-        setup: Vec::new(),
-        virtuals: Vec::new(),
-        layers: a.layers,
-        relations: a.relations,
-        lookups: Vec::new(),
-        scratch: a.scratch,
-        outputs: vec![
-            d::inner(top, mem::READ_ROOT),
-            d::inner(top, mem::WRITE_ROOT),
+        [d::memory_names(WORDS), witness_names(), Vec::new()],
+        vec![
+            (VirtualKind::Range16, "range16".to_string()),
+            (VirtualKind::Xor8A, "xor8_a".to_string()),
+            (VirtualKind::Xor8B, "xor8_b".to_string()),
+            (VirtualKind::Xor8Out, "xor8_out".to_string()),
         ],
-        padding: Padding {
-            row: vec![Fr::ZERO; committed],
-            zero_row_valid: true,
-        },
-    };
-    if let Err(e) = artifact.validate() {
-        panic!("sha256: {e}");
-    }
-    if let Err(e) = crate::memory::check_memory(&artifact) {
+        d::leaves(address_space::DELEGATION_SHA256_COMP, WORDS),
+        enforcing,
+        lookups(),
+        &channels(),
+    );
+    if let Err(e) = crate::lookup::check_copowers(&artifact, &scaled_columns()) {
         panic!("sha256: {e}");
     }
     check_shape(&artifact);
     artifact
 }
 
-/// The memory tree's width at `layer`: `2 * leaves_a_side` halved once a
-/// layer, and never below two.
-fn tree_width(layer: usize) -> usize {
-    let mut width = 2 * d::leaves_a_side(WORDS);
-    for _ in 1..layer {
-        if width > 2 {
-            width /= 2;
-        }
-    }
-    width
-}
-
-/// The tree's first column at `layer`. It is 0 at layer 1, where the leaves
-/// come first, and 0 at every later layer too — the tree is written before the
-/// carried columns at each of them.
-fn tree_offset(_layer: usize) -> usize {
-    0
-}
-
-/// The pairwise reduction that takes `layer`'s tree columns to `layer + 1`'s.
-fn tree_layer(layer: usize) -> Vec<(String, GateDef)> {
-    let width = tree_width(layer);
-    let at = tree_offset(layer);
-    if width > 2 {
-        (0..width / 2)
-            .map(|i| {
-                (
-                    format!("tree_{layer}_{i}"),
-                    GateDef::Product {
-                        coeff: d::lit(1),
-                        left: d::inner(layer, at + 2 * i),
-                        right: d::inner(layer, at + 2 * i + 1),
-                    },
-                )
-            })
-            .collect()
-    } else {
-        vec![
-            (format!("read_up{layer}"), d::copy(d::inner(layer, at))),
-            (format!("write_up{layer}"), d::copy(d::inner(layer, at + 1))),
-        ]
+/// `<stem><j>` for a sequence index, a negative one spelled `m<|j|>`: an
+/// artifact name is `[a-z0-9_]` and a minus sign is not in it.
+fn index_name(j: isize) -> String {
+    match j < 0 {
+        true => format!("m{}", -j),
+        false => format!("{j}"),
     }
 }
 
-/// Gate list 0's enforcing gates: the frame's own, then every committed bit's
-/// booleanity and every frame word's decode.
-fn list0_enforcing() -> Vec<(String, GateDef)> {
-    let mut out = d::frame_gates(WORDS, f::FRAME_BYTES as u64);
-
-    // Every frame word's read value is its 32 bits, which is the word's 32-bit
-    // bound and its decode at once.
-    for j in 0..WORDS {
-        for t in 0..BITS {
-            out.push((format!("in{j}_bit{t}_boolean"), d::booleanity(in_bit(j, t))));
-        }
-        let mut terms = vec![(d::lit(1), word(j, d::WORD_READ_VALUE))];
-        for t in 0..BITS {
-            terms.push((d::neg(1u64 << t), in_bit(j, t)));
-        }
-        out.push((format!("in{j}_word"), d::linear(terms)));
-    }
-
-    // The eight written state words, likewise.
-    for j in 0..f::STATE_WORDS {
-        for t in 0..BITS {
-            out.push((
-                format!("out{j}_bit{t}_boolean"),
-                d::booleanity(out_bit(j, t)),
-            ));
-        }
-        let mut terms = vec![(d::lit(1), word(j, d::WORD_WRITE_VALUE))];
-        for t in 0..BITS {
-            terms.push((d::neg(1u64 << t), out_bit(j, t)));
-        }
-        out.push((format!("out{j}_word"), d::linear(terms)));
-    }
-
-    // The sixteen block words are written back unchanged: the guest's schedule
-    // survives the call, and the invocation computes the state alone.
-    for j in f::BLOCK_WORD..WORDS {
-        out.push((
-            format!("writes_back_w{j}"),
-            d::linear(vec![
-                (d::lit(1), word(j, d::WORD_WRITE_VALUE)),
-                (d::neg(1), word(j, d::WORD_READ_VALUE)),
-            ]),
-        ));
-    }
-
-    // Every derived value's bits, and every carry's.
-    for i in f::BLOCK_WORDS..f::ROUNDS {
-        for t in 0..BITS {
-            out.push((
-                format!("w{i}_bit{t}_boolean"),
-                d::booleanity(sched_bit(i, t)),
-            ));
-        }
-        for t in 0..f::CARRY_W_BITS {
-            out.push((
-                format!("cw{i}_{t}_boolean"),
-                d::booleanity(sched_carry_bit(i, t)),
-            ));
-        }
-    }
-    for i in 1..=f::ROUNDS {
-        for t in 0..BITS {
-            out.push((
-                format!("a{i}_bit{t}_boolean"),
-                d::booleanity(a_bit(i as isize, t)),
-            ));
-            out.push((
-                format!("e{i}_bit{t}_boolean"),
-                d::booleanity(e_bit(i as isize, t)),
-            ));
-        }
-    }
-    for i in 0..f::ROUNDS {
-        for t in 0..f::CARRY_A_BITS {
-            out.push((format!("ca{i}_{t}_boolean"), d::booleanity(ca_bit(i, t))));
-        }
-        for t in 0..f::CARRY_E_BITS {
-            out.push((format!("ce{i}_{t}_boolean"), d::booleanity(ce_bit(i, t))));
-        }
-    }
-    for j in 0..f::STATE_WORDS {
-        out.push((format!("co{j}_boolean"), d::booleanity(out_carry(j))));
-    }
-    out
-}
-
-/// Gate list 2's enforcing gates: the message schedule, the sixty-four rounds
-/// and the eight output words, every one degree 1 over layer 2.
-fn round_gates() -> Vec<(String, GateDef)> {
-    let mut out: Vec<(String, GateDef)> = Vec::new();
-    let two32 = d::pow2(32);
-
-    // W_i = sigma1(W_{i-2}) + W_{i-7} + sigma0(W_{i-15}) + W_{i-16} - 2^32 cw
-    for i in f::BLOCK_WORDS..f::ROUNDS {
-        out.push((
-            format!("schedule_w{i}"),
-            d::linear(vec![
-                (d::lit(1), Scalar::W(i).at(2)),
-                (Coeff::Literal(two32), Scalar::Cw(i).at(2)),
-                (d::neg(1), xor_value(xor_small1(i))),
-                (d::neg(1), Scalar::W(i - 7).at(2)),
-                (d::neg(1), xor_value(xor_small0(i))),
-                (d::neg(1), Scalar::W(i - 16).at(2)),
-            ]),
-        ));
-    }
-
-    // A_{i+1} = T1 + T2 - 2^32 ca,  E_{i+1} = A_{i-3} + T1 - 2^32 ce
-    for i in 0..f::ROUNDS {
-        let k = Fr::from_u64(f::ROUND_CONSTANTS[i] as u64);
-        let t1: Vec<(Coeff, PolyAddress)> = vec![
-            (d::lit(1), Scalar::E(i as isize - 3).at(2)),
-            (d::lit(1), xor_value(xor_sigma1(i))),
-            (d::lit(1), Scalar::Ch(i).at(2)),
-            (d::lit(1), Scalar::W(i).at(2)),
-        ];
-        let mut a_terms = vec![
-            (d::lit(1), Scalar::A(i as isize + 1).at(2)),
-            (Coeff::Literal(two32), Scalar::Ca(i).at(2)),
-            (d::neg(1), xor_value(xor_sigma0(i))),
-            (d::neg(1), xor_value(xor_maj(i))),
-        ];
-        for (c, x) in &t1 {
-            let Coeff::Literal(v) = c else {
-                panic!("sha256: a round coefficient is a literal")
-            };
-            a_terms.push((Coeff::Literal(-*v), *x));
-        }
-        a_terms.push((Coeff::Literal(-k), Scalar::Live.at(2)));
-        out.push((format!("round_a{i}"), d::linear(a_terms)));
-
-        let mut e_terms = vec![
-            (d::lit(1), Scalar::E(i as isize + 1).at(2)),
-            (Coeff::Literal(two32), Scalar::Ce(i).at(2)),
-            (d::neg(1), Scalar::A(i as isize - 3).at(2)),
-        ];
-        for (c, x) in &t1 {
-            let Coeff::Literal(v) = c else {
-                panic!("sha256: a round coefficient is a literal")
-            };
-            e_terms.push((Coeff::Literal(-*v), *x));
-        }
-        e_terms.push((Coeff::Literal(-k), Scalar::Live.at(2)));
-        out.push((format!("round_e{i}"), d::linear(e_terms)));
-    }
-
-    // out_j = H_j + V_j - 2^32 co_j, with V the eight working words after the
-    // last round: (A_64, A_63, A_62, A_61, E_64, E_63, E_62, E_61).
-    for j in 0..f::STATE_WORDS {
-        let v = if j < 4 {
-            Scalar::A(f::ROUNDS as isize - j as isize)
-        } else {
-            Scalar::E(f::ROUNDS as isize - (j as isize - 4))
-        };
-        out.push((
-            format!("output_h{j}"),
-            d::linear(vec![
-                (d::lit(1), Scalar::StateOut(j).at(2)),
-                (Coeff::Literal(two32), Scalar::Co(j).at(2)),
-                (d::neg(1), Scalar::StateIn(j).at(2)),
-                (d::neg(1), v.at(2)),
-            ]),
-        ));
-    }
-    out
-}
-
-/// The family's lookup channels: **none**.
-///
-/// At `2^8` no channel's table fits — `RANGE16` needs sixteen variables and
-/// `TIMESTAMP` nineteen (`docs/spec/lookup.md` §3) — so every bound this
-/// circuit makes is a bit decomposition with a booleanity gate. That is the
-/// rule `docs/spec/delegation.md` §9 states, and unlike `EC_ADD` this family
-/// has no reason to leave it: its row is ~20,000 inner columns, so `2^16`
-/// would be 42 GB of forward pass a shard.
-pub fn channels() -> Vec<crate::lookup::ChannelSpec> {
-    Vec::new()
-}
-
-/// The `W` column names, in layout order.
+/// The `W` column names, mirroring the layout above name for name.
 fn witness_names() -> Vec<String> {
-    let mut out = d::witness_names(WORDS);
+    let mut out = Vec::with_capacity(WITNESS_COLUMNS);
     for j in 0..WORDS {
-        for t in 0..BITS {
-            out.push(format!("in{j}_bit{t}"));
+        for c in 0..d::GAP_CHUNKS {
+            out.push(format!("gap{j}_c{c}"));
         }
     }
-    for j in 0..f::STATE_WORDS {
-        for t in 0..BITS {
-            out.push(format!("out{j}_bit{t}"));
+    for name in ["base_low", "base_low_hi", "base_room", "base_room_hi"] {
+        out.push(name.to_string());
+    }
+    for r in 0..f::GROUPS {
+        out.push(format!("group{r}"));
+    }
+    for stem in ["a", "e"] {
+        for j in -2..=3isize {
+            for b in 0..BYTES {
+                out.push(format!("{stem}{}_b{b}", index_name(j)));
+            }
         }
     }
-    for j in 0..f::STATE_WORDS {
-        out.push(format!("co{j}"));
-    }
-    for i in f::BLOCK_WORDS..f::ROUNDS {
-        for t in 0..BITS {
-            out.push(format!("w{i}_bit{t}"));
+    for i in WINDOW_DECODED {
+        for b in 0..BYTES {
+            out.push(format!("w{i}_b{b}"));
         }
     }
-    for i in f::BLOCK_WORDS..f::ROUNDS {
-        for t in 0..f::CARRY_W_BITS {
-            out.push(format!("cw{i}_{t}"));
+    for m in 0..2 {
+        for b in 0..BYTES {
+            out.push(format!("n{m}_b{b}"));
         }
     }
-    for i in 1..=f::ROUNDS {
-        for t in 0..BITS {
-            out.push(format!("a{i}_bit{t}"));
+    for k in 0..R {
+        for block in ROUND_BLOCKS {
+            for b in 0..block.width() {
+                out.push(match block.width() {
+                    1 => format!("r{k}_{}", block.name()),
+                    _ => format!("r{k}_{}_b{b}", block.name()),
+                });
+            }
         }
     }
-    for i in 1..=f::ROUNDS {
-        for t in 0..BITS {
-            out.push(format!("e{i}_bit{t}"));
+    for m in 0..R {
+        for block in SCHED_BLOCKS {
+            for b in 0..block.width() {
+                out.push(match block.width() {
+                    1 => format!("s{m}_{}", block.name()),
+                    _ => format!("s{m}_{}_b{b}", block.name()),
+                });
+            }
         }
     }
-    for i in 0..f::ROUNDS {
-        for t in 0..f::CARRY_A_BITS {
-            out.push(format!("ca{i}_{t}"));
-        }
+    for j in PAIRED_WORDS {
+        out.push(format!("w{j}_written_hi"));
     }
-    for i in 0..f::ROUNDS {
-        for t in 0..f::CARRY_E_BITS {
-            out.push(format!("ce{i}_{t}"));
-        }
-    }
+    out.push("range16_multiplicity".to_string());
+    out.push("xor8_multiplicity".to_string());
     out
 }
 
-/// The shape this module intends, checked on every artifact it emits.
+/// Obligations a row carries on `RANGE16`: four a frame gap, three each for
+/// the base's two decompositions, and two for each of the four paired words.
+const RANGE16_OBLIGATIONS: usize = 4 * WORDS + 6 + 2 * PAIRED_WORDS.len();
+
+/// Obligations a row carries on `XOR8`: 52 a round and 32 a derived word.
+const XOR8_OBLIGATIONS: usize = 52 * R + 32 * R;
+
+/// The shape, asserted on every artifact this module emits.
 ///
-/// Counted on the emitted artifact rather than on the vectors handed in, which
-/// is what makes it a check rather than a restatement.
+/// The two obligation counts are the cost model's inputs: a fraction tree has
+/// `(lookups + 1).next_power_of_two()` leaves, so `RANGE16`'s 114 sit under a
+/// 128-leaf tree with 13 to spare and `XOR8`'s 336 under a 512-leaf one with
+/// 175.
 pub fn check_shape(a: &CircuitArtifact) {
-    assert_eq!(a.memory.len(), MEMORY_COLUMNS, "sha256: M width");
-    assert_eq!(a.witness.len(), WITNESS_COLUMNS, "sha256: W width");
-    assert!(a.setup.is_empty(), "sha256: no setup column");
-    assert!(a.lookups.is_empty(), "sha256: no lookup");
+    assert_eq!(a.memory.len(), MEMORY_COLUMNS, "sha256: M columns");
+    assert_eq!(a.witness.len(), WITNESS_COLUMNS, "sha256: W columns");
+    assert_eq!(WITNESS_COLUMNS, 520, "sha256: the manifest's W width");
+    assert_eq!(ROUND_COLUMNS, 52, "sha256: a round's columns");
+    assert_eq!(SCHED_COLUMNS, 39, "sha256: a derived word's columns");
     assert!(
-        channels().is_empty(),
-        "a delegation family at 2^8 has no channel"
+        a.setup.is_empty(),
+        "sha256: this family has no setup column"
+    );
+    assert_eq!(a.virtuals.len(), 4, "sha256: range16 and XOR8's three");
+    assert_eq!(a.outputs.len(), 6, "sha256: two roots and two channels");
+    let count = |channel: u32| a.lookups.iter().filter(|l| l.channel == channel).count();
+    assert_eq!(
+        count(lookup_channel::RANGE16),
+        RANGE16_OBLIGATIONS,
+        "sha256: RANGE16 obligations"
     );
     assert_eq!(
-        a.layers[0].width as usize,
-        layer1_width(),
-        "sha256: layer 1"
+        count(lookup_channel::XOR8),
+        XOR8_OBLIGATIONS,
+        "sha256: XOR8 obligations"
+    );
+    assert_eq!(RANGE16_OBLIGATIONS, 114);
+    assert_eq!(XOR8_OBLIGATIONS, 336);
+    assert_eq!((RANGE16_OBLIGATIONS + 1).next_power_of_two(), 128);
+    assert_eq!((XOR8_OBLIGATIONS + 1).next_power_of_two(), 512);
+
+    let named = |name: &str| a.relations.iter().any(|r| r.name == name);
+    for name in [
+        "live_boolean",
+        "base_aligned",
+        "base_in_window",
+        "group_rule",
+        "one_group_a_live_row",
+        "writes_back_w0",
+    ] {
+        assert!(named(name), "sha256: gate `{name}` is missing");
+    }
+    let count = |prefix: &str| {
+        a.relations
+            .iter()
+            .filter(|r| r.name.starts_with(prefix))
+            .count()
+    };
+    assert_eq!(count("addr_w"), WORDS, "sha256: one addr gate a frame word");
+    assert_eq!(count("group"), f::GROUPS + 1, "sha256: the selector");
+    for k in 0..R {
+        assert!(named(&format!("r{k}_a")) && named(&format!("r{k}_e")));
+    }
+    for m in 0..R {
+        assert!(named(&format!("s{m}_sum")), "sha256: schedule word {m}");
+    }
+    // `writes_back_w0`, a decode for each window word the sigmas read, and the
+    // window's twelve-word shift.
+    assert_eq!(
+        count("w"),
+        1 + WINDOW_DECODED.len() + (f::BLOCK_WORDS - R),
+        "sha256: the window's gates"
+    );
+    assert!(
+        a.layers[1..].iter().all(|l| l.enforcing.is_empty()),
+        "sha256: a flat circuit enforces on gate list 0 alone"
+    );
+    assert!(
+        a.padding.zero_row_valid,
+        "sha256: the all-zero row is a valid padding row"
     );
 }
 
@@ -1180,220 +1437,36 @@ pub fn check_shape(a: &CircuitArtifact) {
 mod tests {
     use super::*;
 
-    /// The circuit builds, validates and passes `check_memory` at its default
-    /// height. `artifact` panics on any refusal, so construction is the test.
-    #[test]
-    fn the_circuit_builds_at_its_default_height() {
-        let a = artifact(8);
-        assert_eq!(a.trace_vars, 8);
-        assert_eq!(a.outputs.len(), 2, "two memory roots, no channel");
+    /// A witness column's position in the `W` subtree.
+    fn at(x: PolyAddress) -> usize {
+        match x {
+            PolyAddress::Witness(i) => i as usize,
+            other => panic!("{other} is not a witness column"),
+        }
     }
 
-    /// The reference compression, and the arithmetization's own recurrence over
-    /// `A_i` and `E_i` alone, agree — which is what makes the round gate the
-    /// compression function rather than something near it.
+    /// The witness names are exactly the layout, each once.
     #[test]
-    fn the_two_word_recurrence_is_the_compression_function() {
-        // FIPS 180-4's eight-word shift, verbatim.
-        fn reference(state: [u32; 8], block: [u32; 16]) -> [u32; 8] {
-            let mut w = [0u32; 64];
-            w[..16].copy_from_slice(&block);
-            for i in 16..64 {
-                let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
-                let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-                w[i] = w[i - 16]
-                    .wrapping_add(s0)
-                    .wrapping_add(w[i - 7])
-                    .wrapping_add(s1);
-            }
-            let [mut a, mut b, mut c, mut dd, mut e, mut ff, mut g, mut h] = state;
-            for (i, wi) in w.iter().enumerate() {
-                let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
-                let ch = (e & ff) ^ (!e & g);
-                let t1 = h
-                    .wrapping_add(s1)
-                    .wrapping_add(ch)
-                    .wrapping_add(f::ROUND_CONSTANTS[i])
-                    .wrapping_add(*wi);
-                let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
-                let maj = (a & b) ^ (a & c) ^ (b & c);
-                let t2 = s0.wrapping_add(maj);
-                h = g;
-                g = ff;
-                ff = e;
-                e = dd.wrapping_add(t1);
-                dd = c;
-                c = b;
-                b = a;
-                a = t1.wrapping_add(t2);
-            }
-            let v = [a, b, c, dd, e, ff, g, h];
-            let mut out = [0u32; 8];
-            for j in 0..8 {
-                out[j] = state[j].wrapping_add(v[j]);
-            }
-            out
-        }
-
-        // This circuit's recurrence: two sequences, `D_i = A_{i-3}` and
-        // `H_i = E_{i-3}`, and the carries the witness commits.
-        fn two_word(state: [u32; 8], block: [u32; 16]) -> ([u32; 8], u32, u32, u32, u32) {
-            let mut w = [0u32; 64];
-            w[..16].copy_from_slice(&block);
-            let mut cw_max = 0;
-            for i in 16..64 {
-                let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
-                let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-                let raw = s1 as u64 + w[i - 7] as u64 + s0 as u64 + w[i - 16] as u64;
-                cw_max = cw_max.max((raw >> 32) as u32);
-                w[i] = raw as u32;
-            }
-            // `A[i + 3]` holds `A_i`, so index 0..3 are `A_{-3}..A_{-1}`.
-            let mut aa = vec![state[3], state[2], state[1], state[0]];
-            let mut ee = vec![state[7], state[6], state[5], state[4]];
-            let (mut ca_max, mut ce_max) = (0u32, 0u32);
-            for i in 0..64 {
-                let (ai, am1, am2, am3) = (aa[i + 3], aa[i + 2], aa[i + 1], aa[i]);
-                let (ei, em1, em2, em3) = (ee[i + 3], ee[i + 2], ee[i + 1], ee[i]);
-                let s1 = ei.rotate_right(6) ^ ei.rotate_right(11) ^ ei.rotate_right(25);
-                let ch = em2 ^ (ei & (em1 ^ em2));
-                let t1 =
-                    em3 as u64 + s1 as u64 + ch as u64 + f::ROUND_CONSTANTS[i] as u64 + w[i] as u64;
-                let s0 = ai.rotate_right(2) ^ ai.rotate_right(13) ^ ai.rotate_right(22);
-                let maj = (ai & am1) ^ (ai & am2) ^ (am1 & am2);
-                let t2 = s0 as u64 + maj as u64;
-                ca_max = ca_max.max(((t1 + t2) >> 32) as u32);
-                ce_max = ce_max.max(((am3 as u64 + t1) >> 32) as u32);
-                aa.push((t1 + t2) as u32);
-                ee.push((am3 as u64 + t1) as u32);
-            }
-            let v = [
-                aa[67], aa[66], aa[65], aa[64], ee[67], ee[66], ee[65], ee[64],
-            ];
-            let mut out = [0u32; 8];
-            let mut co_max = 0u32;
-            for j in 0..8 {
-                let raw = state[j] as u64 + v[j] as u64;
-                co_max = co_max.max((raw >> 32) as u32);
-                out[j] = raw as u32;
-            }
-            (out, ca_max, ce_max, cw_max, co_max)
-        }
-
-        let (mut ca, mut ce, mut cw, mut co) = (0u32, 0u32, 0u32, 0u32);
-        for seed in 0..48u32 {
-            let state: [u32; 8] =
-                core::array::from_fn(|j| f::IV[j] ^ seed.wrapping_mul(0x9e37_79b9 + j as u32));
-            let block: [u32; 16] =
-                core::array::from_fn(|j| seed.wrapping_mul(2_654_435_761) ^ (j as u32 * 40_503));
-            let (got, a, e, wv, o) = two_word(state, block);
-            assert_eq!(got, reference(state, block), "seed {seed}");
-            ca = ca.max(a);
-            ce = ce.max(e);
-            cw = cw.max(wv);
-            co = co.max(o);
-        }
-        // The committed carry widths are derived ceilings, not observations;
-        // this is the observation confirming they are not too small.
-        assert!(ca < (1 << f::CARRY_A_BITS), "ca reached {ca}");
-        assert!(ce < (1 << f::CARRY_E_BITS), "ce reached {ce}");
-        assert!(cw < (1 << f::CARRY_W_BITS), "cw reached {cw}");
-        assert!(co < (1 << f::CARRY_OUT_BITS), "co reached {co}");
+    fn the_witness_names_are_the_layout() {
+        let names = witness_names();
+        assert_eq!(names.len(), WITNESS_COLUMNS);
+        let mut sorted = names.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), names.len(), "a name is used twice");
+        assert_eq!(names[at(round_col(1, Round::Bs1Mx, 0))], "r1_bs1_mx");
+        assert_eq!(names[at(sched_col(3, Sched::Ss1Z, 2))], "s3_ss1_z_b2");
+        assert_eq!(names[at(a_byte(-2, 1))], "am2_b1");
+        assert_eq!(names[at(w_byte(14, 3))], "w14_b3");
+        assert_eq!(names[at(written_hi(3))], "w24_written_hi");
     }
 
-    /// Every operand of every three-way combination falls inside the carried
-    /// ranges — derived by walking all 960 of them, not asserted.
-    ///
-    /// The ranges are what make the carried-bit block exactly as wide as gate
-    /// list 1 reads. One too wide is a column `validate` refuses; one too
-    /// narrow is an out-of-layer read it also refuses, so this test is the
-    /// reason neither happens silently when a rotation constant changes.
+    /// The circuit builds at its channel floor, and at no lower height.
     #[test]
-    fn every_carried_bit_is_read() {
-        let mut seen = 0usize;
-        for k in 0..XORS {
-            let kind = xor_kind(k);
-            for t in 0..BITS {
-                for which in 0..3 {
-                    let Some(b) = xor_operand(kind, t, which) else {
-                        continue;
-                    };
-                    seen += 1;
-                    match b {
-                        CarriedBit::A(i, _) => {
-                            assert!((A_BIT_FIRST..=A_BIT_LAST).contains(&i), "A_{i}")
-                        }
-                        CarriedBit::E(i, _) => {
-                            assert!((E_BIT_FIRST..=E_BIT_LAST).contains(&i), "E_{i}")
-                        }
-                        CarriedBit::W(i, _) => {
-                            assert!((W_BIT_FIRST..=W_BIT_LAST).contains(&i), "W_{i}")
-                        }
-                    }
-                    assert!(b.index() < carried_bits(), "{} out of block", b.name());
-                }
-            }
-        }
-        // Every combination has three operands a bit, less the bits the two
-        // `SHR`s shift away: `sigma0` loses its top 3 and `sigma1` its top 10,
-        // once per derived word.
-        assert_eq!(
-            seen,
-            XORS * BITS * 3 - DERIVED_WORDS * (SMALL_SIGMA0.1 + SMALL_SIGMA1.1),
-            "operands, less the shifts"
-        );
-    }
-
-    /// Every layer's width is its parts', and the memory tree halves cleanly.
-    ///
-    /// The offsets in this module are arithmetic — `work_base(layer)` is the
-    /// tree's width plus the carried block's — so a layer one column out would
-    /// read a neighbour's column with no other symptom. This is the check that
-    /// makes that impossible rather than unlikely.
-    #[test]
-    fn every_layer_is_as_wide_as_its_parts() {
-        let a = artifact(8);
-        assert_eq!(a.layers[0].width as usize, layer1_width(), "layer 1");
-        assert_eq!(
-            a.layers[1].width as usize,
-            tree_width(2) + carried_scalars() + XORS,
-            "layer 2: the halved tree, the carried scalars, and one value a XOR"
-        );
-        // Layers 3 upward are the memory tree alone, halving to two.
-        let mut expect = tree_width(3);
-        for k in 2..a.layers.len() {
-            if a.layers[k].halving {
-                assert_eq!(a.layers[k].width, 2, "halving layer {k}");
-            } else {
-                assert_eq!(a.layers[k].width as usize, expect, "tree layer {k}");
-                expect = if expect > 2 { expect / 2 } else { 2 };
-            }
-        }
-        assert_eq!(a.committed().len(), MEMORY_COLUMNS + WITNESS_COLUMNS);
-    }
-
-    /// `Ch`, `Maj` and the three-way XOR, as the circuit spells them, over
-    /// every input — eight each, so exhaustive rather than sampled.
-    #[test]
-    fn the_degree_two_spellings_are_the_boolean_functions() {
-        for x in 0..2u32 {
-            for y in 0..2u32 {
-                for z in 0..2u32 {
-                    assert_eq!(z + x * y - x * z, (x & y) ^ ((1 - x) & z), "ch");
-                    let pab = x * y;
-                    assert_eq!(
-                        pab + z * (x + y - 2 * pab),
-                        (x & y) ^ (x & z) ^ (y & z),
-                        "maj"
-                    );
-                    let p = x * y;
-                    assert_eq!(
-                        (x + y - 2 * p) + z - 2 * z * (x + y - 2 * p),
-                        x ^ y ^ z,
-                        "xor3"
-                    );
-                }
-            }
-        }
+    fn the_circuit_builds_at_its_channel_floor_and_no_lower() {
+        let a = artifact(16);
+        assert_eq!(a.trace_vars, 16);
+        assert!(crate::family_circuit(constants::family::SHA256_COMP, 14).is_none());
+        assert!(crate::family_circuit(constants::family::SHA256_COMP, 16).is_some());
     }
 }
