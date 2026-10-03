@@ -263,6 +263,15 @@ fn the_vendored_crates_are_the_ones_a_guest_patches() {
 /// deleting either line from `[profile.release]`, switching one off in
 /// `[profile.dev]`, or letting the two drift apart on anything else — is
 /// caught by nothing else in the repository.
+///
+/// **One exception since S26e, and the test pins its exact shape**: a single
+/// `[profile.release.package."*"]` table whose single key is
+/// `debug-assertions = false`. It reaches dependencies only — every guest keeps
+/// its own assertions — and only at `--release`, so no committed fixture moves;
+/// `overflow-checks` is inherited and stays on, which is the half of this rule
+/// that is about what a guest computes. `guests/Cargo.toml` says why it is
+/// worth 6.8% of a stateless block's cycles. A second override, one on the dev
+/// profile, or one that touches `overflow-checks` fails here.
 #[test]
 fn the_guest_profiles_differ_only_in_opt_level() {
     let text = fs::read_to_string(root().join("guests/Cargo.toml"))
@@ -330,4 +339,22 @@ fn the_guest_profiles_differ_only_in_opt_level() {
         }
         let _ = v;
     }
+
+    // S26e's one package override, and nothing else in it.
+    let overrides: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with("[profile.") && l.contains(".package."))
+        .collect();
+    assert_eq!(
+        overrides,
+        ["[profile.release.package.\"*\"]"],
+        "guests/Cargo.toml's one package override is the release profile's \"*\""
+    );
+    assert_eq!(
+        table("release.package.\"*\""),
+        [("debug-assertions".to_string(), "false".to_string())],
+        "the override switches dependencies' debug assertions off and nothing \
+         else: overflow-checks is inherited, and on"
+    );
 }

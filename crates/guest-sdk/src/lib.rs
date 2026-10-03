@@ -544,26 +544,49 @@ pub mod recursion {
         /// built here is canonical in **every** lane at every group — which is
         /// one fewer thing for a caller to get right, at 48 stores a call
         /// against the three modular multiplications this replaces.
+        ///
+        /// **One pass, every word written once** (S26e): an array literal in
+        /// the order the `const` assertions above pin, where S26c zeroed all
+        /// 388 bytes and then copied the six input lanes over 192 of them.
+        /// `k256`'s point additions call this about 27,000 times on one
+        /// stateless block.
+        ///
+        /// The zeros are one value through `core::hint::black_box`, which
+        /// changes no word and is there for the code it produces: as 48
+        /// literal zeros LLVM merges them into a 192-byte `memset` call, which
+        /// measured 163 cycles a frame against 48 plain stores.
+        #[inline]
         pub fn of(
             codes: &[u32; ec::GROUPS],
             p: &[[u32; ec::LIMBS]; 3],
             q: &[[u32; ec::LIMBS]; 3],
         ) -> EcAddFrame {
-            let mut frame = EcAddFrame([0u32; ec::FRAME_WORDS]);
-            frame.0[ec::SELECTOR_WORD] = codes[0];
-            let w = &mut frame.0;
-            w[ec::X1_WORD..ec::X1_WORD + ec::LIMBS].copy_from_slice(&p[0]);
-            w[ec::Y1_WORD..ec::Y1_WORD + ec::LIMBS].copy_from_slice(&p[1]);
-            w[ec::Z1_WORD..ec::Z1_WORD + ec::LIMBS].copy_from_slice(&p[2]);
-            w[ec::X2_WORD..ec::X2_WORD + ec::LIMBS].copy_from_slice(&q[0]);
-            w[ec::Y2_WORD..ec::Y2_WORD + ec::LIMBS].copy_from_slice(&q[1]);
-            w[ec::Z2_WORD..ec::Z2_WORD + ec::LIMBS].copy_from_slice(&q[2]);
-            frame
+            let [x1, y1, z1] = p;
+            let [x2, y2, z2] = q;
+            let o = core::hint::black_box(0u32);
+            #[rustfmt::skip]
+            let words = [
+                codes[0],
+                x1[0], x1[1], x1[2], x1[3], x1[4], x1[5], x1[6], x1[7],
+                y1[0], y1[1], y1[2], y1[3], y1[4], y1[5], y1[6], y1[7],
+                z1[0], z1[1], z1[2], z1[3], z1[4], z1[5], z1[6], z1[7],
+                x2[0], x2[1], x2[2], x2[3], x2[4], x2[5], x2[6], x2[7],
+                y2[0], y2[1], y2[2], y2[3], y2[4], y2[5], y2[6], y2[7],
+                z2[0], z2[1], z2[2], z2[3], z2[4], z2[5], z2[6], z2[7],
+                o, o, o, o, o, o, o, o,
+                o, o, o, o, o, o, o, o,
+                o, o, o, o, o, o, o, o,
+                o, o, o, o, o, o, o, o,
+                o, o, o, o, o, o, o, o,
+                o, o, o, o, o, o, o, o,
+            ];
+            EcAddFrame(words)
         }
 
         /// The sum, after a successful [`ec_add_complete`]: the third group
         /// writes `X3`, `Y3` and `Z3` over the `X1`, `Y1` and `Z1` lanes the
         /// first two groups have by then finished reading.
+        #[inline]
         pub fn result(&self) -> [[u32; ec::LIMBS]; 3] {
             let limbs = |first: usize| core::array::from_fn(|k| self.0[first + k]);
             [limbs(ec::X1_WORD), limbs(ec::Y1_WORD), limbs(ec::Z1_WORD)]

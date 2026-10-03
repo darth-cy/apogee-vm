@@ -981,36 +981,31 @@ mod apogee {
     /// not a refusal.
     const _: () = assert!(CURVE_EQUATION_B_SINGLE == 7);
 
-    /// A field element's eight little-endian 32-bit limbs, **below `p`**.
+    /// `1` as frame words: the `Z` an affine operand lifts to.
+    const ONE: [u32; 8] = [1, 0, 0, 0, 0, 0, 0, 0];
+
+    /// A projective point's three coordinates as frame lanes, each **below
+    /// `p`**, which the circuit enforces and the executor refuses by name.
     ///
-    /// `to_bytes` fully normalizes before encoding, so the operand bound the
-    /// circuit enforces — and the executor refuses by name — holds by this
-    /// function's construction rather than by a caller's promise. That is the
-    /// difference from `field_10x26`'s `operand`, which has a fast path worth
-    /// taking because it runs once per multiply; this runs six times per
-    /// addition against twelve multiplies removed.
-    fn limbs(x: FieldElement) -> [u32; 8] {
-        let b = x.to_bytes();
-        core::array::from_fn(|k| {
-            let at = 32 - 4 * (k + 1);
-            u32::from_be_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]])
-        })
-    }
-
-    /// [`limbs`]' inverse on a value below `p`, which every lane the delegation
-    /// writes is. `from_bytes_unchecked` records it as normalized, and it is.
-    fn field(v: &[u32; 8]) -> FieldElement {
-        let mut b = [0u8; 32];
-        for (k, limb) in v.iter().enumerate() {
-            let at = 32 - 4 * (k + 1);
-            b[at..at + 4].copy_from_slice(&limb.to_be_bytes());
-        }
-        FieldElement::from_bytes_unchecked(&b)
-    }
-
-    /// A projective point's three coordinates as frame lanes.
+    /// `FieldElement::to_words` normalizes only a coordinate that is not
+    /// already canonical, and every coordinate this module hands back is, so
+    /// a chain of additions — `lincomb`'s whole shape — pays no normalization
+    /// at all. Until S26e this went through `to_bytes`, which normalizes
+    /// unconditionally and encodes a big-endian byte array the frame then
+    /// decoded straight back: 478 cycles a coordinate against about 30.
     fn lanes(p: &ProjectivePoint) -> [[u32; 8]; 3] {
-        [limbs(p.x), limbs(p.y), limbs(p.z)]
+        [p.x.to_words(), p.y.to_words(), p.z.to_words()]
+    }
+
+    /// The frame's three result lanes as a projective point. Each is below
+    /// `p`, so each is a normalized field element.
+    fn point(frame: &EcAddFrame) -> ProjectivePoint {
+        let [x, y, z] = frame.result();
+        ProjectivePoint {
+            x: FieldElement::from_words(&x),
+            y: FieldElement::from_words(&y),
+            z: FieldElement::from_words(&z),
+        }
     }
 
     /// `a + b` through the delegation, or through this file's own Algorithm 7.
@@ -1023,7 +1018,7 @@ mod apogee {
     pub(super) fn add(a: &ProjectivePoint, b: &ProjectivePoint) -> ProjectivePoint {
         let mut frame = EcAddFrame::of(&SECP256K1_GROUPS, &lanes(a), &lanes(b));
         match ec_add_complete(&mut frame, &SECP256K1_GROUPS) {
-            true => point(&frame.result()),
+            true => point(&frame),
             false => a.add_inner(b),
         }
     }
@@ -1034,12 +1029,12 @@ mod apogee {
     /// identity lifts to a point that is neither the projective identity nor on
     /// the curve, and no complete formula fixes that.
     pub(super) fn add_mixed(a: &ProjectivePoint, b: &AffinePoint) -> ProjectivePoint {
-        let q = [limbs(b.x), limbs(b.y), limbs(FieldElement::ONE)];
+        let q = [b.x.to_words(), b.y.to_words(), ONE];
         let mut frame = EcAddFrame::of(&SECP256K1_GROUPS, &lanes(a), &q);
         if !ec_add_complete(&mut frame, &SECP256K1_GROUPS) {
             return a.add_mixed_inner(b);
         }
-        let mut ret = point(&frame.result());
+        let mut ret = point(&frame);
         ret.conditional_assign(a, b.is_identity());
         ret
     }
@@ -1055,17 +1050,8 @@ mod apogee {
         let p = lanes(a);
         let mut frame = EcAddFrame::of(&SECP256K1_GROUPS, &p, &p);
         match ec_add_complete(&mut frame, &SECP256K1_GROUPS) {
-            true => point(&frame.result()),
+            true => point(&frame),
             false => a.double_inner(),
-        }
-    }
-
-    /// The frame's three result lanes as a projective point.
-    fn point(v: &[[u32; 8]; 3]) -> ProjectivePoint {
-        ProjectivePoint {
-            x: field(&v[0]),
-            y: field(&v[1]),
-            z: field(&v[2]),
         }
     }
 }

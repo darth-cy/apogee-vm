@@ -121,7 +121,7 @@ pub const PINS: [(&str, &str); 26] = [
     ),
     (
         "mod-mul-ops.elf",
-        "b2dd3c624eb8f6bb1185f2ec3f34ca59dace7b77498542047ef297a123079b8c",
+        "0a501f3aa0ae5fc1004941c2ff5ccbef20dd8bdd3b003efb9078cb52bec1ed99",
     ),
     (
         "sha256-ops.elf",
@@ -129,7 +129,7 @@ pub const PINS: [(&str, &str); 26] = [
     ),
     (
         "ec-ops.elf",
-        "9cf40fb34e30b3c65bf2655a1175fc39fd7cd3461265450306229af45100ea2f",
+        "9c4726465e7804fe02941e10dc80788370174842aa980af3262a64e5ace0de37",
     ),
 ];
 

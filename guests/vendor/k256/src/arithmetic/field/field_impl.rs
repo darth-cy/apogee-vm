@@ -80,6 +80,19 @@ impl FieldElementImpl {
         self.value.to_bytes()
     }
 
+    /// apogee-vm: the frame words, whatever the magnitude — the conversion
+    /// normalizes when it has to, so it asks nothing of the tracked state.
+    #[cfg(target_arch = "riscv32")]
+    pub(crate) fn to_words(&self) -> [u32; 8] {
+        self.value.to_words()
+    }
+
+    /// apogee-vm: a frame lane, which is below `p` and so normalized.
+    #[cfg(target_arch = "riscv32")]
+    pub(crate) fn from_words(w: &[u32; 8]) -> Self {
+        Self::new_normalized(&FieldElementUnsafeImpl::from_words(w))
+    }
+
     pub fn normalize_weak(&self) -> Self {
         Self::new_weak_normalized(&self.value.normalize_weak())
     }

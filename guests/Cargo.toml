@@ -27,9 +27,11 @@ members = ["fib", "echo", "rvc-dense", "amm", "orderbook", "vault", "atomics", "
 #           Patched here rather than in `ark-bn254` because that crate's
 #           `#[derive(MontConfig)]` generates its own multiply.
 #
-# The vendored crate is a workspace member by cargo's own rule (a path dependency
-# inside the workspace directory), which is why `cargo fmt --all` covers it; its
-# `[features]` table is the one `crates/prover/tests/one_feature.rs` skips.
+# The vendored crates are NOT workspace members -- `cargo metadata` lists the 23
+# guests and nothing else, a `[patch]` path being no member's dependency -- so the
+# release profile's `"*"` override below reaches them. `cargo fmt --all` covers
+# them because it formats local path dependencies too; their `[features]` tables
+# are the ones `crates/prover/tests/one_feature.rs` skips.
 [patch.crates-io]
 k256 = { path = "vendor/k256" }
 ark-ff = { path = "vendor/ark-ff" }
@@ -84,3 +86,21 @@ incremental = false
 codegen-units = 1
 overflow-checks = true
 debug-assertions = true
+
+# One exception, and only at `--release` (S26e): a DEPENDENCY's
+# `debug_assert!`s are off. `"*"` is every package that is not a guest -- the
+# crates.io dependencies, the vendored ones, and this repository's own
+# guest-sdk, field and transcript -- so every guest keeps its own assertions,
+# and `overflow-checks` stays on everywhere, a package override inheriting it.
+#
+# It is not a semantic change of the kind the release profile's comment
+# forbids. A dependency's debug assertion is that crate's check of its own
+# invariant: one that fires is a bug in the dependency, and the image is the
+# program its identity names either way. What it buys is cycles: in the
+# stateless guest on block 257510 it is 23.8M of 349.3M, 6.8% -- k256 drops
+# its magnitude-tracking debug field element for the plain 10x26 one, and
+# `core`'s inlined precondition checks (`ub_checks`) compile out of every
+# dependency's copies and slices. The dev profile, which builds every
+# committed fixture, keeps them, so no committed ELF moves.
+[profile.release.package."*"]
+debug-assertions = false

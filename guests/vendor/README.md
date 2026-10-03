@@ -14,10 +14,12 @@ revm.rs`' native revm oracle resolves every crate here from crates.io, unpatched
 
 Each crate below is a **verbatim** copy of its crates.io release with the two
 or three files named against it changed and nothing else, so the diff a reviewer has to
-read is that list and not a crate. `cargo fmt --all` covers the tree (cargo makes
-a path dependency inside a workspace directory a member of it) and has never had
+read is that list and not a crate. `cargo fmt --all` covers the tree — it formats
+local path dependencies, and a vendored crate is one of those and **not** a
+workspace member, `cargo metadata` listing the 23 guests alone — and has never had
 anything to say about it; the upstream sources are rustfmt-clean and so are the
-patches. Their own `[features]` tables are the ones
+patches. Not being members is also why `guests/Cargo.toml`'s release-profile
+`"*"` override reaches them (S26e). Their own `[features]` tables are the ones
 `crates/prover/tests/one_feature.rs` skips, and
 `the_vendored_crates_are_the_ones_a_guest_patches` holds every directory here to
 being a crate that `[patch.crates-io]` actually names.
@@ -31,7 +33,7 @@ they are the price of being able to read the code that runs.
 
 ---
 
-## `k256` 0.13.4 — S26, extended at S26b and S26c
+## `k256` 0.13.4 — S26, extended at S26b, S26c and S26e
 
 Upstream `https://github.com/RustCrypto/elliptic-curves`, commit
 `5ac8f5d77f11399ff48d87b0554935f6eddda342` (`.cargo_vcs_info.json`), as published.
@@ -50,14 +52,16 @@ for the same reason — `ecrecover`'s `r^-1` is an addition chain of some 250
 scalar multiplies — and it is cheaper to route than the field half, a `Scalar`
 being already reduced and already eight 32-bit limbs.
 
-**The three changed files.**
+**The changed files.**
 
 | file | change |
 | --- | --- |
 | `Cargo.toml` | one `[target.'cfg(target_arch = "riscv32")'.dependencies]` entry on `guest-sdk`. A target dependency and never a cargo feature, which is how `crates/field` and `crates/transcript` reach their own shims |
-| `src/arithmetic/field/field_10x26.rs` | `mul` and `square` select `apogee::mul_mod_p` under `cfg(target_arch = "riscv32")` and are otherwise untouched, plus a new private `mod apogee` at the end of the file holding `packable`, `pack`, `unpack`, `operand` and `mul_mod_p` |
+| `src/arithmetic/field/field_10x26.rs` | `mul` and `square` select `apogee::mul_mod_p` under `cfg(target_arch = "riscv32")` and are otherwise untouched, plus a new private `mod apogee` at the end of the file holding `packable`, `pack`, `unpack`, `operand` and `mul_mod_p`; since S26e, `to_words` and `from_words` beside it, which are `operand` and `unpack` for `projective.rs` |
 | `src/arithmetic/scalar.rs` | `Scalar::mul` selects `apogee::mul_mod_n` under the same `cfg` and is otherwise untouched, plus a new private `mod apogee` at the end of the file. `Scalar::square` is `self.mul(self)` upstream, so it follows |
-| `src/arithmetic/projective.rs` | **S26c.** `add`, `add_mixed` and `double` select `apogee::{add, add_mixed, double}` under the same `cfg`; each upstream body moves down one function to `add_inner`, `add_mixed_inner` and `double_inner`, unchanged, and is the fallback. A new private `mod apogee` at the end of the file holds `limbs`, `field`, `lanes`, `point` and the three entry points. **`ProjectivePoint`'s storage is untouched** |
+| `src/arithmetic/projective.rs` | **S26c.** `add`, `add_mixed` and `double` select `apogee::{add, add_mixed, double}` under the same `cfg`; each upstream body moves down one function to `add_inner`, `add_mixed_inner` and `double_inner`, unchanged, and is the fallback. A new private `mod apogee` at the end of the file holds `lanes`, `point` and the three entry points — since S26e over `FieldElement::{to_words, from_words}`, where S26c's `limbs` and `field` went through `to_bytes` and `from_bytes_unchecked`. **`ProjectivePoint`'s storage is untouched** |
+| `src/arithmetic/field.rs`, `src/arithmetic/field/field_impl.rs` | **S26e.** `FieldElement::{to_words, from_words}` and the debug wrapper's pair, under the same `cfg`, each forwarding to `FieldElement10x26`'s; nothing else |
+| `src/arithmetic/mul.rs` | **S26e.** `LookupTable::select` selects `apogee::select`, an index, under the same `cfg`, upstream's constant-time body moving to `select_inner`, compiled only off-target, with the two `subtle` imports only it reads; and `lincomb` **borrows** its digits and tables where upstream copied both tables out of the slice on all 33 passes — the one unconditional change in this crate, and a behaviour-preserving one |
 
 **Why the projective patch is a drop-in, and why that is not luck.** Upstream's
 `ProjectivePoint::add` *is* Renes–Costello–Batina 2015 Algorithm 7 in homogeneous
@@ -78,11 +82,13 @@ residue. Three consequences worth knowing:
   here, which lifted to `(0 : 0 : 1)` is neither the projective identity nor a
   curve point, so no complete formula rescues it — upstream's
   `conditional_assign` is what does, and it is still there.
-- **The operand bound costs a normalization per coordinate.** `FieldElement::
-  to_bytes` fully normalizes before encoding, so the circuit's `a < m` holds by
-  construction. There is no fast path as there is in `field_10x26`'s `operand`:
-  this runs six times per addition against twelve multiplies removed, where that
-  runs twice per multiply.
+- **The operand bound costs a normalization only when it has to.** Since S26e a
+  coordinate crosses the frame through `field_10x26`'s `operand`, which packs a
+  value that is already canonical — every coordinate the delegation returns is —
+  and normalizes the rest. S26c went through `to_bytes`, which normalizes
+  unconditionally and encodes big-endian bytes the frame decoded straight back:
+  478 cycles a coordinate and 408 back, six and three times an addition, where the
+  words cost about 30. On stateless block 257510 that glue was 35% of the guest.
 
 **And it changes what `guests/mod-mul-ops` declares.** That guest's `k256` group
 arithmetic now reaches the `EC_ADD` shim as well, so it declares two delegation
@@ -93,10 +99,15 @@ are re-pinned; `docs/handoff/S26c-sha256-ec.md` records the numbers.
 `FieldElementImpl` by `cfg(debug_assertions)`: the magnitude-tracking wrapper in
 `field_impl.rs` when they are on, the bare `FieldElement10x26` when they are off.
 Both route through `FieldElement10x26::mul`, so patching the one file covers both
-configurations. `guests/Cargo.toml` pins `debug-assertions = true` in **both**
-profiles, so the wrapper is what a guest gets either way, and it records the
-delegated result as magnitude 1 and not normalized — which a fully normalized
-value also is.
+configurations — **and both are live since S26e**: `guests/Cargo.toml` switches a
+dependency's debug assertions off at `--release`, so a release guest gets the bare
+element and a dev one, every committed fixture, the wrapper. The wrapper records
+the delegated product as magnitude 1 and not normalized, which a fully normalized
+value also is, and a frame lane read back through `from_words` as normalized.
+The bare element was 2.5% *slower* than the wrapper when it was switched on alone,
+because its `conditional_select` is the hot path of upstream's constant-time
+`LookupTable::select`; S26e's indexed `select` removed that call, which is why the
+two changes are measured together.
 
 **What the field patch has to get right.** A field element is ten 26-bit limbs;
 the frame carries eight 32-bit ones. `pack` and `unpack` are that change of base,
@@ -175,7 +186,7 @@ removes the BLS12-381 path; the arkworks one is not optional.
 one `Crypto` implementation, `DefaultCrypto`, so `crypto()` devirtualizes as
 before and the image grows by **10,568 bytes** over the pre-S26c one.
 
-**The three changed files.**
+**The changed files.**
 
 | file | change |
 | --- | --- |

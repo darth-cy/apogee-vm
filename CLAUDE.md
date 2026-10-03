@@ -378,7 +378,12 @@ guests. Cargo's default release profile would also turn `overflow-checks` off, w
 a performance setting here: `u32::MAX + 1` then commits `00000000` to the journal where the
 dev build panics and exits 101, and the journal is the *committed public output*. So
 `guests/Cargo.toml` pins both profiles to the same semantics — they differ only in
-`opt-level`.
+`opt-level` and, since S26e, in **one** release-only package override: a dependency's
+`debug-assertions` are off at `--release` (`[profile.release.package."*"]`), every guest
+keeping its own and `overflow-checks` staying on everywhere. A dependency's debug assertion
+is its own invariant check, so it changes no journal an honest dependency computes, and it
+is worth 6.8% of a stateless block's cycles; `crates/prover/tests/one_feature.rs` pins the
+override's exact shape. The dev profile, which builds every committed fixture, keeps them.
 
 A guest ELF is not byte-reproducible across machines: rustc embeds absolute paths in
 panic-location strings. Two clean builds on one machine do agree, so the committed `.elf`

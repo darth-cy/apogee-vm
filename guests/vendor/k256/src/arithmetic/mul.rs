@@ -50,7 +50,7 @@ use elliptic_curve::ops::LinearCombinationExt as LinearCombination;
 use elliptic_curve::{
     ops::MulByGenerator,
     scalar::IsHigh,
-    subtle::{Choice, ConditionallySelectable, ConstantTimeEq},
+    subtle::ConditionallySelectable,
 };
 
 #[cfg(feature = "precomputed-tables")]
@@ -71,8 +71,23 @@ impl From<&ProjectivePoint> for LookupTable {
 }
 
 impl LookupTable {
-    /// Given -8 <= x <= 8, returns x * p in constant time.
+    /// Given -8 <= x <= 8, returns x * p.
+    ///
+    /// apogee-vm: on the guest target this is [`apogee::select`], an index and
+    /// not a scan; elsewhere it is upstream's constant-time body, unchanged.
     fn select(&self, x: i8) -> ProjectivePoint {
+        #[cfg(target_arch = "riscv32")]
+        let out = apogee::select(self, x);
+        #[cfg(not(target_arch = "riscv32"))]
+        let out = self.select_inner(x);
+        out
+    }
+
+    /// Given -8 <= x <= 8, returns x * p in constant time.
+    #[cfg(not(target_arch = "riscv32"))]
+    fn select_inner(&self, x: i8) -> ProjectivePoint {
+        use elliptic_curve::subtle::{Choice, ConstantTimeEq};
+
         debug_assert!(x >= -8);
         debug_assert!(x <= 8);
 
@@ -337,10 +352,13 @@ fn lincomb(
         )
     });
 
+    // apogee-vm: the digits and tables are borrowed, where upstream copies
+    // both tables out of the slice on every one of the 33 passes -- two
+    // kilobytes of `memcpy` a pass for a value it only reads.
     let mut acc = ProjectivePoint::IDENTITY;
     for component in 0..xks.len() {
-        let (digit1, digit2) = digits[component];
-        let (table1, table2) = tables[component];
+        let (digit1, digit2) = &digits[component];
+        let (table1, table2) = &tables[component];
 
         acc += &table1.select(digit1.0[32]);
         acc += &table2.select(digit2.0[32]);
@@ -352,8 +370,8 @@ fn lincomb(
         }
 
         for component in 0..xks.len() {
-            let (digit1, digit2) = digits[component];
-            let (table1, table2) = tables[component];
+            let (digit1, digit2) = &digits[component];
+            let (table1, table2) = &tables[component];
 
             acc += &table1.select(digit1.0[i]);
             acc += &table2.select(digit2.0[i]);
@@ -447,6 +465,38 @@ impl MulAssign<Scalar> for ProjectivePoint {
 impl MulAssign<&Scalar> for ProjectivePoint {
     fn mul_assign(&mut self, rhs: &Scalar) {
         *self = mul(self, rhs);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// apogee-vm's vendored change. `guests/vendor/README.md` is the account of it.
+// ---------------------------------------------------------------------------
+
+#[cfg(target_arch = "riscv32")]
+mod apogee {
+    use super::{LookupTable, ProjectivePoint};
+
+    /// `x · p` for `-8 <= x <= 8`, by **index**.
+    ///
+    /// Upstream scans all eight entries with `conditional_assign` and negates
+    /// under a mask, so its time does not depend on `x`. In a zkVM that buys
+    /// nothing: whoever proves an execution holds every value it computes, so
+    /// there is no observer for a timing difference to inform. It cost 3,515
+    /// cycles a call on a stateless block — eight 120-byte conditional
+    /// assignments and an unconditional negation — and `lincomb` calls it
+    /// sixty-six times a scalar.
+    ///
+    /// The result is the representative upstream's returns: the entry itself,
+    /// or its negation by the same `Neg`.
+    pub(super) fn select(table: &LookupTable, x: i8) -> ProjectivePoint {
+        let p = match x.unsigned_abs() {
+            0 => return ProjectivePoint::IDENTITY,
+            n => table.0[usize::from(n) - 1],
+        };
+        match x < 0 {
+            true => -p,
+            false => p,
+        }
     }
 }
 
