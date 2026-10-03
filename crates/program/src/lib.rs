@@ -63,6 +63,10 @@ pub const FAMILIES: [FamilyId; family::COUNT as usize] = [
     family::MOD_MUL,
     family::SHA256_COMP,
     family::EC_ADD,
+    family::FIELD_WINDOWS,
+    family::FR_OP,
+    family::P2_FIELD,
+    family::FIELD_IO,
 ];
 
 /// Every **delegation** family, with the ecall number that invokes it, its
@@ -75,6 +79,11 @@ pub const FAMILIES: [FamilyId; family::COUNT as usize] = [
 /// second copy of them.
 pub const DELEGATIONS: [(FamilyId, u32, u8, usize); constants::delegation::TYPES.len()] =
     constants::delegation::TYPES;
+
+/// The delegation families that read and write the field memory: declaring
+/// any of them brings `FIELD_WINDOWS` into the config, and with it the
+/// recursion format (`docs/spec/recursion.md` §1.1).
+pub const FIELD_DELEGATIONS: [FamilyId; 3] = [family::FR_OP, family::P2_FIELD, family::FIELD_IO];
 
 /// The family that answers `number`, or `None` if it is not a delegation call.
 pub fn delegation_family(number: u32) -> Option<FamilyId> {
@@ -111,6 +120,18 @@ pub fn delegation_frame_words(family: FamilyId) -> Option<usize> {
         .map(|(.., w)| *w)
 }
 
+/// How many accesses a `family` row makes besides its frame: the recursion
+/// families' field cells and data words (`docs/spec/recursion.md` §3-§5), and 0
+/// for every other family.
+pub fn delegation_accesses(family: FamilyId) -> usize {
+    match family {
+        family::FR_OP => constants::fr_op::ACCESSES,
+        family::P2_FIELD => constants::p2_field::ACCESSES,
+        family::FIELD_IO => constants::field_io::ACCESSES,
+        _ => 0,
+    }
+}
+
 /// Whether `family`'s rows are cycles, and so whether it claims pcs.
 ///
 /// The two coincide and always will: a family whose rows are cycles is one the
@@ -141,6 +162,10 @@ pub fn family_name(family: FamilyId) -> &'static str {
         family::MOD_MUL => "MOD_MUL",
         family::SHA256_COMP => "SHA256_COMP",
         family::EC_ADD => "EC_ADD",
+        family::FIELD_WINDOWS => "FIELD_WINDOWS",
+        family::FR_OP => "FR_OP",
+        family::P2_FIELD => "P2_FIELD",
+        family::FIELD_IO => "FIELD_IO",
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -285,7 +310,11 @@ pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
         | family::EC_ADD
         | family::PUBLIC_INPUT
         | family::PUBLIC_OUTPUT
-        | family::ADVICE_WINDOWS => &[],
+        | family::ADVICE_WINDOWS
+        | family::FIELD_WINDOWS
+        | family::FR_OP
+        | family::P2_FIELD
+        | family::FIELD_IO => &[],
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -774,12 +803,18 @@ pub fn decode_program_detaching(
         // and, since S-IO, the two public value ones and `ADVICE_WINDOWS`
         // (`docs/spec/public-values.md` §4). A delegation family is present
         // exactly when the linked binary declares it
-        // (`docs/spec/delegation.md` §7) — never because a caller asked.
+        // (`docs/spec/delegation.md` §7) — never because a caller asked. The
+        // field memory's windows follow the field families: present exactly
+        // when one of them is declared, which is what puts the program in the
+        // recursion format (`docs/spec/recursion.md` §1.1, §2.2).
+        let field = family == family::FIELD_WINDOWS
+            && declared.iter().any(|f| FIELD_DELEGATIONS.contains(f));
         let always = (family == family::INIT_TEARDOWN
             || family == family::ZERO_WINDOWS
             || family == family::ADVICE_WINDOWS
             || family == family::PUBLIC_INPUT
             || family == family::PUBLIC_OUTPUT
+            || field
             || declared.contains(&family))
             && !detached.contains(&family);
         if rows.is_empty() && !always {
@@ -1001,7 +1036,11 @@ pub fn setup_commitments(
             | family::EC_ADD
             | family::PUBLIC_INPUT
             | family::PUBLIC_OUTPUT
-            | family::ADVICE_WINDOWS => Vec::new(),
+            | family::ADVICE_WINDOWS
+            | family::FIELD_WINDOWS
+            | family::FR_OP
+            | family::P2_FIELD
+            | family::FIELD_IO => Vec::new(),
             // One column at a time: at 2^22 rows an `Fr` column is 128 MiB.
             _ => (0..table.columns.len())
                 .map(|c| cm(table, &table.column_poly(c)))

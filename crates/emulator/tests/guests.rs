@@ -777,6 +777,43 @@ fn recursion_ops_invokes_both_families() {
 /// per check but the first: since S26e the ABI is checked by one raw
 /// four-round call against FIPS 180-4's appendix, its window, and a whole
 /// sixteen-call compression.
+/// S-RECURSION's fixture, run: every `FR_OP` op, a `P2_FIELD` duplex step at
+/// each of `n = 2, 1, 0` and both `FIELD_IO` moves, held to literals the guest
+/// reads back through exports (`docs/spec/recursion.md` §2-§5). Traced too,
+/// because what a field access leaves is not an event: the invocation counts
+/// are the guest's own calls, and the cells it last wrote are the field
+/// memory's, which one field window covers.
+#[test]
+fn field_ops_checks_itself_under_the_recursion_ecalls() {
+    let execution = run(&image("field-ops"), &io(&[])).unwrap();
+    assert_eq!(
+        execution.exit_code, 14,
+        "field-ops exited {}, and 200 + i would name the check that failed",
+        execution.exit_code
+    );
+    let image = image("field-ops");
+    let (tables, config) = preprocess(&image);
+    assert!(
+        config.is_recursion(),
+        "declaring a field family is the recursion format"
+    );
+    let (traces, log, ..) = trace_run(&image, &io(&[]), &tables, &config).expect("it traces");
+    for (family, calls) in [
+        (constants::family::FR_OP, 17),
+        (constants::family::P2_FIELD, 3),
+        (constants::family::FIELD_IO, 18),
+    ] {
+        let trace = traces
+            .delegation(family)
+            .expect("a declared family has a buffer");
+        assert_eq!(trace.len(), calls, "{}", program::family_name(family));
+    }
+    let state = log.state();
+    assert_eq!(state.field_windows(1 << 20), 1);
+    // Read and never written: a read re-stamps the cell and keeps its zero.
+    assert_eq!(state.field_cell(0).map(|(_, v)| v), Some(field::Fr::ZERO));
+}
+
 #[test]
 fn sha256_ops_checks_itself_under_the_delegation_ecall() {
     let execution = run(&image("sha256-ops"), &io(&[])).unwrap();

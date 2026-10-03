@@ -116,7 +116,7 @@ pub fn input_of(name: &str) -> Vec<u8> {
         // `recursion-ops` and `shards` are the same shape — each counts its own
         // checks — and `tests/streaming.rs` streams all three.
         "addsub" | "control" | "alu" | "mem" | "keccak-test" | "recursion-ops" | "shards"
-        | "mod-mul-ops" | "sha256-ops" | "ec-ops" => Vec::new(),
+        | "mod-mul-ops" | "sha256-ops" | "ec-ops" | "field-ops" => Vec::new(),
         other => panic!("no input chosen for {other}"),
     }
 }
@@ -135,6 +135,7 @@ pub fn exit_code_of(name: &str) -> i32 {
         "mod-mul-ops" => 28,
         "sha256-ops" => 13,
         "ec-ops" => 20,
+        "field-ops" => 14,
         _ => 0,
     }
 }

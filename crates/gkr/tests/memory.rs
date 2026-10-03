@@ -15,7 +15,9 @@
 
 mod common;
 
-use common::{committed_columns, discharge, fr_base, output_claims};
+use common::{
+    assert_tape_agrees, committed_columns, discharge, fr_base, output_claims, tape_verify,
+};
 use constants::challenge_slot::{
     MEM_ALPHA_ADDR, MEM_ALPHA_TS, MEM_ALPHA_VAL, MEM_GAMMA, MEM_WINDOW_CONSTANT,
 };
@@ -421,14 +423,15 @@ fn prove_and_verify(
     let values = forward(a, base, &challenges);
     let proof = prove(a, &values, &challenges, &mut prover);
     let (mut verifier, challenges) = bind(a, base, window);
-    let claims = verify(
-        a,
-        &proof,
-        &output_claims(a, &values),
-        &challenges,
-        &mut verifier,
-    )?;
-    discharge(base, &claims).expect("an honest proof's base claims discharge");
+    let outputs = output_claims(a, &values);
+    let verdict = verify(a, &proof, &outputs, &challenges, &mut verifier);
+    let digest = witness_digest(&committed_columns(a, base));
+    let drawn: Vec<u32> = (MEM_GAMMA..=MEM_ALPHA_VAL).collect();
+    assert_tape_agrees(
+        &verdict,
+        tape_verify(a, &proof, &outputs, &challenges, digest, &drawn),
+    );
+    discharge(base, &verdict?).expect("an honest proof's base claims discharge");
     Ok(())
 }
 

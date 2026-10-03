@@ -37,8 +37,8 @@ use isa::{decode, Instr};
 use loader::{ProgramImage, Slot};
 use program::{row_kind, DecodedTables, FamilyId, VmConfig};
 use trace::{
-    AddressSpace, CycleProfile, DelegationTrace, FamilyTrace, FamilyTraces, IoStreams, MemoryEvent,
-    MemoryEventLog, MemoryState, Query, Role, Row, ROLES,
+    Access, AddressSpace, CycleProfile, DelegationTrace, FamilyTrace, FamilyTraces, IoStreams,
+    MemoryEvent, MemoryEventLog, MemoryState, Query, Role, Row, ROLES,
 };
 
 /// What a guest is given to read. **Two fields, because there are two things,
@@ -916,9 +916,32 @@ struct Cycle {
     delegation: Option<Invocation>,
 }
 
-/// One delegation invocation: the family, the frame base, and one
-/// `(address, old, new)` per frame word in frame order.
-type Invocation = (FamilyId, u32, Vec<(u32, u32, u32)>);
+/// One delegation invocation: the family, the frame base, one
+/// `(address, old, new)` per frame word in frame order, and the accesses a
+/// recursion family makes besides its frame, in the family's order.
+type Invocation = (FamilyId, u32, Vec<(u32, u32, u32)>, Vec<Option<Extra>>);
+
+/// What a delegation leaves: its frame's `(address, old, new)` words and its
+/// other accesses, an [`Invocation`] without the family and the base.
+type Delegated = (Vec<(u32, u32, u32)>, Vec<Option<Extra>>);
+
+/// One access a recursion invocation makes besides its frame
+/// (`docs/spec/recursion.md` §2.1): a field cell at its slot, or one of
+/// `FIELD_IO`'s RAM data words, which take `field_io::DATA_DELTA`.
+#[derive(Clone, Copy, Debug)]
+enum Extra {
+    Cell {
+        cell: u32,
+        delta: u64,
+        old: Fr,
+        new: Fr,
+    },
+    Word {
+        addr: u32,
+        old: u32,
+        new: u32,
+    },
+}
 
 impl Cycle {
     fn new() -> Cycle {
@@ -956,6 +979,9 @@ struct Machine<'a> {
     /// so a read there is refused loudly here rather than left to fail as an
     /// unprovable trace.
     advice_end: u32,
+    /// The field memory (`docs/spec/recursion.md` §2): a cell never written
+    /// holds 0.
+    field: HashMap<u32, Fr>,
     exit: Option<i32>,
     recorder: Option<Recorder<'a>>,
 }
@@ -983,6 +1009,7 @@ impl<'a> Machine<'a> {
             public_input: &io.input,
             advice_end: guest_memory::ADVICE_ORIGIN
                 + 4 * trace::advice_region_words(&io.advice) as u32,
+            field: HashMap::new(),
             exit: None,
             recorder: None,
         };
@@ -1211,12 +1238,7 @@ impl<'a> Machine<'a> {
     /// The one dispatch: every delegation number reaches it, and a family with
     /// no arm here is a `DELEGATIONS` row nobody implemented, which is a build
     /// error rather than a silent `-ENOSYS`.
-    fn delegate(
-        &mut self,
-        family: FamilyId,
-        pc: u32,
-        base: u32,
-    ) -> Result<Vec<(u32, u32, u32)>, EmuError> {
+    fn delegate(&mut self, family: FamilyId, pc: u32, base: u32) -> Result<Delegated, EmuError> {
         let words =
             program::delegation_frame_words(family).expect("the caller matched a delegation");
         let old = self.delegation_frame(pc, base, words)?;
@@ -1227,10 +1249,204 @@ impl<'a> Machine<'a> {
             family::MOD_MUL => mod_mul_frame(pc, &old)?,
             family::SHA256_COMP => sha256_frame(pc, &old)?,
             family::EC_ADD => ec_add_frame(pc, &old)?,
+            // The recursion families' frames are read-only: the frame is the
+            // call, and what it computes lands in the field memory or, for an
+            // export, in RAM at its own slot.
+            family::FR_OP | family::P2_FIELD | family::FIELD_IO => old.clone(),
             other => panic!("emulator: delegation family {other} has no implementation"),
         };
         assert_eq!(new.len(), words, "a delegation writes its whole frame");
-        Ok(self.delegation_writeback(base, &old, &new))
+        // The frame's slot is the first, so it is written back before an
+        // export writes its data words, which may overlap it.
+        let frame = self.delegation_writeback(base, &old, &new);
+        let extra = match family {
+            family::FR_OP => self.fr_op(pc, &old)?,
+            family::P2_FIELD => self.p2_field(pc, &old)?,
+            family::FIELD_IO => self.field_io(pc, &old)?,
+            _ => Vec::new(),
+        };
+        Ok((frame, extra))
+    }
+
+    /// Field cell `cell`'s value.
+    fn cell(&self, cell: u32) -> Fr {
+        self.field.get(&cell).copied().unwrap_or(Fr::ZERO)
+    }
+
+    /// `FR_OP` over `[op, d, a, b]` (`docs/spec/recursion.md` §3): the
+    /// accesses `a`, `b`, `d`, each `None` where the op makes none.
+    fn fr_op(&mut self, pc: u32, frame: &[u32]) -> Result<Vec<Option<Extra>>, EmuError> {
+        use constants::fr_op as f;
+        let (op, dc, ac, bc) = (
+            frame[f::OP_WORD],
+            frame[f::D_WORD],
+            frame[f::A_WORD],
+            frame[f::B_WORD],
+        );
+        let (a, b, d) = (self.cell(ac), self.cell(bc), self.cell(dc));
+        let imm = Fr::from_u64(bc as u64);
+        let (reads_a, reads_b, new) = match op {
+            f::MUL => (true, true, Some(a * b)),
+            f::ADD => (true, true, Some(a + b)),
+            f::SUB => (true, true, Some(a - b)),
+            f::MAC => (true, true, Some(d + a * b)),
+            f::INV => (true, false, Some(a.inverse().unwrap_or(Fr::ZERO))),
+            f::EQ if a == b => (true, true, None),
+            f::EQ => {
+                return Err(EmuError::DelegationFrame {
+                    pc,
+                    detail: "EQ's two cells hold different values",
+                })
+            }
+            f::IMM => (false, false, Some(imm)),
+            f::SHL => (true, false, Some(a * Fr::from_u64(1 << 32) + imm)),
+            _ => {
+                return Err(EmuError::DelegationFrame {
+                    pc,
+                    detail: "the op is not one FR_OP answers",
+                })
+            }
+        };
+        if let Some(v) = new {
+            self.field.insert(dc, v);
+        }
+        let read = |cell, delta, v| Extra::Cell {
+            cell,
+            delta,
+            old: v,
+            new: v,
+        };
+        Ok(vec![
+            reads_a.then_some(read(ac, f::DELTA_A, a)),
+            reads_b.then_some(read(bc, f::DELTA_B, b)),
+            new.map(|v| Extra::Cell {
+                cell: dc,
+                delta: f::DELTA_D,
+                old: d,
+                new: v,
+            }),
+        ])
+    }
+
+    /// `P2_FIELD` over `[n, s, x, y, d]` (`docs/spec/recursion.md` §4): one
+    /// step of `transcript::Transcript`'s duplex from the state at `s` to the
+    /// next at `d`. The accesses are the state's three lanes, `x`, `y` and the
+    /// next state's three.
+    fn p2_field(&mut self, pc: u32, frame: &[u32]) -> Result<Vec<Option<Extra>>, EmuError> {
+        use constants::p2_field as f;
+        let (n, s, x, y, d) = (
+            frame[f::N_WORD],
+            frame[f::S_WORD],
+            frame[f::X_WORD],
+            frame[f::Y_WORD],
+            frame[f::D_WORD],
+        );
+        if n > 2 || s > u32::MAX - f::STATE_CELLS || d > u32::MAX - f::STATE_CELLS {
+            return Err(EmuError::DelegationFrame {
+                pc,
+                detail: "absorbs more than the rate, or its states leave the cells",
+            });
+        }
+        let state = [self.cell(s), self.cell(s + 1), self.cell(s + 2)];
+        let (xv, yv) = (self.cell(x), self.cell(y));
+        let mut lanes = [
+            if n >= 1 { xv } else { state[0] },
+            match n {
+                2 => yv,
+                1 => Fr::ZERO,
+                _ => state[1],
+            },
+            state[2] + Fr::from_u64(n as u64),
+        ];
+        transcript::poseidon2_permute(&mut lanes);
+        let mut out: Vec<Option<Extra>> = (0..3)
+            .map(|i| {
+                Some(Extra::Cell {
+                    cell: s + i as u32,
+                    delta: f::DELTA_STATE,
+                    old: state[i],
+                    new: state[i],
+                })
+            })
+            .collect();
+        out.push((n >= 1).then_some(Extra::Cell {
+            cell: x,
+            delta: f::DELTA_X,
+            old: xv,
+            new: xv,
+        }));
+        out.push((n == 2).then_some(Extra::Cell {
+            cell: y,
+            delta: f::DELTA_Y,
+            old: yv,
+            new: yv,
+        }));
+        for (i, lane) in lanes.iter().enumerate() {
+            let cell = d + i as u32;
+            out.push(Some(Extra::Cell {
+                cell,
+                delta: f::DELTA_NEXT,
+                old: self.cell(cell),
+                new: *lane,
+            }));
+            self.field.insert(cell, *lane);
+        }
+        Ok(out)
+    }
+
+    /// `FIELD_IO` over `[op, cell, ptr]` (`docs/spec/recursion.md` §5): the
+    /// eight data words at `ptr`, then the cell.
+    fn field_io(&mut self, pc: u32, frame: &[u32]) -> Result<Vec<Option<Extra>>, EmuError> {
+        use constants::field_io as f;
+        let (op, cell, ptr) = (frame[f::OP_WORD], frame[f::CELL_WORD], frame[f::PTR_WORD]);
+        let mut addrs = [0u32; f::DATA_WORDS];
+        for (k, addr) in addrs.iter_mut().enumerate() {
+            let at = ptr
+                .checked_add(4 * k as u32)
+                .ok_or(EmuError::OutOfBounds { pc, addr: ptr })?;
+            *addr = self.data_word(pc, at, 4)?;
+        }
+        let words = addrs.map(|addr| self.word(addr));
+        let old = self.cell(cell);
+        let (new, written) = match op {
+            f::IMPORT => {
+                let mut v = Fr::ZERO;
+                for word in words.iter().rev() {
+                    v = v * Fr::from_u64(1 << 32) + Fr::from_u64(*word as u64);
+                }
+                (v, words)
+            }
+            f::EXPORT => {
+                let bytes = old.to_bytes();
+                let limbs = core::array::from_fn(|k| {
+                    u32::from_le_bytes(bytes[4 * k..4 * k + 4].try_into().expect("four bytes"))
+                });
+                (old, limbs)
+            }
+            _ => {
+                return Err(EmuError::DelegationFrame {
+                    pc,
+                    detail: "the op is not one FIELD_IO answers",
+                })
+            }
+        };
+        let mut out: Vec<Option<Extra>> = Vec::with_capacity(f::ACCESSES);
+        for k in 0..f::DATA_WORDS {
+            self.set_word(addrs[k], written[k]);
+            out.push(Some(Extra::Word {
+                addr: addrs[k],
+                old: words[k],
+                new: written[k],
+            }));
+        }
+        self.field.insert(cell, new);
+        out.push(Some(Extra::Cell {
+            cell,
+            delta: f::CELL_DELTA,
+            old,
+            new,
+        }));
+        Ok(out)
     }
 
     /// Replace a word, staging the slot-3 RAM query.
@@ -1517,13 +1733,13 @@ impl<'a> Machine<'a> {
                         return Err(EmuError::DelegationFamilyAbsent { pc, number: n });
                     }
                 }
-                let frame = self.delegate(family, pc, base)?;
+                let (frame, extra) = self.delegate(family, pc, base)?;
                 // The mirror query: the request consumes the invocation's
                 // answer tuple, whose timestamp and value are both 0
                 // (`docs/spec/delegation.md` §5). Its write-back is 0 too,
                 // which nothing constrains and the honest fill writes.
                 row.stage(Role::Delegate, base, 0, 0);
-                row.delegation = Some((family, base, frame));
+                row.delegation = Some((family, base, frame, extra));
                 0
             }
             _ => ecall::ENOSYS.wrapping_neg(),
@@ -1677,6 +1893,13 @@ impl Keep {
             Keep::Streaming(state) => state.record(space, addr, ts, read_value, write_value),
         }
     }
+
+    fn record_field(&mut self, cell: u32, ts: u64, read: Fr, write: Fr) -> u64 {
+        match self {
+            Keep::Whole(log) => log.record_field(cell, ts, read, write),
+            Keep::Streaming(state) => state.record_field(cell, ts, read, write),
+        }
+    }
 }
 
 impl<'a> Recorder<'a> {
@@ -1720,7 +1943,8 @@ impl<'a> Recorder<'a> {
         // and precede the row's roles: the log is in timestamp order
         // (`docs/spec/delegation.md` §4.1).
         let mut invocation: Vec<Query> = Vec::new();
-        if let Some((_, _, frame)) = &queries.delegation {
+        let mut accesses: Vec<Option<Access>> = Vec::new();
+        if let Some((_, _, frame, extra)) = &queries.delegation {
             for (addr, read, write) in frame {
                 let event = self.memory.record(
                     AddressSpace::Ram,
@@ -1735,6 +1959,41 @@ impl<'a> Recorder<'a> {
                     read_value: *read,
                     write_value: *write,
                 });
+            }
+            // A recursion invocation's other accesses, in its own slots: a
+            // data word is a RAM event at `DATA_DELTA`, which follows the
+            // frame's slot and precedes no role of the requesting row in the
+            // same space; a cell is the field memory's, ordered per cell
+            // (`docs/spec/recursion.md` §2.1).
+            for e in extra {
+                accesses.push(e.map(|e| match e {
+                    Extra::Word { addr, old, new } => {
+                        let event = self.memory.record(
+                            AddressSpace::Ram,
+                            addr,
+                            base + constants::field_io::DATA_DELTA,
+                            old,
+                            new,
+                        );
+                        Access {
+                            addr,
+                            read_ts: event.read_ts,
+                            read: Fr::from_u64(old as u64),
+                            write: Fr::from_u64(new as u64),
+                        }
+                    }
+                    Extra::Cell {
+                        cell,
+                        delta,
+                        old,
+                        new,
+                    } => Access {
+                        addr: cell,
+                        read_ts: self.memory.record_field(cell, base + delta, old, new),
+                        read: old,
+                        write: new,
+                    },
+                }));
             }
         }
         // The row's mirror query names the delegation family's own anchor
@@ -1768,14 +2027,14 @@ impl<'a> Recorder<'a> {
                 row.present |= 1 << role as u8;
             }
         }
-        if let Some((family, frame_base, _)) = &queries.delegation {
+        if let Some((family, frame_base, ..)) = &queries.delegation {
             let at = self
                 .traces
                 .delegations
                 .iter()
                 .position(|t| t.family == *family)
                 .expect("the ecall checked the family is in the config");
-            self.traces.delegations[at].push(cycle, *frame_base, &invocation);
+            self.traces.delegations[at].push(cycle, *frame_base, &invocation, &accesses);
             self.deleg_rows[at] += 1;
             self.flush_delegation(at);
         }

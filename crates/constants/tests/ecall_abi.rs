@@ -32,6 +32,9 @@ fn constants_table() -> BTreeMap<&'static str, u32> {
         ("PRECOMPILE_MOD_MUL", ecall::PRECOMPILE_MOD_MUL),
         ("PRECOMPILE_SHA256_COMP", ecall::PRECOMPILE_SHA256_COMP),
         ("PRECOMPILE_EC_ADD", ecall::PRECOMPILE_EC_ADD),
+        ("PRECOMPILE_FR_OP", ecall::PRECOMPILE_FR_OP),
+        ("PRECOMPILE_P2_FIELD", ecall::PRECOMPILE_P2_FIELD),
+        ("PRECOMPILE_FIELD_IO", ecall::PRECOMPILE_FIELD_IO),
         (
             "RETIRED_MOD_MUL_WITNESSED_MODULUS",
             ecall::RETIRED_MOD_MUL_WITNESSED_MODULUS,

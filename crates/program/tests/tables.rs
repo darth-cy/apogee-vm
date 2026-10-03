@@ -453,7 +453,7 @@ fn parameters_off_the_menu_and_unknown_versions_are_refused() {
 /// silently.
 #[test]
 fn the_field_masks_are_frozen() {
-    let want: [(FamilyId, u8); 18] = [
+    let want: [(FamilyId, u8); 22] = [
         (family::ADD_SUB_LUI_AUIPC, 0b1011_1111),
         (family::JUMP_BRANCH_SLT, 0b1011_1111),
         (family::SHIFT_BITWISE, 0b1011_1111),
@@ -472,6 +472,10 @@ fn the_field_masks_are_frozen() {
         (family::MOD_MUL, 0),
         (family::SHA256_COMP, 0),
         (family::EC_ADD, 0),
+        (family::FIELD_WINDOWS, 0),
+        (family::FR_OP, 0),
+        (family::P2_FIELD, 0),
+        (family::FIELD_IO, 0),
     ];
     assert_eq!(want.map(|(f, _)| f), FAMILIES, "every family, in order");
     for (family, mask) in want {

@@ -1464,6 +1464,7 @@ dependencies = [
  "sumcheck",
  "test-support",
  "transcript",
+ "verifier-core",
 ]
 
 [[package]]
@@ -2021,6 +2022,7 @@ dependencies = [
  "poly",
  "test-support",
  "transcript",
+ "verifier-core",
 ]
 
 [[package]]

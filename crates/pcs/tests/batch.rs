@@ -603,3 +603,81 @@ fn flip_first_digit(token: &str) -> String {
     bytes[0] = if bytes[0] == b'0' { b'1' } else { b'0' };
     String::from_utf8(bytes).expect("hex is ASCII")
 }
+
+/// A **stack** (`docs/spec/recursion.md` §1.3) is the multilinear whose high
+/// variables index its columns: its commitment is the materialized stack's,
+/// and a batch of stacks — one short of its slots, one a single column standing
+/// in for a setup column — opens at `u ‖ r` to `Σ_j eq(r, j)·col_j(u)` and
+/// verifies through the ordinary batch verifier at that point.
+#[test]
+fn a_stack_is_its_columns_under_the_high_variables() {
+    let (width, sigma) = (4usize, 2usize);
+    let srs = common::toy_srs((width + sigma) as u32);
+    let mut rng = Rng::new(0x5309_0001);
+    let full: Vec<MultilinearPoly> = (0..4)
+        .map(|_| common::random_poly(&mut rng, width))
+        .collect();
+    let short: Vec<MultilinearPoly> = (0..3)
+        .map(|_| common::random_poly(&mut rng, width))
+        .collect();
+    let single = common::random_poly(&mut rng, width);
+
+    // The commitment is the materialized stack's, zero slots included.
+    for cols in [&full, &short] {
+        let mut table: Vec<Fr> = Vec::new();
+        for c in cols.iter() {
+            table.extend((0..1usize << width).map(|i| c.get(i)));
+        }
+        table.resize(1 << (width + sigma), Fr::ZERO);
+        let stack = MultilinearPoly::new(PolyBacking::Fr(table));
+        let refs: Vec<&MultilinearPoly> = cols.iter().collect();
+        assert_eq!(
+            pcs::commit_stack(&srs, &refs).unwrap(),
+            commit(&srs, &stack).unwrap()
+        );
+    }
+    let stacks: Vec<Vec<&MultilinearPoly>> =
+        vec![full.iter().collect(), short.iter().collect(), vec![&single]];
+    let cms: Vec<MercuryCommitment> = stacks
+        .iter()
+        .map(|s| pcs::commit_stack(&srs, s).unwrap())
+        .collect();
+    let (u, r) = (
+        common::random_point(&mut rng, width),
+        common::random_point(&mut rng, sigma),
+    );
+    let mut tr = Transcript::new();
+    let (vs, proof) = pcs::batch_open_stacked(&srs, &stacks, &cms, &u, &r, &mut tr).unwrap();
+    let eq_r = poly::eq_table(&r);
+    for (stack, v) in stacks.iter().zip(&vs) {
+        let want = stack
+            .iter()
+            .zip(&eq_r)
+            .fold(Fr::ZERO, |acc, (c, e)| acc + *e * c.evaluate(&u));
+        assert_eq!(*v, want);
+    }
+    let point: Vec<Fr> = u.iter().chain(&r).copied().collect();
+    assert_eq!(
+        batch_verify(
+            &srs.verifier(),
+            &cms,
+            &point,
+            &vs,
+            &proof,
+            &mut Transcript::new()
+        ),
+        Ok(())
+    );
+    // A stack one value off is refused.
+    let mut wrong = vs.clone();
+    wrong[1] += Fr::ONE;
+    assert!(batch_verify(
+        &srs.verifier(),
+        &cms,
+        &point,
+        &wrong,
+        &proof,
+        &mut Transcript::new()
+    )
+    .is_err());
+}

@@ -20,12 +20,15 @@ fn the_tags_are_the_frozen_constants() {
             address_space::DELEGATION_SHA256_COMP,
         ),
         (AddressSpace::EcAdd, address_space::DELEGATION_EC_ADD),
+        (AddressSpace::FrOp, address_space::DELEGATION_FR_OP),
+        (AddressSpace::P2Field, address_space::DELEGATION_P2_FIELD),
+        (AddressSpace::FieldIo, address_space::DELEGATION_FIELD_IO),
     ] {
         assert_eq!(space.tag(), tag);
         assert_eq!(AddressSpace::from_tag(tag), Some(space));
     }
     assert_eq!(
-        (
+        [
             address_space::REG,
             address_space::RAM,
             address_space::PC,
@@ -35,13 +38,18 @@ fn the_tags_are_the_frozen_constants() {
             address_space::DELEGATION_MOD_MUL,
             address_space::DELEGATION_SHA256_COMP,
             address_space::DELEGATION_EC_ADD,
-        ),
-        (1, 2, 3, 4, 5, 6, 7, 8, 9)
+            address_space::FIELD,
+            address_space::DELEGATION_FR_OP,
+            address_space::DELEGATION_P2_FIELD,
+            address_space::DELEGATION_FIELD_IO,
+        ],
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
     );
-    // Every tag is nonzero, so no real tuple is all zeros, and 10 is the tag
-    // the next delegation family takes — it names no space yet
-    // (`docs/spec/delegation.md` §3).
-    for tag in [0u8, 10, 255] {
+    // Every tag is nonzero, so no real tuple is all zeros. 10 is the field
+    // memory's, which names no space of the event log — a field access is not
+    // an event (`docs/spec/recursion.md` §2.1) — and 14 is the tag the next
+    // delegation family takes.
+    for tag in [0u8, address_space::FIELD, 14, 255] {
         assert_eq!(AddressSpace::from_tag(tag), None, "tag {tag}");
     }
     // **Every delegation space round-trips, derived rather than listed.**

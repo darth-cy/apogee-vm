@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 use constants::memory::TS_BITS;
 use constants::{challenge_slot, family, guest_memory, transcript_tags as tags, PROTOCOL_VERSION};
 use field::Fr;
-use gkr_verify::{window_challenges, BoundaryFinals, ExternalChallenges};
+use gkr_verify::{field_window_challenges, window_challenges, BoundaryFinals, ExternalChallenges};
 use transcript::{append_g1_points, io_digest, Transcript};
 
 use crate::{PublicInputs, VerifyingKey};
@@ -43,6 +43,38 @@ impl VmConfig {
             .iter()
             .find(|(f, _)| *f == family)
             .map(|(_, h)| *h)
+    }
+
+    /// Whether a statement under this config is in the **recursion format**:
+    /// it holds the field memory's windows (`docs/spec/recursion.md` §1.1).
+    /// Nothing else says so — no wire form carries a format.
+    pub fn is_recursion(&self) -> bool {
+        self.height(family::FIELD_WINDOWS).is_some()
+    }
+
+    /// `σ`, how many variables a shard of `artifact` stacks its columns
+    /// under (`docs/spec/recursion.md` §1.3): 0 in the base format, where a
+    /// stack is a column; in the recursion format the smallest even `σ` with
+    /// `2^σ` slots for the wider phase, capped so a stack is at most the
+    /// ceremony's `2^STACK_LOG` evaluations.
+    pub fn stack_vars(&self, artifact: &constraints::CircuitArtifact) -> u32 {
+        if !self.is_recursion() {
+            return 0;
+        }
+        let widest = artifact.memory.len().max(artifact.witness.len()).max(1);
+        let need = widest.next_power_of_two().trailing_zeros();
+        (need + need % 2).min(STACK_LOG - artifact.trace_vars)
+    }
+
+    /// `family`'s circuit at `trace_vars`, from this config's format's
+    /// registry: the one source of a key's circuits, for the key's load rule
+    /// and the prover's registration alike.
+    pub fn circuit(&self, family: u32, trace_vars: u32) -> Option<constraints::FamilyCircuit> {
+        if self.is_recursion() {
+            constraints::recursion_circuit(family, trace_vars)
+        } else {
+            constraints::family_circuit(family, trace_vars)
+        }
     }
 
     /// The frozen wire form: `u32` LE family count `k`, then `k` pairs of
@@ -96,6 +128,15 @@ impl VmConfig {
         window_height(&config).ok()?;
         Some(config)
     }
+}
+
+/// The largest stack, `2^STACK_LOG` evaluations: the ceremony the repository
+/// holds (`docs/spec/recursion.md` §1.3).
+pub const STACK_LOG: u32 = 24;
+
+/// How many stacks `columns` columns take at `σ` stack variables.
+pub fn stack_count(columns: usize, sigma: u32) -> usize {
+    columns.div_ceil(1 << sigma)
 }
 
 /// The one height of the three window families, or the rule a config breaks.
@@ -285,6 +326,13 @@ pub fn check_memory_windows(
     let advice = count(family::ADVICE_WINDOWS) as u64;
     if advice_first_window(height) as u64 + advice > (1u64 << 30) / height as u64 {
         return Err("the advice windows do not fit below the top of the address space");
+    }
+    // The field memory's windows are consecutive from cell 0, and a cell is a
+    // `u32` (`docs/spec/recursion.md` §2.2).
+    if let Some(h) = config.height(family::FIELD_WINDOWS) {
+        if count(family::FIELD_WINDOWS) as u64 * h as u64 > 1u64 << 32 {
+            return Err("the field windows do not fit the 2^32 cells");
+        }
     }
     Ok(())
 }
@@ -531,14 +579,32 @@ pub fn memory_slots(memory: &[Fr; 4]) -> ExternalChallenges {
     drawn
 }
 
-/// The external challenges shard `(family, index)`'s circuit reads,
-/// `docs/spec/shard-proof.md` §4: slots 1 to 4 from `memory`; for a RAM window
-/// family, the derived slot 5 at its window — 0 for `INIT_TEARDOWN`,
-/// `windows[index]` for `ZERO_WINDOWS`; then the LogUp slots from `g`, `β` and
-/// the circuit.
+/// The window shard `index` of a window family initializes, on its own grid
+/// of `2^trace_vars`-row windows, or `None` for a family whose rows are not a
+/// window: 0 for `INIT_TEARDOWN`, `windows[index]` for `ZERO_WINDOWS`, the
+/// public windows' constant ids, the `index`-th window from the advice origin
+/// up, and field window `index` from cell 0 up.
 ///
 /// `index` is below the family's count and `windows` is the statement's list,
 /// which the window rules hold to that count; anything else panics.
+pub fn shard_window(family: u32, index: u32, windows: &[u32], trace_vars: u32) -> Option<u32> {
+    match family {
+        family::INIT_TEARDOWN => Some(0),
+        family::ZERO_WINDOWS => Some(windows[index as usize]),
+        // The public windows' ids are constants, because their height is.
+        family::PUBLIC_INPUT => Some(family::PUBLIC_INPUT_WINDOW),
+        family::PUBLIC_OUTPUT => Some(family::PUBLIC_OUTPUT_WINDOW),
+        family::ADVICE_WINDOWS => Some(advice_first_window(1 << trace_vars) + index),
+        family::FIELD_WINDOWS => Some(index),
+        _ => None,
+    }
+}
+
+/// The external challenges shard `(family, index)`'s circuit reads,
+/// `docs/spec/shard-proof.md` §4: slots 1 to 4 from `memory`; for a window
+/// family, the derived slot 5 at [`shard_window`]'s window, over RAM or, for
+/// `FIELD_WINDOWS`, over the field memory; then the LogUp slots from `g`, `β`
+/// and the circuit. Panics as [`shard_window`] does.
 pub fn shard_challenges(
     circuit: &constraints::FamilyCircuit,
     index: u32,
@@ -549,21 +615,12 @@ pub fn shard_challenges(
 ) -> ExternalChallenges {
     let drawn = memory_slots(memory);
     let trace_vars = circuit.artifact.trace_vars;
-    let mut out = match circuit.family {
-        family::INIT_TEARDOWN => window_challenges(&drawn, 0, trace_vars),
-        family::ZERO_WINDOWS => window_challenges(&drawn, windows[index as usize], trace_vars),
-        // The public windows' ids are constants, because their height is.
-        family::PUBLIC_INPUT => window_challenges(&drawn, family::PUBLIC_INPUT_WINDOW, trace_vars),
-        family::PUBLIC_OUTPUT => {
-            window_challenges(&drawn, family::PUBLIC_OUTPUT_WINDOW, trace_vars)
+    let mut out = match shard_window(circuit.family, index, windows, trace_vars) {
+        Some(w) if circuit.family == family::FIELD_WINDOWS => {
+            field_window_challenges(&drawn, w, trace_vars)
         }
-        // Shard `i` is the `i`-th window from the advice origin up.
-        family::ADVICE_WINDOWS => window_challenges(
-            &drawn,
-            advice_first_window(1 << trace_vars) + index,
-            trace_vars,
-        ),
-        _ => drawn,
+        Some(w) => window_challenges(&drawn, w, trace_vars),
+        None => drawn,
     };
     gkr_verify::insert_lookup_challenges(&mut out, g, beta, &circuit.artifact);
     out

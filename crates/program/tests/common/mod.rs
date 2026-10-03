@@ -17,7 +17,7 @@ use program::{decode_program, ProgramParams};
 use test_support::{sha256, to_hex};
 
 /// Every guest with a committed ELF, in `guests/Cargo.toml`'s order.
-pub const GUESTS: [&str; 21] = [
+pub const GUESTS: [&str; 22] = [
     "fib",
     "echo",
     "rvc-dense",
@@ -39,12 +39,13 @@ pub const GUESTS: [&str; 21] = [
     "mod-mul-ops",
     "sha256-ops",
     "ec-ops",
+    "field-ops",
 ];
 
 /// The guests whose image declares a delegation family, and which
 /// (`docs/spec/delegation.md` §7). Every other guest declares none, which is
 /// what `tests/delegation.rs` holds them to.
-pub const DECLARING_GUESTS: [(&str, &[u32]); 9] = [
+pub const DECLARING_GUESTS: [(&str, &[u32]); 10] = [
     ("echo", &[family::POSEIDON2, family::FR_ARITH]),
     ("vault", &[family::POSEIDON2, family::FR_ARITH]),
     ("keccak-test", &[family::KECCAK_F]),
@@ -65,6 +66,13 @@ pub const DECLARING_GUESTS: [(&str, &[u32]); 9] = [
     // on.
     ("sha256-ops", &[family::SHA256_COMP]),
     ("ec-ops", &[family::MOD_MUL, family::EC_ADD]),
+    // S-RECURSION's fixture names all three field families' shims, and so
+    // brings `FIELD_WINDOWS` into its config: it is the one committed guest in
+    // the recursion format (`docs/spec/recursion.md` §1.1).
+    (
+        "field-ops",
+        &[family::FR_OP, family::P2_FIELD, family::FIELD_IO],
+    ),
 ];
 
 /// This crate's committed fixtures and their digests. Refresh with

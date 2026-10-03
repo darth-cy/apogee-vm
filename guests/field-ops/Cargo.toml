@@ -1,0 +1,12 @@
+[package]
+name = "field-ops"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The fixture for the field memory and its three families
+# (`docs/spec/recursion.md` §2-§5): every `FR_OP` op, a duplex step at each of
+# `n = 2, 1, 0`, and both `FIELD_IO` moves, each held to a literal.
+[dependencies]
+guest-sdk.workspace = true
+constants = { path = "../../crates/constants" }

@@ -244,9 +244,42 @@ pub fn commit(srs: &Srs, f: &MultilinearPoly) -> Result<MercuryCommitment, PcsEr
             available: powers.len(),
         });
     }
-    let bases = &powers[..n];
+    Ok(MercuryCommitment(column_msm(&powers[..n], f).to_affine()))
+}
 
-    let point = match f.backing() {
+/// A **stack**'s commitment (`docs/spec/recursion.md` §1.3): the multilinear
+/// whose evaluations `[j·2^n, (j+1)·2^n)` are `cols[j]` and whose every slot
+/// past the last column is zero, read as coefficients like any other. One MSM
+/// a column over the powers its slot starts at, summed — the stack is never
+/// materialized, and a narrow column keeps [`commit`]'s small-scalar path.
+/// Zero slots above the last column move nothing, so a stack's commitment does
+/// not depend on how many slots it is declared to have.
+pub fn commit_stack(srs: &Srs, cols: &[&MultilinearPoly]) -> Result<MercuryCommitment, PcsError> {
+    let width = cols.first().ok_or(PcsError::EmptyBatch)?.num_vars();
+    let n = 1usize << width;
+    let powers = srs.g1();
+    if powers.len() < n * cols.len() {
+        return Err(PcsError::SrsTooSmall {
+            needed: n * cols.len(),
+            available: powers.len(),
+        });
+    }
+    let mut acc = curve::G1Projective::IDENTITY;
+    for (j, col) in cols.iter().enumerate() {
+        if col.num_vars() != width {
+            return Err(PcsError::MixedColumnSizes {
+                expected: width,
+                found: col.num_vars(),
+            });
+        }
+        acc = acc.add(&column_msm(&powers[j * n..(j + 1) * n], col));
+    }
+    Ok(MercuryCommitment(acc.to_affine()))
+}
+
+/// `Σ_i f_i·bases_i` over `f`'s evaluation table, dispatching on its backing.
+fn column_msm(bases: &[G1Affine], f: &MultilinearPoly) -> curve::G1Projective {
+    match f.backing() {
         PolyBacking::U1(limbs, count) => {
             let bits: Vec<u32> = (0..*count)
                 .map(|i| ((limbs[i / 64] >> (i % 64)) & 1) as u32)
@@ -262,9 +295,7 @@ pub fn commit(srs: &Srs, f: &MultilinearPoly) -> Result<MercuryCommitment, PcsEr
         PolyBacking::U32(v) => msm_small_u32(bases, v),
         PolyBacking::Fr(v) => msm(bases, v),
     }
-    .expect("one power per coefficient");
-
-    Ok(MercuryCommitment(point.to_affine()))
+    .expect("one power per coefficient")
 }
 
 // ---------------------------------------------------------------------------
@@ -662,31 +693,59 @@ pub fn batch_open(
     u: &[Fr],
     tr: &mut Transcript,
 ) -> Result<(Vec<Fr>, MercuryProof), PcsError> {
-    if cols.is_empty() {
+    let stacks: Vec<Vec<&MultilinearPoly>> = cols.iter().map(|c| vec![c]).collect();
+    batch_open_stacked(srs, &stacks, cms, u, &[], tr)
+}
+
+/// Open **stacks** at `u ‖ r` as one Mercury instance
+/// (`docs/spec/recursion.md` §1.3). `stacks[i]` is stack `i`'s columns in slot
+/// order — every one `u.len()`-variate, at most `2^r.len()` of them — and its
+/// value is `Σ_j eq(r, j)·col_j(u)`, what the stack evaluates to at `u ‖ r`.
+/// [`batch_open`] is this at `r = []`, every stack one column: the base
+/// format, byte for byte.
+pub fn batch_open_stacked(
+    srs: &Srs,
+    stacks: &[Vec<&MultilinearPoly>],
+    cms: &[MercuryCommitment],
+    u: &[Fr],
+    r: &[Fr],
+    tr: &mut Transcript,
+) -> Result<(Vec<Fr>, MercuryProof), PcsError> {
+    if stacks.is_empty() || stacks.iter().any(Vec::is_empty) {
         return Err(PcsError::EmptyBatch);
     }
-    if cols.len() != cms.len() {
+    if stacks.len() != cms.len() {
         return Err(PcsError::BatchLengthMismatch {
             commitments: cms.len(),
-            paired: cols.len(),
+            paired: stacks.len(),
         });
     }
-    let num_vars = cols[0].num_vars();
-    for col in cols {
-        if col.num_vars() != num_vars {
+    // The refusals in `batch_open`'s order: the columns' sizes, the instance's,
+    // then the point's.
+    let width = stacks[0][0].num_vars();
+    for col in stacks.iter().flatten() {
+        if col.num_vars() != width {
             return Err(PcsError::MixedColumnSizes {
-                expected: num_vars,
+                expected: width,
                 found: col.num_vars(),
             });
         }
     }
-    let n = check_num_vars(num_vars)? as usize;
-    if u.len() != num_vars {
+    let n = check_num_vars(width + r.len())? as usize;
+    if u.len() != width {
         return Err(PcsError::PointLengthMismatch {
             point: u.len(),
-            num_vars,
+            num_vars: width,
         });
     }
+    let slots = 1usize << r.len();
+    if let Some(stack) = stacks.iter().find(|s| s.len() > slots) {
+        return Err(PcsError::BatchLengthMismatch {
+            commitments: slots,
+            paired: stack.len(),
+        });
+    }
+    let point: Vec<Fr> = u.iter().chain(r).copied().collect();
     let available = srs.g1().len();
     if available < n {
         return Err(PcsError::SrsTooSmall {
@@ -695,21 +754,34 @@ pub fn batch_open(
         });
     }
 
-    let vs: Vec<Fr> = cols.iter().map(|col| col.evaluate(u)).collect();
-    let (weights, cm_star, v_star) = batch_preamble(cms, u, &vs, tr);
+    let eq_r = eq_table(r);
+    let vs: Vec<Fr> = stacks
+        .iter()
+        .map(|stack| {
+            stack
+                .iter()
+                .zip(&eq_r)
+                .fold(Fr::ZERO, |acc, (col, e)| acc + *e * col.evaluate(u))
+        })
+        .collect();
+    let (weights, cm_star, v_star) = batch_preamble(cms, &point, &vs, tr);
+    let column = 1usize << width;
     let combined: Vec<Fr> = (0..n)
         .into_par_iter()
         .map(|i| {
+            let (slot, row) = (i / column, i % column);
             let mut acc = Fr::ZERO;
-            for (col, weight) in cols.iter().zip(&weights) {
-                acc += *weight * col.get(i);
+            for (stack, weight) in stacks.iter().zip(&weights) {
+                if let Some(col) = stack.get(slot) {
+                    acc += *weight * col.get(row);
+                }
             }
             acc
         })
         .collect();
     let f_star = MultilinearPoly::new(PolyBacking::Fr(combined));
 
-    let (v, proof) = open(srs, &f_star, &cm_star, u, tr)?;
+    let (v, proof) = open(srs, &f_star, &cm_star, &point, tr)?;
     assert_eq!(
         v, v_star,
         "batch_open: the combined column's value must be the combination of the columns' values"

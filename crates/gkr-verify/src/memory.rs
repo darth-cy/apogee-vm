@@ -41,6 +41,28 @@ pub fn window_challenges(
     window: u32,
     trace_vars: u32,
 ) -> ExternalChallenges {
+    strided_window_challenges(memory, address_space::RAM, 4, window, trace_vars)
+}
+
+/// [`window_challenges`] for one window of the **field memory**
+/// (`docs/spec/recursion.md` §2.2): one cell a row, so
+/// `MEM_WINDOW_CONSTANT = γ_M + FIELD + α_addr·2^trace_vars·window`.
+pub fn field_window_challenges(
+    memory: &ExternalChallenges,
+    window: u32,
+    trace_vars: u32,
+) -> ExternalChallenges {
+    strided_window_challenges(memory, address_space::FIELD, 1, window, trace_vars)
+}
+
+/// A window of `space` whose rows are `stride` addresses apart.
+fn strided_window_challenges(
+    memory: &ExternalChallenges,
+    space: u8,
+    stride: u64,
+    window: u32,
+    trace_vars: u32,
+) -> ExternalChallenges {
     assert!(
         trace_vars <= MAX_TRACE_VARS,
         "window_challenges: trace_vars {trace_vars} is above {MAX_TRACE_VARS}"
@@ -55,14 +77,14 @@ pub fn window_challenges(
         });
         out.insert(slot, value);
     }
-    let first_address = (4u64 << trace_vars) * window as u64;
+    let first_address = (stride << trace_vars) * window as u64;
     let gamma = out.get(challenge_slot::MEM_GAMMA).expect("copied above");
     let alpha_addr = out
         .get(challenge_slot::MEM_ALPHA_ADDR)
         .expect("copied above");
     out.insert(
         challenge_slot::MEM_WINDOW_CONSTANT,
-        gamma + Fr::from_u64(address_space::RAM as u64) + alpha_addr * Fr::from_u64(first_address),
+        gamma + Fr::from_u64(space as u64) + alpha_addr * Fr::from_u64(first_address),
     );
     out
 }

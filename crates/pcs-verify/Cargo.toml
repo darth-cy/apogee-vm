@@ -17,3 +17,5 @@ transcript.workspace = true
 # `eq_table`, the coefficient vector `tensor_eval`'s product formula must equal.
 poly.workspace = true
 test-support.workspace = true
+# The recursion verifier's tape, held to this crate's batch preamble and scalars.
+verifier-core.workspace = true

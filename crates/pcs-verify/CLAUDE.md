@@ -56,6 +56,7 @@ pub mod bdfg;  // the BDFG20 batch: `items`, the one definition both sides read
 | --- | --- |
 | `src/lib.rs` unit tests | the instance rule, the `z` draw's resample rule, the degenerate-challenge predicate, and `P_u`'s two descriptions |
 | `src/uni.rs` unit tests | each univariate helper against its definition |
+| `tests/tape.rs` | S-RECURSION: `verifier_core::tape`'s batch preamble and twelve scalars against this crate's over random instances — an infinity commitment among them — replayed natively, to the weights, `v*`, every scalar and a last challenge, so the two sponges end in one state |
 
 Everything else is `crates/pcs`'s suite, which runs every native verification through this
 crate's `scalars` and `batch_preamble`.

@@ -362,6 +362,75 @@ pub mod recursion {
     static DELEGATION_EC_ADD: [u8; delegation::MARKER_BYTES] =
         super::record(ecall::PRECOMPILE_EC_ADD);
 
+    /// `FR_OP`'s declaration record (S-RECURSION).
+    #[link_section = ".rodata.apogee.delegations.fr_op"]
+    static DELEGATION_FR_OP: [u8; delegation::MARKER_BYTES] =
+        super::record(ecall::PRECOMPILE_FR_OP);
+
+    /// `P2_FIELD`'s declaration record (S-RECURSION).
+    #[link_section = ".rodata.apogee.delegations.p2_field"]
+    static DELEGATION_P2_FIELD: [u8; delegation::MARKER_BYTES] =
+        super::record(ecall::PRECOMPILE_P2_FIELD);
+
+    /// `FIELD_IO`'s declaration record (S-RECURSION).
+    #[link_section = ".rodata.apogee.delegations.field_io"]
+    static DELEGATION_FIELD_IO: [u8; delegation::MARKER_BYTES] =
+        super::record(ecall::PRECOMPILE_FIELD_IO);
+
+    /// One field operation over field cells (`docs/spec/recursion.md` §3):
+    /// `[op, d, a, b]`, one of `constants::fr_op::OPS`.
+    ///
+    /// **Any answer but 0 is fatal.** The field memory exists only where its
+    /// circuits do, so there is no software path to fall back on — and an
+    /// `EQ` whose cells differ is not an answer but a fatal frame error.
+    pub fn fr_op(frame: &mut [u32; constants::fr_op::FRAME_WORDS]) {
+        // SAFETY: as [`poseidon2`]; the frame is four words, read and written
+        // back unchanged.
+        let ret = unsafe {
+            ecall1(
+                delegation_number(&DELEGATION_FR_OP),
+                frame.as_mut_ptr() as u32,
+            )
+        };
+        if ret != 0 {
+            exit(EXIT_PRECOMPILE_ERROR);
+        }
+    }
+
+    /// One step of the transcript's duplex (`docs/spec/recursion.md` §4):
+    /// `[n, s, x, y, d]` absorbs `n` of `x, y` into the state at `s` and
+    /// writes the permuted state to `d`. Fatal on any answer but 0, as
+    /// [`fr_op`].
+    pub fn p2_field(frame: &mut [u32; constants::p2_field::FRAME_WORDS]) {
+        // SAFETY: as [`fr_op`].
+        let ret = unsafe {
+            ecall1(
+                delegation_number(&DELEGATION_P2_FIELD),
+                frame.as_mut_ptr() as u32,
+            )
+        };
+        if ret != 0 {
+            exit(EXIT_PRECOMPILE_ERROR);
+        }
+    }
+
+    /// One move between RAM and a field cell (`docs/spec/recursion.md` §5):
+    /// `[op, cell, ptr]` imports the eight words at `ptr` into `cell` or
+    /// exports `cell` into them. `ptr` names eight words the call may read,
+    /// and for an export write. Fatal on any answer but 0, as [`fr_op`].
+    pub fn field_io(frame: &mut [u32; constants::field_io::FRAME_WORDS]) {
+        // SAFETY: as [`fr_op`]; the caller vouches for the eight words.
+        let ret = unsafe {
+            ecall1(
+                delegation_number(&DELEGATION_FIELD_IO),
+                frame.as_mut_ptr() as u32,
+            )
+        };
+        if ret != 0 {
+            exit(EXIT_PRECOMPILE_ERROR);
+        }
+    }
+
     /// The Poseidon2 delegation's 96-byte frame: three canonical
     /// little-endian `Fr` lanes, permuted in place.
     ///

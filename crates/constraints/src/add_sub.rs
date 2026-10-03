@@ -12,9 +12,10 @@
 //! M[26]     deleg_space: the requested delegation type's address-space tag
 //! W[8..14]  the claimed decoded row: next_pc rs1 rs2 rd imm mask
 //! W[14..20] the mask's six bits; W[20], W[21] is_ecall, is_fence
-//! W[22..26] is_deleg_*: one delegation request selector per type
-//! W[26..30] wrap, rd_hi, pc_wrap, next_pc_hi
-//! W[30..33] one multiplicity per channel: timestamp, range16, decoder
+//! W[22..22+t] is_deleg_*: one request selector per type the circuit knows,
+//!           t = 6 in the base format and every type in the recursion format
+//! W[22+t..26+t] wrap, rd_hi, pc_wrap, next_pc_hi
+//! W[26+t..29+t] one multiplicity per channel: timestamp, range16, decoder
 //! S[0..7]   the decoded table, program::lookup_tuple order
 //! ```
 
@@ -36,16 +37,22 @@ use crate::memory::{
 };
 use crate::{CircuitArtifact, Coeff, GateDef, LookupExpr, PolyAddress, VirtualKind};
 
-/// Every delegation type this family's ecall rows may request, ascending by
-/// family id: `(family, ecall number, address-space tag, frame words)`.
+/// Every delegation type an ecall row may request, ascending by family id:
+/// `(family, ecall number, address-space tag, frame words)`.
 /// `constants::delegation::TYPES` is the one registry; this file builds one
-/// selector column and three gates per row of it.
+/// selector column and three gates per row of the prefix a circuit knows.
 const DELEGATIONS: [(u32, u32, u8, usize); constants::delegation::TYPES.len()] =
     constants::delegation::TYPES;
 
-/// How many delegation types there are, which is how many request selectors
-/// this family commits.
+/// How many delegation types there are.
 const TYPES: usize = DELEGATIONS.len();
+
+/// How many the **base format**'s circuit knows, and so how many request
+/// selectors [`artifact`] commits: frozen, which is what keeps every base key's
+/// bytes while the registry grows. [`recursion_artifact`] knows all [`TYPES`]
+/// (`docs/spec/recursion.md` §1.2).
+const BASE_TYPES: usize = constants::delegation::BASE_TYPES;
+const _: () = assert!(BASE_TYPES <= TYPES);
 
 // The ecall numbers this family proves are pairwise distinct and each in its
 // ABI range, so `ecall_is_exit` and the per-type number gates **partition** its
@@ -134,37 +141,64 @@ const KIND_LUI: PolyAddress = KINDS[kind::LUI as usize];
 pub const IS_ECALL: PolyAddress = w(FRAME_WITNESS + 12);
 /// `W[21]`: 1 exactly on a system row whose code is `fence`.
 pub const IS_FENCE: PolyAddress = w(FRAME_WITNESS + 13);
-/// `W[22..28]`: one **delegation request** selector per type, in
+/// `W[22 + i]`: delegation type `i`'s **request** selector, in
 /// [`DELEGATIONS`] order — 1 exactly on an ecall row whose `a7` is that type's
 /// number (`docs/spec/delegation.md` §5.1). Each is a free boolean, pinned by
 /// the number gates below: an ecall row is an exit or a request of exactly one
 /// type, and its `a7` is that call's number.
-pub const IS_DELEGATION: [PolyAddress; TYPES] = [
-    w(FRAME_WITNESS + 14),
-    w(FRAME_WITNESS + 15),
-    w(FRAME_WITNESS + 16),
-    w(FRAME_WITNESS + 17),
-    w(FRAME_WITNESS + 18),
-    w(FRAME_WITNESS + 19),
+pub const fn is_delegation(i: usize) -> PolyAddress {
+    w(FRAME_WITNESS + 14 + i as u32)
+}
+/// Column `k` past a circuit's `types` request selectors: `wrap`, `rd_hi`,
+/// `pc_wrap`, `next_pc_hi`, then the three multiplicities, which stay last in
+/// the witness subtree (`docs/spec/lookup.md` §7).
+const fn after(types: usize, k: u32) -> PolyAddress {
+    w(FRAME_WITNESS + 14 + types as u32 + k)
+}
+/// The sum's carry, or the difference's borrow, in a circuit knowing `types`.
+pub const fn wrap(types: usize) -> PolyAddress {
+    after(types, 0)
+}
+/// The computed `rd` value's high halfword.
+pub const fn rd_hi(types: usize) -> PolyAddress {
+    after(types, 1)
+}
+/// `next_pc`'s wrap, 0 on every honest row.
+pub const fn pc_wrap(types: usize) -> PolyAddress {
+    after(types, 2)
+}
+/// `next_pc`'s high halfword.
+pub const fn next_pc_hi(types: usize) -> PolyAddress {
+    after(types, 3)
+}
+/// The channels' multiplicities, in channel order — timestamp, range16,
+/// decoder.
+pub const fn multiplicities(types: usize) -> [PolyAddress; 3] {
+    [after(types, 4), after(types, 5), after(types, 6)]
+}
+
+/// `W[22..28]`: the base format's request selectors.
+pub const IS_DELEGATION: [PolyAddress; BASE_TYPES] = [
+    is_delegation(0),
+    is_delegation(1),
+    is_delegation(2),
+    is_delegation(3),
+    is_delegation(4),
+    is_delegation(5),
 ];
 /// The keccak-f request selector, S21's `IS_KECCAK`, now the first of
 /// [`IS_DELEGATION`].
 pub const IS_KECCAK: PolyAddress = IS_DELEGATION[0];
-/// `W[26]`: the sum's carry, or the difference's borrow.
-pub const WRAP: PolyAddress = w(FRAME_WITNESS + 14 + TYPES as u32);
-/// `W[27]`: the computed `rd` value's high halfword.
-pub const RD_HI: PolyAddress = w(FRAME_WITNESS + 15 + TYPES as u32);
-/// `W[28]`: `next_pc`'s wrap, 0 on every honest row.
-pub const PC_WRAP: PolyAddress = w(FRAME_WITNESS + 16 + TYPES as u32);
-/// `W[29]`: `next_pc`'s high halfword.
-pub const NEXT_PC_HI: PolyAddress = w(FRAME_WITNESS + 17 + TYPES as u32);
-/// `W[30..33]`: the channels' multiplicities, in channel order — timestamp,
-/// range16, decoder — last in the witness subtree (`docs/spec/lookup.md` §7).
-pub const MULTIPLICITIES: [PolyAddress; 3] = [
-    w(FRAME_WITNESS + 18 + TYPES as u32),
-    w(FRAME_WITNESS + 19 + TYPES as u32),
-    w(FRAME_WITNESS + 20 + TYPES as u32),
-];
+/// `W[28]`, the base format's [`wrap`].
+pub const WRAP: PolyAddress = wrap(BASE_TYPES);
+/// `W[29]`, the base format's [`rd_hi`].
+pub const RD_HI: PolyAddress = rd_hi(BASE_TYPES);
+/// `W[30]`, the base format's [`pc_wrap`].
+pub const PC_WRAP: PolyAddress = pc_wrap(BASE_TYPES);
+/// `W[31]`, the base format's [`next_pc_hi`].
+pub const NEXT_PC_HI: PolyAddress = next_pc_hi(BASE_TYPES);
+/// `W[32..35]`, the base format's [`multiplicities`].
+pub const MULTIPLICITIES: [PolyAddress; 3] = multiplicities(BASE_TYPES);
 
 /// The decoded table's width, `program::lookup_tuple(ADD_SUB_LUI_AUIPC)`:
 /// `pc next_pc rs1 rs2 rd imm extra_mask`, at `S[0..7]`.
@@ -283,6 +317,21 @@ fn names(list: &[&str]) -> Vec<String> {
 /// S21's `deleg` is the eighth), 4 `RANGE16`, 1 decoder — and on every refusal
 /// of the assembly.
 pub fn artifact(trace_vars: u32) -> CircuitArtifact {
+    build(trace_vars, BASE_TYPES)
+}
+
+/// The **recursion format**'s circuit: [`artifact`] knowing every delegation
+/// type, the recursion families' included (`docs/spec/recursion.md` §1.2).
+pub fn recursion_artifact(trace_vars: u32) -> CircuitArtifact {
+    build(trace_vars, TYPES)
+}
+
+/// The circuit knowing the first `types` rows of the registry.
+fn build(trace_vars: u32, types: usize) -> CircuitArtifact {
+    let delegations = &DELEGATIONS[..types];
+    let is_deleg: Vec<PolyAddress> = (0..types).map(is_delegation).collect();
+    let (wrap, rd_hi, pc_wrap, next_pc_hi) =
+        (wrap(types), rd_hi(types), pc_wrap(types), next_pc_hi(types));
     assert_eq!(
         frame_queries(family::ADD_SUB_LUI_AUIPC),
         &QUERIES,
@@ -313,7 +362,7 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
         "is_fence",
     ]);
     witness.extend(
-        DELEGATIONS
+        delegations
             .iter()
             .map(|(family, ..)| format!("is_deleg_{family}")),
     );
@@ -379,8 +428,8 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     // distinct numbers, which the `const` assertion above makes impossible, and
     // one claiming a type and the exit would need it to be 93 as well
     // (`docs/spec/delegation.md` §5.1).
-    for (i, (family, number, ..)) in DELEGATIONS.iter().enumerate() {
-        let is_t = IS_DELEGATION[i];
+    for (i, (family, number, ..)) in delegations.iter().enumerate() {
+        let is_t = is_deleg[i];
         enforcing.push((format!("is_deleg_{family}_boolean"), booleanity(is_t)));
         enforcing.push((
             format!("deleg_{family}_is_an_ecall"),
@@ -398,7 +447,7 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     {
         let mut linear = vec![(neg(constants::ecall::EXIT as u64), IS_ECALL)];
         let mut products = vec![(lit(1), IS_ECALL, v_rs1)];
-        for is_t in IS_DELEGATION {
+        for &is_t in &is_deleg {
             linear.push((lit(constants::ecall::EXIT as u64), is_t));
             products.push((neg(1), is_t, v_rs1));
         }
@@ -427,7 +476,7 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     ));
     enforcing.push((
         "deleg_mask_rule".into(),
-        mask_rule(frame(SLOT_DELEG, FIELD_MASK), &IS_DELEGATION),
+        mask_rule(frame(SLOT_DELEG, FIELD_MASK), &is_deleg),
     ));
     enforcing.push(("rs1_addr_rule".into(), addr_rule(SLOT_RS1, DECODED_RS1, A7)));
     enforcing.push(("rs2_addr_rule".into(), addr_rule(SLOT_RS2, DECODED_RS2, A0)));
@@ -444,7 +493,7 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
         sum.push((lit(1), bit, v_rs2));
         sum.push((lit(1), bit, DECODED_IMM));
         sum.push((neg(1), bit, sel));
-        sum.push((Coeff::Literal(-two_32()), bit, WRAP));
+        sum.push((Coeff::Literal(-two_32()), bit, wrap));
     }
     sum.push((lit(1), KIND_AUIPC, pc));
     enforcing.push(("add_addi_auipc".into(), quadratic(vec![], sum)));
@@ -456,7 +505,7 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
                 (lit(1), KIND_SUB, v_rs1),
                 (neg(1), KIND_SUB, v_rs2),
                 (neg(1), KIND_SUB, sel),
-                (Coeff::Literal(two_32()), KIND_SUB, WRAP),
+                (Coeff::Literal(two_32()), KIND_SUB, wrap),
             ],
         ),
     ));
@@ -471,7 +520,7 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     // it writes 0, which is the first of the three request-side zeroings.
     enforcing.push(("exit_status".into(), {
         let mut products = vec![(lit(1), IS_ECALL, v_rd), (neg(1), IS_ECALL, sel)];
-        for is_t in IS_DELEGATION {
+        for &is_t in &is_deleg {
             products.push((neg(1), is_t, v_rd));
             products.push((lit(1), is_t, sel));
         }
@@ -523,28 +572,28 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     // is 0 unless `is_ecall` is 1, and `is_ecall` is 0 on a padding row.
     enforcing.push(("deleg_space_rule".into(), {
         let mut terms = vec![(lit(1), deleg_space(QUERIES.len()))];
-        for (i, (.., tag, _)) in DELEGATIONS.iter().enumerate() {
-            terms.push((neg(*tag as u64), IS_DELEGATION[i]));
+        for (i, (.., tag, _)) in delegations.iter().enumerate() {
+            terms.push((neg(*tag as u64), is_deleg[i]));
         }
         GateDef::Linear {
             terms,
             constant: lit(0),
         }
     }));
-    enforcing.push(("wrap_boolean".into(), booleanity(WRAP)));
-    enforcing.push(("pc_wrap_boolean".into(), booleanity(PC_WRAP)));
+    enforcing.push(("wrap_boolean".into(), booleanity(wrap)));
+    enforcing.push(("pc_wrap_boolean".into(), booleanity(pc_wrap)));
     // next_pc + 2^32·pc_wrap = decoded_next_pc, or HALT_PC on the exit row.
     // A delegation request is not an exit: its next_pc is the fall-through,
     // so `is_exit = is_ecall - is_keccak` is what carries the sentinel.
     enforcing.push(("next_pc_rule".into(), {
         let mut linear = vec![
             (lit(1), next_pc),
-            (Coeff::Literal(two_32()), PC_WRAP),
+            (Coeff::Literal(two_32()), pc_wrap),
             (neg(1), DECODED_NEXT_PC),
             (neg(mem::HALT_PC as u64), IS_ECALL),
         ];
         let mut products = vec![(lit(1), IS_ECALL, DECODED_NEXT_PC)];
-        for is_t in IS_DELEGATION {
+        for &is_t in &is_deleg {
             linear.push((lit(mem::HALT_PC as u64), is_t));
             products.push((neg(1), is_t, DECODED_NEXT_PC));
         }
@@ -554,10 +603,10 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     let mut decode = vec![column(pc)];
     decode.extend(DECODED.iter().map(|x| column(*x)));
     let lookups = vec![
-        range16("rd_hi_range", column(RD_HI)),
-        range16("rd_lo_range", low_half(sel, RD_HI)),
-        range16("next_pc_hi_range", column(NEXT_PC_HI)),
-        range16("next_pc_lo_range", low_half(next_pc, NEXT_PC_HI)),
+        range16("rd_hi_range", column(rd_hi)),
+        range16("rd_lo_range", low_half(sel, rd_hi)),
+        range16("next_pc_hi_range", column(next_pc_hi)),
+        range16("next_pc_lo_range", low_half(next_pc, next_pc_hi)),
         LookupExpr {
             name: "decode_row".into(),
             channel: lookup_channel::DECODER,
@@ -578,7 +627,7 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
             ],
             enforcing,
             lookups,
-            channels: channels(),
+            channels: channels_at(types),
         },
     );
     // Every obligation is built above and then handed over, so a count is
@@ -604,21 +653,32 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
 /// `V[range19]`, the 16-bit halves over `V[range16]`, and the decoder over the
 /// family's decoded table at `S[0..7]`.
 pub fn channels() -> Vec<ChannelSpec> {
+    channels_at(BASE_TYPES)
+}
+
+/// [`recursion_artifact`]'s channels: [`channels`] with the multiplicities
+/// past every type's selector.
+pub fn recursion_channels() -> Vec<ChannelSpec> {
+    channels_at(TYPES)
+}
+
+fn channels_at(types: usize) -> Vec<ChannelSpec> {
+    let multiplicities = multiplicities(types);
     vec![
         ChannelSpec {
             channel: lookup_channel::TIMESTAMP,
             table: vec![PolyAddress::Virtual(VirtualKind::Range19)],
-            multiplicity: MULTIPLICITIES[0],
+            multiplicity: multiplicities[0],
         },
         ChannelSpec {
             channel: lookup_channel::RANGE16,
             table: vec![PolyAddress::Virtual(VirtualKind::Range16)],
-            multiplicity: MULTIPLICITIES[1],
+            multiplicity: multiplicities[1],
         },
         ChannelSpec {
             channel: lookup_channel::DECODER,
             table: (0..TABLE_WIDTH as u32).map(PolyAddress::Setup).collect(),
-            multiplicity: MULTIPLICITIES[2],
+            multiplicity: multiplicities[2],
         },
     ]
 }

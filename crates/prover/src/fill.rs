@@ -18,9 +18,7 @@ use constants::mod_mul as mm;
 use constants::poseidon2 as p2;
 use constants::sha256 as sh;
 use constants::{delegation, ecall, family, guest_memory, keccak, memory};
-use constraints::add_sub::{
-    DECODED, IS_ECALL, IS_FENCE, KINDS, NEXT_PC_HI, PC_WRAP, RD_HI, TABLE_WIDTH, WRAP,
-};
+use constraints::add_sub::{DECODED, IS_ECALL, IS_FENCE, KINDS, TABLE_WIDTH};
 use constraints::atomics as at_circuit;
 use constraints::delegation as deleg;
 use constraints::ec_add as ea_circuit;
@@ -193,6 +191,10 @@ pub fn family_fill(family: FamilyId) -> Option<Fill> {
         family::MOD_MUL => Some(mod_mul),
         family::SHA256_COMP => Some(sha256_comp),
         family::EC_ADD => Some(ec_add),
+        family::FIELD_WINDOWS => Some(field_window),
+        family::FR_OP => Some(fr_op),
+        family::P2_FIELD => Some(p2_field),
+        family::FIELD_IO => Some(field_io),
         _ => None,
     }
 }
@@ -2048,6 +2050,295 @@ fn advice(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Stri
     ))
 }
 
+/// One field window's teardown (`docs/spec/recursion.md` §2.2): row `y` is
+/// cell `h·w + y`'s last write, or its window's zero.
+fn field_window(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    let state = src.state()?;
+    let first = src.height as u64 * src.window as u64;
+    let (ts, value): (Vec<Fr>, Vec<Fr>) = (0..src.height as u64)
+        .map(|y| {
+            let (t, v) = state
+                .field_cell((first + y) as u32)
+                .unwrap_or((0, Fr::ZERO));
+            (Fr::from_u64(t), v)
+        })
+        .unzip();
+    Ok(vec![
+        (PolyAddress::Memory(0), fr_column(ts, src.height)),
+        (PolyAddress::Memory(1), fr_column(value, src.height)),
+    ])
+}
+
+/// A recursion family's frame chunk `c` of word `j`: `W[2j + c]`, the layout
+/// `constraints::delegation::frame_witness_range16` names.
+fn recursion_chunk(j: usize, c: usize) -> PolyAddress {
+    PolyAddress::Witness((deleg::GAP_CHUNKS * j + c) as u32)
+}
+
+/// A read-only recursion frame's columns: `delegation_frame_range16` over
+/// `words`, its base columns right after the gap chunks.
+fn recursion_frame(
+    inv: &Invocations,
+    words: usize,
+    frame_bytes: u64,
+) -> Vec<(PolyAddress, MultilinearPoly)> {
+    let base = (deleg::GAP_CHUNKS * words) as u32;
+    delegation_frame_range16(
+        inv,
+        words,
+        frame_bytes,
+        recursion_chunk,
+        [0, 1, 2, 3].map(|i| PolyAddress::Witness(base + i)),
+    )
+}
+
+/// One access's columns (`docs/spec/recursion.md` §2.1): its read timestamp,
+/// its value read, its value written where it writes one, its mask where it
+/// carries one, and its gap's two chunks — every one 0 where the row does not
+/// make it.
+#[allow(clippy::too_many_arguments)]
+fn access_columns(
+    inv: &Invocations,
+    q: usize,
+    delta: u64,
+    read_ts: PolyAddress,
+    read: PolyAddress,
+    write: Option<PolyAddress>,
+    mask: Option<PolyAddress>,
+    gap: [PolyAddress; 2],
+) -> Vec<(PolyAddress, MultilinearPoly)> {
+    let (frames, h) = (inv.frames, inv.height);
+    let a = frames.access(q);
+    let rows = 0..frames.len();
+    let mut out = vec![
+        (
+            read_ts,
+            fr_column(
+                rows.clone().map(|r| Fr::from_u64(a.read_ts[r])).collect(),
+                h,
+            ),
+        ),
+        (read, fr_column(a.read.to_vec(), h)),
+    ];
+    if let Some(write) = write {
+        out.push((write, fr_column(a.write.to_vec(), h)));
+    }
+    if let Some(mask) = mask {
+        out.push((
+            mask,
+            u32_column(a.live.iter().map(|l| *l as u32).collect(), h),
+        ));
+    }
+    let gaps: Vec<u64> = rows
+        .map(|r| match a.live[r] {
+            true => memory::TS_STEP * frames.cycles()[r] + delta - a.read_ts[r] - 1,
+            false => 0,
+        })
+        .collect();
+    for (c, chunk) in gap.into_iter().enumerate() {
+        let values = gaps
+            .iter()
+            .map(|g| ((g >> (16 * (c + 1))) & 0xffff) as u32)
+            .collect();
+        out.push((chunk, u32_column(values, h)));
+    }
+    out
+}
+
+/// `FR_OP`'s columns: the frame, the three accesses, the op selectors, and
+/// `x`, `prod`, `z`.
+fn fr_op(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    use constants::fr_op as f;
+    use constraints::fr_op as c;
+    let inv = invocations(src, family::FR_OP)?;
+    let (frames, h) = (inv.frames, inv.height);
+    let mut out = recursion_frame(&inv, f::FRAME_WORDS, f::FRAME_BYTES as u64);
+    for (q, delta, read_ts, read, write, mask) in [
+        (0, f::DELTA_A, c::A_READ_TS, c::A, None, c::A_LIVE),
+        (1, f::DELTA_B, c::B_READ_TS, c::B, None, c::B_LIVE),
+        (2, f::DELTA_D, c::D_READ_TS, c::D, Some(c::D_NEW), c::D_LIVE),
+    ] {
+        let gap = [c::gap_chunk(q, 0), c::gap_chunk(q, 1)];
+        out.extend(access_columns(
+            &inv,
+            q,
+            delta,
+            read_ts,
+            read,
+            write,
+            Some(mask),
+            gap,
+        ));
+    }
+    let (a, b, d) = (frames.access(0), frames.access(1), frames.access(2));
+    let ops = frames.word(f::OP_WORD).read_value;
+    let mut selectors: Vec<Vec<u32>> = (0..f::OPS.len())
+        .map(|_| Vec::with_capacity(frames.len()))
+        .collect();
+    let (mut x, mut prod, mut z) = (Vec::new(), Vec::new(), Vec::new());
+    for (r, op) in ops.iter().enumerate() {
+        for (column, code) in selectors.iter_mut().zip(f::OPS) {
+            column.push((*op == code) as u32);
+        }
+        let xr = match *op {
+            f::MUL | f::MAC => b.read[r],
+            f::INV => d.write[r],
+            _ => Fr::ZERO,
+        };
+        x.push(xr);
+        prod.push(a.read[r] * xr);
+        z.push(Fr::from_u64(
+            (*op == f::INV && a.read[r] == Fr::ZERO) as u64,
+        ));
+    }
+    for (i, values) in selectors.into_iter().enumerate() {
+        out.push((c::selector(i), u32_column(values, h)));
+    }
+    out.push((c::X, fr_column(x, h)));
+    out.push((c::PROD, fr_column(prod, h)));
+    out.push((c::Z, fr_column(z, h)));
+    Ok(out)
+}
+
+/// `P2_FIELD`'s columns: the frame, the eight accesses, the absorbed lanes,
+/// and the permutation's every intermediate — zero on a padding row, where the
+/// circuit's round constants are `rc·live`.
+fn p2_field(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    use constants::p2_field as f;
+    use constraints::p2_field as c;
+    let inv = invocations(src, family::P2_FIELD)?;
+    let (frames, h) = (inv.frames, inv.height);
+    let mut out = recursion_frame(&inv, f::FRAME_WORDS, f::FRAME_BYTES as u64);
+    let gap = |q: usize| [c::gap_chunk(q, 0), c::gap_chunk(q, 1)];
+    for i in 0..3 {
+        out.extend(access_columns(
+            &inv,
+            i,
+            f::DELTA_STATE,
+            c::state_read_ts(i),
+            c::state(i),
+            None,
+            None,
+            gap(i),
+        ));
+    }
+    out.extend(access_columns(
+        &inv,
+        3,
+        f::DELTA_X,
+        c::X_READ_TS,
+        c::X,
+        None,
+        Some(c::X_LIVE),
+        gap(3),
+    ));
+    out.extend(access_columns(
+        &inv,
+        4,
+        f::DELTA_Y,
+        c::Y_READ_TS,
+        c::Y,
+        None,
+        Some(c::Y_LIVE),
+        gap(4),
+    ));
+    for i in 0..3 {
+        out.extend(access_columns(
+            &inv,
+            5 + i,
+            f::DELTA_NEXT,
+            c::next_read_ts(i),
+            c::next_old(i),
+            Some(c::next(i)),
+            None,
+            gap(5 + i),
+        ));
+    }
+    let (s0, s1, s2) = (frames.access(0), frames.access(1), frames.access(2));
+    let (x, y) = (frames.access(3), frames.access(4));
+    let n = frames.word(f::N_WORD).read_value;
+    let mut lanes: [Vec<Fr>; 2] = Default::default();
+    let mut perm: Vec<Vec<Fr>> = (0..c::PERMUTATION_COLUMNS)
+        .map(|_| Vec::with_capacity(frames.len()))
+        .collect();
+    for (r, nr) in n.iter().enumerate() {
+        let l0 = if x.live[r] { x.read[r] } else { s0.read[r] };
+        let l1 = match (x.live[r], y.live[r]) {
+            (_, true) => y.read[r],
+            (true, false) => Fr::ZERO,
+            _ => s1.read[r],
+        };
+        let l2 = s2.read[r] + Fr::from_u64(*nr as u64);
+        lanes[0].push(l0);
+        lanes[1].push(l1);
+        let (cols, _) = c::permutation_witness([l0, l1, l2]);
+        for (column, v) in perm.iter_mut().zip(cols) {
+            column.push(v);
+        }
+    }
+    let [lane0, lane1] = lanes;
+    out.push((c::LANE0, fr_column(lane0, h)));
+    out.push((c::LANE1, fr_column(lane1, h)));
+    for (i, values) in perm.into_iter().enumerate() {
+        out.push((c::permutation_column(i), fr_column(values, h)));
+    }
+    Ok(out)
+}
+
+/// `FIELD_IO`'s columns: the frame, the eight data words and the cell, the two
+/// op selectors, and each exported word's high halfword.
+fn field_io(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    use constants::field_io as f;
+    use constraints::field_io as c;
+    let inv = invocations(src, family::FIELD_IO)?;
+    let (frames, h) = (inv.frames, inv.height);
+    let mut out = recursion_frame(&inv, f::FRAME_WORDS, f::FRAME_BYTES as u64);
+    for k in 0..f::DATA_WORDS {
+        out.extend(access_columns(
+            &inv,
+            k,
+            f::DATA_DELTA,
+            c::data_read_ts(k),
+            c::data_read(k),
+            Some(c::data_write(k)),
+            None,
+            [c::gap_chunk(k, 0), c::gap_chunk(k, 1)],
+        ));
+    }
+    out.extend(access_columns(
+        &inv,
+        f::DATA_WORDS,
+        f::CELL_DELTA,
+        c::CELL_READ_TS,
+        c::CELL_OLD,
+        Some(c::CELL_NEW),
+        None,
+        [
+            c::gap_chunk(f::DATA_WORDS, 0),
+            c::gap_chunk(f::DATA_WORDS, 1),
+        ],
+    ));
+    let ops = frames.word(f::OP_WORD).read_value;
+    let import: Vec<u32> = ops.iter().map(|o| (*o == f::IMPORT) as u32).collect();
+    let export: Vec<u32> = ops.iter().map(|o| (*o == f::EXPORT) as u32).collect();
+    for k in 0..f::DATA_WORDS {
+        let words = frames.access(k).write;
+        let hi: Vec<u32> = (0..frames.len())
+            .map(|r| match export[r] {
+                1 => {
+                    let bytes = words[r].to_bytes();
+                    u16::from_le_bytes([bytes[2], bytes[3]]) as u32
+                }
+                _ => 0,
+            })
+            .collect();
+        out.push((c::word_hi(k), u32_column(hi, h)));
+    }
+    out.push((c::IMPORT, u32_column(import, h)));
+    out.push((c::EXPORT, u32_column(export, h)));
+    Ok(out)
+}
+
 fn u32_column(mut values: Vec<u32>, height: usize) -> MultilinearPoly {
     values.resize(height, 0);
     MultilinearPoly::new(PolyBacking::U32(values))
@@ -2093,11 +2384,18 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
         .ok_or("the program has no ADD_SUB_LUI_AUIPC table")?;
     let h = src.height;
     let width = frame_queries(fam).len();
+    // The delegation types this format's circuit knows: the base prefix, or
+    // every type in the recursion format (`docs/spec/recursion.md` §1.2).
+    let types = if src.program.config.is_recursion() {
+        constants::delegation::TYPES.len()
+    } else {
+        constants::delegation::BASE_TYPES
+    };
 
     let mut decoded: [Vec<u32>; 6] = Default::default();
     let mut kinds: [Vec<u32>; 6] = Default::default();
     let (mut is_ecall, mut is_fence, mut wrap) = (Vec::new(), Vec::new(), Vec::new());
-    let mut is_deleg: [Vec<u32>; constraints::add_sub::IS_DELEGATION.len()] = Default::default();
+    let mut is_deleg: Vec<Vec<u32>> = vec![Vec::new(); types];
     let (mut sel, mut rd_hi, mut next_pc_hi) = (Vec::new(), Vec::new(), Vec::new());
     for r in 0..rows.len() {
         let row = rows.row(r);
@@ -2117,8 +2415,9 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
         let (a, b) = (read(Role::Rs1), read(Role::Rs2));
         let bit = mask.trailing_zeros();
         let (mut ecall_row, mut fence_row) = (0, 0);
-        // One selector per delegation type, in `IS_DELEGATION` order.
-        let mut deleg_row = [0u32; constraints::add_sub::IS_DELEGATION.len()];
+        // One selector per delegation type the circuit knows, in registry
+        // order.
+        let mut deleg_row = vec![0u32; types];
         let (value, carry) = match bit {
             kind::ADD => add(a, b),
             kind::ADDI => add(a, imm),
@@ -2138,6 +2437,13 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
                         .iter()
                         .position(|(_, n, ..)| *n == a)
                         .expect("just matched");
+                    if at >= types {
+                        return Err(format!(
+                            "cycle {} requests a recursion delegation in a base-format \
+                             statement",
+                            row.cycle
+                        ));
+                    }
                     deleg_row[at] = 1;
                     (0, 0)
                 }
@@ -2217,7 +2523,7 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
                 .iter()
                 .map(|column| column.iter().filter(|v| **v == 1).count())
                 .collect();
-            let names: Vec<String> = program::DELEGATIONS
+            let names: Vec<String> = program::DELEGATIONS[..types]
                 .iter()
                 .map(|(f, ..)| debug::family_name(*f))
                 .collect();
@@ -2234,13 +2540,22 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
     );
     out.push((IS_ECALL, u32_column(is_ecall, h)));
     out.push((IS_FENCE, u32_column(is_fence, h)));
-    for (address, values) in constraints::add_sub::IS_DELEGATION.iter().zip(is_deleg) {
-        out.push((*address, u32_column(values, h)));
+    for (i, values) in is_deleg.into_iter().enumerate() {
+        out.push((
+            constraints::add_sub::is_delegation(i),
+            u32_column(values, h),
+        ));
     }
-    out.push((WRAP, u32_column(wrap, h)));
-    out.push((RD_HI, u32_column(rd_hi, h)));
-    out.push((PC_WRAP, u32_column(Vec::new(), h)));
-    out.push((NEXT_PC_HI, u32_column(next_pc_hi, h)));
+    out.push((constraints::add_sub::wrap(types), u32_column(wrap, h)));
+    out.push((constraints::add_sub::rd_hi(types), u32_column(rd_hi, h)));
+    out.push((
+        constraints::add_sub::pc_wrap(types),
+        u32_column(Vec::new(), h),
+    ));
+    out.push((
+        constraints::add_sub::next_pc_hi(types),
+        u32_column(next_pc_hi, h),
+    ));
     for j in 0..TABLE_WIDTH {
         out.push((PolyAddress::Setup(j as u32), table.column_poly(j)));
     }
