@@ -1704,8 +1704,10 @@ tables imply and 18 the choice above it, for §9.2's reason — a shard's proof
 bytes barely move with its rows. A shard is **16,384 compressions** and
 **189,988 proof bytes**, 11.6 a compression against S26c's 5,186; its forward
 pass is 2,802 inner columns × `2^18` × 32 bytes = 23.5 GB and its derived peak
-about 30 GB, below `KECCAK_F`'s ~60 GB at the same height. That peak is a model
-figure (`docs/spec/constraint-manifest.md` §19.1) and owes a measurement.
+about 30 GB, below `KECCAK_F`'s ~60 GB at the same height. The proof bytes are
+measured, exactly; the peak is the model's, a whole `guests/sha256-ops` statement
+having peaked at 33.1 GB with nothing attributing it to a shard
+(`docs/handoff/S26e-sha256-round-and-cycles.md` §4).
 
 **The price is prover work per compression**: sixteen rows of 2,802 inner
 columns are 44,832 forward-pass cells a compression where S26c's one row was

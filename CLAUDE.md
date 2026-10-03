@@ -1535,11 +1535,13 @@ Amsterdam's; and the deferred suites, which run in one batch at the end of the p
 `SHA256_COMP` became `KECCAK_F`'s S26d shape — four rounds a row, a compression sixteen
 invocations glued by RAM, every Boolean operation an `XOR8` obligation, at `2^18` — so
 block 257510's 8,011 compressions are one shard and ~0.19 MB of proof where they were 32
-shards and 42.5 MB. And the guest itself went from 351.6M cycles to **197.9M** on that
+shards and 42.5 MB — proved end to end, 189,988 proof bytes for the shard, the
+model's figure. And the guest itself went from 351.6M cycles to **197.9M** on that
 block: dependencies' debug assertions off at `--release` (−6.8%), and k256's `EC_ADD` glue —
 coordinates as words rather than bytes, the frame built once, an indexed `select`, no
 table copies in `lincomb`. Measured, journal unchanged at every step; the `2^18` SHA
-shard's ~30 GB peak is the model's and owes a measurement.
+shard's ~30 GB peak is the model's — a whole `sha256-ops` statement peaked at 33.1 GB,
+unattributed.
 
 **`S-NATIVE-IO` takes no number for the same reason**, and it is S-IO's other half. S-IO
 built the mechanism that binds an execution's public values and left the POSIX surface

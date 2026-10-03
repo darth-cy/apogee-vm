@@ -62,9 +62,9 @@ the all-zero row is valid.
 | obligations | 0 | **450**: 114 `RANGE16`, 336 `XOR8` (128- and 512-leaf trees) |
 | relations, depth, wire bytes at `2^18` | — | 2,921, 28, 845,456 |
 | compressions a shard | 256 | **16,384** |
-| proof bytes a shard | ~1.33 MB | **189,988** (derived, the §1.2 model) |
+| proof bytes a shard | ~1.33 MB | **189,988** — the §1.2 model's figure, and measured (§4) |
 | proof bytes a compression | 5,186 | **11.6** |
-| forward pass a shard | — | 23.5 GB; derived peak ~30 GB |
+| forward pass a shard | — | 23.5 GB; modelled peak ~30 GB, a whole statement measured at 33.1 GB (§4) |
 
 **The price**, stated when the shape was chosen: sixteen rows of 2,802 inner
 columns are 44,832 forward-pass cells a compression where S26c's row was 16,688,
@@ -159,8 +159,8 @@ twice each and identical, and re-pinned.
 
 ### Deferred, not run
 
-Every `# DEFERRED` suite but the one count pin §4 records. Three of them — `prover::keccak`, `prover::revm` and
-`host::prove` — carry S26d's `2^18` `KECCAK_F` shard at ~60 GB and do not fit the
+Every `# DEFERRED` suite but the one count pin §4 records. Three of them —
+`prover::keccak`, `prover::revm` and `host::prove` — carry S26d's `2^18` `KECCAK_F` shard at ~60 GB and do not fit the
 48 GB machine this stage ran on at any thread count. **Before this stage nothing
 but `prover::revm` proved a `SHA256_COMP` shard**, and §4 records the one
 end-to-end proof that was run instead.
@@ -228,8 +228,9 @@ PR's.
 
 ## 7. For the next stage
 
-- **Measure the `2^18` `SHA256_COMP` shard** — its peak and proof bytes are the
-  model's (§1).
+- **Attribute §4's 33.1 GB to a shard** — the debug log's `begin`/`done` lines at
+  `detail`, or a `bench prove` run — and measure the `SHA256_COMP` shard inside a real
+  block, where its 16,384 rows are occupied rather than 529 of them.
 - **Where block 257510's 197.9M cycles go now**: memory copying 52.2M (the trie's
   `parse_at` 8.0M, `lincomb`'s by-value point returns 6.4M — about three 120-byte
   copies a select-and-add, from upstream's `AddAssign` shape), `operand` 25.7M

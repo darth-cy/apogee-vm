@@ -8720,8 +8720,11 @@ for §12.1's reason: both channels' tables need 16 variables, and a delegation
 shard's proof bytes barely move with its height. At `2^18` a shard holds
 **16,384 compressions** for 189,988 proof bytes — **11.6 a compression**, a
 factor of 447. Its forward pass is 2,802 × 2^18 × 32 = 23.5 GB and its derived
-peak about 30 GB (forward pass, committed base, transition 0's first bind);
-that is a model figure and owes a measurement. On block 257510 the family
+peak about 30 GB (forward pass, committed base, transition 0's first bind). The
+proof bytes are measured — an end-to-end proof of `guests/sha256-ops` at
+`max_in_flight = 1` gave this shard exactly 189,988, and the whole statement
+peaked at 33.1 GB RSS, unattributed to a shard
+(`docs/handoff/S26e-sha256-round-and-cycles.md` §4). On block 257510 the family
 goes from 32 shards to one.
 
 **The honest price is GKR work per compression.** Sixteen rows of 2,802 inner
