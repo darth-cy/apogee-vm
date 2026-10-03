@@ -1566,9 +1566,17 @@ so production follows demand and every shard heavier than rows is a worker's. It
 no proof byte, no transcript and no wire form. It is **master anti-goal 7's one
 exception** — scoped threads and one lock, in one file, held there by
 `crates/prover/tests/one_pipeline.rs` — and it amends `prompts/00-master.md` there,
-authorized by the owner and recorded in the handoff note. What it owes, in
-`docs/handoff/S-PIPELINE.md`: the full-block measurement the design was built for, and
-the deferred suites, which run in one batch at the end of the progression.
+authorized by the owner and recorded in the handoff note. **Measured on the same block**
+(its §1.1, with S26e's fewer cycles in the tree too):
+- proving took 2,481 s against 6,635 s, at a 173.92 GiB peak against 192.97 GiB;
+- pass 1 is 6.5× faster per shard, on 25.7 of 32 cores where it had three or four;
+- pass 2 keeps the box ~95% busy until the guest exits, and gains only ~10%, because a
+  batch's idle slot never idled its cores;
+- what is left is the exit's tail, where the two `2^18` `KECCAK_F` shards' one-thread
+  fills run longest and set the peak between them.
+
+What it owes is the deferred suites, which run in one batch at the end of the
+progression.
 
 **`S-NATIVE-IO` takes no number for the same reason**, and it is S-IO's other half. S-IO
 built the mechanism that binds an execution's public values and left the POSIX surface

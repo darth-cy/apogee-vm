@@ -312,6 +312,16 @@ The pipeline answers each line:
   holds one worker and nothing else. What is left is the end of each pass, where the
   last shards finish with fewer than `max_in_flight` beside them.
 
+**Measured on the same block** at S-PIPELINE, with S26e's fewer cycles in the tree too
+(`docs/handoff/S-PIPELINE.md` §1.1):
+
+- **Pass 1 took 191 s for 207 shards**, 6.5× faster per shard, with 25.7 of 32 cores busy.
+- **Pass 2 held 11.95 of 12 shards and 30.4 of 32 cores until the guest exited**, and
+  gained ~10%. The gain is small because an idle slot in a batch had never idled its
+  cores: rayon gave them to the shards still running.
+- **What is left is the exit's tail**, 460 s of 2,290. Its longest stretches are the two
+  `2^18` `KECCAK_F` shards' one-thread fills, 200 s and 279 s.
+
 **What this section said before, and why it was wrong.** S26 wrote that the
 batch-then-prove shape needed no threads and no channels, and that "execution is under 1%
 of a block's wall clock, so the overlap a producer/consumer queue would buy is not worth
@@ -385,7 +395,10 @@ count the filled and unclaimed rows of §5.1.
 started at once, so their forward passes coincided; workers desynchronize within a few
 shards, so `max_in_flight` concurrent shards are rarely at their peaks together. The
 bound is the same `max_in_flight` shards either way, and the figures above are the batch
-shape's; the pipeline's own are re-measured at the end of the progression.
+shape's. The pipeline's one measurement so far is §5.2's block at 12 in flight:
+**173.92 GiB**, against the batch shape's 192.97. The two `2^18` `KECCAK_F` shards set
+that peak, held together in the exit's tail with nothing else: two shards, not twelve.
+There, the delegation shards set the peak and the bound did not.
 
 ---
 

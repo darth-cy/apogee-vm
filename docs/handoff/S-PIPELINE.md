@@ -61,6 +61,48 @@ needed no threads because "execution is under 1% of a block's wall clock". That 
 of the executor and beside the point: the cost was the barrier's and the serial fills'.
 §5 now says so.
 
+### 1.1 The same block, through the pipeline
+
+Measured at `1fcd5b2` on the same box with the same command: `bench prove --stateless`,
+`--in-flight 12`, `APOGEE_DEBUG=phase`. Every log line was timestamped and `vmstat`
+sampled the CPU every 10 s (`../apogee-stateless-runs/2026-10-03`, which also archives the
+proof). The block verified, and its journal is the fixture's 43 bytes.
+
+**S26e is in this tree and not in §1's.** The guest is 198M cycles and 207 shards, and
+`SHA256_COMP` is one `2^18` shard where it was 32 at `2^8`. So the totals measure both
+stages, and only each pass's rate per shard and its cores busy measure this one:
+
+| | batches (§1) | pipeline |
+| --- | --- | --- |
+| pass 1 | 2,287 s; 5.99 s a shard; ~3.5 of 32 cores busy | 191 s; 0.92 s a shard; 25.7 of 32 |
+| pass 2 | 4,291 s; 7.99 shard-seconds of GKR and opening per second | 2,290 s; 8.89 |
+| proving | 6,635 s; 382 shards | 2,481 s; 207 shards |
+| peak RSS | 192.97 GiB | 173.92 GiB |
+
+- **Pass 1 is 6.5× faster per shard.**
+  - It held all 12 shards for 75% of the pass, 11.34 on average.
+  - Its fills now bound it: they are 81% of its shard-seconds, one thread each.
+  - Its sampled memory never passed 15.9 GiB.
+- **Pass 2 kept the box full until the guest exited**: 11.95 of 12 shards held on
+  average and 30.4 of 32 logical CPUs busy for 1,825 s, 80% of the pass.
+  - A shard costs what it did: the `2^20` families' GKR times are within ~10% of §1's.
+  - The gain is ~10%, not the quarter §1's idle slots suggested. A finished shard's idle
+    slot never idled its cores: rayon gave them to the shards still running, which is
+    §1's 70–100% busy while proving.
+- **What remains is the exit's tail: 460 s holding 5.6 of 12.**
+  - Its shards exist only once the guest exits, and the workers claimed all eleven within
+    122 s.
+  - `KECCAK_F#1` ran 388 s, 200 of them its fill on one thread, and finished 169 s after
+    every other shard.
+  - `KECCAK_F#0`, claimed 215 s before the exit, ran 563 s, 279 of them its fill.
+- **The peak was the two `2^18` `KECCAK_F` shards**, held together in the tail with
+  nothing else: two shards, not the twelve the bound allows.
+
+**The pipeline's share is an estimate.** Scaling §1's run to this shard mix (its executor
+by cycles, its commits by non-SHA shards, pass 2 by GKR and opening work) puts the batch
+shape at ~3,900 s here. That makes the pipeline's share ~36% of the wall clock: 7.0× on
+pass 1 and ~10% on pass 2. A run of `main` on the same box would measure it.
+
 ## 2. The pipeline
 
 `crates/prover/src/streaming.rs`. Both passes run one function, `pipeline`, over a
@@ -259,21 +301,15 @@ No file under `tools/transcript-ref`, `tools/stateless-ref`, `crates/guest-sdk` 
 
 ### CI's
 
-`cargo test --workspace`, on the owner's standing instruction.
+`cargo test --workspace`, on the owner's standing instruction: green at `1fcd5b2`, with
+every other step of `ci.yml`.
+
+### On the dev box
+
+The full-block run the stage was built for, and the peak under the pipeline: §1.1.
 
 ### Owed
 
-- **The full-block measurement the stage was built for.** The same job as
-  `../apogee-stateless-runs/2026-10-02/prove.sh` — `bench prove --stateless` at
-  `--in-flight 12` with `APOGEE_DEBUG=phase` — on the dev box. Block 257,510 is 198M
-  cycles since S26e rather than 349M, so a new run measures S26e and S-PIPELINE together
-  and its totals are not this table's; what isolates the pipeline is each pass's core
-  utilization against §1, and the `take` lines' `in_flight`, which should sit at the
-  bound until each pass's tail.
-- **The peak under the pipeline.** The bound is unchanged — `max_in_flight` shards — but
-  where a batch's shards started together and peaked together, a pipeline's
-  desynchronize; and pass 1 now holds up to `max_in_flight` shards' fills where it held
-  one. Both are expected to stay under pass 2's peak and neither is measured.
 - **The deferred suites**, in one batch at the end of the progression,
   `crates/prover/tests/streaming.rs` first: it is the one that holds this stage's claim
   on real proofs.
