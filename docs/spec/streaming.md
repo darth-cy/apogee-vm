@@ -3,6 +3,9 @@
 Built at S26 as a second path beside the archived one. **Made the only one at S-STREAM**
 (owner's decision): `prover::prove_block_streaming` proves every block and every statement
 in this repository, and nothing proves through `prover::prove_block` any more (§1.2, §6).
+**Pipelined at S-PIPELINE** (owner's decision): both passes run `max_in_flight` workers that
+pull shards from the executor on demand, with no batch and so no barrier (§5) — master
+anti-goal 7's one exception.
 
 It adds **no protocol**: no transcript message, no challenge, no wire form, no circuit, no
 constant. It changes exactly one thing — *when* a column exists.
@@ -16,7 +19,7 @@ three regions; it restates none of them.
 | --- | --- |
 | `crates/trace` | `MemoryState`, the last-access tables apart from the log; `RowSlice` and `FrameSlice`, a shard's rows; the row-reading column builders |
 | `crates/emulator` | `StreamingRun`, the pull-based tracer, and `ShardChunk` |
-| `crates/prover` | `prove_block_streaming`, the two passes and the backpressure |
+| `crates/prover` | `prove_block_streaming`, the two passes and the pipeline that runs both |
 | `crates/verifier` | `proof_archive`, the four files a proved block leaves on disk (§6.4) |
 | `crates/checker` | `memory_columns_from_log`, the log reading the row reading is held to |
 
@@ -57,8 +60,11 @@ this repository is usable for sizing**, including the ones above.
 - one **partial** buffer per family, at most `height − 1` rows (§3.1) — and at exit
   these become the execution's last shards, the same memory under a new owner;
 - the **last-access tables**, `O(touched addresses)` (§3.2);
-- at most `max_in_flight` **filled** shards, waiting for a batch or being proved —
-  one more, for a moment, when a delegating ecall fills two buffers in one step (§5);
+- at most `max_in_flight` **claimed** shards, one per worker: each its rows and whatever
+  columns, commitments, forward pass and proof it has grown into so far (§5);
+- shards the executor has filled and no worker has claimed yet: **rows only, at most one
+  per family** — a buffer that reached its height and has not been taken, where a
+  partial buffer stood a step before (§5.1);
 - the statement's commitment metadata: `64 · columns` bytes a shard, and the
   `ShardProof`s, which are the output.
 
@@ -84,10 +90,12 @@ cost.
 
 ```text
 PASS 1 — EXECUTE + PRECOMMIT                PASS 2 — REEXECUTE + PROVE
-  execute the guest                           execute the same guest again
-  a shard fills → build its M columns         a shard fills → queue it
-  commit M, keep the 64-byte points           the queue reaches N → prove them
-  drop the columns and the shard              write the proofs, drop the shards
+  max_in_flight workers, one executor         the same, over the same execution
+  a worker with no shard claims the next:     a worker with no shard claims the next:
+    it steps the guest until a buffer fills     it steps the guest until a buffer fills
+    builds that shard's M columns               fills every column of that shard
+    commits them, keeps the 64-byte points      proves it, keeps the proof
+    drops the columns and the shard             drops the columns and the shard
   at exit: the window families' shards        at exit: the window families'
   the statement, then G1–G11                  assemble the BlockProof
 ```
@@ -224,56 +232,173 @@ and an answer to a different question (`docs/spec/debug-info.md` §3).
 
 ---
 
-## 5. Backpressure
+## 5. The pipeline: pulled, bounded, and with no barrier
 
-`prove_block_streaming(setup, io, max_in_flight)`. `max_in_flight` is the number
-of shards **proved at once**, and therefore what bounds the peak: a batch of at most
-that many is proved with one `rayon` parallel iterator, each task building its
-shard's columns, its base layer, its GKR proof and its opening and then dropping all
-of it. The window families are proved last, in batches under the same bound.
+`prove_block_streaming(setup, io, max_in_flight)`. Both passes run one **pipeline**
+(`crates/prover/src/streaming.rs`'s `pipeline`): `max_in_flight` workers over one
+executor, each worker claiming the next shard the moment its own is finished. Pass 1's
+work on a shard is building and committing its `M` columns; pass 2's is filling every
+column and proving it. The window families' shards are not the pipeline's — they are not
+a fact until the execution is over (§3.2) — and follow it in batches under the same
+bound.
 
-A filled shard waits for its batch as rows, and ordinarily no more than
-`max_in_flight` are held at all, waiting or proving. **Two exceptions, both rows and
-neither a forward pass.** A delegating ecall fills two buffers in one step — the requesting
-family's and the delegation family's — so one shard can wait while a full batch
-proves. And at exit every family's partial buffer becomes a shard at once, all of
-them queued and proved in batches; those are the buffers §1.1 already counts, one per
-family and resident since execution began, so the tail holds nothing the executor
-was not holding.
+### 5.1 What is held, and what bounds it
 
-It is an argument and not a constant because the caller is the only one that
-knows the machine — a shard's base layer plus its forward pass is about 1.5 GB at
-`2^20` and rather more for a delegation family — and it is the knob
-`RAYON_NUM_THREADS` used to be. It must be at least 1.
+**A worker claims a shard before anything heavier than its rows exists.** A worker with
+nothing takes the pipeline's one lock and claims the next shard: one the executor has
+already filled, if one is waiting, and otherwise it **steps the executor itself**, under
+the lock, until some family's buffer fills. Everything the shard grows into — its
+columns, its multiplicities, its commitments, its base layer and forward pass, its
+opening — is built by that worker after the claim, and dropped before its next one.
 
-**It is the one knob there is, and what it buys is a bracket rather than a formula.**
-On a 51-shard mini-block on a 247 GiB box, four in flight peaked at 77.10 GiB and eight
-at 83.91, and the extra four were worth 14% of the wall clock — 6.8 GiB for 214 s, which
-is why `tools/bench/src/block.rs`' `DEFAULT_IN_FLIGHT` is 8. The deferred suites take 4
-(`crates/prover/tests/common/mod.rs`' `IN_FLIGHT`): a suite is run for its verdict and
-not for its wall clock. `StreamingReport::peak_in_flight` is the largest batch actually
-proved, the window families' included; it does not count shards waiting for one.
+So two quantities, each bounded by the structure and not by a schedule:
 
-**A queue and not a pool size, because the pool size never bounded anything.** On the
+| what | bound | what holds it there |
+| --- | --- | --- |
+| shards claimed: rows, and anything built from them | `max_in_flight` | one shard a worker and `max_in_flight` workers; every claim asserts it |
+| shards filled and not yet claimed | rows only, **at most one per family** | the executor steps only for a claim with nothing waiting, one step fills at most two buffers and the exit at most one per family; `Source::admit` asserts it |
+
+The second row is the executor's own state under a new owner: a buffer that reached its
+height and has not been taken, where §1.1 already counts one partial buffer per family.
+**The executor never runs ahead of demand.** There is no producer and no queue for one to
+fill: a run whose workers are all busy is a run whose executor is stopped. A delegating
+ecall that fills two buffers in one step leaves one of them waiting for the next worker
+to finish, and the exit's tail — one shard per family, the buffers the executor already
+held — is claimed one shard at a time like any other.
+
+**Workers and not a pool size, because the pool size never bounded anything.** On the
 archived path the parallel step was one `par_iter` over the whole shard list, and rayon
 steals into a new shard task while a thread is parked in a nested `par_iter` — S-BATCH
 walked the log and found **17 shards simultaneously live at 12 threads, and 10 at 6**
-(`docs/handoff/S-BATCH-miniblock-gate.md` §3). `RAYON_NUM_THREADS` was therefore a knob
-that did not hold. A batch of at most `max_in_flight` chunks does.
+(`docs/handoff/S-BATCH-miniblock-gate.md` §3). The workers here are **not** rayon
+threads. Each shard's work runs on rayon's **global** pool, so `RAYON_NUM_THREADS` is the
+cores the shards share, and a worker blocked on that work cannot steal a second shard: the
+bound is the worker count, and nothing a scheduler decides can move it. Two consequences
+follow from the same fact. A `ThreadPool::install` around `prove_block_streaming` bounds
+only the window families' batches, not the shards — which is why
+`crates/prover/tests/block.rs` asserts thread-count independence shard by shard on a
+one-thread pool rather than around the whole call. And a worker runs its shard's fill on
+its own thread, outside the pool, so a pass can have up to `RAYON_NUM_THREADS +
+max_in_flight` threads runnable; a fill is one thread, and the operating system shares
+the cores.
 
-**The block does not depend on it.** Shards are placed by their statement
-position, and each proof is a function of the global state and its own columns
-alone, so the schedule cannot reach a challenge — the same argument
-`docs/spec/block-proof.md` §5.2 makes about the thread count.
-`crates/prover/tests/streaming.rs` proves the bytes equal at 1 and at 8 over two
-statements, and `crates/prover/tests/block.rs`'
-`the_block_does_not_depend_on_the_thread_count` is the other half.
+### 5.2 What the barrier cost, and what replaced it
 
-**There are no threads and no channels.** Master anti-goal 7 bans both, and the
-batch-then-prove shape needs neither: the executor runs until the queue is full,
-the queue is proved, the executor resumes. Execution is under 1% of a block's
-wall clock, so the overlap a producer/consumer queue would buy is not worth a
-thread.
+Until S-PIPELINE the bound was a **batch**: `max_in_flight` filled shards proved with one
+`par_iter`, and the executor stopped until the whole batch was done. With the number of
+live shards held below the core count, fork-join has no other shape. The first
+full-block proof — devnet block 257,510 through `revm-block-stateless`, 349M cycles, 382
+shards, 32 cores, `max_in_flight` 12, before S26e — measured what it cost:
+
+| step | seconds | share | cores busy |
+| --- | --- | --- | --- |
+| pass 1: execute | 55 | 1% | 1 |
+| pass 1: commit 382 shards, one at a time | 2,232 | 34% | ~3.5 of 32 |
+| pass 2: re-execute, and fill each batch | 650 | 10% | 1, no overlap with proving |
+| pass 2: prove 31 batches of 12 | 3,641 | 55% | 70–100% |
+
+About **23% of the proving slots sat idle**, each batch waiting for its slowest shard —
+the 154 s `KECCAK_F` shard, and the slower shift and memory shards — beside 77–107 s for
+the rest. And pass 1 used three or four cores of 32, because a shard's fill is one thread
+and only its MSMs are parallel, and it committed one shard at a time.
+
+The pipeline answers each line:
+
+- **pass 1 commits `max_in_flight` shards at a time**, so one shard's single-threaded
+  fill overlaps the other workers' MSMs;
+- **a shard's fill overlaps the other workers' proving**, and the executor steps while
+  they prove — it is a worker's own claim that runs it;
+- **there is no batch**: a worker that finishes claims the next shard, so a slow shard
+  holds one worker and nothing else. What is left is the end of each pass, where the
+  last shards finish with fewer than `max_in_flight` beside them.
+
+**Measured on the same block** at S-PIPELINE, with S26e's fewer cycles in the tree too
+(`docs/handoff/S-PIPELINE.md` §1.1):
+
+- **Pass 1 took 191 s for 207 shards**, 6.5× faster per shard, with 25.7 of 32 cores busy.
+- **Pass 2 held 11.95 of 12 shards and 30.4 of 32 cores until the guest exited**, and
+  gained ~10%. The gain is small because an idle slot in a batch had never idled its
+  cores: rayon gave them to the shards still running.
+- **What is left is the exit's tail**, 460 s of 2,290. Its longest stretches are the two
+  `2^18` `KECCAK_F` shards' one-thread fills, 200 s and 279 s.
+
+**What this section said before, and why it was wrong.** S26 wrote that the
+batch-then-prove shape needed no threads and no channels, and that "execution is under 1%
+of a block's wall clock, so the overlap a producer/consumer queue would buy is not worth
+a thread". It was right about the executor and wrong about the shape: the cost was never
+the executor's. It was the barrier's, and the serial fills'.
+
+### 5.3 Why threads, and why exactly these
+
+The pipeline is **master anti-goal 7's one exception** (owner's decision, S-PIPELINE):
+`max_in_flight` workers under `std::thread::scope`, sharing one `std::sync::Mutex`
+around the executor and the shards it has filled. Everything inside a shard is still
+rayon over data.
+
+*Start the next shard when any one finishes* is decided at run time by whichever worker
+finishes, so it needs one point where the workers coordinate, and fork-join cannot say it
+with a bound below the core count. Three alternatives were weighed and refused:
+
+- **rayon only, overlapped batches** — `rayon::join` of the executor and the next
+  batch's fills against the current batch's proofs. It needs no exception and it
+  overlaps the fills and the execution, but the barrier stays.
+- **`par_bridge` in a pool of `max_in_flight` threads, each shard installed into a second
+  pool** — the same schedule, on rayon's internal mutex. Its bound would rest on
+  `par_bridge`'s per-thread re-entry guard, an implementation detail of rayon, and on a
+  pool size, which is the reasoning S-BATCH found failing.
+- **a producer thread and a channel** — a queue is somewhere for the executor to run
+  ahead into, and production must follow demand (§5.1).
+
+The shape is one scope and one lock, and `crates/prover/tests/one_pipeline.rs` holds it
+there: it fails on a thread, lock, channel, atomic, `OnceLock` or `async fn` anywhere
+else in the proving stack's sources, and on `streaming.rs` growing a second scope or a
+second lock.
+
+### 5.4 Why it is correct
+
+- **The block does not depend on it.** Shards are placed by their statement position,
+  and each proof is a function of the global state and its own columns alone, so the
+  schedule cannot reach a challenge — the same argument `docs/spec/block-proof.md` §5.2
+  makes about the thread count. `crates/prover/tests/streaming.rs` proves the bytes
+  equal at 1 and at 8 over two statements, and `crates/prover/tests/block.rs`'
+  `the_block_does_not_depend_on_the_thread_count` is the other half.
+- **It cannot deadlock.** There is one lock. It is never held while a shard is worked,
+  never taken twice by one worker, and nothing blocks while holding it but the
+  executor's own step.
+- **The failure returned is the earliest in fill order, at any worker count.** Shards
+  are claimed in fill order, so every shard before the first failure recorded has been
+  claimed, and a claimed shard is always worked to its end: if one of them fails too, it
+  is recorded, and it is earlier. A failure stops every claim after it. An executor
+  failure ranks after every shard it filled — which have all been claimed, the executor
+  stepping only when none is waiting.
+- **A panic stops the rest, and is raised as itself.** A drop guard sets the stop flag
+  as a worker unwinds; a panic inside the executor poisons the lock, which every worker
+  reads as stop. The shards in flight finish, and the first panic is re-raised once
+  every worker has stopped.
+
+### 5.5 The knob
+
+It is an argument and not a constant because the caller is the only one that knows the
+machine — a shard's base layer plus its forward pass is about 1.5 GB at `2^20` and rather
+more for a delegation family. It must be at least 1.
+
+**It is the one knob there is, and what it buys is a bracket rather than a formula.**
+On a 51-shard mini-block on a 247 GiB box, under the batch shape, four in flight peaked
+at 77.10 GiB and eight at 83.91, and the extra four were worth 14% of the wall clock —
+6.8 GiB for 214 s, which is why `tools/bench/src/block.rs`' `DEFAULT_IN_FLIGHT` is 8. The
+deferred suites take 4 (`crates/prover/tests/common/mod.rs`' `IN_FLIGHT`): a suite is run
+for its verdict and not for its wall clock. `StreamingReport::peak_in_flight` is the most
+shards held at once in either pass, the window families' batches included; it does not
+count the filled and unclaimed rows of §5.1.
+
+**A batch's shards peaked together, and a pipeline's do not.** Every shard in a batch
+started at once, so their forward passes coincided; workers desynchronize within a few
+shards, so `max_in_flight` concurrent shards are rarely at their peaks together. The
+bound is the same `max_in_flight` shards either way, and the figures above are the batch
+shape's. The pipeline's one measurement so far is §5.2's block at 12 in flight:
+**173.92 GiB**, against the batch shape's 192.97. The two `2^18` `KECCAK_F` shards set
+that peak, held together in the exit's tail with nothing else: two shards, not twelve.
+There, the delegation shards set the peak and the bound did not.
 
 ---
 
@@ -447,19 +572,27 @@ run, once the report is printed (`tools/bench/CLAUDE.md`).
 | 4 | its final state is the log's, and so are the window list and the boundary read off it | `…::the_streamed_state_is_the_logs` | CI |
 | 5 | the block does not depend on `max_in_flight`, over S16's statement (the `Rows` arm) and a delegation statement (the `Invocations` arm), and each is a block `verify_block` accepts | `crates/prover/tests/streaming.rs::a1`, `a2` | deferred |
 | 6 | nothing in the repository proves through the archived path, and the archived path is still there | `crates/prover/tests/one_proving_path.rs` | CI |
+| 7 | the pipeline works every shard the execution fills exactly once, at 1, 3 and 8 workers, and never more than the worker count at once — read off its own count and off the intervals the work recorded | `crates/prover/src/streaming.rs::tests::every_filled_shard_is_worked_once_and_never_more_than_workers_at_once` | CI |
+| 8 | the executor steps only for a claim with nothing waiting, and shards are claimed in fill order | `…::the_guest_is_stepped_only_for_a_claim_with_nothing_waiting` | CI |
+| 9 | the failure returned is the earliest in fill order at any worker count, and a panic reaches the caller as itself | `…::the_earliest_failure_in_fill_order_is_the_one_returned`, `…::a_panic_in_one_shard_reaches_the_caller_as_itself` | CI |
+| 10 | no thread, lock, channel or atomic outside the pipeline, and the pipeline is one scope and one lock | `crates/prover/tests/one_pipeline.rs` | CI |
 
-Claims 1 to 4 and 6 are what hold the design in ordinary CI, and they are deliberately
-where the risk is: everything this path does differently is a column built from rows
-instead of from events, and a shard cut by a flush instead of by arithmetic.
+Claims 1 to 4 and 6 to 10 are what hold the design in ordinary CI, and they are
+deliberately where the risk is: everything this path does differently is a column built
+from rows instead of from events, a shard cut by a flush instead of by arithmetic, and a
+shard claimed by a worker instead of drained from a batch. Claims 7 to 9 drive the real
+executor over `guests/shards` — seventeen add/sub shards filled in mid-run, every other
+family's at exit — and put a stand-in where the work goes, because what a shard's work
+is does not reach the pipeline.
 
 **Claim 5 is two statements and not three, and that is the shape of the loss in §6.3.**
 It was eight real blocks — three statements proved twice each against an archived
 reference, plus S16's twice more at two bounds — and it is four, two statements at two
 bounds each, held against each other. The `Window` arm needs no run of its own: a window
-family's shard is filled at exit, after every execution shard, so its position in the
-queue is the same at any bound. The delegation statement earns its place because pass 2
-drains the queue in *fill* order while the statement is in ascending-`FamilyId` order, so
-a block whose two orders disagree is the case a batch size could plausibly reach. The
+family's shard is built after the pipeline, over the final state, at any bound. The
+delegation statement earns its place because pass 2's workers finish shards in whatever
+order the schedule picks while the statement is in ascending-`FamilyId` order, so a block
+whose two orders disagree is the case a worker count could plausibly reach. The
 three arms are each still proved and verified by the suites that are about them:
 `tests/block.rs` and `tests/acceptance.rs` the `Rows` arm, `tests/keccak.rs` the
 `Invocations` arm, `tests/public_io.rs` the `Window` arm.
@@ -478,6 +611,10 @@ touch this page:
   has to keep;
 - anything that makes a shard's columns depend on rows outside that shard, which
   would break §3.1 and is what the frame's design deliberately avoids;
+- a change to the pipeline's shape — a second lock, a producer, a queue the executor
+  could run ahead into, or a thread anywhere else — which is master anti-goal 7's
+  exception and therefore the owner's decision; `crates/prover/tests/one_pipeline.rs`
+  is where it fails;
 - a second proving path of any kind, which is §6.2's rule and therefore the owner's
   decision and nobody else's — `crates/prover/tests/one_proving_path.rs` is where the
   argument would have to be made, not routed around;

@@ -22,8 +22,8 @@ mod common;
 use constants::family;
 use field::Fr;
 use prover::{
-    global_commit_phase, prove_shard_columns, public_inputs, shard_columns, statement_inputs,
-    ProverSetup, ProvingContext,
+    global_commit_phase, prove_shard, prove_shard_columns, public_inputs, shard_columns,
+    statement_inputs, ProverSetup, ProvingContext,
 };
 use trace::TraceArchive;
 use verifier::{verify_block, verify_shard};
@@ -470,28 +470,60 @@ fn a7_a_corrupted_cell_in_the_second_shard_refuses_the_block() {
 }
 
 /// Must-be-exact 8: the assembled block is byte-identical for any thread
-/// count. Shard proving is the only parallel step and each shard forks its own
-/// transcript from the global state, so the schedule cannot reach a challenge.
+/// count. Each shard forks its own transcript from the global state and is
+/// placed by its statement position, so the schedule cannot reach a challenge.
 ///
-/// On the streaming path the parallel step is pass 2's batch — a rayon
-/// parallel iterator over at most `max_in_flight` shards — and the claim is
-/// the same one: a shard is placed by its statement position and its proof is
-/// a function of the global state and its own columns alone.
-/// `tests/streaming.rs` makes the companion claim over `max_in_flight` itself,
-/// which is the other half of the schedule.
+/// **Since S-PIPELINE it is asserted where it lives, on one thread.** The
+/// streaming prover's shards are proved by its own workers, which are not
+/// threads of any pool a caller installs — their rayon work runs on the global
+/// pool — so a one-thread `ThreadPool::install` around `prove_block_streaming`
+/// would vary the thread count of the window batches and nothing else, and
+/// still pass. The claim is two claims, and both are run inside the one-thread
+/// pool here: the global commit phase, rebuilt from the archive as `a7`
+/// rebuilds it, whose digest must be the streamed block's; and every shard's
+/// proof, made by the per-shard component the pipeline's workers run, which
+/// must be the streamed block's byte for byte. `tests/streaming.rs` makes the
+/// companion claim over `max_in_flight`, the other half of the schedule.
 #[test]
 #[ignore]
 fn the_block_does_not_depend_on_the_thread_count() {
-    let (_, _, reference) = proved();
+    let (setup, archive, reference) = proved();
+    let order = statement_shards(&setup.program.config, reference.shard_counts());
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(1)
         .build()
         .expect("a one-thread pool");
-    let serial = pool.install(|| {
-        let setup = common::shards_setup();
-        common::streamed(&setup, &common::empty_io())
+    let serial: Vec<ShardProof> = pool.install(|| {
+        let inputs = statement_inputs(&setup, &archive).expect("the statement");
+        let mut global = global_commit_phase(&setup.vk, &setup.srs, &inputs);
+        assert_eq!(
+            global.digest,
+            reference.shard_proofs()[0].global_digest,
+            "the global commit phase on one thread is the streamed block's"
+        );
+        global.statement = reference.statement().clone();
+        let ctx = ProvingContext {
+            setup: &setup,
+            global,
+        };
+        order
+            .iter()
+            .map(|&(family, index)| prove_shard(&ctx, &archive, family, index))
+            .collect()
     });
-    assert_eq!(serial.to_bytes(), reference.to_bytes());
+    assert_eq!(serial.len(), reference.shard_proofs().len());
+    for ((family, index), (one, all)) in order
+        .iter()
+        .zip(serial.iter().zip(reference.shard_proofs()))
+    {
+        assert_eq!(
+            one.to_bytes(),
+            all.to_bytes(),
+            "shard ({family}, {index}): proved on one thread from the archive, it is not \
+             the streamed block's -- the thread count reached a proof, or the archive's \
+             columns and the stream's disagree"
+        );
+    }
 }
 
 /// Acceptance 2: a multi-family block. `guests/mem` touches five execution

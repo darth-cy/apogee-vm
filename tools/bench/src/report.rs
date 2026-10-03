@@ -24,18 +24,22 @@
 //! # Where the timings come from
 //!
 //! Must-be-exact 5: *"read from the `TraceArchive` phase sections whose schemas
-//! S16 froze, not from ad-hoc stopwatches sprinkled in the prover."* They are.
-//! [`Phases`] below is `archive.timing(phase)` for each of S12's five sections,
-//! and nothing here holds a stopwatch over anything inside the prover. Two
-//! honest caveats, both reported rather than smoothed over:
+//! S16 froze, not from ad-hoc stopwatches sprinkled in the prover."* The
+//! archive went with the archived path at S-STREAM, and the rule's point
+//! survived it: [`Phases`] below is `prover::StreamingReport`'s clocks, which
+//! the prover measures around its own two passes and its own executor, and
+//! nothing here holds a stopwatch over anything inside the prover. Two honest
+//! caveats, both reported rather than smoothed over:
 //!
-//! - The five phases do **not** sum to the proving wall-clock.
-//!   `ProverSetup::new`, the plan check, `finish` and the block assembly sit
-//!   outside every phase's span. The remainder is `unattributed_ms` and it is
-//!   **named rather than absorbed**: a total that silently swallows the work
-//!   no section claims is a total nobody can check against a clock.
-//! - The execution phase's number exists only because `host::prove` measures
-//!   it. S12 froze the field and every caller in the repository passed zero.
+//! - The phases do **not** sum to the proving wall-clock. The block assembly
+//!   and `host::prove`'s own work sit outside both passes. The remainder is
+//!   `unattributed_ms` and it is **named rather than absorbed**: a total that
+//!   silently swallows the work no clock claims is a total nobody can check
+//!   against a clock.
+//! - **`execution_ms` is not a slice of the wall at all** (S-PIPELINE). The
+//!   guest is stepped by whichever worker needs the next shard while the others
+//!   commit or prove theirs, so the executor's time is inside the two passes'
+//!   wall clocks, and [`Phases::total_ms`] leaves it out.
 //!
 //! # No comparative claims
 //!
@@ -48,30 +52,39 @@ use std::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
 
-/// The five `TraceArchive` phase timings, in milliseconds.
+/// The proving run's timings, in milliseconds, under the five names S12 gave
+/// the `TraceArchive`'s phase sections — which is what this struct held until
+/// S-STREAM, and why its JSON still has five fields.
 ///
-/// One field per `trace::Phase`, named as S12 named them. A phase that was
-/// read back from an imported archive rather than computed carries the timing
-/// of the run that computed it, which is why a bench run always proves from a
-/// fresh archive.
+/// Since S-PIPELINE they are `prover::StreamingReport`'s clocks: two wall
+/// clocks, one per pass, and the executor's time, which runs **inside** them.
+/// So `execution_ms` is a part of `commit_ms` and `gkr_ms` and not a slice
+/// beside them, and a figure here is comparable with neither a pre-S-STREAM one
+/// nor a pre-S-PIPELINE one.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Phases {
-    /// `emulator::trace_run`: the guest's whole execution.
+    /// The executor's time in both passes, summed over every step any worker
+    /// took. Inside `commit_ms` and `gkr_ms`, so [`Phases::total_ms`] leaves it
+    /// out.
     pub execution_ms: f64,
-    /// The statement's columns, the global commit phase and its MSMs.
+    /// Pass 1, wall clock: the execution, every shard's memory commitments,
+    /// the statement and the global transcript.
     pub commit_ms: f64,
-    /// Every shard's GKR proof. A parallel region's **wall** time.
+    /// Pass 2, wall clock: the second execution and every shard's proof — its
+    /// fill, its GKR proof and its opening, one interval a shard.
     pub gkr_ms: f64,
-    /// Every shard's Mercury opening. A parallel region's wall time.
+    /// `0.0`: the streaming prover opens each shard inside its own interval,
+    /// so there is no phase boundary here to measure.
     pub opening_ms: f64,
-    /// The statement's memory roots and the final section.
+    /// `0.0`, for the same reason.
     pub final_ms: f64,
 }
 
 impl Phases {
-    /// What the five phases account for.
+    /// What the phases account for of the proving wall clock: every one but
+    /// `execution_ms`, which runs inside the two passes.
     pub fn total_ms(&self) -> f64 {
-        self.execution_ms + self.commit_ms + self.gkr_ms + self.opening_ms + self.final_ms
+        self.commit_ms + self.gkr_ms + self.opening_ms + self.final_ms
     }
 }
 
@@ -129,13 +142,11 @@ pub struct BenchReport {
     pub cycles_per_gas: f64,
 
     // --- the proof -------------------------------------------------------
-    /// The streaming prover's backpressure bound, or `None` for the archived
-    /// path. When it is set, the phases below read differently and the printed
-    /// table says so: `execution` is **both** passes' executor
-    /// (`docs/spec/streaming.md` §2), `commit` is pass 1's, `gkr` is pass 2's
-    /// whole proving region — the streaming path fuses the GKR proof and the
-    /// opening over one base layer — and `opening` and `final` are 0 because
-    /// there is no phase boundary there to measure.
+    /// The streaming prover's backpressure bound — its worker count, and the
+    /// most shards it holds at once — or `None` for the archived path, which
+    /// nothing runs any more. When it is set, the phases below are the two
+    /// passes' wall clocks and the executor's time inside them, and the printed
+    /// table says so ([`Phases`]).
     pub in_flight: Option<usize>,
     /// Shards per family, by family name, in statement order.
     pub shards: Vec<(String, u32)>,
@@ -150,18 +161,16 @@ pub struct BenchReport {
     /// `ProverSetup::new`: registry compilation, the setup MSMs, the key check.
     /// Outside every archive phase, and outside `proving_ms`.
     pub setup_ms: f64,
-    /// The four clocks the streaming prover carries, under the five names
-    /// this report has always had. `opening_ms` and `final_ms` are `0.0`:
-    /// one shard's GKR and its opening are a single interval on that path,
-    /// and `execution_ms` is **both passes** summed. A figure here is not
-    /// comparable with a pre-S-STREAM one.
+    /// The streaming prover's clocks, under the five names this report has
+    /// always had: the two passes' wall clocks as `commit_ms` and `gkr_ms`, and
+    /// the executor's time inside them as `execution_ms` ([`Phases`]).
     pub phases: Phases,
     /// The whole of `host::prove`: the executor, every phase, and the work
     /// between them.
     pub proving_ms: f64,
-    /// `proving_ms` less what the phases account for — the plan check, the
-    /// final assembly, and the archive bookkeeping between phases. Named
-    /// rather than absorbed.
+    /// `proving_ms` less what the phases account for — the block's assembly and
+    /// `host::prove`'s own work, outside both passes. Named rather than
+    /// absorbed.
     pub unattributed_ms: f64,
     /// `verify_block` over the finished proof.
     pub verify_ms: f64,
@@ -264,16 +273,16 @@ impl BenchReport {
             row(
                 &mut out,
                 "prover",
-                format!("streaming, at most {n} shards proved at once"),
+                format!("streaming, {n} workers, at most {n} shards held at once"),
             );
             let _ = writeln!(
                 out,
-                "  {:<24} execution is BOTH passes; gkr is pass 2's whole proving region,",
+                "  {:<24} commit and gkr are the two passes' wall clocks; execution is",
                 ""
             );
             let _ = writeln!(
                 out,
-                "  {:<24} the GKR proof and the opening fused over one base layer",
+                "  {:<24} the executor's time INSIDE them, so phases total leaves it out",
                 ""
             );
         }

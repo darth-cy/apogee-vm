@@ -620,7 +620,14 @@ is derivable *from* them is regenerated and diffed in CI.
 - **Own the crypto.** Runtime dependencies are limited to serialization, rayon, CLI and
   error handling. arkworks, Plonky3 and `zkhash` are reference oracles for tests and
   fixtures only, and never reachable from the prover, the verifier or a guest.
-- **No `unsafe`, no nightly, no async, no threads.** Parallelism is rayon over data.
+- **No `unsafe`, no nightly, no async, no threads — but for ONE site.** Parallelism is
+  rayon over data. The one exception is master anti-goal 7's, granted at **S-PIPELINE**:
+  `crates/prover/src/streaming.rs`'s shard pipeline runs `max_in_flight` workers under
+  `std::thread::scope`, sharing one `Mutex` around the executor, because "start the next
+  shard when any one finishes" with fewer shards alive than cores is the one thing
+  fork-join cannot say. `crates/prover/tests/one_pipeline.rs` fails on a thread, lock,
+  channel, atomic, `OnceLock` or `async fn` anywhere else in the proving stack's sources,
+  and on that file growing a second scope or a second lock (`docs/spec/streaming.md` §5).
 - **The execution trace's convention is `docs/spec/execution-trace.md`, and it is frozen.**
   Timestamp `4·cycle + Δ` over four in-cycle slots, **cycles numbered from 1** (timestamp
   0 is every address's initial write, which a cycle-0 pc query could not strictly follow),
@@ -1195,7 +1202,11 @@ is derivable *from* them is regenerated and diffed in CI.
   `prove_block_streaming` (`docs/spec/streaming.md`) proves the guest directly in **two
   passes** — pass 1 executes and commits each shard's `M` columns as the shard fills, then
   runs G1-G11 over the ordered list; pass 2 re-executes and proves each shard as it fills,
-  at most `max_in_flight` at a time. What it buys is a peak that does not grow with the
+  at most `max_in_flight` at a time. **Since S-PIPELINE both passes are one pull-based
+  pipeline**: `max_in_flight` workers, each claiming the next shard the moment its own is
+  done and stepping the executor itself when no filled shard is waiting — so there is no
+  batch and no barrier, the executor never runs ahead of demand, and nothing heavier than
+  rows exists outside a worker (`docs/spec/streaming.md` §5). What it buys is a peak that does not grow with the
   shard count: the archived path was `O(total shards)` in the commit phase (~300 MB a
   shard, which put the pinned full block at 500-600 GB) *and* `O(cycles)` before it
   (~305 B a cycle between the log and the buffers, ~520 GB for the same block), and the
@@ -1470,6 +1481,7 @@ is derivable *from* them is regenerated and diffed in CI.
 | S-STREAM — The sixteen-kilobyte journal; streaming is the only path | done | `docs/handoff/S-STREAM.md` |
 | S-STATELESS — The canonical stateless validator, held to `tests-zkevm@v21.0.1` | done | `docs/handoff/S-STATELESS.md` |
 | S26e — `SHA256_COMP` four rounds a row; guest cycle reductions | done | `docs/handoff/S26e-sha256-round-and-cycles.md` |
+| S-PIPELINE — The shard pipeline: pulled, bounded, no barrier | done | `docs/handoff/S-PIPELINE.md` |
 
 **S-IO takes no number, and that is deliberate** (owner's decision). It is not one of the
 original twenty-seven stages — it is the stage those twenty-seven forgot, inserted after
@@ -1542,6 +1554,29 @@ coordinates as words rather than bytes, the frame built once, an indexed `select
 table copies in `lincomb`. Measured, journal unchanged at every step; the `2^18` SHA
 shard's ~30 GB peak is the model's — a whole `sha256-ops` statement peaked at 33.1 GB,
 unattributed.
+
+**`S-PIPELINE` takes no number either**, and it is the first stage about how the prover
+spends a machine rather than what it proves. The first full-block proof spent a third of
+its wall clock committing pass 1's shards one at a time on three or four of 32 cores, a
+tenth filling each batch on one, and left about a quarter of pass 2's proving slots idle
+behind lock-step batches waiting for their slowest shard. Both passes are now one
+**pull-based pipeline**: `max_in_flight` workers, each claiming the next shard the moment
+its own is done and stepping the executor itself, only when no filled shard is waiting,
+so production follows demand and every shard heavier than rows is a worker's. It changes
+no proof byte, no transcript and no wire form. It is **master anti-goal 7's one
+exception** — scoped threads and one lock, in one file, held there by
+`crates/prover/tests/one_pipeline.rs` — and it amends `prompts/00-master.md` there,
+authorized by the owner and recorded in the handoff note. **Measured on the same block**
+(its §1.1, with S26e's fewer cycles in the tree too):
+- proving took 2,481 s against 6,635 s, at a 173.92 GiB peak against 192.97 GiB;
+- pass 1 is 6.5× faster per shard, on 25.7 of 32 cores where it had three or four;
+- pass 2 keeps the box ~95% busy until the guest exits, and gains only ~10%, because a
+  batch's idle slot never idled its cores;
+- what is left is the exit's tail, where the two `2^18` `KECCAK_F` shards' one-thread
+  fills run longest and set the peak between them.
+
+What it owes is the deferred suites, which run in one batch at the end of the
+progression.
 
 **`S-NATIVE-IO` takes no number for the same reason**, and it is S-IO's other half. S-IO
 built the mechanism that binds an execution's public values and left the POSIX surface

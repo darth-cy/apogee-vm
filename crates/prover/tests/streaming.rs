@@ -4,10 +4,10 @@
 //! acceptance. The streaming prover changes *when* a column exists: pass 1
 //! commits each shard's `M` columns as the shard fills and runs G1–G11 over the
 //! ordered list at the end, pass 2 re-executes and proves each shard as it
-//! fills, holding at most `max_in_flight` of them. Every commitment, every
-//! absorption and every challenge is a function of the statement and the
-//! shard's own columns, so the batch size cannot reach one — and that is the
-//! claim here.
+//! fills, holding at most `max_in_flight` of them — since S-PIPELINE, one per
+//! worker. Every commitment, every absorption and every challenge is a
+//! function of the statement and the shard's own columns, so the worker count
+//! cannot reach one — and that is the claim here.
 //!
 //! # What this file lost at S-STREAM, and why it is not replaced
 //!
@@ -57,7 +57,7 @@ use prover::{prove_block_streaming, ProverSetup, StreamingReport};
 /// challenge — the same argument `docs/spec/block-proof.md` §5.2 makes about
 /// the thread count, and the same one that makes `max_in_flight` safe to tune.
 /// `tests/block.rs`'s `the_block_does_not_depend_on_the_thread_count` is the
-/// other half: this one varies the batch size, that one the pool.
+/// other half: this one varies the worker count, that one the pool.
 fn same_at_one_and_eight(label: &str, setup: &ProverSetup, io: &GuestIo) -> StreamingReport {
     let (one, r1) = prove_block_streaming(setup, io, 1).expect("one at a time");
     let (eight, r8) = prove_block_streaming(setup, io, 8).expect("eight at a time");
@@ -104,12 +104,12 @@ fn a1_the_streamed_block_does_not_depend_on_max_in_flight() {
 /// the statement whose order puts a family the executor fills first *last*
 /// (`docs/spec/delegation.md` §8).
 ///
-/// That ordering is the one place where the batch size could plausibly reach a
-/// proof: pass 2 drains the queue in fill order while the statement is in
-/// ascending-`FamilyId` order, so a block whose two orders disagree is the
-/// case worth varying the bound over. The `Window` arm needs no second run —
-/// a window family's shard is filled at exit, after every execution shard, so
-/// its position in the queue is the same at any bound.
+/// That ordering is the one place where the worker count could plausibly reach
+/// a proof: pass 2's workers finish shards in whatever order the schedule
+/// picks, while the statement is in ascending-`FamilyId` order, so a block
+/// whose two orders disagree is the case worth varying the bound over. The
+/// `Window` arm needs no second run — a window family's shard is built after
+/// the pipeline, over the final state, at any bound.
 #[test]
 #[ignore = "proves a delegation block twice"]
 fn a2_a_block_with_a_delegation_shard_does_not_depend_on_max_in_flight() {
