@@ -216,7 +216,7 @@ impl ProverSetup {
             // against the artifact's and `check_discharge` only needs `>=`. Every
             // registered circuit satisfies it today, and each family's own test
             // is what pins it (`constraints::ec_add`'s `outputs.len() == 4`,
-            // `sha256`'s `== 2`). A family whose top layer grew one more output
+            // `sha256`'s `== 6`). A family whose top layer grew one more output
             // would have the discharge validating one pair and the verifier
             // reading another, and it would surface as `Lookup { channel }` on a
             // channel that is innocent. One integer, printed every run.

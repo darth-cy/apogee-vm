@@ -1469,6 +1469,7 @@ is derivable *from* them is regenerated and diffed in CI.
 | S26d — `KECCAK_F` re-shaped: one round a row | done | `docs/handoff/S26d-keccak-round.md` |
 | S-STREAM — The sixteen-kilobyte journal; streaming is the only path | done | `docs/handoff/S-STREAM.md` |
 | S-STATELESS — The canonical stateless validator, held to `tests-zkevm@v21.0.1` | done | `docs/handoff/S-STATELESS.md` |
+| S26e — `SHA256_COMP` four rounds a row; guest cycle reductions | done | `docs/handoff/S26e-sha256-round-and-cycles.md` |
 
 **S-IO takes no number, and that is deliberate** (owner's decision). It is not one of the
 original twenty-seven stages — it is the stage those twenty-seven forgot, inserted after
@@ -1529,6 +1530,16 @@ blocks to 105 Mgas — matches on every block sampled. S25's stateless witness, 
 What it owes, in `docs/handoff/S-STATELESS.md`: an Osaka-family block validated end to end
 against a canonical output, which needs a witness producer — the devnet dataset is
 Amsterdam's; and the deferred suites, which run in one batch at the end of the progression.
+
+**`S26e` is the stateless guest's first cycle stage**, two owner-chosen halves on one PR.
+`SHA256_COMP` became `KECCAK_F`'s S26d shape — four rounds a row, a compression sixteen
+invocations glued by RAM, every Boolean operation an `XOR8` obligation, at `2^18` — so
+block 257510's 8,011 compressions are one shard and ~0.19 MB of proof where they were 32
+shards and 42.5 MB. And the guest itself went from 351.6M cycles to **197.9M** on that
+block: dependencies' debug assertions off at `--release` (−6.8%), and k256's `EC_ADD` glue —
+coordinates as words rather than bytes, the frame built once, an indexed `select`, no
+table copies in `lincomb`. Measured, journal unchanged at every step; the `2^18` SHA
+shard's ~30 GB peak is the model's and owes a measurement.
 
 **`S-NATIVE-IO` takes no number for the same reason**, and it is S-IO's other half. S-IO
 built the mechanism that binds an execution's public values and left the POSIX surface

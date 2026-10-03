@@ -1242,13 +1242,16 @@ fn sha256_row(frames: &FrameSlice, r: usize) -> Result<Sha256Row, String> {
     // **The one comparison this fill is in a position to make**: what it
     // computed against what the frame says the invocation wrote. A
     // disagreement is a trace this circuit cannot prove, and naming the word
-    // here is better than a `LayerInconsistency` hours into a block.
+    // here is better than a `LayerInconsistency` hours into a block. Always
+    // made since S26e, where S26c made it only under `debug-info`; the
+    // `DISAGREES` in both messages is `docs/spec/debug-info.md` §8's grep
+    // marker, which `tests/debug_info.rs` holds to being in the sources.
     let write = |j: usize| frames.word(j).write_value[r];
     for j in 0..4 {
         if write(sh::STATE_WORD + j) != a[7 - j] || write(sh::STATE_WORD + 4 + j) != e[7 - j] {
             return Err(format!(
-                "sha256 fill: invocation {r} wrote working variables that are not rounds \
-                 {}..{} of its frame",
+                "sha256 fill: invocation {r}'s frame DISAGREES with rounds {}..{}: a working \
+                 variable it wrote is not what those rounds compute",
                 sh::ROUNDS_PER_CALL * group,
                 sh::ROUNDS_PER_CALL * (group + 1)
             ));
@@ -1257,8 +1260,8 @@ fn sha256_row(frames: &FrameSlice, r: usize) -> Result<Sha256Row, String> {
     for i in 0..sh::BLOCK_WORDS {
         if write(sh::WINDOW_WORD + i) != x[i + sh::ROUNDS_PER_CALL] {
             return Err(format!(
-                "sha256 fill: invocation {r} wrote window word {i} as something other than \
-                 the shifted schedule"
+                "sha256 fill: invocation {r}'s frame DISAGREES with its schedule: window \
+                 word {i} is not the shifted window"
             ));
         }
     }

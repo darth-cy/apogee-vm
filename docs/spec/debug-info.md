@@ -369,17 +369,16 @@ Two sums a reader can do by eye, and nothing else in the repository offers eithe
   A trace missing its exit row cannot balance, and a trace with two is a different failure
   with the same symptom.
 
-### 6.5 `SHA256_COMP`: the answer the fill computed and threw away
+### 6.5 `SHA256_COMP`: the comparison is no longer the log's
 
-```text
-apogee deleg    SHA256_COMP#0    compression agrees with the frame on 264 state words
-```
-
-This is the one delegation family with **no executor refusal path**: its fill re-runs the whole
-compression and then commits only the *bits*, so the comparison it is uniquely placed to make —
-the state this row computed against the state the frame says the guest wrote — was never
-actually made. A disagreement otherwise reaches a reader as a broken `out_bit` gate at whatever
-layer it sits on. Eight `u32` compares a row on a `2^8` family.
+Until S26e this section was a line the log printed — `compression agrees with the frame on
+264 state words`, or `DISAGREES` — because S26c's fill re-ran the whole compression, committed
+only its bits, and so never compared its answer with what the frame said the guest wrote. Since
+S26e the fill makes that comparison **always**, in the default build: `prover::fill`'s
+`sha256_row` recomputes each invocation's four rounds and four schedule words and refuses the
+shard when a written working variable or window word differs, with an error that carries
+`DISAGREES` and names the invocation and the word. A failing suite prints it through its
+`expect`, so §8's grep still finds it; there is nothing left for a scan to add.
 
 ### 6.6 `KECCAK_F`: the round histogram, and the one failure the glue cannot see
 
@@ -429,7 +428,7 @@ counting **up** past the two memory roots (`crates/verifier-core/src/reduce.rs:2
 **Nothing central asserts that.** `reduce.rs` only checks the length against the artifact's and
 `check_discharge` only requires `>=`. Every registered circuit satisfies it today and each
 family's own test is what pins it — `constraints::ec_add`'s `outputs.len() == 4`,
-`sha256`'s `== 2` — so this is a latent inconsistency rather than a live bug. A family whose
+`sha256`'s `== 6` since S26e — so this is a latent inconsistency rather than a live bug. A family whose
 top layer grew one more output would have the discharge validating one pair while the verifier
 read another, and it would surface as `Lookup { channel }` on a channel that is innocent. The
 log prints one integer comparison per family, every run.
