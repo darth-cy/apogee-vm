@@ -401,7 +401,14 @@ impl VerifyingKey {
         Ok(key)
     }
 
-    fn decode(bytes: &[u8]) -> Read<VerifyingKey> {
+    /// Decode **only**: no canonical re-encoding and no load rules.
+    ///
+    /// For the recursion guest, which cannot afford [`VerifyingKey::check`] —
+    /// it validates every circuit — and must bind the key it was handed to one
+    /// a verifier has checked by other means. Verifying against a key nobody
+    /// checked means nothing: `gkr_verify::verify` may accept on an artifact
+    /// that breaks a law (`docs/spec/gkr.md` §5.1).
+    pub fn decode(bytes: &[u8]) -> Read<VerifyingKey> {
         let mut r = Reader::new(bytes);
         let code_version = r.u32()?;
         let config = VmConfig::from_bytes(r.bytes()?).ok_or("the VmConfig does not decode")?;

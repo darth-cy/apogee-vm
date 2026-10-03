@@ -46,69 +46,28 @@
 
 use rayon::prelude::*;
 
-use constants::{transcript_tags as tags, FR_TWO_ADICITY, G1_INFINITY_SENTINEL};
+use constants::{transcript_tags as tags, G1_INFINITY_SENTINEL};
 use curve::msm::{msm, msm_small_u32};
 use curve::G1Affine;
 use field::Fr;
+use pcs_verify::{
+    bdfg, challenge_z, check_batch, check_num_vars, degenerate, derive_h_alpha, dot, powers, uni,
+    ENTRY_POINTS,
+};
 use poly::{eq_table, MultilinearPoly, PolyBacking};
 use srs::{Srs, SrsVerifier};
 use transcript::{Tag, Transcript};
 
 mod accumulator;
-mod bdfg;
 mod fft;
-mod uni;
 
-pub use accumulator::{
-    accumulator_digest, accumulator_from_words, accumulator_words, discharge, AccumulatorEntry,
-    PairingSide, ENTRIES_PER_CHECK, ENTRY_WORDS,
-};
+// The instance size `pcs_verify::check_num_vars` returns is a `u64`, so that the
+// rule is the same on the recursion guest's 32-bit target; this crate allocates
+// it, and every size it can be fits a host `usize`.
+const _: () = assert!(pcs_verify::MAX_NUM_VARS < usize::BITS as usize);
 
-// ---------------------------------------------------------------------------
-// Errors
-// ---------------------------------------------------------------------------
-
-/// Every way this crate refuses. One flat enum, one variant per failure class.
-///
-/// Nothing here is a panic: a malformed instance, a malformed proof and a
-/// failed check are all data errors a caller can act on. Panics in this crate
-/// are reserved for broken internal invariants, and each one names the
-/// invariant it broke.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PcsError {
-    /// The multilinear does not have `2t` variables for an integer `t >= 1`:
-    /// an odd variable count, or the single-evaluation polynomial. Mercury is
-    /// defined for `n = 2^(2t)` and this crate never pads to reach it.
-    UnsupportedNumVars { num_vars: usize },
-    /// The opening point's length is not the polynomial's variable count.
-    PointLengthMismatch { point: usize, num_vars: usize },
-    /// The SRS holds fewer than `n` powers, so `f` cannot be committed.
-    SrsTooSmall { needed: usize, available: usize },
-    /// A point supplied to [`verify`] is off the curve or outside the order-`r`
-    /// subgroup. The string names which one.
-    InvalidPoint { field: &'static str },
-    /// The transcript produced `{z, 1/z, alpha}` with fewer than three distinct
-    /// members, which leaves the BDFG20 batch undefined. Probability about
-    /// `2^-252`; `docs/spec/mercury.md` §7.
-    DegenerateChallenge,
-    /// A batch with no columns. There is no `cm*` and no `v*` to open, and no
-    /// statement to make. `docs/spec/mercury.md` §11.
-    EmptyBatch,
-    /// A batch's commitment list and the list paired with it differ in length:
-    /// the columns in [`batch_open`], the claimed values in [`batch_verify`].
-    BatchLengthMismatch { commitments: usize, paired: usize },
-    /// A batch's columns do not all have the same number of variables. Mercury
-    /// batches one instance size at a time and never pads to reach it.
-    MixedColumnSizes { expected: usize, found: usize },
-    /// An accumulator's per-check counts do not partition it, or a count word is
-    /// not a length. `length` is how long the thing being read is and `at` is
-    /// how far the counts got — in **entries** when the counts were handed in
-    /// beside an entry list, in **words** when they were read off a word array,
-    /// which is why neither field names a unit. `docs/spec/accumulator.md` §3.
-    MalformedAccumulator { length: usize, at: usize },
-    /// The pairing check failed. There is one, so there is one variant.
-    VerificationFailed,
-}
+pub use accumulator::{accumulator_from_words, accumulator_words, discharge, AccumulatorEntry};
+pub use pcs_verify::{accumulator_digest, PairingSide, PcsError, ENTRIES_PER_CHECK, ENTRY_WORDS};
 
 // ---------------------------------------------------------------------------
 // Commitment and proof
@@ -237,23 +196,6 @@ impl MercuryProof {
 // Typed G1 absorption — the S02 typed layer, extended
 // ---------------------------------------------------------------------------
 
-/// The four `Fr` limbs an affine `G1` point absorbs as.
-///
-/// `x` low, `x` high, `y` low, `y` high, where "low" is the bottom 128 bits of
-/// the coordinate's canonical little-endian encoding and "high" the remaining
-/// 126. Both halves are below `2^128 < p`, so both are canonical `Fr` without
-/// reduction. The point at infinity absorbs four copies of
-/// `constants::G1_INFINITY_SENTINEL`, which is `2^128` and therefore cannot be
-/// any real point's limb. `docs/spec/mercury.md` §4 is normative.
-///
-/// Since S16 the split itself is `transcript::g1_limbs`, over the point's
-/// 64-byte encoding, so the no_std verifier core absorbs a commitment it holds
-/// as bytes exactly as this crate absorbs a `G1Affine`
-/// (`docs/spec/shard-proof.md` §2.4).
-fn g1_limbs(p: &G1Affine) -> [Fr; 4] {
-    transcript::g1_limbs(&p.to_bytes())
-}
-
 /// `constants::G1_INFINITY_SENTINEL`, decoded.
 ///
 /// `2^128`: the limb a point at infinity absorbs in each of its four lanes, and
@@ -294,7 +236,7 @@ pub fn append_g1_list(tr: &mut Transcript, tag: Tag, ps: &[G1Affine]) {
 /// takes the general one. The two paths agree on every value and differ only in
 /// cost.
 pub fn commit(srs: &Srs, f: &MultilinearPoly) -> Result<MercuryCommitment, PcsError> {
-    let n = check_num_vars(f.num_vars())?;
+    let n = check_num_vars(f.num_vars())? as usize;
     let powers = srs.g1();
     if powers.len() < n {
         return Err(PcsError::SrsTooSmall {
@@ -346,7 +288,7 @@ pub fn open(
     tr: &mut Transcript,
 ) -> Result<(Fr, MercuryProof), PcsError> {
     let num_vars = f.num_vars();
-    let n = check_num_vars(num_vars)?;
+    let n = check_num_vars(num_vars)? as usize;
     if u.len() != num_vars {
         return Err(PcsError::PointLengthMismatch {
             point: u.len(),
@@ -523,19 +465,17 @@ pub fn open(
 // The verification core
 // ---------------------------------------------------------------------------
 
-/// Every field-side check of one Mercury verification, and the terms of its two
-/// pairing relations.
+/// Every check of one Mercury verification but the pairings, and the terms of
+/// its two pairing relations.
 ///
-/// This is the one verification path. It validates the points, replays
-/// `docs/spec/mercury.md` §5's schedule, derives `h(alpha)` and `D(z)`, builds
-/// the BDFG20 batch and squeezes the merge challenge — everything [`verify`]
-/// used to do except the pairings themselves, which it hands back as the twelve
-/// [`AccumulatorEntry`] items of `docs/spec/accumulator.md` §2. Its callers
-/// either execute them or return them, and that branch is the only thing that
-/// separates a native verification from a deferred one.
-///
-/// The entry order is frozen: the statement's commitment, the eight proof
-/// points in their field order, `[1]_1`, then the two `G2X` terms.
+/// This is the one verification path. It validates the points, then hands the
+/// field side — `docs/spec/mercury.md` §5's schedule, `h(alpha)`, `D(z)`, the
+/// BDFG20 batch and the merge challenge — to [`pcs_verify::scalars`], which
+/// the recursion guest runs too, and pairs each scalar with its point as
+/// [`ENTRY_POINTS`] says. That is the twelve [`AccumulatorEntry`] items of
+/// `docs/spec/accumulator.md` §2. Its callers either execute them or return
+/// them, and that branch is the only thing that separates a native
+/// verification from a deferred one.
 fn accumulate(
     vsrs: &SrsVerifier,
     cm: &MercuryCommitment,
@@ -545,14 +485,13 @@ fn accumulate(
     tr: &mut Transcript,
 ) -> Result<Vec<AccumulatorEntry>, PcsError> {
     check_num_vars(u.len())?;
-    let t = u.len() / 2;
-    let b = 1usize << t;
 
     // Every point is validated before it is used, including the commitment the
     // statement names: an off-curve or out-of-subgroup point reaching the
     // pairing is a way to make a check mean something other than it says.
     const NAMES: [&str; 8] = ["h", "q", "g", "s", "d", "pi_z", "w", "w_prime"];
-    for (point, name) in proof.points().iter().zip(NAMES) {
+    let points = proof.points();
+    for (point, name) in points.iter().zip(NAMES) {
         if !point.is_on_curve() || !point.is_in_subgroup() {
             return Err(PcsError::InvalidPoint { field: name });
         }
@@ -561,119 +500,54 @@ fn accumulate(
         return Err(PcsError::InvalidPoint { field: "cm" });
     }
 
-    // The transcript schedule, mirroring `open` step for step.
-    tr.append_scalar(tags::MERCURY_INSTANCE, Fr::from_u64(1u64 << u.len()));
-    append_g1(tr, tags::COMMITMENT, &cm.0);
-    let mut claim: Vec<Fr> = u.to_vec();
-    claim.push(v);
-    tr.append_scalars(tags::EVALUATION_CLAIM, &claim);
-    append_g1(tr, tags::PCS_OPENING, &proof.h);
-    let alpha = tr.challenge_scalar(tags::MERCURY_ALPHA);
-    append_g1_list(tr, tags::PCS_OPENING, &[proof.q, proof.g]);
-    let gamma = tr.challenge_scalar(tags::MERCURY_GAMMA);
-    append_g1_list(tr, tags::PCS_OPENING, &[proof.s, proof.d]);
-    let z = challenge_z(tr);
-    if degenerate(alpha, z) {
-        return Err(PcsError::DegenerateChallenge);
-    }
-    let z_inv = z.inverse().expect("a nonzero challenge is invertible");
-    tr.append_scalars(tags::PCS_OPENING, &proof.evals());
-    append_g1(tr, tags::PCS_OPENING, &proof.pi_z);
-    let delta = tr.challenge_scalar(tags::BDFG_BATCH);
-    append_g1(tr, tags::PCS_OPENING, &proof.w);
-    let z_prime = tr.challenge_scalar(tags::BDFG_POINT);
-    append_g1(tr, tags::PCS_OPENING, &proof.w_prime);
-    let rho = tr.challenge_scalar(tags::PAIRING_MERGE);
-
-    // The two values the verifier derives rather than receives.
-    let claims = bdfg::Claims {
-        g_z: proof.g_z,
-        g_inv_z: proof.g_inv_z,
-        h_z: proof.h_z,
-        h_inv_z: proof.h_inv_z,
-        s_z: proof.s_z,
-        s_inv_z: proof.s_inv_z,
-        h_alpha: derive_h_alpha(&u[..t], &u[t..], z, z_inv, gamma, v, &proof.evals()),
-        d_z: uni::pow_usize(z, b - 1) * proof.g_inv_z,
-    };
-
-    // The BDFG20 batch at `z'`, from the one definition both sides read: `c[i]`
-    // is `delta^i Z_{T \ S_i}(z')` and `constant` is `sum_i c[i] r_i(z')`.
-    let t_set = bdfg::point_set(alpha, z, z_inv);
-    let items = bdfg::items(alpha, z, z_inv, &claims);
-    let mut c = [Fr::ZERO; 4];
-    let mut constant = Fr::ZERO;
-    for (i, item) in items.iter().enumerate() {
-        c[i] = uni::pow_usize(delta, i) * uni::eval(&item.z_complement, z_prime);
-        constant += c[i] * uni::eval(&item.r, z_prime);
-    }
-    let z_t = uni::eval(&uni::vanishing(&t_set), z_prime);
-    let z_pow_b = uni::pow_usize(z, b);
-
-    // Check A is the fold identity at `z`; check B is the BDFG20 batch; `rho`
-    // merges them, which is why every check-B term carries it and no check-A
-    // term does. `docs/spec/mercury.md` §8.2 and §8.3.
-    let one = |scalar: Fr, point: G1Affine| AccumulatorEntry {
-        side: PairingSide::G2One,
-        scalar,
-        point,
-    };
-    Ok(vec![
-        one(Fr::ONE, cm.0),
-        one(rho * c[1], proof.h),
-        one(-(z_pow_b - alpha), proof.q),
-        one(rho * c[0], proof.g),
-        one(rho * c[2], proof.s),
-        one(rho * c[3], proof.d),
-        one(z, proof.pi_z),
-        one(-(rho * z_t), proof.w),
-        one(rho * z_prime, proof.w_prime),
-        one(-(proof.g_z + rho * constant), vsrs.g1_gen),
-        AccumulatorEntry {
-            side: PairingSide::G2X,
-            scalar: Fr::ONE,
-            point: proof.pi_z,
-        },
-        AccumulatorEntry {
-            side: PairingSide::G2X,
-            scalar: rho,
-            point: proof.w_prime,
-        },
-    ])
+    let scalars = pcs_verify::scalars(
+        &cm.0.to_bytes(),
+        u,
+        v,
+        &points.map(|p| p.to_bytes()),
+        &proof.evals(),
+        tr,
+    )?;
+    let [h, q, g, s, d, pi_z, w, w_prime] = points;
+    let at = [cm.0, h, q, g, s, d, pi_z, w, w_prime, vsrs.g1_gen];
+    Ok(ENTRY_POINTS
+        .iter()
+        .zip(scalars)
+        .map(|((side, point), scalar)| AccumulatorEntry {
+            side: *side,
+            scalar,
+            point: at[*point],
+        })
+        .collect())
 }
 
 // ---------------------------------------------------------------------------
 // The batch preamble
 // ---------------------------------------------------------------------------
 
-/// The batch preamble: absorb, squeeze `rho`, and derive `cm*` and `v*`.
+/// The batch preamble: [`pcs_verify::batch_preamble`]'s absorptions and `rho`,
+/// then `cm* = sum rho^i cm_i` by an MSM.
 ///
 /// One length-delimited message of `4k` limbs for the commitments **as
 /// passed**, then one message of `u` followed by all `k` claimed values, then
 /// the challenge. Nothing may be chosen after `rho` is drawn, which is what the
 /// order of those three steps buys. `docs/spec/mercury.md` §11.
 ///
-/// Callers validate `k`, the list lengths and `u` before reaching here, so this
-/// only absorbs and combines.
+/// Callers run [`check_batch`] before reaching here, so this only absorbs and
+/// combines. Returns the weights `rho^i`, `cm*` and `v*`.
 fn batch_preamble(
     cms: &[MercuryCommitment],
     u: &[Fr],
     vs: &[Fr],
     tr: &mut Transcript,
-) -> (Fr, MercuryCommitment, Fr) {
+) -> (Vec<Fr>, MercuryCommitment, Fr) {
     let points: Vec<G1Affine> = cms.iter().map(|cm| cm.0).collect();
-    append_g1_list(tr, tags::COMMITMENT, &points);
-    let mut claim: Vec<Fr> = u.to_vec();
-    claim.extend_from_slice(vs);
-    tr.append_scalars(tags::EVALUATION_CLAIM, &claim);
-    let rho = tr.challenge_scalar(tags::MERCURY_BATCH);
-
-    let weights = powers(rho, cms.len());
+    let encoded: Vec<[u8; 64]> = points.iter().map(G1Affine::to_bytes).collect();
+    let (weights, v_star) = pcs_verify::batch_preamble(&encoded, u, vs, tr);
     let cm_star = msm(&points, &weights)
         .expect("one weight per commitment")
         .to_affine();
-    let v_star = dot(&weights, vs);
-    (rho, MercuryCommitment(cm_star), v_star)
+    (weights, MercuryCommitment(cm_star), v_star)
 }
 
 /// `batch_verify` and `batch_verify_deferred`, up to their one difference.
@@ -685,16 +559,7 @@ fn batch_accumulate(
     proof: &MercuryProof,
     tr: &mut Transcript,
 ) -> Result<Vec<AccumulatorEntry>, PcsError> {
-    if cms.is_empty() {
-        return Err(PcsError::EmptyBatch);
-    }
-    if cms.len() != vs.len() {
-        return Err(PcsError::BatchLengthMismatch {
-            commitments: cms.len(),
-            paired: vs.len(),
-        });
-    }
-    check_num_vars(u.len())?;
+    check_batch(cms.len(), vs.len(), u.len())?;
     // `cm*` is a sum of these, so an off-curve summand would smuggle a point
     // the curve equation never saw into a sum that passes it.
     for cm in cms {
@@ -815,7 +680,7 @@ pub fn batch_open(
             });
         }
     }
-    let n = check_num_vars(num_vars)?;
+    let n = check_num_vars(num_vars)? as usize;
     if u.len() != num_vars {
         return Err(PcsError::PointLengthMismatch {
             point: u.len(),
@@ -831,9 +696,7 @@ pub fn batch_open(
     }
 
     let vs: Vec<Fr> = cols.iter().map(|col| col.evaluate(u)).collect();
-    let (rho, cm_star, v_star) = batch_preamble(cms, u, &vs, tr);
-
-    let weights = powers(rho, cols.len());
+    let (weights, cm_star, v_star) = batch_preamble(cms, u, &vs, tr);
     let combined: Vec<Fr> = (0..n)
         .into_par_iter()
         .map(|i| {
@@ -855,125 +718,8 @@ pub fn batch_open(
 }
 
 // ---------------------------------------------------------------------------
-// Shared pieces
+// The prover's witness
 // ---------------------------------------------------------------------------
-
-/// The largest instance Mercury can express.
-///
-/// The opening's transform needs a `2b`-th root of unity, so `t + 1` may not
-/// exceed `Fr`'s two-adicity and `num_vars = 2t` may not exceed 54. That bound
-/// is also what keeps `1 << num_vars` in range: [`verify`] takes `u` straight
-/// from a caller, so `u.len()` is adversarial input and must not be allowed to
-/// shift a `usize` off its end — with `overflow-checks` on that is a panic out
-/// of a verifier, and with them off it is a silently wrong `n`.
-const MAX_NUM_VARS: usize = 2 * (FR_TWO_ADICITY as usize - 1);
-const _: () = assert!(MAX_NUM_VARS < usize::BITS as usize);
-
-/// `n = 2^num_vars`, or the reason it is not a Mercury instance.
-///
-/// `n = 2^(2t)` with `1 <= t <= FR_TWO_ADICITY - 1`. Odd counts are rejected
-/// rather than padded, and so is the single-evaluation polynomial, whose
-/// `b = 1` leaves `S` and the degree check with no room to exist.
-fn check_num_vars(num_vars: usize) -> Result<usize, PcsError> {
-    if !(2..=MAX_NUM_VARS).contains(&num_vars) || !num_vars.is_multiple_of(2) {
-        return Err(PcsError::UnsupportedNumVars { num_vars });
-    }
-    Ok(1usize << num_vars)
-}
-
-/// `sum_i a[i] * b[i]`, over equal-length slices.
-fn dot(a: &[Fr], b: &[Fr]) -> Fr {
-    debug_assert_eq!(a.len(), b.len());
-    let mut acc = Fr::ZERO;
-    for (x, y) in a.iter().zip(b) {
-        acc += *x * *y;
-    }
-    acc
-}
-
-/// `[1, x, x^2, ..., x^(k-1)]`, the weights of a geometric batch.
-///
-/// Index `i` carries `x^i`, so the first element of a batched list carries `1`.
-fn powers(x: Fr, k: usize) -> Vec<Fr> {
-    let mut out = Vec::with_capacity(k);
-    let mut acc = Fr::ONE;
-    for _ in 0..k {
-        out.push(acc);
-        acc *= x;
-    }
-    out
-}
-
-/// Draw `z` under `MERCURY_Z`, taking the first squeeze that is not `reject`
-/// and squeezing again under the same tag while it is.
-///
-/// `docs/spec/mercury.md` §7 pins `reject = 0`, so that `1/z` exists, and
-/// [`challenge_z`] is that rule. The rejected value is a parameter because the
-/// loop is otherwise unreachable and so untestable: a transcript squeezes zero
-/// with probability about `2^-254`, and no test can wait for that. A test names
-/// a value the sponge really does produce instead, and watches the next squeeze
-/// be taken.
-fn challenge_z_rejecting(tr: &mut Transcript, reject: Fr) -> Fr {
-    loop {
-        let z = tr.challenge_scalar(tags::MERCURY_Z);
-        if z != reject {
-            return z;
-        }
-    }
-}
-
-/// Draw `z`, resampling under the same tag while it is zero so that `1/z`
-/// exists. `docs/spec/mercury.md` §7.
-fn challenge_z(tr: &mut Transcript) -> Fr {
-    challenge_z_rejecting(tr, Fr::ZERO)
-}
-
-/// Whether `{z, 1/z, alpha}` has fewer than three distinct members, which would
-/// leave `Z_T` with a repeated root and the interpolation of `h` undefined.
-///
-/// `z != 0` is already guaranteed by [`challenge_z`] and is repeated here so
-/// the predicate stands alone. `docs/spec/mercury.md` §7.
-fn degenerate(alpha: Fr, z: Fr) -> bool {
-    z == Fr::ZERO || z.square() == Fr::ONE || z == alpha || z * alpha == Fr::ONE
-}
-
-/// `P_u(X) = prod_k (u_k X^(2^k) + 1 - u_k)`, the `O(t)` product formula.
-///
-/// Equal to `sum_i eq(i, u) X^i`, whose coefficient vector is `eq_table(u)`:
-/// the prover uses the table, the verifier uses this, and
-/// `crates/pcs/tests/identities.rs` holds them to each other.
-fn tensor_eval(u: &[Fr], x: Fr) -> Fr {
-    let mut acc = Fr::ONE;
-    let mut power = x;
-    for uk in u {
-        acc *= *uk * power + (Fr::ONE - *uk);
-        power = power.square();
-    }
-    acc
-}
-
-/// `h(alpha)`, from the symmetrized identity evaluated at `z`.
-///
-/// `2 h(alpha) = g_z P_u1(1/z) + g_1/z P_u1(z)
-///             + gamma (h_z P_u2(1/z) + h_1/z P_u2(z) - 2v) - z S(z) - S(1/z)/z`.
-///
-/// The prover computes it this way too, so that the value it builds the batch
-/// around is the value the verifier will use.
-///
-/// `evals` is the six sent values in the proof's field order:
-/// `g_z, g_1/z, h_z, h_1/z, s_z, s_1/z`.
-fn derive_h_alpha(u1: &[Fr], u2: &[Fr], z: Fr, z_inv: Fr, gamma: Fr, v: Fr, evals: &[Fr; 6]) -> Fr {
-    let [g_z, g_inv_z, h_z, h_inv_z, s_z, s_inv_z] = *evals;
-    let two_inv = Fr::from_u64(2)
-        .inverse()
-        .expect("2 is invertible in a field of odd characteristic");
-    let inner = g_z * tensor_eval(u1, z_inv)
-        + g_inv_z * tensor_eval(u1, z)
-        + gamma * (h_z * tensor_eval(u2, z_inv) + h_inv_z * tensor_eval(u2, z) - v - v)
-        - z * s_z
-        - z_inv * s_inv_z;
-    inner * two_inv
-}
 
 /// `S(X)`, the witness for both inner products at once.
 ///
@@ -1052,105 +798,6 @@ mod tests {
 
     use curve::G1Projective;
 
-    /// The instance rule: `2t` variables for `1 <= t <= FR_TWO_ADICITY - 1`,
-    /// and nothing else.
-    ///
-    /// The upper bound is not decoration. `verify` takes `u` straight from a
-    /// caller, so without it `1usize << u.len()` shifts off the end of a
-    /// `usize` — a panic out of a verifier where `overflow-checks` are on, and
-    /// a silently wrong `n` where they are not.
-    #[test]
-    fn only_even_variable_counts_in_range_are_instances() {
-        for num_vars in 0..=256usize {
-            let got = check_num_vars(num_vars);
-            let legal = (2..=MAX_NUM_VARS).contains(&num_vars) && num_vars % 2 == 0;
-            if legal {
-                assert_eq!(got, Ok(1usize << num_vars), "num_vars {num_vars}");
-            } else {
-                assert_eq!(
-                    got,
-                    Err(PcsError::UnsupportedNumVars { num_vars }),
-                    "num_vars {num_vars}"
-                );
-            }
-        }
-        assert_eq!(MAX_NUM_VARS, 54);
-        assert!(check_num_vars(MAX_NUM_VARS).is_ok());
-        assert!(check_num_vars(MAX_NUM_VARS + 2).is_err());
-        // The bound really is what keeps the shift in range.
-        assert!(MAX_NUM_VARS < usize::BITS as usize);
-    }
-
-    /// Acceptance 5, and `docs/spec/mercury.md` §7's `z in F*` rule: a rejected
-    /// squeeze is discarded and the **next** squeeze under the same tag is
-    /// used.
-    ///
-    /// The rule rejects zero, which a sponge produces with probability about
-    /// `2^-254`, so the loop is undrivable as written. Naming the rejected
-    /// value instead makes it drivable with a value the sponge really does
-    /// produce, and what is then checked is the whole rule: the first draw is
-    /// discarded, the second is returned, and the transcript is left where two
-    /// squeezes under `MERCURY_Z` leave it — not one, and not a squeeze under
-    /// some other tag.
-    #[test]
-    fn a_rejected_z_draw_takes_the_next_squeeze() {
-        // What the sponge really produces under this tag, in order.
-        let mut tr = Transcript::new();
-        let draws: Vec<Fr> = (0..3)
-            .map(|_| tr.challenge_scalar(tags::MERCURY_Z))
-            .collect();
-        assert!(draws.iter().all(|z| *z != Fr::ZERO), "and none is zero");
-        assert_ne!(draws[0], draws[1]);
-
-        // The production rule rejects zero, so it takes the first draw.
-        let mut tr = Transcript::new();
-        assert_eq!(challenge_z(&mut tr), draws[0]);
-        assert_eq!(tr.challenge_scalar(tags::MERCURY_Z), draws[1]);
-
-        // Rejecting the first draw takes the second, and leaves the transcript
-        // two squeezes in rather than one.
-        let mut tr = Transcript::new();
-        assert_eq!(challenge_z_rejecting(&mut tr, draws[0]), draws[1]);
-        assert_eq!(tr.challenge_scalar(tags::MERCURY_Z), draws[2]);
-        assert_eq!(
-            tr.event_log(),
-            &[transcript::TranscriptEvent::Challenge {
-                tag: tags::MERCURY_Z
-            }; 3],
-            "the resample is a squeeze under the same tag, not a different one"
-        );
-
-        // And the production rule is exactly this helper at zero.
-        let mut plain = Transcript::new();
-        let mut named = Transcript::new();
-        assert_eq!(
-            challenge_z(&mut plain),
-            challenge_z_rejecting(&mut named, Fr::ZERO)
-        );
-        assert_eq!(plain.snapshot(), named.snapshot());
-    }
-
-    /// `docs/spec/mercury.md` §7. The transcript reaches this with probability
-    /// about `2^-252`, so it is the one predicate no end-to-end test can drive:
-    /// it gets its negative control here.
-    #[test]
-    fn the_degenerate_challenge_set_is_exactly_the_four_cases() {
-        let alpha = Fr::from_u64(11);
-        assert!(degenerate(alpha, Fr::ZERO), "z = 0 has no inverse");
-        assert!(degenerate(alpha, Fr::ONE), "z = 1/z");
-        assert!(degenerate(alpha, Fr::MINUS_ONE), "z = 1/z");
-        assert!(degenerate(alpha, alpha), "z = alpha");
-        assert!(
-            degenerate(alpha, alpha.inverse().expect("nonzero")),
-            "1/z = alpha"
-        );
-        for z in [2u64, 3, 5, 7, 12, 1 << 40] {
-            assert!(!degenerate(alpha, Fr::from_u64(z)), "z = {z} is fine");
-        }
-        // alpha = 0 is not degenerate on its own: Z_{T \ S} is then just X.
-        assert!(!degenerate(Fr::ZERO, Fr::from_u64(3)));
-    }
-
     /// Every limb of a real point is below `2^128`, which is what makes the
     /// infinity sentinel collision-free by construction rather than by an
     /// appeal to the curve equation.
@@ -1160,7 +807,7 @@ mod tests {
         let mut point = G1Projective::GENERATOR;
         for _ in 0..64 {
             let affine = point.to_affine();
-            for limb in g1_limbs(&affine) {
+            for limb in transcript::g1_limbs(&affine.to_bytes()) {
                 let bytes = limb.to_bytes();
                 assert!(
                     bytes[16..].iter().all(|b| *b == 0),
@@ -1170,29 +817,13 @@ mod tests {
             }
             point = point.add(&G1Projective::GENERATOR);
         }
-        assert_eq!(g1_limbs(&G1Affine::IDENTITY), [sentinel; 4]);
+        assert_eq!(
+            transcript::g1_limbs(&G1Affine::IDENTITY.to_bytes()),
+            [sentinel; 4]
+        );
         // The sentinel is exactly 2^128: one at byte 16, zero everywhere else.
         let bytes = sentinel.to_bytes();
         assert_eq!(bytes[16], 1);
         assert!(bytes.iter().enumerate().all(|(i, b)| i == 16 || *b == 0));
-    }
-
-    /// The `P_u` product formula is the coefficient vector `eq_table` builds.
-    #[test]
-    fn the_tensor_product_formula_matches_the_eq_table() {
-        for t in 0..8usize {
-            let u: Vec<Fr> = (0..t).map(|k| Fr::from_u64(3 * k as u64 + 1)).collect();
-            let table = eq_table(&u);
-            for x in [2u64, 5, 9, 1 << 20] {
-                let x = Fr::from_u64(x);
-                let mut expected = Fr::ZERO;
-                let mut power = Fr::ONE;
-                for c in &table {
-                    expected += *c * power;
-                    power *= x;
-                }
-                assert_eq!(tensor_eval(&u, x), expected, "t = {t}");
-            }
-        }
     }
 }

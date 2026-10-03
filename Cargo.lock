@@ -1571,6 +1571,7 @@ dependencies = [
  "field",
  "k256",
  "loader",
+ "pcs",
  "program",
  "prover",
  "rayon",
@@ -2002,10 +2003,22 @@ dependencies = [
  "constants",
  "curve",
  "field",
+ "pcs-verify",
  "poly",
  "rayon",
  "srs",
  "sumcheck",
+ "test-support",
+ "transcript",
+]
+
+[[package]]
+name = "pcs-verify"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "field",
+ "poly",
  "test-support",
  "transcript",
 ]

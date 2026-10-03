@@ -12,9 +12,15 @@
 //!     record a mainnet block from ETH_RPC_URL and profile the revm guest over
 //!     it. This is the one verb that touches the network, and it is opt-in for
 //!     the same reason `kat-gen -- block` is.
+//!
+//! profiler leaf <dir>/<stem> --shards <from>..<to> [--shards ...] [--top <n>] [--json <path>]
+//!     profile the recursion guest's leaf over slices of a block proof that
+//!     `verifier::proof_archive` wrote, one report a slice; `--json` takes one.
 //! ```
 //!
-//! Nothing here invokes the prover, the verifier, an SRS or a commitment.
+//! Nothing here invokes the prover, an SRS or a commitment. `leaf` alone reads a
+//! verifying key and runs the native verifier over the slice it profiles, because
+//! a recursion guest's input is a proof and its `cm*` hints come from verifying it.
 //! `docs/spec/profiling.md` is the design and the reading guide.
 
 use std::path::PathBuf;
@@ -30,6 +36,7 @@ fn usage() -> &'static str {
      profiler elf <file> [--advice <f>] [--input <f>] [--top <n>] [--json <p>]\n\
      profiler block <fixture> [--top <n>] [--json <p>]\n\
      profiler record <number|latest> [--txs <n>] [--top <n>] [--json <p>] [--cache <d>]\n\
+     profiler leaf <dir>/<stem> --shards <from>..<to> [--shards ...] [--top <n>] [--json <p>]\n\
      \n\
      `block` reads a recorded fixture and touches no network. `record` reads\n\
      ETH_RPC_URL. Neither invokes anything proving-related."
@@ -43,6 +50,7 @@ fn main() {
         "elf" => elf(rest),
         "block" => block(rest),
         "record" => record(rest),
+        "leaf" => leaf(rest),
         "--help" | "-h" | "" => {
             println!("{}", usage());
             return;
@@ -158,6 +166,62 @@ fn block(args: &[String]) -> Result<(), String> {
         Some((pin.block_number, pin.txs_recorded, pin.gas_used)),
         &common,
     )
+}
+
+/// `profiler leaf <dir>/<stem>`: the recursion guest's leaf over slices of an
+/// archived block proof. The guest is built once; each slice's advice is built
+/// by `host::recursion::leaf_advice`, which verifies the slice natively first.
+fn leaf(args: &[String]) -> Result<(), String> {
+    let (common, rest) = common(args)?;
+    let mut path = None;
+    let mut slices = Vec::new();
+    let mut at = 0;
+    while at < rest.len() {
+        match rest[at].as_str() {
+            "--shards" => {
+                at += 1;
+                let range = rest.get(at).ok_or("--shards needs <from>..<to>")?;
+                let (from, to) = range
+                    .split_once("..")
+                    .ok_or("--shards takes <from>..<to>")?;
+                let index = |s: &str| {
+                    s.parse::<usize>()
+                        .map_err(|e| format!("--shards {range}: {e}"))
+                };
+                slices.push(index(from)?..index(to)?);
+            }
+            other if other.starts_with("--") => return Err(format!("unknown option `{other}`")),
+            other if path.is_none() => path = Some(PathBuf::from(other)),
+            other => return Err(format!("unexpected argument `{other}`")),
+        }
+        at += 1;
+    }
+    let path = path.ok_or("leaf needs a proof archive's <dir>/<stem>")?;
+    if slices.is_empty() {
+        return Err("leaf needs at least one --shards <from>..<to>".into());
+    }
+    if common.json.is_some() && slices.len() > 1 {
+        return Err("--json writes one report, so give one --shards".into());
+    }
+    let stem = path
+        .file_name()
+        .ok_or("leaf needs <dir>/<stem>")?
+        .to_string_lossy()
+        .to_string();
+    let dir = path.parent().unwrap_or(std::path::Path::new("."));
+    let (vk, _, _, block) = host::proof_archive::read_proof(dir, &stem)?;
+    let elf = fixture::build_guest("recursion", "recursion")?;
+    for range in slices {
+        let advice = host::recursion::leaf_advice(&vk, &block, range.clone())?;
+        let io = emulator::GuestIo {
+            input: Vec::new(),
+            advice,
+        };
+        let label = format!("leaf over shards {}..{}", range.start, range.end);
+        let report = run(&elf, "recursion", &label, &io, None, common.top)?;
+        emit(&report, &common)?;
+    }
+    Ok(())
 }
 
 /// `profiler record <number|latest>`: record from mainnet, then profile.

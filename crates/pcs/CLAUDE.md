@@ -10,11 +10,17 @@ The normative documents are **`docs/spec/mercury.md`** and
 **`docs/spec/accumulator.md`**. This crate is those specifications in code; when they
 disagree, the spec is right and the code is a bug.
 
+**Its verifier's field side is `crates/pcs-verify`**, the `no_std` half the recursion guest
+links: the transcript schedule, `h(alpha)`, `D(z)`, the BDFG20 batch, the twelve scalars,
+`uni` and `bdfg`, `PcsError`, `PairingSide`, the entry words and the digest. This crate
+validates points, computes `cm*`, pairs and opens, and re-exports the rest, so every path
+below is unchanged for its callers.
+
 ```rust
 pub struct MercuryCommitment(pub G1Affine);
 pub struct MercuryProof { /* 8 G1 then 6 Fr, in a fixed field order */ }
 pub const PROOF_BYTES: usize = 704;
-pub enum PcsError { /* ten variants, one per failure class */ }
+pub use pcs_verify::PcsError;   /* ten variants, one per failure class */
 
 pub fn commit(srs: &Srs, f: &MultilinearPoly) -> Result<MercuryCommitment, PcsError>;
 pub fn open(srs: &Srs, f: &MultilinearPoly, cm: &MercuryCommitment, u: &[Fr],
@@ -27,10 +33,8 @@ pub fn batch_open(srs: &Srs, cols: &[MultilinearPoly], cms: &[MercuryCommitment]
 pub fn batch_verify(vsrs: &SrsVerifier, cms: &[MercuryCommitment], u: &[Fr], vs: &[Fr],
                     proof: &MercuryProof, tr: &mut Transcript) -> Result<(), PcsError>;
 
-pub enum PairingSide { G2One, G2X }                                   // FROZEN FOREVER
+pub use pcs_verify::{PairingSide, ENTRY_WORDS, ENTRIES_PER_CHECK};   // FROZEN FOREVER
 pub struct AccumulatorEntry { pub side: PairingSide, pub scalar: Fr, pub point: G1Affine }
-pub const ENTRY_WORDS: usize = 6;
-pub const ENTRIES_PER_CHECK: usize = 12;
 
 pub fn verify_deferred(/* verify's params */) -> Result<Vec<AccumulatorEntry>, PcsError>;
 pub fn batch_verify_deferred(/* batch_verify's params */) -> Result<Vec<AccumulatorEntry>, PcsError>;
@@ -41,7 +45,7 @@ pub fn accumulator_words(entries: &[AccumulatorEntry], checks: &[usize])
     -> Result<Vec<Fr>, PcsError>;
 pub fn accumulator_from_words(words: &[Fr])
     -> Result<(Vec<AccumulatorEntry>, Vec<usize>), PcsError>;
-pub fn accumulator_digest(words: &[Fr]) -> Fr;
+pub use pcs_verify::accumulator_digest;     // fn(words: &[Fr]) -> Fr
 
 pub fn append_g1(tr: &mut Transcript, tag: Tag, p: &G1Affine);
 pub fn append_g1_list(tr: &mut Transcript, tag: Tag, ps: &[G1Affine]);
@@ -52,10 +56,9 @@ impl MercuryProof {
 }
 ```
 
-That is the whole public surface. Four private modules — `uni` (dense univariate
-helpers), `fft` (the size-`2b` transform), `bdfg` (the batched opening, curve-free since
-S09), `accumulator` (entries, their wire form, discharge) — and no traits, no macros, no
-`dyn`, no features.
+That is the whole public surface. Two private modules — `fft` (the size-`2b` transform)
+and `accumulator` (entries, their wire form, discharge) — beside `pcs-verify`'s `uni` and
+`bdfg`, and no traits, no macros, no `dyn`, no features.
 
 ## Frozen invariants
 - **`u1` is the FIRST `t` coordinates of `u`.** The evaluation at index `i + j*b` is the
@@ -94,11 +97,13 @@ S09), `accumulator` (entries, their wire form, discharge) — and no traits, no 
   beyond passing `[1]_2` and `[x]_2` to one `pairing_check`.
 
 ## The rules
-- **One verification path.** `accumulate` runs every field-side check and emits the twelve
-  terms; `verify` and `batch_verify` spend them on the pairings, `verify_deferred` and
-  `batch_verify_deferred` return them. The four public entry points contain no transcript
-  operation at all — `tests/structure.rs` reads that out of the source — so there is
-  nothing in them to drift.
+- **One verification path.** `accumulate` validates the points, runs
+  `pcs_verify::scalars` — every field-side check — and pairs the twelve scalars with their
+  points; `verify` and `batch_verify` spend them on the pairings, `verify_deferred` and
+  `batch_verify_deferred` return them. Neither `accumulate` nor the four public entry
+  points contains a transcript operation — `tests/structure.rs` reads that out of the
+  source — so there is nothing in them to drift, and a guest running `scalars` runs the
+  same schedule.
 - **The batch paths derive `cm*` before reaching the core**, so `k` never reaches it and a
   deferred group is twelve entries whatever the batch width. That derivation is forced:
   §5's schedule absorbs `cm*` at step 2, so a verifier cannot proceed without its limbs.
@@ -119,8 +124,8 @@ S09), `accumulator` (entries, their wire form, discharge) — and no traits, no 
 ## Tests
 | File | What |
 | --- | --- |
-| `src/{fft,uni}.rs` unit tests | the transform against the naive DFT, the frozen root's exact order, and each univariate helper against its definition |
-| `src/lib.rs` unit tests | the instance rule, the degenerate-challenge predicate, the limb bound, `P_u`'s two descriptions, and the `z` draw's resample rule |
+| `src/fft.rs` unit tests | the transform against the naive DFT and the frozen root's exact order |
+| `src/lib.rs` unit tests | the limb bound; the instance rule, the `z` draw's resample rule, the degenerate-challenge predicate and `P_u`'s two descriptions are `crates/pcs-verify`'s, beside the code |
 | `src/accumulator.rs` unit tests | the word round trip, every malformed word sequence, and the limb decoder's one spelling of infinity |
 | `tests/roundtrip.rs` | the round trip, the KZG differential, every menu height |
 | `tests/sizes.rs` | odd and unsupported sizes, mismatched points, a short SRS, backing agreement |
@@ -131,7 +136,7 @@ S09), `accumulator` (entries, their wire form, discharge) — and no traits, no 
 | `tests/sumcheck_bridge.rs` | a real zerocheck's reduced claim opened at its own point, single and batched, with the transposed-point control |
 | `tests/edge_cases.rs` | the committed `z^b = alpha` instance, through the production discharge |
 | `tests/kats.rs` | the committed G1-absorption oracle, the committed proof, transcript binding |
-| `tests/structure.rs` | the one transform, both frozen schedules read out of the source, that the entry points hold no transcript operation, and the constant proof length at four heights and three batch widths |
+| `tests/structure.rs` | the one transform, both frozen schedules read out of `open` and `pcs-verify`'s `scalars` and `batch_preamble`, that `accumulate` and the entry points hold no transcript operation, and the constant proof length at four heights and three batch widths |
 
 `tests/common/mod.rs` builds a **toy SRS** from a written-down `tau`, by writing the
 archive of `docs/spec/srs.md` §5 and loading it. That is what lets CI test Mercury at all.

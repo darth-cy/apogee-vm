@@ -43,9 +43,15 @@ fn repo_root() -> PathBuf {
 /// instead (`crates/emulator/tests/revm.rs`, `crates/prover/tests/revm.rs`).
 /// The owner's decision, S24; `docs/handoff/S24-revm.md` records it.
 ///
+/// **`recursion` is the recursion guest**, exempt for the same reason: it links
+/// `verifier-core`, `gkr-verify` and the circuit registry, nothing is derived
+/// from its bytes but its identity, and its one input is a base proof far
+/// larger than any committed fixture — so it is built from source where it is
+/// run (`host::fixture::build_guest`).
+///
 /// A name here is checked to be a real guest *and* to actually have no
 /// committed ELF, so the list cannot rot in either direction.
-const NOT_A_COMMITTED_FIXTURE: [&str; 1] = ["revm-block"];
+const NOT_A_COMMITTED_FIXTURE: [&str; 2] = ["revm-block", "recursion"];
 
 /// The guests both rules below cover: every member but [`NOT_A_COMMITTED_FIXTURE`].
 fn committed_members() -> Vec<String> {

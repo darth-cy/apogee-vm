@@ -1,0 +1,16 @@
+[package]
+name = "recursion"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The recursion guest's leaf: base shards verified in full but for their
+# Mercury pairings, which it defers. Its `Fr` arithmetic and its transcript's
+# permutations reach the `FR_ARITH` and `POSEIDON2` delegations through
+# `field`'s and `transcript`'s guest-target backends, as `recursion-ops` does.
+# Like `revm-block`, it has no committed ELF: it is built on demand.
+[dependencies]
+guest-sdk.workspace = true
+field = { path = "../../crates/field" }
+pcs-verify = { path = "../../crates/pcs-verify" }
+verifier-core = { path = "../../crates/verifier-core" }

@@ -160,12 +160,13 @@ effort there; §6.3 of that handoff note is the account.
 
 ---
 
-## 5. The three verbs
+## 5. The four verbs
 
 ```
 profiler elf <file> [--advice <f>] [--input <f>] [--top <n>] [--json <p>]
 profiler block <fixture> [--top <n>] [--json <p>]
 profiler record <number|latest> [--txs <n>] [--top <n>] [--json <p>] [--cache <d>]
+profiler leaf <dir>/<stem> --shards <from>..<to> [--shards ...] [--top <n>] [--json <p>]
 ```
 
 `elf` profiles any guest over any bytes. `block` profiles the revm guest over a
@@ -174,7 +175,10 @@ profiler record <number|latest> [--txs <n>] [--top <n>] [--json <p>] [--cache <d
 all of its transactions by default — and profiles the guest over it. Its RPC
 cache is a scratch directory under `target/` and is never committed, for the
 reason `crates/host/src/fixture.rs` gives: a whole block's `eth_getProof`
-answers would dwarf the fixture directory.
+answers would dwarf the fixture directory. `leaf` profiles the recursion
+guest's leaf, `guests/recursion`, over slices of a block proof that
+`verifier::proof_archive` wrote — the guest built once, one report a slice,
+each slice verified natively before its advice is built.
 
 Every number is machine-**independent**: a count of executed cycles on one
 image, not a wall clock. Two runs of one verb on one fixture give the same

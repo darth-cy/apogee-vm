@@ -18,6 +18,10 @@ publish.workspace = true
 [dependencies]
 # `family::COUNT` and `family::DEFAULT_HEIGHTS`, for the revm guest's heights.
 constants.workspace = true
+# `recursion::leaf_advice` decodes a shard's commitments and opening and runs
+# the native deferred verification for the `cm*` hint a guest cannot compute.
+curve.workspace = true
+pcs.workspace = true
 emulator.workspace = true
 loader.workspace = true
 program.workspace = true
@@ -76,6 +80,5 @@ loader.workspace = true
 checker.workspace = true
 constraints.workspace = true
 field.workspace = true
-curve.workspace = true
 rayon.workspace = true
 trace.workspace = true

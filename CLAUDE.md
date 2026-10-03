@@ -45,8 +45,12 @@ crates/
   poly/          MultilinearPoly + small-type backing + eq machinery; no_std
   sumcheck/      Gate + zerocheck prover/verifier; no_std
   srs/           snarkjs .ptau ingestion, the SRS archive, univariate KZG; std
+  pcs-verify/    Mercury's verifier half: the transcript schedule, h(alpha), D(z), the
+                 BDFG20 batch, the twelve accumulator scalars and the entry words, over
+                 points held as bytes; no_std, linked by the recursion guest
   pcs/           Mercury commit/open/verify, RLC batching, deferred pairings
-                 and the accumulator, plus the typed G1 absorption; std
+                 and the accumulator, plus the typed G1 absorption; std; re-exports
+                 pcs-verify, so native and guest verification share one field side
   loader/        ELF parsing, RVC expansion, ProgramImage, and the symbol table read
                  beside the image and never into it; std
   isa/           the RV32IMAC instruction model and the 32-bit decoder; no deps
@@ -108,7 +112,7 @@ crates/
 guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, opcodes/, heap/,
                  addsub/, control/, alu/, mem/, shards/, keccak-test/, keccak-unused/,
                  recursion-ops/, recursion-unused/, revm-block/, public-io/, mod-mul-ops/,
-                 sha256-ops/, ec-ops/
+                 sha256-ops/, ec-ops/, recursion/ (the recursion guest's leaf; no committed ELF)
                  -- their own workspace; see guests/Cargo.toml and docs/guest-program-manual.md
   vendor/        upstream crates vendored so a GUEST can patch them, through
                  guests/Cargo.toml's [patch.crates-io]; see guests/vendor/README.md.
@@ -236,7 +240,7 @@ cargo test --release -p prover --test recursion -- --include-ignored --test-thre
 cargo test --release -p prover --test public_io -- --include-ignored --test-threads=1  # DEFERRED; S-IO's statement: public input in, advice checked against it, journal out
 cargo test --release -p host --test prove -- --include-ignored --test-threads=1  # DEFERRED; S25's MINI-BLOCK GATE: a real mainnet block's first two transactions proved and verified, and the advice tamper twin
 RAYON_NUM_THREADS=6 cargo test --release -p prover --test revm -- --include-ignored --test-threads=1  # DEFERRED; the revm block, thirteen shards since S-IO, and it builds the guest; 38.4 GB peak and 536 s at S24, 523 s here at RAYON_NUM_THREADS=6 over S-IO's thirteen shards; ELEVEN 2^20 shards, so the thread bound is not optional on a 48 GB machine -- and since S26d one of the thirteen is a 2^18 KECCAK_F shard whose forward pass alone is ~60 GB, so the 38.4 GB peak is the pre-S26d figure, owes re-measurement, and may no longer fit a 48 GB machine at any thread count
-cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify -p verifier-core --target riscv32imac-unknown-none-elf
+cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify -p pcs-verify -p verifier-core --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
 cargo run --manifest-path tools/stateless-ref/Cargo.toml
@@ -322,6 +326,11 @@ cargo run --release -p profiler -- block mini-block [--top <n>] [--json <p>]
 ETH_RPC_URL=... cargo run --release -p profiler -- record <number|latest> [--txs <n>]
                                             # ditto over a block recorded from mainnet. The one
                                             # verb that reads RPC; its cache is under target/
+cargo run --release -p profiler -- leaf <dir>/<stem> --shards <from>..<to> [--shards ...]
+                                            # the recursion guest's leaf over slices of a block
+                                            # proof `bench prove --out` archived; one report a
+                                            # slice. Statement order is INIT_TEARDOWN, then
+                                            # ZERO_WINDOWS, then families ascending
 cargo run --release -p bench -- --list      # the routines, and what each measures
 cargo run --release -p bench -- <routine>   # just that one; setup is per-routine
 

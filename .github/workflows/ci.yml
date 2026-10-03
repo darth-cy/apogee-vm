@@ -446,7 +446,7 @@ jobs:
 
       # The crates the recursion guest links compile unchanged for the guest.
       - name: guest target builds
-        run: cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify -p verifier-core --target riscv32imac-unknown-none-elf
+        run: cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify -p pcs-verify -p verifier-core --target riscv32imac-unknown-none-elf
 
       # Acceptance 1, typed out: from the guest's own directory, with no flags
       # beyond the target, and everything else coming from the template config.

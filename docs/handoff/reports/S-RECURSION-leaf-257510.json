@@ -1,0 +1,848 @@
+{
+  "label": "leaf over shards 0..207",
+  "guest": "recursion",
+  "block_number": null,
+  "txs": null,
+  "gas_used": null,
+  "guest_cycles": 3016467025,
+  "cycles_per_gas": null,
+  "exit_code": 0,
+  "journal_bytes": 68,
+  "families": [
+    [
+      "ADD_SUB_LUI_AUIPC",
+      725397194
+    ],
+    [
+      "JUMP_BRANCH_SLT",
+      381875761
+    ],
+    [
+      "SHIFT_BITWISE",
+      368006375
+    ],
+    [
+      "MUL_DIV",
+      2308968
+    ],
+    [
+      "MEM_WORD",
+      1268268104
+    ],
+    [
+      "MEM_SUBWORD",
+      270610623
+    ],
+    [
+      "INIT_TEARDOWN",
+      0
+    ],
+    [
+      "ZERO_WINDOWS",
+      0
+    ],
+    [
+      "POSEIDON2",
+      524006
+    ],
+    [
+      "FR_ARITH",
+      8040921
+    ],
+    [
+      "PUBLIC_INPUT",
+      0
+    ],
+    [
+      "PUBLIC_OUTPUT",
+      0
+    ],
+    [
+      "ADVICE_WINDOWS",
+      0
+    ]
+  ],
+  "ram_windows": 199,
+  "categories": [
+    {
+      "category": "unattributed",
+      "cycles": 1851211500,
+      "share": 61.370188523774765,
+      "calls": 15364927
+    },
+    {
+      "category": "memory copy",
+      "cycles": 806780806,
+      "share": 26.745885146879733,
+      "calls": 14089463
+    },
+    {
+      "category": "witness + block setup",
+      "cycles": 163764710,
+      "share": 5.429023710279081,
+      "calls": 888843
+    },
+    {
+      "category": "core runtime",
+      "cycles": 148763232,
+      "share": 4.931704234360062,
+      "calls": 4848643
+    },
+    {
+      "category": "allocation",
+      "cycles": 63712079,
+      "share": 2.1121423994349815,
+      "calls": 2042570
+    },
+    {
+      "category": "delegation shims",
+      "cycles": 8187,
+      "share": 0.00027141022700223285,
+      "calls": 210
+    },
+    {
+      "category": "keccak256",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0
+    },
+    {
+      "category": "sha256/ripemd160",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0
+    },
+    {
+      "category": "secp256k1",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0
+    },
+    {
+      "category": "bn254",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0
+    },
+    {
+      "category": "256-bit arithmetic",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0
+    },
+    {
+      "category": "evm interpreter",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0
+    },
+    {
+      "category": "evm state + journal",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0
+    },
+    {
+      "category": "rlp + trie",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0
+    }
+  ],
+  "top_functions": [
+    {
+      "path": "field::mont_mul",
+      "category": "unattributed",
+      "cycles": 770990762,
+      "share": 25.559396327231525,
+      "calls": 6316076,
+      "cycles_per_call": 122.06799949842275
+    },
+    {
+      "path": "compiler_builtins::mem::memcpy",
+      "category": "memory copy",
+      "cycles": 555991579,
+      "share": 18.431879891012567,
+      "calls": 6122711,
+      "cycles_per_call": 90.80807162056155
+    },
+    {
+      "path": "field::Fr::from_bytes",
+      "category": "unattributed",
+      "cycles": 312918750,
+      "share": 10.373683763375467,
+      "calls": 2349590,
+      "cycles_per_call": 133.1801505794628
+    },
+    {
+      "path": "transcript::poseidon2_permute",
+      "category": "unattributed",
+      "cycles": 236326706,
+      "share": 7.834552940289477,
+      "calls": 524006,
+      "cycles_per_call": 451.0
+    },
+    {
+      "path": "field::add_limbs",
+      "category": "unattributed",
+      "cycles": 175744164,
+      "share": 5.826158964890392,
+      "calls": 1722982,
+      "cycles_per_call": 102.0
+    },
+    {
+      "path": "memcmp",
+      "category": "memory copy",
+      "cycles": 158901529,
+      "share": 5.267802620849137,
+      "calls": 535850,
+      "cycles_per_call": 296.5410637305216
+    },
+    {
+      "path": "transcript::Transcript::observe",
+      "category": "unattributed",
+      "cycles": 81019506,
+      "share": 2.68590723281651,
+      "calls": 976466,
+      "cycles_per_call": 82.97217312225925
+    },
+    {
+      "path": "memset",
+      "category": "memory copy",
+      "cycles": 72827083,
+      "share": 2.414317225960725,
+      "calls": 1232962,
+      "cycles_per_call": 59.06677010321486
+    },
+    {
+      "path": "serde_core::ser::impls::_<impl serde_core::ser::Serialize for (T0,T1,T2)>::serialize",
+      "category": "witness + block setup",
+      "cycles": 40504930,
+      "share": 1.3427937273738306,
+      "calls": 118088,
+      "cycles_per_call": 343.0063173226746
+    },
+    {
+      "path": "_<core::iter::adapters::GenericShunt<I,R> as core::iter::traits::iterator::Iterator>::next",
+      "category": "core runtime",
+      "cycles": 37830054,
+      "share": 1.2541179361972306,
+      "calls": 65784,
+      "cycles_per_call": 575.0646661802261
+    },
+    {
+      "path": "serde_core::de::SeqAccess::next_element",
+      "category": "witness + block setup",
+      "cycles": 31831549,
+      "share": 1.0552593062077316,
+      "calls": 57070,
+      "cycles_per_call": 557.763255650955
+    },
+    {
+      "path": "field::Fr::to_bytes",
+      "category": "unattributed",
+      "cycles": 30507948,
+      "share": 1.0113801260598896,
+      "calls": 1694886,
+      "cycles_per_call": 18.0
+    },
+    {
+      "path": "serde_core::de::SeqAccess::next_element",
+      "category": "witness + block setup",
+      "cycles": 30331927,
+      "share": 1.005544789603659,
+      "calls": 122817,
+      "cycles_per_call": 246.96847341980344
+    },
+    {
+      "path": "gkr_verify::verify_sumcheck",
+      "category": "unattributed",
+      "cycles": 26599438,
+      "share": 0.8818076836096028,
+      "calls": 5209,
+      "cycles_per_call": 5106.4384718756
+    },
+    {
+      "path": "transcript::g1_limbs",
+      "category": "unattributed",
+      "cycles": 25740157,
+      "share": 0.8533213453576539,
+      "calls": 69483,
+      "cycles_per_call": 370.4525855245168
+    },
+    {
+      "path": "verifier_core::wire::Reader::frs",
+      "category": "core runtime",
+      "cycles": 24149534,
+      "share": 0.8005900213677953,
+      "calls": 5416,
+      "cycles_per_call": 4458.924298375185
+    },
+    {
+      "path": "_<field::Fr as core::ops::arith::Sub>::sub",
+      "category": "core runtime",
+      "cycles": 23532131,
+      "share": 0.780122269030937,
+      "calls": 176333,
+      "cycles_per_call": 133.45279102607
+    },
+    {
+      "path": "gkr_verify::eval_gate",
+      "category": "unattributed",
+      "cycles": 18702193,
+      "share": 0.6200032304347832,
+      "calls": 116722,
+      "cycles_per_call": 160.22851733177978
+    },
+    {
+      "path": "gkr_verify::ResolvedList::eval",
+      "category": "unattributed",
+      "cycles": 17708061,
+      "share": 0.58704639743244,
+      "calls": 116656,
+      "cycles_per_call": 151.79725860650117
+    },
+    {
+      "path": "_<field::Fr as core::ops::arith::AddAssign>::add_assign",
+      "category": "core runtime",
+      "cycles": 16280629,
+      "share": 0.5397250778831238,
+      "calls": 561401,
+      "cycles_per_call": 29.0
+    },
+    {
+      "path": "gkr_verify::ResolvedList::new",
+      "category": "unattributed",
+      "cycles": 15358145,
+      "share": 0.5091434738955914,
+      "calls": 5209,
+      "cycles_per_call": 2948.3864465348433
+    },
+    {
+      "path": "constraints::GateDef::operands",
+      "category": "unattributed",
+      "cycles": 14744062,
+      "share": 0.4887857840912416,
+      "calls": 170469,
+      "cycles_per_call": 86.49116261607682
+    },
+    {
+      "path": "constraints::wire::_<impl serde_core::ser::Serialize for constraints::PolyAddress>::serialize",
+      "category": "witness + block setup",
+      "cycles": 14086767,
+      "share": 0.4669955574932897,
+      "calls": 187472,
+      "cycles_per_call": 75.14064500298711
+    },
+    {
+      "path": "gkr_verify::verify",
+      "category": "unattributed",
+      "cycles": 13631431,
+      "share": 0.45190054746247393,
+      "calls": 207,
+      "cycles_per_call": 65852.32367149758
+    },
+    {
+      "path": "__rustc::__rust_alloc",
+      "category": "allocation",
+      "cycles": 13526077,
+      "share": 0.44840791853177975,
+      "calls": 541043,
+      "cycles_per_call": 25.00000369656386
+    },
+    {
+      "path": "field::Fr::from_u64",
+      "category": "unattributed",
+      "cycles": 13403358,
+      "share": 0.4443396161441546,
+      "calls": 744631,
+      "cycles_per_call": 18.0
+    },
+    {
+      "path": "serde_core::ser::impls::_<impl serde_core::ser::Serialize for &T>::serialize",
+      "category": "witness + block setup",
+      "cycles": 12654313,
+      "share": 0.41950775178787175,
+      "calls": 53813,
+      "cycles_per_call": 235.15345734302122
+    },
+    {
+      "path": "serde_core::de::SeqAccess::next_element",
+      "category": "witness + block setup",
+      "cycles": 12348332,
+      "share": 0.40936406390850566,
+      "calls": 53829,
+      "cycles_per_call": 229.3992457597206
+    },
+    {
+      "path": "memcpy",
+      "category": "memory copy",
+      "cycles": 12245422,
+      "share": 0.4059524569143931,
+      "calls": 6122711,
+      "cycles_per_call": 2.0
+    },
+    {
+      "path": "constraints::GateDef::coefficients",
+      "category": "unattributed",
+      "cycles": 12172870,
+      "share": 0.4035472590654294,
+      "calls": 170469,
+      "cycles_per_call": 71.40811525849274
+    },
+    {
+      "path": "alloc::raw_vec::RawVecInner<A>::finish_grow",
+      "category": "allocation",
+      "cycles": 11192734,
+      "share": 0.3710544125706131,
+      "calls": 298004,
+      "cycles_per_call": 37.55900591938363
+    },
+    {
+      "path": "transcript::Transcript::append_scalars",
+      "category": "unattributed",
+      "cycles": 9176167,
+      "share": 0.30420246347629143,
+      "calls": 69327,
+      "cycles_per_call": 132.3606531365846
+    },
+    {
+      "path": "_<field::Fr as core::ops::arith::Mul>::mul",
+      "category": "core runtime",
+      "cycles": 9033787,
+      "share": 0.29948237209720535,
+      "calls": 1290541,
+      "cycles_per_call": 7.0
+    },
+    {
+      "path": "poly::eq_eval",
+      "category": "unattributed",
+      "cycles": 8351424,
+      "share": 0.27686110707608347,
+      "calls": 5209,
+      "cycles_per_call": 1603.268189671722
+    },
+    {
+      "path": "__rustc::__rust_realloc",
+      "category": "core runtime",
+      "cycles": 8307440,
+      "share": 0.27540297742853664,
+      "calls": 207686,
+      "cycles_per_call": 40.0
+    },
+    {
+      "path": "serde_core::de::SeqAccess::next_element",
+      "category": "witness + block setup",
+      "cycles": 8259359,
+      "share": 0.2738090266377104,
+      "calls": 241301,
+      "cycles_per_call": 34.22844911542016
+    },
+    {
+      "path": "_<field::Fr as core::ops::arith::Add>::add",
+      "category": "core runtime",
+      "cycles": 8131067,
+      "share": 0.2695559716917509,
+      "calls": 1161581,
+      "cycles_per_call": 7.0
+    },
+    {
+      "path": "gkr_verify::eval_gate::_{{closure}}",
+      "category": "unattributed",
+      "cycles": 8038711,
+      "share": 0.2664942442061007,
+      "calls": 63625,
+      "cycles_per_call": 126.345163064833
+    },
+    {
+      "path": "gkr_verify::ResolvedList::summand",
+      "category": "unattributed",
+      "cycles": 7708749,
+      "share": 0.25555555343755165,
+      "calls": 5209,
+      "cycles_per_call": 1479.8903820311
+    },
+    {
+      "path": "gkr_verify::powers",
+      "category": "unattributed",
+      "cycles": 7618138,
+      "share": 0.2525516750841989,
+      "calls": 5209,
+      "cycles_per_call": 1462.4952966020348
+    },
+    {
+      "path": "transcript::Transcript::sample",
+      "category": "unattributed",
+      "cycles": 7021378,
+      "share": 0.23276826637944104,
+      "calls": 71756,
+      "cycles_per_call": 97.85074418863928
+    },
+    {
+      "path": "gkr_verify::check_challenges",
+      "category": "unattributed",
+      "cycles": 6761515,
+      "share": 0.22415345316098723,
+      "calls": 207,
+      "cycles_per_call": 32664.323671497583
+    },
+    {
+      "path": "core::str::converts::from_utf8",
+      "category": "core runtime",
+      "cycles": 6459893,
+      "share": 0.21415427208258642,
+      "calls": 54165,
+      "cycles_per_call": 119.26323271485276
+    },
+    {
+      "path": "_<field::Fr as core::ops::arith::MulAssign>::mul_assign",
+      "category": "core runtime",
+      "cycles": 6241264,
+      "share": 0.2069064222573426,
+      "calls": 215216,
+      "cycles_per_call": 29.0
+    },
+    {
+      "path": "field::Fr::from_hex",
+      "category": "unattributed",
+      "cycles": 5212443,
+      "share": 0.17279960154711121,
+      "calls": 7457,
+      "cycles_per_call": 699.0
+    },
+    {
+      "path": "pcs_verify::entry_words",
+      "category": "unattributed",
+      "cycles": 4657915,
+      "share": 0.15441624129804635,
+      "calls": 24871,
+      "cycles_per_call": 187.282980177717
+    },
+    {
+      "path": "_<core::slice::iter::Iter<T> as core::iter::traits::iterator::Iterator>::any",
+      "category": "memory copy",
+      "cycles": 4485951,
+      "share": 0.14871539993048655,
+      "calls": 207,
+      "cycles_per_call": 21671.260869565216
+    },
+    {
+      "path": "serde_core::de::SeqAccess::next_element",
+      "category": "witness + block setup",
+      "cycles": 3738345,
+      "share": 0.12393124038874584,
+      "calls": 54213,
+      "cycles_per_call": 68.9566155719108
+    },
+    {
+      "path": "alloc::raw_vec::RawVec<T,A>::grow_one",
+      "category": "allocation",
+      "cycles": 3382752,
+      "share": 0.11214284697841177,
+      "calls": 126552,
+      "cycles_per_call": 26.73013464820785
+    },
+    {
+      "path": "alloc::raw_vec::RawVec<T,A>::grow_one",
+      "category": "allocation",
+      "cycles": 3382752,
+      "share": 0.11214284697841177,
+      "calls": 126552,
+      "cycles_per_call": 26.73013464820785
+    },
+    {
+      "path": "alloc::raw_vec::RawVec<T,A>::grow_one",
+      "category": "allocation",
+      "cycles": 3382752,
+      "share": 0.11214284697841177,
+      "calls": 126552,
+      "cycles_per_call": 26.73013464820785
+    },
+    {
+      "path": "alloc::raw_vec::RawVec<T,A>::grow_one",
+      "category": "allocation",
+      "cycles": 3382752,
+      "share": 0.11214284697841177,
+      "calls": 126552,
+      "cycles_per_call": 26.73013464820785
+    },
+    {
+      "path": "alloc::raw_vec::RawVec<T,A>::grow_one",
+      "category": "allocation",
+      "cycles": 3382752,
+      "share": 0.11214284697841177,
+      "calls": 126552,
+      "cycles_per_call": 26.73013464820785
+    },
+    {
+      "path": "alloc::raw_vec::RawVec<T,A>::grow_one",
+      "category": "allocation",
+      "cycles": 3382752,
+      "share": 0.11214284697841177,
+      "calls": 126552,
+      "cycles_per_call": 26.73013464820785
+    },
+    {
+      "path": "constraints::wire::to_bytes",
+      "category": "unattributed",
+      "cycles": 3376417,
+      "share": 0.11193283307978479,
+      "calls": 16,
+      "cycles_per_call": 211026.0625
+    },
+    {
+      "path": "_<field::Fr as core::ops::arith::Neg>::neg",
+      "category": "core runtime",
+      "cycles": 3342381,
+      "share": 0.11080449321338097,
+      "calls": 26113,
+      "cycles_per_call": 127.99682150652932
+    },
+    {
+      "path": "main",
+      "category": "unattributed",
+      "cycles": 3251432,
+      "share": 0.10778940969858605,
+      "calls": 1,
+      "cycles_per_call": 3251432.0
+    },
+    {
+      "path": "transcript::Transcript::challenge_scalar",
+      "category": "unattributed",
+      "cycles": 3020256,
+      "share": 0.10012560969400951,
+      "calls": 71754,
+      "cycles_per_call": 42.09181369679739
+    },
+    {
+      "path": "alloc::raw_vec::RawVec<T,A>::grow_one",
+      "category": "allocation",
+      "cycles": 2750558,
+      "share": 0.09118475279868177,
+      "calls": 102195,
+      "cycles_per_call": 26.914800136993005
+    },
+    {
+      "path": "_<alloc::vec::Vec<T> as alloc::vec::spec_from_iter::SpecFromIter<T,I>>::from_iter",
+      "category": "allocation",
+      "cycles": 2581734,
+      "share": 0.0855880067178921,
+      "calls": 18972,
+      "cycles_per_call": 136.08127767235928
+    }
+  ],
+  "mnemonics": [
+    [
+      "Sw",
+      712759264
+    ],
+    [
+      "Lw",
+      555508840
+    ],
+    [
+      "Addi",
+      483768095
+    ],
+    [
+      "Lbu",
+      243818518
+    ],
+    [
+      "Or",
+      153505029
+    ],
+    [
+      "Slli",
+      146169701
+    ],
+    [
+      "Add",
+      131479206
+    ],
+    [
+      "Bltu",
+      111874025
+    ],
+    [
+      "Bne",
+      90904704
+    ],
+    [
+      "Jalr",
+      67965841
+    ],
+    [
+      "Beq",
+      55481057
+    ],
+    [
+      "Lui",
+      42195748
+    ],
+    [
+      "Auipc",
+      36569249
+    ],
+    [
+      "Andi",
+      34035750
+    ],
+    [
+      "Sub",
+      22819968
+    ],
+    [
+      "Sb",
+      21453477
+    ],
+    [
+      "Xor",
+      20990454
+    ],
+    [
+      "Jal",
+      19646089
+    ],
+    [
+      "Bgeu",
+      17936763
+    ],
+    [
+      "Sltu",
+      15862837
+    ],
+    [
+      "Ecall",
+      8564928
+    ],
+    [
+      "Srl",
+      4368754
+    ],
+    [
+      "Sll",
+      4337864
+    ],
+    [
+      "Srli",
+      2235004
+    ],
+    [
+      "Mul",
+      1927345
+    ],
+    [
+      "And",
+      1776533
+    ],
+    [
+      "Sh",
+      1596396
+    ],
+    [
+      "Blt",
+      1573547
+    ],
+    [
+      "Lh",
+      1469196
+    ],
+    [
+      "Lb",
+      1249798
+    ],
+    [
+      "Lhu",
+      1023238
+    ],
+    [
+      "Srai",
+      418398
+    ],
+    [
+      "Bge",
+      387668
+    ],
+    [
+      "Mulhu",
+      381620
+    ],
+    [
+      "Sltiu",
+      243230
+    ],
+    [
+      "Ori",
+      160811
+    ],
+    [
+      "Xori",
+      8077
+    ],
+    [
+      "Divu",
+      3
+    ]
+  ],
+  "candidates": [
+    {
+      "category": "secp256k1",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0,
+      "frame_words": 30,
+      "shim_cycles": 0,
+      "removable_cycles": 0,
+      "removable_share": 0.0,
+      "entryless": false
+    },
+    {
+      "category": "256-bit arithmetic",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0,
+      "frame_words": 32,
+      "shim_cycles": 0,
+      "removable_cycles": 0,
+      "removable_share": 0.0,
+      "entryless": true
+    },
+    {
+      "category": "bn254",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0,
+      "frame_words": 64,
+      "shim_cycles": 0,
+      "removable_cycles": 0,
+      "removable_share": 0.0,
+      "entryless": false
+    },
+    {
+      "category": "sha256/ripemd160",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0,
+      "frame_words": 25,
+      "shim_cycles": 0,
+      "removable_cycles": 0,
+      "removable_share": 0.0,
+      "entryless": false
+    },
+    {
+      "category": "keccak256",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0,
+      "frame_words": 50,
+      "shim_cycles": 0,
+      "removable_cycles": 0,
+      "removable_share": 0.0,
+      "entryless": false
+    }
+  ],
+  "unattributed_cycles": 28,
+  "unattributed_share": 9.282382259756345e-7,
+  "function_symbols": 263
+}

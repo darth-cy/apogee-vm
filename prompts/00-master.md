@@ -208,6 +208,7 @@ crates/
   transcript/   Poseidon2 permutation + duplex + typed layer
   poly/         MultilinearPoly (small-type backing), eq machinery
   sumcheck/     gate-based sumcheck prover/verifier
+  pcs-verify/   Mercury's verifier half: schedule, derived values, accumulator scalars — no_std
   pcs/          Mercury commit/open/verify + RLC batching + accumulator extraction
   isa/          RV32IMAC instruction model + decode
   loader/       ELF load, RVC expansion, ProgramImage
@@ -223,7 +224,7 @@ crates/
   verifier-core/ statement + transcripts + verifying key + reduce_shard + BlockProof — no_std
   verifier/     proof verification (library + CLI)
   host/         host SDK: prove/verify API, input building, witness recorder
-guests/         fib/, echo/, keccak-test/, revm-block/, recursion-ops/ -- Apogee-SDK programs; vendor/ -- upstream crates a guest patches
+guests/         fib/, echo/, keccak-test/, revm-block/, recursion-ops/, recursion/ -- Apogee-SDK programs; vendor/ -- upstream crates a guest patches
 tools/          kat-gen fixtures, artifact dump, bench harness + its ethproofs-shaped report, cycle profiler, transcript oracle, test-support
 docs/           spec/, handoff/, publication/, GLOSSARY.md, guest-program-manual.md
 prompts/        stage-wise build prompts

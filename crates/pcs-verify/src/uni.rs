@@ -9,6 +9,9 @@
 //! Everything in this module runs on polynomials of size `O(b)` except
 //! [`div_by_linear`], which the opening also calls once at size `n`.
 
+use alloc::vec;
+use alloc::vec::Vec;
+
 use field::Fr;
 
 /// `c(x)`, by Horner. The empty polynomial is the zero polynomial.

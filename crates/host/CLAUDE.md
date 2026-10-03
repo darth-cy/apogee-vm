@@ -87,6 +87,17 @@ pub mod fixture {
 // verb, `tools/profiler` and the suites -- three copies of the same 60 lines before.
 pub fn revm_params() -> ProgramParams;
 pub fn build_revm_guest(mode: Mode) -> Result<Vec<u8>, String>;   // always --release
+// Any guest with no committed ELF, built at --release in a scratch target directory
+// keyed on the pid, so two processes building one guest no longer destroy each other's.
+pub fn build_guest(guest: &str, bin: &str) -> Result<Vec<u8>, String>;
+}
+
+// The recursion stage: `guests/recursion`'s advice for shards `shards` of a block —
+// the key, the statement, each proof and its `cm*` hint, the hint read off the native
+// deferred verification, so building the advice verifies the slice natively first.
+pub mod recursion {
+    pub fn leaf_advice(vk: &VerifyingKey, block: &BlockProof, shards: Range<usize>)
+        -> Result<Vec<u8>, String>;
 }
 ```
 
