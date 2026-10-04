@@ -377,6 +377,11 @@ pub mod recursion {
     static DELEGATION_FIELD_IO: [u8; delegation::MARKER_BYTES] =
         super::record(ecall::PRECOMPILE_FIELD_IO);
 
+    /// `FQ_OP`'s declaration record (S-RECURSION).
+    #[link_section = ".rodata.apogee.delegations.fq_op"]
+    static DELEGATION_FQ_OP: [u8; delegation::MARKER_BYTES] =
+        super::record(ecall::PRECOMPILE_FQ_OP);
+
     /// One field-family call over the frame at `base`, `bytes` long.
     ///
     /// **The answer is `base + bytes`, and any other is fatal**
@@ -413,6 +418,14 @@ pub mod recursion {
     /// and for an export write.
     pub fn field_io(frame: &mut [u32; constants::field_io::FRAME_WORDS]) {
         field_call(&DELEGATION_FIELD_IO, frame.as_mut_ptr(), 4 * frame.len());
+    }
+
+    /// One operation over BN254 base-field elements in field cells
+    /// (`docs/spec/recursion.md` §6): `[op, d, a, b]`, the op word carrying
+    /// the code, the indirection flags and the digit cell
+    /// (`constants::fq_op`).
+    pub fn fq_op(frame: &mut [u32; constants::fq_op::FRAME_WORDS]) {
+        field_call(&DELEGATION_FQ_OP, frame.as_mut_ptr(), 4 * frame.len());
     }
 
     /// The Poseidon2 delegation's 96-byte frame: three canonical

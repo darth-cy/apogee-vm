@@ -26,6 +26,7 @@ mod build;
 pub mod delegation;
 pub mod ec_add;
 pub mod field_io;
+pub mod fq_op;
 pub mod fr_arith;
 pub mod fr_op;
 pub mod gadgets;
@@ -176,6 +177,7 @@ fn circuit(recursion: bool, family: u32, trace_vars: u32) -> Option<FamilyCircui
             f::FR_OP if recursion => (fr_op::artifact, fr_op::channels()),
             f::P2_FIELD if recursion => (p2_field::artifact, p2_field::channels()),
             f::FIELD_IO if recursion => (field_io::artifact, field_io::channels()),
+            f::FQ_OP if recursion => (fq_op::artifact, fq_op::channels()),
             _ => return None,
         };
     if trace_vars < minimum_trace_vars(&channels) {

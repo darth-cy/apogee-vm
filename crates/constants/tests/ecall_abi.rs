@@ -35,6 +35,7 @@ fn constants_table() -> BTreeMap<&'static str, u32> {
         ("PRECOMPILE_FR_OP", ecall::PRECOMPILE_FR_OP),
         ("PRECOMPILE_P2_FIELD", ecall::PRECOMPILE_P2_FIELD),
         ("PRECOMPILE_FIELD_IO", ecall::PRECOMPILE_FIELD_IO),
+        ("PRECOMPILE_FQ_OP", ecall::PRECOMPILE_FQ_OP),
         (
             "RETIRED_MOD_MUL_WITNESSED_MODULUS",
             ecall::RETIRED_MOD_MUL_WITNESSED_MODULUS,

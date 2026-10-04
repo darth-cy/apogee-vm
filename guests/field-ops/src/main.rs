@@ -1,7 +1,8 @@
 #![no_std]
 #![no_main]
 //! S-RECURSION's guest for the field memory: every `FR_OP` op — `DIGIT`'s
-//! chain over a whole word among them — one
+//! chain over a whole word among them — every `FQ_OP` op, a wrapping
+//! subtraction, `(q − 1)²` and an indirect read and write among them — one
 //! `P2_FIELD` duplex step at each of `n = 2, 1, 0`, and both `FIELD_IO` moves,
 //! called by name over frames this guest writes itself
 //! (`docs/spec/recursion.md` §2-§5).
@@ -18,8 +19,8 @@
 //! The exit status, `a0`: one per check passed but the first, or `200 + i` on
 //! the first that fails.
 
-use constants::{field_io as io, fr_op as op};
-use guest_sdk::recursion::{field_io, fr_op, p2_field};
+use constants::{field_io as io, fq_op as fq, fr_op as op};
+use guest_sdk::recursion::{field_io, fq_op, fr_op, p2_field};
 use guest_sdk::{entry, exit};
 
 entry!(main);
@@ -34,6 +35,33 @@ fn export(cell: u32) -> [u32; 8] {
     let mut words = [0u32; 8];
     field_io(&mut [io::EXPORT, cell, words.as_mut_ptr() as u32]);
     words
+}
+
+/// Four cells nothing writes: an element, read where an op ignores its `b`.
+/// Every operand names an element, used or not, since an element's cells
+/// share one read timestamp — which is also why an element's limbs are
+/// exported only once nothing reads it whole again.
+const ZERO_ELEMENT: u32 = 500;
+
+/// `[op, d, a, b]` over elements.
+fn fqe(word: u32, d: u32, a: u32, b: u32) {
+    fq_op(&mut [word, d, a, b]);
+}
+
+/// The element at `cell`'s four limbs, each through an export.
+fn element(cell: u32) -> [u64; 4] {
+    core::array::from_fn(|k| {
+        let w = export(cell + k as u32);
+        w[0] as u64 | (w[1] as u64) << 32
+    })
+}
+
+/// A cell holding the 128-bit integer whose words are `top` first.
+fn wide(cell: u32, top: [u32; 4]) {
+    fr(op::IMM, cell, 0, top[0]);
+    for w in &top[1..] {
+        fr(op::SHL, cell, cell, *w);
+    }
 }
 
 /// `cell ← Σ_k words[k]·2^{32k}` mod p.
@@ -71,6 +99,14 @@ const INV_150: [u32; 8] = [
 const ALL_ONES_REDUCED: [u32; 8] = [
     0x4ffffffa, 0xac96341c, 0x9f60cd29, 0x36fc7695, 0x7879462e, 0x666ea36f, 0x9a07df2f, 0x0e0a77c1,
 ];
+/// `(7 − (2^128 + 5)) mod q`: a subtraction that wraps.
+const SUB_WRAPS: [u64; 4] = [
+    0x3c20_8c16_d87c_fd49,
+    0x9781_6a91_6871_ca8d,
+    0xb850_45b6_8181_585c,
+    0x3064_4e72_e131_a029,
+];
+
 /// The scalar field's modulus, which imports as 0.
 const P: [u32; 8] = [
     0xf0000001, 0x43e1f593, 0x79b97091, 0x2833e848, 0x8181585d, 0xb85045b6, 0xe131a029, 0x30644e72,
@@ -142,6 +178,36 @@ fn main() -> ! {
     check(export(107) == AFTER_N1_LANE1);
     p2_field(&mut [0, 106, 0, 0, 109]);
     check(export(109) == AFTER_N0);
+
+    // FQ_OP: x = 2^128 + 5 and y = 7 from their limb cells, then each op.
+    fr(op::IMM, 200, 0, 5);
+    fr(op::IMM, 201, 0, 1);
+    fr(op::IMM, 204, 0, 7);
+    fqe(fq::FROM128, 210, 200, ZERO_ELEMENT);
+    fqe(fq::FROM128, 214, 204, ZERO_ELEMENT);
+    fqe(fq::MUL, 218, 210, 214);
+    // An element is read whole until it is dead: an export reads its cells
+    // one at a time, so the assertion comes before it.
+    fqe(fq::MULEQ, 218, 210, 214);
+    check(element(218) == [35, 0, 7, 0]);
+    fqe(fq::ADD, 222, 210, 214);
+    check(element(222) == [12, 0, 1, 0]);
+    fqe(fq::SUB, 226, 214, 210);
+    check(element(226) == SUB_WRAPS);
+    // q − 1, squared, reduces to 1.
+    wide(230, [0x9781_6a91, 0x6871_ca8d, 0x3c20_8c16, 0xd87c_fd46]);
+    wide(231, [0x3064_4e72, 0xe131_a029, 0xb850_45b6, 0x8181_585d]);
+    fqe(fq::FROM128, 234, 230, ZERO_ELEMENT);
+    fqe(fq::MUL, 238, 234, 234);
+    check(element(238) == [1, 0, 0, 0]);
+    // Indirect: digit 2 at cell 240, so bucket 2 of the buckets at 300.
+    fr(op::IMM, 240, 0, 2);
+    let digit = 240 << fq::DIGIT_SHIFT;
+    fqe(fq::FROM128, 316, 204, ZERO_ELEMENT);
+    fqe(fq::ADD | fq::IND_A | digit, 250, 300, 214);
+    check(element(250) == [14, 0, 0, 0]);
+    fqe(fq::MUL | fq::IND_D | digit, 304, 210, 214);
+    check(element(320) == [35, 0, 7, 0]);
 
     exit(passed as i32 - 1)
 }

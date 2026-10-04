@@ -4,14 +4,17 @@
 //! Two statements, and between them every new circuit meets the executor and
 //! the fill that produce its rows:
 //!
-//! * **Every row holds.** Each of `FR_OP`, `P2_FIELD` and `FIELD_IO` is filled
+//! * **Every row holds.** Each of `FR_OP`, `P2_FIELD`, `FIELD_IO` and `FQ_OP` is filled
 //!   by `prover::family_fill` from the trace and evaluated row by row —
 //!   every relation through `checker::violated_relations`, every range
 //!   obligation through `checker::violated_lookups` — on every live row and a
 //!   padding row. `P2_FIELD`'s next state comes from the emulator's
 //!   `transcript::poseidon2_permute` and its intermediates from
 //!   `constraints::p2_field::permutation_witness`, so a permutation the circuit
-//!   spells differently from the transcript breaks `r63_out*` here.
+//!   spells differently from the transcript breaks `r63_out*` here. Likewise
+//!   `FQ_OP`'s `d′` is the emulator's own reduction mod q, and its quotient and
+//!   carries are `constraints::fq_op::witness`'s, so a reduction the circuit
+//!   spells differently breaks a `group*` gate.
 //! * **The field memory balances.** Every field leaf the three families'
 //!   circuits evaluate, with the field window's teardown and init, cancels:
 //!   reads times teardowns equals writes times inits. A slot or an offset the
@@ -36,15 +39,16 @@ use program::{decode_program, ProgramParams};
 use prover::{family_fill, Program, ShardRows, ShardSource};
 use trace::{FrameSlice, RowSlice};
 
-/// The three delegation families' height: `RANGE16`'s floor.
+/// The field delegation families' height, `RANGE16`'s floor — but
+/// `FQ_OP`'s, which carries `TIMESTAMP` and takes `2^20`.
 const VARS: u32 = 16;
-/// The field window's: the menu's smallest, which covers every cell the
-/// guest touches.
-const WINDOW_VARS: u32 = 8;
+/// The field window's: the menu's smallest that covers every cell the guest
+/// touches.
+const WINDOW_VARS: u32 = 12;
 
 /// `field-ops` traced at `2^VARS`, with the program a fill reads.
 fn setup() -> (common::Traced, Program) {
-    let t = traced_exiting_at("field-ops", 0, 17, 1 << VARS);
+    let t = traced_exiting_at("field-ops", 0, 23, 1 << VARS);
     let params = ProgramParams {
         heights: [1 << VARS; family::COUNT as usize],
         ..ProgramParams::defaults()
@@ -153,6 +157,13 @@ fn field_accesses(f: u32) -> Vec<String> {
             out
         }
         family::FIELD_IO => vec!["cell".to_string()],
+        family::FQ_OP => {
+            let mut out = vec!["g".to_string()];
+            for q in ["a", "b", "d"] {
+                out.extend((0..4).map(|i| format!("{q}{i}")));
+            }
+            out
+        }
         _ => unreachable!(),
     }
 }
@@ -164,8 +175,15 @@ fn field_accesses(f: u32) -> Vec<String> {
 fn the_field_families_hold_and_the_field_memory_balances() {
     let (t, program) = setup();
     let (mut reads, mut writes) = (Fr::ONE, Fr::ONE);
-    for f in [family::FR_OP, family::P2_FIELD, family::FIELD_IO] {
+    for f in [
+        family::FR_OP,
+        family::P2_FIELD,
+        family::FIELD_IO,
+        family::FQ_OP,
+    ] {
         let name = program::family_name(f);
+        // `FQ_OP` carries `TIMESTAMP`, whose table needs 19 variables.
+        let vars = if f == family::FQ_OP { 20 } else { VARS };
         let trace = t
             .traces
             .delegation(f)
@@ -174,14 +192,14 @@ fn the_field_families_hold_and_the_field_memory_balances() {
             program: &program,
             input: &[],
             advice: &[],
-            rows: ShardRows::Invocations(FrameSlice::shard(trace, 0, 1 << VARS)),
+            rows: ShardRows::Invocations(FrameSlice::shard(trace, 0, 1 << vars)),
             index: 0,
-            height: 1 << VARS,
+            height: 1 << vars,
             window: 0,
         };
         let columns =
             family_fill(f).expect("a fill")(&src).unwrap_or_else(|e| panic!("{name}: {e}"));
-        let a = recursion_circuit(f, VARS).expect("the circuit").artifact;
+        let a = recursion_circuit(f, vars).expect("the circuit").artifact;
         let ch = challenges(&a, None);
         for row in 0..=trace.len() {
             let w = witness_row(&a, &columns, row, &ch);
@@ -226,7 +244,7 @@ fn the_field_families_hold_and_the_field_memory_balances() {
 }
 
 /// The recursion format's `ADD_SUB` over `field-ops`' own rows: every relation
-/// and range obligation holds on every live row and a padding row, its 47
+/// and range obligation holds on every live row and a padding row, its 94
 /// field requests among them (`docs/spec/recursion.md` §1.4).
 #[test]
 fn the_recursion_add_sub_holds_on_the_field_requests() {
@@ -261,11 +279,11 @@ fn the_recursion_add_sub_holds_on_the_field_requests() {
         .expect("the circuit")
         .artifact;
     let ch = challenges(&a, None);
-    let requests: usize = [family::FR_OP, family::P2_FIELD, family::FIELD_IO]
+    let requests: usize = program::FIELD_DELEGATIONS
         .iter()
         .map(|f| t.traces.delegation(*f).map_or(0, |d| d.len()))
         .sum();
-    assert_eq!(requests, 47);
+    assert_eq!(requests, 94);
     for row in 0..=trace.len() {
         let w = witness_row(&a, &columns, row, &ch);
         let broken = checker::violated_relations(&a, &w, &ch);

@@ -135,7 +135,7 @@ pub fn exit_code_of(name: &str) -> i32 {
         "mod-mul-ops" => 28,
         "sha256-ops" => 13,
         "ec-ops" => 20,
-        "field-ops" => 17,
+        "field-ops" => 23,
         _ => 0,
     }
 }

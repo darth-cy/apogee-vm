@@ -54,9 +54,9 @@ fn image_of(bytes: Vec<u8>) -> ProgramImage {
 fn the_registry_is_one_table() {
     assert_eq!(
         DELEGATIONS.len(),
-        9,
+        10,
         "S21 registers one delegation family, S23 two more, S26 a fourth, S26c two more \
-         and S-RECURSION three"
+         and S-RECURSION four"
     );
     assert_eq!(
         constants::delegation::BASE_TYPES,
@@ -151,9 +151,15 @@ fn the_registry_is_one_table() {
                 constants::address_space::DELEGATION_FIELD_IO,
                 3
             ),
+            (
+                family::FQ_OP,
+                ecall::PRECOMPILE_FQ_OP,
+                constants::address_space::DELEGATION_FQ_OP,
+                4
+            ),
         ],
         DELEGATIONS,
-        "the nine families, their numbers, their tags and their frames"
+        "the ten families, their numbers, their tags and their frames"
     );
     // Every number and every tag is its own: the request-side gates partition
     // ecall rows on exactly that (`crates/constraints/src/add_sub.rs`).
@@ -209,8 +215,8 @@ fn a_number_no_family_answers_is_refused() {
     // gained the round word, so `+ 1` was retired and burned and the call took
     // `+ 7`. S26e did it a third: `SHA256_COMP`'s frame became four rounds and a
     // window, so `+ 5` was burned and the call took `+ 8`. S-RECURSION took
-    // `+ 9` through `+ 11` for the field families. So the unanswered numbers are
-    // the **three** retired ones and 12 and up — and every retired one belongs
+    // `+ 9` through `+ 12` for the field families. So the unanswered numbers are
+    // the **three** retired ones and 13 and up — and every retired one belongs
     // in this sweep precisely because burning a number means nothing may answer
     // it, ever.
     for number in [
@@ -219,7 +225,7 @@ fn a_number_no_family_answers_is_refused() {
         ecall::RETIRED_KECCAK_F_WHOLE_PERMUTATION,
         ecall::RETIRED_MOD_MUL_WITNESSED_MODULUS,
         ecall::RETIRED_SHA256_COMP_WHOLE_COMPRESSION,
-        ecall::PRECOMPILE_FIRST + 12,
+        ecall::PRECOMPILE_FIRST + 13,
         0x05ff,
     ] {
         assert_eq!(

@@ -67,6 +67,7 @@ pub const FAMILIES: [FamilyId; family::COUNT as usize] = [
     family::FR_OP,
     family::P2_FIELD,
     family::FIELD_IO,
+    family::FQ_OP,
 ];
 
 /// Every **delegation** family, with the ecall number that invokes it, its
@@ -83,7 +84,12 @@ pub const DELEGATIONS: [(FamilyId, u32, u8, usize); constants::delegation::TYPES
 /// The delegation families that read and write the field memory: declaring
 /// any of them brings `FIELD_WINDOWS` into the config, and with it the
 /// recursion format (`docs/spec/recursion.md` §1.1).
-pub const FIELD_DELEGATIONS: [FamilyId; 3] = [family::FR_OP, family::P2_FIELD, family::FIELD_IO];
+pub const FIELD_DELEGATIONS: [FamilyId; 4] = [
+    family::FR_OP,
+    family::P2_FIELD,
+    family::FIELD_IO,
+    family::FQ_OP,
+];
 
 /// The family that answers `number`, or `None` if it is not a delegation call.
 pub fn delegation_family(number: u32) -> Option<FamilyId> {
@@ -128,6 +134,7 @@ pub fn delegation_accesses(family: FamilyId) -> usize {
         family::FR_OP => constants::fr_op::ACCESSES,
         family::P2_FIELD => constants::p2_field::ACCESSES,
         family::FIELD_IO => constants::field_io::ACCESSES,
+        family::FQ_OP => constants::fq_op::ACCESSES,
         _ => 0,
     }
 }
@@ -166,6 +173,7 @@ pub fn family_name(family: FamilyId) -> &'static str {
         family::FR_OP => "FR_OP",
         family::P2_FIELD => "P2_FIELD",
         family::FIELD_IO => "FIELD_IO",
+        family::FQ_OP => "FQ_OP",
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -314,7 +322,8 @@ pub fn lookup_tuple(family: FamilyId) -> &'static [RowField] {
         | family::FIELD_WINDOWS
         | family::FR_OP
         | family::P2_FIELD
-        | family::FIELD_IO => &[],
+        | family::FIELD_IO
+        | family::FQ_OP => &[],
         other => panic!("family {other} is not in constants::family"),
     }
 }
@@ -1040,7 +1049,8 @@ pub fn setup_commitments(
             | family::FIELD_WINDOWS
             | family::FR_OP
             | family::P2_FIELD
-            | family::FIELD_IO => Vec::new(),
+            | family::FIELD_IO
+            | family::FQ_OP => Vec::new(),
             // One column at a time: at 2^22 rows an `Fr` column is 128 MiB.
             _ => (0..table.columns.len())
                 .map(|c| cm(table, &table.column_poly(c)))

@@ -1207,8 +1207,12 @@ pub mod family {
     /// (`docs/spec/recursion.md` §5).
     pub const FIELD_IO: u32 = 21;
 
+    /// Invoked. One operation a row over elements of BN254's base field, each
+    /// four field cells of 64-bit limbs (`docs/spec/recursion.md` §6).
+    pub const FQ_OP: u32 = 22;
+
     /// How many families this table defines.
-    pub const COUNT: u32 = 22;
+    pub const COUNT: u32 = 23;
 
     /// The pinned height of [`PUBLIC_INPUT`] and [`PUBLIC_OUTPUT`].
     ///
@@ -1279,6 +1283,7 @@ pub mod family {
         false, // FR_OP
         false, // P2_FIELD
         false, // FIELD_IO
+        false, // FQ_OP
     ];
 
     /// The trace-height menu, ascending. Even powers of two only, so that a
@@ -1370,6 +1375,7 @@ pub mod family {
         1 << 20, // FR_OP: a million field operations a shard
         1 << 18, // P2_FIELD: 262,144 duplex steps a shard
         1 << 18, // FIELD_IO: 262,144 moves a shard
+        1 << 20, // FQ_OP: forced, its TIMESTAMP table needing 19 variables
     ];
 
     /// The default `bytecode_size_words`: `2^20` words, a 4 MiB ceiling on the
@@ -1771,6 +1777,11 @@ pub mod ecall {
     /// three-word frame `[op, cell, ptr]`, `crate::field_io`'s layout.
     pub const PRECOMPILE_FIELD_IO: u32 = 0x050B;
 
+    /// One operation over BN254 base-field elements in field cells
+    /// (S-RECURSION): `a0` is a four-word frame `[op, d, a, b]`,
+    /// `crate::fq_op`'s layout.
+    pub const PRECOMPILE_FQ_OP: u32 = 0x050C;
+
     /// Linux `ENOSYS`. An unimplemented number returns `-ENOSYS` in `a0`.
     ///
     /// It survives the deletion of the POSIX layer because it is not part of
@@ -1850,6 +1861,9 @@ pub mod address_space {
     /// The anchor space of `family::FIELD_IO` (S-RECURSION).
     pub const DELEGATION_FIELD_IO: u8 = 13;
 
+    /// The anchor space of `family::FQ_OP` (S-RECURSION).
+    pub const DELEGATION_FQ_OP: u8 = 14;
+
     /// Every delegation tag, ascending, **append-only**: the one place the set
     /// is written down, so a reader of a memory event can tell a delegation
     /// anchor from RAM, a register or the pc without knowing which family it
@@ -1858,7 +1872,7 @@ pub mod address_space {
     /// `constraints::memory::frame_query_takes` and `trace::AddressSpace` both
     /// read it; the `deleg` frame query takes an event in **any** of these
     /// spaces, and nothing else does.
-    pub const DELEGATION: [u8; 9] = [
+    pub const DELEGATION: [u8; 10] = [
         DELEGATION_KECCAK_F,
         DELEGATION_POSEIDON2,
         DELEGATION_FR_ARITH,
@@ -1868,6 +1882,7 @@ pub mod address_space {
         DELEGATION_FR_OP,
         DELEGATION_P2_FIELD,
         DELEGATION_FIELD_IO,
+        DELEGATION_FQ_OP,
     ];
 }
 
@@ -1974,7 +1989,7 @@ pub mod delegation {
     ///
     /// `docs/spec/delegation.md` §3 is the same table in prose, and
     /// `crates/constants/tests/ecall_abi.rs` holds the two equal.
-    pub const TYPES: [(u32, u32, u8, usize); 9] = [
+    pub const TYPES: [(u32, u32, u8, usize); 10] = [
         (
             super::family::KECCAK_F,
             super::ecall::PRECOMPILE_KECCAK_F,
@@ -2028,6 +2043,12 @@ pub mod delegation {
             super::ecall::PRECOMPILE_FIELD_IO,
             super::address_space::DELEGATION_FIELD_IO,
             super::field_io::FRAME_WORDS,
+        ),
+        (
+            super::family::FQ_OP,
+            super::ecall::PRECOMPILE_FQ_OP,
+            super::address_space::DELEGATION_FQ_OP,
+            super::fq_op::FRAME_WORDS,
         ),
     ];
 
@@ -2381,6 +2402,91 @@ pub mod field_io {
     pub const DATA_DELTA: u64 = 1;
     /// The cell's slot.
     pub const CELL_DELTA: u64 = 0;
+}
+
+/// `FQ_OP`'s frame, codes and element layout (S-RECURSION,
+/// `docs/spec/recursion.md` §6).
+///
+/// An **element** of BN254's base field is four consecutive field cells
+/// holding 64-bit limbs, `Σ_i v_i·2^{64i} < 2^256`, congruent to the element
+/// mod [`Q`] and not necessarily below it: reduction is lazy, and only this
+/// family writes one.
+pub mod fq_op {
+    /// The accesses a row makes besides its frame, in order: the digit cell,
+    /// then `a`'s, `b`'s and `d`'s four cells.
+    pub const ACCESSES: usize = 13;
+    /// The operation's word: the code, the indirection flags and the digit
+    /// cell.
+    pub const OP_WORD: usize = 0;
+    /// The destination element's word.
+    pub const D_WORD: usize = 1;
+    /// The first operand element's word.
+    pub const A_WORD: usize = 2;
+    /// The second operand element's word.
+    pub const B_WORD: usize = 3;
+    /// The frame: four words, read-only.
+    pub const FRAME_WORDS: usize = 4;
+    /// The frame in bytes.
+    pub const FRAME_BYTES: usize = 4 * FRAME_WORDS;
+
+    /// `d ≡ a·b`.
+    pub const MUL: u32 = 1;
+    /// `d ≡ a + b`.
+    pub const ADD: u32 = 2;
+    /// `d ≡ a − b`.
+    pub const SUB: u32 = 3;
+    /// `a·b ≡ d`, `d` kept: an assertion.
+    pub const MULEQ: u32 = 4;
+    /// `d = a₀ + 2^128·a₁` from two cells below `2^128` each: a point
+    /// coordinate from its two transcript limbs.
+    pub const FROM128: u32 = 5;
+    /// Every code, ascending; a live row carries exactly one.
+    pub const OPS: [u32; 5] = [MUL, ADD, SUB, MULEQ, FROM128];
+    /// The code's bits in the op word.
+    pub const CODE_BITS: u32 = 3;
+
+    /// The op word's flag making `d` **indirect**: its element is
+    /// `word + BUCKET_CELLS·digit`, the digit being the value of the op
+    /// word's digit cell.
+    pub const IND_D: u32 = 1 << CODE_BITS;
+    /// Likewise for `a`.
+    pub const IND_A: u32 = 2 << CODE_BITS;
+    /// Likewise for `b`.
+    pub const IND_B: u32 = 4 << CODE_BITS;
+    /// The digit cell is the op word shifted down by this much.
+    pub const DIGIT_SHIFT: u32 = CODE_BITS + 3;
+    /// A bucket's cells: an affine point's `x` then `y`.
+    pub const BUCKET_CELLS: u32 = 8;
+    /// An element's cells.
+    pub const ELEMENT_CELLS: usize = 4;
+
+    /// BN254's base field modulus, four little-endian 64-bit limbs.
+    pub const Q: [u64; 4] = [
+        0x3c20_8c16_d87c_fd47,
+        0x9781_6a91_6871_ca8d,
+        0xb850_45b6_8181_585d,
+        0x3064_4e72_e131_a029,
+    ];
+    /// `SUB`'s `z = SUB_MULTIPLE·q − b`: nonnegative for every `b < 2^256`.
+    pub const SUB_MULTIPLE: u64 = 6;
+
+    // `Q` is `mod_mul`'s BN254 base field, limb for limb.
+    const _: () = {
+        assert!(super::mod_mul::CODES[2] == super::mod_mul::BN254_P);
+        let m = super::mod_mul::MODULI[2];
+        let mut i = 0;
+        while i < 4 {
+            assert!(Q[i] == (m[2 * i] as u64 | (m[2 * i + 1] as u64) << 32));
+            i += 1;
+        }
+    };
+
+    /// The slots: the digit cell, then `a`, `b`, `d`, distinct, so any two
+    /// operands may name one element.
+    pub const DELTA_G: u64 = 0;
+    pub const DELTA_A: u64 = 1;
+    pub const DELTA_B: u64 = 2;
+    pub const DELTA_D: u64 = 3;
 }
 
 /// The Ethereum field-multiplication delegation's frame, its four moduli and

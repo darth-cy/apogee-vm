@@ -5,11 +5,12 @@
 use constants::family;
 use constraints::{family_circuit, recursion_circuit};
 
-const RECURSION: [u32; 4] = [
+const RECURSION: [u32; 5] = [
     family::FIELD_WINDOWS,
     family::FR_OP,
     family::P2_FIELD,
     family::FIELD_IO,
+    family::FQ_OP,
 ];
 
 /// Each family builds at its default height — which runs `validate`,

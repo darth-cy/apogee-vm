@@ -309,6 +309,7 @@ pub fn family_name(f: FamilyId) -> String {
         family::FR_OP => "FR_OP".to_string(),
         family::P2_FIELD => "P2_FIELD".to_string(),
         family::FIELD_IO => "FIELD_IO".to_string(),
+        family::FQ_OP => "FQ_OP".to_string(),
         other => format!("family({other})"),
     }
 }

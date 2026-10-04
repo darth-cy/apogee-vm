@@ -66,12 +66,17 @@ pub const DECLARING_GUESTS: [(&str, &[u32]); 10] = [
     // on.
     ("sha256-ops", &[family::SHA256_COMP]),
     ("ec-ops", &[family::MOD_MUL, family::EC_ADD]),
-    // S-RECURSION's fixture names all three field families' shims, and so
+    // S-RECURSION's fixture names all four field families' shims, and so
     // brings `FIELD_WINDOWS` into its config: it is the one committed guest in
     // the recursion format (`docs/spec/recursion.md` §1.1).
     (
         "field-ops",
-        &[family::FR_OP, family::P2_FIELD, family::FIELD_IO],
+        &[
+            family::FR_OP,
+            family::P2_FIELD,
+            family::FIELD_IO,
+            family::FQ_OP,
+        ],
     ),
 ];
 

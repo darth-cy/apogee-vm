@@ -640,6 +640,25 @@ fn reduce(product: &[u64; 2 * mod_mul::LIMBS], m: &[u64; mod_mul::LIMBS]) -> [u6
     rem
 }
 
+/// A field element's integer, when it is below `2^128`.
+fn small(v: Fr) -> Option<u128> {
+    let b = v.to_bytes();
+    b[16..]
+        .iter()
+        .all(|x| *x == 0)
+        .then(|| u128::from_le_bytes(b[..16].try_into().expect("sixteen bytes")))
+}
+
+/// Four 64-bit limbs as eight 32-bit ones, the frame helpers' form.
+fn wide_of(x: &[u64; 4]) -> [u64; mod_mul::LIMBS] {
+    core::array::from_fn(|k| (x[k / 2] >> (32 * (k % 2))) & 0xffff_ffff)
+}
+
+/// Eight 32-bit limbs as four 64-bit ones.
+fn limbs_of(x: &[u64; mod_mul::LIMBS]) -> [u64; 4] {
+    core::array::from_fn(|k| x[2 * k] | x[2 * k + 1] << 32)
+}
+
 /// Whether `a < b` over eight little-endian 32-bit limbs.
 fn less_than(a: &[u64; mod_mul::LIMBS], b: &[u64; mod_mul::LIMBS]) -> bool {
     for k in (0..mod_mul::LIMBS).rev() {
@@ -1252,7 +1271,7 @@ impl<'a> Machine<'a> {
             // The recursion families' frames are read-only: the frame is the
             // call, and what it computes lands in the field memory or, for an
             // export, in RAM at its own slot.
-            family::FR_OP | family::P2_FIELD | family::FIELD_IO => old.clone(),
+            family::FR_OP | family::P2_FIELD | family::FIELD_IO | family::FQ_OP => old.clone(),
             other => panic!("emulator: delegation family {other} has no implementation"),
         };
         assert_eq!(new.len(), words, "a delegation writes its whole frame");
@@ -1263,6 +1282,7 @@ impl<'a> Machine<'a> {
             family::FR_OP => self.fr_op(pc, &old)?,
             family::P2_FIELD => self.p2_field(pc, &old)?,
             family::FIELD_IO => self.field_io(pc, &old)?,
+            family::FQ_OP => self.fq_op(pc, &old)?,
             _ => Vec::new(),
         };
         Ok((frame, extra))
@@ -1469,6 +1489,102 @@ impl<'a> Machine<'a> {
             old,
             new,
         }));
+        Ok(out)
+    }
+
+    /// `FQ_OP` over `[op, d, a, b]` (`docs/spec/recursion.md` §6): one
+    /// operation over BN254 base-field elements, each four cells of 64-bit
+    /// limbs. An indirect operand's element is its word plus 8 times the
+    /// digit the op word's digit cell holds. `d′` is the result **reduced**
+    /// below `q` — the circuit admits any representative below `2^256`, and
+    /// this one is the honest one. The accesses are the digit cell, then
+    /// `a`'s, `b`'s and `d`'s four cells.
+    fn fq_op(&mut self, pc: u32, frame: &[u32]) -> Result<Vec<Option<Extra>>, EmuError> {
+        use constants::fq_op as f;
+        let fail = |detail| EmuError::DelegationFrame { pc, detail };
+        let word = frame[f::OP_WORD];
+        let code = word & ((1 << f::CODE_BITS) - 1);
+        let g = word >> f::DIGIT_SHIFT;
+        let digit_value = self.cell(g);
+        let digit = small(digit_value)
+            .filter(|v| *v < 1 << 24)
+            .ok_or(fail("the digit cell holds no digit"))? as u32;
+        let element_at = |flag: u32, base: u32| {
+            let offset = if word & flag != 0 {
+                f::BUCKET_CELLS * digit
+            } else {
+                0
+            };
+            base.checked_add(offset)
+                .filter(|c| *c <= u32::MAX - f::ELEMENT_CELLS as u32)
+                .ok_or(fail("an element leaves the cells"))
+        };
+        let dc = element_at(f::IND_D, frame[f::D_WORD])?;
+        let ac = element_at(f::IND_A, frame[f::A_WORD])?;
+        let bc = element_at(f::IND_B, frame[f::B_WORD])?;
+        let cells = |c: u32| -> [Fr; 4] { core::array::from_fn(|k| self.cell(c + k as u32)) };
+        let (av, bv, dv) = (cells(ac), cells(bc), cells(dc));
+        let element = |v: &[Fr; 4]| -> Result<[u64; 4], EmuError> {
+            let mut out = [0u64; 4];
+            for (o, x) in out.iter_mut().zip(v) {
+                *o = small(*x)
+                    .filter(|l| *l >> 64 == 0)
+                    .ok_or(fail("an operand is not an element"))? as u64;
+            }
+            Ok(out)
+        };
+        let q = wide_of(&f::Q);
+        let reduced = |x: [u64; 4]| {
+            let mut product = [0u64; 2 * mod_mul::LIMBS];
+            product[..mod_mul::LIMBS].copy_from_slice(&wide_of(&x));
+            reduce(&product, &q)
+        };
+        let new: [u64; 4] = match code {
+            f::FROM128 => {
+                let half = |x: Fr| small(x).ok_or(fail("FROM128's cells pass 2^128"));
+                let (lo, hi) = (half(av[0])?, half(av[1])?);
+                [lo as u64, (lo >> 64) as u64, hi as u64, (hi >> 64) as u64]
+            }
+            f::MUL | f::ADD | f::SUB | f::MULEQ => {
+                let (a, b) = (element(&av)?, element(&bv)?);
+                let r = match code {
+                    f::ADD => add_mod(&reduced(a), &reduced(b), &q),
+                    f::SUB => sub_mod(&reduced(a), &reduced(b), &q),
+                    _ => mul_mod(&wide_of(&a), &wide_of(&b), &q),
+                };
+                if code == f::MULEQ {
+                    let d = element(&dv)?;
+                    if reduced(d) != r {
+                        return Err(fail("MULEQ's product is not d"));
+                    }
+                    d
+                } else {
+                    limbs_of(&r)
+                }
+            }
+            _ => return Err(fail("the op is not one FQ_OP answers")),
+        };
+        for (k, v) in new.iter().enumerate() {
+            self.field.insert(dc + k as u32, Fr::from_u64(*v));
+        }
+        let cell = |cell, delta, old, new| {
+            Some(Extra::Cell {
+                cell,
+                delta,
+                old,
+                new,
+            })
+        };
+        let mut out = vec![cell(g, f::DELTA_G, digit_value, digit_value)];
+        for (k, v) in av.iter().enumerate() {
+            out.push(cell(ac + k as u32, f::DELTA_A, *v, *v));
+        }
+        for (k, v) in bv.iter().enumerate() {
+            out.push(cell(bc + k as u32, f::DELTA_B, *v, *v));
+        }
+        for (k, (old, new)) in dv.iter().zip(new).enumerate() {
+            out.push(cell(dc + k as u32, f::DELTA_D, *old, Fr::from_u64(new)));
+        }
         Ok(out)
     }
 

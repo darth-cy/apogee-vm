@@ -45,12 +45,14 @@ pub enum AddressSpace {
     P2Field,
     /// `family::FIELD_IO`'s delegation anchor space (S-RECURSION).
     FieldIo,
+    /// `family::FQ_OP`'s delegation anchor space (S-RECURSION).
+    FqOp,
 }
 
 /// Every delegation anchor space, ascending by tag. One `deleg` frame query
 /// serves them all, and which one a request names is the row's business:
 /// `constraints::memory::frame_query_takes` is the routing rule.
-pub const DELEGATION_SPACES: [AddressSpace; 9] = [
+pub const DELEGATION_SPACES: [AddressSpace; 10] = [
     AddressSpace::KeccakF,
     AddressSpace::Poseidon2,
     AddressSpace::FrArith,
@@ -60,6 +62,7 @@ pub const DELEGATION_SPACES: [AddressSpace; 9] = [
     AddressSpace::FrOp,
     AddressSpace::P2Field,
     AddressSpace::FieldIo,
+    AddressSpace::FqOp,
 ];
 
 impl AddressSpace {
@@ -78,6 +81,7 @@ impl AddressSpace {
             AddressSpace::FrOp => address_space::DELEGATION_FR_OP,
             AddressSpace::P2Field => address_space::DELEGATION_P2_FIELD,
             AddressSpace::FieldIo => address_space::DELEGATION_FIELD_IO,
+            AddressSpace::FqOp => address_space::DELEGATION_FQ_OP,
         }
     }
 
@@ -96,6 +100,7 @@ impl AddressSpace {
             address_space::DELEGATION_FR_OP => Some(AddressSpace::FrOp),
             address_space::DELEGATION_P2_FIELD => Some(AddressSpace::P2Field),
             address_space::DELEGATION_FIELD_IO => Some(AddressSpace::FieldIo),
+            address_space::DELEGATION_FQ_OP => Some(AddressSpace::FqOp),
             _ => None,
         }
     }
@@ -123,7 +128,8 @@ impl AddressSpace {
             | AddressSpace::EcAdd
             | AddressSpace::FrOp
             | AddressSpace::P2Field
-            | AddressSpace::FieldIo => addr.is_multiple_of(4) && in_ram(addr),
+            | AddressSpace::FieldIo
+            | AddressSpace::FqOp => addr.is_multiple_of(4) && in_ram(addr),
             AddressSpace::Pc => addr == 0,
         }
     }
@@ -147,7 +153,8 @@ impl AddressSpace {
             | AddressSpace::EcAdd
             | AddressSpace::FrOp
             | AddressSpace::P2Field
-            | AddressSpace::FieldIo => false,
+            | AddressSpace::FieldIo
+            | AddressSpace::FqOp => false,
         }
     }
 }
@@ -437,7 +444,8 @@ impl MemoryState {
             | AddressSpace::EcAdd
             | AddressSpace::FrOp
             | AddressSpace::P2Field
-            | AddressSpace::FieldIo => None,
+            | AddressSpace::FieldIo
+            | AddressSpace::FqOp => None,
         }
     }
 
@@ -459,7 +467,8 @@ impl MemoryState {
             | AddressSpace::EcAdd
             | AddressSpace::FrOp
             | AddressSpace::P2Field
-            | AddressSpace::FieldIo => {}
+            | AddressSpace::FieldIo
+            | AddressSpace::FqOp => {}
         }
     }
 }
@@ -704,7 +713,8 @@ fn initial_value(initial: &InitialMemory, space: AddressSpace, addr: u32) -> u32
         | AddressSpace::EcAdd
         | AddressSpace::FrOp
         | AddressSpace::P2Field
-        | AddressSpace::FieldIo => 0,
+        | AddressSpace::FieldIo
+        | AddressSpace::FqOp => 0,
     }
 }
 

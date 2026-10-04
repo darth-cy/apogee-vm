@@ -23,6 +23,7 @@ fn the_tags_are_the_frozen_constants() {
         (AddressSpace::FrOp, address_space::DELEGATION_FR_OP),
         (AddressSpace::P2Field, address_space::DELEGATION_P2_FIELD),
         (AddressSpace::FieldIo, address_space::DELEGATION_FIELD_IO),
+        (AddressSpace::FqOp, address_space::DELEGATION_FQ_OP),
     ] {
         assert_eq!(space.tag(), tag);
         assert_eq!(AddressSpace::from_tag(tag), Some(space));
@@ -42,14 +43,15 @@ fn the_tags_are_the_frozen_constants() {
             address_space::DELEGATION_FR_OP,
             address_space::DELEGATION_P2_FIELD,
             address_space::DELEGATION_FIELD_IO,
+            address_space::DELEGATION_FQ_OP,
         ],
-        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
     );
     // Every tag is nonzero, so no real tuple is all zeros. 10 is the field
     // memory's, which names no space of the event log — a field access is not
-    // an event (`docs/spec/recursion.md` §2.1) — and 14 is the tag the next
+    // an event (`docs/spec/recursion.md` §2.1) — and 15 is the tag the next
     // delegation family takes.
-    for tag in [0u8, address_space::FIELD, 14, 255] {
+    for tag in [0u8, address_space::FIELD, 15, 255] {
         assert_eq!(AddressSpace::from_tag(tag), None, "tag {tag}");
     }
     // **Every delegation space round-trips, derived rather than listed.**

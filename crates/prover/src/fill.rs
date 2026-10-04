@@ -195,6 +195,7 @@ pub fn family_fill(family: FamilyId) -> Option<Fill> {
         family::FR_OP => Some(fr_op),
         family::P2_FIELD => Some(p2_field),
         family::FIELD_IO => Some(field_io),
+        family::FQ_OP => Some(fq_op),
         _ => None,
     }
 }
@@ -2281,6 +2282,142 @@ fn p2_field(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, St
     out.push((c::LANE1, fr_column(lane1, h)));
     for (i, values) in perm.into_iter().enumerate() {
         out.push((c::permutation_column(i), fr_column(values, h)));
+    }
+    Ok(out)
+}
+
+/// `FQ_OP`'s columns (`docs/spec/recursion.md` §6): the frame, the digit cell
+/// and the three elements — each one address, one read timestamp and one gap
+/// chunk for its four cells — the op selectors and indirection flags, and the
+/// arithmetic no event carries, `constraints::fq_op::witness`'s.
+fn fq_op(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, String> {
+    use constants::fq_op as f;
+    use constraints::fq_op as c;
+    let inv = invocations(src, family::FQ_OP)?;
+    let (frames, h) = (inv.frames, inv.height);
+    let n = frames.len();
+    let mut out = recursion_frame(&inv, f::FRAME_WORDS, f::FRAME_BYTES as u64);
+    // The accesses: the digit cell, then a's, b's and d's four cells. Each
+    // gap is one high TIMESTAMP chunk: the digit's, a's four — FROM128's
+    // transcript limbs are written apart — then b's and d's, each shared by
+    // its element's cells.
+    let gaps: [(usize, u64); constraints::fq_op::GAPS] = [
+        (0, f::DELTA_G),
+        (1, f::DELTA_A),
+        (2, f::DELTA_A),
+        (3, f::DELTA_A),
+        (4, f::DELTA_A),
+        (5, f::DELTA_B),
+        (9, f::DELTA_D),
+    ];
+    for (k, (q, delta)) in gaps.into_iter().enumerate() {
+        let head = frames.access(q);
+        let hi: Vec<u32> = (0..n)
+            .map(|r| {
+                let gap = memory::TS_STEP * frames.cycles()[r] + delta - 1 - head.read_ts[r];
+                (gap >> constants::lookup_channel::BITS[0]) as u32
+            })
+            .collect();
+        out.push((c::gap_hi(k), u32_column(hi, h)));
+        let ts = fr_column(head.read_ts.iter().map(|t| Fr::from_u64(*t)).collect(), h);
+        out.push((
+            match k {
+                0 => c::G_READ_TS,
+                1..=4 => c::a_read_ts(k - 1),
+                5 => c::read_ts(2),
+                _ => c::read_ts(3),
+            },
+            ts,
+        ));
+    }
+    for (q, e) in [(5usize, 2usize), (9, 3)] {
+        for k in 1..f::ELEMENT_CELLS {
+            assert_eq!(
+                frames.access(q + k).read_ts,
+                frames.access(q).read_ts,
+                "FQ_OP: an element's cells were last written apart"
+            );
+        }
+        out.push((c::addr(e), u32_column(frames.access(q).addr.to_vec(), h)));
+    }
+    out.push((c::addr(0), u32_column(frames.access(0).addr.to_vec(), h)));
+    out.push((c::addr(1), u32_column(frames.access(1).addr.to_vec(), h)));
+    out.push((c::DIGIT, fr_column(frames.access(0).read.to_vec(), h)));
+    for i in 0..f::ELEMENT_CELLS {
+        out.push((c::a(i), fr_column(frames.access(1 + i).read.to_vec(), h)));
+        out.push((c::b(i), fr_column(frames.access(5 + i).read.to_vec(), h)));
+        out.push((
+            c::d_old(i),
+            fr_column(frames.access(9 + i).read.to_vec(), h),
+        ));
+        out.push((
+            c::d_new(i),
+            fr_column(frames.access(9 + i).write.to_vec(), h),
+        ));
+    }
+    let words = frames.word(f::OP_WORD).read_value;
+    let limbs = |q: usize, r: usize| -> [u64; 4] {
+        core::array::from_fn(|i| {
+            c::limb(frames.access(q + i).read[r]).expect("FQ_OP: an operand is not an element")
+        })
+    };
+    let mut selectors: Vec<Vec<u32>> = (0..f::OPS.len()).map(|_| Vec::with_capacity(n)).collect();
+    let mut flags: [Vec<u32>; 3] = Default::default();
+    let mut y: [Vec<Fr>; 4] = Default::default();
+    let mut d_chunks: Vec<Vec<u32>> = (0..12).map(|_| Vec::with_capacity(n)).collect();
+    let mut k_chunks: Vec<Vec<u32>> = (0..16).map(|_| Vec::with_capacity(n)).collect();
+    let mut carry_chunks: Vec<Vec<u32>> = (0..12).map(|_| Vec::with_capacity(n)).collect();
+    for (r, word) in words.iter().enumerate() {
+        let code = word & ((1 << f::CODE_BITS) - 1);
+        for (column, op) in selectors.iter_mut().zip(f::OPS) {
+            column.push((code == op) as u32);
+        }
+        for (column, flag) in flags.iter_mut().zip([f::IND_D, f::IND_A, f::IND_B]) {
+            column.push((word & flag != 0) as u32);
+        }
+        let d_new: [u64; 4] = core::array::from_fn(|i| {
+            c::limb(frames.access(9 + i).write[r]).expect("FQ_OP: d′ is not an element")
+        });
+        let (a, b) = match code {
+            f::FROM128 => ([0; 4], [0; 4]),
+            _ => (limbs(1, r), limbs(5, r)),
+        };
+        let wit = c::witness(code, a, b, d_new);
+        for (column, v) in y.iter_mut().zip(wit.y) {
+            column.push(Fr::from_u64(v));
+        }
+        for (column, v) in d_chunks.iter_mut().zip(wit.d_chunks.iter().flatten()) {
+            column.push(*v);
+        }
+        for (column, v) in k_chunks.iter_mut().zip(wit.k_chunks.iter().flatten()) {
+            column.push(*v);
+        }
+        for (column, v) in carry_chunks
+            .iter_mut()
+            .zip(wit.carry_chunks.iter().flatten())
+        {
+            column.push(*v);
+        }
+    }
+    // Padding rows are zero everywhere: the carries' offset is gated by
+    // `live`, so a zero chunk is a zero carry there.
+    for (i, values) in selectors.into_iter().enumerate() {
+        out.push((c::selector(i), u32_column(values, h)));
+    }
+    for (column, values) in [c::IND_D, c::IND_A, c::IND_B].into_iter().zip(flags) {
+        out.push((column, u32_column(values, h)));
+    }
+    for (j, values) in y.into_iter().enumerate() {
+        out.push((c::y(j), fr_column(values, h)));
+    }
+    for (k, values) in d_chunks.into_iter().enumerate() {
+        out.push((c::d_chunk(k / 3, k % 3 + 1), u32_column(values, h)));
+    }
+    for (k, values) in k_chunks.into_iter().enumerate() {
+        out.push((c::k_chunk(k / 4, k % 4), u32_column(values, h)));
+    }
+    for (k, values) in carry_chunks.into_iter().enumerate() {
+        out.push((c::carry_chunk(k / 4, k % 4), u32_column(values, h)));
     }
     Ok(out)
 }

@@ -246,16 +246,65 @@ at Δ0.
 
 ---
 
-## 6. `FQ_OP` — one `Fq` operation a row (outline)
+## 6. `FQ_OP` — one `Fq` operation a row
 
-Family 22, ecall `0x050C`, anchor space 14, height `2^20`. An `Fq` element is four
-64-bit limbs in four consecutive cells, always canonical. The ops are:
+Family 22, ecall `0x050C`, anchor space 14, height `2^20`: its `TIMESTAMP` table needs
+19 variables, so `2^20` is forced, not chosen. The owner chose this shape over a
+guest-built-frame variant and a three-operand one, with the fold's cost counted
+including its RISC-V glue (§0, §8.3).
 
-- `MUL`: `c = a·b mod q`, with quotient limbs and signed carries as witnesses;
-- `LIN`: `c = s_a·a + s_b·b + s_c·c′ mod q`, for small signed integers;
-- `CHECK`: canonicalizes and validates advice.
+**An element** of BN254's base field is four consecutive cells holding 64-bit limbs,
+`v = Σ_i v_i·2^{64i} < 2^256`, congruent to the element mod `q` and **not necessarily
+below it**: reduction is lazy, and only this family writes an element, every limb it
+writes range-checked. The executor writes the reduced result, the honest
+representative.
 
-It is specified in full when built, with the folding of §8.3.
+**Frame** `[op, d, a, b]`, read-only. The op word is the code (bits 0..3), three
+indirection flags `ind_d`, `ind_a`, `ind_b` (bits 3, 4, 5) and a **digit cell**
+(`word >> 6`). An indirect operand's element is its word plus `8·digit`, the digit being
+that cell's value: a word names a window's buckets, eight cells apiece (`x` then `y`),
+and the digit picks one. That is what makes the MSM's per-point template a static tape
+(§8.3); a direct operand's word is its element.
+
+| op | name | the identity `a·y + z = q·K + d′` | `d′` |
+| --- | --- | --- | --- |
+| 1 | `MUL` | `y = b`, `z = 0` | written |
+| 2 | `ADD` | `y = 1`, `z = b` | written |
+| 3 | `SUB` | `y = 1`, `z = 6q − b`, nonnegative for any `b < 2^256` | written |
+| 4 | `MULEQ` | `y = b`, `z = 0` | `d`, kept: the row asserts `a·b ≡ d` |
+| 5 | `FROM128` | `y = 0`, `z = d′`, so `K = 0`; `d′₀ + 2^64·d′₁ = a₀` and `d′₂ + 2^64·d′₃ = a₁` | written |
+
+`FROM128` turns a point coordinate's two transcript limbs into an element, and its limb
+ranges are what bound each limb below `2^128`.
+
+**The identity** holds over the integers. It is checked as four equations over 128-bit
+groups of limb positions, `(0,1)`, `(2,3)`, `(4,5)` and `(6)`, with three signed carries
+between them. `y` is four committed columns, so `a_i·y_j` is degree 2. `z`'s limbs are
+`sel·b_k` and `sel·d′_k` products plus the literal `6q_k` on `SUB`. Every term of a group
+equation is below `2^208` for any assignment the ranges admit — `a`, `b`, `d′` below
+`2^256`, `K₀..K₂` below `2^64`, `K₃` below `2^76`, the carries below `2^76` — so no
+equation wraps mod p, and the four equations together are the integer identity. The
+quotient's top limb `K₃` and the carries go through `TIMESTAMP`'s 19-bit chunks, and
+`K₀..K₂` and `d′`'s limbs through `RANGE16`. A carry is its chunks less `2^75·live`, so the
+all-zero padding row has carry 0.
+
+**Accesses**, each at its own slot so any two operands may name one element: the digit
+cell at Δ0, `a` at Δ1, `b` at Δ2 and `d` at Δ3, all on for every live row. `b`'s and
+`d`'s four cells **share one read timestamp and one gap**, because only this family
+writes an element and it writes all four cells together. `a`'s four cells carry one
+each, because `FROM128`'s operand is transcript limbs, imported one at a time. Two rules
+follow for a guest, and the honest fill refuses a trace that breaks either:
+
+- every operand names an element, including one the op ignores (`FROM128`'s `b`);
+- an element is read whole until it is dead, since exporting its limbs reads them one
+  at a time.
+
+**Shape.** 48 `M` and 73 `W` committed columns and 630 inner columns. `TIMESTAMP`
+carries 30 obligations, filling 31 of a 32-leaf tree; `RANGE16` carries 50, filling 51 of
+64. Two more `TIMESTAMP` obligations double that tree, and `artifact` asserts both counts.
+`constraints::fq_op::witness` is the row's arithmetic: `y`, `d′`'s chunks, `K` by exact
+2-adic division (`K = (a·y + z − d′)·q⁻¹ mod 2^576`) and the carries over the field.
+It asserts `q·K` back.
 
 ---
 
@@ -324,8 +373,24 @@ A node's journal carries:
 ### 8.3 Folding
 
 Every point the node owes, with its scalar times the check's weight from the node's own
-transcript, goes through one Pippenger MSM per pairing side on `FQ_OP`. The scalars'
-digits come from `FIELD_IO` exports.
+transcript, goes through one Pippenger MSM per pairing side on `FQ_OP`. The owner's
+design, before it is built:
+
+- **Static per point.** A point's work is one template replayed from the image: its
+  scalar's 32 `DIGIT`s (§3), then one affine bucket addition in each of the 32 windows.
+  The bucket operands are indirect through the digit cells (§6), so nothing in the
+  template depends on a value and the guest replays it at the tape's cost.
+- **Batched across windows.** The 32 additions of one point land in 32 different windows'
+  buckets, so they never collide and share one inversion. The batch's inverse is a host
+  witness held by one `MULEQ`.
+- **Offset buckets.** Every bucket starts at a fixed point `R`, so no addition meets
+  infinity, and the window sums subtract `(Σ_b b)·R` once at the end.
+- **Digits of 8 bits**: 32 windows of 256 buckets. Over the leaves' and internal nodes'
+  point counts together this costs the least, the reduction being a fixed cost per
+  window.
+
+Only the template's first frames — which point, which scalar — are written per point.
+The point at infinity skips its template, the guest holding its limbs to the sentinel.
 
 ### 8.4 The scheduler
 
