@@ -93,8 +93,10 @@ pub fn build_guest(guest: &str, bin: &str) -> Result<Vec<u8>, String>;
 }
 
 // The recursion stage: `guests/recursion`'s advice for shards `shards` of a block —
-// the key, the statement, each proof and its `cm*` hint, the hint read off the native
-// deferred verification, so building the advice verifies the slice natively first.
+// one encoded tape a family the slice holds (`verifier_core::tape`), then each shard's
+// slots and its tape's input blob, the blob's `cm*` read off the native deferred
+// verification. Building it verifies the slice natively and replays every tape
+// natively too, so a tape that would refuse a shard does so on the host, by name.
 pub mod recursion {
     pub fn leaf_advice(vk: &VerifyingKey, block: &BlockProof, shards: Range<usize>)
         -> Result<Vec<u8>, String>;

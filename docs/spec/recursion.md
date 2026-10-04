@@ -341,6 +341,24 @@ What a shard's tape does **not** do, and its caller owes:
 - the curve: a point arrives as its four transcript limbs, and the fold validates it
   and holds `cm*`, a hint, to `Σ ρ^i cm_i`.
 
+**The guest's form** is `tape::encode`: the imports hoisted, since a tape never reuses a
+cell, then runs of one family's frames, each run its ecall number, its count and its
+frames back to back. `guest_sdk::recursion::import` fills a tape's inputs from its blob,
+and `replay` walks the runs, `a0` advancing past every frame itself (§1.4).
+
+**Measured** on block 257510's first 32 base shards, by a leaf with no fold whose tapes
+and slots are advice (`docs/handoff/reports/S-RECURSION-tape-leaf-257510.json`):
+
+- **Coprocessor calls:** 223,599 `FR_OP` calls, 54,615 duplexes and 60,393 imports. That
+  is about 7,000, 1,700 and 1,900 a shard, a fifth of one shard of each family for the
+  whole slice.
+- **RISC-V:** 3.19M cycles. 1.25M of them copy the tapes out of advice, which tapes in an
+  image do not. 1.27M replay them, at 4.6 cycles a call, the run switches most of that.
+  0.67M import, at 11 a word.
+
+A tape replayed as straight-line `ecall`s from `.text`, its frames in `.rodata`, costs one
+cycle a call, and that is the form binding takes (§8).
+
 What a statement chooses the length of — the global phase's absorbs, the
 reconciliation product — the guest records at run time through the same `Tape` and
 replays at once. `tape::run` is the native reading of a tape over a `Vec<Fr>`, and three

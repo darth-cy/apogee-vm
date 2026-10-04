@@ -799,7 +799,7 @@ fn sha256_ops_checks_itself_under_the_delegation_ecall() {
 fn field_ops_checks_itself_under_the_recursion_ecalls() {
     let execution = run(&image("field-ops"), &io(&[])).unwrap();
     assert_eq!(
-        execution.exit_code, 23,
+        execution.exit_code, 26,
         "field-ops exited {}, and 200 + i would name the check that failed",
         execution.exit_code
     );
@@ -811,9 +811,9 @@ fn field_ops_checks_itself_under_the_recursion_ecalls() {
     );
     let (traces, log, ..) = trace_run(&image, &io(&[]), &tables, &config).expect("it traces");
     for (family, calls) in [
-        (constants::family::FR_OP, 35),
-        (constants::family::P2_FIELD, 3),
-        (constants::family::FIELD_IO, 45),
+        (constants::family::FR_OP, 38),
+        (constants::family::P2_FIELD, 5),
+        (constants::family::FIELD_IO, 51),
         (constants::family::FQ_OP, 11),
     ] {
         let trace = traces

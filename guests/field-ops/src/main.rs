@@ -19,8 +19,9 @@
 //! The exit status, `a0`: one per check passed but the first, or `200 + i` on
 //! the first that fails.
 
+use constants::ecall;
 use constants::{field_io as io, fq_op as fq, fr_op as op};
-use guest_sdk::recursion::{field_io, fq_op, fr_op, p2_field};
+use guest_sdk::recursion::{field_io, fq_op, fr_op, p2_field, replay};
 use guest_sdk::{entry, exit};
 
 entry!(main);
@@ -36,6 +37,10 @@ fn export(cell: u32) -> [u32; 8] {
     field_io(&mut [io::EXPORT, cell, words.as_mut_ptr() as u32]);
     words
 }
+
+/// Two 32-byte words, word-aligned, as a tape's input blob is.
+#[repr(C, align(4))]
+struct Blob([u8; 64]);
 
 /// Four cells nothing writes: an element, read where an op ignores its `b`.
 /// Every operand names an element, used or not, since an element's cells
@@ -178,6 +183,44 @@ fn main() -> ! {
     check(export(107) == AFTER_N1_LANE1);
     p2_field(&mut [0, 106, 0, 0, 109]);
     check(export(109) == AFTER_N0);
+
+    // A tape, replayed (`docs/spec/recursion.md` §7): two imports, then an
+    // FR_OP run, a duplex run and an FR_OP run, `a0` advancing past every
+    // frame itself (§1.4). The duplex's state is held to the shim's.
+    let mut blob = Blob([0; 64]);
+    blob.0[0] = 7;
+    blob.0[32] = 11;
+    guest_sdk::recursion::import(&[400, 401], &blob.0);
+    let body = [
+        ecall::PRECOMPILE_FR_OP,
+        2,
+        op::MUL,
+        402,
+        400,
+        401,
+        op::ADD,
+        403,
+        402,
+        400,
+        ecall::PRECOMPILE_P2_FIELD,
+        1,
+        2,
+        600,
+        402,
+        403,
+        404,
+        ecall::PRECOMPILE_FR_OP,
+        1,
+        op::SUB,
+        407,
+        404,
+        404,
+    ];
+    replay(&body);
+    check(export(403) == small(84));
+    p2_field(&mut [2, 600, 402, 403, 410]);
+    check(export(404) == export(410));
+    check(export(407) == small(0));
 
     // FQ_OP: x = 2^128 + 5 and y = 7 from their limb cells, then each op.
     fr(op::IMM, 200, 0, 5);

@@ -1583,6 +1583,7 @@ dependencies = [
  "srs",
  "test-support",
  "trace",
+ "transcript",
  "verifier",
  "verifier-core",
 ]

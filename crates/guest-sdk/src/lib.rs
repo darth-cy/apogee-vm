@@ -428,6 +428,61 @@ pub mod recursion {
         field_call(&DELEGATION_FQ_OP, frame.as_mut_ptr(), 4 * frame.len());
     }
 
+    /// A tape's imports (`docs/spec/recursion.md` §7): the blob's 32-byte
+    /// word `i` into cell `cells[i]`, the blob word-aligned. One frame,
+    /// rewritten in place, and the number looked up once.
+    pub fn import(cells: &[u32], blob: &[u8]) {
+        let number = delegation_number(&DELEGATION_FIELD_IO);
+        let mut frame = [constants::field_io::IMPORT, 0, 0];
+        let base = frame.as_mut_ptr() as u32;
+        let end = base + 4 * frame.len() as u32;
+        let mut ptr = blob.as_ptr() as u32;
+        for cell in cells {
+            frame[1] = *cell;
+            frame[2] = ptr;
+            // SAFETY: the frame is three words on this stack and the eight
+            // words at `ptr` lie in `blob`; the call reads the frame and
+            // writes it back unchanged.
+            if unsafe { ecall1(number, base) } as u32 != end {
+                exit(EXIT_PRECOMPILE_ERROR);
+            }
+            ptr += 32;
+        }
+    }
+
+    /// A tape's body (`docs/spec/recursion.md` §7): each run's frames back to
+    /// back, one ecall a frame. A recursion request leaves `a0` past its
+    /// frame (§1.4), so a run is nothing but its ecalls. The body must lie in
+    /// RAM below `2^31`, where every delegation frame does; a number that is
+    /// no field family's, or a run that does not end where its frames do, is
+    /// fatal.
+    pub fn replay(body: &[u32]) {
+        let numbers = [
+            delegation_number(&DELEGATION_FR_OP),
+            delegation_number(&DELEGATION_P2_FIELD),
+            delegation_number(&DELEGATION_FQ_OP),
+        ];
+        let start = body.as_ptr() as u32;
+        let end = start + 4 * body.len() as u32;
+        let mut a0 = start;
+        while a0 < end {
+            let at = ((a0 - start) / 4) as usize;
+            let (number, count) = (body[at], body[at + 1]);
+            if !numbers.contains(&number) {
+                exit(EXIT_PRECOMPILE_ERROR);
+            }
+            a0 += 8;
+            for _ in 0..count {
+                // SAFETY: the frame lies in `body`, which outlives the call,
+                // and the call reads it and writes it back unchanged.
+                a0 = unsafe { ecall1(number, a0) } as u32;
+            }
+        }
+        if a0 != end {
+            exit(EXIT_PRECOMPILE_ERROR);
+        }
+    }
+
     /// The Poseidon2 delegation's 96-byte frame: three canonical
     /// little-endian `Fr` lanes, permuted in place.
     ///

@@ -1222,6 +1222,53 @@ pub fn shard_blob(inputs: &[Input], proof: &crate::ShardProof, cm_star: &[u8; 64
 }
 
 // ---------------------------------------------------------------------------
+// The guest's form
+// ---------------------------------------------------------------------------
+
+/// A tape as the guest replays it (`docs/spec/recursion.md` §7): the cells
+/// its imports fill, in blob order — the guest imports them up front, the
+/// blob's 32-byte word `i` into `imports[i]` — then its body, runs of one
+/// family's frames: a run is that family's ecall number, its count, then its
+/// frames back to back, which a replay walks with `a0` advancing itself
+/// (§1.4). Hoisting the imports is sound because a tape never reuses a cell:
+/// an import fills a fresh one, which nothing reads before it.
+pub struct Encoded {
+    pub imports: Vec<Cell>,
+    pub body: Vec<u32>,
+}
+
+/// `ops` in the guest's form.
+pub fn encode(ops: &[Op]) -> Encoded {
+    let mut imports = Vec::new();
+    let mut body: Vec<u32> = Vec::new();
+    let mut run: Option<(u32, usize)> = None;
+    for op in ops {
+        let (number, frame): (u32, &[u32]) = match op {
+            Op::Fr(frame) => (constants::ecall::PRECOMPILE_FR_OP, frame),
+            Op::Duplex(frame) => (constants::ecall::PRECOMPILE_P2_FIELD, frame),
+            Op::Import { cell, offset } => {
+                assert_eq!(
+                    *offset as usize,
+                    32 * imports.len(),
+                    "tape: an import out of blob order"
+                );
+                imports.push(*cell);
+                continue;
+            }
+        };
+        match run {
+            Some((n, at)) if n == number => body[at + 1] += 1,
+            _ => {
+                run = Some((number, body.len()));
+                body.extend_from_slice(&[number, 1]);
+            }
+        }
+        body.extend_from_slice(frame);
+    }
+    Encoded { imports, body }
+}
+
+// ---------------------------------------------------------------------------
 // The native reading
 // ---------------------------------------------------------------------------
 
@@ -1296,4 +1343,80 @@ pub fn run(ops: &[Op], memory: &mut Vec<Fr>, blob: &[u8]) -> Result<(), usize> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `encode` keeps every frame in order, a run a family, and hoists the
+    /// imports in blob order: the body read back as frames is the tape
+    /// without its imports, and a replay of the hoisted form computes what the
+    /// tape does.
+    #[test]
+    fn encoding_keeps_the_order_and_hoists_the_imports() {
+        let mut t = Tape::new(3);
+        let x = t.input();
+        let mut tr = CellTranscript::new();
+        tr.append(&mut t, 7, &[x]);
+        let c = tr.challenge(&mut t, 9);
+        let y = t.input();
+        let p = t.mul(c, y);
+        let q = t.add(p, x);
+        let encoded = encode(&t.ops);
+        assert_eq!(encoded.imports, vec![x, y]);
+
+        // The body, read back run by run.
+        let mut frames: Vec<Op> = Vec::new();
+        let mut at = 0;
+        while at < encoded.body.len() {
+            let (number, count) = (encoded.body[at], encoded.body[at + 1] as usize);
+            at += 2;
+            for _ in 0..count {
+                let op = match number {
+                    constants::ecall::PRECOMPILE_FR_OP => {
+                        Op::Fr(encoded.body[at..at + 4].try_into().expect("four words"))
+                    }
+                    constants::ecall::PRECOMPILE_P2_FIELD => {
+                        Op::Duplex(encoded.body[at..at + 5].try_into().expect("five words"))
+                    }
+                    other => panic!("no family has number {other:#x}"),
+                };
+                at += if matches!(op, Op::Fr(_)) { 4 } else { 5 };
+                frames.push(op);
+            }
+        }
+        let without: Vec<Op> = t
+            .ops
+            .iter()
+            .filter(|op| !matches!(op, Op::Import { .. }))
+            .copied()
+            .collect();
+        assert_eq!(frames, without);
+
+        // The hoisted form replays to the same cells.
+        let blob: Vec<u8> = [Fr::from_u64(5), Fr::from_u64(11)]
+            .iter()
+            .flat_map(|v| v.to_bytes())
+            .collect();
+        let mut direct = Vec::new();
+        run(&t.ops, &mut direct, &blob).expect("the tape runs");
+        let mut hoisted = Vec::new();
+        let imports: Vec<Op> = encoded
+            .imports
+            .iter()
+            .enumerate()
+            .map(|(i, cell)| Op::Import {
+                cell: *cell,
+                offset: 32 * i as u32,
+            })
+            .collect();
+        run(&imports, &mut hoisted, &blob).expect("the imports run");
+        run(&without, &mut hoisted, &blob).expect("the body runs");
+        assert_eq!(direct[q as usize], hoisted[q as usize]);
+        assert_eq!(
+            direct[q as usize],
+            direct[c as usize] * Fr::from_u64(11) + Fr::from_u64(5)
+        );
+    }
 }

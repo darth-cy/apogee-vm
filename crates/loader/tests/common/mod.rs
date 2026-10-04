@@ -133,7 +133,7 @@ pub const PINS: [(&str, &str); 27] = [
     ),
     (
         "field-ops.elf",
-        "d9d64a7e094567a44f601a559171bd4b7df5dddf359e8c1ce3cd64795f098366",
+        "0e5867106eaead1015ac7e259bf7d4d60ac31e7687d8f8db3267671ce784a9e3",
     ),
 ];
 

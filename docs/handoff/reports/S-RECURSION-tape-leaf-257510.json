@@ -1,0 +1,380 @@
+{
+  "label": "leaf over shards 0..32",
+  "guest": "recursion",
+  "block_number": null,
+  "txs": null,
+  "gas_used": null,
+  "guest_cycles": 3189274,
+  "cycles_per_gas": null,
+  "exit_code": 0,
+  "journal_bytes": 4,
+  "families": [
+    [
+      "ADD_SUB_LUI_AUIPC",
+      1157447
+    ],
+    [
+      "JUMP_BRANCH_SLT",
+      750421
+    ],
+    [
+      "SHIFT_BITWISE",
+      605797
+    ],
+    [
+      "MUL_DIV",
+      0
+    ],
+    [
+      "MEM_WORD",
+      319289
+    ],
+    [
+      "MEM_SUBWORD",
+      356320
+    ],
+    [
+      "INIT_TEARDOWN",
+      0
+    ],
+    [
+      "ZERO_WINDOWS",
+      0
+    ],
+    [
+      "PUBLIC_INPUT",
+      0
+    ],
+    [
+      "PUBLIC_OUTPUT",
+      0
+    ],
+    [
+      "ADVICE_WINDOWS",
+      0
+    ],
+    [
+      "FIELD_WINDOWS",
+      0
+    ],
+    [
+      "FR_OP",
+      223599
+    ],
+    [
+      "P2_FIELD",
+      54615
+    ],
+    [
+      "FIELD_IO",
+      60393
+    ],
+    [
+      "FQ_OP",
+      0
+    ]
+  ],
+  "ram_windows": 2,
+  "categories": [
+    {
+      "category": "delegation shims",
+      "cycles": 2519935,
+      "share": 79.01280981188822,
+      "calls": 134
+    },
+    {
+      "category": "unattributed",
+      "cycles": 668244,
+      "share": 20.952856355396243,
+      "calls": 1
+    },
+    {
+      "category": "allocation",
+      "cycles": 977,
+      "share": 0.030633931107832066,
+      "calls": 39
+    },
+    {
+      "category": "core runtime",
+      "cycles": 118,
+      "share": 0.003699901607701314,
+      "calls": 79
+    },
+    {
+      "category": "keccak256",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0
+    },
+    {
+      "category": "sha256/ripemd160",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0
+    },
+    {
+      "category": "secp256k1",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0
+    },
+    {
+      "category": "bn254",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0
+    },
+    {
+      "category": "256-bit arithmetic",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0
+    },
+    {
+      "category": "evm interpreter",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0
+    },
+    {
+      "category": "evm state + journal",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0
+    },
+    {
+      "category": "memory copy",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0
+    },
+    {
+      "category": "rlp + trie",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0
+    },
+    {
+      "category": "witness + block setup",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0
+    }
+  ],
+  "top_functions": [
+    {
+      "path": "guest_sdk::recursion::replay",
+      "category": "delegation shims",
+      "cycles": 1271565,
+      "share": 39.87004565929425,
+      "calls": 32,
+      "cycles_per_call": 39736.40625
+    },
+    {
+      "path": "recursion::Advice::words",
+      "category": "delegation shims",
+      "cycles": 1245874,
+      "share": 39.064501827061584,
+      "calls": 38,
+      "cycles_per_call": 32786.15789473684
+    },
+    {
+      "path": "main",
+      "category": "unattributed",
+      "cycles": 668216,
+      "share": 20.951978412641875,
+      "calls": 1,
+      "cycles_per_call": 668216.0
+    },
+    {
+      "path": "recursion::Advice::bytes",
+      "category": "delegation shims",
+      "cycles": 2496,
+      "share": 0.07826232553239389,
+      "calls": 64,
+      "cycles_per_call": 39.0
+    },
+    {
+      "path": "__rustc::__rust_alloc",
+      "category": "allocation",
+      "cycles": 977,
+      "share": 0.030633931107832066,
+      "calls": 39,
+      "cycles_per_call": 25.05128205128205
+    },
+    {
+      "path": "guest_sdk::commit",
+      "category": "core runtime",
+      "cycles": 40,
+      "share": 0.0012542039348140046,
+      "calls": 1,
+      "cycles_per_call": 40.0
+    },
+    {
+      "path": "__rustc::__rust_no_alloc_shim_is_unstable_v2",
+      "category": "core runtime",
+      "cycles": 39,
+      "share": 0.0012228488364436545,
+      "calls": 39,
+      "cycles_per_call": 1.0
+    },
+    {
+      "path": "__rustc::__rust_dealloc",
+      "category": "core runtime",
+      "cycles": 39,
+      "share": 0.0012228488364436545,
+      "calls": 39,
+      "cycles_per_call": 1.0
+    }
+  ],
+  "mnemonics": [
+    [
+      "Addi",
+      746114
+    ],
+    [
+      "Bne",
+      488083
+    ],
+    [
+      "Lbu",
+      356312
+    ],
+    [
+      "Ecall",
+      338608
+    ],
+    [
+      "Slli",
+      314505
+    ],
+    [
+      "Or",
+      267231
+    ],
+    [
+      "Sw",
+      210654
+    ],
+    [
+      "Bgeu",
+      131665
+    ],
+    [
+      "Lw",
+      108635
+    ],
+    [
+      "Beq",
+      59206
+    ],
+    [
+      "Add",
+      48413
+    ],
+    [
+      "Bltu",
+      47325
+    ],
+    [
+      "Srli",
+      23708
+    ],
+    [
+      "Sub",
+      23694
+    ],
+    [
+      "Jal",
+      23597
+    ],
+    [
+      "Jalr",
+      506
+    ],
+    [
+      "Lui",
+      362
+    ],
+    [
+      "Auipc",
+      256
+    ],
+    [
+      "Andi",
+      237
+    ],
+    [
+      "And",
+      116
+    ],
+    [
+      "Sltu",
+      39
+    ],
+    [
+      "Sb",
+      8
+    ]
+  ],
+  "candidates": [
+    {
+      "category": "secp256k1",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0,
+      "frame_words": 30,
+      "shim_cycles": 0,
+      "removable_cycles": 0,
+      "removable_share": 0.0,
+      "entryless": false
+    },
+    {
+      "category": "256-bit arithmetic",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0,
+      "frame_words": 32,
+      "shim_cycles": 0,
+      "removable_cycles": 0,
+      "removable_share": 0.0,
+      "entryless": true
+    },
+    {
+      "category": "bn254",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0,
+      "frame_words": 64,
+      "shim_cycles": 0,
+      "removable_cycles": 0,
+      "removable_share": 0.0,
+      "entryless": false
+    },
+    {
+      "category": "sha256/ripemd160",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0,
+      "frame_words": 25,
+      "shim_cycles": 0,
+      "removable_cycles": 0,
+      "removable_share": 0.0,
+      "entryless": false
+    },
+    {
+      "category": "keccak256",
+      "cycles": 0,
+      "share": 0.0,
+      "calls": 0,
+      "frame_words": 50,
+      "shim_cycles": 0,
+      "removable_cycles": 0,
+      "removable_share": 0.0,
+      "entryless": false
+    }
+  ],
+  "unattributed_cycles": 28,
+  "unattributed_share": 0.0008779427543698033,
+  "function_symbols": 24
+}
