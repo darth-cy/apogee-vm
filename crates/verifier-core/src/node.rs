@@ -831,10 +831,12 @@ pub trait Driver {
     fn export(&mut self, cells: &[Cell]);
 }
 
+/// Run what the procedure has built so far, keeping the buffer's capacity:
+/// a node flushes thousands of times.
 fn flush<D: Driver>(d: &mut D, t: &mut Tape) {
-    let ops = core::mem::take(&mut t.ops);
-    if !ops.is_empty() {
-        d.run(&ops);
+    if !t.ops.is_empty() {
+        d.run(&t.ops);
+        t.ops.clear();
     }
 }
 

@@ -452,15 +452,25 @@ pub mod recursion {
         let number = delegation_number(&DELEGATION_FIELD_IO);
         let mut frame = [constants::field_io::IMPORT, 0, 0];
         let base = frame.as_mut_ptr() as u32;
-        let mut ptr = blob.as_ptr() as u32;
-        for cell in cells {
-            frame[1] = *cell;
+        let mut one = |cell: u32, ptr: u32| {
+            frame[1] = cell;
             frame[2] = ptr;
             // SAFETY: the frame is three words on this stack and the eight
             // words at `ptr` lie in `blob`; the call reads the frame and
             // writes it back unchanged.
             unsafe { ecall1(number, base) };
-            ptr += 32;
+        };
+        // Four a turn, the pointer within the blob, so no overflow is checked.
+        let mut ptr = blob.as_ptr() as u32;
+        let mut quads = cells.chunks_exact(4);
+        for quad in &mut quads {
+            for (k, cell) in quad.iter().enumerate() {
+                one(*cell, ptr.wrapping_add(32 * k as u32));
+            }
+            ptr = ptr.wrapping_add(128);
+        }
+        for (k, cell) in quads.remainder().iter().enumerate() {
+            one(*cell, ptr.wrapping_add(32 * k as u32));
         }
     }
 
@@ -473,8 +483,8 @@ pub mod recursion {
         for _ in 0..blob.len() / 32 {
             // SAFETY: as `import`'s.
             unsafe { ecall1(number, base) };
-            frame[1] += 1;
-            frame[2] += 32;
+            frame[1] = frame[1].wrapping_add(1);
+            frame[2] = frame[2].wrapping_add(32);
         }
     }
 

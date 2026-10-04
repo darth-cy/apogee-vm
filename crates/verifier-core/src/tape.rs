@@ -259,8 +259,32 @@ impl Tape {
 /// overwritten and a challenge is a cell of the state that made it.
 pub struct CellTranscript {
     state: Cell,
-    input: Vec<Cell>,
-    output: Vec<Cell>,
+    input: Rate,
+    output: Rate,
+}
+
+/// At most two cells, a duplex's rate: what is pending, or what is left to
+/// squeeze — held without an allocation, a node making thousands of duplexes.
+#[derive(Clone, Copy, Debug, Default)]
+struct Rate {
+    cells: [Cell; 2],
+    len: usize,
+}
+
+impl Rate {
+    fn push(&mut self, c: Cell) {
+        self.cells[self.len] = c;
+        self.len += 1;
+    }
+    fn pop(&mut self) -> Option<Cell> {
+        (self.len > 0).then(|| {
+            self.len -= 1;
+            self.cells[self.len]
+        })
+    }
+    fn get(&self, i: usize) -> Option<Cell> {
+        (i < self.len).then(|| self.cells[i])
+    }
 }
 
 impl CellTranscript {
@@ -273,8 +297,8 @@ impl CellTranscript {
     pub fn at(state: Cell) -> CellTranscript {
         CellTranscript {
             state,
-            input: Vec::new(),
-            output: Vec::new(),
+            input: Rate::default(),
+            output: Rate::default(),
         }
     }
 
@@ -290,40 +314,46 @@ impl CellTranscript {
     pub fn resume(state: Cell, pending: Option<Cell>) -> CellTranscript {
         CellTranscript {
             state,
-            input: pending.into_iter().collect(),
-            output: Vec::new(),
+            input: Rate {
+                cells: [pending.unwrap_or(ZERO), ZERO],
+                len: pending.is_some() as usize,
+            },
+            output: Rate::default(),
         }
     }
 
     /// Where the transcript is between two messages, for [`Self::resume`].
     pub fn checkpoint(&self) -> (Cell, Option<Cell>) {
-        (self.state, self.input.first().copied())
+        (self.state, self.input.get(0))
     }
 
     /// One duplex step, absorbing what is pending.
     fn duplex(&mut self, t: &mut Tape) {
-        let n = self.input.len() as u32;
-        let x = self.input.first().copied().unwrap_or(ZERO);
-        let y = self.input.get(1).copied().unwrap_or(ZERO);
+        let n = self.input.len as u32;
+        let x = self.input.get(0).unwrap_or(ZERO);
+        let y = self.input.get(1).unwrap_or(ZERO);
         let next = t.fresh(3);
         t.ops.push(Op::Duplex([n, self.state, x, y, next]));
         self.state = next;
-        self.input.clear();
-        self.output = vec![next, next + 1];
+        self.input = Rate::default();
+        self.output = Rate {
+            cells: [next, next + 1],
+            len: 2,
+        };
     }
 
     /// Absorb one cell.
     pub fn observe(&mut self, t: &mut Tape, x: Cell) {
-        self.output.clear();
+        self.output = Rate::default();
         self.input.push(x);
-        if self.input.len() == 2 {
+        if self.input.len == 2 {
             self.duplex(t);
         }
     }
 
     /// Squeeze one cell.
     pub fn sample(&mut self, t: &mut Tape) -> Cell {
-        if !self.input.is_empty() || self.output.is_empty() {
+        if self.input.len > 0 || self.output.len == 0 {
             self.duplex(t);
         }
         self.output.pop().expect("a duplex step refills the rate")
