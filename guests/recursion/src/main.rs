@@ -1,31 +1,33 @@
 #![no_std]
 #![no_main]
-//! The recursion guest's leaf, by tape (`docs/spec/recursion.md` §7): each
-//! base shard it is handed is verified by importing its slots and its proof's
-//! inputs into the field memory and replaying its family's tape, every check
-//! an assertion a coprocessor call makes.
+//! The recursion guest's leaf (`docs/spec/recursion.md` §7, §8): base shards
+//! verified by replaying their families' tapes over the field memory, each
+//! folded into the node's accumulator `(A, B)` — two MSMs on `FQ_OP` — and the
+//! accumulator journaled.
 //!
-//! **A measurement guest, not yet a recursion node.** Its tapes and slots
-//! are advice, which nothing binds, and it folds nothing: what it measures is
-//! a leaf's verification work, by family. A node's tapes live in its image,
-//! and its slots come from its own run of the statement's global phase
-//! (`docs/spec/recursion.md` §8). `host::recursion::leaf_advice` lays the
-//! advice out, and replays every tape natively first.
+//! **A measurement guest, not yet a recursion node.** It runs blind: its
+//! advice is a list of steps `host::recursion::leaf_advice` chose and ran
+//! natively first, tapes and slots included, and nothing binds them. What it
+//! measures is a leaf's work, by family. A node derives its steps from the
+//! statement, replays tapes its image holds, and fills its slots from its own
+//! run of the statement's global phase (§8).
 //!
-//! A tape's body is copied into RAM once before its first replay, because a
+//! A body is copied into RAM once, before its first replay, because a
 //! delegation frame lies below `2^31` and advice above it.
 //!
 //! # Journal and exit status
 //!
-//! The number of shards verified, a little-endian `u32`. Exit 0, or 10 if the
-//! advice does not decode; a shard whose tape refuses it is a fatal frame
-//! error, the coprocessor's `EQ` having no witness.
+//! The accumulator's two points, `A` then `B`, each coordinate four limb
+//! cells, each cell the eight little-endian words `EXPORT` writes. Exit 0, or
+//! 10 if the advice does not decode; a step that refuses is a fatal frame
+//! error, the coprocessor's `EQ` and `MULEQ` having no witness.
 
 extern crate alloc;
 
 use alloc::vec::Vec;
 
-use guest_sdk::recursion::{import, replay};
+use constants::{field_io as io, fq_op as fq, fr_op as fr};
+use guest_sdk::recursion::{field_io, fq_op, fr_op, import, replay};
 use guest_sdk::{advice, commit, entry, exit};
 
 entry!(main);
@@ -78,17 +80,59 @@ fn main() {
         bytes: advice(),
         at: 0,
     };
-    let tapes: Vec<(Vec<u32>, Vec<u32>)> = (0..input.u32())
-        .map(|_| (input.words(), input.words()))
-        .collect();
-    let n = input.u32();
-    for _ in 0..n {
-        let t = input.u32() as usize;
-        let (imports, body) = tapes.get(t).unwrap_or_else(|| exit(EXIT_INPUT));
-        let cells = input.words();
-        import(&cells, input.bytes());
-        import(imports, input.bytes());
-        replay(body);
+    // A's point, scalar and zero cells, B's, then the sentinel's.
+    let header = input.words();
+    if header.len() != 7 {
+        exit(EXIT_INPUT);
     }
-    commit(&n.to_le_bytes());
+    let bodies: Vec<Vec<u32>> = (0..input.u32()).map(|_| input.words()).collect();
+    let lists: Vec<Vec<u32>> = (0..input.u32()).map(|_| input.words()).collect();
+    for _ in 0..input.u32() {
+        match input.u32() {
+            0 => {
+                let list = lists
+                    .get(input.u32() as usize)
+                    .unwrap_or_else(|| exit(EXIT_INPUT));
+                import(list, input.bytes());
+            }
+            1 => replay(
+                bodies
+                    .get(input.u32() as usize)
+                    .unwrap_or_else(|| exit(EXIT_INPUT)),
+            ),
+            2 => {
+                let first = input.u32();
+                let blob = input.bytes();
+                let cells: Vec<u32> = (first..first + (blob.len() / 32) as u32).collect();
+                import(&cells, blob);
+            }
+            3 => {
+                let (limbs, scalar) = (input.u32(), input.u32());
+                let (point, at, zero) = match input.u32() {
+                    0 => (header[0], header[1], header[2]),
+                    1 => (header[3], header[4], header[5]),
+                    _ => exit(EXIT_INPUT),
+                };
+                fq_op(&mut [fq::FROM128, point, limbs, zero]);
+                fq_op(&mut [fq::FROM128, point + 4, limbs + 2, zero]);
+                fr_op(&mut [fr::ADD, at, scalar, 0]);
+            }
+            4 => {
+                let limbs = input.u32();
+                for k in 0..4 {
+                    fr_op(&mut [fr::EQ, 0, limbs + k, header[6]]);
+                }
+            }
+            _ => exit(EXIT_INPUT),
+        }
+    }
+    let mut journal = Vec::new();
+    for cell in input.words() {
+        let mut words = [0u32; 8];
+        field_io(&mut [io::EXPORT, cell, words.as_mut_ptr() as u32]);
+        for w in words {
+            journal.extend_from_slice(&w.to_le_bytes());
+        }
+    }
+    commit(&journal);
 }

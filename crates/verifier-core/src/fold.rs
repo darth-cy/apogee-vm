@@ -32,8 +32,10 @@ use constants::{fq_op as q, fr_op};
 use constraints::fq_op as arith;
 use field::Fr;
 
+use pcs_verify::{PairingSide, ENTRY_POINTS};
+
 use crate::tape::{
-    infinity_sentinel, run, Cell, CellTranscript, Limbs, Memory, Op, ShardTape, Tape, ZERO,
+    infinity_sentinel, run, Cell, CellTranscript, Memory, Op, ShardTape, Tape, ZERO,
 };
 
 /// A scalar's digits, and the windows.
@@ -138,7 +140,8 @@ impl Layout {
             sums: take(WINDOWS * 2 * POINT_CELLS),
             result: take(POINT_CELLS),
             halves: take(2),
-            witnesses: take(2 * MAX_HOLES),
+            // Two to spare: the last hole's `FROM128` reads four cells.
+            witnesses: take(2 * MAX_HOLES + 2),
             scratch: take(0),
         }
     }
@@ -507,12 +510,12 @@ pub struct FoldPoint {
     pub side: Side,
 }
 
-/// A node's cells beside its shards' tapes: the two MSMs, its own
-/// transcript's state, the shard being folded's scalars, and two constants.
+/// A node's cells beside its shards' tapes: its own transcript's state, two
+/// constants, the shard being folded's scalars and a fold tape's scratch —
+/// field cells all, so a `FROM128` reading past a shard's last limbs reads
+/// one of them — and then the two MSMs.
 #[derive(Clone, Copy, Debug)]
 pub struct Node {
-    pub a: Layout,
-    pub b: Layout,
     /// The node transcript's state, three cells, carried from shard to shard.
     pub state: Cell,
     /// `[1]_1`'s four transcript limbs.
@@ -523,28 +526,37 @@ pub struct Node {
     pub scalars: Cell,
     /// Where a fold tape's own cells start.
     pub scratch: Cell,
+    pub a: Layout,
+    pub b: Layout,
 }
 
 impl Node {
     /// The cells from `base` up, room for `points` scalars a shard.
     pub fn at(base: Cell, points: u32) -> Node {
-        let a = Layout::at(base);
-        let b = Layout::at(a.end());
-        let state = b.end();
+        let scratch = base + 8 + points;
+        let a = Layout::at(scratch + SCRATCH);
         Node {
+            state: base,
+            generator: base + 3,
+            sentinel: base + 7,
+            scalars: base + 8,
+            scratch,
             a,
-            b,
-            state,
-            generator: state + 3,
-            sentinel: state + 7,
-            scalars: state + 8,
-            scratch: state + 8 + points,
+            b: Layout::at(a.end()),
         }
     }
 
-    /// One past the last cell a fold tape may take.
+    /// One past the node's last cell.
     pub fn end(&self) -> Cell {
-        self.scratch + SCRATCH
+        self.b.end()
+    }
+
+    /// The layout `side` adds into.
+    pub fn layout(&self, side: Side) -> &Layout {
+        match side {
+            Side::A => &self.a,
+            Side::B => &self.b,
+        }
     }
 
     /// The node's constants: `[1]_1`'s limbs and the sentinel, as cells.
@@ -563,10 +575,10 @@ impl Node {
 
 /// After a shard's tape: the node transcript absorbs the shard's final state
 /// and draws `w` and `w′`, and every point the shard owes gets its scalar —
-/// `cm*` `w·e₀ + w′`, the proof's eight points and `[1]_1` `w·e_k` on `A`,
-/// `π_z` and `w′` `w·e₁₀` and `w·e₁₁` on `B`, and each opened commitment
-/// `−w′·ρ^i`, the batch check `cm* − Σ ρ^i·cm_i` folded beside the Mercury
-/// check. Returns the tape and the points, in the order a guest adds them.
+/// entry `i` of its Mercury check `w·e_i` on the side `ENTRY_POINTS` gives
+/// it, `cm*`'s `w′` more, and each opened commitment `−w′·ρ^i`: the batch
+/// check `cm* − Σ ρ^i·cm_i` folded beside the Mercury check. Returns the
+/// tape and the points, in the order a guest adds them.
 pub fn shard_fold(shape: &ShardTape, node: &Node) -> (Vec<Op>, Vec<FoldPoint>) {
     use constants::transcript_tags as tags;
     let mut t = Tape::new(node.scratch);
@@ -591,28 +603,26 @@ pub fn shard_fold(shape: &ShardTape, node: &Node) -> (Vec<Op>, Vec<FoldPoint>) {
             side,
         });
     };
-    let first = |l: &Limbs| l[0];
-    add(&mut t, first(&out.cm_star), Side::A, &|t, c| {
-        t.fr(fr_op::MUL, c, w, e[0]);
-        t.fr(fr_op::ADD, c, c, w2);
-    });
-    for (k, point) in out.points.iter().enumerate() {
-        add(&mut t, first(point), Side::A, &|t, c| {
-            t.fr(fr_op::MUL, c, w, e[k + 1])
+    // `[cm*, the proof's eight points, [1]_1]`, as `ENTRY_POINTS` indexes them.
+    let limbs = |k: usize| match k {
+        0 => out.cm_star[0],
+        9 => node.generator,
+        k => out.points[k - 1][0],
+    };
+    for (i, (side, k)) in ENTRY_POINTS.iter().enumerate() {
+        let side = match side {
+            PairingSide::G2One => Side::A,
+            PairingSide::G2X => Side::B,
+        };
+        add(&mut t, limbs(*k), side, &|t, c| {
+            t.fr(fr_op::MUL, c, w, e[i]);
+            if i == 0 {
+                t.fr(fr_op::ADD, c, c, w2);
+            }
         });
     }
-    add(&mut t, node.generator, Side::A, &|t, c| {
-        t.fr(fr_op::MUL, c, w, e[9])
-    });
-    // `π_z` and `w′`, the proof's sixth and eighth points, on `B` too.
-    add(&mut t, first(&out.points[5]), Side::B, &|t, c| {
-        t.fr(fr_op::MUL, c, w, e[10])
-    });
-    add(&mut t, first(&out.points[7]), Side::B, &|t, c| {
-        t.fr(fr_op::MUL, c, w, e[11])
-    });
     for (cm, rho) in out.commitments.iter().zip(&out.batch) {
-        add(&mut t, first(cm), Side::A, &|t, c| {
+        add(&mut t, cm[0], Side::A, &|t, c| {
             t.fr(fr_op::MUL, c, w2, *rho);
             t.fr(fr_op::SUB, c, ZERO, c);
         });
