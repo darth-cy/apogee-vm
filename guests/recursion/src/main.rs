@@ -23,10 +23,10 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use constants::field_io as io;
-use guest_sdk::recursion::{field_io, import, replay, Words};
+use guest_sdk::recursion::{field_io, fq_op, fr_op, import, import_run, p2_field, replay, Words};
 use guest_sdk::{advice, commit, entry, exit};
 use verifier_core::node::{leaf, Advice, BaseKey, Driver, Header, ImageTemplate, LeafImage};
-use verifier_core::tape::{encode, Cell, Op};
+use verifier_core::tape::{Cell, Op};
 
 entry!(main);
 
@@ -67,7 +67,15 @@ impl Driver for Guest {
     }
 
     fn run(&mut self, ops: Vec<Op>) {
-        replay(&encode(&ops).body);
+        // Built at run time: a call each, its frame on the stack.
+        for op in ops {
+            match op {
+                Op::Fr(mut frame) => fr_op(&mut frame),
+                Op::Duplex(mut frame) => p2_field(&mut frame),
+                Op::Fq(mut frame) => fq_op(&mut frame),
+                Op::Import { .. } => exit(EXIT_INPUT),
+            }
+        }
     }
 
     fn advise(&mut self, cells: &[Cell], _: Advice) {
@@ -77,9 +85,8 @@ impl Driver for Guest {
 
     fn template(&mut self, template: &ImageTemplate, _: Option<Cell>) {
         if let Some(cells) = template.witnesses() {
-            let cells: Vec<Cell> = cells.collect();
             let blob = self.take(32 * cells.len());
-            import(&cells, blob);
+            import_run(cells.start, blob);
         }
         replay(template.body.body);
     }

@@ -464,6 +464,20 @@ pub mod recursion {
         }
     }
 
+    /// [`import`] into the run of cells from `first`, one a 32-byte word of
+    /// `blob`: a template's witnesses, which lie together.
+    pub fn import_run(first: u32, blob: &[u8]) {
+        let number = delegation_number(&DELEGATION_FIELD_IO);
+        let mut frame = [constants::field_io::IMPORT, first, blob.as_ptr() as u32];
+        let base = frame.as_mut_ptr() as u32;
+        for _ in 0..blob.len() / 32 {
+            // SAFETY: as `import`'s.
+            unsafe { ecall1(number, base) };
+            frame[1] += 1;
+            frame[2] += 32;
+        }
+    }
+
     /// A tape's body (`docs/spec/recursion.md` §7): each run's frames back to
     /// back, one ecall a frame. A recursion request leaves `a0` past its
     /// frame (§1.4), so a run is nothing but its ecalls. The body must lie in
