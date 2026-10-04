@@ -18,6 +18,7 @@
 extern crate alloc;
 
 mod block;
+pub mod chain;
 pub mod fold;
 mod reduce;
 mod statement;

@@ -273,6 +273,23 @@ impl CellTranscript {
         self.state
     }
 
+    /// A transcript resumed between two messages: the state at `state`, and
+    /// the one input a duplex has not yet taken, if the messages so far were
+    /// an odd number of scalars. Whatever was squeezed is gone, as the next
+    /// message's first `observe` would drop it.
+    pub fn resume(state: Cell, pending: Option<Cell>) -> CellTranscript {
+        CellTranscript {
+            state,
+            input: pending.into_iter().collect(),
+            output: Vec::new(),
+        }
+    }
+
+    /// Where the transcript is between two messages, for [`Self::resume`].
+    pub fn checkpoint(&self) -> (Cell, Option<Cell>) {
+        (self.state, self.input.first().copied())
+    }
+
     /// One duplex step, absorbing what is pending.
     fn duplex(&mut self, t: &mut Tape) {
         let n = self.input.len() as u32;
@@ -974,9 +991,13 @@ pub struct ShardSlots {
 /// block's rule reads across shards, and for the fold the batch's weights and
 /// the Mercury check's twelve scalars, and the points they go with.
 pub struct ShardOutputs {
-    /// `ts_window`, as imported: the caller owes its range (`start <= end <=
-    /// 2^38`, step 4) and the block's rule across shards.
+    /// `ts_window`, as imported and held to step 4's range: the caller owes
+    /// the block's rule across shards.
     pub ts_window: [Cell; 2],
+    /// The GKR point, and every column's claim there in layout order — `M`,
+    /// `W`, `S` — which step 10c reads on the public value shards.
+    pub point: Vec<Cell>,
+    pub claims: Vec<Cell>,
     /// The shard transcript's final state, three cells: what a node's own
     /// transcript absorbs, and so what its fold weights depend on.
     pub state: Cell,
@@ -1009,8 +1030,9 @@ pub struct ShardTape {
 /// is how many setup commitments the opening reads, the generic table's
 /// included. Its scratch starts at `first`.
 ///
-/// **Not yet here**: step 10c, which only the two public value families
-/// carry, and the curve checks a point's limbs owe, which the fold makes.
+/// **Not here**: step 10c, which only the two public value families carry
+/// and whose shape is the statement's byte length (`crate::chain::public_value`),
+/// and the curve checks a point's limbs owe, which the fold makes.
 pub fn shard_tape(
     config: &crate::VmConfig,
     circuit: &constraints::FamilyCircuit,
@@ -1054,6 +1076,14 @@ pub fn shard_tape(
         import(&mut t, Input::TsWindow(1)),
     ];
     tr.append(&mut t, tags::SHARD_TS_WINDOW, &ts);
+    // 4. `start <= end <= 2^38`: `start`, `end − start` and `2^38 − end` all
+    //    below `2^39`.
+    let span = t.sub(ts[1], ts[0]);
+    let top = t.constant(Fr::from_u64(1 << constants::memory::TS_BITS));
+    let room = t.sub(top, ts[1]);
+    for x in [ts[0], span, room] {
+        crate::chain::below(&mut t, x, constants::memory::TS_BITS + 1);
+    }
     let witness: Vec<Limbs> = (0..w)
         .map(|stack| core::array::from_fn(|limb| import(&mut t, Input::Witness { stack, limb })))
         .collect();
@@ -1188,7 +1218,7 @@ pub fn shard_tape(
     for v in &claims[mc + wc..] {
         values.push(t.mul(*v, eq_r[0]));
     }
-    let mut point = u;
+    let mut point = u.clone();
     point.extend(r);
     let mut commitments = slots.memory_commitments.clone();
     commitments.extend(witness);
@@ -1208,6 +1238,8 @@ pub fn shard_tape(
         slots,
         outputs: ShardOutputs {
             ts_window: ts,
+            point: u,
+            claims,
             state: tr.state(),
             batch,
             commitments,

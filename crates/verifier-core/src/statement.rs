@@ -445,7 +445,7 @@ pub fn statement_shards(config: &VmConfig, shard_counts: &[u32]) -> Vec<(u32, u3
 
 /// `(family, count)` per family of `config`, in the global transcript's group
 /// order: `INIT_TEARDOWN`, `ZERO_WINDOWS`, then every other family ascending.
-fn groups(config: &VmConfig, shard_counts: &[u32]) -> Vec<(u32, u32)> {
+pub(crate) fn groups(config: &VmConfig, shard_counts: &[u32]) -> Vec<(u32, u32)> {
     let pairs = config
         .families
         .iter()
@@ -487,21 +487,26 @@ pub struct GlobalTranscript {
 /// and one commitment list per statement shard. The verifier checks that first
 /// and refuses as `Statement`; a broken one here is a caller error and panics.
 pub fn global_commit(vk: &VerifyingKey, statement: &PublicInputs) -> GlobalTranscript {
+    global_transcript(vk.srs_digest, &vk.config, vk.identity, statement)
+}
+
+/// [`global_commit`] over the three things it reads of a key.
+pub(crate) fn global_transcript(
+    srs_digest: Fr,
+    config: &VmConfig,
+    identity: ProgramIdentity,
+    statement: &PublicInputs,
+) -> GlobalTranscript {
     let mut t = Transcript::new();
     t.append_scalar(tags::PROTOCOL_SUITE, Fr::from_u64(PROTOCOL_VERSION as u64));
-    t.append_scalar(tags::SRS_DIGEST, vk.srs_digest);
-    absorb_statement_descriptor(
-        &mut t,
-        &vk.config,
-        &statement.shard_counts,
-        &statement.windows,
-    );
-    t.append_scalar(tags::PROGRAM_IDENTITY, vk.identity.0);
+    t.append_scalar(tags::SRS_DIGEST, srs_digest);
+    absorb_statement_descriptor(&mut t, config, &statement.shard_counts, &statement.windows);
+    t.append_scalar(tags::PROGRAM_IDENTITY, identity.0);
     let io = io_digest(&statement.input, &statement.output);
     t.append_bytes(tags::PUBLIC_INPUTS, &io.to_bytes());
 
     let mut lists = statement.memory_commitments.iter();
-    for (family, count) in groups(&vk.config, &statement.shard_counts) {
+    for (family, count) in groups(config, &statement.shard_counts) {
         t.append_scalars(
             tags::MEMORY_GROUP,
             &[Fr::from_u64(family as u64), Fr::from_u64(count as u64)],
