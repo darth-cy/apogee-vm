@@ -2,21 +2,22 @@
 //! format, proved as a block and verified (`docs/spec/recursion.md`).
 //!
 //! `#[ignore]`d and deferred out of CI under master rule 7: the statement is
-//! several `2^20` execution shards, three `2^16` field family shards and a field
-//! window, over a `2^24` SRS — the stacked commitments' ceiling. Run it with
+//! several `2^20` execution shards, a `2^20` `FQ_OP` shard, three `2^16` field
+//! family shards and a field window, over a `2^24` SRS — the stacked
+//! commitments' ceiling. Run it with
 //!
 //! ```text
 //! cargo test --release -p prover --test field_ops -- --include-ignored --test-threads=1
 //! ```
 //!
 //! What only a whole proof reaches: the recursion registry's `ADD_SUB` holding
-//! the three field ecalls, the field window's derived constant on both sides,
+//! the four field ecalls, the field window's derived constant on both sides,
 //! the anchors and `FIELD_IO`'s RAM data words in the global multiset, and the
 //! stacked opening — `σ` challenges after the GKR pass, stacks of columns
 //! committed at their slots' powers, and a batch that opens them at `u ‖ r` —
 //! agreeing between the prover and `verify_block`. And the recursion verifier's
 //! tape over every one of the block's shards, held to the native verifier's
-//! reading of the same proof. Row by row, the three circuits are
+//! reading of the same proof. Row by row, the four circuits are
 //! `crates/checker/tests/recursion.rs`', in CI; the tape's GKR and Mercury
 //! halves are `crates/gkr/tests` and `crates/pcs-verify/tests/tape.rs`.
 
@@ -63,6 +64,7 @@ fn the_recursion_format_proves_and_verifies() {
         family::FR_OP,
         family::P2_FIELD,
         family::FIELD_IO,
+        family::FQ_OP,
         family::FIELD_WINDOWS,
     ] {
         assert_eq!(block.shards.iter().filter(|s| s.family == f).count(), 1);

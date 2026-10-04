@@ -18,9 +18,9 @@ publish.workspace = true
 [dependencies]
 # `family::COUNT` and `family::DEFAULT_HEIGHTS`, for the revm guest's heights.
 constants.workspace = true
-# `recursion::leaf_advice` decodes a shard's commitments and opening and runs
-# the native deferred verification for the `cm*` hint a guest cannot compute,
-# then lays each shard's tape slots out as field elements and point limbs.
+# `recursion` decodes a shard's commitments and opening and runs the native
+# deferred verification for the `cm*` hint a guest cannot compute, then lays
+# each shard's tape slots out as field elements and point limbs.
 curve.workspace = true
 field.workspace = true
 pcs.workspace = true

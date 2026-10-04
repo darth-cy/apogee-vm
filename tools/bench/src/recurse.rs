@@ -142,8 +142,9 @@ fn options(args: &[String]) -> Result<Options, String> {
     if o.out.as_os_str().is_empty() {
         return Err("recurse needs --out <dir>".into());
     }
-    if o.fan_in < 2 || o.leaf == 0 || o.in_flight == 0 || o.shards_in_flight == 0 {
-        return Err("--fan-in is at least 2, the rest at least 1".into());
+    // A node verifies two to four children (`docs/spec/recursion.md` §8.1).
+    if !(2..=4).contains(&o.fan_in) || o.leaf == 0 || o.in_flight == 0 || o.shards_in_flight == 0 {
+        return Err("--fan-in is 2 to 4, the rest at least 1".into());
     }
     Ok(o)
 }
@@ -194,7 +195,17 @@ pub fn run(args: &[String]) -> Result<(), String> {
     }
     let tree = Tree::plan(&costs, o.leaf, o.budget, o.fan_in);
     let text = format!("base {}\n{}", o.archive.display(), tree.to_text());
-    std::fs::write(o.out.join("tree.txt"), &text).map_err(|e| e.to_string())?;
+    // A resumed run keeps the proofs in `<out>`, which are the nodes of the
+    // tree planned there: another plan's would be reused by id.
+    let plan = o.out.join("tree.txt");
+    if std::fs::read_to_string(&plan).is_ok_and(|old| old != text) {
+        return Err(format!(
+            "{} plans another tree, whose proofs this one would reuse: \
+             prove it in a fresh directory",
+            plan.display()
+        ));
+    }
+    std::fs::write(&plan, &text).map_err(|e| e.to_string())?;
     let leaves = tree
         .nodes
         .iter()
@@ -244,29 +255,32 @@ pub fn run(args: &[String]) -> Result<(), String> {
         }
         std::thread::sleep(Duration::from_millis(500));
         let mut finished = None;
-        for (k, (id, child, started)) in running.iter_mut().enumerate() {
+        for (k, (_, child, started)) in running.iter_mut().enumerate() {
             if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-                if !status.success() {
-                    return Err(format!(
-                        "node {id} failed ({status}): see {}",
-                        o.out.join(format!("{id}.log")).display()
-                    ));
-                }
-                println!(
-                    "node {id} proved in {:.1} s",
-                    started.elapsed().as_secs_f64()
-                );
-                finished = Some(k);
+                finished = Some((k, status, started.elapsed()));
                 break;
             }
         }
-        if let Some(k) = finished {
+        if let Some((k, status, took)) = finished {
             let (id, _, _) = running.remove(k);
+            if !status.success() {
+                // The tree cannot finish, so the nodes still running are
+                // stopped rather than left proving what nothing will read.
+                for (_, mut child, _) in running {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+                return Err(format!(
+                    "node {id} failed ({status}): see {}",
+                    o.out.join(format!("{id}.log")).display()
+                ));
+            }
+            println!("node {id} proved in {:.1} s", took.as_secs_f64());
             done[id] = true;
         }
     }
     println!("the tree proved in {:.1} s", begun.elapsed().as_secs_f64());
-    check_root(&o.out, &tree, costs.len(), &base_vk)
+    check_root(&o.out, &tree, costs.len(), &base_vk, &block)
 }
 
 fn describe(node: &TreeNode) -> String {
@@ -289,6 +303,7 @@ fn check_root(
     tree: &Tree,
     shards: usize,
     base_vk: &VerifyingKey,
+    base: &BlockProof,
 ) -> Result<(), String> {
     let kind = match tree.nodes[tree.root] {
         TreeNode::Leaf { .. } => "leaf",
@@ -312,6 +327,19 @@ fn check_root(
     let small = |k: usize| Fr::from_u64(k as u64);
     if cells[journal::FROM] != small(0) || cells[journal::TO] != small(shards) {
         return Err("the root does not cover the shards planned".into());
+    }
+    // The journal is about the archive's statement: its global digest and
+    // memory challenges, its `io_digest`, exit status and shard count, as the
+    // native global transcript has them.
+    let public = base.statement();
+    let global = verifier_core::global_commit(base_vk, public);
+    let mut statement = vec![global.digest];
+    statement.extend(global.memory);
+    statement.push(transcript::io_digest(&public.input, &public.output));
+    statement.push(small(public.exit_status as usize));
+    statement.push(small(public.shard_counts.iter().sum::<u32>() as usize));
+    if cells[journal::DIGEST..=journal::TOTAL] != statement[..] {
+        return Err("the root's journal is not the base statement's".into());
     }
     if kind == "node" {
         let leaf = VerifyingKey::from_bytes(&read(&out.join("leaf.vk"))?)

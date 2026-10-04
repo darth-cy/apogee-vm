@@ -242,8 +242,9 @@ pub fn recursion_params() -> ProgramParams {
 }
 
 /// S-RECURSION's heights for `field-ops`: every execution family at `2^20` —
-/// the guest's own instructions decide which are present — and the three
-/// field families at `RANGE16`'s floor, `2^16`.
+/// the guest's own instructions decide which are present — and `FQ_OP` with
+/// them, its `TIMESTAMP` channel needing 19 variables; the other three field
+/// families at `RANGE16`'s floor, `2^16`.
 pub fn field_ops_params() -> ProgramParams {
     heights(&[
         family::ADD_SUB_LUI_AUIPC,
@@ -253,6 +254,7 @@ pub fn field_ops_params() -> ProgramParams {
         family::MEM_WORD,
         family::MEM_SUBWORD,
         family::ATOMICS,
+        family::FQ_OP,
     ])
 }
 

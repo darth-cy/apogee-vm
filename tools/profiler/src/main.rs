@@ -184,7 +184,7 @@ fn block(args: &[String]) -> Result<(), String> {
 
 /// `profiler leaf <dir>/<stem>`: the recursion guest's leaf over slices of an
 /// archived block proof. The guest is built once; each slice's advice is built
-/// by `host::recursion::leaf_advice`, which verifies the slice natively first.
+/// by `host::recursion::leaf`, which verifies the slice natively first.
 fn leaf(args: &[String]) -> Result<(), String> {
     let (common, rest) = common(args)?;
     let mut path = None;
@@ -224,6 +224,13 @@ fn leaf(args: &[String]) -> Result<(), String> {
         .to_string();
     let dir = path.parent().unwrap_or(std::path::Path::new("."));
     let (vk, _, _, block) = host::proof_archive::read_proof(dir, &stem)?;
+    let total = block.shard_proofs().len();
+    if let Some(r) = slices.iter().find(|r| r.is_empty() || r.end > total) {
+        return Err(format!(
+            "--shards {}..{} is no slice of the statement's {total} shards",
+            r.start, r.end
+        ));
+    }
     // The guest holds the image of the key it was built with.
     let key = verifier_core::node::BaseKey::of(&vk).to_bytes();
     if std::fs::read(base_key_path()).ok().as_deref() != Some(&key[..]) {
