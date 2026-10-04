@@ -646,7 +646,8 @@ fn a2_the_family_set_is_the_program_s() {
 
     for f in 0..family::COUNT {
         let present = families.contains(&f);
-        let expected = f != family::POSEIDON2 && f != family::FR_ARITH;
+        // The recursion format's five are a recursion program's alone.
+        let expected = f != family::POSEIDON2 && f != family::FR_ARITH && f < family::FIELD_WINDOWS;
         assert_eq!(
             present,
             expected,
