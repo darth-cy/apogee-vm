@@ -798,6 +798,12 @@ pub mod transcript_tags {
     /// its batch check into the node's accumulator.
     pub const FOLD_WEIGHT: u64 = 44;
 
+    /// Absorbed in a recursion node's own transcript: one child's journal,
+    /// its every cell, the accumulator among them, before the weight that
+    /// folds that accumulator into the node's is drawn
+    /// (`docs/spec/recursion.md` §8.3).
+    pub const FOLD_CHILD: u64 = 45;
+
     /// Every tag's name, indexed by `tag - 1`. **Documentation, never
     /// semantics**, as `challenge_slot::NAMES` is: the number is the tag, and
     /// nothing reads a name to decide anything. `checker::tape` renders a
@@ -806,7 +812,7 @@ pub mod transcript_tags {
     ///
     /// Append here whenever a tag is appended above. This crate keeps its
     /// zero-logic rule: the lookup lives in `checker::tape`.
-    pub const NAMES: [&str; 44] = [
+    pub const NAMES: [&str; 45] = [
         "PROTOCOL_SUITE",
         "PUBLIC_INPUTS",
         "COMMITMENT",
@@ -851,6 +857,7 @@ pub mod transcript_tags {
         "STACK_CHALLENGE",
         "FOLD_STATE",
         "FOLD_WEIGHT",
+        "FOLD_CHILD",
     ];
 }
 

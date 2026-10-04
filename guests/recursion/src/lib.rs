@@ -1,15 +1,12 @@
 #![no_std]
-#![no_main]
-//! The recursion leaf (`docs/spec/recursion.md` §8, `verifier_core::node`):
-//! shards `from..to` of a base statement verified and folded into an
-//! accumulator, and a journal that holds what a parent needs to fit the leaf
-//! beside its neighbours.
-//!
-//! Its image holds every tape it replays, built by `build.rs` from
-//! `base.key`, the base program's key, so this program's identity binds them.
-//! Its advice is the header and the stream `host::recursion::leaf` laid out,
-//! read in the procedure's order, and nothing in it is trusted: what it
-//! claims the procedure checks, or a later node does.
+//! The recursion nodes' guest side (`docs/spec/recursion.md` §8,
+//! `verifier_core::node`), which the two binaries share: `leaf` verifies a
+//! slice of a base statement, `node` two to four children's proofs. Each
+//! holds its image — every tape it replays — in `.rodata`, built by
+//! `build.rs`, so its identity binds them. Its advice is the header and the
+//! stream `host::recursion` laid out, read in the procedure's order, and
+//! nothing in it is trusted: what it claims the procedure checks, or a later
+//! node does.
 //!
 //! # Journal and exit status
 //!
@@ -23,18 +20,13 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use constants::field_io as io;
-use guest_sdk::recursion::{field_io, fq_op, fr_op, import, import_run, p2_field, replay, Words};
-use guest_sdk::{advice, commit, entry, exit};
-use verifier_core::node::{leaf, Advice, BaseKey, Driver, Header, ImageTemplate, LeafImage};
+use guest_sdk::recursion::{field_io, fq_op, fr_op, import, import_run, p2_field, replay};
+use guest_sdk::{advice, commit, exit};
+use verifier_core::node::{node, Advice, Driver, Header, ImageTemplate, NodeImage};
 use verifier_core::tape::{Cell, Op};
 
-entry!(main);
-
 /// The image or the advice does not read.
-const EXIT_INPUT: i32 = 10;
-
-static IMAGE: &Words<[u8]> = &Words(*include_bytes!(concat!(env!("OUT_DIR"), "/leaf.img")));
-static KEY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/base.key"));
+pub const EXIT_INPUT: i32 = 10;
 
 /// The guest's driver: each call the procedure makes, by its coprocessor
 /// call, and each word of advice read where it is asked for.
@@ -58,6 +50,12 @@ impl Guest {
     fn word(&mut self) -> u32 {
         let w = self.take(4);
         u32::from_le_bytes([w[0], w[1], w[2], w[3]])
+    }
+
+    fn export(cell: Cell) -> [u32; 8] {
+        let mut words = [0u32; 8];
+        field_io(&mut [io::EXPORT, cell, words.as_mut_ptr() as u32]);
+        words
     }
 }
 
@@ -95,20 +93,28 @@ impl Driver for Guest {
         self.word() != 0
     }
 
+    fn read(&mut self, cell: Cell) -> u32 {
+        // An export is any representative; a word's is itself, and only a
+        // word's has its seven high words 0.
+        let words = Guest::export(cell);
+        if words[1..].iter().any(|w| *w != 0) {
+            exit(EXIT_INPUT);
+        }
+        words[0]
+    }
+
     fn export(&mut self, cells: &[Cell]) {
         for cell in cells {
-            let mut words = [0u32; 8];
-            field_io(&mut [io::EXPORT, *cell, words.as_mut_ptr() as u32]);
-            for w in words {
+            for w in Guest::export(*cell) {
                 self.journal.extend_from_slice(&w.to_le_bytes());
             }
         }
     }
 }
 
-fn main() {
-    let image = LeafImage::read(IMAGE.words()).unwrap_or_else(|| exit(EXIT_INPUT));
-    let key = BaseKey::from_bytes(KEY).unwrap_or_else(|| exit(EXIT_INPUT));
+/// The node whose image is `image`, over the advice, its journal committed.
+pub fn run(image: &'static [u32]) {
+    let image = NodeImage::read(image).unwrap_or_else(|| exit(EXIT_INPUT));
     let mut guest = Guest {
         advice: advice(),
         at: 0,
@@ -120,6 +126,6 @@ fn main() {
         Some((header, used)) if used == n => header,
         _ => exit(EXIT_INPUT),
     };
-    leaf(&mut guest, &image, &key, &header);
+    node(&mut guest, &image, &header);
     commit(&guest.journal);
 }

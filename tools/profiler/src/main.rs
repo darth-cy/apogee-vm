@@ -21,6 +21,11 @@
 //!     write the archive's key as guests/recursion/base.key, which the leaf's
 //!     image is built from: the leaf verifies that program's proofs and no
 //!     other's.
+//!
+//! profiler program-keys
+//!     build the two recursion programs and write guests/recursion/programs.key,
+//!     the configs their ELFs derive, which the internal node's image is built
+//!     from. A config does not depend on an image, so two runs agree.
 //! ```
 //!
 //! Nothing here invokes the prover, an SRS or a commitment. `leaf` alone reads a
@@ -43,6 +48,7 @@ fn usage() -> &'static str {
      profiler record <number|latest> [--txs <n>] [--top <n>] [--json <p>] [--cache <d>]\n\
      profiler leaf <dir>/<stem> --shards <from>..<to> [--shards ...] [--top <n>] [--json <p>]\n\
      profiler base-key <dir>/<stem>\n\
+     profiler program-keys\n\
      \n\
      `block` reads a recorded fixture and touches no network. `record` reads\n\
      ETH_RPC_URL. Neither invokes anything proving-related."
@@ -58,6 +64,7 @@ fn main() {
         "record" => record(rest),
         "leaf" => leaf(rest),
         "base-key" => base_key(rest),
+        "program-keys" => program_keys(rest),
         "--help" | "-h" | "" => {
             println!("{}", usage());
             return;
@@ -226,8 +233,8 @@ fn leaf(args: &[String]) -> Result<(), String> {
             path.display()
         ));
     }
-    let elf = fixture::build_guest("recursion", "recursion")?;
-    let words = host::recursion::image(&vk);
+    let elf = fixture::build_guest("recursion", "leaf")?;
+    let words = host::recursion::leaf_image(&vk);
     for range in slices {
         let leaf = host::recursion::leaf(&vk, &words, &block, range.clone())?;
         let io = emulator::GuestIo {
@@ -267,6 +274,41 @@ fn base_key(args: &[String]) -> Result<(), String> {
         "wrote {} ({} bytes)",
         base_key_path().display(),
         bytes.len()
+    );
+    Ok(())
+}
+
+/// `profiler program-keys`: the two recursion programs' keys, from their
+/// ELFs, as the internal node's build reads them.
+fn program_keys(args: &[String]) -> Result<(), String> {
+    if !args.is_empty() {
+        return Err("program-keys takes no arguments".into());
+    }
+    let leaf = fixture::build_guest("recursion", "leaf")?;
+    let node = fixture::build_guest("recursion", "node")?;
+    let keys = host::recursion::program_keys(&leaf, &node)?;
+    let path = base_key_path().with_file_name("programs.key");
+    let bytes = verifier_core::node::ProgramKey::list_to_bytes(&keys);
+    let same = std::fs::read(&path).ok().as_deref() == Some(&bytes[..]);
+    std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+    for (name, key) in ["leaf", "node"].iter().zip(&keys) {
+        let families: Vec<String> = key
+            .config
+            .families
+            .iter()
+            .map(|(f, h)| format!("{}@2^{}", program::family_name(*f), h.trailing_zeros()))
+            .collect();
+        println!("{name}: {}", families.join(" "));
+    }
+    println!(
+        "wrote {} ({} bytes){}",
+        path.display(),
+        bytes.len(),
+        if same {
+            ", unchanged"
+        } else {
+            ", changed: build again and rerun"
+        }
     );
     Ok(())
 }

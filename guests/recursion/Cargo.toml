@@ -4,10 +4,22 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
-# The recursion leaf (`docs/spec/recursion.md` §8): `verifier_core::node`'s
-# procedure over base shards, its tapes in its image. `build.rs` builds the
-# image from `base.key` with the same crate, on the host. Like `revm-block`,
-# it has no committed ELF: it is built on demand.
+# The recursion nodes (`docs/spec/recursion.md` §8): `verifier_core::node`'s
+# procedure, a leaf's over base shards and an internal node's over its
+# children's proofs, each binary's tapes in its own image. `build.rs` builds
+# the images from `base.key` and `programs.key` with the same crate, on the
+# host. Like `revm-block`, it has no committed ELF: it is built on demand.
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "leaf"
+path = "src/bin/leaf.rs"
+
+[[bin]]
+name = "node"
+path = "src/bin/node.rs"
+
 [dependencies]
 guest-sdk.workspace = true
 constants = { path = "../../crates/constants" }
