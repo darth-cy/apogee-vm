@@ -2276,6 +2276,7 @@ pub mod fr_op {
     /// The first operand cell's word.
     pub const A_WORD: usize = 2;
     /// The second operand cell's word, or the integer `IMM` and `SHL` read.
+    /// `DIGIT` writes it.
     pub const B_WORD: usize = 3;
     /// The frame: four words, read and written back unchanged.
     pub const FRAME_WORDS: usize = 4;
@@ -2299,8 +2300,17 @@ pub mod fr_op {
     /// `d = a·2^32 + b`, the frame word: how a constant wider than a word is
     /// built.
     pub const SHL: u32 = 8;
+    /// `a = d + 2^DIGIT_BITS·b` with `d < 2^DIGIT_BITS`, writing both `d` and
+    /// `b`: one digit of a scalar peeled off. A scalar's [`DIGITS`] of them,
+    /// the rest ending at 0, are a representation of it mod p, which is what
+    /// a scalar multiplication by it needs.
+    pub const DIGIT: u32 = 9;
     /// Every code, ascending; a live row carries exactly one.
-    pub const OPS: [u32; 8] = [MUL, ADD, SUB, MAC, INV, EQ, IMM, SHL];
+    pub const OPS: [u32; 9] = [MUL, ADD, SUB, MAC, INV, EQ, IMM, SHL, DIGIT];
+    /// A digit's width: the MSM's window (`docs/spec/recursion.md` §3).
+    pub const DIGIT_BITS: u32 = 8;
+    /// The digits a scalar below `2^256` takes.
+    pub const DIGITS: usize = 256 / DIGIT_BITS as usize;
 
     /// The in-cycle slots of the `a`, `b` and `d` queries: distinct, so any of
     /// the three may name the same cell.

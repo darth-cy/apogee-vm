@@ -2155,7 +2155,7 @@ fn fr_op(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Strin
     let mut out = recursion_frame(&inv, f::FRAME_WORDS, f::FRAME_BYTES as u64);
     for (q, delta, read_ts, read, write, mask) in [
         (0, f::DELTA_A, c::A_READ_TS, c::A, None, c::A_LIVE),
-        (1, f::DELTA_B, c::B_READ_TS, c::B, None, c::B_LIVE),
+        (1, f::DELTA_B, c::B_READ_TS, c::B, Some(c::B_NEW), c::B_LIVE),
         (2, f::DELTA_D, c::D_READ_TS, c::D, Some(c::D_NEW), c::D_LIVE),
     ] {
         let gap = [c::gap_chunk(q, 0), c::gap_chunk(q, 1)];

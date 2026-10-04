@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
-//! S-RECURSION's guest for the field memory: every `FR_OP` op, one
+//! S-RECURSION's guest for the field memory: every `FR_OP` op — `DIGIT`'s
+//! chain over a whole word among them — one
 //! `P2_FIELD` duplex step at each of `n = 2, 1, 0`, and both `FIELD_IO` moves,
 //! called by name over frames this guest writes itself
 //! (`docs/spec/recursion.md` §2-§5).
@@ -108,6 +109,17 @@ fn main() -> ! {
     fr(op::MUL, 1, 1, 1);
     check(export(1) == small(49));
     fr(op::EQ, 0, 1, 1);
+    // DIGIT: 0x12345678 peeled a byte at a time, its rest in place, and the
+    // chain ending at 0 after four digits.
+    fr(op::IMM, 11, 0, 0x1234_5678);
+    fr(op::DIGIT, 12, 11, 11);
+    check(export(12) == small(0x78));
+    check(export(11) == small(0x12_3456));
+    fr(op::DIGIT, 13, 11, 11);
+    fr(op::DIGIT, 14, 11, 11);
+    fr(op::DIGIT, 15, 11, 11);
+    check(export(15) == small(0x12));
+    fr(op::EQ, 0, 11, 0);
 
     // FIELD_IO: a word vector round trip, and two reductions.
     let words: [u32; 8] = [1, 2, 3, 4, 5, 6, 7, 8];

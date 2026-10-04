@@ -1253,6 +1253,16 @@ pub fn run(ops: &[Op], memory: &mut Vec<Fr>, blob: &[u8]) -> Result<(), usize> {
                     }
                     fr_op::IMM => Fr::from_u64(b as u64),
                     fr_op::SHL => va * Fr::from_u64(1 << 32) + Fr::from_u64(b as u64),
+                    // The rest to `b` at its slot, then the digit to `d`.
+                    fr_op::DIGIT => {
+                        let digit =
+                            Fr::from_u64(va.to_bytes()[0] as u64 & ((1 << fr_op::DIGIT_BITS) - 1));
+                        let unit = Fr::from_u64(1 << fr_op::DIGIT_BITS)
+                            .inverse()
+                            .expect("a power of two is invertible");
+                        set(memory, b, (va - digit) * unit);
+                        digit
+                    }
                     _ => return Err(i),
                 };
                 set(memory, d, out);

@@ -1300,6 +1300,29 @@ impl<'a> Machine<'a> {
             }
             f::IMM => (false, false, Some(imm)),
             f::SHL => (true, false, Some(a * Fr::from_u64(1 << 32) + imm)),
+            // `a = d′ + 2^8·b′`: the low byte of `a`'s canonical integer, and
+            // the rest, written to `b` at its slot before `d` at its own.
+            f::DIGIT => {
+                let digit = Fr::from_u64(a.to_bytes()[0] as u64 & ((1 << f::DIGIT_BITS) - 1));
+                let unit = Fr::from_u64(1 << f::DIGIT_BITS)
+                    .inverse()
+                    .expect("a power of two is invertible");
+                let rest = (a - digit) * unit;
+                self.field.insert(bc, rest);
+                let d = self.cell(dc);
+                self.field.insert(dc, digit);
+                let cell = |cell, delta, old, new| Extra::Cell {
+                    cell,
+                    delta,
+                    old,
+                    new,
+                };
+                return Ok(vec![
+                    Some(cell(ac, f::DELTA_A, a, a)),
+                    Some(cell(bc, f::DELTA_B, b, rest)),
+                    Some(cell(dc, f::DELTA_D, d, digit)),
+                ]);
+            }
             _ => {
                 return Err(EmuError::DelegationFrame {
                     pc,

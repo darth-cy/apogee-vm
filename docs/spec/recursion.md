@@ -165,13 +165,20 @@ Family 19, ecall `0x0509`, anchor space 11, height `2^20`.
 | 6 | `EQ` | a, b | nothing: a = b, or there is no witness |
 | 7 | `IMM` | — | d ← b, the frame word read as an integer |
 | 8 | `SHL` | a | d ← a·2³² + b, the frame word |
+| 9 | `DIGIT` | a | d ← the low 8 bits of a, b ← (a − d)/2⁸ |
+
+`DIGIT` peels one digit of a scalar for the MSM's buckets (§8.3). A scalar's 32 of them,
+with the rest ending at 0, satisfy `s = Σ_k d_k·2^{8k}` **mod p**: a representation of
+`s`, not necessarily its canonical one, and exactly what a multiplication of a point of
+order `p` needs. The rest goes to `b`, which may be `a` itself, so a chain peels in place.
 
 **Field queries.**
 
 - `a` is at Δ0, `b` at Δ1 and `d` at Δ2.
 - Each is masked by an `M` column (`a_live`, `b_live`, `d_live`) that a degree-1 gate
   ties to the op selectors.
-- `a` and `b` are read-only and `d` is read-modify-write.
+- `a` is read-only, `d` is read-modify-write, and `b` is read-modify-write on `DIGIT`
+  rows and written back unchanged on every other (`b_kept`).
 - The distinct slots make every aliasing legal.
 
 **Gates.**
@@ -184,6 +191,7 @@ Family 19, ecall `0x0509`, anchor space 11, height `2^20`.
   MUL  d′ − prod      ADD  d′ − a − b      SUB  d′ − a + b      MAC  d′ − d − prod
   EQ   a − b          IMM  d′ − w3         SHL  d′ − 2^32·a − w3
   INV  prod − 1 + z,  z·a,  z·d′,  z boolean,  z·(1 − sel_INV)
+  DIGIT  a − d′ − 2^8·b′, with d′ and 2^8·d′ in RANGE16
   ```
 
 ---

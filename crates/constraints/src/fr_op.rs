@@ -6,18 +6,21 @@
 //! ```text
 //! frame     M[0..20]   cycle live base anchor_value, then 4 per word of [op, d, a, b]
 //! M[20..23]            a_live a_read_ts a          the first operand, read at Δ0
-//! M[23..26]            b_live b_read_ts b          the second, read at Δ1
-//! M[26..30]            d_live d_read_ts d d_new    the destination, read and written at Δ2
+//! M[23..27]            b_live b_read_ts b b_new    the second, read at Δ1, written by DIGIT
+//! M[27..31]            d_live d_read_ts d d_new    the destination, read and written at Δ2
 //! W[0..12]             the frame's gap chunks and base bounds
 //! W[12..18]            two gap chunks each for a, b and d
-//! W[18..26]            one selector per op, `fr_op::OPS` order
-//! W[26..29]            x prod z
-//! W[29]                the RANGE16 channel's multiplicity
+//! W[18..27]            one selector per op, `fr_op::OPS` order
+//! W[27..30]            x prod z
+//! W[30]                the RANGE16 channel's multiplicity
 //! ```
 //!
 //! The cells are the frame's words, so a row names no address column of its
 //! own: `a`'s cell is word 2's value, and so on. Each access carries a mask an
 //! op selector sets, because an `IMM` reads nothing and an `EQ` writes nothing.
+//!
+//! **`DIGIT` is the one op that writes two cells**: `a = d′ + 2^8·b′` with
+//! `d′ < 2^8`, so `b` is written back unchanged on every other row.
 //!
 //! **One product serves every op that multiplies.** `x` is `b` on `MUL` and
 //! `MAC` and `d′` on `INV`, so `prod = a·x` is the one degree-2 product and each
@@ -62,15 +65,17 @@ pub const B_LIVE: PolyAddress = m(3);
 pub const B_READ_TS: PolyAddress = m(4);
 /// `M[25]`: `b`'s value.
 pub const B: PolyAddress = m(5);
-/// `M[26]`: whether this row writes `d`.
-pub const D_LIVE: PolyAddress = m(6);
-/// `M[27]`: when `d` was last written.
-pub const D_READ_TS: PolyAddress = m(7);
-/// `M[28]`: `d`'s value before the row.
-pub const D: PolyAddress = m(8);
-/// `M[29]`: `d`'s value after it.
-pub const D_NEW: PolyAddress = m(9);
-pub const MEMORY_COLUMNS: usize = FRAME_M as usize + 10;
+/// `M[26]`: `b`'s value after the row: `DIGIT`'s rest, and `b` on every other.
+pub const B_NEW: PolyAddress = m(6);
+/// `M[27]`: whether this row writes `d`.
+pub const D_LIVE: PolyAddress = m(7);
+/// `M[28]`: when `d` was last written.
+pub const D_READ_TS: PolyAddress = m(8);
+/// `M[29]`: `d`'s value before the row.
+pub const D: PolyAddress = m(9);
+/// `M[30]`: `d`'s value after it.
+pub const D_NEW: PolyAddress = m(10);
+pub const MEMORY_COLUMNS: usize = FRAME_M as usize + 11;
 
 /// `W[12 + 2q + c]`: chunk `c` of access `q`'s timestamp gap — `a`, `b`, `d`.
 pub const fn gap_chunk(q: usize, c: usize) -> PolyAddress {
@@ -80,15 +85,15 @@ pub const fn gap_chunk(q: usize, c: usize) -> PolyAddress {
 pub const fn selector(i: usize) -> PolyAddress {
     w(6 + i as u32)
 }
-/// `W[26]`: the multiplicand, `b` or `d′`.
-pub const X: PolyAddress = w(14);
-/// `W[27]`: `a·x`.
-pub const PROD: PolyAddress = w(15);
-/// `W[28]`: `INV`'s zero flag.
-pub const Z: PolyAddress = w(16);
-/// `W[29]`: the `RANGE16` channel's multiplicity, last in the witness.
-pub const MULTIPLICITY: PolyAddress = w(17);
-pub const WITNESS_COLUMNS: usize = FRAME_W as usize + 18;
+/// `W[27]`: the multiplicand, `b` or `d′`.
+pub const X: PolyAddress = w(15);
+/// `W[28]`: `a·x`.
+pub const PROD: PolyAddress = w(16);
+/// `W[29]`: `INV`'s zero flag.
+pub const Z: PolyAddress = w(17);
+/// `W[30]`: the `RANGE16` channel's multiplicity, last in the witness.
+pub const MULTIPLICITY: PolyAddress = w(18);
+pub const WITNESS_COLUMNS: usize = FRAME_W as usize + 19;
 
 // A selector's index is its code less one, which the gates below read off.
 const _: () = {
@@ -125,7 +130,7 @@ fn accesses() -> [Access; 3] {
     };
     [
         access(0, "a", A_LIVE, f::A_WORD, f::DELTA_A, A_READ_TS, A, A),
-        access(1, "b", B_LIVE, f::B_WORD, f::DELTA_B, B_READ_TS, B, B),
+        access(1, "b", B_LIVE, f::B_WORD, f::DELTA_B, B_READ_TS, B, B_NEW),
         access(2, "d", D_LIVE, f::D_WORD, f::DELTA_D, D_READ_TS, D, D_NEW),
     ]
 }
@@ -138,8 +143,10 @@ pub fn artifact(trace_vars: u32) -> CircuitArtifact {
     for a in &accesses {
         lookups.extend(a.gap_lookups());
     }
+    lookups.extend(digit_lookups());
     let mut scaled = d::frame_scaled_range16(WORDS);
     scaled.extend(accesses.iter().map(Access::scaled));
+    scaled.push((D_NEW, sel(f::DIGIT)));
     let artifact = crate::memory::assemble(
         trace_vars,
         [memory_names(), witness_names(), Vec::new()],
@@ -183,13 +190,35 @@ fn gates() -> Vec<(String, GateDef)> {
         (
             "a",
             A_LIVE,
-            &[f::MUL, f::ADD, f::SUB, f::MAC, f::INV, f::EQ, f::SHL][..],
+            &[
+                f::MUL,
+                f::ADD,
+                f::SUB,
+                f::MAC,
+                f::INV,
+                f::EQ,
+                f::SHL,
+                f::DIGIT,
+            ][..],
         ),
-        ("b", B_LIVE, &[f::MUL, f::ADD, f::SUB, f::MAC, f::EQ][..]),
+        (
+            "b",
+            B_LIVE,
+            &[f::MUL, f::ADD, f::SUB, f::MAC, f::EQ, f::DIGIT][..],
+        ),
         (
             "d",
             D_LIVE,
-            &[f::MUL, f::ADD, f::SUB, f::MAC, f::INV, f::IMM, f::SHL][..],
+            &[
+                f::MUL,
+                f::ADD,
+                f::SUB,
+                f::MAC,
+                f::INV,
+                f::IMM,
+                f::SHL,
+                f::DIGIT,
+            ][..],
         ),
     ] {
         out.push((format!("{name}_live_boolean"), booleanity(mask)));
@@ -255,6 +284,27 @@ fn gates() -> Vec<(String, GateDef)> {
             vec![(lit(1), sel(f::INV), PROD), (lit(1), sel(f::INV), Z)],
         ),
     ));
+    // `DIGIT`: `a = d′ + 2^8·b′`, `d′` bounded below, and `b` kept on every
+    // other row — written back, as a read is.
+    let digit = sel(f::DIGIT);
+    out.push((
+        "digit_rule".to_string(),
+        quadratic(
+            vec![],
+            vec![
+                (lit(1), digit, A),
+                (neg(1), digit, D_NEW),
+                (Coeff::Literal(-d::pow2(f::DIGIT_BITS)), digit, B_NEW),
+            ],
+        ),
+    ));
+    out.push((
+        "b_kept".to_string(),
+        quadratic(
+            vec![(lit(1), B_NEW), (neg(1), B)],
+            vec![(neg(1), digit, B_NEW), (lit(1), digit, B)],
+        ),
+    ));
     out.push(("z_boolean".to_string(), booleanity(Z)));
     out.push((
         "z_kills_a".to_string(),
@@ -271,10 +321,36 @@ fn gates() -> Vec<(String, GateDef)> {
     out
 }
 
+/// `DIGIT`'s `d′ < 2^8`: the direct pair and its copower, under the op's
+/// selector.
+fn digit_lookups() -> Vec<crate::LookupExpr> {
+    let digit = sel(f::DIGIT);
+    vec![
+        d::range16(
+            "digit_range".to_string(),
+            digit,
+            linear(vec![(lit(1), D_NEW)]),
+        ),
+        d::range16(
+            "digit_scaled".to_string(),
+            digit,
+            linear(vec![(Coeff::Literal(d::pow2(16 - f::DIGIT_BITS)), D_NEW)]),
+        ),
+    ]
+}
+
 /// The `M` column names, in layout order.
 fn memory_names() -> Vec<String> {
     let mut out = d::memory_names(WORDS);
-    for name in ["a_live", "a_read_ts", "a", "b_live", "b_read_ts", "b"] {
+    for name in [
+        "a_live",
+        "a_read_ts",
+        "a",
+        "b_live",
+        "b_read_ts",
+        "b",
+        "b_new",
+    ] {
         out.push(name.to_string());
     }
     for name in ["d_live", "d_read_ts", "d", "d_new"] {

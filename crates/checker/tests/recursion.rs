@@ -44,7 +44,7 @@ const WINDOW_VARS: u32 = 8;
 
 /// `field-ops` traced at `2^VARS`, with the program a fill reads.
 fn setup() -> (common::Traced, Program) {
-    let t = traced_exiting_at("field-ops", 0, 14, 1 << VARS);
+    let t = traced_exiting_at("field-ops", 0, 17, 1 << VARS);
     let params = ProgramParams {
         heights: [1 << VARS; family::COUNT as usize],
         ..ProgramParams::defaults()
@@ -226,7 +226,7 @@ fn the_field_families_hold_and_the_field_memory_balances() {
 }
 
 /// The recursion format's `ADD_SUB` over `field-ops`' own rows: every relation
-/// and range obligation holds on every live row and a padding row, its 38
+/// and range obligation holds on every live row and a padding row, its 47
 /// field requests among them (`docs/spec/recursion.md` §1.4).
 #[test]
 fn the_recursion_add_sub_holds_on_the_field_requests() {
@@ -265,7 +265,7 @@ fn the_recursion_add_sub_holds_on_the_field_requests() {
         .iter()
         .map(|f| t.traces.delegation(*f).map_or(0, |d| d.len()))
         .sum();
-    assert_eq!(requests, 38);
+    assert_eq!(requests, 47);
     for row in 0..=trace.len() {
         let w = witness_row(&a, &columns, row, &ch);
         let broken = checker::violated_relations(&a, &w, &ch);
