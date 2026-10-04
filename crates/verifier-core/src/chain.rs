@@ -509,7 +509,7 @@ mod tests {
     /// that is not 0 refuses.
     #[test]
     fn the_public_windows_are_the_statements() {
-        let mut rng = Rng(0x3130_63);
+        let mut rng = Rng(0x0031_3063);
         let input: Vec<u8> = (0..43).map(|_| rng.next() as u8).collect();
         let output: Vec<u8> = (0..70).map(|_| rng.next() as u8).collect();
         let point: Vec<Fr> = (0..12).map(|_| rng.fr()).collect();
@@ -553,7 +553,7 @@ mod tests {
     /// `2^32` or an `x10` that is not the exit status refuses.
     #[test]
     fn the_boundary_is_step_10b() {
-        let mut rng = Rng(0x3130_62);
+        let mut rng = Rng(0x0031_3062);
         let finals = BoundaryFinals {
             reg_ts: core::array::from_fn(|_| rng.next() >> 26),
             pc_ts: rng.next() >> 26,
