@@ -6,7 +6,10 @@ The host SDK — the path from a guest ELF and its inputs to a `BlockProof` — 
 `prompts/00-master.md`'s projected workspace layout froze the crate's name and its
 charter, *"host SDK: prove/verify API, input building, witness recorder"*, long before
 S25 filled it in. The normative pages are `docs/spec/revm-block.md` for the witness and
-`docs/spec/public-values.md` for what a proof binds.
+`docs/spec/public-values.md` for what a proof binds. Since S-RECURSION it is also a
+recursion node's **host side** — the native run that is a node's advice, and the tree a
+base proof is aggregated by — which is input building for the recursion guest;
+`docs/spec/recursion.md` §8 is normative for it.
 
 ```rust
 // the wrappers. `prover::prove_block_streaming` and `verifier::verify_block` remain the
@@ -92,14 +95,42 @@ pub fn build_revm_guest(mode: Mode) -> Result<Vec<u8>, String>;   // always --re
 pub fn build_guest(guest: &str, bin: &str) -> Result<Vec<u8>, String>;
 }
 
-// The recursion stage: `guests/recursion`'s advice for shards `shards` of a block —
-// one encoded tape a family the slice holds (`verifier_core::tape`), then each shard's
-// slots and its tape's input blob, the blob's `cm*` read off the native deferred
-// verification. Building it verifies the slice natively and replays every tape
-// natively too, so a tape that would refuse a shard does so on the host, by name.
+// S-RECURSION: a recursion node's host side (docs/spec/recursion.md §8). `leaf` and
+// `internal` run `verifier_core::node::node` natively and return what the node's guest
+// reads and publishes; `bench recurse` and `profiler leaf` are the callers.
 pub mod recursion {
-    pub fn leaf_advice(vk: &VerifyingKey, block: &BlockProof, shards: Range<usize>)
-        -> Result<Vec<u8>, String>;
+    pub struct Run { pub advice: Vec<u8>, pub journal: Vec<Fr> }   // the journal's 47 cells
+    // The two programs' parameters, which their identities bind: every cycle-owning family
+    // at 2^20 in both; the window families and the bytecode ceiling at 2^22 for the leaf,
+    // whose image is 5.6 MB, and at 2^20 for the node, whose image is 2.8 MB.
+    pub fn leaf_params() -> ProgramParams;
+    pub fn node_params() -> ProgramParams;
+    // node_image(Kind::Leaf, &BaseKey::of(vk), &[]): the words build.rs puts in the leaf
+    // binary while guests/recursion/base.key is BaseKey::of(vk)'s bytes
+    pub fn leaf_image(vk: &VerifyingKey) -> Vec<u32>;
+    // shards `shards` of a base block, in statement order, against the base key `vk`
+    pub fn leaf(vk: &VerifyingKey, words: &[u32], block: &BlockProof, shards: Range<usize>)
+        -> Result<Run, String>;
+    pub struct Child<'a> { pub vk: &'a VerifyingKey, pub block: &'a BlockProof,
+                           pub program: u32 }   // 0 a leaf's proof, 1 an internal node's
+    // two to four whole children; `identities` the leaf program's and the node program's
+    pub fn internal(words: &[u32], children: &[Child], identities: [Fr; 2])
+        -> Result<Run, String>;
+    // the global transcript's state at statement position `at`, computed natively: three
+    // lanes and the pending input, 0 if none -- the chain claim of a node starting there
+    pub fn chain_state(vk: &VerifyingKey, public: &PublicInputs, io: Fr, at: u32)
+        -> ([Fr; 3], Fr);
+    // [leaf, node]: each ELF's config under its parameters and the setup counts that config
+    // implies -- what guests/recursion/programs.key holds
+    pub fn program_keys(leaf: &[u8], node: &[u8]) -> Result<Vec<ProgramKey>, String>;
+    // the tree, fixed before anything is proved (§8.4)
+    pub struct Tree { pub nodes: Vec<TreeNode>, pub root: usize }   // Clone, Debug, PartialEq, Eq
+    pub enum TreeNode { Leaf { from: u32, to: u32 }, Internal { children: Vec<usize> } }
+    impl Tree { pub fn plan(costs: &[u64], leaf: usize, budget: u64, fan_in: usize) -> Tree;
+                pub fn to_text(&self) -> String;   // `<id> leaf <from> <to>`, `<id> node <c>…`, `root <id>`
+                pub fn from_text(text: &str) -> Option<Tree>; }
+    // each base shard's estimated FQ_OP rows in a leaf's folds: the unit of `--budget`
+    pub fn shard_costs(block: &BlockProof) -> Vec<u64>;
 }
 ```
 
@@ -179,6 +210,80 @@ pub mod recursion {
   second, on a transport failure or a 5xx or a 429 — then a hard failure naming the last
   one. A 4xx other than 429 is not retried: the request reached a server that understood
   it and refused it, so asking four more times asks the same question.
+- **A node's advice is its native run, and the run is the guest's own procedure**
+  (S-RECURSION, `docs/spec/recursion.md` §8.1). `recursion::leaf` and `internal` run
+  `verifier_core::node::node`, the procedure `guests/recursion` runs, through `Native`,
+  this crate's `Driver`, over one `tape::Memory`. Each statement is verified natively
+  first: `derive_global_phase` and `verify_global_memory` once, then for each shard of the
+  slice `verify_shard_local` and `pcs::batch_verify_deferred`, whose first entry is the
+  `cm*` hint the shard's blob carries. Then every image body and run-time tape is replayed
+  by `tape::run` and every MSM template by `fold::simulate`, which is also where each
+  witness the guest imports is computed — a scalar's GLV split, an inversion. So a shard, a
+  chain claim, a child that does not fit beside its neighbour, a point off the curve or an
+  element read whole that was written apart refuses **here, by name, before any guest
+  runs**: the `Err` is the first failure — a native verifier's own message, or the
+  procedure's prefixed with where it happened (`statement <s>, shard <p>: op <k> of an
+  image body refuses`). The procedure changes in `verifier_core::node` and nowhere else;
+  the two drivers only answer it.
+- **The advice is `[n][header][stream]`, in the order the guest reads it.** A `u32` `n`;
+  the `Header`'s `n` words (`Header::to_words`: each statement's program, shard counts,
+  windows, `from`, `to` and its two window lengths); then the stream — 32 little-endian
+  bytes a cell, which `IMPORT` reduces, for every `advise` and for every template's
+  witnesses, a point's six split cells then two 128-bit halves an inversion, and a `u32`
+  flag a point, nonzero for infinity. `guests/recursion/src/lib.rs` reads exactly that,
+  and exits 10 when the header is not exactly `n` words or the stream runs short. **The
+  two `Driver`s are kept in step by hand**: a stream written in another order is not
+  refused here, where nothing reads it back, but misread there, so a change to one
+  driver's method is a change to the other's. `profiler leaf` is the cheapest run that
+  shows a mismatch, executing the guest over the advice and proving nothing: a check the
+  misread words fail is a failing `EQ` or `MULEQ`, which the emulator refuses as a fatal
+  error, and a stream read past its end is exit 10 in the report.
+- **The accumulator is discharged on the host, at every node.** After the procedure,
+  `run_node` reads `A` and `B` out of the journal (`journal::A`, `journal::B`, four 64-bit
+  limbs a coordinate) and checks `e(A, [1]_2) = e(B, [x]_2)` against a key's `SrsVerifier`
+  — the base key for a leaf, the first child's for an internal node. The guest makes no
+  pairing, `(A, B)` being journaled for the top to discharge once, so this check is the
+  host's alone: it is what makes a wrong fold — a weight, a side, a merged scalar, an MSM
+  template — an `Err` (`the folded accumulator does not discharge`) at the node that
+  folded it, and not a root that fails at the top.
+- **Two programs, two parameter sets, and each identity binds its own** (the owner's
+  decision, §8.1). `leaf_params()` puts every cycle-owning family at `2^20` — the leaf's
+  code is some 50 KB — and keeps the window families at their `2^22` default, raising
+  `bytecode_size_words` to `2^22` with them, because window 0 holds the image and a leaf's
+  image is the base program's tapes, 5.6 MB. `node_params()` is the leaf's with
+  `INIT_TEARDOWN`, `ZERO_WINDOWS`, `ADVICE_WINDOWS` and the bytecode ceiling at `2^20`: the
+  recursion programs' tapes are 2.8 MB, inside window 0's 4 MiB. Every other family keeps
+  `ProgramParams::defaults()`'s height. An edit to either function moves that program's
+  config, and with it its identity and its entry in `guests/recursion/programs.key`: rerun
+  `profiler program-keys`, without which `bench recurse` refuses to start.
+- **The words a caller passes must be the binary's.** The host replays the `words` it is
+  handed; the guest replays the image in its `.rodata`, which `guests/recursion/build.rs`
+  makes with the same `node_image` from `base.key` and, for the node, `programs.key`.
+  `leaf_image(vk)` is that call, so the two agree only while `base.key` is
+  `BaseKey::of(vk)`'s bytes, and an internal node's words only while `programs.key` is
+  `program_keys` of the two ELFs. `profiler leaf` compares the first file before it builds
+  the guest, and `bench recurse` both before it proves anything, each refusing with the
+  verb that rewrites the file.
+- **A refusal is an `Err`; a request no node can make is a panic.** Proof data that does
+  not verify, a shard the block does not have, a child that does not fit: `Err`. A leaf
+  over an empty slice, an internal node over fewer than two children or more than four, or
+  a child whose statement is not a node's — a nonempty public input, or a journal other
+  than 1,504 bytes: an `assert!` in `verifier_core::node::node`, the procedure having no
+  proof for such a header. So a caller that takes a slice or a fan-in from a user refuses
+  it first: `profiler leaf` an empty slice or one past the statement, `bench recurse` a
+  fan-in outside 2 to 4.
+- **The tree is planned from an estimate and fixed before anything is proved** (§8.4).
+  `Tree::plan(costs, leaf, budget, fan_in)` closes a leaf of consecutive shards before a
+  shard that would take it past `leaf` shards or its summed cost past `budget`, so a shard
+  alone over the budget is a leaf of its own. It then builds levels over `chunks(fan_in)`,
+  a group of one carried up a level as it is, the procedure refusing a node of one child.
+  Ids are creation order — the leaves in shard order, then each level's nodes — so a
+  child's id is below its parent's and the root is the last node. `shard_costs` is the
+  budget's unit: 400 `FQ_OP` rows a point (the point template is 396 calls) over a shard's
+  twelve Mercury points and its memory and witness commitments, its setup commitments
+  being merged and paid once a node. `from_text` reads `to_text`'s lines and nothing else —
+  ids in order from 0 and a root that names a node, nothing more checked — and `plan`
+  panics on no shards, `leaf == 0` or `fan_in < 2`.
 
 ## The dependencies, and why each is allowed
 Master rule 2's runtime list is exhaustive, so both additions are recorded here and in
@@ -238,6 +343,8 @@ re-records the pinned one from the cache alone to prove the recording determinis
 | `tests/revm_lock.rs` | S-STATELESS: both lockfiles hold the reference stateless guest's revm set, crate for crate |
 | `tests/prove.rs` | **`#[ignore]`d** — the mini-block gate (acceptance 4) and the advice tamper twin (acceptance 5). Since S-STREAM it proves through `host::prove(.., IN_FLIGHT)` with `IN_FLIGHT = 4`: the suite is run for its verdict and not its wall clock, and four shards proved at once was 77.10 GiB against eight at 83.91 on a 51-shard statement |
 | `tests/witness.rs` | acceptance 1 (two cache-only recordings, byte-identical, zero network calls, equal to the committed fixture), acceptance 2's native half (the witness alone reproduces the pinned journal), acceptance 3 twice (every recorded slot deleted in turn, and every recorded account, each refused), the fixture against its pin, the fork table both ways, the journal against the public window's ceiling, and a one-wei balance change moving the journal |
+| `src/recursion.rs` (unit) | S-RECURSION: `Tree::plan` — leaves closing at the shard limit and at the budget, a shard over the budget a leaf alone, internal nodes of two to four children with a group of one carried up a level, a one-shard tree whose root is its leaf — and `from_text` reading `to_text` back |
+| `tests/msm.rs` | S-RECURSION: `verifier_core::fold`'s MSM against `curve`'s, here because `verifier-core` is `no_std` and has no curve. Twelve random points, each loaded from its transcript limbs by `load_point`, through the prelude, one point template each and the finish, give `curve::msm`'s `Σ s_i·P_i`; the point at infinity is held to the sentinel and adds nothing, and a real point said to be infinity refuses; `φ(x, y) = (β·x, y)` is `λ` on the generator and on a random point; `OFFSET` is `k·G` for the templates' `k` and `CORRECTION` is `−(Σ_w 256^w)(Σ_b b(b + 1))·R`. 3 tests |
 
 **The journal does not distinguish every witness, and that is a fact about the workload
 rather than a gap.** On the pinned mini-block, one of thirty-seven recorded slots is read
@@ -245,3 +352,8 @@ by the callee and then overwritten unconditionally, so its original value reache
 observable and changing it leaves the journal identical. A balance is the cell to move in
 a test that wants a guaranteed difference: every touched account's balance and nonce are
 in the output commitment's post-state summary verbatim.
+
+**`recursion::leaf` and `internal` have no suite of their own**: each needs an archived
+base proof and the key files made from it. What runs them is `profiler leaf`, and every
+node of `bench recurse`, which holds its proved journal to the native `Run::journal`
+before it writes the proof.

@@ -372,7 +372,7 @@ sponge state), and the deferred `crates/prover/tests/field_ops.rs`, which replay
 shard of a recursion-format block and holds its outputs to `verify_shard_local` and
 `pcs::batch_verify_deferred`.
 
-## 8. Nodes and the tree (outline)
+## 8. Nodes and the tree
 
 ### 8.1 Two programs, one procedure
 
@@ -543,10 +543,10 @@ and the next step reuses them. `tape::run`'s `Memory` models each access's times
 refuses an element read whole that was not written whole, so a layout that breaks the
 rule fails natively and not in a proof.
 
-**Checked natively.** `host::recursion::leaf_advice` runs a leaf in the guest's order —
-shard tapes, folds, MSMs — over one `Memory`, which is also how it computes every
-witness. It then discharges `(A, B)` with one pairing check, which holds the fold itself,
-every weight, side and merged scalar, to the shards' checks. `crates/host/tests/msm.rs`
+**Checked natively.** `host::recursion::leaf` and `internal` run a node in the guest's
+order — shard tapes, folds, MSMs — over one `Memory`, which is also how they compute
+every witness. Each then discharges `(A, B)` with one pairing check. That check holds the
+fold itself, every weight, side and merged scalar, to the shards' checks. `crates/host/tests/msm.rs`
 holds the MSM to `curve::msm`, `φ` to `λ`, and the offsets' constants to their points.
 
 **Measured** on block 257510's first 32 base shards by the leaf's measurement guest
@@ -565,9 +565,44 @@ The two MSMs' fixed work is about 220k of the `FQ_OP` calls, and some 1,720 poin
 
 ### 8.4 The scheduler
 
-The tree's shape is fixed before proving. A node is ready when its children's proofs
-exist. The ready queue holds `(node, child proof ids)`, and a worker materializes a
-node's advice only when it claims the node. Recursion has its own `max_in_flight`.
+`bench recurse` (`tools/bench/src/recurse.rs`).
+
+**The tree is fixed before anything is proved** (`host::recursion::Tree::plan`).
+
+- **Leaves** are runs of consecutive base shards. A leaf closes before a shard that would
+  take it past `--leaf` shards (64), or its folds' estimated `FQ_OP` rows past
+  `--budget` (none). A shard alone over the budget is a leaf of its own.
+- **Internal nodes** come in levels, each over at most `--fan-in` (4) and at least two
+  children. A group of one is carried up a level as it is.
+- The plan is written to `<out>/tree.txt` before the first node starts.
+
+A node costs about one shard a family before it does any work, sixteen in all. So a
+leaf is cheapest large: another `FQ_OP` shard costs one shard, another node sixteen.
+
+**A node is a process**, `bench recurse-node <out> <id>`:
+
+- It reads the tree, the two recursion programs and its children's proofs from `<out>`.
+- It builds its advice only then: the children verified, every tape replayed natively.
+- It proves at most `--shards-in-flight` shards at once, verifies the proof, and writes
+  `<out>/<id>.block`.
+
+So a node's memory is its own process's, and nothing a node needs is queued. The ready
+queue is the tree itself. A node is ready when its children's proofs exist, and the
+scheduler starts ready nodes in tree order, at most `--in-flight` at a time. It starts
+no thread: it polls its children. A proof already in `<out>` is not proved again, so a
+stopped run resumes. A rerun must plan the same tree and build the same programs, or it
+is refused: its proofs are found by node id.
+
+**At the root**, the scheduler checks what a verifier of the tree owes beyond the root's
+own proof:
+
+- the proof verifies under its program's key;
+- the journal covers the base statement's shards, `0..count`;
+- its statement cells are the base statement's: the global digest, the four memory
+  challenges, `io_digest`, the exit status and the shard count;
+- the journal requires the two programs' identities. The scheduler holds them to the
+  programs it built; a verifier takes them from a channel the prover does not control;
+- the accumulator `(A, B)` discharges with one pairing check (§8.2).
 
 ## 9. Groth16 and the onchain verifier (outline)
 

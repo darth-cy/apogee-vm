@@ -4,7 +4,9 @@
 The prover: a program's verifying key, the statement an execution proves, the global
 commit phase, each shard's proof, the family fills, and the phase snapshots with resume.
 `docs/spec/shard-proof.md` is normative; this crate is its §2, §4, §5, §10 and §11 from the
-prover's side, over `verifier-core`'s statement code.
+prover's side, over `verifier-core`'s statement code. Since S-RECURSION it also proves the
+**recursion format** — the field families' fills and the stacked opening — for which
+`docs/spec/recursion.md` §1-§6 is normative.
 
 ```rust
 pub struct Program { pub image: ProgramImage, pub tables: DecodedTables, pub config: VmConfig }
@@ -116,6 +118,14 @@ pub fn line(text: &str);                         // the raw stderr handle, not e
   `family::PUBLIC_OUTPUT_WINDOW` (**3**) and
   `verifier_core::advice_first_window(h) + index`. `setup_commitments` is empty for all
   three, so each opening claim is `M` alone (`docs/spec/public-values.md` §4).
+  **S-RECURSION's five families were five fills and the same two arms; its format was
+  not.** `register` asks `VmConfig::circuit`, which is `constraints::recursion_circuit` for
+  a config holding `FIELD_WINDOWS` and `family_circuit` otherwise — `VerifyingKey::check`
+  picks the same way — so the config says which format a program is in, and no wire form
+  adds a word for it (`docs/spec/recursion.md` §1.1). `shard_counts` gives `FIELD_WINDOWS`
+  `MemoryState::field_windows(h)`, the consecutive windows from cell 0 through the highest
+  cell the execution touched, and `window_of` gives its shard `index` as its window. What
+  did reach the phase code is the stacked commitments, below.
 - **`prove_block_streaming` is the same block from a different order of work** (S26,
   `docs/spec/streaming.md`). Pass 1 executes and commits each shard's `M` columns as the
   shard fills, then runs G1–G11 over the ordered list; pass 2 re-executes and proves each
@@ -164,6 +174,25 @@ pub fn line(text: &str);                         // the raw stderr handle, not e
 - **A shard's proof is two crate-private halves**, `gkr_part` (through the GKR proof, to
   a `ShardGkr` — the post-GKR snapshot's entry) and `opening_part` (the batched opening),
   which `prove_shard_columns` runs back to back and `advance` runs a phase apart.
+- **The recursion format commits stacks, and the base format is its `σ = 0`**
+  (S-RECURSION, `docs/spec/recursion.md` §1.3). `sigma_of` is `VmConfig::stack_vars` over
+  the family's artifact: 0 in the base format, and otherwise the smallest even `σ` with
+  `2^σ` slots for the wider of `M` and `W` — `W` counting the multiplicities — capped at
+  `STACK_LOG − n`, so a stack is at most `2^24` evaluations, the ceremony the repository
+  holds. `commit_phase` commits a phase one column a commitment at `σ = 0`, byte for byte
+  the base format's, and otherwise as `⌈k/2^σ⌉` stacks through `pcs::commit_stack` — one
+  MSM a column over the powers its slot starts at, summed, so no stack is materialized.
+  The global commit phase stacks each shard's `M` under its family's `σ`, as pass 1's
+  `commit_source` does, and `gkr_part` its `W`. `opening_part` then draws `σ` challenges `r`
+  under `STACK_CHALLENGE` after the GKR pass (`verifier_core::stack_challenges`), opens the
+  `M` stacks, the `W` stacks and each setup column as a stack of one at `u ‖ r` in one
+  `pcs::batch_open_stacked`, and asserts the opened values are
+  `verifier_core::stack_values` of the base claims; at `σ = 0` no challenge is drawn and
+  the batch is `batch_open`'s. **Every recursion-format program reaches the cap**: its
+  `ADD_SUB`'s 27 `M` and 39 `W` columns stack to `2^24` evaluations at `2^20` and at `2^22`
+  alike, as all four field families do at their default heights
+  (`crates/constraints/tests/vectors/recursion.txt` has the widths), so its SRS is the
+  `2^24` ceremony's — `tests/field_ops.rs` proves over a `2^24` toy one.
 - **`prove_shard` is shard-local**: the witness commitments, the shard transcript, the
   lookup challenges, the forward pass, the GKR proof and the one batched opening. The
   global phase is `global_commit_phase`, shard-count generic, whose state a
@@ -183,9 +212,14 @@ pub fn line(text: &str);                         // the raw stderr handle, not e
   set from `EXIT` alone and S23 again: `fill::add_sub`'s system arm keys on
   `program::delegation_family(a7)` and sets that type's selector from its position in
   `program::DELEGATIONS`, so a delegation request fills one `is_deleg_*` column,
-  `rd_selected = 0` and the fall-through, and any
-  other number is still refused by name. The add/sub fill panics if the trace and the decoded table disagree, which the
-  emulator cannot cause.
+  `rd_selected = constants::delegation::a0_after(index, a0)` — 0 for a base type, and since
+  S-RECURSION the frame base past the frame for a field family — and the fall-through, and
+  any other number is still refused by name. **The selector count is the format's**: the
+  six of `BASE_TYPES` in the base format and every row of `TYPES` in the recursion one, so
+  `wrap`, `rd_hi`, `pc_wrap` and `next_pc_hi`, which follow the selectors, sit at addresses
+  `constraints::add_sub` derives from the count; a field family's request in a base-format
+  statement, whose circuit has no selector for it, is refused by name. The add/sub fill
+  panics if the trace and the decoded table disagree, which the emulator cannot cause.
 - **Multiplicities come from `trace::build_multiplicities` and nowhere else.** A fill
   returns every column but them, and `shard_columns` counts them over the family's
   channels.
@@ -279,6 +313,28 @@ pub fn line(text: &str);                         // the raw stderr handle, not e
   subtraction is not always one. Padding rows are zero
   in every column, which the padding contract's second clause needs
   (`docs/spec/delegation.md` §6.1).
+- **The recursion format's fills read the field accesses the tracer recorded**
+  (S-RECURSION, `docs/spec/recursion.md` §2-§6). `fill::field_window` is a window fill
+  over the final `MemoryState`: row `y` is cell `h·w + y`'s last write, its timestamp in
+  `M[0]` and its value in `M[1]`, and `(0, 0)` for a cell nothing touched. The four
+  delegation fills share two helpers — `recursion_frame`, which is
+  `delegation_frame_range16` over the read-only frame with its gap chunks at `W[2j + c]`
+  and the pointer's four halfword columns after them, and `access_columns`, which writes
+  each access's read timestamp, value read, value written where it writes, mask where it
+  carries one and its gap's two chunks off `FrameSlice::access`, all 0 on a row that makes
+  no such access — and each adds its own: `fill::fr_op` the nine op selectors, `x` (`b` on
+  `MUL` and `MAC`, `d′` on `INV`), `prod = a·x` and `z`, set on an `INV` of 0;
+  `fill::p2_field` the first two lanes and every intermediate of
+  `constraints::p2_field::permutation_witness`, zero on a padding row; `fill::field_io` the
+  two op selectors and each exported word's high halfword; and `fill::fq_op` the thirteen
+  cells' values and `d`'s four new ones, seven read timestamps and their gaps' high
+  `TIMESTAMP` chunks — the digit
+  cell's, `a`'s four, and one each for `b` and `d` — an address each for the digit cell and
+  the three elements, the five op selectors, the three indirection flags, and
+  `constraints::fq_op::witness`'s `y`, `d′`, `K` and carry chunks. **`fill::fq_op` is where
+  §6's element rule is held on the honest side**: it asserts that `b`'s and `d`'s four
+  cells share one read timestamp, which the emulator does not check, and panics on a `d′`
+  limb, or an operand limb of any op but `FROM128`, not below `2^64`.
 - **Six `Fr`-backed columns exist across the S18 fills**, and no more: `shift_in` and
   `shift_prod`, whose values are signed on a right shift and reach `2^63` on a left one;
   `mx` and `my`, which are signed; and `r_inv` and `d_inv`, which are field inverses. Every
@@ -423,7 +479,7 @@ pub fn line(text: &str);                         // the raw stderr handle, not e
 ## Tests
 | File | Covers |
 | --- | --- |
-| `tests/common/mod.rs` | the S16 statement: `guests/addsub`'s committed ELF decoded with its family at `2^20`, the two public value families at their pinned `PUBLIC_WINDOW_HEIGHT` (`2^12` since S-STREAM) and everything else at `2^16`, traced into an archive, over a toy SRS whose `tau` is written down and whose archive is cached under `target/tmp` (`CARGO_TARGET_TMPDIR`), shared by the suites that include this module — `tests/acceptance.rs`, `tests/control.rs`, `tests/public_io.rs`, `crates/verifier/tests/cli.rs` and `crates/checker/tests/tamper.rs`; S17's, `guests/control`'s, with both of its execution families at `2^20` (`control_setup`, `control_archive`, `CONTROL_RESULT = 16`); S-IO's, `guests/public-io`'s (`public_io_setup`, `public_io_archive(program, advice)`, and `public_io_input` / `public_io_journal`, which are what the guest's own source says its input and its journal are for a given advice); `toy_tau` |
+| `tests/common/mod.rs` | the S16 statement: `guests/addsub`'s committed ELF decoded with its family at `2^20`, the two public value families at their pinned `PUBLIC_WINDOW_HEIGHT` (`2^12` since S-STREAM) and everything else at `2^16`, traced into an archive, over a toy SRS whose `tau` is written down and whose archive is cached under `target/tmp` (`CARGO_TARGET_TMPDIR`), shared by the suites that include this module — `tests/acceptance.rs`, `tests/control.rs`, `tests/public_io.rs`, `crates/verifier/tests/cli.rs` and `crates/checker/tests/tamper.rs`; S17's, `guests/control`'s, with both of its execution families at `2^20` (`control_setup`, `control_archive`, `CONTROL_RESULT = 16`); S-IO's, `guests/public-io`'s (`public_io_setup`, `public_io_archive(program, advice)`, and `public_io_input` / `public_io_journal`, which are what the guest's own source says its input and its journal are for a given advice); S-RECURSION's, `guests/field-ops`' (`field_ops_params`, `field_ops_program`), the one committed guest in the recursion format; `toy_tau` |
 | `tests/one_feature.rs` | master anti-goal 1, enforced: every `Cargo.toml` in the repository read, and any `[features]` table but this crate's — or any key in this crate's but `EXPECTED`'s one, `debug-info` — fails the test, naming the rule. A `features = [...]` key inside a dependency entry is an upstream crate's feature and always was allowed. Plus: the exception is written down in the root `CLAUDE.md`, `prompts/00-master.md`, its own spec and this file. `guests/vendor` is exempt, and the second test holds every directory there to being a crate `guests/Cargo.toml` really patches in |
 | `tests/key.rs` | S17, in ordinary CI, no proof: `ProverSetup::new` over `control` and the toy SRS gives a key whose `generic_table` is `generic_commitments` over that SRS, whose SRS digest is over its `SrsVerifier` and them, and which loads; each of the three commitments is `[Σ_i c_i·τ^i]_1` of its column, computed by Horner's rule from the toy `τ`, the three distinct, and the same over `2^18` powers as over `2^20` |
 | `tests/control.rs` | **`#[ignore]`d; run with `--include-ignored --test-threads=1`** (18.0 GB peak since S20 proves its two `2^20` shards at once; 10.1 GB at S17). S17 acceptance 1: `control`'s seven-family config since S-IO, its self-checking trace, five shards — `INIT_TEARDOWN`, `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT` and S-IO's `PUBLIC_INPUT` and `PUBLIC_OUTPUT` — each verifying, with round and claim counts and byte lengths from the circuit, the jump family's pinned at 61,612 bytes; the generic table's binding — the key's `generic_table` equal to `generic_commitments` over this SRS, its SRS digest the digest over the `SrsVerifier` and them, and the jump family's opening claim `M ++ W ++ S`, 21 + 44 + 10 commitments ending with the table's three, while add/sub's is 36 + 31 + 7 and ends with identity's; and `a_key_with_another_generic_table_is_another_statement`: a key whose table's value and result commitments are swapped does not load under the honest SRS digest, loads under its own recomputed one, which differs, and refuses every honest shard as `Statement("the proof was made for another statement")` |
@@ -431,6 +487,7 @@ pub fn line(text: &str);                         // the raw stderr handle, not e
 | `tests/keccak.rs` | **`#[ignore]`d; run with `cargo test --release -p prover --test keccak -- --include-ignored --test-threads=1`** (38.9 GB peak and 124 s **as measured at S21**, and neither is an upper bound any more: the keccak shard's own forward pass went from 2.9 GB to **~60 GB**, the height being 1,024 times larger, which makes `KECCAK_F` the peak-setting delegation family of a block and `EC_ADD`'s 20.5 GB the second — while the shard count and every execution shard are unchanged). S21's acceptances 4 and 8: `guests/keccak-test`'s eleven-shard block — six `2^20` execution shards, two `2^16` window shards, S-IO's two `2^12` public-value shards and one `2^18` delegation shard — proves and verifies, every shard also verifies on the S16 path, the delegation shard precedes S-IO's two in statement order, its ts window is its invocations' and is contained in the add/sub family's (which is why §4's disjointness is scoped to cycle-owning families), the cycle profile's total excludes the **240** invocations — ten permutations of 24 rounds since S26d — the shard's proof is its circuit's **381,100** bytes (derived from the artifact, not measured, this suite not having been run since the raise) against S21's 11,880,012, and the statement reads back through the serialized block alone; and `guests/keccak-unused`, which declares the family and never calls it, proving **zero** keccak shards with the family still in the config, the descriptor and the transcript's group list |
 | `tests/public_io.rs` | **`#[ignore]`d; run with `cargo test --release -p prover --test public_io -- --include-ignored --test-threads=1`.** S-IO's end-to-end half over `guests/public-io`, which reads a commitment out of the **public input**, checks 64 bytes of **advice** against it, and publishes its result in the **journal** — issuing no ecall but `EXIT`, which is what makes it provable. 1, the whole architecture: the statement's `input` is what the host put in the window, its `output` is what the guest's stores left behind, the block verifies, and the three families' shard counts are the rule — one each for the two public windows and one advice window for the region the advice spans. 2, a changed `input` or `output`, and a journal with one trailing zero byte, each refused as `Statement`, because `io_digest` moves at G7 before any challenge exists — the length word is what separates a payload from its zero extension. 3, **step 10c isolated**: the global phase derived from the honest statement and handed to `verify_shard_local` beside a statement whose public values differ, so step 5 passes and the public value check is the only thing left to refuse it — without it, deleting 10c would leave every other test green. 4, the advice is unbound and the *guest* stands in for the binding: a different advice is a different execution that proves perfectly well and publishes a different journal, and swapping it under a fixed public input makes the guest refuse the run. 5, `guests/addsub` publishes nothing and still pays exactly two shards and no advice window, with a claimed journal it never wrote refused as `MemoryArgument`. 5 tests. The proof-free half is `crates/checker/tests/public_values.rs`, in ordinary CI |
 | `tests/revm.rs` | **`#[ignore]`d; run with `cargo test --release -p prover --test revm -- --include-ignored --test-threads=1`, and it BUILDS the guest at `--release` (~25 s).** S24's acceptances 6, 7 and 8, and **since S-IO over `guests/revm-block`'s OWN binary**: its `BlockWitness` arrives as **advice** and its output commitment leaves in the **journal**, both ordinary loads and stores, and it issues no ecall but `EXIT`. S24 could prove neither, so it proved a second binary with the witness baked into `.rodata` — which identity commits, making a per-block witness a per-block identity — and published `keccak256` of the commitment in `x24..x31`; **both stopgaps are gone**, and so is `src/stdio.rs`, the fd 0 / fd 1 compatibility binary that was never provable and now has no descriptors to read. What binds the witness is no longer identity but the guest: `BlockWitness::decode`'s canonicity rules and, since S25, `WitnessDb`'s refusal to default on an account, a slot or an ancestor hash it was not given, so a witness describing a different block publishes a different journal or does not run at all. Naming the state roots is the **stateless** mode's journal (`docs/spec/revm-block.md` §5), which is a different binary. Seven `2^20` execution shards (the first statement in which *every* cycle-owning family runs), two `2^20` window shards — `2^20` and not `2^16` because the image ends at `0x1c48d4` — one `2^18` `KECCAK_F` shard, and S-IO's three: one `PUBLIC_INPUT`, one `PUBLIC_OUTPUT` and one `ADVICE_WINDOWS` shard for the 716-byte witness. It carries its own statement, not `tests/common`'s, because its program is built rather than read and `crates/checker` includes that module too. Checked: the block proves and verifies, every shard also verifies on the S16 path, the structural counts are statement order with one window-0 shard and one shard per touched window, the statement's **journal is native revm's output commitment byte for byte** — not a digest of it — and its `input` is empty, this guest's whole input being advice. Acceptance 7: a journal with one byte appended, another program's identity and a changed boundary register value, each refused, and the first carried past `verify_block`'s first two structural checks so that what refuses it is G7's absorption and not a struct comparison |
+| `tests/field_ops.rs` | **`#[ignore]`d; run with `cargo test --release -p prover --test field_ops -- --include-ignored --test-threads=1`.** S-RECURSION's one recursion-format statement, `guests/field-ops`, streamed over a `2^24` toy SRS (`toy_srs(verifier_core::STACK_LOG)`) and accepted by `verify_block`: every shard's witness commitments are `stack_count(k_W, σ)` stacks, add/sub's fewer than its columns; `FR_OP`, `P2_FIELD`, `FIELD_IO` and `FIELD_WINDOWS` each prove one shard; and every shard's tape — `verifier_core::tape::shard_tape` for its family and height, its slots filled from the statement and the key, its blob laid out from the proof — replays under `tape::run` with no assertion failing and leaves what the native side reads: the proof's `ts_window`, `pcs::batch_verify_deferred`'s twelve Mercury scalars after `verify_shard_local`'s claim, and batch weights whose MSM over the commitments is that call's `cm*`. What only a whole proof reaches: the recursion `ADD_SUB` holding the field ecalls, the field window's derived slot on both sides, the anchors and `FIELD_IO`'s RAM data words in the global multiset, and the stacked opening agreeing between the prover and `verify_block`. The row-level half is `crates/checker/tests/recursion.rs`, in CI |
 | `tests/streaming.rs` | **`#[ignore]`d; run with `cargo test --release -p prover --test streaming -- --include-ignored --test-threads=1`.** Since S-STREAM: **`max_in_flight` is a resource setting and reaches no challenge** — the same block at one shard in flight and at eight, over S16's `addsub` and `keccak-test`, each also verifying through `verify_block`, with the report's shard count, cycle count and peak-in-flight bound checked. The delegation statement is here and the `Window` arm is not, deliberately: pass 2's workers finish shards in whatever order the schedule picks while the statement is in ascending-`FamilyId` order, so a block whose two orders disagree is the case worth varying the bound over, and a window family's shard is built after the pipeline whatever the bound. S26's acceptance 5 — the streamed block is `prove_block`'s byte for byte — **is deleted**, because it ran the archived path; the file's header records what that cost. What runs in ordinary CI instead is `crates/emulator/tests/streaming.rs`, `crates/checker/tests/memory.rs`' two-reading comparison and `tests/one_proving_path.rs` |
 | `tests/one_pipeline.rs` | **Master anti-goal 7's one exception, enforced** (S-PIPELINE). Every `.rs` file under `crates/*/src` and `tools/*/src` read, and any thread spawn or scope, lock, condition, channel, atomic, `OnceLock` or `async fn` outside `src/streaming.rs` fails the test, naming the file and line. Tests and guests are not swept: `tests/common`'s `SEQ` counter is a test's, and `guests/atomics`' atomics are the A extension it proves. The second test holds `src/streaming.rs` to **one** `std::thread::scope(` and **one** `Mutex::new(` and nothing else from the list; the third, to the exception being written down in `prompts/00-master.md`, both `CLAUDE.md`s and `docs/spec/streaming.md` |
 | `src/streaming.rs` (unit) | The pipeline over a real execution and no proof — `guests/shards` at `2^16`, seventeen add/sub shards filled in mid-run and every other family's at exit, with a stand-in for the work: every filled shard worked exactly once at 1, 3 and 8 workers and never more than the worker count at once, read off the pipeline's count **and** off the intervals the work recorded; the executor stepped only for a claim with nothing waiting, claims in fill order, two claims held at once counted as two; the earliest failure in fill order returned at 1 and 4 workers; and a panic in one shard's work reaching the caller as its own payload. 0.7 s |

@@ -62,7 +62,8 @@ crates/
                  profile and shard plan, the TraceArchive snapshot, and the memory
                  argument's column builders -- over rows and tables, never the log; std
   emulator/      the RV32IMAC reference emulator, its tracing path, the pull-based
-                 streaming tracer; std
+                 streaming tracer, and since S-RECURSION the field memory and the four
+                 coprocessors that work on it; std
   constraints/   circuits as data: PolyAddress, GateDef, LayerSpec, CircuitArtifact, the
                  laws, the cache-free compilation and the wire form; `memory`: the per-family frames,
                  the two window artifacts and check_memory; and `lookup`: the LogUp
@@ -79,7 +80,13 @@ crates/
                  second being the first delegation family to carry a lookup
                  channel; `gadgets`: the is-zero and
                  comparison gadgets;
-                 `family_circuit`: the registry, now every family; no_std
+                 `family_circuit`: the registry, now every family; and S-RECURSION's
+                 second registry, `recursion_circuit`: the base one byte for byte but
+                 for `ADD_SUB`, whose recursion form knows four more delegation types
+                 and advances `a0`, beside `memory`'s `FIELD_WINDOWS` and the four
+                 coprocessor families over the field memory -- `fr_op`, `p2_field`,
+                 `field_io` and `fq_op`, the last one BN254 base-field operation a row;
+                 no_std
   gkr-verify/    the GKR verifier half: the gate kernel, the layer sumcheck verifier and
                  verify, and every type verify touches; the memory argument's window
                  constant, boundary factors and reconciliation; no_std, linked by the
@@ -89,30 +96,41 @@ crates/
   verifier-core/ the statement and its wire forms, the global and shard transcripts, the
                  verifying key and its load rules, reduce_shard and its two halves —
                  every check of a shard but its Mercury opening — and the block: BlockProof,
-                 BlockReconciliation and the ts-window rule; no_std, linked by the recursion guest
+                 BlockReconciliation and the ts-window rule; and the recursion half: the
+                 stacked opening, `tape` (a shard's checks as coprocessor calls over field
+                 cells), `chain` (the global transcript as a chain across the tree), `fold`
+                 (the commitments' MSM as static templates) and `node` (the one procedure a
+                 recursion node runs, over a host or a guest driver); no_std, linked by the
+                 recursion guest
   verifier/      verify_shard and verify_block, the two verification paths, and the
                  `verifier` CLI; std
   host/          the host SDK: setup/prove/verify around S20's entry points, the
                  WitnessRecorder that records a real mainnet block, the minimal JSON-RPC
                  client and its content-addressed cache, what a recorded block is on
-                 disk, JSON-RPC objects back to the bytes the chain hashes, and the one
-                 reader of a tests-zkevm release; std
+                 disk, JSON-RPC objects back to the bytes the chain hashes, the one
+                 reader of a tests-zkevm release, and `recursion`: a node's advice, built
+                 only after its children verify and its tapes replay natively, and the
+                 tree's plan; std
   prover/        the verifying key's construction, family registration and fills, the
                  global commit phase, prove_shard, and `streaming`, the two-pass prover
                  whose peak does not grow with the shard count -- THE ONE PROVING PATH.
                  prove_block, the phase snapshots and resume are still here and nothing
-                 proves through them; std
+                 proves through them; the recursion format's fills and stacked opening; std
   checker/       the standalone law validators and lookup rules, the padding, padding-identity
                  and witness-row checks, the native lookup evaluator, the memory_roots hook,
                  the artifact cross-check, the circuit dump, the transcript-tape validator,
                  the `checker` CLI, and TamperHarness, the tamper-twin prover; std
   guest-sdk/     crt0, entry!, linker script, bump allocator, the three I/O regions
-                 and the delegation shims; no_std,
+                 and the delegation shims, and `recursion`: the four field families'
+                 calls, a tape's replay and the field imports; no_std,
                  guest-only, and NOT a workspace member
 guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, opcodes/, heap/,
                  addsub/, control/, alu/, mem/, shards/, keccak-test/, keccak-unused/,
                  recursion-ops/, recursion-unused/, revm-block/, public-io/, mod-mul-ops/,
-                 sha256-ops/, ec-ops/, recursion/ (the recursion guest's leaf; no committed ELF)
+                 sha256-ops/, ec-ops/, field-ops/ (the one committed guest in the
+                 recursion format), recursion/ (two bins, `leaf` and `node`, whose
+                 images `build.rs` writes from its committed base.key and programs.key;
+                 no committed ELF)
                  -- their own workspace; see guests/Cargo.toml and docs/guest-program-manual.md
   vendor/        upstream crates vendored so a GUEST can patch them, through
                  guests/Cargo.toml's [patch.crates-io]; see guests/vendor/README.md.
@@ -125,7 +143,8 @@ guests/          fib/, echo/, rvc-dense/, amm/, orderbook/, vault/, atomics/, op
 assets/          gitignored: the PSE powers-of-tau ceremony files; see the S07 handoff
 tools/
   profiler/      the cycle profiler: where a guest's RV32 cycles go, by function and by
-                 semantic workload. Nothing proving-related
+                 semantic workload. Nothing proving-related. It also writes the recursion
+                 guest's two key files (`base-key`, `program-keys`)
   kat-gen/       regenerates the committed Fr, multilinear, curve, MSM, SRS and G1-absorption
                  vectors from arkworks, the Mercury proof fixture from `pcs` itself, the ISA
                  corpus via llvm-objdump, the identity pin from `program` itself, S13's
@@ -139,7 +158,9 @@ tools/
                  transcript tape, and S24's synthetic block -- the witness, what native
                  revm makes of it, and the keccak-f frames the guest delegates -- and,
                  opt-in, a tests-zkevm release's stateless subset (`zkevm`)
-  bench/         one routine per measurement, individually selectable
+  bench/         one routine per measurement, individually selectable; the `prove` verb,
+                 and S-RECURSION's `recurse`, which plans a block proof's recursion tree
+                 and proves it node by node in worker processes
   artifact-dump/ a guest ELF out as the frozen ProgramImage artifact, plus a
                  readable report of it; `tables` prints the decoded tables and identity
   transcript-ref/ the transcript oracle: Plonky3 + zkhash, NOT a workspace member
@@ -241,6 +262,7 @@ cargo test --release -p prover --test recursion -- --include-ignored --test-thre
 cargo test --release -p prover --test public_io -- --include-ignored --test-threads=1  # DEFERRED; S-IO's statement: public input in, advice checked against it, journal out
 cargo test --release -p host --test prove -- --include-ignored --test-threads=1  # DEFERRED; S25's MINI-BLOCK GATE: a real mainnet block's first two transactions proved and verified, and the advice tamper twin
 RAYON_NUM_THREADS=6 cargo test --release -p prover --test revm -- --include-ignored --test-threads=1  # DEFERRED; the revm block, thirteen shards since S-IO, and it builds the guest; 38.4 GB peak and 536 s at S24, 523 s here at RAYON_NUM_THREADS=6 over S-IO's thirteen shards; ELEVEN 2^20 shards, so the thread bound is not optional on a 48 GB machine -- and since S26d one of the thirteen is a 2^18 KECCAK_F shard whose forward pass alone is ~60 GB, so the 38.4 GB peak is the pre-S26d figure, owes re-measurement, and may no longer fit a 48 GB machine at any thread count
+cargo test --release -p prover --test field_ops -- --include-ignored --test-threads=1  # DEFERRED; S-RECURSION's one recursion-format statement, `guests/field-ops`, proved over a 2^24 toy SRS with stacked commitments, and the tape verifier held to the native one over every shard; 13 shards, 163 s and a 29.6 GB peak on the 48 GB Mac when it first passed, before FQ_OP and the field families' height raises, so it owes re-measurement
 cargo build -p field -p constants -p transcript -p poly -p sumcheck -p constraints -p gkr-verify -p pcs-verify -p verifier-core --target riscv32imac-unknown-none-elf
 cargo run -p kat-gen
 cargo run --manifest-path tools/transcript-ref/Cargo.toml
@@ -332,6 +354,21 @@ cargo run --release -p profiler -- leaf <dir>/<stem> --shards <from>..<to> [--sh
                                             # proof `bench prove --out` archived; one report a
                                             # slice. Statement order is INIT_TEARDOWN, then
                                             # ZERO_WINDOWS, then families ascending
+cargo run --release -p profiler -- base-key <dir>/<stem>
+                                            # writes guests/recursion/base.key from an archived
+                                            # block's key: the base program a leaf verifies
+cargo run --release -p profiler -- program-keys
+                                            # writes guests/recursion/programs.key, the leaf's
+                                            # and the node's configs, from their ELFs; it says
+                                            # whether the file changed, and a change means
+                                            # build again and rerun until it does not
+cargo run --release -p bench -- recurse <dir>/<stem> --out <dir> [--leaf 64] [--fan-in 4]
+    [--in-flight 1] [--shards-in-flight 1] [--budget <rows>] [--limit <shards>]
+                                            # S-RECURSION: plan an archived block proof's
+                                            # recursion tree, prove it node by node, each node
+                                            # its own `recurse-node` process, and check the
+                                            # root. A proof already in <out> is kept, so a
+                                            # stopped run resumes. Needs the 2^24 ceremony
 cargo run --release -p bench -- --list      # the routines, and what each measures
 cargo run --release -p bench -- <routine>   # just that one; setup is per-routine
 

@@ -36,6 +36,8 @@ pub fn verify(artifact: &CircuitArtifact, proof: &GkrProof, outputs: &OutputClai
 // src/memory.rs, docs/spec/memory.md §3.3 and §4
 pub struct BoundaryFinals { pub reg_ts: [u64; 32], pub pc_ts: u64, pub reg_values: [u32; 31] }
 pub fn window_challenges(memory: &ExternalChallenges, window: u32, trace_vars: u32) -> ExternalChallenges;
+pub fn field_window_challenges(memory: &ExternalChallenges, window: u32, trace_vars: u32)
+    -> ExternalChallenges;                         // S-RECURSION: FIELD_WINDOWS, docs/spec/recursion.md §2.2
 pub fn boundary_factors(memory: &ExternalChallenges, entry_pc: u32, finals: &BoundaryFinals) -> (Fr, Fr);  // (W_b, R_b)
 pub fn reconciles(read_roots: &[Fr], write_roots: &[Fr], factors: (Fr, Fr)) -> bool;
 
@@ -104,8 +106,28 @@ pub fn channel_holds(root: (Fr, Fr)) -> bool;    // num == 0 AND den != 0, and n
   `MEMORY_BOUNDARY` order. `reconciles` is
   `Π read · R_b = Π write · W_b ≠ 0`. Nothing here decodes the finals or draws the
   challenges: S16's global transcript does.
+- **`field_window_challenges` is `window_challenges` over the field memory** (S-RECURSION,
+  `docs/spec/recursion.md` §2.2): slot 5 is `γ_M + FIELD + α_addr·2^trace_vars·window`, one cell
+  a row where a RAM window's row is four bytes. Both are one private
+  `strided_window_challenges(space, stride)`, `(RAM, 4)` and `(FIELD, 1)`. A field window's
+  artifact names no address space — `constraints::memory::field_window_artifact` is
+  `ZERO_WINDOWS`' circuit at a stride of one — so **this constant is the only place a field
+  window's address space appears**, and its stride must be the artifact's.
+  `verifier_core::shard_challenges` takes it for `FIELD_WINDOWS`, whose window is the shard's
+  index, and `window_challenges` for every other window family.
 - **`#![no_std]` + `alloc`, forever.** CI builds it for `riscv32imac-unknown-none-elf`.
 
 ## Tests
 Exercised end to end through `crates/gkr/tests`, which is where proofs exist; the memory
 functions in `crates/gkr/tests/memory.rs`.
+
+Since S-RECURSION those suites also hold the recursion verifier's reading of `verify` to
+`verify` itself: `crates/gkr/tests/common/mod.rs`' `tape_verify` replays the same binding over
+cells through `verifier_core::tape::gkr_verify` and `tape::run`, and `assert_tape_agrees`
+requires the same claims at the same point, or a refusal from both, over every proof
+`tests/lookup.rs`' and `tests/memory.rs`' `prove_and_verify` makes — `memory.rs`' `x0` write
+of 5 among them, refused by both. `field_window_challenges` has no test here, and **no suite
+reads it above window 0**, where `α_addr·2^n·w` is 0: `crates/checker/tests/recursion.rs`
+balances the field memory over one window, and the deferred `crates/prover/tests/field_ops.rs`
+proves a statement with one field window, so a wrong stride in its slot-5 term would pass
+both.

@@ -85,13 +85,15 @@ pub mod memory {                                   // docs/spec/memory.md §2, �
     pub fn image_window_artifact(trace_vars: u32) -> CircuitArtifact;  // INIT_TEARDOWN
     pub fn zero_window_artifact(trace_vars: u32) -> CircuitArtifact;   // ZERO_WINDOWS, and PUBLIC_OUTPUT
     pub fn value_window_artifact(trace_vars: u32) -> CircuitArtifact;  // PUBLIC_INPUT, ADVICE_WINDOWS; S-IO
+    pub fn field_window_artifact(trace_vars: u32) -> CircuitArtifact;  // FIELD_WINDOWS, a cell a row; S-RECURSION
     pub fn check_memory(a: &CircuitArtifact) -> Result<(), String>;
 }
 
 pub struct FamilyCircuit { pub family: u32, pub artifact: CircuitArtifact,
                            pub channels: Vec<lookup::ChannelSpec> }
 impl FamilyCircuit { pub fn reads_generic_table(&self) -> bool; }   // S17: a GENERIC channel spec
-pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit>;   // the registry
+pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit>;      // the base format's registry
+pub fn recursion_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit>;   // S-RECURSION: the recursion format's
 
 pub mod gadgets {                                  // docs/spec/jump-branch-slt.md §3; S17
     pub fn is_zero(x: &[(Coeff, PolyAddress)], inv: PolyAddress, z: PolyAddress,
@@ -201,16 +203,21 @@ pub mod atomics {                                  // docs/spec/memory-ops.md §
     pub fn channels() -> Vec<lookup::ChannelSpec>;
 }
 
-pub mod add_sub {                                  // docs/spec/shard-proof.md §8
+pub mod add_sub {                         // docs/spec/shard-proof.md §8; recursion.md §1.4
     pub const DECODED: [PolyAddress; 6];           // W[8..14]: next_pc rs1 rs2 rd imm mask
     pub const KINDS: [PolyAddress; 6];             // W[14..20]: system addi auipc add sub lui
     pub const IS_ECALL: PolyAddress;  IS_FENCE;                                // W[20..22]
-    pub const IS_DELEGATION: [PolyAddress; 4];     // W[22..26]; IS_KECCAK is IS_DELEGATION[0]
-    pub const WRAP: PolyAddress;  RD_HI;  PC_WRAP;  NEXT_PC_HI;                // W[26..30]
-    pub const MULTIPLICITIES: [PolyAddress; 3];    // W[30..33]: timestamp, range16, decoder
+    pub const fn is_delegation(i: usize) -> PolyAddress;   // W[22 + i]: delegation::TYPES[i]'s selector
+    pub const fn wrap(types: usize);  rd_hi(types);  pc_wrap(types);  next_pc_hi(types);   // W[22+t..26+t]
+    pub const fn multiplicities(types: usize) -> [PolyAddress; 3];   // W[26+t..29+t]: timestamp, range16, decoder
+    pub const IS_DELEGATION: [PolyAddress; BASE_TYPES];  // W[22..28]; IS_KECCAK is IS_DELEGATION[0]
+    pub const WRAP: PolyAddress;  RD_HI;  PC_WRAP;  NEXT_PC_HI;      // W[28..32], the base format's t = 6
+    pub const MULTIPLICITIES: [PolyAddress; 3];    // W[32..35]
     pub const TABLE_WIDTH: usize = 7;              // S[0..7], program::lookup_tuple order
-    pub fn artifact(trace_vars: u32) -> CircuitArtifact;
+    pub fn artifact(trace_vars: u32) -> CircuitArtifact;             // knows TYPES[..BASE_TYPES]
     pub fn channels() -> Vec<lookup::ChannelSpec>;
+    pub fn recursion_artifact(trace_vars: u32) -> CircuitArtifact;   // S-RECURSION: knows all of TYPES
+    pub fn recursion_channels() -> Vec<lookup::ChannelSpec>;
 }
 
 pub mod keccak {              // docs/spec/delegation.md §6; S21, re-shaped at S26d
@@ -295,6 +302,63 @@ pub mod sha256 {             // docs/spec/delegation.md §15; S26c, re-shaped at
     pub fn channels() -> Vec<lookup::ChannelSpec>;           // RANGE16, then XOR8
     pub fn check_shape(a: &CircuitArtifact);
 }
+
+// S-RECURSION's four field families, docs/spec/recursion.md §3-§6: in recursion_circuit only.
+// Each opens with delegation's head and frame words, M[0..4 + 4·words], and its read-only
+// RANGE16 frame's witness, W[0..2·words + 4]; the module lists what follows. All four are flat.
+pub mod fr_op {                                   // §3: one Fr operation a row
+    pub const A_LIVE: PolyAddress;  A_READ_TS;  A;                       // M[20..23], at Δ0
+    pub const B_LIVE: PolyAddress;  B_READ_TS;  B;  B_NEW;               // M[23..27], at Δ1
+    pub const D_LIVE: PolyAddress;  D_READ_TS;  D;  D_NEW;               // M[27..31], at Δ2
+    pub const fn gap_chunk(q: usize, c: usize);     // W[12..18]: a, b, d, two chunks each
+    pub const fn selector(i: usize);                // W[18..27]: op code i + 1, fr_op::OPS order
+    pub const X: PolyAddress;  PROD;  Z;  MULTIPLICITY;                  // W[27..31]
+    pub const MEMORY_COLUMNS: usize = 31;  WITNESS_COLUMNS: usize = 31;
+    pub fn artifact(trace_vars: u32) -> CircuitArtifact;     // 16 <= n
+    pub fn channels() -> Vec<lookup::ChannelSpec>;           // RANGE16
+}
+
+pub mod p2_field {                                // §4: one duplex step a row
+    pub const fn state_read_ts(i);  state(i);       // M[24..30]: cells s..s+3, at Δ0
+    pub const X_LIVE: PolyAddress;  X_READ_TS;  X;  Y_LIVE;  Y_READ_TS;  Y;   // M[30..36], at Δ1, Δ2
+    pub const fn next_read_ts(i);  next_old(i);  next(i);   // M[36..45]: cells d..d+3, at Δ3
+    pub const fn gap_chunk(q, c);                   // W[14..30]: state0..2, x, y, next0..2
+    pub const LANE0: PolyAddress;  LANE1;           // W[30..32]: the rate after absorbing
+    pub const fn permutation_column(i);             // W[32..381]; PERMUTATION_COLUMNS = 349
+    pub const MULTIPLICITY: PolyAddress;            // W[381]
+    pub const MEMORY_COLUMNS: usize = 45;  WITNESS_COLUMNS: usize = 382;
+    pub fn permutation_witness(lanes: [Fr; 3]) -> (Vec<Fr>, [Fr; 3]);   // the fill's columns, the output
+    pub fn artifact(trace_vars: u32) -> CircuitArtifact;     // 16 <= n
+    pub fn channels() -> Vec<lookup::ChannelSpec>;           // RANGE16
+}
+
+pub mod field_io {                                // §5: one move between RAM and a cell a row
+    pub const fn data_read_ts(k);  data_read(k);  data_write(k);   // M[16..40]: RAM ptr + 4k, at Δ1
+    pub const CELL_READ_TS: PolyAddress;  CELL_OLD;  CELL_NEW;      // M[40..43], at Δ0
+    pub const fn gap_chunk(k, c);                   // W[10..28]: data0..7, then k = 8 the cell
+    pub const IMPORT: PolyAddress;  EXPORT;         // W[28..30]
+    pub const fn word_hi(k);                        // W[30..38]: each exported word's high halfword
+    pub const MULTIPLICITY: PolyAddress;            // W[38]
+    pub const MEMORY_COLUMNS: usize = 43;  WITNESS_COLUMNS: usize = 39;
+    pub fn artifact(trace_vars: u32) -> CircuitArtifact;     // 16 <= n
+    pub fn channels() -> Vec<lookup::ChannelSpec>;           // RANGE16
+}
+
+pub mod fq_op {                                   // §6: one Fq operation a row
+    pub const G_ADDR: PolyAddress;  G_READ_TS;  DIGIT;      // M[20..23]: the digit cell, at Δ0
+    pub const fn addr(q);  a_read_ts(i);  read_ts(q);  a(i);  b(i);  d_old(i);  d_new(i);   // M[23..48]
+    pub const GAPS: usize = 7;  pub const fn gap_hi(k);     // W[12..19]: g, a0..a3, b, d
+    pub const fn selector(i);                       // W[19..24]: op code i + 1
+    pub const IND_D: PolyAddress;  IND_A;  IND_B;   // W[24..27]
+    pub const fn y(j);  d_chunk(i, c);  k_chunk(j, c);  carry_chunk(g, c);   // W[27..71]
+    pub const MULT_TIMESTAMP: PolyAddress;  MULT_RANGE16;   // W[71..73]
+    pub const MEMORY_COLUMNS: usize = 48;  WITNESS_COLUMNS: usize = 73;  CARRY_OFFSET_BITS: u32 = 75;
+    pub fn artifact(trace_vars: u32) -> CircuitArtifact;     // 19 <= n, so 2^20 on the even menu
+    pub fn channels() -> Vec<lookup::ChannelSpec>;           // TIMESTAMP, then RANGE16
+    pub struct Witness { pub y, pub d_chunks, pub k_chunks, pub carry_chunks }
+    pub fn witness(code: u32, a: [u64; 4], b: [u64; 4], d_new: [u64; 4]) -> Witness;
+    pub fn canonical(x);  mul_mod_q(a, b);  add_mod_q(a, b);  sub_mod_q(a, b);  inv_mod_q(a);  limb(v: Fr);
+}
 ```
 
 ## Frozen invariants
@@ -377,6 +441,18 @@ pub mod sha256 {             // docs/spec/delegation.md §15; S26c, re-shaped at
   what makes advice advice. `INIT_TEARDOWN`'s init column is `S[0]` instead because program
   identity binds it, and one execution's public values have no business in every execution's
   identity.
+- **`field_window_artifact` is S-RECURSION's one new memory constructor, and it is
+  `zero_window_artifact` at a stride of one cell a row** (`docs/spec/recursion.md` §2.2). Both
+  are one private `zero_window(trace_vars, stride)`, whose teardown and init tuples carry
+  `(α_addr, V[row])` `stride` times: `WORD_BYTES`, four, for a RAM window, and once for a field
+  window, so row `y` of window `w` is cell `h·w + y`. Nothing else differs — `M[0]
+  teardown_ts`, `M[1] teardown_value`, `V[row]`, init value the literal 0, no gate, no lookup,
+  no channel — so the registry builds it at any height; `FIELD_WINDOWS`' default is `2^20`.
+  The windows are consecutive from cell 0, shard `i` being window `i`. **The address space
+  is not in the artifact**: it is the derived slot 5's alone, `γ_M + FIELD + α_addr·h·w`, which
+  `gkr_verify::field_window_challenges` derives as `window_challenges` derives RAM's. The
+  artifact's stride and slot 5's are one convention kept on two sides, and at window 0 the
+  second is invisible, `α_addr·h·w` being 0 there.
 - **One tuple gate for circuits and boundary.** `read_tuple(q)` and the private write tuple
   are the *unmasked* tuple, a `Linear` whose `AS` and `Δ` terms sit on the mask column; with
   mask 1 each is exactly `T`. One private constructor writes both, each part's terms in slot
@@ -397,8 +473,8 @@ pub mod sha256 {             // docs/spec/delegation.md §15; S26c, re-shaped at
   a global slot over anything but `M`, `S`, `V`, and a leaf mask that is committed without
   its booleanity gate in list 0 or virtual but not `V[ram_live]`. It assumes an artifact that
   passed `validate`.
-- **`family_circuit` is the one registry of circuits** (`docs/spec/shard-proof.md` §11).
-  A verifying key's circuits are byte for byte what it returns for the key's families and
+- **`family_circuit` is the base format's one registry of circuits**
+  (`docs/spec/shard-proof.md` §11). A verifying key's circuits are byte for byte what it returns for the key's families and
   heights, so a circuit is a protocol constant given a family and a height; a later family
   is one arm here and one fill in `crates/prover`. It returns `None` above
   `MAX_TRACE_VARS` and for **any of the seven execution families below 19 variables**, the
@@ -430,6 +506,18 @@ pub mod sha256 {             // docs/spec/delegation.md §15; S26c, re-shaped at
   until S26c, with a delegation family's arm below it; that worked only while no delegation
   family had a channel, and keeping a list in step with two families whose heights differ from
   every other's is exactly the drift the derivation removes.
+- **Since S-RECURSION there are two registries, one a format, over one private `circuit`
+  match** (`docs/spec/recursion.md` §1.2). `recursion_circuit` is `family_circuit` but in two
+  ways: its `ADD_SUB_LUI_AUIPC` is `add_sub::recursion_artifact` with `recursion_channels`, and
+  it holds the five recursion families — `FIELD_WINDOWS`, `FR_OP`, `P2_FIELD`, `FIELD_IO`,
+  `FQ_OP` — whose arms are guarded `if recursion`, so `family_circuit` returns `None` for them
+  and **a base key cannot name one**. Every other family's circuit is the base registry's byte
+  for byte. Nothing on the wire says which registry applies: `verifier_core::VmConfig::circuit`
+  reads the recursion one exactly when the config holds `FIELD_WINDOWS` (`is_recursion`), and
+  both `VerifyingKey::check` and the prover's `register` go through it. One match is also what
+  lets the derived floor serve both: `FIELD_WINDOWS` has no channel and gets 0; `FR_OP`,
+  `P2_FIELD` and `FIELD_IO` carry `RANGE16` alone and get 16; `FQ_OP` carries `TIMESTAMP` and
+  gets 19, which the menu's even heights make `2^20`.
 - **A circuit that reads the `GENERIC` channel names the packed table as its last three
   setup columns** (S17). `FamilyCircuit::reads_generic_table` is whether any channel spec
   is `GENERIC`. At S17 only `JUMP_BRANCH_SLT` reads it: its `S[0..7]` are identity's
@@ -445,9 +533,10 @@ pub mod sha256 {             // docs/spec/delegation.md §15; S26c, re-shaped at
   inline, `jump_branch_slt` behind the private `family_spec` function its `assemble` seam
   takes; a later family names its own the same way. S15 called the type `Extras`.
 - **`add_sub` is §8 as data**, S15's `frame_with_channels_artifact` over the family's
-  **five** frame queries plus 25 witness columns, the 7-column decoded table as `S`, 46
-  enforcing gates of its own beside the frame's 11, five lookups and three channels. Its
-  gates are the family's whole semantics:
+  **five** frame queries plus 27 witness columns, the 7-column decoded table as `S`, 52
+  enforcing gates of its own beside the frame's 11, five lookups and three channels — one
+  selector column and three gates of those for each of the six delegation types it knows,
+  so the counts were 25 and 46 until S26c's two. Its gates are the family's whole semantics:
   one-hot kinds and the packed mask the table's domain; each query's mask the row kind's
   use of it times `m_pc`; each written value the kind's arithmetic with a boolean carry
   and a 16+16-bit range split; `ecall` as `exit` (`a7 = 93`) or one registered delegation
@@ -466,6 +555,23 @@ pub mod sha256 {             // docs/spec/delegation.md §15; S26c, re-shaped at
   become 10, and the frame's own enforcing gates go 16 to 11.** The frame also starts paying
   a pad: eight queries were a power of two a side, five are not, so gate list 0 carries
   three literal-1 leaves a side, as `ATOMICS`' has always done.
+- **`add_sub::recursion_artifact` is the recursion format's `ADD_SUB`, and `artifact` keeps
+  S26c's bytes** (`docs/spec/recursion.md` §1.2, §1.4). Both are one private `build(trace_vars,
+  types)` over the first `types` rows of `constants::delegation::TYPES`: `artifact` passes
+  `BASE_TYPES`, 6, and `recursion_artifact` all ten. Each row a circuit knows costs a selector,
+  `is_delegation(i) = W[22 + i]`, three gates, and a term in each gate that sums over the
+  selectors, and every column after the selectors moves with the count — which is why
+  `wrap`, `rd_hi`, `pc_wrap`, `next_pc_hi` and `multiplicities` take `types` and the constants
+  of those names are the base values. The recursion form commits 39 witness columns to the
+  base's 35 and carries 64 gates of its own to 52. **One gate differs by format**: in place of
+  `deleg_writes_no_register` the recursion form carries `deleg_a0_rule`,
+  `Σ_t is_deleg_t·rd_selected − Σ_{t ≥ BASE_TYPES} is_deleg_t·(v_rs2 + 4·words_t) = 0`, `v_rs2`
+  being the `rs2` query's read, which on an ecall row is `a0`. The rule it states is per type:
+  a recursion request writes `constants::delegation::a0_after` — its frame base advanced past
+  its frame — and a base type writes 0 in either circuit; either way the request writes no
+  value of its own choosing, which is what the zeroing was for. **`BASE_TYPES` is frozen**: a
+  row appended to `TYPES` moves the recursion `ADD_SUB` and no base key, and
+  `tests/vectors/recursion.txt` pins it.
 - **`jump_branch_slt` is `docs/spec/jump-branch-slt.md` as data** (S17): the four-query
   frame plus 37 witness columns, S11's seven-column decoded table and the packed generic
   table as `S`, 42 enforcing gates, 22 lookups and four channels. Its semantics are linear
@@ -560,6 +666,85 @@ pub mod sha256 {             // docs/spec/delegation.md §15; S26c, re-shaped at
   decision 1).
 - **The window address step is `WORD_BYTES`, not `TS_STEP`.** Both are 4; one is bytes per
   RAM word, the other timestamps per cycle.
+- **S-RECURSION's four field families share one shape, built from `delegation.rs`'s
+  crate-private pieces** (`docs/spec/recursion.md` §2–§6). The frame is read-only over
+  `RANGE16`, `read_only_frame_range16`: `frame_gates_range16` plus one `writes_back_w{j}` a
+  word, over `frame_witness_range16(words) = 2·words + 4` witness columns, `MOD_MUL`'s layout.
+  Each access a row makes besides its frame is an `Access`: a word or cell `addr + offset` of a
+  space, under a mask, read at a `read_ts` column and written at `4·cycle + Δ` for its slot Δ,
+  a read-only access writing back its read column. Its leaves are `masked_leaf`, S21's `leaf`
+  under that mask and offset — at `LIVE` and offset 0 it is `leaf` term for term, so no earlier
+  delegation family moved — and `leaves_with` appends every access's read and write after the
+  anchor's and the frame's, one power of two a side. An access's gap is two `RANGE16` chunks,
+  four obligations under its mask whose top chunk `scaled` hands `check_copowers`, everywhere
+  but `FQ_OP`, whose gaps are `TIMESTAMP`'s. All
+  four go through `memory::assemble` with no layer of their own, as `KECCAK_F` does, so each is
+  validated, held to `check_memory` and to the discharge rule as it is built, and each
+  `artifact` asserts its `M` and `W` widths. A `const` assertion beside S21's refuses a frame
+  query at `(RAM, field_io::DATA_DELTA)`, so `FIELD_IO`'s data words, like a frame's, are never
+  filed into the requesting row.
+- **`fr_op` is §3 as data**: one field operation a row over the three cells its frame's words
+  name — `a` at Δ0, `b` at Δ1, `d` at Δ2, so any two may alias — in 31 `M` and 31 `W` columns
+  and 44 enforcing gates, 11 the frame's. Nine op selectors are boolean, sum to `live` and
+  recompose frame word 0, and each access's mask is the sum of the selectors of the ops that
+  touch it: `IMM` reads no `a`, `EQ` writes no `d`. **One product serves every op that
+  multiplies**: `x` is `b` on `MUL` and `MAC` and `d′` on `INV`, so `prod = a·x` is the one
+  product of two row values and each op's equation is degree 2 under its selector. `INV` is
+  the is-zero gadget — `a·d′ = 1 − z`, `z·a = 0`, `z·d′ = 0`, `z` boolean and 0 off `INV` — so
+  `d′` is `a⁻¹`, and 0 at `a = 0`. **`DIGIT` is the one op that writes two cells**: `a = d′ +
+  2^8·b′`, `d′` below `2^8` by its direct `RANGE16` obligation and its `2^8`-scaled one under
+  `DIGIT`'s selector, the pair `check_copowers` requires, and `b_kept` writing `b` back
+  unchanged on every other row. `RANGE16` carries 36 obligations, 37 leaves of 64. Its floor is
+  16 and its `2^20` a choice: one shard holds the 312,984 calls the measured leaf makes (§8.3).
+- **`p2_field` is §4 as data**: one step of the transcript's duplex a row, frame `[n, s, x, y,
+  d]`. It reads the state at cells `s`, `s + 1`, `s + 2` — one address at offsets 0 to 2 — at
+  Δ0, `x` at Δ1 under `x_live` and `y` at Δ2 under `y_live`, with `n = x_live + y_live`, `y`
+  only with `x` and either only on a live row; commits `lane0` and `lane1`, the rate
+  overwritten and zero-filled, beside the capacity `s₂ + n`; and writes their permutation to
+  cells `d` to `d + 2` at Δ3, reading what those cells held. 45 `M`, 382 `W` and 372 enforcing
+  gates. **Flat, not layered**: each of the 80 S-boxes commits `u²` and `u⁴` and each round but
+  the last its three output lanes, 349 columns, the last round landing on the next state's `M`
+  columns — every gate degree 2 on one list, where S23's `POSEIDON2` is ~200 layers deep and a
+  parent pays a sumcheck a layer. **Each round constant enters as `rc·live`**, so a padding
+  row's permutation is zero, and `artifact` asserts the all-zero row valid.
+  `permutation_witness` is the fill's arithmetic in the gates' column order and must spell the
+  permutation as `transcript::poseidon2_permute` does: `checker`'s recursion suite takes the
+  next state from the emulator and breaks `r63_out*` where the two differ. `RANGE16` carries 58
+  obligations, 59 leaves of 64, so six more double its tree. `2^18`, above a floor of 16.
+- **`field_io` is §5 as data**: one move a row between eight RAM words `ptr + 4k`, at Δ1 — a
+  slot the frame's Δ0 is not, so a frame and its data may overlap — and the field cell the
+  frame names, at Δ0. 43 `M`, 39 `W` and 24 enforcing gates. `IMPORT` sets the cell to
+  `Σ_k w_k·2^{32k}` in `Fr` — it **reduces**, the element being what a verifier computes with —
+  and keeps the words; `EXPORT` keeps the cell and writes words whose sum is congruent to it,
+  each below `2^32` by a 16+16 pair under `EXPORT`: **congruence, not canonicity**, and a guest
+  that needs canonical limbs compares them with `p` in RAM itself. **No address column and no
+  address bound**: a data word's address is the frame's `ptr` plus `4k`, read straight into its
+  leaves, and the memory argument alone makes it a word some window initializes. `RANGE16`
+  carries 70 obligations, 71 leaves of 128. `2^18`, above a floor of 16.
+- **`fq_op` is §6 as data, and the one field family on `TIMESTAMP`**, which forces its `2^20`
+  where the other three choose a height above 16. An element of BN254's base field is four
+  consecutive cells of 64-bit limbs, below `2^256` and congruent to the element but not
+  necessarily below `q`: reduction is lazy, and only this family writes one. The frame `[op, d,
+  a, b]` is read-only; `op_word` recomposes the code, the flags `ind_d`, `ind_a`, `ind_b` and
+  the digit cell `op >> 6`, and an indirect operand's first cell is its word plus `8·digit`,
+  the digit read from that cell at Δ0. **One identity serves every op**: `a·y + z = q·K + d′`
+  over the integers — `y` four committed columns, `b` on `MUL` and `MULEQ`, 1 on `ADD` and
+  `SUB`, 0 on `FROM128`, and `z`'s limbs `b_k`, `6q_k − b_k` or `d′_k` by selector — checked as
+  `group0..3` over limb positions `(0,1)`, `(2,3)`, `(4,5)` and `(6)` with three signed
+  carries. Every term is below `2^208` for any assignment the ranges admit, so no equation
+  wraps mod p and the four are the integer identity: **the ranges are the soundness** — `d′`'s
+  limbs and `K₀..K₂` 64 bits over `RANGE16`, `K₃` and each carry plus `2^75` 76 bits in
+  `TIMESTAMP`'s 19-bit chunks, the carry's `−2^75·live` term making the all-zero row's carry 0.
+  `MULEQ` keeps `d`, and so asserts `a·b ≡ d`; `FROM128` has `y = 0`, so `K = 0`, and spells
+  `a`'s two cells as `d′`'s four limbs. **`b`'s and `d`'s four cells share one read timestamp
+  and one gap**, only this family writing an element and all four at once; `a`'s carry one
+  each, `FROM128`'s operand being transcript limbs imported one at a time — whence §6's two
+  rules for a guest. 48 `M`, 73 `W` and 38 enforcing gates. `artifact` asserts the channels'
+  counts, `TIMESTAMP`'s 30 filling 31 of 32 leaves and `RANGE16`'s 50 filling 51 of 64: **two
+  more `TIMESTAMP` obligations double that tree**. `witness` is a row's arithmetic — `K` by
+  exact 2-adic division, `(a·y + z − d′)·q⁻¹ mod 2^576`, asserted back against `q·K`, and the
+  carries over the field — and `canonical` and the four `*_mod_q` are plain arithmetic mod `q`
+  for the native reading and the host.
 
 ## Fixtures
 `tests/vectors/toy_cached.bin` and `tests/vectors/toy_cache_free.bin`: S13's toy
@@ -594,6 +779,16 @@ circuit, and the reason the digest convention exists — and one round a row too
 20,373 readable lines where a 358,525-relation listing was not a readable account of
 anything.
 
+`tests/vectors/recursion.txt`: **S-RECURSION's circuits, by digest** on the same convention —
+`family n memory witness layers inner relations outputs bytes sha256`, the digest of
+`recursion_circuit(family, n).artifact.to_bytes()`. Six lines: the five recursion families at
+their default heights, then `ADD_SUB_LUI_AUIPC`'s recursion form at `2^20`, the one family
+whose recursion circuit is not its base circuit. The largest is `P2_FIELD`'s 294,425 bytes.
+`cargo run -p kat-gen -- recursion` writes it, a default group, and CI regenerates and diffs
+it; **unlike the delegation group's, no kat-gen unit test holds a line to its constructor**,
+so the regenerate-and-diff is its whole guard. `docs/spec/recursion.md` §1.4 and §2–§6 are its
+readable account.
+
 `tests/vectors/{add_sub,jump_branch_slt,shift_bitwise,mul_div}.bin`: one per registered
 execution family — S16's `add_sub::artifact`, S17's `jump_branch_slt::artifact` and S18's
 `shift_bitwise::artifact` and `mul_div::artifact` — each at `trace_vars` 22, the height the
@@ -613,10 +808,14 @@ suite in `crates/checker/tests` pins each SHA-256 and holds its gates to
 | `src/shift_bitwise.rs` (unit) | the legal masks are twelve distinct single bits; the two halves and the two shift directions partition the kinds; and through the private `assemble` seam, the honest family spec gives `artifact`, and the build is refused for an obligation dropped, for `residue`'s direct pair moved under a narrower selector than its scaled obligation (S18's tightened copower check) and for a gate nonzero on the all-zero row |
 | `src/mul_div.rs` (unit) | the legal masks are eight distinct single bits; the multiplies and the divisions partition the kinds; `arithmetic_gates` built at 1 and 32 bits and refused at 0 and 33; and through the `assemble` seam, the honest spec gives `artifact` and the build is refused for a dropped obligation and for a gate nonzero on the all-zero row |
 | `src/jump_branch_slt.rs` (unit) | the legal masks are twelve distinct single bits; through the private `assemble` seam, the honest family spec gives `artifact`, and the build is refused for an obligation dropped (the channel count), for `next_pc`'s direct bound replaced (the copower check) and for a gate nonzero on the all-zero row |
-| `src/add_sub.rs` (unit, and four `const` assertions) | the three system codes pairwise distinct, which is what lets `system_split`, `ecall_code` and `fence_code` refuse every `ebreak` row; and, since S21, `const _: () = assert!(..)` items holding the provable ecall numbers **pairwise** distinct and each in its ABI range, and every delegation type's address-space tag distinct too — what makes `ecall_is_exit` and the per-type number gates a partition rather than gates that can all hold. S23 made that loop over `constants::delegation::TYPES` rather than naming one number. A `const` assertion rather than a test, because a violation there is a mis-numbered ABI and should not compile. Neither gate spells a number: both read `constants::ecall`. The gates themselves are `crates/checker/tests/add_sub.rs`' |
+| `src/add_sub.rs` (unit, and four `const` assertions) | the three system codes pairwise distinct, which is what lets `system_split`, `ecall_code` and `fence_code` refuse every `ebreak` row; and, since S21, `const _: () = assert!(..)` items holding the provable ecall numbers **pairwise** distinct and each in its ABI range, and every delegation type's address-space tag distinct too — what makes `ecall_is_exit` and the per-type number gates a partition rather than gates that can all hold. S23 made that loop over `constants::delegation::TYPES` rather than naming one number, and it covers every row — S-RECURSION's four too — whichever prefix a circuit knows; S-RECURSION added `BASE_TYPES <= TYPES`. A `const` assertion rather than a test, because a violation there is a mis-numbered ABI and should not compile. Neither gate spells a number: both read `constants::ecall`. The gates themselves are `crates/checker/tests/add_sub.rs`' |
 | `src/poseidon2.rs`, `src/fr_arith.rs` (`check_shape`, run on every build) | the same discipline as `keccak`'s, over each circuit's own shape: the column counts, no setup column and **no channel**, every row-wise layer's width equal to its three regions' (poseidon2), the depth, the named relations present **by name**, and every counted family of gates counted on the emitted artifact. `fr_arith` additionally asserts that no relation's name contains `assume` |
 | `src/keccak.rs` (`check_shape`, run on every build) | the column counts, no setup column, four virtual tables, six outputs and the obligation count; **the two channels' obligation counts separately** — 210 on `RANGE16` and exactly 1,020 on `XOR8` — and that `(1,020 + 1).next_power_of_two()` is 1,024, which is the cost cliff `docs/spec/delegation.md` §6.5 records and the reason iota is four obligations and not eight; the depth; `live_boolean`, `base_aligned`, `base_in_window`, `round_rule`, `one_round_a_live_row` and `writes_back_w0` present **by name** and one `round{r}_boolean` per round; 51 `addr_w`, 50 each of `input_w` and `output_w`, and 200 `rho_pi_l`; and that the all-zero row is a valid padding row. S21's must-be-exact 4: a bound that exists only in a comment is not a bound, and a name check is what an `assume_*` hypothesis cannot stand in for |
 | `src/sha256.rs` (`check_shape`, run on every build, and unit) | S26e: the column counts, a round's 52 and a schedule word's 39, no setup column, four virtual tables, six outputs; **114 obligations on `RANGE16` and 336 on `XOR8`**, under 128- and 512-leaf trees; `live_boolean`, `base_aligned`, `base_in_window`, `group_rule`, `one_group_a_live_row` and `writes_back_w0` by name, 25 `addr_w`, the four rounds' `r{k}_a`/`r{k}_e` and the four `s{m}_sum`, 19 window gates; flatness and a valid all-zero row. The unit tests hold the witness names to the layout and the circuit to building at 16 and not at 14 |
 | `src/keccak.rs` (unit) | the rho/pi index map is a permutation of the 25 lanes and its three whole-byte rotations are the ones `mask_slot` exempts; **the rotation's literal weights reproduce `u64::rotate_left`** on every lane's own offset over four pseudo-random states each, evaluated over `Fr` exactly as a gate would — the one place the circuit's arithmetic is checked at the level of the weights themselves; the witness names are the layout, each once; and the circuit builds at 16 and `family_circuit` refuses 8 |
 | `src/memory.rs` (unit) | acceptance 12: the frame with one obligation dropped before the artifact is written panics at the count assertion |
 | `tests/audit.rs` | every `GateDef` variant, all six, emitted across both compilations, counts written by hand; the catalogue; the two compilations' identical shape |
+| `tests/recursion.rs` | S-RECURSION's registry, in ordinary CI: each of the five recursion families builds at its default height in `recursion_circuit` — which runs `validate`, `check_memory` and the discharge rule — with a valid all-zero padding row, and `family_circuit` returns `None` for it, so a base key cannot name one; and every other family id below `family::COUNT` is in both registries or neither, its artifact identical in the two but `ADD_SUB_LUI_AUIPC`'s, whose recursion form commits `TYPES.len() − BASE_TYPES` more witness columns. The circuits' rows are `crates/checker/tests/recursion.rs`' |
+| `src/fr_op.rs`, `src/p2_field.rs`, `src/field_io.rs`, `src/fq_op.rs` (run on every build) | each `artifact` asserts its `M` and `W` widths against `MEMORY_COLUMNS` and `WITNESS_COLUMNS` and passes `check_copowers` over its scaled columns — the frame's, then, but for `FQ_OP`, each access's gap top chunk and `FR_OP`'s digit; `P2_FIELD` asserts a valid all-zero row and `FQ_OP` its two channels' obligation counts, 30 and 50; and in `FR_OP` and `FQ_OP` a `const` assertion holds `OPS[i]` to `i + 1`, the selector index a gate reads off a code, `FQ_OP`'s with `OPS.len() < 2^CODE_BITS` |
+| `src/p2_field.rs` (unit) | `the_witness_is_the_permutation`: `permutation_witness` fills `PERMUTATION_COLUMNS` columns, the witness names are `WITNESS_COLUMNS` long, and every permutation gate, evaluated by hand over `Fr` on one row's witness and output, vanishes — so the gates and the fill read one column order |
+| `src/fq_op.rs` (unit) | `q·q⁻¹ = 1` mod `2^576`, the inverse `witness` divides by; and the plain arithmetic mod `q` — `canonical` of `q − 1` and of `q`, `(q − 1)² = 1`, a difference wrapping below zero, a sum past `q`, an inverse that inverts, and 0's inverse 0 |

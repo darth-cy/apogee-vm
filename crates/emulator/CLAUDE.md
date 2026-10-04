@@ -2,11 +2,14 @@
 
 ## What this crate owns
 The reference emulator — RV32IMAC on one hart over a `ProgramImage` — its ecall
-dispatch, and the tracing path that fills `crates/trace`'s structures.
+dispatch, the tracing path that fills `crates/trace`'s structures, and, since
+S-RECURSION, the field memory and the four coprocessors that work on it.
 **`docs/spec/execution-trace.md` is the convention the trace
 follows; `docs/spec/ecall-abi.md` is the ABI the ecalls implement**; since S21,
-**`docs/spec/delegation.md`** for what a delegation ecall does; and, since S-IO,
-**`docs/spec/public-values.md`** for the two public windows and the advice region.
+**`docs/spec/delegation.md`** for what a delegation ecall does; since S-IO,
+**`docs/spec/public-values.md`** for the two public windows and the advice region;
+and, since S-RECURSION, **`docs/spec/recursion.md`** §1.4 and §2-§6 for the field
+memory, its four families and the `a0` a recursion request leaves.
 
 ```rust
 // TWO fields, because there are two things a guest is given and what tells them
@@ -94,12 +97,15 @@ the **journal** `Machine::finish` reads back out of the public output window at 
   the recorder counts rows per family rather than reading a buffer's length: a flushed
   buffer is replaced by an empty one, so `len()` is no longer the occupancy.
 - **Two runs of one `(image, io)` are one execution** — no clock, no randomness, no
-  threads, and the one hash map is accessed by key — which is what lets the streaming
-  prover's two passes cut the same shards (`docs/spec/streaming.md` §2).
+  threads, and the two hash maps, RAM's pages and since S-RECURSION the field memory's
+  cells, are accessed only by key — which is what lets the streaming prover's two passes
+  cut the same shards (`docs/spec/streaming.md` §2).
 - **Machine state is plain**: `[u32; 32]` registers, the pc, RAM as a hash map of 4 KiB
-  pages (absent is zeros), every slot decoded once up front. Registers start at 0, `x0`
-  included; the pc starts at the entry point; RAM starts as the image, plus — since S-IO —
-  the public input window and the advice region, seeded below.
+  pages (absent is zeros), every slot decoded once up front, and since S-RECURSION the
+  field memory as a hash map of `u32` cells to `Fr` (absent is 0). Registers start at 0,
+  `x0` included; the pc starts at the entry point; RAM starts as the image, plus — since
+  S-IO — the public input window and the advice region, seeded below; the field memory
+  starts empty.
 - **Semantics.** Every A instruction is its plain read-modify-write; `aq`/`rl` order
   nothing. **`sc.w` always succeeds** — it stores and writes 0 — a conformance deviation
   and never a soundness one (`docs/spec/memory-ops.md` §6.6), and the circuits share that
@@ -196,13 +202,15 @@ the **journal** `Machine::finish` reads back out of the public output window at 
   `constants::delegation::FRAME_DELTA` — **right after the pc query and before the roles**,
   which is what makes `(RAM, 0)` a pair no role takes — stages the mirror query
   (`Role::Delegate`, at the base, reading the zero tuple), routes an `Invocation` to the
-  family's `DelegationTrace`, and writes 0 into `a0` with `next_pc` the fall-through. A
+  family's `DelegationTrace`, and writes `constants::delegation::a0_after` into `a0` with
+  `next_pc` the fall-through — 0 for the six base types, and since S-RECURSION the frame
+  base advanced past the frame for the four field families (below). A
   program whose `VmConfig` lacks the family it calls is `DelegationFamilyAbsent`, loudly:
   the executor and the preprocessor disagreeing about the ABI is not something to answer
   `-ENOSYS` to. An executor *without* the circuit answers `-ENOSYS` and the guest's software
-  fallback runs; this VM has all four circuits, so it never takes that branch, and the
-  fallback is the ABI's contract (`docs/spec/delegation.md` §2) rather than a path anything
-  in this repository exercises.
+  fallback runs; this VM has every delegation's circuit, so it never takes that branch, and
+  the fallback is the ABI's contract (`docs/spec/delegation.md` §2) rather than a path
+  anything in this repository exercises.
 - **`keccak_round` is what one invocation does, and `keccak_f` is 24 of them.** S26d made one
   `KECCAK_F` delegation row one *round* (`docs/spec/delegation.md` §6), so the round is the
   function the circuit is checked against and the permutation is the function every oracle
@@ -220,6 +228,60 @@ the **journal** `Machine::finish` reads back out of the public output window at 
   window shifted down four and refilled with them. Sixteen calls are one compression, the
   feed-forward being the caller's; its unit test holds the first call to FIPS 180-4's
   `t = 3` working variables and `W_16..W_19`, and sixteen to `sha256("abc")`.
+- **The field memory belongs to the four field families and to nothing else**
+  (S-RECURSION, `docs/spec/recursion.md` §2). No load or store reaches a cell; only
+  `FR_OP`, `P2_FIELD`, `FIELD_IO` and `FQ_OP` invocations read and write one, each access
+  at its family's own slot `4c + Δ` on the requesting cycle `c`. **A field access is not a
+  `MemoryEvent`**, a value not being a `u32`: the recorder hands it to
+  `MemoryState::record_field` — the log's own state on the whole path, the streaming state
+  on the other, `Keep::record_field` being the one arm that differs, as `Keep::record` is —
+  which asserts, per cell, that the value read is the cell's last write and that the read
+  strictly precedes the write, and returns the read timestamp. The access itself goes to
+  the invocation's `DelegationTrace::accesses` as a `trace::Access`,
+  `program::delegation_accesses(family)` of them a row (3, 8, 9 and 13), `None` where the
+  op makes no such access. `FIELD_IO`'s eight RAM data words are the exception: they are
+  ordinary RAM events at `field_io::DATA_DELTA` = 1, after the frame's slot 0, so a frame
+  and its data may overlap, and they appear among the accesses too. A `TraceArchive`
+  holding a field family's buffer has no wire form — `deterministic_payload` panics on
+  one — so a recursion execution streams.
+- **A field request leaves `a0` past its frame, and its frame is read-only** (§1.4). The
+  ecall arm answers `a0_after(index, base) = base + 4·words` for the number's row of
+  `program::DELEGATIONS`, every field family's being past `BASE_TYPES`, so a tape of
+  consecutive frames replays as back-to-back `ecall`s. The frame is written back unchanged,
+  still logged as RAM events at `FRAME_DELTA`, and what a call computes lands in field
+  cells — or, for an `EXPORT`, in its RAM data words. Each executor checks before it writes,
+  and every refusal is `EmuError::DelegationFrame`, a frame no witness exists for:
+  - **`FR_OP`** `[op, d, a, b]`, §3's nine ops: `a` at Δ0 read-only, `b` at Δ1, `d` at Δ2,
+    each absent where its op makes none — `IMM` reads neither operand, `INV` and `SHL` not
+    `b`, and `EQ` writes nothing. `INV` of 0 answers 0; `IMM` and `SHL` read `b`'s frame
+    word as an integer; `DIGIT` writes `b ← (a − d′)/2^8` before `d ← d′`, the low 8 bits
+    of `a`'s canonical integer, so `b = a` peels in place. Refused: an op outside
+    `fr_op::OPS`, and an `EQ` whose two cells differ — an assertion, so a check that fails
+    is a fatal guest error and never an answer.
+  - **`P2_FIELD`** `[n, s, x, y, d]`: one duplex step of `transcript::Transcript`, the
+    lanes `(n ≥ 1 ? x : s₀, n = 2 ? y : (n = 1 ? 0 : s₁), s₂ + n)` through
+    `transcript::poseidon2_permute` and written to `d..d+2` at Δ3, after reading `s..s+2`
+    at Δ0, `x` at Δ1 when `n ≥ 1` and `y` at Δ2 when `n = 2`. Refused: `n > 2`, and a
+    triple at `s` or `d` that would pass `u32::MAX`.
+  - **`FIELD_IO`** `[op, cell, ptr]`: the eight words at `ptr + 4k` take the **load**
+    rule, not the frame's — `Misaligned` off a word boundary, `OutOfBounds` outside
+    `trace::addressable` or past `advice_end`, or where `ptr + 4k` wraps — so a blob in the
+    advice region is imported where it lies. `IMPORT` writes `Σ w_k·2^{32k}` mod p to the
+    cell and the words back unchanged; `EXPORT` writes the cell's canonical encoding to the
+    words — the honest representative, the circuit asking only congruence and 32-bit
+    limbs — and the cell back unchanged. Refused: any other op.
+  - **`FQ_OP`** `[op, d, a, b]`: the op word's code (bits 0..3), its `IND_D`, `IND_A` and
+    `IND_B` flags (bits 3..6) and its digit cell (`word >> 6`), read at Δ0 on every row;
+    an indirect operand's element is its word plus `8·digit`; then `a`'s, `b`'s and `d`'s
+    four cells at Δ1, Δ2 and Δ3 — thirteen accesses, every one live. `MUL`, `ADD` and `SUB`
+    write `d′` reduced below q, the circuit admitting any representative below `2^256` and
+    this being the honest one; `MULEQ` writes `d` back unchanged; `FROM128` writes
+    `a₀ + 2^128·a₁`, unreduced. Refused: a digit cell not holding an integer below `2^24`,
+    an element whose cells would pass `u32::MAX`, an operand limb not below `2^64` (and
+    `d`'s, on `MULEQ`), a `FROM128` half not below `2^128`, a `MULEQ` whose `a·b ≢ d`
+    mod q, and any other code. **§6's element rule is not checked here**: that `b`'s and
+    `d`'s four cells were last written together is `prover::fill::fq_op`'s assertion and
+    `verifier_core::tape::run`'s refusal.
 
 ## There is no second executor
 `qemu-riscv32` is gone from the repository: not an oracle, not a runner, not a dependency,
@@ -242,9 +304,9 @@ ecall running natively here and taking the `-ENOSYS` software fallback there.
 | --- | --- |
 | `src/lib.rs` (unit) | the last cycle on the 38-bit clock runs and the next is `ClockOverflow` |
 | `tests/keccak.rs` | `keccak_f` against `tiny-keccak`: the all-zero state, the all-ones state, **all 1,600 single-bit states**, a random walk, and `lanes_of`/`words_of` round-tripping over the 50 **state** words. Since S26d also `keccak_round`, which is what one invocation does: 24 of them are `tiny_keccak::keccakf` and one of them is not, and the 24 rounds of one state are pairwise distinct — the index is load-bearing, and it is what the circuit's one-hot selector has to get right. 9 tests |
-| `tests/guests.rs` | the guests' host-computed answers (fib, heap, atomics, rvc-dense), `echo` copying its advice into the journal through the heap, orderbook committing the same journal under advice it cannot verify, `opcodes` executes all 58 non-trapping mnemonics and every instruction of its compressed block, acceptance 11 (seven misaligned kinds, both paths), `run` == `trace_run`, **the recorded public input is what the host supplied and not the prefix the guest consumed** — a cursor is guest state and a statement is not; **S-IO's mechanism executed**, over `guests/public-io` — the guest reads its public input with ordinary loads, checks its advice against it and leaves its result in the journal, which the executor reads back out of the window at exit; advice the public input does not commit to publishes nothing; asking for advice that was not supplied is the fatal `OutOfBounds`, because no advice means no region; and a public input longer than its window is refused by name before the first cycle; and **S21's acceptance 3**: the six digests `guests/keccak-test` checks itself against, re-derived from `tiny-keccak` and read out of the guest's own source so a stale literal cannot pass, and both keccak guests run to their exit statuses under the delegation ecall |
+| `tests/guests.rs` | the guests' host-computed answers (fib, heap, atomics, rvc-dense), `echo` copying its advice into the journal through the heap, orderbook committing the same journal under advice it cannot verify, `opcodes` executes all 58 non-trapping mnemonics and every instruction of its compressed block, acceptance 11 (seven misaligned kinds, both paths), `run` == `trace_run`, **the recorded public input is what the host supplied and not the prefix the guest consumed** — a cursor is guest state and a statement is not; **S-IO's mechanism executed**, over `guests/public-io` — the guest reads its public input with ordinary loads, checks its advice against it and leaves its result in the journal, which the executor reads back out of the window at exit; advice the public input does not commit to publishes nothing; asking for advice that was not supplied is the fatal `OutOfBounds`, because no advice means no region; and a public input longer than its window is refused by name before the first cycle; and **S21's acceptance 3**: the six digests `guests/keccak-test` checks itself against, re-derived from `tiny-keccak` and read out of the guest's own source so a stale literal cannot pass, and both keccak guests run to their exit statuses under the delegation ecall; and **S-RECURSION's** `guests/field-ops` — every `FR_OP` and `FQ_OP` op, a `P2_FIELD` step at each of `n = 2, 1, 0`, both `FIELD_IO` moves and a replayed tape, each result held to a literal through an `EXPORT` — exiting 26, its config the recursion format, and, traced, 38, 5, 51 and 11 invocations of the four families, one field window at `2^20`, and cell 0, read and never written, re-stamped and still 0. No suite here streams it; `crates/checker/tests/recursion.rs` holds its rows to the circuits |
 | `tests/trace.rs` | acceptance 3 (balance, heap traffic included), 4 (a corrupted RAM read, register write mid-chain, pc write and gap, a forged initial value, and a stale read, each named), 5 (the four-slot clock over every event; `amoadd.w` fills all four slots), 6 (routing), the frame table — roles and slots — restated from the spec and checked on every row, the halting sentinel (the exit row alone writes `HALT_PC`, as the last pc write; every other pc write even), every ecall answering as the ABI says — an exit, a delegation answered 0, or `-ENOSYS`, and one cycle each — the rows rebuilding the log exactly, `final_state`, and `trace::init_windows` (fib's stack window at 2^22, 2^20 and 2^16; every traced guest's list exactly its touched windows above 0 at every height, and passing `program::check_memory_windows`) |
-| `tests/streaming.rs` | **S26**: `StreamingRun` against `trace_run` over twelve guests — every chunk equal to that family's own slice of the whole buffer row for row, the chunk set equal to `trace::plan_shards`' counts, no chunk longer than its height, the final `MemoryState` equal to the log's (and the window list at three heights and the boundary read off it), and the profile and `Execution` equal. `keccak-test` and `recursion-ops` are in the list for the `Invocations` arm and `guests/shards` for the flush path: its add/sub family runs 1,064,970 cycles, so at `2^16` it fills **sixteen** buffers before its last short one, and without it every chunk would come from the tail |
+| `tests/streaming.rs` | **S26**: `StreamingRun` against `trace_run` over thirteen guests — every chunk equal to that family's own slice of the whole buffer row for row, the chunk set equal to `trace::plan_shards`' counts, no chunk longer than its height, the final `MemoryState` equal to the log's (and the window list at three heights and the boundary read off it), and the profile and `Execution` equal. `keccak-test` and `recursion-ops` are in the list for the `Invocations` arm and `guests/shards` for the flush path: its add/sub family runs 1,064,970 cycles, so at `2^16` it fills **sixteen** buffers before its last short one, and without it every chunk would come from the tail |
 | `tests/archive.rs` | acceptance 7 (byte-identical round trip, hash-equal payloads, answers without re-execution, `io_digest`) and 8 (five phases, the timing section byte for byte, out-of-order refused by byte patch) |
 | `tests/revm.rs` | **S24**, over `guests/revm-block`, which is built from source rather than read from a committed ELF. In the `test` step: the committed `BlockWitness` is canonical and re-encodes to itself, each canonicity rule refuses by name, the output commitment's three sections read back field by field, native host revm produces the committed output, every keccak-f frame the workload delegated is `tiny-keccak`'s answer, a block whose transactions do not fit its gas limit is refused — including the case revm cannot see, two transactions that each fit the header and together do not — and `BLOCKHASH` still answers `EmptyDB`'s placeholder, which is the pin on the gap that keeps `BlockWitness` unfrozen. **`#[ignore]`d, and CI asks for them by name** at `APOGEE_GUEST_PROFILE=release`: the derived family set (`KECCAK_F` in, S23's two out, every instruction a live row of exactly one family), the guest's **journal** against native revm's answer on the same witness, the harvested frames against the committed ones, the cycle and occupancy report, and the image against the two ceilings its height turns on. Acceptance 3 was the same computation under both executors, over a second `revm-block-stdio` binary reading fd 0; the binary and the test are **deleted**, there being no second executor and no fd 0 |
 

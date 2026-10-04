@@ -1,13 +1,14 @@
 # `tools/bench`
 
 ## What this crate owns
-One routine per thing worth measuring, and — since S25 — one **verb** that runs a real
-proving job and emits a `BenchReport`.
+One routine per thing worth measuring, and **verbs** that run real proving jobs: since S25
+`prove`, which proves one block and emits a `BenchReport`, and since S-RECURSION
+`recurse`, which proves a base block proof's recursion tree.
 
 ```
 cargo run --release -p bench                     # every routine, in registry order
 cargo run --release -p bench -- zerocheck-verify # just that one
-cargo run --release -p bench -- --list           # the registry, and the verb
+cargo run --release -p bench -- --list           # the registry, and the verbs
 
 cargo run --release -p bench -- prove mini-block --hourly-usd 2.36 --json report.json
 cargo run --release -p bench -- prove mini-block --in-flight 4   # the backpressure bound
@@ -21,19 +22,65 @@ cargo run --release -p bench -- prove --stateless <fixture.json | input.bin> [--
 ```
 cargo run --release -p bench -- recurse <dir>/<stem> --out <dir> [--leaf 64] [--budget <rows>]
     [--fan-in 4] [--in-flight 1] [--shards-in-flight 1] [--limit <shards>]
+cargo run --release -p bench -- recurse-node <out> <id> [--shards-in-flight 1]   # what recurse runs
 ```
 
-The tree is planned before anything is proved (`host::recursion::Tree`) and written to
-`<out>/tree.txt`. Each node is a **process**, `bench recurse-node <out> <id>`: it builds
-its advice only when it starts, proves, verifies, and writes `<out>/<id>.block`, so a
-node's memory is its own process's and a node could run on another machine sharing the
-directory. The scheduler keeps `--in-flight` of them running and polls them. That is how
-it stays outside master anti-goal 7: it starts no thread, and
-`crates/prover/tests/one_pipeline.rs` sweeps this crate too. A proof already in `<out>` is
-not proved again, so a stopped run resumes. At the root the scheduler verifies the proof,
-the journal's coverage and identities, and the accumulator's pairing check. It needs the
-2^24 ceremony, which it caches beside the system's temporary files after the first
-ingest.
+`<dir>/<stem>` is a proof archive `prove --out` wrote. The scheduler first builds the
+`leaf` and `node` binaries and holds `guests/recursion/base.key` to the archive's key and
+`programs.key` to the two binaries' program keys, refusing with the `profiler` verb that
+rewrites a stale one (`tools/profiler/CLAUDE.md`). Then it sets each program up once and
+writes `<out>/leaf.elf`, `node.elf`, `leaf.vk` and `node.vk`, printing both identities.
+
+**The tree is planned before anything is proved** (`host::recursion::Tree::plan`, over
+`host::recursion::shard_costs`) and written to `<out>/tree.txt`: a `base <dir>/<stem>` line,
+then `Tree::to_text`. Leaves are runs of consecutive base shards, at most `--leaf` of them
+and, given `--budget`, at most that many estimated `FQ_OP` rows of folds, a shard alone
+over it being a leaf of its own; then levels of internal nodes over two to `--fan-in`
+children, a group of one carried up a level. `--fan-in` is 2 to 4, the procedure's
+limit, and refused outside it. A node costs about a shard a family before it does any work — sixteen — so a leaf
+is cheapest large: another `FQ_OP` shard is one shard, another node sixteen. `--limit <n>`
+plans over the base statement's first `n` shards only, which proves everything but the
+root's claim to the whole statement.
+
+Each node is a **process**, `bench recurse-node <out> <id>`. It reads `tree.txt`, the
+archive, its program's `.elf` from `<out>` and, for an internal node, the other's and its
+children's `<c>.block` with both `.vk`s; sets its own program up again, a `ProverSetup`
+not being saved, only its key; builds its advice only then, through
+`host::recursion::leaf` or `internal`, whatever it verifies checked and every tape
+replayed natively; proves at most `--shards-in-flight` shards at once, verifies the proof
+and holds its journal to the native one; and writes `<out>/<id>.block` through
+`<id>.block.partial` and a rename. Its stdout and stderr are `<out>/<id>.log`. So a node's
+memory is its own process's, and a node could run on another machine sharing the
+directory. The scheduler starts the lowest ready id while fewer than `--in-flight` run —
+every leaf before any internal node, the leaves being numbered first — and polls them
+every half second. That is how it stays outside master anti-goal 7: it starts no thread,
+and `crates/prover/tests/one_pipeline.rs` sweeps this crate too.
+
+**A proof already in `<out>` is not proved again, so a stopped run resumes.** Done means
+`<id>.block` exists, so a rerun must be the run the directory was started with: one whose
+plan differs from `<out>/tree.txt` — another `--leaf`, `--budget`, `--fan-in` or
+`--limit` — or whose `leaf` or `node` build differs from `<out>`'s `.elf` is refused,
+since it would reuse proofs by ids that now name other nodes, or proofs of other
+programs. A node killed mid-write leaves only its `.partial` and is proved again. A node
+that fails stops the scheduler, naming its log, and the scheduler kills the nodes still
+running first, the tree being unable to finish.
+
+**At the root** the scheduler checks what a verifier of the tree owes beside the root's
+own proof: the proof verifies under `<out>/leaf.vk` or `node.vk` by the root's kind, a
+one-leaf tree's root being a leaf; its output is a node's journal, 47 cells; it covers
+shards `0..` the planned count; an internal root requires the identities this run's
+`leaf.vk` and `node.vk` carry; and its accumulator discharges, `e(A, [1]_2) = e(B, [x]_2)`
+against the base key's `SrsVerifier`; and its statement cells — the global digest, the
+four memory challenges, `io_digest`, the exit status and the shard count — are the
+archive statement's, as the native global transcript computes them. It then says whether
+the shards covered are the whole base statement or, under `--limit`, a prefix. The shape
+digest is not recomputed, and the identities it compares are the run's own, not ones from
+a channel the prover does not control.
+
+It needs the `2^24` ceremony, `assets/ptau/ppot_0080_24.ptau`, ingested once and cached as
+`apogee-ceremony-24.srs` in the system's temporary directory, which every node process
+then loads. Every error either verb returns, a usage error included, exits 1 with the
+reason and the usage on stderr.
 
 **`prove --stateless <file>` proves one canonical stateless input with
 `revm-block-stateless`**: an EEST fixture JSON's `statelessInputBytes` — a `tests-zkevm`
@@ -83,9 +130,11 @@ and exited 0.
 **The charter moved by one line at S25, and only one.** It used to read "no assertions, no
 thresholds, no committed output"; the stage requires the report to be committed to its
 handoff note, so *committed output* is now a thing this crate has. No thresholds and no
-assertions still hold, with one exception the `prove` verb makes and states: it asserts
-that the proof **verifies**, because a timing for a proof that does not verify is not a
-measurement of anything. A number that must not regress still belongs in a test.
+assertions still hold, with one exception the proving verbs make and state: they assert
+that the proof **verifies** — `recurse` every node's, holding its journal to the native
+one, and at the root what a verifier of the tree owes besides — because a timing for a
+proof that does not verify is not a measurement of anything. A number that must not
+regress still belongs in a test.
 
 Numbers are internal and machine-dependent. Master rule 11 wants a benchmark in the same
 commit as any optimization; this is where that benchmark goes.
@@ -105,7 +154,7 @@ commit as any optimization; this is where that benchmark goes.
 | `src/block.rs` | `prove` (a verb) | S25: one recorded block — or, since S-STATELESS, one stateless input — proved end to end and verified, filling a `BenchReport` |
 | `src/recurse.rs` | `recurse`, `recurse-node` (verbs) | S-RECURSION: a base block proof's recursion tree, planned, proved node by node in worker processes, and its root checked |
 | `src/report.rs` | — | the `BenchReport` schema, frozen at S25, and the machine facts it carries |
-| `src/main.rs` | — | the registry, the one verb, and the argument parsing |
+| `src/main.rs` | — | the registry, the verbs' dispatch, and the argument parsing |
 
 ## The rules
 - **Routines are independent.** Each derives its own stream from the one `SEED`, builds
@@ -117,7 +166,8 @@ commit as any optimization; this is where that benchmark goes.
 - **`prove` is a verb and not a routine, deliberately.** A routine is `fn()` — no
   arguments, no output but stdout — and a proving job has to be told which block and what
   the hardware costs. Adding a parameter to the registry would have meant changing eight
-  signatures for one caller; `main` matches the verb before the table instead.
+  signatures for one caller; `main` matches the verbs before the table instead, `recurse`
+  and `recurse-node` for the same reason.
 - **The `prove` verb's per-stage timings come from the prover and not from this crate**,
   which is must-be-exact 5, *"not from ad-hoc stopwatches sprinkled in the prover"*. They
   were the `TraceArchive`'s five phase sections until S-STREAM; they are now

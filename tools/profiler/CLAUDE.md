@@ -4,24 +4,68 @@
 **Where a guest's RV32 cycles go**, by function and by semantic workload.
 `docs/spec/profiling.md` is normative.
 
-It proves nothing and opens nothing: no SRS, no circuit built, no commitment computed,
-nothing in `crates/prover`. Three inputs and arithmetic: a guest ELF, the bytes it runs on,
-and the ELF's own symbol table. **`leaf` is the one exception on the input side**: the
-recursion guest's input is a block proof, so before it profiles a slice it reads the
-archived key and proof and runs `host::recursion::leaf_advice`, which verifies the slice
-natively — `crates/verifier`'s key loader and `crates/pcs`' deferred verifier — to get each
-shard's `cm*` hint.
+It proves nothing: no ceremony read, nothing committed, nothing in `crates/prover`.
+Three inputs and arithmetic: a guest ELF, the bytes it runs on, and the ELF's own symbol
+table. **The recursion verbs are the exception on the input side** (S-RECURSION): the
+recursion guest's input is a block proof and its image is built from two key files, so
+`leaf` and `base-key` read an archived key — whose load rebuilds each of its circuits from
+the registry to compare (`VerifyingKey::check`) — and `leaf` takes each slice's advice from
+`host::recursion::leaf`, which verifies the slice natively, runs the leaf's whole
+procedure over it and discharges the accumulator with one pairing against the key's
+`SrsVerifier` (`crates/host/CLAUDE.md`).
 
 ```
 cargo run --release -p profiler -- elf <file> [--advice <f>] [--input <f>] [--top <n>] [--json <p>]
 cargo run --release -p profiler -- block <fixture> [--top <n>] [--json <p>]
 ETH_RPC_URL=… cargo run --release -p profiler -- record <number|latest> [--txs <n>] …
-cargo run --release -p profiler -- leaf <dir>/<stem> --shards <from>..<to> [--shards …]
+cargo run --release -p profiler -- leaf <dir>/<stem> --shards <from>..<to> [--shards …] [--top <n>] [--json <p>]
+cargo run --release -p profiler -- base-key <dir>/<stem>    # writes guests/recursion/base.key
+cargo run --release -p profiler -- program-keys             # writes guests/recursion/programs.key
 ```
 
 `block` reads a recorded fixture under `crates/host/tests/vectors` and touches no network.
 `record` is the one verb that reads `ETH_RPC_URL`; its RPC cache is a scratch directory
 under `target/` and is never committed, for the reason `crates/host/src/fixture.rs` gives.
+
+## The recursion verbs
+S-RECURSION. `docs/spec/recursion.md` §8.1 says what the two key files are and what the
+images built from them hold.
+
+- **`leaf` profiles the recursion guest's leaf** over slices of a base block proof that
+  `verifier::proof_archive` wrote (`bench prove --out`), one report a slice, and `--json`
+  takes one slice. A slice's positions are in statement order: `INIT_TEARDOWN`'s shards,
+  then `ZERO_WINDOWS`', then every other family's ascending
+  (`verifier_core::statement_shards`). It builds the `leaf` binary at `--release`
+  (`host::fixture::build_guest`; the guest has no committed ELF), takes each slice's advice
+  from `host::recursion::leaf` over `leaf_image` of the archive's key, and runs it under
+  `host::recursion::leaf_params()`, the parameters the leaf is proved at, rather than the
+  smallest height that fits. It refuses unless `guests/recursion/base.key` is this
+  archive's key: the binary replays the image `build.rs` made from that file, and the
+  advice is the guest's only when the host replayed the same words.
+- **`base-key <dir>/<stem>` writes `guests/recursion/base.key`**: `BaseKey::of` the
+  archive's key — the base program's config and setup counts, its identity, the SRS digest
+  and the generic table, without its circuits. The leaf's image is built from it, tapes
+  and identity constant both, and the node's takes its SRS digest and table. **Rerun it
+  whenever the archive to be recursed is not the file's**: the file moves whenever the
+  base program does — its code through its identity, its parameters through its config —
+  or the ceremony does, through the SRS digest, and a leaf verifies that one program's
+  proofs and no other's. `profiler leaf` and `bench recurse` both compare the two before
+  any guest runs, and name this verb when they differ.
+- **`program-keys` writes `guests/recursion/programs.key`**: `host::recursion::program_keys`
+  over the two recursion binaries it builds — each one's config under `leaf_params()` or
+  `node_params()`, and the setup counts that config implies — which the internal node's
+  image is built from. **Rerun it when a recursion program's config or setup widths
+  change**: an edit to either parameter function, to the families the guest declares, to a
+  registry circuit's setup width, or to `CODE_VERSION`. It prints both programs' families
+  at their heights and whether the file changed. A config depends on code and parameters
+  and not on `.rodata`, so writing the file changes the node's image and not the configs:
+  after `changed`, run it again — it rebuilds both binaries over the new file — and it
+  prints `unchanged`. `bench recurse` refuses a `programs.key` that is not the two
+  binaries' keys.
+
+Both files are committed, and `build.rs` reads them under `rerun-if-changed`, so a rewrite
+rebuilds the images on the next guest build. Without `base.key` the guest does not build;
+without `programs.key` the node's image is empty and the node binary exits 10.
 
 ## Frozen invariants
 - **One histogram over pc, and everything is derived from it.** One `u64` per halfword slot
@@ -38,6 +82,12 @@ under `target/` and is never committed, for the reason `crates/host/src/fixture.
   (`docs/spec/streaming.md` §1).
 - **A delegation family's rows add nothing.** Its rows are invocations, not cycles, and the
   cycle that requested one is already counted by the family that owns the ecall row.
+- **The report counts `ZERO_WINDOWS`' shards** (`ram_windows`, S-RECURSION): the
+  ordinary-RAM windows the run touched at the config's window height, window 0 aside —
+  `trace::init_windows` over the final memory state, the rule the streaming prover plans
+  those shards by. No row count carries it, and since guest-sdk's allocator never frees,
+  it is what a guest's heap costs a proof. The JSON field is `#[serde(default)]`, so a
+  report written before it still reads.
 - **The classification rules are ORDERED and the order is the semantics**
   (`src/categories.rs`). First match wins, so the specific rules come before the general:
   `revm_interpreter::instructions::system::keccak256` is hashing and `revm_interpreter::` is
@@ -78,3 +128,7 @@ under `target/` and is never committed, for the reason `crates/host/src/fixture.
 | --- | --- |
 | `src/demangle.rs` (unit) | both manglings: a legacy name with its disambiguator dropped and its `$LT$` escapes expanded, an unmangled name unchanged, a v0 name's path, a name that decodes to nothing surviving as itself, and the `CsxJ7lp9_17compiler_builtins3mem6memcpy` that exposed the disambiguator bug |
 | `tests/rules.rs` | 26 real symbols, each held to the category it must land in — including the two a mini-block profile exposed; no rule shadowed by an earlier one; every category reachable by some rule |
+
+The recursion verbs have no suite here: `leaf` and `base-key` need an archived base proof,
+and `program-keys` writes a committed file that `bench recurse` holds to the two binaries
+before it proves anything.

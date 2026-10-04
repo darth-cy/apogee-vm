@@ -181,10 +181,11 @@ for the sake of one spelling, and anti-goal 2 bans proc macros outright. The dec
 form was chosen with the repository owner. It emits a wrapper carrying `#[export_name =
 "main"]`, so the annotated function keeps its own name and may itself be called `main`.
 
-## `recursion`: the delegation shims the backends ride on (S23, S26)
+## `recursion`: the delegation shims the backends ride on (S23, S26, S-RECURSION)
 
-`guest_sdk::recursion` is three raw delegation calls and their declaration records, and
-nothing else:
+`guest_sdk::recursion` is the raw delegation calls and their declaration records — since
+S-RECURSION the four field families' calls among them, with what a tape's replay needs —
+and nothing else:
 
 ```rust
 #[repr(C, align(4))] pub struct Poseidon2Frame(pub [u8; 96]);
@@ -211,6 +212,18 @@ pub fn ec_add(frame: &mut EcAddFrame) -> bool;                // one group
 pub fn ec_add_complete(frame: &mut EcAddFrame, codes: &[u32; 3]) -> bool;
 impl Sha256Frame { pub fn of(state, block) -> Sha256Frame; pub fn working(&self) -> [u32; 8]; }
 impl EcAddFrame { pub fn of(codes, p, q) -> EcAddFrame; pub fn result(&self) -> [[u32; 8]; 3]; }
+
+// S-RECURSION (docs/spec/recursion.md §1.4, §3-§7): the field families. Each frame is
+// read and written back unchanged, each call's answer is checked, and none returns a bool.
+pub fn fr_op(frame: &mut [u32; 4]);        // [op, d, a, b]          constants::fr_op
+pub fn p2_field(frame: &mut [u32; 5]);     // [n, s, x, y, d]        constants::p2_field
+pub fn field_io(frame: &mut [u32; 3]);     // [op, cell, ptr]        constants::field_io
+pub fn fq_op(frame: &mut [u32; 4]);        // [op word, d, a, b]     constants::fq_op
+pub fn import(cells: &[u32], blob: &[u8]);     // blob's 32-byte word i into cells[i]
+pub fn import_run(first: u32, blob: &[u8]);    // ... into first + i
+pub fn replay(body: &[u32]);                   // runs of (number, count, frames ...)
+#[repr(C, align(4))] pub struct Words<T: ?Sized>(pub T);
+impl Words<[u8]> { pub fn words(&self) -> &[u32]; }   // a trailing partial word left out
 ```
 
 - **There is no software path in this module, and there must not be.** The callers are
@@ -259,3 +272,65 @@ impl EcAddFrame { pub fn of(codes, p, q) -> EcAddFrame; pub fn result(&self) -> 
 - **This crate does not depend on `field`, and cannot.** `field` depends on *it* for the
   guest target, and cargo refuses the cycle; that is why the shims take frames of bytes
   rather than `&[Fr]`.
+- **A field call's answer is checked, and there is nothing to fall back to** (S-RECURSION,
+  `docs/spec/recursion.md` §1.4). `field_call` holds the answer to `base + bytes` — what
+  `constants::delegation::a0_after` gives a type past `BASE_TYPES` — and exits
+  `EXIT_PRECOMPILE_ERROR` (72) on anything else, `-ENOSYS` included: the field memory
+  exists only where its circuits do, so no shim returns a `bool`. The frames are
+  `[u32; N]`, word-aligned by their type like every frame here, and read-only, so a caller
+  builds one on the stack per call. A field value never enters guest code: a cell is a
+  `u32` name, a constant is `IMM` and `SHL` of frame words, and a value leaves only through
+  `EXPORT`'s eight words — *a* representative, the circuit proving congruence and 32-bit
+  limbs and not canonicity, which is why `guests/recursion` reads a cell as a word only
+  when its seven high words are 0.
+- **`replay` walks a tape's body on the executor's `a0`** (§7). A body is runs, each its
+  family's ecall number, its count and its frames back to back
+  (`verifier_core::tape::encode`); `replay` steps past a run's two-word header and makes
+  `count` calls, each answer the next call's `a0`, eight an iteration and the rest by four,
+  two and one, `a7` held across them. It never reads a frame's width: the executor's
+  advance walks the run and the end check holds it, so a body that does not end where its
+  last run's frames do exits 72, as does a number that is not `FR_OP`'s, `P2_FIELD`'s or
+  `FQ_OP`'s — `FIELD_IO` is not among them because `tape::encode` hoists a tape's imports
+  out of its body. **A body must lie in RAM**, below `2^31`, because a delegation frame
+  must (`docs/spec/delegation.md` §4): a tape in `.rodata` replays in place, and one in
+  the advice region would be refused `OutOfBounds`.
+- **`import` and `import_run` move a blob into cells and read nothing back** (§7). Each
+  rewrites one `[IMPORT, cell, ptr]` frame on its stack and looks the number up once;
+  `import` takes the blob's 32-byte word `i` into `cells[i]`, four a turn, and
+  `import_run` word `i` into cell `first + i`. Neither checks an answer — the recursion
+  `ADD_SUB`'s `deleg_a0_rule` is what holds a request's `a0` — and **`import` does not
+  check the blob's length**: it reads `32·cells.len()` bytes, which are the caller's to
+  supply. The blob must be word-aligned, the data words being word reads, and may lie
+  anywhere a load reaches, the advice region included, so `guests/recursion` imports its
+  advice where it lies.
+- **`Words` is the alignment rule for an included image.** `include_bytes!` yields an
+  align-1 `[u8; N]`, so `static IMAGE: &Words<[u8]> = &Words(*include_bytes!(...))` is what
+  puts a node's image on a word boundary, and `Words<[u8]>::words` reads it as
+  little-endian `u32`s, a trailing partial word left out.
+- **A field family is declared by its record, like every delegation**
+  (`docs/spec/delegation.md` §7). The four records are
+  `.rodata.apogee.delegations.{fr_op,p2_field,field_io,fq_op}`, each kept by reachability,
+  its number read back through `core::hint::black_box` like every record's. Each is
+  typed as the three little-endian words it is in memory, the same bytes, so
+  `field_number` reads its number with one load where a byte record takes four — a replay
+  asks once a body, and a point's template is a body. So `replay`,
+  which names three of them, declares `FR_OP`, `P2_FIELD` and `FQ_OP` whatever its tapes
+  hold, `import` and `import_run` declare `FIELD_IO`, and declaring any of the four brings
+  `FIELD_WINDOWS` into the config, which is what puts a program in the recursion format
+  (`docs/spec/recursion.md` §1.1,
+  `program::FIELD_DELEGATIONS`). `guests/field-ops` declares all four — it calls every shim,
+  `import` and `replay`, and checks each result through an `EXPORT` — and
+  `crates/emulator/tests/guests.rs` runs it.
+
+**`guests/recursion` is the module's one full caller** (`docs/spec/recursion.md` §8.1):
+one crate's two binaries, `leaf` and `node`, running `verifier_core::node`'s procedure
+through a `Driver` made of these calls, its advice read in the procedure's order and its
+journal committed from `EXPORT`s. **`build.rs` builds both images on the host** with
+`verifier_core::node::node_image`: `leaf.img` from `guests/recursion/base.key`, which it
+requires and `profiler base-key <dir>/<stem>` writes from a proof archive's key, and
+`node.img` from `base.key` and `guests/recursion/programs.key`, the leaf's and the node's
+keys as their ELFs derive them, which `profiler program-keys` writes and reports as
+changed or not — a change means build again and rerun. Each binary holds its own image in
+`.rodata` through `Words`, so its identity binds every tape it replays. Without
+`programs.key` the node's image is empty and the binary exits 10, as it does on an image
+or advice that does not read. Like `revm-block`, it has no committed ELF.
