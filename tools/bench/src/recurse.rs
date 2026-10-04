@@ -172,6 +172,17 @@ pub fn run(args: &[String]) -> Result<(), String> {
                     run `profiler program-keys` first"
             .into());
     }
+    // A resumed run's proofs are of the programs it was started with.
+    for (name, elf) in [("leaf", &leaf_elf), ("node", &node_elf)] {
+        let path = o.out.join(format!("{name}.elf"));
+        if std::fs::read(&path).is_ok_and(|old| old != *elf) {
+            return Err(format!(
+                "{} is another build of the {name} program, whose proofs this run would \
+                 reuse: prove it in a fresh directory",
+                path.display()
+            ));
+        }
+    }
     let t = Instant::now();
     for (name, elf, params) in [
         ("leaf", &leaf_elf, recursion::leaf_params()),
