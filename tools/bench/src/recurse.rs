@@ -439,7 +439,8 @@ pub fn decide(args: &[String]) -> Result<(), String> {
     let out = PathBuf::from(out);
     let (archive, tree) = plan(&out)?;
     let (dir, stem) = split_stem(&archive)?;
-    let (base_vk, _, _, _) = host::proof_archive::read_proof(dir, &stem)?;
+    let (base_vk, _, _, base) = host::proof_archive::read_proof(dir, &stem)?;
+    let io = [&base.statement().input[..], &base.statement().output[..]];
     let (leaf_vk, node_vk) = (vk_of(&out, "leaf")?, vk_of(&out, "node")?);
     let leaf = matches!(tree.nodes[tree.root], TreeNode::Leaf { .. });
     let block = BlockProof::from_bytes(&read(&out.join(format!("{}.block", tree.root)))?)
@@ -453,6 +454,7 @@ pub fn decide(args: &[String]) -> Result<(), String> {
         vk: if leaf { &leaf_vk } else { &node_vk },
         block: &block,
         identities: [leaf_vk.identity.0, node_vk.identity.0],
+        io,
     };
 
     let t = Instant::now();
@@ -475,15 +477,18 @@ pub fn decide(args: &[String]) -> Result<(), String> {
         .ok_or("the base key's SrsVerifier holds a point that is not one")?;
     let srs = (vsrs.g2_gen, vsrs.g2_tau);
     decider::verify(&pk.vk, srs, &decision)?;
-    let constructor = decider::constructor(&pk.vk, srs, root.identities, decision.sides);
-    let calldata = decider::calldata(&decision);
+    let constructor = decider::constructor(&pk.vk, srs, root.identities, &decision);
+    let calldata = decider::calldata(&decision, io);
     let gas = decider::onchain(&constructor, &calldata)?;
     for (name, bytes) in [("constructor", &constructor), ("calldata", &calldata)] {
         let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
         std::fs::write(out.join(format!("decision.{name}")), hex).map_err(|e| e.to_string())?;
     }
     println!(
-        "the contract verifies it: {gas} gas, {} bytes of calldata",
+        "the contract verifies it, {} bytes of input and {} of output: {gas} gas, {} bytes of \
+         calldata",
+        io[0].len(),
+        io[1].len(),
         calldata.len()
     );
     Ok(())

@@ -26,25 +26,40 @@ contract ApogeeVerifier {
     /// How many points pair with `[1]_2`, and how many with `[x]_2`.
     uint256 public immutable sideA;
     uint256 public immutable sideB;
+    /// The base program's public input and output, in bytes: the circuit's.
+    uint256 public immutable inputBytes;
+    uint256 public immutable outputBytes;
 
-    constructor(uint256[34] memory key_, uint256 sideA_, uint256 sideB_) {
+    constructor(uint256[34] memory key_, uint256 sideA_, uint256 sideB_, uint256 inputBytes_, uint256 outputBytes_) {
         key = key_;
         sideA = sideA_;
         sideB = sideB_;
+        inputBytes = inputBytes_;
+        outputBytes = outputBytes_;
     }
 
-    /// Whether the base program ran to `exitStatus` over public values whose
-    /// digest is `ioDigest`. `proof` is `A`, `B`, `C` and the bound wires'
-    /// commitment `D`; `points` are side A's then side B's, three words each:
-    /// `x`, `y` and the point's scalar. A point off the curve reverts.
-    function verify(uint256 ioDigest, uint256 exitStatus, uint256[10] calldata proof, uint256[] calldata points)
-        external
-        view
-        returns (bool)
-    {
+    /// Whether the base program, given the public `input`, published `output`
+    /// and exited with `exitStatus`. `proof` is `A`, `B`, `C` and the bound
+    /// wires' commitment `D`; `points` are side A's then side B's, three
+    /// words each: `x`, `y` and the point's scalar. A point off the curve
+    /// reverts.
+    function verify(
+        bytes calldata input,
+        bytes calldata output,
+        uint256 exitStatus,
+        uint256[10] calldata proof,
+        uint256[] calldata points
+    ) external view returns (bool) {
+        require(input.length == inputBytes && output.length == outputBytes, "public values");
         require(points.length == 3 * (sideA + sideB), "points");
         uint256[34] memory k = key;
-        (uint256 c, uint256 v) = bind([proof[8], proof[9], k[32], k[33], ioDigest, exitStatus], points);
+        uint256 c;
+        uint256 v;
+        {
+            uint256[] memory bound = values(input, output, points);
+            (bound[0], bound[1], bound[2], bound[3], bound[4]) = (proof[8], proof[9], k[32], k[33], exitStatus);
+            (c, v) = bind(bound);
+        }
 
         // The Groth16 check: e(A, B) = e(alpha, beta) e(IC, gamma) e(C, delta) e(D, eta).
         uint256[30] memory g;
@@ -76,18 +91,51 @@ contract ApogeeVerifier {
         return pairing(g, 12);
     }
 
-    /// The binding challenge, and the bound wires' polynomial at it. The
-    /// wires hold `head` past its first two words, which are `D`, and five
-    /// values a point: its coordinates' low and high 128 bits, which are what
-    /// the root's transcript absorbed, and its scalar. The challenge is the
-    /// hash of all of it, so `D` is fixed before the challenge is.
-    function bind(uint256[6] memory head, uint256[] calldata points) private view returns (uint256 c, uint256 v) {
-        uint256[] memory bound = new uint256[](6 + 5 * (points.length / 3));
-        for (uint256 i = 0; i < 6; i++) {
-            bound[i] = head[i];
-        }
+    /// The values the proof's bound wires hold, behind two words for their
+    /// commitment `D` and three the caller fills — the two identities and the
+    /// exit status: the public input and then the output, a wire a byte; and
+    /// five values a point — its coordinates' low and high 128 bits, which
+    /// are what the root's transcript absorbed, and its scalar.
+    function values(bytes calldata input, bytes calldata output, uint256[] calldata points)
+        private
+        pure
+        returns (uint256[] memory bound)
+    {
+        bound = new uint256[](5 + input.length + output.length + 5 * (points.length / 3));
+        limbs(points, bound, spread(output, bound, spread(input, bound, 5)));
+    }
+
+    /// The binding challenge, and the bound wires' polynomial at it: the
+    /// challenge is the hash of `D` and every value, so `D` is fixed before
+    /// the challenge is.
+    function bind(uint256[] memory bound) private view returns (uint256 c, uint256 v) {
         assembly {
-            let out := add(bound, 0xe0)
+            let size := mul(mload(bound), 0x20)
+            if iszero(staticcall(gas(), 2, add(bound, 0x20), size, 0, 0x20)) { revert(0, 0) }
+            c := mod(mload(0), R)
+            for { let at := add(bound, 0x60) let end := add(add(bound, 0x20), size) } lt(at, end) { at := add(at, 0x20) } {
+                v := mulmod(addmod(v, mload(at), R), c, R)
+            }
+        }
+    }
+
+    /// `data`'s bytes, a word each, into `into` from word `at`; and the word
+    /// after them.
+    function spread(bytes calldata data, uint256[] memory into, uint256 at) private pure returns (uint256) {
+        assembly {
+            let out := add(into, mul(add(at, 1), 0x20))
+            for { let p := data.offset let end := add(p, data.length) } lt(p, end) { p := add(p, 1) } {
+                mstore(out, byte(0, calldataload(p)))
+                out := add(out, 0x20)
+            }
+        }
+        return at + data.length;
+    }
+
+    /// Each point's four limbs and its scalar into `into`, from word `at`.
+    function limbs(uint256[] calldata points, uint256[] memory into, uint256 at) private pure {
+        assembly {
+            let out := add(into, mul(add(at, 1), 0x20))
             let p := points.offset
             for { let end := add(p, mul(points.length, 0x20)) } lt(p, end) { p := add(p, 0x60) } {
                 let x := calldataload(p)
@@ -108,11 +156,6 @@ contract ApogeeVerifier {
                 }
                 mstore(add(out, 0x80), calldataload(add(p, 0x40)))
                 out := add(out, 0xa0)
-            }
-            if iszero(staticcall(gas(), 2, add(bound, 0x20), sub(out, add(bound, 0x20)), 0, 0x20)) { revert(0, 0) }
-            c := mod(mload(0), R)
-            for { let at := add(bound, 0x60) } lt(at, out) { at := add(at, 0x20) } {
-                v := mulmod(addmod(v, mload(at), R), c, R)
             }
         }
     }

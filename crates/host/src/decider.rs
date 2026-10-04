@@ -11,19 +11,21 @@
 //!
 //! **It folds nothing.** A point's limbs and its scalar are bound wires
 //! (`groth16`), beside what the proof is about — the two recursion programs'
-//! identities and the base statement's `io_digest` and exit status — so the
-//! verifier holds their values and does the two multi-scalar multiplications
-//! itself, with the curve arithmetic a contract has precompiles for and a
-//! BN254 circuit does not. Then two pairing checks: the Groth16 proof's, and
-//! the accumulator's.
+//! identities and the base statement's exit status and public values, a wire
+//! a byte, whose digest the circuit holds to the journal's `io_digest` — so
+//! the verifier holds their values and does the two multi-scalar
+//! multiplications itself, with the curve arithmetic a contract has
+//! precompiles for and a BN254 circuit does not. Then two pairing checks: the
+//! Groth16 proof's, and the accumulator's.
 
 use curve::pairing::pairing_check;
 use curve::{G1Affine, G1Projective, G2Affine};
 use field::Fr;
 use groth16::{Proof, ProvingKey, Sink, Var, VerifyingKey, ONE};
+use verifier_core::chain;
 use verifier_core::fold::{FoldPoint, Side};
 use verifier_core::node::{journal, node, Advice, Driver, Header, ImageTemplate, NodeImage};
-use verifier_core::tape::{infinity_sentinel, run, Cell, Op};
+use verifier_core::tape::{infinity_sentinel, run, Cell, Op, Tape};
 use verifier_core::BlockProof;
 
 use constants::{fr_op, POSEIDON2_RC3_INITIAL, POSEIDON2_RC3_INTERNAL, POSEIDON2_RC3_TERMINAL};
@@ -40,21 +42,32 @@ pub struct Root<'a> {
     pub block: &'a BlockProof,
     /// The leaf program's and the node program's identities.
     pub identities: [Fr; 2],
+    /// The base statement's public input and output.
+    pub io: [&'a [u8]; 2],
 }
 
-/// The values a verifier holds before the points: the two identities, the
-/// base statement's `io_digest` and its exit status.
-pub const PUBLIC: usize = 4;
+/// The values a verifier holds before the public values' bytes: the two
+/// identities and the base statement's exit status.
+pub const HEAD: usize = 3;
 /// A point's values: its four limbs, then its scalar.
 pub const POINT: usize = 5;
 
-/// A decided root: the proof, the bound values — [`PUBLIC`] of them, then
-/// [`POINT`] a point, side `A`'s points and then side `B`'s — and how many
-/// points each side has.
+/// A decided root: the proof; the bound values — [`HEAD`] of them, a value a
+/// byte of the public input and then of the output, and [`POINT`] a point,
+/// side `A`'s points and then side `B`'s; and how many bytes and points those
+/// are.
 pub struct Decision {
     pub proof: Proof,
     pub data: Vec<Fr>,
+    pub io: [usize; 2],
     pub sides: [usize; 2],
+}
+
+impl Decision {
+    /// The bound values before the points, and the points' own.
+    fn split(&self) -> (&[Fr], &[Fr]) {
+        self.data.split_at(HEAD + self.io[0] + self.io[1])
+    }
 }
 
 /// A cell with no wire: it holds 0, and nothing has constrained it.
@@ -69,6 +82,7 @@ struct Circuit<'a, 's> {
     wires: Vec<Var>,
     /// Poseidon2's round constants, in round order.
     constants: Vec<Fr>,
+    io: [&'a [u8]; 2],
     public: Vec<Var>,
     points: [Vec<Var>; 2],
 }
@@ -352,14 +366,29 @@ impl Driver for Circuit<'_, '_> {
     }
 
     fn export(&mut self, cells: &[Cell]) {
-        self.public = [
-            journal::IDENTITIES,
-            journal::IDENTITIES + 1,
-            journal::IO,
-            journal::EXIT,
-        ]
-        .map(|k| self.bound(cells[k]))
-        .to_vec();
+        // The base statement's public values, a cell a byte past every cell
+        // the procedure used, and their digest held to the journal's. A byte
+        // is a value the verifier holds, so nothing here holds it to a range.
+        let mut t = Tape::new(self.wires.len() as Cell);
+        let io = self.io;
+        let bytes = io.map(|bytes| -> Vec<Cell> {
+            let cells = bytes.iter().map(|byte| {
+                let cell = t.fresh(1);
+                self.native.memory.set(cell, Fr::from_u64(*byte as u64));
+                self.fresh(cell);
+                cell
+            });
+            cells.collect()
+        });
+        let digest = chain::io_digest(&mut t, &bytes[0], &bytes[1]);
+        t.assert_eq(digest, cells[journal::IO]);
+        self.run(&t.ops);
+        self.public = [journal::IDENTITIES, journal::IDENTITIES + 1, journal::EXIT]
+            .map(|k| cells[k])
+            .into_iter()
+            .chain(bytes.concat())
+            .map(|cell| self.bound(cell))
+            .collect();
     }
 
     fn top(&self) -> bool {
@@ -374,6 +403,7 @@ struct Decider<'a> {
     image: NodeImage<'a>,
     statement: Statement<'a>,
     identities: [Fr; 2],
+    io: [&'a [u8]; 2],
     sides: [usize; 2],
     failed: Option<String>,
 }
@@ -385,6 +415,7 @@ impl<'a> Decider<'a> {
             image: NodeImage::read(root.image).ok_or("the image does not read")?,
             statement: Statement::of(root.vk, root.block, root.program, 0..total)?,
             identities: root.identities,
+            io: root.io,
             sides: [0; 2],
             failed: None,
         })
@@ -406,6 +437,7 @@ impl<'a> Decider<'a> {
             sink,
             wires: Vec::new(),
             constants,
+            io: self.io,
             public: Vec::new(),
             points: [Vec::new(), Vec::new()],
         };
@@ -437,6 +469,7 @@ pub fn prove(pk: &ProvingKey, root: &Root) -> Result<Decision, String> {
     Ok(Decision {
         proof,
         data,
+        io: root.io.map(|bytes| bytes.len()),
         sides: decider.sides,
     })
 }
@@ -461,12 +494,12 @@ pub fn verify(
     (g2_one, g2_x): (G2Affine, G2Affine),
     decision: &Decision,
 ) -> Result<(), String> {
-    let data = &decision.data;
+    let (_, points) = decision.split();
     let [a, b] = decision.sides;
-    if data.len() != PUBLIC + POINT * (a + b) {
+    if points.len() != POINT * (a + b) {
         return Err("the bound values are not the sides' points".into());
     }
-    if !groth16::verify(vk, &decision.proof, data) {
+    if !groth16::verify(vk, &decision.proof, &decision.data) {
         return Err("the Groth16 proof does not verify".into());
     }
     let fold = |points: &[Fr]| -> Result<G1Affine, String> {
@@ -477,7 +510,7 @@ pub fn verify(
         }
         Ok(sum.to_affine())
     };
-    let (a, b) = data[PUBLIC..].split_at(POINT * a);
+    let (a, b) = points.split_at(POINT * a);
     if !pairing_check(&[(fold(a)?, g2_one), (-fold(b)?, g2_x)]) {
         return Err("the accumulator does not discharge".into());
     }
@@ -516,13 +549,13 @@ fn g2_words(p: &G2Affine) -> Vec<u8> {
 }
 
 /// The contract's constructor arguments: its key — the Groth16 key, the
-/// ceremony's `[1]_2` and `[x]_2`, the two identities — and each side's
-/// points.
+/// ceremony's `[1]_2` and `[x]_2`, the two identities — then each side's
+/// points and the public input's and output's bytes.
 pub fn constructor(
     vk: &VerifyingKey,
     (g2_one, g2_x): (G2Affine, G2Affine),
     identities: [Fr; 2],
-    sides: [usize; 2],
+    decision: &Decision,
 ) -> Vec<u8> {
     let mut out = g1_words(&vk.alpha);
     for p in [&vk.beta, &vk.gamma, &vk.delta, &vk.eta] {
@@ -536,29 +569,39 @@ pub fn constructor(
     for id in identities {
         out.extend(word(&id.to_bytes()));
     }
-    for side in sides {
-        out.extend(count(side));
+    for n in decision.sides.into_iter().chain(decision.io) {
+        out.extend(count(n));
     }
     out
 }
 
-/// `verify`'s calldata for `decision`.
-pub fn calldata(decision: &Decision) -> Vec<u8> {
-    let data = &decision.data;
-    let signature = b"verify(uint256,uint256,uint256[10],uint256[])";
+/// `verify`'s calldata for `decision`, `io` being the base statement's public
+/// input and output.
+pub fn calldata(decision: &Decision, io: [&[u8]; 2]) -> Vec<u8> {
+    let signature = b"verify(bytes,bytes,uint256,uint256[10],uint256[])";
     let mut out = revm::primitives::keccak256(signature)[..4].to_vec();
-    for v in &data[2..PUBLIC] {
-        out.extend(word(&v.to_bytes()));
-    }
+    // The head: where each array starts, the exit status and the proof.
+    let padded = |bytes: &[u8]| 32 + bytes.len().next_multiple_of(32);
+    let head = 32 * 14;
+    out.extend(count(head));
+    out.extend(count(head + padded(io[0])));
+    out.extend(word(&decision.data[2].to_bytes()));
     let proof = &decision.proof;
     out.extend(g1_words(&proof.a));
     out.extend(g2_words(&proof.b));
     out.extend(g1_words(&proof.c));
     out.extend(g1_words(&proof.d));
-    // The points: where the array starts, its length, then three words a
-    // point.
-    let points = data[PUBLIC..].chunks_exact(POINT);
-    out.extend(count(32 * 13));
+    out.extend(count(head + padded(io[0]) + padded(io[1])));
+    for bytes in io {
+        out.extend(count(bytes.len()));
+        out.extend_from_slice(bytes);
+        out.resize(
+            out.len() + bytes.len().next_multiple_of(32) - bytes.len(),
+            0,
+        );
+    }
+    // The points: three words a point.
+    let points = decision.split().1.chunks_exact(POINT);
     out.extend(count(3 * points.len()));
     for point in points {
         out.extend(point_bytes(&point[..4]).chunks_exact(32).flat_map(word));
@@ -597,5 +640,66 @@ pub fn onchain(constructor: &[u8], calldata: &[u8]) -> Result<u64, String> {
     match called.output() {
         Some(output) if called.is_success() && output[..] == count(1) => Ok(called.tx_gas_used()),
         _ => Err(format!("the contract refuses: {called:?}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The contract, deployed and called in an EVM, over a decision made by
+    /// hand: a circuit that binds the layout's values and nothing more — two
+    /// identities, an exit status, one byte of input and two of output, and
+    /// three points whose fold discharges under a toy `x`: `x·G` and infinity
+    /// on `[1]_2`'s side, `G` on `[x]_2`'s. It accepts what the native check
+    /// accepts, and refuses a changed output byte and a changed scalar.
+    #[test]
+    fn the_contract_checks_a_decision() {
+        let f = Fr::from_u64;
+        let x = f(7);
+        let g = G1Affine::GENERATOR;
+        let points = [
+            (G1Projective::from(g).mul(&x).to_affine(), f(5)),
+            (G1Affine::IDENTITY, f(9)),
+            (g, f(5)),
+        ];
+        let io: [&[u8]; 2] = [&[0xab], &[1, 2]];
+        let mut values = vec![f(11), f(22), f(0)];
+        values.extend(io.concat().iter().map(|b| f(*b as u64)));
+        for (point, scalar) in &points {
+            values.extend(transcript::g1_limbs(&point.to_bytes()));
+            values.push(*scalar);
+        }
+        let mut circuit = |sink: &mut dyn Sink| -> Vec<Var> {
+            let wires = values.iter().map(|v| sink.alloc(*v));
+            let wires: Vec<Var> = wires.collect();
+            for w in &wires {
+                sink.enforce(&[(*w, Fr::ONE)], &[(ONE, Fr::ONE)], &[(*w, Fr::ONE)]);
+            }
+            wires
+        };
+        let pk = groth16::setup(&mut circuit, b"test");
+        let (proof, data) = groth16::prove(&pk, &mut circuit).expect("it proves");
+        let decision = Decision {
+            proof,
+            data,
+            io: [1, 2],
+            sides: [2, 1],
+        };
+        let srs = (G2Affine::GENERATOR, G2Affine::GENERATOR.mul(&x));
+        assert_eq!(verify(&pk.vk, srs, &decision), Ok(()));
+        let constructor = constructor(&pk.vk, srs, [f(11), f(22)], &decision);
+        let calldata = calldata(&decision, io);
+        assert!(onchain(&constructor, &calldata).is_ok());
+
+        // The output's first byte: past the selector, the head's 14 words,
+        // the input's two and the output's length.
+        let output = 4 + 32 * 17;
+        assert_eq!(calldata[output], 1);
+        for at in [output, calldata.len() - 1] {
+            let mut changed = calldata.clone();
+            changed[at] ^= 1;
+            assert!(onchain(&constructor, &changed).is_err(), "byte {at}");
+        }
     }
 }
