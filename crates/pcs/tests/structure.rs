@@ -264,8 +264,9 @@ fn both_sides_run_the_frozen_batch_schedule() {
         "pcs's preamble must run the shared one exactly once"
     );
 
-    // And the two batch entry points reach the transcript only through it.
-    for function in ["batch_open", "batch_accumulate"] {
+    // And the two batch entry points reach the transcript only through it:
+    // `batch_open` is `batch_open_stacked` at one column a stack.
+    for function in ["batch_open_stacked", "batch_accumulate"] {
         assert!(
             schedule(LIB, function).is_empty(),
             "{function} must not touch the transcript itself"

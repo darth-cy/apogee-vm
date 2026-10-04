@@ -300,16 +300,18 @@ fn every_guest_declares_exactly_what_it_links() {
         }
     }
     // The two halves are both non-empty, so neither clause is vacuous, and
-    // every registered family is declared by at least one guest.
+    // every base family is declared by at least one guest. The recursion
+    // format's are declared by `guests/recursion` alone, which has no
+    // committed ELF.
     assert_eq!(common::DECLARING_GUESTS.len(), 9);
     assert!(common::GUESTS.len() > common::DECLARING_GUESTS.len() + 4);
-    for (fam, ..) in DELEGATIONS {
+    for (fam, ..) in &DELEGATIONS[..constants::delegation::BASE_TYPES] {
         assert!(
             common::DECLARING_GUESTS
                 .iter()
-                .any(|(_, f)| f.contains(&fam)),
+                .any(|(_, f)| f.contains(fam)),
             "no guest declares {}",
-            program::family_name(fam)
+            program::family_name(*fam)
         );
     }
 }
