@@ -259,9 +259,9 @@ mod tests {
             ],
         };
 
-        // Keyed on the pid, which is what every temp directory in this
-        // repository does: a fixed path is what made `fixture::build_guest`
-        // unsafe to run twice at once, until it was keyed the same way.
+        // Keyed on the pid, which is what every test-side temp directory in
+        // this repository does: a fixed path is what made
+        // `fixture::build_revm_guest` unsafe to run twice at once.
         // `CARGO_TARGET_TMPDIR` is an integration-test variable and this is a
         // unit test, so it is not available here.
         let dir = std::env::temp_dir().join(format!("apogee-proof-archive-{}", std::process::id()));
