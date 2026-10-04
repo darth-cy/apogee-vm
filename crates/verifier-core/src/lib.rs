@@ -10,10 +10,13 @@
 //! claim chain through `gkr-verify`, the LogUp root checks, and the memory
 //! argument's reconciliation; [`reduce_shard`] runs them in order and returns
 //! the opening claim. `crates/verifier` decodes the curve points and runs that
-//! opening through `pcs::batch_verify`: a Mercury proof's field-side logic is
-//! not factored out of `pcs` (the owner's decision, S16), and a curve point is
-//! held here as its 64 canonical bytes and absorbed through
-//! `transcript::append_g1_points`.
+//! opening through `pcs::batch_verify`, whose field side is `pcs-verify`'s
+//! since S-RECURSION; a curve point is held here as its 64 canonical bytes and
+//! absorbed through `transcript::append_g1_points`.
+//!
+//! S-RECURSION added the recursion half (`docs/spec/recursion.md`): the
+//! stacked opening, and [`tape`], [`chain`], [`fold`] and [`node`], which write
+//! a node's verification as coprocessor calls over field cells.
 
 extern crate alloc;
 

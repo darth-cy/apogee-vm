@@ -867,21 +867,6 @@ pub fn shard_fold(shape: &ShardTape, node: &Node, merged: &[u32]) -> (Vec<Op>, V
     (t.ops, points)
 }
 
-/// The merged points, after a node's last shard: `[1]_1`, then each setup
-/// commitment, all on `A`.
-pub fn merged_points(node: &Node) -> Vec<FoldPoint> {
-    (0..=node.setups)
-        .map(|j| FoldPoint {
-            limbs: match j {
-                0 => node.generator,
-                j => node.setup + 4 * (j - 1),
-            },
-            scalar: node.merged + j,
-            side: Side::A,
-        })
-        .collect()
-}
-
 /// The ops that put a point and its scalar where a template reads them:
 /// its two coordinates from their limbs by `FROM128`, its scalar copied —
 /// or, for the point at infinity, the four `EQ`s that hold its limbs to the
