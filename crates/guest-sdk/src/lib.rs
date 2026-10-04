@@ -430,12 +430,13 @@ pub mod recursion {
 
     /// A tape's imports (`docs/spec/recursion.md` §7): the blob's 32-byte
     /// word `i` into cell `cells[i]`, the blob word-aligned. One frame,
-    /// rewritten in place, and the number looked up once.
+    /// rewritten in place, and the number looked up once. Where `a0` is left
+    /// is not checked call by call: the add/sub family's `a0` rule is what
+    /// holds a recursion request to it (§1.4), and nothing here reads it.
     pub fn import(cells: &[u32], blob: &[u8]) {
         let number = delegation_number(&DELEGATION_FIELD_IO);
         let mut frame = [constants::field_io::IMPORT, 0, 0];
         let base = frame.as_mut_ptr() as u32;
-        let end = base + 4 * frame.len() as u32;
         let mut ptr = blob.as_ptr() as u32;
         for cell in cells {
             frame[1] = *cell;
@@ -443,9 +444,7 @@ pub mod recursion {
             // SAFETY: the frame is three words on this stack and the eight
             // words at `ptr` lie in `blob`; the call reads the frame and
             // writes it back unchanged.
-            if unsafe { ecall1(number, base) } as u32 != end {
-                exit(EXIT_PRECOMPILE_ERROR);
-            }
+            unsafe { ecall1(number, base) };
             ptr += 32;
         }
     }
@@ -472,10 +471,25 @@ pub mod recursion {
                 exit(EXIT_PRECOMPILE_ERROR);
             }
             a0 += 8;
-            for _ in 0..count {
-                // SAFETY: the frame lies in `body`, which outlives the call,
-                // and the call reads it and writes it back unchanged.
-                a0 = unsafe { ecall1(number, a0) } as u32;
+            // Eight calls an iteration and the rest by four, two and one,
+            // `a7` held across them, so a call is its `ecall` and little else.
+            let mut left = count;
+            while left >= 8 {
+                for _ in 0..8 {
+                    // SAFETY: as below.
+                    a0 = unsafe { ecall1(number, a0) } as u32;
+                }
+                left -= 8;
+            }
+            for bit in [4, 2, 1] {
+                if left & bit != 0 {
+                    for _ in 0..bit {
+                        // SAFETY: the frame lies in `body`, which outlives the
+                        // call, and the call reads it and writes it back
+                        // unchanged.
+                        a0 = unsafe { ecall1(number, a0) } as u32;
+                    }
+                }
             }
         }
         if a0 != end {
