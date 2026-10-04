@@ -46,7 +46,9 @@ pub fn usage() -> &'static str {
      [--fan-in <k>] [--in-flight <n>] [--shards-in-flight <m>] [--limit <shards>]\n\
      \x20   prove a base block proof's recursion tree, node by node\n\
      bench recurse-node <out> <id> [--shards-in-flight <m>]\n\
-     \x20   prove one node of a planned tree; `recurse` runs it"
+     \x20   prove one node of a planned tree; `recurse` runs it\n\
+     bench decide <out>\n\
+     \x20   the tree's root in a Groth16 proof, checked by the contract; `recurse` ends with it"
 }
 
 /// The ceremony at `2^24`, the recursion format's stacking height, cached
@@ -303,7 +305,12 @@ pub fn run(args: &[String]) -> Result<(), String> {
         }
     }
     println!("the tree proved in {:.1} s", begun.elapsed().as_secs_f64());
-    check_root(&o.out, &tree, costs.len(), &base_vk, &block)
+    check_root(&o.out, &tree, costs.len(), &base_vk, &block)?;
+    // A tree over a prefix of the statement has no root to decide.
+    if o.limit.is_some() {
+        return Ok(());
+    }
+    decide(&[o.out.to_string_lossy().into_owned()])
 }
 
 fn describe(node: &TreeNode) -> String {
@@ -414,6 +421,72 @@ fn plan(out: &Path) -> Result<(PathBuf, Tree), String> {
 fn vk_of(out: &Path, name: &str) -> Result<VerifyingKey, String> {
     VerifyingKey::from_bytes(&read(&out.join(format!("{name}.vk")))?)
         .map_err(|e| format!("{name}.vk: {e:?}"))
+}
+
+/// The seed of the decider's key: **public, so the key is a development
+/// key** (`groth16::setup`).
+const SEED: &[u8] = b"apogee development key";
+
+/// `bench decide <out>`: the root of the tree in `<out>` in a Groth16 proof
+/// (`host::decider`), checked natively and by the contract in an EVM. Writes
+/// the contract's constructor arguments and `verify`'s calldata beside the
+/// tree, as hex.
+pub fn decide(args: &[String]) -> Result<(), String> {
+    use host::decider;
+    let [out] = args else {
+        return Err("decide needs <out>".into());
+    };
+    let out = PathBuf::from(out);
+    let (archive, tree) = plan(&out)?;
+    let (dir, stem) = split_stem(&archive)?;
+    let (base_vk, _, _, _) = host::proof_archive::read_proof(dir, &stem)?;
+    let (leaf_vk, node_vk) = (vk_of(&out, "leaf")?, vk_of(&out, "node")?);
+    let leaf = matches!(tree.nodes[tree.root], TreeNode::Leaf { .. });
+    let block = BlockProof::from_bytes(&read(&out.join(format!("{}.block", tree.root)))?)
+        .map_err(|e| format!("the root's proof: {e:?}"))?;
+    let keys =
+        recursion::program_keys(&read(&out.join("leaf.elf"))?, &read(&out.join("node.elf"))?)?;
+    let image = node_image(Kind::Internal, &BaseKey::of(&base_vk), &keys);
+    let root = decider::Root {
+        image: &image,
+        program: !leaf as u32,
+        vk: if leaf { &leaf_vk } else { &node_vk },
+        block: &block,
+        identities: [leaf_vk.identity.0, node_vk.identity.0],
+    };
+
+    let t = Instant::now();
+    let pk = decider::setup(&root, SEED)?;
+    let (constraints, wires) = pk.size();
+    println!(
+        "the decider's key, a DEVELOPMENT key: {constraints} constraints over {wires} wires, \
+         set up in {:.1} s",
+        t.elapsed().as_secs_f64()
+    );
+    let t = Instant::now();
+    let decision = decider::prove(&pk, &root)?;
+    let [a, b] = decision.sides;
+    println!(
+        "the root decided in {:.1} s, {a} points to fold on `[1]_2` and {b} on `[x]_2`",
+        t.elapsed().as_secs_f64()
+    );
+
+    let vsrs = verifier::decode_srs_verifier(&base_vk.srs_verifier)
+        .ok_or("the base key's SrsVerifier holds a point that is not one")?;
+    let srs = (vsrs.g2_gen, vsrs.g2_tau);
+    decider::verify(&pk.vk, srs, &decision)?;
+    let constructor = decider::constructor(&pk.vk, srs, root.identities, decision.sides);
+    let calldata = decider::calldata(&decision);
+    let gas = decider::onchain(&constructor, &calldata)?;
+    for (name, bytes) in [("constructor", &constructor), ("calldata", &calldata)] {
+        let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        std::fs::write(out.join(format!("decision.{name}")), hex).map_err(|e| e.to_string())?;
+    }
+    println!(
+        "the contract verifies it: {gas} gas, {} bytes of calldata",
+        calldata.len()
+    );
+    Ok(())
 }
 
 /// `bench recurse-node <out> <id>`: one node of `<out>/tree.txt`, proved.

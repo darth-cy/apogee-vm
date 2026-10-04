@@ -25,6 +25,8 @@ curve.workspace = true
 field.workspace = true
 pcs.workspace = true
 emulator.workspace = true
+# `decider`: the tree's root in a Groth16 circuit.
+groth16.workspace = true
 loader.workspace = true
 program.workspace = true
 prover.workspace = true

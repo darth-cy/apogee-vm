@@ -62,6 +62,7 @@
 //!   pairs, and the verdict the stateless guest gives each.
 
 pub mod canonical;
+pub mod decider;
 pub mod fixture;
 pub mod recorder;
 pub mod recursion;

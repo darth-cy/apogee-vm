@@ -1,0 +1,15 @@
+[package]
+name = "groth16"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The recursion tree's last proof (`host::decider`): Groth16 over this
+# repository's own BN254, with wires bound to data a verifier holds.
+[dependencies]
+constants.workspace = true
+curve.workspace = true
+field.workspace = true
+rayon.workspace = true
+# SHA-256, the binding challenge's hash: the one a contract has a precompile for.
+test-support.workspace = true

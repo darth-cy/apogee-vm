@@ -22,6 +22,7 @@ members = [
     "crates/verifier-core",
     "crates/verifier",
     "crates/prover",
+    "crates/groth16",
     "crates/host",
     "tools/kat-gen",
     "tools/bench",
@@ -61,6 +62,7 @@ checker = { path = "crates/checker" }
 verifier-core = { path = "crates/verifier-core" }
 verifier = { path = "crates/verifier" }
 prover = { path = "crates/prover" }
+groth16 = { path = "crates/groth16" }
 host = { path = "crates/host" }
 
 # Test-only, and a dev-dependency everywhere it appears: SHA-256 for pinning
