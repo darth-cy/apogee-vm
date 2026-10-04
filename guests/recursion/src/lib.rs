@@ -64,10 +64,10 @@ impl Driver for Guest {
         replay(body);
     }
 
-    fn run(&mut self, ops: Vec<Op>) {
+    fn run(&mut self, ops: &[Op]) {
         // Built at run time: a call each, its frame on the stack.
         for op in ops {
-            match op {
+            match *op {
                 Op::Fr(mut frame) => fr_op(&mut frame),
                 Op::Duplex(mut frame) => p2_field(&mut frame),
                 Op::Fq(mut frame) => fq_op(&mut frame),

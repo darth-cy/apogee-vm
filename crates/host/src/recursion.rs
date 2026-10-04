@@ -386,11 +386,11 @@ impl Driver for Native<'_> {
         }
     }
 
-    fn run(&mut self, ops: Vec<Op>) {
+    fn run(&mut self, ops: &[Op]) {
         if self.failed.is_some() {
             return;
         }
-        if let Err(op) = run(&ops, &mut self.memory, &[]) {
+        if let Err(op) = run(ops, &mut self.memory, &[]) {
             self.fail(format!(
                 "op {op} of the procedure's own refuses: {:?}",
                 ops[op]

@@ -886,17 +886,32 @@ pub fn merged_points(node: &Node) -> Vec<FoldPoint> {
 /// its two coordinates from their limbs by `FROM128`, its scalar copied —
 /// or, for the point at infinity, the four `EQ`s that hold its limbs to the
 /// sentinel and nothing else, since it adds nothing.
-pub fn load_point(p: &FoldPoint, l: &Layout, sentinel: Cell, infinity: bool) -> Vec<Op> {
+pub fn load_point(p: &FoldPoint, l: &Layout, sentinel: Cell, infinity: bool) -> Load {
     if infinity {
-        return (0..4)
-            .map(|k| Op::Fr([fr_op::EQ, 0, p.limbs + k, sentinel]))
-            .collect();
+        let ops = core::array::from_fn(|k| Op::Fr([fr_op::EQ, 0, p.limbs + k as u32, sentinel]));
+        return Load { ops, n: 4 };
     }
-    alloc::vec![
+    let ops = [
         Op::Fq([q::FROM128, l.point, p.limbs, l.zero]),
         Op::Fq([q::FROM128, l.point + 4, p.limbs + 2, l.zero]),
         Op::Fr([fr_op::ADD, l.scalar, p.scalar, ZERO]),
-    ]
+        Op::Fr([fr_op::EQ, 0, ZERO, ZERO]),
+    ];
+    Load { ops, n: 3 }
+}
+
+/// [`load_point`]'s ops, three or four, with no allocation: a node loads a
+/// point for each it folds.
+pub struct Load {
+    ops: [Op; 4],
+    n: usize,
+}
+
+impl core::ops::Deref for Load {
+    type Target = [Op];
+    fn deref(&self) -> &[Op] {
+        &self.ops[..self.n]
+    }
 }
 
 #[cfg(test)]

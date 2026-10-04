@@ -8,11 +8,12 @@
 //! ```
 //!
 //! **The tree is fixed before anything is proved** (`host::recursion::Tree`):
-//! leaves of consecutive base shards — at most `--leaf` (32), and by an
-//! estimate of their folds' `FQ_OP` rows at most `--budget` (750,000, which
-//! with a node's fixed MSM work fills one `2^20` shard) — then levels of
-//! internal nodes over at most `--fan-in` (4) and at least two children, a
-//! group of one carried up a level as it is. `--limit` plans over the base
+//! leaves of consecutive base shards — at most `--leaf` (64), and by an
+//! estimate of their folds' `FQ_OP` rows at most `--budget` (none) — then
+//! levels of internal nodes over at most `--fan-in` (4) and at least two
+//! children, a group of one carried up a level as it is. **A node costs about
+//! a shard a family before it does any work** — sixteen — so a leaf is
+//! cheapest large: another `FQ_OP` shard is one shard, another node sixteen. `--limit` plans over the base
 //! statement's first shards only, which proves everything but the root's
 //! claim to the whole statement.
 //!
@@ -103,8 +104,8 @@ fn options(args: &[String]) -> Result<Options, String> {
     let mut o = Options {
         archive: PathBuf::new(),
         out: PathBuf::new(),
-        leaf: 32,
-        budget: 750_000,
+        leaf: 64,
+        budget: u64::MAX,
         fan_in: 4,
         in_flight: 1,
         shards_in_flight: 1,

@@ -34,7 +34,7 @@ use crate::fold::{
     finish, load_point, point_template, prelude, shard_fold, FoldPoint, Hole, Node, Side, Template,
     POINT_CELLS,
 };
-use crate::tape::{encode, shard_tape, Cell, CellTranscript, Limbs, Op, Tape, ZERO};
+use crate::tape::{encode, schedule, shard_tape, Cell, CellTranscript, Limbs, Op, Tape, ZERO};
 use crate::{check_memory_windows, shard_window, statement_shards, VerifyingKey, VmConfig};
 
 /// Every shard tape's first cell: cells `0..3` are the zero state.
@@ -588,10 +588,12 @@ pub fn node_image(kind: Kind, base: &BaseKey, programs: &[ProgramKey]) -> Vec<u3
             }
             offset += n;
             let tape = shard_tape(config, &circuit, merged.len(), FIRST);
-            let at = match pool.iter().position(|ops| *ops == tape.ops) {
+            // Its runs as long as its dependencies allow: a replay pays a run.
+            let ops = schedule(&tape.ops);
+            let at = match pool.iter().position(|o| *o == ops) {
                 Some(at) => at,
                 None => {
-                    pool.push(tape.ops.clone());
+                    pool.push(ops);
                     pool.len() - 1
                 }
             };
@@ -716,7 +718,7 @@ pub fn node_image(kind: Kind, base: &BaseKey, programs: &[ProgramKey]) -> Vec<u3
             }
             w.body(&t.ops);
             let (fold, points) = shard_fold(tape, &node, merged);
-            w.body(&fold);
+            w.body(&schedule(&fold));
             w.put(points.len() as u32);
             for p in &points {
                 for v in [p.limbs, p.scalar, (p.side == Side::B) as u32] {
@@ -814,7 +816,7 @@ pub trait Driver {
     /// Replay an image body; any imports it has were advised just before.
     fn replay(&mut self, body: &[u32]);
     /// Run ops built at run time.
-    fn run(&mut self, ops: Vec<Op>);
+    fn run(&mut self, ops: &[Op]);
     /// Fill `cells` with the advice `what` names.
     fn advise(&mut self, cells: &[Cell], what: Advice);
     /// Replay a template once, its witnesses imported first; `scalar` is
@@ -832,7 +834,7 @@ pub trait Driver {
 fn flush<D: Driver>(d: &mut D, t: &mut Tape) {
     let ops = core::mem::take(&mut t.ops);
     if !ops.is_empty() {
-        d.run(ops);
+        d.run(&ops);
     }
 }
 
@@ -849,7 +851,7 @@ fn point<D: Driver>(d: &mut D, image: &NodeImage, p: &FoldPoint) {
         Side::B => (&node.b, &image.msm[1]),
     };
     let infinity = d.infinity(p.limbs);
-    d.run(load_point(p, l, node.sentinel, infinity));
+    d.run(&load_point(p, l, node.sentinel, infinity));
     if !infinity {
         d.template(&msm.point, Some(l.scalar));
     }

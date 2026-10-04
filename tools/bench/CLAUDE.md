@@ -19,7 +19,7 @@ cargo run --release -p bench -- prove --stateless <fixture.json | input.bin> [--
 `src/recurse.rs`, `docs/spec/recursion.md` §8.4):
 
 ```
-cargo run --release -p bench -- recurse <dir>/<stem> --out <dir> [--leaf 32] [--budget 750000]
+cargo run --release -p bench -- recurse <dir>/<stem> --out <dir> [--leaf 64] [--budget <rows>]
     [--fan-in 4] [--in-flight 1] [--shards-in-flight 1] [--limit <shards>]
 ```
 

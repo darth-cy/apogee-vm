@@ -1341,6 +1341,110 @@ pub fn encode(ops: &[Op]) -> Encoded {
     Encoded { imports, body }
 }
 
+/// The cells an op reads and those it writes, as the circuits' accesses name
+/// them, an indirect `FQ_OP` operand aside.
+fn cells_of(op: &Op) -> (Vec<Cell>, Vec<Cell>) {
+    match *op {
+        Op::Fr([code, d, a, b]) => match code {
+            fr_op::IMM => (vec![], vec![d]),
+            fr_op::SHL | fr_op::INV => (vec![a], vec![d]),
+            fr_op::MAC => (vec![d, a, b], vec![d]),
+            fr_op::EQ => (vec![a, b], vec![]),
+            fr_op::DIGIT => (vec![a], vec![d, b]),
+            _ => (vec![a, b], vec![d]),
+        },
+        Op::Duplex([n, s, x, y, d]) => {
+            let mut reads = vec![s, s + 1, s + 2];
+            reads.extend((n >= 1).then_some(x));
+            reads.extend((n >= 2).then_some(y));
+            (reads, vec![d, d + 1, d + 2])
+        }
+        Op::Fq([_, d, a, b]) => {
+            let element = |c: Cell| (c..c + 4).collect::<Vec<_>>();
+            ([element(a), element(b), element(d)].concat(), element(d))
+        }
+        Op::Import { cell, .. } => (vec![], vec![cell]),
+    }
+}
+
+/// `ops` reordered so that one family's calls run together wherever nothing
+/// between them depends on them, since a replay pays per run and not only
+/// per call: every op still follows the ops whose cells it reads or
+/// overwrites and those that read what it overwrites, and among the ops
+/// ready to run the next is the earliest of the family running, or the
+/// earliest of all. Imports keep their order. A tape with an `FQ_OP` call,
+/// whose indirect operands name cells only their digits know, or with an
+/// inverse a host fills between its ops, is not for this.
+pub fn schedule(ops: &[Op]) -> Vec<Op> {
+    use alloc::collections::BinaryHeap;
+    use core::cmp::Reverse;
+    assert!(
+        !ops.iter().any(|op| matches!(op, Op::Fq(_))),
+        "tape: an FQ_OP tape is not scheduled"
+    );
+    let n = ops.len();
+    let mut after: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut waiting = vec![0usize; n];
+    let mut last: BTreeMap<Cell, usize> = BTreeMap::new();
+    let mut readers: BTreeMap<Cell, Vec<usize>> = BTreeMap::new();
+    for (i, op) in ops.iter().enumerate() {
+        let (reads, writes) = cells_of(op);
+        let mut edge = |j: usize, after: &mut Vec<Vec<usize>>| {
+            if j != i {
+                after[j].push(i);
+                waiting[i] += 1;
+            }
+        };
+        for c in &reads {
+            if let Some(&j) = last.get(c) {
+                edge(j, &mut after);
+            }
+            readers.entry(*c).or_default().push(i);
+        }
+        for c in &writes {
+            if let Some(&j) = last.get(c) {
+                edge(j, &mut after);
+            }
+            for j in readers.remove(c).unwrap_or_default() {
+                edge(j, &mut after);
+            }
+            last.insert(*c, i);
+        }
+    }
+    // A family a heap: imports, then field operations, then duplexes.
+    let family = |op: &Op| match op {
+        Op::Import { .. } => 0,
+        Op::Fr(_) => 1,
+        _ => 2,
+    };
+    let mut ready: [BinaryHeap<Reverse<usize>>; 3] = Default::default();
+    for (i, w) in waiting.iter().enumerate() {
+        if *w == 0 {
+            ready[family(&ops[i])].push(Reverse(i));
+        }
+    }
+    let mut out = Vec::with_capacity(n);
+    let mut running = 0;
+    while out.len() < n {
+        if ready[0].is_empty() && ready[running].is_empty() {
+            running = (1..3)
+                .filter(|f| !ready[*f].is_empty())
+                .min_by_key(|f| ready[*f].peek().map(|r| r.0))
+                .expect("a tape with no cycle has an op ready");
+        }
+        let f = if ready[0].is_empty() { running } else { 0 };
+        let Reverse(i) = ready[f].pop().expect("a ready op");
+        out.push(ops[i]);
+        for k in core::mem::take(&mut after[i]) {
+            waiting[k] -= 1;
+            if waiting[k] == 0 {
+                ready[family(&ops[k])].push(Reverse(k));
+            }
+        }
+    }
+    out
+}
+
 /// An encoded body's frames as ops again, or `None` if it is not runs of a
 /// field family's frames.
 pub fn decode(body: &[u32]) -> Option<Vec<Op>> {
@@ -1577,6 +1681,62 @@ pub fn run(ops: &[Op], memory: &mut Memory, blob: &[u8]) -> Result<(), usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A scheduled tape computes every cell its tape does, imports in their
+    /// blob order, in fewer runs: here a transcript and arithmetic on its
+    /// challenges, interleaved as a verifier writes them.
+    #[test]
+    fn a_schedule_keeps_every_value_in_fewer_runs() {
+        let mut t = Tape::new(3);
+        let mut tr = CellTranscript::new();
+        let mut acc = t.small(1);
+        let mut inputs = Vec::new();
+        for round in 0..6 {
+            let x = t.input();
+            inputs.push(x);
+            tr.append(&mut t, 7, &[x]);
+            let c = tr.challenge(&mut t, 9);
+            let p = t.mul(acc, c);
+            acc = t.add(p, x);
+            let d = t.copy(acc);
+            let digit = t.fresh(1);
+            t.fr(fr_op::DIGIT, digit, d, d);
+            t.mac(acc, digit, c);
+            let _ = round;
+        }
+        let blob: Vec<u8> = (0..6u64)
+            .flat_map(|v| Fr::from_u64(v + 5).to_bytes())
+            .collect();
+        let scheduled = schedule(&t.ops);
+        let runs = |ops: &[Op]| {
+            let e = encode(ops);
+            assert_eq!(e.imports, inputs, "the imports in blob order");
+            let mut at = 0;
+            let mut runs = 0;
+            while at < e.body.len() {
+                let width = if e.body[at] == constants::ecall::PRECOMPILE_P2_FIELD {
+                    5
+                } else {
+                    4
+                };
+                at += 2 + width * e.body[at + 1] as usize;
+                runs += 1;
+            }
+            runs
+        };
+        assert!(
+            runs(&scheduled) < runs(&t.ops),
+            "{} against {}",
+            runs(&scheduled),
+            runs(&t.ops)
+        );
+        let (mut a, mut b) = (Memory::default(), Memory::default());
+        run(&t.ops, &mut a, &blob).expect("the tape runs");
+        run(&scheduled, &mut b, &blob).expect("the schedule runs");
+        for c in 0..t.end() {
+            assert_eq!(a.get(c), b.get(c), "cell {c}");
+        }
+    }
 
     /// An element `FQ_OP` reads under one timestamp — `b`, `d` — is refused
     /// once one of its cells is accessed alone, as the fill refuses it; `a`,
