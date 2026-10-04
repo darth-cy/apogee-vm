@@ -67,6 +67,10 @@ pub struct Profile {
     pub mnemonics: Vec<(String, u64)>,
     /// Cycles at a pc no function symbol claims.
     pub unclaimed: u64,
+    /// `ZERO_WINDOWS`' shard count: the ordinary-RAM windows of the config's
+    /// window height the run touched, window 0 aside — which is what a heap
+    /// that never frees costs a proof (`trace::init_windows`).
+    pub ram_windows: usize,
     pub execution: Execution,
 }
 
@@ -104,6 +108,10 @@ pub fn profile(
         count(&mut hist, slot_base, chunk);
     }
 
+    let window_height = config
+        .height(constants::family::ZERO_WINDOWS)
+        .expect("every config holds the zero-window family");
+    let ram_windows = trace::init_windows(&done.state, window_height).len();
     let funcs = attribute(elf, slot_base, &hist);
     let claimed: u64 = claimed_cycles(&funcs, slot_base, &hist);
     let total: u64 = hist.iter().sum();
@@ -111,6 +119,7 @@ pub fn profile(
         cycles: done.execution.cycle_count,
         mnemonics: by_mnemonic(image, &hist),
         unclaimed: total - claimed,
+        ram_windows,
         hist,
         slot_base,
         profile: done.profile,

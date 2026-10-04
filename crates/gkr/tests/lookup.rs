@@ -3,6 +3,8 @@
 //! tables' closed forms against the tables themselves (acceptance 9), the
 //! derived LogUp challenge slots, and the root check.
 
+mod common;
+
 use constants::{challenge_slot, lookup_channel};
 use constraints::{
     CircuitArtifact, Coeff, GateDef, LayerSpec, Padding, PolyAddress, ProducingEntry, Relation,
@@ -287,14 +289,13 @@ fn prove_and_verify(
             other => panic!("an output is an inner address, not {other}"),
         })
         .collect();
-    verify(
-        a,
-        &proof,
-        &OutputClaims { tables },
-        &challenges,
-        &mut bound(),
-    )
-    .map(|_| ())
+    let outputs = OutputClaims { tables };
+    let verdict = verify(a, &proof, &outputs, &challenges, &mut bound());
+    common::assert_tape_agrees(
+        &verdict,
+        common::tape_verify(a, &proof, &outputs, &challenges, digest, &[]),
+    );
+    verdict.map(|_| ())
 }
 
 // ---------------------------------------------------------------------------

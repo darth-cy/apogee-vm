@@ -8,6 +8,7 @@ members = [
     "crates/poly",
     "crates/sumcheck",
     "crates/srs",
+    "crates/pcs-verify",
     "crates/pcs",
     "crates/loader",
     "crates/isa",
@@ -54,6 +55,7 @@ trace = { path = "crates/trace" }
 emulator = { path = "crates/emulator" }
 constraints = { path = "crates/constraints" }
 gkr-verify = { path = "crates/gkr-verify" }
+pcs-verify = { path = "crates/pcs-verify" }
 gkr = { path = "crates/gkr" }
 checker = { path = "crates/checker" }
 verifier-core = { path = "crates/verifier-core" }

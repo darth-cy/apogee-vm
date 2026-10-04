@@ -16,7 +16,7 @@ use std::process::Command;
 use crate::write_vectors;
 
 /// The guest ELFs the loader tests read, and what each is for.
-pub const ELF_FIXTURES: [(&str, &str); 22] = [
+pub const ELF_FIXTURES: [(&str, &str); 23] = [
     (
         "fib",
         "real compiler output: the address and boundary oracle",
@@ -126,6 +126,12 @@ pub const ELF_FIXTURES: [(&str, &str); 22] = [
          addition computed a second way in software and compared limb for \
          limb, the point checked against `k256` and `ark-bn254` by \
          cross-multiplication, and all four completeness cases",
+    ),
+    (
+        "field-ops",
+        "S-RECURSION's guest: every FR_OP op, a P2_FIELD duplex step at each \
+         of n = 2, 1, 0, and both FIELD_IO moves, each held to a literal \
+         through an export",
     ),
 ];
 

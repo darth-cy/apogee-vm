@@ -67,6 +67,12 @@ preserves every register but `a0`.**
 | `a7` | the delegation ecall number |
 | `a0` | in: the **frame base pointer**; out: 0 on success |
 
+**One amendment, for the recursion format's types only** (owner's decision,
+S-RECURSION): a type past `constants::delegation::BASE_TYPES` answers the frame
+base advanced past its frame, so a run of consecutive frames replays as
+back-to-back ecalls. Every base type, the base `ADD_SUB` circuit and every base
+key are unchanged. `docs/spec/recursion.md` §1.4 is the rule.
+
 A delegation number is in the **precompile** range `0x0500..=0x05FF`
 (`constants::ecall::PRECOMPILE_FIRST`..`PRECOMPILE_LAST`), because a delegation
 is a deterministic function of guest memory and never prover advice. Numbers are

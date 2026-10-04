@@ -22,3 +22,6 @@ transcript.workspace = true
 # columns before proving and verifying. S16 absorbs commitments instead.
 sumcheck.workspace = true
 test-support.workspace = true
+# The recursion verifier's tape (`verifier_core::tape`), held to `verify` over
+# the honest proofs these suites already make.
+verifier-core.workspace = true

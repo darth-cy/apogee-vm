@@ -18,20 +18,24 @@
 extern crate alloc;
 
 mod block;
+pub mod chain;
+pub mod fold;
 mod reduce;
 mod statement;
+pub mod tape;
 mod types;
 pub mod wire;
 
 pub use block::{check_ts_windows, BlockProof, BlockReconciliation, ShardRecord};
 pub use reduce::{
-    derive_global_phase, reduce_shard, verify_global_memory, verify_shard_local, GlobalChallenges,
+    derive_global_phase, reduce_shard, stack_challenges, stack_values, verify_global_memory,
+    verify_shard_local, GlobalChallenges,
 };
 pub use statement::{
     absorb_statement_descriptor, advice_first_window, boundary_scalars, check_memory_windows,
     global_commit, identity_digest, memory_slots, public_io_words, shard_challenges,
-    shard_transcript, srs_digest, statement_shards, window_height, GlobalTranscript,
-    ProgramIdentity, VmConfig, TRIVIAL_TS_WINDOW,
+    shard_transcript, shard_window, srs_digest, stack_count, statement_shards, window_height,
+    GlobalTranscript, ProgramIdentity, VmConfig, STACK_LOG, TRIVIAL_TS_WINDOW,
 };
 pub use types::{
     read_gkr, write_gkr, OpeningClaim, PublicInputs, ShardProof, VerifyError, VerifyingKey,

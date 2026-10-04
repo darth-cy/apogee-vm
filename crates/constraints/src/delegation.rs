@@ -63,6 +63,14 @@ const _: () = {
             "a frame query already holds (RAM, FRAME_DELTA): an invocation's frame events \
              would be filed into the requesting row"
         );
+        // `FIELD_IO`'s data words are RAM events at their own slot, under the
+        // same rule (`docs/spec/recursion.md` §5).
+        assert!(
+            !(crate::memory::FRAME_SPACE[q] == constants::address_space::RAM
+                && crate::memory::FRAME_DELTA[q] == constants::field_io::DATA_DELTA),
+            "a frame query already holds (RAM, DATA_DELTA): an invocation's data events \
+             would be filed into the requesting row"
+        );
         q += 1;
     }
 };
@@ -240,31 +248,53 @@ pub(crate) fn leaf(
     ts: Timestamp,
     value: Option<PolyAddress>,
 ) -> GateDef {
+    masked_leaf(LIVE, space, addr, 0, ts, value)
+}
+
+/// [`leaf`] under its own `mask` and at `addr + offset`:
+/// `mask·T(space, addr + offset, ts, value) + 1 − mask`.
+///
+/// A field query is the reason for both (`docs/spec/recursion.md` §1): a
+/// recursion row's queries switch on and off with its operation, so each
+/// carries a mask of its own, and `P2_FIELD`'s three lanes sit at one base cell
+/// plus 0, 1 and 2. At `LIVE` and offset 0 this is [`leaf`] term for term.
+pub(crate) fn masked_leaf(
+    mask: PolyAddress,
+    space: u8,
+    addr: PolyAddress,
+    offset: u64,
+    ts: Timestamp,
+    value: Option<PolyAddress>,
+) -> GateDef {
     let mut lin = vec![
-        (slot(challenge_slot::MEM_GAMMA), LIVE),
-        (neg(1), LIVE),
-        (lit(space as u64), LIVE),
+        (slot(challenge_slot::MEM_GAMMA), mask),
+        (neg(1), mask),
+        (lit(space as u64), mask),
     ];
-    let mut products = vec![(slot(challenge_slot::MEM_ALPHA_ADDR), addr, LIVE)];
+    let mut products = vec![(slot(challenge_slot::MEM_ALPHA_ADDR), addr, mask)];
+    // `α_addr·offset·mask`, the offset's term repeated as `4·cycle`'s is below.
+    for _ in 0..offset {
+        lin.push((slot(challenge_slot::MEM_ALPHA_ADDR), mask));
+    }
     match ts {
         Timestamp::Zero => {}
         Timestamp::Column(column) => {
-            products.push((slot(challenge_slot::MEM_ALPHA_TS), column, LIVE));
+            products.push((slot(challenge_slot::MEM_ALPHA_TS), column, mask));
         }
         Timestamp::Write(delta) => {
             // `4·cycle + delta`: a coefficient is one literal or one challenge,
             // so `α_ts·4·cycle` is the term repeated four times and
-            // `α_ts·delta·live` `delta` times (`docs/spec/memory.md` §1).
+            // `α_ts·delta·mask` `delta` times (`docs/spec/memory.md` §1).
             for _ in 0..mem::TS_STEP {
-                products.push((slot(challenge_slot::MEM_ALPHA_TS), CYCLE, LIVE));
+                products.push((slot(challenge_slot::MEM_ALPHA_TS), CYCLE, mask));
             }
             for _ in 0..delta {
-                lin.push((slot(challenge_slot::MEM_ALPHA_TS), LIVE));
+                lin.push((slot(challenge_slot::MEM_ALPHA_TS), mask));
             }
         }
     }
     if let Some(value) = value {
-        products.push((slot(challenge_slot::MEM_ALPHA_VAL), value, LIVE));
+        products.push((slot(challenge_slot::MEM_ALPHA_VAL), value, mask));
     }
     GateDef::Quadratic {
         constant: lit(1),
@@ -289,6 +319,90 @@ pub(crate) fn pad_leaf() -> GateDef {
 /// of two with leaves that are literally 1.
 pub fn leaves_a_side(words: usize) -> usize {
     (words + 1).next_power_of_two()
+}
+
+/// [`leaves`] with `extra` read/write pairs after the anchor's, all padded to
+/// one power of two a side: a recursion row's field and data accesses.
+pub(crate) fn leaves_with(
+    space: u8,
+    words: usize,
+    extra: Vec<[(String, GateDef); 2]>,
+) -> [Vec<(String, GateDef)>; 2] {
+    let [mut reads, mut writes] = leaves(space, words);
+    reads.retain(|(name, _)| !name.starts_with("read_pad"));
+    writes.retain(|(name, _)| !name.starts_with("write_pad"));
+    for [read, write] in extra {
+        reads.push(read);
+        writes.push(write);
+    }
+    let side = reads.len().next_power_of_two();
+    for i in reads.len()..side {
+        reads.push((format!("read_pad{i}"), pad_leaf()));
+        writes.push((format!("write_pad{i}"), pad_leaf()));
+    }
+    [reads, writes]
+}
+
+/// One access a recursion row makes besides its frame
+/// (`docs/spec/recursion.md` §2.1): the word or cell `addr + offset` of `space`,
+/// read at `read_ts` with value `read` and written at `4·cycle + delta` with
+/// value `write`, under `mask`. A read-only access writes back what it read, so
+/// its `write` is its `read` column.
+pub(crate) struct Access {
+    pub(crate) name: String,
+    pub(crate) space: u8,
+    pub(crate) mask: PolyAddress,
+    pub(crate) addr: PolyAddress,
+    pub(crate) offset: u64,
+    pub(crate) delta: u64,
+    pub(crate) read_ts: PolyAddress,
+    pub(crate) read: PolyAddress,
+    pub(crate) write: PolyAddress,
+    pub(crate) gap: [PolyAddress; GAP_CHUNKS],
+}
+
+impl Access {
+    /// Its read leaf and its write leaf.
+    pub(crate) fn leaves(&self) -> [(String, GateDef); 2] {
+        let leaf = |ts, value| {
+            masked_leaf(
+                self.mask,
+                self.space,
+                self.addr,
+                self.offset,
+                ts,
+                Some(value),
+            )
+        };
+        [
+            (
+                format!("read_{}", self.name),
+                leaf(Timestamp::Column(self.read_ts), self.read),
+            ),
+            (
+                format!("write_{}", self.name),
+                leaf(Timestamp::Write(self.delta), self.write),
+            ),
+        ]
+    }
+
+    /// Its gap's top chunk, under the selector its scaled obligation carries.
+    pub(crate) fn scaled(&self) -> (PolyAddress, PolyAddress) {
+        (self.gap[GAP_CHUNKS - 1], self.mask)
+    }
+
+    /// Its read strictly precedes its write: `4·cycle + delta − 1 − read_ts`
+    /// in `[0, 2^38)`, four `RANGE16` obligations under its own mask.
+    pub(crate) fn gap_lookups(&self) -> Vec<LookupExpr> {
+        bound_chunked(
+            &format!("gap_{}", self.name),
+            vec![(lit(mem::TS_STEP), CYCLE), (neg(1), self.read_ts)],
+            &self.gap,
+            mem::TS_BITS,
+            self.mask,
+            Coeff::Literal(Fr::from_u64(self.delta) - Fr::from_u64(1)),
+        )
+    }
 }
 
 /// The read side and the write side of the memory subtree, each padded.
@@ -738,6 +852,81 @@ pub(crate) fn frame_gates_range16(
             vec![(neg(1), LIVE, BASE), (neg(1), LIVE, base_room)],
         ),
     ));
+    out
+}
+
+/// The `W` prefix a **read-only** `RANGE16` frame takes, `docs/spec/recursion.md`
+/// §3-§5's three families: two gap chunks a word at `W[2j + c]`, then
+/// `base_low`, its halfword, `base_room`, its halfword — `MOD_MUL`'s layout.
+pub(crate) const fn frame_witness_range16(words: usize) -> u32 {
+    (GAP_CHUNKS * words + 4) as u32
+}
+
+/// [`frame_witness_range16`]'s column names.
+pub(crate) fn frame_names_range16(words: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for j in 0..words {
+        for c in 0..GAP_CHUNKS {
+            out.push(format!("gap{j}_c{c}"));
+        }
+    }
+    for name in ["base_low", "base_low_hi", "base_room", "base_room_hi"] {
+        out.push(name.to_string());
+    }
+    out
+}
+
+/// A read-only `RANGE16` frame's gates and obligations: [`frame_gates_range16`],
+/// one `writes_back_w{j}` a word — the frame survives the call unchanged — and
+/// the gap and base bounds over [`frame_witness_range16`]'s columns.
+pub(crate) fn read_only_frame_range16(
+    words: usize,
+    frame_bytes: u64,
+) -> (Vec<(String, GateDef)>, Vec<LookupExpr>) {
+    let gap = |j: usize, c: usize| w(GAP_CHUNKS * j + c);
+    let base = GAP_CHUNKS * words;
+    let (base_low, base_low_hi, base_room, base_room_hi) =
+        (w(base), w(base + 1), w(base + 2), w(base + 3));
+    let mut gates = frame_gates_range16(words, frame_bytes, base_low, base_room);
+    for j in 0..words {
+        gates.push((
+            format!("writes_back_w{j}"),
+            linear(vec![
+                (lit(1), word(j, WORD_WRITE_VALUE)),
+                (neg(1), word(j, WORD_READ_VALUE)),
+            ]),
+        ));
+    }
+    let mut lookups = gap_lookups_range16(words, &gap);
+    lookups.extend(bound_chunked(
+        "base_low",
+        vec![(lit(1), base_low)],
+        &[base_low_hi],
+        BASE_LOW_BITS as u32,
+        LIVE,
+        lit(0),
+    ));
+    lookups.extend(bound_chunked(
+        "base_room",
+        vec![(lit(1), base_room)],
+        &[base_room_hi],
+        BASE_ROOM_BITS as u32,
+        LIVE,
+        lit(0),
+    ));
+    (gates, lookups)
+}
+
+/// [`read_only_frame_range16`]'s copower-scaled columns, each with the
+/// selector its scaled obligation carries: every gap's top chunk and both base
+/// halfwords, all under `live`.
+pub(crate) fn frame_scaled_range16(words: usize) -> Vec<(PolyAddress, PolyAddress)> {
+    let base = GAP_CHUNKS * words;
+    let mut out: Vec<(PolyAddress, PolyAddress)> = (0..words)
+        .map(|j| (w(GAP_CHUNKS * j + GAP_CHUNKS - 1), LIVE))
+        .collect();
+    out.push((w(base + 1), LIVE));
+    out.push((w(base + 3), LIVE));
     out
 }
 

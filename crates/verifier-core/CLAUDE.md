@@ -45,8 +45,19 @@ pub fn global_commit(vk: &VerifyingKey, statement: &PublicInputs) -> GlobalTrans
 pub fn shard_transcript(digest: Fr, family: u32, index: u32, ts_window: [u64; 2],
                         witness_commitments: &[[u8; 64]]) -> (Transcript, Fr, Fr);   // (t, g, β)
 pub fn memory_slots(memory: &[Fr; 4]) -> ExternalChallenges;
+pub fn shard_window(family: u32, index: u32, windows: &[u32], trace_vars: u32) -> Option<u32>;
 pub fn shard_challenges(circuit: &FamilyCircuit, index: u32, windows: &[u32], memory: &[Fr; 4],
                         g: Fr, beta: Fr) -> ExternalChallenges;
+// S-RECURSION, docs/spec/recursion.md §1.3: the recursion format's stacked opening. σ = 0
+// is the base format exactly, and one code path carries both.
+pub const STACK_LOG: u32 = 24;
+pub fn stack_count(columns: usize, sigma: u32) -> usize;
+pub fn stack_challenges(t: &mut Transcript, sigma: u32) -> Vec<Fr>;
+pub fn stack_values(values: &[Fr], memory: usize, witness: usize, r: &[Fr]) -> Vec<Fr>;
+// S-RECURSION, docs/spec/recursion.md §7: a shard's checks as a straight-line list of
+// coprocessor calls over field cells, compiled on the host and replayed by the guest.
+pub mod tape;   // Tape, CellTranscript, gkr_verify, batch_preamble, mercury_scalars,
+                // shard_tape, shard_blob, and run, the native reading
 
 pub enum VerifyError { Statement(&'static str), Malformed(&'static str), Constraint { layer: usize },
                        Lookup { channel: u32 }, MemoryArgument(&'static str), Opening }   // + Display

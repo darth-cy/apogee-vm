@@ -186,7 +186,7 @@ fn pass1(
     // last-access tables and the profile: the window list, the shard counts and
     // the register/pc boundary (`docs/spec/memory.md` §3.4, §4.1).
     let windows = init_windows(&done.state, h);
-    let counts = shard_counts(config, &done.profile, &io.advice, &windows, h);
+    let counts = shard_counts(config, &done.profile, &done.state, &io.advice, &windows, h);
     let boundary = build_boundary_finals(&done.state);
     report.cycles = done.execution.cycle_count;
 
@@ -323,7 +323,11 @@ fn commit_source(
     let memory = crate::memory_columns_of(setup, family, index, source)?;
     #[cfg(feature = "debug-info")]
     let fill_ms = clock.ms();
-    let commitments = crate::commit_all_owned(&setup.srs, &memory);
+    let commitments = crate::commit_phase(
+        &setup.srs,
+        &memory.iter().collect::<Vec<_>>(),
+        crate::sigma_of(setup, family),
+    );
     dlog!(
         Phase,
         family = family,

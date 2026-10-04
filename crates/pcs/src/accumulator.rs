@@ -19,49 +19,15 @@ use constants::transcript_tags as tags;
 use curve::msm::msm;
 use curve::G1Affine;
 use field::Fr;
+use pcs_verify::{accumulator_digest, entry_words, PairingSide, ENTRY_WORDS};
 use srs::SrsVerifier;
 use transcript::Transcript;
 
-use crate::{g1_limbs, infinity_sentinel, PcsError};
+use crate::{infinity_sentinel, PcsError};
 
 // ---------------------------------------------------------------------------
 // The entry
 // ---------------------------------------------------------------------------
-
-/// Which of the two fixed `G2` arguments an accumulator term pairs against.
-///
-/// Every deferred relation in this protocol has the shape
-/// `e(A, [1]_2) = e(B, [x]_2)`, so a term is on the `A` side or the `B` side
-/// and there is no third possibility. **Frozen forever**, including the wire
-/// values in [`AccumulatorEntry`]'s word form: `G2One` is `0` and `G2X` is `1`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PairingSide {
-    /// Pairs against `[1]_2` — a term of `A`.
-    G2One,
-    /// Pairs against `[x]_2` — a term of `B`.
-    G2X,
-}
-
-impl PairingSide {
-    /// The tag word this side is written as. `docs/spec/accumulator.md` §2.
-    fn word(self) -> Fr {
-        match self {
-            PairingSide::G2One => Fr::ZERO,
-            PairingSide::G2X => Fr::ONE,
-        }
-    }
-
-    /// The inverse of [`PairingSide::word`]; anything else is malformed.
-    fn from_word(w: Fr) -> Option<PairingSide> {
-        if w == Fr::ZERO {
-            Some(PairingSide::G2One)
-        } else if w == Fr::ONE {
-            Some(PairingSide::G2X)
-        } else {
-            None
-        }
-    }
-}
 
 /// One term of one deferred pairing relation: `scalar * point`, on `side`.
 ///
@@ -74,18 +40,6 @@ pub struct AccumulatorEntry {
     pub scalar: Fr,
     pub point: G1Affine,
 }
-
-/// The words one entry occupies: the side tag, the scalar, and the point's four
-/// `Fr` limbs. `6 * 32 = 192` bytes, for every entry, forever.
-pub const ENTRY_WORDS: usize = 6;
-
-/// The entries one deferred Mercury verification emits.
-///
-/// Ten `G2One` terms — the statement's commitment, the eight proof points in
-/// their frozen field order, and `[1]_1` — and two `G2X` terms. The count does
-/// not depend on `n`, and it does not depend on a batch's `k`, because a batch
-/// derives `cm*` before it reaches the verification core.
-pub const ENTRIES_PER_CHECK: usize = 12;
 
 // ---------------------------------------------------------------------------
 // The wire form
@@ -110,9 +64,11 @@ pub fn accumulator_words(
     for &count in checks {
         words.push(Fr::from_u64(count as u64));
         for entry in &entries[offset..offset + count] {
-            words.push(entry.side.word());
-            words.push(entry.scalar);
-            words.extend_from_slice(&g1_limbs(&entry.point));
+            words.extend_from_slice(&entry_words(
+                entry.side,
+                entry.scalar,
+                &entry.point.to_bytes(),
+            ));
         }
         offset += count;
     }
@@ -161,22 +117,6 @@ pub fn accumulator_from_words(
         checks.push(count);
     }
     Ok((entries, checks))
-}
-
-/// The accumulator digest: Poseidon2 over the words of the entry list.
-///
-/// The hash-binding rule, frozen once here and cited by every later stage: a
-/// proof that carries an accumulator binds it by absorbing exactly these words
-/// under `ACCUMULATOR_DIGEST` in a sponge of its own and squeezing once.
-///
-/// The squeeze is a raw `sample`, **not** a `challenge_scalar`, for the reason
-/// `sumcheck::witness_digest`'s is: the tag frames a scalar message, and a
-/// challenge under the same tag would be one tag in two kinds.
-/// `docs/spec/accumulator.md` §5.
-pub fn accumulator_digest(words: &[Fr]) -> Fr {
-    let mut sponge = Transcript::new();
-    sponge.append_scalars(tags::ACCUMULATOR_DIGEST, words);
-    sponge.sample()
 }
 
 // ---------------------------------------------------------------------------
@@ -345,7 +285,7 @@ fn small_usize(x: Fr) -> Option<usize> {
 
 /// The point four accumulator limbs name, or an error.
 ///
-/// The exact inverse of `crate::g1_limbs`: four sentinels are infinity, four
+/// The exact inverse of `transcript::g1_limbs`: four sentinels are infinity, four
 /// 128-bit halves reassemble into the 64-byte affine encoding S05 froze, and
 /// everything else is malformed. `curve::G1Affine::from_bytes` then validates
 /// canonicity, the curve equation and subgroup membership.
@@ -532,13 +472,14 @@ mod tests {
             G1Affine::IDENTITY
         );
         assert_eq!(
-            g1_from_limbs(&g1_limbs(&G1Affine::GENERATOR)).expect("a real point"),
+            g1_from_limbs(&transcript::g1_limbs(&G1Affine::GENERATOR.to_bytes()))
+                .expect("a real point"),
             G1Affine::GENERATOR
         );
 
         // A partial sentinel, in every lane.
         for lane in 0..4 {
-            let mut limbs = g1_limbs(&G1Affine::GENERATOR);
+            let mut limbs = transcript::g1_limbs(&G1Affine::GENERATOR.to_bytes());
             limbs[lane] = sentinel;
             assert!(g1_from_limbs(&limbs).is_err(), "lane {lane}");
 
@@ -552,12 +493,12 @@ mod tests {
         assert!(g1_from_limbs(&[Fr::ZERO; 4]).is_err());
 
         // A limb at or above 2^128 that is not the sentinel.
-        let mut limbs = g1_limbs(&G1Affine::GENERATOR);
+        let mut limbs = transcript::g1_limbs(&G1Affine::GENERATOR.to_bytes());
         limbs[0] = sentinel + Fr::ONE;
         assert!(g1_from_limbs(&limbs).is_err());
 
         // An on-curve-looking point that is not on the curve.
-        let mut limbs = g1_limbs(&G1Affine::GENERATOR);
+        let mut limbs = transcript::g1_limbs(&G1Affine::GENERATOR.to_bytes());
         limbs[2] += Fr::ONE;
         assert!(g1_from_limbs(&limbs).is_err());
     }

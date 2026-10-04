@@ -1,0 +1,13 @@
+[package]
+name = "recursion"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The recursion guest's leaf, by tape (`docs/spec/recursion.md` §7): a base
+# shard is verified by replaying its family's tape of coprocessor calls over
+# the field memory, so it needs the SDK's field shims and the op codes. Like
+# `revm-block`, it has no committed ELF: it is built on demand.
+[dependencies]
+guest-sdk.workspace = true
+constants = { path = "../../crates/constants" }

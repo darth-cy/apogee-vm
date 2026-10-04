@@ -183,6 +183,95 @@ pub fn honest(
     (values, proof, result)
 }
 
+/// `verifier_core::tape`'s reading of [`verify`], replayed natively: the same
+/// binding — `WITNESS_DIGEST [digest]`, then one `SUMCHECK_CHALLENGE` draw per
+/// slot of `drawn`, in order — over cells, every other slot `challenges` holds
+/// imported as it is, and the proof imported. Returns the base claims' values
+/// and their point, or the op whose assertion failed: what `verify` returns,
+/// or that it refused.
+pub fn tape_verify(
+    artifact: &CircuitArtifact,
+    proof: &GkrProof,
+    outputs: &OutputClaims,
+    challenges: &ExternalChallenges,
+    digest: Fr,
+    drawn: &[u32],
+) -> Result<(Vec<Fr>, Vec<Fr>), usize> {
+    use verifier_core::tape::{self, CellTranscript, GkrCells, Tape};
+    let mut t = Tape::new(3);
+    let mut blob: Vec<u8> = Vec::new();
+    let mut import = |t: &mut Tape, v: Fr| {
+        blob.extend_from_slice(&v.to_bytes());
+        t.input()
+    };
+    let mut tr = CellTranscript::new();
+    let d = import(&mut t, digest);
+    tr.append(&mut t, transcript_tags::WITNESS_DIGEST, &[d]);
+    let mut slots = std::collections::BTreeMap::new();
+    for slot in drawn {
+        slots.insert(
+            *slot,
+            tr.challenge(&mut t, transcript_tags::SUMCHECK_CHALLENGE),
+        );
+    }
+    for slot in 0..challenge_slot::NAMES.len() as u32 {
+        if let (false, Some(v)) = (slots.contains_key(&slot), challenges.get(slot)) {
+            slots.insert(slot, import(&mut t, v));
+        }
+    }
+    let mut cells = GkrCells {
+        outputs: Vec::new(),
+        layers: Vec::new(),
+    };
+    for table in &outputs.tables {
+        cells.outputs.push(import(&mut t, table.get(0)));
+    }
+    for k in (0..artifact.depth()).rev() {
+        let layer = &proof.layers[k];
+        let rounds = layer
+            .rounds
+            .iter()
+            .map(|g| g.map(|c| import(&mut t, c)))
+            .collect();
+        let evals = layer
+            .final_evals
+            .iter()
+            .map(|v| import(&mut t, *v))
+            .collect();
+        cells.layers.push((rounds, evals));
+    }
+    let (claims, point) = tape::gkr_verify(&mut t, &mut tr, artifact, &cells, &slots);
+    let mut memory = tape::Memory::default();
+    tape::run(&t.ops, &mut memory, &blob)?;
+    let read = |c: &u32| memory.get(*c);
+    Ok((
+        claims.iter().map(read).collect(),
+        point.iter().map(read).collect(),
+    ))
+}
+
+/// [`verify`]'s verdict and [`tape_verify`]'s agree: the same claims at the
+/// same point, or both a refusal.
+pub fn assert_tape_agrees(
+    verdict: &Result<Vec<BaseClaim>, GkrError>,
+    tape: Result<(Vec<Fr>, Vec<Fr>), usize>,
+) {
+    match verdict {
+        Ok(claims) => {
+            let want = (
+                claims.iter().map(|c| c.value).collect(),
+                claims.first().map(|c| c.point.clone()).unwrap_or_default(),
+            );
+            assert_eq!(
+                tape,
+                Ok(want),
+                "the tape reads an accepted proof differently"
+            );
+        }
+        Err(e) => assert!(tape.is_err(), "the tape accepts what verify refused: {e:?}"),
+    }
+}
+
 /// The discharge a Mercury opening will replace: every base claim against the
 /// committed column it names.
 pub fn discharge(base: &BaseLayer, claims: &[BaseClaim]) -> Result<(), String> {

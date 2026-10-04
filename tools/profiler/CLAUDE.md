@@ -4,14 +4,19 @@
 **Where a guest's RV32 cycles go**, by function and by semantic workload.
 `docs/spec/profiling.md` is normative.
 
-It invokes nothing proving-related — no SRS, no key, no circuit, no commitment, nothing in
-`crates/prover`, `crates/verifier` or `crates/pcs`. Three inputs and arithmetic: a guest
-ELF, the bytes it runs on, and the ELF's own symbol table.
+It proves nothing and opens nothing: no SRS, no circuit built, no commitment computed,
+nothing in `crates/prover`. Three inputs and arithmetic: a guest ELF, the bytes it runs on,
+and the ELF's own symbol table. **`leaf` is the one exception on the input side**: the
+recursion guest's input is a block proof, so before it profiles a slice it reads the
+archived key and proof and runs `host::recursion::leaf_advice`, which verifies the slice
+natively — `crates/verifier`'s key loader and `crates/pcs`' deferred verifier — to get each
+shard's `cm*` hint.
 
 ```
 cargo run --release -p profiler -- elf <file> [--advice <f>] [--input <f>] [--top <n>] [--json <p>]
 cargo run --release -p profiler -- block <fixture> [--top <n>] [--json <p>]
 ETH_RPC_URL=… cargo run --release -p profiler -- record <number|latest> [--txs <n>] …
+cargo run --release -p profiler -- leaf <dir>/<stem> --shards <from>..<to> [--shards …]
 ```
 
 `block` reads a recorded fixture under `crates/host/tests/vectors` and touches no network.

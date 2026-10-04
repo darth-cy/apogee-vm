@@ -12,7 +12,7 @@ use constants::memory::TS_BITS;
 use constants::{generic_table, lookup_channel};
 use constraints::lookup::{check_discharge, ChannelSpec};
 use constraints::memory::check_memory;
-use constraints::{family_circuit, CircuitArtifact, FamilyCircuit, PolyAddress, VirtualKind};
+use constraints::{CircuitArtifact, FamilyCircuit, PolyAddress, VirtualKind};
 use field::Fr;
 use gkr_verify::{BoundaryFinals, GkrProof, SumcheckProof};
 use transcript::Transcript;
@@ -401,7 +401,14 @@ impl VerifyingKey {
         Ok(key)
     }
 
-    fn decode(bytes: &[u8]) -> Read<VerifyingKey> {
+    /// Decode **only**: no canonical re-encoding and no load rules.
+    ///
+    /// For the recursion guest, which cannot afford [`VerifyingKey::check`] —
+    /// it validates every circuit — and must bind the key it was handed to one
+    /// a verifier has checked by other means. Verifying against a key nobody
+    /// checked means nothing: `gkr_verify::verify` may accept on an artifact
+    /// that breaks a law (`docs/spec/gkr.md` §5.1).
+    pub fn decode(bytes: &[u8]) -> Read<VerifyingKey> {
         let mut r = Reader::new(bytes);
         let code_version = r.u32()?;
         let config = VmConfig::from_bytes(r.bytes()?).ok_or("the VmConfig does not decode")?;
@@ -505,7 +512,9 @@ impl VerifyingKey {
                 ));
             }
             let trace_vars = height.trailing_zeros();
-            let canonical = family_circuit(*family, trace_vars)
+            let canonical = self
+                .config
+                .circuit(*family, trace_vars)
                 .ok_or(format!("{name}: no circuit proves it at height {height}"))?;
             if *c != canonical {
                 return Err(format!("{name}: the circuit is not the protocol's"));

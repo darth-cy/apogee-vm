@@ -631,6 +631,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "field-ops"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "guest-sdk",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1056,6 +1064,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "513962919efc330f829edb2535844d1b912b0fbe2ca165d613e4e8788bb05a5a"
 dependencies = [
  "rand_core 0.9.5",
+]
+
+[[package]]
+name = "recursion"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "guest-sdk",
 ]
 
 [[package]]

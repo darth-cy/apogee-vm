@@ -1464,6 +1464,7 @@ dependencies = [
  "sumcheck",
  "test-support",
  "transcript",
+ "verifier-core",
 ]
 
 [[package]]
@@ -1571,6 +1572,7 @@ dependencies = [
  "field",
  "k256",
  "loader",
+ "pcs",
  "program",
  "prover",
  "rayon",
@@ -1581,6 +1583,7 @@ dependencies = [
  "srs",
  "test-support",
  "trace",
+ "transcript",
  "verifier",
  "verifier-core",
 ]
@@ -2002,12 +2005,25 @@ dependencies = [
  "constants",
  "curve",
  "field",
+ "pcs-verify",
  "poly",
  "rayon",
  "srs",
  "sumcheck",
  "test-support",
  "transcript",
+]
+
+[[package]]
+name = "pcs-verify"
+version = "0.1.0"
+dependencies = [
+ "constants",
+ "field",
+ "poly",
+ "test-support",
+ "transcript",
+ "verifier-core",
 ]
 
 [[package]]
@@ -3310,6 +3326,7 @@ dependencies = [
  "constraints",
  "field",
  "gkr-verify",
+ "pcs-verify",
  "poly",
  "transcript",
 ]

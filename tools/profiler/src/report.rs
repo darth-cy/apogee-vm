@@ -76,6 +76,9 @@ pub struct ProfileReport {
     /// Cycles per cycle-owning family and invocations per delegation family, by
     /// name, in family order.
     pub families: Vec<(String, u64)>,
+    /// `ZERO_WINDOWS`' shard count, which no row count above carries.
+    #[serde(default)]
+    pub ram_windows: usize,
     /// Cycles per semantic workload, descending.
     pub categories: Vec<CategoryRow>,
     /// The functions with the most cycles, descending.
@@ -154,6 +157,7 @@ impl ProfileReport {
                 .iter()
                 .map(|(f, n)| (program::family_name(*f).to_string(), *n))
                 .collect(),
+            ram_windows: profile.ram_windows,
             categories,
             top_functions,
             mnemonics: profile.mnemonics.clone(),
@@ -268,6 +272,11 @@ impl ProfileReport {
             }
             row(&mut out, family, n.to_string());
         }
+        row(
+            &mut out,
+            "RAM windows touched",
+            format!("{}  (ZERO_WINDOWS shards)", self.ram_windows),
+        );
 
         let _ = writeln!(out, "\ntop functions");
         for f in &self.top_functions {
