@@ -534,10 +534,29 @@ fn build(trace_vars: u32, types: usize) -> CircuitArtifact {
     // request's read and the invocation's write are different tuples and
     // never cancel.
     let m_deleg = frame(SLOT_DELEG, FIELD_MASK);
-    enforcing.push((
-        "deleg_writes_no_register".into(),
-        quadratic(vec![], vec![(lit(1), m_deleg, sel)]),
-    ));
+    if types == BASE_TYPES {
+        enforcing.push((
+            "deleg_writes_no_register".into(),
+            quadratic(vec![], vec![(lit(1), m_deleg, sel)]),
+        ));
+    } else {
+        // The recursion format's request writes `a0` exactly what
+        // `constants::delegation::a0_after` says: 0 for a base type, and for a
+        // recursion type the base it read, `a0`'s `rs2` read, advanced past
+        // its frame (`docs/spec/recursion.md` §1.4). Pinned either way, so the
+        // zeroing's point — a request writes no value of its own choosing —
+        // stands.
+        let mut linear = Vec::new();
+        let mut products = Vec::new();
+        for (i, (.., words)) in delegations.iter().enumerate() {
+            products.push((lit(1), is_deleg[i], sel));
+            if i >= BASE_TYPES {
+                products.push((neg(1), is_deleg[i], v_rs2));
+                linear.push((neg(4 * *words as u64), is_deleg[i]));
+            }
+        }
+        enforcing.push(("deleg_a0_rule".into(), quadratic(linear, products)));
+    }
     enforcing.push((
         "deleg_read_ts_zero".into(),
         quadratic(

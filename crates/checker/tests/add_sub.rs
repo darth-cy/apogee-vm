@@ -18,7 +18,7 @@ use checker::{
     violated_relations, WitnessRow,
 };
 use constants::extra_mask::add_sub_lui_auipc as kind;
-use constants::{challenge_slot, ecall, family, guest_memory, lookup_channel};
+use constants::{challenge_slot, delegation, ecall, family, guest_memory, lookup_channel};
 use constraints::lookup::{check_discharge, ChannelSpec};
 use constraints::memory::check_memory;
 use constraints::{add_sub, family_circuit, CircuitArtifact, PolyAddress, VirtualKind};
@@ -190,10 +190,14 @@ const CYCLE: u64 = 9;
 /// An ecall row whose `a7` is a **delegation** number rather than 93 is a
 /// delegation request (`docs/spec/delegation.md` §2): it takes the same ecall
 /// frame, carries its type's `is_deleg_t` beside `is_ecall`, makes the mirror query at the
-/// `a0` it read, writes 0 into `a0`, and falls through rather than halting.
+/// `a0` it read, writes `a0` what `constants::delegation::a0_after` says — 0
+/// for a base type — and falls through rather than halting.
 fn honest(i: Instr, rs1v: u32, rs2v: u32, rd_old: u32) -> Row {
     let system_ecall = i.bit == kind::SYSTEM && i.imm == 0;
-    let delegation = system_ecall && rs1v == ecall::PRECOMPILE_KECCAK_F;
+    let deleg = system_ecall
+        .then(|| delegation::TYPES.iter().position(|t| t.1 == rs1v))
+        .flatten();
+    let delegation = deleg.is_some();
     let exit = system_ecall && !delegation;
     let fence = i.bit == kind::SYSTEM && i.imm == 2;
     let (sel, wrap) = match i.bit {
@@ -203,7 +207,7 @@ fn honest(i: Instr, rs1v: u32, rs2v: u32, rd_old: u32) -> Row {
         kind::SUB => (rs1v.wrapping_sub(rs2v), (rs1v < rs2v) as u32),
         kind::LUI => (i.imm, 0),
         _ if exit => (rd_old, 0),
-        _ => (0, 0),
+        _ => (deleg.map_or(0, |t| delegation::a0_after(t, rs2v)), 0),
     };
     let fall = i.pc + if i.compressed { 2 } else { 4 };
     let next = if exit { 1 } else { fall };
@@ -266,14 +270,12 @@ fn honest(i: Instr, rs1v: u32, rs2v: u32, rd_old: u32) -> Row {
     if system_ecall {
         r.set("is_ecall", Fr::ONE);
     }
-    if delegation {
-        r.set("is_deleg_9", Fr::ONE);
+    if let Some(t) = deleg {
+        let (family, _, space, _) = delegation::TYPES[t];
+        r.set(name("is_deleg", &family.to_string()), Fr::ONE);
         // The mirror's leaf names the delegation type through this column, and
         // `deleg_space_rule` ties it to the selector above.
-        r.set(
-            "deleg_space",
-            f(constants::address_space::DELEGATION_KECCAK_F as u64),
-        );
+        r.set("deleg_space", f(space as u64));
     }
     if fence {
         r.set("is_fence", Fr::ONE);
@@ -718,6 +720,49 @@ fn every_row_kind_satisfies_every_gate_and_every_bound() {
     // And the exit row is still the only one that halts: the two ecall kinds
     // differ in exactly the row's `is_deleg_t`.
     assert_eq!(get("exit 42", "is_deleg_9"), Fr::ZERO);
+}
+
+/// S-RECURSION (`docs/spec/recursion.md` §1.4): the recursion format's
+/// `ADD_SUB` holds a recursion request's `a0` write to the base it read
+/// advanced past its frame, and a base request's still to 0, each by
+/// `deleg_a0_rule` alone. The base circuit knows no recursion type and keeps
+/// its `deleg_writes_no_register`.
+#[test]
+fn a_recursion_request_advances_a0_past_its_frame() {
+    let a = add_sub::recursion_artifact(VARS);
+    let base = guest_memory::RAM_ORIGIN + 0x400;
+    let ecall_row = Instr::new(kind::SYSTEM, 0, 0, 0, 0);
+    let keccak = row("keccak delegation request");
+    for number in [
+        ecall::PRECOMPILE_FR_OP,
+        ecall::PRECOMPILE_P2_FIELD,
+        ecall::PRECOMPILE_FIELD_IO,
+    ] {
+        let r = honest(ecall_row, number, base, 7);
+        let (t, words) = delegation::TYPES
+            .iter()
+            .enumerate()
+            .find(|(_, t)| t.1 == number)
+            .map(|(i, t)| (i, t.3))
+            .expect("a registered type");
+        assert!(t >= delegation::BASE_TYPES);
+        assert_eq!(r.get("rd_selected"), f(base as u64 + 4 * words as u64));
+        assert_eq!(violated(&a, &r), (vec![], vec![]), "{number:#x}");
+        let zeroed = with_sel(r, Fr::ZERO);
+        assert_eq!(
+            violated(&a, &zeroed).0,
+            names(&["deleg_a0_rule"]),
+            "{number:#x}"
+        );
+    }
+    assert_eq!(violated(&a, &keccak), (vec![], vec![]));
+    let advanced = with_sel(keccak, f(base as u64 + 16));
+    assert_eq!(violated(&a, &advanced).0, names(&["deleg_a0_rule"]));
+    let gates = |a: &CircuitArtifact| -> Vec<String> {
+        a.relations.iter().map(|r| r.name.clone()).collect()
+    };
+    assert!(gates(&artifact()).contains(&"deleg_writes_no_register".to_string()));
+    assert!(!gates(&artifact()).contains(&"deleg_a0_rule".to_string()));
 }
 
 // ---------------------------------------------------------------------------

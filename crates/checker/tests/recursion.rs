@@ -17,6 +17,11 @@
 //!   reads times teardowns equals writes times inits. A slot or an offset the
 //!   circuit and the executor disagree on is a tuple with no partner.
 //!
+//! * **A field request's `a0` advances.** The recursion format's `ADD_SUB`,
+//!   filled from the same trace, holds on every live row and a padding row,
+//!   so the fill writes each request's `a0` past its frame exactly as the
+//!   emulator did and `deleg_a0_rule` asks (`docs/spec/recursion.md` §1.4).
+//!
 //! A whole proof of the statement is the deferred half.
 
 mod common;
@@ -29,7 +34,7 @@ use gkr::{gate_values, insert_lookup_challenges, virtual_at_row, ExternalChallen
 use poly::MultilinearPoly;
 use program::{decode_program, ProgramParams};
 use prover::{family_fill, Program, ShardRows, ShardSource};
-use trace::FrameSlice;
+use trace::{FrameSlice, RowSlice};
 
 /// The three delegation families' height: `RANGE16`'s floor.
 const VARS: u32 = 16;
@@ -218,4 +223,57 @@ fn the_field_families_hold_and_the_field_memory_balances() {
         writes *= relation(&a, &w, "define_init");
     }
     assert_eq!(reads, writes, "the field memory's tuples do not cancel");
+}
+
+/// The recursion format's `ADD_SUB` over `field-ops`' own rows: every relation
+/// and range obligation holds on every live row and a padding row, its 38
+/// field requests among them (`docs/spec/recursion.md` §1.4).
+#[test]
+fn the_recursion_add_sub_holds_on_the_field_requests() {
+    const ADD_VARS: u32 = 20;
+    let (t, _) = setup();
+    let mut params = ProgramParams {
+        heights: [1 << VARS; family::COUNT as usize],
+        ..ProgramParams::defaults()
+    };
+    params.heights[family::ADD_SUB_LUI_AUIPC as usize] = 1 << ADD_VARS;
+    let (tables, config) = decode_program(&t.image, &params).expect("field-ops decodes");
+    let program = Program {
+        image: t.image.clone(),
+        tables,
+        config,
+    };
+    let trace = t
+        .traces
+        .family(family::ADD_SUB_LUI_AUIPC)
+        .expect("add/sub ran");
+    let src = ShardSource {
+        program: &program,
+        input: &[],
+        advice: &[],
+        rows: ShardRows::Cycles(RowSlice::shard(trace, 0, 1 << ADD_VARS)),
+        index: 0,
+        height: 1 << ADD_VARS,
+        window: 0,
+    };
+    let columns = family_fill(family::ADD_SUB_LUI_AUIPC).expect("a fill")(&src).expect("it fills");
+    let a = recursion_circuit(family::ADD_SUB_LUI_AUIPC, ADD_VARS)
+        .expect("the circuit")
+        .artifact;
+    let ch = challenges(&a, None);
+    let requests: usize = [family::FR_OP, family::P2_FIELD, family::FIELD_IO]
+        .iter()
+        .map(|f| t.traces.delegation(*f).map_or(0, |d| d.len()))
+        .sum();
+    assert_eq!(requests, 38);
+    for row in 0..=trace.len() {
+        let w = witness_row(&a, &columns, row, &ch);
+        let broken = checker::violated_relations(&a, &w, &ch);
+        assert!(broken.is_empty(), "ADD_SUB row {row} breaks {broken:?}");
+        let out = checker::violated_lookups(&a, &w);
+        assert!(
+            out.is_empty(),
+            "ADD_SUB row {row} leaves {out:?} out of range"
+        );
+    }
 }

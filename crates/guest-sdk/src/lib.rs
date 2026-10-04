@@ -377,58 +377,42 @@ pub mod recursion {
     static DELEGATION_FIELD_IO: [u8; delegation::MARKER_BYTES] =
         super::record(ecall::PRECOMPILE_FIELD_IO);
 
-    /// One field operation over field cells (`docs/spec/recursion.md` §3):
-    /// `[op, d, a, b]`, one of `constants::fr_op::OPS`.
+    /// One field-family call over the frame at `base`, `bytes` long.
     ///
-    /// **Any answer but 0 is fatal.** The field memory exists only where its
-    /// circuits do, so there is no software path to fall back on — and an
-    /// `EQ` whose cells differ is not an answer but a fatal frame error.
-    pub fn fr_op(frame: &mut [u32; constants::fr_op::FRAME_WORDS]) {
-        // SAFETY: as [`poseidon2`]; the frame is four words, read and written
-        // back unchanged.
-        let ret = unsafe {
-            ecall1(
-                delegation_number(&DELEGATION_FR_OP),
-                frame.as_mut_ptr() as u32,
-            )
-        };
-        if ret != 0 {
+    /// **The answer is `base + bytes`, and any other is fatal**
+    /// (`docs/spec/recursion.md` §1.4): a recursion request leaves `a0` past
+    /// its frame, so a tape of consecutive frames replays as back-to-back
+    /// ecalls. The field memory exists only where its circuits do, so there is
+    /// no software path to fall back on.
+    fn field_call(record: &'static [u8; delegation::MARKER_BYTES], base: *mut u32, bytes: usize) {
+        // SAFETY: as [`poseidon2`]; the caller's frame is `bytes` long, lives
+        // across the call, and is read and written back unchanged.
+        let ret = unsafe { ecall1(delegation_number(record), base as u32) };
+        if ret as u32 != base as u32 + bytes as u32 {
             exit(EXIT_PRECOMPILE_ERROR);
         }
     }
 
+    /// One field operation over field cells (`docs/spec/recursion.md` §3):
+    /// `[op, d, a, b]`, one of `constants::fr_op::OPS`. An `EQ` whose cells
+    /// differ is not an answer but a fatal frame error.
+    pub fn fr_op(frame: &mut [u32; constants::fr_op::FRAME_WORDS]) {
+        field_call(&DELEGATION_FR_OP, frame.as_mut_ptr(), 4 * frame.len());
+    }
+
     /// One step of the transcript's duplex (`docs/spec/recursion.md` §4):
     /// `[n, s, x, y, d]` absorbs `n` of `x, y` into the state at `s` and
-    /// writes the permuted state to `d`. Fatal on any answer but 0, as
-    /// [`fr_op`].
+    /// writes the permuted state to `d`.
     pub fn p2_field(frame: &mut [u32; constants::p2_field::FRAME_WORDS]) {
-        // SAFETY: as [`fr_op`].
-        let ret = unsafe {
-            ecall1(
-                delegation_number(&DELEGATION_P2_FIELD),
-                frame.as_mut_ptr() as u32,
-            )
-        };
-        if ret != 0 {
-            exit(EXIT_PRECOMPILE_ERROR);
-        }
+        field_call(&DELEGATION_P2_FIELD, frame.as_mut_ptr(), 4 * frame.len());
     }
 
     /// One move between RAM and a field cell (`docs/spec/recursion.md` §5):
     /// `[op, cell, ptr]` imports the eight words at `ptr` into `cell` or
     /// exports `cell` into them. `ptr` names eight words the call may read,
-    /// and for an export write. Fatal on any answer but 0, as [`fr_op`].
+    /// and for an export write.
     pub fn field_io(frame: &mut [u32; constants::field_io::FRAME_WORDS]) {
-        // SAFETY: as [`fr_op`]; the caller vouches for the eight words.
-        let ret = unsafe {
-            ecall1(
-                delegation_number(&DELEGATION_FIELD_IO),
-                frame.as_mut_ptr() as u32,
-            )
-        };
-        if ret != 0 {
-            exit(EXIT_PRECOMPILE_ERROR);
-        }
+        field_call(&DELEGATION_FIELD_IO, frame.as_mut_ptr(), 4 * frame.len());
     }
 
     /// The Poseidon2 delegation's 96-byte frame: three canonical

@@ -1740,7 +1740,14 @@ impl<'a> Machine<'a> {
                 // which nothing constrains and the honest fill writes.
                 row.stage(Role::Delegate, base, 0, 0);
                 row.delegation = Some((family, base, frame, extra));
-                0
+                // `a0` is 0 after a base type, and the base past the frame
+                // after a recursion type (`docs/spec/recursion.md` §1.4); the
+                // frame was just read, so it lies in RAM.
+                let index = program::DELEGATIONS
+                    .iter()
+                    .position(|(_, number, ..)| *number == n)
+                    .expect("just matched");
+                constants::delegation::a0_after(index, base)
             }
             _ => ecall::ENOSYS.wrapping_neg(),
         };

@@ -2429,9 +2429,12 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
                     ecall_row = 1;
                     (read(Role::Rd), 0)
                 }
-                // A delegation request: it writes no register, so its
-                // `rd_selected` is 0, and its `next_pc` is the fall-through —
-                // it is not an exit (`docs/spec/delegation.md` §5.2).
+                // A delegation request: it writes `a0` what
+                // `constants::delegation::a0_after` says — 0 for a base type,
+                // the frame base `b` advanced past the frame for a recursion
+                // type — and its `next_pc` is the fall-through: it is not an
+                // exit (`docs/spec/delegation.md` §5.2, `docs/spec/recursion.md`
+                // §1.4).
                 system_code::ECALL if program::delegation_family(a).is_some() => {
                     let at = program::DELEGATIONS
                         .iter()
@@ -2445,7 +2448,7 @@ fn add_sub(src: &ShardSource) -> Result<Vec<(PolyAddress, MultilinearPoly)>, Str
                         ));
                     }
                     deleg_row[at] = 1;
-                    (0, 0)
+                    (constants::delegation::a0_after(at, b), 0)
                 }
                 system_code::ECALL => {
                     return Err(format!(

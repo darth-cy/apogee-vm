@@ -2037,6 +2037,19 @@ pub mod delegation {
     /// every base key keeps its bytes while the registry grows. A
     /// recursion-format `ADD_SUB` carries every row.
     pub const BASE_TYPES: usize = 6;
+
+    /// What a request of registry row `index` leaves in `a0`, its frame at
+    /// `base` (`docs/spec/recursion.md` §1.4): 0 for a base type, and for a
+    /// type past [`BASE_TYPES`] the base advanced past its frame, so a run of
+    /// consecutive frames replays as back-to-back ecalls. The caller's frame
+    /// lies in RAM, so the sum stays below `2^32`.
+    pub const fn a0_after(index: usize, base: u32) -> u32 {
+        if index < BASE_TYPES {
+            0
+        } else {
+            base + 4 * TYPES[index].3 as u32
+        }
+    }
 }
 
 /// keccak-f[1600] and keccak256, frozen at S21.

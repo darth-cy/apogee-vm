@@ -98,6 +98,24 @@ the shard transcript.
 `σ = 0` is today's protocol exactly: no challenge is drawn and a stack is a column. The
 base format is the recursion format at `σ = 0`, and one code path carries both.
 
+### 1.4 A recursion request leaves `a0` past its frame
+
+A base request writes 0 into `a0` (`docs/spec/delegation.md` §2). A request of a
+recursion type — a row of `constants::delegation::TYPES` past `BASE_TYPES` — writes the
+frame base it read **advanced past its frame**, `a0 + 4·words`
+(`constants::delegation::a0_after`). A tape is a run of consecutive frames, so after
+one call `a0` already names the next frame and a replay is back-to-back `ecall`s, one
+RISC-V row an op instead of two or three.
+
+- The recursion format's `ADD_SUB` carries `deleg_a0_rule`,
+  `Σ_t is_deleg_t·rd_selected − Σ_{t ≥ BASE_TYPES} is_deleg_t·(rs2 + 4·words_t) = 0`,
+  in place of the base circuit's `deleg_writes_no_register`. Either way the request
+  writes a value it did not choose, which is what the zeroing was for.
+- The base circuit keeps its gate and its bytes. The rule is per type, not per format,
+  and no base type advances.
+- `guest_sdk::recursion`'s field shims hold the answer to `base + bytes` and exit 72 on
+  anything else.
+
 ---
 
 ## 2. The field memory
