@@ -1,13 +1,19 @@
 //! The fold's MSM (`docs/spec/recursion.md` §8.3): `Σ_i s_i·P_i` over BN254's
 //! G1 on `FQ_OP`, as tapes a guest replays from its image.
 //!
-//! Pippenger with 8-bit digits — 32 windows of 256 buckets — shaped so that
-//! nothing a replay does depends on a value:
+//! Pippenger with 8-bit digits over GLV halves — 16 windows of 256 buckets —
+//! shaped so that nothing a replay does depends on a value:
 //!
-//! - **A point** is one static template: held to the curve, its scalar's 32
-//!   `DIGIT`s, then one affine bucket addition in each window, the bucket an
-//!   indirect operand through that window's digit cell. The 32 additions land
-//!   in 32 windows, so they never collide, and share one inversion.
+//! - **A scalar is split** by BN254's endomorphism `φ(x, y) = (β·x, y) = λ·P`:
+//!   `k ≡ s₁·k₁ + λ·s₂·k₂` with `k₁, k₂ < 2^128` and signs `s_i = ±1`, a host
+//!   witness ([`split`]) the template holds to `k`. So `k·P` is
+//!   `k₁·(s₁P) + k₂·(s₂φ(P))`, two 128-bit scalars over 16 windows, and the
+//!   fixed work — which is per window — is half a 256-bit scalar's.
+//! - **A point** is one static template: held to the curve, its split held to
+//!   its scalar, each half's 16 `DIGIT`s, then one affine bucket addition in
+//!   each window for `s₁P` and one for `s₂φ(P)`, the bucket an indirect
+//!   operand through that window's digit cell. Each half's 16 additions land
+//!   in 16 windows, so they never collide, and share one inversion.
 //! - **An inversion** is a host witness: the template reads it from two cells
 //!   and asserts it with one `MULEQ`. [`simulate`] runs a template natively
 //!   and fills every one, which is how a host lays a guest's witnesses out;
@@ -43,8 +49,8 @@ use crate::tape::{
     infinity_sentinel, run, Cell, CellTranscript, Memory, Op, ShardTape, Tape, ZERO,
 };
 
-/// A scalar's digits, and the windows.
-pub const WINDOWS: u32 = fr_op::DIGITS as u32;
+/// A half's digits, and the windows.
+pub const WINDOWS: u32 = fr_op::DIGITS as u32 / 2;
 /// A window's buckets, bucket 0 the digit-0 bucket no sum reads.
 pub const BUCKETS: u32 = 1 << fr_op::DIGIT_BITS;
 /// A point's cells: `x`, then `y`.
@@ -53,7 +59,7 @@ pub const POINT_CELLS: u32 = 2 * q::ELEMENT_CELLS as u32;
 /// and one addition.
 pub const MAX_HOLES: u32 = 16;
 /// The cells a template's step may take of its own: a batched addition over
-/// the 32 windows takes 318 elements.
+/// the 16 windows takes 158 elements.
 pub const SCRATCH: u32 = 1 << 11;
 
 /// The offsets' unit `R = k·G`, `k = 2^200 + 0x524543555253494f4e`, an
@@ -77,17 +83,42 @@ pub const OFFSET: [[u64; 4]; 2] = [
 /// offsets add to the finish's Horner sum, negated.
 pub const CORRECTION: [[u64; 4]; 2] = [
     [
-        0xda86_fd00_efe1_4dc0,
-        0x0ccd_ed1a_6af8_6599,
-        0x1f5c_204d_407f_490a,
-        0x04a8_4cf7_2f2e_d20b,
+        0x4dc9_3483_b95a_3212,
+        0xfdc5_7bd7_4f56_fcfa,
+        0xe0c4_38e4_09bf_cd5a,
+        0x1915_6aa8_b205_5643,
     ],
     [
-        0x20c8_6f9a_027f_5c7c,
-        0x5348_7366_16d1_1990,
-        0x698b_42eb_c7dd_d4c4,
-        0x1a96_4299_c18e_8459,
+        0xb16b_1b6e_51e4_6536,
+        0xff38_a8d2_7df2_3fd2,
+        0xe68f_51b6_fb31_820d,
+        0x2078_17bb_842c_3511,
     ],
+];
+
+/// `β`, the cube root of unity in `Fq` with `(β·x, y) = λ·(x, y)` on G1.
+pub const BETA: [u64; 4] = [
+    0x5763_4731_77ff_fffe,
+    0xd4f2_63f1_acdb_5c4f,
+    0x59e2_6bce_a0d4_8bac,
+    0,
+];
+
+/// `λ`, the cube root of unity in `Fr` that `β` acts as.
+pub const LAMBDA: &str = "0x0000000000000000b3c4d79d41a917585bfc41088d8daaa78b17ea66b99c90dd";
+
+/// The short basis of `{(a, b) : a + λ·b ≡ 0 mod r}` [`split`] rounds
+/// against, `(a₁, b₁)` then `(a₂, b₂)`, magnitudes and whether each is
+/// negative; and `round(2^256·b₂/r)` and `round(−2^256·b₁/r)`, as limbs.
+const BASIS: [(u128, bool); 4] = [
+    (0x89d3_2568_94d2_13e3, false),
+    (0x6f4d_8248_eeb8_59fc_8211_bbeb_7d4f_1128, true),
+    (0x6f4d_8248_eeb8_59fd_0be4_e154_1221_250b, false),
+    (0x89d3_2568_94d2_13e3, false),
+];
+const ROUND: [[u64; 3]; 2] = [
+    [0xd91d_232e_c7e0_b3d7, 0x2, 0],
+    [0x7a7b_d9d4_391e_b18e, 0x4cce_f014_a773_d2cf, 0x2],
 ];
 
 /// One MSM's cells.
@@ -95,17 +126,19 @@ pub const CORRECTION: [[u64; 4]; 2] = [
 pub struct Layout {
     /// Bucket `b` of window `w` at `buckets + 8·(256·w + b)`.
     pub buckets: Cell,
-    /// The 32 digit cells.
+    /// The 32 digit cells, `k₁`'s then `k₂`'s.
     pub digits: Cell,
-    /// The point being added.
+    /// The point being added, as loaded and then as `s₁P`; and `s₂φ(P)`.
     pub point: Cell,
+    pub point2: Cell,
     /// The scalar being added; its digit chain consumes it to 0.
     pub scalar: Cell,
     /// Four cells nothing writes: the zero element.
     pub zero: Cell,
-    /// The elements 1 and 3.
+    /// The elements 1, 3 and `β`.
     pub one: Cell,
     pub three: Cell,
+    pub beta: Cell,
     /// The points `R` and `−R''`.
     pub offset: Cell,
     pub correction: Cell,
@@ -121,6 +154,13 @@ pub struct Layout {
     /// 1, 2 and 256 it steps by.
     pub counter: Cell,
     pub steps: Cell,
+    /// `λ`, and two field cells a point's template works in.
+    pub lambda: Cell,
+    pub work: Cell,
+    /// A point's split, `[k₁, k₂, b₁, 0, b₂, 0]`, `b_i` the sign bits and
+    /// each followed by a zero so `FROM128` reads it whole; the inverse
+    /// witnesses follow it, so a point's witnesses are one run of cells.
+    pub split: Cell,
     /// A template's inverse witnesses, two cells a hole.
     pub witnesses: Cell,
     /// Where a template's temporaries start: elements, and nothing else.
@@ -138,12 +178,14 @@ impl Layout {
         };
         Layout {
             buckets: take(WINDOWS * BUCKETS * POINT_CELLS),
-            digits: take(WINDOWS),
+            digits: take(2 * WINDOWS),
             point: take(POINT_CELLS),
+            point2: take(POINT_CELLS),
             scalar: take(1),
             zero: take(q::ELEMENT_CELLS as u32),
             one: take(q::ELEMENT_CELLS as u32),
             three: take(q::ELEMENT_CELLS as u32),
+            beta: take(q::ELEMENT_CELLS as u32),
             offset: take(POINT_CELLS),
             correction: take(POINT_CELLS),
             offsets: take(BUCKETS * POINT_CELLS),
@@ -152,6 +194,9 @@ impl Layout {
             halves: take(2),
             counter: take(1),
             steps: take(3),
+            lambda: take(1),
+            work: take(2),
+            split: take(6),
             // Two to spare: the last hole's `FROM128` reads four cells.
             witnesses: take(2 * MAX_HOLES + 2),
             scratch: take(0),
@@ -403,6 +448,15 @@ pub fn prelude(l: &Layout) -> Vec<Phase> {
     let mut b = Build::new(l);
     constant_element(&mut b.t, one, &[1, 0, 0, 0], l);
     constant_element(&mut b.t, E::at(l.three), &[3, 0, 0, 0], l);
+    constant_element(&mut b.t, E::at(l.beta), &BETA, l);
+    let lambda = Fr::from_hex(LAMBDA)
+        .expect("λ is a canonical literal")
+        .to_bytes();
+    let word = |k: usize| u32::from_le_bytes(lambda[4 * k..4 * k + 4].try_into().expect("4"));
+    b.t.fr(fr_op::IMM, l.lambda, ZERO, word(7));
+    for k in (0..7).rev() {
+        b.t.fr(fr_op::SHL, l.lambda, l.lambda, word(k));
+    }
     constant_point(&mut b.t, l.offset, &OFFSET, l);
     constant_point(&mut b.t, l.correction, &CORRECTION, l);
     for (k, v) in [1, 2, BUCKETS].into_iter().enumerate() {
@@ -440,13 +494,15 @@ pub fn prelude(l: &Layout) -> Vec<Phase> {
     ]
 }
 
-/// One point: held to the curve, its scalar's digits, then one bucket
-/// addition a window, batched. The caller has put the point at `point` and
-/// the scalar at `scalar`.
+/// One point: held to the curve; its split held to its scalar, each half
+/// below `2^128` by its 16 digits and each sign bit a bit; `s₂φ(P)` and
+/// `s₁P`; then one bucket addition a window for each, batched. The caller has
+/// put the point at `point`, the scalar at `scalar` and its [`split`] at
+/// `split`.
 pub fn point_template(l: &Layout) -> Template {
     let mut b = Build::new(l);
     // `y² ≡ x³ + 3`: BN254's G1 has cofactor 1, so on the curve is in the
-    // group. `MULEQ` holds `y²·1` to `x³ + 3`, which it keeps.
+    // group, where `φ` is `λ`. `MULEQ` holds `y²·1` to `x³ + 3`, which it keeps.
     let p = E::at(l.point);
     let t = &mut b.t;
     let (yy, xx, xxx, rhs) = (fresh(t), fresh(t), fresh(t), fresh(t));
@@ -455,23 +511,97 @@ pub fn point_template(l: &Layout) -> Template {
     fq(t, q::MUL, xxx, xx, p);
     fq(t, q::ADD, rhs, xxx, E::at(l.three));
     fq(t, q::MULEQ, rhs, yy, E::at(l.one));
-    for w in 0..WINDOWS {
-        t.fr(fr_op::DIGIT, l.digits + w, l.scalar, l.scalar);
+
+    // `k = (k₁ − 2b₁k₁) + λ(k₂ − 2b₂k₂)`, each `b_i² = b_i`.
+    let [k1, k2, b1, _, b2, _] = core::array::from_fn(|i| l.split + i as u32);
+    let [w0, w1] = [l.work, l.work + 1];
+    for bit in [b1, b2] {
+        t.fr(fr_op::MUL, w0, bit, bit);
+        t.assert_eq(w0, bit);
     }
-    t.assert_eq(l.scalar, ZERO);
-    let pairs: Vec<(E, E)> = (0..WINDOWS)
-        .map(|w| {
-            (
-                E {
-                    word: l.bucket(w, 0),
-                    digit: Some(l.digits + w),
-                },
-                E::at(l.point),
-            )
-        })
-        .collect();
-    b.batched_add(&pairs, E::at(l.one));
+    for (w, k, bit) in [(w0, k1, b1), (w1, k2, b2)] {
+        t.fr(fr_op::MUL, w, bit, k);
+        t.fr(fr_op::ADD, w, w, w);
+        t.fr(fr_op::SUB, w, k, w);
+    }
+    t.fr(fr_op::MUL, w1, w1, l.lambda);
+    t.fr(fr_op::ADD, w0, w0, w1);
+    t.assert_eq(w0, l.scalar);
+    for (half, k) in [k1, k2].into_iter().enumerate() {
+        for w in 0..WINDOWS {
+            let digit = l.digits + WINDOWS * half as u32 + w;
+            t.fr(fr_op::DIGIT, digit, k, k);
+        }
+        t.assert_eq(k, ZERO);
+    }
+
+    // `s₂φ(P) = (β·x, y − 2b₂y)`, then `s₁P` in place, `y − 2b₁y`.
+    let p2 = E::at(l.point2);
+    fq(t, q::MUL, p2, E::at(l.beta), p);
+    for (d, bit) in [(p2, b2), (p, b1)] {
+        let (bq, m) = (fresh(t), fresh(t));
+        fq(t, q::FROM128, bq, E::at(bit), E::at(l.zero));
+        fq(t, q::MUL, m, bq, p.y());
+        fq(t, q::ADD, m, m, m);
+        fq(t, q::SUB, d.y(), p.y(), m);
+    }
+    for (half, point) in [p, p2].into_iter().enumerate() {
+        let pairs: Vec<(E, E)> = (0..WINDOWS)
+            .map(|w| {
+                let digit = l.digits + WINDOWS * half as u32 + w;
+                (
+                    E {
+                        word: l.bucket(w, 0),
+                        digit: Some(digit),
+                    },
+                    point,
+                )
+            })
+            .collect();
+        b.batched_add(&pairs, E::at(l.one));
+    }
     b.done()
+}
+
+/// `k`'s split, as [`point_template`] reads it from `split`:
+/// `[|k₁|, |k₂|, b₁, 0, b₂, 0]` with `k ≡ s₁·|k₁| + λ·s₂·|k₂|`, `s_i = 1 − 2b_i`,
+/// and each `|k_i| < 2^128` — Babai's rounding against [`BASIS`], the
+/// quotients `⌊k·g_i / 2^256⌋` taken in integers.
+pub fn split(k: Fr) -> [Fr; 6] {
+    let bytes = k.to_bytes();
+    let limbs: [u64; 4] = core::array::from_fn(|i| {
+        u64::from_le_bytes(bytes[8 * i..8 * i + 8].try_into().expect("8"))
+    });
+    let fr = |v: u128| Fr::from_u64(v as u64) + Fr::from_u64((v >> 64) as u64) * pow64();
+    let signed = |(v, negative): (u128, bool)| if negative { -fr(v) } else { fr(v) };
+    // `⌊k·g / 2^256⌋`: the product's limbs from the fourth up.
+    let quotient = |g: &[u64; 3]| {
+        let mut product = [0u64; 7];
+        for (i, a) in limbs.iter().enumerate() {
+            let mut carry = 0u128;
+            for (j, b) in g.iter().enumerate() {
+                let v = product[i + j] as u128 + (*a as u128) * (*b as u128) + carry;
+                product[i + j] = v as u64;
+                carry = v >> 64;
+            }
+            product[i + 3] = carry as u64;
+        }
+        fr(product[4] as u128 | (product[5] as u128) << 64)
+            + fr(product[6] as u128) * pow64() * pow64()
+    };
+    let (c1, c2) = (quotient(&ROUND[0]), quotient(&ROUND[1]));
+    let [a1, b1, a2, b2] = BASIS.map(signed);
+    let halves = [k - c1 * a1 - c2 * a2, -(c1 * b1) - c2 * b2];
+    let [(k1, n1), (k2, n2)] = halves.map(|v| {
+        let small = |x: Fr| x.to_bytes()[16..].iter().all(|z| *z == 0);
+        if small(v) {
+            (v, Fr::ZERO)
+        } else {
+            assert!(small(-v), "fold: a split half is not below 2^128");
+            (-v, Fr::ONE)
+        }
+    });
+    [k1, k2, n1, Fr::ZERO, n2, Fr::ZERO]
 }
 
 /// The finish: each window's `T_w = Σ_b b·B_w[b]` by running sums, batched
@@ -767,4 +897,43 @@ pub fn load_point(p: &FoldPoint, l: &Layout, sentinel: Cell, infinity: bool) -> 
         Op::Fq([q::FROM128, l.point + 4, p.limbs + 2, l.zero]),
         Op::Fr([fr_op::ADD, l.scalar, p.scalar, ZERO]),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A split's halves are below `2^128`, its sign bits bits, and it
+    /// recomposes to its scalar — at the edges and at random.
+    #[test]
+    fn a_split_recomposes_its_scalar() {
+        let lambda = Fr::from_hex(LAMBDA).expect("a canonical literal");
+        let mut x = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        let edges = [Fr::ZERO, Fr::ONE, -Fr::ONE, lambda, -lambda];
+        let random = (0..1000).map(|_| {
+            let limbs = [next(), next(), next(), next() >> 3];
+            limbs
+                .iter()
+                .rev()
+                .fold(Fr::ZERO, |acc, l| acc * pow64() + Fr::from_u64(*l))
+        });
+        for k in edges.into_iter().chain(random) {
+            let [k1, k2, b1, z1, b2, z2] = split(k);
+            for half in [k1, k2] {
+                assert!(half.to_bytes()[16..].iter().all(|b| *b == 0), "{k:?}");
+            }
+            for bit in [b1, b2] {
+                assert!(bit == Fr::ZERO || bit == Fr::ONE);
+            }
+            assert_eq!([z1, z2], [Fr::ZERO; 2]);
+            let sign = |b: Fr| Fr::ONE - b - b;
+            assert_eq!(sign(b1) * k1 + lambda * sign(b2) * k2, k);
+        }
+    }
 }

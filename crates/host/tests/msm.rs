@@ -11,8 +11,8 @@ use field::Fr;
 use test_support::Rng;
 use transcript::g1_limbs;
 use verifier_core::fold::{
-    finish, load_point, point_template, prelude, simulate, FoldPoint, Layout, Phase, Side,
-    CORRECTION, OFFSET, WINDOWS,
+    finish, load_point, point_template, prelude, simulate, split, FoldPoint, Layout, Phase, Side,
+    BETA, CORRECTION, LAMBDA, OFFSET, WINDOWS,
 };
 use verifier_core::tape::{infinity_sentinel, run, Memory};
 
@@ -52,6 +52,26 @@ fn the_offset_and_the_correction_are_their_points() {
     let s = powers * Fr::from_u64((1..256u64).map(|b| b * (b + 1)).sum());
     let neg = G1Projective::GENERATOR.mul(&(-(k * s))).to_affine();
     assert_eq!(limbs(&neg), CORRECTION);
+}
+
+/// `φ(x, y) = (β·x, y)` is `λ` on G1: on the generator and on a random point.
+#[test]
+fn the_endomorphism_is_lambda() {
+    let lambda = Fr::from_hex(LAMBDA).expect("a canonical literal");
+    let fq = |limbs: [u64; 4]| {
+        let bytes: Vec<u8> = limbs.iter().flat_map(|l| l.to_le_bytes()).collect();
+        curve::Fq::from_bytes(&bytes.try_into().unwrap()).expect("below q")
+    };
+    let mut rng = Rng::new(0x474c_5631);
+    for p in [
+        G1Projective::GENERATOR.to_affine(),
+        G1Projective::GENERATOR.mul(&scalar(&mut rng)).to_affine(),
+    ] {
+        let mut bytes = p.to_bytes();
+        bytes[..32].copy_from_slice(&(fq(limbs(&p)[0]) * fq(BETA)).to_bytes());
+        let phi = G1Affine::from_bytes(&bytes).expect("on the curve");
+        assert_eq!(phi, G1Projective::from(p).mul(&lambda).to_affine());
+    }
 }
 
 /// Each phase replayed as many times as it says.
@@ -105,7 +125,11 @@ fn the_fold_msm_is_the_curve_msm() {
             "a real point said to be infinity is dropped"
         );
         run(&load_point(&at, &l, sentinel, false), &mut memory, &[]).expect("the point loads");
-        simulate(&point, &mut memory).expect("the point template runs");
+        for (k, v) in split(s).into_iter().enumerate() {
+            memory.set(l.split + k as u32, v);
+        }
+        simulate(&point, &mut memory)
+            .unwrap_or_else(|op| panic!("op {op} of the point template: {:?}", point.ops[op]));
         points.push(p);
         scalars.push(s);
     }

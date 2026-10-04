@@ -42,7 +42,7 @@ use pcs::{batch_verify_deferred, MercuryCommitment, MercuryProof};
 use transcript::g1_limbs;
 use verifier_core::fold::{
     finish, halves, load_point, merged_points, point_template, prelude, shard_fold, simulate,
-    FoldPoint, Node, Phase, Side, Template, POINT_CELLS,
+    split, FoldPoint, Node, Phase, Side, Template, POINT_CELLS,
 };
 use verifier_core::tape::{
     encode, infinity_sentinel, run, shard_blob, shard_tape, Cell, Memory, Op, ShardTape,
@@ -104,13 +104,26 @@ impl Leaf {
         Ok(())
     }
 
-    /// Run a template, its inverses imported first in the guest.
-    fn template(&mut self, body: u32, template: &Template, what: &str) -> Result<(), String> {
+    /// Run a template, its inverses imported first in the guest — after
+    /// `before`, witnesses in the cells just below them.
+    fn template(
+        &mut self,
+        body: u32,
+        template: &Template,
+        before: &[Fr],
+        what: &str,
+    ) -> Result<(), String> {
+        let first = template.holes.first().map(|h| h.into - before.len() as u32);
+        for (k, v) in before.iter().enumerate() {
+            let at = first.expect("witnesses sit below a template's inverses");
+            self.memory.set(at + k as u32, *v);
+        }
         let inverses = simulate(template, &mut self.memory)
             .map_err(|op| format!("{what}: op {op} refuses"))?;
-        if let Some(first) = template.holes.first() {
-            let values: Vec<Fr> = inverses.iter().flat_map(halves).collect();
-            self.step(2, &[first.into]);
+        if let Some(first) = first {
+            let mut values = before.to_vec();
+            values.extend(inverses.iter().flat_map(halves));
+            self.step(2, &[first]);
             bytes(&mut self.steps, &cell_words(&values));
         }
         self.step(1, &[body]);
@@ -144,14 +157,20 @@ impl Leaf {
         }
         self.step(3, &[p.limbs, p.scalar, (p.side == Side::B) as u32]);
         let (t, body) = &msm.point;
-        self.template(*body, t, &format!("{what}: a point"))
+        let halves = split(self.memory.get(l.scalar));
+        self.template(*body, t, &halves, &format!("{what}: a point"))
     }
 
     /// Each phase, replayed as many times as it says.
     fn phases(&mut self, phases: &[(Phase, u32)], what: &str) -> Result<(), String> {
         for (i, ((template, times), body)) in phases.iter().enumerate() {
             for r in 0..*times {
-                self.template(*body, template, &format!("{what}, phase {i} replay {r}"))?;
+                self.template(
+                    *body,
+                    template,
+                    &[],
+                    &format!("{what}, phase {i} replay {r}"),
+                )?;
             }
         }
         Ok(())
