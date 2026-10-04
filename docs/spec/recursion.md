@@ -374,22 +374,115 @@ shard of a recursion-format block and holds its outputs to `verify_shard_local` 
 
 ## 8. Nodes and the tree (outline)
 
-### 8.1 Leaf and internal node
+### 8.1 Two programs, one procedure
 
-- A **leaf** takes up to 32 base shards of one statement. It replays the base global
-  phase, verifies its shards, and folds their per-column deferred checks.
-- An **internal node** takes 2-4 recursion proofs of the recursion program and folds
-  their accumulators with its own children's deferred checks.
-- One binary serves both.
+A **node** verifies statements and folds their deferred checks into one accumulator
+(§8.3). There are two node programs, one crate's two binaries (`guests/recursion`), on
+the owner's decision:
+
+- **The leaf** verifies a slice of shards, `from..to`, of one statement of the **base
+  program**.
+- **The internal node** verifies two to four whole statements of the two recursion
+  programs, which are its children's proofs. It reads each child's journal out of the
+  public window step 10c binds, holds the children to one another, and folds their
+  accumulators beside their shards' checks.
+
+Both run `verifier_core::node::node`, one procedure that a host and a guest each run
+through a `Driver`. The host runs it natively, answering every request for advice from
+the proofs and recording the words the guest will read, every MSM witness among them.
+The guest runs it by its coprocessor calls. So a host refuses whatever a guest would, by
+name, before any guest runs.
+
+**The image** is everything static, encoded as a guest replays it, so the host replays the
+very words the guest does:
+
+- each program's families' shard tapes, pooled so a tape two programs share is held once;
+- the prologue that fills a shard's slots from the node's cells, and the fold after it;
+- the MSMs' templates;
+- step 10b's boundary half;
+- the node's constants.
+
+`build.rs` builds both images on the host with `verifier-core` itself, and each binary
+holds its own in `.rodata`, so a node's identity binds every tape it replays.
+
+- The leaf's image is built from `base.key`, the base program's key without its circuits
+  (`profiler base-key` writes it from a proof archive). It is the base program's tapes,
+  5.6 MB, so **the leaf's window families are at `2^22`**.
+- The node's image is built from `programs.key`, the two recursion programs' configs as
+  their ELFs derive them (`profiler program-keys`). A config depends on code and
+  parameters, not on `.rodata`, so a second run agrees. It is 2.8 MB, and the node's
+  windows are at `2^20`.
+
+Both programs derive the same sixteen families: six execution families, four field
+families, `FIELD_WINDOWS`, the three RAM window families and the two public ones.
+
+**What binds what:**
+
+- A leaf holds the base program's identity as a constant.
+- An internal node takes the two recursion programs' identities as claims and journals
+  them, so the top checks them once.
+- Every program's setup commitments arrive as advice. They are held to its identity by
+  recomputing it, and the entry pc with them.
+- The SRS digest and the generic table are the ceremony's, constants of every image.
+- The procedure's own tapes do no field arithmetic, so no node declares the `FR_ARITH`
+  family: a tape's constants are `IMM` and `SHL` from bytes.
+
+**The global transcript is a chain across the tree** (`verifier_core::chain`).
+
+- The node with a statement's first shard runs the prefix, G1–G7.
+- Every node absorbs the memory commitments of the shards it verifies, G8. These are the
+  same cells it opens against, absorbed from the transcript state the node before it
+  left.
+- The node with the last shard runs the suffix, G9–G11. That settles the digest and the
+  memory challenges every node took as claims, and the boundary's half of step 10b.
+
+A segment's messages are an even number of scalars, so every seam between shards has the
+prefix's parity, and a state there is three lanes and at most one pending input. That
+input is copied: it is a slot cell the next shard overwrites. The statement's shape (its
+counts and windows) is constants of the tapes built from it, and every node journals its
+digest, because a node names its shards by the shape and only the prefix absorbs it.
+
+**Across shards**, per statement:
+
+- the roots' products;
+- each cycle-owning family's time windows: non-empty, and in order;
+- step 10c, where a public shard is, with `io_digest` from the same window words.
+
+Where one node holds a whole statement, as an internal node holds each child's, it also
+makes the memory argument, `Π reads · R_b = Π writes · W_b`.
+
+**An internal node over its children:**
+
+- Each child is verified as a statement, and its exit must be 0.
+- Its journal is read from its output window's words, a cell a 32-byte word.
+- An internal child must require the identities this node requires.
+- Neighbours must be of one base statement, with the same shape, digest, challenges,
+  `io_digest`, exit status and total. Their shards must be adjacent, their chain states
+  must meet, and their time windows must be in order across the seam.
+- A child's `(A, B)` is folded under a weight drawn after absorbing its whole journal
+  (`FOLD_CHILD`, 45).
+- Where the children cover the whole base statement, the node makes the memory argument
+  over the products they journal.
 
 ### 8.2 The journal
 
-A node's journal carries:
+47 cells, one a 32-byte word, as `EXPORT` writes them (`verifier_core::node::journal`):
 
-- the statement digest;
-- the shard range it covers;
-- the recursion identity it requires of its children;
-- its folded accumulator `(A, B)`.
+| cells | what |
+| --- | --- |
+| 0 | the base statement's shape digest |
+| 1–7 | its global digest, four memory challenges, `io_digest`, exit status |
+| 8–10 | its shard count, and the shards this node covers, `from..to` |
+| 11–18 | the chain's state at `from` and at `to`: three lanes and a pending input each |
+| 19–22 | the covered shards' read and write root products; `(W_b, R_b)` where `to` is the count |
+| 23–28 | the first and last covered shard's family and time window |
+| 29–44 | `A` and `B`, each `x` then `y` in four 64-bit limbs |
+| 45–46 | the leaf program's and the node program's identities a node requires; 0 for a leaf |
+
+The root is the node covering `0..count`. Its journal says that the base statement's every
+shard was verified, the global transcript run end to end, and the memory argument made.
+What remains for the top is the accumulator's one pairing check, and the two identities
+held to the published ones.
 
 ### 8.3 Folding
 
