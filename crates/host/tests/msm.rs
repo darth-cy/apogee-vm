@@ -11,7 +11,7 @@ use field::Fr;
 use test_support::Rng;
 use transcript::g1_limbs;
 use verifier_core::fold::{
-    finish_template, load_point, point_template, prelude, simulate, FoldPoint, Layout, Side,
+    finish, load_point, point_template, prelude, simulate, FoldPoint, Layout, Phase, Side,
     CORRECTION, OFFSET, WINDOWS,
 };
 use verifier_core::tape::{infinity_sentinel, run, Memory};
@@ -54,6 +54,16 @@ fn the_offset_and_the_correction_are_their_points() {
     assert_eq!(limbs(&neg), CORRECTION);
 }
 
+/// Each phase replayed as many times as it says.
+fn phases(phases: &[Phase], memory: &mut Memory) {
+    for (i, (template, times)) in phases.iter().enumerate() {
+        for r in 0..*times {
+            simulate(template, memory)
+                .unwrap_or_else(|op| panic!("phase {i}, replay {r}: op {op} refuses"));
+        }
+    }
+}
+
 /// Twelve random points and scalars, each put in place by `load_point` from
 /// its transcript limbs as a guest's are, through the prelude, one point
 /// template each and the finish: the result is `curve::msm`'s. A thirteenth,
@@ -65,7 +75,7 @@ fn the_fold_msm_is_the_curve_msm() {
     let (limbs_at, sentinel) = (l.end(), l.end() + 8);
     let mut memory = Memory::default();
     memory.set(sentinel, infinity_sentinel());
-    simulate(&prelude(&l), &mut memory).expect("the prelude runs");
+    phases(&prelude(&l), &mut memory);
     let point = point_template(&l);
     let at = FoldPoint {
         limbs: limbs_at,
@@ -102,7 +112,7 @@ fn the_fold_msm_is_the_curve_msm() {
     place(&mut memory, &[0; 64], scalar(&mut rng));
     run(&load_point(&at, &l, sentinel, true), &mut memory, &[]).expect("infinity is the sentinel");
 
-    simulate(&finish_template(&l), &mut memory).expect("the finish runs");
+    phases(&finish(&l), &mut memory);
     let got: [[u64; 4]; 2] = core::array::from_fn(|c| {
         core::array::from_fn(|k| {
             let v = memory.get(l.result + 4 * c as u32 + k as u32).to_bytes();

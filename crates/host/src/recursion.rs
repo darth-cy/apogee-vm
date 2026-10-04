@@ -7,9 +7,11 @@
 //! step that would refuse does so here, by name, before any guest runs — a
 //! shard's checks, a point off the curve, an element read whole that was
 //! written apart — and every inverse an MSM takes is computed where the guest
-//! will import it. Building the advice verifies every shard natively, but for
-//! the pairings, since a blob's `cm*` is entry 0 of the native deferred
-//! verification (`docs/spec/accumulator.md` §2).
+//! will import it. Building the advice verifies every shard natively but for
+//! its pairings, a blob's `cm*` being entry 0 of the native deferred
+//! verification (`docs/spec/accumulator.md` §2), and then discharges the
+//! folded accumulator with one pairing check — which is what holds the fold
+//! itself, every weight, side and merged scalar, to the shards' checks.
 //!
 //! The advice is a program the guest runs blind, step by step:
 //!
@@ -39,8 +41,8 @@ use field::Fr;
 use pcs::{batch_verify_deferred, MercuryCommitment, MercuryProof};
 use transcript::g1_limbs;
 use verifier_core::fold::{
-    finish_template, halves, load_point, point_template, prelude, shard_fold, simulate, FoldPoint,
-    Node, Side, Template, POINT_CELLS,
+    finish, halves, load_point, merged_points, point_template, prelude, shard_fold, simulate,
+    FoldPoint, Node, Phase, Side, Template, POINT_CELLS,
 };
 use verifier_core::tape::{
     encode, infinity_sentinel, run, shard_blob, shard_tape, Cell, Memory, Op, ShardTape,
@@ -114,13 +116,54 @@ impl Leaf {
         self.step(1, &[body]);
         Ok(())
     }
+
+    /// One point into its side's MSM: its limbs held to the sentinel if it is
+    /// infinity, and loaded and added if it is not.
+    fn point(
+        &mut self,
+        p: &FoldPoint,
+        node: &Node,
+        msms: &[Msm],
+        what: &str,
+    ) -> Result<(), String> {
+        let (l, msm) = match p.side {
+            Side::A => (&node.a, &msms[0]),
+            Side::B => (&node.b, &msms[1]),
+        };
+        let sentinel = infinity_sentinel();
+        let infinity = (0..4).all(|k| self.memory.get(p.limbs + k) == sentinel);
+        run(
+            &load_point(p, l, node.sentinel, infinity),
+            &mut self.memory,
+            &[],
+        )
+        .map_err(|op| format!("{what}: loading a point refuses at op {op}"))?;
+        if infinity {
+            self.step(4, &[p.limbs]);
+            return Ok(());
+        }
+        self.step(3, &[p.limbs, p.scalar, (p.side == Side::B) as u32]);
+        let (t, body) = &msm.point;
+        self.template(*body, t, &format!("{what}: a point"))
+    }
+
+    /// Each phase, replayed as many times as it says.
+    fn phases(&mut self, phases: &[(Phase, u32)], what: &str) -> Result<(), String> {
+        for (i, ((template, times), body)) in phases.iter().enumerate() {
+            for r in 0..*times {
+                self.template(*body, template, &format!("{what}, phase {i} replay {r}"))?;
+            }
+        }
+        Ok(())
+    }
 }
 
-/// Each side's three templates and their bodies.
+/// Each side's templates, each with its body: the prelude's and the
+/// finish's phases, a count of replays each, and the point's.
 struct Msm {
-    prelude: (Template, u32),
+    prelude: Vec<(Phase, u32)>,
     point: (Template, u32),
-    finish: (Template, u32),
+    finish: Vec<(Phase, u32)>,
 }
 
 /// `guests/recursion`'s advice for shards `shards` of `block`, in statement
@@ -181,37 +224,54 @@ pub fn leaf_advice(
         .map(|s| 12 + s.tape.outputs.commitments.len() as u32)
         .max()
         .unwrap_or(0);
-    let node = Node::at(base, most);
+    let setups: Vec<[u8; 64]> = shapes.iter().flat_map(|s| s.setup.clone()).collect();
+    let node = Node::at(base, setups.len() as u32, most);
+    let mut setup = 0;
     for shape in &mut shapes {
-        shape.fold = shard_fold(&shape.tape, &node);
+        shape.fold = shard_fold(&shape.tape, &node, setup);
         shape.fold_body = leaf.body(&shape.fold.0);
+        setup += shape.setup.len() as u32;
     }
     let msms: Vec<Msm> = [&node.a, &node.b]
         .into_iter()
         .map(|l| {
-            let [prelude, point, finish] =
-                [prelude(l), point_template(l), finish_template(l)].map(|t| {
-                    let body = leaf.body(&t.ops);
-                    (t, body)
-                });
+            let mut bodies = |phases: Vec<Phase>| -> Vec<(Phase, u32)> {
+                phases
+                    .into_iter()
+                    .map(|phase| {
+                        let body = leaf.body(&phase.0.ops);
+                        (phase, body)
+                    })
+                    .collect()
+            };
+            let (prelude, finish) = (bodies(prelude(l)), bodies(finish(l)));
+            let point = point_template(l);
+            let body = leaf.body(&point.ops);
             Msm {
                 prelude,
-                point,
+                point: (point, body),
                 finish,
             }
         })
         .collect();
 
-    // The node's constants and both MSMs' preludes.
+    // The node's constants, the merged setup commitments, and both MSMs'
+    // preludes.
     let constants = node.prelude();
     let body = leaf.body(&constants);
     leaf.replay(body, &constants, "the node's constants")?;
+    let cells: Vec<u32> = (node.setup..node.setup + 4 * node.setups).collect();
+    let values: Vec<Fr> = setups.iter().flat_map(g1_limbs).collect();
+    for (c, v) in cells.iter().zip(&values) {
+        leaf.memory.set(*c, *v);
+    }
+    let list = leaf.list(cells);
+    leaf.step(0, &[list]);
+    bytes(&mut leaf.steps, &cell_words(&values));
     for (msm, side) in msms.iter().zip(["A", "B"]) {
-        let (t, body) = &msm.prelude;
-        leaf.template(*body, t, &format!("{side}'s prelude"))?;
+        leaf.phases(&msm.prelude, &format!("{side}'s prelude"))?;
     }
 
-    let sentinel = infinity_sentinel();
     for (i, proof) in proofs.iter().enumerate() {
         let position = shards.start + i;
         let name = program::family_name(proof.family);
@@ -275,30 +335,28 @@ pub fn leaf_advice(
         let what = format!("shard {position} ({name})'s fold");
         leaf.replay(shape.fold_body, &shape.fold.0, &what)?;
         for p in &shape.fold.1 {
-            let (l, msm) = match p.side {
-                Side::A => (&node.a, &msms[0]),
-                Side::B => (&node.b, &msms[1]),
-            };
-            let infinity = (0..4).all(|k| leaf.memory.get(p.limbs + k) == sentinel);
-            run(
-                &load_point(p, l, node.sentinel, infinity),
-                &mut leaf.memory,
-                &[],
-            )
-            .map_err(|op| format!("{what}: loading a point refuses at op {op}"))?;
-            if infinity {
-                leaf.step(4, &[p.limbs]);
-            } else {
-                leaf.step(3, &[p.limbs, p.scalar, (p.side == Side::B) as u32]);
-                let (t, body) = &msm.point;
-                leaf.template(*body, t, &format!("{what}: a point"))?;
-            }
+            leaf.point(p, &node, &msms, &what)?;
         }
+    }
+    for p in &merged_points(&node) {
+        leaf.point(p, &node, &msms, "the merged points")?;
     }
 
     for (msm, side) in msms.iter().zip(["A", "B"]) {
-        let (t, body) = &msm.finish;
-        leaf.template(*body, t, &format!("{side}'s finish"))?;
+        leaf.phases(&msm.finish, &format!("{side}'s finish"))?;
+    }
+    // What the fold owes: the accumulator discharges, as each shard's
+    // deferred checks did, `e(A, [1]_2) = e(B, [x]_2)`.
+    let point = |at: Cell| {
+        let mut bytes = [0u8; 64];
+        for (k, chunk) in bytes.chunks_exact_mut(8).enumerate() {
+            chunk.copy_from_slice(&leaf.memory.get(at + k as u32).to_bytes()[..8]);
+        }
+        G1Affine::from_bytes(&bytes).ok_or("the accumulator is not a point")
+    };
+    let (a, b) = (point(node.a.result)?, point(node.b.result)?);
+    if !curve::pairing::pairing_check(&[(a, vsrs.g2_gen), (-b, vsrs.g2_tau)]) {
+        return Err("the folded accumulator does not discharge".into());
     }
 
     let mut out = Vec::new();

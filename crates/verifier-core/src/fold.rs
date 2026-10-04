@@ -18,6 +18,11 @@
 //!   finish subtracts what the offsets added, once, at the end.
 //! - **The finish** is static too: each window's running sums, batched across
 //!   the 32 windows, then Horner over the windows by doubling.
+//! - **A loop is one template replayed** ([`Phase`]): the running sums are 254
+//!   replays of one step whose bucket is indirect through a counter cell the
+//!   step itself moves, and so are the offsets, the buckets' setting and the
+//!   Horner steps. An MSM's fixed work is some 200k operations a side and its
+//!   templates about two thousand.
 //!
 //! A point is two elements, `x` at its cell and `y` four cells on. `FQ_OP`
 //! reads an element's four cells under one timestamp, so they are only ever
@@ -44,11 +49,12 @@ pub const WINDOWS: u32 = fr_op::DIGITS as u32;
 pub const BUCKETS: u32 = 1 << fr_op::DIGIT_BITS;
 /// A point's cells: `x`, then `y`.
 pub const POINT_CELLS: u32 = 2 * q::ELEMENT_CELLS as u32;
-/// The most inversions one template takes: the finish's, 508 running steps,
-/// 248 doublings, 31 window additions and the correction.
-pub const MAX_HOLES: u32 = 1024;
-/// The cells a template's step may take of its own.
-pub const SCRATCH: u32 = 1 << 13;
+/// The most inversions one template takes: a Horner step's eight doublings
+/// and one addition.
+pub const MAX_HOLES: u32 = 16;
+/// The cells a template's step may take of its own: a batched addition over
+/// the 32 windows takes 318 elements.
+pub const SCRATCH: u32 = 1 << 11;
 
 /// The offsets' unit `R = k·G`, `k = 2^200 + 0x524543555253494f4e`, an
 /// affine point no input is expected to equal: `x`, then `y`, 64-bit limbs.
@@ -111,6 +117,10 @@ pub struct Layout {
     pub result: Cell,
     /// A constant's two 128-bit halves, as `FROM128` reads them.
     pub halves: Cell,
+    /// A loop's counter, an indirect operand's digit, and the field cells
+    /// 1, 2 and 256 it steps by.
+    pub counter: Cell,
+    pub steps: Cell,
     /// A template's inverse witnesses, two cells a hole.
     pub witnesses: Cell,
     /// Where a template's temporaries start: elements, and nothing else.
@@ -140,6 +150,8 @@ impl Layout {
             sums: take(WINDOWS * 2 * POINT_CELLS),
             result: take(POINT_CELLS),
             halves: take(2),
+            counter: take(1),
+            steps: take(3),
             // Two to spare: the last hole's `FROM128` reads four cells.
             witnesses: take(2 * MAX_HOLES + 2),
             scratch: take(0),
@@ -363,30 +375,69 @@ fn pow64() -> Fr {
     Fr::from_u64(1 << 32) * Fr::from_u64(1 << 32)
 }
 
-/// Once an MSM: the constants, the offsets `(b + 1)·R` by a chain — `2R` a
-/// doubling, every later one an addition of `R` to a different multiple —
-/// and bucket `b` of every window set to `(b + 1)·R`.
-pub fn prelude(l: &Layout) -> Template {
-    let mut b = Build::new(l);
+/// A template and how many times in a row it is replayed: a loop, whose
+/// counter the template moves itself.
+pub type Phase = (Template, u32);
+
+/// Move the counter by `steps[k]`, `op` being `ADD` or `SUB`.
+fn step(t: &mut Tape, l: &Layout, k: u32, op: u32) {
+    t.fr(op, l.counter, l.counter, l.steps + k);
+}
+
+/// The element at `word + 8·counter`.
+fn at_counter(l: &Layout, word: Cell) -> E {
+    E {
+        word,
+        digit: Some(l.counter),
+    }
+}
+
+/// Once an MSM, before its points: the constants and `2R`; then the offsets
+/// `(b + 1)·R`, each `R` more than the last, `b` the counter; then each
+/// window's buckets set to the offsets, the counter `256·w`.
+pub fn prelude(l: &Layout) -> Vec<Phase> {
     let zero = E::at(l.zero);
-    constant_element(&mut b.t, E::at(l.one), &[1, 0, 0, 0], l);
+    let one = E::at(l.one);
+    let offset = |k: u32| E::at(l.offsets + POINT_CELLS * k);
+
+    let mut b = Build::new(l);
+    constant_element(&mut b.t, one, &[1, 0, 0, 0], l);
     constant_element(&mut b.t, E::at(l.three), &[3, 0, 0, 0], l);
     constant_point(&mut b.t, l.offset, &OFFSET, l);
     constant_point(&mut b.t, l.correction, &CORRECTION, l);
-    let offset = |k: u32| E::at(l.offsets + POINT_CELLS * k);
+    for (k, v) in [1, 2, BUCKETS].into_iter().enumerate() {
+        b.t.fr(fr_op::IMM, l.steps + k as u32, ZERO, v);
+    }
     copy_point(&mut b.t, offset(0), E::at(l.offset), zero);
     copy_point(&mut b.t, offset(1), E::at(l.offset), zero);
     b.double(offset(1), l);
-    for k in 2..BUCKETS {
-        copy_point(&mut b.t, offset(k), offset(k - 1), zero);
-        b.batched_add(&[(offset(k), E::at(l.offset))], E::at(l.one));
+    b.t.fr(fr_op::IMM, l.counter, ZERO, 2);
+    let constants = b.done();
+
+    let mut b = Build::new(l);
+    let this = at_counter(l, l.offsets);
+    copy_point(&mut b.t, this, at_counter(l, l.offsets - POINT_CELLS), zero);
+    b.batched_add(&[(this, E::at(l.offset))], one);
+    step(&mut b.t, l, 0, fr_op::ADD);
+    let offsets = b.done();
+
+    let mut b = Build::new(l);
+    b.t.fr(fr_op::IMM, l.counter, ZERO, 0);
+    let reset = b.done();
+
+    let mut b = Build::new(l);
+    for k in 0..BUCKETS {
+        copy_point(&mut b.t, at_counter(l, l.bucket(0, k)), offset(k), zero);
     }
-    for w in 0..WINDOWS {
-        for k in 0..BUCKETS {
-            copy_point(&mut b.t, E::at(l.bucket(w, k)), offset(k), zero);
-        }
-    }
-    b.done()
+    step(&mut b.t, l, 2, fr_op::ADD);
+    let windows = b.done();
+
+    alloc::vec![
+        (constants, 1),
+        (offsets, BUCKETS - 2),
+        (reset, 1),
+        (windows, WINDOWS)
+    ]
 }
 
 /// One point: held to the curve, its scalar's digits, then one bucket
@@ -424,37 +475,59 @@ pub fn point_template(l: &Layout) -> Template {
 }
 
 /// The finish: each window's `T_w = Σ_b b·B_w[b]` by running sums, batched
-/// across the windows; then `Σ_w 256^w·T_w` by Horner, doubling; then `−R''`.
-/// The result is at `result`.
-pub fn finish_template(l: &Layout) -> Template {
-    let mut b = Build::new(l);
+/// across the windows, `b` the counter from 254 down; then `Σ_w 256^w·T_w`
+/// by Horner, eight doublings and `T_w` added a step, the counter `2w`; then
+/// `−R''`. The result is at `result`.
+pub fn finish(l: &Layout) -> Vec<Phase> {
     let zero = E::at(l.zero);
     let one = E::at(l.one);
     let s = |w: u32| E::at(l.sums + 2 * POINT_CELLS * w);
     let tt = |w: u32| E::at(l.sums + 2 * POINT_CELLS * w + POINT_CELLS);
+    let acc = E::at(l.result);
+
+    let mut b = Build::new(l);
     for w in 0..WINDOWS {
         let top = E::at(l.bucket(w, BUCKETS - 1));
         copy_point(&mut b.t, s(w), top, zero);
         copy_point(&mut b.t, tt(w), top, zero);
     }
-    for k in (1..BUCKETS - 1).rev() {
-        let pairs: Vec<(E, E)> = (0..WINDOWS)
-            .map(|w| (s(w), E::at(l.bucket(w, k))))
-            .collect();
-        b.batched_add(&pairs, one);
-        let pairs: Vec<(E, E)> = (0..WINDOWS).map(|w| (tt(w), s(w))).collect();
-        b.batched_add(&pairs, one);
-    }
-    let acc = E::at(l.result);
+    b.t.fr(fr_op::IMM, l.counter, ZERO, BUCKETS - 2);
+    let tops = b.done();
+
+    let mut b = Build::new(l);
+    let pairs: Vec<(E, E)> = (0..WINDOWS)
+        .map(|w| (s(w), at_counter(l, l.bucket(w, 0))))
+        .collect();
+    b.batched_add(&pairs, one);
+    let pairs: Vec<(E, E)> = (0..WINDOWS).map(|w| (tt(w), s(w))).collect();
+    b.batched_add(&pairs, one);
+    step(&mut b.t, l, 0, fr_op::SUB);
+    let running = b.done();
+
+    let mut b = Build::new(l);
     copy_point(&mut b.t, acc, tt(WINDOWS - 1), zero);
-    for w in (0..WINDOWS - 1).rev() {
-        for _ in 0..fr_op::DIGIT_BITS {
-            b.double(acc, l);
-        }
-        b.batched_add(&[(acc, tt(w))], one);
+    b.t.fr(fr_op::IMM, l.counter, ZERO, 2 * (WINDOWS - 2));
+    let top = b.done();
+
+    let mut b = Build::new(l);
+    for _ in 0..fr_op::DIGIT_BITS {
+        b.double(acc, l);
     }
+    b.batched_add(&[(acc, at_counter(l, tt(0).word))], one);
+    step(&mut b.t, l, 1, fr_op::SUB);
+    let horner = b.done();
+
+    let mut b = Build::new(l);
     b.batched_add(&[(acc, E::at(l.correction))], one);
-    b.done()
+    let correction = b.done();
+
+    alloc::vec![
+        (tops, 1),
+        (running, BUCKETS - 2),
+        (top, 1),
+        (horner, WINDOWS - 1),
+        (correction, 1)
+    ]
 }
 
 /// Run `template` natively, filling every hole with its inverse; returns the
@@ -511,9 +584,15 @@ pub struct FoldPoint {
 }
 
 /// A node's cells beside its shards' tapes: its own transcript's state, two
-/// constants, the shard being folded's scalars and a fold tape's scratch —
-/// field cells all, so a `FROM128` reading past a shard's last limbs reads
-/// one of them — and then the two MSMs.
+/// constants, the merged points' scalars and limbs, the shard being folded's
+/// scalars and a fold tape's scratch — field cells all, so a `FROM128`
+/// reading past a shard's last limbs reads one of them — and then the two
+/// MSMs.
+///
+/// **A merged point** is one every shard of a family owes, and so one the
+/// node adds once: `[1]_1`, and each setup commitment of each family the node
+/// verifies. Each shard's fold adds its share to the point's scalar, and the
+/// point goes into the MSM after the last shard ([`merged_points`]).
 #[derive(Clone, Copy, Debug)]
 pub struct Node {
     /// The node transcript's state, three cells, carried from shard to shard.
@@ -522,6 +601,13 @@ pub struct Node {
     pub generator: Cell,
     /// `G1_INFINITY_SENTINEL`.
     pub sentinel: Cell,
+    /// The merged points' scalars, `[1]_1`'s first.
+    pub merged: Cell,
+    /// The merged setup commitments' limbs, four a point, in the order their
+    /// families' [`shard_fold`]s name them.
+    pub setup: Cell,
+    /// How many there are.
+    pub setups: u32,
     /// The shard being folded's point scalars, one cell a point.
     pub scalars: Cell,
     /// Where a fold tape's own cells start.
@@ -531,15 +617,22 @@ pub struct Node {
 }
 
 impl Node {
-    /// The cells from `base` up, room for `points` scalars a shard.
-    pub fn at(base: Cell, points: u32) -> Node {
-        let scratch = base + 8 + points;
+    /// The cells from `base` up: `setups` merged setup commitments, and room
+    /// for `points` scalars a shard.
+    pub fn at(base: Cell, setups: u32, points: u32) -> Node {
+        let merged = base + 8;
+        let setup = merged + 1 + setups;
+        let scalars = setup + 4 * setups;
+        let scratch = scalars + points;
         let a = Layout::at(scratch + SCRATCH);
         Node {
             state: base,
             generator: base + 3,
             sentinel: base + 7,
-            scalars: base + 8,
+            merged,
+            setup,
+            setups,
+            scalars,
             scratch,
             a,
             b: Layout::at(a.end()),
@@ -577,9 +670,11 @@ impl Node {
 /// and draws `w` and `w′`, and every point the shard owes gets its scalar —
 /// entry `i` of its Mercury check `w·e_i` on the side `ENTRY_POINTS` gives
 /// it, `cm*`'s `w′` more, and each opened commitment `−w′·ρ^i`: the batch
-/// check `cm* − Σ ρ^i·cm_i` folded beside the Mercury check. Returns the
-/// tape and the points, in the order a guest adds them.
-pub fn shard_fold(shape: &ShardTape, node: &Node) -> (Vec<Op>, Vec<FoldPoint>) {
+/// check `cm* − Σ ρ^i·cm_i` folded beside the Mercury check. `[1]_1`'s and
+/// the setup commitments' are added to the merged scalars, the family's
+/// first setup commitment being merged point `1 + setup`. Returns the tape
+/// and the rest of the points, in the order a guest adds them.
+pub fn shard_fold(shape: &ShardTape, node: &Node, setup: u32) -> (Vec<Op>, Vec<FoldPoint>) {
     use constants::transcript_tags as tags;
     let mut t = Tape::new(node.scratch);
     let out = &shape.outputs;
@@ -614,6 +709,10 @@ pub fn shard_fold(shape: &ShardTape, node: &Node) -> (Vec<Op>, Vec<FoldPoint>) {
             PairingSide::G2One => Side::A,
             PairingSide::G2X => Side::B,
         };
+        if *k == 9 {
+            t.mac(node.merged, w, e[i]);
+            continue;
+        }
         add(&mut t, limbs(*k), side, &|t, c| {
             t.fr(fr_op::MUL, c, w, e[i]);
             if i == 0 {
@@ -621,13 +720,36 @@ pub fn shard_fold(shape: &ShardTape, node: &Node) -> (Vec<Op>, Vec<FoldPoint>) {
             }
         });
     }
-    for (cm, rho) in out.commitments.iter().zip(&out.batch) {
+    // The setup commitments are the batch's last.
+    let own = out.commitments.len() - shape.slots.setup.len();
+    for (j, (cm, rho)) in out.commitments.iter().zip(&out.batch).enumerate() {
+        if j >= own {
+            let m = node.merged + 1 + setup + (j - own) as u32;
+            let share = t.mul(w2, *rho);
+            t.fr(fr_op::SUB, m, m, share);
+            continue;
+        }
         add(&mut t, cm[0], Side::A, &|t, c| {
             t.fr(fr_op::MUL, c, w2, *rho);
             t.fr(fr_op::SUB, c, ZERO, c);
         });
     }
     (t.ops, points)
+}
+
+/// The merged points, after a node's last shard: `[1]_1`, then each setup
+/// commitment, all on `A`.
+pub fn merged_points(node: &Node) -> Vec<FoldPoint> {
+    (0..=node.setups)
+        .map(|j| FoldPoint {
+            limbs: match j {
+                0 => node.generator,
+                j => node.setup + 4 * (j - 1),
+            },
+            scalar: node.merged + j,
+            side: Side::A,
+        })
+        .collect()
 }
 
 /// The ops that put a point and its scalar where a template reads them:
