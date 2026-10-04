@@ -1,0 +1,10 @@
+# the recursion format's circuits, by SHA-256 of `recursion_circuit(family, n).artifact.to_bytes()`
+# docs/spec/recursion.md is normative; the five recursion families at their default heights,
+# then ADD_SUB_LUI_AUIPC, the one family whose recursion circuit is not its base circuit
+# family n memory witness layers inner relations outputs bytes sha256
+FIELD_WINDOWS 20 2 0 21 42 42 2 2758 b19670d80fb99a092ba594e5a77b149fb0c9aeafb209d3d9e95bf288105fe0f4
+FR_OP 20 31 31 27 370 414 4 89741 b3cf7d6c8012a498b202238696a3388bce8e7da77f96f570e070e04ed27a596f
+P2_FIELD 18 45 382 25 392 764 4 294425 ff920a02680f4bce9a5951c49bcaffc1d71fce1cbf5b78bbe631140363f2f025
+FIELD_IO 18 43 39 26 650 674 4 164713 e2ae73975ca83dca00e9d7f9932cb10aec106990e3fb4830f08a86882dc3fd75
+FQ_OP 20 48 73 27 630 668 6 158326 af9dd8e95ee16d20808b4a923c6208eac67302e22cb682fccf88ca98f177d485
+ADD_SUB_LUI_AUIPC 20 27 39 25 298 373 8 77987 0531ed89f637e857499cc7a38dd0fea37030afbb2ca936c38cebbcfb62f32f74

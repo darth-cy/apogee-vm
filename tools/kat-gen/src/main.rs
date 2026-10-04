@@ -28,6 +28,7 @@
 //! | `lookup`  | `crates/constraints/tests/vectors/lookup_toy.bin` (S15's combined toy) |
 //! | `family`  | `crates/constraints/tests/vectors/{add_sub,jump_branch_slt}.bin` (S16's and S17's family circuits) |
 //! | `delegation` | `crates/constraints/tests/vectors/{keccak,poseidon2,fr_arith,mod_mul,sha256,ec_add}.txt` (the six delegation circuits, by digest: the artifacts are megabytes) |
+//! | `recursion` | `crates/constraints/tests/vectors/recursion.txt` (S-RECURSION's five families and the recursion `ADD_SUB`, by digest) |
 //! | `block`   | `crates/host/tests/vectors/*` (S25's recorded mini-block). **Needs `ETH_RPC_URL`; opt-in only, see `DEFAULT_GROUPS`** |
 //! | `revm`    | `crates/emulator/tests/vectors/revm_block_*` (S24's synthetic block, what native revm makes of it, and the keccak-f frames the guest delegates) |
 //! | `guests`  | the guest ELFs themselves -- opt-in only, see `DEFAULT_GROUPS` |
@@ -55,6 +56,7 @@ mod pairing;
 mod pcs;
 mod poly;
 mod program;
+mod recursion;
 mod revm;
 mod shared;
 mod srs;
@@ -63,7 +65,7 @@ mod tower;
 mod zkevm;
 
 /// Every group, in the order a reader of the tower would meet them.
-const GROUPS: [(&str, fn()); 22] = [
+const GROUPS: [(&str, fn()); 23] = [
     ("field", field::generate),
     ("poly", poly::generate),
     ("curve", curve::generate),
@@ -80,6 +82,7 @@ const GROUPS: [(&str, fn()); 22] = [
     ("lookup", lookup::generate),
     ("family", family::generate),
     ("delegation", delegation::generate),
+    ("recursion", recursion::generate),
     ("moduli", moduli::generate),
     ("tape", tape::generate),
     ("revm", revm::generate),
@@ -101,7 +104,7 @@ const GROUPS: [(&str, fn()); 22] = [
 /// one machine, with `cargo run -p kat-gen -- guests`, and everything CI can
 /// reproduce from them -- the objdump and nm listings -- is in `loader`, which
 /// does run by default.
-const DEFAULT_GROUPS: [&str; 19] = [
+const DEFAULT_GROUPS: [&str; 20] = [
     "field",
     "poly",
     "curve",
@@ -118,6 +121,7 @@ const DEFAULT_GROUPS: [&str; 19] = [
     "lookup",
     "family",
     "delegation",
+    "recursion",
     "moduli",
     "tape",
     "revm",

@@ -133,7 +133,8 @@ tools/
                  S14's memory artifacts, written from `constraints::memory`'s constructors,
                  S15's lookup toy, every registered execution family's circuit, written from
                  `constraints`, the six delegation circuits **by digest** (the artifacts
-                 are megabytes),
+                 are megabytes), S-RECURSION's five families and its `ADD_SUB` by
+                 digest likewise (`recursion`),
                  the generic table's commitments over the ceremony, S20's global
                  transcript tape, and S24's synthetic block -- the witness, what native
                  revm makes of it, and the keccak-f frames the guest delegates -- and,
@@ -259,7 +260,7 @@ APOGEE_DEBUG=detail cargo test --release -p prover --features debug-info \
                                             # verdict the scans reached.
                                             # `docs/spec/debug-info.md` §2, §5, §8
 cargo run -p kat-gen                        # refresh every fixture (manual, deliberate)
-cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader | isa | program | gkr | memory | lookup | family | delegation | moduli | tape | revm
+cargo run -p kat-gen -- <group>             # just one: field | poly | curve | tower | pairing | msm | srs | pcs | loader | isa | program | gkr | memory | lookup | family | delegation | recursion | moduli | tape | revm
 cargo run -p checker -- laws <artifact>     # Laws 1-4 and the lookup rules, the standalone validators
 cargo run -p checker -- padding <artifact>  # the padding contract
 cargo run -p checker -- dump <artifact>     # a circuit, readably: layers, gates, relations, catalogue
