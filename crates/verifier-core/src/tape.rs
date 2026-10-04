@@ -178,6 +178,11 @@ impl Tape {
         c
     }
 
+    /// The input blob's length so far.
+    pub fn blob_bytes(&self) -> u32 {
+        self.blob
+    }
+
     pub fn mul(&mut self, a: Cell, b: Cell) -> Cell {
         let d = self.fresh(1);
         self.fr(fr_op::MUL, d, a, b);

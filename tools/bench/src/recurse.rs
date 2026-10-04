@@ -23,9 +23,11 @@
 //! node's memory is its process's alone, and a node may as well run on
 //! another machine that shares the directory. The scheduler keeps at most
 //! `--in-flight` (1) of them running, each node started the moment its last
-//! child's proof exists, in tree order, and each proving at most
-//! `--shards-in-flight` (1) shards at once. A node whose proof is already in
-//! `<out>` is not proved again, so a stopped run resumes.
+//! child's proof exists, in tree order, and the tree proving at most
+//! `--in-flight` times `--shards-in-flight` (1) shards at once: a node gets
+//! its share of what is spare when it starts, so a root running alone proves
+//! as many shards at once as all the leaves did together. A node whose proof
+//! is already in `<out>` is not proved again, so a stopped run resumes.
 //!
 //! At the root, the scheduler verifies the proof and its journal: the
 //! statement's shards covered, the two identities, and the accumulator's one
@@ -245,34 +247,46 @@ pub fn run(args: &[String]) -> Result<(), String> {
     );
 
     // The nodes: each started when its children are proved, at most
-    // `in_flight` at once.
+    // `in_flight` at once, and `in_flight · shards_in_flight` shards in flight
+    // across them all. A node started while fewer nodes can run takes the
+    // spare share: a root alone has the machine, and proves that many.
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let proof = |id: usize| o.out.join(format!("{id}.block"));
     let mut done: Vec<bool> = (0..tree.nodes.len()).map(|id| proof(id).exists()).collect();
-    let mut running: Vec<(usize, Child, Instant)> = Vec::new();
+    let mut running: Vec<(usize, Child, Instant, usize)> = Vec::new();
     let begun = Instant::now();
     while !done[tree.root] {
-        let ready = (0..tree.nodes.len()).find(|id| {
-            !done[*id]
-                && !running.iter().any(|r| r.0 == *id)
-                && match &tree.nodes[*id] {
-                    TreeNode::Leaf { .. } => true,
-                    TreeNode::Internal { children } => children.iter().all(|c| done[*c]),
-                }
-        });
-        if let (Some(id), true) = (ready, running.len() < o.in_flight) {
+        let ready: Vec<usize> = (0..tree.nodes.len())
+            .filter(|id| {
+                !done[*id]
+                    && !running.iter().any(|r| r.0 == *id)
+                    && match &tree.nodes[*id] {
+                        TreeNode::Leaf { .. } => true,
+                        TreeNode::Internal { children } => children.iter().all(|c| done[*c]),
+                    }
+            })
+            .collect();
+        let held: usize = running.iter().map(|r| r.3).sum();
+        let spare = o.in_flight * o.shards_in_flight - held;
+        if let (Some(id), true) = (ready.first(), running.len() < o.in_flight && spare > 0) {
+            let id = *id;
+            let shards = spare / ready.len().min(o.in_flight - running.len());
+            let shards = shards.max(1);
             let log = std::fs::File::create(o.out.join(format!("{id}.log")))
                 .map_err(|e| e.to_string())?;
             let err = log.try_clone().map_err(|e| e.to_string())?;
             let child = Command::new(&exe)
                 .args(["recurse-node", &o.out.to_string_lossy(), &id.to_string()])
-                .args(["--shards-in-flight", &o.shards_in_flight.to_string()])
+                .args(["--shards-in-flight", &shards.to_string()])
                 .stdout(Stdio::from(log))
                 .stderr(Stdio::from(err))
                 .spawn()
                 .map_err(|e| e.to_string())?;
-            println!("node {id} ({}) started", describe(&tree.nodes[id]));
-            running.push((id, child, Instant::now()));
+            println!(
+                "node {id} ({}) started, {shards} shards in flight",
+                describe(&tree.nodes[id])
+            );
+            running.push((id, child, Instant::now(), shards));
             continue;
         }
         if running.is_empty() {
@@ -280,18 +294,18 @@ pub fn run(args: &[String]) -> Result<(), String> {
         }
         std::thread::sleep(Duration::from_millis(500));
         let mut finished = None;
-        for (k, (_, child, started)) in running.iter_mut().enumerate() {
+        for (k, (_, child, started, _)) in running.iter_mut().enumerate() {
             if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
                 finished = Some((k, status, started.elapsed()));
                 break;
             }
         }
         if let Some((k, status, took)) = finished {
-            let (id, _, _) = running.remove(k);
+            let (id, ..) = running.remove(k);
             if !status.success() {
                 // The tree cannot finish, so the nodes still running are
                 // stopped rather than left proving what nothing will read.
-                for (_, mut child, _) in running {
+                for (_, mut child, ..) in running {
                     let _ = child.kill();
                     let _ = child.wait();
                 }
