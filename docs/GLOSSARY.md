@@ -242,7 +242,8 @@ fewer proof bytes in total
 which the family's height has to reach, and for `KECCAK_F` also S26d's `XOR8` — and that is
 S26c's amendment to a rule that read
 "a delegation family carries no channel" (`docs/spec/delegation.md` §10.3, §10.4); at `2^8`
-none can, and at no height on this menu may any carry `TIMESTAMP`.
+none can, and below `2^20` none can carry `TIMESTAMP`. S-RECURSION's `FQ_OP`, at `2^20`,
+carries it.
 `docs/spec/delegation.md`.
 
 **Delegation request** — the CPU-side row of a delegation call: an ecall whose `a7` is the

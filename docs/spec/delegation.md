@@ -782,12 +782,15 @@ frame word, and it removes the failure
 `constants::family::DEFAULT_HEIGHTS` warns about, a family reaching a channel
 assertion inside `VerifyingKey::check` on bytes a verifier was handed.
 
-**A delegation family at `2^8` must therefore carry no lookup channel**, and
-**no delegation family may carry `TIMESTAMP` at any height this menu offers**:
-that channel's `BITS` is 19, so its table needs `2^20` rows, which is an
-execution family's floor and not a delegation family's. A frame's timestamp gap
-is consequently never a `TIMESTAMP` obligation — it is a bit decomposition at
-`2^8` and, since S26c, four `RANGE16` obligations at `2^16` or above (§10.3).
+**A delegation family at `2^8` must therefore carry no lookup channel.** A family
+below `2^20` cannot carry `TIMESTAMP` either: that channel's `BITS` is 19, so its
+table needs `2^20` rows. Every family this page defines sits below that height, so
+a frame's timestamp gap is never a `TIMESTAMP` obligation — it is a bit
+decomposition at `2^8` and, since S26c, four `RANGE16` obligations at `2^16` or
+above (§10.3). *Until S-RECURSION this paragraph also made it a rule that no
+delegation family may carry `TIMESTAMP`; the owner withdrew that rule, and
+`FQ_OP`, a recursion delegation family at `2^20`, carries the channel
+(`docs/spec/recursion.md` §6).*
 
 **`family_circuit`'s minimum-height guard is derived, not a list.** Until S26c it
 named the seven execution families explicitly and a delegation family's arm sat
@@ -1014,12 +1017,13 @@ factor of 10.7, and its proof from 360,948 bytes a shard to 135,220.
 **What the amendment does not touch.** A family at `2^8` still carries no
 channel, because no table fits there — `POSEIDON2` and `FR_ARITH` are the two
 left; `SHA256_COMP` was the worked example at S26c, its row 16,688 inner columns,
-until S26e re-shaped it onto both channels at `2^18` (§10.5). And **no**
-delegation family may carry `TIMESTAMP` at any height on this menu: `BITS = 19`
-needs `2^20`, which is an execution family's floor. So a frame's timestamp gap is
-never that channel's obligation — it is a bit decomposition at `2^8` and three
-`RANGE16` chunks at `2^16`, the third carrying a scaled obligation that is exact
-at `2^38`.
+until S26e re-shaped it onto both channels at `2^18` (§10.5). And a family below
+`2^20` cannot carry `TIMESTAMP`, whose `BITS = 19` needs `2^20` rows. So a frame's
+timestamp gap in every family here is never that channel's obligation — it is a
+bit decomposition at `2^8` and three `RANGE16` chunks at `2^16`, the third
+carrying a scaled obligation that is exact at `2^38`. (This read as a rule over
+every delegation family until S-RECURSION, whose `FQ_OP` carries `TIMESTAMP` at
+`2^20`; the owner withdrew the rule, §9.)
 
 **What it costs.** Three things, each of which S26c paid.
 

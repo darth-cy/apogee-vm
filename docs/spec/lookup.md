@@ -119,12 +119,13 @@ would have bounded them in sixteen lookups.
 `KECCAK_F` are wide enough that a bit
 decomposition of every bound is the dominant cost — `EC_ADD`'s 97-word frame is 3,686 gap bits
 against 194 chunk columns — and narrow enough per row that `2^16` — `2^18` for `KECCAK_F`,
-which takes two variables above the floor by choice — is affordable. What stays
-true at every height this menu offers is that **no delegation family may carry `TIMESTAMP`**:
-`BITS = 19` needs `2^20` rows, which is an execution family's floor and not an invocation
-family's. So a frame's timestamp gap is never that channel's obligation; it is a bit
-decomposition at `2^8`, and at `2^16` and above three `RANGE16` chunks whose top one carries a
-scaled obligation that is exact at `2^38`.
+which takes two variables above the floor by choice — is affordable. A family below `2^20`
+cannot carry `TIMESTAMP`, whose `BITS = 19` needs `2^20` rows, so in every family below that
+height a frame's timestamp gap is never that channel's obligation; it is a bit decomposition
+at `2^8`, and at `2^16` and above three `RANGE16` chunks whose top one carries a scaled
+obligation that is exact at `2^38`. Until S-RECURSION this was a rule that no delegation
+family may carry `TIMESTAMP`; the owner withdrew it, and `FQ_OP`, at `2^20`, carries it
+(`docs/spec/recursion.md` §6).
 
 ## 4. Gated keys
 

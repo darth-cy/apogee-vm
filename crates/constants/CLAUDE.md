@@ -6,20 +6,22 @@ else. If a later stage needs a magic number that outlives one function, it belon
 here.
 
 ## Frozen invariants
-- **Zero logic, forever.** `src/` holds constant items and doc comments only: no
-  functions, no `const fn`, no traits, no macros, no dependencies. A test that checks a
-  constant lives in the crate that consumes it (see
-  `crates/field/tests/constants_check.rs`).
-- **One exception, added at S10:** `tests/ecall_abi.rs`. `docs/spec/ecall-abi.md` *is* the
+- **Constants first, and logic only where it derives one.** `src/` is constant items and
+  their doc comments, and a `const fn` belongs here only when it computes a value from
+  frozen constants: `delegation::a0_after`, and `ec_add`'s and `mod_mul`'s helpers. *S01's
+  rule was "zero logic, forever" — no functions, no `const fn`, no traits, no macros; the
+  owner withdrew it at S-RECURSION as too restrictive.* A test that checks a constant
+  usually lives in the crate that consumes it (see `crates/field/tests/constants_check.rs`).
+- **`tests/ecall_abi.rs`, added at S10.** `docs/spec/ecall-abi.md` *is* the
   ABI, and acceptance 9 wants the document checked against the numbers rather than
-  maintained beside them. An integration test is a separate crate, so `src/` is still
-  `#![no_std]` with nothing in it but constants.
-- **A third, added at S21:** `tests/keccak.rs`, which re-derives `keccak::ROTATIONS` from the
+  maintained beside them. An integration test is a separate crate, so `src/` stays
+  `#![no_std]`.
+- **`tests/keccak.rs`, added at S21**, which re-derives `keccak::ROTATIONS` from the
   `(t+1)(t+2)/2 mod 64` walk and `keccak::ROUND_CONSTANTS` from the degree-8 LFSR, rather than
   trusting the transcription. Two tables of 25 and 24 numbers copied from a reference are
   exactly the kind of constant a test must re-derive; the same rule as the Poseidon2 round
   constants and the pairing tables below.
-- **A second, added at S14:** `tests/memory.rs`, because `RAM_LIVE_BIT` and `HALT_PC` are
+- **`tests/memory.rs`, added at S14**, because `RAM_LIVE_BIT` and `HALT_PC` are
   claims about `guest_memory::RAM_ORIGIN`: `RAM_ORIGIN == 4 << RAM_LIVE_BIT`, and
   `HALT_PC` odd and below it; `lookup_channel::BITS[TIMESTAMP]` is one about
   `memory::TS_BITS`, two chunks of it being the clock; and two `BITS[RANGE16]` halfwords

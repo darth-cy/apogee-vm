@@ -38,7 +38,7 @@ docs/
                  fd/syscall API is a compatibility wrapper and not the source of truth
   handoff/       one note per completed stage: frozen API, artifacts, deviations
 crates/
-  constants/     frozen constants and tags; zero logic; no_std
+  constants/     frozen constants and tags; no_std
   field/         Fr arithmetic (Montgomery); no_std
   curve/         Fq tower through Fq12 + G1/G2 + the optimal ate pairing + Pippenger MSM; std
   transcript/    Poseidon2 permutation + duplex transcript, and the curve-free G1 absorption; no_std
@@ -555,7 +555,11 @@ is derivable *from* them is regenerated and diffed in CI.
   argument in memory. Entry lists are **concatenated, never combined**; `discharge` weights
   each check by a power of a challenge drawn from the accumulator's own digest, and that
   weight is load-bearing — without it two checks can cancel each other's errors.
-  `docs/spec/accumulator.md`. `ShardProof` and `BlockProof` carry no entries.
+  `docs/spec/accumulator.md`. `ShardProof` and `BlockProof` carry no entries. **Recursion
+  combines** (owner's decision, S-RECURSION, amending the master prompt's proof-shape
+  bullet): a node folds every deferred check it verifies into one `(A, B)` under weights its
+  transcript draws after them, and journals it, so the final verifier discharges one
+  pairing check (`docs/spec/recursion.md` §8.3). The entry list stays a base proof's form.
 - **`discharge` validates every accumulator point.** Nobody upstream does: absorption binds
   claimed limbs, and the in-VM replay does no curve math. One rule, `docs/spec/accumulator.md`
   §4, cited rather than restated.
@@ -1121,10 +1125,10 @@ is derivable *from* them is regenerated and diffed in CI.
   `SHA256_COMP`'s `2^18` are the other way round — a *choice* two variables above that same
   floor, because a delegation shard's cost is its height while its proof bytes barely move
   with it, so fewer, fatter shards cut a hash-heavy workload's total **proof bytes**.
-  **No delegation family may carry `TIMESTAMP` at any height on this menu** — `BITS = 19`
-  needs `2^20`, an execution family's floor — so a frame's timestamp gap is a bit
-  decomposition at `2^8` and three `RANGE16` chunks at `2^16` and above, never that channel's
-  obligation. A frame value's **canonicity** is an eight-limb borrow chain whose last borrow
+  A family below `2^20` cannot carry `TIMESTAMP` — `BITS = 19` needs `2^20` rows — so a
+  frame's timestamp gap in the six base families is a bit decomposition at `2^8` and three
+  `RANGE16` chunks at `2^16` and above. That is a fact about their heights and **no longer a
+  rule** (owner's decision, S-RECURSION): `FQ_OP`, at `2^20`, carries `TIMESTAMP`. A frame value's **canonicity** is an eight-limb borrow chain whose last borrow
   is 1 exactly when the value is below the modulus: against `p`'s literals for `FR_ARITH` and
   `POSEIDON2`, and against `MOD_MUL`'s and `EC_ADD`'s `m_limb` columns, which a selector pins
   to one of four or two tables of literals. **A gated conclusion is
@@ -1486,6 +1490,26 @@ is derivable *from* them is regenerated and diffed in CI.
   mainnet. A panicking guest publishes an empty journal and exits 101, which says nothing
   about *why* — both `WitnessDb` and the recorder use the checked form and name the
   failure.
+- **The recursion format is a second registry, and base proving is frozen** (owner's
+  decision, S-RECURSION, `docs/spec/recursion.md` §1). A statement is in it exactly when its
+  config holds `FIELD_WINDOWS`, so no base key, statement or proof moved a byte.
+  `constraints::recursion_circuit` is `family_circuit` byte for byte except `ADD_SUB`, which
+  knows every row of `delegation::TYPES` where the base one knows the frozen prefix
+  `BASE_TYPES = 6`, and the five recursion families. A row appended to `TYPES` moves the
+  recursion `ADD_SUB` and no base key. A stack is up to `2^σ` columns a commitment, and
+  `σ = 0` is the base format, one code path.
+- **A recursion request leaves `a0` past its frame** (§1.4); a base request still writes 0.
+  So a tape is consecutive frames and its replay back-to-back `ecall`s, and the recursion
+  `ADD_SUB`'s `deleg_a0_rule` is what holds a request to it, since `replay` checks only that a
+  run ends where its frames do.
+- **An `Fq` element is written whole** (§6, §8.3). `FQ_OP` reads an element's four cells as
+  `b` or `d` under one timestamp, so an element written cell by cell has no witness. A
+  template's temporaries are elements on a grid of four, and `tape::run`'s `Memory` refuses
+  the violation natively, before it becomes an unprovable fill.
+- **In a guest, a byte array compared is `memcmp`, a byte a step.** A tape's constant map was
+  keyed by 32 bytes and was 42% of an internal node's cycles until it was keyed by words.
+  Profile a guest's glue by family and by function before proving it: a shard a family is
+  the price of a single row, so `MEM_SUBWORD` and `MUL_DIV` each cost a node a whole shard.
 - **Boring beats clever.** Added surface area is a defect. Every verifier entry point is
   `(&VerifyingKey, &Proof, &PublicInputs)` and nothing else.
 
@@ -1529,6 +1553,7 @@ is derivable *from* them is regenerated and diffed in CI.
 | S-STATELESS — The canonical stateless validator, held to `tests-zkevm@v21.0.1` | done | `docs/handoff/S-STATELESS.md` |
 | S26e — `SHA256_COMP` four rounds a row; guest cycle reductions | done | `docs/handoff/S26e-sha256-round-and-cycles.md` |
 | S-PIPELINE — The shard pipeline: pulled, bounded, no barrier | done | `docs/handoff/S-PIPELINE.md` |
+| S-RECURSION — Recursion: the field memory, the tape verifier and the tree | the tree done; the decider owed | `docs/handoff/S-RECURSION.md` |
 
 **S-IO takes no number, and that is deliberate** (owner's decision). It is not one of the
 original twenty-seven stages — it is the stage those twenty-seven forgot, inserted after
@@ -1624,6 +1649,25 @@ authorized by the owner and recorded in the handoff note. **Measured on the same
 
 What it owes is the deferred suites, which run in one batch at the end of the
 progression.
+
+**`S-RECURSION` takes no number either**, and it is the master prompt's recursion: this
+VM proving its own verifier, the tree of those proofs, and one accumulator left for the
+final verifier (`docs/spec/recursion.md`). Base proving is frozen. A program that declares
+a field family is in a second, **recursion format**: stacked commitments over the `2^24`
+ceremony, a field memory of whole `Fr` cells, and four coprocessors on it — `FR_OP`,
+`P2_FIELD`, `FIELD_IO` and `FQ_OP`, the last one BN254 base-field operation a row.
+`verifier_core::tape` compiles a shard's checks into those coprocessors' calls.
+`verifier_core::node` is the one procedure a node runs, natively on the host and by
+coprocessor calls in `guests/recursion`'s two binaries. `bench recurse` plans a block
+proof's tree and proves it node by node, each node a process. **The full tree over devnet
+block 257,510's 207-shard proof proved and verified end to end**: 387 shards, 11,433 s
+and a 31.2 GB peak on the 48 GB Mac, before two findings that shrink it:
+- a node's cost is about one shard a family before it does any work, so leaves go large;
+- a tape's constants were found by `memcmp` over 32-byte keys, 42% of an internal node's
+  cycles, and are found by words now.
+
+The Groth16 wrapper and the onchain verifier are the owner's "Tree first": designed from
+the measured root, which the handoff note records.
 
 **`S-NATIVE-IO` takes no number for the same reason**, and it is S-IO's other half. S-IO
 built the mechanism that binds an execution's public values and left the POSIX surface
