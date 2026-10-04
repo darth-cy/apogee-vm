@@ -25,7 +25,9 @@ mod lookup;
 mod memory;
 
 pub use lookup::{channel_holds, insert_lookup_challenges};
-pub use memory::{boundary_factors, reconciles, window_challenges, BoundaryFinals};
+pub use memory::{
+    boundary_factors, field_window_challenges, reconciles, window_challenges, BoundaryFinals,
+};
 
 // ---------------------------------------------------------------------------
 // The containers

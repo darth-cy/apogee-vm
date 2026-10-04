@@ -12,9 +12,10 @@
 //!   trip at four heights and two batch widths shows the constant is the real
 //!   length.
 //! * **There is one verification path.** Every transcript operation of a
-//!   verification lives in the shared core; the four public entry points touch
-//!   the transcript not at all, and differ only in whether they execute the
-//!   pairings or hand back their terms.
+//!   verification lives in `pcs-verify`'s field-side core, which the recursion
+//!   guest runs too; `accumulate` and the four public entry points touch the
+//!   transcript not at all, and the entry points differ only in whether they
+//!   execute the pairings or hand back their terms.
 //! * **The pairing-merge challenge is squeezed last and is what merges.**
 //!   Must-be-exact 4 pins the squeeze position. Since S09 the *use* is
 //!   observable — `rho` is the scalar of an accumulator entry, and
@@ -30,9 +31,11 @@ mod common;
 
 const LIB: &str = include_str!("../src/lib.rs");
 const FFT: &str = include_str!("../src/fft.rs");
-const UNI: &str = include_str!("../src/uni.rs");
-const BDFG: &str = include_str!("../src/bdfg.rs");
 const ACCUMULATOR: &str = include_str!("../src/accumulator.rs");
+/// The verifier's field side, the half the recursion guest links.
+const VERIFY: &str = include_str!("../../pcs-verify/src/lib.rs");
+const UNI: &str = include_str!("../../pcs-verify/src/uni.rs");
+const BDFG: &str = include_str!("../../pcs-verify/src/bdfg.rs");
 
 /// Lines of `text` that are neither blank, nor a `//` comment, nor inside the
 /// unit-test module — the code a build actually ships.
@@ -76,6 +79,7 @@ fn the_only_transform_is_the_one_at_two_b() {
     );
 
     for (name, text) in [
+        ("pcs-verify's lib.rs", VERIFY),
         ("uni.rs", UNI),
         ("bdfg.rs", BDFG),
         ("accumulator.rs", ACCUMULATOR),
@@ -91,6 +95,7 @@ fn the_only_transform_is_the_one_at_two_b() {
     assert!(FFT.contains("fn butterflies"));
     for (name, text) in [
         ("lib.rs", LIB),
+        ("pcs-verify's lib.rs", VERIFY),
         ("uni.rs", UNI),
         ("bdfg.rs", BDFG),
         ("accumulator.rs", ACCUMULATOR),
@@ -113,15 +118,15 @@ fn the_only_transform_is_the_one_at_two_b() {
     );
 }
 
-/// The transcript schedule of one function, read out of the source as
-/// `(kind, tag)` pairs in order.
+/// The transcript schedule of one function of `text`, read out of the source
+/// as `(kind, tag)` pairs in order.
 ///
 /// This is `docs/spec/mercury.md` §5's and §11's tables, and the sides must
 /// produce them. Reading tags rather than whole lines keeps the test about the
 /// schedule and not about how a local is spelled.
-fn schedule(function: &str) -> Vec<(&'static str, String)> {
+fn schedule(text: &str, function: &str) -> Vec<(&'static str, String)> {
     let mut out = Vec::new();
-    for line in body(LIB, function).split(';') {
+    for line in body(text, function).split(';') {
         // `challenge_z` is the resample-on-zero wrapper of MERCURY_Z; the tag
         // is inside the helper, so it is named here.
         if line.contains("challenge_z(tr)") {
@@ -131,7 +136,8 @@ fn schedule(function: &str) -> Vec<(&'static str, String)> {
         let touches = line.contains("tr.append_")
             || line.contains("tr.challenge_scalar")
             || line.contains("append_g1(tr,")
-            || line.contains("append_g1_list(tr,");
+            || line.contains("append_g1_list(tr,")
+            || line.contains("append_g1_points(tr,");
         if !touches {
             continue;
         }
@@ -188,17 +194,30 @@ fn both_sides_run_the_frozen_schedule() {
         .iter()
         .map(|(kind, tag)| (*kind, tag.to_string()))
         .collect();
-    for function in ["open", "accumulate"] {
+    for (text, function) in [(LIB, "open"), (VERIFY, "scalars")] {
         assert_eq!(
-            schedule(function),
+            schedule(text, function),
             expected,
             "{function} must run docs/spec/mercury.md section 5's schedule"
         );
     }
+    // And the native core reaches the schedule only through the shared one, so
+    // a guest's replay and a native verification cannot run two schedules.
+    assert!(
+        schedule(LIB, "accumulate").is_empty(),
+        "accumulate must not touch the transcript itself"
+    );
+    assert_eq!(
+        body(LIB, "accumulate")
+            .matches("pcs_verify::scalars(")
+            .count(),
+        1,
+        "accumulate must run the shared field side exactly once"
+    );
     // Said against the source, because it is the one step no proof and no
     // transcript state can reveal on its own: the merge challenge is squeezed
     // after everything, exactly once.
-    let core = schedule("accumulate");
+    let core = schedule(VERIFY, "scalars");
     assert_eq!(
         core.last(),
         Some(&("squeeze", "PAIRING_MERGE".to_string())),
@@ -220,7 +239,7 @@ fn both_sides_run_the_frozen_batch_schedule() {
         .map(|(kind, tag)| (*kind, tag.to_string()))
         .collect();
     assert_eq!(
-        schedule("batch_preamble"),
+        schedule(VERIFY, "batch_preamble"),
         expected,
         "the batch preamble must run docs/spec/mercury.md section 11's schedule"
     );
@@ -228,15 +247,27 @@ fn both_sides_run_the_frozen_batch_schedule() {
     // batching challenge is the LAST thing the preamble takes, so a squeeze
     // moved ahead of either message fails here.
     assert_eq!(
-        schedule("batch_preamble").last(),
+        schedule(VERIFY, "batch_preamble").last(),
         Some(&("squeeze", "MERCURY_BATCH".to_string())),
         "rho is squeezed after both messages, never before either"
+    );
+    // The native preamble adds the `cm*` MSM and nothing else.
+    assert!(
+        schedule(LIB, "batch_preamble").is_empty(),
+        "pcs's preamble must reach the transcript only through the shared one"
+    );
+    assert_eq!(
+        body(LIB, "batch_preamble")
+            .matches("pcs_verify::batch_preamble(")
+            .count(),
+        1,
+        "pcs's preamble must run the shared one exactly once"
     );
 
     // And the two batch entry points reach the transcript only through it.
     for function in ["batch_open", "batch_accumulate"] {
         assert!(
-            schedule(function).is_empty(),
+            schedule(LIB, function).is_empty(),
             "{function} must not touch the transcript itself"
         );
         assert_eq!(
@@ -259,7 +290,7 @@ fn the_verifier_entry_points_are_the_core_plus_one_branch() {
         "batch_verify_deferred",
     ] {
         assert!(
-            schedule(function).is_empty(),
+            schedule(LIB, function).is_empty(),
             "{function} must reach the transcript only through the core"
         );
     }
@@ -287,7 +318,7 @@ fn the_verifier_entry_points_are_the_core_plus_one_branch() {
 /// check and one MSM per side for it to merge into.
 #[test]
 fn the_merge_challenge_is_squeezed_last_and_spent_once() {
-    let core = body(LIB, "accumulate");
+    let core = body(VERIFY, "scalars");
     assert_eq!(
         core.matches("challenge_scalar(tags::PAIRING_MERGE)")
             .count(),

@@ -4,11 +4,13 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
-# `std`, like `curve` and `srs`: this crate pairs, and no guest does.
+# `std`, like `curve` and `srs`: this crate pairs, and no guest does. Its
+# verifier's field side is `pcs-verify`, the no_std half a guest links.
 [dependencies]
 constants.workspace = true
 field.workspace = true
 curve.workspace = true
+pcs-verify.workspace = true
 poly.workspace = true
 srs.workspace = true
 transcript.workspace = true

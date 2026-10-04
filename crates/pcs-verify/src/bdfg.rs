@@ -20,7 +20,10 @@
 //!
 //! Nothing here touches a curve point. The verifier's `G1` accumulation used to
 //! live in this module; since S09 it is a list of `(scalar, point)` accumulator
-//! entries built in `crate::accumulate` from the same `Item`s.
+//! entries, whose scalars [`crate::scalars`] builds from the same `Item`s.
+
+use alloc::vec;
+use alloc::vec::Vec;
 
 use field::Fr;
 

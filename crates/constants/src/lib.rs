@@ -782,6 +782,28 @@ pub mod transcript_tags {
     /// `docs/spec/shard-proof.md` §3.
     pub const GENERIC_TABLE: u64 = 41;
 
+    /// Challenge. One of a recursion-format shard's `σ` stack challenges `r`,
+    /// drawn after the GKR pass and before its one batch opening, which opens
+    /// its stacks at `u ‖ r` (`docs/spec/recursion.md` §1.3). Never drawn in
+    /// the base format, where `σ = 0`.
+    pub const STACK_CHALLENGE: u64 = 42;
+
+    /// Absorbed in a recursion node's own transcript: one verified shard's
+    /// final transcript state, its three lanes, which bind every point and
+    /// scalar of that shard's deferred checks (`docs/spec/recursion.md` §8.3).
+    pub const FOLD_STATE: u64 = 43;
+
+    /// Challenge. One of a recursion node's fold weights, drawn after the
+    /// shard it weights is absorbed: the two that fold its Mercury check and
+    /// its batch check into the node's accumulator.
+    pub const FOLD_WEIGHT: u64 = 44;
+
+    /// Absorbed in a recursion node's own transcript: one child's journal,
+    /// its every cell, the accumulator among them, before the weight that
+    /// folds that accumulator into the node's is drawn
+    /// (`docs/spec/recursion.md` §8.3).
+    pub const FOLD_CHILD: u64 = 45;
+
     /// Every tag's name, indexed by `tag - 1`. **Documentation, never
     /// semantics**, as `challenge_slot::NAMES` is: the number is the tag, and
     /// nothing reads a name to decide anything. `checker::tape` renders a
@@ -790,7 +812,7 @@ pub mod transcript_tags {
     ///
     /// Append here whenever a tag is appended above. This crate keeps its
     /// zero-logic rule: the lookup lives in `checker::tape`.
-    pub const NAMES: [&str; 41] = [
+    pub const NAMES: [&str; 45] = [
         "PROTOCOL_SUITE",
         "PUBLIC_INPUTS",
         "COMMITMENT",
@@ -832,6 +854,10 @@ pub mod transcript_tags {
         "SHARD_SEED",
         "SHARD_TS_WINDOW",
         "GENERIC_TABLE",
+        "STACK_CHALLENGE",
+        "FOLD_STATE",
+        "FOLD_WEIGHT",
+        "FOLD_CHILD",
     ];
 }
 
@@ -1179,8 +1205,33 @@ pub mod family {
     /// never appears.
     pub const EC_ADD: u32 = 17;
 
+    /// The **field memory**'s windows (S-RECURSION): zero-initialized cells of
+    /// [`crate::address_space::FIELD`], one shard per window, consecutive from
+    /// cell 0. `ZERO_WINDOWS`' circuit at a stride of one cell a row. In a
+    /// `VmConfig` exactly when the program declares a field delegation, and a
+    /// statement whose config holds it is in the **recursion format**
+    /// (`docs/spec/recursion.md` §1.1, §2.2).
+    pub const FIELD_WINDOWS: u32 = 18;
+
+    /// Invoked. One field operation a row over field cells
+    /// (`docs/spec/recursion.md` §3).
+    pub const FR_OP: u32 = 19;
+
+    /// Invoked. One step of the transcript's duplex a row: absorb up to two
+    /// cells and permute a state triple into the next (`docs/spec/recursion.md`
+    /// §4).
+    pub const P2_FIELD: u32 = 20;
+
+    /// Invoked. One move a row between eight RAM words and a field cell
+    /// (`docs/spec/recursion.md` §5).
+    pub const FIELD_IO: u32 = 21;
+
+    /// Invoked. One operation a row over elements of BN254's base field, each
+    /// four field cells of 64-bit limbs (`docs/spec/recursion.md` §6).
+    pub const FQ_OP: u32 = 22;
+
     /// How many families this table defines.
-    pub const COUNT: u32 = 18;
+    pub const COUNT: u32 = 23;
 
     /// The pinned height of [`PUBLIC_INPUT`] and [`PUBLIC_OUTPUT`].
     ///
@@ -1247,6 +1298,11 @@ pub mod family {
         false, // MOD_MUL
         false, // SHA256_COMP
         false, // EC_ADD
+        false, // FIELD_WINDOWS
+        false, // FR_OP
+        false, // P2_FIELD
+        false, // FIELD_IO
+        false, // FQ_OP
     ];
 
     /// The trace-height menu, ascending. Even powers of two only, so that a
@@ -1334,6 +1390,11 @@ pub mod family {
         1 << 16, // MOD_MUL, and NOT 2^8 — see the paragraph above
         1 << 18, // SHA256_COMP: CHOSEN above its floor of 16 (RANGE16 and XOR8)
         1 << 16, // EC_ADD: forced, its RANGE16 table needing 16 variables
+        1 << 20, // FIELD_WINDOWS: a million cells a window
+        1 << 20, // FR_OP: a million field operations a shard
+        1 << 18, // P2_FIELD: 262,144 duplex steps a shard
+        1 << 18, // FIELD_IO: 262,144 moves a shard
+        1 << 20, // FQ_OP: forced, its TIMESTAMP table needing 19 variables
     ];
 
     /// The default `bytecode_size_words`: `2^20` words, a 4 MiB ceiling on the
@@ -1723,6 +1784,23 @@ pub mod ecall {
     /// [`RETIRED_KECCAK_F_WHOLE_PERMUTATION`].
     pub const PRECOMPILE_KECCAK_F: u32 = 0x0507;
 
+    /// One field operation over field cells (S-RECURSION): `a0` is a four-word
+    /// frame `[op, d, a, b]`, `crate::fr_op`'s layout.
+    pub const PRECOMPILE_FR_OP: u32 = 0x0509;
+
+    /// One duplex step over field cells (S-RECURSION): `a0` is a five-word
+    /// frame `[n, s, x, y, d]`, `crate::p2_field`'s layout.
+    pub const PRECOMPILE_P2_FIELD: u32 = 0x050A;
+
+    /// One move between RAM and a field cell (S-RECURSION): `a0` is a
+    /// three-word frame `[op, cell, ptr]`, `crate::field_io`'s layout.
+    pub const PRECOMPILE_FIELD_IO: u32 = 0x050B;
+
+    /// One operation over BN254 base-field elements in field cells
+    /// (S-RECURSION): `a0` is a four-word frame `[op, d, a, b]`,
+    /// `crate::fq_op`'s layout.
+    pub const PRECOMPILE_FQ_OP: u32 = 0x050C;
+
     /// Linux `ENOSYS`. An unimplemented number returns `-ENOSYS` in `a0`.
     ///
     /// It survives the deletion of the POSIX layer because it is not part of
@@ -1787,6 +1865,24 @@ pub mod address_space {
     /// The delegation anchor space of `family::EC_ADD` (S26c).
     pub const DELEGATION_EC_ADD: u8 = 9;
 
+    /// The **field memory** (S-RECURSION): cells holding whole `Fr` elements,
+    /// addressed by a `u32`. No instruction reaches it — a load or store names
+    /// [`RAM`] — and only the recursion families' rows read and write it
+    /// (`docs/spec/recursion.md` §2).
+    pub const FIELD: u8 = 10;
+
+    /// The anchor space of `family::FR_OP` (S-RECURSION).
+    pub const DELEGATION_FR_OP: u8 = 11;
+
+    /// The anchor space of `family::P2_FIELD` (S-RECURSION).
+    pub const DELEGATION_P2_FIELD: u8 = 12;
+
+    /// The anchor space of `family::FIELD_IO` (S-RECURSION).
+    pub const DELEGATION_FIELD_IO: u8 = 13;
+
+    /// The anchor space of `family::FQ_OP` (S-RECURSION).
+    pub const DELEGATION_FQ_OP: u8 = 14;
+
     /// Every delegation tag, ascending, **append-only**: the one place the set
     /// is written down, so a reader of a memory event can tell a delegation
     /// anchor from RAM, a register or the pc without knowing which family it
@@ -1795,13 +1891,17 @@ pub mod address_space {
     /// `constraints::memory::frame_query_takes` and `trace::AddressSpace` both
     /// read it; the `deleg` frame query takes an event in **any** of these
     /// spaces, and nothing else does.
-    pub const DELEGATION: [u8; 6] = [
+    pub const DELEGATION: [u8; 10] = [
         DELEGATION_KECCAK_F,
         DELEGATION_POSEIDON2,
         DELEGATION_FR_ARITH,
         DELEGATION_MOD_MUL,
         DELEGATION_SHA256_COMP,
         DELEGATION_EC_ADD,
+        DELEGATION_FR_OP,
+        DELEGATION_P2_FIELD,
+        DELEGATION_FIELD_IO,
+        DELEGATION_FQ_OP,
     ];
 }
 
@@ -1908,7 +2008,7 @@ pub mod delegation {
     ///
     /// `docs/spec/delegation.md` §3 is the same table in prose, and
     /// `crates/constants/tests/ecall_abi.rs` holds the two equal.
-    pub const TYPES: [(u32, u32, u8, usize); 6] = [
+    pub const TYPES: [(u32, u32, u8, usize); 10] = [
         (
             super::family::KECCAK_F,
             super::ecall::PRECOMPILE_KECCAK_F,
@@ -1945,7 +2045,51 @@ pub mod delegation {
             super::address_space::DELEGATION_EC_ADD,
             super::ec_add::FRAME_WORDS,
         ),
+        (
+            super::family::FR_OP,
+            super::ecall::PRECOMPILE_FR_OP,
+            super::address_space::DELEGATION_FR_OP,
+            super::fr_op::FRAME_WORDS,
+        ),
+        (
+            super::family::P2_FIELD,
+            super::ecall::PRECOMPILE_P2_FIELD,
+            super::address_space::DELEGATION_P2_FIELD,
+            super::p2_field::FRAME_WORDS,
+        ),
+        (
+            super::family::FIELD_IO,
+            super::ecall::PRECOMPILE_FIELD_IO,
+            super::address_space::DELEGATION_FIELD_IO,
+            super::field_io::FRAME_WORDS,
+        ),
+        (
+            super::family::FQ_OP,
+            super::ecall::PRECOMPILE_FQ_OP,
+            super::address_space::DELEGATION_FQ_OP,
+            super::fq_op::FRAME_WORDS,
+        ),
     ];
+
+    /// The prefix of [`TYPES`] the **base format** knows (S-RECURSION,
+    /// `docs/spec/recursion.md` §1.2). Frozen: the base `ADD_SUB` circuit
+    /// carries one selector per row of `TYPES[..BASE_TYPES]` and no other, so
+    /// every base key keeps its bytes while the registry grows. A
+    /// recursion-format `ADD_SUB` carries every row.
+    pub const BASE_TYPES: usize = 6;
+
+    /// What a request of registry row `index` leaves in `a0`, its frame at
+    /// `base` (`docs/spec/recursion.md` §1.4): 0 for a base type, and for a
+    /// type past [`BASE_TYPES`] the base advanced past its frame, so a run of
+    /// consecutive frames replays as back-to-back ecalls. The caller's frame
+    /// lies in RAM, so the sum stays below `2^32`.
+    pub const fn a0_after(index: usize, base: u32) -> u32 {
+        if index < BASE_TYPES {
+            0
+        } else {
+            base + 4 * TYPES[index].3 as u32
+        }
+    }
 }
 
 /// keccak-f[1600] and keccak256, frozen at S21.
@@ -2158,6 +2302,210 @@ pub mod fr_arith {
 
     /// The operation codes, ascending. Every live row carries exactly one.
     pub const OPS: [u32; 3] = [OP_ADD, OP_MUL, OP_INV];
+}
+
+/// `FR_OP`'s frame and operation codes (S-RECURSION,
+/// `docs/spec/recursion.md` §3).
+pub mod fr_op {
+    /// The accesses a row makes besides its frame, in order: `a`, `b`, `d`.
+    pub const ACCESSES: usize = 3;
+    /// The operation's word.
+    pub const OP_WORD: usize = 0;
+    /// The destination cell's word.
+    pub const D_WORD: usize = 1;
+    /// The first operand cell's word.
+    pub const A_WORD: usize = 2;
+    /// The second operand cell's word, or the integer `IMM` and `SHL` read.
+    /// `DIGIT` writes it.
+    pub const B_WORD: usize = 3;
+    /// The frame: four words, read and written back unchanged.
+    pub const FRAME_WORDS: usize = 4;
+    /// The frame in bytes, which is what a shim hands over.
+    pub const FRAME_BYTES: usize = 4 * FRAME_WORDS;
+
+    /// `d = a·b`.
+    pub const MUL: u32 = 1;
+    /// `d = a + b`.
+    pub const ADD: u32 = 2;
+    /// `d = a − b`.
+    pub const SUB: u32 = 3;
+    /// `d = d + a·b`.
+    pub const MAC: u32 = 4;
+    /// `d = a⁻¹`, and 0 at `a = 0`.
+    pub const INV: u32 = 5;
+    /// `a = b`, or the row has no witness. Writes nothing.
+    pub const EQ: u32 = 6;
+    /// `d = b`, the frame word, as an integer below `2^32`.
+    pub const IMM: u32 = 7;
+    /// `d = a·2^32 + b`, the frame word: how a constant wider than a word is
+    /// built.
+    pub const SHL: u32 = 8;
+    /// `a = d + 2^DIGIT_BITS·b` with `d < 2^DIGIT_BITS`, writing both `d` and
+    /// `b`: one digit of a scalar peeled off. A scalar's [`DIGITS`] of them,
+    /// the rest ending at 0, are a representation of it mod p, which is what
+    /// a scalar multiplication by it needs.
+    pub const DIGIT: u32 = 9;
+    /// Every code, ascending; a live row carries exactly one.
+    pub const OPS: [u32; 9] = [MUL, ADD, SUB, MAC, INV, EQ, IMM, SHL, DIGIT];
+    /// A digit's width: the MSM's window (`docs/spec/recursion.md` §3).
+    pub const DIGIT_BITS: u32 = 8;
+    /// The digits a scalar below `2^256` takes.
+    pub const DIGITS: usize = 256 / DIGIT_BITS as usize;
+
+    /// The in-cycle slots of the `a`, `b` and `d` queries: distinct, so any of
+    /// the three may name the same cell.
+    pub const DELTA_A: u64 = 0;
+    pub const DELTA_B: u64 = 1;
+    pub const DELTA_D: u64 = 2;
+}
+
+/// `P2_FIELD`'s frame (S-RECURSION, `docs/spec/recursion.md` §4).
+pub mod p2_field {
+    /// The accesses a row makes besides its frame, in order: the state's three lanes, `x`, `y`, the next state's three.
+    pub const ACCESSES: usize = 8;
+    /// How many cells are absorbed: 0, 1 or 2.
+    pub const N_WORD: usize = 0;
+    /// The state triple's first cell.
+    pub const S_WORD: usize = 1;
+    /// The first absorbed cell, read when `n >= 1`.
+    pub const X_WORD: usize = 2;
+    /// The second absorbed cell, read when `n = 2`.
+    pub const Y_WORD: usize = 3;
+    /// The first cell of the triple the permuted state is written to. A
+    /// transcript's states are wherever its caller puts them, so a state is
+    /// never overwritten and none needs a run of cells to itself.
+    pub const D_WORD: usize = 4;
+    /// The frame: five words, read-only.
+    pub const FRAME_WORDS: usize = 5;
+    /// The frame in bytes.
+    pub const FRAME_BYTES: usize = 4 * FRAME_WORDS;
+    /// The cells a state takes.
+    pub const STATE_CELLS: u32 = 3;
+
+    /// The in-cycle slots: the state read, `x`, `y`, and the next state's
+    /// write — distinct, so the absorbed cells may alias anything.
+    pub const DELTA_STATE: u64 = 0;
+    pub const DELTA_X: u64 = 1;
+    pub const DELTA_Y: u64 = 2;
+    pub const DELTA_NEXT: u64 = 3;
+}
+
+/// `FIELD_IO`'s frame and operation codes (S-RECURSION,
+/// `docs/spec/recursion.md` §5).
+pub mod field_io {
+    /// The accesses a row makes besides its frame, in order: the eight data words, then the cell.
+    pub const ACCESSES: usize = 9;
+    /// The operation's word.
+    pub const OP_WORD: usize = 0;
+    /// The field cell's word.
+    pub const CELL_WORD: usize = 1;
+    /// The word holding the RAM pointer to the eight data words.
+    pub const PTR_WORD: usize = 2;
+    /// The frame: three words, read-only.
+    pub const FRAME_WORDS: usize = 3;
+    /// The frame in bytes.
+    pub const FRAME_BYTES: usize = 4 * FRAME_WORDS;
+    /// The data words a move reads or writes at `ptr, ptr + 4, …`.
+    pub const DATA_WORDS: usize = 8;
+
+    /// The cell takes `Σ_k w_k·2^{32k}` mod p; the words are read-only.
+    pub const IMPORT: u32 = 1;
+    /// The words take limbs below `2^32` congruent to the cell; the cell is
+    /// read-only.
+    pub const EXPORT: u32 = 2;
+    /// Every code, ascending.
+    pub const OPS: [u32; 2] = [IMPORT, EXPORT];
+
+    /// The data words' slot: not the frame's, so a frame and its data may
+    /// overlap.
+    pub const DATA_DELTA: u64 = 1;
+    /// The cell's slot.
+    pub const CELL_DELTA: u64 = 0;
+}
+
+/// `FQ_OP`'s frame, codes and element layout (S-RECURSION,
+/// `docs/spec/recursion.md` §6).
+///
+/// An **element** of BN254's base field is four consecutive field cells
+/// holding 64-bit limbs, `Σ_i v_i·2^{64i} < 2^256`, congruent to the element
+/// mod [`Q`] and not necessarily below it: reduction is lazy, and only this
+/// family writes one.
+pub mod fq_op {
+    /// The accesses a row makes besides its frame, in order: the digit cell,
+    /// then `a`'s, `b`'s and `d`'s four cells.
+    pub const ACCESSES: usize = 13;
+    /// The operation's word: the code, the indirection flags and the digit
+    /// cell.
+    pub const OP_WORD: usize = 0;
+    /// The destination element's word.
+    pub const D_WORD: usize = 1;
+    /// The first operand element's word.
+    pub const A_WORD: usize = 2;
+    /// The second operand element's word.
+    pub const B_WORD: usize = 3;
+    /// The frame: four words, read-only.
+    pub const FRAME_WORDS: usize = 4;
+    /// The frame in bytes.
+    pub const FRAME_BYTES: usize = 4 * FRAME_WORDS;
+
+    /// `d ≡ a·b`.
+    pub const MUL: u32 = 1;
+    /// `d ≡ a + b`.
+    pub const ADD: u32 = 2;
+    /// `d ≡ a − b`.
+    pub const SUB: u32 = 3;
+    /// `a·b ≡ d`, `d` kept: an assertion.
+    pub const MULEQ: u32 = 4;
+    /// `d = a₀ + 2^128·a₁` from two cells below `2^128` each: a point
+    /// coordinate from its two transcript limbs.
+    pub const FROM128: u32 = 5;
+    /// Every code, ascending; a live row carries exactly one.
+    pub const OPS: [u32; 5] = [MUL, ADD, SUB, MULEQ, FROM128];
+    /// The code's bits in the op word.
+    pub const CODE_BITS: u32 = 3;
+
+    /// The op word's flag making `d` **indirect**: its element is
+    /// `word + BUCKET_CELLS·digit`, the digit being the value of the op
+    /// word's digit cell.
+    pub const IND_D: u32 = 1 << CODE_BITS;
+    /// Likewise for `a`.
+    pub const IND_A: u32 = 2 << CODE_BITS;
+    /// Likewise for `b`.
+    pub const IND_B: u32 = 4 << CODE_BITS;
+    /// The digit cell is the op word shifted down by this much.
+    pub const DIGIT_SHIFT: u32 = CODE_BITS + 3;
+    /// A bucket's cells: an affine point's `x` then `y`.
+    pub const BUCKET_CELLS: u32 = 8;
+    /// An element's cells.
+    pub const ELEMENT_CELLS: usize = 4;
+
+    /// BN254's base field modulus, four little-endian 64-bit limbs.
+    pub const Q: [u64; 4] = [
+        0x3c20_8c16_d87c_fd47,
+        0x9781_6a91_6871_ca8d,
+        0xb850_45b6_8181_585d,
+        0x3064_4e72_e131_a029,
+    ];
+    /// `SUB`'s `z = SUB_MULTIPLE·q − b`: nonnegative for every `b < 2^256`.
+    pub const SUB_MULTIPLE: u64 = 6;
+
+    // `Q` is `mod_mul`'s BN254 base field, limb for limb.
+    const _: () = {
+        assert!(super::mod_mul::CODES[2] == super::mod_mul::BN254_P);
+        let m = super::mod_mul::MODULI[2];
+        let mut i = 0;
+        while i < 4 {
+            assert!(Q[i] == (m[2 * i] as u64 | (m[2 * i + 1] as u64) << 32));
+            i += 1;
+        }
+    };
+
+    /// The slots: the digit cell, then `a`, `b`, `d`, distinct, so any two
+    /// operands may name one element.
+    pub const DELTA_G: u64 = 0;
+    pub const DELTA_A: u64 = 1;
+    pub const DELTA_B: u64 = 2;
+    pub const DELTA_D: u64 = 3;
 }
 
 /// The Ethereum field-multiplication delegation's frame, its four moduli and

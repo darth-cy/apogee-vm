@@ -6,6 +6,7 @@
 //! constraint system that has not been built yet, and a buffer that guessed
 //! would be a buffer someone has to un-guess.
 
+use field::Fr;
 use program::FamilyId;
 
 use crate::log::AddressSpace;
@@ -251,6 +252,19 @@ impl<'a> FrameSlice<'a> {
         &self.trace.base[self.start..self.start + self.len]
     }
 
+    /// Access `q`'s columns over this shard's invocations.
+    pub fn access(&self, q: usize) -> AccessSlice<'a> {
+        let c = &self.trace.accesses[q];
+        let (a, b) = (self.start, self.start + self.len);
+        AccessSlice {
+            live: &c.live[a..b],
+            addr: &c.addr[a..b],
+            read_ts: &c.read_ts[a..b],
+            read: &c.read[a..b],
+            write: &c.write[a..b],
+        }
+    }
+
     /// Frame word `j`'s four columns over this shard's invocations.
     pub fn word(&self, j: usize) -> WordSlice<'a> {
         let c = &self.trace.words[j];
@@ -262,6 +276,39 @@ impl<'a> FrameSlice<'a> {
             write_value: &c.write_value[a..b],
         }
     }
+}
+
+/// One access a recursion row makes besides its frame
+/// (`docs/spec/recursion.md` §2.1): a field cell, or `FIELD_IO`'s RAM data
+/// word, read and written in one slot. Its values are `Fr` because a cell's
+/// are; a data word's are below `2^32`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Access {
+    pub addr: u32,
+    pub read_ts: u64,
+    pub read: Fr,
+    pub write: Fr,
+}
+
+/// One access's columns over a family's invocations. A row that does not make
+/// the access holds zeros there, `live` false.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AccessColumns {
+    pub live: Vec<bool>,
+    pub addr: Vec<u32>,
+    pub read_ts: Vec<u64>,
+    pub read: Vec<Fr>,
+    pub write: Vec<Fr>,
+}
+
+/// One access's columns over one shard's invocations.
+#[derive(Clone, Copy, Debug)]
+pub struct AccessSlice<'a> {
+    pub live: &'a [bool],
+    pub addr: &'a [u32],
+    pub read_ts: &'a [u64],
+    pub read: &'a [Fr],
+    pub write: &'a [Fr],
 }
 
 /// One frame word's four columns over one shard's invocations.
@@ -381,10 +428,14 @@ pub struct DelegationTrace {
     /// The frame's word queries, in frame order; every entry has one value per
     /// invocation.
     pub words: Vec<QueryColumns>,
+    /// The accesses a row makes besides its frame, in the family's order —
+    /// `program::delegation_accesses` of them, none for a base family.
+    pub accesses: Vec<AccessColumns>,
 }
 
 impl DelegationTrace {
-    /// An empty buffer for `family` at `height`, with `width` frame words.
+    /// An empty buffer for `family` at `height`, with `width` frame words and
+    /// the family's own accesses.
     pub fn new(family: FamilyId, height: u32, width: usize) -> DelegationTrace {
         DelegationTrace {
             family,
@@ -392,6 +443,7 @@ impl DelegationTrace {
             cycle: Vec::new(),
             base: Vec::new(),
             words: vec![QueryColumns::default(); width],
+            accesses: vec![AccessColumns::default(); program::delegation_accesses(family)],
         }
     }
 
@@ -405,8 +457,29 @@ impl DelegationTrace {
     }
 
     /// Append one invocation. `words` is one query per frame word, in frame
-    /// order, and must be the buffer's width.
-    pub fn push(&mut self, cycle: u64, base: u32, words: &[Query]) {
+    /// order, and must be the buffer's width; `accesses` is one entry per
+    /// access of the family's, `None` where the row does not make it.
+    pub fn push(&mut self, cycle: u64, base: u32, words: &[Query], accesses: &[Option<Access>]) {
+        assert_eq!(
+            accesses.len(),
+            self.accesses.len(),
+            "delegation buffer: {} accesses for a family making {}",
+            accesses.len(),
+            self.accesses.len()
+        );
+        for (columns, a) in self.accesses.iter_mut().zip(accesses) {
+            columns.live.push(a.is_some());
+            let a = a.unwrap_or(Access {
+                addr: 0,
+                read_ts: 0,
+                read: Fr::ZERO,
+                write: Fr::ZERO,
+            });
+            columns.addr.push(a.addr);
+            columns.read_ts.push(a.read_ts);
+            columns.read.push(a.read);
+            columns.write.push(a.write);
+        }
         assert_eq!(
             words.len(),
             self.words.len(),

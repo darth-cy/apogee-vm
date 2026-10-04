@@ -439,6 +439,13 @@ fn post_execution_wire(
                 .collect()
         })
         .collect();
+    // A recursion family's field accesses carry `Fr` values and are not
+    // events, so a recursion execution has no archive form: it streams
+    // (`docs/spec/recursion.md` §2.1).
+    assert!(
+        traces.delegations.iter().all(|t| t.accesses.is_empty()),
+        "trace archive: a recursion family's buffer has no archive form"
+    );
     let delegations: Vec<DelegationRef> = traces
         .delegations
         .iter()
@@ -495,6 +502,7 @@ fn decode_post_execution(
                         write_value: write_value.0,
                     })
                     .collect(),
+                accesses: Vec::new(),
             })
             .collect(),
         families: families

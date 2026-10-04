@@ -64,6 +64,7 @@
 pub mod canonical;
 pub mod fixture;
 pub mod recorder;
+pub mod recursion;
 pub mod rpc;
 pub mod zkevm;
 

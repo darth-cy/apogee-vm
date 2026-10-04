@@ -362,6 +362,186 @@ pub mod recursion {
     static DELEGATION_EC_ADD: [u8; delegation::MARKER_BYTES] =
         super::record(ecall::PRECOMPILE_EC_ADD);
 
+    /// `FR_OP`'s declaration record (S-RECURSION). The four field families'
+    /// records are their bytes as three little-endian words — the same bytes
+    /// in `.rodata` — so a call reads its number with one load where a byte
+    /// array takes four: a replay asks once a body, and a point's template is
+    /// a body.
+    #[link_section = ".rodata.apogee.delegations.fr_op"]
+    static DELEGATION_FR_OP: [u32; 3] = super::record_words(ecall::PRECOMPILE_FR_OP);
+
+    /// `P2_FIELD`'s declaration record (S-RECURSION).
+    #[link_section = ".rodata.apogee.delegations.p2_field"]
+    static DELEGATION_P2_FIELD: [u32; 3] = super::record_words(ecall::PRECOMPILE_P2_FIELD);
+
+    /// `FIELD_IO`'s declaration record (S-RECURSION).
+    #[link_section = ".rodata.apogee.delegations.field_io"]
+    static DELEGATION_FIELD_IO: [u32; 3] = super::record_words(ecall::PRECOMPILE_FIELD_IO);
+
+    /// `FQ_OP`'s declaration record (S-RECURSION).
+    #[link_section = ".rodata.apogee.delegations.fq_op"]
+    static DELEGATION_FQ_OP: [u32; 3] = super::record_words(ecall::PRECOMPILE_FQ_OP);
+
+    /// A field family's number, read from its record: word 2, after the
+    /// magic. `black_box` for `delegation_number`'s reason.
+    fn field_number(record: &'static [u32; 3]) -> u32 {
+        core::hint::black_box(record)[2]
+    }
+
+    /// One field-family call over the frame at `base`, `bytes` long.
+    ///
+    /// **The answer is `base + bytes`, and any other is fatal**
+    /// (`docs/spec/recursion.md` §1.4): a recursion request leaves `a0` past
+    /// its frame, so a tape of consecutive frames replays as back-to-back
+    /// ecalls. The field memory exists only where its circuits do, so there is
+    /// no software path to fall back on.
+    fn field_call(record: &'static [u32; 3], base: *mut u32, bytes: usize) {
+        // SAFETY: as [`poseidon2`]; the caller's frame is `bytes` long, lives
+        // across the call, and is read and written back unchanged.
+        let ret = unsafe { ecall1(field_number(record), base as u32) };
+        if ret as u32 != base as u32 + bytes as u32 {
+            exit(EXIT_PRECOMPILE_ERROR);
+        }
+    }
+
+    /// One field operation over field cells (`docs/spec/recursion.md` §3):
+    /// `[op, d, a, b]`, one of `constants::fr_op::OPS`. An `EQ` whose cells
+    /// differ is not an answer but a fatal frame error.
+    pub fn fr_op(frame: &mut [u32; constants::fr_op::FRAME_WORDS]) {
+        field_call(&DELEGATION_FR_OP, frame.as_mut_ptr(), 4 * frame.len());
+    }
+
+    /// One step of the transcript's duplex (`docs/spec/recursion.md` §4):
+    /// `[n, s, x, y, d]` absorbs `n` of `x, y` into the state at `s` and
+    /// writes the permuted state to `d`.
+    pub fn p2_field(frame: &mut [u32; constants::p2_field::FRAME_WORDS]) {
+        field_call(&DELEGATION_P2_FIELD, frame.as_mut_ptr(), 4 * frame.len());
+    }
+
+    /// One move between RAM and a field cell (`docs/spec/recursion.md` §5):
+    /// `[op, cell, ptr]` imports the eight words at `ptr` into `cell` or
+    /// exports `cell` into them. `ptr` names eight words the call may read,
+    /// and for an export write.
+    pub fn field_io(frame: &mut [u32; constants::field_io::FRAME_WORDS]) {
+        field_call(&DELEGATION_FIELD_IO, frame.as_mut_ptr(), 4 * frame.len());
+    }
+
+    /// One operation over BN254 base-field elements in field cells
+    /// (`docs/spec/recursion.md` §6): `[op, d, a, b]`, the op word carrying
+    /// the code, the indirection flags and the digit cell
+    /// (`constants::fq_op`).
+    pub fn fq_op(frame: &mut [u32; constants::fq_op::FRAME_WORDS]) {
+        field_call(&DELEGATION_FQ_OP, frame.as_mut_ptr(), 4 * frame.len());
+    }
+
+    /// Bytes word-aligned by their type, as a node's image is held:
+    /// `static IMAGE: &Words<[u8]> = &Words(*include_bytes!(...))`, read back
+    /// as the words a replay walks.
+    #[repr(C, align(4))]
+    pub struct Words<T: ?Sized>(pub T);
+
+    impl Words<[u8]> {
+        /// The bytes as little-endian words, a trailing partial word left out.
+        pub fn words(&self) -> &[u32] {
+            // SAFETY: the type aligns the bytes to 4, every bit pattern is a
+            // `u32`, and the slice covers whole words of them only.
+            unsafe { core::slice::from_raw_parts(self.0.as_ptr() as *const u32, self.0.len() / 4) }
+        }
+    }
+
+    /// A tape's imports (`docs/spec/recursion.md` §7): the blob's 32-byte
+    /// word `i` into cell `cells[i]`, the blob word-aligned. One frame,
+    /// rewritten in place, and the number looked up once. Where `a0` is left
+    /// is not checked call by call: the add/sub family's `a0` rule is what
+    /// holds a recursion request to it (§1.4), and nothing here reads it.
+    pub fn import(cells: &[u32], blob: &[u8]) {
+        let number = field_number(&DELEGATION_FIELD_IO);
+        let mut frame = [constants::field_io::IMPORT, 0, 0];
+        let base = frame.as_mut_ptr() as u32;
+        let mut one = |cell: u32, ptr: u32| {
+            frame[1] = cell;
+            frame[2] = ptr;
+            // SAFETY: the frame is three words on this stack and the eight
+            // words at `ptr` lie in `blob`; the call reads the frame and
+            // writes it back unchanged.
+            unsafe { ecall1(number, base) };
+        };
+        // Four a turn, the pointer within the blob, so no overflow is checked.
+        let mut ptr = blob.as_ptr() as u32;
+        let mut quads = cells.chunks_exact(4);
+        for quad in &mut quads {
+            for (k, cell) in quad.iter().enumerate() {
+                one(*cell, ptr.wrapping_add(32 * k as u32));
+            }
+            ptr = ptr.wrapping_add(128);
+        }
+        for (k, cell) in quads.remainder().iter().enumerate() {
+            one(*cell, ptr.wrapping_add(32 * k as u32));
+        }
+    }
+
+    /// [`import`] into the run of cells from `first`, one a 32-byte word of
+    /// `blob`: a template's witnesses, which lie together.
+    pub fn import_run(first: u32, blob: &[u8]) {
+        let number = field_number(&DELEGATION_FIELD_IO);
+        let mut frame = [constants::field_io::IMPORT, first, blob.as_ptr() as u32];
+        let base = frame.as_mut_ptr() as u32;
+        for _ in 0..blob.len() / 32 {
+            // SAFETY: as `import`'s.
+            unsafe { ecall1(number, base) };
+            frame[1] = frame[1].wrapping_add(1);
+            frame[2] = frame[2].wrapping_add(32);
+        }
+    }
+
+    /// A tape's body (`docs/spec/recursion.md` §7): each run's frames back to
+    /// back, one ecall a frame. A recursion request leaves `a0` past its
+    /// frame (§1.4), so a run is nothing but its ecalls. The body must lie in
+    /// RAM below `2^31`, where every delegation frame does; a number that is
+    /// no field family's, or a run that does not end where its frames do, is
+    /// fatal.
+    pub fn replay(body: &[u32]) {
+        let numbers = [
+            field_number(&DELEGATION_FR_OP),
+            field_number(&DELEGATION_P2_FIELD),
+            field_number(&DELEGATION_FQ_OP),
+        ];
+        let start = body.as_ptr() as u32;
+        let end = start + 4 * body.len() as u32;
+        let mut a0 = start;
+        while a0 < end {
+            let at = ((a0 - start) / 4) as usize;
+            let (number, count) = (body[at], body[at + 1]);
+            if !numbers.contains(&number) {
+                exit(EXIT_PRECOMPILE_ERROR);
+            }
+            a0 += 8;
+            // Eight calls an iteration and the rest by four, two and one,
+            // `a7` held across them, so a call is its `ecall` and little else.
+            let mut left = count;
+            while left >= 8 {
+                for _ in 0..8 {
+                    // SAFETY: as below.
+                    a0 = unsafe { ecall1(number, a0) } as u32;
+                }
+                left -= 8;
+            }
+            for bit in [4, 2, 1] {
+                if left & bit != 0 {
+                    for _ in 0..bit {
+                        // SAFETY: the frame lies in `body`, which outlives the
+                        // call, and the call reads it and writes it back
+                        // unchanged.
+                        a0 = unsafe { ecall1(number, a0) } as u32;
+                    }
+                }
+            }
+        }
+        if a0 != end {
+            exit(EXIT_PRECOMPILE_ERROR);
+        }
+    }
+
     /// The Poseidon2 delegation's 96-byte frame: three canonical
     /// little-endian `Fr` lanes, permuted in place.
     ///
@@ -791,6 +971,21 @@ const fn record(number: u32) -> [u8; delegation::MARKER_BYTES] {
         j += 1;
     }
     record
+}
+
+// `record_words`' layout: the magic is two words and the number is the third.
+const _: () = assert!(delegation::MARKER_MAGIC.len() == 8 && delegation::MARKER_BYTES == 12);
+
+/// [`record`] as the three little-endian words it is in memory.
+const fn record_words(number: u32) -> [u32; 3] {
+    let r = record(number);
+    let mut words = [0u32; 3];
+    let mut i = 0;
+    while i < 3 {
+        words[i] = u32::from_le_bytes([r[4 * i], r[4 * i + 1], r[4 * i + 2], r[4 * i + 3]]);
+        i += 1;
+    }
+    words
 }
 
 /// The declared ecall number, read back out of the record.

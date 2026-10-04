@@ -1,0 +1,19 @@
+[package]
+name = "pcs-verify"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The verifier half of Mercury, `#![no_std]` + alloc: the recursion guest links
+# this crate. `crates/pcs` is the `std` half — commit, open, the MSMs and the
+# pairings — and re-exports everything public here, so a native verification
+# and a guest's run the same field-side code.
+[dependencies]
+constants.workspace = true
+field.workspace = true
+transcript.workspace = true
+
+[dev-dependencies]
+# `eq_table`, the coefficient vector `tensor_eval`'s product formula must equal.
+poly.workspace = true
+test-support.workspace = true

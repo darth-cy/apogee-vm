@@ -25,7 +25,10 @@ pub mod atomics;
 mod build;
 pub mod delegation;
 pub mod ec_add;
+pub mod field_io;
+pub mod fq_op;
 pub mod fr_arith;
+pub mod fr_op;
 pub mod gadgets;
 pub mod jump_branch_slt;
 pub mod keccak;
@@ -36,6 +39,7 @@ pub mod mem_word;
 pub mod memory;
 pub mod mod_mul;
 pub mod mul_div;
+pub mod p2_field;
 pub mod poseidon2;
 pub mod sha256;
 pub mod shift_bitwise;
@@ -114,6 +118,18 @@ impl FamilyCircuit {
 /// and a floor is not a height: its `DEFAULT_HEIGHTS` entry is `2^18`, chosen
 /// above it.
 pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
+    circuit(false, family, trace_vars)
+}
+
+/// The **recursion format**'s registry (`docs/spec/recursion.md` §1.2):
+/// [`family_circuit`]'s, but for `ADD_SUB`, which knows every delegation type,
+/// and the recursion families, which only it holds. A statement is in the
+/// recursion format exactly when its config holds `FIELD_WINDOWS`.
+pub fn recursion_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
+    circuit(true, family, trace_vars)
+}
+
+fn circuit(recursion: bool, family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
     use constants::family as f;
     if trace_vars > MAX_TRACE_VARS {
         return None;
@@ -125,6 +141,9 @@ pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
     // is the defect this guard exists to prevent.
     let (build, channels): (fn(u32) -> CircuitArtifact, Vec<crate::lookup::ChannelSpec>) =
         match family {
+            f::ADD_SUB_LUI_AUIPC if recursion => {
+                (add_sub::recursion_artifact, add_sub::recursion_channels())
+            }
             f::ADD_SUB_LUI_AUIPC => (add_sub::artifact, add_sub::channels()),
             f::JUMP_BRANCH_SLT => (jump_branch_slt::artifact, jump_branch_slt::channels()),
             f::SHIFT_BITWISE => (shift_bitwise::artifact, shift_bitwise::channels()),
@@ -154,6 +173,11 @@ pub fn family_circuit(family: u32, trace_vars: u32) -> Option<FamilyCircuit> {
             f::MOD_MUL => (mod_mul::artifact, mod_mul::channels()),
             f::SHA256_COMP => (sha256::artifact, sha256::channels()),
             f::EC_ADD => (ec_add::artifact, ec_add::channels()),
+            f::FIELD_WINDOWS if recursion => (memory::field_window_artifact, Vec::new()),
+            f::FR_OP if recursion => (fr_op::artifact, fr_op::channels()),
+            f::P2_FIELD if recursion => (p2_field::artifact, p2_field::channels()),
+            f::FIELD_IO if recursion => (field_io::artifact, field_io::channels()),
+            f::FQ_OP if recursion => (fq_op::artifact, fq_op::channels()),
             _ => return None,
         };
     if trace_vars < minimum_trace_vars(&channels) {

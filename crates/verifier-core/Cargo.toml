@@ -17,6 +17,8 @@ constraints.workspace = true
 field.workspace = true
 # `verify`, the boundary, the window challenge, the LogUp slots and root check.
 gkr-verify.workspace = true
+# `ENTRY_POINTS`: which point each of a deferred check's twelve scalars goes with.
+pcs-verify.workspace = true
 poly.workspace = true
 transcript.workspace = true
 

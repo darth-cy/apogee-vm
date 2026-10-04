@@ -642,9 +642,15 @@ const WORD_BYTES: u64 = 4;
 /// `γ_M + RAM + α_addr·4h·w`, slot 5, with `(α_addr, V[row])` `WORD_BYTES`
 /// times for `4y`: a window row's tuple at `ts` and `value`, where given.
 fn window_tuple(ts: Option<PolyAddress>, value: PolyAddress) -> GateDef {
+    stride_tuple(WORD_BYTES, ts, value)
+}
+
+/// [`window_tuple`] for a window whose rows are `stride` addresses apart: four
+/// bytes a RAM word, one cell a field cell.
+fn stride_tuple(stride: u64, ts: Option<PolyAddress>, value: PolyAddress) -> GateDef {
     let row = PolyAddress::Virtual(VirtualKind::RowIndex);
     let mut terms = Vec::new();
-    for _ in 0..WORD_BYTES {
+    for _ in 0..stride {
         terms.push((slot(challenge_slot::MEM_ALPHA_ADDR), row));
     }
     if let Some(ts) = ts {
@@ -695,10 +701,22 @@ pub fn image_window_artifact(trace_vars: u32) -> CircuitArtifact {
 /// enforcing gates, no obligations. Validated and held to [`check_memory`];
 /// panics if either refuses it.
 pub fn zero_window_artifact(trace_vars: u32) -> CircuitArtifact {
+    zero_window(trace_vars, WORD_BYTES)
+}
+
+/// `FIELD_WINDOWS`, one window of the field memory (`docs/spec/recursion.md`
+/// §2.2): [`zero_window_artifact`] at a stride of **one cell a row**, so row
+/// `y` of window `w` is cell `h·w + y`. The address space is not in the
+/// artifact: it is the derived slot 5's, `γ_M + FIELD + α_addr·h·w`.
+pub fn field_window_artifact(trace_vars: u32) -> CircuitArtifact {
+    zero_window(trace_vars, 1)
+}
+
+fn zero_window(trace_vars: u32, stride: u64) -> CircuitArtifact {
     let row = PolyAddress::Virtual(VirtualKind::RowIndex);
-    let teardown = window_tuple(Some(PolyAddress::Memory(0)), PolyAddress::Memory(1));
+    let teardown = stride_tuple(stride, Some(PolyAddress::Memory(0)), PolyAddress::Memory(1));
     let init = GateDef::Linear {
-        terms: vec![(slot(challenge_slot::MEM_ALPHA_ADDR), row); WORD_BYTES as usize],
+        terms: vec![(slot(challenge_slot::MEM_ALPHA_ADDR), row); stride as usize],
         constant: slot(challenge_slot::MEM_WINDOW_CONSTANT),
     };
     assemble(
