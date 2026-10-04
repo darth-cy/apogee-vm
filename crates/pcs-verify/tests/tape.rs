@@ -87,9 +87,9 @@ fn the_tape_is_the_batch_preamble_and_the_scalars() {
         );
         let last_cell = tr.challenge(&mut b.t, SEED);
 
-        let mut memory = Vec::new();
+        let mut memory = tape::Memory::default();
         tape::run(&b.t.ops, &mut memory, &b.bytes).expect("no assertion fails on a sound instance");
-        let read = |c: Cell| memory.get(c as usize).copied().unwrap_or(Fr::ZERO);
+        let read = |c: Cell| memory.get(c);
         let w: Vec<Fr> = w_cells.iter().map(|c| read(*c)).collect();
         assert_eq!(w, weights, "k {k}");
         assert_eq!(read(v_star_cell), v_star, "k {k}");

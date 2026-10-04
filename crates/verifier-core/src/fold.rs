@@ -4,20 +4,27 @@
 //! Pippenger with 8-bit digits — 32 windows of 256 buckets — shaped so that
 //! nothing a replay does depends on a value:
 //!
-//! - **A point** is one static template: its scalar's 32 `DIGIT`s, then one
-//!   affine bucket addition in each window, the bucket an indirect operand
-//!   through that window's digit cell. The 32 additions land in 32 windows,
-//!   so they never collide, and share one inversion.
+//! - **A point** is one static template: held to the curve, its scalar's 32
+//!   `DIGIT`s, then one affine bucket addition in each window, the bucket an
+//!   indirect operand through that window's digit cell. The 32 additions land
+//!   in 32 windows, so they never collide, and share one inversion.
 //! - **An inversion** is a host witness: the template reads it from two cells
 //!   and asserts it with one `MULEQ`. [`simulate`] runs a template natively
-//!   and fills every one, which is how a host lays a guest's witnesses out.
+//!   and fills every one, which is how a host lays a guest's witnesses out;
+//!   a template's witnesses have cells of their own, so a guest imports them
+//!   all before it replays.
 //! - **Bucket `b` starts at `(b + 1)·R`** for a fixed point `R`, so no
 //!   addition meets infinity and no running sum adds a point to itself; the
 //!   finish subtracts what the offsets added, once, at the end.
 //! - **The finish** is static too: each window's running sums, batched across
 //!   the 32 windows, then Horner over the windows by doubling.
 //!
-//! A point is two elements, `x` at its cell and `y` four cells on.
+//! A point is two elements, `x` at its cell and `y` four cells on. `FQ_OP`
+//! reads an element's four cells under one timestamp, so they are only ever
+//! written together: a template's temporaries are elements on one grid of
+//! four from `scratch`, where nothing else writes, and a step's are dead once
+//! it is done, so the next step reuses them. A constant's two halves are
+//! built in `halves`.
 
 use alloc::vec::Vec;
 
@@ -25,7 +32,9 @@ use constants::{fq_op as q, fr_op};
 use constraints::fq_op as arith;
 use field::Fr;
 
-use crate::tape::{Cell, Op, Tape, ZERO};
+use crate::tape::{
+    infinity_sentinel, run, Cell, CellTranscript, Limbs, Memory, Op, ShardTape, Tape, ZERO,
+};
 
 /// A scalar's digits, and the windows.
 pub const WINDOWS: u32 = fr_op::DIGITS as u32;
@@ -33,6 +42,11 @@ pub const WINDOWS: u32 = fr_op::DIGITS as u32;
 pub const BUCKETS: u32 = 1 << fr_op::DIGIT_BITS;
 /// A point's cells: `x`, then `y`.
 pub const POINT_CELLS: u32 = 2 * q::ELEMENT_CELLS as u32;
+/// The most inversions one template takes: the finish's, 508 running steps,
+/// 248 doublings, 31 window additions and the correction.
+pub const MAX_HOLES: u32 = 1024;
+/// The cells a template's step may take of its own.
+pub const SCRATCH: u32 = 1 << 13;
 
 /// The offsets' unit `R = k·G`, `k = 2^200 + 0x524543555253494f4e`, an
 /// affine point no input is expected to equal: `x`, then `y`, 64-bit limbs.
@@ -93,12 +107,16 @@ pub struct Layout {
     pub sums: Cell,
     /// The result.
     pub result: Cell,
-    /// Where each template's own cells start.
+    /// A constant's two 128-bit halves, as `FROM128` reads them.
+    pub halves: Cell,
+    /// A template's inverse witnesses, two cells a hole.
+    pub witnesses: Cell,
+    /// Where a template's temporaries start: elements, and nothing else.
     pub scratch: Cell,
 }
 
 impl Layout {
-    /// The cells from `base` up, in field order.
+    /// The cells from `base` up, in field order, and [`SCRATCH`] beyond.
     pub fn at(base: Cell) -> Layout {
         let mut next = base;
         let mut take = |n: u32| {
@@ -119,6 +137,8 @@ impl Layout {
             offsets: take(BUCKETS * POINT_CELLS),
             sums: take(WINDOWS * 2 * POINT_CELLS),
             result: take(POINT_CELLS),
+            halves: take(2),
+            witnesses: take(2 * MAX_HOLES),
             scratch: take(0),
         }
     }
@@ -126,6 +146,11 @@ impl Layout {
     /// Bucket `b` of window `w`.
     pub fn bucket(&self, w: u32, b: u32) -> Cell {
         self.buckets + POINT_CELLS * (BUCKETS * w + b)
+    }
+
+    /// One past the last cell, its scratch included.
+    pub fn end(&self) -> Cell {
+        self.scratch + SCRATCH
     }
 }
 
@@ -191,113 +216,117 @@ pub struct Template {
     pub holes: Vec<Hole>,
 }
 
-/// The witness at a hole: `inv` from its two halves, asserted against `of`.
-fn witness(t: &mut Tape, holes: &mut Vec<Hole>, of: E, one: E) -> E {
-    let into = t.fresh(2);
-    holes.push(Hole {
-        at: t.ops.len(),
-        of: of.word,
-        into,
-    });
-    let inv = fresh(t);
-    fq(t, q::FROM128, inv, E::at(into), E::at(one.word));
-    // `inv·of ≡ 1`: `MULEQ` holds its `d` operand, the element 1.
-    fq(t, q::MULEQ, one, inv, of);
-    inv
+/// A template under construction: its tape and its holes.
+struct Build {
+    t: Tape,
+    holes: Vec<Hole>,
+    witnesses: Cell,
 }
 
-/// `acc_k ← acc_k + add_k` for every pair, affine, one inversion between
-/// them all. The pairs' accumulators are distinct points.
-fn batched_add(t: &mut Tape, holes: &mut Vec<Hole>, pairs: &[(E, E)], one: E) {
-    let n = pairs.len();
-    let mut delta = Vec::with_capacity(n);
-    let mut prefix: Vec<E> = Vec::with_capacity(n);
-    for (k, (acc, add)) in pairs.iter().enumerate() {
-        let dx = fresh(t);
-        fq(t, q::SUB, dx, *acc, *add);
-        delta.push(dx);
-        if k == 0 {
-            prefix.push(dx);
-        } else {
-            let p = fresh(t);
-            fq(t, q::MUL, p, prefix[k - 1], dx);
-            prefix.push(p);
+impl Build {
+    fn new(l: &Layout) -> Build {
+        Build {
+            t: Tape::new(l.scratch),
+            holes: Vec::new(),
+            witnesses: l.witnesses,
         }
     }
-    let mut inv = witness(t, holes, prefix[n - 1], one);
-    let mut inverses = alloc::vec![inv; n];
-    for k in (1..n).rev() {
-        let own = fresh(t);
-        fq(t, q::MUL, own, inv, prefix[k - 1]);
-        inverses[k] = own;
-        let next = fresh(t);
-        fq(t, q::MUL, next, inv, delta[k]);
-        inv = next;
+
+    fn done(self) -> Template {
+        assert!(
+            self.holes.len() as u32 <= MAX_HOLES,
+            "fold: more holes than room"
+        );
+        Template {
+            ops: self.t.ops,
+            holes: self.holes,
+        }
     }
-    inverses[0] = inv;
-    for ((acc, add), inv) in pairs.iter().zip(inverses) {
-        let (dy, lam, lam2, sx, u, v) =
+
+    /// The witness at a hole: `inv` from its two halves, held by one
+    /// `MULEQ` to invert `of` — `MULEQ` keeps its `d`, the element 1.
+    fn witness(&mut self, of: E, one: E) -> E {
+        let into = self.witnesses + 2 * self.holes.len() as u32;
+        self.holes.push(Hole {
+            at: self.t.ops.len(),
+            of: of.word,
+            into,
+        });
+        let inv = fresh(&mut self.t);
+        fq(&mut self.t, q::FROM128, inv, E::at(into), one);
+        fq(&mut self.t, q::MULEQ, one, inv, of);
+        inv
+    }
+
+    /// `acc_k ← acc_k + add_k` for every pair, affine, one inversion between
+    /// them all. The accumulators are distinct points; the temporaries are
+    /// given back once the step is done.
+    fn batched_add(&mut self, pairs: &[(E, E)], one: E) {
+        let mark = self.t.mark();
+        let n = pairs.len();
+        let mut delta = Vec::with_capacity(n);
+        let mut prefix: Vec<E> = Vec::with_capacity(n);
+        for (k, (acc, add)) in pairs.iter().enumerate() {
+            let dx = fresh(&mut self.t);
+            fq(&mut self.t, q::SUB, dx, *acc, *add);
+            delta.push(dx);
+            if k == 0 {
+                prefix.push(dx);
+            } else {
+                let p = fresh(&mut self.t);
+                fq(&mut self.t, q::MUL, p, prefix[k - 1], dx);
+                prefix.push(p);
+            }
+        }
+        let mut inv = self.witness(prefix[n - 1], one);
+        let mut inverses = alloc::vec![inv; n];
+        for k in (1..n).rev() {
+            let own = fresh(&mut self.t);
+            fq(&mut self.t, q::MUL, own, inv, prefix[k - 1]);
+            inverses[k] = own;
+            let next = fresh(&mut self.t);
+            fq(&mut self.t, q::MUL, next, inv, delta[k]);
+            inv = next;
+        }
+        inverses[0] = inv;
+        for ((acc, add), inv) in pairs.iter().zip(inverses) {
+            let t = &mut self.t;
+            let (dy, lam, lam2, sx, u, v) =
+                (fresh(t), fresh(t), fresh(t), fresh(t), fresh(t), fresh(t));
+            fq(t, q::SUB, dy, acc.y(), add.y());
+            fq(t, q::MUL, lam, dy, inv);
+            fq(t, q::MUL, lam2, lam, lam);
+            fq(t, q::ADD, sx, *acc, *add);
+            fq(t, q::SUB, *acc, lam2, sx);
+            fq(t, q::SUB, u, *add, *acc);
+            fq(t, q::MUL, v, lam, u);
+            fq(t, q::SUB, acc.y(), v, add.y());
+        }
+        self.t.reset(mark);
+    }
+
+    /// `p ← 2p`, affine, its inversion a hole of its own.
+    fn double(&mut self, p: E, l: &Layout) {
+        let mark = self.t.mark();
+        let t = &mut self.t;
+        let (xx, num, den) = (fresh(t), fresh(t), fresh(t));
+        fq(t, q::MUL, xx, p, p);
+        fq(t, q::MUL, num, xx, E::at(l.three));
+        fq(t, q::ADD, den, p.y(), p.y());
+        let inv = self.witness(den, E::at(l.one));
+        let t = &mut self.t;
+        let (lam, lam2, sx, x3, u, v) =
             (fresh(t), fresh(t), fresh(t), fresh(t), fresh(t), fresh(t));
-        fq(t, q::SUB, dy, acc.y(), add.y());
-        fq(t, q::MUL, lam, dy, inv);
+        fq(t, q::MUL, lam, num, inv);
         fq(t, q::MUL, lam2, lam, lam);
-        fq(t, q::ADD, sx, *acc, *add);
-        fq(t, q::SUB, *acc, lam2, sx);
-        fq(t, q::SUB, u, *add, *acc);
+        fq(t, q::ADD, sx, p, p);
+        fq(t, q::SUB, x3, lam2, sx);
+        fq(t, q::SUB, u, p, x3);
         fq(t, q::MUL, v, lam, u);
-        fq(t, q::SUB, acc.y(), v, add.y());
+        fq(t, q::SUB, p.y(), v, p.y());
+        fq(t, q::ADD, p, x3, E::at(l.zero));
+        self.t.reset(mark);
     }
-}
-
-/// `p ← 2p`, affine, its inversion a hole of its own.
-fn double(t: &mut Tape, holes: &mut Vec<Hole>, p: E, l: &Layout) {
-    let (xx, num, den, x3, sx, lam, lam2, u, v) = (
-        fresh(t),
-        fresh(t),
-        fresh(t),
-        fresh(t),
-        fresh(t),
-        fresh(t),
-        fresh(t),
-        fresh(t),
-        fresh(t),
-    );
-    fq(t, q::MUL, xx, p, p);
-    fq(t, q::MUL, num, xx, E::at(l.three));
-    fq(t, q::ADD, den, p.y(), p.y());
-    let inv = witness(t, holes, den, E::at(l.one));
-    fq(t, q::MUL, lam, num, inv);
-    fq(t, q::MUL, lam2, lam, lam);
-    fq(t, q::ADD, sx, p, p);
-    fq(t, q::SUB, x3, lam2, sx);
-    fq(t, q::SUB, u, p, x3);
-    fq(t, q::MUL, v, lam, u);
-    fq(t, q::SUB, p.y(), v, p.y());
-    fq(t, q::ADD, p, x3, E::at(l.zero));
-}
-
-/// A point's two coordinates from a constant's limbs.
-fn constant_point(t: &mut Tape, at: Cell, point: &[[u64; 4]; 2], zero: E) {
-    for (c, limbs) in point.iter().enumerate() {
-        let element = E::at(at + c as u32 * q::ELEMENT_CELLS as u32);
-        constant_element(t, element, limbs, zero);
-    }
-}
-
-/// An element from a constant's limbs: its two 128-bit halves as cells, then
-/// `FROM128`.
-fn constant_element(t: &mut Tape, d: E, limbs: &[u64; 4], zero: E) {
-    let lo = t.constant(Fr::from_u64(limbs[0]) + Fr::from_u64(limbs[1]) * pow64());
-    let hi = t.constant(Fr::from_u64(limbs[2]) + Fr::from_u64(limbs[3]) * pow64());
-    // `FROM128` reads its two halves as one operand's first two cells.
-    let halves = t.fresh(2);
-    t.ops.push(Op::Fr([fr_op::ADD, halves, lo, ZERO]));
-    t.ops.push(Op::Fr([fr_op::ADD, halves + 1, hi, ZERO]));
-    fq(t, q::FROM128, d, E::at(halves), zero);
-}
-
-fn pow64() -> Fr {
-    Fr::from_u64(1 << 32) * Fr::from_u64(1 << 32)
 }
 
 /// `d ← p`, a point's two elements.
@@ -306,47 +335,74 @@ fn copy_point(t: &mut Tape, d: E, p: E, zero: E) {
     fq(t, q::ADD, d.y(), p.y(), zero);
 }
 
+/// An element from a constant's limbs: each 128-bit half built in its
+/// `halves` cell a word at a time from the top, then `FROM128`.
+fn constant_element(t: &mut Tape, d: E, limbs: &[u64; 4], l: &Layout) {
+    for (k, pair) in limbs.chunks(2).enumerate() {
+        let cell = l.halves + k as u32;
+        let words = [pair[1] >> 32, pair[1], pair[0] >> 32, pair[0]].map(|w| w as u32);
+        t.fr(fr_op::IMM, cell, ZERO, words[0]);
+        for w in &words[1..] {
+            t.fr(fr_op::SHL, cell, cell, *w);
+        }
+    }
+    fq(t, q::FROM128, d, E::at(l.halves), E::at(l.zero));
+}
+
+/// A point from its coordinates' limbs.
+fn constant_point(t: &mut Tape, at: Cell, point: &[[u64; 4]; 2], l: &Layout) {
+    for (c, limbs) in point.iter().enumerate() {
+        constant_element(t, E::at(at + c as u32 * q::ELEMENT_CELLS as u32), limbs, l);
+    }
+}
+
+fn pow64() -> Fr {
+    Fr::from_u64(1 << 32) * Fr::from_u64(1 << 32)
+}
+
 /// Once an MSM: the constants, the offsets `(b + 1)·R` by a chain — `2R` a
 /// doubling, every later one an addition of `R` to a different multiple —
 /// and bucket `b` of every window set to `(b + 1)·R`.
 pub fn prelude(l: &Layout) -> Template {
-    let mut t = Tape::new(l.scratch);
-    let mut holes = Vec::new();
+    let mut b = Build::new(l);
     let zero = E::at(l.zero);
-    constant_element(&mut t, E::at(l.one), &[1, 0, 0, 0], zero);
-    constant_element(&mut t, E::at(l.three), &[3, 0, 0, 0], zero);
-    constant_point(&mut t, l.offset, &OFFSET, zero);
-    constant_point(&mut t, l.correction, &CORRECTION, zero);
-    let offset = |b: u32| E::at(l.offsets + POINT_CELLS * b);
-    copy_point(&mut t, offset(0), E::at(l.offset), zero);
-    copy_point(&mut t, offset(1), E::at(l.offset), zero);
-    double(&mut t, &mut holes, offset(1), l);
-    for b in 2..BUCKETS {
-        copy_point(&mut t, offset(b), offset(b - 1), zero);
-        batched_add(
-            &mut t,
-            &mut holes,
-            &[(offset(b), E::at(l.offset))],
-            E::at(l.one),
-        );
+    constant_element(&mut b.t, E::at(l.one), &[1, 0, 0, 0], l);
+    constant_element(&mut b.t, E::at(l.three), &[3, 0, 0, 0], l);
+    constant_point(&mut b.t, l.offset, &OFFSET, l);
+    constant_point(&mut b.t, l.correction, &CORRECTION, l);
+    let offset = |k: u32| E::at(l.offsets + POINT_CELLS * k);
+    copy_point(&mut b.t, offset(0), E::at(l.offset), zero);
+    copy_point(&mut b.t, offset(1), E::at(l.offset), zero);
+    b.double(offset(1), l);
+    for k in 2..BUCKETS {
+        copy_point(&mut b.t, offset(k), offset(k - 1), zero);
+        b.batched_add(&[(offset(k), E::at(l.offset))], E::at(l.one));
     }
     for w in 0..WINDOWS {
-        for b in 0..BUCKETS {
-            copy_point(&mut t, E::at(l.bucket(w, b)), offset(b), zero);
+        for k in 0..BUCKETS {
+            copy_point(&mut b.t, E::at(l.bucket(w, k)), offset(k), zero);
         }
     }
-    Template { ops: t.ops, holes }
+    b.done()
 }
 
-/// One point: its scalar's digits, then one bucket addition a window,
-/// batched. The caller has put the point at `point` and the scalar at
-/// `scalar`.
+/// One point: held to the curve, its scalar's digits, then one bucket
+/// addition a window, batched. The caller has put the point at `point` and
+/// the scalar at `scalar`.
 pub fn point_template(l: &Layout) -> Template {
-    let mut t = Tape::new(l.scratch);
-    let mut holes = Vec::new();
+    let mut b = Build::new(l);
+    // `y² ≡ x³ + 3`: BN254's G1 has cofactor 1, so on the curve is in the
+    // group. `MULEQ` holds `y²·1` to `x³ + 3`, which it keeps.
+    let p = E::at(l.point);
+    let t = &mut b.t;
+    let (yy, xx, xxx, rhs) = (fresh(t), fresh(t), fresh(t), fresh(t));
+    fq(t, q::MUL, yy, p.y(), p.y());
+    fq(t, q::MUL, xx, p, p);
+    fq(t, q::MUL, xxx, xx, p);
+    fq(t, q::ADD, rhs, xxx, E::at(l.three));
+    fq(t, q::MULEQ, rhs, yy, E::at(l.one));
     for w in 0..WINDOWS {
-        t.ops
-            .push(Op::Fr([fr_op::DIGIT, l.digits + w, l.scalar, l.scalar]));
+        t.fr(fr_op::DIGIT, l.digits + w, l.scalar, l.scalar);
     }
     t.assert_eq(l.scalar, ZERO);
     let pairs: Vec<(E, E)> = (0..WINDOWS)
@@ -360,79 +416,223 @@ pub fn point_template(l: &Layout) -> Template {
             )
         })
         .collect();
-    batched_add(&mut t, &mut holes, &pairs, E::at(l.one));
-    Template { ops: t.ops, holes }
+    b.batched_add(&pairs, E::at(l.one));
+    b.done()
 }
 
 /// The finish: each window's `T_w = Σ_b b·B_w[b]` by running sums, batched
 /// across the windows; then `Σ_w 256^w·T_w` by Horner, doubling; then `−R''`.
 /// The result is at `result`.
 pub fn finish_template(l: &Layout) -> Template {
-    let mut t = Tape::new(l.scratch);
-    let mut holes = Vec::new();
+    let mut b = Build::new(l);
     let zero = E::at(l.zero);
     let one = E::at(l.one);
     let s = |w: u32| E::at(l.sums + 2 * POINT_CELLS * w);
     let tt = |w: u32| E::at(l.sums + 2 * POINT_CELLS * w + POINT_CELLS);
     for w in 0..WINDOWS {
         let top = E::at(l.bucket(w, BUCKETS - 1));
-        for acc in [s(w), tt(w)] {
-            fq(&mut t, q::ADD, acc, top, zero);
-            fq(&mut t, q::ADD, acc.y(), top.y(), zero);
-        }
+        copy_point(&mut b.t, s(w), top, zero);
+        copy_point(&mut b.t, tt(w), top, zero);
     }
-    for b in (1..BUCKETS - 1).rev() {
+    for k in (1..BUCKETS - 1).rev() {
         let pairs: Vec<(E, E)> = (0..WINDOWS)
-            .map(|w| (s(w), E::at(l.bucket(w, b))))
+            .map(|w| (s(w), E::at(l.bucket(w, k))))
             .collect();
-        batched_add(&mut t, &mut holes, &pairs, one);
+        b.batched_add(&pairs, one);
         let pairs: Vec<(E, E)> = (0..WINDOWS).map(|w| (tt(w), s(w))).collect();
-        batched_add(&mut t, &mut holes, &pairs, one);
+        b.batched_add(&pairs, one);
     }
     let acc = E::at(l.result);
-    let top = tt(WINDOWS - 1);
-    fq(&mut t, q::ADD, acc, top, zero);
-    fq(&mut t, q::ADD, acc.y(), top.y(), zero);
+    copy_point(&mut b.t, acc, tt(WINDOWS - 1), zero);
     for w in (0..WINDOWS - 1).rev() {
         for _ in 0..fr_op::DIGIT_BITS {
-            double(&mut t, &mut holes, acc, l);
+            b.double(acc, l);
         }
-        batched_add(&mut t, &mut holes, &[(acc, tt(w))], one);
+        b.batched_add(&[(acc, tt(w))], one);
     }
-    batched_add(&mut t, &mut holes, &[(acc, E::at(l.correction))], one);
-    Template { ops: t.ops, holes }
+    b.batched_add(&[(acc, E::at(l.correction))], one);
+    b.done()
 }
 
 /// Run `template` natively, filling every hole with its inverse; returns the
 /// inverses in hole order — the words a guest imports — or the op that
 /// refused.
-pub fn simulate(template: &Template, memory: &mut Vec<Fr>) -> Result<Vec<[u64; 4]>, usize> {
+pub fn simulate(template: &Template, memory: &mut Memory) -> Result<Vec<[u64; 4]>, usize> {
     let mut witnesses = Vec::with_capacity(template.holes.len());
     let mut from = 0;
     for hole in &template.holes {
-        crate::tape::run(&template.ops[from..hole.at], memory, &[]).map_err(|i| from + i)?;
+        run(&template.ops[from..hole.at], memory, &[]).map_err(|i| from + i)?;
         let mut element = [0u64; 4];
         for (k, limb) in element.iter_mut().enumerate() {
-            *limb = memory
-                .get(hole.of as usize + k)
-                .and_then(|v| arith::limb(*v))
-                .ok_or(hole.at)?;
+            *limb = arith::limb(memory.get(hole.of + k as u32)).ok_or(hole.at)?;
         }
         let inv = arith::inv_mod_q(element);
-        let halves = [
-            Fr::from_u64(inv[0]) + Fr::from_u64(inv[1]) * pow64(),
-            Fr::from_u64(inv[2]) + Fr::from_u64(inv[3]) * pow64(),
-        ];
-        for (k, half) in halves.into_iter().enumerate() {
-            let cell = (hole.into + k as u32) as usize;
-            if memory.len() <= cell {
-                memory.resize(cell + 1, Fr::ZERO);
-            }
-            memory[cell] = half;
+        for (k, half) in halves(&inv).into_iter().enumerate() {
+            memory.set(hole.into + k as u32, half);
         }
         witnesses.push(inv);
         from = hole.at;
     }
-    crate::tape::run(&template.ops[from..], memory, &[]).map_err(|i| from + i)?;
+    run(&template.ops[from..], memory, &[]).map_err(|i| from + i)?;
     Ok(witnesses)
+}
+
+/// An element's two 128-bit halves, as the cells `FROM128` reads.
+pub fn halves(limbs: &[u64; 4]) -> [Fr; 2] {
+    [
+        Fr::from_u64(limbs[0]) + Fr::from_u64(limbs[1]) * pow64(),
+        Fr::from_u64(limbs[2]) + Fr::from_u64(limbs[3]) * pow64(),
+    ]
+}
+
+// ---------------------------------------------------------------------------
+// A node's fold
+// ---------------------------------------------------------------------------
+
+/// Which of the accumulator's two MSMs a point goes to: `A`, paired with
+/// `[1]_2`, or `B`, with `[x]_2` (`docs/spec/accumulator.md` §2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    A,
+    B,
+}
+
+/// One point a shard owes the accumulator: its four transcript limbs'
+/// cells — `x` low, `x` high, `y` low, `y` high, consecutive — its scalar's
+/// cell, and its side.
+#[derive(Clone, Copy, Debug)]
+pub struct FoldPoint {
+    pub limbs: Cell,
+    pub scalar: Cell,
+    pub side: Side,
+}
+
+/// A node's cells beside its shards' tapes: the two MSMs, its own
+/// transcript's state, the shard being folded's scalars, and two constants.
+#[derive(Clone, Copy, Debug)]
+pub struct Node {
+    pub a: Layout,
+    pub b: Layout,
+    /// The node transcript's state, three cells, carried from shard to shard.
+    pub state: Cell,
+    /// `[1]_1`'s four transcript limbs.
+    pub generator: Cell,
+    /// `G1_INFINITY_SENTINEL`.
+    pub sentinel: Cell,
+    /// The shard being folded's point scalars, one cell a point.
+    pub scalars: Cell,
+    /// Where a fold tape's own cells start.
+    pub scratch: Cell,
+}
+
+impl Node {
+    /// The cells from `base` up, room for `points` scalars a shard.
+    pub fn at(base: Cell, points: u32) -> Node {
+        let a = Layout::at(base);
+        let b = Layout::at(a.end());
+        let state = b.end();
+        Node {
+            a,
+            b,
+            state,
+            generator: state + 3,
+            sentinel: state + 7,
+            scalars: state + 8,
+            scratch: state + 8 + points,
+        }
+    }
+
+    /// One past the last cell a fold tape may take.
+    pub fn end(&self) -> Cell {
+        self.scratch + SCRATCH
+    }
+
+    /// The node's constants: `[1]_1`'s limbs and the sentinel, as cells.
+    pub fn prelude(&self) -> Vec<Op> {
+        let mut t = Tape::new(self.scratch);
+        // BN254's G1 generator, `(1, 2)`, the SRS's `[1]_1`.
+        for (k, v) in [1u64, 0, 2, 0].into_iter().enumerate() {
+            let c = t.constant(Fr::from_u64(v));
+            t.fr(fr_op::ADD, self.generator + k as u32, c, ZERO);
+        }
+        let s = t.constant(infinity_sentinel());
+        t.fr(fr_op::ADD, self.sentinel, s, ZERO);
+        t.ops
+    }
+}
+
+/// After a shard's tape: the node transcript absorbs the shard's final state
+/// and draws `w` and `w′`, and every point the shard owes gets its scalar —
+/// `cm*` `w·e₀ + w′`, the proof's eight points and `[1]_1` `w·e_k` on `A`,
+/// `π_z` and `w′` `w·e₁₀` and `w·e₁₁` on `B`, and each opened commitment
+/// `−w′·ρ^i`, the batch check `cm* − Σ ρ^i·cm_i` folded beside the Mercury
+/// check. Returns the tape and the points, in the order a guest adds them.
+pub fn shard_fold(shape: &ShardTape, node: &Node) -> (Vec<Op>, Vec<FoldPoint>) {
+    use constants::transcript_tags as tags;
+    let mut t = Tape::new(node.scratch);
+    let out = &shape.outputs;
+    let mut tr = CellTranscript::at(node.state);
+    let state = [out.state, out.state + 1, out.state + 2];
+    tr.append(&mut t, tags::FOLD_STATE, &state);
+    let w = tr.challenge(&mut t, tags::FOLD_WEIGHT);
+    let w2 = tr.challenge(&mut t, tags::FOLD_WEIGHT);
+    for k in 0..3 {
+        t.fr(fr_op::ADD, node.state + k, tr.state() + k, ZERO);
+    }
+
+    let e = &out.mercury;
+    let mut points: Vec<FoldPoint> = Vec::new();
+    let mut add = |t: &mut Tape, limbs: Cell, side: Side, scalar: &dyn Fn(&mut Tape, Cell)| {
+        let cell = node.scalars + points.len() as u32;
+        scalar(t, cell);
+        points.push(FoldPoint {
+            limbs,
+            scalar: cell,
+            side,
+        });
+    };
+    let first = |l: &Limbs| l[0];
+    add(&mut t, first(&out.cm_star), Side::A, &|t, c| {
+        t.fr(fr_op::MUL, c, w, e[0]);
+        t.fr(fr_op::ADD, c, c, w2);
+    });
+    for (k, point) in out.points.iter().enumerate() {
+        add(&mut t, first(point), Side::A, &|t, c| {
+            t.fr(fr_op::MUL, c, w, e[k + 1])
+        });
+    }
+    add(&mut t, node.generator, Side::A, &|t, c| {
+        t.fr(fr_op::MUL, c, w, e[9])
+    });
+    // `π_z` and `w′`, the proof's sixth and eighth points, on `B` too.
+    add(&mut t, first(&out.points[5]), Side::B, &|t, c| {
+        t.fr(fr_op::MUL, c, w, e[10])
+    });
+    add(&mut t, first(&out.points[7]), Side::B, &|t, c| {
+        t.fr(fr_op::MUL, c, w, e[11])
+    });
+    for (cm, rho) in out.commitments.iter().zip(&out.batch) {
+        add(&mut t, first(cm), Side::A, &|t, c| {
+            t.fr(fr_op::MUL, c, w2, *rho);
+            t.fr(fr_op::SUB, c, ZERO, c);
+        });
+    }
+    (t.ops, points)
+}
+
+/// The ops that put a point and its scalar where a template reads them:
+/// its two coordinates from their limbs by `FROM128`, its scalar copied —
+/// or, for the point at infinity, the four `EQ`s that hold its limbs to the
+/// sentinel and nothing else, since it adds nothing.
+pub fn load_point(p: &FoldPoint, l: &Layout, sentinel: Cell, infinity: bool) -> Vec<Op> {
+    if infinity {
+        return (0..4)
+            .map(|k| Op::Fr([fr_op::EQ, 0, p.limbs + k, sentinel]))
+            .collect();
+    }
+    alloc::vec![
+        Op::Fq([q::FROM128, l.point, p.limbs, l.zero]),
+        Op::Fq([q::FROM128, l.point + 4, p.limbs + 2, l.zero]),
+        Op::Fr([fr_op::ADD, l.scalar, p.scalar, ZERO]),
+    ]
 }

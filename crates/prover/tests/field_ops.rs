@@ -121,13 +121,8 @@ fn every_tape_reads_its_shard_as_the_verifier_does(setup: &ProverSetup, block: &
             .iter()
             .position(|s| *s == (proof.family, proof.shard_index))
             .expect("a statement shard");
-        let mut memory: Vec<Fr> = Vec::new();
-        let mut set = |c: Cell, v: Fr| {
-            if memory.len() <= c as usize {
-                memory.resize(c as usize + 1, Fr::ZERO);
-            }
-            memory[c as usize] = v;
-        };
+        let mut memory = tape::Memory::default();
+        let mut set = |c: Cell, v: Fr| memory.set(c, v);
         set(st.slots.digest, global.digest);
         for (c, v) in st.slots.memory.iter().zip(global.memory) {
             set(*c, v);
@@ -161,7 +156,7 @@ fn every_tape_reads_its_shard_as_the_verifier_does(setup: &ProverSetup, block: &
 
         tape::run(&st.ops, &mut memory, &blob)
             .unwrap_or_else(|op| panic!("{name}: the tape's op {op} refuses an honest shard"));
-        let read = |c: &Cell| memory.get(*c as usize).copied().unwrap_or(Fr::ZERO);
+        let read = |c: &Cell| memory.get(*c);
         let ts: Vec<Fr> = st.outputs.ts_window.iter().map(read).collect();
         assert_eq!(ts, proof.ts_window.map(Fr::from_u64), "{name}");
         let scalars: Vec<Fr> = st.outputs.mercury.iter().map(read).collect();

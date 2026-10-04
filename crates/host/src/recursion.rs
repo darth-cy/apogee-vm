@@ -24,7 +24,7 @@ use curve::G1Affine;
 use field::Fr;
 use pcs::{batch_verify_deferred, MercuryCommitment, MercuryProof};
 use transcript::g1_limbs;
-use verifier_core::tape::{encode, run, shard_blob, shard_tape, Cell, Encoded, ShardTape};
+use verifier_core::tape::{encode, run, shard_blob, shard_tape, Cell, Encoded, Memory, ShardTape};
 use verifier_core::{
     derive_global_phase, shard_window, verify_shard_local, BlockProof, VerifyingKey,
 };
@@ -132,12 +132,9 @@ pub fn leaf_advice(
         }
 
         // The native replay: what the guest is about to do, refused here first.
-        let mut memory: Vec<Fr> = Vec::new();
+        let mut memory = Memory::default();
         for (cell, value) in &slots {
-            if memory.len() <= *cell as usize {
-                memory.resize(*cell as usize + 1, Fr::ZERO);
-            }
-            memory[*cell as usize] = *value;
+            memory.set(*cell, *value);
         }
         run(&tape.ops, &mut memory, &blob)
             .map_err(|op| format!("shard {position} ({name}): the tape refuses at op {op}"))?;

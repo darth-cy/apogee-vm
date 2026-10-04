@@ -9,9 +9,12 @@
 use curve::{msm::msm, G1Affine, G1Projective};
 use field::Fr;
 use test_support::Rng;
+use transcript::g1_limbs;
 use verifier_core::fold::{
-    finish_template, point_template, prelude, simulate, Layout, CORRECTION, OFFSET, WINDOWS,
+    finish_template, load_point, point_template, prelude, simulate, FoldPoint, Layout, Side,
+    CORRECTION, OFFSET, WINDOWS,
 };
+use verifier_core::tape::{infinity_sentinel, run, Memory};
 
 /// A point's coordinates as 64-bit limbs, `x` then `y`.
 fn limbs(p: &G1Affine) -> [[u64; 4]; 2] {
@@ -51,38 +54,58 @@ fn the_offset_and_the_correction_are_their_points() {
     assert_eq!(limbs(&neg), CORRECTION);
 }
 
-/// Twelve random points and scalars through the prelude, one point template
-/// each and the finish: the result is `curve::msm`'s.
+/// Twelve random points and scalars, each put in place by `load_point` from
+/// its transcript limbs as a guest's are, through the prelude, one point
+/// template each and the finish: the result is `curve::msm`'s. A thirteenth,
+/// the point at infinity, is held to the sentinel and adds nothing — and a
+/// real point said to be infinity is refused, since that would drop it.
 #[test]
 fn the_fold_msm_is_the_curve_msm() {
     let l = Layout::at(1 << 16);
-    let mut memory: Vec<Fr> = Vec::new();
+    let (limbs_at, sentinel) = (l.end(), l.end() + 8);
+    let mut memory = Memory::default();
+    memory.set(sentinel, infinity_sentinel());
     simulate(&prelude(&l), &mut memory).expect("the prelude runs");
     let point = point_template(&l);
+    let at = FoldPoint {
+        limbs: limbs_at,
+        scalar: limbs_at + 4,
+        side: Side::A,
+    };
+    let place = |memory: &mut Memory, bytes: &[u8; 64], s: Fr| {
+        for (k, v) in g1_limbs(bytes).into_iter().enumerate() {
+            memory.set(limbs_at + k as u32, v);
+        }
+        memory.set(at.scalar, s);
+    };
     let mut rng = Rng::new(0x4d53_4d31);
     let (mut points, mut scalars) = (Vec::new(), Vec::new());
     for _ in 0..12 {
         let p = G1Projective::GENERATOR.mul(&scalar(&mut rng)).to_affine();
         let s = scalar(&mut rng);
-        let coordinates = limbs(&p);
-        for (c, limbs) in coordinates.iter().enumerate() {
-            for (k, limb) in limbs.iter().enumerate() {
-                let cell = (l.point + 4 * c as u32 + k as u32) as usize;
-                if memory.len() <= cell {
-                    memory.resize(cell + 1, Fr::ZERO);
-                }
-                memory[cell] = Fr::from_u64(*limb);
-            }
-        }
-        memory[l.scalar as usize] = s;
+        place(&mut memory, &p.to_bytes(), s);
+        let mut said_infinity = memory.clone();
+        assert!(
+            run(
+                &load_point(&at, &l, sentinel, true),
+                &mut said_infinity,
+                &[]
+            )
+            .is_err(),
+            "a real point said to be infinity is dropped"
+        );
+        run(&load_point(&at, &l, sentinel, false), &mut memory, &[]).expect("the point loads");
         simulate(&point, &mut memory).expect("the point template runs");
         points.push(p);
         scalars.push(s);
     }
+    place(&mut memory, &[0; 64], scalar(&mut rng));
+    run(&load_point(&at, &l, sentinel, true), &mut memory, &[]).expect("infinity is the sentinel");
+
     simulate(&finish_template(&l), &mut memory).expect("the finish runs");
     let got: [[u64; 4]; 2] = core::array::from_fn(|c| {
         core::array::from_fn(|k| {
-            let v = memory[(l.result + 4 * c as u32 + k as u32) as usize].to_bytes();
+            let v = memory.get(l.result + 4 * c as u32 + k as u32).to_bytes();
             u64::from_le_bytes(v[..8].try_into().unwrap())
         })
     });

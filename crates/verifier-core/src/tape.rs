@@ -75,6 +75,19 @@ impl Tape {
         self.next
     }
 
+    /// Where the next fresh cell will be, for [`Tape::reset`].
+    pub fn mark(&self) -> Cell {
+        self.next
+    }
+
+    /// Take the cells from `mark` up back, for ops that follow those that
+    /// wrote them to reuse: a template's step whose temporaries are dead
+    /// once the step is done. Constants made since are forgotten with them.
+    pub fn reset(&mut self, mark: Cell) {
+        self.next = mark;
+        self.constants.retain(|_, c| *c < mark);
+    }
+
     /// `n` fresh, consecutive cells.
     pub fn fresh(&mut self, n: u32) -> Cell {
         let c = self.next;
@@ -82,7 +95,7 @@ impl Tape {
         c
     }
 
-    fn fr(&mut self, op: u32, d: Cell, a: Cell, b: u32) {
+    pub(crate) fn fr(&mut self, op: u32, d: Cell, a: Cell, b: u32) {
         self.ops.push(Op::Fr([op, d, a, b]));
     }
 
@@ -243,11 +256,21 @@ pub struct CellTranscript {
 impl CellTranscript {
     /// A transcript in the zero state: cells `0..3`, never written.
     pub fn new() -> CellTranscript {
+        CellTranscript::at(ZERO)
+    }
+
+    /// A transcript resumed from the state at `state`, nothing pending.
+    pub fn at(state: Cell) -> CellTranscript {
         CellTranscript {
-            state: ZERO,
+            state,
             input: Vec::new(),
             output: Vec::new(),
         }
+    }
+
+    /// The current state's first cell: the three lanes from here on.
+    pub fn state(&self) -> Cell {
+        self.state
     }
 
     /// One duplex step, absorbing what is pending.
@@ -954,6 +977,9 @@ pub struct ShardOutputs {
     /// `ts_window`, as imported: the caller owes its range (`start <= end <=
     /// 2^38`, step 4) and the block's rule across shards.
     pub ts_window: [Cell; 2],
+    /// The shard transcript's final state, three cells: what a node's own
+    /// transcript absorbs, and so what its fold weights depend on.
+    pub state: Cell,
     /// `ρ^i`, one per opened commitment in batch order: memory stacks, witness
     /// stacks, setup columns.
     pub batch: Vec<Cell>,
@@ -1182,6 +1208,7 @@ pub fn shard_tape(
         slots,
         outputs: ShardOutputs {
             ts_window: ts,
+            state: tr.state(),
             batch,
             commitments,
             cm_star,
@@ -1285,21 +1312,68 @@ fn small(v: Fr) -> Option<u128> {
         .then(|| u128::from_le_bytes(b[..16].try_into().expect("sixteen bytes")))
 }
 
-/// Replay `ops` natively over `memory`, the input blob being `blob`: what the
-/// coprocessor would compute, with every assertion a `Err` naming the op.
-/// An `FQ_OP` result is the reduced representative, as the executor writes.
-pub fn run(ops: &[Op], memory: &mut Vec<Fr>, blob: &[u8]) -> Result<(), usize> {
-    let get = |m: &Vec<Fr>, c: u32| m.get(c as usize).copied().unwrap_or(Fr::ZERO);
-    let set = |m: &mut Vec<Fr>, c: u32, v: Fr| {
-        if m.len() <= c as usize {
-            m.resize(c as usize + 1, Fr::ZERO);
+/// The field memory as [`run`] keeps it: each cell's value, and when it was
+/// last accessed. An access writes its cell back at its own timestamp, and
+/// `FQ_OP` reads `b`'s and `d`'s four cells under one (`docs/spec/recursion.md`
+/// §6), so an element whose cells were last accessed apart is one the fill
+/// refuses — and `run` refuses it first.
+#[derive(Clone, Debug, Default)]
+pub struct Memory {
+    values: Vec<Fr>,
+    stamps: Vec<u64>,
+    clock: u64,
+}
+
+impl Memory {
+    /// Cell `c`'s value, 0 until something writes it.
+    pub fn get(&self, c: Cell) -> Fr {
+        self.values.get(c as usize).copied().unwrap_or(Fr::ZERO)
+    }
+
+    /// Write `v` into `c` as an import does: an access of its own.
+    pub fn set(&mut self, c: Cell, v: Fr) {
+        self.clock += 4;
+        self.write(c, v, self.clock);
+    }
+
+    fn touch(&mut self, c: Cell, at: u64) {
+        let c = c as usize;
+        if self.values.len() <= c {
+            self.values.resize(c + 1, Fr::ZERO);
+            self.stamps.resize(c + 1, 0);
         }
-        m[c as usize] = v;
-    };
+        self.stamps[c] = at;
+    }
+
+    fn write(&mut self, c: Cell, v: Fr, at: u64) {
+        self.touch(c, at);
+        self.values[c as usize] = v;
+    }
+
+    /// Whether `c..c + 4` were last accessed together, and so read as one.
+    fn whole(&self, c: Cell) -> bool {
+        let stamp = |k: u32| self.stamps.get((c + k) as usize).copied().unwrap_or(0);
+        (1..4).all(|k| stamp(k) == stamp(0))
+    }
+}
+
+/// Replay `ops` natively over `memory`, the input blob being `blob`: what the
+/// coprocessor would compute, with every assertion — and every element read
+/// whole that was not written whole — an `Err` naming the op. Each op's
+/// accesses come in the circuits' slot order, so a cell a later access of
+/// the same op reads carries the earlier one's stamp. An `FQ_OP` result is
+/// the reduced representative, as the executor writes.
+pub fn run(ops: &[Op], memory: &mut Memory, blob: &[u8]) -> Result<(), usize> {
     for (i, op) in ops.iter().enumerate() {
+        memory.clock += 4;
+        let ts = memory.clock;
         match *op {
             Op::Fr([code, d, a, b]) => {
-                let (va, vb, vd) = (get(memory, a), get(memory, b), get(memory, d));
+                let (va, vb, vd) = (memory.get(a), memory.get(b), memory.get(d));
+                memory.touch(a, ts + 1);
+                if !matches!(code, fr_op::IMM | fr_op::SHL) {
+                    memory.touch(b, ts + 2);
+                }
                 let out = match code {
                     fr_op::MUL => va * vb,
                     fr_op::ADD => va + vb,
@@ -1321,76 +1395,94 @@ pub fn run(ops: &[Op], memory: &mut Vec<Fr>, blob: &[u8]) -> Result<(), usize> {
                         let unit = Fr::from_u64(1 << fr_op::DIGIT_BITS)
                             .inverse()
                             .expect("a power of two is invertible");
-                        set(memory, b, (va - digit) * unit);
+                        memory.write(b, (va - digit) * unit, ts + 2);
                         digit
                     }
                     _ => return Err(i),
                 };
-                set(memory, d, out);
+                memory.write(d, out, ts + 3);
             }
             Op::Duplex([n, s, x, y, d]) => {
-                let state = [get(memory, s), get(memory, s + 1), get(memory, s + 2)];
+                let state = [memory.get(s), memory.get(s + 1), memory.get(s + 2)];
                 let mut lanes = [
-                    if n >= 1 { get(memory, x) } else { state[0] },
+                    if n >= 1 { memory.get(x) } else { state[0] },
                     match n {
-                        2 => get(memory, y),
+                        2 => memory.get(y),
                         1 => Fr::ZERO,
                         _ => state[1],
                     },
                     state[2] + Fr::from_u64(n as u64),
                 ];
                 transcript::poseidon2_permute(&mut lanes);
+                for k in 0..3 {
+                    memory.touch(s + k, ts);
+                }
+                if n >= 1 {
+                    memory.touch(x, ts + 1);
+                }
+                if n >= 2 {
+                    memory.touch(y, ts + 2);
+                }
                 for (j, lane) in lanes.iter().enumerate() {
-                    set(memory, d + j as u32, *lane);
+                    memory.write(d + j as u32, *lane, ts + 3);
                 }
             }
             Op::Fq([word, d, a, b]) => {
                 use constants::fq_op as q;
                 use constraints::fq_op as arith;
-                let digit = small(get(memory, word >> q::DIGIT_SHIFT)).ok_or(i)? as u32;
+                let g = word >> q::DIGIT_SHIFT;
+                let digit = small(memory.get(g)).ok_or(i)? as u32;
+                memory.touch(g, ts);
                 let at = |flag: u32, w: u32| match word & flag {
                     0 => w,
                     _ => w + q::BUCKET_CELLS * digit,
                 };
                 let (dc, ac, bc) = (at(q::IND_D, d), at(q::IND_A, a), at(q::IND_B, b));
-                let element = |m: &Vec<Fr>, c: u32| -> Option<[u64; 4]> {
+                let element = |m: &Memory, c: u32| -> Option<[u64; 4]> {
                     let mut out = [0u64; 4];
                     for (k, limb) in out.iter_mut().enumerate() {
-                        *limb = arith::limb(get(m, c + k as u32))?;
+                        *limb = arith::limb(m.get(c + k as u32))?;
                     }
                     Some(out)
                 };
-                let operands = |m: &Vec<Fr>| Some((element(m, ac)?, element(m, bc)?));
-                let out = match word & ((1 << q::CODE_BITS) - 1) {
-                    q::FROM128 => {
-                        let lo = small(get(memory, ac)).ok_or(i)?;
-                        let hi = small(get(memory, ac + 1)).ok_or(i)?;
+                let code = word & ((1 << q::CODE_BITS) - 1);
+                let operands = match code {
+                    q::FROM128 => None,
+                    _ => Some((element(memory, ac).ok_or(i)?, element(memory, bc).ok_or(i)?)),
+                };
+                let (lo, hi) = (memory.get(ac), memory.get(ac + 1));
+                for k in 0..4 {
+                    memory.touch(ac + k, ts + 1);
+                }
+                if !memory.whole(bc) {
+                    return Err(i);
+                }
+                for k in 0..4 {
+                    memory.touch(bc + k, ts + 2);
+                }
+                if !memory.whole(dc) {
+                    return Err(i);
+                }
+                let out = match (code, operands) {
+                    (q::FROM128, _) => {
+                        let lo = small(lo).ok_or(i)?;
+                        let hi = small(hi).ok_or(i)?;
                         [lo as u64, (lo >> 64) as u64, hi as u64, (hi >> 64) as u64]
                     }
-                    q::MUL => {
-                        let (x, y) = operands(memory).ok_or(i)?;
-                        arith::mul_mod_q(x, y)
-                    }
-                    q::ADD => {
-                        let (x, y) = operands(memory).ok_or(i)?;
-                        arith::add_mod_q(x, y)
-                    }
-                    q::SUB => {
-                        let (x, y) = operands(memory).ok_or(i)?;
-                        arith::sub_mod_q(x, y)
-                    }
-                    q::MULEQ => {
-                        let (x, y) = operands(memory).ok_or(i)?;
+                    (q::MUL, Some((x, y))) => arith::mul_mod_q(x, y),
+                    (q::ADD, Some((x, y))) => arith::add_mod_q(x, y),
+                    (q::SUB, Some((x, y))) => arith::sub_mod_q(x, y),
+                    (q::MULEQ, Some((x, y))) => {
                         let held = element(memory, dc).ok_or(i)?;
                         if arith::mul_mod_q(x, y) != arith::canonical(held) {
                             return Err(i);
                         }
-                        continue;
+                        held
                     }
                     _ => return Err(i),
                 };
                 for (k, limb) in out.iter().enumerate() {
-                    set(memory, dc + k as u32, Fr::from_u64(*limb));
+                    memory.write(dc + k as u32, Fr::from_u64(*limb), ts + 3);
                 }
             }
             Op::Import { cell, offset } => {
@@ -1401,7 +1493,7 @@ pub fn run(ops: &[Op], memory: &mut Vec<Fr>, blob: &[u8]) -> Result<(), usize> {
                         u32::from_le_bytes(bytes[4 * k..4 * k + 4].try_into().expect("four bytes"));
                     v = v * Fr::from_u64(1 << 32) + Fr::from_u64(w as u64);
                 }
-                set(memory, cell, v);
+                memory.write(cell, v, ts + 3);
             }
         }
     }
@@ -1411,6 +1503,24 @@ pub fn run(ops: &[Op], memory: &mut Vec<Fr>, blob: &[u8]) -> Result<(), usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An element `FQ_OP` reads under one timestamp — `b`, `d` — is refused
+    /// once one of its cells is accessed alone, as the fill refuses it; `a`,
+    /// read a timestamp a cell, is not.
+    #[test]
+    fn an_element_written_apart_is_refused() {
+        use constants::fq_op as q;
+        let (zero, e, halves, d) = (100, 104, 108, 112);
+        let mut m = Memory::default();
+        m.set(halves, Fr::from_u64(7));
+        run(&[Op::Fq([q::FROM128, e, halves, zero])], &mut m, &[]).expect("written whole");
+        run(&[Op::Fq([q::ADD, d, e, e])], &mut m, &[]).expect("read whole");
+        m.set(e + 1, Fr::ZERO);
+        let fq = |op: [u32; 4]| run(&[Op::Fq(op)], &mut m.clone(), &[]);
+        assert_eq!(fq([q::ADD, d, zero, e]), Err(0), "as b");
+        assert_eq!(fq([q::ADD, e, zero, zero]), Err(0), "as d");
+        assert_eq!(fq([q::ADD, d, e, zero]), Ok(()), "as a");
+    }
 
     /// `encode` keeps every frame in order, a run a family, and hoists the
     /// imports in blob order: the body read back as frames is the tape
@@ -1462,9 +1572,9 @@ mod tests {
             .iter()
             .flat_map(|v| v.to_bytes())
             .collect();
-        let mut direct = Vec::new();
+        let mut direct = Memory::default();
         run(&t.ops, &mut direct, &blob).expect("the tape runs");
-        let mut hoisted = Vec::new();
+        let mut hoisted = Memory::default();
         let imports: Vec<Op> = encoded
             .imports
             .iter()
@@ -1476,10 +1586,10 @@ mod tests {
             .collect();
         run(&imports, &mut hoisted, &blob).expect("the imports run");
         run(&without, &mut hoisted, &blob).expect("the body runs");
-        assert_eq!(direct[q as usize], hoisted[q as usize]);
+        assert_eq!(direct.get(q), hoisted.get(q));
         assert_eq!(
-            direct[q as usize],
-            direct[c as usize] * Fr::from_u64(11) + Fr::from_u64(5)
+            direct.get(q),
+            direct.get(c) * Fr::from_u64(11) + Fr::from_u64(5)
         );
     }
 }

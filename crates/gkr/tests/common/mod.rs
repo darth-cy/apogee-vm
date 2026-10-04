@@ -241,9 +241,9 @@ pub fn tape_verify(
         cells.layers.push((rounds, evals));
     }
     let (claims, point) = tape::gkr_verify(&mut t, &mut tr, artifact, &cells, &slots);
-    let mut memory = Vec::new();
+    let mut memory = tape::Memory::default();
     tape::run(&t.ops, &mut memory, &blob)?;
-    let read = |c: &u32| memory.get(*c as usize).copied().unwrap_or(Fr::ZERO);
+    let read = |c: &u32| memory.get(*c);
     Ok((
         claims.iter().map(read).collect(),
         point.iter().map(read).collect(),

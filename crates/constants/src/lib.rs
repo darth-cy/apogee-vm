@@ -788,6 +788,16 @@ pub mod transcript_tags {
     /// the base format, where `σ = 0`.
     pub const STACK_CHALLENGE: u64 = 42;
 
+    /// Absorbed in a recursion node's own transcript: one verified shard's
+    /// final transcript state, its three lanes, which bind every point and
+    /// scalar of that shard's deferred checks (`docs/spec/recursion.md` §8.3).
+    pub const FOLD_STATE: u64 = 43;
+
+    /// Challenge. One of a recursion node's fold weights, drawn after the
+    /// shard it weights is absorbed: the two that fold its Mercury check and
+    /// its batch check into the node's accumulator.
+    pub const FOLD_WEIGHT: u64 = 44;
+
     /// Every tag's name, indexed by `tag - 1`. **Documentation, never
     /// semantics**, as `challenge_slot::NAMES` is: the number is the tag, and
     /// nothing reads a name to decide anything. `checker::tape` renders a
@@ -796,7 +806,7 @@ pub mod transcript_tags {
     ///
     /// Append here whenever a tag is appended above. This crate keeps its
     /// zero-logic rule: the lookup lives in `checker::tape`.
-    pub const NAMES: [&str; 42] = [
+    pub const NAMES: [&str; 44] = [
         "PROTOCOL_SUITE",
         "PUBLIC_INPUTS",
         "COMMITMENT",
@@ -839,6 +849,8 @@ pub mod transcript_tags {
         "SHARD_TS_WINDOW",
         "GENERIC_TABLE",
         "STACK_CHALLENGE",
+        "FOLD_STATE",
+        "FOLD_WEIGHT",
     ];
 }
 
