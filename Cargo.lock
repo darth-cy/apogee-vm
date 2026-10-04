@@ -2184,6 +2184,7 @@ dependencies = [
  "serde",
  "serde_json",
  "trace",
+ "verifier-core",
 ]
 
 [[package]]

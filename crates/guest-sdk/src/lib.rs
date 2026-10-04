@@ -428,6 +428,21 @@ pub mod recursion {
         field_call(&DELEGATION_FQ_OP, frame.as_mut_ptr(), 4 * frame.len());
     }
 
+    /// Bytes word-aligned by their type, as a node's image is held:
+    /// `static IMAGE: &Words<[u8]> = &Words(*include_bytes!(...))`, read back
+    /// as the words a replay walks.
+    #[repr(C, align(4))]
+    pub struct Words<T: ?Sized>(pub T);
+
+    impl Words<[u8]> {
+        /// The bytes as little-endian words, a trailing partial word left out.
+        pub fn words(&self) -> &[u32] {
+            // SAFETY: the type aligns the bytes to 4, every bit pattern is a
+            // `u32`, and the slice covers whole words of them only.
+            unsafe { core::slice::from_raw_parts(self.0.as_ptr() as *const u32, self.0.len() / 4) }
+        }
+    }
+
     /// A tape's imports (`docs/spec/recursion.md` §7): the blob's 32-byte
     /// word `i` into cell `cells[i]`, the blob word-aligned. One frame,
     /// rewritten in place, and the number looked up once. Where `a0` is left

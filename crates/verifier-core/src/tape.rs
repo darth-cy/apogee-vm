@@ -99,42 +99,52 @@ impl Tape {
         self.ops.push(Op::Fr([op, d, a, b]));
     }
 
-    /// A cell holding `v`, made once per tape.
+    /// A cell holding `v`, made once per tape: a small negative value as
+    /// `IMM` and a `SUB`, anything else as [`Tape::bytes`] builds it.
     pub fn constant(&mut self, v: Fr) -> Cell {
-        if v == Fr::ZERO {
-            return ZERO;
-        }
         let key = v.to_bytes();
         if let Some(c) = self.constants.get(&key) {
             return *c;
         }
-        // A small value or its negation is `IMM` and perhaps a `SUB`; anything
-        // else is built a word at a time from the top, `SHL` shifting the
-        // value up and adding the next word.
-        let small = |x: Fr| -> Option<u32> {
-            let b = x.to_bytes();
-            b[4..]
-                .iter()
-                .all(|z| *z == 0)
-                .then(|| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-        };
-        let c = self.fresh(1);
-        if let Some(w) = small(v) {
-            self.fr(fr_op::IMM, c, ZERO, w);
-        } else if let Some(w) = small(-v) {
+        let negative = (-v).to_bytes();
+        if v != Fr::ZERO && negative[4..].iter().all(|z| *z == 0) {
+            let c = self.fresh(1);
+            let w = u32::from_le_bytes([negative[0], negative[1], negative[2], negative[3]]);
             self.fr(fr_op::IMM, c, ZERO, w);
             self.fr(fr_op::SUB, c, ZERO, c);
-        } else {
-            let b = v.to_bytes();
-            let word =
-                |k: usize| u32::from_le_bytes([b[4 * k], b[4 * k + 1], b[4 * k + 2], b[4 * k + 3]]);
-            self.fr(fr_op::IMM, c, ZERO, word(7));
-            for k in (0..7).rev() {
-                self.fr(fr_op::SHL, c, c, word(k));
-            }
+            self.constants.insert(key, c);
+            return c;
         }
-        self.constants.insert(key, c);
+        self.bytes(&key)
+    }
+
+    /// A cell holding the value whose canonical little-endian bytes are `b`,
+    /// made once per tape, a word at a time from its top nonzero one: `IMM`,
+    /// then `SHL` shifting the value up and adding the next word. No field
+    /// arithmetic, so a guest builds it without a delegated `Fr`.
+    pub fn bytes(&mut self, b: &[u8; 32]) -> Cell {
+        let word =
+            |k: usize| u32::from_le_bytes([b[4 * k], b[4 * k + 1], b[4 * k + 2], b[4 * k + 3]]);
+        let Some(top) = (0..8).rev().find(|k| word(*k) != 0) else {
+            return ZERO;
+        };
+        if let Some(c) = self.constants.get(b) {
+            return *c;
+        }
+        let c = self.fresh(1);
+        self.fr(fr_op::IMM, c, ZERO, word(top));
+        for k in (0..top).rev() {
+            self.fr(fr_op::SHL, c, c, word(k));
+        }
+        self.constants.insert(*b, c);
         c
+    }
+
+    /// A cell holding `v`.
+    pub fn small(&mut self, v: u64) -> Cell {
+        let mut b = [0u8; 32];
+        b[..8].copy_from_slice(&v.to_le_bytes());
+        self.bytes(&b)
     }
 
     /// The next 32 bytes of the input blob, imported into a fresh cell.
@@ -191,7 +201,7 @@ impl Tape {
     /// `a ≠ 0`: `a·a⁻¹ = 1`.
     pub fn assert_nonzero(&mut self, a: Cell) {
         let i = self.inv(a);
-        let one = self.constant(Fr::ONE);
+        let one = self.small(1);
         let p = self.mul(a, i);
         self.assert_eq(p, one);
     }
@@ -321,8 +331,8 @@ impl CellTranscript {
 
     /// `tag, length, xs`.
     pub fn append(&mut self, t: &mut Tape, tag: u64, xs: &[Cell]) {
-        let tag = t.constant(Fr::from_u64(tag));
-        let len = t.constant(Fr::from_u64(xs.len() as u64));
+        let tag = t.small(tag);
+        let len = t.small(xs.len() as u64);
         self.observe(t, tag);
         self.observe(t, len);
         for x in xs {
@@ -332,7 +342,7 @@ impl CellTranscript {
 
     /// A challenge under `tag`.
     pub fn challenge(&mut self, t: &mut Tape, tag: u64) -> Cell {
-        let tag = t.constant(Fr::from_u64(tag));
+        let tag = t.small(tag);
         self.observe(t, tag);
         self.sample(t)
     }
@@ -1331,6 +1341,33 @@ pub fn encode(ops: &[Op]) -> Encoded {
     Encoded { imports, body }
 }
 
+/// An encoded body's frames as ops again, or `None` if it is not runs of a
+/// field family's frames.
+pub fn decode(body: &[u32]) -> Option<Vec<Op>> {
+    use constants::ecall::{PRECOMPILE_FQ_OP, PRECOMPILE_FR_OP, PRECOMPILE_P2_FIELD};
+    let mut ops = Vec::new();
+    let mut at = 0;
+    while at < body.len() {
+        let (number, count) = (*body.get(at)?, *body.get(at + 1)? as usize);
+        at += 2;
+        let width = match number {
+            PRECOMPILE_P2_FIELD => 5,
+            PRECOMPILE_FR_OP | PRECOMPILE_FQ_OP => 4,
+            _ => return None,
+        };
+        for _ in 0..count {
+            let frame = body.get(at..at + width)?;
+            ops.push(match number {
+                PRECOMPILE_FR_OP => Op::Fr(frame.try_into().ok()?),
+                PRECOMPILE_FQ_OP => Op::Fq(frame.try_into().ok()?),
+                _ => Op::Duplex(frame.try_into().ok()?),
+            });
+            at += width;
+        }
+    }
+    Some(ops)
+}
+
 // ---------------------------------------------------------------------------
 // The native reading
 // ---------------------------------------------------------------------------
@@ -1342,6 +1379,17 @@ fn small(v: Fr) -> Option<u128> {
         .iter()
         .all(|x| *x == 0)
         .then(|| u128::from_le_bytes(b[..16].try_into().expect("sixteen bytes")))
+}
+
+/// What `IMPORT` makes of 32 bytes: `Σ_k w_k·2^{32k}` mod p over their eight
+/// little-endian words.
+pub fn imported(bytes: &[u8]) -> Fr {
+    let mut v = Fr::ZERO;
+    for k in (0..8).rev() {
+        let w = u32::from_le_bytes(bytes[4 * k..4 * k + 4].try_into().expect("four bytes"));
+        v = v * Fr::from_u64(1 << 32) + Fr::from_u64(w as u64);
+    }
+    v
 }
 
 /// The field memory as [`run`] keeps it: each cell's value, and when it was
@@ -1519,13 +1567,7 @@ pub fn run(ops: &[Op], memory: &mut Memory, blob: &[u8]) -> Result<(), usize> {
             }
             Op::Import { cell, offset } => {
                 let bytes = blob.get(offset as usize..offset as usize + 32).ok_or(i)?;
-                let mut v = Fr::ZERO;
-                for k in (0..8).rev() {
-                    let w =
-                        u32::from_le_bytes(bytes[4 * k..4 * k + 4].try_into().expect("four bytes"));
-                    v = v * Fr::from_u64(1 << 32) + Fr::from_u64(w as u64);
-                }
-                memory.write(cell, v, ts + 3);
+                memory.write(cell, imported(bytes), ts + 3);
             }
         }
     }
@@ -1572,25 +1614,7 @@ mod tests {
         assert_eq!(encoded.imports, vec![x, y]);
 
         // The body, read back run by run.
-        let mut frames: Vec<Op> = Vec::new();
-        let mut at = 0;
-        while at < encoded.body.len() {
-            let (number, count) = (encoded.body[at], encoded.body[at + 1] as usize);
-            at += 2;
-            for _ in 0..count {
-                let op = match number {
-                    constants::ecall::PRECOMPILE_FR_OP => {
-                        Op::Fr(encoded.body[at..at + 4].try_into().expect("four words"))
-                    }
-                    constants::ecall::PRECOMPILE_P2_FIELD => {
-                        Op::Duplex(encoded.body[at..at + 5].try_into().expect("five words"))
-                    }
-                    other => panic!("no family has number {other:#x}"),
-                };
-                at += if matches!(op, Op::Fr(_)) { 4 } else { 5 };
-                frames.push(op);
-            }
-        }
+        let frames = decode(&encoded.body).expect("runs of field frames");
         let without: Vec<Op> = t
             .ops
             .iter()

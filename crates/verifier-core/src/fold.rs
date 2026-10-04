@@ -801,10 +801,10 @@ impl Node {
 /// entry `i` of its Mercury check `w·e_i` on the side `ENTRY_POINTS` gives
 /// it, `cm*`'s `w′` more, and each opened commitment `−w′·ρ^i`: the batch
 /// check `cm* − Σ ρ^i·cm_i` folded beside the Mercury check. `[1]_1`'s and
-/// the setup commitments' are added to the merged scalars, the family's
-/// first setup commitment being merged point `1 + setup`. Returns the tape
-/// and the rest of the points, in the order a guest adds them.
-pub fn shard_fold(shape: &ShardTape, node: &Node, setup: u32) -> (Vec<Op>, Vec<FoldPoint>) {
+/// the setup commitments' are added to the merged scalars, setup commitment
+/// `j` being merged point `merged[j]`. Returns the tape and the rest of the
+/// points, in the order a guest adds them.
+pub fn shard_fold(shape: &ShardTape, node: &Node, merged: &[u32]) -> (Vec<Op>, Vec<FoldPoint>) {
     use constants::transcript_tags as tags;
     let mut t = Tape::new(node.scratch);
     let out = &shape.outputs;
@@ -854,7 +854,7 @@ pub fn shard_fold(shape: &ShardTape, node: &Node, setup: u32) -> (Vec<Op>, Vec<F
     let own = out.commitments.len() - shape.slots.setup.len();
     for (j, (cm, rho)) in out.commitments.iter().zip(&out.batch).enumerate() {
         if j >= own {
-            let m = node.merged + 1 + setup + (j - own) as u32;
+            let m = node.merged + merged[j - own];
             let share = t.mul(w2, *rho);
             t.fr(fr_op::SUB, m, m, share);
             continue;

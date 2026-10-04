@@ -27,7 +27,6 @@ use alloc::vec::Vec;
 use constants::memory::{HALT_PC, PART_ADDR, PART_AS, PART_TS, PART_VAL, TS_BITS};
 use constants::{challenge_slot as slot, fr_op, transcript_tags as tags, PROTOCOL_VERSION};
 use constraints::memory::read_tuple;
-use field::Fr;
 
 use crate::statement::groups;
 use crate::tape::{append_points, eval_gate, Cell, CellTranscript, Limbs, Tape, ZERO};
@@ -72,7 +71,14 @@ impl Shape<'_> {
 }
 
 fn constant(t: &mut Tape, v: u64) -> Cell {
-    t.constant(Fr::from_u64(v))
+    t.small(v)
+}
+
+/// `2^k`'s canonical bytes, `k < 256`.
+fn power(k: u32) -> [u8; 32] {
+    let mut b = [0u8; 32];
+    b[k as usize / 8] = 1 << (k % 8);
+    b
 }
 
 /// The `VM_CONFIG` message: the families, their heights, the bytecode size.
@@ -119,14 +125,14 @@ pub fn identity(
 pub fn prefix(
     t: &mut Tape,
     shape: &Shape,
-    srs_digest: Fr,
+    srs_digest: &[u8; 32],
     identity: Cell,
     io: Cell,
 ) -> CellTranscript {
     let mut tr = CellTranscript::new();
     let version = constant(t, PROTOCOL_VERSION as u64);
     tr.append(t, tags::PROTOCOL_SUITE, &[version]);
-    let srs = t.constant(srs_digest);
+    let srs = t.bytes(srs_digest);
     tr.append(t, tags::SRS_DIGEST, &[srs]);
     let message = config_message(t, shape.config);
     tr.append(t, tags::VM_CONFIG, &message);
@@ -150,7 +156,7 @@ pub fn prefix(
         t.fr(fr_op::DIGIT, digit, top, top);
     }
     below(t, top, 8);
-    let unit = t.constant(two_to(248));
+    let unit = t.bytes(&power(248));
     let high = t.mul(top, unit);
     let low = t.sub(io, high);
     for x in [constant(t, tags::PUBLIC_INPUTS), constant(t, 32), low, top] {
@@ -159,16 +165,33 @@ pub fn prefix(
     tr
 }
 
-/// `2^k`.
-fn two_to(k: u32) -> Fr {
-    (0..k / 32).fold(Fr::from_u64(1 << (k % 32)), |acc, _| {
-        acc * Fr::from_u64(1 << 32)
-    })
+/// Whether a boundary between shards holds a pending input: the prefix
+/// absorbs `3k + w + 20` scalars, `k` the config's families and `w` the
+/// windows, and every message after it an even number.
+pub fn pending(shape: &Shape) -> bool {
+    (shape.config.families.len() + shape.windows.len()) % 2 == 1
 }
 
-/// G8 over statement positions `from..to`: where a family group starts, its
+/// A digest of the shape's counts and windows, which every node verifying
+/// the statement journals so a parent holds its children to one shape: a
+/// node uses the shape to name its shards, and only the prefix absorbs it.
+pub fn shape_digest(t: &mut Tape, shape: &Shape) -> Cell {
+    let mut tr = CellTranscript::new();
+    for (tag, values) in [
+        (tags::SHARD_COUNTS, shape.shard_counts),
+        (tags::MEMORY_WINDOWS, shape.windows),
+    ] {
+        let cells: Vec<Cell> = values.iter().map(|v| constant(t, *v as u64)).collect();
+        tr.append(t, tag, &cells);
+    }
+    tr.sample(t)
+}
+
+/// G8 over statement positions `from..`: where a family group starts, its
 /// `MEMORY_GROUP` message; then each shard's memory commitments, one message a
-/// shard, `lists[i]` being position `from + i`'s.
+/// shard, `lists[i]` being position `from + i`'s. A pending input left at the
+/// end is one of the caller's cells, which a node reuses for its next shard,
+/// so the transcript keeps a copy of it instead.
 pub fn segment(
     t: &mut Tape,
     tr: &mut CellTranscript,
@@ -179,6 +202,9 @@ pub fn segment(
     for (i, list) in lists.iter().enumerate() {
         shape.group_messages(t, tr, from + i as u32);
         append_points(tr, t, tags::COMMITMENT, list);
+    }
+    if let (state, Some(pending)) = tr.checkpoint() {
+        *tr = CellTranscript::resume(state, Some(t.copy(pending)));
     }
 }
 
@@ -209,7 +235,7 @@ pub fn below(t: &mut Tape, x: Cell, bits: u32) {
     let part = bits % 8;
     if part > 0 {
         // Below 2^8, and `rest + 2^8 − 2^part` below 2^8 too.
-        let shifted = t.constant(Fr::from_u64(256 - (1 << part)));
+        let shifted = constant(t, 256 - (1 << part));
         let lifted = t.add(rest, shifted);
         for c in [rest, lifted] {
             t.fr(fr_op::DIGIT, digit, c, c);
@@ -327,7 +353,7 @@ pub fn io_digest(t: &mut Tape, input: &[Cell], output: &[Cell]) -> Cell {
         for chunk in bytes.chunks(31) {
             let acc = t.copy(chunk[0]);
             for (k, byte) in chunk.iter().enumerate().skip(1) {
-                let unit = t.constant(two_to(8 * k as u32));
+                let unit = t.bytes(&power(8 * k as u32));
                 t.mac(acc, *byte, unit);
             }
             tr.observe(t, acc);
@@ -366,6 +392,7 @@ mod tests {
     use crate::tape::{run, Memory};
     use crate::{identity_digest, BoundaryFinals, ProgramIdentity, PublicInputs};
     use constants::family;
+    use field::Fr;
     use transcript::g1_limbs;
 
     struct Rng(u64);
@@ -452,27 +479,38 @@ mod tests {
                 c
             };
             let [i, io_cell] = [id.0, io].map(|v| input(&mut t, &mut memory, v));
-            let mut tr = prefix(&mut t, &shape, srs, i, io_cell);
+            let mut tr = prefix(&mut t, &shape, &srs.to_bytes(), i, io_cell);
+            assert_eq!(tr.checkpoint().1.is_some(), pending(&shape));
+            // Every shard's limbs in one block of cells, as a node's slots
+            // are: each segment runs, then the next shard's overwrite them.
+            let slots = t.fresh(4 * 3);
             for pair in cuts.windows(2) {
                 // A node resumes where the last left off.
                 let (state, pending) = tr.checkpoint();
                 tr = CellTranscript::resume(state, pending);
-                let lists: Vec<Vec<Limbs>> = (pair[0]..pair[1])
-                    .map(|p| {
-                        statement.memory_commitments[p as usize]
-                            .iter()
-                            .map(|pt| g1_limbs(pt).map(|v| input(&mut t, &mut memory, v)))
-                            .collect()
-                    })
-                    .collect();
-                segment(&mut t, &mut tr, &shape, pair[0], &lists);
+                for p in pair[0]..pair[1] {
+                    let points = &statement.memory_commitments[p as usize];
+                    let list: Vec<Limbs> = (0..points.len() as u32)
+                        .map(|k| core::array::from_fn(|i| slots + 4 * k + i as u32))
+                        .collect();
+                    for (k, point) in points.iter().enumerate() {
+                        for (i, v) in g1_limbs(point).into_iter().enumerate() {
+                            memory.set(slots + 4 * k as u32 + i as u32, v);
+                        }
+                    }
+                    segment(&mut t, &mut tr, &shape, p, &[list]);
+                    run(&core::mem::take(&mut t.ops), &mut memory, &[]).expect("a segment runs");
+                    for k in 0..12 {
+                        memory.set(slots + k, Fr::from_u64(0xdead));
+                    }
+                }
             }
             let cells: Vec<Cell> = crate::boundary_scalars(&statement.boundary)
                 .into_iter()
                 .map(|v| input(&mut t, &mut memory, v))
                 .collect();
             let (challenges, digest) = suffix(&mut t, &mut tr, &shape, &cells);
-            run(&t.ops, &mut memory, &[]).expect("the chain runs");
+            run(&t.ops, &mut memory, &[]).expect("the suffix runs");
             assert_eq!(challenges.map(|c| memory.get(c)), native.memory, "{cuts:?}");
             assert_eq!(memory.get(digest), native.digest, "{cuts:?}");
         }

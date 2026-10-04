@@ -16,6 +16,11 @@
 //! profiler leaf <dir>/<stem> --shards <from>..<to> [--shards ...] [--top <n>] [--json <path>]
 //!     profile the recursion guest's leaf over slices of a block proof that
 //!     `verifier::proof_archive` wrote, one report a slice; `--json` takes one.
+//!
+//! profiler base-key <dir>/<stem>
+//!     write the archive's key as guests/recursion/base.key, which the leaf's
+//!     image is built from: the leaf verifies that program's proofs and no
+//!     other's.
 //! ```
 //!
 //! Nothing here invokes the prover, an SRS or a commitment. `leaf` alone reads a
@@ -37,6 +42,7 @@ fn usage() -> &'static str {
      profiler block <fixture> [--top <n>] [--json <p>]\n\
      profiler record <number|latest> [--txs <n>] [--top <n>] [--json <p>] [--cache <d>]\n\
      profiler leaf <dir>/<stem> --shards <from>..<to> [--shards ...] [--top <n>] [--json <p>]\n\
+     profiler base-key <dir>/<stem>\n\
      \n\
      `block` reads a recorded fixture and touches no network. `record` reads\n\
      ETH_RPC_URL. Neither invokes anything proving-related."
@@ -51,6 +57,7 @@ fn main() {
         "block" => block(rest),
         "record" => record(rest),
         "leaf" => leaf(rest),
+        "base-key" => base_key(rest),
         "--help" | "-h" | "" => {
             println!("{}", usage());
             return;
@@ -210,17 +217,57 @@ fn leaf(args: &[String]) -> Result<(), String> {
         .to_string();
     let dir = path.parent().unwrap_or(std::path::Path::new("."));
     let (vk, _, _, block) = host::proof_archive::read_proof(dir, &stem)?;
+    // The guest holds the image of the key it was built with.
+    let key = verifier_core::node::BaseKey::of(&vk).to_bytes();
+    if std::fs::read(base_key_path()).ok().as_deref() != Some(&key[..]) {
+        return Err(format!(
+            "{} is not this archive's key: run `profiler base-key {}` first",
+            base_key_path().display(),
+            path.display()
+        ));
+    }
     let elf = fixture::build_guest("recursion", "recursion")?;
+    let words = host::recursion::image(&vk);
     for range in slices {
-        let advice = host::recursion::leaf_advice(&vk, &block, range.clone())?;
+        let leaf = host::recursion::leaf(&vk, &words, &block, range.clone())?;
         let io = emulator::GuestIo {
             input: Vec::new(),
-            advice,
+            advice: leaf.advice,
         };
         let label = format!("leaf over shards {}..{}", range.start, range.end);
-        let report = run(&elf, "recursion", &label, &io, None, common.top)?;
+        let params = Some(host::recursion::leaf_params());
+        let report = run(&elf, "recursion", &label, &io, params, common.top)?;
         emit(&report, &common)?;
     }
+    Ok(())
+}
+
+/// Where the leaf guest's build reads the base program's key.
+fn base_key_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../guests/recursion/base.key")
+}
+
+/// `profiler base-key <dir>/<stem>`: the archive's key, as the leaf's build
+/// reads it.
+fn base_key(args: &[String]) -> Result<(), String> {
+    let [path] = args else {
+        return Err("base-key needs a proof archive's <dir>/<stem>".into());
+    };
+    let path = PathBuf::from(path);
+    let stem = path
+        .file_name()
+        .ok_or("base-key needs <dir>/<stem>")?
+        .to_string_lossy()
+        .to_string();
+    let dir = path.parent().unwrap_or(std::path::Path::new("."));
+    let (vk, _, _, _) = host::proof_archive::read_proof(dir, &stem)?;
+    let bytes = verifier_core::node::BaseKey::of(&vk).to_bytes();
+    std::fs::write(base_key_path(), &bytes).map_err(|e| e.to_string())?;
+    println!(
+        "wrote {} ({} bytes)",
+        base_key_path().display(),
+        bytes.len()
+    );
     Ok(())
 }
 

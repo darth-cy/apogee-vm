@@ -8,6 +8,7 @@ publish.workspace = true
 # an ELF symbol table and arithmetic. `docs/spec/profiling.md` is the design.
 
 [dependencies]
+verifier-core.workspace = true
 constants.workspace = true
 emulator.workspace = true
 host.workspace = true
