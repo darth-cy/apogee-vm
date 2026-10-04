@@ -354,14 +354,17 @@ and slots are advice (`docs/handoff/reports/S-RECURSION-tape-leaf-257510.json`):
   whole slice.
 - **RISC-V:** 3.19M cycles. 1.25M of them copy the tapes out of advice, which tapes in an
   image do not. 1.27M replay them, at 4.6 cycles a call, the run switches most of that.
-  0.67M import, at 11 a word.
+  0.67M import, at 11 a word. `replay` has since run eight calls an iteration, about two
+  cycles a call; what is left is per run, and a shard tape's runs are short, a duplex
+  every few field operations.
 
 A tape replayed as straight-line `ecall`s from `.text`, its frames in `.rodata`, costs one
 cycle a call, and that is the form binding takes (§8).
 
 What a statement chooses the length of — the global phase's absorbs, the
 reconciliation product — the guest records at run time through the same `Tape` and
-replays at once. `tape::run` is the native reading of a tape over a `Vec<Fr>`, and three
+replays at once. `tape::run` is the native reading of a tape over a `tape::Memory`, which
+models each access's timestamp as well as each cell's value (§8.3), and three
 suites hold it to the native verifier: `crates/gkr/tests`' honest proofs and their
 forgeries (`tape::gkr_verify` against `gkr::verify`, claim for claim and refusal for
 refusal), `crates/pcs-verify/tests/tape.rs` (the preamble and the scalars, to the
@@ -390,25 +393,82 @@ A node's journal carries:
 
 ### 8.3 Folding
 
-Every point the node owes, with its scalar times the check's weight from the node's own
-transcript, goes through one Pippenger MSM per pairing side on `FQ_OP`. The owner's
-design, before it is built:
+A node folds every deferred check it verifies into one accumulator `(A, B)`: `A` the
+points that pair with `[1]_2`, `B` those that pair with `[x]_2`
+(`docs/spec/accumulator.md` §2), each the sum of its points times their scalars.
+`verifier_core::fold` builds it as tapes, in three parts.
 
-- **Static per point.** A point's work is one template replayed from the image: its
-  scalar's 32 `DIGIT`s (§3), then one affine bucket addition in each of the 32 windows.
-  The bucket operands are indirect through the digit cells (§6), so nothing in the
-  template depends on a value and the guest replays it at the tape's cost.
-- **Batched across windows.** The 32 additions of one point land in 32 different windows'
-  buckets, so they never collide and share one inversion. The batch's inverse is a host
-  witness held by one `MULEQ`.
-- **Offset buckets.** Every bucket starts at a fixed point `R`, so no addition meets
-  infinity, and the window sums subtract `(Σ_b b)·R` once at the end.
-- **Digits of 8 bits**: 32 windows of 256 buckets. Over the leaves' and internal nodes'
-  point counts together this costs the least, the reduction being a fixed cost per
-  window.
+**The weights.** After a shard's tape, a transcript of the node's own — a duplex over
+cells, carried from shard to shard — absorbs the shard transcript's final state under
+`FOLD_STATE` (43) and draws two weights, `w` and `w′`, under `FOLD_WEIGHT` (44). That
+state binds every point and scalar of the shard's deferred checks, so a shard's weights
+are drawn after everything they weight, and the folded check fails unless every shard's
+holds, but with probability about `2/r` a shard.
 
-Only the template's first frames — which point, which scalar — are written per point.
-The point at infinity skips its template, the guest holding its limbs to the sentinel.
+**The scalars** (`fold::shard_fold`):
+
+- entry `i` of the shard's Mercury check gets `w·e_i`, on the side
+  `pcs_verify::ENTRY_POINTS` gives it;
+- `cm*` gets `w′` more, and each opened commitment `cm_i` gets `−w′·ρ^i`. That is the batch
+  check `cm* = Σ ρ^i·cm_i`, which a shard's tape cannot make because it is curve
+  arithmetic, folded beside the Mercury check. So the recursion verifies what the native
+  verifier does, the hint `cm*` included;
+- `[1]_1` and the setup commitments are **merged**. Every shard of a family owes the same
+  points, so a shard's fold adds its share to the point's scalar, and the point enters the
+  MSM once, after the node's last shard. On block 257510's first 32 shards that is 9
+  points where it was 229.
+
+**The MSMs**, one a side: Pippenger with 8-bit digits, shaped so that nothing a replay does
+depends on a value.
+
+- **GLV.** BN254's endomorphism `φ(x, y) = (β·x, y)` is `λ` on G1, so a scalar splits as
+  `k ≡ s₁·k₁ + λ·s₂·k₂` with `k₁, k₂ < 2^128`. The split is a host witness (`fold::split`),
+  and the template holds it to `k`: each half is below `2^128` by its 16 `DIGIT`s leaving
+  nothing over, and each sign is a bit. A point is then two 128-bit scalars over **16
+  windows** of 256 buckets, about a 256-bit scalar's work over 32, and the fixed work,
+  which is per window, halves.
+- **A point is one template.** It holds the point to the curve: `y² = x³ + 3`, and G1's
+  cofactor is 1, so on the curve is in the group, where `φ` is `λ`. It holds the split to
+  the scalar, forms `s₂φ(P)` and `s₁P`, and makes one affine bucket addition a window for
+  each, the bucket indirect through the window's digit cell (§6). A half's 16 additions
+  land in 16 windows, so they never collide and share one inversion: a host witness held
+  by one `MULEQ`. The template is 396 `FQ_OP` and 47 `FR_OP` calls over ten witness cells.
+- **Offset buckets.** Bucket `b` starts at `(b + 1)·R` for a fixed point `R`, so no
+  addition meets infinity and no running sum doubles a point. The finish subtracts what
+  the offsets add, once.
+- **A loop is one template replayed.** The finish is each window's running sums, batched
+  across the windows, then Horner by doubling. It and the prelude's offsets and bucket
+  setting are loops: one short template each, replayed, its bucket or window indirect
+  through a counter cell the template steps itself. A side's fixed work is about 110k
+  `FQ_OP` calls, and its templates about two thousand.
+- **The point at infinity** adds nothing. Its four limbs are held to the sentinel, and a
+  real point's cannot be.
+
+**Cells.** `FQ_OP` reads an element's four cells under one timestamp (§6). So a template's
+temporaries are elements on one grid of four from its scratch, where nothing else writes,
+and the next step reuses them. `tape::run`'s `Memory` models each access's timestamp and
+refuses an element read whole that was not written whole, so a layout that breaks the
+rule fails natively and not in a proof.
+
+**Checked natively.** `host::recursion::leaf_advice` runs a leaf in the guest's order —
+shard tapes, folds, MSMs — over one `Memory`, which is also how it computes every
+witness. It then discharges `(A, B)` with one pairing check, which holds the fold itself,
+every weight, side and merged scalar, to the shards' checks. `crates/host/tests/msm.rs`
+holds the MSM to `curve::msm`, `φ` to `λ`, and the offsets' constants to their points.
+
+**Measured** on block 257510's first 32 base shards by the leaf's measurement guest
+(`docs/handoff/reports/S-RECURSION-fold-leaf-257510.json`). The slice is 28 add/sub
+shards, each of 27 memory, 35 witness and 7 setup commitments, and four window shards.
+
+| family | calls | shards |
+| --- | --- | --- |
+| `FQ_OP` | 901,276 | one `2^20`, 147k to spare |
+| `FR_OP` | 312,984 | one `2^20` |
+| `P2_FIELD` | 54,743 | one `2^18` |
+| `FIELD_IO` | 81,137 | one `2^18` |
+
+The two MSMs' fixed work is about 220k of the `FQ_OP` calls, and some 1,720 points are
+396 each. Before GLV and merging, the same leaf took 1,188,658.
 
 ### 8.4 The scheduler
 
