@@ -558,6 +558,10 @@ pub fn setup(circuit: Circuit, seed: &[u8]) -> ProvingKey {
     let mut bound = bound;
     bound.sort_unstable();
     bound.dedup();
+    assert!(
+        bound[0] >= PUBLIC as Var,
+        "groth16: a public wire is not bound"
+    );
     let mut divisor = vec![inverse(delta); a.len()];
     divisor[..PUBLIC].fill(inverse(gamma));
     for wire in &bound {
@@ -658,7 +662,7 @@ pub fn prove(pk: &ProvingKey, circuit: Circuit) -> Result<(Proof, Vec<Fr>), Stri
 
 /// The two public inputs `data` and a proof's `D` give: the challenge, and
 /// the data's polynomial at it.
-pub fn public_inputs(proof: &Proof, data: &[Fr]) -> [Fr; 2] {
+fn public_inputs(proof: &Proof, data: &[Fr]) -> [Fr; 2] {
     let c = challenge(&proof.d, data);
     [c, horner(data, c)]
 }
