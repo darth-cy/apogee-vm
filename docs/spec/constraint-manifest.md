@@ -4,34 +4,50 @@
 > `memory.md` the memory argument, `lookup.md` the channels, `shard-proof.md` §8 the add/sub
 > family, `jump-branch-slt.md` the jump/branch/slt family, `shift-bitwise.md` the shift and
 > bitwise family, `mul-div.md` the M extension, `memory-ops.md` the three memory-op families.
-> `delegation.md` the delegation ABI and the keccak-f family. This page says *what exists*: every
-> circuit `constraints::family_circuit` returns; every committed and virtual column with its
-> position, name, meaning and readers; every intermediate multilinear by layer and offset; and
-> every gate with its formula. It gives columns and gates descriptive names and one-line
-> purposes that the code does not carry, and puts beside each the identifiers that find it in
-> the code: the `PolyAddress`, the artifact's own name for it, and the Rust constant or
-> constructor that makes it.
+> `delegation.md` the delegation ABI and the keccak-f family, and `recursion.md` the recursion
+> format — its registry, its field memory and the five families only it holds. This page says
+> *what exists*: every circuit `constraints::family_circuit` and
+> `constraints::recursion_circuit` return; every committed and virtual column with its position,
+> name, meaning and readers; every intermediate multilinear by layer and offset; and every gate
+> with its formula. It gives columns and gates descriptive names and one-line purposes that the
+> code does not carry, and puts beside each the identifiers that find it in the code: the
+> `PolyAddress`, the artifact's own name for it, and the Rust constant or constructor that makes
+> it.
 >
-> **Status: S26e.** All **eighteen** circuits are registered: `ADD_SUB_LUI_AUIPC`,
-> `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MUL_DIV`, `MEM_WORD`, `MEM_SUBWORD`, `ATOMICS`,
-> `INIT_TEARDOWN`, `ZERO_WINDOWS`, `KECCAK_F`, `POSEIDON2`, `FR_ARITH`, `PUBLIC_INPUT`,
-> `PUBLIC_OUTPUT`, `ADVICE_WINDOWS`, S26's `MOD_MUL` (§18) and S26c's `SHA256_COMP` (§19) and
-> `EC_ADD` (§20). `MOD_MUL` was the fourth delegation family and the first whose behaviour
-> depends on a **selector** — one frame word names one of four fixed Ethereum fields,
-> secp256k1's two and BN254's two, and the circuit supplies the modulus' limbs as literals. S26
-> carried that modulus as a witnessed operand instead; S26b removed it, which is what let the
-> circuit state `a < m` and `b < m` (`delegation.md` §10.2). The EVM's `MULMOD` takes an
-> arbitrary modulus and is **not** served here.
+> **Status: S-RECURSION.** All **eighteen** circuits of the base registry are registered:
+> `ADD_SUB_LUI_AUIPC`, `JUMP_BRANCH_SLT`, `SHIFT_BITWISE`, `MUL_DIV`, `MEM_WORD`, `MEM_SUBWORD`,
+> `ATOMICS`, `INIT_TEARDOWN`, `ZERO_WINDOWS`, `KECCAK_F`, `POSEIDON2`, `FR_ARITH`,
+> `PUBLIC_INPUT`, `PUBLIC_OUTPUT`, `ADVICE_WINDOWS`, S26's `MOD_MUL` (§18) and S26c's
+> `SHA256_COMP` (§19) and `EC_ADD` (§20). `MOD_MUL` was the fourth delegation family and the
+> first whose behaviour depends on a **selector** — one frame word names one of four fixed
+> Ethereum fields, secp256k1's two and BN254's two, and the circuit supplies the modulus' limbs
+> as literals. S26 carried that modulus as a witnessed operand instead; S26b removed it, which
+> is what let the circuit state `a < m` and `b < m` (`delegation.md` §10.2). The EVM's `MULMOD`
+> takes an arbitrary modulus and is **not** served here.
+>
+> **S-RECURSION adds a second registry.** `constraints::recursion_circuit` is the recursion
+> format's (`recursion.md` §1.2): a statement is in that format exactly when its `VmConfig` holds
+> `FIELD_WINDOWS`, and `VmConfig::circuit` then takes every circuit from it. It returns every
+> family above byte for byte as `family_circuit` does but one — `ADD_SUB_LUI_AUIPC`, whose
+> recursion form knows ten delegation types where the base form knows six (§3.11) — and it alone
+> holds five more: the field memory's window family `FIELD_WINDOWS` (§21) and four delegation
+> families over that memory, `FR_OP` (§22), `P2_FIELD` (§23), `FIELD_IO` (§24) and `FQ_OP`
+> (§25). `family_circuit` returns `None` for all five at every height, and no base circuit's
+> bytes moved. `FQ_OP` is the first delegation family to carry `TIMESTAMP`, at `2^20`.
 >
 > **S26c's two are the fifth and sixth delegation families, and they broke a rule this page
 > stated in four places.** `EC_ADD` carries the `RANGE16` channel and `MOD_MUL` was re-shaped to
 > carry it too, where "a delegation family carries no lookup channel" had been an invariant;
-> `delegation.md` §10.3 is the amendment, and the half of the rule that survives is that a
-> family at `2^8` can carry none and no family on this menu can carry `TIMESTAMP`. The
-> consequences reach §0.4, §0.5, §1.1, §1.2, §1.3 and §12.1, and the reshape moved every number
-> in §18. `EC_ADD` is also the first family whose row is **one third** of the operation it
-> serves: a complete point addition is three invocations glued by the frame, not by a bus. Every execution family the decoder routes to has a
-> circuit and a fill, and no `FamilyId` in `constants::family` is without one. S21 added the
+> `delegation.md` §10.3 is the amendment. What decides which channel a family can carry is its
+> height against the channel's table: `RANGE16`'s and `XOR8`'s tables need sixteen variables
+> and `TIMESTAMP`'s 19-bit table nineteen, which on this menu is `2^20`. So the two families at
+> `2^8` carry no channel, and no base delegation family — at `2^8`, `2^16` or `2^18` — carries
+> `TIMESTAMP`; the recursion registry's `FQ_OP`, at `2^20`, does (§25). The consequences reach
+> §0.4, §0.5, §1.1, §1.2, §1.3 and §12.1, and the reshape moved every number in §18. `EC_ADD`
+> is also the first family whose row is **one third** of the operation it serves: a complete
+> point addition is three invocations glued by the frame, not by a bus. Every execution family
+> the decoder routes to has a circuit and a fill, and no `FamilyId` in `constants::family` is
+> without one. S21 added the
 > first family that is **invoked rather than decoded** (§12) and, with it, the `deleg` memory
 > query — the mirror a delegation request makes — which changed `ADD_SUB_LUI_AUIPC`'s frame, its
 > shape and every relation number in §3. S-IO added the three **RAM window** families that carry
@@ -58,7 +74,7 @@
 > row's** alone, no instruction routed there touches memory, and an ecall is now exactly one
 > cycle. Its frame is five queries, its layout is §3.3's throughout, three `mask = 0` gates went
 > with the queries they refused, and the circuit is **five** row-wise lists deep again (§1.2,
-> §1.3, §21 observation 2). **No other circuit changed**: the other six execution families' query
+> §1.3, §26 observation 2). **No other circuit changed**: the other six execution families' query
 > lists are what they were, and their `M` and `W` indices are computed from their own `w`.
 >
 > **Descriptive, not normative.** Where this page and the code disagree, the registry is right
@@ -66,7 +82,7 @@
 > are documentation only, as the artifact's own names are (`gkr.md` §4.2): no code reads either.
 >
 > **Kept current by rule.** A stage that adds or changes a circuit family updates its entry
-> here in the same pull request (`prompts/00-master.md`, implementation rule 12). §20 is what an
+> here in the same pull request (`prompts/00-master.md`, implementation rule 12). §27 is what an
 > entry must hold.
 >
 > **Machine-derived.** Every count, position, name and formula below was read out of
@@ -75,7 +91,7 @@
 > checked; the `n = 16`, `n = 18` and `n = 20` counts were read from `family_circuit` directly, and the
 > §3.10 and §4.10 probes by a program over `family_circuit` and those two suites' `honest_rows`
 > that is not committed. Each family's §x.9 shows a handful of the rows its suite holds to every
-> gate, every range obligation and, from §4 on, both table channels in CI: nine of the sixteen
+> gate, every range obligation and, from §4 on, both table channels in CI: ten of the seventeen
 > in `crates/checker/tests/add_sub.rs`, nine of the 47 in `jump_branch_slt.rs`, nine of the 35
 > in `shift_bitwise.rs` and nine of the 64 in `mul_div.rs`. §12 has no such table: a keccak row
 > is 1,764 committed cells, so §12.9 is the chain of independent readings its suite carries
@@ -90,7 +106,10 @@
 > family's shape, the layout of both public windows and of the advice region, and the equality
 > of the prover's committed column with the verifier's own extension of the same bytes.
 > §5.10, §6.10, §7.10, §8.10 and §9.10, unlike §3.10 and §4.10, are read from their suites'
-> own committed tamper tables rather than from a probe.
+> own committed tamper tables rather than from a probe. **§3.11 and §21–§25 were read from
+> `recursion_circuit`'s artifacts**, written to files and dumped (Appendix A): none is committed
+> as bytes, and `crates/constraints/tests/vectors/recursion.txt` pins each by its shape line and
+> SHA-256.
 
 ---
 
@@ -100,8 +119,8 @@
 
 | what | where |
 | --- | --- |
-| the circuit a verifying key must carry | `constraints::family_circuit(family, trace_vars)`, `crates/constraints/src/lib.rs` |
-| the add/sub circuit | `constraints::add_sub::{artifact, channels}`, `crates/constraints/src/add_sub.rs` |
+| the circuit a verifying key must carry | `constraints::family_circuit(family, trace_vars)` in the base format and `constraints::recursion_circuit(family, trace_vars)` in the recursion format, `VmConfig::circuit` choosing by whether the config holds `FIELD_WINDOWS`; both in `crates/constraints/src/lib.rs` |
+| the add/sub circuit, and its recursion form | `constraints::add_sub::{artifact, channels, recursion_artifact, recursion_channels}`, `crates/constraints/src/add_sub.rs` |
 | the jump/branch/slt circuit | `constraints::jump_branch_slt::{artifact, channels}`, `crates/constraints/src/jump_branch_slt.rs` |
 | the shift/bitwise circuit | `constraints::shift_bitwise::{artifact, channels}`, `crates/constraints/src/shift_bitwise.rs` |
 | the mul/div circuit, and its width seam | `constraints::mul_div::{artifact, channels, arithmetic_gates}`, `crates/constraints/src/mul_div.rs` |
@@ -109,11 +128,12 @@
 | the sub-word circuit, and its width seam | `constraints::mem_subword::{artifact, channels, splice_gates}`, `crates/constraints/src/mem_subword.rs` |
 | the atomics circuit | `constraints::atomics::{artifact, channels}`, `crates/constraints/src/atomics.rs` |
 | the is-zero and comparison gadgets | `constraints::gadgets::{is_zero, comparison, comparison_equation}`, `crates/constraints/src/gadgets.rs` |
-| the frame, the memory tuples, the **three** window circuits | `constraints::memory::{image_window_artifact, zero_window_artifact, value_window_artifact}`, `crates/constraints/src/memory.rs` |
+| the frame, the memory tuples, the **four** window circuits | `constraints::memory::{image_window_artifact, zero_window_artifact, value_window_artifact, field_window_artifact}`, `crates/constraints/src/memory.rs` |
+| the delegation circuits | `constraints::{keccak, poseidon2, fr_arith, mod_mul, sha256, ec_add}::{artifact, channels}`, and the recursion registry's `constraints::{fr_op, p2_field, field_io, fq_op}::{artifact, channels}`, each in `crates/constraints/src/<module>.rs`; the frame, the anchor and the field accesses they share, `constraints::delegation` (`read_only_frame_range16`, `leaves_with`, `Access`) |
 | the fraction trees and their denominators | `constraints::lookup`, `crates/constraints/src/lookup.rs` |
 | the layer assembly: reduction, halving, the names of inner nodes | `crates/constraints/src/build.rs`, `assemble` |
 | a circuit, printed | `cargo run -p checker -- dump <artifact>` (Appendix A) |
-| the columns' values | `trace::{build_memory_columns, build_frame_witness, build_init_teardown_columns, build_value_window_columns, build_multiplicities}` and `prover::family_fill`, `crates/prover/src/fill.rs`; the packed generic table, `program::lookup_tables::generic_table`; the two public windows' and the advice region's layouts, `verifier_core::public_io_words` and `trace::advice_word` |
+| the columns' values | `trace::{build_memory_columns, build_frame_witness, build_init_teardown_columns, build_value_window_columns, build_multiplicities}` and `prover::family_fill`, `crates/prover/src/fill.rs`; the packed generic table, `program::lookup_tables::generic_table`; the two public windows' and the advice region's layouts, `verifier_core::public_io_words` and `trace::advice_word`; the recursion registry's, `fill::field_window` over `trace::MemoryState::field_cell`, and `fill::{fr_op, p2_field, field_io, fq_op}` over the shared `fill::recursion_frame` |
 | the copower check every scaled bound must pass | `constraints::lookup::check_copowers`, `crates/constraints/src/lookup.rs` |
 
 ### 0.2 Notation
@@ -157,7 +177,8 @@ Columns of one layer do not all index the same thing.
 | a decoded-table `S` column | the halfword at pc `2y`; `MINUS_ONE` in every column where no instruction of the family starts (`crates/program/CLAUDE.md`) |
 | a generic-table `S` column (`JUMP_BRANCH_SLT`'s, `SHIFT_BITWISE`'s and `MEM_SUBWORD`'s `S[7..10]`, `MUL_DIV`'s and `ATOMICS`' `S[6..9]`) | row `y` of the packed table (`lookup.md` §9): row 0 the `ZeroEntry`, all 0; rows 1 to `2^16` the AND byte table's `(AND_BASE + a + 1, b, a & b)`; rows `2^16 + 1` to `2^17` `U16GetSign`'s `(SIGN_BASE + h + 1, h >> 15, 0)`; rows `2^17 + 1` to `2^17 + 32` S18's `ShiftPowers`, `(SHIFT_BASE + s + 1, 2^s, 2^(31 − s))`; every later row 0. `AND_BASE = 0`, `SIGN_BASE = 256` and `SHIFT_BASE = SIGN_BASE + 2^16` are `constants::generic_table`'s, so the three key ranges are pairwise disjoint |
 | `V[range19]`, `V[range16]` | the value `y mod 2^19`, `y mod 2^16` |
-| a window family's `M` columns, `S[0]`, `V[row]`, `V[ram_live]` | the RAM word at byte address `4h·w + 4y`, `w` being the shard's window: 0 for `INIT_TEARDOWN`, the statement's `windows[i]` for `ZERO_WINDOWS`, the constants 32 and 33 for the two public families, and `advice_first_window(h) + i` for `ADVICE_WINDOWS` (§10, §11, §15, §16, §17) |
+| a RAM window family's `M` columns, `S[0]`, `V[row]`, `V[ram_live]` | the RAM word at byte address `4h·w + 4y`, `w` being the shard's window: 0 for `INIT_TEARDOWN`, the statement's `windows[i]` for `ZERO_WINDOWS`, the constants 32 and 33 for the two public families, and `advice_first_window(h) + i` for `ADVICE_WINDOWS` (§10, §11, §15, §16, §17) |
+| `FIELD_WINDOWS`' `M` columns and `V[row]` | field cell `h·w + y` of `address_space::FIELD`, `w` being the shard's index: the windows are consecutive from cell 0 (§21) |
 
 ### 0.4 The challenges
 
@@ -169,11 +190,11 @@ this page's.
 | slot | constant | symbol | value | set by | read by |
 | --- | --- | --- | --- | --- | --- |
 | 0 | `TOY` | — | — | — | S13's toy only |
-| 1 | `MEM_GAMMA` | `γ_M` | drawn once per statement | G10 (`shard-proof.md` §2) | frame leaves; §12's 102 invocation leaves |
-| 2 | `MEM_ALPHA_ADDR` | `α_addr` | drawn | G10 | frame leaves, every window tuple of all **five** window families; §12's 102 invocation leaves |
-| 3 | `MEM_ALPHA_TS` | `α_ts` | drawn | G10 | frame leaves, window teardown tuples; §12's invocation leaves **but `write_anchor`**, whose timestamp is the literal 0 |
-| 4 | `MEM_ALPHA_VAL` | `α_val` | drawn | G10 | frame leaves; window tuples carrying a value — every teardown tuple, `INIT_TEARDOWN`'s `α_val·S[0]` init tuple, and `PUBLIC_INPUT`'s and `ADVICE_WINDOWS`' `α_val·M[2]` init tuple, but **not** the init tuple of `ZERO_WINDOWS` or `PUBLIC_OUTPUT`, whose value is the literal 0; §12's invocation leaves **but `write_anchor`**, whose value is the literal 0 |
-| 5 | `MEM_WINDOW_CONSTANT` | `WC` | derived per window shard: `γ_M + 2 + α_addr·4h·w` (2 is `address_space::RAM`) | `gkr_verify::window_challenges`, off the window `verifier_core::shard_challenges` names for the shard's family | window tuples |
+| 1 | `MEM_GAMMA` | `γ_M` | drawn once per statement | G10 (`shard-proof.md` §2) | frame leaves; every delegation family's real memory leaves — §12's 102, and in the recursion registry `FR_OP`'s 16, `P2_FIELD`'s 28, `FIELD_IO`'s 26 and `FQ_OP`'s 36 |
+| 2 | `MEM_ALPHA_ADDR` | `α_addr` | drawn | G10 | frame leaves; every window tuple of all **six** window families, four `(α_addr, V[row])` terms a tuple in the five RAM ones and one in `FIELD_WINDOWS`'; every delegation family's real memory leaves, as slot 1's, `P2_FIELD`'s, `FIELD_IO`'s and `FQ_OP`'s address offsets riding repeated `(α_addr, mask)` terms |
+| 3 | `MEM_ALPHA_TS` | `α_ts` | drawn | G10 | frame leaves, window teardown tuples; §12's invocation leaves **but `write_anchor`**, whose timestamp is the literal 0, and every other delegation family's real leaves but its `write_anchor` likewise — 15 in `FR_OP`, 27 in `P2_FIELD`, 25 in `FIELD_IO` and 35 in `FQ_OP` |
+| 4 | `MEM_ALPHA_VAL` | `α_val` | drawn | G10 | frame leaves; window tuples carrying a value — every teardown tuple, `INIT_TEARDOWN`'s `α_val·S[0]` init tuple, and `PUBLIC_INPUT`'s and `ADVICE_WINDOWS`' `α_val·M[2]` init tuple, but **not** the init tuple of `ZERO_WINDOWS`, `PUBLIC_OUTPUT` or `FIELD_WINDOWS`, whose value is the literal 0; §12's invocation leaves **but `write_anchor`**, whose value is the literal 0, and every other delegation family's likewise — 15 in `FR_OP`, 27 in `P2_FIELD`, 25 in `FIELD_IO` and 35 in `FQ_OP` |
+| 5 | `MEM_WINDOW_CONSTANT` | `WC` | derived per window shard: `γ_M + 2 + α_addr·4h·w` for a RAM window (2 is `address_space::RAM`), and `γ_M + 10 + α_addr·h·w` for a `FIELD_WINDOWS` shard (10 is `address_space::FIELD`, `w` the shard's index) | `gkr_verify::window_challenges`, and `gkr_verify::field_window_challenges` for `FIELD_WINDOWS`, off the window `verifier_core::shard_challenges` names for the shard's family | window tuples |
 | 6 | `LOOKUP_G` | `g` | drawn per shard | S4 (`shard-proof.md` §4) | every table denominator, and every lookup row denominator except `decode_row`'s (a pad denominator is the literal 1) |
 | 7 | `LOOKUP_BETA` | `β` | drawn per shard, after `g` | S4 | every circuit's decoder denominators; and every generic denominator of the **five** circuits that read that channel — its table's, jump/branch/slt's two sign lookups', shift/bitwise's sign lookup, `shift_powers` and four `and_byte_j`, mul/div's two sign lookups, mem_subword's one sign lookup, atomics' two sign lookups and four `and_byte_j`. Not `MEM_WORD`'s: it reads no generic channel |
 | 8 | `LOOKUP_BETA_2` | `β²` | derived: a power of `β` | `gkr_verify::insert_lookup_challenges` | every circuit's decoder denominators; the generic **table**'s denominator in all five that carry it; and of the generic lookups only those whose third tuple position is a column — shift/bitwise's `shift_powers` (`copow`) and its four `and_byte_j` (`byte_and_j`), and atomics' four `and_byte_j`. A sign lookup's third position is the constant 0 and adds no term |
@@ -181,20 +202,29 @@ this page's.
 | 12 | `LOOKUP_BETA_6` | `β⁶` | derived: a power of `β` | `insert_lookup_challenges` | the decoder denominators of add/sub, jump/branch/slt, shift/bitwise, mem_word and mem_subword, whose tuples are seven wide. **Not mul/div's and not atomics'**: each of those decoded tuples has no `imm` and is six wide (§6.1, §9.1) |
 | 13 | `LOOKUP_DECODER_NEUTRAL` | `g_dec` | derived: `g − Σ_{j<W} β^j`, `W` the artifact's own decoder tuple width — 7 in add/sub, jump/branch/slt, shift/bitwise, mem_word and mem_subword, **6 in mul/div and atomics** | `insert_lookup_challenges` | `decode_row`'s denominator |
 
-**Seven registered circuits read no lookup challenge at all** — no `g`, no `β`, no derived
-power, no neutral: the five window families and `POSEIDON2` and `FR_ARITH`, and for opposite
-reasons. A window family has no witness to bound; a delegation family at `2^8` has no table to
-bound one against, so every bound it makes is a bit decomposition. **`MOD_MUL` was among them
-until S26c, `KECCAK_F` until S26d and `SHA256_COMP` until S26e**, and none is now (§18.1, §12.1,
-§19).
+**Eight circuits read no lookup challenge at all** — no `g`, no `β`, no derived power, no
+neutral: the six window families — the base registry's five and the recursion registry's
+`FIELD_WINDOWS`, which like `ZERO_WINDOWS` reads exactly slots 2 to 5 — and `POSEIDON2` and
+`FR_ARITH`, and for opposite reasons. A window family has no witness to bound; a delegation
+family at `2^8` has no table to bound one against, so every bound it makes is a bit
+decomposition. **`MOD_MUL` was among them until S26c, `KECCAK_F` until S26d and `SHA256_COMP`
+until S26e**, and none is now (§18.1, §12.1, §19).
 
-**Four delegation families now read `g`.** S26c gave `MOD_MUL` and `EC_ADD` the `RANGE16`
-channel at `2^16` (`docs/spec/delegation.md` §10.3), S26d gave `KECCAK_F` both `RANGE16` and
-`XOR8` (§10.4), and S26e gave `SHA256_COMP` the same two (§10.5). A range channel's tuple is **one expression wide**, so a family carrying only
-`RANGE16` reads slot **6** (`g`) and **no `β` slot at all** — `β⁰` is the literal 1 and not a
-challenge, `β¹` upward belongs to tuples wider than one, and the decoder neutral is a table
-channel's. So the count of circuits reading `g` is **eleven**: the seven execution families,
-`MOD_MUL`, `EC_ADD`, `KECCAK_F` and `SHA256_COMP`.
+**Eight delegation families now read `g`, four in each registry's own list.** S26c gave
+`MOD_MUL` and `EC_ADD` the `RANGE16` channel at `2^16` (`docs/spec/delegation.md` §10.3), S26d
+gave `KECCAK_F` both `RANGE16` and `XOR8` (§10.4), and S26e gave `SHA256_COMP` the same two
+(§10.5); the recursion registry's four field families carry range channels alone — `RANGE16`
+in `FR_OP`, `P2_FIELD` and `FIELD_IO`, and `TIMESTAMP` and `RANGE16` in `FQ_OP` (§22.6, §23.7,
+§24.6, §25.7). A range channel's tuple is **one expression wide**, so a family carrying range
+channels alone reads slot **6** (`g`) and **no `β` slot at all** — `β⁰` is the literal 1 and not
+a challenge, `β¹` upward belongs to tuples wider than one, and the decoder neutral is a table
+channel's. So **eleven** of the base registry's eighteen circuits read `g`: the seven execution
+families, `MOD_MUL`, `EC_ADD`, `KECCAK_F` and `SHA256_COMP`. The recursion registry's
+twenty-three families read it in **fifteen**: the same eleven, `ADD_SUB_LUI_AUIPC`'s recursion
+form (§3.11) standing in for the base one, and `FR_OP`, `P2_FIELD`, `FIELD_IO` and `FQ_OP`;
+counted as distinct artifacts, sixteen circuits read `g`. **`FQ_OP` is the one circuit that
+carries `TIMESTAMP` and reads no `β`**: every other circuit carrying that channel is an execution
+family, and every execution family carries the decoder channel besides.
 
 **`KECCAK_F` and `SHA256_COMP` are the only circuits that read `β¹` and `β²` without reading
 `β³`.** Their `XOR8` tuple is three wide, so the two slots are its obligations' second and third
@@ -207,17 +237,19 @@ and 119 — read none at all.
 
 `GateDef` (`crates/constraints/src/lib.rs`, and `constraints::CATALOGUE`, the same seven rows);
 `gkr_verify::eval_gate` evaluates every one. Counts are over one circuit at `n = 20`, except
-`KECCAK_F`'s, which is at `n = 18`, and `MOD_MUL`'s and `EC_ADD`'s, which are at `n = 16`.
+`KECCAK_F`'s, `SHA256_COMP`'s, `P2_FIELD`'s and `FIELD_IO`'s, which are at `n = 18`, and
+`MOD_MUL`'s and `EC_ADD`'s, which are at `n = 16`. `ADD_SUB_LUI_AUIPC`'s recursion form (§3.11)
+is the base form's count in every tag but 5.
 
 | tag | shape | `G` | list kind | used by |
 | --- | --- | --- | --- | --- |
-| 0 | `Linear { terms, constant }` | `Σ c_i·x_i + c_0` | row-wise | add/sub, 58: 43 leaves of list 0 (the **6** memory pads, the 15 leaf numerators, the 3 table numerators and 3 table denominators, the 16 pad-fraction columns), 5 degree-1 enforcing gates, 10 copies in lists 2–4; jump/branch/slt, 71: 54 leaves of list 0 (the 26 leaf numerators, 4 of tables and 22 of lookups, the 4 table denominators, the 24 pad-fraction columns), 3 degree-1 enforcing gates, 14 copies in lists 2–4; shift/bitwise, 108: 77 leaves of list 0 (the 43 leaf numerators, 4 of tables and 39 of lookups, the 4 table denominators, the 30 pad-fraction columns), 9 degree-1 enforcing gates, 22 copies in lists 2–5; mul/div, 108: 81 leaves of list 0 (the 31 leaf numerators, 4 of tables and 27 of lookups, the 4 table denominators, the 46 pad-fraction columns), 5 degree-1 enforcing gates, 22 copies in lists 2–5; mem_word, 54: 38 leaves of list 0 (the 4 memory pads, the 21 leaf numerators, 3 of tables and 18 of lookups, the 3 table denominators, the 10 pad-fraction columns), 6 degree-1 enforcing gates, 10 copies in lists 2–4; mem_subword, 100: 72 leaves of list 0 (the 4 memory pads, the 40 leaf numerators, the 4 table denominators, the 24 pad-fraction columns), 6 degree-1 enforcing gates, 22 copies in lists 2–5; atomics, 113: 86 leaves of list 0 (the **6** memory pads, the 40 leaf numerators, the 4 table denominators, the 36 pad-fraction columns), 9 degree-1 enforcing gates, 18 copies in lists 2–5; `ZERO_WINDOWS`, `PUBLIC_INPUT`, `PUBLIC_OUTPUT` and `ADVICE_WINDOWS`, 2 unmasked leaves each; **keccak, 1,673**: 1,354 in list 0 (24 pad leaves, the two tables' numerators and denominators, the 1,230 lookup numerators, and the 96 pad-fraction columns), 307 degree-1 enforcing gates, and 12 copies over lists 8–11, where the memory and `range16` trees are already at one node. It was 170,248 at S21, almost all of it state copies through 168 round layers; **`SHA256_COMP`, 929 at `n = 18`**: 842 in list 0 (12 pad leaves, the two tables' numerators and denominators, the 450 lookup numerators, and the 376 pad-fraction columns), 75 degree-1 enforcing gates, and 12 copies over lists 6–9 — it was 7,224 at S26c, its bits' recompositions; **`MOD_MUL`, 824** and **`EC_ADD`, 3,185**, each the sum of its leaves, its degree-1 enforcing gates and the copies its reduction lists carry (§18.1, §20.1) |
-| 1 | `Product { coeff, left, right }` | `c·x·y` | row-wise | add/sub, 37: the 14 row-wise product-tree nodes (lists 1–3) and the 23 row-wise fraction-node denominators (lists 1–4); jump/branch/slt, 40: the 6 row-wise product-tree nodes (lists 1–2) and the 34 row-wise fraction-node denominators (lists 1–4); shift/bitwise, 59: the 6 product-tree nodes (lists 1–2) and the 53 fraction-node denominators (lists 1–5); mul/div, 56: the 6 product-tree nodes and the 50 fraction-node denominators; mem_word, 37: the 14 row-wise product-tree nodes (lists 1–3) and the 23 fraction-node denominators (lists 1–4); mem_subword, 62: the 14 product-tree nodes and the 48 fraction-node denominators (lists 1–5); atomics, 68: the 14 product-tree nodes and the 54 fraction-node denominators; **keccak, 1,404**: the 126 product-tree nodes that reduce 128 memory leaves to 2 over lists 2–7, and the 1,278 row-wise fraction-node denominators of its two channels over lists 2–11 — 255 for `range16` and 1,023 for `xor8`. It had **no fraction node at all** at S21 and 38,400 `v = B'·B'` gates of chi's first step instead; one round a row moved every one of those into an `XOR8` obligation; **`SHA256_COMP`, 700**: the 62 memory product-tree nodes over lists 1–5 and the 638 row-wise fraction-node denominators of its two channels over lists 1–9 — 127 for `range16` and 511 for `xor8`. It was 9,278 at S26c, 9,216 of them the `x·y` helper of a three-way XOR **bit**, and S26e moved every one of those into an `XOR8` obligation; **`MOD_MUL`, 573** and **`EC_ADD`, 2,301** |
+| 0 | `Linear { terms, constant }` | `Σ c_i·x_i + c_0` | row-wise | add/sub, 58: 43 leaves of list 0 (the **6** memory pads, the 15 leaf numerators, the 3 table numerators and 3 table denominators, the 16 pad-fraction columns), 5 degree-1 enforcing gates, 10 copies in lists 2–4; jump/branch/slt, 71: 54 leaves of list 0 (the 26 leaf numerators, 4 of tables and 22 of lookups, the 4 table denominators, the 24 pad-fraction columns), 3 degree-1 enforcing gates, 14 copies in lists 2–4; shift/bitwise, 108: 77 leaves of list 0 (the 43 leaf numerators, 4 of tables and 39 of lookups, the 4 table denominators, the 30 pad-fraction columns), 9 degree-1 enforcing gates, 22 copies in lists 2–5; mul/div, 108: 81 leaves of list 0 (the 31 leaf numerators, 4 of tables and 27 of lookups, the 4 table denominators, the 46 pad-fraction columns), 5 degree-1 enforcing gates, 22 copies in lists 2–5; mem_word, 54: 38 leaves of list 0 (the 4 memory pads, the 21 leaf numerators, 3 of tables and 18 of lookups, the 3 table denominators, the 10 pad-fraction columns), 6 degree-1 enforcing gates, 10 copies in lists 2–4; mem_subword, 100: 72 leaves of list 0 (the 4 memory pads, the 40 leaf numerators, the 4 table denominators, the 24 pad-fraction columns), 6 degree-1 enforcing gates, 22 copies in lists 2–5; atomics, 113: 86 leaves of list 0 (the **6** memory pads, the 40 leaf numerators, the 4 table denominators, the 36 pad-fraction columns), 9 degree-1 enforcing gates, 18 copies in lists 2–5; `ZERO_WINDOWS`, `PUBLIC_INPUT`, `PUBLIC_OUTPUT`, `ADVICE_WINDOWS` and `FIELD_WINDOWS`, 2 unmasked leaves each; **keccak, 1,673**: 1,354 in list 0 (24 pad leaves, the two tables' numerators and denominators, the 1,230 lookup numerators, and the 96 pad-fraction columns), 307 degree-1 enforcing gates, and 12 copies over lists 8–11, where the memory and `range16` trees are already at one node. It was 170,248 at S21, almost all of it state copies through 168 round layers; **`SHA256_COMP`, 929 at `n = 18`**: 842 in list 0 (12 pad leaves, the two tables' numerators and denominators, the 450 lookup numerators, and the 376 pad-fraction columns), 75 degree-1 enforcing gates, and 12 copies over lists 6–9 — it was 7,224 at S26c, its bits' recompositions; **`MOD_MUL`, 824** and **`EC_ADD`, 3,185**, each the sum of its leaves, its degree-1 enforcing gates and the copies its reduction lists carry (§18.1, §20.1); in the recursion registry, **`FR_OP`, 107**: 92 in list 0 (the table's numerator and denominator, the 36 lookup numerators and the 54 pad-fraction columns — no memory pad leaf, its eight leaves a side filling both trees), 9 degree-1 enforcing gates, and 6 copies over lists 4–6, where both memory trees are already at one node; **`P2_FIELD`, 84 at `n = 18`**: 74 in list 0 (the 4 memory pads, the table's numerator and denominator, the 58 lookup numerators and the 10 pad-fraction columns), 6 degree-1 enforcing gates (`writes_back_w0`–`w4` and `n_word`), and 4 copies over lists 5–6; **`FIELD_IO`, 203 at `n = 18`**: 192 in list 0 (the 6 memory pads, the table's numerator and denominator, the 70 lookup numerators and the 114 pad-fraction columns), 5 degree-1 enforcing gates, and 6 copies over lists 5–7; **`FQ_OP`, 150**: 140 in list 0 (the 28 memory pads, the two tables' numerators and denominators, the 80 lookup numerators and the 28 pad-fraction columns), 6 degree-1 enforcing gates, and 4 copies in list 6, where the two product trees and the `timestamp` tree are already at one node |
+| 1 | `Product { coeff, left, right }` | `c·x·y` | row-wise | add/sub, 37: the 14 row-wise product-tree nodes (lists 1–3) and the 23 row-wise fraction-node denominators (lists 1–4); jump/branch/slt, 40: the 6 row-wise product-tree nodes (lists 1–2) and the 34 row-wise fraction-node denominators (lists 1–4); shift/bitwise, 59: the 6 product-tree nodes (lists 1–2) and the 53 fraction-node denominators (lists 1–5); mul/div, 56: the 6 product-tree nodes and the 50 fraction-node denominators; mem_word, 37: the 14 row-wise product-tree nodes (lists 1–3) and the 23 fraction-node denominators (lists 1–4); mem_subword, 62: the 14 product-tree nodes and the 48 fraction-node denominators (lists 1–5); atomics, 68: the 14 product-tree nodes and the 54 fraction-node denominators; **keccak, 1,404**: the 126 product-tree nodes that reduce 128 memory leaves to 2 over lists 2–7, and the 1,278 row-wise fraction-node denominators of its two channels over lists 2–11 — 255 for `range16` and 1,023 for `xor8`. It had **no fraction node at all** at S21 and 38,400 `v = B'·B'` gates of chi's first step instead; one round a row moved every one of those into an `XOR8` obligation; **`SHA256_COMP`, 700**: the 62 memory product-tree nodes over lists 1–5 and the 638 row-wise fraction-node denominators of its two channels over lists 1–9 — 127 for `range16` and 511 for `xor8`. It was 9,278 at S26c, 9,216 of them the `x·y` helper of a three-way XOR **bit**, and S26e moved every one of those into an `XOR8` obligation; **`MOD_MUL`, 573** and **`EC_ADD`, 2,301**; in the recursion registry, **`FR_OP`, 77**: the 14 product-tree nodes that reduce eight leaves a side to one over lists 1–3, and the 63 row-wise fraction-node denominators of its `range16` tree over lists 1–6; **`P2_FIELD`, 93**: the 30 product-tree nodes that reduce 16 leaves a side to one over lists 1–4, and its one channel's 63 row-wise fraction-node denominators over lists 1–6; **`FIELD_IO`, 157**: the 30 product-tree nodes over lists 1–4 and the 127 row-wise fraction-node denominators over lists 1–7; **`FQ_OP`, 156**: the 62 product-tree nodes over lists 1–5 and the 94 row-wise fraction-node denominators over lists 1–6 — 31 for `timestamp` and 63 for `range16` |
 | 2 | `MaskIntoIdentity { input, mask }` | `x·m + 1 − m` | row-wise | no registered circuit (`memory.md` §2.2 says why) |
 | 3 | `AffineProduct { .. }` | `(Σ a_i·x_i + a_0)·(Σ b_j·y_j + b_0)` | row-wise | no registered circuit |
-| 4 | `TreeProduct { input }` | `x(y,0)·x(y,1)` | halving | add/sub, 5 per halving list (100, `n = 20`); jump/branch/slt, 6 per halving list (120); shift/bitwise and mul/div, 6 per halving list (120 each); mem_word, 5 per halving list (100); mem_subword and atomics, 6 per halving list (120 each); **each of the five window circuits, 2 per halving list** — 40 at `n = 20`, 44 at `n = 22` and 24 at the two public families' pinned `n = 12`, where S-IO's `2^8` gave 16; **keccak and, since S26e, `SHA256_COMP`, 4 per list (72 each at `n = 18`)** — the two memory roots and the two channels' denominators; **`MOD_MUL` and `EC_ADD`, 3 per list** (48 each at `n = 16`) — the two memory roots and the `RANGE16` tree's **denominator**, which is what a fourth output costs |
-| 5 | `Quadratic { constant, linear, products }` | `c_0 + Σ a_i·x_i + Σ b_j·y_j·z_j` | row-wise | add/sub, 100: **10** memory leaves and 15 lookup row denominators (list 0), 52 degree-2 enforcing gates, and the 23 row-wise fraction-node numerators (lists 1–4); jump/branch/slt, 103: 8 memory leaves and 22 lookup row denominators (list 0), 39 degree-2 enforcing gates, and the 34 row-wise fraction-node numerators (lists 1–4); shift/bitwise, 139: 8 memory leaves and 39 lookup row denominators (list 0), 39 degree-2 enforcing gates, and the 53 fraction-node numerators (lists 1–5); mul/div, 134: 8 memory leaves and 27 lookup row denominators, 49 degree-2 enforcing gates, and the 50 fraction-node numerators; mem_word, 80: 12 memory leaves and 18 lookup row denominators (list 0), 27 degree-2 enforcing gates, and the 23 fraction-node numerators (lists 1–4); mem_subword, 143: 12 memory leaves and 36 lookup row denominators, 47 degree-2 enforcing gates, and the 48 fraction-node numerators (lists 1–5); atomics, 137: 10 memory leaves and 36 lookup row denominators, 37 degree-2 enforcing gates, and the 54 fraction-node numerators; `INIT_TEARDOWN`, 2 leaves — **the only window circuit with a `Quadratic` gate**, the other four being unmasked and degree 1 throughout; **keccak, 2,690**: 1,334 in list 0 (the 104 real memory leaves — 51 frame words and the anchor, a side — and the 1,230 lookup row denominators), 78 degree-2 enforcing gates (`live_boolean`, the 51 `addr_w`, the two frame-pointer checks and the 24 `round{r}_boolean`), and the 1,278 row-wise fraction-node numerators over lists 2–11. **There is no `gap_w{j}` gate**: the gap is four `RANGE16` obligations since S26d. It was 149,735 at S21; **`SHA256_COMP`, 1,184**: 502 in list 0 (the 52 real memory leaves — 25 frame words and the anchor, a side — and the 450 lookup row denominators), 44 degree-2 enforcing gates, and the 638 row-wise fraction-node numerators over lists 1–9; it was 8,569 at S26c. **`MOD_MUL`, 908** and **`EC_ADD`, 3,859**, each its real memory leaves, its lookup row denominators, its degree-2 enforcing gates and its fraction-node numerators |
-| 6 | `TreeCross { left, right }` | `p(y,0)·q(y,1) + p(y,1)·q(y,0)` | halving | **keccak and `SHA256_COMP`, 2 per halving list** (36 each at `n = 18`), one per channel — each had none until a stage gave it two channels (S26d and S26e), a circuit with no lookup channel having no fraction tree and this shape being a fraction tree's alone; **`MOD_MUL` and `EC_ADD`, 1 per halving list** (16 each at `n = 16`) — their one `RANGE16` tree's numerator, and the shape that makes a delegation family with a channel visible in this table at all (S26c); add/sub, 3 per halving list (60, `n = 20`); jump/branch/slt, 4 per halving list (80); shift/bitwise and mul/div, 4 per halving list (80 each); mem_word, 3 per halving list (60); mem_subword and atomics, 4 per halving list (80 each) |
+| 4 | `TreeProduct { input }` | `x(y,0)·x(y,1)` | halving | add/sub, 5 per halving list (100, `n = 20`); jump/branch/slt, 6 per halving list (120); shift/bitwise and mul/div, 6 per halving list (120 each); mem_word, 5 per halving list (100); mem_subword and atomics, 6 per halving list (120 each); **each of the six window circuits, 2 per halving list** — 40 at `n = 20`, `FIELD_WINDOWS`' default, 44 at `n = 22` and 24 at the two public families' pinned `n = 12`, where S-IO's `2^8` gave 16; **keccak and, since S26e, `SHA256_COMP`, 4 per list (72 each at `n = 18`)** — the two memory roots and the two channels' denominators; **`MOD_MUL` and `EC_ADD`, 3 per list** (48 each at `n = 16`) — the two memory roots and the `RANGE16` tree's **denominator**, which is what a fourth output costs; in the recursion registry, **`FR_OP`, `P2_FIELD` and `FIELD_IO`, 3 per list** (60 at `FR_OP`'s `n = 20`, 54 each at the other two's `n = 18`) — the two memory roots and the `RANGE16` tree's denominator — and **`FQ_OP`, 4 per list** (80 at `n = 20`) — the two memory roots and the two channels' denominators |
+| 5 | `Quadratic { constant, linear, products }` | `c_0 + Σ a_i·x_i + Σ b_j·y_j·z_j` | row-wise | add/sub, 106: **10** memory leaves and 15 lookup row denominators (list 0), 58 degree-2 enforcing gates, and the 23 row-wise fraction-node numerators (lists 1–4); jump/branch/slt, 103: 8 memory leaves and 22 lookup row denominators (list 0), 39 degree-2 enforcing gates, and the 34 row-wise fraction-node numerators (lists 1–4); shift/bitwise, 139: 8 memory leaves and 39 lookup row denominators (list 0), 39 degree-2 enforcing gates, and the 53 fraction-node numerators (lists 1–5); mul/div, 134: 8 memory leaves and 27 lookup row denominators, 49 degree-2 enforcing gates, and the 50 fraction-node numerators; mem_word, 80: 12 memory leaves and 18 lookup row denominators (list 0), 27 degree-2 enforcing gates, and the 23 fraction-node numerators (lists 1–4); mem_subword, 143: 12 memory leaves and 36 lookup row denominators, 47 degree-2 enforcing gates, and the 48 fraction-node numerators (lists 1–5); atomics, 137: 10 memory leaves and 36 lookup row denominators, 37 degree-2 enforcing gates, and the 54 fraction-node numerators; `INIT_TEARDOWN`, 2 leaves — **the only window circuit with a `Quadratic` gate**, the other five being unmasked and degree 1 throughout; **keccak, 2,690**: 1,334 in list 0 (the 104 real memory leaves — 51 frame words and the anchor, a side — and the 1,230 lookup row denominators), 78 degree-2 enforcing gates (`live_boolean`, the 51 `addr_w`, the two frame-pointer checks and the 24 `round{r}_boolean`), and the 1,278 row-wise fraction-node numerators over lists 2–11. **There is no `gap_w{j}` gate**: the gap is four `RANGE16` obligations since S26d. It was 149,735 at S21; **`SHA256_COMP`, 1,184**: 502 in list 0 (the 52 real memory leaves — 25 frame words and the anchor, a side — and the 450 lookup row denominators), 44 degree-2 enforcing gates, and the 638 row-wise fraction-node numerators over lists 1–9; it was 8,569 at S26c. **`MOD_MUL`, 908** and **`EC_ADD`, 3,859**, each its real memory leaves, its lookup row denominators, its degree-2 enforcing gates and its fraction-node numerators; in the recursion registry, add/sub's recursion form, **118**: the base form's 106 and the twelve degree-2 gates its four more delegation types add (§3.11); **`FR_OP`, 150**: 52 in list 0 (the 16 memory leaves — four frame words, the anchor and three field accesses, a side — and the 36 lookup row denominators), 35 degree-2 enforcing gates, and the 63 row-wise fraction-node numerators over lists 1–6; **`P2_FIELD`, 515**: 86 in list 0 (the 28 real memory leaves — 14 a side — and the 58 lookup row denominators), 366 degree-2 enforcing gates (the 352 permutation gates and 14 of the 20 frame and absorption gates), and the 63 row-wise fraction-node numerators over lists 1–6; **`FIELD_IO`, 242**: 96 in list 0 (the 26 real memory leaves — 13 a side — and the 70 lookup row denominators), 19 degree-2 enforcing gates, and the 127 row-wise fraction-node numerators over lists 1–7; **`FQ_OP`, 242**: 116 in list 0 (the 36 real memory leaves — four frame words, the anchor and 13 field accesses, a side — and the 80 lookup row denominators), 32 degree-2 enforcing gates, and the 94 row-wise fraction-node numerators over lists 1–6 |
+| 6 | `TreeCross { left, right }` | `p(y,0)·q(y,1) + p(y,1)·q(y,0)` | halving | **keccak and `SHA256_COMP`, 2 per halving list** (36 each at `n = 18`), one per channel — each had none until a stage gave it two channels (S26d and S26e), a circuit with no lookup channel having no fraction tree and this shape being a fraction tree's alone; **`MOD_MUL` and `EC_ADD`, 1 per halving list** (16 each at `n = 16`) — their one `RANGE16` tree's numerator, and the shape that makes a delegation family with a channel visible in this table at all (S26c); add/sub, 3 per halving list (60, `n = 20`); jump/branch/slt, 4 per halving list (80); shift/bitwise and mul/div, 4 per halving list (80 each); mem_word, 3 per halving list (60); mem_subword and atomics, 4 per halving list (80 each); in the recursion registry, **`FR_OP`, `P2_FIELD` and `FIELD_IO`, 1 per halving list** (20 at `FR_OP`'s `n = 20`, 18 each at the other two's `n = 18`) — their one `RANGE16` tree's numerator — and **`FQ_OP`, 2 per halving list** (40 at `n = 20`), one per channel |
 
 ### 0.6 The compound expressions
 
@@ -244,22 +276,31 @@ Each is stored as one `Quadratic` with constant 1: linear terms `(γ_M, m)`, `(�
 is `m·T + 1 − m` at every `m`, but it is 1 or a tuple only where `m` is 0 or 1, which is why
 every mask carries a booleanity gate.
 
-**A window tuple** (`memory.md` §3.3, `public-values.md` §4); code: the private
-`memory::window_tuple`, and the inline init tuple in `zero_window_artifact`:
+**A window tuple** (`memory.md` §3.3, `public-values.md` §4, `recursion.md` §2.2); code: the
+private `memory::window_tuple` and `memory::stride_tuple`, and the inline init tuple in the
+private `memory::zero_window`:
 
 ```text
-WC       = γ_M + 2 + α_addr·4h·w                                  one value per shard
+WC       = γ_M + 2 + α_addr·4h·w                                  one value per RAM window shard
 teardown = WC + 4·α_addr·row + α_ts·teardown_ts + α_val·teardown_value
-         = T(RAM, 4h·w + 4·row, teardown_ts, teardown_value)                                  every window family
+         = T(RAM, 4h·w + 4·row, teardown_ts, teardown_value)                                  every RAM window family
 init     = WC + 4·α_addr·row + α_val·S[0]           = T(RAM, 4·row, 0, init_value)            INIT_TEARDOWN, w = 0
 init     = WC + 4·α_addr·row                        = T(RAM, 4h·w + 4·row, 0, 0)              ZERO_WINDOWS, PUBLIC_OUTPUT
 init     = WC + 4·α_addr·row + α_val·M[2]           = T(RAM, 4h·w + 4·row, 0, init_value)     PUBLIC_INPUT, ADVICE_WINDOWS
+
+WC       = γ_M + 10 + α_addr·h·w                                  one value per FIELD_WINDOWS shard
+teardown = WC + α_addr·row + α_ts·teardown_ts + α_val·teardown_value
+         = T(FIELD, h·w + row, teardown_ts, teardown_value)                                   FIELD_WINDOWS
+init     = WC + α_addr·row                          = T(FIELD, h·w + row, 0, 0)               FIELD_WINDOWS
 ```
 
-The three init forms are the three window artifacts: the init value comes from a **setup**
-column that program identity binds, from **nothing** — a literal 0 — or from a **memory** column
-committed at G8 that one execution chose. `INIT_TEARDOWN` masks both of its leaves by
-`V[ram_live]`, which makes them `Quadratic`; the other four carry no mask and are `Linear`.
+The three RAM init forms are the three RAM window artifacts: the init value comes from a
+**setup** column that program identity binds, from **nothing** — a literal 0 — or from a
+**memory** column committed at G8 that one execution chose. `INIT_TEARDOWN` masks both of its
+leaves by `V[ram_live]`, which makes them `Quadratic`; the other five carry no mask and are
+`Linear`. `FIELD_WINDOWS`' artifact is `ZERO_WINDOWS`' construction at a stride of one cell, one
+`(α_addr, V[row])` term a leaf where a RAM window's carries four, and the address space is in
+neither artifact: it enters through `WC` alone (§21.3).
 
 **A lookup's fraction** (`lookup.md` §4 to §6). With selector `s` and tuple `e_0 … e_{W−1}`, the
 gated tuple is `s·e_j` on a range channel, `s·(e_0 + 1)` then `s·e_j` on the generic channel,
@@ -303,7 +344,7 @@ product nodes means the one `Product`.
 
 ## 1. The registry
 
-### 1.1 What `family_circuit` returns
+### 1.1 What `family_circuit` and `recursion_circuit` return
 
 | id | family | constructor | channels | `Some` for | default height | S16 (`guests/addsub`) | S17 (`guests/control`) | S18 (`guests/alu`) | S19 (`guests/mem`) | S21 (`guests/keccak-test`) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -325,39 +366,70 @@ product nodes means the one `Product`.
 | 15 | `MOD_MUL` | `mod_mul::artifact(n)` | `mod_mul::channels()`: **`RANGE16`** since S26c | `16 ≤ n ≤ 30`, the floor derived from the channel's `BITS` | `2^16` | — | — | — | — | — |
 | 16 | `SHA256_COMP` | `sha256::artifact(n)` | `sha256::channels()`: **`RANGE16`** and **`XOR8`** since S26e | `16 ≤ n ≤ 30`, ditto | `2^18`, **raised from `2^8` at S26e** (§19) | — | — | — | — | — |
 | 17 | `EC_ADD` | `ec_add::artifact(n)` | `ec_add::channels()`: **`RANGE16`** — the first a delegation family carried | `16 ≤ n ≤ 30`, ditto | `2^16` | — | — | — | — | — |
+| 18 | `FIELD_WINDOWS` | `memory::field_window_artifact(n)`, through **`recursion_circuit`** alone: `family_circuit(18, n)` is `None` at every `n` | none | `0 ≤ n ≤ 30`, in `recursion_circuit` | `2^20` | — | — | — | — | — |
+| 19 | `FR_OP` | `fr_op::artifact(n)`, through `recursion_circuit` alone | `fr_op::channels()`: **`RANGE16`** | `16 ≤ n ≤ 30` in `recursion_circuit`, the floor derived from the channel's table; `None` at every `n` in `family_circuit` | `2^20` | — | — | — | — | — |
+| 20 | `P2_FIELD` | `p2_field::artifact(n)`, through `recursion_circuit` alone | `p2_field::channels()`: **`RANGE16`** | `16 ≤ n ≤ 30` in `recursion_circuit`, ditto | `2^18` | — | — | — | — | — |
+| 21 | `FIELD_IO` | `field_io::artifact(n)`, through `recursion_circuit` alone | `field_io::channels()`: **`RANGE16`** | `16 ≤ n ≤ 30` in `recursion_circuit`, ditto | `2^18` | — | — | — | — | — |
+| 22 | `FQ_OP` | `fq_op::artifact(n)`, through `recursion_circuit` alone | `fq_op::channels()`: **`TIMESTAMP`** and **`RANGE16`** — the one delegation family carrying `TIMESTAMP` | `19 ≤ n ≤ 30` in `recursion_circuit`, the floor derived from `TIMESTAMP`'s table; `None` at every `n` in `family_circuit` | `2^20`, forced (§25.1) | — | — | — | — | — |
+
+**Families 18 to 22 are the recursion registry's alone.** `constraints::recursion_circuit` is the
+recursion format's registry (`recursion.md` §1.2), and `VmConfig::circuit` takes it for a config
+holding `FIELD_WINDOWS`, which `program::decode_program` lists exactly when the linked binary
+declares one of `program::FIELD_DELEGATIONS` — `FR_OP`, `P2_FIELD`, `FIELD_IO` and `FQ_OP`. Its
+arms for families 18 to 22 are guarded by the registry, so `family_circuit` returns `None` for
+each at every `n` and no base-format key can name one. For every family above it returns
+`family_circuit`'s `FamilyCircuit` byte for byte, at every height, with one exception, family 0
+(§3.11); `crates/constraints/tests/recursion.rs` asserts both halves. None of the five
+statements in the table declares a field family, so each is a base-format statement and the five
+columns read "—" for families 18 to 22. The recursion-format statement is
+`crates/prover/tests/field_ops.rs`': `guests/field-ops`, one shard of each of the five, `FQ_OP`
+at `2^20` beside the execution families and the other four at `2^16`.
+
+| id | family | constructor | channels | `Some` for | default height |
+| --- | --- | --- | --- | --- | --- |
+| 0 | `ADD_SUB_LUI_AUIPC`, recursion format | `add_sub::recursion_artifact(n)` | `add_sub::recursion_channels()`: `TIMESTAMP`, `RANGE16`, `DECODER`, with multiplicities at `W[36..39]` | `19 ≤ n ≤ 30` | `2^22`, as in the base format; the recursion programs run it at `2^20` (`recursion.txt`) |
+
+Its fill is `fill::add_sub`, the base form's, which reads the config's format.
 
 A verifying key carries only menu heights (`constants::family::HEIGHT_MENU`, **`2^8` to `2^22`
 since S21, with `2^12` inserted at index 1 by S-STREAM**),
 which `VmConfig::from_bytes` enforces, so `n` is 8, 12, 16, 18, 20 or 22 in any key — **8 since
 S21**, the delegation height the menu opens with (§12.1), and **12 since S-STREAM**, the two
-public families' pinned height and nothing else's (§15.1, §16.1); §21 observation 1 notes the
+public families' pinned height and nothing else's (§15.1, §16.1); §26 observation 1 notes the
 other values the registry accepts. The
 prover pairs each circuit with a fill,
 `prover::family_fill`: the private `fill::add_sub` for family 0, `fill::jump_branch_slt` for 1,
 `fill::shift_bitwise` for 2, `fill::mul_div` for 3, `fill::mem_word` for 4, `fill::mem_subword`
 for 5, `fill::atomics` for 6, `fill::window` for 7, 8 **and 13**, `fill::keccak_f` for 9,
 `fill::poseidon2` for 10, `fill::fr_arith` for 11, `fill::public_input` for 12,
-`fill::advice` for 14, since S26 `fill::mod_mul` for 15, and since S26c
-`fill::sha256_comp` for 16 and `fill::ec_add` for 17.
-**Every family is provable at S26c.**
+`fill::advice` for 14, since S26 `fill::mod_mul` for 15, since S26c
+`fill::sha256_comp` for 16 and `fill::ec_add` for 17, and since S-RECURSION
+`fill::field_window` for 18, `fill::fr_op` for 19, `fill::p2_field` for 20, `fill::field_io` for
+21 and `fill::fq_op` for 22. **Every family is provable**, in the registry that holds it.
 
 **Two families' `Some` range is no longer the whole menu, and that is S26c.**
 `MOD_MUL` and `EC_ADD` carry `RANGE16`, whose table needs sixteen variables, so
 `family_circuit` returns `None` for either below `2^16` — and the guard that says so is
-**derived** rather than listed: it reads each family's own `channels()` and takes the widest
-range channel's `BITS`, testing the floor before the artifact is built. Until S26c it named
-the seven execution families explicitly with a delegation family's arm below it, which worked
-only while no delegation family had a channel (`docs/spec/lookup.md` §3,
-`docs/spec/delegation.md` §10.3). The practical consequence is in `crates/prover/tests/common`:
-`MOD_MUL_FIXTURE_VARS = 8` is gone, because that height no longer exists for the family.
+**derived** rather than listed: it reads each family's own `channels()` and takes the most any
+one of their tables needs, `lookup::table_vars`, testing the floor before the artifact is built
+(the widest range channel's `BITS` until S26d, when `XOR8`'s 65,536-row table, not a range
+channel's, made that reading wrong). Until S26c it named the seven execution families
+explicitly with a delegation family's arm below it, which worked only while no delegation family
+had a channel (`docs/spec/lookup.md` §3, `docs/spec/delegation.md` §10.3). The practical
+consequence is in `crates/prover/tests/common`: `MOD_MUL_FIXTURE_VARS = 8` is gone, because that
+height no longer exists for the family. The recursion registry's field families take their
+floors the same way: 16 for `FR_OP`, `P2_FIELD` and `FIELD_IO`, whose one channel is `RANGE16`,
+and **19** for `FQ_OP`, whose `TIMESTAMP` table needs nineteen variables — an execution
+family's floor, which on this menu is `2^20`.
 
-**The last three rows are in every `VmConfig`, and two of them prove a shard in every
+**Families 12, 13 and 14 are in every `VmConfig`, and two of them prove a shard in every
 statement.** `program::decode_program` lists families 12, 13 and 14 unconditionally, under the
-same presence rule that lists `INIT_TEARDOWN` and `ZERO_WINDOWS` — a **window family is in every
-config**, and `decode_program`'s three rules stay three — and `verifier_core::window_height`,
-inside `VmConfig::from_bytes`, refuses a config missing any of them or carrying either public
-family at a height other than
-`family::PUBLIC_WINDOW_HEIGHT`. `verifier_core::check_memory_windows` then requires
+same presence rule that lists `INIT_TEARDOWN` and `ZERO_WINDOWS` — a **RAM window family is in
+every config**, and `decode_program`'s three rules stay three — and
+`verifier_core::window_height`, inside `VmConfig::from_bytes`, refuses a config missing any of
+them or carrying either public family at a height other than `family::PUBLIC_WINDOW_HEIGHT`.
+`FIELD_WINDOWS`, the field memory's window family, is outside both rules: it is present exactly
+when the binary declares a field family, and `window_height` does not read it (§21.1). `verifier_core::check_memory_windows` then requires
 `shard_counts[PUBLIC_INPUT]` and `shard_counts[PUBLIC_OUTPUT]` to be exactly 1, because a count a
 prover could drop is a way to publish nothing while having published something; a program that
 ignores public values publishes an empty input and an empty journal and pays two `2^12`-row
@@ -433,8 +505,8 @@ than written out twenty times.
 
 ```text
 circuit             n  lists (row-wise + halving)  top     M      W   S  V  committed    inner  enforcing (d1/d2)  lookups (ts/r16/gen/dec/xor8)  outputs  relations        bytes
-ADD_SUB_LUI_AUIPC  20  25 (5 + 20)                 L25    27     33   7  2         67      298  57 (5/52)          15 (10/4/0/1)                   8        355       68,130
-ADD_SUB_LUI_AUIPC  22  27 (5 + 22)                 L27    27     33   7  2         67      314  57 (5/52)          15 (10/4/0/1)                   8        371       69,220
+ADD_SUB_LUI_AUIPC  20  25 (5 + 20)                 L25    27     35   7  2         69      298  63 (5/58)          15 (10/4/0/1)                   8        361       70,974
+ADD_SUB_LUI_AUIPC  22  27 (5 + 22)                 L27    27     35   7  2         69      314  63 (5/58)          15 (10/4/0/1)                   8        377       72,064
 JUMP_BRANCH_SLT    20  25 (5 + 20)                 L25    21     44  10  2         75      372  42 (3/39)          22 (8/11/2/1)                  10        414       75,608
 JUMP_BRANCH_SLT    22  27 (5 + 22)                 L27    21     44  10  2         75      392  42 (3/39)          22 (8/11/2/1)                  10        434       76,980
 SHIFT_BITWISE      20  26 (6 + 20)                 L26    21     61  10  2         92      458  48 (9/39)          39 (8/24/6/1)                  10        506      101,465
@@ -465,10 +537,26 @@ SHA256_COMP        18  28 (10 + 18)               L28   104    520   0  4       
 EC_ADD             16   28 (12 + 16)               L28   392  1,028   0  1      1,420    8,772  637 (131/506)      1,110 (0/1,110/0/0)             4      9,409    2,350,670
 ```
 
+What `recursion_circuit` returns and `family_circuit` does not — `ADD_SUB_LUI_AUIPC`'s recursion
+form (§3.11) and the five families only the recursion registry holds (§21–§25):
+
+```text
+recursion_circuit   n  lists (row-wise + halving)  top     M      W   S  V  committed    inner  enforcing (d1/d2)  lookups (ts/r16/gen/dec/xor8)  outputs  relations        bytes
+ADD_SUB_LUI_AUIPC  20  25 (5 + 20)                 L25    27     39   7  2         73      298  75 (5/70)          15 (10/4/0/1)                   8        373       77,987
+ADD_SUB_LUI_AUIPC  22  27 (5 + 22)                 L27    27     39   7  2         73      314  75 (5/70)          15 (10/4/0/1)                   8        389       79,077
+FIELD_WINDOWS      16  17 (1 + 16)                 L17     2      0   0  1          2       34  0                  0                               2         34        2,326
+FIELD_WINDOWS      20  21 (1 + 20)                 L21     2      0   0  1          2       42  0                  0                               2         42        2,758
+FR_OP              20  27 (7 + 20)                 L27    31     31   0  1         62      370  44 (9/35)          36 (0/36/0/0)                   4        414       89,741
+P2_FIELD           16  23 (7 + 16)                 L23    45    382   0  1        427      384  372 (6/366)        58 (0/58/0/0)                   4        756      293,915
+P2_FIELD           18  25 (7 + 18)                 L25    45    382   0  1        427      392  372 (6/366)        58 (0/58/0/0)                   4        764      294,425
+FIELD_IO           18  26 (8 + 18)                 L26    43     39   0  1         82      650  24 (5/19)          70 (0/70/0/0)                   4        674      164,713
+FQ_OP              20  27 (7 + 20)                 L27    48     73   0  2        121      630  38 (6/32)          80 (30/50/0/0)                  6        668      158,326
+```
+
 `committed` is layer 0's width, `M + W + S`. `inner` is the width of every layer above 0,
 summed: the multilinears that are never committed, one producing gate each. `relations` is
-producing plus enforcing gates. `bytes` is `to_bytes().len()`. The `n = 22` rows are the
-committed fixtures: `crates/constraints/tests/vectors/add_sub.bin` (SHA-256 `33d0ce5b…956d7f67`),
+producing plus enforcing gates. `bytes` is `to_bytes().len()`. The first block's `n = 22` rows
+are the committed fixtures: `crates/constraints/tests/vectors/add_sub.bin` (SHA-256 `a6113128…6cae38c7`),
 `jump_branch_slt.bin` (`99094d63…742c1305`), `shift_bitwise.bin` (`b0af9325…65e3fd4c`),
 `mul_div.bin` (`98f9f3bd…a30c357a`), `mem_word.bin` (`2c8d94ca…f7ca4500`), `mem_subword.bin`
 (`2c423eb1…9f596181`), `atomics.bin` (`ae58b1ca…643d3108`), `image_window.bin`
@@ -500,6 +588,18 @@ height: `2^8` for three, `2^18` for `KECCAK_F` — the second of its two rows ab
 `keccak.txt` pins — `2^16` for `MOD_MUL` and `EC_ADD`, and `2^12` for `PUBLIC_INPUT` and
 `PUBLIC_OUTPUT`.
 
+**The recursion registry's six circuits are committed by digest too, in one file.**
+`crates/constraints/tests/vectors/recursion.txt` holds each one's shape line and SHA-256:
+`FIELD_WINDOWS`, `FR_OP` and `FQ_OP` at `n = 20` and `P2_FIELD` and `FIELD_IO` at `n = 18`, each
+its family's default, and `ADD_SUB_LUI_AUIPC`'s recursion form at `n = 20`, the height the
+recursion programs run it at. `cargo run -p kat-gen -- recursion` writes the file, `recursion`
+being a default group, and CI regenerates and diffs it; unlike the `delegation` group's six
+lines, no kat-gen unit test holds a line to its constructor. The block's other rows —
+`FIELD_WINDOWS` and `P2_FIELD` at `n = 16`, the height `crates/prover/tests/field_ops.rs` proves
+them at, and the recursion form at `n = 22` — were read from `recursion_circuit` directly. **The
+largest is `P2_FIELD`, at 294,425 bytes**, a flat circuit of 372 enforcing gates where
+`POSEIDON2`'s same permutation is 2,056,361 bytes over 193 row-wise lists (§23.1).
+
 **`ADD_SUB_LUI_AUIPC` moved when the POSIX layer went, and by more than three columns.** `read`
 (63) and `write` (64) are retired and their numbers burned, so the `arg1` and `arg2` queries
 went with them and this family's `ram` query — the ecall transfer row's alone — went with the
@@ -523,7 +623,7 @@ shape follows: one more row-wise level, one more gate list, one more transition 
 **Add/sub was the fifth and is not any more**: its timestamp tree carried 16 obligations from
 S21 until the POSIX layer went, which with its table fraction was 17 leaves and padded to 32 for
 exactly mul/div's reason; at ten obligations it is eleven leaves in a 16-leaf tree and the level
-came back off (§3.6, §21 observation 20).
+came back off (§3.6, §26 observation 20).
 
 **Two of S19's three are six lists deep for the same reason, and `MEM_WORD` is five.**
 Mem_subword's `range16` tree carries 22 obligations and atomics' 19, so each pads to 32 (§8.6,
@@ -536,11 +636,12 @@ timestamp trees hold 8 and 12 obligations beside a table fraction; add/sub's fiv
 
 The proof a shard of each carries, at `n = 20`, by `shard-proof.md` §9's layout over the
 circuit's own shape — the formula `crates/prover/tests/mem.rs`' `proof_bytes` computes and
-`crates/prover/tests/alu.rs` and `mem.rs` each assert against `ShardProof::to_bytes().len()`:
+`crates/prover/tests/acceptance.rs`, `control.rs`, `alu.rs`, `mem.rs` and `keccak.rs` each assert
+against `ShardProof::to_bytes().len()`:
 
 ```text
 circuit             n   proof bytes
-ADD_SUB_LUI_AUIPC  20        57,004
+ADD_SUB_LUI_AUIPC  20        57,196
 JUMP_BRANCH_SLT    20        61,612
 SHIFT_BITWISE      20        68,564
 MUL_DIV            20        67,412
@@ -553,10 +654,13 @@ KECCAK_F           18       381,100
 A proof's length is one transition per gate list, `128` bytes per sumcheck round and `32` per
 final claim, plus `64` per **witness** commitment and `32` per output. **`MEM_WORD`'s is the
 shortest of the seven execution families and add/sub's is the second**, and the gap between them
-is 736 bytes: the two circuits have the same depth, the same `L1` and the same inner widths
-since the frame narrowed, so all of it is add/sub's nine extra witness commitments (576) and its
-five-column wider base layer (160). `MEM_SUBWORD`'s and `ATOMICS`' are the longest of the seven,
-on a wider base layer, a wider `L1` and the extra transition their `range16` trees buy.
+is 928 bytes: the two circuits have the same depth, the same `L1` and the same inner widths
+since the frame narrowed, so all of it is add/sub's eleven extra witness commitments (704) and
+its seven-column wider base layer (224). Add/sub's 57,196 is the formula's over the six-type
+artifact, 192 bytes above the four-type one's 57,004 — two selectors, each one more witness
+commitment and one more base-layer claim — and it is the literal `acceptance.rs` asserts.
+`MEM_SUBWORD`'s and `ATOMICS`' are the longest of the seven, on a wider base layer, a wider `L1`
+and the extra transition their `range16` trees buy.
 
 **`KECCAK_F`'s proof was 11,880,012 bytes until S26d and is 381,100 at `2^18`**, and the
 comparison is the clearest single number this page carries. S21's row was a whole permutation, so
@@ -567,6 +671,11 @@ claims for **10,922 permutations**: 34.9 proof bytes a permutation against 46,40
 `proof_bytes` is a closed form over the artifact and it reproduces S26d's measured 373,276 at
 `2^16` exactly, which is what licenses reading it forward. It is still the largest delegation
 proof of the six, and it is now of the same order as a CPU shard's rather than 173 times one.
+
+**The recursion registry's circuits have no row here.** A recursion-format shard commits its
+`M` and `W` columns as stacks (`recursion.md` §1.3), where `proof_bytes`' layout is one
+commitment a column, so the formula does not give their proofs' lengths and this page gives
+none.
 
 ### 1.3 Shape formulas
 
@@ -581,12 +690,19 @@ was the one exception — a layered circuit with 24 round blocks, assembled by `
   pads a side — `timestamp` with 16 fractions, `range16` with 8, `decoder` with 2; so `R = 4`,
   the timestamp tree setting it. Layers `L1 … L5` are 68, 34, 18, 10 and 8 wide, and
   `L6 … L{n+5}` 8 each: `inner = 138 + 8n`, which is mem_word's formula exactly. Relations
-  0–67 are list 0's leaves, 68–124 its enforcing gates, 125–158 list 1, 159–176 list 2,
-  177–186 list 3, 187–194 list 4, and halving list `k` (`5 ≤ k ≤ n + 4`) holds
-  `195 + 8(k − 5)` to `202 + 8(k − 5)`. The roots are relations `187 + 8n` to `194 + 8n`:
-  347–354 at `n = 20`, 363–370 at `n = 22`. **All of this moved when the POSIX layer went**,
+  0–67 are list 0's leaves, 68–130 its enforcing gates, 131–164 list 1, 165–182 list 2,
+  183–192 list 3, 193–200 list 4, and halving list `k` (`5 ≤ k ≤ n + 4`) holds
+  `201 + 8(k − 5)` to `208 + 8(k − 5)`. The roots are relations `193 + 8n` to `200 + 8n`:
+  353–360 at `n = 20`, 369–376 at `n = 22`. **All of this moved when the POSIX layer went**,
   as all of it had moved at S21 when the frame took an eighth query; the S21 numbers are in
-  `docs/handoff/S21-keccak256.md`, and §3.1 has the before-and-after.
+  `docs/handoff/S21-keccak256.md`, and §3.1 has the before-and-after. S26c's two delegation
+  types then moved every relation from 109 on up by six, three gates apiece, and no layer width.
+- **add/sub, recursion format.** The same five trees as add/sub's, so `R = 4`: `L1 … L5` are 68,
+  34, 18, 10 and 8 wide, and `inner = 138 + 8n`. Relations 0–67 are list 0's leaves, 68–142 its
+  75 enforcing gates, 143–176 list 1, 177–194 list 2, 195–204 list 3 and 205–212 list 4, and
+  halving list `k` (`5 ≤ k ≤ n + 4`) holds `213 + 8(k − 5)` to `220 + 8(k − 5)`. The roots are
+  relations `205 + 8n` to `212 + 8n`: 365–372 at `n = 20`, 381–388 at `n = 22`. Every number from
+  relation 109 up is the base form's plus 12 (§3.11).
 - **jump/branch/slt.** Six trees: `read` and `write` with 4 leaves each, `timestamp` with 16
   fractions, `range16` with 16, `generic` with 4, `decoder` with 2; so `R = 4`, the two
   16-fraction trees setting it. Layers `L1 … L5` are 84, 42, 22, 14 and 10 wide, and
@@ -632,14 +748,16 @@ was the one exception — a layered circuit with 24 round blocks, assembled by `
   296–307 list 4, 308–317 list 5, and halving list `k` (`6 ≤ k ≤ n + 5`) holds
   `318 + 10(k − 6)` to `327 + 10(k − 6)`. The roots are relations `308 + 10n` to `317 + 10n`:
   508–517 at `n = 20`, 528–537 at `n = 22`.
-- **The five windows.** `INIT_TEARDOWN`, `ZERO_WINDOWS`, `PUBLIC_INPUT`, `PUBLIC_OUTPUT` and
-  `ADVICE_WINDOWS` share one shape. Two trees of one leaf each, so `R = 0`: `L1 … L{n+1}` are 2
-  wide and `inner = 2n + 2`. Relation 0 is the teardown leaf, 1 the init leaf, and halving list
-  `k` (`1 ≤ k ≤ n`) holds `2k` (read side) and `2k + 1` (write side). The roots are relations
-  `2n` and `2n + 1`: 24 and 25 at the two public families' `n = 12`, 44 and 45 at
-  `ADVICE_WINDOWS`' default `n = 22`. The three constructors differ only in the base layer and
-  the init leaf — `S[0]`, nothing, or `M[2]` (§0.6) — so every relation number, node name and
-  layer width above `L1` is the same in all five.
+- **The six windows.** `INIT_TEARDOWN`, `ZERO_WINDOWS`, `PUBLIC_INPUT`, `PUBLIC_OUTPUT`,
+  `ADVICE_WINDOWS` and the recursion registry's `FIELD_WINDOWS` share one shape. Two trees of one
+  leaf each, so `R = 0`: `L1 … L{n+1}` are 2 wide and `inner = 2n + 2`. Relation 0 is the
+  teardown leaf, 1 the init leaf, and halving list `k` (`1 ≤ k ≤ n`) holds `2k` (read side) and
+  `2k + 1` (write side). The roots are relations `2n` and `2n + 1`: 24 and 25 at the two public
+  families' `n = 12`, 40 and 41 at `FIELD_WINDOWS`' default `n = 20`, 44 and 45 at
+  `ADVICE_WINDOWS`' default `n = 22`. The four constructors differ only in the base layer and
+  gate list 0's two leaves: the init value is `S[0]`, nothing or `M[2]` (§0.6), and
+  `field_window_artifact`'s stride is one cell where the RAM windows' is four bytes (§21.3). So
+  every relation number, node name and layer width above `L1` is the same in all six.
 - **keccak.** Two trees, `read` and `write`, of 64 leaves each — 50 frame words, the anchor, and
   13 pads a side — and no fraction tree at all, the family having no channel. `R` is 6, but the
   depth is **not** `1 + R + n`: the permutation's 24 blocks of 7 sub-layers stack above gate list
@@ -691,6 +809,46 @@ was the one exception — a layered circuit with 24 round blocks, assembled by `
   halving list `k` (`12 ≤ k ≤ n + 11`) holds `9,345 + 4(k − 12)` to `9,348 + 4(k − 12)`. The
   roots are relations `9,341 + 4n` to `9,344 + 4n`: 9,405–9,408 at `n = 16`.
 
+- **fr_op.** Three trees: `read` and `write` with 8 leaves each and **no pad** — four frame
+  words, the anchor and the three field accesses `a`, `b`, `d` — and `range16` with **64**
+  fractions, 36 obligations and a table fraction padding to it; so `R = 6`, the `range16` tree
+  setting it alone, an 8-leaf product tree being 3 deep. Layers `L1 … L7` are 144, 72, 36, 18,
+  10, 6 and 4 wide, and `L8 … L{n+7}` 4 each: `inner = 290 + 4n`. Relations 0–143 are list 0's
+  leaves, 144–187 its 44 enforcing gates, 188–259 list 1, 260–295 list 2, 296–313 list 3,
+  314–323 list 4, 324–329 list 5, 330–333 list 6, and halving list `k` (`7 ≤ k ≤ n + 6`) holds
+  `334 + 4(k − 7)` to `337 + 4(k − 7)`. The roots are relations `330 + 4n` to `333 + 4n`:
+  410–413 at `n = 20`. The recursion registry's alone (§22).
+
+- **p2_field.** Three trees: `read` and `write` with 16 leaves each — five frame words, the
+  anchor, eight field accesses and **two pads a side** — and `range16` with **64** fractions, 58
+  obligations and a table fraction padding to it; so `R = 6`, the `range16` tree setting it
+  alone, a 16-leaf product tree being 4 deep. Layers `L1 … L7` are 160, 80, 40, 20, 10, 6 and 4
+  wide, and `L8 … L{n+7}` 4 each: `inner = 320 + 4n`. Relations 0–159 are list 0's producing
+  gates, 160–531 its 372 enforcing gates, 532–611 list 1, 612–651 list 2, 652–671 list 3,
+  672–681 list 4, 682–687 list 5, 688–691 list 6, and halving list `k` (`7 ≤ k ≤ n + 6`) holds
+  `692 + 4(k − 7)` to `695 + 4(k − 7)`. The roots are relations `688 + 4n` to `691 + 4n`:
+  752–755 at `n = 16`, 760–763 at `n = 18`. The recursion registry's alone (§23).
+
+- **field_io.** Three trees: `read` and `write` with 16 leaves each — three frame words, the
+  anchor, eight data words and the cell, and **three pads a side** — and `range16` with **128**
+  fractions, 70 obligations and a table fraction padding to it; so `R = 7`, the `range16` tree
+  setting it alone, a 16-leaf product tree being 4 deep. Layers `L1 … L8` are 288, 144, 72, 36,
+  18, 10, 6 and 4 wide, and `L9 … L{n+8}` 4 each: `inner = 578 + 4n`. Relations 0–287 are list
+  0's leaves, 288–311 its 24 enforcing gates, 312–455 list 1, 456–527 list 2, 528–563 list 3,
+  564–581 list 4, 582–591 list 5, 592–597 list 6, 598–601 list 7, and halving list `k`
+  (`8 ≤ k ≤ n + 7`) holds `602 + 4(k − 8)` to `605 + 4(k − 8)`. The roots are relations
+  `598 + 4n` to `601 + 4n`: 670–673 at `n = 18`. The recursion registry's alone (§24).
+
+- **fq_op.** Four trees: `read` and `write` with 32 leaves each — four frame words, the anchor
+  and 13 field accesses, and **14 pads a side** — `timestamp` with 32 fractions (30 obligations,
+  the table fraction and one pad) and `range16` with **64** (50, the table fraction and 13 pads);
+  so `R = 6`, the `range16` tree setting it alone. Layers `L1 … L7` are 256, 128, 64, 32, 16, 8
+  and 6 wide, and `L8 … L{n+7}` 6 each: `inner = 510 + 6n`. Relations 0–255 are list 0's
+  leaves, 256–293 its 38 enforcing gates, 294–421 list 1, 422–485 list 2, 486–517 list 3,
+  518–533 list 4, 534–541 list 5, 542–547 list 6, and halving list `k` (`7 ≤ k ≤ n + 6`) holds
+  `548 + 6(k − 7)` to `553 + 6(k − 7)`. The roots are relations `542 + 6n` to `547 + 6n`:
+  662–667 at `n = 20`. The recursion registry's alone (§25).
+
 ---
 
 ## 2. The memory frame every execution family carries
@@ -729,7 +887,8 @@ word either — there are no transfer cycles — and it is a store's or an atomi
 only be answered by an invocation of that family and by nothing in RAM or a register (§12.4).
 
 **Which delegation family is a property of the row, not of the table, since S23.** One `deleg`
-query serves all four registered types — a second would need a seventh role — so its `AS` term
+query serves every registered type — six in the base format's `ADD_SUB_LUI_AUIPC` and ten in
+the recursion format's (§3.11); a second would need a seventh role — so its `AS` term
 is not a literal on the mask but one more `M` column, `deleg_space` at `M[1 + 5w]`, which the
 family pins to its type selectors with a degree-1 gate (`delegation.md` §5.1). A leaf may read
 no `W` column, which is why the tag cannot ride the selectors directly.
@@ -831,10 +990,11 @@ For the query `<q>` at slot `s`, with `m = <q>_mask`:
 constants are private to `add_sub.rs`). Normative spec: `shard-proof.md` §8. Fill:
 `prover::family_fill(0)`, the private `fill::add_sub`.
 
-**67 committed columns (27 `M`, 33 `W`, 7 `S`)** and two virtual tables. Gate list 0 writes 68
-leaves and holds 57 enforcing gates. 15 lookups on three channels, 8 outputs. At `n = 20`, the
+**69 committed columns (27 `M`, 35 `W`, 7 `S`)** and two virtual tables. Gate list 0 writes 68
+leaves and holds 63 enforcing gates. 15 lookups on three channels, 8 outputs. At `n = 20`, the
 height S16 proves, there are 25 gate lists, the top is `L25`, and the circuit has 298 inner
-columns and 355 relations. `artifact` panics unless the frame is `QUERIES` and the channels
+columns and 361 relations; at `n = 22`, the committed fixture's height, 27 lists, `L27`, 314
+inner columns and 377 relations. `artifact` panics unless the frame is `QUERIES` and the channels
 carry exactly 10, 4 and 1 obligations.
 
 **The frame is what sets those numbers, and it narrowed when the POSIX layer went.** `read`
@@ -852,8 +1012,12 @@ make. Immediately before the change the circuit was
 85 committed columns (42/36/7), 100 leaves, 65 enforcing gates, 21 lookups, 26 gate lists, 368
 inner columns and 433 relations at `n = 20`; three of those figures had already moved past what
 this page recorded at S23, S26's fourth delegation type (`MOD_MUL`) having added one `W`
-column, three enforcing gates and three relations. This entry is read from the current
-artifact throughout.
+column, three enforcing gates and three relations. **S26c then added two more types**,
+`SHA256_COMP`'s and `EC_ADD`'s, whose request selectors sit at `W[26]` and `W[27]`: two `W`
+columns, six enforcing gates and six relations, which moved `wrap` and every `W` column after it
+up by two and every relation from `ecall_is_exit` on up by six. This entry is read from the
+current artifact throughout: the committed `add_sub.bin`, SHA-256 `a6113128…6cae38c7`, at
+`n = 22`.
 
 **Two consequences are worth naming, because each undoes something S21 bought.** Five queries no
 longer fill an eight-leaf product tree, so each side pays **three** literal-1 pad leaves where
@@ -864,10 +1028,10 @@ layer widths are `MEM_WORD`'s exactly (§1.3, §7.7).
 
 **What did not move**: the frozen rows of `docs/spec/execution-trace.md`, the `deleg` mirror and
 everything S21 and S23 built on it, and the family's meaning. `EXIT` is still the only ecall
-that halts, and the family still refuses every ecall number but `EXIT`'s and the four registered
-delegations' (gates 93, 96, 99, 102 and 103). `artifact` also panics on every refusal of the
-assembly, among them `n < 19` (the 19-bit timestamp table needs 19 variables) and `n > 30`
-(`MAX_TRACE_VARS`); `family_circuit` returns `None` for both rather than calling it.
+that halts, and the family still refuses every ecall number but `EXIT`'s and the six delegation
+types this form knows (gates 93, 96, 99, 102, 105, 108 and 109). `artifact` also panics on every
+refusal of the assembly, among them `n < 19` (the 19-bit timestamp table needs 19 variables) and
+`n > 30` (`MAX_TRACE_VARS`); `family_circuit` returns `None` for both rather than calling it.
 
 ### 3.2 Row kinds
 
@@ -884,7 +1048,7 @@ kind is split by the code the decoded table puts in `imm`
 | `lui` | 5 (32) | the value loaded | pc rd | `imm` | 0; on this row only `wrap_boolean` constrains it, the sum and difference gates vanishing | the fall-through | yes |
 | system: fence | 0 (1) | `FENCE` = 2 | pc | 0 | 0; as on a lui row, only `wrap_boolean` constrains it | the fall-through | yes, `is_fence = 1` |
 | system: ecall | 0 (1) | `ECALL` = 0 | pc; rs1 = `x17`, reading 93; rs2 = `x10`; rd = `x10` | `a0` as read | 0; as on a lui row, only `wrap_boolean` constrains it | `HALT_PC` = 1 | `EXIT` only, `is_ecall = 1`, every `is_deleg_t = 0` |
-| system: a **delegation request** (S21; one row kind per type since S23) | 0 (1) | `ECALL` = 0 | pc; rs1 = `x17`, reading the type's number — `0x501`, `0x500`, `0x502` or `0x504`; rs2 = `x10`, the frame base; rd = `x10`; **deleg**, at that base | 0 | 0; as above | the fall-through | yes, `is_ecall = 1` **and** exactly one `is_deleg_t = 1` |
+| system: a **delegation request** (S21; one row kind per type since S23) | 0 (1) | `ECALL` = 0 | pc; rs1 = `x17`, reading the type's number — `0x507`, `0x500`, `0x502`, `0x504`, `0x508` or `0x506`; rs2 = `x10`, the frame base; rd = `x10`; **deleg**, at that base | 0 | 0; as above | the fall-through | yes, `is_ecall = 1` **and** exactly one `is_deleg_t = 1` |
 | system: ebreak | 0 (1) | `EBREAK` = 1 | — | — | — | — | never: no row satisfies `system_split` with the two code gates |
 | padding | none; all 0 | 0 | none | 0 | 0 | 0 | every row past the shard's last cycle |
 
@@ -901,11 +1065,11 @@ A delegation request is the family's second provable ecall kind and the only row
 gained since S16. It is an ordinary ecall row with one type selector set, one extra query, one
 extra memory column and three zeroings; what makes it *an invocation of that type* is nothing
 here — it is the mirror query's tuple meeting an invocation's in the one global multiset
-(§12.4 and its counterparts in §13, §14 and §18, `delegation.md` §5.3). **Which type is a
-property of the row, not of the frame**: the selector says which, and `deleg_space_rule` (§3.5,
-gate 121) copies that type's address-space tag into the row's `deleg_space` cell, which is what
-the mirror's leaf reads. The four types are one row kind here and four families elsewhere; this
-family never sees a delegation frame, a permutation or a delegation shard.
+(§12.4 and its counterparts in §13, §14, §18, §19 and §20, `delegation.md` §5.3). **Which type
+is a property of the row, not of the frame**: the selector says which, and `deleg_space_rule`
+(§3.5, gate 127) copies that type's address-space tag into the row's `deleg_space` cell, which
+is what the mirror's leaf reads. The six types are one row kind here and six families
+elsewhere; this family never sees a delegation frame, a permutation or a delegation shard.
 
 ### 3.3 The base layer
 
@@ -926,7 +1090,7 @@ the artifact. A leaf or obligation is named as in §3.4 and §3.6.
 | `M[6]` | `rs1_mask` | `frame(1, FIELD_MASK)` | rs1 present | 1 on add, sub, addi and every ecall row | leaves `read_rs1`, `write_rs1`; `rs1_mask_boolean`, `rs1_mask_rule`, `rs1_addr_rule`, `rs1_value_masked`; selector of `gap_hi_rs1`, `gap_lo_rs1` |
 | `M[7]` | `rs1_addr` | `frame(1, FIELD_ADDR)` | rs1 register | the decoded `rs1`, or 17 (`a7`) on an ecall row | leaves `read_rs1`, `write_rs1`; `rs1_addr_rule` |
 | `M[8]` | `rs1_read_ts` | `frame(1, FIELD_READ_TS)` | rs1 previous write | | leaf `read_rs1`; `gap_lo_rs1` |
-| `M[9]` | `rs1_read_value` | `frame(1, FIELD_READ_VALUE)` | rs1 value | the `a7` an ecall row reads | leaf `read_rs1`; `rs1_writes_back`, `deleg_9_number`, `deleg_10_number`, `deleg_11_number`, `deleg_15_number`, `ecall_is_exit`, `rs1_value_masked`, `add_addi_auipc`, `sub` |
+| `M[9]` | `rs1_read_value` | `frame(1, FIELD_READ_VALUE)` | rs1 value | the `a7` an ecall row reads | leaf `read_rs1`; `rs1_writes_back`, `deleg_9_number`, `deleg_10_number`, `deleg_11_number`, `deleg_15_number`, `deleg_16_number`, `deleg_17_number`, `ecall_is_exit`, `rs1_value_masked`, `add_addi_auipc`, `sub` |
 | `M[10]` | `rs1_write_value` | `frame(1, FIELD_WRITE_VALUE)` | rs1 written back | `rs1_read_value` | leaf `write_rs1`; `rs1_writes_back` |
 | `M[11]` | `rs2_mask` | `frame(2, FIELD_MASK)` | rs2 present | 1 on add, sub and every ecall row | leaves `read_rs2`, `write_rs2`; `rs2_mask_boolean`, `rs2_mask_rule`, `rs2_addr_rule`, `rs2_value_masked`; selector of `gap_hi_rs2`, `gap_lo_rs2` |
 | `M[12]` | `rs2_addr` | `frame(2, FIELD_ADDR)` | rs2 register | the decoded `rs2`, or 10 (`a0`) on an ecall row | leaves `read_rs2`, `write_rs2`; `rs2_addr_rule` |
@@ -943,7 +1107,7 @@ the artifact. A leaf or obligation is named as in §3.4 and §3.6.
 | `M[23]` | `deleg_read_ts` | `frame(4, FIELD_READ_TS)` | Answer-tuple timestamp | 0, the stamp no cycle can make | leaf `read_deleg`; `deleg_read_ts_zero`, `gap_lo_deleg` |
 | `M[24]` | `deleg_read_value` | `frame(4, FIELD_READ_VALUE)` | Answer-tuple value | 0 | leaf `read_deleg`; `deleg_read_value_zero` |
 | `M[25]` | `deleg_write_value` | `frame(4, FIELD_WRITE_VALUE)` | Consumed-anchor value | **free**; 0 in an honest fill | leaf `write_deleg` **and nothing else**: no gate, no obligation, no table (§3.10) |
-| `M[26]` | `deleg_space` | `memory::deleg_space(5)` | Requested delegation type | that type's `constants::address_space` tag — 4, 5, 6 or 7 — on a request row, 0 on every other | leaves `read_deleg`, `write_deleg`; `deleg_space_rule` |
+| `M[26]` | `deleg_space` | `memory::deleg_space(5)` | Requested delegation type | that type's `constants::address_space` tag — 4, 5, 6, 7, 8 or 9 — on a request row, 0 on every other | leaves `read_deleg`, `write_deleg`; `deleg_space_rule` |
 
 The frame's slots in `add_sub.rs` are `SLOT_PC = 0`, `SLOT_RS1 = 1`, `SLOT_RS2 = 2`,
 `SLOT_RD = 3` and `SLOT_DELEG = 4`, so `frame(3, ..)` is `frame(SLOT_RD, ..)` there. **Slot is
@@ -957,22 +1121,26 @@ all (§2.2).
 fifteen `M` columns and three gap chunks — the `arg1`, `arg2` and `ram` groups — were held to 0
 on every row by three `mask = 0` gates, committed and opened by every shard, and carried
 nothing; they were the I/O-binding stage's, and what that stage did with them was delete them
-(§21 observation 2).
+(§26 observation 2).
 
-**Why the type rides a memory column, and why one query serves all four.** The mirror's leaf
+**Why the type rides a memory column, and why one query serves all six.** The mirror's leaf
 has to name the requested type — the tag is its `AS` term — and a leaf may read no `W` column,
 because `W` is committed after the memory challenges (`memory.md` §8, `check_memory`'s
 provenance rule). The type selectors are `W` columns, so the tag crosses into the leaf through
 `deleg_space`, which `deleg_space_rule` pins to them; with one delegation family the tag *was*
-a literal on the mask, and with four it cannot be. And one `deleg` query serves every type
+a literal on the mask, and with six it cannot be. And one `deleg` query serves every type
 rather than one query apiece because a second mirror query would need a seventh
 `trace::Role` (`execution-trace.md` §7). `delegation.md` §5.1 is that rule, and §10.1 records
 what S21 wrote instead and why it was not implementable.
 
-**Witness columns, `W[0..33]`** — `W[0..8]` filled by `trace::build_frame_witness`, `W[7..30]`
-by `fill::add_sub` (which overwrites `rd_selected`), `W[30..33]` by
+**Witness columns, `W[0..35]`** — `W[0..8]` filled by `trace::build_frame_witness`, `W[7..32]`
+by `fill::add_sub` (which overwrites `rd_selected`), `W[32..35]` by
 `trace::build_multiplicities` inside `prover::shard_columns`; committed in
-`ShardProof::witness_commitments`, absorbed at S3 before `g` and `β`.
+`ShardProof::witness_commitments`, absorbed at S3 before `g` and `β`. The selectors are
+`add_sub::is_delegation(i)` and the seven columns after them `add_sub::wrap(types)` and its
+kin, each a function of how many delegation types the circuit knows; `add_sub::WRAP`,
+`RD_HI`, `PC_WRAP`, `NEXT_PC_HI` and `MULTIPLICITIES` are those functions at
+`constants::delegation::BASE_TYPES` = 6, this form's addresses (§3.11 is the other form).
 
 | address | name | Rust | descriptive name | holds on a live row | read by |
 | --- | --- | --- | --- | --- | --- |
@@ -996,19 +1164,21 @@ by `fill::add_sub` (which overwrites `rd_selected`), `W[30..33]` by
 | `W[17]` | `kind_add` | `add_sub::KINDS[3]`; `KIND_ADD` in `add_sub.rs` (index `add_sub_lui_auipc::ADD`) | add row | | `kind_add_boolean`, `decoded_mask_bits`, `rs1_mask_rule`, `rs2_mask_rule`, `rd_mask_rule`, `add_addi_auipc` |
 | `W[18]` | `kind_sub` | `add_sub::KINDS[4]`; `KIND_SUB` in `add_sub.rs` (index `add_sub_lui_auipc::SUB`) | sub row | | `kind_sub_boolean`, `decoded_mask_bits`, `rs1_mask_rule`, `rs2_mask_rule`, `rd_mask_rule`, `sub` |
 | `W[19]` | `kind_lui` | `add_sub::KINDS[5]`; `KIND_LUI` in `add_sub.rs` (index `add_sub_lui_auipc::LUI`) | lui row | | `kind_lui_boolean`, `decoded_mask_bits`, `rd_mask_rule`, `lui` |
-| `W[20]` | `is_ecall` | `add_sub::IS_ECALL` | Ecall row: the exit, or a delegation | 1 on a system row with code `ECALL` | `is_ecall_boolean`, `system_split`, `ecall_code`, `ecall_is_exit`, `deleg_9_is_an_ecall`, `deleg_10_is_an_ecall`, `deleg_11_is_an_ecall`, `deleg_15_is_an_ecall`, `rs1_mask_rule`, `rs2_mask_rule`, `rd_mask_rule`, `rs1_addr_rule`, `rs2_addr_rule`, `rd_addr_rule`, `exit_status`, `next_pc_rule` |
+| `W[20]` | `is_ecall` | `add_sub::IS_ECALL` | Ecall row: the exit, or a delegation | 1 on a system row with code `ECALL` | `is_ecall_boolean`, `system_split`, `ecall_code`, `ecall_is_exit`, `deleg_9_is_an_ecall`, `deleg_10_is_an_ecall`, `deleg_11_is_an_ecall`, `deleg_15_is_an_ecall`, `deleg_16_is_an_ecall`, `deleg_17_is_an_ecall`, `rs1_mask_rule`, `rs2_mask_rule`, `rd_mask_rule`, `rs1_addr_rule`, `rs2_addr_rule`, `rd_addr_rule`, `exit_status`, `next_pc_rule` |
 | `W[21]` | `is_fence` | `add_sub::IS_FENCE` | Fence row | 1 on a system row with code `FENCE` | `is_fence_boolean`, `system_split`, `fence_code` |
 | `W[22]` | `is_deleg_9` | `add_sub::IS_DELEGATION[0]`; `add_sub::IS_KECCAK`, S21's name kept | `KECCAK_F` request row | 1 on an ecall row whose `a7` is `0x507` (`0x501` until S26d retired it) | `is_deleg_9_boolean`, `deleg_9_is_an_ecall`, `deleg_9_number`, `ecall_is_exit`, `deleg_mask_rule`, `exit_status`, `deleg_space_rule`, `next_pc_rule` |
 | `W[23]` | `is_deleg_10` | `add_sub::IS_DELEGATION[1]` | `POSEIDON2` request row (S23) | 1 on an ecall row whose `a7` is `0x500` | `is_deleg_10_boolean`, `deleg_10_is_an_ecall`, `deleg_10_number`, `ecall_is_exit`, `deleg_mask_rule`, `exit_status`, `deleg_space_rule`, `next_pc_rule` |
 | `W[24]` | `is_deleg_11` | `add_sub::IS_DELEGATION[2]` | `FR_ARITH` request row (S23) | 1 on an ecall row whose `a7` is `0x502` | `is_deleg_11_boolean`, `deleg_11_is_an_ecall`, `deleg_11_number`, `ecall_is_exit`, `deleg_mask_rule`, `exit_status`, `deleg_space_rule`, `next_pc_rule` |
 | `W[25]` | `is_deleg_15` | `add_sub::IS_DELEGATION[3]` | `MOD_MUL` request row (S26) | 1 on an ecall row whose `a7` is `0x504` | `is_deleg_15_boolean`, `deleg_15_is_an_ecall`, `deleg_15_number`, `ecall_is_exit`, `deleg_mask_rule`, `exit_status`, `deleg_space_rule`, `next_pc_rule` |
-| `W[26]` | `wrap` | `add_sub::WRAP` | Carry or borrow | | `add_addi_auipc`, `sub`, `wrap_boolean` |
-| `W[27]` | `rd_hi` | `add_sub::RD_HI` | Result, high halfword | `rd_selected >> 16` | `rd_hi_range`, `rd_lo_range` |
-| `W[28]` | `pc_wrap` | `add_sub::PC_WRAP` | Next-pc overflow | 0 | `pc_wrap_boolean`, `next_pc_rule` |
-| `W[29]` | `next_pc_hi` | `add_sub::NEXT_PC_HI` | Next pc, high halfword | `pc_write_value >> 16` | `next_pc_hi_range`, `next_pc_lo_range` |
-| `W[30]` | `mult_timestamp` | `add_sub::MULTIPLICITIES[0]` | Timestamp-table count | per table row `t`: the gated gap chunks (`mask·chunk`) equal to `t`, credited to rows below `2^19` | leaf `timestamp_table_num` |
-| `W[31]` | `mult_range16` | `add_sub::MULTIPLICITIES[1]` | 16-bit-table count | per table row `t`: the gated halfwords (`pc_mask·halfword`) equal to `t`, credited to rows below `2^16` | leaf `range16_table_num` |
-| `W[32]` | `mult_decoder` | `add_sub::MULTIPLICITIES[2]` | Decoder-table count | per table row `t`: the live cycles at pc `2t`; and every padding row's switched-off tuple (`MINUS_ONE` in all seven positions) on the table's lowest non-live row, which is row 0, since pc 0 lies below `RAM_ORIGIN` and holds no instruction | leaf `decoder_table_num` |
+| `W[26]` | `is_deleg_16` | `add_sub::IS_DELEGATION[4]` | `SHA256_COMP` request row (S26c) | 1 on an ecall row whose `a7` is `0x508` (`0x505` until S26e retired it) | `is_deleg_16_boolean`, `deleg_16_is_an_ecall`, `deleg_16_number`, `ecall_is_exit`, `deleg_mask_rule`, `exit_status`, `deleg_space_rule`, `next_pc_rule` |
+| `W[27]` | `is_deleg_17` | `add_sub::IS_DELEGATION[5]` | `EC_ADD` request row (S26c) | 1 on an ecall row whose `a7` is `0x506` | `is_deleg_17_boolean`, `deleg_17_is_an_ecall`, `deleg_17_number`, `ecall_is_exit`, `deleg_mask_rule`, `exit_status`, `deleg_space_rule`, `next_pc_rule` |
+| `W[28]` | `wrap` | `add_sub::WRAP` | Carry or borrow | | `add_addi_auipc`, `sub`, `wrap_boolean` |
+| `W[29]` | `rd_hi` | `add_sub::RD_HI` | Result, high halfword | `rd_selected >> 16` | `rd_hi_range`, `rd_lo_range` |
+| `W[30]` | `pc_wrap` | `add_sub::PC_WRAP` | Next-pc overflow | 0 | `pc_wrap_boolean`, `next_pc_rule` |
+| `W[31]` | `next_pc_hi` | `add_sub::NEXT_PC_HI` | Next pc, high halfword | `pc_write_value >> 16` | `next_pc_hi_range`, `next_pc_lo_range` |
+| `W[32]` | `mult_timestamp` | `add_sub::MULTIPLICITIES[0]` | Timestamp-table count | per table row `t`: the gated gap chunks (`mask·chunk`) equal to `t`, credited to rows below `2^19` | leaf `timestamp_table_num` |
+| `W[33]` | `mult_range16` | `add_sub::MULTIPLICITIES[1]` | 16-bit-table count | per table row `t`: the gated halfwords (`pc_mask·halfword`) equal to `t`, credited to rows below `2^16` | leaf `range16_table_num` |
+| `W[34]` | `mult_decoder` | `add_sub::MULTIPLICITIES[2]` | Decoder-table count | per table row `t`: the live cycles at pc `2t`; and every padding row's switched-off tuple (`MINUS_ONE` in all seven positions) on the table's lowest non-live row, which is row 0, since pc 0 lies below `RAM_ORIGIN` and holds no instruction | leaf `decoder_table_num` |
 
 A switched-off obligation's gated tuple is 0 (`s·e` at `s = 0`), so row 0 of `mult_timestamp`
 and `mult_range16` counts every switched-off obligation: all 10 timestamp and all 4 `RANGE16`
@@ -1071,19 +1241,20 @@ other leaf takes its space from `memory::FRAME_SPACE`, a compile-time constant o
 the term is `(tag, mask)`; the mirror's is `(1, deleg_space, mask)`, the product
 `deleg_space · deleg_mask`, because one query serves every delegation type and which one is a
 property of the row (§2.2, `delegation.md` §5.1). `deleg_space` holds
-`address_space::DELEGATION_KECCAK_F` = 4, `DELEGATION_POSEIDON2` = 5, `DELEGATION_FR_ARITH` = 6
-or `DELEGATION_MOD_MUL` = 7, and `deleg_space_rule` is what ties it to the row's type selector.
+`address_space::DELEGATION_KECCAK_F` = 4, `DELEGATION_POSEIDON2` = 5, `DELEGATION_FR_ARITH` = 6,
+`DELEGATION_MOD_MUL` = 7, `DELEGATION_SHA256_COMP` = 8 or `DELEGATION_EC_ADD` = 9, and
+`deleg_space_rule` is what ties it to the row's type selector.
 A row requesting nothing has `deleg_space` 0 and `deleg_mask` 0 alike, so the leaf is the
 literal 1 there whichever way it is read.
 
 Four gates below pin what this pair may be — `deleg_space_rule`, `deleg_read_ts_zero`,
 `deleg_read_value_zero` and `deleg_addr_rule` — and together they say a request of type `t`
 reads the tuple `T(AS_t, rs2_read_value, 0, 0)` and writes
-`T(AS_t, rs2_read_value, 4·cycle + 3, deleg_write_value)`. Only an invocation of §12, §13, §14
-or §18 writes a timestamp-0 tuple in its own space, and only a request of that type reads one,
-which is what makes the pairing 1:1 (`delegation.md` §5.3). The tags are pairwise distinct —
-the same `const` assertion in `add_sub.rs` that holds the ecall numbers apart holds the tags
-apart — so a request of one type cannot be answered by an invocation of another.
+`T(AS_t, rs2_read_value, 4·cycle + 3, deleg_write_value)`. Only an invocation of §12, §13, §14,
+§18, §19 or §20 writes a timestamp-0 tuple in its own space, and only a request of that type
+reads one, which is what makes the pairing 1:1 (`delegation.md` §5.3). The tags are pairwise
+distinct — the same `const` assertion in `add_sub.rs` that holds the ecall numbers apart holds
+the tags apart — so a request of one type cannot be answered by an invocation of another.
 
 Two of them in full:
 
@@ -1102,7 +1273,7 @@ L{1}[12]  write_deleg
 **The `timestamp` fraction tree**, `L1[16..48]`: 16 fractions, the table's then 10 gap
 obligations then 5 pads. Fraction `i` is `(L1[16 + 2i], L1[17 + 2i])`, named `<node>_num` and
 `<node>_den`. Eleven leaves fit a 16-leaf tree with room to spare, which is why this circuit is
-five row-wise lists deep and not six (§1.3, §21 observation 20).
+five row-wise lists deep and not six (§1.3, §26 observation 20).
 
 | fraction | `L1` | node | numerator | denominator (named) |
 | --- | --- | --- | --- | --- |
@@ -1162,9 +1333,9 @@ L{1}[67]  decode_row_den
               the claimed row at pc_mask = 1, and the table's MINUS_ONE padding row at 0
 ```
 
-### 3.5 Gate list 0: the 57 enforcing gates
+### 3.5 Gate list 0: the 63 enforcing gates
 
-Relations 68–124, in list order. Each block gives the relation number, the name, what the gate
+Relations 68–130, in list order. Each block gives the relation number, the name, what the gate
 is for, its shape and degree, the constructor, the stored positional form, and the named form,
 factored where that is easier to read. Every factoring re-expands to the stored terms.
 
@@ -1197,7 +1368,7 @@ factored where that is easier to read. Every factoring re-expands to the stored 
             no load — and the two ecall-argument queries that carried the other two gates went
             with the calls that used them (ecall-abi.md §4). `deleg` is NOT read-only and has
             no such gate: it reads the answer tuple an invocation wrote and writes a tuple of
-            its own, which is what makes the pairing 1:1 (delegation.md §5.3). Gates 118–121
+            its own, which is what makes the pairing 1:1 (delegation.md §5.3). Gates 124–127
             pin what it may read instead.
 
 ────────────────────────────────────────────────────────────────────────────────────────────
@@ -1238,7 +1409,7 @@ factored where that is easier to read. Every factoring re-expands to the stored 
             write-backs and x0's initial 0, every read of x0 returns 0.
 ```
 
-**B. What the row is (79–103)**
+**B. What the row is (79–109)**
 
 ```text
 ────────────────────────────────────────────────────────────────────────────────────────────
@@ -1261,10 +1432,10 @@ factored where that is easier to read. Every factoring re-expands to the stored 
                   + 32·kind_lui − decoded_mask
 
   reads as  the bits are the mask the decoder lookup binds. One-hotness is not here: on a
-            live row an all-zero mask satisfies all 57 gates, and only the decoder table,
+            live row an all-zero mask satisfies all 63 gates, and only the decoder table,
             whose masks are single bits, refuses it (lookup.md §10). Two bits that each ask
             for an rd write (any two of addi, auipc, add, sub, lui, or the system bit read as
-            is_ecall beside one of them) are refused by 106 with 71, since rd_mask comes out
+            is_ecall beside one of them) are refused by 112 with 71, since rd_mask comes out
             2. The system bit read as is_fence beside any one other bit passes every gate,
             and only the decoder table refuses it. On a padding row the decoder lookup is
             off, so no table row binds the bits and only the gates above constrain them; the
@@ -1303,14 +1474,14 @@ factored where that is easier to read. Every factoring re-expands to the stored 
                          system_split then fails: no ebreak row is provable.
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-91–102  three gates per delegation type, in constants::delegation::TYPES order
+91–108  three gates per delegation type, in constants::delegation::TYPES order
                                                                         Quadratic, degree 2
-        code  add_sub::artifact, the loop over DELEGATIONS                          S23, S26
+        code  add_sub::artifact, build's loop over DELEGATIONS[..BASE_TYPES]  S23, S26, S26c
 
   91  is_deleg_9_boolean    0 = W[22] − W[22]·W[22]    0 = is_deleg_9  − is_deleg_9²
   92  deleg_9_is_an_ecall   0 = W[22] − W[22]·W[20]    0 = is_deleg_9·(1 − is_ecall)
-  93  deleg_9_number        0 = −1281·W[22] + W[22]·M[9]
-                                                       0 = is_deleg_9·(rs1_read_value − 0x501)
+  93  deleg_9_number        0 = −1287·W[22] + W[22]·M[9]
+                                                       0 = is_deleg_9·(rs1_read_value − 0x507)
   94  is_deleg_10_boolean   0 = W[23] − W[23]·W[23]    0 = is_deleg_10 − is_deleg_10²
   95  deleg_10_is_an_ecall  0 = W[23] − W[23]·W[20]    0 = is_deleg_10·(1 − is_ecall)
   96  deleg_10_number       0 = −1280·W[23] + W[23]·M[9]
@@ -1323,36 +1494,48 @@ factored where that is easier to read. Every factoring re-expands to the stored 
   101 deleg_15_is_an_ecall  0 = W[25] − W[25]·W[20]    0 = is_deleg_15·(1 − is_ecall)
   102 deleg_15_number       0 = −1284·W[25] + W[25]·M[9]
                                                        0 = is_deleg_15·(rs1_read_value − 0x504)
+  103 is_deleg_16_boolean   0 = W[26] − W[26]·W[26]    0 = is_deleg_16 − is_deleg_16²
+  104 deleg_16_is_an_ecall  0 = W[26] − W[26]·W[20]    0 = is_deleg_16·(1 − is_ecall)
+  105 deleg_16_number       0 = −1288·W[26] + W[26]·M[9]
+                                                       0 = is_deleg_16·(rs1_read_value − 0x508)
+  106 is_deleg_17_boolean   0 = W[27] − W[27]·W[27]    0 = is_deleg_17 − is_deleg_17²
+  107 deleg_17_is_an_ecall  0 = W[27] − W[27]·W[20]    0 = is_deleg_17·(1 − is_ecall)
+  108 deleg_17_number       0 = −1286·W[27] + W[27]·M[9]
+                                                       0 = is_deleg_17·(rs1_read_value − 0x506)
 
   reads as  each is_deleg_t = 1 forces is_ecall = 1, so a delegation request is a system row
             with code ECALL and carries the whole ecall frame. Each flag is free on every
-            other row, where its booleanity gate alone holds it to 0 or 1 — and 107 then
-            makes a stray 1 ask for a deleg query, 121 makes it name that type's address
-            space, the number gate makes it ask a7 for that type's number, and 103 and 116
-            turn the exit gates off; the honest fill writes 0 in all four.
+            other row, where its booleanity gate alone holds it to 0 or 1 — and 113 then
+            makes a stray 1 ask for a deleg query, 127 makes it name that type's address
+            space, the number gate makes it ask a7 for that type's number, and 109 and 122
+            turn the exit gates off; the honest fill writes 0 in all six.
 
-            The four numbers are ecall::PRECOMPILE_KECCAK_F, PRECOMPILE_POSEIDON2,
-            PRECOMPILE_FR_ARITH and PRECOMPILE_MOD_MUL read straight from
+            The six numbers are ecall::PRECOMPILE_KECCAK_F, PRECOMPILE_POSEIDON2,
+            PRECOMPILE_FR_ARITH, PRECOMPILE_MOD_MUL, PRECOMPILE_SHA256_COMP and
+            PRECOMPILE_EC_ADD, read straight from the first BASE_TYPES = 6 rows of
             constants::delegation::TYPES, which is also where the family ids in the names
-            come from: no gate here spells a number of its own, and neither does 103. S21 had
+            come from: no gate here spells a number of its own, and neither does 109. S21 had
             one flag and four gates for the one delegation family; since S23 it is three
-            gates per type, the fourth having become 103's sum over types, and S26's MOD_MUL
-            cost exactly those three.
+            gates per type, the fourth having become 109's sum over types, and S26's MOD_MUL
+            and S26c's SHA256_COMP and EC_ADD cost exactly those three apiece. The keccak
+            number is 0x507 since S26d retired 0x501, and SHA256_COMP's 0x508 since S26e
+            retired 0x505; each move changed one literal here, in 93 and in 105.
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-103     ecall_is_exit — every ecall that is not a delegation is EXIT    Quadratic, degree 2
+109     ecall_is_exit — every ecall that is not a delegation is EXIT    Quadratic, degree 2
         code  add_sub::artifact
 
-  positional  0 = −93·W[20] + 93·W[22] + 93·W[23] + 93·W[24] + 93·W[25]
+  positional  0 = −93·W[20] + 93·W[22] + 93·W[23] + 93·W[24] + 93·W[25] + 93·W[26] + 93·W[27]
                   + W[20]·M[9] − W[22]·M[9] − W[23]·M[9] − W[24]·M[9] − W[25]·M[9]
-  named       0 = (is_ecall − is_deleg_9 − is_deleg_10 − is_deleg_11 − is_deleg_15)
-                  · (rs1_read_value − 93)
+                  − W[26]·M[9] − W[27]·M[9]
+  named       0 = (is_ecall − is_deleg_9 − is_deleg_10 − is_deleg_11 − is_deleg_15
+                   − is_deleg_16 − is_deleg_17) · (rs1_read_value − 93)
 
-  reads as  an ecall row's rs1 query reads a7 (gate 108), and a7 is 93 unless this row is a
+  reads as  an ecall row's rs1 query reads a7 (gate 114), and a7 is 93 unless this row is a
             delegation of some type. This is S16's `is_ecall·(rs1_read_value − 93)` with
             every delegation row subtracted out, one linear term and one product per type.
 
-  reads as (91–103)  **an ecall row is an exit or a delegation request of exactly one
+  reads as (91–109)  **an ecall row is an exit or a delegation request of exactly one
                      type.** Each is_deleg_t is a free boolean and is_exit is written out
                      as is_ecall − Σ_t is_deleg_t, so a row setting two type flags at once
                      would need a7 to be two distinct numbers, and a row setting one beside
@@ -1362,31 +1545,31 @@ factored where that is easier to read. Every factoring re-expands to the stored 
                      over every pair of registry rows, not a test, because a violation
                      there is a mis-numbered ABI and should not compile. So the factor is 0
                      or 1 on every row and never −1 or 2, which is what the three amended
-                     gates 103, 116 and 124 need of it.
+                     gates 109, 122 and 130 need of it.
                      **read (63) and write (64) reach none of this**: they are retired and
                      their numbers burned (ecall-abi.md §4), so an image issuing one asks
-                     a7 for a number no selector names and 103 refuses the row.
+                     a7 for a number no selector names and 109 refuses the row.
 ```
 
-**C. Which queries a row makes, and where (104–112)**
+**C. Which queries a row makes, and where (110–118)**
 
 ```text
 ────────────────────────────────────────────────────────────────────────────────────────────
-104     rs1_mask_rule — rs1 is read exactly by add, sub, addi, ecall    Quadratic, degree 2
+110     rs1_mask_rule — rs1 is read exactly by add, sub, addi, ecall    Quadratic, degree 2
         code  add_sub::mask_rule(frame(1, FIELD_MASK), [KIND_ADD, KIND_SUB, KIND_ADDI, IS_ECALL])
 
   positional  0 = M[6] − M[1]·W[17] − M[1]·W[18] − M[1]·W[15] − M[1]·W[20]
   named       0 = rs1_mask − pc_mask·(kind_add + kind_sub + kind_addi + is_ecall)
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-105     rs2_mask_rule — rs2 is read exactly by add, sub, ecall          Quadratic, degree 2
+111     rs2_mask_rule — rs2 is read exactly by add, sub, ecall          Quadratic, degree 2
         code  mask_rule(frame(2, FIELD_MASK), [KIND_ADD, KIND_SUB, IS_ECALL])
 
   positional  0 = M[11] − M[1]·W[17] − M[1]·W[18] − M[1]·W[20]
   named       0 = rs2_mask − pc_mask·(kind_add + kind_sub + is_ecall)
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-106     rd_mask_rule — rd is written by every kind but the fence        Quadratic, degree 2
+112     rd_mask_rule — rd is written by every kind but the fence        Quadratic, degree 2
         code  mask_rule(frame(3, FIELD_MASK),
                         [KIND_ADD, KIND_SUB, KIND_ADDI, KIND_AUIPC, KIND_LUI, IS_ECALL])
 
@@ -1395,7 +1578,7 @@ factored where that is easier to read. Every factoring re-expands to the stored 
   named       0 = rd_mask − pc_mask·(kind_add + kind_sub + kind_addi + kind_auipc
                                      + kind_lui + is_ecall)
 
-  reads as (104, 105, 106)  on a live row the bits are one-hot, so each sum is 0 or 1 and the
+  reads as (110, 111, 112)  on a live row the bits are one-hot, so each sum is 0 or 1 and the
                             mask is the kind's use of the query. A delegation row is an ecall
                             row, so it makes all three: a7 at slot 1, a0 at slot 2, a0 at
                             slot 3. On a padding row pc_mask = 0 and every mask is 0,
@@ -1405,46 +1588,48 @@ factored where that is easier to read. Every factoring re-expands to the stored 
                             arg2_mask = 0 and ram_mask = 0 — each refusing a query the frame
                             carried and no kind could make. The queries are gone, so the
                             gates refuse nothing representable and went with them
-                            (ecall-abi.md §4, §21 observation 2).
+                            (ecall-abi.md §4, §26 observation 2).
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-107     deleg_mask_rule — the mirror query is a delegation row's alone  Quadratic, degree 2
+113     deleg_mask_rule — the mirror query is a delegation row's alone  Quadratic, degree 2
         code  mask_rule(frame(4, FIELD_MASK), &IS_DELEGATION)
 
-  positional  0 = M[21] − M[1]·W[22] − M[1]·W[23] − M[1]·W[24] − M[1]·W[25]
-  named       0 = deleg_mask − pc_mask·(is_deleg_9 + is_deleg_10 + is_deleg_11 + is_deleg_15)
+  positional  0 = M[21] − M[1]·W[22] − M[1]·W[23] − M[1]·W[24] − M[1]·W[25] − M[1]·W[26]
+                  − M[1]·W[27]
+  named       0 = deleg_mask − pc_mask·(is_deleg_9 + is_deleg_10 + is_deleg_11 + is_deleg_15
+                                         + is_deleg_16 + is_deleg_17)
 
   reads as  exactly the delegation rows make the mirror query, whatever their type, and
             every delegation row makes it. A row that set a type flag without making the
             query, or made the query without any flag, fails here — and since the mirror
             query is the request's half of the anchor, a request with no mirror query cannot
             balance against its invocation (delegation.md §5.3). The sum is 0 or 1 on every
-            row that passes 91–103, so this is the ordinary mask rule of 104–106 with the
-            four type flags as its `uses` list; it is what 121 pairs with, one saying the
+            row that passes 91–109, so this is the ordinary mask rule of 110–112 with the
+            six type flags as its `uses` list; it is what 127 pairs with, one saying the
             query is made and the other which type it names.
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-108     rs1_addr_rule — rs1's register is the decoded one, or a7        Quadratic, degree 2
+114     rs1_addr_rule — rs1's register is the decoded one, or a7        Quadratic, degree 2
         code  add_sub::addr_rule(1, DECODED_RS1, 17)
 
   positional  0 = M[6]·M[7] − M[6]·W[9] − 17·M[6]·W[20]
   named       0 = rs1_mask·(rs1_addr − decoded_rs1 − 17·is_ecall)
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-109     rs2_addr_rule — rs2's register is the decoded one, or a0        Quadratic, degree 2
+115     rs2_addr_rule — rs2's register is the decoded one, or a0        Quadratic, degree 2
         code  addr_rule(2, DECODED_RS2, 10)
 
   positional  0 = M[11]·M[12] − M[11]·W[10] − 10·M[11]·W[20]
   named       0 = rs2_mask·(rs2_addr − decoded_rs2 − 10·is_ecall)
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-110     rd_addr_rule — rd's register is the decoded one, or a0          Quadratic, degree 2
+116     rd_addr_rule — rd's register is the decoded one, or a0          Quadratic, degree 2
         code  addr_rule(3, DECODED_RD, 10)
 
   positional  0 = M[16]·M[17] − M[16]·W[11] − 10·M[16]·W[20]
   named       0 = rd_mask·(rd_addr − decoded_rd − 10·is_ecall)
 
-  reads as (108–110)  a present query's register is the table's; a system row's decoded
+  reads as (114–116)  a present query's register is the table's; a system row's decoded
                       registers are 0, so on an ecall row — exit or delegation of any type
                       alike — the constants name a7 and a0. The three gates key on is_ecall
                       and on no type flag, which is why a delegation row needs no address
@@ -1452,33 +1637,33 @@ factored where that is easier to read. Every factoring re-expands to the stored 
                       takes the ecall frame.
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-111     rs1_value_masked — an absent rs1 reads 0                        Quadratic, degree 2
+117     rs1_value_masked — an absent rs1 reads 0                        Quadratic, degree 2
         code  add_sub::value_masked(1)
 
   positional  0 = M[9] − M[6]·M[9]
   named       0 = (1 − rs1_mask)·rs1_read_value
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-112     rs2_value_masked — an absent rs2 reads 0                        Quadratic, degree 2
+118     rs2_value_masked — an absent rs2 reads 0                        Quadratic, degree 2
         code  value_masked(2)
 
   positional  0 = M[14] − M[11]·M[14]
   named       0 = (1 − rs2_mask)·rs2_read_value
 
-  reads as (111, 112)  the sum gate can add both operands on every kind: an addi row's
+  reads as (117, 118)  the sum gate can add both operands on every kind: an addi row's
                        absent rs2, and an auipc row's absent rs1 and rs2, add 0.
 ```
 
-**D. What the row computes (113–124)**
+**D. What the row computes (119–130)**
 
 ```text
 ────────────────────────────────────────────────────────────────────────────────────────────
-113     add_addi_auipc — the three sums, one gate                       Quadratic, degree 2
+119     add_addi_auipc — the three sums, one gate                       Quadratic, degree 2
         code  add_sub::artifact, the `sum` loop over [KIND_ADD, KIND_ADDI, KIND_AUIPC]
 
-  positional  0 = W[17]·M[9] + W[17]·M[14] + W[17]·W[12] − W[17]·W[7] − 2^32·W[17]·W[26]
-                + W[15]·M[9] + W[15]·M[14] + W[15]·W[12] − W[15]·W[7] − 2^32·W[15]·W[26]
-                + W[16]·M[9] + W[16]·M[14] + W[16]·W[12] − W[16]·W[7] − 2^32·W[16]·W[26]
+  positional  0 = W[17]·M[9] + W[17]·M[14] + W[17]·W[12] − W[17]·W[7] − 2^32·W[17]·W[28]
+                + W[15]·M[9] + W[15]·M[14] + W[15]·W[12] − W[15]·W[7] − 2^32·W[15]·W[28]
+                + W[16]·M[9] + W[16]·M[14] + W[16]·W[12] − W[16]·W[7] − 2^32·W[16]·W[28]
                 + W[16]·M[4]
   named, factored
     0 =   kind_add   · ( rs1_read_value + rs2_read_value + decoded_imm − rd_selected − 2^32·wrap )
@@ -1494,39 +1679,40 @@ factored where that is easier to read. Every factoring re-expands to the stored 
             its carry: both addends are below 2^32, so the sum is below 2^33.
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-114     sub — the difference                                            Quadratic, degree 2
+120     sub — the difference                                            Quadratic, degree 2
         code  add_sub::artifact
 
-  positional  0 = W[18]·M[9] − W[18]·M[14] − W[18]·W[7] + 2^32·W[18]·W[26]
+  positional  0 = W[18]·M[9] − W[18]·M[14] − W[18]·W[7] + 2^32·W[18]·W[28]
   named       0 = kind_sub·(rs1_read_value − rs2_read_value − rd_selected + 2^32·wrap)
 
   reads as  rs1 − rs2 = sel − 2^32·wrap: wrap is the borrow.
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-115     lui — the loaded value                                          Quadratic, degree 2
+121     lui — the loaded value                                          Quadratic, degree 2
         code  add_sub::artifact
 
   positional  0 = W[19]·W[12] − W[19]·W[7]
   named       0 = kind_lui·(decoded_imm − rd_selected)
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-116     exit_status — the exit row writes a0 back                       Quadratic, degree 2
+122     exit_status — the exit row writes a0 back                       Quadratic, degree 2
         code  add_sub::artifact
 
   positional  0 = W[20]·M[19] − W[20]·W[7] − W[22]·M[19] + W[22]·W[7]
                   − W[23]·M[19] + W[23]·W[7] − W[24]·M[19] + W[24]·W[7]
-                  − W[25]·M[19] + W[25]·W[7]
-  named       0 = (is_ecall − is_deleg_9 − is_deleg_10 − is_deleg_11 − is_deleg_15)
-                  · (rd_read_value − rd_selected)
+                  − W[25]·M[19] + W[25]·W[7] − W[26]·M[19] + W[26]·W[7]
+                  − W[27]·M[19] + W[27]·W[7]
+  named       0 = (is_ecall − is_deleg_9 − is_deleg_10 − is_deleg_11 − is_deleg_15
+                   − is_deleg_16 − is_deleg_17) · (rd_read_value − rd_selected)
 
   reads as  the exit row's result is a0 as read, and its rd query is x10, so x10's final
             value is the exit status verify_shard's step 10 compares with v_10. A delegation
-            row of any type is subtracted out here and answered by 117 instead: it writes 0
-            into a0, not a0 back (delegation.md §2). Same shape as 103's amendment, same
+            row of any type is subtracted out here and answered by 123 instead: it writes 0
+            into a0, not a0 back (delegation.md §2). Same shape as 109's amendment, same
             reason, and a new type costs it two more products and no degree.
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-117     deleg_writes_no_register — a delegation answers 0               Quadratic, degree 2
+123     deleg_writes_no_register — a delegation answers 0               Quadratic, degree 2
         code  add_sub::artifact                                                         S21
 
   positional  0 = M[21]·W[7]
@@ -1534,26 +1720,26 @@ factored where that is easier to read. Every factoring re-expands to the stored 
 
   reads as  on a delegation row rd_selected is 0, so with 78 the rd query writes 0 into a0 —
             the frozen answer of every delegation call on an executor that has the circuit
-            (delegation.md §2). This is the first of the three request-side zeroings; 118 and
-            119 are the other two. All three key on deleg_mask and not on a type flag, so
+            (delegation.md §2). This is the first of the three request-side zeroings; 124 and
+            125 are the other two. All three key on deleg_mask and not on a type flag, so
             they are one gate apiece however many types there are.
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-118     deleg_read_ts_zero — the mirror query reads the answer tuple    Quadratic, degree 2
+124     deleg_read_ts_zero — the mirror query reads the answer tuple    Quadratic, degree 2
         code  add_sub::artifact                                                         S21
 
   positional  0 = M[21]·M[23]
   named       0 = deleg_mask·deleg_read_ts
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-119     deleg_read_value_zero                                           Quadratic, degree 2
+125     deleg_read_value_zero                                           Quadratic, degree 2
         code  add_sub::artifact                                                         S21
 
   positional  0 = M[21]·M[24]
   named       0 = deleg_mask·deleg_read_value
 
-  reads as (118, 119)  the tuple the request reads is T(deleg_space, deleg_addr, 0, 0)
-                       exactly, and 121 is what fixes deleg_space. Only an invocation writes
+  reads as (124, 125)  the tuple the request reads is T(deleg_space, deleg_addr, 0, 0)
+                       exactly, and 127 is what fixes deleg_space. Only an invocation writes
                        a timestamp-0 tuple in its own space, and it writes one per row, so
                        the read pairs with an invocation of the type it named and with
                        nothing else.
@@ -1562,50 +1748,53 @@ factored where that is easier to read. Every factoring re-expands to the stored 
                        tag (delegation.md §5.2, §5.3).
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-120     deleg_addr_rule — the mirror is at the frame base handed over   Quadratic, degree 2
+126     deleg_addr_rule — the mirror is at the frame base handed over   Quadratic, degree 2
         code  add_sub::artifact                                                         S21
 
   positional  0 = M[21]·M[22] − M[21]·M[14]
   named       0 = deleg_mask·(deleg_addr − rs2_read_value)
 
   reads as  the anchor's address is the a0 the request passed — the same a0 the rs2 query
-            read at slot 2 and gate 109 pinned to register 10. So the invocation that answers
+            read at slot 2 and gate 115 pinned to register 10. So the invocation that answers
             this request permutes the frame at this pointer and no other (delegation.md §5.1).
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-121     deleg_space_rule — the mirror's leaf names the requested type   Linear, degree 1
+127     deleg_space_rule — the mirror's leaf names the requested type   Linear, degree 1
         code  add_sub::artifact                                                         S23
 
-  positional  0 = M[26] − 4·W[22] − 5·W[23] − 6·W[24] − 7·W[25]
+  positional  0 = M[26] − 4·W[22] − 5·W[23] − 6·W[24] − 7·W[25] − 8·W[26] − 9·W[27]
   named       0 = deleg_space − (4·is_deleg_9 + 5·is_deleg_10 + 6·is_deleg_11
-                                 + 7·is_deleg_15)
+                                 + 7·is_deleg_15 + 8·is_deleg_16 + 9·is_deleg_17)
 
   reads as  the literals are address_space::DELEGATION_KECCAK_F, DELEGATION_POSEIDON2,
-            DELEGATION_FR_ARITH and DELEGATION_MOD_MUL, read through
-            constants::delegation::TYPES; the gate spells no tag of its own. It is what
+            DELEGATION_FR_ARITH, DELEGATION_MOD_MUL, DELEGATION_SHA256_COMP and
+            DELEGATION_EC_ADD, read through constants::delegation::TYPES; the gate spells no
+            tag of its own. It is what
             carries the type into the mirror's two leaves (§3.4), which may not read the W
             selectors themselves: a leaf reading a W column is refused by check_memory, W
             being committed after the memory challenges (memory.md §8, delegation.md §5.1,
             §10.1). Ungated and degree 1, so it holds on every row of the shard — on a row
             requesting nothing it forces deleg_space = 0, because each is_deleg_t is 0 unless
-            is_ecall is 1 and is_ecall is 0 on a padding row. With 107 it is the whole of
+            is_ecall is 1 and is_ecall is 0 on a padding row. With 113 it is the whole of
             "which delegation, if any, this row asks for".
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-122     wrap_boolean          0 = W[26] − W[26]·W[26]      0 = wrap − wrap²
-123     pc_wrap_boolean       0 = W[28] − W[28]·W[28]      0 = pc_wrap − pc_wrap²
+128     wrap_boolean          0 = W[28] − W[28]·W[28]      0 = wrap − wrap²
+129     pc_wrap_boolean       0 = W[30] − W[30]·W[30]      0 = pc_wrap − pc_wrap²
         Quadratic, degree 2; code  add_sub::booleanity
 
 ────────────────────────────────────────────────────────────────────────────────────────────
-124     next_pc_rule — the fall-through, or HALT_PC on the exit row     Quadratic, degree 2
+130     next_pc_rule — the fall-through, or HALT_PC on the exit row     Quadratic, degree 2
         code  add_sub::artifact
 
-  positional  0 = M[5] + 2^32·W[28] − W[8] − W[20] + W[22] + W[23] + W[24] + W[25]
-                  + W[20]·W[8] − W[22]·W[8] − W[23]·W[8] − W[24]·W[8] − W[25]·W[8]
+  positional  0 = M[5] + 2^32·W[30] − W[8] − W[20] + W[22] + W[23] + W[24] + W[25] + W[26]
+                  + W[27] + W[20]·W[8] − W[22]·W[8] − W[23]·W[8] − W[24]·W[8] − W[25]·W[8]
+                  − W[26]·W[8] − W[27]·W[8]
   named       0 = pc_write_value + 2^32·pc_wrap
-                  − (1 − is_ecall + is_deleg_9 + is_deleg_10 + is_deleg_11 + is_deleg_15)
-                    ·decoded_next_pc
-                  − HALT_PC·(is_ecall − is_deleg_9 − is_deleg_10 − is_deleg_11 − is_deleg_15)
+                  − (1 − is_ecall + is_deleg_9 + is_deleg_10 + is_deleg_11 + is_deleg_15
+                     + is_deleg_16 + is_deleg_17)·decoded_next_pc
+                  − HALT_PC·(is_ecall − is_deleg_9 − is_deleg_10 − is_deleg_11 − is_deleg_15
+                             − is_deleg_16 − is_deleg_17)
                                                                       (HALT_PC = 1)
 
   reads as  next_pc + 2^32·pc_wrap is decoded_next_pc on every row but the exit row, and 1
@@ -1619,18 +1808,19 @@ factored where that is easier to read. Every factoring re-expands to the stored 
             fall-through is below 2^31, so pc_wrap is 0 on every live row.
 ```
 
-Of the 57 gates, **5 are degree 1**: the two write-backs, `decoded_mask_bits`, `system_split`
+Of the 63 gates, **5 are degree 1**: the two write-backs, `decoded_mask_bits`, `system_split`
 and S23's `deleg_space_rule`. It was 10 before the frame narrowed — four write-backs and the
 three `mask = 0` rules for `arg1`, `arg2` and `ram` — so the deletion took **five degree-1 gates
 and three degree-2 ones**, the three mask booleanity gates of the queries that went, and the
-degree-2 count is 52 where it was 55. **Every gate S23 and S26 added
-or amended is degree 2, and `deleg_space_rule` is degree 1**: a registered delegation type
-costs three gates and a handful of terms rather than a gate list, because a type flag
-multiplies nothing but `is_ecall`, `pc_mask`, `rd_read_value`, `rd_selected`, `rs1_read_value`
-and `decoded_next_pc`, each of which some gate already multiplies. All 57 have constant 0, so
-each is 0 on the all-zero row, and the private `memory::assemble` records
-`zero_row_valid = true` (`build::zero_on_zero_row`). The padding row itself is all zeros in
-every assembled artifact (`build::assemble`), whatever its gates.
+degree-2 count went from 55 to 52; S26c's two delegation types then added six degree-2 gates,
+and it is 58. **Every gate S23, S26 and S26c added or amended is degree 2, and
+`deleg_space_rule` is degree 1**: a registered delegation type costs three gates and a handful
+of terms rather than a gate list, because a type flag multiplies nothing but `is_ecall`,
+`pc_mask`, `rd_read_value`, `rd_selected`, `rs1_read_value` and `decoded_next_pc`, each of which
+some gate already multiplies. All 63 have constant 0, so each is 0 on the all-zero row, and the
+private `memory::assemble` records `zero_row_valid = true` (`build::zero_on_zero_row`). The
+padding row itself is all zeros in every assembled artifact (`build::assemble`), whatever its
+gates.
 
 ### 3.6 The 15 lookups
 
@@ -1650,10 +1840,10 @@ every assembled artifact (`build::assemble`), whatever its gates.
 | 7 | `gap_lo_rd` | `TIMESTAMP` | `M[16]` | `4·M[0] − M[18] − 2^19·W[3] + 2` | `4·cycle − rd_read_ts − 2^19·rd_gap_hi + 2` | `< 2^19` |
 | 8 | `gap_hi_deleg` | `TIMESTAMP` | `M[21]` | `W[4]` | `deleg_gap_hi` | `< 2^19` |
 | 9 | `gap_lo_deleg` | `TIMESTAMP` | `M[21]` | `4·M[0] − M[23] − 2^19·W[4] + 2` | `4·cycle − deleg_read_ts − 2^19·deleg_gap_hi + 2` | `< 2^19` |
-| 10 | `rd_hi_range` | `RANGE16` (1) | `M[1]` | `W[27]` | `rd_hi` | `< 2^16` |
-| 11 | `rd_lo_range` | `RANGE16` | `M[1]` | `W[7] − 2^16·W[27]` | `rd_selected − 2^16·rd_hi` | `< 2^16` |
-| 12 | `next_pc_hi_range` | `RANGE16` | `M[1]` | `W[29]` | `next_pc_hi` | `< 2^16` |
-| 13 | `next_pc_lo_range` | `RANGE16` | `M[1]` | `M[5] − 2^16·W[29]` | `pc_write_value − 2^16·next_pc_hi` | `< 2^16` |
+| 10 | `rd_hi_range` | `RANGE16` (1) | `M[1]` | `W[29]` | `rd_hi` | `< 2^16` |
+| 11 | `rd_lo_range` | `RANGE16` | `M[1]` | `W[7] − 2^16·W[29]` | `rd_selected − 2^16·rd_hi` | `< 2^16` |
+| 12 | `next_pc_hi_range` | `RANGE16` | `M[1]` | `W[31]` | `next_pc_hi` | `< 2^16` |
+| 13 | `next_pc_lo_range` | `RANGE16` | `M[1]` | `M[5] − 2^16·W[31]` | `pc_write_value − 2^16·next_pc_hi` | `< 2^16` |
 | 14 | `decode_row` | `DECODER` (3) | `M[1]` | `(M[4], W[8], W[9], W[10], W[11], W[12], W[13])` | `(pc_read_value, decoded_next_pc, decoded_rs1, decoded_rs2, decoded_rd, decoded_imm, decoded_mask)` | a row of `S[0..7]` |
 
 Read in pairs: `gap_hi_<q>` and `gap_lo_<q>` together say
@@ -1662,9 +1852,9 @@ precedes its own write. `rd_hi_range` and `rd_lo_range` bound `rd_selected` belo
 the `next_pc` pair bounds the next pc the same way (`memory.md` §7's range convention).
 **Lookups 8 and 9 are S21's**, and the `deleg` query is bounded exactly as the four before
 it: the pair is what makes the mirror query's read obey the clock like any other, even though
-the timestamp it reads is the literal 0 (§3.5, gate 118). **The six obligations the POSIX
+the timestamp it reads is the literal 0 (§3.5, gate 124). **The six obligations the POSIX
 layer's deletion took were the `arg1`, `arg2` and `ram` pairs**, each bounding a gap on a query
-no row could make; nothing else moved, and neither S23 nor S26 added a lookup or moved one — a
+no row could make; nothing else moved, and neither S23, S26 nor S26c added a lookup or moved one — a
 delegation type is a selector, a tag and three gates, and none of the three is a key of any
 channel.
 
@@ -1672,13 +1862,13 @@ The channels, `add_sub::channels()`, in output order:
 
 | outputs | channel | id | table | multiplicity | obligations | fractions, padded |
 | --- | --- | --- | --- | --- | --- | --- |
-| 2, 3 | `TIMESTAMP` | 0 | `V[range19]` | `W[30]` | **10** | **16** |
-| 4, 5 | `RANGE16` | 1 | `V[range16]` | `W[31]` | 4 | 8 |
-| 6, 7 | `DECODER` | 3 | `S[0..7]` | `W[32]` | 1 | 2 |
+| 2, 3 | `TIMESTAMP` | 0 | `V[range19]` | `W[32]` | **10** | **16** |
+| 4, 5 | `RANGE16` | 1 | `V[range16]` | `W[33]` | 4 | 8 |
+| 6, 7 | `DECODER` | 3 | `S[0..7]` | `W[34]` | 1 | 2 |
 
 **The timestamp tree's padding is where the three lost queries gave a gate list back.** Ten
 obligations and one table fraction is eleven leaves, which fits a 16-leaf tree with five pads;
-at sixteen obligations it was seventeen leaves, one past 16, and the tree padded to 32 (§19
+at sixteen obligations it was seventeen leaves, one past 16, and the tree padded to 32 (§26
 observation 20). So this circuit is five row-wise lists deep where S21 made it six, and no tree
 of it sets a depth the frame does not.
 
@@ -1697,70 +1887,70 @@ two columns named `<node>_num` and `<node>_den` (relations `define_<node>_num` a
 `define_<node>_den`), as in §3.4; a product node is one column named `<node>`. There are four
 row-wise reduction lists, and the layer widths are `MEM_WORD`'s (§7.7).
 
-**`L2`, gate list 1, 34 columns, relations 125–158.**
+**`L2`, gate list 1, 34 columns, relations 131–164.**
 
 | `L2` | relations | node | formula |
 | --- | --- | --- | --- |
-| 0 | 125 | `read_2_0` | `read_pc · read_rs1` |
-| 1 | 126 | `read_2_1` | `read_rs2 · read_rd` |
-| 2 | 127 | `read_2_2` | `read_deleg · read_pad_0` |
-| 3 | 128 | `read_2_3` | `read_pad_1 · read_pad_2` |
-| 4–7 | 129–132 | `write_2_0` … `write_2_3` | the same over the write side |
-| 8, 9 | 133, 134 | `timestamp_2_0` | `timestamp_table + gap_hi_pc` |
-| 10, 11 | 135, 136 | `timestamp_2_1` | `gap_lo_pc + gap_hi_rs1` |
-| 12, 13 | 137, 138 | `timestamp_2_2` | `gap_lo_rs1 + gap_hi_rs2` |
-| 14, 15 | 139, 140 | `timestamp_2_3` | `gap_lo_rs2 + gap_hi_rd` |
-| 16, 17 | 141, 142 | `timestamp_2_4` | `gap_lo_rd + gap_hi_deleg` |
-| 18, 19 | 143, 144 | `timestamp_2_5` | `gap_lo_deleg + timestamp_pad_0` |
-| 20, 21 | 145, 146 | `timestamp_2_6` | `timestamp_pad_1 + timestamp_pad_2` |
-| 22, 23 | 147, 148 | `timestamp_2_7` | `timestamp_pad_3 + timestamp_pad_4` |
-| 24, 25 | 149, 150 | `range16_2_0` | `range16_table + rd_hi_range` |
-| 26, 27 | 151, 152 | `range16_2_1` | `rd_lo_range + next_pc_hi_range` |
-| 28, 29 | 153, 154 | `range16_2_2` | `next_pc_lo_range + range16_pad_0` |
-| 30, 31 | 155, 156 | `range16_2_3` | `range16_pad_1 + range16_pad_2` |
-| 32, 33 | 157, 158 | `decoder_2_0` | `decoder_table + decode_row` |
+| 0 | 131 | `read_2_0` | `read_pc · read_rs1` |
+| 1 | 132 | `read_2_1` | `read_rs2 · read_rd` |
+| 2 | 133 | `read_2_2` | `read_deleg · read_pad_0` |
+| 3 | 134 | `read_2_3` | `read_pad_1 · read_pad_2` |
+| 4–7 | 135–138 | `write_2_0` … `write_2_3` | the same over the write side |
+| 8, 9 | 139, 140 | `timestamp_2_0` | `timestamp_table + gap_hi_pc` |
+| 10, 11 | 141, 142 | `timestamp_2_1` | `gap_lo_pc + gap_hi_rs1` |
+| 12, 13 | 143, 144 | `timestamp_2_2` | `gap_lo_rs1 + gap_hi_rs2` |
+| 14, 15 | 145, 146 | `timestamp_2_3` | `gap_lo_rs2 + gap_hi_rd` |
+| 16, 17 | 147, 148 | `timestamp_2_4` | `gap_lo_rd + gap_hi_deleg` |
+| 18, 19 | 149, 150 | `timestamp_2_5` | `gap_lo_deleg + timestamp_pad_0` |
+| 20, 21 | 151, 152 | `timestamp_2_6` | `timestamp_pad_1 + timestamp_pad_2` |
+| 22, 23 | 153, 154 | `timestamp_2_7` | `timestamp_pad_3 + timestamp_pad_4` |
+| 24, 25 | 155, 156 | `range16_2_0` | `range16_table + rd_hi_range` |
+| 26, 27 | 157, 158 | `range16_2_1` | `rd_lo_range + next_pc_hi_range` |
+| 28, 29 | 159, 160 | `range16_2_2` | `next_pc_lo_range + range16_pad_0` |
+| 30, 31 | 161, 162 | `range16_2_3` | `range16_pad_1 + range16_pad_2` |
+| 32, 33 | 163, 164 | `decoder_2_0` | `decoder_table + decode_row` |
 
 Positionally, `timestamp_2_0` is `L{2}[8] = L{1}[16]·L{1}[19] + L{1}[18]·L{1}[17]` and
 `L{2}[9] = L{1}[17]·L{1}[19]`: `−mult/(T + g) + 1/(E_gap_hi_pc + g)`, the node `lookup.md` §6
 puts first on purpose. `read_2_2` and `read_2_3` are the nodes the frame's narrowing changed:
 they multiplied two real leaves when the frame was eight queries and now carry the pads.
 
-**`L3`, gate list 2, 18 columns, relations 159–176.**
+**`L3`, gate list 2, 18 columns, relations 165–182.**
 
 | `L3` | relations | node | formula |
 | --- | --- | --- | --- |
-| 0 | 159 | `read_3_0` | `read_2_0 · read_2_1` |
-| 1 | 160 | `read_3_1` | `read_2_2 · read_2_3` |
-| 2, 3 | 161, 162 | `write_3_0`, `write_3_1` | the same over the write side |
-| 4, 5 | 163, 164 | `timestamp_3_0` | `timestamp_2_0 + timestamp_2_1` |
-| 6, 7 | 165, 166 | `timestamp_3_1` | `timestamp_2_2 + timestamp_2_3` |
-| 8, 9 | 167, 168 | `timestamp_3_2` | `timestamp_2_4 + timestamp_2_5` |
-| 10, 11 | 169, 170 | `timestamp_3_3` | `timestamp_2_6 + timestamp_2_7` |
-| 12, 13 | 171, 172 | `range16_3_0` | `range16_2_0 + range16_2_1` |
-| 14, 15 | 173, 174 | `range16_3_1` | `range16_2_2 + range16_2_3` |
-| 16, 17 | 175, 176 | `decoder_3_0` | copy of `decoder_2_0` |
+| 0 | 165 | `read_3_0` | `read_2_0 · read_2_1` |
+| 1 | 166 | `read_3_1` | `read_2_2 · read_2_3` |
+| 2, 3 | 167, 168 | `write_3_0`, `write_3_1` | the same over the write side |
+| 4, 5 | 169, 170 | `timestamp_3_0` | `timestamp_2_0 + timestamp_2_1` |
+| 6, 7 | 171, 172 | `timestamp_3_1` | `timestamp_2_2 + timestamp_2_3` |
+| 8, 9 | 173, 174 | `timestamp_3_2` | `timestamp_2_4 + timestamp_2_5` |
+| 10, 11 | 175, 176 | `timestamp_3_3` | `timestamp_2_6 + timestamp_2_7` |
+| 12, 13 | 177, 178 | `range16_3_0` | `range16_2_0 + range16_2_1` |
+| 14, 15 | 179, 180 | `range16_3_1` | `range16_2_2 + range16_2_3` |
+| 16, 17 | 181, 182 | `decoder_3_0` | copy of `decoder_2_0` |
 
-**`L4`, gate list 3, 10 columns, relations 177–186.**
+**`L4`, gate list 3, 10 columns, relations 183–192.**
 
 | `L4` | relations | node | formula |
 | --- | --- | --- | --- |
-| 0 | 177 | `read_4_0` | `read_3_0 · read_3_1` |
-| 1 | 178 | `write_4_0` | `write_3_0 · write_3_1` |
-| 2, 3 | 179, 180 | `timestamp_4_0` | `timestamp_3_0 + timestamp_3_1` |
-| 4, 5 | 181, 182 | `timestamp_4_1` | `timestamp_3_2 + timestamp_3_3` |
-| 6, 7 | 183, 184 | `range16_4_0` | `range16_3_0 + range16_3_1` |
-| 8, 9 | 185, 186 | `decoder_4_0` | copy of `decoder_3_0` |
+| 0 | 183 | `read_4_0` | `read_3_0 · read_3_1` |
+| 1 | 184 | `write_4_0` | `write_3_0 · write_3_1` |
+| 2, 3 | 185, 186 | `timestamp_4_0` | `timestamp_3_0 + timestamp_3_1` |
+| 4, 5 | 187, 188 | `timestamp_4_1` | `timestamp_3_2 + timestamp_3_3` |
+| 6, 7 | 189, 190 | `range16_4_0` | `range16_3_0 + range16_3_1` |
+| 8, 9 | 191, 192 | `decoder_4_0` | copy of `decoder_3_0` |
 
-**`L5`, gate list 4, 8 columns, relations 187–194** — the row-wise top: one value per row per
+**`L5`, gate list 4, 8 columns, relations 193–200** — the row-wise top: one value per row per
 tree.
 
 | `L5` | relations | node | formula | value at row `y` |
 | --- | --- | --- | --- | --- |
-| 0 | 187 | `read_5_0` | copy of `read_4_0` | the product of row `y`'s 8 read leaves |
-| 1 | 188 | `write_5_0` | copy of `write_4_0` | the product of row `y`'s 8 write leaves |
-| 2, 3 | 189, 190 | `timestamp_5_0` | `timestamp_4_0 + timestamp_4_1` | the sum of row `y`'s 16 timestamp fractions |
-| 4, 5 | 191, 192 | `range16_5_0` | copy of `range16_4_0` | the sum of row `y`'s 8 range16 fractions |
-| 6, 7 | 193, 194 | `decoder_5_0` | copy of `decoder_4_0` | the sum of row `y`'s 2 decoder fractions |
+| 0 | 193 | `read_5_0` | copy of `read_4_0` | the product of row `y`'s 8 read leaves |
+| 1 | 194 | `write_5_0` | copy of `write_4_0` | the product of row `y`'s 8 write leaves |
+| 2, 3 | 195, 196 | `timestamp_5_0` | `timestamp_4_0 + timestamp_4_1` | the sum of row `y`'s 16 timestamp fractions |
+| 4, 5 | 197, 198 | `range16_5_0` | copy of `range16_4_0` | the sum of row `y`'s 8 range16 fractions |
+| 6, 7 | 199, 200 | `decoder_5_0` | copy of `decoder_4_0` | the sum of row `y`'s 2 decoder fractions |
 
 `checker::memory_roots` recomputes the two roots from `L5[0]` and `L5[1]`, the layer the first
 halving list reads.
@@ -1768,7 +1958,7 @@ halving list reads.
 ### 3.8 The halving layers and the outputs
 
 Gate list `k`, for `5 ≤ k ≤ n + 4`, halves layer `k` into layer `k + 1`, which has
-`n + 4 − k` variables. Its eight gates, relation `r = 195 + 8(k − 5)`:
+`n + 4 − k` variables. Its eight gates, relation `r = 201 + 8(k − 5)`:
 
 | `L{k+1}` | relation | node | shape | formula |
 | --- | --- | --- | --- | --- |
@@ -1828,11 +2018,12 @@ them by pc, not by cycle; the table below omits them. Every live row shown has c
 `A` add, carrying: `x7 = x5 + x6`, `0xffffefff + 0x12345678`. `B` sub, borrowing:
 `x29 = x6 − x5`. `C` addi of −1, carrying: `x5 = x5 − 1`. `D` auipc, carrying:
 `x31 = pc + 0xfffff000`. `E` lui: `x6 = 0x12345000`. `F` add into `x0`, carrying. `G` fence.
-`H` exit 42. **`I` keccak delegation request** (S21): `a7 = 0x501`, `a0 = 0x10400`, the frame
-base it hands over, and `a0` written back 0. `P` padding. A `POSEIDON2`, `FR_ARITH` or
-`MOD_MUL` request is the same row with `a7` `0x500`, `0x502` or `0x504`, its own selector at
-`W[23]`, `W[24]` or `W[25]` and its own tag 5, 6 or 7 at `M[26]`; the suite carries one of the
-four, the gates being one loop over the registry.
+`H` exit 42. **`I` keccak delegation request** (S21): `a7 = 0x507`, `a0 = 0x10400`, the frame
+base it hands over, and `a0` written back 0. `P` padding. A `POSEIDON2`, `FR_ARITH`, `MOD_MUL`,
+`SHA256_COMP` or `EC_ADD` request is the same row with `a7` `0x500`, `0x502`, `0x504`, `0x508`
+or `0x506`, its own selector at `W[23]`, `W[24]`, `W[25]`, `W[26]` or `W[27]` and its own tag
+5, 6, 7, 8 or 9 at `M[26]`; the suite carries one of the six, the gates being one loop over
+the registry.
 
 | column | `A` | `B` | `C` | `D` | `E` | `F` | `G` | `H` | `I` | `P` |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -1845,7 +2036,7 @@ four, the gates being one loop over the registry.
 | `M[6]` `rs1_mask` | 1 | 1 | 1 | 0 | 0 | 1 | 0 | 1 | 1 | 0 |
 | `M[7]` `rs1_addr` | 5 | 6 | 5 | 0 | 0 | 5 | 0 | 17 | 17 | 0 |
 | `M[8]` `rs1_read_ts` | 29 | 29 | 29 | 0 | 0 | 29 | 0 | 29 | 29 | 0 |
-| `M[9]`, `M[10]` `rs1_read_value`, `rs1_write_value` | `0xffffefff` | `0x12345678` | `0xfffff000` | 0 | 0 | `0xffffefff` | 0 | 93 | `0x501` | 0 |
+| `M[9]`, `M[10]` `rs1_read_value`, `rs1_write_value` | `0xffffefff` | `0x12345678` | `0xfffff000` | 0 | 0 | `0xffffefff` | 0 | 93 | `0x507` | 0 |
 | `M[11]` `rs2_mask` | 1 | 1 | 0 | 0 | 0 | 1 | 0 | 1 | 1 | 0 |
 | `M[12]` `rs2_addr` | 6 | 5 | 0 | 0 | 0 | 6 | 0 | 10 | 10 | 0 |
 | `M[13]` `rs2_read_ts` | 30 | 30 | 0 | 0 | 0 | 30 | 0 | 30 | 30 | 0 |
@@ -1873,16 +2064,16 @@ four, the gates being one loop over the registry.
 | `W[20]` `is_ecall` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 1 | 0 |
 | `W[21]` `is_fence` | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
 | `W[22]` `is_deleg_9` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 0 |
-| `W[23]`, `W[24]`, `W[25]` `is_deleg_10`, `is_deleg_11`, `is_deleg_15` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| `W[26]` `wrap` | 1 | 1 | 1 | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| `W[27]` `rd_hi` | `0x1234` | `0x1234` | `0xffff` | 0 | `0x1234` | `0x1234` | 0 | 0 | 0 | 0 |
-| `W[28]` `pc_wrap` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| `W[29]` `next_pc_hi` | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 0 | 1 | 0 |
+| `W[23..28]` `is_deleg_10`, `is_deleg_11`, `is_deleg_15`, `is_deleg_16`, `is_deleg_17` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `W[28]` `wrap` | 1 | 1 | 1 | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
+| `W[29]` `rd_hi` | `0x1234` | `0x1234` | `0xffff` | 0 | `0x1234` | `0x1234` | 0 | 0 | 0 | 0 |
+| `W[30]` `pc_wrap` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `W[31]` `next_pc_hi` | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 0 | 1 | 0 |
 
 `F` computes the same sum as `A` and writes 0: `rd_selected` still holds the result, and
 `rd_write_masked` masks it. `H`'s decoded fall-through is `0x10014` while its next pc is 1.
 **`I` and `H` are the same instruction word** — a `SYSTEM` row with code `ECALL` — and every
-column that differs between them follows from one cell, the `a7` the `rs1` query reads: `0x501`
+column that differs between them follows from one cell, the `a7` the `rs1` query reads: `0x507`
 instead of 93 sets `is_deleg_9`, which makes the `deleg` query present (`deleg_mask_rule`),
 names address space 4 in `deleg_space` (`deleg_space_rule`), makes the answer 0
 (`deleg_writes_no_register`) and makes the next pc the fall-through (`next_pc_rule`), and which
@@ -1898,7 +2089,7 @@ booleanity gate refuses 5, so each boolean column was also flipped between 0 and
 two more cells, marked (flip). A cell listed is fixed, if at all, by something that is not
 row-local: the **memory argument**, when the cell is in a leaf whose mask is 1; the **decoder
 table**, when it is in `decode_row`'s tuple on a live row; or nothing. The multiplicities
-`W[30..33]` appear on every row and are not a row's property at all.
+`W[32..35]` appear on every row and are not a row's property at all.
 
 A read timestamp is a case apart. Its gap obligations hold it only in
 `[4·cycle + Δ_q − 2^38, 4·cycle + Δ_q)`, which the timestamp of any earlier write satisfies, so
@@ -1917,7 +2108,7 @@ timestamp once `pc_gap_hi` is re-chosen (a fall of less than `2^19 − 3` passes
 | `M[7]` `rs1_addr` | `rs1_addr_rule` | auipc, lui, fence, padding: nothing |
 | `M[12]` `rs2_addr` | `rs2_addr_rule` | addi (nop included), auipc, lui, fence, padding: nothing |
 | `M[17]` `rd_addr` | `rd_addr_rule` | fence, padding: nothing |
-| `M[19]` `rd_read_value` | the memory argument; on the exit row, also `exit_status` | fence, **the delegation row**, padding: nothing — `exit_status` is off there, and 117 reads `rd_selected` rather than what `a0` held |
+| `M[19]` `rd_read_value` | the memory argument; on the exit row, also `exit_status` | fence, **the delegation row**, padding: nothing — `exit_status` is off there, and 123 reads `rd_selected` rather than what `a0` held |
 | `M[22]` `deleg_addr` | `deleg_addr_rule`, and the memory argument | every row but the delegation row: nothing, the mask being 0 |
 | `M[23]` `deleg_read_ts` | `deleg_read_ts_zero`, with `gap_lo_deleg` | every row but the delegation row: nothing |
 | `M[24]` `deleg_read_value` | `deleg_read_value_zero` | every row but the delegation row: nothing |
@@ -1930,14 +2121,14 @@ timestamp once `pc_gap_hi` is re-chosen (a fall of less than `2^19 − 3` passes
 | `W[10]` `decoded_rs2` | `rs2_addr_rule` and the decoder table | addi, auipc, lui and fence rows: the decoder table alone; padding: nothing |
 | `W[11]` `decoded_rd` | `rd_addr_rule` and the decoder table | fence rows: the decoder table alone; padding: nothing |
 | `W[12]` `decoded_imm` | the gate its kind reads it in, and the decoder table | sub rows: the decoder table alone; padding: nothing |
-| `W[26]` `wrap` (flip) | `add_addi_auipc` or `sub` | lui, fence, exit, **the delegation row** and padding: `wrap_boolean` alone, since the two gates that read it are gated off there |
-| `W[27]` `rd_hi`, `W[29]` `next_pc_hi` | their range obligations | padding: nothing |
+| `W[28]` `wrap` (flip) | `add_addi_auipc` or `sub` | lui, fence, exit, **the delegation row** and padding: `wrap_boolean` alone, since the two gates that read it are gated off there |
+| `W[29]` `rd_hi`, `W[31]` `next_pc_hi` | their range obligations | padding: nothing |
 
 **Three rows left this table when the frame narrowed**, and each was there for the same reason:
 the `arg1`, `arg2` and `ram` columns and their three gap chunks were fixed by nothing on any
 row, and the `arg1` and `arg2` write-back pairs were fixed only by a gate that a pair moved
 together keeps. They were the registry's largest block of cells nothing constrained, and they
-are gone rather than constrained (§21 observation 2).
+are gone rather than constrained (§26 observation 2).
 
 On a padding row every mask is 0 and every lookup is switched off, so no cell there reaches a
 memory event or a table. The gates still hold `pc_write_value + 2^32·pc_wrap = decoded_next_pc`
@@ -1952,11 +2143,403 @@ as on the delegation row, and no other gate, obligation or table is needed to fi
 is what a type tag has to be — the mirror's leaf reads it on every row, and a leaf is not gated
 by anything a row chooses.
 
-**`deleg_write_value` is free on every row, and that is the design** (§21 observation 19). It is
+**`deleg_write_value` is free on every row, and that is the design** (§26 observation 19). It is
 one half of the anchor's answer pair, and its other half is §12's `anchor_value`: nothing fixes
 either locally, and the two must be equal or the multiset does not balance. A prover that writes
 7 on both sides proves the same statement; a prover that writes 7 on one is refused as
 `MemoryArgument`, which is `delegation.md` §5.2's whole argument.
+
+### 3.11 The recursion format's form
+
+`constraints::recursion_circuit(0, n)` is `add_sub::recursion_artifact(n)` with
+`add_sub::recursion_channels()`: the private `build` that `add_sub::artifact` runs, over all ten
+rows of `constants::delegation::TYPES` where the base form takes the first
+`constants::delegation::BASE_TYPES = 6`. Normative spec: `recursion.md` §1.2 and §1.4. A
+statement is in the recursion format exactly when its `VmConfig` holds `FIELD_WINDOWS`
+(`VmConfig::is_recursion`), and `VmConfig::circuit` then takes every circuit from
+`recursion_circuit`, which returns every other family of §1.1 byte for byte as `family_circuit`
+does (`crates/constraints/tests/recursion.rs`, `the_registries_differ_in_add_sub_alone`).
+`family_circuit(0, n)` is unchanged: **the base form keeps its gate and its bytes**, and the
+committed `add_sub.bin` is still it. Fill: the same private `fill::add_sub`, which writes ten
+request selectors when `config.is_recursion()` and six otherwise, and refuses a recursion request
+in a base-format statement by name.
+
+**What this subsection was read from.** `checker dump` of `recursion_circuit(0, 20)`'s bytes
+against `checker dump` of `family_circuit(0, 20)`'s, diffed line by line once the moved `W`
+indices and relation numbers are mapped across. Nothing differs that is not named below. The
+base positions are the committed artifact's (`add_sub.bin`, SHA-256 `a6113128…6cae38c7`), whose
+six request selectors sit at `W[22..28]`: `is_deleg_9`, `_10`, `_11`, `_15`, `_16` and `_17`, the
+last two S26c's `SHA256_COMP` and `EC_ADD`. Its gate numbers are that artifact's too.
+
+**The counts.** Four `W` columns and twelve enforcing gates are added, and one gate is replaced.
+Nothing else changes:
+
+| | base, `family_circuit(0, n)` | recursion, `recursion_circuit(0, n)` |
+| --- | --- | --- |
+| delegation types known | 6 | **10** |
+| `M` / `W` / `S` / virtual | 27 / 35 / 7 / 2 | 27 / **39** / 7 / 2 |
+| committed, layer 0's width | 69 | **73** |
+| gate list 0: leaves, enforcing (d1/d2) | 68, 63 (5/58) | 68, **75 (5/70)** |
+| lookups (ts/r16/gen/dec) | 15 (10/4/0/1) | 15 (10/4/0/1) |
+| gate lists, top, inner at `n = 20` | 25 (5 + 20), `L25`, 298 | 25 (5 + 20), `L25`, 298 |
+| relations at `n = 20` / `n = 22` | 361 / 377 | **373 / 389** |
+| outputs | 8 | 8 |
+| bytes at `n = 20` / `n = 22` | 70,974 / 72,064 | **77,987 / 79,077** |
+
+The halving lists are the same in both, so the differences do not depend on the height:
+**12 relations and 7,013 bytes**. Both registries return `Some` for `19 ≤ n ≤ 30`, because the
+channels and so their floors are the same. The recursion form is not committed as bytes.
+`crates/constraints/tests/vectors/recursion.txt` pins its shape line and digest at `n = 20`, the
+height the recursion programs run the family at. `cargo run -p kat-gen -- recursion` writes
+that line:
+
+```text
+ADD_SUB_LUI_AUIPC 20 27 39 25 298 373 8 77987 0531ed89f637e857499cc7a38dd0fea37030afbb2ca936c38cebbcfb62f32f74
+#                 n  memory witness layers inner relations outputs bytes sha256
+```
+
+**The row kinds it adds** (§3.2). There are four delegation request kinds, one per recursion type.
+Each is a base request's row: the same instruction word, the same ecall frame, and the same
+mirror query at the `a0` it read. Only the value it writes into `a0` differs:
+
+| row kind | `a7`, the `rs1` read | selector | `deleg_space` | `rd_selected`, written to `x10` | `next_pc` |
+| --- | --- | --- | --- | --- | --- |
+| a base request (§3.2) | its type's number | one of `W[22..28]` | 4–9 | 0 | the fall-through |
+| `FR_OP` request, family 19 | `0x509` | `W[28]` | 11 | `a0 + 16`: the frame is 4 words | the fall-through |
+| `P2_FIELD` request, family 20 | `0x50A` | `W[29]` | 12 | `a0 + 20`: 5 words | the fall-through |
+| `FIELD_IO` request, family 21 | `0x50B` | `W[30]` | 13 | `a0 + 12`: 3 words | the fall-through |
+| `FQ_OP` request, family 22 | `0x50C` | `W[31]` | 14 | `a0 + 16`: 4 words | the fall-through |
+
+`a0` is the frame base, `rs2_read_value`. The tags skip 10, which is `address_space::FIELD`: the
+field memory's space, not an anchor's (`recursion.md` §2.1). **In the base form such a row cannot
+be proved**, exactly as a retired `read` cannot. No base selector names its number, so the base
+`ecall_is_exit` requires `a7` to be 93 and refuses the row. The fill refuses it before that, by
+name.
+
+**Witness columns.** Every column of §3.3 not listed here keeps its base address: all 27 `M`,
+`W[0..28]` and all 7 `S`. Four are added. `fill::add_sub` fills them:
+
+| address | name | Rust | descriptive name | holds on a live row | read by |
+| --- | --- | --- | --- | --- | --- |
+| `W[28]` | `is_deleg_19` | `add_sub::is_delegation(6)` | `FR_OP` request row | 1 on an ecall row whose `a7` is `0x509` | `is_deleg_19_boolean`, `deleg_19_is_an_ecall`, `deleg_19_number`, `ecall_is_exit`, `deleg_mask_rule`, `exit_status`, `deleg_a0_rule`, `deleg_space_rule`, `next_pc_rule` |
+| `W[29]` | `is_deleg_20` | `is_delegation(7)` | `P2_FIELD` request row | 1 on an ecall row whose `a7` is `0x50A` | the same nine, `_20`'s three among them |
+| `W[30]` | `is_deleg_21` | `is_delegation(8)` | `FIELD_IO` request row | 1 on an ecall row whose `a7` is `0x50B` | the same nine, `_21`'s three among them |
+| `W[31]` | `is_deleg_22` | `is_delegation(9)` | `FQ_OP` request row | 1 on an ecall row whose `a7` is `0x50C` | the same nine, `_22`'s three among them |
+
+The seven columns after them move up by four. Their meaning, fill and readers are §3.3's. The
+multiplicities are counted by `trace::build_multiplicities` over `recursion_channels()`:
+
+| address | name | Rust | base address |
+| --- | --- | --- | --- |
+| `W[32]` | `wrap` | `add_sub::wrap(10)` | `W[28]` |
+| `W[33]` | `rd_hi` | `rd_hi(10)` | `W[29]` |
+| `W[34]` | `pc_wrap` | `pc_wrap(10)` | `W[30]` |
+| `W[35]` | `next_pc_hi` | `next_pc_hi(10)` | `W[31]` |
+| `W[36]` | `mult_timestamp` | `multiplicities(10)[0]`, `recursion_channels()[0].multiplicity` | `W[32]` |
+| `W[37]` | `mult_range16` | `multiplicities(10)[1]` | `W[33]` |
+| `W[38]` | `mult_decoder` | `multiplicities(10)[2]` | `W[34]` |
+
+The `10` is `constants::delegation::TYPES.len()`, which is what `fill::add_sub` passes;
+`add_sub.rs`'s own `TYPES` is private. **`add_sub::WRAP`, `RD_HI`, `PC_WRAP`, `NEXT_PC_HI` and
+`MULTIPLICITIES` are the base form's addresses**, each the function above at `BASE_TYPES`, and
+`IS_DELEGATION` holds the six base selectors only. None of them names a column of this form past
+`W[27]`.
+
+Some unmoved columns change readers. `deleg_a0_rule` replaces `deleg_writes_no_register` as a
+reader of `W[7] rd_selected`. It is a new reader of `M[14] rs2_read_value` and of each base
+selector, `W[22..28]`. `M[21] deleg_mask` loses `deleg_writes_no_register` and gains no reader.
+`M[26] deleg_space` takes four more values, 11 to 14.
+
+**Gate list 0's leaves** (§3.4). The same 68, in the same order, with the same named forms. Seven
+positional forms move with the columns they read:
+
+| `L1` | node | positional |
+| --- | --- | --- |
+| 16 | `timestamp_table_num` | `−W[36]` |
+| 48 | `range16_table_num` | `−W[37]` |
+| 51 | `rd_hi_range_den` | `g + M[1]·W[33]` |
+| 53 | `rd_lo_range_den` | `g + M[1]·W[7] − 2^16·M[1]·W[33]` |
+| 55 | `next_pc_hi_range_den` | `g + M[1]·W[35]` |
+| 57 | `next_pc_lo_range_den` | `g + M[1]·M[5] − 2^16·M[1]·W[35]` |
+| 64 | `decoder_table_num` | `−W[38]` |
+
+No leaf reads a new column. The selectors are `W` columns, and the mirror's two leaves take the
+type from `deleg_space`, as §3.4 describes, now over ten tags.
+
+**Gate list 0's enforcing gates.** Relations 68–142 hold 75 gates, where the base form holds 63
+at 68–130. Twelve are inserted after the base types' eighteen, which moves every later gate up
+by 12:
+
+| base relation | recursion relation | gate | what changed |
+| --- | --- | --- | --- |
+| 68–108 | 68–108 | the frame's 11, `kind_system_boolean` through `fence_code`, and the six base types' three apiece | nothing |
+| — | **109–120** | `is_deleg_t_boolean`, `deleg_t_is_an_ecall`, `deleg_t_number` for `t` = 19, 20, 21, 22 | added |
+| 109 | 121 | `ecall_is_exit` | four more types |
+| 110–112 | 122–124 | `rs1_mask_rule`, `rs2_mask_rule`, `rd_mask_rule` | nothing |
+| 113 | 125 | `deleg_mask_rule` | four more types |
+| 114–118 | 126–130 | `rs1_addr_rule`, `rs2_addr_rule`, `rd_addr_rule`, `rs1_value_masked`, `rs2_value_masked` | nothing |
+| 119, 120 | 131, 132 | `add_addi_auipc`, `sub` | `wrap` read at `W[32]` |
+| 121 | 133 | `lui` | nothing |
+| 122 | 134 | `exit_status` | four more types |
+| 123 `deleg_writes_no_register` | **135 `deleg_a0_rule`** | what a request writes into `a0` | **replaced** |
+| 124–126 | 136–138 | `deleg_read_ts_zero`, `deleg_read_value_zero`, `deleg_addr_rule` | nothing |
+| 127 | 139 | `deleg_space_rule` | four more tags |
+| 128, 129 | 140, 141 | `wrap_boolean`, `pc_wrap_boolean` | read at `W[32]` and `W[34]` |
+| 130 | 142 | `next_pc_rule` | four more types; `pc_wrap` read at `W[34]` |
+
+All 13 added or replacing gates are `Quadratic` and degree 2, so the degree-1 count stays at 5.
+Every one of the 75 has constant 0, `zero_row_valid` is still `true`, and the padding row is all
+zeros over the 73 committed columns. In the blocks below,
+`D = is_deleg_9 + is_deleg_10 + is_deleg_11 + is_deleg_15 + is_deleg_16 + is_deleg_17 +
+is_deleg_19 + is_deleg_20 + is_deleg_21 + is_deleg_22`, the sum over `W[22..32]`.
+
+```text
+────────────────────────────────────────────────────────────────────────────────────────────
+109–120 three gates per recursion type, continuing 91–108's loop over the registry
+                                                                        Quadratic, degree 2
+        code  add_sub::recursion_artifact: build's loop over DELEGATIONS[..10]   S-RECURSION
+
+  109 is_deleg_19_boolean   0 = W[28] − W[28]·W[28]    0 = is_deleg_19 − is_deleg_19²
+  110 deleg_19_is_an_ecall  0 = W[28] − W[28]·W[20]    0 = is_deleg_19·(1 − is_ecall)
+  111 deleg_19_number       0 = −1289·W[28] + W[28]·M[9]
+                                                       0 = is_deleg_19·(rs1_read_value − 0x509)
+  112 is_deleg_20_boolean   0 = W[29] − W[29]·W[29]    0 = is_deleg_20 − is_deleg_20²
+  113 deleg_20_is_an_ecall  0 = W[29] − W[29]·W[20]    0 = is_deleg_20·(1 − is_ecall)
+  114 deleg_20_number       0 = −1290·W[29] + W[29]·M[9]
+                                                       0 = is_deleg_20·(rs1_read_value − 0x50A)
+  115 is_deleg_21_boolean   0 = W[30] − W[30]·W[30]    0 = is_deleg_21 − is_deleg_21²
+  116 deleg_21_is_an_ecall  0 = W[30] − W[30]·W[20]    0 = is_deleg_21·(1 − is_ecall)
+  117 deleg_21_number       0 = −1291·W[30] + W[30]·M[9]
+                                                       0 = is_deleg_21·(rs1_read_value − 0x50B)
+  118 is_deleg_22_boolean   0 = W[31] − W[31]·W[31]    0 = is_deleg_22 − is_deleg_22²
+  119 deleg_22_is_an_ecall  0 = W[31] − W[31]·W[20]    0 = is_deleg_22·(1 − is_ecall)
+  120 deleg_22_number       0 = −1292·W[31] + W[31]·M[9]
+                                                       0 = is_deleg_22·(rs1_read_value − 0x50C)
+
+  reads as  the base types' three gates, over four more numbers: ecall::PRECOMPILE_FR_OP,
+            PRECOMPILE_P2_FIELD, PRECOMPILE_FIELD_IO and PRECOMPILE_FQ_OP, read through
+            constants::delegation::TYPES. The const assertion in add_sub.rs that makes the
+            number gates a partition runs over the whole registry, not over its base prefix.
+            So the ten numbers are pairwise distinct, and an ecall row is either an exit or a
+            request of exactly one of ten types.
+
+────────────────────────────────────────────────────────────────────────────────────────────
+121     ecall_is_exit — every ecall that is not a delegation is EXIT    Quadratic, degree 2
+
+  positional  0 = −93·W[20] + 93·W[22] + 93·W[23] + 93·W[24] + 93·W[25] + 93·W[26]
+                  + 93·W[27] + 93·W[28] + 93·W[29] + 93·W[30] + 93·W[31]
+                  + W[20]·M[9] − W[22]·M[9] − W[23]·M[9] − W[24]·M[9] − W[25]·M[9]
+                  − W[26]·M[9] − W[27]·M[9] − W[28]·M[9] − W[29]·M[9] − W[30]·M[9]
+                  − W[31]·M[9]
+  named       0 = (is_ecall − D)·(rs1_read_value − 93)
+
+────────────────────────────────────────────────────────────────────────────────────────────
+125     deleg_mask_rule — the mirror query is a delegation row's alone  Quadratic, degree 2
+
+  positional  0 = M[21] − M[1]·W[22] − M[1]·W[23] − M[1]·W[24] − M[1]·W[25] − M[1]·W[26]
+                  − M[1]·W[27] − M[1]·W[28] − M[1]·W[29] − M[1]·W[30] − M[1]·W[31]
+  named       0 = deleg_mask − pc_mask·D
+
+────────────────────────────────────────────────────────────────────────────────────────────
+134     exit_status — the exit row writes a0 back                       Quadratic, degree 2
+
+  positional  0 = W[20]·M[19] − W[20]·W[7] − W[22]·M[19] + W[22]·W[7] − W[23]·M[19]
+                  + W[23]·W[7] − W[24]·M[19] + W[24]·W[7] − W[25]·M[19] + W[25]·W[7]
+                  − W[26]·M[19] + W[26]·W[7] − W[27]·M[19] + W[27]·W[7] − W[28]·M[19]
+                  + W[28]·W[7] − W[29]·M[19] + W[29]·W[7] − W[30]·M[19] + W[30]·W[7]
+                  − W[31]·M[19] + W[31]·W[7]
+  named       0 = (is_ecall − D)·(rd_read_value − rd_selected)
+
+────────────────────────────────────────────────────────────────────────────────────────────
+139     deleg_space_rule — the mirror's leaf names the requested type   Linear, degree 1
+
+  positional  0 = M[26] − 4·W[22] − 5·W[23] − 6·W[24] − 7·W[25] − 8·W[26] − 9·W[27]
+                  − 11·W[28] − 12·W[29] − 13·W[30] − 14·W[31]
+  named       0 = deleg_space − (4·is_deleg_9 + 5·is_deleg_10 + 6·is_deleg_11 + 7·is_deleg_15
+                                 + 8·is_deleg_16 + 9·is_deleg_17 + 11·is_deleg_19
+                                 + 12·is_deleg_20 + 13·is_deleg_21 + 14·is_deleg_22)
+
+  reads as  11 to 14 are address_space::DELEGATION_FR_OP, DELEGATION_P2_FIELD,
+            DELEGATION_FIELD_IO and DELEGATION_FQ_OP, read through the registry. 10 is
+            address_space::FIELD and names no type.
+
+────────────────────────────────────────────────────────────────────────────────────────────
+142     next_pc_rule — the fall-through, or HALT_PC on the exit row     Quadratic, degree 2
+
+  positional  0 = M[5] + 2^32·W[34] − W[8] − W[20] + W[22] + W[23] + W[24] + W[25] + W[26]
+                  + W[27] + W[28] + W[29] + W[30] + W[31] + W[20]·W[8] − W[22]·W[8]
+                  − W[23]·W[8] − W[24]·W[8] − W[25]·W[8] − W[26]·W[8] − W[27]·W[8]
+                  − W[28]·W[8] − W[29]·W[8] − W[30]·W[8] − W[31]·W[8]
+  named       0 = pc_write_value + 2^32·pc_wrap − (1 − is_ecall + D)·decoded_next_pc
+                  − HALT_PC·(is_ecall − D)                                     (HALT_PC = 1)
+
+  reads as (121, 125, 134, 139, 142)  §3.5's readings with D summing ten selectors: a
+                     recursion request is not an exit, asks a7 for its own number, makes the
+                     mirror query in its own space, writes no exit status and falls through.
+                     Each type adds a linear term and a product to 121 and to 142, a product
+                     to 125, two products to 134 and a linear term to 139.
+
+────────────────────────────────────────────────────────────────────────────────────────────
+131, 132, 140, 141   the four gates that read wrap or pc_wrap, which moved
+
+  131 add_addi_auipc   0 = W[17]·M[9] + W[17]·M[14] + W[17]·W[12] − W[17]·W[7] − 2^32·W[17]·W[32]
+                         + W[15]·M[9] + W[15]·M[14] + W[15]·W[12] − W[15]·W[7] − 2^32·W[15]·W[32]
+                         + W[16]·M[9] + W[16]·M[14] + W[16]·W[12] − W[16]·W[7] − 2^32·W[16]·W[32]
+                         + W[16]·M[4]
+  132 sub              0 = W[18]·M[9] − W[18]·M[14] − W[18]·W[7] + 2^32·W[18]·W[32]
+  140 wrap_boolean     0 = W[32] − W[32]·W[32]
+  141 pc_wrap_boolean  0 = W[34] − W[34]·W[34]
+
+  Their named forms are §3.5's.
+
+────────────────────────────────────────────────────────────────────────────────────────────
+135     deleg_a0_rule — a request writes a0 what its type answers       Quadratic, degree 2
+        code  add_sub's build, its types != BASE_TYPES arm,
+              in deleg_writes_no_register's place                               S-RECURSION
+
+  positional  0 = −16·W[28] − 20·W[29] − 12·W[30] − 16·W[31]
+                  + W[22]·W[7] + W[23]·W[7] + W[24]·W[7] + W[25]·W[7] + W[26]·W[7] + W[27]·W[7]
+                  + W[28]·W[7] − W[28]·M[14] + W[29]·W[7] − W[29]·M[14]
+                  + W[30]·W[7] − W[30]·M[14] + W[31]·W[7] − W[31]·M[14]
+  named, factored
+    0 =   (is_deleg_9 + is_deleg_10 + is_deleg_11 + is_deleg_15 + is_deleg_16 + is_deleg_17)
+              · rd_selected
+        + is_deleg_19 · (rd_selected − rs2_read_value − 16)
+        + is_deleg_20 · (rd_selected − rs2_read_value − 20)
+        + is_deleg_21 · (rd_selected − rs2_read_value − 12)
+        + is_deleg_22 · (rd_selected − rs2_read_value − 16)
+    which is recursion.md §1.4's
+      Σ_t is_deleg_t·rd_selected − Σ_{t ≥ BASE_TYPES} is_deleg_t·(rs2_read_value + 4·words_t)
+
+  replaces    base 123 deleg_writes_no_register   0 = M[21]·W[7]   0 = deleg_mask·rd_selected
+
+  reads as  one type at a time:
+              a base request    rd_selected = 0             the base answer
+              FR_OP             rd_selected = a0 + 16
+              P2_FIELD          rd_selected = a0 + 20
+              FIELD_IO          rd_selected = a0 + 12
+              FQ_OP             rd_selected = a0 + 16
+            where a0 is rs2_read_value. On a row requesting nothing every term is 0. Each
+            literal is 4·words from the type's registry row (fr_op::FRAME_WORDS 4, p2_field's
+            5, field_io's 3, fq_op's 4), read through constants::delegation::TYPES. The gate is
+            constants::delegation::a0_after and spells no length of its own.
+```
+
+**What the rule fixes.** On a recursion request row, the gates around it fix everything but
+the value. `rs2_addr_rule` (127) makes the `rs2` query read `x10`, so `rs2_read_value` is the
+`a0` the program passed. `deleg_addr_rule` (138) puts the mirror query at that address, and with
+it the invocation that answers the query. `rd_addr_rule` (128) makes the `rd` query `x10` as
+well, where `rd_is_zero` is 0, so `rd_write_masked` (78) writes `rd_selected` itself. So the row
+writes, at `4·cycle + 3`, **`x10 ← a0 + 4·words_t`, the first byte past the frame its invocation
+read**. In a tape of consecutive frames, that is the next frame's base. The sum is formed over
+`Fr` with no carry column, and `rd_hi_range` and `rd_lo_range` still bound `rd_selected` below
+`2^32` on every live row, so it is an exact integer sum. A frame ending at `2^32` or above has
+no provable request. That costs nothing, because the caller's frame lies in RAM
+(`constants::delegation::a0_after`).
+
+**Why the replay needs it: the replay reads the advance and checks almost nothing else.**
+`guest_sdk::recursion::replay` walks a tape's body (`recursion.md` §7) as
+`a0 = ecall1(number, a0)`, call after call. Each request's frame base is the `a0` the previous
+request left. The next run's header is read where the previous run's `a0` ended. The function
+checks each run's number, and checks once that the body's last call ended exactly at its end.
+`import` passes one fixed frame and reads nothing back. So the circuit is the only thing that
+fixes where a call leaves `a0`. The SDK says as much: "the add/sub family's `a0` rule is what
+holds a recursion request to it (§1.4), and nothing here reads it." If the write were free, the
+prover would choose each call's frame. It could skip an `EQ` frame, which is one of the tape's
+assertions, repeat a frame, or run one from anywhere in RAM, and still end at the body's end.
+The advance buys one RISC-V row per call instead of two or three, and a tape replayed as
+straight-line `ecall`s at one cycle per call (`recursion.md` §1.4, §7). This gate is what makes
+it sound for the guest to skip the check. It also serves the base zeroing's own reason
+(`delegation.md` §5.2, gate 1): a request writes a value it did not choose.
+
+**Why the base gate cannot stay beside it, and why the rule is per type.** On a recursion
+request, `deleg_mask` is 1. `deleg_writes_no_register` would then require `rd_selected = 0` and
+refuse every honest request, so the rule has to replace it. `deleg_mask` says only that *some*
+type was requested, while the advance is a different length per type. So the gate keys on the
+selectors. It is the first request-side gate that does: §3.5's three zeroings each key on the
+mask, one gate however many types there are. For a base type it says exactly what the base gate
+says:
+
+- Where `pc_mask` is 0, `rs1_value_masked` (129) makes `a7` 0, and each number gate then holds
+  its selector to 0. Every term vanishes, as the base gate's does with `deleg_mask` at 0.
+- On a live row, `deleg_mask_rule` (125) makes `deleg_mask` the sum of the selectors, at most
+  one of them 1.
+
+So `Σ_{base t} is_deleg_t·rd_selected` equals `deleg_mask·rd_selected` on every row that
+holds a base request or no request, and the two forms differ only on a recursion request.
+
+**What it leaves alone.** The other two zeroings and `deleg_addr_rule` (136–138) are §3.5's,
+gated on the mask. A recursion request's mirror reads `T(AS_t, a0, 0, 0)` and writes
+`T(AS_t, a0, 4·cycle + 3, deleg_write_value)`, with `AS_t` from 11 to 14. So the anchor pairing
+(`delegation.md` §5.3) is untouched: the `a0` write belongs to the `rd` query and never reaches
+the anchor's space.
+
+**The lookups and channels** (§3.6). The same 15 lookups, in the same order, on the same
+channels and selectors, with the same named tuples. Four positional tuples move:
+
+| # | name | tuple, positional |
+| --- | --- | --- |
+| 10 | `rd_hi_range` | `W[33]` |
+| 11 | `rd_lo_range` | `W[7] − 2^16·W[33]` |
+| 12 | `next_pc_hi_range` | `W[35]` |
+| 13 | `next_pc_lo_range` | `M[5] − 2^16·W[35]` |
+
+The channels' multiplicities are `W[36]`, `W[37]` and `W[38]`. Obligations stay at 10, 4 and 1,
+fraction trees at 16, 8 and 2, and output positions at 2–7. A selector is not a key of any
+channel, and neither is a frame length, so the four types add no obligation and no leaf.
+`L1` stays 68 wide. The challenge slots read are §0.4's, unchanged.
+
+**The inner layers and outputs** (§3.7, §3.8). The same columns, nodes, formulas and widths:
+`L1 … L5` are 68, 34, 18, 10 and 8 wide, and `inner = 138 + 8n`. Each relation number is the
+base number plus 12:
+
+| layer | gate list | base relations | recursion relations |
+| --- | --- | --- | --- |
+| `L2` | 1 | 131–164 | 143–176 |
+| `L3` | 2 | 165–182 | 177–194 |
+| `L4` | 3 | 183–192 | 195–204 |
+| `L5` | 4 | 193–200 | 205–212 |
+| `L{k+1}`, halving list `k`, `5 ≤ k ≤ n + 4` | `k` | `201 + 8(k − 5)` to `208 + 8(k − 5)` | `213 + 8(k − 5)` to `220 + 8(k − 5)` |
+| the roots | `n + 4` | `193 + 8n` to `200 + 8n` | `205 + 8n` to `212 + 8n`: 365–372 at `n = 20`, 381–388 at `n = 22` |
+
+The eight outputs keep their names, their order and their `verify_shard` steps. They sit at
+`L{25}[0..8]` at `n = 20`, as in the base form at that height.
+
+**Witness rows** (§3.9). `crates/checker/tests/add_sub.rs`, in
+`a_recursion_request_advances_a0_past_its_frame`, builds three recursion requests with the
+suite's `honest`. Each is at cycle 9 and pc `0x10010` like every row there, with
+`a0 = RAM_ORIGIN + 0x400 = 0x10400` and an old `a0` of 7, the same frame base and history as the
+keccak request. The test holds each one to every gate and range obligation of the recursion
+form. The recursion form accepts the keccak request too. Only these cells differ from it:
+
+| column | keccak request | `FR_OP` | `P2_FIELD` | `FIELD_IO` |
+| --- | --- | --- | --- | --- |
+| `M[9]`, `M[10]` `rs1_read_value`, `rs1_write_value` | `0x507` | `0x509` | `0x50a` | `0x50b` |
+| `M[20]` `rd_write_value`, `W[7]` `rd_selected` | 0 | `0x10410` | `0x10414` | `0x1040c` |
+| `M[26]` `deleg_space` | 4 | 11 | 12 | 13 |
+| `W[22]` `is_deleg_9` | 1 | 0 | 0 | 0 |
+| `W[28]`, `W[29]`, `W[30]` | 0, 0, 0 | 1, 0, 0 | 0, 1, 0 | 0, 0, 1 |
+| `W[33]` `rd_hi` | 0 | 1 | 1 | 1 |
+
+The test's two controls move `rd_selected` and `rd_write_value` together. One sets them to 0,
+the base answer, on each recursion request. The other sets them to `0x10410`, an advance of 16,
+on the keccak request. Each time, `deleg_a0_rule` is the only gate that refuses. The test also
+asserts that the base artifact still carries `deleg_writes_no_register` and no `deleg_a0_rule`.
+`FQ_OP`'s arm is the gate's fourth term and is not among the three. Its coverage comes from
+`crates/checker/tests/recursion.rs`, in `the_recursion_add_sub_holds_on_the_field_requests`.
+That test fills this form at `n = 20` from `guests/field-ops`' own trace, which issues all four
+field calls and a tape `replay`. It holds every live row and a padding row to every relation
+and range obligation, with the 105 field requests among them.
+
+**What fixes each cell** (§3.10). No probe like §3.10's has been run over this form; the cells
+its rows fix differently are read off gate 135:
+
+- On a recursion request, `deleg_a0_rule` fixes `rd_selected` and `rd_write_value` to the `a0`
+  the row read plus the frame's length, where the base form fixes them to 0. The memory
+  argument fixes `a0` itself, `rs2_read_value`.
+- The request's selector is held as a base selector is: by its booleanity, its ecall gate, and
+  its number gate against the `a7` the memory argument fixes.
+- `deleg_space` is held by the ungated `deleg_space_rule`, now to 11–14.
 
 ---
 
@@ -7178,7 +7761,7 @@ Both are `Linear` and carry no mask: every row of a window above 0 is a RAM word
 `4h ≥ RAM_ORIGIN` at every window height a `VmConfig` may carry. That is the menu's `2^16` and
 up, and not the menu as a whole: `verifier_core::window_height` requires
 `4h ≥ PUBLIC_OUTPUT_ORIGIN + PUBLIC_WINDOW_BYTES` = `0x10000`, so neither `2^8` nor S-STREAM's
-`2^12` is a window height, whatever else they are heights for (§21 observation 1). The halving
+`2^12` is a window height, whatever else they are heights for (§26 observation 1). The halving
 lists and outputs are §10.3's, with the same names, relation numbers and addresses.
 
 ### 11.4 Rows
@@ -7852,7 +8435,7 @@ caller asked for, and `verifier_core::window_height` refuses any other inside
 `VmConfig::from_bytes` (`public-values.md` §2). The registry itself is looser —
 `family_circuit(12, n)` is `Some` for `0 ≤ n ≤ 30`, the family carrying no channel and so
 meeting no `BITS ≤ trace_vars` guard — and that looseness is never reachable through a key
-(§21 observation 1).
+(§26 observation 1).
 
 **The height moved and not one relation did.** `trace_vars` reaches nothing inside
 `memory::value_window_artifact` but its call to `memory::assemble`: both leaves come out of the
@@ -8516,8 +9099,8 @@ carries. `check_shape` holds `artifact.lookups.len()` to `lookups()`' own count,
 obligation is a panic where the artifact is built.
 
 **The 38-bit timestamp gap is `RANGE16`'s and not `TIMESTAMP`'s**, and it cannot be otherwise:
-that channel's `BITS` is 19 and its table needs `2^20` rows, which is an execution family's floor
-and no delegation height on the menu (`delegation.md` §9, §10.3). Two committed chunks with a
+that channel's `BITS` is 19 and its table needs `2^20` rows, an execution family's floor, above
+this family's `2^16` (`delegation.md` §9, §10.3). Two committed chunks with a
 derived low half are three 16-bit pieces for 38 bits, `38 = 16 + 16 + 6`, and the decomposition
 is **exact**: the maximum is `(2^16 − 1)(1 + 2^16) + 2^32(2^6 − 1) = 2^38 − 1`. The carries' 37
 bits are the same shape at `37 = 16 + 16 + 5`, exact at `2^37 − 1`, and the base's 29 and 31 bits
@@ -8609,7 +9192,7 @@ factor of `gkr_verify::reconciles` over the whole statement; 2 `range16_num_root
 | --- | --- |
 | `cycle`, `base` | the multiset: the request's mirror write is `T(DELEGATION_MOD_MUL, base, 4·cycle + 3, v)` and this row's teardown read is its only reader (§5's anchor); locally `base_aligned`, `base_in_window` and `addr_w{j}` against the words |
 | `live` | `live_boolean`, and every leaf's mask |
-| `anchor_value` | **nothing local**: the request's `deleg_write_value` must equal it, and the memory argument is what says so (§21 observation 19) |
+| `anchor_value` | **nothing local**: the request's `deleg_write_value` must equal it, and the memory argument is what says so (§26 observation 19) |
 | `w{j}_read_ts` | the memory argument alone; the four `gap{j}_*` obligations only hold it below this row's own write |
 | word 0's value | the frame's read tuple, `writes_back_w0`, and `selector_rule` against the four selectors |
 | `selector{code}` | its booleanity gate, `selector_rule` and `one_modulus_a_live_row` — the three together are exactly "one of the four codes, the one the frame names" |
@@ -9207,8 +9790,8 @@ of `β` at all. Every obligation's selector is `LIVE`.
 | `carry{r}_{c}_c0_range`, `_c1_range`, `_top_scaled`, `_lo_range` | 180 | `live` | two chunks, `2·carry{r}_{c}_c1`, and the derived low half | each carry's unsigned value below `2^47` |
 
 **1,110 obligations.** The 38-bit timestamp gap is three chunks and not a `TIMESTAMP`
-obligation, because that channel's `BITS` is 19 and its table needs `2^20` rows, which no
-delegation height offers (`delegation.md` §9, §10.3). `TIMESTAMP` would be the natural
+obligation, because that channel's `BITS` is 19 and its table needs `2^20` rows, above this
+family's `2^16` (`delegation.md` §9, §10.3). `TIMESTAMP` would be the natural
 channel and does not fit; `RANGE16` at three chunks a gap is exact at `2^38`, the maximum
 being `(2^16 − 1)(1 + 2^16) + 2^32(2^6 − 1) = 2^38 − 1`.
 
@@ -9371,7 +9954,7 @@ of refusal are told apart: a 32-bit bound is an obligation and not a relation, s
 `violated_relations` must name no `*_range` and `violated_lookups` must name the word.
 
 **No anchor twin is called for this family, deliberately.** `checker::assert_anchor_twins_refused`
-is `constraints::delegation`'s one mechanism, built identically for all six families and
+is `constraints::delegation`'s one mechanism, built identically for all six base families and
 already proved refused at block level over four of them in `crates/checker/tests/tamper.rs` —
 `MOD_MUL` included, which also carries a lookup channel, so even that combination is not new.
 A fifth replay would be the same mutation set at another re-proof in the slowest deferred
@@ -9379,15 +9962,2573 @@ suite, which the root `CLAUDE.md`'s test rule exists to refuse.
 
 ---
 
+## 21. `FIELD_WINDOWS` — family 18
+
+### 21.1 Header
+
+`recursion_circuit(18, n)` is `memory::field_window_artifact(n)` with no channels, and
+`family_circuit(18, n)` is `None` at every `n`: **the recursion registry holds this family and
+the base registry does not** (`recursion.md` §1.2). One window of the **field memory**,
+`address_space::FIELD` = 10, whose cells hold whole `Fr` elements and which no instruction
+reaches (`recursion.md` §2.1). Window `w` is cells `[h·w, h·(w + 1))`, the windows are
+consecutive from cell 0, and shard `i` is window `i` (`verifier_core::shard_window`), so the
+statement carries a count and no window list. Spec: `recursion.md` §2.2; `memory.md` §3 is the
+window machinery it inherits. Fill: `prover::family_fill(18)`, the private
+`fill::field_window`, which writes row `y` from `trace::MemoryState::field_cell(h·w + y)`, and
+`(0, 0)` for a cell no access reached. Two committed columns, one virtual table, two unmasked
+leaves, no enforcing gate, no lookup, no channel, two outputs. At `n = 20`, its default
+(`family::DEFAULT_HEIGHTS`): 21 gate lists, top `L21`, 42 inner columns and relations, 2,758
+bytes — the shape line `crates/constraints/tests/vectors/recursion.txt` pins beside the
+artifact's SHA-256, `b19670d8…5fe0f4`. At `n = 12`, where `crates/checker/tests/recursion.rs`
+fills it, 13 lists, top `L13`, 26 of each and 1,894 bytes; at `n = 16`, the window height the
+deferred `crates/prover/tests/field_ops.rs` gives it, 17 lists, top `L17`, 34 of each and 2,326
+bytes.
+
+**It is in a `VmConfig` exactly when the program declares a field family, and its presence is
+the recursion format.** `program::decode_program` lists it when the linked binary declares any
+of `program::FIELD_DELEGATIONS` — `FR_OP`, `P2_FIELD`, `FIELD_IO` and `FQ_OP` — and
+`VmConfig::is_recursion` is `height(FIELD_WINDOWS).is_some()` and nothing else: no wire form
+carries a format (`recursion.md` §1.1), so this family's entry is what sends a key's load rule
+and the prover's registration to `recursion_circuit` (`VmConfig::circuit`). Its height is the
+program's, `ProgramParams::heights[18]`, and nothing pins it. `verifier_core::window_height`
+reads `INIT_TEARDOWN`, `ZERO_WINDOWS`, `ADVICE_WINDOWS` and the two public families and not
+this one, so any menu height may carry it, and identity binds it through `VM_CONFIG` as it binds
+every family's. Its shard count is `MemoryState::field_windows(h)`: `⌊top / h⌋ + 1` over the
+highest cell the execution touched, 0 when it touched none. Step 2's `check_memory_windows`
+refuses `count·h > 2^32` as `Statement("the field windows do not fit the 2^32 cells")`, a cell
+being a `u32`. A count too small cannot be proved at all: a cell above the last window has no
+init tuple, and its accesses cannot balance (`recursion.md` §2.2). The family owns no cycle
+(`family::CYCLE_OWNING[18]` is `false`).
+
+**`ZERO_WINDOWS`' construction at a stride of one cell, and not its bytes.**
+`field_window_artifact(n)` and `zero_window_artifact(n)` are the private
+`memory::zero_window(n, stride)` at strides 1 and `WORD_BYTES` = 4. They have the same columns,
+names, virtual table, halving lists, relation numbers, outputs and padding contract, and differ
+in one thing: how many `(α_addr, V[row])` terms each leaf carries, one here and four there. That
+is six terms fewer, three a leaf, and each leaf is stored twice, in gate list 0 and in the flat
+relation list. At 37 bytes a term — a 34-byte coefficient (tag, slot, a zero `Fr`) and a 3-byte
+address — that is 444 bytes at every `n`: 2,758 against `zero_window_artifact(20)`'s 3,202, and
+1,894 against `PUBLIC_OUTPUT`'s 2,338 at `n = 12`. So where `PUBLIC_OUTPUT` takes
+`ZERO_WINDOWS`' artifact byte for byte (§16.1), this family takes its constructor and not its
+artifact. Neither artifact names an address space: `RAM`'s 2 and `FIELD`'s 10 both enter
+through slot 5 alone (§21.3).
+
+### 21.2 Columns
+
+| address | name | Rust | descriptive name | row `y` of window `w` holds | read by |
+| --- | --- | --- | --- | --- | --- |
+| `M[0]` | `teardown_ts` | `PolyAddress::Memory(0)` | Last write time | the write timestamp of the last access to cell `h·w + y`, `4·c + Δ` for the cycle `c` whose invocation made it; 0 if no access reached the cell | leaf `teardown` |
+| `M[1]` | `teardown_value` | `PolyAddress::Memory(1)` | Final cell | the value that access wrote, any `Fr`; 0 if no access reached the cell | leaf `teardown` |
+| `V[row]` | `row` | `VirtualKind::RowIndex`, wire tag 0 | Row index | `y` | both leaves |
+
+Both are committed in `PublicInputs::memory_commitments`, which G8 absorbs before the memory
+challenges are squeezed, and **as one stack**: this family's presence puts the statement in the
+recursion format, whose shards commit stacks (`recursion.md` §1.3). `VmConfig::stack_vars` is 2
+at every menu height, two `M` columns and no `W` needing two stack variables, so `M[0]` and
+`M[1]` are slots 0 and 1 of a four-slot stack whose slots 2 and 3 are zero. The shard proof
+carries no witness commitment, and its opening is that one stack at `u ‖ r`, after two
+`STACK_CHALLENGE` squeezes. There is no `W` and no `S`: `program::setup_commitments(18)` is
+empty, so identity commits an empty list for the family, as for `ZERO_WINDOWS`.
+`fill::field_window` writes both columns `Fr`-backed (`fill::fr_column`) whatever their values.
+A field value is a whole field element and not a `u32` (`recursion.md` §2.1), which is also why
+a field access is not a `MemoryEventLog` event and why the fill reads `MemoryState`'s field
+table and not `build_init_teardown_columns`.
+
+### 21.3 Leaves and layers
+
+| `L1` | relation | node | positional | named |
+| --- | --- | --- | --- | --- |
+| 0 | 0 | `teardown` (read side) | `α_addr·V[row] + α_ts·M[0] + α_val·M[1] + WC` | `T(FIELD, h·w + row, teardown_ts, teardown_value)` |
+| 1 | 1 | `init` (write side) | `α_addr·V[row] + WC` | `T(FIELD, h·w + row, 0, 0)` |
+
+Here `WC = γ_M + 10 + α_addr·h·w`, slot 5 at window `w`, the shard's index. The `10` is
+`address_space::FIELD`, and `h·w` is the window's first cell: `2^n·w`, where a RAM window's
+first address is `4·2^n·w`. `gkr_verify::field_window_challenges` derives it, and
+`verifier_core::shard_challenges` calls that for this family alone, on both sides: the prover's
+`gkr_part` and `verify_shard_local`. A recursion verifier's tape derives it a third time, in
+`tape::shard_tape`'s `window(address_space::FIELD, 1)`. **The address space is in no
+artifact**, here or in any RAM window. What separates cell `x` from RAM word `x` is the `10`
+against the `2` in that one derived slot, while the field families' own leaves carry `FIELD` as
+a literal (`recursion.md` §3–§6). Both leaves are `Linear`, unmasked and degree 1, with one
+`α_addr·V[row]` term each where §11.3's carry four, because the stride is one cell a row. There
+is no `V[ram_live]`: every row of every field window is a cell, cell 0 included, and window 0
+supplies cell 0's init tuple. Code: the private `memory::stride_tuple(1, Some(M[0]), M[1])` for
+the read side, and for the write side `memory::zero_window`'s inline `Linear`, which puts
+`stride` copies of `(α_addr, V[row])` on the window constant and no value term.
+
+Halving list `k`, for `1 ≤ k ≤ n`, writes `L{k+1}` (`n − k` variables), exactly as §10.3:
+
+| `L{k+1}` | relation | node | shape |
+| --- | --- | --- | --- |
+| 0 | `2k` | `read_{k+1}_0` | `TreeProduct { L{k}[0] }` |
+| 1 | `2k + 1` | `write_{k+1}_0` | `TreeProduct { L{k}[1] }` |
+
+In the last list, `k = n`, the two nodes are `read_root` and `write_root`.
+
+| output | address, `n = 20` | node | value | verifier |
+| --- | --- | --- | --- | --- |
+| 0 | `L{21}[0]` | `read_root`, relation 40 | the product of every row's teardown leaf | step 10a: must equal `PublicInputs::memory_roots[p][0]`, `p` the position of `(18, i)` in `verifier_core::statement_shards`. The group order is `INIT_TEARDOWN`, `ZERO_WINDOWS`, then every other family ascending, so this family's shards follow every family below 18 and precede `FR_OP`'s. A factor of `reconciles` |
+| 1 | `L{21}[1]` | `write_root`, relation 41 | the product of every row's init leaf | step 10a: `memory_roots[p][1]`, the same `p`; a factor of `reconciles` |
+
+**There is no step 10c**: `verify_shard_local`'s `public_value` match names `PUBLIC_INPUT` and
+`PUBLIC_OUTPUT` and falls through to `None` for family 18. The shard claims the trivial time
+window `[0, 2^38)` (`TRIVIAL_TS_WINDOW`), because the family is neither cycle-owning nor a
+delegation family, so `check_ts_windows` asks nothing of it. The field memory has no boundary
+either: registers and the pc are the whole boundary (`memory.md` §4.2), so every field tuple
+balances between the field families' leaves and these windows' roots inside `reconciles`' one
+product.
+
+### 21.4 Rows
+
+A window shard has no padding: every row is a cell. `zero_row_valid` is `true` and the padding
+contract is `M[0] = 0, M[1] = 0`. Here that all-zero row is an ordinary row, a cell no access
+reached, and its two leaves cancel.
+
+| row | `teardown_ts` | `teardown_value` | leaves |
+| --- | --- | --- | --- |
+| a cell no access reached | 0 | 0 | both `T(FIELD, h·w + y, 0, 0)`: they cancel |
+| a cell some access reached, by a read or a write (a read writes back what it read) | the last access's write timestamp `t = 4·c + Δ` | the value it wrote, `v`: any `Fr`, 0 for a cell only read | `T(FIELD, h·w + y, t, v)` read against `T(FIELD, h·w + y, 0, 0)` written |
+
+`guests/field-ops`' cell 0 is the second row with `v = 0`: it is read and never written, so the
+read re-stamps the cell and keeps its zero, which `crates/emulator/tests/guests.rs` asserts.
+
+Nothing in this circuit checks a row alone. There is no enforcing gate to check one with, and no
+obligation bounds either column. Both are fixed by the memory argument alone: the multiset
+forces a window's teardown column to be each cell's last `(ts, value)` (`memory.md` §4.2), over
+the chain the field accesses' own gap checks build, two `RANGE16` chunks a read as for a frame
+word (`recursion.md` §2.1). `teardown_value` needs no bound, because a cell holds an `Fr`.
+`teardown_ts` needs none, because the final read balances only against the chain's highest
+write (`memory.md` §4.2).
+
+**What holds this in CI**:
+
+- `crates/constraints/tests/recursion.rs`'
+  `the_recursion_families_build_in_the_recursion_registry_alone` builds the circuit at `2^20`,
+  which runs `validate` and `check_memory`. It asserts `zero_row_valid` and that
+  `family_circuit(18, 20)` is `None`.
+- `recursion.txt`'s first line is rewritten by `cargo run -p kat-gen -- recursion`, a default
+  group, and CI diffs it.
+- `crates/checker/tests/recursion.rs`' `the_field_families_hold_and_the_field_memory_balances`
+  fills a `2^12` field window from `guests/field-ops`' real trace with `prover::family_fill`.
+  It evaluates both leaves on all 4,096 rows through the engine's kernel, under
+  `field_window_challenges` at window 0. It then multiplies every field leaf that the four
+  field families' live rows evaluate, and holds the reads times the teardowns equal to the
+  writes times the inits. So a slot, an offset or a stride on which the circuits and the
+  executor disagree leaves a tuple with no partner.
+- `crates/emulator/tests/guests.rs`' `field_ops_checks_itself_under_the_recursion_ecalls`
+  asserts that the guest's field memory is one window at `2^20`.
+
+The proof half is `crates/prover/tests/field_ops.rs`' `the_recursion_format_proves_and_verifies`,
+`#[ignore]`d for size. It proves one field window shard, verifies it through `verify_block` and
+replays its tape against `verify_shard_local`.
+
+**Two things no suite reaches.** `field-ops` touches fewer than 4,096 cells, so it is one window
+at every height a suite gives the family, and every run above is window 0. Whatever depends on
+`w` is therefore exercised only where it is 0: slot 5's `α_addr·h·w`, in
+`field_window_challenges` and in the tape, and the fill's first cell `h·w`. The stride inside the
+artifact is held, by every row from 1 up of the checker's window; the stride in the window's
+first cell is not. And `check_memory_windows`' cell bound has no negative control.
+
 ---
 
-## 21. Observations
+## 22. `FR_OP` — family 19
+
+### 22.1 Header
+
+| | |
+| --- | --- |
+| id, constant | 19, `constants::family::FR_OP` |
+| registry | `constraints::recursion_circuit(19, n)` and nothing else: `family_circuit(19, n)` is `None` at every `n` |
+| constructor | `constraints::fr_op::artifact(n)` |
+| channels | `fr_op::channels()`: **`RANGE16`**, table `V[range16]`, multiplicity `W[30]` |
+| fill | the private `prover::fill::fr_op` |
+| normative spec | `docs/spec/recursion.md` §3, with §1.2, §1.4 and §2; `docs/spec/delegation.md` §4 and §5 for the frame and the anchor |
+| ecall, spaces | `0x0509` (`ecall::PRECOMPILE_FR_OP`); anchor space `address_space::DELEGATION_FR_OP` = 11; cells in `address_space::FIELD` = 10 |
+| committed | 31 `M`, 31 `W`, 0 `S` — 62 |
+| virtual | 1: `V[range16]` |
+| gate list 0 | 144 producing columns — 8 memory leaves a side, no pad, and 64 fraction pairs — and 44 enforcing gates (9 degree-1, 35 degree-2) |
+| obligations | 36, all `RANGE16` |
+| outputs | 4 |
+| at `n = 20` | depth 27 (7 row-wise + 20 halving), top `L27`, 370 inner columns, 414 relations, 89,741 wire bytes |
+
+`recursion_circuit(19, n)` is `fr_op::artifact(n)` with `fr_op::channels()`, one `RANGE16`
+channel. **Only the recursion registry holds it** (`recursion.md` §1.2): its arm in
+`constraints::circuit` is `f::FR_OP if recursion`, so `family_circuit(19, n)` is `None` at every
+height, and `crates/constraints/tests/recursion.rs`'
+`the_recursion_families_build_in_the_recursion_registry_alone` asserts both halves at the default
+height. A verifying key reaches it through `VmConfig::circuit`, which takes `recursion_circuit`
+exactly when the config holds `FIELD_WINDOWS`; declaring `FR_OP` is what puts `FIELD_WINDOWS`
+there (`program::FIELD_DELEGATIONS`), so a program that calls this family is in the recursion
+format by construction. Like `MOD_MUL`, `EC_ADD` and `FR_ARITH` it is built by `memory::assemble`:
+every constraint is an enforcing gate on gate list 0, and above the leaves there are two product
+trees, one fraction tree and nothing else.
+
+**None of the counts in the table depends on `n`** but its last row's: the depth, the inner and
+the relation totals are `7 + n`, `290 + 4n` and `334 + 4n`, a height adding one halving list of
+four nodes and nothing else, and the wire bytes grow with it — this page gives them at `n = 20`
+only. `crates/constraints/tests/vectors/recursion.txt` pins the `n = 20` artifact by digest, as
+the six base delegation families are pinned (§1.2):
+`FR_OP 20 31 31 27 370 414 4 89741 b3cf7d6c…d27a596f` — `n`, `M`, `W`, gate lists, inner columns,
+relations, outputs, bytes and SHA-256. `cargo run -p kat-gen -- recursion` writes the line and
+`recursion` is a default group, so CI regenerates and diffs it; unlike the six lines of the
+`delegation` group, no kat-gen unit test holds it to its constructor. This section was read from a
+`checker dump` of those 89,741 bytes, whose SHA-256 is the committed one.
+
+`artifact` panics unless `lookup::check_copowers` accepts its ten scaled columns (§22.6) and the
+widths are `fr_op::MEMORY_COLUMNS` = 31 and `fr_op::WITNESS_COLUMNS` = 31; `memory::assemble`
+before it panics on every refusal of `validate`, of `memory::check_memory` and, the family
+declaring a channel, of `lookup::check_discharge`. **There is no `check_shape`**: unlike
+the six base delegation families, nothing asserts the obligation count or a gate by name where
+the artifact is built.
+
+**The height is `2^20`, a choice above a floor of `2^16`.** `RANGE16`'s table needs sixteen
+variables, so §1.1's derived guard makes `recursion_circuit(19, n)` `Some` for `16 ≤ n ≤ 30` and
+`None` below. `DEFAULT_HEIGHTS[FR_OP]` is `2^20`, "a million field operations a shard", and
+`recursion.md` §8.3 measures one leaf over block 257510's first 32 base shards at 312,984 `FR_OP`
+calls, one `2^20` shard. The circuit is narrow enough for the height: its seven row-wise layers'
+290 columns at `2^20` rows and 32 bytes are about 9.7 GB of forward pass — computed as §18.1
+computes its figures, not measured. **The suites build it at `2^16`**:
+`crates/checker/tests/recursion.rs` evaluates rows of `recursion_circuit(19, 16)`, and the deferred
+`crates/prover/tests/field_ops.rs` proves `guests/field-ops`' block with the family at `2^16`.
+
+**Stacked commitments.** In the recursion format a shard commits its `M` columns and its `W`
+columns as stacks (`recursion.md` §1.3). `VmConfig::stack_vars` gives this artifact
+`σ = min(6, 24 − n)` — six being the smallest even `σ` with `2^σ ≥ 31` — so at `n = 20` each
+phase's 31 columns are two stacks of sixteen, and at the suites' `n = 16` one stack of 64. §1.2's
+`proof_bytes` is the base format's layout, one commitment a column, so this page gives no
+proof-byte figure for the family.
+
+**One row is one field operation**, `ops/row = 1`, over up to three cells of the field memory,
+and the frame `[op, d, a, b]` is **read-only**: four RAM words the guest wrote — an operation code
+and three cell numbers, the last of which `IMM` and `SHL` read as an integer instead — written
+back unchanged. The result goes to a field cell and never to RAM. The request that pairs with the
+row, an `ADD_SUB` row of the recursion format, leaves `a0` at `base + 16` rather than 0
+(`recursion.md` §1.4); that is that circuit's `deleg_a0_rule`, which
+`crates/checker/tests/add_sub.rs`' `a_recursion_request_advances_a0_past_its_frame` holds, and
+nothing in this circuit reads `a0`. Its callers are `verifier_core::tape`, which compiles a
+shard's checks into straight-line runs of `FR_OP`, `P2_FIELD` and `FIELD_IO` calls over absolute
+cells (`recursion.md` §7), and the fold's MSM templates (`recursion.md` §8.3).
+
+**Its §0.5 counts are at `n = 20`**, its default: 107 `Linear`, 77 `Product`, 150 `Quadratic`, 60
+`TreeProduct` (3 a halving list) and 20 `TreeCross` (1 a halving list), which sum to 414.
+
+### 22.2 Row kinds
+
+**Invoked, not decoded**: the family claims no pc, `program::lookup_tuple(19)` is empty, it owns
+no cycle (`CYCLE_OWNING` is `false` for it), and it is in a `VmConfig` exactly when the linked
+binary declares it, through its `.rodata.apogee.delegations.fr_op` record. A row is live or
+padding; there is no no-op kind. On a live row exactly one op selector is set, and its code is
+frame word 0.
+
+| op | code | selector | `a_live` | `b_live` | `d_live` | `x` | what the row states | field accesses |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `MUL` | 1 | `op1`, `W[18]` | 1 | 1 | 1 | `b` | `d′ = prod = a·b` | 3 |
+| `ADD` | 2 | `op2`, `W[19]` | 1 | 1 | 1 | 0 | `d′ = a + b` | 3 |
+| `SUB` | 3 | `op3`, `W[20]` | 1 | 1 | 1 | 0 | `d′ = a − b` | 3 |
+| `MAC` | 4 | `op4`, `W[21]` | 1 | 1 | 1 | `b` | `d′ = d + prod` — the one op whose gate reads `d`'s old value | 3 |
+| `INV` | 5 | `op5`, `W[22]` | 1 | 0 | 1 | `d′` | `a·d′ = 1 − z`: `d′ = a⁻¹`, and 0 at `a = 0` | 2 |
+| `EQ` | 6 | `op6`, `W[23]` | 1 | 1 | 0 | 0 | `a = b`, or the row has no witness; writes nothing | 2 |
+| `IMM` | 7 | `op7`, `W[24]` | 0 | 0 | 1 | 0 | `d′ = w3`, frame word 3 read as an integer | 1 |
+| `SHL` | 8 | `op8`, `W[25]` | 1 | 0 | 1 | 0 | `d′ = 2^32·a + w3` | 2 |
+| `DIGIT` | 9 | `op9`, `W[26]` | 1 | 1 | 1 | 0 | `a = d′ + 2^8·b′` with `d′ < 2^8`, writing `b` and `d` | 3 |
+| padding | — | all 0 | 0 | 0 | 0 | 0 | nothing | 0 |
+
+Every live row adds five read and five write tuples besides its field accesses: the four frame
+words at `(RAM, base + 4j)`, read at their own timestamps and written back at `4·cycle + 0`, and
+the anchor pair at `(DELEGATION_FR_OP, base)` — the teardown read at `4·cycle + 3` and the answer,
+written at timestamp 0 with value 0. Each field access is one read and one write at
+`(FIELD, cell)`: `a` at `4·cycle + 0`, `b` at `+ 1`, `d` at `+ 2`. A masked-off access's two leaves
+are the product's identity, so a live row adds 8, 7 or 6 tuples a side. A padding row adds none:
+its 16 leaves are all 1.
+
+**Every aliasing is legal because the slots are distinct** (`recursion.md` §3,
+`execution-trace.md` §3). The three field accesses take Δ 0, 1 and 2, the frame's RAM words also
+take Δ 0 but in another space, and the anchor takes Δ 3 in its own; so a cell named twice in one
+row is read, written back and read again at the next slot. `guests/field-ops` makes the cases on
+purpose: `MUL 1, 1, 1` reads cell 1 as `a`, as `b` after `a`'s write-back and as `d` after `b`'s,
+and writes 49 at Δ 2; `DIGIT 12, 11, 11` reads one cell as `a` and as `b` and writes the rest back
+into it; `EQ 0, 1, 1` compares a cell with itself. An access whose read consumes the same row's
+previous slot has a gap of 0, which its obligations admit.
+
+**Not provable**, and refused by the executor first: an op word outside 1–9
+(`EmuError::DelegationFrame`, "the op is not one FR_OP answers"); an `EQ` whose cells differ (the
+same error, "EQ's two cells hold different values"); a frame base that is misaligned or puts the
+frame outside RAM (`Misaligned`, `OutOfBounds`). A cell no `FIELD_WINDOWS` window covers has no
+init tuple, so a read of it cannot balance (`recursion.md` §2.2); no gate says so.
+
+**The padding row.** With `live = 0`, `one_op_a_live_row` and the nine booleanity gates force
+every selector to 0; the three mask rules then force every mask to 0, `x_rule` and `prod_rule`
+give `x = prod = 0`, and `z_only_inv` gives `z = 0`. `op_word` and `writes_back_w{j}` are
+ungated, so the op word reads 0 and every frame word writes back what it read; `b_kept` makes
+`b′ = b`. Nothing else is forced: every other cell is free on a padding row and is 0 because the
+fill writes it so. `zero_row_valid` is `true` and the padding contract is the all-zero row.
+
+### 22.3 The base layer
+
+**`M`, 31 columns** — `constraints::delegation`'s head and frame over four words, then the three
+accesses. Filled by `fill::fr_op`: the head and the frame through `recursion_frame`, which is
+`delegation_frame_range16`, and each access through `access_columns`, which writes zeros where
+the row does not make the access (`trace::AccessColumns`). Committed in
+`PublicInputs::memory_commitments`, as stacks, and absorbed at G8 before the memory challenges.
+
+| `PolyAddress` | name | Rust | what the honest fill writes | read by |
+| --- | --- | --- | --- | --- |
+| `M[0]` | `cycle` | `delegation::CYCLE` | the requesting cycle | `read_anchor`'s timestamp, the seven write leaves but `write_anchor`, the seven `*_lo_range` obligations — **no gate** |
+| `M[1]` | `live` | `delegation::LIVE` | 1 on an invocation | the ten frame and anchor leaves (mask), the 22 frame and base obligations (selector), `live_boolean`, `addr_w{j}`, `base_aligned`, `base_in_window`, `one_op_a_live_row` |
+| `M[2]` | `base` | `delegation::BASE` | the frame base the request passed in `a0` | `read_anchor`, `write_anchor`, `addr_w{j}`, `base_aligned`, `base_in_window` |
+| `M[3]` | `anchor_value` | `delegation::ANCHOR_VALUE` | 0 | `read_anchor` alone |
+| `M[4 + 4j]` | `w{j}_addr` | `delegation::word(j, WORD_ADDR)` | `base + 4j` | `read_w{j}`, `write_w{j}`, `addr_w{j}` |
+| `M[5 + 4j]` | `w{j}_read_ts` | `word(j, WORD_READ_TS)` | the timestamp of the write the read consumed | `read_w{j}`, `gap{j}_lo_range` — **no gate** |
+| `M[6]` | `w0_read_value` | `word(0, WORD_READ_VALUE)` | the op code | `read_w0`, `writes_back_w0`, `op_word` |
+| `M[10]` | `w1_read_value` | `word(1, WORD_READ_VALUE)` | `d`'s cell | `read_w1`, `writes_back_w1`, and the address of `read_d` and `write_d` |
+| `M[14]` | `w2_read_value` | `word(2, WORD_READ_VALUE)` | `a`'s cell | `read_w2`, `writes_back_w2`, and the address of `read_a` and `write_a` |
+| `M[18]` | `w3_read_value` | `word(3, WORD_READ_VALUE)` | `b`'s cell, or the integer `IMM` and `SHL` read | `read_w3`, `writes_back_w3`, the address of `read_b` and `write_b`, `imm_rule`, `shl_rule` |
+| `M[7 + 4j]` | `w{j}_write_value` | `word(j, WORD_WRITE_VALUE)` | the word read, unchanged | `write_w{j}`, `writes_back_w{j}` |
+| `M[20]` | `a_live` | `fr_op::A_LIVE` | 1 where the op reads `a`: every op but `IMM` | `read_a`, `write_a` (mask), `gap_a_*` (selector), `a_live_boolean`, `a_live_rule` |
+| `M[21]` | `a_read_ts` | `fr_op::A_READ_TS` | when `a`'s cell was last written | `read_a`, `gap_a_lo_range` — **no gate** |
+| `M[22]` | `a` | `fr_op::A` | `a`'s value — the read value **and** the written one | `read_a`, `write_a`, `prod_rule`, `add_rule`, `sub_rule`, `eq_rule`, `shl_rule`, `digit_rule`, `z_kills_a` |
+| `M[23]` | `b_live` | `fr_op::B_LIVE` | 1 on `MUL`, `ADD`, `SUB`, `MAC`, `EQ`, `DIGIT` | `read_b`, `write_b` (mask), `gap_b_*` (selector), `b_live_boolean`, `b_live_rule` |
+| `M[24]` | `b_read_ts` | `fr_op::B_READ_TS` | when `b`'s cell was last written | `read_b`, `gap_b_lo_range` — **no gate** |
+| `M[25]` | `b` | `fr_op::B` | `b`'s value before the row | `read_b`, `x_rule`, `add_rule`, `sub_rule`, `eq_rule`, `b_kept` |
+| `M[26]` | `b_new` | `fr_op::B_NEW` | `b`'s value after it: `DIGIT`'s rest, and `b` on every other op | `write_b`, `digit_rule`, `b_kept` |
+| `M[27]` | `d_live` | `fr_op::D_LIVE` | 1 on every op but `EQ` | `read_d`, `write_d` (mask), `gap_d_*` (selector), `d_live_boolean`, `d_live_rule` |
+| `M[28]` | `d_read_ts` | `fr_op::D_READ_TS` | when `d`'s cell was last written | `read_d`, `gap_d_lo_range` — **no gate** |
+| `M[29]` | `d` | `fr_op::D` | `d`'s value before the row | `read_d`, `mac_rule` |
+| `M[30]` | `d_new` | `fr_op::D_NEW` | the result | `write_d`, `x_rule`, `mul_rule`, `add_rule`, `sub_rule`, `mac_rule`, `imm_rule`, `shl_rule`, `digit_rule`, `z_kills_d`, `digit_range`, `digit_scaled` |
+
+**`W`, 31 columns**, in layout order — all filled by `fill::fr_op` but the last. Committed in
+`ShardProof::witness_commitments`, as stacks, absorbed at S3, with `g` drawn after them at S4.
+
+| `PolyAddress` | name | Rust | what the honest fill writes | read by |
+| --- | --- | --- | --- | --- |
+| `W[2j + c]`, `j < 4`, `c < 2` | `gap{j}_c{c}` | — (`fill::recursion_chunk`) | chunk `c` of `4·cycle − w{j}_read_ts − 1`, weight `2^{16(c+1)}` | `gap{j}_c{c}_range`, `gap{j}_lo_range`, and at `c = 1` `gap{j}_top_scaled` — **no gate** |
+| `W[8]` | `base_low` | — | `(base − RAM_ORIGIN)/4` | `base_aligned`, `base_low_lo_range` |
+| `W[9]` | `base_low_hi` | — | its high halfword | the three `base_low_*` obligations — **no gate** |
+| `W[10]` | `base_room` | — | `2^31 − 16 − base` | `base_in_window`, `base_room_lo_range` |
+| `W[11]` | `base_room_hi` | — | its high halfword | the three `base_room_*` obligations — **no gate** |
+| `W[12 + 2q + c]`, `q` = `a`, `b`, `d` | `gap_{q}_c{c}` | `fr_op::gap_chunk(q, c)` | chunk `c` of `4·cycle + Δ_q − read_ts − 1` where the row makes the access, 0 where it does not | the access's four obligations — **no gate** |
+| `W[18 + i]`, `i < 9` | `op{i+1}` | `fr_op::selector(i)` | 1 on the row's own op, in `constants::fr_op::OPS` order | `op{c}_boolean`, `one_op_a_live_row`, `op_word`, each mask rule that names the op, and the op's own gate; `op5` also `x_rule` and `z_only_inv`, `op1` and `op4` `x_rule`, `op9` `b_kept` and the two digit obligations' selector |
+| `W[27]` | `x` | `fr_op::X` | `b` on `MUL` and `MAC`, `d′` on `INV`, 0 on every other op | `x_rule`, `prod_rule` |
+| `W[28]` | `prod` | `fr_op::PROD` | `a·x` | `prod_rule`, `mul_rule`, `mac_rule`, `inv_rule` |
+| `W[29]` | `z` | `fr_op::Z` | 1 exactly on an `INV` row whose `a` is 0 | `inv_rule`, `z_boolean`, `z_kills_a`, `z_kills_d`, `z_only_inv` |
+| `W[30]` | `mult_range16` | `fr_op::MULTIPLICITY` | `trace::build_multiplicities`' count, appended after the fill | `range16_table_num` — **no gate** |
+
+**`S`: none**, the channel's table being a closed form.
+
+The frame's own `W` columns, `W[0..12]`, have no accessor in `constraints::fr_op`: they are
+`delegation::read_only_frame_range16`'s, the layout `delegation::frame_witness_range16(4) = 12`
+names, and the fill reaches the chunks through its private `recursion_chunk`.
+
+**The cells are frame words, so a row has no address column of its own.** `a`'s cell is
+`w2_read_value`, `b`'s `w3_read_value` and `d`'s `w1_read_value`, and each field leaf's address
+operand is that `M` column. No gate bounds a cell number.
+
+**Sixteen of the columns the fill writes are `Fr`-backed** — `cycle`, the four frame and three
+access read timestamps, the five value columns `a`, `b`, `b_new`, `d`, `d_new`, and `x`, `prod`
+and `z` — and every other is `u32`-backed. A cell holds a whole `Fr`, and no gate decomposes one.
+
+**17 of the 31 `W` columns are read by no gate**: the 14 gap chunks, `base_low_hi`, `base_room_hi`
+and the multiplicity. Each is the direct half of a range bound or a table count, and the channel
+is the only thing that refuses a wrong one.
+
+### 22.4 Gate list 0: the 144 leaves
+
+144 producing columns, relations 0–143 in tree order; relation `r` defines `L1[r]`.
+
+| relations | columns | what |
+| --- | --- | --- |
+| 0–3 | 4 | `read_w0` … `read_w3` |
+| 4 | 1 | `read_anchor` |
+| 5–7 | 3 | `read_a`, `read_b`, `read_d` |
+| 8–11 | 4 | `write_w0` … `write_w3` |
+| 12 | 1 | `write_anchor` |
+| 13–15 | 3 | `write_a`, `write_b`, `write_d` |
+| 16–17 | 2 | `range16_table_num`, `range16_table_den` |
+| 18–49 | 32 | the four frame gaps' four obligations, `(num, den)` each |
+| 50–61 | 12 | `base_low`'s three obligations, then `base_room`'s |
+| 62–85 | 24 | the three accesses' gaps, `a`, `b` then `d`, four obligations each |
+| 86–89 | 4 | `digit_range`, `digit_scaled` |
+| 90–143 | 54 | `range16_pad_0` … `range16_pad_26`, 27 neutral fractions to 64 |
+
+**No pad leaf.** The frame and the anchor are five leaves a side, which `delegation::leaves` pads
+to eight; `delegation::leaves_with` drops those pads, appends the three accesses' pairs, and pads
+again to a power of two, and eight is one. `FR_OP` is the first delegation family in this page
+whose product trees are exactly full.
+
+The sixteen memory leaves are §0.6's frame-leaf pattern, each under its mask `m`, built by
+`delegation::masked_leaf` — the frame and the anchor through `delegation::leaves`, the accesses
+through `delegation::Access::leaves` — each one `Quadratic` with constant 1:
+
+```text
+pattern     m·T(space, addr, ts, value) + 1 − m
+positional  1 + mem_gamma·m + -1·m + space·m + (mem_alpha_ts·m) ×Δ
+              + mem_alpha_addr·addr·m + <ts> + mem_alpha_val·value·m
+<ts>        mem_alpha_ts·read_ts·m on a read; (mem_alpha_ts·M[0]·m) ×4 on a write
+```
+
+| leaf | relation | mask `m` | space | addr | ts | value |
+| --- | --- | --- | --- | --- | --- | --- |
+| `read_w{j}` | `j` | `live` `M[1]` | `RAM` = 2 | `M[4 + 4j]` | `M[5 + 4j]` | `M[6 + 4j]` |
+| `read_anchor` | 4 | `live` | 11 | `M[2]` | `4·cycle + 3` | `M[3]` |
+| `read_a` | 5 | `a_live` `M[20]` | `FIELD` = 10 | `M[14]` | `M[21]` | `M[22]` |
+| `read_b` | 6 | `b_live` `M[23]` | 10 | `M[18]` | `M[24]` | `M[25]` |
+| `read_d` | 7 | `d_live` `M[27]` | 10 | `M[10]` | `M[28]` | `M[29]` |
+| `write_w{j}` | `8 + j` | `live` | 2 | `M[4 + 4j]` | `4·cycle + 0` | `M[7 + 4j]` |
+| `write_anchor` | 12 | `live` | 11 | `M[2]` | the literal 0 | absent |
+| `write_a` | 13 | `a_live` | 10 | `M[14]` | `4·cycle + 0` | `M[22]`, the value read |
+| `write_b` | 14 | `b_live` | 10 | `M[18]` | `4·cycle + 1` | `M[26]` |
+| `write_d` | 15 | `d_live` | 10 | `M[10]` | `4·cycle + 2` | `M[30]` |
+
+`read_anchor`'s timestamp `4·cycle + 3` is spelled as a write's is, three `mem_alpha_ts·M[1]`
+linear terms and four `mem_alpha_ts·M[0]·M[1]` products; `write_anchor` is
+`1 + mem_gamma·M[1] + -1·M[1] + 11·M[1] + mem_alpha_addr·M[2]·M[1]` and nothing else.
+
+The fraction leaves are `lookup.md` §6's — `(−mult, T + g)` for the table, `(1, E_l + g)` per
+obligation, `(0, 1)` per pad — and every one is `Linear` but the 36 row denominators:
+
+```text
+range16_table_num    -1·W[30] + 0
+range16_table_den    1·V[range16] + lookup_g
+<obligation>_num     1
+<obligation>_den     lookup_g + <constant>·s + Σ c·s·x        Quadratic; s the selector, c·x the tuple's terms
+range16_pad_{i}_num  0
+range16_pad_{i}_den  1
+```
+
+so `gap_a_lo_range_den` is
+`lookup_g + -1·M[20] + 4·M[20]·M[0] + -1·M[20]·M[21] + -65536·M[20]·W[12] + 0x30644e72…f592f0000001·M[20]·W[13]`,
+and `digit_range_den` is `lookup_g + 1·W[26]·M[30]`.
+
+### 22.5 Gate list 0: the 44 enforcing gates
+
+Relations 144–187, in `artifact`'s order: the frame's eleven from
+`delegation::read_only_frame_range16` (`frame_gates_range16`, then one `writes_back_w{j}` a
+word), then the family's 33 from `fr_op`'s private `gates()`. The nine degree-1 gates are
+`Linear` (`delegation::linear`); the 35 degree-2 gates are `Quadratic` with constant 0
+(`delegation::quadratic` and `booleanity`). Every gate's constant is 0, so `zero_row_valid` is
+`true` (`build::zero_on_zero_row`).
+
+Positional form, as the dump stores each, `0 = …` for every row; `0x30644e72…f592f0000001` is
+`−2^32` (§0.2):
+
+```text
+144 live_boolean        (0 + 1·M[1] + -1·M[1]·M[1])
+145 addr_w0             (0 + 0·M[1] + 1·M[1]·M[4] + -1·M[1]·M[2])
+146 addr_w1             (0 + -4·M[1] + 1·M[1]·M[8] + -1·M[1]·M[2])
+147 addr_w2             (0 + -8·M[1] + 1·M[1]·M[12] + -1·M[1]·M[2])
+148 addr_w3             (0 + -12·M[1] + 1·M[1]·M[16] + -1·M[1]·M[2])
+149 base_aligned        (0 + -65536·M[1] + 1·M[1]·M[2] + -4·M[1]·W[8])
+150 base_in_window      (0 + 2147483632·M[1] + -1·M[1]·M[2] + -1·M[1]·W[10])
+151 writes_back_w0      (1·M[7] + -1·M[6] + 0)                 152–154 the same over M[11]/M[10], M[15]/M[14], M[19]/M[18]
+155 op1_boolean         (0 + 1·W[18] + -1·W[18]·W[18])         156–163 the same over W[19] … W[26]
+164 one_op_a_live_row   (-1·M[1] + 1·W[18] + 1·W[19] + 1·W[20] + 1·W[21] + 1·W[22] + 1·W[23] + 1·W[24] + 1·W[25] + 1·W[26] + 0)
+165 op_word             (-1·M[6] + 1·W[18] + 2·W[19] + 3·W[20] + 4·W[21] + 5·W[22] + 6·W[23] + 7·W[24] + 8·W[25] + 9·W[26] + 0)
+166 a_live_boolean      (0 + 1·M[20] + -1·M[20]·M[20])
+167 a_live_rule         (1·M[20] + -1·W[18] + -1·W[19] + -1·W[20] + -1·W[21] + -1·W[22] + -1·W[23] + -1·W[25] + -1·W[26] + 0)
+168 b_live_boolean      (0 + 1·M[23] + -1·M[23]·M[23])
+169 b_live_rule         (1·M[23] + -1·W[18] + -1·W[19] + -1·W[20] + -1·W[21] + -1·W[23] + -1·W[26] + 0)
+170 d_live_boolean      (0 + 1·M[27] + -1·M[27]·M[27])
+171 d_live_rule         (1·M[27] + -1·W[18] + -1·W[19] + -1·W[20] + -1·W[21] + -1·W[22] + -1·W[24] + -1·W[25] + -1·W[26] + 0)
+172 x_rule              (0 + 1·W[27] + -1·W[18]·M[25] + -1·W[21]·M[25] + -1·W[22]·M[30])
+173 prod_rule           (0 + 1·W[28] + -1·M[22]·W[27])
+174 mul_rule            (0 + 1·W[18]·M[30] + -1·W[18]·W[28])
+175 add_rule            (0 + 1·W[19]·M[30] + -1·W[19]·M[22] + -1·W[19]·M[25])
+176 sub_rule            (0 + 1·W[20]·M[30] + -1·W[20]·M[22] + 1·W[20]·M[25])
+177 mac_rule            (0 + 1·W[21]·M[30] + -1·W[21]·M[29] + -1·W[21]·W[28])
+178 eq_rule             (0 + 1·W[23]·M[22] + -1·W[23]·M[25])
+179 imm_rule            (0 + 1·W[24]·M[30] + -1·W[24]·M[18])
+180 shl_rule            (0 + 1·W[25]·M[30] + 0x30644e72…f592f0000001·W[25]·M[22] + -1·W[25]·M[18])
+181 inv_rule            (0 + -1·W[22] + 1·W[22]·W[28] + 1·W[22]·W[29])
+182 digit_rule          (0 + 1·W[26]·M[22] + -1·W[26]·M[30] + -256·W[26]·M[26])
+183 b_kept              (0 + 1·M[26] + -1·M[25] + -1·W[26]·M[26] + 1·W[26]·M[25])
+184 z_boolean           (0 + 1·W[29] + -1·W[29]·W[29])
+185 z_kills_a           (0 + 1·W[29]·M[22])
+186 z_kills_d           (0 + 1·W[29]·M[30])
+187 z_only_inv          (0 + 1·W[29] + -1·W[29]·W[22])
+```
+
+`addr_w0` carries the term `0·M[1]`: the constructor writes `−4j·live` at every `j`, and keeps it
+at `j = 0`.
+
+Named form:
+
+| relations | gate | degree | `= 0` | what it fixes |
+| --- | --- | --- | --- | --- |
+| 144 | `live_boolean` | 2 | `live − live²` | the frame's one mask is a bit |
+| 145–148 | `addr_w{j}` | 2 | `live·(w{j}_addr − base − 4j)` | word `j` is at `base + 4j` |
+| 149 | `base_aligned` | 2 | `live·(base − 65,536 − 4·base_low)` | the base is word-aligned and at or above `RAM_ORIGIN` = 65,536 |
+| 150 | `base_in_window` | 2 | `live·(2^31 − 16 − base − base_room)` | the 16-byte frame is inside RAM |
+| 151–154 | `writes_back_w{j}` | 1 | `w{j}_write_value − w{j}_read_value` | the frame survives the call: the guest's op and cells cannot be rewritten |
+| 155–163 | `op{c}_boolean` | 2 | `op{c} − op{c}²` | each selector is a bit |
+| 164 | `one_op_a_live_row` | 1 | `Σ_c op{c} − live` | one op a live row, none on padding |
+| 165 | `op_word` | 1 | `Σ_c c·op{c} − w0_read_value` | the op word is the set selector's code |
+| 166, 168, 170 | `{a,b,d}_live_boolean` | 2 | `m − m²` | each access mask is a bit |
+| 167 | `a_live_rule` | 1 | `a_live − Σ_{c ≠ 7} op{c}` | `a` is read by every op but `IMM` |
+| 169 | `b_live_rule` | 1 | `b_live − (op1 + op2 + op3 + op4 + op6 + op9)` | `b` is read by six ops |
+| 171 | `d_live_rule` | 1 | `d_live − Σ_{c ≠ 6} op{c}` | `d` is written by every op but `EQ` |
+| 172 | `x_rule` | 2 | `x − op1·b − op4·b − op5·d_new` | the multiplicand: `b` on `MUL` and `MAC`, `d′` on `INV`, else 0 |
+| 173 | `prod_rule` | 2 | `prod − a·x`, ungated | the one product |
+| 174 | `mul_rule` | 2 | `op1·(d_new − prod)` | `MUL` |
+| 175 | `add_rule` | 2 | `op2·(d_new − a − b)` | `ADD` |
+| 176 | `sub_rule` | 2 | `op3·(d_new − a + b)` | `SUB` |
+| 177 | `mac_rule` | 2 | `op4·(d_new − d − prod)` | `MAC` |
+| 178 | `eq_rule` | 2 | `op6·(a − b)` | `EQ` |
+| 179 | `imm_rule` | 2 | `op7·(d_new − w3_read_value)` | `IMM` |
+| 180 | `shl_rule` | 2 | `op8·(d_new − 2^32·a − w3_read_value)` | `SHL` |
+| 181 | `inv_rule` | 2 | `op5·(prod + z − 1)` | `INV`: `a·d′ = 1 − z` |
+| 182 | `digit_rule` | 2 | `op9·(a − d_new − 2^8·b_new)` | `DIGIT` |
+| 183 | `b_kept` | 2 | `(1 − op9)·(b_new − b)` | `b` is written back as read on every row but a `DIGIT` |
+| 184 | `z_boolean` | 2 | `z − z²` | — implied, see below |
+| 185 | `z_kills_a` | 2 | `z·a` | `z = 0` wherever `a ≠ 0` |
+| 186 | `z_kills_d` | 2 | `z·d_new` | `d′ = 0` wherever `z = 1` |
+| 187 | `z_only_inv` | 2 | `z·(1 − op5)` | `z = 0` off an `INV` row |
+
+**One product serves every op that multiplies.** `x` is `b` on `MUL` and `MAC` and `d′` on `INV`,
+so `prod = a·x` is the row's one product of two values, and each op's equation stays a sum of
+`selector·column` products, degree 2. `INV` is §14.4's is-zero gadget — `inv_rule`, `z_kills_a`
+and `z_kills_d` in the places of its three gates, the first spelled `op5·(prod + z − 1)` over the
+shared product — plus `z_only_inv`: on an `INV` row `a·d′ + z = 1`, `z·a = 0` and `z·d′ = 0`
+leave `d′ = a⁻¹` where `a ≠ 0` and `z = 1`, `d′ = 0` where `a = 0`.
+
+Five notes, each a thing that is easy to get wrong.
+
+- **`one_op_a_live_row` is what keeps a field write inside an invocation.** The three masks are
+  tied to the selectors and to nothing else, and the selectors are tied to `live` by this gate
+  alone. Without it a padding row — which pairs with no request, its ten frame and anchor leaves
+  being the product's identity — could set `op7`: `d_live_rule` makes its `d` access live,
+  `imm_rule` writes `w3_read_value`, which is free on a padding row, to the cell
+  `w1_read_value` names, likewise free, at a `cycle` of its choosing, and the multiset balances
+  it as an ordinary read-modify-write. Its other job is a second op on a live row. The codes are
+  1–9, so sums collide (`1 + 2 = 3`), but every pair of selectors but `{op6, op7}` already drives
+  one mask to 2 and is refused by that mask's booleanity — `a` is read by every op but `IMM` and
+  `d` written by every op but `EQ` — and `EQ` with `IMM` spells 13, which names no op.
+- **Four booleanity gates are implied, and three of them are required anyway.** Given
+  `one_op_a_live_row` and the nine `op{c}_boolean`, at most one selector is set, so each mask, a
+  sum of selectors, is 0 or 1. `a_live_boolean`, `b_live_boolean` and `d_live_boolean` are
+  nevertheless what `check_memory` requires of a committed leaf mask and `validate` of a lookup
+  selector, and each looks for that gate. `z_boolean` is implied by the gadget: off an `INV` row
+  `z_only_inv` makes `z` 0, and on one `inv_rule` and `z_kills_a` make it 1 exactly where `a = 0`.
+  `FR_ARITH`'s `is_zero` carries no such gate (§14.3); `recursion.md` §3 lists this one, and it
+  costs a gate and no degree.
+- **`DIGIT` does not pin the digit.** `digit_range` and `digit_scaled` hold `d′` below `2^8`, and
+  `digit_rule` then defines `b′ = (a − d′)·2^{−8}` over `Fr` for each of the 256 candidates, so a
+  `DIGIT` row admits 256 witnesses; the executor writes `a`'s canonical low byte. What gives a
+  chain of digits its meaning is the caller's last check that the rest is 0 —
+  `guests/field-ops`' `EQ 0, 11, 0` after four, the MSM template's sixteen `DIGIT`s "leaving
+  nothing over" (`recursion.md` §8.3) — after which `Σ_k d_k·2^{8k}` is congruent to the scalar,
+  a representation and not necessarily the canonical one (`recursion.md` §3).
+- **`b_kept` is what makes `b` an operand.** `b_live` is 1 on six ops and the `b` access writes
+  `b_new` at `4·cycle + 1`; on the five of them that are not `DIGIT`, `b_kept` is the only thing
+  saying `b_new = b`, so without it a `MUL` could rewrite its second operand's cell. `a` needs no
+  such gate: `write_a` writes `M[22]`, the column `read_a` read, so its write-back is structural.
+- **`op_word` and `writes_back_w{j}` are ungated**, both sides being 0 on the all-zero row, and
+  every nonzero constant rides a column: `base_aligned`'s `−RAM_ORIGIN` and `base_in_window`'s
+  `2^31 − 16` ride `live`, `inv_rule`'s `−1` rides `op5`.
+
+### 22.6 The 36 obligations and the channel
+
+One channel, `RANGE16` = channel 1, table `V[range16]`, multiplicity `W[30]`. The tuple is **one**
+expression wide, so it weights its column by the literal 1 and reads `g` and **no** power of `β`
+and no neutral: `E + g = g + s·e_0`. The helpers are
+`delegation::{bound_chunked, gap_lookups_range16, range16}`, shared with the base delegation
+families that carry `RANGE16`.
+
+| obligation | relations | count | selector | tuple | bound |
+| --- | --- | --- | --- | --- | --- |
+| `gap{j}_c0_range`, `gap{j}_c1_range` | 18–49 | 8 | `live` | `W[2j + c]` | each chunk below `2^16` |
+| `gap{j}_top_scaled` | ” | 4 | `live` | `2^10·W[2j + 1]` | the top chunk below `2^6` |
+| `gap{j}_lo_range` | ” | 4 | `live` | `4·cycle − w{j}_read_ts − 2^16·W[2j] − 2^32·W[2j + 1] − 1` | the derived low sixteen bits: the frame word's read precedes `4·cycle + 0` |
+| `base_low_c0_range`, `base_low_top_scaled`, `base_low_lo_range` | 50–55 | 3 | `live` | `W[9]`; `2^3·W[9]`; `W[8] − 2^16·W[9]` | `base_low < 2^29` |
+| `base_room_c0_range`, `base_room_top_scaled`, `base_room_lo_range` | 56–61 | 3 | `live` | `W[11]`; `2·W[11]`; `W[10] − 2^16·W[11]` | `base_room < 2^31` |
+| `gap_a_c0_range`, `_c1_range`, `_top_scaled`, `_lo_range` | 62–69 | 4 | `a_live` | `W[12]`; `W[13]`; `2^10·W[13]`; `4·cycle − a_read_ts − 2^16·W[12] − 2^32·W[13] − 1` | `a`'s read precedes `4·cycle + 0` |
+| `gap_b_c0_range`, `_c1_range`, `_top_scaled`, `_lo_range` | 70–77 | 4 | `b_live` | `W[14]`; `W[15]`; `2^10·W[15]`; `4·cycle − b_read_ts − 2^16·W[14] − 2^32·W[15]` | `b`'s read precedes `4·cycle + 1` |
+| `gap_d_c0_range`, `_c1_range`, `_top_scaled`, `_lo_range` | 78–85 | 4 | `d_live` | `W[16]`; `W[17]`; `2^10·W[17]`; `4·cycle − d_read_ts − 2^16·W[16] − 2^32·W[17] + 1` | `d`'s read precedes `4·cycle + 2` |
+| `digit_range` | 86–87 | 1 | `op9` | `d_new` | `d′ < 2^16` |
+| `digit_scaled` | 88–89 | 1 | `op9` | `2^8·d_new` | with the above, `d′ < 2^8` |
+
+**36 obligations**, in that order: 16 for the frame's gaps, 3 and 3 for the base, 12 for the
+accesses' gaps, 2 for the digit. Each gap is `4·cycle + Δ − read_ts − 1` in `[0, 2^38)`, so a
+`lo_range` tuple's constant is `Δ − 1`: −1 for the frame and `a`, 0 for `b`, +1 for `d`. The
+38-bit gap is §18.5's exact three-piece shape, `38 = 16 + 16 + 6`, and the base's 29 and 31 bits
+one committed chunk each.
+
+**Selectors: 22 obligations ride `live`, twelve an access's own mask and two `op9`.** Every leaf
+and every obligation of the six base delegation families rides `live`; here a row that does not
+make an access has `read_ts` 0, and its `gap_{q}_lo_range` would read `4·cycle + Δ − 1`, out of
+range once `4·cycle` passes `2^16` — the mask exempts it, as `live` exempts a padding row. The
+digit's pair rides the op's own selector, so `d_new` is bounded on a `DIGIT` row and nowhere else;
+on every other op no obligation reads it.
+
+**The scaled obligation alone bounds nothing**, and `lookup::check_copowers` is what says so
+(§18.5). `fr_op::artifact` passes it ten `(column, selector)` pairs, each the selector its scaled
+obligation carries: the four frame gap tops `W[1]`, `W[3]`, `W[5]`, `W[7]` and the two base
+halfwords `W[9]`, `W[11]` under `live`; the three access gap tops `W[13]`, `W[15]`, `W[17]` under
+`a_live`, `b_live`, `d_live`; and `d_new`, `M[30]`, under `op9`. Each has its direct obligation
+under the same selector, and the artifact is not built without it.
+
+**The channel table.**
+
+| channel | output positions | table columns | multiplicity |
+| --- | --- | --- | --- |
+| `RANGE16` = 1 | 2, 3 | `V[range16]` | `W[30]` |
+
+**37 leaves in a 64-leaf tree.** 36 obligations and the table fraction pad to 64 with 27 neutral
+fractions. 27 more obligations fit before the tree doubles; five fewer would halve it to 32 and
+take a row-wise list off the circuit, this tree alone setting `R = 6`, each product tree being 3
+deep.
+
+**One multiplicity column, read by no gate.** `trace::build_multiplicities` counts each table
+row's occurrences over the 36 gated tuples of every row of the shard — padding rows included, 36
+zeros each — and appends the column after the fill; `fill::fr_op` does not write it.
+`checker::violated_lookups` is the native reading of every obligation above, and
+`lookup::check_discharge`, which `memory::assemble` runs, is what says each has its own
+denominator leaf beside a numerator of 1 and the channel exactly one table fraction.
+
+### 22.7 The trees, the inner layers and the outputs
+
+Three trees: `read` and `write`, eight leaves each, and `range16`, 64 fractions. Seven row-wise
+lists — the `range16` tree's six levels and gate list 0 — then `n` halving lists. Each row-wise
+list reduces every tree pairwise; a tree already at one node copies itself up, so all three reach
+the halving phase together.
+
+| layer | read tree | write tree | `range16` | width |
+| --- | --- | --- | --- | --- |
+| `L1` | 8 | 8 | 128 | 144 |
+| `L2` | 4 | 4 | 64 | 72 |
+| `L3` | 2 | 2 | 32 | 36 |
+| `L4` | 1 | 1 | 16 | 18 |
+| `L5` | 1 | 1 | 8 | 10 |
+| `L6` | 1 | 1 | 4 | 6 |
+| `L7` | 1 | 1 | 2 | 4 |
+| `L8`–`L27` | 1 | 1 | 2 | 4 each |
+
+`370 = 144 + 72 + 36 + 18 + 10 + 6 + 4 + 20·4`, and at any admissible `n` the inner and relation
+totals are `290 + 4n` and `334 + 4n`.
+
+Relations: **0–143** list 0's leaves and **144–187** its enforcing gates, then **188–259** list 1,
+**260–295** list 2, **296–313** list 3, **314–323** list 4, **324–329** list 5, **330–333** list 6,
+and halving list `k` (`7 ≤ k ≤ n + 6`) holds `334 + 4(k − 7)` to `337 + 4(k − 7)`. The roots are
+relations `330 + 4n` to `333 + 4n`: **410–413** at `n = 20`. A product node is `Product` in lists
+1–3, where the memory trees reduce, and `TreeProduct` in a halving list; lists 4–6 carry the two
+memory nodes up as `Linear` copies. A fraction node is a `Quadratic` numerator and a `Product`
+denominator in lists 1–6, a `TreeCross` numerator and a `TreeProduct` denominator in a halving
+list (§0.6). Each halving list is the four gates `read_{k+1}_0`, `write_{k+1}_0`,
+`range16_{k+1}_0_num` and `range16_{k+1}_0_den`, the last list's being `read_root`, `write_root`,
+`range16_num_root` and `range16_den_root`.
+
+**The outputs**, in output-map order:
+
+| output | `PolyAddress` | name | read by |
+| --- | --- | --- | --- |
+| 0 | `L{27}[0]` | `read_root` | `verify_shard` step 10a, against `memory_roots[p]` for `p` the position of `(19, shard_index)` in `verifier_core::statement_shards`, and step 10b's product over the statement |
+| 1 | `L{27}[1]` | `write_root` | ditto |
+| 2, 3 | `L{27}[2..4]` | `range16_num_root`, `range16_den_root` | step 9: `num = 0` **and** `den ≠ 0`, or `Lookup { channel: 1 }` |
+
+On the all-zero row every memory leaf is `m·T + 1 − m` at `m = 0`, which is 1, so the product-tree
+clause holds with no pad leaf to help it; the fraction tree is exempt from it, as every fraction
+tree is (§0.6, `lookup.md` §6).
+
+### 22.8 Witness rows
+
+`crates/checker/tests/recursion.rs`' `the_field_families_hold_and_the_field_memory_balances` fills
+a `2^16` shard of this family from `guests/field-ops`' real trace with `prover::family_fill`, and
+evaluates each of its 38 live rows and the first padding row through `checker::violated_relations`,
+over scratch the engine's gate kernel computes row-locally, and through `checker::violated_lookups`.
+It also multiplies every live row's field leaves, with `P2_FIELD`'s, `FIELD_IO`'s and `FQ_OP`'s and
+the field window's teardown and init, and requires reads × teardowns = writes × inits: a slot or an
+address the circuit and the executor disagreed on would leave a tuple with no partner. It runs in
+ordinary CI. `crates/emulator/tests/guests.rs`' `field_ops_checks_itself_under_the_recursion_ecalls`
+pins the 38 invocations and the guest's exit status, 26, each check a literal read back through an
+`EXPORT`.
+
+The rows below are those calls' operation-level cells as `fill::fr_op` writes them over the
+executor's answers. **They were derived from the guest's source and `emulator`'s `fr_op`, not
+printed from a run**, and the cycle, the base, the read timestamps and the gap chunks, which are
+the run's, are left out. A call is written `OP d, a, b` as `guests/field-ops`' `fr` takes it, so
+the frame is `[code, d, a, b]`; `live` is 1 on rows 0–37, and the row's own `op{c}` is its one
+selector.
+
+| row | call | frame `w0`…`w3` | `a_live` `b_live` `d_live` | `a` | `b` | `b_new` | `d` | `d_new` | `x` | `prod` | `z` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | `IMM 1, 0, 7` | 7, 1, 0, 7 | 0 0 1 | 0 | 0 | 0 | 0 | 7 | 0 | 0 | 0 |
+| 2 | `MUL 3, 1, 2` | 1, 3, 1, 2 | 1 1 1 | 7 | 11 | 11 | 0 | 77 | 11 | 77 | 0 |
+| 5 | `MAC 5, 1, 2` | 4, 5, 1, 2 | 1 1 1 | 7 | 11 | 11 | 73 | 150 | 11 | 77 | 0 |
+| 6 | `INV 6, 5, 0` | 5, 6, 5, 0 | 1 0 1 | 150 | 0 | 0 | 0 | `150⁻¹` | `150⁻¹` | 1 | 0 |
+| 9 | `EQ 0, 7, 8` | 6, 0, 7, 8 | 1 1 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 0 |
+| 10 | `INV 9, 0, 0` | 5, 9, 0, 0 | 1 0 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 |
+| 11 | `SHL 10, 8, 5` | 8, 10, 8, 5 | 1 0 1 | 1 | 0 | 0 | 0 | `2^32 + 5` | 0 | 0 | 0 |
+| 12 | `MUL 1, 1, 1` | 1, 1, 1, 1 | 1 1 1 | 7 | 7 | 7 | 7 | 49 | 7 | 49 | 0 |
+| 15 | `DIGIT 12, 11, 11` | 9, 12, 11, 11 | 1 1 1 | `0x12345678` | `0x12345678` | `0x123456` | 0 | `0x78` | 0 | 0 | 0 |
+| 38 | padding | 0, 0, 0, 0 | 0 0 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+Row 10 is the gadget's zero case, `z = 1` and `d′ = 0`; row 12 reads one cell three times, `b`
+and `d` each reading the previous slot's write-back; row 15's `0x78` is one of the 256 digits its
+gates admit. The 0s of
+an access the op does not make — `a` and `b` on row 0, `b` on rows 6 and 11, `d` on row 9 — are
+the fill's, and free (§22.9).
+
+**No negative control exercises this circuit.** No suite corrupts a cell of an `FR_OP` row and
+requires a named gate or obligation to refuse it, row-locally or through `checker::TamperHarness`,
+and none runs the checker's independent validators — `check_laws`, `check_padding`,
+`check_padding_identity` — over this artifact: its construction-time checks are `constraints`'
+own, and a key built over it runs `VerifyingKey::check`. What a whole proof adds is the deferred
+`crates/prover/tests/field_ops.rs`: the block at `2^16` proved and verified through
+`verify_block`, and every shard's tape replayed and held to `verify_shard_local` and
+`pcs::batch_verify_deferred`.
+
+### 22.9 What fixes each cell
+
+Read off the gates and §22.3's readers, not off a tamper table or a probe; §22.8 says why there
+is neither.
+
+| cell | what fixes it |
+| --- | --- |
+| `cycle`, `base` | the multiset: the frame's and the accesses' writes ride `4·cycle + Δ`, and the anchor's teardown read at `4·cycle + 3` has the request's mirror write as its only partner; locally `base_aligned`, `base_in_window` and `addr_w{j}` |
+| `live` | `live_boolean`, every frame and anchor leaf's mask, and `one_op_a_live_row` |
+| `anchor_value` | **nothing local**: the request's mirror write must equal it, and the memory argument is what says so (§26 observation 19) |
+| `w{j}_addr` | `addr_w{j}`, against `base` |
+| `w{j}_read_ts` | the multiset; the four `gap{j}_*` obligations only hold it below `4·cycle` |
+| `w0_read_value`, the op word | the frame's read tuple, `writes_back_w0` and `op_word` — with the selectors, one of 1–9 on a live row and 0 on a padding row |
+| `w1_read_value` … `w3_read_value` | the frame's read tuples and `writes_back_w{j}`; as cell numbers, nothing local — a cell no window initializes cannot balance; `w3` is also `imm_rule`'s and `shl_rule`'s operand |
+| `w{j}_write_value` | `writes_back_w{j}` |
+| `a_live`, `b_live`, `d_live` | the mask rule against the selectors, and its booleanity gate |
+| `a_read_ts`, `b_read_ts`, `d_read_ts` | where the access is made, the multiset and the access's four gap obligations under its mask; where it is not, **nothing** |
+| `a` | where `a_live` is 1, the multiset — `read_a` and `write_a` are one column, so the read is the cell's last value and is what goes back; the op gates read it. On an `IMM` row, **nothing** |
+| `b` | where `b_live` is 1, the multiset; on `INV`, `IMM` and `SHL` rows `b` and `b_new` are free together under `b_kept` |
+| `b_new` | `b_kept`, `b` on every row but a `DIGIT`; there `digit_rule`, given `a` and `d_new` |
+| `d` | where `d_live` is 1, the multiset, `d`'s cell's last value; only `mac_rule` reads it. On an `EQ` row, **nothing** |
+| `d_new` | the op's gate — `mul_rule`, `add_rule`, `sub_rule`, `mac_rule`, `imm_rule` or `shl_rule`, the `INV` gadget, or `digit_rule` with `digit_range` and `digit_scaled`; on an `EQ` row, **nothing** |
+| gap chunks, `base_low_hi`, `base_room_hi` | **their own obligations and nothing else**: no gate reads any of the 16 |
+| `base_low`, `base_room` | `base_aligned` / `base_in_window`, and their obligations |
+| `op{c}` | `op{c}_boolean`, `one_op_a_live_row` and `op_word` |
+| `x` | `x_rule` |
+| `prod` | `prod_rule` |
+| `z` | `inv_rule`, `z_kills_a` and `z_only_inv` determine it; `z_boolean` and `z_kills_d` hold besides |
+| `mult_range16` | `trace::build_multiplicities`, and the channel's root check — no gate reads it |
+
+**An unmade access's cells are free, and nothing depends on them.** On a live row whose op does
+not make an access, that access's leaves are the product's identity, its four obligations are off,
+and no live gate reads its values: an `EQ` row's `d`, `d_new`, `d_read_ts` and gap chunks, an
+`IMM` row's `a` and `b` accesses, and an `INV` or `SHL` row's `b` access — `b_kept` holding `b_new`
+to `b` without fixing either. It is §26 observation 7's shape, `jalr_drop` off a `jalr` row, and
+the honest fill writes 0.
+
+---
+
+## 23. `P2_FIELD` — family 20
+
+### 23.1 Header
+
+| | |
+| --- | --- |
+| id, constant | 20, `constants::family::P2_FIELD` |
+| registry | `constraints::recursion_circuit(20, n)` **alone**; `family_circuit(20, n)` is `None` at every `n` |
+| constructor | `constraints::p2_field::artifact(n)` |
+| channels | `p2_field::channels()`: **`RANGE16`** alone, multiplicity `W[381]` |
+| fill | the private `prover::fill::p2_field` |
+| ecall, anchor space | `0x050A` (`ecall::PRECOMPILE_P2_FIELD`), `address_space::DELEGATION_P2_FIELD` = 12; the eight field accesses are in `address_space::FIELD` = 10 |
+| normative spec | `docs/spec/recursion.md` §4, with §2 for the field memory, §1.2 for the registry and §1.4 for the request's `a0`; `delegation.md` §4 and §5 for the frame and the anchor |
+| committed | 45 `M`, 382 `W`, 0 `S` — 427 |
+| virtual | 1: `V[range16]` |
+| obligations | 58, all `RANGE16` |
+| enforcing gates | 372 (6 degree-1, 366 degree-2), all on gate list 0 |
+| outputs | 4 |
+| at `n = 18` | depth 25 (7 row-wise + 18 halving), 392 inner columns, 764 relations, 294,425 wire bytes — the default height, and the one `crates/constraints/tests/vectors/recursion.txt` pins |
+| at `n = 16` | depth 23 (7 + 16), 384 inner columns, 756 relations, 293,915 wire bytes — the height the two suites that fill it build |
+
+`recursion_circuit(20, n)` is `p2_field::artifact(n)` with `p2_field::channels()`, one `RANGE16`
+channel. **The base registry never returns it**: the private `circuit` behind both registries
+holds one match and guards this family's arm by the registry, so `family_circuit(20, n)` falls
+through to `None` at every `n` and no base-format key can name the family
+(`crates/constraints/tests/recursion.rs`'
+`the_recursion_families_build_in_the_recursion_registry_alone`, `recursion.md` §1.2). It is built
+by `memory::assemble`: every constraint it makes is an enforcing gate or an obligation on gate
+list 0, so above the leaves it is two product trees, one fraction tree and the halving phase. Its
+frame and anchor are `constraints::delegation`'s read-only `RANGE16` frame,
+`read_only_frame_range16` over five words, and its eight field accesses are `delegation::Access`es
+that `delegation::leaves_with` appends to the frame's leaves. Fill: `prover::family_fill(20)`.
+
+**427 committed columns (45 `M`, 382 `W`, no `S`) and one virtual table, `V[range16]`.** Gate list
+0 writes 160 columns — 16 leaves a side of the two memory trees plus the `RANGE16` tree's 64
+fraction pairs — and holds **372 enforcing gates (6 degree-1, 366 degree-2)**: 20 for the frame and
+the absorption, 352 for the permutation. **58 obligations**, all `RANGE16`, and **4 outputs**. At
+`n = 18` there are 25 gate lists (7 row-wise and 18 halving), the top is `L25`, and the circuit has
+392 inner columns and 764 relations and is 294,425 bytes of wire form, SHA-256 `ff920a02…63f2f025`
+in `recursion.txt` — one line among the recursion format's six, which
+`cargo run -p kat-gen -- recursion` writes and CI regenerates and diffs. Only the depth, the inner
+and relation totals and the wire length depend on `n`: the first three are `7 + n`, `320 + 4n` and
+`692 + 4n`, a height adding halving lists and nothing else, one node per output each.
+
+`artifact` panics on every refusal of `validate` (through `build::assemble`), of
+`memory::check_memory` and `lookup::check_discharge` (through `memory::assemble`) and of
+`lookup::check_copowers` over its fifteen scaled columns, and unless the `M` and `W` widths are
+`MEMORY_COLUMNS` and `WITNESS_COLUMNS`, 45 and 382, and the all-zero row is a valid padding row.
+**It has no `check_shape`**: nothing at construction counts the 58 obligations or names a relation,
+as `keccak::check_shape` and `sha256::check_shape` do. What holds the shape is the digest line and
+§23.9's suites.
+
+**One row is one step of the transcript's duplex**, `transcript::Transcript::duplex` over cells of
+the field memory (`recursion.md` §2, §4). The frame `[n, s, x, y, d]` is five RAM words the
+request's `a0` names: `n` the count absorbed, `s` the first of the three cells holding the state,
+`x` and `y` the cells absorbed, `d` the first of the three cells the permuted state is written to.
+The row reads `s, s+1, s+2` at Δ0, `x` at Δ1 when `n ≥ 1` and `y` at Δ2 when `n = 2`; forms the
+lanes `(n ≥ 1 ? x : s₀, n = 2 ? y : (n = 1 ? 0 : s₁), s₂ + n)` — the rate overwritten and
+zero-filled and the count added to the capacity, which is what keeps `[a]` and `[a, 0]` apart; and
+writes `poseidon2_permute` of them to `d, d+1, d+2` at Δ3. The frame itself is read-only. **A cell
+holds a whole `Fr`**, so no value crosses a frame as words, and there is no canonicity chain and no
+bit decomposition anywhere — where `POSEIDON2` (§13) carried its three lanes as 24 RAM words read
+and written in place, each of its six values with 520 bit columns. The next state goes to cells
+the caller chose, so no handle to an old state is ever overwritten (`recursion.md` §4);
+`verifier_core::tape`'s shard transcript over cells is this duplex (`recursion.md` §7).
+
+**Flat, not layered.** `POSEIDON2` computes its permutation in 192 round layers, `193 + n` gate
+lists, and a parent pays one sumcheck a layer to verify a shard; this circuit is `7 + n`
+(`recursion.md` §4). What buys that is commitment: each of the 80 S-boxes commits `u²` and `u⁴`,
+and each round but the last commits its three output lanes — `349 = 2·80 + 3·63` `W` columns — so
+every gate is degree 2 over committed columns. **The last round's outputs are `M` columns**,
+`next0`–`next2`, the values the next state's write leaves publish, so no copy gate stands between
+the permutation and the multiset. The width is cheap where it lands: a recursion-format shard
+commits each phase as stacks (`recursion.md` §1.3), and `VmConfig::stack_vars` gives
+`σ = min(24 − n, 10)` for this circuit — `σ = 6` at `n = 18`, its 45 `M` columns one stack and its
+382 `W` columns six; `σ = 8` at `n = 16`, one and two.
+
+**Homogeneous.** Every round constant enters as `rc·live`, so on a padding row each round is the
+constant-free round and the all-zero row satisfies every gate. A bare constant would make
+`zero_row_valid` false, which `artifact` asserts true.
+
+**The height is `2^18`, and 16 is the floor.** `RANGE16`'s table needs sixteen variables, so the
+registry's derived guard returns `None` below 16, and `recursion_circuit(20, n)` is `Some` for
+`16 ≤ n ≤ 30`. `DEFAULT_HEIGHTS[P2_FIELD]` is `2^18`, 262,144 duplex steps a shard, which is the
+height `recursion.txt` pins. The two suites that fill a shard take `2^16`:
+`crates/checker/tests/recursion.rs`' `VARS`, and the deferred `crates/prover/tests/field_ops.rs`,
+whose statement puts this family at `WINDOW_VARS = 16`. Every gate and obligation is the same at
+both.
+
+**This family's §0.5 entries are at `n = 18`**, its default: 84 `Linear`, 93 `Product`, 515
+`Quadratic`, 54 `TreeProduct` (3 a halving list) and 18 `TreeCross` (1 a halving list), which sum
+to 764.
+
+### 23.2 Row kinds
+
+Four, and none is an instruction: the family is invoked, not decoded. It claims no pc, owns no
+cycle, is not in `constants::family::CYCLE_OWNING`, and is in a `VmConfig` exactly when the linked
+binary declares it — which, `P2_FIELD` being one of `program::FIELD_DELEGATIONS`, also brings
+`FIELD_WINDOWS` in and makes the statement the recursion format's (`recursion.md` §1.1). The three
+live kinds are one row shape, told apart by `n` through `n_word` and the two masks.
+
+| row kind | `live` | `n` | `x_live`, `y_live` | lanes `(lane0, lane1, state2 + n)` | what it adds to the multiset |
+| --- | --- | --- | --- | --- | --- |
+| **absorb two** | 1 | 2 | 1, 1 | `(x, y, state2 + 2)` | 14 read tuples and 14 write tuples: the 5 frame words at `(RAM, base + 4j)`, the anchor pair at `(DELEGATION_P2_FIELD, base)`, and 8 field accesses at `(FIELD, cell)` |
+| **absorb one** | 1 | 1 | 1, 0 | `(x, 0, state2 + 1)` | 13 and 13: no `y` access |
+| **squeeze** | 1 | 0 | 0, 0 | `(state0, state1, state2)` | 12 and 12: neither `x` nor `y` |
+| **padding** | 0 | 0 | 0, 0 | — | nothing: all 32 leaves are 1 — 28 real ones collapse to the product's identity and 4 are pads that are literally 1 — and 58 gated zeros the channel counts |
+
+A live row holds the requesting cycle, the frame base, the five frame words, each access's read
+timestamp and value, the two absorbed lanes, the permutation's 349 intermediates, the next state,
+and the gap chunks of its frame words and of the accesses it makes, with the frame pointer's four
+columns. The request that made it is a recursion-format `ADD_SUB` row whose `deleg_a0_rule`
+writes `base + 20` into `a0` (`recursion.md` §1.4), which `crates/checker/tests/add_sub.rs`'
+`a_recursion_request_advances_a0_past_its_frame` runs over this family's number among three.
+Nothing in this circuit sees `a0`.
+
+**A padding row is all-zero because the fill writes it so, and the gates force less than that and
+more than nothing.** Four cells are pinned: `x_needs_live` makes `x_live` 0, `y_needs_x` then makes
+`y_live` 0, `n_word` — ungated — makes the frame's `n` 0, and `writes_back_w0` its write. Every
+leaf is masked and every obligation's selector is `live`, `x_live` or `y_live`, so outside the
+permutation the rest is free: `cycle`, `base`, `anchor_value`, the frame's addresses and its other
+four words (each written back as read), every timestamp, every gap chunk, the base columns, `x`,
+`y`, `next{i}_old` and the three state values. **The permutation's region is not free**: its 352
+gates are ungated and `lane0_rule` and `lane1_rule` hold with both masks 0, so a padding row's
+`lane0` is `state0`, its `lane1` is `state1`, and every intermediate and `next0`–`next2` are the
+constant-free permutation of `(state0, state1, state2)`. It is harmless — no leaf publishes any of
+it — and it is read off the gates: no suite evaluates a padding row other than the all-zero one.
+
+**Not provable**: an `n` of 3 or more, for which no pair of boolean masks satisfies `n_word`; a
+frame that is not 4-aligned, starts below `RAM_ORIGIN` or ends past `2^31`, which `base_aligned`
+and `base_in_window` refuse; and an access to a cell no `FIELD_WINDOWS` shard initializes, which
+has no init tuple and cannot balance (`recursion.md` §2.2). The executor refuses the first two
+before it answers — `emulator`'s private `p2_field` names `n > 2` as a `DelegationFrame` error,
+and `delegation_frame` a misaligned base as `Misaligned` and one outside RAM as `OutOfBounds` —
+and refuses an `s` or a `d` above `u32::MAX − 3` by the same `DelegationFrame` error, whose detail
+reads "absorbs more than the rate, or its states leave the cells".
+
+### 23.3 The base layer
+
+**Memory-argument columns, `M[0..45]`** — `M[0..24]` filled by `fill::recursion_frame`, the shared
+`delegation_frame_range16`, and `M[24..45]` by `fill::access_columns`; committed in
+`PublicInputs::memory_commitments` before the memory challenges, as one stack.
+
+| `PolyAddress` | name | Rust | what the fill writes | read by |
+| --- | --- | --- | --- | --- |
+| `M[0]` | `cycle` | `delegation::CYCLE` | the requesting cycle | `read_anchor` and the 13 write leaves other than `write_anchor`, as `4·cycle`; the 13 `*_lo_range` obligations |
+| `M[1]` | `live` | `delegation::LIVE` | 1 on an invocation | the mask of 24 leaves — all but the four `x` and `y` leaves and the pads; the selector of 50 obligations; `live_boolean`, `addr_w{j}`, `base_aligned`, `base_in_window`, `x_needs_live`; and, as `rc·live`, the 272 permutation gates that carry a round constant |
+| `M[2]` | `base` | `delegation::BASE` | the frame base `a0` carried | `addr_w{j}`, `base_aligned`, `base_in_window`, the anchor's two leaves |
+| `M[3]` | `anchor_value` | `delegation::ANCHOR_VALUE` | 0 | `read_anchor` |
+| `M[4 + 4j + f]`, `j < 5` | `w{j}_{addr,read_ts,read_value,write_value}` | `delegation::word(j, f)` | word `j`'s address, the timestamp of the write its read consumed, its value, and the same value | `read_w{j}`, `write_w{j}`, `addr_w{j}`, `gap{j}_lo_range`, `writes_back_w{j}`; the read value also as the next table says |
+| `M[24 + 2i]`, `i < 3` | `state{i}_read_ts` | `p2_field::state_read_ts(i)` | when cell `s + i` was last written | `read_state{i}`, `gap_state{i}_lo_range` |
+| `M[25 + 2i]` | `state{i}` | `p2_field::state(i)` | cell `s + i`'s value | `read_state{i}`, `write_state{i}`; and `state0` by `lane0_rule`, `state1` by `lane1_rule`, `state2` by round 0's six gates |
+| `M[30]` | `x_live` | `p2_field::X_LIVE` | 1 where `n ≥ 1` | the mask of `read_x` and `write_x`; the selector of the four `gap_x_*`; `x_live_boolean`, `y_needs_x`, `x_needs_live`, `n_word`, `lane0_rule`, `lane1_rule` |
+| `M[31]` | `x_read_ts` | `p2_field::X_READ_TS` | when cell `x` was last written; 0 where `n = 0` | `read_x`, `gap_x_lo_range` |
+| `M[32]` | `x` | `p2_field::X` | cell `x`'s value; 0 where `n = 0` | `read_x`, `write_x`, `lane0_rule` |
+| `M[33]` | `y_live` | `p2_field::Y_LIVE` | 1 where `n = 2` | the mask of `read_y` and `write_y`; the selector of the four `gap_y_*`; `y_live_boolean`, `y_needs_x`, `n_word`, `lane1_rule` |
+| `M[34]` | `y_read_ts` | `p2_field::Y_READ_TS` | when cell `y` was last written; 0 where `n < 2` | `read_y`, `gap_y_lo_range` |
+| `M[35]` | `y` | `p2_field::Y` | cell `y`'s value; 0 where `n < 2` | `read_y`, `write_y`, `lane1_rule` |
+| `M[36 + 3i]`, `i < 3` | `next{i}_read_ts` | `p2_field::next_read_ts(i)` | when cell `d + i` was last written | `read_next{i}`, `gap_next{i}_lo_range` |
+| `M[37 + 3i]` | `next{i}_old` | `p2_field::next_old(i)` | what cell `d + i` held | `read_next{i}` — **and nothing else** |
+| `M[38 + 3i]` | `next{i}` | `p2_field::next(i)` | lane `i` of the permuted state, the executor's write | `write_next{i}`, `r63_out{i}` |
+
+**The frame's words name cells, and the columns `x` and `y` are the cells' values.** The five read
+values are:
+
+| word | `constants::p2_field` | value | read, besides by the frame's own leaves and gates, by |
+| --- | --- | --- | --- |
+| 0 | `N_WORD` | `n` | `n_word`, and round 0's six gates as lane 2's `+ n` |
+| 1 | `S_WORD` | `s` | the six `read_state{i}`, `write_state{i}` leaves, as the address `s + i` |
+| 2 | `X_WORD` | the cell `x` is read from | `read_x`, `write_x`, as the address |
+| 3 | `Y_WORD` | the cell `y` is read from | `read_y`, `write_y`, as the address |
+| 4 | `D_WORD` | `d` | the six `read_next{i}`, `write_next{i}` leaves, as the address `d + i` |
+
+No gate or obligation of this circuit bounds `s`, `d` or the two absorbed cells' indices: each is a
+RAM word the guest wrote, and an address no field window covers cannot balance.
+
+**Witness columns, `W[0..382]`** — all filled by `fill::p2_field` except the last; committed in
+`ShardProof::witness_commitments`, six stacks at `n = 18`, before `g` is drawn.
+
+| `PolyAddress` | name | Rust | what the fill writes | read by |
+| --- | --- | --- | --- | --- |
+| `W[2j + c]`, `j < 5`, `c < 2` | `gap{j}_c{c}` | `read_only_frame_range16`'s layout; the fill's `recursion_chunk` | chunk `c` of `4·cycle − 1 − w{j}_read_ts`, weight `2^{16(c+1)}` | `gap{j}_c{c}_range`, `gap{j}_lo_range`, and at `c = 1` `gap{j}_top_scaled` — **no gate** |
+| `W[10]`, `W[11]` | `base_low`, `base_low_hi` | ditto; the fill's `recursion_frame` | `(base − RAM_ORIGIN)/4` and its high halfword | `base_aligned` (`base_low` only); the three `base_low_*` |
+| `W[12]`, `W[13]` | `base_room`, `base_room_hi` | ditto | `2^31 − 20 − base` and its high halfword | `base_in_window` (`base_room` only); the three `base_room_*` |
+| `W[14 + 2q + c]`, `q < 8`, `c < 2` | `gap_<q>_c{c}` | `p2_field::gap_chunk(q, c)` | chunk `c` of `4·cycle + Δ_q − 1 − <q>_read_ts`; 0 where the row does not make access `q` | that access's four obligations — **no gate** |
+| `W[30]` | `lane0` | `p2_field::LANE0` | `x` where `n ≥ 1`, else `state0` | `lane0_rule`, round 0's six gates |
+| `W[31]` | `lane1` | `p2_field::LANE1` | `y` where `n = 2`, 0 where `n = 1`, `state1` where `n = 0` | `lane1_rule`, round 0's six gates |
+| `W[32 + k]`, `k < 349` | `r{r}_l{i}_u2`, `r{r}_l{i}_u4`, `r{r}_s{i}` | `p2_field::permutation_column(k)` | `p2_field::permutation_witness`' intermediates, in round order | below |
+| `W[381]` | `mult_range16` | `p2_field::MULTIPLICITY` | `trace::build_multiplicities`' count, appended after the fill | `range16_table_num` — **and no gate** |
+
+with access `q` = `state0`, `state1`, `state2`, `x`, `y`, `next0`, `next1`, `next2` and slot `Δ_q` =
+0, 0, 0, 1, 2, 3, 3, 3 (`constants::p2_field::DELTA_*`).
+
+**The permutation's columns, `W[32..381]`**, round by round — each S-box's `u²` and `u⁴` adjacent,
+then the round's output lanes:
+
+| rounds | kind | columns a round | addresses |
+| --- | --- | --- | --- |
+| 0–3 | full | 9 | `r{r}_l{i}_u2`, `r{r}_l{i}_u4` at `W[32 + 9r + 2i]`, `W[33 + 9r + 2i]`; `r{r}_s{i}` at `W[38 + 9r + i]` |
+| 4–59 | partial | 5 | `r{r}_l0_u2`, `r{r}_l0_u4` at `W[68 + 5(r − 4)]`, `W[69 + 5(r − 4)]`; `r{r}_s{i}` at `W[70 + 5(r − 4) + i]` |
+| 60–62 | full | 9 | `W[348 + 9(r − 60) + 2i]`, `W[349 + 9(r − 60) + 2i]`; `r{r}_s{i}` at `W[354 + 9(r − 60) + i]` |
+| 63 | full, the last | 6 | `r63_l{i}_u2`, `r63_l{i}_u4` at `W[375 + 2i]`, `W[376 + 2i]`; its outputs are `M[38]`, `M[41]`, `M[44]` |
+
+`36 + 280 + 27 + 6 = 349`. Each `u2` is read by the `square` gate that defines it and by its
+`fourth`; each `u4` by the `fourth` that defines it and the round's three `out` gates; each
+`r{r}_s{i}` by the `out` that defines it, the next round's three `out` gates and, where the next
+round S-boxes lane `i`, the next round's `square`. `u` itself — a lane plus `rc·live` — is never a
+column, and neither is an S-box's output `u·u⁴`: each is an expression inside the gates that read
+it.
+
+**`S`: none.** `V[range16]` is read by `range16_table_den` alone.
+
+### 23.4 Gate list 0: the 160 producing columns
+
+Relation `i` defines `L1[i]`, in tree order.
+
+| relations | columns | what |
+| --- | --- | --- |
+| 0–4 | 5 | `read_w{j}`, the frame words |
+| 5 | 1 | `read_anchor` |
+| 6–8 | 3 | `read_state{i}` |
+| 9, 10 | 2 | `read_x`, `read_y` |
+| 11–13 | 3 | `read_next{i}` |
+| 14, 15 | 2 | `read_pad14`, `read_pad15`, the literal 1, to 16 leaves |
+| 16–31 | 16 | the write side in the same order: `write_w{j}`, `write_anchor`, `write_state{i}`, `write_x`, `write_y`, `write_next{i}`, `write_pad14`, `write_pad15` |
+| 32, 33 | 2 | `range16_table_{num,den}` |
+| 34–73 | 40 | the five frame gaps' four obligations, `(num, den)` each |
+| 74–85 | 12 | `base_low`'s three and `base_room`'s three |
+| 86–109 | 24 | `gap_state{i}`'s four, `i < 3` |
+| 110–117 | 8 | `gap_x`'s four |
+| 118–125 | 8 | `gap_y`'s four |
+| 126–149 | 24 | `gap_next{i}`'s four, `i < 3` |
+| 150–159 | 10 | `range16_pad_{0..4}`, five neutral fractions to 64 |
+
+The pads are named by position, 14 and 15, because `delegation::leaves_with` strips the frame's own
+pads, appends the eight accesses' leaves and pads again.
+
+Every memory leaf is one pattern — §0.6's frame leaf under its own mask and at an address offset,
+`delegation::masked_leaf`:
+
+```text
+pattern     m·T(space, addr + o, ts, value) + 1 − m
+positional  1 + mem_gamma·m + -1·m + space·m + (mem_alpha_addr·m) ×o + (mem_alpha_ts·m) ×Δ
+              + mem_alpha_addr·addr·m + <ts products> + mem_alpha_val·value·m
+```
+
+A column timestamp is the one product `mem_alpha_ts·read_ts·m`; a timestamp `4·cycle + Δ` — every
+write leaf but `write_anchor`, and `read_anchor` at Δ 3 — is `(mem_alpha_ts·cycle·m) ×4` beside
+the linear `(mem_alpha_ts·m) ×Δ`; the literal 0, `write_anchor`'s, is no term, and neither is its
+absent value. An offset repeats `(mem_alpha_addr·m)` `o` times, as `4·cycle` repeats its term, a
+coefficient being one literal or one challenge. Every real leaf is one `Quadratic` with constant
+1.
+
+| leaf | `m` | space | `addr + o` | ts | value |
+| --- | --- | --- | --- | --- | --- |
+| `read_w{j}` | `live` | `RAM` = 2 | `w{j}_addr` | `w{j}_read_ts` | `w{j}_read_value` |
+| `write_w{j}` | `live` | 2 | `w{j}_addr` | `4·cycle + 0` | `w{j}_write_value` |
+| `read_anchor` | `live` | 12 | `base` | `4·cycle + 3` | `anchor_value` |
+| `write_anchor` | `live` | 12 | `base` | the literal 0 | absent |
+| `read_state{i}` | `live` | `FIELD` = 10 | `w1_read_value + i` | `state{i}_read_ts` | `state{i}` |
+| `write_state{i}` | `live` | 10 | `w1_read_value + i` | `4·cycle + 0` | `state{i}` |
+| `read_x` | `x_live` | 10 | `w2_read_value` | `x_read_ts` | `x` |
+| `write_x` | `x_live` | 10 | `w2_read_value` | `4·cycle + 1` | `x` |
+| `read_y` | `y_live` | 10 | `w3_read_value` | `y_read_ts` | `y` |
+| `write_y` | `y_live` | 10 | `w3_read_value` | `4·cycle + 2` | `y` |
+| `read_next{i}` | `live` | 10 | `w4_read_value + i` | `next{i}_read_ts` | `next{i}_old` |
+| `write_next{i}` | `live` | 10 | `w4_read_value + i` | `4·cycle + 3` | `next{i}` |
+
+Two of them positionally, the second with its repeats folded as `×k`:
+
+```text
+read_state1   1 + mem_gamma·M[1] + -1·M[1] + 10·M[1] + mem_alpha_addr·M[1]
+                + mem_alpha_addr·M[10]·M[1] + mem_alpha_ts·M[26]·M[1] + mem_alpha_val·M[27]·M[1]
+write_y       1 + mem_gamma·M[33] + -1·M[33] + 10·M[33] + (mem_alpha_ts·M[33]) ×2
+                + mem_alpha_addr·M[18]·M[33] + (mem_alpha_ts·M[0]·M[33]) ×4 + mem_alpha_val·M[35]·M[33]
+```
+
+**A read-only access writes back the column it read**: `write_state{i}`, `write_x` and `write_y`
+take their read's value column, so the state and an absorbed cell leave the call with a new
+timestamp and the same value; only the next state has distinct old and new columns. **Each access
+kind has a slot of its own** — the state at 0, `x` at 1, `y` at 2, the next state at 3 — so no two
+accesses at one cell share a slot, and every aliasing is legal: `x` may be `y`, either may be a
+state or a destination cell, and `d` may overlap `s`. A read at a later slot consumes the earlier
+one's write-back.
+
+The fraction leaves are §0.6's: `(1, E_l + g)` per obligation; `(−mult, T + g)` for the table,
+`(-1·W[381] + 0)` and `(1·V[range16] + lookup_g)`, both `Linear`; and `(0, 1)` per pad. A row
+denominator is `lookup_g` plus the selector times every term of the tuple, a constant folding into
+a literal on the selector, so it is one `Quadratic`:
+
+```text
+define_gap_y_lo_range_den   lookup_g + 1·M[33] + 4·M[33]·M[0] + -1·M[33]·M[34]
+                              + -65536·M[33]·W[22] + 0x30644e72…f592f0000001·M[33]·W[23]
+```
+
+### 23.5 Gate list 0: the 20 frame and absorption gates
+
+Relations 160–179, in `artifact`'s order: `read_only_frame_range16`'s thirteen, then the
+absorption's seven. None reads a challenge, and every one is 0 on the all-zero row.
+
+| relation | name | degree | positional | named |
+| --- | --- | --- | --- | --- |
+| 160 | `live_boolean` | 2 | `0 + 1·M[1] + -1·M[1]·M[1]` | `live − live²` |
+| 161–165 | `addr_w{j}` | 2 | `0 + -4j·M[1] + 1·M[1]·M[4+4j] + -1·M[1]·M[2]` | `live·(w{j}_addr − base − 4j)` |
+| 166 | `base_aligned` | 2 | `0 + -65536·M[1] + 1·M[1]·M[2] + -4·M[1]·W[10]` | `live·(base − RAM_ORIGIN − 4·base_low)` |
+| 167 | `base_in_window` | 2 | `0 + 2147483628·M[1] + -1·M[1]·M[2] + -1·M[1]·W[12]` | `live·((2^31 − 20) − base − base_room)` |
+| 168–172 | `writes_back_w{j}` | 1 | `1·M[7+4j] + -1·M[6+4j] + 0` | `w{j}_write_value − w{j}_read_value` |
+| 173 | `x_live_boolean` | 2 | `0 + 1·M[30] + -1·M[30]·M[30]` | `x_live − x_live²` |
+| 174 | `y_live_boolean` | 2 | `0 + 1·M[33] + -1·M[33]·M[33]` | `y_live − y_live²` |
+| 175 | `y_needs_x` | 2 | `0 + 1·M[33] + -1·M[30]·M[33]` | `y_live·(1 − x_live)` |
+| 176 | `x_needs_live` | 2 | `0 + 1·M[30] + -1·M[30]·M[1]` | `x_live·(1 − live)` |
+| 177 | `n_word` | 1 | `1·M[6] + -1·M[30] + -1·M[33] + 0` | `n − x_live − y_live` |
+| 178 | `lane0_rule` | 2 | `0 + 1·W[30] + -1·M[25] + -1·M[30]·M[32] + 1·M[30]·M[25]` | `lane0 − x_live·x − (1 − x_live)·state0` |
+| 179 | `lane1_rule` | 2 | `0 + 1·W[31] + -1·M[27] + 1·M[30]·M[27] + -1·M[33]·M[35]` | `lane1 − (1 − x_live)·state1 − y_live·y` |
+
+`RAM_ORIGIN` is 65,536 and the frame 20 bytes, so `2^31 − 20` is 2,147,483,628. There is no
+`gap_w{j}` gate: the frame's gaps are §23.7's obligations, the bound and the decomposition at once.
+`x_live_boolean` and `y_live_boolean` are owed twice over — `check_memory` requires a booleanity
+gate for every `M` leaf mask and `validate` one for every lookup selector, and both columns are
+both.
+
+Four notes, each a thing that is easy to get wrong.
+
+- **`n_word` is what ties the capacity's count to what was absorbed, and it is ungated.** Lane 2
+  adds the frame word `n` itself, so without it a row could count 2 and absorb nothing, or absorb
+  two cells and count 0. On a padding row it is what makes `n` 0, the masks being 0 there.
+- **`y_needs_x` is load-bearing.** Without it `n = 1` has a second spelling,
+  `(x_live, y_live) = (0, 1)`, which passes `n_word` and gives `lane0 = state0` and
+  `lane1 = state1 + y` — `y` added into the rate with `s₀` kept, which is no step of any
+  transcript. With it the masks are a function of `n`: `(0, 0)`, `(1, 0)`, `(1, 1)`.
+- **`x_needs_live` keeps every field access on an invocation**: without it a padding row could set
+  `x_live` and make an `x` access, read and written back, on a row that requests nothing.
+- **`x` and `y` are free on a live row whose mask is 0.** `lane0_rule` reads `x` only as
+  `x_live·x` and `lane1_rule` reads `y` only as `y_live·y`, and their leaves and gap obligations
+  carry the same masks. The honest fill writes 0 there.
+
+### 23.6 Gate list 0: the 352 permutation gates
+
+Relations 180–531, one block a round in round order. A full round's block is `r{r}_l{i}_square`
+and `r{r}_l{i}_fourth` for `i` = 0, 1, 2, interleaved, then `r{r}_out0`–`r{r}_out2`: nine
+relations. A partial round's is `r{r}_l0_square`, `r{r}_l0_fourth`, `r{r}_out0`–`r{r}_out2`:
+five.
+
+| relations | rounds | kind | gates |
+| --- | --- | --- | --- |
+| 180–188 | 0 | full, the initial external matrix folded in | 9 |
+| 189–215 | 1–3 | full | 27 |
+| 216–495 | 4–59 | partial, round `r` at `216 + 5(r − 4)` to `220 + 5(r − 4)` | 280 |
+| 496–522 | 60–62 | full | 27 |
+| 523–531 | 63 | full, its outputs `next0`–`next2` | 9 |
+
+Write `rc_{r,i}` for round `r`'s constant on lane `i`: `POSEIDON2_RC3_INITIAL[r][i]` for `r < 4`,
+`POSEIDON2_RC3_INTERNAL[r − 4]` on lane 0 alone for `4 ≤ r < 60`, and
+`POSEIDON2_RC3_TERMINAL[r − 60][i]` for `r ≥ 60` — `transcript::poseidon2_permute`'s own tables,
+read by `p2_field`'s `rounds` with no second copy. Round `r`'s input lanes are `r{r−1}_s{i}`, and
+round 0's are the external matrix over the absorbed lanes:
+
+```text
+E0 = 2·lane0 + lane1 + state2 + n
+E1 = lane0 + 2·lane1 + state2 + n
+E2 = lane0 + lane1 + 2·(state2 + n)
+```
+
+An S-boxed lane's input is `u = E_i + rc·live` in round 0 and `u = r{r−1}_s{i} + rc·live` after,
+and its S-box output is `v = u4·u = u⁵`. A full round's output is `M_E·v` with
+`M_E = [[2,1,1],[1,2,1],[1,1,2]]`; a partial round S-boxes lane 0 alone and its output is
+`M_I·(v_0, s_1, s_2)` with `M_I = [[2,1,1],[1,2,1],[1,1,3]]`, `s_i` the round's input lanes.
+
+| gate | count | products, positionally | named |
+| --- | --- | --- | --- |
+| `r0_l{i}_square` | 3 | 21, 21, 28 | `r0_l{i}_u2 − (E_i + rc_{0,i}·live)²` |
+| `r{r}_l{i}_square`, `r ≥ 1` | 77 | 3 | `r{r}_l{i}_u2 − (r{r−1}_s{i} + rc_{r,i}·live)²` |
+| `r{r}_l{i}_fourth` | 80 | 1 | `r{r}_l{i}_u4 − r{r}_l{i}_u2²` |
+| `r0_out{i}` | 3 | 25, 25, 26 | `r0_s{i} − (M_E·v)_i` |
+| `r{r}_out{i}`, full, `r ≥ 1` | 21 | 8 | `r{r}_s{i} − (M_E·v)_i`; at `r = 63` the column is `next{i}` |
+| `r{r}_out0`, partial | 56 | 4, beside the linear `s_1` and `s_2` | `r{r}_s0 − 2·v_0 − s_1 − s_2` |
+| `r{r}_out1`, `r{r}_out2`, partial | 112 | 2, beside three linear terms | `r{r}_s1 − v_0 − 2·s_1 − s_2` and `r{r}_s2 − v_0 − s_1 − 3·s_2` |
+
+`3 + 77 + 80 + 3 + 21 + 56 + 112 = 352`. Every one is a `Quadratic` with constant 0, of degree 2,
+that reads no challenge.
+
+**The positional form does not merge terms**, and that is where the product counts come from.
+`p2_field`'s `Expr` squares a linear form term by term and adds forms by concatenation, so `E0`'s
+`2·lane0` is two `lane0` terms, and its square with `rc·live` is 21 products where the merged
+square of five distinct operands is 15; `E2`'s seven terms give 28. A full round's output repeats
+its own lane's `v`, `(M_E·v)_0 = v_0 + v_1 + v_2 + v_0`, so it carries `v_i`'s two products twice.
+A constant appears as `−2·rc` on each `x·live` product of a square, `−rc²` on its `live·live`, and
+`−rc` on an output's `u4·live`; the dump prints each as 64 hex digits. Round 4, the first partial
+round, reads in full:
+
+```text
+216 r4_l0_square   0 + 1·W[68] + -1·W[65]·W[65] + 0x2c8e9069…74d05698·W[65]·M[1]
+                     + 0x112265e8…f9f55bb1·M[1]·M[1]
+217 r4_l0_fourth   0 + 1·W[69] + -1·W[68]·W[68]
+218 r4_out0        0 + 1·W[70] + -1·W[66] + -1·W[67] + -1·W[69]·W[65] + 0x16474834…ba682b4c·W[69]·M[1]
+                     + -1·W[69]·W[65] + 0x16474834…ba682b4c·W[69]·M[1]
+219 r4_out1        0 + 1·W[71] + -1·W[66] + -1·W[67] + -1·W[66] + -1·W[69]·W[65]
+                     + 0x16474834…ba682b4c·W[69]·M[1]
+220 r4_out2        0 + 1·W[72] + -1·W[66] + -1·W[67] + -2·W[67] + -1·W[69]·W[65]
+                     + 0x16474834…ba682b4c·W[69]·M[1]
+```
+
+with `W[65..68]` `r3_s0`–`r3_s2`, `W[68]` `r4_l0_u2`, `W[69]` `r4_l0_u4`, `W[70..73]`
+`r4_s0`–`r4_s2`, and the three literals `−2·rc_4`, `−rc_4²` and `−rc_4` for
+`rc_4 = POSEIDON2_RC3_INTERNAL[0]`.
+
+**Why every gate is degree 2.** The S-box `u⁵` is split at its squares: `u²` and `u⁴` are columns,
+and `u·u⁴` is a product of a column and a linear form inside the output gate that consumes it. A
+constant rides `live`, a column times a literal. Besides its own 349 columns and `live`, the block
+reads only round 0's inputs — `lane0`, `lane1`, `state2` and the frame word `n` — and it writes
+outside them only `next0`–`next2`.
+
+### 23.7 The 58 lookups and the channel
+
+One channel, `RANGE16` = channel 1, table `V[range16]`, multiplicity `W[381]`. The tuple is one
+expression wide, so it reads `g` and no power of `β`. The helpers are
+`delegation::{read_only_frame_range16, gap_lookups_range16, bound_chunked}` and
+`Access::gap_lookups`.
+
+| obligation | relations (num, den) | count | selector | tuple | shape |
+| --- | --- | --- | --- | --- | --- |
+| `gap{j}_c0_range`, `gap{j}_c1_range`, `j < 5` | 34–73 | 10 | `live` | `gap{j}_c{c}` | direct: each chunk below `2^16` |
+| `gap{j}_top_scaled` | ” | 5 | `live` | `1024·gap{j}_c1` | scaled: the top chunk below `2^6` |
+| `gap{j}_lo_range` | ” | 5 | `live` | `4·cycle − w{j}_read_ts − 2^16·c0 − 2^32·c1 − 1` | the derived low sixteen bits |
+| `base_low_c0_range`, `base_low_top_scaled`, `base_low_lo_range` | 74–79 | 3 | `live` | `base_low_hi`, `8·base_low_hi`, `base_low − 2^16·base_low_hi` | `[0, 2^29)` |
+| `base_room_c0_range`, `base_room_top_scaled`, `base_room_lo_range` | 80–85 | 3 | `live` | `base_room_hi`, `2·base_room_hi`, `base_room − 2^16·base_room_hi` | `[0, 2^31)` |
+| `gap_state{i}_*`, `i < 3` | 86–109 | 12 | `live` | the frame's four over `state{i}_read_ts`, constant `−1` | the read precedes slot 0 |
+| `gap_x_*` | 110–117 | 4 | `x_live` | over `x_read_ts`, constant 0 | precedes slot 1 |
+| `gap_y_*` | 118–125 | 4 | `y_live` | over `y_read_ts`, constant `+1` | precedes slot 2 |
+| `gap_next{i}_*`, `i < 3` | 126–149 | 12 | `live` | over `next{i}_read_ts`, constant `+2` | precedes slot 3 |
+
+Each word's and each access's four are `_c0_range`, `_c1_range`, `_top_scaled` and `_lo_range`, in
+that order. Access `q`'s derived low half is
+
+```text
+4·cycle + Δ_q − 1 − <q>_read_ts − 2^16·gap_<q>_c0 − 2^32·gap_<q>_c1
+gap_y_lo_range, positionally:   4·M[0] + -1·M[34] + -65536·W[22] + 0x30644e72…f592f0000001·W[23] + 1
+```
+
+whose constant `Δ_q − 1` is the `−1`, `0`, `+1`, `+2` above, the long literal being `−2^32`.
+
+**A field access carries the gap check every read carries** (`recursion.md` §2.1): 38 bits, two
+committed chunks and a derived low half, `38 = 16 + 16 + 6`, exact at `2^38 − 1`. `TIMESTAMP` would
+need `2^20` rows; `FQ_OP` takes that height for it (`recursion.md` §6), and this family's `2^18`
+does not have it.
+
+**`lookup::check_copowers` takes fifteen pairs**, each top chunk with the selector its scaled
+obligation carries: the five frame gap tops, `base_low_hi` and `base_room_hi` under `live`
+(`delegation::frame_scaled_range16`), the six state and next tops under `live`, `gap_x_c1` under
+`x_live` and `gap_y_c1` under `y_live` (`Access::scaled`). The scaled obligation alone bounds
+nothing — `2^{16−r}` is a unit in `Fr` — and the direct pair under the same selector is its
+premise.
+
+**Every obligation is gated by the mask of the access it bounds**, so an access the row does not
+make neither bounds nor is bounded: its gated tuple is the all-zero one, a real entry of the table,
+and the multiplicity counts it.
+
+| channel | output positions | table columns | multiplicity |
+| --- | --- | --- | --- |
+| `RANGE16` = 1 | 2, 3 | `V[range16]` | `W[381]` |
+
+**58 obligations and the table fraction are 59 leaves of a 64-leaf tree.** One more field access —
+a leaf a side and four obligations — fits both trees; a second fills the memory trees exactly and
+doubles the `RANGE16` tree.
+
+`trace::build_multiplicities` counts each table row over the 58 gated tuples of every row of the
+shard, a padding row and an unmade access contributing zeros, and appends the column after the
+fill; `fill::p2_field` does not write it.
+
+### 23.8 The trees, the inner layers and the outputs
+
+Three trees. The memory product trees are 14 real leaves a side padded to 16; the `RANGE16`
+fraction tree is 59 leaves padded to 64. `R = 6`, the fraction tree setting it alone — a 16-leaf
+product tree is 4 deep — so the depth is `N = 1 + 6 + n`: seven row-wise lists, then `n` halving
+lists. Each row-wise list reduces every tree pairwise, and a tree already at one node copies itself
+up.
+
+| layer | read tree | write tree | `range16` | width |
+| --- | --- | --- | --- | --- |
+| `L1` | 16 | 16 | 128 | 160 |
+| `L2` | 8 | 8 | 64 | 80 |
+| `L3` | 4 | 4 | 32 | 40 |
+| `L4` | 2 | 2 | 16 | 20 |
+| `L5` | 1 | 1 | 8 | 10 |
+| `L6` | 1 | 1 | 4 | 6 |
+| `L7` | 1 | 1 | 2 | 4 |
+| `L8`–`L{n+7}` | 1 | 1 | 2 | 4 each |
+
+so `inner = 320 + 4n` — 392 at `n = 18`, 384 at `n = 16`. The product trees reach one node at `L5`
+and are carried as `Linear` copies through `L6` and `L7`; the fraction tree reaches one pair at
+`L7`.
+
+Relations: **0–159** are list 0's producing gates (§23.4), **160–531** its 372 enforcing gates
+(§23.5, §23.6), **532–611** list 1, **612–651** list 2, **652–671** list 3, **672–681** list 4,
+**682–687** list 5, **688–691** list 6, and halving list `k` (`7 ≤ k ≤ n + 6`) holds
+`692 + 4(k − 7)` to `695 + 4(k − 7)`. The roots are relations `688 + 4n` to `691 + 4n`:
+**760–763** at `n = 18`, **752–755** at `n = 16`. Inner nodes are `read_{k}_{j}`, `write_{k}_{j}`
+and `range16_{k}_{j}_{num,den}`, the last list's `read_root`, `write_root`, `range16_num_root` and
+`range16_den_root`. Each halving list is four gates: the two memory `TreeProduct`s, the channel's
+denominator `TreeProduct` and its numerator `TreeCross`.
+
+| output | `PolyAddress` at `n = 18` | name | read by |
+| --- | --- | --- | --- |
+| 0 | `L{25}[0]` | `read_root` | `verify_shard` step 10a, against `memory_roots[p]` for `p` the position of `(20, shard_index)` in `verifier_core::statement_shards`; and step 10b's cross-shard product |
+| 1 | `L{25}[1]` | `write_root` | ditto |
+| 2, 3 | `L{25}[2..4]` | `range16_num_root`, `range16_den_root` | step 9: `num = 0` **and** `den ≠ 0`, the failure `Lookup { channel: 1 }` |
+
+### 23.9 Witness rows
+
+**There is no row table here**: a live row is 427 committed cells, 349 of them the permutation's.
+What stands in for one is a chain of readings, every one in the ordinary workspace run but the
+last.
+
+1. `crates/constraints/src/p2_field.rs`' unit test `the_witness_is_the_permutation` evaluates the
+   352 permutation gates directly over `Fr` on `permutation_witness([7, 11, 13])` with `live = 1`,
+   and requires each to vanish — the witness generator the fill calls and the gates are one
+   spelling — besides holding `permutation_witness` to `PERMUTATION_COLUMNS` columns and the `W`
+   names to `WITNESS_COLUMNS`.
+2. `crates/emulator/tests/guests.rs`' `field_ops_checks_itself_under_the_recursion_ecalls`:
+   `guests/field-ops` exits 26, every check passing — among them one duplex step at each of
+   `n = 2, 1, 0` whose exported lanes equal literals `transcript::poseidon2_permute` computed
+   host-side, and a step replayed from a tape whose lane 0 equals a direct call's — and its trace
+   holds exactly 5 `P2_FIELD` invocations.
+3. `crates/checker/tests/recursion.rs`' `the_field_families_hold_and_the_field_memory_balances`
+   fills a `2^16` shard of those five with `prover::family_fill` and evaluates every live row and
+   the first padding row through `checker::violated_relations` and `checker::violated_lookups`.
+   The `next` columns are the executor's writes — `poseidon2_permute`'s output — while the
+   intermediates are `permutation_witness`', so a permutation the circuit spells differently from
+   the transcript breaks `r63_out*` there. The same test multiplies the eight accesses' field
+   leaves on every live row into one product with the `FIELD_WINDOWS` shard's teardown and init
+   leaves and requires reads to equal writes: a slot or an offset the circuit and the executor
+   disagree on is a tuple with no partner.
+4. `crates/constraints/tests/recursion.rs`' `the_recursion_families_build_in_the_recursion_registry_alone`
+   builds the circuit at `2^18` — `validate`, `check_memory` and `check_discharge` with it —
+   asserts that the all-zero row pads, and that `family_circuit(20, 18)` is `None`.
+5. `crates/prover/tests/field_ops.rs`' `the_recursion_format_proves_and_verifies` — deferred,
+   `#[ignore]`d — proves `guests/field-ops` as one block holding exactly one `P2_FIELD` shard,
+   verifies it through `verify_block`, holds the shard's witness commitments to
+   `stack_count(382, σ)`, and replays the shard's tape against `verify_shard_local` and
+   `pcs::batch_verify_deferred`.
+
+An honest live row, in words:
+
+| column group | value |
+| --- | --- |
+| `cycle`, `live`, `base`, `anchor_value` | the requesting cycle; 1; the frame pointer, 4-aligned, in `[RAM_ORIGIN, 2^31 − 20]`; 0 |
+| `w{j}_addr`, `w{j}_read_ts` | `base + 4j`, and the last write to that word |
+| `w{j}_read_value`, `w{j}_write_value` | `n`, `s`, `x`'s cell, `y`'s cell, `d`, each written back unchanged |
+| `gap{j}_c{c}`, `gap_<q>_c{c}` | bits `[16(c+1), 16(c+2))` of `4·cycle + Δ − 1 − read_ts`; 0 for an access the row does not make |
+| `base_low`, `base_room` and their halfwords | `(base − RAM_ORIGIN)/4` and `2^31 − 20 − base` |
+| `state{i}_read_ts`, `state{i}` | the last write to cell `s + i`, and its value |
+| `x_live`, `x_read_ts`, `x` | 1, the last write to cell `x` and its value, where `n ≥ 1`; 0, 0, 0 otherwise |
+| `y_live`, `y_read_ts`, `y` | the same where `n = 2` |
+| `next{i}_read_ts`, `next{i}_old`, `next{i}` | the last write to cell `d + i`, what it held, and lane `i` of `poseidon2_permute(lanes)` |
+| `lane0`, `lane1` | the absorbed rate |
+| `r{r}_l{i}_u2`, `r{r}_l{i}_u4`, `r{r}_s{i}` | `u²` and `u⁴` of each S-box input `u = lane + rc`, and each round's output lanes but the last's |
+| `mult_range16` | `trace`'s count; 0 on a table row no tuple names |
+
+and a padding row is 0 in every one of them.
+
+### 23.10 What fixes each cell
+
+Read off the artifact's gates and obligations — `checker dump`'s read sets — and not off a tamper
+table: no suite corrupts a cell of this family and names what refuses it, so this is an account,
+not a test.
+
+| cell | what fixes it |
+| --- | --- |
+| `cycle`, `base` | the multiset: the request's mirror write is `T(DELEGATION_P2_FIELD, base, 4·cycle + 3, v)` and this row's teardown read is its only reader, and every frame and field write rides `4·cycle`; locally `base_aligned`, `base_in_window` and `addr_w{j}` |
+| `live` | `live_boolean`, and the 24 leaves it masks; through `x_needs_live` and `y_needs_x` it also switches the `x` and `y` accesses off |
+| `anchor_value` | nothing locally: the request's `deleg_write_value` must equal it, and the memory argument is what says so (§26 observation 19) |
+| `w{j}_addr` | `addr_w{j}`, against `base` |
+| `w{j}_read_ts` | the multiset; the four `gap{j}_*` obligations hold it below this row's own write |
+| `w{j}_write_value` | `writes_back_w{j}`: the frame is read-only |
+| `n` (`w0_read_value`) | the frame's read tuple and `n_word` |
+| `s`, `d`, `x`'s and `y`'s cells (`w1`–`w4` read values) | the frame's read tuples; as addresses, the field leaves — a cell no window covers cannot balance. No gate or obligation bounds them |
+| `x_live`, `y_live` | their booleanity, `n_word`, `y_needs_x` and `x_needs_live`: `(0, 0)`, `(1, 0)`, `(1, 1)` for `n` = 0, 1, 2, and `(0, 0)` on a padding row |
+| `state{i}`, `state{i}_read_ts` | the multiset: the read consumes the cell's last write, and the write-back at `4·cycle + 0` carries the same column; `gap_state{i}_*` holds the stamp below it |
+| `x`, `x_read_ts`; `y`, `y_read_ts` | the same, where the access's mask is 1; nothing where it is 0 |
+| `next{i}_read_ts` | the multiset, and `gap_next{i}_*` |
+| `next{i}_old` | **the multiset alone**: its read leaf is its only reader, a destination's old value being no input of the duplex |
+| `next{i}` | `r63_out{i}`, and the write leaf that publishes it to the field memory |
+| `lane0`, `lane1` | `lane0_rule`, `lane1_rule` |
+| `r{r}_l{i}_u2`, `r{r}_l{i}_u4`, `r{r}_s{i}` | the `square`, `fourth` or `out` gate that defines it, whose one unknown it is once the round before is fixed |
+| `gap{j}_c{c}`, `gap_<q>_c{c}`, `base_low_hi`, `base_room_hi` | their own obligations and nothing else — no gate reads any of these 28 |
+| `base_low`, `base_room` | `base_aligned` and `base_in_window`, and their `lo_range` obligations |
+| `mult_range16` | `trace::build_multiplicities`, and the channel's root check — no gate reads it |
+| the padding row | `check_padding`'s all-zero row, subject to §23.2's padding paragraph |
+
+---
+
+## 24. `FIELD_IO` — family 21
+
+### 24.1 Header
+
+`recursion_circuit(21, n)` is `field_io::artifact(n)` with `field_io::channels()`, which is **one
+`RANGE16` channel**, and `family_circuit(21, n)` is `None` at every `n`: this is one of the five
+families only the **recursion** registry holds (`recursion.md` §1.2), so no base key can name it,
+and a program that declares it has `FIELD_WINDOWS` in its config and is in the recursion format
+(§1.1). Like `MOD_MUL` and `FR_ARITH` it is built by `memory::assemble`: every constraint it
+makes is an enforcing gate on gate list 0, so above the leaves it is two product trees, one
+fraction tree and nothing else. Normative spec: `recursion.md` **§5**, with §1.4 (the request's
+`a0`) and §2 (the field memory); the frame and the anchor are `delegation.md` §4 and §5,
+consumed unchanged. Fill: `prover::family_fill(21)`, the private `fill::field_io`. Ecall `0x050B`
+(`ecall::PRECOMPILE_FIELD_IO`), anchor space `address_space::DELEGATION_FIELD_IO` = 13, and the
+cell's space `address_space::FIELD` = 10. S-RECURSION added it.
+
+**82 committed columns (43 `M`, 39 `W`, no `S`) and one virtual table, `V[range16]`.** Gate list
+0 writes 288 columns — 16 leaves a side of the two memory trees plus the `RANGE16` tree's 128
+fraction pairs — and holds **24 enforcing gates (5 degree-1, 19 degree-2)**. **70 obligations**,
+all `RANGE16`, 54 under `live` and 16 under `export`; **4 outputs**. At its default `n = 18`
+there are 26 gate lists (8 row-wise and 18 halving), the top is `L26`, and the circuit has 650
+inner columns and 674 relations, 164,713 bytes of wire form — the `FIELD_IO` line of
+`crates/constraints/tests/vectors/recursion.txt`, SHA-256 `e2ae7397…2dc3fd75`, which
+`cargo run -p kat-gen -- recursion` writes and CI regenerates and diffs. Of those counts only the
+list count, the top and the inner and relation totals depend on `n`: `8 + n` lists,
+`inner = 578 + 4n`, `relations = 602 + 4n`. A height adds halving lists and nothing else, one
+node per output each.
+
+`artifact` asserts the memory and witness widths, `MEMORY_COLUMNS` (43) and `WITNESS_COLUMNS`
+(39), and panics on a refusal of `lookup::check_copowers` over its 14 scaled columns (§24.6);
+`memory::assemble` runs `validate`, `memory::check_memory` and, the family declaring a channel,
+`lookup::check_discharge`, and panics on each. **There is no `check_shape`**: unlike the six base
+delegation families, nothing at construction requires a relation by name or counts the
+obligations, so what moves when a gate or an obligation is dropped is the digest in
+`recursion.txt`.
+
+**One row is one move.** `IMPORT` (op 1) sets the cell to `Σ_k w_k·2^{32k}` over `Fr` — that is,
+mod `p` — from the eight RAM words `ptr, ptr + 4, …, ptr + 28`, and leaves the words as they
+were. `EXPORT` (op 2) writes into those eight words eight limbs below `2^32` whose weighted sum is
+congruent to the cell, and leaves the cell as it was. The frame `[op, cell, ptr]` is three words,
+12 bytes, read-only. A recursion node's tapes take their inputs into the field memory through
+`IMPORT` alone (`recursion.md` §7), and its journal leaves the field memory through `EXPORT`
+(`recursion.md` §8.2).
+
+**The height is `2^18`, a choice above a floor of 16.** `RANGE16`'s table needs sixteen
+variables, so the derived minimum-height guard makes `recursion_circuit(21, n)` `None` below 16;
+`DEFAULT_HEIGHTS[FIELD_IO]` is `2^18`, 262,144 moves a shard. The leaf `recursion.md` §8.3
+measures over block 257510's first 32 base shards makes 81,137 `FIELD_IO` calls — one `2^18`
+shard. The forward pass is 578 × 2^18 × 32 = 4.85 GB over the eight row-wise layers, the
+eighteen halving layers adding 34 MB: **computed, not measured**. In the recursion format the
+shard's 43 `M` and 39 `W` columns are **one stack each** at `n = 18`: `VmConfig::stack_vars` gives
+`σ = 6`, which is both the wider phase's need (43 columns, 64 slots) and `24 − n`
+(`recursion.md` §1.3).
+
+**This family's §0.5 counts are at `n = 18`**: 203 `Linear`, 157 `Product`, 242 `Quadratic`, 54
+`TreeProduct` (3 a halving list) and 18 `TreeCross` (1 a halving list), summing to 674.
+
+### 24.2 Row kinds
+
+Three, and none is an instruction: **this family is invoked, not decoded**. It claims no pc,
+`program::lookup_tuple(21)` is empty, it owns no cycle, it is not in
+`constants::family::CYCLE_OWNING`, and it is in a `VmConfig` exactly when the linked binary
+declares it (`.rodata.apogee.delegations.field_io`). **One row is one move**, `IMPORT` or
+`EXPORT`; there is no no-op kind.
+
+| row kind | `live` | `import`, `export` | what the row holds | what it adds to the multiset |
+| --- | --- | --- | --- | --- |
+| an **import** | 1 | 1, 0 | the requesting cycle, the frame base, the three frame words read and written back, the eight data words read and written back unchanged, the cell's old value and its new one, two gap chunks for each of the twelve reads, and the frame pointer's four columns | 13 read tuples and 13 write tuples: the 3 frame words at `(RAM, base + 4j)`, the anchor pair at `(DELEGATION_FIELD_IO, base)`, the 8 data words at `(RAM, ptr + 4k)` and the cell at `(FIELD, cell)` |
+| an **export** | 1 | 0, 1 | the same, but the cell written back unchanged and the eight words rewritten with limbs congruent to it, each with its high halfword | the same 13 and 13 |
+| **padding** | 0 | 0, 0 | every committed cell 0 **as the honest fill writes it**, the multiplicity column excepted | nothing: all 32 leaves are 1 — 26 real ones collapse to the product's identity and 6 are pads that are literally 1 — and 70 gated zeros the channel counts |
+
+An import row adds 16 gated zeros to the channel too: the eight exported-word pairs carry
+`export`.
+
+**The request is the recursion format's `ADD_SUB_LUI_AUIPC`**, an ecall row with `a7 = 0x050B`
+whose `is_deleg` selector for registry row 8 puts tag 13 on the `deleg` mirror. It does not write
+0 into `a0`: its `deleg_a0_rule` writes the base advanced past the frame, `a0 + 12`
+(`recursion.md` §1.4, `constants::delegation::a0_after`), so back-to-back calls walk consecutive
+frames. `crates/checker/tests/add_sub.rs`' `a_recursion_request_advances_a0_past_its_frame`
+holds it.
+
+**What is not provable**, and what refuses it first:
+
+| what | the circuit | the executor |
+| --- | --- | --- |
+| an op word other than 1 or 2 | `op_word` with `one_op_a_live_row` and the two booleanities | `EmuError::DelegationFrame`, "the op is not one FIELD_IO answers" |
+| a frame base not word-aligned, or a frame not inside `[RAM_ORIGIN, 2^31)` | `base_aligned`, `base_in_window` | `Misaligned`, `OutOfBounds` (`delegation.md` §4) |
+| a data word no window initializes — `ptr` not a multiple of 4, or `ptr + 4k` outside every RAM, public and advice window | the multiset alone: the read tuple has no write to consume | `Misaligned` or `OutOfBounds` (`data_word`, over `trace::addressable`), and `ptr + 4k` past `2^32` as `OutOfBounds` |
+| a cell no `FIELD_WINDOWS` window covers | the multiset alone (`recursion.md` §2.2) | nothing to refuse: `MemoryState::field_windows` takes as many windows as the highest touched cell needs |
+
+**A padding row is all-zero because the fill writes it so, not because the gates force it.** On a
+padding row `one_op_a_live_row` and the two booleanities force `import = export = 0`, `op_word`
+then forces the op word's read value to 0, and the three `writes_back_w{j}` hold each frame
+word's write value to its read value. Nothing else reaches the row: every other gate carries
+`live`, `import` or `export` as a factor, and every obligation's selector is `live` or `export`,
+so a padding row could legally carry anything in its data, cell, timestamp, gap and base
+columns. It is harmless — every leaf is the product's identity, and the row requests nothing and
+pairs with no anchor — and `zero_row_valid` is `true`, decided at construction from every
+enforcing gate's constant being 0.
+
+### 24.3 The base layer
+
+**Memory-argument columns, `M[0..43]`** — filled by `fill::field_io` through the shared
+`recursion_frame` (`delegation_frame_range16`, with the base columns after the gap chunks) and
+`access_columns`; committed in `PublicInputs::memory_commitments`, absorbed at G8 before the
+memory challenges.
+
+| address | name | Rust | what it is | honest fill | read by |
+| --- | --- | --- | --- | --- | --- |
+| `M[0]` | `cycle` | `delegation::CYCLE` | the requesting cycle | the cycle, `Fr`-backed | `read_anchor` and the twelve write leaves other than `write_anchor`, each as `4·cycle`; the twelve gap `_lo_range` obligations |
+| `M[1]` | `live` | `delegation::LIVE` | the row's one mask: the frame, the anchor, the data words and the cell are one invocation | 1 on an invocation, 0 on padding | `live_boolean`, `addr_w{j}`, `base_aligned`, `base_in_window`, `one_op_a_live_row`; the mask of all 26 real leaves; the selector of 54 obligations |
+| `M[2]` | `base` | `delegation::BASE` | the frame base, `a0` at the request | `u32` | both anchor leaves' address, `addr_w{j}`, `base_aligned`, `base_in_window` |
+| `M[3]` | `anchor_value` | `delegation::ANCHOR_VALUE` | the anchor teardown's value, **free on both sides** | 0 | `read_anchor` alone |
+| `M[4 + 4j + f]`, `j < 3` | `w{j}_addr`, `w{j}_read_ts`, `w{j}_read_value`, `w{j}_write_value` | `delegation::word(j, f)` | frame word `j`: 0 the op, 1 the cell, 2 `ptr` (`constants::field_io::{OP_WORD, CELL_WORD, PTR_WORD}`) | `base + 4j`; the last write's timestamp, `Fr`-backed; the word read, and the same word written back | `read_w{j}`, `write_w{j}`, `addr_w{j}`, `gap{j}_lo_range`, `writes_back_w{j}`; and as values: word 0 by `op_word`, word 1 as `read_cell`'s and `write_cell`'s address, word 2 as all sixteen data leaves' |
+| `M[16 + 3k]`, `k < 8` | `data{k}_read_ts` | `field_io::data_read_ts(k)` | when word `ptr + 4k` was last written | `Fr`-backed | `read_data{k}`, `gap_data{k}_lo_range` |
+| `M[17 + 3k]` | `data{k}_read` | `field_io::data_read(k)` | the word before the row | `Fr`-backed, the executor's `u32` | `read_data{k}`, `import_rule`, `import_keeps_word{k}` |
+| `M[18 + 3k]` | `data{k}_write` | `field_io::data_write(k)` | the word after it | `Fr`-backed: the read word on an import, limb `k` of the cell's canonical bytes on an export | `write_data{k}`, `import_keeps_word{k}`, `export_rule`, `word{k}_lo_range` |
+| `M[40]` | `cell_read_ts` | `field_io::CELL_READ_TS` | when the cell was last written | `Fr`-backed | `read_cell`, `gap_cell_lo_range` |
+| `M[41]` | `cell_old` | `field_io::CELL_OLD` | the cell before the row — 0 if nothing wrote it, the `FIELD_WINDOWS` init | `Fr` | `read_cell`, `export_keeps_cell`, `export_rule` |
+| `M[42]` | `cell_new` | `field_io::CELL_NEW` | the cell after it | `Fr`: the imported element, or `cell_old` on an export | `write_cell`, `import_rule`, `export_keeps_cell` |
+
+**Witness columns, `W[0..39]`** — all filled by `fill::field_io` except the last; committed in
+`ShardProof::witness_commitments`, absorbed at S3, with `g` drawn after them at S4.
+
+| address | name | Rust | what it is | honest fill | read by |
+| --- | --- | --- | --- | --- | --- |
+| `W[2j + c]`, `j < 3`, `c < 2` | `gap{j}_c{c}` | `delegation::frame_witness_range16`'s layout; `fill::recursion_chunk` | chunk `c` of frame word `j`'s gap `4·cycle − 1 − w{j}_read_ts`, weight `2^{16(c+1)}` | bits 16–31, then 32–37, of the gap | its obligations alone |
+| `W[6..10]` | `base_low`, `base_low_hi`, `base_room`, `base_room_hi` | — | `(base − RAM_ORIGIN)/4` and `2^31 − 12 − base`, each with its high halfword | | `base_aligned` reads `base_low` and `base_in_window` `base_room`; the rest, obligations alone |
+| `W[10 + 2k + c]`, `k < 8` | `gap_data{k}_c{c}` | `field_io::gap_chunk(k, c)` | data word `k`'s gap `4·cycle − data{k}_read_ts` | as the frame's | its obligations alone |
+| `W[26]`, `W[27]` | `gap_cell_c0`, `gap_cell_c1` | `field_io::gap_chunk(8, c)` | the cell's gap `4·cycle − 1 − cell_read_ts` | as the frame's | its obligations alone |
+| `W[28]` | `import` | `field_io::IMPORT` | `IMPORT`'s selector | 1 on an import row | `import_boolean`, `one_op_a_live_row`, `op_word`, `import_rule`, the eight `import_keeps_word{k}` |
+| `W[29]` | `export` | `field_io::EXPORT` | `EXPORT`'s selector, and the sixteen word obligations' | 1 on an export row | `export_boolean`, `one_op_a_live_row`, `op_word`, `export_keeps_cell`, `export_rule`; the selector of 16 obligations |
+| `W[30 + k]` | `word{k}_hi` | `field_io::word_hi(k)` | exported word `k`'s high halfword | `data{k}_write >> 16` on an export row, 0 on every other | `word{k}_hi_range`, `word{k}_lo_range` alone |
+| `W[38]` | `mult_range16` | `field_io::MULTIPLICITY` | the `RANGE16` table's count | `trace::build_multiplicities`, not the fill | `range16_table_num` alone |
+
+**35 of the 39 witness columns are read by no enforcing gate.** The 24 gap chunks, `base_low_hi`,
+`base_room_hi` and the eight `word{k}_hi` exist only to be the direct half of a range check, and
+`mult_range16` is read only by the leaf `range16_table_num`. The four a gate reads are
+`base_low`, `base_room`, `import` and `export`. Every value the fill writes is the executor's or
+a function of it: the selectors read off the op word, the halfwords off the written words, and
+the gap chunks and the base's four columns off the timestamps and the base.
+
+**Where each value reads from.** An import's input is the eight words' `read` values and its
+output the cell's `new`; an export's input is the cell's `old` value and its output the eight
+words' `write` values. The side a move does not change is written back by a gate of its own —
+`import_keeps_word{k}` on an import, `export_keeps_cell` on an export — and the frame by the
+three `writes_back_w{j}`, so a move can rewrite neither its source nor its frame.
+
+**No address column and no address bound.** A data word's address is the frame's `ptr`,
+`w2_read_value` = `M[14]`, plus `4k`, read straight into its two leaves; the cell's is
+`w1_read_value` = `M[10]`. There is no `addr` column for either, no alignment decomposition and no
+range obligation: what makes `ptr + 4k` a word and the cell a cell is the multiset, a tuple at an
+address no window initializes having no write to consume (`recursion.md` §5, §2.2). Every RAM
+window's addresses are `4h·w + 4·row`, so a `ptr` that is not a multiple of 4 reaches no init
+tuple. The executor admits exactly `trace::addressable`'s words: RAM, the two public windows and
+the advice region up to its end. The recursion guest's tape inputs are imported straight out of
+the advice region this way (`guest_sdk::recursion::import`).
+
+**A data word and the frame may coincide.** The data words take `field_io::DATA_DELTA` = 1, the
+frame `delegation::FRAME_DELTA` = 0, so a data word at a frame word's address reads what the
+frame's write-back left at `4·cycle + 0` and writes at `4·cycle + 1`: an export over its own
+frame overwrites the frame after the call has read it. `(RAM, 1)` is a slot no frame query of the
+requesting row holds — a `const` assertion in `constraints/src/delegation.rs` — so a data event is
+never filed into the requesting row. The data words are ordinary RAM events in the memory event
+log; the cell, at `field_io::CELL_DELTA` = 0 in its own space, is not a log event, and
+`trace::MemoryState` keeps its last `(ts, value)` (`recursion.md` §2.1).
+
+### 24.4 Gate list 0: the 288 leaves
+
+A leaf's relation number equals its `L1` offset, 0 to 287.
+
+**The memory product trees**, `delegation::leaves_with(DELEGATION_FIELD_IO, 3, …)`: the three
+frame words and the anchor, then the nine accesses of `field_io`'s private `accesses` — the eight
+data words, then the cell — **13 real leaves a side, padded to 16**. Every real leaf is masked by
+`live` and is the flat `Quadratic` of `delegation::masked_leaf`, §0.6's frame leaf with an
+address offset:
+
+```text
+positional  1 + γ_M·M[1] − M[1] + AS·M[1] + (α_addr·M[1]) ×off + (α_ts·M[1]) ×Δ
+              + α_addr·addr·M[1] + α_ts·ts·M[1]   (read side)
+                                 | (α_ts·M[0]·M[1]) ×4   (write side)
+              + α_val·value·M[1]
+named       live·T(AS, addr + off, ts, value) + 1 − live
+```
+
+`write_data1`, relation 21, is
+`1 + γ_M·M[1] − M[1] + 2·M[1] + (α_addr·M[1]) ×4 + α_ts·M[1] + α_addr·M[14]·M[1] + (α_ts·M[0]·M[1]) ×4 + α_val·M[21]·M[1]`,
+which is `live·T(RAM, ptr + 4, 4·cycle + 1, data1_write) + 1 − live`. The anchor's two leaves are
+every delegation family's: the teardown `T(13, base, 4·cycle + 3, anchor_value)`, its `+ 3` three
+`α_ts·M[1]` terms, and the answer `T(13, base, 0, 0)`, with no `α_ts` or `α_val` term at all.
+
+| `L1` | node | `AS` | addr | off | timestamp | value |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0–2 | `read_w{j}` | 2 | `M[4 + 4j]` | 0 | `M[5 + 4j]` | `M[6 + 4j]` |
+| 3 | `read_anchor` | 13 | `M[2]` | 0 | `4·M[0] + 3` | `M[3]` |
+| 4–11 | `read_data{k}` | 2 | `M[14]` | `4k` | `M[16 + 3k]` | `M[17 + 3k]` |
+| 12 | `read_cell` | 10 | `M[10]` | 0 | `M[40]` | `M[41]` |
+| 13–15 | `read_pad13` … `read_pad15` | — | — | — | — | the literal 1 |
+| 16–18 | `write_w{j}` | 2 | `M[4 + 4j]` | 0 | `4·M[0] + 0` | `M[7 + 4j]` |
+| 19 | `write_anchor` | 13 | `M[2]` | 0 | the literal 0 | the literal 0 |
+| 20–27 | `write_data{k}` | 2 | `M[14]` | `4k` | `4·M[0] + 1` | `M[18 + 3k]` |
+| 28 | `write_cell` | 10 | `M[10]` | 0 | `4·M[0] + 0` | `M[42]` |
+| 29–31 | `write_pad13` … `write_pad15` | — | — | — | — | the literal 1 |
+
+**The pads are named by their position in the side**, `read_pad13` to `read_pad15`:
+`leaves_with` names a pad by its index there, as it does for the other recursion families that
+pad (`P2_FIELD`'s are `read_pad14` and `read_pad15`), where `delegation::leaves` — §18's and
+§20's — counts its pads from `read_pad0`. Names are documentation only (§0.2).
+
+**The `range16` fraction tree**, `L1[32..288]`: 128 fractions — the table's, then the 70
+obligations in `lookups` order, then 57 pads. Fraction `i` is `(L1[32 + 2i], L1[33 + 2i])`, named
+`<node>_num` and `<node>_den`.
+
+| fraction | `L1` | node | numerator | denominator |
+| --- | --- | --- | --- | --- |
+| 0 | 32, 33 | `range16_table` | `−W[38]`, `Linear` | `V[range16] + g`, `Linear` |
+| 1–70 | 34–173 | the obligation's name (§24.6) | the literal 1, `Linear` | `g + s·e`, `Quadratic`: the selector times each term of the tuple, a constant folded onto `s` |
+| 71–127 | 174–287 | `range16_pad_0` … `range16_pad_56` | the literal 0, `Linear` | the literal 1, `Linear` |
+
+### 24.5 Gate list 0: the 24 enforcing gates
+
+Relations 288–311, in list order. The first nine are the read-only `RANGE16` frame's,
+`delegation::read_only_frame_range16(3, 12)` — `frame_gates_range16`'s six, then the three
+write-backs; the last fifteen are `field_io`'s private `gates`.
+
+| group | relations | count | degree | shape | what it says |
+| --- | --- | --- | --- | --- | --- |
+| `live_boolean` | 288 | 1 | 2 | `Quadratic` | the row's one mask is a bit |
+| `addr_w{j}` | 289–291 | 3 | 2 | `Quadratic` | `live·(w{j}_addr − base − 4j)`: word `j` is at `base + 4j`. Degree 2 because it carries `live`, which vacates it on a padding row |
+| `base_aligned`, `base_in_window` | 292–293 | 2 | 2 | `Quadratic` | `live·(base − RAM_ORIGIN − 4·base_low)` and `live·(2^31 − 12 − base − base_room)`: the base is 4-aligned and its 12-byte frame is inside RAM |
+| `writes_back_w{j}` | 294–296 | 3 | 1 | `Linear` | `w{j}_write_value − w{j}_read_value`: the frame is read-only |
+| `import_boolean`, `export_boolean` | 297–298 | 2 | 2 | `Quadratic` | each op selector is a bit |
+| `one_op_a_live_row` | 299 | 1 | 1 | `Linear` | `import + export − live` |
+| `op_word` | 300 | 1 | 1 | `Linear` | `import + 2·export − w0_read_value`: the op word is the selectors, `IMPORT` = 1 and `EXPORT` = 2 |
+| `import_rule` | 301 | 1 | 2 | `Quadratic` | `import·(cell_new − Σ_k 2^{32k}·data{k}_read)` |
+| `import_keeps_word{k}` | 302–309 | 8 | 2 | `Quadratic` | `import·(data{k}_write − data{k}_read)` |
+| `export_keeps_cell` | 310 | 1 | 2 | `Quadratic` | `export·(cell_new − cell_old)` |
+| `export_rule` | 311 | 1 | 2 | `Quadratic` | `export·(cell_old − Σ_k 2^{32k}·data{k}_write)` |
+
+Positional, as stored — every `Quadratic` here has constant 0, every product is two committed
+columns, and `addr_w0`'s `0·M[1]` is `neg(4·0)` kept as a term:
+
+```text
+288      live_boolean           0 = M[1] − M[1]·M[1]
+289      addr_w0                0 = 0·M[1] + M[1]·M[4] − M[1]·M[2]
+290      addr_w1                0 = −4·M[1] + M[1]·M[8] − M[1]·M[2]
+291      addr_w2                0 = −8·M[1] + M[1]·M[12] − M[1]·M[2]
+292      base_aligned           0 = −65536·M[1] + M[1]·M[2] − 4·M[1]·W[6]
+293      base_in_window         0 = 2147483636·M[1] − M[1]·M[2] − M[1]·W[8]
+294–296  writes_back_w{j}       0 = M[7 + 4j] − M[6 + 4j]
+297      import_boolean         0 = W[28] − W[28]·W[28]
+298      export_boolean         0 = W[29] − W[29]·W[29]
+299      one_op_a_live_row      0 = W[28] + W[29] − M[1]
+300      op_word                0 = W[28] + 2·W[29] − M[6]
+301      import_rule            0 = W[28]·M[42] − W[28]·M[17] − 2^32·W[28]·M[20] − 2^64·W[28]·M[23]
+                                    − 2^96·W[28]·M[26] − 2^128·W[28]·M[29] − 2^160·W[28]·M[32]
+                                    − 2^192·W[28]·M[35] − 2^224·W[28]·M[38]
+302–309  import_keeps_word{k}   0 = W[28]·M[18 + 3k] − W[28]·M[17 + 3k]
+310      export_keeps_cell      0 = W[29]·M[42] − W[29]·M[41]
+311      export_rule            0 = −W[29]·M[18] − 2^32·W[29]·M[21] − 2^64·W[29]·M[24]
+                                    − 2^96·W[29]·M[27] − 2^128·W[29]·M[30] − 2^160·W[29]·M[33]
+                                    − 2^192·W[29]·M[36] − 2^224·W[29]·M[39] + W[29]·M[41]
+```
+
+`65536` is `RAM_ORIGIN` and `2147483636` is `2^31 − 12`. `−2^{32k}` for `k ≥ 1` is a literal above
+`2^32`, so the dump prints it as `p − 2^{32k}` in hex (§0.2): `−2^32` reads
+`0x30644e72…43e1f592f0000001` and `−2^224` `0x30644e71e131a029…f0000001`.
+
+**The move is ten gates, each under its own selector**, which is what keeps every product two
+committed columns — `import·cell_new`, `import·data{k}_read` — and never three. A selector rather
+than `live` gates them because the two kinds say opposite things about the same columns: on an
+import the words stay and the cell moves, on an export the cell stays and the words move.
+
+**`one_op_a_live_row` is load-bearing.** `op_word` pins the op word to the selectors, not the
+selectors to the two codes: without this gate a live row may set both selectors to 0, and
+`op_word` then asks only for an op word of 0 — a call the executor refuses, and one a guest's
+frame can hold. Every one of the ten move gates vanishes and the sixteen word obligations switch
+off, so `cell_new` and the eight `data{k}_write` are free: any element into the cell and any
+eight values into eight RAM words, not even below `2^32`. The gate also refuses both selectors
+at 1, whose op word would be 3 — no code either, though there the two kinds' rules, holding
+together, change nothing. So it is this gate, and not `op_word`, that confines a live row to
+`IMPORT` and `EXPORT`.
+
+**`EXPORT` proves congruence and 32-bit limbs, not canonicity.** With each `data{k}_write` below
+`2^32` by its pair (§24.6), `W = Σ_k 2^{32k}·data{k}_write` is an integer in `[0, 2^256)`, and
+`export_rule` is the statement `W ≡ cell_old (mod p)`. `2^256` is about `5.29·p`, so `W` is
+`cell_old + j·p` for some `j` in `0 … 5` when `cell_old < 2^256 − 5p` (about `0.29·p`) and in
+`0 … 4` otherwise — **five or six representatives, and the circuit does not say which**. The
+executor writes the canonical one, `j = 0`, as limbs of `Fr::to_bytes`, and the fill copies it;
+a prover may write any of the others. A guest that needs the canonical limbs compares them with
+`p` in RAM itself (`recursion.md` §5). Two readers in the tree need no such check: the recursion
+guest's `read` accepts an exported cell as a `u32` only when its seven high words are 0, which
+only the canonical representative of a value below `2^32` has; and an internal node reads each
+of a child's 47 journal cells — each an `EXPORT`'s eight words (`recursion.md` §8.2) — back as
+`Σ_i w_i·2^{32i}` over `Fr` (`verifier_core::node`), which is the element whichever
+representative was written. A scalar's Pippenger digits need none of it, because
+`(s + kr)·P = s·P`.
+
+**`IMPORT` reduces, and needs no bound.** `import_rule` is an equation over `Fr`, so the cell is
+`Σ_k 2^{32k}·data{k}_read mod p`: that is the move's definition, and there is no integer reading to
+protect. No obligation reads an import row's words — the sixteen word pairs are `export`'s — so a
+word is whatever the memory argument says was last written at `ptr + 4k`. A word read from the
+advice region may be any `Fr`, the advice windows bounding nothing (§17); the import then takes
+the weighted sum mod `p` like any other, an element eight `u32` limbs also reach. `guests/field-ops`
+imports `p`'s own limbs, which land 0, and eight `0xffffffff` words, which land `2^256 − 1` reduced.
+
+**Neither move rule needs `MOD_MUL`'s integer reading.** There a limb identity must not wrap, and
+the operands' bounds are its soundness (§18.4). Here both rules are meant mod `p`, and the only
+bound in the move is the export's. What it buys is that the family keeps the write-side
+induction's shape (`memory-ops.md` §5.1): the one kind of word it computes into RAM, an exported
+one, is bounded by its pair, and every other word it writes is a copy of the word it read there —
+an imported word or a frame word, written back as read.
+
+### 24.6 The 70 lookups and the channel
+
+One channel, `RANGE16` = channel 1, table `V[range16]`, multiplicity `W[38]`. The tuple is
+**one** expression wide, so the circuit reads `g` and **no** power of `β` and no neutral, and
+`E + g = g + s·e_0` is every row denominator. The helpers are `delegation::{range16, bound32,
+bound_chunked}`: the frame's obligations through `read_only_frame_range16`, the accesses' through
+`Access::gap_lookups`, the words' through `bound32`.
+
+| obligations | relations | count | selector | tuple, positional | holds where the selector is 1 |
+| --- | --- | --- | --- | --- | --- |
+| `gap{j}_c0_range`, `gap{j}_c1_range`, `gap{j}_top_scaled`, `gap{j}_lo_range`, `j < 3` | `34 + 8j` to `41 + 8j` | 12 | `M[1]` | `W[2j]`; `W[2j + 1]`; `1024·W[2j + 1]`; `4·M[0] − M[5 + 4j] − 65536·W[2j] − 2^32·W[2j + 1] − 1` | `4·cycle − 1 − w{j}_read_ts` in `[0, 2^38)` |
+| `base_low_c0_range`, `base_low_top_scaled`, `base_low_lo_range` | 58–63 | 3 | `M[1]` | `W[7]`; `8·W[7]`; `W[6] − 65536·W[7]` | `base_low` in `[0, 2^29)` |
+| `base_room_c0_range`, `base_room_top_scaled`, `base_room_lo_range` | 64–69 | 3 | `M[1]` | `W[9]`; `2·W[9]`; `W[8] − 65536·W[9]` | `base_room` in `[0, 2^31)` |
+| `gap_data{k}_c0_range`, `_c1_range`, `_top_scaled`, `_lo_range`, `k < 8` | `70 + 8k` to `77 + 8k` | 32 | `M[1]` | `W[10 + 2k]`; `W[11 + 2k]`; `1024·W[11 + 2k]`; `4·M[0] − M[16 + 3k] − 65536·W[10 + 2k] − 2^32·W[11 + 2k]` | `4·cycle − data{k}_read_ts` in `[0, 2^38)` |
+| `gap_cell_c0_range`, `_c1_range`, `_top_scaled`, `_lo_range` | 134–141 | 4 | `M[1]` | `W[26]`; `W[27]`; `1024·W[27]`; `4·M[0] − M[40] − 65536·W[26] − 2^32·W[27] − 1` | `4·cycle − 1 − cell_read_ts` in `[0, 2^38)` |
+| `word{k}_hi_range`, `word{k}_lo_range`, `k < 8` | `142 + 4k` to `145 + 4k` | 16 | **`W[29]`** | `W[30 + k]`; `M[18 + 3k] − 65536·W[30 + k]` | `data{k}_write` in `[0, 2^32)` |
+
+The relations are each obligation's `_num` and `_den` leaves, `34 + 2i` and `35 + 2i` for
+obligation `i`. **70 obligations**, in that order: 12 for the frame's gaps, 3 and 3 for the base,
+32 for the data words' gaps, 4 for the cell's, 16 for the exported words. The first 54 carry
+`live`; the last 16 carry `export`, which `export_boolean` holds to booleanity, as `validate`
+requires of any lookup's selector. `2^32` in a tuple above is the literal `−2^32` the dump prints
+in hex.
+
+**Two slots, two gap constants.** Each gap is `4·cycle + Δ − 1 − read_ts`, chunked as
+`memory.md` §7's `38 = 16 + 16 + 6`, and is exact: the maximum is
+`(2^16 − 1)(1 + 2^16) + 2^32(2^6 − 1) = 2^38 − 1`. The frame words and the cell are at `Δ = 0`,
+which puts `−1` on the expression; the data words are at `Δ = 1`, which puts 0. The constant
+folds onto the selector in the row denominator — `gap0_lo_range_den` carries `−1·M[1]`,
+`gap_data0_lo_range_den` no linear term. So a frame word or the cell reads a write strictly
+before `4·cycle`, and a data word one at or before `4·cycle` — which is what lets a data word
+consume the frame's own write-back at `4·cycle + 0` when the two coincide. Every read is strictly
+below its own write, so no access consumes its own tuple. The anchor's teardown has no gap: its
+timestamp is `4·cycle + 3` by construction. **There is no `gap_w{j}` gate**: the obligations are
+the bound and the decomposition at once, as `memory::gap_lookups` has it for an execution family.
+
+**The scaled obligations alone bound nothing**, and `lookup::check_copowers` is what says so.
+`artifact` passes it 14 columns, all under `live`: the three frame gap tops, `base_low_hi` and
+`base_room_hi` (`delegation::frame_scaled_range16`) and the nine accesses' gap tops
+(`Access::scaled`). Each has its direct obligation under the same selector — `gap*_c1_range`,
+`base_low_c0_range`, `base_room_c0_range`. The scale is `2^{16−r}` for an `r`-bit top: 1024 for a
+gap's 6 bits, 8 for `base_low`'s 13, 2 for `base_room`'s 15.
+
+**The exported words are `bound32`'s 16+16 pairs**: `word{k}_hi` direct and
+`data{k}_write − 2^16·word{k}_hi` derived, one committed column and two obligations a word. The
+low expression is defined as the remainder, so `hi < 2^16` and `lo < 2^16` give
+`data{k}_write < 2^32` with no wrap. Nothing is scaled, so nothing here is a copower.
+
+**One multiplicity column, and no gate reads it.** `trace::build_multiplicities` counts each
+`V[range16]` row's occurrences over the 70 gated tuples of every row of the shard — switched-off
+ones included, a padding row contributing 70 zeros and an import row 16 — and appends `W[38]`
+after the fill, which does not write it. At `n = 18` the table column repeats every `2^16` rows,
+and each count sits on the lowest row holding its value (`lookup.md` §7), so rows `2^16` and
+above hold 0. It exists because `artifact.committed()` names it, it is last in the witness
+subtree because `lookup`'s own rule wants it there, and it is the ancestor of outputs 2 and 3.
+
+`lookup::check_discharge`, which `memory::assemble` runs because the family declares a channel,
+holds each obligation to one denominator leaf with a numerator of 1 beside it and the channel to
+exactly one table fraction. `checker::violated_lookups` is the native reading of every obligation
+on a row.
+
+**Headroom.** 71 of the fraction tree's 128 leaves are used; 57 more obligations fit, and the
+58th doubles the tree and adds a row-wise list (`R = 8`). The product trees have 3 spare leaves a
+side, and a 17th leaf there would double them to 32 and leave `R` at 7.
+
+### 24.7 The trees, the inner layers and the outputs
+
+Three trees: `read` and `write`, 16 leaves each, and `range16`, 128 fractions. **`R = 7`, and the
+fraction tree sets it alone** — a 16-leaf product tree is 4 deep — so the depth is
+`N = 1 + 7 + n`, 26 at `n = 18`.
+
+Layer `L1` is 288 wide: `read_*` at 0–15, `write_*` at 16–31, then the fraction tree's 128
+`(num, den)` pairs at 32–287, the table's first and the 57 pads last. Widths:
+
+```text
+L1    288      L5     18      L9 … L{n+8}    4 each
+L2    144      L6     10
+L3     72      L7      6
+L4     36      L8      4
+```
+
+so `inner = 578 + 4n` — 650 at `n = 18`, and 642 at the `n = 16` the row suite and the deferred
+proof build it at (§24.8). The two product trees reach one node at `L5` and are carried as
+`Linear` copies through `L6`–`L8`; the fraction tree reaches one pair at `L8`.
+
+| list | writes | relations | `Product` | `Quadratic` | `Linear` |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `L2`: `read_2_0` … `read_2_7`, `write_2_0` … `write_2_7`, `range16_2_{0…63}` | 312–455 | 16 + 64 | 64 | — |
+| 2 | `L3`: `read_3_*` 4, `write_3_*` 4, `range16_3_*` 32 pairs | 456–527 | 8 + 32 | 32 | — |
+| 3 | `L4`: 2, 2, 16 pairs | 528–563 | 4 + 16 | 16 | — |
+| 4 | `L5`: `read_5_0`, `write_5_0`, 8 pairs | 564–581 | 2 + 8 | 8 | — |
+| 5 | `L6`: `read_6_0`, `write_6_0` copied, 4 pairs | 582–591 | 4 | 4 | 2 |
+| 6 | `L7`: copied, 2 pairs | 592–597 | 2 | 2 | 2 |
+| 7 | `L8`: `read_8_0`, `write_8_0` copied, `range16_8_0` | 598–601 | 1 | 1 | 2 |
+
+The `Product` column is product-tree nodes plus fraction denominators. A product node is
+`out = a·b` and a fraction node `range16_{k}_{i}` is `num = a_num·b_den + b_num·a_den`,
+`den = a_den·b_den` over the layer below's pairs `2i` and `2i + 1` (§0.6):
+`define_range16_2_0_num` is `L1[32]·L1[35] + L1[34]·L1[33]`, the table fraction and
+`gap0_c0_range`'s.
+
+Relations: **0–287** list 0's leaves, **288–311** its 24 enforcing gates, **312–601** lists 1–7
+as above, and halving list `k` (`8 ≤ k ≤ n + 7`) holds `602 + 4(k − 8)` to `605 + 4(k − 8)`. The
+roots are relations `598 + 4n` to `601 + 4n`: **670–673** at `n = 18`. Every number but the
+halving lists' is independent of `n`.
+
+Each halving list is four gates: the `read_{k}_0` and `write_{k}_0` `TreeProduct`s, the channel's
+numerator `TreeCross { num, den }` and its denominator `TreeProduct`; at `L26` they are
+`read_root`, `write_root`, `range16_num_root` and `range16_den_root`. **The fraction tree is
+exempt from the padding-identity clause**: `checker::check_padding_identity` requires every column
+the first halving list reads to be 1 on the padding row except a `TreeCross`'s operands, a
+padding row contributing 70 neutral entries the multiplicity counts.
+
+**The outputs**, in output-map order: 0 `read_root` and 1 `write_root`, at `memory::READ_ROOT` and
+`WRITE_ROOT`, read at `verify_shard` step 10a against `memory_roots[p]` for `p` the position of
+`(21, shard_index)` in `verifier_core::statement_shards` — `INIT_TEARDOWN` and `ZERO_WINDOWS`
+first and every other family ascending, so after every `P2_FIELD` shard and before every `FQ_OP`
+one — and each a factor of `gkr_verify::reconciles` over the whole statement; 2
+`range16_num_root` and 3 `range16_den_root`, read at step 9, the failure `Lookup { channel: 1 }`
+and the check **both** `num == 0` and `den != 0`. In a recursion node the same checks are
+`tape::shard_tape`'s, replayed over field cells (`recursion.md` §7).
+
+### 24.8 What fixes each cell
+
+| cell | what fixes it |
+| --- | --- |
+| `cycle`, `base` | the multiset: the request's mirror write is `T(DELEGATION_FIELD_IO, base, 4·cycle + 3, v)` and this row's `read_anchor` is its only reader (`delegation.md` §5.3); locally `base_aligned`, `base_in_window` and `addr_w{j}` against the words |
+| `live` | `live_boolean`, every real leaf's mask, and `one_op_a_live_row` |
+| `anchor_value` | **nothing local**: the request's mirror write value must equal it, and the memory argument is what says so |
+| `w{j}_addr` | `addr_w{j}` |
+| `w{j}_read_ts`, `data{k}_read_ts`, `cell_read_ts` | the memory argument alone; each access's four gap obligations only hold it below the access's own write |
+| `w0_read_value` | the frame's read tuple, `writes_back_w0`, and `op_word` against the selectors |
+| `w1_read_value`, `w2_read_value` | the frame's read tuples and `writes_back_w{j}`; as the cell's and the data words' address, the multiset, which has no init tuple for a cell or a word no window covers. No gate bounds or aligns either |
+| `w{j}_write_value` | `writes_back_w{j}` |
+| `import`, `export` | their booleanity, `one_op_a_live_row` and `op_word` — together exactly "one of the two codes on a live row, the one the frame names, and neither on a padding row" |
+| `data{k}_read` | the memory argument alone: the last write to `ptr + 4k`. This family bounds no word it reads — an import's are reduced, an export's are read by nothing but their leaf |
+| `data{k}_write` | on an import, `import_keeps_word{k}`; on an export, `export_rule` with the other seven and its own 16+16 pair, which fix the eight words as one of `cell_old`'s five or six representatives below `2^256` and nothing more (§24.5) |
+| `cell_old` | the memory argument: the cell's last write, or the `FIELD_WINDOWS` init `(FIELD, cell, 0, 0)` |
+| `cell_new` | on an import, `import_rule`; on an export, `export_keeps_cell` |
+| `word{k}_hi` | on an export row, its two obligations and nothing else; on an import or padding row **nothing at all** — no gate reads it and both its obligations carry `export`. The fill writes 0 there |
+| the 24 gap chunks, `base_low_hi`, `base_room_hi` | their own obligations and nothing else: no enforcing gate reads any of the 26 |
+| `base_low`, `base_room` | `base_aligned` and `base_in_window`, and their `_lo_range` obligations |
+| `mult_range16` | `trace::build_multiplicities`, and the channel's own root check — no gate reads it |
+| the padding row | the seven gates §24.2's last paragraph names, and the fill writing zeros |
+
+**The row suite is row-local at `n = 16`.** `crates/checker/tests/recursion.rs`'
+`the_field_families_hold_and_the_field_memory_balances` fills a `FIELD_IO` shard from
+`guests/field-ops`' real trace through `prover::family_fill` — 51 invocations, both moves among
+them, an import of `p`'s own limbs and one of eight `0xffffffff` words included — and evaluates
+every live row and the first padding row of `recursion_circuit(21, 16)` through
+`checker::violated_relations` and `checker::violated_lookups`. Sixteen is the channel's floor and
+not the default height, and relations 0–601 — every leaf, enforcing gate and row-wise node — are
+the same at every `n`. The same test multiplies every live row's `read_cell` and `write_cell`
+into the field memory's product, beside `FR_OP`'s, `P2_FIELD`'s and `FQ_OP`'s field leaves and the
+field window's teardown and init, and requires reads and writes to cancel: a slot or an address
+the circuit and the executor disagreed on would leave a tuple with no partner. The data words'
+and the frame's RAM leaves are not in that product, and the multiplicity column reads 0 there —
+the fill does not write it — so the channel's table side is not exercised by this test.
+
+The executor's half is `crates/emulator/tests/guests.rs`'
+`field_ops_checks_itself_under_the_recursion_ecalls`: the guest exits 26, every check passed, its
+results read back through exports against literals, and its trace holds 51 `FIELD_IO`
+invocations. `crates/constraints/tests/recursion.rs`'
+`the_recursion_families_build_in_the_recursion_registry_alone` builds the circuit at its default
+`2^18` — which runs `validate`, `check_memory`, the discharge rule and `artifact`'s own checks —
+requires `zero_row_valid`, and requires `family_circuit(21, 18)` to be `None`; `recursion.txt`
+pins the bytes. The request side is `crates/checker/tests/add_sub.rs`'
+`a_recursion_request_advances_a0_past_its_frame`. What only a whole proof reaches — the data
+words in the global multiset, the anchor pairing, the channel's roots over counted
+multiplicities and the stacked opening — is `crates/prover/tests/field_ops.rs`, `#[ignore]`d and
+deferred: `guests/field-ops` proved with one `FIELD_IO` shard at `2^16`, verified through
+`verify_block`, and every shard's tape replayed against `verify_shard_local` and
+`pcs::batch_verify_deferred`.
+
+**No suite carries a negative control for this family.** Every row the row suite evaluates is
+honest: no test corrupts a cell and names the gate or obligation that refuses it —
+`one_op_a_live_row`, `import_keeps_word{k}`, `export_keeps_cell`, `export_rule` and the word pairs
+among them — and none exhibits the non-canonical export the circuit admits.
+
+---
+
+## 25. `FQ_OP` — family 22
+
+### 25.1 Header
+
+`recursion_circuit(22, n)` is `fq_op::artifact(n)` with `fq_op::channels()`, which is **two
+range channels**, `TIMESTAMP` then `RANGE16`. `family_circuit(22, n)` is `None` at every `n`:
+this is one of the five families only the **recursion** registry holds (`recursion.md` §1.2,
+`constraints::recursion_circuit` in `crates/constraints/src/lib.rs`), so a base-format key
+cannot name it, and a statement holds it only in the recursion format. Like `MOD_MUL`,
+`EC_ADD` and `FR_ARITH` it is built by `memory::assemble`: every constraint it makes is an
+enforcing gate on gate list 0, so above the leaves it is two product trees, two fraction trees
+and nothing else. Normative spec: `recursion.md` **§6**, with §1.2 (the registry), §1.4 (the
+request's `a0`), §2 (the field memory) and §8.3 (why an operand is indirect); `delegation.md`
+§4 and §5 for the frame and the anchor. Fill: `prover::family_fill(22)`, the private
+`fill::fq_op`, over the field families' shared frame fill `fill::recursion_frame`. Ecall
+`0x050C` (`ecall::PRECOMPILE_FQ_OP`), anchor space `address_space::DELEGATION_FQ_OP` = 14, and
+every operand access in `address_space::FIELD` = 10. A request of this type leaves `a0 + 16`
+in `a0`, its frame base advanced past its four words (`delegation::a0_after`, `recursion.md`
+§1.4), which the recursion-format `ADD_SUB`'s `deleg_a0_rule` holds.
+
+**121 committed columns (48 `M`, 73 `W`, no `S`) and two virtual tables, `V[range19]` and
+`V[range16]`.** Gate list 0 writes 256 columns — 32 leaves a side of the two memory trees, the
+`TIMESTAMP` tree's 32 fraction pairs and the `RANGE16` tree's 64 — and holds **38 enforcing
+gates (6 degree-1, 32 degree-2)**. **80 obligations**, 30 on `TIMESTAMP` and 50 on `RANGE16`,
+and **6 outputs**. At `n = 20`, its default height, there are 27 gate lists (7 row-wise and 20
+halving), the top is `L27`, and the circuit has 630 inner columns and 668 relations, 158,326
+bytes of wire form. **None of these counts depends on `n`** but the inner and relation totals,
+`510 + 6n` and `548 + 6n`: a height adds halving lists and nothing else, one node per output
+each.
+
+The artifact is pinned by digest, as the six base delegation families' are:
+`crates/constraints/tests/vectors/recursion.txt` carries the line
+`FQ_OP 20 48 73 27 630 668 6 158326 af9dd8e9…f177d485` — `n`, memory, witness, gate lists,
+inner, relations, outputs, bytes, SHA-256 — beside the other four recursion families' and the
+recursion-format `ADD_SUB`'s. `cargo run -p kat-gen -- recursion` writes it, and the group is
+one of kat-gen's defaults, so CI regenerates and diffs it. This section was read from a
+`checker dump` of `recursion_circuit(22, 20).artifact.to_bytes()`, 2,300 lines.
+
+`artifact` panics unless `M` is `MEMORY_COLUMNS` (48) and `W` is `WITNESS_COLUMNS` (73), unless
+`TIMESTAMP` carries exactly 30 obligations and `RANGE16` exactly 50, and on any refusal of
+`lookup::check_copowers` over the frame's six scaled columns. `memory::assemble` runs
+`validate` (through `build::assemble`), `memory::check_memory` and, the family declaring
+channels, `lookup::check_discharge`, and panics on any refusal of each.
+
+**The height is `2^20`, and it is forced rather than chosen.** `TIMESTAMP`'s table is
+`V[range19]`, nineteen variables, so `recursion_circuit`'s derived floor is 19 — the most any
+of the family's channels needs, `lookup::table_vars` — and the range is `19 ≤ n ≤ 30`;
+Mercury's even variable count makes `2^20` the least height a key can carry
+(`constants::family::DEFAULT_HEIGHTS`: "forced, its TIMESTAMP table needing 19 variables";
+`recursion.md` §6). **It is the first delegation family to carry `TIMESTAMP`.** That table fits
+`2^20` and `2^22` on this menu and no lower height, and every base delegation family is below
+it — `POSEIDON2` and `FR_ARITH` at `2^8`, `MOD_MUL` and `EC_ADD` at `2^16`, `KECCAK_F` and
+`SHA256_COMP` at `2^18` — so `FQ_OP`, at `2^20`, is the one delegation family that carries
+it. What the channel buys is a 19-bit chunk: a field access's 38-bit gap is two of
+them, exactly, where `RANGE16` takes three with a scaled one, and the quotient's top limb and
+each carry, 76 bits apiece, are four (§25.7).
+
+**One row is one operation over elements of BN254's base field**, `ops/row = 1`. An element is
+four consecutive field cells holding 64-bit limbs, `v = Σ_i v_i·2^{64i} < 2^256`, congruent to
+the element mod `q` and **not necessarily below it**: reduction is lazy (`recursion.md` §6). It
+cannot be one cell, `q` being larger than `p`. The family serves a recursion node's fold: the
+MSMs' per-point template is 396 `FQ_OP` calls, and on block 257510's first 32 base shards the
+leaf made 901,276 of them, one `2^20` shard with about 147k rows to spare (`recursion.md`
+§8.3).
+
+**A recursion-format shard commits stacks, not columns** (`recursion.md` §1.3). At `n = 20`,
+`σ = min(24 − 20, 8) = 4`, so the 48 `M` columns are three full stacks of 16 and the 73 `W`
+columns five, the last holding nine. `shard-proof.md` §9's per-column closed form,
+`proof_bytes`, therefore does not give this family's proof length, and this section gives none.
+
+**One shard is a computed 20.8 GB** by §18.1's accounting: 17.1 GB of forward pass (the seven
+row-wise layers' 510 columns at `2^20` rows and 32 bytes; the twenty halving layers add
+0.2 GB), 1.5 GB of committed base (88 small-type columns at 4 bytes and 33 `Fr` ones at 32 —
+`cycle`, the eleven read timestamps, `digit`, the sixteen limbs of `a`, `b`, `d` and `d′`, and
+`y`'s four), and 2.0 GB of transition 0's first bind, a half-height `Fr` table over 121
+columns. It is a model, not a measurement.
+
+**This family's §0.5 counts are at `n = 20`, §0.5's own height**: 150 `Linear`, 156
+`Product`, 242 `Quadratic`, 80 `TreeProduct` (4 a halving list) and 40 `TreeCross` (2 a halving
+list), summing to 668.
+
+### 25.2 Row kinds
+
+Two, and neither is an instruction: **this family is invoked, not decoded**. It claims no pc,
+`program::lookup_tuple(22)` is empty, it is not in `constants::family::CYCLE_OWNING`, and it is
+in a `VmConfig` exactly when the linked binary declares it — which, as for every field family,
+also puts `FIELD_WINDOWS` in the config and the statement in the recursion format
+(`recursion.md` §1.1, §2.2).
+
+| row kind | `live` | what the row holds | what it adds to the multiset |
+| --- | --- | --- | --- |
+| an **operation** | 1 | the requesting cycle, the frame base, the four frame words, the digit cell and its value, the three elements' addresses, read timestamps and limbs, `d′`'s limbs, the op's selector, the three indirection flags, `y`, the quotient's chunks, three carries' chunks, and eleven gaps' chunks | 18 read tuples and 18 write tuples: the four frame words at `(RAM, base + 4j)`, read and written back at `4·cycle`; the anchor pair at `(DELEGATION_FQ_OP, base)`; and 13 field tuples — the digit cell at `(FIELD, g_addr)` at `Δ0`, `a`'s four cells at `(FIELD, a_addr + i)` at `Δ1`, `b`'s at `Δ2` and `d`'s at `Δ3`, every one written back with the value it read but `d`'s, which take `d′` |
+| **padding** | 0 | every committed cell 0 **as the honest fill writes it**, the two multiplicity columns excepted | nothing: all 64 leaves are 1 — 36 real ones collapse to the product's identity and 28 are pads that are literally 1 — and 80 gated zeros the two channels count, 30 and 50 |
+
+**A live row is one of five operations, and all five make the same 36 tuples.** Each access
+is masked by `live` and by nothing else, which is `recursion.md` §6's first guest rule seen
+from the circuit: every operand names an element, including one the op ignores. The four
+slots are distinct, so any two operands may name one element, the later slot reading what the
+earlier wrote back.
+
+The op word, frame word 0, is `code + 8·ind_d + 16·ind_a + 32·ind_b + 64·g_addr` (`op_word`):
+the code in bits 0–2 (`fq_op::CODE_BITS`), the three flags in bits 3, 4 and 5 (`IND_D`,
+`IND_A`, `IND_B`), and the **digit cell** above them (`DIGIT_SHIFT` = 6). Each operand is
+**direct** — its element starts at its frame word — or **indirect**, starting at its word plus
+`8·digit`, the digit being the digit cell's value: a word names a window's buckets, eight
+cells apiece (`BUCKET_CELLS`, `x` then `y`), and the digit picks one (`recursion.md` §8.3). The
+flags are independent, so one digit may index any of the three elements.
+
+Every operation is one identity, `a·y + z = q·K + d′` over the integers (§25.6), with `y` and
+`z` chosen by the selector:
+
+| op | code | selector | `y` | `z`'s limb `k` | `d′` | what the row says |
+| --- | --- | --- | --- | --- | --- | --- |
+| `MUL` | 1 | `op1` | `b` | 0 | written | `d′ ≡ a·b (mod q)` |
+| `ADD` | 2 | `op2` | `(1, 0, 0, 0)` | `b_k` | written | `d′ ≡ a + b` |
+| `SUB` | 3 | `op3` | `(1, 0, 0, 0)` | `6q_k − b_k` | written | `d′ ≡ a + 6q − b ≡ a − b`; `6q > 2^256`, so `z` is positive for every `b < 2^256` |
+| `MULEQ` | 4 | `op4` | `b` | 0 | `d`, kept by `muleq_keeps_d{i}` | `a·b ≡ d`: an assertion; nothing new is written |
+| `FROM128` | 5 | `op5` | 0 | `d′_k` | written, with `d′₀ + 2^64·d′₁ = a₀` and `d′₂ + 2^64·d′₃ = a₁` | `0 = q·K`, so `K = 0` and `d′ = a₀ + 2^128·a₁` exactly |
+
+`FROM128` turns a point coordinate's two transcript limbs, the cells `a` and `a + 1`, into an
+element. Its `a` is not an element and does not enter the identity; its two `from128_half`
+gates with `d′`'s ranges are what bound each limb below `2^128` (`recursion.md` §6).
+
+**What is not provable.**
+
+- A code the selectors do not spell — 0, 6 or 7 in the low three bits. `op_word` solves for
+  `g_addr = (w0 − code − flags)/64` over `Fr`, which is a small integer only when the word's
+  low six bits are a code and its flags; any other word puts the digit cell's tuple at an
+  address no field window initializes, and the multiset refuses it (`recursion.md` §5:
+  addressability is the multiset's).
+- An operand outside every field window, named directly or through a digit that is not a
+  small integer, for the same reason.
+- A `b` or `d` element whose four cells were last written at different timestamps: their four
+  read leaves share one `read_ts` column, so no single value pairs all four.
+- A `FROM128` whose `a₀` or `a₁` is not below `2^128`.
+- A `MULEQ` whose `a·b ≢ d (mod q)` — and one whose kept `d` exceeds `a·b` as an integer, the
+  quotient's chunks being nonnegative. A reduced `d` never does (§25.6).
+
+The executor refuses more, and earlier, by name (the emulator's `fq_op`, which `delegate`
+calls after writing the read-only frame back): a digit cell holding no value below `2^24`, on
+a direct row too; an element leaving the cell range; an operand limb at or above `2^64` on the
+four arithmetic ops; `FROM128`'s cells past `2^128`; a `MULEQ` that does not hold; a code it
+does not answer. It writes the **reduced** `d′`, the honest representative. The fill refuses
+an element whose cells were last written apart, which the executor does not check, and an
+operand or a `d′` that is not an element.
+
+Three things hold the all-zero row and are worth spelling out. `one_op_a_live_row` forces
+every selector to 0 there, so the four `y{j}_rule` gates force `y` to 0 and every `z` term
+vanishes with its selector; each group equation then reads `−q·K − d′ + c_{g−1} − 2^128·c_g`
+and holds at zero. The carries' offset carries `live`, so a padding row's carry is the chunk
+sum less `2^75·0`, not less `2^75`. And the three `_addr_rule` gates and `op_word` are
+ungated with every term a column, so each reads `0 = 0`. `zero_row_valid` is `true`, which
+`crates/constraints/tests/recursion.rs` asserts.
+
+**The padding row is all-zero because the fill writes it so, not because the gates force
+it.** Every obligation's selector is `live`, so on a padding row no bound applies: `d′`, the
+quotient and the carries need only satisfy the four group equations over `Fr` with `y` and
+`z` at 0, and the flags, the addresses and the digit only `op_word` and the address rules. It
+is harmless — the row's leaves are the identity, it requests nothing, pairs with no anchor and
+writes no register — but a test asserting "a padding row's columns are zero" asserts a
+property of the fill.
+
+The two multiplicity columns are the committed columns whose row `y` is not this shard's
+`y`-th invocation: each is row `y` of its channel's table (§0.3).
+
+### 25.3 The base layer
+
+**Memory-argument columns, `M[0..48]`** — filled by `fill::fq_op`, the frame through
+`fill::recursion_frame`; committed as stacks in `PublicInputs::memory_commitments`, absorbed
+at G8 before the memory challenges. `Fr`-backed: `cycle`, the eleven read timestamps, `digit`
+and every limb. The rest are `u32`.
+
+| address | name | Rust | what it is | honest fill | read by |
+| --- | --- | --- | --- | --- | --- |
+| `M[0..4]` | `cycle`, `live`, `base`, `anchor_value` | `delegation::{CYCLE, LIVE, BASE, ANCHOR_VALUE}` | as §18.3 and §12.3: the requesting cycle, the row's one mask, the `a0` the request passed, and the anchor teardown's value, **free on both sides** | the cycle; 1; the base; 0 | `cycle`: the 17 write leaves stamping `4·cycle + Δ`, `read_anchor`, and the eleven gap `_lo` obligations. `live`: every real leaf's mask, every obligation's selector, and twelve gates — `live_boolean`, the four `addr_w{j}`, `base_aligned`, `base_in_window`, `one_op_a_live_row` and the four `group{g}`. `base`: the four `addr_w{j}`, both base bounds, both anchor leaves. `anchor_value`: `read_anchor` alone |
+| `M[4 + 4j + f]`, `j < 4` | `w{j}_addr`, `w{j}_read_ts`, `w{j}_read_value`, `w{j}_write_value` | `delegation::word(j, f)` | frame word `j`: 0 the op word, 1 `d`'s word, 2 `a`'s, 3 `b`'s (`fq_op::{OP_WORD, D_WORD, A_WORD, B_WORD}`) | the word's address, its last write, its value, and the same value | `addr`: both leaves and `addr_w{j}`; `read_ts`: `read_w{j}` and `gap{j}_lo_range`; `read_value`: `read_w{j}`, `writes_back_w{j}`, and `op_word` for word 0, `d_addr_rule`, `a_addr_rule` and `b_addr_rule` for words 1, 2 and 3; `write_value`: `write_w{j}` and `writes_back_w{j}` |
+| `M[20]` | `g_addr` | `fq_op::G_ADDR` | the digit cell: the op word shifted down six bits | `w0 >> 6` | `op_word`, `read_g`, `write_g` |
+| `M[21]` | `g_read_ts` | `G_READ_TS` | the digit cell's last write | the log's | `read_g`, `gap_g_lo_range` |
+| `M[22]` | `digit` | `DIGIT` | the digit cell's value | the cell's value | `read_g`, `write_g`, and the three `_addr_rule` gates under their flags |
+| `M[23]` | `a_addr` | `addr(1)` | `a`'s first cell | `w2 + 8·ind_a·digit` | `a_addr_rule`, `a`'s eight leaves |
+| `M[24 + i]` | `a_read_ts{i}` | `a_read_ts(i)` | the last write to `a`'s cell `i` — **one a cell** | the log's | `read_a{i}`, `gap_a{i}_lo_range` |
+| `M[28 + i]` | `a{i}` | `a(i)` | limb `i` of `a`, as read | the cell's value | `read_a{i}`, `write_a{i}`, the group gates multiplying it by `y`, and, for `a0` and `a1`, the two `from128_half` gates |
+| `M[32]` | `b_addr` | `addr(2)` | `b`'s first cell | `w3 + 8·ind_b·digit` | `b_addr_rule`, `b`'s eight leaves |
+| `M[33]` | `b_read_ts` | `read_ts(2)` | the last write to `b`'s four cells — **one for the element** | the first cell's, asserted equal to the other three's | `read_b0` … `read_b3`, `gap_b_lo_range` |
+| `M[34 + i]` | `b{i}` | `b(i)` | limb `i` of `b` | the cell's value | `read_b{i}`, `write_b{i}`, `y{i}_rule`, and through `z` `group0` (`i < 2`) or `group1` (`i ≥ 2`) |
+| `M[38]` | `d_addr` | `addr(3)` | `d`'s first cell | `w1 + 8·ind_d·digit` | `d_addr_rule`, `d`'s eight leaves |
+| `M[39]` | `d_read_ts` | `read_ts(3)` | the last write to `d`'s four cells, one for the element | as `b_read_ts` | `read_d0` … `read_d3`, `gap_d_lo_range` |
+| `M[40 + i]` | `d{i}` | `d_old(i)` | limb `i` of `d` before the row | the cell's value | `read_d{i}`, `muleq_keeps_d{i}` |
+| `M[44 + i]` | `n{i}` | `d_new(i)` | limb `i` of `d′`, `d` after the row | the executor's write | `write_d{i}`, `muleq_keeps_d{i}`, `from128_half0` (`i < 2`) or `from128_half1`, `group0` (`i < 2`) or `group1`, and `n{i}_c0_range` |
+
+**Witness columns, `W[0..73]`** — all filled by `fill::fq_op` but the last two; committed as
+stacks in `ShardProof::witness_commitments`, absorbed at S3, with `g` drawn after them at S4.
+
+| address | name | Rust | what it is | read by |
+| --- | --- | --- | --- | --- |
+| `W[2j + c]`, `j < 4`, `c < 2` | `gap{j}_c{c}` | `fill::recursion_chunk(j, c)` | chunk `c` of frame word `j`'s timestamp gap, weight `2^{16(c+1)}` — `delegation::frame_witness_range16`'s layout, `MOD_MUL`'s | its obligations alone |
+| `W[8..12]` | `base_low`, `base_low_hi`, `base_room`, `base_room_hi` | — | `(base − RAM_ORIGIN)/4` and `2^31 − 16 − base`, each with its high halfword | `base_low` and `base_room` by `base_aligned` and `base_in_window` and their `_lo_range`; the two halfwords by their three obligations alone |
+| `W[12 + k]`, `k < 7` | `gap_g_hi`, `gap_a0_hi` … `gap_a3_hi`, `gap_b_hi`, `gap_d_hi` | `gap_hi(k)` | the high 19 bits of access `k`'s gap, `fq_op::GAPS` = 7: the digit cell's, `a`'s four, `b`'s, `d`'s | its two `TIMESTAMP` obligations alone |
+| `W[19 + i]`, `i < 5` | `op1` … `op5` | `selector(i)` | the op selectors in `fq_op::OPS` order, code `i + 1` | its booleanity, `one_op_a_live_row`, `op_word`, and the gates its op reads (§25.5) |
+| `W[24..27]` | `ind_d`, `ind_a`, `ind_b` | `IND_D`, `IND_A`, `IND_B` | the three indirection flags | its booleanity, `op_word`, its `_addr_rule` |
+| `W[27 + j]` | `y0` … `y3` | `y(j)` | the multiplicand's limb `j` | `y{j}_rule` and the group gates |
+| `W[31 + 3i + c − 1]`, `c = 1, 2, 3` | `n{i}_c{c}` | `d_chunk(i, c)` | bits `16c … 16c + 15` of `d′`'s limb `i`; bits 0–15 are derived | its own obligation and `n{i}_c0_range` |
+| `W[43 + 4j + c]` | `k{j}_c{c}` | `k_chunk(j, c)` | chunk `c` of the quotient's limb `j`: 16 bits for `j < 3`, 19 for `K3` | the group gates and its own obligation |
+| `W[59 + 4g + c]`, `g < 3` | `carry{g}_c{c}` | `carry_chunk(g, c)` | 19-bit chunk `c` of carry `g` plus `2^75` | `group{g}` and `group{g+1}`, and its own obligation |
+| `W[71]`, `W[72]` | `mult_timestamp`, `mult_range16` | `MULT_TIMESTAMP`, `MULT_RANGE16` | the two channels' multiplicities, last in the witness | each its table's numerator leaf alone; filled by `trace::build_multiplicities`, not by the fill |
+
+**31 of the 73 witness columns are read by no gate at all**: the 8 frame gap chunks,
+`base_low_hi`, `base_room_hi`, the 7 `gap_*_hi`, the 12 `n{i}_c{c}` and the two
+multiplicities. Each of the first 29 exists to be the direct half of a bound. **The
+quotient's and the carries' chunks are the other way round: the group gates read them
+directly**, as weighted sums, so there is no `K` or carry value column — where `MOD_MUL` has
+`carry{k}` — and every one of their chunks is committed, with no derived chunk and no scaled
+obligation. `d′` is a third shape: its value is the `M` column `n{i}` that the write leaf
+needs, its three upper chunks are witnesses, and its low chunk is derived.
+
+**`a` has four read timestamps and `b` and `d` one each**, which is the asymmetry
+`recursion.md` §6 records. `b`'s and `d`'s cells are only ever written together — by this
+family, all four at one `4·cycle + 3` — so one timestamp and one gap serve an element.
+`FROM128`'s `a` is two transcript limbs that `FIELD_IO` imported one at a time, so `a`'s
+cells are not, and the price is three more timestamps, three more gaps and six more
+`TIMESTAMP` obligations.
+
+**This family names address columns, where `FR_OP` names none.** An `FR_OP` cell is its frame
+word's value; an `FQ_OP` element is its frame word plus `8·digit` where indirect, which takes
+a column and a gate. Every address it names — `g_addr` and the three elements' — is bounded by
+nothing local; that a cell lies inside a field window is the multiset's business.
+
+**Where each value reads from.** `a`, `b` and the old `d` are read values; `d′` alone is a
+written one. The frame is read-only — four `writes_back_w{j}` — and so are the digit cell, `a`
+and `b`, whose write leaves take the read column as their value: the row cannot change them.
+
+### 25.4 Gate list 0: the 256 leaves
+
+A leaf's relation number equals its `L1` offset, 0 to 255.
+
+**The memory product trees**, read side `L1[0..32]` and write side `L1[32..64]`, are
+`delegation::leaves_with(DELEGATION_FQ_OP, 4, accesses)`: the four frame words and the anchor
+(`delegation::leaves`, its pads removed), then the 13 field accesses in
+`fq_op::accesses()`' order — 18 real leaves a side, padded to 32 with **14 pads a side**.
+Every real leaf's mask is `M[1]`.
+
+| `L1` | node | `AS` | addr | timestamp part | value |
+| --- | --- | --- | --- | --- | --- |
+| 0–3 | `read_w0` … `read_w3` | 2 (`RAM`) | `M[4 + 4j]` | `M[5 + 4j]` | `M[6 + 4j]` |
+| 4 | `read_anchor` | 14 | `M[2]` | `4·M[0] + 3` | `M[3]` |
+| 5 | `read_g` | 10 (`FIELD`) | `M[20]` | `M[21]` | `M[22]` |
+| 6–9 | `read_a0` … `read_a3` | 10 | `M[23] + i` | `M[24 + i]` | `M[28 + i]` |
+| 10–13 | `read_b0` … `read_b3` | 10 | `M[32] + i` | `M[33]` | `M[34 + i]` |
+| 14–17 | `read_d0` … `read_d3` | 10 | `M[38] + i` | `M[39]` | `M[40 + i]` |
+| 18–31 | `read_pad18` … `read_pad31` | — | — | — | the literal 1 |
+| 32–35 | `write_w0` … `write_w3` | 2 | `M[4 + 4j]` | `4·M[0] + 0` | `M[7 + 4j]` |
+| 36 | `write_anchor` | 14 | `M[2]` | the literal 0 | the literal 0 |
+| 37 | `write_g` | 10 | `M[20]` | `4·M[0] + 0` | `M[22]` |
+| 38–41 | `write_a0` … `write_a3` | 10 | `M[23] + i` | `4·M[0] + 1` | `M[28 + i]` |
+| 42–45 | `write_b0` … `write_b3` | 10 | `M[32] + i` | `4·M[0] + 2` | `M[34 + i]` |
+| 46–49 | `write_d0` … `write_d3` | 10 | `M[38] + i` | `4·M[0] + 3` | `M[44 + i]` |
+| 50–63 | `write_pad18` … `write_pad31` | — | — | — | the literal 1 |
+
+**A field access's leaf is the memory tuple at an offset** (`delegation::masked_leaf`):
+`live·T(FIELD, addr + i, ts, value) + 1 − live`, stored as one `Quadratic` with constant 1 —
+linear terms `(γ_M, live)`, `(−1, live)`, `(10, live)`, then `(α_addr, live) ×i` for the
+offset and, on the write side, `(α_ts, live) ×Δ`; products `(α_addr, addr, live)`, then
+`(α_ts, read_ts, live)` or `(α_ts, cycle, live) ×4`, then `(α_val, value, live)`. The offset is
+a repeated term for the reason `4·cycle` is (§0.2). The frame and anchor leaves are §18.6's.
+The pads are named by their leaf index, `read_pad18` … `read_pad31`, where `delegation::leaves`
+numbers a frame-only family's from 0.
+
+Three in full:
+
+```text
+L{1}[7]   read_a1
+  positional  1 + γ_M·M[1] − M[1] + 10·M[1] + α_addr·M[1] + α_addr·M[23]·M[1]
+                + α_ts·M[25]·M[1] + α_val·M[29]·M[1]
+  named       live·T(FIELD, a_addr + 1, a_read_ts1, a1) + 1 − live
+
+L{1}[48]  write_d2
+  positional  1 + γ_M·M[1] − M[1] + 10·M[1] + α_addr·M[1] ×2 + α_ts·M[1] ×3
+                + α_addr·M[38]·M[1] + α_ts·M[0]·M[1] ×4 + α_val·M[46]·M[1]
+  named       live·T(FIELD, d_addr + 2, 4·cycle + 3, n2) + 1 − live
+
+L{1}[4]   read_anchor
+  positional  1 + γ_M·M[1] − M[1] + 14·M[1] + α_ts·M[1] ×3 + α_addr·M[2]·M[1]
+                + α_ts·M[0]·M[1] ×4 + α_val·M[3]·M[1]
+  named       live·T(DELEGATION_FQ_OP, base, 4·cycle + 3, anchor_value) + 1 − live
+```
+
+**The `timestamp` fraction tree**, `L1[64..128]`: 32 fractions — the table's, the 30
+`TIMESTAMP` obligations in artifact order, one pad. Fraction `f` is
+`(L1[64 + 2f], L1[65 + 2f])`, named `<node>_num` and `<node>_den`.
+
+| fraction | `L1` | node | numerator | denominator (named) |
+| --- | --- | --- | --- | --- |
+| 0 | 64, 65 | `timestamp_table` | `−mult_timestamp` | `V[range19] + g` |
+| 1, 2 | 66–69 | `gap_g_hi_range`, `gap_g_lo_range` | 1 | `g + live·gap_g_hi`; `g − live + 4·live·cycle − live·g_read_ts − 2^19·live·gap_g_hi` |
+| 3–10 | 70–85 | `gap_a{i}_hi_range`, `gap_a{i}_lo_range`, `i < 4` | 1 | `g + live·gap_a{i}_hi`; `g + 4·live·cycle − live·a_read_ts{i} − 2^19·live·gap_a{i}_hi` |
+| 11, 12 | 86–89 | `gap_b_hi_range`, `gap_b_lo_range` | 1 | `g + live·gap_b_hi`; `g + live + 4·live·cycle − live·b_read_ts − 2^19·live·gap_b_hi` |
+| 13, 14 | 90–93 | `gap_d_hi_range`, `gap_d_lo_range` | 1 | `g + live·gap_d_hi`; `g + 2·live + 4·live·cycle − live·d_read_ts − 2^19·live·gap_d_hi` |
+| 15–18 | 94–101 | `k3_c0_range` … `k3_c3_range` | 1 | `g + live·k3_c{c}` |
+| 19–30 | 102–125 | `carry{g}_c{c}_range` | 1 | `g + live·carry{g}_c{c}` |
+| 31 | 126, 127 | `timestamp_pad_0` | 0 | 1 |
+
+**The `range16` fraction tree**, `L1[128..256]`: 64 fractions — the table's, the 50 `RANGE16`
+obligations in artifact order, 13 pads. Fraction `f` is `(L1[128 + 2f], L1[129 + 2f])`.
+
+| fraction | `L1` | node | numerator | denominator (named) |
+| --- | --- | --- | --- | --- |
+| 0 | 128, 129 | `range16_table` | `−mult_range16` | `V[range16] + g` |
+| 1–16 | 130–161 | `gap{j}_c0_range`, `gap{j}_c1_range`, `gap{j}_top_scaled`, `gap{j}_lo_range`, `j < 4` | 1 | `g + live·gap{j}_c0`; `g + live·gap{j}_c1`; `g + 2^10·live·gap{j}_c1`; `g − live + 4·live·cycle − live·w{j}_read_ts − 2^16·live·gap{j}_c0 − 2^32·live·gap{j}_c1` |
+| 17–19 | 162–167 | `base_low_c0_range`, `base_low_top_scaled`, `base_low_lo_range` | 1 | `g + live·base_low_hi`; `g + 2^3·live·base_low_hi`; `g + live·base_low − 2^16·live·base_low_hi` |
+| 20–22 | 168–173 | `base_room_c0_range`, `base_room_top_scaled`, `base_room_lo_range` | 1 | `g + live·base_room_hi`; `g + 2·live·base_room_hi`; `g + live·base_room − 2^16·live·base_room_hi` |
+| 23–38 | 174–205 | `n{i}_c1_range`, `n{i}_c2_range`, `n{i}_c3_range`, `n{i}_c0_range`, `i < 4` | 1 | `g + live·n{i}_c{c}`; and `g + live·n{i} − 2^16·live·n{i}_c1 − 2^32·live·n{i}_c2 − 2^48·live·n{i}_c3` |
+| 39–50 | 206–229 | `k{j}_c{c}_range`, `j < 3` | 1 | `g + live·k{j}_c{c}` |
+| 51–63 | 230–255 | `range16_pad_0` … `range16_pad_12` | 0 | 1 |
+
+The linear term on a `gap_<x>_lo` denominator's `live` is `Δ − 1` — `−1` for the digit cell,
+none for `a`'s four, `+1` for `b`, `+2` for `d` — and `−1` on every frame gap, the frame
+writing at `Δ0`. In positional form `gap_d_lo_range`'s denominator (`L1[93]`) is
+`g + 2·M[1] + 4·M[1]·M[0] − M[1]·M[39] − 2^19·M[1]·W[18]`, and `n0_c0_range`'s (`L1[181]`)
+is `g + M[1]·M[44] − 2^16·M[1]·W[31] − 2^32·M[1]·W[32] − 2^48·M[1]·W[33]`, the dump printing
+`−2^32` and `−2^48` as `0x30644e72…f592f0000001` and `0x30644e72…43e0f593f0000001`.
+
+### 25.5 Gate list 0: the 38 enforcing gates
+
+Relations 256–293, in `artifact`'s order: the frame's eleven
+(`delegation::frame_gates_range16`, then `read_only_frame_range16`'s write-backs), then the
+private `fq_op::gates()`' 27, built from `delegation::{booleanity, linear, quadratic}` and the
+private `fq_op::group`. Six are `Linear` — the four write-backs, `one_op_a_live_row` and
+`op_word` — and the other 32 `Quadratic`.
+
+| relations | name | count | degree | positional | named |
+| --- | --- | --- | --- | --- | --- |
+| 256 | `live_boolean` | 1 | 2 | `M[1] − M[1]·M[1]` | the row's one mask is a bit |
+| 257–260 | `addr_w{j}` | 4 | 2 | `−4j·M[1] + M[1]·M[4 + 4j] − M[1]·M[2]` | `live·(w{j}_addr − base − 4j)`; `addr_w0` stores its `−4j` as `0·M[1]` |
+| 261 | `base_aligned` | 1 | 2 | `−65,536·M[1] + M[1]·M[2] − 4·M[1]·W[8]` | `live·(base − 4·base_low − RAM_ORIGIN)` |
+| 262 | `base_in_window` | 1 | 2 | `2,147,483,632·M[1] − M[1]·M[2] − M[1]·W[10]` | `live·(2^31 − 16 − base − base_room)`: the 16-byte frame is inside RAM |
+| 263–266 | `writes_back_w{j}` | 4 | 1 | `M[7 + 4j] − M[6 + 4j]` | the frame is read-only |
+| 267–271 | `op{c}_boolean` | 5 | 2 | `W[18 + c] − W[18 + c]·W[18 + c]` | each op selector is a bit |
+| 272–274 | `ind_d_boolean`, `ind_a_boolean`, `ind_b_boolean` | 3 | 2 | over `W[24]`, `W[25]`, `W[26]` | each flag is a bit |
+| 275 | `one_op_a_live_row` | 1 | 1 | `−M[1] + W[19] + W[20] + W[21] + W[22] + W[23]` | `Σ op_c = live` |
+| 276 | `op_word` | 1 | 1 | `−M[6] + W[19] + 2·W[20] + 3·W[21] + 4·W[22] + 5·W[23] + 8·W[24] + 16·W[25] + 32·W[26] + 64·M[20]` | `w0_read_value = Σ c·op_c + 8·ind_d + 16·ind_a + 32·ind_b + 64·g_addr` |
+| 277 | `d_addr_rule` | 1 | 2 | `M[38] − M[10] − 8·W[24]·M[22]` | `d_addr = w1 + 8·ind_d·digit` |
+| 278 | `a_addr_rule` | 1 | 2 | `M[23] − M[14] − 8·W[25]·M[22]` | `a_addr = w2 + 8·ind_a·digit` |
+| 279 | `b_addr_rule` | 1 | 2 | `M[32] − M[18] − 8·W[26]·M[22]` | `b_addr = w3 + 8·ind_b·digit` |
+| 280 | `y0_rule` | 1 | 2 | `W[27] − W[20] − W[21] − W[19]·M[34] − W[22]·M[34]` | `y0 = op2 + op3 + (op1 + op4)·b0` |
+| 281–283 | `y{j}_rule` | 3 | 2 | `W[27 + j] − W[19]·M[34 + j] − W[22]·M[34 + j]` | `y_j = (op1 + op4)·b_j` |
+| 284–287 | `muleq_keeps_d{i}` | 4 | 2 | `W[22]·M[44 + i] − W[22]·M[40 + i]` | `op4·(n_i − d_i)`: `MULEQ` writes `d` back |
+| 288 | `from128_half0` | 1 | 2 | `W[23]·M[44] + 2^64·W[23]·M[45] − W[23]·M[28]` | `op5·(n0 + 2^64·n1 − a0)` |
+| 289 | `from128_half1` | 1 | 2 | `W[23]·M[46] + 2^64·W[23]·M[47] − W[23]·M[29]` | `op5·(n2 + 2^64·n3 − a1)` |
+| 290–293 | **`group{g}`** | 4 | 2 | §25.6 | the identity, one 128-bit group of limb positions each |
+
+**There is no `gap_w{j}` gate, and none for a field access's gap**: each gap's obligations are
+the bound and the decomposition at once, exactly as `memory::gap_lookups` has it for an
+execution family (§25.7).
+
+**`one_op_a_live_row` is load-bearing twice**, as `MOD_MUL`'s `one_modulus_a_live_row` is.
+The codes are 1 to 5, consecutive, so two selectors spell a third code and `op_word` cannot
+see it: `ADD` and `SUB` together spell 5, `FROM128`'s. Such a row has `y = (2, 0, 0, 0)` and
+`z = 6q`, so it proves `d′ ≡ 2a` under a `FROM128` word, and every other gate and all 80
+obligations hold on it — checked for this section on the artifact's own formulas, where
+`one_op_a_live_row` is the one relation that row breaks. It is also what bounds `y`:
+`y{j}_rule` makes `y_j` a selector-weighted sum of copies of `b_j` and 1, which is `b_j`, 1 or
+0 only while the selectors are one-hot.
+
+**`op_word` is the op word's whole decode, and it bounds nothing.** It fixes the selectors and
+the flags from the word's low six bits and `g_addr` from the rest. `g_addr` carries no range
+check: a word whose low bits are not a code is refused by the multiset, not by a gate (§25.2).
+
+**The three address rules are degree 2** because a flag multiplies the digit, and ungated,
+because both sides are columns. On a direct row the digit is multiplied by 0, and nothing
+local reads it.
+
+**The two `from128_half` gates are integer equations.** With `d′`'s limbs below `2^64`,
+`d′₀ + 2^64·d′₁ < 2^128 < p`, so a `FROM128` whose `a₀` is a field element at or above `2^128`
+has no witness. Each term carries `op5`, which is what makes them degree 2.
+
+### 25.6 The identity, and why no group equation wraps
+
+**One identity serves all five ops**: `a·y + z = q·K + d′` over the integers, with `y` and `z`
+per §25.2's table, `K` the quotient — the one value in the row the execution did not record —
+and `q = Σ_i q_i·2^{64i}` the literal limbs of `constants::fq_op::Q`, which a `const`
+assertion holds to `MOD_MUL`'s BN254 base-field modulus limb for limb. It is checked as four
+equations over 128-bit groups of limb positions, `(0, 1)`, `(2, 3)`, `(4, 5)` and `(6)`, with
+three signed carries between them — where `MOD_MUL` checks fifteen 32-bit positions with
+fourteen. Write
+
+```text
+T_k = Σ_{i+j=k} (a_i·y_j − q_i·K_j)  +  [k < 4]·(op2·b_k − op3·b_k + 6q_k·op3 + op5·n_k − n_k)
+K_j = Σ_c 2^{16c}·k{j}_c{c}   (j < 3),          K_3 = Σ_c 2^{19c}·k3_c{c}
+c_g = Σ_c 2^{19c}·carry{g}_c{c} − 2^75·live
+```
+
+and gate `group{g}` is
+
+```text
+T_{2g} + 2^64·T_{2g+1} + c_{g−1} − 2^128·c_g = 0
+```
+
+with `c_{−1}` absent, `c_3` absent — which is the closing condition — and `T_7` empty, no
+`(i, j)` pair reaching position 7. Weight group `g` by `2^{128g}` and sum: the carries
+telescope and what is left is `a·y + z − q·K − d′ = 0`. **The absence of a fourth carry is
+the identity.**
+
+Each gate is one `Quadratic`, every product a pair of committed columns — `a_i·y_j` an `M` and
+a `W`, `op·b_k` and `op·n_k` a `W` and an `M` — so the degree is 2. The stored form merges a
+column's two positions and expands `K` and the carries into their chunks:
+
+| gate | relation | linear terms | products | what it reads |
+| --- | --- | --- | --- | --- |
+| `group0` | 290 | 16 | 9 | positions 0 and 1: `a0`, `a1`, `y0`, `y1`; `K0`, `K1`; `b0`, `b1`, `n0`, `n1` through `z` and `d′`; `carry0` out |
+| `group1` | 291 | 28 | 13 | positions 2 and 3: all four of `a` and `y`; all four `K` limbs; `b2`, `b3`, `n2`, `n3`; `carry0` in, `carry1` out |
+| `group2` | 292 | 21 | 5 | positions 4 and 5: `a1` … `a3`, `y1` … `y3`; `K1`, `K2`, `K3`; `carry1` in, `carry2` out |
+| `group3` | 293 | 9 | 1 | position 6: `a3·y3`, `K3`; `carry2` in |
+
+In `group0`, `k0_c{c}` carries `−2^{16c}·(q_0 + 2^64·q_1)` — at `c = 0` the dump's
+`0x30644e72…178302ba`, which is `p − 0x97816a91…d87cfd47` — `k1_c{c}` carries
+`−2^{64+16c}·q_0`, `op3` carries `6·(q_0 + 2^64·q_1)`, each `carry0_c{c}` carries
+`−2^{128+19c}`, and `live` carries `+2^203`, the carry out's offset `−2^128·(−2^75)`. In
+`group1` and `group2`, with a carry in and a carry out, `live` carries `2^203 − 2^75`; in
+`group3` it carries `−2^75`. The shortest in full:
+
+```text
+group3  [293]
+  positional  −q_3·W[55] − 2^19·q_3·W[56] − 2^38·q_3·W[57] − 2^57·q_3·W[58]
+                + W[67] + 2^19·W[68] + 2^38·W[69] + 2^57·W[70] − 2^75·M[1] + M[31]·W[30]
+  named       a3·y3 − q_3·K3 + c_2 = 0
+```
+
+**Why the equations over `Fr` are the equations over ℤ.** Take every column at the most its
+bound admits — `a`'s, `b`'s and `d′`'s limbs below `2^64`, `y`'s therefore below `2^64` too,
+every 16-bit chunk below `2^16` and every 19-bit one below `2^19`, `live` and the selectors at
+most 1. The absolute values of a group's terms then sum below `2^204.6`, `2^204.8`, `2^205.2`
+and `2^137.6` for groups 0 to 3. The largest single term is a carry out's top chunk,
+`2^185·(2^19 − 1) < 2^204`, beside the offset's `2^203`, and `p` is above `2^253`. So no group
+equation wraps, the four together are the integer identity, and there is no
+modular-arithmetic loophole to argue about. `recursion.md` §6 states the argument as "every
+term below `2^208`"; the figures here were computed term by term from the dump's own
+coefficients.
+
+**Two of those bounds are not on this row, and that is the design.** `d′`, `K` and the carries
+are bounded here, by 44 obligations (§25.7), and `y` by `y{j}_rule` over `b` and one-hot
+selectors — but **nothing on the row bounds `a`'s or `b`'s limbs**. That is the element
+invariant of `recursion.md` §6: only this family writes an element, and every limb it writes
+is range-checked here as `d′`; `a` and `b` are written back as read; a cell nothing has written
+holds its window's 0. So, by induction over the field memory, an element a program names as an
+operand has limbs below `2^64` — provided every operand **is** an element, which is the
+guest's rule and not the circuit's. A program that hands this family cells another family
+wrote — an `IMPORT`'s, an `FR_OP`'s — leaves the premise, and the integer reading with it; the
+executor refuses such a row by name ("an operand is not an element"), and so does the fill. On
+a `FROM128` row neither `a` nor `b` enters the identity — `y` is 0 and `z` is `d′` — so the
+transcript limbs need no such bound, and the `from128_half` gates bound them instead.
+
+**`d′` is fixed modulo `q`, not uniquely.** The identity says `d′ ≡ a·y + z (mod q)`, the
+ranges say `d′ < 2^256`, and `K`'s nonnegative chunks say `d′ ≤ a·y + z`. `2^256/q` is 5.29, so
+up to six representatives satisfy all three, and nothing in the circuit chooses among them:
+there is no `< q` chain here, where `MOD_MUL`'s `out_below_modulus` is what makes its result
+unique. A `MUL` row carrying the reduced result plus `q`, with `K` one lower, satisfies every
+gate and all 80 obligations — checked for this section on the artifact's formulas. That is
+lazy reduction, `recursion.md` §6's "congruent to the element mod `q` and not necessarily below
+it", and the executor writes the reduced representative. Given `d′`, `K` is
+`(a·y + z − d′)/q`, unique, and each carry is its group's sum over `2^128`, unique.
+
+**`K ≥ 0` has one consequence worth knowing.** On `MUL`, `ADD` and `SUB` a reduced `d′` never
+exceeds `a·y + z` — `SUB`'s `6q − b` is what keeps `a + z` positive — so every honest row has a
+witness. A `MULEQ` whose kept `d` is a non-canonical representative above `a·b` has none: the
+executor checks only `d ≡ a·b (mod q)` and accepts the call, and `fq_op::witness` panics on
+the row ("a difference goes negative"). `FROM128` is the one op that writes an element
+without reducing it.
+
+**The quotient and the carries.** `K` reaches `(2^256 − 1)²/q < 2^259` on a product, so its
+top limb passes `2^64`: `K3` is limbs 3 and 4 of `K` together, four 19-bit chunks,
+`[0, 2^76)`, so `K < 2^268`, which `witness` asserts. A carry is read as its committed chunk
+sum less `2^75·live`, a value in `[−2^75, 2^75)`; `fq_op::CARRY_OFFSET_BITS`' doc says an
+honest carry stays below `2^71`, and `witness` asserts each fits the offset. A random
+canonical `MUL` re-derived for this section has carries near `−2^63`.
+
+### 25.7 The 80 lookups and the two channels
+
+Two channels, both **range** channels: `TIMESTAMP` = channel 0, table `V[range19]`,
+multiplicity `W[71]`; `RANGE16` = channel 1, table `V[range16]`, multiplicity `W[72]`
+(`fq_op::channels()`, in that order). A range tuple is one expression wide, so every row
+denominator is `g + live·e_0`: the family reads `g`, no power of `β` and no neutral (§0.4).
+Every obligation's selector is `live`. The frame's obligations are
+`delegation::read_only_frame_range16`'s; the family's own are the private `fq_op::lookups()`.
+
+| obligation | channel | count | tuple | shape |
+| --- | --- | --- | --- | --- |
+| `gap{j}_c0_range`, `gap{j}_c1_range` | `RANGE16` | 8 | `gap{j}_c{c}` | direct: each chunk below `2^16` |
+| `gap{j}_top_scaled` | `RANGE16` | 4 | `2^10·gap{j}_c1` | scaled: the top chunk below `2^6` |
+| `gap{j}_lo_range` | `RANGE16` | 4 | `4·cycle − w{j}_read_ts − 1 − 2^16·gap{j}_c0 − 2^32·gap{j}_c1` | the derived low sixteen bits: a frame word's read precedes the frame's write at `4·cycle` |
+| `base_low_c0_range`, `base_low_top_scaled`, `base_low_lo_range` | `RANGE16` | 3 | `base_low_hi`, `2^3·base_low_hi`, `base_low − 2^16·base_low_hi` | `[0, 2^29)` |
+| `base_room_c0_range`, `base_room_top_scaled`, `base_room_lo_range` | `RANGE16` | 3 | `base_room_hi`, `2·base_room_hi`, `base_room − 2^16·base_room_hi` | `[0, 2^31)` |
+| `gap_<x>_hi_range` | `TIMESTAMP` | 7 | `gap_<x>_hi` | direct: below `2^19` |
+| `gap_<x>_lo_range` | `TIMESTAMP` | 7 | `4·cycle + Δ − 1 − <x>_read_ts − 2^19·gap_<x>_hi` | the derived low 19 bits: the access's read precedes its write at `4·cycle + Δ` |
+| `n{i}_c1_range`, `n{i}_c2_range`, `n{i}_c3_range` | `RANGE16` | 12 | `n{i}_c{c}` | direct |
+| `n{i}_c0_range` | `RANGE16` | 4 | `n{i} − 2^16·n{i}_c1 − 2^32·n{i}_c2 − 2^48·n{i}_c3` | the derived low sixteen bits: `d′`'s limb below `2^64` |
+| `k{j}_c{c}_range`, `j < 3` | `RANGE16` | 12 | `k{j}_c{c}` | direct: `K0`, `K1`, `K2` below `2^64` |
+| `k3_c{c}_range` | `TIMESTAMP` | 4 | `k3_c{c}` | direct: `K3` below `2^76` |
+| `carry{g}_c{c}_range` | `TIMESTAMP` | 12 | `carry{g}_c{c}` | direct: each carry's offset value below `2^76` |
+
+`<x>` is `g`, `a0` … `a3`, `b` and `d`, with `Δ` = 0, 1, 1, 1, 1, 2 and 3, so the `lo`
+tuple's constant `Δ − 1` is −1, 0, 0, 0, 0, 1 and 2; the denominator folds it onto `live`.
+
+**80 obligations**, in `artifact`'s order: the frame's 22 on `RANGE16`, the 14 field gaps on
+`TIMESTAMP`, `d′`'s 16 and `K0`–`K2`'s 12 on `RANGE16`, then `K3`'s 4 and the carries' 12 on
+`TIMESTAMP`. Each channel's fraction tree takes its own in that order (§25.4).
+
+**Every bound is exact, and only the frame's needs a scaled obligation.** A field gap is two
+19-bit chunks, `38 = 19 + 19` — `memory.md` §7's timestamp gadget exactly, the one the
+execution families use; a frame gap is §18.5's `38 = 16 + 16 + 6`; `d′`'s limbs and `K0`–`K2`
+are `64 = 4·16`, and `K3` and each carry `76 = 4·19`. So `lookup::check_copowers` is handed the
+frame's six scaled columns — the four gap tops and the two base halfwords, each under `live`
+(`delegation::frame_scaled_range16`) — and nothing of the family's own.
+
+**The frame's gaps and the field accesses' gaps are bounded in different channels.** The
+frame's come from `delegation::read_only_frame_range16`, the four field families' shared
+frame, which bounds a gap in three `RANGE16` pieces — the one range channel the two families
+at `2^18` can carry, `V[range19]` not fitting there — and this family's own accesses take
+`TIMESTAMP`'s two.
+
+**The two trees and their headroom.** `TIMESTAMP`'s 30 obligations and its table fraction
+fill 31 of a 32-leaf tree — `artifact` asserts the 30, and its comment notes that two more
+would double the tree — to 64 leaves, `RANGE16`'s size, which would widen `L1` through `L6`
+and add no list. `RANGE16`'s 50 fill 51 of 64: thirteen more fit, and a fourteenth would double
+it to 128 leaves and add a row-wise list, `R` being that tree's.
+
+**The two channels gate identically**, `g + live·e_0`, so one channel's denominator gate is
+byte for byte what the other's would be over the same column. `lookup::check_discharge`
+counts each obligation's leaf and each table fraction **inside its own channel's cone**, which
+is what keeps one channel from discharging another's obligation. This is the first delegation
+family carrying both range channels, a pairing every execution family already has.
+
+**Two multiplicity columns, and no gate reads either.** `trace::build_multiplicities` counts
+each table row's occurrences over that channel's gated tuples on every row of the shard — a
+padding row contributing 30 and 50 zeros, so table row 0's counts are large — and credits the
+lowest row holding a tuple. `V[range19]` repeats its `2^19` values twice in `2^20` rows and
+`V[range16]` its `2^16` sixteen times, so `mult_timestamp` is 0 on every row from `2^19` up and
+`mult_range16` on every row from `2^16` up. `fill::fq_op` writes neither: both are `trace`'s,
+counted after the fill. Each is read by its table's numerator leaf alone.
+`checker::violated_lookups` is the native reading of all 80, both channels being range
+channels.
+
+### 25.8 The trees, the inner layers and the outputs
+
+Four trees: `read` and `write`, 32 leaves each (18 real, 14 pads); `timestamp`, 32 fractions
+(31 real, one pad); `range16`, 64 (51 real, 13 pads). **`R = 6`, the `range16` tree setting it
+alone** — a 32-leaf tree is five deep — so the depth is `N = 1 + 6 + n`, 27 at `n = 20`.
+
+Layer `L1` is 256 wide: `read_*` 0–31, `write_*` 32–63, the `timestamp` tree's 32
+`(num, den)` pairs at 64–127 and the `range16` tree's 64 at 128–255, each tree's table first
+and its pads last. Widths:
+
+```text
+L1   256      L4    32      L7     6      L8 … L{n+7}   6 each
+L2   128      L5    16
+L3    64      L6     8
+```
+
+so `inner = 510 + 6n` — 630 at `n = 20`. The two product trees and the `timestamp` tree reach
+one node at `L6` and are carried to `L7` by four `Linear` copies in list 6 (`read_7_0`,
+`write_7_0`, `timestamp_7_0_num`, `timestamp_7_0_den`); the `range16` tree reaches one pair at
+`L7`. Layer `L{k}`'s nodes, `2 ≤ k ≤ 7`, run `read_{k}_*`, `write_{k}_*`,
+`timestamp_{k}_*_num`/`_den`, then `range16_{k}_*_num`/`_den`, and a fraction node is §0.6's
+pair: `timestamp_2_0` is `num = L1[64]·L1[67] + L1[66]·L1[65]`,
+`den = L1[65]·L1[67]`.
+
+Relations: **0–255** are list 0's leaves, **256–293** its 38 enforcing gates, **294–421**
+list 1, **422–485** list 2, **486–517** list 3, **518–533** list 4, **534–541** list 5,
+**542–547** list 6, and halving list `k` (`7 ≤ k ≤ n + 6`) holds `548 + 6(k − 7)` to
+`553 + 6(k − 7)`. The roots are relations `542 + 6n` to `547 + 6n`: **662–667** at `n = 20`.
+Every number before the halving lists is independent of `n`.
+
+Each halving list is six gates, in output order: the read and write sides' `TreeProduct`s,
+then for each channel a `TreeCross` numerator and a `TreeProduct` denominator. **The two
+fraction trees are exempt from the padding-identity clause**, and
+`checker::check_padding_identity` makes the exemption by shape: every column the first halving
+list reads must be 1 except a `TreeCross`'s operands, a fraction tree's identity being
+`(0, 1)` and a padding row not idle in a channel — it contributes 80 neutral entries the
+multiplicities count.
+
+**The outputs**, in output-map order: 0 `read_root` and 1 `write_root` at `memory::READ_ROOT`
+and `WRITE_ROOT`, read at `verify_shard` step 10a against `memory_roots[p]` for `p` the
+position of `(22, shard_index)` in `verifier_core::statement_shards` — **last** in every
+statement it appears in, 22 being the highest family id and the order ascending after
+`INIT_TEARDOWN` and `ZERO_WINDOWS` — and each a factor of `gkr_verify::reconciles`; 2
+`timestamp_num_root` and 3 `timestamp_den_root`, read at step 9, the failure
+`Lookup { channel: 0 }`; 4 `range16_num_root` and 5 `range16_den_root`, the failure
+`Lookup { channel: 1 }`; each pair checked **both** `num == 0` and `den != 0`, a leaf pair of
+`(0, 0)` otherwise annihilating its tree. Six is `2 + 2·2`, the one length at which
+`reduce_shard`'s step 9, reading channel `j`'s pair at `outputs[2 + 2j]`, and
+`lookup::channel_cones`, counting down from the end, name the same pairs
+(`ProverSetup::new`'s comment says why that matters); `recursion.txt`'s shape line pins the
+six. A node makes these same checks over cells, in this shard's tape (`recursion.md` §7).
+
+### 25.9 Witness rows
+
+**There is no row table here**: a live row is 121 committed cells, and its cycle, timestamps
+and addresses belong to an execution. What stands in its place is a chain of readings, as
+§20.7's does for `EC_ADD`.
+
+1. **`crates/checker/tests/recursion.rs`**' `the_field_families_hold_and_the_field_memory_balances`
+   fills `guests/field-ops`' `FQ_OP` buffer — **eleven** invocations — through
+   `prover::family_fill(22)` at `2^20`, and evaluates every live row and the first padding
+   row through `checker::violated_relations`, over scratch `gkr::gate_values` computes, and
+   `checker::violated_lookups`, both channels. Its `d′` is the emulator's own reduction mod
+   `q` and its quotient and carries are `fq_op::witness`'s, so a reduction the circuit spelled
+   differently would break a `group` gate there. It then multiplies every row's 13 field
+   access leaves into the field memory's product, beside `FR_OP`'s, `P2_FIELD`'s and
+   `FIELD_IO`'s and the field window's teardown and init, and requires
+   reads × teardowns = writes × inits: a slot or an offset the circuit and the executor
+   disagreed on would be a tuple with no partner.
+2. **`crates/emulator/tests/guests.rs`**' `field_ops_checks_itself_under_the_recursion_ecalls`
+   runs the guest to exit 26 and pins the eleven calls. The guest's expectations are literals,
+   checked on exported limbs: `x = 2^128 + 5` and `y = 7` built by `FROM128` from their limb
+   cells, `x·y = [35, 0, 7, 0]`, a `MULEQ` re-asserting it, `x + y = [12, 0, 1, 0]`, `y − x`
+   wrapping mod `q`, `(q − 1)² = 1`, an indirect read — `ADD | IND_A`, the digit 2 at cell
+   240 picking bucket 2 of the buckets at 300 — and an indirect write, `MUL | IND_D`.
+3. **`constraints::fq_op`'s unit tests**: `the_inverse_inverts`, `q·q⁻¹ = 1 mod 2^576`, on
+   which `witness`'s exact 2-adic division of `a·y + z − d′` by `q` rests, and
+   `the_arithmetic_is_mod_q`. `witness` itself asserts `q·K` back, the `2^268` bound, each
+   carry's offset and the top group's closing.
+4. **`crates/constraints/tests/recursion.rs`**: the family builds at its default height —
+   which runs `validate`, `check_memory` and the discharge rule — its all-zero row pads, and
+   the base registry refuses it.
+
+**What those eleven rows exercise, and what they do not.** Re-derived for this section and
+evaluated on the dump's own `group` coefficients:
+
+| row | op | `a` | `b` | `d′` | `K` | carries |
+| --- | --- | --- | --- | --- | --- | --- |
+| `x` | `FROM128` | cells 200, 201: 5, 1 | four cells nothing writes | `[5, 0, 1, 0]` | 0 | 0, 0, 0 |
+| `x·y` | `MUL` | `x` | `y = [7, 0, 0, 0]` | `[35, 0, 7, 0]` | 0 | 0, 0, 0 |
+| `y − x` | `SUB` | `y` | `x` | `q + 2 − 2^128` | 5 | 0, 0, 0 |
+| `(q − 1)²` | `MUL` | `q − 1` | `q − 1` | `[1, 0, 0, 0]` | `q − 2` | 0, 0, 0 |
+
+The eleven are four `FROM128`, three `MUL` (one indirect in `d`), one `MULEQ`, two `ADD` (one
+indirect in `a`) and one `SUB`. **In all eleven every carry is 0** — stored as
+`carry{g}_c3 = 2^18` and zero below it, the offset's chunk — and `K` is nonzero on two, the
+`SUB` and `(q − 1)²` rows. None sets `ind_b`. So CI holds the circuit to honest rows that never
+pass a nonzero value through a carry and never index `b`; §25.10's probe does both on one
+row. **No suite carries a negative control for this family.**
+
+**The one whole proof is deferred.** `crates/prover/tests/field_ops.rs` proves
+`guests/field-ops`' recursion-format block over a `2^24` toy SRS — `field_ops_params` puts this
+family at `2^20` beside the execution families, its `TIMESTAMP` channel needing 19 variables,
+and the other three field families at `2^16` — and accepts it through `verify_block`. It
+asserts one shard of each field family, this one included, that every shard's witness
+commitments are its stacks — five for this family, `stack_count(73, 4)` — and that every
+shard's tape replays under `tape::run` and leaves what the native verifier computes
+(`recursion.md` §7). It is `#[ignore]`d, run in the end-of-progression batch, and the only
+place this family's shard is proved and verified.
+
+An honest live row, in words:
+
+| column group | value |
+| --- | --- |
+| `cycle`, `live`, `base`, `anchor_value` | the requesting cycle; 1; the frame pointer, 4-aligned, in `[RAM_ORIGIN, 2^31 − 16]`; 0 |
+| `w{j}_addr`, `w{j}_read_ts` | `base + 4j`, and the last write to that word |
+| `w{j}_read_value` = `w{j}_write_value` | the four frame words |
+| `gap{j}_c{c}` | bits `[16(c+1), 16(c+2))` of `4·cycle − w{j}_read_ts − 1` |
+| `base_low`, `base_room`, and their halfwords | `(base − RAM_ORIGIN)/4` and `2^31 − 16 − base` |
+| `g_addr`, `digit` | `w0 >> 6`, and that cell's value |
+| `a_addr`, `b_addr`, `d_addr` | the frame word, plus `8·digit` where the flag is set |
+| `g_read_ts`, `a_read_ts{i}`, `b_read_ts`, `d_read_ts` | each access's last write: one per `a` cell, one per `b` and `d` element |
+| `gap_<x>_hi` | bits `[19, 38)` of `4·cycle + Δ − 1 − <x>_read_ts` |
+| `a{i}`, `b{i}`, `d{i}` | the cells as read: 64-bit limbs, but a `FROM128`'s `a₀` and `a₁`, which are 128-bit transcript limbs |
+| `n{i}` | `d′`'s limbs: the result reduced below `q` on `MUL`, `ADD` and `SUB`, `d` itself on `MULEQ`, `a₀`'s and `a₁`'s halves on `FROM128` |
+| `op{c}`, `ind_d`, `ind_a`, `ind_b` | the word's code one-hot, and its three flag bits |
+| `y{j}` | `b`'s limbs on `MUL` and `MULEQ`, `(1, 0, 0, 0)` on `ADD` and `SUB`, 0 on `FROM128` |
+| `n{i}_c{c}` | bits `[16c, 16c + 16)` of `n{i}`, `c = 1, 2, 3` |
+| `k{j}_c{c}` | `K`'s chunks: 16-bit for `K0`–`K2`, 19-bit for `K3 = K >> 192` |
+| `carry{g}_c{c}` | the 19-bit chunks of `c_g + 2^75` |
+| `mult_timestamp`, `mult_range16` | `trace`'s counts; 0 on a row the table does not hold |
+
+and a padding row is 0 in every one of them.
+
+### 25.10 What fixes each cell
+
+| cell | what fixes it |
+| --- | --- |
+| `cycle` | the multiset: every write leaf stamps `4·cycle + Δ` and the anchor teardown reads `4·cycle + 3`, which the request's mirror write fixes (`delegation.md` §5). Locally only the eleven gap obligations read it, against the read timestamps |
+| `base` | the multiset, through the anchor; locally `base_aligned`, `base_in_window` and the four `addr_w{j}` against the words |
+| `live` | `live_boolean`, and every leaf's mask |
+| `anchor_value` | **nothing local**: the request's `deleg_write_value` must equal it, and the memory argument is what says so (§26 observation 19) |
+| `w{j}_read_ts`, `g_read_ts`, `a_read_ts{i}`, `b_read_ts`, `d_read_ts` | the memory argument alone; each gap's obligations only hold it below this row's write at `4·cycle + Δ` |
+| the four frame words | the frame's read tuples and `writes_back_w{j}`; word 0's value also `op_word`, and words 1, 2, 3's the three `_addr_rule` gates |
+| `op1` … `op5` | booleanity, `one_op_a_live_row` and `op_word`: together "exactly one of the five codes, the one the word's low three bits spell" |
+| `ind_d`, `ind_a`, `ind_b` | booleanity and `op_word`; each also its `_addr_rule` |
+| `g_addr` | `op_word`: the word shifted down six bits. That it is a cell at all is the multiset's: a word whose low bits no code and flags spell puts it outside every field window |
+| `digit` | the memory argument alone — it is a cell's value; on an indirect row it also scales that operand's address through `_addr_rule`. The executor refuses a digit cell holding no value below `2^24`, direct rows included |
+| `a_addr`, `b_addr`, `d_addr` | their `_addr_rule`: the frame word, plus `8·digit` where the flag is set |
+| `a{i}`, `b{i}` | the memory argument — what the cell holds — and their write leaves, which write the same column back, so the row cannot change them; their `2^64` bound is the element invariant, not the row's (§25.6). `b` is copied into `y` on `MUL` and `MULEQ` and read by the identity on `ADD` and `SUB`; `a0` and `a1` are also held by `from128_half` on `FROM128` |
+| `d{i}` | the memory argument alone, but on `MULEQ`, where `muleq_keeps_d{i}` ties it to `n{i}` |
+| `n{i}` | the group equations **modulo `q`**, and its four obligations below `2^64`: one of at most six representatives (§25.6); `d` itself on `MULEQ`; on `FROM128`, the `from128_half` gates exactly, the identity's `op5·n_k − n_k` cancelling there |
+| `y{j}` | `y{j}_rule` |
+| `k{j}_c{c}` | the group equations — given `d′`, `K` is unique, and so are its base-`2^16` and base-`2^19` digits — and its own obligation |
+| `carry{g}_c{c}` | `group{g}` and `group{g+1}`, which the carry joins — it is its group's sum over `2^128` — and its own obligation |
+| `gap{j}_c{c}`, `base_low_hi`, `base_room_hi`, `gap_<x>_hi`, `n{i}_c{c}` | **their own obligations and nothing else**: no gate reads any of the 29, so a wrong chunk breaks no relation and the channel alone refuses it |
+| `base_low`, `base_room` | `base_aligned` and `base_in_window`, and their `_lo_range` |
+| `mult_timestamp`, `mult_range16` | `trace::build_multiplicities`, and the channels' root checks — no gate reads them |
+| the padding row | `check_padding`'s all-zero row and §25.2's gates that hold there, subject to §25.2's last paragraph |
+
+**This table is read off the artifact, not off a committed tamper table.** No suite carries a
+negative control for this family, so what stands behind it is the dump's readers — which leaf,
+gate and obligation reads each column — beside a probe over the dump's own formulas: one honest
+live row, a random canonical `MUL` with nonzero carries and `ind_b` set, each committed cell
+moved by one, every enforcing gate and obligation evaluated; then the same over `ADD`, `SUB`,
+`MULEQ` and `FROM128` rows. The probe is not committed. What it shows, beyond the table:
+
+- `cycle`, every read timestamp, `anchor_value`, the old `d` on any op but `MULEQ`, the digit on
+  a direct row, and on a `FROM128` row `a2`, `a3` and all of `b` — moved by one, **no gate and
+  no obligation fires**. Each is the memory argument's alone.
+- `n{i}` moved by one breaks only its group gate on `MUL`, `ADD` and `SUB`, its group gate and
+  `muleq_keeps_d{i}` on `MULEQ`, and only `from128_half` on `FROM128`.
+- A chunk moved by one is refused by the identity where a gate reads it — every `k{j}_c{c}`
+  and `carry{g}_c{c}` — and by a derived low obligation where none does: the `n{i}` chunks,
+  every gap chunk and both base halfwords. A chunk's own direct obligation fires only on a
+  value outside its range.
+- `b{i}` moved by one on `MUL` breaks `y{i}_rule` alone, and on `ADD` its group gate alone.
+
+---
+
+## 26. Observations
 
 Facts this accounting turned up. None changes a circuit.
 
 1. **The registry and the height menu disagree both ways.** `family_circuit` builds
-   all **seven** registered execution circuits at every `n` from 19 to 30, and the **five**
-   window circuits and the six delegation circuits at every `n` from 0 to 30. A key's heights
+   all **seven** registered execution circuits at every `n` from 19 to 30, the **five**
+   window circuits, `POSEIDON2` and `FR_ARITH` at every `n` from 0 to 30, and the other four
+   delegation circuits at every `n` from 16 to 30. A key's heights
    come from `VmConfig`, which `VmConfig::from_bytes` holds to `HEIGHT_MENU` (`n` = **8**, 16,
    18, 20, 22 since S21, and **12** since S-STREAM).
    So the seven execution circuits are reachable only at 20 and 22, which is `shard-proof.md` §8's,
@@ -9403,8 +12544,8 @@ Facts this accounting turned up. None changes a circuit.
    `4h ≥ PUBLIC_OUTPUT_ORIGIN + PUBLIC_WINDOW_BYTES`, whose right-hand side went from `0x8800`
    to `0x10000`, so the rule went from `h ≥ 8,704` to `h ≥ 2^14` — and the smallest menu entry
    above either is the same `2^16`. **`PUBLIC_INPUT` and `PUBLIC_OUTPUT` are the opposite
-   case**: reachable over the whole 0–30 range, like a delegation family and for the same
-   reason — no channel, so no `BITS ≤ trace_vars` guard — but derivable at `2^12` and nowhere
+   case**: reachable over the whole 0–30 range, like `POSEIDON2` and `FR_ARITH` and for the
+   same reason — no channel, so no `BITS ≤ trace_vars` guard — but derivable at `2^12` and nowhere
    else, because the height is what places their windows (§15.1). Conversely, no execution
    circuit exists at the menu's 16 and 18, so a `VmConfig` placing one there decodes but no key
    for it loads (`VerifyingKey::check`) — and since S19 the `trace_vars < 19 ⇒ None` arm names
@@ -9424,7 +12565,14 @@ Facts this accounting turned up. None changes a circuit.
    the menu's `2^8` entry is an *even* power is not a coincidence a stage may spend: Mercury
    needs `n` even for `b = sqrt(2^n)` to exist, so the menu below `2^16` had exactly `2^8`,
    `2^10`, `2^12` and `2^14` to choose from — and S-STREAM spent a second of the four, on the
-   two public families and on nothing else.
+   two public families and on nothing else. **The recursion registry adds five ranges.**
+   `recursion_circuit` builds `FIELD_WINDOWS` at every `n` from 0 to 30, no channel giving it a
+   floor, and nothing pins its height: `verifier_core::window_height` reads the five RAM window
+   families and not this one, so a key may carry it at any menu height — `field-ops`' suites put
+   it at `2^12` and `2^16`, and its default is `2^20` (§21.1). `FR_OP`, `P2_FIELD` and
+   `FIELD_IO` it builds from 16, as the base families carrying `RANGE16` are built, and `FQ_OP`
+   from **19**, an execution family's floor: `FQ_OP` is reachable at the menu's 20 and 22
+   alone, exactly as the seven execution circuits are (§25.1).
 2. **No registered family carries an inert column any more, and add/sub was the last.**
    Eighteen of its `M` and `W` columns used to be: the `arg1`, `arg2` and `ram` queries were
    held absent on every row by three `mask = 0` gates, yet `frame_queries` fixed the frame, so
@@ -9462,7 +12610,10 @@ Facts this accounting turned up. None changes a circuit.
    copies it, and six of atomics' gates do. **S21 adds two more such columns, and they are a
    pair**: add/sub's `deleg_write_value` (`M[25]`, §3.3) and keccak's `anchor_value` (`M[3]`,
    §12.3) are each read by one leaf and by nothing else, and the memory argument is the only
-   thing that says they are equal — which is observation 19.
+   thing that says they are equal — which is observation 19. **`P2_FIELD` adds three more**:
+   `next{i}_old` (`M[37 + 3i]`), what a destination cell held before the duplex step writes
+   it, is read by `read_next{i}` and by nothing else, a destination's old value being no input
+   of the duplex (§23.10).
 5. **A `sub` row's `decoded_imm` is fixed by the decoder table alone.** No gate constrains it
    there: `sub` has no `imm` term, and the gates that read it (`add_addi_auipc`, `lui`,
    `ecall_code`, `fence_code`) are gated off by bits that are 0 on a sub row. On an `add` row
@@ -9539,8 +12690,9 @@ Facts this accounting turned up. None changes a circuit.
     `ram` query writes at `4·cycle + 3` in address space 2 and its `rd` query at `4·cycle + 3`
     in address space 1, which is what lets one row be one read-modify-write
     (`execution-trace.md` §4). **Since S21 a delegation request does the same**: its `rd` query
-    writes `a0` at `4·cycle + 3` in space 1 and its `deleg` mirror at `4·cycle + 3` in space 4,
-    5, 6 or 7, the delegation family's own (§3.4). Add/sub's frame *held* two Δ-3 queries from
+    writes `a0` at `4·cycle + 3` in space 1 and its `deleg` mirror at `4·cycle + 3` in a space
+    from 4 to 9 — 11 to 14 besides in the recursion format's form — the delegation family's own
+    (§3.4, §3.11). Add/sub's frame *held* two Δ-3 queries from
     S16 to S21 without ever making two — `ram` beside `rd`, with `ram_mask_rule` pinning the
     first to 0 on every row — and the `ram` query has since gone (observation 2). What both
     cases rest on is §3 of `execution-trace.md`: queries at distinct addresses may share a slot,
@@ -9603,9 +12755,10 @@ Facts this accounting turned up. None changes a circuit.
     shim at all, and `crates/prover/tests/keccak.rs` asserts exactly that containment.
     `verify_block`'s `check_ts_windows` therefore requires non-emptiness, ordering and pairwise
     disjointness **per cycle-owning family** (`constants::family::CYCLE_OWNING`), which is
-    `false` for this family as it is for all **five** window families — and for a different
-    reason: a window family owns no cycle because its rows are addresses, and a delegation
-    family because its rows are invocations of someone else's cycle (§12.8,
+    `false` for this family as it is for every other delegation family, the recursion
+    registry's four included, and for all **six** window families — and for a different
+    reason: a window family owns no cycle because its rows are addresses or field cells, and a
+    delegation family because its rows are invocations of someone else's cycle (§12.8, §21.3,
     `block-proof.md` §4).
 23. **A forgery's error class depends on which entry point verifies it, and S21 is where
     that first mattered.** `verify_shard`'s order is `Statement`, `Malformed`, `Constraint`,
@@ -9632,19 +12785,84 @@ Facts this accounting turned up. None changes a circuit.
     id, not a gate**. It is the first place in this registry where two `FamilyId`s carry
     identical circuits, and `VerifyingKey::check` is untroubled by it: a key's circuits are the
     registry's, family by family, and two families returning equal bytes is not a collision.
+    **`FIELD_WINDOWS` is the counter-case**: it shares `ZERO_WINDOWS`' constructor and not its
+    bytes — the private `memory::zero_window` at a stride of one cell, where `ZERO_WINDOWS` and
+    `PUBLIC_OUTPUT` take four bytes — so its two leaves carry one `(α_addr, V[row])` term where
+    theirs carry four, 444 bytes fewer at every `n` (§21.1). Neither artifact names an address
+    space: what separates field cell `x` from RAM word `x` is the 10 against the 2 in slot 5's
+    derived window constant, and nothing in either artifact.
 25. **`ADVICE_WINDOWS`' `M[2]` is the only committed column in the whole registry that nothing
     binds.** Every other committed column is reached by a gate, a leaf, a lookup, an opening
     against identity or the SRS digest, or a verifier step. `M[2]` is reached by its init leaf
     alone, and a leaf constrains nothing by itself — it balances against whatever the guest read
     (§17.2). That is the definition of advice and not a gap, but it is worth writing down beside
-    §21 observation 6's unconstrained `INIT_TEARDOWN` cells and §21 observation 19's free anchor
+    §26 observation 6's unconstrained `INIT_TEARDOWN` cells and §26 observation 19's free anchor
     value, because the three are the registry's whole inventory of deliberately free committed
     cells, and each is free for a different reason: masked off, paired by the multiset, or
     chosen by the prover on purpose.
+26. **`FQ_OP` is the one delegation family that carries `TIMESTAMP`, and its height is why.**
+    `TIMESTAMP`'s table is `V[range19]`, nineteen variables, which on this menu is `2^20` or
+    `2^22`. Every base delegation family is below it — `2^8`, `2^16` or `2^18` — and `FQ_OP` is
+    at `2^20` (§25.1), so its channels are an execution family's two range channels without the
+    decoder, and it is the one circuit carrying `TIMESTAMP` that reads no `β` (§0.4). It spends
+    the 19-bit chunk where the chunk is exact: a field access's 38-bit gap is two of them, and
+    `K`'s top limb and each 76-bit carry four, while its frame's gaps stay three `RANGE16`
+    pieces, the field families' shared frame being built for the two of them at `2^18`
+    (§25.7). `FR_OP`, at `2^20` too, carries `RANGE16` alone.
+27. **Three field families tie their op selectors to `live` with one gate, and each would lose
+    a different thing without it.** `FR_OP`'s `one_op_a_live_row` is the only tie between a
+    field access and an invocation: without it a padding row could set `op7` and write a free
+    value into a free cell at a cycle of its choosing, and the multiset would balance it as an
+    ordinary read-modify-write (§22.5). `FIELD_IO`'s is what confines a live row to `IMPORT`
+    and `EXPORT`: with both selectors 0, `op_word` asks only for an op word of 0, every move
+    gate vanishes and the cell and the eight words are free (§24.5). `FQ_OP`'s is the partition
+    `op_word` cannot see, its codes 1 to 5 being consecutive: `ADD` and `SUB` together spell
+    `FROM128`'s 5 and prove `d′ ≡ 2a` under a `FROM128` word (§25.5) — `MOD_MUL`'s
+    `one_modulus_a_live_row` and `EC_ADD`'s `one_code_a_live_row` again. `P2_FIELD` has no op
+    selectors; its `x_needs_live` does the first of those jobs (§23.5).
+28. **Two field families fix a value only up to a multiple of the modulus, and the executor's
+    choice is what makes it canonical.** `FIELD_IO`'s `EXPORT` proves eight limbs below `2^32`
+    whose weighted sum is congruent to the cell mod `p`, which five or six representatives
+    below `2^256` satisfy (§24.5). `FQ_OP`'s `d′` is fixed mod `q` with limbs below `2^64` and a
+    nonnegative quotient, which up to six satisfy (§25.6). Neither carries a `< modulus` chain,
+    where `MOD_MUL`'s and `EC_ADD`'s results do; each executor writes the reduced
+    representative, and a reader that needs the canonical one checks or reduces it itself.
+    `FR_OP`'s `DIGIT` is the same shape a third time: its gates admit 256 digits a row, and
+    what gives a chain of digits its meaning is the caller's last check that the rest is 0
+    (§22.5).
+29. **`FQ_OP`'s executor and circuit disagree at two edges, in opposite directions.** The
+    executor accepts a `MULEQ` whose kept `d` is a representative above `a·b`, checking only
+    `d ≡ a·b (mod q)`, and the circuit has no witness for it: `K` would be negative, and
+    `fq_op::witness` panics on the row (§25.6). Only `FROM128` writes an unreduced element, so
+    the case needs a `MULEQ` whose `d` came from one. The other way, the executor refuses a
+    digit cell holding no value below `2^24` on a direct row too, where the circuit multiplies
+    the digit by 0 and nothing local reads it (§25.2, §25.5); `guests/field-ops`' direct rows
+    name cell 0, which nothing writes.
+30. **An access a row does not make leaves its cells free, in the two field families that mask
+    accesses by op.** On an `FR_OP` row whose op skips an access, that access's leaves are the
+    product's identity, its four obligations are off and no live gate reads its values
+    (§22.9); on a `P2_FIELD` row with `n < 2`, `x` or `y`, its read timestamp and its gap chunks
+    are free the same way (§23.5). Observation 7's shape: nothing depends on the cells, and the
+    honest fill writes 0. `FIELD_IO` and `FQ_OP` mask every access by `live` alone, so a live
+    row makes all of them — `FQ_OP` names an element for every operand, including one the op
+    ignores (§25.2).
+31. **A `P2_FIELD` padding row is constrained where no leaf can see it.** Its 352 permutation
+    gates are ungated, and `lane0_rule` and `lane1_rule` hold with both masks 0, so a padding
+    row's lanes are its state's and every intermediate and `next0`–`next2` are the
+    constant-free permutation of `(state0, state1, state2)`, while the rest of the row is free
+    but for four cells (§23.2). It is harmless — no leaf publishes any of it — and it is read
+    off the gates: no suite evaluates a padding row other than the all-zero one.
+32. **A booleanity gate can be implied and still be owed.** `FR_OP`'s `a_live_boolean`,
+    `b_live_boolean` and `d_live_boolean` follow from `one_op_a_live_row` and the nine op
+    booleanities, each mask being a sum of selectors at most one of which is set; but
+    `check_memory` requires a booleanity gate for every committed leaf mask and `validate` one
+    for every lookup selector, and each of the three is both. Its `z_boolean` is implied by the
+    is-zero gadget and written anyway, where `FR_ARITH`'s `is_zero` carries none (§22.5,
+    §14.3). Observations 3 and 13 are the same shape; none of the four costs a degree.
 
 ---
 
-## 22. Maintaining this page
+## 27. Maintaining this page
 
 A stage that adds a circuit family, or changes one, updates this page in the same pull request
 (`prompts/00-master.md`, implementation rule 12). **Changing one is the same obligation as
@@ -9657,7 +12875,7 @@ a pinned height**, even one that moves no gate: S-STREAM moved `family::PUBLIC_W
 from `2^8` to `2^12`, which added four halving lists to two artifacts and changed nothing else
 about either, and that alone moved §1.1's two registry rows and its menu sentence, §1.2's two
 master-table rows and their byte lengths, §1.3's five-windows bullet, §15 and §16 throughout,
-§21 observation 1 and Appendix A's dump recipe. The test for whether this page owes an edit is
+§26 observation 1 and Appendix A's dump recipe. The test for whether this page owes an edit is
 not "did a gate change" but "did a number here come from something that moved".
 
 A new family's entry is a section like §3, §4, §5 or §6 and holds:
@@ -9685,7 +12903,9 @@ A new family's entry is a section like §3, §4, §5 or §6 and holds:
    better source: it runs in CI and a probe does not. A family too wide for a row table says so
    and gives the chain that stands in for one instead (§12.9).
 9. **Its rows in §1.1, §1.2 and §1.3, its counts in §0.5, the challenge slots it reads in
-   §0.4**, and any §21 observation the accounting turns up. A family whose decoded tuple is not
+   §0.4**, and any §26 observation the accounting turns up — a family only the recursion
+   registry holds marked as `recursion_circuit`'s there, and pinned by its line in
+   `recursion.txt`. A family whose decoded tuple is not
    seven wide also moves §0.4's `β⁶` and `g_dec` rows, as `MUL_DIV`'s and `ATOMICS`' six-wide
    ones did; a family that reads or does not read the generic channel moves §0.4's `β` and `β²`
    rows, as `MEM_WORD`'s absence from them records.
@@ -9696,7 +12916,10 @@ probes were read from `family_circuit` and the suites' `honest_rows` directly an
 committed command (Appendix A, last paragraph). **§12's artifact is not committed as bytes**:
 like the other five delegation families it is committed by digest
 (`crates/constraints/tests/vectors/keccak.txt`), and what this page was read from is
-`keccak::artifact(18)` itself — small enough to dump since S26d (Appendix A). §7.9's, §8.9's
+`keccak::artifact(18)` itself — small enough to dump since S26d (Appendix A). **Neither is any
+circuit only the recursion registry returns**: `crates/constraints/tests/vectors/recursion.txt`
+pins §3.11's and §21–§25's by digest, and what this page was read from is a `checker dump` of each
+artifact written to a file (Appendix A). §7.9's, §8.9's
 and §9.9's rows are the three fills' own output over `guests/mem`, which
 `crates/checker/tests/mem_fill.rs` holds to every gate and both table channels in ordinary CI.
 The `checker dump` of the family's committed fixture is the machine view to check the entry
@@ -9741,6 +12964,19 @@ cat crates/constraints/tests/vectors/mod_mul.txt      # 2^16 since S26c; §18
 cat crates/constraints/tests/vectors/sha256.txt       # §19
 cat crates/constraints/tests/vectors/ec_add.txt       # §20
 cargo run -p kat-gen -- delegation              # rewrites all six lines from the constructors
+cat crates/constraints/tests/vectors/recursion.txt   # §3.11 and §21–§25: the recursion registry's
+                                                     # six circuits, by shape line and SHA-256
+cargo run -p kat-gen -- recursion               # rewrites recursion.txt from recursion_circuit
+# §3.11's and §21–§25's dumps: no CLI writes the bytes. Write
+#   constraints::recursion_circuit(family, n).unwrap().artifact.to_bytes() to a file and
+#   `checker dump` it:
+#     (0, 20)    77,987 bytes  §3.11, diffed against family_circuit(0, 20)'s 70,974
+#     (18, 20)    2,758 bytes  §21
+#     (19, 20)   89,741 bytes  §22
+#     (20, 18)  294,425 bytes  §23, 2,531 lines
+#     (21, 18)  164,713 bytes  §24, 2,278 lines
+#     (22, 20)  158,326 bytes  §25, 2,300 lines
+#   `checker laws` and `checker padding` over the (0, 20) bytes hold as well.
 for f in alu reg mem atomics; do
   cargo run -p checker -- dump crates/constraints/tests/vectors/memory_frame_$f.bin    # §2.2's four bare frames
 done
@@ -9751,7 +12987,8 @@ cargo run -p checker -- laws crates/constraints/tests/vectors/mul_div.bin
 cargo run -p checker -- laws crates/constraints/tests/vectors/mem_word.bin
 cargo run -p checker -- laws crates/constraints/tests/vectors/mem_subword.bin
 cargo run -p checker -- laws crates/constraints/tests/vectors/atomics.bin
-cargo test -p checker --test add_sub            # §3.9's rows against every gate and bound
+cargo test -p checker --test add_sub            # §3.9's rows against every gate and bound, and
+                                                # §3.11's three recursion requests
 cargo test -p checker --test jump_branch_slt    # §4.9's rows against every gate, bound and table
 cargo test -p checker --test shift_bitwise      # §5.9's and §5.10's, 17 tests
 cargo test -p checker --test mul_div            # §6.9's and §6.10's, 17 tests
@@ -9783,6 +13020,19 @@ cargo test -p prover --test fills               # §18's, §19's and §20's fill
 cargo test -p checker --test public_values      # §15's, §16's and §17's shapes, both public
                                                 # windows' and the advice region's layouts, and
                                                 # the window rules, in ordinary CI
+cargo test -p constraints --test recursion      # the five recursion families build in the
+                                                # recursion registry alone, and the registries
+                                                # differ in ADD_SUB alone
+cargo test -p checker --test recursion          # §21–§25's rows and the field memory's balance,
+                                                # and §3.11's form over field-ops' 105 field
+                                                # requests, in ordinary CI
+cargo test -p constraints --lib p2_field        # §23.9's the_witness_is_the_permutation
+cargo test -p emulator --test guests field_ops  # field-ops' literal checks and its invocation
+                                                # counts, in ordinary CI
+cargo test --release -p prover --test field_ops -- --include-ignored --test-threads=1
+                                                # the one recursion-format proof: field-ops proved
+                                                # and verified, every shard's tape replayed.
+                                                # DEFERRED
 cargo test -p prover --test public_io -- --include-ignored --test-threads=1
                                                 # S-IO's statement: guests/public-io proved and
                                                 # verified, step 10c isolated, and the advice
@@ -9797,7 +13047,7 @@ that the leaf and inner-layer subsections write a fraction node by its stem `x`:
 its two columns `x_num` and `x_den`, defined by relations `define_x_num` and `define_x_den`. The
 halving lists repeat one pattern, so the dump at `n = 22` gives every `n`: the row-wise layers do
 not depend on `n` — `L1`–`L5` for add/sub, jump/branch/slt and mem_word, `L1`–`L6` for the two
-S18 families and for mem_subword and atomics — nor do relations 0–194 of add/sub, 0–213 of
+S18 families and for mem_subword and atomics — nor do relations 0–200 of add/sub, 0–213 of
 jump/branch/slt, 0–305 of shift/bitwise, 0–297 of mul/div, 0–170 of mem_word, 0–304 of
 mem_subword and 0–317 of atomics, and the halving lists follow §3.8's, §4.8's, §5.8's, §6.8's,
 §7.8's, §8.8's and §9.8's formulas.
@@ -9806,14 +13056,16 @@ The counts at `n = 16`, `n = 18` and `n = 20` were read from `family_circuit` di
 `depth()`, layer widths, `relations`, `lookups` and `to_bytes()`), which has no CLI; §15's,
 §16's and §17's counts were read the same way, from `family_circuit(12, 12)`,
 `family_circuit(13, 12)`, `family_circuit(14, 16)` and `family_circuit(14, 22)`, and their
-columns, gates, relation numbers, outputs and padding contracts from the dumps above. The §3.10
+columns, gates, relation numbers, outputs and padding contracts from the dumps above. §3.11's
+and §21–§25's were read the same way from `recursion_circuit`, and the recursion form's
+relations 0–212 do not depend on `n` either. The §3.10
 probe is add/sub's `honest_rows` with one cell moved at a time, run through
 `violated_relations` and `violated_lookups`; the §4.10 probe is the same over
 jump/branch/slt's `honest_rows`, run also through that suite's own table check,
 `violated_tables`. §5.10, §6.10, §7.10, §8.10 and §9.10 need no probe: they are their
 suites' `each_gate_is_the_one_that_refuses_its_row` read as a cell-by-cell account, and that
-test runs in ordinary CI. §1.2's proof byte lengths are `crates/prover/tests/alu.rs`' and
-`crates/prover/tests/mem.rs`', both of which are `#[ignore]`d and run with
+test runs in ordinary CI. §1.2's proof byte lengths are `crates/prover/tests/acceptance.rs`',
+`control.rs`', `alu.rs`' and `mem.rs`', all of which are `#[ignore]`d and run with
 `--include-ignored --test-threads=1`; the formula they check them against is
 `shard-proof.md` §9's over the circuit's own shape, written out as `mem.rs`' `proof_bytes`.
 §12's **381,100** is that same formula over `keccak::artifact(18)`, which
