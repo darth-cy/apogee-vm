@@ -362,25 +362,31 @@ pub mod recursion {
     static DELEGATION_EC_ADD: [u8; delegation::MARKER_BYTES] =
         super::record(ecall::PRECOMPILE_EC_ADD);
 
-    /// `FR_OP`'s declaration record (S-RECURSION).
+    /// `FR_OP`'s declaration record (S-RECURSION). The four field families'
+    /// records are their bytes as three little-endian words — the same bytes
+    /// in `.rodata` — so a call reads its number with one load where a byte
+    /// array takes four: a replay asks once a body, and a point's template is
+    /// a body.
     #[link_section = ".rodata.apogee.delegations.fr_op"]
-    static DELEGATION_FR_OP: [u8; delegation::MARKER_BYTES] =
-        super::record(ecall::PRECOMPILE_FR_OP);
+    static DELEGATION_FR_OP: [u32; 3] = super::record_words(ecall::PRECOMPILE_FR_OP);
 
     /// `P2_FIELD`'s declaration record (S-RECURSION).
     #[link_section = ".rodata.apogee.delegations.p2_field"]
-    static DELEGATION_P2_FIELD: [u8; delegation::MARKER_BYTES] =
-        super::record(ecall::PRECOMPILE_P2_FIELD);
+    static DELEGATION_P2_FIELD: [u32; 3] = super::record_words(ecall::PRECOMPILE_P2_FIELD);
 
     /// `FIELD_IO`'s declaration record (S-RECURSION).
     #[link_section = ".rodata.apogee.delegations.field_io"]
-    static DELEGATION_FIELD_IO: [u8; delegation::MARKER_BYTES] =
-        super::record(ecall::PRECOMPILE_FIELD_IO);
+    static DELEGATION_FIELD_IO: [u32; 3] = super::record_words(ecall::PRECOMPILE_FIELD_IO);
 
     /// `FQ_OP`'s declaration record (S-RECURSION).
     #[link_section = ".rodata.apogee.delegations.fq_op"]
-    static DELEGATION_FQ_OP: [u8; delegation::MARKER_BYTES] =
-        super::record(ecall::PRECOMPILE_FQ_OP);
+    static DELEGATION_FQ_OP: [u32; 3] = super::record_words(ecall::PRECOMPILE_FQ_OP);
+
+    /// A field family's number, read from its record: word 2, after the
+    /// magic. `black_box` for `delegation_number`'s reason.
+    fn field_number(record: &'static [u32; 3]) -> u32 {
+        core::hint::black_box(record)[2]
+    }
 
     /// One field-family call over the frame at `base`, `bytes` long.
     ///
@@ -389,10 +395,10 @@ pub mod recursion {
     /// its frame, so a tape of consecutive frames replays as back-to-back
     /// ecalls. The field memory exists only where its circuits do, so there is
     /// no software path to fall back on.
-    fn field_call(record: &'static [u8; delegation::MARKER_BYTES], base: *mut u32, bytes: usize) {
+    fn field_call(record: &'static [u32; 3], base: *mut u32, bytes: usize) {
         // SAFETY: as [`poseidon2`]; the caller's frame is `bytes` long, lives
         // across the call, and is read and written back unchanged.
-        let ret = unsafe { ecall1(delegation_number(record), base as u32) };
+        let ret = unsafe { ecall1(field_number(record), base as u32) };
         if ret as u32 != base as u32 + bytes as u32 {
             exit(EXIT_PRECOMPILE_ERROR);
         }
@@ -449,7 +455,7 @@ pub mod recursion {
     /// is not checked call by call: the add/sub family's `a0` rule is what
     /// holds a recursion request to it (§1.4), and nothing here reads it.
     pub fn import(cells: &[u32], blob: &[u8]) {
-        let number = delegation_number(&DELEGATION_FIELD_IO);
+        let number = field_number(&DELEGATION_FIELD_IO);
         let mut frame = [constants::field_io::IMPORT, 0, 0];
         let base = frame.as_mut_ptr() as u32;
         let mut one = |cell: u32, ptr: u32| {
@@ -477,7 +483,7 @@ pub mod recursion {
     /// [`import`] into the run of cells from `first`, one a 32-byte word of
     /// `blob`: a template's witnesses, which lie together.
     pub fn import_run(first: u32, blob: &[u8]) {
-        let number = delegation_number(&DELEGATION_FIELD_IO);
+        let number = field_number(&DELEGATION_FIELD_IO);
         let mut frame = [constants::field_io::IMPORT, first, blob.as_ptr() as u32];
         let base = frame.as_mut_ptr() as u32;
         for _ in 0..blob.len() / 32 {
@@ -496,9 +502,9 @@ pub mod recursion {
     /// fatal.
     pub fn replay(body: &[u32]) {
         let numbers = [
-            delegation_number(&DELEGATION_FR_OP),
-            delegation_number(&DELEGATION_P2_FIELD),
-            delegation_number(&DELEGATION_FQ_OP),
+            field_number(&DELEGATION_FR_OP),
+            field_number(&DELEGATION_P2_FIELD),
+            field_number(&DELEGATION_FQ_OP),
         ];
         let start = body.as_ptr() as u32;
         let end = start + 4 * body.len() as u32;
@@ -965,6 +971,21 @@ const fn record(number: u32) -> [u8; delegation::MARKER_BYTES] {
         j += 1;
     }
     record
+}
+
+// `record_words`' layout: the magic is two words and the number is the third.
+const _: () = assert!(delegation::MARKER_MAGIC.len() == 8 && delegation::MARKER_BYTES == 12);
+
+/// [`record`] as the three little-endian words it is in memory.
+const fn record_words(number: u32) -> [u32; 3] {
+    let r = record(number);
+    let mut words = [0u32; 3];
+    let mut i = 0;
+    while i < 3 {
+        words[i] = u32::from_le_bytes([r[4 * i], r[4 * i + 1], r[4 * i + 2], r[4 * i + 3]]);
+        i += 1;
+    }
+    words
 }
 
 /// The declared ecall number, read back out of the record.

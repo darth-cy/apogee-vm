@@ -1240,6 +1240,10 @@ fn internal<D: Driver>(
 ) -> Vec<Cell> {
     let node = &image.node;
     let mut children: Vec<(Vec<Cell>, Statement)> = Vec::new();
+    // A journal word's weight within its cell, `2^{32i}`, and a limb's
+    // within a half, `2^64`: made once, not once a cell.
+    let units: Vec<Cell> = (1..8).map(|i| rt.power(32 * i)).collect();
+    let shift = rt.power(64);
     for (s, child) in h.statements.iter().enumerate() {
         let identity = identities[child.program as usize];
         let st = statement(d, image, s as u32, child, identity, rt);
@@ -1251,11 +1255,8 @@ fn internal<D: Driver>(
             .map(|k| {
                 let words = &output[1 + 8 * k..1 + 8 * (k + 1)];
                 let acc = rt.copy(words[0]);
-                for (i, w) in words.iter().enumerate().skip(1) {
-                    let mut unit = [0u8; 32];
-                    unit[4 * i] = 1;
-                    let unit = rt.bytes(&unit);
-                    rt.mac(acc, *w, unit);
+                for (w, unit) in words[1..].iter().zip(&units) {
+                    rt.mac(acc, *w, *unit);
                 }
                 acc
             })
@@ -1297,9 +1298,6 @@ fn internal<D: Driver>(
             // A coordinate's four 64-bit limbs as the two 128-bit halves a
             // point's load reads.
             let halves = rt.fresh(4);
-            let mut shift = [0u8; 32];
-            shift[8] = 1;
-            let shift = rt.bytes(&shift);
             for half in 0..4 {
                 let (lo, hi) = (cells[at + 2 * half], cells[at + 2 * half + 1]);
                 rt.fr(fr_op::ADD, halves + half as u32, lo, ZERO);

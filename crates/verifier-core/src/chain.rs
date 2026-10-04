@@ -74,13 +74,6 @@ fn constant(t: &mut Tape, v: u64) -> Cell {
     t.small(v)
 }
 
-/// `2^k`'s canonical bytes, `k < 256`.
-fn power(k: u32) -> [u8; 32] {
-    let mut b = [0u8; 32];
-    b[k as usize / 8] = 1 << (k % 8);
-    b
-}
-
 /// The `VM_CONFIG` message: the families, their heights, the bytecode size.
 fn config_message(t: &mut Tape, config: &VmConfig) -> Vec<Cell> {
     let families = config.families.iter().map(|(f, _)| *f as u64);
@@ -156,7 +149,7 @@ pub fn prefix(
         t.fr(fr_op::DIGIT, digit, top, top);
     }
     below(t, top, 8);
-    let unit = t.bytes(&power(248));
+    let unit = t.power(248);
     let high = t.mul(top, unit);
     let low = t.sub(io, high);
     for x in [constant(t, tags::PUBLIC_INPUTS), constant(t, 32), low, top] {
@@ -350,11 +343,12 @@ pub fn io_digest(t: &mut Tape, input: &[Cell], output: &[Cell]) -> Cell {
         let (tag, len) = (constant(t, tag), constant(t, bytes.len() as u64));
         tr.observe(t, tag);
         tr.observe(t, len);
+        // Byte `k` of a chunk weighs `2^(8k)`: made once, not once a chunk.
+        let units: Vec<Cell> = (1..31).map(|k| t.power(8 * k)).collect();
         for chunk in bytes.chunks(31) {
             let acc = t.copy(chunk[0]);
-            for (k, byte) in chunk.iter().enumerate().skip(1) {
-                let unit = t.bytes(&power(8 * k as u32));
-                t.mac(acc, *byte, unit);
+            for (byte, unit) in chunk[1..].iter().zip(&units) {
+                t.mac(acc, *byte, *unit);
             }
             tr.observe(t, acc);
         }

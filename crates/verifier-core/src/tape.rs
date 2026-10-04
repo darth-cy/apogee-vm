@@ -53,10 +53,19 @@ pub struct Tape {
     pub ops: Vec<Op>,
     /// The next free cell.
     next: Cell,
-    /// Each constant's cell, by its canonical bytes.
-    constants: BTreeMap<[u8; 32], Cell>,
+    /// Each constant's cell, by its canonical little-endian words: words and
+    /// not bytes, because a guest compares `[u8; 32]` keys with `memcmp`, a
+    /// byte a step, and an internal node looks up thousands of constants.
+    constants: BTreeMap<[u32; 8], Cell>,
     /// Bytes of input blob laid out so far.
     blob: u32,
+}
+
+/// 32 little-endian bytes as eight little-endian words.
+fn words_of(b: &[u8; 32]) -> [u32; 8] {
+    core::array::from_fn(|k| {
+        u32::from_le_bytes([b[4 * k], b[4 * k + 1], b[4 * k + 2], b[4 * k + 3]])
+    })
 }
 
 impl Tape {
@@ -102,49 +111,60 @@ impl Tape {
     /// A cell holding `v`, made once per tape: a small negative value as
     /// `IMM` and a `SUB`, anything else as [`Tape::bytes`] builds it.
     pub fn constant(&mut self, v: Fr) -> Cell {
-        let key = v.to_bytes();
+        let key = words_of(&v.to_bytes());
         if let Some(c) = self.constants.get(&key) {
             return *c;
         }
-        let negative = (-v).to_bytes();
-        if v != Fr::ZERO && negative[4..].iter().all(|z| *z == 0) {
+        let negative = words_of(&(-v).to_bytes());
+        if v != Fr::ZERO && negative[1..].iter().all(|z| *z == 0) {
             let c = self.fresh(1);
-            let w = u32::from_le_bytes([negative[0], negative[1], negative[2], negative[3]]);
-            self.fr(fr_op::IMM, c, ZERO, w);
+            self.fr(fr_op::IMM, c, ZERO, negative[0]);
             self.fr(fr_op::SUB, c, ZERO, c);
             self.constants.insert(key, c);
             return c;
         }
-        self.bytes(&key)
+        self.words(&key)
     }
 
     /// A cell holding the value whose canonical little-endian bytes are `b`,
+    /// as [`Tape::words`] builds it.
+    pub fn bytes(&mut self, b: &[u8; 32]) -> Cell {
+        self.words(&words_of(b))
+    }
+
+    /// A cell holding the value whose canonical little-endian words are `w`,
     /// made once per tape, a word at a time from its top nonzero one: `IMM`,
     /// then `SHL` shifting the value up and adding the next word. No field
     /// arithmetic, so a guest builds it without a delegated `Fr`.
-    pub fn bytes(&mut self, b: &[u8; 32]) -> Cell {
-        let word =
-            |k: usize| u32::from_le_bytes([b[4 * k], b[4 * k + 1], b[4 * k + 2], b[4 * k + 3]]);
-        let Some(top) = (0..8).rev().find(|k| word(*k) != 0) else {
+    pub fn words(&mut self, w: &[u32; 8]) -> Cell {
+        let Some(top) = (0..8).rev().find(|k| w[*k] != 0) else {
             return ZERO;
         };
-        if let Some(c) = self.constants.get(b) {
+        if let Some(c) = self.constants.get(w) {
             return *c;
         }
         let c = self.fresh(1);
-        self.fr(fr_op::IMM, c, ZERO, word(top));
+        self.fr(fr_op::IMM, c, ZERO, w[top]);
         for k in (0..top).rev() {
-            self.fr(fr_op::SHL, c, c, word(k));
+            self.fr(fr_op::SHL, c, c, w[k]);
         }
-        self.constants.insert(*b, c);
+        self.constants.insert(*w, c);
         c
     }
 
     /// A cell holding `v`.
     pub fn small(&mut self, v: u64) -> Cell {
-        let mut b = [0u8; 32];
-        b[..8].copy_from_slice(&v.to_le_bytes());
-        self.bytes(&b)
+        let mut w = [0; 8];
+        w[0] = v as u32;
+        w[1] = (v >> 32) as u32;
+        self.words(&w)
+    }
+
+    /// A cell holding `2^k`, `k < 256`.
+    pub fn power(&mut self, k: u32) -> Cell {
+        let mut w = [0; 8];
+        w[k as usize / 32] = 1 << (k % 32);
+        self.words(&w)
     }
 
     /// The next 32 bytes of the input blob, imported into a fresh cell.
