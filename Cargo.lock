@@ -623,6 +623,7 @@ dependencies = [
  "field",
  "gkr",
  "host",
+ "loader",
  "pcs",
  "poly",
  "program",
@@ -636,6 +637,7 @@ dependencies = [
  "test-support",
  "trace",
  "transcript",
+ "verifier",
  "verifier-core",
 ]
 

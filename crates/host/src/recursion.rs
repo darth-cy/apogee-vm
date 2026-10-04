@@ -483,3 +483,180 @@ pub fn program_keys(leaf: &[u8], node: &[u8]) -> Result<Vec<ProgramKey>, String>
         })
         .collect()
 }
+
+/// A recursion tree's shape, fixed before anything is proved
+/// (`docs/spec/recursion.md` §8.4).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Tree {
+    pub nodes: Vec<TreeNode>,
+    pub root: usize,
+}
+
+/// A node of a [`Tree`]: a leaf over base shards `from..to`, or an internal
+/// node over its children, in order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TreeNode {
+    Leaf { from: u32, to: u32 },
+    Internal { children: Vec<usize> },
+}
+
+impl Tree {
+    /// Leaves of consecutive shards, each closed before a shard that would
+    /// take it past `leaf` shards or its folds past `budget` (`costs` being
+    /// each shard's, [`shard_costs`]) — a shard alone over the budget a leaf
+    /// of its own; then levels of internal nodes over at most `fan_in` and
+    /// at least two children, a group of one carried up a level as it is.
+    pub fn plan(costs: &[u64], leaf: usize, budget: u64, fan_in: usize) -> Tree {
+        assert!(
+            !costs.is_empty() && leaf >= 1 && fan_in >= 2,
+            "a tree needs shards"
+        );
+        let mut nodes = Vec::new();
+        let mut level = Vec::new();
+        let (mut from, mut spent) = (0, 0);
+        for (i, cost) in costs.iter().enumerate() {
+            if i > from && (i - from == leaf || spent + cost > budget) {
+                nodes.push(TreeNode::Leaf {
+                    from: from as u32,
+                    to: i as u32,
+                });
+                level.push(nodes.len() - 1);
+                (from, spent) = (i, 0);
+            }
+            spent += cost;
+        }
+        nodes.push(TreeNode::Leaf {
+            from: from as u32,
+            to: costs.len() as u32,
+        });
+        level.push(nodes.len() - 1);
+        while level.len() > 1 {
+            let mut next = Vec::new();
+            for group in level.chunks(fan_in) {
+                if let [orphan] = group {
+                    next.push(*orphan);
+                } else {
+                    nodes.push(TreeNode::Internal {
+                        children: group.to_vec(),
+                    });
+                    next.push(nodes.len() - 1);
+                }
+            }
+            level = next;
+        }
+        Tree {
+            nodes,
+            root: level[0],
+        }
+    }
+
+    /// The tree as lines: `<id> leaf <from> <to>` or `<id> node <child>…`,
+    /// then `root <id>`.
+    pub fn to_text(&self) -> String {
+        let mut out = String::new();
+        for (id, node) in self.nodes.iter().enumerate() {
+            match node {
+                TreeNode::Leaf { from, to } => out.push_str(&format!("{id} leaf {from} {to}\n")),
+                TreeNode::Internal { children } => {
+                    let c: Vec<String> = children.iter().map(|c| c.to_string()).collect();
+                    out.push_str(&format!("{id} node {}\n", c.join(" ")));
+                }
+            }
+        }
+        out.push_str(&format!("root {}\n", self.root));
+        out
+    }
+
+    pub fn from_text(text: &str) -> Option<Tree> {
+        let mut nodes = Vec::new();
+        let mut root = None;
+        for line in text.lines() {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            let num = |w: &str| w.parse::<usize>().ok();
+            match words.as_slice() {
+                ["root", id] => root = num(id),
+                [id, "leaf", from, to] if num(id)? == nodes.len() => nodes.push(TreeNode::Leaf {
+                    from: num(from)? as u32,
+                    to: num(to)? as u32,
+                }),
+                [id, "node", children @ ..] if num(id)? == nodes.len() => {
+                    let children = children
+                        .iter()
+                        .map(|c| num(c))
+                        .collect::<Option<Vec<_>>>()?;
+                    nodes.push(TreeNode::Internal { children });
+                }
+                _ => return None,
+            }
+        }
+        let root = root.filter(|r| *r < nodes.len())?;
+        Some(Tree { nodes, root })
+    }
+}
+
+/// Each base shard's estimated `FQ_OP` rows in a leaf's folds: about 400 a
+/// point, and a shard's points its Mercury check's twelve and its memory and
+/// witness commitments — its setup commitments are merged, the leaf's.
+pub fn shard_costs(block: &BlockProof) -> Vec<u64> {
+    let public = block.statement();
+    block
+        .shard_proofs()
+        .iter()
+        .zip(&public.memory_commitments)
+        .map(|(proof, memory)| 400 * (12 + memory.len() + proof.witness_commitments.len()) as u64)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Leaves close at the shard limit and at the budget, a shard over the
+    /// budget is a leaf alone, internal nodes take two to four children with a
+    /// lone group carried up, and the tree reads back from its text.
+    #[test]
+    fn a_tree_is_planned() {
+        let costs = [10, 10, 10, 10, 10, 50, 10, 10, 10];
+        let tree = Tree::plan(&costs, 3, 25, 4);
+        let leaves: Vec<_> = tree
+            .nodes
+            .iter()
+            .filter_map(|n| match n {
+                TreeNode::Leaf { from, to } => Some((*from, *to)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(leaves, [(0, 2), (2, 4), (4, 5), (5, 6), (6, 8), (8, 9)]);
+        // Six leaves: one node over the first four, one over the last two.
+        assert_eq!(
+            tree.nodes[6..],
+            [
+                TreeNode::Internal {
+                    children: vec![0, 1, 2, 3]
+                },
+                TreeNode::Internal {
+                    children: vec![4, 5]
+                },
+                TreeNode::Internal {
+                    children: vec![6, 7]
+                },
+            ]
+        );
+        assert_eq!(tree.root, 8);
+        // Five leaves: four under a node, the fifth carried to the root's level.
+        let five = Tree::plan(&[1; 5], 1, 100, 4);
+        assert_eq!(
+            five.nodes[5..],
+            [
+                TreeNode::Internal {
+                    children: vec![0, 1, 2, 3]
+                },
+                TreeNode::Internal {
+                    children: vec![5, 4]
+                },
+            ]
+        );
+        assert_eq!(Tree::from_text(&tree.to_text()), Some(tree));
+        assert_eq!(Tree::plan(&[7], 32, 10, 4).root, 0);
+    }
+}

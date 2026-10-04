@@ -15,6 +15,26 @@ cargo run --release -p bench -- prove mini-block --out proofs/   # write the pro
 cargo run --release -p bench -- prove --stateless <fixture.json | input.bin> [--case <name>]
 ```
 
+**`recurse` proves a base block proof's recursion tree** (S-RECURSION,
+`src/recurse.rs`, `docs/spec/recursion.md` §8.4):
+
+```
+cargo run --release -p bench -- recurse <dir>/<stem> --out <dir> [--leaf 32] [--budget 750000]
+    [--fan-in 4] [--in-flight 1] [--shards-in-flight 1] [--limit <shards>]
+```
+
+The tree is planned before anything is proved (`host::recursion::Tree`) and written to
+`<out>/tree.txt`. Each node is a **process**, `bench recurse-node <out> <id>`: it builds
+its advice only when it starts, proves, verifies, and writes `<out>/<id>.block`, so a
+node's memory is its own process's and a node could run on another machine sharing the
+directory. The scheduler keeps `--in-flight` of them running and polls them. That is how
+it stays outside master anti-goal 7: it starts no thread, and
+`crates/prover/tests/one_pipeline.rs` sweeps this crate too. A proof already in `<out>` is
+not proved again, so a stopped run resumes. At the root the scheduler verifies the proof,
+the journal's coverage and identities, and the accumulator's pairing check. It needs the
+2^24 ceremony, which it caches beside the system's temporary files after the first
+ingest.
+
 **`prove --stateless <file>` proves one canonical stateless input with
 `revm-block-stateless`**: an EEST fixture JSON's `statelessInputBytes` — a `tests-zkevm`
 release, or a batch of the zkEVM benchmark's devnet datasets — or a file of nothing but
@@ -83,6 +103,7 @@ commit as any optimization; this is where that benchmark goes.
 | `src/square.rs` | — | the `A * A - B = 0` instance the two zerocheck routines share |
 | `src/timing.rs` | — | the seed, `REPS`, `Best`, and the formatting helpers |
 | `src/block.rs` | `prove` (a verb) | S25: one recorded block — or, since S-STATELESS, one stateless input — proved end to end and verified, filling a `BenchReport` |
+| `src/recurse.rs` | `recurse`, `recurse-node` (verbs) | S-RECURSION: a base block proof's recursion tree, planned, proved node by node in worker processes, and its root checked |
 | `src/report.rs` | — | the `BenchReport` schema, frozen at S25, and the machine facts it carries |
 | `src/main.rs` | — | the registry, the one verb, and the argument parsing |
 
