@@ -40,6 +40,9 @@ pub enum Op {
     Fr([u32; 4]),
     /// `P2_FIELD`'s frame `[n, s, x, y, d]`.
     Duplex([u32; 5]),
+    /// `FQ_OP`'s frame `[op, d, a, b]`, the op word carrying the code, the
+    /// indirection flags and the digit cell.
+    Fq([u32; 4]),
     /// `FIELD_IO`'s `IMPORT` of the eight words at byte `offset` of the input
     /// blob into `cell`.
     Import { cell: Cell, offset: u32 },
@@ -1246,6 +1249,7 @@ pub fn encode(ops: &[Op]) -> Encoded {
         let (number, frame): (u32, &[u32]) = match op {
             Op::Fr(frame) => (constants::ecall::PRECOMPILE_FR_OP, frame),
             Op::Duplex(frame) => (constants::ecall::PRECOMPILE_P2_FIELD, frame),
+            Op::Fq(frame) => (constants::ecall::PRECOMPILE_FQ_OP, frame),
             Op::Import { cell, offset } => {
                 assert_eq!(
                     *offset as usize,
@@ -1272,8 +1276,18 @@ pub fn encode(ops: &[Op]) -> Encoded {
 // The native reading
 // ---------------------------------------------------------------------------
 
+/// A field element's integer, when it is below `2^128`.
+fn small(v: Fr) -> Option<u128> {
+    let b = v.to_bytes();
+    b[16..]
+        .iter()
+        .all(|x| *x == 0)
+        .then(|| u128::from_le_bytes(b[..16].try_into().expect("sixteen bytes")))
+}
+
 /// Replay `ops` natively over `memory`, the input blob being `blob`: what the
 /// coprocessor would compute, with every assertion a `Err` naming the op.
+/// An `FQ_OP` result is the reduced representative, as the executor writes.
 pub fn run(ops: &[Op], memory: &mut Vec<Fr>, blob: &[u8]) -> Result<(), usize> {
     let get = |m: &Vec<Fr>, c: u32| m.get(c as usize).copied().unwrap_or(Fr::ZERO);
     let set = |m: &mut Vec<Fr>, c: u32, v: Fr| {
@@ -1328,6 +1342,55 @@ pub fn run(ops: &[Op], memory: &mut Vec<Fr>, blob: &[u8]) -> Result<(), usize> {
                 transcript::poseidon2_permute(&mut lanes);
                 for (j, lane) in lanes.iter().enumerate() {
                     set(memory, d + j as u32, *lane);
+                }
+            }
+            Op::Fq([word, d, a, b]) => {
+                use constants::fq_op as q;
+                use constraints::fq_op as arith;
+                let digit = small(get(memory, word >> q::DIGIT_SHIFT)).ok_or(i)? as u32;
+                let at = |flag: u32, w: u32| match word & flag {
+                    0 => w,
+                    _ => w + q::BUCKET_CELLS * digit,
+                };
+                let (dc, ac, bc) = (at(q::IND_D, d), at(q::IND_A, a), at(q::IND_B, b));
+                let element = |m: &Vec<Fr>, c: u32| -> Option<[u64; 4]> {
+                    let mut out = [0u64; 4];
+                    for (k, limb) in out.iter_mut().enumerate() {
+                        *limb = arith::limb(get(m, c + k as u32))?;
+                    }
+                    Some(out)
+                };
+                let operands = |m: &Vec<Fr>| Some((element(m, ac)?, element(m, bc)?));
+                let out = match word & ((1 << q::CODE_BITS) - 1) {
+                    q::FROM128 => {
+                        let lo = small(get(memory, ac)).ok_or(i)?;
+                        let hi = small(get(memory, ac + 1)).ok_or(i)?;
+                        [lo as u64, (lo >> 64) as u64, hi as u64, (hi >> 64) as u64]
+                    }
+                    q::MUL => {
+                        let (x, y) = operands(memory).ok_or(i)?;
+                        arith::mul_mod_q(x, y)
+                    }
+                    q::ADD => {
+                        let (x, y) = operands(memory).ok_or(i)?;
+                        arith::add_mod_q(x, y)
+                    }
+                    q::SUB => {
+                        let (x, y) = operands(memory).ok_or(i)?;
+                        arith::sub_mod_q(x, y)
+                    }
+                    q::MULEQ => {
+                        let (x, y) = operands(memory).ok_or(i)?;
+                        let held = element(memory, dc).ok_or(i)?;
+                        if arith::mul_mod_q(x, y) != arith::canonical(held) {
+                            return Err(i);
+                        }
+                        continue;
+                    }
+                    _ => return Err(i),
+                };
+                for (k, limb) in out.iter().enumerate() {
+                    set(memory, dc + k as u32, Fr::from_u64(*limb));
                 }
             }
             Op::Import { cell, offset } => {

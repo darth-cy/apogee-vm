@@ -680,6 +680,88 @@ fn q_inverse() -> Wide {
     x
 }
 
+// ---------------------------------------------------------------------------
+// Arithmetic mod q, plainly: the native reading's and the host's
+// ---------------------------------------------------------------------------
+
+/// Whether `x < q`.
+fn below_q(x: &[u64; 4]) -> bool {
+    for k in (0..4).rev() {
+        if x[k] != f::Q[k] {
+            return x[k] < f::Q[k];
+        }
+    }
+    false
+}
+
+/// `x − q`, for `x ≥ q`.
+fn minus_q(x: [u64; 4]) -> [u64; 4] {
+    let mut out = [0u64; 4];
+    let mut borrow = 0u64;
+    for k in 0..4 {
+        let (t, b1) = x[k].overflowing_sub(f::Q[k]);
+        let (t, b2) = t.overflowing_sub(borrow);
+        out[k] = t;
+        borrow = (b1 | b2) as u64;
+    }
+    out
+}
+
+/// `x mod q` for `x` below `2^512`, bit by bit from the top: the remainder
+/// doubles, takes the next bit, and loses `q` once if it reaches it.
+fn reduce(x: &Wide) -> [u64; 4] {
+    let mut rem = [0u64; 4];
+    for bit in (0..512).rev() {
+        let mut carry = (x[bit / 64] >> (bit % 64)) & 1;
+        for limb in rem.iter_mut() {
+            let next = *limb >> 63;
+            *limb = (*limb << 1) | carry;
+            carry = next;
+        }
+        if !below_q(&rem) {
+            rem = minus_q(rem);
+        }
+    }
+    rem
+}
+
+/// `x mod q`, the canonical representative of an element.
+pub fn canonical(x: [u64; 4]) -> [u64; 4] {
+    reduce(&wide(&x))
+}
+
+/// `a·b mod q`.
+pub fn mul_mod_q(a: [u64; 4], b: [u64; 4]) -> [u64; 4] {
+    reduce(&mul(&wide(&a), &wide(&b)))
+}
+
+/// `a + b mod q`.
+pub fn add_mod_q(a: [u64; 4], b: [u64; 4]) -> [u64; 4] {
+    reduce(&add(&wide(&a), &wide(&b)))
+}
+
+/// `a − b mod q`, as `a + 6q − b`.
+pub fn sub_mod_q(a: [u64; 4], b: [u64; 4]) -> [u64; 4] {
+    let six_q = mul(&wide(&f::Q), &wide(&[f::SUB_MULTIPLE]));
+    reduce(&sub(&add(&wide(&a), &six_q), &wide(&b)))
+}
+
+/// `a⁻¹ mod q` by Fermat, `a^{q−2}`; 0 at `a ≡ 0`.
+pub fn inv_mod_q(a: [u64; 4]) -> [u64; 4] {
+    let mut e = f::Q;
+    e[0] -= 2;
+    let mut out = [1, 0, 0, 0];
+    for k in (0..4).rev() {
+        for bit in (0..64).rev() {
+            out = mul_mod_q(out, out);
+            if (e[k] >> bit) & 1 == 1 {
+                out = mul_mod_q(out, a);
+            }
+        }
+    }
+    out
+}
+
 /// A field element's integer, when it is below `2^64`.
 pub fn limb(v: Fr) -> Option<u64> {
     let b = v.to_bytes();
@@ -799,5 +881,21 @@ mod tests {
     #[test]
     fn the_inverse_inverts() {
         assert_eq!(mul(&wide(&f::Q), &q_inverse()), wide(&[1]));
+    }
+
+    /// The plain arithmetic mod q: `(q − 1)² = 1`, a wrap below zero, a sum
+    /// past `2^256`, and an inverse that inverts.
+    #[test]
+    fn the_arithmetic_is_mod_q() {
+        let mut m = f::Q;
+        m[0] -= 1;
+        assert_eq!(canonical(m), m);
+        assert_eq!(canonical(f::Q), [0; 4]);
+        assert_eq!(mul_mod_q(m, m), [1, 0, 0, 0]);
+        assert_eq!(sub_mod_q([1, 0, 0, 0], [2, 0, 0, 0]), m);
+        assert_eq!(add_mod_q(m, [2, 0, 0, 0]), [1, 0, 0, 0]);
+        let x = [0x1234_5678_9abc_def0, 7, 0, 1 << 40];
+        assert_eq!(mul_mod_q(x, inv_mod_q(x)), [1, 0, 0, 0]);
+        assert_eq!(inv_mod_q([0; 4]), [0; 4]);
     }
 }
