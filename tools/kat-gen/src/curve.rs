@@ -294,7 +294,7 @@ const G1_HEADER: &str = "\
 #   g1_scalar_edge <name> <P> <k> <kP>             k = 0, 1, r-1, r
 #   g1_reject      <P> <reason>                    from_bytes must return None
 #
-# Rejection reasons name the class from S05's Must-be-exact 3: non_canonical_x,
+# Rejection reasons name the class: non_canonical_x,
 # non_canonical_y, off_curve, and nonzero_infinity_pattern (an encoding that is
 # all-zero but for one byte, so it is not infinity and is not on the curve).
 #

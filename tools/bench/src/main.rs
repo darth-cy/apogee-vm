@@ -33,42 +33,42 @@ mod zerocheck_verify;
 const ROUTINES: [(&str, &str, fn()); 8] = [
     (
         "fr-arith",
-        "S01: Fr mul, square, inverse and batch inverse against ark-bn254",
+        "Fr mul, square, inverse and batch inverse against ark-bn254",
         fr_arith::run,
     ),
     (
         "poly-bind",
-        "S03: lift plus the full bind chain of a u32 column at 2^20",
+        "lift plus the full bind chain of a u32 column at 2^20",
         poly_bind::run,
     ),
     (
         "msm",
-        "S07 acceptance 9 and 10: MSM at 2^22 over ceremony bases, against ark-bn254",
+        "MSM at 2^22 over ceremony bases, against ark-bn254",
         msm::run,
     ),
     (
         "mercury",
-        "S08 acceptance 11: Mercury commit, open and verify at 2^22 over ceremony bases",
+        "Mercury commit, open and verify at 2^22 over ceremony bases",
         mercury::run,
     ),
     (
         "mercury-batch",
-        "S09 acceptance 11: 16 x 2^20 columns as one batch, then as 16 single openings",
+        "16 x 2^20 columns as one batch, then as 16 single openings",
         mercury_batch::run,
     ),
     (
         "zerocheck-prove",
-        "S04: prove wall-clock and peak polynomial memory at 2^20",
+        "prove wall-clock and peak polynomial memory at 2^20",
         zerocheck_prove::run,
     ),
     (
         "zerocheck-verify",
-        "S04: sumcheck verification against naive verification at 2^20",
+        "sumcheck verification against naive verification at 2^20",
         zerocheck_verify::run,
     ),
     (
         "gkr-prove",
-        "S13: GKR forward, self_check, prove and verify over a 339-gate circuit at 2^18",
+        "GKR forward, self_check, prove and verify over a 339-gate circuit at 2^18",
         gkr_prove::run,
     ),
 ];

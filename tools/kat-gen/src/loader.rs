@@ -43,86 +43,81 @@ pub const ELF_FIXTURES: [(&str, &str); 22] = [
     (
         "atomics",
         "every A-extension instruction as the compiler emits them: the atomics \
-         family's fixture, and the one S11 force-detaches",
+         family's fixture",
     ),
     (
         "opcodes",
         "every RV32IMAC instruction executed with edge-case operands: the \
-         output oracle's coverage fixture, and its misalignment one",
+         executor's coverage fixture",
     ),
-    (
-        "heap",
-        "Vec and Box churned through the bump allocator: S12's allocator \
-         exercise",
-    ),
+    ("heap", "Vec and Box churned through the bump allocator"),
     (
         "addsub",
-        "S16's tiny guest: add/sub/addi/lui/auipc, a fence and an exit, and \
-         nothing else -- the first program proven end to end",
+        "the smallest provable guest: add/sub/addi/lui/auipc, a fence and an exit, \
+         and nothing else",
     ),
     (
         "control",
-        "S17's guest: the twelve jump/branch/slt instructions over the \
-         stage's acceptance matrix, self-checking, beside add/sub rows",
+        "the twelve jump/branch/slt instructions over a matrix of operands, \
+         self-checking, beside add/sub rows",
     ),
     (
         "alu",
-        "S18's guest: the twelve shift/bitwise and eight mul/div instructions \
-         over the stage's acceptance matrices, self-checking",
+        "the twelve shift/bitwise and eight mul/div instructions over matrices \
+         of operands, self-checking",
     ),
     (
         "mem",
-        "S19's guest: `lw`/`sw`, the six sub-word loads and stores at every \
-         legal offset, and all eleven atomics, over the stage's acceptance \
-         matrices, self-checking",
+        "`lw`/`sw`, the six sub-word loads and stores at every legal offset, \
+         and all eleven atomics, over matrices of operands, self-checking",
     ),
     (
         "shards",
-        "S20's guest: a counted loop of unrolled `add`s whose add/sub family \
+        "a counted loop of unrolled `add`s whose add/sub family \
          runs 1,064,970 cycles, so one execution is two shards of one family",
     ),
     (
         "keccak-test",
-        "S21's guest: `guest_sdk::keccak256` over the sponge's six shapes, \
-         self-checking, and the first program whose image declares a delegation",
+        "`guest_sdk::keccak256` over the sponge's six shapes, self-checking; \
+         its image declares a delegation",
     ),
     (
         "keccak-unused",
-        "S21's zero-shard fixture: it links the keccak shim, so its image \
+        "a zero-shard fixture: it links the keccak shim, so its image \
          declares the family, and never calls it",
     ),
     (
         "recursion-ops",
-        "S23's guest: `field::Fr` arithmetic and `transcript::poseidon2_permute`, which \
+        "`field::Fr` arithmetic and `transcript::poseidon2_permute`, which \
          the guest-target backends route through the two delegations",
     ),
     (
         "recursion-unused",
-        "S23's zero-shard fixture: it links both backends, so its image declares both \
+        "a zero-shard fixture: it links both backends, so its image declares both \
          families, and reaches neither",
     ),
     (
         "public-io",
-        "S-IO's guest: its public input and its advice are ordinary loads and its \
+        "its public input and its advice are ordinary loads and its \
          journal ordinary stores, so it issues no ecall but EXIT and is provable",
     ),
     (
         "mod-mul-ops",
-        "S26's guest, specialized at S26b: the MOD_MUL delegation by name over \
+        "the MOD_MUL delegation by name over \
          all four selectors, each answer computed a second way in software and \
          compared, and the three vendored callers that name no shim at all -- \
          `k256`'s group arithmetic and its scalar, and ark-bn254's two fields",
     ),
     (
         "sha256-ops",
-        "S26c's guest: the SHA256_COMP delegation by name against FIPS 180-4's \
+        "the SHA256_COMP delegation by name against FIPS 180-4's \
          own one-block vector, and the digest surface at every length that \
          moves the Merkle-Damgard padding, each answer checked against a \
          published digest and against `sha2`",
     ),
     (
         "ec-ops",
-        "S26c's guest: the EC_ADD delegation by name on both curves, every \
+        "the EC_ADD delegation by name on both curves, every \
          addition computed a second way in software and compared limb for \
          limb, the point checked against `k256` and `ark-bn254` by \
          cross-multiplication, and all four completeness cases",

@@ -1,5 +1,5 @@
 # the four moduli `constants::mod_mul::MODULI` holds, from arkworks
-# docs/spec/delegation.md §14 is normative; the order is `mod_mul::CODES`
+# docs/spec/delegation-circuits.md §5 specifies the family; the order is `mod_mul::CODES`
 # name, then eight little-endian 32-bit limbs in hex, low limb first
 SECP256K1_P fffffc2f fffffffe ffffffff ffffffff ffffffff ffffffff ffffffff ffffffff
 SECP256K1_N d0364141 bfd25e8c af48a03b baaedce6 fffffffe ffffffff ffffffff ffffffff

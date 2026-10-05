@@ -139,7 +139,7 @@ fn header(out: &mut String, artifact: &[u8], elf: &[u8], source_label: &str, art
          \n\
          The artifact IS that wire form -- `postcard` over `entry`, `segments`,\n\
          `slot_base` and `slots` in declaration order, with no header and no\n\
-         framing of its own. A later stage reads it back with\n\
+         framing of its own. It reads back with\n\
          \n\
          \x20   let bytes = std::fs::read({artifact_name:?})?;\n\
          \x20   let image: loader::ProgramImage = postcard::from_bytes(&bytes)?;\n\
@@ -147,8 +147,8 @@ fn header(out: &mut String, artifact: &[u8], elf: &[u8], source_label: &str, art
          and gets the value `load_elf` gives for the same ELF.\n\
          \n\
          The sha256 above pins these bytes so a rebuild can be compared against\n\
-         them. It is **not** program identity: that is S11's, computed over the\n\
-         decoded per-family tables and the `VmConfig`, and it is a different\n\
+         them. It is **not** program identity, which is computed over the\n\
+         decoded per-family tables and the `VmConfig`, and is a different\n\
          value in a different field.\n\
          \n\
          Symbol names below come from the ELF's own symbol table. They make the\n\

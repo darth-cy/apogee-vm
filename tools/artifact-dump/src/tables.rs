@@ -53,10 +53,10 @@ pub fn render(
          The identity is one Fr, canonical little-endian: the Mercury commitments to\n\
          every column below and to the image's words in RAM window 0, with the\n\
          VmConfig and the entry point, digested by the recipe in\n\
-         crates/program/CLAUDE.md. It is a function of the decoded instructions, the\n\
-         file-backed bytes (.text, .rodata, .data), the entry point and the\n\
-         parameters -- not of the ELF's symbols, its section headers or the size of\n\
-         a segment with no file bytes.\n",
+         docs/spec/program.md section 8. It is a function of the decoded\n\
+         instructions, the file-backed bytes (.text, .rodata, .data), the entry\n\
+         point and the parameters -- not of the ELF's symbols, its section headers\n\
+         or the size of a segment with no file bytes.\n",
         to_hex(&sha256(elf)),
         tables.code_version,
         config.bytecode_size_words,
@@ -158,7 +158,7 @@ fn listing(out: &mut String, image: &loader::ProgramImage, tables: &DecodedTable
         "\nkinds\n\
          -----\n\
          The extra-mask bits this program uses, and the mnemonic each names. The\n\
-         bit positions are frozen in constants::extra_mask.\n"
+         bit positions are fixed in constants::extra_mask.\n"
     );
     for ((family, bit), mnemonic) in &kinds {
         let name = if *family == constants::family::ADD_SUB_LUI_AUIPC

@@ -169,8 +169,8 @@ fn usage(why: &str) -> ! {
     eprintln!("usage: cargo run -p artifact-dump -- <guest.elf> [--out <dir>]");
     eprintln!("       cargo run --release -p artifact-dump -- tables <guest.elf> [--ptau <file>]");
     eprintln!();
-    eprintln!("The first writes <name>.img -- the frozen ProgramImage wire form, which is");
-    eprintln!("the artifact later stages read -- and <name>.img.txt, a report of it.");
+    eprintln!("The first writes <name>.img -- the ProgramImage wire form, the artifact");
+    eprintln!("everything downstream reads -- and <name>.img.txt, a report of it.");
     eprintln!("`tables` prints the decoded per-family tables, the VmConfig and, with the");
     eprintln!("PSE ceremony file, the program identity. See docs/guest-program-manual.md.");
     std::process::exit(if why.is_empty() { 0 } else { 2 });

@@ -44,7 +44,7 @@ pub fn generate() {
     let mut out = String::new();
     out.push_str("# the four moduli `constants::mod_mul::MODULI` holds, from arkworks\n");
     out.push_str(
-        "# docs/spec/delegation.md \u{00a7}14 is normative; the order is `mod_mul::CODES`\n",
+        "# docs/spec/delegation-circuits.md \u{00a7}5 specifies the family; the order is `mod_mul::CODES`\n",
     );
     out.push_str("# name, then eight little-endian 32-bit limbs in hex, low limb first\n");
     out.push_str(&line("SECP256K1_P", &modulus_of::<ark_secp256k1::Fq>()));

@@ -617,14 +617,14 @@ fn io_digest(input: &[u8], output: &[u8]) -> Bn254 {
 
 fn write_io_digest() {
     let mut out =
-        provenance("io_digest v1 -- the public I/O digest over the fd 0 and fd 1 streams");
+        provenance("io_digest v1 -- the public I/O digest over the public input and output");
     out.push_str(
         "# io <name> <input|-> <output|-> <digest>\n\
          #\n\
          # Streams are lowercase hex, `-` for empty. The digest is one canonical\n\
          # little-endian Fr.\n\
          #\n\
-         # The cases come in three groups: the four shapes acceptance 10 names,\n\
+         # The cases come in three groups: the four basic shapes,\n\
          # the chunk boundaries either side of 31 bytes, and three pairs that\n\
          # differ in exactly one way -- swapped streams, an appended zero byte,\n\
          # one flipped bit -- so the file itself shows each digest moving.\n\n",

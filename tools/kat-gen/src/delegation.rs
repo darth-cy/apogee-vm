@@ -64,7 +64,7 @@ fn line(name: &str, spec: &str, artifact: &CircuitArtifact) -> String {
     let inner: usize = artifact.layers.iter().map(|l| l.width as usize).sum();
     format!(
         "# the {name} delegation family's circuit, by SHA-256 of `artifact(n).to_bytes()`\n\
-         # docs/spec/delegation.md is normative; docs/spec/constraint-manifest.md \u{00a7}{spec} is the accounting\n\
+         # docs/spec/delegation-circuits.md \u{00a7}{spec} specifies it\n\
          # the artifact itself is megabytes, so what is committed is its digest\n\
          # n memory witness layers inner relations outputs bytes sha256\n\
          {n} {memory} {witness} {layers} {inner} {relations} {outputs} {len} {digest}\n",
@@ -87,7 +87,7 @@ fn fixtures() -> [(&'static str, String); 6] {
             "crates/constraints/tests/vectors/keccak.txt",
             line(
                 "KECCAK_F",
-                "12",
+                "2",
                 &keccak::artifact(trace_vars(family::KECCAK_F)),
             ),
         ),
@@ -95,7 +95,7 @@ fn fixtures() -> [(&'static str, String); 6] {
             "crates/constraints/tests/vectors/poseidon2.txt",
             line(
                 "POSEIDON2",
-                "13",
+                "3",
                 &poseidon2::artifact(trace_vars(family::POSEIDON2)),
             ),
         ),
@@ -103,7 +103,7 @@ fn fixtures() -> [(&'static str, String); 6] {
             "crates/constraints/tests/vectors/fr_arith.txt",
             line(
                 "FR_ARITH",
-                "14",
+                "4",
                 &fr_arith::artifact(trace_vars(family::FR_ARITH)),
             ),
         ),
@@ -111,7 +111,7 @@ fn fixtures() -> [(&'static str, String); 6] {
             "crates/constraints/tests/vectors/mod_mul.txt",
             line(
                 "MOD_MUL",
-                "18",
+                "5",
                 &mod_mul::artifact(trace_vars(family::MOD_MUL)),
             ),
         ),
@@ -119,17 +119,13 @@ fn fixtures() -> [(&'static str, String); 6] {
             "crates/constraints/tests/vectors/sha256.txt",
             line(
                 "SHA256_COMP",
-                "19",
+                "6",
                 &sha256::artifact(trace_vars(family::SHA256_COMP)),
             ),
         ),
         (
             "crates/constraints/tests/vectors/ec_add.txt",
-            line(
-                "EC_ADD",
-                "20",
-                &ec_add::artifact(trace_vars(family::EC_ADD)),
-            ),
+            line("EC_ADD", "7", &ec_add::artifact(trace_vars(family::EC_ADD))),
         ),
     ]
 }
